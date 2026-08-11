@@ -13,6 +13,8 @@ struct ConvertView: View {
     @State private var isRunning = false
     @State private var progress: Double?
 
+    @Environment(\.toolPresentation) private var presentation
+
     var body: some View {
         ToolScaffold(
             utility: utility,
@@ -33,8 +35,7 @@ struct ConvertView: View {
                         }
                     }
                     .labelsHidden()
-                    .pickerStyle(.segmented)
-                    .fixedSize()
+                    .optionPickerStyle(presentation)
                 }
 
                 if format.supportsQuality {

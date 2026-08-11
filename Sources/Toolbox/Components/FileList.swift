@@ -6,6 +6,8 @@ import ToolboxKit
 struct FileList: View {
     @Binding var files: [URL]
 
+    @Environment(\.toolPresentation) private var presentation
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
@@ -50,7 +52,7 @@ struct FileList: View {
                     }
                 }
             }
-            .frame(maxHeight: 150)
+            .frame(maxHeight: presentation.fileListMaxHeight)
         }
     }
 }
@@ -58,6 +60,8 @@ struct FileList: View {
 /// Per-file outcomes after a run.
 struct ResultsList: View {
     let outcomes: [JobOutcome]
+
+    @Environment(\.toolPresentation) private var presentation
 
     private var failures: [JobOutcome] { outcomes.filter { !$0.succeeded } }
     private var successes: [JobOutcome] { outcomes.filter(\.succeeded) }
@@ -125,7 +129,7 @@ struct ResultsList: View {
                     }
                 }
             }
-            .frame(maxHeight: 180)
+            .frame(maxHeight: presentation.resultsMaxHeight)
         }
     }
 

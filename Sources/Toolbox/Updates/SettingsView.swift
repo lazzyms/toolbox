@@ -1,7 +1,85 @@
 import SwiftUI
 
-/// Settings window — currently just update preferences.
+/// Settings window: where the app lives, and update preferences.
 struct SettingsView: View {
+    @ObservedObject var settings: AppSettings
+    @ObservedObject var updates: UpdateController
+
+    var body: some View {
+        TabView {
+            GeneralSettings(settings: settings)
+                .tabItem { Label("General", systemImage: "gearshape") }
+
+            UpdateSettings(updates: updates)
+                .tabItem { Label("Updates", systemImage: "arrow.down.circle") }
+        }
+        .frame(width: 440)
+    }
+}
+
+/// Menu bar / Dock presence and login item.
+struct GeneralSettings: View {
+    @ObservedObject var settings: AppSettings
+
+    /// `SMAppService.register()` can fail (an unapproved login item, a bundle
+    /// macOS won't accept); showing why beats silently reverting the toggle.
+    @State private var loginItemError: String?
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Show Toolbox in the menu bar", isOn: $settings.showsMenuBarIcon)
+
+                Toggle("Hide Dock icon", isOn: $settings.hidesDockIcon)
+                    .help("Toolbox keeps running in the menu bar with no Dock icon and no app switcher entry.")
+
+                if settings.hidesDockIcon {
+                    Text("Toolbox stays reachable from the menu bar icon. Open the main window from there whenever you need it.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } header: {
+                Text("Appearance")
+            } footer: {
+                // Explains why the menu bar toggle can flip itself back on.
+                Text("Hiding the Dock icon keeps the menu bar icon switched on — otherwise there would be no way to reach Toolbox again.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if settings.isLoginItemAvailable {
+                Section {
+                    Toggle(
+                        "Open Toolbox at login",
+                        isOn: Binding(
+                            get: { settings.launchesAtLogin },
+                            set: { enabled in
+                                let error = settings.setLaunchesAtLogin(enabled)
+                                loginItemError = error?.localizedDescription
+                            }
+                        )
+                    )
+
+                    if let loginItemError {
+                        Label(loginItemError, systemImage: "exclamationmark.triangle")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                } header: {
+                    Text("Startup")
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// Update preferences.
+struct UpdateSettings: View {
     @ObservedObject var updates: UpdateController
 
     private var lastChecked: String {
@@ -54,7 +132,6 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 440)
         .fixedSize(horizontal: false, vertical: true)
     }
 }
