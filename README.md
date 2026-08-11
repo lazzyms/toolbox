@@ -1,7 +1,8 @@
 # Toolbox
 
-A native macOS app collecting the small file utilities you keep needing. Everything
-runs locally — the app has no network code.
+A native macOS app collecting the small file utilities you keep needing. Your files
+are processed entirely on-device and never uploaded. The only network access is the
+update check described in [Updates](#updates), which you can turn off.
 
 **Current tools**
 
@@ -25,6 +26,40 @@ Because this build isn't notarized by Apple, the first launch needs one extra st
 
 That's once per machine; afterwards it's a normal double-click. (See
 [Distribution](#distribution) for how to remove this step entirely.)
+
+## Updates
+
+Toolbox updates itself using [Sparkle](https://sparkle-project.org). On first launch
+it asks whether to check automatically — nothing is requested from the network before
+you answer. After that it checks once a day, and **Toolbox → Check for Updates…**
+works any time. Both behaviours are togglable in **Toolbox → Settings**.
+
+Every download is verified against an Ed25519 public key baked into the app bundle
+(`SUPublicEDKey` in `Resources/Info.plist`) before anything is installed. The matching
+private key exists only in the maintainer's Keychain, so publishing an update requires
+that key — a compromised GitHub account alone can't push code to installed copies.
+
+### Cutting a release
+
+```bash
+./Scripts/release.sh --version 1.1.0 [--notes notes.md]
+./Scripts/release.sh --version 1.1.0 --dry-run   # build + sign the feed, publish nothing
+```
+
+That builds the universal app and DMG, signs the DMG with your private key, updates
+`docs/appcast.xml` (the feed clients poll), then tags and creates the GitHub release.
+It aborts if the feed ends up unsigned rather than shipping something clients reject.
+
+Two one-time setup steps:
+
+1. `generate_keys` (in Sparkle's `bin/` under `.build/artifacts`) creates the keypair
+   and stores the private half in your Keychain. Put the printed public key in
+   `SUPublicEDKey`. Changing this key later strands everyone already running the app.
+2. Enable GitHub Pages once — **Settings → Pages → deploy from branch → main → /docs**
+   — so `SUFeedURL` resolves.
+
+Sparkle compares `CFBundleVersion`, not the marketing version, so `release.sh` derives
+it from `git rev-list --count HEAD` to keep it monotonic without manual bookkeeping.
 
 ## Build from source
 
@@ -81,10 +116,15 @@ Sources/Toolbox/        SwiftUI app
   Utility.swift          the tool registry
   Components/            shared UI: drop zone, file list, scaffold
   Features/              one view per tool
+  Updates/               Sparkle wiring and the Settings pane
 Resources/              Info.plist, entitlements, generated icon
-Scripts/                build-app.sh, make-dmg.sh, notarize.sh, make-icon.swift
+Scripts/                build-app.sh, make-dmg.sh, release.sh, notarize.sh, make-icon.swift
+docs/                   appcast.xml — the update feed, served by GitHub Pages
 Tests/                  37 tests over real generated PDFs and images
 ```
+
+`ToolboxKit` has no dependencies at all, so the file-processing code stays offline and
+testable; Sparkle is linked only into the app target.
 
 ## Notes on behaviour
 
@@ -100,6 +140,13 @@ Tests/                  37 tests over real generated PDFs and images
 - **Not sandboxed, deliberately.** Under App Sandbox, picking `photo.heic` doesn't
   grant permission to create `photo.png` beside it, which would break the default
   "save next to the original" workflow. The app runs under the Hardened Runtime
-  with no network entitlement instead. See `Resources/Toolbox.entitlements`.
+  instead. See `Resources/Toolbox.entitlements`.
+- **Ad-hoc builds weaken one protection.** Library Validation requires every loaded
+  library to share the executable's Team ID, and an ad-hoc signature has no Team ID,
+  so dyld refuses to load the embedded `Sparkle.framework`. Ad-hoc builds therefore
+  sign with `Resources/Toolbox-adhoc.entitlements`, which disables it — and that also
+  permits unsigned dylib injection. Developer ID builds keep it enabled, since their
+  Team IDs match. `build-app.sh` picks the right entitlements automatically and
+  smoke-launches the bundle, because this class of mistake only surfaces at runtime.
 - **PDF unlocking requires the real password.** It decrypts with the credential
   you supply; it does not crack anything.

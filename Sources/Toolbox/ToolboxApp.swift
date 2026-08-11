@@ -2,6 +2,10 @@ import SwiftUI
 
 @main
 struct ToolboxApp: App {
+    // Created once for the app's lifetime; Sparkle's scheduled checks depend on
+    // the updater outliving any single window.
+    @StateObject private var updates = UpdateController()
+
     var body: some Scene {
         Window("Toolbox", id: "main") {
             ContentView()
@@ -10,6 +14,18 @@ struct ToolboxApp: App {
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(replacing: .newItem) {}
+
+            // Sits in the app menu next to About, where macOS users expect it.
+            CommandGroup(after: .appInfo) {
+                if updates.isAvailable {
+                    Button("Check for Updates…") { updates.checkForUpdates() }
+                        .disabled(!updates.canCheckForUpdates)
+                }
+            }
+        }
+
+        Settings {
+            SettingsView(updates: updates)
         }
     }
 }

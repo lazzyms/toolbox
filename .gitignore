@@ -1,6 +1,8 @@
 .build/
 dist/
 .swiftpm/
+# Editor config carries workspace-specific paths.
+.vscode/
 Resources/AppIcon.icns
 .DS_Store
 *.xcuserstate

@@ -1,0 +1,15 @@
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>Toolbox</title>
+        <item>
+            <title>1.0.0</title>
+            <pubDate>Tue, 11 Aug 2026 13:16:45 +0530</pubDate>
+            <link>https://github.com/lazzyms/toolbox</link>
+            <sparkle:version>2</sparkle:version>
+            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/lazzyms/toolbox/releases/download/v1.0.0/Toolbox-1.0.0.dmg" length="1812614" type="application/octet-stream" sparkle:edSignature="2joh06hADogw8dbk+JBmH7uf8LvZF4ml/mUQ6oiGy5kxv9JUv0K2zZ/IFt4//vUNkNTj5ezqH26kQ6Z/Ho1CBw=="/>
+        </item>
+    </channel>
+</rss>
