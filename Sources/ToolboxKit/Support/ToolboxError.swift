@@ -12,6 +12,10 @@ public enum ToolboxError: LocalizedError, Equatable {
     case writeFailed(URL)
     case invalidDimensions
     case noGain
+    /// The output format can hold one image, and the input has several.
+    case wouldDropFrames(URL, frames: Int, format: String)
+    /// The frames read fine, but ImageIO can't write that format's animation.
+    case cannotWriteFrames(URL, frames: Int, format: String)
 
     public var errorDescription: String? {
         switch self {
@@ -37,6 +41,12 @@ public enum ToolboxError: LocalizedError, Equatable {
             return "Enter a width or a height greater than zero."
         case .noGain:
             return "Already optimized — the original was smaller."
+        case .wouldDropFrames(let url, let frames, let format):
+            return "“\(url.lastPathComponent)” has \(frames) frames, and a \(format) "
+                + "file can only hold the first one."
+        case .cannotWriteFrames(let url, let frames, let format):
+            return "“\(url.lastPathComponent)” has \(frames) frames, and this Mac "
+                + "can't write an animated \(format) file."
         }
     }
 
@@ -49,6 +59,11 @@ public enum ToolboxError: LocalizedError, Equatable {
             return "You can open and save it normally — nothing to remove."
         case .noGain:
             return "The original file was copied unchanged."
+        case .wouldDropFrames:
+            return "Nothing was written. Resize and Compress keep every frame, "
+                + "because they write the file back in its own format."
+        case .cannotWriteFrames:
+            return "Nothing was written and the original is untouched."
         default:
             return nil
         }
