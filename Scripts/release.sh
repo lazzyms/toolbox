@@ -152,7 +152,10 @@ DEFAULT_BRANCH="$(gh repo view "$REPO" --json defaultBranchRef \
   -q .defaultBranchRef.name 2>/dev/null || echo main)"
 
 git add docs/appcast.xml
-git commit -q -m "Release $VERSION" || echo "    (nothing to commit)"
+# `[skip ci]` is load-bearing: a push to main normally cuts a release, and this
+# commit is the *product* of one. GitHub honours the marker natively, which covers
+# the case CI can't — a maintainer running this script with their own credentials.
+git commit -q -m "Release $VERSION [skip ci]" || echo "    (nothing to commit)"
 git tag -f "v$VERSION"
 # Fails rather than force-pushing if the default branch has diverged: silently
 # overwriting someone else's commits is far worse than a stopped release.

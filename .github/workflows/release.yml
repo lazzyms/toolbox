@@ -6,8 +6,11 @@ name: Release
 #
 # Triggered by `push`, not `pull_request: closed`, because a merged PR from a fork
 # gets no secrets and a read-only token on that event — and the Sparkle signing key
-# is a secret. Pushes made with GITHUB_TOKEN don't start workflows, so the
-# docs/appcast.xml commit this workflow makes cannot retrigger it.
+# is a secret.
+#
+# Two things stop this releasing its own release commit: pushes made with
+# GITHUB_TOKEN don't start workflows, and release.sh tags that commit `[skip ci]`,
+# which GitHub honours for pushes made with anyone's credentials.
 #
 # Pushing a `ci/**` branch rehearses the whole thing — build, DMG, signed feed —
 # and stops before publishing. That is the only way to test a change to this file
@@ -47,13 +50,6 @@ jobs:
   # Cheap Linux job, so the macOS runner only starts when something actually ships.
   plan:
     runs-on: ubuntu-latest
-    # Skip the release commit this workflow makes itself. Redundant with
-    # GITHUB_TOKEN pushes not triggering workflows, but a maintainer running
-    # Scripts/release.sh by hand pushes that same commit with their own
-    # credentials, which does trigger.
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      !startsWith(github.event.head_commit.message, 'Release ')
     outputs:
       release: ${{ steps.plan.outputs.release }}
       version: ${{ steps.plan.outputs.version }}

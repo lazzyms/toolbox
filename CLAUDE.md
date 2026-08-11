@@ -124,9 +124,11 @@ gates it, and `ci.yml` runs the same tests on every PR so a red `main` doesn't b
 - **The signing key** is the `SPARKLE_PRIVATE_KEY` secret, read by `release.sh` when set (`--ed-key-file -`,
   via stdin) instead of the Keychain. Its public half is `SUPublicEDKey` in `Info.plist`; they must stay
   a pair or every client rejects the update.
-- **Two loop guards**, because the workflow itself pushes a `Release X` commit to `main`: GITHUB_TOKEN
-  pushes don't trigger workflows, and the `plan` job skips commits whose message starts with `Release `.
-  Removing either turns one merge into an endless release chain.
+- **Two loop guards**, because the workflow itself pushes a `Release X [skip ci]` commit to `main`:
+  GITHUB_TOKEN pushes don't trigger workflows, and GitHub honours `[skip ci]` for pushes made with
+  anyone's credentials (which is what covers a local `release.sh` run). Dropping the marker from that
+  commit message turns one merge into an endless release chain. Guarding on the `Release ` prefix
+  instead would have been worse — it silently skipped the commit that *added* this workflow.
 - **Rehearsals**: pushing a `ci/**` branch runs the entire workflow and stops before tagging. Any ref
   other than `main` is forced to `--dry-run`. That is the only safe way to test a pipeline change.
 - Running `Scripts/release.sh` locally still works and is occasionally right (a broken runner), but it
