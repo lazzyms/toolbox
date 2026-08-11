@@ -10,5 +10,6 @@ extension Utility {
         Utility(id: "heic-convert", title: "Convert Image Format", shortTitle: "Convert", blurb: "HEIC to PNG, JPEG and back — batch friendly.", symbol: "arrow.triangle.2.circlepath", tint: .blue, category: .images, pane: { ConvertView(utility: $0) }),
         Utility(id: "compress", title: "Compress Images", shortTitle: "Compress", blurb: "Shrink files losslessly, or trade quality for size.", symbol: "arrow.down.circle.fill", tint: .green, category: .images, pane: { CompressView(utility: $0) }),
         Utility(id: "resize", title: "Resize Images", shortTitle: "Resize", blurb: "Scale by pixels, percentage or longest side.", symbol: "aspectratio.fill", tint: .purple, category: .images, pane: { ResizeView(utility: $0) }),
+        Utility(id: "icon-set", title: "Generate App Icons", shortTitle: "Icons", blurb: "Turn one image into a complete macOS, favicon, iOS or Android icon set.", symbol: "app.badge", tint: .orange, category: .images, pane: { IconSetView(utility: $0) }),
     ]
 }
