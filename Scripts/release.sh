@@ -18,6 +18,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
 
+# One source of truth: the download URL baked into the signed feed must match the
+# repo the release is actually created in, or clients download a 404.
+REPO="lazzyms/toolbox"
+
 VERSION=""
 NOTES=""
 DRY_RUN=0
@@ -85,14 +89,14 @@ if [[ -n "$NOTES" && -f "$NOTES" ]]; then
   cp "$NOTES" "$FEED_DIR/Toolbox-$VERSION.md"
 fi
 
-DOWNLOAD_PREFIX="https://github.com/lazzyms/toolbox/releases/download/v$VERSION"
+DOWNLOAD_PREFIX="https://github.com/$REPO/releases/download/v$VERSION"
 
 # Signs each archive with the Keychain private key and embeds the signature plus
 # length in the feed. Fails loudly if the key is missing rather than emitting an
 # unsigned feed that clients would reject.
 "$SPARKLE_BIN/generate_appcast" \
   --download-url-prefix "$DOWNLOAD_PREFIX/" \
-  --link "https://github.com/lazzyms/toolbox" \
+  --link "https://github.com/$REPO" \
   --embed-release-notes \
   "$FEED_DIR"
 
@@ -119,10 +123,24 @@ fi
 # --- 3. Publish ----------------------------------------------------------
 echo ""
 echo "### Publishing to GitHub"
+
+# GitHub Pages serves docs/ from the *default* branch, so the appcast has to land
+# there or SUFeedURL 404s no matter what was committed. Pushing the current
+# branch is not enough when releasing from a topic branch.
+DEFAULT_BRANCH="$(gh repo view "$REPO" --json defaultBranchRef \
+  -q .defaultBranchRef.name 2>/dev/null || echo main)"
+
 git add docs/appcast.xml
 git commit -q -m "Release $VERSION" || echo "    (nothing to commit)"
 git tag -f "v$VERSION"
-git push origin HEAD
+# Fails rather than force-pushing if the default branch has diverged: silently
+# overwriting someone else's commits is far worse than a stopped release.
+if ! git push origin "HEAD:$DEFAULT_BRANCH"; then
+  echo "" >&2
+  echo "error: could not fast-forward $DEFAULT_BRANCH. Rebase onto it and retry;" >&2
+  echo "       the appcast must be on $DEFAULT_BRANCH for GitHub Pages to serve it." >&2
+  exit 1
+fi
 git push origin -f "v$VERSION"
 
 RELEASE_NOTES_ARG=()
@@ -135,7 +153,19 @@ fi
 gh release create "v$VERSION" "$DMG" \
   --title "Toolbox $VERSION" \
   "${RELEASE_NOTES_ARG[@]}" \
-  --repo lazzyms/toolbox
+  --repo "$REPO"
+
+# The feed is useless if the asset URL it points at doesn't resolve, and that is
+# exactly the mistake a signed appcast hides until a user tries to update.
+echo ""
+echo "### Verifying the published download"
+ASSET_URL="$DOWNLOAD_PREFIX/Toolbox-$VERSION.dmg"
+CODE="$(curl -sIL -o /dev/null -w '%{http_code}' "$ASSET_URL")"
+if [[ "$CODE" != "200" ]]; then
+  echo "error: $ASSET_URL returned HTTP $CODE — the appcast points at a broken URL." >&2
+  exit 1
+fi
+echo "    $ASSET_URL → HTTP 200"
 
 echo ""
 echo "=========================================="
