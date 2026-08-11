@@ -6,6 +6,9 @@ update check described in [Updates](#updates), which you can turn off.
 
 **Website:** <https://lazzyms.github.io/toolbox> (source in [`docs/`](docs/))
 
+**Licence:** [MIT](LICENSE) — free to use, fork, rebrand and sell. See
+[License](#license).
+
 **Current tools**
 
 | Tool | What it does |
@@ -183,3 +186,36 @@ would otherwise be free to reinterpret them.
   smoke-launches the bundle, because this class of mistake only surfaces at runtime.
 - **PDF unlocking requires the real password.** It decrypts with the credential
   you supply; it does not crack anything.
+
+## Contributing
+
+Bug reports, tool requests and pull requests are all welcome —
+[CONTRIBUTING.md](CONTRIBUTING.md) covers the setup, the coding conventions, what the
+tests expect and how to open a PR. For a new utility, start with
+[Adding a utility](#adding-a-utility) above; for anything large, open an issue first.
+
+## License
+
+Toolbox is released under the [MIT License](LICENSE). In plain terms, you can:
+
+- use it for anything, personal or commercial, free of charge;
+- modify it however you like;
+- fork it, rename it, restyle it and ship it as your own product;
+- sell it, or sell something built on top of it, and keep the money.
+
+The only condition is that the copyright notice and licence text travel with copies or
+substantial portions of the source. There's nothing to ask permission for and nothing to
+pay. It comes with no warranty.
+
+Sparkle, the app's one dependency, is MIT licensed too, so a redistributed build carries
+the same terms. If you do ship your own build, repoint `SUFeedURL` and `SUPublicEDKey` in
+`Resources/Info.plist` at your own update feed and signing key — otherwise your users
+will be checking this project's feed for updates.
+
+## Support
+
+The app is free and stays free. If it's useful to you, there's a tip jar:
+
+**[buymeacoffee.com/lazzyms](https://buymeacoffee.com/lazzyms)**
+
+Entirely optional — nothing in the app is gated behind it.

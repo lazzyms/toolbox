@@ -88,6 +88,11 @@
     <symbol id="i-moon" viewBox="0 0 24 24">
       <path d="M20.4 14.6A8.8 8.8 0 0 1 9.4 3.6a8.8 8.8 0 1 0 11 11Z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/>
     </symbol>
+    <symbol id="i-coffee" viewBox="0 0 24 24">
+      <path d="M3.6 8.6h12.6v5.2a5.6 5.6 0 0 1-5.6 5.6H9.2a5.6 5.6 0 0 1-5.6-5.6Z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/>
+      <path d="M16.4 9.9h1.7a2.7 2.7 0 0 1 0 5.4h-1.7" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/>
+      <path d="M7.4 2.8v2.6m4.4-2.6v2.6" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+    </symbol>
   </defs>
 </svg>
 
@@ -105,6 +110,7 @@
       <a href="#install">Install</a>
       <a href="#build">Build</a>
       <a href="#faq">FAQ</a>
+      <a href="#support">Support</a>
     </nav>
     <div class="nav-actions">
       <button id="theme-toggle" class="icon-btn" type="button" aria-label="Switch to light appearance">
@@ -148,7 +154,7 @@
     <p class="dl-fallback" id="dl-note">
       <a href="https://github.com/lazzyms/toolbox/releases/latest">Latest release</a> · Apple silicon &amp; Intel
     </p>
-    <p class="cta-note">Free to use and share · <a href="#gatekeeper">one extra step on first launch</a></p>
+    <p class="cta-note">Free and MIT licensed · <a href="#gatekeeper">one extra step on first launch</a></p>
 
     <!-- Interactive recreation of the app UI (HTML/CSS, not a screenshot). -->
     <figure class="shot">
@@ -482,8 +488,38 @@ swift test
 
     <details>
       <summary>Can I request a tool?</summary>
-      <p>Open an issue on <a href="https://github.com/lazzyms/toolbox/issues">GitHub</a>. Small, local, file-in/file-out jobs are exactly what this is for.</p>
+      <p>Open an issue on <a href="https://github.com/lazzyms/toolbox/issues">GitHub</a>. Small, local, file-in/file-out jobs are exactly what this is for. If you'd rather build it, <a href="https://github.com/lazzyms/toolbox/blob/main/CONTRIBUTING.md">CONTRIBUTING.md</a> walks through the three edits a new tool needs.</p>
     </details>
+
+    <details>
+      <summary>Can I fork it, rebrand it and sell it?</summary>
+      <p>Yes — all of that. Toolbox is under the <a href="https://github.com/lazzyms/toolbox/blob/main/LICENSE">MIT licence</a>, so you can use it, modify it, ship it under your own name and charge money for it, commercially or otherwise. The only condition is that you keep the copyright and licence notice somewhere in your copy. No permission needed, and nothing to pay.</p>
+      <p>Two practical notes if you do: the app ships your own build, so you'll want to point <code>SUFeedURL</code> and the Ed25519 key in <code>Resources/Info.plist</code> at your own update feed rather than this one, and Sparkle — the only dependency — is MIT licensed too, so it comes along on the same terms.</p>
+    </details>
+  </div>
+</section>
+
+<!-- ───────────────────────────── support ───────────────────────────── -->
+<section class="section alt" id="support">
+  <div class="wrap narrow">
+    <div class="support">
+      <span class="support-ico"><svg class="ico" aria-hidden="true"><use href="#i-coffee"/></svg></span>
+      <p class="kicker">Support the project</p>
+      <h2>Free forever. Coffee optional.</h2>
+      <p class="lede-p">
+        Toolbox is MIT licensed and stays that way — there's no paid tier, no trial and
+        nothing held back. If it saved you from uploading a private PDF to some stranger's
+        website, you're welcome to put something in the tip jar instead.
+      </p>
+      <a class="btn bmc" href="https://buymeacoffee.com/lazzyms" target="_blank" rel="noopener">
+        <svg class="ico" aria-hidden="true"><use href="#i-coffee"/></svg>
+        Buy me a coffee
+      </a>
+      <p class="support-note">
+        Opens buymeacoffee.com in a new tab. Entirely optional — nothing in the app
+        changes either way.
+      </p>
+    </div>
   </div>
 </section>
 
@@ -510,11 +546,14 @@ swift test
 
 <footer class="footer">
   <div class="wrap footer-inner">
-    <p>Toolbox — free to use and share.</p>
+    <p>Toolbox — MIT licensed. Use it, fork it, rebrand it, sell it.</p>
     <nav aria-label="Footer">
       <a href="https://github.com/lazzyms/toolbox">Source</a>
       <a href="https://github.com/lazzyms/toolbox/releases">Releases</a>
       <a href="https://github.com/lazzyms/toolbox/issues">Issues</a>
+      <a href="https://github.com/lazzyms/toolbox/blob/main/CONTRIBUTING.md">Contributing</a>
+      <a href="https://github.com/lazzyms/toolbox/blob/main/LICENSE">Licence</a>
+      <a href="https://buymeacoffee.com/lazzyms" target="_blank" rel="noopener">Buy me a coffee</a>
     </nav>
   </div>
 </footer>
