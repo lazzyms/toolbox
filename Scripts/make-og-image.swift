@@ -145,7 +145,7 @@ let white = NSColor.white
 let muted = NSColor(srgbRed: 0.60, green: 0.64, blue: 0.73, alpha: 1)
 let faint = NSColor(srgbRed: 0.43, green: 0.47, blue: 0.58, alpha: 1)
 
-draw("MACOS 14+  ·  UNIVERSAL  ·  NO NETWORK CODE",
+draw("MACOS 14+  ·  UNIVERSAL  ·  FILES NEVER UPLOADED",
      x: 236, y: 500, size: 19, weight: .semibold, color: faint, tracking: 2.4)
 draw("Toolbox", x: 232, y: 424, size: 76, weight: .bold, color: white, tracking: -2)
 
@@ -153,7 +153,7 @@ draw("The small file jobs, done on your Mac.",
      x: 86, y: 322, size: 42, weight: .medium, color: white, tracking: -0.6)
 draw("Unlock PDFs, convert HEIC, compress and resize images — in batches,",
      x: 86, y: 258, size: 26, weight: .regular, color: muted)
-draw("entirely offline. Free and open source.",
+draw("on your own disk. Free and open source.",
      x: 86, y: 218, size: 26, weight: .regular, color: muted)
 
 // ── tool chips ────────────────────────────────────────────────────────────────

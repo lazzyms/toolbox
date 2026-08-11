@@ -30,6 +30,26 @@
 	<true/>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+
+	<!-- ===== Sparkle auto-update ===== -->
+	<!-- Where to look for new versions. Served over HTTPS from GitHub Pages;
+	     the signature check below is what actually establishes trust. -->
+	<key>SUFeedURL</key>
+	<string>https://lazzyms.github.io/toolbox/appcast.xml</string>
+	<!-- Ed25519 public key. Sparkle refuses any update whose signature doesn't
+	     verify against this, so the download source doesn't have to be trusted.
+	     The matching private key lives only in the maintainer's Keychain. -->
+	<key>SUPublicEDKey</key>
+	<string>XvddDMOK0js6DYUHbIuWKdM2Gz3sMyeGh/JBMxblnTg=</string>
+	<!-- No value set for SUEnableAutomaticChecks: Sparkle then asks the user on
+	     first launch instead of silently checking, so no network request happens
+	     before they have agreed. -->
+	<key>SUScheduledCheckInterval</key>
+	<integer>86400</integer>
+	<!-- Download and install in the background once permission is granted;
+	     the user still confirms the relaunch. -->
+	<key>SUAutomaticallyUpdate</key>
+	<false/>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>
