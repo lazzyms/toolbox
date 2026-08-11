@@ -3,6 +3,8 @@
 A native macOS app collecting the small file utilities you keep needing. Everything
 runs locally — the app has no network code.
 
+**Website:** <https://lazzyms.github.io/toolbox> (source in [`docs/`](docs/))
+
 **Current tools**
 
 | Tool | What it does |
@@ -84,7 +86,33 @@ Sources/Toolbox/        SwiftUI app
 Resources/              Info.plist, entitlements, generated icon
 Scripts/                build-app.sh, make-dmg.sh, notarize.sh, make-icon.swift
 Tests/                  37 tests over real generated PDFs and images
+docs/                   the GitHub Pages site (static, no build step)
 ```
+
+## Website
+
+`docs/` is a single static page — `index.html` plus `assets/`. There is no build
+step, bundler or dependency, so GitHub Pages serves it as-is:
+
+**Settings → Pages → Source: Deploy from a branch → `main` / `docs`**
+
+To work on it locally:
+
+```bash
+python3 -m http.server -d docs 8000    # → http://localhost:8000
+```
+
+Two things there are generated rather than hand-maintained:
+
+- `docs/og.png` — the social preview card. Re-render it with
+  `swift Scripts/make-og-image.swift` after changing the wording.
+- `docs/assets/icon.svg` — the app icon redrawn on the same 1024pt grid as
+  `Scripts/make-icon.swift`; keep the two in sync.
+
+The download button resolves the real `Toolbox-<version>.dmg` asset from the
+releases API at page load, so it points straight at the current DMG without the
+URL needing to be edited each release. With JavaScript disabled it falls back to
+the releases page.
 
 ## Notes on behaviour
 

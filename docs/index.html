@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Toolbox — small file utilities for macOS</title>
+<meta name="description" content="A native macOS app collecting the small file utilities you keep needing: remove PDF passwords, convert HEIC, compress and resize images. Batch-friendly, runs entirely on your Mac, no network code.">
+<link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="assets/icon.svg">
+<link rel="stylesheet" href="assets/styles.css">
+<link rel="canonical" href="https://lazzyms.github.io/toolbox/">
+
+<meta property="og:type" content="website">
+<meta property="og:title" content="Toolbox — small file utilities for macOS">
+<meta property="og:description" content="Remove PDF passwords, convert HEIC, compress and resize images. Native, batch-friendly, and everything runs locally.">
+<meta property="og:url" content="https://lazzyms.github.io/toolbox/">
+<meta property="og:image" content="https://lazzyms.github.io/toolbox/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#07090f">
+</head>
+<body>
+
+<!-- Icon definitions. Approximations of the SF Symbols the app uses. -->
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <defs>
+    <symbol id="i-lock-open" viewBox="0 0 24 24">
+      <path d="M7 10V7a5 5 0 0 1 9.8-1.4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      <rect x="3.5" y="10" width="14" height="10.5" rx="2.6" fill="currentColor"/>
+    </symbol>
+    <symbol id="i-convert" viewBox="0 0 24 24">
+      <path d="M4.5 9.5a8 8 0 0 1 13.2-3.3M19.5 14.5A8 8 0 0 1 6.3 17.8" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"/>
+      <path d="M17.9 2.6v4.2h-4.2M6.1 21.4v-4.2h4.2" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="i-compress" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="9.2" fill="currentColor"/>
+      <path d="M12 7.4v8.2m0 0 3.3-3.3M12 15.6l-3.3-3.3" fill="none" stroke="var(--card)" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="i-resize" viewBox="0 0 24 24">
+      <rect x="2.2" y="5" width="19.6" height="14" rx="2.6" fill="currentColor"/>
+      <path d="M8.4 15.6V8.4h7.2" fill="none" stroke="var(--card)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24">
+      <path d="M12 2.6 4.4 5.5v6.1c0 4.6 3.1 8.6 7.6 9.8 4.5-1.2 7.6-5.2 7.6-9.8V5.5Z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/>
+      <path d="m8.6 12.2 2.4 2.4 4.4-4.8" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="i-stack" viewBox="0 0 24 24">
+      <path d="M12 2.8 21.5 8 12 13.2 2.5 8Zm9.5 8.4L12 16.4 2.5 11.2m19 4.6L12 21 2.5 15.8" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="i-doc-safe" viewBox="0 0 24 24">
+      <path d="M13.6 2.8H6.9a2 2 0 0 0-2 2v14.4a2 2 0 0 0 2 2h10.2a2 2 0 0 0 2-2V8.2Z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/>
+      <path d="M13.4 3v5.1h5.3" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/>
+      <path d="m8.7 15.2 2 2 4-4.3" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="i-gauge" viewBox="0 0 24 24">
+      <path d="M3.4 17.6a9.6 9.6 0 1 1 17.2 0" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+      <path d="M12 12.6 16.4 9" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+      <circle cx="12" cy="13" r="1.9" fill="currentColor"/>
+    </symbol>
+    <symbol id="i-rotate" viewBox="0 0 24 24">
+      <rect x="3" y="3" width="18" height="18" rx="3" fill="none" stroke="currentColor" stroke-width="1.9"/>
+      <path d="M8.6 14.4V9.8a1.6 1.6 0 0 1 1.6-1.6h4.4m0 0-2 -2m2 2-2 2" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="i-chip" viewBox="0 0 24 24">
+      <rect x="6.2" y="6.2" width="11.6" height="11.6" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.9"/>
+      <path d="M9.6 2.9v3.3m4.8-3.3v3.3M9.6 17.8v3.3m4.8-3.3v3.3M2.9 9.6h3.3m-3.3 4.8h3.3M17.8 9.6h3.3m-3.3 4.8h3.3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="i-beaker" viewBox="0 0 24 24">
+      <path d="M9 3.2v6.1L4.6 17a2.4 2.4 0 0 0 2.1 3.6h10.6a2.4 2.4 0 0 0 2.1-3.6L15 9.3V3.2" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M8.2 3.2h7.6M6.3 14.4h11.4" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="i-github" viewBox="0 0 24 24">
+      <path fill="currentColor" d="M12 .8a11.2 11.2 0 0 0-3.5 21.8c.5.1.7-.2.7-.6v-2.2c-3 .7-3.7-1.4-3.7-1.4-.5-1.3-1.2-1.6-1.2-1.6-1-.7 0-.7 0-.7 1.1.1 1.7 1.1 1.7 1.1 1 1.7 2.6 1.2 3.2.9.1-.7.4-1.2.7-1.5-2.4-.3-5-1.2-5-5.3 0-1.2.4-2.1 1.1-2.9-.1-.3-.5-1.4.1-2.8 0 0 .9-.3 3 1.1a10.4 10.4 0 0 1 5.5 0c2.1-1.4 3-1.1 3-1.1.6 1.4.2 2.5.1 2.8.7.8 1.1 1.7 1.1 2.9 0 4.1-2.6 5-5 5.3.4.4.8 1.1.8 2.2v3.2c0 .4.2.7.8.6A11.2 11.2 0 0 0 12 .8Z"/>
+    </symbol>
+    <symbol id="i-download" viewBox="0 0 24 24">
+      <path d="M12 3.4v11.2m0 0 4.2-4.2M12 14.6l-4.2-4.2M4.2 17.4v1.4a2 2 0 0 0 2 2h11.6a2 2 0 0 0 2-2v-1.4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="4.4" fill="none" stroke="currentColor" stroke-width="1.9"/>
+      <path d="M12 2.6v2.2m0 14.4v2.2M2.6 12h2.2m14.4 0h2.2M5.3 5.3l1.6 1.6m10.2 10.2 1.6 1.6M18.7 5.3l-1.6 1.6M6.9 17.1l-1.6 1.6" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24">
+      <path d="M20.4 14.6A8.8 8.8 0 0 1 9.4 3.6a8.8 8.8 0 1 0 11 11Z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/>
+    </symbol>
+  </defs>
+</svg>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="#top">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-name">Toolbox</span>
+    </a>
+    <nav class="nav-links" aria-label="Sections">
+      <a href="#tools">Tools</a>
+      <a href="#why">Why</a>
+      <a href="#install">Install</a>
+      <a href="#build">Build</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+    <div class="nav-actions">
+      <button id="theme-toggle" class="icon-btn" type="button" aria-label="Switch to light appearance">
+        <svg class="ico only-dark" aria-hidden="true"><use href="#i-sun"/></svg>
+        <svg class="ico only-light" aria-hidden="true"><use href="#i-moon"/></svg>
+      </button>
+      <a class="icon-btn" href="https://github.com/lazzyms/toolbox" aria-label="Toolbox on GitHub">
+        <svg class="ico" aria-hidden="true"><use href="#i-github"/></svg>
+      </a>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+<!-- ───────────────────────────── hero ───────────────────────────── -->
+<section class="hero" id="top">
+  <div class="glow" aria-hidden="true"></div>
+  <div class="wrap hero-inner">
+    <p class="eyebrow">
+      <span class="dot" aria-hidden="true"></span>
+      macOS 14+ · Universal binary · No network code
+    </p>
+
+    <h1>The small file jobs,<br><span class="grad">done on your Mac.</span></h1>
+
+    <p class="lede">
+      A native macOS app collecting the utilities you keep needing — unlock a PDF, get
+      HEIC out of your camera roll, squeeze a folder of screenshots, resize a batch for
+      the web. Drop files in, get files out. Nothing is uploaded anywhere.
+    </p>
+
+    <div class="cta">
+      <a class="btn primary" data-dl href="https://github.com/lazzyms/toolbox/releases/latest">
+        <svg class="ico" aria-hidden="true"><use href="#i-download"/></svg>
+        Download the DMG
+        <span class="meta"></span>
+      </a>
+      <a class="btn ghost" href="#build">Build from source</a>
+    </div>
+    <p class="dl-fallback" id="dl-note">
+      <a href="https://github.com/lazzyms/toolbox/releases/latest">Latest release</a> · Apple silicon &amp; Intel
+    </p>
+    <p class="cta-note">Free to use and share · <a href="#gatekeeper">one extra step on first launch</a></p>
+
+    <!-- Interactive recreation of the app UI (HTML/CSS, not a screenshot). -->
+    <figure class="shot">
+      <div class="window" id="demo">
+        <div class="titlebar">
+          <span class="lights" aria-hidden="true"><i class="r"></i><i class="y"></i><i class="g"></i></span>
+          <span class="title">Toolbox</span>
+        </div>
+        <div class="window-body">
+          <nav class="sidebar" aria-label="Utilities">
+            <p class="side-head">PDF</p>
+            <ul class="side-list" data-category="pdf"></ul>
+            <p class="side-head">Images</p>
+            <ul class="side-list" data-category="images"></ul>
+          </nav>
+          <section class="detail" aria-live="polite"></section>
+        </div>
+      </div>
+      <figcaption>
+        An interactive recreation of the interface — pick a tool, then press the blue
+        button to watch a batch run.
+      </figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- ───────────────────────────── tools ───────────────────────────── -->
+<section class="section" id="tools">
+  <div class="wrap">
+    <p class="kicker">The toolbox</p>
+    <h2>Four tools today. The registry takes more.</h2>
+    <p class="section-lede">
+      Every tool accepts multiple files at once — drag-and-drop or a file picker —
+      processes them in parallel, and reports a result per file. One bad file never
+      stops the batch.
+    </p>
+
+    <div class="grid tools-grid">
+      <article class="card tool" style="--tint:var(--orange)">
+        <span class="tool-ico"><svg class="ico" aria-hidden="true"><use href="#i-lock-open"/></svg></span>
+        <h3>Remove PDF Password</h3>
+        <p>Saves a decrypted copy of a PDF you already know the password for. Text stays selectable and searchable.</p>
+        <ul class="ticks">
+          <li>Batch a whole folder with one shared password</li>
+          <li>Writes <code>file-unlocked.pdf</code> beside the original</li>
+          <li>Decrypts with your credential — it does not crack anything</li>
+        </ul>
+      </article>
+
+      <article class="card tool" style="--tint:var(--blue)">
+        <span class="tool-ico"><svg class="ico" aria-hidden="true"><use href="#i-convert"/></svg></span>
+        <h3>Convert Image Format</h3>
+        <p>HEIC ⇄ PNG ⇄ JPEG ⇄ TIFF, plus WebP where macOS can encode it. Reads RAW too.</p>
+        <ul class="ticks">
+          <li>Quality slider for the lossy formats</li>
+          <li>Optionally strip EXIF and location data</li>
+          <li>Reads DNG, CR2, NEF, ARW, ORF, RAF, AVIF, GIF, BMP</li>
+        </ul>
+      </article>
+
+      <article class="card tool" style="--tint:var(--green)">
+        <span class="tool-ico"><svg class="ico" aria-hidden="true"><use href="#i-compress"/></svg></span>
+        <h3>Compress Images</h3>
+        <p>Lossless and format-preserving, or lossy with a quality slider when you want the bytes back.</p>
+        <ul class="ticks">
+          <li>Never returns a file bigger than the original</li>
+          <li>Per-file before → after sizes in the results list</li>
+          <li>Keeps the correct extension either way</li>
+        </ul>
+      </article>
+
+      <article class="card tool" style="--tint:var(--purple)">
+        <span class="tool-ico"><svg class="ico" aria-hidden="true"><use href="#i-resize"/></svg></span>
+        <h3>Resize Images</h3>
+        <p>Fit inside a box, clamp the longest side, scale by percentage, or force exact pixels.</p>
+        <ul class="ticks">
+          <li>Longest side handles portrait and landscape in one batch</li>
+          <li>Won't upscale unless you ask it to</li>
+          <li>EXIF rotation baked in, so nothing comes out sideways</li>
+        </ul>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────────────────────── why ───────────────────────────── -->
+<section class="section alt" id="why">
+  <div class="wrap">
+    <p class="kicker">Behaviour you can rely on</p>
+    <h2>Boring in all the right places.</h2>
+    <p class="section-lede">
+      Most of the work in a file utility is what happens on the unhappy path. These are
+      the guarantees the app is built around.
+    </p>
+
+    <div class="grid why-grid">
+      <article class="card feat">
+        <span class="feat-ico"><svg class="ico" aria-hidden="true"><use href="#i-shield"/></svg></span>
+        <h3>Local by construction</h3>
+        <p>There is no network code in the app, and the entitlements grant no outgoing connections. Your PDFs and photos stay on the disk they were already on.</p>
+      </article>
+
+      <article class="card feat">
+        <span class="feat-ico"><svg class="ico" aria-hidden="true"><use href="#i-doc-safe"/></svg></span>
+        <h3>Originals are never touched</h3>
+        <p>Results are written next to the input, or into a folder you pick, with a suffix like <code>-unlocked</code>, <code>-compressed</code>, <code>-resized</code>.</p>
+      </article>
+
+      <article class="card feat">
+        <span class="feat-ico"><svg class="ico" aria-hidden="true"><use href="#i-stack"/></svg></span>
+        <h3>Nothing gets overwritten</h3>
+        <p>A name collision becomes <code>photo-1.png</code>, <code>photo-2.png</code>, and so on. You can run the same batch twice without losing the first result.</p>
+      </article>
+
+      <article class="card feat">
+        <span class="feat-ico"><svg class="ico" aria-hidden="true"><use href="#i-gauge"/></svg></span>
+        <h3>Compression never inflates</h3>
+        <p>Re-encoding a photo can honestly produce more bytes — HEIC is roughly twice as efficient as JPEG. When that happens the original bytes are copied instead.</p>
+      </article>
+
+      <article class="card feat">
+        <span class="feat-ico"><svg class="ico" aria-hidden="true"><use href="#i-rotate"/></svg></span>
+        <h3>Rotation handled</h3>
+        <p>EXIF orientation is baked into the pixels on resize, so iPhone photos come out upright instead of sideways in whatever you paste them into.</p>
+      </article>
+
+      <article class="card feat">
+        <span class="feat-ico"><svg class="ico" aria-hidden="true"><use href="#i-chip"/></svg></span>
+        <h3>Universal &amp; hardened</h3>
+        <p>One binary with arm64 and x86_64 slices, code-signed with the Hardened Runtime and no network entitlement.</p>
+      </article>
+    </div>
+
+    <div class="stats">
+      <div class="stat"><b>4</b><span>tools in the sidebar</span></div>
+      <div class="stat"><b>37</b><span>tests over real PDFs and images</span></div>
+      <div class="stat"><b>0</b><span>network calls</span></div>
+      <div class="stat"><b>0</b><span>third-party dependencies</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────────────────────── install ───────────────────────────── -->
+<section class="section" id="install">
+  <div class="wrap">
+    <p class="kicker">Install</p>
+    <h2>Three steps, then it's a normal app.</h2>
+
+    <div class="steps">
+      <div class="step">
+        <span class="num">1</span>
+        <div>
+          <h3>Download the DMG</h3>
+          <p>Grab <code>Toolbox-&lt;version&gt;.dmg</code> from the <a href="https://github.com/lazzyms/toolbox/releases/latest">latest release</a>.</p>
+        </div>
+      </div>
+      <div class="step">
+        <span class="num">2</span>
+        <div>
+          <h3>Drag to Applications</h3>
+          <p>Open the disk image and drop <b>Toolbox</b> onto the Applications shortcut inside it.</p>
+        </div>
+      </div>
+      <div class="step">
+        <span class="num">3</span>
+        <div>
+          <h3>Open it the first time</h3>
+          <p>Right-click Toolbox in Applications → <b>Open</b> → <b>Open</b>. Once per machine.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="callout" id="gatekeeper">
+      <h3>Why the right-click?</h3>
+      <p>
+        This build isn't notarized by Apple, so Gatekeeper won't let a plain double-click
+        through on first launch. Right-click → Open is the standard way to approve it, and
+        it's only needed once — after that it opens normally.
+      </p>
+      <p class="muted">
+        Notarization needs a paid Apple Developer account. The scripts in the repo support
+        it (<code>Scripts/notarize.sh</code>), and the app stays free either way —
+        notarization buys Gatekeeper trust, not a licence.
+      </p>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th>Signing mode</th><th>Command</th><th>What other people see</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Ad-hoc <span class="pill">default</span></td>
+              <td><code>./Scripts/build-app.sh</code></td>
+              <td>Works, needs right-click → Open once</td>
+            </tr>
+            <tr>
+              <td>Developer ID</td>
+              <td><code>./Scripts/build-app.sh --sign auto</code></td>
+              <td>Fewer warnings, still not fully trusted</td>
+            </tr>
+            <tr>
+              <td>Notarized</td>
+              <td><code>--sign auto</code> then <code>./Scripts/notarize.sh</code></td>
+              <td>Normal double-click, no warnings</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────────────────────── build ───────────────────────────── -->
+<section class="section alt" id="build">
+  <div class="wrap">
+    <p class="kicker">For developers</p>
+    <h2>Clone it, test it, ship your own DMG.</h2>
+    <p class="section-lede">Requires Xcode 16 or newer. No package manager, no dependencies to resolve.</p>
+
+    <div class="build-grid">
+      <div class="code-card">
+        <div class="code-head">
+          <span>Terminal</span>
+          <button class="copy" type="button" data-copy="#build-cmds">Copy</button>
+        </div>
+<pre id="build-cmds"><code><span class="c">// clone</span>
+git clone https://github.com/lazzyms/toolbox.git
+cd toolbox
+
+<span class="c">// run the test suite</span>
+swift test
+
+<span class="c">// → dist/Toolbox.app (universal)</span>
+./Scripts/build-app.sh --version 1.0.0
+
+<span class="c">// → dist/Toolbox-1.0.0.dmg</span>
+./Scripts/make-dmg.sh --version 1.0.0</code></pre>
+      </div>
+
+      <div class="code-card">
+        <div class="code-head"><span>Project layout</span></div>
+<pre><code><span class="d">Sources/ToolboxKit/</span>  <span class="c">processing, no UI</span>
+  PDF/               PDFUnlocker
+  Images/            ImageProcessor, ResizeSpec
+  Support/           BatchRunner, OutputNaming
+<span class="d">Sources/Toolbox/</span>    <span class="c">SwiftUI app</span>
+  Utility.swift      <span class="c">the tool registry</span>
+  Components/        DropZone, FileList, ToolScaffold
+  Features/          one view per tool
+<span class="d">Resources/</span>          Info.plist, entitlements, icon
+<span class="d">Scripts/</span>            build-app, make-dmg, notarize
+<span class="d">Tests/</span>              37 tests</code></pre>
+      </div>
+    </div>
+
+    <div class="card add-util">
+      <span class="feat-ico"><svg class="ico" aria-hidden="true"><use href="#i-beaker"/></svg></span>
+      <h3>Adding a utility is three edits</h3>
+      <p>
+        <code>Sources/Toolbox/Utility.swift</code> is the only place that knows the tool
+        list, and <code>BatchRunner.run</code> already handles concurrency, progress and
+        per-file error isolation — a new tool usually needs no threading code of its own.
+      </p>
+      <ol class="numbered">
+        <li>Put the logic in <code>ToolboxKit</code> as a plain file-in / file-out function, so it's unit-testable without a running app.</li>
+        <li>Add a SwiftUI view in <code>Features/</code>, wrapped in <code>ToolScaffold</code> — you get drag-and-drop, batching, progress and Finder reveal for free.</li>
+        <li>Append a <code>Utility</code> entry to <code>Utility.all</code> and add its <code>id</code> to the <code>switch</code> in <code>makeView()</code>.</li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────────────────────── faq ───────────────────────────── -->
+<section class="section" id="faq">
+  <div class="wrap narrow">
+    <p class="kicker">Questions</p>
+    <h2>The fine print, up front.</h2>
+
+    <details>
+      <summary>Can it open a PDF I've lost the password for?</summary>
+      <p>No. It decrypts using the password you supply — it doesn't crack, guess or brute-force anything. If you don't know the password, this app can't help you.</p>
+    </details>
+
+    <details>
+      <summary>Does anything get uploaded?</summary>
+      <p>No. The app contains no network code and ships without a network entitlement, so there's nothing to opt out of. Everything happens on your machine.</p>
+    </details>
+
+    <details>
+      <summary>Why isn't it sandboxed?</summary>
+      <p>Under App Sandbox, picking <code>photo.heic</code> doesn't grant permission to create <code>photo.png</code> beside it — which would break the default “save next to the original” workflow. It runs under the Hardened Runtime with no network entitlement instead. See <code>Resources/Toolbox.entitlements</code>.</p>
+    </details>
+
+    <details>
+      <summary>My compressed file came out the same size. Bug?</summary>
+      <p>Probably not. Some images genuinely can't be re-encoded smaller — an already-efficient HEIC, or a photo pushed into PNG. Rather than hand you a larger file, the app copies the original bytes through and keeps the right extension.</p>
+    </details>
+
+    <details>
+      <summary>What happens if one file in a batch is broken?</summary>
+      <p>That file fails and the rest continue. The results list tells you which one it was and why, so you can retry just that file.</p>
+    </details>
+
+    <details>
+      <summary>Which macOS versions are supported?</summary>
+      <p>macOS 14 Sonoma and later, on both Apple silicon and Intel. WebP <em>encoding</em> is only offered when the running system can actually write it — the option hides itself rather than failing at save time.</p>
+    </details>
+
+    <details>
+      <summary>Can I request a tool?</summary>
+      <p>Open an issue on <a href="https://github.com/lazzyms/toolbox/issues">GitHub</a>. Small, local, file-in/file-out jobs are exactly what this is for.</p>
+    </details>
+  </div>
+</section>
+
+<section class="closer">
+  <div class="wrap">
+    <span class="brand-mark big" aria-hidden="true"></span>
+    <h2>Stop hunting for a website to do it.</h2>
+    <p>Keep it in the dock instead.</p>
+    <div class="cta">
+      <a class="btn primary" data-dl href="https://github.com/lazzyms/toolbox/releases/latest">
+        <svg class="ico" aria-hidden="true"><use href="#i-download"/></svg>
+        Download the DMG
+        <span class="meta"></span>
+      </a>
+      <a class="btn ghost" href="https://github.com/lazzyms/toolbox">
+        <svg class="ico" aria-hidden="true"><use href="#i-github"/></svg>
+        View source
+      </a>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="footer">
+  <div class="wrap footer-inner">
+    <p>Toolbox — free to use and share.</p>
+    <nav aria-label="Footer">
+      <a href="https://github.com/lazzyms/toolbox">Source</a>
+      <a href="https://github.com/lazzyms/toolbox/releases">Releases</a>
+      <a href="https://github.com/lazzyms/toolbox/issues">Issues</a>
+    </nav>
+  </div>
+</footer>
+
+<script src="assets/app.js"></script>
+</body>
+</html>
