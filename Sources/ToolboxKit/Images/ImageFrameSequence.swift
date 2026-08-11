@@ -136,6 +136,9 @@ struct ImageFrameSequence {
     let frames: [Frame]
     /// 0 means "repeat forever", matching `kCGImagePropertyGIFLoopCount`.
     let loopCount: Int
+    /// Whether the operations actually changed the frames, which is what tells
+    /// the caller's no-inflation guard that comparing sizes is meaningless.
+    let didTransform: Bool
 
     var fileExtension: String { container.fileExtension }
 
@@ -144,7 +147,7 @@ struct ImageFrameSequence {
 
     // MARK: - Reading
 
-    /// Decodes every frame of a multi-frame input, applying `target` to each.
+    /// Decodes every frame of a multi-frame input, applying `transform` to each.
     ///
     /// Returns `nil` for anything that is a single image — the caller's existing
     /// one-frame path handles those. Throws rather than returning frame 0 when
@@ -153,8 +156,7 @@ struct ImageFrameSequence {
         from source: CGImageSource,
         input: URL,
         requestedFormat: ImageFormat?,
-        resize: ResizeSpec,
-        target: CGSize?
+        transform: ImageTransform
     ) throws -> ImageFrameSequence? {
         let count = CGImageSourceGetCount(source)
         guard count > 1,
@@ -178,12 +180,17 @@ struct ImageFrameSequence {
             )
         }
 
+        // Every frame goes through the same transform as a still image would,
+        // so animated and single-frame inputs can't drift apart.
         var frames: [Frame] = []
         frames.reserveCapacity(count)
+        var didTransform = false
         for index in 0..<count {
+            let rendered = try transform.decode(from: source, at: index, input: input)
+            if index == 0 { didTransform = rendered.didTransform }
             frames.append(
                 Frame(
-                    image: try image(from: source, at: index, input: input, resize: resize, target: target),
+                    image: rendered.image,
                     delay: delay(from: source, at: index, container: container)
                 )
             )
@@ -192,45 +199,9 @@ struct ImageFrameSequence {
         return ImageFrameSequence(
             container: container,
             frames: frames,
-            loopCount: loopCount(from: source, container: container)
+            loopCount: loopCount(from: source, container: container),
+            didTransform: didTransform
         )
-    }
-
-    /// One frame, scaled the same way `ImageProcessor` scales a single image so
-    /// animated and still inputs can't drift apart.
-    private static func image(
-        from source: CGImageSource,
-        at index: Int,
-        input: URL,
-        resize: ResizeSpec,
-        target: CGSize?
-    ) throws -> CGImage {
-        guard let target else {
-            guard let full = CGImageSourceCreateImageAtIndex(
-                source, index, [kCGImageSourceShouldCache: false] as CFDictionary
-            ) else {
-                throw ToolboxError.decodeFailed(input)
-            }
-            return full
-        }
-
-        let maxSide = Int(max(target.width, target.height).rounded())
-        let thumbOptions: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: maxSide,
-            kCGImageSourceShouldCacheImmediately: true,
-        ]
-        guard let scaled = CGImageSourceCreateThumbnailAtIndex(
-            source, index, thumbOptions as CFDictionary
-        ) else {
-            throw ToolboxError.decodeFailed(input)
-        }
-
-        if case .exact = resize {
-            return try ImageProcessor.redraw(scaled, to: target)
-        }
-        return scaled
     }
 
     private static func delay(
