@@ -14,6 +14,12 @@
   --green:  #30d158;
   --purple: #bf5af2;
 
+  /* Buy Me a Coffee brand yellow. --bmc is the button fill and always pairs with
+     near-black text; --bmc-ink is the readable-on-background variant, overridden
+     for light mode below because the raw yellow disappears on white. */
+  --bmc:     #ffdd00;
+  --bmc-ink: #ffd75e;
+
   --bg:        #07090f;
   --bg-alt:    #0b0e17;
   --card:      #101522;
@@ -46,6 +52,7 @@
   --text:      #0d1220;
   --muted:     #5a6478;
   --faint:     #8a94a8;
+  --bmc-ink:   #8a6a00;
   --shadow: 0 24px 60px -24px rgba(20, 35, 80, .28);
   color-scheme: light;
 }
@@ -248,6 +255,18 @@ code {
 
 .btn.ghost { background: var(--card); border-color: var(--line); color: var(--text); }
 .btn.ghost:hover { border-color: var(--brand-500); }
+
+/* Buy Me a Coffee. Their yellow only works with near-black text, so the
+   colours here are fixed rather than theme-dependent. */
+.btn.bmc {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bmc) 84%, #fff), var(--bmc));
+  border-color: color-mix(in srgb, var(--bmc) 78%, #000);
+  color: #14110a;
+  box-shadow: 0 12px 30px -12px color-mix(in srgb, var(--bmc) 55%, transparent),
+              inset 0 1px 0 rgba(255, 255, 255, .5);
+}
+.btn.bmc:hover { box-shadow: 0 18px 40px -14px color-mix(in srgb, var(--bmc) 65%, transparent),
+                             inset 0 1px 0 rgba(255, 255, 255, .6); }
 
 /* Version/size detail resolved from the releases API. */
 .btn .meta { font-weight: 420; opacity: .72; font-size: .86em; }
@@ -606,6 +625,32 @@ summary::after {
 }
 details[open] summary::after { transform: translateY(-30%) rotate(225deg); }
 details p { padding: 0 40px 18px 0; color: var(--muted); font-size: .93rem; }
+
+/* ─────────────────────────── support ─────────────────────────── */
+
+.support {
+  text-align: center;
+  background: var(--card);
+  border: 1px solid color-mix(in srgb, var(--bmc) 30%, var(--line));
+  border-radius: var(--radius);
+  padding: clamp(26px, 4.4vw, 44px);
+  box-shadow: var(--shadow);
+}
+.support-ico {
+  display: grid; place-items: center;
+  width: 46px; height: 46px; border-radius: 13px;
+  margin: 0 auto 18px;
+  color: var(--bmc-ink);
+  background: color-mix(in srgb, var(--bmc) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--bmc) 34%, transparent);
+}
+.support-ico .ico { width: 23px; height: 23px; }
+
+.support .kicker { color: var(--bmc-ink); }
+.support h2 { font-size: clamp(1.5rem, 3vw, 2.1rem); }
+.support .lede-p { max-width: 520px; margin: 16px auto 0; color: var(--muted); font-size: .95rem; }
+.support .btn { margin-top: 26px; }
+.support .support-note { max-width: 420px; margin: 14px auto 0; font-size: .82rem; color: var(--faint); }
 
 /* ─────────────────────────── closer + footer ─────────────────────────── */
 
