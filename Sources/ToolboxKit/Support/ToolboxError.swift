@@ -20,6 +20,8 @@ public enum ToolboxError: LocalizedError, Equatable {
     case unsupportedRotation(Int)
     /// A page range that can't be applied, carrying the reason as a message.
     case invalidPageRange(String)
+    /// An icon set with no usable sizes, carrying the reason as a message.
+    case invalidIconSizes(String)
 
     public var errorDescription: String? {
         switch self {
@@ -54,6 +56,8 @@ public enum ToolboxError: LocalizedError, Equatable {
         case .unsupportedRotation(let degrees):
             return "Can't rotate by \(degrees)°."
         case .invalidPageRange(let reason):
+            return reason
+        case .invalidIconSizes(let reason):
             return reason
         }
     }

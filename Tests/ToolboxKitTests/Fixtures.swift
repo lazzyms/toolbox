@@ -291,4 +291,71 @@ struct Fixtures: ~Copyable {
         }
         return url
     }
+
+    /// A non-square PNG split into three vertical bands — red, green, blue —
+    /// each a third of the width.
+    ///
+    /// The bands make crop-versus-stretch unmistakable: a centred square crop
+    /// of a 3:1 source keeps only the green middle, while a stretch squeezes
+    /// all three bands in.
+    func threeToneImage(
+        named name: String,
+        width: Int = 60,
+        height: Int = 20
+    ) throws -> URL {
+        let context = CGContext(
+            data: nil, width: width, height: height,
+            bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )!
+        let third = Double(width) / 3
+        let bands: [(CGRect, (Double, Double, Double))] = [
+            (CGRect(x: 0, y: 0, width: third, height: Double(height)), (1, 0, 0)),
+            (CGRect(x: third, y: 0, width: third, height: Double(height)), (0, 1, 0)),
+            (CGRect(x: third * 2, y: 0, width: third, height: Double(height)), (0, 0, 1)),
+        ]
+        for (rect, colour) in bands {
+            context.setFillColor(red: colour.0, green: colour.1, blue: colour.2, alpha: 1)
+            context.fill(rect)
+        }
+
+        let url = directory.appendingPathComponent(name).appendingPathExtension("png")
+        let destination = CGImageDestinationCreateWithURL(
+            url as CFURL, UTType.png.identifier as CFString, 1, nil
+        )!
+        CGImageDestinationAddImage(destination, context.makeImage()!, nil)
+        guard CGImageDestinationFinalize(destination) else {
+            throw ToolboxError.encodeFailed("PNG")
+        }
+        return url
+    }
+
+    /// A square PNG with a red square in the middle and transparency everywhere
+    /// else, so alpha survival at every output size is checkable by reading a
+    /// single pixel.
+    func transparentImage(named name: String, side: Int = 64) throws -> URL {
+        let context = CGContext(
+            data: nil, width: side, height: side,
+            bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )!
+        let quarter = Double(side) / 4
+        context.setFillColor(red: 1, green: 0, blue: 0, alpha: 1)
+        context.fill(CGRect(
+            x: quarter, y: quarter,
+            width: quarter * 2, height: quarter * 2
+        ))
+
+        let url = directory.appendingPathComponent(name).appendingPathExtension("png")
+        let destination = CGImageDestinationCreateWithURL(
+            url as CFURL, UTType.png.identifier as CFString, 1, nil
+        )!
+        CGImageDestinationAddImage(destination, context.makeImage()!, nil)
+        guard CGImageDestinationFinalize(destination) else {
+            throw ToolboxError.encodeFailed("PNG")
+        }
+        return url
+    }
 }
