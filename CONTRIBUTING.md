@@ -177,9 +177,20 @@ path, since that's most of what a file utility does.
 
 ## Releases
 
-Releases are cut by maintainers with `./Scripts/release.sh`, which signs the update
-feed with a private Ed25519 key held only in the maintainer's Keychain. Don't bump
-versions, edit `docs/appcast.xml` or add tags in a pull request.
+Merging a pull request to `main` publishes a release. GitHub Actions runs the tests,
+builds and signs the DMG, updates the feed installed copies poll, and creates the
+GitHub release; the update reaches users within a day. The signing key is an Ed25519
+private key held as a repository secret, so a release can only come from this repo.
+
+For contributors that means two things:
+
+- **Don't bump versions, edit `docs/appcast.xml`, or add tags in a pull request.** The
+  version is derived from the newest tag, and the feed is rewritten by the workflow.
+- **Your PR title becomes the release notes**, so write it as something a user would
+  understand.
+
+A maintainer picks the size of the bump with a label on the PR before merging: none for
+a patch, `minor` or `major` to go further, `no-release` to merge without publishing.
 
 ## Licensing of contributions
 
