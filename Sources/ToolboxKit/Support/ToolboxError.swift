@@ -18,6 +18,8 @@ public enum ToolboxError: LocalizedError, Equatable {
     case cannotWriteFrames(URL, frames: Int, format: String)
     /// A rotation that isn't a whole quarter turn.
     case unsupportedRotation(Int)
+    /// A page range that can't be applied, carrying the reason as a message.
+    case invalidPageRange(String)
 
     public var errorDescription: String? {
         switch self {
@@ -51,6 +53,8 @@ public enum ToolboxError: LocalizedError, Equatable {
                 + "can't write an animated \(format) file."
         case .unsupportedRotation(let degrees):
             return "Can't rotate by \(degrees)°."
+        case .invalidPageRange(let reason):
+            return reason
         }
     }
 
