@@ -1,0 +1,257 @@
+name: Release
+
+# Every merge to main ships a release, so a merged PR reaches installed copies
+# within a day. Labels on the PR steer it: `no-release` skips, `minor`/`major`
+# change the bump (patch otherwise).
+#
+# Triggered by `push`, not `pull_request: closed`, because a merged PR from a fork
+# gets no secrets and a read-only token on that event — and the Sparkle signing key
+# is a secret.
+#
+# Two things stop this releasing its own release commit: pushes made with
+# GITHUB_TOKEN don't start workflows, and release.sh tags that commit `[skip ci]`,
+# which GitHub honours for pushes made with anyone's credentials.
+#
+# Pushing a `ci/**` branch rehearses the whole thing — build, DMG, signed feed —
+# and stops before publishing. That is the only way to test a change to this file
+# without cutting a real release.
+on:
+  push:
+    branches:
+      - main
+      - 'ci/**'
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: How to bump the version (ignored when a version is given)
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      version:
+        description: Exact version to release, e.g. 1.2.0
+        type: string
+      dry_run:
+        description: Build and sign the feed, publish nothing
+        type: boolean
+        default: false
+
+permissions:
+  contents: write # tag, GitHub release, and the docs/appcast.xml commit
+  pull-requests: read # the merged PR's labels and title
+
+# A second merge waits instead of racing: it then reads the tag the first one
+# pushed and takes the next version up. Never cancel — a half-published release
+# (tag pushed, no DMG) is worse than a queue.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  # Cheap Linux job, so the macOS runner only starts when something actually ships.
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      release: ${{ steps.plan.outputs.release }}
+      version: ${{ steps.plan.outputs.version }}
+      previous: ${{ steps.plan.outputs.previous }}
+      pr: ${{ steps.plan.outputs.pr }}
+      title: ${{ steps.plan.outputs.title }}
+      notes: ${{ steps.plan.outputs.notes }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # tags are the version source of truth
+
+      - name: Work out what to release
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_BUMP: ${{ inputs.bump }}
+        run: |
+          set -euo pipefail
+
+          LABELS=""
+          PR=""
+          TITLE=""
+          BODY=""
+          if [[ "$EVENT_NAME" != "workflow_dispatch" ]]; then
+            # Which PR did this commit arrive in? Resolves for merge commits and
+            # squashes alike, and comes back empty for a direct push to main.
+            PULLS="$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls")"
+            PR="$(jq -r '.[0].number // ""' <<<"$PULLS")"
+            TITLE="$(jq -r '.[0].title // ""' <<<"$PULLS")"
+            BODY="$(jq -r '.[0].body // ""' <<<"$PULLS")"
+            LABELS="$(jq -r '[.[0].labels[]?.name] | join(" ")' <<<"$PULLS")"
+          fi
+
+          if [[ " $LABELS " == *" no-release "* ]]; then
+            echo "::notice::PR #$PR is labelled no-release — nothing published."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          NEXT="$(VERSION="$INPUT_VERSION" BUMP="${INPUT_BUMP:-patch}" LABELS="$LABELS" \
+            ./Scripts/next-version.sh)"
+          PREVIOUS="$(./Scripts/next-version.sh --previous)"
+
+          # A "## Release notes" section in the PR body wins over the title. These
+          # notes are the only changelog users see — they land in Sparkle's
+          # what's-new dialog — and a PR title that reads fine on GitHub often
+          # doesn't ("Fix #12", "Address review comments").
+          # Everything under the heading up to the next one, with blank lines held
+          # back until something follows them — that trims the leading and trailing
+          # ones without losing the blanks between paragraphs.
+          NOTES="$(awk '
+            /^#+[[:space:]]*[Rr]elease [Nn]otes[[:space:]]*$/ { grab = 1; next }
+            grab && /^#+[[:space:]]/ { grab = 0 }
+            grab {
+              if ($0 ~ /^[[:space:]]*$/) { if (started) pending++; next }
+              for (i = 0; i < pending; i++) print ""
+              pending = 0
+              started = 1
+              print
+            }
+          ' <<<"$BODY")"
+
+          {
+            echo "release=true"
+            echo "version=$NEXT"
+            echo "previous=$PREVIOUS"
+            echo "pr=$PR"
+            # GITHUB_OUTPUT is line-based; PR titles can't hold newlines, but
+            # flatten anyway rather than corrupt every later output on the day
+            # one does.
+            echo "title=${TITLE//$'\n'/ }"
+            # Multi-line values need the delimiter form. The delimiter is one no
+            # PR body would contain, since a collision would let a body forge
+            # further outputs.
+            echo "notes<<TOOLBOX_NOTES_EOF_9f3c"
+            echo "$NOTES"
+            echo "TOOLBOX_NOTES_EOF_9f3c"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Releasing $NEXT (was ${PREVIOUS:-nothing}), from PR #${PR:-none}"
+          if [[ -n "$NOTES" ]]; then
+            echo "Using the PR's Release notes section:"
+            echo "$NOTES"
+          else
+            echo "No Release notes section in the PR body — using the title."
+          fi
+
+  release:
+    needs: plan
+    if: needs.plan.outputs.release == 'true'
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Full history: CFBundleVersion is `git rev-list --count HEAD`, and
+          # release.sh needs the tags to push against.
+          fetch-depth: 0
+
+      - name: Require the Sparkle signing key
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          if [[ -z "$SPARKLE_PRIVATE_KEY" ]]; then
+            echo "::error::SPARKLE_PRIVATE_KEY is not set. Export the key with Sparkle's" \
+                 "generate_keys -x and add it as a repository secret — without it the feed" \
+                 "would be unsigned and every installed copy would reject the update."
+            exit 1
+          fi
+
+      - name: Toolchain
+        run: swift --version
+
+      # Also fetches Sparkle's binary artifacts, which hold generate_appcast and
+      # the framework slice build-app.sh embeds.
+      - name: Resolve dependencies
+        run: swift package resolve
+
+      # A release goes straight to auto-updating clients, so this gates it.
+      - name: Test
+        run: swift test
+
+      - name: Write release notes
+        env:
+          TITLE: ${{ needs.plan.outputs.title }}
+          BODY_NOTES: ${{ needs.plan.outputs.notes }}
+          PR: ${{ needs.plan.outputs.pr }}
+          PREVIOUS: ${{ needs.plan.outputs.previous }}
+        run: |
+          set -euo pipefail
+
+          # dist/ is gitignored, so the notes never end up in the release commit.
+          mkdir -p dist
+          NOTES=dist/release-notes.md
+
+          if [[ -n "$BODY_NOTES" ]]; then
+            printf '%s\n' "$BODY_NOTES" > "$NOTES"
+          elif [[ -n "$TITLE" ]]; then
+            if [[ -n "$PR" ]]; then
+              printf -- '- %s (#%s)\n' "$TITLE" "$PR" > "$NOTES"
+            else
+              printf -- '- %s\n' "$TITLE" > "$NOTES"
+            fi
+          else
+            printf -- '- Changes pushed to main.\n' > "$NOTES"
+          fi
+
+          if [[ -n "$PREVIOUS" ]]; then
+            printf '\n[Full changes](https://github.com/%s/compare/v%s...v%s)\n' \
+              "$GITHUB_REPOSITORY" "$PREVIOUS" "$VERSION" >> "$NOTES"
+          fi
+
+          cat "$NOTES"
+
+      - name: Build, sign and publish
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+
+          # Author of the docs/appcast.xml commit release.sh pushes.
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          ARGS=(--version "$VERSION" --notes dist/release-notes.md)
+          # Only main publishes. Anywhere else — a ci/** rehearsal, a dispatch with
+          # dry_run — builds and signs but stops before tagging.
+          if [[ "$GITHUB_REF_NAME" != "main" || "${INPUT_DRY_RUN:-false}" == "true" ]]; then
+            echo "::notice::Dry run on '$GITHUB_REF_NAME' — building and signing only."
+            ARGS+=(--dry-run)
+          fi
+
+          ./Scripts/release.sh "${ARGS[@]}"
+
+      # Kept whatever happened: on a failure after the DMG was built, this is what
+      # tells you whether the bundle or the publish step was at fault.
+      - name: Keep the DMG
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: Toolbox-${{ needs.plan.outputs.version }}
+          path: dist/*.dmg
+          if-no-files-found: warn
+
+      - name: Summarise
+        if: success()
+        run: |
+          {
+            echo "## Toolbox $VERSION"
+            if [[ "$GITHUB_REF_NAME" == "main" ]]; then
+              echo "- [Release](https://github.com/$GITHUB_REPOSITORY/releases/tag/v$VERSION)"
+              echo "- [Update feed](https://lazzyms.github.io/toolbox/appcast.xml)"
+              echo "- Installed copies offer it within 24 hours, or on demand via"
+              echo "  **Toolbox → Check for Updates…**"
+            else
+              echo "Dry run on \`$GITHUB_REF_NAME\` — built and signed, published nothing."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -62,21 +62,51 @@ that key — a compromised GitHub account alone can't push code to installed cop
 
 ### Cutting a release
 
+Releases are automatic: **merging a PR to `main` publishes one**. No version to bump,
+no tag to push, nothing to run.
+[`.github/workflows/release.yml`](.github/workflows/release.yml) runs the tests, builds
+the universal app and DMG, signs the feed, tags, and creates the GitHub release —
+after which installed copies pick it up within a day.
+
+The version comes from the newest `v*` tag, bumped one patch. Labels on the PR change
+that:
+
+| Label on the merged PR | Result |
+| --- | --- |
+| *(none)* | patch — `1.0.0` → `1.0.1` |
+| `minor` | `1.0.0` → `1.1.0` |
+| `major` | `1.0.0` → `2.0.0` |
+| `no-release` | nothing is published |
+
+Release notes come from the merged PR: a `## Release notes` section in its description
+if there is one, otherwise the PR title. They show up on the release page *and* in
+Sparkle's "what's new" dialog, so that section is worth writing whenever the title
+alone wouldn't tell a user what changed.
+
+To release by hand, or to test a change to the pipeline:
+
 ```bash
-./Scripts/release.sh --version 1.1.0 [--notes notes.md]
+./Scripts/next-version.sh                        # what would ship next
 ./Scripts/release.sh --version 1.1.0 --dry-run   # build + sign the feed, publish nothing
+./Scripts/release.sh --version 1.1.0 [--notes notes.md]
+gh workflow run Release -f version=1.1.0         # or from CI, with --dry-run available
 ```
 
-That builds the universal app and DMG, signs the DMG with your private key, updates
-`docs/appcast.xml` (the feed clients poll), then tags and creates the GitHub release.
-It aborts if the feed ends up unsigned rather than shipping something clients reject.
+`release.sh` aborts if the feed ends up unsigned rather than shipping something clients
+reject. Pushing a `ci/**` branch runs the whole workflow as a rehearsal — build, DMG,
+signed feed — and stops before publishing.
 
-Two one-time setup steps:
+One-time setup, all of it already done for this repo:
 
 1. `generate_keys` (in Sparkle's `bin/` under `.build/artifacts`) creates the keypair
    and stores the private half in your Keychain. Put the printed public key in
    `SUPublicEDKey`. Changing this key later strands everyone already running the app.
-2. Enable GitHub Pages once — **Settings → Pages → deploy from branch → main → /docs**
+2. `generate_keys -x key.txt`, then add the contents as the `SPARKLE_PRIVATE_KEY`
+   repository secret and delete the file — a runner has no Keychain to unlock, and
+   `release.sh` reads that variable when it's set.
+3. **Settings → Actions → General → Workflow permissions → Read and write**, so the
+   workflow can commit `docs/appcast.xml` and create the release.
+4. Enable GitHub Pages once — **Settings → Pages → deploy from branch → main → /docs**
    — so `SUFeedURL` resolves.
 
 Sparkle compares `CFBundleVersion`, not the marketing version, so `release.sh` derives
@@ -145,7 +175,8 @@ Sources/Toolbox/        SwiftUI app
   MenuBar/               the status-item panel, Dock/login-item settings
   Updates/               Sparkle wiring and the Settings pane
 Resources/              Info.plist, entitlements, generated icon
-Scripts/                build-app.sh, make-dmg.sh, release.sh, notarize.sh, make-icon.swift
+Scripts/                build-app.sh, make-dmg.sh, release.sh, next-version.sh, notarize.sh
+.github/workflows/      ci.yml (tests on PRs), release.yml (release on merge)
 docs/                   the website and appcast.xml — both served by GitHub Pages
 Tests/                  37 tests over real generated PDFs and images
 ```

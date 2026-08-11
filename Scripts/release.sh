@@ -6,9 +6,13 @@
 #
 # What it does:
 #   1. builds the universal app and DMG
-#   2. signs the DMG with your Ed25519 private key (from the Keychain)
+#   2. signs the DMG with the Ed25519 private key
 #   3. writes/updates docs/appcast.xml — the feed the app polls
 #   4. creates a GitHub release with the DMG attached
+#
+# The key comes from your login Keychain, or from $SPARKLE_PRIVATE_KEY when set —
+# that is how .github/workflows/release.yml signs, since a runner has no Keychain
+# to unlock. Normally you don't run this by hand: merging to main runs it in CI.
 #
 # The appcast is served from GitHub Pages (docs/ on the default branch), which
 # must match SUFeedURL in Resources/Info.plist.
@@ -91,14 +95,25 @@ fi
 
 DOWNLOAD_PREFIX="https://github.com/$REPO/releases/download/v$VERSION"
 
-# Signs each archive with the Keychain private key and embeds the signature plus
-# length in the feed. Fails loudly if the key is missing rather than emitting an
-# unsigned feed that clients would reject.
-"$SPARKLE_BIN/generate_appcast" \
-  --download-url-prefix "$DOWNLOAD_PREFIX/" \
-  --link "https://github.com/$REPO" \
-  --embed-release-notes \
-  "$FEED_DIR"
+# Signs each archive with the private key and embeds the signature plus length in
+# the feed. Fails loudly if the key is missing rather than emitting an unsigned
+# feed that clients would reject.
+APPCAST_ARGS=(
+  --download-url-prefix "$DOWNLOAD_PREFIX/"
+  --link "https://github.com/$REPO"
+  --embed-release-notes
+)
+
+if [[ -n "${SPARKLE_PRIVATE_KEY:-}" ]]; then
+  # CI has no Keychain to unlock, so the key arrives as a secret. `--ed-key-file -`
+  # reads it from stdin, which keeps it off disk and out of the process list.
+  echo "    signing with \$SPARKLE_PRIVATE_KEY"
+  printf '%s' "$SPARKLE_PRIVATE_KEY" \
+    | "$SPARKLE_BIN/generate_appcast" "${APPCAST_ARGS[@]}" --ed-key-file - "$FEED_DIR"
+else
+  echo "    signing with the private key in your login Keychain"
+  "$SPARKLE_BIN/generate_appcast" "${APPCAST_ARGS[@]}" "$FEED_DIR"
+fi
 
 mkdir -p "$ROOT/docs"
 cp "$FEED_DIR/appcast.xml" "$ROOT/docs/appcast.xml"
@@ -106,8 +121,14 @@ cp "$FEED_DIR/appcast.xml" "$ROOT/docs/appcast.xml"
 # Verify the feed actually carries a signature — an unsigned entry would be
 # rejected by every client and is the one mistake worth catching here.
 if ! grep -q 'sparkle:edSignature' "$ROOT/docs/appcast.xml"; then
-  echo "error: appcast has no EdDSA signature. Is the private key in your Keychain?" >&2
-  echo "       Run: $SPARKLE_BIN/generate_keys" >&2
+  echo "error: appcast has no EdDSA signature — clients would reject this update." >&2
+  if [[ -n "${SPARKLE_PRIVATE_KEY:-}" ]]; then
+    echo "       \$SPARKLE_PRIVATE_KEY is set but was not accepted. It must be the" >&2
+    echo "       exact contents of 'generate_keys -x', with no extra whitespace." >&2
+  else
+    echo "       Is the private key in your login Keychain? Run:" >&2
+    echo "         $SPARKLE_BIN/generate_keys" >&2
+  fi
   exit 1
 fi
 echo "    appcast signed and written to docs/appcast.xml"
@@ -131,7 +152,10 @@ DEFAULT_BRANCH="$(gh repo view "$REPO" --json defaultBranchRef \
   -q .defaultBranchRef.name 2>/dev/null || echo main)"
 
 git add docs/appcast.xml
-git commit -q -m "Release $VERSION" || echo "    (nothing to commit)"
+# `[skip ci]` is load-bearing: a push to main normally cuts a release, and this
+# commit is the *product* of one. GitHub honours the marker natively, which covers
+# the case CI can't — a maintainer running this script with their own credentials.
+git commit -q -m "Release $VERSION [skip ci]" || echo "    (nothing to commit)"
 git tag -f "v$VERSION"
 # Fails rather than force-pushing if the default branch has diverged: silently
 # overwriting someone else's commits is far worse than a stopped release.
