@@ -24,19 +24,10 @@ public enum PDFUnlocker {
         password: String,
         to location: OutputLocation = .alongsideInput
     ) throws -> Result {
-        guard input.pathExtension.lowercased() == "pdf" else {
-            throw ToolboxError.unsupportedInput(input.pathExtension)
-        }
-        // PDFDocument(url:) returns nil for unreadable/corrupt files but succeeds
-        // (with isLocked == true) for encrypted ones.
-        guard let doc = PDFDocument(url: input) else {
-            throw ToolboxError.notAPDF(input)
-        }
+        let doc = try PDFDocumentIO.open(input)
 
         if doc.isLocked {
-            guard doc.unlock(withPassword: password) else {
-                throw ToolboxError.wrongPassword
-            }
+            try PDFDocumentIO.unlock(doc, password: password)
         } else if !doc.isEncrypted {
             throw ToolboxError.notEncrypted
         }
@@ -51,15 +42,17 @@ public enum PDFUnlocker {
         // encryption dictionary — the result still prompts for a password. So
         // rebuild instead: copy the decrypted pages into a fresh document, which
         // has no encryption to inherit. Text stays selectable and searchable.
-        let rebuilt = PDFDocument()
-        for index in 0..<doc.pageCount {
-            guard let page = doc.page(at: index)?.copy() as? PDFPage else { continue }
-            rebuilt.insert(page, at: rebuilt.pageCount)
-        }
+        let rebuilt = PDFDocumentIO.copy(doc)
 
         var wroteCleanCopy = rebuilt.pageCount == doc.pageCount
             && rebuilt.pageCount > 0
-            && rebuilt.write(to: output)
+        if wroteCleanCopy {
+            do {
+                try PDFDocumentIO.save(rebuilt, to: output)
+            } catch {
+                wroteCleanCopy = false
+            }
+        }
 
         // Verify rather than trust: the copy must open with no password at all.
         if wroteCleanCopy, let check = PDFDocument(url: output), check.isLocked {
