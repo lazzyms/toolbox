@@ -7,6 +7,9 @@ import SwiftUI
 struct Utility: Identifiable, Hashable {
     let id: String
     let title: String
+    /// One or two words for the menu bar panel's picker chips, where `title`
+    /// would truncate at half the popover's width.
+    let shortTitle: String
     /// Shown under the title in the sidebar and at the top of the detail pane.
     let blurb: String
     let symbol: String
@@ -36,6 +39,7 @@ struct Utility: Identifiable, Hashable {
         Utility(
             id: "pdf-unlock",
             title: "Remove PDF Password",
+            shortTitle: "Unlock PDF",
             blurb: "Save an unlocked copy of a PDF you know the password for.",
             symbol: "lock.open.fill",
             tint: .orange,
@@ -44,6 +48,7 @@ struct Utility: Identifiable, Hashable {
         Utility(
             id: "heic-convert",
             title: "Convert Image Format",
+            shortTitle: "Convert",
             blurb: "HEIC to PNG, JPEG and back — batch friendly.",
             symbol: "arrow.triangle.2.circlepath",
             tint: .blue,
@@ -52,6 +57,7 @@ struct Utility: Identifiable, Hashable {
         Utility(
             id: "compress",
             title: "Compress Images",
+            shortTitle: "Compress",
             blurb: "Shrink files losslessly, or trade quality for size.",
             symbol: "arrow.down.circle.fill",
             tint: .green,
@@ -60,6 +66,7 @@ struct Utility: Identifiable, Hashable {
         Utility(
             id: "resize",
             title: "Resize Images",
+            shortTitle: "Resize",
             blurb: "Scale by pixels, percentage or longest side.",
             symbol: "aspectratio.fill",
             tint: .purple,

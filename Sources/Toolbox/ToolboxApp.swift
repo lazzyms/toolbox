@@ -6,8 +6,14 @@ struct ToolboxApp: App {
     // the updater outliving any single window.
     @StateObject private var updates = UpdateController()
 
+    // Shared instance: it owns the process-wide activation policy, and the app
+    // delegate has to read the same values before the first window appears.
+    @StateObject private var settings = AppSettings.shared
+
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
+
     var body: some Scene {
-        Window("Toolbox", id: "main") {
+        Window("Toolbox", id: MainWindow.id) {
             ContentView()
                 .frame(minWidth: 780, minHeight: 560)
         }
@@ -24,8 +30,18 @@ struct ToolboxApp: App {
             }
         }
 
+        // The same tools in a popover, so the app can drop out of the Dock and
+        // still be fully usable. `isInserted` adds and removes the status item
+        // live — no relaunch when the setting is toggled.
+        MenuBarExtra(isInserted: $settings.showsMenuBarIcon) {
+            MenuBarPanel(settings: settings, updates: updates)
+        } label: {
+            Image(systemName: "hammer.fill")
+        }
+        .menuBarExtraStyle(.window)
+
         Settings {
-            SettingsView(updates: updates)
+            SettingsView(settings: settings, updates: updates)
         }
     }
 }

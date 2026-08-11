@@ -21,6 +21,19 @@ update check described in [Updates](#updates), which you can turn off.
 Every tool takes multiple files at once (drag-and-drop or a file picker), processes
 them in parallel, and reports per-file results. One bad file never stops the batch.
 
+## Window or menu bar
+
+Toolbox runs either way, and every tool works the same in both.
+
+- **Menu bar** — the hammer icon opens a panel with the full toolbox: pick a tool,
+  drop files in, run it. On by default; turn it off in **Settings → General**.
+- **Dock-less** — switch on **Hide Dock icon** and Toolbox becomes a menu bar app:
+  no Dock icon, no app switcher entry, no window at login. It takes effect
+  immediately, no relaunch. The menu bar icon stays switched on while the Dock icon
+  is hidden, so there's always a way back — its menu also has **Show Dock Icon** and
+  **Open Toolbox Window**.
+- **Open at login** is in the same place, for either mode.
+
 ## Install
 
 Grab the latest `Toolbox-<version>.dmg` from
@@ -106,9 +119,14 @@ tool list. To add one:
    file in, file out, no UI imports. This keeps it unit-testable.
 2. Add a SwiftUI view in `Sources/Toolbox/Features/`. Wrap it in `ToolScaffold`
    and reuse `DropZone`, `FileList`, `ResultsList` and `DestinationPicker` to get
-   drag-and-drop, batching, progress and Finder reveal for free.
+   drag-and-drop, batching, progress and Finder reveal for free. Those components
+   read `\.toolPresentation` from the environment and size themselves for the
+   window or the menu bar panel, so one view covers both; for option pickers use
+   `.optionPickerStyle(presentation)` rather than `.pickerStyle(.segmented)`,
+   which is too wide for the panel.
 3. Append a `Utility` entry to `Utility.all` and add its `id` to the `switch` in
-   `makeView()`.
+   `makeView()`. Its `shortTitle` is what the menu bar panel's picker chips show,
+   so keep it to a word or two.
 
 `BatchRunner.run` handles concurrency, progress and per-file error isolation, so
 a new tool usually needs no threading code of its own.
@@ -124,6 +142,7 @@ Sources/Toolbox/        SwiftUI app
   Utility.swift          the tool registry
   Components/            shared UI: drop zone, file list, scaffold
   Features/              one view per tool
+  MenuBar/               the status-item panel, Dock/login-item settings
   Updates/               Sparkle wiring and the Settings pane
 Resources/              Info.plist, entitlements, generated icon
 Scripts/                build-app.sh, make-dmg.sh, release.sh, notarize.sh, make-icon.swift

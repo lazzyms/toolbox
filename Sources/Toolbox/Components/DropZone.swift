@@ -12,23 +12,25 @@ struct DropZone: View {
 
     @State private var isTargeted = false
 
+    @Environment(\.toolPresentation) private var presentation
+
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: presentation.isCompact ? 8 : 12) {
             Image(systemName: isTargeted ? "arrow.down.doc.fill" : "doc.badge.plus")
-                .font(.system(size: 34, weight: .light))
+                .font(.system(size: presentation.dropZoneIconSize, weight: .light))
                 .foregroundStyle(isTargeted ? Color.accentColor : .secondary)
                 .accessibilityHidden(true)
 
             Text(prompt)
-                .font(.callout)
+                .font(presentation.isCompact ? .caption : .callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
 
             Button("Choose Files…", action: openPanel)
-                .controlSize(.large)
+                .controlSize(presentation.isCompact ? .small : .large)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 30)
+        .padding(.vertical, presentation.dropZonePadding)
         .background {
             RoundedRectangle(cornerRadius: 12)
                 .fill(isTargeted ? Color.accentColor.opacity(0.08) : Color(nsColor: .textBackgroundColor).opacity(0.4))
@@ -54,6 +56,22 @@ struct DropZone: View {
         if !contentTypes.isEmpty {
             panel.allowedContentTypes = contentTypes
         }
+
+        // macOS closes the menu bar popover the moment it stops being the key
+        // window, which a modal open panel would cause — the user would come
+        // back to a dismissed panel. Hanging the picker off the popover as a
+        // sheet keeps the popover key, and open.
+        if presentation.isCompact, let host = NSApp.keyWindow {
+            panel.beginSheetModal(for: host) { response in
+                guard response == .OK else { return }
+                add(panel.urls)
+            }
+            return
+        }
+
+        // An accessory app isn't active, so its panel would open behind whatever
+        // is frontmost.
+        NSApp.activate(ignoringOtherApps: true)
         guard panel.runModal() == .OK else { return }
         add(panel.urls)
     }

@@ -29,6 +29,8 @@ struct CompressView: View {
     @State private var isRunning = false
     @State private var progress: Double?
 
+    @Environment(\.toolPresentation) private var presentation
+
     private var lossyChoices: [ImageFormat] {
         ImageFormat.encodable.filter { !$0.isLossless }
     }
@@ -49,14 +51,13 @@ struct CompressView: View {
                         ForEach(Mode.allCases) { Text($0.title).tag($0) }
                     }
                     .labelsHidden()
-                    .pickerStyle(.segmented)
-                    .fixedSize()
+                    .optionPickerStyle(presentation)
                 }
 
                 Text(mode.explanation)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .padding(.leading, 100)
+                    .padding(.leading, presentation.explanationInset)
                     .fixedSize(horizontal: false, vertical: true)
 
                 if mode == .lossy {
@@ -65,8 +66,7 @@ struct CompressView: View {
                             ForEach(lossyChoices) { Text($0.displayName).tag($0) }
                         }
                         .labelsHidden()
-                        .pickerStyle(.segmented)
-                        .fixedSize()
+                        .optionPickerStyle(presentation)
                     }
 
                     OptionRow(label: "Quality") {

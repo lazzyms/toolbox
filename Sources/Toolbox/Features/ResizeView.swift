@@ -29,6 +29,8 @@ struct ResizeView: View {
     @State private var isRunning = false
     @State private var progress: Double?
 
+    @Environment(\.toolPresentation) private var presentation
+
     var body: some View {
         ToolScaffold(
             utility: utility,
@@ -45,8 +47,7 @@ struct ResizeView: View {
                         ForEach(Method.allCases) { Text($0.title).tag($0) }
                     }
                     .labelsHidden()
-                    .pickerStyle(.segmented)
-                    .fixedSize()
+                    .optionPickerStyle(presentation)
                 }
 
                 switch method {
@@ -60,7 +61,7 @@ struct ResizeView: View {
                     Text("Scales down to fit inside the box. Aspect ratio is preserved — leave a field empty to leave that side unconstrained.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .padding(.leading, 100)
+                        .padding(.leading, presentation.explanationInset)
                         .fixedSize(horizontal: false, vertical: true)
 
                 case .longest:
@@ -71,7 +72,7 @@ struct ResizeView: View {
                     Text("Handles portrait and landscape in one batch — whichever side is longer becomes this size.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .padding(.leading, 100)
+                        .padding(.leading, presentation.explanationInset)
                         .fixedSize(horizontal: false, vertical: true)
 
                 case .percent:
@@ -95,7 +96,7 @@ struct ResizeView: View {
                           systemImage: "exclamationmark.triangle")
                         .font(.caption)
                         .foregroundStyle(.orange)
-                        .padding(.leading, 100)
+                        .padding(.leading, presentation.explanationInset)
                 }
 
                 if method != .exact {
