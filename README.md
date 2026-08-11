@@ -4,6 +4,8 @@ A native macOS app collecting the small file utilities you keep needing. Your fi
 are processed entirely on-device and never uploaded. The only network access is the
 update check described in [Updates](#updates), which you can turn off.
 
+**Website:** <https://lazzyms.github.io/toolbox> (source in [`docs/`](docs/))
+
 **Current tools**
 
 | Tool | What it does |
@@ -122,12 +124,40 @@ Sources/Toolbox/        SwiftUI app
   Updates/               Sparkle wiring and the Settings pane
 Resources/              Info.plist, entitlements, generated icon
 Scripts/                build-app.sh, make-dmg.sh, release.sh, notarize.sh, make-icon.swift
-docs/                   appcast.xml — the update feed, served by GitHub Pages
+docs/                   the website and appcast.xml — both served by GitHub Pages
 Tests/                  37 tests over real generated PDFs and images
 ```
 
 `ToolboxKit` has no dependencies at all, so the file-processing code stays offline and
 testable; Sparkle is linked only into the app target.
+
+## Website
+
+`docs/` is a single static page — `index.html` plus `assets/`. There is no build
+step, bundler or dependency, so GitHub Pages serves it as-is. Enabling Pages is
+the same one-time step the update feed needs (see [Updates](#updates)); the site
+and `appcast.xml` are served from the same directory and don't interact.
+
+To work on it locally:
+
+```bash
+python3 -m http.server -d docs 8000    # → http://localhost:8000
+```
+
+Two things there are generated rather than hand-maintained:
+
+- `docs/og.png` — the social preview card. Re-render it with
+  `swift Scripts/make-og-image.swift` after changing the wording.
+- `docs/assets/icon.svg` — the app icon redrawn on the same 1024pt grid as
+  `Scripts/make-icon.swift`; keep the two in sync.
+
+The download button resolves the real `Toolbox-<version>.dmg` asset from the
+releases API at page load, so it points straight at the current DMG without the
+URL needing to be edited each release. With JavaScript disabled it falls back to
+the releases page.
+
+`.nojekyll` matters here: it stops Pages running the files through Jekyll, which
+would otherwise be free to reinterpret them.
 
 ## Notes on behaviour
 

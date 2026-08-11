@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The app icon, mirroring the geometry in Scripts/make-icon.swift on the same
+     1024pt grid (y flipped for SVG). Keep the two in sync when either changes. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="Toolbox">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4A8FFA"/>
+      <stop offset="1" stop-color="#294FD4"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="64" y="64" width="896" height="896" rx="200" ry="200" fill="url(#bg)"/>
+
+  <!-- toolbox body -->
+  <rect x="232" y="387" width="560" height="330" rx="44" ry="44" fill="#ffffff" fill-opacity="0.96"/>
+
+  <!-- handle arc, centred on the body's top edge -->
+  <path d="M392 387a120 120 0 0 1 240 0" fill="none" stroke="#ffffff" stroke-opacity="0.96"
+        stroke-width="52" stroke-linecap="round"/>
+
+  <!-- latch -->
+  <rect x="437" y="517" width="150" height="70" rx="18" ry="18" fill="#294FD4"/>
+</svg>
