@@ -123,4 +123,60 @@ struct Fixtures: ~Copyable {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
         return CGImageSourceGetType(source) as String?
     }
+
+    /// A real animated GIF: one gradient frame per entry in `delays`, each
+    /// visibly different from the last so a dropped or duplicated frame shows up.
+    ///
+    /// Written with ImageIO's own GIF keys rather than through `ToolboxKit`, so a
+    /// round-trip test can't pass by agreeing with a bug in the code it checks.
+    func animatedGIF(
+        named name: String,
+        width: Int = 64,
+        height: Int = 48,
+        delays: [Double] = [0.1, 0.25, 0.4],
+        loopCount: Int = 0
+    ) throws -> URL {
+        let url = directory.appendingPathComponent(name).appendingPathExtension("gif")
+        guard let destination = CGImageDestinationCreateWithURL(
+            url as CFURL, UTType.gif.identifier as CFString, delays.count, nil
+        ) else {
+            throw ToolboxError.writeFailed(url)
+        }
+
+        CGImageDestinationSetProperties(destination, [
+            kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFLoopCount: loopCount],
+        ] as CFDictionary)
+
+        for (index, delay) in delays.enumerated() {
+            let context = CGContext(
+                data: nil, width: width, height: height,
+                bitsPerComponent: 8, bytesPerRow: 0,
+                space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            )!
+            for y in stride(from: 0, to: height, by: 4) {
+                for x in stride(from: 0, to: width, by: 4) {
+                    context.setFillColor(
+                        red: Double((x + index * 17) % width) / Double(width),
+                        green: Double(y) / Double(height),
+                        blue: Double((x ^ y ^ (index * 40)) % 256) / 255.0,
+                        alpha: 1
+                    )
+                    context.fill(CGRect(x: x, y: y, width: 4, height: 4))
+                }
+            }
+
+            CGImageDestinationAddImage(destination, context.makeImage()!, [
+                kCGImagePropertyGIFDictionary: [
+                    kCGImagePropertyGIFDelayTime: delay,
+                    kCGImagePropertyGIFUnclampedDelayTime: delay,
+                ],
+            ] as CFDictionary)
+        }
+
+        guard CGImageDestinationFinalize(destination) else {
+            throw ToolboxError.encodeFailed("GIF")
+        }
+        return url
+    }
 }

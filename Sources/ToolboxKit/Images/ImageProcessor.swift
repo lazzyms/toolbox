@@ -94,8 +94,21 @@ public struct ImageProcessor: Sendable {
         var originalSize = CGSize(width: declaredWidth ?? 0, height: declaredHeight ?? 0)
         let target = options.resize.target(for: originalSize, allowUpscale: options.allowUpscale)
 
+        // An animated GIF or a multi-page file must not come back as frame 0
+        // reported as a success, so every frame goes through the same transform
+        // — or the run fails and says which frames would have been lost.
+        let sequence = try ImageFrameSequence.read(
+            from: source,
+            input: input,
+            requestedFormat: options.format,
+            resize: options.resize,
+            target: target
+        )
+
         let image: CGImage
-        if let target {
+        if let sequence {
+            image = sequence.firstImage
+        } else if let target {
             // Thumbnail path does the decode and scale in one step and honours
             // the EXIF orientation, which is what makes rotated iPhone photos
             // come out upright.
@@ -134,16 +147,20 @@ public struct ImageProcessor: Sendable {
             for: input,
             in: options.location,
             suffix: options.suffix,
-            extension: outputFormat.fileExtension
+            extension: sequence?.fileExtension ?? outputFormat.fileExtension
         )
 
-        try Self.write(
-            image: image,
-            to: output,
-            format: outputFormat,
-            quality: options.quality,
-            sourceProperties: options.stripMetadata ? nil : properties
-        )
+        if let sequence {
+            try sequence.write(to: output, quality: options.quality)
+        } else {
+            try Self.write(
+                image: image,
+                to: output,
+                format: outputFormat,
+                quality: options.quality,
+                sourceProperties: options.stripMetadata ? nil : properties
+            )
+        }
 
         let originalBytes = OutputNaming.fileSize(of: input)
         let newBytes = OutputNaming.fileSize(of: output)
@@ -240,7 +257,8 @@ public struct ImageProcessor: Sendable {
     }
 
     /// Draws into an exact box, ignoring the source aspect ratio.
-    private static func redraw(_ image: CGImage, to size: CGSize) throws -> CGImage {
+    /// Not private so each frame of an animation scales identically.
+    static func redraw(_ image: CGImage, to size: CGSize) throws -> CGImage {
         let width = Int(size.width.rounded())
         let height = Int(size.height.rounded())
 
