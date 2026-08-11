@@ -458,7 +458,7 @@ swift test
         <span class="card-icon"><svg class="ico" aria-hidden="true"><use href="#i-beaker"/></svg></span>
         <h3 class="card-title">Adding a utility is three edits</h3>
         <p class="card-description">
-          <code>Sources/Toolbox/Utility.swift</code> is the only place that knows the tool
+          <code>Sources/Toolbox/Registry/</code> is the only place that knows the tool
           list, and <code>BatchRunner.run</code> already handles concurrency, progress and
           per-file error isolation — a new tool usually needs no threading code of its own.
         </p>
@@ -467,7 +467,7 @@ swift test
       <ol class="numbered">
         <li>Put the logic in <code>ToolboxKit</code> as a plain file-in / file-out function, so it's unit-testable without a running app.</li>
         <li>Add a SwiftUI view in <code>Features/</code>, wrapped in <code>ToolScaffold</code> — you get drag-and-drop, batching, progress and Finder reveal for free.</li>
-        <li>Append a <code>Utility</code> entry to <code>Utility.all</code> and add its <code>id</code> to the <code>switch</code> in <code>makeView()</code>.</li>
+        <li>Append one <code>Utility</code> line to its category's registry, passing <code>pane:</code> a closure that builds the view — a tool with no pane doesn't compile.</li>
       </ol>
     </div>
   </div>
