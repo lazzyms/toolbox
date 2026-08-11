@@ -18,7 +18,10 @@ them in parallel, and reports per-file results. One bad file never stops the bat
 
 ## Install
 
-Download `Toolbox-<version>.dmg`, open it, and drag **Toolbox** to Applications.
+Grab the latest `Toolbox-<version>.dmg` from
+**[Releases](https://github.com/lazzyms/toolbox/releases/latest)**, open it, and drag
+**Toolbox** to Applications. After that, Toolbox keeps itself up to date — see
+[Updates](#updates).
 
 Because this build isn't notarized by Apple, the first launch needs one extra step:
 
