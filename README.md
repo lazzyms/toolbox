@@ -154,6 +154,11 @@ Two things there are generated rather than hand-maintained:
 - `docs/assets/icon.svg` — the app icon redrawn on the same 1024pt grid as
   `Scripts/make-icon.swift`; keep the two in sync.
 
+The tip jar is the Buy Me a Coffee widget loaded from `cdnjs.buymeacoffee.com` at
+the bottom of `index.html`, rather than a section in the page. It is the only
+third-party request the page makes and the only part of it not served from this
+repo; with JavaScript disabled nothing appears, so the footer keeps a plain link.
+
 The download button resolves the real `Toolbox-<version>.dmg` asset from the
 releases API at page load, so it points straight at the current DMG without the
 URL needing to be edited each release. With JavaScript disabled it falls back to

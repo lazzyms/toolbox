@@ -88,11 +88,6 @@
     <symbol id="i-moon" viewBox="0 0 24 24">
       <path d="M20.4 14.6A8.8 8.8 0 0 1 9.4 3.6a8.8 8.8 0 1 0 11 11Z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/>
     </symbol>
-    <symbol id="i-coffee" viewBox="0 0 24 24">
-      <path d="M3.6 8.6h12.6v5.2a5.6 5.6 0 0 1-5.6 5.6H9.2a5.6 5.6 0 0 1-5.6-5.6Z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/>
-      <path d="M16.4 9.9h1.7a2.7 2.7 0 0 1 0 5.4h-1.7" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/>
-      <path d="M7.4 2.8v2.6m4.4-2.6v2.6" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
-    </symbol>
   </defs>
 </svg>
 
@@ -110,7 +105,6 @@
       <a href="#install">Install</a>
       <a href="#build">Build</a>
       <a href="#faq">FAQ</a>
-      <a href="#support">Support</a>
     </nav>
     <div class="nav-actions">
       <button id="theme-toggle" class="icon-btn" type="button" aria-label="Switch to light appearance">
@@ -499,30 +493,6 @@ swift test
   </div>
 </section>
 
-<!-- ───────────────────────────── support ───────────────────────────── -->
-<section class="section alt" id="support">
-  <div class="wrap narrow">
-    <div class="support">
-      <span class="support-ico"><svg class="ico" aria-hidden="true"><use href="#i-coffee"/></svg></span>
-      <p class="kicker">Support the project</p>
-      <h2>Free forever. Coffee optional.</h2>
-      <p class="lede-p">
-        Toolbox is MIT licensed and stays that way — there's no paid tier, no trial and
-        nothing held back. If it saved you from uploading a private PDF to some stranger's
-        website, you're welcome to put something in the tip jar instead.
-      </p>
-      <a class="btn bmc" href="https://buymeacoffee.com/lazzyms" target="_blank" rel="noopener">
-        <svg class="ico" aria-hidden="true"><use href="#i-coffee"/></svg>
-        Buy me a coffee
-      </a>
-      <p class="support-note">
-        Opens buymeacoffee.com in a new tab. Entirely optional — nothing in the app
-        changes either way.
-      </p>
-    </div>
-  </div>
-</section>
-
 <section class="closer">
   <div class="wrap">
     <span class="brand-mark big" aria-hidden="true"></span>
@@ -559,5 +529,18 @@ swift test
 </footer>
 
 <script src="assets/app.js"></script>
+
+<!-- Buy Me a Coffee — a floating button the vendor script injects itself, in place
+     of the section that used to sit above the closer. It is the only third party
+     the page talks to; everything else here is local and static. -->
+<script data-name="BMC-Widget" data-cfasync="false"
+        src="https://cdnjs.buymeacoffee.com/1.0.0/widget.prod.min.js"
+        data-id="gBqcsJK"
+        data-description="Support me on Buy me a coffee!"
+        data-message="Free forever. Coffee optional"
+        data-color="#FF813F"
+        data-position="Right"
+        data-x_margin="18"
+        data-y_margin="18"></script>
 </body>
 </html>
