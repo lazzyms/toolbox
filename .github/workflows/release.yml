@@ -57,7 +57,7 @@ jobs:
       pr: ${{ steps.plan.outputs.pr }}
       title: ${{ steps.plan.outputs.title }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # tags are the version source of truth
 
@@ -114,7 +114,7 @@ jobs:
     env:
       VERSION: ${{ needs.plan.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Full history: CFBundleVersion is `git rev-list --count HEAD`, and
           # release.sh needs the tags to push against.
@@ -198,7 +198,7 @@ jobs:
       # tells you whether the bundle or the publish step was at fault.
       - name: Keep the DMG
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: Toolbox-${{ needs.plan.outputs.version }}
           path: dist/*.dmg
