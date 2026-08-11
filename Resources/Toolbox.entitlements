@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Deliberately NOT sandboxed.
+
+	  The default workflow is "save the result next to the original". Under App
+	  Sandbox, picking photo.heic grants access to that file but not permission
+	  to create photo.png beside it, so the app's main feature would fail unless
+	  the user picked an output folder every single time.
+
+	  This app is distributed outside the App Store, where the sandbox is
+	  optional. It still runs under the Hardened Runtime, has no network
+	  entitlement, and never opens a socket — everything happens locally.
+	-->
+
+	<!-- No JIT, no unsigned memory, no library injection, no network. -->
+	<key>com.apple.security.cs.allow-jit</key>
+	<false/>
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<false/>
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<false/>
+</dict>
+</plist>
