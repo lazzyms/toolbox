@@ -16,6 +16,8 @@ public enum ToolboxError: LocalizedError, Equatable {
     case wouldDropFrames(URL, frames: Int, format: String)
     /// The frames read fine, but ImageIO can't write that format's animation.
     case cannotWriteFrames(URL, frames: Int, format: String)
+    /// A rotation that isn't a whole quarter turn.
+    case unsupportedRotation(Int)
 
     public var errorDescription: String? {
         switch self {
@@ -47,6 +49,8 @@ public enum ToolboxError: LocalizedError, Equatable {
         case .cannotWriteFrames(let url, let frames, let format):
             return "“\(url.lastPathComponent)” has \(frames) frames, and this Mac "
                 + "can't write an animated \(format) file."
+        case .unsupportedRotation(let degrees):
+            return "Can't rotate by \(degrees)°."
         }
     }
 
@@ -64,6 +68,8 @@ public enum ToolboxError: LocalizedError, Equatable {
                 + "because they write the file back in its own format."
         case .cannotWriteFrames:
             return "Nothing was written and the original is untouched."
+        case .unsupportedRotation:
+            return "Rotation works in quarter turns: 90°, 180° or 270°."
         default:
             return nil
         }
