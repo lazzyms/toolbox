@@ -20,9 +20,10 @@
       'aria-label',
       `Switch to ${theme === 'dark' ? 'light' : 'dark'} appearance`
     );
+    // Matches --background in styles.css: oklch(0.145 0 0) / oklch(1 0 0).
     $('meta[name="theme-color"]')?.setAttribute(
       'content',
-      theme === 'dark' ? '#07090f' : '#f6f8fc'
+      theme === 'dark' ? '#0a0a0a' : '#ffffff'
     );
   };
 
@@ -199,7 +200,6 @@
       id: 'pdf-unlock',
       category: 'pdf',
       icon: 'i-lock-open',
-      tint: 'var(--orange)',
       title: 'Remove PDF Password',
       blurb: 'Save an unlocked copy of a PDF you know the password for.',
       prompt: 'Drop password-protected PDFs here',
@@ -219,7 +219,6 @@
       id: 'heic-convert',
       category: 'images',
       icon: 'i-convert',
-      tint: 'var(--blue)',
       title: 'Convert Image Format',
       blurb: 'HEIC to PNG, JPEG and back — batch friendly.',
       prompt: 'Drop HEIC, PNG, JPEG, TIFF or RAW images here',
@@ -241,7 +240,6 @@
       id: 'compress',
       category: 'images',
       icon: 'i-compress',
-      tint: 'var(--green)',
       title: 'Compress Images',
       blurb: 'Shrink files losslessly, or trade quality for size.',
       prompt: 'Drop images to make smaller',
@@ -266,7 +264,6 @@
       id: 'resize',
       category: 'images',
       icon: 'i-resize',
-      tint: 'var(--purple)',
       title: 'Resize Images',
       blurb: 'Scale by pixels, percentage or longest side.',
       prompt: 'Drop images to resize',
@@ -310,7 +307,7 @@
     const category = list.dataset.category;
     list.innerHTML = TOOLS.filter((t) => t.category === category).map((t) => `
       <li>
-        <button type="button" data-tool="${t.id}" style="--tint:${t.tint}">
+        <button type="button" data-tool="${t.id}">
           <svg class="ico" aria-hidden="true"><use href="#${t.icon}"/></svg>
           <span>${esc(t.title)}</span>
         </button>
@@ -331,7 +328,7 @@
       case 'password':
         return `<div class="opt">
             <label for="d-pw">${opt.label}</label>
-            <input class="field" id="d-pw" type="password" value="hunter2" style="width:140px" readonly>
+            <input class="input" id="d-pw" type="password" value="hunter2" style="width:8.75rem" readonly>
           </div>`;
 
       case 'segment': {
@@ -342,7 +339,7 @@
           ? `<p class="hint">${esc(opt.hints[opt.value])}</p>` : '';
         return `<div class="opt">
             <label>${opt.label}</label>
-            <div class="seg">${buttons}</div>
+            <div class="tabs">${buttons}</div>
           </div>${hint}`;
       }
 
@@ -357,22 +354,22 @@
       case 'size':
         return `<div class="opt">
             <label>${opt.label}</label>
-            <input class="field" type="text" value="2000" aria-label="Width" readonly>
+            <input class="input" type="text" value="2000" aria-label="Width" readonly style="width:4rem">
             <span aria-hidden="true">×</span>
-            <input class="field" type="text" value="2000" aria-label="Height" readonly>
+            <input class="input" type="text" value="2000" aria-label="Height" readonly style="width:4rem">
             <span class="val">px</span>
           </div>`;
 
       case 'check':
         return `<div class="opt">
             <label>${opt.label}</label>
-            <label class="check"><input type="checkbox"> ${esc(opt.text)}</label>
+            <label class="check"><input class="checkbox" type="checkbox"> ${esc(opt.text)}</label>
           </div>`;
 
       case 'destination':
         return `<div class="opt">
             <label>Save to</label>
-            <div class="seg">
+            <div class="tabs">
               <button type="button" aria-pressed="true">Next to originals</button>
               <button type="button" aria-pressed="false">Choose folder…</button>
             </div>
@@ -398,7 +395,9 @@
         : file.size;
 
       return `<div class="filerow${finished ? ' done' : ''}" style="animation-delay:${i * 55}ms">
-          <span class="state" aria-hidden="true">${finished ? '✓' : '·'}</span>
+          <span class="state" aria-hidden="true">${finished
+            ? '<svg class="ico" style="width:.75rem;height:.75rem"><use href="#i-check"/></svg>'
+            : '·'}</span>
           <span class="name">${esc(finished ? outName : file.name)}</span>
           <span class="size">${esc(size)}</span>
         </div>`;
@@ -416,7 +415,7 @@
       : tool.run;
 
     const status = running
-      ? `<div class="bar"><i style="width:${Math.round(state.progress * 100)}%"></i></div>
+      ? `<div class="progress"><i style="width:${Math.round(state.progress * 100)}%"></i></div>
          <span class="status">Working…</span>`
       : state.phase === 'done'
         ? `<span class="status">${total} of ${total} succeeded</span>`
@@ -430,9 +429,9 @@
     }
 
     detail.innerHTML = `
-      <div class="detail-scroll" style="--tint:${tool.tint}">
+      <div class="detail-scroll">
         <div class="detail-head">
-          <svg class="ico" aria-hidden="true"><use href="#${tool.icon}"/></svg>
+          <span class="card-icon"><svg class="ico" aria-hidden="true"><use href="#${tool.icon}"/></svg></span>
           <div>
             <h4>${esc(tool.title)}</h4>
             <p>${esc(tool.blurb)}</p>
@@ -444,7 +443,7 @@
           : `<div class="dropzone">
                <span class="glyph" aria-hidden="true">⬇</span>
                <p>${esc(tool.prompt)}</p>
-               <button class="fake-btn" type="button" data-add>Choose Files…</button>
+               <button class="btn btn-outline btn-sm" type="button" data-add>Choose Files…</button>
              </div>`}
 
         ${tool.options.map((o, i) => optionMarkup(tool, o, i)).join('')}
@@ -452,7 +451,7 @@
 
       <div class="runbar">
         ${status}
-        <button class="run" type="button" data-run ${running ? 'disabled' : ''}>
+        <button class="btn btn-default btn-sm" type="button" data-run ${running ? 'disabled' : ''}>
           ${esc(state.phase === 'done' ? 'Run again' : runLabel)}
         </button>
       </div>`;

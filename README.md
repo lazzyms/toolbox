@@ -141,18 +141,38 @@ step, bundler or dependency, so GitHub Pages serves it as-is. Enabling Pages is
 the same one-time step the update feed needs (see [Updates](#updates)); the site
 and `appcast.xml` are served from the same directory and don't interact.
 
+`assets/styles.css` is a hand-written port of the [shadcn/ui](https://ui.shadcn.com)
+design language rather than a framework install — the same design tokens
+(`--background`/`--foreground`, `--card`, `--muted`, `--primary`, `--border`,
+`--ring`, `--radius`) and the same component recipes (button, card, badge, alert,
+separator, table, accordion, tabs, input, slider, progress), which is what keeps
+the directory build-free. The palette is shadcn's "neutral" scale with the chroma
+set to zero, so the page is greyscale in both appearances: emphasis comes from
+contrast and borders, never from hue. Adding a component means adding its recipe
+under the `shadcn components` heading in that file and reusing the tokens.
+
 To work on it locally:
 
 ```bash
 python3 -m http.server -d docs 8000    # → http://localhost:8000
 ```
 
+Append `?theme=light` or `?theme=dark` to force an appearance without touching
+system settings.
+
 Two things there are generated rather than hand-maintained:
 
 - `docs/og.png` — the social preview card. Re-render it with
-  `swift Scripts/make-og-image.swift` after changing the wording.
+  `swift Scripts/make-og-image.swift` after changing the wording. Note it still
+  uses the app's blue brand gradient, unlike the page itself.
 - `docs/assets/icon.svg` — the app icon redrawn on the same 1024pt grid as
-  `Scripts/make-icon.swift`; keep the two in sync.
+  `Scripts/make-icon.swift`; keep the two in sync. It stays in the app's brand
+  colours on purpose, so the favicon matches the icon in the Dock.
+
+The tip jar is the Buy Me a Coffee widget loaded from `cdnjs.buymeacoffee.com` at
+the bottom of `index.html`, rather than a section in the page. It is the only
+third-party request the page makes and the only part of it not served from this
+repo; with JavaScript disabled nothing appears, so the footer keeps a plain link.
 
 The download button resolves the real `Toolbox-<version>.dmg` asset from the
 releases API at page load, so it points straight at the current DMG without the
