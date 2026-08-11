@@ -186,8 +186,9 @@ For contributors that means two things:
 
 - **Don't bump versions, edit `docs/appcast.xml`, or add tags in a pull request.** The
   version is derived from the newest tag, and the feed is rewritten by the workflow.
-- **Your PR title becomes the release notes**, so write it as something a user would
-  understand.
+- **Your PR becomes the release notes.** A `## Release notes` section in the description
+  is used as-is; otherwise the title is. Either way it reaches users inside the app, in
+  Sparkle's "what's new" dialog, so write it for them rather than for reviewers.
 
 A maintainer picks the size of the bump with a label on the PR before merging: none for
 a patch, `minor` or `major` to go further, `no-release` to merge without publishing.

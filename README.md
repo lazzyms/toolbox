@@ -78,8 +78,10 @@ that:
 | `major` | `1.0.0` → `2.0.0` |
 | `no-release` | nothing is published |
 
-Release notes are the PR's title plus a compare link, so they read sensibly both on
-the release page and in Sparkle's "what's new" dialog.
+Release notes come from the merged PR: a `## Release notes` section in its description
+if there is one, otherwise the PR title. They show up on the release page *and* in
+Sparkle's "what's new" dialog, so that section is worth writing whenever the title
+alone wouldn't tell a user what changed.
 
 To release by hand, or to test a change to the pipeline:
 

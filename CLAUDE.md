@@ -121,6 +121,8 @@ gates it, and `ci.yml` runs the same tests on every PR so a red `main` doesn't b
 
 - **Version** comes from `Scripts/next-version.sh` — newest `v*` tag, bumped a patch. Labels on the
   merged PR override: `minor`, `major`, or `no-release` to skip publishing entirely.
+- **Notes** are the merged PR's `## Release notes` section, falling back to its title. They are
+  embedded in the appcast, so they're what Sparkle shows users — not just release-page decoration.
 - **The signing key** is the `SPARKLE_PRIVATE_KEY` secret, read by `release.sh` when set (`--ed-key-file -`,
   via stdin) instead of the Keychain. Its public half is `SUPublicEDKey` in `Info.plist`; they must stay
   a pair or every client rejects the update.

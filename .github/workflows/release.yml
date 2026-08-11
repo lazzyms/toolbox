@@ -56,6 +56,7 @@ jobs:
       previous: ${{ steps.plan.outputs.previous }}
       pr: ${{ steps.plan.outputs.pr }}
       title: ${{ steps.plan.outputs.title }}
+      notes: ${{ steps.plan.outputs.notes }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -74,12 +75,14 @@ jobs:
           LABELS=""
           PR=""
           TITLE=""
+          BODY=""
           if [[ "$EVENT_NAME" != "workflow_dispatch" ]]; then
             # Which PR did this commit arrive in? Resolves for merge commits and
             # squashes alike, and comes back empty for a direct push to main.
             PULLS="$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls")"
             PR="$(jq -r '.[0].number // ""' <<<"$PULLS")"
             TITLE="$(jq -r '.[0].title // ""' <<<"$PULLS")"
+            BODY="$(jq -r '.[0].body // ""' <<<"$PULLS")"
             LABELS="$(jq -r '[.[0].labels[]?.name] | join(" ")' <<<"$PULLS")"
           fi
 
@@ -93,6 +96,25 @@ jobs:
             ./Scripts/next-version.sh)"
           PREVIOUS="$(./Scripts/next-version.sh --previous)"
 
+          # A "## Release notes" section in the PR body wins over the title. These
+          # notes are the only changelog users see — they land in Sparkle's
+          # what's-new dialog — and a PR title that reads fine on GitHub often
+          # doesn't ("Fix #12", "Address review comments").
+          # Everything under the heading up to the next one, with blank lines held
+          # back until something follows them — that trims the leading and trailing
+          # ones without losing the blanks between paragraphs.
+          NOTES="$(awk '
+            /^#+[[:space:]]*[Rr]elease [Nn]otes[[:space:]]*$/ { grab = 1; next }
+            grab && /^#+[[:space:]]/ { grab = 0 }
+            grab {
+              if ($0 ~ /^[[:space:]]*$/) { if (started) pending++; next }
+              for (i = 0; i < pending; i++) print ""
+              pending = 0
+              started = 1
+              print
+            }
+          ' <<<"$BODY")"
+
           {
             echo "release=true"
             echo "version=$NEXT"
@@ -102,9 +124,21 @@ jobs:
             # flatten anyway rather than corrupt every later output on the day
             # one does.
             echo "title=${TITLE//$'\n'/ }"
+            # Multi-line values need the delimiter form. The delimiter is one no
+            # PR body would contain, since a collision would let a body forge
+            # further outputs.
+            echo "notes<<TOOLBOX_NOTES_EOF_9f3c"
+            echo "$NOTES"
+            echo "TOOLBOX_NOTES_EOF_9f3c"
           } >> "$GITHUB_OUTPUT"
 
           echo "Releasing $NEXT (was ${PREVIOUS:-nothing}), from PR #${PR:-none}"
+          if [[ -n "$NOTES" ]]; then
+            echo "Using the PR's Release notes section:"
+            echo "$NOTES"
+          else
+            echo "No Release notes section in the PR body — using the title."
+          fi
 
   release:
     needs: plan
@@ -146,6 +180,7 @@ jobs:
       - name: Write release notes
         env:
           TITLE: ${{ needs.plan.outputs.title }}
+          BODY_NOTES: ${{ needs.plan.outputs.notes }}
           PR: ${{ needs.plan.outputs.pr }}
           PREVIOUS: ${{ needs.plan.outputs.previous }}
         run: |
@@ -155,7 +190,9 @@ jobs:
           mkdir -p dist
           NOTES=dist/release-notes.md
 
-          if [[ -n "$TITLE" ]]; then
+          if [[ -n "$BODY_NOTES" ]]; then
+            printf '%s\n' "$BODY_NOTES" > "$NOTES"
+          elif [[ -n "$TITLE" ]]; then
             if [[ -n "$PR" ]]; then
               printf -- '- %s (#%s)\n' "$TITLE" "$PR" > "$NOTES"
             else
