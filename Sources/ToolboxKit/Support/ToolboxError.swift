@@ -22,6 +22,10 @@ public enum ToolboxError: LocalizedError, Equatable {
     case invalidPageRange(String)
     /// An icon set with no usable sizes, carrying the reason as a message.
     case invalidIconSizes(String)
+    /// A GIF-tool request that can't be honoured, carrying the reason.
+    case invalidGIFOptions(String)
+    /// A "split the animation" request landed on something with a single frame.
+    case notAnimated(URL)
 
     public var errorDescription: String? {
         switch self {
@@ -59,6 +63,10 @@ public enum ToolboxError: LocalizedError, Equatable {
             return reason
         case .invalidIconSizes(let reason):
             return reason
+        case .invalidGIFOptions(let reason):
+            return reason
+        case .notAnimated(let url):
+            return "“\(url.lastPathComponent)” has a single frame — nothing to extract."
         }
     }
 
