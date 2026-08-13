@@ -26,6 +26,8 @@ public enum ToolboxError: LocalizedError, Equatable {
     case invalidGIFOptions(String)
     /// A "split the animation" request landed on something with a single frame.
     case notAnimated(URL)
+    /// A crop that can't be applied, carrying the reason as a message.
+    case invalidCrop(String)
 
     public var errorDescription: String? {
         switch self {
@@ -67,6 +69,8 @@ public enum ToolboxError: LocalizedError, Equatable {
             return reason
         case .notAnimated(let url):
             return "“\(url.lastPathComponent)” has a single frame — nothing to extract."
+        case .invalidCrop(let reason):
+            return reason
         }
     }
 
