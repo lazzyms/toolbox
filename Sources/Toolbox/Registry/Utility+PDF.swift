@@ -8,5 +8,6 @@ extension Utility {
     /// conflict on that line alone — resolved by keeping both.
     static let pdfTools: [Utility] = [
         Utility(id: "pdf-unlock", title: "Remove PDF Password", shortTitle: "Unlock PDF", blurb: "Save an unlocked copy of a PDF you know the password for.", symbol: "lock.open.fill", tint: .orange, category: .pdf, pane: { PDFUnlockView(utility: $0) }),
+        Utility(id: "pdf-page-numbers", title: "Add PDF Page Numbers", shortTitle: "Page Numbers", blurb: "Stamp page numbers onto a PDF.", symbol: "number", tint: .blue, category: .pdf, pane: { PDFPageNumbersView(utility: $0) }),
     ]
 }

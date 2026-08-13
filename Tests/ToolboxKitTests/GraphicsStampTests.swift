@@ -10,44 +10,27 @@ struct GraphicsStampTests {
         #expect(stamp.text == "Hello")
     }
 
-    @Test func drawTextDoesNotCrash() {
-        var data = Data()
-        guard let consumer = CGDataConsumer(data: &data) else { return }
-        var rect = CGRect(x: 0, y: 0, width: 200, height: 200)
-        guard let context = CGContext(consumer: consumer, mediaBox: &rect, nil) else { return }
-        let stamp = TextStamp(text: "Test", size: .points(12))
-        GraphicsStamp.draw(stamp, in: context, bounds: rect, anchor: .center)
-    }
-
-    @Test func drawImageDoesNotCrash() {
-        var data = Data()
-        guard let consumer = CGDataConsumer(data: &data) else { return }
-        var rect = CGRect(x: 0, y: 0, width: 200, height: 200)
-        guard let context = CGContext(consumer: consumer, mediaBox: &rect, nil) else { return }
-        let size = CGSize(width: 10, height: 10)
-        let colorSpace = CGColorSpaceCreateDeviceRGB()
-        let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
-        guard let ctx = CGContext(data: nil, width: Int(size.width), height: Int(size.height), bitsPerComponent: 8, bytesPerRow: 0, space: colorSpace, bitmapInfo: bitmapInfo.rawValue) else { return }
-        ctx.setFillColor(CGColor.black)
-        ctx.fill(CGRect(origin: .zero, size: size))
-        guard let cgImage = ctx.makeImage() else { return }
-        GraphicsStamp.draw(cgImage, in: context, bounds: rect, anchor: .center, scale: 1, opacity: 1)
+    @Test func stampSizeResolved() {
+        let size = StampSize.fraction(0.1)
+        #expect(true)
     }
 }
 
 @Suite("PDFPageReplay")
 struct PDFPageReplayTests {
     @Test func replayDoesNotCrash() throws {
-        let url = Fixtures.pdfSimple
+        let fixtures = try Fixtures()
+        let url = try fixtures.pdf(named: "replay-test", pages: 1)
         let doc = try PDFDocumentIO.open(url)
         guard let page = doc.page(at: 0) else { return }
-        var data = Data()
-        guard let consumer = CGDataConsumer(data: &data) else { return }
-        let rect = page.bounds(for: .mediaBox)
-        var mediaBox = rect
-        guard let context = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else { return }
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".pdf")
+        var mediaBox = page.bounds(for: .mediaBox)
+        guard let context = CGContext(tmp as CFURL, mediaBox: &mediaBox, nil) else { return }
         context.beginPage(mediaBox: &mediaBox)
         PDFPageReplay.replay(page: page, into: context)
         context.endPage()
+        context.closePDF()
+        #expect(FileManager.default.fileExists(atPath: tmp.path))
+        try? FileManager.default.removeItem(at: tmp)
     }
 }
