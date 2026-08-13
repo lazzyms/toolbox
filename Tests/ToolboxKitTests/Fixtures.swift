@@ -179,4 +179,116 @@ struct Fixtures: ~Copyable {
         }
         return url
     }
+
+    /// Four flat quadrants, named in the order they are *displayed*: top-left,
+    /// top-right, bottom-left, bottom-right.
+    ///
+    /// Flat colours mean a single pixel says where a crop landed and which way a
+    /// rotation went, which is what the operation-order tests read back.
+    func quadrantImage(
+        named name: String,
+        width: Int,
+        height: Int,
+        format: ImageFormat = .png
+    ) throws -> URL {
+        let context = CGContext(
+            data: nil, width: width, height: height,
+            bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )!
+
+        // CGContext puts the origin at the bottom left; flipping first means the
+        // rects below can be written the way the image is displayed.
+        context.translateBy(x: 0, y: Double(height))
+        context.scaleBy(x: 1, y: -1)
+
+        let halfWidth = Double(width) / 2
+        let halfHeight = Double(height) / 2
+        let quadrants: [(CGRect, (Double, Double, Double))] = [
+            (CGRect(x: 0, y: 0, width: halfWidth, height: halfHeight), (1, 0, 0)),
+            (CGRect(x: halfWidth, y: 0, width: halfWidth, height: halfHeight), (0, 1, 0)),
+            (CGRect(x: 0, y: halfHeight, width: halfWidth, height: halfHeight), (0, 0, 1)),
+            (CGRect(x: halfWidth, y: halfHeight, width: halfWidth, height: halfHeight), (1, 1, 0)),
+        ]
+        for (rect, colour) in quadrants {
+            context.setFillColor(red: colour.0, green: colour.1, blue: colour.2, alpha: 1)
+            context.fill(rect)
+        }
+
+        let url = directory.appendingPathComponent(name)
+            .appendingPathExtension(format.fileExtension)
+        let destination = CGImageDestinationCreateWithURL(
+            url as CFURL, format.utType.identifier as CFString, 1, nil
+        )!
+        CGImageDestinationAddImage(destination, context.makeImage()!, nil)
+        guard CGImageDestinationFinalize(destination) else {
+            throw ToolboxError.encodeFailed(format.displayName)
+        }
+        return url
+    }
+
+    /// A Display P3 image, tagged with that profile.
+    ///
+    /// The fill is P3's own fully saturated red, which sits outside the sRGB
+    /// gamut, so a pipeline that quietly flattens to sRGB changes the file
+    /// rather than merely relabelling it.
+    func wideGamutImage(named name: String, width: Int = 120, height: Int = 90) throws -> URL {
+        let p3 = CGColorSpace(name: CGColorSpace.displayP3)!
+        let context = CGContext(
+            data: nil, width: width, height: height,
+            bitsPerComponent: 8, bytesPerRow: 0, space: p3,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )!
+        context.setFillColor(red: 1, green: 0, blue: 0, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        context.setFillColor(red: 0, green: 1, blue: 0, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: width / 2, height: height / 2))
+
+        // PNG so the profile survives losslessly and no quality dial is involved.
+        let url = directory.appendingPathComponent(name).appendingPathExtension("png")
+        let destination = CGImageDestinationCreateWithURL(
+            url as CFURL, UTType.png.identifier as CFString, 1, nil
+        )!
+        CGImageDestinationAddImage(destination, context.makeImage()!, nil)
+        guard CGImageDestinationFinalize(destination) else {
+            throw ToolboxError.encodeFailed("PNG")
+        }
+        return url
+    }
+
+    /// A JPEG carrying an EXIF orientation tag, deliberately not square so that
+    /// applying the orientation is visible in the pixel dimensions alone.
+    ///
+    /// Orientation 6 means "rotate a quarter turn clockwise to display", so a
+    /// 40×20 file like this one is 20×40 as the user sees it.
+    func orientedJPEG(
+        named name: String,
+        orientation: Int = 6,
+        width: Int = 40,
+        height: Int = 20
+    ) throws -> URL {
+        let context = CGContext(
+            data: nil, width: width, height: height,
+            bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )!
+        context.setFillColor(red: 1, green: 0, blue: 0, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: width / 2, height: height))
+        context.setFillColor(red: 0, green: 0, blue: 1, alpha: 1)
+        context.fill(CGRect(x: width / 2, y: 0, width: width / 2, height: height))
+
+        let url = directory.appendingPathComponent(name).appendingPathExtension("jpg")
+        let destination = CGImageDestinationCreateWithURL(
+            url as CFURL, UTType.jpeg.identifier as CFString, 1, nil
+        )!
+        CGImageDestinationAddImage(destination, context.makeImage()!, [
+            kCGImagePropertyOrientation: orientation,
+        ] as CFDictionary)
+        guard CGImageDestinationFinalize(destination) else {
+            throw ToolboxError.encodeFailed("JPEG")
+        }
+        return url
+    }
 }

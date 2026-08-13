@@ -4,18 +4,30 @@ import Foundation
 public struct JobOutcome: Sendable, Identifiable {
     public let id: URL
     public let input: URL
-    public let output: URL?
+    /// Every file a job produced. Most tools produce one, which is why
+    /// `output` — the first element — has always been the public face. Split,
+    /// extract-pages and PDF→JPG write several and report them all here.
+    public let outputs: [URL]
     public let detail: String
     public let failure: String?
 
     public var succeeded: Bool { failure == nil }
 
-    public init(input: URL, output: URL?, detail: String, failure: String? = nil) {
+    /// The first output, or nil when the job produced nothing. Existing call
+    /// sites and tests keep reading this; tools that write one file per input
+    /// never need to look at `outputs` at all.
+    public var output: URL? { outputs.first }
+
+    public init(input: URL, outputs: [URL], detail: String, failure: String? = nil) {
         self.id = input
         self.input = input
-        self.output = output
+        self.outputs = outputs
         self.detail = detail
         self.failure = failure
+    }
+
+    public init(input: URL, output: URL?, detail: String, failure: String? = nil) {
+        self.init(input: input, outputs: output.map { [$0] } ?? [], detail: detail, failure: failure)
     }
 }
 
