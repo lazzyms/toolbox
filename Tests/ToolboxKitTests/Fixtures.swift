@@ -882,4 +882,35 @@ struct Fixtures: ~Copyable {
         }
         return image
     }
+
+    /// accept either a cutout or an honest no-subject failure.
+    func highContrastSubjectImage(
+        named name: String,
+        width: Int = 400,
+        height: Int = 300
+    ) throws -> URL {
+        let context = CGContext(
+            data: nil, width: width, height: height,
+            bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )!
+        context.setFillColor(CGColor(gray: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        context.setFillColor(red: 0.05, green: 0.05, blue: 0.05, alpha: 1)
+        context.fillEllipse(in: CGRect(
+            x: Double(width) * 0.25, y: Double(height) * 0.25,
+            width: Double(width) * 0.5, height: Double(height) * 0.5
+        ))
+
+        let url = directory.appendingPathComponent(name).appendingPathExtension("png")
+        let destination = CGImageDestinationCreateWithURL(
+            url as CFURL, UTType.png.identifier as CFString, 1, nil
+        )!
+        CGImageDestinationAddImage(destination, context.makeImage()!, nil)
+        guard CGImageDestinationFinalize(destination) else {
+            throw ToolboxError.encodeFailed("PNG")
+        }
+        return url
+    }
 }

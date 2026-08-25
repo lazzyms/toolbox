@@ -20,5 +20,6 @@ extension Utility {
         Utility(id: "image-tone", title: "Colour & Tone Adjustments", shortTitle: "Tone", blurb: "Batch brightness, contrast, saturation, exposure and one-tap presets.", symbol: "slider.horizontal.3", tint: .yellow, category: .images, pane: { ImageToneView(utility: $0) }),
         Utility(id: "tiff-pages", title: "Split & Combine TIFF", shortTitle: "TIFF Pages", blurb: "Break a multi-page TIFF into images, or bind a batch of images into one.", symbol: "rectangle.split.2x1", tint: .brown, category: .images, pane: { TIFFView(utility: $0) }),
         Utility(id: "image-blur-faces", title: "Blur Faces", shortTitle: "Blur Faces", blurb: "Detect faces on-device and blur them — photos never leave this Mac.", symbol: "face.dashed", tint: .red, category: .images, pane: { ImageBlurFacesView(utility: $0) }),
+        Utility(id: "image-remove-bg", title: "Remove Background", shortTitle: "Cutout", blurb: "Lift the subject out of a photo into a transparent PNG — on-device with Vision.", symbol: "wand.and.stars", tint: .purple, category: .images, pane: { ImageRemoveBackgroundView(utility: $0) }),
     ]
 }

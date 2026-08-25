@@ -57,6 +57,10 @@ public enum ToolboxError: LocalizedError, Equatable {
     case noFacesDetected(URL)
     /// The Vision face detector itself failed, carrying its message.
     case faceDetectionFailed(String)
+    /// Subject segmentation that found no distinct foreground.
+    case noSubjectFound(URL)
+    /// The Vision segmentation engine itself failed, carrying its message.
+    case segmentationFailed(String)
 
     public var errorDescription: String? {
         switch self {
@@ -128,6 +132,10 @@ public enum ToolboxError: LocalizedError, Equatable {
             return "No faces were found in “\(url.lastPathComponent)” — nothing was blurred."
         case .faceDetectionFailed(let reason):
             return "Face detection failed: \(reason)"
+        case .noSubjectFound(let url):
+            return "No distinct subject found in “\(url.lastPathComponent)”."
+        case .segmentationFailed(let reason):
+            return "Subject detection failed: \(reason)"
         }
     }
 
