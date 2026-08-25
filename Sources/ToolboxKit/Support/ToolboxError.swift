@@ -38,6 +38,8 @@ public enum ToolboxError: LocalizedError, Equatable {
     case emptyPassword
     /// A protection write that couldn't be verified as locked.
     case protectionFailed(URL)
+    /// A job that needs files was handed none.
+    case emptySelection
 
     public var errorDescription: String? {
         switch self {
@@ -91,6 +93,8 @@ public enum ToolboxError: LocalizedError, Equatable {
             return "Enter a password."
         case .protectionFailed:
             return "Protection couldn't be verified — no file was written."
+        case .emptySelection:
+            return "Add at least one file."
         }
     }
 
