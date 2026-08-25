@@ -204,3 +204,17 @@ lives in `.git/.graphite_metadata.db` and editing only the JSON corrupts the pai
   a lower number. It also pushes `HEAD:main` (GitHub Pages serves `docs/appcast.xml` from the default
   branch only) and aborts rather than force-pushing if that isn't a fast-forward. **Cut releases from
   `main` after the stack has merged, not from a branch in the stack.**
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues via the `gh` CLI against `lazzyms/toolbox`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default five-role vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: root `CONTEXT.md` plus `docs/adr/`. See `docs/agents/domain.md`.
