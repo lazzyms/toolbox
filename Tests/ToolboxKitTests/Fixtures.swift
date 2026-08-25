@@ -497,6 +497,53 @@ struct Fixtures: ~Copyable {
         return url
     }
 
+    /// A PDF whose pages show large clear text as *pixels* — text drawn into
+    /// a bitmap first, then placed as an image like `imageOnlyPDF` does. This
+    /// is what a scan looks like to OCR: no operators, just glyphs of light.
+    func scannedTextPDF(
+        named name: String,
+        text: String,
+        pages: Int = 1
+    ) throws -> URL {
+        let width = 600, height = 300
+        let imageContext = CGContext(
+            data: nil, width: width, height: height,
+            bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )!
+        imageContext.setFillColor(CGColor(gray: 1, alpha: 1))
+        imageContext.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        let string = NSAttributedString(
+            string: text,
+            attributes: [.font: CTFontCreateWithName("Helvetica" as CFString, 72, nil)]
+        )
+        imageContext.textPosition = CGPoint(x: 40, y: 120)
+        CTLineDraw(CTLineCreateWithAttributedString(string), imageContext)
+        let image = imageContext.makeImage()!
+
+        let mediaBox = CGRect(x: 0, y: 0, width: width, height: height)
+        var box = mediaBox
+        let url = directory.appendingPathComponent(name).appendingPathExtension("pdf")
+        guard let context = CGContext(url as CFURL, mediaBox: &box, nil) else {
+            throw ToolboxError.writeFailed(url)
+        }
+        for _ in 1...max(1, pages) {
+            context.beginPage(mediaBox: &box)
+
+            // Flip so the bitmap draws upright, same trap imageOnlyPDF hits.
+            context.saveGState()
+            context.translateBy(x: 0, y: CGFloat(height))
+            context.scaleBy(x: 1, y: -1)
+            context.draw(image, in: mediaBox)
+            context.restoreGState()
+
+            context.endPage()
+        }
+        context.closePDF()
+        return url
+    }
+
     /// A signature-shaped PNG: an opaque ink rectangle covering the *full*
     /// canvas, transparent nowhere else. Full coverage is the point — whatever
     /// draws it renders as one solid rectangle, so its ink bounding box

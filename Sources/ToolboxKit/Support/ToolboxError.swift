@@ -48,6 +48,8 @@ public enum ToolboxError: LocalizedError, Equatable {
     case invalidSplit(String)
     /// A sign request with neither a readable signature image nor a typed name.
     case emptySignature
+    /// The Vision OCR engine itself failed, carrying its message.
+    case ocrFailed(String)
 
     public var errorDescription: String? {
         switch self {
@@ -111,6 +113,8 @@ public enum ToolboxError: LocalizedError, Equatable {
             return reason
         case .emptySignature:
             return "Choose a signature image or type a name to sign with."
+        case .ocrFailed(let reason):
+            return "Text recognition failed: \(reason)"
         }
     }
 
