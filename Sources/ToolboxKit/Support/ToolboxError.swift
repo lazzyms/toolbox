@@ -61,6 +61,8 @@ public enum ToolboxError: LocalizedError, Equatable {
     case noSubjectFound(URL)
     /// The Vision segmentation engine itself failed, carrying its message.
     case segmentationFailed(String)
+    /// A page-removal selection that covers every page — the result would be empty.
+    case removesAllPages(URL)
 
     public var errorDescription: String? {
         switch self {
@@ -136,6 +138,8 @@ public enum ToolboxError: LocalizedError, Equatable {
             return "No distinct subject found in “\(url.lastPathComponent)”."
         case .segmentationFailed(let reason):
             return "Subject detection failed: \(reason)"
+        case .removesAllPages(let url):
+            return "That selection removes every page of “\(url.lastPathComponent)” — nothing would be left."
         }
     }
 

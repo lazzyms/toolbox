@@ -20,5 +20,6 @@ extension Utility {
         Utility(id: "pdf-image-extract", title: "Extract Images from PDF", shortTitle: "Extract Images", blurb: "Pull embedded pictures out at their original resolution — JPEGs stay untouched.", symbol: "photo.on.rectangle", tint: .green, category: .pdf, pane: { PDFImageExtractView(utility: $0) }),
         Utility(id: "pdf-sign", title: "Sign PDF", shortTitle: "Sign", blurb: "Stamp your signature image or typed name onto pages — visual only, not cryptographic.", symbol: "signature", tint: .pink, category: .pdf, pane: { PDFSignView(utility: $0) }),
         Utility(id: "pdf-ocr", title: "OCR PDF", shortTitle: "OCR", blurb: "Read text out of scans with on-device OCR — outputs a .txt file.", symbol: "doc.text.viewfinder", tint: .teal, category: .pdf, pane: { PDFOCRView(utility: $0) }),
+        Utility(id: "pdf-remove-pages", title: "Remove PDF Pages", shortTitle: "Remove Pages", blurb: "Delete selected pages from a PDF — the rest stay, in order.", symbol: "doc.badge.minus", tint: .brown, category: .pdf, pane: { PDFRemovePagesView(utility: $0) }),
     ]
 }
