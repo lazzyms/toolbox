@@ -10,5 +10,6 @@ extension Utility {
         Utility(id: "pdf-unlock", title: "Remove PDF Password", shortTitle: "Unlock PDF", blurb: "Save an unlocked copy of a PDF you know the password for.", symbol: "lock.open.fill", tint: .orange, category: .pdf, pane: { PDFUnlockView(utility: $0) }),
         Utility(id: "pdf-page-numbers", title: "Add PDF Page Numbers", shortTitle: "Page Numbers", blurb: "Stamp page numbers onto a PDF.", symbol: "number", tint: .blue, category: .pdf, pane: { PDFPageNumbersView(utility: $0) }),
         Utility(id: "pdf-merge", title: "Merge PDF", shortTitle: "Merge", blurb: "Combine several PDFs into one file.", symbol: "square.on.square", tint: .purple, category: .pdf, pane: { PDFMergeView(utility: $0) }),
+        Utility(id: "pdf-watermark", title: "Watermark PDF", shortTitle: "Watermark", blurb: "Stamp text or an image across pages — DRAFT, CONFIDENTIAL, a logo.", symbol: "paintbrush", tint: .cyan, category: .pdf, pane: { PDFWatermarkView(utility: $0) }),
     ]
 }

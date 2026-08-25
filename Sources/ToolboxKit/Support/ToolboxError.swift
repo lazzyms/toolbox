@@ -30,6 +30,8 @@ public enum ToolboxError: LocalizedError, Equatable {
     case notAnimated(URL)
     /// A crop that can't be applied, carrying the reason as a message.
     case invalidCrop(String)
+    /// A watermark request with neither usable text nor an image.
+    case emptyWatermark
 
     public var errorDescription: String? {
         switch self {
@@ -75,6 +77,8 @@ public enum ToolboxError: LocalizedError, Equatable {
             return "“\(url.lastPathComponent)” has a single frame — nothing to extract."
         case .invalidCrop(let reason):
             return reason
+        case .emptyWatermark:
+            return "Enter watermark text or choose an image."
         }
     }
 
