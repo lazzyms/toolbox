@@ -822,4 +822,42 @@ struct Fixtures: ~Copyable {
         }
         return url
     }
+
+    /// (cycled); the default is a uniform 32×24.
+    func multipageTIFF(
+        named name: String,
+        frames: Int,
+        sizes: [CGSize] = []
+    ) throws -> URL {
+        let fallback = CGSize(width: 32, height: 24)
+        let colours: [(red: Double, green: Double, blue: Double)] = [
+            (1, 0, 0), (0, 1, 0), (0, 0, 1), (1, 1, 0), (0, 1, 1),
+        ]
+
+        let url = directory.appendingPathComponent(name).appendingPathExtension("tiff")
+        guard let destination = CGImageDestinationCreateWithURL(
+            url as CFURL, UTType.tiff.identifier as CFString, max(1, frames), nil
+        ) else {
+            throw ToolboxError.writeFailed(url)
+        }
+
+        for index in 0..<max(1, frames) {
+            let size = sizes.isEmpty ? fallback : sizes[index % sizes.count]
+            let context = CGContext(
+                data: nil, width: Int(size.width), height: Int(size.height),
+                bitsPerComponent: 8, bytesPerRow: 0,
+                space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            )!
+            let colour = colours[index % colours.count]
+            context.setFillColor(red: colour.red, green: colour.green, blue: colour.blue, alpha: 1)
+            context.fill(CGRect(origin: .zero, size: size))
+            CGImageDestinationAddImage(destination, context.makeImage()!, nil)
+        }
+
+        guard CGImageDestinationFinalize(destination) else {
+            throw ToolboxError.encodeFailed("TIFF")
+        }
+        return url
+    }
 }

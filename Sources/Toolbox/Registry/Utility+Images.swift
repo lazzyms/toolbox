@@ -18,5 +18,6 @@ extension Utility {
         Utility(id: "image-watermark", title: "Watermark Images", shortTitle: "Watermark", blurb: "Stamp text or a logo across a batch of images.", symbol: "drop.halffull", tint: .cyan, category: .images, pane: { ImageWatermarkView(utility: $0) }),
         Utility(id: "image-metadata", title: "Image Metadata", shortTitle: "Metadata", blurb: "See what a photo leaks, then strip EXIF and GPS without recompressing it.", symbol: "info.circle", tint: .mint, category: .images, pane: { ImageMetadataView(utility: $0) }),
         Utility(id: "image-tone", title: "Colour & Tone Adjustments", shortTitle: "Tone", blurb: "Batch brightness, contrast, saturation, exposure and one-tap presets.", symbol: "slider.horizontal.3", tint: .yellow, category: .images, pane: { ImageToneView(utility: $0) }),
+        Utility(id: "tiff-pages", title: "Split & Combine TIFF", shortTitle: "TIFF Pages", blurb: "Break a multi-page TIFF into images, or bind a batch of images into one.", symbol: "rectangle.split.2x1", tint: .brown, category: .images, pane: { TIFFView(utility: $0) }),
     ]
 }
