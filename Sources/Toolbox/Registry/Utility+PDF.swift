@@ -21,5 +21,6 @@ extension Utility {
         Utility(id: "pdf-sign", title: "Sign PDF", shortTitle: "Sign", blurb: "Stamp your signature image or typed name onto pages — visual only, not cryptographic.", symbol: "signature", tint: .pink, category: .pdf, pane: { PDFSignView(utility: $0) }),
         Utility(id: "pdf-ocr", title: "OCR PDF", shortTitle: "OCR", blurb: "Read text out of scans with on-device OCR — outputs a .txt file.", symbol: "doc.text.viewfinder", tint: .teal, category: .pdf, pane: { PDFOCRView(utility: $0) }),
         Utility(id: "pdf-remove-pages", title: "Remove PDF Pages", shortTitle: "Remove Pages", blurb: "Delete selected pages from a PDF — the rest stay, in order.", symbol: "doc.badge.minus", tint: .brown, category: .pdf, pane: { PDFRemovePagesView(utility: $0) }),
+        Utility(id: "pdf-extract-pages", title: "Extract PDF Pages", shortTitle: "Extract Pages", blurb: "Pull selected pages out into a new PDF — ranges like 1-3, 7.", symbol: "doc.text.magnifyingglass", tint: .indigo, category: .pdf, pane: { PageExtractView(utility: $0) }),
     ]
 }
