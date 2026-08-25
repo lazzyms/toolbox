@@ -358,4 +358,68 @@ struct Fixtures: ~Copyable {
         }
         return url
     }
+
+    /// A PDF whose only page content is a raster image — no text operators at
+    /// all, so text extraction finds nothing. This is what a scan looks like.
+    func imageOnlyPDF(named name: String, width: Int = 200, height: Int = 100) throws -> URL {
+        let mediaBox = CGRect(x: 0, y: 0, width: width, height: height)
+        var box = mediaBox
+        let url = directory.appendingPathComponent(name).appendingPathExtension("pdf")
+        guard let context = CGContext(url as CFURL, mediaBox: &box, nil) else {
+            throw ToolboxError.writeFailed(url)
+        }
+        context.beginPage(mediaBox: &box)
+
+        let imageContext = CGContext(
+            data: nil, width: width / 2, height: height / 2,
+            bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )!
+        imageContext.setFillColor(red: 0.2, green: 0.4, blue: 0.9, alpha: 1)
+        imageContext.fill(CGRect(x: 0, y: 0, width: width / 2, height: height / 2))
+        let image = imageContext.makeImage()!
+
+        // Flip so the image draws upright, same trap the real tools face.
+        context.saveGState()
+        context.translateBy(x: 0, y: CGFloat(height))
+        context.scaleBy(x: 1, y: -1)
+        context.draw(image, in: mediaBox)
+        context.restoreGState()
+
+        context.endPage()
+        context.closePDF()
+        return url
+    }
+
+    /// A PDF with one large title line and one small body line, so heading
+    /// inference from relative font sizes has something honest to find.
+    func pdfWithTitleAndBody(
+        named name: String,
+        title: String,
+        body: String
+    ) throws -> URL {
+        let mediaBox = CGRect(x: 0, y: 0, width: 400, height: 200)
+        var box = mediaBox
+        let url = directory.appendingPathComponent(name).appendingPathExtension("pdf")
+        guard let context = CGContext(url as CFURL, mediaBox: &box, nil) else {
+            throw ToolboxError.writeFailed(url)
+        }
+        context.beginPage(mediaBox: &box)
+
+        func draw(_ string: String, size: CGFloat, y: CGFloat) {
+            let attributed = NSAttributedString(
+                string: string,
+                attributes: [.font: CTFontCreateWithName("Helvetica" as CFString, size, nil)]
+            )
+            context.textPosition = CGPoint(x: 20, y: y)
+            CTLineDraw(CTLineCreateWithAttributedString(attributed), context)
+        }
+        draw(title, size: 36, y: 120)
+        draw(body, size: 12, y: 60)
+
+        context.endPage()
+        context.closePDF()
+        return url
+    }
 }

@@ -42,6 +42,8 @@ public enum ToolboxError: LocalizedError, Equatable {
     case emptySelection
     /// A render whose pixel dimensions would exhaust memory, carrying the size.
     case resolutionTooLarge(Int, Int)
+    /// A text extraction that found no text layer — the file is a scan.
+    case noTextLayer(URL)
 
     public var errorDescription: String? {
         switch self {
@@ -99,6 +101,8 @@ public enum ToolboxError: LocalizedError, Equatable {
             return "Add at least one file."
         case .resolutionTooLarge(let width, let height):
             return "That would render \(width)×\(height) pixels — pick a lower DPI."
+        case .noTextLayer(let url):
+            return "“\(url.lastPathComponent)” has no selectable text — this looks like a scan."
         }
     }
 
@@ -122,6 +126,8 @@ public enum ToolboxError: LocalizedError, Equatable {
             return "Nothing was written and the original is untouched."
         case .unsupportedRotation:
             return "Rotation works in quarter turns: 90°, 180° or 270°."
+        case .noTextLayer:
+            return "Try the OCR tool to read text out of a scan."
         default:
             return nil
         }
