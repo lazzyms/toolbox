@@ -44,6 +44,8 @@ public enum ToolboxError: LocalizedError, Equatable {
     case resolutionTooLarge(Int, Int)
     /// A text extraction that found no text layer — the file is a scan.
     case noTextLayer(URL)
+    /// A split request that can't be honoured, carrying the reason.
+    case invalidSplit(String)
 
     public var errorDescription: String? {
         switch self {
@@ -103,6 +105,8 @@ public enum ToolboxError: LocalizedError, Equatable {
             return "That would render \(width)×\(height) pixels — pick a lower DPI."
         case .noTextLayer(let url):
             return "“\(url.lastPathComponent)” has no selectable text — this looks like a scan."
+        case .invalidSplit(let reason):
+            return reason
         }
     }
 

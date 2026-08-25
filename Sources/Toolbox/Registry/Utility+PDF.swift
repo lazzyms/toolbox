@@ -16,5 +16,6 @@ extension Utility {
         Utility(id: "images-to-pdf", title: "Images to PDF", shortTitle: "Images→PDF", blurb: "Turn photos and scans into one PDF — HEIC included.", symbol: "photo.on.rectangle.angled", tint: .blue, category: .pdf, pane: { ImagesToPDFView(utility: $0) }),
         Utility(id: "pdf-to-images", title: "PDF to Images", shortTitle: "PDF→Images", blurb: "Render pages to JPEG or PNG at 72–300 dpi.", symbol: "photo.stack", tint: .indigo, category: .pdf, pane: { PDFToImagesView(utility: $0) }),
         Utility(id: "pdf-to-text", title: "PDF to Text", shortTitle: "PDF→Text", blurb: "Pull the text out as .txt or best-effort Markdown.", symbol: "doc.plaintext", tint: .gray, category: .pdf, pane: { PDFToTextView(utility: $0) }),
+        Utility(id: "pdf-split", title: "Split PDF", shortTitle: "Split", blurb: "Break one PDF into several — every page, by ranges, or fixed-size chunks.", symbol: "rectangle.split.3x1", tint: .orange, category: .pdf, pane: { PDFSplitView(utility: $0) }),
     ]
 }
