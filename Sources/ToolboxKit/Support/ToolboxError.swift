@@ -34,6 +34,10 @@ public enum ToolboxError: LocalizedError, Equatable {
     case emptyWatermark
     /// A PDF crop box that is empty or falls outside the page.
     case invalidCropBox(String)
+    /// A protect request with no password.
+    case emptyPassword
+    /// A protection write that couldn't be verified as locked.
+    case protectionFailed(URL)
 
     public var errorDescription: String? {
         switch self {
@@ -83,6 +87,10 @@ public enum ToolboxError: LocalizedError, Equatable {
             return "Enter watermark text or choose an image."
         case .invalidCropBox(let reason):
             return reason
+        case .emptyPassword:
+            return "Enter a password."
+        case .protectionFailed:
+            return "Protection couldn't be verified — no file was written."
         }
     }
 
@@ -95,6 +103,8 @@ public enum ToolboxError: LocalizedError, Equatable {
             return "You can open and save it normally — nothing to remove."
         case .passwordProtected:
             return "Unlock it first, then run the tool again."
+        case .protectionFailed:
+            return "The original is untouched."
         case .noGain:
             return "The original file was copied unchanged."
         case .wouldDropFrames:

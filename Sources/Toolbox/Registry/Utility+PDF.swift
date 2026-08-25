@@ -12,5 +12,6 @@ extension Utility {
         Utility(id: "pdf-merge", title: "Merge PDF", shortTitle: "Merge", blurb: "Combine several PDFs into one file.", symbol: "square.on.square", tint: .purple, category: .pdf, pane: { PDFMergeView(utility: $0) }),
         Utility(id: "pdf-watermark", title: "Watermark PDF", shortTitle: "Watermark", blurb: "Stamp text or an image across pages — DRAFT, CONFIDENTIAL, a logo.", symbol: "paintbrush", tint: .cyan, category: .pdf, pane: { PDFWatermarkView(utility: $0) }),
         Utility(id: "pdf-crop", title: "Crop PDF", shortTitle: "Crop", blurb: "Trim margins or cut to a region — losslessly.", symbol: "crop.rotate", tint: .mint, category: .pdf, pane: { PDFCropView(utility: $0) }),
+        Utility(id: "pdf-protect", title: "Protect PDF", shortTitle: "Protect", blurb: "Add a password so only you can open it.", symbol: "lock.fill", tint: .red, category: .pdf, pane: { PDFProtectView(utility: $0) }),
     ]
 }
