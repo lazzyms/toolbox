@@ -14,5 +14,6 @@ extension Utility {
         Utility(id: "pdf-crop", title: "Crop PDF", shortTitle: "Crop", blurb: "Trim margins or cut to a region — losslessly.", symbol: "crop.rotate", tint: .mint, category: .pdf, pane: { PDFCropView(utility: $0) }),
         Utility(id: "pdf-protect", title: "Protect PDF", shortTitle: "Protect", blurb: "Add a password so only you can open it.", symbol: "lock.fill", tint: .red, category: .pdf, pane: { PDFProtectView(utility: $0) }),
         Utility(id: "images-to-pdf", title: "Images to PDF", shortTitle: "Images→PDF", blurb: "Turn photos and scans into one PDF — HEIC included.", symbol: "photo.on.rectangle.angled", tint: .blue, category: .pdf, pane: { ImagesToPDFView(utility: $0) }),
+        Utility(id: "pdf-to-images", title: "PDF to Images", shortTitle: "PDF→Images", blurb: "Render pages to JPEG or PNG at 72–300 dpi.", symbol: "photo.stack", tint: .indigo, category: .pdf, pane: { PDFToImagesView(utility: $0) }),
     ]
 }

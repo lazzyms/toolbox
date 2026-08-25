@@ -40,6 +40,8 @@ public enum ToolboxError: LocalizedError, Equatable {
     case protectionFailed(URL)
     /// A job that needs files was handed none.
     case emptySelection
+    /// A render whose pixel dimensions would exhaust memory, carrying the size.
+    case resolutionTooLarge(Int, Int)
 
     public var errorDescription: String? {
         switch self {
@@ -95,6 +97,8 @@ public enum ToolboxError: LocalizedError, Equatable {
             return "Protection couldn't be verified — no file was written."
         case .emptySelection:
             return "Add at least one file."
+        case .resolutionTooLarge(let width, let height):
+            return "That would render \(width)×\(height) pixels — pick a lower DPI."
         }
     }
 
