@@ -790,4 +790,36 @@ struct Fixtures: ~Copyable {
         }
         return url
     }
+
+
+    /// A uniform grey field.
+    ///
+    /// A flat fill means a tone adjustment shows up as a shift of the
+    /// whole-image mean rather than as movement inside local structure, which
+    /// keeps brightness/exposure checks free of clipping and resampling noise.
+    func flatImage(
+        named name: String,
+        width: Int = 64,
+        height: Int = 64,
+        level: Double = 0.5
+    ) throws -> URL {
+        let context = CGContext(
+            data: nil, width: width, height: height,
+            bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )!
+        context.setFillColor(gray: level, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+
+        let url = directory.appendingPathComponent(name).appendingPathExtension("png")
+        let destination = CGImageDestinationCreateWithURL(
+            url as CFURL, UTType.png.identifier as CFString, 1, nil
+        )!
+        CGImageDestinationAddImage(destination, context.makeImage()!, nil)
+        guard CGImageDestinationFinalize(destination) else {
+            throw ToolboxError.encodeFailed("PNG")
+        }
+        return url
+    }
 }
