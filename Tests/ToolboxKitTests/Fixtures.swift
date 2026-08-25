@@ -572,4 +572,155 @@ struct Fixtures: ~Copyable {
         }
         return url
     }
+
+    /// A flat-colour image so a stamped watermark shows up as a measurable
+    /// darkening against a known base — single-pixel probes stay unambiguous.
+    ///
+    /// Always PNG: lossless, so no quality dial sits between the tool and the
+    /// pixels the assertions read back.
+    func solidImage(
+        named name: String,
+        width: Int,
+        height: Int,
+        colour: (red: Double, green: Double, blue: Double)
+    ) throws -> URL {
+        let context = CGContext(
+            data: nil, width: width, height: height,
+            bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )!
+        context.setFillColor(red: colour.red, green: colour.green, blue: colour.blue, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+
+        let url = directory.appendingPathComponent(name).appendingPathExtension("png")
+        let destination = CGImageDestinationCreateWithURL(
+            url as CFURL, UTType.png.identifier as CFString, 1, nil
+        )!
+        CGImageDestinationAddImage(destination, context.makeImage()!, nil)
+        guard CGImageDestinationFinalize(destination) else {
+            throw ToolboxError.encodeFailed("PNG")
+        }
+        return url
+    }
+
+    /// Decoded pixels in a known layout — RGBA8, sRGB, one byte per channel
+    /// in R,G,B,A order — so geometric tests can probe colours without
+    /// guessing the byte order ImageIO happened to hand back.
+    ///
+    /// 32-big is what puts R first in memory here: with a little-endian word
+    /// the alpha lands in byte 0 and every channel probe silently reads the
+    /// wrong channel.
+    struct PixelBuffer {
+        let bytes: [UInt8]
+        let width: Int
+        let height: Int
+
+        func pixel(atX x: Int, y: Int) -> (r: UInt8, g: UInt8, b: UInt8, a: UInt8) {
+            let offset = (y * width + x) * 4
+            return (bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3])
+        }
+
+        /// Average colour over `displayRect`, whose origin is the displayed
+        /// image's top-left (y grows downward), matching how fixtures name
+        /// their regions.
+        func meanColour(in displayRect: CGRect) -> (red: Double, green: Double, blue: Double) {
+            let x0 = max(0, Int(displayRect.minX))
+            let x1 = min(width - 1, Int(displayRect.maxX))
+            let y0 = max(0, Int(displayRect.minY))
+            let y1 = min(height - 1, Int(displayRect.maxY))
+            guard x0 <= x1, y0 <= y1 else { return (0, 0, 0) }
+            var red = 0.0, green = 0.0, blue = 0.0, count = 0.0
+            for y in y0...y1 {
+                for x in x0...x1 {
+                    let p = pixel(atX: x, y: y)
+                    red += Double(p.r)
+                    green += Double(p.g)
+                    blue += Double(p.b)
+                    count += 1
+                }
+            }
+            return (red / count, green / count, blue / count)
+        }
+
+        /// How many pixels in `displayRect` read as "ink": opaque enough to be
+        /// real and every channel below `maxChannelBelow`, which black ink on
+        /// any bright base satisfies.
+        func inkPixelCount(in displayRect: CGRect, maxChannelBelow threshold: UInt8) -> Int {
+            let x0 = max(0, Int(displayRect.minX))
+            let x1 = min(width - 1, Int(displayRect.maxX))
+            let y0 = max(0, Int(displayRect.minY))
+            let y1 = min(height - 1, Int(displayRect.maxY))
+            var count = 0
+            for y in y0...max(y0, y1) {
+                for x in x0...max(x0, x1) where pixel(atX: x, y: y).a > 0 {
+                    let p = pixel(atX: x, y: y)
+                    if max(p.r, max(p.g, p.b)) < threshold { count += 1 }
+                }
+            }
+            return count
+        }
+
+        /// Bounding box of all ink pixels (same test as `inkPixelCount`) in
+        /// display coordinates, or nil when nothing matched.
+        func inkBoundingBox(maxChannelBelow threshold: UInt8) -> CGRect? {
+            var minX = Int.max, maxX = Int.min, minY = Int.max, maxY = Int.min
+            for y in 0..<height {
+                for x in 0..<width where pixel(atX: x, y: y).a > 0 {
+                    let p = pixel(atX: x, y: y)
+                    if max(p.r, max(p.g, p.b)) < threshold {
+                        minX = min(minX, x); maxX = max(maxX, x)
+                        minY = min(minY, y); maxY = max(maxY, y)
+                    }
+                }
+            }
+            guard minX <= maxX else { return nil }
+            return CGRect(x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1)
+        }
+    }
+
+    /// Reads `url` through the same upright decode the watermarker uses, then
+    /// redraws into the canonical RGBA buffer.
+    static func pixels(of url: URL) throws -> PixelBuffer {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
+            throw ToolboxError.decodeFailed(url)
+        }
+        let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+        let declaredWidth = (props?[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue ?? 1
+        let declaredHeight = (props?[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue ?? 1
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: max(declaredWidth, declaredHeight),
+        ]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary),
+              let context = CGContext(
+                data: nil, width: image.width, height: image.height,
+                bitsPerComponent: 8, bytesPerRow: 0,
+                space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                    | CGImageByteOrderInfo.order32Big.rawValue
+              )
+        else {
+            throw ToolboxError.decodeFailed(url)
+        }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+
+        // Row stride can carry padding, so copy row by row into a tight buffer.
+        let bytesPerRow = context.bytesPerRow
+        var bytes = [UInt8](repeating: 0, count: image.width * image.height * 4)
+        if let raw = context.data {
+            bytes.withUnsafeMutableBytes { destination in
+                let sourceBase = raw.assumingMemoryBound(to: UInt8.self)
+                for row in 0..<image.height {
+                    memcpy(
+                        destination.baseAddress! + row * image.width * 4,
+                        sourceBase + row * bytesPerRow,
+                        image.width * 4
+                    )
+                }
+            }
+        }
+        return PixelBuffer(bytes: bytes, width: image.width, height: image.height)
+    }
 }
