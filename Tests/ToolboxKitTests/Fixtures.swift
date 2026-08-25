@@ -913,4 +913,64 @@ struct Fixtures: ~Copyable {
         }
         return url
     }
+
+    /// A PDF whose pages are filled with a noisy gradient image, drawn at
+    /// several times the page's point size so compression has real pixels to
+    /// shed. The noise is the point: it defeats both PNG and JPEG dictionary
+    /// tricks on the *input* side while the rasterise-then-JPEG output sheds
+    /// resolution, guaranteeing a strictly smaller compressed copy.
+    ///
+    /// Pixel values come from a fixed integer hash, so every run sees the same
+    /// file and size assertions stay deterministic.
+    func noisyGradientPDF(
+        named name: String,
+        pixelWidth: Int = 1600,
+        pixelHeight: Int = 800,
+        pages: Int = 1
+    ) throws -> URL {
+        // RGBX: no alpha semantics to trip over — the fourth byte is padding.
+        let context = CGContext(
+            data: nil, width: pixelWidth, height: pixelHeight,
+            bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+        )!
+        if let raw = context.data {
+            let bytes = raw.assumingMemoryBound(to: UInt8.self)
+            for y in 0..<pixelHeight {
+                for x in 0..<pixelWidth {
+                    let offset = (y * pixelWidth + x) * 4
+                    // Smooth base plus a hash-driven high-frequency term.
+                    let smooth = UInt8((x * 255 / pixelWidth) ^ (y * 255 / pixelHeight))
+                    let noise = UInt8(truncatingIfNeeded: x &* 73856093 ^ y &* 19349663)
+                    bytes[offset] = smooth &+ (noise / 2)
+                    bytes[offset + 1] = smooth &+ noise
+                    bytes[offset + 2] = noise
+                }
+            }
+        }
+        let image = context.makeImage()!
+
+        let mediaBox = CGRect(x: 0, y: 0, width: 400, height: 200)
+        var box = mediaBox
+        let url = directory.appendingPathComponent(name).appendingPathExtension("pdf")
+        guard let pdfContext = CGContext(url as CFURL, mediaBox: &box, nil) else {
+            throw ToolboxError.writeFailed(url)
+        }
+        for _ in 1...max(1, pages) {
+            pdfContext.beginPage(mediaBox: &box)
+
+            // Flip so the bitmap draws upright, the trap every draw-a-bitmap
+            // fixture here hits.
+            pdfContext.saveGState()
+            pdfContext.translateBy(x: 0, y: mediaBox.height)
+            pdfContext.scaleBy(x: 1, y: -1)
+            pdfContext.draw(image, in: mediaBox)
+            pdfContext.restoreGState()
+
+            pdfContext.endPage()
+        }
+        pdfContext.closePDF()
+        return url
+    }
 }
