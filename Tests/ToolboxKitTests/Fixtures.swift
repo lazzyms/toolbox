@@ -723,4 +723,71 @@ struct Fixtures: ~Copyable {
         }
         return PixelBuffer(bytes: bytes, width: image.width, height: image.height)
     }
+
+    /// An image carrying the metadata a real photo leaks: camera make/model,
+    /// lens, timestamp, GPS coordinates and IPTC attribution, plus an
+    /// orientation tag of 6 so tests can watch what stripping does to it.
+    ///
+    /// Written through ImageIO's property dictionaries directly — the same
+    /// route a phone camera takes — so a strip test can't pass by agreeing
+    /// with a bug in ToolboxKit's own writing path.
+    func taggedImage(
+        named name: String,
+        width: Int = 64,
+        height: Int = 48,
+        format: ImageFormat = .jpeg
+    ) throws -> URL {
+        let context = CGContext(
+            data: nil, width: width, height: height,
+            bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )!
+        for y in stride(from: 0, to: height, by: 4) {
+            for x in stride(from: 0, to: width, by: 4) {
+                context.setFillColor(
+                    red: Double(x) / Double(width),
+                    green: Double(y) / Double(height),
+                    blue: Double((x ^ y) % 256) / 255.0,
+                    alpha: 1
+                )
+                context.fill(CGRect(x: x, y: y, width: 4, height: 4))
+            }
+        }
+
+        let url = directory.appendingPathComponent(name)
+            .appendingPathExtension(format.fileExtension)
+        let destination = CGImageDestinationCreateWithURL(
+            url as CFURL, format.utType.identifier as CFString, 1, nil
+        )!
+        CGImageDestinationAddImage(destination, context.makeImage()!, [
+            kCGImagePropertyExifDictionary: [
+                kCGImagePropertyExifDateTimeOriginal: "2026:08:25 10:30:00",
+                kCGImagePropertyExifLensModel: "TestLens 50mm",
+                kCGImagePropertyExifPixelXDimension: width,
+                kCGImagePropertyExifPixelYDimension: height,
+            ],
+            kCGImagePropertyGPSDictionary: [
+                kCGImagePropertyGPSLatitude: 37.3349,
+                kCGImagePropertyGPSLatitudeRef: "N",
+                kCGImagePropertyGPSLongitude: 122.0090,
+                kCGImagePropertyGPSLongitudeRef: "W",
+            ],
+            kCGImagePropertyIPTCDictionary: [
+                kCGImagePropertyIPTCCopyrightNotice: "(c) Probe Photographer",
+                kCGImagePropertyIPTCCredit: "Probe Credit",
+            ],
+            kCGImagePropertyTIFFDictionary: [
+                kCGImagePropertyTIFFMake: "ProbeCam",
+                kCGImagePropertyTIFFModel: "Probe One",
+                kCGImagePropertyTIFFSoftware: "ProbeSoft",
+                kCGImagePropertyTIFFOrientation: 6,
+            ],
+            kCGImagePropertyOrientation: 6,
+        ] as CFDictionary)
+        guard CGImageDestinationFinalize(destination) else {
+            throw ToolboxError.encodeFailed(format.displayName)
+        }
+        return url
+    }
 }

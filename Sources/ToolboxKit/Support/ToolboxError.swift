@@ -50,6 +50,8 @@ public enum ToolboxError: LocalizedError, Equatable {
     case emptySignature
     /// The Vision OCR engine itself failed, carrying its message.
     case ocrFailed(String)
+    /// A metadata strip that couldn't be verified as clean.
+    case stripFailed(URL)
 
     public var errorDescription: String? {
         switch self {
@@ -115,6 +117,8 @@ public enum ToolboxError: LocalizedError, Equatable {
             return "Choose a signature image or type a name to sign with."
         case .ocrFailed(let reason):
             return "Text recognition failed: \(reason)"
+        case .stripFailed:
+            return "Metadata removal couldn't be verified — no file was written."
         }
     }
 

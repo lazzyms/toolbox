@@ -16,5 +16,6 @@ extension Utility {
         Utility(id: "gif-create", title: "Create GIF", shortTitle: "GIF Maker", blurb: "Animate a batch of still images into a looped GIF.", symbol: "film.stack", tint: .teal, category: .images, pane: { GIFView(utility: $0, mode: .create) }),
         Utility(id: "gif-extract", title: "Extract GIF Frames", shortTitle: "Frames", blurb: "Split an animated GIF into its individual frames.", symbol: "square.stack.3d.up", tint: .teal, category: .images, pane: { GIFView(utility: $0, mode: .extract) }),
         Utility(id: "image-watermark", title: "Watermark Images", shortTitle: "Watermark", blurb: "Stamp text or a logo across a batch of images.", symbol: "drop.halffull", tint: .cyan, category: .images, pane: { ImageWatermarkView(utility: $0) }),
+        Utility(id: "image-metadata", title: "Image Metadata", shortTitle: "Metadata", blurb: "See what a photo leaks, then strip EXIF and GPS without recompressing it.", symbol: "info.circle", tint: .mint, category: .images, pane: { ImageMetadataView(utility: $0) }),
     ]
 }
