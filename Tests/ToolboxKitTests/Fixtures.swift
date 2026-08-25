@@ -475,4 +475,54 @@ struct Fixtures: ~Copyable {
         }
         return url
     }
+
+    /// A blank white PDF — no text, no images — so geometric tests can read a
+    /// signature's placement off an otherwise featureless canvas.
+    func blankPDF(
+        named name: String,
+        pages: Int = 1,
+        width: CGFloat = 400,
+        height: CGFloat = 200
+    ) throws -> URL {
+        var box = CGRect(x: 0, y: 0, width: width, height: height)
+        let url = directory.appendingPathComponent(name).appendingPathExtension("pdf")
+        guard let context = CGContext(url as CFURL, mediaBox: &box, nil) else {
+            throw ToolboxError.writeFailed(url)
+        }
+        for _ in 1...max(1, pages) {
+            context.beginPage(mediaBox: &box)
+            context.endPage()
+        }
+        context.closePDF()
+        return url
+    }
+
+    /// A signature-shaped PNG: an opaque ink rectangle covering the *full*
+    /// canvas, transparent nowhere else. Full coverage is the point — whatever
+    /// draws it renders as one solid rectangle, so its ink bounding box
+    /// exposes both placement and aspect ratio unambiguously.
+    func signaturePNG(
+        named name: String,
+        width: Int = 180,
+        height: Int = 60
+    ) throws -> URL {
+        let context = CGContext(
+            data: nil, width: width, height: height,
+            bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )!
+        context.setFillColor(red: 0.05, green: 0.05, blue: 0.5, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+
+        let url = directory.appendingPathComponent(name).appendingPathExtension("png")
+        let destination = CGImageDestinationCreateWithURL(
+            url as CFURL, UTType.png.identifier as CFString, 1, nil
+        )!
+        CGImageDestinationAddImage(destination, context.makeImage()!, nil)
+        guard CGImageDestinationFinalize(destination) else {
+            throw ToolboxError.encodeFailed("PNG")
+        }
+        return url
+    }
 }

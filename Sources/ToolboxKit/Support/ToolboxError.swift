@@ -46,6 +46,8 @@ public enum ToolboxError: LocalizedError, Equatable {
     case noTextLayer(URL)
     /// A split request that can't be honoured, carrying the reason.
     case invalidSplit(String)
+    /// A sign request with neither a readable signature image nor a typed name.
+    case emptySignature
 
     public var errorDescription: String? {
         switch self {
@@ -107,6 +109,8 @@ public enum ToolboxError: LocalizedError, Equatable {
             return "“\(url.lastPathComponent)” has no selectable text — this looks like a scan."
         case .invalidSplit(let reason):
             return reason
+        case .emptySignature:
+            return "Choose a signature image or type a name to sign with."
         }
     }
 
