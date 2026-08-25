@@ -422,4 +422,57 @@ struct Fixtures: ~Copyable {
         context.closePDF()
         return url
     }
+
+    /// A hand-assembled PDF for pinning XObject shapes Quartz's own writer
+    /// never emits — JPXDecode streams, soft masks, one image object shared by
+    /// two pages. Each triple is an object: the head is dictionary text with
+    /// `__LENGTH__` standing wherever the stream's byte count belongs.
+    ///
+    /// The xref is computed from real offsets, so CoreGraphics parses it
+    /// strictly rather than reconstructing and hiding mistakes.
+    func rawPDF(
+        named name: String,
+        objects: [(id: Int, head: String, stream: Data?)]
+    ) throws -> URL {
+        var pdf = Data()
+        pdf.append(contentsOf: "%PDF-1.4\n".utf8)
+        var offsets: [Int: Int] = [:]
+        for object in objects {
+            offsets[object.id] = pdf.count
+            pdf.append(contentsOf: "\(object.id) 0 obj\n".utf8)
+            if let stream = object.stream {
+                let head = object.head.replacingOccurrences(of: "__LENGTH__", with: String(stream.count))
+                pdf.append(contentsOf: head.utf8)
+                pdf.append(contentsOf: "\nstream\n".utf8)
+                pdf.append(stream)
+                pdf.append(contentsOf: "\nendstream\nendobj\n".utf8)
+            } else {
+                pdf.append(contentsOf: object.head.utf8)
+                pdf.append(contentsOf: "\nendobj\n".utf8)
+            }
+        }
+
+        let xrefOffset = pdf.count
+        // Xref rows map one-to-one to ascending object numbers, so gaps
+        // between sparse ids get explicit free entries.
+        let highestID = objects.map(\.id).max() ?? 0
+        var xref = "xref\n0 \(highestID + 1)\n0000000000 65535 f \n"
+        for number in 1...highestID {
+            if let offset = offsets[number] {
+                xref += String(format: "%010d 00000 n \n", offset)
+            } else {
+                xref += "0000000000 65535 f \n"
+            }
+        }
+        xref += "trailer\n<< /Size \(highestID + 1) /Root 1 0 R >>\nstartxref\n\(xrefOffset)\n%%EOF\n"
+        pdf.append(contentsOf: xref.utf8)
+
+        let url = directory.appendingPathComponent(name).appendingPathExtension("pdf")
+        do {
+            try pdf.write(to: url)
+        } catch {
+            throw ToolboxError.writeFailed(url)
+        }
+        return url
+    }
 }
