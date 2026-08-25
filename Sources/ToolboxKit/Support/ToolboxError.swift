@@ -32,6 +32,8 @@ public enum ToolboxError: LocalizedError, Equatable {
     case invalidCrop(String)
     /// A watermark request with neither usable text nor an image.
     case emptyWatermark
+    /// A PDF crop box that is empty or falls outside the page.
+    case invalidCropBox(String)
 
     public var errorDescription: String? {
         switch self {
@@ -79,6 +81,8 @@ public enum ToolboxError: LocalizedError, Equatable {
             return reason
         case .emptyWatermark:
             return "Enter watermark text or choose an image."
+        case .invalidCropBox(let reason):
+            return reason
         }
     }
 
