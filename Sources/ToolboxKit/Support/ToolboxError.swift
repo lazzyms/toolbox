@@ -5,6 +5,8 @@ public enum ToolboxError: LocalizedError, Equatable {
     case notAPDF(URL)
     case wrongPassword
     case notEncrypted
+    /// An operation that can't read through a password met one.
+    case passwordProtected(URL)
     case unsupportedInput(String)
     case unsupportedOutput(String)
     case decodeFailed(URL)
@@ -39,6 +41,8 @@ public enum ToolboxError: LocalizedError, Equatable {
             return "Incorrect password."
         case .notEncrypted:
             return "This PDF has no password."
+        case .passwordProtected(let url):
+            return "“\(url.lastPathComponent)” is password-protected."
         case .unsupportedInput(let ext):
             return "“\(ext)” files aren't supported here."
         case .unsupportedOutput(let name):
@@ -81,6 +85,8 @@ public enum ToolboxError: LocalizedError, Equatable {
             return "Check the password and try again. It is case-sensitive."
         case .notEncrypted:
             return "You can open and save it normally — nothing to remove."
+        case .passwordProtected:
+            return "Unlock it first, then run the tool again."
         case .noGain:
             return "The original file was copied unchanged."
         case .wouldDropFrames:
