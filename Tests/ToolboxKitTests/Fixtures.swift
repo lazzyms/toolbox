@@ -860,4 +860,26 @@ struct Fixtures: ~Copyable {
         }
         return url
     }
+
+    /// Decodes a fixture file to its raw CGImage through the same upright
+    /// path the image tools use, so tests hand a tool exactly the pixels a
+    /// run would see.
+    static func cgImage(of url: URL) throws -> CGImage {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+        else {
+            throw ToolboxError.decodeFailed(url)
+        }
+        let width = (props[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue ?? 1
+        let height = (props[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue ?? 1
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: max(width, height),
+        ]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            throw ToolboxError.decodeFailed(url)
+        }
+        return image
+    }
 }

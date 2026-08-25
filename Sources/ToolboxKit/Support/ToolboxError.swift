@@ -52,6 +52,11 @@ public enum ToolboxError: LocalizedError, Equatable {
     case ocrFailed(String)
     /// A metadata strip that couldn't be verified as clean.
     case stripFailed(URL)
+    /// A face-blur run that found no faces — writing a "-blurred" copy would
+    /// imply anonymisation that never happened.
+    case noFacesDetected(URL)
+    /// The Vision face detector itself failed, carrying its message.
+    case faceDetectionFailed(String)
 
     public var errorDescription: String? {
         switch self {
@@ -119,6 +124,10 @@ public enum ToolboxError: LocalizedError, Equatable {
             return "Text recognition failed: \(reason)"
         case .stripFailed:
             return "Metadata removal couldn't be verified — no file was written."
+        case .noFacesDetected(let url):
+            return "No faces were found in “\(url.lastPathComponent)” — nothing was blurred."
+        case .faceDetectionFailed(let reason):
+            return "Face detection failed: \(reason)"
         }
     }
 
