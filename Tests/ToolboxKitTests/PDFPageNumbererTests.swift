@@ -19,7 +19,7 @@ struct PDFPageNumbererTests {
             format: .plain,
             fontSize: 12,
             margin: 36,
-            to: .custom(tmp)
+            to: .directory(tmp)
         )
         let doc = try PDFDocumentIO.open(output)
         #expect(doc.pageCount == 1)
@@ -41,7 +41,7 @@ struct PDFPageNumbererTests {
             format: .pagePrefix,
             fontSize: 10,
             margin: 24,
-            to: .custom(tmp)
+            to: .directory(tmp)
         )
         let doc = try PDFDocumentIO.open(output)
         #expect(doc.pageCount == 3)
