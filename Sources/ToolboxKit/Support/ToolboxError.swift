@@ -63,6 +63,8 @@ public enum ToolboxError: LocalizedError, Equatable {
     case segmentationFailed(String)
     /// A page-removal selection that covers every page — the result would be empty.
     case removesAllPages(URL)
+    /// An organise plan that kept no pages at all.
+    case emptyPlan
 
     public var errorDescription: String? {
         switch self {
@@ -140,6 +142,8 @@ public enum ToolboxError: LocalizedError, Equatable {
             return "Subject detection failed: \(reason)"
         case .removesAllPages(let url):
             return "That selection removes every page of “\(url.lastPathComponent)” — nothing would be left."
+        case .emptyPlan:
+            return "Every page was removed — keep at least one."
         }
     }
 

@@ -22,5 +22,6 @@ extension Utility {
         Utility(id: "pdf-ocr", title: "OCR PDF", shortTitle: "OCR", blurb: "Read text out of scans with on-device OCR — outputs a .txt file.", symbol: "doc.text.viewfinder", tint: .teal, category: .pdf, pane: { PDFOCRView(utility: $0) }),
         Utility(id: "pdf-remove-pages", title: "Remove PDF Pages", shortTitle: "Remove Pages", blurb: "Delete selected pages from a PDF — the rest stay, in order.", symbol: "doc.badge.minus", tint: .brown, category: .pdf, pane: { PDFRemovePagesView(utility: $0) }),
         Utility(id: "pdf-extract-pages", title: "Extract PDF Pages", shortTitle: "Extract Pages", blurb: "Pull selected pages out into a new PDF — ranges like 1-3, 7.", symbol: "doc.text.magnifyingglass", tint: .indigo, category: .pdf, pane: { PageExtractView(utility: $0) }),
+        Utility(id: "pdf-organize", title: "Organize PDF", shortTitle: "Organize", blurb: "Reorder, rotate and delete pages of one PDF from a thumbnail grid.", symbol: "rectangle.grid.2x2", tint: .cyan, category: .pdf, pane: { OrganizeView(utility: $0) }),
     ]
 }
