@@ -3,7 +3,7 @@ import ImageIO
 import UniformTypeIdentifiers
 
 public enum ImageFormat: String, CaseIterable, Sendable, Identifiable {
-    case png, jpeg, heic, tiff, webp
+    case png, jpeg, heic, tiff, gif, avif, ico, icns, webp
 
     public var id: String { rawValue }
 
@@ -13,6 +13,10 @@ public enum ImageFormat: String, CaseIterable, Sendable, Identifiable {
         case .jpeg: return "JPEG"
         case .heic: return "HEIC"
         case .tiff: return "TIFF"
+        case .gif: return "GIF"
+        case .avif: return "AVIF"
+        case .ico: return "ICO"
+        case .icns: return "ICNS"
         case .webp: return "WebP"
         }
     }
@@ -23,6 +27,10 @@ public enum ImageFormat: String, CaseIterable, Sendable, Identifiable {
         case .jpeg: return "jpg"
         case .heic: return "heic"
         case .tiff: return "tiff"
+        case .gif: return "gif"
+        case .avif: return "avif"
+        case .ico: return "ico"
+        case .icns: return "icns"
         case .webp: return "webp"
         }
     }
@@ -33,25 +41,33 @@ public enum ImageFormat: String, CaseIterable, Sendable, Identifiable {
         case .jpeg: return .jpeg
         case .heic: return .heic
         case .tiff: return .tiff
+        case .gif: return .gif
+        case .avif: return UTType("public.avif")!
+        // No built-in statics for the icon containers, so their UTTypes come
+        // from the registered identifiers ImageIO actually reports.
+        case .ico: return UTType("com.microsoft.ico")!
+        case .icns: return UTType("com.apple.icns")!
         case .webp: return .webP
         }
     }
 
-    /// Formats that keep every pixel exactly. JPEG/WebP here are lossy by nature;
-    /// HEIC is lossy as CoreGraphics encodes it.
+    /// Whether a quality slider applies. Lossy formats (JPEG, HEIC, AVIF, WebP)
+    /// get one; the rest don't — GIF quantises to a palette but has no
+    /// continuous quality axis, and the icon containers are pixel-exact.
     public var isLossless: Bool {
         switch self {
-        case .png, .tiff: return true
-        case .jpeg, .heic, .webp: return false
+        case .png, .tiff, .gif, .ico, .icns: return true
+        case .jpeg, .heic, .avif, .webp: return false
         }
     }
 
-    /// Whether a quality slider applies.
     public var supportsQuality: Bool { !isLossless }
 
-    /// Whether this Mac can actually *write* the format. WebP encoding in
-    /// particular is not available on every macOS version, so the UI hides
-    /// options that would fail at save time.
+    /// Whether this Mac can actually *write* the format. WebP is excluded
+    /// outright — ImageIO has never shipped a WebP encoder, so `.webp` is false
+    /// on every macOS version and the UI never offers it. Every other format
+    /// resolves from the system's current encoder list, so a newer macOS lights
+    /// new options up without a code change.
     public var canEncode: Bool {
         (CGImageDestinationCopyTypeIdentifiers() as? [String])?
             .contains(utType.identifier) ?? false
@@ -63,9 +79,16 @@ public enum ImageFormat: String, CaseIterable, Sendable, Identifiable {
 
     /// Extensions we accept as input. Broader than the encodable set because
     /// ImageIO reads more formats than it writes.
+    ///
+    /// Deliberately a hardcoded set rather than a reflection of
+    /// `CGImageSourceCopyTypeIdentifiers()`: the derived list includes
+    /// non-image types (PDF, PostScript) that must not appear in an image drop
+    /// zone, and a fixed set keeps the drop zone predictable and testable. It
+    /// is extended by hand as formats are added.
     public static let readableExtensions: Set<String> = [
-        "heic", "heif", "png", "jpg", "jpeg", "tiff", "tif",
-        "gif", "bmp", "webp", "avif", "dng", "cr2", "nef", "arw", "orf", "raf",
+        "heic", "heif", "heics", "png", "jpg", "jpeg", "tiff", "tif",
+        "gif", "bmp", "webp", "avif", "avifs", "ico", "icns", "jp2", "j2k",
+        "dng", "cr2", "nef", "arw", "orf", "raf", "rw2", "srw", "pef",
     ]
 
     public static func isReadable(_ url: URL) -> Bool {

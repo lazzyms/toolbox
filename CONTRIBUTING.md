@@ -78,7 +78,7 @@ short version:
 | Processing logic (PDF, images, batching) | `Sources/ToolboxKit/` |
 | UI for a tool | `Sources/Toolbox/Features/` |
 | Shared UI pieces | `Sources/Toolbox/Components/` |
-| The tool list | `Sources/Toolbox/Utility.swift` |
+| The tool list | `Sources/Toolbox/Registry/` |
 | Updater / Settings | `Sources/Toolbox/Updates/` |
 | The website | `docs/` |
 

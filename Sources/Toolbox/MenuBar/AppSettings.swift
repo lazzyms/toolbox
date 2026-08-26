@@ -17,23 +17,45 @@ final class AppSettings: ObservableObject {
         static let hidesDockIcon = "hidesDockIcon"
     }
 
+    // Both flags below are hand-written accessors rather than `@Published`, and
+    // that is load-bearing rather than a style choice.
+    //
+    // `@Published` notifies on *every* assignment, including one that writes the
+    // value the property already holds; a `didSet` guard cannot suppress that,
+    // because `didSet` runs after the notification has gone out. `MenuBarExtra`
+    // writes its `isInserted` binding back from a KVO observer on the status
+    // item *during* a scene update, so that redundant notification invalidated
+    // `App.body`, which re-ran the scene update, which wrote the binding again —
+    // an unbounded main-thread loop that starved the runloop before the first
+    // window was ever presented. Hence the invariant: assigning the value a
+    // property already has must not notify observers, must not touch
+    // `UserDefaults`, and must not cascade.
+    private var storedShowsMenuBarIcon: Bool
+    private var storedHidesDockIcon: Bool
+
     /// Whether the `MenuBarExtra` is inserted in the status bar.
-    @Published var showsMenuBarIcon: Bool {
-        didSet {
-            guard showsMenuBarIcon != oldValue else { return }
-            UserDefaults.standard.set(showsMenuBarIcon, forKey: Key.showsMenuBarIcon)
+    var showsMenuBarIcon: Bool {
+        get { storedShowsMenuBarIcon }
+        set {
+            guard newValue != storedShowsMenuBarIcon else { return }
+            objectWillChange.send()
+            storedShowsMenuBarIcon = newValue
+            UserDefaults.standard.set(newValue, forKey: Key.showsMenuBarIcon)
             // Removing the last way to reach a Dock-less app would strand it
             // running with no UI at all, so bring the Dock icon back instead.
-            if !showsMenuBarIcon { hidesDockIcon = false }
+            if !newValue { hidesDockIcon = false }
         }
     }
 
     /// Whether the app runs as an accessory (no Dock icon, no app menu).
-    @Published var hidesDockIcon: Bool {
-        didSet {
-            guard hidesDockIcon != oldValue else { return }
-            UserDefaults.standard.set(hidesDockIcon, forKey: Key.hidesDockIcon)
-            if hidesDockIcon { showsMenuBarIcon = true }
+    var hidesDockIcon: Bool {
+        get { storedHidesDockIcon }
+        set {
+            guard newValue != storedHidesDockIcon else { return }
+            objectWillChange.send()
+            storedHidesDockIcon = newValue
+            UserDefaults.standard.set(newValue, forKey: Key.hidesDockIcon)
+            if newValue { showsMenuBarIcon = true }
             applyActivationPolicy()
         }
     }
@@ -48,10 +70,11 @@ final class AppSettings: ObservableObject {
             Key.showsMenuBarIcon: true,
             Key.hidesDockIcon: false,
         ])
-        // Assigned directly: `didSet` doesn't run during init, which is what we
-        // want here — nothing to reconcile yet and no NSApp to talk to.
-        showsMenuBarIcon = defaults.bool(forKey: Key.showsMenuBarIcon)
-        hidesDockIcon = defaults.bool(forKey: Key.hidesDockIcon)
+        // Seeded through the stored values, never the setters: nothing is
+        // reconciled yet, there is no NSApp to talk to, and no observer could
+        // meaningfully hear about a value the object is being born with.
+        storedShowsMenuBarIcon = defaults.bool(forKey: Key.showsMenuBarIcon)
+        storedHidesDockIcon = defaults.bool(forKey: Key.hidesDockIcon)
         launchesAtLogin = isLoginItemAvailable && SMAppService.mainApp.status == .enabled
     }
 

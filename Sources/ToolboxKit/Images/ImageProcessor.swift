@@ -3,10 +3,13 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
-/// One image transform: decode → optional resize → encode.
+/// One image transform: decode → operations → encode.
 ///
 /// Convert, compress and resize are all the same operation with different
-/// options, so they share this single implementation.
+/// options, so they share this single implementation. The middle is an ordered
+/// `[ImageOperation]`, so a new image tool is a new operation rather than a new
+/// decode/encode path with its own chances to get orientation, the
+/// no-inflation guard or output naming wrong.
 public struct ImageProcessor: Sendable {
 
     public struct Options: Sendable {
@@ -14,7 +17,10 @@ public struct ImageProcessor: Sendable {
         public var format: ImageFormat?
         /// 0.0…1.0, ignored by lossless formats.
         public var quality: Double
-        public var resize: ResizeSpec
+        /// The middle of the pipeline, applied in the order given. Order is
+        /// significant: cropping then resizing keeps a different region than
+        /// resizing then cropping.
+        public var operations: [ImageOperation]
         /// Drop EXIF/GPS/maker notes. Location data lives here, so it defaults on
         /// for lossy re-encodes where the user is already accepting a rewrite.
         public var stripMetadata: Bool
@@ -27,7 +33,7 @@ public struct ImageProcessor: Sendable {
         public init(
             format: ImageFormat? = nil,
             quality: Double = 0.8,
-            resize: ResizeSpec = .none,
+            operations: [ImageOperation] = [],
             stripMetadata: Bool = false,
             allowUpscale: Bool = false,
             keepSmallerOriginal: Bool = false,
@@ -36,12 +42,37 @@ public struct ImageProcessor: Sendable {
         ) {
             self.format = format
             self.quality = quality
-            self.resize = resize
+            self.operations = operations
             self.stripMetadata = stripMetadata
             self.allowUpscale = allowUpscale
             self.keepSmallerOriginal = keepSmallerOriginal
             self.suffix = suffix
             self.location = location
+        }
+
+        /// Resizing on its own, which is what every caller wanted before the
+        /// pipeline existed. `resize` deliberately has no default value: that
+        /// is what keeps this unambiguous against the initialiser above.
+        public init(
+            format: ImageFormat? = nil,
+            quality: Double = 0.8,
+            resize: ResizeSpec,
+            stripMetadata: Bool = false,
+            allowUpscale: Bool = false,
+            keepSmallerOriginal: Bool = false,
+            suffix: String = "",
+            location: OutputLocation = .alongsideInput
+        ) {
+            self.init(
+                format: format,
+                quality: quality,
+                operations: [.resize(resize)],
+                stripMetadata: stripMetadata,
+                allowUpscale: allowUpscale,
+                keepSmallerOriginal: keepSmallerOriginal,
+                suffix: suffix,
+                location: location
+            )
         }
     }
 
@@ -92,39 +123,38 @@ public struct ImageProcessor: Sendable {
         }
 
         var originalSize = CGSize(width: declaredWidth ?? 0, height: declaredHeight ?? 0)
-        let target = options.resize.target(for: originalSize, allowUpscale: options.allowUpscale)
 
-        let image: CGImage
-        if let target {
-            // Thumbnail path does the decode and scale in one step and honours
-            // the EXIF orientation, which is what makes rotated iPhone photos
-            // come out upright.
-            let maxSide = Int(max(target.width, target.height).rounded())
-            let thumbOptions: [CFString: Any] = [
-                kCGImageSourceCreateThumbnailFromImageAlways: true,
-                kCGImageSourceCreateThumbnailWithTransform: true,
-                kCGImageSourceThumbnailMaxPixelSize: maxSide,
-                kCGImageSourceShouldCacheImmediately: true,
-            ]
-            guard let scaled = CGImageSourceCreateThumbnailAtIndex(
-                source, 0, thumbOptions as CFDictionary
-            ) else {
-                throw ToolboxError.decodeFailed(input)
-            }
+        // Pick the route through the pipeline before decoding anything: the
+        // cheap one for a lone resize can only be taken during the decode.
+        let transform = ImageTransform(
+            operations: options.operations,
+            sourceSize: originalSize,
+            orientation: Self.orientation(from: properties),
+            allowUpscale: options.allowUpscale
+        )
 
-            if case .exact = options.resize {
-                // Thumbnailing preserves the ratio, so an exact request needs a
-                // real redraw into the requested box.
-                image = try Self.redraw(scaled, to: target)
-            } else {
-                image = scaled
-            }
+        // An animated GIF or a multi-page file must not come back as frame 0
+        // reported as a success, so every frame goes through the same transform
+        // — or the run fails and says which frames would have been lost.
+        let sequence = try ImageFrameSequence.read(
+            from: source,
+            input: input,
+            requestedFormat: options.format,
+            transform: transform
+        )
+
+        let rendered: RenderedImage
+        if let sequence {
+            rendered = RenderedImage(
+                image: sequence.firstImage,
+                // Frames are written from pixels with no metadata copied at all.
+                orientationBaked: false,
+                didTransform: sequence.didTransform
+            )
         } else {
-            guard let full = CGImageSourceCreateImageAtIndex(source, 0, sourceOptions as CFDictionary) else {
-                throw ToolboxError.decodeFailed(input)
-            }
-            image = full
+            rendered = try transform.decode(from: source, at: 0, input: input)
         }
+        let image = rendered.image
 
         if originalSize.width == 0 {
             originalSize = CGSize(width: image.width, height: image.height)
@@ -134,16 +164,21 @@ public struct ImageProcessor: Sendable {
             for: input,
             in: options.location,
             suffix: options.suffix,
-            extension: outputFormat.fileExtension
+            extension: sequence?.fileExtension ?? outputFormat.fileExtension
         )
 
-        try Self.write(
-            image: image,
-            to: output,
-            format: outputFormat,
-            quality: options.quality,
-            sourceProperties: options.stripMetadata ? nil : properties
-        )
+        if let sequence {
+            try sequence.write(to: output, quality: options.quality)
+        } else {
+            try Self.write(
+                image: image,
+                to: output,
+                format: outputFormat,
+                quality: options.quality,
+                sourceProperties: options.stripMetadata ? nil : properties,
+                dropOrientation: rendered.orientationBaked
+            )
+        }
 
         let originalBytes = OutputNaming.fileSize(of: input)
         let newBytes = OutputNaming.fileSize(of: output)
@@ -153,9 +188,13 @@ public struct ImageProcessor: Sendable {
         // tool whose job is "make this smaller" must never hand back something
         // larger, so fall back to the original bytes.
         //
-        // Skipped when resizing, where a size change is the point and comparing
-        // against the original is meaningless.
-        if options.keepSmallerOriginal, originalBytes > 0, newBytes >= originalBytes, target == nil {
+        // Skipped whenever an operation actually changed the pixels: a resize,
+        // crop, rotation or flip is a change the user asked for, so handing the
+        // original back instead would silently discard it. Operations that
+        // resolved to nothing for this image don't count, which is what keeps a
+        // plain convert or compress under the guard.
+        if options.keepSmallerOriginal, originalBytes > 0, newBytes >= originalBytes,
+           !rendered.didTransform {
             try? FileManager.default.removeItem(at: output)
 
             // Copy under the *input's* extension: writing HEIC bytes to a .png
@@ -197,7 +236,8 @@ public struct ImageProcessor: Sendable {
         to output: URL,
         format: ImageFormat,
         quality: Double,
-        sourceProperties: [CFString: Any]?
+        sourceProperties: [CFString: Any]?,
+        dropOrientation: Bool
     ) throws {
         guard let destination = CGImageDestinationCreateWithURL(
             output as CFURL, format.utType.identifier as CFString, 1, nil
@@ -212,13 +252,18 @@ public struct ImageProcessor: Sendable {
                 min(max(quality, 0.0), 1.0)
         } else {
             // PNG/TIFF: ask ImageIO for its best effort rather than its fastest.
-            properties[kCGImageDestinationOptimizeColorForSharing] = true
+            // That flag also converts the colours to sRGB "for sharing", which
+            // would flatten a wide-gamut (Display P3) photo and dull the
+            // colours — exactly what the pipeline must not do. It is a no-op
+            // for pixels that already are sRGB, so only those get it.
+            if Self.isAlreadySRGB(image.colorSpace) {
+                properties[kCGImageDestinationOptimizeColorForSharing] = true
+            }
         }
 
         if let sourceProperties {
-            // Carry over the tags worth keeping (orientation is already baked
-            // into the pixels, so it must not be copied — that would rotate the
-            // image a second time).
+            // Carry over the tags worth keeping. The top-level orientation is
+            // never among them.
             for key in [
                 kCGImagePropertyExifDictionary,
                 kCGImagePropertyTIFFDictionary,
@@ -229,9 +274,20 @@ public struct ImageProcessor: Sendable {
             ] where sourceProperties[key] != nil {
                 properties[key] = sourceProperties[key]
             }
+
+            // When the decode turned the pixels upright, the orientation has
+            // already been spent and writing the tag would rotate the image a
+            // second time on display. Omitting the top-level key is not enough:
+            // ImageIO reports the same value inside the TIFF dictionary, which
+            // is copied wholesale above.
+            if dropOrientation, var tiff = properties[kCGImagePropertyTIFFDictionary]
+                as? [CFString: Any] {
+                tiff[kCGImagePropertyTIFFOrientation] = nil
+                properties[kCGImagePropertyTIFFDictionary] = tiff
+            }
         }
 
-        CGImageDestinationAddImage(destination, image, properties as CFDictionary)
+        CGImageDestinationAddImage(destination, image, properties.isEmpty ? nil : properties as CFDictionary)
 
         guard CGImageDestinationFinalize(destination) else {
             try? FileManager.default.removeItem(at: output)
@@ -240,7 +296,8 @@ public struct ImageProcessor: Sendable {
     }
 
     /// Draws into an exact box, ignoring the source aspect ratio.
-    private static func redraw(_ image: CGImage, to size: CGSize) throws -> CGImage {
+    /// Not private so each frame of an animation scales identically.
+    static func redraw(_ image: CGImage, to size: CGSize) throws -> CGImage {
         let width = Int(size.width.rounded())
         let height = Int(size.height.rounded())
 
@@ -264,6 +321,35 @@ public struct ImageProcessor: Sendable {
             throw ToolboxError.encodeFailed("bitmap")
         }
         return result
+    }
+
+    /// The orientation the file records, or `.up` when it records none.
+    private static func orientation(
+        from properties: [CFString: Any]?
+    ) -> CGImagePropertyOrientation {
+        guard let raw = (properties?[kCGImagePropertyOrientation] as? NSNumber)?.uint32Value,
+              let orientation = CGImagePropertyOrientation(rawValue: raw)
+        else { return .up }
+        return orientation
+    }
+
+    /// Whether `kCGImageDestinationOptimizeColorForSharing` is a no-op, so the
+    /// flag can be applied without flattening a wide gamut: the image already
+    /// is sRGB, or carries no profile worth keeping.
+    private static func isAlreadySRGB(_ space: CGColorSpace?) -> Bool {
+        guard let space else { return true }
+        // Greyscale and CMYK pixels can't describe an RGBA buffer and ImageIO
+        // picks the conversion itself; leave today's behaviour alone there.
+        guard space.model == .rgb else { return true }
+        if let name = space.name {
+            // Named sRGB is canonical. A different *name* (Display P3, Adobe
+            // RGB…) means a wider gamut that sharing would destroy.
+            return name == CGColorSpace.sRGB
+        }
+        // A nameless RGB space is ICC-based. ImageIO decodes ordinary sRGB
+        // files to the named space above, so one of these carries a profile
+        // that must not be thrown away.
+        return false
     }
 
     private static func inferredFormat(from url: URL, source: CGImageSource) -> ImageFormat {

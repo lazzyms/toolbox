@@ -142,8 +142,8 @@ trust, not licensing.
 
 ## Adding a utility
 
-The registry in `Sources/Toolbox/Utility.swift` is the only place that knows the
-tool list. To add one:
+The registry in `Sources/Toolbox/Registry/` is the only place that knows the tool
+list, one file per category. To add one:
 
 1. Put the processing logic in `Sources/ToolboxKit/` as a plain function —
    file in, file out, no UI imports. This keeps it unit-testable.
@@ -154,9 +154,11 @@ tool list. To add one:
    window or the menu bar panel, so one view covers both; for option pickers use
    `.optionPickerStyle(presentation)` rather than `.pickerStyle(.segmented)`,
    which is too wide for the panel.
-3. Append a `Utility` entry to `Utility.all` and add its `id` to the `switch` in
-   `makeView()`. Its `shortTitle` is what the menu bar panel's picker chips show,
-   so keep it to a word or two.
+3. Append one `Utility` line to its category's array — `Utility+PDF.swift` or
+   `Utility+Images.swift` — passing `pane:` a closure that builds the view from
+   step 2. That single entry is the whole registration; a tool with no pane
+   doesn't compile. Its `shortTitle` is what the menu bar panel's picker chips
+   show, so keep it to a word or two.
 
 `BatchRunner.run` handles concurrency, progress and per-file error isolation, so
 a new tool usually needs no threading code of its own.
@@ -169,7 +171,7 @@ Sources/ToolboxKit/     processing logic, no UI — where the tests point
   Images/               ImageProcessor, ImageFormat, ResizeSpec
   Support/              BatchRunner, OutputNaming, errors, formatting
 Sources/Toolbox/        SwiftUI app
-  Utility.swift          the tool registry
+  Registry/              the tool list, one file per category
   Components/            shared UI: drop zone, file list, scaffold
   Features/              one view per tool
   MenuBar/               the status-item panel, Dock/login-item settings

@@ -45,11 +45,21 @@ New processing code belongs in ToolboxKit even if only one view calls it.
 
 ### The tool registry
 
-`Sources/Toolbox/Utility.swift` is the single source of truth for the tool list. Adding a utility
-touches **two** places in that file, and forgetting the second silently yields `UnavailableView`:
+`Sources/Toolbox/Registry/` is the single source of truth for the tool list, split so PDF and image
+work never touch the same file:
 
-1. append a `Utility` to `Utility.all`
-2. add its `id` to the `switch` in `makeView()`
+- `Utility.swift` — the type, `Category`, and `all`, assembled as `pdfTools + imageTools`
+- `Utility+PDF.swift`, `Utility+Images.swift` — one `[Utility]` per category
+
+Adding a utility is **one appended line** in its category's array, and that line carries the tool's
+own pane factory, so there is no lookup table to forget to update. Entries are one per line —
+deliberately past the usual column budget — so two branches adding a tool conflict on that line
+alone, resolved by keeping both.
+
+Two things about `Utility` are deliberate. The stored `pane` closure takes the `Utility` and
+`makeView()` feeds `self` back in, because every pane hands one to `ToolScaffold` for its header and
+a closure written inline in the registry can't refer to the value it is initialising. And a closure
+isn't equatable, so `Hashable`/`Equatable` are hand-written on `id` rather than synthesised.
 
 ### Convert, compress and resize are one implementation
 
@@ -194,3 +204,17 @@ lives in `.git/.graphite_metadata.db` and editing only the JSON corrupts the pai
   a lower number. It also pushes `HEAD:main` (GitHub Pages serves `docs/appcast.xml` from the default
   branch only) and aborts rather than force-pushing if that isn't a fast-forward. **Cut releases from
   `main` after the stack has merged, not from a branch in the stack.**
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues via the `gh` CLI against `lazzyms/toolbox`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default five-role vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: root `CONTEXT.md` plus `docs/adr/`. See `docs/agents/domain.md`.
