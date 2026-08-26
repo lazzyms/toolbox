@@ -111,8 +111,6 @@
     <nav class="nav-links" aria-label="Sections">
       <a href="#tools">Tools</a>
       <a href="#why">Why</a>
-      <a href="#install">Install</a>
-      <a href="#build">Build</a>
       <a href="#faq">FAQ</a>
     </nav>
     <div class="nav-actions">
@@ -135,16 +133,16 @@
     <p>
       <span class="badge badge-secondary badge-multiline">
         <span class="dot" aria-hidden="true"></span>
-        macOS 14+ · Universal binary · Your files never leave the Mac
+        Native macOS utility · Private by design
       </span>
     </p>
 
-    <h1>The small file jobs,<br>done on your Mac.</h1>
+    <h1>Your files.<br><em>Your Mac.</em><br>Done.</h1>
 
     <p class="lede">
-      A native macOS app collecting thirty-one utilities — unlock a PDF, get HEIC out
-      of your camera roll, merge a stack of scans into one file, lift a subject out of
-      a photo. Drop files in, get files out. Your files are never uploaded anywhere.
+      Toolbox brings 31 essential file utilities into one beautifully simple Mac app.
+      Convert, compress, organize and protect your files — without sending them to a
+      website, creating an account or learning another workflow.
     </p>
 
     <div class="cta">
@@ -153,12 +151,15 @@
         Download the DMG
         <span class="meta"></span>
       </a>
-      <a class="btn btn-outline btn-lg" href="#build">Build from source</a>
+      <a class="btn btn-outline btn-lg" href="https://github.com/lazzyms/toolbox">
+        <svg class="ico" aria-hidden="true"><use href="#i-github"/></svg>
+        View source
+      </a>
     </div>
     <p class="dl-fallback" id="dl-note">
       <a href="https://github.com/lazzyms/toolbox/releases/latest">Latest release</a> · Apple silicon &amp; Intel
     </p>
-    <p class="cta-note">Free and MIT licensed · <a href="#gatekeeper">one extra step on first launch</a></p>
+    <p class="cta-note">Free and MIT licensed · macOS 14+ · Apple silicon and Intel</p>
 
     <!-- Interactive recreation of the app UI (HTML/CSS, not a screenshot). -->
     <figure class="shot">
@@ -189,64 +190,33 @@
 <section class="section" id="tools">
   <div class="wrap">
     <p class="kicker">The toolbox</p>
-    <h2>Thirty-one tools today. The registry takes more.</h2>
+    <h2>31 tools for the work between apps.</h2>
     <p class="section-lede">
-      Every tool accepts multiple files at once — drag-and-drop or a file picker —
-      processes them in parallel, and reports a result per file. One bad file never
-      stops the batch.
+      The everyday file jobs that are too small for a new app and too useful to do
+      online. Drop in one file or a whole batch, choose what you need, and get clean
+      results back in seconds.
     </p>
 
-    <div class="grid tools-grid">
-      <article class="card card-interactive">
-        <div class="card-header">
-          <span class="card-icon"><svg class="ico" aria-hidden="true"><use href="#i-doc-safe"/></svg></span>
-          <h3 class="card-title">PDF tools</h3>
-          <p class="card-description">Seventeen ways to open up, break apart, protect and rebuild PDFs — passwords, pages, text, signatures.</p>
+    <div class="category-grid">
+      <a class="category-card card-interactive" href="pdf.html">
+        <span class="category-art category-art-pdf" aria-hidden="true"><span>PDF</span></span>
+        <div class="category-copy">
+          <p class="category-count">17 tools</p>
+          <h3>Work with PDFs.</h3>
+          <p>Merge, split, sign, OCR, protect and organize documents without uploading them.</p>
+          <span class="category-link">Explore PDF tools <span aria-hidden="true">→</span></span>
         </div>
-        <ul class="ticks">
-          <li><strong>Remove PDF Password</strong> — Save an unlocked copy of a PDF you know the password for.</li>
-          <li><strong>Add PDF Page Numbers</strong> — Stamp page numbers onto a PDF.</li>
-          <li><strong>Merge PDF</strong> — Combine several PDFs into one file.</li>
-          <li><strong>Watermark PDF</strong> — Stamp text or an image across pages — DRAFT, CONFIDENTIAL, a logo.</li>
-          <li><strong>Crop PDF</strong> — Trim margins or cut to a region — losslessly.</li>
-          <li><strong>Protect PDF</strong> — Add a password so only you can open it.</li>
-          <li><strong>Images to PDF</strong> — Turn photos and scans into one PDF — HEIC included.</li>
-          <li><strong>PDF to Images</strong> — Render pages to JPEG or PNG at 72–300 dpi.</li>
-          <li><strong>PDF to Text</strong> — Pull the text out as .txt or best-effort Markdown.</li>
-          <li><strong>Split PDF</strong> — Break one PDF into several — every page, by ranges, or fixed-size chunks.</li>
-          <li><strong>Extract Images from PDF</strong> — Pull embedded pictures out at their original resolution — JPEGs stay untouched.</li>
-          <li><strong>Sign PDF</strong> — Stamp your signature image or typed name onto pages — visual only, not cryptographic.</li>
-          <li><strong>OCR PDF</strong> — Read text out of scans with on-device OCR — outputs a .txt file.</li>
-          <li><strong>Remove PDF Pages</strong> — Delete selected pages from a PDF — the rest stay, in order.</li>
-          <li><strong>Extract PDF Pages</strong> — Pull selected pages out into a new PDF — ranges like 1-3, 7.</li>
-          <li><strong>Organize PDF</strong> — Reorder, rotate and delete pages of one PDF from a thumbnail grid.</li>
-          <li><strong>Compress PDF</strong> — Shrink scan-heavy PDFs by rasterising pages as JPEG — text becomes pixels.</li>
-        </ul>
-      </article>
+      </a>
 
-      <article class="card card-interactive">
-        <div class="card-header">
-          <span class="card-icon"><svg class="ico" aria-hidden="true"><use href="#i-convert"/></svg></span>
-          <h3 class="card-title">Image tools</h3>
-          <p class="card-description">Fourteen batch tools for converting, resizing, annotating and cleaning up photos and scans.</p>
+      <a class="category-card card-interactive" href="images.html">
+        <span class="category-art category-art-images" aria-hidden="true"><span>IMG</span></span>
+        <div class="category-copy">
+          <p class="category-count">14 tools</p>
+          <h3>Make images work harder.</h3>
+          <p>Convert, resize, clean up and annotate photos, scans and GIFs in batches.</p>
+          <span class="category-link">Explore image tools <span aria-hidden="true">→</span></span>
         </div>
-        <ul class="ticks">
-          <li><strong>Convert Image Format</strong> — HEIC to PNG, JPEG and back — batch friendly.</li>
-          <li><strong>Compress Images</strong> — Shrink files losslessly, or trade quality for size.</li>
-          <li><strong>Resize Images</strong> — Scale by pixels, percentage or longest side.</li>
-          <li><strong>Rotate &amp; Flip Images</strong> — Quarter turns and mirrors, without resampling — batch friendly.</li>
-          <li><strong>Crop Images</strong> — Cut to an anchored aspect ratio or a fixed pixel rectangle, in a batch.</li>
-          <li><strong>Generate App Icons</strong> — Turn one image into a complete macOS, favicon, iOS or Android icon set.</li>
-          <li><strong>Create GIF</strong> — Animate a batch of still images into a looped GIF.</li>
-          <li><strong>Extract GIF Frames</strong> — Split an animated GIF into its individual frames.</li>
-          <li><strong>Watermark Images</strong> — Stamp text or a logo across a batch of images.</li>
-          <li><strong>Image Metadata</strong> — See what a photo leaks, then strip EXIF and GPS without recompressing it.</li>
-          <li><strong>Colour &amp; Tone Adjustments</strong> — Batch brightness, contrast, saturation, exposure and one-tap presets.</li>
-          <li><strong>Split &amp; Combine TIFF</strong> — Break a multi-page TIFF into images, or bind a batch of images into one.</li>
-          <li><strong>Blur Faces</strong> — Detect faces on-device and blur them — photos never leave this Mac.</li>
-          <li><strong>Remove Background</strong> — Lift the subject out of a photo into a transparent PNG — on-device with Vision.</li>
-        </ul>
-      </article>
+      </a>
     </div>
   </div>
 </section>
@@ -254,59 +224,59 @@
 <!-- ───────────────────────────── why ───────────────────────────── -->
 <section class="section alt" id="why">
   <div class="wrap">
-    <p class="kicker">Behaviour you can rely on</p>
-    <h2>Boring in all the right places.</h2>
+    <p class="kicker">Built for trust</p>
+    <h2>Private by default. Predictable by design.</h2>
     <p class="section-lede">
-      Most of the work in a file utility is what happens on the unhappy path. These are
-      the guarantees the app is built around.
+      Toolbox does the careful things quietly: it works locally, protects your originals,
+      and gives you a clear result for every file.
     </p>
 
     <div class="grid why-grid">
       <article class="card card-interactive">
         <div class="card-header">
           <span class="card-icon"><svg class="ico" aria-hidden="true"><use href="#i-shield"/></svg></span>
-          <h3 class="card-title">Your files stay put</h3>
-          <p class="card-description">All processing happens on-device — your PDFs and photos stay on the disk they were already on. The file-processing core has no networking in it at all; the only thing that talks to the network is the update check, and it asks first.</p>
+          <h3 class="card-title">Your files stay on your Mac</h3>
+          <p class="card-description">PDFs and photos are processed on-device. No account, upload or analytics — just the files you chose to work on.</p>
         </div>
       </article>
 
       <article class="card card-interactive">
         <div class="card-header">
           <span class="card-icon"><svg class="ico" aria-hidden="true"><use href="#i-doc-safe"/></svg></span>
-          <h3 class="card-title">Originals are never touched</h3>
-          <p class="card-description">Results are written next to the input, or into a folder you pick, with a suffix like <code>-unlocked</code>, <code>-compressed</code>, <code>-resized</code>.</p>
+          <h3 class="card-title">Originals remain untouched</h3>
+          <p class="card-description">Results get their own filename, such as <code>-unlocked</code>, <code>-compressed</code> or <code>-resized</code>.</p>
         </div>
       </article>
 
       <article class="card card-interactive">
         <div class="card-header">
           <span class="card-icon"><svg class="ico" aria-hidden="true"><use href="#i-stack"/></svg></span>
-          <h3 class="card-title">Nothing gets overwritten</h3>
-          <p class="card-description">A name collision becomes <code>photo-1.png</code>, <code>photo-2.png</code>, and so on. You can run the same batch twice without losing the first result.</p>
+          <h3 class="card-title">Safe to run twice</h3>
+          <p class="card-description">If a result already exists, Toolbox adds <code>-1</code>, <code>-2</code> and so on. Your earlier work stays right where it is.</p>
         </div>
       </article>
 
       <article class="card card-interactive">
         <div class="card-header">
           <span class="card-icon"><svg class="ico" aria-hidden="true"><use href="#i-gauge"/></svg></span>
-          <h3 class="card-title">Compression never inflates</h3>
-          <p class="card-description">Re-encoding a photo can honestly produce more bytes — HEIC is roughly twice as efficient as JPEG. When that happens the original bytes are copied instead.</p>
+          <h3 class="card-title">Compression with guardrails</h3>
+          <p class="card-description">When a conversion would make an image larger, Toolbox keeps the original bytes instead of handing you a worse result.</p>
         </div>
       </article>
 
       <article class="card card-interactive">
         <div class="card-header">
           <span class="card-icon"><svg class="ico" aria-hidden="true"><use href="#i-rotate"/></svg></span>
-          <h3 class="card-title">Rotation handled</h3>
-          <p class="card-description">EXIF orientation is baked into the pixels on resize, so iPhone photos come out upright instead of sideways in whatever you paste them into.</p>
+          <h3 class="card-title">Photos stay upright</h3>
+          <p class="card-description">Camera orientation is handled during resize, so iPhone photos look right wherever you use them next.</p>
         </div>
       </article>
 
       <article class="card card-interactive">
         <div class="card-header">
           <span class="card-icon"><svg class="ico" aria-hidden="true"><use href="#i-verified"/></svg></span>
-          <h3 class="card-title">Updates verify themselves</h3>
-          <p class="card-description">Updates are checked against an Ed25519 key baked into the app before anything installs, so the download host doesn't have to be trusted. Publishing one needs a private key that isn't on GitHub.</p>
+          <h3 class="card-title">Updates you can verify</h3>
+          <p class="card-description">Updates are checked against a signing key built into the app before anything installs.</p>
         </div>
       </article>
     </div>
@@ -320,163 +290,11 @@
   </div>
 </section>
 
-<!-- ───────────────────────────── install ───────────────────────────── -->
-<section class="section" id="install">
-  <div class="wrap">
-    <p class="kicker">Install</p>
-    <h2>Three steps, then it's a normal app.</h2>
-
-    <div class="steps">
-      <div class="step">
-        <span class="num">1</span>
-        <div>
-          <h3>Download the DMG</h3>
-          <p>Grab <code>Toolbox-&lt;version&gt;.dmg</code> from the <a href="https://github.com/lazzyms/toolbox/releases/latest">latest release</a>.</p>
-        </div>
-      </div>
-      <div class="step">
-        <span class="num">2</span>
-        <div>
-          <h3>Drag to Applications</h3>
-          <p>Open the disk image and drop <b>Toolbox</b> onto the Applications shortcut inside it.</p>
-        </div>
-      </div>
-      <div class="step">
-        <span class="num">3</span>
-        <div>
-          <h3>Open it the first time</h3>
-          <p>Right-click Toolbox in Applications → <b>Open</b> → <b>Open</b>. Once per machine.</p>
-        </div>
-      </div>
-    </div>
-
-    <p class="section-lede">
-      After that it keeps itself current: on first launch it asks whether to check for
-      updates automatically, and you can change your mind later in Settings.
-    </p>
-
-    <div class="alert callout" id="gatekeeper">
-      <h3 class="alert-title">Why the right-click?</h3>
-      <div class="alert-description">
-        <p>
-          This build isn't notarized by Apple, so Gatekeeper won't let a plain double-click
-          through on first launch. Right-click → Open is the standard way to approve it, and
-          it's only needed once — after that it opens normally.
-        </p>
-        <p>
-          Notarization needs a paid Apple Developer account. The scripts in the repo support
-          it (<code>Scripts/notarize.sh</code>), and the app stays free either way —
-          notarization buys Gatekeeper trust, not a licence.
-        </p>
-        <p>
-          One honest trade-off in that default build: Library Validation only loads libraries
-          whose Team ID matches the executable's, and an ad-hoc signature has no Team ID — so
-          macOS would refuse to load the bundled updater framework. Ad-hoc builds therefore
-          turn that check off, which also lets other unsigned libraries be injected into the
-          process. Developer ID builds keep it on, because their Team IDs match.
-        </p>
-      </div>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr><th>Signing mode</th><th>Command</th><th>What other people see</th></tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>Ad-hoc <span class="badge badge-secondary">default</span></td>
-              <td><code>./Scripts/build-app.sh</code></td>
-              <td>Works, needs right-click → Open once</td>
-            </tr>
-            <tr>
-              <td>Developer ID</td>
-              <td><code>./Scripts/build-app.sh --sign auto</code></td>
-              <td>Fewer warnings, still not fully trusted</td>
-            </tr>
-            <tr>
-              <td>Notarized</td>
-              <td><code>--sign auto</code> then <code>./Scripts/notarize.sh</code></td>
-              <td>Normal double-click, no warnings</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- ───────────────────────────── build ───────────────────────────── -->
-<section class="section alt" id="build">
-  <div class="wrap">
-    <p class="kicker">For developers</p>
-    <h2>Clone it, test it, ship your own DMG.</h2>
-    <p class="section-lede">Requires Xcode 16 or newer. One dependency — Sparkle, for updates — which SwiftPM fetches for you; the <code>ToolboxKit</code> processing core has none at all.</p>
-
-    <div class="build-grid">
-      <div class="code-card">
-        <div class="code-head">
-          <span>Terminal</span>
-          <button class="btn btn-outline btn-sm copy" type="button" data-copy="#build-cmds">Copy</button>
-        </div>
-<pre id="build-cmds"><code><span class="c">// clone</span>
-git clone https://github.com/lazzyms/toolbox.git
-cd toolbox
-
-<span class="c">// run the test suite</span>
-swift test
-
-<span class="c">// → dist/Toolbox.app (universal)</span>
-./Scripts/build-app.sh --version 1.0.0
-
-<span class="c">// → dist/Toolbox-1.0.0.dmg</span>
-./Scripts/make-dmg.sh --version 1.0.0
-
-<span class="c">// build, sign the feed, tag, release</span>
-./Scripts/release.sh --version 1.1.0</code></pre>
-      </div>
-
-      <div class="code-card">
-        <div class="code-head"><span>Project layout</span></div>
-<pre><code><span class="d">Sources/ToolboxKit/</span>  <span class="c">processing, no UI</span>
-  PDF/               unlock, merge, split, OCR, sign…
-  Images/            convert, compress, resize, GIF, cutout…
-  Support/           BatchRunner, OutputNaming
-<span class="d">Sources/Toolbox/</span>    <span class="c">SwiftUI app</span>
-  Utility.swift      <span class="c">the tool registry</span>
-  Components/        DropZone, FileList, ToolScaffold
-  Features/          one view per tool
-  Updates/           <span class="c">Sparkle wiring, Settings</span>
-<span class="d">Resources/</span>          Info.plist, entitlements, icon
-<span class="d">Scripts/</span>            build-app, make-dmg, release
-<span class="d">docs/</span>               <span class="c">this site + appcast.xml</span>
-<span class="d">Tests/</span>              318 tests</code></pre>
-      </div>
-    </div>
-
-    <div class="card" style="margin-top: 1rem">
-      <div class="card-header">
-        <span class="card-icon"><svg class="ico" aria-hidden="true"><use href="#i-beaker"/></svg></span>
-        <h3 class="card-title">Adding a utility is three edits</h3>
-        <p class="card-description">
-          <code>Sources/Toolbox/Registry/</code> is the only place that knows the tool
-          list, and <code>BatchRunner.run</code> already handles concurrency, progress and
-          per-file error isolation — a new tool usually needs no threading code of its own.
-        </p>
-      </div>
-      <hr class="separator">
-      <ol class="numbered">
-        <li>Put the logic in <code>ToolboxKit</code> as a plain file-in / file-out function, so it's unit-testable without a running app.</li>
-        <li>Add a SwiftUI view in <code>Features/</code>, wrapped in <code>ToolScaffold</code> — you get drag-and-drop, batching, progress and Finder reveal for free.</li>
-        <li>Append one <code>Utility</code> line to its category's registry, passing <code>pane:</code> a closure that builds the view — a tool with no pane doesn't compile.</li>
-      </ol>
-    </div>
-  </div>
-</section>
-
 <!-- ───────────────────────────── faq ───────────────────────────── -->
 <section class="section" id="faq">
   <div class="wrap narrow">
     <p class="kicker">Questions</p>
-    <h2>The fine print, up front.</h2>
+    <h2>Good questions deserve straight answers.</h2>
 
     <div class="accordion">
       <details>
@@ -550,8 +368,8 @@ swift test
 <section class="closer">
   <div class="wrap">
     <span class="brand-mark big" aria-hidden="true"></span>
-    <h2>Stop hunting for a website to do it.</h2>
-    <p>Keep it in the dock instead.</p>
+    <h2>The utility drawer for your Mac.</h2>
+    <p>Keep the small jobs close at hand.</p>
     <div class="cta">
       <a class="btn btn-default btn-lg" data-dl href="https://github.com/lazzyms/toolbox/releases/latest">
         <svg class="ico" aria-hidden="true"><use href="#i-download"/></svg>
