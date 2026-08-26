@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Toolbox — small file utilities for macOS</title>
-<meta name="description" content="A native macOS app collecting the small file utilities you keep needing: remove PDF passwords, convert HEIC, compress and resize images. Batch-friendly, and your files are processed on-device and never uploaded.">
+<meta name="description" content="A native macOS app collecting 31 small file utilities: unlock, merge, split and OCR PDFs; convert, compress and resize images. Your files never leave your Mac.">
 <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="assets/icon.svg">
 <link rel="stylesheet" href="assets/styles.css">
@@ -12,7 +12,7 @@
 
 <meta property="og:type" content="website">
 <meta property="og:title" content="Toolbox — small file utilities for macOS">
-<meta property="og:description" content="Remove PDF passwords, convert HEIC, compress and resize images. Native, batch-friendly, and your files never leave your Mac.">
+<meta property="og:description" content="Thirty-one small file utilities in one native macOS app: unlock, merge, split and OCR PDFs; convert, compress and annotate images. Batch-friendly, and your files never leave your Mac.">
 <meta property="og:url" content="https://lazzyms.github.io/toolbox/">
 <meta property="og:image" content="https://lazzyms.github.io/toolbox/og.png">
 <meta property="og:image:width" content="1200">
@@ -142,9 +142,9 @@
     <h1>The small file jobs,<br>done on your Mac.</h1>
 
     <p class="lede">
-      A native macOS app collecting the utilities you keep needing — unlock a PDF, get
-      HEIC out of your camera roll, squeeze a folder of screenshots, resize a batch for
-      the web. Drop files in, get files out. Your files are never uploaded anywhere.
+      A native macOS app collecting thirty-one utilities — unlock a PDF, get HEIC out
+      of your camera roll, merge a stack of scans into one file, lift a subject out of
+      a photo. Drop files in, get files out. Your files are never uploaded anywhere.
     </p>
 
     <div class="cta">
@@ -189,7 +189,7 @@
 <section class="section" id="tools">
   <div class="wrap">
     <p class="kicker">The toolbox</p>
-    <h2>Four tools today. The registry takes more.</h2>
+    <h2>Thirty-one tools today. The registry takes more.</h2>
     <p class="section-lede">
       Every tool accepts multiple files at once — drag-and-drop or a file picker —
       processes them in parallel, and reports a result per file. One bad file never
@@ -199,53 +199,52 @@
     <div class="grid tools-grid">
       <article class="card card-interactive">
         <div class="card-header">
-          <span class="card-icon"><svg class="ico" aria-hidden="true"><use href="#i-lock-open"/></svg></span>
-          <h3 class="card-title">Remove PDF Password</h3>
-          <p class="card-description">Saves a decrypted copy of a PDF you already know the password for. Text stays selectable and searchable.</p>
+          <span class="card-icon"><svg class="ico" aria-hidden="true"><use href="#i-doc-safe"/></svg></span>
+          <h3 class="card-title">PDF tools</h3>
+          <p class="card-description">Seventeen ways to open up, break apart, protect and rebuild PDFs — passwords, pages, text, signatures.</p>
         </div>
         <ul class="ticks">
-          <li>Batch a whole folder with one shared password</li>
-          <li>Writes <code>file-unlocked.pdf</code> beside the original</li>
-          <li>Decrypts with your credential — it does not crack anything</li>
+          <li><strong>Remove PDF Password</strong> — Save an unlocked copy of a PDF you know the password for.</li>
+          <li><strong>Add PDF Page Numbers</strong> — Stamp page numbers onto a PDF.</li>
+          <li><strong>Merge PDF</strong> — Combine several PDFs into one file.</li>
+          <li><strong>Watermark PDF</strong> — Stamp text or an image across pages — DRAFT, CONFIDENTIAL, a logo.</li>
+          <li><strong>Crop PDF</strong> — Trim margins or cut to a region — losslessly.</li>
+          <li><strong>Protect PDF</strong> — Add a password so only you can open it.</li>
+          <li><strong>Images to PDF</strong> — Turn photos and scans into one PDF — HEIC included.</li>
+          <li><strong>PDF to Images</strong> — Render pages to JPEG or PNG at 72–300 dpi.</li>
+          <li><strong>PDF to Text</strong> — Pull the text out as .txt or best-effort Markdown.</li>
+          <li><strong>Split PDF</strong> — Break one PDF into several — every page, by ranges, or fixed-size chunks.</li>
+          <li><strong>Extract Images from PDF</strong> — Pull embedded pictures out at their original resolution — JPEGs stay untouched.</li>
+          <li><strong>Sign PDF</strong> — Stamp your signature image or typed name onto pages — visual only, not cryptographic.</li>
+          <li><strong>OCR PDF</strong> — Read text out of scans with on-device OCR — outputs a .txt file.</li>
+          <li><strong>Remove PDF Pages</strong> — Delete selected pages from a PDF — the rest stay, in order.</li>
+          <li><strong>Extract PDF Pages</strong> — Pull selected pages out into a new PDF — ranges like 1-3, 7.</li>
+          <li><strong>Organize PDF</strong> — Reorder, rotate and delete pages of one PDF from a thumbnail grid.</li>
+          <li><strong>Compress PDF</strong> — Shrink scan-heavy PDFs by rasterising pages as JPEG — text becomes pixels.</li>
         </ul>
       </article>
 
       <article class="card card-interactive">
         <div class="card-header">
           <span class="card-icon"><svg class="ico" aria-hidden="true"><use href="#i-convert"/></svg></span>
-          <h3 class="card-title">Convert Image Format</h3>
-          <p class="card-description">HEIC ⇄ PNG ⇄ JPEG ⇄ TIFF, plus WebP where macOS can encode it. Reads RAW too.</p>
+          <h3 class="card-title">Image tools</h3>
+          <p class="card-description">Fourteen batch tools for converting, resizing, annotating and cleaning up photos and scans.</p>
         </div>
         <ul class="ticks">
-          <li>Quality slider for the lossy formats</li>
-          <li>Optionally strip EXIF and location data</li>
-          <li>Reads DNG, CR2, NEF, ARW, ORF, RAF, AVIF, GIF, BMP</li>
-        </ul>
-      </article>
-
-      <article class="card card-interactive">
-        <div class="card-header">
-          <span class="card-icon"><svg class="ico" aria-hidden="true"><use href="#i-compress"/></svg></span>
-          <h3 class="card-title">Compress Images</h3>
-          <p class="card-description">Lossless and format-preserving, or lossy with a quality slider when you want the bytes back.</p>
-        </div>
-        <ul class="ticks">
-          <li>Never returns a file bigger than the original</li>
-          <li>Per-file before → after sizes in the results list</li>
-          <li>Keeps the correct extension either way</li>
-        </ul>
-      </article>
-
-      <article class="card card-interactive">
-        <div class="card-header">
-          <span class="card-icon"><svg class="ico" aria-hidden="true"><use href="#i-resize"/></svg></span>
-          <h3 class="card-title">Resize Images</h3>
-          <p class="card-description">Fit inside a box, clamp the longest side, scale by percentage, or force exact pixels.</p>
-        </div>
-        <ul class="ticks">
-          <li>Longest side handles portrait and landscape in one batch</li>
-          <li>Won't upscale unless you ask it to</li>
-          <li>EXIF rotation baked in, so nothing comes out sideways</li>
+          <li><strong>Convert Image Format</strong> — HEIC to PNG, JPEG and back — batch friendly.</li>
+          <li><strong>Compress Images</strong> — Shrink files losslessly, or trade quality for size.</li>
+          <li><strong>Resize Images</strong> — Scale by pixels, percentage or longest side.</li>
+          <li><strong>Rotate &amp; Flip Images</strong> — Quarter turns and mirrors, without resampling — batch friendly.</li>
+          <li><strong>Crop Images</strong> — Cut to an anchored aspect ratio or a fixed pixel rectangle, in a batch.</li>
+          <li><strong>Generate App Icons</strong> — Turn one image into a complete macOS, favicon, iOS or Android icon set.</li>
+          <li><strong>Create GIF</strong> — Animate a batch of still images into a looped GIF.</li>
+          <li><strong>Extract GIF Frames</strong> — Split an animated GIF into its individual frames.</li>
+          <li><strong>Watermark Images</strong> — Stamp text or a logo across a batch of images.</li>
+          <li><strong>Image Metadata</strong> — See what a photo leaks, then strip EXIF and GPS without recompressing it.</li>
+          <li><strong>Colour &amp; Tone Adjustments</strong> — Batch brightness, contrast, saturation, exposure and one-tap presets.</li>
+          <li><strong>Split &amp; Combine TIFF</strong> — Break a multi-page TIFF into images, or bind a batch of images into one.</li>
+          <li><strong>Blur Faces</strong> — Detect faces on-device and blur them — photos never leave this Mac.</li>
+          <li><strong>Remove Background</strong> — Lift the subject out of a photo into a transparent PNG — on-device with Vision.</li>
         </ul>
       </article>
     </div>
@@ -313,8 +312,8 @@
     </div>
 
     <div class="stats">
-      <div class="stat"><b>4</b><span>tools in the sidebar</span></div>
-      <div class="stat"><b>37</b><span>tests over real PDFs and images</span></div>
+      <div class="stat"><b>31</b><span>tools in the sidebar</span></div>
+      <div class="stat"><b>318</b><span>tests over real PDFs and images</span></div>
       <div class="stat"><b>0</b><span>files uploaded, ever</span></div>
       <div class="stat"><b>2</b><span>architectures in one binary</span></div>
     </div>
@@ -438,8 +437,8 @@ swift test
       <div class="code-card">
         <div class="code-head"><span>Project layout</span></div>
 <pre><code><span class="d">Sources/ToolboxKit/</span>  <span class="c">processing, no UI</span>
-  PDF/               PDFUnlocker
-  Images/            ImageProcessor, ResizeSpec
+  PDF/               unlock, merge, split, OCR, sign…
+  Images/            convert, compress, resize, GIF, cutout…
   Support/           BatchRunner, OutputNaming
 <span class="d">Sources/Toolbox/</span>    <span class="c">SwiftUI app</span>
   Utility.swift      <span class="c">the tool registry</span>
@@ -449,7 +448,7 @@ swift test
 <span class="d">Resources/</span>          Info.plist, entitlements, icon
 <span class="d">Scripts/</span>            build-app, make-dmg, release
 <span class="d">docs/</span>               <span class="c">this site + appcast.xml</span>
-<span class="d">Tests/</span>              37 tests</code></pre>
+<span class="d">Tests/</span>              318 tests</code></pre>
       </div>
     </div>
 
