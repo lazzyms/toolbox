@@ -12,7 +12,7 @@
 - `./Scripts/next-version.sh` — next release version
 - `./Scripts/release.sh --version 1.1.0 [--dry-run]` — CI uses this; do not run by hand
 
-Requires Xcode 16+, macOS 14 target, swift-tools-version 6.0.
+Requires Xcode 26+, macOS 14 target, swift-tools-version 6.0.
 
 ## Architecture
 

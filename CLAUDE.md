@@ -25,7 +25,7 @@ swift run Toolbox                   # run without bundling — see caveat below
 ```
 
 `--filter` matches Swift identifiers, so `--filter "Compression size guard"` finds nothing — use
-`CompressionGuardTests`. Requires Xcode 16+ (swift-tools-version 6.0, macOS 14 target).
+`CompressionGuardTests`. Requires Xcode 26+ (swift-tools-version 6.0, macOS 14 target).
 
 `swift run Toolbox` produces a bare binary with no `Info.plist`, so `SUFeedURL` is absent and
 `UpdateController` deliberately disables itself (`isAvailable == false`). Anything touching updates

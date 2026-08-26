@@ -114,7 +114,7 @@ it from `git rev-list --count HEAD` to keep it monotonic without manual bookkeep
 
 ## Build from source
 
-Requires Xcode 16 or newer.
+Requires Xcode 26 or newer.
 
 ```bash
 swift test                              # run the test suite
