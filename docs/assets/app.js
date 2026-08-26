@@ -72,7 +72,7 @@
         if (note) {
           note.innerHTML =
             'No release has been published yet — ' +
-            '<a href="#build">build it from source</a> in the meantime.';
+            '<a href="https://github.com/lazzyms/toolbox">view the source</a> in the meantime.';
         }
         return;
       }
