@@ -579,7 +579,7 @@ details .accordion-content p { font-size: .875rem; color: var(--muted-foreground
 .section-lede { max-width: 40rem; margin-top: 1rem; color: var(--muted-foreground); }
 
 .grid { display: grid; gap: 1rem; margin-top: 2.5rem; }
-/* Four tools sit better as a 2×2 block than as a row of three with an orphan. */
+/* One category card per column reads better than three across with an orphan. */
 .tools-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 21rem), 1fr)); }
 @media (min-width: 780px) { .tools-grid { grid-template-columns: repeat(2, 1fr); } }
 .why-grid { grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); }
