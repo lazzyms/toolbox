@@ -49,7 +49,7 @@ let background = NSColor(srgbRed: 0.965, green: 0.969, blue: 0.976, alpha: 1)
 background.setFill()
 context.fill(CGRect(x: 0, y: 0, width: width, height: height))
 
-let card = CGRect(x: 42, y: 235, width: 516, height: 142)
+let card = CGRect(x: 42, y: 298, width: 516, height: 104)
 NSColor.white.setFill()
 context.addPath(CGPath(roundedRect: card, cornerWidth: 16, cornerHeight: 16, transform: nil))
 context.fillPath()
@@ -72,10 +72,10 @@ let ink = NSColor(srgbRed: 0.10, green: 0.12, blue: 0.16, alpha: 1)
 let muted = NSColor(srgbRed: 0.32, green: 0.36, blue: 0.43, alpha: 1)
 let blue = NSColor(srgbRed: 0.12, green: 0.35, blue: 0.84, alpha: 1)
 
-draw("FIRST LAUNCH BLOCKED?", at: CGPoint(x: 70, y: 339), size: 17, weight: .bold, color: blue)
-draw("Open System Settings → Privacy & Security", at: CGPoint(x: 70, y: 305), size: 16, weight: .semibold, color: ink)
-draw("Scroll down to the “Toolbox” message and click “Open Anyway”.", at: CGPoint(x: 70, y: 279), size: 13, weight: .regular, color: muted)
-draw("Then confirm the prompt. You only need to do this once.", at: CGPoint(x: 70, y: 256), size: 13, weight: .regular, color: muted)
+draw("FIRST LAUNCH BLOCKED?", at: CGPoint(x: 70, y: 376), size: 16, weight: .bold, color: blue)
+draw("Open System Settings → Privacy & Security", at: CGPoint(x: 70, y: 349), size: 15, weight: .semibold, color: ink)
+draw("Scroll down to the “Toolbox” message and click “Open Anyway”.", at: CGPoint(x: 70, y: 326), size: 12, weight: .regular, color: muted)
+draw("Then confirm the prompt. You only need this once.", at: CGPoint(x: 70, y: 307), size: 12, weight: .regular, color: muted)
 
 NSGraphicsContext.restoreGraphicsState()
 

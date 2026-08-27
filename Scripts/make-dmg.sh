@@ -75,13 +75,14 @@ hdiutil create -srcfolder "$STAGE" -volname "$VOLUME_NAME" \
 
 echo "==> Arranging window"
 MOUNT_DIR="$(mktemp -d)"
-hdiutil attach "$TEMP_DMG" -mountpoint "$MOUNT_DIR" -nobrowse -noautoopen >/dev/null
+hdiutil attach "$TEMP_DMG" -mountpoint "$MOUNT_DIR" -noautoopen >/dev/null
+MOUNT_NAME="$(basename "$MOUNT_DIR")"
 
 # Best-effort cosmetics. A sandboxed or headless shell can't drive Finder, and
 # an ugly-but-working DMG beats a failed build, so never abort on this.
 osascript >/dev/null 2>&1 <<OSA || echo "    (skipped Finder layout — not fatal)"
 tell application "Finder"
-  tell disk "$VOLUME_NAME"
+  tell disk "$MOUNT_NAME"
     open
     set current view of container window to icon view
     set toolbar visible of container window to false
@@ -91,19 +92,20 @@ tell application "Finder"
     set arrangement of opts to not arranged
     set icon size of opts to 128
     set background picture of opts to file ".background:Toolbox-install.png"
-    set position of item "Toolbox.app" of container window to {150, 190}
-    set position of item "Applications" of container window to {450, 190}
-    set position of item "Read Me First.txt" of container window to {300, 340}
+    set position of item "Toolbox.app" of container window to {150, 270}
+    set position of item "Applications" of container window to {450, 270}
+    set position of item "Read Me First.txt" of container window to {300, 390}
     close
     open
     update without registering applications
-    delay 1
+    delay 2
   end tell
 end tell
 OSA
 
 sync
-hdiutil detach "$MOUNT_DIR" -force >/dev/null 2>&1 || true
+hdiutil detach "$MOUNT_DIR" >/dev/null 2>&1 \
+  || hdiutil detach "$MOUNT_DIR" -force >/dev/null 2>&1 || true
 rmdir "$MOUNT_DIR" 2>/dev/null || true
 
 echo "==> Compressing"
