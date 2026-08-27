@@ -3,6 +3,19 @@
     <channel>
         <title>Toolbox</title>
         <item>
+            <title>1.1.4</title>
+            <pubDate>Thu, 27 Aug 2026 13:32:04 +0000</pubDate>
+            <link>https://github.com/lazzyms/toolbox</link>
+            <sparkle:version>81</sparkle:version>
+            <sparkle:shortVersionString>1.1.4</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[- Changes pushed to main.
+
+[Full changes](https://github.com/lazzyms/toolbox/compare/v1.1.3...v1.1.4)
+]]></description>
+            <enclosure url="https://github.com/lazzyms/toolbox/releases/download/v1.1.4/Toolbox-1.1.4.dmg" length="5223059" type="application/octet-stream" sparkle:edSignature="TF9cPo0StOvfUhYJgCmT2NQegXLZNora0SnmgA0PQZMrc9LBwr2p9xF2RHq2t0fy7km6KjIG782gV+uZQGO0Ag=="/>
+        </item>
+        <item>
             <title>1.1.3</title>
             <pubDate>Thu, 27 Aug 2026 12:11:17 +0000</pubDate>
             <link>https://github.com/lazzyms/toolbox</link>
@@ -27,19 +40,6 @@
 [Full changes](https://github.com/lazzyms/toolbox/compare/v1.1.1...v1.1.2)
 ]]></description>
             <enclosure url="https://github.com/lazzyms/toolbox/releases/download/v1.1.2/Toolbox-1.1.2.dmg" length="3609507" type="application/octet-stream" sparkle:edSignature="DNRKg7MnOX1QVdhPtHypUc86wKfkZDvxNG3dSw9AhpFliBwtpCylPlCBGJ8LCKVK/wnDF/QqRPCwGyZy4t/UDQ=="/>
-        </item>
-        <item>
-            <title>1.1.1</title>
-            <pubDate>Thu, 27 Aug 2026 11:16:20 +0000</pubDate>
-            <link>https://github.com/lazzyms/toolbox</link>
-            <sparkle:version>73</sparkle:version>
-            <sparkle:shortVersionString>1.1.1</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[- Changes pushed to main.
-
-[Full changes](https://github.com/lazzyms/toolbox/compare/v1.1.0...v1.1.1)
-]]></description>
-            <enclosure url="https://github.com/lazzyms/toolbox/releases/download/v1.1.1/Toolbox-1.1.1.dmg" length="3470080" type="application/octet-stream" sparkle:edSignature="CwPsS/w4MwBS4KM2YBmkGc5/YTQ66rcsELNAGTYr+QTkAIIt2hFaC+iiFqGvs89YDBY8Vm3CbekcWPoiDRdEBQ=="/>
         </item>
     </channel>
 </rss>
