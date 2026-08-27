@@ -72,6 +72,28 @@ struct GeneralSettings: View {
                     Text("Startup")
                 }
             }
+
+            Section {
+                HStack(spacing: 14) {
+                    Image("BuyMeACoffeeQR", bundle: .module)
+                        .resizable()
+                        .interpolation(.none)
+                        .scaledToFit()
+                        .frame(width: 84, height: 84)
+                        .accessibilityLabel("Buy Me a Coffee donation QR code")
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Enjoying Toolbox?")
+                            .font(.subheadline.weight(.medium))
+                        Text("If you’d like to support development, scan the QR code to buy me a coffee.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            } header: {
+                Text("Support Toolbox")
+            }
         }
         .formStyle(.grouped)
         .fixedSize(horizontal: false, vertical: true)
