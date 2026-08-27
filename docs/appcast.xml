@@ -3,6 +3,19 @@
     <channel>
         <title>Toolbox</title>
         <item>
+            <title>1.1.3</title>
+            <pubDate>Thu, 27 Aug 2026 12:11:17 +0000</pubDate>
+            <link>https://github.com/lazzyms/toolbox</link>
+            <sparkle:version>79</sparkle:version>
+            <sparkle:shortVersionString>1.1.3</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[- Fix DMG Finder install layout (#89)
+
+[Full changes](https://github.com/lazzyms/toolbox/compare/v1.1.2...v1.1.3)
+]]></description>
+            <enclosure url="https://github.com/lazzyms/toolbox/releases/download/v1.1.3/Toolbox-1.1.3.dmg" length="3610676" type="application/octet-stream" sparkle:edSignature="w2iDzUD2UqeYz8d7NoUZVHbITjgYe0TqJMd6cYxOxGhJeRrGr9gFNCI7hQxBZLhyKFMG5FmLCibH442Yg9GjBw=="/>
+        </item>
+        <item>
             <title>1.1.2</title>
             <pubDate>Thu, 27 Aug 2026 11:54:30 +0000</pubDate>
             <link>https://github.com/lazzyms/toolbox</link>
@@ -27,27 +40,6 @@
 [Full changes](https://github.com/lazzyms/toolbox/compare/v1.1.0...v1.1.1)
 ]]></description>
             <enclosure url="https://github.com/lazzyms/toolbox/releases/download/v1.1.1/Toolbox-1.1.1.dmg" length="3470080" type="application/octet-stream" sparkle:edSignature="CwPsS/w4MwBS4KM2YBmkGc5/YTQ66rcsELNAGTYr+QTkAIIt2hFaC+iiFqGvs89YDBY8Vm3CbekcWPoiDRdEBQ=="/>
-        </item>
-        <item>
-            <title>1.1.0</title>
-            <pubDate>Tue, 11 Aug 2026 10:34:38 +0000</pubDate>
-            <link>https://github.com/lazzyms/toolbox</link>
-            <sparkle:version>23</sparkle:version>
-            <sparkle:shortVersionString>1.1.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[**Toolbox now lives in the menu bar.** The hammer icon opens a panel with the full
-toolbox — pick a tool, drop files in, run it — so you never need a window. Switch on
-**Hide Dock icon** in **Settings → General** and Toolbox leaves the Dock entirely: no
-Dock icon, no app switcher entry, no window at login. It takes effect immediately, no
-relaunch, and the menu bar icon stays available so there's always a way back.
-
-**Open Toolbox at login** is in the same place, for either mode.
-
-Everything else is unchanged: files are still processed entirely on your Mac.
-
-[Full changes](https://github.com/lazzyms/toolbox/compare/v1.0.0...v1.1.0)
-]]></description>
-            <enclosure url="https://github.com/lazzyms/toolbox/releases/download/v1.1.0/Toolbox-1.1.0.dmg" length="1921146" type="application/octet-stream" sparkle:edSignature="YeQWxCj2AylPXFFKE0NOpmmXP1P9mHJQ6RAOhD/mR/sF9ho8ukTDPVpAg/BZZcQ/T7lZH+UrMC9VfSWTnNZ+Bg=="/>
         </item>
     </channel>
 </rss>
