@@ -64,7 +64,7 @@ that key — a compromised GitHub account alone can't push code to installed cop
 
 Releases are automatic: **merging a PR to `main` publishes one**. No version to bump,
 no tag to push, nothing to run.
-[`.github/workflows/release.yml`](.github/workflows/release.yml) runs the tests, builds
+[`.github/workflows/release.yml`](.github/workflows/release.yml) builds
 the universal app and DMG, signs the feed, tags, and creates the GitHub release —
 after which installed copies pick it up within a day.
 
@@ -178,7 +178,7 @@ Sources/Toolbox/        SwiftUI app
   Updates/               Sparkle wiring and the Settings pane
 Resources/              Info.plist, entitlements, generated icon
 Scripts/                build-app.sh, make-dmg.sh, release.sh, next-version.sh, notarize.sh
-.github/workflows/      ci.yml (tests on PRs), release.yml (release on merge)
+.github/workflows/      release.yml (release on merge)
 docs/                   the website and appcast.xml — both served by GitHub Pages
 Tests/                  37 tests over real generated PDFs and images
 ```

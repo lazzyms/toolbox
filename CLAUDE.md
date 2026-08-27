@@ -127,7 +127,7 @@ WebP and HEIC *encoding* availability varies by macOS version.
 
 **Every push to `main` publishes a release** (`.github/workflows/release.yml`) that installed copies
 auto-update to within a day. There is no staging step: whatever lands on `main` ships. `swift test`
-gates it, and `ci.yml` runs the same tests on every PR so a red `main` doesn't become a failed release.
+.
 
 - **Version** comes from `Scripts/next-version.sh` — newest `v*` tag, bumped a patch. Labels on the
   merged PR override: `minor`, `major`, or `no-release` to skip publishing entirely.

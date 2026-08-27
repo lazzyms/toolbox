@@ -65,7 +65,7 @@ Tests use real files via `Tests/ToolboxKitTests/Fixtures.swift`. Guard format te
 
 ## Release
 
-Every push to `main` publishes a release. No staging. `swift test` gates via `ci.yml`.
+Every push to `main` publishes a release. No staging.
 
 - Version from newest `v*` tag + bump. PR labels override: `minor`, `major`, `no-release` to skip.
 - Release notes = PR `## Release notes` section, else PR title. Shown in Sparkle dialog.
@@ -81,7 +81,7 @@ Every push to `main` publishes a release. No staging. `swift test` gates via `ci
 ## Conventions
 
 - Commit messages: imperative, <~72 chars, no trailing period. Branch off `main`, PR against `main`.
-- No linter in CI; match existing style: `UpperCamelCase`, `lowerCamelCase`, 4-space indent.
+- Match existing style: `UpperCamelCase`, `lowerCamelCase`, 4-space indent.
 - Prefer `struct`. `ToolboxError` cases for failures visible to users. Comments explain why.
 - `ToolboxKit` must stay dependency-free.
 

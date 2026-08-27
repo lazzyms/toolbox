@@ -112,7 +112,7 @@ through to check them.
 
 ## Coding style
 
-There's no linter in CI; match the code that's already there.
+Match the code that's already there.
 
 - Standard Swift conventions: `UpperCamelCase` types, `lowerCamelCase` members, 4-space
   indent, no trailing whitespace, roughly 100 columns.
@@ -177,7 +177,7 @@ path, since that's most of what a file utility does.
 
 ## Releases
 
-Merging a pull request to `main` publishes a release. GitHub Actions runs the tests,
+Merging a pull request to `main` publishes a release. GitHub Actions
 builds and signs the DMG, updates the feed installed copies poll, and creates the
 GitHub release; the update reaches users within a day. The signing key is an Ed25519
 private key held as a repository secret, so a release can only come from this repo.
