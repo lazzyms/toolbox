@@ -52,6 +52,11 @@ chmod +x "$CONTENTS/MacOS/Toolbox"
 
 echo "==> Assembling bundle"
 cp "$ROOT/Resources/AppIcon.icns" "$CONTENTS/Resources/AppIcon.icns"
+# SwiftPM keeps executable target resources in a sibling bundle. Copy it into
+# the hand-assembled app or Bundle.module won't find the donation QR at runtime.
+RESOURCE_BUNDLE="$ROOT/.build/arm64-apple-macosx/release/Toolbox_Toolbox.bundle"
+test -d "$RESOURCE_BUNDLE"
+cp -R "$RESOURCE_BUNDLE" "$CONTENTS/Resources/Toolbox_Toolbox.bundle"
 sed -e "s/__VERSION__/$VERSION/" -e "s/__BUILD__/$BUILD_NUMBER/" \
   "$ROOT/Resources/Info.plist" > "$CONTENTS/Info.plist"
 printf 'APPL????' > "$CONTENTS/PkgInfo"

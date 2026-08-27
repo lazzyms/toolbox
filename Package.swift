@@ -25,6 +25,9 @@ let package = Package(
             dependencies: [
                 "ToolboxKit",
                 .product(name: "Sparkle", package: "Sparkle"),
+            ],
+            resources: [
+                .process("Assets"),
             ]
         ),
         .testTarget(name: "ToolboxKitTests", dependencies: ["ToolboxKit"]),

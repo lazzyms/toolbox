@@ -36,6 +36,8 @@ mkdir -p "$STAGE"
 # -R preserves the signature; plain cp -r can break code signatures.
 cp -R "$APP" "$STAGE/Toolbox.app"
 ln -s /Applications "$STAGE/Applications"
+mkdir -p "$STAGE/.background"
+swift "$ROOT/Scripts/make-dmg-background.swift" "$STAGE/.background/Toolbox-install.png"
 
 # A short README in the image covers the first-open step for unsigned builds.
 cat > "$STAGE/Read Me First.txt" <<'TXT'
@@ -45,17 +47,13 @@ INSTALL
   Drag Toolbox to the Applications folder alongside this file.
 
 FIRST LAUNCH
-  This build is not notarized by Apple, so macOS will refuse the first
-  double-click. To open it:
+  macOS may block the first launch because this build is not notarized by Apple.
+  To allow it, open:
 
-    Right-click (or Control-click) Toolbox in Applications → Open → Open
-
-  You only need to do this once. Every launch after that is a normal
-  double-click.
-
-  If macOS still blocks it, go to
     System Settings → Privacy & Security
-  and click "Open Anyway" next to the Toolbox message.
+
+  Scroll down to the "Toolbox" message and click "Open Anyway". Then confirm
+  the prompt. You only need to do this once; later launches are normal.
 
 WHAT IT DOES
   • Remove PDF Password — save an unlocked copy of a PDF you have the
@@ -92,6 +90,7 @@ tell application "Finder"
     set opts to the icon view options of container window
     set arrangement of opts to not arranged
     set icon size of opts to 128
+    set background picture of opts to file ".background:Toolbox-install.png"
     set position of item "Toolbox.app" of container window to {150, 190}
     set position of item "Applications" of container window to {450, 190}
     set position of item "Read Me First.txt" of container window to {300, 340}
