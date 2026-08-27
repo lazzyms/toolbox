@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// Settings window: where the app lives, and update preferences.
 struct SettingsView: View {
@@ -75,17 +76,22 @@ struct GeneralSettings: View {
 
             Section {
                 HStack(spacing: 14) {
-                    Image("BuyMeACoffeeQR", bundle: .module)
-                        .resizable()
-                        .interpolation(.none)
-                        .scaledToFit()
-                        .frame(width: 84, height: 84)
-                        .accessibilityLabel("Buy Me a Coffee donation QR code")
+                    if let path = Bundle.module.path(forResource: "BuyMeACoffeeQR", ofType: "png"),
+                       let image = NSImage(contentsOfFile: path) {
+                        Image(nsImage: image)
+                            .resizable()
+                            .interpolation(.none)
+                            .scaledToFit()
+                            .frame(width: 84, height: 84)
+                            .accessibilityLabel("Buy Me a Coffee donation QR code")
+                    } else {
+                        Color.clear.frame(width: 84, height: 84)
+                    }
 
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Enjoying Toolbox?")
                             .font(.subheadline.weight(.medium))
-                        Text("If you’d like to support development, scan the QR code to buy me a coffee.")
+                        Text("If you’d like to support development, scan the QR code to support.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
