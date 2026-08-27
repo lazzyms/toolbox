@@ -15,6 +15,7 @@ final class AppSettings: ObservableObject {
     private enum Key {
         static let showsMenuBarIcon = "showsMenuBarIcon"
         static let hidesDockIcon = "hidesDockIcon"
+        static let analyticsEnabled = "analyticsEnabled"
     }
 
     // Both flags below are hand-written accessors rather than `@Published`, and
@@ -32,6 +33,7 @@ final class AppSettings: ObservableObject {
     // `UserDefaults`, and must not cascade.
     private var storedShowsMenuBarIcon: Bool
     private var storedHidesDockIcon: Bool
+    private var storedAnalyticsEnabled: Bool
 
     /// Whether the `MenuBarExtra` is inserted in the status bar.
     var showsMenuBarIcon: Bool {
@@ -60,6 +62,17 @@ final class AppSettings: ObservableObject {
         }
     }
 
+    var analyticsEnabled: Bool {
+        get { storedAnalyticsEnabled }
+        set {
+            guard newValue != storedAnalyticsEnabled else { return }
+            objectWillChange.send()
+            storedAnalyticsEnabled = newValue
+            UserDefaults.standard.set(newValue, forKey: Key.analyticsEnabled)
+            AnalyticsManager.shared.setEnabled(newValue)
+        }
+    }
+
     /// Mirrors `SMAppService`, which is the source of truth — the user can also
     /// remove the login item from System Settings behind our back.
     @Published private(set) var launchesAtLogin = false
@@ -69,12 +82,14 @@ final class AppSettings: ObservableObject {
         defaults.register(defaults: [
             Key.showsMenuBarIcon: true,
             Key.hidesDockIcon: false,
+            Key.analyticsEnabled: AnalyticsManager.defaultEnabled,
         ])
         // Seeded through the stored values, never the setters: nothing is
         // reconciled yet, there is no NSApp to talk to, and no observer could
         // meaningfully hear about a value the object is being born with.
         storedShowsMenuBarIcon = defaults.bool(forKey: Key.showsMenuBarIcon)
         storedHidesDockIcon = defaults.bool(forKey: Key.hidesDockIcon)
+        storedAnalyticsEnabled = defaults.bool(forKey: Key.analyticsEnabled)
         launchesAtLogin = isLoginItemAvailable && SMAppService.mainApp.status == .enabled
     }
 

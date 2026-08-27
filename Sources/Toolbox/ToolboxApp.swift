@@ -1,4 +1,6 @@
 import SwiftUI
+import FirebaseCore
+import Foundation
 
 @main
 struct ToolboxApp: App {
@@ -11,6 +13,19 @@ struct ToolboxApp: App {
     @StateObject private var settings = AppSettings.shared
 
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
+
+    init() {
+        guard let url = Bundle.module.url(forResource: "GoogleService-Info", withExtension: "plist"),
+              let values = NSDictionary(contentsOf: url),
+              let appID = values["GOOGLE_APP_ID"] as? String,
+              let senderID = values["GCM_SENDER_ID"] as? String else { return }
+        let options = FirebaseOptions(googleAppID: appID, gcmSenderID: senderID)
+        options.apiKey = values["API_KEY"] as? String
+        options.projectID = values["PROJECT_ID"] as? String
+        options.storageBucket = values["STORAGE_BUCKET"] as? String
+        FirebaseApp.configure(options: options)
+        AnalyticsManager.shared.configure(enabled: AppSettings.shared.analyticsEnabled)
+    }
 
     var body: some Scene {
         Window("Toolbox", id: MainWindow.id) {

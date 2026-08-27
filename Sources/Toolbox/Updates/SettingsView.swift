@@ -74,6 +74,18 @@ struct GeneralSettings: View {
             }
 
             Section {
+                Toggle("Share anonymous install analytics", isOn: $settings.analyticsEnabled)
+                    .help("Helps measure Toolbox adoption. No filenames, file contents, paths, or hardware identifiers are collected.")
+            } header: {
+                Text("Privacy")
+            } footer: {
+                Text("Enabled for new installs to measure anonymous app installations and launches. You can turn this off at any time.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Section {
                 HStack(spacing: 14) {
                     Image("BuyMeACoffeeQR", bundle: .module)
                         .resizable()
