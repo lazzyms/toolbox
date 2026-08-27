@@ -173,9 +173,12 @@ jobs:
       - name: Resolve dependencies
         run: swift package resolve
 
-      # A release goes straight to auto-updating clients, so this gates it.
+      # Build only the test target; `swift test` also compiles the app target,
+      # which adds unnecessary time before the release can be packaged.
       - name: Test
-        run: swift test
+        run: |
+          swift build --build-tests
+          swift test --skip-build
 
       - name: Write release notes
         env:
