@@ -49,7 +49,7 @@ on something that gets declined.
 
 ## Getting set up
 
-You need macOS 14 or later and Xcode 16 or newer. There's no package manager step to
+You need macOS 14 or later and Xcode 26 or newer. There's no package manager step to
 run by hand — SwiftPM fetches the one dependency (Sparkle) on first build.
 
 ```bash
