@@ -3,6 +3,19 @@
     <channel>
         <title>Toolbox</title>
         <item>
+            <title>1.1.2</title>
+            <pubDate>Thu, 27 Aug 2026 11:54:30 +0000</pubDate>
+            <link>https://github.com/lazzyms/toolbox</link>
+            <sparkle:version>76</sparkle:version>
+            <sparkle:shortVersionString>1.1.2</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[- Add in-app donation QR code (#88)
+
+[Full changes](https://github.com/lazzyms/toolbox/compare/v1.1.1...v1.1.2)
+]]></description>
+            <enclosure url="https://github.com/lazzyms/toolbox/releases/download/v1.1.2/Toolbox-1.1.2.dmg" length="3609507" type="application/octet-stream" sparkle:edSignature="DNRKg7MnOX1QVdhPtHypUc86wKfkZDvxNG3dSw9AhpFliBwtpCylPlCBGJ8LCKVK/wnDF/QqRPCwGyZy4t/UDQ=="/>
+        </item>
+        <item>
             <title>1.1.1</title>
             <pubDate>Thu, 27 Aug 2026 11:16:20 +0000</pubDate>
             <link>https://github.com/lazzyms/toolbox</link>
@@ -35,38 +48,6 @@ Everything else is unchanged: files are still processed entirely on your Mac.
 [Full changes](https://github.com/lazzyms/toolbox/compare/v1.0.0...v1.1.0)
 ]]></description>
             <enclosure url="https://github.com/lazzyms/toolbox/releases/download/v1.1.0/Toolbox-1.1.0.dmg" length="1921146" type="application/octet-stream" sparkle:edSignature="YeQWxCj2AylPXFFKE0NOpmmXP1P9mHJQ6RAOhD/mR/sF9ho8ukTDPVpAg/BZZcQ/T7lZH+UrMC9VfSWTnNZ+Bg=="/>
-        </item>
-        <item>
-            <title>1.0.0</title>
-            <pubDate>Tue, 11 Aug 2026 13:37:04 +0530</pubDate>
-            <link>https://github.com/lazzyms/toolbox</link>
-            <sparkle:version>4</sparkle:version>
-            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[First public release.
-
-**Tools**
-
-- **Remove PDF Password** — save a decrypted copy of a PDF you know the password for. Text stays selectable and searchable.
-- **Convert Image Format** — HEIC ⇄ PNG ⇄ JPEG ⇄ TIFF, and reads RAW.
-- **Compress Images** — lossless (format-preserving) or lossy with a quality slider. Never returns a file bigger than the original.
-- **Resize Images** — fit inside a box, longest side, percentage, or exact pixels. EXIF rotation is baked in, so iPhone photos come out upright.
-
-Drag in as many files as you like; they process in parallel and one bad file never stops the batch. Originals are never modified and nothing is overwritten.
-
-**Installing**
-
-Download the DMG, open it, drag **Toolbox** to Applications. This build isn't notarized by Apple, so the first launch needs one extra step:
-
-> **Right-click** Toolbox in Applications → **Open** → **Open**
-
-That's once per machine; afterwards it's a normal double-click.
-
-**Updates**
-
-Toolbox updates itself from here on. It asks on first launch whether to check automatically, then checks daily — or use **Toolbox → Check for Updates…** any time. Every download is verified against a cryptographic signature before installing. Your files are processed on-device and never uploaded.
-]]></description>
-            <enclosure url="https://github.com/lazzyms/toolbox/releases/download/v1.0.0/Toolbox-1.0.0.dmg" length="1812595" type="application/octet-stream" sparkle:edSignature="QqzZiLBIkh5YpEFczdShlCOJcUNeUPpoFrd9dGb//d9G+j+UwZZ7uirylWVDk3wouJaDI+QgpWOwkK2UZZiOCw=="/>
         </item>
     </channel>
 </rss>
