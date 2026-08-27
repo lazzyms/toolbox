@@ -3,6 +3,19 @@
     <channel>
         <title>Toolbox</title>
         <item>
+            <title>1.1.5</title>
+            <pubDate>Thu, 27 Aug 2026 13:56:41 +0000</pubDate>
+            <link>https://github.com/lazzyms/toolbox</link>
+            <sparkle:version>85</sparkle:version>
+            <sparkle:shortVersionString>1.1.5</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[- Fix QR code visibility in Settings (#90)
+
+[Full changes](https://github.com/lazzyms/toolbox/compare/v1.1.4...v1.1.5)
+]]></description>
+            <enclosure url="https://github.com/lazzyms/toolbox/releases/download/v1.1.5/Toolbox-1.1.5.dmg" length="5224711" type="application/octet-stream" sparkle:edSignature="4e43eU+6yb1gwUMQy7mg5GPJ1/qUaoYDdRWbIiDg3DavGg5VtEDde4mJnanKZye8ue3yJ+p2NKf4WWAvWd3FAw=="/>
+        </item>
+        <item>
             <title>1.1.4</title>
             <pubDate>Thu, 27 Aug 2026 13:32:04 +0000</pubDate>
             <link>https://github.com/lazzyms/toolbox</link>
@@ -27,19 +40,6 @@
 [Full changes](https://github.com/lazzyms/toolbox/compare/v1.1.2...v1.1.3)
 ]]></description>
             <enclosure url="https://github.com/lazzyms/toolbox/releases/download/v1.1.3/Toolbox-1.1.3.dmg" length="3610676" type="application/octet-stream" sparkle:edSignature="w2iDzUD2UqeYz8d7NoUZVHbITjgYe0TqJMd6cYxOxGhJeRrGr9gFNCI7hQxBZLhyKFMG5FmLCibH442Yg9GjBw=="/>
-        </item>
-        <item>
-            <title>1.1.2</title>
-            <pubDate>Thu, 27 Aug 2026 11:54:30 +0000</pubDate>
-            <link>https://github.com/lazzyms/toolbox</link>
-            <sparkle:version>76</sparkle:version>
-            <sparkle:shortVersionString>1.1.2</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[- Add in-app donation QR code (#88)
-
-[Full changes](https://github.com/lazzyms/toolbox/compare/v1.1.1...v1.1.2)
-]]></description>
-            <enclosure url="https://github.com/lazzyms/toolbox/releases/download/v1.1.2/Toolbox-1.1.2.dmg" length="3609507" type="application/octet-stream" sparkle:edSignature="DNRKg7MnOX1QVdhPtHypUc86wKfkZDvxNG3dSw9AhpFliBwtpCylPlCBGJ8LCKVK/wnDF/QqRPCwGyZy4t/UDQ=="/>
         </item>
     </channel>
 </rss>
