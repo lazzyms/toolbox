@@ -173,13 +173,6 @@ jobs:
       - name: Resolve dependencies
         run: swift package resolve
 
-      # Build only the test target; `swift test` also compiles the app target,
-      # which adds unnecessary time before the release can be packaged.
-      - name: Test
-        run: |
-          swift build --build-tests
-          swift test --skip-build
-
       - name: Write release notes
         env:
           TITLE: ${{ needs.plan.outputs.title }}
