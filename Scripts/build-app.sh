@@ -52,8 +52,9 @@ chmod +x "$CONTENTS/MacOS/Toolbox"
 
 echo "==> Assembling bundle"
 cp "$ROOT/Resources/AppIcon.icns" "$CONTENTS/Resources/AppIcon.icns"
-# SwiftPM keeps executable target resources in a sibling bundle. Copy it into
-# the hand-assembled app or Bundle.module won't find the donation QR at runtime.
+# SwiftPM keeps executable target resources in a sibling bundle. Put that
+# bundle in the signed app resources directory for the hand-assembled app;
+# the app resolves it through Bundle.main at runtime.
 RESOURCE_BUNDLE="$ROOT/.build/arm64-apple-macosx/release/Toolbox_Toolbox.bundle"
 test -d "$RESOURCE_BUNDLE"
 cp -R "$RESOURCE_BUNDLE" "$CONTENTS/Resources/Toolbox_Toolbox.bundle"
@@ -143,6 +144,7 @@ codesign --verify --deep --strict --verbose=1 "$APP"
 otool -l "$CONTENTS/MacOS/Toolbox" | grep -A2 LC_RPATH | grep -q "Frameworks" \
   && echo "    rpath to Frameworks present"
 test -x "$SPARKLE_V/Sparkle" && echo "    Sparkle.framework embedded"
+test -d "$CONTENTS/Resources/Toolbox_Toolbox.bundle" && echo "    resource bundle embedded"
 lipo -archs "$CONTENTS/MacOS/Toolbox"
 
 # Actually launch it. A signing or embedding mistake shows up only at runtime as

@@ -88,7 +88,9 @@ struct GeneralSettings: View {
 
             Section {
                 HStack(spacing: 14) {
-                    if let path = Bundle.module.path(forResource: "BuyMeACoffeeQR", ofType: "png"),
+                    if let resources = Bundle.main.url(forResource: "Toolbox_Toolbox", withExtension: "bundle"),
+                       let bundle = Bundle(url: resources),
+                       let path = bundle.path(forResource: "BuyMeACoffeeQR", ofType: "png"),
                        let image = NSImage(contentsOfFile: path) {
                         Image(nsImage: image)
                             .resizable()

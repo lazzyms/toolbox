@@ -15,7 +15,9 @@ struct ToolboxApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
     init() {
-        guard let url = Bundle.module.url(forResource: "GoogleService-Info", withExtension: "plist"),
+        guard let resources = Bundle.main.url(forResource: "Toolbox_Toolbox", withExtension: "bundle"),
+              let bundle = Bundle(url: resources),
+              let url = bundle.url(forResource: "GoogleService-Info", withExtension: "plist"),
               let values = NSDictionary(contentsOf: url),
               let appID = values["GOOGLE_APP_ID"] as? String,
               let senderID = values["GCM_SENDER_ID"] as? String else { return }
