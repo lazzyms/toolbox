@@ -1,0 +1,88 @@
+name: Tauri Build
+
+# Branch build for the Tauri port (issue #95, distribution setup). Every push to
+# `tauri-port` (or a `ci/**` rehearsal branch) verifies the Rust kit with the test
+# suite and produces unsigned installers for both platforms as runnable artifacts.
+# Nothing is signed, tagged, or released here: signed public release needs the
+# Apple Developer ID and Windows Authenticode credentials documented in #95, at
+# which point this workflow graduates to a release pipeline like release.yml.
+on:
+  push:
+    branches:
+      - tauri-port
+      - 'ci/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tauri-build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-26
+            name: macOS
+          - os: windows-latest
+            name: Windows
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Install Rust (Windows)
+        if: runner.os == 'Windows'
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ToolboxTauri/src-tauri
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ToolboxTauri/package-lock.json
+
+      - name: Install frontend deps
+        run: npm ci
+        working-directory: ToolboxTauri
+
+      - name: Run kit tests
+        run: cargo test
+        working-directory: ToolboxTauri/src-tauri
+
+      - name: Build unsigned bundles
+        run: npm run tauri build
+        working-directory: ToolboxTauri
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v7
+        with:
+          name: toolbox-${{ matrix.name }}
+          path: |
+            ToolboxTauri/src-tauri/target/release/bundle/macos/*.app
+            ToolboxTauri/src-tauri/target/release/bundle/macos/*.dmg
+            ToolboxTauri/src-tauri/target/release/bundle/nsis/*.exe
+            ToolboxTauri/src-tauri/target/release/bundle/msi/*.msi
+          if-no-files-found: warn
+
+      - name: Summarise
+        run: |
+          {
+            echo "## Toolbox Tauri — ${{ matrix.name }}"
+            echo "Kit tests pass; unsigned installers attached as artifacts."
+            echo "Ad-hoc/unsigned: suitable for testing, not public distribution."
+          } >> "$GITHUB_STEP_SUMMARY"
