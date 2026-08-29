@@ -4,11 +4,10 @@
 mod kit;
 
 use crate::kit::common::JobOutcome;
-use crate::kit::images::{ImageProcessor, Options as ImageOptions};
+use crate::kit::images::{ImageProcessor, Options as ImageOptions, OutputFormat};
 use crate::kit::pdf::PDFProcessor;
 use crate::kit::common::batch_runner::BatchRunner;
 use std::path::PathBuf;
-use image::ImageFormat;
 
 #[tauri::command]
 async fn unlock_pdf(paths: Vec<String>, password: String) -> Vec<JobOutcome> {
@@ -44,10 +43,11 @@ async fn convert_images(paths: Vec<String>, format: String) -> Vec<JobOutcome> {
     let inputs: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
 
     let img_format = match format.as_str() {
-        "jpg" => ImageFormat::Jpeg,
-        "png" => ImageFormat::Png,
-        "webp" => ImageFormat::WebP,
-        _ => ImageFormat::Png,
+        "jpg" => OutputFormat::Jpeg,
+        "png" => OutputFormat::Png,
+        "webp" => OutputFormat::WebP,
+        "heic" => OutputFormat::Heic,
+        _ => OutputFormat::Png,
     };
 
     BatchRunner::run(inputs, |path| {

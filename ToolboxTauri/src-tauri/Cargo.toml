@@ -17,6 +17,8 @@ getrandom = "0.4"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 lopdf = "0.44"
 rayon = "1"
+heif-rs = "26.7"
+webpx = "0.4"
 
 [profile.release]
 codegen-units = 1

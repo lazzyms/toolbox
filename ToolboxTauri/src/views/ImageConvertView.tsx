@@ -9,6 +9,7 @@ export const ImageConvertView = ({ utility }: { utility: Utility }) => {
         { id: 'png', label: 'PNG', icon: '🖼️' },
         { id: 'jpg', label: 'JPEG', icon: '📷' },
         { id: 'webp', label: 'WebP', icon: '🌐' },
+        { id: 'heic', label: 'HEIC', icon: '📱' },
     ];
 
     return (
@@ -17,7 +18,7 @@ export const ImageConvertView = ({ utility }: { utility: Utility }) => {
                 <div className="space-y-6">
                     <div className="flex flex-col space-y-3 max-w-sm">
                         <label className="text-sm font-medium text-slate-700">Target Format</label>
-                        <div className="grid grid-cols-3 gap-3">
+                        <div className="grid grid-cols-4 gap-3">
                             {formats.map(f => (
                                 <button
                                     key={f.id}

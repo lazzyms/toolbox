@@ -11,16 +11,6 @@ pub struct JobOutcome {
     pub failure: Option<String>,
 }
 
-impl JobOutcome {
-    pub fn succeeded(&self) -> bool {
-        self.failure.is_none()
-    }
-
-    pub fn output(&self) -> Option<&PathBuf> {
-        self.output_paths.first()
-    }
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum OutputLocation {
     AlongsideInput,
