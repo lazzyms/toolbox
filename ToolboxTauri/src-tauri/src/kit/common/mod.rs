@@ -1,3 +1,5 @@
+pub mod batch_runner;
+
 use serde::{Serialize, Deserialize};
 use std::path::PathBuf;
 

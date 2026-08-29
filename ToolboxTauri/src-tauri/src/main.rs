@@ -3,8 +3,8 @@
 
 mod kit;
 
-use crate::kit::common::{JobOutcome, OutputLocation};
-use crate::kit::images::{ImageProcessor, ImageProcessor::Options as ImageOptions};
+use crate::kit::common::JobOutcome;
+use crate::kit::images::{ImageProcessor, Options as ImageOptions};
 use crate::kit::pdf::PDFProcessor;
 use crate::kit::common::batch_runner::BatchRunner;
 use std::path::PathBuf;
@@ -68,6 +68,7 @@ fn main() {
             compress_images,
             convert_images
         ])
+        .plugin(tauri_plugin_dialog::init())
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
