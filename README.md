@@ -34,7 +34,7 @@ Toolbox runs either way, and every tool works the same in both.
   **Open Toolbox Window**.
 - **Open at login** is in the same place, for either mode.
 
-## Install
+## Install the macOS release
 
 Grab the latest `Toolbox-<version>.dmg` from
 **[Releases](https://github.com/lazzyms/toolbox/releases/latest)**, open it, and drag
@@ -47,6 +47,32 @@ Because this build isn't notarized by Apple, the first launch needs one extra st
 
 That's once per machine; afterwards it's a normal double-click. (See
 [Distribution](#distribution) for how to remove this step entirely.)
+
+## Install the cross-platform preview
+
+The Tauri build runs on macOS and Windows. It is currently published as unsigned
+CI artifacts, not as a stable GitHub Release.
+
+1. Open the [Tauri Build workflow](https://github.com/lazzyms/toolbox/actions/workflows/tauri-ci.yml).
+2. Select the latest successful run.
+3. Download the artifact for your platform.
+
+### macOS
+
+1. Open the downloaded artifact and then open the `.dmg` file.
+2. Drag **Toolbox** to **Applications**.
+3. In Applications, Control-click **Toolbox**, choose **Open**, and choose **Open** again.
+
+macOS asks for this confirmation because the preview build is not notarized.
+
+### Windows
+
+1. Open the downloaded artifact.
+2. Run the `.exe` installer in the `nsis` folder.
+3. If Windows SmartScreen appears, choose **More info**, then **Run anyway**.
+
+The preview installer is unsigned. The installer includes qpdf, which the PDF
+protection tool uses.
 
 ## Updates
 
