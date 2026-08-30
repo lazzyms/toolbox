@@ -39,6 +39,18 @@ export const MainPage = () => {
                 <div className="mt-auto p-4 bg-slate-100 rounded-2xl">
                     <p className="text-[11px] text-slate-400 text-center font-medium uppercase tracking-wider">Unified Native Engine</p>
                 </div>
+
+                <p className="mt-4 text-center text-xs text-slate-400">
+                    Built with <span aria-hidden="true">❤️</span> by{' '}
+                    <a
+                        className="font-medium text-slate-500 underline decoration-slate-300 underline-offset-2 transition-colors hover:text-blue-600"
+                        href="https://mauliksompura.co.in"
+                        rel="noreferrer"
+                        target="_blank"
+                    >
+                        lazzyms
+                    </a>
+                </p>
             </div>
 
             {/* Detail Area */}
