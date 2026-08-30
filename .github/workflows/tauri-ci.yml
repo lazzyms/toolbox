@@ -76,10 +76,14 @@ jobs:
         working-directory: ToolboxTauri
         run: |
           New-Item -ItemType Directory -Force -Path src-tauri\resources | Out-Null
-          $qpdf = Get-Command qpdf
-          Copy-Item $qpdf.Source src-tauri\resources\qpdf.exe -Force
-          Get-ChildItem (Split-Path $qpdf.Source) -Filter *.dll |
+          $qpdf = Get-ChildItem "$env:ChocolateyInstall\lib\qpdf" -Recurse -Filter qpdf.exe |
+            Select-Object -First 1
+          if (-not $qpdf) { throw 'Could not locate the real qpdf.exe in the Chocolatey package' }
+          Write-Host "Staging $($qpdf.FullName)"
+          Copy-Item $qpdf.FullName src-tauri\resources\qpdf.exe -Force
+          Get-ChildItem $qpdf.DirectoryName -Filter *.dll |
             Copy-Item -Destination src-tauri\resources -Force
+          & src-tauri\resources\qpdf.exe --version
           '{"bundle": {"resources": ["resources/*"]}}' |
             Out-File -Encoding ascii resources-qpdf.json
 
