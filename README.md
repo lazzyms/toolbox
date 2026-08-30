@@ -317,3 +317,5 @@ The app is free and stays free. If it's useful to you, there's a tip jar:
 **[buymeacoffee.com/lazzyms](https://buymeacoffee.com/lazzyms)**
 
 Entirely optional — nothing in the app is gated behind it.
+
+Built with ❤️ by [lazzyms](https://mauliksompura.co.in)
