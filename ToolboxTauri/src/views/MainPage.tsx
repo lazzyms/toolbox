@@ -4,6 +4,7 @@ import { PDFUnlockView } from './PDFUnlockView';
 import { PDFProtectView } from './PDFProtectView';
 import { ImageCompressView } from './ImageCompressView';
 import { ImageConvertView } from './ImageConvertView';
+import { TablerIcon } from '../components/TablerIcon';
 
 export const MainPage = () => {
     const [selectedTool, setSelectedTool] = useState<Utility | null>(null);
@@ -13,7 +14,9 @@ export const MainPage = () => {
             {/* Sidebar */}
             <div className="w-72 bg-white border-r border-slate-200 p-6 flex flex-col">
                 <div className="flex items-center space-x-3 mb-10 px-2">
-                    <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold">T</div>
+                    <div className="w-8 h-8 bg-gradient-to-br from-amber-400 to-orange-500 rounded-lg flex items-center justify-center shadow-sm">
+                        <TablerIcon name="briefcase" color="#172033" className="w-5 h-5" />
+                    </div>
                     <h1 className="text-xl font-bold tracking-tight">Toolbox</h1>
                 </div>
 
@@ -28,9 +31,7 @@ export const MainPage = () => {
                                 : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
                             }`}
                         >
-                            <span className="mr-3 text-lg group-hover:scale-110 transition-transform" style={{ color: tool.tint }}>
-                                {tool.symbol}
-                            </span>
+                            <TablerIcon name={tool.symbol} color={tool.tint} className="mr-3 w-5 h-5 group-hover:scale-110 transition-transform" />
                             <span className="text-sm font-medium">{tool.shortTitle}</span>
                         </button>
                     ))}
@@ -64,7 +65,9 @@ export const MainPage = () => {
                     </div>
                 ) : (
                     <div className="h-full flex flex-col items-center justify-center text-center space-y-4">
-                        <div className="w-20 h-20 bg-slate-200 rounded-full flex items-center justify-center text-4xl opacity-50">🛠️</div>
+                        <div className="w-20 h-20 bg-slate-200 rounded-full flex items-center justify-center opacity-50">
+                            <TablerIcon name="briefcase" color="#475569" className="w-10 h-10" />
+                        </div>
                         <div>
                             <h3 className="text-xl font-semibold text-slate-700">Ready to process</h3>
                             <p className="text-slate-400">Select a utility from the sidebar to begin</p>
