@@ -38,8 +38,7 @@ struct MenuBarPanel: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Image(systemName: selected.symbol)
-                .foregroundStyle(selected.tint)
+            TablerIcon(name: selected.symbol, color: selected.tint)
                 .frame(width: 18)
 
             VStack(alignment: .leading, spacing: 1) {
@@ -107,8 +106,7 @@ struct MenuBarPanel: View {
                     selection = utility.id
                 } label: {
                     HStack(spacing: 6) {
-                        Image(systemName: utility.symbol)
-                            .foregroundStyle(utility.tint)
+                        TablerIcon(name: utility.symbol, color: utility.tint)
                             .frame(width: 16)
                         Text(utility.shortTitle)
                             .font(.caption)

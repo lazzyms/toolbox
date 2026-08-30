@@ -53,7 +53,8 @@ struct ToolboxApp: App {
         MenuBarExtra(isInserted: $settings.showsMenuBarIcon) {
             MenuBarPanel(settings: settings, updates: updates)
         } label: {
-            Image(systemName: "hammer.fill")
+            TablerIcon(name: "briefcase", color: .primary)
+                .frame(width: 18, height: 18)
         }
         .menuBarExtraStyle(.window)
 
@@ -77,8 +78,7 @@ struct ContentView: View {
                     Section(category.rawValue) {
                         ForEach(Utility.inCategory(category)) { utility in
                             HStack(spacing: 10) {
-                                Image(systemName: utility.symbol)
-                                    .foregroundStyle(utility.tint)
+                                TablerIcon(name: utility.symbol, color: utility.tint)
                                     .frame(width: 20)
                                 Text(utility.title)
                                     .lineLimit(1)

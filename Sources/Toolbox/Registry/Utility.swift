@@ -15,6 +15,7 @@ struct Utility: Identifiable, Hashable {
     let shortTitle: String
     /// Shown under the title in the sidebar and at the top of the detail pane.
     let blurb: String
+    /// The bundled Tabler icon name, without its `.svg` extension.
     let symbol: String
     let tint: Color
     let category: Category

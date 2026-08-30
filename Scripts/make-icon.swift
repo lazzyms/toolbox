@@ -1,6 +1,9 @@
 #!/usr/bin/env swift
 
-// Generates Resources/AppIcon.icns — a rounded-square "toolbox" mark.
+// Generates Resources/AppIcon.icns — a rounded-square toolbox mark inspired by
+// Tabler's MIT-licensed briefcase icon family. The sidebar uses the original
+// bundled Tabler SVGs; this generator keeps the app icon crisp at every Dock
+// size without requiring a graphics tool in the release environment.
 // Committing a generator instead of a binary keeps the repo diffable and lets
 // the icon be tweaked without a design tool.
 
@@ -25,7 +28,7 @@ func drawIcon(side: CGFloat) -> CGImage {
     let scale = side / 1024.0
     func s(_ value: CGFloat) -> CGFloat { value * scale }
 
-    // Rounded-rect background with a vertical gradient, matching macOS icon shape.
+    // Rounded-rect background with a warm amber gradient, matching macOS icon shape.
     let inset = s(64)
     let rect = CGRect(x: inset, y: inset, width: side - inset * 2, height: side - inset * 2)
     let squircle = CGPath(
@@ -38,8 +41,8 @@ func drawIcon(side: CGFloat) -> CGImage {
     let gradient = CGGradient(
         colorsSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
         colors: [
-            CGColor(red: 0.29, green: 0.56, blue: 0.98, alpha: 1),
-            CGColor(red: 0.16, green: 0.31, blue: 0.83, alpha: 1),
+            CGColor(red: 1.00, green: 0.72, blue: 0.22, alpha: 1),
+            CGColor(red: 0.88, green: 0.35, blue: 0.10, alpha: 1),
         ] as CFArray,
         locations: [0, 1]
     )!
@@ -51,21 +54,22 @@ func drawIcon(side: CGFloat) -> CGImage {
     )
     context.restoreGState()
 
-    // Toolbox body.
+    // Toolbox body. The dark slate silhouette echoes Tabler's restrained
+    // outline language while remaining legible at 16pt.
     let bodyWidth = s(560), bodyHeight = s(330)
     let body = CGRect(
         x: (side - bodyWidth) / 2,
         y: (side - bodyHeight) / 2 - s(40),
         width: bodyWidth, height: bodyHeight
     )
-    context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.96))
+    context.setFillColor(CGColor(red: 0.10, green: 0.12, blue: 0.16, alpha: 0.98))
     context.addPath(CGPath(
         roundedRect: body, cornerWidth: s(44), cornerHeight: s(44), transform: nil
     ))
     context.fillPath()
 
     // Handle arc above the body.
-    context.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.96))
+    context.setStrokeColor(CGColor(red: 0.10, green: 0.12, blue: 0.16, alpha: 0.98))
     context.setLineWidth(s(52))
     context.setLineCap(.round)
     let handleRadius = s(120)
@@ -83,7 +87,7 @@ func drawIcon(side: CGFloat) -> CGImage {
         y: body.midY - latchHeight / 2,
         width: latchWidth, height: latchHeight
     )
-    context.setFillColor(CGColor(red: 0.16, green: 0.31, blue: 0.83, alpha: 1))
+    context.setFillColor(CGColor(red: 1.00, green: 0.72, blue: 0.22, alpha: 1))
     context.addPath(CGPath(
         roundedRect: latch, cornerWidth: s(18), cornerHeight: s(18), transform: nil
     ))

@@ -25,9 +25,7 @@ struct ToolScaffold<Body: View, Controls: View>: View {
                     // spend a third of the popover on chrome.
                     if !presentation.isCompact {
                         HStack(spacing: 10) {
-                            Image(systemName: utility.symbol)
-                                .font(.title2)
-                                .foregroundStyle(utility.tint)
+                            TablerIcon(name: utility.symbol, color: utility.tint)
                                 .frame(width: 28)
 
                             VStack(alignment: .leading, spacing: 2) {
