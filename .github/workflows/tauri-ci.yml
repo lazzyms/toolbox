@@ -75,11 +75,11 @@ jobs:
         shell: pwsh
         working-directory: ToolboxTauri
         run: |
-          New-Item -ItemType Directory -Force -Path resources | Out-Null
+          New-Item -ItemType Directory -Force -Path src-tauri\resources | Out-Null
           $qpdf = Get-Command qpdf
-          Copy-Item $qpdf.Source resources\qpdf.exe -Force
+          Copy-Item $qpdf.Source src-tauri\resources\qpdf.exe -Force
           Get-ChildItem (Split-Path $qpdf.Source) -Filter *.dll |
-            Copy-Item -Destination resources -Force
+            Copy-Item -Destination src-tauri\resources -Force
           '{"bundle": {"resources": ["resources/*"]}}' |
             Out-File -Encoding ascii resources-qpdf.json
 
@@ -94,6 +94,7 @@ jobs:
 
       - name: Bundle qpdf into app (macOS)
         if: runner.os == 'macOS'
+        working-directory: ToolboxTauri
         run: |
           ./scripts/bundle-qpdf.sh \
             "$(pwd)/src-tauri/target/release/bundle/macos/Toolbox.app"
