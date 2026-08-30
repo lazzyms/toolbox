@@ -40,14 +40,18 @@ export const ToolScaffold = ({ utility, children }: ToolScaffoldProps) => {
     }, []);
 
     const browse = async () => {
-        const picked = await open({ multiple: true });
-        setFiles((prev) => {
-            const existing = new Set(prev);
-            const fresh = (Array.isArray(picked) ? picked : picked ? [picked] : []).filter(
-                (p) => !existing.has(p)
-            );
-            return fresh.length ? [...prev, ...fresh] : prev;
-        });
+        try {
+            const picked = await open({ multiple: true });
+            setFiles((prev) => {
+                const existing = new Set(prev);
+                const fresh = (Array.isArray(picked) ? picked : picked ? [picked] : []).filter(
+                    (p) => !existing.has(p)
+                );
+                return fresh.length ? [...prev, ...fresh] : prev;
+            });
+        } catch (e) {
+            setResults([{ input_path: 'Dialog error', failure: String(e), detail: '' }]);
+        }
     };
 
     return (

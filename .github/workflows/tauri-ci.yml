@@ -32,6 +32,8 @@ jobs:
           - os: windows-latest
             name: Windows
     runs-on: ${{ matrix.os }}
+    env:
+      TOOLBOX_REQUIRE_QPDF: '1'
     steps:
       - uses: actions/checkout@v7
 
@@ -60,13 +62,78 @@ jobs:
         run: npm ci
         working-directory: ToolboxTauri
 
+      - name: Install qpdf (macOS)
+        if: runner.os == 'macOS'
+        run: brew install qpdf
+
+      - name: Install qpdf (Windows)
+        if: runner.os == 'Windows'
+        run: choco install qpdf -y
+
+      - name: Stage qpdf as Windows bundle resources
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: ToolboxTauri
+        run: |
+          New-Item -ItemType Directory -Force -Path resources | Out-Null
+          $qpdf = Get-Command qpdf
+          Copy-Item $qpdf.Source resources\qpdf.exe -Force
+          Get-ChildItem (Split-Path $qpdf.Source) -Filter *.dll |
+            Copy-Item -Destination resources -Force
+          '{"bundle": {"resources": ["resources/*"]}}' |
+            Out-File -Encoding ascii resources-qpdf.json
+
       - name: Run kit tests
         run: cargo test
         working-directory: ToolboxTauri/src-tauri
 
-      - name: Build unsigned bundles
+      - name: Build unsigned macOS app
+        if: runner.os == 'macOS'
         run: npm run tauri build
         working-directory: ToolboxTauri
+
+      - name: Bundle qpdf into app (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          ./scripts/bundle-qpdf.sh \
+            "$(pwd)/src-tauri/target/release/bundle/macos/Toolbox.app"
+
+      - name: Create macOS DMG from bundled app
+        if: runner.os == 'macOS'
+        run: |
+          ./scripts/make-dmg.sh \
+            "$(pwd)/src-tauri/target/release/bundle/macos/Toolbox.app" \
+            "$(pwd)/src-tauri/target/release/bundle/dmg/Toolbox_0.1.0_aarch64.dmg"
+        working-directory: ToolboxTauri
+
+      - name: Verify bundled qpdf (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          DMG="$(find src-tauri/target/release/bundle/dmg -name '*.dmg' -print -quit)"
+          MOUNT="$(mktemp -d)"
+          hdiutil attach -nobrowse -readonly -mountpoint "$MOUNT" "$DMG" >/dev/null
+          APP="$MOUNT/Toolbox.app"
+          test -x "$APP/Contents/Resources/qpdf-bin/qpdf"
+          "$APP/Contents/Resources/qpdf-bin/qpdf" --version
+          codesign --verify --deep --strict "$APP"
+          hdiutil detach "$MOUNT" >/dev/null
+
+      - name: Build unsigned Windows bundles with qpdf resources
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: ToolboxTauri
+        run: npm run tauri build -- --config resources-qpdf.json
+
+      - name: Verify bundled qpdf (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: ToolboxTauri
+        run: |
+          $bundled = Get-ChildItem src-tauri\target\release\bundle -Recurse -Filter qpdf.exe |
+            Select-Object -First 1
+          if (-not $bundled) { throw 'qpdf.exe was not included in a Windows bundle' }
+          & $bundled.FullName --version
 
       - name: Upload installers
         uses: actions/upload-artifact@v7
@@ -74,7 +141,7 @@ jobs:
           name: toolbox-${{ matrix.name }}
           path: |
             ToolboxTauri/src-tauri/target/release/bundle/macos/*.app
-            ToolboxTauri/src-tauri/target/release/bundle/macos/*.dmg
+            ToolboxTauri/src-tauri/target/release/bundle/dmg/*.dmg
             ToolboxTauri/src-tauri/target/release/bundle/nsis/*.exe
             ToolboxTauri/src-tauri/target/release/bundle/msi/*.msi
           if-no-files-found: warn

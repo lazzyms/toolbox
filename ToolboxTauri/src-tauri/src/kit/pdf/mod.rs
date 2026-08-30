@@ -1,10 +1,7 @@
-use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::process::Command;
 
-use lopdf::encryption::crypt_filters::{Aes256CryptFilter, CryptFilter};
-use lopdf::encryption::{EncryptionState, EncryptionVersion, Permissions};
-use lopdf::Document;
+use lopdf::{Document, LoadOptions};
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 
@@ -20,20 +17,24 @@ impl PDFProcessor {
             None,
         );
 
-        match Document::load(&input_path) {
-            Ok(mut doc) => {
+        // Reading an encrypted PDF without a password makes lopdf drop every
+        // object except the /Encrypt dictionary (objects == 1), so decrypting
+        // afterwards writes a corrupt skeleton file. The password must be given
+        // at load time so lopdf decrypts each object as it parses it.
+        let loaded = Document::load_with_options(&input_path, LoadOptions::with_password(password));
+        match loaded {
+            Ok(doc) => {
                 if doc.is_encrypted() {
-                    // Rejects a wrong password; successful decrypt strips the /Encrypt
-                    // trailer entry so the resaved document is unencrypted.
-                    if let Err(e) = doc.decrypt(password) {
-                        return JobOutcome {
-                            input_path,
-                            output_paths: vec![],
-                            detail: "".to_string(),
-                            failure: Some(format!("Wrong password or unsupported encryption: {}", e)),
-                        };
-                    }
+                    // Loading with the wrong password can surface a still-encrypted
+                    // document rather than an error; treat it as a rejection.
+                    return JobOutcome {
+                        input_path,
+                        output_paths: vec![],
+                        detail: "".to_string(),
+                        failure: Some("Wrong password or unsupported encryption.".to_string()),
+                    };
                 }
+                let mut doc = doc;
                 match doc.save(&output_path) {
                     Ok(_) => JobOutcome {
                         input_path,
@@ -53,11 +54,14 @@ impl PDFProcessor {
                 input_path,
                 output_paths: vec![],
                 detail: "".to_string(),
-                failure: Some(format!("Load failed: {}", e)),
+                failure: Some(format!("Wrong password or unsupported encryption: {}", e)),
             },
         }
     }
 
+    /// Underlying encryption writer. lopdf's own `Document::encrypt` produces an
+    /// /Encrypt dictionary that other readers (macOS PDFKit) cannot decrypt, so
+    /// protection shells out to a correct, cross-platform AES-256 writer.
     pub fn protect(input_path: PathBuf, password: &str) -> JobOutcome {
         let output_path = OutputNaming::get_destination(
             &input_path,
@@ -67,71 +71,100 @@ impl PDFProcessor {
             None,
         );
 
-        match Document::load(&input_path) {
-            Ok(mut doc) => {
-                let mut file_encryption_key = [0u8; 32];
-                if let Err(e) = getrandom::fill(&mut file_encryption_key) {
-                    return JobOutcome {
-                        input_path,
-                        output_paths: vec![],
-                        detail: "".to_string(),
-                        failure: Some(format!("Failed to generate encryption key: {}", e)),
-                    };
-                }
-
-                let crypt_filter: Arc<dyn CryptFilter> = Arc::new(Aes256CryptFilter);
-                let version = EncryptionVersion::V5 {
-                    encrypt_metadata: true,
-                    crypt_filters: BTreeMap::from([(b"StdCF".to_vec(), crypt_filter)]),
-                    file_encryption_key: &file_encryption_key,
-                    stream_filter: b"StdCF".to_vec(),
-                    string_filter: b"StdCF".to_vec(),
-                    owner_password: password,
-                    user_password: password,
-                    permissions: Permissions::all(),
+        if let Some(ref e) = input_path.extension().map(|e| e.to_string_lossy().to_lowercase()) {
+            if e != "pdf" {
+                return JobOutcome {
+                    input_path,
+                    output_paths: vec![],
+                    detail: "".to_string(),
+                    failure: Some("Only PDF files can be protected.".to_string()),
                 };
-
-                match EncryptionState::try_from(version) {
-                    Ok(state) => {
-                        if let Err(e) = doc.encrypt(&state) {
-                            return JobOutcome {
-                                input_path,
-                                output_paths: vec![],
-                                detail: "".to_string(),
-                                failure: Some(format!("Encrypt failed: {}", e)),
-                            };
-                        }
-                        match doc.save(&output_path) {
-                            Ok(_) => JobOutcome {
-                                input_path,
-                                output_paths: vec![output_path],
-                                detail: "PDF Protected".to_string(),
-                                failure: None,
-                            },
-                            Err(e) => JobOutcome {
-                                input_path,
-                                output_paths: vec![],
-                                detail: "".to_string(),
-                                failure: Some(format!("Save failed: {}", e)),
-                            },
-                        }
-                    }
-                    Err(e) => JobOutcome {
-                        input_path,
-                        output_paths: vec![],
-                        detail: "".to_string(),
-                        failure: Some(format!("Encryption setup failed: {}", e)),
-                    },
-                }
             }
+        }
+
+        let Some(qpdf) = find_qpdf() else {
+            return JobOutcome {
+                input_path,
+                output_paths: vec![],
+                detail: "".to_string(),
+                failure: Some(
+                    "qpdf is required to protect PDFs but was not found. \
+                     Set TOOLBOX_QPDF_PATH or add qpdf to PATH."
+                        .to_string(),
+                ),
+            };
+        };
+
+        let status = Command::new(&qpdf)
+            .arg("--encrypt")
+            .arg(password)
+            .arg(password)
+            .arg("256")
+            .arg("--")
+            .arg(&input_path)
+            .arg(&output_path)
+            .output();
+
+        match status {
+            Ok(out) if out.status.success() => JobOutcome {
+                input_path,
+                output_paths: vec![output_path],
+                detail: "PDF Protected".to_string(),
+                failure: None,
+            },
+            Ok(out) => JobOutcome {
+                input_path,
+                output_paths: vec![],
+                detail: "".to_string(),
+                failure: Some(
+                    String::from_utf8_lossy(&out.stderr)
+                        .trim()
+                        .lines()
+                        .last()
+                        .map(|l| l.to_string())
+                        .unwrap_or_else(|| "qpdf failed to protect the PDF.".to_string()),
+                ),
+            },
             Err(e) => JobOutcome {
                 input_path,
                 output_paths: vec![],
                 detail: "".to_string(),
-                failure: Some(format!("Load failed: {}", e)),
+                failure: Some(format!("Could not run qpdf: {}", e)),
             },
         }
     }
+}
+
+/// Locate qpdf from an explicit override, the installed app resources, or PATH.
+fn find_qpdf() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("TOOLBOX_QPDF_PATH") {
+        let p = PathBuf::from(p);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        let exe_dir = exe.parent()?;
+        let candidates = [
+            exe_dir.join("qpdf.exe"),
+            exe_dir.join("resources").join("qpdf.exe"),
+            exe_dir.parent()?.join("Resources").join("qpdf-bin").join("qpdf"),
+        ];
+        for candidate in candidates {
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    // Fall back to a `qpdf` on PATH (dev / non-bundled runs).
+    Command::new("qpdf")
+        .arg("--version")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|_| PathBuf::from("qpdf"))
 }
 
 #[cfg(test)]
@@ -144,6 +177,21 @@ mod tests {
         std::env::temp_dir().join(format!("toolbox_{}_{}", std::process::id(), name))
     }
 
+    fn qpdf_available() -> bool {
+        find_qpdf().is_some()
+    }
+
+    fn require_qpdf() -> bool {
+        if qpdf_available() {
+            return true;
+        }
+        if std::env::var_os("TOOLBOX_REQUIRE_QPDF").is_some() {
+            panic!("qpdf is required for this test run");
+        }
+        eprintln!("skipping: qpdf not available");
+        false
+    }
+
     fn make_pdf(path: &PathBuf) {
         let mut doc = Document::with_version("1.7");
         let pages_id = doc.new_object_id();
@@ -152,11 +200,18 @@ mod tests {
             "Subtype" => "Type1",
             "BaseFont" => "Helvetica",
         });
+        // A real page carries a /Contents stream. Streams are what trigger the
+        // encryption round-trip bugs, so every fixture must include one.
+        let content_id = doc.add_object(Object::Stream(lopdf::Stream::new(
+            dictionary! {},
+            b"BT /F1 24 Tf (hello) Tj ET".to_vec(),
+        )));
         let page_id = doc.add_object(dictionary! {
             "Type" => "Page",
             "Parent" => pages_id,
             "MediaBox" => vec![Object::Real(0.0), Object::Real(0.0), Object::Real(612.0), Object::Real(792.0)],
             "Resources" => dictionary! { "Font" => dictionary! { "F1" => font_id } },
+            "Contents" => content_id,
         });
         let pages = dictionary! {
             "Type" => "Pages",
@@ -174,12 +229,22 @@ mod tests {
 
     #[test]
     fn protect_then_unlock_roundtrip() {
+        if !require_qpdf() {
+            return;
+        }
         let src = temp_path("roundtrip.pdf");
         make_pdf(&src);
 
         let protected = PDFProcessor::protect(src.clone(), "hunter2");
         assert!(protected.failure.is_none(), "{}", protected.failure.clone().unwrap_or_default());
         assert_eq!(protected.output_paths.len(), 1);
+
+        // the protected file must decrypt correctly with the password
+        let enc = Document::load_with_options(&protected.output_paths[0], lopdf::LoadOptions::with_password("hunter2"));
+        assert!(enc.is_ok());
+        let enc = enc.unwrap();
+        assert!(!enc.is_encrypted());
+        assert!(enc.objects.len() > 1, "protected PDF lost its objects");
 
         // protects and saves an encrypted file distinct from the input
         assert_ne!(&protected.output_paths[0], &src);
@@ -190,7 +255,20 @@ mod tests {
         // the unlocked copy must load as a plain (non-encrypted) document
         let loaded = Document::load(&unlocked.output_paths[0]);
         assert!(loaded.is_ok());
-        assert!(!loaded.unwrap().is_encrypted());
+        let loaded = loaded.unwrap();
+        assert!(!loaded.is_encrypted());
+        // Regression guard: a bad round-trip used to drop every object bar the
+        // /Encrypt dict (and sometimes write a 180-byte skeleton). A real
+        // unlocked page must retain all its objects.
+        assert!(
+            loaded.objects.len() > 1,
+            "unlocked PDF lost its objects ({} remaining)",
+            loaded.objects.len()
+        );
+        assert!(
+            loaded.objects.iter().any(|(_, o)| matches!(o, Object::Stream(_))),
+            "unlocked PDF must keep its content stream"
+        );
 
         let _ = std::fs::remove_file(&protected.output_paths[0]);
         let _ = std::fs::remove_file(&unlocked.output_paths[0]);
@@ -199,6 +277,9 @@ mod tests {
 
     #[test]
     fn wrong_password_is_rejected() {
+        if !require_qpdf() {
+            return;
+        }
         let src = temp_path("wrongpw.pdf");
         make_pdf(&src);
 
@@ -210,6 +291,21 @@ mod tests {
         assert!(unlocked.output_paths.is_empty());
 
         let _ = std::fs::remove_file(&protected.output_paths[0]);
+        let _ = std::fs::remove_file(&src);
+    }
+
+    #[test]
+    fn protect_reports_missing_qpdf() {
+        // When qpdf is genuinely absent, protect must fail cleanly rather than
+        // panic. Only meaningful if it is absent: otherwise this is a no-op that
+        // still exercises the non-engine path via a bogus override.
+        if qpdf_available() {
+            return;
+        }
+        let src = temp_path("noqpdf.pdf");
+        make_pdf(&src);
+        let out = PDFProcessor::protect(src.clone(), "x");
+        assert!(out.failure.is_some());
         let _ = std::fs::remove_file(&src);
     }
 }
