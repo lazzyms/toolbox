@@ -109,6 +109,7 @@ jobs:
 
       - name: Verify bundled qpdf (macOS)
         if: runner.os == 'macOS'
+        working-directory: ToolboxTauri
         run: |
           set -euo pipefail
           DMG="$(find src-tauri/target/release/bundle/dmg -name '*.dmg' -print -quit)"
@@ -131,10 +132,16 @@ jobs:
         shell: pwsh
         working-directory: ToolboxTauri
         run: |
-          $bundled = Get-ChildItem src-tauri\target\release\bundle -Recurse -Filter qpdf.exe |
+          $bundled = Get-ChildItem src-tauri\target\release -Recurse -Filter qpdf.exe |
             Select-Object -First 1
-          if (-not $bundled) { throw 'qpdf.exe was not included in a Windows bundle' }
+          if (-not $bundled) { throw 'qpdf.exe was not included in the Windows release tree' }
           & $bundled.FullName --version
+          if (-not (Get-ChildItem src-tauri\target\release\bundle\nsis -Filter *.exe)) {
+            throw 'NSIS installer was not produced'
+          }
+          if (-not (Get-ChildItem src-tauri\target\release\bundle\msi -Filter *.msi)) {
+            throw 'MSI installer was not produced'
+          }
 
       - name: Upload installers
         uses: actions/upload-artifact@v7
