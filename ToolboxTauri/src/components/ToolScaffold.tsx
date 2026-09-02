@@ -6,23 +6,32 @@ import { ResultList } from './ResultList';
 
 interface ToolScaffoldProps {
     utility: ToolDefinition;
+    onRun: (files: string[]) => Promise<JobOutcome[]>;
     children: (props: {
         files: string[];
-        setFiles: (files: string[]) => void;
         run: () => Promise<void>;
-        results: JobOutcome[];
-        setResults: (results: JobOutcome[]) => void;
         loading: boolean;
-        setLoading: (loading: boolean) => void;
         progress: Progress;
     }) => React.ReactNode;
 }
 
-export const ToolScaffold = ({ utility, children }: ToolScaffoldProps) => {
+export const ToolScaffold = ({ utility, onRun, children }: ToolScaffoldProps) => {
     const [files, setFiles] = useState<string[]>([]);
     const [results, setResults] = useState<JobOutcome[]>([]);
     const [loading, setLoading] = useState(false);
     const progress: Progress = { completed: loading ? 0 : results.length, total: files.length };
+
+    const run = async () => {
+        setLoading(true);
+        setResults([]);
+        try {
+            setResults(await onRun(files));
+        } catch (error) {
+            setResults([{ inputPath: 'Tool error', outputPaths: [], failure: String(error), detail: '' }]);
+        } finally {
+            setLoading(false);
+        }
+    };
 
     useEffect(() => {
         const appWindow = getCurrentWebviewWindow();
@@ -102,12 +111,8 @@ export const ToolScaffold = ({ utility, children }: ToolScaffoldProps) => {
 
             {children({
                 files,
-                setFiles,
-                run: async () => {},
-                results,
-                setResults,
+                run,
                 loading,
-                setLoading,
                 progress,
             })}
 

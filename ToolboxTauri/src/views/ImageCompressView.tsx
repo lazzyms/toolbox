@@ -1,14 +1,14 @@
 import { useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { ToolScaffold } from '../components/ToolScaffold';
-import type { ToolDefinition, ToolResult } from '../contracts';
+import { invoke } from '@tauri-apps/api/core';
+import type { CompressImagesRequest, ToolDefinition, ToolResult } from '../contracts';
 
 export const ImageCompressView = ({ utility }: { utility: ToolDefinition }) => {
     const [quality, setQuality] = useState(80);
 
     return (
-        <ToolScaffold utility={utility}>
-            {({ files, setResults, loading, setLoading }) => (
+        <ToolScaffold utility={utility} onRun={(paths) => invoke<ToolResult>('compress_images', { request: { paths, quality, outputLocation: 'alongsideInput' } satisfies CompressImagesRequest })}>
+            {({ files, run, loading }) => (
                 <div className="space-y-6">
                     <div className="flex flex-col space-y-2 max-w-sm">
                         <div className="flex justify-between">
@@ -31,17 +31,7 @@ export const ImageCompressView = ({ utility }: { utility: ToolDefinition }) => {
 
                     <button
                         disabled={loading || files.length === 0}
-                        onClick={async () => {
-                            setLoading(true);
-                            try {
-                                const res = await invoke<ToolResult>('compress_images', { paths: files, quality });
-                                setResults(res);
-                            } catch (e) {
-                                alert(e);
-                            } finally {
-                                setLoading(false);
-                            }
-                        }}
+                        onClick={run}
                         className="bg-green-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-green-700 disabled:opacity-50 transition-colors"
                     >
                         Compress Images

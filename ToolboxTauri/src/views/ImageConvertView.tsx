@@ -1,20 +1,20 @@
 import { useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { ToolScaffold } from '../components/ToolScaffold';
-import type { ToolDefinition, ToolResult } from '../contracts';
+import { invoke } from '@tauri-apps/api/core';
+import type { ConvertImagesRequest, ToolDefinition, ToolResult } from '../contracts';
 
 export const ImageConvertView = ({ utility }: { utility: ToolDefinition }) => {
-    const [format, setFormat] = useState('png');
+    const [format, setFormat] = useState<ConvertImagesRequest['format']>('png');
     const formats = [
         { id: 'png', label: 'PNG', icon: '🖼️' },
         { id: 'jpg', label: 'JPEG', icon: '📷' },
         { id: 'webp', label: 'WebP', icon: '🌐' },
         { id: 'heic', label: 'HEIC', icon: '📱' },
-    ];
+    ] as const;
 
     return (
-        <ToolScaffold utility={utility}>
-            {({ files, setResults, loading, setLoading }) => (
+        <ToolScaffold utility={utility} onRun={(paths) => invoke<ToolResult>('convert_images', { request: { paths, format, outputLocation: 'alongsideInput' } satisfies ConvertImagesRequest })}>
+            {({ files, run, loading }) => (
                 <div className="space-y-6">
                     <div className="flex flex-col space-y-3 max-w-sm">
                         <label className="text-sm font-medium text-slate-700">Target Format</label>
@@ -38,17 +38,7 @@ export const ImageConvertView = ({ utility }: { utility: ToolDefinition }) => {
 
                     <button
                         disabled={loading || files.length === 0}
-                        onClick={async () => {
-                            setLoading(true);
-                            try {
-                                const res = await invoke<ToolResult>('convert_images', { paths: files, format });
-                                setResults(res);
-                            } catch (e) {
-                                alert(e);
-                            } finally {
-                                setLoading(false);
-                            }
-                        }}
+                        onClick={run}
                         className="bg-blue-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors"
                     >
                         Convert Images

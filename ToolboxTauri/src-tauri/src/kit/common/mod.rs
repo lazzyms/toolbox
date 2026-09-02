@@ -12,7 +12,6 @@ impl OutputNaming {
         location: &OutputLocation,
         suffix: &str,
         extension: &str,
-        _custom_folder: Option<&PathBuf>,
     ) -> PathBuf {
         let directory = match location {
             OutputLocation::AlongsideInput => input_path.parent().unwrap_or_else(|| std::path::Path::new(".")),
