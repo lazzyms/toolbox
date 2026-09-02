@@ -12,6 +12,7 @@ import { PDFSimpleToolView } from './PDFSimpleToolView';
 import { PDFSelectionView } from './PDFSelectionView';
 import { PDFPathsView } from './PDFPathsView';
 import { PDFConversionView } from './PDFConversionView';
+import { VisionView } from './VisionView';
 import { ImageGeometryView } from './ImageGeometryView';
 import { ImageEffectView } from './ImageEffectView';
 import { ImageFormatView } from './ImageFormatView';
@@ -34,6 +35,9 @@ const views = {
     'pdf-to-text': (props) => <PDFConversionView {...props} mode="to-text" />,
     'pdf-image-extract': (props) => <PDFConversionView {...props} mode="extract-images" />,
     'images-to-pdf': (props) => <PDFConversionView {...props} mode="images-to-pdf" />,
+    'pdf-ocr': (props) => <VisionView {...props} mode="ocr" />,
+    'image-blur-faces': (props) => <VisionView {...props} mode="faces" />,
+    'image-remove-bg': (props) => <VisionView {...props} mode="background" />,
     'image-resize': (props) => <ImageGeometryView {...props} mode="resize" />,
     'image-rotate': (props) => <ImageGeometryView {...props} mode="rotate" />,
     'image-crop': (props) => <ImageGeometryView {...props} mode="crop" />,
