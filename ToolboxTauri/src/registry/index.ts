@@ -8,9 +8,9 @@ const image = (id: string, title: string, shortTitle: string, blurb: string, sym
 
 export const UtilityRegistry: ToolDefinition[] = [
     { id: "pdf-unlock", title: "Remove PDF Password", shortTitle: "Unlock PDF", blurb: "Save an unlocked copy of a PDF you know the password for.", symbol: "lock-open", tint: "#f97316", category: "PDF", command: "unlock_pdf", verification: "unlock-pdf", view: "pdf-unlock", status: "implemented" },
-    pdf("pdf-page-numbers", "Add PDF Page Numbers", "Page Numbers", "Stamp page numbers onto a PDF.", "numbers", "#3b82f6", "add_page_numbers", "pdf-page-numbers"),
+    { id: "pdf-page-numbers", title: "Add PDF Page Numbers", shortTitle: "Page Numbers", blurb: "Stamp page numbers onto a PDF.", symbol: "numbers", tint: "#3b82f6", category: "PDF", command: "add_page_numbers", verification: "pdf-page-numbers", view: "pdf-page-numbers", status: "implemented" },
     pdf("pdf-merge", "Merge PDF", "Merge", "Combine several PDFs into one file.", "files", "#a855f7", "merge_pdfs", "pdf-merge"),
-    pdf("pdf-watermark", "Watermark PDF", "Watermark", "Stamp text or an image across PDF pages.", "droplet", "#06b6d4", "watermark_pdf", "pdf-watermark"),
+    { id: "pdf-watermark", title: "Watermark PDF", shortTitle: "Watermark", blurb: "Stamp text across PDF pages.", symbol: "droplet", tint: "#06b6d4", category: "PDF", command: "watermark_pdf", verification: "pdf-watermark", view: "pdf-watermark", status: "implemented" },
     { id: "pdf-crop", title: "Crop PDF", shortTitle: "Crop", blurb: "Hide content outside a selected page rectangle.", symbol: "crop", tint: "#10b981", category: "PDF", command: "crop_pdf", verification: "pdf-crop", view: "pdf-crop", status: "implemented" },
     { id: "pdf-protect", title: "Protect PDF", shortTitle: "Protect", blurb: "Add a password so only you can open a PDF.", symbol: "lock", tint: "#ef4444", category: "PDF", command: "protect_pdf", verification: "protect-pdf", view: "pdf-protect", status: "implemented" },
     pdf("images-to-pdf", "Images to PDF", "Images to PDF", "Turn photos and scans into one PDF, including HEIC files.", "photo", "#3b82f6", "images_to_pdf", "images-to-pdf"),
@@ -23,7 +23,7 @@ export const UtilityRegistry: ToolDefinition[] = [
     pdf("pdf-remove-pages", "Remove PDF Pages", "Remove Pages", "Delete selected pages while keeping the rest in order.", "file-minus", "#92400e", "remove_pdf_pages", "pdf-remove-pages"),
     pdf("pdf-extract-pages", "Extract PDF Pages", "Extract Pages", "Pull selected page ranges into a new PDF.", "file-search", "#6366f1", "extract_pdf_pages", "pdf-extract-pages"),
     { id: "pdf-organize", title: "Organize PDF", shortTitle: "Organize", blurb: "Reorder PDF pages and save an organized copy.", symbol: "layout-grid", tint: "#06b6d4", category: "PDF", command: "organize_pdf", verification: "pdf-organize", view: "pdf-organize", status: "implemented" },
-    pdf("pdf-compress", "Compress PDF", "Compress", "Shrink scan-heavy PDFs by rasterizing pages as JPEG.", "file-download", "#10b981", "compress_pdf", "pdf-compress"),
+    { id: "pdf-compress", title: "Compress PDF", shortTitle: "Compress", blurb: "Shrink PDF stream data without changing page geometry.", symbol: "file-download", tint: "#10b981", category: "PDF", command: "compress_pdf", verification: "pdf-compress", view: "pdf-compress", status: "implemented" },
     { id: "heic-convert", title: "Convert Image Format", shortTitle: "Convert", blurb: "Convert HEIC to PNG, JPEG, WebP, and back.", symbol: "arrows-exchange", tint: "#3b82f6", category: "Images", command: "convert_images", verification: "convert-image-format", view: "image-convert", status: "implemented" },
     { id: "compress", title: "Compress Images", shortTitle: "Compress", blurb: "Shrink image files losslessly or trade quality for size.", symbol: "file-download", tint: "#22c55e", category: "Images", command: "compress_images", verification: "compress-images", view: "image-compress", status: "implemented" },
     image("resize", "Resize Images", "Resize", "Scale images by pixels, percentage, or longest side.", "resize", "#a855f7", "resize_images", "resize-images"),

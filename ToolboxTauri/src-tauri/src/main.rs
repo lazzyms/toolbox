@@ -5,7 +5,7 @@ mod kit;
 
 use crate::kit::common::{JobOutcome, OutputLocation};
 use crate::kit::images::{ImageProcessor, Options as ImageOptions, OutputFormat};
-use crate::kit::pdf::{editor, metadata, PDFProcessor};
+use crate::kit::pdf::{editor, metadata, remaining, PDFProcessor};
 use crate::kit::contracts::{CompressImagesRequest, ConvertImagesRequest, PdfRequest};
 use crate::kit::common::batch_runner::BatchRunner;
 
@@ -83,6 +83,21 @@ async fn organize_pdf(request: editor::OrganizePdfRequest) -> Vec<JobOutcome> {
     BatchRunner::run(request.paths.clone(), |path| editor::organize(&request, path))
 }
 
+#[tauri::command]
+async fn add_page_numbers(request: remaining::PageOverlayRequest) -> Vec<JobOutcome> {
+    BatchRunner::run(request.paths.clone(), |path| remaining::add_page_numbers(&request, path))
+}
+
+#[tauri::command]
+async fn watermark_pdf(request: remaining::PageOverlayRequest) -> Vec<JobOutcome> {
+    BatchRunner::run(request.paths.clone(), |path| remaining::watermark(&request, path))
+}
+
+#[tauri::command]
+async fn compress_pdf(request: remaining::CompressPdfRequest) -> Vec<JobOutcome> {
+    BatchRunner::run(request.paths.clone(), |path| remaining::compress(&request, path))
+}
+
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
@@ -94,6 +109,9 @@ fn main() {
             crop_pdf,
             sign_pdf,
             organize_pdf
+            ,add_page_numbers,
+            watermark_pdf,
+            compress_pdf
         ])
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())

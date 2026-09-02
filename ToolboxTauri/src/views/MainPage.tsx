@@ -8,6 +8,7 @@ import { ImageConvertView } from './ImageConvertView';
 import { TablerIcon } from '../components/TablerIcon';
 import { PlannedToolView } from './PlannedToolView';
 import { PDFCropView, PDFOrganizeView, PDFSignView } from './PDFPageToolView';
+import { PDFSimpleToolView } from './PDFSimpleToolView';
 
 const views = {
     'pdf-unlock': PDFUnlockView,
@@ -15,6 +16,9 @@ const views = {
     'pdf-crop': PDFCropView,
     'pdf-sign': PDFSignView,
     'pdf-organize': PDFOrganizeView,
+    'pdf-page-numbers': (props) => <PDFSimpleToolView {...props} mode="pageNumbers" />,
+    'pdf-watermark': (props) => <PDFSimpleToolView {...props} mode="watermark" />,
+    'pdf-compress': (props) => <PDFSimpleToolView {...props} mode="compress" />,
     'image-compress': ImageCompressView,
     'image-convert': ImageConvertView,
     planned: PlannedToolView,
