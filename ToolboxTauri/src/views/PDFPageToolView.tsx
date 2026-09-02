@@ -29,28 +29,33 @@ export const PDFPageToolView = ({ utility, mode }: { utility: ToolDefinition; mo
                 return invoke<ToolResult>("organize_pdf", { request: { paths, pageOrder: document?.pages.map((page) => page.index) ?? [], deletePages: [], rotatePages: [], scope, outputLocation: "alongsideInput" } satisfies OrganizePdfRequest });
             }}
         >
-            {({ files, run, loading }) => {
-                useEffect(() => {
-                    const path = files[0];
-                    if (!path) { setDocument(null); return; }
-                    invoke<PdfDocument>("inspect_pdf", { request: { path } }).then((metadata) => {
-                        setDocument(metadata);
-                        setState(initialState);
-                        const page = metadata.pages[0];
-                        if (page) setRectangle({ x: 0, y: 0, width: page.width, height: page.height });
-                    }).catch(() => setDocument(null));
-                }, [files]);
-
-                return (
-                    <div className="space-y-4">
-                        {document ? <PdfEditor document={document} state={state} onStateChange={setState} /> : <p className="text-sm text-slate-500">Select a PDF to open the editor.</p>}
-                        {mode === "sign" && <input aria-label="Typed signature" value={text} onChange={(event) => setText(event.target.value)} className="rounded border px-3 py-2" />}
-                        <button type="button" disabled={loading || files.length === 0 || !document} onClick={run} className="rounded-lg bg-blue-600 px-6 py-2 font-medium text-white disabled:opacity-50">{utility.shortTitle}</button>
-                    </div>
-                );
-            }}
+            {({ files, run, loading }) => <PDFPageToolContent files={files} run={run} loading={loading} utility={utility} mode={mode} document={document} setDocument={setDocument} state={state} setState={setState} text={text} setText={setText} setRectangle={setRectangle} />}
         </ToolScaffold>
     );
+};
+
+const PDFPageToolContent = ({ files, run, loading, utility, mode, document, setDocument, state, setState, text, setText, setRectangle }: {
+    files: string[]; run: () => Promise<void>; loading: boolean; utility: ToolDefinition; mode: Mode;
+    document: PdfDocument | null; setDocument: (document: PdfDocument | null) => void; state: PdfEditorState;
+    setState: (state: PdfEditorState) => void; text: string; setText: (text: string) => void;
+    setRectangle: (rectangle: { x: number; y: number; width: number; height: number }) => void;
+}) => {
+    useEffect(() => {
+        const path = files[0];
+        if (!path) { setDocument(null); return; }
+        invoke<PdfDocument>("inspect_pdf", { request: { path } }).then((metadata) => {
+            setDocument(metadata);
+            setState(initialState);
+            const page = metadata.pages[0];
+            if (page) setRectangle({ x: 0, y: 0, width: page.width, height: page.height });
+        }).catch(() => setDocument(null));
+    }, [files, setDocument, setState, setRectangle]);
+
+    return <div className="space-y-4">
+        {document ? <PdfEditor document={document} state={state} onStateChange={setState} /> : <p className="text-sm text-slate-500">Select a PDF to open the editor.</p>}
+        {mode === "sign" && <input aria-label="Typed signature" value={text} onChange={(event) => setText(event.target.value)} className="rounded border px-3 py-2" />}
+        <button type="button" disabled={loading || files.length === 0 || !document} onClick={run} className="rounded-lg bg-blue-600 px-6 py-2 font-medium text-white disabled:opacity-50">{utility.shortTitle}</button>
+    </div>;
 };
 
 export const PDFCropView = (props: { utility: ToolDefinition }) => <PDFPageToolView {...props} mode="crop" />;
