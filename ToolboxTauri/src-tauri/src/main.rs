@@ -118,6 +118,26 @@ async fn split_pdf(request: remaining::PageSelectionRequest) -> Vec<JobOutcome> 
     BatchRunner::run(request.paths.clone(), |path| remaining::split(path, &request.output_location))
 }
 
+#[tauri::command]
+async fn pdf_to_images(request: remaining::PdfToImagesRequest) -> Vec<JobOutcome> {
+    BatchRunner::run(request.paths.clone(), |path| remaining::to_images(&request, path))
+}
+
+#[tauri::command]
+async fn pdf_to_text(request: remaining::PdfToTextRequest) -> Vec<JobOutcome> {
+    BatchRunner::run(request.paths.clone(), |path| remaining::to_text(&request, path))
+}
+
+#[tauri::command]
+async fn extract_pdf_images(request: remaining::PdfToTextRequest) -> Vec<JobOutcome> {
+    BatchRunner::run(request.paths.clone(), |path| remaining::extract_images(&request, path))
+}
+
+#[tauri::command]
+async fn images_to_pdf(request: remaining::ImagesToPdfRequest) -> Vec<JobOutcome> {
+    vec![remaining::images_to_pdf(&request)]
+}
+
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
@@ -135,7 +155,11 @@ fn main() {
             remove_pdf_pages,
             extract_pdf_pages
             ,merge_pdfs,
-            split_pdf
+            split_pdf,
+            pdf_to_images,
+            pdf_to_text,
+            extract_pdf_images,
+            images_to_pdf
         ])
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
