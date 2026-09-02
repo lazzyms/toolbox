@@ -33,6 +33,9 @@ pub struct GifExtractRequest { pub paths: Vec<PathBuf>, pub output_location: Out
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TiffRequest { pub paths: Vec<PathBuf>, pub output_location: OutputLocation }
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetadataRequest { pub paths: Vec<PathBuf>, pub output_location: OutputLocation }
 
 pub fn resize(request: &ResizeRequest, input: PathBuf) -> JobOutcome { transform(request.paths.as_slice(), input, &request.output_location, "-resized", |image| { if request.width == 0 || request.height == 0 { return Err("Image dimensions must be positive.".to_string()); } Ok(image.resize_exact(request.width, request.height, image::imageops::FilterType::Lanczos3)) }) }
 pub fn rotate(request: &RotateRequest, input: PathBuf) -> JobOutcome { transform(request.paths.as_slice(), input, &request.output_location, "-rotated", |image| { Ok(match request.degrees.rem_euclid(360) { 90 => image.rotate90(), 180 => image.rotate180(), 270 => image.rotate270(), 0 => image, _ => return Err("Rotation must be 0, 90, 180, or 270 degrees.".to_string()) }) }) }
@@ -70,6 +73,7 @@ pub fn gif_extract(request: &GifExtractRequest, input: PathBuf) -> JobOutcome {
 }
 
 pub fn tiff(request: &TiffRequest, input: PathBuf) -> JobOutcome { transform(&request.paths, input, &request.output_location, "-tiff", |image| Ok(image)) }
+pub fn strip_metadata(request: &MetadataRequest, input: PathBuf) -> JobOutcome { transform(&request.paths, input, &request.output_location, "-stripped", |image| Ok(image)) }
 
 fn transform<F>(_: &[PathBuf], input: PathBuf, location: &OutputLocation, suffix: &str, edit: F) -> JobOutcome where F: FnOnce(DynamicImage) -> Result<DynamicImage, String> {
     let image = match image::open(&input) { Ok(image) => image, Err(error) => return failure(input, format!("Could not read image: {error}")) };

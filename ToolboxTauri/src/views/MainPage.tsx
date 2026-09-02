@@ -15,6 +15,7 @@ import { PDFConversionView } from './PDFConversionView';
 import { ImageGeometryView } from './ImageGeometryView';
 import { ImageEffectView } from './ImageEffectView';
 import { ImageFormatView } from './ImageFormatView';
+import { ImageMetadataView } from './ImageMetadataView';
 
 const views = {
     'pdf-unlock': PDFUnlockView,
@@ -42,6 +43,7 @@ const views = {
     'gif-create': (props) => <ImageFormatView {...props} mode="gif-create" />,
     'gif-extract': (props) => <ImageFormatView {...props} mode="gif-extract" />,
     'tiff-pages': (props) => <ImageFormatView {...props} mode="tiff" />,
+    'image-metadata': ImageMetadataView,
     'image-compress': ImageCompressView,
     'image-convert': ImageConvertView,
     planned: PlannedToolView,
