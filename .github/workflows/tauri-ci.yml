@@ -9,7 +9,7 @@ name: Tauri Build
 on:
   push:
     branches:
-      - tauri-port
+      - tauri-port-ci
       - 'ci/**'
   workflow_dispatch:
 

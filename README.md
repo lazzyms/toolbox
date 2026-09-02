@@ -50,16 +50,15 @@ That's once per machine; afterwards it's a normal double-click. (See
 
 ## Install the cross-platform preview
 
-The Tauri build runs on macOS and Windows. It is currently published as unsigned
-CI artifacts, not as a stable GitHub Release.
+The Tauri build runs on macOS and Windows. Each push to `tauri-port` publishes a
+signed GitHub Release with update metadata for both platforms.
 
-1. Open the [Tauri Build workflow](https://github.com/lazzyms/toolbox/actions/workflows/tauri-ci.yml).
-2. Select the latest successful run.
-3. Download the artifact for your platform.
+Open the [Tauri releases](https://github.com/lazzyms/toolbox/releases?q=tauri-v)
+and download the installer for your platform.
 
 ### macOS
 
-1. Open the downloaded artifact and then open the `.dmg` file.
+1. Open the downloaded `.dmg` file.
 2. Drag **Toolbox** to **Applications**.
 3. In Applications, Control-click **Toolbox**, choose **Open**, and choose **Open** again.
 
@@ -68,11 +67,10 @@ macOS asks for this confirmation because the preview build is not notarized.
 ### Windows
 
 1. Open the downloaded artifact.
-2. Run the `.exe` installer in the `nsis` folder.
+2. Run the `.exe` installer.
 3. If Windows SmartScreen appears, choose **More info**, then **Run anyway**.
 
-The preview installer is unsigned. The installer includes qpdf, which the PDF
-protection tool uses.
+The installer includes qpdf, which the PDF protection tool uses.
 
 ## Updates
 
@@ -85,6 +83,10 @@ Every download is verified against an Ed25519 public key baked into the app bund
 (`SUPublicEDKey` in `Resources/Info.plist`) before anything is installed. The matching
 private key exists only in the maintainer's Keychain, so publishing an update requires
 that key — a compromised GitHub account alone can't push code to installed copies.
+
+The Tauri port checks its signed GitHub update manifest shortly after launch. If a
+new version is available, it asks to download and install it; Windows restarts via
+the installer and macOS relaunches the app after installation.
 
 ### Cutting a release
 

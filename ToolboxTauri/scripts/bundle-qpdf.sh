@@ -135,3 +135,15 @@ echo "bundle-qpdf: embedded self-contained qpdf -> $BIN_DIR"
 VERSION="$("$BIN_DIR/$QPDF_NAME" --version 2>/dev/null | head -1)"
 [[ -n "$VERSION" ]] || { echo "bundle-qpdf: qpdf --version failed" >&2; exit 1; }
 echo "$VERSION"
+
+# Tauri creates the updater archive before this script injects qpdf. Rebuild it
+# after injection so an update is as self-contained as a fresh install, then
+# sign the exact archive that will be published. Local unsigned builds keep the
+# normal bundle-only behavior.
+if [[ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
+  ARCHIVE="$APP.tar.gz"
+  tar -czf "$ARCHIVE" -C "$(dirname "$APP")" "$(basename "$APP")"
+  TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" \
+    npm run tauri signer sign "$ARCHIVE"
+  echo "bundle-qpdf: rebuilt and signed updater archive -> $ARCHIVE"
+fi
