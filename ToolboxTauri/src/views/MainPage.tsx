@@ -7,10 +7,14 @@ import { ImageCompressView } from './ImageCompressView';
 import { ImageConvertView } from './ImageConvertView';
 import { TablerIcon } from '../components/TablerIcon';
 import { PlannedToolView } from './PlannedToolView';
+import { PDFCropView, PDFOrganizeView, PDFSignView } from './PDFPageToolView';
 
 const views = {
     'pdf-unlock': PDFUnlockView,
     'pdf-protect': PDFProtectView,
+    'pdf-crop': PDFCropView,
+    'pdf-sign': PDFSignView,
+    'pdf-organize': PDFOrganizeView,
     'image-compress': ImageCompressView,
     'image-convert': ImageConvertView,
     planned: PlannedToolView,

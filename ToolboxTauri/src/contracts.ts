@@ -31,7 +31,7 @@ export interface ToolDefinition {
     status: ToolStatus;
     command: string;
     verification: string;
-    view: "pdf-unlock" | "pdf-protect" | "image-compress" | "image-convert" | "planned";
+    view: "pdf-unlock" | "pdf-protect" | "pdf-crop" | "pdf-sign" | "pdf-organize" | "image-compress" | "image-convert" | "planned";
 }
 
 export interface ToolRequest {

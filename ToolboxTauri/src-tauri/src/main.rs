@@ -5,7 +5,7 @@ mod kit;
 
 use crate::kit::common::{JobOutcome, OutputLocation};
 use crate::kit::images::{ImageProcessor, Options as ImageOptions, OutputFormat};
-use crate::kit::pdf::{metadata, PDFProcessor};
+use crate::kit::pdf::{editor, metadata, PDFProcessor};
 use crate::kit::contracts::{CompressImagesRequest, ConvertImagesRequest, PdfRequest};
 use crate::kit::common::batch_runner::BatchRunner;
 
@@ -68,6 +68,21 @@ fn inspect_pdf(request: InspectPdfRequest) -> Result<metadata::PdfDocumentMetada
     metadata::inspect(&request.path)
 }
 
+#[tauri::command]
+async fn crop_pdf(request: editor::CropPdfRequest) -> Vec<JobOutcome> {
+    BatchRunner::run(request.paths.clone(), |path| editor::crop(&request, path))
+}
+
+#[tauri::command]
+async fn sign_pdf(request: editor::SignPdfRequest) -> Vec<JobOutcome> {
+    BatchRunner::run(request.paths.clone(), |path| editor::sign(&request, path))
+}
+
+#[tauri::command]
+async fn organize_pdf(request: editor::OrganizePdfRequest) -> Vec<JobOutcome> {
+    BatchRunner::run(request.paths.clone(), |path| editor::organize(&request, path))
+}
+
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
@@ -75,7 +90,10 @@ fn main() {
             protect_pdf,
             compress_images,
             convert_images,
-            inspect_pdf
+            inspect_pdf,
+            crop_pdf,
+            sign_pdf,
+            organize_pdf
         ])
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())

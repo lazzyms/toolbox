@@ -1,4 +1,5 @@
 pub mod metadata;
+pub mod editor;
 
 use std::path::PathBuf;
 use std::process::Command;
