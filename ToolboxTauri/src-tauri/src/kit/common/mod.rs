@@ -1,21 +1,8 @@
 pub mod batch_runner;
 
-use serde::{Serialize, Deserialize};
 use std::path::PathBuf;
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct JobOutcome {
-    pub input_path: PathBuf,
-    pub output_paths: Vec<PathBuf>,
-    pub detail: String,
-    pub failure: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum OutputLocation {
-    AlongsideInput,
-    CustomFolder,
-}
+pub use crate::kit::contracts::JobOutcome;
+pub use crate::kit::contracts::OutputLocation;
 
 pub struct OutputNaming;
 
@@ -25,11 +12,11 @@ impl OutputNaming {
         location: &OutputLocation,
         suffix: &str,
         extension: &str,
-        custom_folder: Option<&PathBuf>,
+        _custom_folder: Option<&PathBuf>,
     ) -> PathBuf {
         let directory = match location {
             OutputLocation::AlongsideInput => input_path.parent().unwrap_or_else(|| std::path::Path::new(".")),
-            OutputLocation::CustomFolder => custom_folder.expect("Custom folder must be provided"),
+            OutputLocation::CustomFolder(folder) => folder,
         };
 
         let stem = input_path.file_stem().and_then(|s| s.to_str()).unwrap_or("");

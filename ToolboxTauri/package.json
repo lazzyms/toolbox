@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "check:matrix": "node scripts/check-tool-matrix.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
   },

@@ -91,6 +91,10 @@ jobs:
         run: cargo test
         working-directory: ToolboxTauri/src-tauri
 
+      - name: Verify the tool matrix
+        run: npm run check:matrix
+        working-directory: ToolboxTauri
+
       - name: Build unsigned macOS app
         if: runner.os == 'macOS'
         run: npm run tauri build

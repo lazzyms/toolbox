@@ -1,0 +1,41 @@
+export type ToolCategory = "PDF" | "Images";
+
+export type ToolStatus = "implemented" | "planned";
+
+export type OutputLocation = "alongside-input" | "custom-folder";
+
+export type JobState = "running" | "success" | "mixed" | "failure";
+
+export interface JobOutcome {
+    inputPath: string;
+    outputPaths: string[];
+    detail: string;
+    failure: string | null;
+}
+
+export type ToolResult = JobOutcome[];
+
+export interface Progress {
+    completed: number;
+    total: number;
+}
+
+export interface ToolDefinition {
+    id: string;
+    title: string;
+    shortTitle: string;
+    blurb: string;
+    symbol: string;
+    tint: string;
+    category: ToolCategory;
+    status: ToolStatus;
+    command: string;
+    verification: string;
+    view: "pdf-unlock" | "pdf-protect" | "image-compress" | "image-convert" | "planned";
+}
+
+export interface ToolRequest {
+    paths: string[];
+    outputLocation?: OutputLocation;
+    customFolder?: string;
+}
