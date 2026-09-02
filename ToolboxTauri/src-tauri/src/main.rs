@@ -144,6 +144,10 @@ async fn resize_images(request: tools::ResizeRequest) -> Vec<JobOutcome> { Batch
 async fn rotate_images(request: tools::RotateRequest) -> Vec<JobOutcome> { BatchRunner::run(request.paths.clone(), |path| tools::rotate(&request, path)) }
 #[tauri::command]
 async fn crop_images(request: tools::CropRequest) -> Vec<JobOutcome> { BatchRunner::run(request.paths.clone(), |path| tools::crop(&request, path)) }
+#[tauri::command]
+async fn adjust_image_tone(request: tools::ToneRequest) -> Vec<JobOutcome> { BatchRunner::run(request.paths.clone(), |path| tools::tone(&request, path)) }
+#[tauri::command]
+async fn watermark_images(request: tools::WatermarkRequest) -> Vec<JobOutcome> { BatchRunner::run(request.paths.clone(), |path| tools::watermark(&request, path)) }
 
 fn main() {
     tauri::Builder::default()
@@ -170,6 +174,8 @@ fn main() {
             resize_images,
             rotate_images,
             crop_images
+            ,adjust_image_tone,
+            watermark_images
         ])
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())

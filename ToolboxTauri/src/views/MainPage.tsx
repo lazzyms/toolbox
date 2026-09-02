@@ -13,6 +13,7 @@ import { PDFSelectionView } from './PDFSelectionView';
 import { PDFPathsView } from './PDFPathsView';
 import { PDFConversionView } from './PDFConversionView';
 import { ImageGeometryView } from './ImageGeometryView';
+import { ImageEffectView } from './ImageEffectView';
 
 const views = {
     'pdf-unlock': PDFUnlockView,
@@ -34,6 +35,8 @@ const views = {
     'image-resize': (props) => <ImageGeometryView {...props} mode="resize" />,
     'image-rotate': (props) => <ImageGeometryView {...props} mode="rotate" />,
     'image-crop': (props) => <ImageGeometryView {...props} mode="crop" />,
+    'image-watermark': (props) => <ImageEffectView {...props} mode="watermark" />,
+    'image-tone': (props) => <ImageEffectView {...props} mode="tone" />,
     'image-compress': ImageCompressView,
     'image-convert': ImageConvertView,
     planned: PlannedToolView,
