@@ -9,6 +9,7 @@ import { TablerIcon } from '../components/TablerIcon';
 import { PlannedToolView } from './PlannedToolView';
 import { PDFCropView, PDFOrganizeView, PDFSignView } from './PDFPageToolView';
 import { PDFSimpleToolView } from './PDFSimpleToolView';
+import { PDFSelectionView } from './PDFSelectionView';
 
 const views = {
     'pdf-unlock': PDFUnlockView,
@@ -19,6 +20,8 @@ const views = {
     'pdf-page-numbers': (props) => <PDFSimpleToolView {...props} mode="pageNumbers" />,
     'pdf-watermark': (props) => <PDFSimpleToolView {...props} mode="watermark" />,
     'pdf-compress': (props) => <PDFSimpleToolView {...props} mode="compress" />,
+    'pdf-remove-pages': (props) => <PDFSelectionView {...props} mode="remove" />,
+    'pdf-extract-pages': (props) => <PDFSelectionView {...props} mode="extract" />,
     'image-compress': ImageCompressView,
     'image-convert': ImageConvertView,
     planned: PlannedToolView,

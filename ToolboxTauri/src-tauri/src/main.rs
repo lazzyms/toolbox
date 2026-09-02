@@ -98,6 +98,16 @@ async fn compress_pdf(request: remaining::CompressPdfRequest) -> Vec<JobOutcome>
     BatchRunner::run(request.paths.clone(), |path| remaining::compress(&request, path))
 }
 
+#[tauri::command]
+async fn remove_pdf_pages(request: remaining::PageSelectionRequest) -> Vec<JobOutcome> {
+    BatchRunner::run(request.paths.clone(), |path| remaining::remove_pages(&request, path))
+}
+
+#[tauri::command]
+async fn extract_pdf_pages(request: remaining::PageSelectionRequest) -> Vec<JobOutcome> {
+    BatchRunner::run(request.paths.clone(), |path| remaining::extract_pages(&request, path))
+}
+
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
@@ -111,7 +121,9 @@ fn main() {
             organize_pdf
             ,add_page_numbers,
             watermark_pdf,
-            compress_pdf
+            compress_pdf,
+            remove_pdf_pages,
+            extract_pdf_pages
         ])
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())

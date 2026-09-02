@@ -1,0 +1,14 @@
+import { useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { ToolScaffold } from "../components/ToolScaffold";
+import type { ToolDefinition, ToolResult } from "../contracts";
+
+export const PDFSelectionView = ({ utility, mode }: { utility: ToolDefinition; mode: "remove" | "extract" }) => {
+    const [pages, setPages] = useState("1");
+    return <ToolScaffold utility={utility} onRun={(paths) => {
+        const selected = pages.split(",").map((page) => Number(page.trim()) - 1).filter((page) => Number.isInteger(page) && page >= 0);
+        return invoke<ToolResult>(mode === "remove" ? "remove_pdf_pages" : "extract_pdf_pages", { request: { paths, pages: selected, outputLocation: "alongsideInput" } });
+    }}>
+        {({ files, run, loading }) => <div className="space-y-4"><input aria-label="Page numbers" value={pages} onChange={(event) => setPages(event.target.value)} className="rounded border px-3 py-2" placeholder="1, 3, 5" /><button type="button" disabled={loading || files.length === 0} onClick={run} className="rounded-lg bg-blue-600 px-6 py-2 font-medium text-white disabled:opacity-50">{utility.shortTitle}</button></div>}
+    </ToolScaffold>;
+};

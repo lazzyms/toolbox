@@ -19,6 +19,14 @@ pub struct CompressPdfRequest {
     pub output_location: OutputLocation,
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PageSelectionRequest {
+    pub paths: Vec<PathBuf>,
+    pub pages: Vec<usize>,
+    pub output_location: OutputLocation,
+}
+
 pub fn add_page_numbers(request: &PageOverlayRequest, input: PathBuf) -> JobOutcome {
     overlay(request, input, "-numbered", |page_number, width, height| {
         format!("BT /Fnum 12 Tf {} {} Td ({}) Tj ET", width - 50.0, 24.0_f32.min(height / 2.0), page_number)
@@ -37,6 +45,31 @@ pub fn compress(request: &CompressPdfRequest, input: PathBuf) -> JobOutcome {
     let _quality = request.quality.clamp(1, 100);
     document.compress();
     match document.save(&output) { Ok(_) => JobOutcome { input_path: input, output_paths: vec![output], detail: "PDF compressed".to_string(), failure: None }, Err(error) => failure(input, format!("Save failed: {error}")) }
+}
+
+pub fn remove_pages(request: &PageSelectionRequest, input: PathBuf) -> JobOutcome {
+    let output = OutputNaming::get_destination(&input, &request.output_location, "-pages-removed", "pdf");
+    let mut document = match Document::load(&input) { Ok(document) => document, Err(error) => return failure(input, error.to_string()) };
+    let pages = document.get_pages();
+    let delete = request.pages.iter().filter_map(|page| pages.get(&(*page as u32 + 1)).map(|_| *page as u32 + 1)).collect::<Vec<_>>();
+    if delete.len() >= pages.len() { return failure(input, "The output must keep at least one page.".to_string()); }
+    document.delete_pages(&delete);
+    save(document, input, output, "PDF pages removed")
+}
+
+pub fn extract_pages(request: &PageSelectionRequest, input: PathBuf) -> JobOutcome {
+    let output = OutputNaming::get_destination(&input, &request.output_location, "-extracted", "pdf");
+    let mut document = match Document::load(&input) { Ok(document) => document, Err(error) => return failure(input, error.to_string()) };
+    let pages = document.get_pages();
+    let keep = request.pages.iter().copied().filter(|page| *page < pages.len()).collect::<std::collections::BTreeSet<_>>();
+    let delete = (0..pages.len()).filter(|page| !keep.contains(page)).map(|page| page as u32 + 1).collect::<Vec<_>>();
+    if keep.is_empty() { return failure(input, "Select at least one page.".to_string()); }
+    document.delete_pages(&delete);
+    save(document, input, output, "PDF pages extracted")
+}
+
+fn save(mut document: Document, input: PathBuf, output: PathBuf, detail: &str) -> JobOutcome {
+    match document.save(&output) { Ok(_) => JobOutcome { input_path: input, output_paths: vec![output], detail: detail.to_string(), failure: None }, Err(error) => failure(input, format!("Save failed: {error}")) }
 }
 
 fn overlay<F>(request: &PageOverlayRequest, input: PathBuf, suffix: &str, content: F) -> JobOutcome
