@@ -5,7 +5,7 @@ mod kit;
 
 use crate::kit::common::{JobOutcome, OutputLocation};
 use crate::kit::images::{ImageProcessor, Options as ImageOptions, OutputFormat};
-use crate::kit::pdf::PDFProcessor;
+use crate::kit::pdf::{metadata, PDFProcessor};
 use crate::kit::contracts::{CompressImagesRequest, ConvertImagesRequest, PdfRequest};
 use crate::kit::common::batch_runner::BatchRunner;
 
@@ -57,13 +57,25 @@ async fn convert_images(request: ConvertImagesRequest) -> Vec<JobOutcome> {
     })
 }
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InspectPdfRequest {
+    path: std::path::PathBuf,
+}
+
+#[tauri::command]
+fn inspect_pdf(request: InspectPdfRequest) -> Result<metadata::PdfDocumentMetadata, String> {
+    metadata::inspect(&request.path)
+}
+
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             unlock_pdf,
             protect_pdf,
             compress_images,
-            convert_images
+            convert_images,
+            inspect_pdf
         ])
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())

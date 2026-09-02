@@ -1,3 +1,5 @@
+pub mod metadata;
+
 use std::path::PathBuf;
 use std::process::Command;
 
