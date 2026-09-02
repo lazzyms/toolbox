@@ -24,9 +24,9 @@ export const PDFPageToolView = ({ utility, mode }: { utility: ToolDefinition; mo
                     return invoke<ToolResult>("crop_pdf", { request: { paths, rectangle, scope, outputLocation: "alongsideInput" } satisfies CropPdfRequest });
                 }
                 if (mode === "sign") {
-                    return invoke<ToolResult>("sign_pdf", { request: { paths, page: state.currentPage, text, rectangle, scope, outputLocation: "alongsideInput" } satisfies SignPdfRequest });
+                    return invoke<ToolResult>("sign_pdf", { request: { paths, page: state.currentPage, text, signaturePath: null, rectangle, scope, outputLocation: "alongsideInput" } satisfies SignPdfRequest });
                 }
-                return invoke<ToolResult>("organize_pdf", { request: { paths, pageOrder: document?.pages.map((page) => page.index) ?? [], scope, outputLocation: "alongsideInput" } satisfies OrganizePdfRequest });
+                return invoke<ToolResult>("organize_pdf", { request: { paths, pageOrder: document?.pages.map((page) => page.index) ?? [], deletePages: [], rotatePages: [], scope, outputLocation: "alongsideInput" } satisfies OrganizePdfRequest });
             }}
         >
             {({ files, run, loading }) => {

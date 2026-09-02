@@ -46,11 +46,14 @@ export interface CropPdfRequest {
 export interface SignPdfRequest extends CropPdfRequest {
     page: number;
     text: string;
+    signaturePath: string | null;
 }
 
 export interface OrganizePdfRequest {
     paths: string[];
     pageOrder: number[];
+    deletePages: number[];
+    rotatePages: { page: number; degrees: number }[];
     scope: PdfPageScope;
     outputLocation: "alongsideInput";
 }
