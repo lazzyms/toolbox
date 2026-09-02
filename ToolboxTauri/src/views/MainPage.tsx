@@ -72,6 +72,8 @@ export const MainPage = () => {
                         <button
                             key={tool.id}
                             onClick={() => setSelectedTool(tool)}
+                            aria-current={selectedTool?.id === tool.id ? 'page' : undefined}
+                            aria-label={`${tool.title}: ${tool.blurb}`}
                             className={`w-full text-left px-3 py-2 rounded-xl transition-all duration-200 flex items-center group ${
                                 selectedTool?.id === tool.id
                                 ? 'bg-blue-50 text-blue-700 shadow-sm'

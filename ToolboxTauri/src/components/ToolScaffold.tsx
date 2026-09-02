@@ -74,7 +74,16 @@ export const ToolScaffold = ({ utility, onRun, children }: ToolScaffoldProps) =>
             </div>
 
             <div
+                role="button"
+                tabIndex={0}
+                aria-label="Choose files to process"
                 onClick={browse}
+                onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        void browse();
+                    }
+                }}
                 className="flex-1 border-2 border-dashed border-slate-300 rounded-2xl p-8 flex flex-col items-center justify-center bg-slate-50 hover:border-blue-400 transition-colors cursor-pointer mb-6"
             >
                 <div className="text-center pointer-events-none">
@@ -101,7 +110,7 @@ export const ToolScaffold = ({ utility, onRun, children }: ToolScaffoldProps) =>
                         <div className="max-h-40 overflow-y-auto border rounded-lg bg-white p-2 space-y-1">
                             {files.map((f) => (
                                     <div key={f} className="text-xs text-slate-500 truncate p-1 border-b last:border-0">
-                                    {f.split('/').pop()}
+                                    {f.split(/[\\/]/).pop()}
                                 </div>
                             ))}
                         </div>
