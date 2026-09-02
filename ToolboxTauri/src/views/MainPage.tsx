@@ -10,6 +10,7 @@ import { PlannedToolView } from './PlannedToolView';
 import { PDFCropView, PDFOrganizeView, PDFSignView } from './PDFPageToolView';
 import { PDFSimpleToolView } from './PDFSimpleToolView';
 import { PDFSelectionView } from './PDFSelectionView';
+import { PDFPathsView } from './PDFPathsView';
 
 const views = {
     'pdf-unlock': PDFUnlockView,
@@ -22,6 +23,8 @@ const views = {
     'pdf-compress': (props) => <PDFSimpleToolView {...props} mode="compress" />,
     'pdf-remove-pages': (props) => <PDFSelectionView {...props} mode="remove" />,
     'pdf-extract-pages': (props) => <PDFSelectionView {...props} mode="extract" />,
+    'pdf-merge': (props) => <PDFPathsView {...props} mode="merge" />,
+    'pdf-split': (props) => <PDFPathsView {...props} mode="split" />,
     'image-compress': ImageCompressView,
     'image-convert': ImageConvertView,
     planned: PlannedToolView,

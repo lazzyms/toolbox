@@ -108,6 +108,16 @@ async fn extract_pdf_pages(request: remaining::PageSelectionRequest) -> Vec<JobO
     BatchRunner::run(request.paths.clone(), |path| remaining::extract_pages(&request, path))
 }
 
+#[tauri::command]
+async fn merge_pdfs(request: remaining::MergePdfRequest) -> Vec<JobOutcome> {
+    vec![remaining::merge(&request)]
+}
+
+#[tauri::command]
+async fn split_pdf(request: remaining::PageSelectionRequest) -> Vec<JobOutcome> {
+    BatchRunner::run(request.paths.clone(), |path| remaining::split(path, &request.output_location))
+}
+
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
@@ -124,6 +134,8 @@ fn main() {
             compress_pdf,
             remove_pdf_pages,
             extract_pdf_pages
+            ,merge_pdfs,
+            split_pdf
         ])
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())

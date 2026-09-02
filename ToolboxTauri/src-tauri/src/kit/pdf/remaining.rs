@@ -1,5 +1,6 @@
 use lopdf::{dictionary, Document, Object};
 use std::path::PathBuf;
+use std::process::Command;
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 
@@ -25,6 +26,29 @@ pub struct PageSelectionRequest {
     pub paths: Vec<PathBuf>,
     pub pages: Vec<usize>,
     pub output_location: OutputLocation,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergePdfRequest {
+    pub paths: Vec<PathBuf>,
+    pub output_location: OutputLocation,
+}
+
+pub fn merge(request: &MergePdfRequest) -> JobOutcome {
+    let Some(first) = request.paths.first().cloned() else { return failure(PathBuf::new(), "Select at least one PDF.".to_string()); };
+    let output = OutputNaming::get_destination(&first, &request.output_location, "-merged", "pdf");
+    let Some(qpdf) = qpdf() else { return failure(first, "qpdf is required to merge PDFs but was not found.".to_string()); };
+    let result = Command::new(qpdf).arg("--empty").arg("--pages").args(&request.paths).arg("--").arg(&output).output();
+    match result { Ok(result) if result.status.success() => JobOutcome { input_path: first, output_paths: vec![output], detail: "PDFs merged".to_string(), failure: None }, Ok(result) => failure(first, stderr(result, "qpdf failed to merge the PDFs.")), Err(error) => failure(first, format!("Could not run qpdf: {error}")) }
+}
+
+pub fn split(input: PathBuf, location: &OutputLocation) -> JobOutcome {
+    let output = OutputNaming::get_destination(&input, location, "-split", "pdf");
+    let Some(qpdf) = qpdf() else { return failure(input, "qpdf is required to split PDFs but was not found.".to_string()); };
+    let pattern = output.with_file_name(format!("{}-page-%d.pdf", output.file_stem().and_then(|stem| stem.to_str()).unwrap_or("output")));
+    let result = Command::new(qpdf).arg(&input).arg("--split-pages").arg(&pattern).output();
+    match result { Ok(result) if result.status.success() => JobOutcome { input_path: input, output_paths: vec![pattern], detail: "PDF split".to_string(), failure: None }, Ok(result) => failure(input, stderr(result, "qpdf failed to split the PDF.")), Err(error) => failure(input, format!("Could not run qpdf: {error}")) }
 }
 
 pub fn add_page_numbers(request: &PageOverlayRequest, input: PathBuf) -> JobOutcome {
@@ -98,4 +122,6 @@ where F: Fn(usize, f32, f32) -> String {
 }
 
 fn escape(text: &str) -> String { text.replace('\\', "\\\\").replace('(', "\\(").replace(')', "\\)") }
+fn qpdf() -> Option<PathBuf> { std::env::var_os("TOOLBOX_QPDF_PATH").map(PathBuf::from).filter(|path| path.is_file()).or_else(|| Command::new("qpdf").arg("--version").output().ok().filter(|result| result.status.success()).map(|_| PathBuf::from("qpdf"))) }
+fn stderr(result: std::process::Output, fallback: &str) -> String { String::from_utf8_lossy(&result.stderr).trim().lines().last().filter(|line| !line.is_empty()).unwrap_or(fallback).to_string() }
 fn failure(input_path: PathBuf, error: String) -> JobOutcome { JobOutcome { input_path, output_paths: vec![], detail: String::new(), failure: Some(error) } }
