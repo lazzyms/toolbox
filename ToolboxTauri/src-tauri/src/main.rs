@@ -148,6 +148,14 @@ async fn crop_images(request: tools::CropRequest) -> Vec<JobOutcome> { BatchRunn
 async fn adjust_image_tone(request: tools::ToneRequest) -> Vec<JobOutcome> { BatchRunner::run(request.paths.clone(), |path| tools::tone(&request, path)) }
 #[tauri::command]
 async fn watermark_images(request: tools::WatermarkRequest) -> Vec<JobOutcome> { BatchRunner::run(request.paths.clone(), |path| tools::watermark(&request, path)) }
+#[tauri::command]
+async fn generate_icon_set(request: tools::IconSetRequest) -> Vec<JobOutcome> { BatchRunner::run(request.paths.clone(), |path| tools::icon_set(&request, path)) }
+#[tauri::command]
+async fn create_gif(request: tools::GifCreateRequest) -> Vec<JobOutcome> { vec![tools::gif_create(&request)] }
+#[tauri::command]
+async fn extract_gif_frames(request: tools::GifExtractRequest) -> Vec<JobOutcome> { BatchRunner::run(request.paths.clone(), |path| tools::gif_extract(&request, path)) }
+#[tauri::command]
+async fn process_tiff_pages(request: tools::TiffRequest) -> Vec<JobOutcome> { BatchRunner::run(request.paths.clone(), |path| tools::tiff(&request, path)) }
 
 fn main() {
     tauri::Builder::default()
@@ -176,6 +184,10 @@ fn main() {
             crop_images
             ,adjust_image_tone,
             watermark_images
+            ,generate_icon_set,
+            create_gif,
+            extract_gif_frames,
+            process_tiff_pages
         ])
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())

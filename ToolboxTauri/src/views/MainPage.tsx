@@ -14,6 +14,7 @@ import { PDFPathsView } from './PDFPathsView';
 import { PDFConversionView } from './PDFConversionView';
 import { ImageGeometryView } from './ImageGeometryView';
 import { ImageEffectView } from './ImageEffectView';
+import { ImageFormatView } from './ImageFormatView';
 
 const views = {
     'pdf-unlock': PDFUnlockView,
@@ -37,6 +38,10 @@ const views = {
     'image-crop': (props) => <ImageGeometryView {...props} mode="crop" />,
     'image-watermark': (props) => <ImageEffectView {...props} mode="watermark" />,
     'image-tone': (props) => <ImageEffectView {...props} mode="tone" />,
+    'image-icons': (props) => <ImageFormatView {...props} mode="icons" />,
+    'gif-create': (props) => <ImageFormatView {...props} mode="gif-create" />,
+    'gif-extract': (props) => <ImageFormatView {...props} mode="gif-extract" />,
+    'tiff-pages': (props) => <ImageFormatView {...props} mode="tiff" />,
     'image-compress': ImageCompressView,
     'image-convert': ImageConvertView,
     planned: PlannedToolView,

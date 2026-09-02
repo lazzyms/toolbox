@@ -31,7 +31,7 @@ export interface ToolDefinition {
     status: ToolStatus;
     command: string;
     verification: string;
-    view: "pdf-unlock" | "pdf-protect" | "pdf-crop" | "pdf-sign" | "pdf-organize" | "pdf-page-numbers" | "pdf-watermark" | "pdf-compress" | "pdf-remove-pages" | "pdf-extract-pages" | "pdf-merge" | "pdf-split" | "pdf-to-images" | "pdf-to-text" | "pdf-image-extract" | "images-to-pdf" | "image-resize" | "image-rotate" | "image-crop" | "image-compress" | "image-convert" | "image-watermark" | "image-tone" | "planned";
+    view: "pdf-unlock" | "pdf-protect" | "pdf-crop" | "pdf-sign" | "pdf-organize" | "pdf-page-numbers" | "pdf-watermark" | "pdf-compress" | "pdf-remove-pages" | "pdf-extract-pages" | "pdf-merge" | "pdf-split" | "pdf-to-images" | "pdf-to-text" | "pdf-image-extract" | "images-to-pdf" | "image-resize" | "image-rotate" | "image-crop" | "image-compress" | "image-convert" | "image-watermark" | "image-tone" | "image-icons" | "gif-create" | "gif-extract" | "tiff-pages" | "planned";
 }
 
 export interface ToolRequest {
