@@ -57,8 +57,12 @@ pub struct SignPdfRequest {
     pub text: String,
     pub signature_path: Option<PathBuf>,
     pub rectangle: PdfRect,
+    #[serde(default = "default_scope")]
+    pub scope: PageScope,
     pub output_location: OutputLocation,
 }
+
+fn default_scope() -> PageScope { PageScope::All }
 
 pub fn crop(request: &CropPdfRequest, input: PathBuf) -> JobOutcome {
     transform_pdf(input, &request.output_location, "-cropped", |document, pages| {
@@ -106,8 +110,15 @@ pub fn organize(request: &OrganizePdfRequest, input: PathBuf) -> JobOutcome {
 pub fn sign(request: &SignPdfRequest, input: PathBuf) -> JobOutcome {
     transform_pdf(input, &request.output_location, "-signed", |document, pages| {
         validate_rect(&request.rectangle)?;
-        let Some(page_id) = pages.get(request.page).copied() else { return Err("Signature page is outside the document.".to_string()); };
+        let targets = match &request.scope {
+            PageScope::All => (0..pages.len()).collect::<Vec<_>>(),
+            PageScope::Selected { pages: selected } => selected.iter().copied().filter(|page| *page < pages.len()).collect(),
+        };
+        if targets.is_empty() { return Err("Select at least one page for the signature.".to_string()); }
+        if request.page >= pages.len() { return Err("Signature page is outside the document.".to_string()); }
         let stream = format!("BT /Fsig 24 Tf {} {} Td ({}) Tj ET", request.rectangle.x, request.rectangle.y, escape_text(&request.text));
+        for page_index in targets {
+        let page_id = pages[page_index];
         let (stream_id, resource_id, resource_name) = if let Some(path) = &request.signature_path {
             let (bytes, width, height) = signature_jpeg(path)?;
             let image_id = document.add_object(Object::Stream(lopdf::Stream::new(dictionary! {
@@ -119,7 +130,7 @@ pub fn sign(request: &SignPdfRequest, input: PathBuf) -> JobOutcome {
             (document.add_object(Object::Stream(lopdf::Stream::new(dictionary! {}, content.into_bytes()))), image_id, "XObject")
         } else {
             let font_id = document.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
-            let content_id = document.add_object(Object::Stream(lopdf::Stream::new(dictionary! {}, stream.into_bytes())));
+            let content_id = document.add_object(Object::Stream(lopdf::Stream::new(dictionary! {}, stream.clone().into_bytes())));
             (content_id, font_id, "Font")
         };
         let page = document.get_dictionary_mut(page_id).map_err(|e| e.to_string())?;
@@ -133,10 +144,11 @@ pub fn sign(request: &SignPdfRequest, input: PathBuf) -> JobOutcome {
             resources.get_mut(b"XObject").map_err(|e| e.to_string())?.as_dict_mut().map_err(|e| e.to_string())?.set("Isig", resource_id);
         }
         let contents = page.get_mut(b"Contents");
-        let Ok(contents) = contents else { page.set("Contents", Object::Reference(stream_id)); return Ok(()); };
-        if let Object::Reference(_) = contents { return Ok(()); }
+        let Ok(contents) = contents else { page.set("Contents", Object::Reference(stream_id)); continue; };
+        if let Object::Reference(_) = contents { continue; }
         let existing = contents.as_array().map_err(|e| e.to_string())?.to_vec();
         *contents = Object::Array(existing.into_iter().chain([Object::Reference(stream_id)]).collect());
+        }
         Ok(())
     })
 }
