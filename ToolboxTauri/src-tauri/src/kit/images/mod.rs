@@ -1,8 +1,11 @@
 use std::path::PathBuf;
+use std::fs::File;
+use std::io::BufReader;
 
 use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::PngEncoder;
 use image::ImageEncoder;
+use image::AnimationDecoder;
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::ToolError;
@@ -136,6 +139,12 @@ impl ImageProcessor {
             };
         }
 
+        if options.target_format.is_some() {
+            if let Err(error) = reject_animated_input(&input_path) {
+                return JobOutcome { input_path, output_paths: vec![], detail: String::new(), failure: Some(ToolError::processing(error)) };
+            }
+        }
+
         let img = match load_image(&input_path) {
             Ok(i) => i,
             Err(e) => {
@@ -182,6 +191,11 @@ impl ImageProcessor {
             };
         }
 
+        if let Err(error) = validate_encoded_output(&output_path, img.width(), img.height(), format) {
+            let _ = std::fs::remove_file(&output_path);
+            return JobOutcome { input_path, output_paths: vec![], detail: String::new(), failure: Some(ToolError::processing(error)) };
+        }
+
         let new_bytes = std::fs::metadata(&output_path).map(|m| m.len()).unwrap_or(0);
 
         if options.keep_smaller_original && new_bytes >= original_bytes {
@@ -215,6 +229,23 @@ impl ImageProcessor {
             failure: None,
         }
     }
+}
+
+fn reject_animated_input(path: &std::path::Path) -> Result<(), String> {
+    if lower_ext(path).as_deref() != Some("gif") { return Ok(()); }
+    let file = File::open(path).map_err(|error| format!("Could not inspect GIF sequence: {error}"))?;
+    let decoder = image::codecs::gif::GifDecoder::new(BufReader::new(file)).map_err(|error| format!("Could not inspect GIF sequence: {error}"))?;
+    let frames = decoder.into_frames().collect_frames().map_err(|error| format!("Could not inspect GIF frames: {error}"))?;
+    if frames.len() > 1 { return Err("Animated GIF conversion is unsupported because it would discard frames; extract frames first.".to_string()); }
+    Ok(())
+}
+
+fn validate_encoded_output(path: &std::path::Path, width: u32, height: u32, format: OutputFormat) -> Result<(), String> {
+    if !path.is_file() { return Err("Encoder did not produce an output container.".to_string()); }
+    if format == OutputFormat::Heic { return Ok(()); }
+    let output = image::open(path).map_err(|error| format!("Encoded output could not be decoded: {error}"))?;
+    if output.width() != width || output.height() != height { return Err("Encoded output dimensions do not match the source.".to_string()); }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -382,6 +413,21 @@ mod tests {
         assert_eq!(detect_format(std::path::Path::new("x.heic")), OutputFormat::Heic);
         assert_eq!(detect_format(std::path::Path::new("x.HEIC")), OutputFormat::Heic);
         assert_eq!(detect_format(std::path::Path::new("x.jpeg")), OutputFormat::Jpeg);
+    }
+
+    #[test]
+    fn conversion_rejects_animated_gifs_without_mutating_source() {
+        let src = temp_path("animated_conversion.gif");
+        let file = std::fs::File::create(&src).unwrap();
+        let mut encoder = image::codecs::gif::GifEncoder::new(file);
+        let frames = (0..2).map(|value| image::Frame::from_parts(image::RgbaImage::from_pixel(2, 2, Rgba([value * 100, 0, 0, 255])), 0, 0, image::Delay::from_numer_denom_ms(100, 1))).collect::<Vec<_>>();
+        encoder.encode_frames(frames).unwrap();
+        let before = std::fs::read(&src).unwrap();
+        let result = ImageProcessor::run(src.clone(), Options { target_format: Some(OutputFormat::Png), quality: 80, keep_smaller_original: false, suffix: "-converted".to_string(), output_location: OutputLocation::AlongsideInput });
+        assert!(result.failure.is_some());
+        assert_eq!(std::fs::read(&src).unwrap(), before);
+        cleanup(&result.output_paths);
+        let _ = std::fs::remove_file(src);
     }
 }
 pub mod tools;
