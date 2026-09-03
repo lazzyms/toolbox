@@ -7,7 +7,7 @@ import type { CropPdfRequest, OrganizePdfRequest, PdfDocument, PdfEditorState, S
 
 type Mode = "crop" | "sign" | "organize";
 
-const initialState: PdfEditorState = { currentPage: 0, selectedPages: [], scope: { kind: "all" }, layout: "vertical" };
+const initialState: PdfEditorState = { currentPage: 0, selectedPages: [], scope: { kind: "all" }, layout: "vertical", density: "comfortable", error: null };
 
 export const PDFPageToolView = ({ utility, mode }: { utility: ToolDefinition; mode: Mode }) => {
     const [document, setDocument] = useState<PdfDocument | null>(null);

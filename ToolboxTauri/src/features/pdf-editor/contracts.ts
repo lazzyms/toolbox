@@ -1,4 +1,5 @@
 export type EditorLayout = "vertical" | "horizontal";
+export type EditorDensity = "compact" | "comfortable";
 
 export type PageScope =
     | { kind: "all" }
@@ -20,6 +21,8 @@ export interface PdfEditorState {
     selectedPages: number[];
     scope: PageScope;
     layout: EditorLayout;
+    density: EditorDensity;
+    error: string | null;
 }
 
 export interface PreviewSize {
