@@ -30,6 +30,7 @@ pub struct CompressPdfRequest {
 pub struct PageSelectionRequest {
     pub paths: Vec<PathBuf>,
     pub pages: Vec<usize>,
+    #[serde(default)] pub page_ranges: Option<String>,
     pub output_location: OutputLocation,
 }
 
@@ -207,7 +208,8 @@ pub fn remove_pages(request: &PageSelectionRequest, input: PathBuf) -> JobOutcom
     let output = OutputNaming::get_destination(&input, &request.output_location, "-pages-removed", "pdf");
     let mut document = match Document::load(&input) { Ok(document) => document, Err(error) => return failure(input, error.to_string()) };
     let pages = document.get_pages();
-    let delete = request.pages.iter().filter_map(|page| pages.get(&(*page as u32 + 1)).map(|_| *page as u32 + 1)).collect::<Vec<_>>();
+    let selected = match selected_page_indices(request, pages.len()) { Ok(selected) => selected, Err(error) => return failure(input, error) };
+    let delete = selected.into_iter().map(|page| page as u32 + 1).collect::<Vec<_>>();
     if delete.len() >= pages.len() { return failure(input, "The output must keep at least one page.".to_string()); }
     document.delete_pages(&delete);
     save(document, input, output, "PDF pages removed")
@@ -217,11 +219,38 @@ pub fn extract_pages(request: &PageSelectionRequest, input: PathBuf) -> JobOutco
     let output = OutputNaming::get_destination(&input, &request.output_location, "-extracted", "pdf");
     let mut document = match Document::load(&input) { Ok(document) => document, Err(error) => return failure(input, error.to_string()) };
     let pages = document.get_pages();
-    let keep = request.pages.iter().copied().filter(|page| *page < pages.len()).collect::<std::collections::BTreeSet<_>>();
+    let keep = match selected_page_indices(request, pages.len()) { Ok(selected) => selected.into_iter().collect::<std::collections::BTreeSet<_>>(), Err(error) => return failure(input, error) };
     let delete = (0..pages.len()).filter(|page| !keep.contains(page)).map(|page| page as u32 + 1).collect::<Vec<_>>();
     if keep.is_empty() { return failure(input, "Select at least one page.".to_string()); }
     document.delete_pages(&delete);
     save(document, input, output, "PDF pages extracted")
+}
+
+fn selected_page_indices(request: &PageSelectionRequest, page_count: usize) -> Result<Vec<usize>, String> {
+    let Some(raw) = request.page_ranges.as_deref().filter(|value| !value.trim().is_empty()) else {
+        if request.pages.is_empty() { return Err("Enter at least one page or range, for example 1-3, 7.".to_string()); }
+        if request.pages.iter().any(|page| *page >= page_count) { return Err("A selected page is outside the document.".to_string()); }
+        return Ok(request.pages.clone());
+    };
+    let mut selected = std::collections::BTreeSet::new();
+    for token in raw.split(',').map(str::trim) {
+        if token.is_empty() { return Err("Page ranges cannot contain empty entries.".to_string()); }
+        let (start, end) = match token.split_once('-') {
+            Some((start, end)) => (parse_page_number(start)?, parse_page_number(end)?),
+            None => { let page = parse_page_number(token)?; (page, page) },
+        };
+        if start > end { return Err(format!("Page range {token} is reversed.")); }
+        if end > page_count { return Err(format!("Page range {token} is outside the document.")); }
+        selected.extend((start - 1)..end);
+    }
+    if selected.is_empty() { return Err("Select at least one page.".to_string()); }
+    Ok(selected.into_iter().collect())
+}
+
+fn parse_page_number(value: &str) -> Result<usize, String> {
+    let page = value.trim().parse::<usize>().map_err(|_| format!("Invalid page number: {value}."))?;
+    if page == 0 { return Err("Page numbers start at 1.".to_string()); }
+    Ok(page)
 }
 
 fn save(mut document: Document, input: PathBuf, output: PathBuf, detail: &str) -> JobOutcome {
@@ -258,3 +287,36 @@ fn qpdf() -> Option<PathBuf> { std::env::var_os("TOOLBOX_QPDF_PATH").map(PathBuf
 fn tool(variable: &str, command: &str) -> Option<PathBuf> { std::env::var_os(variable).map(PathBuf::from).filter(|path| path.is_file()).or_else(|| Command::new(command).arg("-h").output().ok().map(|_| PathBuf::from(command))) }
 fn stderr(result: std::process::Output, fallback: &str) -> String { String::from_utf8_lossy(&result.stderr).trim().lines().last().filter(|line| !line.is_empty()).unwrap_or(fallback).to_string() }
 fn failure(input_path: PathBuf, error: String) -> JobOutcome { JobOutcome::failure(input_path, ToolError::processing(error)) }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request(page_ranges: Option<&str>, pages: Vec<usize>) -> PageSelectionRequest {
+        PageSelectionRequest {
+            paths: vec![],
+            pages,
+            page_ranges: page_ranges.map(str::to_string),
+            output_location: OutputLocation::AlongsideInput,
+        }
+    }
+
+    #[test]
+    fn parses_ranges_in_document_order() {
+        let selected = selected_page_indices(&request(Some("1-3, 7"), vec![]), 7).unwrap();
+        assert_eq!(selected, vec![0, 1, 2, 6]);
+    }
+
+    #[test]
+    fn rejects_invalid_or_out_of_bounds_ranges() {
+        for input in ["", "1-3, nope", "0", "4"] {
+            assert!(selected_page_indices(&request(Some(input), vec![]), 3).is_err(), "{input}");
+        }
+    }
+
+    #[test]
+    fn supports_legacy_zero_based_page_selection() {
+        let selected = selected_page_indices(&request(None, vec![0, 2]), 3).unwrap();
+        assert_eq!(selected, vec![0, 2]);
+    }
+}
