@@ -117,7 +117,7 @@ async fn merge_pdfs(request: remaining::MergePdfRequest) -> Vec<JobOutcome> {
 
 #[tauri::command]
 async fn split_pdf(request: remaining::PageSelectionRequest) -> Vec<JobOutcome> {
-    BatchRunner::run(request.paths.clone(), |path| remaining::split(path, &request.output_location))
+    BatchRunner::run(request.paths.clone(), |path| remaining::split(&request, path))
 }
 
 #[tauri::command]
