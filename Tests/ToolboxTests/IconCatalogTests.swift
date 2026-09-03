@@ -2,8 +2,12 @@ import XCTest
 @testable import Toolbox
 
 final class IconCatalogTests: XCTestCase {
-    func testSidebarUsesTablerIconNames() {
-        XCTAssertEqual(Utility.all.first?.symbol, "lock-open")
-        XCTAssertTrue(Utility.all.allSatisfy { !$0.symbol.contains(".") })
+    func testRegistryKeepsFeaturePresentationText() {
+        XCTAssertEqual(Utility.all.first?.title, "Remove PDF Password")
+        XCTAssertTrue(Utility.all.allSatisfy { !$0.title.isEmpty && !$0.blurb.isEmpty })
+
+        let storedProperties = Mirror(reflecting: Utility.all[0]).children.compactMap(\.label)
+        XCTAssertFalse(storedProperties.contains("symbol"))
+        XCTAssertFalse(storedProperties.contains("tint"))
     }
 }

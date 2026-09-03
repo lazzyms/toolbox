@@ -88,7 +88,6 @@ struct OrganizeView: View {
     private func loadedHeader(for input: URL) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "doc.fill")
-                .foregroundStyle(utility.tint)
             Text(input.lastPathComponent)
                 .lineLimit(1)
                 .truncationMode(.middle)
