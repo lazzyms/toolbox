@@ -42,7 +42,12 @@ pub struct WatermarkRequest {
 pub struct IconSetRequest { pub paths: Vec<PathBuf>, pub sizes: Vec<u32>, pub output_location: OutputLocation }
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GifCreateRequest { pub paths: Vec<PathBuf>, pub output_location: OutputLocation }
+pub struct GifCreateRequest {
+    pub paths: Vec<PathBuf>,
+    #[serde(default = "default_gif_delay_ms")] pub frame_delay_ms: u32,
+    #[serde(default = "default_gif_loop")] pub loop_forever: bool,
+    pub output_location: OutputLocation,
+}
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GifExtractRequest { pub paths: Vec<PathBuf>, pub output_location: OutputLocation }
@@ -153,9 +158,18 @@ pub fn gif_create(request: &GifCreateRequest) -> JobOutcome {
     let output = OutputNaming::get_destination(&input, &request.output_location, "-animated", "gif");
     let file = match File::create(&output) { Ok(file) => file, Err(error) => return failure(input, error.to_string()) };
     let mut encoder = image::codecs::gif::GifEncoder::new(file);
-    let frames = request.paths.iter().map(|path| image::open(path).map(|image| image::Frame::from_parts(image.to_rgba8(), 0, 0, image::Delay::from_numer_denom_ms(100, 1))).map_err(|error| error.to_string())).collect::<Result<Vec<_>, _>>();
-    match frames.and_then(|frames| encoder.encode_frames(frames).map_err(|error| error.to_string())) { Ok(_) => JobOutcome { input_path: input, output_paths: vec![output], detail: "GIF saved".to_string(), failure: None }, Err(error) => failure(input, format!("Could not create GIF: {error}")) }
+    if request.loop_forever { if let Err(error) = encoder.set_repeat(image::codecs::gif::Repeat::Infinite) { let _ = std::fs::remove_file(&output); return failure(input, format!("Could not configure GIF loop: {error}")); } }
+    let images = request.paths.iter().map(|path| image::open(path).map(|image| image.to_rgba8()).map_err(|error| error.to_string())).collect::<Result<Vec<_>, _>>();
+    let images = match images { Ok(images) => images, Err(error) => { let _ = std::fs::remove_file(&output); return failure(input, format!("Could not create GIF: {error}")); } };
+    let width = images.iter().map(|image| image.width()).max().unwrap_or(0);
+    let height = images.iter().map(|image| image.height()).max().unwrap_or(0);
+    let delay = image::Delay::from_numer_denom_ms(request.frame_delay_ms.clamp(1, 60_000), 1);
+    let frames = images.into_iter().map(|image| { let mut canvas = image::RgbaImage::new(width, height); image::imageops::overlay(&mut canvas, &image, 0, 0); image::Frame::from_parts(canvas, 0, 0, delay) }).collect::<Vec<_>>();
+    match encoder.encode_frames(frames) { Ok(_) => JobOutcome { input_path: input, output_paths: vec![output], detail: "GIF saved".to_string(), failure: None }, Err(error) => { let _ = std::fs::remove_file(&output); failure(input, format!("Could not create GIF: {error}")) } }
 }
+
+fn default_gif_delay_ms() -> u32 { 100 }
+fn default_gif_loop() -> bool { true }
 
 pub fn gif_extract(request: &GifExtractRequest, input: PathBuf) -> JobOutcome {
     let file = match File::open(&input) { Ok(file) => file, Err(error) => return failure(input, error.to_string()) };
@@ -354,6 +368,26 @@ mod tests {
         assert!(output_image.pixels().any(|pixel| pixel.0[0..3] != [10, 20, 30]));
         assert!(output_image.pixels().all(|pixel| pixel.0[3] == 77));
         let _ = std::fs::remove_file(input);
+        let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn gif_creation_preserves_order_timing_and_canvas() {
+        let first = path("gif-first.png");
+        let second = path("gif-second.png");
+        image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 0, 0, 128])).save(&first).unwrap();
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([0, 255, 0, 255])).save(&second).unwrap();
+        let result = gif_create(&GifCreateRequest { paths: vec![first.clone(), second.clone()], frame_delay_ms: 250, loop_forever: true, output_location: OutputLocation::AlongsideInput });
+        let output = result.output_paths.first().unwrap();
+        let file = File::open(output).unwrap();
+        let decoder = image::codecs::gif::GifDecoder::new(BufReader::new(file)).unwrap();
+        let frames = decoder.into_frames().collect_frames().unwrap();
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0].buffer().dimensions(), (2, 2));
+        assert_eq!(frames[0].delay().numer_denom_ms(), (250, 1));
+        assert_eq!(frames[1].buffer().get_pixel(0, 0).0[1], 255);
+        let _ = std::fs::remove_file(first);
+        let _ = std::fs::remove_file(second);
         let _ = std::fs::remove_file(output);
     }
 }
