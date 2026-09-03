@@ -19,6 +19,9 @@ export interface PdfDocument {
 export interface PdfEditorState {
     currentPage: number;
     selectedPages: number[];
+    pageOrder: number[];
+    deletedPages: number[];
+    rotatePages: { page: number; degrees: number }[];
     scope: PageScope;
     layout: EditorLayout;
     density: EditorDensity;

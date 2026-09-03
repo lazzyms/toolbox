@@ -7,7 +7,7 @@ import type { CropPdfRequest, OrganizePdfRequest, PdfDocument, PdfEditorState, S
 
 type Mode = "crop" | "sign" | "organize";
 
-const initialState: PdfEditorState = { currentPage: 0, selectedPages: [], scope: { kind: "all" }, layout: "vertical", density: "comfortable", error: null };
+const initialState: PdfEditorState = { currentPage: 0, selectedPages: [], pageOrder: [], deletedPages: [], rotatePages: [], scope: { kind: "all" }, layout: "vertical", density: "comfortable", error: null };
 
 export const PDFPageToolView = ({ utility, mode }: { utility: ToolDefinition; mode: Mode }) => {
     const [document, setDocument] = useState<PdfDocument | null>(null);
@@ -26,7 +26,7 @@ export const PDFPageToolView = ({ utility, mode }: { utility: ToolDefinition; mo
                 if (mode === "sign") {
                     return invoke<ToolResult>("sign_pdf", { request: { paths, page: state.currentPage, text, signaturePath: null, rectangle, scope, outputLocation: "alongsideInput" } satisfies SignPdfRequest });
                 }
-                return invoke<ToolResult>("organize_pdf", { request: { paths, pageOrder: document?.pages.map((page) => page.index) ?? [], deletePages: [], rotatePages: [], scope, outputLocation: "alongsideInput" } satisfies OrganizePdfRequest });
+                return invoke<ToolResult>("organize_pdf", { request: { paths, pageOrder: state.pageOrder, deletePages: state.deletedPages, rotatePages: state.rotatePages, scope, outputLocation: "alongsideInput" } satisfies OrganizePdfRequest });
             }}
         >
             {({ files, run, loading }) => <PDFPageToolContent files={files} run={run} loading={loading} utility={utility} mode={mode} document={document} setDocument={setDocument} state={state} setState={setState} text={text} setText={setText} setRectangle={setRectangle} />}
@@ -45,14 +45,14 @@ const PDFPageToolContent = ({ files, run, loading, utility, mode, document, setD
         if (!path) { setDocument(null); return; }
         invoke<PdfDocument>("inspect_pdf", { request: { path } }).then((metadata) => {
             setDocument(metadata);
-            setState(initialState);
+            setState({ ...initialState, pageOrder: metadata.pages.map((page) => page.index) });
             const page = metadata.pages[0];
             if (page) setRectangle({ x: 0, y: 0, width: page.width, height: page.height });
         }).catch(() => setDocument(null));
     }, [files, setDocument, setState, setRectangle]);
 
     return <div className="space-y-4">
-        {document ? <PdfEditor document={document} state={state} onStateChange={setState} /> : <p className="text-sm text-slate-500">Select a PDF to open the editor.</p>}
+        {document ? <PdfEditor document={document} state={state} onStateChange={setState} organizeControls={mode === "organize"} /> : <p className="text-sm text-slate-500">Select a PDF to open the editor.</p>}
         {mode === "sign" && <input aria-label="Typed signature" value={text} onChange={(event) => setText(event.target.value)} className="rounded border px-3 py-2" />}
         <button type="button" disabled={loading || files.length === 0 || !document} onClick={run} className="rounded-lg bg-blue-600 px-6 py-2 font-medium text-white disabled:opacity-50">{utility.shortTitle}</button>
     </div>;
