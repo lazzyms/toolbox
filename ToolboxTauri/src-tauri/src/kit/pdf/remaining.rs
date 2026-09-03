@@ -231,7 +231,17 @@ pub fn images_to_pdf(request: &ImagesToPdfRequest) -> JobOutcome {
 }
 
 fn image_as_jpeg(path: &PathBuf) -> Result<(Vec<u8>, u32, u32), String> {
-    let image = image::open(path).map_err(|error| format!("Could not decode image: {error}"))?;
+    let extension = path.extension().and_then(|value| value.to_str()).unwrap_or("").to_lowercase();
+    if matches!(extension.as_str(), "gif" | "tif" | "tiff") { return Err("Animated or multi-frame image inputs are not supported for image-to-PDF conversion.".to_string()); }
+    let image = if matches!(extension.as_str(), "heic" | "heif") {
+        let converted = std::env::temp_dir().join(format!("toolbox_heic_{}_{}.jpg", std::process::id(), path.file_name().and_then(|name| name.to_str()).unwrap_or("input")));
+        let result = Command::new("sips").arg("-s").arg("format").arg("jpeg").arg(path).arg("--out").arg(&converted).output()
+            .map_err(|error| format!("Could not run the HEIC decoder: {error}"))?;
+        if !result.status.success() { return Err(stderr(result, "HEIC decoding is unavailable on this system.")); }
+        let decoded = image::open(&converted).map_err(|error| format!("Could not decode HEIC image: {error}"));
+        let _ = fs::remove_file(&converted);
+        decoded?
+    } else { image::open(path).map_err(|error| format!("Could not decode image: {error}"))? };
     let (width, height) = (image.width(), image.height());
     let mut output = Cursor::new(Vec::new());
     JpegEncoder::new_with_quality(&mut output, 92).encode_image(&DynamicImage::ImageRgb8(image.to_rgb8())).map_err(|error| format!("Could not encode image as JPEG: {error}"))?;
