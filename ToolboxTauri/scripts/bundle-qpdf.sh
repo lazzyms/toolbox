@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Bundles a self-contained qpdf into a freshly built macOS Toolbox.app so
-# Protect works out of the box. Run after `npm run tauri build`.
+# Bundles self-contained qpdf and pdftoppm binaries into a freshly built
+# macOS Toolbox.app so PDF protection and rendering work out of the box.
+# Run after `npm run tauri build`.
 #
 # Homebrew's qpdf is dynamically linked against libqpdf and (transitively)
 # libjpeg/libcrypto. A bare copy would fail with "Library not loaded". Instead
@@ -11,6 +12,7 @@ set -euo pipefail
 
 APP="${1:-$(pwd)/src-tauri/target/release/bundle/macos/Toolbox.app}"
 QPDF_BIN="${QPDF:-$(command -v qpdf || true)}"
+PDFTOPPM_BIN="${PDFTOPPM:-$(command -v pdftoppm || true)}"
 
 if [[ ! -d "$APP" ]]; then
   echo "bundle-qpdf: app bundle not found at $APP" >&2
@@ -20,16 +22,12 @@ if [[ -z "$QPDF_BIN" ]]; then
   echo "bundle-qpdf: qpdf not found; install it (brew install qpdf) or set QPDF" >&2
   exit 1
 fi
+if [[ -z "$PDFTOPPM_BIN" ]]; then
+  echo "bundle-qpdf: pdftoppm not found; install it (brew install poppler) or set PDFTOPPM" >&2
+  exit 1
+fi
 
 RES="$APP/Contents/Resources"
-BIN_DIR="$RES/qpdf-bin"
-mkdir -p "$BIN_DIR"
-chmod -R u+w "$BIN_DIR"
-
-QPDF_NAME="qpdf"
-cp "$QPDF_BIN" "$BIN_DIR/$QPDF_NAME"
-chmod +x "$BIN_DIR/$QPDF_NAME"
-
 collect_deps() {
   otool -L "$1" 2>/dev/null | awk 'NR>1 { print $1 }' || true
 }
@@ -79,11 +77,6 @@ resolve_dep() {
   esac
 }
 
-# Track which local dylibs have been pulled in, via a marker file (avoids the
-# macOS bash 3.2 associative-array limitation).
-handled="$BIN_DIR/.bundle-handled"
-: > "$handled"
-
 process_file() { # $1 = source file, $2 = copied file
   local source="$1"
   local file="$2"
@@ -108,18 +101,33 @@ process_file() { # $1 = source file, $2 = copied file
   done
 }
 
-process_file "$QPDF_BIN" "$BIN_DIR/$QPDF_NAME"
+bundle_tool() { # $1 = source binary, $2 = destination directory, $3 = output name
+  local source="$1"
+  local destination="$2"
+  local name="$3"
+  BIN_DIR="$destination"
+  mkdir -p "$BIN_DIR"
+  chmod -R u+w "$BIN_DIR"
+  cp "$source" "$BIN_DIR/$name"
+  chmod +x "$BIN_DIR/$name"
+  handled="$BIN_DIR/.bundle-handled"
+  : > "$handled"
+  process_file "$source" "$BIN_DIR/$name"
 
-# Sanity check: no unresolved non-system deps on the top-level binary.
-while IFS= read -r dep; do
-  is_system_dep "$dep" && continue
-  case "$dep" in
-    @loader_path/*) [[ -f "$BIN_DIR/${dep#@loader_path/}" ]] || { echo "bundle-qpdf: missing $dep" >&2; exit 1; } ;;
-    *) echo "bundle-qpdf: unresolved dependency $dep" >&2; exit 1 ;;
-  esac
-done < <(collect_deps "$BIN_DIR/$QPDF_NAME")
+  # Sanity check: no unresolved non-system deps on the top-level binary.
+  while IFS= read -r dep; do
+    is_system_dep "$dep" && continue
+    case "$dep" in
+      @loader_path/*) [[ -f "$BIN_DIR/${dep#@loader_path/}" ]] || { echo "bundle-qpdf: missing $dep" >&2; exit 1; } ;;
+      *) echo "bundle-qpdf: unresolved dependency $dep" >&2; exit 1 ;;
+    esac
+  done < <(collect_deps "$BIN_DIR/$name")
 
-rm -f "$handled"
+  rm -f "$handled"
+}
+
+bundle_tool "$QPDF_BIN" "$RES/qpdf-bin" qpdf
+bundle_tool "$PDFTOPPM_BIN" "$RES/pdf-bin" pdftoppm
 
 # Sign the injected binaries with the app's identity or an explicit override.
 if ! command -v codesign >/dev/null 2>&1; then
@@ -131,10 +139,11 @@ find "$BIN_DIR" -type f -exec codesign --force --sign "$SIGNING_IDENTITY" {} \;
 codesign --force --sign "$SIGNING_IDENTITY" "$APP"
 codesign --verify --deep --strict "$APP"
 
-echo "bundle-qpdf: embedded self-contained qpdf -> $BIN_DIR"
-VERSION="$("$BIN_DIR/$QPDF_NAME" --version 2>/dev/null | head -1)"
+echo "bundle-qpdf: embedded self-contained PDF helpers -> $RES/{qpdf-bin,pdf-bin}"
+VERSION="$("$RES/qpdf-bin/qpdf" --version 2>/dev/null | head -1)"
 [[ -n "$VERSION" ]] || { echo "bundle-qpdf: qpdf --version failed" >&2; exit 1; }
 echo "$VERSION"
+"$RES/pdf-bin/pdftoppm" -h >/dev/null
 
 # Tauri creates the updater archive before this script injects qpdf. Rebuild it
 # after injection so an update is as self-contained as a fresh install, then

@@ -90,17 +90,21 @@ jobs:
         working-directory: ToolboxTauri
       - name: Install qpdf (macOS)
         if: runner.os == 'macOS'
-        run: brew install qpdf
+        run: brew install qpdf poppler
       - name: Install qpdf and stage Windows resources
         if: runner.os == 'Windows'
         shell: pwsh
         working-directory: ToolboxTauri
         run: |
-          choco install qpdf -y
+          choco install qpdf poppler -y
           New-Item -ItemType Directory -Force -Path src-tauri\resources | Out-Null
           $qpdf = Get-ChildItem "$env:ChocolateyInstall\lib\qpdf" -Recurse -Filter qpdf.exe | Select-Object -First 1
           Copy-Item $qpdf.FullName src-tauri\resources\qpdf.exe -Force
           Get-ChildItem $qpdf.DirectoryName -Filter *.dll | Copy-Item -Destination src-tauri\resources -Force
+          $pdftoppm = Get-ChildItem "$env:ChocolateyInstall\lib\poppler" -Recurse -Filter pdftoppm.exe | Select-Object -First 1
+          if (-not $pdftoppm) { throw 'Could not locate pdftoppm.exe in the Poppler package' }
+          Copy-Item $pdftoppm.FullName src-tauri\resources\pdftoppm.exe -Force
+          Get-ChildItem "$env:ChocolateyInstall\lib\poppler" -Recurse -Filter *.dll | Copy-Item -Destination src-tauri\resources -Force
           @{version=$env:VERSION; bundle=@{resources=@('resources/*')}} | ConvertTo-Json -Compress | Out-File -Encoding ascii release-config.json
       - name: Write macOS version config
         if: runner.os == 'macOS'

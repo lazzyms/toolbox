@@ -70,7 +70,8 @@ macOS asks for this confirmation because the preview build is not notarized.
 2. Run the `.exe` installer.
 3. If Windows SmartScreen appears, choose **More info**, then **Run anyway**.
 
-The installer includes qpdf, which the PDF protection tool uses.
+The installer includes qpdf and Poppler's `pdftoppm`, which power PDF
+protection and PDF-to-image rendering without relying on host installations.
 
 ## Updates
 
