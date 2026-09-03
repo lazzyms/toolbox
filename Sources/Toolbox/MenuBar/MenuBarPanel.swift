@@ -38,9 +38,6 @@ struct MenuBarPanel: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            TablerIcon(name: selected.symbol, color: selected.tint)
-                .frame(width: 18)
-
             VStack(alignment: .leading, spacing: 1) {
                 Text(selected.title)
                     .font(.subheadline.weight(.semibold))
@@ -106,8 +103,6 @@ struct MenuBarPanel: View {
                     selection = utility.id
                 } label: {
                     HStack(spacing: 6) {
-                        TablerIcon(name: utility.symbol, color: utility.tint)
-                            .frame(width: 16)
                         Text(utility.shortTitle)
                             .font(.caption)
                             .lineLimit(1)

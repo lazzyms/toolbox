@@ -15,9 +15,6 @@ struct Utility: Identifiable, Hashable {
     let shortTitle: String
     /// Shown under the title in the sidebar and at the top of the detail pane.
     let blurb: String
-    /// The bundled Tabler icon name, without its `.svg` extension.
-    let symbol: String
-    let tint: Color
     let category: Category
 
     /// Builds this tool's detail pane.
@@ -36,8 +33,6 @@ struct Utility: Identifiable, Hashable {
         title: String,
         shortTitle: String,
         blurb: String,
-        symbol: String,
-        tint: Color,
         category: Category,
         pane: @escaping @MainActor @Sendable (Utility) -> Pane
     ) {
@@ -45,8 +40,6 @@ struct Utility: Identifiable, Hashable {
         self.title = title
         self.shortTitle = shortTitle
         self.blurb = blurb
-        self.symbol = symbol
-        self.tint = tint
         self.category = category
         self.pane = { AnyView(pane($0)) }
     }

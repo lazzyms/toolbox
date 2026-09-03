@@ -77,12 +77,8 @@ struct ContentView: View {
                 ForEach(Utility.Category.allCases) { category in
                     Section(category.rawValue) {
                         ForEach(Utility.inCategory(category)) { utility in
-                            HStack(spacing: 10) {
-                                TablerIcon(name: utility.symbol, color: utility.tint)
-                                    .frame(width: 20)
-                                Text(utility.title)
-                                    .lineLimit(1)
-                            }
+                            Text(utility.title)
+                                .lineLimit(1)
                             .tag(utility.id)
                         }
                     }
