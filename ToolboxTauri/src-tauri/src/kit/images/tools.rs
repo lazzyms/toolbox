@@ -12,7 +12,7 @@ use crate::kit::contracts::ToolError;
 pub struct ResizeRequest { pub paths: Vec<PathBuf>, pub width: u32, pub height: u32, pub output_location: OutputLocation }
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RotateRequest { pub paths: Vec<PathBuf>, pub degrees: i32, pub output_location: OutputLocation }
+pub struct RotateRequest { pub paths: Vec<PathBuf>, pub degrees: i32, #[serde(default = "default_flip")] pub flip: String, pub output_location: OutputLocation }
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CropRequest {
@@ -73,7 +73,14 @@ pub struct MetadataRequest { pub paths: Vec<PathBuf>, pub output_location: Outpu
 pub struct MetadataReport { pub path: PathBuf, pub exif: bool, pub gps: bool, pub xmp: bool, pub icc: bool, pub orientation: bool, pub unsupported: Vec<String> }
 
 pub fn resize(request: &ResizeRequest, input: PathBuf) -> JobOutcome { transform(request.paths.as_slice(), input, &request.output_location, "-resized", |image| { if request.width == 0 || request.height == 0 { return Err("Image dimensions must be positive.".to_string()); } Ok(image.resize_exact(request.width, request.height, image::imageops::FilterType::Lanczos3)) }) }
-pub fn rotate(request: &RotateRequest, input: PathBuf) -> JobOutcome { transform(request.paths.as_slice(), input, &request.output_location, "-rotated", |image| { Ok(match request.degrees.rem_euclid(360) { 90 => image.rotate90(), 180 => image.rotate180(), 270 => image.rotate270(), 0 => image, _ => return Err("Rotation must be 0, 90, 180, or 270 degrees.".to_string()) }) }) }
+pub fn rotate(request: &RotateRequest, input: PathBuf) -> JobOutcome {
+    transform(request.paths.as_slice(), input, &request.output_location, "-rotated", |image| {
+        let image = match request.degrees.rem_euclid(360) { 90 => image.rotate90(), 180 => image.rotate180(), 270 => image.rotate270(), 0 => image, _ => return Err("Rotation must be 0, 90, 180, or 270 degrees.".to_string()) };
+        Ok(match request.flip.as_str() { "none" => image, "horizontal" => DynamicImage::ImageRgba8(image::imageops::flip_horizontal(&image.to_rgba8())), "vertical" => DynamicImage::ImageRgba8(image::imageops::flip_vertical(&image.to_rgba8())), _ => return Err("Mirror choice must be none, horizontal, or vertical.".to_string()) })
+    })
+}
+
+fn default_flip() -> String { "none".to_string() }
 pub fn crop(request: &CropRequest, input: PathBuf) -> JobOutcome {
     transform(request.paths.as_slice(), input, &request.output_location, "-cropped", |image| {
         let (x, y, width, height) = crop_rect(image.width(), image.height(), request)?;
@@ -471,5 +478,23 @@ mod tests {
         assert_eq!(crop_rect(8, 4, &request).unwrap(), (2, 0, 4, 4));
         let invalid = CropRequest { mode: "rectangle".to_string(), x: 7, y: 0, width: 2, height: 1, ..request };
         assert!(crop_rect(8, 4, &invalid).is_err());
+    }
+
+    #[test]
+    fn rotate_mirror_preserves_pixels_without_resampling() {
+        let input = path("rotate-input.png");
+        let mut image = image::RgbaImage::new(2, 1);
+        image.put_pixel(0, 0, image::Rgba([255, 0, 0, 255]));
+        image.put_pixel(1, 0, image::Rgba([0, 255, 0, 255]));
+        image.save(&input).unwrap();
+        let result = rotate(&RotateRequest { paths: vec![input.clone()], degrees: 0, flip: "horizontal".to_string(), output_location: OutputLocation::AlongsideInput }, input.clone());
+        let output = result.output_paths.first().unwrap();
+        let pixels = image::open(output).unwrap().to_rgba8();
+        assert_eq!(pixels.dimensions(), (2, 1));
+        assert_eq!(pixels.get_pixel(0, 0).0, [0, 255, 0, 255]);
+        let invalid = rotate(&RotateRequest { paths: vec![input.clone()], degrees: 0, flip: "diagonal".to_string(), output_location: OutputLocation::AlongsideInput }, input.clone());
+        assert!(invalid.failure.is_some());
+        let _ = std::fs::remove_file(input);
+        let _ = std::fs::remove_file(output);
     }
 }
