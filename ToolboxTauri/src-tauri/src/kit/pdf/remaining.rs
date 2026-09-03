@@ -134,17 +134,28 @@ pub fn extract_images(request: &PdfToTextRequest, input: PathBuf) -> JobOutcome 
     for (page_number, page_id) in document.get_pages() {
         let images = match document.get_page_images(page_id) { Ok(images) => images, Err(error) => return failure(input, error.to_string()) };
         for (index, image) in images.iter().enumerate() {
-            let Some(filters) = &image.filters else { continue; };
-            if filters.iter().any(|filter| filter != "DCTDecode") { continue; }
+            let Some(filters) = &image.filters else {
+                remove_outputs(&outputs);
+                return failure(input, "PDF contains an embedded image with no supported filter; extraction stopped without a complete result.".to_string());
+            };
+            if filters.iter().any(|filter| filter != "DCTDecode") {
+                remove_outputs(&outputs);
+                return failure(input, format!("PDF image on page {page_number} uses an unsupported filter; only original JPEG images can be extracted without recompression."));
+            }
             let mut path = directory.join(format!("{stem}-image-{page_number}-{index}.jpg"));
             let mut counter = 1;
             while path.exists() { path = directory.join(format!("{stem}-image-{page_number}-{index}-{counter}.jpg")); counter += 1; }
-            if let Err(error) = fs::write(&path, image.content) { return failure(input, format!("Could not write extracted image: {error}")); }
+            if let Err(error) = fs::write(&path, image.content) {
+                remove_outputs(&outputs);
+                return failure(input, format!("Could not write extracted image: {error}"));
+            }
             outputs.push(path);
         }
     }
-    if outputs.is_empty() { failure(input, "No embedded JPEG images were found. Non-JPEG PDF image filters are not extractable without recompression.".to_string()) } else { JobOutcome { input_path: input, output_paths: outputs, detail: "PDF images extracted".to_string(), failure: None } }
+    if outputs.is_empty() { failure(input, "No embedded JPEG images were found. Non-JPEG PDF image filters are not extractable without recompression.".to_string()) } else { JobOutcome { input_path: input, output_paths: outputs, detail: "Embedded JPEG images extracted without recompression".to_string(), failure: None } }
 }
+
+fn remove_outputs(outputs: &[PathBuf]) { for output in outputs { let _ = fs::remove_file(output); } }
 
 pub fn images_to_pdf(request: &ImagesToPdfRequest) -> JobOutcome {
     let Some(first) = request.paths.first().cloned() else { return failure(PathBuf::new(), "Select at least one image.".to_string()); };
