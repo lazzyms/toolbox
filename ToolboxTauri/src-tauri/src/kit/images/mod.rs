@@ -127,6 +127,15 @@ impl ImageProcessor {
     pub fn run(input_path: PathBuf, options: Options) -> JobOutcome {
         let original_bytes = std::fs::metadata(&input_path).map(|m| m.len()).unwrap_or(0);
 
+        if options.quality == 0 && options.target_format.is_none() {
+            let extension = input_path.extension().and_then(|e| e.to_str()).unwrap_or("bin");
+            let output_path = OutputNaming::get_destination(&input_path, &options.output_location, &options.suffix, extension);
+            return match std::fs::copy(&input_path, &output_path) {
+                Ok(_) => JobOutcome { input_path, output_paths: vec![output_path], detail: "Kept original bytes (lossless mode)".to_string(), failure: None },
+                Err(error) => JobOutcome { input_path, output_paths: vec![], detail: String::new(), failure: Some(ToolError::processing(format!("Lossless copy failed: {error}"))) },
+            };
+        }
+
         let img = match load_image(&input_path) {
             Ok(i) => i,
             Err(e) => {
@@ -277,6 +286,18 @@ mod tests {
 
         cleanup(&out.output_paths);
         let _ = std::fs::remove_file(&src);
+    }
+
+    #[test]
+    fn lossless_compression_preserves_source_bytes() {
+        let src = temp_path("lossless_src.png");
+        let original = b"deliberate source bytes";
+        std::fs::write(&src, original).unwrap();
+        let out = ImageProcessor::run(src.clone(), Options { target_format: None, quality: 0, keep_smaller_original: true, suffix: "-compressed".to_string(), output_location: OutputLocation::AlongsideInput });
+        assert!(out.failure.is_none(), "{}", out.failure.clone().unwrap_or_default());
+        assert_eq!(std::fs::read(&out.output_paths[0]).unwrap(), original);
+        cleanup(&out.output_paths);
+        let _ = std::fs::remove_file(src);
     }
 
     // Photo-size image: x265 rejects tiny frames on some builds, and the

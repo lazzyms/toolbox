@@ -36,6 +36,8 @@ pub struct PdfRequest {
 pub struct CompressImagesRequest {
     pub paths: Vec<PathBuf>,
     pub quality: u8,
+    #[serde(default)]
+    pub lossless: bool,
     pub output_location: OutputLocation,
 }
 
