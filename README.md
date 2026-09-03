@@ -89,6 +89,16 @@ The Tauri port checks its signed GitHub update manifest shortly after launch. If
 new version is available, it asks to download and install it; Windows restarts via
 the installer and macOS relaunches the app after installation.
 
+### Anonymous install analytics
+
+Packaged Tauri builds send Firebase Analytics a `first_install` event once per
+local app installation and an `app_opened` event on later launches. The event
+contains only the app platform; no filenames, file contents, paths, or hardware
+identifiers are sent. Development builds do not send analytics. In Firebase
+Analytics, the `first_install` event's user count provides an approximate total
+of distinct installations; clearing the app's local data creates a new install
+identity.
+
 ### Cutting a release
 
 Releases are automatic: **merging a PR to `main` publishes one**. No version to bump,

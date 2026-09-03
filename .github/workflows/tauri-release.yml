@@ -89,6 +89,10 @@ jobs:
       - name: Run UI automation
         run: npm run test:ui
         working-directory: ToolboxTauri
+
+      - name: Run analytics tests
+        run: npm run test:analytics
+        working-directory: ToolboxTauri
       - name: Install qpdf (macOS)
         if: runner.os == 'macOS'
         run: brew install qpdf poppler
