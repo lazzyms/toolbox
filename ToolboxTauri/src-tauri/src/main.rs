@@ -3,7 +3,7 @@
 
 mod kit;
 
-use crate::kit::common::{JobOutcome, OutputLocation};
+use crate::kit::common::JobOutcome;
 use crate::kit::images::{ImageProcessor, Options as ImageOptions, OutputFormat};
 use crate::kit::images::tools;
 use crate::kit::pdf::{editor, metadata, remaining, PDFProcessor};
@@ -217,6 +217,7 @@ mod command_tests {
     // IPC-facing layer is exercised without needing a live WebView.
 
     use super::*;
+    use crate::kit::common::OutputLocation;
     use image::Rgba;
     use std::path::PathBuf;
 

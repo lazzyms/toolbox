@@ -5,6 +5,7 @@ use image::codecs::png::PngEncoder;
 use image::ImageEncoder;
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
+use crate::kit::contracts::ToolError;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum OutputFormat {
@@ -133,7 +134,7 @@ impl ImageProcessor {
                     input_path,
                     output_paths: vec![],
                     detail: "".to_string(),
-                    failure: Some(e),
+                    failure: Some(ToolError::processing(e)),
                 };
             }
         };
@@ -158,7 +159,7 @@ impl ImageProcessor {
                     input_path,
                     output_paths: vec![],
                     detail: "".to_string(),
-                    failure: Some(e),
+                    failure: Some(ToolError::processing(e)),
                 };
             }
         };
@@ -168,7 +169,7 @@ impl ImageProcessor {
                 input_path,
                 output_paths: vec![],
                 detail: "".to_string(),
-                failure: Some(format!("Write failed: {}", e)),
+                failure: Some(ToolError::processing(format!("Write failed: {}", e))),
             };
         }
 
@@ -187,7 +188,7 @@ impl ImageProcessor {
                     input_path,
                     output_paths: vec![],
                     detail: "".to_string(),
-                    failure: Some(format!("Fallback copy failed: {}", e)),
+                    failure: Some(ToolError::processing(format!("Fallback copy failed: {}", e))),
                 };
             }
             return JobOutcome {

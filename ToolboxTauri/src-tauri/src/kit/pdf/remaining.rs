@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
+use crate::kit::contracts::ToolError;
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -245,4 +246,4 @@ fn escape(text: &str) -> String { text.replace('\\', "\\\\").replace('(', "\\(")
 fn qpdf() -> Option<PathBuf> { std::env::var_os("TOOLBOX_QPDF_PATH").map(PathBuf::from).filter(|path| path.is_file()).or_else(|| Command::new("qpdf").arg("--version").output().ok().filter(|result| result.status.success()).map(|_| PathBuf::from("qpdf"))) }
 fn tool(variable: &str, command: &str) -> Option<PathBuf> { std::env::var_os(variable).map(PathBuf::from).filter(|path| path.is_file()).or_else(|| Command::new(command).arg("-h").output().ok().map(|_| PathBuf::from(command))) }
 fn stderr(result: std::process::Output, fallback: &str) -> String { String::from_utf8_lossy(&result.stderr).trim().lines().last().filter(|line| !line.is_empty()).unwrap_or(fallback).to_string() }
-fn failure(input_path: PathBuf, error: String) -> JobOutcome { JobOutcome { input_path, output_paths: vec![], detail: String::new(), failure: Some(error) } }
+fn failure(input_path: PathBuf, error: String) -> JobOutcome { JobOutcome::failure(input_path, ToolError::processing(error)) }

@@ -5,6 +5,7 @@ use std::io::BufReader;
 use std::path::PathBuf;
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
+use crate::kit::contracts::ToolError;
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -84,4 +85,4 @@ fn transform<F>(_: &[PathBuf], input: PathBuf, location: &OutputLocation, suffix
     match image.save_with_format(&output, format) { Ok(_) => JobOutcome { input_path: input, output_paths: vec![output], detail: "Image saved".to_string(), failure: None }, Err(error) => failure(input, format!("Could not save image: {error}")) }
 }
 
-fn failure(input_path: PathBuf, error: String) -> JobOutcome { JobOutcome { input_path, output_paths: vec![], detail: String::new(), failure: Some(error) } }
+fn failure(input_path: PathBuf, error: String) -> JobOutcome { JobOutcome::failure(input_path, ToolError::processing(error)) }
