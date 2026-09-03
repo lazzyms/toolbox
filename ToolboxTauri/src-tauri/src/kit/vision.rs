@@ -1,11 +1,16 @@
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use image::GenericImageView;
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::ToolError;
 use crate::kit::resources;
+
+const OCR_MAX_INPUT_BYTES: u64 = 100 * 1024 * 1024;
+const OCR_MAX_OUTPUT_BYTES: usize = 10 * 1024 * 1024;
+const OCR_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -16,19 +21,55 @@ pub struct VisionRequest {
 
 pub fn ocr_pdf(request: &VisionRequest, input: PathBuf) -> JobOutcome {
     let output = OutputNaming::get_destination(&input, &request.output_location, "-ocr-text", "txt");
+    let input_size = match std::fs::metadata(&input) {
+        Ok(metadata) => metadata.len(),
+        Err(error) => return failure(input, format!("Could not inspect PDF for OCR: {error}")),
+    };
+    if input_size > OCR_MAX_INPUT_BYTES { return failure(input, "PDF exceeds the 100 MiB OCR input limit.".to_string()); }
     let engine = match find_engine("ocr", "TOOLBOX_TESSERACT_PATH", "tesseract") {
         Ok(engine) => engine,
         Err(error) => return unavailable(input, error),
     };
-    let result = Command::new(engine).arg(&input).arg("stdout").output();
+    let result = run_ocr(&engine, &input);
     match result {
-        Ok(result) if result.status.success() => match std::fs::write(&output, result.stdout) {
-            Ok(_) => success(input, output, "OCR text extracted"),
-            Err(error) => failure(input, format!("Could not write OCR output: {error}")),
-        },
+        Ok(result) if result.status.success() => {
+            if result.stdout.len() > OCR_MAX_OUTPUT_BYTES { return failure(input, "OCR output exceeds the 10 MiB text limit.".to_string()); }
+            let text = normalize_ocr_text(&result.stdout);
+            if text.is_empty() { return failure(input, "OCR completed but found no readable text.".to_string()); }
+            match std::fs::write(&output, text) {
+                Ok(_) => success(input, output, "OCR text extracted in page order"),
+                Err(error) => failure(input, format!("Could not write OCR output: {error}")),
+            }
+        }
         Ok(result) => failure(input, stderr(result, "OCR engine failed.")),
-        Err(error) => failure(input, format!("Could not run OCR engine: {error}")),
+        Err(error) => failure(input, error),
     }
+}
+
+fn run_ocr(engine: &std::path::Path, input: &std::path::Path) -> Result<std::process::Output, String> {
+    let mut child = Command::new(engine).arg(input).arg("stdout").stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()
+        .map_err(|error| format!("Could not run OCR engine: {error}"))?;
+    let started = Instant::now();
+    loop {
+        match child.try_wait().map_err(|error| format!("Could not read OCR engine status: {error}"))? {
+            Some(_) => return child.wait_with_output().map_err(|error| format!("Could not collect OCR output: {error}")),
+            None if started.elapsed() >= OCR_TIMEOUT => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("OCR timed out after 120 seconds.".to_string());
+            }
+            None => std::thread::sleep(Duration::from_millis(50)),
+        }
+    }
+}
+
+fn normalize_ocr_text(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes)
+        .lines()
+        .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 pub fn blur_faces(request: &VisionRequest, input: PathBuf) -> JobOutcome {
@@ -110,7 +151,7 @@ fn stderr(result: std::process::Output, fallback: &str) -> String { String::from
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_cutout, validate_face_blur};
+    use super::{normalize_ocr_text, validate_cutout, validate_face_blur};
     use image::{Rgba, RgbaImage};
     use std::path::PathBuf;
 
@@ -144,5 +185,10 @@ mod tests {
         assert!(validate_face_blur(&input, &output).is_err());
         let _ = std::fs::remove_file(input);
         let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn normalizes_ocr_lines_without_reordering_them() {
+        assert_eq!(normalize_ocr_text(b"  first   line\r\n\n second line  \n"), "first line\nsecond line");
     }
 }
