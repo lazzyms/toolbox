@@ -1,25 +1,28 @@
 import { useState, useEffect } from 'react';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { open } from '@tauri-apps/plugin-dialog';
-import { Utility } from '../registry';
+import type { ToolDefinition, JobOutcome, Progress } from '../contracts';
+import { ResultList } from './ResultList';
 
 interface ToolScaffoldProps {
-    utility: Utility;
+    utility: ToolDefinition;
     children: (props: {
         files: string[];
         setFiles: (files: string[]) => void;
         run: () => Promise<void>;
-        results: any[];
-        setResults: (results: any[]) => void;
+        results: JobOutcome[];
+        setResults: (results: JobOutcome[]) => void;
         loading: boolean;
         setLoading: (loading: boolean) => void;
+        progress: Progress;
     }) => React.ReactNode;
 }
 
 export const ToolScaffold = ({ utility, children }: ToolScaffoldProps) => {
     const [files, setFiles] = useState<string[]>([]);
-    const [results, setResults] = useState<any[]>([]);
+    const [results, setResults] = useState<JobOutcome[]>([]);
     const [loading, setLoading] = useState(false);
+    const progress: Progress = { completed: loading ? 0 : results.length, total: files.length };
 
     useEffect(() => {
         const appWindow = getCurrentWebviewWindow();
@@ -50,7 +53,7 @@ export const ToolScaffold = ({ utility, children }: ToolScaffoldProps) => {
                 return fresh.length ? [...prev, ...fresh] : prev;
             });
         } catch (e) {
-            setResults([{ input_path: 'Dialog error', failure: String(e), detail: '' }]);
+            setResults([{ inputPath: 'Dialog error', outputPaths: [], failure: String(e), detail: '' }]);
         }
     };
 
@@ -87,8 +90,8 @@ export const ToolScaffold = ({ utility, children }: ToolScaffoldProps) => {
                             </button>
                         </div>
                         <div className="max-h-40 overflow-y-auto border rounded-lg bg-white p-2 space-y-1">
-                            {files.map((f, i) => (
-                                <div key={i} className="text-xs text-slate-500 truncate p-1 border-b last:border-0">
+                            {files.map((f) => (
+                                    <div key={f} className="text-xs text-slate-500 truncate p-1 border-b last:border-0">
                                     {f.split('/').pop()}
                                 </div>
                             ))}
@@ -104,15 +107,11 @@ export const ToolScaffold = ({ utility, children }: ToolScaffoldProps) => {
                 results,
                 setResults,
                 loading,
-                setLoading
+                setLoading,
+                progress,
             })}
 
-            {loading && (
-                <div className="fixed bottom-8 right-8 bg-white shadow-xl border rounded-full px-6 py-3 flex items-center space-x-4">
-                    <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-                    <span className="text-sm font-medium text-slate-700">Processing batch...</span>
-                </div>
-            )}
+            <ResultList results={results} progress={progress} loading={loading} />
         </div>
     );
 };

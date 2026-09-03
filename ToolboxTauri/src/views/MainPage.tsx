@@ -1,13 +1,23 @@
-import { useState } from 'react';
-import { Utility, UtilityRegistry } from '../registry';
+import { useState, type ComponentType } from 'react';
+import { UtilityRegistry } from '../registry';
+import type { ToolDefinition } from '../contracts';
 import { PDFUnlockView } from './PDFUnlockView';
 import { PDFProtectView } from './PDFProtectView';
 import { ImageCompressView } from './ImageCompressView';
 import { ImageConvertView } from './ImageConvertView';
 import { TablerIcon } from '../components/TablerIcon';
+import { PlannedToolView } from './PlannedToolView';
+
+const views = {
+    'pdf-unlock': PDFUnlockView,
+    'pdf-protect': PDFProtectView,
+    'image-compress': ImageCompressView,
+    'image-convert': ImageConvertView,
+    planned: PlannedToolView,
+} satisfies Record<ToolDefinition["view"], ComponentType<{ utility: ToolDefinition }>>;
 
 export const MainPage = () => {
-    const [selectedTool, setSelectedTool] = useState<Utility | null>(null);
+    const [selectedTool, setSelectedTool] = useState<ToolDefinition | null>(null);
 
     return (
         <div className="flex h-screen bg-slate-50 text-slate-900 font-sans selection:bg-blue-100">
@@ -58,10 +68,10 @@ export const MainPage = () => {
             <div className="flex-1 p-12 overflow-auto bg-gradient-to-br from-slate-50 to-slate-100">
                 {selectedTool ? (
                     <div className="max-w-4xl mx-auto h-full">
-                        {selectedTool.id === 'pdf-unlock' && <PDFUnlockView utility={selectedTool} />}
-                        {selectedTool.id === 'pdf-protect' && <PDFProtectView utility={selectedTool} />}
-                        {selectedTool.id === 'image-compress' && <ImageCompressView utility={selectedTool} />}
-                        {selectedTool.id === 'image-convert' && <ImageConvertView utility={selectedTool} />}
+                        {(() => {
+                            const View = views[selectedTool.view];
+                            return <View utility={selectedTool} />;
+                        })()}
                     </div>
                 ) : (
                     <div className="h-full flex flex-col items-center justify-center text-center space-y-4">
