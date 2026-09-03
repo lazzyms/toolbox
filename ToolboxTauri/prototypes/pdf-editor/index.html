@@ -22,6 +22,16 @@
   .signature { position:absolute; left:29%; top:63%; padding:10px 17px; border:1px solid #ec4899; color:#be185d; background:#fce7f355; transform:rotate(-5deg); }
   .inspector { display:grid; gap:13px; } .state { margin-top:auto; background:#f8fafc; border-radius:9px; padding:11px; font:12px ui-monospace, monospace; white-space:pre-wrap; color:#334155; }
   .bottom { position:fixed; bottom:16px; left:50%; transform:translateX(-50%); display:flex; gap:8px; padding:9px; background:#172033ee; border-radius:13px; box-shadow:0 8px 28px #17203355; } .bottom button { box-shadow:none; }
+  .shell[data-variant="inspector"] { grid-template-columns: 280px 1fr 180px; }
+  .shell[data-variant="inspector"] .right { grid-column: 1; grid-row: 1; }
+  .shell[data-variant="inspector"] .stage { grid-column: 2; grid-row: 1; }
+  .shell[data-variant="inspector"] .left { grid-column: 3; grid-row: 1; }
+  .shell[data-variant="filmstrip"] { grid-template-columns: 1fr 270px; grid-template-rows: 145px 1fr; }
+  .shell[data-variant="filmstrip"] .left { grid-column: 1 / -1; grid-row: 1; }
+  .shell[data-variant="filmstrip"] .thumbs { display:flex; overflow:auto; }
+  .shell[data-variant="filmstrip"] .thumb { min-width:125px; }
+  .shell[data-variant="filmstrip"] .stage { grid-column: 1; grid-row: 2; }
+  .shell[data-variant="filmstrip"] .right { grid-column: 2; grid-row: 2; }
   @media (max-width: 900px) { .shell { grid-template-columns: 170px 1fr; } .right { display:none; } }
 </style>
 <header class="top"><h1>PDF editor · interaction prototype</h1><div class="variants" aria-label="Layout variants"><button data-variant="preview">Preview-first</button><button data-variant="inspector">Inspector-first</button><button data-variant="filmstrip">Filmstrip-first</button></div></header>
