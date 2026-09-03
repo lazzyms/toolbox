@@ -26,6 +26,13 @@ pub enum ResourceSource { Bundled, DevelopmentOverride, Path }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedResource { pub path: PathBuf, pub source: ResourceSource }
 
+pub fn application_resource_root() -> Option<PathBuf> {
+    if let Some(root) = std::env::var_os("TOOLBOX_RESOURCE_ROOT") { return Some(PathBuf::from(root)); }
+    let executable = std::env::current_exe().ok()?;
+    let parent = executable.parent()?;
+    if parent.file_name().and_then(|name| name.to_str()) == Some("MacOS") { parent.parent().map(|root| root.join("Resources")) } else { Some(parent.to_path_buf()) }
+}
+
 pub fn resolve(name: &str, bundled_root: &Path, override_var: &str, path_name: &str) -> Result<ResolvedResource, String> {
     let manifest_path = bundled_root.join("manifest.json");
     if manifest_path.is_file() {
