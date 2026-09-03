@@ -33,3 +33,27 @@ export interface PdfRect {
     width: number;
     height: number;
 }
+
+export type PdfPageScope = "all" | { selected: { pages: number[] } };
+
+export interface CropPdfRequest {
+    paths: string[];
+    rectangle: PdfRect;
+    scope: PdfPageScope;
+    outputLocation: "alongsideInput";
+}
+
+export interface SignPdfRequest extends CropPdfRequest {
+    page: number;
+    text: string;
+    signaturePath: string | null;
+}
+
+export interface OrganizePdfRequest {
+    paths: string[];
+    pageOrder: number[];
+    deletePages: number[];
+    rotatePages: { page: number; degrees: number }[];
+    scope: PdfPageScope;
+    outputLocation: "alongsideInput";
+}
