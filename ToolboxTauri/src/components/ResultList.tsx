@@ -16,7 +16,7 @@ export const ResultList = ({ results, progress, loading }: { results: JobOutcome
                 <div key={result.inputPath} className="flex items-center justify-between rounded-lg border bg-white p-3">
                     <span className="max-w-xs truncate text-sm">{result.inputPath.split(/[\\/]/).pop()}</span>
                     <span className={`rounded px-2 py-1 text-xs font-medium ${result.failure ? "bg-red-100 text-red-600" : "bg-green-100 text-green-600"}`}>
-                        {result.failure ?? result.detail}
+                        {result.failure?.message ?? result.detail}
                     </span>
                 </div>
             ))}

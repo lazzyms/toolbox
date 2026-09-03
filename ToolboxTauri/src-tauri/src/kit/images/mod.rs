@@ -1,10 +1,14 @@
 use std::path::PathBuf;
+use std::fs::File;
+use std::io::BufReader;
 
 use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::PngEncoder;
 use image::ImageEncoder;
+use image::AnimationDecoder;
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
+use crate::kit::contracts::ToolError;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum OutputFormat {
@@ -126,6 +130,21 @@ impl ImageProcessor {
     pub fn run(input_path: PathBuf, options: Options) -> JobOutcome {
         let original_bytes = std::fs::metadata(&input_path).map(|m| m.len()).unwrap_or(0);
 
+        if options.quality == 0 && options.target_format.is_none() {
+            let extension = input_path.extension().and_then(|e| e.to_str()).unwrap_or("bin");
+            let output_path = OutputNaming::get_destination(&input_path, &options.output_location, &options.suffix, extension);
+            return match std::fs::copy(&input_path, &output_path) {
+                Ok(_) => JobOutcome { input_path, output_paths: vec![output_path], detail: "Kept original bytes (lossless mode)".to_string(), failure: None },
+                Err(error) => JobOutcome { input_path, output_paths: vec![], detail: String::new(), failure: Some(ToolError::processing(format!("Lossless copy failed: {error}"))) },
+            };
+        }
+
+        if options.target_format.is_some() {
+            if let Err(error) = reject_animated_input(&input_path) {
+                return JobOutcome { input_path, output_paths: vec![], detail: String::new(), failure: Some(ToolError::processing(error)) };
+            }
+        }
+
         let img = match load_image(&input_path) {
             Ok(i) => i,
             Err(e) => {
@@ -133,7 +152,7 @@ impl ImageProcessor {
                     input_path,
                     output_paths: vec![],
                     detail: "".to_string(),
-                    failure: Some(e),
+                    failure: Some(ToolError::processing(e)),
                 };
             }
         };
@@ -158,7 +177,7 @@ impl ImageProcessor {
                     input_path,
                     output_paths: vec![],
                     detail: "".to_string(),
-                    failure: Some(e),
+                    failure: Some(ToolError::processing(e)),
                 };
             }
         };
@@ -168,8 +187,13 @@ impl ImageProcessor {
                 input_path,
                 output_paths: vec![],
                 detail: "".to_string(),
-                failure: Some(format!("Write failed: {}", e)),
+                failure: Some(ToolError::processing(format!("Write failed: {}", e))),
             };
+        }
+
+        if let Err(error) = validate_encoded_output(&output_path, img.width(), img.height(), format) {
+            let _ = std::fs::remove_file(&output_path);
+            return JobOutcome { input_path, output_paths: vec![], detail: String::new(), failure: Some(ToolError::processing(error)) };
         }
 
         let new_bytes = std::fs::metadata(&output_path).map(|m| m.len()).unwrap_or(0);
@@ -187,7 +211,7 @@ impl ImageProcessor {
                     input_path,
                     output_paths: vec![],
                     detail: "".to_string(),
-                    failure: Some(format!("Fallback copy failed: {}", e)),
+                    failure: Some(ToolError::processing(format!("Fallback copy failed: {}", e))),
                 };
             }
             return JobOutcome {
@@ -205,6 +229,23 @@ impl ImageProcessor {
             failure: None,
         }
     }
+}
+
+fn reject_animated_input(path: &std::path::Path) -> Result<(), String> {
+    if lower_ext(path).as_deref() != Some("gif") { return Ok(()); }
+    let file = File::open(path).map_err(|error| format!("Could not inspect GIF sequence: {error}"))?;
+    let decoder = image::codecs::gif::GifDecoder::new(BufReader::new(file)).map_err(|error| format!("Could not inspect GIF sequence: {error}"))?;
+    let frames = decoder.into_frames().collect_frames().map_err(|error| format!("Could not inspect GIF frames: {error}"))?;
+    if frames.len() > 1 { return Err("Animated GIF conversion is unsupported because it would discard frames; extract frames first.".to_string()); }
+    Ok(())
+}
+
+fn validate_encoded_output(path: &std::path::Path, width: u32, height: u32, format: OutputFormat) -> Result<(), String> {
+    if !path.is_file() { return Err("Encoder did not produce an output container.".to_string()); }
+    if format == OutputFormat::Heic { return Ok(()); }
+    let output = image::open(path).map_err(|error| format!("Encoded output could not be decoded: {error}"))?;
+    if output.width() != width || output.height() != height { return Err("Encoded output dimensions do not match the source.".to_string()); }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -276,6 +317,18 @@ mod tests {
 
         cleanup(&out.output_paths);
         let _ = std::fs::remove_file(&src);
+    }
+
+    #[test]
+    fn lossless_compression_preserves_source_bytes() {
+        let src = temp_path("lossless_src.png");
+        let original = b"deliberate source bytes";
+        std::fs::write(&src, original).unwrap();
+        let out = ImageProcessor::run(src.clone(), Options { target_format: None, quality: 0, keep_smaller_original: true, suffix: "-compressed".to_string(), output_location: OutputLocation::AlongsideInput });
+        assert!(out.failure.is_none(), "{}", out.failure.clone().unwrap_or_default());
+        assert_eq!(std::fs::read(&out.output_paths[0]).unwrap(), original);
+        cleanup(&out.output_paths);
+        let _ = std::fs::remove_file(src);
     }
 
     // Photo-size image: x265 rejects tiny frames on some builds, and the
@@ -360,6 +413,21 @@ mod tests {
         assert_eq!(detect_format(std::path::Path::new("x.heic")), OutputFormat::Heic);
         assert_eq!(detect_format(std::path::Path::new("x.HEIC")), OutputFormat::Heic);
         assert_eq!(detect_format(std::path::Path::new("x.jpeg")), OutputFormat::Jpeg);
+    }
+
+    #[test]
+    fn conversion_rejects_animated_gifs_without_mutating_source() {
+        let src = temp_path("animated_conversion.gif");
+        let file = std::fs::File::create(&src).unwrap();
+        let mut encoder = image::codecs::gif::GifEncoder::new(file);
+        let frames = (0..2).map(|value| image::Frame::from_parts(image::RgbaImage::from_pixel(2, 2, Rgba([value * 100, 0, 0, 255])), 0, 0, image::Delay::from_numer_denom_ms(100, 1))).collect::<Vec<_>>();
+        encoder.encode_frames(frames).unwrap();
+        let before = std::fs::read(&src).unwrap();
+        let result = ImageProcessor::run(src.clone(), Options { target_format: Some(OutputFormat::Png), quality: 80, keep_smaller_original: false, suffix: "-converted".to_string(), output_location: OutputLocation::AlongsideInput });
+        assert!(result.failure.is_some());
+        assert_eq!(std::fs::read(&src).unwrap(), before);
+        cleanup(&result.output_paths);
+        let _ = std::fs::remove_file(src);
     }
 }
 pub mod tools;

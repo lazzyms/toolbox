@@ -4,6 +4,7 @@ use lopdf::{dictionary, Document, Object};
 use std::path::{Path, PathBuf};
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
+use crate::kit::contracts::ToolError;
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -56,8 +57,12 @@ pub struct SignPdfRequest {
     pub text: String,
     pub signature_path: Option<PathBuf>,
     pub rectangle: PdfRect,
+    #[serde(default = "default_scope")]
+    pub scope: PageScope,
     pub output_location: OutputLocation,
 }
+
+fn default_scope() -> PageScope { PageScope::All }
 
 pub fn crop(request: &CropPdfRequest, input: PathBuf) -> JobOutcome {
     transform_pdf(input, &request.output_location, "-cropped", |document, pages| {
@@ -65,6 +70,7 @@ pub fn crop(request: &CropPdfRequest, input: PathBuf) -> JobOutcome {
         validate_rect(&request.rectangle)?;
         for (index, page_id) in pages.iter().enumerate() {
             if selected(index) {
+                validate_rect_for_page(document, *page_id, &request.rectangle)?;
                 let page = document.get_dictionary_mut(*page_id).map_err(|e| e.to_string())?;
                 page.set("MediaBox", vec![
                     Object::Real(request.rectangle.x),
@@ -105,8 +111,15 @@ pub fn organize(request: &OrganizePdfRequest, input: PathBuf) -> JobOutcome {
 pub fn sign(request: &SignPdfRequest, input: PathBuf) -> JobOutcome {
     transform_pdf(input, &request.output_location, "-signed", |document, pages| {
         validate_rect(&request.rectangle)?;
-        let Some(page_id) = pages.get(request.page).copied() else { return Err("Signature page is outside the document.".to_string()); };
+        let targets = match &request.scope {
+            PageScope::All => (0..pages.len()).collect::<Vec<_>>(),
+            PageScope::Selected { pages: selected } => selected.iter().copied().filter(|page| *page < pages.len()).collect(),
+        };
+        if targets.is_empty() { return Err("Select at least one page for the signature.".to_string()); }
+        if request.page >= pages.len() { return Err("Signature page is outside the document.".to_string()); }
         let stream = format!("BT /Fsig 24 Tf {} {} Td ({}) Tj ET", request.rectangle.x, request.rectangle.y, escape_text(&request.text));
+        for page_index in targets {
+        let page_id = pages[page_index];
         let (stream_id, resource_id, resource_name) = if let Some(path) = &request.signature_path {
             let (bytes, width, height) = signature_jpeg(path)?;
             let image_id = document.add_object(Object::Stream(lopdf::Stream::new(dictionary! {
@@ -118,7 +131,7 @@ pub fn sign(request: &SignPdfRequest, input: PathBuf) -> JobOutcome {
             (document.add_object(Object::Stream(lopdf::Stream::new(dictionary! {}, content.into_bytes()))), image_id, "XObject")
         } else {
             let font_id = document.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
-            let content_id = document.add_object(Object::Stream(lopdf::Stream::new(dictionary! {}, stream.into_bytes())));
+            let content_id = document.add_object(Object::Stream(lopdf::Stream::new(dictionary! {}, stream.clone().into_bytes())));
             (content_id, font_id, "Font")
         };
         let page = document.get_dictionary_mut(page_id).map_err(|e| e.to_string())?;
@@ -132,10 +145,11 @@ pub fn sign(request: &SignPdfRequest, input: PathBuf) -> JobOutcome {
             resources.get_mut(b"XObject").map_err(|e| e.to_string())?.as_dict_mut().map_err(|e| e.to_string())?.set("Isig", resource_id);
         }
         let contents = page.get_mut(b"Contents");
-        let Ok(contents) = contents else { page.set("Contents", Object::Reference(stream_id)); return Ok(()); };
-        if let Object::Reference(_) = contents { return Ok(()); }
+        let Ok(contents) = contents else { page.set("Contents", Object::Reference(stream_id)); continue; };
+        if let Object::Reference(_) = contents { continue; }
         let existing = contents.as_array().map_err(|e| e.to_string())?.to_vec();
         *contents = Object::Array(existing.into_iter().chain([Object::Reference(stream_id)]).collect());
+        }
         Ok(())
     })
 }
@@ -154,7 +168,17 @@ fn selected_pages(scope: &PageScope, count: usize) -> impl Fn(usize) -> bool + '
     move |index| match scope { PageScope::All => true, PageScope::Selected { pages } => pages.contains(&index) && index < count }
 }
 
-fn validate_rect(rect: &PdfRect) -> Result<(), String> { if rect.width <= 0.0 || rect.height <= 0.0 { Err("Rectangle must have positive dimensions.".to_string()) } else { Ok(()) } }
+fn validate_rect(rect: &PdfRect) -> Result<(), String> { if !rect.x.is_finite() || !rect.y.is_finite() || !rect.width.is_finite() || !rect.height.is_finite() || rect.width <= 0.0 || rect.height <= 0.0 { Err("Rectangle must have positive finite dimensions.".to_string()) } else { Ok(()) } }
+fn validate_rect_for_page(document: &Document, page_id: lopdf::ObjectId, rect: &PdfRect) -> Result<(), String> {
+    let page = document.get_dictionary(page_id).map_err(|error| error.to_string())?;
+    let media_box = page.get(b"MediaBox").and_then(Object::as_array).map_err(|error| error.to_string())?;
+    let left = media_box.first().and_then(|value| value.as_f32().ok()).ok_or_else(|| "PDF page has an invalid media box.".to_string())?;
+    let bottom = media_box.get(1).and_then(|value| value.as_f32().ok()).ok_or_else(|| "PDF page has an invalid media box.".to_string())?;
+    let right = media_box.get(2).and_then(|value| value.as_f32().ok()).ok_or_else(|| "PDF page has an invalid media box.".to_string())?;
+    let top = media_box.get(3).and_then(|value| value.as_f32().ok()).ok_or_else(|| "PDF page has an invalid media box.".to_string())?;
+    if rect.x < left || rect.y < bottom || rect.x + rect.width > right || rect.y + rect.height > top { return Err("Crop rectangle must stay within every selected page's media box.".to_string()); }
+    Ok(())
+}
 fn escape_text(text: &str) -> String { text.replace('\\', "\\\\").replace('(', "\\(").replace(')', "\\)") }
 fn signature_jpeg(path: &Path) -> Result<(Vec<u8>, u32, u32), String> {
     let image = image::open(path).map_err(|error| format!("Could not read signature image: {error}"))?;
@@ -163,7 +187,7 @@ fn signature_jpeg(path: &Path) -> Result<(Vec<u8>, u32, u32), String> {
     JpegEncoder::new_with_quality(&mut bytes, 95).write_image(rgb.as_raw(), rgb.width(), rgb.height(), image::ExtendedColorType::Rgb8).map_err(|error| format!("Could not encode signature image: {error}"))?;
     Ok((bytes, rgb.width(), rgb.height()))
 }
-fn failure(input_path: PathBuf, error: String) -> JobOutcome { JobOutcome { input_path, output_paths: vec![], detail: String::new(), failure: Some(error) } }
+fn failure(input_path: PathBuf, error: String) -> JobOutcome { JobOutcome::failure(input_path, ToolError::processing(error)) }
 
 #[allow(dead_code)]
 fn _path(_: &Path) {}

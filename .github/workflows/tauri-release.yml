@@ -49,8 +49,16 @@ jobs:
         include:
           - os: macos-26
             name: macOS
+            target: aarch64-apple-darwin
+            artifact: macos-aarch64
           - os: windows-latest
-            name: Windows
+            name: Windows x86_64
+            target: x86_64-pc-windows-msvc
+            artifact: windows-x86_64
+          - os: windows-11-arm
+            name: Windows arm64
+            target: aarch64-pc-windows-msvc
+            artifact: windows-arm64
     runs-on: ${{ matrix.os }}
     env:
       VERSION: ${{ needs.version.outputs.value }}
@@ -63,6 +71,8 @@ jobs:
         shell: bash
         run: test -n "$TAURI_SIGNING_PRIVATE_KEY"
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
       - uses: swatinem/rust-cache@v2
         with: {workspaces: ToolboxTauri/src-tauri}
       - uses: actions/setup-node@v4
@@ -71,6 +81,12 @@ jobs:
           cache: npm
           cache-dependency-path: ToolboxTauri/package-lock.json
       - run: npm ci
+        working-directory: ToolboxTauri
+      - name: Install Playwright browser
+        run: npx playwright install chromium
+        working-directory: ToolboxTauri
+      - name: Run UI automation
+        run: npm run test:ui
         working-directory: ToolboxTauri
       - name: Install qpdf (macOS)
         if: runner.os == 'macOS'
@@ -92,32 +108,35 @@ jobs:
         run: printf '{"version":"%s"}\n' "$VERSION" > release-config.json
       - run: cargo test
         working-directory: ToolboxTauri/src-tauri
+      - name: Run native E2E matrix
+        run: npm run test:native:e2e
+        working-directory: ToolboxTauri
       - name: Build macOS
         if: runner.os == 'macOS'
         working-directory: ToolboxTauri
         run: |
-          npm run tauri build -- --config release-config.json
-          ./scripts/bundle-qpdf.sh "$(pwd)/src-tauri/target/release/bundle/macos/Toolbox.app"
+          npm run tauri build -- --target ${{ matrix.target }} --config release-config.json
+          ./scripts/bundle-qpdf.sh "$(pwd)/src-tauri/target/${{ matrix.target }}/release/bundle/macos/Toolbox.app"
           mkdir -p release-assets
-          archive="$(find src-tauri/target/release/bundle/macos -name '*.app.tar.gz' -print -quit)"
-          cp "$archive" release-assets/Toolbox-macos-aarch64.app.tar.gz
-          cp "$archive.sig" release-assets/Toolbox-macos-aarch64.app.tar.gz.sig
-          dmg="$(pwd)/src-tauri/target/release/bundle/dmg/Toolbox_${VERSION}_aarch64.dmg"
-          ./scripts/make-dmg.sh "$(pwd)/src-tauri/target/release/bundle/macos/Toolbox.app" "$dmg"
+          archive="$(find src-tauri/target/${{ matrix.target }}/release/bundle/macos -name '*.app.tar.gz' -print -quit)"
+          cp "$archive" "release-assets/Toolbox-${{ matrix.artifact }}.app.tar.gz"
+          cp "$archive.sig" "release-assets/Toolbox-${{ matrix.artifact }}.app.tar.gz.sig"
+          dmg="$(pwd)/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/Toolbox_${VERSION}_aarch64.dmg"
+          ./scripts/make-dmg.sh "$(pwd)/src-tauri/target/${{ matrix.target }}/release/bundle/macos/Toolbox.app" "$dmg"
           cp "$dmg" "release-assets/Toolbox-$VERSION-macos.dmg"
       - name: Build Windows
         if: runner.os == 'Windows'
         shell: pwsh
         working-directory: ToolboxTauri
         run: |
-          npm run tauri build -- --config release-config.json
+          npm run tauri build -- --target ${{ matrix.target }} --config release-config.json
           New-Item -ItemType Directory -Force -Path release-assets | Out-Null
-          $installer = Get-ChildItem src-tauri\target\release\bundle\nsis -Filter *.exe | Select-Object -First 1
-          Copy-Item $installer.FullName release-assets\Toolbox-windows-x86_64-setup.exe
-          Copy-Item "$($installer.FullName).sig" release-assets\Toolbox-windows-x86_64-setup.exe.sig
+          $installer = Get-ChildItem "src-tauri\target\${{ matrix.target }}\release\bundle\nsis" -Filter *.exe | Select-Object -First 1
+          Copy-Item $installer.FullName "release-assets\Toolbox-${{ matrix.artifact }}-setup.exe"
+          Copy-Item "$($installer.FullName).sig" "release-assets\Toolbox-${{ matrix.artifact }}-setup.exe.sig"
       - uses: actions/upload-artifact@v7
         with:
-          name: toolbox-${{ matrix.name }}
+          name: toolbox-${{ matrix.artifact }}
           path: ToolboxTauri/release-assets/*
           if-no-files-found: error
 
@@ -131,16 +150,19 @@ jobs:
       - uses: actions/checkout@v7
         with: {ref: tauri-port, fetch-depth: 0}
       - uses: actions/download-artifact@v7
-        with: {name: toolbox-macOS, path: release-assets}
+        with: {name: toolbox-macos-aarch64, path: release-assets}
       - uses: actions/download-artifact@v7
-        with: {name: toolbox-Windows, path: release-assets}
+        with: {name: toolbox-windows-x86_64, path: release-assets}
+      - uses: actions/download-artifact@v7
+        with: {name: toolbox-windows-arm64, path: release-assets}
       - name: Create signed update manifest
         run: |
           set -euo pipefail
           jq -n --arg v "$VERSION" \
             --arg ms "$(cat release-assets/Toolbox-macos-aarch64.app.tar.gz.sig)" \
             --arg ws "$(cat release-assets/Toolbox-windows-x86_64-setup.exe.sig)" \
-            '{version:$v,notes:("Toolbox Tauri " + $v),platforms:{"darwin-aarch64":{url:("https://github.com/lazzyms/toolbox/releases/download/tauri-v"+$v+"/Toolbox-macos-aarch64.app.tar.gz"),signature:$ms},"windows-x86_64":{url:("https://github.com/lazzyms/toolbox/releases/download/tauri-v"+$v+"/Toolbox-windows-x86_64-setup.exe"),signature:$ws}}}' \
+            --arg wa "$(cat release-assets/Toolbox-windows-arm64-setup.exe.sig)" \
+            '{version:$v,notes:("Toolbox Tauri " + $v),platforms:{"darwin-aarch64":{url:("https://github.com/lazzyms/toolbox/releases/download/tauri-v"+$v+"/Toolbox-macos-aarch64.app.tar.gz"),signature:$ms},"windows-x86_64":{url:("https://github.com/lazzyms/toolbox/releases/download/tauri-v"+$v+"/Toolbox-windows-x86_64-setup.exe"),signature:$ws},"windows-aarch64":{url:("https://github.com/lazzyms/toolbox/releases/download/tauri-v"+$v+"/Toolbox-windows-arm64-setup.exe"),signature:$wa}}}' \
             > tauri-latest.json
           gh release create "tauri-v$VERSION" release-assets/* tauri-latest.json \
             --title "Toolbox Tauri $VERSION" --notes "Signed macOS and Windows installers."

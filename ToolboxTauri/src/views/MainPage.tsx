@@ -58,8 +58,8 @@ export const MainPage = () => {
 
     return (
         <div className="flex h-screen bg-slate-50 text-slate-900 font-sans selection:bg-blue-100">
-            {/* Sidebar */}
-            <div className="w-72 bg-white border-r border-slate-200 p-6 flex flex-col">
+            <a href="#tool-detail" className="sr-only focus:not-sr-only focus:absolute focus:z-10 focus:bg-white focus:p-2">Skip to tool</a>
+            <aside aria-label="Toolbox navigation" className="w-72 bg-white border-r border-slate-200 p-6 flex flex-col">
                 <div className="flex items-center space-x-3 mb-10 px-2">
                     <div className="w-8 h-8 bg-gradient-to-br from-amber-400 to-orange-500 rounded-lg flex items-center justify-center shadow-sm">
                         <TablerIcon name="briefcase" color="#172033" className="w-5 h-5" />
@@ -67,10 +67,11 @@ export const MainPage = () => {
                     <h1 className="text-xl font-bold tracking-tight">Toolbox</h1>
                 </div>
 
-                <div className="flex-1 space-y-1">
+                <nav aria-label="Utilities" className="flex-1 space-y-1">
                     {UtilityRegistry.map(tool => (
                         <button
                             key={tool.id}
+                            type="button"
                             onClick={() => setSelectedTool(tool)}
                             aria-current={selectedTool?.id === tool.id ? 'page' : undefined}
                             aria-label={`${tool.title}: ${tool.blurb}`}
@@ -84,7 +85,7 @@ export const MainPage = () => {
                             <span className="text-sm font-medium">{tool.shortTitle}</span>
                         </button>
                     ))}
-                </div>
+                </nav>
 
                 <div className="mt-auto p-4 bg-slate-100 rounded-2xl">
                     <p className="text-[11px] text-slate-400 text-center font-medium uppercase tracking-wider">Unified Native Engine</p>
@@ -101,10 +102,9 @@ export const MainPage = () => {
                         lazzyms
                     </a>
                 </p>
-            </div>
+            </aside>
 
-            {/* Detail Area */}
-            <div className="flex-1 p-12 overflow-auto bg-gradient-to-br from-slate-50 to-slate-100">
+            <main id="tool-detail" tabIndex={-1} aria-label="Tool detail" className="flex-1 p-12 overflow-auto bg-gradient-to-br from-slate-50 to-slate-100">
                 {selectedTool ? (
                     <div className="max-w-4xl mx-auto h-full">
                         {(() => {
@@ -112,7 +112,7 @@ export const MainPage = () => {
                             return <View utility={selectedTool} />;
                         })()}
                     </div>
-                ) : (
+                    ) : (
                     <div className="h-full flex flex-col items-center justify-center text-center space-y-4">
                         <div className="w-20 h-20 bg-slate-200 rounded-full flex items-center justify-center opacity-50">
                             <TablerIcon name="briefcase" color="#475569" className="w-10 h-10" />
@@ -123,7 +123,10 @@ export const MainPage = () => {
                         </div>
                     </div>
                 )}
-            </div>
+                <p className="sr-only" role="status" aria-live="polite">
+                    {selectedTool ? `${selectedTool.title} selected.` : "No tool selected."}
+                </p>
+            </main>
         </div>
     );
 };

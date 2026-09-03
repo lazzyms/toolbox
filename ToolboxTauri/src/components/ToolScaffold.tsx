@@ -27,7 +27,7 @@ export const ToolScaffold = ({ utility, onRun, children }: ToolScaffoldProps) =>
         try {
             setResults(await onRun(files));
         } catch (error) {
-            setResults([{ inputPath: 'Tool error', outputPaths: [], failure: String(error), detail: '' }]);
+            setResults([{ inputPath: 'Tool error', outputPaths: [], failure: { kind: 'processing', message: String(error) }, detail: '' }]);
         } finally {
             setLoading(false);
         }
@@ -62,7 +62,7 @@ export const ToolScaffold = ({ utility, onRun, children }: ToolScaffoldProps) =>
                 return fresh.length ? [...prev, ...fresh] : prev;
             });
         } catch (e) {
-            setResults([{ inputPath: 'Dialog error', outputPaths: [], failure: String(e), detail: '' }]);
+            setResults([{ inputPath: 'Dialog error', outputPaths: [], failure: { kind: 'processing', message: String(e) }, detail: '' }]);
         }
     };
 

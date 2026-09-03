@@ -5,9 +5,10 @@ import type { CompressImagesRequest, ToolDefinition, ToolResult } from '../contr
 
 export const ImageCompressView = ({ utility }: { utility: ToolDefinition }) => {
     const [quality, setQuality] = useState(80);
+    const [lossless, setLossless] = useState(false);
 
     return (
-        <ToolScaffold utility={utility} onRun={(paths) => invoke<ToolResult>('compress_images', { request: { paths, quality, outputLocation: 'alongsideInput' } satisfies CompressImagesRequest })}>
+        <ToolScaffold utility={utility} onRun={(paths) => invoke<ToolResult>('compress_images', { request: { paths, quality, lossless, outputLocation: 'alongsideInput' } satisfies CompressImagesRequest })}>
             {({ files, run, loading }) => (
                 <div className="space-y-6">
                     <div className="flex flex-col space-y-2 max-w-sm">
@@ -28,6 +29,11 @@ export const ImageCompressView = ({ utility }: { utility: ToolDefinition }) => {
                             <span>Higher Quality</span>
                         </div>
                     </div>
+
+                    <label className="flex items-center gap-2 text-sm text-slate-700">
+                        <input aria-label="Lossless compression" type="checkbox" checked={lossless} onChange={(e) => setLossless(e.target.checked)} />
+                        Lossless (preserve original bytes)
+                    </label>
 
                     <button
                         disabled={loading || files.length === 0}
