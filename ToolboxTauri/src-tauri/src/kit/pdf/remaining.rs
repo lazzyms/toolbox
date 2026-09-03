@@ -49,6 +49,7 @@ pub struct PdfToImagesRequest {
     pub paths: Vec<PathBuf>,
     pub dpi: u16,
     pub format: String,
+    #[serde(default)] pub page_range: Option<String>,
     pub output_location: OutputLocation,
 }
 
@@ -141,7 +142,15 @@ pub fn to_images(request: &PdfToImagesRequest, input: PathBuf) -> JobOutcome {
     let extension = if format == "jpg" { "jpg" } else { "png" };
     let destination = OutputNaming::get_destination(&input, &request.output_location, "-images", extension);
     let prefix = destination.with_extension("");
-    let output = Command::new(renderer).arg(format!("-{format}")).arg("-r").arg(dpi.to_string()).arg(&input).arg(&prefix).output();
+    let mut command = Command::new(renderer);
+    command.arg(format!("-{format}")).arg("-r").arg(dpi.to_string());
+    if let Some(range) = request.page_range.as_deref().filter(|value| !value.trim().is_empty()) {
+        let (first, last) = range.split_once('-').unwrap_or((range, range));
+        let first = match first.trim().parse::<usize>() { Ok(page) if page > 0 => page, _ => return failure(input, "Page range start must be a positive number.".to_string()) };
+        let last = match last.trim().parse::<usize>() { Ok(page) if page >= first => page, _ => return failure(input, "Page range must be ascending and use positive page numbers.".to_string()) };
+        command.arg("-f").arg(first.to_string()).arg("-l").arg(last.to_string());
+    }
+    let output = command.arg(&input).arg(&prefix).output();
     match output {
         Ok(result) if result.status.success() => {
             let mut outputs = fs::read_dir(prefix.parent().unwrap_or_else(|| std::path::Path::new("."))).ok().into_iter().flatten().filter_map(Result::ok).map(|entry| entry.path()).filter(|path| path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with(prefix.file_name().and_then(|stem| stem.to_str()).unwrap_or("")) && path.extension().is_some_and(|ext| ext == extension))).collect::<Vec<_>>();
