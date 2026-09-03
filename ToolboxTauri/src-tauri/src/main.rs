@@ -166,6 +166,8 @@ async fn extract_gif_frames(request: tools::GifExtractRequest) -> Vec<JobOutcome
 async fn process_tiff_pages(request: tools::TiffRequest) -> Vec<JobOutcome> { vec![tools::tiff(&request)] }
 #[tauri::command]
 async fn image_metadata(request: tools::MetadataRequest) -> Vec<JobOutcome> { BatchRunner::run(request.paths.clone(), |path| tools::strip_metadata(&request, path)) }
+#[tauri::command]
+fn inspect_image_metadata(request: tools::MetadataRequest) -> Vec<Result<tools::MetadataReport, String>> { request.paths.into_iter().map(tools::inspect_metadata).collect() }
 
 fn main() {
     tauri::Builder::default()
@@ -202,6 +204,7 @@ fn main() {
             extract_gif_frames,
             process_tiff_pages
             ,image_metadata
+            ,inspect_image_metadata
         ])
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
