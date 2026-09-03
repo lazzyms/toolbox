@@ -19,7 +19,7 @@ npm run tauri dev
 
 The Vite dev server listens on `http://localhost:1420`; Tauri opens a desktop window titled `Toolbox`. On macOS, install qpdf with `brew install qpdf` if PDF protection or unlocking is being exercised. On Windows, install qpdf with `choco install qpdf -y`; release builds bundle it beside the executable through `scripts/bundle-qpdf.ps1`.
 
-For a packaged smoke run, use `npm run tauri build` and launch the unsigned installer/app produced under `ToolboxTauri/src-tauri/target/release/bundle/`. Never drive a user's installed Toolbox while a verification run is active. Keep one dev instance per run; the dev server port and Tauri window are shared resources.
+For a packaged smoke run, use `npm run tauri build` and launch the unsigned app produced under `ToolboxTauri/src-tauri/target/release/bundle/`. The build may omit updater artifacts when `TAURI_SIGNING_PRIVATE_KEY` is absent. Never drive a user's installed Toolbox while a verification run is active. Keep one dev instance per run; the dev server port and Tauri window are shared resources.
 
 Teardown: close the Tauri window, stop the `npm run tauri dev` process you started, and remove only the run's scratch directory.
 
@@ -32,6 +32,8 @@ cd ToolboxTauri
 npm run build
 cd src-tauri
 cargo test
+cd ..
+npm run check:release
 ```
 
 On a live run, also confirm `http://localhost:1420` answers and that the focused desktop window is titled `Toolbox`. `cargo test` exercises the Rust kit and the IPC-facing command shapes; it is not a substitute for a real WebView drive.
@@ -46,13 +48,13 @@ Use the Tauri desktop window through the platform UI harness (macOS Accessibilit
 4. Exercise the feature's visible control: `PDF Password` + `Unlock PDF`, `Encryption Password` + `Protect PDF`, `Quality` + `Compress Images`, or a target format such as `JPEG` + `Convert Images`.
 5. Wait for `Processing batch…` to disappear and assert the result row is green and contains the expected detail. Inspect the filesystem output and prove the input bytes remain unchanged.
 
-The frontend invokes `unlock_pdf`, `protect_pdf`, `compress_images`, and `convert_images` through Tauri IPC. Do not call those commands directly for the UI proof. The app has no current resize, menu-bar, settings, analytics, or metadata-strip UI in this Tauri surface.
+The frontend invokes every command listed in the feature map through Tauri IPC. Do not call commands directly for a live UI proof. PDF rendering uses `pdftoppm`; PDF protection, merging, and splitting use qpdf. OCR, face blur, and background removal use offline adapters documented in `docs/tauri-vision-engines.md`; an absent adapter is an expected, explicit unsupported result, not a pass. The surface includes image geometry/effects/formats, PDF conversion/editor/selection tools, accessibility semantics, and release checks.
 
 ## Evidence
 
 Store proof artifacts under a run-specific `.verification/tauri-<timestamp>/evidence/` directory. Capture a screenshot showing the selected tool, fixture filename, visible option, and run button; a screenshot showing the resulting per-file row; `npm run build` and `cargo test` transcripts; and hashes or byte comparisons proving originals were unchanged, plus output extension, suffix, and encryption/format checks.
 
-Exercise the real user path through the Tauri window, file dialog, and run button. Verify visible results and filesystem side effects together. Use disposable local fixtures and passwords; do not upload files or use production secrets. Mocks are unnecessary because the Rust commands already isolate the local filesystem and qpdf boundary.
+Exercise the real user path through the Tauri window, file dialog, and run button. Verify visible results and filesystem side effects together. Use disposable local fixtures and passwords; do not upload files or use production secrets. For automation, run `npm run check:release` and `cargo test --manifest-path ToolboxTauri/src-tauri/Cargo.toml`; these prove contracts and native behavior but do not replace a live WebView drive.
 
 ## Cleanup
 
@@ -64,4 +66,4 @@ The canonical commands are `npm run tauri dev`, `npm run build`, and `cargo test
 
 ## Feature map
 
-See [`features/README.md`](features/README.md) for the maintained Tauri user-facing feature map. Keep it aligned with `ToolboxTauri/src/registry/index.ts` and `ToolboxTauri/src/views/`.
+See [`features/README.md`](features/README.md) for the maintained Tauri user-facing feature map. Keep it aligned with `ToolboxTauri/src/registry/index.ts`, `ToolboxTauri/src/views/`, `ToolboxTauri/src-tauri/src/main.rs`, and the native adapters documented in `docs/tauri-vision-engines.md`.
