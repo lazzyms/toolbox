@@ -362,3 +362,4 @@ mod tests {
         assert_eq!(detect_format(std::path::Path::new("x.jpeg")), OutputFormat::Jpeg);
     }
 }
+pub mod tools;

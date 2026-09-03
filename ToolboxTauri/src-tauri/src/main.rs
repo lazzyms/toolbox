@@ -5,6 +5,7 @@ mod kit;
 
 use crate::kit::common::{JobOutcome, OutputLocation};
 use crate::kit::images::{ImageProcessor, Options as ImageOptions, OutputFormat};
+use crate::kit::images::tools;
 use crate::kit::pdf::{editor, metadata, remaining, PDFProcessor};
 use crate::kit::contracts::{CompressImagesRequest, ConvertImagesRequest, PdfRequest};
 use crate::kit::common::batch_runner::BatchRunner;
@@ -137,6 +138,26 @@ async fn extract_pdf_images(request: remaining::PdfToTextRequest) -> Vec<JobOutc
 async fn images_to_pdf(request: remaining::ImagesToPdfRequest) -> Vec<JobOutcome> {
     vec![remaining::images_to_pdf(&request)]
 }
+#[tauri::command]
+async fn resize_images(request: tools::ResizeRequest) -> Vec<JobOutcome> { BatchRunner::run(request.paths.clone(), |path| tools::resize(&request, path)) }
+#[tauri::command]
+async fn rotate_images(request: tools::RotateRequest) -> Vec<JobOutcome> { BatchRunner::run(request.paths.clone(), |path| tools::rotate(&request, path)) }
+#[tauri::command]
+async fn crop_images(request: tools::CropRequest) -> Vec<JobOutcome> { BatchRunner::run(request.paths.clone(), |path| tools::crop(&request, path)) }
+#[tauri::command]
+async fn adjust_image_tone(request: tools::ToneRequest) -> Vec<JobOutcome> { BatchRunner::run(request.paths.clone(), |path| tools::tone(&request, path)) }
+#[tauri::command]
+async fn watermark_images(request: tools::WatermarkRequest) -> Vec<JobOutcome> { BatchRunner::run(request.paths.clone(), |path| tools::watermark(&request, path)) }
+#[tauri::command]
+async fn generate_icon_set(request: tools::IconSetRequest) -> Vec<JobOutcome> { BatchRunner::run(request.paths.clone(), |path| tools::icon_set(&request, path)) }
+#[tauri::command]
+async fn create_gif(request: tools::GifCreateRequest) -> Vec<JobOutcome> { vec![tools::gif_create(&request)] }
+#[tauri::command]
+async fn extract_gif_frames(request: tools::GifExtractRequest) -> Vec<JobOutcome> { BatchRunner::run(request.paths.clone(), |path| tools::gif_extract(&request, path)) }
+#[tauri::command]
+async fn process_tiff_pages(request: tools::TiffRequest) -> Vec<JobOutcome> { BatchRunner::run(request.paths.clone(), |path| tools::tiff(&request, path)) }
+#[tauri::command]
+async fn image_metadata(request: tools::MetadataRequest) -> Vec<JobOutcome> { BatchRunner::run(request.paths.clone(), |path| tools::strip_metadata(&request, path)) }
 
 fn main() {
     tauri::Builder::default()
@@ -159,7 +180,17 @@ fn main() {
             pdf_to_images,
             pdf_to_text,
             extract_pdf_images,
-            images_to_pdf
+            images_to_pdf,
+            resize_images,
+            rotate_images,
+            crop_images
+            ,adjust_image_tone,
+            watermark_images
+            ,generate_icon_set,
+            create_gif,
+            extract_gif_frames,
+            process_tiff_pages
+            ,image_metadata
         ])
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())

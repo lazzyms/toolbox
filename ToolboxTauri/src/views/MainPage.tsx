@@ -12,6 +12,10 @@ import { PDFSimpleToolView } from './PDFSimpleToolView';
 import { PDFSelectionView } from './PDFSelectionView';
 import { PDFPathsView } from './PDFPathsView';
 import { PDFConversionView } from './PDFConversionView';
+import { ImageGeometryView } from './ImageGeometryView';
+import { ImageEffectView } from './ImageEffectView';
+import { ImageFormatView } from './ImageFormatView';
+import { ImageMetadataView } from './ImageMetadataView';
 
 const views = {
     'pdf-unlock': PDFUnlockView,
@@ -30,6 +34,16 @@ const views = {
     'pdf-to-text': (props) => <PDFConversionView {...props} mode="to-text" />,
     'pdf-image-extract': (props) => <PDFConversionView {...props} mode="extract-images" />,
     'images-to-pdf': (props) => <PDFConversionView {...props} mode="images-to-pdf" />,
+    'image-resize': (props) => <ImageGeometryView {...props} mode="resize" />,
+    'image-rotate': (props) => <ImageGeometryView {...props} mode="rotate" />,
+    'image-crop': (props) => <ImageGeometryView {...props} mode="crop" />,
+    'image-watermark': (props) => <ImageEffectView {...props} mode="watermark" />,
+    'image-tone': (props) => <ImageEffectView {...props} mode="tone" />,
+    'image-icons': (props) => <ImageFormatView {...props} mode="icons" />,
+    'gif-create': (props) => <ImageFormatView {...props} mode="gif-create" />,
+    'gif-extract': (props) => <ImageFormatView {...props} mode="gif-extract" />,
+    'tiff-pages': (props) => <ImageFormatView {...props} mode="tiff" />,
+    'image-metadata': ImageMetadataView,
     'image-compress': ImageCompressView,
     'image-convert': ImageConvertView,
     planned: PlannedToolView,
