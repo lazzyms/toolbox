@@ -1,10 +1,5 @@
 import type { ToolDefinition } from "../contracts";
 
-const planned = (tool: Omit<ToolDefinition, "status">): ToolDefinition => ({ ...tool, status: "planned" });
-const pdf = (id: string, title: string, shortTitle: string, blurb: string, symbol: string, tint: string, command: string, verification: string, view: ToolDefinition["view"] = "planned") =>
-    planned({ id, title, shortTitle, blurb, symbol, tint, category: "PDF", command, verification, view });
-const image = (id: string, title: string, shortTitle: string, blurb: string, symbol: string, tint: string, command: string, verification: string, view: ToolDefinition["view"] = "planned") =>
-    planned({ id, title, shortTitle, blurb, symbol, tint, category: "Images", command, verification, view });
 
 export const UtilityRegistry: ToolDefinition[] = [
     { id: "pdf-unlock", title: "Remove PDF Password", shortTitle: "Unlock PDF", blurb: "Save an unlocked copy of a PDF you know the password for.", symbol: "lock-open", tint: "#f97316", category: "PDF", command: "unlock_pdf", verification: "unlock-pdf", view: "pdf-unlock", status: "implemented" },
@@ -19,7 +14,7 @@ export const UtilityRegistry: ToolDefinition[] = [
     { id: "pdf-split", title: "Split PDF", shortTitle: "Split", blurb: "Break a PDF into separate page files.", symbol: "file-scissors", tint: "#f97316", category: "PDF", command: "split_pdf", verification: "pdf-split", view: "pdf-split", status: "implemented" },
     { id: "pdf-image-extract", title: "Extract Images from PDF", shortTitle: "Extract Images", blurb: "Pull embedded JPEG pictures out at their original resolution.", symbol: "photo-search", tint: "#22c55e", category: "PDF", command: "extract_pdf_images", verification: "pdf-image-extract", view: "pdf-image-extract", status: "implemented" },
     { id: "pdf-sign", title: "Sign PDF", shortTitle: "Sign", blurb: "Place a visible typed signature on a PDF page.", symbol: "signature", tint: "#ec4899", category: "PDF", command: "sign_pdf", verification: "pdf-sign", view: "pdf-sign", status: "implemented" },
-    pdf("pdf-ocr", "OCR PDF", "OCR", "Read text out of scans on-device and save a text file.", "scan", "#14b8a6", "ocr_pdf", "pdf-ocr"),
+    { id: "pdf-ocr", title: "OCR PDF", shortTitle: "OCR", blurb: "Read text out of scans through an offline OCR adapter.", symbol: "scan", tint: "#14b8a6", category: "PDF", command: "ocr_pdf", verification: "pdf-ocr", view: "pdf-ocr", status: "implemented" },
     { id: "pdf-remove-pages", title: "Remove PDF Pages", shortTitle: "Remove Pages", blurb: "Delete selected pages while keeping the rest in order.", symbol: "file-minus", tint: "#92400e", category: "PDF", command: "remove_pdf_pages", verification: "pdf-remove-pages", view: "pdf-remove-pages", status: "implemented" },
     { id: "pdf-extract-pages", title: "Extract PDF Pages", shortTitle: "Extract Pages", blurb: "Pull selected page ranges into a new PDF.", symbol: "file-search", tint: "#6366f1", category: "PDF", command: "extract_pdf_pages", verification: "pdf-extract-pages", view: "pdf-extract-pages", status: "implemented" },
     { id: "pdf-organize", title: "Organize PDF", shortTitle: "Organize", blurb: "Reorder PDF pages and save an organized copy.", symbol: "layout-grid", tint: "#06b6d4", category: "PDF", command: "organize_pdf", verification: "pdf-organize", view: "pdf-organize", status: "implemented" },
@@ -36,8 +31,8 @@ export const UtilityRegistry: ToolDefinition[] = [
     { id: "image-metadata", title: "Image Metadata", shortTitle: "Metadata", blurb: "Save a copy without image metadata.", symbol: "info-circle", tint: "#10b981", category: "Images", command: "image_metadata", verification: "image-metadata", view: "image-metadata", status: "implemented" },
     { id: "image-tone", title: "Colour and Tone Adjustments", shortTitle: "Tone", blurb: "Adjust image brightness and contrast in batches.", symbol: "adjustments", tint: "#eab308", category: "Images", command: "adjust_image_tone", verification: "image-tone", view: "image-tone", status: "implemented" },
     { id: "tiff-pages", title: "Split and Combine TIFF", shortTitle: "TIFF Pages", blurb: "Process TIFF images without changing the source file.", symbol: "files", tint: "#92400e", category: "Images", command: "process_tiff_pages", verification: "tiff-pages", view: "tiff-pages", status: "implemented" },
-    image("image-blur-faces", "Blur Faces", "Blur Faces", "Detect faces on-device and blur them in photos.", "face-id", "#ef4444", "blur_faces", "image-blur-faces"),
-    image("image-remove-bg", "Remove Background", "Cutout", "Lift the subject out of a photo into a transparent PNG.", "wand", "#a855f7", "remove_image_background", "image-remove-bg"),
+    { id: "image-blur-faces", title: "Blur Faces", shortTitle: "Blur Faces", blurb: "Detect and blur faces through an offline vision adapter.", symbol: "face-id", tint: "#ef4444", category: "Images", command: "blur_faces", verification: "image-blur-faces", view: "image-blur-faces", status: "implemented" },
+    { id: "image-remove-bg", title: "Remove Background", shortTitle: "Cutout", blurb: "Remove backgrounds through an offline vision adapter.", symbol: "wand", tint: "#a855f7", category: "Images", command: "remove_image_background", verification: "image-remove-bg", view: "image-remove-bg", status: "implemented" },
 ];
 
 export const utilitiesByCategory = (category: ToolDefinition["category"]) =>

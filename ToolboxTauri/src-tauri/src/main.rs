@@ -7,6 +7,7 @@ use crate::kit::common::{JobOutcome, OutputLocation};
 use crate::kit::images::{ImageProcessor, Options as ImageOptions, OutputFormat};
 use crate::kit::images::tools;
 use crate::kit::pdf::{editor, metadata, remaining, PDFProcessor};
+use crate::kit::vision;
 use crate::kit::contracts::{CompressImagesRequest, ConvertImagesRequest, PdfRequest};
 use crate::kit::common::batch_runner::BatchRunner;
 
@@ -138,6 +139,13 @@ async fn extract_pdf_images(request: remaining::PdfToTextRequest) -> Vec<JobOutc
 async fn images_to_pdf(request: remaining::ImagesToPdfRequest) -> Vec<JobOutcome> {
     vec![remaining::images_to_pdf(&request)]
 }
+
+#[tauri::command]
+async fn ocr_pdf(request: vision::VisionRequest) -> Vec<JobOutcome> { BatchRunner::run(request.paths.clone(), |path| vision::ocr_pdf(&request, path)) }
+#[tauri::command]
+async fn blur_faces(request: vision::VisionRequest) -> Vec<JobOutcome> { BatchRunner::run(request.paths.clone(), |path| vision::blur_faces(&request, path)) }
+#[tauri::command]
+async fn remove_image_background(request: vision::VisionRequest) -> Vec<JobOutcome> { BatchRunner::run(request.paths.clone(), |path| vision::remove_background(&request, path)) }
 #[tauri::command]
 async fn resize_images(request: tools::ResizeRequest) -> Vec<JobOutcome> { BatchRunner::run(request.paths.clone(), |path| tools::resize(&request, path)) }
 #[tauri::command]
@@ -181,6 +189,9 @@ fn main() {
             pdf_to_text,
             extract_pdf_images,
             images_to_pdf,
+            ocr_pdf,
+            blur_faces,
+            remove_image_background,
             resize_images,
             rotate_images,
             crop_images
