@@ -73,10 +73,25 @@ pub struct PdfToTextRequest {
 
 pub fn merge(request: &MergePdfRequest) -> JobOutcome {
     let Some(first) = request.paths.first().cloned() else { return failure(PathBuf::new(), "Select at least one PDF.".to_string()); };
+    if request.paths.len() < 2 { return failure(first, "Select at least two PDFs to merge.".to_string()); }
+    let mut expected_pages = 0usize;
+    for path in &request.paths {
+        if path.extension().and_then(|extension| extension.to_str()).is_none_or(|extension| !extension.eq_ignore_ascii_case("pdf")) { return failure(first, format!("Only PDF inputs can be merged: {}", path.display())); }
+        let document = match Document::load(path) { Ok(document) => document, Err(error) => return failure(first, format!("Could not read {}: {error}", path.display())) };
+        expected_pages += document.get_pages().len();
+    }
     let output = OutputNaming::get_destination(&first, &request.output_location, "-merged", "pdf");
     let Some(qpdf) = qpdf() else { return failure(first, "qpdf is required to merge PDFs but was not found.".to_string()); };
     let result = Command::new(qpdf).arg("--empty").arg("--pages").args(&request.paths).arg("--").arg(&output).output();
-    match result { Ok(result) if result.status.success() => JobOutcome { input_path: first, output_paths: vec![output], detail: "PDFs merged".to_string(), failure: None }, Ok(result) => failure(first, stderr(result, "qpdf failed to merge the PDFs.")), Err(error) => failure(first, format!("Could not run qpdf: {error}")) }
+    match result {
+        Ok(result) if result.status.success() => match Document::load(&output) {
+            Ok(document) if document.get_pages().len() == expected_pages => JobOutcome { input_path: first, output_paths: vec![output], detail: format!("{} PDFs merged in input order", request.paths.len()), failure: None },
+            Ok(document) => { let _ = fs::remove_file(&output); failure(first, format!("Merged PDF page count mismatch: expected {expected_pages}, got {}.", document.get_pages().len())) },
+            Err(error) => { let _ = fs::remove_file(&output); failure(first, format!("Merged PDF could not be verified: {error}")) },
+        },
+        Ok(result) => { let _ = fs::remove_file(&output); failure(first, stderr(result, "qpdf failed to merge the PDFs.")) },
+        Err(error) => failure(first, format!("Could not run qpdf: {error}")),
+    }
 }
 
 pub fn split(request: &PageSelectionRequest, input: PathBuf) -> JobOutcome {
