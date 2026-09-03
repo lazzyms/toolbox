@@ -82,6 +82,12 @@ jobs:
           cache-dependency-path: ToolboxTauri/package-lock.json
       - run: npm ci
         working-directory: ToolboxTauri
+      - name: Install Playwright browser
+        run: npx playwright install chromium
+        working-directory: ToolboxTauri
+      - name: Run UI automation
+        run: npm run test:ui
+        working-directory: ToolboxTauri
       - name: Install qpdf (macOS)
         if: runner.os == 'macOS'
         run: brew install qpdf
@@ -102,6 +108,9 @@ jobs:
         run: printf '{"version":"%s"}\n' "$VERSION" > release-config.json
       - run: cargo test
         working-directory: ToolboxTauri/src-tauri
+      - name: Run native E2E matrix
+        run: npm run test:native:e2e
+        working-directory: ToolboxTauri
       - name: Build macOS
         if: runner.os == 'macOS'
         working-directory: ToolboxTauri

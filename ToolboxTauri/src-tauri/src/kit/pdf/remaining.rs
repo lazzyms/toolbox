@@ -121,13 +121,14 @@ pub fn split(request: &PageSelectionRequest, input: PathBuf) -> JobOutcome {
     let result = Command::new(qpdf).arg(&input).arg("--split-pages").arg(&pattern).output();
     match result {
         Ok(result) if result.status.success() => {
+            let prefix = pattern.file_stem().and_then(|stem| stem.to_str()).unwrap_or("output").replace("%d", "");
             let mut outputs = fs::read_dir(pattern.parent().unwrap_or_else(|| std::path::Path::new(".")))
                 .ok()
                 .into_iter()
                 .flatten()
                 .filter_map(Result::ok)
                 .map(|entry| entry.path())
-                .filter(|path| path.file_name().and_then(|name| name.to_str()).map(|name| name.starts_with(pattern.file_stem().and_then(|stem| stem.to_str()).unwrap_or("")) && path.extension().is_some_and(|ext| ext == "pdf")).unwrap_or(false))
+                .filter(|path| path.file_name().and_then(|name| name.to_str()).map(|name| name.starts_with(&prefix) && path.extension().is_some_and(|ext| ext == "pdf")).unwrap_or(false))
                 .collect::<Vec<_>>();
             outputs.sort();
             if outputs.is_empty() { failure(input, "qpdf reported success but produced no split files.".to_string()) }

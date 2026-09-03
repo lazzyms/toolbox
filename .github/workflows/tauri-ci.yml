@@ -62,6 +62,14 @@ jobs:
         run: npm ci
         working-directory: ToolboxTauri
 
+      - name: Install Playwright browser
+        run: npx playwright install chromium
+        working-directory: ToolboxTauri
+
+      - name: Run UI automation
+        run: npm run test:ui
+        working-directory: ToolboxTauri
+
       - name: Install qpdf (macOS)
         if: runner.os == 'macOS'
         run: brew install qpdf
@@ -90,6 +98,10 @@ jobs:
       - name: Run kit tests
         run: cargo test
         working-directory: ToolboxTauri/src-tauri
+
+      - name: Run native E2E matrix
+        run: npm run test:native:e2e
+        working-directory: ToolboxTauri
 
       - name: Verify the tool matrix
         run: npm run check:matrix
