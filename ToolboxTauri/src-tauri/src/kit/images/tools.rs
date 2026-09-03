@@ -39,7 +39,12 @@ pub struct WatermarkRequest {
 }
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct IconSetRequest { pub paths: Vec<PathBuf>, pub sizes: Vec<u32>, pub output_location: OutputLocation }
+pub struct IconSetRequest {
+    pub paths: Vec<PathBuf>,
+    #[serde(default = "default_icon_preset")] pub preset: String,
+    #[serde(default)] pub sizes: Vec<u32>,
+    pub output_location: OutputLocation,
+}
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GifCreateRequest {
@@ -143,14 +148,39 @@ fn glyph(character: char) -> [u8; 7] {
 }
 pub fn icon_set(request: &IconSetRequest, input: PathBuf) -> JobOutcome {
     let image = match image::open(&input) { Ok(image) => image, Err(error) => return failure(input, format!("Could not read image: {error}")) };
+    let (prefix, sizes) = match icon_plan(&request.preset, &request.sizes) { Ok(plan) => plan, Err(error) => return failure(input, error) };
     let mut outputs = Vec::new();
-    for size in request.sizes.iter().copied().filter(|size| *size > 0) {
-        let output = OutputNaming::get_destination(&input, &request.output_location, &format!("-icon-{size}"), "png");
-        if let Err(error) = image.resize_exact(size, size, image::imageops::FilterType::Lanczos3).save(&output) { return failure(input, format!("Could not save icon: {error}")); }
+    for size in sizes {
+        let output = OutputNaming::get_destination(&input, &request.output_location, &format!("-{prefix}-{size}"), "png");
+        if let Err(error) = image.resize_exact(size, size, image::imageops::FilterType::Lanczos3).save(&output) {
+            for created in &outputs { let _ = std::fs::remove_file(created); }
+            return failure(input, format!("Could not save icon: {error}"));
+        }
         outputs.push(output);
     }
-    if outputs.is_empty() { return failure(input, "Select at least one icon size.".to_string()); }
-    JobOutcome { input_path: input, output_paths: outputs, detail: "Icons saved".to_string(), failure: None }
+    let detail = match request.preset.as_str() {
+        "macos" => "macOS PNG icon set saved; ICNS container is unavailable on this target.",
+        "favicon" => "Favicon PNG icon set saved; ICO container is unavailable on this target.",
+        "ios" => "iOS PNG icon set saved.",
+        "android" => "Android PNG icon set saved.",
+        _ => "Custom PNG icon set saved.",
+    };
+    JobOutcome { input_path: input, output_paths: outputs, detail: detail.to_string(), failure: None }
+}
+
+fn default_icon_preset() -> String { "custom".to_string() }
+
+fn icon_plan(preset: &str, custom_sizes: &[u32]) -> Result<(&'static str, Vec<u32>), String> {
+    let sizes = match preset {
+        "macos" => ("macos-icon", vec![16, 32, 128, 256, 512, 1024]),
+        "favicon" => ("favicon", vec![16, 32, 48, 64, 128, 256]),
+        "ios" => ("ios-icon", vec![20, 29, 40, 60, 76, 83, 1024]),
+        "android" => ("android-icon", vec![48, 72, 96, 144, 192, 512]),
+        "custom" => ("icon", custom_sizes.iter().copied().filter(|size| *size > 0 && *size <= 4096).collect()),
+        _ => return Err(format!("Unsupported icon preset: {preset}.")),
+    };
+    if sizes.1.is_empty() { return Err("Select at least one custom icon size from 1 to 4096 pixels.".to_string()); }
+    Ok(sizes)
 }
 
 pub fn gif_create(request: &GifCreateRequest) -> JobOutcome {
@@ -389,5 +419,14 @@ mod tests {
         let _ = std::fs::remove_file(first);
         let _ = std::fs::remove_file(second);
         let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn icon_presets_are_named_and_reject_invalid_custom_sizes() {
+        let (prefix, macos) = icon_plan("macos", &[]).unwrap();
+        assert_eq!(prefix, "macos-icon");
+        assert_eq!(macos, vec![16, 32, 128, 256, 512, 1024]);
+        assert!(icon_plan("custom", &[0, 5000]).is_err());
+        assert!(icon_plan("unknown", &[]).is_err());
     }
 }
