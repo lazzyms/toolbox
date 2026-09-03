@@ -14,6 +14,10 @@ use crate::kit::contracts::ToolError;
 pub struct PageOverlayRequest {
     pub paths: Vec<PathBuf>,
     pub text: String,
+    #[serde(default)] pub opacity: u8,
+    #[serde(default)] pub position: Option<String>,
+    #[serde(default)] pub logo_path: Option<PathBuf>,
+    #[serde(default)] pub pages: Option<Vec<usize>>,
     pub output_location: OutputLocation,
 }
 
@@ -251,13 +255,15 @@ fn image_as_jpeg(path: &PathBuf) -> Result<(Vec<u8>, u32, u32), String> {
 pub fn add_page_numbers(request: &PageOverlayRequest, input: PathBuf) -> JobOutcome {
     overlay(request, input, "-numbered", |page_number, width, height| {
         format!("BT /Fnum 12 Tf {} {} Td ({}) Tj ET", width - 50.0, 24.0_f32.min(height / 2.0), page_number)
-    })
+    }, 100)
 }
 
 pub fn watermark(request: &PageOverlayRequest, input: PathBuf) -> JobOutcome {
+    if let Some(path) = &request.logo_path { return watermark_image(request, input, path); }
     overlay(request, input, "-watermarked", |_, width, height| {
-        format!("BT /Fnum 48 Tf {} {} Td ({}) Tj ET", width / 4.0, height / 2.0, escape(&request.text))
-    })
+        let (x, y) = watermark_position(request.position.as_deref(), width, height);
+        format!("BT /Fnum 48 Tf {x} {y} Td ({}) Tj ET", escape(&request.text))
+    }, request.opacity.clamp(1, 100))
 }
 
 pub fn compress(request: &CompressPdfRequest, input: PathBuf) -> JobOutcome {
@@ -332,12 +338,15 @@ fn save(mut document: Document, input: PathBuf, output: PathBuf, detail: &str) -
     match document.save(&output) { Ok(_) => JobOutcome { input_path: input, output_paths: vec![output], detail: detail.to_string(), failure: None }, Err(error) => failure(input, format!("Save failed: {error}")) }
 }
 
-fn overlay<F>(request: &PageOverlayRequest, input: PathBuf, suffix: &str, content: F) -> JobOutcome
+fn overlay<F>(request: &PageOverlayRequest, input: PathBuf, suffix: &str, content: F, opacity: u8) -> JobOutcome
 where F: Fn(usize, f32, f32) -> String {
     let output = OutputNaming::get_destination(&input, &request.output_location, suffix, "pdf");
     let mut document = match Document::load(&input) { Ok(document) => document, Err(error) => return failure(input, error.to_string()) };
     let font_id = document.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
+    if let Err(error) = validate_overlay_scope(request.pages.as_deref(), document.get_pages().len()) { return failure(input, error); }
+    let opacity_id = document.add_object(dictionary! { "Type" => "ExtGState", "ca" => opacity as f32 / 100.0, "CA" => opacity as f32 / 100.0 });
     for (number, page_id) in document.get_pages().values().copied().enumerate() {
+        if request.pages.as_ref().is_some_and(|pages| !pages.contains(&number)) { continue; }
         let Ok(page) = document.get_dictionary(page_id) else { return failure(input, "Could not read PDF page".to_string()); };
         let Ok(media_box) = page.get(b"MediaBox").and_then(Object::as_array) else { return failure(input, "PDF page has no media box".to_string()); };
         let Ok(left) = media_box[0].as_f32() else { return failure(input, "PDF page left edge is invalid".to_string()); };
@@ -352,9 +361,49 @@ where F: Fn(usize, f32, f32) -> String {
         let resources = match page.get_mut(b"Resources").and_then(Object::as_dict_mut) { Ok(resources) => resources, Err(error) => return failure(input, error.to_string()) };
         if !resources.has(b"Font") { resources.set("Font", Object::Dictionary(dictionary! {})); }
         if let Err(error) = resources.get_mut(b"Font").and_then(Object::as_dict_mut).map(|fonts| fonts.set("Fnum", font_id)) { return failure(input, error.to_string()); }
-        if let Err(error) = document.add_page_contents(page_id, content(number + 1, width, height).into_bytes()) { return failure(input, error.to_string()); }
+        resources.set("ExtGState", resources.get(b"ExtGState").cloned().unwrap_or_else(|_| Object::Dictionary(dictionary! {})));
+        if let Err(error) = resources.get_mut(b"ExtGState").and_then(Object::as_dict_mut).map(|states| states.set("GSwm", opacity_id)) { return failure(input, error.to_string()); }
+        if let Err(error) = document.add_page_contents(page_id, format!("q /GSwm gs {} Q", content(number + 1, width, height)).into_bytes()) { return failure(input, error.to_string()); }
     }
     match document.save(&output) { Ok(_) => JobOutcome { input_path: input, output_paths: vec![output], detail: "PDF saved".to_string(), failure: None }, Err(error) => failure(input, format!("Save failed: {error}")) }
+}
+
+fn watermark_position(position: Option<&str>, width: f32, height: f32) -> (f32, f32) {
+    match position.unwrap_or("center") {
+        "top-left" => (24.0, height - 48.0), "top-right" => (width - 180.0, height - 48.0),
+        "bottom-left" => (24.0, 24.0), "bottom-right" => (width - 180.0, 24.0),
+        _ => (width / 4.0, height / 2.0),
+    }
+}
+
+fn watermark_image(request: &PageOverlayRequest, input: PathBuf, logo: &PathBuf) -> JobOutcome {
+    let output = OutputNaming::get_destination(&input, &request.output_location, "-watermarked", "pdf");
+    let mut document = match Document::load(&input) { Ok(document) => document, Err(error) => return failure(input, error.to_string()) };
+    if let Err(error) = validate_overlay_scope(request.pages.as_deref(), document.get_pages().len()) { return failure(input, error); }
+    let (bytes, width, height) = match image_as_jpeg(logo) { Ok(value) => value, Err(error) => return failure(input, error) };
+    let image_id = document.add_object(Stream::new(dictionary! { "Type" => "XObject", "Subtype" => "Image", "Width" => width as i64, "Height" => height as i64, "ColorSpace" => "DeviceRGB", "BitsPerComponent" => 8, "Filter" => "DCTDecode" }, bytes));
+    let state_id = document.add_object(dictionary! { "Type" => "ExtGState", "ca" => request.opacity.clamp(1, 100) as f32 / 100.0, "CA" => request.opacity.clamp(1, 100) as f32 / 100.0 });
+    for (number, page_id) in document.get_pages().values().copied().enumerate() {
+        if request.pages.as_ref().is_some_and(|pages| !pages.contains(&number)) { continue; }
+        let page = match document.get_dictionary_mut(page_id) { Ok(page) => page, Err(error) => return failure(input, error.to_string()) };
+        if !page.has(b"Resources") { page.set("Resources", Object::Dictionary(dictionary! {})); }
+        let resources = match page.get_mut(b"Resources").and_then(Object::as_dict_mut) { Ok(resources) => resources, Err(error) => return failure(input, error.to_string()) };
+        resources.set("XObject", resources.get(b"XObject").cloned().unwrap_or_else(|_| Object::Dictionary(dictionary! {})));
+        resources.set("ExtGState", resources.get(b"ExtGState").cloned().unwrap_or_else(|_| Object::Dictionary(dictionary! {})));
+        resources.get_mut(b"XObject").and_then(Object::as_dict_mut).map(|objects| objects.set("Iwm", image_id)).map_err(|error| error.to_string()).ok();
+        resources.get_mut(b"ExtGState").and_then(Object::as_dict_mut).map(|states| states.set("GSwm", state_id)).map_err(|error| error.to_string()).ok();
+        let (x, y) = watermark_position(request.position.as_deref(), width as f32, height as f32);
+        if let Err(error) = document.add_page_contents(page_id, format!("q /GSwm gs {} 0 0 {} {} {} cm /Iwm Do Q", width.min(180) as f32, height.min(100) as f32, x, y).into_bytes()) { return failure(input, error.to_string()); }
+    }
+    match document.save(&output) { Ok(_) => JobOutcome { input_path: input, output_paths: vec![output], detail: "PDF image watermark applied".to_string(), failure: None }, Err(error) => failure(input, format!("Save failed: {error}")) }
+}
+
+fn validate_overlay_scope(pages: Option<&[usize]>, page_count: usize) -> Result<(), String> {
+    if let Some(pages) = pages {
+        if pages.is_empty() { return Err("Select at least one page for the watermark.".to_string()); }
+        if pages.iter().any(|page| *page >= page_count) { return Err("A watermark page is outside the document.".to_string()); }
+    }
+    Ok(())
 }
 
 fn escape(text: &str) -> String { text.replace('\\', "\\\\").replace('(', "\\(").replace(')', "\\)") }
