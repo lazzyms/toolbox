@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "test:ui": "playwright test",
     "check:matrix": "node scripts/check-tool-matrix.mjs",
     "check:release": "npm run check:matrix && node scripts/check-release-readiness.mjs",
     "preview": "vite preview",
@@ -20,6 +21,7 @@
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@tailwindcss/vite": "^4",
     "@tauri-apps/cli": "^2",
     "@types/react": "^18.3.12",

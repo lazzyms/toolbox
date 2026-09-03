@@ -56,6 +56,8 @@ run by hand — SwiftPM fetches the one dependency (Sparkle) on first build.
 git clone https://github.com/lazzyms/toolbox.git
 cd toolbox
 
+git config core.hooksPath .githooks
+
 swift test                              # the test suite
 ./Scripts/build-app.sh --version 0.0.0  # → dist/Toolbox.app (universal, ad-hoc signed)
 ./Scripts/make-dmg.sh   --version 0.0.0 # → dist/Toolbox-0.0.0.dmg
@@ -64,6 +66,9 @@ swift test                              # the test suite
 `swift test` covers everything in `ToolboxKit`, which is where the real work happens,
 so most changes can be developed and verified without launching the app at all. You
 can also open `Package.swift` in Xcode and run the `Toolbox` scheme.
+
+Commits run the full browser UI automation suite for all registered Tauri features.
+Install its dependencies with `cd ToolboxTauri && npm ci` before committing.
 
 An ad-hoc signed build needs the one-time **right-click → Open** on first launch. See
 [Distribution](README.md#distribution) in the README for why.

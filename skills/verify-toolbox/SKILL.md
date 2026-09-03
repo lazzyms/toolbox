@@ -19,6 +19,8 @@ npm run tauri dev
 
 The Vite dev server listens on `http://localhost:1420`; Tauri opens a desktop window titled `Toolbox`. On macOS, install qpdf with `brew install qpdf` if PDF protection or unlocking is being exercised. On Windows, install qpdf with `choco install qpdf -y`; release builds bundle it beside the executable through `scripts/bundle-qpdf.ps1`.
 
+For automated browser UI coverage of every registered feature, run `npm run test:ui` from `ToolboxTauri/`. The test starts Vite, selects each registry entry, and asserts the matching detail heading and live status. This verifies navigation and pane reachability; feature processing remains covered by the live drive and native tests below.
+
 For a packaged smoke run, use `npm run tauri build` and launch the unsigned app produced under `ToolboxTauri/src-tauri/target/release/bundle/`. The build may omit updater artifacts when `TAURI_SIGNING_PRIVATE_KEY` is absent. Never drive a user's installed Toolbox while a verification run is active. Keep one dev instance per run; the dev server port and Tauri window are shared resources.
 
 Teardown: close the Tauri window, stop the `npm run tauri dev` process you started, and remove only the run's scratch directory.
