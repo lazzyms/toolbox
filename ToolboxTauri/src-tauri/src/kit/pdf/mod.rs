@@ -14,6 +14,12 @@ pub struct PDFProcessor;
 
 impl PDFProcessor {
     pub fn remove_password(input_path: PathBuf, password: &str, output_location: &OutputLocation) -> JobOutcome {
+        if password.is_empty() {
+            return JobOutcome { input_path, output_paths: vec![], detail: "".to_string(), failure: Some(ToolError::invalid_input("Enter the PDF password.")) };
+        }
+        if input_path.extension().and_then(|extension| extension.to_str()).is_none_or(|extension| !extension.eq_ignore_ascii_case("pdf")) {
+            return JobOutcome { input_path, output_paths: vec![], detail: "".to_string(), failure: Some(ToolError::invalid_input("Only PDF files can be unlocked.")) };
+        }
         let output_path = OutputNaming::get_destination(
             &input_path,
             output_location,
@@ -39,19 +45,14 @@ impl PDFProcessor {
                     };
                 }
                 let mut doc = doc;
+                let page_count = doc.get_pages().len();
                 match doc.save(&output_path) {
-                    Ok(_) => JobOutcome {
-                        input_path,
-                        output_paths: vec![output_path],
-                        detail: "PDF Unlocked".to_string(),
-                        failure: None,
+                    Ok(_) => match Document::load(&output_path) {
+                        Ok(verified) if !verified.is_encrypted() && verified.get_pages().len() == page_count && verified.objects.len() > 1 => JobOutcome { input_path, output_paths: vec![output_path], detail: "PDF Unlocked and verified".to_string(), failure: None },
+                        Ok(_) => { let _ = std::fs::remove_file(&output_path); JobOutcome { input_path, output_paths: vec![], detail: "".to_string(), failure: Some(ToolError::processing("Unlocked PDF failed verification.")) } },
+                        Err(error) => { let _ = std::fs::remove_file(&output_path); JobOutcome { input_path, output_paths: vec![], detail: "".to_string(), failure: Some(ToolError::processing(format!("Unlocked PDF could not be reopened: {error}"))) } },
                     },
-                    Err(e) => JobOutcome {
-                        input_path,
-                        output_paths: vec![],
-                        detail: "".to_string(),
-                        failure: Some(ToolError::processing(format!("Save failed: {}", e))),
-                    },
+                    Err(e) => { let _ = std::fs::remove_file(&output_path); JobOutcome { input_path, output_paths: vec![], detail: "".to_string(), failure: Some(ToolError::processing(format!("Save failed: {}", e))) } },
                 }
             }
             Err(e) => JobOutcome {
