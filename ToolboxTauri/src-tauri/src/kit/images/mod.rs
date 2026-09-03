@@ -32,6 +32,7 @@ pub struct Options {
     pub quality: u8, // 1-100
     pub keep_smaller_original: bool,
     pub suffix: String,
+    pub output_location: OutputLocation,
 }
 
 fn lower_ext(path: &std::path::Path) -> Option<String> {
@@ -144,10 +145,9 @@ impl ImageProcessor {
 
         let output_path = OutputNaming::get_destination(
             &input_path,
-            &OutputLocation::AlongsideInput,
+            &options.output_location,
             &options.suffix,
             extension,
-            None,
         );
 
         let quality = options.quality.clamp(1, 100);
@@ -178,10 +178,9 @@ impl ImageProcessor {
             let _ = std::fs::remove_file(&output_path);
             let fallback_path = OutputNaming::get_destination(
                 &input_path,
-                &OutputLocation::AlongsideInput,
+                &options.output_location,
                 &options.suffix,
                 input_path.extension().and_then(|e| e.to_str()).unwrap_or("bin"),
-                None,
             );
             if let Err(e) = std::fs::copy(&input_path, &fallback_path) {
                 return JobOutcome {
@@ -237,6 +236,7 @@ mod tests {
                 quality: 80,
                 keep_smaller_original: false,
                 suffix: "-converted".to_string(),
+                output_location: OutputLocation::AlongsideInput,
             },
         );
 
@@ -263,6 +263,7 @@ mod tests {
                 quality: 50,
                 keep_smaller_original: true,
                 suffix: "-compressed".to_string(),
+                output_location: OutputLocation::AlongsideInput,
             },
         );
 
@@ -293,6 +294,7 @@ mod tests {
                 quality: 80,
                 keep_smaller_original: false,
                 suffix: "-heic".to_string(),
+                output_location: OutputLocation::AlongsideInput,
             },
         );
         assert!(heic.failure.is_none(), "{}", heic.failure.clone().unwrap_or_default());
@@ -308,6 +310,7 @@ mod tests {
                 quality: 80,
                 keep_smaller_original: false,
                 suffix: "-back".to_string(),
+                output_location: OutputLocation::AlongsideInput,
             },
         );
         assert!(back.failure.is_none(), "{}", back.failure.clone().unwrap_or_default());
@@ -333,6 +336,7 @@ mod tests {
                 quality: 60,
                 keep_smaller_original: false,
                 suffix: "-webp".to_string(),
+                output_location: OutputLocation::AlongsideInput,
             },
         );
 

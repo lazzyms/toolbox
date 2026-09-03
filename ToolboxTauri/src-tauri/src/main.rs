@@ -3,46 +3,42 @@
 
 mod kit;
 
-use crate::kit::common::JobOutcome;
+use crate::kit::common::{JobOutcome, OutputLocation};
 use crate::kit::images::{ImageProcessor, Options as ImageOptions, OutputFormat};
 use crate::kit::pdf::PDFProcessor;
+use crate::kit::contracts::{CompressImagesRequest, ConvertImagesRequest, PdfRequest};
 use crate::kit::common::batch_runner::BatchRunner;
-use std::path::PathBuf;
 
 #[tauri::command]
-async fn unlock_pdf(paths: Vec<String>, password: String) -> Vec<JobOutcome> {
-    let inputs: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
-    BatchRunner::run(inputs, |path| {
-        PDFProcessor::remove_password(path, &password)
+async fn unlock_pdf(request: PdfRequest) -> Vec<JobOutcome> {
+    BatchRunner::run(request.paths, |path| {
+        PDFProcessor::remove_password(path, &request.password, &request.output_location)
     })
 }
 
 #[tauri::command]
-async fn protect_pdf(paths: Vec<String>, password: String) -> Vec<JobOutcome> {
-    let inputs: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
-    BatchRunner::run(inputs, |path| {
-        PDFProcessor::protect(path, &password)
+async fn protect_pdf(request: PdfRequest) -> Vec<JobOutcome> {
+    BatchRunner::run(request.paths, |path| {
+        PDFProcessor::protect(path, &request.password, &request.output_location)
     })
 }
 
 #[tauri::command]
-async fn compress_images(paths: Vec<String>, quality: u8) -> Vec<JobOutcome> {
-    let inputs: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
-    BatchRunner::run(inputs, |path| {
+async fn compress_images(request: CompressImagesRequest) -> Vec<JobOutcome> {
+    BatchRunner::run(request.paths, |path| {
         ImageProcessor::run(path, ImageOptions {
             target_format: None,
-            quality,
+            quality: request.quality,
             keep_smaller_original: true,
             suffix: "-compressed".to_string(),
+            output_location: request.output_location.clone(),
         })
     })
 }
 
 #[tauri::command]
-async fn convert_images(paths: Vec<String>, format: String) -> Vec<JobOutcome> {
-    let inputs: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
-
-    let img_format = match format.as_str() {
+async fn convert_images(request: ConvertImagesRequest) -> Vec<JobOutcome> {
+    let img_format = match request.format.as_str() {
         "jpg" => OutputFormat::Jpeg,
         "png" => OutputFormat::Png,
         "webp" => OutputFormat::WebP,
@@ -50,12 +46,13 @@ async fn convert_images(paths: Vec<String>, format: String) -> Vec<JobOutcome> {
         _ => OutputFormat::Png,
     };
 
-    BatchRunner::run(inputs, |path| {
+    BatchRunner::run(request.paths, |path| {
         ImageProcessor::run(path, ImageOptions {
             target_format: Some(img_format),
             quality: 80,
             keep_smaller_original: false,
             suffix: "-converted".to_string(),
+            output_location: request.output_location.clone(),
         })
     })
 }
@@ -83,6 +80,7 @@ mod command_tests {
 
     use super::*;
     use image::Rgba;
+    use std::path::PathBuf;
 
     fn temp_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("toolbox_cmd_{}_{}", std::process::id(), name))
@@ -105,10 +103,9 @@ mod command_tests {
         let src = temp_path("cmd_convert.png");
         write_png(&src, 256, 44);
 
-        let heic = tauri::async_runtime::block_on(convert_images(
-            vec![src.display().to_string()],
-            "heic".to_string(),
-        ));
+        let heic = tauri::async_runtime::block_on(convert_images(ConvertImagesRequest {
+            paths: vec![src.clone()], format: "heic".to_string(), output_location: OutputLocation::AlongsideInput,
+        }));
         assert!(heic[0].failure.is_none(), "{}", heic[0].failure.clone().unwrap_or_default());
         assert_eq!(
             heic[0].output_paths[0].extension().and_then(|e| e.to_str()),
@@ -117,10 +114,9 @@ mod command_tests {
         let bytes = std::fs::read(&heic[0].output_paths[0]).unwrap();
         assert!(heif::decode(&bytes).is_ok(), "command output must be real HEIC");
 
-        let webp = tauri::async_runtime::block_on(convert_images(
-            vec![src.display().to_string()],
-            "webp".to_string(),
-        ));
+        let webp = tauri::async_runtime::block_on(convert_images(ConvertImagesRequest {
+            paths: vec![src.clone()], format: "webp".to_string(), output_location: OutputLocation::AlongsideInput,
+        }));
         assert!(webp[0].failure.is_none(), "{}", webp[0].failure.clone().unwrap_or_default());
         let bytes = std::fs::read(&webp[0].output_paths[0]).unwrap();
         assert_eq!(&bytes[..4], b"RIFF", "command output must be real WebP");
@@ -137,10 +133,9 @@ mod command_tests {
         write_png(&a, 128, 1);
         write_png(&b, 128, 2);
 
-        let out = tauri::async_runtime::block_on(convert_images(
-            vec![a.display().to_string(), b.display().to_string()],
-            "jpg".to_string(),
-        ));
+        let out = tauri::async_runtime::block_on(convert_images(ConvertImagesRequest {
+            paths: vec![a.clone(), b.clone()], format: "jpg".to_string(), output_location: OutputLocation::AlongsideInput,
+        }));
         assert_eq!(out.len(), 2);
         for job in &out {
             assert!(job.failure.is_none(), "{}", job.failure.clone().unwrap_or_default());
@@ -159,7 +154,9 @@ mod command_tests {
         write_png(&src, 128, 7);
         let before = std::fs::metadata(&src).unwrap().len();
 
-        let out = tauri::async_runtime::block_on(compress_images(vec![src.display().to_string()], 50));
+        let out = tauri::async_runtime::block_on(compress_images(CompressImagesRequest {
+            paths: vec![src.clone()], quality: 50, output_location: OutputLocation::AlongsideInput,
+        }));
         assert!(out[0].failure.is_none(), "{}", out[0].failure.clone().unwrap_or_default());
         assert_eq!(
             out[0].output_paths[0].extension().and_then(|e| e.to_str()),
@@ -170,5 +167,24 @@ mod command_tests {
 
         cleanup(&out[0].output_paths);
         let _ = std::fs::remove_file(&src);
+    }
+
+    #[test]
+    fn convert_command_keeps_batch_failures_isolated() {
+        let valid = temp_path("cmd_mixed_valid.png");
+        let missing = temp_path("cmd_mixed_missing.png");
+        write_png(&valid, 64, 9);
+
+        let out = tauri::async_runtime::block_on(convert_images(ConvertImagesRequest {
+            paths: vec![valid.clone(), missing.clone()],
+            format: "jpg".to_string(),
+            output_location: OutputLocation::AlongsideInput,
+        }));
+        assert_eq!(out.len(), 2);
+        assert!(out.iter().any(|job| job.failure.is_none()));
+        assert!(out.iter().any(|job| job.failure.is_some()));
+
+        cleanup(&out.iter().flat_map(|job| job.output_paths.clone()).collect::<Vec<_>>());
+        let _ = std::fs::remove_file(valid);
     }
 }

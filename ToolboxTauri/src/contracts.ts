@@ -2,7 +2,7 @@ export type ToolCategory = "PDF" | "Images";
 
 export type ToolStatus = "implemented" | "planned";
 
-export type OutputLocation = "alongside-input" | "custom-folder";
+export type OutputLocation = "alongsideInput" | { customFolder: string };
 
 export type JobState = "running" | "success" | "mixed" | "failure";
 
@@ -36,6 +36,17 @@ export interface ToolDefinition {
 
 export interface ToolRequest {
     paths: string[];
-    outputLocation?: OutputLocation;
-    customFolder?: string;
+    outputLocation: OutputLocation;
+}
+
+export interface PDFRequest extends ToolRequest {
+    password: string;
+}
+
+export interface CompressImagesRequest extends ToolRequest {
+    quality: number;
+}
+
+export interface ConvertImagesRequest extends ToolRequest {
+    format: "jpg" | "png" | "webp" | "heic";
 }

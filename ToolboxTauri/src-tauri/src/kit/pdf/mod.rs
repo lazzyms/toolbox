@@ -8,13 +8,12 @@ use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 pub struct PDFProcessor;
 
 impl PDFProcessor {
-    pub fn remove_password(input_path: PathBuf, password: &str) -> JobOutcome {
+    pub fn remove_password(input_path: PathBuf, password: &str, output_location: &OutputLocation) -> JobOutcome {
         let output_path = OutputNaming::get_destination(
             &input_path,
-            &OutputLocation::AlongsideInput,
+            output_location,
             "-unlocked",
             "pdf",
-            None,
         );
 
         // Reading an encrypted PDF without a password makes lopdf drop every
@@ -62,13 +61,12 @@ impl PDFProcessor {
     /// Underlying encryption writer. lopdf's own `Document::encrypt` produces an
     /// /Encrypt dictionary that other readers (macOS PDFKit) cannot decrypt, so
     /// protection shells out to a correct, cross-platform AES-256 writer.
-    pub fn protect(input_path: PathBuf, password: &str) -> JobOutcome {
+    pub fn protect(input_path: PathBuf, password: &str, output_location: &OutputLocation) -> JobOutcome {
         let output_path = OutputNaming::get_destination(
             &input_path,
-            &OutputLocation::AlongsideInput,
+            output_location,
             "-protected",
             "pdf",
-            None,
         );
 
         if let Some(ref e) = input_path.extension().map(|e| e.to_string_lossy().to_lowercase()) {
@@ -235,7 +233,7 @@ mod tests {
         let src = temp_path("roundtrip.pdf");
         make_pdf(&src);
 
-        let protected = PDFProcessor::protect(src.clone(), "hunter2");
+        let protected = PDFProcessor::protect(src.clone(), "hunter2", &OutputLocation::AlongsideInput);
         assert!(protected.failure.is_none(), "{}", protected.failure.clone().unwrap_or_default());
         assert_eq!(protected.output_paths.len(), 1);
 
@@ -249,7 +247,7 @@ mod tests {
         // protects and saves an encrypted file distinct from the input
         assert_ne!(&protected.output_paths[0], &src);
 
-        let unlocked = PDFProcessor::remove_password(protected.output_paths[0].clone(), "hunter2");
+        let unlocked = PDFProcessor::remove_password(protected.output_paths[0].clone(), "hunter2", &OutputLocation::AlongsideInput);
         assert!(unlocked.failure.is_none(), "{}", unlocked.failure.clone().unwrap_or_default());
 
         // the unlocked copy must load as a plain (non-encrypted) document
@@ -283,10 +281,10 @@ mod tests {
         let src = temp_path("wrongpw.pdf");
         make_pdf(&src);
 
-        let protected = PDFProcessor::protect(src.clone(), "correct horse");
+        let protected = PDFProcessor::protect(src.clone(), "correct horse", &OutputLocation::AlongsideInput);
         assert!(protected.failure.is_none());
 
-        let unlocked = PDFProcessor::remove_password(protected.output_paths[0].clone(), "battery staple");
+        let unlocked = PDFProcessor::remove_password(protected.output_paths[0].clone(), "battery staple", &OutputLocation::AlongsideInput);
         assert!(unlocked.failure.is_some(), "wrong password must fail");
         assert!(unlocked.output_paths.is_empty());
 
@@ -304,7 +302,7 @@ mod tests {
         }
         let src = temp_path("noqpdf.pdf");
         make_pdf(&src);
-        let out = PDFProcessor::protect(src.clone(), "x");
+        let out = PDFProcessor::protect(src.clone(), "x", &OutputLocation::AlongsideInput);
         assert!(out.failure.is_some());
         let _ = std::fs::remove_file(&src);
     }

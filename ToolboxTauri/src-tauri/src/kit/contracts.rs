@@ -24,6 +24,30 @@ pub struct ToolRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PdfRequest {
+    pub paths: Vec<PathBuf>,
+    pub password: String,
+    pub output_location: OutputLocation,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompressImagesRequest {
+    pub paths: Vec<PathBuf>,
+    pub quality: u8,
+    pub output_location: OutputLocation,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConvertImagesRequest {
+    pub paths: Vec<PathBuf>,
+    pub format: String,
+    pub output_location: OutputLocation,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct JobOutcome {
     pub input_path: PathBuf,
     pub output_paths: Vec<PathBuf>,
@@ -57,5 +81,14 @@ mod tests {
         let progress = Progress { completed: 1, total: 2 };
         assert_eq!(serde_json::to_value(request).unwrap()["outputLocation"], "alongsideInput");
         assert_eq!(serde_json::to_value(progress).unwrap()["completed"], 1);
+    }
+
+    #[test]
+    fn custom_folder_is_part_of_the_request_shape() {
+        let request = ToolRequest {
+            paths: vec![PathBuf::from("source.pdf")],
+            output_location: OutputLocation::CustomFolder(PathBuf::from("exports")),
+        };
+        assert_eq!(serde_json::to_value(request).unwrap()["outputLocation"]["customFolder"], "exports");
     }
 }
