@@ -96,15 +96,28 @@ jobs:
         shell: pwsh
         working-directory: ToolboxTauri
         run: |
-          choco install qpdf poppler -y
+          choco install qpdf -y
+          $popplerVersion = '26.02.0-0'
+          $popplerSha256 = '993e4a94376ed712fafc7058d724ea0b943d118bbd2305cd9ed55174eb85cda5'
+          $popplerArchive = Join-Path $env:RUNNER_TEMP "poppler-$popplerVersion.zip"
+          Invoke-WebRequest `
+            -Uri "https://github.com/oschwartz10612/poppler-windows/releases/download/v$popplerVersion/Release-$popplerVersion.zip" `
+            -OutFile $popplerArchive
+          if ((Get-FileHash $popplerArchive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $popplerSha256) {
+            throw 'Poppler archive checksum did not match the pinned release'
+          }
+          $popplerExtract = Join-Path $env:RUNNER_TEMP "poppler-$popplerVersion"
+          Expand-Archive -Path $popplerArchive -DestinationPath $popplerExtract -Force
+          $pdftoppm = Get-ChildItem $popplerExtract -Recurse -Filter pdftoppm.exe | Select-Object -First 1
+          if (-not $pdftoppm) { throw 'Could not locate pdftoppm.exe in the Poppler archive' }
+          $env:PATH = "$($pdftoppm.DirectoryName);$env:PATH"
+          $pdftoppm.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           New-Item -ItemType Directory -Force -Path src-tauri\resources | Out-Null
           $qpdf = Get-ChildItem "$env:ChocolateyInstall\lib\qpdf" -Recurse -Filter qpdf.exe | Select-Object -First 1
           Copy-Item $qpdf.FullName src-tauri\resources\qpdf.exe -Force
           Get-ChildItem $qpdf.DirectoryName -Filter *.dll | Copy-Item -Destination src-tauri\resources -Force
-          $pdftoppm = Get-ChildItem "$env:ChocolateyInstall\lib\poppler" -Recurse -Filter pdftoppm.exe | Select-Object -First 1
-          if (-not $pdftoppm) { throw 'Could not locate pdftoppm.exe in the Poppler package' }
           Copy-Item $pdftoppm.FullName src-tauri\resources\pdftoppm.exe -Force
-          Get-ChildItem "$env:ChocolateyInstall\lib\poppler" -Recurse -Filter *.dll | Copy-Item -Destination src-tauri\resources -Force
+          Get-ChildItem $pdftoppm.DirectoryName -Filter *.dll | Copy-Item -Destination src-tauri\resources -Force
           @{version=$env:VERSION; bundle=@{resources=@('resources/*')}} | ConvertTo-Json -Compress | Out-File -Encoding ascii release-config.json
       - name: Write macOS version config
         if: runner.os == 'macOS'
