@@ -436,7 +436,11 @@ fn validate_overlay_scope(pages: Option<&[usize]>, page_count: usize) -> Result<
 
 fn escape(text: &str) -> String { text.replace('\\', "\\\\").replace('(', "\\(").replace(')', "\\)") }
 fn qpdf() -> Option<PathBuf> { std::env::var_os("TOOLBOX_QPDF_PATH").map(PathBuf::from).filter(|path| path.is_file()).or_else(|| Command::new("qpdf").arg("--version").output().ok().filter(|result| result.status.success()).map(|_| PathBuf::from("qpdf"))) }
-fn tool(variable: &str, command: &str) -> Option<PathBuf> { std::env::var_os(variable).map(PathBuf::from).filter(|path| path.is_file()).or_else(|| Command::new(command).arg("-h").output().ok().map(|_| PathBuf::from(command))) }
+fn tool(variable: &str, command: &str) -> Option<PathBuf> {
+    std::env::var_os(variable).map(PathBuf::from).filter(|path| path.is_file())
+        .or_else(|| crate::kit::resources::application_resource_root().and_then(|root| [root.join("pdf-bin").join(command), root.join("resources").join(command), root.join(command)].into_iter().find(|path| path.is_file())))
+        .or_else(|| Command::new(command).arg("-h").output().ok().map(|_| PathBuf::from(command)))
+}
 fn stderr(result: std::process::Output, fallback: &str) -> String { String::from_utf8_lossy(&result.stderr).trim().lines().last().filter(|line| !line.is_empty()).unwrap_or(fallback).to_string() }
 fn failure(input_path: PathBuf, error: String) -> JobOutcome { JobOutcome::failure(input_path, ToolError::processing(error)) }
 

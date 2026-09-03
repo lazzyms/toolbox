@@ -72,11 +72,11 @@ jobs:
 
       - name: Install qpdf (macOS)
         if: runner.os == 'macOS'
-        run: brew install qpdf
+        run: brew install qpdf poppler
 
       - name: Install qpdf (Windows)
         if: runner.os == 'Windows'
-        run: choco install qpdf -y
+        run: choco install qpdf poppler -y
 
       - name: Stage qpdf as Windows bundle resources
         if: runner.os == 'Windows'
@@ -90,6 +90,13 @@ jobs:
           Write-Host "Staging $($qpdf.FullName)"
           Copy-Item $qpdf.FullName src-tauri\resources\qpdf.exe -Force
           Get-ChildItem $qpdf.DirectoryName -Filter *.dll |
+            Copy-Item -Destination src-tauri\resources -Force
+          $pdftoppm = Get-ChildItem "$env:ChocolateyInstall\lib\poppler" -Recurse -Filter pdftoppm.exe |
+            Select-Object -First 1
+          if (-not $pdftoppm) { throw 'Could not locate pdftoppm.exe in the Poppler package' }
+          Write-Host "Staging $($pdftoppm.FullName)"
+          Copy-Item $pdftoppm.FullName src-tauri\resources\pdftoppm.exe -Force
+          Get-ChildItem "$env:ChocolateyInstall\lib\poppler" -Recurse -Filter *.dll |
             Copy-Item -Destination src-tauri\resources -Force
           & src-tauri\resources\qpdf.exe --version
           '{"bundle": {"resources": ["resources/*"]}}' |
@@ -138,6 +145,8 @@ jobs:
           APP="$MOUNT/Toolbox.app"
           test -x "$APP/Contents/Resources/qpdf-bin/qpdf"
           "$APP/Contents/Resources/qpdf-bin/qpdf" --version
+          test -x "$APP/Contents/Resources/pdf-bin/pdftoppm"
+          "$APP/Contents/Resources/pdf-bin/pdftoppm" -h >/dev/null
           codesign --verify --deep --strict "$APP"
           hdiutil detach "$MOUNT" >/dev/null
 
@@ -156,6 +165,10 @@ jobs:
             Select-Object -First 1
           if (-not $bundled) { throw 'qpdf.exe was not included in the Windows release tree' }
           & $bundled.FullName --version
+          $pdftoppm = Get-ChildItem src-tauri\target\release -Recurse -Filter pdftoppm.exe |
+            Select-Object -First 1
+          if (-not $pdftoppm) { throw 'pdftoppm.exe was not included in the Windows release tree' }
+          & $pdftoppm.FullName -h | Out-Null
           if (-not (Get-ChildItem src-tauri\target\release\bundle\nsis -Filter *.exe)) {
             throw 'NSIS installer was not produced'
           }
