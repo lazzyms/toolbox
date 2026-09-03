@@ -1,0 +1,48 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PDF editor prototype</title>
+<style>
+  :root { color-scheme: light; font: 15px system-ui, sans-serif; color: #172033; background: #eef2f7; }
+  * { box-sizing: border-box; } body { margin: 0; min-height: 100vh; }
+  button { border: 0; border-radius: 9px; padding: 9px 13px; background: #fff; color: inherit; cursor: pointer; box-shadow: 0 1px 3px #18263a22; }
+  button.active, button:hover { background: #2563eb; color: white; } label { display: grid; gap: 5px; color: #475569; }
+  .top { display:flex; align-items:center; justify-content:space-between; padding:18px 24px; background:#fff; border-bottom:1px solid #dbe2eb; }
+  .top h1 { margin:0; font-size:19px; } .variants, .tools { display:flex; gap:7px; flex-wrap:wrap; }
+  .shell { display:grid; grid-template-columns: 210px 1fr 250px; gap:18px; padding:20px; min-height:calc(100vh - 74px); }
+  .panel { background:#fff; border:1px solid #dbe2eb; border-radius:14px; padding:14px; display:flex; flex-direction:column; gap:14px; }
+  .panel h2 { margin:0; font-size:13px; text-transform:uppercase; letter-spacing:.08em; color:#64748b; }
+  .thumbs { display:grid; gap:9px; overflow:auto; } .thumb { display:grid; grid-template-columns:34px 1fr; gap:8px; align-items:center; padding:8px; border:1px solid #e2e8f0; border-radius:9px; text-align:left; }
+  .thumb.selected { outline:2px solid #60a5fa; background:#eff6ff; } .mini { height:45px; background:linear-gradient(135deg,#e2e8f0,#fff); border:1px solid #cbd5e1; border-radius:3px; }
+  .stage { display:grid; place-items:center; min-height:560px; background:#dbe3ed; border-radius:14px; padding:34px; }
+  .page { position:relative; width:min(100%,440px); aspect-ratio: .707; background:#fff; box-shadow:0 8px 30px #1720332b; padding:42px 38px; }
+  .page:after { content:"Preview page  •  1 / 6"; position:absolute; bottom:25px; left:38px; color:#94a3b8; font-size:11px; }
+  .lines { display:grid; gap:12px; } .lines i { display:block; height:7px; border-radius:4px; background:#cbd5e1; } .lines i:nth-child(2n) { width:82%; } .lines i:nth-child(3n) { width:65%; }
+  .overlay { position:absolute; left:25%; top:30%; width:50%; height:26%; border:2px dashed #2563eb; background:#60a5fa22; display:grid; place-items:center; color:#1d4ed8; font-weight:600; }
+  .signature { position:absolute; left:29%; top:63%; padding:10px 17px; border:1px solid #ec4899; color:#be185d; background:#fce7f355; transform:rotate(-5deg); }
+  .inspector { display:grid; gap:13px; } .state { margin-top:auto; background:#f8fafc; border-radius:9px; padding:11px; font:12px ui-monospace, monospace; white-space:pre-wrap; color:#334155; }
+  .bottom { position:fixed; bottom:16px; left:50%; transform:translateX(-50%); display:flex; gap:8px; padding:9px; background:#172033ee; border-radius:13px; box-shadow:0 8px 28px #17203355; } .bottom button { box-shadow:none; }
+  @media (max-width: 900px) { .shell { grid-template-columns: 170px 1fr; } .right { display:none; } }
+</style>
+<header class="top"><h1>PDF editor · interaction prototype</h1><div class="variants" aria-label="Layout variants"><button data-variant="preview">Preview-first</button><button data-variant="inspector">Inspector-first</button><button data-variant="filmstrip">Filmstrip-first</button></div></header>
+<main class="shell">
+  <aside class="panel left"><h2>Pages</h2><div class="thumbs" id="thumbs"></div></aside>
+  <section class="stage"><article class="page"><div class="lines"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><div class="overlay" id="crop">Crop rectangle</div><div class="signature" id="sign">Alex Morgan</div></article></section>
+  <aside class="panel right"><h2>Tool</h2><div class="tools"><button data-tool="crop">Crop</button><button data-tool="sign">Sign</button><button data-tool="organize">Organize</button></div><div class="inspector"><label>Page scope<select id="scope"><option>All pages</option><option>Selected pages</option></select></label><label>Layout density<input id="density" type="range" min="1" max="3" value="2"></label></div><pre class="state" id="state"></pre></aside>
+</main>
+<nav class="bottom" aria-label="Prototype controls"><button id="prev">← Prev</button><button id="next">Next →</button><button id="reset">Reset state</button></nav>
+<script>
+  const state = { variant: new URLSearchParams(location.search).get('variant') || 'preview', tool: 'crop', page: 1, scope: 'All pages', density: 2, order: [1,2,3,4,5,6] };
+  const thumbs = document.querySelector('#thumbs'), crop = document.querySelector('#crop'), sign = document.querySelector('#sign');
+  function render() {
+    document.querySelector('.shell').dataset.variant = state.variant;
+    document.querySelectorAll('[data-variant]').forEach(b => b.classList.toggle('active', b.dataset.variant === state.variant));
+    document.querySelectorAll('[data-tool]').forEach(b => b.classList.toggle('active', b.dataset.tool === state.tool));
+    document.querySelector('#scope').value = state.scope; document.querySelector('#density').value = state.density;
+    crop.hidden = state.tool !== 'crop'; sign.hidden = state.tool !== 'sign';
+    thumbs.innerHTML = state.order.map(n => `<button class="thumb ${n === state.page ? 'selected' : ''}" data-page="${n}"><span class="mini"></span><span>Page ${n}</span></button>`).join('');
+    document.querySelector('#state').textContent = JSON.stringify(state, null, 2);
+  }
+  document.addEventListener('click', e => { const variant = e.target.closest('[data-variant]'), tool = e.target.closest('[data-tool]'), page = e.target.closest('[data-page]'); if (variant) state.variant = variant.dataset.variant; if (tool) state.tool = tool.dataset.tool; if (page) state.page = Number(page.dataset.page); if (e.target.id === 'prev') state.page = Math.max(1, state.page - 1); if (e.target.id === 'next') state.page = Math.min(6, state.page + 1); if (e.target.id === 'reset') Object.assign(state, { tool:'crop', page:1, scope:'All pages', density:2, order:[1,2,3,4,5,6] }); render(); });
+  document.querySelector('#scope').addEventListener('change', e => { state.scope = e.target.value; render(); }); document.querySelector('#density').addEventListener('input', e => { state.density = Number(e.target.value); render(); }); render();
+</script>
