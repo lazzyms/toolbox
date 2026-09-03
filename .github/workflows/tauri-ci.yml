@@ -76,7 +76,7 @@ jobs:
 
       - name: Install qpdf (Windows)
         if: runner.os == 'Windows'
-        run: choco install qpdf -y
+        run: choco install qpdf poppler -y
 
       - name: Stage qpdf as Windows bundle resources
         if: runner.os == 'Windows'
