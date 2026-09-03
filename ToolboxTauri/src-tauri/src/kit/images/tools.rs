@@ -9,7 +9,12 @@ use crate::kit::contracts::ToolError;
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ResizeRequest { pub paths: Vec<PathBuf>, pub width: u32, pub height: u32, pub output_location: OutputLocation }
+pub struct ResizeRequest {
+    pub paths: Vec<PathBuf>, pub width: u32, pub height: u32,
+    #[serde(default = "default_resize_mode")] pub mode: String,
+    #[serde(default)] pub percentage: u32, #[serde(default)] pub longest_side: u32,
+    pub output_location: OutputLocation,
+}
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RotateRequest { pub paths: Vec<PathBuf>, pub degrees: i32, #[serde(default = "default_flip")] pub flip: String, pub output_location: OutputLocation }
@@ -72,7 +77,34 @@ pub struct MetadataRequest { pub paths: Vec<PathBuf>, pub output_location: Outpu
 #[serde(rename_all = "camelCase")]
 pub struct MetadataReport { pub path: PathBuf, pub exif: bool, pub gps: bool, pub xmp: bool, pub icc: bool, pub orientation: bool, pub unsupported: Vec<String> }
 
-pub fn resize(request: &ResizeRequest, input: PathBuf) -> JobOutcome { transform(request.paths.as_slice(), input, &request.output_location, "-resized", |image| { if request.width == 0 || request.height == 0 { return Err("Image dimensions must be positive.".to_string()); } Ok(image.resize_exact(request.width, request.height, image::imageops::FilterType::Lanczos3)) }) }
+pub fn resize(request: &ResizeRequest, input: PathBuf) -> JobOutcome {
+    transform(request.paths.as_slice(), input, &request.output_location, "-resized", |image| {
+        let (width, height) = resize_dimensions(image.width(), image.height(), request)?;
+        Ok(image.resize_exact(width, height, image::imageops::FilterType::Lanczos3))
+    })
+}
+
+fn default_resize_mode() -> String { "exact".to_string() }
+
+fn resize_dimensions(source_width: u32, source_height: u32, request: &ResizeRequest) -> Result<(u32, u32), String> {
+    let dimensions = match request.mode.as_str() {
+        "exact" => (request.width, request.height),
+        "percentage" => {
+            if request.percentage == 0 || request.percentage > 1000 { return Err("Resize percentage must be between 1 and 1000.".to_string()); }
+            (scale_dimension(source_width, request.percentage), scale_dimension(source_height, request.percentage))
+        }
+        "longestSide" => {
+            if request.longest_side == 0 || request.longest_side > 16384 { return Err("Longest side must be between 1 and 16384 pixels.".to_string()); }
+            let scale = request.longest_side as f64 / source_width.max(source_height) as f64;
+            (((source_width as f64 * scale).round() as u32).max(1), ((source_height as f64 * scale).round() as u32).max(1))
+        }
+        _ => return Err(format!("Unsupported resize mode: {}.", request.mode)),
+    };
+    if dimensions.0 == 0 || dimensions.1 == 0 || dimensions.0 > 16384 || dimensions.1 > 16384 { return Err("Resize dimensions must be between 1 and 16384 pixels.".to_string()); }
+    Ok(dimensions)
+}
+
+fn scale_dimension(value: u32, percentage: u32) -> u32 { ((value as u64 * percentage as u64 + 50) / 100).max(1).min(16384) as u32 }
 pub fn rotate(request: &RotateRequest, input: PathBuf) -> JobOutcome {
     transform(request.paths.as_slice(), input, &request.output_location, "-rotated", |image| {
         let image = match request.degrees.rem_euclid(360) { 90 => image.rotate90(), 180 => image.rotate180(), 270 => image.rotate270(), 0 => image, _ => return Err("Rotation must be 0, 90, 180, or 270 degrees.".to_string()) };
@@ -496,5 +528,15 @@ mod tests {
         assert!(invalid.failure.is_some());
         let _ = std::fs::remove_file(input);
         let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn resize_modes_produce_bounded_dimensions() {
+        let percentage = ResizeRequest { paths: vec![], width: 0, height: 0, mode: "percentage".to_string(), percentage: 50, longest_side: 0, output_location: OutputLocation::AlongsideInput };
+        assert_eq!(resize_dimensions(400, 200, &percentage).unwrap(), (200, 100));
+        let longest = ResizeRequest { mode: "longestSide".to_string(), longest_side: 100, ..percentage };
+        assert_eq!(resize_dimensions(400, 200, &longest).unwrap(), (100, 50));
+        let invalid = ResizeRequest { mode: "percentage".to_string(), percentage: 0, ..longest };
+        assert!(resize_dimensions(400, 200, &invalid).is_err());
     }
 }
