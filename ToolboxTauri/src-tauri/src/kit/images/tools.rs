@@ -162,7 +162,24 @@ pub fn gif_extract(request: &GifExtractRequest, input: PathBuf) -> JobOutcome {
     let decoder = match image::codecs::gif::GifDecoder::new(BufReader::new(file)) { Ok(decoder) => decoder, Err(error) => return failure(input, error.to_string()) };
     let frames = match decoder.into_frames().collect_frames() { Ok(frames) => frames, Err(error) => return failure(input, error.to_string()) };
     let mut outputs = Vec::new();
-    for (index, frame) in frames.into_iter().enumerate() { let output = OutputNaming::get_destination(&input, &request.output_location, &format!("-frame-{}", index + 1), "png"); if let Err(error) = frame.into_buffer().save(&output) { return failure(input, error.to_string()); } outputs.push(output); }
+    let mut timing = Vec::new();
+    for (index, frame) in frames.into_iter().enumerate() {
+        let output = OutputNaming::get_destination(&input, &request.output_location, &format!("-frame-{}", index + 1), "png");
+        let (numerator, denominator) = frame.delay().numer_denom_ms();
+        let delay_ms = (numerator as u64 * 1000 / denominator.max(1) as u64).max(1);
+        if let Err(error) = frame.into_buffer().save(&output) {
+            for created in &outputs { let _ = std::fs::remove_file(created); }
+            return failure(input, error.to_string());
+        }
+        timing.push(serde_json::json!({ "file": output, "delayMs": delay_ms }));
+        outputs.push(output);
+    }
+    let timing_path = OutputNaming::get_destination(&input, &request.output_location, "-frame-timing", "json");
+    if let Err(error) = std::fs::write(&timing_path, serde_json::to_vec_pretty(&timing).unwrap_or_default()) {
+        for created in &outputs { let _ = std::fs::remove_file(created); }
+        return failure(input, format!("Could not save GIF timing manifest: {error}"));
+    }
+    outputs.push(timing_path);
     JobOutcome { input_path: input, output_paths: outputs, detail: "GIF frames saved".to_string(), failure: None }
 }
 
