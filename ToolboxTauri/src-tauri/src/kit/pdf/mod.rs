@@ -84,6 +84,9 @@ impl PDFProcessor {
                 };
             }
         }
+        if password.is_empty() {
+            return JobOutcome { input_path, output_paths: vec![], detail: "".to_string(), failure: Some(ToolError::invalid_input("A non-empty password is required.")) };
+        }
 
         let Some(qpdf) = find_qpdf() else {
             return JobOutcome {
@@ -108,24 +111,17 @@ impl PDFProcessor {
             .output();
 
         match status {
-            Ok(out) if out.status.success() => JobOutcome {
-                input_path,
-                output_paths: vec![output_path],
-                detail: "PDF Protected".to_string(),
-                failure: None,
-            },
-            Ok(out) => JobOutcome {
-                input_path,
-                output_paths: vec![],
-                detail: "".to_string(),
-                failure: Some(ToolError::processing(
-                    String::from_utf8_lossy(&out.stderr)
-                        .trim()
-                        .lines()
-                        .last()
-                        .map(|l| l.to_string())
-                        .unwrap_or_else(|| "qpdf failed to protect the PDF.".to_string()),
-                )),
+            Ok(out) if out.status.success() => {
+                let encrypted = Document::load(&output_path).map(|document| document.is_encrypted()).unwrap_or(false);
+                let readable = Document::load_with_options(&output_path, lopdf::LoadOptions::with_password(password)).map(|document| !document.is_encrypted()).unwrap_or(false);
+                if encrypted && readable { JobOutcome { input_path, output_paths: vec![output_path], detail: "PDF Protected with verified AES-256 encryption".to_string(), failure: None } }
+                else { let _ = std::fs::remove_file(&output_path); JobOutcome { input_path, output_paths: vec![], detail: "".to_string(), failure: Some(ToolError::processing("qpdf produced an output that could not be verified as password-protected.")) } }
+            }
+            Ok(out) => {
+                let _ = std::fs::remove_file(&output_path);
+                JobOutcome { input_path, output_paths: vec![], detail: "".to_string(), failure: Some(ToolError::processing(
+                    String::from_utf8_lossy(&out.stderr).trim().lines().last().map(|l| l.to_string()).unwrap_or_else(|| "qpdf failed to protect the PDF.".to_string()),
+                )) }
             },
             Err(e) => JobOutcome {
                 input_path,
