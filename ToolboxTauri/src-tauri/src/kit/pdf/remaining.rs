@@ -18,6 +18,8 @@ pub struct PageOverlayRequest {
     #[serde(default)] pub position: Option<String>,
     #[serde(default)] pub logo_path: Option<PathBuf>,
     #[serde(default)] pub pages: Option<Vec<usize>>,
+    #[serde(default)] pub start_number: Option<u32>,
+    #[serde(default)] pub font_size: Option<u16>,
     pub output_location: OutputLocation,
 }
 
@@ -269,7 +271,10 @@ fn image_as_jpeg(path: &PathBuf) -> Result<(Vec<u8>, u32, u32), String> {
 
 pub fn add_page_numbers(request: &PageOverlayRequest, input: PathBuf) -> JobOutcome {
     overlay(request, input, "-numbered", |page_number, width, height| {
-        format!("BT /Fnum 12 Tf {} {} Td ({}) Tj ET", width - 50.0, 24.0_f32.min(height / 2.0), page_number)
+        let number = request.start_number.unwrap_or(1).saturating_add(page_number as u32).saturating_sub(1);
+        let size = request.font_size.unwrap_or(12).clamp(8, 72);
+        let (x, y) = number_position(request.position.as_deref(), width, height);
+        format!("BT /Fnum {size} Tf {x} {y} Td ({number}) Tj ET")
     }, 100)
 }
 
@@ -388,6 +393,13 @@ fn watermark_position(position: Option<&str>, width: f32, height: f32) -> (f32, 
         "top-left" => (24.0, height - 48.0), "top-right" => (width - 180.0, height - 48.0),
         "bottom-left" => (24.0, 24.0), "bottom-right" => (width - 180.0, 24.0),
         _ => (width / 4.0, height / 2.0),
+    }
+}
+
+fn number_position(position: Option<&str>, width: f32, height: f32) -> (f32, f32) {
+    match position.unwrap_or("bottom-right") {
+        "bottom-left" => (24.0, 24.0), "top-left" => (24.0, height - 24.0), "top-right" => (width - 60.0, height - 24.0),
+        _ => (width - 60.0, 24.0),
     }
 }
 
