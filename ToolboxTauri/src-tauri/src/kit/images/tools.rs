@@ -28,7 +28,15 @@ pub struct ToneRequest {
 }
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct WatermarkRequest { pub paths: Vec<PathBuf>, pub opacity: u8, pub output_location: OutputLocation }
+pub struct WatermarkRequest {
+    pub paths: Vec<PathBuf>,
+    pub opacity: u8,
+    #[serde(default)] pub text: Option<String>,
+    #[serde(default)] pub logo_path: Option<PathBuf>,
+    #[serde(default = "default_watermark_position")] pub x: u32,
+    #[serde(default = "default_watermark_position")] pub y: u32,
+    pub output_location: OutputLocation,
+}
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IconSetRequest { pub paths: Vec<PathBuf>, pub sizes: Vec<u32>, pub output_location: OutputLocation }
@@ -69,7 +77,65 @@ pub fn tone(request: &ToneRequest, input: PathBuf) -> JobOutcome {
         Ok(DynamicImage::ImageRgba8(image).adjust_contrast(request.contrast))
     })
 }
-pub fn watermark(request: &WatermarkRequest, input: PathBuf) -> JobOutcome { transform(&request.paths, input, &request.output_location, "-watermarked", |image| { let mut image = image.to_rgba8(); let opacity = request.opacity.min(100) as u16 * 255 / 100; for pixel in image.pixels_mut() { pixel.0[0] = ((pixel.0[0] as u16 * (255 - opacity) + opacity * 255) / 255) as u8; } Ok(DynamicImage::ImageRgba8(image)) }) }
+pub fn watermark(request: &WatermarkRequest, input: PathBuf) -> JobOutcome {
+    transform(&request.paths, input, &request.output_location, "-watermarked", |image| {
+        let mut image = image.to_rgba8();
+        let original_alpha = image.pixels().map(|pixel| pixel.0[3]).collect::<Vec<_>>();
+        let alpha = request.opacity.min(100) as u16 * 255 / 100;
+        let mut watermark = image::RgbaImage::new(image.width(), image.height());
+        if let Some(text) = request.text.as_deref().filter(|text| !text.trim().is_empty()) {
+            draw_text(&mut watermark, text, request.x, request.y, alpha as u8);
+        }
+        if let Some(path) = request.logo_path.as_ref() {
+            let logo = image::open(path).map_err(|error| format!("Could not read watermark logo: {error}"))?.to_rgba8();
+            image::imageops::overlay(&mut watermark, &logo, request.x as i64, request.y as i64);
+        }
+        if watermark.pixels().all(|pixel| pixel.0[3] == 0) {
+            return Err("Provide watermark text or a logo image.".to_string());
+        }
+        image::imageops::overlay(&mut image, &watermark, 0, 0);
+        for (pixel, alpha) in image.pixels_mut().zip(original_alpha) { pixel.0[3] = alpha; }
+        Ok(DynamicImage::ImageRgba8(image))
+    })
+}
+
+fn default_watermark_position() -> u32 { 16 }
+
+fn draw_text(canvas: &mut image::RgbaImage, text: &str, x: u32, y: u32, alpha: u8) {
+    let scale = 3;
+    for (index, character) in text.chars().enumerate() {
+        let glyph = glyph(character);
+        let origin_x = x.saturating_add(index as u32 * 6 * scale);
+        for (row, bits) in glyph.iter().enumerate() {
+            for column in 0..5 {
+                if bits & (1 << (4 - column)) != 0 {
+                    for dy in 0..scale { for dx in 0..scale {
+                        let px = origin_x + column * scale + dx;
+                        let py = y + row as u32 * scale + dy;
+                        if px < canvas.width() && py < canvas.height() { canvas.put_pixel(px, py, image::Rgba([255, 255, 255, alpha])); }
+                    }}
+                }
+            }
+        }
+    }
+}
+
+fn glyph(character: char) -> [u8; 7] {
+    match character.to_ascii_uppercase() {
+        'A' => [0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
+        'B' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110],
+        'C' => [0b01111, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b01111],
+        'D' => [0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110],
+        'E' => [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111],
+        'L' => [0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111],
+        'O' => [0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
+        'R' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001],
+        'T' => [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100],
+        'U' => [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
+        ' ' => [0; 7],
+        _ => [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b00000, 0b00100],
+    }
+}
 pub fn icon_set(request: &IconSetRequest, input: PathBuf) -> JobOutcome {
     let image = match image::open(&input) { Ok(image) => image, Err(error) => return failure(input, format!("Could not read image: {error}")) };
     let mut outputs = Vec::new();
@@ -258,5 +324,19 @@ mod tests {
         assert!(!report.exif && !report.gps && !report.xmp && !report.icc);
         assert!(!report.unsupported.is_empty());
         let _ = std::fs::remove_file(input);
+    }
+
+    #[test]
+    fn text_watermark_composites_without_changing_alpha() {
+        let input = path("watermark-input.png");
+        let image = image::RgbaImage::from_pixel(64, 32, image::Rgba([10, 20, 30, 77]));
+        image.save(&input).unwrap();
+        let result = watermark(&WatermarkRequest { paths: vec![input.clone()], opacity: 50, text: Some("TOOL".to_string()), logo_path: None, x: 2, y: 2, output_location: OutputLocation::AlongsideInput }, input.clone());
+        let output = result.output_paths.first().unwrap();
+        let output_image = image::open(output).unwrap().to_rgba8();
+        assert!(output_image.pixels().any(|pixel| pixel.0[0..3] != [10, 20, 30]));
+        assert!(output_image.pixels().all(|pixel| pixel.0[3] == 77));
+        let _ = std::fs::remove_file(input);
+        let _ = std::fs::remove_file(output);
     }
 }
