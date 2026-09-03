@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 concurrency:
   group: tauri-release
@@ -183,12 +184,21 @@ jobs:
             > tauri-latest.json
           gh release create "tauri-v$VERSION" release-assets/* tauri-latest.json \
             --title "Toolbox Tauri $VERSION" --notes "Signed macOS and Windows installers."
-      - name: Publish manifest at the updater endpoint
+      - name: Publish manifest through protected branch PR
         run: |
-          cp tauri-latest.json tauri-latest.json.new
-          mv tauri-latest.json.new tauri-latest.json
+          set -euo pipefail
+          branch="automation/tauri-manifest-${VERSION}-${GITHUB_RUN_ID}"
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git switch --create "$branch"
           git add tauri-latest.json
           git commit -m "Publish Tauri $VERSION update manifest [skip ci]"
-          git push origin HEAD:tauri-port
+          git push origin "HEAD:$branch"
+          pr_url="$(gh pr create \
+            --base tauri-port \
+            --head "$branch" \
+            --title "Publish Tauri $VERSION updater manifest" \
+            --body "Publishes the signed updater manifest for Tauri $VERSION at the protected tauri-port endpoint.")"
+          gh pr merge "$pr_url" --squash --auto \
+            --subject "Publish Tauri $VERSION update manifest [skip ci]" \
+            --body "Publishes the signed updater manifest for Tauri $VERSION."
