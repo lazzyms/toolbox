@@ -63,6 +63,7 @@ export interface PDFRequest extends ToolRequest {
 
 export interface CompressImagesRequest extends ToolRequest {
     quality: number;
+    lossless?: boolean;
 }
 
 export interface ConvertImagesRequest extends ToolRequest {

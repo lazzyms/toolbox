@@ -30,7 +30,7 @@ async fn compress_images(request: CompressImagesRequest) -> Vec<JobOutcome> {
     BatchRunner::run(request.paths, |path| {
         ImageProcessor::run(path, ImageOptions {
             target_format: None,
-            quality: request.quality,
+            quality: if request.lossless { 0 } else { request.quality },
             keep_smaller_original: true,
             suffix: "-compressed".to_string(),
             output_location: request.output_location.clone(),
@@ -297,7 +297,7 @@ mod command_tests {
         let before = std::fs::metadata(&src).unwrap().len();
 
         let out = tauri::async_runtime::block_on(compress_images(CompressImagesRequest {
-            paths: vec![src.clone()], quality: 50, output_location: OutputLocation::AlongsideInput,
+            paths: vec![src.clone()], quality: 50, lossless: false, output_location: OutputLocation::AlongsideInput,
         }));
         assert!(out[0].failure.is_none(), "{}", out[0].failure.clone().unwrap_or_default());
         assert_eq!(
