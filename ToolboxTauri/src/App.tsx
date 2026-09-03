@@ -1,10 +1,15 @@
 import { useEffect, useRef } from "react";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { initializeInstallAnalytics } from "./analytics";
 import { MainPage } from "./views/MainPage";
 
 export default function App() {
   const updateStarted = useRef(false);
+
+  useEffect(() => {
+    void initializeInstallAnalytics();
+  }, []);
 
   useEffect(() => {
     if (import.meta.env.DEV || updateStarted.current) return;
