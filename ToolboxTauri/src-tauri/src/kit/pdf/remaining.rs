@@ -158,9 +158,17 @@ pub fn to_text(request: &PdfToTextRequest, input: PathBuf) -> JobOutcome {
     let document = match Document::load(&input) { Ok(document) => document, Err(error) => return failure(input, error.to_string()) };
     let pages = document.get_pages().keys().copied().collect::<Vec<_>>();
     match document.extract_text(&pages) {
-        Ok(text) => match fs::write(&output, text) { Ok(_) => JobOutcome { input_path: input, output_paths: vec![output], detail: "PDF text extracted".to_string(), failure: None }, Err(error) => failure(input, format!("Could not write text output: {error}")) },
+        Ok(text) => {
+            let text = normalize_pdf_text(&text);
+            if text.is_empty() { return failure(input, "PDF contains no selectable text; scanned PDFs require OCR.".to_string()); }
+            match fs::write(&output, text) { Ok(_) => JobOutcome { input_path: input, output_paths: vec![output], detail: "PDF text extracted in page order".to_string(), failure: None }, Err(error) => failure(input, format!("Could not write text output: {error}")) }
+        },
         Err(error) => failure(input, format!("Could not extract selectable PDF text: {error}")),
     }
+}
+
+fn normalize_pdf_text(text: &str) -> String {
+    text.lines().map(str::trim_end).collect::<Vec<_>>().join("\n").trim().to_string()
 }
 
 pub fn extract_images(request: &PdfToTextRequest, input: PathBuf) -> JobOutcome {
@@ -368,5 +376,11 @@ mod tests {
     fn supports_legacy_zero_based_page_selection() {
         let selected = selected_page_indices(&request(None, vec![0, 2]), 3).unwrap();
         assert_eq!(selected, vec![0, 2]);
+    }
+
+    #[test]
+    fn normalizes_selectable_text_without_reordering_lines() {
+        assert_eq!(normalize_pdf_text("first line  \nsecond line\n\n"), "first line\nsecond line");
+        assert!(normalize_pdf_text("  \n\t").is_empty());
     }
 }
