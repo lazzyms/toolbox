@@ -8,6 +8,7 @@ use std::process::Command;
 use lopdf::{Document, LoadOptions};
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
+use crate::kit::contracts::ToolError;
 
 pub struct PDFProcessor;
 
@@ -34,7 +35,7 @@ impl PDFProcessor {
                         input_path,
                         output_paths: vec![],
                         detail: "".to_string(),
-                        failure: Some("Wrong password or unsupported encryption.".to_string()),
+                        failure: Some(ToolError::invalid_input("Wrong password or unsupported encryption.")),
                     };
                 }
                 let mut doc = doc;
@@ -49,7 +50,7 @@ impl PDFProcessor {
                         input_path,
                         output_paths: vec![],
                         detail: "".to_string(),
-                        failure: Some(format!("Save failed: {}", e)),
+                        failure: Some(ToolError::processing(format!("Save failed: {}", e))),
                     },
                 }
             }
@@ -57,7 +58,7 @@ impl PDFProcessor {
                 input_path,
                 output_paths: vec![],
                 detail: "".to_string(),
-                failure: Some(format!("Wrong password or unsupported encryption: {}", e)),
+                failure: Some(ToolError::invalid_input(format!("Wrong password or unsupported encryption: {}", e))),
             },
         }
     }
@@ -79,7 +80,7 @@ impl PDFProcessor {
                     input_path,
                     output_paths: vec![],
                     detail: "".to_string(),
-                    failure: Some("Only PDF files can be protected.".to_string()),
+                    failure: Some(ToolError::invalid_input("Only PDF files can be protected.")),
                 };
             }
         }
@@ -89,11 +90,10 @@ impl PDFProcessor {
                 input_path,
                 output_paths: vec![],
                 detail: "".to_string(),
-                failure: Some(
+                failure: Some(ToolError::unavailable(
                     "qpdf is required to protect PDFs but was not found. \
-                     Set TOOLBOX_QPDF_PATH or add qpdf to PATH."
-                        .to_string(),
-                ),
+                     Set TOOLBOX_QPDF_PATH or add qpdf to PATH.",
+                )),
             };
         };
 
@@ -118,20 +118,20 @@ impl PDFProcessor {
                 input_path,
                 output_paths: vec![],
                 detail: "".to_string(),
-                failure: Some(
+                failure: Some(ToolError::processing(
                     String::from_utf8_lossy(&out.stderr)
                         .trim()
                         .lines()
                         .last()
                         .map(|l| l.to_string())
                         .unwrap_or_else(|| "qpdf failed to protect the PDF.".to_string()),
-                ),
+                )),
             },
             Err(e) => JobOutcome {
                 input_path,
                 output_paths: vec![],
                 detail: "".to_string(),
-                failure: Some(format!("Could not run qpdf: {}", e)),
+                failure: Some(ToolError::unavailable(format!("Could not run qpdf: {}", e))),
             },
         }
     }
