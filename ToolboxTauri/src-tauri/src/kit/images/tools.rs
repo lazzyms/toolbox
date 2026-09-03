@@ -15,7 +15,13 @@ pub struct ResizeRequest { pub paths: Vec<PathBuf>, pub width: u32, pub height: 
 pub struct RotateRequest { pub paths: Vec<PathBuf>, pub degrees: i32, pub output_location: OutputLocation }
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CropRequest { pub paths: Vec<PathBuf>, pub x: u32, pub y: u32, pub width: u32, pub height: u32, pub output_location: OutputLocation }
+pub struct CropRequest {
+    pub paths: Vec<PathBuf>, pub x: u32, pub y: u32, pub width: u32, pub height: u32,
+    #[serde(default = "default_crop_mode")] pub mode: String,
+    #[serde(default)] pub aspect_width: u32, #[serde(default)] pub aspect_height: u32,
+    #[serde(default = "default_crop_anchor")] pub anchor: String,
+    pub output_location: OutputLocation,
+}
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToneRequest {
@@ -68,7 +74,36 @@ pub struct MetadataReport { pub path: PathBuf, pub exif: bool, pub gps: bool, pu
 
 pub fn resize(request: &ResizeRequest, input: PathBuf) -> JobOutcome { transform(request.paths.as_slice(), input, &request.output_location, "-resized", |image| { if request.width == 0 || request.height == 0 { return Err("Image dimensions must be positive.".to_string()); } Ok(image.resize_exact(request.width, request.height, image::imageops::FilterType::Lanczos3)) }) }
 pub fn rotate(request: &RotateRequest, input: PathBuf) -> JobOutcome { transform(request.paths.as_slice(), input, &request.output_location, "-rotated", |image| { Ok(match request.degrees.rem_euclid(360) { 90 => image.rotate90(), 180 => image.rotate180(), 270 => image.rotate270(), 0 => image, _ => return Err("Rotation must be 0, 90, 180, or 270 degrees.".to_string()) }) }) }
-pub fn crop(request: &CropRequest, input: PathBuf) -> JobOutcome { transform(request.paths.as_slice(), input, &request.output_location, "-cropped", |image| { if request.width == 0 || request.height == 0 || request.x.saturating_add(request.width) > image.width() || request.y.saturating_add(request.height) > image.height() { return Err("Crop rectangle must fit inside the image.".to_string()); } Ok(image.crop_imm(request.x, request.y, request.width, request.height)) }) }
+pub fn crop(request: &CropRequest, input: PathBuf) -> JobOutcome {
+    transform(request.paths.as_slice(), input, &request.output_location, "-cropped", |image| {
+        let (x, y, width, height) = crop_rect(image.width(), image.height(), request)?;
+        Ok(image.crop_imm(x, y, width, height))
+    })
+}
+
+fn default_crop_mode() -> String { "rectangle".to_string() }
+fn default_crop_anchor() -> String { "center".to_string() }
+
+fn crop_rect(image_width: u32, image_height: u32, request: &CropRequest) -> Result<(u32, u32, u32, u32), String> {
+    if request.mode == "aspectRatio" {
+        if request.aspect_width == 0 || request.aspect_height == 0 { return Err("Aspect ratio dimensions must be positive.".to_string()); }
+        let ratio = request.aspect_width as f64 / request.aspect_height as f64;
+        let (width, height) = if image_width as f64 / image_height as f64 > ratio {
+            let height = image_height;
+            ((height as f64 * ratio).round() as u32, height)
+        } else {
+            let width = image_width;
+            (width, (width as f64 / ratio).round() as u32)
+        };
+        if width == 0 || height == 0 || width > image_width || height > image_height { return Err("Aspect ratio crop does not fit inside the image.".to_string()); }
+        let x = match request.anchor.as_str() { "left" => 0, "right" => image_width - width, _ => (image_width - width) / 2 };
+        let y = match request.anchor.as_str() { "top" => 0, "bottom" => image_height - height, _ => (image_height - height) / 2 };
+        Ok((x, y, width, height))
+    } else if request.mode == "rectangle" {
+        if request.width == 0 || request.height == 0 || request.x.saturating_add(request.width) > image_width || request.y.saturating_add(request.height) > image_height { return Err("Crop rectangle must fit inside the image.".to_string()); }
+        Ok((request.x, request.y, request.width, request.height))
+    } else { Err(format!("Unsupported crop mode: {}.", request.mode)) }
+}
 pub fn tone(request: &ToneRequest, input: PathBuf) -> JobOutcome {
     transform(&request.paths, input, &request.output_location, "-tone", |image| {
         let mut image = image::imageops::brighten(&image, request.brightness);
@@ -428,5 +463,13 @@ mod tests {
         assert_eq!(macos, vec![16, 32, 128, 256, 512, 1024]);
         assert!(icon_plan("custom", &[0, 5000]).is_err());
         assert!(icon_plan("unknown", &[]).is_err());
+    }
+
+    #[test]
+    fn crop_aspect_ratio_is_anchored_and_bounds_checked() {
+        let request = CropRequest { paths: vec![], x: 0, y: 0, width: 1, height: 1, mode: "aspectRatio".to_string(), aspect_width: 1, aspect_height: 1, anchor: "top".to_string(), output_location: OutputLocation::AlongsideInput };
+        assert_eq!(crop_rect(8, 4, &request).unwrap(), (2, 0, 4, 4));
+        let invalid = CropRequest { mode: "rectangle".to_string(), x: 7, y: 0, width: 2, height: 1, ..request };
+        assert!(crop_rect(8, 4, &invalid).is_err());
     }
 }
