@@ -186,10 +186,21 @@ pub fn watermark(request: &PageOverlayRequest, input: PathBuf) -> JobOutcome {
 
 pub fn compress(request: &CompressPdfRequest, input: PathBuf) -> JobOutcome {
     let output = OutputNaming::get_destination(&input, &request.output_location, "-compressed", "pdf");
-    let mut document = match Document::load(&input) { Ok(document) => document, Err(error) => return failure(input, error.to_string()) };
-    let _quality = request.quality.clamp(1, 100);
-    document.compress();
-    match document.save(&output) { Ok(_) => JobOutcome { input_path: input, output_paths: vec![output], detail: "PDF compressed".to_string(), failure: None }, Err(error) => failure(input, format!("Save failed: {error}")) }
+    let source = match Document::load(&input) { Ok(document) => document, Err(error) => return failure(input, error.to_string()) };
+    let page_count = source.get_pages().len();
+    let Some(qpdf) = qpdf() else { return failure(input, "qpdf is required to compress PDFs but was not found. Set TOOLBOX_QPDF_PATH or add qpdf to PATH.".to_string()); };
+    let quality = request.quality.clamp(1, 100);
+    let level = ((100_u16.saturating_sub(quality as u16) * 8) / 99 + 1).to_string();
+    let result = Command::new(qpdf).arg("--object-streams=generate").arg("--stream-data=compress").arg("--recompress-flate").arg(format!("--compression-level={level}")).arg(&input).arg(&output).output();
+    match result {
+        Ok(result) if result.status.success() => match Document::load(&output) {
+            Ok(verified) if verified.get_pages().len() == page_count => JobOutcome { input_path: input, output_paths: vec![output], detail: format!("PDF compressed at quality {quality}"), failure: None },
+            Ok(_) => { let _ = fs::remove_file(&output); failure(input, "Compressed PDF changed its page count.".to_string()) },
+            Err(error) => { let _ = fs::remove_file(&output); failure(input, format!("Compressed PDF could not be verified: {error}")) },
+        },
+        Ok(result) => { let _ = fs::remove_file(&output); failure(input, stderr(result, "qpdf failed to compress the PDF.")) },
+        Err(error) => { let _ = fs::remove_file(&output); failure(input, format!("Could not run qpdf: {error}")) },
+    }
 }
 
 pub fn remove_pages(request: &PageSelectionRequest, input: PathBuf) -> JobOutcome {
