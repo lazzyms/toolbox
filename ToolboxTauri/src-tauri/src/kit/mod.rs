@@ -4,6 +4,7 @@ pub mod images;
 pub mod pdf;
 pub mod vision;
 pub mod fidelity;
+pub mod resources;
 
 #[cfg(test)]
 mod fidelity_tests {
