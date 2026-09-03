@@ -31,6 +31,8 @@ pub struct PageSelectionRequest {
     pub paths: Vec<PathBuf>,
     pub pages: Vec<usize>,
     #[serde(default)] pub page_ranges: Option<String>,
+    #[serde(default)] pub split_mode: Option<String>,
+    #[serde(default)] pub chunk_size: Option<usize>,
     pub output_location: OutputLocation,
 }
 
@@ -72,9 +74,27 @@ pub fn merge(request: &MergePdfRequest) -> JobOutcome {
     match result { Ok(result) if result.status.success() => JobOutcome { input_path: first, output_paths: vec![output], detail: "PDFs merged".to_string(), failure: None }, Ok(result) => failure(first, stderr(result, "qpdf failed to merge the PDFs.")), Err(error) => failure(first, format!("Could not run qpdf: {error}")) }
 }
 
-pub fn split(input: PathBuf, location: &OutputLocation) -> JobOutcome {
+pub fn split(request: &PageSelectionRequest, input: PathBuf) -> JobOutcome {
+    let location = &request.output_location;
     let output = OutputNaming::get_destination(&input, location, "-split", "pdf");
     let Some(qpdf) = qpdf() else { return failure(input, "qpdf is required to split PDFs but was not found.".to_string()); };
+    if request.split_mode.as_deref() == Some("chunks") {
+        let Some(size) = request.chunk_size.filter(|size| *size > 0) else { return failure(input, "Chunk size must be greater than zero.".to_string()); };
+        let result = Command::new(&qpdf).arg(&input).arg(format!("--split-pages={size}" )).arg(&output).output();
+        return match result { Ok(result) if result.status.success() => split_outputs(&input, output, "page"), Ok(result) => failure(input, stderr(result, "qpdf failed to split PDF chunks.")), Err(error) => failure(input, format!("Could not run qpdf: {error}")) };
+    }
+    if let Some(raw) = request.page_ranges.as_deref().filter(|value| !value.trim().is_empty()) {
+        let page_count = match Document::load(&input) { Ok(document) => document.get_pages().len(), Err(error) => return failure(input, error.to_string()) };
+        let ranges = match parse_split_ranges(raw, page_count) { Ok(ranges) => ranges, Err(error) => return failure(input, error) };
+        let stem = output.file_stem().and_then(|value| value.to_str()).unwrap_or("split");
+        let mut outputs = Vec::new();
+        for (number, (start, end)) in ranges.into_iter().enumerate() {
+            let target = OutputNaming::get_destination(&input, location, &format!("-split-{number}"), "pdf");
+            let result = Command::new(&qpdf).arg(&input).arg("--pages").arg(&input).arg(format!("{start}-{end}")).arg("--").arg(&target).output();
+            match result { Ok(result) if result.status.success() => outputs.push(target), Ok(result) => { remove_outputs(&outputs); return failure(input, stderr(result, "qpdf failed to split the selected ranges.")); }, Err(error) => { remove_outputs(&outputs); return failure(input, format!("Could not run qpdf: {error}")); } }
+        }
+        return JobOutcome { input_path: input, output_paths: outputs, detail: format!("PDF split into selected ranges from {stem}"), failure: None };
+    }
     let pattern = output.with_file_name(format!("{}-page-%d.pdf", output.file_stem().and_then(|stem| stem.to_str()).unwrap_or("output")));
     let result = Command::new(qpdf).arg(&input).arg("--split-pages").arg(&pattern).output();
     match result {
@@ -94,6 +114,23 @@ pub fn split(input: PathBuf, location: &OutputLocation) -> JobOutcome {
         Ok(result) => failure(input, stderr(result, "qpdf failed to split the PDF.")),
         Err(error) => failure(input, format!("Could not run qpdf: {error}")),
     }
+}
+
+fn split_outputs(input: &PathBuf, output: PathBuf, kind: &str) -> JobOutcome {
+    let prefix = output.file_stem().and_then(|stem| stem.to_str()).unwrap_or("split");
+    let mut outputs = fs::read_dir(output.parent().unwrap_or_else(|| std::path::Path::new("."))).ok().into_iter().flatten().filter_map(Result::ok).map(|entry| entry.path()).filter(|path| path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with(prefix) && path.extension().is_some_and(|ext| ext == "pdf"))).collect::<Vec<_>>();
+    outputs.sort();
+    if outputs.is_empty() { failure(input.clone(), format!("qpdf reported success but produced no {kind} files.")) } else { JobOutcome { input_path: input.clone(), output_paths: outputs, detail: "PDF split".to_string(), failure: None } }
+}
+
+fn parse_split_ranges(raw: &str, page_count: usize) -> Result<Vec<(usize, usize)>, String> {
+    raw.split(',').map(str::trim).map(|token| {
+        let (start, end) = token.split_once('-').unwrap_or((token, token));
+        let start = parse_page_number(start)?;
+        let end = if end.trim().is_empty() { page_count } else { parse_page_number(end)? };
+        if start > end || end > page_count { return Err(format!("Invalid page range: {token}.")); }
+        Ok((start, end))
+    }).collect()
 }
 
 pub fn to_images(request: &PdfToImagesRequest, input: PathBuf) -> JobOutcome {
@@ -308,6 +345,8 @@ mod tests {
             paths: vec![],
             pages,
             page_ranges: page_ranges.map(str::to_string),
+            split_mode: None,
+            chunk_size: None,
             output_location: OutputLocation::AlongsideInput,
         }
     }
