@@ -5,7 +5,7 @@ mod kit;
 
 use crate::kit::common::{JobOutcome, OutputLocation};
 use crate::kit::images::{ImageProcessor, Options as ImageOptions, OutputFormat};
-use crate::kit::pdf::{editor, metadata, PDFProcessor};
+use crate::kit::pdf::{editor, metadata, remaining, PDFProcessor};
 use crate::kit::contracts::{CompressImagesRequest, ConvertImagesRequest, PdfRequest};
 use crate::kit::common::batch_runner::BatchRunner;
 
@@ -83,6 +83,61 @@ async fn organize_pdf(request: editor::OrganizePdfRequest) -> Vec<JobOutcome> {
     BatchRunner::run(request.paths.clone(), |path| editor::organize(&request, path))
 }
 
+#[tauri::command]
+async fn add_page_numbers(request: remaining::PageOverlayRequest) -> Vec<JobOutcome> {
+    BatchRunner::run(request.paths.clone(), |path| remaining::add_page_numbers(&request, path))
+}
+
+#[tauri::command]
+async fn watermark_pdf(request: remaining::PageOverlayRequest) -> Vec<JobOutcome> {
+    BatchRunner::run(request.paths.clone(), |path| remaining::watermark(&request, path))
+}
+
+#[tauri::command]
+async fn compress_pdf(request: remaining::CompressPdfRequest) -> Vec<JobOutcome> {
+    BatchRunner::run(request.paths.clone(), |path| remaining::compress(&request, path))
+}
+
+#[tauri::command]
+async fn remove_pdf_pages(request: remaining::PageSelectionRequest) -> Vec<JobOutcome> {
+    BatchRunner::run(request.paths.clone(), |path| remaining::remove_pages(&request, path))
+}
+
+#[tauri::command]
+async fn extract_pdf_pages(request: remaining::PageSelectionRequest) -> Vec<JobOutcome> {
+    BatchRunner::run(request.paths.clone(), |path| remaining::extract_pages(&request, path))
+}
+
+#[tauri::command]
+async fn merge_pdfs(request: remaining::MergePdfRequest) -> Vec<JobOutcome> {
+    vec![remaining::merge(&request)]
+}
+
+#[tauri::command]
+async fn split_pdf(request: remaining::PageSelectionRequest) -> Vec<JobOutcome> {
+    BatchRunner::run(request.paths.clone(), |path| remaining::split(path, &request.output_location))
+}
+
+#[tauri::command]
+async fn pdf_to_images(request: remaining::PdfToImagesRequest) -> Vec<JobOutcome> {
+    BatchRunner::run(request.paths.clone(), |path| remaining::to_images(&request, path))
+}
+
+#[tauri::command]
+async fn pdf_to_text(request: remaining::PdfToTextRequest) -> Vec<JobOutcome> {
+    BatchRunner::run(request.paths.clone(), |path| remaining::to_text(&request, path))
+}
+
+#[tauri::command]
+async fn extract_pdf_images(request: remaining::PdfToTextRequest) -> Vec<JobOutcome> {
+    BatchRunner::run(request.paths.clone(), |path| remaining::extract_images(&request, path))
+}
+
+#[tauri::command]
+async fn images_to_pdf(request: remaining::ImagesToPdfRequest) -> Vec<JobOutcome> {
+    vec![remaining::images_to_pdf(&request)]
+}
+
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
@@ -94,6 +149,17 @@ fn main() {
             crop_pdf,
             sign_pdf,
             organize_pdf
+            ,add_page_numbers,
+            watermark_pdf,
+            compress_pdf,
+            remove_pdf_pages,
+            extract_pdf_pages
+            ,merge_pdfs,
+            split_pdf,
+            pdf_to_images,
+            pdf_to_text,
+            extract_pdf_images,
+            images_to_pdf
         ])
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
