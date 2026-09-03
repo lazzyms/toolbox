@@ -64,6 +64,8 @@ Stop only the Tauri dev process and Vite process started by this run; never kill
 
 The canonical commands are `npm run tauri dev`, `npm run build`, and `cargo test` from the directories above. If repeated verification is needed, add a helper only inside `skills/verify-toolbox/` and document its exact invocation here.
 
+Run `node skills/verify-toolbox/scripts/run-evidence.mjs MANIFEST EVIDENCE_DIR ROOT` to validate a manifest-driven evidence set. The command writes only the run-specific evidence directory and uses relative paths in its report.
+
 ## Feature map
 
 See [`features/README.md`](features/README.md) for the maintained Tauri user-facing feature map. Keep it aligned with `ToolboxTauri/src/registry/index.ts`, `ToolboxTauri/src/views/`, `ToolboxTauri/src-tauri/src/main.rs`, and the native adapters documented in `docs/tauri-vision-engines.md`.
