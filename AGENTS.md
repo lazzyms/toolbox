@@ -1,92 +1,45 @@
 # Toolbox — Agent Guide
 
+## Scope
+
+This branch is the cross-platform Tauri app. The legacy Swift macOS app and its
+release workflow live only on `main`. Do not reintroduce Swift package files,
+Swift sources, or the Swift release workflow here. Keep `docs/` unchanged unless
+the task explicitly targets the website.
+
 ## Commands
 
-- `swift test` — all 37 tests
-- `swift test --filter ImageProcessor` — one @Suite (match type name)
-- `swift test --filter heicToPNG` — one test (match func name)
-- `swift build` — debug build
-- `swift run Toolbox` — runs without bundle; `Info.plist` missing → `UpdateController.isAvailable == false`
-- `./Scripts/build-app.sh --version 1.0.0` → `dist/Toolbox.app` universal, signed, smoke-launched
-- `./Scripts/make-dmg.sh --version 1.0.0` → `dist/Toolbox-1.0.0.dmg`
-- `./Scripts/next-version.sh` — next release version
-- `./Scripts/release.sh --version 1.1.0 [--dry-run]` — CI uses this; do not run by hand
+Run from `ToolboxTauri/`:
 
-Requires Xcode 26+, macOS 14 target, swift-tools-version 6.0.
+- `npm run test:ui` — all Playwright UI tests
+- `npm run test:analytics` — install analytics unit tests
+- `npm run test:native:e2e` — native command matrix with isolated fixtures
+- `npm run check:release` — tool matrix and release configuration checks
+- `npm run build` — TypeScript and Vite production build
+- `npm run tauri build` — native installer bundle
+- `cargo test --manifest-path src-tauri/Cargo.toml` — Rust tests
 
 ## Architecture
 
-Two targets, invariant:
+- `ToolboxTauri/src/` contains the React UI and feature views.
+- `ToolboxTauri/src-tauri/src/` contains native commands and processing logic.
+- `ToolboxTauri/tests/` contains browser automation using the checked-in fixture.
+- `ToolboxTauri/src-tauri/src/main.rs` contains the fixture-backed native E2E matrix.
 
-- `Sources/ToolboxKit/` — processing only. Zero deps, no Sparkle/SwiftUI/AppKit. Every entry point is synchronous `file in → file out`, `Sendable`, unit-testable.
-- `Sources/Toolbox/` — SwiftUI app. Links Sparkle. No processing logic.
+New processing behavior belongs in the native kit and must remain deterministic,
+local, and testable. UI views should use the shared `ToolScaffold` and preserve
+per-file failure isolation.
 
-New processing code belongs in ToolboxKit even if used by one view.
+## Invariants
 
-### Registry
-
-`Sources/Toolbox/Registry/` is source of truth:
-- `Utility.swift` — type, `Category`, `all = pdfTools + imageTools`
-- `Utility+PDF.swift`, `Utility+Images.swift` — one `[Utility]` per category
-
-Add utility = one appended line in its category array with `pane:` factory. `pane` takes `Utility`, `makeView()` feeds `self` back to `ToolScaffold`.
-
-### Image pipeline
-
-`ImageProcessor.run(_:options:)` = decode → optional resize → encode.
-Convert/Compress/Resize differ only in `ImageProcessor.Options` (`format`, `quality`, `resize`, `keepSmallerOriginal`, `suffix`). Fix bugs once there.
-
-### Feature view pattern
-
-Views in `Features/` are `@State`-only:
-`files: [URL]` + options → build `Options` → `Task { await BatchRunner.run(...) }` → `await MainActor.run` to publish `[JobOutcome]`.
-Wrap body in `ToolScaffold`, reuse `DropZone`, `FileList`, `ResultsList`, `DestinationPicker`, `OptionRow`.
-`BatchRunner` handles bounded parallelism, progress, per-file error isolation. Captured `job` closure must be `Sendable`. Detail pane is `.id(selected.id)`-keyed → switching tools tears down state.
-
-## Invariants tests enforce
-
-- Originals never modified; outputs get suffix `-unlocked`, `-compressed`, `-resized`.
-- Nothing overwritten: always route through `OutputNaming.destination`, appends `-1`, `-2`…
-- Compression never inflates: with `keepSmallerOriginal`, `ImageProcessor` copies original bytes under input extension. Skipped on resize.
-- EXIF orientation baked into pixels on resize; orientation tag must NOT be copied.
-- PDF unlocking keeps text selectable: `PDFUnlocker` rebuilds fresh `PDFDocument`, verifies unlocked, falls back to CoreGraphics re-render. Requires real password.
-
-Tests use real files via `Tests/ToolboxKitTests/Fixtures.swift`. Guard format tests with `try #require(ImageFormat.x.canEncode)`.
-
-## Packaging gotchas
-
-- Version injected, not committed. `Resources/Info.plist` contains `__VERSION__` and `__BUILD__` placeholders replaced by `build-app.sh`. Build number = `git rev-list --count HEAD`.
-- Sparkle linked but not embedded by SwiftPM. `build-app.sh` copies `macos-arm64_x86_64` slice and adds `@executable_path/../Frameworks` rpath.
-- Two entitlements: ad-hoc uses `Toolbox-adhoc.entitlements` (Library Validation disabled). Developer ID uses `Toolbox.entitlements`. `build-app.sh` picks automatically and launches bundle to verify.
-- Never `codesign --deep` for Developer ID — mis-signs Sparkle XPC helpers.
-- App deliberately not sandboxed (Hardened Runtime only). Sandbox breaks save-next-to-original.
-- Universal build compiles arm64/x86_64 separately then `lipo`.
-- `Resources/AppIcon.icns` generated by `Scripts/make-icon.swift`, gitignored. Also gitignored: `.build/`, `dist/`, `.vscode/`.
+- Never modify originals or overwrite an existing output.
+- Keep output naming collision-safe and operation-specific.
+- Keep native helper/model discovery explicit and fail closed when unavailable.
+- Maintain parity across macOS and Windows release targets.
+- Keep analytics anonymous and development builds inactive.
 
 ## Release
 
-Every push to `main` publishes a release. No staging.
-
-- Version from newest `v*` tag + bump. PR labels override: `minor`, `major`, `no-release` to skip.
-- Release notes = PR `## Release notes` section, else PR title. Shown in Sparkle dialog.
-- Signing key = `SPARKLE_PRIVATE_KEY` secret. Public half is `SUPublicEDKey` in `Info.plist`.
-- Loop guards: GITHUB_TOKEN pushes don't trigger workflows; release commit is `[skip ci]`.
-- Rehearsal: push to `ci/**` branch runs workflow in `--dry-run`.
-- Cut releases from `main` after stack merges, not from a stacked branch — build number derived from `git rev-list --count HEAD`.
-
-## Stacking
-
-`gt` is installed, trunk `main`. Worktrees break restacks: a branch checked out elsewhere cannot be restacked here → `gt restack` stalls.
-
-## Conventions
-
-- Commit messages: imperative, <~72 chars, no trailing period. Branch off `main`, PR against `main`.
-- Match existing style: `UpperCamelCase`, `lowerCamelCase`, 4-space indent.
-- Prefer `struct`. `ToolboxError` cases for failures visible to users. Comments explain why.
-- `ToolboxKit` must stay dependency-free.
-
-## Important files
-
-- README.md — user behaviour, signing, distribution
-- CONTRIBUTING.md — setup, coding style, PR flow
-- CLAUDE.md — detailed architecture notes, invariants, stacking hazards
+`tauri-port` is the default branch and primary release line. Its release workflow
+publishes signed macOS and Windows artifacts plus the updater manifest. The Swift
+release workflow remains on `main` and must not be copied into this branch.
