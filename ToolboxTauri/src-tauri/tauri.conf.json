@@ -15,6 +15,7 @@
         "title": "Toolbox",
         "width": 1100,
         "height": 720,
+        "maximized": true,
         "minWidth": 800,
         "minHeight": 560,
         "resizable": true

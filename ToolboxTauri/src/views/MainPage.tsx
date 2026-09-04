@@ -56,14 +56,14 @@ export const MainPage = () => {
     const [selectedTool, setSelectedTool] = useState<ToolDefinition | null>(null);
 
     return (
-        <div className="flex h-screen bg-slate-50 text-slate-900 font-sans selection:bg-blue-100">
+        <div className="flex h-screen overflow-hidden bg-slate-50 text-slate-900 font-sans selection:bg-blue-100">
             <a href="#tool-detail" className="sr-only focus:not-sr-only focus:absolute focus:z-10 focus:bg-white focus:p-2">Skip to tool</a>
-            <aside aria-label="Toolbox navigation" className="w-72 bg-white border-r border-slate-200 p-6 flex flex-col">
+            <aside aria-label="Toolbox navigation" className="w-72 shrink-0 min-h-0 bg-white border-r border-slate-200 p-6 flex flex-col">
                 <div className="mb-10 px-2">
                     <h1 className="text-xl font-bold tracking-tight">Toolbox</h1>
                 </div>
 
-                <nav aria-label="Utilities" className="flex-1 space-y-1">
+                <nav aria-label="Utilities" className="min-h-0 flex-1 overflow-y-auto space-y-1">
                     {UtilityRegistry.map(tool => (
                         <button
                             key={tool.id}
@@ -81,10 +81,6 @@ export const MainPage = () => {
                         </button>
                     ))}
                 </nav>
-
-                <div className="mt-auto p-4 bg-slate-100 rounded-2xl">
-                    <p className="text-[11px] text-slate-400 text-center font-medium uppercase tracking-wider">Unified Native Engine</p>
-                </div>
 
                 <p className="mt-4 text-center text-xs text-slate-400">
                     Built by{' '}

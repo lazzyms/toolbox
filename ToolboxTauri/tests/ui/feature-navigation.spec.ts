@@ -66,6 +66,17 @@ test("sidebar navigation has no decorative icons", async ({ page }) => {
     await expect(page.locator('aside[aria-label="Toolbox navigation"] [aria-hidden="true"]')).toHaveCount(0);
 });
 
+test("sidebar and detail pane scroll independently", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.locator('nav[aria-label="Utilities"]')).toHaveCSS("overflow-y", "auto");
+    await expect(page.locator('main[aria-label="Tool detail"]')).toHaveCSS("overflow-y", "auto");
+});
+
+test("sidebar does not show the engine badge", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.getByText("Unified Native Engine", { exact: true })).toHaveCount(0);
+});
+
 const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[number]) => {
     await page.goto("/");
     await page.getByRole("button", {
