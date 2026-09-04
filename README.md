@@ -1,6 +1,10 @@
 # Toolbox
 
-A native macOS app collecting the small file utilities you keep needing. Your files
+> The cross-platform Tauri app on `tauri-port` is now the primary Toolbox app.
+> The legacy Swift macOS app on `main` is deprecated; its source, release workflow,
+> and `docs/` site remain available independently.
+
+A cross-platform desktop app collecting the small file utilities you keep needing. Your files
 are processed entirely on-device and never uploaded. The only network access is the
 update check described in [Updates](#updates), which you can turn off.
 
