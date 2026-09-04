@@ -16,6 +16,7 @@ import { ImageGeometryView } from './ImageGeometryView';
 import { ImageEffectView } from './ImageEffectView';
 import { ImageFormatView } from './ImageFormatView';
 import { ImageMetadataView } from './ImageMetadataView';
+import { SettingsPanel } from './SettingsPanel';
 
 const views = {
     'pdf-unlock': PDFUnlockView,
@@ -54,6 +55,7 @@ const views = {
 
 export const MainPage = () => {
     const [selectedTool, setSelectedTool] = useState<ToolDefinition | null>(null);
+    const [settingsOpen, setSettingsOpen] = useState(false);
 
     return (
         <div className="flex h-screen overflow-hidden bg-slate-50 text-slate-900 font-sans selection:bg-blue-100">
@@ -81,6 +83,14 @@ export const MainPage = () => {
                         </button>
                     ))}
                 </nav>
+
+                <button
+                    type="button"
+                    onClick={() => setSettingsOpen(true)}
+                    className="mt-4 w-full rounded-xl border border-slate-200 px-3 py-2 text-left text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900"
+                >
+                    Settings
+                </button>
 
                 <p className="mt-4 text-center text-xs text-slate-400">
                     Built by{' '}
@@ -115,6 +125,8 @@ export const MainPage = () => {
                     {selectedTool ? `${selectedTool.title} selected.` : "No tool selected."}
                 </p>
             </main>
+
+            {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
         </div>
     );
 };
