@@ -61,6 +61,11 @@ test("every registered feature opens its detail pane", async ({ page }) => {
     }
 });
 
+test("sidebar navigation has no decorative icons", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.locator('aside[aria-label="Toolbox navigation"] [aria-hidden="true"]')).toHaveCount(0);
+});
+
 const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[number]) => {
     await page.goto("/");
     await page.getByRole("button", {
