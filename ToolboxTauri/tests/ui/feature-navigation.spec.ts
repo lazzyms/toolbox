@@ -94,6 +94,18 @@ test("pdf editor renders page previews", async ({ page }) => {
     await expect(page.locator('aside[aria-label="PDF page thumbnails"] img[alt="Thumbnail of page 1"]')).toBeVisible();
 });
 
+test("vision tools explain unavailable resources before file selection", async ({ page }) => {
+    await page.goto("/");
+    for (const id of ["pdf-ocr", "image-blur-faces", "image-remove-bg"]) {
+        const utility = UtilityRegistry.find((item) => item.id === id);
+        expect(utility).toBeDefined();
+        if (!utility) continue;
+        await page.getByRole("button", { name: `${utility.title}: ${utility.blurb}` }).click();
+        await expect(page.getByText("Unavailable in this build.", { exact: true })).toBeVisible();
+        await expect(page.getByRole("button", { name: "Choose files to process" })).toHaveCount(0);
+    }
+});
+
 const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[number]) => {
     await page.goto("/");
     await page.getByRole("button", {
@@ -121,6 +133,7 @@ test.describe("registered feature actions", () => {
 
     for (const utility of UtilityRegistry) {
         test(`${utility.id} accepts the fixture and runs`, async ({ page }) => {
+            test.skip(utility.status !== "implemented", "Tool is not available in this build.");
             await exerciseFeature(page, utility);
         });
     }
