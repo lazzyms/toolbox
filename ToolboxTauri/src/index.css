@@ -639,6 +639,102 @@ select:focus-visible {
 .file-selection-item:last-child {
   border-bottom: 0;
 }
+.result-list {
+  display: grid;
+  gap: 8px;
+}
+.result-summary {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+.result-card {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+}
+.result-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px;
+}
+.result-input,
+.result-output-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.result-input {
+  font-size: 13px;
+}
+.result-status {
+  flex: 0 1 auto;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.result-status-success {
+  background: rgba(34, 197, 94, 0.14);
+  color: #4ade80;
+}
+.result-status-failure {
+  background: rgba(248, 113, 113, 0.14);
+  color: var(--danger);
+}
+.result-outputs {
+  display: grid;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--border);
+  background: var(--border);
+  list-style: none;
+}
+.result-output {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px 16px;
+  padding: 10px 12px;
+  background: var(--surface);
+}
+.result-output-name {
+  color: var(--muted);
+  font-size: 12px;
+}
+.result-output-actions {
+  display: flex;
+  gap: 6px;
+}
+.result-output-actions button {
+  min-height: 32px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--fg);
+  font-size: 11px;
+}
+.result-output-actions button:hover:not(:disabled) {
+  border-color: var(--muted);
+  background: var(--surface-2);
+}
+.result-output-actions button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.result-action-error {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--danger);
+  font-size: 12px;
+}
 @media (max-width: 1020px) {
   .tool-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -686,6 +782,14 @@ select:focus-visible {
   }
   .tool-workspace-heading {
     align-items: flex-start;
+    flex-direction: column;
+  }
+  .result-heading,
+  .result-output {
+    align-items: flex-start;
+    grid-template-columns: 1fr;
+  }
+  .result-heading {
     flex-direction: column;
   }
 }

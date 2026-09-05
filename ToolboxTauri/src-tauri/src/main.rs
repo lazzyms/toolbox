@@ -1,8 +1,9 @@
-// Prev: ToolboxTauri/src-tauri/src/main.rs
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod file_actions;
 mod kit;
 
+use crate::file_actions::{open_output_path, reveal_output_path};
 use crate::kit::common::JobOutcome;
 use crate::kit::images::{ImageProcessor, Options as ImageOptions, OutputFormat};
 use crate::kit::images::tools;
@@ -178,6 +179,8 @@ fn inspect_image_metadata(request: tools::MetadataRequest) -> Vec<Result<tools::
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
+            open_output_path,
+            reveal_output_path,
             remove_password,
             protect_pdf,
             compress_images,

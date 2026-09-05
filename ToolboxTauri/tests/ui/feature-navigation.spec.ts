@@ -5,16 +5,27 @@ import { UtilityRegistry } from "../../src/registry";
 
 const fixturePath = path.resolve("src-tauri/icons/icon.png");
 const fixtureName = path.basename(fixturePath);
+const mockedOutputPaths = [`${fixturePath}.output-one`, `${fixturePath}.output-two`];
 const appVersion = (JSON.parse(readFileSync(path.resolve("package.json"), "utf8")) as { version: string }).version;
+
+type MockOutcome = {
+    inputPath: string;
+    outputPaths: string[];
+    detail: string;
+    failure: { kind: string; message: string } | null;
+};
 
 type TestWindow = Window & {
     __toolboxInvocations?: Array<{ command: string; args: unknown }>;
+    __toolboxProcessingResults?: MockOutcome[];
+    __toolboxActionFailure?: { command: string; path: string; message: string; delayMs?: number };
 };
 
 test.beforeEach(async ({ page }) => {
-    await page.addInitScript(({ fixturePath }) => {
+    await page.addInitScript(({ fixturePath, mockedOutputPaths }) => {
         const invocations: Array<{ command: string; args: unknown }> = [];
         (window as TestWindow).__toolboxInvocations = invocations;
+        Object.defineProperty(window.navigator, "platform", { configurable: true, value: "MacIntel" });
 
         window.__TAURI_INTERNALS__ = {
             metadata: {
@@ -25,15 +36,25 @@ test.beforeEach(async ({ page }) => {
                 invocations.push({ command, args });
 
                 if (command === "plugin:dialog|open") return fixturePath;
+                if (command === "open_output_path" || command === "reveal_output_path") {
+                    const failure = (window as TestWindow).__toolboxActionFailure;
+                    if (failure?.command === command && failure.path === (args as { path: string }).path) {
+                        if (failure.delayMs) {
+                            await new Promise((resolve) => window.setTimeout(resolve, failure.delayMs));
+                        }
+                        throw failure.message;
+                    }
+                    return null;
+                }
                 if (command === "inspect_pdf") {
                     return { pages: [{ index: 0, width: 612, height: 792 }] };
                 }
                 if (command === "inspect_image_metadata") return ["fixture image"];
                 if (command.startsWith("plugin:")) return null;
 
-                return [{
+                return (window as TestWindow).__toolboxProcessingResults ?? [{
                     inputPath: fixturePath,
-                    outputPaths: [`${fixturePath}.output`],
+                    outputPaths: mockedOutputPaths,
                     detail: "Test output",
                     failure: null,
                 }];
@@ -44,7 +65,7 @@ test.beforeEach(async ({ page }) => {
         window.__TAURI_EVENT_PLUGIN_INTERNALS__ = {
             unregisterListener: () => undefined,
         };
-    }, { fixturePath });
+    }, { fixturePath, mockedOutputPaths });
 });
 
 test("every registered feature opens its detail pane", async ({ page }) => {
@@ -273,6 +294,92 @@ test("remove password exposes one cross-format document tool", async ({ page }) 
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await page.locator('input[type="password"]').fill("test-password");
     await expect(page.getByLabel("Tool detail").getByRole("button", { name: "Remove Password" })).toBeEnabled();
+});
+
+test("every output exposes native file actions and keeps action errors inline", async ({ page }) => {
+    const failedOutput = `${fixturePath}.partial-output`;
+    const outputs = [...mockedOutputPaths, failedOutput];
+    await page.goto("/");
+    await page.evaluate(({ fixturePath, mockedOutputPaths, failedOutput }) => {
+        (window as TestWindow).__toolboxProcessingResults = [
+            {
+                inputPath: fixturePath,
+                outputPaths: mockedOutputPaths,
+                detail: "Test output",
+                failure: null,
+            },
+            {
+                inputPath: `${fixturePath}.failed-input`,
+                outputPaths: [failedOutput],
+                detail: "",
+                failure: { kind: "processing", message: "Processing failed" },
+            },
+        ];
+        (window as TestWindow).__toolboxActionFailure = {
+            command: "reveal_output_path",
+            path: failedOutput,
+            message: "Could not reveal test output",
+        };
+    }, { fixturePath, mockedOutputPaths, failedOutput });
+
+    await page.getByRole("button", { name: "Open Compress Images" }).click();
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await page.getByLabel("Tool detail").getByRole("button", { name: "Compress Images", exact: true }).click();
+
+    const outputRows = page.locator(".result-output");
+    await expect(outputRows).toHaveCount(outputs.length);
+    await expect(page.getByRole("button", { name: "Open file" })).toHaveCount(outputs.length);
+    await expect(page.getByRole("button", { name: "Show in Finder" })).toHaveCount(outputs.length);
+
+    for (let index = 0; index < outputs.length; index += 1) {
+        await outputRows.nth(index).getByRole("button", { name: "Open file" }).click();
+        await outputRows.nth(index).getByRole("button", { name: "Show in Finder" }).click();
+    }
+
+    const actionInvocations = await page.evaluate(() =>
+        ((window as TestWindow).__toolboxInvocations ?? []).filter(({ command }) =>
+            command === "open_output_path" || command === "reveal_output_path"
+        ),
+    );
+    expect(actionInvocations).toEqual(outputs.flatMap((path) => [
+        { command: "open_output_path", args: { path } },
+        { command: "reveal_output_path", args: { path } },
+    ]));
+    await expect(page.getByRole("alert")).toHaveText("Could not reveal test output");
+    await expect(page.getByText("1 of 2 files failed", { exact: true })).toBeVisible();
+    await expect(page.getByText("Processing failed", { exact: true })).toBeVisible();
+});
+
+test("output action state resets and ignores stale completions", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Compress Images" }).click();
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    const processButton = page.getByLabel("Tool detail").getByRole("button", { name: "Compress Images", exact: true });
+    await processButton.click();
+
+    await page.evaluate(({ path }) => {
+        (window as TestWindow).__toolboxActionFailure = {
+            command: "open_output_path",
+            path,
+            message: "Stale action failure",
+            delayMs: 150,
+        };
+        (window as TestWindow).__toolboxProcessingResults = [{
+            inputPath: `${path}.next-input`,
+            outputPaths: [`${path}.next-output`],
+            detail: "New result set",
+            failure: null,
+        }];
+    }, { path: mockedOutputPaths[0] });
+
+    await page.locator(".result-output").first().getByRole("button", { name: "Open file" }).click();
+    await processButton.click();
+
+    await expect(page.getByText("New result set", { exact: true })).toBeVisible();
+    await expect(page.locator(".result-output")).toHaveCount(1);
+    await page.waitForTimeout(200);
+    await expect(page.getByText("Stale action failure", { exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Open file" })).toBeEnabled();
 });
 
 const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[number]) => {
