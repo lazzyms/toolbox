@@ -18,7 +18,9 @@ serde_json = "1"
 cfb = "0.7.3"
 office-crypto = "0.3.0"
 md-5 = "0.10"
+quick-xml = "0.41.0"
 sha1 = "0.10"
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "tiff"] }
 lopdf = "0.44"
 rayon = "1"

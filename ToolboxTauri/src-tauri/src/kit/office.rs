@@ -5,7 +5,10 @@ use std::path::PathBuf;
 
 use cfb::CompoundFile;
 use md5::{Digest, Md5};
+use quick_xml::events::Event;
+use quick_xml::Reader as XmlReader;
 use sha1::Sha1;
+use zip::ZipArchive;
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::ToolError;
@@ -131,7 +134,7 @@ fn invalid(message: impl Into<String>) -> OfficeError {
 
 fn decrypt_office_bytes(raw: &[u8], extension: &str, password: &str) -> Result<Vec<u8>, OfficeError> {
     let extension = extension.to_ascii_lowercase();
-    if matches!(extension.as_str(), "docx" | "xlsx" | "pptx") && is_zip(raw) {
+    if matches!(extension.as_str(), "docx" | "xlsx" | "pptx") && is_ooxml_package(raw, &extension) {
         return Ok(raw.to_vec());
     }
     if !raw.starts_with(&CFB_MAGIC) {
@@ -151,7 +154,7 @@ fn decrypt_office_bytes(raw: &[u8], extension: &str, password: &str) -> Result<V
 fn verify_unlocked_bytes(bytes: Vec<u8>, extension: &str) -> Result<Vec<u8>, OfficeError> {
     let extension = extension.to_ascii_lowercase();
     let valid = if matches!(extension.as_str(), "docx" | "xlsx" | "pptx") {
-        is_zip(&bytes)
+        is_ooxml_package(&bytes, &extension)
     } else {
         bytes.starts_with(&CFB_MAGIC)
     };
@@ -164,8 +167,69 @@ fn verify_unlocked_bytes(bytes: Vec<u8>, extension: &str) -> Result<Vec<u8>, Off
     }
 }
 
-fn is_zip(data: &[u8]) -> bool {
-    data.starts_with(b"PK\x03\x04") || data.starts_with(b"PK\x05\x06") || data.starts_with(b"PK\x07\x08")
+fn is_ooxml_package(data: &[u8], extension: &str) -> bool {
+    let (main_part, main_part_root) = match extension {
+        "docx" => ("word/document.xml", b"document".as_slice()),
+        "xlsx" => ("xl/workbook.xml", b"workbook".as_slice()),
+        "pptx" => ("ppt/presentation.xml", b"presentation".as_slice()),
+        _ => return false,
+    };
+    let Ok(mut archive) = ZipArchive::new(Cursor::new(data)) else {
+        return false;
+    };
+    let Some(content_types) = read_zip_entry(&mut archive, "[Content_Types].xml") else {
+        return false;
+    };
+    let Some(main_part) = read_zip_entry(&mut archive, main_part) else {
+        return false;
+    };
+    has_xml_root(&content_types, b"Types") && has_xml_root(&main_part, main_part_root)
+}
+
+fn read_zip_entry(archive: &mut ZipArchive<Cursor<&[u8]>>, name: &str) -> Option<Vec<u8>> {
+    let mut entry = archive.by_name(name).ok()?;
+    let mut contents = Vec::new();
+    entry.read_to_end(&mut contents).ok()?;
+    Some(contents)
+}
+
+fn has_xml_root(data: &[u8], expected: &[u8]) -> bool {
+    let mut reader = XmlReader::from_reader(Cursor::new(data));
+    reader.config_mut().check_end_names = true;
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    let mut root_seen = false;
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element)) => {
+                if depth == 0 {
+                    if root_seen || element.local_name().as_ref() != expected {
+                        return false;
+                    }
+                    root_seen = true;
+                }
+                depth += 1;
+            }
+            Ok(Event::Empty(element)) => {
+                if depth == 0 {
+                    if root_seen || element.local_name().as_ref() != expected {
+                        return false;
+                    }
+                    root_seen = true;
+                }
+            }
+            Ok(Event::End(_)) => {
+                if depth == 0 {
+                    return false;
+                }
+                depth -= 1;
+            }
+            Ok(Event::Eof) => return root_seen && depth == 0,
+            Ok(_) => {}
+            Err(_) => return false,
+        }
+        buffer.clear();
+    }
 }
 
 fn map_modern_decrypt_error(error: office_crypto::DecryptError) -> OfficeError {
@@ -234,6 +298,18 @@ fn write_cfb_stream(file: &mut CfbFile, name: &str, data: &[u8]) -> Result<(), O
         .seek(SeekFrom::Start(0))
         .and_then(|_| stream.write_all(data))
         .map_err(|error| OfficeError::Processing(format!("Could not write Office stream {name}: {error}")))?;
+    Ok(())
+}
+
+fn write_cfb_stream_resized(file: &mut CfbFile, name: &str, data: &[u8]) -> Result<(), OfficeError> {
+    let mut stream = file
+        .open_stream(name)
+        .map_err(|error| OfficeError::Processing(format!("Could not open Office stream {name}: {error}")))?;
+    stream
+        .set_len(data.len() as u64)
+        .and_then(|_| stream.seek(SeekFrom::Start(0)))
+        .and_then(|_| stream.write_all(data))
+        .map_err(|error| OfficeError::Processing(format!("Could not resize or write Office stream {name}: {error}")))?;
     Ok(())
 }
 
@@ -450,13 +526,13 @@ fn decrypt_doc(raw: &[u8], password: &str) -> Result<Vec<u8>, OfficeError> {
         if password_verifier_method2(&chars) != i_key {
             return Err(OfficeError::WrongPassword("The Word document password is incorrect.".to_string()));
         }
-        decrypt_xor_method2(&mut table, &chars);
+        decrypt_xor_method2(&mut table, &chars, 0);
         if let Some(data) = data_stream.as_mut() {
-            decrypt_xor_method2(data, &chars);
+            decrypt_xor_method2(data, &chars, 0);
         }
         let mut word_decrypted = word.clone();
         if word_decrypted.len() > 68 {
-            decrypt_xor_method2(&mut word_decrypted[68..], &chars);
+            decrypt_xor_method2(&mut word_decrypted[68..], &chars, 68);
         }
         clear_word_fib(&mut word_decrypted);
         write_cfb_stream(&mut file, "/WordDocument", &word_decrypted)?;
@@ -634,10 +710,10 @@ fn xor_array_method2(password: &[u8]) -> [u8; 16] {
     padded
 }
 
-fn decrypt_xor_method2(data: &mut [u8], password: &[u8]) {
+fn decrypt_xor_method2(data: &mut [u8], password: &[u8], stream_offset: usize) {
     let array = xor_array_method2(password);
     for (index, value) in data.iter_mut().enumerate() {
-        let transformed = *value ^ array[index % 16];
+        let transformed = *value ^ array[(stream_offset + index) % 16];
         if *value != 0 && transformed != 0 {
             *value = transformed;
         }
@@ -649,6 +725,16 @@ struct BiffRecord {
     id: u16,
     start: usize,
     size: usize,
+}
+
+impl BiffRecord {
+    fn encoded_len(self) -> usize {
+        4 + self.size
+    }
+
+    fn end(self) -> usize {
+        self.start + self.encoded_len()
+    }
 }
 
 fn parse_biff_records(data: &[u8]) -> Result<Vec<BiffRecord>, OfficeError> {
@@ -677,7 +763,7 @@ fn decrypt_xls(raw: &[u8], password: &str) -> Result<Vec<u8>, OfficeError> {
     let workbook_name = if file.open_stream("/Workbook").is_ok() { "/Workbook" } else { "/Book" };
     let workbook = read_cfb_stream(&mut file, workbook_name)?;
     let records = parse_biff_records(&workbook)?;
-    let Some(file_pass) = records.iter().find(|record| record.id == 0x002F) else {
+    let Some(file_pass) = records.iter().copied().find(|record| record.id == 0x002F) else {
         return Ok(raw.to_vec());
     };
     if file_pass.size < 2 {
@@ -714,7 +800,7 @@ fn decrypt_xls(raw: &[u8], password: &str) -> Result<Vec<u8>, OfficeError> {
 
     let mut plain: Vec<i16> = Vec::with_capacity(workbook.len());
     let mut encrypted = Vec::with_capacity(workbook.len());
-    for record in records {
+    for record in records.iter().copied() {
         let header = &workbook[record.start..record.start + 4];
         let payload = &workbook[record.start + 4..record.start + 4 + record.size];
         if record.id == 0x002F {
@@ -753,7 +839,27 @@ fn decrypt_xls(raw: &[u8], password: &str) -> Result<Vec<u8>, OfficeError> {
     for (index, marker) in plain.into_iter().enumerate() {
         workbook_decrypted.push(if marker >= 0 { marker as u8 } else { decrypted[index] });
     }
-    write_cfb_stream(&mut file, workbook_name, &workbook_decrypted)?;
+    let removed_start = file_pass.start;
+    let removed_end = file_pass.end();
+    let removed_len = file_pass.encoded_len();
+    for record in records.iter().copied().filter(|record| record.id == 0x0085 && record.size >= 4) {
+        let offset = read_u32(&workbook_decrypted, record.start + 4)? as usize;
+        let relocated = if offset >= removed_end {
+            offset.checked_sub(removed_len).ok_or_else(|| {
+                invalid("The Excel BoundSheet8 offset cannot be relocated safely.")
+            })?
+        } else if offset >= removed_start {
+            return Err(invalid(
+                "The Excel BoundSheet8 offset points inside the removed FilePass record.",
+            ));
+        } else {
+            offset
+        };
+        workbook_decrypted[record.start + 4..record.start + 8]
+            .copy_from_slice(&(relocated as u32).to_le_bytes());
+    }
+    workbook_decrypted.drain(removed_start..removed_end);
+    write_cfb_stream_resized(&mut file, workbook_name, &workbook_decrypted)?;
     finish_cfb(file)
 }
 
@@ -785,6 +891,7 @@ struct PptRecord {
     offset: usize,
     record_type: u16,
     length: usize,
+    end: usize,
 }
 
 fn ppt_record(data: &[u8], offset: usize) -> Result<PptRecord, OfficeError> {
@@ -796,7 +903,7 @@ fn ppt_record(data: &[u8], offset: usize) -> Result<PptRecord, OfficeError> {
     if end > data.len() {
         return Err(invalid("The PowerPoint record is truncated."));
     }
-    Ok(PptRecord { offset, record_type, length })
+    Ok(PptRecord { offset, record_type, length, end })
 }
 
 struct PptDirectory {
@@ -817,7 +924,7 @@ fn parse_ppt_directory(data: &[u8], offset: usize) -> Result<PptDirectory, Offic
     if record.record_type != 0x1772 {
         return Err(invalid("The PowerPoint persist directory is malformed."));
     }
-    let end = offset + 8 + record.length;
+    let end = record.end;
     let mut cursor = offset + 8;
     let mut entries = Vec::new();
     while cursor < end {
@@ -912,6 +1019,11 @@ fn decrypt_ppt(raw: &[u8], password: &str) -> Result<Vec<u8>, OfficeError> {
     if !cipher.verify(password, &info.encrypted_verifier, &info.encrypted_hash) {
         return Err(OfficeError::WrongPassword("The PowerPoint presentation password is incorrect.".to_string()));
     }
+    if file.open_stream("/Pictures").is_ok() {
+        return Err(OfficeError::Unsupported(
+            "Encrypted PowerPoint presentations with a /Pictures stream are not supported by the native adapter.".to_string(),
+        ));
+    }
 
     let mut current_user_decrypted = current_user.clone();
     current_user_decrypted[12..16].copy_from_slice(&0xE391C05Fu32.to_le_bytes());
@@ -925,19 +1037,13 @@ fn decrypt_ppt(raw: &[u8], password: &str) -> Result<Vec<u8>, OfficeError> {
 
     let mut ordered: Vec<(u32, usize)> = persist_objects.into_iter().collect();
     ordered.sort_by_key(|(_, offset)| *offset);
-    for (index, (persist_id, offset)) in ordered.iter().enumerate() {
+    for (persist_id, offset) in &ordered {
         let record = ppt_record(&document, *offset);
         let Ok(record) = record else { continue };
         if record.record_type == 0x0FF5 || record.record_type == 0x1772 || *offset == crypt_offset {
             continue;
         }
-        let end = ordered
-            .iter()
-            .skip(index + 1)
-            .map(|(_, next)| *next)
-            .find(|next| *next > *offset)
-            .unwrap_or(document.len())
-            .min(document.len());
+        let end = record.end;
         if end <= *offset {
             continue;
         }
@@ -1005,10 +1111,167 @@ fn remove_ppt_persist_entry(
 
 #[cfg(test)]
 mod tests {
-    use super::{decrypt_office_bytes, make_rc4_key, password_verifier_method1, OfficeError, OfficeProcessor};
+    use super::{
+        decrypt_doc, decrypt_office_bytes, decrypt_ppt, decrypt_xls, make_cryptoapi_key,
+        make_rc4_key, password_verifier_method1, password_verifier_method2, open_cfb,
+        read_cfb_stream, xor_array_method1, xor_array_method2, OfficeError, OfficeProcessor,
+        Rc4,
+    };
     use crate::kit::common::OutputLocation;
     use crate::kit::contracts::ErrorKind;
+    use cfb::CompoundFile;
+    use std::io::{Cursor, Write};
     use std::path::PathBuf;
+    use zip::{write::SimpleFileOptions, ZipWriter};
+
+    fn cfb_with_streams(streams: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut file = CompoundFile::create(Cursor::new(Vec::new())).unwrap();
+        for (name, data) in streams {
+            file.create_stream(*name).unwrap().write_all(data).unwrap();
+        }
+        file.flush().unwrap();
+        file.into_inner().into_inner()
+    }
+
+    fn biff_record(id: u16, payload: &[u8]) -> Vec<u8> {
+        let mut record = Vec::with_capacity(4 + payload.len());
+        record.extend_from_slice(&id.to_le_bytes());
+        record.extend_from_slice(&(payload.len() as u16).to_le_bytes());
+        record.extend_from_slice(payload);
+        record
+    }
+
+    fn minimal_ooxml_package(extension: &str) -> Vec<u8> {
+        let (main_part, content_types, main_xml, relationship_type):
+            (&str, &[u8], &[u8], &str) = match extension {
+            "docx" => (
+                "word/document.xml",
+                br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#,
+                br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body/></w:document>"#,
+                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument",
+            ),
+            "xlsx" => (
+                "xl/workbook.xml",
+                br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>"#,
+                br#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheets/></workbook>"#,
+                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument",
+            ),
+            "pptx" => (
+                "ppt/presentation.xml",
+                br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/></Types>"#,
+                br#"<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"/>"#,
+                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument",
+            ),
+            _ => panic!("unsupported OOXML extension"),
+        };
+        let mut archive = ZipWriter::new(Cursor::new(Vec::new()));
+        archive.start_file("[Content_Types].xml", SimpleFileOptions::default()).unwrap();
+        archive.write_all(content_types).unwrap();
+        archive.start_file("_rels/.rels", SimpleFileOptions::default()).unwrap();
+        write!(
+            archive,
+            "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"{relationship_type}\" Target=\"/{main_part}\"/></Relationships>"
+        )
+        .unwrap();
+        archive.start_file(main_part, SimpleFileOptions::default()).unwrap();
+        archive.write_all(main_xml).unwrap();
+        archive.finish().unwrap().into_inner()
+    }
+
+    fn malformed_ooxml_package() -> Vec<u8> {
+        let mut archive = ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, contents) in [
+            ("[Content_Types].xml", b"<Types>".as_slice()),
+            ("word/document.xml", b"<w:document>".as_slice()),
+        ] {
+            archive.start_file(name, SimpleFileOptions::default()).unwrap();
+            archive.write_all(contents).unwrap();
+        }
+        archive.finish().unwrap().into_inner()
+    }
+
+    fn ppt_record(record_type: u16, payload: &[u8]) -> Vec<u8> {
+        let mut record = Vec::with_capacity(8 + payload.len());
+        record.extend_from_slice(&0u16.to_le_bytes());
+        record.extend_from_slice(&record_type.to_le_bytes());
+        record.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        record.extend_from_slice(payload);
+        record
+    }
+
+    fn cryptoapi_info(password: &str, salt: [u8; 16], key_size: u32) -> Vec<u8> {
+        let mut info = vec![0u8; 12 + 20 + 60];
+        info[0..4].copy_from_slice(&0x0002_0004u32.to_le_bytes());
+        info[8..12].copy_from_slice(&20u32.to_le_bytes());
+        info[28..32].copy_from_slice(&key_size.to_le_bytes());
+        let verifier_offset = 32;
+        info[verifier_offset + 4..verifier_offset + 20].copy_from_slice(&salt);
+        let verifier = [0x21u8; 16];
+        let hash = super::sha1_digest(&verifier);
+        let mut encrypted_verifier = verifier;
+        let mut encrypted_hash = hash;
+        let key = make_cryptoapi_key(password, &salt, key_size, 0);
+        let mut rc4 = Rc4::new(&key);
+        rc4.apply(&mut encrypted_verifier);
+        rc4.apply(&mut encrypted_hash);
+        info[verifier_offset + 20..verifier_offset + 36].copy_from_slice(&encrypted_verifier);
+        info[verifier_offset + 40..verifier_offset + 60].copy_from_slice(&encrypted_hash);
+        info
+    }
+
+    fn ppt_fixture(with_content: bool, with_pictures: bool) -> Vec<u8> {
+        let password = "secret";
+        let salt = [0x31u8; 16];
+        let info = cryptoapi_info(password, salt, 128);
+        let crypt = ppt_record(0x2F14, &info);
+        assert_eq!(crypt.len(), 100);
+
+        let content_offset = 300usize;
+        let content_plain = ppt_record(0x03E8, &[0x41, 0x42, 0x43, 0x44]);
+        let mut document = vec![0u8; 320];
+        document[..crypt.len()].copy_from_slice(&crypt);
+        if with_content {
+            let mut content_encrypted = content_plain.clone();
+            let key = make_cryptoapi_key(password, &salt, 128, 2);
+            Rc4::new(&key).apply(&mut content_encrypted[8..]);
+            document[content_offset..content_offset + content_encrypted.len()]
+                .copy_from_slice(&content_encrypted);
+            document[content_offset + content_encrypted.len()..]
+                .copy_from_slice(&[0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7]);
+        }
+
+        let mut directory_body = Vec::new();
+        let entry_count = u32::from(with_content) + 1;
+        directory_body.extend_from_slice(&(1u32 | (entry_count << 20)).to_le_bytes());
+        directory_body.extend_from_slice(&0u32.to_le_bytes());
+        if with_content {
+            directory_body.extend_from_slice(&(content_offset as u32).to_le_bytes());
+        }
+        document[100..100 + 8 + directory_body.len()]
+            .copy_from_slice(&ppt_record(0x1772, &directory_body));
+
+        let mut edit_body = vec![0u8; 0x20];
+        edit_body[12..16].copy_from_slice(&100u32.to_le_bytes());
+        edit_body[28..32].copy_from_slice(&1u32.to_le_bytes());
+        document[200..240].copy_from_slice(&ppt_record(0x0FF5, &edit_body));
+
+        let mut current_user = vec![0u8; 20];
+        current_user[2..4].copy_from_slice(&0x0FF6u16.to_le_bytes());
+        current_user[16..20].copy_from_slice(&200u32.to_le_bytes());
+
+        if with_pictures {
+            cfb_with_streams(&[
+                ("/Current User", &current_user),
+                ("/PowerPoint Document", &document),
+                ("/Pictures", &[0xAA, 0xBB, 0xCC]),
+            ])
+        } else {
+            cfb_with_streams(&[
+                ("/Current User", &current_user),
+                ("/PowerPoint Document", &document),
+            ])
+        }
+    }
 
     #[test]
     fn recognizes_modern_and_legacy_microsoft_office_extensions() {
@@ -1045,9 +1308,140 @@ mod tests {
 
     #[test]
     fn plain_modern_office_package_is_handled_without_an_external_runtime() {
-        let package = b"PK\x03\x04plain-office-package";
-        let decrypted = decrypt_office_bytes(package, "docx", "secret").unwrap();
-        assert_eq!(decrypted, package);
+        for extension in ["docx", "xlsx", "pptx"] {
+            let package = minimal_ooxml_package(extension);
+            let decrypted = decrypt_office_bytes(&package, extension, "secret").unwrap();
+            assert_eq!(decrypted, package);
+        }
+    }
+
+    #[test]
+    fn malformed_modern_office_package_is_not_verified() {
+        let malformed = b"PK\x03\x04garbage";
+        let error = decrypt_office_bytes(malformed, "docx", "secret").unwrap_err();
+        assert!(matches!(error, OfficeError::InvalidInput(_)));
+        let error = super::verify_unlocked_bytes(malformed.to_vec(), "docx").unwrap_err();
+        assert!(matches!(error, OfficeError::Processing(_)));
+        let malformed_zip = malformed_ooxml_package();
+        let error = decrypt_office_bytes(&malformed_zip, "docx", "secret").unwrap_err();
+        assert!(matches!(error, OfficeError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn word_xor_decryption_uses_the_word_document_offset() {
+        let password = b"abcde";
+        let mut word = vec![0u8; 100];
+        word[10..12].copy_from_slice(&0x8100u16.to_le_bytes());
+        word[14..18].copy_from_slice(&password_verifier_method2(password).to_le_bytes());
+        let array = xor_array_method2(password);
+        for (index, byte) in word[68..].iter_mut().enumerate() {
+            let plain = 0xA0u8.wrapping_add(index as u8);
+            *byte = plain ^ array[(68 + index) % 16];
+        }
+        let raw = cfb_with_streams(&[
+            ("/WordDocument", &word),
+            ("/0Table", &[0x11; 16]),
+        ]);
+        let mut raw_file = open_cfb(&raw).unwrap();
+        let raw_word = read_cfb_stream(&mut raw_file, "/WordDocument").unwrap();
+        assert_eq!(u32::from_le_bytes(raw_word[14..18].try_into().unwrap()), password_verifier_method2(password));
+        assert_eq!(password_verifier_method2(&super::legacy_password_chars("abcde").unwrap()), password_verifier_method2(password));
+
+        let unlocked = decrypt_doc(&raw, "abcde").unwrap();
+        let mut file = open_cfb(&unlocked).unwrap();
+        let word = read_cfb_stream(&mut file, "/WordDocument").unwrap();
+        assert_eq!(word[68..], (0..32).map(|index| 0xA0u8.wrapping_add(index)).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn excel_unlock_removes_the_file_pass_record_and_resizes_the_stream() {
+        let password = b"abcde";
+        let mut file_pass_payload = vec![0u8; 6];
+        file_pass_payload[4..6].copy_from_slice(&password_verifier_method1(password).to_le_bytes());
+        let bof = biff_record(0x0809, &[1, 2, 3, 4]);
+        let mut workbook = biff_record(0x002F, &file_pass_payload);
+        workbook.extend_from_slice(&bof);
+        let padding = biff_record(0x0809, &[0x5A; 4555]);
+        workbook.extend_from_slice(&padding);
+        let mut bound_sheet = biff_record(0x0085, &[0, 0, 0, 0]);
+        let sheet_bof_offset = workbook.len() + bound_sheet.len();
+        bound_sheet[4..8].copy_from_slice(&(sheet_bof_offset as u32).to_le_bytes());
+        let bound_sheet_len = bound_sheet.len();
+        workbook.extend_from_slice(&bound_sheet);
+        let sheet_bof = biff_record(0x0809, &[5, 6, 7, 8]);
+        let sheet_bof_len = sheet_bof.len();
+        workbook.extend_from_slice(&sheet_bof);
+        let data = biff_record(0x0203, &[0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68]);
+        let data_start = workbook.len() + 4;
+        workbook.extend_from_slice(&data);
+        workbook.extend_from_slice(&biff_record(0x000A, &[]));
+        let array = xor_array_method1(password);
+        let payload_len = 8usize;
+        for index in 0..payload_len {
+            let plain = workbook[data_start + index];
+            let array_index = (data_start + payload_len + index) % 16;
+            workbook[data_start + index] = plain.rotate_left(5) ^ array[array_index];
+        }
+        let raw = cfb_with_streams(&[("/Workbook", &workbook)]);
+
+        let unlocked = decrypt_xls(&raw, "abcde").unwrap();
+        let mut file = open_cfb(&unlocked).unwrap();
+        let workbook = read_cfb_stream(&mut file, "/Workbook").unwrap();
+        let records = super::parse_biff_records(&workbook).unwrap();
+        assert!(records.iter().all(|record| record.id != 0x002F));
+        assert_eq!(workbook.len(), bof.len() + padding.len() + bound_sheet_len + sheet_bof_len + data.len() + 4);
+        let bound_sheet = records.iter().find(|record| record.id == 0x0085).unwrap();
+        let relocated_offset = u32::from_le_bytes(workbook[bound_sheet.start + 4..bound_sheet.start + 8].try_into().unwrap()) as usize;
+        assert_eq!(relocated_offset, sheet_bof_offset - (4 + file_pass_payload.len()));
+        assert!(records.iter().any(|record| record.id == 0x0809 && record.start == relocated_offset));
+        let data = records.iter().find(|record| record.id == 0x0203).unwrap();
+        assert_eq!(&workbook[data.start + 4..data.end()], &[0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68]);
+    }
+
+    #[test]
+    fn powerpoint_final_persist_object_does_not_decrypt_the_tail() {
+        let raw = ppt_fixture(true, false);
+        let unlocked = decrypt_ppt(&raw, "secret").unwrap();
+        let mut file = open_cfb(&unlocked).unwrap();
+        let document = read_cfb_stream(&mut file, "/PowerPoint Document").unwrap();
+        assert_eq!(&document[312..320], &[0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7]);
+    }
+
+    #[test]
+    fn powerpoint_with_pictures_is_rejected_until_picture_decryption_is_supported() {
+        let error = decrypt_ppt(&ppt_fixture(false, true), "secret").unwrap_err();
+        assert!(matches!(error, OfficeError::Unsupported(_)));
+    }
+
+    #[test]
+    fn powerpoint_picture_rejection_preserves_input_and_creates_no_output() {
+        let directory = std::env::temp_dir().join(format!(
+            "toolbox-office-ppt-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let input = directory.join("presentation.ppt");
+        std::fs::write(&input, ppt_fixture(false, true)).unwrap();
+        let original = std::fs::read(&input).unwrap();
+
+        let outcome = OfficeProcessor::remove_password(
+            input.clone(),
+            "secret",
+            &OutputLocation::AlongsideInput,
+        );
+
+        assert!(matches!(
+            outcome.failure.as_ref().map(|error| &error.kind),
+            Some(ErrorKind::Unavailable)
+        ));
+        assert!(outcome.output_paths.is_empty());
+        assert_eq!(std::fs::read(&input).unwrap(), original);
+        assert!(!directory.join("presentation-unlocked.ppt").exists());
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

@@ -5181,6 +5181,7 @@ dependencies = [
  "lopdf",
  "md-5 0.10.6",
  "office-crypto",
+ "quick-xml 0.41.0",
  "rayon",
  "serde",
  "serde_json",
@@ -5193,6 +5194,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tiff",
  "webpx",
+ "zip 8.6.0",
 ]
 
 [[package]]
