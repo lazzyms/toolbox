@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::ToolError;
+use super::metadata::page_bounds;
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -213,12 +214,7 @@ fn selected_pages(scope: &PageScope, count: usize) -> impl Fn(usize) -> bool + '
 
 fn validate_rect(rect: &PdfRect) -> Result<(), String> { if !rect.x.is_finite() || !rect.y.is_finite() || !rect.width.is_finite() || !rect.height.is_finite() || rect.width <= 0.0 || rect.height <= 0.0 { Err("Rectangle must have positive finite dimensions.".to_string()) } else { Ok(()) } }
 fn validate_rect_for_page(document: &Document, page_id: lopdf::ObjectId, rect: &PdfRect) -> Result<(), String> {
-    let page = document.get_dictionary(page_id).map_err(|error| error.to_string())?;
-    let media_box = page.get(b"MediaBox").and_then(Object::as_array).map_err(|error| error.to_string())?;
-    let left = media_box.first().and_then(|value| value.as_f32().ok()).ok_or_else(|| "PDF page has an invalid media box.".to_string())?;
-    let bottom = media_box.get(1).and_then(|value| value.as_f32().ok()).ok_or_else(|| "PDF page has an invalid media box.".to_string())?;
-    let right = media_box.get(2).and_then(|value| value.as_f32().ok()).ok_or_else(|| "PDF page has an invalid media box.".to_string())?;
-    let top = media_box.get(3).and_then(|value| value.as_f32().ok()).ok_or_else(|| "PDF page has an invalid media box.".to_string())?;
+    let (left, bottom, right, top) = page_bounds(document, page_id).map_err(|_| "PDF page has an invalid media box.".to_string())?;
     if rect.x < left || rect.y < bottom || rect.x + rect.width > right || rect.y + rect.height > top { return Err("Crop rectangle must stay within every selected page's media box.".to_string()); }
     Ok(())
 }

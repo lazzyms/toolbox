@@ -8,6 +8,7 @@ use std::process::Command;
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::ToolError;
+use super::metadata::page_bounds;
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -369,12 +370,10 @@ where F: Fn(usize, f32, f32) -> String {
     let opacity_id = document.add_object(dictionary! { "Type" => "ExtGState", "ca" => opacity as f32 / 100.0, "CA" => opacity as f32 / 100.0 });
     for (number, page_id) in document.get_pages().values().copied().enumerate() {
         if request.pages.as_ref().is_some_and(|pages| !pages.contains(&number)) { continue; }
-        let Ok(page) = document.get_dictionary(page_id) else { return failure(input, "Could not read PDF page".to_string()); };
-        let Ok(media_box) = page.get(b"MediaBox").and_then(Object::as_array) else { return failure(input, "PDF page has no media box".to_string()); };
-        let Ok(left) = media_box[0].as_f32() else { return failure(input, "PDF page left edge is invalid".to_string()); };
-        let Ok(bottom) = media_box[1].as_f32() else { return failure(input, "PDF page bottom edge is invalid".to_string()); };
-        let Ok(right) = media_box[2].as_f32() else { return failure(input, "PDF page right edge is invalid".to_string()); };
-        let Ok(top) = media_box[3].as_f32() else { return failure(input, "PDF page top edge is invalid".to_string()); };
+        let (left, bottom, right, top) = match page_bounds(&document, page_id) {
+            Ok(bounds) => bounds,
+            Err(error) => return failure(input, error),
+        };
         let width = right - left;
         let height = top - bottom;
         if width <= 0.0 || height <= 0.0 { return failure(input, "PDF page has invalid dimensions".to_string()); }
@@ -483,5 +482,54 @@ mod tests {
     fn normalizes_selectable_text_without_reordering_lines() {
         assert_eq!(normalize_pdf_text("first line  \nsecond line\n\n"), "first line\nsecond line");
         assert!(normalize_pdf_text("  \n\t").is_empty());
+    }
+
+    #[test]
+    fn accepts_integer_square_media_boxes_for_pdf_edits() {
+        let input = std::env::temp_dir().join(format!("toolbox_square_pdf_{}.pdf", std::process::id()));
+        let mut document = Document::with_version("1.7");
+        let pages_id = document.new_object_id();
+        let contents_id = document.add_object(Stream::new(dictionary! {}, Vec::new()));
+        let page_id = document.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "MediaBox" => vec![Object::Integer(0), Object::Integer(0), Object::Integer(256), Object::Integer(256)],
+            "Contents" => contents_id,
+        });
+        document.objects.insert(pages_id, dictionary! {
+            "Type" => "Pages",
+            "Kids" => vec![Object::Reference(page_id)],
+            "Count" => 1,
+        }.into());
+        let catalog_id = document.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+        document.trailer.set("Root", catalog_id);
+        document.save(&input).unwrap();
+
+        let numbered = add_page_numbers(&PageOverlayRequest {
+            paths: vec![input.clone()], text: "1".to_string(), opacity: 100,
+            position: Some("bottom-right".to_string()), logo_path: None, pages: None,
+            start_number: None, font_size: None, output_location: OutputLocation::AlongsideInput,
+        }, input.clone());
+        assert!(numbered.failure.is_none(), "page numbers failed: {:?}", numbered.failure);
+
+        let watermark = watermark(&PageOverlayRequest {
+            paths: vec![input.clone()], text: "TEST".to_string(), opacity: 70,
+            position: Some("center".to_string()), logo_path: None, pages: None,
+            start_number: None, font_size: None, output_location: OutputLocation::AlongsideInput,
+        }, input.clone());
+        assert!(watermark.failure.is_none(), "watermark failed: {:?}", watermark.failure);
+
+        let cropped = crate::kit::pdf::editor::crop(&crate::kit::pdf::editor::CropPdfRequest {
+            paths: vec![input.clone()],
+            rectangle: crate::kit::pdf::editor::PdfRect { x: 0.0, y: 0.0, width: 128.0, height: 128.0 },
+            scope: crate::kit::pdf::editor::PageScope::All,
+            output_location: OutputLocation::AlongsideInput,
+        }, input.clone());
+        assert!(cropped.failure.is_none(), "crop failed: {:?}", cropped.failure);
+
+        for output in numbered.output_paths.into_iter().chain(watermark.output_paths).chain(cropped.output_paths) {
+            let _ = std::fs::remove_file(output);
+        }
+        let _ = std::fs::remove_file(input);
     }
 }

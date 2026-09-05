@@ -1,6 +1,9 @@
 use lopdf::{Document, Object};
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use base64::Engine;
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
@@ -11,6 +14,7 @@ pub struct PdfPageMetadata {
     pub y: f32,
     pub width: f32,
     pub height: f32,
+    pub preview: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -26,12 +30,47 @@ pub fn inspect(path: &Path) -> Result<PdfDocumentMetadata, String> {
         .get_pages()
         .values()
         .enumerate()
-        .map(|(index, page_id)| page_size(&document, *page_id).map(|(x, y, width, height)| PdfPageMetadata { index, x, y, width, height }))
+        .map(|(index, page_id)| page_bounds(&document, *page_id).map(|(left, bottom, right, top)| PdfPageMetadata {
+            index,
+            x: left,
+            y: bottom,
+            width: right - left,
+            height: top - bottom,
+            preview: render_preview(path, index + 1),
+        }))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(PdfDocumentMetadata { path: path.to_path_buf(), pages })
 }
 
-fn page_size(document: &Document, page_id: lopdf::ObjectId) -> Result<(f32, f32, f32, f32), String> {
+fn render_preview(path: &Path, page: usize) -> Option<String> {
+    let renderer = find_pdftoppm()?;
+    let nonce = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_nanos();
+    let prefix = std::env::temp_dir().join(format!("toolbox-pdf-preview-{}-{page}-{nonce}", std::process::id()));
+    let output = Command::new(renderer)
+        .arg("-png")
+        .arg("-singlefile")
+        .arg("-f")
+        .arg(page.to_string())
+        .arg("-l")
+        .arg(page.to_string())
+        .arg(path)
+        .arg(&prefix)
+        .output()
+        .ok();
+    let preview_path = prefix.with_extension("png");
+    let preview = output.filter(|result| result.status.success()).and_then(|_| std::fs::read(&preview_path).ok());
+    let _ = std::fs::remove_file(preview_path);
+    preview.map(|bytes| format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
+}
+
+fn find_pdftoppm() -> Option<PathBuf> {
+    std::env::var_os("TOOLBOX_PDFTOPPM_PATH")
+        .map(PathBuf::from)
+        .filter(|path| path.is_file())
+        .or_else(|| Command::new("pdftoppm").arg("-h").output().ok().filter(|result| result.status.success()).map(|_| PathBuf::from("pdftoppm")))
+}
+
+pub(crate) fn page_bounds(document: &Document, page_id: lopdf::ObjectId) -> Result<(f32, f32, f32, f32), String> {
     let page = document.get_dictionary(page_id).map_err(|error| format!("Could not read PDF page: {error}"))?;
     let media_box = page.get(b"MediaBox").map_err(|error| format!("PDF page has no media box: {error}"))?;
     let values = media_box.as_array().map_err(|error| format!("PDF media box is invalid: {error}"))?;
@@ -42,15 +81,13 @@ fn page_size(document: &Document, page_id: lopdf::ObjectId) -> Result<(f32, f32,
     let bottom = number(&values[1])?;
     let right = number(&values[2])?;
     let top = number(&values[3])?;
-    let width = right - left;
-    let height = top - bottom;
-    if width <= 0.0 || height <= 0.0 {
+    if right <= left || top <= bottom {
         return Err("PDF page has invalid dimensions.".to_string());
     }
-    Ok((left, bottom, width, height))
+    Ok((left, bottom, right, top))
 }
 
-fn number(value: &Object) -> Result<f32, String> {
+pub(crate) fn number(value: &Object) -> Result<f32, String> {
     match value {
         Object::Integer(value) => Ok(*value as f32),
         Object::Real(value) => Ok(*value),

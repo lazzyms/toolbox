@@ -7,7 +7,7 @@ import { PDFProtectView } from "./PDFProtectView";
 import { PDFEditView } from "./PDFEditView";
 import { ImageCompressView } from "./ImageCompressView";
 import { ImageConvertView } from "./ImageConvertView";
-import { PlannedToolView } from "./PlannedToolView";
+import { PlannedToolView, UnavailableToolView } from "./PlannedToolView";
 import { PDFCropView, PDFOrganizeView, PDFSignView } from "./PDFPageToolView";
 import { PDFSimpleToolView } from "./PDFSimpleToolView";
 import { PDFSelectionView } from "./PDFSelectionView";
@@ -475,5 +475,8 @@ export const MainPage = () => {
 
 const ViewFor = ({ utility }: { utility: ToolDefinition }) => {
   const View = views[utility.view];
+  if (utility.status === "unavailable") {
+    return <UnavailableToolView utility={utility} />;
+  }
   return <View utility={utility} />;
 };

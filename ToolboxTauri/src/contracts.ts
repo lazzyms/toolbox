@@ -1,6 +1,6 @@
 export type ToolCategory = "PDF" | "Images" | "Documents";
 
-export type ToolStatus = "implemented" | "planned";
+export type ToolStatus = "implemented" | "planned" | "unavailable";
 
 export type OutputLocation = "alongsideInput" | { customFolder: string };
 

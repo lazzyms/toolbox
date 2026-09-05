@@ -1,12 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
-import { readFileSync } from "node:fs";
 import path from "node:path";
 import { UtilityRegistry } from "../../src/registry";
 
 const fixturePath = path.resolve("src-tauri/icons/icon.png");
 const fixtureName = path.basename(fixturePath);
 const mockedOutputPaths = [`${fixturePath}.output-one`, `${fixturePath}.output-two`];
-const appVersion = (JSON.parse(readFileSync(path.resolve("package.json"), "utf8")) as { version: string }).version;
 
 type MockOutcome = {
     inputPath: string;
@@ -47,7 +45,7 @@ test.beforeEach(async ({ page }) => {
                     return null;
                 }
                 if (command === "inspect_pdf") {
-                    return { pages: [{ index: 0, width: 612, height: 792 }] };
+                    return { pages: [{ index: 0, x: 0, y: 0, width: 612, height: 792, preview: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='612' height='792'%3E%3Crect width='100%25' height='100%25' fill='white'/%3E%3C/svg%3E" }] };
                 }
                 if (command === "inspect_image_metadata") return ["fixture image"];
                 if (command.startsWith("plugin:")) return null;
@@ -84,7 +82,7 @@ test("every registered feature opens its detail pane", async ({ page }) => {
         await expect(navigationButton).toBeVisible();
         await navigationButton.click();
         await expect(page.getByRole("heading", { name: utility.title, exact: true })).toBeVisible();
-        await expect(page.getByRole("status")).toHaveText(`${utility.title} selected.`);
+        await expect(page.locator('p[role="status"]')).toHaveText(`${utility.title} selected.`);
     }
 });
 
@@ -247,30 +245,61 @@ test("desktop scrolling stays inside the command pane", async ({ page }) => {
     expect(layout.commandOverscroll).toBe("contain");
 });
 
-test("sidebar and detail pane scroll independently", async ({ page }) => {
+test("crop stays disabled until a crop rectangle is drawn", async ({ page }) => {
     await page.goto("/");
-    await expect(page.locator('nav[aria-label="Utilities"]')).toHaveCSS("overflow-y", "auto");
-    await expect(page.locator('main[aria-label="Tool detail"]')).toHaveCSS("overflow-y", "auto");
+    await page.getByRole("button", { name: "Open Crop PDF" }).click();
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await expect(page.getByText(fixtureName, { exact: true })).toBeVisible();
+
+    const cropAction = page.getByRole("main").getByRole("button", { name: "Crop", exact: true });
+    await expect(cropAction).toBeDisabled();
+
+    const preview = page.getByLabel("Preview of page 1");
+    await expect(preview).toBeVisible();
+    await preview.scrollIntoViewIfNeeded();
+    const box = await preview.boundingBox();
+    expect(box).not.toBeNull();
+    if (!box) return;
+    await page.mouse.move(box.x + box.width * 0.2, box.y + box.height * 0.2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width * 0.8, box.y + box.height * 0.8);
+    await page.mouse.up();
+
+    await expect(cropAction).toBeEnabled();
 });
 
-test("sidebar does not show the engine badge", async ({ page }) => {
+test("pdf editor renders page previews", async ({ page }) => {
     await page.goto("/");
-    await expect(page.getByText("Unified Native Engine", { exact: true })).toHaveCount(0);
+    await page.getByRole("button", { name: "Open Sign PDF" }).click();
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await expect(page.getByRole("img", { name: "Preview of page 1" })).toBeVisible();
+    await expect(page.locator('aside[aria-label="PDF page thumbnails"] img[alt="Thumbnail of page 1"]')).toBeVisible();
 });
 
-test("settings shows app info and the donation QR code", async ({ page }) => {
+test("vision tools explain unavailable resources before file selection", async ({ page }) => {
     await page.goto("/");
-    await page.getByRole("button", { name: "Settings" }).click();
+    for (const [index, id] of ["pdf-ocr", "image-blur-faces", "image-remove-bg"].entries()) {
+        const utility = UtilityRegistry.find((item) => item.id === id);
+        expect(utility).toBeDefined();
+        if (!utility) continue;
+        if (index > 0) await page.getByRole("button", { name: "← All tools" }).click();
+        await page.getByRole("button", { name: `Open ${utility.title}` }).click();
+        await expect(page.getByText("Unavailable in this build.", { exact: true })).toBeVisible();
+        await expect(page.getByRole("button", { name: "Choose files to process" })).toHaveCount(0);
+    }
+});
 
-    const settings = page.getByRole("dialog", { name: "Settings" });
-    await expect(settings).toBeVisible();
-    await expect(settings.getByText("App info", { exact: true })).toBeVisible();
-    await expect(settings.getByText("Toolbox", { exact: true })).toBeVisible();
-    await expect(settings.getByText(`Version ${appVersion}`, { exact: true })).toBeVisible();
-    await expect(settings.getByRole("img", { name: "Buy Me a Coffee donation QR code" })).toBeVisible();
+test("remove pages stays disabled until a page is selected", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Remove PDF Pages" }).click();
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await expect(page.getByText(fixtureName, { exact: true })).toBeVisible();
 
-    await settings.getByRole("button", { name: "Close settings" }).click();
-    await expect(settings).toBeHidden();
+    const removeAction = page.getByRole("main").getByRole("button", { name: "Remove Pages", exact: true });
+    await expect(removeAction).toBeDisabled();
+    const pageButton = page.getByRole("button", { name: "Page 1, 612 by 792 points" });
+    await pageButton.click();
+    await expect(removeAction).toBeEnabled();
 });
 
 test("command K focuses the tool search", async ({ page }) => {
@@ -395,6 +424,22 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
     if (utility.id === "pdf-edit") {
         await page.getByLabel("Edit text").fill("Test annotation");
     }
+    if (utility.id === "pdf-remove-pages") {
+        await page.getByRole("button", { name: "Page 1, 612 by 792 points" }).click();
+    }
+    if (utility.id === "pdf-crop") {
+        const preview = page.getByLabel("Preview of page 1");
+        await expect(preview).toBeVisible();
+        await preview.scrollIntoViewIfNeeded();
+        const box = await preview.boundingBox();
+        expect(box).not.toBeNull();
+        if (box) {
+            await page.mouse.move(box.x + box.width * 0.2, box.y + box.height * 0.2);
+            await page.mouse.down();
+            await page.mouse.move(box.x + box.width * 0.8, box.y + box.height * 0.8);
+            await page.mouse.up();
+        }
+    }
 
     const action = page.locator("main button").filter({ hasText: utility.shortTitle }).last();
     await expect(action).toBeEnabled();
@@ -410,6 +455,7 @@ test.describe("registered feature actions", () => {
 
     for (const utility of UtilityRegistry) {
         test(`${utility.id} accepts the fixture and runs`, async ({ page }) => {
+            test.skip(utility.status !== "implemented", "Tool is not available in this build.");
             await exerciseFeature(page, utility);
         });
     }

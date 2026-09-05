@@ -7,10 +7,11 @@ export type PageScope =
 
 export interface PdfPage {
     index: number;
-    x: number;
-    y: number;
+    x?: number;
+    y?: number;
     width: number;
     height: number;
+    preview?: string | null;
 }
 
 export interface PdfDocument {

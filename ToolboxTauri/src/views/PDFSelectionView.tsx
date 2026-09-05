@@ -48,6 +48,6 @@ const PDFRemovalContent = ({ files, run, loading, document, setDocument, selecte
             </button>)}
         </div></fieldset> : <p className="text-sm text-slate-500">Select a PDF to preview its pages.</p>}
         <p className="text-sm text-slate-600" aria-live="polite">{selectedPages.length} page{selectedPages.length === 1 ? "" : "s"} selected</p>
-        <button type="button" disabled={loading || files.length === 0 || !document} onClick={run} className="rounded-lg bg-blue-600 px-6 py-2 font-medium text-white disabled:opacity-50">{utility.shortTitle}</button>
+        <button type="button" disabled={loading || files.length === 0 || !document || selectedPages.length === 0} onClick={run} className="rounded-lg bg-blue-600 px-6 py-2 font-medium text-white disabled:opacity-50">{utility.shortTitle}</button>
     </div>;
 };
