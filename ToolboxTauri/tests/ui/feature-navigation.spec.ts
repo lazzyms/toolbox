@@ -24,7 +24,7 @@ test.beforeEach(async ({ page }) => {
 
                 if (command === "plugin:dialog|open") return fixturePath;
                 if (command === "inspect_pdf") {
-                    return { pages: [{ index: 0, width: 612, height: 792 }] };
+                    return { pages: [{ index: 0, x: 0, y: 0, width: 612, height: 792, preview: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='612' height='792'%3E%3Crect width='100%25' height='100%25' fill='white'/%3E%3C/svg%3E" }] };
                 }
                 if (command === "inspect_image_metadata") return ["fixture image"];
                 if (command.startsWith("plugin:")) return null;
@@ -82,6 +82,16 @@ test("crop stays disabled until a crop rectangle is drawn", async ({ page }) => 
     await page.mouse.up();
 
     await expect(cropAction).toBeEnabled();
+});
+
+test("pdf editor renders page previews", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", {
+        name: "Sign PDF: Place a visible typed signature on a PDF page.",
+    }).click();
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await expect(page.getByRole("img", { name: "Preview of page 1" })).toBeVisible();
+    await expect(page.locator('aside[aria-label="PDF page thumbnails"] img[alt="Thumbnail of page 1"]')).toBeVisible();
 });
 
 const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[number]) => {
