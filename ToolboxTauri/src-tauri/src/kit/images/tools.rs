@@ -2,7 +2,7 @@ use image::{DynamicImage, ImageFormat};
 use image::AnimationDecoder;
 use std::fs::File;
 use std::io::{BufReader, Seek};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::ToolError;
@@ -224,7 +224,7 @@ pub fn icon_set(request: &IconSetRequest, input: PathBuf) -> JobOutcome {
     let image = match image::open(&input) { Ok(image) => image, Err(error) => return failure(input, format!("Could not read image: {error}")) };
     let (prefix, sizes) = match icon_plan(&request.preset, &request.sizes) { Ok(plan) => plan, Err(error) => return failure(input, error) };
     let mut outputs = Vec::new();
-    for size in sizes {
+    for &size in &sizes {
         let output = OutputNaming::get_destination(&input, &request.output_location, &format!("-{prefix}-{size}"), "png");
         if let Err(error) = image.resize_exact(size, size, image::imageops::FilterType::Lanczos3).save(&output) {
             for created in &outputs { let _ = std::fs::remove_file(created); }
@@ -232,14 +232,53 @@ pub fn icon_set(request: &IconSetRequest, input: PathBuf) -> JobOutcome {
         }
         outputs.push(output);
     }
+    if request.preset == "macos" {
+        let icns = OutputNaming::get_destination(&input, &request.output_location, "-macos-icon", "icns");
+        if let Err(error) = write_icns(&icns, &sizes, &outputs) {
+            for created in &outputs { let _ = std::fs::remove_file(created); }
+            let _ = std::fs::remove_file(&icns);
+            return failure(input, format!("Could not save macOS ICNS container: {error}"));
+        }
+        outputs.push(icns);
+    }
     let detail = match request.preset.as_str() {
-        "macos" => "macOS PNG icon set saved; ICNS container is unavailable on this target.",
+        "macos" => "macOS PNG and ICNS icon set saved.",
         "favicon" => "Favicon PNG icon set saved; ICO container is unavailable on this target.",
         "ios" => "iOS PNG icon set saved.",
         "android" => "Android PNG icon set saved.",
         _ => "Custom PNG icon set saved.",
     };
     JobOutcome { input_path: input, output_paths: outputs, detail: detail.to_string(), failure: None }
+}
+
+fn write_icns(output: &Path, sizes: &[u32], pngs: &[PathBuf]) -> Result<(), String> {
+    let mut items = Vec::new();
+    for (size, png) in sizes.iter().zip(pngs) {
+        let type_code = match size {
+            16 => *b"icp4",
+            32 => *b"icp5",
+            128 => *b"ic07",
+            256 => *b"ic08",
+            512 => *b"ic09",
+            1024 => *b"ic10",
+            _ => return Err(format!("Unsupported ICNS image size: {size}")),
+        };
+        let payload = std::fs::read(png).map_err(|error| format!("Could not read generated PNG: {error}"))?;
+        let item_length = payload.len().checked_add(8).ok_or_else(|| "ICNS item is too large.".to_string())?;
+        let item_length = u32::try_from(item_length).map_err(|_| "ICNS item is too large.".to_string())?;
+        items.push((type_code, item_length, payload));
+    }
+    let total_length = 8usize.checked_add(items.iter().map(|(_, length, _)| *length as usize).sum::<usize>()).ok_or_else(|| "ICNS container is too large.".to_string())?;
+    let total_length = u32::try_from(total_length).map_err(|_| "ICNS container is too large.".to_string())?;
+    let mut bytes = Vec::with_capacity(total_length as usize);
+    bytes.extend_from_slice(b"icns");
+    bytes.extend_from_slice(&total_length.to_be_bytes());
+    for (type_code, item_length, payload) in items {
+        bytes.extend_from_slice(&type_code);
+        bytes.extend_from_slice(&item_length.to_be_bytes());
+        bytes.extend_from_slice(&payload);
+    }
+    std::fs::write(output, bytes).map_err(|error| error.to_string())
 }
 
 fn default_icon_preset() -> String { "custom".to_string() }
@@ -502,6 +541,21 @@ mod tests {
         assert_eq!(macos, vec![16, 32, 128, 256, 512, 1024]);
         assert!(icon_plan("custom", &[0, 5000]).is_err());
         assert!(icon_plan("unknown", &[]).is_err());
+    }
+
+    #[test]
+    fn macos_icon_preset_includes_a_valid_icns_container() {
+        let input = path("macos-icon-source.png");
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([10, 20, 30, 255])).save(&input).unwrap();
+        let result = icon_set(&IconSetRequest { paths: vec![input.clone()], preset: "macos".to_string(), sizes: vec![], output_location: OutputLocation::AlongsideInput }, input.clone());
+        assert!(result.failure.is_none());
+        let icns = result.output_paths.iter().find(|output| output.extension().is_some_and(|extension| extension == "icns")).unwrap();
+        let bytes = std::fs::read(icns).unwrap();
+        assert!(bytes.starts_with(b"icns"));
+        assert_eq!(u32::from_be_bytes(bytes[4..8].try_into().unwrap()) as usize, bytes.len());
+        assert!(bytes.windows(4).any(|item| item == b"icp4"));
+        for output in result.output_paths { let _ = std::fs::remove_file(output); }
+        let _ = std::fs::remove_file(input);
     }
 
     #[test]
