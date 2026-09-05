@@ -1,3 +1,3 @@
 # OCR PDF
 
-Choose `OCR`, select a scan, and run it. Verify the configured offline OCR adapter writes `-ocr-text.txt`; without an adapter, verify the visible unsupported error and no output.
+Launch Toolbox, then choose `All tools` → `PDF` → `OCR PDF`. The current build marks this tool unavailable: verify the visible unsupported error and no output. If an offline OCR adapter is supplied in a future build, select a scan and verify `-ocr-text.txt`.

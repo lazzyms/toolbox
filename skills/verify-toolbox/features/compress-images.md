@@ -8,12 +8,12 @@
 
 ## How to get to it (user POV)
 
-Launch Toolbox, then choose `Compress` in the Images section of the sidebar.
+Launch Toolbox, then choose `All tools` → `Images` → `Compress Images`.
 
 ## Driving it with Tauri desktop UI
 
-Choose a PNG or JPEG fixture, set the `Quality` slider, and click `Compress Images`. Assert a successful result, a `-compressed` output, unchanged original bytes, and an output no larger than the original.
+Choose a PNG or JPEG fixture, set the visible `Quality` slider from 1 to 100, and click `Compress Images`. The `Lossless (preserve original bytes)` checkbox is also available. Assert a successful result, a `-compressed` output, unchanged original bytes, and an output no larger than the original.
 
 ## Gotchas
 
-The frontend sends paths and numeric quality to `compress_images`. It does not expose the legacy Swift lossless/lossy picker or metadata toggle; an unchanged copy is valid when re-encoding would inflate the file.
+The frontend sends paths, numeric quality, and the lossless flag to `compress_images`; an unchanged copy is valid when re-encoding would inflate the file.

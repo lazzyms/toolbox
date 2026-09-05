@@ -9,7 +9,7 @@
 
 ## How to get to it (user POV)
 
-Launch Toolbox, then choose `Remove Password` in the Documents section of the sidebar.
+Launch Toolbox, then choose `All tools` → `Documents` → `Remove Password`.
 
 ## Driving it with Tauri desktop UI
 

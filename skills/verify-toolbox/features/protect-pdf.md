@@ -8,7 +8,7 @@
 
 ## How to get to it (user POV)
 
-Launch Toolbox, then choose `Protect PDF` in the PDF section of the sidebar.
+Launch Toolbox, then choose `All tools` → `PDF` → `Protect PDF`.
 
 ## Driving it with Tauri desktop UI
 

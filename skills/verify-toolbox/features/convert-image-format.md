@@ -8,7 +8,7 @@
 
 ## How to get to it (user POV)
 
-Launch Toolbox, then choose `Convert` in the Images section of the sidebar.
+Launch Toolbox, then choose `All tools` → `Images` → `Convert Image Format`.
 
 ## Driving it with Tauri desktop UI
 
@@ -16,4 +16,4 @@ Choose a PNG fixture, click the `JPEG` target-format button, and click `Convert 
 
 ## Gotchas
 
-HEIC support depends on the Rust `heif-rs` build and platform codecs. Verify actual bytes, not only the filename. The Tauri port has no resize flow or menu-bar settings surface.
+HEIC support depends on the Rust `heif-rs` build and platform codecs. Verify actual bytes, not only the filename. Resize is a separate `Resize Images` tool, and settings are a separate sidebar item.
