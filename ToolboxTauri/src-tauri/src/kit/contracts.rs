@@ -33,6 +33,14 @@ pub struct PdfRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PasswordRequest {
+    pub paths: Vec<PathBuf>,
+    pub password: String,
+    pub output_location: OutputLocation,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CompressImagesRequest {
     pub paths: Vec<PathBuf>,
     pub quality: u8,

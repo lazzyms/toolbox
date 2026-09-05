@@ -165,7 +165,8 @@ pub fn to_images(request: &PdfToImagesRequest, input: PathBuf) -> JobOutcome {
     let destination = OutputNaming::get_destination(&input, &request.output_location, "-images", extension);
     let prefix = destination.with_extension("");
     let mut command = Command::new(renderer);
-    command.arg(format!("-{format}")).arg("-r").arg(dpi.to_string());
+    let renderer_format = if format == "jpg" { "jpeg" } else { "png" };
+    command.arg(format!("-{renderer_format}")).arg("-r").arg(dpi.to_string());
     if let Some(range) = request.page_range.as_deref().filter(|value| !value.trim().is_empty()) {
         let (first, last) = range.split_once('-').unwrap_or((range, range));
         let first = match first.trim().parse::<usize>() { Ok(page) if page > 0 => page, _ => return failure(input, "Page range start must be a positive number.".to_string()) };

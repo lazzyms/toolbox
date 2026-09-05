@@ -8,13 +8,14 @@ use crate::kit::images::{ImageProcessor, Options as ImageOptions, OutputFormat};
 use crate::kit::images::tools;
 use crate::kit::pdf::{editor, metadata, remaining, PDFProcessor};
 use crate::kit::vision;
-use crate::kit::contracts::{CompressImagesRequest, ConvertImagesRequest, PdfRequest};
+use crate::kit::contracts::{CompressImagesRequest, ConvertImagesRequest, PasswordRequest, PdfRequest};
 use crate::kit::common::batch_runner::BatchRunner;
+use crate::kit::password::PasswordProcessor;
 
 #[tauri::command]
-async fn unlock_pdf(request: PdfRequest) -> Vec<JobOutcome> {
+async fn remove_password(request: PasswordRequest) -> Vec<JobOutcome> {
     BatchRunner::run(request.paths, |path| {
-        PDFProcessor::remove_password(path, &request.password, &request.output_location)
+        PasswordProcessor::remove_password(path, &request.password, &request.output_location)
     })
 }
 
@@ -78,6 +79,11 @@ async fn crop_pdf(request: editor::CropPdfRequest) -> Vec<JobOutcome> {
 #[tauri::command]
 async fn sign_pdf(request: editor::SignPdfRequest) -> Vec<JobOutcome> {
     BatchRunner::run(request.paths.clone(), |path| editor::sign(&request, path))
+}
+
+#[tauri::command]
+async fn edit_pdf(request: editor::EditPdfRequest) -> Vec<JobOutcome> {
+    BatchRunner::run(request.paths.clone(), |path| editor::edit(&request, path))
 }
 
 #[tauri::command]
@@ -172,12 +178,13 @@ fn inspect_image_metadata(request: tools::MetadataRequest) -> Vec<Result<tools::
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
-            unlock_pdf,
+            remove_password,
             protect_pdf,
             compress_images,
             convert_images,
             inspect_pdf,
             crop_pdf,
+            edit_pdf,
             sign_pdf,
             organize_pdf
             ,add_page_numbers,
@@ -222,7 +229,7 @@ mod command_tests {
     use super::*;
     use crate::kit::common::OutputLocation;
     use crate::kit::images::tools::{CropRequest, GifCreateRequest, GifExtractRequest, IconSetRequest, MetadataRequest, ResizeRequest, RotateRequest, TiffRequest, ToneRequest, WatermarkRequest};
-    use crate::kit::pdf::editor::{CropPdfRequest, OrganizePdfRequest, PageScope, PdfRect, RotatePage, SignPdfRequest};
+    use crate::kit::pdf::editor::{CropPdfRequest, EditPdfRequest, OrganizePdfRequest, PageScope, PdfRect, RotatePage, SignPdfRequest};
     use crate::kit::pdf::remaining::{CompressPdfRequest, ImagesToPdfRequest, MergePdfRequest, PageOverlayRequest, PageSelectionRequest, PdfToImagesRequest, PdfToTextRequest};
     use crate::kit::vision::VisionRequest;
     use image::Rgba;
@@ -336,11 +343,12 @@ mod command_tests {
         std::fs::rename(image_pdf_output, &image_pdf).unwrap();
 
         let mut outputs = Vec::new();
-        outputs.extend(assert_success("unlock", unlock_pdf(PdfRequest { paths: vec![protected], password: "test-password".into(), output_location: location(&root, "unlock") })));
+        outputs.extend(assert_success("unlock", remove_password(PasswordRequest { paths: vec![protected], password: "test-password".into(), output_location: location(&root, "unlock") })));
         outputs.extend(assert_success("page numbers", add_page_numbers(PageOverlayRequest { paths: vec![pdf.clone()], text: "1".into(), opacity: 100, position: Some("bottom-right".into()), logo_path: None, pages: None, start_number: Some(1), font_size: Some(12), output_location: location(&root, "page numbers") })));
         outputs.extend(assert_success("merge", merge_pdfs(MergePdfRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: location(&root, "merge") })));
         outputs.extend(assert_success("watermark pdf", watermark_pdf(PageOverlayRequest { paths: vec![pdf.clone()], text: "TEST".into(), opacity: 70, position: Some("center".into()), logo_path: None, pages: None, start_number: None, font_size: None, output_location: location(&root, "watermark pdf") })));
         outputs.extend(assert_success("crop pdf", crop_pdf(CropPdfRequest { paths: vec![pdf.clone()], rectangle: PdfRect { x: 0.5, y: 0.5, width: 500.0, height: 700.0 }, scope: PageScope::All, output_location: location(&root, "crop pdf") })));
+        outputs.extend(assert_success("edit pdf", edit_pdf(EditPdfRequest { paths: vec![pdf.clone()], mode: "highlight".into(), text: "TEST NOTE".into(), pages: None, rectangle: PdfRect { x: 40.0, y: 650.0, width: 220.0, height: 60.0 }, output_location: location(&root, "edit pdf") })));
         outputs.extend(assert_success("protect", protect_pdf(PdfRequest { paths: vec![pdf_two.clone()], password: "another-password".into(), output_location: location(&root, "protect") })));
         outputs.extend(assert_success("images to pdf", images_to_pdf(ImagesToPdfRequest { paths: vec![image.clone(), image_two.clone()], output_location: location(&root, "images to pdf") })));
         outputs.extend(assert_success("pdf to images", pdf_to_images(PdfToImagesRequest { paths: vec![pdf.clone()], dpi: 72, format: "png".into(), page_range: None, output_location: location(&root, "pdf to images") })));
@@ -355,7 +363,7 @@ mod command_tests {
         outputs.extend(assert_success("compress pdf", compress_pdf(CompressPdfRequest { paths: vec![pdf.clone()], quality: 80, output_location: location(&root, "compress pdf") })));
         outputs.extend(assert_success("convert", convert_images(ConvertImagesRequest { paths: vec![image.clone()], format: "jpg".into(), output_location: location(&root, "convert") })));
         outputs.extend(assert_success("compress images", compress_images(CompressImagesRequest { paths: vec![image.clone()], quality: 80, lossless: false, output_location: location(&root, "compress images") })));
-        outputs.extend(assert_success("resize", resize_images(ResizeRequest { paths: vec![image.clone()], width: 128, height: 128, mode: "exact".into(), percentage: 100, longest_side: 128, output_location: location(&root, "resize") })));
+        outputs.extend(assert_success("resize", resize_images(ResizeRequest { paths: vec![image.clone()], width: 128, height: 128, mode: "exact".into(), resampling: "lanczos".into(), keep_aspect_ratio: true, percentage: 100, longest_side: 128, output_location: location(&root, "resize") })));
         outputs.extend(assert_success("rotate", rotate_images(RotateRequest { paths: vec![image.clone()], degrees: 90, flip: "none".into(), output_location: location(&root, "rotate") })));
         outputs.extend(assert_success("crop image", crop_images(CropRequest { paths: vec![image.clone()], x: 0, y: 0, width: 128, height: 128, mode: "rectangle".into(), aspect_width: 128, aspect_height: 128, anchor: "center".into(), output_location: location(&root, "crop image") })));
         outputs.extend(assert_success("icons", generate_icon_set(IconSetRequest { paths: vec![image.clone()], preset: "favicon".into(), sizes: vec![], output_location: location(&root, "icons") })));
@@ -373,7 +381,11 @@ mod command_tests {
         assert_eq!(std::fs::read(&animated).unwrap(), animated_bytes, "native E2E commands must not modify their GIF input");
         assert_eq!(std::fs::read(&tiff).unwrap(), tiff_bytes, "native E2E commands must not modify their TIFF input");
         assert!(!outputs.is_empty(), "native E2E matrix must exercise every producing command");
-        let _ = std::fs::remove_dir_all(root);
+        if std::env::var_os("TOOLBOX_KEEP_NATIVE_E2E").is_none() {
+            let _ = std::fs::remove_dir_all(root);
+        } else {
+            eprintln!("native e2e artifacts retained at {}", root.display());
+        }
     }
 
     #[test]

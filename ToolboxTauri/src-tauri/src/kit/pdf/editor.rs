@@ -62,6 +62,17 @@ pub struct SignPdfRequest {
     pub output_location: OutputLocation,
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditPdfRequest {
+    pub paths: Vec<PathBuf>,
+    pub mode: String,
+    #[serde(default)] pub text: String,
+    #[serde(default)] pub pages: Option<Vec<usize>>,
+    pub rectangle: PdfRect,
+    pub output_location: OutputLocation,
+}
+
 fn default_scope() -> PageScope { PageScope::All }
 
 pub fn crop(request: &CropPdfRequest, input: PathBuf) -> JobOutcome {
@@ -149,6 +160,38 @@ pub fn sign(request: &SignPdfRequest, input: PathBuf) -> JobOutcome {
         if let Object::Reference(_) = contents { continue; }
         let existing = contents.as_array().map_err(|e| e.to_string())?.to_vec();
         *contents = Object::Array(existing.into_iter().chain([Object::Reference(stream_id)]).collect());
+        }
+        Ok(())
+    })
+}
+
+pub fn edit(request: &EditPdfRequest, input: PathBuf) -> JobOutcome {
+    transform_pdf(input, &request.output_location, "-edited", |document, pages| {
+        validate_rect(&request.rectangle)?;
+        if request.mode != "shape" && request.text.trim().is_empty() { return Err("Text is required for this edit mode.".to_string()); }
+        let targets = request.pages.as_ref().map(|selected| selected.iter().copied().filter(|page| *page < pages.len()).collect()).unwrap_or_else(|| (0..pages.len()).collect::<Vec<_>>());
+        if targets.is_empty() { return Err("Select at least one page for the edit.".to_string()); }
+        let font_id = document.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
+        let content = if request.mode == "shape" {
+            format!("q 0 0 0 RG 1 w {} {} {} {} re S Q", request.rectangle.x, request.rectangle.y, request.rectangle.width, request.rectangle.height)
+        } else if request.mode == "highlight" {
+            format!("q 1 1 0 rg {} {} {} {} re f Q BT /Fedit 12 Tf {} {} Td ({}) Tj ET", request.rectangle.x, request.rectangle.y, request.rectangle.width, request.rectangle.height, request.rectangle.x + 4.0, request.rectangle.y + request.rectangle.height - 16.0, escape_text(&request.text))
+        } else {
+            format!("BT /Fedit 12 Tf {} {} Td ({}) Tj ET", request.rectangle.x, request.rectangle.y, escape_text(&request.text))
+        };
+        for page_index in targets {
+            let stream_id = document.add_object(Object::Stream(lopdf::Stream::new(dictionary! {}, content.clone().into_bytes())));
+            let page_id = pages[page_index];
+            let page = document.get_dictionary_mut(page_id).map_err(|e| e.to_string())?;
+            if !page.has(b"Resources") { page.set("Resources", Object::Dictionary(dictionary! {})); }
+            let resources = page.get_mut(b"Resources").map_err(|e| e.to_string())?.as_dict_mut().map_err(|e| e.to_string())?;
+            resources.set("Font", resources.get(b"Font").cloned().unwrap_or_else(|_| Object::Dictionary(dictionary! {})));
+            resources.get_mut(b"Font").map_err(|e| e.to_string())?.as_dict_mut().map_err(|e| e.to_string())?.set("Fedit", font_id);
+            match page.get_mut(b"Contents") {
+                Ok(Object::Array(contents)) => contents.push(Object::Reference(stream_id)),
+                Ok(Object::Reference(existing)) => { let prior = Object::Reference(*existing); page.set("Contents", Object::Array(vec![prior, Object::Reference(stream_id)])); },
+                _ => page.set("Contents", Object::Reference(stream_id)),
+            }
         }
         Ok(())
     })

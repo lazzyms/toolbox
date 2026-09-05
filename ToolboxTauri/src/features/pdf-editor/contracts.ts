@@ -7,6 +7,8 @@ export type PageScope =
 
 export interface PdfPage {
     index: number;
+    x: number;
+    y: number;
     width: number;
     height: number;
 }

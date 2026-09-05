@@ -51,9 +51,13 @@ test("every registered feature opens its detail pane", async ({ page }) => {
     await page.goto("/");
     await expect(page.getByRole("heading", { name: "Ready to process" })).toBeVisible();
 
-    for (const utility of UtilityRegistry) {
+    for (const [index, utility] of UtilityRegistry.entries()) {
+        if (index > 0) {
+            await page.getByRole("button", { name: "← All tools" }).click();
+        }
+
         const navigationButton = page.getByRole("button", {
-            name: `${utility.title}: ${utility.blurb}`,
+            name: `Open ${utility.title}`,
         });
 
         await expect(navigationButton).toBeVisible();
@@ -63,9 +67,163 @@ test("every registered feature opens its detail pane", async ({ page }) => {
     }
 });
 
-test("sidebar navigation has no decorative icons", async ({ page }) => {
+test("sidebar quick access pairs design icons with labels", async ({ page }) => {
     await page.goto("/");
-    await expect(page.locator('aside[aria-label="Toolbox navigation"] [aria-hidden="true"]')).toHaveCount(0);
+    const quickAccess = page.locator("nav.quick-tools");
+    await expect(quickAccess).toBeVisible();
+    await expect(quickAccess.getByRole("button")).toHaveCount(4);
+    await expect(quickAccess.locator('[aria-hidden="true"]')).toHaveCount(4);
+
+    const iconMetrics = await quickAccess.locator(".quick-tool-icon").first().evaluate((node) => {
+        const icon = node.querySelector("span");
+        const box = node.getBoundingClientRect();
+        const glyph = icon?.getBoundingClientRect();
+        return {
+            color: getComputedStyle(node).color,
+            boxWidth: box.width,
+            boxHeight: box.height,
+            glyphWidth: glyph?.width ?? 0,
+            glyphHeight: glyph?.height ?? 0,
+        };
+    });
+
+    expect(iconMetrics.color).not.toBe("rgb(153, 153, 153)");
+    expect(iconMetrics.boxWidth).toBeGreaterThanOrEqual(26);
+    expect(iconMetrics.boxHeight).toBeGreaterThanOrEqual(26);
+    expect(iconMetrics.glyphWidth).toBeGreaterThanOrEqual(15);
+    expect(iconMetrics.glyphHeight).toBeGreaterThanOrEqual(15);
+});
+
+test("settings highlight matches navigation items", async ({ page }) => {
+    await page.goto("/");
+    const settings = page.getByRole("button", { name: "Settings", exact: true });
+    const allTools = page.locator('nav[aria-label="Workspace navigation"]').getByRole("button", {
+        name: "All tools",
+    });
+
+    const settingsStyle = await settings.evaluate((node) => {
+        const style = getComputedStyle(node);
+        return {
+            borderRadius: style.borderRadius,
+            borderTopWidth: style.borderTopWidth,
+        };
+    });
+    const allToolsStyle = await allTools.evaluate((node) => {
+        const style = getComputedStyle(node);
+        return {
+            borderRadius: style.borderRadius,
+            borderTopWidth: style.borderTopWidth,
+        };
+    });
+
+    expect(settingsStyle.borderRadius).toBe(allToolsStyle.borderRadius);
+    expect(settingsStyle.borderTopWidth).toBe("0px");
+
+    await settings.click();
+    await expect(settings).toHaveAttribute("aria-current", "page");
+});
+
+test("file upload surface follows the selected theme", async ({ page }) => {
+    await page.goto("/");
+    const utility = UtilityRegistry[0];
+    await page.getByRole("button", { name: `Open ${utility.title}` }).click();
+
+    const dropzone = page.getByRole("button", { name: "Choose files to process" });
+    const readSurface = () => dropzone.evaluate((node) => ({
+        background: getComputedStyle(node).backgroundColor,
+        border: getComputedStyle(node).borderTopColor,
+        copy: getComputedStyle(node.querySelector("p")!).color,
+    }));
+
+    await page.mouse.move(0, 0);
+    const darkSurface = await readSurface();
+    const settings = page.getByRole("button", { name: "Settings", exact: true });
+    await settings.click();
+    const dialog = page.getByRole("dialog", { name: "Settings" });
+    await dialog.getByRole("button", { name: "Light" }).click();
+    await expect.poll(() => page.locator("body").getAttribute("data-theme")).toBe("light");
+    await page.mouse.move(0, 0);
+    await expect.poll(async () => (await readSurface()).background).not.toBe(darkSurface.background);
+
+    const lightSurface = await readSurface();
+    expect(lightSurface.background).not.toBe(darkSurface.background);
+    expect(lightSurface.border).not.toBe(darkSurface.border);
+    expect(lightSurface.copy).not.toBe(darkSurface.copy);
+
+    await dialog.getByRole("button", { name: "Dark" }).click();
+    await page.mouse.move(0, 0);
+    await expect.poll(readSurface).toEqual(darkSurface);
+});
+
+test("favorites and recent navigation show their intended libraries", async ({ page }) => {
+    await page.goto("/");
+    const workspaceNav = page.locator('nav[aria-label="Workspace navigation"]');
+
+    await workspaceNav.getByRole("button", { name: "Favorites" }).click();
+    await expect(page.getByRole("heading", { name: "Favorites", exact: true })).toBeVisible();
+    await expect(page.getByText("No favorite tools yet", { exact: true })).toBeVisible();
+    await expect(workspaceNav.getByRole("button", { name: "Favorites" })).toHaveAttribute("aria-current", "page");
+
+    await workspaceNav.getByRole("button", { name: "Recent" }).click();
+    await expect(page.getByRole("heading", { name: "Recent", exact: true })).toBeVisible();
+    await expect(page.getByText("No recent tools yet", { exact: true })).toBeVisible();
+    await expect(workspaceNav.getByRole("button", { name: "Recent" })).toHaveAttribute("aria-current", "page");
+
+    await workspaceNav.getByRole("button", { name: "All tools" }).click();
+    await page.getByRole("button", { name: "Add Remove Password to favorites" }).click();
+    await workspaceNav.getByRole("button", { name: "Favorites" }).click();
+    await expect(page.locator(".tool-card")).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "Open Remove Password" })).toBeVisible();
+
+    await page.getByRole("button", { name: "Open Remove Password" }).click();
+    await page.getByRole("button", { name: "← All tools" }).click();
+    await workspaceNav.getByRole("button", { name: "Recent" }).click();
+    await expect(page.locator(".tool-card")).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "Open Remove Password" })).toBeVisible();
+});
+
+test("tool cards render their design icon masks", async ({ page }) => {
+    await page.goto("/");
+    const icons = page.locator(".tool-card .card-icon > span");
+    await expect(icons).toHaveCount(UtilityRegistry.length);
+
+    const maskImages = await icons.evaluateAll((nodes) =>
+        nodes.map((node) => getComputedStyle(node).maskImage),
+    );
+
+    expect(maskImages.every((maskImage) => maskImage !== "none")).toBe(true);
+    expect(new Set(maskImages).size).toBeGreaterThan(1);
+});
+
+test("search shortcut stays in one inline keycap", async ({ page }) => {
+    await page.goto("/");
+    const shortcut = page.locator(".search-box kbd");
+    const metrics = await shortcut.evaluate((node) => {
+        const style = getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return { width: rect.width, height: rect.height, whiteSpace: style.whiteSpace };
+    });
+
+    expect(metrics.whiteSpace).toBe("nowrap");
+    expect(metrics.width).toBeGreaterThan(metrics.height);
+});
+
+test("desktop scrolling stays inside the command pane", async ({ page }) => {
+    await page.goto("/");
+    const layout = await page.evaluate(() => ({
+        documentOverflow: getComputedStyle(document.documentElement).overflow,
+        bodyOverflow: getComputedStyle(document.body).overflow,
+        shellFillsViewport:
+            document.querySelector(".app-shell").getBoundingClientRect().height === window.innerHeight,
+        commandOverflow: getComputedStyle(document.querySelector(".command-center")).overflowY,
+        commandOverscroll: getComputedStyle(document.querySelector(".command-center")).overscrollBehaviorY,
+    }));
+
+    expect(layout.documentOverflow).toBe("hidden");
+    expect(layout.bodyOverflow).toBe("hidden");
+    expect(layout.shellFillsViewport).toBe(true);
+    expect(layout.commandOverflow).toBe("auto");
+    expect(layout.commandOverscroll).toBe("contain");
 });
 
 test("sidebar and detail pane scroll independently", async ({ page }) => {
@@ -94,17 +252,41 @@ test("settings shows app info and the donation QR code", async ({ page }) => {
     await expect(settings).toBeHidden();
 });
 
+test("command K focuses the tool search", async ({ page }) => {
+    await page.goto("/");
+    const search = page.getByRole("textbox", { name: "Search tools" });
+
+    await page.locator("body").press("Meta+K");
+
+    await expect(search).toBeFocused();
+});
+
+test("remove password exposes one cross-format document tool", async ({ page }) => {
+    const utility = UtilityRegistry.find((item) => item.id === "pdf-unlock");
+    expect(utility).toBeDefined();
+    expect(utility?.title).toBe("Remove Password");
+    expect(utility?.category).toBe("Documents");
+    expect(utility?.command).toBe("remove_password");
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Remove Password" }).click();
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await page.locator('input[type="password"]').fill("test-password");
+    await expect(page.getByLabel("Tool detail").getByRole("button", { name: "Remove Password" })).toBeEnabled();
+});
+
 const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[number]) => {
     await page.goto("/");
-    await page.getByRole("button", {
-        name: `${utility.title}: ${utility.blurb}`,
-    }).click();
+    await page.getByRole("button", { name: `Open ${utility.title}` }).click();
 
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await expect(page.getByText(fixtureName, { exact: true })).toBeVisible();
 
     if (utility.id === "pdf-unlock" || utility.id === "pdf-protect") {
         await page.locator('input[type="password"]').fill("test-password");
+    }
+    if (utility.id === "pdf-edit") {
+        await page.getByLabel("Edit text").fill("Test annotation");
     }
 
     const action = page.locator("main button").filter({ hasText: utility.shortTitle }).last();
@@ -117,7 +299,7 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
 };
 
 test.describe("registered feature actions", () => {
-    expect(UtilityRegistry).toHaveLength(31);
+    expect(UtilityRegistry).toHaveLength(32);
 
     for (const utility of UtilityRegistry) {
         test(`${utility.id} accepts the fixture and runs`, async ({ page }) => {

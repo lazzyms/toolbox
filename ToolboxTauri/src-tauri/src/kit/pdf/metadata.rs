@@ -7,6 +7,8 @@ use serde::Serialize;
 #[serde(rename_all = "camelCase")]
 pub struct PdfPageMetadata {
     pub index: usize,
+    pub x: f32,
+    pub y: f32,
     pub width: f32,
     pub height: f32,
 }
@@ -24,12 +26,12 @@ pub fn inspect(path: &Path) -> Result<PdfDocumentMetadata, String> {
         .get_pages()
         .values()
         .enumerate()
-        .map(|(index, page_id)| page_size(&document, *page_id).map(|(width, height)| PdfPageMetadata { index, width, height }))
+        .map(|(index, page_id)| page_size(&document, *page_id).map(|(x, y, width, height)| PdfPageMetadata { index, x, y, width, height }))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(PdfDocumentMetadata { path: path.to_path_buf(), pages })
 }
 
-fn page_size(document: &Document, page_id: lopdf::ObjectId) -> Result<(f32, f32), String> {
+fn page_size(document: &Document, page_id: lopdf::ObjectId) -> Result<(f32, f32, f32, f32), String> {
     let page = document.get_dictionary(page_id).map_err(|error| format!("Could not read PDF page: {error}"))?;
     let media_box = page.get(b"MediaBox").map_err(|error| format!("PDF page has no media box: {error}"))?;
     let values = media_box.as_array().map_err(|error| format!("PDF media box is invalid: {error}"))?;
@@ -45,7 +47,7 @@ fn page_size(document: &Document, page_id: lopdf::ObjectId) -> Result<(f32, f32)
     if width <= 0.0 || height <= 0.0 {
         return Err("PDF page has invalid dimensions.".to_string());
     }
-    Ok((width, height))
+    Ok((left, bottom, width, height))
 }
 
 fn number(value: &Object) -> Result<f32, String> {
@@ -86,6 +88,7 @@ mod tests {
 
         let metadata = inspect(&path).unwrap();
         assert_eq!(metadata.pages.len(), 2);
+        assert_eq!((metadata.pages[0].x, metadata.pages[0].y), (0.0, 0.0));
         assert_eq!((metadata.pages[0].width, metadata.pages[0].height), (612.0, 792.0));
         assert_eq!((metadata.pages[1].width, metadata.pages[1].height), (792.0, 612.0));
         let _ = std::fs::remove_file(path);

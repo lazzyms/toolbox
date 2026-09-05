@@ -4,6 +4,12 @@ import fileDownload from '../assets/tabler/file-download.svg?url';
 import arrowsExchange from '../assets/tabler/arrows-exchange.svg?url';
 import briefcase from '../assets/tabler/briefcase.svg?url';
 
+const designIcons = import.meta.glob('../assets/design-icons/*.svg', {
+    eager: true,
+    import: 'default',
+    query: '?url',
+}) as Record<string, string>;
+
 const icons = {
     'lock-open': lockOpen,
     lock,
@@ -23,7 +29,9 @@ export const TablerIcon = ({
     color?: string;
     className?: string;
 }) => {
-    const source = icons[name as TablerIconName] ?? briefcase;
+    const designSource = designIcons[`../assets/design-icons/${name}.svg`];
+    const source = designSource ?? icons[name as TablerIconName] ?? briefcase;
+    const mask = `url("${source}")`;
 
     return (
         <span
@@ -31,8 +39,8 @@ export const TablerIcon = ({
             className={`inline-block shrink-0 bg-current ${className}`}
             style={{
                 backgroundColor: color,
-                maskImage: `url(${source})`,
-                WebkitMaskImage: `url(${source})`,
+                maskImage: mask,
+                WebkitMaskImage: mask,
                 maskPosition: 'center',
                 WebkitMaskPosition: 'center',
                 maskRepeat: 'no-repeat',

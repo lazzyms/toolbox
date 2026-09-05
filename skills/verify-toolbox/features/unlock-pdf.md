@@ -1,19 +1,20 @@
-# Unlock PDF
+# Remove Password
 
 ## Sub-features
 
-- Select PDFs through the native Tauri file dialog or drag-and-drop.
-- Unlock with the real password through the `unlock_pdf` command.
-- Show per-file results and write `-unlocked` outputs.
+- Select PDFs or Office files through the native Tauri file dialog or drag-and-drop.
+- Remove a password with the real password through the `remove_password` command.
+- Supports PDF plus legacy and modern Word, Excel, and PowerPoint files: `.doc`, `.docx`, `.xls`, `.xlsx`, `.ppt`, and `.pptx`.
+- Show per-file results and write collision-safe `-unlocked` outputs.
 
 ## How to get to it (user POV)
 
-Launch Toolbox, then choose `Unlock PDF` in the PDF section of the sidebar.
+Launch Toolbox, then choose `Remove Password` in the Documents section of the sidebar.
 
 ## Driving it with Tauri desktop UI
 
-Click the `Drag & Drop files here` area, choose a password-protected PDF, enter its password in `PDF Password`, and click `Unlock PDF`. Assert the result row reports `PDF Unlocked` and inspect the output with qpdf or a PDF reader.
+Click the `Drag & Drop files here` area, choose a password-protected PDF or Office file, enter its password in `File Password`, and click `Remove Password`. Assert the result row reports a successful unlock and inspect the output without supplying a password.
 
 ## Gotchas
 
-qpdf is required for protected PDFs. A wrong password must produce a visible failure without an unlocked output. Files stay on the local machine.
+qpdf is required for protected PDFs. Office formats use the bundled native adapter and do not require LibreOffice or another external Office runtime. A wrong password must produce a visible failure without an unlocked output. Files stay on the local machine.

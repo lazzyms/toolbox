@@ -50,7 +50,7 @@ const PDFPageToolContent = ({ files, run, loading, utility, mode, document, setD
             setDocument(metadata);
             setState({ ...initialState, pageOrder: metadata.pages.map((page) => page.index) });
             const page = metadata.pages[0];
-            if (page) setRectangle({ x: 0, y: 0, width: page.width, height: page.height });
+            if (page) setRectangle({ x: page.x, y: page.y, width: page.width, height: page.height });
         }).catch(() => setDocument(null));
     }, [files, setDocument, setState, setRectangle]);
 
