@@ -7,6 +7,8 @@ use serde::Serialize;
 #[serde(rename_all = "camelCase")]
 pub struct PdfPageMetadata {
     pub index: usize,
+    pub x: f32,
+    pub y: f32,
     pub width: f32,
     pub height: f32,
 }
@@ -24,12 +26,12 @@ pub fn inspect(path: &Path) -> Result<PdfDocumentMetadata, String> {
         .get_pages()
         .values()
         .enumerate()
-        .map(|(index, page_id)| page_size(&document, *page_id).map(|(width, height)| PdfPageMetadata { index, width, height }))
+        .map(|(index, page_id)| page_bounds(&document, *page_id).map(|(left, bottom, right, top)| PdfPageMetadata { index, x: left, y: bottom, width: right - left, height: top - bottom }))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(PdfDocumentMetadata { path: path.to_path_buf(), pages })
 }
 
-fn page_size(document: &Document, page_id: lopdf::ObjectId) -> Result<(f32, f32), String> {
+pub(crate) fn page_bounds(document: &Document, page_id: lopdf::ObjectId) -> Result<(f32, f32, f32, f32), String> {
     let page = document.get_dictionary(page_id).map_err(|error| format!("Could not read PDF page: {error}"))?;
     let media_box = page.get(b"MediaBox").map_err(|error| format!("PDF page has no media box: {error}"))?;
     let values = media_box.as_array().map_err(|error| format!("PDF media box is invalid: {error}"))?;
@@ -40,15 +42,13 @@ fn page_size(document: &Document, page_id: lopdf::ObjectId) -> Result<(f32, f32)
     let bottom = number(&values[1])?;
     let right = number(&values[2])?;
     let top = number(&values[3])?;
-    let width = right - left;
-    let height = top - bottom;
-    if width <= 0.0 || height <= 0.0 {
+    if right <= left || top <= bottom {
         return Err("PDF page has invalid dimensions.".to_string());
     }
-    Ok((width, height))
+    Ok((left, bottom, right, top))
 }
 
-fn number(value: &Object) -> Result<f32, String> {
+pub(crate) fn number(value: &Object) -> Result<f32, String> {
     match value {
         Object::Integer(value) => Ok(*value as f32),
         Object::Real(value) => Ok(*value),
