@@ -5,7 +5,8 @@ import { PDFUnlockView } from './PDFUnlockView';
 import { PDFProtectView } from './PDFProtectView';
 import { ImageCompressView } from './ImageCompressView';
 import { ImageConvertView } from './ImageConvertView';
-import { PlannedToolView } from './PlannedToolView';
+import { TablerIcon } from '../components/TablerIcon';
+import { PlannedToolView, UnavailableToolView } from './PlannedToolView';
 import { PDFCropView, PDFOrganizeView, PDFSignView } from './PDFPageToolView';
 import { PDFSimpleToolView } from './PDFSimpleToolView';
 import { PDFSelectionView } from './PDFSelectionView';
@@ -16,7 +17,6 @@ import { ImageGeometryView } from './ImageGeometryView';
 import { ImageEffectView } from './ImageEffectView';
 import { ImageFormatView } from './ImageFormatView';
 import { ImageMetadataView } from './ImageMetadataView';
-import { SettingsPanel } from './SettingsPanel';
 
 const views = {
     'pdf-unlock': PDFUnlockView,
@@ -55,17 +55,19 @@ const views = {
 
 export const MainPage = () => {
     const [selectedTool, setSelectedTool] = useState<ToolDefinition | null>(null);
-    const [settingsOpen, setSettingsOpen] = useState(false);
 
     return (
-        <div className="flex h-screen overflow-hidden bg-slate-50 text-slate-900 font-sans selection:bg-blue-100">
+        <div className="flex h-screen bg-slate-50 text-slate-900 font-sans selection:bg-blue-100">
             <a href="#tool-detail" className="sr-only focus:not-sr-only focus:absolute focus:z-10 focus:bg-white focus:p-2">Skip to tool</a>
-            <aside aria-label="Toolbox navigation" className="w-72 shrink-0 min-h-0 bg-white border-r border-slate-200 p-6 flex flex-col">
-                <div className="mb-10 px-2">
+            <aside aria-label="Toolbox navigation" className="w-72 bg-white border-r border-slate-200 p-6 flex flex-col">
+                <div className="flex items-center space-x-3 mb-10 px-2">
+                    <div className="w-8 h-8 bg-gradient-to-br from-amber-400 to-orange-500 rounded-lg flex items-center justify-center shadow-sm">
+                        <TablerIcon name="briefcase" color="#172033" className="w-5 h-5" />
+                    </div>
                     <h1 className="text-xl font-bold tracking-tight">Toolbox</h1>
                 </div>
 
-                <nav aria-label="Utilities" className="min-h-0 flex-1 overflow-y-auto space-y-1">
+                <nav aria-label="Utilities" className="flex-1 space-y-1">
                     {UtilityRegistry.map(tool => (
                         <button
                             key={tool.id}
@@ -73,27 +75,25 @@ export const MainPage = () => {
                             onClick={() => setSelectedTool(tool)}
                             aria-current={selectedTool?.id === tool.id ? 'page' : undefined}
                             aria-label={`${tool.title}: ${tool.blurb}`}
-                            className={`w-full text-left px-3 py-2 rounded-xl transition-all duration-200 ${
+                            className={`w-full text-left px-3 py-2 rounded-xl transition-all duration-200 flex items-center group ${
                                 selectedTool?.id === tool.id
                                 ? 'bg-blue-50 text-blue-700 shadow-sm'
                                 : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
                             }`}
                         >
+                            <TablerIcon name={tool.symbol} color={tool.tint} className="mr-3 w-5 h-5 group-hover:scale-110 transition-transform" />
                             <span className="text-sm font-medium">{tool.shortTitle}</span>
+                            {tool.status === "unavailable" && <span className="ml-auto text-[10px] font-semibold uppercase tracking-wide text-slate-400">Unavailable</span>}
                         </button>
                     ))}
                 </nav>
 
-                <button
-                    type="button"
-                    onClick={() => setSettingsOpen(true)}
-                    className="mt-4 w-full rounded-xl border border-slate-200 px-3 py-2 text-left text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900"
-                >
-                    Settings
-                </button>
+                <div className="mt-auto p-4 bg-slate-100 rounded-2xl">
+                    <p className="text-[11px] text-slate-400 text-center font-medium uppercase tracking-wider">Unified Native Engine</p>
+                </div>
 
                 <p className="mt-4 text-center text-xs text-slate-400">
-                    Built by{' '}
+                    Built with <span aria-hidden="true">❤️</span> by{' '}
                     <a
                         className="font-medium text-slate-500 underline decoration-slate-300 underline-offset-2 transition-colors hover:text-blue-600"
                         href="https://mauliksompura.co.in"
@@ -110,11 +110,14 @@ export const MainPage = () => {
                     <div className="max-w-4xl mx-auto h-full">
                         {(() => {
                             const View = views[selectedTool.view];
-                            return <View utility={selectedTool} />;
+                            return selectedTool.status === "unavailable" ? <UnavailableToolView utility={selectedTool} /> : <View utility={selectedTool} />;
                         })()}
                     </div>
                     ) : (
                     <div className="h-full flex flex-col items-center justify-center text-center space-y-4">
+                        <div className="w-20 h-20 bg-slate-200 rounded-full flex items-center justify-center opacity-50">
+                            <TablerIcon name="briefcase" color="#475569" className="w-10 h-10" />
+                        </div>
                         <div>
                             <h3 className="text-xl font-semibold text-slate-700">Ready to process</h3>
                             <p className="text-slate-400">Select a utility from the sidebar to begin</p>
@@ -125,8 +128,6 @@ export const MainPage = () => {
                     {selectedTool ? `${selectedTool.title} selected.` : "No tool selected."}
                 </p>
             </main>
-
-            {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
         </div>
     );
 };
