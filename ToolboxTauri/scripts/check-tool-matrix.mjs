@@ -4,7 +4,7 @@ const registry = readFileSync("src/registry/index.ts", "utf8");
 const registryIds = [...registry.matchAll(/(?:id: "([^"]+)"|(?:pdf|image)\("([^"]+)")/g)].map((match) => match[1] ?? match[2]);
 const factoryEntries = (registry.match(/(?:pdf|image)\("/g) ?? []).length;
 const requiredFields = ["command", "verification", "view"];
-const expectedToolCount = 31;
+const expectedToolCount = 32;
 
 if (registryIds.length !== expectedToolCount) throw new Error(`Tauri registry has ${registryIds.length} tools, expected ${expectedToolCount}`);
 if (new Set(registryIds).size !== registryIds.length) throw new Error("Tauri registry contains duplicate IDs");

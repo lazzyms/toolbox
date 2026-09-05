@@ -3,6 +3,7 @@ import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { initializeInstallAnalytics } from "./analytics";
 import { MainPage } from "./views/MainPage";
+import { UtilityIndex } from "./components/UtilityIndex";
 
 export default function App() {
   const updateStarted = useRef(false);
@@ -12,7 +13,12 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (import.meta.env.DEV || updateStarted.current) return;
+    if (
+      import.meta.env.DEV ||
+      import.meta.env.VITE_ENABLE_UPDATES !== "true" ||
+      updateStarted.current
+    )
+      return;
     updateStarted.current = true;
 
     const update = async () => {
@@ -36,5 +42,10 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, []);
 
-  return <MainPage />;
+  return (
+    <>
+      <MainPage />
+      <UtilityIndex />
+    </>
+  );
 }

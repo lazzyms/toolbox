@@ -3,6 +3,7 @@ import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { open } from '@tauri-apps/plugin-dialog';
 import type { ToolDefinition, JobOutcome, Progress } from '../contracts';
 import { ResultList } from './ResultList';
+import { TablerIcon } from './TablerIcon';
 
 interface ToolScaffoldProps {
     utility: ToolDefinition;
@@ -67,10 +68,10 @@ export const ToolScaffold = ({ utility, onRun, children }: ToolScaffoldProps) =>
     };
 
     return (
-        <div className="flex flex-col h-full">
-            <div className="mb-6">
-                <h2 className="text-3xl font-bold text-slate-900">{utility.title}</h2>
-                <p className="text-slate-500">{utility.blurb}</p>
+        <div className="tool-scaffold">
+            <div className="tool-scaffold-heading">
+                <h2>{utility.title}</h2>
+                <p>{utility.blurb}</p>
             </div>
 
             <div
@@ -84,32 +85,34 @@ export const ToolScaffold = ({ utility, onRun, children }: ToolScaffoldProps) =>
                         void browse();
                     }
                 }}
-                className="flex-1 border-2 border-dashed border-slate-300 rounded-2xl p-8 flex flex-col items-center justify-center bg-slate-50 hover:border-blue-400 transition-colors cursor-pointer mb-6"
+                className="file-dropzone"
             >
-                <div className="text-center pointer-events-none">
-                    <div className="text-4xl mb-4">📁</div>
-                    <p className="text-slate-600 font-medium">Drag & Drop files here</p>
-                    <p className="text-slate-400 text-sm">or click to browse</p>
+                <div className="file-dropzone-copy">
+                    <div className="file-dropzone-icon" aria-hidden="true">
+                        <TablerIcon name="file-minus" className="file-dropzone-icon-glyph" />
+                    </div>
+                    <p>Drag & Drop files here</p>
+                    <p>or click to browse</p>
                 </div>
 
                 {files.length > 0 && (
-                    <div className="mt-6 w-full max-w-md pointer-events-auto">
-                        <div className="flex justify-between items-center mb-2">
-                            <span className="text-sm font-semibold text-slate-700">{files.length} files selected</span>
+                    <div className="file-selection">
+                        <div className="file-selection-header">
+                            <span className="file-selection-count">{files.length} files selected</span>
                             <button
                                 onClick={(e) => {
                                     e.stopPropagation();
                                     setFiles([]);
                                     setResults([]);
                                 }}
-                                className="text-xs text-red-500 hover:underline"
+                                className="file-selection-clear"
                             >
                                 Clear all
                             </button>
                         </div>
-                        <div className="max-h-40 overflow-y-auto border rounded-lg bg-white p-2 space-y-1">
+                        <div className="file-selection-list">
                             {files.map((f) => (
-                                    <div key={f} className="text-xs text-slate-500 truncate p-1 border-b last:border-0">
+                                <div key={f} className="file-selection-item">
                                     {f.split(/[\\/]/).pop()}
                                 </div>
                             ))}

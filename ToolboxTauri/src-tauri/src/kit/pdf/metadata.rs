@@ -125,6 +125,7 @@ mod tests {
 
         let metadata = inspect(&path).unwrap();
         assert_eq!(metadata.pages.len(), 2);
+        assert_eq!((metadata.pages[0].x, metadata.pages[0].y), (0.0, 0.0));
         assert_eq!((metadata.pages[0].width, metadata.pages[0].height), (612.0, 792.0));
         assert_eq!((metadata.pages[1].width, metadata.pages[1].height), (792.0, 612.0));
         let _ = std::fs::remove_file(path);

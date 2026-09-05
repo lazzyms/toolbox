@@ -1,7 +1,7 @@
 # Toolbox
 
-Toolbox is a cross-platform desktop app for private, local-first PDF and image
-utilities. Files are processed on-device and are never uploaded.
+Toolbox is a cross-platform desktop app for private, local-first PDF, document,
+and image utilities. Files are processed on-device and are never uploaded.
 
 The Tauri app on `tauri-port` is the primary Toolbox app and the repository's
 default branch. The legacy Swift macOS app remains on `main` with its own release
@@ -24,15 +24,17 @@ Download the latest installer from the
 1. Run the downloaded `.exe` installer.
 2. If Windows SmartScreen appears, choose **More info**, then **Run anyway**.
 
-The installers bundle the native PDF helpers they need. Toolbox checks for signed
-updates shortly after launch and asks before installing one.
+The installers bundle the native PDF helpers they need. Remove Password uses a
+native Rust adapter for Word, Excel, and PowerPoint files with no Office runtime
+dependency. Toolbox checks for signed updates shortly after launch and asks before
+installing one.
 
 ## Features
 
-Toolbox currently provides 31 utilities covering PDF password handling, page
-editing, merging, splitting, extraction, conversion, OCR, signing, watermarking,
-numbering, compression, image conversion, compression, resizing, rotation,
-cropping, watermarking, metadata removal, tone adjustment, icon generation, GIF
+Toolbox currently provides 32 utilities covering PDF and Office password handling,
+page editing, merging, splitting, extraction, conversion, OCR, signing, watermarking,
+numbering, compression, image conversion, resizing, rotation, cropping, metadata
+removal, tone adjustment, icon generation, GIF
 creation and extraction, TIFF processing, face blurring, and background removal.
 
 Every registered feature has UI automation and native fixture coverage. The app

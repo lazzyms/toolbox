@@ -1,17 +1,20 @@
 import { useState } from 'react';
 import { ToolScaffold } from '../components/ToolScaffold';
 import { invoke } from '@tauri-apps/api/core';
-import type { PDFRequest, ToolDefinition, ToolResult } from '../contracts';
+import type { PasswordRequest, ToolDefinition, ToolResult } from '../contracts';
 
 export const PDFUnlockView = ({ utility }: { utility: ToolDefinition }) => {
     const [password, setPassword] = useState('');
 
     return (
-        <ToolScaffold utility={utility} onRun={(paths) => invoke<ToolResult>('unlock_pdf', { request: { paths, password, outputLocation: 'alongsideInput' } satisfies PDFRequest })}>
+        <ToolScaffold utility={utility} onRun={(paths) => invoke<ToolResult>('remove_password', { request: { paths, password, outputLocation: 'alongsideInput' } satisfies PasswordRequest })}>
             {({ files, run, loading }) => (
                 <div className="space-y-6">
+                    <p className="text-sm text-slate-600" aria-live="polite">
+                        Supports PDF, DOC/DOCX, XLS/XLSX, and PPT/PPTX. Office files are processed locally.
+                    </p>
                     <div className="flex flex-col space-y-2 max-w-sm">
-                        <label className="text-sm font-medium text-slate-700">PDF Password</label>
+                        <label className="text-sm font-medium text-slate-700">File Password</label>
                         <input
                             type="password"
                             value={password}
@@ -26,7 +29,7 @@ export const PDFUnlockView = ({ utility }: { utility: ToolDefinition }) => {
                         onClick={run}
                         className="bg-blue-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors"
                     >
-                        Unlock PDF
+                        Remove Password
                     </button>
                 </div>
             )}

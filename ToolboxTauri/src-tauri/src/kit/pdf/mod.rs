@@ -46,6 +46,22 @@ impl PDFProcessor {
                 }
                 let mut doc = doc;
                 let page_count = doc.get_pages().len();
+                // Loading an encrypted PDF can leave the original trailer's
+                // `/Size` higher than the surviving object table. Keep the
+                // rewritten xref table truthful so strict PDF validators do
+                // not report a stale object-count warning.
+                doc.max_id = doc
+                    .objects
+                    .iter()
+                    .filter(|(_, object)| {
+                        object
+                            .type_name()
+                            .map(|name| ![b"ObjStm".as_slice(), b"XRef".as_slice(), b"Linearized".as_slice()].contains(&name))
+                            .unwrap_or(true)
+                    })
+                    .map(|((id, _), _)| *id)
+                    .max()
+                    .unwrap_or(0);
                 match doc.save(&output_path) {
                     Ok(_) => match Document::load(&output_path) {
                         Ok(verified) if !verified.is_encrypted() && verified.get_pages().len() == page_count && verified.objects.len() > 1 => JobOutcome { input_path, output_paths: vec![output_path], detail: "PDF Unlocked and verified".to_string(), failure: None },
@@ -267,6 +283,16 @@ mod tests {
         assert!(
             loaded.objects.iter().any(|(_, o)| matches!(o, Object::Stream(_))),
             "unlocked PDF must keep its content stream"
+        );
+        let qpdf_check = std::process::Command::new(find_qpdf().unwrap())
+            .arg("--check")
+            .arg(&unlocked.output_paths[0])
+            .output()
+            .unwrap();
+        assert!(
+            qpdf_check.status.success(),
+            "unlocked PDF should pass qpdf validation: {}",
+            String::from_utf8_lossy(&qpdf_check.stderr)
         );
 
         let _ = std::fs::remove_file(&protected.output_paths[0]);

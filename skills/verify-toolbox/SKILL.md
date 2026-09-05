@@ -19,9 +19,9 @@ npm run tauri dev
 
 The Vite dev server listens on `http://localhost:1420`; Tauri opens a desktop window titled `Toolbox`. On macOS, install qpdf with `brew install qpdf` if PDF protection or unlocking is being exercised. On Windows, install qpdf with `choco install qpdf -y`; release builds bundle it beside the executable through `scripts/bundle-qpdf.ps1`.
 
-For automated browser UI coverage of every registered feature, run `npm run test:ui` from `ToolboxTauri/`. The suite starts Vite, selects each of the 31 registry entries in a fresh page, supplies the checked-in app-icon fixture through the dialog bridge, exercises the feature action, and asserts the corresponding Tauri command plus a successful result. This verifies navigation, pane controls, fixture handling, and command dispatch; native processing remains covered by the live drive and native tests below.
+For automated browser UI coverage of every registered feature, run `npm run test:ui` from `ToolboxTauri/`. The suite starts Vite, selects each of the 32 registry entries in a fresh page, supplies the checked-in app-icon fixture through the dialog bridge, exercises the feature action, and asserts the corresponding Tauri command plus a successful result. This verifies navigation, pane controls, fixture handling, and command dispatch; native processing remains covered by the live drive and native tests below.
 
-For native E2E coverage of all 31 registered commands, run `npm run test:native:e2e` from `ToolboxTauri/`. The test creates valid PDF, PNG, animated GIF, and TIFF fixtures under a unique temporary root, gives every command its own output directory, verifies real output files or explicit unavailable vision adapters, and proves the source fixtures remain unchanged.
+For native E2E coverage of all 32 registered commands, run `npm run test:native:e2e` from `ToolboxTauri/`. The test creates valid PDF, PNG, animated GIF, and TIFF fixtures under a unique temporary root, gives every command its own output directory, verifies real output files or explicit unavailable vision adapters, and proves the source fixtures remain unchanged.
 
 For a packaged smoke run, use `npm run tauri build` and launch the unsigned app produced under `ToolboxTauri/src-tauri/target/release/bundle/`. The build may omit updater artifacts when `TAURI_SIGNING_PRIVATE_KEY` is absent. Never drive a user's installed Toolbox while a verification run is active. Keep one dev instance per run; the dev server port and Tauri window are shared resources.
 
@@ -47,12 +47,12 @@ On a live run, also confirm `http://localhost:1420` answers and that the focused
 Use the Tauri desktop window through the platform UI harness (macOS Accessibility/CUA or Windows UI Automation). Prefer visible labels and text; do not use coordinates when a text or role selector is available.
 
 1. Confirm the window title is `Toolbox` and the empty state says `Ready to process`.
-2. Select one of the four sidebar buttons: `Unlock PDF`, `Protect PDF`, `Compress`, or `Convert`.
+2. Select a tool from the Documents, PDF, or Images category, such as `Remove Password`, `Protect PDF`, `Compress`, or `Convert`.
 3. Click the `Drag & Drop files here` area (or drop real fixture paths) and use the native file dialog to select files. Assert the selected count and filename appear.
-4. Exercise the feature's visible control: `PDF Password` + `Unlock PDF`, `Encryption Password` + `Protect PDF`, `Quality` + `Compress Images`, or a target format such as `JPEG` + `Convert Images`.
+4. Exercise the feature's visible control: `File Password` + `Remove Password`, `Encryption Password` + `Protect PDF`, `Quality` + `Compress Images`, or a target format such as `JPEG` + `Convert Images`.
 5. Wait for `Processing batch…` to disappear and assert the result row is green and contains the expected detail. Inspect the filesystem output and prove the input bytes remain unchanged.
 
-The frontend invokes every command listed in the feature map through Tauri IPC. Do not call commands directly for a live UI proof. PDF rendering uses `pdftoppm`; PDF protection, merging, and splitting use qpdf. OCR, face blur, and background removal use offline adapters documented in `docs/tauri-vision-engines.md`; an absent adapter is an expected, explicit unsupported result, not a pass. The surface includes image geometry/effects/formats, PDF conversion/editor/selection tools, accessibility semantics, and release checks.
+The frontend invokes every command listed in the feature map through Tauri IPC. Do not call commands directly for a live UI proof. PDF rendering uses `pdftoppm`; PDF protection, merging, and splitting use qpdf. Remove Password uses the native Rust Office adapter for Word, Excel, and PowerPoint files and does not require an Office runtime. OCR, face blur, and background removal use offline adapters documented in `docs/tauri-vision-engines.md`; an absent adapter is an expected, explicit unsupported result, not a pass. The surface includes image geometry/effects/formats, PDF conversion/editor/selection tools, accessibility semantics, and release checks.
 
 ## Evidence
 

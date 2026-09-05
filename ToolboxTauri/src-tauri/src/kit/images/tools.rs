@@ -12,6 +12,8 @@ use crate::kit::contracts::ToolError;
 pub struct ResizeRequest {
     pub paths: Vec<PathBuf>, pub width: u32, pub height: u32,
     #[serde(default = "default_resize_mode")] pub mode: String,
+    #[serde(default = "default_resampling")] pub resampling: String,
+    #[serde(default = "default_keep_aspect_ratio")] pub keep_aspect_ratio: bool,
     #[serde(default)] pub percentage: u32, #[serde(default)] pub longest_side: u32,
     pub output_location: OutputLocation,
 }
@@ -80,14 +82,22 @@ pub struct MetadataReport { pub path: PathBuf, pub exif: bool, pub gps: bool, pu
 pub fn resize(request: &ResizeRequest, input: PathBuf) -> JobOutcome {
     transform(request.paths.as_slice(), input, &request.output_location, "-resized", |image| {
         let (width, height) = resize_dimensions(image.width(), image.height(), request)?;
-        Ok(image.resize_exact(width, height, image::imageops::FilterType::Lanczos3))
+        let filter = match request.resampling.as_str() { "nearest" => image::imageops::FilterType::Nearest, "bicubic" => image::imageops::FilterType::CatmullRom, _ => image::imageops::FilterType::Lanczos3 };
+        Ok(image.resize_exact(width, height, filter))
     })
 }
 
 fn default_resize_mode() -> String { "exact".to_string() }
+fn default_resampling() -> String { "lanczos".to_string() }
+fn default_keep_aspect_ratio() -> bool { true }
 
 fn resize_dimensions(source_width: u32, source_height: u32, request: &ResizeRequest) -> Result<(u32, u32), String> {
     let dimensions = match request.mode.as_str() {
+        "exact" if request.keep_aspect_ratio => {
+            if request.width == 0 || request.height == 0 { return Err("Resize dimensions must be positive.".to_string()); }
+            let scale = (request.width as f64 / source_width as f64).min(request.height as f64 / source_height as f64);
+            (((source_width as f64 * scale).round() as u32).max(1), ((source_height as f64 * scale).round() as u32).max(1))
+        }
         "exact" => (request.width, request.height),
         "percentage" => {
             if request.percentage == 0 || request.percentage > 1000 { return Err("Resize percentage must be between 1 and 1000.".to_string()); }
@@ -586,7 +596,7 @@ mod tests {
 
     #[test]
     fn resize_modes_produce_bounded_dimensions() {
-        let percentage = ResizeRequest { paths: vec![], width: 0, height: 0, mode: "percentage".to_string(), percentage: 50, longest_side: 0, output_location: OutputLocation::AlongsideInput };
+        let percentage = ResizeRequest { paths: vec![], width: 0, height: 0, mode: "percentage".to_string(), resampling: "lanczos".to_string(), keep_aspect_ratio: true, percentage: 50, longest_side: 0, output_location: OutputLocation::AlongsideInput };
         assert_eq!(resize_dimensions(400, 200, &percentage).unwrap(), (200, 100));
         let longest = ResizeRequest { mode: "longestSide".to_string(), longest_side: 100, ..percentage };
         assert_eq!(resize_dimensions(400, 200, &longest).unwrap(), (100, 50));

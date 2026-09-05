@@ -1,6 +1,8 @@
 pub mod common;
 pub mod contracts;
 pub mod images;
+pub mod office;
+pub mod password;
 pub mod pdf;
 pub mod vision;
 pub mod fidelity;

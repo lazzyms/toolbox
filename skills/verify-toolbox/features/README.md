@@ -4,7 +4,7 @@ The primary surface is the cross-platform Tauri desktop window. Every registry e
 
 | Feature | Entry point | Automated proof |
 | --- | --- | --- |
-| [Unlock PDF](unlock-pdf.md) | PDF → Unlock PDF | round-trip password removal |
+| [Remove Password](unlock-pdf.md) | Documents → Remove Password | PDF and Office password removal |
 | [Page numbers](pdf-page-numbers.md) | PDF → Page Numbers | page geometry and overlay |
 | [Merge PDF](pdf-merge.md) | PDF → Merge | qpdf output page count |
 | [Watermark PDF](pdf-watermark.md) | PDF → Watermark | overlay output and original preservation |
