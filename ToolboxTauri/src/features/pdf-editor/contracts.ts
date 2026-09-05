@@ -11,6 +11,7 @@ export interface PdfPage {
     y?: number;
     width: number;
     height: number;
+    preview?: string | null;
 }
 
 export interface PdfDocument {

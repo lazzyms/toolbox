@@ -87,7 +87,13 @@ export const PdfEditor = ({ document, state, onStateChange, renderOverlay, organ
                             onClick={() => onStateChange({ ...state, currentPage: pageIndex })}
                             className={`relative shrink-0 rounded border p-2 ${selected ? "border-blue-500 ring-2 ring-blue-200" : "border-slate-200"}`}
                         >
-                            <span className="block bg-slate-100" style={{ width: state.density === "compact" ? 48 : 64, height: (state.density === "compact" ? 48 : 64) * page.height / page.width }} />
+                            {page.preview ? <img
+                                src={page.preview}
+                                alt={`Thumbnail of page ${page.index + 1}`}
+                                className="block bg-slate-100 object-contain"
+                                draggable={false}
+                                style={{ width: state.density === "compact" ? 48 : 64, height: (state.density === "compact" ? 48 : 64) * page.height / page.width }}
+                            /> : <span className="block bg-slate-100" style={{ width: state.density === "compact" ? 48 : 64, height: (state.density === "compact" ? 48 : 64) * page.height / page.width }} />}
                             <span className="text-xs text-slate-500">{page.index + 1}</span>
                         </button>
                     );
@@ -114,6 +120,7 @@ export const PdfEditor = ({ document, state, onStateChange, renderOverlay, organ
                             onPointerMove={updateSelection}
                             onPointerUp={finishSelection}
                         >
+                            {current.preview ? <img src={current.preview} alt={`Preview of page ${current.index + 1}`} className="absolute inset-0 h-full w-full object-contain" draggable={false} /> : <span className="absolute inset-0 flex items-center justify-center text-sm text-slate-500">Preview unavailable.</span>}
                             {cropPreview && <div
                                 aria-label="Crop rectangle"
                                 className="pointer-events-none absolute border-2 border-blue-600 bg-blue-200/30"
