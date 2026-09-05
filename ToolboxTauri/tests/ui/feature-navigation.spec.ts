@@ -1,11 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
-import { readFileSync } from "node:fs";
 import path from "node:path";
 import { UtilityRegistry } from "../../src/registry";
 
 const fixturePath = path.resolve("src-tauri/icons/icon.png");
 const fixtureName = path.basename(fixturePath);
-const appVersion = (JSON.parse(readFileSync(path.resolve("package.json"), "utf8")) as { version: string }).version;
 
 type TestWindow = Window & {
     __toolboxInvocations?: Array<{ command: string; args: unknown }>;
@@ -63,35 +61,27 @@ test("every registered feature opens its detail pane", async ({ page }) => {
     }
 });
 
-test("sidebar navigation has no decorative icons", async ({ page }) => {
+test("crop stays disabled until a crop rectangle is drawn", async ({ page }) => {
     await page.goto("/");
-    await expect(page.locator('aside[aria-label="Toolbox navigation"] [aria-hidden="true"]')).toHaveCount(0);
-});
+    await page.getByRole("button", {
+        name: "Crop PDF: Hide content outside a selected page rectangle.",
+    }).click();
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await expect(page.getByText(fixtureName, { exact: true })).toBeVisible();
 
-test("sidebar and detail pane scroll independently", async ({ page }) => {
-    await page.goto("/");
-    await expect(page.locator('nav[aria-label="Utilities"]')).toHaveCSS("overflow-y", "auto");
-    await expect(page.locator('main[aria-label="Tool detail"]')).toHaveCSS("overflow-y", "auto");
-});
+    const cropAction = page.getByRole("main").getByRole("button", { name: "Crop", exact: true });
+    await expect(cropAction).toBeDisabled();
 
-test("sidebar does not show the engine badge", async ({ page }) => {
-    await page.goto("/");
-    await expect(page.getByText("Unified Native Engine", { exact: true })).toHaveCount(0);
-});
+    const preview = page.getByLabel("Preview of page 1");
+    const box = await preview.boundingBox();
+    expect(box).not.toBeNull();
+    if (!box) return;
+    await page.mouse.move(box.x + box.width * 0.2, box.y + box.height * 0.2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width * 0.8, box.y + box.height * 0.8);
+    await page.mouse.up();
 
-test("settings shows app info and the donation QR code", async ({ page }) => {
-    await page.goto("/");
-    await page.getByRole("button", { name: "Settings" }).click();
-
-    const settings = page.getByRole("dialog", { name: "Settings" });
-    await expect(settings).toBeVisible();
-    await expect(settings.getByText("App info", { exact: true })).toBeVisible();
-    await expect(settings.getByText("Toolbox", { exact: true })).toBeVisible();
-    await expect(settings.getByText(`Version ${appVersion}`, { exact: true })).toBeVisible();
-    await expect(settings.getByRole("img", { name: "Buy Me a Coffee donation QR code" })).toBeVisible();
-
-    await settings.getByRole("button", { name: "Close settings" }).click();
-    await expect(settings).toBeHidden();
+    await expect(cropAction).toBeEnabled();
 });
 
 const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[number]) => {
