@@ -57,7 +57,7 @@ test("every registered feature opens its detail pane", async ({ page }) => {
         await expect(navigationButton).toBeVisible();
         await navigationButton.click();
         await expect(page.getByRole("heading", { name: utility.title, exact: true })).toBeVisible();
-        await expect(page.getByRole("status")).toHaveText(`${utility.title} selected.`);
+        await expect(page.locator('p[role="status"]')).toHaveText(`${utility.title} selected.`);
     }
 });
 
@@ -106,6 +106,21 @@ test("vision tools explain unavailable resources before file selection", async (
     }
 });
 
+test("remove pages stays disabled until a page is selected", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", {
+        name: "Remove PDF Pages: Delete selected pages while keeping the rest in order.",
+    }).click();
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await expect(page.getByText(fixtureName, { exact: true })).toBeVisible();
+
+    const removeAction = page.getByRole("main").getByRole("button", { name: "Remove Pages", exact: true });
+    await expect(removeAction).toBeDisabled();
+    const pageButton = page.getByRole("button", { name: "Page 1, 612 by 792 points" });
+    await pageButton.click();
+    await expect(removeAction).toBeEnabled();
+});
+
 const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[number]) => {
     await page.goto("/");
     await page.getByRole("button", {
@@ -117,6 +132,20 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
 
     if (utility.id === "pdf-unlock" || utility.id === "pdf-protect") {
         await page.locator('input[type="password"]').fill("test-password");
+    }
+    if (utility.id === "pdf-remove-pages") {
+        await page.getByRole("button", { name: "Page 1, 612 by 792 points" }).click();
+    }
+    if (utility.id === "pdf-crop") {
+        const preview = page.getByLabel("Preview of page 1");
+        const box = await preview.boundingBox();
+        expect(box).not.toBeNull();
+        if (box) {
+            await page.mouse.move(box.x + box.width * 0.2, box.y + box.height * 0.2);
+            await page.mouse.down();
+            await page.mouse.move(box.x + box.width * 0.8, box.y + box.height * 0.8);
+            await page.mouse.up();
+        }
     }
 
     const action = page.locator("main button").filter({ hasText: utility.shortTitle }).last();
