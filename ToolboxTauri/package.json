@@ -1,0 +1,38 @@
+{
+  "name": "toolbox",
+  "private": true,
+  "version": "0.2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "test:ui": "playwright test",
+    "test:analytics": "tsx --test tests/analytics.test.ts",
+    "test:native:e2e": "cargo test --manifest-path src-tauri/Cargo.toml every_registered_command_runs_with_real_fixtures_in_isolated_sandboxes",
+    "check:matrix": "node scripts/check-tool-matrix.mjs",
+    "check:release": "npm run check:matrix && node scripts/check-release-readiness.mjs",
+    "preview": "vite preview",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-dialog": "^2",
+    "@tauri-apps/plugin-process": "^2.3.1",
+    "@tauri-apps/plugin-updater": "^2.11.0",
+    "firebase": "^12.18.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "@tailwindcss/vite": "^4",
+    "@tauri-apps/cli": "^2",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "tailwindcss": "^4",
+    "tsx": "^4.23.13",
+    "typescript": "^5.6.3",
+    "vite": "^6.0.3"
+  }
+}

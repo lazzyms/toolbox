@@ -3,27 +3,22 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Toolbox — small file utilities for macOS</title>
-<meta name="description" content="A native macOS app collecting 31 small file utilities: unlock, merge, split and OCR PDFs; convert, compress and resize images. Your files never leave your Mac.">
+<title>Toolbox | Local file utilities for macOS and Windows</title>
+<meta name="description" content="Local PDF, Office, and image utilities for macOS and Windows. Remove passwords, edit PDFs, and convert, compress, or resize images without uploading files.">
 <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="assets/icon.svg">
 <link rel="stylesheet" href="assets/styles.css">
 <link rel="canonical" href="https://lazzyms.github.io/toolbox/">
 
 <meta property="og:type" content="website">
-<meta property="og:title" content="Toolbox — small file utilities for macOS">
-<meta property="og:description" content="Thirty-one small file utilities in one native macOS app: unlock, merge, split and OCR PDFs; convert, compress and annotate images. Batch-friendly, and your files never leave your Mac.">
+<meta property="og:title" content="Toolbox | Local file utilities for macOS and Windows">
+<meta property="og:description" content="Remove PDF and Office passwords, edit PDFs, and convert, compress, or resize images. Files stay on your computer.">
 <meta property="og:url" content="https://lazzyms.github.io/toolbox/">
-<meta property="og:image" content="https://lazzyms.github.io/toolbox/og.png">
-<meta property="og:image:width" content="1200">
-<meta property="og:image:height" content="630">
-<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:card" content="summary">
 <meta name="theme-color" content="#0a0a0a">
 </head>
 <body>
 
-<!-- Icon definitions. Approximations of the SF Symbols the app uses, drawn as
-     1px-stroke line icons to match the Lucide set shadcn/ui ships with. -->
 <svg class="sprite" aria-hidden="true" focusable="false">
   <defs>
     <g id="stroke-defaults"></g>
@@ -133,23 +128,22 @@
     <p>
       <span class="badge badge-secondary badge-multiline">
         <span class="dot" aria-hidden="true"></span>
-        Native macOS utility · Private by design
+        macOS and Windows · Local file processing
       </span>
     </p>
 
-    <h1>Your files.<br><em>Your Mac.</em><br>Done.</h1>
+    <h1>Your files.<br><em>On your device.</em><br>Done.</h1>
 
     <p class="lede">
-      Toolbox brings 31 essential file utilities into one beautifully simple Mac app.
-      Convert, compress, organize and protect your files — without sending them to a
-      website, creating an account or learning another workflow.
+      Remove passwords from PDF and Office files. Edit, organize, and protect PDFs.
+      Convert, compress, and resize images in a desktop app for macOS and Windows.
+      Your files stay on your computer.
     </p>
 
     <div class="cta">
-      <a class="btn btn-default btn-lg" data-dl href="https://github.com/lazzyms/toolbox/releases/latest">
+      <a class="btn btn-default btn-lg" data-dl data-download-auto href="https://github.com/lazzyms/toolbox/releases/download/tauri-v0.2.0/Toolbox-0.2.0-macos.dmg">
         <svg class="ico" aria-hidden="true"><use href="#i-download"/></svg>
-        Download the DMG
-        <span class="meta"></span>
+        <span data-download-label>Download for macOS</span>
       </a>
       <a class="btn btn-outline btn-lg" href="https://github.com/lazzyms/toolbox">
         <svg class="ico" aria-hidden="true"><use href="#i-github"/></svg>
@@ -157,32 +151,48 @@
       </a>
     </div>
     <p class="dl-fallback" id="dl-note">
-      <a href="https://github.com/lazzyms/toolbox/releases/latest">Latest release</a> · Apple silicon &amp; Intel
+      Your device is detected automatically. Every installer is also listed below.
     </p>
-    <p class="cta-note">Free and MIT licensed · macOS 14+ · Apple silicon and Intel</p>
+    <p class="cta-note">Free and MIT licensed · <a href="https://github.com/lazzyms/toolbox/releases/tag/tauri-v0.2.0">Tauri 0.2.0</a> · Released September 6, 2026</p>
 
-    <!-- Interactive recreation of the app UI (HTML/CSS, not a screenshot). -->
-    <figure class="shot">
-      <div class="window" id="demo">
-        <div class="titlebar">
-          <span class="lights" aria-hidden="true"><i></i><i></i><i></i></span>
-          <span class="title">Toolbox</span>
-        </div>
-        <div class="window-body">
-          <nav class="sidebar" aria-label="Utilities">
-            <p class="side-head">PDF</p>
-            <ul class="side-list" data-category="pdf"></ul>
-            <p class="side-head">Images</p>
-            <ul class="side-list" data-category="images"></ul>
-          </nav>
-          <section class="detail" aria-live="polite"></section>
-        </div>
+    <div class="download-panel" id="downloads" aria-labelledby="downloads-title">
+      <p class="kicker" id="downloads-title">Download the current release</p>
+      <div class="download-grid">
+        <a class="download-card" data-download-platform="macos" href="https://github.com/lazzyms/toolbox/releases/download/tauri-v0.2.0/Toolbox-0.2.0-macos.dmg">
+          <span class="download-card-title">macOS</span>
+          <span class="download-card-meta">Apple silicon · DMG</span>
+          <span class="download-card-action">Download directly <span aria-hidden="true">↗</span></span>
+        </a>
+        <a class="download-card" data-download-platform="windows-x64" href="https://github.com/lazzyms/toolbox/releases/download/tauri-v0.2.0/Toolbox-windows-x86_64-setup.exe">
+          <span class="download-card-title">Windows x64</span>
+          <span class="download-card-meta">Intel or AMD · EXE installer</span>
+          <span class="download-card-action">Download directly <span aria-hidden="true">↗</span></span>
+        </a>
+        <a class="download-card" data-download-platform="windows-arm64" href="https://github.com/lazzyms/toolbox/releases/download/tauri-v0.2.0/Toolbox-windows-arm64-setup.exe">
+          <span class="download-card-title">Windows ARM64</span>
+          <span class="download-card-meta">ARM Windows · EXE installer</span>
+          <span class="download-card-action">Download directly <span aria-hidden="true">↗</span></span>
+        </a>
       </div>
-      <figcaption>
-        An interactive recreation of the interface — pick a tool, then press the run
-        button to watch a batch go through.
-      </figcaption>
-    </figure>
+    </div>
+
+    <section class="screenshots" aria-labelledby="screenshots-title">
+      <div class="screenshots-heading">
+        <p class="kicker">Inside Toolbox</p>
+        <h2 id="screenshots-title">A focused workspace for real file work.</h2>
+        <p>See the current Tauri app: a command center for the full catalog and a focused view for password protected documents.</p>
+      </div>
+      <div class="screenshot-grid">
+        <figure class="screenshot-card">
+          <div class="screenshot-frame"><img src="assets/screenshot-command-center.png" alt="Toolbox command center showing the tool library and recent tools" loading="lazy"></div>
+          <figcaption><strong>Command center</strong><span>Find any file action quickly.</span></figcaption>
+        </figure>
+        <figure class="screenshot-card">
+          <div class="screenshot-frame"><img src="assets/screenshot-remove-password.png" alt="Toolbox Remove Password screen with a document drop area and password field" loading="lazy"></div>
+          <figcaption><strong>Remove Password</strong><span>Process a PDF or Office file locally, then save an unlocked copy beside the original.</span></figcaption>
+        </figure>
+      </div>
+    </section>
   </div>
 </section>
 
@@ -190,28 +200,27 @@
 <section class="section" id="tools">
   <div class="wrap">
     <p class="kicker">The toolbox</p>
-    <h2>31 tools for the work between apps.</h2>
+    <h2>File work in one place.</h2>
     <p class="section-lede">
-      The everyday file jobs that are too small for a new app and too useful to do
-      online. Drop in one file or a whole batch, choose what you need, and get clean
-      results back in seconds.
+      The catalog covers documents, PDFs, images, GIFs, and TIFF files. OCR PDF,
+      Blur Faces, and Remove Background are listed as unavailable in the current build.
     </p>
 
     <div class="category-grid">
       <a class="category-card card-interactive" href="pdf.html">
         <span class="category-art category-art-pdf" aria-hidden="true"><span>PDF</span></span>
         <div class="category-copy">
-          <p class="category-count">17 tools</p>
-          <h3>Work with PDFs.</h3>
-          <p>Merge, split, sign, OCR, protect and organize documents without uploading them.</p>
-          <span class="category-link">Explore PDF tools <span aria-hidden="true">→</span></span>
+          <p class="category-count">Documents + PDF</p>
+          <h3>Work with documents.</h3>
+          <p>Remove PDF and Office passwords. Edit, merge, split, sign, and protect PDFs.</p>
+          <span class="category-link">Explore document tools <span aria-hidden="true">→</span></span>
         </div>
       </a>
 
       <a class="category-card card-interactive" href="images.html">
         <span class="category-art category-art-images" aria-hidden="true"><span>IMG</span></span>
         <div class="category-copy">
-          <p class="category-count">14 tools</p>
+          <p class="category-count">Images</p>
           <h3>Make images work harder.</h3>
           <p>Convert, resize, clean up and annotate photos, scans and GIFs in batches.</p>
           <span class="category-link">Explore image tools <span aria-hidden="true">→</span></span>
@@ -227,16 +236,16 @@
     <p class="kicker">Built for trust</p>
     <h2>Private by default. Predictable by design.</h2>
     <p class="section-lede">
-      Toolbox does the careful things quietly: it works locally, protects your originals,
-      and gives you a clear result for every file.
+      Toolbox processes files locally, preserves your originals, and reports which
+      files succeeded or failed.
     </p>
 
     <div class="grid why-grid">
       <article class="card card-interactive">
         <div class="card-header">
           <span class="card-icon"><svg class="ico" aria-hidden="true"><use href="#i-shield"/></svg></span>
-          <h3 class="card-title">Your files stay on your Mac</h3>
-          <p class="card-description">PDFs and photos are processed on-device. No account or upload. Anonymous install measurement is enabled by default and can be turned off in Settings.</p>
+          <h3 class="card-title">Your files stay on your device</h3>
+          <p class="card-description">Documents and images are processed on your computer. No account or file upload is required. Release builds send anonymous install and app-open analytics.</p>
         </div>
       </article>
 
@@ -260,15 +269,15 @@
         <div class="card-header">
           <span class="card-icon"><svg class="ico" aria-hidden="true"><use href="#i-gauge"/></svg></span>
           <h3 class="card-title">Compression with guardrails</h3>
-          <p class="card-description">When a conversion would make an image larger, Toolbox keeps the original bytes instead of handing you a worse result.</p>
+          <p class="card-description">Compress Images copies the original bytes to a new output if re-encoding would make the file larger.</p>
         </div>
       </article>
 
       <article class="card card-interactive">
         <div class="card-header">
           <span class="card-icon"><svg class="ico" aria-hidden="true"><use href="#i-rotate"/></svg></span>
-          <h3 class="card-title">Photos stay upright</h3>
-          <p class="card-description">Camera orientation is handled during resize, so iPhone photos look right wherever you use them next.</p>
+          <h3 class="card-title">Open results from the app</h3>
+          <p class="card-description">Open an output file or reveal it in Finder on macOS or File Explorer on Windows.</p>
         </div>
       </article>
 
@@ -282,10 +291,10 @@
     </div>
 
     <div class="stats">
-      <div class="stat"><b>31</b><span>tools in the sidebar</span></div>
-      <div class="stat"><b>318</b><span>tests over real PDFs and images</span></div>
-      <div class="stat"><b>0</b><span>files uploaded, ever</span></div>
-      <div class="stat"><b>2</b><span>architectures in one binary</span></div>
+      <div class="stat"><b>Local</b><span>file processing</span></div>
+      <div class="stat"><b>Safe</b><span>originals stay untouched</span></div>
+      <div class="stat"><b>Batch</b><span>per-file results</span></div>
+      <div class="stat"><b>Signed</b><span>updates verified before install</span></div>
     </div>
   </div>
 </section>
@@ -298,67 +307,70 @@
 
     <div class="accordion">
       <details>
-        <summary>Can it open a PDF I've lost the password for?<svg class="chevron" aria-hidden="true"><use href="#i-chevron-down"/></svg></summary>
+        <summary>Can it open a document I've lost the password for?<svg class="chevron" aria-hidden="true"><use href="#i-chevron-down"/></svg></summary>
         <div class="accordion-content">
-          <p>No. It decrypts using the password you supply — it doesn't crack, guess or brute-force anything. If you don't know the password, this app can't help you.</p>
+          <p>No. Remove Password uses the password you supply. It supports PDF, Word, Excel, and PowerPoint files, including DOC, DOCX, XLS, XLSX, PPT, and PPTX. Unsupported encryption formats return an error.</p>
         </div>
       </details>
 
       <details>
         <summary>Does anything get uploaded?<svg class="chevron" aria-hidden="true"><use href="#i-chevron-down"/></svg></summary>
         <div class="accordion-content">
-          <p>Your files, never. Every PDF and image is read and written on your own disk, and the <code>ToolboxKit</code> code that does that work has no networking in it at all. Toolbox sends only anonymous installation and app-open measurement to understand adoption; it never sends filenames, paths, file contents or hardware identifiers. You can turn this measurement off in Settings. The other network request is the update check below, which asks before its first request and can be switched off.</p>
+          <p>File processing stays on your computer. Toolbox does not upload your documents or images.</p>
+          <p>Release builds initialize Firebase Analytics and record installation and app-open events with a Tauri platform label. Those event parameters contain no filenames, paths, or file contents. The current Settings panel has no analytics opt-out. Update checks also use the network.</p>
         </div>
       </details>
 
       <details>
         <summary>How do updates work?<svg class="chevron" aria-hidden="true"><use href="#i-chevron-down"/></svg></summary>
         <div class="accordion-content">
-          <p>Through <a href="https://sparkle-project.org">Sparkle</a>, against a feed hosted on this site. On first launch the app asks whether to check automatically — nothing is requested before you answer. Say yes and it checks once a day; either way <b>Toolbox → Check for Updates…</b> works whenever you want it, and both behaviours are togglable in Settings.</p>
-          <p>Every download is verified against an Ed25519 public key baked into the app bundle before anything is installed, and the matching private key lives only in the maintainer's Keychain — so a compromised GitHub account on its own can't push code to installed copies.</p>
+          <p>Release builds check for updates about three seconds after launch. If an update is available, Toolbox asks before downloading and installing it, then restarts.</p>
+          <p>The Tauri updater verifies the download with the public key bundled in the app. The current Settings panel has no update toggle or manual check button.</p>
         </div>
       </details>
 
       <details>
-        <summary>Why isn't it sandboxed?<svg class="chevron" aria-hidden="true"><use href="#i-chevron-down"/></svg></summary>
+        <summary>How do I install Toolbox?<svg class="chevron" aria-hidden="true"><use href="#i-chevron-down"/></svg></summary>
         <div class="accordion-content">
-          <p>Under App Sandbox, picking <code>photo.heic</code> doesn't grant permission to create <code>photo.png</code> beside it — which would break the default “save next to the original” workflow. It runs under the Hardened Runtime instead, which keeps the code-integrity protections without restricting where results can be written. See <code>Resources/Toolbox.entitlements</code>.</p>
+          <p>On macOS, open the DMG and drag Toolbox to Applications. If needed, Control-click Toolbox in Applications and choose Open.</p>
+          <p>On Windows, run the installer for your processor. The current public installers are not Authenticode-signed, so SmartScreen may show “Windows protected your PC.” Only continue after confirming that you downloaded the expected installer from the direct release link.</p>
+          <p>To remove that warning for future releases, publish the Windows installer with a trusted Authenticode certificate, sign it with SignTool during CI, and timestamp the signature. The updater signature does not establish Windows SmartScreen reputation.</p>
         </div>
       </details>
 
       <details>
         <summary>My compressed file came out the same size. Bug?<svg class="chevron" aria-hidden="true"><use href="#i-chevron-down"/></svg></summary>
         <div class="accordion-content">
-          <p>Probably not. Some images genuinely can't be re-encoded smaller — an already-efficient HEIC, or a photo pushed into PNG. Rather than hand you a larger file, the app copies the original bytes through and keeps the right extension.</p>
+          <p>Compress Images keeps the original bytes if re-encoding would increase the size. Its Lossless mode also copies the original bytes. Both modes save a separate output. Compress PDF optimizes stream data and does not guarantee a smaller file.</p>
         </div>
       </details>
 
       <details>
         <summary>What happens if one file in a batch is broken?<svg class="chevron" aria-hidden="true"><use href="#i-chevron-down"/></svg></summary>
         <div class="accordion-content">
-          <p>That file fails and the rest continue. The results list tells you which one it was and why, so you can retry just that file.</p>
+          <p>Tools that process files separately report a failure for that input and continue with the rest. Tools that combine files, such as Merge PDF, need valid inputs to produce a combined output.</p>
         </div>
       </details>
 
       <details>
-        <summary>Which macOS versions are supported?<svg class="chevron" aria-hidden="true"><use href="#i-chevron-down"/></svg></summary>
+        <summary>Which platforms have installers?<svg class="chevron" aria-hidden="true"><use href="#i-chevron-down"/></svg></summary>
         <div class="accordion-content">
-          <p>macOS 14 Sonoma and later, on both Apple silicon and Intel. WebP <em>encoding</em> is only offered when the running system can actually write it — the option hides itself rather than failing at save time.</p>
+          <p>The current Tauri release provides a macOS Apple silicon DMG and separate Windows x64 and ARM64 installers. This release line has no Intel Mac or Linux installer.</p>
         </div>
       </details>
 
       <details>
         <summary>Can I request a tool?<svg class="chevron" aria-hidden="true"><use href="#i-chevron-down"/></svg></summary>
         <div class="accordion-content">
-          <p>Open an issue on <a href="https://github.com/lazzyms/toolbox/issues">GitHub</a>. Small, local, file-in/file-out jobs are exactly what this is for. If you'd rather build it, <a href="https://github.com/lazzyms/toolbox/blob/main/CONTRIBUTING.md">CONTRIBUTING.md</a> walks through the three edits a new tool needs.</p>
+          <p>Open an issue on <a href="https://github.com/lazzyms/toolbox/issues">GitHub</a>. To contribute, start with the <a href="https://github.com/lazzyms/toolbox/blob/main/README.md#development">Tauri development guide</a> and open your pull request against <code>main</code>.</p>
         </div>
       </details>
 
       <details>
         <summary>Can I fork it, rebrand it and sell it?<svg class="chevron" aria-hidden="true"><use href="#i-chevron-down"/></svg></summary>
         <div class="accordion-content">
-          <p>Yes — all of that. Toolbox is under the <a href="https://github.com/lazzyms/toolbox/blob/main/LICENSE">MIT licence</a>, so you can use it, modify it, ship it under your own name and charge money for it, commercially or otherwise. The only condition is that you keep the copyright and licence notice somewhere in your copy. No permission needed, and nothing to pay.</p>
-          <p>Two practical notes if you do: the app ships your own build, so you'll want to point <code>SUFeedURL</code> and the Ed25519 key in <code>Resources/Info.plist</code> at your own update feed rather than this one, and Sparkle — the only dependency — is MIT licensed too, so it comes along on the same terms.</p>
+          <p>Yes. Toolbox uses the <a href="https://github.com/lazzyms/toolbox/blob/main/LICENSE">MIT license</a>. Keep the copyright and license notice in your copy, and review the licenses of bundled dependencies.</p>
+          <p>For your own release, configure your updater endpoint and public key in <code>ToolboxTauri/src-tauri/tauri.conf.json</code>. Configure analytics for your distribution too.</p>
         </div>
       </details>
     </div>
@@ -368,13 +380,12 @@
 <section class="closer">
   <div class="wrap">
     <span class="brand-mark big" aria-hidden="true"></span>
-    <h2>The utility drawer for your Mac.</h2>
-    <p>Keep the small jobs close at hand.</p>
+    <h2>Finish the file work.</h2>
+    <p>PDF, Office, and image tools for macOS and Windows.</p>
     <div class="cta">
-      <a class="btn btn-default btn-lg" data-dl href="https://github.com/lazzyms/toolbox/releases/latest">
+      <a class="btn btn-default btn-lg" data-dl data-download-auto href="https://github.com/lazzyms/toolbox/releases/download/tauri-v0.2.0/Toolbox-0.2.0-macos.dmg">
         <svg class="ico" aria-hidden="true"><use href="#i-download"/></svg>
-        Download the DMG
-        <span class="meta"></span>
+        <span data-download-label>Download for macOS</span>
       </a>
       <a class="btn btn-outline btn-lg" href="https://github.com/lazzyms/toolbox">
         <svg class="ico" aria-hidden="true"><use href="#i-github"/></svg>
@@ -388,13 +399,13 @@
 
 <footer class="footer">
   <div class="wrap footer-inner">
-    <p>Toolbox — MIT licensed. Use it, fork it, rebrand it, sell it.</p>
+    <p>Toolbox. Free and MIT licensed.</p>
     <nav aria-label="Footer">
       <a href="https://github.com/lazzyms/toolbox">Source</a>
-      <a href="https://github.com/lazzyms/toolbox/releases">Releases</a>
+      <a href="https://github.com/lazzyms/toolbox/releases?q=tauri-v">Releases</a>
       <a href="https://github.com/lazzyms/toolbox/issues">Issues</a>
-      <a href="https://github.com/lazzyms/toolbox/blob/main/CONTRIBUTING.md">Contributing</a>
-      <a href="https://github.com/lazzyms/toolbox/blob/main/LICENSE">Licence</a>
+      <a href="https://github.com/lazzyms/toolbox/blob/main/README.md#development">Contributing</a>
+      <a href="https://github.com/lazzyms/toolbox/blob/main/LICENSE">License</a>
       <a href="https://buymeacoffee.com/lazzyms" target="_blank" rel="noopener">Buy me a coffee</a>
     </nav>
   </div>
@@ -402,17 +413,5 @@
 
 <script src="assets/app.js"></script>
 
-<!-- Buy Me a Coffee — a floating button the vendor script injects itself. It is
-     the one piece of the page not served from this repo, and the only third
-     party the site talks to; everything else here is local and static. -->
-<script data-name="BMC-Widget" data-cfasync="false"
-        src="https://cdnjs.buymeacoffee.com/1.0.0/widget.prod.min.js"
-        data-id="gBqcsJK"
-        data-description="Support me on Buy me a coffee!"
-        data-message="Free forever. Coffee optional"
-        data-color="#FF813F"
-        data-position="Right"
-        data-x_margin="18"
-        data-y_margin="18"></script>
 </body>
 </html>

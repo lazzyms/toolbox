@@ -1,5 +1,8 @@
 # ADR 0002: Upscaling beyond bicubic
 
+> Historical ADR from the Swift line. It does not describe a current Tauri
+> feature commitment.
+
 Status: proposed · Closes #35
 
 ## Context

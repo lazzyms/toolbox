@@ -1,0 +1,213 @@
+name: Tauri Build
+
+# Branch build for the Tauri port (issue #95, distribution setup). Every push to
+# `main` (or a `ci/**` rehearsal branch) verifies the Rust kit with the test
+# suite and produces unsigned installers for both platforms as runnable artifacts.
+# Nothing is signed, tagged, or released here: public releases are handled by the
+# Tauri release workflow after the required signing credentials are configured.
+on:
+  push:
+    branches:
+      - main
+      - 'ci/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tauri-build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-26
+            name: macOS
+          - os: windows-latest
+            name: Windows
+    runs-on: ${{ matrix.os }}
+    env:
+      TOOLBOX_REQUIRE_QPDF: '1'
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Install Rust (Windows)
+        if: runner.os == 'Windows'
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ToolboxTauri/src-tauri
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ToolboxTauri/package-lock.json
+
+      - name: Install frontend deps
+        run: npm ci
+        working-directory: ToolboxTauri
+
+      - name: Install Playwright browser
+        run: npx playwright install chromium
+        working-directory: ToolboxTauri
+
+      - name: Run UI automation
+        run: npm run test:ui
+        working-directory: ToolboxTauri
+
+      - name: Run analytics tests
+        run: npm run test:analytics
+        working-directory: ToolboxTauri
+
+      - name: Install qpdf (macOS)
+        if: runner.os == 'macOS'
+        run: brew install qpdf poppler
+
+      - name: Install qpdf (Windows)
+        if: runner.os == 'Windows'
+        run: choco install qpdf poppler -y
+
+      - name: Stage qpdf as Windows bundle resources
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: ToolboxTauri
+        run: |
+          $popplerVersion = '26.02.0-0'
+          $popplerSha256 = '993e4a94376ed712fafc7058d724ea0b943d118bbd2305cd9ed55174eb85cda5'
+          $popplerArchive = Join-Path $env:RUNNER_TEMP "poppler-$popplerVersion.zip"
+          Invoke-WebRequest `
+            -Uri "https://github.com/oschwartz10612/poppler-windows/releases/download/v$popplerVersion/Release-$popplerVersion.zip" `
+            -OutFile $popplerArchive
+          if ((Get-FileHash $popplerArchive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $popplerSha256) {
+            throw 'Poppler archive checksum did not match the pinned release'
+          }
+          $popplerExtract = Join-Path $env:RUNNER_TEMP "poppler-$popplerVersion"
+          Expand-Archive -Path $popplerArchive -DestinationPath $popplerExtract -Force
+          $pdftoppm = Get-ChildItem $popplerExtract -Recurse -Filter pdftoppm.exe |
+            Select-Object -First 1
+          if (-not $pdftoppm) { throw 'Could not locate pdftoppm.exe in the Poppler archive' }
+          $env:PATH = "$($pdftoppm.DirectoryName);$env:PATH"
+          $pdftoppm.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          New-Item -ItemType Directory -Force -Path src-tauri\resources | Out-Null
+          $qpdf = Get-ChildItem "$env:ChocolateyInstall\lib\qpdf" -Recurse -Filter qpdf.exe |
+            Select-Object -First 1
+          if (-not $qpdf) { throw 'Could not locate the real qpdf.exe in the Chocolatey package' }
+          Write-Host "Staging $($qpdf.FullName)"
+          Copy-Item $qpdf.FullName src-tauri\resources\qpdf.exe -Force
+          Get-ChildItem $qpdf.DirectoryName -Filter *.dll |
+            Copy-Item -Destination src-tauri\resources -Force
+          Write-Host "Staging $($pdftoppm.FullName)"
+          Copy-Item $pdftoppm.FullName src-tauri\resources\pdftoppm.exe -Force
+          Get-ChildItem $pdftoppm.DirectoryName -Filter *.dll |
+            Copy-Item -Destination src-tauri\resources -Force
+          & src-tauri\resources\qpdf.exe --version
+          '{"bundle": {"resources": ["resources/*"]}}' |
+            Out-File -Encoding ascii resources-qpdf.json
+
+      - name: Run kit tests
+        run: cargo test
+        working-directory: ToolboxTauri/src-tauri
+
+      - name: Run native E2E matrix
+        run: npm run test:native:e2e
+        working-directory: ToolboxTauri
+
+      - name: Verify the tool matrix
+        run: npm run check:matrix
+        working-directory: ToolboxTauri
+
+      - name: Build unsigned macOS app
+        if: runner.os == 'macOS'
+        run: npm run tauri build
+        working-directory: ToolboxTauri
+
+      - name: Bundle qpdf into app (macOS)
+        if: runner.os == 'macOS'
+        working-directory: ToolboxTauri
+        run: |
+          ./scripts/bundle-qpdf.sh \
+            "$(pwd)/src-tauri/target/release/bundle/macos/Toolbox.app"
+
+      - name: Create macOS DMG from bundled app
+        if: runner.os == 'macOS'
+        run: |
+          version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          ./scripts/make-dmg.sh \
+            "$(pwd)/src-tauri/target/release/bundle/macos/Toolbox.app" \
+            "$(pwd)/src-tauri/target/release/bundle/dmg/Toolbox_${version}_aarch64.dmg"
+        working-directory: ToolboxTauri
+
+      - name: Verify bundled qpdf (macOS)
+        if: runner.os == 'macOS'
+        working-directory: ToolboxTauri
+        run: |
+          set -euo pipefail
+          DMG="$(find src-tauri/target/release/bundle/dmg -name '*.dmg' -print -quit)"
+          MOUNT="$(mktemp -d)"
+          hdiutil attach -nobrowse -readonly -mountpoint "$MOUNT" "$DMG" >/dev/null
+          APP="$MOUNT/Toolbox.app"
+          test -x "$APP/Contents/Resources/qpdf-bin/qpdf"
+          "$APP/Contents/Resources/qpdf-bin/qpdf" --version
+          test -x "$APP/Contents/Resources/pdf-bin/pdftoppm"
+          "$APP/Contents/Resources/pdf-bin/pdftoppm" -h >/dev/null
+          codesign --verify --deep --strict "$APP"
+          hdiutil detach "$MOUNT" >/dev/null
+
+      - name: Build unsigned Windows bundles with qpdf resources
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: ToolboxTauri
+        run: npm run tauri build -- --config resources-qpdf.json
+
+      - name: Verify bundled qpdf (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: ToolboxTauri
+        run: |
+          $bundled = Get-ChildItem src-tauri\target\release -Recurse -Filter qpdf.exe |
+            Select-Object -First 1
+          if (-not $bundled) { throw 'qpdf.exe was not included in the Windows release tree' }
+          & $bundled.FullName --version
+          $pdftoppm = Get-ChildItem src-tauri\target\release -Recurse -Filter pdftoppm.exe |
+            Select-Object -First 1
+          if (-not $pdftoppm) { throw 'pdftoppm.exe was not included in the Windows release tree' }
+          & $pdftoppm.FullName -h | Out-Null
+          if (-not (Get-ChildItem src-tauri\target\release\bundle\nsis -Filter *.exe)) {
+            throw 'NSIS installer was not produced'
+          }
+          if (-not (Get-ChildItem src-tauri\target\release\bundle\msi -Filter *.msi)) {
+            throw 'MSI installer was not produced'
+          }
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v7
+        with:
+          name: toolbox-${{ matrix.name }}
+          path: |
+            ToolboxTauri/src-tauri/target/release/bundle/macos/*.app
+            ToolboxTauri/src-tauri/target/release/bundle/dmg/*.dmg
+            ToolboxTauri/src-tauri/target/release/bundle/nsis/*.exe
+            ToolboxTauri/src-tauri/target/release/bundle/msi/*.msi
+          if-no-files-found: warn
+
+      - name: Summarise
+        run: |
+          {
+            echo "## Toolbox Tauri — ${{ matrix.name }}"
+            echo "Kit tests pass; unsigned installers attached as artifacts."
+            echo "Ad-hoc/unsigned: suitable for testing, not public distribution."
+          } >> "$GITHUB_STEP_SUMMARY"
