@@ -210,6 +210,6 @@ jobs:
             --head "$branch" \
             --title "Publish Tauri $VERSION updater manifest" \
             --body "Publishes the signed updater manifest for Tauri $VERSION at the protected tauri-port endpoint.")"
-          gh pr merge "$pr_url" --squash --auto \
+          gh pr merge "$pr_url" --squash \
             --subject "Publish Tauri $VERSION update manifest [skip ci]" \
             --body "Publishes the signed updater manifest for Tauri $VERSION."
