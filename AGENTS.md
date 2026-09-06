@@ -3,9 +3,9 @@
 ## Scope
 
 This branch is the cross-platform Tauri app. The legacy Swift macOS app and its
-release workflow live only on `main`. Do not reintroduce Swift package files,
-Swift sources, or the Swift release workflow here. Keep `docs/` unchanged unless
-the task explicitly targets the website.
+release workflow were removed during the migration to Tauri. Do not reintroduce
+Swift package files, Swift sources, or the Swift release workflow here. Keep
+`docs/` unchanged unless the task explicitly targets the website.
 
 ## Commands
 
@@ -40,6 +40,6 @@ per-file failure isolation.
 
 ## Release
 
-`tauri-port` is the default branch and primary release line. Its release workflow
-publishes signed macOS and Windows artifacts plus the updater manifest. The Swift
-release workflow remains on `main` and must not be copied into this branch.
+`main` is the default branch and primary release line. Its release workflow
+publishes signed macOS and Windows artifacts plus the updater manifest. Keep the
+release path cross-platform and Tauri based.

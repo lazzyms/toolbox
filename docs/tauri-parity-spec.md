@@ -1,5 +1,5 @@
 > Historical design record. This specification describes the migration target,
-> not the current `tauri-port` feature or verification status. See
+> not the current `main` feature or verification status. See
 > [the current tool matrix](tauri-tool-matrix.md) and [release readiness](tauri-release-readiness.md)
 > for the shipped catalog and checks.
 

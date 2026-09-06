@@ -2,7 +2,7 @@ name: Tauri Release
 
 on:
   push:
-    branches: [tauri-port]
+    branches: [main]
   workflow_dispatch:
     inputs:
       version:
@@ -177,7 +177,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v7
-        with: {ref: tauri-port, fetch-depth: 0}
+        with: {ref: main, fetch-depth: 0}
       - uses: actions/download-artifact@v7
         with: {name: toolbox-macos-aarch64, path: release-assets}
       - uses: actions/download-artifact@v7
@@ -194,7 +194,7 @@ jobs:
             '{version:$v,notes:("Toolbox Tauri " + $v),platforms:{"darwin-aarch64":{url:("https://github.com/lazzyms/toolbox/releases/download/tauri-v"+$v+"/Toolbox-macos-aarch64.app.tar.gz"),signature:$ms},"windows-x86_64":{url:("https://github.com/lazzyms/toolbox/releases/download/tauri-v"+$v+"/Toolbox-windows-x86_64-setup.exe"),signature:$ws},"windows-aarch64":{url:("https://github.com/lazzyms/toolbox/releases/download/tauri-v"+$v+"/Toolbox-windows-arm64-setup.exe"),signature:$wa}}}' \
             > tauri-latest.json
           gh release create "tauri-v$VERSION" release-assets/* tauri-latest.json \
-            --title "Toolbox Tauri $VERSION" --notes "Signed macOS and Windows installers."
+            --title "Toolbox Tauri $VERSION" --notes "macOS and Windows installers with signed Tauri updater artifacts."
       - name: Publish manifest through protected branch PR
         run: |
           set -euo pipefail
@@ -206,10 +206,10 @@ jobs:
           git commit -m "Publish Tauri $VERSION update manifest [skip ci]"
           git push origin "HEAD:$branch"
           pr_url="$(gh pr create \
-            --base tauri-port \
+            --base main \
             --head "$branch" \
             --title "Publish Tauri $VERSION updater manifest" \
-            --body "Publishes the signed updater manifest for Tauri $VERSION at the protected tauri-port endpoint.")"
+            --body "Publishes the signed updater manifest for Tauri $VERSION at the protected main endpoint.")"
           gh pr merge "$pr_url" --squash \
             --subject "Publish Tauri $VERSION update manifest [skip ci]" \
             --body "Publishes the signed updater manifest for Tauri $VERSION."

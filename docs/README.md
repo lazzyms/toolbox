@@ -1,7 +1,7 @@
 # Toolbox documentation
 
 The public website is [index.html](index.html). It describes the current Tauri
-release on `tauri-port`.
+release on `main`.
 
 Current references:
 
