@@ -1,6 +1,6 @@
 # Toolbox Tauri feature map
 
-The primary surface is the cross-platform Tauri desktop window. Every registry entry below has a dedicated verification recipe and invokes a typed Rust command through Tauri IPC.
+The primary surface is the cross-platform Tauri desktop window. Every registry entry below has a dedicated verification recipe. Implemented entries invoke a typed Rust command through Tauri IPC; unavailable entries document the prerequisite that currently prevents the user path.
 
 | Feature | Entry point | Automated proof |
 | --- | --- | --- |
@@ -9,6 +9,7 @@ The primary surface is the cross-platform Tauri desktop window. Every registry e
 | [Merge PDF](pdf-merge.md) | PDF → Merge | qpdf output page count |
 | [Watermark PDF](pdf-watermark.md) | PDF → Watermark | overlay output and original preservation |
 | [Crop PDF](pdf-crop.md) | PDF → Crop | MediaBox and selected scope |
+| [Edit PDF](pdf-edit.md) | PDF → Edit | typed annotation output and original preservation |
 | [Protect PDF](protect-pdf.md) | PDF → Protect | encrypted output round-trip |
 | [Images to PDF](images-to-pdf.md) | PDF → Images to PDF | page count and dimensions |
 | [PDF to Images](pdf-to-images.md) | PDF → PDF to Images | rendered image output |
