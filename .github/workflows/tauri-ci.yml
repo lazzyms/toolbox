@@ -146,9 +146,10 @@ jobs:
       - name: Create macOS DMG from bundled app
         if: runner.os == 'macOS'
         run: |
+          version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
           ./scripts/make-dmg.sh \
             "$(pwd)/src-tauri/target/release/bundle/macos/Toolbox.app" \
-            "$(pwd)/src-tauri/target/release/bundle/dmg/Toolbox_0.1.0_aarch64.dmg"
+            "$(pwd)/src-tauri/target/release/bundle/dmg/Toolbox_${version}_aarch64.dmg"
         working-directory: ToolboxTauri
 
       - name: Verify bundled qpdf (macOS)

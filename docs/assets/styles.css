@@ -217,7 +217,7 @@ code {
 .btn-icon { width: 2.25rem; height: 2.25rem; padding: 0; }
 .btn-icon .ico { width: 1rem; height: 1rem; }
 
-/* Version/size detail resolved from the releases API, kept quiet inside the button. */
+/* Release details stay quiet inside the download controls. */
 .btn .meta { font-weight: 400; opacity: .7; font-size: .8125rem; }
 .btn .meta:empty { display: none; }
 
@@ -436,134 +436,48 @@ details .accordion-content p { font-size: .875rem; color: var(--muted-foreground
 .cta-note { margin-top: .5rem; }
 .cta-note a, .dl-fallback a { text-decoration: underline; text-underline-offset: 3px; }
 
-/* ─────────────────────────── app window mock ─────────────────────────── */
-
-.shot { margin: clamp(2.75rem, 5vw, 4.5rem) 0 0; }
-
-.window {
-  max-width: 58rem; margin-inline: auto;
-  background: var(--card);
+.download-panel {
+  max-width: 58rem;
+  margin: clamp(3rem, 6vw, 5rem) auto 0;
+  padding: 1.5rem;
   border: 1px solid var(--border);
-  border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-lg);
-  overflow: hidden;
+  border-radius: 1.25rem;
+  background: color-mix(in oklab, var(--card) 88%, transparent);
   text-align: left;
 }
-
-.titlebar {
-  position: relative;
-  display: flex; align-items: center;
-  height: 2.5rem; padding: 0 .875rem;
-  background: var(--muted);
-  border-bottom: 1px solid var(--border);
-}
-/* Window controls, monochrome: outlined circles rather than red/amber/green. */
-.lights { display: flex; gap: .5rem; }
-.lights i {
-  width: .6875rem; height: .6875rem; border-radius: 50%; display: block;
-  background: color-mix(in oklab, var(--foreground) 22%, transparent);
-}
-.titlebar .title {
-  position: absolute; inset: 0; display: grid; place-items: center;
-  font-size: .8125rem; font-weight: 500; color: var(--muted-foreground);
-  pointer-events: none;
-}
-
-.window-body { display: grid; grid-template-columns: 13.5rem 1fr; min-height: 27rem; }
-
-.sidebar {
-  background: color-mix(in oklab, var(--muted) 55%, var(--card));
-  border-right: 1px solid var(--border);
-  padding: .75rem .5rem;
-}
-.side-head {
-  font-size: .6875rem; font-weight: 500; text-transform: uppercase;
-  letter-spacing: .06em; color: var(--muted-foreground);
-  padding: .75rem .625rem .375rem;
-}
-.side-head:first-child { padding-top: .125rem; }
-.side-list { list-style: none; margin: 0; padding: 0; }
-.side-list button {
-  display: flex; align-items: center; gap: .625rem;
-  width: 100%; text-align: left;
-  font: inherit; font-size: .8125rem; font-weight: 500;
-  color: var(--foreground);
-  background: none; border: 1px solid transparent; border-radius: var(--radius-md);
-  padding: .375rem .625rem;
-  cursor: pointer;
-  transition: background-color .15s, color .15s;
-}
-.side-list button:hover { background: var(--accent); }
-.side-list button[aria-current="true"] {
-  background: var(--primary); color: var(--primary-foreground);
-}
-.side-list .ico { width: .875rem; height: .875rem; }
-.side-list span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-.detail { display: flex; flex-direction: column; }
-.detail-scroll { padding: 1.125rem; display: grid; gap: 1rem; align-content: start; flex: 1; }
-
-.detail-head { display: flex; gap: .75rem; align-items: flex-start; }
-.detail-head .card-icon { width: 2rem; height: 2rem; }
-.detail-head h4 { font-size: .9375rem; font-weight: 600; }
-.detail-head p { font-size: .8125rem; color: var(--muted-foreground); margin-top: .125rem; }
-
-.dropzone {
-  border: 1px dashed var(--border-strong);
-  border-radius: var(--radius-lg);
-  background: color-mix(in oklab, var(--muted) 40%, transparent);
-  padding: 1.625rem 1.125rem;
-  text-align: center;
-  display: grid; gap: .5rem; justify-items: center;
-  transition: border-color .18s, background-color .18s;
-}
-.dropzone.hot {
-  border-color: var(--foreground);
-  background: color-mix(in oklab, var(--muted) 90%, transparent);
-}
-.dropzone .glyph { font-size: 1.25rem; line-height: 1; color: var(--muted-foreground); }
-.dropzone.hot .glyph { color: var(--foreground); }
-.dropzone p { font-size: .8125rem; color: var(--muted-foreground); }
-
-.files { display: grid; gap: .375rem; }
-.filerow {
-  display: flex; align-items: center; gap: .625rem;
-  font-size: .8125rem;
-  padding: .5rem .75rem;
+.download-panel .kicker { margin-bottom: 1rem; }
+.download-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .75rem; }
+.download-card {
+  display: grid;
+  gap: .25rem;
+  padding: 1rem;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: color-mix(in oklab, var(--muted) 35%, transparent);
-  animation: pop .25s ease-out both;
+  border-radius: var(--radius-lg);
+  background: var(--background);
+  transition: border-color .2s, transform .2s, box-shadow .2s;
 }
-.filerow .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.filerow .size { margin-left: auto; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
-.filerow .state { width: .875rem; color: var(--muted-foreground); font-size: .8125rem; line-height: 1; }
-.filerow.done .state { color: var(--foreground); }
+.download-card:hover { text-decoration: none; border-color: color-mix(in oklab, var(--brand) 52%, var(--border)); transform: translateY(-2px); box-shadow: var(--shadow-sm); }
+.download-card[data-recommended="true"] { border-color: color-mix(in oklab, var(--brand) 58%, var(--border)); box-shadow: 0 0 0 2px color-mix(in oklab, var(--brand) 14%, transparent); }
+.download-card-title { font-weight: 650; }
+.download-card-meta { color: var(--muted-foreground); font-size: .75rem; }
+.download-card-action { margin-top: .65rem; color: var(--brand); font-size: .75rem; font-weight: 650; }
 
-@keyframes pop { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
-
-.opt { display: flex; align-items: center; gap: .625rem; font-size: .8125rem; }
-.opt > label:first-child {
-  width: 4.75rem; flex: none;
-  color: var(--muted-foreground); font-weight: 500;
+.screenshots { margin-top: clamp(4rem, 8vw, 7rem); text-align: left; }
+.screenshots-heading { max-width: 42rem; }
+.screenshots-heading h2 { margin-top: .75rem; }
+.screenshots-heading > p:last-child { margin-top: 1rem; color: var(--muted-foreground); font-size: 1rem; }
+.screenshot-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.25rem; margin-top: 2.5rem; }
+.screenshot-card { margin: 0; }
+.screenshot-frame {
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 1.25rem;
+  background: #090b10;
+  box-shadow: 0 26px 65px rgb(0 0 0 / 28%), 0 0 0 1px rgb(255 255 255 / 4%);
 }
-.opt .val { font-variant-numeric: tabular-nums; color: var(--muted-foreground); min-width: 2.25rem; }
-.hint { font-size: .75rem; color: var(--muted-foreground); padding-left: 5.375rem; margin-top: -.375rem; }
-.check { display: flex; align-items: center; gap: .5rem; color: var(--muted-foreground); }
-
-.runbar {
-  display: flex; align-items: center; gap: .75rem;
-  padding: .75rem 1.125rem;
-  border-top: 1px solid var(--border);
-  background: color-mix(in oklab, var(--muted) 55%, var(--card));
-}
-.runbar .status { font-size: .8125rem; color: var(--muted-foreground); }
-.runbar .btn { margin-left: auto; }
-
-.shot figcaption {
-  text-align: center; font-size: .8125rem; color: var(--muted-foreground);
-  margin-top: 1.25rem; max-width: 34rem; margin-inline: auto;
-}
+.screenshot-frame img { display: block; width: 100%; height: auto; }
+.screenshot-card figcaption { display: grid; gap: .25rem; margin-top: 1rem; font-size: .8125rem; }
+.screenshot-card figcaption span { color: var(--muted-foreground); }
 
 /* ─────────────────────────── sections ─────────────────────────── */
 
@@ -711,24 +625,14 @@ pre .d { color: var(--foreground); font-weight: 600; }
 
 @media (max-width: 860px) {
   .nav-links { display: none; }
-  .window-body { grid-template-columns: 1fr; min-height: 0; }
-  .sidebar {
-    border-right: 0; border-bottom: 1px solid var(--border);
-    display: flex; gap: .375rem; overflow-x: auto; padding: .625rem;
-    scrollbar-width: none;
-  }
-  .sidebar::-webkit-scrollbar { display: none; }
-  .side-head { display: none; }
-  .side-list { display: flex; gap: .375rem; }
-  .side-list button { white-space: nowrap; border-color: var(--border); }
-  .hint { padding-left: 0; }
-  .opt { flex-wrap: wrap; }
 }
 
 @media (max-width: 560px) {
   .card { padding: 1.25rem; }
   .alert { padding: 1.125rem 1.25rem; }
   .cta .btn { width: 100%; }
+  .download-panel { padding: 1.125rem; }
+  .download-grid, .screenshot-grid { grid-template-columns: 1fr; }
   .stat b { font-size: 1.625rem; }
 }
 
@@ -809,17 +713,6 @@ h2 { font-size: clamp(2rem, 4vw, 3.6rem); letter-spacing: -.06em; line-height: 1
 .btn-default:hover { background: var(--brand-deep); }
 .btn-outline { background: color-mix(in oklab, var(--card) 72%, transparent); backdrop-filter: blur(10px); border-color: var(--border-strong); }
 .cta-note, .dl-fallback { font-size: .75rem; }
-
-.shot { margin-top: clamp(4rem, 8vw, 7rem); }
-.window { border-radius: 1.25rem; border-color: rgb(255 255 255 / 18%); box-shadow: 0 35px 90px rgb(0 0 0 / 45%), 0 0 0 1px rgb(255 255 255 / 4%); }
-.titlebar { height: 2.75rem; background: linear-gradient(180deg, #252a34, #1a1e26); }
-.lights i { width: .7rem; height: .7rem; }
-.lights i:nth-child(1) { background: #ff5f57; }
-.lights i:nth-child(2) { background: #ffbd2e; }
-.lights i:nth-child(3) { background: #28c840; }
-.sidebar { background: #101319; }
-.side-list button[aria-current="true"] { background: linear-gradient(100deg, #2f7bff, #1957d8); color: white; box-shadow: 0 4px 12px rgb(21 84 216 / 25%); }
-.shot figcaption { margin-top: 1.5rem; }
 
 .section { padding: clamp(5.5rem, 11vw, 10rem) 0; }
 .section.alt { background: linear-gradient(180deg, color-mix(in oklab, var(--muted) 55%, var(--background)), var(--background)); }

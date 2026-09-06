@@ -1,5 +1,9 @@
 # Image Format Fidelity Research: Rust vs. Apple ImageIO
 
+> Historical Swift parity research. The current Tauri implementation does not
+> promise every behavior described here. Use the Tauri source and [the current
+> tool matrix](tauri-tool-matrix.md) for shipped behavior.
+
 This report evaluates the capabilities of the Rust `image` crate and its ecosystem compared to Apple's `ImageIO` framework, specifically for the Tauri Toolbox project.
 
 ## Executive Summary

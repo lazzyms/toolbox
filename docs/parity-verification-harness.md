@@ -1,5 +1,9 @@
 # Tauri parity verification harness
 
+> Historical acceptance design. The repository does not currently run every gate
+> described below. Use [the current release checks](tauri-release-readiness.md)
+> and [the Tauri tool matrix](tauri-tool-matrix.md) for the checks that exist.
+
 ## Goal
 
 Prove the parity contract from [Define the parity acceptance contract for all
@@ -124,4 +128,3 @@ required live-platform jobs fail. Model-dependent jobs must fail closed when a
 model is missing rather than being skipped. A platform job may be marked
 unavailable only by an explicit feature flag backed by the platform-support
 decision and a recorded reason; it cannot be inferred from runner absence.
-
