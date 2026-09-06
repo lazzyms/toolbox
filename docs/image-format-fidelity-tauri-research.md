@@ -1,5 +1,9 @@
 # Tauri image-format fidelity decision research
 
+> Historical research and proposed behavior. It is not a statement of the
+> current release. The shipped Tauri behavior is recorded in the registry and
+> source implementation.
+
 ## Scope
 
 This note resolves the image-format question for the Tauri parity map. The
@@ -83,4 +87,3 @@ for oriented JPEG, transparent PNG, lossless/lossy WebP, HEIC, animated GIF,
 multi-page TIFF, metadata-bearing files, and every icon preset. The current
 Tauri commands should not be considered parity-complete until those fixtures
 exercise both adapter-present and adapter-absent cases.
-

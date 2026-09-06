@@ -1,6 +1,7 @@
 .build/
 dist/
 .firebase/
+.verification/
 # Editor config carries workspace-specific paths.
 .vscode/
 .DS_Store

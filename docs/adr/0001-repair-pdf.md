@@ -1,5 +1,8 @@
 # ADR 0001: Repairing damaged PDFs
 
+> Historical ADR from the Swift line. The current Tauri implementation uses its
+> native kit and qpdf resources; this record is retained for design history.
+
 Status: proposed · Closes #24
 
 ## Context

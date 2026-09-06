@@ -32,9 +32,15 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -n "$INPUT" ]]; then version="$INPUT"; else
-            tag="$(git tag --list 'tauri-v[0-9]*' --sort=-v:refname | head -1)"
+            configured="$(jq -r '.version' ToolboxTauri/src-tauri/tauri.conf.json)"
+            [[ "$configured" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+            tag="$(git tag --list 'tauri-v[0-9]*' --sort=-v:refname | sed -n '1p')"
             current="${tag#tauri-v}"
-            if [[ -z "$current" ]]; then version=0.1.3; else
+            if [[ -z "$current" ]]; then
+              version="$configured"
+            elif [[ "$configured" != "$current" && "$(printf '%s\n' "$configured" "$current" | sort -V | tail -1)" == "$configured" ]]; then
+              version="$configured"
+            else
               IFS=. read -r major minor patch <<< "$current"
               version="$major.$minor.$((patch + 1))"
             fi

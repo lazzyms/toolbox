@@ -1,5 +1,10 @@
 # PDF Encryption Fidelity Research: Rust vs. PDFKit
 
+> Historical research. The current Tauri implementation uses its native kit and
+> bundled qpdf workflow for PDF operations, plus a Rust adapter for Office
+> password removal. Read [the current tool matrix](tauri-tool-matrix.md) for
+> shipped commands and status.
+
 This research investigates the capability of Rust libraries to handle PDF encryption and password management compared to Apple's native `PDFKit`, specifically for "Protect PDF" (adding passwords) and "Remove Password PDF" (removing passwords) tools.
 
 ## Executive Summary

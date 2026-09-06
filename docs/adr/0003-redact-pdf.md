@@ -1,5 +1,8 @@
 # ADR 0003: Redaction that actually removes
 
+> Historical ADR from the Swift line. It does not describe a current Tauri
+> feature commitment.
+
 Status: proposed · Design for #23 (implementation to follow)
 
 ## Context

@@ -1,4 +1,7 @@
 <?xml version="1.0" standalone="yes"?>
+<!-- Deprecated on tauri-port. Tauri updates use the signed JSON manifest
+     published as tauri-latest.json on the tauri-port branch. The items below
+     are retained as historical Swift release records. -->
 <rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
     <channel>
         <title>Toolbox</title>
