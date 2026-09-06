@@ -1,5 +1,9 @@
 # Portable offline vision engine decision
 
+> Historical decision record. The current release keeps OCR, face blur, and
+> background removal unavailable because it does not bundle their resources.
+> See [offline vision engines](tauri-vision-engines.md) for the current status.
+
 ## Scope
 
 This note resolves the engine-selection question for OCR, face blur, and
@@ -104,4 +108,3 @@ the application resources and validates its manifest before execution.
 - [U²-Net repository](https://github.com/xuebinqin/U-2-Net)
 - [U²-Net Apache 2.0 license](https://github.com/xuebinqin/U-2-Net/blob/master/LICENSE)
 - [ONNX Runtime installation documentation](https://onnxruntime.ai/docs/install/)
-

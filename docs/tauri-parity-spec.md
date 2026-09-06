@@ -1,3 +1,8 @@
+> Historical design record. This specification describes the migration target,
+> not the current `tauri-port` feature or verification status. See
+> [the current tool matrix](tauri-tool-matrix.md) and [release readiness](tauri-release-readiness.md)
+> for the shipped catalog and checks.
+
 ## Problem Statement
 
 Toolbox has a legacy native Swift app whose user-visible behavior is the parity
@@ -195,4 +200,3 @@ fixture harness, image/PDF fidelity foundations, PDF editor operations,
 remaining tools, bundled vision adapters, then packaging/accessibility/release
 gates. Each implementation ticket should carry its blocking edges and close
 only with the relevant evidence bundle attached.
-
