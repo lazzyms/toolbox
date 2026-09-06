@@ -5,6 +5,8 @@ name: Tauri Build
 # suite and produces unsigned installers for both platforms as runnable artifacts.
 # Nothing is signed, tagged, or released here: public releases are handled by the
 # Tauri release workflow after the required signing credentials are configured.
+# Updater artifacts are disabled for this unsigned verification build so Tauri
+# does not require the release workflow's private signing key.
 on:
   push:
     branches:
@@ -115,7 +117,7 @@ jobs:
           Get-ChildItem $pdftoppm.DirectoryName -Filter *.dll |
             Copy-Item -Destination src-tauri\resources -Force
           & src-tauri\resources\qpdf.exe --version
-          '{"bundle": {"resources": ["resources/*"]}}' |
+          '{"bundle": {"createUpdaterArtifacts": false, "resources": ["resources/*"]}}' |
             Out-File -Encoding ascii resources-qpdf.json
 
       - name: Run kit tests
@@ -130,9 +132,13 @@ jobs:
         run: npm run check:matrix
         working-directory: ToolboxTauri
 
+      - name: Write unsigned bundle config
+        run: node -e "require('fs').writeFileSync('ci-config.json', JSON.stringify({bundle:{createUpdaterArtifacts:false}}))"
+        working-directory: ToolboxTauri
+
       - name: Build unsigned macOS app
         if: runner.os == 'macOS'
-        run: npm run tauri build
+        run: npm run tauri build -- --config ci-config.json
         working-directory: ToolboxTauri
 
       - name: Bundle qpdf into app (macOS)
