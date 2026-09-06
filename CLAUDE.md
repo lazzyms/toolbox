@@ -1,9 +1,9 @@
 # Toolbox repository guide
 
-The primary application in this branch is the cross-platform Tauri app under
-`ToolboxTauri/`. The legacy Swift app and its release workflow are retained only
-on `main`. The static `docs/` website is independent and must remain unchanged
-unless a task explicitly targets it.
+The primary application is the cross-platform Tauri app under `ToolboxTauri/`.
+The legacy Swift app and its release workflow were removed during the migration.
+The static `docs/` website is independent and must remain unchanged unless a task
+explicitly targets it.
 
 ## Commands
 
@@ -39,7 +39,6 @@ change needs automated coverage.
 
 ## Branches and releases
 
-`tauri-port` is the default branch and primary release line. Its release workflow
-publishes signed macOS and Windows artifacts and updater metadata. The Swift
-release line remains separate on `main`; do not add Swift package files, sources,
-tests, or workflows to this branch.
+`main` is the default branch and primary release line. Its release workflow
+publishes signed macOS and Windows artifacts and updater metadata. Do not add
+Swift package files, sources, tests, or workflows to this branch.

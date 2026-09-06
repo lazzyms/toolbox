@@ -1,15 +1,14 @@
 name: Tauri Build
 
 # Branch build for the Tauri port (issue #95, distribution setup). Every push to
-# `tauri-port` (or a `ci/**` rehearsal branch) verifies the Rust kit with the test
+# `main` (or a `ci/**` rehearsal branch) verifies the Rust kit with the test
 # suite and produces unsigned installers for both platforms as runnable artifacts.
-# Nothing is signed, tagged, or released here: signed public release needs the
-# Apple Developer ID and Windows Authenticode credentials documented in #95, at
-# which point this workflow graduates to a release pipeline like release.yml.
+# Nothing is signed, tagged, or released here: public releases are handled by the
+# Tauri release workflow after the required signing credentials are configured.
 on:
   push:
     branches:
-      - tauri-port-ci
+      - main
       - 'ci/**'
   workflow_dispatch:
 

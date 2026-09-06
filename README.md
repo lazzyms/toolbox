@@ -3,9 +3,8 @@
 Toolbox is a cross-platform desktop app for private, local-first PDF, document,
 and image utilities. Files are processed on-device and are never uploaded.
 
-The Tauri app on `tauri-port` is the primary Toolbox app and the repository's
-default branch. The legacy Swift macOS app remains on `main` with its own release
-workflow. The website in [`docs/`](docs/) is kept independently.
+The Tauri app on `main` is the primary Toolbox app and the repository's
+default branch. The website in [`docs/`](docs/) is kept independently.
 
 ## Install the cross-platform release
 
@@ -31,7 +30,7 @@ installing one.
 
 ## Features
 
-Toolbox currently provides 32 utilities covering PDF and Office password handling,
+Toolbox currently provides utilities covering PDF and Office password handling,
 page editing, merging, splitting, extraction, conversion, OCR, signing, watermarking,
 numbering, compression, image conversion, resizing, rotation, cropping, metadata
 removal, tone adjustment, icon generation, GIF
@@ -71,13 +70,12 @@ npm run tauri build
 
 ## Releases
 
-Pushing to `tauri-port` runs [the Tauri release workflow](.github/workflows/tauri-release.yml),
+Pushing to `main` runs [the Tauri release workflow](.github/workflows/tauri-release.yml),
 which builds macOS arm64 and Windows arm64/x86_64 artifacts, signs updater metadata,
 and publishes a `tauri-v*` GitHub release.
 
-The Swift release workflow and Swift source are intentionally retained on `main`
-for the legacy macOS release line. Changes to that line do not belong in this
-branch. The `docs/` website and its appcast are also intentionally left unchanged.
+The Tauri workflow is the only release path on `main`. The `docs/` website and its
+historical appcast are maintained separately from the application source.
 
 ## Website
 
@@ -89,6 +87,6 @@ the application code and do not add trackers or third-party embeds.
 Keep processing behavior in `ToolboxTauri/src-tauri/`, UI behavior in
 `ToolboxTauri/src/`, and tests in `ToolboxTauri/tests/`. Add or update automated
 coverage with every behavior change. Use short imperative commit messages and
-open pull requests against `tauri-port`.
+open pull requests against `main`.
 
 Toolbox is released under the [MIT License](LICENSE).

@@ -30,7 +30,7 @@ be committed to the repository. SmartScreen reputation still builds over time
 after signing.
 
 The updater manifest is published at `tauri-latest.json` on the protected
-`tauri-port` branch. The app checks for updates after launch when the release
+`main` branch. The app checks for updates after launch when the release
 build sets `VITE_ENABLE_UPDATES=true`, asks before installing, verifies the
 payload with the bundled public key, and relaunches after installation.
 

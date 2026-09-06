@@ -1,7 +1,7 @@
 # Tauri tool matrix
 
 The [Tauri registry](../ToolboxTauri/src/registry/index.ts) defines the catalog,
-category, display order, command, and availability for `tauri-port`. It currently
+category, display order, command, and availability for `main`. It currently
 includes document, PDF, and image utilities. OCR PDF, Blur Faces, and Remove
 Background are marked unavailable because their offline resources are not bundled.
 
@@ -57,4 +57,5 @@ The `Verification` column contains registry identifiers, not proof that a
 matching fixture or recipe passed. `npm run check:matrix`, run from
 `ToolboxTauri/`, checks registry completeness, unique IDs, and the presence of
 command, verification, and view fields. It does not compare a Swift registry or
-execute tools. The legacy Swift catalog remains on `main`.
+execute tools. Historical Swift catalog references are retained only in the parity
+records.

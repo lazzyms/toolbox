@@ -1,9 +1,8 @@
 # Contributing to Toolbox
 
 Toolbox is a cross-platform Tauri desktop app. Contributions should target the
-`tauri-port` branch, which is the repository default and primary release line.
-The legacy Swift macOS release remains separate on `main`; the `docs/` website is
-also maintained independently.
+`main` branch, which is the repository default and primary release line.
+The `docs/` website is also maintained independently.
 
 ## Getting set up
 
@@ -47,7 +46,7 @@ appcast behavior intact.
 
 ## Pull requests
 
-Open pull requests against `tauri-port`. Describe the behavior changed and the
+Open pull requests against `main`. Describe the behavior changed and the
 verification run. UI changes should include a focused Playwright regression test;
 native changes should include fixture-backed coverage.
 
