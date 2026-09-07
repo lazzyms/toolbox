@@ -131,13 +131,20 @@ try {
     Pop-Location
 }
 
-$releaseCandidates = @(
-    Join-Path $tauriRoot "target\$Target\release\$MainBinaryName.exe",
-    Join-Path $tauriRoot "target\release\$MainBinaryName.exe"
+$releaseDirectories = @(
+    (Join-Path -Path $tauriRoot -ChildPath ("target\{0}\release" -f $Target)),
+    (Join-Path -Path $tauriRoot -ChildPath "target\release")
 )
-$executable = $releaseCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
-if (-not $executable) { throw "Could not find the release executable for $MainBinaryName ($Target)." }
-Copy-Item -LiteralPath $executable -Destination (Join-Path $stage "$MainBinaryName.exe") -Force
+$executable = $null
+foreach ($releaseDirectory in $releaseDirectories) {
+    $candidate = Join-Path -Path $releaseDirectory -ChildPath ("{0}.exe" -f $MainBinaryName)
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+        $executable = Get-Item -LiteralPath $candidate
+        break
+    }
+}
+if ($null -eq $executable) { throw "Could not find the release executable for $MainBinaryName ($Target)." }
+Copy-Item -LiteralPath $executable.FullName -Destination (Join-Path $stage "$MainBinaryName.exe") -Force
 
 $resources = $config.bundle.PSObject.Properties["resources"]
 $externalBin = $config.bundle.PSObject.Properties["externalBin"]
