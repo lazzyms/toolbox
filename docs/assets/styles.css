@@ -472,8 +472,8 @@ details .accordion-content p { font-size: .875rem; color: var(--muted-foreground
   overflow: hidden;
   border: 1px solid var(--border-strong);
   border-radius: 1.25rem;
-  background: #090b10;
-  box-shadow: 0 26px 65px rgb(0 0 0 / 28%), 0 0 0 1px rgb(255 255 255 / 4%);
+  background: var(--card);
+  box-shadow: var(--shadow-lg), 0 0 0 1px color-mix(in srgb, var(--foreground) 4%, transparent);
 }
 .screenshot-frame img { display: block; width: 100%; height: auto; }
 .screenshot-card figcaption { display: grid; gap: .25rem; margin-top: 1rem; font-size: .8125rem; }
