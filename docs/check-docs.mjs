@@ -23,11 +23,11 @@ const comparisons = [
 ];
 const pages = new Map(readdirSync(docs).filter(name => name.endsWith('.html'))
   .map(name => [name, readFileSync(new URL(name, docs), 'utf8')]));
-const releaseBase = 'https://github.com/lazzyms/toolbox/releases/download/tauri-v0.2.0/';
+const releaseBase = 'https://github.com/lazzyms/toolbox/releases/download/tauri-v1.0.0/';
 const downloadAssets = {
-  macos: `${releaseBase}Toolbox-0.2.0-macos.dmg`,
-  'windows-x64': `${releaseBase}Toolbox-windows-x86_64-setup.exe`,
-  'windows-arm64': `${releaseBase}Toolbox-windows-arm64-setup.exe`,
+  macos: `${releaseBase}Toolbox-1.0.0-macos.dmg`,
+  'windows-x64': 'https://apps.microsoft.com/detail/9N5R8W4GJVH4',
+  'windows-arm64': 'https://apps.microsoft.com/detail/9N5R8W4GJVH4',
 };
 const publicSources = pages;
 for (const [name, source] of publicSources) {

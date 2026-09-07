@@ -1,0 +1,108 @@
+name: Microsoft Store
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: microsoft-store
+  cancel-in-progress: false
+
+jobs:
+  build-and-publish:
+    name: Build and publish MSIX
+    runs-on: windows-latest
+    env:
+      TOOLBOX_MSIX_IDENTITY_NAME: ${{ vars.TOOLBOX_MSIX_IDENTITY_NAME }}
+      TOOLBOX_MSIX_PUBLISHER: ${{ vars.TOOLBOX_MSIX_PUBLISHER }}
+      TOOLBOX_MSIX_PUBLISHER_DISPLAY_NAME: ${{ vars.TOOLBOX_MSIX_PUBLISHER_DISPLAY_NAME }}
+      TOOLBOX_MSIX_STORE_ID: ${{ vars.TOOLBOX_MSIX_STORE_ID }}
+      TOOLBOX_REQUIRE_QPDF: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ToolboxTauri/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: ToolboxTauri
+
+      - name: Run release checks
+        run: npm run check:release
+        working-directory: ToolboxTauri
+
+      - name: Run Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+        working-directory: ToolboxTauri
+
+      - name: Install and stage PDF helper resources
+        shell: pwsh
+        working-directory: ToolboxTauri
+        run: |
+          choco install qpdf -y
+          $popplerVersion = '26.02.0-0'
+          $popplerSha256 = '993e4a94376ed712fafc7058d724ea0b943d118bbd2305cd9ed55174eb85cda5'
+          $popplerArchive = Join-Path $env:RUNNER_TEMP "poppler-$popplerVersion.zip"
+          Invoke-WebRequest `
+            -Uri "https://github.com/oschwartz10612/poppler-windows/releases/download/v$popplerVersion/Release-$popplerVersion.zip" `
+            -OutFile $popplerArchive
+          if ((Get-FileHash $popplerArchive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $popplerSha256) {
+            throw 'Poppler archive checksum did not match the pinned release'
+          }
+          $popplerExtract = Join-Path $env:RUNNER_TEMP "poppler-$popplerVersion"
+          Expand-Archive -Path $popplerArchive -DestinationPath $popplerExtract -Force
+          $pdftoppm = Get-ChildItem $popplerExtract -Recurse -Filter pdftoppm.exe | Select-Object -First 1
+          if (-not $pdftoppm) { throw 'Could not locate pdftoppm.exe in the Poppler archive' }
+          New-Item -ItemType Directory -Force -Path src-tauri\resources | Out-Null
+          $qpdf = Get-ChildItem "$env:ChocolateyInstall\lib\qpdf" -Recurse -Filter qpdf.exe | Select-Object -First 1
+          if (-not $qpdf) { throw 'Could not locate qpdf.exe in the Chocolatey package' }
+          Copy-Item $qpdf.FullName src-tauri\resources\qpdf.exe -Force
+          Get-ChildItem $qpdf.DirectoryName -Filter *.dll | Copy-Item -Destination src-tauri\resources -Force
+          Copy-Item $pdftoppm.FullName src-tauri\resources\pdftoppm.exe -Force
+          Get-ChildItem $pdftoppm.DirectoryName -Filter *.dll | Copy-Item -Destination src-tauri\resources -Force
+          & src-tauri\resources\qpdf.exe --version
+
+      - name: Build unsigned MSIX
+        shell: pwsh
+        working-directory: ToolboxTauri
+        run: .\scripts\build-msix.ps1
+
+      - name: Upload MSIX build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: toolbox-msix
+          path: ToolboxTauri/.artifacts/msix/*.msix
+          if-no-files-found: error
+
+      - name: Configure Microsoft Store CLI
+        uses: microsoft/microsoft-store-apppublisher@v1.1
+
+      - name: Reconfigure Store credentials
+        shell: pwsh
+        run: |
+          msstore reconfigure `
+            --tenantId "${{ secrets.AZURE_AD_TENANT_ID }}" `
+            --sellerId "${{ secrets.SELLER_ID }}" `
+            --clientId "${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}" `
+            --clientSecret "${{ secrets.AZURE_AD_APPLICATION_SECRET }}"
+
+      - name: Publish package to Microsoft Store
+        shell: pwsh
+        run: |
+          $package = Get-ChildItem "${{ github.workspace }}\ToolboxTauri\.artifacts\msix" -Filter *.msix | Select-Object -First 1
+          if (-not $package) { throw 'The MSIX package was not produced.' }
+          msstore publish "${{ github.workspace }}\ToolboxTauri\.artifacts\msix" `
+            --inputFile $package.FullName `
+            --appId "${{ vars.TOOLBOX_MSIX_STORE_ID }}"

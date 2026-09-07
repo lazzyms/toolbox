@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap uap10 rescap">
+  <Identity
+    Name="[PARTNER_CENTER_PACKAGE_IDENTITY_NAME]"
+    Publisher="[PARTNER_CENTER_PUBLISHER]"
+    Version="[MSIX_VERSION]"
+    ProcessorArchitecture="x64" />
+  <Properties>
+    <DisplayName>[RESERVED_STORE_NAME]</DisplayName>
+    <PublisherDisplayName>[PARTNER_CENTER_PUBLISHER_DISPLAY_NAME]</PublisherDisplayName>
+    <Description>[SHORT_APP_DESCRIPTION]</Description>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+  <Dependencies>
+    <TargetDeviceFamily
+      Name="Windows.Desktop"
+      MinVersion="10.0.19041.0"
+      MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+  <Applications>
+    <Application
+      Id="App"
+      Executable="[APP_EXECUTABLE_NAME].exe"
+      uap10:RuntimeBehavior="packagedClassicApp"
+      uap10:TrustLevel="mediumIL">
+      <uap:VisualElements
+        DisplayName="[RESERVED_STORE_NAME]"
+        Description="[SHORT_APP_DESCRIPTION]"
+        BackgroundColor="transparent"
+        Square44x44Logo="Assets\Square44x44Logo.png"
+        Square150x150Logo="Assets\Square150x150Logo.png" />
+    </Application>
+  </Applications>
+</Package>
