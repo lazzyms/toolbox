@@ -22,6 +22,8 @@ jobs:
       TOOLBOX_MSIX_PUBLISHER_DISPLAY_NAME: ${{ vars.TOOLBOX_MSIX_PUBLISHER_DISPLAY_NAME }}
       TOOLBOX_MSIX_STORE_ID: ${{ vars.TOOLBOX_MSIX_STORE_ID }}
       TOOLBOX_REQUIRE_QPDF: '1'
+      TOOLBOX_QPDF_PATH: ${{ github.workspace }}\ToolboxTauri\src-tauri\resources\qpdf.exe
+      TOOLBOX_PDFTOPPM_PATH: ${{ github.workspace }}\ToolboxTauri\src-tauri\resources\pdftoppm.exe
     steps:
       - uses: actions/checkout@v4
 
