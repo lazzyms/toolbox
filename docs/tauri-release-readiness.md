@@ -7,6 +7,8 @@ The reserved MSIX product is **Toolbox: PDF & File Tools** (Store ID
 every push to `main` and publishes it with the [Microsoft Store Developer CLI]
 after the initial Partner Center submission metadata is complete.
 
+Privacy policy URL: <https://lazzyms.github.io/toolbox/privacy.html>
+
 Configure these GitHub repository variables:
 
 - `TOOLBOX_MSIX_STORE_ID`: `9N5R8W4GJVH4`
