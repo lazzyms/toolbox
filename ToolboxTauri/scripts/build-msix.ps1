@@ -1,4 +1,4 @@
-<#!
+<#
 .SYNOPSIS
     Builds an unsigned x64 MSIX package for Microsoft Store submission.
 
@@ -6,7 +6,7 @@
     Account-specific Partner Center values are required as parameters or
     environment variables. The generated manifest and package stay under
     .artifacts and are intentionally not committed.
-#!>
+#>
 [CmdletBinding()]
 param(
     [string]$PackageIdentityName = $env:TOOLBOX_MSIX_IDENTITY_NAME,
