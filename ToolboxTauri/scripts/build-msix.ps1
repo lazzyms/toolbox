@@ -173,6 +173,15 @@ $manifestPath = Join-Path $stage "AppxManifest.xml"
 [IO.File]::WriteAllText($manifestPath, $manifest, [Text.UTF8Encoding]::new($false))
 
 $makeAppx = Get-Command MakeAppx.exe -ErrorAction SilentlyContinue
+if (-not $makeAppx) {
+    $windowsKitsBin = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin"
+    if (Test-Path -LiteralPath $windowsKitsBin -PathType Container) {
+        $makeAppx = Get-ChildItem -LiteralPath $windowsKitsBin -Recurse -Filter MakeAppx.exe -File |
+            Where-Object { $_.FullName -match "\\x64\\MakeAppx\.exe$" } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+    }
+}
 if (-not $makeAppx) { throw "MakeAppx.exe was not found. Run from a Windows SDK Developer Command Prompt." }
 $packagePath = Join-Path $artifactRoot "Toolbox_${msixVersion}_x64.msix"
 if (Test-Path -LiteralPath $packagePath) { Remove-Item -LiteralPath $packagePath -Force }
