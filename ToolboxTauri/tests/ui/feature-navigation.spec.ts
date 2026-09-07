@@ -154,11 +154,13 @@ test("file upload surface follows the selected theme", async ({ page }) => {
         copy: getComputedStyle(node.querySelector("p")!).color,
     }));
 
-    await page.mouse.move(0, 0);
-    const darkSurface = await readSurface();
     const settings = page.getByRole("button", { name: "Settings", exact: true });
     await settings.click();
     const dialog = page.getByRole("dialog", { name: "Settings" });
+    await dialog.getByRole("button", { name: "Dark" }).click();
+    await expect.poll(() => page.locator("body").getAttribute("data-theme")).toBe("dark");
+    await page.mouse.move(0, 0);
+    const darkSurface = await readSurface();
     await dialog.getByRole("button", { name: "Light" }).click();
     await expect.poll(() => page.locator("body").getAttribute("data-theme")).toBe("light");
     await page.mouse.move(0, 0);
