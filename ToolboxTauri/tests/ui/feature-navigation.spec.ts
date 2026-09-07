@@ -201,6 +201,37 @@ test("favorites and recent navigation show their intended libraries", async ({ p
     await expect(page.getByRole("button", { name: "Open Remove Password" })).toBeVisible();
 });
 
+test("tool cards open from the card surface without favorite navigation", async ({ page }) => {
+    await page.goto("/");
+    const card = page.locator(".tool-card").first();
+    await card.click();
+    await expect(page.getByRole("heading", { name: "Remove Password", exact: true })).toBeVisible();
+
+    await page.getByRole("button", { name: "← All tools" }).click();
+    await page.locator(".tool-card").first().getByRole("button", { name: "Add Remove Password to favorites" }).click();
+    await expect(page.getByRole("heading", { name: "All tools", exact: true })).toBeVisible();
+});
+
+test("Windows labels the reveal action as opening the file location", async ({ page }) => {
+    await page.addInitScript(() => {
+        Object.defineProperty(window.navigator, "platform", { configurable: true, value: "Win32" });
+    });
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Compress Images" }).click();
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await page.getByRole("button", { name: "Compress Images", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Open file location" })).toHaveCount(2);
+});
+
+test("settings checks for and installs available updates", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Settings" });
+    await expect(dialog.getByRole("button", { name: "Check for updates" })).toBeVisible();
+    await dialog.getByRole("button", { name: "Check for updates" }).click();
+    await expect(dialog.getByRole("status")).toHaveText("Toolbox is up to date.");
+});
+
 test("tool cards render their design icon masks", async ({ page }) => {
     await page.goto("/");
     const icons = page.locator(".tool-card .card-icon > span");
