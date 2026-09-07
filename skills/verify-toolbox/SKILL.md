@@ -9,15 +9,15 @@ Toolbox's current product surface is the cross-platform Tauri desktop app under 
 
 ## Launch
 
-From the repository root, install frontend dependencies once and start the Tauri development app:
+From the repository root, start the Tauri development app. If dependencies are missing or the lockfile changed, ask before running the environment-changing install step:
 
 ```bash
 cd ToolboxTauri
-npm ci
+npm ci                 # only when installation is needed and authorized
 npm run tauri dev
 ```
 
-The Vite dev server listens on `http://localhost:1420`; Tauri opens a desktop window titled `Toolbox`. On macOS, install qpdf with `brew install qpdf` if PDF protection or unlocking is being exercised. On Windows, install qpdf with `choco install qpdf -y`; release builds bundle it beside the executable through `scripts/bundle-qpdf.ps1`.
+The Vite dev server listens on `http://localhost:1420`; Tauri opens a desktop window titled `Toolbox`. If PDF protection or unlocking is being exercised and qpdf is absent, ask before installing it with `brew install qpdf` on macOS or `choco install qpdf -y` on Windows. Release builds bundle it beside the executable through `scripts/bundle-qpdf.ps1`.
 
 For automated browser UI coverage of every registered feature, run `npm run test:ui` from `ToolboxTauri/`. The suite starts Vite, selects each of the 32 registry entries in a fresh page, supplies the checked-in app-icon fixture through the dialog bridge, exercises the feature action, and asserts the corresponding Tauri command plus a successful result. This verifies navigation, pane controls, fixture handling, and command dispatch; native processing remains covered by the live drive and native tests below.
 
@@ -29,7 +29,7 @@ Teardown: close the Tauri window, stop the `npm run tauri dev` process you start
 
 ## Doctor
 
-Run these read-only checks before driving:
+Run these baseline checks before driving. The build may write generated output, so treat this as a verification run rather than a read-only inspection:
 
 ```bash
 cd ToolboxTauri
