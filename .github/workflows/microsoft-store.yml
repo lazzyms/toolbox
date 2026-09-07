@@ -43,10 +43,6 @@ jobs:
         run: npm run check:release
         working-directory: ToolboxTauri
 
-      - name: Run Rust tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
-        working-directory: ToolboxTauri
-
       - name: Install and stage PDF helper resources
         shell: pwsh
         working-directory: ToolboxTauri
@@ -73,6 +69,10 @@ jobs:
           Copy-Item $pdftoppm.FullName src-tauri\resources\pdftoppm.exe -Force
           Get-ChildItem $pdftoppm.DirectoryName -Filter *.dll | Copy-Item -Destination src-tauri\resources -Force
           & src-tauri\resources\qpdf.exe --version
+
+      - name: Run Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+        working-directory: ToolboxTauri
 
       - name: Build unsigned MSIX
         shell: pwsh
