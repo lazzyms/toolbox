@@ -38,6 +38,16 @@ per-file failure isolation.
 - Maintain parity across macOS and Windows release targets.
 - Keep analytics anonymous and development builds inactive.
 
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues for `lazzyms/toolbox`, operated with `gh`. See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+Single-context domain documentation in `CONTEXT.md` and `docs/adr/`. See `docs/agents/domain.md`.
+
 ## Release
 
 `main` is the default branch and primary release line. Its release workflow
