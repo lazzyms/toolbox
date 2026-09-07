@@ -183,9 +183,14 @@ if (-not $makeAppx) {
     }
 }
 if (-not $makeAppx) { throw "MakeAppx.exe was not found. Run from a Windows SDK Developer Command Prompt." }
+$makeAppxPath = if ($makeAppx.PSObject.Properties.Name -contains "Source") {
+    [string]$makeAppx.Source
+} else {
+    [string]$makeAppx.FullName
+}
 $packagePath = Join-Path $artifactRoot "Toolbox_${msixVersion}_x64.msix"
 if (Test-Path -LiteralPath $packagePath) { Remove-Item -LiteralPath $packagePath -Force }
-& $makeAppx.Source pack /d $stage /p $packagePath /h SHA256 /o /v
+& $makeAppxPath pack /d $stage /p $packagePath /h SHA256 /o /v
 if ($LASTEXITCODE -ne 0) { throw "MakeAppx.exe failed with exit code $LASTEXITCODE." }
 
 $hash = (Get-FileHash -LiteralPath $packagePath -Algorithm SHA256).Hash.ToLowerInvariant()
