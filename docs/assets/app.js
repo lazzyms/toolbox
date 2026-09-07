@@ -19,6 +19,10 @@
       'content',
       theme === 'dark' ? '#0a0a0a' : '#ffffff'
     );
+    for (const image of $$('[data-theme-src-dark][data-theme-src-light]')) {
+      const source = image.dataset[`themeSrc${theme[0].toUpperCase()}${theme.slice(1)}`];
+      if (source && image.getAttribute('src') !== source) image.setAttribute('src', source);
+    }
   };
 
   const forced = new URLSearchParams(location.search).get('theme');
