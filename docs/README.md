@@ -3,6 +3,9 @@
 The public website is [index.html](index.html). It describes the current Tauri
 release on `main`.
 
+Windows users can install Toolbox from the
+[Microsoft Store](https://apps.microsoft.com/detail/9N5R8W4GJVH4).
+
 Current references:
 
 - [PDF and document tools](pdf.html)

@@ -1,0 +1,7 @@
+interface:
+  display_name: "Publish Toolbox to Microsoft Store"
+  short_description: "Build and publish Toolbox MSIX releases"
+  default_prompt: "Use $publish-microsoft-store to build Toolbox's MSIX and publish it through the reserved Microsoft Store product."
+
+policy:
+  allow_implicit_invocation: true
