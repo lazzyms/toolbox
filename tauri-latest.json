@@ -1,18 +1,18 @@
 {
-  "version": "1.0.4",
-  "notes": "Toolbox Tauri 1.0.4",
+  "version": "1.0.5",
+  "notes": "Toolbox Tauri 1.0.5",
   "platforms": {
     "darwin-aarch64": {
-      "url": "https://github.com/lazzyms/toolbox/releases/download/tauri-v1.0.4/Toolbox-macos-aarch64.app.tar.gz",
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSd0pycGp0WUpVdGx4ZGJlZTVRbnZwZnhaSUc3K09FWE5jVFVwUTN0K05wb1BuRkkralBBZ3dFQUVHUzR6UUZZZXN1RCs5c3RsaHdNRURYQnFMT0tyK3hNOXRpZHpQZndFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4Nzk3NjAyCWZpbGU6VG9vbGJveC5hcHAudGFyLmd6Ck9uZXRXS0FLMTFZMjhBbWNvNFRSQkNkYjEwNm1ib01STnlOakhXbnBZSjNWbGkxeGVhWGpEN0NxYlp1bXU2NUJRUmRQT0o3WmpaSE81SVkyamUyUkRBPT0K"
+      "url": "https://github.com/lazzyms/toolbox/releases/download/tauri-v1.0.5/Toolbox-macos-aarch64.app.tar.gz",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSd0pycGp0WUpVdHRhTklHdmIrL05hditqR1cxcEw0Z3ZRelM5NkxQaDJGUVlXUGNGM3ExUjd4UWlIL0dCK1hvOGlGVUd5NXJKZjUyTnR0R1FTTDl5SDlidTRRa3Y5d0FNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4ODAyNjA5CWZpbGU6VG9vbGJveC5hcHAudGFyLmd6ClM5dUlEMkxMYzVyRUpmamJJd0l1RDBPWlc2Z2xha0ltOU5MalRZeUwwYzJ4bDM4d1FqRjhDTVptNzkxc0w1OWNhV3FpNDJvRFY2TjdSdUVHYVJpNUJRPT0K"
     },
     "windows-x86_64": {
-      "url": "https://github.com/lazzyms/toolbox/releases/download/tauri-v1.0.4/Toolbox-windows-x86_64-setup.exe",
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSd0pycGp0WUpVdHBBWFp6aDU5ZVZONTc5azlJdjV4Y1U3bWtzZDh0MjY0MThkL3VUSmdnd1RSTTFuaUhHTjFPYWR6ek9NQUFKNG84bm1EY1lyWitKbHE4NVIwc0gwVHc4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4Nzk3NzIyCWZpbGU6VG9vbGJveF8xLjAuNF94NjQtc2V0dXAuZXhlCkMzR1B1bktJNUhtMkliZ0FpNnNCQlBoTFN6TEFtTTk4czRoWVJhOGVOeUxPZ2ppSUNvMEd3RTR0RzN4VU9FU0YwaFRVVWd4VitZMko4UjhWT2JWd0NnPT0K"
+      "url": "https://github.com/lazzyms/toolbox/releases/download/tauri-v1.0.5/Toolbox-windows-x86_64-setup.exe",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSd0pycGp0WUpVdGp2d1RTSENwaTNHR0xLUzNQUXl6SlJIbjQzU2tNK0YySTBZaU51U3ZvVWhYSmdTMmZ0ZFh2eUpnMjBKTkF4cGREdFBRVFhzZ25VSjBwdmszQitXVnc4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4ODAyNTU3CWZpbGU6VG9vbGJveF8xLjAuNV94NjQtc2V0dXAuZXhlCmNNWFBtNlNIVjdicmNOdXRLaFIzN0NTbWFmUjg3aU9rYVNVdXl5eTNSTXN3RGVJR3FIcnVmSWFvSmt6Y2NMc3MwdE0vSFQvekpoT1F6UTBPRDh2TkNnPT0K"
     },
     "windows-aarch64": {
-      "url": "https://github.com/lazzyms/toolbox/releases/download/tauri-v1.0.4/Toolbox-windows-arm64-setup.exe",
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSd0pycGp0WUpVdHN5UkErSEtFK2xqRTBSZ0FTdER0ajdJd29oNVBQWlJGbUFOU0JMMHFwU1ZadWdjdERGSHJHcFNEcVpWN0FrN3RZY3VubTh3bktmZnZ4eWdYa1ZxakFnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4Nzk3OTUzCWZpbGU6VG9vbGJveF8xLjAuNF9hcm02NC1zZXR1cC5leGUKYks3L0hFaUIyUUJmR21raWg2bU0wSTVxbXArOUR6Rk00NWVsOGx5bFBudmJSS3Q1ZTE3Q1N4YldaWmZNQWRQWFNmRUpPRWpoSkFCc1gwOWFKblNhQXc9PQo="
+      "url": "https://github.com/lazzyms/toolbox/releases/download/tauri-v1.0.5/Toolbox-windows-arm64-setup.exe",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSd0pycGp0WUpVdHMvdHVsMzFEaEFQOVJ2cDNVOFdzMFNTbHEyNXo3MmE2dDhWa2hvVlFWZ0pIazdVK2hrb1pHRTVpUjI3c0JCWkMwRmtkajFPMld5dkVLaHBCK204VXdZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4ODAyOTE1CWZpbGU6VG9vbGJveF8xLjAuNV9hcm02NC1zZXR1cC5leGUKWVJ0RzRFdmVmS1JVS1lzUUgvMFMrRi9nRFJlZWJWRVVEd0JSMlhqcGg0NXVUMVl5K1ZXSUYrbjgyU1o4Zit6YS9ZVG9PSlllc2dZb0QxM0JaMTBKRFE9PQo="
     }
   }
 }
