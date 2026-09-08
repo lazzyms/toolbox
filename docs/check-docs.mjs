@@ -23,6 +23,11 @@ const comparisons = [
 ];
 const pages = new Map(readdirSync(docs).filter(name => name.endsWith('.html'))
   .map(name => [name, readFileSync(new URL(name, docs), 'utf8')]));
+const appSource = readFileSync(new URL('assets/app.js', docs), 'utf8');
+const iconTable = appSource.match(/const toolIcons = \{([\s\S]*?)\n  \};/);
+assert(iconTable, 'Docs must define the shared tool icon table');
+const toolIcons = new Map([...iconTable[1].matchAll(/(?:'([^']+)'|([a-z][\w-]*)):\s*'([^']+)'/g)]
+  .map(match => [match[1] || match[2], match[3]]));
 const releaseBase = 'https://github.com/lazzyms/toolbox/releases/download/tauri-v1.0.0/';
 const downloadAssets = {
   macos: `${releaseBase}Toolbox-1.0.0-macos.dmg`,
@@ -63,6 +68,12 @@ for (const [platform, href] of Object.entries(downloadAssets)) {
 for (const [name, categories] of [['pdf.html', ['Documents', 'PDF']], ['images.html', ['Images']]]) {
   const ids = [...pages.get(name).matchAll(/\bdata-tool-id=["']([^"']+)["']/g)].map(match => match[1]);
   comparisons.push([ids, registry.filter(tool => categories.includes(tool.category)).map(tool => tool.id), `${name} tool coverage and order`]);
+  comparisons.push([ids.every(id => toolIcons.has(id)), true, `${name} tools use the shared icon table`]);
+  for (const id of ids) {
+    const icon = toolIcons.get(id);
+    comparisons.push([icon && existsSync(new URL(`assets/design-icons/${icon}.svg`, docs)), true, `${name} ${id} icon asset`]);
+  }
+  comparisons.push([pages.get(name).includes('class="ico only-dark"') && pages.get(name).includes('class="ico only-light"'), true, `${name} theme icons`]);
 }
 let failures = 0;
 for (const [actual, expected, label] of comparisons) {
