@@ -772,6 +772,7 @@ h2 { font-size: clamp(2rem, 4vw, 3.6rem); letter-spacing: -.06em; line-height: 1
 .feature-card { min-height: 15rem; padding: clamp(1.25rem, 2.5vw, 1.75rem); border: 1px solid var(--border); border-radius: 1rem; background: linear-gradient(145deg, color-mix(in oklab, var(--card) 97%, var(--brand) 3%), var(--card)); box-shadow: 0 12px 28px rgb(0 0 0 / 7%); transition: border-color .2s, transform .2s, box-shadow .2s; }
 .feature-card:hover { border-color: color-mix(in oklab, var(--brand) 48%, var(--border)); transform: translateY(-3px); box-shadow: 0 18px 34px rgb(0 0 0 / 12%); }
 .feature-glyph { display: grid; place-items: center; width: 2.75rem; height: 2.75rem; margin-bottom: 2.25rem; border-radius: .8rem; color: var(--brand); background: var(--brand-soft); border: 1px solid color-mix(in oklab, var(--brand) 20%, transparent); font-size: 1.25rem; font-weight: 650; }
+.feature-glyph img { width: 1.4rem; height: 1.4rem; }
 .feature-card h2 { font-size: 1.2rem; letter-spacing: -.035em; }
 .feature-card > p:last-child { margin-top: .65rem; color: var(--muted-foreground); font-size: .875rem; line-height: 1.55; }
 .category-cta { padding: clamp(5rem, 11vw, 9rem) 0; text-align: center; background: radial-gradient(35% 80% at 50% 35%, color-mix(in oklab, var(--brand) 14%, transparent), transparent 75%); border-top: 1px solid var(--border); }

@@ -42,6 +42,30 @@
     if (!localStorage.getItem('toolbox-theme')) setTheme(e.matches ? 'light' : 'dark');
   });
 
+  const toolIcons = {
+    'pdf-unlock': 'remove-password', 'pdf-page-numbers': 'page-numbers',
+    'pdf-merge': 'merge-pdf', 'pdf-watermark': 'watermark-pdf', 'pdf-crop': 'crop-pdf',
+    'pdf-edit': 'edit-pdf', 'pdf-protect': 'protect-pdf', 'images-to-pdf': 'images-to-pdf',
+    'pdf-to-images': 'pdf-to-images', 'pdf-to-text': 'pdf-to-text', 'pdf-split': 'split-pdf',
+    'pdf-image-extract': 'extract-images', 'pdf-sign': 'signature', 'pdf-ocr': 'ocr-pdf',
+    'pdf-remove-pages': 'file-minus', 'pdf-extract-pages': 'extract-pages',
+    'pdf-organize': 'organize-pdf', 'pdf-compress': 'compress-pdf',
+    'heic-convert': 'convert-format', compress: 'compress-images', resize: 'resize-images',
+    rotate: 'rotate-images', crop: 'crop-images', 'icon-set': 'generate-icons',
+    'gif-create': 'create-gif', 'gif-extract': 'extract-gif',
+    'image-watermark': 'watermark-images', 'image-metadata': 'image-metadata',
+    'image-tone': 'image-tone', 'tiff-pages': 'layers', 'image-blur-faces': 'face-id',
+    'image-remove-bg': 'wand',
+  };
+  for (const card of $$('.feature-card[data-tool-id]')) {
+    const icon = toolIcons[card.dataset.toolId];
+    if (!icon) continue;
+    const glyph = $('.feature-glyph', card);
+    glyph?.replaceChildren(Object.assign(document.createElement('img'), {
+      src: `assets/design-icons/${icon}.svg`, alt: '',
+    }));
+  }
+
   /* ───────────────────────── downloads ───────────────────────── */
 
   // Keep platform download destinations in one place when cutting a new release.
