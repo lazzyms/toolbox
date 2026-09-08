@@ -39,6 +39,10 @@ for (const [name, source] of pages) {
     const href = tag[0].match(/\bhref=["']([^"']*)["']/)?.[1];
     comparisons.push([Object.values(downloadAssets).includes(href), true, `${name} download destination`]);
   }
+  for (const tag of source.matchAll(/\bdata-theme-src-(?:dark|light)=["']([^"']+)["']/g)) {
+    const path = fileURLToPath(new URL(tag[1], new URL(name, docs)));
+    comparisons.push([existsSync(path), true, `${name} themed screenshot ${tag[1]}`]);
+  }
   for (const link of source.matchAll(/\b(?:href|src)=["']([^"']+)["']/g)) {
     const href = link[1].replaceAll('&amp;', '&');
     if (/^(?:[a-z][\w+.-]*:|\/\/)/i.test(href)) continue;
