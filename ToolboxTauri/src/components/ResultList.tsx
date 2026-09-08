@@ -28,7 +28,7 @@ const outputName = (path: string) => path.split(/[\\/]/).pop() || path;
 const revealButtonLabel = () => {
     const platform = navigator.platform.toLowerCase();
     if (platform.includes("mac")) return "Show in Finder";
-    if (platform.includes("win")) return "Show in Explorer";
+    if (platform.includes("win")) return "Open file location";
     return "Show in file manager";
 };
 

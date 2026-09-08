@@ -10,8 +10,9 @@
   --accent: #ededed;
   --ink: #171717;
   --danger: #f87171;
+  --danger-surface: #3a2024;
 }
-body[data-theme="light"] { color-scheme: light; --bg:#f7f7f5; --surface:#fff; --surface-2:#ededeb; --fg:#1d1d1b; --muted:#686865; --border:#d8d8d3; --accent:#1d1d1b; --ink:#f7f7f5; --danger:#b42318; }
+body[data-theme="light"] { color-scheme: light; --bg:#f7f7f5; --surface:#fff; --surface-2:#ededeb; --fg:#1d1d1b; --muted:#686865; --border:#d8d8d3; --accent:#1d1d1b; --ink:#f7f7f5; --danger:#b42318; --danger-surface:#fde8e7; }
 * {
   box-sizing: border-box;
 }
@@ -391,10 +392,10 @@ select:focus-visible {
   gap: 10px;
 }
 .tool-card {
-  min-height: 158px;
+  min-height: 138px;
   display: flex;
   flex-direction: column;
-  padding: 17px;
+  padding: 14px;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--surface);
@@ -404,6 +405,10 @@ select:focus-visible {
   transform: translateY(-2px);
   border-color: var(--muted);
   background: var(--surface-2);
+}
+.tool-card:focus-visible {
+  outline: 2px solid var(--fg);
+  outline-offset: 3px;
 }
 .tool-card-top,
 .tool-card footer,
@@ -653,7 +658,8 @@ select:focus-visible {
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: var(--bg);
+  background: var(--surface);
+  color: var(--fg);
 }
 .result-heading {
   display: flex;
@@ -684,7 +690,7 @@ select:focus-visible {
   color: #4ade80;
 }
 .result-status-failure {
-  background: rgba(248, 113, 113, 0.14);
+  background: var(--danger-surface);
   color: var(--danger);
 }
 .result-outputs {

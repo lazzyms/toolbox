@@ -113,6 +113,9 @@ export const MainPage = () => {
   >("all");
   const [search, setSearch] = useState("");
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchShortcut = navigator.platform.toLowerCase().includes("win")
+    ? "Ctrl + K"
+    : "⌘ + K";
   const [favorites, setFavorites] = useState<string[]>(() =>
     JSON.parse(localStorage.getItem("toolbox-favorites") || "[]"),
   );
@@ -177,12 +180,6 @@ export const MainPage = () => {
         : filter === "recent"
           ? "Recent"
           : `${filter} tools`;
-  const workspaceDescription =
-    filter === "favorites"
-      ? "Your saved tools, ready whenever you need them."
-      : filter === "recent"
-        ? "The tools you opened most recently on this device."
-        : "Private utilities for PDFs, images, documents, and everyday file work.";
   useEffect(() => {
     document.body.dataset.theme =
       (localStorage.getItem("toolbox-theme") as "dark" | "light") || "dark";
@@ -337,7 +334,6 @@ export const MainPage = () => {
                   {filter === "all" ? "Ready to process" : "Your workspace"}
                 </h3>
                 <h1>{workspaceTitle}</h1>
-                <p>{workspaceDescription}</p>
               </div>
               <label className="search-box">
                 <span>⌕</span>
@@ -348,14 +344,13 @@ export const MainPage = () => {
                   placeholder="Find a tool or action"
                   aria-label="Search tools"
                 />
-                <kbd>⌘ K</kbd>
+                <kbd>{searchShortcut}</kbd>
               </label>
             </div>
             {filter === "all" && recentPreviewTools.length > 0 && (
               <section className="recent-section">
                 <div className="section-heading">
                   <h2>Pick up where you left off</h2>
-                  <span>Stored on this device</span>
                 </div>
                 <div className="recent-grid">
                   {recentPreviewTools.map((tool) => (
@@ -381,7 +376,6 @@ export const MainPage = () => {
             <section>
               <div className="section-heading">
                 <h2>Tool library</h2>
-                <span>{visibleTools.length} tools</span>
               </div>
               <div className="filter-row">
                 {(["all", "PDF", "Images", "Documents", "favorites"] as const).map(
@@ -401,7 +395,19 @@ export const MainPage = () => {
               </div>
               <div className="tool-grid">
                 {visibleTools.map((tool) => (
-                  <article className="tool-card" key={tool.id}>
+                  <article
+                    className="tool-card"
+                    key={tool.id}
+                    tabIndex={0}
+                    aria-label={`Open ${tool.title}`}
+                    onClick={() => openTool(tool)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        openTool(tool);
+                      }
+                    }}
+                  >
                     <div className="tool-card-top">
                       <span className="card-icon">
                         <TablerIcon name={iconName(tool)} />
@@ -415,7 +421,10 @@ export const MainPage = () => {
                             : `Add ${tool.title} to favorites`
                         }
                         aria-pressed={favorites.includes(tool.id)}
-                        onClick={() => toggleFavorite(tool.id)}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          toggleFavorite(tool.id);
+                        }}
                       >
                         {favorites.includes(tool.id) ? "★" : "☆"}
                       </button>
@@ -426,7 +435,10 @@ export const MainPage = () => {
                       <span>{tool.category}</span>
                       <button
                         type="button"
-                        onClick={() => openTool(tool)}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          openTool(tool);
+                        }}
                         aria-label={`Open ${tool.title}`}
                       >
                         Open tool →
