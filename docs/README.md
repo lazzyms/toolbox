@@ -3,6 +3,9 @@
 The public website is [index.html](index.html). It describes the current Tauri
 release on `main`.
 
+Windows users can install Toolbox from the
+[Microsoft Store](https://apps.microsoft.com/detail/9N5R8W4GJVH4).
+
 Current references:
 
 - [PDF and document tools](pdf.html)
@@ -25,4 +28,4 @@ node docs/check-docs.mjs
 The checker compares the category pages with
 `ToolboxTauri/src/registry/index.ts`, checks the matrix rows, validates local
 links and screenshot assets, and verifies that downloads point directly to the
-three installers in the current release.
+macOS release asset and the Microsoft Store listing for Windows.

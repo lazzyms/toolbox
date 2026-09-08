@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { check } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 import packageInfo from "../../package.json";
 import qrCode from "../assets/BuyMeACoffeeQR.png";
 
@@ -10,10 +12,29 @@ export const SettingsPanel = ({ onClose }: SettingsPanelProps) => {
   const [theme, setTheme] = useState<"dark" | "light">(
     () => (localStorage.getItem("toolbox-theme") as "dark" | "light") || "dark",
   );
+  const [updateState, setUpdateState] = useState<"idle" | "checking" | "available" | "current" | "failed">("idle");
+  const [updateVersion, setUpdateVersion] = useState<string | null>(null);
   useEffect(() => {
     document.body.dataset.theme = theme;
     localStorage.setItem("toolbox-theme", theme);
   }, [theme]);
+  const checkForUpdates = async () => {
+    setUpdateState("checking");
+    try {
+      const update = await check();
+      if (!update) {
+        setUpdateVersion(null);
+        setUpdateState("current");
+        return;
+      }
+      setUpdateVersion(update.version);
+      setUpdateState("available");
+      await update.downloadAndInstall();
+      await relaunch();
+    } catch {
+      setUpdateState("failed");
+    }
+  };
   return (
     <div className="settings-overlay" role="presentation">
       <section
@@ -74,6 +95,17 @@ export const SettingsPanel = ({ onClose }: SettingsPanelProps) => {
                 If you’d like to support development, scan the QR code.
               </p>
             </div>
+          </section>
+          <section aria-labelledby="updates-title">
+            <h3 id="updates-title">Updates</h3>
+            <button type="button" onClick={() => void checkForUpdates()} disabled={updateState === "checking"}>
+              {updateState === "checking" ? "Checking..." : "Check for updates"}
+            </button>
+            <p role="status" aria-live="polite">
+              {updateState === "current" && "Toolbox is up to date."}
+              {updateState === "available" && updateVersion && `Installing Toolbox ${updateVersion}...`}
+              {updateState === "failed" && "Could not check for updates."}
+            </p>
           </section>
         </div>
       </section>

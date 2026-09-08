@@ -141,7 +141,7 @@
     </p>
 
     <div class="cta">
-      <a class="btn btn-default btn-lg" data-dl data-download-auto href="https://github.com/lazzyms/toolbox/releases/download/tauri-v0.2.0/Toolbox-0.2.0-macos.dmg">
+      <a class="btn btn-default btn-lg" data-dl data-download-auto href="https://github.com/lazzyms/toolbox/releases/download/tauri-v1.0.0/Toolbox-1.0.0-macos.dmg">
         <svg class="ico" aria-hidden="true"><use href="#i-download"/></svg>
         <span data-download-label>Download for macOS</span>
       </a>
@@ -153,25 +153,25 @@
     <p class="dl-fallback" id="dl-note">
       Your device is detected automatically. Every installer is also listed below.
     </p>
-    <p class="cta-note">Free and MIT licensed · <a href="https://github.com/lazzyms/toolbox/releases/tag/tauri-v0.2.0">Tauri 0.2.0</a> · Released September 6, 2026</p>
+    <p class="cta-note">Free and MIT licensed · <a href="https://github.com/lazzyms/toolbox/releases/tag/tauri-v1.0.0">Tauri 1.0.0</a> · Released September 6, 2026</p>
 
     <div class="download-panel" id="downloads" aria-labelledby="downloads-title">
       <p class="kicker" id="downloads-title">Download the current release</p>
       <div class="download-grid">
-        <a class="download-card" data-download-platform="macos" href="https://github.com/lazzyms/toolbox/releases/download/tauri-v0.2.0/Toolbox-0.2.0-macos.dmg">
+        <a class="download-card" data-download-platform="macos" href="https://github.com/lazzyms/toolbox/releases/download/tauri-v1.0.0/Toolbox-1.0.0-macos.dmg">
           <span class="download-card-title">macOS</span>
           <span class="download-card-meta">Apple silicon · DMG</span>
           <span class="download-card-action">Download directly <span aria-hidden="true">↗</span></span>
         </a>
-        <a class="download-card" data-download-platform="windows-x64" href="https://github.com/lazzyms/toolbox/releases/download/tauri-v0.2.0/Toolbox-windows-x86_64-setup.exe">
+        <a class="download-card" data-download-platform="windows-x64" href="https://apps.microsoft.com/detail/9N5R8W4GJVH4">
           <span class="download-card-title">Windows x64</span>
-          <span class="download-card-meta">Intel or AMD · EXE installer</span>
-          <span class="download-card-action">Download directly <span aria-hidden="true">↗</span></span>
+          <span class="download-card-meta">Microsoft Store · MSIX app</span>
+          <span class="download-card-action">Open in Microsoft Store <span aria-hidden="true">↗</span></span>
         </a>
-        <a class="download-card" data-download-platform="windows-arm64" href="https://github.com/lazzyms/toolbox/releases/download/tauri-v0.2.0/Toolbox-windows-arm64-setup.exe">
+        <a class="download-card" data-download-platform="windows-arm64" href="https://apps.microsoft.com/detail/9N5R8W4GJVH4">
           <span class="download-card-title">Windows ARM64</span>
-          <span class="download-card-meta">ARM Windows · EXE installer</span>
-          <span class="download-card-action">Download directly <span aria-hidden="true">↗</span></span>
+          <span class="download-card-meta">Microsoft Store · MSIX app</span>
+          <span class="download-card-action">Open in Microsoft Store <span aria-hidden="true">↗</span></span>
         </a>
       </div>
     </div>
@@ -180,7 +180,7 @@
       <div class="screenshots-heading">
         <p class="kicker">Inside Toolbox</p>
         <h2 id="screenshots-title">A focused workspace for real file work.</h2>
-        <p>Captured from Toolbox 0.2.0 on macOS, with the home workspace, focused file tools, and settings.</p>
+        <p>Captured from Toolbox 1.0.0 on macOS, with the home workspace, focused file tools, and settings.</p>
       </div>
       <div class="screenshot-grid">
         <figure class="screenshot-card">
@@ -196,7 +196,7 @@
           <figcaption><strong>Convert Image Format</strong><span>Choose a target format in a focused image workflow.</span></figcaption>
         </figure>
         <figure class="screenshot-card">
-          <div class="screenshot-frame"><img src="assets/screenshot-settings.png" data-theme-src-dark="assets/screenshot-settings.png" data-theme-src-light="assets/screenshot-settings-light.png" alt="Toolbox settings panel showing theme controls, version 0.2.0, and support QR code" loading="lazy"></div>
+          <div class="screenshot-frame"><img src="assets/screenshot-settings.png" data-theme-src-dark="assets/screenshot-settings.png" data-theme-src-light="assets/screenshot-settings-light.png" alt="Toolbox settings panel showing theme controls, version 1.0.0, and support QR code" loading="lazy"></div>
           <figcaption><strong>Settings</strong><span>Switch themes, confirm the installed version, and support development.</span></figcaption>
         </figure>
       </div>
@@ -341,8 +341,7 @@
         <summary>How do I install Toolbox?<svg class="chevron" aria-hidden="true"><use href="#i-chevron-down"/></svg></summary>
         <div class="accordion-content">
           <p>On macOS, open the DMG and drag Toolbox to Applications. If needed, Control-click Toolbox in Applications and choose Open.</p>
-          <p>On Windows, run the installer for your processor. The current public installers are not Authenticode-signed, so SmartScreen may show “Windows protected your PC.” Only continue after confirming that you downloaded the expected installer from the direct release link.</p>
-          <p>To remove that warning for future releases, publish the Windows installer with a trusted Authenticode certificate, sign it with SignTool during CI, and timestamp the signature. The updater signature does not establish Windows SmartScreen reputation.</p>
+          <p>On Windows, install Toolbox from the <a href="https://apps.microsoft.com/detail/9N5R8W4GJVH4">Microsoft Store</a>. Microsoft signs accepted MSIX packages and delivers updates through the Store.</p>
         </div>
       </details>
 
@@ -363,7 +362,7 @@
       <details>
         <summary>Which platforms have installers?<svg class="chevron" aria-hidden="true"><use href="#i-chevron-down"/></svg></summary>
         <div class="accordion-content">
-          <p>The current Tauri release provides a macOS Apple silicon DMG and separate Windows x64 and ARM64 installers. This release line has no Intel Mac or Linux installer.</p>
+          <p>The current Tauri release provides a macOS Apple silicon DMG and a Windows MSIX app through the Microsoft Store. This release line has no Intel Mac or Linux installer.</p>
         </div>
       </details>
 
@@ -391,7 +390,7 @@
     <h2>Finish the file work.</h2>
     <p>PDF, Office, and image tools for macOS and Windows.</p>
     <div class="cta">
-      <a class="btn btn-default btn-lg" data-dl data-download-auto href="https://github.com/lazzyms/toolbox/releases/download/tauri-v0.2.0/Toolbox-0.2.0-macos.dmg">
+      <a class="btn btn-default btn-lg" data-dl data-download-auto href="https://github.com/lazzyms/toolbox/releases/download/tauri-v1.0.0/Toolbox-1.0.0-macos.dmg">
         <svg class="ico" aria-hidden="true"><use href="#i-download"/></svg>
         <span data-download-label>Download for macOS</span>
       </a>
@@ -414,6 +413,7 @@
       <a href="https://github.com/lazzyms/toolbox/issues">Issues</a>
       <a href="https://github.com/lazzyms/toolbox/blob/main/README.md#development">Contributing</a>
       <a href="https://github.com/lazzyms/toolbox/blob/main/LICENSE">License</a>
+      <a href="privacy.html">Privacy</a>
       <a href="https://buymeacoffee.com/lazzyms" target="_blank" rel="noopener">Buy me a coffee</a>
     </nav>
   </div>

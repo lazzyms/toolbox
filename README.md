@@ -9,7 +9,9 @@ default branch. The website in [`docs/`](docs/) is kept independently.
 ## Install the cross-platform release
 
 Download the latest installer from the
-[Tauri releases](https://github.com/lazzyms/toolbox/releases?q=tauri-v).
+[Tauri releases](https://github.com/lazzyms/toolbox/releases?q=tauri-v), or
+install the Windows build from the
+[Microsoft Store](https://apps.microsoft.com/detail/9N5R8W4GJVH4).
 
 ### macOS
 
@@ -20,8 +22,9 @@ Download the latest installer from the
 
 ### Windows
 
-1. Run the downloaded `.exe` installer.
-2. If Windows SmartScreen appears, choose **More info**, then **Run anyway**.
+Install Toolbox from the
+[Microsoft Store](https://apps.microsoft.com/detail/9N5R8W4GJVH4), which delivers
+the signed MSIX package and Store-managed updates.
 
 The installers bundle the native PDF helpers they need. Remove Password uses a
 native Rust adapter for Word, Excel, and PowerPoint files with no Office runtime

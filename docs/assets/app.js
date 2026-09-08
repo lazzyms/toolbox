@@ -44,23 +44,22 @@
 
   /* ───────────────────────── downloads ───────────────────────── */
 
-  // These are versioned asset URLs, so every download starts the installer directly.
-  // Keep them in one place when cutting a new release.
+  // Keep platform download destinations in one place when cutting a new release.
   const downloads = {
     macos: {
-      href: 'https://github.com/lazzyms/toolbox/releases/download/tauri-v0.2.0/Toolbox-0.2.0-macos.dmg',
+      href: 'https://github.com/lazzyms/toolbox/releases/download/tauri-v1.0.0/Toolbox-1.0.0-macos.dmg',
       label: 'Download for macOS',
       detail: 'Apple silicon · DMG',
     },
     'windows-x64': {
-      href: 'https://github.com/lazzyms/toolbox/releases/download/tauri-v0.2.0/Toolbox-windows-x86_64-setup.exe',
+      href: 'https://apps.microsoft.com/detail/9N5R8W4GJVH4',
       label: 'Download for Windows x64',
-      detail: 'Intel or AMD · EXE installer',
+      detail: 'Microsoft Store · MSIX app',
     },
     'windows-arm64': {
-      href: 'https://github.com/lazzyms/toolbox/releases/download/tauri-v0.2.0/Toolbox-windows-arm64-setup.exe',
+      href: 'https://apps.microsoft.com/detail/9N5R8W4GJVH4',
       label: 'Download for Windows ARM64',
-      detail: 'ARM Windows · EXE installer',
+      detail: 'Microsoft Store · MSIX app',
     },
   };
 
