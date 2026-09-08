@@ -3,6 +3,8 @@
 Toolbox is a cross-platform desktop app for private, local-first PDF, document,
 and image utilities. Files are processed on-device and are never uploaded.
 
+[![Build with Ona](https://ona.com/build-with-ona.svg)](https://app.ona.com/#https://github.com/lazzyms/toolbox)
+
 The Tauri app on `main` is the primary Toolbox app and the repository's
 default branch. The website in [`docs/`](docs/) is kept independently.
 
