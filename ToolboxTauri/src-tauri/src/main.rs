@@ -176,6 +176,9 @@ async fn image_metadata(request: tools::MetadataRequest) -> Vec<JobOutcome> { Ba
 #[tauri::command]
 fn inspect_image_metadata(request: tools::MetadataRequest) -> Vec<Result<tools::MetadataReport, String>> { request.paths.into_iter().map(tools::inspect_metadata).collect() }
 
+#[tauri::command]
+fn inspect_image_preview(request: tools::ImagePreviewRequest) -> Result<tools::ImagePreview, String> { tools::inspect_preview(&request) }
+
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
@@ -214,7 +217,8 @@ fn main() {
             extract_gif_frames,
             process_tiff_pages
             ,image_metadata
-            ,inspect_image_metadata
+            ,inspect_image_metadata,
+            inspect_image_preview
         ])
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())

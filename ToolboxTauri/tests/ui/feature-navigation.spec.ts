@@ -47,6 +47,9 @@ test.beforeEach(async ({ page }) => {
                 if (command === "inspect_pdf") {
                     return { pages: [{ index: 0, x: 0, y: 0, width: 612, height: 792, preview: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='612' height='792'%3E%3Crect width='100%25' height='100%25' fill='white'/%3E%3C/svg%3E" }] };
                 }
+                if (command === "inspect_image_preview") {
+                    return { width: 640, height: 480, dataUrl: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='640' height='480'%3E%3Crect width='100%25' height='100%25' fill='white'/%3E%3C/svg%3E" };
+                }
                 if (command === "inspect_image_metadata") return ["fixture image"];
                 if (command.startsWith("plugin:")) return null;
 
@@ -307,6 +310,27 @@ test("pdf editor renders page previews", async ({ page }) => {
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await expect(page.getByRole("img", { name: "Preview of page 1" })).toBeVisible();
     await expect(page.locator('aside[aria-label="PDF page thumbnails"] img[alt="Thumbnail of page 1"]')).toBeVisible();
+});
+
+test("workspaces keep one selection while changing the requested outcome", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Image editor", exact: true }).click();
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await expect(page.getByRole("img", { name: `Preview of ${fixtureName}` })).toBeVisible();
+
+    await page.getByRole("tab", { name: "Open Rotate and Flip Images" }).click();
+    await expect(page.getByRole("heading", { name: "Rotate and Flip Images", exact: true })).toBeVisible();
+    await expect(page.getByText("1 files selected", { exact: true })).toBeVisible();
+    await page.getByRole("tab", { name: "Open Colour and Tone Adjustments" }).click();
+    await expect(page.getByRole("slider", { name: "Contrast" })).toBeVisible();
+
+    await page.getByRole("button", { name: "← All tools" }).click();
+    await page.getByRole("button", { name: "Open PDF editor", exact: true }).click();
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await expect(page.getByRole("img", { name: "Preview of page 1" })).toBeVisible();
+    await page.getByRole("tab", { name: "Open Crop PDF" }).click();
+    await expect(page.getByText("Drag over the active page to choose the crop rectangle.", { exact: false })).toBeVisible();
+    await expect(page.getByText("1 files selected", { exact: true })).toBeVisible();
 });
 
 test("vision tools explain unavailable resources before file selection", async ({ page }) => {

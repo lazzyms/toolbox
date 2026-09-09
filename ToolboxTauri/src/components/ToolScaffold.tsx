@@ -22,6 +22,10 @@ export const ToolScaffold = ({ utility, onRun, children }: ToolScaffoldProps) =>
     const [loading, setLoading] = useState(false);
     const progress: Progress = { completed: loading ? 0 : results.length, total: files.length };
 
+    useEffect(() => {
+        setResults([]);
+    }, [utility.id]);
+
     const run = async () => {
         setLoading(true);
         setResults([]);

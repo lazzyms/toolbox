@@ -1,4 +1,4 @@
-import type { ToolDefinition } from "../contracts";
+import type { ToolDefinition, ToolWorkspaceDefinition } from "../contracts";
 
 
 export const UtilityRegistry: ToolDefinition[] = [
@@ -38,3 +38,90 @@ export const UtilityRegistry: ToolDefinition[] = [
 
 export const utilitiesByCategory = (category: ToolDefinition["category"]) =>
     UtilityRegistry.filter((utility) => utility.category === category);
+
+/**
+ * Workspaces are the user-facing layer over the atomic command registry.
+ * Keep the atomic IDs stable: verification, saved navigation, and native
+ * command contracts still address individual outcomes.
+ */
+export const ToolWorkspaceRegistry: ToolWorkspaceDefinition[] = [
+    {
+        id: "file-security",
+        title: "Protect & unlock files",
+        blurb: "Open a file once, then protect it or remove its password without leaving the workspace.",
+        symbol: "lock",
+        tint: "#ef4444",
+        category: "Documents",
+        categories: ["Documents", "PDF"],
+        toolIds: ["pdf-unlock", "pdf-protect"],
+    },
+    {
+        id: "pdf-editor",
+        title: "PDF editor",
+        blurb: "Open a PDF and work on its content, pages, overlays, and final output from one editor surface.",
+        symbol: "edit-pdf",
+        tint: "#8b5cf6",
+        category: "PDF",
+        categories: ["PDF"],
+        toolIds: [
+            "pdf-edit",
+            "pdf-crop",
+            "pdf-watermark",
+            "pdf-sign",
+            "pdf-page-numbers",
+            "pdf-remove-pages",
+            "pdf-organize",
+            "pdf-merge",
+            "pdf-split",
+            "pdf-extract-pages",
+            "pdf-compress",
+        ],
+    },
+    {
+        id: "pdf-convert",
+        title: "PDF conversion",
+        blurb: "Move between PDF pages, images, and selectable text with one input surface and clear outputs.",
+        symbol: "arrows-exchange",
+        tint: "#6366f1",
+        category: "PDF",
+        categories: ["PDF"],
+        toolIds: ["pdf-to-images", "pdf-to-text", "pdf-image-extract", "images-to-pdf"],
+    },
+    {
+        id: "image-editor",
+        title: "Image editor",
+        blurb: "Tune, crop, resize, rotate, flip, watermark, compress, or convert images in one photo-style workspace.",
+        symbol: "adjustments",
+        tint: "#eab308",
+        category: "Images",
+        categories: ["Images"],
+        toolIds: ["heic-convert", "compress", "resize", "rotate", "crop", "image-watermark", "image-tone"],
+    },
+    {
+        id: "media-tools",
+        title: "Media utilities",
+        blurb: "Generate icons, work with GIF and TIFF sequences, inspect metadata, and access optional vision tools.",
+        symbol: "layers",
+        tint: "#14b8a6",
+        category: "Images",
+        categories: ["Images", "PDF"],
+        toolIds: [
+            "icon-set",
+            "gif-create",
+            "gif-extract",
+            "tiff-pages",
+            "image-metadata",
+            "pdf-ocr",
+            "image-blur-faces",
+            "image-remove-bg",
+        ],
+    },
+];
+
+export const toolsForWorkspace = (workspace: ToolWorkspaceDefinition) =>
+    workspace.toolIds
+        .map((id) => UtilityRegistry.find((utility) => utility.id === id))
+        .filter(Boolean) as ToolDefinition[];
+
+export const workspaceForTool = (toolId: string) =>
+    ToolWorkspaceRegistry.find((workspace) => workspace.toolIds.includes(toolId));

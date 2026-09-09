@@ -8,6 +8,7 @@ interface PdfEditorProps {
     state: PdfEditorState;
     onStateChange: (state: PdfEditorState) => void;
     organizeControls?: boolean;
+    pageSelectionMode?: "delete";
     renderOverlay?: (pageIndex: number) => ReactNode;
     selectionRectangle?: PdfRect | null;
     onSelectionChange?: (rectangle: PdfRect | null) => void;
@@ -24,7 +25,7 @@ const togglePageSelection = (state: PdfEditorState, pageIndex: number): PdfEdito
     };
 };
 
-export const PdfEditor = ({ document, state, onStateChange, renderOverlay, organizeControls = false, selectionRectangle, onSelectionChange }: PdfEditorProps) => {
+export const PdfEditor = ({ document, state, onStateChange, renderOverlay, organizeControls = false, pageSelectionMode, selectionRectangle, onSelectionChange }: PdfEditorProps) => {
     const order = state.pageOrder.length ? state.pageOrder : document.pages.map((page) => page.index);
     const activeOrder = order.filter((index) => !state.deletedPages.includes(index));
     const currentPosition = Math.max(0, activeOrder.indexOf(state.currentPage));
@@ -82,9 +83,20 @@ export const PdfEditor = ({ document, state, onStateChange, renderOverlay, organ
                         <button
                             key={page.index}
                             type="button"
-                            aria-label={`Page ${page.index + 1}`}
+                            aria-label={`Page ${page.index + 1}, ${page.width} by ${page.height} points`}
                             aria-pressed={selected}
-                            onClick={() => onStateChange({ ...state, currentPage: pageIndex })}
+                            onClick={() => {
+                                if (pageSelectionMode === "delete") {
+                                    onStateChange({
+                                        ...state,
+                                        deletedPages: state.deletedPages.includes(pageIndex)
+                                            ? state.deletedPages.filter((index) => index !== pageIndex)
+                                            : [...state.deletedPages, pageIndex],
+                                    });
+                                } else {
+                                    onStateChange({ ...state, currentPage: pageIndex });
+                                }
+                            }}
                             className={`relative shrink-0 rounded border p-2 ${selected ? "border-blue-500 ring-2 ring-blue-200" : "border-slate-200"}`}
                         >
                             {page.preview ? <img
