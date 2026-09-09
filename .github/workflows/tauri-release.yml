@@ -110,13 +110,13 @@ jobs:
         working-directory: ToolboxTauri
       - name: Install qpdf (macOS)
         if: runner.os == 'macOS'
-        run: brew install qpdf poppler
+        run: brew install qpdf poppler tesseract
       - name: Install qpdf and stage Windows resources
         if: runner.os == 'Windows'
         shell: pwsh
         working-directory: ToolboxTauri
         run: |
-          choco install qpdf -y
+          choco install qpdf tesseract -y
           $popplerVersion = '26.02.0-0'
           $popplerSha256 = '993e4a94376ed712fafc7058d724ea0b943d118bbd2305cd9ed55174eb85cda5'
           $popplerArchive = Join-Path $env:RUNNER_TEMP "poppler-$popplerVersion.zip"
@@ -143,6 +143,12 @@ jobs:
         if: runner.os == 'macOS'
         working-directory: ToolboxTauri
         run: printf '{"version":"%s"}\n' "$VERSION" > release-config.json
+      - name: Stage offline vision adapter
+        run: npm run stage:vision -- ${{ matrix.target }}
+        working-directory: ToolboxTauri
+      - name: Stage offline OCR resources
+        run: npm run stage:ocr -- ${{ matrix.target }}
+        working-directory: ToolboxTauri
       - run: cargo test
         working-directory: ToolboxTauri/src-tauri
       - name: Run native E2E matrix

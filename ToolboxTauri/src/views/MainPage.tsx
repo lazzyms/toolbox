@@ -309,7 +309,7 @@ export const MainPage = () => {
               </div>
               <div className="tool-workspace-heading">
                 <div>
-                  <div className="workspace-title">{selectedTool.title}</div>
+                  <h1 className="workspace-title">{selectedTool.title}</h1>
                   <p>{selectedTool.blurb}</p>
                 </div>
                 <button
@@ -488,7 +488,7 @@ export const MainPage = () => {
 const ViewFor = ({ utility }: { utility: ToolDefinition }) => {
   const View = views[utility.view];
   if (utility.status === "unavailable") {
-    return <UnavailableToolView utility={utility} />;
+    return <UnavailableToolView />;
   }
   return <View utility={utility} />;
 };

@@ -49,7 +49,7 @@ jobs:
         shell: pwsh
         working-directory: ToolboxTauri
         run: |
-          choco install qpdf -y
+          choco install qpdf tesseract -y
           $popplerVersion = '26.02.0-0'
           $popplerSha256 = '993e4a94376ed712fafc7058d724ea0b943d118bbd2305cd9ed55174eb85cda5'
           $popplerArchive = Join-Path $env:RUNNER_TEMP "poppler-$popplerVersion.zip"
@@ -71,6 +71,14 @@ jobs:
           Copy-Item $pdftoppm.FullName src-tauri\resources\pdftoppm.exe -Force
           Get-ChildItem $pdftoppm.DirectoryName -Filter *.dll | Copy-Item -Destination src-tauri\resources -Force
           & src-tauri\resources\qpdf.exe --version
+
+      - name: Stage offline vision adapter
+        run: npm run stage:vision
+        working-directory: ToolboxTauri
+
+      - name: Stage offline OCR resources
+        run: npm run stage:ocr
+        working-directory: ToolboxTauri
 
       - name: Run Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml

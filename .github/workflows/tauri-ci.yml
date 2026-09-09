@@ -77,11 +77,11 @@ jobs:
 
       - name: Install qpdf (macOS)
         if: runner.os == 'macOS'
-        run: brew install qpdf poppler
+        run: brew install qpdf poppler tesseract
 
       - name: Install qpdf (Windows)
         if: runner.os == 'Windows'
-        run: choco install qpdf poppler -y
+        run: choco install qpdf poppler tesseract -y
 
       - name: Stage qpdf as Windows bundle resources
         if: runner.os == 'Windows'
@@ -119,6 +119,14 @@ jobs:
           & src-tauri\resources\qpdf.exe --version
           '{"bundle": {"createUpdaterArtifacts": false, "resources": ["resources/*"]}}' |
             Out-File -Encoding ascii resources-qpdf.json
+
+      - name: Stage offline vision adapter
+        run: npm run stage:vision
+        working-directory: ToolboxTauri
+
+      - name: Stage offline OCR resources
+        run: npm run stage:ocr
+        working-directory: ToolboxTauri
 
       - name: Run kit tests
         run: cargo test

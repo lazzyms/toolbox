@@ -29,6 +29,7 @@
     "active": true,
     "targets": "all",
     "createUpdaterArtifacts": true,
+    "resources": ["resources/vision", "resources/ocr"],
     "macOS": {
       "signingIdentity": "-"
     },

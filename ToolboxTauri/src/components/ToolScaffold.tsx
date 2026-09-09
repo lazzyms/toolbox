@@ -16,7 +16,7 @@ interface ToolScaffoldProps {
     }) => React.ReactNode;
 }
 
-export const ToolScaffold = ({ utility, onRun, children }: ToolScaffoldProps) => {
+export const ToolScaffold = ({ onRun, children }: ToolScaffoldProps) => {
     const [files, setFiles] = useState<string[]>([]);
     const [results, setResults] = useState<JobOutcome[]>([]);
     const [loading, setLoading] = useState(false);
@@ -69,11 +69,6 @@ export const ToolScaffold = ({ utility, onRun, children }: ToolScaffoldProps) =>
 
     return (
         <div className="tool-scaffold">
-            <div className="tool-scaffold-heading">
-                <h2>{utility.title}</h2>
-                <p>{utility.blurb}</p>
-            </div>
-
             <div
                 role="button"
                 tabIndex={0}
