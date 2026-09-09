@@ -32,6 +32,8 @@ const pdfEditorIds = new Set<string>(pdfEditorActionIds);
 const editModes = ["text", "note", "highlight", "shape"] as const;
 
 type EditMode = (typeof editModes)[number];
+type OrganizeMode = "arrange" | "add-pages";
+type AddPagePosition = "before" | "after" | "end";
 
 const createInitialState = (document?: PdfDocument): PdfEditorState => ({
   currentPage: 0,
@@ -87,6 +89,9 @@ export const PDFEditorWorkspaceView = ({ utility }: { utility: ToolDefinition })
   const [splitMode, setSplitMode] = useState<"pages" | "ranges" | "chunks">("pages");
   const [chunkSize, setChunkSize] = useState(2);
   const [quality, setQuality] = useState(80);
+  const [organizeMode, setOrganizeMode] = useState<OrganizeMode>("arrange");
+  const [addPagePosition, setAddPagePosition] = useState<AddPagePosition>("after");
+  const [addPageCount, setAddPageCount] = useState(1);
   const activeUtility = pdfEditorIds.has(utility.id)
     ? utility
     : UtilityRegistry.find((item) => item.id === "pdf-edit") ?? utility;
@@ -171,6 +176,17 @@ export const PDFEditorWorkspaceView = ({ utility }: { utility: ToolDefinition })
             : Promise.resolve(invalidResult(paths, "Delete at least one page in the editor first."));
         }
         if (activeUtility.id === "pdf-organize") {
+          if (organizeMode === "add-pages") {
+            return invoke<ToolResult>("add_pdf_pages", {
+              request: {
+                paths: [paths[0]],
+                page: state.currentPage,
+                position: addPagePosition,
+                count: addPageCount,
+                outputLocation: "alongsideInput",
+              },
+            });
+          }
           return invoke<ToolResult>("organize_pdf", {
             request: {
               paths: [paths[0]],
@@ -248,6 +264,12 @@ export const PDFEditorWorkspaceView = ({ utility }: { utility: ToolDefinition })
           setChunkSize={setChunkSize}
           quality={quality}
           setQuality={setQuality}
+          organizeMode={organizeMode}
+          setOrganizeMode={setOrganizeMode}
+          addPagePosition={addPagePosition}
+          setAddPagePosition={setAddPagePosition}
+          addPageCount={addPageCount}
+          setAddPageCount={setAddPageCount}
         />
       )}
     </ToolScaffold>
@@ -291,6 +313,12 @@ interface PDFEditorContentProps {
   setChunkSize: (value: number) => void;
   quality: number;
   setQuality: (value: number) => void;
+  organizeMode: OrganizeMode;
+  setOrganizeMode: (value: OrganizeMode) => void;
+  addPagePosition: AddPagePosition;
+  setAddPagePosition: (value: AddPagePosition) => void;
+  addPageCount: number;
+  setAddPageCount: (value: number) => void;
 }
 
 const PDFEditorContent = ({
@@ -330,6 +358,12 @@ const PDFEditorContent = ({
   setChunkSize,
   quality,
   setQuality,
+  organizeMode,
+  setOrganizeMode,
+  addPagePosition,
+  setAddPagePosition,
+  addPageCount,
+  setAddPageCount,
 }: PDFEditorContentProps) => {
   useEffect(() => {
     const path = files[0];
@@ -374,7 +408,8 @@ const PDFEditorContent = ({
     files.length === 0 ||
     (utility.id === "pdf-crop" && !rectangle) ||
     (utility.id === "pdf-remove-pages" && state.deletedPages.length === 0) ||
-    (utility.id === "pdf-edit" && editMode !== "shape" && !text.trim());
+    (utility.id === "pdf-edit" && editMode !== "shape" && !text.trim()) ||
+    (utility.id === "pdf-organize" && organizeMode === "add-pages" && (!Number.isInteger(addPageCount) || addPageCount < 1));
 
   return (
     <div className="pdf-editor-workspace">
@@ -383,7 +418,7 @@ const PDFEditorContent = ({
           document={document}
           state={state}
           onStateChange={setState}
-          organizeControls={utility.id === "pdf-remove-pages" || utility.id === "pdf-organize"}
+          organizeControls={utility.id === "pdf-remove-pages" || (utility.id === "pdf-organize" && organizeMode === "arrange")}
           pageSelectionMode={utility.id === "pdf-remove-pages" ? "delete" : undefined}
           selectionRectangle={needsSelection ? rectangle : undefined}
           onSelectionChange={needsSelection ? setRectangle : undefined}
@@ -418,12 +453,28 @@ const PDFEditorContent = ({
         {utility.id === "pdf-page-numbers" && <div className="workspace-field-grid"><label className="workspace-field"><span>Start at</span><input aria-label="Starting page number" type="number" min="1" value={startNumber} onChange={(event) => setStartNumber(Number(event.target.value))} /></label><label className="workspace-field"><span>Font size</span><input aria-label="Page number font size" type="number" min="8" max="72" value={fontSize} onChange={(event) => setFontSize(Number(event.target.value))} /></label><label className="workspace-field"><span>Position</span><select aria-label="Page number position" value={watermarkPosition} onChange={(event) => setWatermarkPosition(event.target.value)}><option value="bottom-right">Bottom right</option><option value="bottom-left">Bottom left</option><option value="top-right">Top right</option><option value="top-left">Top left</option></select></label><label className="workspace-field"><span>Pages</span><input aria-label="Page number pages" value={pages} onChange={(event) => setPages(event.target.value)} placeholder="All pages, or 1, 3" /></label></div>}
         {utility.id === "pdf-sign" && <p className="workspace-note">Drag on the active page to place the signature. Select an image or use the typed signature.</p>}
         {utility.id === "pdf-remove-pages" && <p className="workspace-note">Use Delete page in the editor. The original remains unchanged and the remaining pages keep their order.</p>}
-        {utility.id === "pdf-organize" && <p className="workspace-note">Move, rotate, or delete pages in the editor, then save the resulting order.</p>}
+        {utility.id === "pdf-organize" && (
+          <>
+            <div className="workspace-segmented-control" role="group" aria-label="PDF page operation">
+              <button type="button" aria-pressed={organizeMode === "arrange"} onClick={() => setOrganizeMode("arrange")}>Arrange pages</button>
+              <button type="button" aria-pressed={organizeMode === "add-pages"} onClick={() => setOrganizeMode("add-pages")}>Add blank pages</button>
+            </div>
+            {organizeMode === "add-pages" ? (
+              <>
+                <div className="workspace-field-grid">
+                  <label className="workspace-field"><span>Insert</span><select aria-label="Blank page position" value={addPagePosition} onChange={(event) => setAddPagePosition(event.target.value as AddPagePosition)}><option value="before">Before selected page</option><option value="after">After selected page</option><option value="end">At end of document</option></select></label>
+                  <label className="workspace-field"><span>Blank pages</span><input aria-label="Number of blank pages" type="number" min="1" max="100" value={addPageCount} onChange={(event) => setAddPageCount(Number(event.target.value))} /></label>
+                </div>
+                <p className="workspace-note">Blank pages copy the selected page size. The PDF is saved as a new copy and the original stays unchanged.</p>
+              </>
+            ) : <p className="workspace-note">Move, rotate, or delete pages in the editor, then save the resulting order.</p>}
+          </>
+        )}
         {utility.id === "pdf-merge" && <p className="workspace-note">Select two or more PDFs. They will be combined in the order shown in the file list.</p>}
         {utility.id === "pdf-split" && <div className="workspace-field-grid"><label className="workspace-field"><span>Split mode</span><select aria-label="Split mode" value={splitMode} onChange={(event) => setSplitMode(event.target.value as typeof splitMode)}><option value="pages">Every page</option><option value="ranges">Ranges</option><option value="chunks">Fixed-size chunks</option></select></label>{splitMode === "ranges" && <label className="workspace-field"><span>Ranges</span><input aria-label="Page ranges" value={pages} onChange={(event) => setPages(event.target.value)} placeholder="1-3, 4-8, 9-" /></label>}{splitMode === "chunks" && <label className="workspace-field"><span>Pages per file</span><input aria-label="Pages per file" type="number" min="1" value={chunkSize} onChange={(event) => setChunkSize(Number(event.target.value))} /></label>}</div>}
         {utility.id === "pdf-extract-pages" && <label className="workspace-field"><span>Pages or ranges</span><input aria-label="Page numbers or ranges" value={pages} onChange={(event) => setPages(event.target.value)} placeholder="1-3, 7" /></label>}
         {utility.id === "pdf-compress" && <label className="workspace-field"><span>Compression quality <output>{quality}%</output></span><input aria-label="PDF quality" type="range" min="1" max="100" value={quality} onChange={(event) => setQuality(Number(event.target.value))} /></label>}
-        <button type="button" disabled={runDisabled} onClick={run} className="workspace-primary-action">{utility.id === "pdf-edit" ? "Edit PDF" : utility.shortTitle}</button>
+        <button type="button" disabled={runDisabled} onClick={run} className="workspace-primary-action">{utility.id === "pdf-edit" ? "Edit PDF" : utility.id === "pdf-organize" && organizeMode === "add-pages" ? "Add Pages" : utility.shortTitle}</button>
       </div>
     </div>
   );

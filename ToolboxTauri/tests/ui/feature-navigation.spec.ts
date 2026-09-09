@@ -312,6 +312,27 @@ test("pdf editor renders page previews", async ({ page }) => {
     await expect(page.locator('aside[aria-label="PDF page thumbnails"] img[alt="Thumbnail of page 1"]')).toBeVisible();
 });
 
+test("PDF editor adds blank pages from the organize outcome", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Organize PDF" }).click();
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await expect(page.getByRole("img", { name: "Preview of page 1" })).toBeVisible();
+
+    await page.getByRole("button", { name: "Add blank pages", exact: true }).click();
+    await page.getByLabel("Number of blank pages").fill("2");
+    const addPages = page.getByRole("button", { name: "Add Pages", exact: true });
+    await expect(addPages).toBeEnabled();
+    await addPages.click();
+
+    await expect(page.getByText("Test output", { exact: true })).toBeVisible();
+    const invocation = await page.evaluate(() =>
+        (window as TestWindow).__toolboxInvocations?.find(({ command }) => command === "add_pdf_pages"),
+    );
+    expect(invocation?.args).toMatchObject({
+        request: { position: "after", page: 0, count: 2 },
+    });
+});
+
 test("workspaces keep one selection while changing the requested outcome", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Open Image editor", exact: true }).click();
