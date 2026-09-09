@@ -82,6 +82,8 @@ test("every registered feature opens its detail pane", async ({ page }) => {
         await expect(navigationButton).toBeVisible();
         await navigationButton.click();
         await expect(page.getByRole("heading", { name: utility.title, exact: true })).toBeVisible();
+        await expect(page.locator("#tool-detail h1")).toHaveCount(1);
+        await expect(page.locator("#tool-detail h2")).toHaveCount(0);
         await expect(page.locator('p[role="status"]')).toHaveText(`${utility.title} selected.`);
     }
 });
@@ -307,19 +309,6 @@ test("pdf editor renders page previews", async ({ page }) => {
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await expect(page.getByRole("img", { name: "Preview of page 1" })).toBeVisible();
     await expect(page.locator('aside[aria-label="PDF page thumbnails"] img[alt="Thumbnail of page 1"]')).toBeVisible();
-});
-
-test("vision tools explain unavailable resources before file selection", async ({ page }) => {
-    await page.goto("/");
-    for (const [index, id] of ["pdf-ocr", "image-blur-faces", "image-remove-bg"].entries()) {
-        const utility = UtilityRegistry.find((item) => item.id === id);
-        expect(utility).toBeDefined();
-        if (!utility) continue;
-        if (index > 0) await page.getByRole("button", { name: "← All tools" }).click();
-        await page.getByRole("button", { name: `Open ${utility.title}` }).click();
-        await expect(page.getByText("Unavailable in this build.", { exact: true })).toBeVisible();
-        await expect(page.getByRole("button", { name: "Choose files to process" })).toHaveCount(0);
-    }
 });
 
 test("remove pages stays disabled until a page is selected", async ({ page }) => {

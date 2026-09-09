@@ -2,3 +2,7 @@
 node_modules/
 dist/
 test-results/
+src-tauri/resources/vision/bin/
+src-tauri/resources/vision/manifest.json
+src-tauri/resources/ocr/bin/
+src-tauri/resources/ocr/manifest.json

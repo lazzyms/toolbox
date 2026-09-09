@@ -5,6 +5,14 @@ description = "Cross-platform Toolbox (Tauri port of the macOS utilities app)"
 authors = ["Maulik Sompura"]
 edition = "2021"
 
+[features]
+vision-adapter = ["dep:tract-onnx"]
+
+[[bin]]
+name = "toolbox-vision-adapter"
+path = "src/bin/toolbox-vision-adapter.rs"
+required-features = ["vision-adapter"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -29,6 +37,7 @@ heif-rs = "26.7"
 webpx = "0.4"
 sha2 = "0.11"
 tiff = "0.11"
+tract-onnx = { version = "0.23.7", optional = true }
 
 [profile.release]
 codegen-units = 1
