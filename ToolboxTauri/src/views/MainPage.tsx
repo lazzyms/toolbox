@@ -1,66 +1,55 @@
 import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
-import { UtilityRegistry } from "../registry";
+import {
+  ToolWorkspaceRegistry,
+  UtilityRegistry,
+  toolsForWorkspace,
+  workspaceForTool,
+} from "../registry";
 import type { ToolDefinition } from "../contracts";
 import { TablerIcon } from "../components/TablerIcon";
-import { PDFUnlockView } from "./PDFUnlockView";
-import { PDFProtectView } from "./PDFProtectView";
-import { PDFEditView } from "./PDFEditView";
-import { ImageCompressView } from "./ImageCompressView";
-import { ImageConvertView } from "./ImageConvertView";
+import { WorkspaceActionBar } from "../components/WorkspaceActionBar";
+import { SecurityWorkspaceView } from "./SecurityWorkspaceView";
+import { PDFEditorWorkspaceView } from "./PDFEditorWorkspaceView";
+import { PDFConversionWorkspaceView } from "./PDFConversionWorkspaceView";
+import { ImageEditorWorkspaceView } from "./ImageEditorWorkspaceView";
+import { MediaWorkspaceView } from "./MediaWorkspaceView";
 import { PlannedToolView, UnavailableToolView } from "./PlannedToolView";
-import { PDFCropView, PDFOrganizeView, PDFSignView } from "./PDFPageToolView";
-import { PDFSimpleToolView } from "./PDFSimpleToolView";
-import { PDFSelectionView } from "./PDFSelectionView";
-import { PDFPathsView } from "./PDFPathsView";
-import { PDFConversionView } from "./PDFConversionView";
 import { VisionView } from "./VisionView";
-import { ImageGeometryView } from "./ImageGeometryView";
-import { ImageEffectView } from "./ImageEffectView";
-import { ImageFormatView } from "./ImageFormatView";
-import { ImageMetadataView } from "./ImageMetadataView";
 import { SettingsPanel } from "./SettingsPanel";
 
 const views = {
-  "pdf-unlock": PDFUnlockView,
-  "pdf-protect": PDFProtectView,
-  "pdf-edit": PDFEditView,
-  "pdf-crop": PDFCropView,
-  "pdf-sign": PDFSignView,
-  "pdf-organize": PDFOrganizeView,
-  "pdf-page-numbers": (props) => (
-    <PDFSimpleToolView {...props} mode="pageNumbers" />
-  ),
-  "pdf-watermark": (props) => <PDFSimpleToolView {...props} mode="watermark" />,
-  "pdf-compress": (props) => <PDFSimpleToolView {...props} mode="compress" />,
-  "pdf-remove-pages": (props) => <PDFSelectionView {...props} mode="remove" />,
-  "pdf-extract-pages": (props) => (
-    <PDFSelectionView {...props} mode="extract" />
-  ),
-  "pdf-merge": (props) => <PDFPathsView {...props} mode="merge" />,
-  "pdf-split": (props) => <PDFPathsView {...props} mode="split" />,
-  "pdf-to-images": (props) => <PDFConversionView {...props} mode="to-images" />,
-  "pdf-to-text": (props) => <PDFConversionView {...props} mode="to-text" />,
-  "pdf-image-extract": (props) => (
-    <PDFConversionView {...props} mode="extract-images" />
-  ),
-  "images-to-pdf": (props) => (
-    <PDFConversionView {...props} mode="images-to-pdf" />
-  ),
+  "pdf-unlock": SecurityWorkspaceView,
+  "pdf-protect": SecurityWorkspaceView,
+  "pdf-edit": PDFEditorWorkspaceView,
+  "pdf-crop": PDFEditorWorkspaceView,
+  "pdf-sign": PDFEditorWorkspaceView,
+  "pdf-organize": PDFEditorWorkspaceView,
+  "pdf-page-numbers": PDFEditorWorkspaceView,
+  "pdf-watermark": PDFEditorWorkspaceView,
+  "pdf-compress": PDFEditorWorkspaceView,
+  "pdf-remove-pages": PDFEditorWorkspaceView,
+  "pdf-extract-pages": PDFEditorWorkspaceView,
+  "pdf-merge": PDFEditorWorkspaceView,
+  "pdf-split": PDFEditorWorkspaceView,
+  "pdf-to-images": PDFConversionWorkspaceView,
+  "pdf-to-text": PDFConversionWorkspaceView,
+  "pdf-image-extract": PDFConversionWorkspaceView,
+  "images-to-pdf": PDFConversionWorkspaceView,
   "pdf-ocr": (props) => <VisionView {...props} mode="ocr" />,
   "image-blur-faces": (props) => <VisionView {...props} mode="faces" />,
   "image-remove-bg": (props) => <VisionView {...props} mode="background" />,
-  "image-resize": (props) => <ImageGeometryView {...props} mode="resize" />,
-  "image-rotate": (props) => <ImageGeometryView {...props} mode="rotate" />,
-  "image-crop": (props) => <ImageGeometryView {...props} mode="crop" />,
-  "image-watermark": (props) => <ImageEffectView {...props} mode="watermark" />,
-  "image-tone": (props) => <ImageEffectView {...props} mode="tone" />,
-  "image-icons": (props) => <ImageFormatView {...props} mode="icons" />,
-  "gif-create": (props) => <ImageFormatView {...props} mode="gif-create" />,
-  "gif-extract": (props) => <ImageFormatView {...props} mode="gif-extract" />,
-  "tiff-pages": (props) => <ImageFormatView {...props} mode="tiff" />,
-  "image-metadata": ImageMetadataView,
-  "image-compress": ImageCompressView,
-  "image-convert": ImageConvertView,
+  "image-resize": ImageEditorWorkspaceView,
+  "image-rotate": ImageEditorWorkspaceView,
+  "image-crop": ImageEditorWorkspaceView,
+  "image-watermark": ImageEditorWorkspaceView,
+  "image-tone": ImageEditorWorkspaceView,
+  "image-icons": MediaWorkspaceView,
+  "gif-create": MediaWorkspaceView,
+  "gif-extract": MediaWorkspaceView,
+  "tiff-pages": MediaWorkspaceView,
+  "image-metadata": MediaWorkspaceView,
+  "image-compress": ImageEditorWorkspaceView,
+  "image-convert": ImageEditorWorkspaceView,
   planned: PlannedToolView,
 } satisfies Record<
   ToolDefinition["view"],
@@ -130,21 +119,21 @@ export const MainPage = () => {
     [recent],
   );
   const recentPreviewTools = recentTools.slice(0, 3);
-  const visibleTools = useMemo(
-    () => {
-      const source = filter === "recent" ? recentTools : UtilityRegistry;
-      return source.filter(
-        (tool) =>
-          (filter === "all" ||
-            filter === "recent" ||
-            tool.category === filter ||
-            (filter === "favorites" && favorites.includes(tool.id))) &&
-          `${tool.title} ${tool.blurb}`
-            .toLowerCase()
-            .includes(search.toLowerCase()),
-      );
-    },
-    [filter, search, favorites, recentTools],
+  const visibleWorkspaces = useMemo(
+    () =>
+      ToolWorkspaceRegistry.map((workspace) => {
+        const actions = toolsForWorkspace(workspace).filter((tool) => {
+          const matchesScope =
+            filter === "all" ||
+            (filter === "recent" && recent.includes(tool.id)) ||
+            (filter === "favorites" && favorites.includes(tool.id)) ||
+            (filter !== "recent" && filter !== "favorites" && tool.category === filter);
+          const searchText = `${tool.title} ${tool.blurb} ${workspace.title} ${workspace.blurb}`.toLowerCase();
+          return matchesScope && searchText.includes(search.toLowerCase());
+        });
+        return { workspace, actions };
+      }).filter(({ actions }) => actions.length > 0),
+    [filter, search, favorites, recent],
   );
   const openTool = (tool: ToolDefinition) => {
     setSelectedTool(tool);
@@ -180,6 +169,9 @@ export const MainPage = () => {
         : filter === "recent"
           ? "Recent"
           : `${filter} tools`;
+  const selectedWorkspace = selectedTool
+    ? workspaceForTool(selectedTool.id)
+    : undefined;
   useEffect(() => {
     document.body.dataset.theme =
       (localStorage.getItem("toolbox-theme") as "dark" | "light") || "dark";
@@ -291,7 +283,7 @@ export const MainPage = () => {
             <i /> On-device workspace
           </span>
         </header>
-        {selectedTool ? (
+        {selectedTool && selectedWorkspace ? (
           <section className="tool-workspace" id="tool-detail">
             <button
               className="back-link"
@@ -305,12 +297,12 @@ export const MainPage = () => {
                 <span className="card-icon">
                   <TablerIcon name={iconName(selectedTool)} />
                 </span>
-                {selectedTool.category} utility
+                {selectedWorkspace.title} workspace
               </div>
               <div className="tool-workspace-heading">
                 <div>
-                  <div className="workspace-title">{selectedTool.title}</div>
-                  <p>{selectedTool.blurb}</p>
+                  <div className="workspace-title">{selectedWorkspace.title}</div>
+                  <p>{selectedWorkspace.blurb}</p>
                 </div>
                 <button
                   className="favorite-button"
@@ -321,6 +313,15 @@ export const MainPage = () => {
                   {favorites.includes(selectedTool.id) ? "★ Saved" : "☆ Save"}
                 </button>
               </div>
+              <WorkspaceActionBar
+                actions={toolsForWorkspace(selectedWorkspace)}
+                activeId={selectedTool.id}
+                onSelect={openTool}
+                label={`${selectedWorkspace.title} actions`}
+              />
+              <p className="workspace-selected-action">
+                Selected action: <strong>{selectedTool.title}</strong>
+              </p>
               <div className="tool-view">
                 <ViewFor utility={selectedTool} />
               </div>
@@ -394,60 +395,83 @@ export const MainPage = () => {
                 )}
               </div>
               <div className="tool-grid">
-                {visibleTools.map((tool) => (
+                {visibleWorkspaces.map(({ workspace, actions }) => (
                   <article
-                    className="tool-card"
-                    key={tool.id}
+                    className="tool-card workspace-card"
+                    key={workspace.id}
                     tabIndex={0}
-                    aria-label={`Open ${tool.title}`}
-                    onClick={() => openTool(tool)}
+                    aria-label={`Open ${workspace.title}`}
+                    onClick={() => openTool(actions[0])}
                     onKeyDown={(event) => {
                       if (event.key === "Enter" || event.key === " ") {
                         event.preventDefault();
-                        openTool(tool);
+                        openTool(actions[0]);
                       }
                     }}
                   >
-                    <div className="tool-card-top">
-                      <span className="card-icon">
-                        <TablerIcon name={iconName(tool)} />
+                    <div className="workspace-card-heading">
+                      <span className="workspace-card-eyebrow">
+                        {actions.length} {actions.length === 1 ? "action" : "actions"} · {workspace.categories.join(" + ")}
                       </span>
-                      <button
-                        className="favorite-button"
-                        type="button"
-                        aria-label={
-                          favorites.includes(tool.id)
-                            ? `Remove ${tool.title} from favorites`
-                            : `Add ${tool.title} to favorites`
-                        }
-                        aria-pressed={favorites.includes(tool.id)}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          toggleFavorite(tool.id);
-                        }}
-                      >
-                        {favorites.includes(tool.id) ? "★" : "☆"}
-                      </button>
                     </div>
-                    <h3>{tool.title}</h3>
-                    <p>{tool.blurb}</p>
+                    <h3>{workspace.title}</h3>
+                    <p>{workspace.blurb}</p>
+                    <div className="workspace-action-list">
+                      {actions.map((tool) => (
+                        <div className="workspace-action-row" key={tool.id}>
+                          <button
+                            type="button"
+                            className="workspace-action-button"
+                            aria-label={`Open ${tool.title}`}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              openTool(tool);
+                            }}
+                          >
+                            <span className="card-icon">
+                              <TablerIcon name={iconName(tool)} />
+                            </span>
+                            <span>
+                              <strong>{tool.title}</strong>
+                              <small>{tool.blurb}</small>
+                            </span>
+                          </button>
+                          <button
+                            className="favorite-button"
+                            type="button"
+                            aria-label={
+                              favorites.includes(tool.id)
+                                ? `Remove ${tool.title} from favorites`
+                                : `Add ${tool.title} to favorites`
+                            }
+                            aria-pressed={favorites.includes(tool.id)}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              toggleFavorite(tool.id);
+                            }}
+                          >
+                            {favorites.includes(tool.id) ? "★" : "☆"}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
                     <footer>
-                      <span>{tool.category}</span>
+                      <span>One file surface · {actions.length} outcomes</span>
                       <button
                         type="button"
                         onClick={(event) => {
                           event.stopPropagation();
-                          openTool(tool);
+                          openTool(actions[0]);
                         }}
-                        aria-label={`Open ${tool.title}`}
+                        aria-label={`Open ${workspace.title}`}
                       >
-                        Open tool →
+                        Open workspace →
                       </button>
                     </footer>
                   </article>
                 ))}
               </div>
-              {visibleTools.length === 0 && (
+              {visibleWorkspaces.length === 0 && (
                 <div className="empty-state">
                   <strong>
                     {filter === "favorites" && !search

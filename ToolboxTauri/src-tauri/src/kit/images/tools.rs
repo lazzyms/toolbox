@@ -1,4 +1,6 @@
-use image::{DynamicImage, ImageFormat};
+use base64::{engine::general_purpose::STANDARD, Engine};
+use image::codecs::png::PngEncoder;
+use image::{DynamicImage, ImageFormat, ImageEncoder};
 use image::AnimationDecoder;
 use std::fs::File;
 use std::io::{BufReader, Seek};
@@ -6,6 +8,42 @@ use std::path::{Path, PathBuf};
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::ToolError;
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImagePreviewRequest {
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImagePreview {
+    pub width: u32,
+    pub height: u32,
+    pub data_url: String,
+}
+
+pub fn inspect_preview(request: &ImagePreviewRequest) -> Result<ImagePreview, String> {
+    let image = image::open(&request.path)
+        .map_err(|error| format!("Could not preview image: {error}"))?;
+    let width = image.width();
+    let height = image.height();
+    let preview = image.thumbnail(1200, 900).to_rgba8();
+    let mut bytes = Vec::new();
+    PngEncoder::new(&mut bytes)
+        .write_image(
+            preview.as_raw(),
+            preview.width(),
+            preview.height(),
+            image::ExtendedColorType::Rgba8,
+        )
+        .map_err(|error| format!("Could not encode image preview: {error}"))?;
+    Ok(ImagePreview {
+        width,
+        height,
+        data_url: format!("data:image/png;base64,{}", STANDARD.encode(bytes)),
+    })
+}
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]

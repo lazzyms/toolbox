@@ -45,6 +45,19 @@ pub struct OrganizePdfRequest {
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AddPdfPagesRequest {
+    pub paths: Vec<PathBuf>,
+    #[serde(default = "default_add_page_position")]
+    pub position: String,
+    #[serde(default)]
+    pub page: usize,
+    #[serde(default = "default_add_page_count")]
+    pub count: usize,
+    pub output_location: OutputLocation,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RotatePage {
     pub page: usize,
     pub degrees: i32,
@@ -75,6 +88,8 @@ pub struct EditPdfRequest {
 }
 
 fn default_scope() -> PageScope { PageScope::All }
+fn default_add_page_position() -> String { "after".to_string() }
+fn default_add_page_count() -> usize { 1 }
 
 pub fn crop(request: &CropPdfRequest, input: PathBuf) -> JobOutcome {
     transform_pdf(input, &request.output_location, "-cropped", |document, pages| {
@@ -114,6 +129,65 @@ pub fn organize(request: &OrganizePdfRequest, input: PathBuf) -> JobOutcome {
         }
         if order.is_empty() { return Err("The organize plan must keep at least one page.".to_string()); }
         let root = document.get_dictionary_mut(root).map_err(|e| e.to_string())?;
+        root.set("Kids", order.iter().map(|page| Object::Reference(*page)).collect::<Vec<_>>());
+        root.set("Count", order.len() as i64);
+        Ok(())
+    })
+}
+
+pub fn add_pages(request: &AddPdfPagesRequest, input: PathBuf) -> JobOutcome {
+    transform_pdf(input, &request.output_location, "-pages-added", |document, pages| {
+        if request.count == 0 {
+            return Err("Add at least one blank page.".to_string());
+        }
+        if request.count > 100 {
+            return Err("You can add at most 100 blank pages at once.".to_string());
+        }
+
+        let insertion_index = match request.position.as_str() {
+            "before" if request.page < pages.len() => request.page,
+            "after" if request.page < pages.len() => request.page + 1,
+            "end" => pages.len(),
+            "before" | "after" => return Err("The selected page is outside the document.".to_string()),
+            _ => return Err("Page insertion position must be before, after, or end.".to_string()),
+        };
+        let parent = document
+            .get_dictionary(pages[0])
+            .map_err(|error| error.to_string())?
+            .get(b"Parent")
+            .map_err(|error| error.to_string())?
+            .as_reference()
+            .map_err(|error| error.to_string())?;
+        let template_index = insertion_index.saturating_sub(1).min(pages.len() - 1);
+        let template = document
+            .get_dictionary(pages[template_index])
+            .map_err(|error| error.to_string())?
+            .clone();
+        let (left, bottom, right, top) = page_bounds(document, pages[template_index])?;
+        let mut inserted = Vec::with_capacity(request.count);
+
+        for _ in 0..request.count {
+            let mut blank = dictionary! {
+                "Type" => "Page",
+                "Parent" => Object::Reference(parent),
+                "MediaBox" => vec![
+                    Object::Real(left),
+                    Object::Real(bottom),
+                    Object::Real(right),
+                    Object::Real(top),
+                ],
+            };
+            for key in ["CropBox", "BleedBox", "TrimBox", "ArtBox", "Rotate", "UserUnit"] {
+                if let Ok(value) = template.get(key.as_bytes()) {
+                    blank.set(key, value.clone());
+                }
+            }
+            inserted.push(document.add_object(blank));
+        }
+
+        let mut order = pages.to_vec();
+        order.splice(insertion_index..insertion_index, inserted);
+        let root = document.get_dictionary_mut(parent).map_err(|error| error.to_string())?;
         root.set("Kids", order.iter().map(|page| Object::Reference(*page)).collect::<Vec<_>>());
         root.set("Count", order.len() as i64);
         Ok(())

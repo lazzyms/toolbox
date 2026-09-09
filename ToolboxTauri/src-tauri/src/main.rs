@@ -93,6 +93,11 @@ async fn organize_pdf(request: editor::OrganizePdfRequest) -> Vec<JobOutcome> {
 }
 
 #[tauri::command]
+async fn add_pdf_pages(request: editor::AddPdfPagesRequest) -> Vec<JobOutcome> {
+    BatchRunner::run(request.paths.clone(), |path| editor::add_pages(&request, path))
+}
+
+#[tauri::command]
 async fn add_page_numbers(request: remaining::PageOverlayRequest) -> Vec<JobOutcome> {
     BatchRunner::run(request.paths.clone(), |path| remaining::add_page_numbers(&request, path))
 }
@@ -176,6 +181,9 @@ async fn image_metadata(request: tools::MetadataRequest) -> Vec<JobOutcome> { Ba
 #[tauri::command]
 fn inspect_image_metadata(request: tools::MetadataRequest) -> Vec<Result<tools::MetadataReport, String>> { request.paths.into_iter().map(tools::inspect_metadata).collect() }
 
+#[tauri::command]
+fn inspect_image_preview(request: tools::ImagePreviewRequest) -> Result<tools::ImagePreview, String> { tools::inspect_preview(&request) }
+
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
@@ -189,7 +197,8 @@ fn main() {
             crop_pdf,
             edit_pdf,
             sign_pdf,
-            organize_pdf
+            organize_pdf,
+            add_pdf_pages
             ,add_page_numbers,
             watermark_pdf,
             compress_pdf,
@@ -214,7 +223,8 @@ fn main() {
             extract_gif_frames,
             process_tiff_pages
             ,image_metadata
-            ,inspect_image_metadata
+            ,inspect_image_metadata,
+            inspect_image_preview
         ])
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
@@ -232,7 +242,7 @@ mod command_tests {
     use super::*;
     use crate::kit::common::OutputLocation;
     use crate::kit::images::tools::{CropRequest, GifCreateRequest, GifExtractRequest, IconSetRequest, MetadataRequest, ResizeRequest, RotateRequest, TiffRequest, ToneRequest, WatermarkRequest};
-    use crate::kit::pdf::editor::{CropPdfRequest, EditPdfRequest, OrganizePdfRequest, PageScope, PdfRect, RotatePage, SignPdfRequest};
+    use crate::kit::pdf::editor::{AddPdfPagesRequest, CropPdfRequest, EditPdfRequest, OrganizePdfRequest, PageScope, PdfRect, RotatePage, SignPdfRequest};
     use crate::kit::pdf::remaining::{CompressPdfRequest, ImagesToPdfRequest, MergePdfRequest, PageOverlayRequest, PageSelectionRequest, PdfToImagesRequest, PdfToTextRequest};
     use crate::kit::vision::VisionRequest;
     use image::Rgba;
@@ -299,14 +309,14 @@ mod command_tests {
         outcome.output_paths.clone()
     }
 
-    fn assert_adapter_unavailable<F>(name: &str, future: F)
+    fn assert_optional_adapter<F>(name: &str, future: F)
     where F: Future<Output = Vec<JobOutcome>> {
         let outcomes = tauri::async_runtime::block_on(future);
         assert_eq!(outcomes.len(), 1, "{name} should return one input outcome");
         let outcome = &outcomes[0];
         if let Some(error) = &outcome.failure {
-            assert!(matches!(error.kind, crate::kit::contracts::ErrorKind::Unavailable), "{name} failed for an unexpected reason: {error}");
-            assert!(outcome.output_paths.is_empty(), "{name} must not fake an output when the adapter is unavailable");
+            assert!(matches!(error.kind, crate::kit::contracts::ErrorKind::Unavailable | crate::kit::contracts::ErrorKind::Processing), "{name} failed for an unexpected reason: {error}");
+            assert!(outcome.output_paths.is_empty(), "{name} must not report an output after an adapter failure");
         } else {
             assert!(!outcome.output_paths.is_empty(), "{name} adapter reported success without an output");
             for output in &outcome.output_paths { assert!(output.is_file(), "{name} reported missing output {}", output.display()); }
@@ -359,10 +369,23 @@ mod command_tests {
         outputs.extend(assert_success("split", split_pdf(PageSelectionRequest { paths: vec![pdf.clone()], pages: vec![], page_ranges: None, split_mode: Some("pages".into()), chunk_size: None, output_location: location(&root, "split") })));
         outputs.extend(assert_success("extract pdf images", extract_pdf_images(PdfToTextRequest { paths: vec![image_pdf.clone()], output_location: location(&root, "extract pdf images") })));
         outputs.extend(assert_success("sign", sign_pdf(SignPdfRequest { paths: vec![pdf.clone()], page: 0, text: "Signed".into(), signature_path: None, rectangle: PdfRect { x: 40.0, y: 40.0, width: 180.0, height: 60.0 }, scope: PageScope::All, output_location: location(&root, "sign") })));
-        assert_adapter_unavailable("ocr", ocr_pdf(VisionRequest { paths: vec![pdf.clone()], output_location: location(&root, "ocr") }));
+        assert_optional_adapter("ocr", ocr_pdf(VisionRequest { paths: vec![pdf.clone()], output_location: location(&root, "ocr") }));
         outputs.extend(assert_success("remove pages", remove_pdf_pages(PageSelectionRequest { paths: vec![pdf.clone()], pages: vec![0], page_ranges: None, split_mode: None, chunk_size: None, output_location: location(&root, "remove pages") })));
         outputs.extend(assert_success("extract pages", extract_pdf_pages(PageSelectionRequest { paths: vec![pdf.clone()], pages: vec![], page_ranges: Some("1".into()), split_mode: None, chunk_size: None, output_location: location(&root, "extract pages") })));
         outputs.extend(assert_success("organize", organize_pdf(OrganizePdfRequest { paths: vec![pdf.clone()], page_order: vec![1, 0], delete_pages: vec![], rotate_pages: vec![RotatePage { page: 0, degrees: 90 }], scope: PageScope::All, output_location: location(&root, "organize") })));
+        let added = assert_success(
+            "add pages",
+            add_pdf_pages(AddPdfPagesRequest {
+                paths: vec![pdf.clone()],
+                position: "after".into(),
+                page: 0,
+                count: 2,
+                output_location: location(&root, "add pages"),
+            }),
+        );
+        let added_document = lopdf::Document::load(&added[0]).unwrap();
+        assert_eq!(added_document.get_pages().len(), 4, "add pages must insert the requested number of pages");
+        outputs.extend(added);
         outputs.extend(assert_success("compress pdf", compress_pdf(CompressPdfRequest { paths: vec![pdf.clone()], quality: 80, output_location: location(&root, "compress pdf") })));
         outputs.extend(assert_success("convert", convert_images(ConvertImagesRequest { paths: vec![image.clone()], format: "jpg".into(), output_location: location(&root, "convert") })));
         outputs.extend(assert_success("compress images", compress_images(CompressImagesRequest { paths: vec![image.clone()], quality: 80, lossless: false, output_location: location(&root, "compress images") })));
@@ -376,8 +399,8 @@ mod command_tests {
         outputs.extend(assert_success("metadata", image_metadata(MetadataRequest { paths: vec![image.clone()], output_location: location(&root, "metadata") })));
         outputs.extend(assert_success("tone", adjust_image_tone(ToneRequest { paths: vec![image.clone()], brightness: 20, contrast: 0.0, saturation: 0.0, exposure: 0.0, output_location: location(&root, "tone") })));
         outputs.extend(assert_success("tiff", process_tiff_pages(TiffRequest { paths: vec![tiff.clone()], output_location: location(&root, "tiff") })));
-        assert_adapter_unavailable("face blur", blur_faces(VisionRequest { paths: vec![image.clone()], output_location: location(&root, "face blur") }));
-        assert_adapter_unavailable("background removal", remove_image_background(VisionRequest { paths: vec![image.clone()], output_location: location(&root, "background removal") }));
+        assert_optional_adapter("face blur", blur_faces(VisionRequest { paths: vec![image.clone()], output_location: location(&root, "face blur") }));
+        assert_optional_adapter("background removal", remove_image_background(VisionRequest { paths: vec![image.clone()], output_location: location(&root, "background removal") }));
 
         assert_eq!(std::fs::read(&pdf).unwrap(), plain_pdf_bytes, "native E2E commands must not modify their PDF input");
         assert_eq!(std::fs::read(&image).unwrap(), plain_image_bytes, "native E2E commands must not modify their image input");

@@ -1,4 +1,4 @@
-import type { ToolDefinition } from "../contracts";
+import type { ToolDefinition, ToolWorkspaceDefinition } from "../contracts";
 
 
 export const UtilityRegistry: ToolDefinition[] = [
@@ -18,7 +18,7 @@ export const UtilityRegistry: ToolDefinition[] = [
     { id: "pdf-ocr", title: "OCR PDF", shortTitle: "OCR", blurb: "Read text out of scans through an offline OCR adapter.", symbol: "scan", tint: "#14b8a6", category: "PDF", command: "ocr_pdf", verification: "pdf-ocr", view: "pdf-ocr", status: "unavailable" },
     { id: "pdf-remove-pages", title: "Remove PDF Pages", shortTitle: "Remove Pages", blurb: "Delete selected pages while keeping the rest in order.", symbol: "file-minus", tint: "#92400e", category: "PDF", command: "remove_pdf_pages", verification: "pdf-remove-pages", view: "pdf-remove-pages", status: "implemented" },
     { id: "pdf-extract-pages", title: "Extract PDF Pages", shortTitle: "Extract Pages", blurb: "Pull selected page ranges into a new PDF.", symbol: "file-search", tint: "#6366f1", category: "PDF", command: "extract_pdf_pages", verification: "pdf-extract-pages", view: "pdf-extract-pages", status: "implemented" },
-    { id: "pdf-organize", title: "Organize PDF", shortTitle: "Organize", blurb: "Reorder PDF pages and save an organized copy.", symbol: "layout-grid", tint: "#06b6d4", category: "PDF", command: "organize_pdf", verification: "pdf-organize", view: "pdf-organize", status: "implemented" },
+    { id: "pdf-organize", title: "Organize PDF", shortTitle: "Organize", blurb: "Reorder, rotate, remove, or add blank PDF pages and save an organized copy.", symbol: "layout-grid", tint: "#06b6d4", category: "PDF", command: "organize_pdf", verification: "pdf-organize", view: "pdf-organize", status: "implemented" },
     { id: "pdf-compress", title: "Compress PDF", shortTitle: "Compress", blurb: "Shrink PDF stream data without changing page geometry.", symbol: "file-download", tint: "#10b981", category: "PDF", command: "compress_pdf", verification: "pdf-compress", view: "pdf-compress", status: "implemented" },
     { id: "heic-convert", title: "Convert Image Format", shortTitle: "Convert", blurb: "Convert HEIC to PNG, JPEG, WebP, and back.", symbol: "arrows-exchange", tint: "#3b82f6", category: "Images", command: "convert_images", verification: "convert-image-format", view: "image-convert", status: "implemented" },
     { id: "compress", title: "Compress Images", shortTitle: "Compress", blurb: "Shrink image files losslessly or trade quality for size.", symbol: "file-download", tint: "#22c55e", category: "Images", command: "compress_images", verification: "compress-images", view: "image-compress", status: "implemented" },
@@ -38,3 +38,90 @@ export const UtilityRegistry: ToolDefinition[] = [
 
 export const utilitiesByCategory = (category: ToolDefinition["category"]) =>
     UtilityRegistry.filter((utility) => utility.category === category);
+
+/**
+ * Workspaces are the user-facing layer over the atomic command registry.
+ * Keep the atomic IDs stable: verification, saved navigation, and native
+ * command contracts still address individual outcomes.
+ */
+export const ToolWorkspaceRegistry: ToolWorkspaceDefinition[] = [
+    {
+        id: "file-security",
+        title: "Protect & unlock files",
+        blurb: "Open a file once, then protect it or remove its password without leaving the workspace.",
+        symbol: "lock",
+        tint: "#ef4444",
+        category: "Documents",
+        categories: ["Documents", "PDF"],
+        toolIds: ["pdf-unlock", "pdf-protect"],
+    },
+    {
+        id: "pdf-editor",
+        title: "PDF editor",
+        blurb: "Open a PDF and work on its content, pages, overlays, and final output from one editor surface.",
+        symbol: "edit-pdf",
+        tint: "#8b5cf6",
+        category: "PDF",
+        categories: ["PDF"],
+        toolIds: [
+            "pdf-edit",
+            "pdf-crop",
+            "pdf-watermark",
+            "pdf-sign",
+            "pdf-page-numbers",
+            "pdf-remove-pages",
+            "pdf-organize",
+            "pdf-merge",
+            "pdf-split",
+            "pdf-extract-pages",
+            "pdf-compress",
+        ],
+    },
+    {
+        id: "pdf-convert",
+        title: "PDF conversion",
+        blurb: "Move between PDF pages, images, and selectable text with one input surface and clear outputs.",
+        symbol: "arrows-exchange",
+        tint: "#6366f1",
+        category: "PDF",
+        categories: ["PDF"],
+        toolIds: ["pdf-to-images", "pdf-to-text", "pdf-image-extract", "images-to-pdf"],
+    },
+    {
+        id: "image-editor",
+        title: "Image editor",
+        blurb: "Tune, crop, resize, rotate, flip, watermark, compress, or convert images in one photo-style workspace.",
+        symbol: "adjustments",
+        tint: "#eab308",
+        category: "Images",
+        categories: ["Images"],
+        toolIds: ["heic-convert", "compress", "resize", "rotate", "crop", "image-watermark", "image-tone"],
+    },
+    {
+        id: "media-tools",
+        title: "Media utilities",
+        blurb: "Generate icons, work with GIF and TIFF sequences, inspect metadata, and access optional vision tools.",
+        symbol: "layers",
+        tint: "#14b8a6",
+        category: "Images",
+        categories: ["Images", "PDF"],
+        toolIds: [
+            "icon-set",
+            "gif-create",
+            "gif-extract",
+            "tiff-pages",
+            "image-metadata",
+            "pdf-ocr",
+            "image-blur-faces",
+            "image-remove-bg",
+        ],
+    },
+];
+
+export const toolsForWorkspace = (workspace: ToolWorkspaceDefinition) =>
+    workspace.toolIds
+        .map((id) => UtilityRegistry.find((utility) => utility.id === id))
+        .filter(Boolean) as ToolDefinition[];
+
+export const workspaceForTool = (toolId: string) =>
+    ToolWorkspaceRegistry.find((workspace) => workspace.toolIds.includes(toolId));

@@ -63,6 +63,12 @@ export interface Progress {
   total: number;
 }
 
+export interface ImagePreview {
+  width: number;
+  height: number;
+  dataUrl: string;
+}
+
 export interface ToolDefinition {
   id: string;
   title: string;
@@ -108,6 +114,17 @@ export interface ToolDefinition {
     | "tiff-pages"
     | "image-metadata"
     | "planned";
+}
+
+export interface ToolWorkspaceDefinition {
+  id: string;
+  title: string;
+  blurb: string;
+  symbol: string;
+  tint: string;
+  category: ToolCategory;
+  categories: ToolCategory[];
+  toolIds: string[];
 }
 
 export interface ToolRequest {
