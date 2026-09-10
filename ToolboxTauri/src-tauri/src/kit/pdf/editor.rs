@@ -78,6 +78,7 @@ fn default_scope() -> PageScope { PageScope::All }
 
 pub fn crop(request: &CropPdfRequest, input: PathBuf) -> JobOutcome {
     transform_pdf(input, &request.output_location, "-cropped", |document, pages| {
+        validate_scope(&request.scope, pages.len())?;
         let selected = selected_pages(&request.scope, pages.len());
         validate_rect(&request.rectangle)?;
         for (index, page_id) in pages.iter().enumerate() {
@@ -98,6 +99,7 @@ pub fn crop(request: &CropPdfRequest, input: PathBuf) -> JobOutcome {
 
 pub fn organize(request: &OrganizePdfRequest, input: PathBuf) -> JobOutcome {
     transform_pdf(input, &request.output_location, "-organized", |document, pages| {
+        validate_scope(&request.scope, pages.len())?;
         let selected = selected_pages(&request.scope, pages.len());
         let requested: Vec<_> = request.page_order.iter().copied().filter(|index| *index < pages.len() && selected(*index) && !request.delete_pages.contains(index)).collect();
         let mut order = requested.into_iter().map(|index| pages[index]).collect::<Vec<_>>();
@@ -122,6 +124,7 @@ pub fn organize(request: &OrganizePdfRequest, input: PathBuf) -> JobOutcome {
 
 pub fn sign(request: &SignPdfRequest, input: PathBuf) -> JobOutcome {
     transform_pdf(input, &request.output_location, "-signed", |document, pages| {
+        validate_scope(&request.scope, pages.len())?;
         validate_rect(&request.rectangle)?;
         let targets = match &request.scope {
             PageScope::All => (0..pages.len()).collect::<Vec<_>>(),
@@ -168,6 +171,9 @@ pub fn sign(request: &SignPdfRequest, input: PathBuf) -> JobOutcome {
 
 pub fn edit(request: &EditPdfRequest, input: PathBuf) -> JobOutcome {
     transform_pdf(input, &request.output_location, "-edited", |document, pages| {
+        if let Some(selected) = request.pages.as_deref() {
+            validate_selected_pages(selected, pages.len())?;
+        }
         validate_rect(&request.rectangle)?;
         if request.mode != "shape" && request.text.trim().is_empty() { return Err("Text is required for this edit mode.".to_string()); }
         let targets = request.pages.as_ref().map(|selected| selected.iter().copied().filter(|page| *page < pages.len()).collect()).unwrap_or_else(|| (0..pages.len()).collect::<Vec<_>>());
@@ -212,6 +218,23 @@ fn selected_pages(scope: &PageScope, count: usize) -> impl Fn(usize) -> bool + '
     move |index| match scope { PageScope::All => true, PageScope::Selected { pages } => pages.contains(&index) && index < count }
 }
 
+fn validate_scope(scope: &PageScope, count: usize) -> Result<(), String> {
+    match scope {
+        PageScope::All => Ok(()),
+        PageScope::Selected { pages } => validate_selected_pages(pages, count),
+    }
+}
+
+fn validate_selected_pages(pages: &[usize], count: usize) -> Result<(), String> {
+    if pages.is_empty() {
+        return Err("Select at least one page.".to_string());
+    }
+    if pages.iter().any(|page| *page >= count) {
+        return Err("A selected page is outside the document.".to_string());
+    }
+    Ok(())
+}
+
 fn validate_rect(rect: &PdfRect) -> Result<(), String> { if !rect.x.is_finite() || !rect.y.is_finite() || !rect.width.is_finite() || !rect.height.is_finite() || rect.width <= 0.0 || rect.height <= 0.0 { Err("Rectangle must have positive finite dimensions.".to_string()) } else { Ok(()) } }
 fn validate_rect_for_page(document: &Document, page_id: lopdf::ObjectId, rect: &PdfRect) -> Result<(), String> {
     let (left, bottom, right, top) = page_bounds(document, page_id).map_err(|_| "PDF page has an invalid media box.".to_string())?;
@@ -230,3 +253,15 @@ fn failure(input_path: PathBuf, error: String) -> JobOutcome { JobOutcome::failu
 
 #[allow(dead_code)]
 fn _path(_: &Path) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_empty_and_out_of_bounds_page_scopes() {
+        assert!(validate_scope(&PageScope::Selected { pages: vec![] }, 2).is_err());
+        assert!(validate_scope(&PageScope::Selected { pages: vec![2] }, 2).is_err());
+        assert!(validate_scope(&PageScope::Selected { pages: vec![0, 1] }, 2).is_ok());
+    }
+}

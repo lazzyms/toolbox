@@ -160,6 +160,7 @@ fn parse_split_ranges(raw: &str, page_count: usize) -> Result<Vec<(usize, usize)
 pub fn to_images(request: &PdfToImagesRequest, input: PathBuf) -> JobOutcome {
     let format = request.format.to_lowercase();
     if format != "jpg" && format != "png" { return failure(input, "PDF images must be JPEG or PNG.".to_string()); }
+    if request.page_range.as_deref().is_some_and(|range| range.trim().is_empty()) { return failure(input, "Select at least one page or leave the page range unset.".to_string()); }
     let Some(renderer) = tool("TOOLBOX_PDFTOPPM_PATH", "pdftoppm") else { return failure(input, "pdftoppm is required to render PDFs. Set TOOLBOX_PDFTOPPM_PATH or add pdftoppm to PATH.".to_string()); };
     let dpi = request.dpi.clamp(72, 300);
     let extension = if format == "jpg" { "jpg" } else { "png" };

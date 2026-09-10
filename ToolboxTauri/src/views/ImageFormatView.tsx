@@ -8,7 +8,7 @@ export const ImageFormatView = ({ utility, mode }: { utility: ToolDefinition; mo
     const [loop, setLoop] = useState(true);
     const [iconPreset, setIconPreset] = useState("macos");
     return <ToolScaffold utility={utility} onRun={(paths) => {
-        if (mode === "icons") return invoke<ToolResult>("generate_icon_set", { request: { paths: [paths[0]], preset: iconPreset, sizes: [], outputLocation: "alongsideInput" } });
+        if (mode === "icons") return invoke<ToolResult>("generate_icon_set", { request: { paths, preset: iconPreset, sizes: [], outputLocation: "alongsideInput" } });
         if (mode === "gif-create") return invoke<ToolResult>("create_gif", { request: { paths, frameDelayMs: delay, loopForever: loop, outputLocation: "alongsideInput" } });
         if (mode === "gif-extract") return invoke<ToolResult>("extract_gif_frames", { request: { paths, outputLocation: "alongsideInput" } });
         return invoke<ToolResult>("process_tiff_pages", { request: { paths, outputLocation: "alongsideInput" } });

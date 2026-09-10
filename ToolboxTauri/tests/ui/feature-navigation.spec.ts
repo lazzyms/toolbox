@@ -6,6 +6,15 @@ const fixturePath = path.resolve("src-tauri/icons/icon.png");
 const fixtureName = path.basename(fixturePath);
 const mockedOutputPaths = [`${fixturePath}.output-one`, `${fixturePath}.output-two`];
 
+const setFixturePath = async (page: Page, extension: string) => {
+    const selectedPath = fixturePath.replace(/\.[^.]+$/, `.${extension}`);
+    await page.evaluate((path) => {
+        (window as TestWindow).__toolboxFixturePath = path;
+        (window as TestWindow).__toolboxFixturePaths = [path];
+    }, selectedPath);
+    return path.basename(selectedPath);
+};
+
 type MockOutcome = {
     inputPath: string;
     outputPaths: string[];
@@ -14,6 +23,8 @@ type MockOutcome = {
 };
 
 type TestWindow = Window & {
+    __toolboxFixturePath?: string;
+    __toolboxFixturePaths?: string[];
     __toolboxInvocations?: Array<{ command: string; args: unknown }>;
     __toolboxProcessingResults?: MockOutcome[];
     __toolboxActionFailure?: { command: string; path: string; message: string; delayMs?: number };
@@ -33,7 +44,7 @@ test.beforeEach(async ({ page }) => {
             invoke: async (command, args) => {
                 invocations.push({ command, args });
 
-                if (command === "plugin:dialog|open") return fixturePath;
+                if (command === "plugin:dialog|open") return (window as TestWindow).__toolboxFixturePaths ?? (window as TestWindow).__toolboxFixturePath ?? fixturePath;
                 if (command === "open_output_path" || command === "reveal_output_path") {
                     const failure = (window as TestWindow).__toolboxActionFailure;
                     if (failure?.command === command && failure.path === (args as { path: string }).path) {
@@ -281,8 +292,9 @@ test("desktop scrolling stays inside the command pane", async ({ page }) => {
 test("crop stays disabled until a crop rectangle is drawn", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Open Crop PDF" }).click();
+    const selectedFixtureName = await setFixturePath(page, "pdf");
     await page.getByRole("button", { name: "Choose files to process" }).click();
-    await expect(page.getByText(fixtureName, { exact: true })).toBeVisible();
+    await expect(page.getByText(selectedFixtureName, { exact: true })).toBeVisible();
 
     const cropAction = page.getByRole("main").getByRole("button", { name: "Crop", exact: true });
     await expect(cropAction).toBeDisabled();
@@ -304,6 +316,7 @@ test("crop stays disabled until a crop rectangle is drawn", async ({ page }) => 
 test("pdf editor renders page previews", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Open Sign PDF" }).click();
+    await setFixturePath(page, "pdf");
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await expect(page.getByRole("img", { name: "Preview of page 1" })).toBeVisible();
     await expect(page.locator('aside[aria-label="PDF page thumbnails"] img[alt="Thumbnail of page 1"]')).toBeVisible();
@@ -325,8 +338,9 @@ test("vision tools explain unavailable resources before file selection", async (
 test("remove pages stays disabled until a page is selected", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Open Remove PDF Pages" }).click();
+    const selectedFixtureName = await setFixturePath(page, "pdf");
     await page.getByRole("button", { name: "Choose files to process" }).click();
-    await expect(page.getByText(fixtureName, { exact: true })).toBeVisible();
+    await expect(page.getByText(selectedFixtureName, { exact: true })).toBeVisible();
 
     const removeAction = page.getByRole("main").getByRole("button", { name: "Remove Pages", exact: true });
     await expect(removeAction).toBeDisabled();
@@ -353,6 +367,7 @@ test("remove password exposes one cross-format document tool", async ({ page }) 
 
     await page.goto("/");
     await page.getByRole("button", { name: "Open Remove Password" }).click();
+    await setFixturePath(page, "doc");
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await page.locator('input[type="password"]').fill("test-password");
     await expect(page.getByLabel("Tool detail").getByRole("button", { name: "Remove Password" })).toBeEnabled();
@@ -448,8 +463,18 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
     await page.goto("/");
     await page.getByRole("button", { name: `Open ${utility.title}` }).click();
 
+    const fixtureForUtility = fixturePath.replace(/\.[^.]+$/, `.${utility.acceptedExtensions[0]}`);
+    const fixturePaths = utility.inputCardinality.kind === "multiple" && utility.inputCardinality.minimum > 1
+        ? [fixtureForUtility, fixtureForUtility.replace(/\.[^.]+$/, `-two.${utility.acceptedExtensions[0]}`)]
+        : [fixtureForUtility];
+    await page.evaluate((selectedPaths) => {
+        (window as TestWindow).__toolboxFixturePath = selectedPaths[0];
+        (window as TestWindow).__toolboxFixturePaths = selectedPaths;
+    }, fixturePaths);
     await page.getByRole("button", { name: "Choose files to process" }).click();
-    await expect(page.getByText(fixtureName, { exact: true })).toBeVisible();
+    for (const selectedPath of fixturePaths) {
+        await expect(page.getByText(path.basename(selectedPath), { exact: true })).toBeVisible();
+    }
 
     if (utility.id === "pdf-unlock" || utility.id === "pdf-protect") {
         await page.locator('input[type="password"]').fill("test-password");
@@ -492,4 +517,45 @@ test.describe("registered feature actions", () => {
             await exerciseFeature(page, utility);
         });
     }
+});
+
+test("the registry exposes one complete capability contract per tool", async () => {
+    expect(UtilityRegistry).toHaveLength(32);
+    for (const utility of UtilityRegistry) {
+        expect(utility.acceptedExtensions.length, utility.id).toBeGreaterThan(0);
+        expect(["single", "multiple"]).toContain(utility.inputCardinality.kind);
+        expect(typeof utility.supportsPageSelection, utility.id).toBe("boolean");
+        expect(typeof utility.supportsPreview, utility.id).toBe("boolean");
+        expect(["available", "unavailable"]).toContain(utility.nativeAvailability);
+    }
+});
+
+test("single-input tools reject a multi-file selection before IPC", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Generate App Icons" }).click();
+    const paths = [fixturePath, fixturePath.replace(/\.[^.]+$/, "-two.png")];
+    await page.evaluate((selectedPaths) => {
+        (window as TestWindow).__toolboxFixturePaths = selectedPaths;
+    }, paths);
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+
+    await expect(page.getByText("Icons accepts exactly one file.", { exact: true })).toBeVisible();
+    const invocations = await page.evaluate(() => (window as TestWindow).__toolboxInvocations ?? []);
+    expect(invocations.some(({ command }) => command === "generate_icon_set")).toBe(false);
+});
+
+test("multi-file tools pass the complete ordered selection to IPC", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Convert Image Format" }).click();
+    const paths = [fixturePath, fixturePath.replace(/\.[^.]+$/, "-two.png")];
+    await page.evaluate((selectedPaths) => {
+        (window as TestWindow).__toolboxFixturePaths = selectedPaths;
+    }, paths);
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await page.locator("main button").filter({ hasText: "Convert" }).last().click();
+
+    const invocations = await page.evaluate(() => (window as TestWindow).__toolboxInvocations ?? []);
+    const invocation = invocations.find(({ command }) => command === "convert_images");
+    expect(invocation).toBeDefined();
+    expect((invocation?.args as { request: { paths: string[] } }).request.paths).toEqual(paths);
 });

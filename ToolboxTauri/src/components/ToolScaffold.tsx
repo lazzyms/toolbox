@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { open } from '@tauri-apps/plugin-dialog';
-import type { ToolDefinition, JobOutcome, Progress } from '../contracts';
+import { selectionCountError, type ToolDefinition, type JobOutcome, type Progress } from '../contracts';
 import { ResultList } from './ResultList';
 import { TablerIcon } from './TablerIcon';
 
@@ -22,7 +22,40 @@ export const ToolScaffold = ({ utility, onRun, children }: ToolScaffoldProps) =>
     const [loading, setLoading] = useState(false);
     const progress: Progress = { completed: loading ? 0 : results.length, total: files.length };
 
+    const selectionError = selectionCountError(utility, files.length);
+    const addFiles = useCallback((selected: string[]) => {
+        const accepted = selected.filter((path) => {
+            const extension = path.split(/[\\/.]/).pop()?.toLowerCase();
+            return extension !== undefined && utility.acceptedExtensions.includes(extension);
+        });
+        const rejected = selected.filter((path) => !accepted.includes(path));
+        if (rejected.length > 0) {
+            setResults(rejected.map((inputPath) => ({
+                inputPath,
+                outputPaths: [],
+                detail: '',
+                failure: { kind: 'invalidInput', message: `Unsupported file type for ${utility.shortTitle}. Accepted types: ${utility.acceptedExtensions.map((extension) => `.${extension}`).join(', ')}.` },
+            })));
+        }
+        const fresh = accepted.filter((path) => !files.includes(path));
+        if (utility.inputCardinality.kind === 'single' && files.length + fresh.length > 1) {
+            setResults([{ inputPath: fresh[0] ?? files[0] ?? '', outputPaths: [], detail: '', failure: { kind: 'invalidInput', message: `${utility.shortTitle} accepts exactly one file.` } }]);
+            return;
+        }
+        setFiles((previous) => {
+            const existing = new Set(previous);
+            const newPaths = accepted.filter((path) => !existing.has(path));
+            return newPaths.length ? [...previous, ...newPaths] : previous;
+        });
+    }, [files, utility]);
+
     const run = async () => {
+        if (selectionError) {
+            setResults(files.length > 0
+                ? files.map((inputPath) => ({ inputPath, outputPaths: [], detail: '', failure: { kind: 'invalidInput', message: selectionError } }))
+                : [{ inputPath: '', outputPaths: [], detail: '', failure: { kind: 'invalidInput', message: selectionError } }]);
+            return;
+        }
         setLoading(true);
         setResults([]);
         try {
@@ -39,29 +72,21 @@ export const ToolScaffold = ({ utility, onRun, children }: ToolScaffoldProps) =>
         const unlisten = appWindow.onDragDropEvent((event) => {
             if (event.payload.type === 'drop') {
                 const paths = (event.payload as { type: 'drop'; paths: string[] }).paths;
-                // Dedupe: skip paths already in the list
-                setFiles((prev) => {
-                    const existing = new Set(prev);
-                    const fresh = paths.filter((p) => !existing.has(p));
-                    return fresh.length ? [...prev, ...fresh] : prev;
-                });
+                addFiles(paths);
             }
         });
         return () => {
             unlisten.then((dispose) => dispose());
         };
-    }, []);
+    }, [addFiles]);
 
     const browse = async () => {
         try {
-            const picked = await open({ multiple: true });
-            setFiles((prev) => {
-                const existing = new Set(prev);
-                const fresh = (Array.isArray(picked) ? picked : picked ? [picked] : []).filter(
-                    (p) => !existing.has(p)
-                );
-                return fresh.length ? [...prev, ...fresh] : prev;
+            const picked = await open({
+                multiple: utility.inputCardinality.kind === 'multiple',
+                filters: [{ name: 'Supported files', extensions: [...utility.acceptedExtensions] }],
             });
+            addFiles(Array.isArray(picked) ? picked : picked ? [picked] : []);
         } catch (e) {
             setResults([{ inputPath: 'Dialog error', outputPaths: [], failure: { kind: 'processing', message: String(e) }, detail: '' }]);
         }
@@ -72,6 +97,12 @@ export const ToolScaffold = ({ utility, onRun, children }: ToolScaffoldProps) =>
             <div className="tool-scaffold-heading">
                 <h2>{utility.title}</h2>
                 <p>{utility.blurb}</p>
+                <p className="text-xs text-slate-500" aria-label="Tool capability">
+                    {utility.inputCardinality.kind === 'single' ? 'One file' : `Multiple files, at least ${utility.inputCardinality.minimum}`}.
+                    {' '}Accepted: {utility.acceptedExtensions.map((extension) => `.${extension}`).join(', ')}.
+                    {utility.supportsPageSelection ? ' Page selection supported.' : ''}
+                    {utility.supportsPreview ? ' Output preview supported.' : ''}
+                </p>
             </div>
 
             <div
@@ -120,6 +151,8 @@ export const ToolScaffold = ({ utility, onRun, children }: ToolScaffoldProps) =>
                     </div>
                 )}
             </div>
+
+            {selectionError && files.length > 0 && <p className="text-sm text-amber-700" role="alert">{selectionError}</p>}
 
             {children({
                 files,

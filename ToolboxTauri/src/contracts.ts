@@ -2,6 +2,12 @@ export type ToolCategory = "PDF" | "Images" | "Documents";
 
 export type ToolStatus = "implemented" | "planned" | "unavailable";
 
+export type InputCardinality =
+  | { kind: "single" }
+  | { kind: "multiple"; minimum: number };
+
+export type NativeAvailability = "available" | "unavailable";
+
 export type OutputLocation = "alongsideInput" | { customFolder: string };
 
 export type JobState = "running" | "success" | "mixed" | "failure";
@@ -73,6 +79,11 @@ export interface ToolDefinition {
   category: ToolCategory;
   status: ToolStatus;
   command: ToolCommand;
+  acceptedExtensions: readonly string[];
+  inputCardinality: InputCardinality;
+  supportsPageSelection: boolean;
+  supportsPreview: boolean;
+  nativeAvailability: NativeAvailability;
   verification: string;
   view:
     | "pdf-unlock"
@@ -109,6 +120,16 @@ export interface ToolDefinition {
     | "image-metadata"
     | "planned";
 }
+
+export const selectionCountError = (tool: ToolDefinition, count: number) => {
+  if (tool.inputCardinality.kind === "single" && count !== 1) {
+    return `${tool.shortTitle} accepts exactly one file.`;
+  }
+  if (tool.inputCardinality.kind === "multiple" && count < tool.inputCardinality.minimum) {
+    return `${tool.shortTitle} requires at least ${tool.inputCardinality.minimum} files.`;
+  }
+  return null;
+};
 
 export interface ToolRequest {
   paths: string[];
