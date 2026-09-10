@@ -102,6 +102,9 @@ jobs:
           $pdftoppm = Get-ChildItem $popplerExtract -Recurse -Filter pdftoppm.exe |
             Select-Object -First 1
           if (-not $pdftoppm) { throw 'Could not locate pdftoppm.exe in the Poppler archive' }
+          $pdftotext = Get-ChildItem $popplerExtract -Recurse -Filter pdftotext.exe |
+            Select-Object -First 1
+          if (-not $pdftotext) { throw 'Could not locate pdftotext.exe in the Poppler archive' }
           $env:PATH = "$($pdftoppm.DirectoryName);$env:PATH"
           $pdftoppm.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           New-Item -ItemType Directory -Force -Path src-tauri\resources | Out-Null
@@ -116,6 +119,8 @@ jobs:
           Copy-Item $pdftoppm.FullName src-tauri\resources\pdftoppm.exe -Force
           Get-ChildItem $pdftoppm.DirectoryName -Filter *.dll |
             Copy-Item -Destination src-tauri\resources -Force
+          Write-Host "Staging $($pdftotext.FullName)"
+          Copy-Item $pdftotext.FullName src-tauri\resources\pdftotext.exe -Force
           & src-tauri\resources\qpdf.exe --version
           '{"bundle": {"createUpdaterArtifacts": false, "resources": ["resources/*"]}}' |
             Out-File -Encoding ascii resources-qpdf.json
@@ -192,6 +197,10 @@ jobs:
             Select-Object -First 1
           if (-not $pdftoppm) { throw 'pdftoppm.exe was not included in the Windows release tree' }
           & $pdftoppm.FullName -h | Out-Null
+          $pdftotext = Get-ChildItem src-tauri\target\release -Recurse -Filter pdftotext.exe |
+            Select-Object -First 1
+          if (-not $pdftotext) { throw 'pdftotext.exe was not included in the Windows release tree' }
+          & $pdftotext.FullName -h | Out-Null
           if (-not (Get-ChildItem src-tauri\target\release\bundle\nsis -Filter *.exe)) {
             throw 'NSIS installer was not produced'
           }

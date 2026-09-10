@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bundles self-contained qpdf and pdftoppm binaries into a freshly built
+# Bundles self-contained qpdf and Poppler binaries into a freshly built
 # macOS Toolbox.app so PDF protection and rendering work out of the box.
 # Run after `npm run tauri build`.
 #
@@ -13,6 +13,7 @@ set -euo pipefail
 APP="${1:-$(pwd)/src-tauri/target/release/bundle/macos/Toolbox.app}"
 QPDF_BIN="${QPDF:-$(command -v qpdf || true)}"
 PDFTOPPM_BIN="${PDFTOPPM:-$(command -v pdftoppm || true)}"
+PDFTOTEXT_BIN="${PDFTOTEXT:-$(command -v pdftotext || true)}"
 
 if [[ ! -d "$APP" ]]; then
   echo "bundle-qpdf: app bundle not found at $APP" >&2
@@ -24,6 +25,10 @@ if [[ -z "$QPDF_BIN" ]]; then
 fi
 if [[ -z "$PDFTOPPM_BIN" ]]; then
   echo "bundle-qpdf: pdftoppm not found; install it (brew install poppler) or set PDFTOPPM" >&2
+  exit 1
+fi
+if [[ -z "$PDFTOTEXT_BIN" ]]; then
+  echo "bundle-qpdf: pdftotext not found; install it (brew install poppler) or set PDFTOTEXT" >&2
   exit 1
 fi
 
@@ -128,6 +133,7 @@ bundle_tool() { # $1 = source binary, $2 = destination directory, $3 = output na
 
 bundle_tool "$QPDF_BIN" "$RES/qpdf-bin" qpdf
 bundle_tool "$PDFTOPPM_BIN" "$RES/pdf-bin" pdftoppm
+bundle_tool "$PDFTOTEXT_BIN" "$RES/pdf-bin" pdftotext
 
 # Sign the injected binaries with the app's identity or an explicit override.
 if ! command -v codesign >/dev/null 2>&1; then
@@ -144,6 +150,7 @@ VERSION="$("$RES/qpdf-bin/qpdf" --version 2>/dev/null | head -1)"
 [[ -n "$VERSION" ]] || { echo "bundle-qpdf: qpdf --version failed" >&2; exit 1; }
 echo "$VERSION"
 "$RES/pdf-bin/pdftoppm" -h >/dev/null
+"$RES/pdf-bin/pdftotext" -h >/dev/null
 
 # Tauri creates the updater archive before this script injects qpdf. Rebuild it
 # after injection so an update is as self-contained as a fresh install, then

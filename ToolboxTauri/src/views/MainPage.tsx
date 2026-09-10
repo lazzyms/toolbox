@@ -5,56 +5,23 @@ import {
   toolsForWorkspace,
   workspaceForTool,
 } from "../registry";
-import type { ToolDefinition } from "../contracts";
+import type { ToolDefinition, WorkspaceId } from "../contracts";
 import { TablerIcon } from "../components/TablerIcon";
-import { WorkspaceActionBar } from "../components/WorkspaceActionBar";
 import { SecurityWorkspaceView } from "./SecurityWorkspaceView";
 import { PDFEditorWorkspaceView } from "./PDFEditorWorkspaceView";
 import { PDFConversionWorkspaceView } from "./PDFConversionWorkspaceView";
 import { ImageEditorWorkspaceView } from "./ImageEditorWorkspaceView";
 import { MediaWorkspaceView } from "./MediaWorkspaceView";
 import { PlannedToolView, UnavailableToolView } from "./PlannedToolView";
-import { VisionView } from "./VisionView";
 import { SettingsPanel } from "./SettingsPanel";
 
-const views = {
-  "pdf-unlock": SecurityWorkspaceView,
-  "pdf-protect": SecurityWorkspaceView,
-  "pdf-edit": PDFEditorWorkspaceView,
-  "pdf-crop": PDFEditorWorkspaceView,
-  "pdf-sign": PDFEditorWorkspaceView,
-  "pdf-organize": PDFEditorWorkspaceView,
-  "pdf-page-numbers": PDFEditorWorkspaceView,
-  "pdf-watermark": PDFEditorWorkspaceView,
-  "pdf-compress": PDFEditorWorkspaceView,
-  "pdf-remove-pages": PDFEditorWorkspaceView,
-  "pdf-extract-pages": PDFEditorWorkspaceView,
-  "pdf-merge": PDFEditorWorkspaceView,
-  "pdf-split": PDFEditorWorkspaceView,
-  "pdf-to-images": PDFConversionWorkspaceView,
-  "pdf-to-text": PDFConversionWorkspaceView,
-  "pdf-image-extract": PDFConversionWorkspaceView,
-  "images-to-pdf": PDFConversionWorkspaceView,
-  "pdf-ocr": (props) => <VisionView {...props} mode="ocr" />,
-  "image-blur-faces": (props) => <VisionView {...props} mode="faces" />,
-  "image-remove-bg": (props) => <VisionView {...props} mode="background" />,
-  "image-resize": ImageEditorWorkspaceView,
-  "image-rotate": ImageEditorWorkspaceView,
-  "image-crop": ImageEditorWorkspaceView,
-  "image-watermark": ImageEditorWorkspaceView,
-  "image-tone": ImageEditorWorkspaceView,
-  "image-icons": MediaWorkspaceView,
-  "gif-create": MediaWorkspaceView,
-  "gif-extract": MediaWorkspaceView,
-  "tiff-pages": MediaWorkspaceView,
-  "image-metadata": MediaWorkspaceView,
-  "image-compress": ImageEditorWorkspaceView,
-  "image-convert": ImageEditorWorkspaceView,
-  planned: PlannedToolView,
-} satisfies Record<
-  ToolDefinition["view"],
-  ComponentType<{ utility: ToolDefinition }>
->;
+const workspaceViews = {
+  "file-security": SecurityWorkspaceView,
+  "pdf-editor": PDFEditorWorkspaceView,
+  "pdf-convert": PDFConversionWorkspaceView,
+  "image-editor": ImageEditorWorkspaceView,
+  "media-tools": MediaWorkspaceView,
+} satisfies Record<WorkspaceId, ComponentType<{ utility: ToolDefinition }>>;
 
 const designIconByToolId: Record<string, string> = {
   "pdf-unlock": "remove-password",
@@ -284,7 +251,7 @@ export const MainPage = () => {
           </span>
         </header>
         {selectedTool && selectedWorkspace ? (
-          <section className="tool-workspace" id="tool-detail">
+          <section className={`tool-workspace ${selectedWorkspace.id === "pdf-editor" ? "pdf-studio" : ""}`} id="tool-detail">
             <button
               className="back-link"
               type="button"
@@ -295,13 +262,13 @@ export const MainPage = () => {
             <div className="tool-workspace-card">
               <div className="tool-workspace-kicker">
                 <span className="card-icon">
-                  <TablerIcon name={iconName(selectedTool)} />
+                  <TablerIcon name={selectedWorkspace.symbol} />
                 </span>
                 {selectedWorkspace.title} workspace
               </div>
               <div className="tool-workspace-heading">
                 <div>
-                  <div className="workspace-title">{selectedWorkspace.title}</div>
+                  <h1 className="workspace-title">{selectedWorkspace.title}</h1>
                   <p>{selectedWorkspace.blurb}</p>
                 </div>
                 <button
@@ -313,15 +280,6 @@ export const MainPage = () => {
                   {favorites.includes(selectedTool.id) ? "★ Saved" : "☆ Save"}
                 </button>
               </div>
-              <WorkspaceActionBar
-                actions={toolsForWorkspace(selectedWorkspace)}
-                activeId={selectedTool.id}
-                onSelect={openTool}
-                label={`${selectedWorkspace.title} actions`}
-              />
-              <p className="workspace-selected-action">
-                Selected action: <strong>{selectedTool.title}</strong>
-              </p>
               <div className="tool-view">
                 <ViewFor utility={selectedTool} />
               </div>
@@ -500,7 +458,7 @@ export const MainPage = () => {
         )}
         <p className="sr-only" role="status" aria-live="polite">
           {selectedTool
-            ? `${selectedTool.title} selected.`
+            ? `${selectedWorkspace?.title ?? selectedTool.title} workspace open.`
             : "No tool selected."}
         </p>
       </main>
@@ -510,9 +468,11 @@ export const MainPage = () => {
 };
 
 const ViewFor = ({ utility }: { utility: ToolDefinition }) => {
-  const View = views[utility.view];
   if (utility.status === "unavailable") {
     return <UnavailableToolView utility={utility} />;
   }
+  const workspace = workspaceForTool(utility.id);
+  if (!workspace) return <PlannedToolView utility={utility} />;
+  const View = workspaceViews[workspace.id];
   return <View utility={utility} />;
 };

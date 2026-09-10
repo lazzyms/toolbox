@@ -2,6 +2,57 @@ export type ToolCategory = "PDF" | "Images" | "Documents";
 
 export type ToolStatus = "implemented" | "planned" | "unavailable";
 
+export type AtomicToolId =
+  | "pdf-unlock"
+  | "pdf-page-numbers"
+  | "pdf-merge"
+  | "pdf-watermark"
+  | "pdf-crop"
+  | "pdf-edit"
+  | "pdf-protect"
+  | "images-to-pdf"
+  | "pdf-to-images"
+  | "pdf-to-text"
+  | "pdf-split"
+  | "pdf-image-extract"
+  | "pdf-sign"
+  | "pdf-ocr"
+  | "pdf-remove-pages"
+  | "pdf-extract-pages"
+  | "pdf-organize"
+  | "pdf-compress"
+  | "heic-convert"
+  | "compress"
+  | "resize"
+  | "rotate"
+  | "crop"
+  | "icon-set"
+  | "gif-create"
+  | "gif-extract"
+  | "image-watermark"
+  | "image-metadata"
+  | "image-tone"
+  | "tiff-pages"
+  | "image-blur-faces"
+  | "image-remove-bg";
+
+export type WorkspaceId =
+  | "file-security"
+  | "pdf-editor"
+  | "pdf-convert"
+  | "image-editor"
+  | "media-tools";
+
+export type ToolInputMode = "multiple" | "single" | "ordered";
+
+export type ToolExecutionMode = "batch" | "aggregate" | "inspect" | "unavailable";
+
+export interface ToolActionPolicy {
+  inputMode: ToolInputMode;
+  execution: ToolExecutionMode;
+  acceptedExtensions?: readonly string[];
+}
+
 export type OutputLocation = "alongsideInput" | { customFolder: string };
 
 export type JobState = "running" | "success" | "mixed" | "failure";
@@ -70,7 +121,7 @@ export interface ImagePreview {
 }
 
 export interface ToolDefinition {
-  id: string;
+  id: AtomicToolId;
   title: string;
   shortTitle: string;
   blurb: string;
@@ -117,14 +168,14 @@ export interface ToolDefinition {
 }
 
 export interface ToolWorkspaceDefinition {
-  id: string;
+  id: WorkspaceId;
   title: string;
   blurb: string;
   symbol: string;
   tint: string;
   category: ToolCategory;
   categories: ToolCategory[];
-  toolIds: string[];
+  toolIds: AtomicToolId[];
 }
 
 export interface ToolRequest {

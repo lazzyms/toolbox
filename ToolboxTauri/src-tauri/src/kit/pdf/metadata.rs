@@ -15,6 +15,17 @@ pub struct PdfPageMetadata {
     pub width: f32,
     pub height: f32,
     pub preview: Option<String>,
+    pub text_runs: Option<Vec<PdfTextRun>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PdfTextRun {
+    pub text: String,
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -37,6 +48,7 @@ pub fn inspect(path: &Path) -> Result<PdfDocumentMetadata, String> {
             width: right - left,
             height: top - bottom,
             preview: render_preview(path, index + 1),
+            text_runs: None,
         }))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(PdfDocumentMetadata { path: path.to_path_buf(), pages })

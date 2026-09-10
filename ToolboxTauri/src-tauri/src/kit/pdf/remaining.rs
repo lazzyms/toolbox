@@ -57,6 +57,7 @@ pub struct PdfToImagesRequest {
     pub dpi: u16,
     pub format: String,
     #[serde(default)] pub page_range: Option<String>,
+    #[serde(default)] pub pages: Option<Vec<usize>>,
     pub output_location: OutputLocation,
 }
 
@@ -71,6 +72,7 @@ pub struct ImagesToPdfRequest {
 #[serde(rename_all = "camelCase")]
 pub struct PdfToTextRequest {
     pub paths: Vec<PathBuf>,
+    #[serde(default)] pub pages: Option<Vec<usize>>,
     pub output_location: OutputLocation,
 }
 
@@ -163,10 +165,23 @@ pub fn to_images(request: &PdfToImagesRequest, input: PathBuf) -> JobOutcome {
     let Some(renderer) = tool("TOOLBOX_PDFTOPPM_PATH", "pdftoppm") else { return failure(input, "pdftoppm is required to render PDFs. Set TOOLBOX_PDFTOPPM_PATH or add pdftoppm to PATH.".to_string()); };
     let dpi = request.dpi.clamp(72, 300);
     let extension = if format == "jpg" { "jpg" } else { "png" };
-    let destination = OutputNaming::get_destination(&input, &request.output_location, "-images", extension);
+    let destination = unique_image_destination(&input, &request.output_location, extension);
     let prefix = destination.with_extension("");
-    let mut command = Command::new(renderer);
     let renderer_format = if format == "jpg" { "jpeg" } else { "png" };
+    if let Some(requested_pages) = request.pages.as_ref() {
+        let document = match Document::load(&input) {
+            Ok(document) => document,
+            Err(error) => return failure(input, error.to_string()),
+        };
+        let pages = match selected_pdf_pages(&document, Some(requested_pages)) {
+            Ok(pages) if !pages.is_empty() => pages,
+            Ok(_) => return failure(input, "Select at least one PDF page.".to_string()),
+            Err(error) => return failure(input, error),
+        };
+        return render_selected_pages(&renderer, &input, &prefix, renderer_format, dpi, extension, &pages);
+    }
+
+    let mut command = Command::new(&renderer);
     command.arg(format!("-{renderer_format}")).arg("-r").arg(dpi.to_string());
     if let Some(range) = request.page_range.as_deref().filter(|value| !value.trim().is_empty()) {
         let (first, last) = range.split_once('-').unwrap_or((range, range));
@@ -186,10 +201,84 @@ pub fn to_images(request: &PdfToImagesRequest, input: PathBuf) -> JobOutcome {
     }
 }
 
+fn unique_image_destination(input: &PathBuf, location: &OutputLocation, extension: &str) -> PathBuf {
+    let mut suffix = "-images".to_string();
+    let mut destination = OutputNaming::get_destination(input, location, &suffix, extension);
+    let mut counter = 1usize;
+    while rendered_output_exists(&destination, extension) {
+        suffix = format!("-images-{counter}");
+        destination = OutputNaming::get_destination(input, location, &suffix, extension);
+        counter += 1;
+    }
+    destination
+}
+
+fn rendered_output_exists(destination: &PathBuf, extension: &str) -> bool {
+    if destination.exists() { return true; }
+    let Some(directory) = destination.parent() else { return false; };
+    let Some(stem) = destination.file_stem().and_then(|value| value.to_str()) else { return false; };
+    let prefix = format!("{stem}-");
+    fs::read_dir(directory).ok().into_iter().flatten().filter_map(Result::ok).any(|entry| {
+        let path = entry.path();
+        path.extension().and_then(|value| value.to_str()).is_some_and(|value| value.eq_ignore_ascii_case(extension))
+            && path.file_stem().and_then(|value| value.to_str()).is_some_and(|value| value.starts_with(&prefix))
+    })
+}
+
+fn render_selected_pages(
+    renderer: &PathBuf,
+    input: &PathBuf,
+    prefix: &PathBuf,
+    renderer_format: &str,
+    dpi: u16,
+    extension: &str,
+    pages: &[u32],
+) -> JobOutcome {
+    let mut outputs = Vec::with_capacity(pages.len());
+    let base = prefix.file_name().and_then(|value| value.to_str()).unwrap_or("output");
+    for page in pages {
+        let page_prefix = prefix.with_file_name(format!("{base}-page-{page}"));
+        let output = page_prefix.with_extension(extension);
+        if output.exists() {
+            remove_outputs(&outputs);
+            return failure(input.clone(), format!("Refusing to overwrite existing image output: {}", output.display()));
+        }
+        let result = Command::new(renderer)
+            .arg(format!("-{renderer_format}"))
+            .arg("-r")
+            .arg(dpi.to_string())
+            .arg("-f")
+            .arg(page.to_string())
+            .arg("-l")
+            .arg(page.to_string())
+            .arg("-singlefile")
+            .arg(input)
+            .arg(&page_prefix)
+            .output();
+        match result {
+            Ok(result) if result.status.success() && output.exists() => outputs.push(output),
+            Ok(result) => {
+                remove_outputs(&outputs);
+                return failure(input.clone(), stderr(result, "pdftoppm failed to render the selected PDF page."));
+            }
+            Err(error) => {
+                remove_outputs(&outputs);
+                return failure(input.clone(), format!("Could not run pdftoppm: {error}"));
+            }
+        }
+    }
+    JobOutcome { input_path: input.clone(), output_paths: outputs, detail: "Selected PDF pages rendered to images in page order".to_string(), failure: None }
+}
+
 pub fn to_text(request: &PdfToTextRequest, input: PathBuf) -> JobOutcome {
     let output = OutputNaming::get_destination(&input, &request.output_location, "-text", "txt");
     let document = match Document::load(&input) { Ok(document) => document, Err(error) => return failure(input, error.to_string()) };
-    let pages = document.get_pages().keys().copied().collect::<Vec<_>>();
+    let pages = selected_pdf_pages(&document, request.pages.as_ref());
+    let pages = match pages {
+        Ok(pages) if !pages.is_empty() => pages,
+        Ok(_) => return failure(input, "Select at least one PDF page.".to_string()),
+        Err(error) => return failure(input, error),
+    };
     match document.extract_text(&pages) {
         Ok(text) => {
             let text = normalize_pdf_text(&text);
@@ -206,10 +295,15 @@ fn normalize_pdf_text(text: &str) -> String {
 
 pub fn extract_images(request: &PdfToTextRequest, input: PathBuf) -> JobOutcome {
     let document = match Document::load(&input) { Ok(document) => document, Err(error) => return failure(input, error.to_string()) };
+    let selected = match selected_pdf_pages(&document, request.pages.as_ref()) {
+        Ok(pages) => pages.into_iter().map(|page| page as usize).collect::<std::collections::HashSet<_>>(),
+        Err(error) => return failure(input, error),
+    };
     let directory = match &request.output_location { OutputLocation::AlongsideInput => input.parent().unwrap_or_else(|| std::path::Path::new(".")), OutputLocation::CustomFolder(folder) => folder.as_path() };
     let stem = input.file_stem().and_then(|value| value.to_str()).unwrap_or("output");
     let mut outputs = Vec::new();
     for (page_number, page_id) in document.get_pages() {
+        if request.pages.is_some() && !selected.contains(&(page_number as usize)) { continue; }
         let images = match document.get_page_images(page_id) { Ok(images) => images, Err(error) => return failure(input, error.to_string()) };
         for (index, image) in images.iter().enumerate() {
             let Some(filters) = &image.filters else {
@@ -231,6 +325,17 @@ pub fn extract_images(request: &PdfToTextRequest, input: PathBuf) -> JobOutcome 
         }
     }
     if outputs.is_empty() { failure(input, "No embedded JPEG images were found. Non-JPEG PDF image filters are not extractable without recompression.".to_string()) } else { JobOutcome { input_path: input, output_paths: outputs, detail: "Embedded JPEG images extracted without recompression".to_string(), failure: None } }
+}
+
+fn selected_pdf_pages(document: &Document, requested: Option<&Vec<usize>>) -> Result<Vec<u32>, String> {
+    let pages = document.get_pages().keys().copied().collect::<Vec<_>>();
+    let Some(requested) = requested else { return Ok(pages); };
+    if requested.is_empty() { return Ok(Vec::new()); }
+    let requested = requested.iter().map(|page| (*page as u32).saturating_add(1)).collect::<std::collections::HashSet<_>>();
+    if requested.iter().any(|page| !pages.contains(page)) {
+        return Err("Selected PDF pages are outside the document.".to_string());
+    }
+    Ok(pages.into_iter().filter(|page| requested.contains(page)).collect())
 }
 
 fn remove_outputs(outputs: &[PathBuf]) { for output in outputs { let _ = fs::remove_file(output); } }

@@ -23,9 +23,197 @@ pub struct ImagePreview {
     pub data_url: String,
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ImageEdit {
+    Convert { format: String },
+    Compress { quality: u8, #[serde(default)] lossless: bool },
+    Resize {
+        width: u32,
+        height: u32,
+        #[serde(default = "default_resize_mode")] mode: String,
+        #[serde(default)] percentage: u32,
+        #[serde(default)] longest_side: u32,
+        #[serde(default = "default_resampling")] resampling: String,
+        #[serde(default = "default_keep_aspect_ratio")] keep_aspect_ratio: bool,
+    },
+    Rotate { degrees: i32, #[serde(default = "default_flip")] flip: String },
+    Crop {
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+        #[serde(default = "default_crop_mode")] mode: String,
+        #[serde(default)] aspect_width: u32,
+        #[serde(default)] aspect_height: u32,
+        #[serde(default = "default_crop_anchor")] anchor: String,
+    },
+    Tone { brightness: i32, contrast: f32, #[serde(default)] saturation: f32, #[serde(default)] exposure: f32 },
+    Watermark {
+        #[serde(default)] text: Option<String>,
+        #[serde(default)] logo_path: Option<PathBuf>,
+        opacity: u8,
+        #[serde(default = "default_watermark_position")] x: u32,
+        #[serde(default = "default_watermark_position")] y: u32,
+    },
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageEditPlan {
+    pub edits: Vec<ImageEdit>,
+    pub output_location: OutputLocation,
+    #[serde(default = "default_edit_suffix")]
+    pub suffix: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageEditPreviewRequest {
+    pub path: PathBuf,
+    pub plan: ImageEditPlan,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageEditExportRequest {
+    pub paths: Vec<PathBuf>,
+    pub plan: ImageEditPlan,
+}
+
+fn default_edit_suffix() -> String { "-edited".to_string() }
+
+impl ImageEditPlan {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.edits.is_empty() { return Err("Add at least one image edit before exporting.".to_string()); }
+        for edit in &self.edits {
+            match edit {
+                ImageEdit::Convert { format } if !matches!(format.as_str(), "jpg" | "jpeg" | "png" | "webp" | "heic") => return Err(format!("Unsupported image format: {format}.")),
+                ImageEdit::Compress { quality, .. } if *quality == 0 || *quality > 100 => return Err("Compression quality must be between 1 and 100.".to_string()),
+                ImageEdit::Resize { width, height, mode, percentage, longest_side, .. } => {
+                    match mode.as_str() {
+                        "exact" if *width == 0 || *height == 0 => return Err("Resize dimensions must be positive.".to_string()),
+                        "percentage" if *percentage == 0 || *percentage > 1000 => return Err("Resize percentage must be between 1 and 1000.".to_string()),
+                        "longestSide" if *longest_side == 0 || *longest_side > 16384 => return Err("Longest side must be between 1 and 16384 pixels.".to_string()),
+                        "exact" | "percentage" | "longestSide" => {},
+                        _ => return Err(format!("Unsupported resize mode: {mode}.")),
+                    }
+                }
+                ImageEdit::Rotate { degrees, flip } if !matches!(degrees.rem_euclid(360), 0 | 90 | 180 | 270) => return Err("Rotation must be 0, 90, 180, or 270 degrees.".to_string()),
+                ImageEdit::Rotate { flip, .. } if !matches!(flip.as_str(), "none" | "horizontal" | "vertical") => return Err("Mirror choice must be none, horizontal, or vertical.".to_string()),
+                ImageEdit::Crop { width, height, mode, aspect_width, aspect_height, .. } if mode == "rectangle" && (*width == 0 || *height == 0) => return Err("Crop rectangle must have positive dimensions.".to_string()),
+                ImageEdit::Crop { mode, aspect_width, aspect_height, .. } if mode == "aspectRatio" && (*aspect_width == 0 || *aspect_height == 0) => return Err("Aspect ratio dimensions must be positive.".to_string()),
+                ImageEdit::Crop { mode, .. } if !matches!(mode.as_str(), "rectangle" | "aspectRatio") => return Err(format!("Unsupported crop mode: {mode}.")),
+                ImageEdit::Tone { brightness, contrast, saturation, exposure } if !(-100..=100).contains(brightness) => return Err("Brightness must be between -100 and 100.".to_string()),
+                ImageEdit::Tone { contrast, .. } if !(-100.0..=100.0).contains(contrast) => return Err("Contrast must be between -100 and 100.".to_string()),
+                ImageEdit::Tone { saturation, .. } if !(-100.0..=100.0).contains(saturation) => return Err("Saturation must be between -100 and 100.".to_string()),
+                ImageEdit::Tone { exposure, .. } if !(-100.0..=100.0).contains(exposure) => return Err("Exposure must be between -100 and 100.".to_string()),
+                ImageEdit::Watermark { opacity, text, logo_path, .. } if *opacity > 100 => return Err("Watermark opacity must be between 0 and 100.".to_string()),
+                ImageEdit::Watermark { text, logo_path, .. } if text.as_deref().is_none_or(|value| value.trim().is_empty()) && logo_path.is_none() => return Err("Provide watermark text or a logo image.".to_string()),
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+}
+
+pub fn inspect_edit_preview(request: &ImageEditPreviewRequest) -> Result<ImagePreview, String> {
+    request.plan.validate()?;
+    let source = crate::kit::images::load_image(&request.path)?;
+    let (edited, _, _) = apply_edit_plan(&request.plan, source, crate::kit::images::detect_format(&request.path))?;
+    encode_preview(edited)
+}
+
+pub fn export_edit_plan(plan: &ImageEditPlan, input: PathBuf) -> JobOutcome {
+    if let Err(error) = plan.validate() { return failure(input, error); }
+    let source = match crate::kit::images::load_image(&input) {
+        Ok(image) => image,
+        Err(error) => return failure(input, error),
+    };
+    let (edited, format, quality) = match apply_edit_plan(plan, source, crate::kit::images::detect_format(&input)) {
+        Ok(value) => value,
+        Err(error) => return failure(input, error),
+    };
+    let output = OutputNaming::get_destination(&input, &plan.output_location, &plan.suffix, format.extension());
+    let bytes = match crate::kit::images::encode(&edited, format, quality) {
+        Ok(bytes) => bytes,
+        Err(error) => return failure(input, error),
+    };
+    if let Err(error) = std::fs::write(&output, bytes) {
+        return failure(input, format!("Could not save edited image: {error}"));
+    }
+    JobOutcome { input_path: input, output_paths: vec![output], detail: format!("Applied {} edits in one export.", plan.edits.len()), failure: None }
+}
+
+fn encode_preview(image: DynamicImage) -> Result<ImagePreview, String> {
+    let width = image.width();
+    let height = image.height();
+    let preview = image.thumbnail(1200, 900).to_rgba8();
+    let mut bytes = Vec::new();
+    PngEncoder::new(&mut bytes)
+        .write_image(preview.as_raw(), preview.width(), preview.height(), image::ExtendedColorType::Rgba8)
+        .map_err(|error| format!("Could not encode image preview: {error}"))?;
+    Ok(ImagePreview { width, height, data_url: format!("data:image/png;base64,{}", STANDARD.encode(bytes)) })
+}
+
+fn apply_edit_plan(plan: &ImageEditPlan, mut image: DynamicImage, mut format: crate::kit::images::OutputFormat) -> Result<(DynamicImage, crate::kit::images::OutputFormat, u8), String> {
+    let mut quality = 90;
+    for edit in &plan.edits {
+        match edit {
+            ImageEdit::Convert { format: requested } => format = parse_output_format(requested)?,
+            ImageEdit::Compress { quality: requested, lossless } => { quality = if *lossless { 100 } else { *requested }; },
+            ImageEdit::Resize { width, height, mode, percentage, longest_side, resampling, keep_aspect_ratio } => {
+                let request = ResizeRequest { paths: vec![], width: *width, height: *height, mode: mode.clone(), resampling: resampling.clone(), keep_aspect_ratio: *keep_aspect_ratio, percentage: *percentage, longest_side: *longest_side, output_location: OutputLocation::AlongsideInput };
+                let (width, height) = resize_dimensions(image.width(), image.height(), &request)?;
+                let filter = match resampling.as_str() { "nearest" => image::imageops::FilterType::Nearest, "bicubic" => image::imageops::FilterType::CatmullRom, _ => image::imageops::FilterType::Lanczos3 };
+                image = image.resize_exact(width, height, filter);
+            }
+            ImageEdit::Rotate { degrees, flip } => {
+                image = match degrees.rem_euclid(360) { 90 => image.rotate90(), 180 => image.rotate180(), 270 => image.rotate270(), 0 => image, _ => return Err("Rotation must be 0, 90, 180, or 270 degrees.".to_string()) };
+                image = match flip.as_str() { "none" => image, "horizontal" => DynamicImage::ImageRgba8(image::imageops::flip_horizontal(&image.to_rgba8())), "vertical" => DynamicImage::ImageRgba8(image::imageops::flip_vertical(&image.to_rgba8())), _ => return Err("Mirror choice must be none, horizontal, or vertical.".to_string()) };
+            }
+            ImageEdit::Crop { x, y, width, height, mode, aspect_width, aspect_height, anchor } => {
+                let request = CropRequest { paths: vec![], x: *x, y: *y, width: *width, height: *height, mode: mode.clone(), aspect_width: *aspect_width, aspect_height: *aspect_height, anchor: anchor.clone(), output_location: OutputLocation::AlongsideInput };
+                let (x, y, width, height) = crop_rect(image.width(), image.height(), &request)?;
+                image = image.crop_imm(x, y, width, height);
+            }
+            ImageEdit::Tone { brightness, contrast, saturation, exposure } => {
+                let mut rgba = image::imageops::brighten(&image, *brightness);
+                let exposure = 2.0_f32.powf(*exposure / 100.0);
+                let saturation = (1.0 + *saturation / 100.0).max(0.0);
+                for pixel in rgba.pixels_mut() {
+                    let [red, green, blue, alpha] = pixel.0;
+                    let average = (red as f32 + green as f32 + blue as f32) / 3.0;
+                    pixel.0 = [
+                        ((average + (red as f32 - average) * saturation) * exposure).clamp(0.0, 255.0) as u8,
+                        ((average + (green as f32 - average) * saturation) * exposure).clamp(0.0, 255.0) as u8,
+                        ((average + (blue as f32 - average) * saturation) * exposure).clamp(0.0, 255.0) as u8,
+                        alpha,
+                    ];
+                }
+                image = DynamicImage::ImageRgba8(rgba).adjust_contrast(*contrast);
+            }
+            ImageEdit::Watermark { text, logo_path, opacity, x, y } => {
+                let request = WatermarkRequest { paths: vec![], opacity: *opacity, text: text.clone(), logo_path: logo_path.clone(), x: *x, y: *y, output_location: OutputLocation::AlongsideInput };
+                image = apply_watermark(image, &request)?;
+            }
+        }
+    }
+    Ok((image, format, quality.clamp(1, 100)))
+}
+
+fn parse_output_format(format: &str) -> Result<crate::kit::images::OutputFormat, String> {
+    match format.to_ascii_lowercase().as_str() {
+        "jpg" | "jpeg" => Ok(crate::kit::images::OutputFormat::Jpeg),
+        "png" => Ok(crate::kit::images::OutputFormat::Png),
+        "webp" => Ok(crate::kit::images::OutputFormat::WebP),
+        "heic" => Ok(crate::kit::images::OutputFormat::Heic),
+        _ => Err(format!("Unsupported image format: {format}.")),
+    }
+}
+
 pub fn inspect_preview(request: &ImagePreviewRequest) -> Result<ImagePreview, String> {
-    let image = image::open(&request.path)
-        .map_err(|error| format!("Could not preview image: {error}"))?;
+    let image = crate::kit::images::load_image(&request.path).map_err(|error| format!("Could not preview image: {error}"))?;
     let width = image.width();
     let height = image.height();
     let preview = image.thumbnail(1200, 900).to_rgba8();
@@ -211,24 +399,28 @@ pub fn tone(request: &ToneRequest, input: PathBuf) -> JobOutcome {
 }
 pub fn watermark(request: &WatermarkRequest, input: PathBuf) -> JobOutcome {
     transform(&request.paths, input, &request.output_location, "-watermarked", |image| {
-        let mut image = image.to_rgba8();
-        let original_alpha = image.pixels().map(|pixel| pixel.0[3]).collect::<Vec<_>>();
-        let alpha = request.opacity.min(100) as u16 * 255 / 100;
-        let mut watermark = image::RgbaImage::new(image.width(), image.height());
-        if let Some(text) = request.text.as_deref().filter(|text| !text.trim().is_empty()) {
-            draw_text(&mut watermark, text, request.x, request.y, alpha as u8);
-        }
-        if let Some(path) = request.logo_path.as_ref() {
-            let logo = image::open(path).map_err(|error| format!("Could not read watermark logo: {error}"))?.to_rgba8();
-            image::imageops::overlay(&mut watermark, &logo, request.x as i64, request.y as i64);
-        }
-        if watermark.pixels().all(|pixel| pixel.0[3] == 0) {
-            return Err("Provide watermark text or a logo image.".to_string());
-        }
-        image::imageops::overlay(&mut image, &watermark, 0, 0);
-        for (pixel, alpha) in image.pixels_mut().zip(original_alpha) { pixel.0[3] = alpha; }
-        Ok(DynamicImage::ImageRgba8(image))
+        apply_watermark(image, request)
     })
+}
+
+fn apply_watermark(image: DynamicImage, request: &WatermarkRequest) -> Result<DynamicImage, String> {
+    let mut image = image.to_rgba8();
+    let original_alpha = image.pixels().map(|pixel| pixel.0[3]).collect::<Vec<_>>();
+    let alpha = request.opacity.min(100) as u16 * 255 / 100;
+    let mut watermark = image::RgbaImage::new(image.width(), image.height());
+    if let Some(text) = request.text.as_deref().filter(|text| !text.trim().is_empty()) {
+        draw_text(&mut watermark, text, request.x, request.y, alpha as u8);
+    }
+    if let Some(path) = request.logo_path.as_ref() {
+        let logo = crate::kit::images::load_image(path)?.to_rgba8();
+        image::imageops::overlay(&mut watermark, &logo, request.x as i64, request.y as i64);
+    }
+    if watermark.pixels().all(|pixel| pixel.0[3] == 0) {
+        return Err("Provide watermark text or a logo image.".to_string());
+    }
+    image::imageops::overlay(&mut image, &watermark, 0, 0);
+    for (pixel, alpha) in image.pixels_mut().zip(original_alpha) { pixel.0[3] = alpha; }
+    Ok(DynamicImage::ImageRgba8(image))
 }
 
 fn default_watermark_position() -> u32 { 16 }
@@ -482,7 +674,7 @@ pub fn strip_metadata(request: &MetadataRequest, input: PathBuf) -> JobOutcome {
 fn contains(bytes: &[u8], needle: &[u8]) -> bool { bytes.windows(needle.len()).any(|window| window == needle) }
 
 fn transform<F>(_: &[PathBuf], input: PathBuf, location: &OutputLocation, suffix: &str, edit: F) -> JobOutcome where F: FnOnce(DynamicImage) -> Result<DynamicImage, String> {
-    let image = match image::open(&input) { Ok(image) => image, Err(error) => return failure(input, format!("Could not read image: {error}")) };
+    let image = match crate::kit::images::load_image(&input) { Ok(image) => image, Err(error) => return failure(input, format!("Could not read image: {error}")) };
     let image = match edit(image) { Ok(image) => image, Err(error) => return failure(input, error) };
     let extension = input.extension().and_then(|extension| extension.to_str()).unwrap_or("png");
     let output = OutputNaming::get_destination(&input, location, suffix, extension);
@@ -640,5 +832,71 @@ mod tests {
         assert_eq!(resize_dimensions(400, 200, &longest).unwrap(), (100, 50));
         let invalid = ResizeRequest { mode: "percentage".to_string(), percentage: 0, ..longest };
         assert!(resize_dimensions(400, 200, &invalid).is_err());
+    }
+
+    #[test]
+    fn composed_plan_applies_ordered_edits_once_without_mutating_source() {
+        let input = path("composed-plan.png");
+        image::RgbaImage::from_fn(4, 2, |x, y| image::Rgba([x as u8 * 40, y as u8 * 80, 10, 255]))
+            .save(&input)
+            .unwrap();
+        let source = std::fs::read(&input).unwrap();
+        let plan = ImageEditPlan {
+            edits: vec![
+                ImageEdit::Resize {
+                    width: 4,
+                    height: 2,
+                    mode: "exact".to_string(),
+                    percentage: 0,
+                    longest_side: 0,
+                    resampling: "nearest".to_string(),
+                    keep_aspect_ratio: false,
+                },
+                ImageEdit::Rotate {
+                    degrees: 90,
+                    flip: "none".to_string(),
+                },
+                ImageEdit::Crop {
+                    x: 0,
+                    y: 0,
+                    width: 2,
+                    height: 2,
+                    mode: "rectangle".to_string(),
+                    aspect_width: 0,
+                    aspect_height: 0,
+                    anchor: "center".to_string(),
+                },
+            ],
+            output_location: OutputLocation::AlongsideInput,
+            suffix: "-edited".to_string(),
+        };
+
+        let preview = inspect_edit_preview(&ImageEditPreviewRequest { path: input.clone(), plan: plan.clone() }).unwrap();
+        assert_eq!((preview.width, preview.height), (2, 2));
+        let result = export_edit_plan(&plan, input.clone());
+        assert!(result.failure.is_none(), "{}", result.failure.clone().unwrap_or_default());
+        assert_eq!(std::fs::read(&input).unwrap(), source);
+        let output = result.output_paths.first().unwrap();
+        let edited = image::open(output).unwrap();
+        assert_eq!((edited.width(), edited.height()), (2, 2));
+
+        let _ = std::fs::remove_file(input);
+        let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn composed_plan_rejects_invalid_editor_values() {
+        let plan = ImageEditPlan {
+            edits: vec![ImageEdit::Tone {
+                brightness: 101,
+                contrast: 0.0,
+                saturation: 0.0,
+                exposure: 0.0,
+            }],
+            output_location: OutputLocation::AlongsideInput,
+            suffix: "-edited".to_string(),
+        };
+
+        assert_eq!(plan.validate().unwrap_err(), "Brightness must be between -100 and 100.");
     }
 }

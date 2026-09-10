@@ -1,20 +1,35 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ToolScaffold } from "../components/ToolScaffold";
-import { UtilityRegistry } from "../registry";
-import type { PasswordRequest, PDFRequest, ToolDefinition, ToolResult } from "../contracts";
+import { WorkspaceCommandRail } from "../components/WorkspaceCommandRail";
+import { toolsForWorkspaceId, UtilityRegistry } from "../registry";
+import type { AtomicToolId, PasswordRequest, PDFRequest, ToolDefinition, ToolResult } from "../contracts";
 
-const securityIds = new Set(["pdf-unlock", "pdf-protect"]);
+const securityActions = toolsForWorkspaceId("file-security");
+const securityIds = new Set<string>(securityActions.map((tool) => tool.id));
 
 export const SecurityWorkspaceView = ({ utility }: { utility: ToolDefinition }) => {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [activeToolId, setActiveToolId] = useState<AtomicToolId>(
+    securityIds.has(utility.id) ? utility.id : "pdf-unlock",
+  );
+  useEffect(() => {
+    setActiveToolId(securityIds.has(utility.id) ? utility.id : "pdf-unlock");
+  }, [utility.id]);
   const activeUtility = securityIds.has(utility.id)
-    ? utility
-    : UtilityRegistry.find((item) => item.id === "pdf-unlock") ?? utility;
+    ? UtilityRegistry.find((item) => item.id === activeToolId) ?? utility
+    : UtilityRegistry.find((item) => item.id === activeToolId) ?? utility;
+
+  useEffect(() => {
+    setPassword("");
+    setShowPassword(false);
+  }, [activeUtility.id]);
 
   return (
     <ToolScaffold
+      variant="workspace"
+      sessionKey="file-security"
       utility={activeUtility}
       onRun={(paths) =>
         activeUtility.id === "pdf-protect"
@@ -36,7 +51,14 @@ export const SecurityWorkspaceView = ({ utility }: { utility: ToolDefinition }) 
     >
       {({ files, run, loading }) => (
         <div className="workspace-control-panel">
+          <WorkspaceCommandRail
+            actions={securityActions}
+            activeId={activeToolId}
+            onSelect={setActiveToolId}
+            label="File security tools"
+          />
           <div>
+            <h2 className="workspace-active-command">{activeUtility.title}</h2>
             <p className="workspace-panel-label">
               {activeUtility.id === "pdf-protect" ? "Protect a file" : "Unlock a file"}
             </p>
@@ -44,6 +66,11 @@ export const SecurityWorkspaceView = ({ utility }: { utility: ToolDefinition }) 
               {activeUtility.id === "pdf-protect"
                 ? "Add a password to each selected PDF. The originals stay untouched."
                 : "Use the existing password to save an unlocked copy of each selected PDF or Office file."}
+            </p>
+            <p className="workspace-note">
+              {activeUtility.id === "pdf-protect"
+                ? "PDF files only"
+                : "PDF, Word, Excel, and PowerPoint files"}
             </p>
           </div>
           <label className="workspace-field">

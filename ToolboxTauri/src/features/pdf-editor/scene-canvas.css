@@ -1,0 +1,16 @@
+.scene-canvas { width: 100%; height: 100%; min-height: 160px; min-width: 0; overflow: auto; display: flex; align-items: safe center; justify-content: safe center; background: #e5e7eb; }
+.scene-canvas-page { flex: none; overflow: hidden; touch-action: none; user-select: none; box-shadow: 0 2px 12px #0002; }
+.scene-tool-select { cursor: default; }
+.scene-tool-text, .scene-tool-highlight, .scene-tool-shape, .scene-tool-signature, .scene-tool-crop { cursor: crosshair; }
+.scene-tool-watermark { cursor: default; }
+.scene-object-hit { fill: transparent; stroke: none; cursor: move; pointer-events: all; }
+.scene-object-watermark { cursor: pointer; }
+.scene-object-hit:focus-visible { outline: none; stroke: #2563eb; stroke-width: 2px; vector-effect: non-scaling-stroke; }
+.scene-resize-handle { fill: white; stroke: #2563eb; cursor: nwse-resize; }
+.scene-resize-handle[data-corner="ne"], .scene-resize-handle[data-corner="sw"] { cursor: nesw-resize; }
+.scene-resize-handle:focus-visible { fill: #bfdbfe; outline: none; }
+.scene-crop-outline { fill: #2563eb18; stroke: #2563eb; stroke-dasharray: 6 4; }
+.scene-text-layer { user-select: text; pointer-events: all; }
+.scene-text-run { user-select: text; cursor: text; }
+.scene-inline-text-editor { overflow: visible; pointer-events: all; }
+.scene-inline-text-editor textarea { width: 100%; height: 100%; resize: none; padding: 4px 6px; border: 1px solid #2563eb; border-radius: 3px; outline: 2px solid #bfdbfe; background: color-mix(in srgb, var(--surface, #fff) 92%, transparent); color: var(--fg, #111827); font: inherit; line-height: 1.2; }

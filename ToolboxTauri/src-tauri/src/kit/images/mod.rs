@@ -19,7 +19,7 @@ pub enum OutputFormat {
 }
 
 impl OutputFormat {
-    fn extension(self) -> &'static str {
+    pub(crate) fn extension(self) -> &'static str {
         match self {
             OutputFormat::Jpeg => "jpg",
             OutputFormat::Png => "png",
@@ -45,7 +45,7 @@ fn lower_ext(path: &std::path::Path) -> Option<String> {
         .map(|s| s.to_ascii_lowercase())
 }
 
-fn detect_format(path: &std::path::Path) -> OutputFormat {
+pub(crate) fn detect_format(path: &std::path::Path) -> OutputFormat {
     match lower_ext(path).as_deref() {
         Some("jpg" | "jpeg") => OutputFormat::Jpeg,
         Some("webp") => OutputFormat::WebP,
@@ -60,7 +60,7 @@ fn detect_format(path: &std::path::Path) -> OutputFormat {
 // HEIC has no decoder in the image crate, so fall back to heif-rs when the
 // extension says HEIF but image::open refused it. Everything else errors
 // normally so a genuinely corrupt file is surfaced as such.
-fn load_image(path: &std::path::Path) -> Result<image::DynamicImage, String> {
+pub(crate) fn load_image(path: &std::path::Path) -> Result<image::DynamicImage, String> {
     match image::open(path) {
         Ok(img) => Ok(img),
         Err(first) => {
@@ -77,7 +77,7 @@ fn load_image(path: &std::path::Path) -> Result<image::DynamicImage, String> {
 // Encoders write to a buffer first: WebP and HEIC only expose buffer encoders
 // anyway, and buffering lets the no-inflation guard compare sizes before
 // touching the destination (JPEG/PNG write through the same path).
-fn encode(img: &image::DynamicImage, format: OutputFormat, quality: u8) -> Result<Vec<u8>, String> {
+pub(crate) fn encode(img: &image::DynamicImage, format: OutputFormat, quality: u8) -> Result<Vec<u8>, String> {
     match format {
         OutputFormat::Jpeg => {
             let rgb = img.to_rgb8();

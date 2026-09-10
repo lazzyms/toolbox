@@ -7,7 +7,7 @@ use crate::file_actions::{open_output_path, reveal_output_path};
 use crate::kit::common::JobOutcome;
 use crate::kit::images::{ImageProcessor, Options as ImageOptions, OutputFormat};
 use crate::kit::images::tools;
-use crate::kit::pdf::{editor, metadata, remaining, PDFProcessor};
+use crate::kit::pdf::{editor, metadata, remaining, scene, PDFProcessor};
 use crate::kit::vision;
 use crate::kit::contracts::{CompressImagesRequest, ConvertImagesRequest, PasswordRequest, PdfRequest};
 use crate::kit::common::batch_runner::BatchRunner;
@@ -73,6 +73,21 @@ fn inspect_pdf(request: InspectPdfRequest) -> Result<metadata::PdfDocumentMetada
 }
 
 #[tauri::command]
+async fn inspect_pdf_scene(request: InspectPdfRequest) -> Result<metadata::PdfDocumentMetadata, String> {
+    tauri::async_runtime::spawn_blocking(move || scene::inspect(&request.path)).await.map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn preview_pdf_scene(request: scene::PreviewRequest) -> Result<scene::ScenePreview, String> {
+    tauri::async_runtime::spawn_blocking(move || scene::preview(&request)).await.map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn export_pdf_scene(request: scene::ExportRequest) -> Vec<JobOutcome> {
+    BatchRunner::run(request.paths.clone(), |path| scene::export(&request, path))
+}
+
+#[tauri::command]
 async fn crop_pdf(request: editor::CropPdfRequest) -> Vec<JobOutcome> {
     BatchRunner::run(request.paths.clone(), |path| editor::crop(&request, path))
 }
@@ -85,6 +100,11 @@ async fn sign_pdf(request: editor::SignPdfRequest) -> Vec<JobOutcome> {
 #[tauri::command]
 async fn edit_pdf(request: editor::EditPdfRequest) -> Vec<JobOutcome> {
     BatchRunner::run(request.paths.clone(), |path| editor::edit(&request, path))
+}
+
+#[tauri::command]
+async fn edit_pdf_session(request: editor::PdfEditSessionRequest) -> Vec<JobOutcome> {
+    BatchRunner::run(request.paths.clone(), |path| editor::apply_session(&request, path))
 }
 
 #[tauri::command]
@@ -184,6 +204,14 @@ fn inspect_image_metadata(request: tools::MetadataRequest) -> Vec<Result<tools::
 #[tauri::command]
 fn inspect_image_preview(request: tools::ImagePreviewRequest) -> Result<tools::ImagePreview, String> { tools::inspect_preview(&request) }
 
+#[tauri::command]
+fn inspect_image_edit_preview(request: tools::ImageEditPreviewRequest) -> Result<tools::ImagePreview, String> { tools::inspect_edit_preview(&request) }
+
+#[tauri::command]
+async fn export_image_edit_plan(request: tools::ImageEditExportRequest) -> Vec<JobOutcome> {
+    BatchRunner::run(request.paths.clone(), |path| tools::export_edit_plan(&request.plan, path))
+}
+
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
@@ -194,8 +222,12 @@ fn main() {
             compress_images,
             convert_images,
             inspect_pdf,
+            inspect_pdf_scene,
+            preview_pdf_scene,
+            export_pdf_scene,
             crop_pdf,
             edit_pdf,
+            edit_pdf_session,
             sign_pdf,
             organize_pdf,
             add_pdf_pages
@@ -224,7 +256,9 @@ fn main() {
             process_tiff_pages
             ,image_metadata
             ,inspect_image_metadata,
-            inspect_image_preview
+            inspect_image_preview,
+            inspect_image_edit_preview,
+            export_image_edit_plan
         ])
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
@@ -241,8 +275,8 @@ mod command_tests {
 
     use super::*;
     use crate::kit::common::OutputLocation;
-    use crate::kit::images::tools::{CropRequest, GifCreateRequest, GifExtractRequest, IconSetRequest, MetadataRequest, ResizeRequest, RotateRequest, TiffRequest, ToneRequest, WatermarkRequest};
-    use crate::kit::pdf::editor::{AddPdfPagesRequest, CropPdfRequest, EditPdfRequest, OrganizePdfRequest, PageScope, PdfRect, RotatePage, SignPdfRequest};
+    use crate::kit::images::tools::{CropRequest, GifCreateRequest, GifExtractRequest, ImageEdit, ImageEditExportRequest, ImageEditPlan, ImageEditPreviewRequest, IconSetRequest, MetadataRequest, ResizeRequest, RotateRequest, TiffRequest, ToneRequest, WatermarkRequest};
+    use crate::kit::pdf::editor::{AddPdfPagesRequest, CropPdfRequest, EditPdfRequest, OrganizePdfRequest, PageScope, PdfEditMode, PdfEditOperation, PdfEditSessionPlan, PdfEditSessionRequest, PdfOverlay, PdfOverlayPosition, PdfRect, RotatePage, SignPdfRequest};
     use crate::kit::pdf::remaining::{CompressPdfRequest, ImagesToPdfRequest, MergePdfRequest, PageOverlayRequest, PageSelectionRequest, PdfToImagesRequest, PdfToTextRequest};
     use crate::kit::vision::VisionRequest;
     use image::Rgba;
@@ -356,18 +390,51 @@ mod command_tests {
         std::fs::rename(image_pdf_output, &image_pdf).unwrap();
 
         let mut outputs = Vec::new();
+        let inspected_scene = tauri::async_runtime::block_on(inspect_pdf_scene(InspectPdfRequest { path: pdf.clone() })).unwrap();
+        assert_eq!(inspected_scene.pages.len(), 2);
+        let visual_scene: scene::PdfScene = serde_json::from_value(serde_json::json!({ "pages": [
+            { "sourceIndex": 0, "width": 612, "height": 792, "rotation": 0, "crop": null, "objects": [
+                { "kind": "highlight", "rect": { "x": 65, "y": 62, "width": 200, "height": 30 }, "text": "", "fontSize": 18, "color": "#FFD700", "opacity": 0.35, "strokes": [] },
+                { "kind": "text", "rect": { "x": 72, "y": 150, "width": 360, "height": 40 }, "text": "Edited entirely on this device", "fontSize": 18, "color": "#1455AA", "opacity": 1, "strokes": [] },
+                { "kind": "shape", "rect": { "x": 65, "y": 145, "width": 380, "height": 50 }, "text": "", "fontSize": 18, "color": "#1455AA", "opacity": 1, "strokes": [] },
+                { "kind": "watermark", "rect": { "x": 120, "y": 340, "width": 370, "height": 80 }, "text": "PRIVATE DRAFT", "fontSize": 40, "color": "#AAAAAA", "opacity": 0.4, "strokes": [] },
+                { "kind": "signature", "rect": { "x": 90, "y": 580, "width": 200, "height": 50 }, "text": "", "fontSize": 18, "color": "#202020", "opacity": 1, "strokes": [[{"x":0,"y":0.8},{"x":0.2,"y":0.1},{"x":0.15,"y":1},{"x":0.6,"y":0.2},{"x":0.4,"y":0.8},{"x":1,"y":0.4}]] }
+            ] },
+            { "sourceIndex": null, "width": 612, "height": 792, "rotation": 90, "crop": {"x": 20, "y": 20, "width": 550, "height": 700}, "objects": [
+                { "kind": "text", "rect": { "x": 72, "y": 100, "width": 350, "height": 40 }, "text": "New page in the same session", "fontSize": 18, "color": "#202020", "opacity": 1, "strokes": [] }
+            ] }
+        ] })).unwrap();
+        let rendered_scene = tauri::async_runtime::block_on(preview_pdf_scene(scene::PreviewRequest { path: pdf.clone(), scene: visual_scene.clone(), page_index: 0 })).unwrap();
+        assert!(rendered_scene.data_url.starts_with("data:image/png;base64,"));
+        outputs.extend(assert_success("PDF scene", export_pdf_scene(scene::ExportRequest { paths: vec![pdf.clone()], scene: visual_scene, output_location: OutputLocation::AlongsideInput })));
         outputs.extend(assert_success("unlock", remove_password(PasswordRequest { paths: vec![protected], password: "test-password".into(), output_location: location(&root, "unlock") })));
         outputs.extend(assert_success("page numbers", add_page_numbers(PageOverlayRequest { paths: vec![pdf.clone()], text: "1".into(), opacity: 100, position: Some("bottom-right".into()), logo_path: None, pages: None, start_number: Some(1), font_size: Some(12), output_location: location(&root, "page numbers") })));
         outputs.extend(assert_success("merge", merge_pdfs(MergePdfRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: location(&root, "merge") })));
         outputs.extend(assert_success("watermark pdf", watermark_pdf(PageOverlayRequest { paths: vec![pdf.clone()], text: "TEST".into(), opacity: 70, position: Some("center".into()), logo_path: None, pages: None, start_number: None, font_size: None, output_location: location(&root, "watermark pdf") })));
         outputs.extend(assert_success("crop pdf", crop_pdf(CropPdfRequest { paths: vec![pdf.clone()], rectangle: PdfRect { x: 0.5, y: 0.5, width: 500.0, height: 700.0 }, scope: PageScope::All, output_location: location(&root, "crop pdf") })));
         outputs.extend(assert_success("edit pdf", edit_pdf(EditPdfRequest { paths: vec![pdf.clone()], mode: "highlight".into(), text: "TEST NOTE".into(), pages: None, rectangle: PdfRect { x: 40.0, y: 650.0, width: 220.0, height: 60.0 }, output_location: location(&root, "edit pdf") })));
+        outputs.extend(assert_success("composed pdf editor", edit_pdf_session(PdfEditSessionRequest {
+            paths: vec![pdf.clone()],
+            plan: PdfEditSessionPlan {
+                page_order: vec![1, 0],
+                delete_pages: vec![],
+                rotate_pages: vec![RotatePage { page: 0, degrees: 90 }],
+                operations: vec![
+                    PdfEditOperation::Overlay { overlay: PdfOverlay::Edit { mode: PdfEditMode::Highlight, text: "COMPOSED".into(), pages: None, rectangle: PdfRect { x: 40.0, y: 650.0, width: 220.0, height: 60.0 } } },
+                    PdfEditOperation::Overlay { overlay: PdfOverlay::Watermark { text: "WATERMARK".into(), opacity: 65, position: Some(PdfOverlayPosition::Center), logo_path: None, pages: None } },
+                ],
+            },
+            output_location: location(&root, "composed pdf editor"),
+        })));
         outputs.extend(assert_success("protect", protect_pdf(PdfRequest { paths: vec![pdf_two.clone()], password: "another-password".into(), output_location: location(&root, "protect") })));
         outputs.extend(assert_success("images to pdf", images_to_pdf(ImagesToPdfRequest { paths: vec![image.clone(), image_two.clone()], output_location: location(&root, "images to pdf") })));
-        outputs.extend(assert_success("pdf to images", pdf_to_images(PdfToImagesRequest { paths: vec![pdf.clone()], dpi: 72, format: "png".into(), page_range: None, output_location: location(&root, "pdf to images") })));
-        outputs.extend(assert_success("pdf to text", pdf_to_text(PdfToTextRequest { paths: vec![pdf.clone()], output_location: location(&root, "pdf to text") })));
+        outputs.extend(assert_success("pdf to images", pdf_to_images(PdfToImagesRequest { paths: vec![pdf.clone()], dpi: 72, format: "png".into(), page_range: None, pages: None, output_location: location(&root, "pdf to images") })));
+        let selected_image_outputs = assert_success("pdf selected pages to images", pdf_to_images(PdfToImagesRequest { paths: vec![pdf.clone()], dpi: 72, format: "png".into(), page_range: None, pages: Some(vec![1]), output_location: location(&root, "pdf selected pages to images") }));
+        assert_eq!(selected_image_outputs.len(), 1, "selected PDF page rendering must produce only the selected page");
+        outputs.extend(selected_image_outputs);
+        outputs.extend(assert_success("pdf to text", pdf_to_text(PdfToTextRequest { paths: vec![pdf.clone()], pages: None, output_location: location(&root, "pdf to text") })));
         outputs.extend(assert_success("split", split_pdf(PageSelectionRequest { paths: vec![pdf.clone()], pages: vec![], page_ranges: None, split_mode: Some("pages".into()), chunk_size: None, output_location: location(&root, "split") })));
-        outputs.extend(assert_success("extract pdf images", extract_pdf_images(PdfToTextRequest { paths: vec![image_pdf.clone()], output_location: location(&root, "extract pdf images") })));
+        outputs.extend(assert_success("extract pdf images", extract_pdf_images(PdfToTextRequest { paths: vec![image_pdf.clone()], pages: None, output_location: location(&root, "extract pdf images") })));
         outputs.extend(assert_success("sign", sign_pdf(SignPdfRequest { paths: vec![pdf.clone()], page: 0, text: "Signed".into(), signature_path: None, rectangle: PdfRect { x: 40.0, y: 40.0, width: 180.0, height: 60.0 }, scope: PageScope::All, output_location: location(&root, "sign") })));
         assert_optional_adapter("ocr", ocr_pdf(VisionRequest { paths: vec![pdf.clone()], output_location: location(&root, "ocr") }));
         outputs.extend(assert_success("remove pages", remove_pdf_pages(PageSelectionRequest { paths: vec![pdf.clone()], pages: vec![0], page_ranges: None, split_mode: None, chunk_size: None, output_location: location(&root, "remove pages") })));
@@ -396,6 +463,17 @@ mod command_tests {
         outputs.extend(assert_success("create gif", create_gif(GifCreateRequest { paths: vec![image.clone(), image_two.clone()], frame_delay_ms: 100, loop_forever: true, output_location: location(&root, "create gif") })));
         outputs.extend(assert_success("extract gif", extract_gif_frames(GifExtractRequest { paths: vec![animated.clone()], output_location: location(&root, "extract gif") })));
         outputs.extend(assert_success("watermark image", watermark_images(WatermarkRequest { paths: vec![image.clone()], opacity: 70, text: Some("TEST".into()), logo_path: None, x: 16, y: 16, output_location: location(&root, "watermark image") })));
+        let image_plan = ImageEditPlan {
+            edits: vec![
+                ImageEdit::Resize { width: 128, height: 128, mode: "exact".into(), percentage: 100, longest_side: 128, resampling: "lanczos".into(), keep_aspect_ratio: false },
+                ImageEdit::Rotate { degrees: 90, flip: "horizontal".into() },
+            ],
+            output_location: location(&root, "composed image editor"),
+            suffix: "-session".into(),
+        };
+        let image_preview = inspect_image_edit_preview(ImageEditPreviewRequest { path: image.clone(), plan: image_plan.clone() }).expect("composed image preview should be available");
+        assert_eq!((image_preview.width, image_preview.height), (128, 128), "composed image preview must reflect the complete edit plan");
+        outputs.extend(assert_success("composed image editor", export_image_edit_plan(ImageEditExportRequest { paths: vec![image.clone()], plan: image_plan })));
         outputs.extend(assert_success("metadata", image_metadata(MetadataRequest { paths: vec![image.clone()], output_location: location(&root, "metadata") })));
         outputs.extend(assert_success("tone", adjust_image_tone(ToneRequest { paths: vec![image.clone()], brightness: 20, contrast: 0.0, saturation: 0.0, exposure: 0.0, output_location: location(&root, "tone") })));
         outputs.extend(assert_success("tiff", process_tiff_pages(TiffRequest { paths: vec![tiff.clone()], output_location: location(&root, "tiff") })));

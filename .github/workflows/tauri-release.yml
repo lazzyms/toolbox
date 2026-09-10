@@ -130,6 +130,8 @@ jobs:
           Expand-Archive -Path $popplerArchive -DestinationPath $popplerExtract -Force
           $pdftoppm = Get-ChildItem $popplerExtract -Recurse -Filter pdftoppm.exe | Select-Object -First 1
           if (-not $pdftoppm) { throw 'Could not locate pdftoppm.exe in the Poppler archive' }
+          $pdftotext = Get-ChildItem $popplerExtract -Recurse -Filter pdftotext.exe | Select-Object -First 1
+          if (-not $pdftotext) { throw 'Could not locate pdftotext.exe in the Poppler archive' }
           $env:PATH = "$($pdftoppm.DirectoryName);$env:PATH"
           $pdftoppm.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           New-Item -ItemType Directory -Force -Path src-tauri\resources | Out-Null
@@ -138,6 +140,7 @@ jobs:
           Get-ChildItem $qpdf.DirectoryName -Filter *.dll | Copy-Item -Destination src-tauri\resources -Force
           Copy-Item $pdftoppm.FullName src-tauri\resources\pdftoppm.exe -Force
           Get-ChildItem $pdftoppm.DirectoryName -Filter *.dll | Copy-Item -Destination src-tauri\resources -Force
+          Copy-Item $pdftotext.FullName src-tauri\resources\pdftotext.exe -Force
           @{version=$env:VERSION; bundle=@{resources=@('resources/*')}} | ConvertTo-Json -Compress | Out-File -Encoding ascii release-config.json
       - name: Write macOS version config
         if: runner.os == 'macOS'

@@ -1,4 +1,10 @@
-import type { ToolDefinition, ToolWorkspaceDefinition } from "../contracts";
+import type {
+    AtomicToolId,
+    ToolActionPolicy,
+    ToolDefinition,
+    ToolWorkspaceDefinition,
+    WorkspaceId,
+} from "../contracts";
 
 
 export const UtilityRegistry: ToolDefinition[] = [
@@ -36,6 +42,48 @@ export const UtilityRegistry: ToolDefinition[] = [
     { id: "image-remove-bg", title: "Remove Background", shortTitle: "Cutout", blurb: "Remove backgrounds through an offline vision adapter.", symbol: "wand", tint: "#a855f7", category: "Images", command: "remove_image_background", verification: "image-remove-bg", view: "image-remove-bg", status: "unavailable" },
 ];
 
+/**
+ * Declarative input and execution policy for each stable atomic action.
+ * Workspace views own domain forms. The shared scaffold owns the mechanics
+ * described here, including ordered input and format-aware selection.
+ */
+export const ToolActionPolicies: Record<AtomicToolId, ToolActionPolicy> = {
+    "pdf-unlock": { inputMode: "multiple", execution: "batch", acceptedExtensions: [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"] },
+    "pdf-page-numbers": { inputMode: "single", execution: "inspect", acceptedExtensions: [".pdf"] },
+    "pdf-merge": { inputMode: "ordered", execution: "aggregate", acceptedExtensions: [".pdf"] },
+    "pdf-watermark": { inputMode: "single", execution: "inspect", acceptedExtensions: [".pdf"] },
+    "pdf-crop": { inputMode: "single", execution: "inspect", acceptedExtensions: [".pdf"] },
+    "pdf-edit": { inputMode: "single", execution: "inspect", acceptedExtensions: [".pdf"] },
+    "pdf-protect": { inputMode: "multiple", execution: "batch", acceptedExtensions: [".pdf"] },
+    "images-to-pdf": { inputMode: "ordered", execution: "aggregate", acceptedExtensions: [".png", ".jpg", ".jpeg", ".webp", ".heic", ".tif", ".tiff"] },
+    "pdf-to-images": { inputMode: "multiple", execution: "batch", acceptedExtensions: [".pdf"] },
+    "pdf-to-text": { inputMode: "multiple", execution: "batch", acceptedExtensions: [".pdf"] },
+    "pdf-split": { inputMode: "single", execution: "inspect", acceptedExtensions: [".pdf"] },
+    "pdf-image-extract": { inputMode: "multiple", execution: "batch", acceptedExtensions: [".pdf"] },
+    "pdf-sign": { inputMode: "single", execution: "inspect", acceptedExtensions: [".pdf"] },
+    "pdf-ocr": { inputMode: "single", execution: "unavailable", acceptedExtensions: [".pdf"] },
+    "pdf-remove-pages": { inputMode: "single", execution: "inspect", acceptedExtensions: [".pdf"] },
+    "pdf-extract-pages": { inputMode: "single", execution: "inspect", acceptedExtensions: [".pdf"] },
+    "pdf-organize": { inputMode: "single", execution: "inspect", acceptedExtensions: [".pdf"] },
+    "pdf-compress": { inputMode: "single", execution: "inspect", acceptedExtensions: [".pdf"] },
+    "heic-convert": { inputMode: "single", execution: "inspect", acceptedExtensions: [".heic", ".heif", ".png", ".jpg", ".jpeg", ".webp"] },
+    compress: { inputMode: "single", execution: "inspect", acceptedExtensions: [".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif"] },
+    resize: { inputMode: "single", execution: "inspect", acceptedExtensions: [".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif"] },
+    rotate: { inputMode: "single", execution: "inspect", acceptedExtensions: [".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif"] },
+    crop: { inputMode: "single", execution: "inspect", acceptedExtensions: [".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif"] },
+    "icon-set": { inputMode: "single", execution: "batch", acceptedExtensions: [".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif"] },
+    "gif-create": { inputMode: "ordered", execution: "aggregate", acceptedExtensions: [".png", ".jpg", ".jpeg", ".webp"] },
+    "gif-extract": { inputMode: "single", execution: "batch", acceptedExtensions: [".gif"] },
+    "image-watermark": { inputMode: "single", execution: "inspect", acceptedExtensions: [".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif"] },
+    "image-metadata": { inputMode: "multiple", execution: "batch", acceptedExtensions: [".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif", ".tif", ".tiff"] },
+    "image-tone": { inputMode: "single", execution: "inspect", acceptedExtensions: [".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif"] },
+    "tiff-pages": { inputMode: "ordered", execution: "aggregate", acceptedExtensions: [".tif", ".tiff"] },
+    "image-blur-faces": { inputMode: "single", execution: "unavailable", acceptedExtensions: [".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif"] },
+    "image-remove-bg": { inputMode: "single", execution: "unavailable", acceptedExtensions: [".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif"] },
+};
+
+export const actionPolicyFor = (toolId: AtomicToolId) => ToolActionPolicies[toolId];
+
 export const utilitiesByCategory = (category: ToolDefinition["category"]) =>
     UtilityRegistry.filter((utility) => utility.category === category);
 
@@ -71,10 +119,6 @@ export const ToolWorkspaceRegistry: ToolWorkspaceDefinition[] = [
             "pdf-page-numbers",
             "pdf-remove-pages",
             "pdf-organize",
-            "pdf-merge",
-            "pdf-split",
-            "pdf-extract-pages",
-            "pdf-compress",
         ],
     },
     {
@@ -85,7 +129,17 @@ export const ToolWorkspaceRegistry: ToolWorkspaceDefinition[] = [
         tint: "#6366f1",
         category: "PDF",
         categories: ["PDF"],
-        toolIds: ["pdf-to-images", "pdf-to-text", "pdf-image-extract", "images-to-pdf"],
+        toolIds: [
+            "pdf-to-images",
+            "pdf-to-text",
+            "pdf-image-extract",
+            "images-to-pdf",
+            "pdf-ocr",
+            "pdf-merge",
+            "pdf-split",
+            "pdf-extract-pages",
+            "pdf-compress",
+        ],
     },
     {
         id: "image-editor",
@@ -111,7 +165,6 @@ export const ToolWorkspaceRegistry: ToolWorkspaceDefinition[] = [
             "gif-extract",
             "tiff-pages",
             "image-metadata",
-            "pdf-ocr",
             "image-blur-faces",
             "image-remove-bg",
         ],
@@ -123,5 +176,13 @@ export const toolsForWorkspace = (workspace: ToolWorkspaceDefinition) =>
         .map((id) => UtilityRegistry.find((utility) => utility.id === id))
         .filter(Boolean) as ToolDefinition[];
 
+export const workspaceById = (workspaceId: WorkspaceId) =>
+    ToolWorkspaceRegistry.find((workspace) => workspace.id === workspaceId);
+
+export const toolsForWorkspaceId = (workspaceId: WorkspaceId) => {
+    const workspace = workspaceById(workspaceId);
+    return workspace ? toolsForWorkspace(workspace) : [];
+};
+
 export const workspaceForTool = (toolId: string) =>
-    ToolWorkspaceRegistry.find((workspace) => workspace.toolIds.includes(toolId));
+    ToolWorkspaceRegistry.find((workspace) => workspace.toolIds.includes(toolId as ToolDefinition["id"]));
