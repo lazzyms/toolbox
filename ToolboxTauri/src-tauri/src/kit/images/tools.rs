@@ -542,8 +542,16 @@ pub fn gif_create(request: &GifCreateRequest) -> JobOutcome {
     let file = match File::create(&output) { Ok(file) => file, Err(error) => return failure(input, error.to_string()) };
     let mut encoder = image::codecs::gif::GifEncoder::new(file);
     if request.loop_forever { if let Err(error) = encoder.set_repeat(image::codecs::gif::Repeat::Infinite) { let _ = std::fs::remove_file(&output); return failure(input, format!("Could not configure GIF loop: {error}")); } }
-    let images = request.paths.iter().map(|path| image::open(path).map(|image| image.to_rgba8()).map_err(|error| error.to_string())).collect::<Result<Vec<_>, _>>();
-    let images = match images { Ok(images) => images, Err(error) => { let _ = std::fs::remove_file(&output); return failure(input, format!("Could not create GIF: {error}")); } };
+    let mut images = Vec::with_capacity(request.paths.len());
+    for path in &request.paths {
+        match image::open(path) {
+            Ok(image) => images.push(image.to_rgba8()),
+            Err(error) => {
+                let _ = std::fs::remove_file(&output);
+                return failure(path.clone(), format!("Could not create GIF from {}: {error}", path.display()));
+            }
+        }
+    }
     let width = images.iter().map(|image| image.width()).max().unwrap_or(0);
     let height = images.iter().map(|image| image.height()).max().unwrap_or(0);
     let delay = image::Delay::from_numer_denom_ms(request.frame_delay_ms.clamp(1, 60_000), 1);
@@ -586,7 +594,7 @@ pub fn tiff(request: &TiffRequest) -> JobOutcome {
     for path in &request.paths {
         match read_tiff_pages(path) {
             Ok(mut decoded) => pages.append(&mut decoded),
-            Err(error) => return failure(input, error),
+            Err(error) => return failure(path.clone(), format!("Could not process {}: {error}", path.display())),
         }
     }
     let output = if request.paths.len() == 1 {

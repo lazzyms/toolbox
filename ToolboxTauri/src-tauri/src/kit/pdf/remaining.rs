@@ -81,8 +81,8 @@ pub fn merge(request: &MergePdfRequest) -> JobOutcome {
     if request.paths.len() < 2 { return failure(first, "Select at least two PDFs to merge.".to_string()); }
     let mut expected_pages = 0usize;
     for path in &request.paths {
-        if path.extension().and_then(|extension| extension.to_str()).is_none_or(|extension| !extension.eq_ignore_ascii_case("pdf")) { return failure(first, format!("Only PDF inputs can be merged: {}", path.display())); }
-        let document = match Document::load(path) { Ok(document) => document, Err(error) => return failure(first, format!("Could not read {}: {error}", path.display())) };
+        if path.extension().and_then(|extension| extension.to_str()).is_none_or(|extension| !extension.eq_ignore_ascii_case("pdf")) { return failure(path.clone(), format!("Only PDF inputs can be merged: {}", path.display())); }
+        let document = match Document::load(path) { Ok(document) => document, Err(error) => return failure(path.clone(), format!("Could not read {}: {error}", path.display())) };
         expected_pages += document.get_pages().len();
     }
     let output = OutputNaming::get_destination(&first, &request.output_location, "-merged", "pdf");
@@ -347,7 +347,7 @@ pub fn images_to_pdf(request: &ImagesToPdfRequest) -> JobOutcome {
     let pages_id = document.new_object_id();
     let mut kids = Vec::new();
     for path in &request.paths {
-        let (jpeg, width, height) = match image_as_jpeg(path) { Ok(value) => value, Err(error) => return failure(first, error) };
+        let (jpeg, width, height) = match image_as_jpeg(path) { Ok(value) => value, Err(error) => return failure(path.clone(), format!("Could not process {}: {error}", path.display())) };
         let image_id = document.add_object(Stream::new(dictionary! { "Type" => "XObject", "Subtype" => "Image", "Width" => width as i64, "Height" => height as i64, "ColorSpace" => "DeviceRGB", "BitsPerComponent" => 8, "Filter" => "DCTDecode" }, jpeg));
         let content_id = document.add_object(Stream::new(dictionary! {}, format!("q {width} 0 0 {height} 0 0 cm /Im0 Do Q").into_bytes()));
         let page_id = document.add_object(dictionary! { "Type" => "Page", "Parent" => pages_id, "MediaBox" => vec![0.into(), 0.into(), (width as f32).into(), (height as f32).into()], "Resources" => dictionary! { "XObject" => dictionary! { "Im0" => image_id } }, "Contents" => content_id });

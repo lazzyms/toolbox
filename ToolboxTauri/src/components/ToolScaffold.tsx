@@ -110,7 +110,10 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         setFiles((prev) => {
             const existing = new Set(prev);
             const fresh = paths.filter((p) => !existing.has(p));
-            if (inputPolicy.inputCardinality === 'single' && replaceSingle) return fresh;
+            if (inputPolicy.inputCardinality === 'single' && replaceSingle) {
+                const next = paths[0];
+                return next && next !== prev[0] ? [next] : prev;
+            }
             return fresh.length ? [...prev, ...fresh] : prev;
         });
     };

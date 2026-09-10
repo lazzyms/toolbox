@@ -19,6 +19,7 @@ type TestWindow = Window & {
     __toolboxProcessingDelayMs?: number;
     __toolboxActionFailure?: { command: string; path: string; message: string; delayMs?: number };
     __toolboxSecondPick?: boolean;
+    __toolboxDialogResults?: Array<string | string[] | null>;
 };
 
 test.beforeEach(async ({ page }) => {
@@ -36,6 +37,8 @@ test.beforeEach(async ({ page }) => {
                 invocations.push({ command, args });
 
                 if (command === "plugin:dialog|open") {
+                    const dialogResults = (window as TestWindow).__toolboxDialogResults;
+                    if (dialogResults?.length) return dialogResults.shift() ?? null;
                     if ((window as TestWindow).__toolboxSecondPick) {
                         delete (window as TestWindow).__toolboxSecondPick;
                         return `${fixturePath}.second.pdf`;
@@ -613,6 +616,25 @@ test("single-input actions report every selected file instead of truncating the 
     );
     expect(processingInvocations).toHaveLength(0);
     await expect(page.getByText("This action accepts one input file, but 2 were selected.", { exact: true })).toHaveCount(2);
+});
+
+test("single-input replacement keeps the source and edit state after cancellation or the same path", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Crop PDF" }).click();
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await drawSceneMark(page, "Crop");
+    await expect(page.getByRole("button", { name: "Reset edits" })).toBeEnabled();
+
+    await page.evaluate((path) => { (window as TestWindow).__toolboxDialogResults = [null, path]; }, fixturePath);
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await expect(page.locator(".file-selection-count")).toHaveText("1 file open");
+    await expect(page.getByText(fixtureName, { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Reset edits" })).toBeEnabled();
+
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await expect(page.locator(".file-selection-count")).toHaveText("1 file open");
+    await expect(page.getByText(fixtureName, { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Reset edits" })).toBeEnabled();
 });
 
 test("page-scoped actions disable export when the explicit selection is empty", async ({ page }) => {
