@@ -48,7 +48,7 @@ export const MediaWorkspaceView = ({ utility }: { utility: ToolDefinition }) => 
       onRun={(paths) => {
         if (activeUtility.id === "icon-set") {
           return invoke<ToolResult>("generate_icon_set", {
-            request: { paths: [paths[0]], preset: iconPreset, sizes: iconSizes, outputLocation: "alongsideInput" },
+            request: { paths, preset: iconPreset, sizes: iconSizes, outputLocation: "alongsideInput" },
           });
         }
         if (activeUtility.id === "gif-create") {

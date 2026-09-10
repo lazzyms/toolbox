@@ -16,10 +16,14 @@ const OCR_TIMEOUT: Duration = Duration::from_secs(120);
 #[serde(rename_all = "camelCase")]
 pub struct VisionRequest {
     pub paths: Vec<PathBuf>,
+    #[serde(default)] pub pages: Option<Vec<usize>>,
     pub output_location: OutputLocation,
 }
 
 pub fn ocr_pdf(request: &VisionRequest, input: PathBuf) -> JobOutcome {
+    if request.pages.as_ref().is_some_and(Vec::is_empty) {
+        return failure(input, "Select at least one PDF page for OCR.".to_string());
+    }
     let output = OutputNaming::get_destination(&input, &request.output_location, "-ocr-text", "txt");
     let input_size = match std::fs::metadata(&input) {
         Ok(metadata) => metadata.len(),

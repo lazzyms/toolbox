@@ -595,6 +595,36 @@ test("output action state resets and ignores stale completions", async ({ page }
     await expect(page.getByRole("button", { name: "Open file" })).toBeEnabled();
 });
 
+test("single-input actions report every selected file instead of truncating the selection", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Merge PDF" }).click();
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await page.evaluate(() => { (window as TestWindow).__toolboxSecondPick = true; });
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await page.getByRole("button", { name: "Compress PDF", exact: true }).click();
+
+    const exportButton = page.getByRole("button", { name: "Export Compress PDF", exact: true });
+    await expect(exportButton).toBeEnabled();
+    await exportButton.click();
+
+    await expect(page.getByText("2 of 2 files failed", { exact: true })).toBeVisible();
+    const processingInvocations = await page.evaluate(() =>
+        ((window as TestWindow).__toolboxInvocations ?? []).filter(({ command }) => command === "compress_pdf"),
+    );
+    expect(processingInvocations).toHaveLength(0);
+    await expect(page.getByText("This action accepts one input file, but 2 were selected.", { exact: true })).toHaveCount(2);
+});
+
+test("page-scoped actions disable export when the explicit selection is empty", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open PDF to Text" }).click();
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    const pageCheckbox = page.getByRole("checkbox", { name: "Page 1" });
+    await expect(pageCheckbox).toBeChecked();
+    await pageCheckbox.uncheck();
+    await expect(page.getByRole("button", { name: "Export PDF to Text", exact: true })).toBeDisabled();
+});
+
 const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[number]) => {
     await page.goto("/");
     await page.getByRole("button", { name: `Open ${utility.title}` }).click();

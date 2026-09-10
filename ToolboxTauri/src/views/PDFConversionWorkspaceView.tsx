@@ -66,7 +66,7 @@ export const PDFConversionWorkspaceView = ({ utility }: { utility: ToolDefinitio
         if (activeUtility.id === "pdf-split") {
           return invoke<ToolResult>("split_pdf", {
             request: {
-              paths: [paths[0]],
+              paths,
               pages: [],
               pageRanges: splitMode === "ranges" ? pageRange || null : null,
               splitMode,
@@ -78,7 +78,7 @@ export const PDFConversionWorkspaceView = ({ utility }: { utility: ToolDefinitio
         if (activeUtility.id === "pdf-extract-pages") {
           return invoke<ToolResult>("extract_pdf_pages", {
             request: {
-              paths: [paths[0]],
+              paths,
               pages: selectedPages,
               pageRanges: pageRange || null,
               outputLocation: "alongsideInput",
@@ -87,7 +87,7 @@ export const PDFConversionWorkspaceView = ({ utility }: { utility: ToolDefinitio
         }
         if (activeUtility.id === "pdf-compress") {
           return invoke<ToolResult>("compress_pdf", {
-            request: { paths: [paths[0]], quality, outputLocation: "alongsideInput" },
+            request: { paths, quality, outputLocation: "alongsideInput" },
           });
         }
         if (activeUtility.id === "pdf-to-images") {
@@ -109,7 +109,7 @@ export const PDFConversionWorkspaceView = ({ utility }: { utility: ToolDefinitio
         }
         if (activeUtility.id === "pdf-ocr") {
           return invoke<ToolResult>("ocr_pdf", {
-            request: { paths, outputLocation: "alongsideInput" },
+            request: { paths, pages: pages ?? null, outputLocation: "alongsideInput" },
           });
         }
         return invoke<ToolResult>("extract_pdf_images", {
@@ -238,13 +238,7 @@ const ConversionControls = ({
   const parsedSelection = document ? parsePageRange(pageRange, document.pages.length) : [];
   const selectionIssue = Array.isArray(parsedSelection) ? null : parsedSelection;
   const selectionCount = document ? selectedPages.length : 0;
-  const needsPageSelection = [
-    "pdf-to-images",
-    "pdf-to-text",
-    "pdf-image-extract",
-    "pdf-ocr",
-    "pdf-extract-pages",
-  ].includes(activeUtility.id);
+  const needsPageSelection = activeUtility.capability.supportsPageSelection;
   const needsMultipleInputs = activeUtility.id === "pdf-merge";
   const canExport = files.length > 0 && (!needsMultipleInputs || files.length > 1);
 

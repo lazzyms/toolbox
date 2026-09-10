@@ -23,7 +23,7 @@ export const WorkspaceCommandRail = ({
     <p className="workspace-command-rail-label">Tools</p>
     <nav role="toolbar" aria-label={label}>
       {actions.map((tool) => {
-        const unavailable = tool.status === "unavailable";
+        const unavailable = tool.capability.nativeAvailability === "unavailable";
         return (
           <button
             key={tool.id}
