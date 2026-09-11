@@ -2,9 +2,10 @@ use image::codecs::jpeg::JpegEncoder;
 use image::DynamicImage;
 use lopdf::{dictionary, Document, Object, Stream};
 use std::fs;
-use std::io::Cursor;
-use std::path::PathBuf;
+use std::io::{self, Cursor};
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming, OutputReservation};
 use crate::kit::contracts::ToolError;
@@ -104,58 +105,134 @@ pub fn merge(request: &MergePdfRequest) -> JobOutcome {
 
 pub fn split(request: &PageSelectionRequest, input: PathBuf) -> JobOutcome {
     let location = &request.output_location;
-    let output = match OutputNaming::reserve_destination(&input, location, "-split", "pdf") {
-        Ok(output) => output,
-        Err(error) => return failure(input, format!("Could not reserve split PDF output: {error}")),
-    };
     let Some(qpdf) = qpdf() else { return failure(input, "qpdf is required to split PDFs but was not found.".to_string()); };
-    if request.split_mode.as_deref() == Some("chunks") {
-        let Some(size) = request.chunk_size.filter(|size| *size > 0) else { return failure(input, "Chunk size must be greater than zero.".to_string()); };
-        let result = Command::new(&qpdf).arg(&input).arg(format!("--split-pages={size}" )).arg(output.path()).output();
-        return match result { Ok(result) if result.status.success() => split_outputs(&input, output.commit(), "page"), Ok(result) => failure(input, stderr(result, "qpdf failed to split PDF chunks.")), Err(error) => failure(input, format!("Could not run qpdf: {error}")) };
-    }
-    if let Some(raw) = request.page_ranges.as_deref().filter(|value| !value.trim().is_empty()) {
-        let page_count = match Document::load(&input) { Ok(document) => document.get_pages().len(), Err(error) => return failure(input, error.to_string()) };
-        let ranges = match parse_split_ranges(raw, page_count) { Ok(ranges) => ranges, Err(error) => return failure(input, error) };
-        let stem = output.path().file_stem().and_then(|value| value.to_str()).unwrap_or("split");
-        let mut outputs = Vec::new();
-        for (number, (start, end)) in ranges.into_iter().enumerate() {
-            let target = match OutputNaming::reserve_destination(&input, location, &format!("-split-{number}"), "pdf") {
-                Ok(output) => output,
-                Err(error) => { remove_outputs(&outputs); return failure(input, format!("Could not reserve split range output: {error}")); }
+    let workspace = match SplitWorkspace::new() {
+        Ok(workspace) => workspace,
+        Err(error) => return failure(input, format!("Could not create a private split workspace: {error}")),
+    };
+    let generated = match generate_split_outputs(request, &input, &qpdf, &workspace) {
+        Ok(generated) => generated,
+        Err(error) => return failure(input, error),
+    };
+    match materialize_split_outputs(&input, location, &generated) {
+        Ok(outputs) => {
+            let detail = if request.page_ranges.as_deref().is_some_and(|value| !value.trim().is_empty()) {
+                let stem = input.file_stem().and_then(|value| value.to_str()).unwrap_or("split");
+                format!("PDF split into selected ranges from {stem}")
+            } else {
+                "PDF split".to_string()
             };
-            let result = Command::new(&qpdf).arg(&input).arg("--pages").arg(&input).arg(format!("{start}-{end}")).arg("--").arg(target.path()).output();
-            match result { Ok(result) if result.status.success() => outputs.push(target.commit()), Ok(result) => { remove_outputs(&outputs); return failure(input, stderr(result, "qpdf failed to split the selected ranges.")); }, Err(error) => { remove_outputs(&outputs); return failure(input, format!("Could not run qpdf: {error}")); } }
+            JobOutcome { input_path: input, output_paths: outputs, detail, failure: None }
         }
-        return JobOutcome { input_path: input, output_paths: outputs, detail: format!("PDF split into selected ranges from {stem}"), failure: None };
-    }
-    let pattern = output.path().with_file_name(format!("{}-page-%d.pdf", output.path().file_stem().and_then(|stem| stem.to_str()).unwrap_or("output")));
-    let result = Command::new(qpdf).arg(&input).arg("--split-pages").arg(&pattern).output();
-    match result {
-        Ok(result) if result.status.success() => {
-            let prefix = pattern.file_stem().and_then(|stem| stem.to_str()).unwrap_or("output").replace("%d", "");
-            let mut outputs = fs::read_dir(pattern.parent().unwrap_or_else(|| std::path::Path::new(".")))
-                .ok()
-                .into_iter()
-                .flatten()
-                .filter_map(Result::ok)
-                .map(|entry| entry.path())
-                .filter(|path| path.file_name().and_then(|name| name.to_str()).map(|name| name.starts_with(&prefix) && path.extension().is_some_and(|ext| ext == "pdf")).unwrap_or(false))
-                .collect::<Vec<_>>();
-            outputs.sort();
-            if outputs.is_empty() { failure(input, "qpdf reported success but produced no split files.".to_string()) }
-            else { let _ = output.commit(); JobOutcome { input_path: input, output_paths: outputs, detail: "PDF split".to_string(), failure: None } }
-        }
-        Ok(result) => failure(input, stderr(result, "qpdf failed to split the PDF.")),
-        Err(error) => failure(input, format!("Could not run qpdf: {error}")),
+        Err(error) => failure(input, error),
     }
 }
 
-fn split_outputs(input: &PathBuf, output: PathBuf, kind: &str) -> JobOutcome {
-    let prefix = output.file_stem().and_then(|stem| stem.to_str()).unwrap_or("split");
-    let mut outputs = fs::read_dir(output.parent().unwrap_or_else(|| std::path::Path::new("."))).ok().into_iter().flatten().filter_map(Result::ok).map(|entry| entry.path()).filter(|path| path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with(prefix) && path.extension().is_some_and(|ext| ext == "pdf"))).collect::<Vec<_>>();
+struct SplitWorkspace(PathBuf);
+
+impl SplitWorkspace {
+    fn new() -> io::Result<Self> {
+        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+        let root = std::env::temp_dir();
+        for attempt in 0..100 {
+            let path = root.join(format!("toolbox_pdf_split_{}_{}_{}", std::process::id(), timestamp, attempt));
+            match fs::create_dir(&path) {
+                Ok(()) => return Ok(Self(path)),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Err(io::Error::new(io::ErrorKind::AlreadyExists, "could not allocate a unique temporary directory"))
+    }
+
+    fn path(&self) -> &Path { &self.0 }
+}
+
+impl Drop for SplitWorkspace {
+    fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); }
+}
+
+fn generate_split_outputs(request: &PageSelectionRequest, input: &Path, qpdf: &Path, workspace: &SplitWorkspace) -> Result<Vec<PathBuf>, String> {
+    let stem = input.file_stem().and_then(|value| value.to_str()).unwrap_or("output");
+    if request.split_mode.as_deref() == Some("chunks") {
+        let Some(size) = request.chunk_size.filter(|size| *size > 0) else { return Err("Chunk size must be greater than zero.".to_string()); };
+        let output = workspace.path().join(format!("{stem}-split.pdf"));
+        let result = Command::new(qpdf).arg(input).arg(format!("--split-pages={size}")).arg(&output).output().map_err(|error| format!("Could not run qpdf: {error}"))?;
+        if !result.status.success() { return Err(stderr(result, "qpdf failed to split PDF chunks.")); }
+        return collect_split_outputs(workspace.path(), "qpdf reported success but produced no chunk files.");
+    }
+    if let Some(raw) = request.page_ranges.as_deref().filter(|value| !value.trim().is_empty()) {
+        let page_count = Document::load(input).map_err(|error| error.to_string())?.get_pages().len();
+        let ranges = parse_split_ranges(raw, page_count)?;
+        let mut outputs = Vec::with_capacity(ranges.len());
+        for (number, (start, end)) in ranges.into_iter().enumerate() {
+            let output = workspace.path().join(format!("{stem}-split-{number}.pdf"));
+            let result = Command::new(qpdf).arg(input).arg("--pages").arg(input).arg(format!("{start}-{end}")).arg("--").arg(&output).output().map_err(|error| format!("Could not run qpdf: {error}"))?;
+            if !result.status.success() { return Err(stderr(result, "qpdf failed to split the selected ranges.")); }
+            if !output.is_file() { return Err("qpdf reported success but produced no range file.".to_string()); }
+            outputs.push(output);
+        }
+        return Ok(outputs);
+    }
+    let pattern = workspace.path().join(format!("{stem}-split-page-%d.pdf"));
+    let result = Command::new(qpdf).arg(input).arg("--split-pages").arg(&pattern).output().map_err(|error| format!("Could not run qpdf: {error}"))?;
+    if !result.status.success() { return Err(stderr(result, "qpdf failed to split the PDF.")); }
+    collect_split_outputs(workspace.path(), "qpdf reported success but produced no split files.")
+}
+
+fn collect_split_outputs(workspace: &Path, empty_message: &str) -> Result<Vec<PathBuf>, String> {
+    let mut outputs = fs::read_dir(workspace).map_err(|error| format!("Could not inspect qpdf split outputs: {error}"))?.filter_map(Result::ok).map(|entry| entry.path()).filter(|path| path.is_file() && path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))).collect::<Vec<_>>();
     outputs.sort();
-    if outputs.is_empty() { failure(input.clone(), format!("qpdf reported success but produced no {kind} files.")) } else { JobOutcome { input_path: input.clone(), output_paths: outputs, detail: "PDF split".to_string(), failure: None } }
+    if outputs.is_empty() { Err(empty_message.to_string()) } else { Ok(outputs) }
+}
+
+fn materialize_split_outputs(input: &Path, location: &OutputLocation, generated: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
+    let mut outputs = Vec::with_capacity(generated.len());
+    for source in generated {
+        let suffix = match split_output_suffix(input, source) {
+            Ok(suffix) => suffix,
+            Err(error) => {
+                remove_outputs(&outputs);
+                return Err(error);
+            }
+        };
+        let reservation = match OutputNaming::reserve_destination(input, location, &suffix, "pdf") {
+            Ok(reservation) => reservation,
+            Err(error) => {
+                remove_outputs(&outputs);
+                return Err(format!("Could not reserve split output: {error}"));
+            }
+        };
+        let destination = reservation.path().to_path_buf();
+        if let Err(error) = move_without_overwrite(source, &destination) {
+            remove_outputs(&outputs);
+            return Err(format!("Could not move split output: {error}"));
+        }
+        outputs.push(reservation.commit());
+    }
+    Ok(outputs)
+}
+
+fn split_output_suffix(input: &Path, generated: &Path) -> Result<String, String> {
+    let input_stem = input.file_stem().and_then(|value| value.to_str()).unwrap_or("output");
+    let generated_stem = generated.file_stem().and_then(|value| value.to_str()).ok_or_else(|| "qpdf produced an unnamed split file.".to_string())?;
+    let suffix = generated_stem.strip_prefix(input_stem).ok_or_else(|| "qpdf produced an unexpected split file name.".to_string())?;
+    if !suffix.starts_with("-split") { return Err("qpdf produced an unexpected split file name.".to_string()); }
+    Ok(suffix.to_string())
+}
+
+fn move_without_overwrite(source: &Path, destination: &Path) -> io::Result<()> {
+    match fs::hard_link(source, destination) {
+        Ok(()) => fs::remove_file(source),
+        Err(error) if matches!(error.kind(), io::ErrorKind::CrossesDevices | io::ErrorKind::PermissionDenied | io::ErrorKind::Unsupported) => {
+            let mut source_file = fs::File::open(source)?;
+            let mut destination_file = fs::OpenOptions::new().write(true).create_new(true).open(destination)?;
+            std::io::copy(&mut source_file, &mut destination_file)?;
+            drop(destination_file);
+            fs::remove_file(source)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 fn parse_split_ranges(raw: &str, page_count: usize) -> Result<Vec<(usize, usize)>, String> {
@@ -588,6 +665,8 @@ fn failure(input_path: PathBuf, error: String) -> JobOutcome { JobOutcome::failu
 mod tests {
     use super::*;
 
+    static SPLIT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn request(page_ranges: Option<&str>, pages: Vec<usize>) -> PageSelectionRequest {
         PageSelectionRequest {
             paths: vec![],
@@ -597,6 +676,136 @@ mod tests {
             chunk_size: None,
             output_location: OutputLocation::AlongsideInput,
         }
+    }
+
+    fn split_request(output_location: OutputLocation, split_mode: &str, page_ranges: Option<&str>, chunk_size: Option<usize>) -> PageSelectionRequest {
+        PageSelectionRequest {
+            paths: vec![],
+            pages: vec![],
+            page_ranges: page_ranges.map(str::to_string),
+            split_mode: Some(split_mode.to_string()),
+            chunk_size,
+            output_location,
+        }
+    }
+
+    fn split_fixture_root(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "toolbox_split_regression_{}_{}_{}",
+            std::process::id(),
+            name,
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+        ));
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    fn split_fixture_pdf(path: &PathBuf, page_count: usize) {
+        let mut document = Document::with_version("1.7");
+        let pages_id = document.new_object_id();
+        let font_id = document.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
+        let mut kids = Vec::new();
+        for number in 0..page_count {
+            let contents_id = document.add_object(Stream::new(dictionary! {}, format!("BT /F1 24 Tf 72 720 Td (Split page {}) Tj ET", number + 1).into_bytes()));
+            let page_id = document.add_object(dictionary! {
+                "Type" => "Page",
+                "Parent" => pages_id,
+                "MediaBox" => vec![Object::Integer(0), Object::Integer(0), Object::Integer(612), Object::Integer(792)],
+                "Resources" => dictionary! { "Font" => dictionary! { "F1" => font_id } },
+                "Contents" => contents_id,
+            });
+            kids.push(Object::Reference(page_id));
+        }
+        document.objects.insert(pages_id, dictionary! { "Type" => "Pages", "Kids" => kids, "Count" => page_count as i64 }.into());
+        let catalog_id = document.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+        document.trailer.set("Root", catalog_id);
+        document.save(path).unwrap();
+    }
+
+    fn split_temp_entries() -> std::collections::HashSet<PathBuf> {
+        let prefix = format!("toolbox_pdf_split_{}", std::process::id());
+        fs::read_dir(std::env::temp_dir()).unwrap().filter_map(Result::ok).map(|entry| entry.path()).filter(|path| path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with(&prefix))).collect()
+    }
+
+    fn assert_split_outputs(outputs: &[PathBuf], expected_count: usize) {
+        assert_eq!(outputs.len(), expected_count);
+        assert_eq!(outputs.iter().collect::<std::collections::HashSet<_>>().len(), expected_count);
+        for output in outputs {
+            assert!(output.is_file(), "split reported missing output {}", output.display());
+            assert!(Document::load(output).is_ok(), "split output is not a valid PDF: {}", output.display());
+        }
+    }
+
+    fn run_split_with_sentinel(name: &str, split_mode: &str, page_ranges: Option<&str>, chunk_size: Option<usize>, sentinel_name: &str, expected_count: usize) {
+        let _lock = SPLIT_TEST_LOCK.lock().unwrap();
+        if qpdf().is_none() {
+            eprintln!("skipping: qpdf not available");
+            return;
+        }
+        let root = split_fixture_root(name);
+        let input = root.join("document.pdf");
+        let output_folder = root.join("outputs");
+        fs::create_dir_all(&output_folder).unwrap();
+        split_fixture_pdf(&input, 3);
+        let sentinel = output_folder.join(sentinel_name);
+        fs::write(&sentinel, format!("{name} sentinel")).unwrap();
+        let sentinel_bytes = fs::read(&sentinel).unwrap();
+        let temp_before = split_temp_entries();
+
+        let outcome = split(&split_request(OutputLocation::CustomFolder(output_folder.clone()), split_mode, page_ranges, chunk_size), input.clone());
+
+        assert!(outcome.failure.is_none(), "split failed: {:?}", outcome.failure);
+        assert_eq!(outcome.input_path, input);
+        assert_split_outputs(&outcome.output_paths, expected_count);
+        assert!(!outcome.output_paths.contains(&sentinel));
+        assert_eq!(fs::read(&sentinel).unwrap(), sentinel_bytes);
+        let temp_after = split_temp_entries();
+        assert_eq!(temp_after, temp_before, "split temporary directories were not cleaned");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn page_split_does_not_overwrite_existing_outputs() {
+        run_split_with_sentinel("pages", "pages", None, None, "document-split-page-1.pdf", 3);
+    }
+
+    #[test]
+    fn chunk_split_does_not_overwrite_existing_outputs() {
+        run_split_with_sentinel("chunks", "chunks", None, Some(2), "document-split-1-2.pdf", 2);
+    }
+
+    #[test]
+    fn range_split_does_not_overwrite_existing_outputs() {
+        run_split_with_sentinel("ranges", "pages", Some("1,3"), None, "document-split-0.pdf", 2);
+    }
+
+    #[test]
+    fn split_failure_leaves_no_partial_destinations() {
+        let _lock = SPLIT_TEST_LOCK.lock().unwrap();
+        if qpdf().is_none() {
+            eprintln!("skipping: qpdf not available");
+            return;
+        }
+        let root = split_fixture_root("failure");
+        let input = root.join("invalid.pdf");
+        let output_folder = root.join("outputs");
+        fs::create_dir_all(&output_folder).unwrap();
+        fs::write(&input, b"not a PDF").unwrap();
+        let sentinel = output_folder.join("document-split-page-1.pdf");
+        fs::write(&sentinel, b"sentinel").unwrap();
+        let temp_before = split_temp_entries();
+
+        let outcome = split(&split_request(OutputLocation::CustomFolder(output_folder.clone()), "pages", None, None), input.clone());
+
+        assert_eq!(outcome.input_path, input);
+        assert!(outcome.failure.is_some());
+        assert!(outcome.output_paths.is_empty());
+        assert_eq!(fs::read(&sentinel).unwrap(), b"sentinel");
+        assert_eq!(fs::read_dir(&output_folder).unwrap().count(), 1);
+        assert_eq!(split_temp_entries(), temp_before, "split temporary directories were not cleaned after failure");
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
