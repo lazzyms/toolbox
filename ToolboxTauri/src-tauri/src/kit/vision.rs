@@ -44,7 +44,10 @@ pub fn ocr_pdf(request: &VisionRequest, input: PathBuf) -> JobOutcome {
             let text = normalize_ocr_text(&result.stdout);
             if text.is_empty() { return failure(input, "OCR completed but found no readable text.".to_string()); }
             match std::fs::write(output.path(), text) {
-                Ok(_) => success(input, output.commit(), "OCR text extracted in page order"),
+                Ok(_) => match output.publish() {
+                    Ok(path) => success(input, path, "OCR text extracted in page order"),
+                    Err(error) => failure(input, format!("Could not publish OCR output: {error}")),
+                },
                 Err(error) => failure(input, format!("Could not write OCR output: {error}")),
             }
         }
@@ -105,7 +108,10 @@ fn run_image_adapter(request: &VisionRequest, input: PathBuf, resource_name: &st
                 ImageAdapterValidation::Cutout => validate_cutout(output.path()),
             };
             match validation {
-                Ok(()) => success(input, output.commit(), detail),
+                Ok(()) => match output.publish() {
+                    Ok(path) => success(input, path, detail),
+                    Err(error) => failure(input, format!("Could not publish vision output: {error}")),
+                },
                 Err(error) => failure(input, error),
             }
         }

@@ -458,12 +458,28 @@ test("PDF conversion exposes page selection and an output preview", async ({ pag
     await expect(page.locator(".workspace-primary-action")).toBeDisabled();
 });
 
+test("PDF range splitting rejects a blank range and accepts a range", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open PDF to Images" }).click();
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await page.getByRole("toolbar", { name: "PDF conversion tools" }).getByRole("button", { name: "Split PDF" }).click();
+    await page.getByLabel("Split mode").selectOption("ranges");
+
+    await expect(page.getByRole("alert")).toHaveText("Enter at least one page range to split by ranges.");
+    await expect(page.getByRole("button", { name: "Export Split PDF" })).toBeDisabled();
+
+    await page.getByRole("textbox", { name: "Page ranges" }).fill("1");
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Export Split PDF" })).toBeEnabled();
+});
+
 test("media and security workspaces expose ordered inputs and format boundaries", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Open Create GIF" }).click();
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await expect(page.getByRole("region", { name: "Frame order" })).toBeVisible();
     await expect(page.locator(".media-frame-preview")).toBeVisible();
+    await expect.poll(async () => page.evaluate(() => (window as TestWindow).__toolboxInvocations?.filter(({ command }) => command === "inspect_image_preview").length ?? 0)).toBe(1);
     await expect(page.getByRole("button", { name: "Move selected file up" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Move selected file down" })).toBeVisible();
 

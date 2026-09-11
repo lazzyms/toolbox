@@ -145,7 +145,10 @@ pub fn export_edit_plan(plan: &ImageEditPlan, input: PathBuf) -> JobOutcome {
     if let Err(error) = std::fs::write(output.path(), bytes) {
         return failure(input, format!("Could not save edited image: {error}"));
     }
-    JobOutcome { input_path: input, output_paths: vec![output.commit()], detail: format!("Applied {} edits in one export.", plan.edits.len()), failure: None }
+    match output.publish() {
+        Ok(path) => JobOutcome { input_path: input, output_paths: vec![path], detail: format!("Applied {} edits in one export.", plan.edits.len()), failure: None },
+        Err(error) => failure(input, format!("Could not publish edited image: {error}")),
+    }
 }
 
 fn encode_preview(image: DynamicImage) -> Result<ImagePreview, String> {
@@ -470,24 +473,28 @@ pub fn icon_set(request: &IconSetRequest, input: PathBuf) -> JobOutcome {
     for &size in &sizes {
         let output = match OutputNaming::reserve_destination(&input, &request.output_location, &format!("-{prefix}-{size}"), "png") {
             Ok(output) => output,
-            Err(error) => { for created in &outputs { let _ = std::fs::remove_file(created); } return failure(input, format!("Could not reserve icon output: {error}")); }
+            Err(error) => return failure(input, format!("Could not reserve icon output: {error}")),
         };
         if let Err(error) = image.resize_exact(size, size, image::imageops::FilterType::Lanczos3).save(output.path()) {
-            for created in &outputs { let _ = std::fs::remove_file(created); }
             return failure(input, format!("Could not save icon: {error}"));
         }
-        outputs.push(output.commit());
+        match output.publish() {
+            Ok(path) => outputs.push(path),
+            Err(error) => return failure(input, format!("Could not publish icon output: {error}")),
+        }
     }
     if request.preset == "macos" {
         let icns = match OutputNaming::reserve_destination(&input, &request.output_location, "-macos-icon", "icns") {
             Ok(output) => output,
-            Err(error) => { for created in &outputs { let _ = std::fs::remove_file(created); } return failure(input, format!("Could not reserve macOS icon output: {error}")); }
+            Err(error) => return failure(input, format!("Could not reserve macOS icon output: {error}")),
         };
         if let Err(error) = write_icns(icns.path(), &sizes, &outputs) {
-            for created in &outputs { let _ = std::fs::remove_file(created); }
             return failure(input, format!("Could not save macOS ICNS container: {error}"));
         }
-        outputs.push(icns.commit());
+        match icns.publish() {
+            Ok(path) => outputs.push(path),
+            Err(error) => return failure(input, format!("Could not publish macOS ICNS output: {error}")),
+        }
     }
     let detail = match request.preset.as_str() {
         "macos" => "macOS PNG and ICNS icon set saved.",
@@ -550,22 +557,31 @@ pub fn gif_create(request: &GifCreateRequest) -> JobOutcome {
         Ok(destination) => destination,
         Err(error) => return failure(input, error.to_string()),
     };
-    let mut encoder = image::codecs::gif::GifEncoder::new(file);
-    if request.loop_forever { if let Err(error) = encoder.set_repeat(image::codecs::gif::Repeat::Infinite) { return failure(input, format!("Could not configure GIF loop: {error}")); } }
-    let mut images = Vec::with_capacity(request.paths.len());
-    for path in &request.paths {
-        match image::open(path) {
-            Ok(image) => images.push(image.to_rgba8()),
-            Err(error) => {
-                return failure(path.clone(), format!("Could not create GIF from {}: {error}", path.display()));
+    let encode_result = {
+        let mut encoder = image::codecs::gif::GifEncoder::new(file);
+        if request.loop_forever { if let Err(error) = encoder.set_repeat(image::codecs::gif::Repeat::Infinite) { return failure(input, format!("Could not configure GIF loop: {error}")); } }
+        let mut images = Vec::with_capacity(request.paths.len());
+        for path in &request.paths {
+            match image::open(path) {
+                Ok(image) => images.push(image.to_rgba8()),
+                Err(error) => {
+                    return failure(path.clone(), format!("Could not create GIF from {}: {error}", path.display()));
+                }
             }
         }
+        let width = images.iter().map(|image| image.width()).max().unwrap_or(0);
+        let height = images.iter().map(|image| image.height()).max().unwrap_or(0);
+        let delay = image::Delay::from_numer_denom_ms(request.frame_delay_ms.clamp(1, 60_000), 1);
+        let frames = images.into_iter().map(|image| { let mut canvas = image::RgbaImage::new(width, height); image::imageops::overlay(&mut canvas, &image, 0, 0); image::Frame::from_parts(canvas, 0, 0, delay) }).collect::<Vec<_>>();
+        encoder.encode_frames(frames)
+    };
+    match encode_result {
+        Ok(_) => match output.publish() {
+            Ok(path) => JobOutcome { input_path: input, output_paths: vec![path], detail: "GIF saved".to_string(), failure: None },
+            Err(error) => failure(input, format!("Could not publish GIF output: {error}")),
+        },
+        Err(error) => failure(input, format!("Could not create GIF: {error}")),
     }
-    let width = images.iter().map(|image| image.width()).max().unwrap_or(0);
-    let height = images.iter().map(|image| image.height()).max().unwrap_or(0);
-    let delay = image::Delay::from_numer_denom_ms(request.frame_delay_ms.clamp(1, 60_000), 1);
-    let frames = images.into_iter().map(|image| { let mut canvas = image::RgbaImage::new(width, height); image::imageops::overlay(&mut canvas, &image, 0, 0); image::Frame::from_parts(canvas, 0, 0, delay) }).collect::<Vec<_>>();
-    match encoder.encode_frames(frames) { Ok(_) => JobOutcome { input_path: input, output_paths: vec![output.commit()], detail: "GIF saved".to_string(), failure: None }, Err(error) => failure(input, format!("Could not create GIF: {error}")) }
 }
 
 fn default_gif_delay_ms() -> u32 { 100 }
@@ -580,27 +596,31 @@ pub fn gif_extract(request: &GifExtractRequest, input: PathBuf) -> JobOutcome {
     for (index, frame) in frames.into_iter().enumerate() {
         let output = match OutputNaming::reserve_destination(&input, &request.output_location, &format!("-frame-{}", index + 1), "png") {
             Ok(output) => output,
-            Err(error) => { for created in &outputs { let _ = std::fs::remove_file(created); } return failure(input, format!("Could not reserve GIF frame output: {error}")); }
+            Err(error) => return failure(input, format!("Could not reserve GIF frame output: {error}")),
         };
         let (numerator, denominator) = frame.delay().numer_denom_ms();
         let delay_ms = (numerator as u64 * 1000 / denominator.max(1) as u64).max(1);
         if let Err(error) = frame.into_buffer().save(output.path()) {
-            for created in &outputs { let _ = std::fs::remove_file(created); }
             return failure(input, error.to_string());
         }
-        let output = output.commit();
+        let output = match output.publish() {
+            Ok(output) => output,
+            Err(error) => return failure(input, format!("Could not publish GIF frame output: {error}")),
+        };
         timing.push(serde_json::json!({ "file": output, "delayMs": delay_ms }));
         outputs.push(output);
     }
     let timing_path = match OutputNaming::reserve_destination(&input, &request.output_location, "-frame-timing", "json") {
         Ok(output) => output,
-        Err(error) => { for created in &outputs { let _ = std::fs::remove_file(created); } return failure(input, format!("Could not reserve GIF timing output: {error}")); }
+        Err(error) => return failure(input, format!("Could not reserve GIF timing output: {error}")),
     };
     if let Err(error) = std::fs::write(timing_path.path(), serde_json::to_vec_pretty(&timing).unwrap_or_default()) {
-        for created in &outputs { let _ = std::fs::remove_file(created); }
         return failure(input, format!("Could not save GIF timing manifest: {error}"));
     }
-    outputs.push(timing_path.commit());
+    outputs.push(match timing_path.publish() {
+        Ok(path) => path,
+        Err(error) => return failure(input, format!("Could not publish GIF timing manifest: {error}")),
+    });
     JobOutcome { input_path: input, output_paths: outputs, detail: "GIF frames saved".to_string(), failure: None }
 }
 
@@ -618,16 +638,15 @@ pub fn tiff(request: &TiffRequest) -> JobOutcome {
         for (index, page) in pages.iter().enumerate() {
             let output = match OutputNaming::reserve_destination(&input, &request.output_location, &format!("-page-{}", index + 1), "tiff") {
                 Ok(output) => output,
-                Err(error) => {
-                    for created in &outputs { let _ = std::fs::remove_file(created); }
-                    return failure(input, format!("Could not reserve TIFF page output: {error}"));
-                }
+                Err(error) => return failure(input, format!("Could not reserve TIFF page output: {error}")),
             };
             if let Err(error) = write_tiff_page(output.path(), page) {
-                for created in &outputs { let _ = std::fs::remove_file(created); }
                 return failure(input, format!("Could not write TIFF page: {error}"));
             }
-            outputs.push(output.commit());
+            outputs.push(match output.publish() {
+                Ok(path) => path,
+                Err(error) => return failure(input, format!("Could not publish TIFF page: {error}")),
+            });
         }
         return JobOutcome { input_path: input, output_paths: outputs, detail: "TIFF pages saved".to_string(), failure: None };
     } else {
@@ -637,7 +656,10 @@ pub fn tiff(request: &TiffRequest) -> JobOutcome {
         }
     };
     if let Err(error) = write_tiff_pages(output.path(), &pages) { return failure(input, format!("Could not combine TIFF pages: {error}")); }
-    JobOutcome { input_path: input, output_paths: vec![output.commit()], detail: "TIFF pages combined".to_string(), failure: None }
+    match output.publish() {
+        Ok(path) => JobOutcome { input_path: input, output_paths: vec![path], detail: "TIFF pages combined".to_string(), failure: None },
+        Err(error) => failure(input, format!("Could not publish combined TIFF: {error}")),
+    }
 }
 
 #[derive(Clone)]
@@ -704,7 +726,10 @@ pub fn strip_metadata(request: &MetadataRequest, input: PathBuf) -> JobOutcome {
     let format = ImageFormat::from_path(output.path()).unwrap_or(ImageFormat::Png);
     if let Err(error) = image.save_with_format(output.path(), format) { return failure(input, format!("Could not save metadata-free image: {error}")); }
     match inspect_metadata(output.path().to_path_buf()) {
-        Ok(report) if !report.exif && !report.xmp && !report.icc => JobOutcome { input_path: input, output_paths: vec![output.commit()], detail: "Metadata removed and verified".to_string(), failure: None },
+        Ok(report) if !report.exif && !report.xmp && !report.icc => match output.publish() {
+            Ok(path) => JobOutcome { input_path: input, output_paths: vec![path], detail: "Metadata removed and verified".to_string(), failure: None },
+            Err(error) => failure(input, format!("Could not publish metadata-free image: {error}")),
+        },
         Ok(_) => failure(input, "Image encoder retained metadata that could not be removed safely.".to_string()),
         Err(error) => failure(input, format!("Could not verify metadata removal: {error}")),
     }
@@ -721,7 +746,13 @@ fn transform<F>(_: &[PathBuf], input: PathBuf, location: &OutputLocation, suffix
         Err(error) => return failure(input, format!("Could not reserve image output: {error}")),
     };
     let format = ImageFormat::from_path(output.path()).unwrap_or(ImageFormat::Png);
-    match image.save_with_format(output.path(), format) { Ok(_) => JobOutcome { input_path: input, output_paths: vec![output.commit()], detail: "Image saved".to_string(), failure: None }, Err(error) => failure(input, format!("Could not save image: {error}")) }
+    match image.save_with_format(output.path(), format) {
+        Ok(_) => match output.publish() {
+            Ok(path) => JobOutcome { input_path: input, output_paths: vec![path], detail: "Image saved".to_string(), failure: None },
+            Err(error) => failure(input, format!("Could not publish image: {error}")),
+        },
+        Err(error) => failure(input, format!("Could not save image: {error}")),
+    }
 }
 
 fn failure(input_path: PathBuf, error: String) -> JobOutcome { JobOutcome::failure(input_path, ToolError::processing(error)) }

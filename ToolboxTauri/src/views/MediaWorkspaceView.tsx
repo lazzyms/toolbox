@@ -153,7 +153,7 @@ const MediaFrameOrder = ({ files, activeUtility, selectedFileIndex, selectFile }
   const frameKey = files.join("\u0000");
 
   useEffect(() => {
-    if (!frameKey || !["gif-create", "tiff-pages"].includes(activeUtility.id)) {
+    if (!frameKey || !activeUtility.capability.supportsPreview || !["gif-create", "tiff-pages"].includes(activeUtility.id)) {
       setPreviews({});
       return;
     }
@@ -173,7 +173,7 @@ const MediaFrameOrder = ({ files, activeUtility, selectedFileIndex, selectFile }
     return () => {
       current = false;
     };
-  }, [activeUtility.id, frameKey]);
+  }, [activeUtility.capability.supportsPreview, activeUtility.id, frameKey]);
 
   return (
     <section className="media-frame-order" role="region" aria-label="Frame order">
@@ -184,7 +184,7 @@ const MediaFrameOrder = ({ files, activeUtility, selectedFileIndex, selectFile }
           <li key={file} data-selected={index === selectedFileIndex ? "true" : undefined}>
             <button type="button" onClick={() => selectFile(index)} aria-label={`Frame ${index + 1}`}>
               <span>{index + 1}</span>
-              {previews[file] && <img className="media-frame-preview" src={previews[file]?.dataUrl} alt={`Preview of frame ${index + 1}`} />}
+              {activeUtility.capability.supportsPreview && previews[file] && <img className="media-frame-preview" src={previews[file]?.dataUrl} alt={`Preview of frame ${index + 1}`} />}
               {file.split(/[\\/]/).pop()}
             </button>
           </li>

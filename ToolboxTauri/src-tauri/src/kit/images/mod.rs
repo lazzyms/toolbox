@@ -137,7 +137,10 @@ impl ImageProcessor {
                 Err(error) => return JobOutcome::failure(input_path, ToolError::processing(format!("Could not reserve output: {error}"))),
             };
             return match std::fs::copy(&input_path, output_path.path()) {
-                Ok(_) => JobOutcome { input_path, output_paths: vec![output_path.commit()], detail: "Kept original bytes (lossless mode)".to_string(), failure: None },
+                Ok(_) => match output_path.publish() {
+                    Ok(path) => JobOutcome { input_path, output_paths: vec![path], detail: "Kept original bytes (lossless mode)".to_string(), failure: None },
+                    Err(error) => JobOutcome::failure(input_path, ToolError::processing(format!("Could not publish output: {error}"))),
+                },
                 Err(error) => JobOutcome { input_path, output_paths: vec![], detail: String::new(), failure: Some(ToolError::processing(format!("Lossless copy failed: {error}"))) },
             };
         }
@@ -222,19 +225,25 @@ impl ImageProcessor {
                     failure: Some(ToolError::processing(format!("Fallback copy failed: {}", e))),
                 };
             }
-            return JobOutcome {
-                input_path,
-                output_paths: vec![fallback_path.commit()],
-                detail: "Kept original (compressed version was larger)".to_string(),
-                failure: None,
+            return match fallback_path.publish() {
+                Ok(path) => JobOutcome {
+                    input_path,
+                    output_paths: vec![path],
+                    detail: "Kept original (compressed version was larger)".to_string(),
+                    failure: None,
+                },
+                Err(error) => JobOutcome::failure(input_path, ToolError::processing(format!("Could not publish fallback output: {error}"))),
             };
         }
 
-        JobOutcome {
-            input_path,
-            output_paths: vec![output_path.commit()],
-            detail: format!("Saved as {}", extension),
-            failure: None,
+        match output_path.publish() {
+            Ok(path) => JobOutcome {
+                input_path,
+                output_paths: vec![path],
+                detail: format!("Saved as {}", extension),
+                failure: None,
+            },
+            Err(error) => JobOutcome::failure(input_path, ToolError::processing(format!("Could not publish output: {error}"))),
         }
     }
 }

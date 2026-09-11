@@ -94,7 +94,10 @@ pub fn merge(request: &MergePdfRequest) -> JobOutcome {
     let result = Command::new(qpdf).arg("--empty").arg("--pages").args(&request.paths).arg("--").arg(output.path()).output();
     match result {
         Ok(result) if result.status.success() => match Document::load(output.path()) {
-            Ok(document) if document.get_pages().len() == expected_pages => JobOutcome { input_path: first, output_paths: vec![output.commit()], detail: format!("{} PDFs merged in input order", request.paths.len()), failure: None },
+            Ok(document) if document.get_pages().len() == expected_pages => match output.publish() {
+                Ok(path) => JobOutcome { input_path: first, output_paths: vec![path], detail: format!("{} PDFs merged in input order", request.paths.len()), failure: None },
+                Err(error) => failure(first, format!("Could not publish merged PDF output: {error}")),
+            },
             Ok(document) => failure(first, format!("Merged PDF page count mismatch: expected {expected_pages}, got {}.", document.get_pages().len())),
             Err(error) => failure(first, format!("Merged PDF could not be verified: {error}")),
         },
@@ -104,6 +107,9 @@ pub fn merge(request: &MergePdfRequest) -> JobOutcome {
 }
 
 pub fn split(request: &PageSelectionRequest, input: PathBuf) -> JobOutcome {
+    if let Err(error) = validate_split_request(request) {
+        return JobOutcome::failure(input, ToolError::invalid_input(error));
+    }
     let location = &request.output_location;
     let Some(qpdf) = qpdf() else { return failure(input, "qpdf is required to split PDFs but was not found.".to_string()); };
     let workspace = match SplitWorkspace::new() {
@@ -191,24 +197,20 @@ fn materialize_split_outputs(input: &Path, location: &OutputLocation, generated:
     for source in generated {
         let suffix = match split_output_suffix(input, source) {
             Ok(suffix) => suffix,
-            Err(error) => {
-                remove_outputs(&outputs);
-                return Err(error);
-            }
+            Err(error) => return Err(error),
         };
         let reservation = match OutputNaming::reserve_destination(input, location, &suffix, "pdf") {
             Ok(reservation) => reservation,
-            Err(error) => {
-                remove_outputs(&outputs);
-                return Err(format!("Could not reserve split output: {error}"));
-            }
+            Err(error) => return Err(format!("Could not reserve split output: {error}")),
         };
-        let destination = reservation.path().to_path_buf();
-        if let Err(error) = move_without_overwrite(source, &destination) {
-            remove_outputs(&outputs);
+        if let Err(error) = copy_into_reservation(source, reservation.path()) {
             return Err(format!("Could not move split output: {error}"));
         }
-        outputs.push(reservation.commit());
+        let destination = match reservation.publish() {
+            Ok(path) => path,
+            Err(error) => return Err(format!("Could not publish split output: {error}")),
+        };
+        outputs.push(destination);
     }
     Ok(outputs)
 }
@@ -221,18 +223,16 @@ fn split_output_suffix(input: &Path, generated: &Path) -> Result<String, String>
     Ok(suffix.to_string())
 }
 
-fn move_without_overwrite(source: &Path, destination: &Path) -> io::Result<()> {
-    match fs::hard_link(source, destination) {
-        Ok(()) => fs::remove_file(source),
-        Err(error) if matches!(error.kind(), io::ErrorKind::CrossesDevices | io::ErrorKind::PermissionDenied | io::ErrorKind::Unsupported) => {
-            let mut source_file = fs::File::open(source)?;
-            let mut destination_file = fs::OpenOptions::new().write(true).create_new(true).open(destination)?;
-            std::io::copy(&mut source_file, &mut destination_file)?;
-            drop(destination_file);
-            fs::remove_file(source)
-        }
-        Err(error) => Err(error),
+fn copy_into_reservation(source: &Path, destination: &Path) -> io::Result<()> {
+    fs::copy(source, destination)?;
+    fs::remove_file(source)
+}
+
+fn validate_split_request(request: &PageSelectionRequest) -> Result<(), String> {
+    if request.split_mode.as_deref() == Some("ranges") && request.page_ranges.as_deref().is_none_or(|value| value.trim().is_empty()) {
+        return Err("Enter at least one page range when split mode is Ranges.".to_string());
     }
+    Ok(())
 }
 
 fn parse_split_ranges(raw: &str, page_count: usize) -> Result<Vec<(usize, usize)>, String> {
@@ -251,11 +251,14 @@ pub fn to_images(request: &PdfToImagesRequest, input: PathBuf) -> JobOutcome {
     let Some(renderer) = tool("TOOLBOX_PDFTOPPM_PATH", "pdftoppm") else { return failure(input, "pdftoppm is required to render PDFs. Set TOOLBOX_PDFTOPPM_PATH or add pdftoppm to PATH.".to_string()); };
     let dpi = request.dpi.clamp(72, 300);
     let extension = if format == "jpg" { "jpg" } else { "png" };
-    let destination = match unique_image_destination(&input, &request.output_location, extension) {
-        Ok(output) => output,
+    let workspace = match SplitWorkspace::new() {
+        Ok(workspace) => workspace,
+        Err(error) => return failure(input, format!("Could not create a private image workspace: {error}")),
+    };
+    let prefix = match unique_image_prefix(&input, &request.output_location, extension, &workspace) {
+        Ok(prefix) => prefix,
         Err(error) => return failure(input, format!("Could not reserve PDF image output: {error}")),
     };
-    let prefix = destination.path().with_extension("");
     let renderer_format = if format == "jpg" { "jpeg" } else { "png" };
     if let Some(requested_pages) = request.pages.as_ref() {
         let document = match Document::load(&input) {
@@ -267,9 +270,11 @@ pub fn to_images(request: &PdfToImagesRequest, input: PathBuf) -> JobOutcome {
             Ok(_) => return failure(input, "Select at least one PDF page.".to_string()),
             Err(error) => return failure(input, error),
         };
-        let outcome = render_selected_pages(&renderer, &input, &prefix, renderer_format, dpi, extension, &pages);
-        if outcome.failure.is_none() { let _ = destination.commit(); }
-        return outcome;
+        let generated = match render_selected_pages(&renderer, &input, &prefix, renderer_format, dpi, extension, &pages) {
+            Ok(outputs) => outputs,
+            Err(error) => return failure(input, error),
+        };
+        return materialize_rendered_images(&input, &request.output_location, &generated);
     }
 
     let mut command = Command::new(&renderer);
@@ -285,35 +290,35 @@ pub fn to_images(request: &PdfToImagesRequest, input: PathBuf) -> JobOutcome {
         Ok(result) if result.status.success() => {
             let mut outputs = fs::read_dir(prefix.parent().unwrap_or_else(|| std::path::Path::new("."))).ok().into_iter().flatten().filter_map(Result::ok).map(|entry| entry.path()).filter(|path| path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with(prefix.file_name().and_then(|stem| stem.to_str()).unwrap_or("")) && path.extension().is_some_and(|ext| ext == extension))).collect::<Vec<_>>();
             outputs.sort();
-            if outputs.is_empty() { failure(input, "PDF renderer produced no images.".to_string()) } else { let _ = destination.commit(); JobOutcome { input_path: input, output_paths: outputs, detail: "PDF rendered to images".to_string(), failure: None } }
+            if outputs.is_empty() {
+                failure(input, "PDF renderer produced no images.".to_string())
+            } else {
+                materialize_rendered_images(&input, &request.output_location, &outputs)
+            }
         }
         Ok(result) => failure(input, stderr(result, "pdftoppm failed to render the PDF.")),
         Err(error) => failure(input, format!("Could not run pdftoppm: {error}")),
     }
 }
 
-fn unique_image_destination(input: &PathBuf, location: &OutputLocation, extension: &str) -> std::io::Result<OutputReservation> {
-    let mut suffix = "-images".to_string();
-    let mut destination = OutputNaming::reserve_destination(input, location, &suffix, extension)?;
-    let mut counter = 1usize;
-    while rendered_output_exists(destination.path(), extension) {
-        suffix = format!("-images-{counter}");
-        destination = OutputNaming::reserve_destination(input, location, &suffix, extension)?;
+fn unique_image_prefix(input: &PathBuf, location: &OutputLocation, extension: &str, workspace: &SplitWorkspace) -> std::io::Result<PathBuf> {
+    let mut counter = 0usize;
+    loop {
+        let suffix = if counter == 0 { "-images".to_string() } else { format!("-images-{counter}") };
+        let destination = OutputNaming::reserve_destination(input, location, &suffix, extension)?;
+        let stem = destination.destination_path().file_stem().and_then(|value| value.to_str()).unwrap_or("output").to_string();
+        let has_existing_family = input.parent().unwrap_or_else(|| Path::new(".")).read_dir().ok().into_iter().flatten().filter_map(Result::ok).any(|entry| {
+            let path = entry.path();
+            path.extension().and_then(|value| value.to_str()).is_some_and(|value| value.eq_ignore_ascii_case(extension))
+                && path.file_stem().and_then(|value| value.to_str()).is_some_and(|value| value.starts_with(&format!("{stem}-")))
+        });
+        if !has_existing_family {
+            drop(destination);
+            return Ok(workspace.path().join(stem));
+        }
+        drop(destination);
         counter += 1;
     }
-    Ok(destination)
-}
-
-fn rendered_output_exists(destination: &std::path::Path, extension: &str) -> bool {
-    if destination.exists() { return true; }
-    let Some(directory) = destination.parent() else { return false; };
-    let Some(stem) = destination.file_stem().and_then(|value| value.to_str()) else { return false; };
-    let prefix = format!("{stem}-");
-    fs::read_dir(directory).ok().into_iter().flatten().filter_map(Result::ok).any(|entry| {
-        let path = entry.path();
-        path.extension().and_then(|value| value.to_str()).is_some_and(|value| value.eq_ignore_ascii_case(extension))
-            && path.file_stem().and_then(|value| value.to_str()).is_some_and(|value| value.starts_with(&prefix))
-    })
 }
 
 fn render_selected_pages(
@@ -324,16 +329,12 @@ fn render_selected_pages(
     dpi: u16,
     extension: &str,
     pages: &[u32],
-) -> JobOutcome {
+) -> Result<Vec<PathBuf>, String> {
     let mut outputs = Vec::with_capacity(pages.len());
     let base = prefix.file_name().and_then(|value| value.to_str()).unwrap_or("output");
     for page in pages {
         let page_prefix = prefix.with_file_name(format!("{base}-page-{page}"));
         let output = page_prefix.with_extension(extension);
-        if output.exists() {
-            remove_outputs(&outputs);
-            return failure(input.clone(), format!("Refusing to overwrite existing image output: {}", output.display()));
-        }
         let result = Command::new(renderer)
             .arg(format!("-{renderer_format}"))
             .arg("-r")
@@ -348,17 +349,36 @@ fn render_selected_pages(
             .output();
         match result {
             Ok(result) if result.status.success() && output.exists() => outputs.push(output),
-            Ok(result) => {
-                remove_outputs(&outputs);
-                return failure(input.clone(), stderr(result, "pdftoppm failed to render the selected PDF page."));
-            }
-            Err(error) => {
-                remove_outputs(&outputs);
-                return failure(input.clone(), format!("Could not run pdftoppm: {error}"));
-            }
+            Ok(result) => return Err(stderr(result, "pdftoppm failed to render the selected PDF page.")),
+            Err(error) => return Err(format!("Could not run pdftoppm: {error}")),
         }
     }
-    JobOutcome { input_path: input.clone(), output_paths: outputs, detail: "Selected PDF pages rendered to images in page order".to_string(), failure: None }
+    Ok(outputs)
+}
+
+fn materialize_rendered_images(input: &Path, location: &OutputLocation, generated: &[PathBuf]) -> JobOutcome {
+    let input_stem = input.file_stem().and_then(|value| value.to_str()).unwrap_or("output");
+    let mut outputs = Vec::with_capacity(generated.len());
+    for source in generated {
+        let extension = source.extension().and_then(|value| value.to_str()).unwrap_or("png");
+        let stem = match source.file_stem().and_then(|value| value.to_str()).and_then(|value| value.strip_prefix(input_stem)) {
+            Some(suffix) if suffix.starts_with('-') => suffix,
+            _ => return failure(input.to_path_buf(), "PDF renderer produced an unexpected image file name.".to_string()),
+        };
+        let reservation = match OutputNaming::reserve_destination(input, location, stem, extension) {
+            Ok(reservation) => reservation,
+            Err(error) => return failure(input.to_path_buf(), format!("Could not reserve PDF image output: {error}")),
+        };
+        if let Err(error) = fs::copy(source, reservation.path()) {
+            return failure(input.to_path_buf(), format!("Could not copy rendered PDF image: {error}"));
+        }
+        let destination = match reservation.publish() {
+            Ok(path) => path,
+            Err(error) => return failure(input.to_path_buf(), format!("Could not publish rendered PDF image: {error}")),
+        };
+        outputs.push(destination);
+    }
+    JobOutcome { input_path: input.to_path_buf(), output_paths: outputs, detail: "PDF rendered to images".to_string(), failure: None }
 }
 
 pub fn to_text(request: &PdfToTextRequest, input: PathBuf) -> JobOutcome {
@@ -377,7 +397,13 @@ pub fn to_text(request: &PdfToTextRequest, input: PathBuf) -> JobOutcome {
         Ok(text) => {
             let text = normalize_pdf_text(&text);
             if text.is_empty() { return failure(input, "PDF contains no selectable text; scanned PDFs require OCR.".to_string()); }
-            match fs::write(output.path(), text) { Ok(_) => JobOutcome { input_path: input, output_paths: vec![output.commit()], detail: "PDF text extracted in page order".to_string(), failure: None }, Err(error) => failure(input, format!("Could not write text output: {error}")) }
+            match fs::write(output.path(), text) {
+                Ok(_) => match output.publish() {
+                    Ok(path) => JobOutcome { input_path: input, output_paths: vec![path], detail: "PDF text extracted in page order".to_string(), failure: None },
+                    Err(error) => failure(input, format!("Could not publish text output: {error}")),
+                },
+                Err(error) => failure(input, format!("Could not write text output: {error}")),
+            }
         },
         Err(error) => failure(input, format!("Could not extract selectable PDF text: {error}")),
     }
@@ -401,18 +427,15 @@ pub fn extract_images(request: &PdfToTextRequest, input: PathBuf) -> JobOutcome 
         let images = match document.get_page_images(page_id) { Ok(images) => images, Err(error) => return failure(input, error.to_string()) };
         for (index, image) in images.iter().enumerate() {
             let Some(filters) = &image.filters else {
-                remove_outputs(&outputs);
                 return failure(input, "PDF contains an embedded image with no supported filter; extraction stopped without a complete result.".to_string());
             };
             if filters.iter().any(|filter| filter != "DCTDecode") {
-                remove_outputs(&outputs);
                 return failure(input, format!("PDF image on page {page_number} uses an unsupported filter; only original JPEG images can be extracted without recompression."));
             }
             let mut path = directory.join(format!("{stem}-image-{page_number}-{index}.jpg"));
             let mut counter = 1;
             while path.exists() { path = directory.join(format!("{stem}-image-{page_number}-{index}-{counter}.jpg")); counter += 1; }
             if let Err(error) = fs::write(&path, image.content) {
-                remove_outputs(&outputs);
                 return failure(input, format!("Could not write extracted image: {error}"));
             }
             outputs.push(path);
@@ -431,8 +454,6 @@ fn selected_pdf_pages(document: &Document, requested: Option<&Vec<usize>>) -> Re
     }
     Ok(pages.into_iter().filter(|page| requested.contains(page)).collect())
 }
-
-fn remove_outputs(outputs: &[PathBuf]) { for output in outputs { let _ = fs::remove_file(output); } }
 
 pub fn images_to_pdf(request: &ImagesToPdfRequest) -> JobOutcome {
     let Some(first) = request.paths.first().cloned() else { return failure(PathBuf::new(), "Select at least one image.".to_string()); };
@@ -453,7 +474,13 @@ pub fn images_to_pdf(request: &ImagesToPdfRequest) -> JobOutcome {
     document.objects.insert(pages_id, dictionary! { "Type" => "Pages", "Kids" => kids, "Count" => request.paths.len() as i64 }.into());
     let catalog_id = document.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
     document.trailer.set("Root", catalog_id);
-    match document.save(output.path()) { Ok(_) => JobOutcome { input_path: first, output_paths: vec![output.commit()], detail: "Images combined into PDF".to_string(), failure: None }, Err(error) => failure(first, format!("Save failed: {error}")) }
+    match document.save(output.path()) {
+        Ok(_) => match output.publish() {
+            Ok(path) => JobOutcome { input_path: first, output_paths: vec![path], detail: "Images combined into PDF".to_string(), failure: None },
+            Err(error) => failure(first, format!("Could not publish combined PDF: {error}")),
+        },
+        Err(error) => failure(first, format!("Save failed: {error}")),
+    }
 }
 
 fn image_as_jpeg(path: &PathBuf) -> Result<(Vec<u8>, u32, u32), String> {
@@ -504,7 +531,10 @@ pub fn compress(request: &CompressPdfRequest, input: PathBuf) -> JobOutcome {
     let result = Command::new(qpdf).arg("--object-streams=generate").arg("--stream-data=compress").arg("--recompress-flate").arg(format!("--compression-level={level}")).arg(&input).arg(output.path()).output();
     match result {
         Ok(result) if result.status.success() => match Document::load(output.path()) {
-            Ok(verified) if verified.get_pages().len() == page_count => JobOutcome { input_path: input, output_paths: vec![output.commit()], detail: format!("PDF compressed at quality {quality}"), failure: None },
+            Ok(verified) if verified.get_pages().len() == page_count => match output.publish() {
+                Ok(path) => JobOutcome { input_path: input, output_paths: vec![path], detail: format!("PDF compressed at quality {quality}"), failure: None },
+                Err(error) => failure(input, format!("Could not publish compressed PDF: {error}")),
+            },
             Ok(_) => failure(input, "Compressed PDF changed its page count.".to_string()),
             Err(error) => failure(input, format!("Compressed PDF could not be verified: {error}")),
         },
@@ -569,7 +599,13 @@ fn parse_page_number(value: &str) -> Result<usize, String> {
 }
 
 fn save(mut document: Document, input: PathBuf, output: OutputReservation, detail: &str) -> JobOutcome {
-    match document.save(output.path()) { Ok(_) => JobOutcome { input_path: input, output_paths: vec![output.commit()], detail: detail.to_string(), failure: None }, Err(error) => failure(input, format!("Save failed: {error}")) }
+    match document.save(output.path()) {
+        Ok(_) => match output.publish() {
+            Ok(path) => JobOutcome { input_path: input, output_paths: vec![path], detail: detail.to_string(), failure: None },
+            Err(error) => failure(input, format!("Could not publish PDF output: {error}")),
+        },
+        Err(error) => failure(input, format!("Save failed: {error}")),
+    }
 }
 
 fn overlay<F>(request: &PageOverlayRequest, input: PathBuf, suffix: &str, content: F, opacity: u8) -> JobOutcome
@@ -600,7 +636,13 @@ where F: Fn(usize, f32, f32) -> String {
         if let Err(error) = resources.get_mut(b"ExtGState").and_then(Object::as_dict_mut).map(|states| states.set("GSwm", opacity_id)) { return failure(input, error.to_string()); }
         if let Err(error) = document.add_page_contents(page_id, format!("q /GSwm gs {} Q", content(number + 1, width, height)).into_bytes()) { return failure(input, error.to_string()); }
     }
-    match document.save(output.path()) { Ok(_) => JobOutcome { input_path: input, output_paths: vec![output.commit()], detail: "PDF saved".to_string(), failure: None }, Err(error) => failure(input, format!("Save failed: {error}")) }
+    match document.save(output.path()) {
+        Ok(_) => match output.publish() {
+            Ok(path) => JobOutcome { input_path: input, output_paths: vec![path], detail: "PDF saved".to_string(), failure: None },
+            Err(error) => failure(input, format!("Could not publish PDF output: {error}")),
+        },
+        Err(error) => failure(input, format!("Save failed: {error}")),
+    }
 }
 
 fn watermark_position(position: Option<&str>, width: f32, height: f32) -> (f32, f32) {
@@ -640,7 +682,13 @@ fn watermark_image(request: &PageOverlayRequest, input: PathBuf, logo: &PathBuf)
         let (x, y) = watermark_position(request.position.as_deref(), width as f32, height as f32);
         if let Err(error) = document.add_page_contents(page_id, format!("q /GSwm gs {} 0 0 {} {} {} cm /Iwm Do Q", width.min(180) as f32, height.min(100) as f32, x, y).into_bytes()) { return failure(input, error.to_string()); }
     }
-    match document.save(output.path()) { Ok(_) => JobOutcome { input_path: input, output_paths: vec![output.commit()], detail: "PDF image watermark applied".to_string(), failure: None }, Err(error) => failure(input, format!("Save failed: {error}")) }
+    match document.save(output.path()) {
+        Ok(_) => match output.publish() {
+            Ok(path) => JobOutcome { input_path: input, output_paths: vec![path], detail: "PDF image watermark applied".to_string(), failure: None },
+            Err(error) => failure(input, format!("Could not publish watermarked PDF: {error}")),
+        },
+        Err(error) => failure(input, format!("Save failed: {error}")),
+    }
 }
 
 fn validate_overlay_scope(pages: Option<&[usize]>, page_count: usize) -> Result<(), String> {
@@ -778,6 +826,16 @@ mod tests {
     #[test]
     fn range_split_does_not_overwrite_existing_outputs() {
         run_split_with_sentinel("ranges", "pages", Some("1,3"), None, "document-split-0.pdf", 2);
+    }
+
+    #[test]
+    fn range_split_rejects_blank_ranges_without_outputs() {
+        let input = PathBuf::from("blank-ranges.pdf");
+        let outcome = split(&split_request(OutputLocation::AlongsideInput, "ranges", Some("  "), None), input.clone());
+
+        assert_eq!(outcome.input_path, input);
+        assert!(matches!(outcome.failure.as_ref().map(|error| &error.kind), Some(crate::kit::contracts::ErrorKind::InvalidInput)));
+        assert!(outcome.output_paths.is_empty());
     }
 
     #[test]

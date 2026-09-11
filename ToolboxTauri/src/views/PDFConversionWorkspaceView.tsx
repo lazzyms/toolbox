@@ -240,7 +240,10 @@ const ConversionControls = ({
   const selectionCount = document ? selectedPages.length : 0;
   const needsPageSelection = activeUtility.capability.supportsPageSelection;
   const needsMultipleInputs = activeUtility.id === "pdf-merge";
-  const canExport = files.length > 0 && (!needsMultipleInputs || files.length > 1);
+  const rangeSelectionIssue = activeUtility.id === "pdf-split" && splitMode === "ranges" && !pageRange.trim()
+    ? "Enter at least one page range to split by ranges."
+    : null;
+  const canExport = files.length > 0 && (!needsMultipleInputs || files.length > 1) && rangeSelectionIssue === null;
 
   return (
     <div className="workspace-control-panel">
@@ -342,6 +345,7 @@ const ConversionControls = ({
           {splitMode === "chunks" && <label className="workspace-field"><span>Pages per file</span><input aria-label="Pages per file" type="number" min="1" value={chunkSize} onChange={(event) => setChunkSize(Number(event.target.value))} /></label>}
         </div>
       )}
+      {rangeSelectionIssue && <p className="workspace-note" role="alert">{rangeSelectionIssue}</p>}
       {activeUtility.id === "pdf-extract-pages" && (
         <label className="workspace-field"><span>Pages or ranges</span><input aria-label="Page numbers or ranges" value={pageRange} onChange={(event) => { const value = event.target.value; setPageRange(value); if (!document) return; const parsed = parsePageRange(value, document.pages.length); setSelectedPages(Array.isArray(parsed) ? parsed : []); }} placeholder="1-3, 7" /></label>
       )}

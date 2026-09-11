@@ -68,7 +68,10 @@ impl PDFProcessor {
                     .unwrap_or(0);
                 match doc.save(output_path.path()) {
                     Ok(_) => match Document::load(output_path.path()) {
-                        Ok(verified) if !verified.is_encrypted() && verified.get_pages().len() == page_count && verified.objects.len() > 1 => JobOutcome { input_path, output_paths: vec![output_path.commit()], detail: "PDF Unlocked and verified".to_string(), failure: None },
+                        Ok(verified) if !verified.is_encrypted() && verified.get_pages().len() == page_count && verified.objects.len() > 1 => match output_path.publish() {
+                            Ok(path) => JobOutcome { input_path, output_paths: vec![path], detail: "PDF Unlocked and verified".to_string(), failure: None },
+                            Err(error) => JobOutcome::failure(input_path, ToolError::processing(format!("Could not publish unlocked PDF output: {error}"))),
+                        },
                         Ok(_) => JobOutcome { input_path, output_paths: vec![], detail: "".to_string(), failure: Some(ToolError::processing("Unlocked PDF failed verification.")) },
                         Err(error) => JobOutcome { input_path, output_paths: vec![], detail: "".to_string(), failure: Some(ToolError::processing(format!("Unlocked PDF could not be reopened: {error}"))) },
                     },
@@ -138,7 +141,12 @@ impl PDFProcessor {
             Ok(out) if out.status.success() => {
                 let encrypted = Document::load(output_path.path()).map(|document| document.is_encrypted()).unwrap_or(false);
                 let readable = Document::load_with_options(output_path.path(), lopdf::LoadOptions::with_password(password)).map(|document| !document.is_encrypted()).unwrap_or(false);
-                if encrypted && readable { JobOutcome { input_path, output_paths: vec![output_path.commit()], detail: "PDF Protected with verified AES-256 encryption".to_string(), failure: None } }
+                if encrypted && readable {
+                    match output_path.publish() {
+                        Ok(path) => JobOutcome { input_path, output_paths: vec![path], detail: "PDF Protected with verified AES-256 encryption".to_string(), failure: None },
+                        Err(error) => JobOutcome::failure(input_path, ToolError::processing(format!("Could not publish protected PDF output: {error}"))),
+                    }
+                }
                 else { JobOutcome { input_path, output_paths: vec![], detail: "".to_string(), failure: Some(ToolError::processing("qpdf produced an output that could not be verified as password-protected.")) } }
             }
             Ok(out) => {

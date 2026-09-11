@@ -531,11 +531,14 @@ pub fn apply_session(request: &PdfEditSessionRequest, input: PathBuf) -> JobOutc
         }
     }
     match document.save(output.path()) {
-        Ok(_) => JobOutcome {
-            input_path: input,
-            output_paths: vec![output.commit()],
-            detail: "PDF edit session saved".to_string(),
-            failure: None,
+        Ok(_) => match output.publish() {
+            Ok(path) => JobOutcome {
+                input_path: input,
+                output_paths: vec![path],
+                detail: "PDF edit session saved".to_string(),
+                failure: None,
+            },
+            Err(error) => failure(input, format!("Could not publish PDF edit output: {error}")),
         },
         Err(error) => failure(input, format!("Save failed: {error}")),
     }
@@ -826,7 +829,13 @@ where F: FnOnce(&mut Document, &[lopdf::ObjectId]) -> Result<(), String> {
     let pages: Vec<_> = document.get_pages().values().copied().collect();
     if pages.is_empty() { return failure(input, "PDF has no pages".to_string()); }
     if let Err(error) = edit(&mut document, &pages) { return failure(input, error); }
-    match document.save(output.path()) { Ok(_) => JobOutcome { input_path: input, output_paths: vec![output.commit()], detail: "PDF saved".to_string(), failure: None }, Err(error) => failure(input, format!("Save failed: {error}")) }
+    match document.save(output.path()) {
+        Ok(_) => match output.publish() {
+            Ok(path) => JobOutcome { input_path: input, output_paths: vec![path], detail: "PDF saved".to_string(), failure: None },
+            Err(error) => failure(input, format!("Could not publish PDF output: {error}")),
+        },
+        Err(error) => failure(input, format!("Save failed: {error}")),
+    }
 }
 
 fn selected_pages(scope: &PageScope, count: usize) -> impl Fn(usize) -> bool + '_ {
