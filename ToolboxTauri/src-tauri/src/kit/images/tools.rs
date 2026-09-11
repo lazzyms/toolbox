@@ -783,6 +783,80 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_gif_jobs_with_same_named_inputs_never_share_an_output() {
+        use std::collections::HashSet;
+        use std::sync::{Arc, Barrier};
+
+        let root = std::env::temp_dir().join(format!(
+            "toolbox_gif_collision_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let output_directory = root.join("outputs");
+        std::fs::create_dir_all(&output_directory).unwrap();
+        let existing_output = output_directory.join("frame-animated.gif");
+        let existing_bytes = b"existing output must remain intact";
+        std::fs::write(&existing_output, existing_bytes).unwrap();
+
+        let worker_count = 8usize;
+        let mut inputs = Vec::with_capacity(worker_count);
+        for index in 0..worker_count {
+            let input_directory = root.join(format!("input-{index}"));
+            std::fs::create_dir_all(&input_directory).unwrap();
+            let input = input_directory.join("frame.png");
+            image::RgbaImage::from_pixel(2, 2, image::Rgba([index as u8 * 24, 80, 160, 255]))
+                .save(&input)
+                .unwrap();
+            inputs.push(input);
+        }
+
+        let barrier = Arc::new(Barrier::new(worker_count));
+        let handles = inputs
+            .iter()
+            .cloned()
+            .map(|input| {
+                let barrier = Arc::clone(&barrier);
+                let output_directory = output_directory.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    gif_create(&GifCreateRequest {
+                        paths: vec![input],
+                        frame_delay_ms: 100,
+                        loop_forever: true,
+                        output_location: OutputLocation::CustomFolder(output_directory),
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        let outcomes = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect::<Vec<_>>();
+
+        assert!(outcomes.iter().all(|outcome| outcome.failure.is_none()));
+        let outputs = outcomes
+            .iter()
+            .map(|outcome| outcome.output_paths[0].clone())
+            .collect::<Vec<_>>();
+        assert_eq!(outputs.iter().collect::<HashSet<_>>().len(), worker_count);
+        assert_eq!(std::fs::read(&existing_output).unwrap(), existing_bytes);
+        for output in &outputs {
+            let decoder = image::codecs::gif::GifDecoder::new(BufReader::new(File::open(output).unwrap())).unwrap();
+            let frames = decoder.into_frames().collect_frames().unwrap();
+            assert_eq!(frames.len(), 1);
+            assert_eq!(frames[0].buffer().dimensions(), (2, 2));
+            assert!(std::fs::metadata(output).unwrap().len() > 0);
+        }
+        let output_entries = std::fs::read_dir(&output_directory).unwrap().count();
+        assert_eq!(output_entries, worker_count + 1);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn icon_presets_are_named_and_reject_invalid_custom_sizes() {
         let (prefix, macos) = icon_plan("macos", &[]).unwrap();
         assert_eq!(prefix, "macos-icon");

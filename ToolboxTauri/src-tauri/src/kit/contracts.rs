@@ -334,4 +334,35 @@ mod tests {
         assert_eq!(outcomes.len(), 1);
         assert!(outcomes[0].failure.as_ref().is_some_and(|error| error.message.contains("at least one page")));
     }
+
+    #[test]
+    fn native_capabilities_match_the_shared_contract_artifact() {
+        let shared: serde_json::Value = serde_json::from_str(include_str!("../../../shared/tool-capabilities.json")).unwrap();
+        let rows = shared.as_array().unwrap();
+
+        assert_eq!(rows.len(), NATIVE_CAPABILITIES.len());
+        for row in rows {
+            let command = row["command"].as_str().unwrap();
+            let capability = native_capability(command).unwrap_or_else(|| panic!("Missing native capability for {command}"));
+            let accepted_extensions = row["acceptedExtensions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|extension| extension.as_str().unwrap().trim_start_matches('.'))
+                .collect::<Vec<_>>();
+            assert_eq!(capability.accepted_extensions, accepted_extensions);
+            assert_eq!(
+                capability.input_cardinality,
+                match row["inputCardinality"].as_str().unwrap() {
+                    "single" => InputCardinality::Single,
+                    "multiple" => InputCardinality::Multiple,
+                    "ordered" => InputCardinality::Ordered,
+                    cardinality => panic!("Unknown input cardinality {cardinality}"),
+                }
+            );
+            assert_eq!(capability.supports_page_selection, row["supportsPageSelection"].as_bool().unwrap());
+            assert_eq!(capability.supports_preview, row["supportsPreview"].as_bool().unwrap());
+            assert_eq!(capability.native_available, row["nativeAvailability"] == "available");
+        }
+    }
 }
