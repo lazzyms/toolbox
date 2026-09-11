@@ -24,7 +24,10 @@ pub fn ocr_pdf(request: &VisionRequest, input: PathBuf) -> JobOutcome {
     if request.pages.as_ref().is_some_and(Vec::is_empty) {
         return failure(input, "Select at least one PDF page for OCR.".to_string());
     }
-    let output = OutputNaming::get_destination(&input, &request.output_location, "-ocr-text", "txt");
+    let output = match OutputNaming::reserve_destination(&input, &request.output_location, "-ocr-text", "txt") {
+        Ok(output) => output,
+        Err(error) => return failure(input, format!("Could not reserve OCR output: {error}")),
+    };
     let input_size = match std::fs::metadata(&input) {
         Ok(metadata) => metadata.len(),
         Err(error) => return failure(input, format!("Could not inspect PDF for OCR: {error}")),
@@ -40,8 +43,8 @@ pub fn ocr_pdf(request: &VisionRequest, input: PathBuf) -> JobOutcome {
             if result.stdout.len() > OCR_MAX_OUTPUT_BYTES { return failure(input, "OCR output exceeds the 10 MiB text limit.".to_string()); }
             let text = normalize_ocr_text(&result.stdout);
             if text.is_empty() { return failure(input, "OCR completed but found no readable text.".to_string()); }
-            match std::fs::write(&output, text) {
-                Ok(_) => success(input, output, "OCR text extracted in page order"),
+            match std::fs::write(output.path(), text) {
+                Ok(_) => success(input, output.commit(), "OCR text extracted in page order"),
                 Err(error) => failure(input, format!("Could not write OCR output: {error}")),
             }
         }
@@ -87,27 +90,29 @@ pub fn remove_background(request: &VisionRequest, input: PathBuf) -> JobOutcome 
 enum ImageAdapterValidation { FaceBlur, Cutout }
 
 fn run_image_adapter(request: &VisionRequest, input: PathBuf, resource_name: &str, variable: &str, command: &str, suffix: &str, detail: &str, validation: ImageAdapterValidation) -> JobOutcome {
-    let output = OutputNaming::get_destination(&input, &request.output_location, suffix, "png");
+    let output = match OutputNaming::reserve_destination(&input, &request.output_location, suffix, "png") {
+        Ok(output) => output,
+        Err(error) => return failure(input, format!("Could not reserve vision output: {error}")),
+    };
     let engine = match find_engine(resource_name, variable, command) {
         Ok(engine) => engine,
         Err(error) => return unavailable(input, error),
     };
-    match Command::new(engine).arg(&input).arg(&output).output() {
-        Ok(result) if result.status.success() && output.is_file() => {
+    match Command::new(engine).arg(&input).arg(output.path()).output() {
+        Ok(result) if result.status.success() && output.path().is_file() => {
             let validation = match validation {
-                ImageAdapterValidation::FaceBlur => validate_face_blur(&input, &output),
-                ImageAdapterValidation::Cutout => validate_cutout(&output),
+                ImageAdapterValidation::FaceBlur => validate_face_blur(&input, output.path()),
+                ImageAdapterValidation::Cutout => validate_cutout(output.path()),
             };
             match validation {
-                Ok(()) => success(input, output, detail),
-                Err(error) => { let _ = std::fs::remove_file(&output); failure(input, error) },
+                Ok(()) => success(input, output.commit(), detail),
+                Err(error) => failure(input, error),
             }
         }
         Ok(result) if result.status.success() => {
-            let _ = std::fs::remove_file(&output);
             failure(input, "Vision adapter reported success but produced no output.".to_string())
         }
-        Ok(result) => { let _ = std::fs::remove_file(&output); failure(input, stderr(result, "Vision adapter failed.")) },
+        Ok(result) => failure(input, stderr(result, "Vision adapter failed.")),
         Err(error) => failure(input, format!("Could not run vision adapter: {error}")),
     }
 }

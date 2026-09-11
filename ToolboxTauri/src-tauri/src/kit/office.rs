@@ -69,12 +69,15 @@ impl OfficeProcessor {
                 )
             }
         };
-        let output_path = OutputNaming::get_destination(
+        let output_path = match OutputNaming::reserve_destination(
             &input_path,
             output_location,
             "-unlocked",
             extension,
-        );
+        ) {
+            Ok(output) => output,
+            Err(error) => return JobOutcome::failure(input_path, ToolError::processing(format!("Could not reserve the unlocked document: {error}"))),
+        };
 
         let mut output_created = false;
         match decrypt_office_bytes(&raw, extension, password)
@@ -83,7 +86,7 @@ impl OfficeProcessor {
                 let mut output = OpenOptions::new()
                     .write(true)
                     .create_new(true)
-                    .open(&output_path)
+                    .open(output_path.path())
                     .map_err(|error| {
                         OfficeError::Processing(format!("Could not create the unlocked document: {error}"))
                     })?;
@@ -94,13 +97,13 @@ impl OfficeProcessor {
             }) {
             Ok(()) => JobOutcome {
                 input_path,
-                output_paths: vec![output_path],
+                output_paths: vec![output_path.commit()],
                 detail: "Office document unlocked and verified".to_string(),
                 failure: None,
             },
             Err(error) => {
                 if output_created {
-                    let _ = std::fs::remove_file(&output_path);
+                    let _ = std::fs::remove_file(output_path.path());
                 }
                 JobOutcome::failure(input_path, error.into_tool_error())
             }

@@ -500,7 +500,10 @@ pub fn edit(request: &EditPdfRequest, input: PathBuf) -> JobOutcome {
 }
 
 pub fn apply_session(request: &PdfEditSessionRequest, input: PathBuf) -> JobOutcome {
-    let output = OutputNaming::get_destination(&input, &request.output_location, "-edited", "pdf");
+    let output = match OutputNaming::reserve_destination(&input, &request.output_location, "-edited", "pdf") {
+        Ok(output) => output,
+        Err(error) => return failure(input, format!("Could not reserve PDF edit output: {error}")),
+    };
     let mut document = match Document::load(&input) {
         Ok(document) => document,
         Err(error) => return failure(input, error.to_string()),
@@ -527,10 +530,10 @@ pub fn apply_session(request: &PdfEditSessionRequest, input: PathBuf) -> JobOutc
             return failure(input, error);
         }
     }
-    match document.save(&output) {
+    match document.save(output.path()) {
         Ok(_) => JobOutcome {
             input_path: input,
-            output_paths: vec![output],
+            output_paths: vec![output.commit()],
             detail: "PDF edit session saved".to_string(),
             failure: None,
         },
@@ -815,12 +818,15 @@ fn page_number_position(position: Option<&PdfOverlayPosition>, width: f32, heigh
 
 fn transform_pdf<F>(input: PathBuf, location: &OutputLocation, suffix: &str, edit: F) -> JobOutcome
 where F: FnOnce(&mut Document, &[lopdf::ObjectId]) -> Result<(), String> {
-    let output = OutputNaming::get_destination(&input, location, suffix, "pdf");
+    let output = match OutputNaming::reserve_destination(&input, location, suffix, "pdf") {
+        Ok(output) => output,
+        Err(error) => return failure(input, format!("Could not reserve PDF output: {error}")),
+    };
     let mut document = match Document::load(&input) { Ok(document) => document, Err(error) => return failure(input, error.to_string()) };
     let pages: Vec<_> = document.get_pages().values().copied().collect();
     if pages.is_empty() { return failure(input, "PDF has no pages".to_string()); }
     if let Err(error) = edit(&mut document, &pages) { return failure(input, error); }
-    match document.save(&output) { Ok(_) => JobOutcome { input_path: input, output_paths: vec![output], detail: "PDF saved".to_string(), failure: None }, Err(error) => failure(input, format!("Save failed: {error}")) }
+    match document.save(output.path()) { Ok(_) => JobOutcome { input_path: input, output_paths: vec![output.commit()], detail: "PDF saved".to_string(), failure: None }, Err(error) => failure(input, format!("Save failed: {error}")) }
 }
 
 fn selected_pages(scope: &PageScope, count: usize) -> impl Fn(usize) -> bool + '_ {

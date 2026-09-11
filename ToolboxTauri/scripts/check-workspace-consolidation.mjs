@@ -5,7 +5,7 @@ import process from "node:process";
 const root = process.cwd();
 const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "utf8");
 const registry = read("src/registry/index.ts");
-const atomicSource = registry.split("export const ToolActionPolicies")[0];
+const atomicSource = registry.split("export const UtilityRegistry")[0];
 const atomicIds = [...atomicSource.matchAll(/\{ id: "([^"]+)"/g)].map((match) => match[1]);
 const workspaceSource = registry.split("export const ToolWorkspaceRegistry")[1] ?? "";
 const workspaceIds = [...workspaceSource.matchAll(/toolIds:\s*\[([\s\S]*?)\]/g)]

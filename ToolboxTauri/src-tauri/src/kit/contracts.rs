@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fmt;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -99,70 +101,84 @@ impl fmt::Display for ToolError {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum InputCardinality {
     Single,
     Multiple,
     Ordered,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NativeCapability {
-    pub command: &'static str,
-    pub accepted_extensions: &'static [&'static str],
+    pub command: String,
+    pub accepted_extensions: Vec<String>,
     pub input_cardinality: InputCardinality,
     pub supports_page_selection: bool,
     pub supports_preview: bool,
+    #[serde(rename = "nativeAvailability", deserialize_with = "deserialize_native_availability")]
     pub native_available: bool,
 }
 
-const PDF: &[&str] = &["pdf"];
-const OFFICE: &[&str] = &["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx"];
-const IMAGE: &[&str] = &["png", "jpg", "jpeg", "webp", "heic", "heif"];
-const IMAGE_SEQUENCE: &[&str] = &["png", "jpg", "jpeg", "webp", "heic", "tif", "tiff"];
-const TIFF: &[&str] = &["tif", "tiff"];
+static CAPABILITY_REGISTRY: OnceLock<Vec<NativeCapability>> = OnceLock::new();
 
-pub const NATIVE_CAPABILITIES: &[NativeCapability] = &[
-    NativeCapability { command: "remove_password", accepted_extensions: OFFICE, input_cardinality: InputCardinality::Multiple, supports_page_selection: false, supports_preview: false, native_available: true },
-    NativeCapability { command: "protect_pdf", accepted_extensions: PDF, input_cardinality: InputCardinality::Multiple, supports_page_selection: false, supports_preview: false, native_available: true },
-    NativeCapability { command: "compress_images", accepted_extensions: IMAGE, input_cardinality: InputCardinality::Single, supports_page_selection: false, supports_preview: true, native_available: true },
-    NativeCapability { command: "convert_images", accepted_extensions: IMAGE, input_cardinality: InputCardinality::Single, supports_page_selection: false, supports_preview: true, native_available: true },
-    NativeCapability { command: "export_pdf_scene", accepted_extensions: PDF, input_cardinality: InputCardinality::Single, supports_page_selection: true, supports_preview: true, native_available: true },
-    NativeCapability { command: "export_image_edit_plan", accepted_extensions: IMAGE, input_cardinality: InputCardinality::Single, supports_page_selection: false, supports_preview: true, native_available: true },
-    NativeCapability { command: "crop_pdf", accepted_extensions: PDF, input_cardinality: InputCardinality::Single, supports_page_selection: true, supports_preview: true, native_available: true },
-    NativeCapability { command: "sign_pdf", accepted_extensions: PDF, input_cardinality: InputCardinality::Single, supports_page_selection: true, supports_preview: true, native_available: true },
-    NativeCapability { command: "edit_pdf", accepted_extensions: PDF, input_cardinality: InputCardinality::Single, supports_page_selection: true, supports_preview: true, native_available: true },
-    NativeCapability { command: "edit_pdf_session", accepted_extensions: PDF, input_cardinality: InputCardinality::Single, supports_page_selection: true, supports_preview: true, native_available: true },
-    NativeCapability { command: "organize_pdf", accepted_extensions: PDF, input_cardinality: InputCardinality::Single, supports_page_selection: true, supports_preview: true, native_available: true },
-    NativeCapability { command: "add_pdf_pages", accepted_extensions: PDF, input_cardinality: InputCardinality::Single, supports_page_selection: true, supports_preview: true, native_available: true },
-    NativeCapability { command: "add_page_numbers", accepted_extensions: PDF, input_cardinality: InputCardinality::Single, supports_page_selection: true, supports_preview: true, native_available: true },
-    NativeCapability { command: "watermark_pdf", accepted_extensions: PDF, input_cardinality: InputCardinality::Single, supports_page_selection: true, supports_preview: true, native_available: true },
-    NativeCapability { command: "compress_pdf", accepted_extensions: PDF, input_cardinality: InputCardinality::Single, supports_page_selection: false, supports_preview: false, native_available: true },
-    NativeCapability { command: "remove_pdf_pages", accepted_extensions: PDF, input_cardinality: InputCardinality::Single, supports_page_selection: true, supports_preview: true, native_available: true },
-    NativeCapability { command: "extract_pdf_pages", accepted_extensions: PDF, input_cardinality: InputCardinality::Single, supports_page_selection: true, supports_preview: true, native_available: true },
-    NativeCapability { command: "merge_pdfs", accepted_extensions: PDF, input_cardinality: InputCardinality::Ordered, supports_page_selection: false, supports_preview: false, native_available: true },
-    NativeCapability { command: "split_pdf", accepted_extensions: PDF, input_cardinality: InputCardinality::Single, supports_page_selection: false, supports_preview: false, native_available: true },
-    NativeCapability { command: "pdf_to_images", accepted_extensions: PDF, input_cardinality: InputCardinality::Multiple, supports_page_selection: true, supports_preview: true, native_available: true },
-    NativeCapability { command: "pdf_to_text", accepted_extensions: PDF, input_cardinality: InputCardinality::Multiple, supports_page_selection: true, supports_preview: true, native_available: true },
-    NativeCapability { command: "extract_pdf_images", accepted_extensions: PDF, input_cardinality: InputCardinality::Multiple, supports_page_selection: true, supports_preview: false, native_available: true },
-    NativeCapability { command: "images_to_pdf", accepted_extensions: IMAGE_SEQUENCE, input_cardinality: InputCardinality::Ordered, supports_page_selection: false, supports_preview: false, native_available: true },
-    NativeCapability { command: "ocr_pdf", accepted_extensions: PDF, input_cardinality: InputCardinality::Single, supports_page_selection: true, supports_preview: false, native_available: false },
-    NativeCapability { command: "blur_faces", accepted_extensions: IMAGE, input_cardinality: InputCardinality::Single, supports_page_selection: false, supports_preview: false, native_available: false },
-    NativeCapability { command: "remove_image_background", accepted_extensions: IMAGE, input_cardinality: InputCardinality::Single, supports_page_selection: false, supports_preview: false, native_available: false },
-    NativeCapability { command: "resize_images", accepted_extensions: IMAGE, input_cardinality: InputCardinality::Single, supports_page_selection: false, supports_preview: true, native_available: true },
-    NativeCapability { command: "rotate_images", accepted_extensions: IMAGE, input_cardinality: InputCardinality::Single, supports_page_selection: false, supports_preview: true, native_available: true },
-    NativeCapability { command: "crop_images", accepted_extensions: IMAGE, input_cardinality: InputCardinality::Single, supports_page_selection: false, supports_preview: true, native_available: true },
-    NativeCapability { command: "adjust_image_tone", accepted_extensions: IMAGE, input_cardinality: InputCardinality::Single, supports_page_selection: false, supports_preview: true, native_available: true },
-    NativeCapability { command: "watermark_images", accepted_extensions: IMAGE, input_cardinality: InputCardinality::Single, supports_page_selection: false, supports_preview: true, native_available: true },
-    NativeCapability { command: "generate_icon_set", accepted_extensions: IMAGE, input_cardinality: InputCardinality::Single, supports_page_selection: false, supports_preview: true, native_available: true },
-    NativeCapability { command: "create_gif", accepted_extensions: &["png", "jpg", "jpeg", "webp"], input_cardinality: InputCardinality::Ordered, supports_page_selection: false, supports_preview: false, native_available: true },
-    NativeCapability { command: "extract_gif_frames", accepted_extensions: &["gif"], input_cardinality: InputCardinality::Single, supports_page_selection: false, supports_preview: true, native_available: true },
-    NativeCapability { command: "process_tiff_pages", accepted_extensions: TIFF, input_cardinality: InputCardinality::Ordered, supports_page_selection: false, supports_preview: true, native_available: true },
-    NativeCapability { command: "image_metadata", accepted_extensions: &["png", "jpg", "jpeg", "webp", "heic", "heif", "tif", "tiff"], input_cardinality: InputCardinality::Multiple, supports_page_selection: false, supports_preview: false, native_available: true },
-];
+fn deserialize_native_availability<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    match String::deserialize(deserializer)?.as_str() {
+        "available" => Ok(true),
+        "unavailable" => Ok(false),
+        value => Err(serde::de::Error::custom(format!("unknown native availability {value}"))),
+    }
+}
+
+fn parse_capability_registry(raw: &str) -> Result<Vec<NativeCapability>, String> {
+    let capabilities: Vec<NativeCapability> = serde_json::from_str(raw).map_err(|error| error.to_string())?;
+    if capabilities.is_empty() {
+        return Err("The shared capability registry is empty.".to_string());
+    }
+    let mut commands = HashSet::new();
+    for capability in &capabilities {
+        if capability.command.is_empty() || !commands.insert(capability.command.as_str()) {
+            return Err(format!("Duplicate or empty shared capability command {}.", capability.command));
+        }
+        if capability.accepted_extensions.is_empty() {
+            return Err(format!("{} has no accepted extensions.", capability.command));
+        }
+        let mut extensions = HashSet::new();
+        for extension in &capability.accepted_extensions {
+            let valid = extension.strip_prefix('.').is_some_and(|value| {
+                !value.is_empty()
+                    && value.chars().all(|character| {
+                        character.is_ascii_lowercase() || character.is_ascii_digit()
+                    })
+            });
+            if !valid || !extensions.insert(extension.as_str()) {
+                return Err(format!(
+                    "{} has an invalid accepted extension {extension}.",
+                    capability.command
+                ));
+            }
+        }
+    }
+    Ok(capabilities)
+}
+
+pub fn native_capabilities() -> &'static [NativeCapability] {
+    CAPABILITY_REGISTRY
+        .get_or_init(|| {
+            parse_capability_registry(include_str!("../../../shared/tool-capabilities.json"))
+                .unwrap_or_else(|error| panic!("Invalid shared capability registry: {error}"))
+        })
+        .as_slice()
+}
 
 pub fn native_capability(command: &str) -> Option<&'static NativeCapability> {
-    NATIVE_CAPABILITIES.iter().find(|capability| capability.command == command)
+    native_capabilities()
+        .iter()
+        .find(|capability| capability.command == command)
 }
 
 pub struct ValidatedCommandInputs {
@@ -225,9 +241,11 @@ pub fn partition_command_inputs(command: &str, paths: &[PathBuf]) -> Result<Vali
             rejected: paths.iter().cloned().enumerate().map(|(index, path)| (index, JobOutcome::failure(path, ToolError::invalid_input("This action accepts exactly one input file.")))).collect(),
         });
     }
-    let accepted_extensions = capability.accepted_extensions.iter().map(|extension| format!(".{extension}")).collect::<Vec<_>>().join(", ");
+    let accepted_extensions = capability.accepted_extensions.join(", ");
     let (accepted, rejected): (Vec<_>, Vec<_>) = paths.iter().cloned().enumerate().partition(|(_, path)| {
-        path.extension().and_then(|extension| extension.to_str()).map(|extension| capability.accepted_extensions.iter().any(|accepted| accepted.eq_ignore_ascii_case(extension))).unwrap_or(false)
+        path.extension().and_then(|extension| extension.to_str()).map(|extension| {
+            capability.accepted_extensions.iter().any(|accepted| accepted.trim_start_matches('.').eq_ignore_ascii_case(extension))
+        }).unwrap_or(false)
     });
     Ok(ValidatedCommandInputs {
         accepted,
@@ -340,7 +358,7 @@ mod tests {
         let shared: serde_json::Value = serde_json::from_str(include_str!("../../../shared/tool-capabilities.json")).unwrap();
         let rows = shared.as_array().unwrap();
 
-        assert_eq!(rows.len(), NATIVE_CAPABILITIES.len());
+        assert_eq!(rows.len(), native_capabilities().len());
         for row in rows {
             let command = row["command"].as_str().unwrap();
             let capability = native_capability(command).unwrap_or_else(|| panic!("Missing native capability for {command}"));
@@ -348,7 +366,7 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .iter()
-                .map(|extension| extension.as_str().unwrap().trim_start_matches('.'))
+                .map(|extension| extension.as_str().unwrap())
                 .collect::<Vec<_>>();
             assert_eq!(capability.accepted_extensions, accepted_extensions);
             assert_eq!(
@@ -364,5 +382,26 @@ mod tests {
             assert_eq!(capability.supports_preview, row["supportsPreview"].as_bool().unwrap());
             assert_eq!(capability.native_available, row["nativeAvailability"] == "available");
         }
+
+        let office = native_capability("remove_password").unwrap();
+        assert_eq!(office.accepted_extensions, [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"]);
+        let images = native_capability("images_to_pdf").unwrap();
+        assert_eq!(images.input_cardinality, InputCardinality::Ordered);
+        assert!(images.accepted_extensions.contains(&".tiff".to_string()));
+        let pdf = native_capability("pdf_to_text").unwrap();
+        assert!(pdf.supports_page_selection && pdf.supports_preview);
+        assert!(!native_capability("ocr_pdf").unwrap().native_available);
+        assert!(!native_capability("blur_faces").unwrap().native_available);
+        assert!(!native_capability("remove_image_background").unwrap().native_available);
+    }
+
+    #[test]
+    fn shared_capability_parser_rejects_duplicate_and_unknown_contract_data() {
+        let row = r#"{"command":"test","acceptedExtensions":[".pdf"],"inputCardinality":"single","supportsPageSelection":false,"supportsPreview":false,"nativeAvailability":"available"}"#;
+        assert!(parse_capability_registry(&format!("[{row},{row}]")).unwrap_err().contains("Duplicate"));
+        let unknown = format!("[{}]", row.replace('}', ",\"unknown\":true}"));
+        assert!(parse_capability_registry(&unknown)
+            .unwrap_err()
+            .contains("unknown field"));
     }
 }
