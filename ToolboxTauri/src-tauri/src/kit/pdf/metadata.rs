@@ -14,6 +14,8 @@ pub struct PdfPageMetadata {
     pub y: f32,
     pub width: f32,
     pub height: f32,
+    pub rotation: i32,
+    pub page_box: [f32; 4],
     pub preview: Option<String>,
     pub text_runs: Option<Vec<PdfTextRun>>,
 }
@@ -41,14 +43,35 @@ pub fn inspect(path: &Path) -> Result<PdfDocumentMetadata, String> {
         .get_pages()
         .values()
         .enumerate()
-        .map(|(index, page_id)| page_bounds(&document, *page_id).map(|(left, bottom, right, top)| PdfPageMetadata {
-            index,
-            x: left,
-            y: bottom,
-            width: right - left,
-            height: top - bottom,
-            preview: render_preview(path, index + 1),
-            text_runs: None,
+        .map(|(index, page_id)| page_bounds(&document, *page_id).and_then(|(left, bottom, right, top)| {
+            let crop = super::inherited(&document, *page_id, b"CropBox")?
+                .map(|value| value.as_array().map_err(|error| error.to_string()).and_then(|values| {
+                    if values.len() != 4 { return Err("PDF crop box must have four values.".to_string()); }
+                    Ok([
+                        number(super::resolve(&document, &values[0])?)?, number(super::resolve(&document, &values[1])?)?,
+                        number(super::resolve(&document, &values[2])?)?, number(super::resolve(&document, &values[3])?)?,
+                    ])
+                }))
+                .transpose()?
+                .unwrap_or([left, bottom, right, top]);
+            let page_box = [crop[0].max(left), crop[1].max(bottom), crop[2].min(right), crop[3].min(top)];
+            if page_box[2] <= page_box[0] || page_box[3] <= page_box[1] { return Err("PDF crop box has invalid dimensions.".to_string()); }
+            let rotation = super::inherited(&document, *page_id, b"Rotate")?
+                .map(|value| value.as_i64().map_err(|error| error.to_string()))
+                .transpose()?
+                .unwrap_or(0)
+                .rem_euclid(360) as i32;
+            Ok(PdfPageMetadata {
+                index,
+                x: left,
+                y: bottom,
+                width: right - left,
+                height: top - bottom,
+                rotation,
+                page_box,
+                preview: render_preview(path, index + 1),
+                text_runs: None,
+            })
         }))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(PdfDocumentMetadata { path: path.to_path_buf(), pages })
@@ -139,6 +162,8 @@ mod tests {
         assert_eq!(metadata.pages.len(), 2);
         assert_eq!((metadata.pages[0].x, metadata.pages[0].y), (0.0, 0.0));
         assert_eq!((metadata.pages[0].width, metadata.pages[0].height), (612.0, 792.0));
+        assert_eq!(metadata.pages[0].rotation, 0);
+        assert_eq!(metadata.pages[0].page_box, [0.0, 0.0, 612.0, 792.0]);
         assert_eq!((metadata.pages[1].width, metadata.pages[1].height), (792.0, 612.0));
         let _ = std::fs::remove_file(path);
     }

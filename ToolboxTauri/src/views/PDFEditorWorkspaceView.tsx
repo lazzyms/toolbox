@@ -167,7 +167,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onScene }: {
   const pageTargets = selectedPages.filter((id) => scene.pages.some((item) => item.id === id));
   const targets = pageTargets.length ? pageTargets : page ? [page.id] : [];
   const insertPage = () => {
-    const blank: ScenePage = { id: crypto.randomUUID(), sourceIndex: null, width: page.width, height: page.height, rotation: 0, crop: null, objects: [] };
+    const blank: ScenePage = { id: crypto.randomUUID(), sourceIndex: null, width: page.width, height: page.height, rotation: 0, crop: null, sourceRotation: null, sourceBox: null, objects: [] };
     const next = [...scene.pages]; next.splice(currentIndex + 1, 0, blank);
     commit({ pages: next }); selectPage(blank.id);
   };
