@@ -276,7 +276,7 @@ fn map_source_rect(mut rect: (u32, u32, u32, u32), geometry: &[ImageGeometryStep
 fn scale_floor(value: u32, from: u32, to: u32) -> u32 { ((value as u64 * to as u64) / from as u64) as u32 }
 fn scale_ceil(value: u32, from: u32, to: u32) -> u32 { ((value as u64 * to as u64 + from as u64 - 1) / from as u64) as u32 }
 
-fn parse_output_format(format: &str) -> Result<crate::kit::images::OutputFormat, String> {
+pub(crate) fn parse_output_format(format: &str) -> Result<crate::kit::images::OutputFormat, String> {
     match format.to_ascii_lowercase().as_str() {
         "jpg" | "jpeg" => Ok(crate::kit::images::OutputFormat::Jpeg),
         "png" => Ok(crate::kit::images::OutputFormat::Png),
