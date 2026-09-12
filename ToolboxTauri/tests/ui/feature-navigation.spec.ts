@@ -70,6 +70,15 @@ if (command === "preview_pdf_scene") return { dataUrl: "data:image/svg+xml,%3Csv
                 if (command === "inspect_image_preview") {
                     return { width: 640, height: 480, dataUrl: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='640' height='480'%3E%3Crect width='100%25' height='100%25' fill='white'/%3E%3C/svg%3E" };
                 }
+                if (command === "inspect_tiff_pages") {
+                    const requestPath = (args as { request: { path: string } }).request.path;
+                    const pageCount = requestPath.endsWith("two-page.tiff") ? 2 : 1;
+                    return Array.from({ length: pageCount }, (_, page) => ({
+                        width: 640,
+                        height: 480,
+                        dataUrl: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='640' height='480'%3E%3Crect width='100%25' height='100%25' fill='white'/%3E%3C/svg%3E",
+                    }));
+                }
                 if (command === "inspect_image_edit_preview") {
                     const edits = (args as { request?: { plan?: { edits?: Array<{ kind: string; width?: number; height?: number; mode?: string; aspectWidth?: number; aspectHeight?: number; anchor?: string }> } } }).request?.plan?.edits ?? [];
                     const crop = [...edits].reverse().find((edit) => edit.kind === "crop");
@@ -578,6 +587,39 @@ test("media and security workspaces expose ordered inputs and format boundaries"
     await page.getByRole("button", { name: "← All tools" }).click();
     await page.getByRole("button", { name: "Open Remove Password" }).click();
     await expect(page.getByText("PDF, Word, Excel, and PowerPoint files", { exact: true })).toBeVisible();
+});
+
+test("TIFF workspace expands internal pages and sends the displayed order", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Split and Combine TIFF" }).click();
+    await page.evaluate(() => {
+        (window as TestWindow).__toolboxDialogResults = [["/local/two-page.tiff", "/local/one-page.tiff"]];
+    });
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+
+    const frames = page.locator(".media-frame-list button");
+    await expect(frames).toHaveCount(3);
+    await expect(frames.nth(0)).toContainText("two-page.tiff · page 1");
+    await expect(frames.nth(1)).toContainText("two-page.tiff · page 2");
+    await expect(frames.nth(2)).toContainText("one-page.tiff · page 1");
+    await frames.nth(1).click();
+    await page.getByRole("button", { name: "Move selected TIFF page up" }).click();
+    await expect(frames.nth(0)).toContainText("two-page.tiff · page 2");
+
+    await page.locator(".workspace-primary-action").click();
+    const invocation = await page.evaluate(() =>
+        (window as TestWindow).__toolboxInvocations?.find(({ command }) => command === "process_tiff_pages"),
+    );
+    expect(invocation?.args).toMatchObject({
+        request: {
+            paths: ["/local/two-page.tiff", "/local/one-page.tiff"],
+            pages: [
+                { path: "/local/two-page.tiff", page: 1 },
+                { path: "/local/two-page.tiff", page: 0 },
+                { path: "/local/one-page.tiff", page: 0 },
+            ],
+        },
+    });
 });
 
 test("shared workspace ignores a stale processing completion after action changes", async ({ page }) => {

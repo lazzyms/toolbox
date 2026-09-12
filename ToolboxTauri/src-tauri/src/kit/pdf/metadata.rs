@@ -78,7 +78,7 @@ fn render_preview(path: &Path, page: usize) -> Option<String> {
 fn find_pdftoppm() -> Option<PathBuf> {
     std::env::var_os("TOOLBOX_PDFTOPPM_PATH")
         .map(PathBuf::from)
-        .filter(|path| path.is_file())
+        .filter(|path| !path.as_os_str().is_empty() && path.is_file())
         .or_else(|| Command::new("pdftoppm").arg("-h").output().ok().filter(|result| result.status.success()).map(|_| PathBuf::from("pdftoppm")))
 }
 
