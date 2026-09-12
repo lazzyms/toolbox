@@ -23,7 +23,7 @@ pub(crate) struct PdfMutationPreflight {
     pub(crate) has_tagged_structure: bool,
 }
 
-fn resolve<'a>(document: &'a Document, mut value: &'a Object) -> Result<&'a Object, String> {
+pub(crate) fn resolve<'a>(document: &'a Document, mut value: &'a Object) -> Result<&'a Object, String> {
     let mut seen = HashSet::new();
     while let Object::Reference(id) = value {
         if !seen.insert(*id) {
@@ -32,6 +32,67 @@ fn resolve<'a>(document: &'a Document, mut value: &'a Object) -> Result<&'a Obje
         value = document.get_object(*id).map_err(|error| error.to_string())?;
     }
     Ok(value)
+}
+
+pub(crate) fn inherited(document: &Document, mut id: ObjectId, key: &[u8]) -> Result<Option<Object>, String> {
+    let mut seen = HashSet::new();
+    loop {
+        if !seen.insert(id) {
+            return Err("Cyclic PDF page tree".to_string());
+        }
+        let page_tree = document.get_dictionary(id).map_err(|error| error.to_string())?;
+        if let Ok(value) = page_tree.get(key) {
+            return Ok(Some(resolve(document, value)?.clone()));
+        }
+        match page_tree.get(b"Parent") {
+            Ok(parent) => id = parent.as_reference().map_err(|error| error.to_string())?,
+            Err(_) => return Ok(None),
+        }
+    }
+}
+
+fn box_values(document: &Document, value: &Object) -> Result<[f32; 4], String> {
+    let values = resolve(document, value)?.as_array().map_err(|error| error.to_string())?;
+    if values.len() != 4 {
+        return Err("PDF page box must have four values.".to_string());
+    }
+    let values = values
+        .iter()
+        .map(|value| crate::kit::pdf::metadata::number(resolve(document, value)?))
+        .collect::<Result<Vec<_>, _>>()?;
+    let result = [values[0], values[1], values[2], values[3]];
+    if result.iter().any(|value| !value.is_finite()) || result[2] <= result[0] || result[3] <= result[1] {
+        return Err("PDF page box has invalid dimensions.".to_string());
+    }
+    Ok(result)
+}
+
+pub(crate) fn set_page_box_family(document: &mut Document, page_id: ObjectId, new_box: [f32; 4], clamp_ancillary: bool) -> Result<(), String> {
+    let mut ancillary = Vec::new();
+    for key in ["BleedBox", "TrimBox", "ArtBox"] {
+        if let Some(value) = inherited(document, page_id, key.as_bytes())? {
+            ancillary.push((key, box_values(document, &value)?));
+        }
+    }
+    let new_box_object = Object::Array(new_box.iter().copied().map(Object::Real).collect());
+    let page = document.get_dictionary_mut(page_id).map_err(|error| error.to_string())?;
+    page.set("MediaBox", new_box_object.clone());
+    page.set("CropBox", new_box_object.clone());
+    for (key, old_box) in ancillary {
+        let value = if !clamp_ancillary {
+            new_box
+        } else {
+            let clamped = [
+                old_box[0].max(new_box[0]).min(new_box[2]),
+                old_box[1].max(new_box[1]).min(new_box[3]),
+                old_box[2].max(new_box[0]).min(new_box[2]),
+                old_box[3].max(new_box[1]).min(new_box[3]),
+            ];
+            if clamped[2] > clamped[0] && clamped[3] > clamped[1] { clamped } else { new_box }
+        };
+        page.set(key, Object::Array(value.iter().copied().map(Object::Real).collect()));
+    }
+    Ok(())
 }
 
 fn has_catalog_entry(document: &Document, catalog: ObjectId, key: &[u8]) -> Result<bool, String> {
@@ -102,6 +163,23 @@ fn document_has_signature(document: &Document, catalog: ObjectId, pages: &[Objec
     }).collect::<Result<Vec<_>, String>>().map(|values| values.into_iter().any(|value| value))
 }
 
+fn page_has_internal_navigation(document: &Document, page: ObjectId) -> Result<bool, String> {
+    let Some(annotations) = document.get_dictionary(page).map_err(|error| error.to_string())?.get(b"Annots").ok() else {
+        return Ok(false);
+    };
+    let annotations = resolve(document, annotations)?.as_array().map_err(|error| error.to_string())?;
+    annotations.iter().map(|annotation| {
+        let annotation = resolve(document, annotation)?.as_dict().map_err(|error| error.to_string())?;
+        if annotation.get(b"Dest").is_ok() {
+            return Ok(true);
+        }
+        let Some(action) = annotation.get(b"A").ok() else {
+            return Ok(false);
+        };
+        Ok(resolve(document, action)?.as_dict().map_err(|error| error.to_string())?.get(b"D").is_ok())
+    }).collect::<Result<Vec<_>, String>>().map(|values| values.into_iter().any(|value| value))
+}
+
 pub(crate) fn mutation_preflight(document: &Document, reject_navigation: bool, reject_tagged_structure: bool) -> Result<PdfMutationPreflight, String> {
     if document.is_encrypted() {
         return Err("Unlock the PDF before editing".to_string());
@@ -115,6 +193,12 @@ pub(crate) fn mutation_preflight(document: &Document, reject_navigation: bool, r
         return Err(unsupported());
     }
     let kids = root.get(b"Kids").map_err(|_| unsupported())?.as_array().map_err(|_| unsupported())?;
+    let count = root.get(b"Count").map_err(|_| "PDF page-tree /Count is missing; mutation was rejected before output".to_string())?;
+    let count = resolve(document, count).map_err(|_| "PDF page-tree /Count is invalid; mutation was rejected before output".to_string())?.as_i64()
+        .map_err(|_| "PDF page-tree /Count is invalid; mutation was rejected before output".to_string())?;
+    if count < 0 || usize::try_from(count).ok() != Some(pages.len()) {
+        return Err("PDF page-tree /Count does not match the flattened page count; mutation was rejected before output".to_string());
+    }
     if kids.len() != pages.len() {
         return Err(unsupported());
     }
@@ -130,8 +214,10 @@ pub(crate) fn mutation_preflight(document: &Document, reject_navigation: bool, r
     if document_has_signature(document, catalog, &pages)? {
         return Err("Digitally signed PDFs cannot be edited because this mutation would invalidate the signature; remove the signature or use an unsigned copy".to_string());
     }
+    let page_navigation = pages.iter().map(|page| page_has_internal_navigation(document, *page)).collect::<Result<Vec<_>, _>>()?.into_iter().any(|present| present);
     let has_navigation = [b"Outlines".as_slice(), b"Names", b"Dests", b"PageLabels", b"OpenAction"]
         .into_iter().map(|key| has_catalog_entry(document, catalog, key)).collect::<Result<Vec<_>, _>>()?.into_iter().any(|present| present);
+    let has_navigation = has_navigation || page_navigation;
     let has_form_structure = has_catalog_entry(document, catalog, b"AcroForm")?;
     let has_tagged_structure = has_catalog_entry(document, catalog, b"StructTreeRoot")?;
     if reject_navigation && (has_navigation || has_form_structure) {

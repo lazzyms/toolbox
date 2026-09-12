@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::ToolError;
 use super::metadata::page_bounds;
-use super::{mutation_preflight, PdfMutationPreflight};
+use super::{inherited, mutation_preflight, PdfMutationPreflight};
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -347,13 +347,12 @@ pub fn crop(request: &CropPdfRequest, input: PathBuf) -> JobOutcome {
         for (index, page_id) in pages.iter().enumerate() {
             if selected(index) {
                 validate_rect_for_page(document, *page_id, &request.rectangle)?;
-                let page = document.get_dictionary_mut(*page_id).map_err(|e| e.to_string())?;
-                page.set("MediaBox", vec![
-                    Object::Real(request.rectangle.x),
-                    Object::Real(request.rectangle.y),
-                    Object::Real(request.rectangle.x + request.rectangle.width),
-                    Object::Real(request.rectangle.y + request.rectangle.height),
-                ]);
+                super::set_page_box_family(document, *page_id, [
+                    request.rectangle.x,
+                    request.rectangle.y,
+                    request.rectangle.x + request.rectangle.width,
+                    request.rectangle.y + request.rectangle.height,
+                ], true)?;
             }
         }
         Ok(())
@@ -469,21 +468,12 @@ pub fn sign(request: &SignPdfRequest, input: PathBuf) -> JobOutcome {
             let content_id = document.add_object(Object::Stream(lopdf::Stream::new(dictionary! {}, stream.clone().into_bytes())));
             (content_id, font_id, "Font")
         };
-        let page = document.get_dictionary_mut(page_id).map_err(|e| e.to_string())?;
-        if !page.has(b"Resources") { page.set("Resources", Object::Dictionary(dictionary! {})); }
-        let resources = page.get_mut(b"Resources").map_err(|e| e.to_string())?.as_dict_mut().map_err(|e| e.to_string())?;
         if resource_name == "Font" {
-            resources.set("Font", resources.get(b"Font").cloned().unwrap_or_else(|_| Object::Dictionary(dictionary! {})));
-            resources.get_mut(b"Font").map_err(|e| e.to_string())?.as_dict_mut().map_err(|e| e.to_string())?.set("Fsig", resource_id);
+            add_font(document, page_id, "Fsig", resource_id)?;
         } else {
-            resources.set("XObject", resources.get(b"XObject").cloned().unwrap_or_else(|_| Object::Dictionary(dictionary! {})));
-            resources.get_mut(b"XObject").map_err(|e| e.to_string())?.as_dict_mut().map_err(|e| e.to_string())?.set("Isig", resource_id);
+            add_xobject(document, page_id, "Isig", resource_id)?;
         }
-        let contents = page.get_mut(b"Contents");
-        let Ok(contents) = contents else { page.set("Contents", Object::Reference(stream_id)); continue; };
-        if let Object::Reference(_) = contents { continue; }
-        let existing = contents.as_array().map_err(|e| e.to_string())?.to_vec();
-        *contents = Object::Array(existing.into_iter().chain([Object::Reference(stream_id)]).collect());
+        append_content_stream(document, page_id, stream_id)?;
         }
         Ok(())
     })
@@ -642,13 +632,12 @@ fn apply_crop_operation(document: &mut Document, pages: &[lopdf::ObjectId], rect
     validate_rect(rectangle)?;
     for page_index in scoped_indices(scope, pages.len())? {
         validate_rect_for_page(document, pages[page_index], rectangle)?;
-        let page = document.get_dictionary_mut(pages[page_index]).map_err(|error| error.to_string())?;
-        page.set("MediaBox", vec![
-            Object::Real(rectangle.x),
-            Object::Real(rectangle.y),
-            Object::Real(rectangle.x + rectangle.width),
-            Object::Real(rectangle.y + rectangle.height),
-        ]);
+        super::set_page_box_family(document, pages[page_index], [
+            rectangle.x,
+            rectangle.y,
+            rectangle.x + rectangle.width,
+            rectangle.y + rectangle.height,
+        ], true)?;
     }
     Ok(())
 }
@@ -777,43 +766,49 @@ fn optional_indices(pages: &Option<Vec<usize>>, page_count: usize, label: &str) 
 
 fn append_content(document: &mut Document, page_id: lopdf::ObjectId, content: &[u8]) -> Result<(), String> {
     let stream_id = document.add_object(Object::Stream(lopdf::Stream::new(dictionary! {}, content.to_vec())));
-    let page = document.get_dictionary_mut(page_id).map_err(|error| error.to_string())?;
-    match page.get_mut(b"Contents") {
-        Ok(Object::Array(contents)) => contents.push(Object::Reference(stream_id)),
-        Ok(Object::Reference(existing)) => {
-            let prior = Object::Reference(*existing);
-            page.set("Contents", Object::Array(vec![prior, Object::Reference(stream_id)]));
+    append_content_stream(document, page_id, stream_id)
+}
+
+fn append_content_stream(document: &mut Document, page_id: lopdf::ObjectId, stream_id: lopdf::ObjectId) -> Result<(), String> {
+    let prior = document.get_dictionary(page_id).map_err(|error| error.to_string())?.get(b"Contents").ok().cloned();
+    let contents = match prior {
+        Some(Object::Array(contents)) => Object::Array(contents.into_iter().chain([Object::Reference(stream_id)]).collect()),
+        Some(Object::Reference(existing)) => Object::Array(vec![Object::Reference(existing), Object::Reference(stream_id)]),
+        Some(existing) => {
+            let existing_id = document.add_object(existing);
+            Object::Array(vec![Object::Reference(existing_id), Object::Reference(stream_id)])
         }
-        _ => page.set("Contents", Object::Reference(stream_id)),
-    }
+        None => Object::Reference(stream_id),
+    };
+    document.get_dictionary_mut(page_id).map_err(|error| error.to_string())?.set("Contents", contents);
+    Ok(())
+}
+
+fn add_resource(document: &mut Document, page_id: lopdf::ObjectId, category: &str, name: &str, value: Object) -> Result<(), String> {
+    let mut resources = inherited(document, page_id, b"Resources")?
+        .map(|value| value.as_dict().map(|dictionary| dictionary.clone()).map_err(|error| error.to_string()))
+        .transpose()?
+        .unwrap_or_default();
+    let mut entries = match resources.get(category.as_bytes()) {
+        Ok(value) => super::resolve(document, value).and_then(|value| value.as_dict().map(|dictionary| dictionary.clone()).map_err(|error| error.to_string()))?,
+        Err(_) => lopdf::Dictionary::new(),
+    };
+    entries.set(name, value);
+    resources.set(category, entries);
+    document.get_dictionary_mut(page_id).map_err(|error| error.to_string())?.set("Resources", Object::Dictionary(resources));
     Ok(())
 }
 
 fn add_font(document: &mut Document, page_id: lopdf::ObjectId, name: &str, font_id: lopdf::ObjectId) -> Result<(), String> {
-    let page = document.get_dictionary_mut(page_id).map_err(|error| error.to_string())?;
-    if !page.has(b"Resources") { page.set("Resources", Object::Dictionary(dictionary! {})); }
-    let resources = page.get_mut(b"Resources").map_err(|error| error.to_string())?.as_dict_mut().map_err(|error| error.to_string())?;
-    resources.set("Font", resources.get(b"Font").cloned().unwrap_or_else(|_| Object::Dictionary(dictionary! {})));
-    resources.get_mut(b"Font").map_err(|error| error.to_string())?.as_dict_mut().map_err(|error| error.to_string())?.set(name, font_id);
-    Ok(())
+    add_resource(document, page_id, "Font", name, Object::Reference(font_id))
 }
 
 fn add_xobject(document: &mut Document, page_id: lopdf::ObjectId, name: &str, image_id: lopdf::ObjectId) -> Result<(), String> {
-    let page = document.get_dictionary_mut(page_id).map_err(|error| error.to_string())?;
-    if !page.has(b"Resources") { page.set("Resources", Object::Dictionary(dictionary! {})); }
-    let resources = page.get_mut(b"Resources").map_err(|error| error.to_string())?.as_dict_mut().map_err(|error| error.to_string())?;
-    resources.set("XObject", resources.get(b"XObject").cloned().unwrap_or_else(|_| Object::Dictionary(dictionary! {})));
-    resources.get_mut(b"XObject").map_err(|error| error.to_string())?.as_dict_mut().map_err(|error| error.to_string())?.set(name, image_id);
-    Ok(())
+    add_resource(document, page_id, "XObject", name, Object::Reference(image_id))
 }
 
 fn add_ext_gstate(document: &mut Document, page_id: lopdf::ObjectId, name: &str, state_id: lopdf::ObjectId) -> Result<(), String> {
-    let page = document.get_dictionary_mut(page_id).map_err(|error| error.to_string())?;
-    if !page.has(b"Resources") { page.set("Resources", Object::Dictionary(dictionary! {})); }
-    let resources = page.get_mut(b"Resources").map_err(|error| error.to_string())?.as_dict_mut().map_err(|error| error.to_string())?;
-    resources.set("ExtGState", resources.get(b"ExtGState").cloned().unwrap_or_else(|_| Object::Dictionary(dictionary! {})));
-    resources.get_mut(b"ExtGState").map_err(|error| error.to_string())?.as_dict_mut().map_err(|error| error.to_string())?.set(name, state_id);
-    Ok(())
+    add_resource(document, page_id, "ExtGState", name, Object::Reference(state_id))
 }
 
 fn watermark_position(position: Option<&PdfOverlayPosition>, width: f32, height: f32) -> (f32, f32) {
@@ -1045,6 +1040,185 @@ mod session_tests {
         assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
         let _ = std::fs::remove_file(source);
         let _ = std::fs::remove_dir(output_dir);
+    }
+
+    #[test]
+    fn sign_appends_to_indirect_contents_and_preserves_the_prior_stream() {
+        let source = temp_path("indirect-contents-sign.pdf");
+        let output_dir = temp_path("indirect-contents-sign-output");
+        std::fs::create_dir_all(&output_dir).expect("output directory should be created");
+        make_pdf_with_pages(&source, 1);
+        let source_document = Document::load(&source).unwrap();
+        let source_page = source_document.get_pages().values().next().copied().unwrap();
+        let prior_contents = source_document.get_dictionary(source_page).unwrap().get(b"Contents").unwrap().as_reference().unwrap();
+
+        let outcome = sign(
+            &SignPdfRequest {
+                paths: vec![source.clone()],
+                page: 0,
+                text: "signed".to_string(),
+                signature_path: None,
+                rectangle: PdfRect { x: 10.0, y: 10.0, width: 100.0, height: 30.0 },
+                scope: PageScope::All,
+                output_location: editor_request_location(&output_dir),
+            },
+            source.clone(),
+        );
+
+        assert!(outcome.failure.is_none(), "sign failed: {:?}", outcome.failure);
+        let output = outcome.output_paths.first().expect("sign should produce an output");
+        let output_document = Document::load(output).unwrap();
+        let output_page = output_document.get_pages().values().next().copied().unwrap();
+        let contents = output_document.get_dictionary(output_page).unwrap().get(b"Contents").unwrap().as_array().unwrap();
+        assert_eq!(contents.first().unwrap().as_reference().unwrap(), prior_contents);
+        assert!(String::from_utf8_lossy(&output_document.get_page_content(output_page)).contains("source"));
+        assert!(String::from_utf8_lossy(&output_document.get_page_content(output_page)).contains("signed"));
+
+        let _ = std::fs::remove_file(source);
+        let _ = std::fs::remove_file(output);
+        let _ = std::fs::remove_dir(output_dir);
+    }
+
+    #[test]
+    fn overlays_clone_inherited_indirect_resources_before_adding_entries() {
+        let source = temp_path("inherited-resources.pdf");
+        let mut document = Document::with_version("1.7");
+        let pages_id = document.new_object_id();
+        let font_id = document.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Courier" });
+        let inherited_fonts = document.add_object(dictionary! { "F0" => font_id });
+        let existing_xobject = document.add_object(Object::Stream(lopdf::Stream::new(dictionary! {
+            "Type" => "XObject", "Subtype" => "Image", "Width" => 1, "Height" => 1,
+            "ColorSpace" => "DeviceRGB", "BitsPerComponent" => 8,
+        }, vec![0, 0, 0])));
+        let inherited_xobjects = document.add_object(dictionary! { "Existing" => existing_xobject });
+        let inherited_resources = document.add_object(dictionary! {
+            "Font" => inherited_fonts,
+            "XObject" => inherited_xobjects,
+        });
+        let content = document.add_object(Object::Stream(lopdf::Stream::new(dictionary! {}, b"BT /F0 12 Tf 10 10 Td (source) Tj ET".to_vec())));
+        let page_id = document.add_object(dictionary! {
+            "Type" => "Page", "Parent" => pages_id,
+            "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+            "Contents" => content,
+        });
+        document.objects.insert(pages_id, dictionary! {
+            "Type" => "Pages", "Kids" => vec![Object::Reference(page_id)], "Count" => 1,
+            "Resources" => inherited_resources,
+        }.into());
+        let catalog = document.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+        document.trailer.set("Root", catalog);
+
+        apply_overlay(&mut document, &[page_id], &PdfOverlay::PageNumbers {
+            start_number: Some(1), font_size: Some(12), position: None, pages: None,
+        }).unwrap();
+        apply_overlay(&mut document, &[page_id], &PdfOverlay::Edit {
+            mode: PdfEditMode::Shape, text: String::new(), pages: None,
+            rectangle: PdfRect { x: 10.0, y: 10.0, width: 20.0, height: 20.0 },
+        }).unwrap();
+        apply_overlay(&mut document, &[page_id], &PdfOverlay::Sign {
+            page: 0, text: "signed".to_string(), signature_path: None,
+            rectangle: PdfRect { x: 10.0, y: 40.0, width: 100.0, height: 30.0 }, scope: PageScope::All,
+        }).unwrap();
+        apply_overlay(&mut document, &[page_id], &PdfOverlay::Watermark {
+            text: "mark".to_string(), opacity: 50, position: None, logo_path: None, pages: None,
+        }).unwrap();
+        add_xobject(&mut document, page_id, "Added", existing_xobject).unwrap();
+
+        let page = document.get_dictionary(page_id).unwrap();
+        let resources = page.get(b"Resources").unwrap().as_dict().unwrap();
+        let fonts = resources.get(b"Font").unwrap().as_dict().unwrap();
+        assert!(fonts.has(b"F0"));
+        for name in [b"Fnum".as_slice(), b"Fedit", b"Fsig", b"Fwm"] { assert!(fonts.has(name), "missing font {name:?}"); }
+        let xobjects = resources.get(b"XObject").unwrap().as_dict().unwrap();
+        assert!(xobjects.has(b"Existing"));
+        assert!(xobjects.has(b"Added"));
+        assert!(resources.get(b"ExtGState").unwrap().as_dict().unwrap().has(b"GSwm"));
+
+        let _ = std::fs::remove_file(source);
+    }
+
+    #[test]
+    fn crop_clamps_all_existing_page_boxes_to_the_new_media_box() {
+        let source = temp_path("crop-box-family.pdf");
+        let output_dir = temp_path("crop-box-family-output");
+        std::fs::create_dir_all(&output_dir).unwrap();
+        make_pdf_with_pages(&source, 1);
+        let mut document = Document::load(&source).unwrap();
+        let page = document.get_pages().values().next().copied().unwrap();
+        document.get_dictionary_mut(page).unwrap().set("CropBox", vec![0.into(), 0.into(), 612.into(), 792.into()]);
+        document.get_dictionary_mut(page).unwrap().set("BleedBox", vec![0.into(), 0.into(), 612.into(), 792.into()]);
+        document.get_dictionary_mut(page).unwrap().set("TrimBox", vec![50.into(), 50.into(), 150.into(), 200.into()]);
+        document.get_dictionary_mut(page).unwrap().set("ArtBox", vec![500.into(), 700.into(), 700.into(), 900.into()]);
+        document.save(&source).unwrap();
+
+        let outcome = crop(&CropPdfRequest {
+            paths: vec![source.clone()],
+            rectangle: PdfRect { x: 100.0, y: 100.0, width: 200.0, height: 300.0 },
+            scope: PageScope::All,
+            output_location: editor_request_location(&output_dir),
+        }, source.clone());
+        assert!(outcome.failure.is_none(), "crop failed: {:?}", outcome.failure);
+        let output_document = Document::load(outcome.output_paths.first().unwrap()).unwrap();
+        let page = output_document.get_pages().values().next().copied().unwrap();
+        let page = output_document.get_dictionary(page).unwrap();
+        for key in [b"MediaBox".as_slice(), b"CropBox", b"BleedBox", b"ArtBox"] {
+            assert_eq!(page.get(key).unwrap().as_array().unwrap().iter().map(|value| value.as_i64().unwrap() as f32).collect::<Vec<_>>(), vec![100.0, 100.0, 300.0, 400.0]);
+        }
+        assert_eq!(page.get(b"TrimBox").unwrap().as_array().unwrap().iter().map(|value| value.as_i64().unwrap() as f32).collect::<Vec<_>>(), vec![100.0, 100.0, 150.0, 200.0]);
+
+        let _ = std::fs::remove_file(source);
+        let _ = std::fs::remove_file(outcome.output_paths.first().unwrap());
+        let _ = std::fs::remove_dir(output_dir);
+    }
+
+    #[test]
+    fn crop_rejects_internal_page_links_and_malformed_page_counts_before_output() {
+        for (name, action) in [("dest", false), ("action", true)] {
+            let source = temp_path(&format!("internal-link-{name}.pdf"));
+            let output_dir = temp_path(&format!("internal-link-{name}-output"));
+            std::fs::create_dir_all(&output_dir).unwrap();
+            make_pdf_with_pages(&source, 1);
+            let mut document = Document::load(&source).unwrap();
+            let page = document.get_pages().values().next().copied().unwrap();
+            let destination = vec![Object::Reference(page), Object::Name(b"Fit".to_vec())];
+            let annotation = if action {
+                document.add_object(dictionary! { "Type" => "Annot", "Subtype" => "Link", "Rect" => vec![0.into(), 0.into(), 10.into(), 10.into()], "A" => dictionary! { "S" => "GoTo", "D" => destination } })
+            } else {
+                document.add_object(dictionary! { "Type" => "Annot", "Subtype" => "Link", "Rect" => vec![0.into(), 0.into(), 10.into(), 10.into()], "Dest" => destination })
+            };
+            document.get_dictionary_mut(page).unwrap().set("Annots", vec![Object::Reference(annotation)]);
+            document.save(&source).unwrap();
+            let outcome = crop(&CropPdfRequest {
+                paths: vec![source.clone()], rectangle: PdfRect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 },
+                scope: PageScope::All, output_location: editor_request_location(&output_dir),
+            }, source.clone());
+            assert!(outcome.failure.as_ref().is_some_and(|error| error.message.contains("navigation")), "{name}: {:?}", outcome.failure);
+            assert!(outcome.output_paths.is_empty());
+            assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
+            let _ = std::fs::remove_file(source);
+            let _ = std::fs::remove_dir(output_dir);
+        }
+
+        for count in [-1, 2] {
+            let source = temp_path(&format!("malformed-count-{count}.pdf"));
+            let output_dir = temp_path(&format!("malformed-count-{count}-output"));
+            std::fs::create_dir_all(&output_dir).unwrap();
+            make_pdf_with_pages(&source, 1);
+            let mut document = Document::load(&source).unwrap();
+            let pages = document.trailer.get(b"Root").unwrap().as_reference().unwrap();
+            let pages = document.get_dictionary(pages).unwrap().get(b"Pages").unwrap().as_reference().unwrap();
+            document.get_dictionary_mut(pages).unwrap().set("Count", count);
+            document.save(&source).unwrap();
+            let outcome = crop(&CropPdfRequest {
+                paths: vec![source.clone()], rectangle: PdfRect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 },
+                scope: PageScope::All, output_location: editor_request_location(&output_dir),
+            }, source.clone());
+            assert!(outcome.failure.as_ref().is_some_and(|error| error.message.contains("page-tree")), "count {count}: {:?}", outcome.failure);
+            assert!(outcome.output_paths.is_empty());
+            assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
+            let _ = std::fs::remove_file(source);
+            let _ = std::fs::remove_dir(output_dir);
+        }
     }
 
     #[test]

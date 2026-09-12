@@ -6,6 +6,7 @@ use quick_xml::{events::Event, escape::unescape, Reader as XmlReader, XmlVersion
 use serde::{Deserialize, Serialize};
 use crate::kit::{common::{JobOutcome, OutputLocation, OutputNaming}, contracts::ToolError};
 use super::metadata::{PdfDocumentMetadata, PdfPageMetadata, PdfTextRun};
+use super::{inherited, resolve};
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Rect { pub x: f32, pub y: f32, pub width: f32, pub height: f32 }
@@ -57,23 +58,6 @@ pub struct ExportRequest { pub paths: Vec<PathBuf>, pub scene: PdfScene, pub out
 pub struct ScenePreview { pub data_url: String, pub width: u32, pub height: u32 }
 
 fn err(e: impl std::fmt::Display) -> String { e.to_string() }
-fn resolve<'a>(doc: &'a Document, mut value: &'a Object) -> Result<&'a Object, String> {
-    let mut seen = HashSet::new();
-    while let Object::Reference(id) = value {
-        if !seen.insert(*id) { return Err("Cyclic PDF reference".into()); }
-        value = doc.get_object(*id).map_err(err)?;
-    }
-    Ok(value)
-}
-fn inherited(doc: &Document, mut id: ObjectId, key: &[u8]) -> Result<Option<Object>, String> {
-    let mut seen = HashSet::new();
-    loop {
-        if !seen.insert(id) { return Err("Cyclic PDF page tree".into()); }
-        let d = doc.get_dictionary(id).map_err(err)?;
-        if let Ok(v) = d.get(key) { return Ok(Some(resolve(doc, v)?.clone())); }
-        match d.get(b"Parent") { Ok(v) => id = v.as_reference().map_err(err)?, Err(_) => return Ok(None) }
-    }
-}
 fn bounds(doc: &Document, v: &Object) -> Result<[f32;4], String> {
     let a = resolve(doc,v)?.as_array().map_err(err)?;
     if a.len()!=4 { return Err("Invalid page box".into()); }
@@ -441,9 +425,8 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
         if let Some(index) = source_index {
             let id = preflight.source_pages[index];
             let resources = scene_resources(&doc, id, xobjects, &fonts, states)?;
+            super::set_page_box_family(&mut doc, id, [0., 0., crop.width, crop.height], false)?;
             let page_dict = doc.get_dictionary_mut(id).map_err(err)?;
-            page_dict.set("MediaBox",array(&[0.,0.,crop.width,crop.height]));
-            page_dict.set("CropBox",array(&[0.,0.,crop.width,crop.height]));
             page_dict.set("Rotate",page.rotation.rem_euclid(360));
             page_dict.set("Resources",resources);
             page_dict.set("Contents",stream);
