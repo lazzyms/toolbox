@@ -77,6 +77,75 @@ test('highlight can convert a selected source-text range into highlights', async
   expect(scene.pages[0].objects[0]).toMatchObject({ kind: 'highlight', highlightMode: 'text-selection' });
 });
 
+test('text selection cancels on outside release and leaves later drawing usable', async ({ page }) => {
+  await openEditor(page);
+  await page.getByRole('button', { name: 'Highlight', exact: true }).click();
+  const text = page.locator('[data-text-run]').first();
+  const box = (await text.boundingBox())!;
+  await page.mouse.move(box.x + 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(5, 5, { steps: 4 });
+  await page.mouse.up();
+
+  await page.getByRole('button', { name: 'Text', exact: true }).click();
+  await dragOnCanvas(page, .2, .2);
+  const scene = await sceneFromExport(page);
+  expect(scene.pages[0].objects).toHaveLength(1);
+  expect(scene.pages[0].objects[0].kind).toBe('text');
+});
+
+test('text selection cancels on window blur and leaves later drawing usable', async ({ page }) => {
+  await openEditor(page);
+  await page.getByRole('button', { name: 'Highlight', exact: true }).click();
+  const text = page.locator('[data-text-run]').first();
+  const box = (await text.boundingBox())!;
+  await page.mouse.move(box.x + 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+  await page.mouse.up();
+
+  await page.getByRole('button', { name: 'Shape', exact: true }).click();
+  await dragOnCanvas(page, .25, .25);
+  const scene = await sceneFromExport(page);
+  expect(scene.pages[0].objects).toHaveLength(1);
+  expect(scene.pages[0].objects[0].kind).toBe('shape');
+});
+
+test('space-drag and middle-button pan leave rotated document coordinates unchanged', async ({ page }) => {
+  await openEditor(page);
+  await page.getByRole('button', { name: 'Text', exact: true }).click();
+  await dragOnCanvas(page, .2, .2);
+  await page.getByRole('button', { name: 'Zoom in', exact: true }).click();
+  await page.getByRole('button', { name: 'Zoom in', exact: true }).click();
+  await page.getByRole('button', { name: 'Zoom in', exact: true }).click();
+  await page.getByRole('button', { name: 'Zoom in', exact: true }).click();
+  await page.getByRole('button', { name: 'Rotate selected pages', exact: true }).click();
+  const beforePan = await sceneFromExport(page);
+  const host = page.locator('.scene-canvas');
+  const canvas = (await page.getByRole('group', { name: 'PDF page canvas' }).boundingBox())!;
+
+  await page.evaluate(() => document.querySelector<HTMLElement>('.scene-canvas')?.scrollTo(0, 0));
+  await page.mouse.move(canvas.x + canvas.width / 2, canvas.y + canvas.height / 2);
+  await page.mouse.down({ button: 'middle' });
+  await page.mouse.move(canvas.x + canvas.width / 2, canvas.y + canvas.height / 2 - 120, { steps: 6 });
+  await page.mouse.up({ button: 'middle' });
+  const afterMiddle = await host.evaluate((node) => ({ left: node.scrollLeft, top: node.scrollTop }));
+  expect(afterMiddle.top + afterMiddle.left).toBeGreaterThan(0);
+
+  await page.evaluate(() => document.querySelector<HTMLElement>('.scene-canvas')?.scrollTo(0, 0));
+  await page.keyboard.down(' ');
+  await page.mouse.move(canvas.x + canvas.width / 2, canvas.y + canvas.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(canvas.x + canvas.width / 2, canvas.y + canvas.height / 2 - 120, { steps: 6 });
+  await page.mouse.up();
+  await page.keyboard.up(' ');
+  const afterSpace = await host.evaluate((node) => ({ left: node.scrollLeft, top: node.scrollTop }));
+  expect(afterSpace.top + afterSpace.left).toBeGreaterThan(0);
+
+  const afterPan = await sceneFromExport(page);
+  expect(afterPan.pages[0].objects[0].rect).toEqual(beforePan.pages[0].objects[0].rect);
+});
+
 test('shape tool exposes every requested shape and arrow direction', async ({ page }) => {
   await openEditor(page);
   const variants = ['square', 'round', 'triangle', 'line', 'dotted-line', 'arrow-left', 'arrow-right', 'arrow-up', 'arrow-down'];
