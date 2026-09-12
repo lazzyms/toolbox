@@ -155,15 +155,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn publication_does_not_replace_a_competing_destination() {
+    fn publication_does_not_replace_a_competing_extracted_image_destination() {
         let root = std::env::temp_dir().join(format!("toolbox_output_reservation_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let input = root.join("source.txt");
         std::fs::write(&input, b"source").unwrap();
 
-        let reservation = OutputNaming::reserve_destination(&input, &OutputLocation::CustomFolder(root.clone()), "-copy", "txt").unwrap();
-        let destination = reservation.path.with_file_name("source-copy.txt");
+        let reservation = OutputNaming::reserve_destination(&input, &OutputLocation::CustomFolder(root.clone()), "-image-2-7", "jpg").unwrap();
+        let destination = reservation.destination_path().to_path_buf();
         let temporary = reservation.path().to_path_buf();
         std::fs::write(reservation.path(), b"operation bytes").unwrap();
         std::fs::write(&destination, b"competing bytes").unwrap();

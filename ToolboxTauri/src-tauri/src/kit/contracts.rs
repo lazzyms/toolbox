@@ -336,6 +336,17 @@ mod tests {
     }
 
     #[test]
+    fn images_to_pdf_rejects_tiff_at_the_native_boundary() {
+        for extension in ["tif", "tiff"] {
+            let outcomes = validate_command_inputs("images_to_pdf", &[PathBuf::from(format!("source.{extension}"))]).unwrap_err();
+
+            assert_eq!(outcomes.len(), 1);
+            assert!(outcomes[0].failure.as_ref().is_some_and(|error| matches!(error.kind, ErrorKind::InvalidInput)));
+            assert!(outcomes[0].failure.as_ref().is_some_and(|error| error.message.contains("Accepted extensions")));
+        }
+    }
+
+    #[test]
     fn capability_registry_keeps_valid_inputs_when_one_extension_is_rejected() {
         let paths = vec![PathBuf::from("source.png"), PathBuf::from("source.pdf")];
         let validation = partition_command_inputs("image_metadata", &paths).unwrap();
@@ -387,7 +398,9 @@ mod tests {
         assert_eq!(office.accepted_extensions, [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"]);
         let images = native_capability("images_to_pdf").unwrap();
         assert_eq!(images.input_cardinality, InputCardinality::Ordered);
-        assert!(images.accepted_extensions.contains(&".tiff".to_string()));
+        assert!(!images.accepted_extensions.contains(&".tif".to_string()));
+        assert!(!images.accepted_extensions.contains(&".tiff".to_string()));
+        assert!(!native_capability("extract_gif_frames").unwrap().supports_preview);
         let pdf = native_capability("pdf_to_text").unwrap();
         assert!(pdf.supports_page_selection && pdf.supports_preview);
         assert!(!native_capability("ocr_pdf").unwrap().native_available);

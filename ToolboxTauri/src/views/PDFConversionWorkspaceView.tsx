@@ -9,6 +9,12 @@ import type { AtomicToolId, ToolDefinition, ToolResult } from "../contracts";
 
 const conversionActions = toolsForWorkspaceId("pdf-convert");
 const conversionIds = new Set<string>(conversionActions.map((tool) => tool.id));
+const nonInspectingConversionIds = new Set(["images-to-pdf", "pdf-merge", "pdf-compress"]);
+type PdfInspectionState =
+  | { kind: "idle" }
+  | { kind: "pending"; path: string }
+  | { kind: "ready"; path: string }
+  | { kind: "error"; path: string };
 
 const formatPageRange = (pages: number[]) => {
   const oneBased = [...pages].sort((left, right) => left - right).map((page) => page + 1);
@@ -203,24 +209,35 @@ const ConversionControls = ({
   setInspectError,
 }: ConversionControlsProps) => {
   const inputPath = files[0];
+  const [inspection, setInspection] = useState<PdfInspectionState>({ kind: "idle" });
 
   useEffect(() => {
+    let current = true;
+    setDocument(null);
+    setSelectedPages([]);
+    setInspectError("");
     if (!inputPath) {
-      setDocument(null);
-      setSelectedPages([]);
+      setInspection({ kind: "idle" });
       return;
     }
-    if (["images-to-pdf", "pdf-merge", "pdf-compress"].includes(activeUtility.id)) return;
-    let current = true;
-    setInspectError("");
+    if (nonInspectingConversionIds.has(activeUtility.id)) {
+      setInspection({ kind: "idle" });
+      return () => {
+        current = false;
+      };
+    }
+    setInspection({ kind: "pending", path: inputPath });
     void invoke<PdfDocument>("inspect_pdf", { request: { path: inputPath } })
       .then((value) => {
         if (!current) return;
         setDocument(value);
         setSelectedPages(value.pages.map((page) => page.index));
+        setInspection({ kind: "ready", path: inputPath });
       })
       .catch((error) => {
-        if (current) setInspectError(String(error));
+        if (!current) return;
+        setInspectError(String(error));
+        setInspection({ kind: "error", path: inputPath });
       });
     return () => {
       current = false;
@@ -235,15 +252,18 @@ const ConversionControls = ({
     setPageRange(nextPages.length ? formatPageRange(nextPages) : "");
   };
 
-  const parsedSelection = document ? parsePageRange(pageRange, document.pages.length) : [];
+  const inspectedDocument = inspection.kind === "ready" && inspection.path === inputPath ? document : null;
+  const inspectionReady = inspection.kind === "ready" && inspection.path === inputPath && inspectedDocument !== null;
+  const parsedSelection = inspectedDocument ? parsePageRange(pageRange, inspectedDocument.pages.length) : [];
   const selectionIssue = Array.isArray(parsedSelection) ? null : parsedSelection;
-  const selectionCount = document ? selectedPages.length : 0;
+  const selectionCount = inspectedDocument ? selectedPages.length : 0;
   const needsPageSelection = activeUtility.capability.supportsPageSelection;
   const needsMultipleInputs = activeUtility.id === "pdf-merge";
   const rangeSelectionIssue = activeUtility.id === "pdf-split" && splitMode === "ranges" && !pageRange.trim()
     ? "Enter at least one page range to split by ranges."
     : null;
-  const canExport = files.length > 0 && (!needsMultipleInputs || files.length > 1) && rangeSelectionIssue === null;
+  const canExport = files.length > 0 && (!needsMultipleInputs || files.length > 1) && rangeSelectionIssue === null
+    && (nonInspectingConversionIds.has(activeUtility.id) || inspectionReady);
 
   return (
     <div className="workspace-control-panel">
@@ -259,9 +279,9 @@ const ConversionControls = ({
             <p className="workspace-panel-label">Page selection</p>
             <p className="workspace-panel-copy">Preview the source pages and choose exactly what this conversion should include.</p>
           </div>
-          {document ? (
+          {inspectedDocument ? (
             <div className="conversion-page-grid">
-              {document.pages.map((page) => (
+              {inspectedDocument.pages.map((page) => (
                 <label className="conversion-page-card" key={page.index}>
                   <input
                     type="checkbox"
@@ -275,9 +295,9 @@ const ConversionControls = ({
               ))}
             </div>
           ) : (
-            <p className="workspace-note">{inspectError || "Select a PDF to load its page previews."}</p>
+            <p className="workspace-note">{inspection.kind === "error" && inspection.path === inputPath ? inspectError : "Select a PDF to load its page previews."}</p>
           )}
-          {document && <p className="workspace-note">{selectionIssue?.message || selectedPageLabel(selectionCount)}</p>}
+          {inspectedDocument && <p className="workspace-note">{selectionIssue?.message || selectedPageLabel(selectionCount)}</p>}
         </section>
       )}
 
@@ -313,8 +333,8 @@ const ConversionControls = ({
               onChange={(event) => {
                 const value = event.target.value;
                 setPageRange(value);
-                if (!document) return;
-                const parsed = parsePageRange(value, document.pages.length);
+                if (!inspectedDocument) return;
+                const parsed = parsePageRange(value, inspectedDocument.pages.length);
                 setSelectedPages(Array.isArray(parsed) ? parsed : []);
               }}
               placeholder="All pages, or 1-3"
@@ -347,14 +367,14 @@ const ConversionControls = ({
       )}
       {rangeSelectionIssue && <p className="workspace-note" role="alert">{rangeSelectionIssue}</p>}
       {activeUtility.id === "pdf-extract-pages" && (
-        <label className="workspace-field"><span>Pages or ranges</span><input aria-label="Page numbers or ranges" value={pageRange} onChange={(event) => { const value = event.target.value; setPageRange(value); if (!document) return; const parsed = parsePageRange(value, document.pages.length); setSelectedPages(Array.isArray(parsed) ? parsed : []); }} placeholder="1-3, 7" /></label>
+        <label className="workspace-field"><span>Pages or ranges</span><input aria-label="Page numbers or ranges" value={pageRange} onChange={(event) => { const value = event.target.value; setPageRange(value); if (!inspectedDocument) return; const parsed = parsePageRange(value, inspectedDocument.pages.length); setSelectedPages(Array.isArray(parsed) ? parsed : []); }} placeholder="1-3, 7" /></label>
       )}
       {activeUtility.id === "pdf-compress" && (
         <label className="workspace-field"><span>Compression quality <output>{quality}%</output></span><input aria-label="PDF quality" type="range" min="1" max="100" value={quality} onChange={(event) => setQuality(Number(event.target.value))} /></label>
       )}
       <button
         type="button"
-        disabled={loading || !canExport || (needsPageSelection && (!document || selectionCount === 0 || selectionIssue !== null))}
+        disabled={loading || !canExport || (needsPageSelection && (!inspectedDocument || selectionCount === 0 || selectionIssue !== null))}
         onClick={run}
         className="workspace-primary-action"
         aria-label={`Export ${activeUtility.title}`}

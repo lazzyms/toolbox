@@ -419,29 +419,38 @@ pub fn extract_images(request: &PdfToTextRequest, input: PathBuf) -> JobOutcome 
         Ok(pages) => pages.into_iter().map(|page| page as usize).collect::<std::collections::HashSet<_>>(),
         Err(error) => return failure(input, error),
     };
-    let directory = match &request.output_location { OutputLocation::AlongsideInput => input.parent().unwrap_or_else(|| std::path::Path::new(".")), OutputLocation::CustomFolder(folder) => folder.as_path() };
-    let stem = input.file_stem().and_then(|value| value.to_str()).unwrap_or("output");
     let mut outputs = Vec::new();
     for (page_number, page_id) in document.get_pages() {
         if request.pages.is_some() && !selected.contains(&(page_number as usize)) { continue; }
-        let images = match document.get_page_images(page_id) { Ok(images) => images, Err(error) => return failure(input, error.to_string()) };
+        let images = match document.get_page_images(page_id) { Ok(images) => images, Err(error) => return extraction_failure(&input, &outputs, error.to_string()) };
         for (index, image) in images.iter().enumerate() {
             let Some(filters) = &image.filters else {
-                return failure(input, "PDF contains an embedded image with no supported filter; extraction stopped without a complete result.".to_string());
+                return extraction_failure(&input, &outputs, "PDF contains an embedded image with no supported filter; extraction stopped without a complete result.");
             };
             if filters.iter().any(|filter| filter != "DCTDecode") {
-                return failure(input, format!("PDF image on page {page_number} uses an unsupported filter; only original JPEG images can be extracted without recompression."));
+                return extraction_failure(&input, &outputs, format!("PDF image on page {page_number} uses an unsupported filter; only original JPEG images can be extracted without recompression."));
             }
-            let mut path = directory.join(format!("{stem}-image-{page_number}-{index}.jpg"));
-            let mut counter = 1;
-            while path.exists() { path = directory.join(format!("{stem}-image-{page_number}-{index}-{counter}.jpg")); counter += 1; }
-            if let Err(error) = fs::write(&path, image.content) {
-                return failure(input, format!("Could not write extracted image: {error}"));
+            let reservation = match OutputNaming::reserve_destination(&input, &request.output_location, &format!("-image-{page_number}-{index}"), "jpg") {
+                Ok(reservation) => reservation,
+                Err(error) => return extraction_failure(&input, &outputs, format!("Could not reserve extracted image output: {error}")),
+            };
+            if let Err(error) = fs::write(reservation.path(), image.content) {
+                return extraction_failure(&input, &outputs, format!("Could not write extracted image: {error}"));
             }
-            outputs.push(path);
+            match reservation.publish() {
+                Ok(path) => outputs.push(path),
+                Err(error) => return extraction_failure(&input, &outputs, format!("Could not publish extracted image: {error}")),
+            }
         }
     }
     if outputs.is_empty() { failure(input, "No embedded JPEG images were found. Non-JPEG PDF image filters are not extractable without recompression.".to_string()) } else { JobOutcome { input_path: input, output_paths: outputs, detail: "Embedded JPEG images extracted without recompression".to_string(), failure: None } }
+}
+
+fn extraction_failure(input: &Path, outputs: &[PathBuf], message: impl Into<String>) -> JobOutcome {
+    for output in outputs {
+        let _ = fs::remove_file(output);
+    }
+    failure(input.to_path_buf(), message.into())
 }
 
 fn selected_pdf_pages(document: &Document, requested: Option<&Vec<usize>>) -> Result<Vec<u32>, String> {

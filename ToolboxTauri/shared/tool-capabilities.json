@@ -21,7 +21,7 @@
   { "command": "pdf_to_images", "acceptedExtensions": [".pdf"], "inputCardinality": "multiple", "supportsPageSelection": true, "supportsPreview": true, "nativeAvailability": "available" },
   { "command": "pdf_to_text", "acceptedExtensions": [".pdf"], "inputCardinality": "multiple", "supportsPageSelection": true, "supportsPreview": true, "nativeAvailability": "available" },
   { "command": "extract_pdf_images", "acceptedExtensions": [".pdf"], "inputCardinality": "multiple", "supportsPageSelection": true, "supportsPreview": false, "nativeAvailability": "available" },
-  { "command": "images_to_pdf", "acceptedExtensions": [".png", ".jpg", ".jpeg", ".webp", ".heic", ".tif", ".tiff"], "inputCardinality": "ordered", "supportsPageSelection": false, "supportsPreview": false, "nativeAvailability": "available" },
+  { "command": "images_to_pdf", "acceptedExtensions": [".png", ".jpg", ".jpeg", ".webp", ".heic"], "inputCardinality": "ordered", "supportsPageSelection": false, "supportsPreview": false, "nativeAvailability": "available" },
   { "command": "ocr_pdf", "acceptedExtensions": [".pdf"], "inputCardinality": "single", "supportsPageSelection": true, "supportsPreview": false, "nativeAvailability": "unavailable" },
   { "command": "blur_faces", "acceptedExtensions": [".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif"], "inputCardinality": "single", "supportsPageSelection": false, "supportsPreview": false, "nativeAvailability": "unavailable" },
   { "command": "remove_image_background", "acceptedExtensions": [".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif"], "inputCardinality": "single", "supportsPageSelection": false, "supportsPreview": false, "nativeAvailability": "unavailable" },
@@ -32,7 +32,7 @@
   { "command": "watermark_images", "acceptedExtensions": [".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif"], "inputCardinality": "single", "supportsPageSelection": false, "supportsPreview": true, "nativeAvailability": "available" },
   { "command": "generate_icon_set", "acceptedExtensions": [".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif"], "inputCardinality": "single", "supportsPageSelection": false, "supportsPreview": true, "nativeAvailability": "available" },
   { "command": "create_gif", "acceptedExtensions": [".png", ".jpg", ".jpeg", ".webp"], "inputCardinality": "ordered", "supportsPageSelection": false, "supportsPreview": true, "nativeAvailability": "available" },
-  { "command": "extract_gif_frames", "acceptedExtensions": [".gif"], "inputCardinality": "single", "supportsPageSelection": false, "supportsPreview": true, "nativeAvailability": "available" },
+  { "command": "extract_gif_frames", "acceptedExtensions": [".gif"], "inputCardinality": "single", "supportsPageSelection": false, "supportsPreview": false, "nativeAvailability": "available" },
   { "command": "process_tiff_pages", "acceptedExtensions": [".tif", ".tiff"], "inputCardinality": "ordered", "supportsPageSelection": false, "supportsPreview": true, "nativeAvailability": "available" },
   { "command": "image_metadata", "acceptedExtensions": [".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif", ".tif", ".tiff"], "inputCardinality": "multiple", "supportsPageSelection": false, "supportsPreview": false, "nativeAvailability": "available" }
 ]

@@ -32,11 +32,12 @@ test("UI capabilities are the shared native contract facts", () => {
     ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
   ]);
   assert.deepEqual(capabilitiesByCommand.get("images_to_pdf")?.acceptedExtensions, [
-    ".png", ".jpg", ".jpeg", ".webp", ".heic", ".tif", ".tiff",
+    ".png", ".jpg", ".jpeg", ".webp", ".heic",
   ]);
   assert.equal(capabilitiesByCommand.get("pdf_to_text")?.supportsPageSelection, true);
   assert.equal(capabilitiesByCommand.get("create_gif")?.inputCardinality, "ordered");
   assert.equal(capabilitiesByCommand.get("create_gif")?.supportsPreview, true);
+  assert.equal(capabilitiesByCommand.get("extract_gif_frames")?.supportsPreview, false);
   assert.equal(capabilitiesByCommand.get("ocr_pdf")?.nativeAvailability, "unavailable");
   assert.equal(capabilitiesByCommand.get("blur_faces")?.nativeAvailability, "unavailable");
   assert.equal(capabilitiesByCommand.get("remove_image_background")?.nativeAvailability, "unavailable");

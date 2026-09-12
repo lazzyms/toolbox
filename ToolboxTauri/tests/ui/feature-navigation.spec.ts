@@ -17,6 +17,8 @@ type TestWindow = Window & {
     __toolboxInvocations?: Array<{ command: string; args: unknown }>;
     __toolboxProcessingResults?: MockOutcome[];
     __toolboxProcessingDelayMs?: number;
+    __toolboxInspectionDelayMs?: number;
+    __toolboxInspectionError?: string;
     __toolboxActionFailure?: { command: string; path: string; message: string; delayMs?: number };
     __toolboxSecondPick?: boolean;
     __toolboxDialogResults?: Array<string | string[] | null>;
@@ -57,7 +59,13 @@ test.beforeEach(async ({ page }) => {
                 }
 if (command === "preview_pdf_scene") return { dataUrl: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='612' height='792'/%3E", width: 612, height: 792 };
                 if (command === "inspect_pdf" || command === "inspect_pdf_scene") {
-                    return { pages: [{ index: 0, x: 0, y: 0, width: 612, height: 792, preview: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='612' height='792'%3E%3Crect width='100%25' height='100%25' fill='white'/%3E%3C/svg%3E" }] };
+                    const inspectionDelay = (window as TestWindow).__toolboxInspectionDelayMs;
+                    if (inspectionDelay) await new Promise((resolve) => window.setTimeout(resolve, inspectionDelay));
+                    const requestPath = (args as { request: { path: string } }).request.path;
+                    const inspectionError = (window as TestWindow).__toolboxInspectionError;
+                    if (inspectionError && requestPath.endsWith(".rejected.pdf")) throw inspectionError;
+                    const pageCount = requestPath.endsWith(".replacement.pdf") ? 2 : 1;
+                    return { pages: Array.from({ length: pageCount }, (_, index) => ({ index, x: 0, y: 0, width: 612, height: 792, preview: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='612' height='792'%3E%3Crect width='100%25' height='100%25' fill='white'/%3E%3C/svg%3E" })) };
                 }
                 if (command === "inspect_image_preview") {
                     return { width: 640, height: 480, dataUrl: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='640' height='480'%3E%3Crect width='100%25' height='100%25' fill='white'/%3E%3C/svg%3E" };
@@ -661,6 +669,45 @@ test("page-scoped actions disable export when the explicit selection is empty", 
     await expect(pageCheckbox).toBeChecked();
     await pageCheckbox.uncheck();
     await expect(page.getByRole("button", { name: "Export PDF to Text", exact: true })).toBeDisabled();
+});
+
+test("PDF replacement clears stale inspection state while inspection is pending or rejected", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Extract PDF Pages" }).click();
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await expect(page.getByRole("checkbox", { name: "Page 1" })).toBeChecked();
+    await expect(page.getByRole("button", { name: "Export Extract PDF Pages", exact: true })).toBeEnabled();
+
+    await page.evaluate(() => {
+        (window as TestWindow).__toolboxInspectionDelayMs = 250;
+        (window as TestWindow).__toolboxDialogResults = ["/local/document.replacement.pdf"];
+    });
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+
+    await expect(page.getByRole("checkbox", { name: "Page 1" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Export Extract PDF Pages", exact: true })).toBeDisabled();
+    await expect(page.getByRole("checkbox", { name: "Page 2" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Export Extract PDF Pages", exact: true })).toBeEnabled();
+
+    await page.evaluate(() => {
+        (window as TestWindow).__toolboxInspectionError = "inspection rejected";
+        (window as TestWindow).__toolboxDialogResults = ["/local/document.rejected.pdf"];
+    });
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+
+    await expect(page.getByRole("checkbox", { name: "Page 2" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Export Extract PDF Pages", exact: true })).toBeDisabled();
+    await expect(page.getByText("inspection rejected", { exact: true })).toBeVisible();
+});
+
+test("GIF extraction does not request a source preview", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Extract GIF Frames" }).click();
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await expect(page.getByLabel("Tool detail").getByRole("button", { name: "Frames", exact: true })).toBeEnabled();
+
+    const previewInvocations = await page.evaluate(() => (window as TestWindow).__toolboxInvocations?.filter(({ command }) => command === "inspect_image_preview") ?? []);
+    expect(previewInvocations).toHaveLength(0);
 });
 
 const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[number]) => {
