@@ -282,8 +282,38 @@ fn page_has_widget(document: &Document, page: ObjectId) -> Result<bool, String> 
     }).collect::<Result<Vec<_>, String>>().map(|values| values.into_iter().any(|value| value))
 }
 
+fn field_has_signature(document: &Document, value: &Object, seen: &mut HashSet<ObjectId>) -> Result<bool, String> {
+    let id = value.as_reference().map_err(err)?;
+    if !seen.insert(id) { return Err("Cyclic PDF form field tree".into()); }
+    let field = document.get_dictionary(id).map_err(err)?;
+    if field.get(b"FT").ok().and_then(|value| value.as_name().ok()) == Some(b"Sig") { return Ok(true); }
+    let Some(kids) = field.get(b"Kids").ok() else { return Ok(false); };
+    resolve(document, kids)?.as_array().map_err(err)?.iter().map(|kid| field_has_signature(document, kid, seen)).collect::<Result<Vec<_>, String>>().map(|values| values.into_iter().any(|value| value))
+}
+
+fn document_has_signature(document: &Document, catalog: ObjectId, pages: &[ObjectId]) -> Result<bool, String> {
+    if let Ok(acro_form) = document.get_dictionary(catalog).map_err(err)?.get(b"AcroForm") {
+        let acro_form = resolve(document, acro_form)?.as_dict().map_err(err)?;
+        if acro_form.get(b"SigFlags").ok().and_then(|value| value.as_i64().ok()).is_some_and(|flags| flags != 0) { return Ok(true); }
+        if let Some(fields) = acro_form.get(b"Fields").ok() {
+            let mut seen = HashSet::new();
+            if resolve(document, fields)?.as_array().map_err(err)?.iter().map(|field| field_has_signature(document, field, &mut seen)).collect::<Result<Vec<_>, String>>()?.into_iter().any(|value| value) { return Ok(true); }
+        }
+    }
+    pages.iter().map(|page| {
+        let Some(annotations) = document.get_dictionary(*page).map_err(err)?.get(b"Annots").ok() else { return Ok(false); };
+        resolve(document, annotations)?.as_array().map_err(err)?.iter().map(|annotation| {
+            let id = annotation.as_reference().map_err(err)?;
+            Ok(document.get_dictionary(id).map_err(err)?.get(b"FT").ok().and_then(|value| value.as_name().ok()) == Some(b"Sig"))
+        }).collect::<Result<Vec<_>, String>>().map(|values| values.into_iter().any(|value| value))
+    }).collect::<Result<Vec<_>, String>>().map(|values| values.into_iter().any(|value| value))
+}
+
 fn scene_preflight(document: &Document, scene: &PdfScene, source_pages: &[ObjectId]) -> Result<ScenePreflight, String> {
     let (catalog, pages_root) = catalog_and_pages_root(document)?;
+    if document_has_signature(document, catalog, source_pages)? {
+        return Err("Digitally signed PDFs cannot be edited because scene export would invalidate the signature; remove the signature or use an unsigned copy".into());
+    }
     let root = document.get_dictionary(pages_root).map_err(err)?;
     if root.get(b"Type").map_err(err)?.as_name().map_err(err)? != b"Pages" {
         return Err("PDF catalog has an unsupported page-tree root".into());
@@ -812,5 +842,23 @@ mod tests {
         assert!(result.failure.as_ref().is_some_and(|error| error.message.contains("annotation")));
         assert!(result.output_paths.is_empty());
         assert!(!input.with_file_name("annotated-edited-1.pdf").exists());
+    }
+    #[test]
+    fn scene_rejects_digitally_signed_pdf_before_output() {
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("signed.pdf"); fixture(&input);
+        let mut source=Document::load(&input).unwrap();
+        let signature=source.add_object(dictionary! {"Type"=>"Annot", "Subtype"=>"Widget", "FT"=>"Sig", "Rect"=>array(&[10.,10.,80.,30.])});
+        let acro_form=source.add_object(dictionary! {"Fields"=>vec![Object::Reference(signature)]});
+        let catalog_id=source.trailer.get(b"Root").unwrap().as_reference().unwrap();
+        source.get_dictionary_mut(catalog_id).unwrap().set("AcroForm",acro_form);
+        source.save(&input).unwrap();
+        let scene=PdfScene { pages:vec![
+            ScenePage {source_index:Some(0),width:300.,height:200.,rotation:0,crop:None,objects:vec![]},
+            ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0,crop:None,objects:vec![]},
+        ] };
+        let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
+        assert!(result.failure.as_ref().is_some_and(|error| error.message.contains("Digitally signed")));
+        assert!(result.output_paths.is_empty());
+        assert!(!input.with_file_name("signed-edited-1.pdf").exists());
     }
 }
