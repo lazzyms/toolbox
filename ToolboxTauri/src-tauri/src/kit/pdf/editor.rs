@@ -340,6 +340,7 @@ pub fn crop(request: &CropPdfRequest, input: PathBuf) -> JobOutcome {
 
 pub fn organize(request: &OrganizePdfRequest, input: PathBuf) -> JobOutcome {
     transform_pdf(input, &request.output_location, "-organized", |document, pages| {
+        let root = flat_page_tree_root(document, pages)?;
         validate_unique_page_refs("page order", &request.page_order, pages.len())?;
         validate_unique_page_refs("deleted pages", &request.delete_pages, pages.len())?;
         validate_unique_rotations(&request.rotate_pages, pages.len())?;
@@ -354,7 +355,6 @@ pub fn organize(request: &OrganizePdfRequest, input: PathBuf) -> JobOutcome {
             if !selected_set.contains(&index) { order.push(*page_id); }
             else if !deleted.contains(&index) { order.push(pages[selected_iter.next().ok_or("The selected organize scope could not be represented")?]); }
         }
-        let root = document.get_dictionary(pages[0]).map_err(|e| e.to_string())?.get(b"Parent").map_err(|e| e.to_string())?.as_reference().map_err(|e| e.to_string())?;
         for operation in &request.rotate_pages {
             if selected_set.contains(&operation.page) {
                 if let Some(page_id) = pages.get(operation.page).copied() {
@@ -370,6 +370,31 @@ pub fn organize(request: &OrganizePdfRequest, input: PathBuf) -> JobOutcome {
         root.set("Count", order.len() as i64);
         Ok(())
     })
+}
+
+fn flat_page_tree_root(document: &Document, pages: &[lopdf::ObjectId]) -> Result<lopdf::ObjectId, String> {
+    let unsupported = || "PDF uses a nested or unsupported page tree; organize was rejected before output".to_string();
+    let catalog = document.trailer.get(b"Root").map_err(|_| unsupported())?.as_reference().map_err(|_| unsupported())?;
+    let root = document.get_dictionary(catalog).map_err(|_| unsupported())?.get(b"Pages").map_err(|_| unsupported())?.as_reference().map_err(|_| unsupported())?;
+    let root_dictionary = document.get_dictionary(root).map_err(|_| unsupported())?;
+    if root_dictionary.get(b"Type").map_err(|_| unsupported())?.as_name().map_err(|_| unsupported())? != b"Pages" {
+        return Err(unsupported());
+    }
+    let kids = root_dictionary.get(b"Kids").map_err(|_| unsupported())?.as_array().map_err(|_| unsupported())?;
+    if kids.len() != pages.len() {
+        return Err(unsupported());
+    }
+    for (index, kid) in kids.iter().enumerate() {
+        let page_id = kid.as_reference().map_err(|_| unsupported())?;
+        let page = document.get_dictionary(page_id).map_err(|_| unsupported())?;
+        if page.get(b"Type").map_err(|_| unsupported())?.as_name().map_err(|_| unsupported())? != b"Page"
+            || page_id != pages[index]
+            || page.get(b"Parent").map_err(|_| unsupported())?.as_reference().map_err(|_| unsupported())? != root
+        {
+            return Err(unsupported());
+        }
+    }
+    Ok(root)
 }
 
 pub fn add_pages(request: &AddPdfPagesRequest, input: PathBuf) -> JobOutcome {
@@ -916,6 +941,28 @@ mod session_tests {
         document.save(path).expect("fixture PDF should save");
     }
 
+    fn make_nested_pdf(path: &Path) {
+        let mut document = Document::with_version("1.7");
+        let root = document.new_object_id();
+        let nested = document.new_object_id();
+        let content = document.add_object(Object::Stream(lopdf::Stream::new(dictionary! {}, Vec::new())));
+        let nested_page = document.add_object(dictionary! {
+            "Type" => "Page", "Parent" => nested, "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()], "Contents" => content,
+        });
+        let direct_page = document.add_object(dictionary! {
+            "Type" => "Page", "Parent" => root, "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()], "Contents" => content,
+        });
+        document.objects.insert(nested, dictionary! {
+            "Type" => "Pages", "Parent" => root, "Kids" => vec![Object::Reference(nested_page)], "Count" => 1,
+        }.into());
+        document.objects.insert(root, dictionary! {
+            "Type" => "Pages", "Kids" => vec![Object::Reference(nested), Object::Reference(direct_page)], "Count" => 2,
+        }.into());
+        let catalog = document.add_object(dictionary! { "Type" => "Catalog", "Pages" => root });
+        document.trailer.set("Root", catalog);
+        document.save(path).expect("nested fixture PDF should save");
+    }
+
     fn editor_request_location(folder: &Path) -> OutputLocation {
         OutputLocation::CustomFolder(folder.to_path_buf())
     }
@@ -1152,6 +1199,26 @@ mod session_tests {
 
         let _ = std::fs::remove_file(source);
         let _ = std::fs::remove_file(output);
+        let _ = std::fs::remove_dir(output_dir);
+    }
+
+    #[test]
+    fn organize_rejects_nested_page_tree_before_output() {
+        let source = temp_path("organize-nested.pdf");
+        let output_dir = temp_path("organize-nested-output");
+        std::fs::create_dir_all(&output_dir).expect("output directory should be created");
+        make_nested_pdf(&source);
+
+        let outcome = organize(&OrganizePdfRequest {
+            paths: vec![source.clone()], page_order: vec![], delete_pages: vec![], rotate_pages: vec![],
+            scope: PageScope::All, output_location: location(&output_dir),
+        }, source.clone());
+
+        assert!(outcome.failure.as_ref().is_some_and(|error| error.message.contains("nested or unsupported")), "{:?}", outcome.failure);
+        assert!(outcome.output_paths.is_empty());
+        assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
+
+        let _ = std::fs::remove_file(source);
         let _ = std::fs::remove_dir(output_dir);
     }
 }

@@ -1,6 +1,9 @@
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::io::Read;
+use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use image::GenericImageView;
@@ -137,21 +140,60 @@ fn render_ocr_page(renderer: &Path, input: &Path, workspace: &OcrWorkspace, page
     if result.status.success() && output.is_file() { Ok(output) } else { Err(stderr(result, "PDF renderer failed to render the selected OCR page.")) }
 }
 
+fn read_command_output<R: Read>(mut reader: R, stream: &'static str) -> Result<Vec<u8>, String> {
+    let mut output = Vec::new();
+    let mut buffer = [0; 8192];
+    loop {
+        let count = reader.read(&mut buffer).map_err(|error| format!("Could not read OCR helper {stream}: {error}"))?;
+        if count == 0 { return Ok(output); }
+        if output.len().saturating_add(count) > OCR_MAX_OUTPUT_BYTES {
+            return Err(format!("OCR helper {stream} output exceeds the 10 MiB limit."));
+        }
+        output.extend_from_slice(&buffer[..count]);
+    }
+}
+
+fn spawn_output_reader<R: Read + Send + 'static>(reader: R, stream: &'static str, failed: Arc<AtomicBool>) -> JoinHandle<Result<Vec<u8>, String>> {
+    thread::spawn(move || {
+        let result = read_command_output(reader, stream);
+        if result.is_err() { failed.store(true, Ordering::Release); }
+        result
+    })
+}
+
+fn join_output_reader(handle: JoinHandle<Result<Vec<u8>, String>>, stream: &'static str) -> Result<Vec<u8>, String> {
+    handle.join().map_err(|_| format!("OCR helper {stream} reader stopped unexpectedly."))?
+}
+
 fn run_command(mut command: Command) -> Result<std::process::Output, String> {
     let mut child = command.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()
         .map_err(|error| format!("Could not run OCR helper: {error}"))?;
+    let stdout = child.stdout.take().ok_or("OCR helper stdout was not captured.")?;
+    let stderr = child.stderr.take().ok_or("OCR helper stderr was not captured.")?;
+    let failed = Arc::new(AtomicBool::new(false));
+    let stdout_reader = spawn_output_reader(stdout, "stdout", Arc::clone(&failed));
+    let stderr_reader = spawn_output_reader(stderr, "stderr", Arc::clone(&failed));
     let started = Instant::now();
-    loop {
+    let mut timed_out = false;
+    let status = loop {
         match child.try_wait().map_err(|error| format!("Could not read OCR helper status: {error}"))? {
-            Some(_) => return child.wait_with_output().map_err(|error| format!("Could not collect OCR helper output: {error}")),
-            None if started.elapsed() >= OCR_TIMEOUT => {
+            Some(status) => break status,
+            None if failed.load(Ordering::Acquire) => {
                 let _ = child.kill();
-                let _ = child.wait();
-                return Err("OCR helper timed out after 120 seconds.".to_string());
+                break child.wait().map_err(|error| format!("Could not stop OCR helper: {error}"))?;
             }
-            None => std::thread::sleep(Duration::from_millis(50)),
+            None if started.elapsed() >= OCR_TIMEOUT => {
+                timed_out = true;
+                let _ = child.kill();
+                break child.wait().map_err(|error| format!("Could not stop OCR helper: {error}"))?;
+            }
+            None => thread::sleep(Duration::from_millis(50)),
         }
-    }
+    };
+    let stdout = join_output_reader(stdout_reader, "stdout")?;
+    let stderr = join_output_reader(stderr_reader, "stderr")?;
+    if timed_out { return Err("OCR helper timed out after 120 seconds.".to_string()); }
+    Ok(std::process::Output { status, stdout, stderr })
 }
 
 fn find_pdf_renderer() -> Result<PathBuf, String> {
@@ -262,11 +304,13 @@ fn stderr(result: std::process::Output, fallback: &str) -> String { String::from
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_ocr_text, ocr_pdf, validate_cutout, validate_face_blur, VisionRequest};
+    use super::{normalize_ocr_text, ocr_pdf, run_command, validate_cutout, validate_face_blur, VisionRequest};
     use image::{Rgba, RgbaImage};
     use lopdf::{dictionary, Document, Object, Stream};
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::process::Command;
+    use std::time::{Duration, Instant};
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
@@ -433,5 +477,17 @@ mod tests {
     #[test]
     fn normalizes_ocr_lines_without_reordering_them() {
         assert_eq!(normalize_ocr_text(b"  first   line\r\n\n second line  \n"), "first line\nsecond line");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_command_drains_large_helper_output_without_timeout() {
+        let started = Instant::now();
+        let mut command = Command::new("sh");
+        command.args(["-c", "head -c 131072 /dev/zero; head -c 131072 /dev/zero >&2"]);
+        let result = run_command(command).expect("large helper output should be drained");
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert_eq!(result.stdout.len(), 131072);
+        assert_eq!(result.stderr.len(), 131072);
     }
 }
