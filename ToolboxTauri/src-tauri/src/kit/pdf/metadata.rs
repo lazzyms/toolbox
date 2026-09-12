@@ -83,8 +83,8 @@ fn find_pdftoppm() -> Option<PathBuf> {
 }
 
 pub(crate) fn page_bounds(document: &Document, page_id: lopdf::ObjectId) -> Result<(f32, f32, f32, f32), String> {
-    let page = document.get_dictionary(page_id).map_err(|error| format!("Could not read PDF page: {error}"))?;
-    let media_box = page.get(b"MediaBox").map_err(|error| format!("PDF page has no media box: {error}"))?;
+    let media_box = super::inherited(document, page_id, b"MediaBox")?
+        .ok_or_else(|| "PDF page has no media box.".to_string())?;
     let values = media_box.as_array().map_err(|error| format!("PDF media box is invalid: {error}"))?;
     if values.len() != 4 {
         return Err("PDF media box must have four values.".to_string());
@@ -141,5 +141,23 @@ mod tests {
         assert_eq!((metadata.pages[0].width, metadata.pages[0].height), (612.0, 792.0));
         assert_eq!((metadata.pages[1].width, metadata.pages[1].height), (792.0, 612.0));
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn resolves_inherited_media_box_values() {
+        let mut document = Document::with_version("1.7");
+        let pages_id = document.new_object_id();
+        let page_id = document.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+        });
+        document.objects.insert(pages_id, Object::Dictionary(dictionary! {
+            "Type" => "Pages",
+            "Kids" => vec![Object::Reference(page_id)],
+            "Count" => 1,
+            "MediaBox" => vec![10.into(), 20.into(), 310.into(), 420.into()],
+        }));
+
+        assert_eq!(page_bounds(&document, page_id).unwrap(), (10.0, 20.0, 310.0, 420.0));
     }
 }

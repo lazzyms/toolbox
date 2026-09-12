@@ -11,11 +11,21 @@ use lopdf::Document;
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::ToolError;
+use crate::kit::pdf::metadata::page_bounds;
 use crate::kit::resources;
 
 const OCR_MAX_INPUT_BYTES: u64 = 100 * 1024 * 1024;
 const OCR_MAX_OUTPUT_BYTES: usize = 10 * 1024 * 1024;
+const OCR_RENDER_DPI: u32 = 200;
+const OCR_MAX_SINGLE_PIXELS: u64 = 40_000_000;
+const OCR_MAX_TOTAL_PIXELS: u64 = 120_000_000;
+const OCR_MAX_RENDERED_BYTES: u64 = 50 * 1024 * 1024;
 const OCR_TIMEOUT: Duration = Duration::from_secs(120);
+
+#[derive(Debug, Clone, Copy)]
+struct OcrPage {
+    number: u32,
+}
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -72,20 +82,47 @@ pub fn ocr_pdf(request: &VisionRequest, input: PathBuf) -> JobOutcome {
     }
 }
 
-fn selected_ocr_pages(input: &Path, requested: Option<&[usize]>) -> Result<Vec<u32>, String> {
+fn selected_ocr_pages(input: &Path, requested: Option<&[usize]>) -> Result<Vec<OcrPage>, String> {
     let document = Document::load(input).map_err(|error| format!("Could not inspect PDF for OCR: {error}"))?;
-    let pages = document.get_pages().keys().copied().collect::<Vec<_>>();
-    let Some(requested) = requested else {
-        return if pages.is_empty() { Err("PDF has no pages to OCR.".to_string()) } else { Ok(pages) };
-    };
-    if requested.is_empty() { return Err("Select at least one PDF page for OCR.".to_string()); }
-    let requested = requested.iter().map(|page| page.checked_add(1).and_then(|page| u32::try_from(page).ok())).collect::<Option<std::collections::HashSet<_>>>()
-        .ok_or_else(|| "Selected PDF pages are outside the document.".to_string())?;
-    if requested.iter().any(|page| !pages.contains(page)) {
-        return Err("Selected PDF pages are outside the document.".to_string());
+    let pages = document.get_pages();
+    if pages.is_empty() { return Err("PDF has no pages to OCR.".to_string()); }
+    let requested = requested.map(|pages| {
+        if pages.is_empty() { return Err("Select at least one PDF page for OCR.".to_string()); }
+        pages.iter().map(|page| page.checked_add(1).and_then(|page| u32::try_from(page).ok())).collect::<Option<std::collections::HashSet<_>>>()
+            .ok_or_else(|| "Selected PDF pages are outside the document.".to_string())
+    }).transpose()?;
+    if let Some(requested) = &requested {
+        if requested.iter().any(|page| !pages.contains_key(page)) {
+            return Err("Selected PDF pages are outside the document.".to_string());
+        }
     }
-    let selected = pages.into_iter().filter(|page| requested.contains(page)).collect::<Vec<_>>();
+    let mut total_pixels = 0u64;
+    let mut selected = Vec::new();
+    for (number, page_id) in pages {
+        if requested.as_ref().is_some_and(|requested| !requested.contains(&number)) { continue; }
+        let (left, bottom, right, top) = page_bounds(&document, page_id)?;
+        let width = right - left;
+        let height = top - bottom;
+        let pixels = rendered_pixels(width, height)?;
+        if pixels > OCR_MAX_SINGLE_PIXELS {
+            return Err("Selected PDF page exceeds the 40 million pixel OCR limit.".to_string());
+        }
+        total_pixels = total_pixels.checked_add(pixels).ok_or_else(|| "Selected PDF pages exceed the OCR pixel limit.".to_string())?;
+        if total_pixels > OCR_MAX_TOTAL_PIXELS {
+            return Err("Selected PDF pages exceed the 120 million pixel OCR limit.".to_string());
+        }
+        selected.push(OcrPage { number });
+    }
     if selected.is_empty() { Err("Select at least one PDF page for OCR.".to_string()) } else { Ok(selected) }
+}
+
+fn rendered_pixels(width: f32, height: f32) -> Result<u64, String> {
+    let width = (width / 72.0 * OCR_RENDER_DPI as f32).ceil();
+    let height = (height / 72.0 * OCR_RENDER_DPI as f32).ceil();
+    if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
+        return Err("Selected PDF page has invalid OCR dimensions.".to_string());
+    }
+    (width as u64).checked_mul(height as u64).ok_or_else(|| "Selected PDF pages exceed the OCR pixel limit.".to_string())
 }
 
 struct OcrWorkspace(PathBuf);
@@ -117,11 +154,11 @@ impl Drop for OcrWorkspace {
     fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
 }
 
-fn run_ocr(engine: &Path, renderer: &Path, input: &Path, pages: &[u32]) -> Result<Vec<u8>, String> {
+fn run_ocr(engine: &Path, renderer: &Path, input: &Path, pages: &[OcrPage]) -> Result<Vec<u8>, String> {
     run_ocr_until(engine, renderer, input, pages, Instant::now() + OCR_TIMEOUT)
 }
 
-fn run_ocr_until(engine: &Path, renderer: &Path, input: &Path, pages: &[u32], deadline: Instant) -> Result<Vec<u8>, String> {
+fn run_ocr_until(engine: &Path, renderer: &Path, input: &Path, pages: &[OcrPage], deadline: Instant) -> Result<Vec<u8>, String> {
     let workspace = OcrWorkspace::new()?;
     let result = (|| {
         let mut text = Vec::new();
@@ -143,15 +180,23 @@ fn run_ocr_until(engine: &Path, renderer: &Path, input: &Path, pages: &[u32], de
     result
 }
 
-fn render_ocr_page(renderer: &Path, input: &Path, workspace: &OcrWorkspace, page: u32, deadline: Instant) -> Result<PathBuf, String> {
-    let prefix = workspace.page_prefix(page);
+fn render_ocr_page(renderer: &Path, input: &Path, workspace: &OcrWorkspace, page: OcrPage, deadline: Instant) -> Result<PathBuf, String> {
+    let prefix = workspace.page_prefix(page.number);
     let output = prefix.with_extension("png");
     let result = run_command({
         let mut command = Command::new(renderer);
-        command.arg("-png").arg("-r").arg("200").arg("-f").arg(page.to_string()).arg("-l").arg(page.to_string()).arg("-singlefile").arg(input).arg(&prefix);
+        command.arg("-png").arg("-r").arg(OCR_RENDER_DPI.to_string()).arg("-f").arg(page.number.to_string()).arg("-l").arg(page.number.to_string()).arg("-singlefile").arg(input).arg(&prefix);
         command
     }, deadline)?;
-    if result.status.success() && output.is_file() { Ok(output) } else { Err(stderr(result, "PDF renderer failed to render the selected OCR page.")) }
+    if result.status.success() && output.is_file() {
+        let size = std::fs::metadata(&output).map_err(|error| format!("Could not inspect rendered OCR page: {error}"))?.len();
+        if size > OCR_MAX_RENDERED_BYTES {
+            return Err("Rendered OCR page exceeds the 50 MiB file-size limit.".to_string());
+        }
+        Ok(output)
+    } else {
+        Err(stderr(result, "PDF renderer failed to render the selected OCR page."))
+    }
 }
 
 fn read_command_output<R: Read>(mut reader: R, stream: &'static str) -> Result<Vec<u8>, String> {
@@ -378,9 +423,50 @@ mod tests {
         let input = path("selected-pages-scope.pdf");
         make_pdf(&input, 2);
 
-        assert_eq!(super::selected_ocr_pages(&input, Some(&[1, 0])).unwrap(), vec![1, 2]);
+        assert_eq!(super::selected_ocr_pages(&input, Some(&[1, 0])).unwrap().iter().map(|page| page.number).collect::<Vec<_>>(), vec![1, 2]);
         assert!(super::selected_ocr_pages(&input, Some(&[2])).is_err());
 
+        let _ = fs::remove_file(input);
+    }
+
+    #[test]
+    fn selected_ocr_pages_reject_excessive_render_pixels_before_starting_helpers() {
+        let input = path("oversized-page.pdf");
+        make_pdf(&input, 1);
+        let mut document = Document::load(&input).unwrap();
+        let page = document.get_pages().values().next().copied().unwrap();
+        let root = document.get_dictionary(page).unwrap().get(b"Parent").unwrap().as_reference().unwrap();
+        document.get_dictionary_mut(page).unwrap().remove(b"MediaBox");
+        document.get_dictionary_mut(root).unwrap().set("MediaBox", vec![0.into(), 0.into(), 14400.into(), 14400.into()]);
+        document.save(&input).unwrap();
+
+        let error = super::selected_ocr_pages(&input, None).unwrap_err();
+        assert!(error.contains("pixel"), "{error}");
+        let _ = fs::remove_file(input);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn oversized_rendered_page_is_rejected_before_ocr_runs() {
+        let renderer = path("oversized-renderer.sh");
+        let engine = path("oversized-engine.sh");
+        let input = path("oversized-render.pdf");
+        make_pdf(&input, 1);
+        fs::write(&renderer, format!("#!/bin/sh\ndd if=/dev/zero of=\"${{10}}.png\" bs=1 count=0 seek={} 2>/dev/null\n", super::OCR_MAX_RENDERED_BYTES + 1)).unwrap();
+        fs::write(&engine, "#!/bin/sh\nprintf 'ocr should not run\\n'\n").unwrap();
+        for helper in [&renderer, &engine] {
+            let mut permissions = fs::metadata(helper).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(helper, permissions).unwrap();
+        }
+        let workspace = super::OcrWorkspace::new().unwrap();
+        let result = super::render_ocr_page(&renderer, &input, &workspace, super::OcrPage { number: 1 }, Instant::now() + Duration::from_secs(5));
+        let error = result.unwrap_err();
+        assert!(error.contains("file-size limit"), "{error}");
+
+        drop(workspace);
+        let _ = fs::remove_file(renderer);
+        let _ = fs::remove_file(engine);
         let _ = fs::remove_file(input);
     }
 
@@ -542,7 +628,7 @@ mod tests {
         }
 
         let started = Instant::now();
-        let result = super::run_ocr_until(&engine, &renderer, &input, &[1, 2], Instant::now() + Duration::from_millis(300));
+        let result = super::run_ocr_until(&engine, &renderer, &input, &[super::OcrPage { number: 1 }, super::OcrPage { number: 2 }], Instant::now() + Duration::from_millis(300));
 
         assert_eq!(result.unwrap_err(), "OCR helper timed out after 120 seconds.");
         assert!(started.elapsed() < Duration::from_secs(1), "request deadline was not shared: {:?}", started.elapsed());
