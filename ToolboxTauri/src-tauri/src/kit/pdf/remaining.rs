@@ -10,6 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming, OutputReservation};
 use crate::kit::contracts::ToolError;
 use super::metadata::page_bounds;
+use super::mutation_preflight;
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -83,7 +84,10 @@ pub fn merge(request: &MergePdfRequest) -> JobOutcome {
     let mut expected_pages = 0usize;
     for path in &request.paths {
         if path.extension().and_then(|extension| extension.to_str()).is_none_or(|extension| !extension.eq_ignore_ascii_case("pdf")) { return failure(path.clone(), format!("Only PDF inputs can be merged: {}", path.display())); }
-        let document = match Document::load(path) { Ok(document) => document, Err(error) => return failure(path.clone(), format!("Could not read {}: {error}", path.display())) };
+        let document = match load_existing_document_for_mutation(path) {
+            Ok(document) => document,
+            Err(error) => return failure(path.clone(), format!("Could not read {}: {error}", path.display())),
+        };
         expected_pages += document.get_pages().len();
     }
     let output = match OutputNaming::reserve_destination(&first, &request.output_location, "-merged", "pdf") {
@@ -109,6 +113,9 @@ pub fn merge(request: &MergePdfRequest) -> JobOutcome {
 pub fn split(request: &PageSelectionRequest, input: PathBuf) -> JobOutcome {
     if let Err(error) = validate_split_request(request) {
         return JobOutcome::failure(input, ToolError::invalid_input(error));
+    }
+    if let Err(error) = load_existing_document_for_mutation(&input) {
+        return failure(input, error);
     }
     let location = &request.output_location;
     let Some(qpdf) = qpdf() else { return failure(input, "qpdf is required to split PDFs but was not found.".to_string()); };
@@ -543,13 +550,13 @@ pub fn watermark(request: &PageOverlayRequest, input: PathBuf) -> JobOutcome {
 }
 
 pub fn compress(request: &CompressPdfRequest, input: PathBuf) -> JobOutcome {
+    let source = match load_existing_document_for_mutation(&input) { Ok(document) => document, Err(error) => return failure(input, error) };
+    let page_count = source.get_pages().len();
+    let Some(qpdf) = qpdf() else { return failure(input, "qpdf is required to compress PDFs but was not found. Set TOOLBOX_QPDF_PATH or add qpdf to PATH.".to_string()); };
     let output = match OutputNaming::reserve_destination(&input, &request.output_location, "-compressed", "pdf") {
         Ok(output) => output,
         Err(error) => return failure(input, format!("Could not reserve compressed PDF output: {error}")),
     };
-    let source = match Document::load(&input) { Ok(document) => document, Err(error) => return failure(input, error.to_string()) };
-    let page_count = source.get_pages().len();
-    let Some(qpdf) = qpdf() else { return failure(input, "qpdf is required to compress PDFs but was not found. Set TOOLBOX_QPDF_PATH or add qpdf to PATH.".to_string()); };
     let quality = request.quality.clamp(1, 100);
     let level = ((100_u16.saturating_sub(quality as u16) * 8) / 99 + 1).to_string();
     let result = Command::new(qpdf).arg("--object-streams=generate").arg("--stream-data=compress").arg("--recompress-flate").arg(format!("--compression-level={level}")).arg(&input).arg(output.path()).output();
@@ -568,29 +575,29 @@ pub fn compress(request: &CompressPdfRequest, input: PathBuf) -> JobOutcome {
 }
 
 pub fn remove_pages(request: &PageSelectionRequest, input: PathBuf) -> JobOutcome {
-    let output = match OutputNaming::reserve_destination(&input, &request.output_location, "-pages-removed", "pdf") {
-        Ok(output) => output,
-        Err(error) => return failure(input, format!("Could not reserve page removal output: {error}")),
-    };
-    let mut document = match Document::load(&input) { Ok(document) => document, Err(error) => return failure(input, error.to_string()) };
+    let mut document = match load_existing_document_for_mutation(&input) { Ok(document) => document, Err(error) => return failure(input, error) };
     let pages = document.get_pages();
     let selected = match selected_page_indices(request, pages.len()) { Ok(selected) => selected, Err(error) => return failure(input, error) };
     let delete = selected.into_iter().map(|page| page as u32 + 1).collect::<Vec<_>>();
     if delete.len() >= pages.len() { return failure(input, "The output must keep at least one page.".to_string()); }
+    let output = match OutputNaming::reserve_destination(&input, &request.output_location, "-pages-removed", "pdf") {
+        Ok(output) => output,
+        Err(error) => return failure(input, format!("Could not reserve page removal output: {error}")),
+    };
     document.delete_pages(&delete);
     save(document, input, output, "PDF pages removed")
 }
 
 pub fn extract_pages(request: &PageSelectionRequest, input: PathBuf) -> JobOutcome {
-    let output = match OutputNaming::reserve_destination(&input, &request.output_location, "-extracted", "pdf") {
-        Ok(output) => output,
-        Err(error) => return failure(input, format!("Could not reserve page extraction output: {error}")),
-    };
-    let mut document = match Document::load(&input) { Ok(document) => document, Err(error) => return failure(input, error.to_string()) };
+    let mut document = match load_existing_document_for_mutation(&input) { Ok(document) => document, Err(error) => return failure(input, error) };
     let pages = document.get_pages();
     let keep = match selected_page_indices(request, pages.len()) { Ok(selected) => selected.into_iter().collect::<std::collections::BTreeSet<_>>(), Err(error) => return failure(input, error) };
     let delete = (0..pages.len()).filter(|page| !keep.contains(page)).map(|page| page as u32 + 1).collect::<Vec<_>>();
     if keep.is_empty() { return failure(input, "Select at least one page.".to_string()); }
+    let output = match OutputNaming::reserve_destination(&input, &request.output_location, "-extracted", "pdf") {
+        Ok(output) => output,
+        Err(error) => return failure(input, format!("Could not reserve page extraction output: {error}")),
+    };
     document.delete_pages(&delete);
     save(document, input, output, "PDF pages extracted")
 }
@@ -634,13 +641,13 @@ fn save(mut document: Document, input: PathBuf, output: OutputReservation, detai
 
 fn overlay<F>(request: &PageOverlayRequest, input: PathBuf, suffix: &str, content: F, opacity: u8) -> JobOutcome
 where F: Fn(usize, f32, f32) -> String {
+    let mut document = match load_existing_document_for_mutation(&input) { Ok(document) => document, Err(error) => return failure(input, error) };
+    if let Err(error) = validate_overlay_scope(request.pages.as_deref(), document.get_pages().len()) { return failure(input, error); }
     let output = match OutputNaming::reserve_destination(&input, &request.output_location, suffix, "pdf") {
         Ok(output) => output,
         Err(error) => return failure(input, format!("Could not reserve PDF overlay output: {error}")),
     };
-    let mut document = match Document::load(&input) { Ok(document) => document, Err(error) => return failure(input, error.to_string()) };
     let font_id = document.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
-    if let Err(error) = validate_overlay_scope(request.pages.as_deref(), document.get_pages().len()) { return failure(input, error); }
     let opacity_id = document.add_object(dictionary! { "Type" => "ExtGState", "ca" => opacity as f32 / 100.0, "CA" => opacity as f32 / 100.0 });
     for (number, page_id) in document.get_pages().values().copied().enumerate() {
         if request.pages.as_ref().is_some_and(|pages| !pages.contains(&number)) { continue; }
@@ -685,13 +692,13 @@ fn number_position(position: Option<&str>, width: f32, height: f32) -> (f32, f32
 }
 
 fn watermark_image(request: &PageOverlayRequest, input: PathBuf, logo: &PathBuf) -> JobOutcome {
+    let mut document = match load_existing_document_for_mutation(&input) { Ok(document) => document, Err(error) => return failure(input, error) };
+    if let Err(error) = validate_overlay_scope(request.pages.as_deref(), document.get_pages().len()) { return failure(input, error); }
+    let (bytes, width, height) = match image_as_jpeg(logo) { Ok(value) => value, Err(error) => return failure(input, error) };
     let output = match OutputNaming::reserve_destination(&input, &request.output_location, "-watermarked", "pdf") {
         Ok(output) => output,
         Err(error) => return failure(input, format!("Could not reserve watermarked PDF output: {error}")),
     };
-    let mut document = match Document::load(&input) { Ok(document) => document, Err(error) => return failure(input, error.to_string()) };
-    if let Err(error) = validate_overlay_scope(request.pages.as_deref(), document.get_pages().len()) { return failure(input, error); }
-    let (bytes, width, height) = match image_as_jpeg(logo) { Ok(value) => value, Err(error) => return failure(input, error) };
     let image_id = document.add_object(Stream::new(dictionary! { "Type" => "XObject", "Subtype" => "Image", "Width" => width as i64, "Height" => height as i64, "ColorSpace" => "DeviceRGB", "BitsPerComponent" => 8, "Filter" => "DCTDecode" }, bytes));
     let state_id = document.add_object(dictionary! { "Type" => "ExtGState", "ca" => request.opacity.clamp(1, 100) as f32 / 100.0, "CA" => request.opacity.clamp(1, 100) as f32 / 100.0 });
     for (number, page_id) in document.get_pages().values().copied().enumerate() {
@@ -721,6 +728,12 @@ fn validate_overlay_scope(pages: Option<&[usize]>, page_count: usize) -> Result<
         if pages.iter().any(|page| *page >= page_count) { return Err("A watermark page is outside the document.".to_string()); }
     }
     Ok(())
+}
+
+fn load_existing_document_for_mutation(input: &Path) -> Result<Document, String> {
+    let document = Document::load(input).map_err(|error| error.to_string())?;
+    mutation_preflight(&document, true, true)?;
+    Ok(document)
 }
 
 fn escape(text: &str) -> String { text.replace('\\', "\\\\").replace('(', "\\(").replace(')', "\\)") }
@@ -793,6 +806,83 @@ mod tests {
         let catalog_id = document.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
         document.trailer.set("Root", catalog_id);
         document.save(path).unwrap();
+    }
+
+    fn unsafe_mutation_fixture(path: &Path, kind: &str) {
+        split_fixture_pdf(&path.to_path_buf(), 2);
+        let mut document = Document::load(path).unwrap();
+        let catalog_id = document.trailer.get(b"Root").unwrap().as_reference().unwrap();
+        match kind {
+            "signed" => {
+                let signature = document.add_object(dictionary! { "Type" => "Sig" });
+                document.get_dictionary_mut(catalog_id).unwrap().set("Perms", dictionary! { "DocMDP" => signature });
+            }
+            "outline" => {
+                let outlines = document.add_object(dictionary! { "Type" => "Outlines", "Count" => 0 });
+                document.get_dictionary_mut(catalog_id).unwrap().set("Outlines", outlines);
+            }
+            "tagged" => {
+                let structure = document.add_object(dictionary! { "Type" => "StructTreeRoot", "K" => vec![] });
+                document.get_dictionary_mut(catalog_id).unwrap().set("StructTreeRoot", structure);
+            }
+            _ => panic!("unknown unsafe fixture kind: {kind}"),
+        }
+        document.save(path).unwrap();
+    }
+
+    #[test]
+    fn remaining_mutators_reject_unsafe_documents_before_reserving_output() {
+        for kind in ["signed", "outline", "tagged"] {
+            for operation in ["numbers", "watermark", "image-watermark", "compress", "remove", "extract"] {
+                let root = split_fixture_root(&format!("unsafe-{kind}-{operation}"));
+                let input = root.join("document.pdf");
+                let output = root.join("outputs");
+                fs::create_dir_all(&output).unwrap();
+                unsafe_mutation_fixture(&input, kind);
+                let output_location = OutputLocation::CustomFolder(output.clone());
+                let logo = root.join("logo.jpg");
+                if operation == "image-watermark" {
+                    let mut jpeg = Cursor::new(Vec::new());
+                    JpegEncoder::new(&mut jpeg).encode_image(&DynamicImage::ImageRgb8(image::RgbImage::from_pixel(1, 1, image::Rgb([255, 0, 0])))).unwrap();
+                    fs::write(&logo, jpeg.into_inner()).unwrap();
+                }
+                let outcome = match operation {
+                    "numbers" => add_page_numbers(&PageOverlayRequest {
+                        paths: vec![input.clone()], text: "1".to_string(), opacity: 100,
+                        position: None, logo_path: None, pages: None, start_number: None,
+                        font_size: None, output_location: output_location.clone(),
+                    }, input.clone()),
+                    "watermark" => watermark(&PageOverlayRequest {
+                        paths: vec![input.clone()], text: "TEST".to_string(), opacity: 70,
+                        position: None, logo_path: None, pages: None, start_number: None,
+                        font_size: None, output_location: output_location.clone(),
+                    }, input.clone()),
+                    "image-watermark" => watermark(&PageOverlayRequest {
+                        paths: vec![input.clone()], text: String::new(), opacity: 70,
+                        position: None, logo_path: Some(logo), pages: None, start_number: None,
+                        font_size: None, output_location: output_location.clone(),
+                    }, input.clone()),
+                    "compress" => compress(&CompressPdfRequest {
+                        paths: vec![input.clone()], quality: 80, output_location: output_location.clone(),
+                    }, input.clone()),
+                    "remove" => {
+                        let mut request = request(None, vec![0]);
+                        request.output_location = output_location.clone();
+                        remove_pages(&request, input.clone())
+                    }
+                    "extract" => {
+                        let mut request = request(None, vec![0]);
+                        request.output_location = output_location;
+                        extract_pages(&request, input.clone())
+                    }
+                    _ => unreachable!(),
+                };
+                assert!(outcome.failure.is_some(), "{kind} {operation}: {:?}", outcome.failure);
+                assert!(outcome.output_paths.is_empty());
+                assert_eq!(fs::read_dir(output).unwrap().count(), 0, "{kind} {operation}");
+                fs::remove_dir_all(root).unwrap();
+            }
+        }
     }
 
     #[cfg(unix)]

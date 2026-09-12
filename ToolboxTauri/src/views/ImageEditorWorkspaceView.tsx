@@ -389,6 +389,28 @@ const ImageEditorControls = ({
   const previousInputPath = useRef<string | undefined>(undefined);
   const previewStageRef = useRef<HTMLDivElement>(null);
   const dragOffset = useRef<{ x: number; y: number } | null>(null);
+  const activePointerId = useRef<number | null>(null);
+
+  const clearImageDrag = () => {
+    const pointerId = activePointerId.current;
+    activePointerId.current = null;
+    dragOffset.current = null;
+    const stage = previewStageRef.current;
+    if (pointerId !== null && stage?.hasPointerCapture(pointerId)) stage.releasePointerCapture(pointerId);
+  };
+
+  useEffect(() => {
+    const clear = () => clearImageDrag();
+    window.addEventListener("pointerup", clear);
+    window.addEventListener("pointercancel", clear);
+    window.addEventListener("blur", clear);
+    return () => {
+      window.removeEventListener("pointerup", clear);
+      window.removeEventListener("pointercancel", clear);
+      window.removeEventListener("blur", clear);
+      clearImageDrag();
+    };
+  }, []);
 
   useEffect(() => {
     if (previousInputPath.current !== undefined && previousInputPath.current !== inputPath) onReset();
@@ -469,12 +491,13 @@ const ImageEditorControls = ({
     dragOffset.current = utility.id === "crop"
       ? { x: point.x - cropX, y: point.y - cropY }
       : { x: 0, y: 0 };
+    activePointerId.current = event.pointerId;
     event.currentTarget.setPointerCapture(event.pointerId);
     event.preventDefault();
   };
   const moveImageDrag = (event: React.PointerEvent<HTMLDivElement>) => {
     const interactionPreview = utility.id === "crop" ? sourcePreview : resultPreview ?? sourcePreview;
-    if (!dragOffset.current || !interactionPreview) return;
+    if (activePointerId.current !== event.pointerId || !dragOffset.current || !interactionPreview) return;
     const point = pointInPreview(event);
     if (!point) return;
     if (utility.id === "crop") {
@@ -486,8 +509,7 @@ const ImageEditorControls = ({
     }
   };
   const endImageDrag = (event: React.PointerEvent<HTMLDivElement>) => {
-    dragOffset.current = null;
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    if (activePointerId.current === event.pointerId) clearImageDrag();
   };
   const interactionPreview = utility.id === "crop" ? sourcePreview : resultPreview ?? sourcePreview;
   const cropRect = utility.id === "crop" && sourcePreview

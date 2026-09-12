@@ -304,7 +304,7 @@ fn scene_preflight(document: &Document, scene: &PdfScene, source_pages: &[Object
             let output_crop = page.crop.as_ref().map(|crop| (crop.width, crop.height)).unwrap_or((page.width, page.height));
             let source_box_matches_output = geometry.bbox[0].abs() <= 0.1 && geometry.bbox[1].abs() <= 0.1 && (geometry.bbox[2] - geometry.bbox[0] - output_crop.0).abs() <= 0.1 && (geometry.bbox[3] - geometry.bbox[1] - output_crop.1).abs() <= 0.1;
             let changes_page_coordinates = page.crop.is_some() || !source_box_matches_output || (page.width - geometry.width).abs() > 0.1 || (page.height - geometry.height).abs() > 0.1 || page.rotation.rem_euclid(360) != source_rotation;
-            navigation_geometry_edit |= page.crop.is_some() || page.rotation.rem_euclid(360) != source_rotation;
+            navigation_geometry_edit |= changes_page_coordinates;
             if has_annotations && changes_page_coordinates {
                 return Err("This PDF page has annotations or form widgets and the requested crop or rotation would change their coordinates; scene export was rejected before output".into());
             }
@@ -748,6 +748,9 @@ mod tests {
         let temp=TempDir::new().unwrap(); let input=temp.0.join("structured.pdf"); fixture(&input);
         let mut source=Document::load(&input).unwrap();
         let pages:Vec<_>=source.get_pages().values().copied().collect();
+        source.get_dictionary_mut(pages[0]).unwrap().set("MediaBox", array(&[0.,0.,200.,300.]));
+        source.get_dictionary_mut(pages[0]).unwrap().set("CropBox", array(&[0.,0.,200.,300.]));
+        source.get_dictionary_mut(pages[0]).unwrap().set("Rotate", 0);
         let annotation=source.add_object(dictionary! {"Type"=>"Annot", "Subtype"=>"Link", "Rect"=>array(&[20.,20.,80.,50.]), "A"=>dictionary! {"S"=>"URI", "URI"=>"https://example.invalid"}});
         let widget=source.add_object(dictionary! {"Type"=>"Annot", "Subtype"=>"Widget", "FT"=>"Tx", "Rect"=>array(&[90.,20.,180.,50.])});
         source.get_dictionary_mut(pages[1]).unwrap().set("Annots",vec![Object::Reference(annotation),Object::Reference(widget)]);
@@ -761,7 +764,7 @@ mod tests {
         catalog.set("Metadata",metadata); catalog.set("Names",names); catalog.set("Outlines",outlines); catalog.set("StructTreeRoot",structure); catalog.set("AcroForm",acro_form);
         source.save(&input).unwrap();
         let original=fs::read(&input).unwrap();
-        let scene=PdfScene { pages: pages.iter().enumerate().map(|(index,_)| ScenePage { source_index:Some(index), width:if index==0 {300.} else {612.}, height:if index==0 {200.} else {792.}, rotation:if index==0 {90} else {0}, crop:None, objects:vec![] }).collect() };
+        let scene=PdfScene { pages: pages.iter().enumerate().map(|(index,_)| ScenePage { source_index:Some(index), width:if index==0 {200.} else {612.}, height:if index==0 {300.} else {792.}, rotation:0, crop:None, objects:vec![] }).collect() };
         let composed=compose(&input,&scene).unwrap();
         let catalog=composed.get_dictionary(catalog_id).unwrap();
         for key in [b"Metadata".as_slice(),b"Names",b"Outlines",b"StructTreeRoot",b"AcroForm"] { assert!(catalog.has(key),"catalog lost {key:?}"); }
@@ -852,6 +855,26 @@ mod tests {
         assert!(result.failure.as_ref().is_some_and(|error| error.message.contains("destinations")), "{:?}", result.failure);
         assert!(result.output_paths.is_empty());
         assert!(!input.with_file_name("navigation-edited-1.pdf").exists());
+    }
+
+    #[test]
+    fn scene_rejects_navigation_when_page_box_origin_changes_coordinates() {
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("box-origin-navigation.pdf"); fixture(&input);
+        let mut source=Document::load(&input).unwrap();
+        let outlines=source.add_object(dictionary! {"Type"=>"Outlines", "Count"=>0});
+        let pages:Vec<_>=source.get_pages().values().copied().collect();
+        source.get_dictionary_mut(pages[0]).unwrap().set("Rotate", 0);
+        let catalog_id=source.trailer.get(b"Root").unwrap().as_reference().unwrap();
+        source.get_dictionary_mut(catalog_id).unwrap().set("Outlines", outlines);
+        source.save(&input).unwrap();
+        let scene=PdfScene { pages:vec![
+            ScenePage {source_index:Some(0),width:200.,height:300.,rotation:0,crop:None,objects:vec![]},
+            ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0,crop:None,objects:vec![]},
+        ] };
+        let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
+        assert!(result.failure.as_ref().is_some_and(|error| error.message.contains("destinations")), "{result:?}");
+        assert!(result.output_paths.is_empty());
+        assert!(!input.with_file_name("box-origin-navigation-edited-1.pdf").exists());
     }
     #[test]
     fn scene_rejects_tagged_page_removal_before_output() {
