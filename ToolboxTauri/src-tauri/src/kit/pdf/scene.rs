@@ -4,7 +4,7 @@ use flate2::{write::ZlibEncoder, Compression};
 use lopdf::{dictionary, Document, Object, ObjectId, Stream};
 use quick_xml::{events::Event, escape::unescape, Reader as XmlReader, XmlVersion};
 use serde::{Deserialize, Serialize};
-use crate::kit::{common::{JobOutcome, OutputLocation}, contracts::ToolError};
+use crate::kit::{common::{JobOutcome, OutputLocation, OutputNaming}, contracts::ToolError};
 use super::metadata::{PdfDocumentMetadata, PdfPageMetadata, PdfTextRun};
 
 #[derive(Clone, Debug, Deserialize)]
@@ -482,15 +482,14 @@ pub fn export(request:&ExportRequest,input:PathBuf)->JobOutcome {
         let parent=input.parent().ok_or("Input has no parent directory")?;
         let stem=input.file_stem().ok_or("Input has no filename")?.to_string_lossy();
         for n in 1..=10000 {
-            let path=parent.join(format!("{stem}-edited-{n}.pdf"));
-            match OpenOptions::new().write(true).create_new(true).open(&path) {
-                Ok(mut file)=>{
-                    if let Err(e)=file.write_all(&bytes).and_then(|_|file.sync_all()) { drop(file); let _=fs::remove_file(&path); return Err(err(e)); }
-                    return Ok(path);
-                },
-                Err(e) if e.kind()==std::io::ErrorKind::AlreadyExists=>continue,
-                Err(e)=>return Err(err(e)),
-            }
+            let candidate=parent.join(format!("{stem}-edited-{n}.pdf"));
+            let reservation=match OutputNaming::reserve_named_candidate(&candidate).map_err(err)? {
+                Some(reservation)=>reservation,
+                None=>continue,
+            };
+            let mut file=OpenOptions::new().write(true).open(reservation.path()).map_err(err)?;
+            file.write_all(&bytes).and_then(|_|file.sync_all()).map_err(err)?;
+            return reservation.publish().map_err(err);
         } Err("Could not reserve a unique export filename".into())
     })();
     match result { Ok(path)=>JobOutcome{input_path:input,output_paths:vec![path],detail:"PDF scene exported".into(),failure:None},Err(e)=>JobOutcome::failure(input,ToolError::processing(e)) }
@@ -499,6 +498,7 @@ pub fn export(request:&ExportRequest,input:PathBuf)->JobOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kit::common::OutputNaming;
 
     fn fixture(path: &Path) {
         let mut d = Document::with_version("1.7");
@@ -557,6 +557,17 @@ mod tests {
         assert_ne!(a.output_paths,b.output_paths); assert_ne!(a.output_paths[0],input);
         assert_eq!(fs::read(&input).unwrap(),original); assert_eq!(fs::read(occupied).unwrap(),b"existing output");
         assert_eq!(Document::load(&a.output_paths[0]).unwrap().get_pages().len(),3);
+    }
+    #[test]
+    fn scene_reservation_does_not_replace_a_competing_destination() {
+        let temp=TempDir::new().unwrap();
+        let candidate=temp.0.join("source-edited-1.pdf");
+        let reservation=OutputNaming::reserve_named_candidate(&candidate).unwrap().unwrap();
+        fs::write(reservation.path(),b"scene bytes").unwrap();
+        fs::write(&candidate,b"competing replacement").unwrap();
+
+        assert!(reservation.publish().is_err());
+        assert_eq!(fs::read(candidate).unwrap(),b"competing replacement");
     }
     #[test]
     fn validation_fails_closed_before_writing_outputs() {

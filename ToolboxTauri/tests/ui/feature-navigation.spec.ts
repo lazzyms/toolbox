@@ -17,8 +17,11 @@ type TestWindow = Window & {
     __toolboxInvocations?: Array<{ command: string; args: unknown }>;
     __toolboxProcessingResults?: MockOutcome[];
     __toolboxProcessingDelayMs?: number;
+    __toolboxInspectionDelayMs?: number;
+    __toolboxInspectionError?: string;
     __toolboxActionFailure?: { command: string; path: string; message: string; delayMs?: number };
     __toolboxSecondPick?: boolean;
+    __toolboxDialogResults?: Array<string | string[] | null>;
 };
 
 test.beforeEach(async ({ page }) => {
@@ -36,6 +39,8 @@ test.beforeEach(async ({ page }) => {
                 invocations.push({ command, args });
 
                 if (command === "plugin:dialog|open") {
+                    const dialogResults = (window as TestWindow).__toolboxDialogResults;
+                    if (dialogResults?.length) return dialogResults.shift() ?? null;
                     if ((window as TestWindow).__toolboxSecondPick) {
                         delete (window as TestWindow).__toolboxSecondPick;
                         return `${fixturePath}.second.pdf`;
@@ -54,7 +59,13 @@ test.beforeEach(async ({ page }) => {
                 }
 if (command === "preview_pdf_scene") return { dataUrl: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='612' height='792'/%3E", width: 612, height: 792 };
                 if (command === "inspect_pdf" || command === "inspect_pdf_scene") {
-                    return { pages: [{ index: 0, x: 0, y: 0, width: 612, height: 792, preview: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='612' height='792'%3E%3Crect width='100%25' height='100%25' fill='white'/%3E%3C/svg%3E" }] };
+                    const inspectionDelay = (window as TestWindow).__toolboxInspectionDelayMs;
+                    if (inspectionDelay) await new Promise((resolve) => window.setTimeout(resolve, inspectionDelay));
+                    const requestPath = (args as { request: { path: string } }).request.path;
+                    const inspectionError = (window as TestWindow).__toolboxInspectionError;
+                    if (inspectionError && requestPath.endsWith(".rejected.pdf")) throw inspectionError;
+                    const pageCount = requestPath.endsWith(".replacement.pdf") ? 2 : 1;
+                    return { pages: Array.from({ length: pageCount }, (_, index) => ({ index, x: 0, y: 0, width: 612, height: 792, preview: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='612' height='792'%3E%3Crect width='100%25' height='100%25' fill='white'/%3E%3C/svg%3E" })) };
                 }
                 if (command === "inspect_image_preview") {
                     return { width: 640, height: 480, dataUrl: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='640' height='480'%3E%3Crect width='100%25' height='100%25' fill='white'/%3E%3C/svg%3E" };
@@ -455,12 +466,28 @@ test("PDF conversion exposes page selection and an output preview", async ({ pag
     await expect(page.locator(".workspace-primary-action")).toBeDisabled();
 });
 
+test("PDF range splitting rejects a blank range and accepts a range", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open PDF to Images" }).click();
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await page.getByRole("toolbar", { name: "PDF conversion tools" }).getByRole("button", { name: "Split PDF" }).click();
+    await page.getByLabel("Split mode").selectOption("ranges");
+
+    await expect(page.getByRole("alert")).toHaveText("Enter at least one page range to split by ranges.");
+    await expect(page.getByRole("button", { name: "Export Split PDF" })).toBeDisabled();
+
+    await page.getByRole("textbox", { name: "Page ranges" }).fill("1");
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Export Split PDF" })).toBeEnabled();
+});
+
 test("media and security workspaces expose ordered inputs and format boundaries", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Open Create GIF" }).click();
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await expect(page.getByRole("region", { name: "Frame order" })).toBeVisible();
     await expect(page.locator(".media-frame-preview")).toBeVisible();
+    await expect.poll(async () => page.evaluate(() => (window as TestWindow).__toolboxInvocations?.filter(({ command }) => command === "inspect_image_preview").length ?? 0)).toBe(1);
     await expect(page.getByRole("button", { name: "Move selected file up" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Move selected file down" })).toBeVisible();
 
@@ -593,6 +620,94 @@ test("output action state resets and ignores stale completions", async ({ page }
     await page.waitForTimeout(200);
     await expect(page.getByText("Stale action failure", { exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Open file" })).toBeEnabled();
+});
+
+test("single-input actions report every selected file instead of truncating the selection", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Merge PDF" }).click();
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await page.evaluate(() => { (window as TestWindow).__toolboxSecondPick = true; });
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await page.getByRole("button", { name: "Compress PDF", exact: true }).click();
+
+    const exportButton = page.getByRole("button", { name: "Export Compress PDF", exact: true });
+    await expect(exportButton).toBeEnabled();
+    await exportButton.click();
+
+    await expect(page.getByText("2 of 2 files failed", { exact: true })).toBeVisible();
+    const processingInvocations = await page.evaluate(() =>
+        ((window as TestWindow).__toolboxInvocations ?? []).filter(({ command }) => command === "compress_pdf"),
+    );
+    expect(processingInvocations).toHaveLength(0);
+    await expect(page.getByText("This action accepts one input file, but 2 were selected.", { exact: true })).toHaveCount(2);
+});
+
+test("single-input replacement keeps the source and edit state after cancellation or the same path", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Crop PDF" }).click();
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await drawSceneMark(page, "Crop");
+    await expect(page.getByRole("button", { name: "Reset edits" })).toBeEnabled();
+
+    await page.evaluate((path) => { (window as TestWindow).__toolboxDialogResults = [null, path]; }, fixturePath);
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await expect(page.locator(".file-selection-count")).toHaveText("1 file open");
+    await expect(page.getByText(fixtureName, { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Reset edits" })).toBeEnabled();
+
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await expect(page.locator(".file-selection-count")).toHaveText("1 file open");
+    await expect(page.getByText(fixtureName, { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Reset edits" })).toBeEnabled();
+});
+
+test("page-scoped actions disable export when the explicit selection is empty", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open PDF to Text" }).click();
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    const pageCheckbox = page.getByRole("checkbox", { name: "Page 1" });
+    await expect(pageCheckbox).toBeChecked();
+    await pageCheckbox.uncheck();
+    await expect(page.getByRole("button", { name: "Export PDF to Text", exact: true })).toBeDisabled();
+});
+
+test("PDF replacement clears stale inspection state while inspection is pending or rejected", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Extract PDF Pages" }).click();
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await expect(page.getByRole("checkbox", { name: "Page 1" })).toBeChecked();
+    await expect(page.getByRole("button", { name: "Export Extract PDF Pages", exact: true })).toBeEnabled();
+
+    await page.evaluate(() => {
+        (window as TestWindow).__toolboxInspectionDelayMs = 250;
+        (window as TestWindow).__toolboxDialogResults = ["/local/document.replacement.pdf"];
+    });
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+
+    await expect(page.getByRole("checkbox", { name: "Page 1" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Export Extract PDF Pages", exact: true })).toBeDisabled();
+    await expect(page.getByRole("checkbox", { name: "Page 2" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Export Extract PDF Pages", exact: true })).toBeEnabled();
+
+    await page.evaluate(() => {
+        (window as TestWindow).__toolboxInspectionError = "inspection rejected";
+        (window as TestWindow).__toolboxDialogResults = ["/local/document.rejected.pdf"];
+    });
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+
+    await expect(page.getByRole("checkbox", { name: "Page 2" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Export Extract PDF Pages", exact: true })).toBeDisabled();
+    await expect(page.getByText("inspection rejected", { exact: true })).toBeVisible();
+});
+
+test("GIF extraction does not request a source preview", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Extract GIF Frames" }).click();
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await expect(page.getByLabel("Tool detail").getByRole("button", { name: "Frames", exact: true })).toBeEnabled();
+
+    const previewInvocations = await page.evaluate(() => (window as TestWindow).__toolboxInvocations?.filter(({ command }) => command === "inspect_image_preview") ?? []);
+    expect(previewInvocations).toHaveLength(0);
 });
 
 const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[number]) => {

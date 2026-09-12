@@ -468,7 +468,7 @@ export const MainPage = () => {
 };
 
 const ViewFor = ({ utility }: { utility: ToolDefinition }) => {
-  if (utility.status === "unavailable") {
+  if (utility.capability.nativeAvailability === "unavailable") {
     return <UnavailableToolView utility={utility} />;
   }
   const workspace = workspaceForTool(utility.id);

@@ -424,11 +424,7 @@ pub fn add_pages(request: &AddPdfPagesRequest, input: PathBuf) -> JobOutcome {
 pub fn sign(request: &SignPdfRequest, input: PathBuf) -> JobOutcome {
     transform_pdf(input, &request.output_location, "-signed", |document, pages| {
         validate_rect(&request.rectangle)?;
-        let targets = match &request.scope {
-            PageScope::All => (0..pages.len()).collect::<Vec<_>>(),
-            PageScope::Selected { pages: selected } => selected.iter().copied().filter(|page| *page < pages.len()).collect(),
-        };
-        if targets.is_empty() { return Err("Select at least one page for the signature.".to_string()); }
+        let targets = scoped_indices(&request.scope, pages.len())?;
         if request.page >= pages.len() { return Err("Signature page is outside the document.".to_string()); }
         let stream = format!("BT /Fsig 24 Tf {} {} Td ({}) Tj ET", request.rectangle.x, request.rectangle.y, escape_text(&request.text));
         for page_index in targets {
@@ -471,8 +467,7 @@ pub fn edit(request: &EditPdfRequest, input: PathBuf) -> JobOutcome {
     transform_pdf(input, &request.output_location, "-edited", |document, pages| {
         validate_rect(&request.rectangle)?;
         if request.mode != "shape" && request.text.trim().is_empty() { return Err("Text is required for this edit mode.".to_string()); }
-        let targets = request.pages.as_ref().map(|selected| selected.iter().copied().filter(|page| *page < pages.len()).collect()).unwrap_or_else(|| (0..pages.len()).collect::<Vec<_>>());
-        if targets.is_empty() { return Err("Select at least one page for the edit.".to_string()); }
+        let targets = optional_indices(&request.pages, pages.len(), "edit pages")?;
         let font_id = document.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
         let content = if request.mode == "shape" {
             format!("q 0 0 0 RG 1 w {} {} {} {} re S Q", request.rectangle.x, request.rectangle.y, request.rectangle.width, request.rectangle.height)
@@ -500,7 +495,10 @@ pub fn edit(request: &EditPdfRequest, input: PathBuf) -> JobOutcome {
 }
 
 pub fn apply_session(request: &PdfEditSessionRequest, input: PathBuf) -> JobOutcome {
-    let output = OutputNaming::get_destination(&input, &request.output_location, "-edited", "pdf");
+    let output = match OutputNaming::reserve_destination(&input, &request.output_location, "-edited", "pdf") {
+        Ok(output) => output,
+        Err(error) => return failure(input, format!("Could not reserve PDF edit output: {error}")),
+    };
     let mut document = match Document::load(&input) {
         Ok(document) => document,
         Err(error) => return failure(input, error.to_string()),
@@ -527,12 +525,15 @@ pub fn apply_session(request: &PdfEditSessionRequest, input: PathBuf) -> JobOutc
             return failure(input, error);
         }
     }
-    match document.save(&output) {
-        Ok(_) => JobOutcome {
-            input_path: input,
-            output_paths: vec![output],
-            detail: "PDF edit session saved".to_string(),
-            failure: None,
+    match document.save(output.path()) {
+        Ok(_) => match output.publish() {
+            Ok(path) => JobOutcome {
+                input_path: input,
+                output_paths: vec![path],
+                detail: "PDF edit session saved".to_string(),
+                failure: None,
+            },
+            Err(error) => failure(input, format!("Could not publish PDF edit output: {error}")),
         },
         Err(error) => failure(input, format!("Save failed: {error}")),
     }
@@ -815,12 +816,21 @@ fn page_number_position(position: Option<&PdfOverlayPosition>, width: f32, heigh
 
 fn transform_pdf<F>(input: PathBuf, location: &OutputLocation, suffix: &str, edit: F) -> JobOutcome
 where F: FnOnce(&mut Document, &[lopdf::ObjectId]) -> Result<(), String> {
-    let output = OutputNaming::get_destination(&input, location, suffix, "pdf");
+    let output = match OutputNaming::reserve_destination(&input, location, suffix, "pdf") {
+        Ok(output) => output,
+        Err(error) => return failure(input, format!("Could not reserve PDF output: {error}")),
+    };
     let mut document = match Document::load(&input) { Ok(document) => document, Err(error) => return failure(input, error.to_string()) };
     let pages: Vec<_> = document.get_pages().values().copied().collect();
     if pages.is_empty() { return failure(input, "PDF has no pages".to_string()); }
     if let Err(error) = edit(&mut document, &pages) { return failure(input, error); }
-    match document.save(&output) { Ok(_) => JobOutcome { input_path: input, output_paths: vec![output], detail: "PDF saved".to_string(), failure: None }, Err(error) => failure(input, format!("Save failed: {error}")) }
+    match document.save(output.path()) {
+        Ok(_) => match output.publish() {
+            Ok(path) => JobOutcome { input_path: input, output_paths: vec![path], detail: "PDF saved".to_string(), failure: None },
+            Err(error) => failure(input, format!("Could not publish PDF output: {error}")),
+        },
+        Err(error) => failure(input, format!("Save failed: {error}")),
+    }
 }
 
 fn selected_pages(scope: &PageScope, count: usize) -> impl Fn(usize) -> bool + '_ {
@@ -860,6 +870,10 @@ mod session_tests {
     }
 
     fn make_pdf(path: &Path) {
+        make_pdf_with_pages(path, 2);
+    }
+
+    fn make_pdf_with_pages(path: &Path, page_count: usize) {
         let mut document = Document::with_version("1.7");
         let pages_id = document.new_object_id();
         let font_id = document.add_object(dictionary! {
@@ -872,7 +886,7 @@ mod session_tests {
             b"BT /F0 12 Tf 36 720 Td (source) Tj ET".to_vec(),
         )));
         let mut kids = Vec::new();
-        for _ in 0..2 {
+        for _ in 0..page_count {
             let page_id = document.add_object(dictionary! {
                 "Type" => "Page",
                 "Parent" => pages_id,
@@ -885,11 +899,109 @@ mod session_tests {
         document.objects.insert(pages_id, dictionary! {
             "Type" => "Pages",
             "Kids" => kids,
-            "Count" => 2,
+            "Count" => page_count as i64,
         }.into());
         let catalog_id = document.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
         document.trailer.set("Root", catalog_id);
         document.save(path).expect("fixture PDF should save");
+    }
+
+    fn editor_request_location(folder: &Path) -> OutputLocation {
+        OutputLocation::CustomFolder(folder.to_path_buf())
+    }
+
+    #[test]
+    fn sign_rejects_a_mixed_valid_and_out_of_bounds_scope_without_writing() {
+        let source = temp_path("sign-invalid-scope.pdf");
+        let output_dir = temp_path("sign-invalid-scope-output");
+        std::fs::create_dir_all(&output_dir).expect("output directory should be created");
+        make_pdf_with_pages(&source, 1);
+        let source_bytes = std::fs::read(&source).expect("source should be readable");
+        let outcome = sign(
+            &SignPdfRequest {
+                paths: vec![source.clone()],
+                page: 0,
+                text: "signed".to_string(),
+                signature_path: None,
+                rectangle: PdfRect { x: 10.0, y: 10.0, width: 100.0, height: 30.0 },
+                scope: PageScope::Selected { pages: vec![0, 99] },
+                output_location: editor_request_location(&output_dir),
+            },
+            source.clone(),
+        );
+
+        assert!(outcome.failure.is_some());
+        assert!(outcome.output_paths.is_empty());
+        assert_eq!(std::fs::read(&source).unwrap(), source_bytes);
+        assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
+        let _ = std::fs::remove_file(source);
+        let _ = std::fs::remove_dir(output_dir);
+    }
+
+    #[test]
+    fn edit_rejects_a_mixed_valid_and_out_of_bounds_selection_without_writing() {
+        let source = temp_path("edit-invalid-selection.pdf");
+        let output_dir = temp_path("edit-invalid-selection-output");
+        std::fs::create_dir_all(&output_dir).expect("output directory should be created");
+        make_pdf_with_pages(&source, 1);
+        let source_bytes = std::fs::read(&source).expect("source should be readable");
+        let outcome = edit(
+            &EditPdfRequest {
+                paths: vec![source.clone()],
+                mode: "shape".to_string(),
+                text: String::new(),
+                pages: Some(vec![0, 99]),
+                rectangle: PdfRect { x: 10.0, y: 10.0, width: 100.0, height: 30.0 },
+                output_location: editor_request_location(&output_dir),
+            },
+            source.clone(),
+        );
+
+        assert!(outcome.failure.is_some());
+        assert!(outcome.output_paths.is_empty());
+        assert_eq!(std::fs::read(&source).unwrap(), source_bytes);
+        assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
+        let _ = std::fs::remove_file(source);
+        let _ = std::fs::remove_dir(output_dir);
+    }
+
+    #[test]
+    fn sign_and_edit_reject_empty_page_selections_without_writing() {
+        let source = temp_path("empty-selection.pdf");
+        let output_dir = temp_path("empty-selection-output");
+        std::fs::create_dir_all(&output_dir).expect("output directory should be created");
+        make_pdf_with_pages(&source, 1);
+        let source_bytes = std::fs::read(&source).expect("source should be readable");
+        let sign_outcome = sign(
+            &SignPdfRequest {
+                paths: vec![source.clone()],
+                page: 0,
+                text: "signed".to_string(),
+                signature_path: None,
+                rectangle: PdfRect { x: 10.0, y: 10.0, width: 100.0, height: 30.0 },
+                scope: PageScope::Selected { pages: vec![] },
+                output_location: editor_request_location(&output_dir),
+            },
+            source.clone(),
+        );
+        let edit_outcome = edit(
+            &EditPdfRequest {
+                paths: vec![source.clone()],
+                mode: "shape".to_string(),
+                text: String::new(),
+                pages: Some(vec![]),
+                rectangle: PdfRect { x: 10.0, y: 10.0, width: 100.0, height: 30.0 },
+                output_location: editor_request_location(&output_dir),
+            },
+            source.clone(),
+        );
+
+        assert!(sign_outcome.failure.is_some());
+        assert!(edit_outcome.failure.is_some());
+        assert_eq!(std::fs::read(&source).unwrap(), source_bytes);
+        assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
+        let _ = std::fs::remove_file(source);
+        let _ = std::fs::remove_dir(output_dir);
     }
 
     #[test]

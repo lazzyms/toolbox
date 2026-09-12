@@ -43,14 +43,16 @@ export type WorkspaceId =
   | "image-editor"
   | "media-tools";
 
-export type ToolInputMode = "multiple" | "single" | "ordered";
+export type ToolInputCardinality = "single" | "multiple" | "ordered";
 
-export type ToolExecutionMode = "batch" | "aggregate" | "inspect" | "unavailable";
+export type NativeAvailability = "available" | "unavailable";
 
-export interface ToolActionPolicy {
-  inputMode: ToolInputMode;
-  execution: ToolExecutionMode;
-  acceptedExtensions?: readonly string[];
+export interface ToolCapability {
+  acceptedExtensions: readonly string[];
+  inputCardinality: ToolInputCardinality;
+  supportsPageSelection: boolean;
+  supportsPreview: boolean;
+  nativeAvailability: NativeAvailability;
 }
 
 export type OutputLocation = "alongsideInput" | { customFolder: string };
@@ -100,12 +102,21 @@ export interface ToolError {
   message: string;
 }
 
-export interface JobOutcome {
+export interface SuccessfulJobOutcome {
   inputPath: string;
   outputPaths: string[];
   detail: string;
-  failure: ToolError | null;
+  failure: null;
 }
+
+export interface FailedJobOutcome {
+  inputPath: string;
+  outputPaths: string[];
+  detail: string;
+  failure: ToolError;
+}
+
+export type JobOutcome = SuccessfulJobOutcome | FailedJobOutcome;
 
 export type ToolResult = JobOutcome[];
 
@@ -129,6 +140,7 @@ export interface ToolDefinition {
   tint: string;
   category: ToolCategory;
   status: ToolStatus;
+  capability: ToolCapability;
   command: ToolCommand;
   verification: string;
   view:
