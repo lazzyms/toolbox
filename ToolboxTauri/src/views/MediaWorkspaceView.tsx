@@ -6,11 +6,15 @@ import { toolsForWorkspaceId, UtilityRegistry } from "../registry";
 import type { AtomicToolId, ImagePreview, ToolDefinition, ToolResult } from "../contracts";
 
 type TiffFrame = { key: string; path: string; page: number; preview: ImagePreview };
-type TiffInspection =
+export type TiffInspection =
   | { kind: "idle" }
   | { kind: "loading"; key: string }
   | { kind: "ready"; key: string; frames: TiffFrame[] }
   | { kind: "error"; key: string; message: string };
+
+export const tiffInspectionKey = (files: string[]) => files.join("\u0000");
+export const isCurrentTiffInspection = (inspection: TiffInspection, files: string[]): inspection is Extract<TiffInspection, { kind: "ready" }> =>
+  inspection.kind === "ready" && inspection.key === tiffInspectionKey(files);
 
 const mediaActions = toolsForWorkspaceId("media-tools");
 const mediaIds = new Set<string>(mediaActions.map((tool) => tool.id));
@@ -75,7 +79,7 @@ export const MediaWorkspaceView = ({ utility }: { utility: ToolDefinition }) => 
           return invoke<ToolResult>("process_tiff_pages", {
             request: {
               paths,
-              pages: tiffInspection.kind === "ready"
+              pages: isCurrentTiffInspection(tiffInspection, paths)
                 ? tiffInspection.frames.map(({ path, page }) => ({ path, page }))
                 : [],
               outputLocation: "alongsideInput",
@@ -165,7 +169,7 @@ export const MediaWorkspaceView = ({ utility }: { utility: ToolDefinition }) => 
             </>
           )}
 
-          <button type="button" disabled={loading || files.length === 0 || (activeUtility.id === "tiff-pages" && tiffInspection.kind !== "ready") || (activeUtility.id === "image-metadata" && metadataMode === "inspect")} onClick={run} className="workspace-primary-action">
+          <button type="button" disabled={loading || files.length === 0 || (activeUtility.id === "tiff-pages" && !isCurrentTiffInspection(tiffInspection, files)) || (activeUtility.id === "image-metadata" && metadataMode === "inspect")} onClick={run} className="workspace-primary-action">
             {activeUtility.id === "image-metadata" ? "Remove metadata" : activeUtility.shortTitle}
           </button>
         </div>
@@ -192,7 +196,7 @@ const MediaFrameOrder = ({
   moveTiffFrame: (delta: -1 | 1) => void;
 }) => {
   const [previews, setPreviews] = useState<Record<string, ImagePreview | null>>({});
-  const frameKey = files.join("\u0000");
+  const frameKey = tiffInspectionKey(files);
   const isTiff = activeUtility.id === "tiff-pages";
 
   useEffect(() => {
@@ -244,7 +248,7 @@ const MediaFrameOrder = ({
     };
   }, [files, frameKey, isTiff, selectIndex]);
 
-  const tiffFrames = tiffInspection.kind === "ready" && tiffInspection.key === frameKey ? tiffInspection.frames : [];
+  const tiffFrames = isCurrentTiffInspection(tiffInspection, files) ? tiffInspection.frames : [];
 
   return (
     <section className="media-frame-order" role="region" aria-label="Frame order">

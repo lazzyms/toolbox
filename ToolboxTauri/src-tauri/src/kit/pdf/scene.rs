@@ -318,6 +318,24 @@ fn scene_preflight(document: &Document, scene: &PdfScene, source_pages: &[Object
 fn same_box(left: [f32; 4], right: [f32; 4]) -> bool { left.iter().zip(right).all(|(left, right)| (*left - right).abs() <= 0.1) }
 fn same_rect(left: &Rect, right: &Rect) -> bool { same_box([left.x, left.y, left.x + left.width, left.y + left.height], [right.x, right.y, right.x + right.width, right.y + right.height]) }
 
+fn is_identity_scene(document: &Document, scene: &PdfScene, source_pages: &[ObjectId]) -> Result<bool, String> {
+    if scene.pages.len() != source_pages.len() { return Ok(false); }
+    for (index, page) in scene.pages.iter().enumerate() {
+        if page.source_index != Some(index) || !page.objects.is_empty() || page.rotation.rem_euclid(360) != 0 { return Ok(false); }
+        dimensions(page.width, page.height)?;
+        let source = source_pages[index];
+        let geometry = geometry(document, source)?;
+        if (page.width - geometry.width).abs() > 0.1 || (page.height - geometry.height).abs() > 0.1 { return Ok(false); }
+        let full_page = Rect { x: 0., y: 0., width: page.width, height: page.height };
+        if let Some(crop) = &page.crop {
+            valid_rect(crop)?;
+            if crop.x < 0. || crop.y < 0. || crop.x + crop.width > page.width + 0.01 || crop.y + crop.height > page.height + 0.01 { return Err("Crop is outside the page".into()); }
+            if !same_rect(crop, &full_page) { return Ok(false); }
+        }
+    }
+    Ok(true)
+}
+
 fn scene_resources(document: &Document, page_id: ObjectId, xobjects: lopdf::Dictionary, fonts: &HashMap<&'static str, ObjectId>, states: lopdf::Dictionary) -> Result<lopdf::Dictionary, String> {
     let mut resources = match inherited(document, page_id, b"Resources")? {
         Some(value) => value.as_dict().map_err(err)?.clone(),
@@ -340,6 +358,7 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
     let mut doc=load(path)?;
     let sources:Vec<_>=doc.get_pages().values().copied().collect();
     let preflight = scene_preflight(&doc, scene, &sources)?;
+    if is_identity_scene(&doc, scene, &sources)? { return Ok(doc); }
     let font_specs: [(&str, &str); 9] = [
         ("Helvetica", "SceneFont"), ("Helvetica-Bold", "SceneFontHelveticaBold"),
         ("Helvetica-Oblique", "SceneFontHelveticaOblique"), ("Times-Roman", "SceneFontTimesRoman"),
@@ -629,12 +648,17 @@ mod tests {
         let fonts = d.add_object(dictionary! { "F1" => font });
         let resources = d.add_object(dictionary! { "Font" => fonts });
         let annotation = d.add_object(dictionary! { "Type" => "Annot", "Subtype" => "Text", "Rect" => array(&[30., 40., 90., 80.]) });
-        let page = d.add_object(dictionary! { "Type" => "Page", "Parent" => pages_id, "Resources" => resources, "Contents" => content, "Annots" => vec![Object::Reference(annotation)] });
+        let link = d.add_object(dictionary! { "Type" => "Annot", "Subtype" => "Link", "Rect" => array(&[100., 40., 160., 80.]), "A" => dictionary! { "S" => "URI", "URI" => "https://example.invalid" } });
+        let widget = d.add_object(dictionary! { "Type" => "Annot", "Subtype" => "Widget", "FT" => "Tx", "Rect" => array(&[170., 40., 210., 80.]) });
+        let page = d.add_object(dictionary! { "Type" => "Page", "Parent" => pages_id, "Resources" => resources, "Contents" => content, "Annots" => vec![Object::Reference(annotation), Object::Reference(link), Object::Reference(widget)] });
         d.objects.insert(pages_id, dictionary! {
             "Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1,
             "MediaBox" => array(&[10., 20., 250., 360.]), "CropBox" => array(&[20., 30., 220., 330.]), "Rotate" => 90,
         }.into());
-        let catalog = d.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+        let names = d.add_object(dictionary! { "Dests" => dictionary! { "fixture" => Object::Array(vec![Object::Reference(page), Object::Name(b"Fit".to_vec())]) } });
+        let outlines = d.add_object(dictionary! { "Type" => "Outlines", "Count" => 0 });
+        let acro_form = d.add_object(dictionary! { "Fields" => vec![Object::Reference(widget)] });
+        let catalog = d.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id, "Names" => names, "Outlines" => outlines, "AcroForm" => acro_form });
         d.trailer.set("Root", catalog);
         d.save(path).unwrap();
     }
@@ -670,7 +694,8 @@ mod tests {
     }
 
     #[test]
-    fn inspect_then_noop_export_accepts_annotated_rotated_offset_pdf() {
+    fn inspect_then_noop_export_preserves_annotated_rotated_offset_pdf_geometry() {
+        let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
         if renderer().is_err() { return; }
         let temp = TempDir::new().unwrap();
         let input = temp.0.join("annotated-rotated-offset.pdf");
@@ -687,7 +712,19 @@ mod tests {
         let output = outcome.output_paths.first().unwrap();
         let output_document = Document::load(output).unwrap();
         let page = output_document.get_pages().values().next().copied().unwrap();
-        assert!(output_document.get_dictionary(page).unwrap().get(b"Annots").is_ok());
+        assert_eq!(bounds(&output_document, &inherited(&output_document, page, b"MediaBox").unwrap().unwrap()).unwrap(), [10., 20., 250., 360.]);
+        assert_eq!(bounds(&output_document, &inherited(&output_document, page, b"CropBox").unwrap().unwrap()).unwrap(), [20., 30., 220., 330.]);
+        assert_eq!(inherited(&output_document, page, b"Rotate").unwrap().unwrap().as_i64().unwrap(), 90);
+        let page_dictionary = output_document.get_dictionary(page).unwrap();
+        assert!(page_dictionary.get(b"MediaBox").is_err());
+        assert!(page_dictionary.get(b"CropBox").is_err());
+        assert!(page_dictionary.get(b"Rotate").is_err());
+        let annots = page_dictionary.get(b"Annots").unwrap().as_array().unwrap();
+        assert_eq!(annots.len(), 3);
+        let annotation_rect = output_document.get_dictionary(annots[0].as_reference().unwrap()).unwrap().get(b"Rect").unwrap();
+        assert_eq!(bounds(&output_document, annotation_rect).unwrap(), [30., 40., 90., 80.]);
+        assert!(output_document.get_dictionary(output_document.trailer.get(b"Root").unwrap().as_reference().unwrap()).unwrap().get(b"Names").is_ok());
+        assert!(String::from_utf8_lossy(&output_document.get_page_content(page)).contains("Annotated source"));
     }
     #[test]
     fn exports_preserve_original_and_existing_outputs_byte_for_byte() {
@@ -726,6 +763,7 @@ mod tests {
     }
     #[test]
     fn preview_and_export_are_pixel_identical_and_temp_storage_is_cleaned() {
+        let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
         let renderer=match renderer() { Ok(r)=>r,Err(e)=>{if std::env::var_os("TOOLBOX_REQUIRE_PDF_RENDERER").is_some(){panic!("{e}")}; eprintln!("Renderer unavailable: {e}");return;} };
         let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); fixture(&input);
         let before=fs::read(&input).unwrap();

@@ -9,6 +9,9 @@ pub mod fidelity;
 pub mod resources;
 
 #[cfg(test)]
+pub(crate) static PROCESS_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
 mod fidelity_tests {
     use super::fidelity::{describe, ContentShape, MetadataPolicy, OrientationPolicy};
     use image::codecs::gif::{GifEncoder, Repeat};

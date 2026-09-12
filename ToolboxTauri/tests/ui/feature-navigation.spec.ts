@@ -18,6 +18,7 @@ type TestWindow = Window & {
     __toolboxProcessingResults?: MockOutcome[];
     __toolboxProcessingDelayMs?: number;
     __toolboxInspectionDelayMs?: number;
+    __toolboxTiffInspectionDelayMs?: number;
     __toolboxInspectionError?: string;
     __toolboxActionFailure?: { command: string; path: string; message: string; delayMs?: number };
     __toolboxSecondPick?: boolean;
@@ -71,6 +72,8 @@ if (command === "preview_pdf_scene") return { dataUrl: "data:image/svg+xml,%3Csv
                     return { width: 640, height: 480, dataUrl: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='640' height='480'%3E%3Crect width='100%25' height='100%25' fill='white'/%3E%3C/svg%3E" };
                 }
                 if (command === "inspect_tiff_pages") {
+                    const inspectionDelay = (window as TestWindow).__toolboxTiffInspectionDelayMs;
+                    if (inspectionDelay) await new Promise((resolve) => window.setTimeout(resolve, inspectionDelay));
                     const requestPath = (args as { request: { path: string } }).request.path;
                     const pageCount = requestPath.endsWith("two-page.tiff") ? 2 : 1;
                     return Array.from({ length: pageCount }, (_, page) => ({
@@ -142,7 +145,7 @@ test("every registered feature opens its detail pane", async ({ page }) => {
         } else {
             await expect(page.getByRole("heading", { name: workspaceForTool(utility.id)?.title, exact: true })).toBeVisible();
         }
-        await expect(page.locator('p[role="status"]')).toHaveText(`${workspaceForTool(utility.id)?.title ?? utility.title} workspace open.`);
+        await expect(page.locator('p.sr-only[role="status"]')).toHaveText(`${workspaceForTool(utility.id)?.title ?? utility.title} workspace open.`);
     }
 });
 
@@ -644,6 +647,49 @@ test("TIFF workspace expands internal pages and sends the displayed order", asyn
             ],
         },
     });
+});
+
+test("non-previewable PDF conversions identify source selection and show deterministic output limits", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open PDF to Text" }).click();
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await expect(page.getByRole("region", { name: "Source page selection" })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Conversion preview" })).toHaveCount(0);
+    await expect(page.getByText("Output preview unavailable. Export creates a text file from the selected pages.", { exact: true })).toBeVisible();
+    await expect(page.getByRole("img", { name: "Source page preview 1" })).toBeVisible();
+
+    await page.getByRole("toolbar", { name: "PDF conversion tools" }).getByRole("button", { name: "Extract PDF Pages", exact: true }).click();
+    await expect(page.getByText("Output preview unavailable. Export creates a PDF containing the selected pages.", { exact: true })).toBeVisible();
+});
+
+test("TIFF export waits for inspection of the current file set", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Split and Combine TIFF" }).click();
+    await page.evaluate(() => { (window as TestWindow).__toolboxDialogResults = ["/local/one-page.tiff"]; });
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await expect(page.locator(".media-frame-list button")).toHaveCount(1);
+
+    await page.evaluate(() => {
+        (window as TestWindow).__toolboxTiffInspectionDelayMs = 250;
+        (window as TestWindow).__toolboxDialogResults = ["/local/two-page.tiff"];
+    });
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await expect(page.locator(".workspace-primary-action")).toBeDisabled();
+    await expect(page.locator(".media-frame-list button")).toHaveCount(3);
+    const invocation = await page.evaluate(() =>
+        (window as TestWindow).__toolboxInvocations?.find(({ command }) => command === "process_tiff_pages"),
+    );
+    expect(invocation).toBeUndefined();
+    await expect(page.locator(".workspace-primary-action")).toBeEnabled();
+    await page.locator(".workspace-primary-action").click();
+    const currentInvocation = await page.evaluate(() =>
+        (window as TestWindow).__toolboxInvocations?.find(({ command }) => command === "process_tiff_pages"),
+    );
+    expect(currentInvocation?.args).toMatchObject({ request: { pages: [
+        { path: "/local/one-page.tiff", page: 0 },
+        { path: "/local/two-page.tiff", page: 0 },
+        { path: "/local/two-page.tiff", page: 1 },
+    ] } });
 });
 
 test("shared workspace ignores a stale processing completion after action changes", async ({ page }) => {
