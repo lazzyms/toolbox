@@ -1071,6 +1071,63 @@ mod tests {
     }
 
     #[test]
+    fn source_space_crop_replacement_uses_latest_region_before_later_edits() {
+        let input = path("source-space-crops.png");
+        let mut source = image::RgbaImage::from_pixel(10, 8, image::Rgba([0, 0, 0, 255]));
+        for y in 0..3 {
+            for x in 0..2 {
+                source.put_pixel(x, y, image::Rgba([255, 0, 0, 255]));
+            }
+        }
+        for y in 5..7 {
+            for x in 7..10 {
+                source.put_pixel(x, y, image::Rgba([0, 255, 0, 255]));
+            }
+        }
+        source.save(&input).unwrap();
+        let plan = ImageEditPlan {
+            edits: vec![
+                ImageEdit::Crop {
+                    x: 0,
+                    y: 0,
+                    width: 2,
+                    height: 3,
+                    mode: "rectangle".to_string(),
+                    aspect_width: 2,
+                    aspect_height: 3,
+                    anchor: "center".to_string(),
+                },
+                ImageEdit::Rotate {
+                    degrees: 90,
+                    flip: "none".to_string(),
+                },
+                ImageEdit::Crop {
+                    x: 7,
+                    y: 5,
+                    width: 3,
+                    height: 2,
+                    mode: "rectangle".to_string(),
+                    aspect_width: 3,
+                    aspect_height: 2,
+                    anchor: "center".to_string(),
+                },
+            ],
+            output_location: OutputLocation::AlongsideInput,
+            suffix: "-edited".to_string(),
+        };
+
+        let result = export_edit_plan(&plan, input.clone());
+        assert!(result.failure.is_none(), "{}", result.failure.clone().unwrap_or_default());
+        let output = result.output_paths.first().unwrap();
+        let edited = image::open(output).unwrap().to_rgba8();
+        assert_eq!(edited.dimensions(), (2, 3));
+        assert!(edited.pixels().all(|pixel| pixel.0 == [0, 255, 0, 255]));
+
+        let _ = std::fs::remove_file(input);
+        let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
     fn composed_plan_rejects_invalid_editor_values() {
         let plan = ImageEditPlan {
             edits: vec![ImageEdit::Tone {
