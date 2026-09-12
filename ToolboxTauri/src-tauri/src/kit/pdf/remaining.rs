@@ -658,13 +658,8 @@ where F: Fn(usize, f32, f32) -> String {
         let width = right - left;
         let height = top - bottom;
         if width <= 0.0 || height <= 0.0 { return failure(input, "PDF page has invalid dimensions".to_string()); }
-        let page = match document.get_dictionary_mut(page_id) { Ok(page) => page, Err(error) => return failure(input, error.to_string()) };
-        if !page.has(b"Resources") { page.set("Resources", Object::Dictionary(dictionary! {})); }
-        let resources = match page.get_mut(b"Resources").and_then(Object::as_dict_mut) { Ok(resources) => resources, Err(error) => return failure(input, error.to_string()) };
-        if !resources.has(b"Font") { resources.set("Font", Object::Dictionary(dictionary! {})); }
-        if let Err(error) = resources.get_mut(b"Font").and_then(Object::as_dict_mut).map(|fonts| fonts.set("Fnum", font_id)) { return failure(input, error.to_string()); }
-        resources.set("ExtGState", resources.get(b"ExtGState").cloned().unwrap_or_else(|_| Object::Dictionary(dictionary! {})));
-        if let Err(error) = resources.get_mut(b"ExtGState").and_then(Object::as_dict_mut).map(|states| states.set("GSwm", opacity_id)) { return failure(input, error.to_string()); }
+        if let Err(error) = super::editor::add_resource(&mut document, page_id, "Font", "Fnum", Object::Reference(font_id)) { return failure(input, error); }
+        if let Err(error) = super::editor::add_resource(&mut document, page_id, "ExtGState", "GSwm", Object::Reference(opacity_id)) { return failure(input, error); }
         if let Err(error) = document.add_page_contents(page_id, format!("q /GSwm gs {} Q", content(number + 1, width, height)).into_bytes()) { return failure(input, error.to_string()); }
     }
     match document.save(output.path()) {
@@ -703,13 +698,8 @@ fn watermark_image(request: &PageOverlayRequest, input: PathBuf, logo: &PathBuf)
     let state_id = document.add_object(dictionary! { "Type" => "ExtGState", "ca" => request.opacity.clamp(1, 100) as f32 / 100.0, "CA" => request.opacity.clamp(1, 100) as f32 / 100.0 });
     for (number, page_id) in document.get_pages().values().copied().enumerate() {
         if request.pages.as_ref().is_some_and(|pages| !pages.contains(&number)) { continue; }
-        let page = match document.get_dictionary_mut(page_id) { Ok(page) => page, Err(error) => return failure(input, error.to_string()) };
-        if !page.has(b"Resources") { page.set("Resources", Object::Dictionary(dictionary! {})); }
-        let resources = match page.get_mut(b"Resources").and_then(Object::as_dict_mut) { Ok(resources) => resources, Err(error) => return failure(input, error.to_string()) };
-        resources.set("XObject", resources.get(b"XObject").cloned().unwrap_or_else(|_| Object::Dictionary(dictionary! {})));
-        resources.set("ExtGState", resources.get(b"ExtGState").cloned().unwrap_or_else(|_| Object::Dictionary(dictionary! {})));
-        resources.get_mut(b"XObject").and_then(Object::as_dict_mut).map(|objects| objects.set("Iwm", image_id)).map_err(|error| error.to_string()).ok();
-        resources.get_mut(b"ExtGState").and_then(Object::as_dict_mut).map(|states| states.set("GSwm", state_id)).map_err(|error| error.to_string()).ok();
+        if let Err(error) = super::editor::add_resource(&mut document, page_id, "XObject", "Iwm", Object::Reference(image_id)) { return failure(input, error); }
+        if let Err(error) = super::editor::add_resource(&mut document, page_id, "ExtGState", "GSwm", Object::Reference(state_id)) { return failure(input, error); }
         let (x, y) = watermark_position(request.position.as_deref(), width as f32, height as f32);
         if let Err(error) = document.add_page_contents(page_id, format!("q /GSwm gs {} 0 0 {} {} {} cm /Iwm Do Q", width.min(180) as f32, height.min(100) as f32, x, y).into_bytes()) { return failure(input, error.to_string()); }
     }
@@ -828,6 +818,64 @@ mod tests {
             _ => panic!("unknown unsafe fixture kind: {kind}"),
         }
         document.save(path).unwrap();
+    }
+
+    fn inherited_overlay_fixture(path: &Path) {
+        let mut document = Document::with_version("1.7");
+        let pages_id = document.new_object_id();
+        let font_id = document.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
+        let fonts_id = document.add_object(dictionary! { "F1" => font_id });
+        let resources_id = document.add_object(dictionary! { "Font" => Object::Reference(fonts_id) });
+        let content = document.add_object(Stream::new(dictionary! {}, b"BT /F1 18 Tf 72 720 Td (Existing content) Tj ET".to_vec()));
+        let inherited_page = document.add_object(dictionary! { "Type" => "Page", "Parent" => pages_id, "Contents" => content });
+        let direct_resources = document.add_object(dictionary! { "Font" => Object::Reference(fonts_id) });
+        let direct_page = document.add_object(dictionary! { "Type" => "Page", "Parent" => pages_id, "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()], "Resources" => direct_resources, "Contents" => content });
+        document.objects.insert(pages_id, dictionary! {
+            "Type" => "Pages", "Kids" => vec![Object::Reference(inherited_page), Object::Reference(direct_page)], "Count" => 2,
+            "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()], "Resources" => Object::Reference(resources_id),
+        }.into());
+        let catalog_id = document.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+        document.trailer.set("Root", catalog_id);
+        document.save(path).unwrap();
+    }
+
+    #[test]
+    fn legacy_overlays_merge_inherited_and_indirect_resources_without_losing_content() {
+        let cases = ["numbers", "watermark", "image-watermark"];
+        for case in cases {
+            let root = split_fixture_root(&format!("overlay-resources-{case}"));
+            let input = root.join("document.pdf");
+            let output = root.join("outputs");
+            fs::create_dir_all(&output).unwrap();
+            inherited_overlay_fixture(&input);
+            let logo = root.join("logo.jpg");
+            if case == "image-watermark" {
+                let mut jpeg = Cursor::new(Vec::new());
+                JpegEncoder::new(&mut jpeg).encode_image(&DynamicImage::ImageRgb8(image::RgbImage::from_pixel(2, 2, image::Rgb([255, 0, 0])))).unwrap();
+                fs::write(&logo, jpeg.into_inner()).unwrap();
+            }
+            let request = PageOverlayRequest {
+                paths: vec![input.clone()], text: "TEST".into(), opacity: 70, position: Some("center".into()),
+                logo_path: (case == "image-watermark").then_some(logo), pages: None, start_number: None,
+                font_size: None, output_location: OutputLocation::CustomFolder(output),
+            };
+            let outcome = if case == "numbers" { add_page_numbers(&request, input.clone()) } else { watermark(&request, input.clone()) };
+            assert!(outcome.failure.is_none(), "{case}: {:?}", outcome.failure);
+            let output_document = Document::load(outcome.output_paths.first().unwrap()).unwrap();
+            for page_id in output_document.get_pages().values().copied() {
+                let page = output_document.get_dictionary(page_id).unwrap();
+                let resources = page.get(b"Resources").unwrap().as_dict().unwrap();
+                let fonts = super::super::resolve(&output_document, resources.get(b"Font").unwrap()).unwrap().as_dict().unwrap();
+                assert!(fonts.has(b"F1"));
+                let content_bytes = output_document.get_page_content(page_id);
+                let content = String::from_utf8_lossy(&content_bytes);
+                assert!(content.contains("Existing content"));
+                if case == "numbers" { assert!(fonts.has(b"Fnum")); }
+                if case == "watermark" { assert!(fonts.has(b"Fnum")); assert!(super::super::resolve(&output_document, resources.get(b"ExtGState").unwrap()).unwrap().as_dict().unwrap().has(b"GSwm")); }
+                if case == "image-watermark" { assert!(super::super::resolve(&output_document, resources.get(b"XObject").unwrap()).unwrap().as_dict().unwrap().has(b"Iwm")); assert!(super::super::resolve(&output_document, resources.get(b"ExtGState").unwrap()).unwrap().as_dict().unwrap().has(b"GSwm")); }
+            }
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[test]

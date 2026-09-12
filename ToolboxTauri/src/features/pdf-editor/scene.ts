@@ -35,6 +35,8 @@ export interface ScenePage {
   height: number;
   rotation: number;
   crop: SceneRect | null;
+  sourceRotation: number | null;
+  sourceBox: SceneRect | null;
   objects: SceneObject[];
 }
 export interface PdfScene { pages: ScenePage[] }
@@ -54,6 +56,9 @@ export interface SceneCanvasProps {
 }
 export const sceneFromDocument = (document: PdfDocument): PdfScene => ({
   pages: document.pages.map((page) => ({ id: `source-${page.index}`, sourceIndex: page.index,
-    width: page.width, height: page.height, rotation: 0, crop: null, objects: [] })),
+    width: page.width, height: page.height, rotation: 0, crop: null,
+    sourceRotation: page.rotation ?? 0,
+    sourceBox: page.pageBox ? { x: page.pageBox[0], y: page.pageBox[1], width: page.pageBox[2] - page.pageBox[0], height: page.pageBox[3] - page.pageBox[1] } : null,
+    objects: [] })),
 });
 export const visibleBounds = (page: ScenePage): SceneRect => page.crop ?? { x: 0, y: 0, width: page.width, height: page.height };

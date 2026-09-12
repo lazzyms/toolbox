@@ -11,6 +11,8 @@ export interface PdfPage {
     y?: number;
     width: number;
     height: number;
+    rotation?: number;
+    pageBox?: [number, number, number, number];
     preview?: string | null;
     textRuns?: PdfTextRun[] | null;
 }

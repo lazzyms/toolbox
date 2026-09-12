@@ -43,7 +43,10 @@ pub enum WatermarkPattern { AcrossPage, BottomRightToTopLeft, TopRightToBottomLe
 #[serde(rename_all="camelCase")]
 pub struct ScenePage {
     pub source_index: Option<usize>, pub width: f32, pub height: f32,
-    pub rotation: i32, pub crop: Option<Rect>, pub objects: Vec<SceneObject>,
+    pub rotation: i32, pub crop: Option<Rect>,
+    #[serde(default)] pub source_rotation: Option<i32>,
+    #[serde(default)] pub source_box: Option<Rect>,
+    pub objects: Vec<SceneObject>,
 }
 #[derive(Clone, Debug, Deserialize)]
 pub struct PdfScene { pub pages: Vec<ScenePage> }
@@ -285,9 +288,18 @@ fn scene_preflight(document: &Document, scene: &PdfScene, source_pages: &[Object
             let has_widget = page_has_widget(document, page_id)?;
             let source_rotation = inherited(document, page_id, b"Rotate")?.map(|value| value.as_i64().map_err(err)).transpose()?.unwrap_or(0).rem_euclid(360) as i32;
             let geometry = geometry(document, page_id)?;
-            let output_crop = page.crop.as_ref().map(|crop| (crop.width, crop.height)).unwrap_or((page.width, page.height));
-            let source_box_matches_output = geometry.bbox[0].abs() <= 0.1 && geometry.bbox[1].abs() <= 0.1 && (geometry.bbox[2] - geometry.bbox[0] - output_crop.0).abs() <= 0.1 && (geometry.bbox[3] - geometry.bbox[1] - output_crop.1).abs() <= 0.1;
-            let changes_page_coordinates = page.crop.is_some() || !source_box_matches_output || (page.width - geometry.width).abs() > 0.1 || (page.height - geometry.height).abs() > 0.1 || page.rotation.rem_euclid(360) != source_rotation;
+            if let Some(baseline_rotation) = page.source_rotation {
+                if baseline_rotation.rem_euclid(360) != source_rotation {
+                    return Err("Scene source rotation baseline does not match the source PDF".into());
+                }
+            }
+            if let Some(baseline_box) = &page.source_box {
+                let baseline = [baseline_box.x, baseline_box.y, baseline_box.x + baseline_box.width, baseline_box.y + baseline_box.height];
+                if !same_box(geometry.bbox, baseline) { return Err("Scene source page-box baseline does not match the source PDF".into()); }
+            }
+            let full_page = Rect{x:0., y:0., width:page.width, height:page.height};
+            let crop_changes = page.crop.as_ref().is_some_and(|crop| !same_rect(crop, &full_page));
+            let changes_page_coordinates = crop_changes || (page.width - geometry.width).abs() > 0.1 || (page.height - geometry.height).abs() > 0.1 || page.rotation.rem_euclid(360) != 0;
             navigation_geometry_edit |= changes_page_coordinates;
             if has_annotations && changes_page_coordinates {
                 return Err("This PDF page has annotations or form widgets and the requested crop or rotation would change their coordinates; scene export was rejected before output".into());
@@ -302,6 +314,9 @@ fn scene_preflight(document: &Document, scene: &PdfScene, source_pages: &[Object
     }
     Ok(ScenePreflight { pages_root, source_pages: source_pages.to_vec() })
 }
+
+fn same_box(left: [f32; 4], right: [f32; 4]) -> bool { left.iter().zip(right).all(|(left, right)| (*left - right).abs() <= 0.1) }
+fn same_rect(left: &Rect, right: &Rect) -> bool { same_box([left.x, left.y, left.x + left.width, left.y + left.height], [right.x, right.y, right.x + right.width, right.y + right.height]) }
 
 fn scene_resources(document: &Document, page_id: ObjectId, xobjects: lopdf::Dictionary, fonts: &HashMap<&'static str, ObjectId>, states: lopdf::Dictionary) -> Result<lopdf::Dictionary, String> {
     let mut resources = match inherited(document, page_id, b"Resources")? {
@@ -536,10 +551,11 @@ pub fn inspect(path:&Path)->Result<PdfDocumentMetadata,String> {
     let mut pages=Vec::new();
     for (index,id) in doc.get_pages().values().enumerate() {
         let g=geometry(&doc,*id)?;
-        pages.push(PdfPageMetadata{index,x:0.,y:0.,width:g.width,height:g.height,preview:None,text_runs:None});
+        let source_rotation = inherited(&doc, *id, b"Rotate")?.map(|value| value.as_i64().map_err(err)).transpose()?.unwrap_or(0).rem_euclid(360) as i32;
+        pages.push(PdfPageMetadata{index,x:g.bbox[0],y:g.bbox[1],width:g.width,height:g.height,rotation:source_rotation,page_box:g.bbox,preview:None,text_runs:None});
     }
     if pages.is_empty() { return Err("PDF contains no pages".into()); }
-    let scene=PdfScene{pages:pages.iter().map(|p|ScenePage{source_index:Some(p.index),width:p.width,height:p.height,rotation:0,crop:None,objects:vec![]}).collect()};
+    let scene=PdfScene{pages:pages.iter().map(|p|ScenePage{source_index:Some(p.index),width:p.width,height:p.height,rotation:0,crop:None,source_rotation:Some(p.rotation),source_box:Some(Rect{x:p.page_box[0],y:p.page_box[1],width:p.page_box[2]-p.page_box[0],height:p.page_box[3]-p.page_box[1]}),objects:vec![]}).collect()};
     let renderer=renderer()?;
     let temp=TempDir::new()?;
     let normalized=temp.0.join("scene.pdf");
@@ -604,6 +620,24 @@ mod tests {
         d.trailer.set("Root",catalog);
         d.save(path).unwrap();
     }
+
+    fn annotated_rotated_offset_fixture(path: &Path) {
+        let mut d = Document::with_version("1.7");
+        let pages_id = d.new_object_id();
+        let content = d.add_object(Stream::new(dictionary!{}, b"BT /F1 18 Tf 40 260 Td (Annotated source) Tj ET".to_vec()));
+        let font = d.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
+        let fonts = d.add_object(dictionary! { "F1" => font });
+        let resources = d.add_object(dictionary! { "Font" => fonts });
+        let annotation = d.add_object(dictionary! { "Type" => "Annot", "Subtype" => "Text", "Rect" => array(&[30., 40., 90., 80.]) });
+        let page = d.add_object(dictionary! { "Type" => "Page", "Parent" => pages_id, "Resources" => resources, "Contents" => content, "Annots" => vec![Object::Reference(annotation)] });
+        d.objects.insert(pages_id, dictionary! {
+            "Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1,
+            "MediaBox" => array(&[10., 20., 250., 360.]), "CropBox" => array(&[20., 30., 220., 330.]), "Rotate" => 90,
+        }.into());
+        let catalog = d.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+        d.trailer.set("Root", catalog);
+        d.save(path).unwrap();
+    }
     fn object(kind: Kind) -> SceneObject {
         SceneObject { kind, rect: Rect{x:30.,y:40.,width:120.,height:40.}, text:"LOCAL".into(),font_size:18.,color:"#0066CC".into(),opacity:0.5,
             strokes:vec![vec![Point{x:0.,y:0.5},Point{x:0.5,y:0.},Point{x:1.,y:1.}]], shape:None, highlight_mode:None,
@@ -611,9 +645,9 @@ mod tests {
     }
     fn scene() -> PdfScene {
         PdfScene { pages:vec![
-            ScenePage {source_index:Some(1),width:612.,height:792.,rotation:180,crop:Some(Rect{x:10.,y:20.,width:500.,height:600.}),objects:vec![object(Kind::Highlight),object(Kind::Text),object(Kind::Shape),object(Kind::Watermark),object(Kind::Signature)]},
-            ScenePage {source_index:None,width:300.,height:200.,rotation:90,crop:None,objects:vec![object(Kind::Text)]},
-            ScenePage {source_index:Some(0),width:300.,height:200.,rotation:0,crop:None,objects:vec![]},
+            ScenePage {source_index:Some(1),width:612.,height:792.,rotation:180,crop:Some(Rect{x:10.,y:20.,width:500.,height:600.}),source_rotation:None,source_box:None,objects:vec![object(Kind::Highlight),object(Kind::Text),object(Kind::Shape),object(Kind::Watermark),object(Kind::Signature)]},
+            ScenePage {source_index:None,width:300.,height:200.,rotation:90,crop:None,source_rotation:None,source_box:None,objects:vec![object(Kind::Text)]},
+            ScenePage {source_index:Some(0),width:300.,height:200.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]},
         ] }
     }
     #[test]
@@ -633,6 +667,27 @@ mod tests {
         assert!(content.contains("/S4 gs")); assert!(content.contains("re W n")); assert!(content.contains("<4C4F43414C>"));
         let blank=composed.get_page_content(pages[1]); assert!(!String::from_utf8_lossy(&blank).contains("/Original Do"));
         assert!(String::from_utf8_lossy(&blank).contains("<4C4F43414C>"));
+    }
+
+    #[test]
+    fn inspect_then_noop_export_accepts_annotated_rotated_offset_pdf() {
+        if renderer().is_err() { return; }
+        let temp = TempDir::new().unwrap();
+        let input = temp.0.join("annotated-rotated-offset.pdf");
+        annotated_rotated_offset_fixture(&input);
+        let metadata = inspect(&input).unwrap();
+        let scene = PdfScene { pages: metadata.pages.iter().map(|page| ScenePage {
+            source_index: Some(page.index), width: page.width, height: page.height, rotation: 0, crop: None,
+            source_rotation: Some(page.rotation),
+            source_box: Some(Rect { x: page.page_box[0], y: page.page_box[1], width: page.page_box[2] - page.page_box[0], height: page.page_box[3] - page.page_box[1] }),
+            objects: vec![],
+        }).collect() };
+        let outcome = export(&ExportRequest { paths: vec![input.clone()], scene, output_location: OutputLocation::AlongsideInput }, input.clone());
+        assert!(outcome.failure.is_none(), "no-op export failed: {:?}", outcome.failure);
+        let output = outcome.output_paths.first().unwrap();
+        let output_document = Document::load(output).unwrap();
+        let page = output_document.get_pages().values().next().copied().unwrap();
+        assert!(output_document.get_dictionary(page).unwrap().get(b"Annots").is_ok());
     }
     #[test]
     fn exports_preserve_original_and_existing_outputs_byte_for_byte() {
@@ -747,7 +802,7 @@ mod tests {
         catalog.set("Metadata",metadata); catalog.set("Names",names); catalog.set("Outlines",outlines); catalog.set("StructTreeRoot",structure); catalog.set("AcroForm",acro_form);
         source.save(&input).unwrap();
         let original=fs::read(&input).unwrap();
-        let scene=PdfScene { pages: pages.iter().enumerate().map(|(index,_)| ScenePage { source_index:Some(index), width:if index==0 {200.} else {612.}, height:if index==0 {300.} else {792.}, rotation:0, crop:None, objects:vec![] }).collect() };
+        let scene=PdfScene { pages: pages.iter().enumerate().map(|(index,_)| ScenePage { source_index:Some(index), width:if index==0 {200.} else {612.}, height:if index==0 {300.} else {792.}, rotation:0, crop:None, source_rotation:None, source_box:None, objects:vec![] }).collect() };
         let composed=compose(&input,&scene).unwrap();
         let catalog=composed.get_dictionary(catalog_id).unwrap();
         for key in [b"Metadata".as_slice(),b"Names",b"Outlines",b"StructTreeRoot",b"AcroForm"] { assert!(catalog.has(key),"catalog lost {key:?}"); }
@@ -760,7 +815,7 @@ mod tests {
     #[test]
     fn scene_rejects_nested_page_tree_before_output() {
         let temp=TempDir::new().unwrap(); let input=temp.0.join("nested.pdf"); nested_fixture(&input);
-        let scene=PdfScene { pages:vec![ScenePage { source_index:Some(0), width:300., height:200., rotation:0, crop:None, objects:vec![] }, ScenePage { source_index:Some(1), width:612., height:792., rotation:0, crop:None, objects:vec![] }] };
+        let scene=PdfScene { pages:vec![ScenePage { source_index:Some(0), width:300., height:200., rotation:0, crop:None, source_rotation:None, source_box:None, objects:vec![] }, ScenePage { source_index:Some(1), width:612., height:792., rotation:0, crop:None, source_rotation:None, source_box:None, objects:vec![] }] };
         let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
         assert!(result.failure.as_ref().is_some_and(|error| error.message.contains("nested")));
         assert!(result.output_paths.is_empty());
@@ -772,7 +827,7 @@ mod tests {
         let mut source=Document::load(&input).unwrap(); let page=source.get_pages().values().next().copied().unwrap();
         let annotation=source.add_object(dictionary! {"Type"=>"Annot", "Subtype"=>"Text", "Rect"=>array(&[20.,20.,80.,50.])});
         source.get_dictionary_mut(page).unwrap().set("Annots",vec![Object::Reference(annotation)]); source.save(&input).unwrap();
-        let scene=PdfScene { pages:vec![ScenePage { source_index:Some(0), width:300., height:200., rotation:0, crop:Some(Rect{x:0.,y:0.,width:100.,height:100.}), objects:vec![] }] };
+        let scene=PdfScene { pages:vec![ScenePage { source_index:Some(0), width:300., height:200., rotation:0, crop:Some(Rect{x:0.,y:0.,width:100.,height:100.}), source_rotation:None, source_box:None, objects:vec![] }] };
         let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
         assert!(result.failure.as_ref().is_some_and(|error| error.message.contains("annotation")));
         assert!(result.output_paths.is_empty());
@@ -788,8 +843,8 @@ mod tests {
         source.get_dictionary_mut(catalog_id).unwrap().set("AcroForm",acro_form);
         source.save(&input).unwrap();
         let scene=PdfScene { pages:vec![
-            ScenePage {source_index:Some(0),width:300.,height:200.,rotation:0,crop:None,objects:vec![]},
-            ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0,crop:None,objects:vec![]},
+            ScenePage {source_index:Some(0),width:300.,height:200.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]},
+            ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]},
         ] };
         let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
         assert!(result.failure.as_ref().is_some_and(|error| error.message.contains("Digitally signed")));
@@ -813,8 +868,8 @@ mod tests {
             }
             source.save(&input).unwrap();
             let scene=PdfScene { pages:vec![
-                ScenePage {source_index:Some(0),width:300.,height:200.,rotation:0,crop:None,objects:vec![]},
-                ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0,crop:None,objects:vec![]},
+                ScenePage {source_index:Some(0),width:300.,height:200.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]},
+                ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]},
             ] };
             let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
             assert!(result.failure.as_ref().is_some_and(|error| error.message.contains("Digitally signed")), "{name}: {:?}", result.failure);
@@ -831,8 +886,8 @@ mod tests {
         source.get_dictionary_mut(catalog_id).unwrap().set("Outlines", outlines);
         source.save(&input).unwrap();
         let scene=PdfScene { pages:vec![
-            ScenePage {source_index:Some(0),width:300.,height:200.,rotation:0,crop:Some(Rect{x:0.,y:0.,width:100.,height:100.}),objects:vec![]},
-            ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0,crop:None,objects:vec![]},
+            ScenePage {source_index:Some(0),width:300.,height:200.,rotation:0,crop:Some(Rect{x:0.,y:0.,width:100.,height:100.}),source_rotation:None,source_box:None,objects:vec![]},
+            ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]},
         ] };
         let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
         assert!(result.failure.as_ref().is_some_and(|error| error.message.contains("destinations")), "{:?}", result.failure);
@@ -841,7 +896,7 @@ mod tests {
     }
 
     #[test]
-    fn scene_rejects_navigation_when_page_box_origin_changes_coordinates() {
+    fn scene_accepts_navigation_when_only_the_source_page_box_has_an_offset() {
         let temp=TempDir::new().unwrap(); let input=temp.0.join("box-origin-navigation.pdf"); fixture(&input);
         let mut source=Document::load(&input).unwrap();
         let outlines=source.add_object(dictionary! {"Type"=>"Outlines", "Count"=>0});
@@ -851,13 +906,13 @@ mod tests {
         source.get_dictionary_mut(catalog_id).unwrap().set("Outlines", outlines);
         source.save(&input).unwrap();
         let scene=PdfScene { pages:vec![
-            ScenePage {source_index:Some(0),width:200.,height:300.,rotation:0,crop:None,objects:vec![]},
-            ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0,crop:None,objects:vec![]},
+            ScenePage {source_index:Some(0),width:200.,height:300.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]},
+            ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]},
         ] };
         let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
-        assert!(result.failure.as_ref().is_some_and(|error| error.message.contains("destinations")), "{result:?}");
-        assert!(result.output_paths.is_empty());
-        assert!(!input.with_file_name("box-origin-navigation-edited-1.pdf").exists());
+        assert!(result.failure.is_none(), "{result:?}");
+        assert_eq!(result.output_paths.len(), 1);
+        assert!(input.with_file_name("box-origin-navigation-edited-1.pdf").exists());
     }
     #[test]
     fn scene_rejects_tagged_page_removal_before_output() {
@@ -869,7 +924,7 @@ mod tests {
         let catalog_id=source.trailer.get(b"Root").unwrap().as_reference().unwrap();
         source.get_dictionary_mut(catalog_id).unwrap().set("StructTreeRoot",structure);
         source.save(&input).unwrap();
-        let scene=PdfScene { pages:vec![ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0,crop:None,objects:vec![]}] };
+        let scene=PdfScene { pages:vec![ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]}] };
         let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
         assert!(result.failure.as_ref().is_some_and(|error| error.message.contains("tagged PDF")), "{:?}", result.failure);
         assert!(result.output_paths.is_empty());

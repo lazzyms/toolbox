@@ -449,8 +449,11 @@ pub fn add_pages(request: &AddPdfPagesRequest, input: PathBuf) -> JobOutcome {
 pub fn sign(request: &SignPdfRequest, input: PathBuf) -> JobOutcome {
     transform_pdf(input, &request.output_location, "-signed", |document, pages, _preflight| {
         validate_rect(&request.rectangle)?;
-        let targets = scoped_indices(&request.scope, pages.len())?;
         if request.page >= pages.len() { return Err("Signature page is outside the document.".to_string()); }
+        let targets = match &request.scope {
+            PageScope::All => vec![request.page],
+            PageScope::Selected { .. } => scoped_indices(&request.scope, pages.len())?,
+        };
         let stream = format!("BT /Fsig 24 Tf {} {} Td ({}) Tj ET", request.rectangle.x, request.rectangle.y, escape_text(&request.text));
         for page_index in targets {
         let page_id = pages[page_index];
@@ -784,7 +787,7 @@ fn append_content_stream(document: &mut Document, page_id: lopdf::ObjectId, stre
     Ok(())
 }
 
-fn add_resource(document: &mut Document, page_id: lopdf::ObjectId, category: &str, name: &str, value: Object) -> Result<(), String> {
+pub(crate) fn add_resource(document: &mut Document, page_id: lopdf::ObjectId, category: &str, name: &str, value: Object) -> Result<(), String> {
     let mut resources = inherited(document, page_id, b"Resources")?
         .map(|value| value.as_dict().map(|dictionary| dictionary.clone()).map_err(|error| error.to_string()))
         .transpose()?
@@ -1073,6 +1076,36 @@ mod session_tests {
         assert_eq!(contents.first().unwrap().as_reference().unwrap(), prior_contents);
         assert!(String::from_utf8_lossy(&output_document.get_page_content(output_page)).contains("source"));
         assert!(String::from_utf8_lossy(&output_document.get_page_content(output_page)).contains("signed"));
+
+        let _ = std::fs::remove_file(source);
+        let _ = std::fs::remove_file(output);
+        let _ = std::fs::remove_dir(output_dir);
+    }
+
+    #[test]
+    fn standalone_sign_scope_all_only_signs_the_requested_page() {
+        let source = temp_path("sign-requested-page.pdf");
+        let output_dir = temp_path("sign-requested-page-output");
+        std::fs::create_dir_all(&output_dir).expect("output directory should be created");
+        make_pdf_with_pages(&source, 3);
+
+        let outcome = sign(
+            &SignPdfRequest {
+                paths: vec![source.clone()], page: 1, text: "target signature".into(), signature_path: None,
+                rectangle: PdfRect { x: 10.0, y: 10.0, width: 100.0, height: 30.0 }, scope: PageScope::All,
+                output_location: editor_request_location(&output_dir),
+            },
+            source.clone(),
+        );
+
+        assert!(outcome.failure.is_none(), "sign failed: {:?}", outcome.failure);
+        let output = outcome.output_paths.first().expect("sign should produce an output");
+        let document = Document::load(output).unwrap();
+        for (index, page_id) in document.get_pages().values().copied().enumerate() {
+            let content_bytes = document.get_page_content(page_id);
+            let content = String::from_utf8_lossy(&content_bytes);
+            assert_eq!(content.contains("target signature"), index == 1, "page {index} content: {content}");
+        }
 
         let _ = std::fs::remove_file(source);
         let _ = std::fs::remove_file(output);
