@@ -182,24 +182,38 @@ fn encode_preview(image: DynamicImage) -> Result<ImagePreview, String> {
 
 fn apply_edit_plan(plan: &ImageEditPlan, mut image: DynamicImage, mut format: crate::kit::images::OutputFormat) -> Result<(DynamicImage, crate::kit::images::OutputFormat, u8), String> {
     let mut quality = 90;
+    let source_width = image.width();
+    let source_height = image.height();
+    let mut geometry = Vec::new();
     for edit in &plan.edits {
         match edit {
             ImageEdit::Convert { format: requested } => format = parse_output_format(requested)?,
             ImageEdit::Compress { quality: requested, lossless } => { quality = if *lossless { 100 } else { *requested }; },
             ImageEdit::Resize { width, height, mode, percentage, longest_side, resampling, keep_aspect_ratio } => {
                 let request = ResizeRequest { paths: vec![], width: *width, height: *height, mode: mode.clone(), resampling: resampling.clone(), keep_aspect_ratio: *keep_aspect_ratio, percentage: *percentage, longest_side: *longest_side, output_location: OutputLocation::AlongsideInput };
+                let old_width = image.width();
+                let old_height = image.height();
                 let (width, height) = resize_dimensions(image.width(), image.height(), &request)?;
                 let filter = match resampling.as_str() { "nearest" => image::imageops::FilterType::Nearest, "bicubic" => image::imageops::FilterType::CatmullRom, _ => image::imageops::FilterType::Lanczos3 };
                 image = image.resize_exact(width, height, filter);
+                geometry.push(ImageGeometryStep::Resize { from_width: old_width, from_height: old_height, to_width: width, to_height: height });
             }
             ImageEdit::Rotate { degrees, flip } => {
+                let old_width = image.width();
+                let old_height = image.height();
                 image = match degrees.rem_euclid(360) { 90 => image.rotate90(), 180 => image.rotate180(), 270 => image.rotate270(), 0 => image, _ => return Err("Rotation must be 0, 90, 180, or 270 degrees.".to_string()) };
+                geometry.push(ImageGeometryStep::Rotate { width: old_width, height: old_height, degrees: degrees.rem_euclid(360) });
+                let current_width = image.width();
+                let current_height = image.height();
                 image = match flip.as_str() { "none" => image, "horizontal" => DynamicImage::ImageRgba8(image::imageops::flip_horizontal(&image.to_rgba8())), "vertical" => DynamicImage::ImageRgba8(image::imageops::flip_vertical(&image.to_rgba8())), _ => return Err("Mirror choice must be none, horizontal, or vertical.".to_string()) };
+                if flip == "horizontal" { geometry.push(ImageGeometryStep::FlipHorizontal { width: current_width }); }
+                if flip == "vertical" { geometry.push(ImageGeometryStep::FlipVertical { height: current_height }); }
             }
             ImageEdit::Crop { x, y, width, height, mode, aspect_width, aspect_height, anchor } => {
                 let request = CropRequest { paths: vec![], x: *x, y: *y, width: *width, height: *height, mode: mode.clone(), aspect_width: *aspect_width, aspect_height: *aspect_height, anchor: anchor.clone(), output_location: OutputLocation::AlongsideInput };
-                let (x, y, width, height) = crop_rect(image.width(), image.height(), &request)?;
-                image = image.crop_imm(x, y, width, height);
+                let (x, y, width, height) = crop_rect(source_width, source_height, &request)?;
+                let crop = map_source_rect((x, y, width, height), &geometry)?;
+                image = image.crop_imm(crop.0, crop.1, crop.2, crop.3);
             }
             ImageEdit::Tone { brightness, contrast, saturation, exposure } => {
                 let mut rgba = image::imageops::brighten(&image, *brightness);
@@ -225,6 +239,42 @@ fn apply_edit_plan(plan: &ImageEditPlan, mut image: DynamicImage, mut format: cr
     }
     Ok((image, format, quality.clamp(1, 100)))
 }
+
+#[derive(Debug, Clone, Copy)]
+enum ImageGeometryStep {
+    Resize { from_width: u32, from_height: u32, to_width: u32, to_height: u32 },
+    Rotate { width: u32, height: u32, degrees: i32 },
+    FlipHorizontal { width: u32 },
+    FlipVertical { height: u32 },
+}
+
+fn map_source_rect(mut rect: (u32, u32, u32, u32), geometry: &[ImageGeometryStep]) -> Result<(u32, u32, u32, u32), String> {
+    for step in geometry {
+        let (x, y, width, height) = rect;
+        let right = x.checked_add(width).ok_or_else(|| "Crop rectangle exceeds coordinate bounds.".to_string())?;
+        let bottom = y.checked_add(height).ok_or_else(|| "Crop rectangle exceeds coordinate bounds.".to_string())?;
+        rect = match step {
+            ImageGeometryStep::Resize { from_width, from_height, to_width, to_height } => (
+                scale_floor(x, *from_width, *to_width),
+                scale_floor(y, *from_height, *to_height),
+                scale_ceil(right, *from_width, *to_width) - scale_floor(x, *from_width, *to_width),
+                scale_ceil(bottom, *from_height, *to_height) - scale_floor(y, *from_height, *to_height),
+            ),
+            ImageGeometryStep::Rotate { width: image_width, height: image_height, degrees } => match degrees {
+                90 => (*image_height - bottom, x, height, width),
+                180 => (*image_width - right, *image_height - bottom, width, height),
+                270 => (y, *image_width - right, height, width),
+                _ => (x, y, width, height),
+            },
+            ImageGeometryStep::FlipHorizontal { width: image_width } => (*image_width - right, y, width, height),
+            ImageGeometryStep::FlipVertical { height: image_height } => (x, *image_height - bottom, width, height),
+        };
+    }
+    Ok(rect)
+}
+
+fn scale_floor(value: u32, from: u32, to: u32) -> u32 { ((value as u64 * to as u64) / from as u64) as u32 }
+fn scale_ceil(value: u32, from: u32, to: u32) -> u32 { ((value as u64 * to as u64 + from as u64 - 1) / from as u64) as u32 }
 
 fn parse_output_format(format: &str) -> Result<crate::kit::images::OutputFormat, String> {
     match format.to_ascii_lowercase().as_str() {
@@ -1134,12 +1184,112 @@ mod tests {
             suffix: "-edited".to_string(),
         };
 
+        let preview = inspect_edit_preview(&ImageEditPreviewRequest { path: input.clone(), plan: plan.clone() }).unwrap();
+        assert_eq!((preview.width, preview.height), (2, 3));
         let result = export_edit_plan(&plan, input.clone());
         assert!(result.failure.is_none(), "{}", result.failure.clone().unwrap_or_default());
         let output = result.output_paths.first().unwrap();
         let edited = image::open(output).unwrap().to_rgba8();
         assert_eq!(edited.dimensions(), (2, 3));
         assert!(edited.pixels().all(|pixel| pixel.0 == [0, 255, 0, 255]));
+
+        let _ = std::fs::remove_file(input);
+        let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn source_space_crop_maps_through_rotation_before_execution() {
+        let input = path("rotate-before-source-crop.png");
+        image::RgbaImage::from_pixel(100, 60, image::Rgba([40, 80, 120, 255])).save(&input).unwrap();
+        let plan = ImageEditPlan {
+            edits: vec![
+                ImageEdit::Rotate { degrees: 90, flip: "none".to_string() },
+                ImageEdit::Crop {
+                    x: 0, y: 0, width: 100, height: 60, mode: "rectangle".to_string(),
+                    aspect_width: 100, aspect_height: 60, anchor: "center".to_string(),
+                },
+            ],
+            output_location: OutputLocation::AlongsideInput,
+            suffix: "-edited".to_string(),
+        };
+
+        let preview = inspect_edit_preview(&ImageEditPreviewRequest { path: input.clone(), plan: plan.clone() }).unwrap();
+        assert_eq!((preview.width, preview.height), (60, 100));
+        let result = export_edit_plan(&plan, input.clone());
+        assert!(result.failure.is_none(), "{}", result.failure.clone().unwrap_or_default());
+        let output = result.output_paths.first().unwrap();
+        let edited = image::open(output).unwrap();
+        assert_eq!((edited.width(), edited.height()), (60, 100));
+
+        let _ = std::fs::remove_file(input);
+        let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn aspect_crop_uses_source_geometry_for_preview_and_export() {
+        let input = path("aspect-source-crop.png");
+        image::RgbaImage::from_fn(100, 60, |x, _| if x < 40 {
+            image::Rgba([255, 0, 0, 255])
+        } else {
+            image::Rgba([0, 255, 0, 255])
+        }).save(&input).unwrap();
+        let plan = ImageEditPlan {
+            edits: vec![
+                ImageEdit::Rotate { degrees: 90, flip: "none".to_string() },
+                ImageEdit::Crop {
+                    x: 0, y: 0, width: 1, height: 1, mode: "aspectRatio".to_string(),
+                    aspect_width: 1, aspect_height: 1, anchor: "right".to_string(),
+                },
+            ],
+            output_location: OutputLocation::AlongsideInput,
+            suffix: "-edited".to_string(),
+        };
+
+        let request = CropRequest {
+            paths: vec![], x: 0, y: 0, width: 1, height: 1, mode: "aspectRatio".to_string(),
+            aspect_width: 1, aspect_height: 1, anchor: "right".to_string(),
+            output_location: OutputLocation::AlongsideInput,
+        };
+        assert_eq!(crop_rect(100, 60, &request).unwrap(), (40, 0, 60, 60));
+        let preview = inspect_edit_preview(&ImageEditPreviewRequest { path: input.clone(), plan: plan.clone() }).unwrap();
+        assert_eq!((preview.width, preview.height), (60, 60));
+        let result = export_edit_plan(&plan, input.clone());
+        assert!(result.failure.is_none(), "{}", result.failure.clone().unwrap_or_default());
+        let output = result.output_paths.first().unwrap();
+        let edited = image::open(output).unwrap().to_rgba8();
+        assert_eq!((edited.width(), edited.height()), (60, 60));
+        assert!(edited.pixels().all(|pixel| pixel.0 == [0, 255, 0, 255]));
+
+        let _ = std::fs::remove_file(input);
+        let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn source_space_crop_maps_through_resize_before_execution() {
+        let input = path("resize-before-source-crop.png");
+        image::RgbaImage::from_pixel(100, 60, image::Rgba([40, 80, 120, 255])).save(&input).unwrap();
+        let plan = ImageEditPlan {
+            edits: vec![
+                ImageEdit::Resize {
+                    width: 50, height: 30, mode: "exact".to_string(), percentage: 0, longest_side: 0,
+                    resampling: "nearest".to_string(), keep_aspect_ratio: false,
+                },
+                ImageEdit::Crop {
+                    x: 0, y: 0, width: 100, height: 60, mode: "rectangle".to_string(),
+                    aspect_width: 100, aspect_height: 60, anchor: "center".to_string(),
+                },
+            ],
+            output_location: OutputLocation::AlongsideInput,
+            suffix: "-edited".to_string(),
+        };
+
+        let preview = inspect_edit_preview(&ImageEditPreviewRequest { path: input.clone(), plan: plan.clone() }).unwrap();
+        assert_eq!((preview.width, preview.height), (50, 30));
+        let result = export_edit_plan(&plan, input.clone());
+        assert!(result.failure.is_none(), "{}", result.failure.clone().unwrap_or_default());
+        let output = result.output_paths.first().unwrap();
+        let edited = image::open(output).unwrap();
+        assert_eq!((edited.width(), edited.height()), (50, 30));
 
         let _ = std::fs::remove_file(input);
         let _ = std::fs::remove_file(output);

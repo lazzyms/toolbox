@@ -16,6 +16,7 @@ import {
   createImageEditHistory,
   planWithDraft,
   redoImageEdit,
+  resolveImageCropRect,
   resetImageEdits,
   undoImageEdit,
   type ImageEditOperation,
@@ -442,7 +443,7 @@ const ImageEditorControls = ({
   };
   const beginImageDrag = (event: React.PointerEvent<HTMLDivElement>) => {
     const interactionPreview = utility.id === "crop" ? sourcePreview : resultPreview ?? sourcePreview;
-    if (!interactionPreview || (utility.id !== "crop" && utility.id !== "image-watermark")) return;
+    if (!interactionPreview || (utility.id === "crop" && cropMode !== "rectangle") || (utility.id !== "crop" && utility.id !== "image-watermark")) return;
     const point = pointInPreview(event);
     if (!point) return;
     dragOffset.current = utility.id === "crop"
@@ -469,7 +470,13 @@ const ImageEditorControls = ({
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
   };
   const interactionPreview = utility.id === "crop" ? sourcePreview : resultPreview ?? sourcePreview;
-  const cropOverlay = utility.id === "crop" && sourcePreview ? { left: `${cropX / sourcePreview.width * 100}%`, top: `${cropY / sourcePreview.height * 100}%`, width: `${width / sourcePreview.width * 100}%`, height: `${height / sourcePreview.height * 100}%` } : null;
+  const cropRect = utility.id === "crop" && sourcePreview
+    ? resolveImageCropRect(sourcePreview.width, sourcePreview.height, {
+      kind: "crop", x: cropX, y: cropY, width, height, mode: cropMode,
+      aspectWidth: width, aspectHeight: height, anchor,
+    })
+    : null;
+  const cropOverlay = cropRect && sourcePreview ? { left: `${cropRect.x / sourcePreview.width * 100}%`, top: `${cropRect.y / sourcePreview.height * 100}%`, width: `${cropRect.width / sourcePreview.width * 100}%`, height: `${cropRect.height / sourcePreview.height * 100}%` } : null;
   const watermarkOverlay = utility.id === "image-watermark" && interactionPreview ? { left: `${Math.min(cropX / interactionPreview.width * 100, 94)}%`, top: `${Math.min(cropY / interactionPreview.height * 100, 94)}%` } : null;
   const primaryPreview = utility.id === "crop" ? sourcePreview : resultPreview ?? sourcePreview;
   const primaryPreviewAlt = utility.id === "crop" ? `Original image preview of ${inputPath?.split(/[\\/]/).pop() ?? "selected image"}` : `Preview of ${inputPath?.split(/[\\/]/).pop() ?? "selected image"}`;
