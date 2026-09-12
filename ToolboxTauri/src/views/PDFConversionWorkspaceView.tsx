@@ -215,6 +215,7 @@ const ConversionControls = ({
     let current = true;
     setDocument(null);
     setSelectedPages([]);
+    setPageRange("");
     setInspectError("");
     if (!inputPath) {
       setInspection({ kind: "idle" });
@@ -232,6 +233,7 @@ const ConversionControls = ({
         if (!current) return;
         setDocument(value);
         setSelectedPages(value.pages.map((page) => page.index));
+        setPageRange("");
         setInspection({ kind: "ready", path: inputPath });
       })
       .catch((error) => {
@@ -242,7 +244,7 @@ const ConversionControls = ({
     return () => {
       current = false;
     };
-  }, [activeUtility.id, inputPath, setDocument, setInspectError, setSelectedPages]);
+  }, [activeUtility.id, inputPath, setDocument, setInspectError, setPageRange, setSelectedPages]);
 
   const togglePage = (page: number) => {
     const nextPages = selectedPages.includes(page)

@@ -317,6 +317,11 @@ type ImageEditorControlsProps = {
   onReset: () => void;
 };
 
+type ImagePreviewValidation =
+  | { key: string; status: "pending" }
+  | { key: string; status: "valid" }
+  | { key: string; status: "error"; message: string };
+
 const ImageEditorControls = ({
   files,
   runCombined,
@@ -377,7 +382,8 @@ const ImageEditorControls = ({
 }: ImageEditorControlsProps) => {
   const [sourcePreview, setSourcePreview] = useState<ImagePreview | null>(null);
   const [resultPreview, setResultPreview] = useState<ImagePreview | null>(null);
-  const [previewError, setPreviewError] = useState("");
+  const [sourcePreviewError, setSourcePreviewError] = useState("");
+  const [previewValidation, setPreviewValidation] = useState<ImagePreviewValidation | null>(null);
   const inputPath = files[0];
   const previewPlanKey = JSON.stringify({ plan, draft });
   const previousInputPath = useRef<string | undefined>(undefined);
@@ -393,18 +399,19 @@ const ImageEditorControls = ({
     if (!inputPath) {
       setSourcePreview(null);
       setResultPreview(null);
-      setPreviewError("");
+      setSourcePreviewError("");
+      setPreviewValidation(null);
       return;
     }
     let current = true;
     setSourcePreview(null);
-    setPreviewError("");
+    setSourcePreviewError("");
     void invoke<ImagePreview>("inspect_image_preview", { request: { path: inputPath } })
       .then((value) => {
         if (current && value && typeof value.dataUrl === "string") setSourcePreview(value);
       })
       .catch((error) => {
-        if (current) setPreviewError(String(error));
+        if (current) setSourcePreviewError(String(error));
       });
     return () => {
       current = false;
@@ -412,25 +419,38 @@ const ImageEditorControls = ({
   }, [inputPath]);
 
   useEffect(() => {
-    if (!inputPath || !planWithDraft(plan, draft).edits.length) {
+    const nextPlan = planWithDraft(plan, draft);
+    if (!inputPath || !nextPlan.edits.length) {
       setResultPreview(null);
+      setPreviewValidation(null);
       return;
     }
     let current = true;
-    setPreviewError("");
+    setResultPreview(null);
+    setPreviewValidation({ key: previewPlanKey, status: "pending" });
     void invoke<ImagePreview>("inspect_image_edit_preview", {
-      request: { path: inputPath, plan: planWithDraft(plan, draft) },
+      request: { path: inputPath, plan: nextPlan },
     })
       .then((value) => {
-        if (current && value && typeof value.dataUrl === "string") setResultPreview(value);
+        if (!current) return;
+        if (!value || typeof value.dataUrl !== "string") {
+          setPreviewValidation({ key: previewPlanKey, status: "error", message: "The edit preview was invalid." });
+          return;
+        }
+        setResultPreview(value);
+        setPreviewValidation({ key: previewPlanKey, status: "valid" });
       })
       .catch((error) => {
-        if (current) setPreviewError(String(error));
+        if (current) setPreviewValidation({ key: previewPlanKey, status: "error", message: String(error) });
       });
     return () => {
       current = false;
     };
   }, [inputPath, previewPlanKey]);
+
+  const previewError = sourcePreviewError || (previewValidation?.status === "error" ? previewValidation.message : "");
+  const hasEdits = plan.edits.length > 0 || draft !== null;
+  const previewIsValid = previewValidation?.key === previewPlanKey && previewValidation.status === "valid";
 
   const pointInPreview = (event: React.PointerEvent<HTMLDivElement>) => {
     const bounds = previewStageRef.current?.getBoundingClientRect();
@@ -580,7 +600,7 @@ const ImageEditorControls = ({
           <button type="button" aria-label="Add edit to plan" onClick={onAddEdit} disabled={!draft}>Add edit to plan</button>
         </section>
         <p aria-live="polite" className="workspace-note">{plan.edits.length + (draft ? 1 : 0)} edits will be applied to each selected image.</p>
-        <button type="button" aria-label="Export edited images" disabled={loading || files.length === 0 || (!plan.edits.length && !draft)} onClick={runCombined} className="workspace-primary-action">Export edited images</button>
+        <button type="button" aria-label="Export edited images" disabled={loading || files.length === 0 || !hasEdits || !previewIsValid} onClick={runCombined} className="workspace-primary-action">Export edited images</button>
       </section>
     </div>
   );
