@@ -266,7 +266,11 @@ pub struct JobOutcome {
 
 impl JobOutcome {
     pub fn failure(input_path: PathBuf, error: ToolError) -> Self {
-        Self { input_path, output_paths: Vec::new(), detail: String::new(), failure: Some(error) }
+        Self::failure_with_outputs(input_path, Vec::new(), error)
+    }
+
+    pub fn failure_with_outputs(input_path: PathBuf, output_paths: Vec<PathBuf>, error: ToolError) -> Self {
+        Self { input_path, output_paths, detail: String::new(), failure: Some(error) }
     }
 }
 
@@ -296,6 +300,21 @@ mod tests {
         let value = serde_json::to_value(outcome).unwrap();
         assert_eq!(value["failure"]["kind"], "invalidInput");
         assert_eq!(value["failure"]["message"], "Input file does not exist.");
+    }
+
+    #[test]
+    fn partial_failures_keep_published_outputs_in_the_ipc_contract() {
+        let output = PathBuf::from("source-frame-1.png");
+        let outcome = JobOutcome::failure_with_outputs(
+            PathBuf::from("source.gif"),
+            vec![output.clone()],
+            ToolError::processing("Could not publish the next frame."),
+        );
+        let value = serde_json::to_value(outcome).unwrap();
+
+        assert_eq!(value["outputPaths"], serde_json::json!([output]));
+        assert_eq!(value["failure"]["kind"], "processing");
+        assert_eq!(value["failure"]["message"], "Could not publish the next frame.");
     }
 
     #[test]

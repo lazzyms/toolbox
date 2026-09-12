@@ -100,6 +100,11 @@ async fn crop_pdf(request: editor::CropPdfRequest) -> Vec<JobOutcome> {
 
 #[tauri::command]
 async fn sign_pdf(request: editor::SignPdfRequest) -> Vec<JobOutcome> {
+    let explicit_pages = match &request.scope {
+        editor::PageScope::All => None,
+        editor::PageScope::Selected { pages } => Some(pages.as_slice()),
+    };
+    if let Err(outcomes) = validate_page_selection("sign_pdf", &request.paths, explicit_pages) { return outcomes; }
     BatchRunner::run("sign_pdf", request.paths.clone(), |path| editor::sign(&request, path))
 }
 
@@ -260,7 +265,7 @@ where
                     aggregate.input_path.display(), error.message
                 ))
             };
-            JobOutcome::failure(input_path, error)
+            JobOutcome::failure_with_outputs(input_path, aggregate.output_paths.clone(), error)
         }).collect(),
     }
 }
@@ -464,6 +469,23 @@ mod command_tests {
     }
 
     #[test]
+    fn aggregate_failures_preserve_partial_outputs_for_result_list_consumers() {
+        let paths = vec![PathBuf::from("first.tiff"), PathBuf::from("second.tiff")];
+        let published = PathBuf::from("first-page-1.tiff");
+        let outcomes = aggregate_outcomes(&paths, || {
+            JobOutcome::failure_with_outputs(
+                paths[0].clone(),
+                vec![published.clone()],
+                ToolError::processing("The next TIFF page could not be published."),
+            )
+        });
+
+        assert_eq!(outcomes.len(), paths.len());
+        assert!(outcomes.iter().all(|outcome| outcome.failure.is_some()));
+        assert!(outcomes.iter().all(|outcome| outcome.output_paths == vec![published.clone()]));
+    }
+
+    #[test]
     fn crop_command_rejects_empty_selected_scope_before_processing() {
         let root = sandbox("crop-empty-selection");
         let input = root.join("source.pdf"); make_pdf(&input, 1);
@@ -483,6 +505,29 @@ mod command_tests {
         assert_eq!(std::fs::read(&input).unwrap(), original);
         assert_eq!(std::fs::read_dir(root.join("crop-empty")).unwrap().count(), 0);
 
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sign_command_rejects_empty_selected_scope_at_the_boundary() {
+        let root = sandbox("sign-empty-selection");
+        let input = root.join("source.pdf");
+        make_pdf(&input, 1);
+        let outcomes = tauri::async_runtime::block_on(sign_pdf(SignPdfRequest {
+            paths: vec![input.clone()],
+            page: 0,
+            text: "signed".to_string(),
+            signature_path: None,
+            rectangle: PdfRect { x: 1.0, y: 1.0, width: 100.0, height: 100.0 },
+            scope: PageScope::Selected { pages: vec![] },
+            output_location: location(&root, "sign-empty"),
+        }));
+
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].input_path, input);
+        assert!(outcomes[0].output_paths.is_empty());
+        assert!(outcomes[0].failure.as_ref().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput)));
+        assert!(outcomes[0].failure.as_ref().is_some_and(|error| error.message.contains("at least one page")));
         let _ = std::fs::remove_dir_all(root);
     }
 

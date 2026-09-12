@@ -473,27 +473,27 @@ pub fn icon_set(request: &IconSetRequest, input: PathBuf) -> JobOutcome {
     for &size in &sizes {
         let output = match OutputNaming::reserve_destination(&input, &request.output_location, &format!("-{prefix}-{size}"), "png") {
             Ok(output) => output,
-            Err(error) => return failure(input, format!("Could not reserve icon output: {error}")),
+            Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not reserve icon output: {error}"))),
         };
         if let Err(error) = image.resize_exact(size, size, image::imageops::FilterType::Lanczos3).save(output.path()) {
-            return failure(input, format!("Could not save icon: {error}"));
+            return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not save icon: {error}")));
         }
         match output.publish() {
             Ok(path) => outputs.push(path),
-            Err(error) => return failure(input, format!("Could not publish icon output: {error}")),
+            Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not publish icon output: {error}"))),
         }
     }
     if request.preset == "macos" {
         let icns = match OutputNaming::reserve_destination(&input, &request.output_location, "-macos-icon", "icns") {
             Ok(output) => output,
-            Err(error) => return failure(input, format!("Could not reserve macOS icon output: {error}")),
+            Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not reserve macOS icon output: {error}"))),
         };
         if let Err(error) = write_icns(icns.path(), &sizes, &outputs) {
-            return failure(input, format!("Could not save macOS ICNS container: {error}"));
+            return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not save macOS ICNS container: {error}")));
         }
         match icns.publish() {
             Ok(path) => outputs.push(path),
-            Err(error) => return failure(input, format!("Could not publish macOS ICNS output: {error}")),
+            Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not publish macOS ICNS output: {error}"))),
         }
     }
     let detail = match request.preset.as_str() {
@@ -596,30 +596,34 @@ pub fn gif_extract(request: &GifExtractRequest, input: PathBuf) -> JobOutcome {
     for (index, frame) in frames.into_iter().enumerate() {
         let output = match OutputNaming::reserve_destination(&input, &request.output_location, &format!("-frame-{}", index + 1), "png") {
             Ok(output) => output,
-            Err(error) => return failure(input, format!("Could not reserve GIF frame output: {error}")),
+            Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not reserve GIF frame output: {error}"))),
         };
         let (numerator, denominator) = frame.delay().numer_denom_ms();
         let delay_ms = (numerator as u64 * 1000 / denominator.max(1) as u64).max(1);
         if let Err(error) = frame.into_buffer().save(output.path()) {
-            return failure(input, error.to_string());
+            return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(error.to_string()));
         }
         let output = match output.publish() {
             Ok(output) => output,
-            Err(error) => return failure(input, format!("Could not publish GIF frame output: {error}")),
+            Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not publish GIF frame output: {error}"))),
         };
         timing.push(serde_json::json!({ "file": output, "delayMs": delay_ms }));
         outputs.push(output);
     }
     let timing_path = match OutputNaming::reserve_destination(&input, &request.output_location, "-frame-timing", "json") {
         Ok(output) => output,
-        Err(error) => return failure(input, format!("Could not reserve GIF timing output: {error}")),
+        Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not reserve GIF timing output: {error}"))),
     };
-    if let Err(error) = std::fs::write(timing_path.path(), serde_json::to_vec_pretty(&timing).unwrap_or_default()) {
-        return failure(input, format!("Could not save GIF timing manifest: {error}"));
+    let timing_bytes = match serde_json::to_vec_pretty(&timing) {
+        Ok(bytes) => bytes,
+        Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not encode GIF timing manifest: {error}"))),
+    };
+    if let Err(error) = std::fs::write(timing_path.path(), timing_bytes) {
+        return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not save GIF timing manifest: {error}")));
     }
     outputs.push(match timing_path.publish() {
         Ok(path) => path,
-        Err(error) => return failure(input, format!("Could not publish GIF timing manifest: {error}")),
+        Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not publish GIF timing manifest: {error}"))),
     });
     JobOutcome { input_path: input, output_paths: outputs, detail: "GIF frames saved".to_string(), failure: None }
 }
@@ -638,14 +642,14 @@ pub fn tiff(request: &TiffRequest) -> JobOutcome {
         for (index, page) in pages.iter().enumerate() {
             let output = match OutputNaming::reserve_destination(&input, &request.output_location, &format!("-page-{}", index + 1), "tiff") {
                 Ok(output) => output,
-                Err(error) => return failure(input, format!("Could not reserve TIFF page output: {error}")),
+                Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not reserve TIFF page output: {error}"))),
             };
             if let Err(error) = write_tiff_page(output.path(), page) {
-                return failure(input, format!("Could not write TIFF page: {error}"));
+                return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not write TIFF page: {error}")));
             }
             outputs.push(match output.publish() {
                 Ok(path) => path,
-                Err(error) => return failure(input, format!("Could not publish TIFF page: {error}")),
+                Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not publish TIFF page: {error}"))),
             });
         }
         return JobOutcome { input_path: input, output_paths: outputs, detail: "TIFF pages saved".to_string(), failure: None };

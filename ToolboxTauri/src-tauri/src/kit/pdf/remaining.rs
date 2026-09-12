@@ -130,7 +130,7 @@ pub fn split(request: &PageSelectionRequest, input: PathBuf) -> JobOutcome {
             };
             JobOutcome { input_path: input, output_paths: outputs, detail, failure: None }
         }
-        Err(error) => failure(input, error),
+        Err(outcome) => outcome,
     }
 }
 
@@ -192,23 +192,23 @@ fn collect_split_outputs(workspace: &Path, empty_message: &str) -> Result<Vec<Pa
     if outputs.is_empty() { Err(empty_message.to_string()) } else { Ok(outputs) }
 }
 
-fn materialize_split_outputs(input: &Path, location: &OutputLocation, generated: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
+fn materialize_split_outputs(input: &Path, location: &OutputLocation, generated: &[PathBuf]) -> Result<Vec<PathBuf>, JobOutcome> {
     let mut outputs = Vec::with_capacity(generated.len());
     for source in generated {
         let suffix = match split_output_suffix(input, source) {
             Ok(suffix) => suffix,
-            Err(error) => return Err(error),
+            Err(error) => return Err(JobOutcome::failure_with_outputs(input.to_path_buf(), outputs, ToolError::processing(error))),
         };
         let reservation = match OutputNaming::reserve_destination(input, location, &suffix, "pdf") {
             Ok(reservation) => reservation,
-            Err(error) => return Err(format!("Could not reserve split output: {error}")),
+            Err(error) => return Err(JobOutcome::failure_with_outputs(input.to_path_buf(), outputs, ToolError::processing(format!("Could not reserve split output: {error}")))),
         };
         if let Err(error) = copy_into_reservation(source, reservation.path()) {
-            return Err(format!("Could not move split output: {error}"));
+            return Err(JobOutcome::failure_with_outputs(input.to_path_buf(), outputs, ToolError::processing(format!("Could not move split output: {error}"))));
         }
         let destination = match reservation.publish() {
             Ok(path) => path,
-            Err(error) => return Err(format!("Could not publish split output: {error}")),
+            Err(error) => return Err(JobOutcome::failure_with_outputs(input.to_path_buf(), outputs, ToolError::processing(format!("Could not publish split output: {error}")))),
         };
         outputs.push(destination);
     }
@@ -363,18 +363,18 @@ fn materialize_rendered_images(input: &Path, location: &OutputLocation, generate
         let extension = source.extension().and_then(|value| value.to_str()).unwrap_or("png");
         let stem = match source.file_stem().and_then(|value| value.to_str()).and_then(|value| value.strip_prefix(input_stem)) {
             Some(suffix) if suffix.starts_with('-') => suffix,
-            _ => return failure(input.to_path_buf(), "PDF renderer produced an unexpected image file name.".to_string()),
+            _ => return JobOutcome::failure_with_outputs(input.to_path_buf(), outputs, ToolError::processing("PDF renderer produced an unexpected image file name.")),
         };
         let reservation = match OutputNaming::reserve_destination(input, location, stem, extension) {
             Ok(reservation) => reservation,
-            Err(error) => return failure(input.to_path_buf(), format!("Could not reserve PDF image output: {error}")),
+            Err(error) => return JobOutcome::failure_with_outputs(input.to_path_buf(), outputs, ToolError::processing(format!("Could not reserve PDF image output: {error}"))),
         };
         if let Err(error) = fs::copy(source, reservation.path()) {
-            return failure(input.to_path_buf(), format!("Could not copy rendered PDF image: {error}"));
+            return JobOutcome::failure_with_outputs(input.to_path_buf(), outputs, ToolError::processing(format!("Could not copy rendered PDF image: {error}")));
         }
         let destination = match reservation.publish() {
             Ok(path) => path,
-            Err(error) => return failure(input.to_path_buf(), format!("Could not publish rendered PDF image: {error}")),
+            Err(error) => return JobOutcome::failure_with_outputs(input.to_path_buf(), outputs, ToolError::processing(format!("Could not publish rendered PDF image: {error}"))),
         };
         outputs.push(destination);
     }
@@ -443,11 +443,15 @@ pub fn extract_images(request: &PdfToTextRequest, input: PathBuf) -> JobOutcome 
     if reservations.is_empty() {
         return failure(input, "No embedded JPEG images were found. Non-JPEG PDF image filters are not extractable without recompression.".to_string());
     }
+    publish_extracted_images(input, reservations)
+}
+
+fn publish_extracted_images(input: PathBuf, reservations: Vec<OutputReservation>) -> JobOutcome {
     let mut outputs = Vec::with_capacity(reservations.len());
     for reservation in reservations {
         match reservation.publish() {
             Ok(path) => outputs.push(path),
-            Err(error) => return failure(input, format!("Could not publish extracted image: {error}")),
+            Err(error) => return JobOutcome::failure_with_outputs(input, outputs, ToolError::processing(format!("Could not publish extracted image: {error}"))),
         }
     }
     JobOutcome { input_path: input, output_paths: outputs, detail: "Embedded JPEG images extracted without recompression".to_string(), failure: None }
@@ -837,6 +841,82 @@ mod tests {
 
         assert!(outcome.failure.is_some());
         assert_eq!(fs::read(destination).unwrap(),b"competing replacement");
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn extracted_image_publication_reports_outputs_published_before_a_later_conflict() {
+        let temp = std::env::temp_dir().join(format!(
+            "toolbox_extract_partial_{}_{}",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        fs::create_dir_all(&temp).unwrap();
+        let input = temp.join("source.pdf");
+        fs::write(&input, b"source").unwrap();
+        let location = OutputLocation::AlongsideInput;
+        let first = OutputNaming::reserve_destination(&input, &location, "-image-1-0", "jpg").unwrap();
+        let second = OutputNaming::reserve_destination(&input, &location, "-image-1-1", "jpg").unwrap();
+        let first_destination = first.destination_path().to_path_buf();
+        let second_destination = second.destination_path().to_path_buf();
+        fs::write(first.path(), b"first extracted image").unwrap();
+        fs::write(second.path(), b"second extracted image").unwrap();
+        fs::write(&second_destination, b"competing replacement").unwrap();
+
+        let outcome = publish_extracted_images(input.clone(), vec![first, second]);
+
+        assert!(outcome.failure.is_some());
+        assert_eq!(outcome.output_paths, vec![first_destination.clone()]);
+        assert_eq!(fs::read(&first_destination).unwrap(), b"first extracted image");
+        assert_eq!(fs::read(&second_destination).unwrap(), b"competing replacement");
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn rendered_image_materialization_reports_outputs_published_before_a_later_invalid_file() {
+        let temp = split_fixture_root("rendered-partial");
+        let input = temp.join("source.pdf");
+        let generated = temp.join("generated");
+        let output_folder = temp.join("outputs");
+        fs::create_dir_all(&generated).unwrap();
+        fs::create_dir_all(&output_folder).unwrap();
+        fs::write(&input, b"source").unwrap();
+        let first = generated.join("source-page-1.png");
+        let invalid = generated.join("unexpected.png");
+        fs::write(&first, b"rendered image").unwrap();
+        fs::write(&invalid, b"unexpected image").unwrap();
+
+        let outcome = materialize_rendered_images(&input, &OutputLocation::CustomFolder(output_folder.clone()), &[first, invalid]);
+
+        assert!(outcome.failure.is_some());
+        assert_eq!(outcome.output_paths.len(), 1);
+        assert!(outcome.output_paths[0].is_file());
+        assert_eq!(fs::read(&outcome.output_paths[0]).unwrap(), b"rendered image");
+        assert_eq!(fs::read_dir(&output_folder).unwrap().count(), 1);
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn split_materialization_reports_outputs_published_before_a_later_invalid_file() {
+        let temp = split_fixture_root("split-partial");
+        let input = temp.join("source.pdf");
+        let generated = temp.join("generated");
+        let output_folder = temp.join("outputs");
+        fs::create_dir_all(&generated).unwrap();
+        fs::create_dir_all(&output_folder).unwrap();
+        fs::write(&input, b"source").unwrap();
+        let first = generated.join("source-split-0.pdf");
+        let invalid = generated.join("unexpected.pdf");
+        fs::write(&first, b"first split").unwrap();
+        fs::write(&invalid, b"unexpected split").unwrap();
+
+        let outcome = materialize_split_outputs(&input, &OutputLocation::CustomFolder(output_folder.clone()), &[first, invalid]).unwrap_err();
+
+        assert!(outcome.failure.is_some());
+        assert_eq!(outcome.output_paths.len(), 1);
+        assert!(outcome.output_paths[0].is_file());
+        assert_eq!(fs::read(&outcome.output_paths[0]).unwrap(), b"first split");
+        assert_eq!(fs::read_dir(&output_folder).unwrap().count(), 1);
         fs::remove_dir_all(temp).unwrap();
     }
 
