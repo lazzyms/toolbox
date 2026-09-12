@@ -214,6 +214,7 @@ pub fn normalize_session_plan(plan: &PdfEditSessionPlan, page_count: usize) -> R
     validate_unique_rotations(&plan.rotate_pages, page_count)?;
     for operation in &plan.operations {
         validate_operation(operation, page_count)?;
+        validate_operation_targets(operation, &plan.delete_pages, page_count)?;
     }
     if page_order.iter().filter(|page| !plan.delete_pages.contains(page)).count() == 0 {
         return Err("The PDF edit plan must keep at least one page.".to_string());
@@ -317,6 +318,26 @@ fn validate_operation(operation: &PdfEditOperation, page_count: usize) -> Result
             }
         }
     }
+}
+
+fn validate_operation_targets(operation: &PdfEditOperation, deleted_pages: &[usize], page_count: usize) -> Result<(), String> {
+    let targets = match operation {
+        PdfEditOperation::Crop { scope, .. } => scoped_indices(scope, page_count)?,
+        PdfEditOperation::Overlay { overlay } => match overlay {
+            PdfOverlay::Edit { pages, .. } => optional_indices(pages, page_count, "edit pages")?,
+            PdfOverlay::Watermark { pages, .. } => optional_indices(pages, page_count, "watermark pages")?,
+            PdfOverlay::Sign { page, scope, .. } => match scope {
+                PageScope::All => vec![*page],
+                PageScope::Selected { .. } => scoped_indices(scope, page_count)?,
+            },
+            PdfOverlay::PageNumbers { pages, .. } => optional_indices(pages, page_count, "page-number pages")?,
+        },
+        PdfEditOperation::AddPages { .. } => return Ok(()),
+    };
+    if let Some(page) = targets.into_iter().find(|page| deleted_pages.contains(page)) {
+        return Err(format!("PDF edit operation targets page {} that is also scheduled for deletion.", page + 1));
+    }
+    Ok(())
 }
 
 pub fn crop(request: &CropPdfRequest, input: PathBuf) -> JobOutcome {
@@ -1070,6 +1091,58 @@ mod session_tests {
             }],
         };
         assert!(normalize_session_plan(&invalid_insert, 2).is_err());
+    }
+
+    #[test]
+    fn session_plan_rejects_crop_and_overlay_targets_deleted_pages() {
+        let crop = PdfEditSessionPlan {
+            page_order: vec![],
+            delete_pages: vec![0],
+            rotate_pages: vec![],
+            operations: vec![PdfEditOperation::Crop {
+                rectangle: PdfRect { x: 0.0, y: 0.0, width: 10.0, height: 10.0 },
+                scope: PageScope::Selected { pages: vec![0] },
+            }],
+        };
+        assert!(normalize_session_plan(&crop, 2).is_err());
+
+        let overlay = PdfEditSessionPlan {
+            page_order: vec![],
+            delete_pages: vec![1],
+            rotate_pages: vec![],
+            operations: vec![PdfEditOperation::Overlay {
+                overlay: PdfOverlay::PageNumbers { start_number: None, font_size: None, position: None, pages: Some(vec![1]) },
+            }],
+        };
+        assert!(normalize_session_plan(&overlay, 2).is_err());
+    }
+
+    #[test]
+    fn session_rejects_deleted_page_targets_before_reserving_output() {
+        for (name, operation) in [
+            ("crop", PdfEditOperation::Crop {
+                rectangle: PdfRect { x: 0.0, y: 0.0, width: 10.0, height: 10.0 },
+                scope: PageScope::Selected { pages: vec![0] },
+            }),
+            ("overlay", PdfEditOperation::Overlay {
+                overlay: PdfOverlay::PageNumbers { start_number: None, font_size: None, position: None, pages: Some(vec![0]) },
+            }),
+        ] {
+            let source = temp_path(&format!("deleted-target-{name}.pdf"));
+            let output_dir = temp_path(&format!("deleted-target-{name}-output"));
+            std::fs::create_dir_all(&output_dir).expect("output directory should be created");
+            make_pdf(&source);
+            let outcome = apply_session(&PdfEditSessionRequest {
+                paths: vec![source.clone()],
+                plan: PdfEditSessionPlan { page_order: vec![], delete_pages: vec![0], rotate_pages: vec![], operations: vec![operation] },
+                output_location: location(&output_dir),
+            }, source.clone());
+            assert!(outcome.failure.as_ref().is_some_and(|error| error.message.contains("scheduled for deletion")), "{name}: {:?}", outcome.failure);
+            assert!(outcome.output_paths.is_empty());
+            assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
+            let _ = std::fs::remove_file(source);
+            let _ = std::fs::remove_dir(output_dir);
+        }
     }
 
     #[test]

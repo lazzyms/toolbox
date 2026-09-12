@@ -487,6 +487,30 @@ test("Image crop keeps the source interaction surface and shows a separate resul
     await expect(overlay).toHaveAttribute("style", /top: 37\.5%/);
 });
 
+test("Image crop cancels a global pointer interruption before a later move", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Image editor", exact: true }).click();
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await page.getByRole("toolbar", { name: "Image editor tools" }).getByRole("button", { name: "Crop Images", exact: true }).click();
+    await page.getByLabel("Crop width").fill("160");
+    await page.getByLabel("Crop height").fill("120");
+    await page.getByLabel("Crop left").fill("80");
+    await page.getByLabel("Crop top").fill("60");
+    await expect(page.getByLabel("Crop selection")).toBeVisible();
+
+    const stage = (await page.locator(".image-editor-preview-stage").boundingBox())!;
+    const before = { left: await page.getByLabel("Crop left").inputValue(), top: await page.getByLabel("Crop top").inputValue() };
+    await page.locator(".image-editor-preview-stage").dispatchEvent("pointerdown", {
+        pointerId: 77, button: 0, clientX: stage.x + stage.width * .25, clientY: stage.y + stage.height * .25,
+    });
+    await page.evaluate(() => window.dispatchEvent(new PointerEvent("pointercancel", { pointerId: 77, bubbles: true })));
+    await page.locator(".image-editor-preview-stage").dispatchEvent("pointermove", {
+        pointerId: 77, clientX: stage.x + stage.width * .75, clientY: stage.y + stage.height * .75,
+    });
+    await expect(page.getByLabel("Crop left")).toHaveValue(before.left);
+    await expect(page.getByLabel("Crop top")).toHaveValue(before.top);
+});
+
 test("Image aspect crop uses the anchored maximum-fit geometry for overlay and result", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Open Image editor", exact: true }).click();
