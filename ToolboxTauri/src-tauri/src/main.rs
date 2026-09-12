@@ -5,7 +5,7 @@ mod kit;
 
 use crate::file_actions::{open_output_path, reveal_output_path};
 use crate::kit::common::JobOutcome;
-use crate::kit::images::{ImageProcessor, Options as ImageOptions, OutputFormat};
+use crate::kit::images::{ImageProcessor, Options as ImageOptions};
 use crate::kit::images::tools;
 use crate::kit::pdf::{editor, metadata, remaining, scene, PDFProcessor};
 use crate::kit::vision;
@@ -42,12 +42,14 @@ async fn compress_images(request: CompressImagesRequest) -> Vec<JobOutcome> {
 
 #[tauri::command]
 async fn convert_images(request: ConvertImagesRequest) -> Vec<JobOutcome> {
-    let img_format = match request.format.as_str() {
-        "jpg" => OutputFormat::Jpeg,
-        "png" => OutputFormat::Png,
-        "webp" => OutputFormat::WebP,
-        "heic" => OutputFormat::Heic,
-        _ => OutputFormat::Png,
+    let img_format = match tools::parse_output_format(&request.format) {
+        Ok(format) => format,
+        Err(error) => {
+            if request.paths.is_empty() {
+                return vec![JobOutcome::failure(std::path::PathBuf::new(), ToolError::invalid_input(error))];
+            }
+            return request.paths.into_iter().map(|path| JobOutcome::failure(path, ToolError::invalid_input(error.clone()))).collect();
+        }
     };
 
     BatchRunner::run("convert_images", request.paths, |path| {
@@ -726,6 +728,26 @@ mod command_tests {
         cleanup(&out[1].output_paths);
         let _ = std::fs::remove_file(&a);
         let _ = std::fs::remove_file(&b);
+    }
+
+    #[test]
+    fn convert_command_rejects_bogus_and_unsupported_formats_without_writing() {
+        for format in ["gif", "bogus"] {
+            let root = sandbox(&format!("convert-invalid-{format}"));
+            let src = root.join("source.png");
+            write_png(&src, 32, 4);
+            let original = std::fs::read(&src).unwrap();
+            let outcomes = tauri::async_runtime::block_on(convert_images(ConvertImagesRequest {
+                paths: vec![src.clone()], format: format.to_string(), output_location: location(&root, "output"),
+            }));
+            assert_eq!(outcomes.len(), 1);
+            assert!(outcomes[0].failure.as_ref().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput)));
+            assert!(outcomes[0].failure.as_ref().is_some_and(|error| error.message.contains("Unsupported image format")));
+            assert!(outcomes[0].output_paths.is_empty());
+            assert_eq!(std::fs::read(&src).unwrap(), original);
+            assert_eq!(std::fs::read_dir(root.join("output")).unwrap().count(), 0);
+            let _ = std::fs::remove_dir_all(root);
+        }
     }
 
     #[test]

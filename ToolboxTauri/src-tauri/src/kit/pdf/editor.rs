@@ -340,18 +340,28 @@ pub fn crop(request: &CropPdfRequest, input: PathBuf) -> JobOutcome {
 
 pub fn organize(request: &OrganizePdfRequest, input: PathBuf) -> JobOutcome {
     transform_pdf(input, &request.output_location, "-organized", |document, pages| {
-        let selected = selected_pages(&request.scope, pages.len());
-        let requested: Vec<_> = request.page_order.iter().copied().filter(|index| *index < pages.len() && selected(*index) && !request.delete_pages.contains(index)).collect();
-        let mut order = requested.into_iter().map(|index| pages[index]).collect::<Vec<_>>();
+        validate_unique_page_refs("page order", &request.page_order, pages.len())?;
+        validate_unique_page_refs("deleted pages", &request.delete_pages, pages.len())?;
+        validate_unique_rotations(&request.rotate_pages, pages.len())?;
+        let selected = scoped_indices(&request.scope, pages.len())?;
+        let selected_set = selected.iter().copied().collect::<std::collections::HashSet<_>>();
+        let deleted = request.delete_pages.iter().copied().filter(|index| selected_set.contains(index)).collect::<std::collections::HashSet<_>>();
+        let mut selected_order = request.page_order.iter().copied().filter(|index| selected_set.contains(index) && !deleted.contains(index)).collect::<Vec<_>>();
+        selected_order.extend(selected.iter().copied().filter(|index| !deleted.contains(index) && !request.page_order.contains(index)));
+        let mut selected_iter = selected_order.into_iter();
+        let mut order = Vec::new();
         for (index, page_id) in pages.iter().enumerate() {
-            if selected(index) && !request.delete_pages.contains(&index) && !request.page_order.contains(&index) { order.push(*page_id); }
+            if !selected_set.contains(&index) { order.push(*page_id); }
+            else if !deleted.contains(&index) { order.push(pages[selected_iter.next().ok_or("The selected organize scope could not be represented")?]); }
         }
         let root = document.get_dictionary(pages[0]).map_err(|e| e.to_string())?.get(b"Parent").map_err(|e| e.to_string())?.as_reference().map_err(|e| e.to_string())?;
         for operation in &request.rotate_pages {
-            if let Some(page_id) = pages.get(operation.page).copied() {
+            if selected_set.contains(&operation.page) {
+                if let Some(page_id) = pages.get(operation.page).copied() {
                 let page = document.get_dictionary_mut(page_id).map_err(|e| e.to_string())?;
                 let degrees = operation.degrees.rem_euclid(360);
                 page.set("Rotate", degrees as i64);
+                }
             }
         }
         if order.is_empty() { return Err("The organize plan must keep at least one page.".to_string()); }
@@ -1104,6 +1114,41 @@ mod session_tests {
         assert!(output_bytes.windows(b"session text".len()).any(|bytes| bytes == b"session text"));
         assert!(output_bytes.windows(b"session mark".len()).any(|bytes| bytes == b"session mark"));
         assert_eq!(std::fs::read(&source).expect("source should remain readable"), source_bytes);
+
+        let _ = std::fs::remove_file(source);
+        let _ = std::fs::remove_file(output);
+        let _ = std::fs::remove_dir(output_dir);
+    }
+
+    #[test]
+    fn organize_selected_scope_preserves_unselected_pages_and_order() {
+        let source = temp_path("organize-selected.pdf");
+        let output_dir = temp_path("organize-selected-output");
+        std::fs::create_dir_all(&output_dir).expect("output directory should be created");
+        let mut document = Document::with_version("1.7");
+        let pages_id = document.new_object_id();
+        let mut kids = Vec::new();
+        for index in 0..4 {
+            let content = document.add_object(Object::Stream(lopdf::Stream::new(dictionary! {}, format!("BT /F0 12 Tf 36 720 Td (page-{index}) Tj ET").into_bytes())));
+            kids.push(Object::Reference(document.add_object(dictionary! {
+                "Type" => "Page", "Parent" => pages_id, "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()], "Contents" => content,
+            })));
+        }
+        document.objects.insert(pages_id, dictionary! {"Type" => "Pages", "Kids" => kids, "Count" => 4}.into());
+        let catalog = document.add_object(dictionary! {"Type" => "Catalog", "Pages" => pages_id});
+        document.trailer.set("Root", catalog);
+        document.save(&source).expect("fixture PDF should save");
+
+        let outcome = organize(&OrganizePdfRequest {
+            paths: vec![source.clone()], page_order: vec![3, 1], delete_pages: vec![],
+            rotate_pages: vec![], scope: PageScope::Selected { pages: vec![1, 3] }, output_location: location(&output_dir),
+        }, source.clone());
+        assert!(outcome.failure.is_none(), "selected organize failed: {:?}", outcome.failure);
+        let output = outcome.output_paths.first().expect("organize should produce an output");
+        let output_document = Document::load(output).expect("organized PDF should reopen");
+        let order = output_document.get_pages().values().copied().collect::<Vec<_>>();
+        let contents = order.iter().map(|page| String::from_utf8_lossy(&output_document.get_page_content(*page)).into_owned()).collect::<Vec<_>>();
+        assert_eq!(contents, vec!["BT /F0 12 Tf 36 720 Td (page-0) Tj ET\n", "BT /F0 12 Tf 36 720 Td (page-3) Tj ET\n", "BT /F0 12 Tf 36 720 Td (page-2) Tj ET\n", "BT /F0 12 Tf 36 720 Td (page-1) Tj ET\n"]);
 
         let _ = std::fs::remove_file(source);
         let _ = std::fs::remove_file(output);

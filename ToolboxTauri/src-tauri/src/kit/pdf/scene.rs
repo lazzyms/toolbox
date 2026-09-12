@@ -255,11 +255,113 @@ fn add_signature_image(document: &mut Document, xobjects: &mut lopdf::Dictionary
     xobjects.set(name, id);
 }
 
+struct ScenePreflight {
+    pages_root: ObjectId,
+    source_pages: Vec<ObjectId>,
+}
+
+fn catalog_and_pages_root(document: &Document) -> Result<(ObjectId, ObjectId), String> {
+    let catalog = document.trailer.get(b"Root").map_err(err)?.as_reference().map_err(err)?;
+    let catalog_dict = document.get_dictionary(catalog).map_err(err)?;
+    let pages = catalog_dict.get(b"Pages").map_err(err)?.as_reference().map_err(err)?;
+    document.get_dictionary(pages).map_err(err)?;
+    Ok((catalog, pages))
+}
+
+fn has_catalog_structure(document: &Document, catalog: ObjectId, key: &[u8]) -> Result<bool, String> {
+    Ok(document.get_dictionary(catalog).map_err(err)?.get(key).is_ok())
+}
+
+fn page_has_widget(document: &Document, page: ObjectId) -> Result<bool, String> {
+    let Some(annotations) = document.get_dictionary(page).map_err(err)?.get(b"Annots").ok() else { return Ok(false); };
+    let annotations = resolve(document, annotations)?.as_array().map_err(err)?;
+    annotations.iter().map(|annotation| {
+        let id = annotation.as_reference().map_err(err)?;
+        let dictionary = document.get_dictionary(id).map_err(err)?;
+        Ok(dictionary.get(b"Subtype").ok().and_then(|value| value.as_name().ok()) == Some(b"Widget"))
+    }).collect::<Result<Vec<_>, String>>().map(|values| values.into_iter().any(|value| value))
+}
+
+fn scene_preflight(document: &Document, scene: &PdfScene, source_pages: &[ObjectId]) -> Result<ScenePreflight, String> {
+    let (catalog, pages_root) = catalog_and_pages_root(document)?;
+    let root = document.get_dictionary(pages_root).map_err(err)?;
+    if root.get(b"Type").map_err(err)?.as_name().map_err(err)? != b"Pages" {
+        return Err("PDF catalog has an unsupported page-tree root".into());
+    }
+    let kids = root.get(b"Kids").map_err(err)?.as_array().map_err(err)?;
+    if kids.len() != source_pages.len() {
+        return Err("PDF uses a nested or unsupported page tree; scene export was rejected before output".into());
+    }
+    for (index, kid) in kids.iter().enumerate() {
+        let page_id = kid.as_reference().map_err(err)?;
+        let page = document.get_dictionary(page_id).map_err(err)?;
+        if page.get(b"Type").map_err(err)?.as_name().map_err(err)? != b"Page" || page_id != source_pages[index] || page.get(b"Parent").map_err(err)?.as_reference().map_err(err)? != pages_root {
+            return Err("PDF uses a nested or unsupported page tree; scene export was rejected before output".into());
+        }
+    }
+
+    let mut seen = HashSet::new();
+    let mut retained = HashSet::new();
+    for page in &scene.pages {
+        if let Some(index) = page.source_index {
+            let source = *source_pages.get(index).ok_or("Scene source page is outside the document")?;
+            if !seen.insert(source) { return Err("A source page can appear only once in a scene".into()); }
+            retained.insert(source);
+        }
+    }
+    let has_navigation = [b"Outlines".as_slice(), b"Names", b"Dests", b"PageLabels", b"OpenAction"]
+        .into_iter()
+        .map(|key| has_catalog_structure(document, catalog, key))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .any(|present| present);
+    if retained.len() != source_pages.len() && (has_navigation || has_catalog_structure(document, catalog, b"AcroForm")?) {
+        return Err("This PDF contains navigation or form structures that could target a removed page; scene export was rejected before output".into());
+    }
+    for page in &scene.pages {
+        if let Some(index) = page.source_index {
+            let page_id = source_pages[index];
+            let page_dict = document.get_dictionary(page_id).map_err(err)?;
+            let has_annotations = page_dict.get(b"Annots").is_ok();
+            let has_widget = page_has_widget(document, page_id)?;
+            let source_rotation = inherited(document, page_id, b"Rotate")?.map(|value| value.as_i64().map_err(err)).transpose()?.unwrap_or(0).rem_euclid(360) as i32;
+            let geometry = geometry(document, page_id)?;
+            let output_crop = page.crop.as_ref().map(|crop| (crop.width, crop.height)).unwrap_or((page.width, page.height));
+            let source_box_matches_output = geometry.bbox[0].abs() <= 0.1 && geometry.bbox[1].abs() <= 0.1 && (geometry.bbox[2] - geometry.bbox[0] - output_crop.0).abs() <= 0.1 && (geometry.bbox[3] - geometry.bbox[1] - output_crop.1).abs() <= 0.1;
+            let changes_page_coordinates = page.crop.is_some() || !source_box_matches_output || (page.width - geometry.width).abs() > 0.1 || (page.height - geometry.height).abs() > 0.1 || page.rotation.rem_euclid(360) != source_rotation;
+            if has_annotations && changes_page_coordinates {
+                return Err("This PDF page has annotations or form widgets and the requested crop or rotation would change their coordinates; scene export was rejected before output".into());
+            }
+            if (page.crop.is_some() || changes_page_coordinates) && has_widget {
+                return Err("Cropping or rotating a PDF with form widgets is unsupported; remove the page operation or edit the source PDF first".into());
+            }
+        }
+    }
+    Ok(ScenePreflight { pages_root, source_pages: source_pages.to_vec() })
+}
+
+fn scene_resources(document: &Document, page_id: ObjectId, xobjects: lopdf::Dictionary, fonts: &HashMap<&'static str, ObjectId>, states: lopdf::Dictionary) -> Result<lopdf::Dictionary, String> {
+    let mut resources = match inherited(document, page_id, b"Resources")? {
+        Some(value) => value.as_dict().map_err(err)?.clone(),
+        None => lopdf::Dictionary::new(),
+    };
+    let mut page_xobjects = resources.get(b"XObject").ok().map(|value| resolve(document, value).and_then(|value| value.as_dict().map_err(err).map(Clone::clone))).transpose()?.unwrap_or_default();
+    for (name, value) in xobjects.into_iter() { page_xobjects.set(name, value); }
+    resources.set("XObject", page_xobjects);
+    let mut page_fonts = resources.get(b"Font").ok().map(|value| resolve(document, value).and_then(|value| value.as_dict().map_err(err).map(Clone::clone))).transpose()?.unwrap_or_default();
+    for (name, value) in fonts { page_fonts.set(*name, *value); }
+    resources.set("Font", page_fonts);
+    let mut page_states = resources.get(b"ExtGState").ok().map(|value| resolve(document, value).and_then(|value| value.as_dict().map_err(err).map(Clone::clone))).transpose()?.unwrap_or_default();
+    for (name, value) in states.into_iter() { page_states.set(name, value); }
+    resources.set("ExtGState", page_states);
+    Ok(resources)
+}
+
 pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
     if scene.pages.is_empty() || scene.pages.len()>2000 { return Err("Scene must contain 1–2000 pages".into()); }
     let mut doc=load(path)?;
     let sources:Vec<_>=doc.get_pages().values().copied().collect();
-    let root=doc.new_object_id();
+    let preflight = scene_preflight(&doc, scene, &sources)?;
     let font_specs: [(&str, &str); 9] = [
         ("Helvetica", "SceneFont"), ("Helvetica-Bold", "SceneFontHelveticaBold"),
         ("Helvetica-Oblique", "SceneFontHelveticaOblique"), ("Times-Roman", "SceneFontTimesRoman"),
@@ -356,12 +458,24 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
         let stream=doc.add_object(Stream::new(dictionary!{},content.into_bytes()));
         let mut page_fonts=lopdf::Dictionary::new();
         for (resource,id) in &fonts { page_fonts.set(*resource,*id); }
-        let id=doc.add_object(dictionary!{"Type"=>"Page","Parent"=>root,"MediaBox"=>array(&[0.,0.,crop.width,crop.height]),"Rotate"=>page.rotation.rem_euclid(360),"Resources"=>dictionary!{"XObject"=>xobjects,"Font"=>page_fonts,"ExtGState"=>states},"Contents"=>stream});
-        kids.push(Object::Reference(id));
+        let source_index = page.source_index;
+        if let Some(index) = source_index {
+            let id = preflight.source_pages[index];
+            let resources = scene_resources(&doc, id, xobjects, &fonts, states)?;
+            let page_dict = doc.get_dictionary_mut(id).map_err(err)?;
+            page_dict.set("MediaBox",array(&[0.,0.,crop.width,crop.height]));
+            page_dict.set("CropBox",array(&[0.,0.,crop.width,crop.height]));
+            page_dict.set("Rotate",page.rotation.rem_euclid(360));
+            page_dict.set("Resources",resources);
+            page_dict.set("Contents",stream);
+            kids.push(Object::Reference(id));
+        } else {
+            let id=doc.add_object(dictionary!{"Type"=>"Page","Parent"=>preflight.pages_root,"MediaBox"=>array(&[0.,0.,crop.width,crop.height]),"Rotate"=>page.rotation.rem_euclid(360),"Resources"=>dictionary!{"XObject"=>xobjects,"Font"=>page_fonts,"ExtGState"=>states},"Contents"=>stream});
+            kids.push(Object::Reference(id));
+        }
     }
-    doc.objects.insert(root,Object::Dictionary(dictionary!{"Type"=>"Pages","Count"=>kids.len() as i64,"Kids"=>kids}));
-    let catalog=doc.add_object(dictionary!{"Type"=>"Catalog","Pages"=>root});
-    doc.trailer.set("Root",catalog);
+    doc.objects.get_mut(&preflight.pages_root).ok_or("PDF page-tree root disappeared during scene export")?.as_dict_mut().map_err(err)?.set("Kids",kids);
+    doc.objects.get_mut(&preflight.pages_root).ok_or("PDF page-tree root disappeared during scene export")?.as_dict_mut().map_err(err)?.set("Count",scene.pages.len() as i64);
     Ok(doc)
 }
 
@@ -503,15 +617,26 @@ mod tests {
     fn fixture(path: &Path) {
         let mut d = Document::with_version("1.7");
         let root = d.new_object_id();
-        let nested = d.new_object_id();
         let font = d.add_object(dictionary! {"Type"=>"Font", "Subtype"=>"Type1", "BaseFont"=>"Helvetica"});
         let fonts = d.add_object(dictionary! {"OriginalFont"=>font});
         let resources = d.add_object(dictionary! {"Font"=>fonts});
         let content = d.add_object(Stream::new(dictionary!{}, b"q 1 0 0 rg 40 60 50 70 re f Q BT /OriginalFont 18 Tf 40 260 Td (Original content) Tj ET".to_vec()));
-        let first = d.add_object(dictionary! {"Type"=>"Page", "Parent"=>nested, "Contents"=>content});
+        let first = d.add_object(dictionary! {"Type"=>"Page", "Parent"=>root, "MediaBox"=>array(&[10.,20.,250.,360.]), "CropBox"=>array(&[20.,30.,220.,330.]), "Rotate"=>90, "Resources"=>resources, "Contents"=>content});
         let second = d.add_object(dictionary! {"Type"=>"Page", "Parent"=>root, "MediaBox"=>array(&[0.,0.,612.,792.]), "Resources"=>resources, "Contents"=>content});
+        d.objects.insert(root, Object::Dictionary(dictionary! {"Type"=>"Pages", "Kids"=>vec![Object::Reference(first),Object::Reference(second)], "Count"=>2}));
+        let catalog = d.add_object(dictionary! {"Type"=>"Catalog","Pages"=>root});
+        d.trailer.set("Root",catalog);
+        d.save(path).unwrap();
+    }
+    fn nested_fixture(path: &Path) {
+        let mut d = Document::with_version("1.7");
+        let root = d.new_object_id();
+        let nested = d.new_object_id();
+        let content = d.add_object(Stream::new(dictionary!{}, b"q".to_vec()));
+        let first = d.add_object(dictionary! {"Type"=>"Page", "Parent"=>nested, "Contents"=>content});
+        let second = d.add_object(dictionary! {"Type"=>"Page", "Parent"=>root, "MediaBox"=>array(&[0.,0.,612.,792.]), "Contents"=>content});
         d.objects.insert(nested, Object::Dictionary(dictionary! {"Type"=>"Pages", "Parent"=>root, "Kids"=>vec![Object::Reference(first)], "Count"=>1,
-            "MediaBox"=>array(&[10.,20.,250.,360.]), "CropBox"=>array(&[20.,30.,220.,330.]), "Rotate"=>90, "Resources"=>resources}));
+            "MediaBox"=>array(&[10.,20.,250.,360.]), "CropBox"=>array(&[20.,30.,220.,330.]), "Rotate"=>90}));
         d.objects.insert(root, Object::Dictionary(dictionary! {"Type"=>"Pages", "Kids"=>vec![Object::Reference(nested),Object::Reference(second)], "Count"=>2}));
         let catalog = d.add_object(dictionary! {"Type"=>"Catalog","Pages"=>root});
         d.trailer.set("Root",catalog);
@@ -531,11 +656,12 @@ mod tests {
     }
     #[test]
     fn geometry_resolves_nested_resources_boxes_and_rotation() {
-        let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); fixture(&input);
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); nested_fixture(&input);
         let d=load(&input).unwrap(); let pages:Vec<_>=d.get_pages().values().copied().collect();
         let g=geometry(&d,pages[0]).unwrap();
         assert_eq!((g.width,g.height),(300.,200.));
         assert_eq!(g.matrix,[0.,1.,1.,0.,-30.,-20.]);
+        fixture(&input);
         let composed=compose(&input,&scene()).unwrap();
         let pages:Vec<_>=composed.get_pages().values().copied().collect();
         assert_eq!(pages.len(),3);
@@ -637,5 +763,54 @@ mod tests {
         let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); fixture(&input);
         let runs=extract_text_runs(&input,1,300.,200.).unwrap();
         assert!(runs.iter().any(|run|run.text.contains("Original")),"runs: {runs:?}");
+    }
+    #[test]
+    fn scene_preserves_catalog_structures_and_page_annotations() {
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("structured.pdf"); fixture(&input);
+        let mut source=Document::load(&input).unwrap();
+        let pages:Vec<_>=source.get_pages().values().copied().collect();
+        let annotation=source.add_object(dictionary! {"Type"=>"Annot", "Subtype"=>"Link", "Rect"=>array(&[20.,20.,80.,50.]), "A"=>dictionary! {"S"=>"URI", "URI"=>"https://example.invalid"}});
+        let widget=source.add_object(dictionary! {"Type"=>"Annot", "Subtype"=>"Widget", "FT"=>"Tx", "Rect"=>array(&[90.,20.,180.,50.])});
+        source.get_dictionary_mut(pages[1]).unwrap().set("Annots",vec![Object::Reference(annotation),Object::Reference(widget)]);
+        let metadata=source.add_object(Stream::new(dictionary! {"Type"=>"Metadata", "Subtype"=>"XML"}, b"<xmpmeta>fixture</xmpmeta>".to_vec()));
+        let names=source.add_object(dictionary! {"Dests"=>dictionary! {"fixture"=>Object::Reference(pages[0])}});
+        let outlines=source.add_object(dictionary! {"Type"=>"Outlines", "Count"=>0});
+        let structure=source.add_object(dictionary! {"Type"=>"StructTreeRoot", "K"=>vec![]});
+        let acro_form=source.add_object(dictionary! {"Fields"=>vec![Object::Reference(widget)]});
+        let catalog_id=source.trailer.get(b"Root").unwrap().as_reference().unwrap();
+        let catalog=source.get_dictionary_mut(catalog_id).unwrap();
+        catalog.set("Metadata",metadata); catalog.set("Names",names); catalog.set("Outlines",outlines); catalog.set("StructTreeRoot",structure); catalog.set("AcroForm",acro_form);
+        source.save(&input).unwrap();
+        let original=fs::read(&input).unwrap();
+        let scene=PdfScene { pages: pages.iter().enumerate().map(|(index,_)| ScenePage { source_index:Some(index), width:if index==0 {300.} else {612.}, height:if index==0 {200.} else {792.}, rotation:if index==0 {90} else {0}, crop:None, objects:vec![] }).collect() };
+        let composed=compose(&input,&scene).unwrap();
+        let catalog=composed.get_dictionary(catalog_id).unwrap();
+        for key in [b"Metadata".as_slice(),b"Names",b"Outlines",b"StructTreeRoot",b"AcroForm"] { assert!(catalog.has(key),"catalog lost {key:?}"); }
+        let output_pages:Vec<_>=composed.get_pages().values().copied().collect();
+        assert_eq!(output_pages, pages);
+        let annots=composed.get_dictionary(output_pages[1]).unwrap().get(b"Annots").unwrap().as_array().unwrap();
+        assert_eq!(annots.len(),2);
+        assert_eq!(fs::read(&input).unwrap(),original);
+    }
+    #[test]
+    fn scene_rejects_nested_page_tree_before_output() {
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("nested.pdf"); nested_fixture(&input);
+        let scene=PdfScene { pages:vec![ScenePage { source_index:Some(0), width:300., height:200., rotation:0, crop:None, objects:vec![] }, ScenePage { source_index:Some(1), width:612., height:792., rotation:0, crop:None, objects:vec![] }] };
+        let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
+        assert!(result.failure.as_ref().is_some_and(|error| error.message.contains("nested")));
+        assert!(result.output_paths.is_empty());
+        assert!(!input.with_file_name("nested-edited-1.pdf").exists());
+    }
+    #[test]
+    fn scene_rejects_annotation_crop_before_output() {
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("annotated.pdf"); fixture(&input);
+        let mut source=Document::load(&input).unwrap(); let page=source.get_pages().values().next().copied().unwrap();
+        let annotation=source.add_object(dictionary! {"Type"=>"Annot", "Subtype"=>"Text", "Rect"=>array(&[20.,20.,80.,50.])});
+        source.get_dictionary_mut(page).unwrap().set("Annots",vec![Object::Reference(annotation)]); source.save(&input).unwrap();
+        let scene=PdfScene { pages:vec![ScenePage { source_index:Some(0), width:300., height:200., rotation:0, crop:Some(Rect{x:0.,y:0.,width:100.,height:100.}), objects:vec![] }] };
+        let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
+        assert!(result.failure.as_ref().is_some_and(|error| error.message.contains("annotation")));
+        assert!(result.output_paths.is_empty());
+        assert!(!input.with_file_name("annotated-edited-1.pdf").exists());
     }
 }
