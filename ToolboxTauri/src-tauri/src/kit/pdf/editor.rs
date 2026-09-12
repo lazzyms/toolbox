@@ -454,28 +454,24 @@ pub fn sign(request: &SignPdfRequest, input: PathBuf) -> JobOutcome {
             PageScope::All => vec![request.page],
             PageScope::Selected { .. } => scoped_indices(&request.scope, pages.len())?,
         };
-        let stream = format!("BT /Fsig 24 Tf {} {} Td ({}) Tj ET", request.rectangle.x, request.rectangle.y, escape_text(&request.text));
         for page_index in targets {
         let page_id = pages[page_index];
-        let (stream_id, resource_id, resource_name) = if let Some(path) = &request.signature_path {
+        let stream_id = if let Some(path) = &request.signature_path {
             let (bytes, width, height) = signature_jpeg(path)?;
             let image_id = document.add_object(Object::Stream(lopdf::Stream::new(dictionary! {
                 "Type" => "XObject", "Subtype" => "Image", "Width" => width as i64,
                 "Height" => height as i64, "ColorSpace" => "DeviceRGB", "BitsPerComponent" => 8,
                 "Filter" => "DCTDecode",
             }, bytes)));
-            let content = format!("q {} 0 0 {} {} {} cm /Isig Do Q", request.rectangle.width, request.rectangle.height, request.rectangle.x, request.rectangle.y);
-            (document.add_object(Object::Stream(lopdf::Stream::new(dictionary! {}, content.into_bytes()))), image_id, "XObject")
+            let resource_name = add_xobject(document, page_id, "Isig", image_id)?;
+            let content = format!("q {} 0 0 {} {} {} cm /{resource_name} Do Q", request.rectangle.width, request.rectangle.height, request.rectangle.x, request.rectangle.y);
+            document.add_object(Object::Stream(lopdf::Stream::new(dictionary! {}, content.into_bytes())))
         } else {
             let font_id = document.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
-            let content_id = document.add_object(Object::Stream(lopdf::Stream::new(dictionary! {}, stream.clone().into_bytes())));
-            (content_id, font_id, "Font")
+            let resource_name = add_font(document, page_id, "Fsig", font_id)?;
+            let content = format!("BT /{resource_name} 24 Tf {} {} Td ({}) Tj ET", request.rectangle.x, request.rectangle.y, escape_text(&request.text));
+            document.add_object(Object::Stream(lopdf::Stream::new(dictionary! {}, content.into_bytes())))
         };
-        if resource_name == "Font" {
-            add_font(document, page_id, "Fsig", resource_id)?;
-        } else {
-            add_xobject(document, page_id, "Isig", resource_id)?;
-        }
         append_content_stream(document, page_id, stream_id)?;
         }
         Ok(())
@@ -487,27 +483,20 @@ pub fn edit(request: &EditPdfRequest, input: PathBuf) -> JobOutcome {
         validate_rect(&request.rectangle)?;
         if request.mode != "shape" && request.text.trim().is_empty() { return Err("Text is required for this edit mode.".to_string()); }
         let targets = optional_indices(&request.pages, pages.len(), "edit pages")?;
-        let font_id = document.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
-        let content = if request.mode == "shape" {
-            format!("q 0 0 0 RG 1 w {} {} {} {} re S Q", request.rectangle.x, request.rectangle.y, request.rectangle.width, request.rectangle.height)
-        } else if request.mode == "highlight" {
-            format!("q 1 1 0 rg {} {} {} {} re f Q BT /Fedit 12 Tf {} {} Td ({}) Tj ET", request.rectangle.x, request.rectangle.y, request.rectangle.width, request.rectangle.height, request.rectangle.x + 4.0, request.rectangle.y + request.rectangle.height - 16.0, escape_text(&request.text))
-        } else {
-            format!("BT /Fedit 12 Tf {} {} Td ({}) Tj ET", request.rectangle.x, request.rectangle.y, escape_text(&request.text))
-        };
+        let font_id = (request.mode != "shape").then(|| document.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" }));
         for page_index in targets {
-            let stream_id = document.add_object(Object::Stream(lopdf::Stream::new(dictionary! {}, content.clone().into_bytes())));
             let page_id = pages[page_index];
-            let page = document.get_dictionary_mut(page_id).map_err(|e| e.to_string())?;
-            if !page.has(b"Resources") { page.set("Resources", Object::Dictionary(dictionary! {})); }
-            let resources = page.get_mut(b"Resources").map_err(|e| e.to_string())?.as_dict_mut().map_err(|e| e.to_string())?;
-            resources.set("Font", resources.get(b"Font").cloned().unwrap_or_else(|_| Object::Dictionary(dictionary! {})));
-            resources.get_mut(b"Font").map_err(|e| e.to_string())?.as_dict_mut().map_err(|e| e.to_string())?.set("Fedit", font_id);
-            match page.get_mut(b"Contents") {
-                Ok(Object::Array(contents)) => contents.push(Object::Reference(stream_id)),
-                Ok(Object::Reference(existing)) => { let prior = Object::Reference(*existing); page.set("Contents", Object::Array(vec![prior, Object::Reference(stream_id)])); },
-                _ => page.set("Contents", Object::Reference(stream_id)),
-            }
+            let content = if let Some(font_id) = font_id {
+                let font_name = add_font(document, page_id, "Fedit", font_id)?;
+                if request.mode == "highlight" {
+                    format!("q 1 1 0 rg {} {} {} {} re f Q BT /{font_name} 12 Tf {} {} Td ({}) Tj ET", request.rectangle.x, request.rectangle.y, request.rectangle.width, request.rectangle.height, request.rectangle.x + 4.0, request.rectangle.y + request.rectangle.height - 16.0, escape_text(&request.text))
+                } else {
+                    format!("BT /{font_name} 12 Tf {} {} Td ({}) Tj ET", request.rectangle.x, request.rectangle.y, escape_text(&request.text))
+                }
+            } else {
+                format!("q 0 0 0 RG 1 w {} {} {} {} re S Q", request.rectangle.x, request.rectangle.y, request.rectangle.width, request.rectangle.height)
+            };
+            append_content(document, page_id, content.as_bytes())?;
         }
         Ok(())
     })
@@ -653,15 +642,20 @@ fn apply_overlay(document: &mut Document, pages: &[lopdf::ObjectId], overlay: &P
             for page_index in &targets {
                 validate_rect_for_page(document, pages[*page_index], rectangle)?;
             }
-            let font_id = document.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
-            let content = match mode {
-                PdfEditMode::Shape => format!("q 0 0 0 RG 1 w {} {} {} {} re S Q", rectangle.x, rectangle.y, rectangle.width, rectangle.height),
-                PdfEditMode::Highlight => format!("q 1 1 0 rg {} {} {} {} re f Q BT /Fedit 12 Tf {} {} Td ({}) Tj ET", rectangle.x, rectangle.y, rectangle.width, rectangle.height, rectangle.x + 4.0, rectangle.y + rectangle.height - 16.0, escape_text(text)),
-                PdfEditMode::Text | PdfEditMode::Note => format!("BT /Fedit 12 Tf {} {} Td ({}) Tj ET", rectangle.x, rectangle.y, escape_text(text)),
-            };
+            let font_id = (!matches!(mode, PdfEditMode::Shape)).then(|| document.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" }));
             for page_index in targets {
-                add_font(document, pages[page_index], "Fedit", font_id)?;
-                append_content(document, pages[page_index], content.as_bytes())?;
+                let page_id = pages[page_index];
+                let content = if let Some(font_id) = font_id {
+                    let font_name = add_font(document, page_id, "Fedit", font_id)?;
+                    match mode {
+                        PdfEditMode::Highlight => format!("q 1 1 0 rg {} {} {} {} re f Q BT /{font_name} 12 Tf {} {} Td ({}) Tj ET", rectangle.x, rectangle.y, rectangle.width, rectangle.height, rectangle.x + 4.0, rectangle.y + rectangle.height - 16.0, escape_text(text)),
+                        PdfEditMode::Text | PdfEditMode::Note => format!("BT /{font_name} 12 Tf {} {} Td ({}) Tj ET", rectangle.x, rectangle.y, escape_text(text)),
+                        PdfEditMode::Shape => unreachable!(),
+                    }
+                } else {
+                    format!("q 0 0 0 RG 1 w {} {} {} {} re S Q", rectangle.x, rectangle.y, rectangle.width, rectangle.height)
+                };
+                append_content(document, page_id, content.as_bytes())?;
             }
             Ok(())
         }
@@ -677,8 +671,8 @@ fn apply_overlay(document: &mut Document, pages: &[lopdf::ObjectId], overlay: &P
                 for page_index in targets {
                     let (left, bottom, right, top) = page_bounds(document, pages[page_index])?;
                     let (x, y) = watermark_position(position.as_ref(), right - left, top - bottom);
-                    add_xobject(document, pages[page_index], "Iwm", image_id)?;
-                    let content = format!("q {} 0 0 {} {} {} cm /Iwm Do Q", 160.0, 80.0, left + x, bottom + y);
+                    let image_name = add_xobject(document, pages[page_index], "Iwm", image_id)?;
+                    let content = format!("q {} 0 0 {} {} {} cm /{image_name} Do Q", 160.0, 80.0, left + x, bottom + y);
                     append_content(document, pages[page_index], content.as_bytes())?;
                 }
             } else {
@@ -686,10 +680,10 @@ fn apply_overlay(document: &mut Document, pages: &[lopdf::ObjectId], overlay: &P
                 for page_index in targets {
                     let (left, bottom, right, top) = page_bounds(document, pages[page_index])?;
                     let (x, y) = watermark_position(position.as_ref(), right - left, top - bottom);
-                    add_font(document, pages[page_index], "Fwm", font_id)?;
+                    let font_name = add_font(document, pages[page_index], "Fwm", font_id)?;
                     let graphics_state = document.add_object(dictionary! { "Type" => "ExtGState", "ca" => (*opacity as f32 / 100.0).clamp(0.01, 1.0), "CA" => (*opacity as f32 / 100.0).clamp(0.01, 1.0) });
-                    add_ext_gstate(document, pages[page_index], "GSwm", graphics_state)?;
-                    let content = format!("q /GSwm gs 0 0 0 rg BT /Fwm 48 Tf {} {} Td ({}) Tj ET Q", left + x, bottom + y, escape_text(text));
+                    let state_name = add_ext_gstate(document, pages[page_index], "GSwm", graphics_state)?;
+                    let content = format!("q /{state_name} gs 0 0 0 rg BT /{font_name} 48 Tf {} {} Td ({}) Tj ET Q", left + x, bottom + y, escape_text(text));
                     append_content(document, pages[page_index], content.as_bytes())?;
                 }
             }
@@ -715,15 +709,15 @@ fn apply_overlay(document: &mut Document, pages: &[lopdf::ObjectId], overlay: &P
                     "Filter" => "DCTDecode",
                 }, bytes)));
                 for page_index in targets {
-                    add_xobject(document, pages[page_index], "Isig", image_id)?;
-                    let content = format!("q {} 0 0 {} {} {} cm /Isig Do Q", rectangle.width, rectangle.height, rectangle.x, rectangle.y);
+                    let image_name = add_xobject(document, pages[page_index], "Isig", image_id)?;
+                    let content = format!("q {} 0 0 {} {} {} cm /{image_name} Do Q", rectangle.width, rectangle.height, rectangle.x, rectangle.y);
                     append_content(document, pages[page_index], content.as_bytes())?;
                 }
             } else {
                 let font_id = document.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
                 for page_index in targets {
-                    add_font(document, pages[page_index], "Fsig", font_id)?;
-                    let content = format!("BT /Fsig 24 Tf {} {} Td ({}) Tj ET", rectangle.x, rectangle.y, escape_text(text));
+                    let font_name = add_font(document, pages[page_index], "Fsig", font_id)?;
+                    let content = format!("BT /{font_name} 24 Tf {} {} Td ({}) Tj ET", rectangle.x, rectangle.y, escape_text(text));
                     append_content(document, pages[page_index], content.as_bytes())?;
                 }
             }
@@ -736,8 +730,8 @@ fn apply_overlay(document: &mut Document, pages: &[lopdf::ObjectId], overlay: &P
                 let size = font_size.unwrap_or(12).clamp(8, 72);
                 let (x, y) = page_number_position(position.as_ref(), right - left, top - bottom);
                 let number = start_number.unwrap_or(1).saturating_add(page_index as u32).saturating_sub(1);
-                add_font(document, pages[page_index], "Fnum", font_id)?;
-                let content = format!("BT /Fnum {size} Tf {} {} Td ({number}) Tj ET", left + x, bottom + y);
+                let font_name = add_font(document, pages[page_index], "Fnum", font_id)?;
+                let content = format!("BT /{font_name} {size} Tf {} {} Td ({number}) Tj ET", left + x, bottom + y);
                 append_content(document, pages[page_index], content.as_bytes())?;
             }
             Ok(())
@@ -787,7 +781,16 @@ fn append_content_stream(document: &mut Document, page_id: lopdf::ObjectId, stre
     Ok(())
 }
 
-pub(crate) fn add_resource(document: &mut Document, page_id: lopdf::ObjectId, category: &str, name: &str, value: Object) -> Result<(), String> {
+fn next_resource_name(entries: &lopdf::Dictionary, category: &str, base: &str) -> Result<String, String> {
+    if !entries.has(base.as_bytes()) { return Ok(base.to_string()); }
+    for suffix in 1..=10000 {
+        let candidate = format!("{base}{suffix}");
+        if !entries.has(candidate.as_bytes()) { return Ok(candidate); }
+    }
+    Err(format!("Could not allocate a unique {category} resource name"))
+}
+
+pub(crate) fn add_resource(document: &mut Document, page_id: lopdf::ObjectId, category: &str, name: &str, value: Object) -> Result<String, String> {
     let mut resources = inherited(document, page_id, b"Resources")?
         .map(|value| value.as_dict().map(|dictionary| dictionary.clone()).map_err(|error| error.to_string()))
         .transpose()?
@@ -796,21 +799,22 @@ pub(crate) fn add_resource(document: &mut Document, page_id: lopdf::ObjectId, ca
         Ok(value) => super::resolve(document, value).and_then(|value| value.as_dict().map(|dictionary| dictionary.clone()).map_err(|error| error.to_string()))?,
         Err(_) => lopdf::Dictionary::new(),
     };
-    entries.set(name, value);
+    let resource_name = next_resource_name(&entries, category, name)?;
+    entries.set(resource_name.as_str(), value);
     resources.set(category, entries);
     document.get_dictionary_mut(page_id).map_err(|error| error.to_string())?.set("Resources", Object::Dictionary(resources));
-    Ok(())
+    Ok(resource_name)
 }
 
-fn add_font(document: &mut Document, page_id: lopdf::ObjectId, name: &str, font_id: lopdf::ObjectId) -> Result<(), String> {
+fn add_font(document: &mut Document, page_id: lopdf::ObjectId, name: &str, font_id: lopdf::ObjectId) -> Result<String, String> {
     add_resource(document, page_id, "Font", name, Object::Reference(font_id))
 }
 
-fn add_xobject(document: &mut Document, page_id: lopdf::ObjectId, name: &str, image_id: lopdf::ObjectId) -> Result<(), String> {
+fn add_xobject(document: &mut Document, page_id: lopdf::ObjectId, name: &str, image_id: lopdf::ObjectId) -> Result<String, String> {
     add_resource(document, page_id, "XObject", name, Object::Reference(image_id))
 }
 
-fn add_ext_gstate(document: &mut Document, page_id: lopdf::ObjectId, name: &str, state_id: lopdf::ObjectId) -> Result<(), String> {
+fn add_ext_gstate(document: &mut Document, page_id: lopdf::ObjectId, name: &str, state_id: lopdf::ObjectId) -> Result<String, String> {
     add_resource(document, page_id, "ExtGState", name, Object::Reference(state_id))
 }
 
@@ -1118,15 +1122,18 @@ mod session_tests {
         let mut document = Document::with_version("1.7");
         let pages_id = document.new_object_id();
         let font_id = document.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Courier" });
-        let inherited_fonts = document.add_object(dictionary! { "F0" => font_id });
+        let inherited_fonts = document.add_object(dictionary! { "F0" => font_id, "Fedit" => font_id, "Fnum" => font_id, "Fsig" => font_id, "Fwm" => font_id });
         let existing_xobject = document.add_object(Object::Stream(lopdf::Stream::new(dictionary! {
             "Type" => "XObject", "Subtype" => "Image", "Width" => 1, "Height" => 1,
             "ColorSpace" => "DeviceRGB", "BitsPerComponent" => 8,
         }, vec![0, 0, 0])));
-        let inherited_xobjects = document.add_object(dictionary! { "Existing" => existing_xobject });
+        let inherited_xobjects = document.add_object(dictionary! { "Existing" => existing_xobject, "Iwm" => existing_xobject, "Isig" => existing_xobject });
+        let existing_state = document.add_object(dictionary! { "Type" => "ExtGState", "ca" => 0.25, "CA" => 0.25 });
+        let inherited_states = document.add_object(dictionary! { "GSwm" => existing_state });
         let inherited_resources = document.add_object(dictionary! {
             "Font" => inherited_fonts,
             "XObject" => inherited_xobjects,
+            "ExtGState" => inherited_states,
         });
         let content = document.add_object(Object::Stream(lopdf::Stream::new(dictionary! {}, b"BT /F0 12 Tf 10 10 Td (source) Tj ET".to_vec())));
         let page_id = document.add_object(dictionary! {
@@ -1145,7 +1152,7 @@ mod session_tests {
             start_number: Some(1), font_size: Some(12), position: None, pages: None,
         }).unwrap();
         apply_overlay(&mut document, &[page_id], &PdfOverlay::Edit {
-            mode: PdfEditMode::Shape, text: String::new(), pages: None,
+            mode: PdfEditMode::Text, text: "edit".to_string(), pages: None,
             rectangle: PdfRect { x: 10.0, y: 10.0, width: 20.0, height: 20.0 },
         }).unwrap();
         apply_overlay(&mut document, &[page_id], &PdfOverlay::Sign {
@@ -1161,11 +1168,16 @@ mod session_tests {
         let resources = page.get(b"Resources").unwrap().as_dict().unwrap();
         let fonts = resources.get(b"Font").unwrap().as_dict().unwrap();
         assert!(fonts.has(b"F0"));
-        for name in [b"Fnum".as_slice(), b"Fedit", b"Fsig", b"Fwm"] { assert!(fonts.has(name), "missing font {name:?}"); }
+        for name in [b"Fnum".as_slice(), b"Fedit", b"Fsig", b"Fwm", b"Fnum1", b"Fedit1", b"Fsig1", b"Fwm1"] { assert!(fonts.has(name), "missing font {name:?}"); }
         let xobjects = resources.get(b"XObject").unwrap().as_dict().unwrap();
         assert!(xobjects.has(b"Existing"));
         assert!(xobjects.has(b"Added"));
-        assert!(resources.get(b"ExtGState").unwrap().as_dict().unwrap().has(b"GSwm"));
+        let states = resources.get(b"ExtGState").unwrap().as_dict().unwrap();
+        assert!(states.has(b"GSwm"));
+        assert!(states.has(b"GSwm1"));
+        let content_bytes = document.get_page_content(page_id);
+        let content = String::from_utf8_lossy(&content_bytes);
+        for name in ["/Fnum1", "/Fedit1", "/Fsig1", "/Fwm1", "/GSwm1"] { assert!(content.contains(name), "missing generated resource reference {name}: {content}"); }
 
         let _ = std::fs::remove_file(source);
     }

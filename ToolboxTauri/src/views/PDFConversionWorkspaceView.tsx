@@ -10,6 +10,10 @@ import type { AtomicToolId, ToolDefinition, ToolResult } from "../contracts";
 const conversionActions = toolsForWorkspaceId("pdf-convert");
 const conversionIds = new Set<string>(conversionActions.map((tool) => tool.id));
 const nonInspectingConversionIds = new Set(["images-to-pdf", "pdf-merge", "pdf-compress"]);
+const outputPreviewLimitations: Partial<Record<AtomicToolId, string>> = {
+  "pdf-to-text": "Output preview unavailable. Export creates a text file from the selected pages.",
+  "pdf-extract-pages": "Output preview unavailable. Export creates a PDF containing the selected pages.",
+};
 type PdfInspectionState =
   | { kind: "idle" }
   | { kind: "pending"; path: string }
@@ -266,6 +270,8 @@ const ConversionControls = ({
     : null;
   const canExport = files.length > 0 && (!needsMultipleInputs || files.length > 1) && rangeSelectionIssue === null
     && (nonInspectingConversionIds.has(activeUtility.id) || inspectionReady);
+  const outputPreviewLimitation = outputPreviewLimitations[activeUtility.id];
+  const previewRegionLabel = outputPreviewLimitation ? "Source page selection" : "Conversion preview";
 
   return (
     <div className="workspace-control-panel">
@@ -276,10 +282,10 @@ const ConversionControls = ({
         label="PDF conversion tools"
       />
       {needsPageSelection && (
-        <section className="conversion-preview" role="region" aria-label="Conversion preview">
+        <section className="conversion-preview" role="region" aria-label={previewRegionLabel}>
           <div className="workspace-panel-intro">
-            <p className="workspace-panel-label">Page selection</p>
-            <p className="workspace-panel-copy">Preview the source pages and choose exactly what this conversion should include.</p>
+            <p className="workspace-panel-label">{outputPreviewLimitation ? "Source page selection" : "Page selection"}</p>
+            <p className="workspace-panel-copy">{outputPreviewLimitation ? "Choose exactly which source pages this conversion should include." : "Preview the rendered output and choose exactly what this conversion should include."}</p>
           </div>
           {inspectedDocument ? (
             <div className="conversion-page-grid">
@@ -291,7 +297,7 @@ const ConversionControls = ({
                     checked={selectedPages.includes(page.index)}
                     onChange={() => togglePage(page.index)}
                   />
-                  {page.preview ? <img src={page.preview} alt={`Conversion preview page ${page.index + 1}`} /> : <span className="conversion-page-placeholder">Preview unavailable</span>}
+                  {page.preview ? <img src={page.preview} alt={`Source page preview ${page.index + 1}`} /> : <span className="conversion-page-placeholder">Source preview unavailable</span>}
                   <span>Page {page.index + 1}</span>
                 </label>
               ))}
@@ -300,6 +306,7 @@ const ConversionControls = ({
             <p className="workspace-note">{inspection.kind === "error" && inspection.path === inputPath ? inspectError : "Select a PDF to load its page previews."}</p>
           )}
           {inspectedDocument && <p className="workspace-note">{selectionIssue?.message || selectedPageLabel(selectionCount)}</p>}
+          {outputPreviewLimitation && <p className="workspace-note" role="status">{outputPreviewLimitation}</p>}
         </section>
       )}
 

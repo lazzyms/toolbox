@@ -577,6 +577,7 @@ mod command_tests {
 
     #[test]
     fn every_registered_command_runs_with_real_fixtures_in_isolated_sandboxes() {
+        let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
         let root = sandbox("all");
         let image = root.join("image.png"); write_png(&image, 256, 44);
         let image_two = root.join("image-two.png"); write_png(&image_two, 256, 88);
