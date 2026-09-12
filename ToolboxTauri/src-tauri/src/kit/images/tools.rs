@@ -84,6 +84,22 @@ pub struct ImageEditExportRequest {
 fn default_edit_suffix() -> String { "-edited".to_string() }
 
 impl ImageEditPlan {
+    fn canonicalized(&self) -> Self {
+        let latest_crop = self.edits.iter().rev().find(|edit| matches!(edit, ImageEdit::Crop { .. })).cloned();
+        let mut crop_inserted = false;
+        let mut edits = Vec::with_capacity(self.edits.len());
+        for edit in &self.edits {
+            if matches!(edit, ImageEdit::Crop { .. }) {
+                if crop_inserted { continue; }
+                crop_inserted = true;
+                if let Some(crop) = &latest_crop { edits.push(crop.clone()); }
+            } else {
+                edits.push(edit.clone());
+            }
+        }
+        Self { edits, ..self.clone() }
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if self.edits.is_empty() { return Err("Add at least one image edit before exporting.".to_string()); }
         for edit in &self.edits {
@@ -118,19 +134,21 @@ impl ImageEditPlan {
 }
 
 pub fn inspect_edit_preview(request: &ImageEditPreviewRequest) -> Result<ImagePreview, String> {
-    request.plan.validate()?;
+    let plan = request.plan.canonicalized();
+    plan.validate()?;
     let source = crate::kit::images::load_image(&request.path)?;
-    let (edited, _, _) = apply_edit_plan(&request.plan, source, crate::kit::images::detect_format(&request.path))?;
+    let (edited, _, _) = apply_edit_plan(&plan, source, crate::kit::images::detect_format(&request.path))?;
     encode_preview(edited)
 }
 
 pub fn export_edit_plan(plan: &ImageEditPlan, input: PathBuf) -> JobOutcome {
+    let plan = plan.canonicalized();
     if let Err(error) = plan.validate() { return failure(input, error); }
     let source = match crate::kit::images::load_image(&input) {
         Ok(image) => image,
         Err(error) => return failure(input, error),
     };
-    let (edited, format, quality) = match apply_edit_plan(plan, source, crate::kit::images::detect_format(&input)) {
+    let (edited, format, quality) = match apply_edit_plan(&plan, source, crate::kit::images::detect_format(&input)) {
         Ok(value) => value,
         Err(error) => return failure(input, error),
     };

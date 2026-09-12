@@ -54,7 +54,7 @@ export const createImageEditHistory = (): ImageEditHistory => ({
 
 export const commitImageEdit = (history: ImageEditHistory, edit: ImageEditOperation): ImageEditHistory => ({
   past: [...history.past, history.present],
-  present: { ...history.present, edits: [...history.present.edits, edit] },
+  present: { ...history.present, edits: upsertImageEdit(history.present.edits, edit) },
   future: [],
 });
 
@@ -74,7 +74,16 @@ export const redoImageEdit = (history: ImageEditHistory): ImageEditHistory => {
 
 export const resetImageEdits = (): ImageEditHistory => createImageEditHistory();
 
+const upsertImageEdit = (edits: ImageEditOperation[], edit: ImageEditOperation): ImageEditOperation[] => {
+  if (edit.kind !== "crop") return [...edits, edit];
+  const cropIndex = edits.findIndex((existing) => existing.kind === "crop");
+  if (cropIndex < 0) return [...edits, edit];
+  const nextEdits = edits.filter((existing, index) => existing.kind !== "crop" || index === cropIndex);
+  nextEdits[cropIndex] = edit;
+  return nextEdits;
+};
+
 export const planWithDraft = (plan: ImageEditPlan, draft: ImageEditOperation | null): ImageEditPlan => ({
   ...plan,
-  edits: draft ? [...plan.edits, draft] : plan.edits,
+  edits: draft ? upsertImageEdit(plan.edits, draft) : plan.edits,
 });
