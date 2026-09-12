@@ -71,10 +71,22 @@ if (command === "preview_pdf_scene") return { dataUrl: "data:image/svg+xml,%3Csv
                     return { width: 640, height: 480, dataUrl: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='640' height='480'%3E%3Crect width='100%25' height='100%25' fill='white'/%3E%3C/svg%3E" };
                 }
                 if (command === "inspect_image_edit_preview") {
-                    const edits = (args as { request?: { plan?: { edits?: Array<{ kind: string; width?: number; height?: number }> } } }).request?.plan?.edits ?? [];
+                    const edits = (args as { request?: { plan?: { edits?: Array<{ kind: string; width?: number; height?: number; mode?: string; aspectWidth?: number; aspectHeight?: number; anchor?: string }> } } }).request?.plan?.edits ?? [];
                     const crop = [...edits].reverse().find((edit) => edit.kind === "crop");
-                    const width = crop?.width ?? 640;
-                    const height = crop?.height ?? 480;
+                    const sourceWidth = 640;
+                    const sourceHeight = 480;
+                    let width = crop?.width ?? sourceWidth;
+                    let height = crop?.height ?? sourceHeight;
+                    if (crop?.mode === "aspectRatio" && crop.aspectWidth && crop.aspectHeight) {
+                        const ratio = crop.aspectWidth / crop.aspectHeight;
+                        if (sourceWidth / sourceHeight > ratio) {
+                            height = sourceHeight;
+                            width = Math.round(height * ratio);
+                        } else {
+                            width = sourceWidth;
+                            height = Math.round(width / ratio);
+                        }
+                    }
                     return { width, height, dataUrl: `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='${width}' height='${height}'%3E%3Crect width='100%25' height='100%25' fill='white'/%3E%3C/svg%3E` };
                 }
                 if (command === "inspect_image_metadata") return ["fixture image"];
@@ -462,6 +474,24 @@ test("Image crop keeps the source interaction surface and shows a separate resul
     await expect(page.getByLabel("Crop top")).toHaveValue("180");
     await expect(overlay).toHaveAttribute("style", /left: 37\.5%/);
     await expect(overlay).toHaveAttribute("style", /top: 37\.5%/);
+});
+
+test("Image aspect crop uses the anchored maximum-fit geometry for overlay and result", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Image editor", exact: true }).click();
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await page.getByRole("toolbar", { name: "Image editor tools" }).getByRole("button", { name: "Crop Images", exact: true }).click();
+    await page.getByLabel("Crop mode").selectOption("aspectRatio");
+    await page.getByLabel("Crop width").fill("1");
+    await page.getByLabel("Crop height").fill("1");
+    await page.getByLabel("Anchor").selectOption("right");
+
+    const overlay = page.getByLabel("Crop selection");
+    await expect(overlay).toHaveAttribute("style", /left: 25%/);
+    await expect(overlay).toHaveAttribute("style", /top: 0%/);
+    await expect(overlay).toHaveAttribute("style", /width: 75%/);
+    await expect(overlay).toHaveAttribute("style", /height: 100%/);
+    await expect(page.getByRole("region", { name: "Crop result preview" })).toContainText("480 × 480px");
 });
 
 test("Image editor history can undo, redo, and reset the composed plan", async ({ page }) => {

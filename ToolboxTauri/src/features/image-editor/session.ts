@@ -40,6 +40,8 @@ export interface ImageEditHistory {
   future: ImageEditPlan[];
 }
 
+export type ImageCropRect = { x: number; y: number; width: number; height: number };
+
 export const emptyImageEditPlan = (): ImageEditPlan => ({
   edits: [],
   outputLocation: "alongsideInput",
@@ -73,6 +75,24 @@ export const redoImageEdit = (history: ImageEditHistory): ImageEditHistory => {
 };
 
 export const resetImageEdits = (): ImageEditHistory => createImageEditHistory();
+
+export const resolveImageCropRect = (
+  sourceWidth: number,
+  sourceHeight: number,
+  crop: Extract<ImageEditOperation, { kind: "crop" }>,
+): ImageCropRect => {
+  if (crop.mode !== "aspectRatio") return { x: crop.x, y: crop.y, width: crop.width, height: crop.height };
+  const ratio = crop.aspectWidth / crop.aspectHeight;
+  const [width, height] = sourceWidth / sourceHeight > ratio
+    ? [Math.round(sourceHeight * ratio), sourceHeight]
+    : [sourceWidth, Math.round(sourceWidth / ratio)];
+  return {
+    x: crop.anchor === "left" ? 0 : crop.anchor === "right" ? sourceWidth - width : Math.floor((sourceWidth - width) / 2),
+    y: crop.anchor === "top" ? 0 : crop.anchor === "bottom" ? sourceHeight - height : Math.floor((sourceHeight - height) / 2),
+    width,
+    height,
+  };
+};
 
 const upsertImageEdit = (edits: ImageEditOperation[], edit: ImageEditOperation): ImageEditOperation[] => {
   if (edit.kind !== "crop") return [...edits, edit];

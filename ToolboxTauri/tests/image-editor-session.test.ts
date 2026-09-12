@@ -4,6 +4,7 @@ import {
   commitImageEdit,
   createImageEditHistory,
   planWithDraft,
+  resolveImageCropRect,
   type ImageEditOperation,
 } from "../src/features/image-editor/session";
 
@@ -30,4 +31,14 @@ test("coalesces source-space crop selections without moving later edits", () => 
 
   assert.deepEqual(planWithDraft(history.present, secondSelection).edits, [secondSelection, rotate]);
   assert.deepEqual(commitImageEdit(history, secondSelection).present.edits, [secondSelection, rotate]);
+});
+
+test("resolves aspect crop geometry from source dimensions and anchor", () => {
+  assert.deepEqual(resolveImageCropRect(640, 480, {
+    ...crop(0, 0, 1, 1),
+    mode: "aspectRatio",
+    aspectWidth: 1,
+    aspectHeight: 1,
+    anchor: "right",
+  }), { x: 160, y: 0, width: 480, height: 480 });
 });
