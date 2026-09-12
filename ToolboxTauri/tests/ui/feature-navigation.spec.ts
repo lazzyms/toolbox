@@ -71,7 +71,11 @@ if (command === "preview_pdf_scene") return { dataUrl: "data:image/svg+xml,%3Csv
                     return { width: 640, height: 480, dataUrl: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='640' height='480'%3E%3Crect width='100%25' height='100%25' fill='white'/%3E%3C/svg%3E" };
                 }
                 if (command === "inspect_image_edit_preview") {
-                    return { width: 640, height: 480, dataUrl: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='640' height='480'%3E%3Crect width='100%25' height='100%25' fill='white'/%3E%3C/svg%3E" };
+                    const edits = (args as { request?: { plan?: { edits?: Array<{ kind: string; width?: number; height?: number }> } } }).request?.plan?.edits ?? [];
+                    const crop = [...edits].reverse().find((edit) => edit.kind === "crop");
+                    const width = crop?.width ?? 640;
+                    const height = crop?.height ?? 480;
+                    return { width, height, dataUrl: `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='${width}' height='${height}'%3E%3Crect width='100%25' height='100%25' fill='white'/%3E%3C/svg%3E` };
                 }
                 if (command === "inspect_image_metadata") return ["fixture image"];
                 if (command.startsWith("plugin:")) return null;
@@ -431,6 +435,33 @@ test("Image editor previews a reversible edit stack and exports one combined pla
     );
     expect(invocation?.args).toMatchObject({ request: { plan: { edits: expect.any(Array) } } });
     expect((invocation?.args as { request: { plan: { edits: unknown[] } } } | undefined)?.request.plan.edits).toHaveLength(2);
+});
+
+test("Image crop keeps the source interaction surface and shows a separate result", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Image editor", exact: true }).click();
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await page.getByRole("toolbar", { name: "Image editor tools" }).getByRole("button", { name: "Crop Images", exact: true }).click();
+    await page.getByLabel("Crop width").fill("160");
+    await page.getByLabel("Crop height").fill("120");
+    await page.getByLabel("Crop left").fill("80");
+    await page.getByLabel("Crop top").fill("60");
+
+    await expect(page.getByRole("img", { name: `Original image preview of ${fixtureName}` })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Crop result preview" })).toBeVisible();
+    const stage = (await page.locator(".image-editor-preview-stage").boundingBox())!;
+    const overlay = page.getByLabel("Crop selection");
+    await expect(overlay).toHaveAttribute("style", /left: 12\.5%/);
+    await expect(overlay).toHaveAttribute("style", /top: 12\.5%/);
+
+    await page.mouse.move(stage.x + stage.width * .25, stage.y + stage.height * .25);
+    await page.mouse.down();
+    await page.mouse.move(stage.x + stage.width * .5, stage.y + stage.height * .5, { steps: 4 });
+    await page.mouse.up();
+    await expect(page.getByLabel("Crop left")).toHaveValue("240");
+    await expect(page.getByLabel("Crop top")).toHaveValue("180");
+    await expect(overlay).toHaveAttribute("style", /left: 37\.5%/);
+    await expect(overlay).toHaveAttribute("style", /top: 37\.5%/);
 });
 
 test("Image editor history can undo, redo, and reset the composed plan", async ({ page }) => {

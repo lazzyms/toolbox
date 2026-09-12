@@ -1123,6 +1123,23 @@ select:focus-visible {
   max-width: 60%;
   color: var(--danger);
 }
+.image-editor-result-preview {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  display: grid;
+  gap: 4px;
+  width: min(180px, 32%);
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  box-shadow: 0 2px 8px #0002;
+  color: var(--muted);
+  font-size: 10px;
+}
+.image-editor-result-preview .workspace-panel-label { margin: 0; }
+.image-editor-result-preview img { width: 100%; max-height: 120px; object-fit: contain; background: var(--surface-2); }
 .tool-view .text-slate-900,
 .tool-view .text-slate-700,
 .tool-view .text-slate-600 {

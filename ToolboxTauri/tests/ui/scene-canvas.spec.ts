@@ -15,11 +15,15 @@ test.beforeEach(async ({ page }) => {
     function Harness() {
       const [page, setPage] = React.useState({ id: 'p', sourceIndex: null, width: 600, height: 800, rotation: 0, crop: null, objects: [] });
       const [tool, setTool] = React.useState('text');
+      const [mounted, setMounted] = React.useState(true);
       const [selectedId, onSelect] = React.useState(null);
       (window as any).canvasState = page;
       (window as any).setCanvasTool = setTool;
       (window as any).setCanvasPage = setPage;
+      (window as any).setCanvasMounted = setMounted;
+      if (!mounted) return null;
       return React.createElement(SceneCanvas, { page, tool, selectedId, onSelect, zoom: 1, sourcePreview: null, renderedPreview: null,
+        textRuns: [{ text: 'Selectable local text', x: 60, y: 55, width: 250, height: 25 }],
         onInteraction: () => {}, onCommit: (next: any) => { (window as any).commits = ((window as any).commits ?? 0) + 1; setPage(next); },
         makeObject: (kind: string, rect: any) => ({ id: crypto.randomUUID(), kind, rect, text: 'Local text', fontSize: 18, color: '#202020', opacity: 1, strokes: [] }),
       });
@@ -46,6 +50,25 @@ test('canvas pointer gestures create drag resize and cancel without extra histor
   await canvas.dispatchEvent('pointerdown', { pointerId: 99, button: 0, clientX: b.x + 30, clientY: b.y + 30 });
   await canvas.dispatchEvent('pointercancel', { pointerId: 99 });
   expect(await page.evaluate(() => (window as any).commits)).toBe(3);
+});
+
+test('unmounting a text selection clears the gesture before remount', async ({ page }) => {
+  await page.evaluate(() => (window as any).setCanvasTool('highlight'));
+  const text = page.locator('[data-text-run]').first();
+  const box = (await text.boundingBox())!;
+  await page.mouse.move(box.x + 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.evaluate(() => (window as any).setCanvasMounted(false));
+  await expect(page.getByRole('group', { name: 'PDF page canvas' })).toHaveCount(0);
+  await page.evaluate(() => { (window as any).setCanvasMounted(true); (window as any).setCanvasTool('text'); });
+  await expect(page.getByRole('group', { name: 'PDF page canvas' })).toBeVisible();
+  await page.mouse.up();
+  const canvas = (await page.getByRole('group', { name: 'PDF page canvas' }).boundingBox())!;
+  await page.mouse.move(canvas.x + canvas.width * .2, canvas.y + canvas.height * .2);
+  await page.mouse.down();
+  await page.mouse.move(canvas.x + canvas.width * .4, canvas.y + canvas.height * .3, { steps: 4 });
+  await page.mouse.up();
+  expect(await page.evaluate(() => (window as any).commits)).toBe(1);
 });
 
 test('canvas maps drawing through crop and rotation into source coordinates', async ({ page }) => {

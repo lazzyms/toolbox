@@ -374,7 +374,8 @@ const ImageEditorControls = ({
   onRedo,
   onReset,
 }: ImageEditorControlsProps) => {
-  const [preview, setPreview] = useState<ImagePreview | null>(null);
+  const [sourcePreview, setSourcePreview] = useState<ImagePreview | null>(null);
+  const [resultPreview, setResultPreview] = useState<ImagePreview | null>(null);
   const [previewError, setPreviewError] = useState("");
   const inputPath = files[0];
   const previewPlanKey = JSON.stringify({ plan, draft });
@@ -389,8 +390,29 @@ const ImageEditorControls = ({
 
   useEffect(() => {
     if (!inputPath) {
-      setPreview(null);
+      setSourcePreview(null);
+      setResultPreview(null);
       setPreviewError("");
+      return;
+    }
+    let current = true;
+    setSourcePreview(null);
+    setPreviewError("");
+    void invoke<ImagePreview>("inspect_image_preview", { request: { path: inputPath } })
+      .then((value) => {
+        if (current && value && typeof value.dataUrl === "string") setSourcePreview(value);
+      })
+      .catch((error) => {
+        if (current) setPreviewError(String(error));
+      });
+    return () => {
+      current = false;
+    };
+  }, [inputPath]);
+
+  useEffect(() => {
+    if (!inputPath || !planWithDraft(plan, draft).edits.length) {
+      setResultPreview(null);
       return;
     }
     let current = true;
@@ -399,7 +421,7 @@ const ImageEditorControls = ({
       request: { path: inputPath, plan: planWithDraft(plan, draft) },
     })
       .then((value) => {
-        if (current && value && typeof value.dataUrl === "string") setPreview(value);
+        if (current && value && typeof value.dataUrl === "string") setResultPreview(value);
       })
       .catch((error) => {
         if (current) setPreviewError(String(error));
@@ -411,14 +433,16 @@ const ImageEditorControls = ({
 
   const pointInPreview = (event: React.PointerEvent<HTMLDivElement>) => {
     const bounds = previewStageRef.current?.getBoundingClientRect();
-    if (!bounds || !preview) return null;
+    const interactionPreview = utility.id === "crop" ? sourcePreview : resultPreview ?? sourcePreview;
+    if (!bounds || !interactionPreview) return null;
     return {
-      x: Math.min(Math.max((event.clientX - bounds.left) / bounds.width * preview.width, 0), preview.width),
-      y: Math.min(Math.max((event.clientY - bounds.top) / bounds.height * preview.height, 0), preview.height),
+      x: Math.min(Math.max((event.clientX - bounds.left) / bounds.width * interactionPreview.width, 0), interactionPreview.width),
+      y: Math.min(Math.max((event.clientY - bounds.top) / bounds.height * interactionPreview.height, 0), interactionPreview.height),
     };
   };
   const beginImageDrag = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (!preview || (utility.id !== "crop" && utility.id !== "image-watermark")) return;
+    const interactionPreview = utility.id === "crop" ? sourcePreview : resultPreview ?? sourcePreview;
+    if (!interactionPreview || (utility.id !== "crop" && utility.id !== "image-watermark")) return;
     const point = pointInPreview(event);
     if (!point) return;
     dragOffset.current = utility.id === "crop"
@@ -428,12 +452,13 @@ const ImageEditorControls = ({
     event.preventDefault();
   };
   const moveImageDrag = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (!dragOffset.current || !preview) return;
+    const interactionPreview = utility.id === "crop" ? sourcePreview : resultPreview ?? sourcePreview;
+    if (!dragOffset.current || !interactionPreview) return;
     const point = pointInPreview(event);
     if (!point) return;
     if (utility.id === "crop") {
-      setCropX(Math.round(Math.min(Math.max(point.x - dragOffset.current.x, 0), Math.max(preview.width - width, 0))));
-      setCropY(Math.round(Math.min(Math.max(point.y - dragOffset.current.y, 0), Math.max(preview.height - height, 0))));
+      setCropX(Math.round(Math.min(Math.max(point.x - dragOffset.current.x, 0), Math.max(interactionPreview.width - width, 0))));
+      setCropY(Math.round(Math.min(Math.max(point.y - dragOffset.current.y, 0), Math.max(interactionPreview.height - height, 0))));
     } else {
       setCropX(Math.round(point.x));
       setCropY(Math.round(point.y));
@@ -443,8 +468,11 @@ const ImageEditorControls = ({
     dragOffset.current = null;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
   };
-  const cropOverlay = utility.id === "crop" && preview ? { left: `${cropX / preview.width * 100}%`, top: `${cropY / preview.height * 100}%`, width: `${width / preview.width * 100}%`, height: `${height / preview.height * 100}%` } : null;
-  const watermarkOverlay = utility.id === "image-watermark" && preview ? { left: `${Math.min(cropX / preview.width * 100, 94)}%`, top: `${Math.min(cropY / preview.height * 100, 94)}%` } : null;
+  const interactionPreview = utility.id === "crop" ? sourcePreview : resultPreview ?? sourcePreview;
+  const cropOverlay = utility.id === "crop" && sourcePreview ? { left: `${cropX / sourcePreview.width * 100}%`, top: `${cropY / sourcePreview.height * 100}%`, width: `${width / sourcePreview.width * 100}%`, height: `${height / sourcePreview.height * 100}%` } : null;
+  const watermarkOverlay = utility.id === "image-watermark" && interactionPreview ? { left: `${Math.min(cropX / interactionPreview.width * 100, 94)}%`, top: `${Math.min(cropY / interactionPreview.height * 100, 94)}%` } : null;
+  const primaryPreview = utility.id === "crop" ? sourcePreview : resultPreview ?? sourcePreview;
+  const primaryPreviewAlt = utility.id === "crop" ? `Original image preview of ${inputPath?.split(/[\\/]/).pop() ?? "selected image"}` : `Preview of ${inputPath?.split(/[\\/]/).pop() ?? "selected image"}`;
   const selectTool = (nextToolId: AtomicToolId) => {
     if (nextToolId === activeToolId) return;
     if (draft) onAddEdit();
@@ -460,18 +488,18 @@ const ImageEditorControls = ({
         label="Image editor tools"
       />
       <section className="image-editor-preview" aria-label="Image preview">
-        {preview ? (
+        {primaryPreview ? (
           <div
             ref={previewStageRef}
             className={`image-editor-preview-stage ${utility.id === "crop" || utility.id === "image-watermark" ? "image-editor-preview-stage-interactive" : ""}`}
-            style={{ aspectRatio: `${preview.width} / ${preview.height}` }}
+            style={{ aspectRatio: `${primaryPreview.width} / ${primaryPreview.height}` }}
             onPointerDown={beginImageDrag}
             onPointerMove={moveImageDrag}
             onPointerUp={endImageDrag}
             onPointerCancel={endImageDrag}
           >
-            <img src={preview.dataUrl} alt={`Preview of ${inputPath?.split(/[\\/]/).pop() ?? "selected image"}`} />
-            {cropOverlay && <div className="image-editor-crop-overlay" aria-label="Crop preview" style={cropOverlay} />}
+            <img src={primaryPreview.dataUrl} alt={primaryPreviewAlt} />
+            {cropOverlay && <div className="image-editor-crop-overlay" aria-label="Crop selection" style={cropOverlay} />}
             {watermarkOverlay && <div className="image-editor-watermark-overlay" aria-label="Watermark preview" style={watermarkOverlay}>{watermarkText || "Watermark"}</div>}
           </div>
         ) : (
@@ -481,8 +509,13 @@ const ImageEditorControls = ({
             <span>{inputPath ? "The editor can still process this file." : "Your original stays on this device."}</span>
           </div>
         )}
-        {preview && <span className="image-editor-dimensions">{preview.width} × {preview.height}px</span>}
+        {primaryPreview && <span className="image-editor-dimensions">{primaryPreview.width} × {primaryPreview.height}px</span>}
         {previewError && <span className="image-editor-preview-error" role="status">{previewError}</span>}
+        {utility.id === "crop" && resultPreview && <section className="image-editor-result-preview" aria-label="Crop result preview">
+          <p className="workspace-panel-label">Resulting crop</p>
+          <img src={resultPreview.dataUrl} alt={`Resulting crop preview of ${inputPath?.split(/[\\/]/).pop() ?? "selected image"}`} />
+          <span>{resultPreview.width} × {resultPreview.height}px</span>
+        </section>}
       </section>
       <section className="image-editor-controls" aria-label="Image adjustments">
         <div className="workspace-panel-intro">

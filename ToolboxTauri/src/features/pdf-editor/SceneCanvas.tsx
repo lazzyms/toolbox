@@ -18,7 +18,8 @@ export function sceneTransform(page: ScenePage) {
 }
 
 type Gesture = { pointerId: number; start: ScenePoint; base: ScenePage; next: ScenePage;
-  mode: 'create' | 'move' | 'resize' | 'crop' | 'text-selection'; id?: string; corner?: string; points: ScenePoint[]; changed: boolean };
+  mode: 'create' | 'move' | 'resize' | 'crop' | 'text-selection' | 'pan'; id?: string; corner?: string; points: ScenePoint[]; changed: boolean;
+  clientStart?: ScenePoint; scrollStart?: ScenePoint };
 const rectangle = (a: ScenePoint, b: ScenePoint): SceneRect => ({ x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), width: Math.max(1, Math.abs(a.x - b.x)), height: Math.max(1, Math.abs(a.y - b.y)) });
 
 const cssFont = (font?: string) => font?.startsWith('Times') ? 'Times New Roman, serif' : font?.startsWith('Courier') ? 'Courier New, monospace' : 'Helvetica, Arial, sans-serif';
@@ -103,18 +104,63 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
   const surface = useRef<SVGSVGElement>(null);
   const coordinates = useRef<SVGGElement>(null);
   const gesture = useRef<Gesture | null>(null);
+  const spacePressed = useRef(false);
   const editInput = useRef<HTMLTextAreaElement>(null);
   const [draft, setDraft] = useState<ScenePage | null>(null);
   const [size, setSize] = useState({ width: 600, height: 600 });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState('');
+  const [spaceHeld, setSpaceHeld] = useState(false);
+  const [panning, setPanning] = useState(false);
   useLayoutEffect(() => {
     if (!host.current) return;
     const observer = new ResizeObserver(([entry]) => setSize({ width: entry.contentRect.width, height: entry.contentRect.height }));
     observer.observe(host.current);
     return () => observer.disconnect();
   }, []);
-  useEffect(() => { gesture.current = null; setDraft(null); setEditingId(null); }, [page]);
+  useEffect(() => { gesture.current = null; setDraft(null); setEditingId(null); setPanning(false); window.getSelection()?.removeAllRanges(); }, [page]);
+  useEffect(() => {
+    const clearGesture = () => {
+      const active = gesture.current;
+      if (!active) return;
+      gesture.current = null;
+      setDraft(null);
+      setPanning(false);
+      if (active.mode === 'text-selection') window.getSelection()?.removeAllRanges();
+      if (surface.current?.hasPointerCapture(active.pointerId)) surface.current.releasePointerCapture(active.pointerId);
+    };
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== ' ') return;
+      spacePressed.current = true;
+      setSpaceHeld(true);
+    };
+    const onKeyUp = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== ' ') return;
+      spacePressed.current = false;
+      setSpaceHeld(false);
+    };
+    const onBlur = () => {
+      spacePressed.current = false;
+      setSpaceHeld(false);
+      clearGesture();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('pointerup', clearGesture);
+    window.addEventListener('pointercancel', clearGesture);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('pointerup', clearGesture);
+      window.removeEventListener('pointercancel', clearGesture);
+      window.removeEventListener('blur', onBlur);
+      const active = gesture.current;
+      gesture.current = null;
+      if (active && surface.current?.hasPointerCapture(active.pointerId)) surface.current.releasePointerCapture(active.pointerId);
+      window.getSelection()?.removeAllRanges();
+    };
+  }, []);
   useEffect(() => {
     if (!editingId) return;
     requestAnimationFrame(() => { editInput.current?.focus(); editInput.current?.select(); });
@@ -157,6 +203,15 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     return Array.from(selection.getRangeAt(0).getClientRects()).map(rect => rectangle(pointFromClient(rect.left, rect.top), pointFromClient(rect.right, rect.bottom))).filter(rect => rect.width > 2 && rect.height > 2);
   }
   function down(event: PointerEvent<SVGSVGElement>) {
+    if (event.button === 1 || (event.button === 0 && spacePressed.current)) {
+      event.preventDefault();
+      const scrollable = host.current;
+      surface.current?.setPointerCapture(event.pointerId);
+      gesture.current = { pointerId: event.pointerId, start: point(event), base: page, next: page, mode: 'pan', points: [], changed: false,
+        clientStart: { x: event.clientX, y: event.clientY }, scrollStart: { x: scrollable?.scrollLeft ?? 0, y: scrollable?.scrollTop ?? 0 } };
+      setPanning(true);
+      return;
+    }
     if (event.button !== 0 || gesture.current) return;
     const target = event.target as Element;
     if (target.closest('[data-text-editor]')) return;
@@ -166,6 +221,7 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
       // Leave the browser's selection gesture intact. The selection is turned
       // into one or more scene highlights when the pointer is released.
       gesture.current = { pointerId: event.pointerId, start, base: page, next: page, mode: 'text-selection', points: [start], changed: false };
+      surface.current?.setPointerCapture(event.pointerId);
       return;
     }
     const id = target.closest('[data-object]')?.getAttribute('data-object') ?? undefined;
@@ -196,6 +252,14 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
   function move(event: PointerEvent<SVGSVGElement>) {
     const g = gesture.current;
     if (!g || g.pointerId !== event.pointerId || g.mode === 'text-selection') return;
+    if (g.mode === 'pan') {
+      const scrollable = host.current;
+      if (!scrollable || !g.clientStart || !g.scrollStart) return;
+      scrollable.scrollLeft = g.scrollStart.x - event.clientX + g.clientStart.x;
+      scrollable.scrollTop = g.scrollStart.y - event.clientY + g.clientStart.y;
+      g.changed ||= Math.abs(event.clientX - g.clientStart.x) + Math.abs(event.clientY - g.clientStart.y) > 0.5;
+      return;
+    }
     const p = point(event);
     const dx = p.x - g.start.x, dy = p.y - g.start.y;
     g.changed ||= Math.abs(dx) + Math.abs(dy) > 0.5;
@@ -225,6 +289,9 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     const g = gesture.current;
     if (!g || g.pointerId !== event.pointerId) return;
     gesture.current = null;
+    setPanning(false);
+    if (surface.current?.hasPointerCapture(event.pointerId)) surface.current.releasePointerCapture(event.pointerId);
+    if (g.mode === 'pan') return;
     if (g.mode === 'text-selection') {
       if (!cancel) {
         const rects = selectedTextRects();
@@ -233,7 +300,6 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
       window.getSelection()?.removeAllRanges();
       return;
     }
-    if (surface.current?.hasPointerCapture(event.pointerId)) surface.current.releasePointerCapture(event.pointerId);
     setDraft(null);
     if (!cancel && g.changed) onCommit(g.next);
     else if (g.mode === 'create') onSelect(null);
@@ -258,7 +324,7 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
   }
   const exact = renderedPreview && !draft && !editingId;
   return <div className="scene-canvas" ref={host}>
-    <svg ref={surface} className={`scene-canvas-page scene-tool-${tool}`} aria-label="PDF page canvas" role="group" width={transform.width * scale} height={transform.height * scale} viewBox={`0 0 ${transform.width} ${transform.height}`} onPointerDown={down} onPointerMove={move} onPointerUp={e => finish(e)} onPointerCancel={e => finish(e, true)} onLostPointerCapture={e => finish(e, true)} onDoubleClick={doubleClick}>
+    <svg ref={surface} className={`scene-canvas-page scene-tool-${tool}${panning ? ' scene-pan-active' : spaceHeld ? ' scene-space-pan' : ''}`} aria-label="PDF page canvas" role="group" width={transform.width * scale} height={transform.height * scale} viewBox={`0 0 ${transform.width} ${transform.height}`} onPointerDown={down} onPointerMove={move} onPointerUp={e => finish(e)} onPointerCancel={e => finish(e, true)} onLostPointerCapture={e => finish(e, true)} onDoubleClick={doubleClick}>
       <rect width={transform.width} height={transform.height} fill="white" />
       {exact && <image href={renderedPreview.dataUrl} width={transform.width} height={transform.height} preserveAspectRatio="none" pointerEvents="none" />}
       <g ref={coordinates} transform={transform.matrix}>
