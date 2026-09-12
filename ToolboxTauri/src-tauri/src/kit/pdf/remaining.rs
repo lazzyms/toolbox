@@ -419,37 +419,42 @@ pub fn extract_images(request: &PdfToTextRequest, input: PathBuf) -> JobOutcome 
         Ok(pages) => pages.into_iter().map(|page| page as usize).collect::<std::collections::HashSet<_>>(),
         Err(error) => return failure(input, error),
     };
-    let mut outputs = Vec::new();
+    let mut reservations = Vec::new();
     for (page_number, page_id) in document.get_pages() {
         if request.pages.is_some() && !selected.contains(&(page_number as usize)) { continue; }
-        let images = match document.get_page_images(page_id) { Ok(images) => images, Err(error) => return extraction_failure(&input, &outputs, error.to_string()) };
+        let images = match document.get_page_images(page_id) { Ok(images) => images, Err(error) => return extraction_failure(&input, reservations, error.to_string()) };
         for (index, image) in images.iter().enumerate() {
             let Some(filters) = &image.filters else {
-                return extraction_failure(&input, &outputs, "PDF contains an embedded image with no supported filter; extraction stopped without a complete result.");
+                return extraction_failure(&input, reservations, "PDF contains an embedded image with no supported filter; extraction stopped without a complete result.");
             };
             if filters.iter().any(|filter| filter != "DCTDecode") {
-                return extraction_failure(&input, &outputs, format!("PDF image on page {page_number} uses an unsupported filter; only original JPEG images can be extracted without recompression."));
+                return extraction_failure(&input, reservations, format!("PDF image on page {page_number} uses an unsupported filter; only original JPEG images can be extracted without recompression."));
             }
             let reservation = match OutputNaming::reserve_destination(&input, &request.output_location, &format!("-image-{page_number}-{index}"), "jpg") {
                 Ok(reservation) => reservation,
-                Err(error) => return extraction_failure(&input, &outputs, format!("Could not reserve extracted image output: {error}")),
+                Err(error) => return extraction_failure(&input, reservations, format!("Could not reserve extracted image output: {error}")),
             };
             if let Err(error) = fs::write(reservation.path(), image.content) {
-                return extraction_failure(&input, &outputs, format!("Could not write extracted image: {error}"));
+                return extraction_failure(&input, reservations, format!("Could not write extracted image: {error}"));
             }
-            match reservation.publish() {
-                Ok(path) => outputs.push(path),
-                Err(error) => return extraction_failure(&input, &outputs, format!("Could not publish extracted image: {error}")),
-            }
+            reservations.push(reservation);
         }
     }
-    if outputs.is_empty() { failure(input, "No embedded JPEG images were found. Non-JPEG PDF image filters are not extractable without recompression.".to_string()) } else { JobOutcome { input_path: input, output_paths: outputs, detail: "Embedded JPEG images extracted without recompression".to_string(), failure: None } }
+    if reservations.is_empty() {
+        return failure(input, "No embedded JPEG images were found. Non-JPEG PDF image filters are not extractable without recompression.".to_string());
+    }
+    let mut outputs = Vec::with_capacity(reservations.len());
+    for reservation in reservations {
+        match reservation.publish() {
+            Ok(path) => outputs.push(path),
+            Err(error) => return failure(input, format!("Could not publish extracted image: {error}")),
+        }
+    }
+    JobOutcome { input_path: input, output_paths: outputs, detail: "Embedded JPEG images extracted without recompression".to_string(), failure: None }
 }
 
-fn extraction_failure(input: &Path, outputs: &[PathBuf], message: impl Into<String>) -> JobOutcome {
-    for output in outputs {
-        let _ = fs::remove_file(output);
-    }
+fn extraction_failure(input: &Path, reservations: Vec<OutputReservation>, message: impl Into<String>) -> JobOutcome {
+    drop(reservations);
     failure(input.to_path_buf(), message.into())
 }
 
@@ -777,6 +782,62 @@ mod tests {
         let catalog_id = document.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
         document.trailer.set("Root", catalog_id);
         document.save(path).unwrap();
+    }
+
+    fn image_extraction_fixture(path: &Path) {
+        let mut jpeg=Cursor::new(Vec::new());
+        JpegEncoder::new(&mut jpeg).encode_image(&DynamicImage::ImageRgb8(image::RgbImage::from_pixel(1,1,image::Rgb([255,0,0])))).unwrap();
+        let mut document=Document::with_version("1.7");
+        let pages_id=document.new_object_id();
+        let jpeg_id=document.add_object(Stream::new(dictionary! {
+            "Type"=>"XObject", "Subtype"=>"Image", "Width"=>1, "Height"=>1,
+            "ColorSpace"=>"DeviceRGB", "BitsPerComponent"=>8, "Filter"=>"DCTDecode"
+        },jpeg.into_inner()));
+        let unsupported_id=document.add_object(Stream::new(dictionary! {
+            "Type"=>"XObject", "Subtype"=>"Image", "Width"=>1, "Height"=>1,
+            "ColorSpace"=>"DeviceRGB", "BitsPerComponent"=>8, "Filter"=>"FlateDecode"
+        },b"unsupported".to_vec()));
+        let page_id=document.add_object(dictionary! {
+            "Type"=>"Page", "Parent"=>pages_id, "MediaBox"=>vec![0.into(),0.into(),1.into(),1.into()],
+            "Resources"=>dictionary! { "XObject"=>dictionary! { "AFirst"=>jpeg_id, "ZUnsupported"=>unsupported_id } }
+        });
+        document.objects.insert(pages_id,dictionary! { "Type"=>"Pages", "Kids"=>vec![Object::Reference(page_id)], "Count"=>1 }.into());
+        let catalog_id=document.add_object(dictionary! { "Type"=>"Catalog", "Pages"=>pages_id });
+        document.trailer.set("Root",catalog_id);
+        document.save(path).unwrap();
+    }
+
+    #[test]
+    fn failed_image_extraction_publishes_no_partial_outputs() {
+        let temp=std::env::temp_dir().join(format!("toolbox_extract_images_{}_{}",std::process::id(),SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir_all(&temp).unwrap();
+        let input=temp.join("source.pdf");
+        image_extraction_fixture(&input);
+        let outcome=extract_images(&PdfToTextRequest { paths:vec![input.clone()], pages:None, output_location:OutputLocation::AlongsideInput },input.clone());
+
+        assert!(outcome.failure.is_some(),"expected unsupported image filter to fail");
+        assert!(outcome.output_paths.is_empty());
+        assert_eq!(fs::read_dir(&temp).unwrap().count(),1);
+        assert!(!temp.join("source-image-1-0.jpg").exists());
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn extraction_failure_preserves_a_competing_replacement() {
+        let temp=std::env::temp_dir().join(format!("toolbox_extract_failure_{}_{}",std::process::id(),SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir_all(&temp).unwrap();
+        let input=temp.join("source.pdf");
+        fs::write(&input,b"source").unwrap();
+        let reservation=OutputNaming::reserve_destination(&input,&OutputLocation::AlongsideInput,"-image-1-0","jpg").unwrap();
+        fs::write(reservation.path(),b"extracted bytes").unwrap();
+        let destination=reservation.destination_path().to_path_buf();
+        fs::write(&destination,b"competing replacement").unwrap();
+
+        let outcome=extraction_failure(&input,vec![reservation],"extraction stopped");
+
+        assert!(outcome.failure.is_some());
+        assert_eq!(fs::read(destination).unwrap(),b"competing replacement");
+        fs::remove_dir_all(temp).unwrap();
     }
 
     fn split_temp_entries() -> std::collections::HashSet<PathBuf> {

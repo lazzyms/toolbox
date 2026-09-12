@@ -60,6 +60,10 @@ impl OutputNaming {
         })
     }
 
+    pub fn reserve_named_candidate(path: &Path) -> io::Result<Option<OutputReservation>> {
+        Self::reserve_candidate(path).map(|reservation| reservation.map(|(reservation, _)| reservation))
+    }
+
     fn allocate<T, F>(
         input_path: &Path,
         location: &OutputLocation,
