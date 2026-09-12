@@ -289,7 +289,7 @@ pub fn to_images(request: &PdfToImagesRequest, input: PathBuf) -> JobOutcome {
     match output {
         Ok(result) if result.status.success() => {
             let mut outputs = fs::read_dir(prefix.parent().unwrap_or_else(|| std::path::Path::new("."))).ok().into_iter().flatten().filter_map(Result::ok).map(|entry| entry.path()).filter(|path| path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with(prefix.file_name().and_then(|stem| stem.to_str()).unwrap_or("")) && path.extension().is_some_and(|ext| ext == extension))).collect::<Vec<_>>();
-            outputs.sort();
+            outputs.sort_by_key(|path| rendered_page_index(path, &prefix));
             if outputs.is_empty() {
                 failure(input, "PDF renderer produced no images.".to_string())
             } else {
@@ -299,6 +299,12 @@ pub fn to_images(request: &PdfToImagesRequest, input: PathBuf) -> JobOutcome {
         Ok(result) => failure(input, stderr(result, "pdftoppm failed to render the PDF.")),
         Err(error) => failure(input, format!("Could not run pdftoppm: {error}")),
     }
+}
+
+fn rendered_page_index(path: &Path, prefix: &Path) -> Option<u32> {
+    let stem = path.file_stem()?.to_str()?;
+    let prefix = prefix.file_name()?.to_str()?;
+    stem.strip_prefix(&format!("{prefix}-"))?.parse().ok()
 }
 
 fn unique_image_prefix(input: &PathBuf, location: &OutputLocation, extension: &str, workspace: &SplitWorkspace) -> std::io::Result<PathBuf> {
@@ -732,6 +738,7 @@ mod tests {
     use super::*;
 
     static SPLIT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    static RENDERER_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn request(page_ranges: Option<&str>, pages: Vec<usize>) -> PageSelectionRequest {
         PageSelectionRequest {
@@ -786,6 +793,43 @@ mod tests {
         let catalog_id = document.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
         document.trailer.set("Root", catalog_id);
         document.save(path).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pdf_to_images_keeps_twelve_pages_in_numeric_order() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = RENDERER_TEST_LOCK.lock().unwrap();
+        let root = split_fixture_root("numeric-images");
+        let input = root.join("document.pdf");
+        let output_folder = root.join("outputs");
+        let renderer = root.join("renderer.sh");
+        fs::create_dir_all(&output_folder).unwrap();
+        split_fixture_pdf(&input, 12);
+        fs::write(&renderer, "#!/bin/sh\nprefix=\nfor arg in \"$@\"; do prefix=\"$arg\"; done\ni=1\nwhile [ \"$i\" -le 12 ]; do printf 'page-%s' \"$i\" > \"$prefix-$i.png\"; i=$((i + 1)); done\n").unwrap();
+        let mut permissions = fs::metadata(&renderer).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&renderer, permissions).unwrap();
+        let previous = std::env::var_os("TOOLBOX_PDFTOPPM_PATH");
+        std::env::set_var("TOOLBOX_PDFTOPPM_PATH", &renderer);
+
+        let outcome = to_images(&PdfToImagesRequest {
+            paths: vec![input.clone()], dpi: 72, format: "png".to_string(), page_range: None, pages: None,
+            output_location: OutputLocation::CustomFolder(output_folder.clone()),
+        }, input.clone());
+
+        match previous {
+            Some(value) => std::env::set_var("TOOLBOX_PDFTOPPM_PATH", value),
+            None => std::env::remove_var("TOOLBOX_PDFTOPPM_PATH"),
+        }
+        assert!(outcome.failure.is_none(), "numeric image export failed: {:?}", outcome.failure);
+        assert_eq!(outcome.output_paths.len(), 12);
+        for (index, output) in outcome.output_paths.iter().enumerate() {
+            assert_eq!(output.file_stem().unwrap().to_str().unwrap(), format!("document-images-{}", index + 1));
+            assert_eq!(fs::read_to_string(output).unwrap(), format!("page-{}", index + 1));
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 
     fn image_extraction_fixture(path: &Path) {

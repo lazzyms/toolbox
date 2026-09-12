@@ -291,7 +291,24 @@ fn field_has_signature(document: &Document, value: &Object, seen: &mut HashSet<O
     resolve(document, kids)?.as_array().map_err(err)?.iter().map(|kid| field_has_signature(document, kid, seen)).collect::<Result<Vec<_>, String>>().map(|values| values.into_iter().any(|value| value))
 }
 
+fn is_signature_dictionary(value: &Object) -> bool {
+    let dictionary = match value {
+        Object::Dictionary(dictionary) => dictionary,
+        Object::Stream(stream) => &stream.dict,
+        _ => return false,
+    };
+    dictionary.get(b"Type").ok().and_then(|value| value.as_name().ok()) == Some(b"Sig") || dictionary.has(b"ByteRange")
+}
+
 fn document_has_signature(document: &Document, catalog: ObjectId, pages: &[ObjectId]) -> Result<bool, String> {
+    let catalog_dictionary = document.get_dictionary(catalog).map_err(err)?;
+    if let Ok(perms) = catalog_dictionary.get(b"Perms") {
+        resolve(document, perms)?.as_dict().map_err(err)?;
+        return Ok(true);
+    }
+    if document.objects.values().any(is_signature_dictionary) {
+        return Ok(true);
+    }
     if let Ok(acro_form) = document.get_dictionary(catalog).map_err(err)?.get(b"AcroForm") {
         let acro_form = resolve(document, acro_form)?.as_dict().map_err(err)?;
         if acro_form.get(b"SigFlags").ok().and_then(|value| value.as_i64().ok()).is_some_and(|flags| flags != 0) { return Ok(true); }
@@ -332,6 +349,7 @@ fn scene_preflight(document: &Document, scene: &PdfScene, source_pages: &[Object
 
     let mut seen = HashSet::new();
     let mut retained = HashSet::new();
+    let mut navigation_geometry_edit = false;
     for page in &scene.pages {
         if let Some(index) = page.source_index {
             let source = *source_pages.get(index).ok_or("Scene source page is outside the document")?;
@@ -359,6 +377,7 @@ fn scene_preflight(document: &Document, scene: &PdfScene, source_pages: &[Object
             let output_crop = page.crop.as_ref().map(|crop| (crop.width, crop.height)).unwrap_or((page.width, page.height));
             let source_box_matches_output = geometry.bbox[0].abs() <= 0.1 && geometry.bbox[1].abs() <= 0.1 && (geometry.bbox[2] - geometry.bbox[0] - output_crop.0).abs() <= 0.1 && (geometry.bbox[3] - geometry.bbox[1] - output_crop.1).abs() <= 0.1;
             let changes_page_coordinates = page.crop.is_some() || !source_box_matches_output || (page.width - geometry.width).abs() > 0.1 || (page.height - geometry.height).abs() > 0.1 || page.rotation.rem_euclid(360) != source_rotation;
+            navigation_geometry_edit |= page.crop.is_some() || page.rotation.rem_euclid(360) != source_rotation;
             if has_annotations && changes_page_coordinates {
                 return Err("This PDF page has annotations or form widgets and the requested crop or rotation would change their coordinates; scene export was rejected before output".into());
             }
@@ -366,6 +385,9 @@ fn scene_preflight(document: &Document, scene: &PdfScene, source_pages: &[Object
                 return Err("Cropping or rotating a PDF with form widgets is unsupported; remove the page operation or edit the source PDF first".into());
             }
         }
+    }
+    if has_navigation && navigation_geometry_edit {
+        return Err("This PDF contains bookmarks or destinations whose coordinates cannot be transformed safely after crop or rotation; scene export was rejected before output".into());
     }
     Ok(ScenePreflight { pages_root, source_pages: source_pages.to_vec() })
 }
@@ -860,5 +882,48 @@ mod tests {
         assert!(result.failure.as_ref().is_some_and(|error| error.message.contains("Digitally signed")));
         assert!(result.output_paths.is_empty());
         assert!(!input.with_file_name("signed-edited-1.pdf").exists());
+    }
+    #[test]
+    fn scene_rejects_catalog_permissions_and_signature_dictionaries_before_output() {
+        let cases = [
+            ("perms", dictionary! {}, true),
+            ("type", dictionary! {"Type"=>"Sig"}, false),
+            ("byte-range", dictionary! {"ByteRange"=>vec![0.into(), 10.into(), 20.into(), 30.into()]}, false),
+        ];
+        for (name, signature_dictionary, permissions) in cases {
+            let temp=TempDir::new().unwrap(); let input=temp.0.join(format!("{name}.pdf")); fixture(&input);
+            let mut source=Document::load(&input).unwrap();
+            let signature=source.add_object(signature_dictionary);
+            let catalog_id=source.trailer.get(b"Root").unwrap().as_reference().unwrap();
+            if permissions {
+                source.get_dictionary_mut(catalog_id).unwrap().set("Perms", dictionary! {"DocMDP"=>Object::Reference(signature)});
+            }
+            source.save(&input).unwrap();
+            let scene=PdfScene { pages:vec![
+                ScenePage {source_index:Some(0),width:300.,height:200.,rotation:0,crop:None,objects:vec![]},
+                ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0,crop:None,objects:vec![]},
+            ] };
+            let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
+            assert!(result.failure.as_ref().is_some_and(|error| error.message.contains("Digitally signed")), "{name}: {:?}", result.failure);
+            assert!(result.output_paths.is_empty());
+            assert!(!input.with_file_name(format!("{name}-edited-1.pdf")).exists());
+        }
+    }
+    #[test]
+    fn scene_rejects_navigation_geometry_edits_before_output() {
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("navigation.pdf"); fixture(&input);
+        let mut source=Document::load(&input).unwrap();
+        let outlines=source.add_object(dictionary! {"Type"=>"Outlines", "Count"=>0});
+        let catalog_id=source.trailer.get(b"Root").unwrap().as_reference().unwrap();
+        source.get_dictionary_mut(catalog_id).unwrap().set("Outlines", outlines);
+        source.save(&input).unwrap();
+        let scene=PdfScene { pages:vec![
+            ScenePage {source_index:Some(0),width:300.,height:200.,rotation:0,crop:Some(Rect{x:0.,y:0.,width:100.,height:100.}),objects:vec![]},
+            ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0,crop:None,objects:vec![]},
+        ] };
+        let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
+        assert!(result.failure.as_ref().is_some_and(|error| error.message.contains("destinations")), "{:?}", result.failure);
+        assert!(result.output_paths.is_empty());
+        assert!(!input.with_file_name("navigation-edited-1.pdf").exists());
     }
 }
