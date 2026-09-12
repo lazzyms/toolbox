@@ -64,7 +64,7 @@ if (command === "preview_pdf_scene") return { dataUrl: "data:image/svg+xml,%3Csv
                     const requestPath = (args as { request: { path: string } }).request.path;
                     const inspectionError = (window as TestWindow).__toolboxInspectionError;
                     if (inspectionError && requestPath.endsWith(".rejected.pdf")) throw inspectionError;
-                    const pageCount = requestPath.endsWith(".replacement.pdf") ? 2 : 1;
+                    const pageCount = requestPath.endsWith(".replacement.pdf") ? 2 : requestPath.endsWith(".scoped.pdf") ? 3 : 1;
                     return { pages: Array.from({ length: pageCount }, (_, index) => ({ index, x: 0, y: 0, width: 612, height: 792, preview: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='612' height='792'%3E%3Crect width='100%25' height='100%25' fill='white'/%3E%3C/svg%3E" })) };
                 }
                 if (command === "inspect_image_preview") {
@@ -75,6 +75,8 @@ if (command === "preview_pdf_scene") return { dataUrl: "data:image/svg+xml,%3Csv
                     const crop = [...edits].reverse().find((edit) => edit.kind === "crop");
                     const sourceWidth = 640;
                     const sourceHeight = 480;
+                    if (crop?.mode === "rectangle" && (!crop.width || !crop.height)) throw "Crop rectangle must have positive dimensions.";
+                    if (crop?.mode === "aspectRatio" && (!crop.aspectWidth || !crop.aspectHeight)) throw "Aspect ratio dimensions must be positive.";
                     let width = crop?.width ?? sourceWidth;
                     let height = crop?.height ?? sourceHeight;
                     if (crop?.mode === "aspectRatio" && crop.aspectWidth && crop.aspectHeight) {
@@ -494,6 +496,24 @@ test("Image aspect crop uses the anchored maximum-fit geometry for overlay and r
     await expect(page.getByRole("region", { name: "Crop result preview" })).toContainText("480 × 480px");
 });
 
+test("Image crop clears an old result and disables export after invalid preview validation", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Image editor", exact: true }).click();
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await page.getByRole("toolbar", { name: "Image editor tools" }).getByRole("button", { name: "Crop Images", exact: true }).click();
+    await page.getByLabel("Crop width").fill("160");
+    await page.getByLabel("Crop height").fill("120");
+    await expect(page.getByRole("region", { name: "Crop result preview" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Export edited images" })).toBeEnabled();
+
+    await page.getByLabel("Crop mode").selectOption("aspectRatio");
+    await page.getByLabel("Crop width").fill("0");
+
+    await expect(page.getByText("Aspect ratio dimensions must be positive.", { exact: true })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Crop result preview" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Export edited images" })).toBeDisabled();
+});
+
 test("Image editor history can undo, redo, and reset the composed plan", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Open Image editor", exact: true }).click();
@@ -759,6 +779,32 @@ test("PDF replacement clears stale inspection state while inspection is pending 
     await expect(page.getByRole("checkbox", { name: "Page 2" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Export Extract PDF Pages", exact: true })).toBeDisabled();
     await expect(page.getByText("inspection rejected", { exact: true })).toBeVisible();
+});
+
+test("PDF conversion resets the displayed scope when switching actions", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open PDF to Images" }).click();
+    await page.evaluate(() => {
+        (window as TestWindow).__toolboxDialogResults = ["/local/document.scoped.pdf"];
+    });
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await expect(page.getByRole("checkbox", { name: "Page 3" })).toBeVisible();
+    await page.getByRole("textbox", { name: "Page range" }).fill("1");
+    await expect(page.getByRole("checkbox", { name: "Page 2" })).not.toBeChecked();
+
+    await page.getByRole("toolbar", { name: "PDF conversion tools" }).getByRole("button", { name: "PDF to Text", exact: true }).click();
+    await expect(page.getByRole("checkbox", { name: "Page 3" })).toBeVisible();
+    await page.getByRole("toolbar", { name: "PDF conversion tools" }).getByRole("button", { name: "PDF to Images", exact: true }).click();
+    await expect(page.getByRole("checkbox", { name: "Page 3" })).toBeVisible();
+
+    await expect(page.getByRole("textbox", { name: "Page range" })).toHaveValue("");
+    await expect(page.getByRole("checkbox", { name: "Page 2" })).toBeChecked();
+    await page.getByRole("button", { name: "Export PDF to Images", exact: true }).click();
+
+    const invocation = await page.evaluate(() =>
+        (window as TestWindow).__toolboxInvocations?.find(({ command }) => command === "pdf_to_images"),
+    );
+    expect(invocation?.args).toMatchObject({ request: { pages: [0, 1, 2], pageRange: "1-3" } });
 });
 
 test("GIF extraction does not request a source preview", async ({ page }) => {
