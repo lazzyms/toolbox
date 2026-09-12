@@ -54,7 +54,11 @@ pub fn ocr_pdf(request: &VisionRequest, input: PathBuf) -> JobOutcome {
     match result {
         Ok(stdout) => {
             if stdout.len() > OCR_MAX_OUTPUT_BYTES { return failure(input, "OCR output exceeds the 10 MiB text limit.".to_string()); }
-            let text = normalize_ocr_text(&stdout);
+            let text = match normalize_ocr_text(&stdout) {
+                Ok(text) => text,
+                Err(error) => return failure(input, error),
+            };
+            if text.len() > OCR_MAX_OUTPUT_BYTES { return failure(input, "OCR output exceeds the 10 MiB text limit.".to_string()); }
             if text.is_empty() { return failure(input, "OCR completed but found no readable text.".to_string()); }
             match std::fs::write(output.path(), text) {
                 Ok(_) => match output.publish() {
@@ -114,16 +118,20 @@ impl Drop for OcrWorkspace {
 }
 
 fn run_ocr(engine: &Path, renderer: &Path, input: &Path, pages: &[u32]) -> Result<Vec<u8>, String> {
+    run_ocr_until(engine, renderer, input, pages, Instant::now() + OCR_TIMEOUT)
+}
+
+fn run_ocr_until(engine: &Path, renderer: &Path, input: &Path, pages: &[u32], deadline: Instant) -> Result<Vec<u8>, String> {
     let workspace = OcrWorkspace::new()?;
     let result = (|| {
         let mut text = Vec::new();
         for page in pages {
-            let image = render_ocr_page(renderer, input, &workspace, *page)?;
+            let image = render_ocr_page(renderer, input, &workspace, *page, deadline)?;
             let result = run_command({
                 let mut command = Command::new(engine);
                 command.arg(&image).arg("stdout");
                 command
-            })?;
+            }, deadline)?;
             if !result.status.success() { return Err(stderr(result, "OCR engine failed.")); }
             if text.len().saturating_add(result.stdout.len()).saturating_add(1) > OCR_MAX_OUTPUT_BYTES { return Err("OCR output exceeds the 10 MiB text limit.".to_string()); }
             text.extend_from_slice(&result.stdout);
@@ -135,14 +143,14 @@ fn run_ocr(engine: &Path, renderer: &Path, input: &Path, pages: &[u32]) -> Resul
     result
 }
 
-fn render_ocr_page(renderer: &Path, input: &Path, workspace: &OcrWorkspace, page: u32) -> Result<PathBuf, String> {
+fn render_ocr_page(renderer: &Path, input: &Path, workspace: &OcrWorkspace, page: u32, deadline: Instant) -> Result<PathBuf, String> {
     let prefix = workspace.page_prefix(page);
     let output = prefix.with_extension("png");
     let result = run_command({
         let mut command = Command::new(renderer);
         command.arg("-png").arg("-r").arg("200").arg("-f").arg(page.to_string()).arg("-l").arg(page.to_string()).arg("-singlefile").arg(input).arg(&prefix);
         command
-    })?;
+    }, deadline)?;
     if result.status.success() && output.is_file() { Ok(output) } else { Err(stderr(result, "PDF renderer failed to render the selected OCR page.")) }
 }
 
@@ -171,7 +179,8 @@ fn join_output_reader(handle: JoinHandle<Result<Vec<u8>, String>>, stream: &'sta
     handle.join().map_err(|_| format!("OCR helper {stream} reader stopped unexpectedly."))?
 }
 
-fn run_command(mut command: Command) -> Result<std::process::Output, String> {
+fn run_command(mut command: Command, deadline: Instant) -> Result<std::process::Output, String> {
+    if Instant::now() >= deadline { return Err("OCR helper timed out after 120 seconds.".to_string()); }
     let mut child = command.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()
         .map_err(|error| format!("Could not run OCR helper: {error}"))?;
     let stdout = child.stdout.take().ok_or("OCR helper stdout was not captured.")?;
@@ -179,7 +188,6 @@ fn run_command(mut command: Command) -> Result<std::process::Output, String> {
     let failed = Arc::new(AtomicBool::new(false));
     let stdout_reader = spawn_output_reader(stdout, "stdout", Arc::clone(&failed));
     let stderr_reader = spawn_output_reader(stderr, "stderr", Arc::clone(&failed));
-    let started = Instant::now();
     let mut timed_out = false;
     let status = loop {
         match child.try_wait().map_err(|error| format!("Could not read OCR helper status: {error}"))? {
@@ -188,12 +196,12 @@ fn run_command(mut command: Command) -> Result<std::process::Output, String> {
                 let _ = child.kill();
                 break child.wait().map_err(|error| format!("Could not stop OCR helper: {error}"))?;
             }
-            None if started.elapsed() >= OCR_TIMEOUT => {
+            None if Instant::now() >= deadline => {
                 timed_out = true;
                 let _ = child.kill();
                 break child.wait().map_err(|error| format!("Could not stop OCR helper: {error}"))?;
             }
-            None => thread::sleep(Duration::from_millis(50)),
+            None => thread::sleep(Duration::from_millis(50).min(deadline.saturating_duration_since(Instant::now()))),
         }
     };
     let stdout = join_output_reader(stdout_reader, "stdout")?;
@@ -225,13 +233,15 @@ where
     fallback()
 }
 
-fn normalize_ocr_text(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(bytes)
+fn normalize_ocr_text(bytes: &[u8]) -> Result<String, String> {
+    let text = std::str::from_utf8(bytes)
+        .map_err(|_| "OCR helper produced invalid UTF-8 text.".to_string())?
         .lines()
         .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n");
+    Ok(text)
 }
 
 pub fn blur_faces(request: &VisionRequest, input: PathBuf) -> JobOutcome {
@@ -508,7 +518,37 @@ mod tests {
 
     #[test]
     fn normalizes_ocr_lines_without_reordering_them() {
-        assert_eq!(normalize_ocr_text(b"  first   line\r\n\n second line  \n"), "first line\nsecond line");
+        assert_eq!(normalize_ocr_text(b"  first   line\r\n\n second line  \n").unwrap(), "first line\nsecond line");
+    }
+
+    #[test]
+    fn rejects_invalid_utf8_ocr_output() {
+        assert!(normalize_ocr_text(b"valid\xfftext").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn multi_page_ocr_uses_one_request_deadline() {
+        let renderer = path("deadline-renderer.sh");
+        let engine = path("deadline-engine.sh");
+        let input = path("deadline.pdf");
+        make_pdf(&input, 2);
+        fs::write(&renderer, "#!/bin/sh\nsleep 0.18\ntouch \"${10}.png\"\n").unwrap();
+        fs::write(&engine, "#!/bin/sh\nsleep 0.18\nprintf 'page\\n'\n").unwrap();
+        for helper in [&renderer, &engine] {
+            let mut permissions = fs::metadata(helper).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(helper, permissions).unwrap();
+        }
+
+        let started = Instant::now();
+        let result = super::run_ocr_until(&engine, &renderer, &input, &[1, 2], Instant::now() + Duration::from_millis(300));
+
+        assert_eq!(result.unwrap_err(), "OCR helper timed out after 120 seconds.");
+        assert!(started.elapsed() < Duration::from_secs(1), "request deadline was not shared: {:?}", started.elapsed());
+        let _ = fs::remove_file(renderer);
+        let _ = fs::remove_file(engine);
+        let _ = fs::remove_file(input);
     }
 
     #[cfg(unix)]
@@ -517,7 +557,7 @@ mod tests {
         let started = Instant::now();
         let mut command = Command::new("sh");
         command.args(["-c", "head -c 131072 /dev/zero; head -c 131072 /dev/zero >&2"]);
-        let result = run_command(command).expect("large helper output should be drained");
+        let result = run_command(command, Instant::now() + Duration::from_secs(5)).expect("large helper output should be drained");
         assert!(started.elapsed() < Duration::from_secs(5));
         assert_eq!(result.stdout.len(), 131072);
         assert_eq!(result.stderr.len(), 131072);
