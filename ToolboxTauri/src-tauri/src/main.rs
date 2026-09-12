@@ -123,6 +123,11 @@ async fn edit_pdf_session(request: editor::PdfEditSessionRequest) -> Vec<JobOutc
 
 #[tauri::command]
 async fn organize_pdf(request: editor::OrganizePdfRequest) -> Vec<JobOutcome> {
+    let explicit_pages = match &request.scope {
+        editor::PageScope::All => None,
+        editor::PageScope::Selected { pages } => Some(pages.as_slice()),
+    };
+    if let Err(outcomes) = validate_page_selection("organize_pdf", &request.paths, explicit_pages) { return outcomes; }
     BatchRunner::run("organize_pdf", request.paths.clone(), |path| editor::organize(&request, path))
 }
 
@@ -239,6 +244,9 @@ fn inspect_image_metadata(request: tools::MetadataRequest) -> Vec<Result<tools::
 fn inspect_image_preview(request: tools::ImagePreviewRequest) -> Result<tools::ImagePreview, String> { tools::inspect_preview(&request) }
 
 #[tauri::command]
+fn inspect_tiff_pages(request: tools::TiffPreviewRequest) -> Result<Vec<tools::ImagePreview>, String> { tools::inspect_tiff_pages(&request) }
+
+#[tauri::command]
 fn inspect_image_edit_preview(request: tools::ImageEditPreviewRequest) -> Result<tools::ImagePreview, String> { tools::inspect_edit_preview(&request) }
 
 #[tauri::command]
@@ -317,6 +325,7 @@ fn main() {
             ,image_metadata
             ,inspect_image_metadata,
             inspect_image_preview,
+            inspect_tiff_pages,
             inspect_image_edit_preview,
             export_image_edit_plan
         ])
@@ -461,10 +470,10 @@ mod command_tests {
             paths: vec![image.clone(), missing_gif_frame.clone()], frame_delay_ms: 100, loop_forever: true, output_location: location(&root, "gif-missing"),
         }));
         assert_aggregate_success("TIFF valid inputs", &[tiff.clone(), tiff_two.clone()], process_tiff_pages(TiffRequest {
-            paths: vec![tiff.clone(), tiff_two.clone()], output_location: location(&root, "tiff-valid"),
+            paths: vec![tiff.clone(), tiff_two.clone()], pages: None, output_location: location(&root, "tiff-valid"),
         }));
         assert_aggregate_failure("TIFF missing later input", &[tiff.clone(), missing_tiff.clone()], &missing_tiff, process_tiff_pages(TiffRequest {
-            paths: vec![tiff.clone(), missing_tiff.clone()], output_location: location(&root, "tiff-missing"),
+            paths: vec![tiff.clone(), missing_tiff.clone()], pages: None, output_location: location(&root, "tiff-missing"),
         }));
 
         let _ = std::fs::remove_dir_all(root);
@@ -530,6 +539,25 @@ mod command_tests {
         assert!(outcomes[0].output_paths.is_empty());
         assert!(outcomes[0].failure.as_ref().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput)));
         assert!(outcomes[0].failure.as_ref().is_some_and(|error| error.message.contains("at least one page")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn organize_command_rejects_empty_selected_scope_before_processing() {
+        let root = sandbox("organize-empty-selection");
+        let input = root.join("source.pdf"); make_pdf(&input, 1);
+        let outcomes = tauri::async_runtime::block_on(organize_pdf(OrganizePdfRequest {
+            paths: vec![input.clone()], page_order: vec![], delete_pages: vec![], rotate_pages: vec![],
+            scope: PageScope::Selected { pages: vec![] }, output_location: location(&root, "organize-empty"),
+        }));
+
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].input_path, input);
+        assert!(outcomes[0].output_paths.is_empty());
+        assert!(outcomes[0].failure.as_ref().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput)));
+        assert!(outcomes[0].failure.as_ref().is_some_and(|error| error.message.contains("at least one page")));
+        assert_eq!(std::fs::read_dir(root.join("organize-empty")).unwrap().count(), 0);
+
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -666,7 +694,7 @@ mod command_tests {
         outputs.extend(assert_success("composed image editor", export_image_edit_plan(ImageEditExportRequest { paths: vec![image.clone()], plan: image_plan })));
         outputs.extend(assert_success("metadata", image_metadata(MetadataRequest { paths: vec![image.clone()], output_location: location(&root, "metadata") })));
         outputs.extend(assert_success("tone", adjust_image_tone(ToneRequest { paths: vec![image.clone()], brightness: 20, contrast: 0.0, saturation: 0.0, exposure: 0.0, output_location: location(&root, "tone") })));
-        outputs.extend(assert_aggregate_success("tiff", &[tiff.clone()], process_tiff_pages(TiffRequest { paths: vec![tiff.clone()], output_location: location(&root, "tiff") })));
+        outputs.extend(assert_aggregate_success("tiff", &[tiff.clone()], process_tiff_pages(TiffRequest { paths: vec![tiff.clone()], pages: None, output_location: location(&root, "tiff") })));
         assert_optional_adapter("face blur", blur_faces(VisionRequest { paths: vec![image.clone()], pages: None, output_location: location(&root, "face blur") }));
         assert_optional_adapter("background removal", remove_image_background(VisionRequest { paths: vec![image.clone()], pages: None, output_location: location(&root, "background removal") }));
 

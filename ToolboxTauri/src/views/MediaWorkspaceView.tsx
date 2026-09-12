@@ -5,6 +5,13 @@ import { WorkspaceCommandRail } from "../components/WorkspaceCommandRail";
 import { toolsForWorkspaceId, UtilityRegistry } from "../registry";
 import type { AtomicToolId, ImagePreview, ToolDefinition, ToolResult } from "../contracts";
 
+type TiffFrame = { key: string; path: string; page: number; preview: ImagePreview };
+type TiffInspection =
+  | { kind: "idle" }
+  | { kind: "loading"; key: string }
+  | { kind: "ready"; key: string; frames: TiffFrame[] }
+  | { kind: "error"; key: string; message: string };
+
 const mediaActions = toolsForWorkspaceId("media-tools");
 const mediaIds = new Set<string>(mediaActions.map((tool) => tool.id));
 
@@ -23,6 +30,8 @@ export const MediaWorkspaceView = ({ utility }: { utility: ToolDefinition }) => 
   const [iconSizes, setIconSizes] = useState(iconSizesByPreset.macos);
   const [metadataMode, setMetadataMode] = useState<"inspect" | "strip">("strip");
   const [report, setReport] = useState<unknown[]>([]);
+  const [selectedTiffFrameIndex, setSelectedTiffFrameIndex] = useState(0);
+  const [tiffInspection, setTiffInspection] = useState<TiffInspection>({ kind: "idle" });
   const [activeToolId, setActiveToolId] = useState<AtomicToolId>(
     mediaIds.has(utility.id) ? utility.id : "icon-set",
   );
@@ -45,6 +54,7 @@ export const MediaWorkspaceView = ({ utility }: { utility: ToolDefinition }) => 
       variant="workspace"
       sessionKey="media-tools"
       utility={activeUtility}
+      showFileOrdering={activeUtility.id !== "tiff-pages"}
       onRun={(paths) => {
         if (activeUtility.id === "icon-set") {
           return invoke<ToolResult>("generate_icon_set", {
@@ -63,7 +73,13 @@ export const MediaWorkspaceView = ({ utility }: { utility: ToolDefinition }) => 
         }
         if (activeUtility.id === "tiff-pages") {
           return invoke<ToolResult>("process_tiff_pages", {
-            request: { paths, outputLocation: "alongsideInput" },
+            request: {
+              paths,
+              pages: tiffInspection.kind === "ready"
+                ? tiffInspection.frames.map(({ path, page }) => ({ path, page }))
+                : [],
+              outputLocation: "alongsideInput",
+            },
           });
         }
         return invoke<ToolResult>("image_metadata", {
@@ -86,7 +102,17 @@ export const MediaWorkspaceView = ({ utility }: { utility: ToolDefinition }) => 
           </div>
 
           {(activeUtility.id === "gif-create" || activeUtility.id === "tiff-pages") && (
-            <MediaFrameOrder files={files} activeUtility={activeUtility} selectedFileIndex={selectedFileIndex} selectFile={selectFile} />
+            <MediaFrameOrder files={files} activeUtility={activeUtility} selectedIndex={activeUtility.id === "tiff-pages" ? selectedTiffFrameIndex : selectedFileIndex} selectIndex={activeUtility.id === "tiff-pages" ? setSelectedTiffFrameIndex : selectFile} tiffInspection={tiffInspection} setTiffInspection={setTiffInspection} moveTiffFrame={(delta) => {
+              setTiffInspection((current) => {
+                if (current.kind !== "ready") return current;
+                const nextIndex = selectedTiffFrameIndex + delta;
+                if (nextIndex < 0 || nextIndex >= current.frames.length) return current;
+                const frames = [...current.frames];
+                [frames[selectedTiffFrameIndex], frames[nextIndex]] = [frames[nextIndex], frames[selectedTiffFrameIndex]];
+                setSelectedTiffFrameIndex(nextIndex);
+                return { ...current, frames };
+              });
+            }} />
           )}
 
           {activeUtility.id === "icon-set" && (
@@ -139,7 +165,7 @@ export const MediaWorkspaceView = ({ utility }: { utility: ToolDefinition }) => 
             </>
           )}
 
-          <button type="button" disabled={loading || files.length === 0 || (activeUtility.id === "image-metadata" && metadataMode === "inspect")} onClick={run} className="workspace-primary-action">
+          <button type="button" disabled={loading || files.length === 0 || (activeUtility.id === "tiff-pages" && tiffInspection.kind !== "ready") || (activeUtility.id === "image-metadata" && metadataMode === "inspect")} onClick={run} className="workspace-primary-action">
             {activeUtility.id === "image-metadata" ? "Remove metadata" : activeUtility.shortTitle}
           </button>
         </div>
@@ -148,12 +174,29 @@ export const MediaWorkspaceView = ({ utility }: { utility: ToolDefinition }) => 
   );
 };
 
-const MediaFrameOrder = ({ files, activeUtility, selectedFileIndex, selectFile }: { files: string[]; activeUtility: ToolDefinition; selectedFileIndex: number; selectFile: (index: number) => void }) => {
+const MediaFrameOrder = ({
+  files,
+  activeUtility,
+  selectedIndex,
+  selectIndex,
+  tiffInspection,
+  setTiffInspection,
+  moveTiffFrame,
+}: {
+  files: string[];
+  activeUtility: ToolDefinition;
+  selectedIndex: number;
+  selectIndex: (index: number) => void;
+  tiffInspection: TiffInspection;
+  setTiffInspection: (update: TiffInspection | ((current: TiffInspection) => TiffInspection)) => void;
+  moveTiffFrame: (delta: -1 | 1) => void;
+}) => {
   const [previews, setPreviews] = useState<Record<string, ImagePreview | null>>({});
   const frameKey = files.join("\u0000");
+  const isTiff = activeUtility.id === "tiff-pages";
 
   useEffect(() => {
-    if (!frameKey || !activeUtility.capability.supportsPreview || !["gif-create", "tiff-pages"].includes(activeUtility.id)) {
+    if (isTiff || !frameKey || !activeUtility.capability.supportsPreview || activeUtility.id !== "gif-create") {
       setPreviews({});
       return;
     }
@@ -173,24 +216,65 @@ const MediaFrameOrder = ({ files, activeUtility, selectedFileIndex, selectFile }
     return () => {
       current = false;
     };
-  }, [activeUtility.capability.supportsPreview, activeUtility.id, frameKey]);
+  }, [activeUtility.capability.supportsPreview, activeUtility.id, frameKey, isTiff]);
+
+  useEffect(() => {
+    if (!isTiff) {
+      setTiffInspection({ kind: "idle" });
+      return;
+    }
+    if (!frameKey) {
+      setTiffInspection({ kind: "idle" });
+      selectIndex(0);
+      return;
+    }
+    let current = true;
+    setTiffInspection({ kind: "loading", key: frameKey });
+    selectIndex(0);
+    void Promise.all(files.map(async (path) => {
+      const pages = await invoke<ImagePreview[]>("inspect_tiff_pages", { request: { path } });
+      return pages.map((preview, page) => ({ key: path + "\u0000" + page, path, page, preview }));
+    })).then((groups) => {
+      if (current) setTiffInspection({ kind: "ready", key: frameKey, frames: groups.flat() });
+    }).catch((error) => {
+      if (current) setTiffInspection({ kind: "error", key: frameKey, message: String(error) });
+    });
+    return () => {
+      current = false;
+    };
+  }, [files, frameKey, isTiff, selectIndex]);
+
+  const tiffFrames = tiffInspection.kind === "ready" && tiffInspection.key === frameKey ? tiffInspection.frames : [];
 
   return (
     <section className="media-frame-order" role="region" aria-label="Frame order">
       <p className="workspace-panel-label">Frame order</p>
       <p className="workspace-panel-copy">The output follows this order. Select a frame, then move it with the arrows.</p>
+      {isTiff && tiffInspection.kind === "loading" && <p className="workspace-note" role="status">Reading TIFF pages on this device.</p>}
+      {isTiff && tiffInspection.kind === "error" && <p className="workspace-note" role="alert">TIFF pages could not be read. {tiffInspection.message}</p>}
       <ol className="media-frame-list">
-        {files.map((file, index) => (
-          <li key={file} data-selected={index === selectedFileIndex ? "true" : undefined}>
-            <button type="button" onClick={() => selectFile(index)} aria-label={`Frame ${index + 1}`}>
-              <span>{index + 1}</span>
-              {activeUtility.capability.supportsPreview && previews[file] && <img className="media-frame-preview" src={previews[file]?.dataUrl} alt={`Preview of frame ${index + 1}`} />}
-              {file.split(/[\\/]/).pop()}
-            </button>
-          </li>
-        ))}
+        {(isTiff ? tiffFrames : files).map((item, index) => {
+          const file = isTiff ? (item as TiffFrame).path : item as string;
+          const preview = isTiff ? (item as TiffFrame).preview : previews[file];
+          const page = isTiff ? (item as TiffFrame).page : null;
+          return (
+            <li key={isTiff ? (item as TiffFrame).key : file} data-selected={index === selectedIndex ? "true" : undefined}>
+              <button type="button" onClick={() => selectIndex(index)} aria-label={"Frame " + (index + 1)}>
+                <span>{index + 1}</span>
+                {activeUtility.capability.supportsPreview && preview && <img className="media-frame-preview" src={preview.dataUrl} alt={"Preview of frame " + (index + 1)} />}
+                {file.split(/[\\/]/).pop()}{page === null ? "" : " · page " + (page + 1)}
+              </button>
+            </li>
+          );
+        })}
       </ol>
-      {files.length === 0 && <p className="workspace-note">Select frames to arrange them here.</p>}
+      {((isTiff && tiffFrames.length === 0 && tiffInspection.kind !== "error") || (!isTiff && files.length === 0)) && <p className="workspace-note">Select frames to arrange them here.</p>}
+      {isTiff && tiffFrames.length > 0 && (
+        <div className="file-selection-order" aria-label="Selected TIFF page ordering">
+          <button type="button" aria-label="Move selected TIFF page up" disabled={selectedIndex === 0} onClick={() => moveTiffFrame(-1)}>↑</button>
+          <button type="button" aria-label="Move selected TIFF page down" disabled={selectedIndex >= tiffFrames.length - 1} onClick={() => moveTiffFrame(1)}>↓</button>
+        </div>
+      )}
     </section>
   );
 };

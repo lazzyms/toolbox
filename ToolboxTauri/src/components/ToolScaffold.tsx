@@ -11,6 +11,7 @@ interface ToolScaffoldProps {
     onRunCombined?: (files: string[]) => Promise<JobOutcome[]>;
     variant?: 'standard' | 'workspace';
     sessionKey?: string;
+    showFileOrdering?: boolean;
     children: (props: {
         files: string[];
         run: () => Promise<void>;
@@ -23,7 +24,7 @@ interface ToolScaffoldProps {
     }) => React.ReactNode;
 }
 
-export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, children }: ToolScaffoldProps) => {
+export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, showFileOrdering = true, children }: ToolScaffoldProps) => {
     const [files, setFiles] = useState<string[]>([]);
     const [results, setResults] = useState<JobOutcome[]>([]);
     const [loading, setLoading] = useState(false);
@@ -168,7 +169,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         <div className="file-selection">
             <div className="file-selection-header">
                 <span className="file-selection-count">{files.length} {files.length === 1 ? 'file' : 'files'} open</span>
-                {inputPolicy.inputCardinality === 'ordered' && (
+                {inputPolicy.inputCardinality === 'ordered' && showFileOrdering && (
                     <span className="file-selection-order" aria-label="Selected file ordering">
                         <button
                             type="button"

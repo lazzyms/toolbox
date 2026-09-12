@@ -363,8 +363,12 @@ fn scene_preflight(document: &Document, scene: &PdfScene, source_pages: &[Object
         .collect::<Result<Vec<_>, _>>()?
         .into_iter()
         .any(|present| present);
+    let has_tagged_structure = has_catalog_structure(document, catalog, b"StructTreeRoot")?;
     if retained.len() != source_pages.len() && (has_navigation || has_catalog_structure(document, catalog, b"AcroForm")?) {
         return Err("This PDF contains navigation or form structures that could target a removed page; scene export was rejected before output".into());
+    }
+    if retained.len() != source_pages.len() && has_tagged_structure {
+        return Err("This tagged PDF contains a StructTreeRoot or ParentTree that could target a removed page; scene export was rejected before output".into());
     }
     for page in &scene.pages {
         if let Some(index) = page.source_index {
@@ -548,7 +552,7 @@ impl TempDir {
 }
 impl Drop for TempDir { fn drop(&mut self) { let _=fs::remove_dir_all(&self.0); } }
 fn renderer()->Result<PathBuf,String> {
-    let path=std::env::var_os("TOOLBOX_PDFTOPPM_PATH").map(PathBuf::from).unwrap_or_else(||PathBuf::from("pdftoppm"));
+    let path=std::env::var_os("TOOLBOX_PDFTOPPM_PATH").filter(|path| !path.is_empty()).map(PathBuf::from).unwrap_or_else(||PathBuf::from("pdftoppm"));
     if Command::new(&path).arg("-h").output().map(|o|o.status.success()).unwrap_or(false) { Ok(path) } else { Err("pdftoppm is required for PDF previews. Set TOOLBOX_PDFTOPPM_PATH or add it to PATH.".into()) }
 }
 
@@ -925,5 +929,21 @@ mod tests {
         assert!(result.failure.as_ref().is_some_and(|error| error.message.contains("destinations")), "{:?}", result.failure);
         assert!(result.output_paths.is_empty());
         assert!(!input.with_file_name("navigation-edited-1.pdf").exists());
+    }
+    #[test]
+    fn scene_rejects_tagged_page_removal_before_output() {
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("tagged.pdf"); fixture(&input);
+        let mut source=Document::load(&input).unwrap();
+        let pages:Vec<_>=source.get_pages().values().copied().collect();
+        let parent_tree=source.add_object(dictionary! {"Nums"=>Object::Array(vec![Object::Integer(0),Object::Dictionary(dictionary! {"Pg"=>Object::Reference(pages[0])})])});
+        let structure=source.add_object(dictionary! {"Type"=>"StructTreeRoot","K"=>vec![],"ParentTree"=>parent_tree});
+        let catalog_id=source.trailer.get(b"Root").unwrap().as_reference().unwrap();
+        source.get_dictionary_mut(catalog_id).unwrap().set("StructTreeRoot",structure);
+        source.save(&input).unwrap();
+        let scene=PdfScene { pages:vec![ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0,crop:None,objects:vec![]}] };
+        let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
+        assert!(result.failure.as_ref().is_some_and(|error| error.message.contains("tagged PDF")), "{:?}", result.failure);
+        assert!(result.output_paths.is_empty());
+        assert!(!input.with_file_name("tagged-edited-1.pdf").exists());
     }
 }

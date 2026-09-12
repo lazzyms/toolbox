@@ -1,6 +1,6 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
 use image::codecs::png::PngEncoder;
-use image::{DynamicImage, ImageFormat, ImageEncoder};
+use image::{DynamicImage, ImageBuffer, ImageFormat, ImageEncoder, Luma, Rgb, Rgba};
 use image::AnimationDecoder;
 use std::fs::File;
 use std::io::{BufReader, Seek};
@@ -307,6 +307,13 @@ pub fn inspect_preview(request: &ImagePreviewRequest) -> Result<ImagePreview, St
     })
 }
 
+pub fn inspect_tiff_pages(request: &TiffPreviewRequest) -> Result<Vec<ImagePreview>, String> {
+    read_tiff_pages(&request.path)?
+        .iter()
+        .map(|page| tiff_page_to_dynamic(page).and_then(encode_preview))
+        .collect()
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResizeRequest {
@@ -371,7 +378,18 @@ pub struct GifCreateRequest {
 pub struct GifExtractRequest { pub paths: Vec<PathBuf>, pub output_location: OutputLocation }
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TiffRequest { pub paths: Vec<PathBuf>, pub output_location: OutputLocation }
+pub struct TiffPageRef { pub path: PathBuf, pub page: usize }
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TiffRequest {
+    pub paths: Vec<PathBuf>,
+    #[serde(default)]
+    pub pages: Option<Vec<TiffPageRef>>,
+    pub output_location: OutputLocation,
+}
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TiffPreviewRequest { pub path: PathBuf }
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MetadataRequest { pub paths: Vec<PathBuf>, pub output_location: OutputLocation }
@@ -698,13 +716,33 @@ pub fn gif_extract(request: &GifExtractRequest, input: PathBuf) -> JobOutcome {
 
 pub fn tiff(request: &TiffRequest) -> JobOutcome {
     let Some(input) = request.paths.first().cloned() else { return failure(PathBuf::new(), "Select at least one TIFF file.".to_string()); };
-    let mut pages = Vec::new();
-    for path in &request.paths {
-        match read_tiff_pages(path) {
-            Ok(mut decoded) => pages.append(&mut decoded),
-            Err(error) => return failure(path.clone(), format!("Could not process {}: {error}", path.display())),
+    let pages = if let Some(page_refs) = &request.pages {
+        if page_refs.is_empty() { return failure(input, "Select at least one TIFF page.".to_string()); }
+        let mut selected = Vec::with_capacity(page_refs.len());
+        for page_ref in page_refs {
+            if !request.paths.iter().any(|path| path == &page_ref.path) {
+                return failure(page_ref.path.clone(), "The TIFF page selection contains an unselected file.".to_string());
+            }
+            let decoded = match read_tiff_pages(&page_ref.path) {
+                Ok(decoded) => decoded,
+                Err(error) => return failure(page_ref.path.clone(), format!("Could not process {}: {error}", page_ref.path.display())),
+            };
+            let Some(page) = decoded.get(page_ref.page) else {
+                return failure(page_ref.path.clone(), format!("TIFF page {} is outside the document.", page_ref.page + 1));
+            };
+            selected.push(page.clone());
         }
-    }
+        selected
+    } else {
+        let mut pages = Vec::new();
+        for path in &request.paths {
+            match read_tiff_pages(path) {
+                Ok(mut decoded) => pages.append(&mut decoded),
+                Err(error) => return failure(path.clone(), format!("Could not process {}: {error}", path.display())),
+            }
+        }
+        pages
+    };
     let output = if request.paths.len() == 1 {
         let mut outputs = Vec::new();
         for (index, page) in pages.iter().enumerate() {
@@ -736,6 +774,15 @@ pub fn tiff(request: &TiffRequest) -> JobOutcome {
 
 #[derive(Clone)]
 enum TiffPage { Gray { width: u32, height: u32, data: Vec<u8> }, Rgb { width: u32, height: u32, data: Vec<u8> }, Rgba { width: u32, height: u32, data: Vec<u8> } }
+
+fn tiff_page_to_dynamic(page: &TiffPage) -> Result<DynamicImage, String> {
+    match page {
+        TiffPage::Gray { width, height, data } => ImageBuffer::<Luma<u8>, _>::from_raw(*width, *height, data.clone()).map(DynamicImage::ImageLuma8),
+        TiffPage::Rgb { width, height, data } => ImageBuffer::<Rgb<u8>, _>::from_raw(*width, *height, data.clone()).map(DynamicImage::ImageRgb8),
+        TiffPage::Rgba { width, height, data } => ImageBuffer::<Rgba<u8>, _>::from_raw(*width, *height, data.clone()).map(DynamicImage::ImageRgba8),
+    }
+    .ok_or_else(|| "TIFF page pixel data has an invalid length.".to_string())
+}
 
 fn read_tiff_pages(path: &std::path::Path) -> Result<Vec<TiffPage>, String> {
     let file = File::open(path).map_err(|error| format!("Could not open TIFF: {error}"))?;
@@ -842,7 +889,7 @@ mod tests {
         encoder.write_image::<tiff::encoder::colortype::Gray8>(2, 1, &[10, 20]).unwrap();
         encoder.write_image::<tiff::encoder::colortype::Gray8>(2, 1, &[30, 40]).unwrap();
 
-        let split = tiff(&TiffRequest { paths: vec![input.clone()], output_location: OutputLocation::AlongsideInput });
+        let split = tiff(&TiffRequest { paths: vec![input.clone()], pages: None, output_location: OutputLocation::AlongsideInput });
         assert_eq!(split.output_paths.len(), 2);
         assert_eq!(read_tiff_pages(&split.output_paths[0]).unwrap().len(), 1);
         assert_eq!(read_tiff_pages(&split.output_paths[1]).unwrap().len(), 1);
@@ -851,7 +898,7 @@ mod tests {
         let second = path("second.tiff");
         write_tiff_page(&first, &TiffPage::Gray { width: 1, height: 1, data: vec![1] }).unwrap();
         write_tiff_page(&second, &TiffPage::Gray { width: 1, height: 1, data: vec![2] }).unwrap();
-        let combined = tiff(&TiffRequest { paths: vec![first.clone(), second.clone()], output_location: OutputLocation::AlongsideInput });
+        let combined = tiff(&TiffRequest { paths: vec![first.clone(), second.clone()], pages: None, output_location: OutputLocation::AlongsideInput });
         let pages = read_tiff_pages(&combined.output_paths[0]).unwrap();
         assert_eq!(pages.len(), 2);
         assert!(matches!(&pages[0], TiffPage::Gray { data, .. } if data == &vec![1]));
@@ -870,9 +917,42 @@ mod tests {
         let file = File::create(&input).unwrap();
         let mut encoder = tiff::encoder::TiffEncoder::new(file).unwrap();
         encoder.write_image::<tiff::encoder::colortype::Gray16>(1, 1, &[1]).unwrap();
-        let result = tiff(&TiffRequest { paths: vec![input.clone()], output_location: OutputLocation::AlongsideInput });
+        let result = tiff(&TiffRequest { paths: vec![input.clone()], pages: None, output_location: OutputLocation::AlongsideInput });
         assert!(result.failure.is_some());
         let _ = std::fs::remove_file(input);
+    }
+
+    #[test]
+    fn selected_tiff_pages_follow_explicit_cross_file_order() {
+        let two_page = path("ordered-two-page.tiff");
+        let one_page = path("ordered-one-page.tiff");
+        let file = File::create(&two_page).unwrap();
+        let mut encoder = tiff::encoder::TiffEncoder::new(file).unwrap();
+        encoder.write_image::<tiff::encoder::colortype::Gray8>(2, 1, &[10, 20]).unwrap();
+        encoder.write_image::<tiff::encoder::colortype::Gray8>(2, 1, &[30, 40]).unwrap();
+        write_tiff_page(&one_page, &TiffPage::Gray { width: 1, height: 1, data: vec![2] }).unwrap();
+
+        let outcome = tiff(&TiffRequest {
+            paths: vec![two_page.clone(), one_page.clone()],
+            pages: Some(vec![
+                TiffPageRef { path: two_page.clone(), page: 1 },
+                TiffPageRef { path: one_page.clone(), page: 0 },
+                TiffPageRef { path: two_page.clone(), page: 0 },
+            ]),
+            output_location: OutputLocation::AlongsideInput,
+        });
+
+        assert!(outcome.failure.is_none(), "selected TIFF pages failed: {:?}", outcome.failure);
+        let output = outcome.output_paths.first().unwrap().clone();
+        let pages = read_tiff_pages(&output).unwrap();
+        assert_eq!(pages.len(), 3);
+        assert!(matches!(&pages[0], TiffPage::Gray { data, .. } if data == &vec![30, 40]));
+        assert!(matches!(&pages[1], TiffPage::Gray { data, .. } if data == &vec![2]));
+        assert!(matches!(&pages[2], TiffPage::Gray { data, .. } if data == &vec![10, 20]));
+
+        let _ = std::fs::remove_file(two_page);
+        let _ = std::fs::remove_file(one_page);
+        let _ = std::fs::remove_file(output);
     }
 
     #[test]

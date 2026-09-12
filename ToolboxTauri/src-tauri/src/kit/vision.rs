@@ -91,7 +91,13 @@ impl OcrWorkspace {
         let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
         for attempt in 0..100 {
             let path = std::env::temp_dir().join(format!("toolbox_ocr_{}_{}_{}", std::process::id(), timestamp, attempt));
-            match std::fs::create_dir(&path) {
+            let mut builder = std::fs::DirBuilder::new();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt;
+                builder.mode(0o700);
+            }
+            match builder.create(&path) {
                 Ok(()) => return Ok(Self(path)),
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
                 Err(error) => return Err(format!("Could not create private OCR workspace: {error}")),
@@ -197,18 +203,26 @@ fn run_command(mut command: Command) -> Result<std::process::Output, String> {
 }
 
 fn find_pdf_renderer() -> Result<PathBuf, String> {
-    if let Ok(path) = std::env::var("TOOLBOX_PDFTOPPM_PATH") {
-        let path = PathBuf::from(path);
+    find_pdf_renderer_with_override(std::env::var_os("TOOLBOX_PDFTOPPM_PATH").map(PathBuf::from), || {
+        let root = crate::kit::resources::application_resource_root().unwrap_or_default();
+        let executable = if cfg!(windows) { "pdftoppm.exe" } else { "pdftoppm" };
+        [root.join("pdf-bin").join(executable), root.join("resources").join(executable), root.join(executable)]
+            .into_iter()
+            .find(|path| path.is_file())
+            .or_else(|| Command::new(executable).arg("-h").output().ok().filter(|result| result.status.success()).map(|_| PathBuf::from(executable)))
+            .ok_or_else(|| "PDF rasterizer is unavailable. Bundle pdftoppm or set TOOLBOX_PDFTOPPM_PATH.".to_string())
+    })
+}
+
+fn find_pdf_renderer_with_override<F>(override_path: Option<PathBuf>, fallback: F) -> Result<PathBuf, String>
+where
+    F: FnOnce() -> Result<PathBuf, String>,
+{
+    if let Some(path) = override_path.filter(|path| !path.as_os_str().is_empty()) {
         if path.is_file() { return Ok(path); }
         return Err("TOOLBOX_PDFTOPPM_PATH does not point to a file.".to_string());
     }
-    let root = crate::kit::resources::application_resource_root().unwrap_or_default();
-    let executable = if cfg!(windows) { "pdftoppm.exe" } else { "pdftoppm" };
-    [root.join("pdf-bin").join(executable), root.join("resources").join(executable), root.join(executable)]
-        .into_iter()
-        .find(|path| path.is_file())
-        .or_else(|| Command::new(executable).arg("-h").output().ok().filter(|result| result.status.success()).map(|_| PathBuf::from(executable)))
-        .ok_or_else(|| "PDF rasterizer is unavailable. Bundle pdftoppm or set TOOLBOX_PDFTOPPM_PATH.".to_string())
+    fallback()
 }
 
 fn normalize_ocr_text(bytes: &[u8]) -> String {
@@ -432,6 +446,24 @@ mod tests {
         assert_eq!(before_workspaces, after_workspaces);
         assert_eq!(original, input_after);
         assert_eq!(output_entries, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ocr_workspace_is_private_and_removed_on_drop() {
+        let workspace = super::OcrWorkspace::new().unwrap();
+        let path = workspace.0.clone();
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o700);
+        fs::write(path.join("secret.png"), b"private OCR input").unwrap();
+        drop(workspace);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn empty_pdf_renderer_override_uses_path_fallback() {
+        let result = super::find_pdf_renderer_with_override(Some(PathBuf::new()), || Ok(PathBuf::from("pdftoppm")));
+        assert_eq!(result.unwrap(), PathBuf::from("pdftoppm"));
     }
 
     #[cfg(unix)]
