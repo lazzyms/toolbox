@@ -2,6 +2,7 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use image::codecs::png::PngEncoder;
 use image::{DynamicImage, ImageBuffer, ImageFormat, ImageEncoder, Luma, Rgb, Rgba};
 use image::AnimationDecoder;
+use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::{BufReader, Seek};
 use std::path::{Path, PathBuf};
@@ -501,7 +502,7 @@ fn apply_watermark(image: DynamicImage, request: &WatermarkRequest) -> Result<Dy
     let alpha = request.opacity.min(100) as u16 * 255 / 100;
     let mut watermark = image::RgbaImage::new(image.width(), image.height());
     if let Some(text) = request.text.as_deref().filter(|text| !text.trim().is_empty()) {
-        draw_text(&mut watermark, text, request.x, request.y, alpha as u8);
+        draw_text(&mut watermark, text, request.x, request.y, alpha as u8)?;
     }
     if let Some(path) = request.logo_path.as_ref() {
         let logo = crate::kit::images::load_image(path)?.to_rgba8();
@@ -517,40 +518,124 @@ fn apply_watermark(image: DynamicImage, request: &WatermarkRequest) -> Result<Dy
 
 fn default_watermark_position() -> u32 { 16 }
 
-fn draw_text(canvas: &mut image::RgbaImage, text: &str, x: u32, y: u32, alpha: u8) {
-    let scale = 3;
-    for (index, character) in text.chars().enumerate() {
-        let glyph = glyph(character);
-        let origin_x = x.saturating_add(index as u32 * 6 * scale);
-        for (row, bits) in glyph.iter().enumerate() {
-            for column in 0..5 {
-                if bits & (1 << (4 - column)) != 0 {
-                    for dy in 0..scale { for dx in 0..scale {
-                        let px = origin_x + column * scale + dx;
-                        let py = y + row as u32 * scale + dy;
-                        if px < canvas.width() && py < canvas.height() { canvas.put_pixel(px, py, image::Rgba([255, 255, 255, alpha])); }
-                    }}
-                }
+const WATERMARK_FONT_RESOURCE: &str = "watermarkFont";
+const WATERMARK_FONT_FILE: &str = "DejaVuSans.ttf";
+const WATERMARK_FONT_SIZE: f32 = 32.0;
+const INCLUDED_WATERMARK_FONT: &[u8] = include_bytes!("../../../resources/fonts/DejaVuSans.ttf");
+
+fn watermark_font_bytes() -> Result<Vec<u8>, String> {
+    let bundled_root = crate::kit::resources::application_resource_root()
+        .map(|root| root.join("resources").join("fonts"));
+    if let Some(root) = bundled_root.filter(|root| root.join("manifest.json").is_file()) {
+        let resource = crate::kit::resources::resolve(
+            WATERMARK_FONT_RESOURCE,
+            &root,
+            "TOOLBOX_WATERMARK_FONT_PATH",
+            WATERMARK_FONT_FILE,
+        )?;
+        return std::fs::read(&resource.path)
+            .map_err(|error| format!("Could not read bundled watermark font: {error}"));
+    }
+    Ok(INCLUDED_WATERMARK_FONT.to_vec())
+}
+
+fn draw_text(canvas: &mut image::RgbaImage, text: &str, x: u32, y: u32, alpha: u8) -> Result<(), String> {
+    let bytes = watermark_font_bytes()?;
+    let font = fontdue::Font::from_bytes(bytes.clone(), fontdue::FontSettings::default())
+        .map_err(|error| format!("Could not parse bundled watermark font: {error}"))?;
+    let mut face = rustybuzz::Face::from_slice(&bytes, 0)
+        .ok_or_else(|| "Could not parse bundled watermark font for shaping.".to_string())?;
+    face.set_pixels_per_em(Some((WATERMARK_FONT_SIZE as u16, WATERMARK_FONT_SIZE as u16)));
+
+    let unsupported = text
+        .chars()
+        .filter(|character| !font.has_glyph(*character))
+        .collect::<BTreeSet<_>>();
+    if !unsupported.is_empty() {
+        return Err(unsupported_watermark_characters(unsupported));
+    }
+
+    let mut buffer = rustybuzz::UnicodeBuffer::new();
+    buffer.push_str(text);
+    buffer.set_direction(rustybuzz::Direction::LeftToRight);
+    buffer.guess_segment_properties();
+    let glyph_buffer = rustybuzz::shape(&face, &[], buffer);
+    let glyph_count = u32::from(font.glyph_count());
+    let mut unsupported_shaped = BTreeSet::new();
+    let mut has_invalid_glyph = false;
+    for info in glyph_buffer.glyph_infos() {
+        if info.glyph_id == 0 || info.glyph_id >= glyph_count || info.glyph_id > u32::from(u16::MAX) {
+            has_invalid_glyph = true;
+            if let Some(character) = text.get(info.cluster as usize..).and_then(|value| value.chars().next()) {
+                unsupported_shaped.insert(character);
             }
         }
     }
+    if !unsupported_shaped.is_empty() {
+        return Err(unsupported_watermark_characters(unsupported_shaped));
+    }
+    if has_invalid_glyph {
+        return Err("Unsupported watermark text: shaping produced a missing glyph.".to_string());
+    }
+
+    let scale = WATERMARK_FONT_SIZE / face.units_per_em() as f32;
+    let ascent = font
+        .horizontal_line_metrics(WATERMARK_FONT_SIZE)
+        .map(|metrics| metrics.ascent)
+        .unwrap_or(WATERMARK_FONT_SIZE * 0.8);
+    let baseline_y = y as f32 + ascent;
+    let mut pen_x = 0.0_f32;
+    for (info, position) in glyph_buffer.glyph_infos().iter().zip(glyph_buffer.glyph_positions()) {
+        let glyph_id = info.glyph_id as u16;
+        let (metrics, bitmap) = font.rasterize_indexed(glyph_id, WATERMARK_FONT_SIZE);
+        let glyph_x = (x as f32
+            + (pen_x + position.x_offset as f32) * scale
+            + metrics.bounds.xmin)
+            .floor() as i64;
+        let glyph_y = (baseline_y
+            - position.y_offset as f32 * scale
+            - metrics.bounds.height
+            - metrics.bounds.ymin)
+            .floor() as i64;
+        for row in 0..metrics.height {
+            for column in 0..metrics.width {
+                let coverage = bitmap[row * metrics.width + column];
+                let glyph_alpha = ((u16::from(coverage) * u16::from(alpha) + 127) / 255) as u8;
+                if glyph_alpha == 0 { continue; }
+                let px = glyph_x + column as i64;
+                let py = glyph_y + row as i64;
+                if px < 0 || py < 0 || px >= canvas.width() as i64 || py >= canvas.height() as i64 { continue; }
+                blend_watermark_pixel(canvas.get_pixel_mut(px as u32, py as u32), glyph_alpha);
+            }
+        }
+        pen_x += position.x_advance as f32;
+    }
+    Ok(())
 }
 
-fn glyph(character: char) -> [u8; 7] {
-    match character.to_ascii_uppercase() {
-        'A' => [0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
-        'B' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110],
-        'C' => [0b01111, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b01111],
-        'D' => [0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110],
-        'E' => [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111],
-        'L' => [0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111],
-        'O' => [0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
-        'R' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001],
-        'T' => [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100],
-        'U' => [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
-        ' ' => [0; 7],
-        _ => [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b00000, 0b00100],
-    }
+fn blend_watermark_pixel(pixel: &mut Rgba<u8>, source_alpha: u8) {
+    let source_alpha = u16::from(source_alpha);
+    let destination_alpha = u16::from(pixel.0[3]);
+    let output_alpha = source_alpha + ((destination_alpha * (255 - source_alpha) + 127) / 255);
+    pixel.0 = [255, 255, 255, output_alpha.min(255) as u8];
+}
+
+fn unsupported_watermark_characters(characters: impl IntoIterator<Item = char>) -> String {
+    let details = characters
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|character| {
+            let codepoint = format!("U+{:04X}", character as u32);
+            if character.is_control() || character.is_whitespace() {
+                format!("{codepoint} ({character:?})")
+            } else {
+                format!("{codepoint} ({character})")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("Unsupported watermark characters: {details}.")
 }
 pub fn icon_set(request: &IconSetRequest, input: PathBuf) -> JobOutcome {
     let image = match image::open(&input) { Ok(image) => image, Err(error) => return failure(input, format!("Could not read image: {error}")) };
@@ -879,6 +964,7 @@ fn failure(input_path: PathBuf, error: String) -> JobOutcome { JobOutcome::failu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::{Digest, Sha256};
     fn path(name: &str) -> PathBuf { std::env::temp_dir().join(format!("toolbox_tiff_{}_{}", std::process::id(), name)) }
 
     #[test]
@@ -976,6 +1062,104 @@ mod tests {
         assert!(output_image.pixels().any(|pixel| pixel.0[0..3] != [10, 20, 30]));
         assert!(output_image.pixels().all(|pixel| pixel.0[3] == 77));
         let _ = std::fs::remove_file(input);
+        let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn text_watermark_supports_ascii_latin_combining_and_non_latin_text() {
+        let mut canvas = image::RgbaImage::new(640, 96);
+        draw_text(&mut canvas, "ASCII Café e\u{301} Ж", 4, 4, 200).unwrap();
+        assert!(canvas.pixels().any(|pixel| pixel.0[3] > 0));
+
+        for text in ["Watermark", "Café", "e\u{301}", "Ж"] {
+            let mut sample = image::RgbaImage::new(160, 64);
+            draw_text(&mut sample, text, 4, 4, 255).unwrap();
+            assert!(sample.pixels().any(|pixel| pixel.0[3] > 0), "{text:?} did not rasterize");
+        }
+    }
+
+    #[test]
+    fn unsupported_mixed_text_fails_without_reserving_or_writing_output() {
+        let input = path("watermark-unsupported.png");
+        let stem = input.file_stem().and_then(|value| value.to_str()).unwrap();
+        let output = input.with_file_name(format!("{stem}-watermarked.png"));
+        let alternate_output = input.with_file_name(format!("{stem}-watermarked-1.png"));
+        let _ = std::fs::remove_file(&input);
+        let _ = std::fs::remove_file(&output);
+        let _ = std::fs::remove_file(&alternate_output);
+        image::RgbaImage::from_pixel(64, 64, image::Rgba([10, 20, 30, 91])).save(&input).unwrap();
+        let source_bytes = std::fs::read(&input).unwrap();
+        let existing_bytes = b"existing output must remain intact";
+        std::fs::write(&output, existing_bytes).unwrap();
+
+        let result = watermark(&WatermarkRequest {
+            paths: vec![input.clone()],
+            opacity: 80,
+            text: Some("Café Ж \u{10FFFF}".to_string()),
+            logo_path: None,
+            x: 4,
+            y: 4,
+            output_location: OutputLocation::AlongsideInput,
+        }, input.clone());
+
+        let error = result.failure.as_ref().expect("unsupported text must fail");
+        assert!(error.message.contains("Unsupported watermark characters"));
+        assert!(error.message.contains("U+10FFFF"));
+        assert!(result.output_paths.is_empty());
+        assert_eq!(std::fs::read(&input).unwrap(), source_bytes);
+        assert_eq!(std::fs::read(&output).unwrap(), existing_bytes);
+        assert!(!alternate_output.exists());
+
+        let _ = std::fs::remove_file(input);
+        let _ = std::fs::remove_file(output);
+        let _ = std::fs::remove_file(alternate_output);
+    }
+
+    #[test]
+    fn repeated_text_watermark_rendering_is_deterministic() {
+        fn digest(text: &str) -> [u8; 32] {
+            let mut canvas = image::RgbaImage::new(320, 96);
+            draw_text(&mut canvas, text, 8, 8, 173).unwrap();
+            Sha256::digest(canvas.as_raw()).into()
+        }
+
+        assert_eq!(digest("Café e\u{301} Ж"), digest("Café e\u{301} Ж"));
+    }
+
+    #[test]
+    fn watermark_preserves_source_alpha_and_existing_outputs_on_collision() {
+        let input = path("watermark-safety.png");
+        let stem = input.file_stem().and_then(|value| value.to_str()).unwrap();
+        let existing_output = input.with_file_name(format!("{stem}-watermarked.png"));
+        let expected_output = input.with_file_name(format!("{stem}-watermarked-1.png"));
+        let _ = std::fs::remove_file(&input);
+        let _ = std::fs::remove_file(&existing_output);
+        image::RgbaImage::from_pixel(64, 64, image::Rgba([10, 20, 30, 91])).save(&input).unwrap();
+        let source_bytes = std::fs::read(&input).unwrap();
+        let existing_bytes = b"do not overwrite this output";
+        std::fs::write(&existing_output, existing_bytes).unwrap();
+
+        let result = watermark(&WatermarkRequest {
+            paths: vec![input.clone()],
+            opacity: 50,
+            text: Some("Safe".to_string()),
+            logo_path: None,
+            x: 4,
+            y: 4,
+            output_location: OutputLocation::AlongsideInput,
+        }, input.clone());
+
+        assert!(result.failure.is_none(), "watermark failed: {:?}", result.failure);
+        let output = result.output_paths.first().expect("watermark output");
+        assert_eq!(output, &expected_output);
+        assert_eq!(std::fs::read(&input).unwrap(), source_bytes);
+        assert_eq!(std::fs::read(&existing_output).unwrap(), existing_bytes);
+        let output_image = image::open(output).unwrap().to_rgba8();
+        assert!(output_image.pixels().any(|pixel| pixel.0[0..3] != [10, 20, 30]));
+        assert!(output_image.pixels().all(|pixel| pixel.0[3] == 91));
+
+        let _ = std::fs::remove_file(input);
+        let _ = std::fs::remove_file(existing_output);
         let _ = std::fs::remove_file(output);
     }
 

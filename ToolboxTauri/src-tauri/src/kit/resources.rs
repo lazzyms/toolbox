@@ -15,8 +15,12 @@ pub struct ResourceManifest {
 #[serde(rename_all = "camelCase")]
 pub struct ResourceSpec {
     pub path: PathBuf,
+    #[serde(default)]
+    pub version: String,
     pub sha256: String,
     pub license: String,
+    #[serde(default)]
+    pub source_url: String,
     pub max_bytes: u64,
 }
 
@@ -55,7 +59,7 @@ pub fn resolve_bundled_or_override(name: &str, bundled_root: &Path, override_var
         let manifest: ResourceManifest = serde_json::from_slice(&fs::read(&manifest_path).map_err(|e| format!("Cannot read resource manifest: {e}"))?)
             .map_err(|e| format!("Invalid resource manifest: {e}"))?;
         let spec = manifest.resources.get(name).ok_or_else(|| format!("Resource {name} is missing from the bundled manifest."))?;
-        if manifest.version != 1 || manifest.architecture != std::env::consts::ARCH { return Err("Bundled resource manifest does not match this application.".to_string()); }
+        if manifest.version != 1 || (manifest.architecture != "all" && manifest.architecture != std::env::consts::ARCH) { return Err("Bundled resource manifest does not match this application.".to_string()); }
         let path = bundled_root.join(&spec.path);
         verify(&path, spec)?;
         return Ok(Some(ResolvedResource { path, source: ResourceSource::Bundled }));
@@ -70,6 +74,7 @@ pub fn resolve_bundled_or_override(name: &str, bundled_root: &Path, override_var
 
 fn verify(path: &Path, spec: &ResourceSpec) -> Result<(), String> {
     let bytes = fs::read(path).map_err(|e| format!("Bundled resource is unavailable: {e}"))?;
+    if spec.version.trim().is_empty() { return Err("Bundled resource has no version metadata.".to_string()); }
     if spec.license.trim().is_empty() { return Err("Bundled resource has no license metadata.".to_string()); }
     if bytes.len() as u64 > spec.max_bytes { return Err("Bundled resource exceeds its declared size limit.".to_string()); }
     let digest = digest_hex(&bytes);
@@ -101,7 +106,7 @@ mod tests {
         fs::write(root.join("bin/adapter"), b"bundled").unwrap();
         let checksum = digest_hex(b"bundled");
         let mut resources = BTreeMap::new();
-        resources.insert("adapter".to_string(), ResourceSpec { path: PathBuf::from("bin/adapter"), sha256: checksum, license: "MIT".to_string(), max_bytes: 100 });
+        resources.insert("adapter".to_string(), ResourceSpec { path: PathBuf::from("bin/adapter"), version: "test".to_string(), sha256: checksum, license: "MIT".to_string(), source_url: "https://example.test/adapter".to_string(), max_bytes: 100 });
         fs::write(root.join("manifest.json"), serde_json::to_vec(&ResourceManifest { version: 1, architecture: std::env::consts::ARCH.to_string(), resources }).unwrap()).unwrap();
         let result = resolve("adapter", &root, "TOOLBOX_TEST_OVERRIDE", "adapter").unwrap();
         assert_eq!(result.source, ResourceSource::Bundled);
@@ -114,9 +119,17 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         fs::write(root.join("bin"), b"changed").unwrap();
         let mut resources = BTreeMap::new();
-        resources.insert("adapter".to_string(), ResourceSpec { path: PathBuf::from("bin"), sha256: "bad".to_string(), license: "MIT".to_string(), max_bytes: 100 });
+        resources.insert("adapter".to_string(), ResourceSpec { path: PathBuf::from("bin"), version: "test".to_string(), sha256: "bad".to_string(), license: "MIT".to_string(), source_url: "https://example.test/adapter".to_string(), max_bytes: 100 });
         fs::write(root.join("manifest.json"), serde_json::to_vec(&ResourceManifest { version: 1, architecture: std::env::consts::ARCH.to_string(), resources }).unwrap()).unwrap();
         assert!(resolve("adapter", &root, "TOOLBOX_TEST_OVERRIDE", "adapter").is_err());
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn bundled_watermark_font_manifest_is_pinned_and_verified() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/fonts");
+        let result = resolve("watermarkFont", &root, "TOOLBOX_WATERMARK_FONT_PATH", "DejaVuSans.ttf").unwrap();
+        assert_eq!(result.source, ResourceSource::Bundled);
+        assert_eq!(result.path.file_name().and_then(|name| name.to_str()), Some("DejaVuSans.ttf"));
     }
 }

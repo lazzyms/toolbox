@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "architecture": "all",
+  "resources": {
+    "watermarkFont": {
+      "path": "DejaVuSans.ttf",
+      "version": "2.37",
+      "sha256": "7da195a74c55bef988d0d48f9508bd5d849425c1770dba5d7bfc6ce9ed848954",
+      "license": "Bitstream Vera Fonts License / Arev Fonts License / public domain DejaVu changes; see LICENSE.txt",
+      "sourceUrl": "https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_2_37/dejavu-fonts-ttf-2.37.zip",
+      "maxBytes": 1000000
+    }
+  }
+}

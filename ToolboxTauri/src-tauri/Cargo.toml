@@ -32,6 +32,8 @@ quick-xml = "0.41.0"
 sha1 = "0.10"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "tiff"] }
+fontdue = "0.9.4"
+rustybuzz = "0.20.1"
 lopdf = "0.44"
 rayon = "1"
 heif-rs = "26.7"
