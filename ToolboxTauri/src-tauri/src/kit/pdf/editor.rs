@@ -526,6 +526,9 @@ pub fn apply_session(request: &PdfEditSessionRequest, input: PathBuf) -> JobOutc
         Ok(document) => document,
         Err(error) => return failure(input, error.to_string()),
     };
+    if document.is_encrypted() {
+        return failure(input, "Unlock the PDF before editing".to_string());
+    }
     let pages = document.get_pages().values().copied().collect::<Vec<_>>();
     if pages.is_empty() {
         return failure(input, "PDF has no pages".to_string());
@@ -872,6 +875,7 @@ fn page_number_position(position: Option<&PdfOverlayPosition>, width: f32, heigh
 fn transform_pdf<F>(input: PathBuf, location: &OutputLocation, suffix: &str, edit: F) -> JobOutcome
 where F: FnOnce(&mut Document, &[lopdf::ObjectId], &PdfMutationPreflight) -> Result<(), String> {
     let mut document = match Document::load(&input) { Ok(document) => document, Err(error) => return failure(input, error.to_string()) };
+    if document.is_encrypted() { return failure(input, "Unlock the PDF before editing".to_string()); }
     let pages: Vec<_> = document.get_pages().values().copied().collect();
     if pages.is_empty() { return failure(input, "PDF has no pages".to_string()); }
     let preflight = match mutation_preflight(&document, true, true) {
@@ -983,9 +987,52 @@ mod session_tests {
         document.save(path).expect("nested fixture PDF should save");
     }
 
+    fn make_duplicate_page_kids_pdf(path: &Path) {
+        make_pdf_with_pages(path, 2);
+        let mut document = Document::load(path).expect("fixture should load");
+        let pages = document.get_pages().values().copied().collect::<Vec<_>>();
+        let pages_root = document
+            .trailer
+            .get(b"Root")
+            .unwrap()
+            .as_reference()
+            .unwrap();
+        let pages_root = document.get_dictionary(pages_root).unwrap().get(b"Pages").unwrap().as_reference().unwrap();
+        document.get_dictionary_mut(pages_root).unwrap().set(
+            "Kids",
+            vec![Object::Reference(pages[0]), Object::Reference(pages[0])],
+        );
+        document.save(path).expect("duplicate page-tree fixture should save");
+    }
+
+    fn encrypt_pdf(path: &Path) {
+        let mut document = Document::load(path).expect("fixture should load");
+        document.trailer.set(
+            "ID",
+            Object::Array(vec![
+                Object::String(b"toolbox-test-id-1".to_vec(), lopdf::StringFormat::Literal),
+                Object::String(b"toolbox-test-id-2".to_vec(), lopdf::StringFormat::Literal),
+            ]),
+        );
+        let encryption_state = lopdf::EncryptionState::try_from(lopdf::EncryptionVersion::V2 {
+            document: &document,
+            owner_password: "owner",
+            user_password: "user",
+            key_length: 128,
+            permissions: lopdf::Permissions::all(),
+        })
+        .expect("encryption fixture should create an encryption state");
+        document.encrypt(&encryption_state).expect("fixture should encrypt");
+        document.save(path).expect("encrypted fixture should save");
+    }
+
     fn add_page_annotation(path: &Path, page_index: usize, annotation: Object) {
         let mut document = Document::load(path).expect("fixture should load");
         let page = document.get_pages().values().copied().collect::<Vec<_>>()[page_index];
+        let mut annotation = annotation;
+        if let Object::Dictionary(dictionary) = &mut annotation {
+            dictionary.set("P", Object::Reference(page));
+        }
         let annotation_id = document.add_object(annotation);
         document.get_dictionary_mut(page).unwrap().set("Annots", vec![Object::Reference(annotation_id)]);
         document.save(path).expect("annotated fixture should save");
@@ -1084,6 +1131,46 @@ mod session_tests {
         assert!(sign_outcome.failure.is_some());
         assert!(edit_outcome.failure.is_some());
         assert_eq!(std::fs::read(&source).unwrap(), source_bytes);
+        assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
+        let _ = std::fs::remove_file(source);
+        let _ = std::fs::remove_dir(output_dir);
+    }
+
+    #[test]
+    fn encrypted_session_and_edit_report_unlock_before_empty_page_checks() {
+        let source = temp_path("encrypted-editor-entry.pdf");
+        let output_dir = temp_path("encrypted-editor-entry-output");
+        std::fs::create_dir_all(&output_dir).expect("output directory should be created");
+        make_pdf_with_pages(&source, 1);
+        encrypt_pdf(&source);
+        assert!(Document::load(&source).unwrap().is_encrypted());
+        let original = std::fs::read(&source).unwrap();
+
+        let session_outcome = apply_session(
+            &PdfEditSessionRequest {
+                paths: vec![source.clone()],
+                plan: PdfEditSessionPlan { page_order: vec![], delete_pages: vec![], rotate_pages: vec![], operations: vec![] },
+                output_location: location(&output_dir),
+            },
+            source.clone(),
+        );
+        let edit_outcome = edit(
+            &EditPdfRequest {
+                paths: vec![source.clone()],
+                mode: "shape".to_string(),
+                text: String::new(),
+                pages: None,
+                rectangle: PdfRect { x: 10.0, y: 10.0, width: 100.0, height: 30.0 },
+                output_location: location(&output_dir),
+            },
+            source.clone(),
+        );
+
+        for (name, outcome) in [("session", session_outcome), ("edit", edit_outcome)] {
+            assert!(outcome.failure.as_ref().is_some_and(|error| error.message == "Unlock the PDF before editing"), "{name}: {:?}", outcome.failure);
+            assert!(outcome.output_paths.is_empty(), "{name} must not produce an output");
+        }
+        assert_eq!(std::fs::read(&source).unwrap(), original);
         assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
         let _ = std::fs::remove_file(source);
         let _ = std::fs::remove_dir(output_dir);
@@ -1307,6 +1394,29 @@ mod session_tests {
     }
 
     #[test]
+    fn crop_rejects_duplicate_flat_page_tree_references_before_output() {
+        let source = temp_path("duplicate-page-kid");
+        let output_dir = temp_path("duplicate-page-kid-output");
+        std::fs::create_dir_all(&output_dir).unwrap();
+        make_duplicate_page_kids_pdf(&source);
+        let original = std::fs::read(&source).unwrap();
+
+        let outcome = crop(&CropPdfRequest {
+            paths: vec![source.clone()],
+            rectangle: PdfRect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 },
+            scope: PageScope::All,
+            output_location: location(&output_dir),
+        }, source.clone());
+
+        assert!(outcome.failure.as_ref().is_some_and(|error| error.message.contains("duplicate")), "unexpected result: {:?}", outcome.failure);
+        assert!(outcome.output_paths.is_empty());
+        assert_eq!(std::fs::read(&source).unwrap(), original);
+        assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
+        let _ = std::fs::remove_file(source);
+        let _ = std::fs::remove_dir(output_dir);
+    }
+
+    #[test]
     fn crop_rejects_plain_annotations_before_reserving_and_preserves_the_original() {
         let source = temp_path("crop-annotation-output");
         let output_dir = temp_path("crop-annotation-output-dir");
@@ -1380,10 +1490,47 @@ mod session_tests {
         let pages = document.get_pages().values().copied().collect::<Vec<_>>();
         assert!(document.get_dictionary(pages[0]).unwrap().get(b"Annots").is_err());
         assert_eq!(document.get_dictionary(pages[1]).unwrap().get(b"Annots").unwrap().as_array().unwrap().len(), 1);
-        assert_eq!(document.get_dictionary(pages[1]).unwrap().get(b"Annots").unwrap().as_array().unwrap()[0].as_reference().unwrap().1, 0);
+        let annotation = document.get_dictionary(pages[1]).unwrap().get(b"Annots").unwrap().as_array().unwrap()[0].as_reference().unwrap();
+        assert_eq!(annotation.1, 0);
+        assert_eq!(document.get_dictionary(annotation).unwrap().get(b"P").unwrap().as_reference().unwrap(), pages[1]);
 
         let _ = std::fs::remove_file(source);
         let _ = std::fs::remove_file(output);
+        let _ = std::fs::remove_dir(output_dir);
+    }
+
+    #[test]
+    fn organize_rejects_annotation_with_a_non_owner_page_reference_before_output() {
+        let source = temp_path("annotation-wrong-page");
+        let output_dir = temp_path("annotation-wrong-page-output");
+        std::fs::create_dir_all(&output_dir).unwrap();
+        make_pdf_with_pages(&source, 2);
+        let mut document = Document::load(&source).unwrap();
+        let pages = document.get_pages().values().copied().collect::<Vec<_>>();
+        let annotation = document.add_object(dictionary! {
+            "Type" => "Annot",
+            "Subtype" => "Text",
+            "Rect" => vec![20.into(), 20.into(), 80.into(), 50.into()],
+            "P" => Object::Reference(pages[1]),
+        });
+        document.get_dictionary_mut(pages[0]).unwrap().set("Annots", vec![Object::Reference(annotation)]);
+        document.save(&source).unwrap();
+        let original = std::fs::read(&source).unwrap();
+
+        let outcome = organize(&OrganizePdfRequest {
+            paths: vec![source.clone()],
+            page_order: vec![1, 0],
+            delete_pages: vec![],
+            rotate_pages: vec![],
+            scope: PageScope::All,
+            output_location: location(&output_dir),
+        }, source.clone());
+
+        assert!(outcome.failure.as_ref().is_some_and(|error| error.message.contains("owning page")), "unexpected result: {:?}", outcome.failure);
+        assert!(outcome.output_paths.is_empty());
+        assert_eq!(std::fs::read(&source).unwrap(), original);
+        assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
+        let _ = std::fs::remove_file(source);
         let _ = std::fs::remove_dir(output_dir);
     }
 

@@ -389,6 +389,14 @@ pub(crate) fn validate_page_annotations(document: &Document, pages: &[ObjectId])
             if !type_is_annotation || subtype.is_none() {
                 return Err(invalid_annotation(&format!("page {} annotation {} is missing a valid Type or Subtype", page_index + 1, annotation_index + 1)));
             }
+            if let Ok(page_reference) = annotation.get(b"P") {
+                let referenced_page = page_reference.as_reference().map_err(|_| {
+                    invalid_annotation(&format!("page {} annotation {} /P must be an indirect reference to its owning page", page_index + 1, annotation_index + 1))
+                })?;
+                if referenced_page != *page_id {
+                    return Err(invalid_annotation(&format!("page {} annotation {} /P must reference its owning page", page_index + 1, annotation_index + 1)));
+                }
+            }
             annotation_rect_is_valid(document, annotation)?;
             if subtype == Some(b"Widget".as_slice()) {
                 page_widget_ids.insert(annotation_id);
@@ -541,6 +549,13 @@ pub(crate) fn mutation_preflight(document: &Document, reject_navigation: bool, r
         return Err(unsupported());
     }
     let kids = root.get(b"Kids").map_err(|_| unsupported())?.as_array().map_err(|_| unsupported())?;
+    let mut seen_kids = HashSet::new();
+    for kid in kids {
+        let page_id = kid.as_reference().map_err(|_| unsupported())?;
+        if !seen_kids.insert(page_id) {
+            return Err("PDF page-tree is malformed (duplicate /Kids page reference); mutation was rejected before output".to_string());
+        }
+    }
     let count = root.get(b"Count").map_err(|_| "PDF page-tree /Count is missing; mutation was rejected before output".to_string())?;
     let count = resolve(document, count).map_err(|_| "PDF page-tree /Count is invalid; mutation was rejected before output".to_string())?.as_i64()
         .map_err(|_| "PDF page-tree /Count is invalid; mutation was rejected before output".to_string())?;
