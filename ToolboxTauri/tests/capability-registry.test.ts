@@ -4,7 +4,10 @@ import {
   parseCapabilityRegistry,
   SharedCapabilityRegistry,
 } from "../src/registry/capabilities.ts";
-import { UtilityRegistry } from "../src/registry/index.ts";
+import {
+  ToolWorkspaceRegistry,
+  UtilityRegistry,
+} from "../src/registry/index.ts";
 
 test("UI capabilities are the shared native contract facts", () => {
   const capabilitiesByCommand = new Map(
@@ -50,6 +53,17 @@ test("UI capabilities are the shared native contract facts", () => {
   assert.equal(capabilitiesByCommand.get("ocr_pdf")?.nativeAvailability, "unavailable");
   assert.equal(capabilitiesByCommand.get("blur_faces")?.nativeAvailability, "unavailable");
   assert.equal(capabilitiesByCommand.get("remove_image_background")?.nativeAvailability, "unavailable");
+});
+
+test("workspace membership covers every registered utility exactly once", () => {
+  const workspaceToolIds = ToolWorkspaceRegistry.flatMap((workspace) => workspace.toolIds);
+
+  assert.equal(workspaceToolIds.length, UtilityRegistry.length);
+  assert.equal(new Set(workspaceToolIds).size, workspaceToolIds.length);
+  assert.deepEqual(
+    [...workspaceToolIds].sort(),
+    UtilityRegistry.map(({ id }) => id).sort(),
+  );
 });
 
 test("shared capability parsing rejects drift-prone shapes", () => {
