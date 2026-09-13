@@ -2,6 +2,7 @@ pub mod common;
 pub mod contracts;
 pub mod images;
 pub mod office;
+mod office_agile;
 pub mod password;
 pub mod pdf;
 pub mod vision;
