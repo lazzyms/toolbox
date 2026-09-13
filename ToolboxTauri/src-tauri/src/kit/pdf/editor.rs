@@ -1,6 +1,6 @@
 use image::codecs::jpeg::JpegEncoder;
 use image::ImageEncoder;
-use lopdf::{dictionary, Document, Object};
+use lopdf::{dictionary, Document, Object, ObjectId};
 use std::path::{Path, PathBuf};
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
@@ -249,6 +249,23 @@ fn validate_unique_rotations(rotations: &[RotatePage], page_count: usize) -> Res
     validate_unique_page_refs("rotations", &pages, page_count)
 }
 
+fn reject_annotated_pages(
+    preflight: &PdfMutationPreflight,
+    pages: &[ObjectId],
+    page_indices: impl IntoIterator<Item = usize>,
+    operation: &str,
+) -> Result<(), String> {
+    let Some(page_index) = page_indices.into_iter().find(|index| {
+        pages.get(*index).is_some_and(|page| preflight.annotated_pages.contains(page))
+    }) else {
+        return Ok(());
+    };
+    Err(format!(
+        "PDF page {} has annotations and cannot be {operation}; mutation was rejected before output",
+        page_index + 1
+    ))
+}
+
 fn validate_scope(scope: &PageScope, page_count: usize) -> Result<(), String> {
     match scope {
         PageScope::All => Ok(()),
@@ -341,19 +358,19 @@ fn validate_operation_targets(operation: &PdfEditOperation, deleted_pages: &[usi
 }
 
 pub fn crop(request: &CropPdfRequest, input: PathBuf) -> JobOutcome {
-    transform_pdf(input, &request.output_location, "-cropped", |document, pages, _preflight| {
-        let selected = selected_pages(&request.scope, pages.len());
+    transform_pdf(input, &request.output_location, "-cropped", |document, pages, preflight| {
         validate_rect(&request.rectangle)?;
-        for (index, page_id) in pages.iter().enumerate() {
-            if selected(index) {
-                validate_rect_for_page(document, *page_id, &request.rectangle)?;
-                super::set_page_box_family(document, *page_id, [
-                    request.rectangle.x,
-                    request.rectangle.y,
-                    request.rectangle.x + request.rectangle.width,
-                    request.rectangle.y + request.rectangle.height,
-                ], true)?;
-            }
+        let selected = scoped_indices(&request.scope, pages.len())?;
+        reject_annotated_pages(preflight, pages, selected.iter().copied(), "cropped")?;
+        for page_index in selected {
+            let page_id = pages[page_index];
+            validate_rect_for_page(document, page_id, &request.rectangle)?;
+            super::set_page_box_family(document, page_id, [
+                request.rectangle.x,
+                request.rectangle.y,
+                request.rectangle.x + request.rectangle.width,
+                request.rectangle.y + request.rectangle.height,
+            ], true)?;
         }
         Ok(())
     })
@@ -368,6 +385,8 @@ pub fn organize(request: &OrganizePdfRequest, input: PathBuf) -> JobOutcome {
         let selected = scoped_indices(&request.scope, pages.len())?;
         let selected_set = selected.iter().copied().collect::<std::collections::HashSet<_>>();
         let deleted = request.delete_pages.iter().copied().filter(|index| selected_set.contains(index)).collect::<std::collections::HashSet<_>>();
+        reject_annotated_pages(preflight, pages, request.delete_pages.iter().copied().filter(|index| selected_set.contains(index)), "deleted")?;
+        reject_annotated_pages(preflight, pages, request.rotate_pages.iter().filter(|rotation| selected_set.contains(&rotation.page)).map(|rotation| rotation.page), "rotated")?;
         let mut selected_order = request.page_order.iter().copied().filter(|index| selected_set.contains(index) && !deleted.contains(index)).collect::<Vec<_>>();
         selected_order.extend(selected.iter().copied().filter(|index| !deleted.contains(index) && !request.page_order.contains(index)));
         let mut selected_iter = selected_order.into_iter();
@@ -519,6 +538,23 @@ pub fn apply_session(request: &PdfEditSessionRequest, input: PathBuf) -> JobOutc
         Ok(plan) => plan,
         Err(error) => return failure(input, error),
     };
+    if let Err(error) = reject_annotated_pages(&preflight, &pages, plan.delete_pages.iter().copied(), "deleted") {
+        return failure(input, error);
+    }
+    if let Err(error) = reject_annotated_pages(&preflight, &pages, plan.rotate_pages.iter().map(|rotation| rotation.page), "rotated") {
+        return failure(input, error);
+    }
+    for operation in &plan.operations {
+        if let PdfEditOperation::Crop { scope, .. } = operation {
+            let targets = match scoped_indices(scope, pages.len()) {
+                Ok(targets) => targets,
+                Err(error) => return failure(input, error),
+            };
+            if let Err(error) = reject_annotated_pages(&preflight, &pages, targets, "cropped") {
+                return failure(input, error);
+            }
+        }
+    }
     let output = match OutputNaming::reserve_destination(&input, &request.output_location, "-edited", "pdf") {
         Ok(output) => output,
         Err(error) => return failure(input, format!("Could not reserve PDF edit output: {error}")),
@@ -842,11 +878,11 @@ where F: FnOnce(&mut Document, &[lopdf::ObjectId], &PdfMutationPreflight) -> Res
         Ok(preflight) => preflight,
         Err(error) => return failure(input, error),
     };
+    if let Err(error) = edit(&mut document, &pages, &preflight) { return failure(input, error); }
     let output = match OutputNaming::reserve_destination(&input, location, suffix, "pdf") {
         Ok(output) => output,
         Err(error) => return failure(input, format!("Could not reserve PDF output: {error}")),
     };
-    if let Err(error) = edit(&mut document, &pages, &preflight) { return failure(input, error); }
     match document.save(output.path()) {
         Ok(_) => match output.publish() {
             Ok(path) => JobOutcome { input_path: input, output_paths: vec![path], detail: "PDF saved".to_string(), failure: None },
@@ -854,10 +890,6 @@ where F: FnOnce(&mut Document, &[lopdf::ObjectId], &PdfMutationPreflight) -> Res
         },
         Err(error) => failure(input, format!("Save failed: {error}")),
     }
-}
-
-fn selected_pages(scope: &PageScope, count: usize) -> impl Fn(usize) -> bool + '_ {
-    move |index| match scope { PageScope::All => true, PageScope::Selected { pages } => pages.contains(&index) && index < count }
 }
 
 fn validate_rect(rect: &PdfRect) -> Result<(), String> { if !rect.x.is_finite() || !rect.y.is_finite() || !rect.width.is_finite() || !rect.height.is_finite() || rect.width <= 0.0 || rect.height <= 0.0 { Err("Rectangle must have positive finite dimensions.".to_string()) } else { Ok(()) } }
@@ -949,6 +981,14 @@ mod session_tests {
         let catalog = document.add_object(dictionary! { "Type" => "Catalog", "Pages" => root });
         document.trailer.set("Root", catalog);
         document.save(path).expect("nested fixture PDF should save");
+    }
+
+    fn add_page_annotation(path: &Path, page_index: usize, annotation: Object) {
+        let mut document = Document::load(path).expect("fixture should load");
+        let page = document.get_pages().values().copied().collect::<Vec<_>>()[page_index];
+        let annotation_id = document.add_object(annotation);
+        document.get_dictionary_mut(page).unwrap().set("Annots", vec![Object::Reference(annotation_id)]);
+        document.save(path).expect("annotated fixture should save");
     }
 
     fn editor_request_location(folder: &Path) -> OutputLocation {
@@ -1260,6 +1300,117 @@ mod session_tests {
             }, source.clone());
             assert!(outcome.failure.as_ref().is_some_and(|error| error.message.contains("page-tree")), "count {count}: {:?}", outcome.failure);
             assert!(outcome.output_paths.is_empty());
+            assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
+            let _ = std::fs::remove_file(source);
+            let _ = std::fs::remove_dir(output_dir);
+        }
+    }
+
+    #[test]
+    fn crop_rejects_plain_annotations_before_reserving_and_preserves_the_original() {
+        let source = temp_path("crop-annotation-output");
+        let output_dir = temp_path("crop-annotation-output-dir");
+        std::fs::create_dir_all(&output_dir).unwrap();
+        make_pdf_with_pages(&source, 1);
+        add_page_annotation(&source, 0, dictionary! {
+            "Type" => "Annot", "Subtype" => "Text", "Rect" => vec![20.into(), 20.into(), 80.into(), 50.into()],
+        }.into());
+        let original = std::fs::read(&source).unwrap();
+
+        let outcome = crop(&CropPdfRequest {
+            paths: vec![source.clone()], rectangle: PdfRect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 },
+            scope: PageScope::All, output_location: location(&output_dir),
+        }, source.clone());
+
+        assert!(outcome.failure.as_ref().is_some_and(|error| error.message.contains("annotation")), "unexpected result: {:?}", outcome.failure);
+        assert!(outcome.output_paths.is_empty());
+        assert_eq!(std::fs::read(&source).unwrap(), original);
+        assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
+        let _ = std::fs::remove_file(source);
+        let _ = std::fs::remove_dir(output_dir);
+    }
+
+    #[test]
+    fn organize_rejects_annotation_rotation_and_page_deletion_before_output() {
+        for (name, rotate_pages, delete_pages) in [
+            ("rotation", vec![RotatePage { page: 0, degrees: 90 }], vec![]),
+            ("deletion", vec![], vec![0]),
+        ] {
+            let source = temp_path(&format!("annotation-page-plan-{name}"));
+            let output_dir = temp_path(&format!("annotation-page-plan-{name}-output"));
+            std::fs::create_dir_all(&output_dir).unwrap();
+            make_pdf(&source);
+            add_page_annotation(&source, 0, dictionary! {
+                "Type" => "Annot", "Subtype" => "Text", "Rect" => vec![20.into(), 20.into(), 80.into(), 50.into()],
+            }.into());
+            let original = std::fs::read(&source).unwrap();
+
+            let outcome = organize(&OrganizePdfRequest {
+                paths: vec![source.clone()], page_order: vec![1, 0], delete_pages, rotate_pages,
+                scope: PageScope::All, output_location: location(&output_dir),
+            }, source.clone());
+
+            assert!(outcome.failure.as_ref().is_some_and(|error| error.message.contains("annotation")), "{name}: {:?}", outcome.failure);
+            assert!(outcome.output_paths.is_empty());
+            assert_eq!(std::fs::read(&source).unwrap(), original);
+            assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
+            let _ = std::fs::remove_file(source);
+            let _ = std::fs::remove_dir(output_dir);
+        }
+    }
+
+    #[test]
+    fn organize_reorders_pages_with_annotations_without_detaching_them() {
+        let source = temp_path("annotation-page-reorder");
+        let output_dir = temp_path("annotation-page-reorder-output");
+        std::fs::create_dir_all(&output_dir).unwrap();
+        make_pdf(&source);
+        add_page_annotation(&source, 0, dictionary! {
+            "Type" => "Annot", "Subtype" => "Text", "Rect" => vec![20.into(), 20.into(), 80.into(), 50.into()],
+        }.into());
+
+        let outcome = organize(&OrganizePdfRequest {
+            paths: vec![source.clone()], page_order: vec![1, 0], delete_pages: vec![], rotate_pages: vec![],
+            scope: PageScope::All, output_location: location(&output_dir),
+        }, source.clone());
+
+        assert!(outcome.failure.is_none(), "reorder failed: {:?}", outcome.failure);
+        let output = outcome.output_paths.first().unwrap();
+        let document = Document::load(output).unwrap();
+        let pages = document.get_pages().values().copied().collect::<Vec<_>>();
+        assert!(document.get_dictionary(pages[0]).unwrap().get(b"Annots").is_err());
+        assert_eq!(document.get_dictionary(pages[1]).unwrap().get(b"Annots").unwrap().as_array().unwrap().len(), 1);
+        assert_eq!(document.get_dictionary(pages[1]).unwrap().get(b"Annots").unwrap().as_array().unwrap()[0].as_reference().unwrap().1, 0);
+
+        let _ = std::fs::remove_file(source);
+        let _ = std::fs::remove_file(output);
+        let _ = std::fs::remove_dir(output_dir);
+    }
+
+    #[test]
+    fn malformed_annotation_entries_and_orphan_widgets_fail_closed_without_output() {
+        for (name, annotation) in [
+            ("direct-entry", dictionary! { "Type" => "Annot", "Subtype" => "Text", "Rect" => vec![20.into(), 20.into(), 80.into(), 50.into()] }.into()),
+            ("orphan-widget", dictionary! { "Type" => "Annot", "Subtype" => "Widget", "FT" => "Tx", "Rect" => vec![20.into(), 20.into(), 80.into(), 50.into()] }.into()),
+        ] {
+            let source = temp_path(&format!("malformed-annotation-{name}"));
+            let output_dir = temp_path(&format!("malformed-annotation-{name}-output"));
+            std::fs::create_dir_all(&output_dir).unwrap();
+            make_pdf_with_pages(&source, 1);
+            let mut document = Document::load(&source).unwrap();
+            let page = document.get_pages().values().next().copied().unwrap();
+            document.get_dictionary_mut(page).unwrap().set("Annots", vec![annotation]);
+            document.save(&source).unwrap();
+            let original = std::fs::read(&source).unwrap();
+
+            let outcome = crop(&CropPdfRequest {
+                paths: vec![source.clone()], rectangle: PdfRect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 },
+                scope: PageScope::All, output_location: location(&output_dir),
+            }, source.clone());
+
+            assert!(outcome.failure.is_some(), "{name}: malformed annotation must fail");
+            assert!(outcome.output_paths.is_empty());
+            assert_eq!(std::fs::read(&source).unwrap(), original);
             assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
             let _ = std::fs::remove_file(source);
             let _ = std::fs::remove_dir(output_dir);

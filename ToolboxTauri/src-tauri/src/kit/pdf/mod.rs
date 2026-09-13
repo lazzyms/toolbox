@@ -169,6 +169,7 @@ pub(crate) fn read_preview_png(path: &Path) -> Result<(Vec<u8>, u32, u32), Strin
 pub(crate) struct PdfMutationPreflight {
     pub(crate) pages_root: ObjectId,
     pub(crate) pages: Vec<ObjectId>,
+    pub(crate) annotated_pages: HashSet<ObjectId>,
     pub(crate) has_navigation: bool,
     pub(crate) has_form_structure: bool,
     pub(crate) has_tagged_structure: bool,
@@ -200,6 +201,202 @@ pub(crate) fn inherited(document: &Document, mut id: ObjectId, key: &[u8]) -> Re
             Err(_) => return Ok(None),
         }
     }
+}
+
+fn invalid_annotation(detail: &str) -> String {
+    format!("PDF annotation structure is invalid ({detail}); mutation was rejected before output")
+}
+
+fn invalid_form_structure(detail: &str) -> String {
+    format!("PDF form/widget structure is invalid ({detail}); mutation was rejected before output")
+}
+
+fn annotation_rect_is_valid(document: &Document, annotation: &lopdf::Dictionary) -> Result<(), String> {
+    let rect = annotation.get(b"Rect").map_err(|_| invalid_annotation("an annotation is missing Rect"))?;
+    let values = resolve(document, rect)
+        .map_err(|_| invalid_annotation("an annotation Rect could not be resolved"))?
+        .as_array()
+        .map_err(|_| invalid_annotation("an annotation Rect is not an array"))?;
+    if values.len() != 4 {
+        return Err(invalid_annotation("an annotation Rect must have four values"));
+    }
+    let values = values
+        .iter()
+        .map(|value| resolve(document, value).and_then(crate::kit::pdf::metadata::number))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| invalid_annotation("an annotation Rect contains a non-numeric value"))?;
+    if values.iter().any(|value| !value.is_finite()) || values[2] <= values[0] || values[3] <= values[1] {
+        return Err(invalid_annotation("an annotation Rect has invalid dimensions"));
+    }
+    Ok(())
+}
+
+fn validate_form_field(
+    document: &Document,
+    id: ObjectId,
+    expected_parent: Option<ObjectId>,
+    inherited_field_type: Option<Vec<u8>>,
+    reachable: &mut HashSet<ObjectId>,
+    visiting: &mut HashSet<ObjectId>,
+    widget_ids: &mut HashSet<ObjectId>,
+) -> Result<(), String> {
+    if !visiting.insert(id) {
+        return Err(invalid_form_structure("the field tree contains a cycle"));
+    }
+
+    let result = (|| {
+        let field = document
+            .get_dictionary(id)
+            .map_err(|_| invalid_form_structure("a field is not an indirect dictionary"))?;
+        let parent = match field.get(b"Parent") {
+            Ok(value) => Some(value.as_reference().map_err(|_| invalid_form_structure("a field Parent is not an indirect reference"))?),
+            Err(_) => None,
+        };
+        if parent != expected_parent {
+            return Err(invalid_form_structure("a field Parent does not match its field tree"));
+        }
+
+        if !reachable.insert(id) {
+            return Ok(());
+        }
+
+        let own_field_type = match field.get(b"FT") {
+            Ok(value) => Some(
+                resolve(document, value)
+                    .map_err(|_| invalid_form_structure("a field type could not be resolved"))?
+                    .as_name()
+                    .map_err(|_| invalid_form_structure("a field type is not a name"))?
+                    .to_vec(),
+            ),
+            Err(_) => None,
+        };
+        let field_type = own_field_type.or(inherited_field_type);
+        let subtype = match field.get(b"Subtype") {
+            Ok(value) => Some(
+                resolve(document, value)
+                    .map_err(|_| invalid_form_structure("a field subtype could not be resolved"))?
+                    .as_name()
+                    .map_err(|_| invalid_form_structure("a field subtype is not a name"))?
+                    .to_vec(),
+            ),
+            Err(_) => None,
+        };
+        if subtype.as_deref() == Some(b"Widget".as_slice()) {
+            if field_type.is_none() {
+                return Err(invalid_form_structure("a widget has no effective field type"));
+            }
+            widget_ids.insert(id);
+        }
+
+        if let Ok(kids) = field.get(b"Kids") {
+            let kids = resolve(document, kids)
+                .map_err(|_| invalid_form_structure("field Kids could not be resolved"))?
+                .as_array()
+                .map_err(|_| invalid_form_structure("field Kids is not an array"))?;
+            for kid in kids {
+                let kid_id = kid
+                    .as_reference()
+                    .map_err(|_| invalid_form_structure("field Kids must contain indirect references"))?;
+                validate_form_field(document, kid_id, Some(id), field_type.clone(), reachable, visiting, widget_ids)?;
+            }
+        }
+        Ok(())
+    })();
+
+    visiting.remove(&id);
+    result
+}
+
+fn validate_form_widgets(document: &Document, page_widget_ids: &HashSet<ObjectId>) -> Result<(), String> {
+    let catalog = document
+        .trailer
+        .get(b"Root")
+        .map_err(|_| invalid_form_structure("the catalog is missing"))?
+        .as_reference()
+        .map_err(|_| invalid_form_structure("the catalog is not an indirect dictionary"))?;
+    let catalog = document
+        .get_dictionary(catalog)
+        .map_err(|_| invalid_form_structure("the catalog is not a dictionary"))?;
+    let Some(acro_form_value) = catalog.get(b"AcroForm").ok() else {
+        if page_widget_ids.is_empty() {
+            return Ok(());
+        }
+        return Err(invalid_form_structure("a page widget is not attached to an AcroForm"));
+    };
+    let acro_form = resolve(document, acro_form_value)
+        .map_err(|_| invalid_form_structure("AcroForm could not be resolved"))?
+        .as_dict()
+        .map_err(|_| invalid_form_structure("AcroForm is not a dictionary"))?;
+    let fields = acro_form
+        .get(b"Fields")
+        .map_err(|_| invalid_form_structure("AcroForm Fields is missing"))?;
+    let fields = resolve(document, fields)
+        .map_err(|_| invalid_form_structure("AcroForm Fields could not be resolved"))?
+        .as_array()
+        .map_err(|_| invalid_form_structure("AcroForm Fields is not an array"))?;
+
+    let mut reachable = HashSet::new();
+    let mut visiting = HashSet::new();
+    let mut form_widget_ids = HashSet::new();
+    for field in fields {
+        let field_id = field
+            .as_reference()
+            .map_err(|_| invalid_form_structure("AcroForm Fields must contain indirect references"))?;
+        validate_form_field(document, field_id, None, None, &mut reachable, &mut visiting, &mut form_widget_ids)?;
+    }
+    if form_widget_ids.len() != page_widget_ids.len() || form_widget_ids.iter().any(|id| !page_widget_ids.contains(id)) {
+        return Err(invalid_form_structure("page widgets and AcroForm fields are not attached to the same field tree"));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_page_annotations(document: &Document, pages: &[ObjectId]) -> Result<HashSet<ObjectId>, String> {
+    let mut annotated_pages = HashSet::new();
+    let mut page_widget_ids = HashSet::new();
+    for (page_index, page_id) in pages.iter().enumerate() {
+        let page = document
+            .get_dictionary(*page_id)
+            .map_err(|_| invalid_annotation(&format!("page {} is not a dictionary", page_index + 1)))?;
+        let Some(annots_value) = page.get(b"Annots").ok() else {
+            continue;
+        };
+        let annotations = resolve(document, annots_value)
+            .map_err(|_| invalid_annotation(&format!("page {} Annots could not be resolved", page_index + 1)))?
+            .as_array()
+            .map_err(|_| invalid_annotation(&format!("page {} Annots is not an array", page_index + 1)))?;
+        if annotations.is_empty() {
+            continue;
+        }
+        annotated_pages.insert(*page_id);
+        for (annotation_index, entry) in annotations.iter().enumerate() {
+            let annotation_id = entry.as_reference().map_err(|_| {
+                invalid_annotation(&format!("page {} annotation {} must be an indirect reference", page_index + 1, annotation_index + 1))
+            })?;
+            let annotation = document.get_dictionary(annotation_id).map_err(|_| {
+                invalid_annotation(&format!("page {} annotation {} is not an indirect dictionary", page_index + 1, annotation_index + 1))
+            })?;
+            let type_is_annotation = annotation
+                .get(b"Type")
+                .ok()
+                .and_then(|value| resolve(document, value).ok())
+                .and_then(|value| value.as_name().ok())
+                == Some(b"Annot".as_slice());
+            let subtype = annotation
+                .get(b"Subtype")
+                .ok()
+                .and_then(|value| resolve(document, value).ok())
+                .and_then(|value| value.as_name().ok());
+            if !type_is_annotation || subtype.is_none() {
+                return Err(invalid_annotation(&format!("page {} annotation {} is missing a valid Type or Subtype", page_index + 1, annotation_index + 1)));
+            }
+            annotation_rect_is_valid(document, annotation)?;
+            if subtype == Some(b"Widget".as_slice()) {
+                page_widget_ids.insert(annotation_id);
+            }
+        }
+    }
+    validate_form_widgets(document, &page_widget_ids)?;
+    Ok(annotated_pages)
 }
 
 fn box_values(document: &Document, value: &Object) -> Result<[f32; 4], String> {
@@ -365,6 +562,7 @@ pub(crate) fn mutation_preflight(document: &Document, reject_navigation: bool, r
     if document_has_signature(document, catalog, &pages)? {
         return Err("Digitally signed PDFs cannot be edited because this mutation would invalidate the signature; remove the signature or use an unsigned copy".to_string());
     }
+    let annotated_pages = validate_page_annotations(document, &pages)?;
     let page_navigation = pages.iter().map(|page| page_has_internal_navigation(document, *page)).collect::<Result<Vec<_>, _>>()?.into_iter().any(|present| present);
     let has_navigation = [b"Outlines".as_slice(), b"Names", b"Dests", b"PageLabels", b"OpenAction"]
         .into_iter().map(|key| has_catalog_entry(document, catalog, key)).collect::<Result<Vec<_>, _>>()?.into_iter().any(|present| present);
@@ -377,7 +575,7 @@ pub(crate) fn mutation_preflight(document: &Document, reject_navigation: bool, r
     if reject_tagged_structure && has_tagged_structure {
         return Err("This tagged PDF contains a StructTreeRoot or ParentTree that could be invalidated by this mutation; use an untagged PDF copy".to_string());
     }
-    Ok(PdfMutationPreflight { pages_root, pages, has_navigation, has_form_structure, has_tagged_structure })
+    Ok(PdfMutationPreflight { pages_root, pages, annotated_pages, has_navigation, has_form_structure, has_tagged_structure })
 }
 
 impl PDFProcessor {
