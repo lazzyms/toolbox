@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::ToolError;
 use super::metadata::{effective_crop_bounds, page_bounds};
-use super::{inherited, mutation_preflight, PdfMutationPreflight};
+use super::{inherited, mutation_preflight, PdfMutationIntent, PdfMutationPreflight};
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -358,7 +358,7 @@ fn validate_operation_targets(operation: &PdfEditOperation, deleted_pages: &[usi
 }
 
 pub fn crop(request: &CropPdfRequest, input: PathBuf) -> JobOutcome {
-    transform_pdf(input, &request.output_location, "-cropped", |document, pages, preflight| {
+    transform_pdf(input, &request.output_location, "-cropped", PdfMutationIntent::General, |document, pages, preflight| {
         validate_rect(&request.rectangle)?;
         let selected = scoped_indices(&request.scope, pages.len())?;
         reject_annotated_pages(preflight, pages, selected.iter().copied(), "cropped")?;
@@ -377,7 +377,12 @@ pub fn crop(request: &CropPdfRequest, input: PathBuf) -> JobOutcome {
 }
 
 pub fn organize(request: &OrganizePdfRequest, input: PathBuf) -> JobOutcome {
-    transform_pdf(input, &request.output_location, "-organized", |document, pages, preflight| {
+    let intent = if request.delete_pages.is_empty() && request.rotate_pages.is_empty() {
+        PdfMutationIntent::ReorderOnly
+    } else {
+        PdfMutationIntent::General
+    };
+    transform_pdf(input, &request.output_location, "-organized", intent, |document, pages, preflight| {
         let root = preflight.pages_root;
         validate_unique_page_refs("page order", &request.page_order, pages.len())?;
         validate_unique_page_refs("deleted pages", &request.delete_pages, pages.len())?;
@@ -413,7 +418,7 @@ pub fn organize(request: &OrganizePdfRequest, input: PathBuf) -> JobOutcome {
 }
 
 pub fn add_pages(request: &AddPdfPagesRequest, input: PathBuf) -> JobOutcome {
-    transform_pdf(input, &request.output_location, "-pages-added", |document, pages, preflight| {
+    transform_pdf(input, &request.output_location, "-pages-added", PdfMutationIntent::General, |document, pages, preflight| {
         if request.count == 0 {
             return Err("Add at least one blank page.".to_string());
         }
@@ -466,7 +471,7 @@ pub fn add_pages(request: &AddPdfPagesRequest, input: PathBuf) -> JobOutcome {
 }
 
 pub fn sign(request: &SignPdfRequest, input: PathBuf) -> JobOutcome {
-    transform_pdf(input, &request.output_location, "-signed", |document, pages, _preflight| {
+    transform_pdf(input, &request.output_location, "-signed", PdfMutationIntent::General, |document, pages, _preflight| {
         validate_rect(&request.rectangle)?;
         if request.page >= pages.len() { return Err("Signature page is outside the document.".to_string()); }
         let targets = match &request.scope {
@@ -498,7 +503,7 @@ pub fn sign(request: &SignPdfRequest, input: PathBuf) -> JobOutcome {
 }
 
 pub fn edit(request: &EditPdfRequest, input: PathBuf) -> JobOutcome {
-    transform_pdf(input, &request.output_location, "-edited", |document, pages, _preflight| {
+    transform_pdf(input, &request.output_location, "-edited", PdfMutationIntent::General, |document, pages, _preflight| {
         validate_rect(&request.rectangle)?;
         if request.mode != "shape" && request.text.trim().is_empty() { return Err("Text is required for this edit mode.".to_string()); }
         let targets = optional_indices(&request.pages, pages.len(), "edit pages")?;
@@ -533,7 +538,7 @@ pub fn apply_session(request: &PdfEditSessionRequest, input: PathBuf) -> JobOutc
     if pages.is_empty() {
         return failure(input, "PDF has no pages".to_string());
     }
-    let preflight = match mutation_preflight(&document, true, true) {
+    let preflight = match mutation_preflight(&document, PdfMutationIntent::ValidateOnly) {
         Ok(preflight) => preflight,
         Err(error) => return failure(input, error),
     };
@@ -541,6 +546,14 @@ pub fn apply_session(request: &PdfEditSessionRequest, input: PathBuf) -> JobOutc
         Ok(plan) => plan,
         Err(error) => return failure(input, error),
     };
+    let intent = if plan.delete_pages.is_empty() && plan.rotate_pages.is_empty() && plan.operations.is_empty() {
+        PdfMutationIntent::ReorderOnly
+    } else {
+        PdfMutationIntent::General
+    };
+    if let Err(error) = preflight.enforce_policy(intent) {
+        return failure(input, error);
+    }
     if let Err(error) = reject_annotated_pages(&preflight, &pages, plan.delete_pages.iter().copied(), "deleted") {
         return failure(input, error);
     }
@@ -872,13 +885,13 @@ fn page_number_position(position: Option<&PdfOverlayPosition>, width: f32, heigh
     }
 }
 
-fn transform_pdf<F>(input: PathBuf, location: &OutputLocation, suffix: &str, edit: F) -> JobOutcome
+fn transform_pdf<F>(input: PathBuf, location: &OutputLocation, suffix: &str, intent: PdfMutationIntent, edit: F) -> JobOutcome
 where F: FnOnce(&mut Document, &[lopdf::ObjectId], &PdfMutationPreflight) -> Result<(), String> {
     let mut document = match Document::load(&input) { Ok(document) => document, Err(error) => return failure(input, error.to_string()) };
     if document.is_encrypted() { return failure(input, "Unlock the PDF before editing".to_string()); }
     let pages: Vec<_> = document.get_pages().values().copied().collect();
     if pages.is_empty() { return failure(input, "PDF has no pages".to_string()); }
-    let preflight = match mutation_preflight(&document, true, true) {
+    let preflight = match mutation_preflight(&document, intent) {
         Ok(preflight) => preflight,
         Err(error) => return failure(input, error),
     };
@@ -1036,6 +1049,69 @@ mod session_tests {
         let annotation_id = document.add_object(annotation);
         document.get_dictionary_mut(page).unwrap().set("Annots", vec![Object::Reference(annotation_id)]);
         document.save(path).expect("annotated fixture should save");
+    }
+
+    fn make_navigation_and_form_pdf(path: &Path) {
+        make_pdf_with_pages(path, 2);
+        let mut document = Document::load(path).expect("fixture should load");
+        let pages = document.get_pages().values().copied().collect::<Vec<_>>();
+        let link = document.add_object(dictionary! {
+            "Type" => "Annot",
+            "Subtype" => "Link",
+            "Rect" => vec![20.into(), 20.into(), 80.into(), 50.into()],
+            "P" => Object::Reference(pages[1]),
+            "Dest" => vec![Object::Reference(pages[0]), Object::Name(b"Fit".to_vec())],
+        });
+        let widget = document.add_object(dictionary! {
+            "Type" => "Annot",
+            "Subtype" => "Widget",
+            "FT" => "Tx",
+            "Rect" => vec![90.into(), 20.into(), 180.into(), 50.into()],
+            "P" => Object::Reference(pages[0]),
+        });
+        document.get_dictionary_mut(pages[0]).unwrap().set("Annots", vec![Object::Reference(widget)]);
+        document.get_dictionary_mut(pages[1]).unwrap().set("Annots", vec![Object::Reference(link)]);
+
+        let names = document.add_object(dictionary! {
+            "Dests" => dictionary! {
+                "first" => vec![Object::Reference(pages[0]), Object::Name(b"Fit".to_vec())],
+            },
+        });
+        let outlines = document.add_object(dictionary! {
+            "Type" => "Outlines",
+            "Count" => 0,
+        });
+        let acro_form = document.add_object(dictionary! {
+            "Fields" => vec![Object::Reference(widget)],
+        });
+        let catalog = document.trailer.get(b"Root").unwrap().as_reference().unwrap();
+        document.get_dictionary_mut(catalog).unwrap().set("Names", names);
+        document.get_dictionary_mut(catalog).unwrap().set("Outlines", outlines);
+        document.get_dictionary_mut(catalog).unwrap().set("AcroForm", acro_form);
+        document.save(path).expect("navigation and form fixture should save");
+    }
+
+    fn assert_reordered_navigation_and_form_references(path: &Path, original_pages: &[ObjectId], widget: ObjectId) {
+        let document = Document::load(path).expect("output should load");
+        let pages = document.get_pages().values().copied().collect::<Vec<_>>();
+        assert_eq!(pages, vec![original_pages[1], original_pages[0]]);
+
+        let catalog_id = document.trailer.get(b"Root").unwrap().as_reference().unwrap();
+        let catalog = document.get_dictionary(catalog_id).unwrap();
+        let names = catalog.get(b"Names").unwrap().as_reference().unwrap();
+        let dests = document.get_dictionary(names).unwrap().get(b"Dests").unwrap().as_dict().unwrap();
+        assert_eq!(dests.get(b"first").unwrap().as_array().unwrap()[0].as_reference().unwrap(), original_pages[0]);
+
+        assert!(catalog.get(b"Outlines").is_ok());
+        let acro_form = catalog.get(b"AcroForm").unwrap().as_reference().unwrap();
+        let fields = document.get_dictionary(acro_form).unwrap().get(b"Fields").unwrap().as_array().unwrap();
+        assert_eq!(fields, &[Object::Reference(widget)]);
+        assert_eq!(document.get_dictionary(widget).unwrap().get(b"P").unwrap().as_reference().unwrap(), original_pages[0]);
+        assert_eq!(document.get_dictionary(pages[1]).unwrap().get(b"Annots").unwrap().as_array().unwrap(), &[Object::Reference(widget)]);
+        let link = document.get_dictionary(pages[0]).unwrap().get(b"Annots").unwrap().as_array().unwrap()[0].as_reference().unwrap();
+        let link = document.get_dictionary(link).unwrap();
+        assert_eq!(link.get(b"P").unwrap().as_reference().unwrap(), original_pages[1]);
+        assert_eq!(link.get(b"Dest").unwrap().as_array().unwrap()[0].as_reference().unwrap(), original_pages[0]);
     }
 
     fn editor_request_location(folder: &Path) -> OutputLocation {
@@ -1500,6 +1576,52 @@ mod session_tests {
     }
 
     #[test]
+    fn pure_reorder_allows_navigation_and_form_references_for_organize_and_session() {
+        for case in ["organize", "session"] {
+            let source = temp_path(&format!("navigation-form-reorder-{case}"));
+            let output_dir = temp_path(&format!("navigation-form-reorder-{case}-output"));
+            std::fs::create_dir_all(&output_dir).unwrap();
+            make_navigation_and_form_pdf(&source);
+            let original = std::fs::read(&source).unwrap();
+            let source_document = Document::load(&source).unwrap();
+            let original_pages = source_document.get_pages().values().copied().collect::<Vec<_>>();
+            let catalog = source_document.trailer.get(b"Root").unwrap().as_reference().unwrap();
+            let acro_form = source_document.get_dictionary(catalog).unwrap().get(b"AcroForm").unwrap().as_reference().unwrap();
+            let widget = source_document.get_dictionary(acro_form).unwrap().get(b"Fields").unwrap().as_array().unwrap()[0].as_reference().unwrap();
+
+            let outcome = match case {
+                "organize" => organize(&OrganizePdfRequest {
+                    paths: vec![source.clone()],
+                    page_order: vec![1, 0],
+                    delete_pages: vec![],
+                    rotate_pages: vec![],
+                    scope: PageScope::All,
+                    output_location: location(&output_dir),
+                }, source.clone()),
+                "session" => apply_session(&PdfEditSessionRequest {
+                    paths: vec![source.clone()],
+                    plan: PdfEditSessionPlan {
+                        page_order: vec![1, 0],
+                        delete_pages: vec![],
+                        rotate_pages: vec![],
+                        operations: vec![],
+                    },
+                    output_location: location(&output_dir),
+                }, source.clone()),
+                _ => unreachable!(),
+            };
+
+            assert!(outcome.failure.is_none(), "{case}: {:?}", outcome.failure);
+            let output = outcome.output_paths.first().unwrap();
+            assert_reordered_navigation_and_form_references(output, &original_pages, widget);
+            assert_eq!(std::fs::read(&source).unwrap(), original);
+            let _ = std::fs::remove_file(source);
+            let _ = std::fs::remove_file(output);
+            let _ = std::fs::remove_dir(output_dir);
+        }
+    }
+
+    #[test]
     fn organize_rejects_annotation_with_a_non_owner_page_reference_before_output() {
         let source = temp_path("annotation-wrong-page");
         let output_dir = temp_path("annotation-wrong-page-output");
@@ -1859,8 +1981,8 @@ mod session_tests {
     }
 
     #[test]
-    fn all_editor_mutations_reject_navigational_pdfs_before_reserving_output() {
-        let cases = ["organize", "session", "add"];
+    fn unsafe_editor_mutations_reject_navigational_pdfs_before_reserving_output() {
+        let cases = ["organize-rotate", "session-overlay", "add"];
         for case in cases {
             let source = temp_path(&format!("navigation-{case}.pdf"));
             let output_dir = temp_path(&format!("navigation-{case}-output"));
@@ -1871,14 +1993,25 @@ mod session_tests {
                 document.add_object(dictionary! { "Type" => "Outlines", "Count" => 0 })
             };
             add_catalog_marker(&source, b"Outlines", Object::Reference(outlines));
+            let original = std::fs::read(&source).unwrap();
 
             let outcome = match case {
-                "organize" => organize(&OrganizePdfRequest {
-                    paths: vec![source.clone()], page_order: vec![], delete_pages: vec![], rotate_pages: vec![],
+                "organize-rotate" => organize(&OrganizePdfRequest {
+                    paths: vec![source.clone()], page_order: vec![1, 0], delete_pages: vec![],
+                    rotate_pages: vec![RotatePage { page: 0, degrees: 90 }],
                     scope: PageScope::All, output_location: location(&output_dir),
                 }, source.clone()),
-                "session" => apply_session(&PdfEditSessionRequest {
-                    paths: vec![source.clone()], plan: empty_plan(), output_location: location(&output_dir),
+                "session-overlay" => apply_session(&PdfEditSessionRequest {
+                    paths: vec![source.clone()],
+                    plan: PdfEditSessionPlan {
+                        page_order: vec![1, 0],
+                        delete_pages: vec![],
+                        rotate_pages: vec![],
+                        operations: vec![PdfEditOperation::Overlay {
+                            overlay: PdfOverlay::PageNumbers { start_number: None, font_size: None, position: None, pages: None },
+                        }],
+                    },
+                    output_location: location(&output_dir),
                 }, source.clone()),
                 "add" => add_pages(&AddPdfPagesRequest {
                     paths: vec![source.clone()], position: "end".to_string(), page: 0, count: 1,
@@ -1889,6 +2022,7 @@ mod session_tests {
 
             assert!(outcome.failure.as_ref().is_some_and(|error| error.message.contains("navigation")), "{case}: {:?}", outcome.failure);
             assert!(outcome.output_paths.is_empty());
+            assert_eq!(std::fs::read(&source).unwrap(), original);
             assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
             let _ = std::fs::remove_file(source);
             let _ = std::fs::remove_dir(output_dir);

@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming, OutputReservation};
 use crate::kit::contracts::ToolError;
 use super::metadata::page_bounds;
-use super::mutation_preflight;
+use super::{mutation_preflight, PdfMutationIntent};
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -774,7 +774,7 @@ fn validate_overlay_scope(pages: Option<&[usize]>, page_count: usize) -> Result<
 
 fn load_existing_document_for_mutation(input: &Path) -> Result<Document, String> {
     let document = Document::load(input).map_err(|error| error.to_string())?;
-    mutation_preflight(&document, true, true)?;
+    mutation_preflight(&document, PdfMutationIntent::General)?;
     Ok(document)
 }
 

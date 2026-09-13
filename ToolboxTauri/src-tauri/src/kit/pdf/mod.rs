@@ -175,6 +175,25 @@ pub(crate) struct PdfMutationPreflight {
     pub(crate) has_tagged_structure: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum PdfMutationIntent {
+    General,
+    ReorderOnly,
+    ValidateOnly,
+}
+
+impl PdfMutationPreflight {
+    pub(crate) fn enforce_policy(&self, intent: PdfMutationIntent) -> Result<(), String> {
+        if matches!(intent, PdfMutationIntent::General) && (self.has_navigation || self.has_form_structure) {
+            return Err("This PDF contains navigation or form structures that could be invalidated by this mutation; use an unstructured PDF copy".to_string());
+        }
+        if !matches!(intent, PdfMutationIntent::ValidateOnly) && self.has_tagged_structure {
+            return Err("This tagged PDF contains a StructTreeRoot or ParentTree that could be invalidated by this mutation; use an untagged PDF copy".to_string());
+        }
+        Ok(())
+    }
+}
+
 pub(crate) fn resolve<'a>(document: &'a Document, mut value: &'a Object) -> Result<&'a Object, String> {
     let mut seen = HashSet::new();
     while let Object::Reference(id) = value {
@@ -536,7 +555,7 @@ fn page_has_internal_navigation(document: &Document, page: ObjectId) -> Result<b
     }).collect::<Result<Vec<_>, String>>().map(|values| values.into_iter().any(|value| value))
 }
 
-pub(crate) fn mutation_preflight(document: &Document, reject_navigation: bool, reject_tagged_structure: bool) -> Result<PdfMutationPreflight, String> {
+pub(crate) fn mutation_preflight(document: &Document, intent: PdfMutationIntent) -> Result<PdfMutationPreflight, String> {
     if document.is_encrypted() {
         return Err("Unlock the PDF before editing".to_string());
     }
@@ -584,13 +603,9 @@ pub(crate) fn mutation_preflight(document: &Document, reject_navigation: bool, r
     let has_navigation = has_navigation || page_navigation;
     let has_form_structure = has_catalog_entry(document, catalog, b"AcroForm")?;
     let has_tagged_structure = has_catalog_entry(document, catalog, b"StructTreeRoot")?;
-    if reject_navigation && (has_navigation || has_form_structure) {
-        return Err("This PDF contains navigation or form structures that could be invalidated by this mutation; use an unstructured PDF copy".to_string());
-    }
-    if reject_tagged_structure && has_tagged_structure {
-        return Err("This tagged PDF contains a StructTreeRoot or ParentTree that could be invalidated by this mutation; use an untagged PDF copy".to_string());
-    }
-    Ok(PdfMutationPreflight { pages_root, pages, annotated_pages, has_navigation, has_form_structure, has_tagged_structure })
+    let preflight = PdfMutationPreflight { pages_root, pages, annotated_pages, has_navigation, has_form_structure, has_tagged_structure };
+    preflight.enforce_policy(intent)?;
+    Ok(preflight)
 }
 
 impl PDFProcessor {

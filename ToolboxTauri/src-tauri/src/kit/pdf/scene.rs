@@ -6,7 +6,7 @@ use quick_xml::{events::Event, escape::unescape, Reader as XmlReader, XmlVersion
 use serde::{Deserialize, Serialize};
 use crate::kit::{common::{JobOutcome, OutputLocation, OutputNaming}, contracts::ToolError};
 use super::metadata::{PdfDocumentMetadata, PdfPageMetadata, PdfTextRun};
-use super::{inherited, resolve};
+use super::{inherited, resolve, PdfMutationIntent};
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Rect { pub x: f32, pub y: f32, pub width: f32, pub height: f32 }
@@ -257,8 +257,8 @@ fn page_has_widget(document: &Document, page: ObjectId) -> Result<bool, String> 
     }).collect::<Result<Vec<_>, String>>().map(|values| values.into_iter().any(|value| value))
 }
 
-fn scene_preflight(document: &Document, scene: &PdfScene, source_pages: &[ObjectId], identity: bool) -> Result<ScenePreflight, String> {
-    let common = super::mutation_preflight(document, false, false)?;
+fn scene_preflight(document: &Document, scene: &PdfScene, source_pages: &[ObjectId], identity: bool, pure_reorder: bool) -> Result<ScenePreflight, String> {
+    let common = super::mutation_preflight(document, PdfMutationIntent::ValidateOnly)?;
     if common.pages != source_pages { return Err("PDF uses a nested or unsupported page tree; scene export was rejected before output".into()); }
     let pages_root = common.pages_root;
 
@@ -274,7 +274,7 @@ fn scene_preflight(document: &Document, scene: &PdfScene, source_pages: &[Object
     }
     let has_navigation = common.has_navigation;
     let has_tagged_structure = has_tagged_structure(document, source_pages, common.has_tagged_structure)?;
-    if has_tagged_structure && !identity {
+    if has_tagged_structure && !identity && !pure_reorder {
         return Err("This tagged PDF contains structure mappings that cannot be remapped by scene edits; scene export was rejected before output".into());
     }
     if retained.len() != source_pages.len() && (has_navigation || common.has_form_structure) {
@@ -387,6 +387,25 @@ fn is_identity_scene(document: &Document, scene: &PdfScene, source_pages: &[Obje
     Ok(true)
 }
 
+fn is_pure_page_reorder(document: &Document, scene: &PdfScene, source_pages: &[ObjectId]) -> Result<bool, String> {
+    if scene.pages.len() != source_pages.len() {
+        return Ok(false);
+    }
+    let mut seen = HashSet::new();
+    for page in &scene.pages {
+        let Some(index) = page.source_index else { return Ok(false); };
+        let Some(source) = source_pages.get(index).copied() else { return Ok(false); };
+        if !seen.insert(index) || !page.objects.is_empty() {
+            return Ok(false);
+        }
+        dimensions(page.width, page.height)?;
+        if page_geometry_changed(page, &geometry(document, source)?) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 fn effective_resource_entries(document: &Document, page_id: ObjectId, category: &[u8]) -> Result<lopdf::Dictionary, String> {
     let Some(value) = inherited(document, page_id, b"Resources")? else { return Ok(lopdf::Dictionary::new()); };
     let resources = value.as_dict().map_err(err)?;
@@ -425,8 +444,19 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
     let mut doc=load(path)?;
     let sources:Vec<_>=doc.get_pages().values().copied().collect();
     let identity = is_identity_scene(&doc, scene, &sources)?;
-    let preflight = scene_preflight(&doc, scene, &sources, identity)?;
+    let pure_reorder = is_pure_page_reorder(&doc, scene, &sources)?;
+    let preflight = scene_preflight(&doc, scene, &sources, identity, pure_reorder)?;
     if identity { return Ok(doc); }
+    if pure_reorder {
+        let order = scene.pages.iter().map(|page| {
+            let index = page.source_index.ok_or_else(|| "Pure page reorder is missing a source page".to_string())?;
+            sources.get(index).copied().ok_or_else(|| "Scene source page is outside the document".to_string())
+        }).collect::<Result<Vec<_>, String>>()?;
+        let root = doc.get_dictionary_mut(preflight.pages_root).map_err(err)?;
+        root.set("Kids", order.iter().map(|page| Object::Reference(*page)).collect::<Vec<_>>());
+        root.set("Count", order.len() as i64);
+        return Ok(doc);
+    }
     let font_specs: [(&str, &str); 9] = [
         ("Helvetica", "SceneFont"), ("Helvetica-Bold", "SceneFontHelveticaBold"),
         ("Helvetica-Oblique", "SceneFontHelveticaOblique"), ("Times-Roman", "SceneFontTimesRoman"),
@@ -788,6 +818,63 @@ mod tests {
         d.save(path).unwrap();
     }
 
+    fn tagged_reorder_fixture(path: &Path) {
+        fixture(path);
+        let mut d = Document::load(path).unwrap();
+        let pages: Vec<_> = d.get_pages().values().copied().collect();
+        let link = d.add_object(dictionary! {
+            "Type" => "Annot", "Subtype" => "Link", "Rect" => array(&[20., 20., 80., 50.]),
+            "P" => Object::Reference(pages[1]),
+            "Dest" => vec![Object::Reference(pages[0]), Object::Name(b"Fit".to_vec())],
+        });
+        let widget = d.add_object(dictionary! {
+            "Type" => "Annot", "Subtype" => "Widget", "FT" => "Tx", "Rect" => array(&[90., 20., 180., 50.]),
+            "P" => Object::Reference(pages[0]),
+        });
+        d.get_dictionary_mut(pages[0]).unwrap().set("Annots", vec![Object::Reference(widget)]);
+        d.get_dictionary_mut(pages[1]).unwrap().set("Annots", vec![Object::Reference(link)]);
+        d.get_dictionary_mut(pages[0]).unwrap().set("StructParents", 0);
+        d.get_dictionary_mut(pages[1]).unwrap().set("StructParents", 1);
+
+        let metadata = d.add_object(Stream::new(dictionary! { "Type" => "Metadata", "Subtype" => "XML" }, b"<xmpmeta>stable</xmpmeta>".to_vec()));
+        let names = d.add_object(dictionary! {
+            "Dests" => dictionary! { "first" => vec![Object::Reference(pages[0]), Object::Name(b"Fit".to_vec())] },
+        });
+        let outlines = d.add_object(dictionary! { "Type" => "Outlines", "Count" => 0 });
+        let parent_tree = d.add_object(dictionary! {
+            "Nums" => vec![Object::Integer(0), Object::Dictionary(dictionary! {
+                "Pg" => Object::Reference(pages[0]),
+            })],
+        });
+        let structure = d.add_object(dictionary! {
+            "Type" => "StructTreeRoot", "K" => vec![], "ParentTree" => Object::Reference(parent_tree),
+        });
+        let acro_form = d.add_object(dictionary! { "Fields" => vec![Object::Reference(widget)] });
+        let catalog = d.trailer.get(b"Root").unwrap().as_reference().unwrap();
+        let catalog = d.get_dictionary_mut(catalog).unwrap();
+        catalog.set("Metadata", Object::Reference(metadata));
+        catalog.set("Names", Object::Reference(names));
+        catalog.set("Outlines", Object::Reference(outlines));
+        catalog.set("StructTreeRoot", Object::Reference(structure));
+        catalog.set("AcroForm", Object::Reference(acro_form));
+        d.save(path).unwrap();
+    }
+
+    fn assert_only_page_tree_order_changed(document: &Document, original: &Document, pages_root: ObjectId, order: &[ObjectId]) {
+        assert_eq!(document.trailer, original.trailer);
+        assert_eq!(document.objects.len(), original.objects.len());
+        for (id, value) in &original.objects {
+            if *id == pages_root {
+                let mut expected = original.get_dictionary(*id).unwrap().clone();
+                expected.set("Kids", order.iter().map(|page| Object::Reference(*page)).collect::<Vec<_>>());
+                expected.set("Count", order.len() as i64);
+                assert_eq!(document.get_object(*id).unwrap(), &Object::Dictionary(expected));
+            } else {
+                assert_eq!(document.get_object(*id).unwrap(), value, "object {id:?} changed during pure reorder");
+            }
+        }
+    }
+
     fn inherited_collision_fixture(path: &Path) {
         let mut d = Document::with_version("1.7");
         let pages_id = d.new_object_id();
@@ -1074,6 +1161,35 @@ mod tests {
         assert_eq!(annots.len(),2);
         assert_eq!(fs::read(&input).unwrap(),original);
     }
+
+    #[test]
+    fn tagged_pure_page_reorder_preserves_existing_objects_and_references() {
+        let temp = TempDir::new().unwrap();
+        let input = temp.0.join("tagged-reorder.pdf");
+        tagged_reorder_fixture(&input);
+        let original_bytes = fs::read(&input).unwrap();
+        let original = Document::load(&input).unwrap();
+        let pages: Vec<_> = original.get_pages().values().copied().collect();
+        let catalog = original.trailer.get(b"Root").unwrap().as_reference().unwrap();
+        let pages_root = original.get_dictionary(catalog).unwrap().get(b"Pages").unwrap().as_reference().unwrap();
+        let scene = PdfScene { pages: vec![
+            ScenePage {
+                source_index: Some(1), width: 612., height: 792., rotation: 0, crop: None,
+                source_rotation: Some(0), source_box: Some(Rect { x: 0., y: 0., width: 612., height: 792. }), objects: vec![],
+            },
+            ScenePage {
+                source_index: Some(0), width: 300., height: 200., rotation: 0, crop: None,
+                source_rotation: Some(90), source_box: Some(Rect { x: 20., y: 30., width: 200., height: 300. }), objects: vec![],
+            },
+        ] };
+
+        let composed = compose(&input, &scene).expect("tagged pure reorder should compose");
+        let reordered: Vec<_> = composed.get_pages().values().copied().collect();
+        assert_eq!(reordered, vec![pages[1], pages[0]]);
+        assert_only_page_tree_order_changed(&composed, &original, pages_root, &reordered);
+        assert_eq!(fs::read(&input).unwrap(), original_bytes);
+    }
+
     #[test]
     fn scene_rejects_nested_page_tree_before_output() {
         let temp=TempDir::new().unwrap(); let input=temp.0.join("nested.pdf"); nested_fixture(&input);
