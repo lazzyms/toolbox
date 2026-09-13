@@ -3,7 +3,7 @@ import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { ToolScaffold } from '../components/ToolScaffold';
 import type { ToolDefinition, ToolResult } from '../contracts';
-import type { PdfDocument } from '../features/pdf-editor/contracts';
+import type { PdfDocument, PdfPage, PdfTextRun } from '../features/pdf-editor/contracts';
 import { SceneCanvas } from '../features/pdf-editor/SceneCanvas';
 import { sceneFromDocument, visibleBounds } from '../features/pdf-editor/scene';
 import type { PdfScene, SceneObject, ScenePage, ScenePreview, SceneRect, SceneShape, SceneTool, SignatureMode, WatermarkPattern } from '../features/pdf-editor/scene';
@@ -76,6 +76,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onScene }: {
   const draggedPage = useRef<string | null>(null);
   const previewCache = useRef(createPreviewCache());
   const previewGeneration = useRef<GenerationState>({ current: 0 });
+  const textGeneration = useRef<GenerationState>({ current: 0 });
   const scene = history.present;
   const page = scene.pages.find((item) => item.id === currentId) ?? scene.pages[0];
   const selected = page?.objects.find((object) => object.id === selectedId);
@@ -96,6 +97,27 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onScene }: {
     }).catch((reason) => { if (active) setError(String(reason)); }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [path]);
+  useEffect(() => {
+    const sourceIndex = page?.sourceIndex;
+    const sourcePage = sourceIndex === null || sourceIndex === undefined ? undefined : document?.pages[sourceIndex];
+    if (!path || !document || sourceIndex === null || sourceIndex === undefined || !sourcePage || sourcePage.textRuns != null) {
+      return () => { textGeneration.current.current += 1; };
+    }
+    const requestGeneration = ++textGeneration.current.current;
+    void requestWithGeneration(textGeneration.current, requestGeneration,
+      () => invoke<PdfPage>('inspect_pdf_scene_page', { request: { path, pageIndex: sourceIndex } }),
+      (value) => {
+        if (value.index !== sourceIndex) return;
+        const textRuns: PdfTextRun[] = value.textRuns ?? [];
+        setDocument((current) => {
+          if (!current || current.path !== path || textGeneration.current.current !== requestGeneration || current.pages[sourceIndex]?.textRuns != null) return current;
+          return { ...current, pages: current.pages.map((item, index) => index === sourceIndex ? { ...item, textRuns } : item) };
+        });
+      },
+      (reason) => setError(String(reason)),
+      () => {});
+    return () => { textGeneration.current.current += 1; };
+  }, [path, document, page?.sourceIndex]);
   useEffect(() => { onScene(path, document ? scene : null); }, [path, scene, document]);
   useEffect(() => {
     previewGeneration.current.current += 1;

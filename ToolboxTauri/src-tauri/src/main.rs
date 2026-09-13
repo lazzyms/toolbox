@@ -69,6 +69,13 @@ struct InspectPdfRequest {
     path: std::path::PathBuf,
 }
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InspectPdfScenePageRequest {
+    path: std::path::PathBuf,
+    page_index: usize,
+}
+
 #[tauri::command]
 fn inspect_pdf(request: InspectPdfRequest) -> Result<metadata::PdfDocumentMetadata, String> {
     metadata::inspect(&request.path)
@@ -77,6 +84,11 @@ fn inspect_pdf(request: InspectPdfRequest) -> Result<metadata::PdfDocumentMetada
 #[tauri::command]
 async fn inspect_pdf_scene(request: InspectPdfRequest) -> Result<metadata::PdfDocumentMetadata, String> {
     tauri::async_runtime::spawn_blocking(move || scene::inspect(&request.path)).await.map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn inspect_pdf_scene_page(request: InspectPdfScenePageRequest) -> Result<metadata::PdfPageMetadata, String> {
+    tauri::async_runtime::spawn_blocking(move || scene::inspect_page(&request.path, request.page_index)).await.map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -297,6 +309,7 @@ fn main() {
             convert_images,
             inspect_pdf,
             inspect_pdf_scene,
+            inspect_pdf_scene_page,
             preview_pdf_scene,
             preview_pdf_scene_pages,
             export_pdf_scene,

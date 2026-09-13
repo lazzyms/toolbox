@@ -5,6 +5,8 @@ test.beforeEach(async ({ page }) => {
   await page.addInitScript(({ svg }) => {
     const w = window as any;
     w.calls = [];
+    w.sceneTextDelays = {};
+    w.sceneTextResponses = {};
     w.__TAURI_INTERNALS__ = {
       metadata: { currentWindow: { label: 'main' }, currentWebview: { label: 'main', windowLabel: 'main' } },
       transformCallback: () => 1, unregisterCallback: () => {},
@@ -12,6 +14,15 @@ test.beforeEach(async ({ page }) => {
         w.calls.push({ command, args });
         if (command === 'plugin:dialog|open') return '/local/scene-fixture.pdf';
         if (command === 'inspect_pdf_scene') return { path: '/local/scene-fixture.pdf', pages: [0, 1, 2].map(index => ({ index, width: 612, height: 792, preview: svg })) };
+        if (command === 'inspect_pdf_scene_page') {
+          const pageIndex = args.request.pageIndex;
+          const delay = w.sceneTextDelays[pageIndex] ?? 0;
+          if (delay) await new Promise(resolve => setTimeout(resolve, delay));
+          const key = `${args.request.path}:${pageIndex}`;
+          const response = (w.sceneTextResponses[key] ?? 0) + 1;
+          w.sceneTextResponses[key] = response;
+          return { index: pageIndex, width: 612, height: 792, preview: null, textRuns: [{ text: `${args.request.path} page ${pageIndex} response ${response}`, x: 60, y: 55, width: 250, height: 25 }] };
+        }
         if (command === 'preview_pdf_scene_pages') {
           if (w.previewFailure) throw new Error('Renderer unavailable');
           if (w.previewDelay) await new Promise(resolve => setTimeout(resolve, w.previewDelay));
@@ -51,6 +62,31 @@ test('scene preview cache misses use one indexed batch request', async ({ page }
   expect(previewCalls).toHaveLength(1);
   expect(previewCalls[0].args).toMatchObject({ request: { pageIndices: [0, 1] } });
   expect(await page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'preview_pdf_scene').length)).toBe(0);
+});
+
+test('scene lazily requests text for the current source page', async ({ page }) => {
+  await openEditor(page);
+  await expect.poll(() => page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'inspect_pdf_scene_page').map((call: any) => call.args.request.pageIndex))).toEqual([0]);
+  await page.getByRole('button', { name: 'Highlight', exact: true }).click();
+  await expect(page.locator('[data-text-run]')).toHaveCount(1);
+  await page.getByRole('button', { name: 'Page 2', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'inspect_pdf_scene_page').map((call: any) => call.args.request.pageIndex))).toEqual([0, 1]);
+});
+
+test('scene ignores stale page text responses after changing pages', async ({ page }) => {
+  await page.goto('/');
+  await page.evaluate(() => { (window as any).sceneTextDelays[0] = 300; });
+  await page.getByRole('button', { name: 'Open Edit PDF', exact: true }).click();
+  await page.getByRole('button', { name: 'Choose files to process' }).click();
+  await expect(page.getByRole('group', { name: 'PDF page canvas' })).toBeVisible();
+  await page.getByRole('button', { name: 'Page 2', exact: true }).click();
+  await page.getByRole('button', { name: 'Highlight', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'inspect_pdf_scene_page').map((call: any) => call.args.request.pageIndex))).toEqual([0, 1]);
+  await expect.poll(() => page.evaluate(() => (window as any).sceneTextResponses['/local/scene-fixture.pdf:0'])).toBe(1);
+  await expect.poll(() => page.locator('[data-text-run]').allTextContents()).toEqual(['/local/scene-fixture.pdf page 1 response 1']);
+  await page.getByRole('button', { name: 'Page 1', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'inspect_pdf_scene_page').map((call: any) => call.args.request.pageIndex))).toEqual([0, 1, 0]);
+  await expect.poll(() => page.locator('[data-text-run]').allTextContents()).toEqual(['/local/scene-fixture.pdf page 0 response 2']);
 });
 
 test('scene composes every mark kind, moves and resizes, then exports once', async ({ page }) => {

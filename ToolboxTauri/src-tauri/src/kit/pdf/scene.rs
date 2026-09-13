@@ -755,6 +755,15 @@ pub fn inspect(path:&Path)->Result<PdfDocumentMetadata,String> {
     if pages.is_empty() { return Err("PDF contains no pages".into()); }
     Ok(PdfDocumentMetadata{path:path.to_path_buf(),pages})
 }
+pub fn inspect_page(path:&Path,page_index:usize)->Result<PdfPageMetadata,String> {
+    let doc=load(path)?;
+    let pages:Vec<_>=doc.get_pages().values().copied().collect();
+    let id=*pages.get(page_index).ok_or("PDF page outside document")?;
+    let g=geometry(&doc,id)?;
+    let source_rotation = inherited(&doc, id, b"Rotate")?.map(|value| value.as_i64().map_err(err)).transpose()?.unwrap_or(0).rem_euclid(360) as i32;
+    let text_runs=extract_text_runs(path,page_index + 1,g.width,g.height,Instant::now() + super::PDF_TEXT_TIMEOUT).unwrap_or_default();
+    Ok(PdfPageMetadata{index:page_index,x:g.bbox[0],y:g.bbox[1],width:g.width,height:g.height,rotation:source_rotation,page_box:g.bbox,preview:None,text_runs:Some(text_runs)})
+}
 pub fn export(request:&ExportRequest,input:PathBuf)->JobOutcome {
     let result=(|| {
         if !matches!(request.output_location,OutputLocation::AlongsideInput) { return Err("Scene exports must be alongside the input".into()); }
@@ -790,6 +799,21 @@ mod tests {
         let content = d.add_object(Stream::new(dictionary!{}, b"q 1 0 0 rg 40 60 50 70 re f Q BT /OriginalFont 18 Tf 40 260 Td (Original content) Tj ET".to_vec()));
         let first = d.add_object(dictionary! {"Type"=>"Page", "Parent"=>root, "MediaBox"=>array(&[10.,20.,250.,360.]), "CropBox"=>array(&[20.,30.,220.,330.]), "Rotate"=>90, "Resources"=>resources, "Contents"=>content});
         let second = d.add_object(dictionary! {"Type"=>"Page", "Parent"=>root, "MediaBox"=>array(&[0.,0.,612.,792.]), "Resources"=>resources, "Contents"=>content});
+        d.objects.insert(root, Object::Dictionary(dictionary! {"Type"=>"Pages", "Kids"=>vec![Object::Reference(first),Object::Reference(second)], "Count"=>2}));
+        let catalog = d.add_object(dictionary! {"Type"=>"Catalog","Pages"=>root});
+        d.trailer.set("Root",catalog);
+        d.save(path).unwrap();
+    }
+    fn page_text_fixture(path: &Path) {
+        let mut d = Document::with_version("1.7");
+        let root = d.new_object_id();
+        let font = d.add_object(dictionary! {"Type"=>"Font", "Subtype"=>"Type1", "BaseFont"=>"Helvetica"});
+        let fonts = d.add_object(dictionary! {"OriginalFont"=>font});
+        let resources = d.add_object(dictionary! {"Font"=>fonts});
+        let first_content = d.add_object(Stream::new(dictionary!{}, b"BT /OriginalFont 18 Tf 40 700 Td (First page text) Tj ET".to_vec()));
+        let second_content = d.add_object(Stream::new(dictionary!{}, b"BT /OriginalFont 18 Tf 40 700 Td (Second page text) Tj ET".to_vec()));
+        let first = d.add_object(dictionary! {"Type"=>"Page", "Parent"=>root, "MediaBox"=>array(&[0.,0.,612.,792.]), "Resources"=>resources, "Contents"=>first_content});
+        let second = d.add_object(dictionary! {"Type"=>"Page", "Parent"=>root, "MediaBox"=>array(&[0.,0.,612.,792.]), "Resources"=>resources, "Contents"=>second_content});
         d.objects.insert(root, Object::Dictionary(dictionary! {"Type"=>"Pages", "Kids"=>vec![Object::Reference(first),Object::Reference(second)], "Count"=>2}));
         let catalog = d.add_object(dictionary! {"Type"=>"Catalog","Pages"=>root});
         d.trailer.set("Root",catalog);
@@ -967,6 +991,23 @@ mod tests {
         assert_eq!(metadata.pages[0].page_box, [20., 30., 220., 330.]);
         assert_eq!(metadata.pages[0].rotation, 90);
         assert!(metadata.pages.iter().all(|page| page.preview.is_none() && page.text_runs.is_none()));
+    }
+
+    #[test]
+    fn inspect_page_validates_bounds_and_returns_only_the_requested_text_runs() {
+        let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
+        if text_extractor().is_none() { return; }
+        let temp = TempDir::new().unwrap();
+        let input = temp.0.join("page-text.pdf");
+        page_text_fixture(&input);
+
+        let page = inspect_page(&input, 1).unwrap();
+        assert_eq!(page.index, 1);
+        assert_eq!((page.width, page.height), (612., 792.));
+        let runs = page.text_runs.expect("page inspection should return a loaded text-run list");
+        assert!(runs.iter().any(|run| run.text.contains("Second")), "runs: {runs:?}");
+        assert!(runs.iter().all(|run| run.width.is_finite() && run.height.is_finite() && run.width > 0. && run.height > 0.));
+        assert!(inspect_page(&input, 2).is_err_and(|error| error == "PDF page outside document"));
     }
 
     #[test]
