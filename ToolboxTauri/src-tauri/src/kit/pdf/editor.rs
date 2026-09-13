@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::ToolError;
-use super::metadata::page_bounds;
+use super::metadata::{effective_crop_bounds, page_bounds};
 use super::{inherited, mutation_preflight, PdfMutationPreflight};
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -862,8 +862,8 @@ fn selected_pages(scope: &PageScope, count: usize) -> impl Fn(usize) -> bool + '
 
 fn validate_rect(rect: &PdfRect) -> Result<(), String> { if !rect.x.is_finite() || !rect.y.is_finite() || !rect.width.is_finite() || !rect.height.is_finite() || rect.width <= 0.0 || rect.height <= 0.0 { Err("Rectangle must have positive finite dimensions.".to_string()) } else { Ok(()) } }
 fn validate_rect_for_page(document: &Document, page_id: lopdf::ObjectId, rect: &PdfRect) -> Result<(), String> {
-    let (left, bottom, right, top) = page_bounds(document, page_id).map_err(|_| "PDF page has an invalid media box.".to_string())?;
-    if rect.x < left || rect.y < bottom || rect.x + rect.width > right || rect.y + rect.height > top { return Err("Crop rectangle must stay within every selected page's media box.".to_string()); }
+    let [left, bottom, right, top] = effective_crop_bounds(document, page_id).map_err(|_| "PDF page has an invalid effective CropBox.".to_string())?;
+    if rect.x < left || rect.y < bottom || rect.x + rect.width > right || rect.y + rect.height > top { return Err("Crop rectangle must stay within every selected page's effective CropBox.".to_string()); }
     Ok(())
 }
 fn escape_text(text: &str) -> String { text.replace('\\', "\\\\").replace('(', "\\(").replace(')', "\\)") }
@@ -1421,6 +1421,39 @@ mod session_tests {
 
         let _ = std::fs::remove_file(source);
         let _ = std::fs::remove_file(output);
+        let _ = std::fs::remove_dir(output_dir);
+    }
+
+    #[test]
+    fn session_rejects_overlay_outside_the_effective_crop_box_without_public_output() {
+        let source = temp_path("crop-overlay-current-box.pdf");
+        let output_dir = temp_path("crop-overlay-current-box-output");
+        std::fs::create_dir_all(&output_dir).expect("output directory should be created");
+        make_pdf_with_pages(&source, 1);
+        let mut source_document = Document::load(&source).expect("source fixture should load");
+        let page = source_document.get_pages().values().next().copied().unwrap();
+        source_document.get_dictionary_mut(page).unwrap().set("CropBox", vec![50.into(), 50.into(), 550.into(), 742.into()]);
+        source_document.save(&source).expect("cropped source fixture should save");
+        let source_bytes = std::fs::read(&source).expect("source should be readable");
+        let outcome = apply_session(&PdfEditSessionRequest {
+            paths: vec![source.clone()],
+            plan: PdfEditSessionPlan {
+                page_order: vec![], delete_pages: vec![], rotate_pages: vec![],
+                operations: vec![PdfEditOperation::Overlay {
+                    overlay: PdfOverlay::Edit {
+                        mode: PdfEditMode::Text, text: "outside crop".into(), pages: Some(vec![0]),
+                        rectangle: PdfRect { x: 0., y: 0., width: 20., height: 20. },
+                    },
+                }],
+            },
+            output_location: location(&output_dir),
+        }, source.clone());
+
+        assert!(outcome.failure.as_ref().is_some_and(|error| error.message.contains("CropBox")), "unexpected result: {:?}", outcome.failure);
+        assert!(outcome.output_paths.is_empty());
+        assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
+        assert_eq!(std::fs::read(&source).expect("source should remain readable"), source_bytes);
+        let _ = std::fs::remove_file(source);
         let _ = std::fs::remove_dir(output_dir);
     }
 

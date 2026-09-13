@@ -1,7 +1,7 @@
 use lopdf::{Document, Object};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use serde::Serialize;
@@ -44,18 +44,7 @@ pub fn inspect(path: &Path) -> Result<PdfDocumentMetadata, String> {
         .values()
         .enumerate()
         .map(|(index, page_id)| page_bounds(&document, *page_id).and_then(|(left, bottom, right, top)| {
-            let crop = super::inherited(&document, *page_id, b"CropBox")?
-                .map(|value| value.as_array().map_err(|error| error.to_string()).and_then(|values| {
-                    if values.len() != 4 { return Err("PDF crop box must have four values.".to_string()); }
-                    Ok([
-                        number(super::resolve(&document, &values[0])?)?, number(super::resolve(&document, &values[1])?)?,
-                        number(super::resolve(&document, &values[2])?)?, number(super::resolve(&document, &values[3])?)?,
-                    ])
-                }))
-                .transpose()?
-                .unwrap_or([left, bottom, right, top]);
-            let page_box = [crop[0].max(left), crop[1].max(bottom), crop[2].min(right), crop[3].min(top)];
-            if page_box[2] <= page_box[0] || page_box[3] <= page_box[1] { return Err("PDF crop box has invalid dimensions.".to_string()); }
+            let page_box = effective_crop_bounds(&document, *page_id)?;
             let rotation = super::inherited(&document, *page_id, b"Rotate")?
                 .map(|value| value.as_i64().map_err(|error| error.to_string()))
                 .transpose()?
@@ -69,7 +58,7 @@ pub fn inspect(path: &Path) -> Result<PdfDocumentMetadata, String> {
                 height: top - bottom,
                 rotation,
                 page_box,
-                preview: render_preview(path, index + 1),
+                preview: render_preview(path, index + 1, page_box[2] - page_box[0], page_box[3] - page_box[1]),
                 text_runs: None,
             })
         }))
@@ -77,32 +66,49 @@ pub fn inspect(path: &Path) -> Result<PdfDocumentMetadata, String> {
     Ok(PdfDocumentMetadata { path: path.to_path_buf(), pages })
 }
 
-fn render_preview(path: &Path, page: usize) -> Option<String> {
+fn render_preview(path: &Path, page: usize, width: f32, height: f32) -> Option<String> {
+    if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 || width > super::PDF_MAX_PAGE_POINTS || height > super::PDF_MAX_PAGE_POINTS {
+        return None;
+    }
     let renderer = find_pdftoppm()?;
     let nonce = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_nanos();
     let prefix = std::env::temp_dir().join(format!("toolbox-pdf-preview-{}-{page}-{nonce}", std::process::id()));
-    let output = Command::new(renderer)
-        .arg("-png")
-        .arg("-singlefile")
-        .arg("-f")
-        .arg(page.to_string())
-        .arg("-l")
-        .arg(page.to_string())
-        .arg(path)
-        .arg(&prefix)
-        .output()
-        .ok();
+    let output = super::run_bounded_helper({
+        let mut command = Command::new(renderer);
+        command
+            .arg("-png")
+            .arg("-singlefile")
+            .arg("-scale-to")
+            .arg(super::PDF_PREVIEW_MAX_DIMENSION.to_string())
+            .arg("-f")
+            .arg(page.to_string())
+            .arg("-l")
+            .arg(page.to_string())
+            .arg(path)
+            .arg(&prefix);
+        command
+    }, Instant::now() + super::PDF_PREVIEW_TIMEOUT, 64 * 1024, super::PDF_TEXT_MAX_ERROR_BYTES, "PDF preview renderer timed out.").ok();
     let preview_path = prefix.with_extension("png");
-    let preview = output.filter(|result| result.status.success()).and_then(|_| std::fs::read(&preview_path).ok());
+    let preview = output.filter(|result| result.status.success()).and_then(|_| {
+        let (bytes, _, _) = super::read_preview_png(&preview_path).ok()?;
+        Some(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
+    });
     let _ = std::fs::remove_file(preview_path);
-    preview.map(|bytes| format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
+    preview
 }
 
 fn find_pdftoppm() -> Option<PathBuf> {
     std::env::var_os("TOOLBOX_PDFTOPPM_PATH")
         .map(PathBuf::from)
         .filter(|path| !path.as_os_str().is_empty() && path.is_file())
-        .or_else(|| Command::new("pdftoppm").arg("-h").output().ok().filter(|result| result.status.success()).map(|_| PathBuf::from("pdftoppm")))
+        .or_else(|| {
+            super::helper_available({
+                let mut command = Command::new("pdftoppm");
+                command.arg("-h");
+                command
+            })
+            .then(|| PathBuf::from("pdftoppm"))
+        })
 }
 
 pub(crate) fn page_bounds(document: &Document, page_id: lopdf::ObjectId) -> Result<(f32, f32, f32, f32), String> {
@@ -112,14 +118,41 @@ pub(crate) fn page_bounds(document: &Document, page_id: lopdf::ObjectId) -> Resu
     if values.len() != 4 {
         return Err("PDF media box must have four values.".to_string());
     }
-    let left = number(&values[0])?;
-    let bottom = number(&values[1])?;
-    let right = number(&values[2])?;
-    let top = number(&values[3])?;
-    if right <= left || top <= bottom {
+    let left = number(super::resolve(document, &values[0])?)?;
+    let bottom = number(super::resolve(document, &values[1])?)?;
+    let right = number(super::resolve(document, &values[2])?)?;
+    let top = number(super::resolve(document, &values[3])?)?;
+    if ![left, bottom, right, top].iter().all(|value| value.is_finite()) || right <= left || top <= bottom {
         return Err("PDF page has invalid dimensions.".to_string());
     }
     Ok((left, bottom, right, top))
+}
+
+pub(crate) fn effective_crop_bounds(document: &Document, page_id: lopdf::ObjectId) -> Result<[f32; 4], String> {
+    let media = page_bounds(document, page_id)?;
+    let crop = match super::inherited(document, page_id, b"CropBox")? {
+        Some(value) => {
+            let values = value.as_array().map_err(|error| format!("PDF crop box is invalid: {error}"))?;
+            if values.len() != 4 {
+                return Err("PDF crop box must have four values.".to_string());
+            }
+            [
+                number(super::resolve(document, &values[0])?)?,
+                number(super::resolve(document, &values[1])?)?,
+                number(super::resolve(document, &values[2])?)?,
+                number(super::resolve(document, &values[3])?)?,
+            ]
+        }
+        None => [media.0, media.1, media.2, media.3],
+    };
+    if !crop.iter().all(|value| value.is_finite()) || crop[2] <= crop[0] || crop[3] <= crop[1] {
+        return Err("PDF crop box has invalid dimensions.".to_string());
+    }
+    let result = [crop[0].max(media.0), crop[1].max(media.1), crop[2].min(media.2), crop[3].min(media.3)];
+    if result[2] <= result[0] || result[3] <= result[1] {
+        return Err("PDF crop box has invalid dimensions.".to_string());
+    }
+    Ok(result)
 }
 
 pub(crate) fn number(value: &Object) -> Result<f32, String> {

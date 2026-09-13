@@ -1,4 +1,4 @@
-use std::{collections::{HashMap, HashSet}, fs::{self, OpenOptions}, io::Write, path::{Path, PathBuf}, process::Command, sync::atomic::{AtomicU64, Ordering}};
+use std::{collections::{HashMap, HashSet}, fs::{self, OpenOptions}, io::Write, path::{Path, PathBuf}, process::Command, sync::atomic::{AtomicU64, Ordering}, time::{Instant}};
 use base64::Engine;
 use flate2::{write::ZlibEncoder, Compression};
 use lopdf::{dictionary, Document, Object, ObjectId, Stream};
@@ -387,7 +387,23 @@ fn is_identity_scene(document: &Document, scene: &PdfScene, source_pages: &[Obje
     Ok(true)
 }
 
-fn scene_resources(document: &Document, page_id: ObjectId, xobjects: lopdf::Dictionary, fonts: &HashMap<&'static str, ObjectId>, states: lopdf::Dictionary) -> Result<lopdf::Dictionary, String> {
+fn effective_resource_entries(document: &Document, page_id: ObjectId, category: &[u8]) -> Result<lopdf::Dictionary, String> {
+    let Some(value) = inherited(document, page_id, b"Resources")? else { return Ok(lopdf::Dictionary::new()); };
+    let resources = value.as_dict().map_err(err)?;
+    let Some(entries) = resources.get(category).ok() else { return Ok(lopdf::Dictionary::new()); };
+    Ok(resolve(document, entries)?.as_dict().map_err(err)?.clone())
+}
+
+fn next_resource_name(entries: &lopdf::Dictionary, category: &str, base: &str) -> Result<String, String> {
+    if !entries.has(base.as_bytes()) { return Ok(base.to_string()); }
+    for suffix in 1..=10000 {
+        let candidate = format!("{base}{suffix}");
+        if !entries.has(candidate.as_bytes()) { return Ok(candidate); }
+    }
+    Err(format!("Could not allocate a unique {category} resource name"))
+}
+
+fn scene_resources(document: &Document, page_id: ObjectId, xobjects: lopdf::Dictionary, fonts: lopdf::Dictionary, states: lopdf::Dictionary) -> Result<lopdf::Dictionary, String> {
     let mut resources = match inherited(document, page_id, b"Resources")? {
         Some(value) => value.as_dict().map_err(err)?.clone(),
         None => lopdf::Dictionary::new(),
@@ -396,7 +412,7 @@ fn scene_resources(document: &Document, page_id: ObjectId, xobjects: lopdf::Dict
     for (name, value) in xobjects.into_iter() { page_xobjects.set(name, value); }
     resources.set("XObject", page_xobjects);
     let mut page_fonts = resources.get(b"Font").ok().map(|value| resolve(document, value).and_then(|value| value.as_dict().map_err(err).map(Clone::clone))).transpose()?.unwrap_or_default();
-    for (name, value) in fonts { page_fonts.set(*name, *value); }
+    for (name, value) in fonts.into_iter() { page_fonts.set(name, value); }
     resources.set("Font", page_fonts);
     let mut page_states = resources.get(b"ExtGState").ok().map(|value| resolve(document, value).and_then(|value| value.as_dict().map_err(err).map(Clone::clone))).transpose()?.unwrap_or_default();
     for (name, value) in states.into_iter() { page_states.set(name, value); }
@@ -438,6 +454,18 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
             kids.push(Object::Reference(sources[page.source_index.unwrap()]));
             continue;
         }
+        let mut effective_fonts = source_index.map(|index| effective_resource_entries(&doc, sources[index], b"Font")).transpose()?.unwrap_or_default();
+        let mut font_names = HashMap::new();
+        let mut font_resources = lopdf::Dictionary::new();
+        for (_, resource) in &font_specs {
+            let name = next_resource_name(&effective_fonts, "Font", resource)?;
+            effective_fonts.set(name.as_str(), Object::Null);
+            let id = *fonts.get(resource).ok_or("Scene font resource disappeared")?;
+            font_resources.set(name.as_str(), Object::Reference(id));
+            font_names.insert(*resource, name);
+        }
+        let mut effective_xobjects = source_index.map(|index| effective_resource_entries(&doc, sources[index], b"XObject")).transpose()?.unwrap_or_default();
+        let mut effective_states = source_index.map(|index| effective_resource_entries(&doc, sources[index], b"ExtGState")).transpose()?.unwrap_or_default();
         let mut xobjects=lopdf::Dictionary::new();
         let mut content=if preserve_source_page {
             let g = source_geometry.as_ref().unwrap();
@@ -449,14 +477,16 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
             let id=sources[index];
             if (page.width-g.width).abs()>0.1 || (page.height-g.height).abs()>0.1 { return Err("Scene dimensions do not match source page".into()); }
             if !preserve_source_page {
+                let original_name = next_resource_name(&effective_xobjects, "XObject", "Original")?;
+                effective_xobjects.set(original_name.as_str(), Object::Null);
                 let resources=inherited(&doc,id,b"Resources")?.unwrap_or(Object::Dictionary(dictionary!{}));
                 resources.as_dict().map_err(err)?;
                 let mut form=dictionary!{"Type"=>"XObject","Subtype"=>"Form","BBox"=>array(&g.bbox),"Resources"=>resources};
                 if let Ok(group)=doc.get_dictionary(id).map_err(err)?.get(b"Group") { form.set("Group",group.clone()); }
                 let bytes=doc.get_page_content(id);
                 let form_id=doc.add_object(Stream::new(form,bytes));
-                xobjects.set("Original",form_id);
-                content.push_str(&format!("q\n{}/Original Do\nQ\n",cm(g.matrix)));
+                xobjects.set(original_name.as_str(),form_id);
+                content.push_str(&format!("q\n{} /{original_name} Do\nQ\n", cm(g.matrix)));
             }
         }
         if page.objects.len()>10000 { return Err("Too many scene objects".into()); }
@@ -467,9 +497,12 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
             if !o.font_size.is_finite() || o.font_size<=0. || o.font_size>1000. { return Err("Invalid font size".into()); }
             if o.highlight_mode.is_some() && !matches!(&o.kind, Kind::Highlight) { return Err("Highlight mode is only valid for highlight objects".into()); }
             let rgb=rgb(&o.color)?;
-            states.set(format!("S{i}"),dictionary!{"Type"=>"ExtGState","ca"=>o.opacity,"CA"=>o.opacity});
+            let state_base = format!("S{i}");
+            let state_name = next_resource_name(&effective_states, "ExtGState", &state_base)?;
+            effective_states.set(state_name.as_str(), Object::Null);
+            states.set(state_name.as_str(),dictionary!{"Type"=>"ExtGState","ca"=>o.opacity,"CA"=>o.opacity});
             let r=&o.rect;
-            content.push_str(&format!("q /S{i} gs {} {} {} rg {} {} {} RG 2 w 1 J 1 j\n",rgb[0],rgb[1],rgb[2],rgb[0],rgb[1],rgb[2]));
+            content.push_str(&format!("q /{state_name} gs {} {} {} rg {} {} {} RG 2 w 1 J 1 j\n",rgb[0],rgb[1],rgb[2],rgb[0],rgb[1],rgb[2]));
             match o.kind {
                 Kind::Highlight=>content.push_str(&format!("{} {} {} {} re f\n",r.x,r.y,r.width,r.height)),
                 Kind::Shape=>content.push_str(&shape_content(o.shape.as_ref(), r)),
@@ -477,12 +510,15 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
                     match o.signature_mode {
                         Some(SignatureMode::Image) => {
                             let path=o.signature_path.as_ref().ok_or("Choose a signature image before placing it")?;
-                            let name=format!("Sig{i}");
+                            let name_base = format!("Sig{i}");
+                            let name = next_resource_name(&effective_xobjects, "XObject", &name_base)?;
+                            effective_xobjects.set(name.as_str(), Object::Null);
                             add_signature_image(&mut doc, &mut xobjects, &name, signature_image(path)?);
                             content.push_str(&format!("q {} 0 0 {} {} {} /{name} Do Q\n",r.width,r.height,r.x,r.y));
                         }
                         Some(SignatureMode::Text) => {
                             let (_, resource)=font_spec(o.font_family.as_deref())?;
+                            let resource = font_names.get(resource).ok_or("Scene font resource disappeared")?;
                             let encoded=encode_text(&o.text)?;
                             content.push_str(&format!("BT /{resource} {} Tf 1 0 0 -1 {} {} Tm <{encoded}> Tj ET\n",o.font_size,r.x,r.y+o.font_size));
                         }
@@ -501,6 +537,7 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
                 },
                 Kind::Text=>{
                     let (_, resource)=font_spec(o.font_family.as_deref())?;
+                    let resource = font_names.get(resource).ok_or("Scene font resource disappeared")?;
                     let encoded_lines=o.text.lines().map(encode_text).collect::<Result<Vec<_>,_>>()?;
                     content.push_str(&format!("{} {} {} {} re W n\n",r.x,r.y,r.width,r.height));
                     for (line,encoded) in encoded_lines.iter().enumerate() {
@@ -509,6 +546,7 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
                 },
                 Kind::Watermark=>{
                     let (_, resource)=font_spec(o.font_family.as_deref())?;
+                    let resource = font_names.get(resource).ok_or("Scene font resource disappeared")?;
                     let encoded=encode_text(&o.text)?;
                     let area=page.crop.as_ref().cloned().unwrap_or(Rect{x:0.,y:0.,width:page.width,height:page.height});
                     for (x,y,angle) in watermark_placements(&area,o.font_size,&o.text,o.watermark_pattern.as_ref()) {
@@ -521,11 +559,9 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
         }
         content.push_str("Q\n");
         let stream=doc.add_object(Stream::new(dictionary!{},content.into_bytes()));
-        let mut page_fonts=lopdf::Dictionary::new();
-        for (resource,id) in &fonts { page_fonts.set(*resource,*id); }
         if let Some(index) = source_index {
             let id = preflight.source_pages[index];
-            let resources = scene_resources(&doc, id, xobjects, &fonts, states)?;
+            let resources = scene_resources(&doc, id, xobjects, font_resources, states)?;
             if preserve_source_page {
                 let page_dict = doc.get_dictionary_mut(id).map_err(err)?;
                 let original_contents = page_dict.get(b"Contents").ok().cloned();
@@ -540,7 +576,7 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
             }
             kids.push(Object::Reference(id));
         } else {
-            let id=doc.add_object(dictionary!{"Type"=>"Page","Parent"=>preflight.pages_root,"MediaBox"=>array(&[0.,0.,crop.width,crop.height]),"Rotate"=>page.rotation.rem_euclid(360),"Resources"=>dictionary!{"XObject"=>xobjects,"Font"=>page_fonts,"ExtGState"=>states},"Contents"=>stream});
+            let id=doc.add_object(dictionary!{"Type"=>"Page","Parent"=>preflight.pages_root,"MediaBox"=>array(&[0.,0.,crop.width,crop.height]),"Rotate"=>page.rotation.rem_euclid(360),"Resources"=>dictionary!{"XObject"=>xobjects,"Font"=>font_resources,"ExtGState"=>states},"Contents"=>stream});
             kids.push(Object::Reference(id));
         }
     }
@@ -567,13 +603,19 @@ impl TempDir {
 impl Drop for TempDir { fn drop(&mut self) { let _=fs::remove_dir_all(&self.0); } }
 fn renderer()->Result<PathBuf,String> {
     let path=std::env::var_os("TOOLBOX_PDFTOPPM_PATH").filter(|path| !path.is_empty()).map(PathBuf::from).unwrap_or_else(||PathBuf::from("pdftoppm"));
-    if Command::new(&path).arg("-h").output().map(|o|o.status.success()).unwrap_or(false) { Ok(path) } else { Err("pdftoppm is required for PDF previews. Set TOOLBOX_PDFTOPPM_PATH or add it to PATH.".into()) }
+    let mut command = Command::new(&path);
+    command.arg("-h");
+    if super::helper_available(command) { Ok(path) } else { Err("pdftoppm is required for PDF previews. Set TOOLBOX_PDFTOPPM_PATH or add it to PATH.".into()) }
 }
 
 fn text_extractor()->Option<PathBuf> {
     std::env::var_os("TOOLBOX_PDFTOTEXT_PATH").map(PathBuf::from).filter(|path|path.is_file())
         .or_else(|| crate::kit::resources::application_resource_root().and_then(|root| [root.join("pdf-bin").join("pdftotext"), root.join("resources").join("pdftotext"), root.join("pdftotext")].into_iter().find(|path|path.is_file())))
-        .or_else(|| Command::new("pdftotext").arg("-h").output().ok().filter(|output|output.status.success()).map(|_|PathBuf::from("pdftotext")))
+        .or_else(|| {
+            let mut command = Command::new("pdftotext");
+            command.arg("-h");
+            super::helper_available(command).then(|| PathBuf::from("pdftotext"))
+        })
 }
 
 fn xml_attribute(element: &quick_xml::events::BytesStart<'_>, name: &[u8]) -> Option<String> {
@@ -582,9 +624,13 @@ fn xml_attribute(element: &quick_xml::events::BytesStart<'_>, name: &[u8]) -> Op
 
 fn xml_number(element: &quick_xml::events::BytesStart<'_>, name: &[u8]) -> Option<f32> { xml_attribute(element,name)?.parse().ok() }
 
-fn extract_text_runs(path: &Path, page_number: usize, width: f32, height: f32) -> Option<Vec<PdfTextRun>> {
+fn extract_text_runs(path: &Path, page_number: usize, width: f32, height: f32, deadline: Instant) -> Option<Vec<PdfTextRun>> {
     let extractor=text_extractor()?;
-    let output=Command::new(extractor).args(["-bbox-layout","-enc","UTF-8","-f"]).arg(page_number.to_string()).arg("-l").arg(page_number.to_string()).arg(path).arg("-").output().ok()?;
+    let output=super::run_bounded_helper({
+        let mut command = Command::new(extractor);
+        command.args(["-bbox-layout","-enc","UTF-8","-f"]).arg(page_number.to_string()).arg("-l").arg(page_number.to_string()).arg(path).arg("-");
+        command
+    }, deadline, super::PDF_TEXT_MAX_OUTPUT_BYTES, super::PDF_TEXT_MAX_ERROR_BYTES, "PDF text extraction timed out.").ok()?;
     if !output.status.success() { return None; }
     let mut reader=XmlReader::from_reader(output.stdout.as_slice());
     reader.config_mut().trim_text(false);
@@ -596,6 +642,7 @@ fn extract_text_runs(path: &Path, page_number: usize, width: f32, height: f32) -
         match reader.read_event_into(&mut buffer) {
             Ok(Event::Start(element)) if element.local_name().as_ref() == b"page" => {
                 source_size=(xml_number(&element,b"width").unwrap_or(width),xml_number(&element,b"height").unwrap_or(height));
+                if !source_size.0.is_finite() || !source_size.1.is_finite() || source_size.0 <= 0. || source_size.1 <= 0. { return None; }
             }
             Ok(Event::Start(element)) if element.local_name().as_ref() == b"word" => {
                 current=Some((xml_number(&element,b"xMin")?,xml_number(&element,b"yMin")?,xml_number(&element,b"xMax")?,xml_number(&element,b"yMax")?,String::new()));
@@ -608,8 +655,9 @@ fn extract_text_runs(path: &Path, page_number: usize, width: f32, height: f32) -
             }
             Ok(Event::End(element)) if element.local_name().as_ref() == b"word" => {
                 if let Some((x_min,y_min,x_max,y_max,text))=current.take() {
+                    if ![x_min,y_min,x_max,y_max].iter().all(|value| value.is_finite()) { return None; }
                     if !text.trim().is_empty() && runs.len() < 10_000 && x_max > x_min && y_max > y_min {
-                        let sx=width/source_size.0.max(1.); let sy=height/source_size.1.max(1.);
+                        let sx=width/source_size.0; let sy=height/source_size.1;
                         runs.push(PdfTextRun{text,x:x_min*sx,y:y_min*sy,width:(x_max-x_min)*sx,height:(y_max-y_min)*sy});
                     }
                 }
@@ -624,12 +672,14 @@ fn extract_text_runs(path: &Path, page_number: usize, width: f32, height: f32) -
 }
 fn render(path:&Path,index:usize,renderer:&Path,temp:&TempDir)->Result<ScenePreview,String> {
     let prefix=temp.0.join("render");
-    let output=Command::new(renderer).args(["-png","-singlefile","-scale-to","1600","-f"]).arg((index+1).to_string()).arg("-l").arg((index+1).to_string()).arg(path).arg(&prefix).output().map_err(err)?;
+    let output=super::run_bounded_helper({
+        let mut command = Command::new(renderer);
+        command.args(["-png","-singlefile","-scale-to"]).arg(super::PDF_PREVIEW_MAX_DIMENSION.to_string()).arg("-f").arg((index+1).to_string()).arg("-l").arg((index+1).to_string()).arg(path).arg(&prefix);
+        command
+    }, Instant::now() + super::PDF_PREVIEW_TIMEOUT, 64 * 1024, super::PDF_TEXT_MAX_ERROR_BYTES, "PDF preview renderer timed out.").map_err(err)?;
     if !output.status.success() { return Err("pdftoppm could not render this PDF".into()); }
-    let bytes=fs::read(prefix.with_extension("png")).map_err(err)?;
-    let image=image::load_from_memory_with_format(&bytes,image::ImageFormat::Png).map_err(err)?;
-    if image.width()>1600 || image.height()>1600 { return Err("Preview exceeded size limit".into()); }
-    Ok(ScenePreview{data_url:format!("data:image/png;base64,{}",base64::engine::general_purpose::STANDARD.encode(bytes)),width:image.width(),height:image.height()})
+    let (bytes,width,height)=super::read_preview_png(&prefix.with_extension("png")).map_err(err)?;
+    Ok(ScenePreview{data_url:format!("data:image/png;base64,{}",base64::engine::general_purpose::STANDARD.encode(bytes)),width,height})
 }
 pub fn preview(request:&PreviewRequest)->Result<ScenePreview,String> {
     if request.page_index>=request.scene.pages.len() { return Err("Preview page outside scene".into()); }
@@ -655,7 +705,7 @@ pub fn inspect(path:&Path)->Result<PdfDocumentMetadata,String> {
     compose(path,&scene)?.save(&normalized).map_err(err)?;
     for p in &mut pages {
         p.preview=Some(render(&normalized,p.index,&renderer,&temp)?.data_url);
-        p.text_runs=extract_text_runs(path,p.index+1,p.width,p.height);
+        p.text_runs=extract_text_runs(path,p.index+1,p.width,p.height,Instant::now() + super::PDF_TEXT_TIMEOUT);
     }
     Ok(PdfDocumentMetadata{path:path.to_path_buf(),pages})
 }
@@ -734,6 +784,33 @@ mod tests {
         let outlines = d.add_object(dictionary! { "Type" => "Outlines", "Count" => 0 });
         let acro_form = d.add_object(dictionary! { "Fields" => vec![Object::Reference(widget)] });
         let catalog = d.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id, "Names" => names, "Outlines" => outlines, "AcroForm" => acro_form });
+        d.trailer.set("Root", catalog);
+        d.save(path).unwrap();
+    }
+
+    fn inherited_collision_fixture(path: &Path) {
+        let mut d = Document::with_version("1.7");
+        let pages_id = d.new_object_id();
+        let existing_font = d.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Courier" });
+        let fonts_id = d.add_object(dictionary! { "SceneFont" => existing_font, "SceneFont1" => existing_font });
+        let existing_xobject = d.add_object(Stream::new(dictionary! { "Type" => "XObject", "Subtype" => "Form", "BBox" => array(&[0., 0., 1., 1.]) }, Vec::new()));
+        let xobjects_id = d.add_object(dictionary! {
+            "Original" => existing_xobject, "Original1" => existing_xobject,
+            "Sig1" => existing_xobject, "Sig11" => existing_xobject,
+        });
+        let existing_state = d.add_object(dictionary! { "Type" => "ExtGState", "ca" => 0.1, "CA" => 0.1 });
+        let states_id = d.add_object(dictionary! { "S0" => existing_state, "S01" => existing_state, "S1" => existing_state, "S11" => existing_state });
+        let resources_id = d.add_object(dictionary! {
+            "Font" => Object::Reference(fonts_id), "XObject" => Object::Reference(xobjects_id),
+            "ExtGState" => Object::Reference(states_id),
+        });
+        let content = d.add_object(Stream::new(dictionary! {}, b"BT /SceneFont 18 Tf 40 260 Td (Original content) Tj ET".to_vec()));
+        let page = d.add_object(dictionary! { "Type" => "Page", "Parent" => pages_id, "MediaBox" => array(&[0., 0., 612., 792.]), "Contents" => content });
+        d.objects.insert(pages_id, dictionary! {
+            "Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1,
+            "Resources" => Object::Reference(resources_id),
+        }.into());
+        let catalog = d.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
         d.trailer.set("Root", catalog);
         d.save(path).unwrap();
     }
@@ -925,10 +1002,45 @@ mod tests {
     }
 
     #[test]
+    fn scene_allocates_overlay_resources_around_inherited_names() {
+        let temp = TempDir::new().unwrap();
+        let input = temp.0.join("inherited-collisions.pdf");
+        let signature = temp.0.join("signature.png");
+        inherited_collision_fixture(&input);
+        let image = image::RgbaImage::from_pixel(4, 4, image::Rgba([0, 0, 0, 255]));
+        image.save(&signature).unwrap();
+
+        let mut signature_object = object(Kind::Signature);
+        signature_object.signature_mode = Some(SignatureMode::Image);
+        signature_object.signature_path = Some(signature);
+        let model = PdfScene { pages: vec![ScenePage {
+            source_index: Some(0), width: 612., height: 792., rotation: 0,
+            crop: Some(Rect { x: 0., y: 0., width: 500., height: 700. }),
+            source_rotation: None, source_box: None,
+            objects: vec![object(Kind::Text), signature_object],
+        }] };
+
+        let composed = compose(&input, &model).unwrap();
+        let page = composed.get_pages().values().next().copied().unwrap();
+        let content = String::from_utf8_lossy(&composed.get_page_content(page)).into_owned();
+        assert!(content.contains("/SceneFont2 18 Tf"), "font resource collision: {content}");
+        assert!(content.contains("/S02 gs") && content.contains("/S12 gs"), "state resource collisions: {content}");
+        assert!(content.contains("/Original2 Do") && content.contains("/Sig12 Do"), "xobject resource collisions: {content}");
+
+        let resources = composed.get_dictionary(page).unwrap().get(b"Resources").unwrap().as_dict().unwrap();
+        let fonts = resources.get(b"Font").unwrap().as_dict().unwrap();
+        let xobjects = resources.get(b"XObject").unwrap().as_dict().unwrap();
+        let states = resources.get(b"ExtGState").unwrap().as_dict().unwrap();
+        for name in ["SceneFont", "SceneFont1", "SceneFont2"] { assert!(fonts.has(name.as_bytes())); }
+        for name in ["Original", "Original1", "Original2", "Sig1", "Sig11", "Sig12"] { assert!(xobjects.has(name.as_bytes())); }
+        for name in ["S0", "S01", "S02", "S1", "S11", "S12"] { assert!(states.has(name.as_bytes())); }
+    }
+
+    #[test]
     fn extracts_selectable_text_runs_when_the_local_poppler_helper_is_available() {
         if text_extractor().is_none() { return; }
         let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); fixture(&input);
-        let runs=extract_text_runs(&input,1,300.,200.).unwrap();
+        let runs=extract_text_runs(&input,1,300.,200.,Instant::now() + super::super::PDF_TEXT_TIMEOUT).unwrap();
         assert!(runs.iter().any(|run|run.text.contains("Original")),"runs: {runs:?}");
     }
     #[test]

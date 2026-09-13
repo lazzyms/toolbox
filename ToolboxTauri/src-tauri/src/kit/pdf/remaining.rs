@@ -533,18 +533,20 @@ fn image_as_jpeg(path: &PathBuf) -> Result<(Vec<u8>, u32, u32), String> {
 }
 
 pub fn add_page_numbers(request: &PageOverlayRequest, input: PathBuf) -> JobOutcome {
-    overlay(request, input, "-numbered", |page_number, width, height, font_name, _state_name| {
+    overlay(request, input, "-numbered", |page_number, page, font_name, _state_name| {
         let number = request.start_number.unwrap_or(1).saturating_add(page_number as u32).saturating_sub(1);
         let size = request.font_size.unwrap_or(12).clamp(8, 72);
-        let (x, y) = number_position(request.position.as_deref(), width, height);
+        let (x, y) = number_position(request.position.as_deref(), page.display_width, page.display_height);
+        let (x, y) = page_point_from_display(page, x, y);
         format!("BT /{font_name} {size} Tf {x} {y} Td ({number}) Tj ET")
     }, 100)
 }
 
 pub fn watermark(request: &PageOverlayRequest, input: PathBuf) -> JobOutcome {
     if let Some(path) = &request.logo_path { return watermark_image(request, input, path); }
-    overlay(request, input, "-watermarked", |_, width, height, font_name, _state_name| {
-        let (x, y) = watermark_position(request.position.as_deref(), width, height);
+    overlay(request, input, "-watermarked", |_, page, font_name, _state_name| {
+        let (x, y) = watermark_position(request.position.as_deref(), page.display_width, page.display_height);
+        let (x, y) = page_point_from_display(page, x, y);
         format!("BT /{font_name} 48 Tf {x} {y} Td ({}) Tj ET", escape(&request.text))
     }, request.opacity.clamp(1, 100))
 }
@@ -639,8 +641,53 @@ fn save(mut document: Document, input: PathBuf, output: OutputReservation, detai
     }
 }
 
+#[derive(Clone, Copy)]
+struct OverlayPageGeometry {
+    left: f32,
+    bottom: f32,
+    width: f32,
+    height: f32,
+    rotation: i32,
+    display_width: f32,
+    display_height: f32,
+}
+
+fn overlay_page_geometry(document: &Document, page_id: lopdf::ObjectId) -> Result<OverlayPageGeometry, String> {
+    let (left, bottom, right, top) = page_bounds(document, page_id)?;
+    let rotation = super::inherited(document, page_id, b"Rotate")?
+        .map(|value| value.as_i64().map_err(|error| error.to_string()))
+        .transpose()?
+        .unwrap_or(0)
+        .rem_euclid(360) as i32;
+    if rotation % 90 != 0 { return Err("PDF page rotation must be a multiple of 90 degrees".to_string()); }
+    let width = right - left;
+    let height = top - bottom;
+    let (display_width, display_height) = if matches!(rotation, 90 | 270) { (height, width) } else { (width, height) };
+    Ok(OverlayPageGeometry { left, bottom, width, height, rotation, display_width, display_height })
+}
+
+fn page_point_from_display(page: OverlayPageGeometry, x: f32, y: f32) -> (f32, f32) {
+    let (x, y) = match page.rotation {
+        0 => (x, y),
+        90 => (page.width - y, x),
+        180 => (page.width - x, page.height - y),
+        _ => (y, page.height - x),
+    };
+    (page.left + x, page.bottom + y)
+}
+
+fn image_origin_from_display(page: OverlayPageGeometry, x: f32, y: f32, image_width: f32, image_height: f32) -> (f32, f32) {
+    let (x, y) = match page.rotation {
+        0 => (x, y),
+        90 => (page.width - image_width - y, x),
+        180 => (page.width - image_width - x, page.height - image_height - y),
+        _ => (y, page.height - image_height - x),
+    };
+    (page.left + x, page.bottom + y)
+}
+
 fn overlay<F>(request: &PageOverlayRequest, input: PathBuf, suffix: &str, content: F, opacity: u8) -> JobOutcome
-where F: Fn(usize, f32, f32, &str, &str) -> String {
+where F: Fn(usize, OverlayPageGeometry, &str, &str) -> String {
     let mut document = match load_existing_document_for_mutation(&input) { Ok(document) => document, Err(error) => return failure(input, error) };
     if let Err(error) = validate_overlay_scope(request.pages.as_deref(), document.get_pages().len()) { return failure(input, error); }
     let output = match OutputNaming::reserve_destination(&input, &request.output_location, suffix, "pdf") {
@@ -651,16 +698,14 @@ where F: Fn(usize, f32, f32, &str, &str) -> String {
     let opacity_id = document.add_object(dictionary! { "Type" => "ExtGState", "ca" => opacity as f32 / 100.0, "CA" => opacity as f32 / 100.0 });
     for (number, page_id) in document.get_pages().values().copied().enumerate() {
         if request.pages.as_ref().is_some_and(|pages| !pages.contains(&number)) { continue; }
-        let (left, bottom, right, top) = match page_bounds(&document, page_id) {
-            Ok(bounds) => bounds,
+        let page = match overlay_page_geometry(&document, page_id) {
+            Ok(page) => page,
             Err(error) => return failure(input, error),
         };
-        let width = right - left;
-        let height = top - bottom;
-        if width <= 0.0 || height <= 0.0 { return failure(input, "PDF page has invalid dimensions".to_string()); }
+        if page.width <= 0.0 || page.height <= 0.0 { return failure(input, "PDF page has invalid dimensions".to_string()); }
         let font_name = match super::editor::add_resource(&mut document, page_id, "Font", "Fnum", Object::Reference(font_id)) { Ok(name) => name, Err(error) => return failure(input, error) };
         let state_name = match super::editor::add_resource(&mut document, page_id, "ExtGState", "GSwm", Object::Reference(opacity_id)) { Ok(name) => name, Err(error) => return failure(input, error) };
-        if let Err(error) = document.add_page_contents(page_id, format!("q /{state_name} gs {} Q", content(number + 1, width, height, &font_name, &state_name)).into_bytes()) { return failure(input, error.to_string()); }
+        if let Err(error) = document.add_page_contents(page_id, format!("q /{state_name} gs {} Q", content(number + 1, page, &font_name, &state_name)).into_bytes()) { return failure(input, error.to_string()); }
     }
     match document.save(output.path()) {
         Ok(_) => match output.publish() {
@@ -689,19 +734,26 @@ fn number_position(position: Option<&str>, width: f32, height: f32) -> (f32, f32
 fn watermark_image(request: &PageOverlayRequest, input: PathBuf, logo: &PathBuf) -> JobOutcome {
     let mut document = match load_existing_document_for_mutation(&input) { Ok(document) => document, Err(error) => return failure(input, error) };
     if let Err(error) = validate_overlay_scope(request.pages.as_deref(), document.get_pages().len()) { return failure(input, error); }
-    let (bytes, width, height) = match image_as_jpeg(logo) { Ok(value) => value, Err(error) => return failure(input, error) };
+    let (bytes, image_width, image_height) = match image_as_jpeg(logo) { Ok(value) => value, Err(error) => return failure(input, error) };
     let output = match OutputNaming::reserve_destination(&input, &request.output_location, "-watermarked", "pdf") {
         Ok(output) => output,
         Err(error) => return failure(input, format!("Could not reserve watermarked PDF output: {error}")),
     };
-    let image_id = document.add_object(Stream::new(dictionary! { "Type" => "XObject", "Subtype" => "Image", "Width" => width as i64, "Height" => height as i64, "ColorSpace" => "DeviceRGB", "BitsPerComponent" => 8, "Filter" => "DCTDecode" }, bytes));
+    let image_id = document.add_object(Stream::new(dictionary! { "Type" => "XObject", "Subtype" => "Image", "Width" => image_width as i64, "Height" => image_height as i64, "ColorSpace" => "DeviceRGB", "BitsPerComponent" => 8, "Filter" => "DCTDecode" }, bytes));
     let state_id = document.add_object(dictionary! { "Type" => "ExtGState", "ca" => request.opacity.clamp(1, 100) as f32 / 100.0, "CA" => request.opacity.clamp(1, 100) as f32 / 100.0 });
     for (number, page_id) in document.get_pages().values().copied().enumerate() {
         if request.pages.as_ref().is_some_and(|pages| !pages.contains(&number)) { continue; }
         let image_name = match super::editor::add_resource(&mut document, page_id, "XObject", "Iwm", Object::Reference(image_id)) { Ok(name) => name, Err(error) => return failure(input, error) };
         let state_name = match super::editor::add_resource(&mut document, page_id, "ExtGState", "GSwm", Object::Reference(state_id)) { Ok(name) => name, Err(error) => return failure(input, error) };
-        let (x, y) = watermark_position(request.position.as_deref(), width as f32, height as f32);
-        if let Err(error) = document.add_page_contents(page_id, format!("q /{state_name} gs {} 0 0 {} {} {} cm /{image_name} Do Q", width.min(180) as f32, height.min(100) as f32, x, y).into_bytes()) { return failure(input, error.to_string()); }
+        let page = match overlay_page_geometry(&document, page_id) {
+            Ok(page) => page,
+            Err(error) => return failure(input, error),
+        };
+        let draw_width = image_width.min(180) as f32;
+        let draw_height = image_height.min(100) as f32;
+        let (x, y) = watermark_position(request.position.as_deref(), page.display_width, page.display_height);
+        let (x, y) = image_origin_from_display(page, x, y, draw_width, draw_height);
+        if let Err(error) = document.add_page_contents(page_id, format!("q /{state_name} gs {} 0 0 {} {} {} cm /{image_name} Do Q", draw_width, draw_height, x, y).into_bytes()) { return failure(input, error.to_string()); }
     }
     match document.save(output.path()) {
         Ok(_) => match output.publish() {
@@ -862,6 +914,25 @@ mod tests {
         document.save(path).unwrap();
     }
 
+    fn offset_rotated_overlay_fixture(path: &Path) {
+        let mut document = Document::with_version("1.7");
+        let pages_id = document.new_object_id();
+        let font_id = document.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
+        let resources_id = document.add_object(dictionary! { "Font" => dictionary! { "F1" => font_id } });
+        let content = document.add_object(Stream::new(dictionary! {}, Vec::new()));
+        let page_id = document.add_object(dictionary! {
+            "Type" => "Page", "Parent" => pages_id, "Rotate" => 90,
+            "Resources" => Object::Reference(resources_id), "Contents" => content,
+        });
+        document.objects.insert(pages_id, dictionary! {
+            "Type" => "Pages", "Kids" => vec![Object::Reference(page_id)], "Count" => 1,
+            "MediaBox" => vec![10.into(), 20.into(), 250.into(), 360.into()],
+        }.into());
+        let catalog_id = document.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+        document.trailer.set("Root", catalog_id);
+        document.save(path).unwrap();
+    }
+
     #[test]
     fn legacy_overlays_merge_inherited_and_indirect_resources_without_losing_content() {
         let cases = ["numbers", "watermark", "image-watermark"];
@@ -947,6 +1018,44 @@ mod tests {
             }
             fs::remove_dir_all(root).unwrap();
         }
+    }
+
+    #[test]
+    fn legacy_page_numbers_and_logo_watermarks_use_offset_rotated_page_coordinates() {
+        let root = split_fixture_root("offset-rotated-overlay-coordinates");
+        let input = root.join("document.pdf");
+        let output = root.join("outputs");
+        fs::create_dir_all(&output).unwrap();
+        offset_rotated_overlay_fixture(&input);
+
+        let numbered = add_page_numbers(&PageOverlayRequest {
+            paths: vec![input.clone()], text: String::new(), opacity: 100,
+            position: Some("bottom-right".into()), logo_path: None, pages: None,
+            start_number: None, font_size: None, output_location: OutputLocation::CustomFolder(output.clone()),
+        }, input.clone());
+        assert!(numbered.failure.is_none(), "page numbers failed: {:?}", numbered.failure);
+        let numbered_document = Document::load(numbered.output_paths.first().unwrap()).unwrap();
+        let numbered_page = numbered_document.get_pages().values().next().copied().unwrap();
+        let numbered_content = String::from_utf8_lossy(&numbered_document.get_page_content(numbered_page)).into_owned();
+        assert!(numbered_content.contains("226 300 Td"), "number coordinates: {numbered_content}");
+
+        let logo = root.join("logo.jpg");
+        let mut jpeg = Cursor::new(Vec::new());
+        JpegEncoder::new(&mut jpeg).encode_image(&DynamicImage::ImageRgb8(image::RgbImage::from_pixel(40, 30, image::Rgb([255, 0, 0])))).unwrap();
+        fs::write(&logo, jpeg.into_inner()).unwrap();
+        let watermarked = watermark(&PageOverlayRequest {
+            paths: vec![input.clone()], text: String::new(), opacity: 70,
+            position: Some("bottom-right".into()), logo_path: Some(logo), pages: None,
+            start_number: None, font_size: None, output_location: OutputLocation::CustomFolder(output),
+        }, input.clone());
+        assert!(watermarked.failure.is_none(), "logo watermark failed: {:?}", watermarked.failure);
+        let watermarked_document = Document::load(watermarked.output_paths.first().unwrap()).unwrap();
+        let watermarked_page = watermarked_document.get_pages().values().next().copied().unwrap();
+        let watermarked_content = String::from_utf8_lossy(&watermarked_document.get_page_content(watermarked_page)).into_owned();
+        assert!(watermarked_content.contains("40 0 0 30 186 180 cm"), "logo coordinates: {watermarked_content}");
+
+        for output in numbered.output_paths.into_iter().chain(watermarked.output_paths) { let _ = fs::remove_file(output); }
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -12,6 +12,7 @@ const conversionIds = new Set<string>(conversionActions.map((tool) => tool.id));
 const nonInspectingConversionIds = new Set(["images-to-pdf", "pdf-merge", "pdf-compress"]);
 const outputPreviewLimitations: Partial<Record<AtomicToolId, string>> = {
   "pdf-to-text": "Output preview unavailable. Export creates a text file from the selected pages.",
+  "pdf-image-extract": "Output preview unavailable. Export extracts embedded JPEG images from the selected pages.",
   "pdf-extract-pages": "Output preview unavailable. Export creates a PDF containing the selected pages.",
 };
 type PdfInspectionState =
@@ -35,6 +36,14 @@ const formatPageRange = (pages: number[]) => {
     else ranges.push(String(page));
   }
   return ranges.join(",");
+};
+
+const pdfToImagesOutputSummary = (selectedPages: number[], dpi: string, format: string) => {
+  const pageSummary = selectedPages.length
+    ? `${selectedPages.length === 1 ? "page" : "pages"} ${formatPageRange(selectedPages)}`
+    : "the selected pages";
+  const formatLabel = format === "jpg" ? "JPEG" : format.toUpperCase();
+  return `Output preview unavailable. Export renders ${pageSummary} at ${dpi} DPI as ${formatLabel} image files.`;
 };
 
 export const PDFConversionWorkspaceView = ({ utility }: { utility: ToolDefinition }) => {
@@ -270,7 +279,11 @@ const ConversionControls = ({
     : null;
   const canExport = files.length > 0 && (!needsMultipleInputs || files.length > 1) && rangeSelectionIssue === null
     && (nonInspectingConversionIds.has(activeUtility.id) || inspectionReady);
-  const outputPreviewLimitation = outputPreviewLimitations[activeUtility.id];
+  const outputPreviewLimitation = activeUtility.id === "pdf-to-images"
+    ? pdfToImagesOutputSummary(selectedPages, dpi, format)
+    : activeUtility.capability.supportsPreview
+      ? null
+      : outputPreviewLimitations[activeUtility.id] ?? "Output preview unavailable for this conversion.";
   const previewRegionLabel = outputPreviewLimitation ? "Source page selection" : "Conversion preview";
 
   return (

@@ -4,8 +4,13 @@ pub mod editor;
 pub mod remaining;
 
 use std::collections::HashSet;
-use std::path::PathBuf;
-use std::process::Command;
+use std::fs;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use lopdf::{Document, LoadOptions, Object, ObjectId};
 
@@ -13,6 +18,152 @@ use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::ToolError;
 
 pub struct PDFProcessor;
+
+pub(crate) const PDF_MAX_PAGE_POINTS: f32 = 14_400.0;
+pub(crate) const PDF_PREVIEW_MAX_DIMENSION: u32 = 1_600;
+pub(crate) const PDF_PREVIEW_MAX_PIXELS: u64 = 2_560_000;
+pub(crate) const PDF_PREVIEW_MAX_BYTES: u64 = 20 * 1024 * 1024;
+pub(crate) const PDF_PREVIEW_TIMEOUT: Duration = Duration::from_secs(15);
+pub(crate) const PDF_HELPER_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+pub(crate) const PDF_TEXT_MAX_OUTPUT_BYTES: usize = 10 * 1024 * 1024;
+pub(crate) const PDF_TEXT_MAX_ERROR_BYTES: usize = 1024 * 1024;
+pub(crate) const PDF_TEXT_TIMEOUT: Duration = Duration::from_secs(15);
+
+fn read_helper_output<R: Read>(mut reader: R, stream: &'static str, maximum: usize) -> Result<Vec<u8>, String> {
+    let mut output = Vec::new();
+    let mut buffer = [0_u8; 8192];
+    loop {
+        let count = reader.read(&mut buffer).map_err(|error| format!("Could not read PDF helper {stream}: {error}"))?;
+        if count == 0 {
+            return Ok(output);
+        }
+        if output.len().saturating_add(count) > maximum {
+            return Err(format!("PDF helper {stream} output exceeds its limit."));
+        }
+        output.extend_from_slice(&buffer[..count]);
+    }
+}
+
+fn spawn_helper_reader<R: Read + Send + 'static>(reader: R, stream: &'static str, maximum: usize) -> Receiver<Result<Vec<u8>, String>> {
+    let (sender, receiver) = mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let _ = sender.send(read_helper_output(reader, stream, maximum));
+    });
+    receiver
+}
+
+fn poll_helper_reader(receiver: &Receiver<Result<Vec<u8>, String>>, stream: &'static str) -> Result<Option<Result<Vec<u8>, String>>, String> {
+    match receiver.try_recv() {
+        Ok(result) => Ok(Some(result)),
+        Err(TryRecvError::Empty) => Ok(None),
+        Err(TryRecvError::Disconnected) => Err(format!("PDF helper {stream} reader stopped unexpectedly.")),
+    }
+}
+
+pub(crate) fn run_bounded_helper(mut command: Command, deadline: Instant, max_stdout: usize, max_stderr: usize, timeout_message: &str) -> Result<std::process::Output, String> {
+    if Instant::now() >= deadline {
+        return Err(timeout_message.to_string());
+    }
+    let mut child = command.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|error| format!("Could not run PDF helper: {error}"))?;
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("PDF helper stdout was not captured.".to_string());
+        }
+    };
+    let stderr = match child.stderr.take() {
+        Some(stderr) => stderr,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("PDF helper stderr was not captured.".to_string());
+        }
+    };
+    let stdout_reader = spawn_helper_reader(stdout, "stdout", max_stdout);
+    let stderr_reader = spawn_helper_reader(stderr, "stderr", max_stderr);
+    let mut status = None;
+    let mut stdout_result = None;
+    let mut stderr_result = None;
+    let mut timed_out = false;
+
+    loop {
+        if stdout_result.is_none() {
+            stdout_result = poll_helper_reader(&stdout_reader, "stdout")?;
+        }
+        if stderr_result.is_none() {
+            stderr_result = poll_helper_reader(&stderr_reader, "stderr")?;
+        }
+        if stdout_result.as_ref().is_some_and(Result::is_err) || stderr_result.as_ref().is_some_and(Result::is_err) {
+            if status.is_none() {
+                let _ = child.kill();
+                status = Some(child.wait().map_err(|error| format!("Could not stop PDF helper: {error}"))?);
+            }
+        } else if status.is_none() {
+            status = child.try_wait().map_err(|error| {
+                let _ = child.kill();
+                let _ = child.wait();
+                format!("Could not read PDF helper status: {error}")
+            })?;
+        }
+
+        if status.is_some() && stdout_result.is_some() && stderr_result.is_some() {
+            break;
+        }
+        if Instant::now() >= deadline {
+            timed_out = true;
+            let _ = child.kill();
+            let _ = child.wait();
+            break;
+        }
+        thread::sleep(Duration::from_millis(10).min(deadline.saturating_duration_since(Instant::now())));
+    }
+
+    if timed_out {
+        return Err(timeout_message.to_string());
+    }
+    let status = status.ok_or("PDF helper did not report a status.")?;
+    let stdout = stdout_result.ok_or("PDF helper stdout was not read.")??;
+    let stderr = stderr_result.ok_or("PDF helper stderr was not read.")??;
+    Ok(std::process::Output { status, stdout, stderr })
+}
+
+pub(crate) fn helper_available(command: Command) -> bool {
+    run_bounded_helper(
+        command,
+        Instant::now() + PDF_HELPER_PROBE_TIMEOUT,
+        64 * 1024,
+        PDF_TEXT_MAX_ERROR_BYTES,
+        "PDF helper probe timed out.",
+    )
+    .map(|output| output.status.success())
+    .unwrap_or(false)
+}
+
+pub(crate) fn preview_png_dimensions(bytes: &[u8]) -> Result<(u32, u32), String> {
+    if bytes.len() < 24 || &bytes[..8] != b"\x89PNG\r\n\x1a\n" || &bytes[12..16] != b"IHDR" {
+        return Err("PDF helper did not produce a PNG preview.".to_string());
+    }
+    let width = u32::from_be_bytes(bytes[16..20].try_into().expect("PNG width has four bytes"));
+    let height = u32::from_be_bytes(bytes[20..24].try_into().expect("PNG height has four bytes"));
+    let pixels = u64::from(width).checked_mul(u64::from(height)).ok_or_else(|| "PDF preview dimensions overflowed.".to_string())?;
+    if width == 0 || height == 0 || width > PDF_PREVIEW_MAX_DIMENSION || height > PDF_PREVIEW_MAX_DIMENSION || pixels > PDF_PREVIEW_MAX_PIXELS {
+        return Err("PDF preview exceeds its raster size limit.".to_string());
+    }
+    Ok((width, height))
+}
+
+pub(crate) fn read_preview_png(path: &Path) -> Result<(Vec<u8>, u32, u32), String> {
+    let size = fs::metadata(path).map_err(|error| format!("Could not inspect PDF preview: {error}"))?.len();
+    if size > PDF_PREVIEW_MAX_BYTES {
+        return Err("PDF preview exceeds its file-size limit.".to_string());
+    }
+    let bytes = fs::read(path).map_err(|error| format!("Could not read PDF preview: {error}"))?;
+    let (width, height) = preview_png_dimensions(&bytes)?;
+    image::load_from_memory_with_format(&bytes, image::ImageFormat::Png).map_err(|error| format!("PDF helper did not produce a valid PNG preview: {error}"))?;
+    Ok((bytes, width, height))
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct PdfMutationPreflight {
