@@ -4,6 +4,8 @@ import { UtilityRegistry, workspaceForTool } from "../../src/registry";
 
 const fixturePath = path.resolve("src-tauri/icons/icon.png");
 const fixtureName = path.basename(fixturePath);
+const pdfFixturePath = path.resolve("tests/fixtures/document.pdf");
+const pdfFixtureName = path.basename(pdfFixturePath);
 const mockedOutputPaths = [`${fixturePath}.output-one`, `${fixturePath}.output-two`];
 
 type MockOutcome = {
@@ -26,7 +28,7 @@ type TestWindow = Window & {
 };
 
 test.beforeEach(async ({ page }) => {
-    await page.addInitScript(({ fixturePath, mockedOutputPaths }) => {
+    await page.addInitScript(({ fixturePath, pdfFixturePath, mockedOutputPaths }) => {
         const invocations: Array<{ command: string; args: unknown }> = [];
         (window as TestWindow).__toolboxInvocations = invocations;
         Object.defineProperty(window.navigator, "platform", { configurable: true, value: "MacIntel" });
@@ -44,7 +46,7 @@ test.beforeEach(async ({ page }) => {
                     if (dialogResults?.length) return dialogResults.shift() ?? null;
                     if ((window as TestWindow).__toolboxSecondPick) {
                         delete (window as TestWindow).__toolboxSecondPick;
-                        return `${fixturePath}.second.pdf`;
+                        return `${pdfFixturePath}.second.pdf`;
                     }
                     return fixturePath;
                 }
@@ -122,7 +124,7 @@ if (command === "preview_pdf_scene_pages") return (args as { request: { pageIndi
         window.__TAURI_EVENT_PLUGIN_INTERNALS__ = {
             unregisterListener: () => undefined,
         };
-    }, { fixturePath, mockedOutputPaths });
+    }, { fixturePath, pdfFixturePath, mockedOutputPaths });
 });
 
 test("every registered feature opens its detail pane", async ({ page }) => {
@@ -353,10 +355,18 @@ const drawSceneMark = async (page: Page, tool: string) => {
     await page.mouse.up();
 };
 
+const chooseFixture = async (page: Page, selectedPath: string) => {
+    await page.evaluate((fixture) => {
+        (window as TestWindow).__toolboxDialogResults = [fixture];
+    }, selectedPath);
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await expect(page.getByText(path.basename(selectedPath), { exact: true })).toBeVisible();
+};
+
 test("crop is applied visually and exported as part of the scene", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Open Crop PDF" }).click();
-    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await chooseFixture(page, pdfFixturePath);
     await drawSceneMark(page, "Crop");
     await page.getByRole("button", { name: "Export PDF", exact: true }).click();
     const invocation = await page.evaluate(() => (window as TestWindow).__toolboxInvocations?.find(c => c.command === "export_pdf_scene"));
@@ -366,7 +376,7 @@ test("crop is applied visually and exported as part of the scene", async ({ page
 test("pdf editor renders page previews", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Open Sign PDF" }).click();
-    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await chooseFixture(page, pdfFixturePath);
     await expect(page.getByRole("group", { name: "PDF page canvas" })).toBeVisible();
     await expect(page.getByRole("img", { name: "Thumbnail of page 1" })).toBeVisible();
 });
@@ -374,7 +384,7 @@ test("pdf editor renders page previews", async ({ page }) => {
 test("PDF editor inserts editable blank pages from thumbnails", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Open Organize PDF" }).click();
-    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await chooseFixture(page, pdfFixturePath);
     await page.getByRole("button", { name: "Add blank page", exact: true }).click();
     await drawSceneMark(page, "Shape");
     await page.getByRole("button", { name: "Export PDF", exact: true }).click();
@@ -396,8 +406,8 @@ test("editor command rails keep one document session while changing tools", asyn
 
     await page.getByRole("button", { name: "← All tools" }).click();
     await page.getByRole("button", { name: "Open PDF editor", exact: true }).click();
-    await page.getByRole("button", { name: "Choose files to process" }).click();
-await expect(page.getByRole("group", { name: "PDF page canvas" })).toBeVisible();
+    await chooseFixture(page, pdfFixturePath);
+    await expect(page.getByRole("group", { name: "PDF page canvas" })).toBeVisible();
     await page.getByRole("toolbar", { name: "PDF editor tools" }).getByRole("button", { name: "Crop", exact: true }).click();
     await expect(page.getByText("Drag a rectangle on the page to crop.", { exact: true })).toBeVisible();
     await expect(page.locator(".file-selection-count")).toHaveText("1 file open");
@@ -419,7 +429,7 @@ test("vision tools explain unavailable resources before file selection", async (
 test("PDF editor protects the last page and supports unified history", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Open Remove PDF Pages" }).click();
-    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await chooseFixture(page, pdfFixturePath);
     await expect(page.getByRole("button", { name: "Delete selected pages" })).toBeDisabled();
     await drawSceneMark(page, "Text");
     await expect(page.locator(".scene-object-hit")).toHaveCount(1);
@@ -572,7 +582,7 @@ test("Image editor history can undo, redo, and reset the composed plan", async (
 test("PDF to Images identifies source selection and summarizes its non-previewable output", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Open PDF to Images" }).click();
-  await page.getByRole("button", { name: "Choose files to process" }).click();
+  await chooseFixture(page, pdfFixturePath);
   await expect(page.getByRole("region", { name: "Source page selection" })).toBeVisible();
   await expect(page.getByRole("region", { name: "Conversion preview" })).toHaveCount(0);
   await expect(page.getByRole("checkbox", { name: "Page 1" })).toBeChecked();
@@ -592,7 +602,7 @@ test("PDF to Images identifies source selection and summarizes its non-previewab
 test("PDF range splitting rejects a blank range and accepts a range", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Open PDF to Images" }).click();
-    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await chooseFixture(page, pdfFixturePath);
     await page.getByRole("toolbar", { name: "PDF conversion tools" }).getByRole("button", { name: "Split PDF" }).click();
     await page.getByLabel("Split mode").selectOption("ranges");
 
@@ -658,7 +668,7 @@ test("TIFF workspace expands internal pages and sends the displayed order", asyn
 test("non-previewable PDF conversions identify source selection and show deterministic output limits", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Open PDF to Text" }).click();
-    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await chooseFixture(page, pdfFixturePath);
     await expect(page.getByRole("region", { name: "Source page selection" })).toBeVisible();
     await expect(page.getByRole("region", { name: "Conversion preview" })).toHaveCount(0);
     await expect(page.getByText("Output preview unavailable. Export creates a text file from the selected pages.", { exact: true })).toBeVisible();
@@ -682,7 +692,7 @@ test("non-previewable PDF conversions identify source selection and show determi
 test("PDF conversion visibly rejects retained files when an action changes format", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Open Images to PDF" }).click();
-    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await chooseFixture(page, fixturePath);
 
     const rail = page.getByRole("toolbar", { name: "PDF conversion tools" });
     await rail.getByRole("button", { name: "PDF to Text", exact: true }).click();
@@ -697,10 +707,7 @@ test("PDF conversion visibly rejects retained files when an action changes forma
 test("PDF page-scoped conversions send the selected pages and keep OCR gated", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Open PDF to Text" }).click();
-    await page.evaluate(() => {
-        (window as TestWindow).__toolboxDialogResults = ["/local/document.scoped.pdf"];
-    });
-    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await chooseFixture(page, "/local/document.scoped.pdf");
     await expect(page.getByRole("checkbox", { name: "Page 3" })).toBeVisible();
     await page.getByRole("checkbox", { name: "Page 1" }).uncheck();
     await page.getByRole("checkbox", { name: "Page 3" }).uncheck();
@@ -776,7 +783,7 @@ test("remove password exposes one cross-format document tool", async ({ page }) 
 
     await page.goto("/");
     await page.getByRole("button", { name: "Open Remove Password" }).click();
-    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await chooseFixture(page, pdfFixturePath);
     await page.locator('input[type="password"]').fill("test-password");
     await expect(page.locator(".workspace-primary-action")).toBeEnabled();
 });
@@ -872,7 +879,7 @@ test("output action state resets and ignores stale completions", async ({ page }
 test("single-input actions report every selected file instead of truncating the selection", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Open Merge PDF" }).click();
-    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await chooseFixture(page, pdfFixturePath);
     await page.evaluate(() => { (window as TestWindow).__toolboxSecondPick = true; });
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await page.getByRole("button", { name: "Compress PDF", exact: true }).click();
@@ -892,26 +899,26 @@ test("single-input actions report every selected file instead of truncating the 
 test("single-input replacement keeps the source and edit state after cancellation or the same path", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Open Crop PDF" }).click();
-    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await chooseFixture(page, pdfFixturePath);
     await drawSceneMark(page, "Crop");
     await expect(page.getByRole("button", { name: "Reset edits" })).toBeEnabled();
 
-    await page.evaluate((path) => { (window as TestWindow).__toolboxDialogResults = [null, path]; }, fixturePath);
+    await page.evaluate((path) => { (window as TestWindow).__toolboxDialogResults = [null, path]; }, pdfFixturePath);
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await expect(page.locator(".file-selection-count")).toHaveText("1 file open");
-    await expect(page.getByText(fixtureName, { exact: true })).toBeVisible();
+    await expect(page.getByText(pdfFixtureName, { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Reset edits" })).toBeEnabled();
 
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await expect(page.locator(".file-selection-count")).toHaveText("1 file open");
-    await expect(page.getByText(fixtureName, { exact: true })).toBeVisible();
+    await expect(page.getByText(pdfFixtureName, { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Reset edits" })).toBeEnabled();
 });
 
 test("page-scoped actions disable export when the explicit selection is empty", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Open PDF to Text" }).click();
-    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await chooseFixture(page, pdfFixturePath);
     const pageCheckbox = page.getByRole("checkbox", { name: "Page 1" });
     await expect(pageCheckbox).toBeChecked();
     await pageCheckbox.uncheck();
@@ -921,26 +928,20 @@ test("page-scoped actions disable export when the explicit selection is empty", 
 test("PDF replacement clears stale inspection state while inspection is pending or rejected", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Open Extract PDF Pages" }).click();
-    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await chooseFixture(page, pdfFixturePath);
     await expect(page.getByRole("checkbox", { name: "Page 1" })).toBeChecked();
     await expect(page.getByRole("button", { name: "Export Extract PDF Pages", exact: true })).toBeEnabled();
 
-    await page.evaluate(() => {
-        (window as TestWindow).__toolboxInspectionDelayMs = 250;
-        (window as TestWindow).__toolboxDialogResults = ["/local/document.replacement.pdf"];
-    });
-    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await page.evaluate(() => { (window as TestWindow).__toolboxInspectionDelayMs = 250; });
+    await chooseFixture(page, "/local/document.replacement.pdf");
 
     await expect(page.getByRole("checkbox", { name: "Page 1" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Export Extract PDF Pages", exact: true })).toBeDisabled();
     await expect(page.getByRole("checkbox", { name: "Page 2" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Export Extract PDF Pages", exact: true })).toBeEnabled();
 
-    await page.evaluate(() => {
-        (window as TestWindow).__toolboxInspectionError = "inspection rejected";
-        (window as TestWindow).__toolboxDialogResults = ["/local/document.rejected.pdf"];
-    });
-    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await page.evaluate(() => { (window as TestWindow).__toolboxInspectionError = "inspection rejected"; });
+    await chooseFixture(page, "/local/document.rejected.pdf");
 
     await expect(page.getByRole("checkbox", { name: "Page 2" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Export Extract PDF Pages", exact: true })).toBeDisabled();
@@ -950,10 +951,7 @@ test("PDF replacement clears stale inspection state while inspection is pending 
 test("PDF conversion resets the displayed scope when switching actions", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Open PDF to Images" }).click();
-    await page.evaluate(() => {
-        (window as TestWindow).__toolboxDialogResults = ["/local/document.scoped.pdf"];
-    });
-    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await chooseFixture(page, "/local/document.scoped.pdf");
     await expect(page.getByRole("checkbox", { name: "Page 3" })).toBeVisible();
     await page.getByRole("textbox", { name: "Page range" }).fill("1");
     await expect(page.getByRole("checkbox", { name: "Page 2" })).not.toBeChecked();
@@ -987,8 +985,10 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
     await page.goto("/");
     await page.getByRole("button", { name: `Open ${utility.title}` }).click();
 
-    await page.getByRole("button", { name: "Choose files to process" }).click();
-    await expect(page.getByText(fixtureName, { exact: true })).toBeVisible();
+    const selectedFixturePath = utility.capability.acceptedExtensions.some((extension) => extension.toLowerCase() === ".pdf")
+        ? pdfFixturePath
+        : fixturePath;
+    await chooseFixture(page, selectedFixturePath);
 
     if (utility.id === "pdf-unlock" || utility.id === "pdf-protect") {
         await page.locator('input[type="password"]').fill("test-password");

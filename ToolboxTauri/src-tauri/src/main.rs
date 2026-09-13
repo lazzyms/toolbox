@@ -678,8 +678,12 @@ mod command_tests {
         assert!(rendered_scene_pages.iter().all(|preview| preview.preview.data_url.starts_with("data:image/png;base64,")));
         let wire = serde_json::to_value(&rendered_scene_pages).unwrap();
         assert_eq!(wire[0]["pageIndex"], 1);
-        assert_eq!(wire[0]["preview"]["width"], 612);
-        assert!(wire[0]["preview"]["dataUrl"].as_str().is_some_and(|value| value.starts_with("data:image/png;base64,")));
+        let preview = &wire[0]["preview"];
+        let preview_width = preview["width"].as_u64().expect("preview width must be numeric");
+        let preview_height = preview["height"].as_u64().expect("preview height must be numeric");
+        assert!(preview_width > 0 && preview_height > 0, "preview dimensions must be positive");
+        assert!(preview_width > preview_height, "a 90-degree page should preview in landscape orientation");
+        assert!(preview["dataUrl"].as_str().is_some_and(|value| value.starts_with("data:image/png;base64,")));
         outputs.extend(assert_success("PDF scene", export_pdf_scene(scene::ExportRequest { paths: vec![pdf.clone()], scene: visual_scene, output_location: OutputLocation::AlongsideInput })));
         outputs.extend(assert_success("unlock", remove_password(PasswordRequest { paths: vec![protected], password: "test-password".into(), output_location: location(&root, "unlock") })));
         outputs.extend(assert_success("page numbers", add_page_numbers(PageOverlayRequest { paths: vec![pdf.clone()], text: "1".into(), opacity: 100, position: Some("bottom-right".into()), logo_path: None, pages: None, start_number: Some(1), font_size: Some(12), output_location: location(&root, "page numbers") })));
