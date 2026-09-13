@@ -31,6 +31,7 @@ const designIconByToolId: Record<string, string> = {
   "pdf-crop": "crop-pdf",
   "pdf-edit": "edit-pdf",
   "pdf-protect": "protect-pdf",
+  "office-protect": "protect-pdf",
   "images-to-pdf": "images-to-pdf",
   "pdf-to-images": "pdf-to-images",
   "pdf-to-text": "pdf-to-text",

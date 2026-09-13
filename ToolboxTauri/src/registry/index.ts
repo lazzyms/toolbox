@@ -13,6 +13,7 @@ const UtilityMetadata: Array<Omit<ToolDefinition, "capability" | "status">> = [
     { id: "pdf-crop", title: "Crop PDF", shortTitle: "Crop", blurb: "Hide content outside a selected page rectangle.", symbol: "crop", tint: "#10b981", category: "PDF", command: "crop_pdf", verification: "pdf-crop", view: "pdf-crop" },
     { id: "pdf-edit", title: "Edit PDF", shortTitle: "Edit", blurb: "Add text, highlights, shapes, and notes to a PDF.", symbol: "wand", tint: "#8b5cf6", category: "PDF", command: "edit_pdf", verification: "pdf-edit", view: "pdf-edit" },
     { id: "pdf-protect", title: "Protect PDF", shortTitle: "Protect", blurb: "Add a password so only you can open a PDF.", symbol: "lock", tint: "#ef4444", category: "PDF", command: "protect_pdf", verification: "protect-pdf", view: "pdf-protect" },
+    { id: "office-protect", title: "Protect Office Files", shortTitle: "Protect Office", blurb: "A verified local Office protection writer is not installed in this build.", symbol: "lock", tint: "#ef4444", category: "Documents", command: "protect_office", verification: "protect-office", view: "office-protect" },
     { id: "images-to-pdf", title: "Images to PDF", shortTitle: "Images to PDF", blurb: "Turn photos and scans into one PDF.", symbol: "photo", tint: "#3b82f6", category: "PDF", command: "images_to_pdf", verification: "images-to-pdf", view: "images-to-pdf" },
     { id: "pdf-to-images", title: "PDF to Images", shortTitle: "PDF to Images", blurb: "Render PDF pages to JPEG images at 72 to 300 dpi.", symbol: "photo", tint: "#6366f1", category: "PDF", command: "pdf_to_images", verification: "pdf-to-images", view: "pdf-to-images" },
     { id: "pdf-to-text", title: "PDF to Text", shortTitle: "PDF to Text", blurb: "Extract selectable PDF text into a text file.", symbol: "file-text", tint: "#6b7280", category: "PDF", command: "pdf_to_text", verification: "pdf-to-text", view: "pdf-to-text" },
@@ -66,7 +67,7 @@ export const ToolWorkspaceRegistry: ToolWorkspaceDefinition[] = [
         tint: "#ef4444",
         category: "Documents",
         categories: ["Documents", "PDF"],
-        toolIds: ["pdf-unlock", "pdf-protect"],
+        toolIds: ["pdf-unlock", "pdf-protect", "office-protect"],
     },
     {
         id: "pdf-editor",

@@ -12,6 +12,7 @@ use crate::kit::vision;
 use crate::kit::contracts::{command_supports_preview, validate_command_inputs, validate_page_selection, CompressImagesRequest, ConvertImagesRequest, PasswordRequest, PdfRequest, ToolError};
 use crate::kit::common::batch_runner::BatchRunner;
 use crate::kit::password::PasswordProcessor;
+use crate::kit::office::OfficeProcessor;
 
 #[tauri::command]
 async fn remove_password(request: PasswordRequest) -> Vec<JobOutcome> {
@@ -24,6 +25,13 @@ async fn remove_password(request: PasswordRequest) -> Vec<JobOutcome> {
 async fn protect_pdf(request: PdfRequest) -> Vec<JobOutcome> {
     BatchRunner::run("protect_pdf", request.paths, |path| {
         PDFProcessor::protect(path, &request.password, &request.output_location)
+    })
+}
+
+#[tauri::command]
+async fn protect_office(request: PasswordRequest) -> Vec<JobOutcome> {
+    BatchRunner::run("protect_office", request.paths, |path| {
+        OfficeProcessor::protect(path, &request.password, &request.output_location)
     })
 }
 
@@ -312,6 +320,7 @@ fn main() {
             reveal_output_path,
             remove_password,
             protect_pdf,
+            protect_office,
             compress_images,
             convert_images,
             inspect_pdf,
@@ -816,6 +825,80 @@ mod command_tests {
         cleanup(&out[1].output_paths);
         let _ = std::fs::remove_file(&a);
         let _ = std::fs::remove_file(&b);
+    }
+
+    #[test]
+    fn office_protection_command_reports_unavailable_for_all_six_formats_without_output() {
+        let root = sandbox("office-protect-unavailable");
+        let extensions = ["doc", "docx", "xls", "xlsx", "ppt", "pptx"];
+        let inputs = extensions
+            .iter()
+            .map(|extension| root.join(format!("source.{extension}")))
+            .collect::<Vec<_>>();
+        for input in &inputs {
+            std::fs::write(input, b"Office fixture").unwrap();
+        }
+        let originals = inputs
+            .iter()
+            .map(|input| std::fs::read(input).unwrap())
+            .collect::<Vec<_>>();
+        let output_folder = location(&root, "output");
+
+        let outcomes = tauri::async_runtime::block_on(protect_office(PasswordRequest {
+            paths: inputs.clone(),
+            password: "secret".into(),
+            output_location: output_folder,
+        }));
+
+        assert_eq!(outcomes.len(), extensions.len());
+        assert!(outcomes.iter().all(|outcome| {
+            outcome.output_paths.is_empty()
+                && outcome.failure.as_ref().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::Unavailable))
+        }));
+        for (input, original) in inputs.iter().zip(originals) {
+            assert_eq!(std::fs::read(input).unwrap(), original, "Office source was modified: {}", input.display());
+        }
+        assert_eq!(std::fs::read_dir(root.join("output")).unwrap().count(), 0);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn protect_pdf_keeps_mixed_office_inputs_isolated_and_round_trips() {
+        let root = sandbox("protect-pdf-mixed-office");
+        let pdf = root.join("source.pdf");
+        let office = root.join("source.docx");
+        make_pdf(&pdf, 1);
+        std::fs::write(&office, b"Office fixture").unwrap();
+        let pdf_original = std::fs::read(&pdf).unwrap();
+        let office_original = std::fs::read(&office).unwrap();
+
+        let outcomes = tauri::async_runtime::block_on(protect_pdf(PdfRequest {
+            paths: vec![pdf.clone(), office.clone()],
+            password: "secret".into(),
+            output_location: location(&root, "protected"),
+        }));
+
+        assert_eq!(outcomes.len(), 2);
+        assert!(outcomes[0].failure.is_none());
+        assert_eq!(outcomes[0].output_paths.len(), 1);
+        assert!(outcomes[0].output_paths[0].is_file());
+        assert!(outcomes[1].output_paths.is_empty());
+        assert!(outcomes[1].failure.as_ref().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput)));
+        assert_eq!(std::fs::read(&pdf).unwrap(), pdf_original);
+        assert_eq!(std::fs::read(&office).unwrap(), office_original);
+        assert_eq!(std::fs::read_dir(root.join("protected")).unwrap().count(), 1);
+
+        let unlocked = tauri::async_runtime::block_on(remove_password(PasswordRequest {
+            paths: outcomes[0].output_paths.clone(),
+            password: "secret".into(),
+            output_location: location(&root, "unlocked"),
+        }));
+        assert!(unlocked[0].failure.is_none());
+        assert_eq!(unlocked[0].output_paths.len(), 1);
+        assert!(unlocked[0].output_paths[0].is_file());
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

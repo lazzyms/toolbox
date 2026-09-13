@@ -12,7 +12,10 @@ export const PlannedToolView = ({ utility }: { utility: ToolDefinition }) => (
 );
 
 export const UnavailableToolView = ({ utility }: { utility: ToolDefinition }) => {
-    const mode = utility.id === "pdf-ocr" ? "PDF OCR" : utility.id === "image-blur-faces" ? "Face blur" : utility.id === "image-remove-bg" ? "Background removal" : utility.title;
+    const mode = utility.id === "pdf-ocr" ? "PDF OCR" : utility.id === "image-blur-faces" ? "Face blur" : utility.id === "image-remove-bg" ? "Background removal" : utility.id === "office-protect" ? "Office protection" : utility.title;
+    const explanation = utility.id === "office-protect"
+        ? "This build does not include a verified local writer for DOC, DOCX, XLS, XLSX, PPT, or PPTX. No Office output will be created."
+        : "This tool requires an offline vision resource that is not bundled. Files will not be selected or processed.";
     return (
     <div className="flex h-full flex-col">
         <div className="mb-6">
@@ -21,7 +24,7 @@ export const UnavailableToolView = ({ utility }: { utility: ToolDefinition }) =>
         </div>
         <div className="rounded-xl border border-slate-200 bg-white p-5 text-sm text-slate-700" role="status">
             <p className="font-semibold">Unavailable in this build.</p>
-            <p className="mt-2">Mode: {mode}. This tool requires an offline vision resource that is not bundled. Files will not be selected or processed.</p>
+            <p className="mt-2">Mode: {mode}. {explanation}</p>
         </div>
     </div>
     );

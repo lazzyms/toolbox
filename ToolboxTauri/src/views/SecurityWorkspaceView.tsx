@@ -20,6 +20,8 @@ export const SecurityWorkspaceView = ({ utility }: { utility: ToolDefinition }) 
   const activeUtility = securityIds.has(utility.id)
     ? UtilityRegistry.find((item) => item.id === activeToolId) ?? utility
     : UtilityRegistry.find((item) => item.id === activeToolId) ?? utility;
+  const isPdfProtection = activeUtility.id === "pdf-protect";
+  const isOfficeProtection = activeUtility.id === "office-protect";
 
   useEffect(() => {
     setPassword("");
@@ -32,7 +34,7 @@ export const SecurityWorkspaceView = ({ utility }: { utility: ToolDefinition }) 
       sessionKey="file-security"
       utility={activeUtility}
       onRun={(paths) =>
-        activeUtility.id === "pdf-protect"
+        isPdfProtection
           ? invoke<ToolResult>("protect_pdf", {
               request: {
                 paths,
@@ -40,6 +42,14 @@ export const SecurityWorkspaceView = ({ utility }: { utility: ToolDefinition }) 
                 outputLocation: "alongsideInput",
               } satisfies PDFRequest,
             })
+          : isOfficeProtection
+            ? invoke<ToolResult>("protect_office", {
+                request: {
+                  paths,
+                  password,
+                  outputLocation: "alongsideInput",
+                } satisfies PasswordRequest,
+              })
           : invoke<ToolResult>("remove_password", {
               request: {
                 paths,
@@ -60,24 +70,28 @@ export const SecurityWorkspaceView = ({ utility }: { utility: ToolDefinition }) 
           <div>
             <h2 className="workspace-active-command">{activeUtility.title}</h2>
             <p className="workspace-panel-label">
-              {activeUtility.id === "pdf-protect" ? "Protect a file" : "Unlock a file"}
+              {isPdfProtection || isOfficeProtection ? "Protect a file" : "Unlock a file"}
             </p>
             <p className="workspace-panel-copy">
-              {activeUtility.id === "pdf-protect"
+              {isPdfProtection
                 ? "Add a password to each selected PDF. The originals stay untouched."
+                : isOfficeProtection
+                  ? "Add a password to each selected Office file. The originals stay untouched."
                 : "Use the existing password to save an unlocked copy of each selected PDF or Office file."}
             </p>
             <p className="workspace-note">
-              {activeUtility.id === "pdf-protect"
+              {isPdfProtection
                 ? "PDF files only"
+                : isOfficeProtection
+                  ? "Word, Excel, and PowerPoint files"
                 : "PDF, Word, Excel, and PowerPoint files"}
             </p>
           </div>
           <label className="workspace-field">
-            <span>{activeUtility.id === "pdf-protect" ? "New password" : "Current password"}</span>
+            <span>{isPdfProtection || isOfficeProtection ? "New password" : "Current password"}</span>
             <span className="workspace-password-field">
               <input
-                aria-label={activeUtility.id === "pdf-protect" ? "New password" : "Current password"}
+                aria-label={isPdfProtection || isOfficeProtection ? "New password" : "Current password"}
                 type={showPassword ? "text" : "password"}
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}

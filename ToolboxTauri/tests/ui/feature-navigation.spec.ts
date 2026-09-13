@@ -788,6 +788,27 @@ test("remove password exposes one cross-format document tool", async ({ page }) 
     await expect(page.locator(".workspace-primary-action")).toBeEnabled();
 });
 
+test("Office protection exposes all formats but clearly remains unavailable", async ({ page }) => {
+    const utility = UtilityRegistry.find((item) => item.id === "office-protect");
+    expect(utility).toBeDefined();
+    expect(workspaceForTool("office-protect")?.id).toBe("file-security");
+    expect(utility?.command).toBe("protect_office");
+    expect(utility?.capability.acceptedExtensions).toEqual([
+        ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+    ]);
+    expect(utility?.capability.nativeAvailability).toBe("unavailable");
+    expect(utility?.status).toBe("unavailable");
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Protect Office Files" }).click();
+    await expect(page.getByRole("heading", { name: "Protect Office Files" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Choose files to process" })).toHaveCount(0);
+    const unavailablePanel = page.locator('div[role="status"]');
+    await expect(unavailablePanel).toContainText("verified local writer");
+    await expect(unavailablePanel).toContainText("No Office output will be created");
+    await expect.poll(async () => page.evaluate(() => (window as TestWindow).__toolboxInvocations ?? [])).toHaveLength(0);
+});
+
 test("every output exposes native file actions and keeps action errors inline", async ({ page }) => {
     const failedOutput = `${fixturePath}.partial-output`;
     const outputs = [...mockedOutputPaths, failedOutput];
@@ -1033,7 +1054,7 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
 };
 
 test.describe("registered feature actions", () => {
-    expect(UtilityRegistry).toHaveLength(32);
+    expect(UtilityRegistry).toHaveLength(33);
 
     for (const utility of UtilityRegistry) {
         test(`${utility.id} accepts the fixture and runs`, async ({ page }) => {

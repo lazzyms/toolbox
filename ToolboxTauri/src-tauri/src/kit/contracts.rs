@@ -415,6 +415,12 @@ mod tests {
 
         let office = native_capability("remove_password").unwrap();
         assert_eq!(office.accepted_extensions, [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"]);
+        let office_protection = native_capability("protect_office").unwrap();
+        assert_eq!(office_protection.accepted_extensions, [".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"]);
+        assert!(!office_protection.native_available);
+        let pdf_protection = native_capability("protect_pdf").unwrap();
+        assert_eq!(pdf_protection.accepted_extensions, [".pdf"]);
+        assert!(pdf_protection.native_available);
         let images = native_capability("images_to_pdf").unwrap();
         assert_eq!(images.input_cardinality, InputCardinality::Ordered);
         assert!(!images.accepted_extensions.contains(&".tif".to_string()));
@@ -435,5 +441,23 @@ mod tests {
         assert!(parse_capability_registry(&unknown)
             .unwrap_err()
             .contains("unknown field"));
+    }
+
+    #[test]
+    fn unavailable_office_protection_rejects_each_office_input_without_processing() {
+        let paths = ["source.doc", "source.docx", "source.xls", "source.xlsx", "source.ppt", "source.pptx"]
+            .into_iter()
+            .map(PathBuf::from)
+            .collect::<Vec<_>>();
+        let validation = partition_command_inputs("protect_office", &paths).unwrap();
+
+        assert!(validation.accepted.is_empty());
+        assert_eq!(validation.rejected.len(), paths.len());
+        assert!(validation.rejected.iter().all(|(_, outcome)| {
+            matches!(
+                outcome.failure.as_ref().map(|error| &error.kind),
+                Some(ErrorKind::Unavailable)
+            ) && outcome.output_paths.is_empty()
+        }));
     }
 }

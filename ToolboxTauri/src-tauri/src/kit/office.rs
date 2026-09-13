@@ -105,6 +105,19 @@ impl OfficeProcessor {
             Err(error) => JobOutcome::failure(input_path, error.into_tool_error()),
         }
     }
+
+    pub fn protect(
+        input_path: PathBuf,
+        _password: &str,
+        _output_location: &OutputLocation,
+    ) -> JobOutcome {
+        JobOutcome::failure(
+            input_path,
+            ToolError::unavailable(
+                "Office protection is unavailable: this build has no verified local writer for DOC, DOCX, XLS, XLSX, PPT, or PPTX.",
+            ),
+        )
+    }
 }
 
 #[derive(Debug)]
@@ -1284,6 +1297,45 @@ mod tests {
         assert!(OfficeProcessor::supports_extension("DOCX"));
         assert!(OfficeProcessor::supports_extension("XlS"));
         assert!(OfficeProcessor::supports_extension("PpTx"));
+    }
+
+    #[test]
+    fn office_protection_is_explicitly_unavailable_for_all_formats() {
+        let directory = std::env::temp_dir().join(format!(
+            "toolbox-office-protect-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+
+        for extension in ["doc", "docx", "xls", "xlsx", "ppt", "pptx"] {
+            let input = directory.join(format!("source.{extension}"));
+            let fixture = if matches!(extension, "docx" | "xlsx" | "pptx") {
+                minimal_ooxml_package(extension)
+            } else {
+                cfb_with_streams(&[("/fixture", b"Office fixture")])
+            };
+            std::fs::write(&input, &fixture).unwrap();
+
+            let outcome = OfficeProcessor::protect(
+                input.clone(),
+                "secret",
+                &OutputLocation::AlongsideInput,
+            );
+
+            assert!(matches!(
+                outcome.failure.as_ref().map(|error| &error.kind),
+                Some(ErrorKind::Unavailable)
+            ));
+            assert!(outcome.output_paths.is_empty());
+            assert_eq!(std::fs::read(&input).unwrap(), fixture);
+            assert!(!directory.join(format!("source-protected.{extension}")).exists());
+        }
+
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
