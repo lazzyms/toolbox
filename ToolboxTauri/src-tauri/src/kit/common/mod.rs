@@ -169,12 +169,68 @@ mod tests {
         let reservation = OutputNaming::reserve_destination(&input, &OutputLocation::CustomFolder(root.clone()), "-image-2-7", "jpg").unwrap();
         let destination = reservation.destination_path().to_path_buf();
         let temporary = reservation.path().to_path_buf();
+        let claim = OutputNaming::claim_path(&destination);
         std::fs::write(reservation.path(), b"operation bytes").unwrap();
         std::fs::write(&destination, b"competing bytes").unwrap();
 
         assert!(reservation.publish().is_err());
         assert_eq!(std::fs::read(&destination).unwrap(), b"competing bytes");
         assert!(!temporary.exists());
+        assert!(!claim.exists());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn successful_publication_removes_private_temp_and_claim() {
+        let root = std::env::temp_dir().join(format!("toolbox_output_success_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let input = root.join("source.txt");
+        std::fs::write(&input, b"source").unwrap();
+
+        let reservation = OutputNaming::reserve_destination(&input, &OutputLocation::CustomFolder(root.clone()), "-copy", "txt").unwrap();
+        let destination = reservation.destination_path().to_path_buf();
+        let temporary = reservation.path().to_path_buf();
+        let claim = OutputNaming::claim_path(&destination);
+        std::fs::write(reservation.path(), b"operation bytes").unwrap();
+
+        assert_eq!(reservation.publish().unwrap(), destination);
+        assert_eq!(std::fs::read(&destination).unwrap(), b"operation bytes");
+        assert!(!temporary.exists());
+        assert!(!claim.exists());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_private_write_leaves_no_public_temp_or_claim_artifacts() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!("toolbox_output_write_failure_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let input = root.join("source.txt");
+        std::fs::write(&input, b"source").unwrap();
+
+        let reservation = OutputNaming::reserve_destination(&input, &OutputLocation::CustomFolder(root.clone()), "-copy", "txt").unwrap();
+        let destination = reservation.destination_path().to_path_buf();
+        let temporary = reservation.path().to_path_buf();
+        let claim = OutputNaming::claim_path(&destination);
+        let mut readonly = std::fs::metadata(&temporary).unwrap().permissions();
+        readonly.set_mode(0o400);
+        std::fs::set_permissions(&temporary, readonly).unwrap();
+
+        assert!(std::fs::write(&temporary, b"partial bytes").is_err());
+
+        let mut writable = std::fs::metadata(&temporary).unwrap().permissions();
+        writable.set_mode(0o600);
+        std::fs::set_permissions(&temporary, writable).unwrap();
+        drop(reservation);
+        assert!(!destination.exists());
+        assert!(!temporary.exists());
+        assert!(!claim.exists());
 
         std::fs::remove_dir_all(root).unwrap();
     }

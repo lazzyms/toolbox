@@ -608,6 +608,7 @@ const ImageEditorControls = ({
             <p className="workspace-panel-label">Edit stack</p>
             <p className="workspace-panel-copy">Preview changes together and export them once.</p>
           </div>
+          <p className="workspace-panel-copy">Edits are append-only. Removing or reordering individual operations is deferred.</p>
           <p aria-live="polite">{plan.edits.length} committed edit{plan.edits.length === 1 ? "" : "s"}{draft ? " plus current draft" : ""}</p>
           {plan.edits.length > 0 && (
             <ol className="image-edit-timeline">

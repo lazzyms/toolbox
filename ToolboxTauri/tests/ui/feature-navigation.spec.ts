@@ -449,6 +449,7 @@ test("Image editor previews a reversible edit stack and exports one combined pla
     await expect(page.getByRole("button", { name: "Undo" })).toBeDisabled();
     await expect(page.getByRole("button", { name: "Redo" })).toBeDisabled();
     await expect(page.getByRole("button", { name: "Reset edits" })).toBeDisabled();
+    await expect(page.getByText("Edits are append-only. Removing or reordering individual operations is deferred.", { exact: true })).toBeVisible();
     await expect(page.locator('[role="tablist"]')).toHaveCount(0);
     await expect(page.getByRole("toolbar", { name: "Image editor tools" })).toBeVisible();
     await expect(page.locator(".workspace-primary-action")).toHaveCount(1);
@@ -464,6 +465,7 @@ test("Image editor previews a reversible edit stack and exports one combined pla
     await page.getByLabel("Rotation").selectOption("90");
     await page.getByRole("button", { name: "Add edit to plan" }).click();
     await expect(page.getByText("2 committed edits", { exact: true })).toBeVisible();
+    await expect(page.locator(".image-edit-timeline li")).toContainText(["Resize 320 × 768", "Rotate 90°"]);
     await page.getByRole("button", { name: "Export edited images" }).click();
 
     const invocation = await page.evaluate(() =>
@@ -569,14 +571,17 @@ test("Image editor history can undo, redo, and reset the composed plan", async (
     await page.getByRole("button", { name: "Add edit to plan" }).click();
 
     await expect(page.getByRole("button", { name: "Undo" })).toBeEnabled();
+    await expect(page.getByText("1 committed edit", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Undo" }).click();
     await expect(page.getByRole("button", { name: "Export edited images" })).toBeDisabled();
     await expect(page.getByRole("button", { name: "Redo" })).toBeEnabled();
 
     await page.getByRole("button", { name: "Redo" }).click();
     await expect(page.getByRole("button", { name: "Export edited images" })).toBeEnabled();
+    await expect(page.getByText("1 committed edit", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Reset edits" }).click();
     await expect(page.getByRole("button", { name: "Export edited images" })).toBeDisabled();
+    await expect(page.getByText("0 committed edits", { exact: true })).toBeVisible();
 });
 
 test("PDF to Images identifies source selection and summarizes its non-previewable output", async ({ page }) => {

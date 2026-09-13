@@ -4,8 +4,11 @@ import {
   commitImageEdit,
   createImageEditHistory,
   planWithDraft,
+  redoImageEdit,
   resolveImageCropRect,
   type ImageEditOperation,
+  resetImageEdits,
+  undoImageEdit,
 } from "../src/features/image-editor/session";
 
 const crop = (x: number, y: number, width: number, height: number): ImageEditOperation => ({
@@ -41,4 +44,33 @@ test("resolves aspect crop geometry from source dimensions and anchor", () => {
     aspectHeight: 1,
     anchor: "right",
   }), { x: 160, y: 0, width: 480, height: 480 });
+});
+
+test("appends edits with predictable undo, redo, reset, and branch behavior", () => {
+  const rotate: ImageEditOperation = { kind: "rotate", degrees: 90, flip: "none" };
+  const tone: ImageEditOperation = { kind: "tone", brightness: 10, contrast: 20, saturation: 0, exposure: 0 };
+  const replacement: ImageEditOperation = { kind: "rotate", degrees: 180, flip: "none" };
+  const initial = createImageEditHistory();
+  const one = commitImageEdit(initial, rotate);
+  const two = commitImageEdit(one, tone);
+
+  assert.deepEqual(one.present.edits, [rotate]);
+  assert.deepEqual(two.present.edits, [rotate, tone]);
+  assert.deepEqual(two.past.map((plan) => plan.edits), [[], [rotate]]);
+
+  const undone = undoImageEdit(two);
+  assert.deepEqual(undone.present.edits, [rotate]);
+  assert.deepEqual(undone.future.map((plan) => plan.edits), [[rotate, tone]]);
+
+  const redone = redoImageEdit(undone);
+  assert.deepEqual(redone.present.edits, [rotate, tone]);
+  assert.deepEqual(redone.future, []);
+
+  const branched = commitImageEdit(undone, replacement);
+  assert.deepEqual(branched.present.edits, [rotate, replacement]);
+  assert.deepEqual(branched.future, []);
+  assert.deepEqual(resetImageEdits(), createImageEditHistory());
+  assert.deepEqual(initial.present.edits, []);
+  assert.deepEqual(one.present.edits, [rotate]);
+  assert.deepEqual(two.present.edits, [rotate, tone]);
 });

@@ -1397,6 +1397,12 @@ mod tests {
         let output = result.output_paths.first().unwrap();
         let edited = image::open(output).unwrap();
         assert_eq!((edited.width(), edited.height()), (2, 2));
+        let output_name = output.file_name().and_then(|name| name.to_str()).unwrap();
+        let claim = output.with_file_name(format!(".{output_name}.toolbox-reservation"));
+        assert!(!claim.exists());
+        assert!(!std::fs::read_dir(input.parent().unwrap()).unwrap().filter_map(Result::ok).any(|entry| {
+            entry.file_name().to_str().is_some_and(|name| name.starts_with(".composed-plan-edited.png.toolbox-tmp-"))
+        }));
 
         let _ = std::fs::remove_file(input);
         let _ = std::fs::remove_file(output);
