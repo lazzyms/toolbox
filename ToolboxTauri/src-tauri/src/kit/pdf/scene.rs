@@ -728,15 +728,6 @@ pub fn inspect(path:&Path)->Result<PdfDocumentMetadata,String> {
         pages.push(PdfPageMetadata{index,x:g.bbox[0],y:g.bbox[1],width:g.width,height:g.height,rotation:source_rotation,page_box:g.bbox,preview:None,text_runs:None});
     }
     if pages.is_empty() { return Err("PDF contains no pages".into()); }
-    let scene=PdfScene{pages:pages.iter().map(|p|ScenePage{source_index:Some(p.index),width:p.width,height:p.height,rotation:0,crop:None,source_rotation:Some(p.rotation),source_box:Some(Rect{x:p.page_box[0],y:p.page_box[1],width:p.page_box[2]-p.page_box[0],height:p.page_box[3]-p.page_box[1]}),objects:vec![]}).collect()};
-    let renderer=renderer()?;
-    let temp=TempDir::new()?;
-    let normalized=temp.0.join("scene.pdf");
-    compose(path,&scene)?.save(&normalized).map_err(err)?;
-    for p in &mut pages {
-        p.preview=Some(render(&normalized,p.index,&renderer,&temp)?.data_url);
-        p.text_runs=extract_text_runs(path,p.index+1,p.width,p.height,Instant::now() + super::PDF_TEXT_TIMEOUT);
-    }
     Ok(PdfDocumentMetadata{path:path.to_path_buf(),pages})
 }
 pub fn export(request:&ExportRequest,input:PathBuf)->JobOutcome {
@@ -930,6 +921,27 @@ mod tests {
         assert!(content.contains("/S4 gs")); assert!(content.contains("re W n")); assert!(content.contains("<4C4F43414C>"));
         let blank=composed.get_page_content(pages[1]); assert!(!String::from_utf8_lossy(&blank).contains("/Original Do"));
         assert!(String::from_utf8_lossy(&blank).contains("<4C4F43414C>"));
+    }
+
+    #[test]
+    fn inspect_returns_page_metadata_without_invoking_pdftoppm() {
+        let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let input = temp.0.join("source.pdf");
+        fixture(&input);
+        let previous = std::env::var_os("TOOLBOX_PDFTOPPM_PATH");
+        std::env::set_var("TOOLBOX_PDFTOPPM_PATH", temp.0.join("pdftoppm-not-invoked"));
+        let result = inspect(&input);
+        match previous {
+            Some(value) => std::env::set_var("TOOLBOX_PDFTOPPM_PATH", value),
+            None => std::env::remove_var("TOOLBOX_PDFTOPPM_PATH"),
+        }
+        let metadata = result.unwrap();
+        assert_eq!(metadata.pages.len(), 2);
+        assert_eq!((metadata.pages[0].width, metadata.pages[0].height), (300., 200.));
+        assert_eq!(metadata.pages[0].page_box, [20., 30., 220., 330.]);
+        assert_eq!(metadata.pages[0].rotation, 90);
+        assert!(metadata.pages.iter().all(|page| page.preview.is_none() && page.text_runs.is_none()));
     }
 
     #[test]
