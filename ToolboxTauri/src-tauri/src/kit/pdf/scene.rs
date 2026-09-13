@@ -486,7 +486,7 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
                 let bytes=doc.get_page_content(id);
                 let form_id=doc.add_object(Stream::new(form,bytes));
                 xobjects.set(original_name.as_str(),form_id);
-                content.push_str(&format!("q\n{} /{original_name} Do\nQ\n", cm(g.matrix)));
+                content.push_str(&format!("q\n{}\n/{original_name} Do\nQ\n", cm(g.matrix)));
             }
         }
         if page.objects.len()>10000 { return Err("Too many scene objects".into()); }
