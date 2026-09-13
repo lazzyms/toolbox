@@ -7,6 +7,10 @@ import type { PdfDocument } from '../features/pdf-editor/contracts';
 import { SceneCanvas } from '../features/pdf-editor/SceneCanvas';
 import { sceneFromDocument, visibleBounds } from '../features/pdf-editor/scene';
 import type { PdfScene, SceneObject, ScenePage, ScenePreview, SceneRect, SceneShape, SceneTool, SignatureMode, WatermarkPattern } from '../features/pdf-editor/scene';
+import { PREVIEW_CACHE_MAX_ENTRIES, PREVIEW_RENDER_SETTINGS, createPreviewCache, previewCacheKey, requestWithGeneration } from './pdfPreviewHelpers';
+import type { GenerationState } from './pdfPreviewHelpers';
+
+export { createPreviewCache, previewCacheKey, requestWithGeneration } from './pdfPreviewHelpers';
 
 const tools: { id: SceneTool; label: string; glyph: string }[] = [
   { id: 'select', label: 'Select', glyph: '↖' }, { id: 'text', label: 'Text', glyph: 'T' },
@@ -68,11 +72,14 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onScene }: {
   const [renderError, setRenderError] = useState<string | null>(null);
   const group = useRef<string | null>(null);
   const draggedPage = useRef<string | null>(null);
+  const previewCache = useRef(createPreviewCache());
+  const previewGeneration = useRef<GenerationState>({ current: 0 });
   const scene = history.present;
   const page = scene.pages.find((item) => item.id === currentId) ?? scene.pages[0];
   const selected = page?.objects.find((object) => object.id === selectedId);
   const currentIndex = scene.pages.findIndex((item) => item.id === page?.id);
-  const previewKey = `${JSON.stringify(scene)}:${currentIndex}`;
+  const serializedScene = JSON.stringify(scene);
+  const previewKey = path ? previewCacheKey(path, currentIndex, serializedScene, PREVIEW_RENDER_SETTINGS) : null;
 
   useEffect(() => {
     let active = true;
@@ -89,18 +96,62 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onScene }: {
   }, [path]);
   useEffect(() => { onScene(path, document ? scene : null); }, [path, scene, document]);
   useEffect(() => {
-    if (!path || !page) return;
-    let active = true;
-    setRenderError(null); setRendering(true);
-    const timer = window.setTimeout(() => {
-      invoke<ScenePreview>('preview_pdf_scene', { request: { path, scene, pageIndex: currentIndex } }).then((value) => {
-        if (!active) return;
-        setPreview({ key: previewKey, value });
-        setThumbnails((existing) => ({ ...existing, [page.id]: { key: JSON.stringify(page), value } }));
-      }).catch((reason) => { if (active) setRenderError(String(reason)); }).finally(() => { if (active) setRendering(false); });
-    }, 200);
-    return () => { active = false; window.clearTimeout(timer); };
-  }, [path, previewKey, interaction]);
+    previewGeneration.current.current += 1;
+    previewCache.current.clear();
+    setPreview(null);
+    setThumbnails({});
+    setRenderError(null);
+    setRendering(false);
+  }, [path, serializedScene]);
+  useEffect(() => {
+    const requestGeneration = ++previewGeneration.current.current;
+    const serializedScene = JSON.stringify(scene);
+    if (!path || !page || currentIndex < 0) {
+      setPreview(null); setRenderError(null); setRendering(false);
+      return () => { previewGeneration.current.current += 1; };
+    }
+    setRenderError(null);
+    setRendering(true);
+    setPreview(null);
+    const indexes = [...new Set([currentIndex, currentIndex - 1, currentIndex + 1]
+      .filter((index) => index >= 0 && index < scene.pages.length))];
+    const updateThumbnail = (item: ScenePage, key: string, value: ScenePreview) => {
+      setThumbnails((existing) => {
+        const next = { ...existing, [item.id]: { key, value } };
+        const staleIds = Object.keys(next).slice(0, Math.max(0, Object.keys(next).length - PREVIEW_CACHE_MAX_ENTRIES));
+        for (const staleId of staleIds) delete next[staleId];
+        return next;
+      });
+    };
+    const missing: { index: number; item: ScenePage; key: string }[] = [];
+    for (const index of indexes) {
+      const item = scene.pages[index];
+      const key = previewCacheKey(path, index, serializedScene, PREVIEW_RENDER_SETTINGS);
+      const cached = previewCache.current.get(key);
+      if (cached) {
+        if (index === currentIndex) {
+          setPreview({ key, value: cached });
+          setRendering(false);
+        }
+        updateThumbnail(item, key, cached);
+      } else missing.push({ index, item, key });
+    }
+    const timer = missing.length ? window.setTimeout(() => {
+      if (previewGeneration.current.current !== requestGeneration) return;
+      for (const { index, item, key } of missing) {
+        void requestWithGeneration(previewGeneration.current, requestGeneration,
+          () => invoke<ScenePreview>('preview_pdf_scene', { request: { path, scene, pageIndex: index } }),
+          (value) => {
+            previewCache.current.set(key, value);
+            if (index === currentIndex) setPreview({ key, value });
+            updateThumbnail(item, key, value);
+          },
+          (reason) => { if (index === currentIndex) setRenderError(String(reason)); },
+          () => { if (index === currentIndex) setRendering(false); });
+      }
+    }, 200) : undefined;
+    return () => { if (timer !== undefined) window.clearTimeout(timer); previewGeneration.current.current += 1; };
+  }, [path, currentIndex, serializedScene, interaction]);
 
   const commit = (next: PdfScene, mergeGroup: string | null = null) => {
     const merge = Boolean(mergeGroup && group.current === mergeGroup);
@@ -283,7 +334,8 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onScene }: {
             <button type="button" aria-label="Delete selected pages" title="Delete selected pages" disabled={targets.length >= scene.pages.length} onClick={deletePages}>−</button></div>
           {scene.pages.map((item, index) => {
             const cached = thumbnails[item.id];
-            const thumb = cached?.key === JSON.stringify(item) ? cached.value.dataUrl : item.sourceIndex === null ? null : document?.pages[item.sourceIndex]?.preview;
+            const thumbnailKey = path ? previewCacheKey(path, index, serializedScene, PREVIEW_RENDER_SETTINGS) : null;
+            const thumb = cached?.key === thumbnailKey ? cached.value.dataUrl : item.sourceIndex === null ? null : document?.pages[item.sourceIndex]?.preview;
             return <button key={item.id} type="button" className="scene-thumbnail" aria-label={`Page ${index + 1}${item.sourceIndex === null ? ', blank' : ''}`}
               aria-current={page.id === item.id ? 'page' : undefined} aria-pressed={targets.includes(item.id)} draggable
               onDragStart={() => { draggedPage.current = item.id; }} onDragEnd={() => { draggedPage.current = null; }} onDragOver={(event) => event.preventDefault()} onDrop={() => movePages(item.id)}
