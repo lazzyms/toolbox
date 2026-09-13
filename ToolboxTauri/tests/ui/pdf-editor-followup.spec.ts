@@ -1,16 +1,17 @@
 import { test, expect, type Page } from '@playwright/test';
 
 const svg = "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="612" height="792"><rect width="612" height="792" fill="white"/><text x="60" y="85" font-size="24">Selectable local PDF text</text></svg>');
+const signatureAssetUrl = 'asset://localhost/' + encodeURIComponent('/local/signature.png');
 
 test.beforeEach(async ({ page }) => {
-  await page.addInitScript(({ svg }) => {
+  await page.addInitScript(({ svg, signatureAssetUrl }) => {
     const w = window as any;
     w.calls = [];
     w.dialogNext = null;
     w.__TAURI_INTERNALS__ = {
       metadata: { currentWindow: { label: 'main' }, currentWebview: { label: 'main', windowLabel: 'main' } },
       transformCallback: () => 1, unregisterCallback: () => {},
-      convertFileSrc: (path: string) => path === '/local/signature.png' ? svg : path,
+      convertFileSrc: (path: string) => path === '/local/signature.png' ? signatureAssetUrl : path,
       invoke: async (command: string, args: any) => {
         w.calls.push({ command, args });
         if (command === 'plugin:dialog|open') {
@@ -25,7 +26,7 @@ test.beforeEach(async ({ page }) => {
       },
     };
     w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
-  }, { svg });
+  }, { svg, signatureAssetUrl });
 });
 
 async function openEditor(page: Page) {
@@ -165,7 +166,10 @@ test('signature supports a draggable local image and a typed font-backed box', a
   await page.evaluate(() => { (window as any).dialogNext = '/local/signature.png'; });
   await page.getByRole('button', { name: 'Choose signature image', exact: true }).click();
   await expect(page.getByText('signature.png', { exact: true })).toBeVisible();
+  await expect(page.locator('.scene-signature-mini-preview')).toHaveAttribute('src', signatureAssetUrl);
   await dragOnCanvas(page, .18, .22, .25, .12);
+  await expect.poll(() => page.locator('.scene-canvas image').evaluateAll((images) => images.map((image) => image.getAttribute('href'))))
+    .toContain(signatureAssetUrl);
   await page.getByRole('button', { name: 'Signature', exact: true }).click();
   await page.getByRole('combobox', { name: 'Signature mode' }).selectOption('text');
   await page.getByRole('textbox', { name: 'Signature text' }).fill('A. Local');
@@ -173,7 +177,7 @@ test('signature supports a draggable local image and a typed font-backed box', a
   await dragOnCanvas(page, .52, .48, .24, .12);
   const scene = await sceneFromExport(page);
   expect(scene.pages[0].objects).toHaveLength(2);
-  expect(scene.pages[0].objects[0]).toMatchObject({ signatureMode: 'image', signaturePath: '/local/signature.png' });
+  expect(scene.pages[0].objects[0]).toMatchObject({ signatureMode: 'image', signaturePath: '/local/signature.png', signaturePreview: signatureAssetUrl });
   expect(scene.pages[0].objects[1]).toMatchObject({ signatureMode: 'text', text: 'A. Local', fontFamily: 'Times-Italic' });
 });
 

@@ -143,8 +143,8 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onScene }: {
     try {
       const picked = await open({ multiple: false, filters: [{ name: 'Signature image', extensions: ['png', 'jpg', 'jpeg', 'webp', 'tif', 'tiff'] }] });
       if (typeof picked !== 'string') return;
-      let previewSource = picked;
-      try { previewSource = convertFileSrc(picked); } catch { /* The native export still has the original local path. */ }
+      let previewSource: string | null = null;
+      try { previewSource = convertFileSrc(picked); } catch { /* Keep the original path for native export, but fail closed for the preview. */ }
       setSignatureMode('image'); setSignaturePath(picked); setSignaturePreview(previewSource);
       if (selected?.kind === 'signature') updateObject({ signatureMode: 'image', signaturePath: picked, signaturePreview: previewSource }, 'signature-image');
     } catch (reason) { setError(String(reason)); }
