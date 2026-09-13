@@ -31,6 +31,17 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
     const [selectedFileIndex, setSelectedFileIndex] = useState(0);
     const runGeneration = useRef(0);
     const inputPolicy = utility.capability;
+    const acceptedExtensions = new Set(inputPolicy.acceptedExtensions.map((extension) => extension.toLowerCase()));
+    const unsupportedFiles = files.filter((path) => {
+        const name = path.split(/[\\/]/).pop() ?? path;
+        const extension = name.includes('.') ? `.${name.split('.').pop()?.toLowerCase()}` : '';
+        return !acceptedExtensions.has(extension);
+    });
+    const inputPolicyIssue = inputPolicy.inputCardinality === 'single' && files.length > 1
+        ? `This action accepts one input file, but ${files.length} are open. Close the extra files or switch to a multi-file action.`
+        : unsupportedFiles.length > 0
+            ? `${unsupportedFiles.length} ${unsupportedFiles.length === 1 ? 'file is' : 'files are'} not supported by ${utility.title}. Close ${unsupportedFiles.length === 1 ? 'it' : 'them'} or switch actions.`
+            : null;
     const progress: Progress = {
         completed: loading ? 0 : Math.min(results.length, files.length),
         total: files.length,
@@ -233,6 +244,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 {files.length > 0 && <button type="button" className="workspace-source-clear" onClick={clearFiles}>Close</button>}
             </div>
             {files.length > 0 && fileSelection}
+            {inputPolicyIssue && <p className="workspace-note" role="alert">{inputPolicyIssue}</p>}
         </section>
     );
 

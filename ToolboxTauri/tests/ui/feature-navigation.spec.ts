@@ -666,6 +666,54 @@ test("non-previewable PDF conversions identify source selection and show determi
 
     await page.getByRole("toolbar", { name: "PDF conversion tools" }).getByRole("button", { name: "Extract PDF Pages", exact: true }).click();
     await expect(page.getByText("Output preview unavailable. Export creates a PDF containing the selected pages.", { exact: true })).toBeVisible();
+
+    const rail = page.getByRole("toolbar", { name: "PDF conversion tools" });
+    for (const [action, summary] of [
+        ["Images to PDF", "Output preview unavailable. Export combines the selected images into one PDF in file order."],
+        ["Merge PDF", "Output preview unavailable. Export merges the selected PDFs in file order."],
+        ["Split PDF", "Output preview unavailable. Export creates separate PDF files using the selected split mode."],
+        ["Compress PDF", "Output preview unavailable. Export creates a compressed PDF copy while preserving page geometry."],
+    ] as const) {
+        await rail.getByRole("button", { name: action, exact: true }).click();
+        await expect(page.getByText(summary, { exact: true })).toBeVisible();
+    }
+});
+
+test("PDF conversion visibly rejects retained files when an action changes format", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Images to PDF" }).click();
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+
+    const rail = page.getByRole("toolbar", { name: "PDF conversion tools" });
+    await rail.getByRole("button", { name: "PDF to Text", exact: true }).click();
+    await expect(page.getByText("1 file is not supported by PDF to Text. Close it or switch actions.", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Export PDF to Text", exact: true })).toBeDisabled();
+    const inspections = await page.evaluate(() =>
+        (window as TestWindow).__toolboxInvocations?.filter(({ command }) => command === "inspect_pdf") ?? [],
+    );
+    expect(inspections).toHaveLength(0);
+});
+
+test("PDF page-scoped conversions send the selected pages and keep OCR gated", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open PDF to Text" }).click();
+    await page.evaluate(() => {
+        (window as TestWindow).__toolboxDialogResults = ["/local/document.scoped.pdf"];
+    });
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await expect(page.getByRole("checkbox", { name: "Page 3" })).toBeVisible();
+    await page.getByRole("checkbox", { name: "Page 1" }).uncheck();
+    await page.getByRole("checkbox", { name: "Page 3" }).uncheck();
+    await page.getByRole("button", { name: "Export PDF to Text", exact: true }).click();
+
+    const textInvocation = await page.evaluate(() =>
+        (window as TestWindow).__toolboxInvocations?.find(({ command }) => command === "pdf_to_text"),
+    );
+    expect(textInvocation?.args).toMatchObject({ request: { paths: ["/local/document.scoped.pdf"], pages: [1] } });
+
+    const ocrButton = page.getByRole("toolbar", { name: "PDF conversion tools" }).getByRole("button", { name: "OCR PDF", exact: true });
+    await expect(ocrButton).toBeDisabled();
+    await expect(ocrButton).toHaveAttribute("title", "OCR PDF is unavailable in this build");
 });
 
 test("TIFF export waits for inspection of the current file set", async ({ page }) => {

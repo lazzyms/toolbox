@@ -9,11 +9,16 @@ import type { AtomicToolId, ToolDefinition, ToolResult } from "../contracts";
 
 const conversionActions = toolsForWorkspaceId("pdf-convert");
 const conversionIds = new Set<string>(conversionActions.map((tool) => tool.id));
-const nonInspectingConversionIds = new Set(["images-to-pdf", "pdf-merge", "pdf-compress"]);
+const nonInspectingConversionIds = new Set(["images-to-pdf", "pdf-merge", "pdf-split", "pdf-compress"]);
 const outputPreviewLimitations: Partial<Record<AtomicToolId, string>> = {
+  "images-to-pdf": "Output preview unavailable. Export combines the selected images into one PDF in file order.",
+  "pdf-merge": "Output preview unavailable. Export merges the selected PDFs in file order.",
+  "pdf-split": "Output preview unavailable. Export creates separate PDF files using the selected split mode.",
   "pdf-to-text": "Output preview unavailable. Export creates a text file from the selected pages.",
   "pdf-image-extract": "Output preview unavailable. Export extracts embedded JPEG images from the selected pages.",
   "pdf-extract-pages": "Output preview unavailable. Export creates a PDF containing the selected pages.",
+  "pdf-compress": "Output preview unavailable. Export creates a compressed PDF copy while preserving page geometry.",
+  "pdf-ocr": "Output preview unavailable. OCR is unavailable in this build.",
 };
 type PdfInspectionState =
   | { kind: "idle" }
@@ -223,6 +228,19 @@ const ConversionControls = ({
 }: ConversionControlsProps) => {
   const inputPath = files[0];
   const [inspection, setInspection] = useState<PdfInspectionState>({ kind: "idle" });
+  const acceptedExtensions = new Set(activeUtility.capability.acceptedExtensions.map((extension) => extension.toLowerCase()));
+  const unsupportedFiles = files.filter((path) => {
+    const name = path.split(/[\\/]/).pop() ?? path;
+    const extension = name.includes(".") ? `.${name.split(".").pop()?.toLowerCase()}` : "";
+    return !acceptedExtensions.has(extension);
+  });
+  const inputCardinalityIssue = activeUtility.capability.inputCardinality === "single" && files.length > 1
+    ? `This action accepts one input file, but ${files.length} are still open. Close the extra files or switch to a multi-file action.`
+    : null;
+  const inputFormatIssue = unsupportedFiles.length > 0
+    ? `${unsupportedFiles.length} ${unsupportedFiles.length === 1 ? "file is" : "files are"} not supported by ${activeUtility.title}. Close ${unsupportedFiles.length === 1 ? "it" : "them"} or switch actions.`
+    : null;
+  const inputPolicyIssue = inputCardinalityIssue ?? inputFormatIssue;
 
   useEffect(() => {
     let current = true;
@@ -230,7 +248,7 @@ const ConversionControls = ({
     setSelectedPages([]);
     setPageRange("");
     setInspectError("");
-    if (!inputPath) {
+    if (!inputPath || inputPolicyIssue) {
       setInspection({ kind: "idle" });
       return;
     }
@@ -257,7 +275,7 @@ const ConversionControls = ({
     return () => {
       current = false;
     };
-  }, [activeUtility.id, inputPath, setDocument, setInspectError, setPageRange, setSelectedPages]);
+  }, [activeUtility.id, inputPath, inputPolicyIssue, setDocument, setInspectError, setPageRange, setSelectedPages]);
 
   const togglePage = (page: number) => {
     const nextPages = selectedPages.includes(page)
@@ -277,7 +295,7 @@ const ConversionControls = ({
   const rangeSelectionIssue = activeUtility.id === "pdf-split" && splitMode === "ranges" && !pageRange.trim()
     ? "Enter at least one page range to split by ranges."
     : null;
-  const canExport = files.length > 0 && (!needsMultipleInputs || files.length > 1) && rangeSelectionIssue === null
+  const canExport = files.length > 0 && activeUtility.capability.nativeAvailability === "available" && (!needsMultipleInputs || files.length > 1) && rangeSelectionIssue === null
     && (nonInspectingConversionIds.has(activeUtility.id) || inspectionReady);
   const outputPreviewLimitation = activeUtility.id === "pdf-to-images"
     ? pdfToImagesOutputSummary(selectedPages, dpi, format)
@@ -319,9 +337,10 @@ const ConversionControls = ({
             <p className="workspace-note">{inspection.kind === "error" && inspection.path === inputPath ? inspectError : "Select a PDF to load its page previews."}</p>
           )}
           {inspectedDocument && <p className="workspace-note">{selectionIssue?.message || selectedPageLabel(selectionCount)}</p>}
-          {outputPreviewLimitation && <p className="workspace-note" role="status">{outputPreviewLimitation}</p>}
         </section>
       )}
+      {outputPreviewLimitation && <p className="workspace-note" role="status">{outputPreviewLimitation}</p>}
+      {activeUtility.capability.nativeAvailability === "unavailable" && <p className="workspace-note" role="alert">{activeUtility.title} is unavailable in this build.</p>}
 
       <div>
         <p className="workspace-panel-label">Choose an output</p>

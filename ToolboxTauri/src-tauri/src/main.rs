@@ -168,6 +168,7 @@ async fn watermark_pdf(request: remaining::PageOverlayRequest) -> Vec<JobOutcome
 
 #[tauri::command]
 async fn compress_pdf(request: remaining::CompressPdfRequest) -> Vec<JobOutcome> {
+    if let Err(outcomes) = validate_command_inputs("compress_pdf", &request.paths) { return outcomes; }
     BatchRunner::run("compress_pdf", request.paths.clone(), |path| remaining::compress(&request, path))
 }
 
@@ -180,6 +181,7 @@ async fn remove_pdf_pages(request: remaining::PageSelectionRequest) -> Vec<JobOu
 
 #[tauri::command]
 async fn extract_pdf_pages(request: remaining::PageSelectionRequest) -> Vec<JobOutcome> {
+    if let Err(outcomes) = validate_command_inputs("extract_pdf_pages", &request.paths) { return outcomes; }
     let explicit_pages = request.page_ranges.as_deref().filter(|range| !range.trim().is_empty()).is_none().then_some(request.pages.as_slice());
     if let Err(outcomes) = validate_page_selection("extract_pdf_pages", &request.paths, explicit_pages) { return outcomes; }
     BatchRunner::run("extract_pdf_pages", request.paths.clone(), |path| remaining::extract_pages(&request, path))
@@ -193,23 +195,27 @@ async fn merge_pdfs(request: remaining::MergePdfRequest) -> Vec<JobOutcome> {
 
 #[tauri::command]
 async fn split_pdf(request: remaining::PageSelectionRequest) -> Vec<JobOutcome> {
+    if let Err(outcomes) = validate_command_inputs("split_pdf", &request.paths) { return outcomes; }
     BatchRunner::run("split_pdf", request.paths.clone(), |path| remaining::split(&request, path))
 }
 
 #[tauri::command]
 async fn pdf_to_images(request: remaining::PdfToImagesRequest) -> Vec<JobOutcome> {
+    if let Err(outcomes) = validate_command_inputs("pdf_to_images", &request.paths) { return outcomes; }
     if let Err(outcomes) = validate_page_selection("pdf_to_images", &request.paths, request.pages.as_deref()) { return outcomes; }
     BatchRunner::run("pdf_to_images", request.paths.clone(), |path| remaining::to_images(&request, path))
 }
 
 #[tauri::command]
 async fn pdf_to_text(request: remaining::PdfToTextRequest) -> Vec<JobOutcome> {
+    if let Err(outcomes) = validate_command_inputs("pdf_to_text", &request.paths) { return outcomes; }
     if let Err(outcomes) = validate_page_selection("pdf_to_text", &request.paths, request.pages.as_deref()) { return outcomes; }
     BatchRunner::run("pdf_to_text", request.paths.clone(), |path| remaining::to_text(&request, path))
 }
 
 #[tauri::command]
 async fn extract_pdf_images(request: remaining::PdfToTextRequest) -> Vec<JobOutcome> {
+    if let Err(outcomes) = validate_command_inputs("extract_pdf_images", &request.paths) { return outcomes; }
     if let Err(outcomes) = validate_page_selection("extract_pdf_images", &request.paths, request.pages.as_deref()) { return outcomes; }
     BatchRunner::run("extract_pdf_images", request.paths.clone(), |path| remaining::extract_images(&request, path))
 }
@@ -222,6 +228,7 @@ async fn images_to_pdf(request: remaining::ImagesToPdfRequest) -> Vec<JobOutcome
 
 #[tauri::command]
 async fn ocr_pdf(request: vision::VisionRequest) -> Vec<JobOutcome> {
+    if let Err(outcomes) = validate_command_inputs("ocr_pdf", &request.paths) { return outcomes; }
     if let Err(outcomes) = validate_page_selection("ocr_pdf", &request.paths, request.pages.as_deref()) { return outcomes; }
     BatchRunner::run("ocr_pdf", request.paths.clone(), |path| vision::ocr_pdf(&request, path))
 }
@@ -883,6 +890,50 @@ mod command_tests {
         assert_eq!(outcomes[0].input_path, pdf);
         assert!(outcomes[0].output_paths.is_empty());
         assert!(outcomes[0].failure.as_ref().is_some_and(|error| error.message.contains("at least one page")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn conversion_commands_validate_formats_cardinality_and_page_scope_at_the_boundary() {
+        let root = sandbox("conversion-boundary");
+        let pdf = root.join("document.pdf");
+        let second_pdf = root.join("second.pdf");
+        let image = root.join("wrong-input.png");
+        make_pdf(&pdf, 2);
+        make_pdf(&second_pdf, 2);
+        write_png(&image, 8, 4);
+
+        let wrong_format = tauri::async_runtime::block_on(pdf_to_text(PdfToTextRequest {
+            paths: vec![image.clone()],
+            pages: Some(vec![0]),
+            output_location: location(&root, "wrong-format"),
+        }));
+        assert_eq!(wrong_format.len(), 1);
+        assert!(wrong_format[0].output_paths.is_empty());
+        assert!(wrong_format[0].failure.as_ref().is_some_and(|error| error.message.contains("Accepted extensions")));
+
+        let wrong_cardinality = tauri::async_runtime::block_on(split_pdf(PageSelectionRequest {
+            paths: vec![pdf.clone(), second_pdf.clone()],
+            pages: vec![],
+            page_ranges: None,
+            split_mode: Some("pages".to_string()),
+            chunk_size: None,
+            output_location: location(&root, "wrong-cardinality"),
+        }));
+        assert_eq!(wrong_cardinality.len(), 2);
+        assert!(wrong_cardinality.iter().all(|outcome| outcome.output_paths.is_empty() && outcome.failure.is_some()));
+
+        let selected = tauri::async_runtime::block_on(pdf_to_text(PdfToTextRequest {
+            paths: vec![pdf.clone()],
+            pages: Some(vec![1]),
+            output_location: location(&root, "selected-text"),
+        }));
+        let output = selected[0].output_paths.first().expect("selected text should produce an output");
+        let text = std::fs::read_to_string(output).unwrap();
+        assert!(text.contains("Toolbox page 2"), "selected text: {text}");
+        assert!(!text.contains("Toolbox page 1"), "unselected text: {text}");
+
+        cleanup(&selected.iter().flat_map(|outcome| outcome.output_paths.clone()).collect::<Vec<_>>());
         let _ = std::fs::remove_dir_all(root);
     }
 
