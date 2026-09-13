@@ -86,6 +86,12 @@ async fn preview_pdf_scene(request: scene::PreviewRequest) -> Result<scene::Scen
 }
 
 #[tauri::command]
+async fn preview_pdf_scene_pages(request: scene::PreviewPagesRequest) -> Result<Vec<scene::IndexedScenePreview>, String> {
+    if !command_supports_preview("export_pdf_scene") { return Err("PDF scene preview is unavailable in this build.".to_string()); }
+    tauri::async_runtime::spawn_blocking(move || scene::preview_pages(&request)).await.map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 async fn export_pdf_scene(request: scene::ExportRequest) -> Vec<JobOutcome> {
     BatchRunner::run("export_pdf_scene", request.paths.clone(), |path| scene::export(&request, path))
 }
@@ -292,6 +298,7 @@ fn main() {
             inspect_pdf,
             inspect_pdf_scene,
             preview_pdf_scene,
+            preview_pdf_scene_pages,
             export_pdf_scene,
             crop_pdf,
             edit_pdf,
@@ -646,6 +653,13 @@ mod command_tests {
         ] })).unwrap();
         let rendered_scene = tauri::async_runtime::block_on(preview_pdf_scene(scene::PreviewRequest { path: pdf.clone(), scene: visual_scene.clone(), page_index: 0 })).unwrap();
         assert!(rendered_scene.data_url.starts_with("data:image/png;base64,"));
+        let rendered_scene_pages = tauri::async_runtime::block_on(preview_pdf_scene_pages(scene::PreviewPagesRequest { path: pdf.clone(), scene: visual_scene.clone(), page_indices: vec![1, 0] })).unwrap();
+        assert_eq!(rendered_scene_pages.iter().map(|preview| preview.page_index).collect::<Vec<_>>(), vec![1, 0]);
+        assert!(rendered_scene_pages.iter().all(|preview| preview.preview.data_url.starts_with("data:image/png;base64,")));
+        let wire = serde_json::to_value(&rendered_scene_pages).unwrap();
+        assert_eq!(wire[0]["pageIndex"], 1);
+        assert_eq!(wire[0]["preview"]["width"], 612);
+        assert!(wire[0]["preview"]["dataUrl"].as_str().is_some_and(|value| value.starts_with("data:image/png;base64,")));
         outputs.extend(assert_success("PDF scene", export_pdf_scene(scene::ExportRequest { paths: vec![pdf.clone()], scene: visual_scene, output_location: OutputLocation::AlongsideInput })));
         outputs.extend(assert_success("unlock", remove_password(PasswordRequest { paths: vec![protected], password: "test-password".into(), output_location: location(&root, "unlock") })));
         outputs.extend(assert_success("page numbers", add_page_numbers(PageOverlayRequest { paths: vec![pdf.clone()], text: "1".into(), opacity: 100, position: Some("bottom-right".into()), logo_path: None, pages: None, start_number: Some(1), font_size: Some(12), output_location: location(&root, "page numbers") })));

@@ -12,10 +12,10 @@ test.beforeEach(async ({ page }) => {
         w.calls.push({ command, args });
         if (command === 'plugin:dialog|open') return '/local/scene-fixture.pdf';
         if (command === 'inspect_pdf_scene') return { path: '/local/scene-fixture.pdf', pages: [0, 1, 2].map(index => ({ index, width: 612, height: 792, preview: svg })) };
-        if (command === 'preview_pdf_scene') {
+        if (command === 'preview_pdf_scene_pages') {
           if (w.previewFailure) throw new Error('Renderer unavailable');
           if (w.previewDelay) await new Promise(resolve => setTimeout(resolve, w.previewDelay));
-          return { dataUrl: svg, width: 612, height: 792 };
+          return args.request.pageIndices.map((pageIndex: number) => ({ pageIndex, preview: { dataUrl: svg, width: 612, height: 792 } }));
         }
         if (command === 'export_pdf_scene') return [{ inputPath: '/local/scene-fixture.pdf', outputPaths: ['/local/scene-fixture-edited-1.pdf'], detail: 'PDF scene exported', failure: null }];
         return null;
@@ -44,6 +44,14 @@ async function exported(page: Page) {
   await page.getByRole('button', { name: 'Export PDF', exact: true }).click();
   return page.evaluate(() => (window as any).calls.filter((c: any) => c.command === 'export_pdf_scene').at(-1).args.request.scene);
 }
+
+test('scene preview cache misses use one indexed batch request', async ({ page }) => {
+  await openEditor(page);
+  const previewCalls = await page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'preview_pdf_scene_pages'));
+  expect(previewCalls).toHaveLength(1);
+  expect(previewCalls[0].args).toMatchObject({ request: { pageIndices: [0, 1] } });
+  expect(await page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'preview_pdf_scene').length)).toBe(0);
+});
 
 test('scene composes every mark kind, moves and resizes, then exports once', async ({ page }) => {
   await openEditor(page);

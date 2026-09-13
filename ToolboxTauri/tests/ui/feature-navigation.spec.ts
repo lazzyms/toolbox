@@ -58,7 +58,7 @@ test.beforeEach(async ({ page }) => {
                     }
                     return null;
                 }
-if (command === "preview_pdf_scene") return { dataUrl: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='612' height='792'/%3E", width: 612, height: 792 };
+if (command === "preview_pdf_scene_pages") return (args as { request: { pageIndices: number[] } }).request.pageIndices.map((pageIndex) => ({ pageIndex, preview: { dataUrl: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='612' height='792'/%3E", width: 612, height: 792 } }));
                 if (command === "inspect_pdf" || command === "inspect_pdf_scene") {
                     const inspectionDelay = (window as TestWindow).__toolboxInspectionDelayMs;
                     if (inspectionDelay) await new Promise((resolve) => window.setTimeout(resolve, inspectionDelay));

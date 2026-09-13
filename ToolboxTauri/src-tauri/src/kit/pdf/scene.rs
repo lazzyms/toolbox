@@ -55,10 +55,16 @@ pub struct PdfScene { pub pages: Vec<ScenePage> }
 pub struct PreviewRequest { pub path: PathBuf, pub scene: PdfScene, pub page_index: usize }
 #[derive(Deserialize)]
 #[serde(rename_all="camelCase")]
+pub struct PreviewPagesRequest { pub path: PathBuf, pub scene: PdfScene, pub page_indices: Vec<usize> }
+#[derive(Deserialize)]
+#[serde(rename_all="camelCase")]
 pub struct ExportRequest { pub paths: Vec<PathBuf>, pub scene: PdfScene, pub output_location: OutputLocation }
 #[derive(Serialize)]
 #[serde(rename_all="camelCase")]
 pub struct ScenePreview { pub data_url: String, pub width: u32, pub height: u32 }
+#[derive(Serialize)]
+#[serde(rename_all="camelCase")]
+pub struct IndexedScenePreview { pub page_index: usize, pub preview: ScenePreview }
 
 fn err(e: impl std::fmt::Display) -> String { e.to_string() }
 fn bounds(doc: &Document, v: &Object) -> Result<[f32;4], String> {
@@ -719,6 +725,25 @@ pub fn preview(request:&PreviewRequest)->Result<ScenePreview,String> {
     compose(&request.path,&request.scene)?.save(&path).map_err(err)?;
     render(&path,request.page_index,&renderer,&temp)
 }
+fn validate_preview_page_indices(page_indices:&[usize], page_count:usize)->Result<(),String> {
+    if !(1..=3).contains(&page_indices.len()) { return Err("Preview requests must include 1–3 page indices".into()); }
+    let mut seen=HashSet::with_capacity(page_indices.len());
+    for &index in page_indices {
+        if index>=page_count { return Err("Preview page outside scene".into()); }
+        if !seen.insert(index) { return Err("Preview page indices must be unique".into()); }
+    }
+    Ok(())
+}
+pub fn preview_pages(request:&PreviewPagesRequest)->Result<Vec<IndexedScenePreview>,String> {
+    validate_preview_page_indices(&request.page_indices,request.scene.pages.len())?;
+    let renderer=renderer()?;
+    let temp=TempDir::new()?;
+    let path=temp.0.join("scene.pdf");
+    compose(&request.path,&request.scene)?.save(&path).map_err(err)?;
+    request.page_indices.iter().copied().map(|page_index| {
+        render(&path,page_index,&renderer,&temp).map(|preview| IndexedScenePreview{page_index,preview})
+    }).collect()
+}
 pub fn inspect(path:&Path)->Result<PdfDocumentMetadata,String> {
     let doc=load(path)?;
     let mut pages=Vec::new();
@@ -1049,6 +1074,40 @@ mod tests {
         assert_eq!(fs::read_dir(&temp.0).unwrap().count(),1);
         assert!(compose(&input,&PdfScene{pages:vec![]}).is_err());
     }
+    #[test]
+    fn preview_pages_rejects_empty_duplicate_out_of_range_and_oversized_sets() {
+        let cases=[
+            (vec![], "Preview requests must include 1–3 page indices"),
+            (vec![0, 0], "Preview page indices must be unique"),
+            (vec![3], "Preview page outside scene"),
+            (vec![0, 1, 2, 0], "Preview requests must include 1–3 page indices"),
+        ];
+        for (page_indices,message) in cases {
+            let result=preview_pages(&PreviewPagesRequest { path: PathBuf::from("missing.pdf"), scene: scene(), page_indices });
+            assert_eq!(result.err().as_deref(),Some(message));
+        }
+    }
+
+    #[test]
+    fn preview_pages_returns_ordered_indexed_previews_from_one_normalized_scene() {
+        let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
+        let renderer=match renderer() { Ok(r)=>r,Err(e)=>{if std::env::var_os("TOOLBOX_REQUIRE_PDF_RENDERER").is_some(){panic!("{e}")}; eprintln!("Renderer unavailable: {e}");return;} };
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); fixture(&input);
+        let before=fs::read(&input).unwrap();
+        let request=PreviewPagesRequest { path:input.clone(), scene:scene(), page_indices:vec![2,0,1] };
+        let previews=preview_pages(&request).unwrap();
+        assert_eq!(previews.iter().map(|preview| preview.page_index).collect::<Vec<_>>(),vec![2,0,1]);
+        assert!(previews.iter().all(|preview| preview.preview.data_url.starts_with("data:image/png;base64,")));
+        assert_eq!(fs::read(&input).unwrap(),before);
+
+        let normalized=temp.0.join("normalized.pdf"); compose(&input,&request.scene).unwrap().save(&normalized).unwrap();
+        let render_temp=TempDir::new().unwrap();
+        for indexed in &previews {
+            let expected=render(&normalized,indexed.page_index,&renderer,&render_temp).unwrap();
+            assert_eq!(indexed.preview.data_url,expected.data_url,"page {} differs from the normalized scene render",indexed.page_index);
+        }
+    }
+
     #[test]
     fn preview_and_export_are_pixel_identical_and_temp_storage_is_cleaned() {
         let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();

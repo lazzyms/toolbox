@@ -12,6 +12,8 @@ import type { GenerationState } from './pdfPreviewHelpers';
 
 export { createPreviewCache, previewCacheKey, requestWithGeneration } from './pdfPreviewHelpers';
 
+type IndexedScenePreview = { pageIndex: number; preview: ScenePreview };
+
 const tools: { id: SceneTool; label: string; glyph: string }[] = [
   { id: 'select', label: 'Select', glyph: '↖' }, { id: 'text', label: 'Text', glyph: 'T' },
   { id: 'highlight', label: 'Highlight', glyph: '▰' }, { id: 'shape', label: 'Shape', glyph: '□' },
@@ -138,17 +140,23 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onScene }: {
     }
     const timer = missing.length ? window.setTimeout(() => {
       if (previewGeneration.current.current !== requestGeneration) return;
-      for (const { index, item, key } of missing) {
-        void requestWithGeneration(previewGeneration.current, requestGeneration,
-          () => invoke<ScenePreview>('preview_pdf_scene', { request: { path, scene, pageIndex: index } }),
-          (value) => {
+      void requestWithGeneration(previewGeneration.current, requestGeneration,
+        () => invoke<IndexedScenePreview[]>('preview_pdf_scene_pages', { request: { path, scene, pageIndices: missing.map(({ index }) => index) } }),
+        (values) => {
+          const previews = new Map(values.map(({ pageIndex, preview }) => [pageIndex, preview]));
+          for (const { index, item, key } of missing) {
+            const value = previews.get(index);
+            if (!value) {
+              if (index === currentIndex) setRenderError('Preview response did not include the current page.');
+              continue;
+            }
             previewCache.current.set(key, value);
             if (index === currentIndex) setPreview({ key, value });
             updateThumbnail(item, key, value);
-          },
-          (reason) => { if (index === currentIndex) setRenderError(String(reason)); },
-          () => { if (index === currentIndex) setRendering(false); });
-      }
+          }
+        },
+        (reason) => { if (missing.some(({ index }) => index === currentIndex)) setRenderError(String(reason)); },
+        () => setRendering(false));
     }, 200) : undefined;
     return () => { if (timer !== undefined) window.clearTimeout(timer); previewGeneration.current.current += 1; };
   }, [path, currentIndex, serializedScene, interaction]);
