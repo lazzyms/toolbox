@@ -2,12 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { ToolScaffold } from '../components/ToolScaffold';
+import type { WorkspaceSourceAction } from '../components/ToolScaffold';
 import type { ToolDefinition, ToolResult } from '../contracts';
 import type { PdfDocument, PdfPage, PdfTextRun } from '../features/pdf-editor/contracts';
 import { SceneCanvas } from '../features/pdf-editor/SceneCanvas';
 import { sceneFromDocument, visibleBounds } from '../features/pdf-editor/scene';
 import type { PdfScene, SceneObject, ScenePage, ScenePreview, SceneRect, SceneShape, SceneTool, SignatureMode, WatermarkPattern } from '../features/pdf-editor/scene';
-import { PREVIEW_CACHE_MAX_ENTRIES, PREVIEW_RENDER_SETTINGS, createPreviewCache, previewCacheKey, requestWithGeneration } from './pdfPreviewHelpers';
+import { PREVIEW_CACHE_MAX_ENTRIES, PREVIEW_RENDER_SETTINGS, createPreviewCache, pdfEditorErrorMessage, previewCacheKey, requestWithGeneration } from './pdfPreviewHelpers';
 import type { GenerationState } from './pdfPreviewHelpers';
 
 export { createPreviewCache, previewCacheKey, requestWithGeneration } from './pdfPreviewHelpers';
@@ -20,22 +21,30 @@ const tools: { id: SceneTool; label: string; glyph: string }[] = [
   { id: 'signature', label: 'Signature', glyph: '〰' }, { id: 'watermark', label: 'Watermark', glyph: 'W' },
   { id: 'crop', label: 'Crop', glyph: '⌗' },
 ];
+const toolGuidance: Record<SceneTool, string> = {
+  select: 'Select, move, or resize an object.', text: 'Drag to add text. Double-click text to edit it.',
+  highlight: 'Drag across text or draw a highlight area.', shape: 'Drag to draw a shape.',
+  signature: 'Choose a signature, then drag its box onto the page.', watermark: 'Choose a pattern, then add a watermark.',
+  crop: 'Drag a rectangle on the page to crop it.',
+};
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 type History = { past: PdfScene[]; present: PdfScene; future: PdfScene[] };
 
-export const PDFEditorWorkspaceView = ({ utility }: { utility: ToolDefinition }) => {
+export const PDFEditorWorkspaceView = ({ utility, onWorkspaceSourceAction }: { utility: ToolDefinition; onWorkspaceSourceAction?: (action: WorkspaceSourceAction | null) => void }) => {
   const session = useRef<{ path: string; scene: PdfScene } | null>(null);
   const initialTool: SceneTool = utility.id === 'pdf-crop' ? 'crop' : utility.id === 'pdf-watermark' ? 'watermark' : utility.id === 'pdf-sign' ? 'signature' : 'select';
-  return <ToolScaffold utility={utility} variant="workspace" sessionKey="pdf-editor-scene"
+  return <ToolScaffold utility={utility} variant="workspace" sessionKey="pdf-editor-scene" onWorkspaceSourceAction={onWorkspaceSourceAction}
     onRun={async (paths) => {
       const [inputPath] = paths;
       if (!inputPath || !session.current || session.current.path !== inputPath) throw new Error('Select exactly one open PDF before exporting.');
-      return invoke<ToolResult>('export_pdf_scene', { request: { paths, scene: session.current.scene, outputLocation: 'alongsideInput' } });
+      const results = await invoke<ToolResult>('export_pdf_scene', { request: { paths, scene: session.current.scene, outputLocation: 'alongsideInput' } });
+      return results.map((result) => result.failure ? { ...result, failure: { ...result.failure, message: pdfEditorErrorMessage(result.failure.message, 'export') } } : result);
     }}>
     {({ files, run, loading }) => {
       const inputPath = files.length === 1 ? files[0] ?? null : null;
       return <PDFSceneSession key={inputPath ?? 'empty'} path={inputPath} initialTool={initialTool}
-      exporting={loading} onExport={run} onScene={(path, scene) => { session.current = path && scene ? { path, scene } : null; }} />}
+      exporting={loading} onExport={run}
+      onScene={(path, scene) => { session.current = path && scene ? { path, scene } : null; }} />}
     }
   </ToolScaffold>;
 };
@@ -70,7 +79,6 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onScene }: {
   const [rendering, setRendering] = useState(false);
   const [preview, setPreview] = useState<{ key: string; value: ScenePreview } | null>(null);
   const [thumbnails, setThumbnails] = useState<Record<string, { key: string; value: ScenePreview }>>({});
-  const [interaction, setInteraction] = useState(0);
   const [renderError, setRenderError] = useState<string | null>(null);
   const group = useRef<string | null>(null);
   const draggedPage = useRef<string | null>(null);
@@ -94,7 +102,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onScene }: {
       const initial = sceneFromDocument(value);
       setHistory({ past: [], present: initial, future: [] });
       setCurrentId(initial.pages[0].id); setSelectedPages([initial.pages[0].id]);
-    }).catch((reason) => { if (active) setError(String(reason)); }).finally(() => { if (active) setLoading(false); });
+    }).catch((reason) => { if (active) setError(pdfEditorErrorMessage(reason, 'open')); }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [path]);
   useEffect(() => {
@@ -114,7 +122,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onScene }: {
           return { ...current, pages: current.pages.map((item, index) => index === sourceIndex ? { ...item, textRuns } : item) };
         });
       },
-      (reason) => setError(String(reason)),
+      (reason) => setError(pdfEditorErrorMessage(reason, 'open')),
       () => {});
     return () => { textGeneration.current.current += 1; };
   }, [path, document, page?.sourceIndex]);
@@ -177,11 +185,11 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onScene }: {
             updateThumbnail(item, key, value);
           }
         },
-        (reason) => { if (missing.some(({ index }) => index === currentIndex)) setRenderError(String(reason)); },
+        (reason) => { if (missing.some(({ index }) => index === currentIndex)) setRenderError(pdfEditorErrorMessage(reason, 'preview')); },
         () => setRendering(false));
     }, 200) : undefined;
     return () => { if (timer !== undefined) window.clearTimeout(timer); previewGeneration.current.current += 1; };
-  }, [path, currentIndex, serializedScene, interaction]);
+  }, [path, currentIndex, serializedScene]);
 
   const commit = (next: PdfScene, mergeGroup: string | null = null) => {
     const merge = Boolean(mergeGroup && group.current === mergeGroup);
@@ -289,13 +297,14 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onScene }: {
   const activeSignatureFont = selected?.fontFamily ?? signatureFont;
   const activeWatermarkPattern = selected?.watermarkPattern ?? watermarkPattern;
   const activeWatermarkText = selected?.text ?? watermarkText;
+  const showProperties = Boolean(selected) || tool !== 'select';
 
   return <section className="pdf-scene-workspace" aria-label="PDF editing session" onKeyDown={(event) => {
     const input = event.target instanceof HTMLElement && (['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target.tagName) || event.target.isContentEditable);
     if (!input && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); event.shiftKey ? redo() : undo(); }
   }}>
     <div className="scene-tools" role="toolbar" aria-label="PDF editor tools">
-      {tools.map((item) => <button key={item.id} type="button" aria-label={item.label} title={item.label} aria-pressed={tool === item.id}
+      {tools.map((item) => <button key={item.id} type="button" aria-label={item.label} aria-description={toolGuidance[item.id]} title={toolGuidance[item.id]} aria-pressed={tool === item.id}
         onClick={() => { endGroup(); setTool(item.id); setSelectedId(null); }} disabled={!page}><span aria-hidden="true">{item.glyph}</span>{item.label}</button>)}
       <span className="scene-toolbar-divider" />
       <button type="button" aria-label="Undo" title="Undo (⌘Z / Ctrl+Z)" disabled={!history.past.length} onClick={undo}>↶</button>
@@ -304,9 +313,8 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onScene }: {
       <button type="button" className="workspace-primary-action scene-export" aria-label="Export PDF" disabled={!page || exporting || Boolean(renderError) || rendering || !exactPreview}
         onClick={() => void onExport()}>{exporting ? 'Exporting…' : 'Export PDF'}</button>
     </div>
-    <div className="scene-properties" aria-label="Object properties">
+    {showProperties && <div className="scene-properties" aria-label="Object properties">
       {selectedKind === 'text' && <>
-        <span className="scene-inline-hint">Double-click text on the page to edit</span>
         <label>Size<input aria-label="Font size" type="number" min="6" max="144" value={selected?.fontSize ?? fontSize}
           onChange={(event) => { const value = Math.max(6, Math.min(144, Number(event.target.value) || 6)); selected ? updateObject({ fontSize: value }, 'font') : setFontSize(value); }} onBlur={endGroup} /></label>
       </>}
@@ -354,7 +362,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onScene }: {
       {tool === 'signature' && !selected && <span>{signatureMode === 'image' ? 'Choose an image, then drag its box onto the page.' : 'Type a signature, choose its font, then drag a box onto the page.'}</span>}
       {tool === 'watermark' && !selected && <><span>Fixed placement: choose a pattern and add it to the page.</span><button type="button" onClick={addFixedWatermark}>Add fixed watermark</button></>}
       <span className="scene-render-status" role="status">{rendering ? 'Rendering on device…' : exactPreview ? 'Export preview · on device' : 'Local document'}</span>
-    </div>
+    </div>}
     {error && <p role="alert" className="scene-error">{error}</p>}
     {renderError && <p role="alert" className="scene-error">{renderError} Export is disabled until the preview can be verified.</p>}
     {!page ? <div className="scene-empty"><strong>{loading ? 'Opening PDF…' : 'Open a PDF to edit'}</strong><span>Text, markup, signatures and page edits in one document.<br />Files stay on your device. Export creates a new copy.</span></div> : <>
@@ -379,7 +387,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onScene }: {
           <SceneCanvas page={page} sourcePreview={page.sourceIndex === null ? null : document?.pages[page.sourceIndex]?.preview ?? null}
             textRuns={page.sourceIndex === null ? [] : document?.pages[page.sourceIndex]?.textRuns ?? []}
             renderedPreview={exactPreview} tool={tool} selectedId={selectedId} zoom={zoom} onSelect={(id) => { endGroup(); setSelectedId(id); }}
-            onCommit={commitPage} onInteraction={() => { setPreview(null); setInteraction((value) => value + 1); }} makeObject={makeObject} />
+            onCommit={commitPage} makeObject={makeObject} />
         </div>
       </div>
       <footer className="scene-bottom-bar">

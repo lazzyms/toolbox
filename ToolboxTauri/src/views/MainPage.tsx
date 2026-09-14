@@ -7,6 +7,7 @@ import {
 } from "../registry";
 import type { ToolDefinition, WorkspaceId } from "../contracts";
 import { TablerIcon } from "../components/TablerIcon";
+import type { WorkspaceSourceAction } from "../components/ToolScaffold";
 import { SecurityWorkspaceView } from "./SecurityWorkspaceView";
 import { PDFEditorWorkspaceView } from "./PDFEditorWorkspaceView";
 import { PDFConversionWorkspaceView } from "./PDFConversionWorkspaceView";
@@ -64,6 +65,7 @@ const iconName = (tool: ToolDefinition) =>
 
 export const MainPage = () => {
   const [selectedTool, setSelectedTool] = useState<ToolDefinition | null>(null);
+  const [workspaceSourceAction, setWorkspaceSourceAction] = useState<WorkspaceSourceAction | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [filter, setFilter] = useState<
     "all" | "PDF" | "Images" | "Documents" | "favorites" | "recent"
@@ -104,6 +106,7 @@ export const MainPage = () => {
     [filter, search, favorites, recent],
   );
   const openTool = (tool: ToolDefinition) => {
+    setWorkspaceSourceAction(null);
     setSelectedTool(tool);
     setRecent((current) => {
       const next = [tool.id, ...current.filter((id) => id !== tool.id)].slice(
@@ -127,6 +130,7 @@ export const MainPage = () => {
   ) => {
     setFilter(nextFilter);
     setSearch("");
+    setWorkspaceSourceAction(null);
     setSelectedTool(null);
   };
   const workspaceTitle =
@@ -253,13 +257,21 @@ export const MainPage = () => {
         </header>
         {selectedTool && selectedWorkspace ? (
           <section className={`tool-workspace ${selectedWorkspace.id === "pdf-editor" ? "pdf-studio" : ""}`} id="tool-detail">
-            <button
-              className="back-link"
-              type="button"
-              onClick={() => setSelectedTool(null)}
-            >
-              ← All tools
-            </button>
+            {selectedWorkspace.id === "pdf-editor" ? (
+              <div className="pdf-editor-header-line">
+                <button className="back-link" type="button" onClick={() => { setWorkspaceSourceAction(null); setSelectedTool(null); }}>← All tools</button>
+                <h1 className="workspace-title">{selectedWorkspace.title}</h1>
+                {workspaceSourceAction && <button type="button" className="pdf-editor-open-files" aria-label="Choose files to process" title="Open files" onClick={() => void workspaceSourceAction()}>Open files</button>}
+                <button
+                  className="favorite-button"
+                  type="button"
+                  aria-pressed={favorites.includes(selectedTool.id)}
+                  onClick={() => toggleFavorite(selectedTool.id)}
+                >
+                  {favorites.includes(selectedTool.id) ? "★ Saved" : "☆ Save"}
+                </button>
+              </div>
+            ) : <button className="back-link" type="button" onClick={() => setSelectedTool(null)}>← All tools</button>}
             <div className="tool-workspace-card">
               <div className="tool-workspace-kicker">
                 <span className="card-icon">
@@ -267,7 +279,7 @@ export const MainPage = () => {
                 </span>
                 {selectedWorkspace.title} workspace
               </div>
-              <div className="tool-workspace-heading">
+              {selectedWorkspace.id !== "pdf-editor" && <div className="tool-workspace-heading">
                 <div>
                   <h1 className="workspace-title">{selectedWorkspace.title}</h1>
                   <p>{selectedWorkspace.blurb}</p>
@@ -280,9 +292,9 @@ export const MainPage = () => {
                 >
                   {favorites.includes(selectedTool.id) ? "★ Saved" : "☆ Save"}
                 </button>
-              </div>
+              </div>}
               <div className="tool-view">
-                <ViewFor utility={selectedTool} />
+                <ViewFor utility={selectedTool} onWorkspaceSourceAction={selectedWorkspace.id === "pdf-editor" ? (action) => setWorkspaceSourceAction(() => action) : undefined} />
               </div>
             </div>
           </section>
@@ -468,12 +480,13 @@ export const MainPage = () => {
   );
 };
 
-const ViewFor = ({ utility }: { utility: ToolDefinition }) => {
+const ViewFor = ({ utility, onWorkspaceSourceAction }: { utility: ToolDefinition; onWorkspaceSourceAction?: (action: WorkspaceSourceAction | null) => void }) => {
   if (utility.capability.nativeAvailability === "unavailable") {
     return <UnavailableToolView utility={utility} />;
   }
   const workspace = workspaceForTool(utility.id);
   if (!workspace) return <PlannedToolView utility={utility} />;
+  if (workspace.id === "pdf-editor") return <PDFEditorWorkspaceView utility={utility} onWorkspaceSourceAction={onWorkspaceSourceAction} />;
   const View = workspaceViews[workspace.id];
   return <View utility={utility} />;
 };

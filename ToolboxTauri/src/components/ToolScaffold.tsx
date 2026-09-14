@@ -5,12 +5,15 @@ import type { ToolDefinition, JobOutcome, Progress } from '../contracts';
 import { ResultList } from './ResultList';
 import { TablerIcon } from './TablerIcon';
 
+export type WorkspaceSourceAction = () => void | Promise<void>;
+
 interface ToolScaffoldProps {
     utility: ToolDefinition;
     onRun: (files: string[]) => Promise<JobOutcome[]>;
     onRunCombined?: (files: string[]) => Promise<JobOutcome[]>;
     variant?: 'standard' | 'workspace';
     sessionKey?: string;
+    onWorkspaceSourceAction?: (action: WorkspaceSourceAction | null) => void;
     showFileOrdering?: boolean;
     children: (props: {
         files: string[];
@@ -24,12 +27,13 @@ interface ToolScaffoldProps {
     }) => React.ReactNode;
 }
 
-export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, showFileOrdering = true, children }: ToolScaffoldProps) => {
+export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, children }: ToolScaffoldProps) => {
     const [files, setFiles] = useState<string[]>([]);
     const [results, setResults] = useState<JobOutcome[]>([]);
     const [loading, setLoading] = useState(false);
     const [selectedFileIndex, setSelectedFileIndex] = useState(0);
     const runGeneration = useRef(0);
+    const browseRef = useRef<WorkspaceSourceAction>(() => undefined);
     const inputPolicy = utility.capability;
     const acceptedExtensions = new Set(inputPolicy.acceptedExtensions.map((extension) => extension.toLowerCase()));
     const unsupportedFiles = files.filter((path) => {
@@ -169,6 +173,13 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         }
     };
 
+    browseRef.current = browse;
+    useEffect(() => {
+        if (variant !== 'workspace' || !onWorkspaceSourceAction) return;
+        onWorkspaceSourceAction(files.length === 0 ? () => browseRef.current() : null);
+        return () => onWorkspaceSourceAction(null);
+    }, [files.length, onWorkspaceSourceAction, variant]);
+
     const clearFiles = (event?: React.MouseEvent<HTMLButtonElement>) => {
         event?.stopPropagation();
         setFiles([]);
@@ -230,7 +241,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
     );
 
     const workspaceSource = (
-        <section className="workspace-source-bar" aria-label="Open document">
+        <section className="workspace-source-bar" aria-label="Open document" data-empty={files.length === 0 ? 'true' : 'false'}>
             <div className="workspace-source-copy">
                 <span className="workspace-source-kicker">Source</span>
                 <strong>{files.length ? `${files.length} ${files.length === 1 ? 'file' : 'files'} open` : 'Open a file to begin'}</strong>

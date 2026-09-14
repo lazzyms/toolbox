@@ -56,20 +56,31 @@ function shapeArtwork(shape: SceneShape | undefined, r: SceneRect, color: string
 
 function watermarkPlacements(page: ScenePage, object: SceneObject): { x: number; y: number; angle: number }[] {
   const area = visibleBounds(page);
+  const anchor = object.rect;
   const pattern: WatermarkPattern = object.watermarkPattern ?? 'across-page';
   const textWidth = Math.max(1, object.text.length) * object.fontSize * 0.6;
-  const centerX = area.x + area.width / 2, centerY = area.y + area.height / 2;
+  const centerX = anchor.x + anchor.width / 2, centerY = anchor.y + anchor.height / 2;
   if (pattern === 'bottom-right-to-top-left') return [{ x: centerX - textWidth / 2, y: centerY + object.fontSize / 2, angle: -45 }];
   if (pattern === 'top-right-to-bottom-left') return [{ x: centerX - textWidth / 2, y: centerY + object.fontSize / 2, angle: 45 }];
   if (pattern === 'center-horizontal') return [{ x: centerX - textWidth / 2, y: centerY + object.fontSize / 2, angle: 0 }];
   if (pattern === 'center-vertical') return [{ x: centerX - textWidth / 2, y: centerY + object.fontSize / 2, angle: 90 }];
   const stepX = Math.max(100, textWidth + object.fontSize * 2), stepY = Math.max(80, object.fontSize * 4);
   const placements: { x: number; y: number; angle: number }[] = [];
-  for (let y = area.y - area.height; y <= area.y + area.height * 2; y += stepY) {
-    const offset = Math.round((y - area.y) / stepY) * stepX * 0.45;
-    for (let x = area.x - area.width + offset; x <= area.x + area.width * 2; x += stepX) placements.push({ x, y, angle: -35 });
+  const offsetX = anchor.x - (area.x + area.width * 0.14);
+  const offsetY = anchor.y - (area.y + area.height * 0.33);
+  for (let y = area.y - area.height + offsetY; y <= area.y + area.height * 2 + offsetY; y += stepY) {
+    const offset = Math.round((y - (area.y + offsetY)) / stepY) * stepX * 0.45;
+    for (let x = area.x - area.width + offsetX + offset; x <= area.x + area.width * 2 + offsetX; x += stepX) placements.push({ x, y, angle: -35 });
   }
   return placements;
+}
+
+function resizedObject(object: SceneObject, rect: SceneRect, original: SceneObject): SceneObject {
+  if (object.kind !== 'watermark') return { ...object, rect };
+  const widthScale = rect.width / Math.max(1, original.rect.width);
+  const heightScale = rect.height / Math.max(1, original.rect.height);
+  const fontSize = Math.max(6, Math.min(144, original.fontSize * Math.max(widthScale, heightScale)));
+  return { ...object, rect, fontSize };
 }
 
 function Artwork({ page, object }: { page: ScenePage; object: SceneObject }) {
@@ -99,11 +110,12 @@ function Artwork({ page, object }: { page: ScenePage; object: SceneObject }) {
   return shapeArtwork(object.shape, r, object.color, object.opacity);
 }
 
-export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPreview, tool, selectedId, zoom, onSelect, onCommit, onInteraction, makeObject }: SceneCanvasProps) {
+export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPreview, tool, selectedId, zoom, onSelect, onCommit, makeObject }: SceneCanvasProps) {
   const host = useRef<HTMLDivElement>(null);
   const surface = useRef<SVGSVGElement>(null);
   const coordinates = useRef<SVGGElement>(null);
   const gesture = useRef<Gesture | null>(null);
+  const lastObjectId = useRef<string | null>(null);
   const spacePressed = useRef(false);
   const editInput = useRef<HTMLTextAreaElement>(null);
   const [draft, setDraft] = useState<ScenePage | null>(null);
@@ -193,7 +205,8 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     // Pointer capture can retarget the second click to the SVG surface. Keep
     // the selected object as the fallback so double-clicking still enters the
     // inline editor after the first click selected its hit box.
-    const id = (event.target as Element).closest('[data-object]')?.getAttribute('data-object') ?? selectedId;
+    const hit = Array.from(document.elementsFromPoint(event.clientX, event.clientY)).find((element) => element.closest('[data-object]'))?.closest('[data-object]');
+    const id = (event.target as Element).closest('[data-object]')?.getAttribute('data-object') ?? hit?.getAttribute('data-object') ?? lastObjectId.current ?? selectedId;
     const object = id ? page.objects.find(item => item.id === id) : undefined;
     if (object) beginTextEdit(event, object);
   }
@@ -229,12 +242,10 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     let next = page;
     let mode: Gesture['mode'];
     let objectId = id;
-    const existing = id ? page.objects.find(object => object.id === id) : undefined;
-    if (existing?.kind === 'watermark') { onSelect(id ?? null); event.preventDefault(); return; }
-    if (id && tool !== 'crop' && (tool === 'select' || selectedId === id || corner)) { mode = corner ? 'resize' : 'move'; onSelect(id); }
-    else if (tool === 'select') { onSelect(null); return; }
+    if (id && tool !== 'crop' && (tool === 'select' || selectedId === id || corner)) { mode = corner ? 'resize' : 'move'; lastObjectId.current = id; onSelect(id); }
+    else if (tool === 'select') { lastObjectId.current = null; onSelect(null); return; }
     else if (tool === 'crop') { mode = 'crop'; onSelect(null); }
-    else if (tool === 'watermark') { onSelect(null); return; }
+    else if (tool === 'watermark') { lastObjectId.current = null; onSelect(null); return; }
     else {
       mode = 'create';
       const object = makeObject(tool, { x: start.x, y: start.y, width: 1, height: 1 });
@@ -246,7 +257,6 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     surface.current?.setPointerCapture(event.pointerId);
     (target.closest('[data-object]') as SVGElement | null)?.focus();
     gesture.current = { pointerId: event.pointerId, start, base: page, next, mode, id: objectId, corner, points: [start], changed: false };
-    onInteraction();
     setDraft(next);
   }
   function move(event: PointerEvent<SVGSVGElement>) {
@@ -281,7 +291,7 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
         rect = rectangle({ x: Math.min(...xs), y: Math.min(...ys) }, { x: Math.max(...xs), y: Math.max(...ys) });
         return { ...object, rect, strokes: [g.points.map(v => ({ x: (v.x - rect.x) / rect.width, y: (v.y - rect.y) / rect.height }))] };
       }
-      return { ...object, rect };
+      return g.mode === 'resize' ? resizedObject(object, rect, original) : { ...object, rect };
     }) };
     setDraft(g.next);
   }
@@ -307,11 +317,10 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
   function key(event: KeyboardEvent<SVGElement>, object: SceneObject, corner?: string) {
     if (event.key === 'Escape') { gesture.current = null; setDraft(null); onSelect(null); return; }
     if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(object.id); return; }
-    if (object.kind === 'watermark') return;
     const steps: Record<string, ScenePoint> = { ArrowLeft: { x: -1, y: 0 }, ArrowRight: { x: 1, y: 0 }, ArrowUp: { x: 0, y: -1 }, ArrowDown: { x: 0, y: 1 } };
     const step = steps[event.key];
     if (!step && event.key !== 'Delete' && event.key !== 'Backspace') return;
-    event.preventDefault(); event.stopPropagation(); onInteraction(); onSelect(object.id);
+    event.preventDefault(); event.stopPropagation(); onSelect(object.id);
     const angle = page.rotation * Math.PI / 180, amount = event.shiftKey ? 10 : 1;
     const dx = step ? Math.round((step.x * Math.cos(angle) + step.y * Math.sin(angle)) * amount) : 0;
     const dy = step ? Math.round((-step.x * Math.sin(angle) + step.y * Math.cos(angle)) * amount) : 0;
@@ -320,7 +329,7 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     const rect = corner ? rectangle({ x: corner.includes('w') ? r.x + r.width : r.x, y: corner.includes('n') ? r.y + r.height : r.y },
       { x: Math.max(b.x, Math.min(b.x + b.width, (corner.includes('w') ? r.x : r.x + r.width) + dx)), y: Math.max(b.y, Math.min(b.y + b.height, (corner.includes('n') ? r.y : r.y + r.height) + dy)) })
       : { ...r, x: Math.max(b.x, Math.min(b.x + b.width - r.width, r.x + dx)), y: Math.max(b.y, Math.min(b.y + b.height - r.height, r.y + dy)) };
-    onCommit({ ...page, objects: page.objects.map(o => o.id === object.id ? { ...o, rect } : o) });
+    onCommit({ ...page, objects: page.objects.map(o => o.id === object.id ? (corner ? resizedObject(o, rect, o) : { ...o, rect }) : o) });
   }
   const exact = renderedPreview && !draft && !editingId;
   return <div className="scene-canvas" ref={host}>
@@ -342,7 +351,7 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
           </foreignObject>}
           {selectedId === object.id && editingId !== object.id && <g className="scene-selection">
             <rect {...object.rect} fill="none" stroke="var(--scene-accent, #2563eb)" strokeWidth={1.5 / scale} pointerEvents="none" />
-            {object.kind !== 'watermark' && (['nw', 'ne', 'sw', 'se'] as const).map(corner => <rect key={corner} data-object={object.id} data-corner={corner} x={(corner.includes('w') ? object.rect.x : object.rect.x + object.rect.width) - 5 / scale} y={(corner.includes('n') ? object.rect.y : object.rect.y + object.rect.height) - 5 / scale} width={10 / scale} height={10 / scale} tabIndex={0} role="button" aria-label={`Resize ${object.kind} ${corner}`} className="scene-resize-handle" strokeWidth={1 / scale} onKeyDown={e => key(e, object, corner)} />)}
+            {(['nw', 'ne', 'sw', 'se'] as const).map(corner => <rect key={corner} data-object={object.id} data-corner={corner} x={(corner.includes('w') ? object.rect.x : object.rect.x + object.rect.width) - 5 / scale} y={(corner.includes('n') ? object.rect.y : object.rect.y + object.rect.height) - 5 / scale} width={10 / scale} height={10 / scale} tabIndex={0} role="button" aria-label={`Resize ${object.kind} ${corner}`} className="scene-resize-handle" strokeWidth={1 / scale} onKeyDown={e => key(e, object, corner)} />)}
           </g>}
         </g>)}
         {draft && gesture.current?.mode === 'crop' && draft.crop && <rect {...draft.crop} className="scene-crop-outline" strokeWidth={2 / scale} pointerEvents="none" />}

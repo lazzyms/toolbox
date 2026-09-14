@@ -181,7 +181,7 @@ test('signature supports a draggable local image and a typed font-backed box', a
   expect(scene.pages[0].objects[1]).toMatchObject({ signatureMode: 'text', text: 'A. Local', fontFamily: 'Times-Italic' });
 });
 
-test('watermarks are added as fixed patterns and cannot be moved by dragging', async ({ page }) => {
+test('watermarks expose move and resize handles and export resized geometry', async ({ page }) => {
   await openEditor(page);
   await page.getByRole('button', { name: 'Watermark', exact: true }).click();
   await expect(page.locator('input[type="color"][aria-label="Object color"]')).toBeVisible();
@@ -190,11 +190,20 @@ test('watermarks are added as fixed patterns and cannot be moved by dragging', a
   await page.getByRole('combobox', { name: 'Watermark pattern' }).selectOption('bottom-right-to-top-left');
   await page.getByRole('button', { name: 'Add fixed watermark', exact: true }).click();
   const watermark = page.getByRole('button', { name: 'watermark object 1', exact: true });
+  await watermark.focus();
+  await expect(page.getByRole('button', { name: 'Resize watermark se', exact: true })).toBeVisible();
   const before = await watermark.boundingBox();
   const box = before!;
   await page.mouse.move(box.x + 5, box.y + 5); await page.mouse.down(); await page.mouse.move(box.x + 100, box.y + 50, { steps: 5 }); await page.mouse.up();
   const after = await watermark.boundingBox();
-  expect(after?.x).toBeCloseTo(box.x, 0);
+  expect(after?.x).toBeGreaterThan(box.x + 20);
+  const handle = page.getByRole('button', { name: 'Resize watermark se', exact: true });
+  const handleBox = (await handle.boundingBox())!;
+  const beforeScene = await sceneFromExport(page);
+  await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2);
+  await page.mouse.down(); await page.mouse.move(handleBox.x + 80, handleBox.y + 40, { steps: 5 }); await page.mouse.up();
   const scene = await sceneFromExport(page);
   expect(scene.pages[0].objects[0]).toMatchObject({ kind: 'watermark', text: 'PRIVATE', watermarkPattern: 'bottom-right-to-top-left' });
+  expect(scene.pages[0].objects[0].rect.width).toBeGreaterThan(beforeScene.pages[0].objects[0].rect.width);
+  expect(scene.pages[0].objects[0].fontSize).toBeGreaterThan(beforeScene.pages[0].objects[0].fontSize);
 });

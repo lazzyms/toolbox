@@ -24,7 +24,7 @@ test.beforeEach(async ({ page }) => {
       if (!mounted) return null;
       return React.createElement(SceneCanvas, { page, tool, selectedId, onSelect, zoom: 1, sourcePreview: null, renderedPreview: null,
         textRuns: [{ text: 'Selectable local text', x: 60, y: 55, width: 250, height: 25 }],
-        onInteraction: () => {}, onCommit: (next: any) => { (window as any).commits = ((window as any).commits ?? 0) + 1; setPage(next); },
+        onCommit: (next: any) => { (window as any).commits = ((window as any).commits ?? 0) + 1; setPage(next); },
         makeObject: (kind: string, rect: any) => ({ id: crypto.randomUUID(), kind, rect, text: 'Local text', fontSize: 18, color: '#202020', opacity: 1, strokes: [] }),
       });
     }

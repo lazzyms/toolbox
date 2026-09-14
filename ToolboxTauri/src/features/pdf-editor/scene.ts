@@ -51,7 +51,6 @@ export interface SceneCanvasProps {
   zoom: number;
   onSelect: (id: string | null) => void;
   onCommit: (page: ScenePage) => void;
-  onInteraction: () => void;
   makeObject: (kind: SceneObject['kind'], rect: SceneRect) => SceneObject;
 }
 export const sceneFromDocument = (document: PdfDocument): PdfScene => ({

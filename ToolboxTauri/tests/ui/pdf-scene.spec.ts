@@ -24,7 +24,7 @@ test.beforeEach(async ({ page }) => {
           return { index: pageIndex, width: 612, height: 792, preview: null, textRuns: [{ text: `${args.request.path} page ${pageIndex} response ${response}`, x: 60, y: 55, width: 250, height: 25 }] };
         }
         if (command === 'preview_pdf_scene_pages') {
-          if (w.previewFailure) throw new Error('Renderer unavailable');
+          if (w.previewFailure) throw new Error(w.previewFailureMessage ?? 'Renderer unavailable');
           if (w.previewDelay) await new Promise(resolve => setTimeout(resolve, w.previewDelay));
           return args.request.pageIndices.map((pageIndex: number) => ({ pageIndex, preview: { dataUrl: svg, width: 612, height: 792 } }));
         }
@@ -56,12 +56,38 @@ async function exported(page: Page) {
   return page.evaluate(() => (window as any).calls.filter((c: any) => c.command === 'export_pdf_scene').at(-1).args.request.scene);
 }
 
+test('PDF editor keeps the back link, title, and empty-state open action compact', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open Edit PDF', exact: true }).click();
+  await expect(page.locator('.pdf-editor-header-line')).toContainText('PDF editor');
+  await expect(page.locator('.pdf-editor-header-line')).toContainText('Open files');
+  await expect(page.getByRole('button', { name: 'Choose files to process' })).toBeVisible();
+  await expect(page.locator('.workspace-source-bar[data-empty="true"]')).toBeHidden();
+  await expect(page.getByRole('button', { name: '← All tools', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Choose files to process' }).click();
+  await expect(page.getByRole('group', { name: 'PDF page canvas' })).toBeVisible();
+  await expect(page.locator('[aria-label="Object properties"]')).toHaveCount(0);
+});
+
 test('scene preview cache misses use one indexed batch request', async ({ page }) => {
   await openEditor(page);
   const previewCalls = await page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'preview_pdf_scene_pages'));
   expect(previewCalls).toHaveLength(1);
   expect(previewCalls[0].args).toMatchObject({ request: { pageIndices: [0, 1] } });
   expect(await page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'preview_pdf_scene').length)).toBe(0);
+});
+
+test('pointer-down does not request another preview before the scene changes', async ({ page }) => {
+  await openEditor(page);
+  const canvas = (await page.getByRole('group', { name: 'PDF page canvas' }).boundingBox())!;
+  const before = await page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'preview_pdf_scene_pages').length);
+  await page.getByRole('button', { name: 'Text', exact: true }).click();
+  await page.mouse.move(canvas.x + canvas.width * .2, canvas.y + canvas.height * .2);
+  await page.mouse.down();
+  await page.waitForTimeout(250);
+  expect(await page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'preview_pdf_scene_pages').length)).toBe(before);
+  expect(await page.locator('.scene-canvas image').count()).toBeGreaterThan(0);
+  await page.mouse.up();
 });
 
 test('scene lazily requests text for the current source page', async ({ page }) => {
@@ -158,8 +184,19 @@ test('scene rejects stale and failed previews without exposing an unverified exp
   await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeEnabled();
   await page.evaluate(() => { (window as any).previewFailure = true; });
   await draw(page, 'Shape', .4);
+  expect(await page.locator('.scene-canvas image').count()).toBeGreaterThan(0);
   await expect(page.getByRole('alert')).toContainText('Renderer unavailable');
   await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeDisabled();
+});
+
+test('scene explains unsafe PDF preview failures without exposing native wrappers', async ({ page }) => {
+  await openEditor(page);
+  await page.evaluate(() => {
+    (window as any).previewFailure = true;
+    (window as any).previewFailureMessage = 'Error: This tagged PDF contains structure mappings that cannot be remapped by scene edits; scene export was rejected before output';
+  });
+  await draw(page, 'Shape', .4);
+  await expect(page.getByRole('alert')).toHaveText('This tagged PDF uses accessibility structure that cannot be preserved after this edit. Undo the page edit or use a copy without tagged structure. Export is disabled until the preview can be verified.');
 });
 
 for (const theme of ['light', 'dark']) test(`scene preview and inline tools remain above the fold in ${theme}`, async ({ page }, testInfo) => {
