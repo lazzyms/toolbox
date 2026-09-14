@@ -22,7 +22,9 @@ type Gesture = { pointerId: number; start: ScenePoint; base: ScenePage; next: Sc
   clientStart?: ScenePoint; scrollStart?: ScenePoint };
 const rectangle = (a: ScenePoint, b: ScenePoint): SceneRect => ({ x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), width: Math.max(1, Math.abs(a.x - b.x)), height: Math.max(1, Math.abs(a.y - b.y)) });
 
-const cssFont = (font?: string) => font?.startsWith('Times') ? 'Times New Roman, serif' : font?.startsWith('Courier') ? 'Courier New, monospace' : 'Helvetica, Arial, sans-serif';
+const cssFont = (font?: string) => font === 'Satisfy' ? 'Toolbox Satisfy, cursive'
+  : font === 'Pacifico' ? 'Toolbox Pacifico, cursive'
+    : font?.startsWith('Times') ? 'Times New Roman, serif' : font?.startsWith('Courier') ? 'Courier New, monospace' : 'Helvetica, Arial, sans-serif';
 const fontWeight = (font?: string) => font?.includes('Bold') ? 700 : 400;
 const fontStyle = (font?: string) => font?.includes('Oblique') || font?.includes('Italic') ? 'italic' : 'normal';
 
@@ -76,11 +78,8 @@ function watermarkPlacements(page: ScenePage, object: SceneObject): { x: number;
 }
 
 function resizedObject(object: SceneObject, rect: SceneRect, original: SceneObject): SceneObject {
-  if (object.kind !== 'watermark') return { ...object, rect };
-  const widthScale = rect.width / Math.max(1, original.rect.width);
-  const heightScale = rect.height / Math.max(1, original.rect.height);
-  const fontSize = Math.max(6, Math.min(144, original.fontSize * Math.max(widthScale, heightScale)));
-  return { ...object, rect, fontSize };
+  if (object.kind === 'watermark') return original;
+  return { ...object, rect };
 }
 
 function Artwork({ page, object }: { page: ScenePage; object: SceneObject }) {
@@ -242,6 +241,12 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     let next = page;
     let mode: Gesture['mode'];
     let objectId = id;
+    const hitObject = id ? page.objects.find(object => object.id === id) : undefined;
+    if (hitObject?.kind === 'watermark' && tool !== 'crop') {
+      lastObjectId.current = id ?? null;
+      onSelect(id ?? null);
+      return;
+    }
     if (id && tool !== 'crop' && (tool === 'select' || selectedId === id || corner)) { mode = corner ? 'resize' : 'move'; lastObjectId.current = id; onSelect(id); }
     else if (tool === 'select') { lastObjectId.current = null; onSelect(null); return; }
     else if (tool === 'crop') { mode = 'crop'; onSelect(null); }
@@ -320,6 +325,7 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     const steps: Record<string, ScenePoint> = { ArrowLeft: { x: -1, y: 0 }, ArrowRight: { x: 1, y: 0 }, ArrowUp: { x: 0, y: -1 }, ArrowDown: { x: 0, y: 1 } };
     const step = steps[event.key];
     if (!step && event.key !== 'Delete' && event.key !== 'Backspace') return;
+    if (object.kind === 'watermark' && step) { event.preventDefault(); event.stopPropagation(); return; }
     event.preventDefault(); event.stopPropagation(); onSelect(object.id);
     const angle = page.rotation * Math.PI / 180, amount = event.shiftKey ? 10 : 1;
     const dx = step ? Math.round((step.x * Math.cos(angle) + step.y * Math.sin(angle)) * amount) : 0;
@@ -351,7 +357,7 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
           </foreignObject>}
           {selectedId === object.id && editingId !== object.id && <g className="scene-selection">
             <rect {...object.rect} fill="none" stroke="var(--scene-accent, #2563eb)" strokeWidth={1.5 / scale} pointerEvents="none" />
-            {(['nw', 'ne', 'sw', 'se'] as const).map(corner => <rect key={corner} data-object={object.id} data-corner={corner} x={(corner.includes('w') ? object.rect.x : object.rect.x + object.rect.width) - 5 / scale} y={(corner.includes('n') ? object.rect.y : object.rect.y + object.rect.height) - 5 / scale} width={10 / scale} height={10 / scale} tabIndex={0} role="button" aria-label={`Resize ${object.kind} ${corner}`} className="scene-resize-handle" strokeWidth={1 / scale} onKeyDown={e => key(e, object, corner)} />)}
+            {object.kind !== 'watermark' && (['nw', 'ne', 'sw', 'se'] as const).map(corner => <rect key={corner} data-object={object.id} data-corner={corner} x={(corner.includes('w') ? object.rect.x : object.rect.x + object.rect.width) - 5 / scale} y={(corner.includes('n') ? object.rect.y : object.rect.y + object.rect.height) - 5 / scale} width={10 / scale} height={10 / scale} tabIndex={0} role="button" aria-label={`Resize ${object.kind} ${corner}`} className="scene-resize-handle" strokeWidth={1 / scale} onKeyDown={e => key(e, object, corner)} />)}
           </g>}
         </g>)}
         {draft && gesture.current?.mode === 'crop' && draft.crop && <rect {...draft.crop} className="scene-crop-outline" strokeWidth={2 / scale} pointerEvents="none" />}

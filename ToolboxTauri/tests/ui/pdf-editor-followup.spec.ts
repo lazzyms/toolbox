@@ -173,12 +173,12 @@ test('signature supports a draggable local image and a typed font-backed box', a
   await page.getByRole('button', { name: 'Signature', exact: true }).click();
   await page.getByRole('combobox', { name: 'Signature mode' }).selectOption('text');
   await page.getByRole('textbox', { name: 'Signature text' }).fill('A. Local');
-  await page.getByRole('combobox', { name: 'Signature font' }).selectOption('Times-Italic');
+  await page.getByRole('combobox', { name: 'Signature font' }).selectOption('Pacifico');
   await dragOnCanvas(page, .52, .48, .24, .12);
   const scene = await sceneFromExport(page);
   expect(scene.pages[0].objects).toHaveLength(2);
   expect(scene.pages[0].objects[0]).toMatchObject({ signatureMode: 'image', signaturePath: '/local/signature.png', signaturePreview: signatureAssetUrl });
-  expect(scene.pages[0].objects[1]).toMatchObject({ signatureMode: 'text', text: 'A. Local', fontFamily: 'Times-Italic' });
+  expect(scene.pages[0].objects[1]).toMatchObject({ signatureMode: 'text', text: 'A. Local', fontFamily: 'Pacifico' });
 });
 
 test('typed signature property keeps focus for every character', async ({ page }) => {
@@ -194,7 +194,7 @@ test('typed signature property keeps focus for every character', async ({ page }
   await expect(input).toHaveValue('A. Local');
 });
 
-test('watermarks expose move and resize handles and export resized geometry', async ({ page }) => {
+test('watermarks stay fixed and expose font size as a dropdown', async ({ page }) => {
   await openEditor(page);
   await page.getByRole('button', { name: 'Watermark', exact: true }).click();
   await expect(page.locator('input[type="color"][aria-label="Object color"]')).toBeVisible();
@@ -204,19 +204,14 @@ test('watermarks expose move and resize handles and export resized geometry', as
   await page.getByRole('button', { name: 'Add fixed watermark', exact: true }).click();
   const watermark = page.getByRole('button', { name: 'watermark object 1', exact: true });
   await watermark.focus();
-  await expect(page.getByRole('button', { name: 'Resize watermark se', exact: true })).toBeVisible();
-  const before = await watermark.boundingBox();
-  const box = before!;
-  await page.mouse.move(box.x + 5, box.y + 5); await page.mouse.down(); await page.mouse.move(box.x + 100, box.y + 50, { steps: 5 }); await page.mouse.up();
-  const after = await watermark.boundingBox();
-  expect(after?.x).toBeGreaterThan(box.x + 20);
-  const handle = page.getByRole('button', { name: 'Resize watermark se', exact: true });
-  const handleBox = (await handle.boundingBox())!;
-  const beforeScene = await sceneFromExport(page);
-  await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2);
-  await page.mouse.down(); await page.mouse.move(handleBox.x + 80, handleBox.y + 40, { steps: 5 }); await page.mouse.up();
+  await expect(page.getByRole('button', { name: 'Resize watermark se', exact: true })).toHaveCount(0);
+  const before = await sceneFromExport(page);
+  const box = (await watermark.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await page.mouse.down(); await page.mouse.move(box.x + 100, box.y + 50, { steps: 5 }); await page.mouse.up();
+  const afterDrag = await sceneFromExport(page);
+  expect(afterDrag.pages[0].objects[0].rect).toEqual(before.pages[0].objects[0].rect);
+  await page.getByRole('combobox', { name: 'Watermark font size' }).selectOption('72');
   const scene = await sceneFromExport(page);
-  expect(scene.pages[0].objects[0]).toMatchObject({ kind: 'watermark', text: 'PRIVATE', watermarkPattern: 'bottom-right-to-top-left' });
-  expect(scene.pages[0].objects[0].rect.width).toBeGreaterThan(beforeScene.pages[0].objects[0].rect.width);
-  expect(scene.pages[0].objects[0].fontSize).toBeGreaterThan(beforeScene.pages[0].objects[0].fontSize);
+  expect(scene.pages[0].objects[0]).toMatchObject({ kind: 'watermark', text: 'PRIVATE', watermarkPattern: 'bottom-right-to-top-left', fontSize: 72 });
+  expect(scene.pages[0].objects[0].rect).toEqual(before.pages[0].objects[0].rect);
 });

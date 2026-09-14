@@ -140,7 +140,7 @@ test('scene composes every mark kind, moves and resizes, then exports once', asy
   expect(result.pages[0].objects.map((o: any) => o.kind)).toEqual(['text', 'highlight', 'shape', 'signature', 'watermark']);
   expect(result.pages[0].objects[0].rect.x).toBeCloseTo(612 * .2 + 10, 0);
   expect(result.pages[0].objects[0].rect.width).toBeGreaterThan(612 * .35 + 8);
-  expect(result.pages[0].objects[3]).toMatchObject({ signatureMode: 'text', fontFamily: 'Helvetica-Oblique' });
+  expect(result.pages[0].objects[3]).toMatchObject({ signatureMode: 'text', fontFamily: 'Satisfy' });
   expect(await page.evaluate(() => (window as any).calls.filter((c: any) => c.command === 'export_pdf_scene').length)).toBe(1);
 });
 

@@ -135,6 +135,18 @@ fn font_spec(value: Option<&str>) -> Result<(&'static str, &'static str), String
     }
 }
 
+const INCLUDED_SIGNATURE_SATISFY_FONT: &[u8] = include_bytes!("../../../resources/fonts/Satisfy-Regular.ttf");
+const INCLUDED_SIGNATURE_PACIFICO_FONT: &[u8] = include_bytes!("../../../resources/fonts/Pacifico-Regular.ttf");
+const SIGNATURE_RASTER_SCALE: f32 = 4.0;
+
+fn signature_font_bytes(font_family: &str) -> Result<&'static [u8], String> {
+    match font_family {
+        "Satisfy" => Ok(INCLUDED_SIGNATURE_SATISFY_FONT),
+        "Pacifico" => Ok(INCLUDED_SIGNATURE_PACIFICO_FONT),
+        _ => Err("Unsupported cursive signature font".into()),
+    }
+}
+
 fn encode_text(text: &str) -> Result<String, String> {
     if text.len() > 100_000 { return Err("Text is too long".into()); }
     let mut encoded = String::new();
@@ -238,6 +250,58 @@ fn signature_image(path: &Path) -> Result<SignatureImage, String> {
     }
     let alpha = alpha.iter().any(|value| *value < 255).then_some(alpha);
     Ok(SignatureImage { rgb: compress_bytes(&rgb)?, alpha: alpha.map(|values| compress_bytes(&values)).transpose()?, width: image.width(), height: image.height() })
+}
+
+fn signature_text_image(text: &str, font_family: &str, font_size: f32, color: [f32; 3]) -> Result<SignatureImage, String> {
+    if text.trim().is_empty() { return Err("Signature text is required when using a typed signature".into()); }
+    if text.len() > 100_000 { return Err("Text is too long".into()); }
+    let bytes = signature_font_bytes(font_family)?;
+    let font = fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default()).map_err(|error| format!("Could not parse signature font: {error}"))?;
+    let raster_size = (font_size * SIGNATURE_RASTER_SCALE).clamp(24.0, 512.0);
+    let line_metrics = font.horizontal_line_metrics(raster_size).ok_or("Could not measure signature font")?;
+    let line_height = (line_metrics.ascent - line_metrics.descent).max(raster_size * 1.1);
+    let lines = text.split('\n').collect::<Vec<_>>();
+    let mut line_widths = Vec::with_capacity(lines.len());
+    for line in &lines {
+        let mut width = 0.0;
+        for character in line.chars() {
+            if !font.has_glyph(character) { return Err(format!("Signature font does not support character {character:?}")); }
+            width += font.metrics(character, raster_size).advance_width;
+        }
+        line_widths.push(width);
+    }
+    let width = (line_widths.iter().copied().fold(0.0, f32::max) + 16.0).ceil() as usize;
+    let height = (line_height * lines.len() as f32 + 16.0).ceil() as usize;
+    let pixels = width.checked_mul(height).ok_or("Signature image dimensions overflowed")?;
+    if width == 0 || height == 0 || pixels > 20_000_000 { return Err("Signature text dimensions are not supported".into()); }
+    let color = color.map(|channel| (channel.clamp(0.0, 1.0) * 255.0).round() as u8);
+    let mut alpha = vec![0_u8; pixels];
+    for (line_index, line) in lines.iter().enumerate() {
+        let baseline = 8.0 + line_index as f32 * line_height + line_metrics.ascent;
+        let mut pen_x = 8.0;
+        for character in line.chars() {
+            let metrics = font.metrics(character, raster_size);
+            let (_, bitmap) = font.rasterize(character, raster_size);
+            let glyph_x = (pen_x + metrics.bounds.xmin).floor() as i64;
+            let glyph_y = (baseline - metrics.bounds.height - metrics.bounds.ymin).floor() as i64;
+            for row in 0..metrics.height {
+                for column in 0..metrics.width {
+                    let value = bitmap[row * metrics.width + column];
+                    if value == 0 { continue; }
+                    let x = glyph_x + column as i64;
+                    let y = glyph_y + row as i64;
+                    if x < 0 || y < 0 || x >= width as i64 || y >= height as i64 { continue; }
+                    let index = y as usize * width + x as usize;
+                    alpha[index] = alpha[index].max(value);
+                }
+            }
+            pen_x += metrics.advance_width;
+        }
+    }
+    let mut rgb = Vec::with_capacity(pixels * 3);
+    for _ in 0..pixels { rgb.extend_from_slice(&color); }
+    let alpha = alpha.iter().any(|value| *value < 255).then_some(alpha);
+    Ok(SignatureImage { rgb: compress_bytes(&rgb)?, alpha: alpha.map(|values| compress_bytes(&values)).transpose()?, width: width as u32, height: height as u32 })
 }
 
 fn add_signature_image(document: &mut Document, xobjects: &mut lopdf::Dictionary, name: &str, image: SignatureImage) {
@@ -561,10 +625,18 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
                             content.push_str(&format!("q {} 0 0 {} {} {} /{name} Do Q\n",r.width,r.height,r.x,r.y));
                         }
                         Some(SignatureMode::Text) => {
-                            let (_, resource)=font_spec(o.font_family.as_deref())?;
-                            let resource = font_names.get(resource).ok_or("Scene font resource disappeared")?;
-                            let encoded=encode_text(&o.text)?;
-                            content.push_str(&format!("BT /{resource} {} Tf 1 0 0 -1 {} {} Tm <{encoded}> Tj ET\n",o.font_size,r.x,r.y+o.font_size));
+                            if let Some(font_family) = o.font_family.as_deref().filter(|font| matches!(*font, "Satisfy" | "Pacifico")) {
+                                let name_base = format!("Sig{i}");
+                                let name = next_resource_name(&effective_xobjects, "XObject", &name_base)?;
+                                effective_xobjects.set(name.as_str(), Object::Null);
+                                add_signature_image(&mut doc, &mut xobjects, &name, signature_text_image(&o.text, font_family, o.font_size, rgb)?);
+                                content.push_str(&format!("q {} 0 0 {} {} {} /{name} Do Q\n",r.width,r.height,r.x,r.y));
+                            } else {
+                                let (_, resource)=font_spec(o.font_family.as_deref())?;
+                                let resource = font_names.get(resource).ok_or("Scene font resource disappeared")?;
+                                let encoded=encode_text(&o.text)?;
+                                content.push_str(&format!("BT /{resource} {} Tf 1 0 0 -1 {} {} Tm <{encoded}> Tj ET\n",o.font_size,r.x,r.y+o.font_size));
+                            }
                         }
                         None => {
                             if o.strokes.iter().map(Vec::len).sum::<usize>()>100000 { return Err("Signature is too large".into()); }
@@ -1285,6 +1357,31 @@ mod tests {
         let content_bytes=composed.get_page_content(page_id); let content=String::from_utf8_lossy(&content_bytes); assert!(content.contains("/Sig0 Do"));
         let has_mask=composed.objects.values().filter_map(|value|value.as_stream().ok()).any(|stream|stream.dict.has(b"SMask"));
         assert!(has_mask);
+    }
+
+    #[test]
+    fn cursive_typed_signatures_use_bundled_raster_fonts() {
+        let temp = TempDir::new().unwrap();
+        let input = temp.0.join("source.pdf");
+        fixture(&input);
+        for font_family in ["Satisfy", "Pacifico"] {
+            let mut value = object(Kind::Signature);
+            value.signature_mode = Some(SignatureMode::Text);
+            value.text = "A. Local".into();
+            value.font_family = Some(font_family.into());
+            let mut model = scene();
+            model.pages[0].objects = vec![value];
+            let composed = compose(&input, &model).unwrap();
+            let page_id = composed.get_pages().values().next().copied().unwrap();
+            let content = String::from_utf8_lossy(&composed.get_page_content(page_id)).into_owned();
+            assert!(content.contains("/Sig0 Do"), "{font_family} signature was not rasterized: {content}");
+            let resources = composed.get_dictionary(page_id).unwrap().get(b"Resources").unwrap().as_dict().unwrap();
+            let xobjects = resources.get(b"XObject").unwrap().as_dict().unwrap();
+            let signature = xobjects.get(b"Sig0").unwrap().as_reference().unwrap();
+            let signature = composed.get_object(signature).unwrap().as_stream().unwrap();
+            assert_eq!(signature.dict.get(b"Subtype").unwrap().as_name().unwrap(), b"Image");
+            assert!(signature.dict.has(b"SMask"), "{font_family} signature lost transparency");
+        }
     }
 
     #[test]

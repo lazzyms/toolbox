@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { ToolScaffold } from '../components/ToolScaffold';
@@ -27,6 +27,17 @@ const toolGuidance: Record<SceneTool, string> = {
   signature: 'Choose a signature, then drag its box onto the page.', watermark: 'Choose a pattern, then add a watermark.',
   crop: 'Drag a rectangle on the page to crop it.',
 };
+const signatureFontOptions = [
+  { value: 'Satisfy', label: 'Satisfy — cursive' },
+  { value: 'Pacifico', label: 'Pacifico — cursive' },
+  { value: 'Helvetica-Oblique', label: 'Helvetica italic' },
+  { value: 'Times-Italic', label: 'Times italic' },
+  { value: 'Courier-Oblique', label: 'Courier italic' },
+  { value: 'Helvetica', label: 'Helvetica' },
+  { value: 'Times-Roman', label: 'Times' },
+  { value: 'Courier', label: 'Courier' },
+];
+const watermarkFontSizes = [18, 24, 32, 40, 48, 56, 64, 72, 88, 104, 120];
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 type History = { past: PdfScene[]; present: PdfScene; future: PdfScene[] };
 
@@ -71,8 +82,10 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onScene }: {
   const [signaturePath, setSignaturePath] = useState<string | null>(null);
   const [signaturePreview, setSignaturePreview] = useState<string | null>(null);
   const [signatureText, setSignatureText] = useState('Your signature');
-  const [signatureFont, setSignatureFont] = useState('Helvetica-Oblique');
+  const [signatureTextDraft, setSignatureTextDraft] = useState('');
+  const [signatureFont, setSignatureFont] = useState('Satisfy');
   const [watermarkText, setWatermarkText] = useState('DRAFT');
+  const [watermarkFontSize, setWatermarkFontSize] = useState(40);
   const [watermarkPattern, setWatermarkPattern] = useState<WatermarkPattern>('across-page');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(Boolean(path));
@@ -91,6 +104,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onScene }: {
   const currentIndex = scene.pages.findIndex((item) => item.id === page?.id);
   const serializedScene = JSON.stringify(scene);
   const previewKey = path ? previewCacheKey(path, currentIndex, serializedScene, PREVIEW_RENDER_SETTINGS) : null;
+  const selectedSignature = selected?.kind === 'signature' ? selected : null;
 
   useEffect(() => {
     let active = true;
@@ -127,6 +141,9 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onScene }: {
     return () => { textGeneration.current.current += 1; };
   }, [path, document, page?.sourceIndex]);
   useEffect(() => { onScene(path, document ? scene : null); }, [path, scene, document]);
+  useLayoutEffect(() => {
+    if (selectedSignature) setSignatureTextDraft(selectedSignature.text);
+  }, [selectedSignature?.id, selectedSignature?.text]);
   useEffect(() => {
     previewGeneration.current.current += 1;
     previewCache.current.clear();
@@ -216,7 +233,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onScene }: {
   const makeObject = (kind: SceneObject['kind'], rect: SceneRect): SceneObject => ({
     id: crypto.randomUUID(), kind, rect,
     text: kind === 'watermark' ? watermarkText : kind === 'signature' ? signatureText : text,
-    fontSize: kind === 'signature' ? Math.max(18, fontSize) : fontSize,
+    fontSize: kind === 'watermark' ? watermarkFontSize : kind === 'signature' ? Math.max(18, fontSize) : fontSize,
     color: kind === 'highlight' ? highlightColor : color,
     opacity: kind === 'highlight' ? highlightOpacity : opacity,
     strokes: [],
@@ -293,10 +310,11 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onScene }: {
   const activeSignatureMode = selected?.signatureMode ?? signatureMode;
   const activeSignaturePath = selected?.signaturePath ?? signaturePath;
   const activeSignaturePreview = selected?.signaturePreview ?? signaturePreview;
-  const activeSignatureText = selected?.text ?? signatureText;
+  const activeSignatureText = selectedSignature ? signatureTextDraft : signatureText;
   const activeSignatureFont = selected?.fontFamily ?? signatureFont;
   const activeWatermarkPattern = selected?.watermarkPattern ?? watermarkPattern;
   const activeWatermarkText = selected?.text ?? watermarkText;
+  const activeWatermarkFontSize = selected?.kind === 'watermark' ? selected.fontSize : watermarkFontSize;
   const showProperties = Boolean(selected) || tool !== 'select';
 
   return <section className="pdf-scene-workspace" aria-label="PDF editing session" onKeyDown={(event) => {
@@ -330,10 +348,14 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onScene }: {
           <button type="button" onClick={() => void chooseSignatureImage()}>Choose signature image</button>
           <span className="scene-property-note">{activeSignaturePath ? activeSignaturePath.split(/[\\/]/).pop() : 'No image chosen'}</span>
         </> : <>
-          <label>Signature<input aria-label="Signature text" value={activeSignatureText} onChange={(event) => selected ? updateObject({ text: event.target.value }, 'signature-text') : setSignatureText(event.target.value)} onBlur={endGroup} /></label>
+          <label>Signature<input aria-label="Signature text" value={activeSignatureText}
+            onChange={(event) => selectedSignature ? setSignatureTextDraft(event.target.value) : setSignatureText(event.target.value)}
+            onBlur={() => {
+              if (selectedSignature && signatureTextDraft !== selectedSignature.text) updateObject({ text: signatureTextDraft }, 'signature-text');
+              endGroup();
+            }} /></label>
           <label>Font<select aria-label="Signature font" value={activeSignatureFont} onChange={(event) => selected ? updateObject({ fontFamily: event.target.value }, 'signature-font') : setSignatureFont(event.target.value)}>
-            <option value="Helvetica-Oblique">Helvetica italic</option><option value="Times-Italic">Times italic</option><option value="Courier-Oblique">Courier italic</option>
-            <option value="Helvetica">Helvetica</option><option value="Times-Roman">Times</option><option value="Courier">Courier</option>
+            {signatureFontOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select></label>
         </>}
         <label>Size<input aria-label="Font size" type="number" min="8" max="144" value={selected?.fontSize ?? Math.max(18, fontSize)}
@@ -342,6 +364,12 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onScene }: {
       </>}
       {(selectedKind === 'watermark') && <>
         <label>Text<input aria-label="Watermark text" value={activeWatermarkText} onChange={(event) => selected ? updateObject({ text: event.target.value }, 'watermark-text') : setWatermarkText(event.target.value)} onBlur={endGroup} /></label>
+        <label>Size<select aria-label="Watermark font size" value={activeWatermarkFontSize} onChange={(event) => {
+          const value = Number(event.target.value);
+          selected ? updateObject({ fontSize: value }, 'watermark-font-size') : setWatermarkFontSize(value);
+        }}>
+          {watermarkFontSizes.map((value) => <option key={value} value={value}>{value} pt</option>)}
+        </select></label>
         <label>Pattern<select aria-label="Watermark pattern" value={activeWatermarkPattern} onChange={(event) => selected ? updateObject({ watermarkPattern: event.target.value as WatermarkPattern }, 'watermark-pattern') : setWatermarkPattern(event.target.value as WatermarkPattern)}>
           <option value="across-page">Across page</option><option value="bottom-right-to-top-left">Bottom-right to top-left</option><option value="top-right-to-bottom-left">Top-right to bottom-left</option><option value="center-horizontal">Centre horizontal</option><option value="center-vertical">Centre vertical</option>
         </select></label>
