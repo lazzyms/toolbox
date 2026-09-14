@@ -1,11 +1,13 @@
-use aes::cipher::{block_padding::NoPadding, BlockEncryptMut, KeyIvInit};
+use aes::cipher::{block_padding::NoPadding, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
 use aes::Aes256;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use cfb::CompoundFile;
 use hmac::{Hmac, KeyInit, Mac};
+use quick_xml::events::{BytesStart, Event};
+use quick_xml::{Reader as XmlReader, XmlVersion};
 use sha2::{Digest, Sha512};
-use std::io::{Cursor, Write};
+use std::io::{Cursor, Read, Write};
 
 const BLOCK_SIZE: usize = 16;
 const HASH_SIZE: usize = 64;
@@ -31,6 +33,7 @@ const INTEGRITY_VALUE_BLOCK_KEY: [u8; 8] = [
 ];
 
 type Aes256CbcEncryptor = cbc::Encryptor<Aes256>;
+type Aes256CbcDecryptor = cbc::Decryptor<Aes256>;
 
 /// Encrypt an OOXML package using ECMA-376 Agile encryption.
 ///
@@ -102,6 +105,113 @@ pub(crate) fn encrypt_ooxml(package: &[u8], password: &str) -> Result<Vec<u8>, S
     Ok(compound.into_inner().into_inner())
 }
 
+pub(crate) fn verify_ooxml(
+    encrypted: &[u8],
+    password: &str,
+    expected_package: &[u8],
+) -> Result<(), String> {
+    let mut compound = CompoundFile::open(Cursor::new(encrypted.to_vec()))
+        .map_err(|error| format!("Could not open the encrypted Office container: {error}"))?;
+    let encryption_info = read_compound_stream(&mut compound, "/EncryptionInfo")?;
+    let encrypted_package = read_compound_stream(&mut compound, "/EncryptedPackage")?;
+    let parameters = parse_encryption_info(&encryption_info)?;
+
+    let password_hash = iterated_password_hash(&parameters.password_salt, password);
+    let package_key = decrypt_aes_cbc(
+        &derive_key(&password_hash, &ENCRYPTED_KEY_VALUE_BLOCK_KEY),
+        &parameters.password_salt,
+        &parameters.encrypted_key_value,
+    )?
+    .try_into()
+    .map_err(|_| "The Agile package key has an invalid length.".to_string())?;
+
+    let verifier_hash_input = decrypt_aes_cbc(
+        &derive_key(&password_hash, &VERIFIER_HASH_INPUT_BLOCK_KEY),
+        &parameters.password_salt,
+        &parameters.encrypted_verifier_hash_input,
+    )?;
+    let verifier_hash_value = decrypt_aes_cbc(
+        &derive_key(&password_hash, &VERIFIER_HASH_VALUE_BLOCK_KEY),
+        &parameters.password_salt,
+        &parameters.encrypted_verifier_hash_value,
+    )?;
+    let expected_verifier_hash: [u8; HASH_SIZE] = Sha512::digest(&verifier_hash_input).into();
+    if verifier_hash_value != expected_verifier_hash {
+        return Err("The Agile password verifier did not match.".to_string());
+    }
+
+    if encrypted_package.len() < 8 {
+        return Err("The EncryptedPackage stream is missing its length header.".to_string());
+    }
+    let package_length = u32::from_le_bytes(
+        encrypted_package[..4]
+            .try_into()
+            .expect("the package length header is four bytes"),
+    );
+    if encrypted_package[4..8] != [0_u8; 4] {
+        return Err("The EncryptedPackage stream has an invalid reserved header.".to_string());
+    }
+    if usize::try_from(package_length).ok() != Some(expected_package.len()) {
+        return Err("The declared OOXML package length did not match the expected package.".to_string());
+    }
+
+    let mut plaintext = Vec::with_capacity(expected_package.len());
+    let mut remaining = usize::try_from(package_length)
+        .map_err(|_| "The OOXML package length is not supported on this platform.".to_string())?;
+    let mut encrypted_offset = 8usize;
+    let mut segment_index = 0_u32;
+    while remaining > 0 {
+        let segment_length = remaining.min(SEGMENT_SIZE);
+        let ciphertext_length = (segment_length + BLOCK_SIZE - 1) / BLOCK_SIZE * BLOCK_SIZE;
+        let ciphertext_end = encrypted_offset
+            .checked_add(ciphertext_length)
+            .ok_or_else(|| "The EncryptedPackage stream length overflowed.".to_string())?;
+        let ciphertext = encrypted_package
+            .get(encrypted_offset..ciphertext_end)
+            .ok_or_else(|| "The EncryptedPackage stream ended before its declared length.".to_string())?;
+
+        let mut iv_input = Vec::with_capacity(KEY_DATA_SALT_SIZE + std::mem::size_of::<u32>());
+        iv_input.extend_from_slice(&parameters.key_data_salt);
+        iv_input.extend_from_slice(&segment_index.to_le_bytes());
+        let segment_iv: [u8; BLOCK_SIZE] = Sha512::digest(iv_input)[..BLOCK_SIZE]
+            .try_into()
+            .expect("SHA-512 has at least 16 bytes");
+        let decrypted_segment = decrypt_aes_cbc(&package_key, &segment_iv, ciphertext)?;
+        plaintext.extend_from_slice(&decrypted_segment[..segment_length]);
+
+        encrypted_offset = ciphertext_end;
+        remaining -= segment_length;
+        segment_index = segment_index
+            .checked_add(1)
+            .ok_or_else(|| "The OOXML package has too many encryption segments.".to_string())?;
+    }
+    if encrypted_offset != encrypted_package.len() {
+        return Err("The EncryptedPackage stream has an invalid ciphertext length.".to_string());
+    }
+
+    let integrity_key = decrypt_aes_cbc(
+        &package_key,
+        &derive_iv(&parameters.key_data_salt, &INTEGRITY_KEY_BLOCK_KEY),
+        &parameters.encrypted_hmac_key,
+    )?
+    .try_into()
+    .map_err(|_| "The Agile integrity key has an invalid length.".to_string())?;
+    let integrity_value = decrypt_aes_cbc(
+        &package_key,
+        &derive_iv(&parameters.key_data_salt, &INTEGRITY_VALUE_BLOCK_KEY),
+        &parameters.encrypted_hmac_value,
+    )?;
+    let computed_integrity = hmac_sha512(&integrity_key, &encrypted_package)?;
+    if integrity_value != computed_integrity {
+        return Err("The Agile package integrity HMAC did not match.".to_string());
+    }
+
+    if plaintext != expected_package {
+        return Err("The decrypted OOXML package did not match the expected package.".to_string());
+    }
+    Ok(())
+}
+
 fn random_bytes<const N: usize>() -> Result<[u8; N], String> {
     let mut bytes = [0_u8; N];
     getrandom::fill(&mut bytes).map_err(|error| format!("Could not generate encryption randomness: {error}"))?;
@@ -164,6 +274,22 @@ fn encrypt_aes_cbc(
         .encrypt_padded_b2b_mut::<NoPadding>(plaintext, &mut ciphertext)
         .map_err(|_| "Could not encrypt an Agile OOXML value.".to_string())?;
     Ok(encrypted.to_vec())
+}
+
+fn decrypt_aes_cbc(
+    key: &[u8; PACKAGE_KEY_SIZE],
+    iv: &[u8; BLOCK_SIZE],
+    ciphertext: &[u8],
+) -> Result<Vec<u8>, String> {
+    if ciphertext.len() % BLOCK_SIZE != 0 {
+        return Err("Agile AES ciphertext must be block aligned.".to_string());
+    }
+
+    let mut plaintext = vec![0_u8; ciphertext.len()];
+    let decrypted = Aes256CbcDecryptor::new(key.into(), iv.into())
+        .decrypt_padded_b2b_mut::<NoPadding>(ciphertext, &mut plaintext)
+        .map_err(|_| "Could not decrypt an Agile OOXML value.".to_string())?;
+    Ok(decrypted.to_vec())
 }
 
 fn encrypt_package(
@@ -241,13 +367,235 @@ fn write_compound_stream(
         .map_err(|error| format!("Could not write the {path} stream: {error}"))
 }
 
+fn read_compound_stream(
+    compound: &mut CompoundFile<Cursor<Vec<u8>>>,
+    path: &str,
+) -> Result<Vec<u8>, String> {
+    let mut stream = compound
+        .open_stream(path)
+        .map_err(|error| format!("Could not open the {path} stream: {error}"))?;
+    let mut contents = Vec::new();
+    stream
+        .read_to_end(&mut contents)
+        .map_err(|error| format!("Could not read the {path} stream: {error}"))?;
+    Ok(contents)
+}
+
+#[derive(Default)]
+struct AgileParameters {
+    key_data_salt: Option<[u8; KEY_DATA_SALT_SIZE]>,
+    encrypted_hmac_key: Option<[u8; KEY_DATA_SALT_SIZE]>,
+    encrypted_hmac_value: Option<[u8; HASH_SIZE]>,
+    spin_count: Option<u32>,
+    password_salt: Option<[u8; KEY_DATA_SALT_SIZE]>,
+    encrypted_verifier_hash_input: Option<[u8; BLOCK_SIZE]>,
+    encrypted_verifier_hash_value: Option<[u8; HASH_SIZE]>,
+    encrypted_key_value: Option<[u8; PACKAGE_KEY_SIZE]>,
+}
+
+fn parse_encryption_info(encryption_info: &[u8]) -> Result<ParsedAgileParameters, String> {
+    if encryption_info.len() <= 8 {
+        return Err("The EncryptionInfo stream is incomplete.".to_string());
+    }
+    if encryption_info[..4] != [0x04, 0x00, 0x04, 0x00]
+        || u32::from_le_bytes(
+            encryption_info[4..8]
+                .try_into()
+                .expect("the EncryptionInfo header is four bytes"),
+        ) != 0x40
+    {
+        return Err("The EncryptionInfo stream is not an Agile encryption header.".to_string());
+    }
+
+    let xml = std::str::from_utf8(&encryption_info[8..])
+        .map_err(|error| format!("The EncryptionInfo XML is not UTF-8: {error}"))?;
+    let mut reader = XmlReader::from_reader(Cursor::new(xml.as_bytes()));
+    reader.config_mut().check_end_names = true;
+    let mut parameters = AgileParameters::default();
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    let mut root_seen = false;
+    let mut root_closed = false;
+
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element)) => {
+                if depth == 0 {
+                    if root_seen || root_closed || element.local_name().as_ref() != b"encryption" {
+                        return Err("The EncryptionInfo XML has an invalid root element.".to_string());
+                    }
+                    root_seen = true;
+                }
+                parse_agile_element(&element, &mut parameters)?;
+                depth += 1;
+            }
+            Ok(Event::Empty(element)) => {
+                if depth == 0 {
+                    if root_seen || root_closed || element.local_name().as_ref() != b"encryption" {
+                        return Err("The EncryptionInfo XML has an invalid root element.".to_string());
+                    }
+                    root_seen = true;
+                    root_closed = true;
+                } else {
+                    parse_agile_element(&element, &mut parameters)?;
+                }
+            }
+            Ok(Event::End(_)) => {
+                if depth == 0 {
+                    return Err("The EncryptionInfo XML has an unexpected closing element.".to_string());
+                }
+                depth -= 1;
+                if depth == 0 {
+                    root_closed = true;
+                }
+            }
+            Ok(Event::Text(text)) => {
+                if text.iter().any(|byte| !byte.is_ascii_whitespace()) {
+                    return Err("The EncryptionInfo XML has unexpected text.".to_string());
+                }
+            }
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(error) => return Err(format!("The EncryptionInfo XML is malformed: {error}")),
+        }
+        buffer.clear();
+    }
+
+    if !root_seen || !root_closed || depth != 0 {
+        return Err("The EncryptionInfo XML is incomplete.".to_string());
+    }
+    parameters
+        .spin_count
+        .ok_or_else(|| "The EncryptionInfo XML has no password spin count.".to_string())?;
+
+    Ok(ParsedAgileParameters {
+        key_data_salt: parameters
+            .key_data_salt
+            .ok_or_else(|| "The EncryptionInfo XML has no keyData salt.".to_string())?,
+        encrypted_hmac_key: parameters
+            .encrypted_hmac_key
+            .ok_or_else(|| "The EncryptionInfo XML has no encrypted HMAC key.".to_string())?,
+        encrypted_hmac_value: parameters
+            .encrypted_hmac_value
+            .ok_or_else(|| "The EncryptionInfo XML has no encrypted HMAC value.".to_string())?,
+        password_salt: parameters
+            .password_salt
+            .ok_or_else(|| "The EncryptionInfo XML has no password salt.".to_string())?,
+        encrypted_verifier_hash_input: parameters.encrypted_verifier_hash_input.ok_or_else(|| {
+            "The EncryptionInfo XML has no encrypted verifier input.".to_string()
+        })?,
+        encrypted_verifier_hash_value: parameters.encrypted_verifier_hash_value.ok_or_else(|| {
+            "The EncryptionInfo XML has no encrypted verifier hash.".to_string()
+        })?,
+        encrypted_key_value: parameters
+            .encrypted_key_value
+            .ok_or_else(|| "The EncryptionInfo XML has no encrypted package key.".to_string())?,
+    })
+}
+
+struct ParsedAgileParameters {
+    key_data_salt: [u8; KEY_DATA_SALT_SIZE],
+    encrypted_hmac_key: [u8; KEY_DATA_SALT_SIZE],
+    encrypted_hmac_value: [u8; HASH_SIZE],
+    password_salt: [u8; KEY_DATA_SALT_SIZE],
+    encrypted_verifier_hash_input: [u8; BLOCK_SIZE],
+    encrypted_verifier_hash_value: [u8; HASH_SIZE],
+    encrypted_key_value: [u8; PACKAGE_KEY_SIZE],
+}
+
+fn parse_agile_element(
+    element: &BytesStart<'_>,
+    parameters: &mut AgileParameters,
+) -> Result<(), String> {
+    match element.local_name().as_ref() {
+        b"keyData" => {
+            if parameters.key_data_salt.is_some() {
+                return Err("The EncryptionInfo XML has duplicate keyData elements.".to_string());
+            }
+            parameters.key_data_salt = Some(read_base64_attribute(element, b"saltValue")?);
+        }
+        b"dataIntegrity" => {
+            if parameters.encrypted_hmac_key.is_some() || parameters.encrypted_hmac_value.is_some() {
+                return Err("The EncryptionInfo XML has duplicate dataIntegrity elements.".to_string());
+            }
+            parameters.encrypted_hmac_key = Some(read_base64_attribute(element, b"encryptedHmacKey")?);
+            parameters.encrypted_hmac_value = Some(read_base64_attribute(element, b"encryptedHmacValue")?);
+        }
+        b"encryptedKey" => {
+            if parameters.spin_count.is_some() {
+                return Err("The EncryptionInfo XML has duplicate encryptedKey elements.".to_string());
+            }
+            let spin_count = read_xml_attribute(element, b"spinCount")?
+                .parse::<u32>()
+                .map_err(|error| format!("The Agile spin count is invalid: {error}"))?;
+            if spin_count != SPIN_COUNT {
+                return Err("The Agile encryption spin count is unsupported.".to_string());
+            }
+            parameters.spin_count = Some(spin_count);
+            parameters.password_salt = Some(read_base64_attribute(element, b"saltValue")?);
+            parameters.encrypted_verifier_hash_input =
+                Some(read_base64_attribute(element, b"encryptedVerifierHashInput")?);
+            parameters.encrypted_verifier_hash_value =
+                Some(read_base64_attribute(element, b"encryptedVerifierHashValue")?);
+            parameters.encrypted_key_value =
+                Some(read_base64_attribute(element, b"encryptedKeyValue")?);
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn read_xml_attribute(element: &BytesStart<'_>, name: &[u8]) -> Result<String, String> {
+    let mut value = None;
+    for attribute in element.attributes() {
+        let attribute = attribute.map_err(|error| format!("The Agile XML attribute is invalid: {error}"))?;
+        if attribute.key.as_ref() == name {
+            if value.is_some() {
+                return Err(format!(
+                    "The Agile XML has duplicate {} attributes.",
+                    String::from_utf8_lossy(name)
+                ));
+            }
+            value = Some(
+                attribute
+                    .normalized_value(XmlVersion::Implicit1_0)
+                    .map_err(|error| format!("The Agile XML attribute is invalid: {error}"))?
+                    .into_owned(),
+            );
+        }
+    }
+    value.ok_or_else(|| {
+        format!(
+            "The Agile XML is missing its {} attribute.",
+            String::from_utf8_lossy(name)
+        )
+    })
+}
+
+fn read_base64_attribute<const N: usize>(
+    element: &BytesStart<'_>,
+    name: &[u8],
+) -> Result<[u8; N], String> {
+    let encoded = read_xml_attribute(element, name)?;
+    let decoded = BASE64
+        .decode(encoded.as_bytes())
+        .map_err(|error| format!("The Agile {} attribute is not base64: {error}", String::from_utf8_lossy(name)))?;
+    decoded.try_into().map_err(|decoded: Vec<u8>| {
+        format!(
+            "The Agile {} attribute has an invalid length: expected {N}, got {}.",
+            String::from_utf8_lossy(name),
+            decoded.len()
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use base64::engine::general_purpose::STANDARD as BASE64;
     use base64::Engine;
     use cfb::CompoundFile;
-    use super::encrypt_ooxml;
-    use std::io::{Cursor, Read, Write};
+    use super::{encrypt_ooxml, verify_ooxml};
+    use std::io::{Cursor, Read, Seek, SeekFrom, Write};
     use zip::{write::SimpleFileOptions, ZipWriter};
 
     fn minimal_ooxml_package(kind: &str, include_large_entry: bool) -> Vec<u8> {
@@ -320,6 +668,74 @@ mod tests {
             .map(|(value, _)| value)
             .unwrap();
         BASE64.decode(value).unwrap()
+    }
+
+    fn tamper_encrypted_package(encrypted: Vec<u8>) -> Vec<u8> {
+        let mut compound = CompoundFile::open(Cursor::new(encrypted)).unwrap();
+        {
+            let mut stream = compound.open_stream("/EncryptedPackage").unwrap();
+            stream.seek(SeekFrom::Start(8)).unwrap();
+            let mut byte = [0_u8; 1];
+            stream.read_exact(&mut byte).unwrap();
+            byte[0] ^= 1;
+            stream.seek(SeekFrom::Start(8)).unwrap();
+            stream.write_all(&byte).unwrap();
+        }
+        compound.flush().unwrap();
+        compound.into_inner().into_inner()
+    }
+
+    #[test]
+    fn verifies_small_ooxml_package() {
+        let package = minimal_ooxml_package("docx", false);
+        assert!(package.len() < 4096);
+        let encrypted = encrypt_ooxml(&package, "password").unwrap();
+
+        assert_eq!(verify_ooxml(&encrypted, "password", &package), Ok(()));
+    }
+
+    #[test]
+    fn verifies_package_with_exactly_one_segment() {
+        let mut package = minimal_ooxml_package("docx", false);
+        package.resize(4096, 0xA5);
+        assert_eq!(package.len(), 4096);
+        let encrypted = encrypt_ooxml(&package, "password").unwrap();
+
+        assert_eq!(verify_ooxml(&encrypted, "password", &package), Ok(()));
+    }
+
+    #[test]
+    fn verifies_package_over_one_segment() {
+        let package = minimal_ooxml_package("xlsx", true);
+        assert!(package.len() > 4096);
+        let encrypted = encrypt_ooxml(&package, "password").unwrap();
+
+        assert_eq!(verify_ooxml(&encrypted, "password", &package), Ok(()));
+    }
+
+    #[test]
+    fn verifies_unicode_password() {
+        let package = minimal_ooxml_package("docx", false);
+        let encrypted = encrypt_ooxml(&package, "päss🔐文").unwrap();
+
+        assert_eq!(verify_ooxml(&encrypted, "päss🔐文", &package), Ok(()));
+    }
+
+    #[test]
+    fn rejects_wrong_password() {
+        let package = minimal_ooxml_package("docx", false);
+        let encrypted = encrypt_ooxml(&package, "correct password").unwrap();
+
+        assert!(verify_ooxml(&encrypted, "wrong password", &package).is_err());
+    }
+
+    #[test]
+    fn rejects_one_byte_ciphertext_tampering() {
+        let package = minimal_ooxml_package("docx", false);
+        let encrypted = encrypt_ooxml(&package, "password").unwrap();
+        let tampered = tamper_encrypted_package(encrypted);
+
+        assert!(verify_ooxml(&tampered, "password", &package).is_err());
     }
 
     #[test]
