@@ -119,7 +119,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onScene }: {
         const textRuns: PdfTextRun[] = value.textRuns ?? [];
         setDocument((current) => {
           if (!current || current.path !== path || textGeneration.current.current !== requestGeneration || current.pages[sourceIndex]?.textRuns != null) return current;
-          return { ...current, pages: current.pages.map((item, index) => index === sourceIndex ? { ...item, textRuns } : item) };
+          return { ...current, pages: current.pages.map((item, index) => index === sourceIndex ? { ...item, preview: value.preview ?? item.preview ?? null, textRuns } : item) };
         });
       },
       (reason) => setError(pdfEditorErrorMessage(reason, 'open')),

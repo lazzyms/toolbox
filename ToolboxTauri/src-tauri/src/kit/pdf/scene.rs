@@ -211,6 +211,12 @@ fn watermark_placements(area: &Rect, anchor: &Rect, font_size: f32, text: &str, 
     }
 }
 
+fn scene_angle_to_pdf_text_matrix(angle: f32) -> [f32; 4] {
+    let radians = angle.to_radians();
+    let (c, s) = (radians.cos(), radians.sin());
+    [c, -s, -s, -c]
+}
+
 struct SignatureImage { rgb: Vec<u8>, alpha: Option<Vec<u8>>, width: u32, height: u32 }
 
 fn compress_bytes(bytes: &[u8]) -> Result<Vec<u8>, String> {
@@ -588,8 +594,8 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
                     let encoded=encode_text(&o.text)?;
                     let area=page.crop.as_ref().cloned().unwrap_or(Rect{x:0.,y:0.,width:page.width,height:page.height});
                     for (x,y,angle) in watermark_placements(&area,&o.rect,o.font_size,&o.text,o.watermark_pattern.as_ref()) {
-                        let radians=angle.to_radians(); let c=radians.cos(); let s=radians.sin();
-                        content.push_str(&format!("BT /{resource} {} Tf {} {} {} {} {} {} Tm <{encoded}> Tj ET\n",o.font_size,c,s,s,-c,x,y));
+                        let [a, b, c, d] = scene_angle_to_pdf_text_matrix(angle);
+                        content.push_str(&format!("BT /{resource} {} Tf {} {} {} {} {} {} Tm <{encoded}> Tj ET\n",o.font_size,a,b,c,d,x,y));
                     }
                 },
             }
@@ -764,7 +770,8 @@ pub fn inspect_page(path:&Path,page_index:usize)->Result<PdfPageMetadata,String>
     let g=geometry(&doc,id)?;
     let source_rotation = inherited(&doc, id, b"Rotate")?.map(|value| value.as_i64().map_err(err)).transpose()?.unwrap_or(0).rem_euclid(360) as i32;
     let text_runs=extract_text_runs(path,page_index + 1,g.width,g.height,Instant::now() + super::PDF_TEXT_TIMEOUT).unwrap_or_default();
-    Ok(PdfPageMetadata{index:page_index,x:g.bbox[0],y:g.bbox[1],width:g.width,height:g.height,rotation:source_rotation,page_box:g.bbox,preview:None,text_runs:Some(text_runs)})
+    let preview = super::metadata::render_preview(path, page_index + 1, g.width, g.height);
+    Ok(PdfPageMetadata{index:page_index,x:g.bbox[0],y:g.bbox[1],width:g.width,height:g.height,rotation:source_rotation,page_box:g.bbox,preview,text_runs:Some(text_runs)})
 }
 pub fn export(request:&ExportRequest,input:PathBuf)->JobOutcome {
     let result=(|| {
@@ -998,7 +1005,7 @@ mod tests {
     #[test]
     fn inspect_page_validates_bounds_and_returns_only_the_requested_text_runs() {
         let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
-        if text_extractor().is_none() { return; }
+        if text_extractor().is_none() || renderer().is_err() { return; }
         let temp = TempDir::new().unwrap();
         let input = temp.0.join("page-text.pdf");
         page_text_fixture(&input);
@@ -1006,10 +1013,30 @@ mod tests {
         let page = inspect_page(&input, 1).unwrap();
         assert_eq!(page.index, 1);
         assert_eq!((page.width, page.height), (612., 792.));
+        assert!(page.preview.as_deref().is_some_and(|preview| preview.starts_with("data:image/png;base64,")));
         let runs = page.text_runs.expect("page inspection should return a loaded text-run list");
         assert!(runs.iter().any(|run| run.text.contains("Second")), "runs: {runs:?}");
         assert!(runs.iter().all(|run| run.width.is_finite() && run.height.is_finite() && run.width > 0. && run.height > 0.));
         assert!(inspect_page(&input, 2).is_err_and(|error| error == "PDF page outside document"));
+    }
+
+    #[test]
+    fn diagonal_watermark_matrices_match_react_y_down_angles() {
+        let area = Rect { x: 0., y: 0., width: 612., height: 792. };
+        let anchor = Rect { x: 100., y: 200., width: 300., height: 80. };
+        for (pattern, expected_angle) in [
+            (WatermarkPattern::BottomRightToTopLeft, -45_f32),
+            (WatermarkPattern::TopRightToBottomLeft, 45_f32),
+        ] {
+            let placement = watermark_placements(&area, &anchor, 18., "LOCAL", Some(&pattern))[0];
+            assert_eq!(placement.2, expected_angle);
+            let [a, b, c, d] = scene_angle_to_pdf_text_matrix(placement.2);
+            let radians = expected_angle.to_radians();
+            assert!((a - radians.cos()).abs() < 0.0001);
+            assert!((-b - radians.sin()).abs() < 0.0001);
+            assert!((-c - radians.sin()).abs() < 0.0001);
+            assert!((-d - radians.cos()).abs() < 0.0001);
+        }
     }
 
     #[test]

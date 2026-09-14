@@ -66,7 +66,7 @@ pub fn inspect(path: &Path) -> Result<PdfDocumentMetadata, String> {
     Ok(PdfDocumentMetadata { path: path.to_path_buf(), pages })
 }
 
-fn render_preview(path: &Path, page: usize, width: f32, height: f32) -> Option<String> {
+pub(crate) fn render_preview(path: &Path, page: usize, width: f32, height: f32) -> Option<String> {
     if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 || width > super::PDF_MAX_PAGE_POINTS || height > super::PDF_MAX_PAGE_POINTS {
         return None;
     }

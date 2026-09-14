@@ -13,7 +13,7 @@ test.beforeEach(async ({ page }) => {
       invoke: async (command: string, args: any) => {
         w.calls.push({ command, args });
         if (command === 'plugin:dialog|open') return '/local/scene-fixture.pdf';
-        if (command === 'inspect_pdf_scene') return { path: '/local/scene-fixture.pdf', pages: [0, 1, 2].map(index => ({ index, width: 612, height: 792, preview: svg })) };
+        if (command === 'inspect_pdf_scene') return { path: '/local/scene-fixture.pdf', pages: [0, 1, 2].map(index => ({ index, width: 612, height: 792, preview: null })) };
         if (command === 'inspect_pdf_scene_page') {
           const pageIndex = args.request.pageIndex;
           const delay = w.sceneTextDelays[pageIndex] ?? 0;
@@ -21,7 +21,7 @@ test.beforeEach(async ({ page }) => {
           const key = `${args.request.path}:${pageIndex}`;
           const response = (w.sceneTextResponses[key] ?? 0) + 1;
           w.sceneTextResponses[key] = response;
-          return { index: pageIndex, width: 612, height: 792, preview: null, textRuns: [{ text: `${args.request.path} page ${pageIndex} response ${response}`, x: 60, y: 55, width: 250, height: 25 }] };
+          return { index: pageIndex, width: 612, height: 792, preview: svg, textRuns: [{ text: `${args.request.path} page ${pageIndex} response ${response}`, x: 60, y: 55, width: 250, height: 25 }] };
         }
         if (command === 'preview_pdf_scene_pages') {
           if (w.previewFailure) throw new Error(w.previewFailureMessage ?? 'Renderer unavailable');
@@ -184,15 +184,17 @@ test('scene drag reorders selected thumbnails together and protects the last pag
 
 test('scene rejects stale and failed previews without exposing an unverified export', async ({ page }) => {
   await openEditor(page);
+  await expect.poll(() => page.locator('.scene-canvas image').evaluateAll((images) => images.map((image) => image.getAttribute('href')))).toContain(svg);
   await page.evaluate(() => { (window as any).previewDelay = 350; });
   await draw(page, 'Text', .2);
   await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeDisabled();
+  await expect.poll(() => page.locator('.scene-canvas image').evaluateAll((images) => images.map((image) => image.getAttribute('href')))).toContain(svg);
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await expect(page.locator('.scene-object-hit')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeEnabled();
   await page.evaluate(() => { (window as any).previewFailure = true; });
   await draw(page, 'Shape', .4);
-  expect(await page.locator('.scene-canvas image').count()).toBeGreaterThan(0);
+  await expect.poll(() => page.locator('.scene-canvas image').evaluateAll((images) => images.map((image) => image.getAttribute('href')))).toContain(svg);
   await expect(page.getByRole('alert')).toContainText('Renderer unavailable');
   await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeDisabled();
 });
