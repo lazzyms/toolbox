@@ -531,17 +531,38 @@ mod command_tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    fn assert_optional_adapter<F>(name: &str, future: F)
+    fn assert_vision_adapter<F>(name: &str, future: F)
     where F: Future<Output = Vec<JobOutcome>> {
         let outcomes = tauri::async_runtime::block_on(future);
         assert_eq!(outcomes.len(), 1, "{name} should return one input outcome");
         let outcome = &outcomes[0];
+        let resources_staged = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/vision/manifest.json").is_file();
         if let Some(error) = &outcome.failure {
-            assert!(matches!(error.kind, crate::kit::contracts::ErrorKind::Unavailable | crate::kit::contracts::ErrorKind::Processing), "{name} failed for an unexpected reason: {error}");
+            if matches!(error.kind, crate::kit::contracts::ErrorKind::Unavailable) {
+                assert!(!resources_staged && std::env::var_os("TOOLBOX_REQUIRE_VISION_RESOURCES").is_none(), "{name} resources were staged but the adapter was unavailable: {error}");
+            }
             assert!(outcome.output_paths.is_empty(), "{name} must not report an output after an adapter failure");
         } else {
             assert!(!outcome.output_paths.is_empty(), "{name} adapter reported success without an output");
             for output in &outcome.output_paths { assert!(output.is_file(), "{name} reported missing output {}", output.display()); }
+        }
+    }
+
+    fn assert_ocr_adapter<F>(name: &str, future: F)
+    where F: Future<Output = Vec<JobOutcome>> {
+        let outcomes = tauri::async_runtime::block_on(future);
+        assert_eq!(outcomes.len(), 1, "{name} should return one input outcome");
+        let outcome = &outcomes[0];
+        let resources_staged = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/ocr/manifest.json").is_file();
+        if let Some(error) = &outcome.failure {
+            if matches!(error.kind, crate::kit::contracts::ErrorKind::Unavailable) {
+                assert!(!resources_staged && std::env::var_os("TOOLBOX_REQUIRE_OCR_RESOURCES").is_none(), "{name} resources were staged but OCR was unavailable: {error}");
+            }
+        } else {
+            assert!(!outcome.output_paths.is_empty(), "{name} reported success without an output");
+            for output in &outcome.output_paths { assert!(output.is_file(), "{name} reported missing output {}", output.display()); }
+            let text = std::fs::read_to_string(&outcome.output_paths[0]).unwrap_or_default();
+            assert!(text.contains("Toolbox page"), "{name} did not extract the fixture text: {text:?}");
         }
     }
 
@@ -624,7 +645,7 @@ mod command_tests {
         outputs.extend(assert_success("split", split_pdf(PageSelectionRequest { paths: vec![pdf.clone()], pages: vec![], page_ranges: None, split_mode: Some("pages".into()), chunk_size: None, output_location: location(&root, "split") })));
         outputs.extend(assert_success("extract pdf images", extract_pdf_images(PdfToTextRequest { paths: vec![image_pdf.clone()], pages: None, output_location: location(&root, "extract pdf images") })));
         outputs.extend(assert_success("sign", sign_pdf(SignPdfRequest { paths: vec![pdf.clone()], page: 0, text: "Signed".into(), signature_path: None, rectangle: PdfRect { x: 40.0, y: 40.0, width: 180.0, height: 60.0 }, scope: PageScope::All, output_location: location(&root, "sign") })));
-        assert_optional_adapter("ocr", ocr_pdf(VisionRequest { paths: vec![pdf.clone()], pages: None, output_location: location(&root, "ocr") }));
+        assert_ocr_adapter("ocr", ocr_pdf(VisionRequest { paths: vec![pdf.clone()], pages: None, output_location: location(&root, "ocr") }));
         outputs.extend(assert_success("remove pages", remove_pdf_pages(PageSelectionRequest { paths: vec![pdf.clone()], pages: vec![0], page_ranges: None, split_mode: None, chunk_size: None, output_location: location(&root, "remove pages") })));
         outputs.extend(assert_success("extract pages", extract_pdf_pages(PageSelectionRequest { paths: vec![pdf.clone()], pages: vec![], page_ranges: Some("1".into()), split_mode: None, chunk_size: None, output_location: location(&root, "extract pages") })));
         outputs.extend(assert_success("organize", organize_pdf(OrganizePdfRequest { paths: vec![pdf.clone()], page_order: vec![1, 0], delete_pages: vec![], rotate_pages: vec![RotatePage { page: 0, degrees: 90 }], scope: PageScope::All, output_location: location(&root, "organize") })));
@@ -665,8 +686,8 @@ mod command_tests {
         outputs.extend(assert_success("metadata", image_metadata(MetadataRequest { paths: vec![image.clone()], output_location: location(&root, "metadata") })));
         outputs.extend(assert_success("tone", adjust_image_tone(ToneRequest { paths: vec![image.clone()], brightness: 20, contrast: 0.0, saturation: 0.0, exposure: 0.0, output_location: location(&root, "tone") })));
         outputs.extend(assert_aggregate_success("tiff", &[tiff.clone()], process_tiff_pages(TiffRequest { paths: vec![tiff.clone()], output_location: location(&root, "tiff") })));
-        assert_optional_adapter("face blur", blur_faces(VisionRequest { paths: vec![image.clone()], pages: None, output_location: location(&root, "face blur") }));
-        assert_optional_adapter("background removal", remove_image_background(VisionRequest { paths: vec![image.clone()], pages: None, output_location: location(&root, "background removal") }));
+        assert_vision_adapter("face blur", blur_faces(VisionRequest { paths: vec![image.clone()], pages: None, output_location: location(&root, "face blur") }));
+        assert_vision_adapter("background removal", remove_image_background(VisionRequest { paths: vec![image.clone()], pages: None, output_location: location(&root, "background removal") }));
 
         assert_eq!(std::fs::read(&pdf).unwrap(), plain_pdf_bytes, "native E2E commands must not modify their PDF input");
         assert_eq!(std::fs::read(&image).unwrap(), plain_image_bytes, "native E2E commands must not modify their image input");

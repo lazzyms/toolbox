@@ -28,12 +28,28 @@ pub struct ResolvedResource { pub path: PathBuf, pub source: ResourceSource }
 
 pub fn application_resource_root() -> Option<PathBuf> {
     if let Some(root) = std::env::var_os("TOOLBOX_RESOURCE_ROOT") { return Some(PathBuf::from(root)); }
+    resource_root_from_runtime()
+}
+
+#[cfg(test)]
+fn resource_root_from_runtime() -> Option<PathBuf> {
+    Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources"))
+}
+
+#[cfg(not(test))]
+fn resource_root_from_runtime() -> Option<PathBuf> {
     let executable = std::env::current_exe().ok()?;
     let parent = executable.parent()?;
     if parent.file_name().and_then(|name| name.to_str()) == Some("MacOS") { parent.parent().map(|root| root.join("Resources")) } else { Some(parent.to_path_buf()) }
 }
 
 pub fn resolve(name: &str, bundled_root: &Path, override_var: &str, path_name: &str) -> Result<ResolvedResource, String> {
+    if let Some(resource) = resolve_bundled_or_override(name, bundled_root, override_var)? { return Ok(resource); }
+    find_on_path(path_name).map(|path| ResolvedResource { path, source: ResourceSource::Path })
+        .ok_or_else(|| format!("Resource {name} is unavailable."))
+}
+
+pub fn resolve_bundled_or_override(name: &str, bundled_root: &Path, override_var: &str) -> Result<Option<ResolvedResource>, String> {
     let manifest_path = bundled_root.join("manifest.json");
     if manifest_path.is_file() {
         let manifest: ResourceManifest = serde_json::from_slice(&fs::read(&manifest_path).map_err(|e| format!("Cannot read resource manifest: {e}"))?)
@@ -42,15 +58,14 @@ pub fn resolve(name: &str, bundled_root: &Path, override_var: &str, path_name: &
         if manifest.version != 1 || manifest.architecture != std::env::consts::ARCH { return Err("Bundled resource manifest does not match this application.".to_string()); }
         let path = bundled_root.join(&spec.path);
         verify(&path, spec)?;
-        return Ok(ResolvedResource { path, source: ResourceSource::Bundled });
+        return Ok(Some(ResolvedResource { path, source: ResourceSource::Bundled }));
     }
     if let Ok(path) = std::env::var(override_var) {
         let path = PathBuf::from(path);
-        if path.is_file() { return Ok(ResolvedResource { path, source: ResourceSource::DevelopmentOverride }); }
+        if path.is_file() { return Ok(Some(ResolvedResource { path, source: ResourceSource::DevelopmentOverride })); }
         return Err(format!("Development resource override {override_var} does not point to a file."));
     }
-    find_on_path(path_name).map(|path| ResolvedResource { path, source: ResourceSource::Path })
-        .ok_or_else(|| format!("Resource {name} is unavailable."))
+    Ok(None)
 }
 
 fn verify(path: &Path, spec: &ResourceSpec) -> Result<(), String> {
