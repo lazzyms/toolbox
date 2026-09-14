@@ -44,7 +44,7 @@ pub(crate) fn encrypt_ooxml(package: &[u8], password: &str) -> Result<Vec<u8>, S
     let key_data_salt = random_bytes::<KEY_DATA_SALT_SIZE>()?;
     let package_key = random_bytes::<PACKAGE_KEY_SIZE>()?;
     let verifier_hash_input = random_bytes::<BLOCK_SIZE>()?;
-    let integrity_key = random_bytes::<HASH_SIZE>()?;
+    let integrity_salt = random_bytes::<KEY_DATA_SALT_SIZE>()?;
 
     let password_hash = iterated_password_hash(&password_salt, password);
     let encrypted_verifier_hash_input = encrypt_aes_cbc(
@@ -65,11 +65,11 @@ pub(crate) fn encrypt_ooxml(package: &[u8], password: &str) -> Result<Vec<u8>, S
     )?;
 
     let encrypted_package = encrypt_package(package, package_length, &package_key, &key_data_salt)?;
-    let integrity_value = hmac_sha512(&integrity_key, &encrypted_package)?;
+    let integrity_value = hmac_sha512(&integrity_salt, &encrypted_package)?;
     let encrypted_integrity_key = encrypt_aes_cbc(
         &package_key,
         &derive_iv(&key_data_salt, &INTEGRITY_KEY_BLOCK_KEY),
-        &integrity_key,
+        &integrity_salt,
     )?;
     let encrypted_integrity_value = encrypt_aes_cbc(
         &package_key,
@@ -199,7 +199,7 @@ fn encrypt_package(
     Ok(encrypted_package)
 }
 
-fn hmac_sha512(key: &[u8; HASH_SIZE], data: &[u8]) -> Result<[u8; HASH_SIZE], String> {
+fn hmac_sha512(key: &[u8; KEY_DATA_SALT_SIZE], data: &[u8]) -> Result<[u8; HASH_SIZE], String> {
     let mut mac = Hmac::<Sha512>::new_from_slice(key)
         .map_err(|_| "Could not initialize the Agile integrity HMAC.".to_string())?;
     mac.update(data);
@@ -243,8 +243,11 @@ fn write_compound_stream(
 
 #[cfg(test)]
 mod tests {
+    use base64::engine::general_purpose::STANDARD as BASE64;
+    use base64::Engine;
+    use cfb::CompoundFile;
     use super::encrypt_ooxml;
-    use std::io::{Cursor, Write};
+    use std::io::{Cursor, Read, Write};
     use zip::{write::SimpleFileOptions, ZipWriter};
 
     fn minimal_ooxml_package(kind: &str, include_large_entry: bool) -> Vec<u8> {
@@ -300,6 +303,34 @@ mod tests {
         }
 
         archive.finish().unwrap().into_inner()
+    }
+
+    fn decode_encryption_info_attribute(encrypted: Vec<u8>, name: &str) -> Vec<u8> {
+        let mut compound = CompoundFile::open(Cursor::new(encrypted)).unwrap();
+        let mut stream = compound.open_stream("/EncryptionInfo").unwrap();
+        let mut encryption_info = Vec::new();
+        stream.read_to_end(&mut encryption_info).unwrap();
+        assert!(encryption_info.len() > 8);
+
+        let xml = std::str::from_utf8(&encryption_info[8..]).unwrap();
+        let marker = format!("{name}=\"");
+        let value = xml
+            .split_once(&marker)
+            .and_then(|(_, remainder)| remainder.split_once('\"'))
+            .map(|(value, _)| value)
+            .unwrap();
+        BASE64.decode(value).unwrap()
+    }
+
+    #[test]
+    fn writes_agile_integrity_fields_with_declared_sizes() {
+        let encrypted = encrypt_ooxml(&minimal_ooxml_package("docx", false), "password").unwrap();
+
+        let encrypted_hmac_key = decode_encryption_info_attribute(encrypted.clone(), "encryptedHmacKey");
+        let encrypted_hmac_value = decode_encryption_info_attribute(encrypted, "encryptedHmacValue");
+
+        assert_eq!(encrypted_hmac_key.len(), 16);
+        assert_eq!(encrypted_hmac_value.len(), 64);
     }
 
     #[test]
