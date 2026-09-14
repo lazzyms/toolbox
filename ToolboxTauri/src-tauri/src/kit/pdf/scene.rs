@@ -180,21 +180,23 @@ fn shape_content(shape: Option<&Shape>, r: &Rect) -> String {
     }
 }
 
-fn watermark_placements(area: &Rect, font_size: f32, text: &str, pattern: Option<&WatermarkPattern>) -> Vec<(f32, f32, f32)> {
+fn watermark_placements(area: &Rect, anchor: &Rect, font_size: f32, text: &str, pattern: Option<&WatermarkPattern>) -> Vec<(f32, f32, f32)> {
     let pattern = pattern.unwrap_or(&WatermarkPattern::AcrossPage);
     let text_width = text.chars().count().max(1) as f32 * font_size * 0.6;
-    let center_x = area.x + area.width / 2.;
-    let center_y = area.y + area.height / 2.;
+    let center_x = anchor.x + anchor.width / 2.;
+    let center_y = anchor.y + anchor.height / 2.;
     match pattern {
         WatermarkPattern::AcrossPage => {
             let step_x = (text_width + font_size * 2.).max(100.);
             let step_y = (font_size * 4.).max(80.);
+            let offset_x = anchor.x - (area.x + area.width * 0.14);
+            let offset_y = anchor.y - (area.y + area.height * 0.33);
             let mut placements = Vec::new();
-            let mut y = area.y - area.height;
-            while y <= area.y + area.height * 2. {
-                let offset = ((y - area.y) / step_y).round() * step_x * 0.45;
-                let mut x = area.x - area.width + offset;
-                while x <= area.x + area.width * 2. {
+            let mut y = area.y - area.height + offset_y;
+            while y <= area.y + area.height * 2. + offset_y {
+                let offset = ((y - (area.y + offset_y)) / step_y).round() * step_x * 0.45;
+                let mut x = area.x - area.width + offset_x + offset;
+                while x <= area.x + area.width * 2. + offset_x {
                     placements.push((x, y, -35.));
                     x += step_x;
                 }
@@ -585,7 +587,7 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
                     let resource = font_names.get(resource).ok_or("Scene font resource disappeared")?;
                     let encoded=encode_text(&o.text)?;
                     let area=page.crop.as_ref().cloned().unwrap_or(Rect{x:0.,y:0.,width:page.width,height:page.height});
-                    for (x,y,angle) in watermark_placements(&area,o.font_size,&o.text,o.watermark_pattern.as_ref()) {
+                    for (x,y,angle) in watermark_placements(&area,&o.rect,o.font_size,&o.text,o.watermark_pattern.as_ref()) {
                         let radians=angle.to_radians(); let c=radians.cos(); let s=radians.sin();
                         content.push_str(&format!("BT /{resource} {} Tf {} {} {} {} {} {} Tm <{encoded}> Tj ET\n",o.font_size,c,s,s,-c,x,y));
                     }
@@ -1183,6 +1185,28 @@ mod tests {
         assert!(content.contains("[3 4] 0 d"));
         assert!(content.contains("BT /SceneFont 18 Tf"));
         assert!(content.contains("m ")); assert!(content.contains(" h f"));
+    }
+
+    #[test]
+    fn watermark_placements_follow_moved_and_resized_rectangles() {
+        let area = Rect { x: 10., y: 20., width: 500., height: 600. };
+        let original = Rect { x: 30., y: 40., width: 120., height: 40. };
+        let moved = Rect { x: 180., y: 220., width: 120., height: 40. };
+        let resized = Rect { x: 30., y: 40., width: 240., height: 80. };
+        let patterns = [
+            WatermarkPattern::AcrossPage,
+            WatermarkPattern::BottomRightToTopLeft,
+            WatermarkPattern::TopRightToBottomLeft,
+            WatermarkPattern::CenterHorizontal,
+            WatermarkPattern::CenterVertical,
+        ];
+        for pattern in patterns {
+            let initial = watermark_placements(&area, &original, 18., "LOCAL", Some(&pattern));
+            let moved_placements = watermark_placements(&area, &moved, 18., "LOCAL", Some(&pattern));
+            let resized_placements = watermark_placements(&area, &resized, 36., "LOCAL", Some(&pattern));
+            assert_ne!(initial, moved_placements, "moving {pattern:?} did not change native placements");
+            assert_ne!(initial, resized_placements, "resizing {pattern:?} did not change native placements");
+        }
     }
 
     #[test]

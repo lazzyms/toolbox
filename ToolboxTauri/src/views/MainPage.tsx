@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import {
   ToolWorkspaceRegistry,
   UtilityRegistry,
@@ -66,6 +66,9 @@ const iconName = (tool: ToolDefinition) =>
 export const MainPage = () => {
   const [selectedTool, setSelectedTool] = useState<ToolDefinition | null>(null);
   const [workspaceSourceAction, setWorkspaceSourceAction] = useState<WorkspaceSourceAction | null>(null);
+  const publishWorkspaceSourceAction = useCallback((action: WorkspaceSourceAction | null) => {
+    setWorkspaceSourceAction(() => action);
+  }, []);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [filter, setFilter] = useState<
     "all" | "PDF" | "Images" | "Documents" | "favorites" | "recent"
@@ -294,7 +297,7 @@ export const MainPage = () => {
                 </button>
               </div>}
               <div className="tool-view">
-                <ViewFor utility={selectedTool} onWorkspaceSourceAction={selectedWorkspace.id === "pdf-editor" ? (action) => setWorkspaceSourceAction(() => action) : undefined} />
+                <ViewFor utility={selectedTool} onWorkspaceSourceAction={selectedWorkspace.id === "pdf-editor" ? publishWorkspaceSourceAction : undefined} />
               </div>
             </div>
           </section>

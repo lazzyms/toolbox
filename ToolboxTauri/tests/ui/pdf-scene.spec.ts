@@ -57,6 +57,12 @@ async function exported(page: Page) {
 }
 
 test('PDF editor keeps the back link, title, and empty-state open action compact', async ({ page }) => {
+  const consoleErrors: string[] = [];
+  const pageErrors: string[] = [];
+  page.on('console', message => {
+    if (message.type() === 'error') consoleErrors.push(message.text());
+  });
+  page.on('pageerror', error => pageErrors.push(error.message));
   await page.goto('/');
   await page.getByRole('button', { name: 'Open Edit PDF', exact: true }).click();
   await expect(page.locator('.pdf-editor-header-line')).toContainText('PDF editor');
@@ -67,6 +73,8 @@ test('PDF editor keeps the back link, title, and empty-state open action compact
   await page.getByRole('button', { name: 'Choose files to process' }).click();
   await expect(page.getByRole('group', { name: 'PDF page canvas' })).toBeVisible();
   await expect(page.locator('[aria-label="Object properties"]')).toHaveCount(0);
+  expect(consoleErrors).toEqual([]);
+  expect(pageErrors).toEqual([]);
 });
 
 test('scene preview cache misses use one indexed batch request', async ({ page }) => {
