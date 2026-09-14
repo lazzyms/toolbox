@@ -98,17 +98,7 @@ pub(crate) fn render_preview(path: &Path, page: usize, width: f32, height: f32) 
 }
 
 fn find_pdftoppm() -> Option<PathBuf> {
-    std::env::var_os("TOOLBOX_PDFTOPPM_PATH")
-        .map(PathBuf::from)
-        .filter(|path| !path.as_os_str().is_empty() && path.is_file())
-        .or_else(|| {
-            super::helper_available({
-                let mut command = Command::new("pdftoppm");
-                command.arg("-h");
-                command
-            })
-            .then(|| PathBuf::from("pdftoppm"))
-        })
+    crate::kit::resources::resolve_pdf_renderer().ok()
 }
 
 pub(crate) fn page_bounds(document: &Document, page_id: lopdf::ObjectId) -> Result<(f32, f32, f32, f32), String> {

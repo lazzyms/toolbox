@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -45,6 +46,29 @@ fn resource_root_from_runtime() -> Option<PathBuf> {
     let executable = std::env::current_exe().ok()?;
     let parent = executable.parent()?;
     if parent.file_name().and_then(|name| name.to_str()) == Some("MacOS") { parent.parent().map(|root| root.join("Resources")) } else { Some(parent.to_path_buf()) }
+}
+
+pub(crate) fn resolve_pdf_renderer() -> Result<PathBuf, String> {
+    let executable = if cfg!(windows) { "pdftoppm.exe" } else { "pdftoppm" };
+    if let Some(path) = std::env::var_os("TOOLBOX_PDFTOPPM_PATH").filter(|path| !path.is_empty()).map(PathBuf::from) {
+        if path.is_file() { return Ok(path); }
+        return Err("TOOLBOX_PDFTOPPM_PATH does not point to a file.".to_string());
+    }
+
+    if let Some(root) = application_resource_root() {
+        for path in [root.join("pdf-bin").join(executable), root.join("resources").join(executable), root.join(executable)] {
+            if !path.is_file() { continue; }
+            let mut command = Command::new(&path);
+            command.arg("-h");
+            if crate::kit::pdf::helper_available(command) { return Ok(path); }
+        }
+    }
+
+    let path = PathBuf::from(executable);
+    let mut command = Command::new(&path);
+    command.arg("-h");
+    if crate::kit::pdf::helper_available(command) { return Ok(path); }
+    Err("pdftoppm is required for PDF previews. Set TOOLBOX_PDFTOPPM_PATH or add it to PATH.".to_string())
 }
 
 pub fn resolve(name: &str, bundled_root: &Path, override_var: &str, path_name: &str) -> Result<ResolvedResource, String> {

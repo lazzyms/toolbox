@@ -646,10 +646,7 @@ impl TempDir {
 }
 impl Drop for TempDir { fn drop(&mut self) { let _=fs::remove_dir_all(&self.0); } }
 fn renderer()->Result<PathBuf,String> {
-    let path=std::env::var_os("TOOLBOX_PDFTOPPM_PATH").filter(|path| !path.is_empty()).map(PathBuf::from).unwrap_or_else(||PathBuf::from("pdftoppm"));
-    let mut command = Command::new(&path);
-    command.arg("-h");
-    if super::helper_available(command) { Ok(path) } else { Err("pdftoppm is required for PDF previews. Set TOOLBOX_PDFTOPPM_PATH or add it to PATH.".into()) }
+    crate::kit::resources::resolve_pdf_renderer()
 }
 
 fn text_extractor()->Option<PathBuf> {
@@ -962,6 +959,45 @@ mod tests {
             ScenePage {source_index:Some(0),width:300.,height:200.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]},
         ] }
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn renderer_uses_bundled_pdftoppm_when_path_and_override_are_unavailable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let pdf_bin = temp.0.join("pdf-bin");
+        fs::create_dir(&pdf_bin).unwrap();
+        let bundled = pdf_bin.join("pdftoppm");
+        fs::write(&bundled, b"#!/bin/sh\nexit 0\n").unwrap();
+        let mut permissions = fs::metadata(&bundled).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&bundled, permissions).unwrap();
+
+        let previous_root = std::env::var_os("TOOLBOX_RESOURCE_ROOT");
+        let previous_override = std::env::var_os("TOOLBOX_PDFTOPPM_PATH");
+        let previous_path = std::env::var_os("PATH");
+        std::env::set_var("TOOLBOX_RESOURCE_ROOT", &temp.0);
+        std::env::remove_var("TOOLBOX_PDFTOPPM_PATH");
+        std::env::set_var("PATH", temp.0.join("missing-path"));
+        let result = renderer();
+        match previous_root {
+            Some(value) => std::env::set_var("TOOLBOX_RESOURCE_ROOT", value),
+            None => std::env::remove_var("TOOLBOX_RESOURCE_ROOT"),
+        }
+        match previous_override {
+            Some(value) => std::env::set_var("TOOLBOX_PDFTOPPM_PATH", value),
+            None => std::env::remove_var("TOOLBOX_PDFTOPPM_PATH"),
+        }
+        match previous_path {
+            Some(value) => std::env::set_var("PATH", value),
+            None => std::env::remove_var("PATH"),
+        }
+
+        assert_eq!(result.unwrap(), bundled);
+    }
+
     #[test]
     fn geometry_resolves_nested_resources_boxes_and_rotation() {
         let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); nested_fixture(&input);
