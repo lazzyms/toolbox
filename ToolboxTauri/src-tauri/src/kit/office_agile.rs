@@ -38,8 +38,8 @@ type Aes256CbcDecryptor = cbc::Decryptor<Aes256>;
 /// Encrypt an OOXML package using ECMA-376 Agile encryption.
 ///
 /// The function only operates on byte slices. It does not read or write files,
-/// and the returned bytes are a Compound File containing the two streams used
-/// by encrypted OOXML documents.
+/// and the returned bytes are a Compound File containing the streams and
+/// DataSpaces hierarchy used by encrypted OOXML documents.
 pub(crate) fn encrypt_ooxml(package: &[u8], password: &str) -> Result<Vec<u8>, String> {
     let package_length = u32::try_from(package.len())
         .map_err(|_| "The OOXML package is too large to encrypt.".to_string())?;
@@ -96,6 +96,35 @@ pub(crate) fn encrypt_ooxml(package: &[u8], password: &str) -> Result<Vec<u8>, S
 
     let mut compound = CompoundFile::create(Cursor::new(Vec::new()))
         .map_err(|error| format!("Could not create the encrypted Office container: {error}"))?;
+    compound
+        .create_storage_all("/\x06DataSpaces")
+        .map_err(|error| format!("Could not create the Office DataSpaces storage: {error}"))?;
+    write_compound_stream(
+        &mut compound,
+        "/\x06DataSpaces/Version",
+        &data_space_version_info(),
+    )?;
+    write_compound_stream(
+        &mut compound,
+        "/\x06DataSpaces/DataSpaceMap",
+        &data_space_map(),
+    )?;
+    compound
+        .create_storage_all("/\x06DataSpaces/DataSpaceInfo")
+        .map_err(|error| format!("Could not create the Office DataSpaceInfo storage: {error}"))?;
+    write_compound_stream(
+        &mut compound,
+        "/\x06DataSpaces/DataSpaceInfo/StrongEncryptionDataSpace",
+        &data_space_definition(),
+    )?;
+    compound
+        .create_storage_all("/\x06DataSpaces/TransformInfo/StrongEncryptionTransform")
+        .map_err(|error| format!("Could not create the Office TransformInfo storage: {error}"))?;
+    write_compound_stream(
+        &mut compound,
+        "/\x06DataSpaces/TransformInfo/StrongEncryptionTransform/\x06Primary",
+        &transform_info(),
+    )?;
     write_compound_stream(&mut compound, "/EncryptionInfo", &encryption_info_stream)?;
     write_compound_stream(&mut compound, "/EncryptedPackage", &encrypted_package)?;
     compound
@@ -352,6 +381,93 @@ fn encryption_info_xml(
         BASE64.encode(encrypted_verifier_hash_value),
         BASE64.encode(encrypted_key_value),
     )
+}
+
+fn write_unicode_lp_p4(buffer: &mut Vec<u8>, value: &str) {
+    let code_units: Vec<u16> = value.encode_utf16().collect();
+    let data_length = code_units
+        .len()
+        .checked_mul(std::mem::size_of::<u16>())
+        .and_then(|length| u32::try_from(length).ok())
+        .expect("DataSpaces Unicode string is too long");
+    buffer.extend_from_slice(&data_length.to_le_bytes());
+    for code_unit in code_units {
+        buffer.extend_from_slice(&code_unit.to_le_bytes());
+    }
+    let padding = (4 - data_length % 4) % 4;
+    for _ in 0..padding {
+        buffer.push(0);
+    }
+}
+
+fn write_version(buffer: &mut Vec<u8>) {
+    buffer.extend_from_slice(&1_u16.to_le_bytes());
+    buffer.extend_from_slice(&0_u16.to_le_bytes());
+}
+
+fn data_space_version_info() -> Vec<u8> {
+    let mut stream = Vec::new();
+    write_unicode_lp_p4(&mut stream, "Microsoft.Container.DataSpaces");
+    write_version(&mut stream);
+    write_version(&mut stream);
+    write_version(&mut stream);
+    stream
+}
+
+fn data_space_map() -> Vec<u8> {
+    let mut entry = Vec::new();
+    entry.extend_from_slice(&1_u32.to_le_bytes());
+    entry.extend_from_slice(&0_u32.to_le_bytes());
+    write_unicode_lp_p4(&mut entry, "EncryptedPackage");
+    write_unicode_lp_p4(&mut entry, "StrongEncryptionDataSpace");
+
+    let entry_length = u32::try_from(entry.len() + std::mem::size_of::<u32>())
+        .expect("DataSpaceMap entry is too long");
+    let mut stream = Vec::new();
+    stream.extend_from_slice(&8_u32.to_le_bytes());
+    stream.extend_from_slice(&1_u32.to_le_bytes());
+    stream.extend_from_slice(&entry_length.to_le_bytes());
+    stream.extend_from_slice(&entry);
+    stream
+}
+
+fn data_space_definition() -> Vec<u8> {
+    let mut stream = Vec::new();
+    stream.extend_from_slice(&8_u32.to_le_bytes());
+    stream.extend_from_slice(&1_u32.to_le_bytes());
+    write_unicode_lp_p4(&mut stream, "StrongEncryptionTransform");
+    stream
+}
+
+fn transform_info() -> Vec<u8> {
+    let mut transform_id = Vec::new();
+    write_unicode_lp_p4(
+        &mut transform_id,
+        "{FF9A3F03-56EF-4613-BDD5-5A41C1D07246}",
+    );
+
+    let transform_length = u32::try_from(
+        std::mem::size_of::<u32>()
+            + std::mem::size_of::<u32>()
+            + transform_id.len(),
+    )
+    .expect("TransformInfoHeader is too long");
+    let mut stream = Vec::new();
+    stream.extend_from_slice(&transform_length.to_le_bytes());
+    stream.extend_from_slice(&1_u32.to_le_bytes());
+    stream.extend_from_slice(&transform_id);
+    write_unicode_lp_p4(&mut stream, "Microsoft.Container.EncryptionTransform");
+    write_version(&mut stream);
+    write_version(&mut stream);
+    write_version(&mut stream);
+
+    // Agile encryption is described by EncryptionInfo; the transform name is
+    // therefore the required null string, while these fields identify AES.
+    stream.extend_from_slice(&0_u32.to_le_bytes());
+    stream.extend_from_slice(&16_u32.to_le_bytes());
+    stream.extend_from_slice(&0_u32.to_le_bytes());
+    stream.extend_from_slice(&4_u32.to_le_bytes());
+    stream
 }
 
 fn write_compound_stream(
@@ -683,6 +799,131 @@ mod tests {
         }
         compound.flush().unwrap();
         compound.into_inner().into_inner()
+    }
+
+    fn read_u32(bytes: &[u8], offset: &mut usize) -> u32 {
+        let end = *offset + 4;
+        let value = u32::from_le_bytes(bytes[*offset..end].try_into().unwrap());
+        *offset = end;
+        value
+    }
+
+    fn read_unicode_lp_p4(bytes: &[u8], offset: &mut usize) -> String {
+        let byte_length = read_u32(bytes, offset) as usize;
+        assert_eq!(byte_length % 2, 0);
+        let data_end = *offset + byte_length;
+        let code_units = bytes[*offset..data_end]
+            .chunks_exact(2)
+            .map(|unit| u16::from_le_bytes([unit[0], unit[1]]));
+        let value = String::from_utf16(code_units.collect::<Vec<_>>().as_slice()).unwrap();
+        *offset = data_end;
+        while *offset % 4 != 0 {
+            assert_eq!(bytes[*offset], 0);
+            *offset += 1;
+        }
+        value
+    }
+
+    fn read_test_stream(
+        compound: &mut CompoundFile<Cursor<Vec<u8>>>,
+        path: &str,
+    ) -> Vec<u8> {
+        let mut stream = compound.open_stream(path).unwrap();
+        let mut contents = Vec::new();
+        stream.read_to_end(&mut contents).unwrap();
+        contents
+    }
+
+    #[test]
+    fn writes_agile_data_spaces_hierarchy() {
+        let encrypted = encrypt_ooxml(&minimal_ooxml_package("docx", false), "password").unwrap();
+        let mut compound = CompoundFile::open(Cursor::new(encrypted)).unwrap();
+
+        for path in [
+            "/\x06DataSpaces",
+            "/\x06DataSpaces/DataSpaceInfo",
+            "/\x06DataSpaces/TransformInfo",
+            "/\x06DataSpaces/TransformInfo/StrongEncryptionTransform",
+        ] {
+            assert!(compound.is_storage(path), "missing storage {path:?}");
+        }
+        for path in [
+            "/\x06DataSpaces/Version",
+            "/\x06DataSpaces/DataSpaceMap",
+            "/\x06DataSpaces/DataSpaceInfo/StrongEncryptionDataSpace",
+            "/\x06DataSpaces/TransformInfo/StrongEncryptionTransform/\x06Primary",
+        ] {
+            assert!(compound.is_stream(path), "missing stream {path:?}");
+        }
+
+        let version = read_test_stream(&mut compound, "/\x06DataSpaces/Version");
+        assert_eq!(version.len(), 76);
+        let mut offset = 0;
+        assert_eq!(
+            read_unicode_lp_p4(&version, &mut offset),
+            "Microsoft.Container.DataSpaces"
+        );
+        for _ in 0..3 {
+            assert_eq!(read_u32(&version, &mut offset), 1);
+        }
+        assert_eq!(offset, version.len());
+
+        let map = read_test_stream(&mut compound, "/\x06DataSpaces/DataSpaceMap");
+        assert_eq!(map.len(), 112);
+        let mut offset = 0;
+        assert_eq!(read_u32(&map, &mut offset), 8);
+        assert_eq!(read_u32(&map, &mut offset), 1);
+        let entry_start = offset;
+        let entry_length = read_u32(&map, &mut offset) as usize;
+        assert_eq!(entry_length, 104);
+        assert_eq!(read_u32(&map, &mut offset), 1);
+        assert_eq!(read_u32(&map, &mut offset), 0);
+        assert_eq!(read_unicode_lp_p4(&map, &mut offset), "EncryptedPackage");
+        assert_eq!(
+            read_unicode_lp_p4(&map, &mut offset),
+            "StrongEncryptionDataSpace"
+        );
+        assert_eq!(offset, entry_start + entry_length);
+        assert_eq!(offset, map.len());
+
+        let definition = read_test_stream(
+            &mut compound,
+            "/\x06DataSpaces/DataSpaceInfo/StrongEncryptionDataSpace",
+        );
+        assert_eq!(definition.len(), 64);
+        let mut offset = 0;
+        assert_eq!(read_u32(&definition, &mut offset), 8);
+        assert_eq!(read_u32(&definition, &mut offset), 1);
+        assert_eq!(
+            read_unicode_lp_p4(&definition, &mut offset),
+            "StrongEncryptionTransform"
+        );
+        assert_eq!(offset, definition.len());
+
+        let primary = read_test_stream(
+            &mut compound,
+            "/\x06DataSpaces/TransformInfo/StrongEncryptionTransform/\x06Primary",
+        );
+        assert_eq!(primary.len(), 200);
+        let mut offset = 0;
+        assert_eq!(read_u32(&primary, &mut offset), 88);
+        assert_eq!(read_u32(&primary, &mut offset), 1);
+        assert_eq!(
+            read_unicode_lp_p4(&primary, &mut offset),
+            "{FF9A3F03-56EF-4613-BDD5-5A41C1D07246}"
+        );
+        assert_eq!(
+            read_unicode_lp_p4(&primary, &mut offset),
+            "Microsoft.Container.EncryptionTransform"
+        );
+        for _ in 0..3 {
+            assert_eq!(read_u32(&primary, &mut offset), 1);
+        }
+        assert_eq!(read_u32(&primary, &mut offset), 0);
+        assert_eq!(read_u32(&primary, &mut offset), 16);
+        assert_eq!(read_u32(&primary, &mut offset), 0);
+        assert_eq!(read_u32(&primary, &mut offset), 4);
+        assert_eq!(offset, primary.len());
     }
 
     #[test]
