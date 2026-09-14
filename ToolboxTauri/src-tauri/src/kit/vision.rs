@@ -26,29 +26,84 @@ pub fn ocr_pdf(request: &VisionRequest, input: PathBuf) -> JobOutcome {
         Err(error) => return failure(input, format!("Could not inspect PDF for OCR: {error}")),
     };
     if input_size > OCR_MAX_INPUT_BYTES { return failure(input, "PDF exceeds the 100 MiB OCR input limit.".to_string()); }
-    let engine = match find_engine("ocr", "TOOLBOX_TESSERACT_PATH", "tesseract") {
+    let engine = match find_engine("tesseract", "TOOLBOX_TESSERACT_PATH", "tesseract") {
         Ok(engine) => engine,
         Err(error) => return unavailable(input, error),
     };
-    let result = run_ocr(&engine, &input);
+    let tessdata = match find_resource("engTraineddata", "TOOLBOX_TESSDATA_PATH", &ocr_resource_root()) {
+        Ok(resource) => resource,
+        Err(error) => return unavailable(input, error),
+    };
+    let renderer = match find_pdf_renderer() {
+        Ok(renderer) => renderer,
+        Err(error) => return unavailable(input, error),
+    };
+    let result = run_ocr(&engine, &tessdata, &renderer, &input);
     match result {
-        Ok(result) if result.status.success() => {
-            if result.stdout.len() > OCR_MAX_OUTPUT_BYTES { return failure(input, "OCR output exceeds the 10 MiB text limit.".to_string()); }
-            let text = normalize_ocr_text(&result.stdout);
+        Ok(stdout) => {
+            if stdout.len() > OCR_MAX_OUTPUT_BYTES { return failure(input, "OCR output exceeds the 10 MiB text limit.".to_string()); }
+            let text = normalize_ocr_text(&stdout);
             if text.is_empty() { return failure(input, "OCR completed but found no readable text.".to_string()); }
             match std::fs::write(&output, text) {
                 Ok(_) => success(input, output, "OCR text extracted in page order"),
                 Err(error) => failure(input, format!("Could not write OCR output: {error}")),
             }
         }
-        Ok(result) => failure(input, stderr(result, "OCR engine failed.")),
         Err(error) => failure(input, error),
     }
 }
 
-fn run_ocr(engine: &std::path::Path, input: &std::path::Path) -> Result<std::process::Output, String> {
-    let mut child = Command::new(engine).arg(input).arg("stdout").stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()
-        .map_err(|error| format!("Could not run OCR engine: {error}"))?;
+fn run_ocr(engine: &std::path::Path, tessdata: &std::path::Path, renderer: &std::path::Path, input: &std::path::Path) -> Result<Vec<u8>, String> {
+    let temporary_root = std::env::temp_dir().join(format!("toolbox_ocr_{}_{}", std::process::id(), unique_suffix()));
+    std::fs::create_dir_all(&temporary_root).map_err(|error| format!("Could not create OCR workspace: {error}"))?;
+    let prefix = temporary_root.join("page");
+    let render_result = run_command({
+        let mut command = Command::new(renderer);
+        command.arg("-png").arg("-r").arg("200").arg(input).arg(&prefix);
+        command
+    });
+    let result = match render_result {
+        Ok(result) if result.status.success() => (|| -> Result<Vec<u8>, String> {
+            let mut pages = std::fs::read_dir(&temporary_root)
+                .map_err(|error| format!("Could not inspect rendered OCR pages: {error}"))?
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .filter(|path| path.extension().and_then(|extension| extension.to_str()) == Some("png"))
+                .collect::<Vec<_>>();
+            pages.sort_by_key(|path| {
+                path.file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .and_then(|stem| stem.strip_prefix("page-"))
+                    .and_then(|page| page.parse::<usize>().ok())
+                    .unwrap_or(usize::MAX)
+            });
+            if pages.is_empty() { Err("PDF renderer produced no pages for OCR.".to_string()) }
+            else {
+                let tessdata_dir = tessdata.parent().ok_or_else(|| "OCR language data has no parent directory.".to_string())?;
+                let mut text = Vec::new();
+                for page in pages {
+                    let result = run_command({
+                        let mut command = Command::new(engine);
+                        command.arg(&page).arg("stdout").arg("--tessdata-dir").arg(tessdata_dir).arg("-l").arg("eng").arg("--psm").arg("3");
+                        command
+                    })?;
+                    if !result.status.success() { return Err(stderr(result, "OCR engine failed.")); }
+                    if text.len() + result.stdout.len() > OCR_MAX_OUTPUT_BYTES { return Err("OCR output exceeds the 10 MiB text limit.".to_string()); }
+                    text.extend_from_slice(&result.stdout);
+                    text.push(b'\n');
+                }
+                Ok(text)
+            }
+        })(),
+        Ok(result) => Err(stderr(result, "PDF renderer failed.")),
+        Err(error) => Err(error),
+    };
+    cleanup_ocr_workspace(temporary_root, result)
+}
+
+fn run_command(mut command: Command) -> Result<std::process::Output, String> {
+    let mut child = command.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()
+        .map_err(|error| format!("Could not run OCR helper: {error}"))?;
     let started = Instant::now();
     loop {
         match child.try_wait().map_err(|error| format!("Could not read OCR engine status: {error}"))? {
@@ -63,6 +118,15 @@ fn run_ocr(engine: &std::path::Path, input: &std::path::Path) -> Result<std::pro
     }
 }
 
+fn cleanup_ocr_workspace(root: PathBuf, result: Result<Vec<u8>, String>) -> Result<Vec<u8>, String> {
+    let _ = std::fs::remove_dir_all(root);
+    result
+}
+
+fn unique_suffix() -> u128 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|duration| duration.as_nanos()).unwrap_or_default()
+}
+
 fn normalize_ocr_text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes)
         .lines()
@@ -73,22 +137,26 @@ fn normalize_ocr_text(bytes: &[u8]) -> String {
 }
 
 pub fn blur_faces(request: &VisionRequest, input: PathBuf) -> JobOutcome {
-    run_image_adapter(request, input, "faceBlur", "TOOLBOX_FACE_BLUR_PATH", "toolbox-face-blur", "-blurred", "Blurred faces", ImageAdapterValidation::FaceBlur)
+    run_image_adapter(request, input, "face-blur", "faceBlur", "faceBlurModel", "TOOLBOX_FACE_BLUR_PATH", "TOOLBOX_FACE_BLUR_MODEL_PATH", "toolbox-face-blur", "-blurred", "Blurred faces", ImageAdapterValidation::FaceBlur)
 }
 
 pub fn remove_background(request: &VisionRequest, input: PathBuf) -> JobOutcome {
-    run_image_adapter(request, input, "backgroundRemoval", "TOOLBOX_BACKGROUND_REMOVAL_PATH", "toolbox-background-removal", "-cutout", "Background removed", ImageAdapterValidation::Cutout)
+    run_image_adapter(request, input, "background-removal", "backgroundRemoval", "backgroundRemovalModel", "TOOLBOX_BACKGROUND_REMOVAL_PATH", "TOOLBOX_BACKGROUND_REMOVAL_MODEL_PATH", "toolbox-background-removal", "-cutout", "Background removed", ImageAdapterValidation::Cutout)
 }
 
 enum ImageAdapterValidation { FaceBlur, Cutout }
 
-fn run_image_adapter(request: &VisionRequest, input: PathBuf, resource_name: &str, variable: &str, command: &str, suffix: &str, detail: &str, validation: ImageAdapterValidation) -> JobOutcome {
+fn run_image_adapter(request: &VisionRequest, input: PathBuf, mode: &str, resource_name: &str, model_name: &str, variable: &str, model_variable: &str, command: &str, suffix: &str, detail: &str, validation: ImageAdapterValidation) -> JobOutcome {
     let output = OutputNaming::get_destination(&input, &request.output_location, suffix, "png");
     let engine = match find_engine(resource_name, variable, command) {
         Ok(engine) => engine,
         Err(error) => return unavailable(input, error),
     };
-    match Command::new(engine).arg(&input).arg(&output).output() {
+    let model = match find_model(model_name, model_variable) {
+        Ok(model) => model,
+        Err(error) => return unavailable(input, error),
+    };
+    match Command::new(engine).arg("--mode").arg(mode).arg("--input").arg(&input).arg("--output").arg(&output).arg("--model").arg(model).output() {
         Ok(result) if result.status.success() && output.is_file() => {
             let validation = match validation {
                 ImageAdapterValidation::FaceBlur => validate_face_blur(&input, &output),
@@ -109,8 +177,51 @@ fn run_image_adapter(request: &VisionRequest, input: PathBuf, resource_name: &st
 }
 
 fn find_engine(name: &str, variable: &str, command: &str) -> Result<PathBuf, String> {
-    let root = resources::application_resource_root().map(|root| root.join("vision")).unwrap_or_default();
+    let root = if name == "tesseract" { ocr_resource_root() } else { vision_resource_root() };
     resources::resolve(name, &root, variable, command).map(|resource| resource.path)
+}
+
+fn find_model(name: &str, variable: &str) -> Result<PathBuf, String> {
+    let root = vision_resource_root();
+    resources::resolve_bundled_or_override(name, &root, variable)
+        .and_then(|resource| resource.map(|resource| resource.path).ok_or_else(|| format!("Resource {name} is unavailable.")))
+}
+
+fn find_resource(name: &str, variable: &str, root: &std::path::Path) -> Result<PathBuf, String> {
+    resources::resolve_bundled_or_override(name, root, variable)
+        .and_then(|resource| resource.map(|resource| resource.path).ok_or_else(|| format!("Resource {name} is unavailable.")))
+}
+
+fn find_pdf_renderer() -> Result<PathBuf, String> {
+    if let Ok(path) = std::env::var("TOOLBOX_PDFTOPPM_PATH") {
+        let path = PathBuf::from(path);
+        if path.is_file() { return Ok(path); }
+        return Err("TOOLBOX_PDFTOPPM_PATH does not point to a file.".to_string());
+    }
+    let root = resources::application_resource_root().unwrap_or_default();
+    let executable = if cfg!(windows) { "pdftoppm.exe" } else { "pdftoppm" };
+    [
+        root.join("pdf-bin").join(executable),
+        root.join("resources").join(executable),
+        root.join(executable),
+        root.join("resources").join("pdf-bin").join(executable),
+    ].into_iter().find(|path| path.is_file())
+        .or_else(|| {
+            Command::new("pdftoppm").arg("-h").output().ok().filter(|result| result.status.success()).map(|_| PathBuf::from("pdftoppm"))
+        })
+        .ok_or_else(|| "PDF rasterizer is unavailable. Bundle pdftoppm or set TOOLBOX_PDFTOPPM_PATH.".to_string())
+}
+
+fn vision_resource_root() -> std::path::PathBuf {
+    let root = resources::application_resource_root().unwrap_or_default();
+    let direct = root.join("vision");
+    if direct.is_dir() || !root.join("resources").join("vision").is_dir() { direct } else { root.join("resources").join("vision") }
+}
+
+fn ocr_resource_root() -> std::path::PathBuf {
+    let root = resources::application_resource_root().unwrap_or_default();
+    let direct = root.join("ocr");
+    if direct.is_dir() || !root.join("resources").join("ocr").is_dir() { direct } else { root.join("resources").join("ocr") }
 }
 
 fn validate_cutout(path: &std::path::Path) -> Result<(), String> {

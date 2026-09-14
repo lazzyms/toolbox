@@ -9,6 +9,8 @@
     "test:ui": "playwright test",
     "test:analytics": "tsx --test tests/analytics.test.ts",
     "test:native:e2e": "cargo test --manifest-path src-tauri/Cargo.toml every_registered_command_runs_with_real_fixtures_in_isolated_sandboxes",
+    "stage:vision": "node scripts/stage-vision-resources.mjs",
+    "stage:ocr": "node scripts/stage-ocr-resources.mjs",
     "check:matrix": "node scripts/check-tool-matrix.mjs",
     "check:release": "npm run check:matrix && node scripts/check-release-readiness.mjs",
     "preview": "vite preview",

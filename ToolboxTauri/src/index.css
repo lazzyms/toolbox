@@ -268,8 +268,7 @@ select:focus-visible {
   letter-spacing: 0.12em;
   text-transform: uppercase;
 }
-.workspace-toolbar h1,
-.tool-workspace h2 {
+.workspace-toolbar h1 {
   margin: 0 0 10px;
   font-size: clamp(38px, 4vw, 54px);
   line-height: 1;
@@ -603,10 +602,6 @@ select:focus-visible {
 .tool-workspace-kicker .card-icon {
   width: 28px;
   height: 28px;
-}
-.tool-workspace h2 {
-  margin-top: 22px;
-  font-size: 38px;
 }
 .tool-workspace-heading {
   align-items: end;
@@ -1136,21 +1131,6 @@ select:focus-visible {
   display: flex;
   flex-direction: column;
   height: 100%;
-}
-.tool-scaffold-heading {
-  margin-bottom: 24px;
-}
-.tool-scaffold-heading h2 {
-  margin: 0;
-  color: var(--fg);
-  font-size: 30px;
-  font-weight: 700;
-  letter-spacing: -0.03em;
-}
-.tool-scaffold-heading p {
-  margin: 6px 0 0;
-  color: var(--muted);
-  line-height: 1.5;
 }
 .file-dropzone {
   flex: 1;
