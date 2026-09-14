@@ -277,6 +277,7 @@ impl JobOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kit::office::OfficeProcessor;
 
     #[test]
     fn ipc_result_uses_the_frontend_field_names() {
@@ -415,9 +416,6 @@ mod tests {
 
         let office = native_capability("remove_password").unwrap();
         assert_eq!(office.accepted_extensions, [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"]);
-        let office_protection = native_capability("protect_office").unwrap();
-        assert_eq!(office_protection.accepted_extensions, [".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"]);
-        assert!(!office_protection.native_available);
         let pdf_protection = native_capability("protect_pdf").unwrap();
         assert_eq!(pdf_protection.accepted_extensions, [".pdf"]);
         assert!(pdf_protection.native_available);
@@ -444,20 +442,12 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_office_protection_rejects_each_office_input_without_processing() {
-        let paths = ["source.doc", "source.docx", "source.xls", "source.xlsx", "source.ppt", "source.pptx"]
-            .into_iter()
-            .map(PathBuf::from)
-            .collect::<Vec<_>>();
-        let validation = partition_command_inputs("protect_office", &paths).unwrap();
-
-        assert!(validation.accepted.is_empty());
-        assert_eq!(validation.rejected.len(), paths.len());
-        assert!(validation.rejected.iter().all(|(_, outcome)| {
-            matches!(
-                outcome.failure.as_ref().map(|error| &error.kind),
-                Some(ErrorKind::Unavailable)
-            ) && outcome.output_paths.is_empty()
-        }));
+    fn native_office_protection_accepts_docx_and_xlsx_only() {
+        for extension in ["docx", "xlsx", "DOCX", "XLSX"] {
+            assert!(OfficeProcessor::supports_protection_extension(extension));
+        }
+        for extension in ["doc", "xls", "ppt", "pptx"] {
+            assert!(!OfficeProcessor::supports_protection_extension(extension));
+        }
     }
 }
