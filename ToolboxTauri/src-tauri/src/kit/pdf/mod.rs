@@ -3,15 +3,145 @@ pub mod scene;
 pub mod editor;
 pub mod remaining;
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::process::Command;
 
-use lopdf::{Document, LoadOptions};
+use lopdf::{Document, LoadOptions, Object, ObjectId};
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::ToolError;
 
 pub struct PDFProcessor;
+
+#[derive(Debug, Clone)]
+pub(crate) struct PdfMutationPreflight {
+    pub(crate) pages_root: ObjectId,
+    pub(crate) pages: Vec<ObjectId>,
+    pub(crate) has_navigation: bool,
+    pub(crate) has_form_structure: bool,
+    pub(crate) has_tagged_structure: bool,
+}
+
+fn resolve<'a>(document: &'a Document, mut value: &'a Object) -> Result<&'a Object, String> {
+    let mut seen = HashSet::new();
+    while let Object::Reference(id) = value {
+        if !seen.insert(*id) {
+            return Err("Cyclic PDF reference".to_string());
+        }
+        value = document.get_object(*id).map_err(|error| error.to_string())?;
+    }
+    Ok(value)
+}
+
+fn has_catalog_entry(document: &Document, catalog: ObjectId, key: &[u8]) -> Result<bool, String> {
+    Ok(document.get_dictionary(catalog).map_err(|error| error.to_string())?.get(key).is_ok())
+}
+
+fn field_has_signature(document: &Document, value: &Object, seen: &mut HashSet<ObjectId>) -> Result<bool, String> {
+    let id = value.as_reference().map_err(|error| error.to_string())?;
+    if !seen.insert(id) {
+        return Err("Cyclic PDF form field tree".to_string());
+    }
+    let field = document.get_dictionary(id).map_err(|error| error.to_string())?;
+    if field.get(b"FT").ok().and_then(|value| value.as_name().ok()) == Some(b"Sig") {
+        return Ok(true);
+    }
+    let Some(kids) = field.get(b"Kids").ok() else {
+        return Ok(false);
+    };
+    resolve(document, kids)?.as_array().map_err(|error| error.to_string())?.iter()
+        .map(|kid| field_has_signature(document, kid, seen))
+        .collect::<Result<Vec<_>, _>>()
+        .map(|values| values.into_iter().any(|value| value))
+}
+
+fn is_signature_dictionary(value: &Object) -> bool {
+    let dictionary = match value {
+        Object::Dictionary(dictionary) => dictionary,
+        Object::Stream(stream) => &stream.dict,
+        _ => return false,
+    };
+    dictionary.get(b"Type").ok().and_then(|value| value.as_name().ok()) == Some(b"Sig") || dictionary.has(b"ByteRange")
+}
+
+fn document_has_signature(document: &Document, catalog: ObjectId, pages: &[ObjectId]) -> Result<bool, String> {
+    let catalog_dictionary = document.get_dictionary(catalog).map_err(|error| error.to_string())?;
+    if let Ok(perms) = catalog_dictionary.get(b"Perms") {
+        resolve(document, perms)?.as_dict().map_err(|error| error.to_string())?;
+        return Ok(true);
+    }
+    if document.objects.values().any(is_signature_dictionary) {
+        return Ok(true);
+    }
+    if let Ok(acro_form) = catalog_dictionary.get(b"AcroForm") {
+        let acro_form = resolve(document, acro_form)?.as_dict().map_err(|error| error.to_string())?;
+        if acro_form.get(b"SigFlags").ok().and_then(|value| value.as_i64().ok()).is_some_and(|flags| flags != 0) {
+            return Ok(true);
+        }
+        if let Some(fields) = acro_form.get(b"Fields").ok() {
+            let mut seen = HashSet::new();
+            if resolve(document, fields)?.as_array().map_err(|error| error.to_string())?.iter()
+                .map(|field| field_has_signature(document, field, &mut seen))
+                .collect::<Result<Vec<_>, _>>()?.into_iter().any(|value| value) {
+                return Ok(true);
+            }
+        }
+    }
+    pages.iter().map(|page| {
+        let Some(annotations) = document.get_dictionary(*page).map_err(|error| error.to_string())?.get(b"Annots").ok() else {
+            return Ok(false);
+        };
+        resolve(document, annotations)?.as_array().map_err(|error| error.to_string())?.iter()
+            .map(|annotation| {
+                let id = annotation.as_reference().map_err(|error| error.to_string())?;
+                Ok(document.get_dictionary(id).map_err(|error| error.to_string())?.get(b"FT").ok().and_then(|value| value.as_name().ok()) == Some(b"Sig"))
+            })
+            .collect::<Result<Vec<_>, String>>()
+            .map(|values| values.into_iter().any(|value| value))
+    }).collect::<Result<Vec<_>, String>>().map(|values| values.into_iter().any(|value| value))
+}
+
+pub(crate) fn mutation_preflight(document: &Document, reject_navigation: bool, reject_tagged_structure: bool) -> Result<PdfMutationPreflight, String> {
+    if document.is_encrypted() {
+        return Err("Unlock the PDF before editing".to_string());
+    }
+    let catalog = document.trailer.get(b"Root").map_err(|error| error.to_string())?.as_reference().map_err(|error| error.to_string())?;
+    let pages_root = document.get_dictionary(catalog).map_err(|error| error.to_string())?.get(b"Pages").map_err(|error| error.to_string())?.as_reference().map_err(|error| error.to_string())?;
+    let pages = document.get_pages().values().copied().collect::<Vec<_>>();
+    let unsupported = || "PDF uses a nested or unsupported page tree; mutation was rejected before output".to_string();
+    let root = document.get_dictionary(pages_root).map_err(|_| unsupported())?;
+    if root.get(b"Type").map_err(|_| unsupported())?.as_name().map_err(|_| unsupported())? != b"Pages" {
+        return Err(unsupported());
+    }
+    let kids = root.get(b"Kids").map_err(|_| unsupported())?.as_array().map_err(|_| unsupported())?;
+    if kids.len() != pages.len() {
+        return Err(unsupported());
+    }
+    for (index, kid) in kids.iter().enumerate() {
+        let page_id = kid.as_reference().map_err(|_| unsupported())?;
+        let page = document.get_dictionary(page_id).map_err(|_| unsupported())?;
+        if page.get(b"Type").map_err(|_| unsupported())?.as_name().map_err(|_| unsupported())? != b"Page"
+            || page_id != pages[index]
+            || page.get(b"Parent").map_err(|_| unsupported())?.as_reference().map_err(|_| unsupported())? != pages_root {
+            return Err(unsupported());
+        }
+    }
+    if document_has_signature(document, catalog, &pages)? {
+        return Err("Digitally signed PDFs cannot be edited because this mutation would invalidate the signature; remove the signature or use an unsigned copy".to_string());
+    }
+    let has_navigation = [b"Outlines".as_slice(), b"Names", b"Dests", b"PageLabels", b"OpenAction"]
+        .into_iter().map(|key| has_catalog_entry(document, catalog, key)).collect::<Result<Vec<_>, _>>()?.into_iter().any(|present| present);
+    let has_form_structure = has_catalog_entry(document, catalog, b"AcroForm")?;
+    let has_tagged_structure = has_catalog_entry(document, catalog, b"StructTreeRoot")?;
+    if reject_navigation && (has_navigation || has_form_structure) {
+        return Err("This PDF contains navigation or form structures that could be invalidated by this mutation; use an unstructured PDF copy".to_string());
+    }
+    if reject_tagged_structure && has_tagged_structure {
+        return Err("This tagged PDF contains a StructTreeRoot or ParentTree that could be invalidated by this mutation; use an untagged PDF copy".to_string());
+    }
+    Ok(PdfMutationPreflight { pages_root, pages, has_navigation, has_form_structure, has_tagged_structure })
+}
 
 impl PDFProcessor {
     pub fn remove_password(input_path: PathBuf, password: &str, output_location: &OutputLocation) -> JobOutcome {

@@ -260,18 +260,6 @@ struct ScenePreflight {
     source_pages: Vec<ObjectId>,
 }
 
-fn catalog_and_pages_root(document: &Document) -> Result<(ObjectId, ObjectId), String> {
-    let catalog = document.trailer.get(b"Root").map_err(err)?.as_reference().map_err(err)?;
-    let catalog_dict = document.get_dictionary(catalog).map_err(err)?;
-    let pages = catalog_dict.get(b"Pages").map_err(err)?.as_reference().map_err(err)?;
-    document.get_dictionary(pages).map_err(err)?;
-    Ok((catalog, pages))
-}
-
-fn has_catalog_structure(document: &Document, catalog: ObjectId, key: &[u8]) -> Result<bool, String> {
-    Ok(document.get_dictionary(catalog).map_err(err)?.get(key).is_ok())
-}
-
 fn page_has_widget(document: &Document, page: ObjectId) -> Result<bool, String> {
     let Some(annotations) = document.get_dictionary(page).map_err(err)?.get(b"Annots").ok() else { return Ok(false); };
     let annotations = resolve(document, annotations)?.as_array().map_err(err)?;
@@ -282,70 +270,10 @@ fn page_has_widget(document: &Document, page: ObjectId) -> Result<bool, String> 
     }).collect::<Result<Vec<_>, String>>().map(|values| values.into_iter().any(|value| value))
 }
 
-fn field_has_signature(document: &Document, value: &Object, seen: &mut HashSet<ObjectId>) -> Result<bool, String> {
-    let id = value.as_reference().map_err(err)?;
-    if !seen.insert(id) { return Err("Cyclic PDF form field tree".into()); }
-    let field = document.get_dictionary(id).map_err(err)?;
-    if field.get(b"FT").ok().and_then(|value| value.as_name().ok()) == Some(b"Sig") { return Ok(true); }
-    let Some(kids) = field.get(b"Kids").ok() else { return Ok(false); };
-    resolve(document, kids)?.as_array().map_err(err)?.iter().map(|kid| field_has_signature(document, kid, seen)).collect::<Result<Vec<_>, String>>().map(|values| values.into_iter().any(|value| value))
-}
-
-fn is_signature_dictionary(value: &Object) -> bool {
-    let dictionary = match value {
-        Object::Dictionary(dictionary) => dictionary,
-        Object::Stream(stream) => &stream.dict,
-        _ => return false,
-    };
-    dictionary.get(b"Type").ok().and_then(|value| value.as_name().ok()) == Some(b"Sig") || dictionary.has(b"ByteRange")
-}
-
-fn document_has_signature(document: &Document, catalog: ObjectId, pages: &[ObjectId]) -> Result<bool, String> {
-    let catalog_dictionary = document.get_dictionary(catalog).map_err(err)?;
-    if let Ok(perms) = catalog_dictionary.get(b"Perms") {
-        resolve(document, perms)?.as_dict().map_err(err)?;
-        return Ok(true);
-    }
-    if document.objects.values().any(is_signature_dictionary) {
-        return Ok(true);
-    }
-    if let Ok(acro_form) = document.get_dictionary(catalog).map_err(err)?.get(b"AcroForm") {
-        let acro_form = resolve(document, acro_form)?.as_dict().map_err(err)?;
-        if acro_form.get(b"SigFlags").ok().and_then(|value| value.as_i64().ok()).is_some_and(|flags| flags != 0) { return Ok(true); }
-        if let Some(fields) = acro_form.get(b"Fields").ok() {
-            let mut seen = HashSet::new();
-            if resolve(document, fields)?.as_array().map_err(err)?.iter().map(|field| field_has_signature(document, field, &mut seen)).collect::<Result<Vec<_>, String>>()?.into_iter().any(|value| value) { return Ok(true); }
-        }
-    }
-    pages.iter().map(|page| {
-        let Some(annotations) = document.get_dictionary(*page).map_err(err)?.get(b"Annots").ok() else { return Ok(false); };
-        resolve(document, annotations)?.as_array().map_err(err)?.iter().map(|annotation| {
-            let id = annotation.as_reference().map_err(err)?;
-            Ok(document.get_dictionary(id).map_err(err)?.get(b"FT").ok().and_then(|value| value.as_name().ok()) == Some(b"Sig"))
-        }).collect::<Result<Vec<_>, String>>().map(|values| values.into_iter().any(|value| value))
-    }).collect::<Result<Vec<_>, String>>().map(|values| values.into_iter().any(|value| value))
-}
-
 fn scene_preflight(document: &Document, scene: &PdfScene, source_pages: &[ObjectId]) -> Result<ScenePreflight, String> {
-    let (catalog, pages_root) = catalog_and_pages_root(document)?;
-    if document_has_signature(document, catalog, source_pages)? {
-        return Err("Digitally signed PDFs cannot be edited because scene export would invalidate the signature; remove the signature or use an unsigned copy".into());
-    }
-    let root = document.get_dictionary(pages_root).map_err(err)?;
-    if root.get(b"Type").map_err(err)?.as_name().map_err(err)? != b"Pages" {
-        return Err("PDF catalog has an unsupported page-tree root".into());
-    }
-    let kids = root.get(b"Kids").map_err(err)?.as_array().map_err(err)?;
-    if kids.len() != source_pages.len() {
-        return Err("PDF uses a nested or unsupported page tree; scene export was rejected before output".into());
-    }
-    for (index, kid) in kids.iter().enumerate() {
-        let page_id = kid.as_reference().map_err(err)?;
-        let page = document.get_dictionary(page_id).map_err(err)?;
-        if page.get(b"Type").map_err(err)?.as_name().map_err(err)? != b"Page" || page_id != source_pages[index] || page.get(b"Parent").map_err(err)?.as_reference().map_err(err)? != pages_root {
-            return Err("PDF uses a nested or unsupported page tree; scene export was rejected before output".into());
-        }
-    }
+    let common = super::mutation_preflight(document, false, false)?;
+    if common.pages != source_pages { return Err("PDF uses a nested or unsupported page tree; scene export was rejected before output".into()); }
+    let pages_root = common.pages_root;
 
     let mut seen = HashSet::new();
     let mut retained = HashSet::new();
@@ -357,14 +285,9 @@ fn scene_preflight(document: &Document, scene: &PdfScene, source_pages: &[Object
             retained.insert(source);
         }
     }
-    let has_navigation = [b"Outlines".as_slice(), b"Names", b"Dests", b"PageLabels", b"OpenAction"]
-        .into_iter()
-        .map(|key| has_catalog_structure(document, catalog, key))
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .any(|present| present);
-    let has_tagged_structure = has_catalog_structure(document, catalog, b"StructTreeRoot")?;
-    if retained.len() != source_pages.len() && (has_navigation || has_catalog_structure(document, catalog, b"AcroForm")?) {
+    let has_navigation = common.has_navigation;
+    let has_tagged_structure = common.has_tagged_structure;
+    if retained.len() != source_pages.len() && (has_navigation || common.has_form_structure) {
         return Err("This PDF contains navigation or form structures that could target a removed page; scene export was rejected before output".into());
     }
     if retained.len() != source_pages.len() && has_tagged_structure {

@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::ToolError;
 use super::metadata::page_bounds;
+use super::{mutation_preflight, PdfMutationPreflight};
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -319,7 +320,7 @@ fn validate_operation(operation: &PdfEditOperation, page_count: usize) -> Result
 }
 
 pub fn crop(request: &CropPdfRequest, input: PathBuf) -> JobOutcome {
-    transform_pdf(input, &request.output_location, "-cropped", |document, pages| {
+    transform_pdf(input, &request.output_location, "-cropped", |document, pages, _preflight| {
         let selected = selected_pages(&request.scope, pages.len());
         validate_rect(&request.rectangle)?;
         for (index, page_id) in pages.iter().enumerate() {
@@ -339,8 +340,8 @@ pub fn crop(request: &CropPdfRequest, input: PathBuf) -> JobOutcome {
 }
 
 pub fn organize(request: &OrganizePdfRequest, input: PathBuf) -> JobOutcome {
-    transform_pdf(input, &request.output_location, "-organized", |document, pages| {
-        let root = flat_page_tree_root(document, pages)?;
+    transform_pdf(input, &request.output_location, "-organized", |document, pages, preflight| {
+        let root = preflight.pages_root;
         validate_unique_page_refs("page order", &request.page_order, pages.len())?;
         validate_unique_page_refs("deleted pages", &request.delete_pages, pages.len())?;
         validate_unique_rotations(&request.rotate_pages, pages.len())?;
@@ -372,33 +373,8 @@ pub fn organize(request: &OrganizePdfRequest, input: PathBuf) -> JobOutcome {
     })
 }
 
-fn flat_page_tree_root(document: &Document, pages: &[lopdf::ObjectId]) -> Result<lopdf::ObjectId, String> {
-    let unsupported = || "PDF uses a nested or unsupported page tree; organize was rejected before output".to_string();
-    let catalog = document.trailer.get(b"Root").map_err(|_| unsupported())?.as_reference().map_err(|_| unsupported())?;
-    let root = document.get_dictionary(catalog).map_err(|_| unsupported())?.get(b"Pages").map_err(|_| unsupported())?.as_reference().map_err(|_| unsupported())?;
-    let root_dictionary = document.get_dictionary(root).map_err(|_| unsupported())?;
-    if root_dictionary.get(b"Type").map_err(|_| unsupported())?.as_name().map_err(|_| unsupported())? != b"Pages" {
-        return Err(unsupported());
-    }
-    let kids = root_dictionary.get(b"Kids").map_err(|_| unsupported())?.as_array().map_err(|_| unsupported())?;
-    if kids.len() != pages.len() {
-        return Err(unsupported());
-    }
-    for (index, kid) in kids.iter().enumerate() {
-        let page_id = kid.as_reference().map_err(|_| unsupported())?;
-        let page = document.get_dictionary(page_id).map_err(|_| unsupported())?;
-        if page.get(b"Type").map_err(|_| unsupported())?.as_name().map_err(|_| unsupported())? != b"Page"
-            || page_id != pages[index]
-            || page.get(b"Parent").map_err(|_| unsupported())?.as_reference().map_err(|_| unsupported())? != root
-        {
-            return Err(unsupported());
-        }
-    }
-    Ok(root)
-}
-
 pub fn add_pages(request: &AddPdfPagesRequest, input: PathBuf) -> JobOutcome {
-    transform_pdf(input, &request.output_location, "-pages-added", |document, pages| {
+    transform_pdf(input, &request.output_location, "-pages-added", |document, pages, preflight| {
         if request.count == 0 {
             return Err("Add at least one blank page.".to_string());
         }
@@ -413,13 +389,7 @@ pub fn add_pages(request: &AddPdfPagesRequest, input: PathBuf) -> JobOutcome {
             "before" | "after" => return Err("The selected page is outside the document.".to_string()),
             _ => return Err("Page insertion position must be before, after, or end.".to_string()),
         };
-        let parent = document
-            .get_dictionary(pages[0])
-            .map_err(|error| error.to_string())?
-            .get(b"Parent")
-            .map_err(|error| error.to_string())?
-            .as_reference()
-            .map_err(|error| error.to_string())?;
+        let parent = preflight.pages_root;
         let template_index = insertion_index.saturating_sub(1).min(pages.len() - 1);
         let template = document
             .get_dictionary(pages[template_index])
@@ -457,7 +427,7 @@ pub fn add_pages(request: &AddPdfPagesRequest, input: PathBuf) -> JobOutcome {
 }
 
 pub fn sign(request: &SignPdfRequest, input: PathBuf) -> JobOutcome {
-    transform_pdf(input, &request.output_location, "-signed", |document, pages| {
+    transform_pdf(input, &request.output_location, "-signed", |document, pages, _preflight| {
         validate_rect(&request.rectangle)?;
         let targets = scoped_indices(&request.scope, pages.len())?;
         if request.page >= pages.len() { return Err("Signature page is outside the document.".to_string()); }
@@ -499,7 +469,7 @@ pub fn sign(request: &SignPdfRequest, input: PathBuf) -> JobOutcome {
 }
 
 pub fn edit(request: &EditPdfRequest, input: PathBuf) -> JobOutcome {
-    transform_pdf(input, &request.output_location, "-edited", |document, pages| {
+    transform_pdf(input, &request.output_location, "-edited", |document, pages, _preflight| {
         validate_rect(&request.rectangle)?;
         if request.mode != "shape" && request.text.trim().is_empty() { return Err("Text is required for this edit mode.".to_string()); }
         let targets = optional_indices(&request.pages, pages.len(), "edit pages")?;
@@ -530,10 +500,6 @@ pub fn edit(request: &EditPdfRequest, input: PathBuf) -> JobOutcome {
 }
 
 pub fn apply_session(request: &PdfEditSessionRequest, input: PathBuf) -> JobOutcome {
-    let output = match OutputNaming::reserve_destination(&input, &request.output_location, "-edited", "pdf") {
-        Ok(output) => output,
-        Err(error) => return failure(input, format!("Could not reserve PDF edit output: {error}")),
-    };
     let mut document = match Document::load(&input) {
         Ok(document) => document,
         Err(error) => return failure(input, error.to_string()),
@@ -542,11 +508,19 @@ pub fn apply_session(request: &PdfEditSessionRequest, input: PathBuf) -> JobOutc
     if pages.is_empty() {
         return failure(input, "PDF has no pages".to_string());
     }
+    let preflight = match mutation_preflight(&document, true, true) {
+        Ok(preflight) => preflight,
+        Err(error) => return failure(input, error),
+    };
     let plan = match normalize_session_plan(&request.plan, pages.len()) {
         Ok(plan) => plan,
         Err(error) => return failure(input, error),
     };
-    let mut current_pages = match apply_page_plan(&mut document, &pages, &plan) {
+    let output = match OutputNaming::reserve_destination(&input, &request.output_location, "-edited", "pdf") {
+        Ok(output) => output,
+        Err(error) => return failure(input, format!("Could not reserve PDF edit output: {error}")),
+    };
+    let mut current_pages = match apply_page_plan(&mut document, &pages, preflight.pages_root, &plan) {
         Ok(order) => order,
         Err(error) => return failure(input, error),
     };
@@ -554,7 +528,7 @@ pub fn apply_session(request: &PdfEditSessionRequest, input: PathBuf) -> JobOutc
         let result = match operation {
             PdfEditOperation::Crop { rectangle, scope } => apply_crop_operation(&mut document, &pages, rectangle, scope),
             PdfEditOperation::Overlay { overlay } => apply_overlay(&mut document, &pages, overlay),
-            PdfEditOperation::AddPages { page, position, count } => apply_add_pages_operation(&mut document, &mut current_pages, &pages, *page, position, *count),
+            PdfEditOperation::AddPages { page, position, count } => apply_add_pages_operation(&mut document, &mut current_pages, &pages, preflight.pages_root, *page, position, *count),
         };
         if let Err(error) = result {
             return failure(input, error);
@@ -574,14 +548,7 @@ pub fn apply_session(request: &PdfEditSessionRequest, input: PathBuf) -> JobOutc
     }
 }
 
-fn apply_page_plan(document: &mut Document, pages: &[lopdf::ObjectId], plan: &PdfEditSessionPlan) -> Result<Vec<lopdf::ObjectId>, String> {
-    let parent = document
-        .get_dictionary(pages[0])
-        .map_err(|error| error.to_string())?
-        .get(b"Parent")
-        .map_err(|error| error.to_string())?
-        .as_reference()
-        .map_err(|error| error.to_string())?;
+fn apply_page_plan(document: &mut Document, pages: &[lopdf::ObjectId], parent: lopdf::ObjectId, plan: &PdfEditSessionPlan) -> Result<Vec<lopdf::ObjectId>, String> {
     let order = plan
         .page_order
         .iter()
@@ -606,6 +573,7 @@ fn apply_add_pages_operation(
     document: &mut Document,
     current_pages: &mut Vec<lopdf::ObjectId>,
     original_pages: &[lopdf::ObjectId],
+    parent: lopdf::ObjectId,
     page: usize,
     position: &str,
     count: usize,
@@ -621,13 +589,6 @@ fn apply_add_pages_operation(
     };
     let template_index = insertion_index.saturating_sub(1).min(current_pages.len().saturating_sub(1));
     let template_id = *current_pages.get(template_index).ok_or_else(|| "The PDF must contain at least one page.".to_string())?;
-    let parent = document
-        .get_dictionary(template_id)
-        .map_err(|error| error.to_string())?
-        .get(b"Parent")
-        .map_err(|error| error.to_string())?
-        .as_reference()
-        .map_err(|error| error.to_string())?;
     let template = document.get_dictionary(template_id).map_err(|error| error.to_string())?.clone();
     let (left, bottom, right, top) = page_bounds(document, template_id)?;
     let mut inserted = Vec::with_capacity(count);
@@ -850,15 +811,19 @@ fn page_number_position(position: Option<&PdfOverlayPosition>, width: f32, heigh
 }
 
 fn transform_pdf<F>(input: PathBuf, location: &OutputLocation, suffix: &str, edit: F) -> JobOutcome
-where F: FnOnce(&mut Document, &[lopdf::ObjectId]) -> Result<(), String> {
+where F: FnOnce(&mut Document, &[lopdf::ObjectId], &PdfMutationPreflight) -> Result<(), String> {
+    let mut document = match Document::load(&input) { Ok(document) => document, Err(error) => return failure(input, error.to_string()) };
+    let pages: Vec<_> = document.get_pages().values().copied().collect();
+    if pages.is_empty() { return failure(input, "PDF has no pages".to_string()); }
+    let preflight = match mutation_preflight(&document, true, true) {
+        Ok(preflight) => preflight,
+        Err(error) => return failure(input, error),
+    };
     let output = match OutputNaming::reserve_destination(&input, location, suffix, "pdf") {
         Ok(output) => output,
         Err(error) => return failure(input, format!("Could not reserve PDF output: {error}")),
     };
-    let mut document = match Document::load(&input) { Ok(document) => document, Err(error) => return failure(input, error.to_string()) };
-    let pages: Vec<_> = document.get_pages().values().copied().collect();
-    if pages.is_empty() { return failure(input, "PDF has no pages".to_string()); }
-    if let Err(error) = edit(&mut document, &pages) { return failure(input, error); }
+    if let Err(error) = edit(&mut document, &pages, &preflight) { return failure(input, error); }
     match document.save(output.path()) {
         Ok(_) => match output.publish() {
             Ok(path) => JobOutcome { input_path: input, output_paths: vec![path], detail: "PDF saved".to_string(), failure: None },
@@ -1220,5 +1185,152 @@ mod session_tests {
 
         let _ = std::fs::remove_file(source);
         let _ = std::fs::remove_dir(output_dir);
+    }
+
+    fn add_catalog_marker(path: &Path, key: &[u8], value: Object) {
+        let mut document = Document::load(path).expect("fixture should load");
+        let catalog = document.trailer.get(b"Root").unwrap().as_reference().unwrap();
+        document.get_dictionary_mut(catalog).unwrap().set(key, value);
+        document.save(path).expect("fixture marker should save");
+    }
+
+    fn empty_plan() -> PdfEditSessionPlan {
+        PdfEditSessionPlan { page_order: vec![], delete_pages: vec![], rotate_pages: vec![], operations: vec![] }
+    }
+
+    #[test]
+    fn all_editor_mutations_reject_signed_pdfs_before_reserving_output() {
+        let cases = ["organize", "session", "add"];
+        for case in cases {
+            let source = temp_path(&format!("signed-{case}.pdf"));
+            let output_dir = temp_path(&format!("signed-{case}-output"));
+            std::fs::create_dir_all(&output_dir).unwrap();
+            make_pdf(&source);
+            let signature = {
+                let mut document = Document::load(&source).unwrap();
+                document.add_object(dictionary! { "Type" => "Sig" })
+            };
+            add_catalog_marker(&source, b"Perms", dictionary! { "DocMDP" => signature }.into());
+
+            let outcome = match case {
+                "organize" => organize(&OrganizePdfRequest {
+                    paths: vec![source.clone()], page_order: vec![], delete_pages: vec![], rotate_pages: vec![],
+                    scope: PageScope::All, output_location: location(&output_dir),
+                }, source.clone()),
+                "session" => apply_session(&PdfEditSessionRequest {
+                    paths: vec![source.clone()], plan: empty_plan(), output_location: location(&output_dir),
+                }, source.clone()),
+                "add" => add_pages(&AddPdfPagesRequest {
+                    paths: vec![source.clone()], position: "end".to_string(), page: 0, count: 1,
+                    output_location: location(&output_dir),
+                }, source.clone()),
+                _ => unreachable!(),
+            };
+
+            assert!(outcome.failure.as_ref().is_some_and(|error| error.message.contains("Digitally signed")), "{case}: {:?}", outcome.failure);
+            assert!(outcome.output_paths.is_empty());
+            assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
+            let _ = std::fs::remove_file(source);
+            let _ = std::fs::remove_dir(output_dir);
+        }
+    }
+
+    #[test]
+    fn all_editor_mutations_reject_navigational_pdfs_before_reserving_output() {
+        let cases = ["organize", "session", "add"];
+        for case in cases {
+            let source = temp_path(&format!("navigation-{case}.pdf"));
+            let output_dir = temp_path(&format!("navigation-{case}-output"));
+            std::fs::create_dir_all(&output_dir).unwrap();
+            make_pdf(&source);
+            let outlines = {
+                let mut document = Document::load(&source).unwrap();
+                document.add_object(dictionary! { "Type" => "Outlines", "Count" => 0 })
+            };
+            add_catalog_marker(&source, b"Outlines", Object::Reference(outlines));
+
+            let outcome = match case {
+                "organize" => organize(&OrganizePdfRequest {
+                    paths: vec![source.clone()], page_order: vec![], delete_pages: vec![], rotate_pages: vec![],
+                    scope: PageScope::All, output_location: location(&output_dir),
+                }, source.clone()),
+                "session" => apply_session(&PdfEditSessionRequest {
+                    paths: vec![source.clone()], plan: empty_plan(), output_location: location(&output_dir),
+                }, source.clone()),
+                "add" => add_pages(&AddPdfPagesRequest {
+                    paths: vec![source.clone()], position: "end".to_string(), page: 0, count: 1,
+                    output_location: location(&output_dir),
+                }, source.clone()),
+                _ => unreachable!(),
+            };
+
+            assert!(outcome.failure.as_ref().is_some_and(|error| error.message.contains("navigation")), "{case}: {:?}", outcome.failure);
+            assert!(outcome.output_paths.is_empty());
+            assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
+            let _ = std::fs::remove_file(source);
+            let _ = std::fs::remove_dir(output_dir);
+        }
+    }
+
+    #[test]
+    fn all_editor_mutations_reject_tagged_pdfs_before_reserving_output() {
+        let cases = ["organize", "session", "add"];
+        for case in cases {
+            let source = temp_path(&format!("tagged-{case}.pdf"));
+            let output_dir = temp_path(&format!("tagged-{case}-output"));
+            std::fs::create_dir_all(&output_dir).unwrap();
+            make_pdf(&source);
+            let structure = {
+                let mut document = Document::load(&source).unwrap();
+                document.add_object(dictionary! { "Type" => "StructTreeRoot", "K" => vec![] })
+            };
+            add_catalog_marker(&source, b"StructTreeRoot", Object::Reference(structure));
+
+            let outcome = match case {
+                "organize" => organize(&OrganizePdfRequest {
+                    paths: vec![source.clone()], page_order: vec![], delete_pages: vec![], rotate_pages: vec![],
+                    scope: PageScope::All, output_location: location(&output_dir),
+                }, source.clone()),
+                "session" => apply_session(&PdfEditSessionRequest {
+                    paths: vec![source.clone()], plan: empty_plan(), output_location: location(&output_dir),
+                }, source.clone()),
+                "add" => add_pages(&AddPdfPagesRequest {
+                    paths: vec![source.clone()], position: "end".to_string(), page: 0, count: 1,
+                    output_location: location(&output_dir),
+                }, source.clone()),
+                _ => unreachable!(),
+            };
+
+            assert!(outcome.failure.as_ref().is_some_and(|error| error.message.contains("tagged PDF")), "{case}: {:?}", outcome.failure);
+            assert!(outcome.output_paths.is_empty());
+            assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
+            let _ = std::fs::remove_file(source);
+            let _ = std::fs::remove_dir(output_dir);
+        }
+    }
+
+    #[test]
+    fn session_and_add_reject_nested_page_trees_before_output() {
+        for case in ["session", "add"] {
+            let source = temp_path(&format!("nested-{case}.pdf"));
+            let output_dir = temp_path(&format!("nested-{case}-output"));
+            std::fs::create_dir_all(&output_dir).unwrap();
+            make_nested_pdf(&source);
+            let outcome = match case {
+                "session" => apply_session(&PdfEditSessionRequest {
+                    paths: vec![source.clone()], plan: empty_plan(), output_location: location(&output_dir),
+                }, source.clone()),
+                "add" => add_pages(&AddPdfPagesRequest {
+                    paths: vec![source.clone()], position: "end".to_string(), page: 0, count: 1,
+                    output_location: location(&output_dir),
+                }, source.clone()),
+                _ => unreachable!(),
+            };
+            assert!(outcome.failure.as_ref().is_some_and(|error| error.message.contains("nested or unsupported")), "{case}: {:?}", outcome.failure);
+            assert!(outcome.output_paths.is_empty());
+            assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
+            let _ = std::fs::remove_file(source);
+            let _ = std::fs::remove_dir(output_dir);
+        }
     }
 }
