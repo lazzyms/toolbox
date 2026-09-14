@@ -2,11 +2,15 @@ pub mod common;
 pub mod contracts;
 pub mod images;
 pub mod office;
+mod office_agile;
 pub mod password;
 pub mod pdf;
 pub mod vision;
 pub mod fidelity;
 pub mod resources;
+
+#[cfg(test)]
+pub(crate) static PROCESS_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 mod fidelity_tests {

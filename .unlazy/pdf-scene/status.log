@@ -1,0 +1,10 @@
+2026-09-09T19:09:46.563Z dispatch ready-1 opened: leaf-1.1.1, leaf-1.1.2
+2026-09-09T19:09:47.167Z dispatch ready-1 started leaf-1.1.1 as 01a08793-82e4-7380-9394-f439c6ccade5
+2026-09-09T19:09:47.346Z dispatch ready-1 started leaf-1.1.2 as 01a08793-83a7-7d92-9e6d-081dd1dbab14
+2026-09-09T19:09:47.452Z dispatch ready-1 sealed
+2026-09-09T19:17:19.619Z dispatch ready-1 returned leaf-1.1.1
+2026-09-09T19:17:19.735Z dispatch ready-1 returned leaf-1.1.2
+Native workers returned partial code after account quota failure; driver takes over both existing leaf leases sequentially. No leaf is verified yet.
+leaf-1.1.1 parent-reverified and lease released
+leaf-1.1.2 parent-reverified and lease released
+leaf-1.2.1 parent-reverified and lease released

@@ -1,11 +1,319 @@
-use image::{DynamicImage, ImageFormat};
+use base64::{engine::general_purpose::STANDARD, Engine};
+use image::codecs::png::PngEncoder;
+use image::{DynamicImage, ImageBuffer, ImageFormat, ImageEncoder, Luma, Rgb, Rgba};
 use image::AnimationDecoder;
+use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::{BufReader, Seek};
 use std::path::{Path, PathBuf};
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::ToolError;
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImagePreviewRequest {
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImagePreview {
+    pub width: u32,
+    pub height: u32,
+    pub data_url: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ImageEdit {
+    Convert { format: String },
+    Compress { quality: u8, #[serde(default)] lossless: bool },
+    Resize {
+        width: u32,
+        height: u32,
+        #[serde(default = "default_resize_mode")] mode: String,
+        #[serde(default)] percentage: u32,
+        #[serde(default)] longest_side: u32,
+        #[serde(default = "default_resampling")] resampling: String,
+        #[serde(default = "default_keep_aspect_ratio")] keep_aspect_ratio: bool,
+    },
+    Rotate { degrees: i32, #[serde(default = "default_flip")] flip: String },
+    Crop {
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+        #[serde(default = "default_crop_mode")] mode: String,
+        #[serde(default)] aspect_width: u32,
+        #[serde(default)] aspect_height: u32,
+        #[serde(default = "default_crop_anchor")] anchor: String,
+    },
+    Tone { brightness: i32, contrast: f32, #[serde(default)] saturation: f32, #[serde(default)] exposure: f32 },
+    Watermark {
+        #[serde(default)] text: Option<String>,
+        #[serde(default)] logo_path: Option<PathBuf>,
+        opacity: u8,
+        #[serde(default = "default_watermark_position")] x: u32,
+        #[serde(default = "default_watermark_position")] y: u32,
+    },
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageEditPlan {
+    pub edits: Vec<ImageEdit>,
+    pub output_location: OutputLocation,
+    #[serde(default = "default_edit_suffix")]
+    pub suffix: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageEditPreviewRequest {
+    pub path: PathBuf,
+    pub plan: ImageEditPlan,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageEditExportRequest {
+    pub paths: Vec<PathBuf>,
+    pub plan: ImageEditPlan,
+}
+
+fn default_edit_suffix() -> String { "-edited".to_string() }
+
+impl ImageEditPlan {
+    fn canonicalized(&self) -> Self {
+        let latest_crop = self.edits.iter().rev().find(|edit| matches!(edit, ImageEdit::Crop { .. })).cloned();
+        let mut crop_inserted = false;
+        let mut edits = Vec::with_capacity(self.edits.len());
+        for edit in &self.edits {
+            if matches!(edit, ImageEdit::Crop { .. }) {
+                if crop_inserted { continue; }
+                crop_inserted = true;
+                if let Some(crop) = &latest_crop { edits.push(crop.clone()); }
+            } else {
+                edits.push(edit.clone());
+            }
+        }
+        Self { edits, ..self.clone() }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.edits.is_empty() { return Err("Add at least one image edit before exporting.".to_string()); }
+        for edit in &self.edits {
+            match edit {
+                ImageEdit::Convert { format } if !matches!(format.as_str(), "jpg" | "jpeg" | "png" | "webp" | "heic") => return Err(format!("Unsupported image format: {format}.")),
+                ImageEdit::Compress { quality, .. } if *quality == 0 || *quality > 100 => return Err("Compression quality must be between 1 and 100.".to_string()),
+                ImageEdit::Resize { width, height, mode, percentage, longest_side, .. } => {
+                    match mode.as_str() {
+                        "exact" if *width == 0 || *height == 0 => return Err("Resize dimensions must be positive.".to_string()),
+                        "percentage" if *percentage == 0 || *percentage > 1000 => return Err("Resize percentage must be between 1 and 1000.".to_string()),
+                        "longestSide" if *longest_side == 0 || *longest_side > 16384 => return Err("Longest side must be between 1 and 16384 pixels.".to_string()),
+                        "exact" | "percentage" | "longestSide" => {},
+                        _ => return Err(format!("Unsupported resize mode: {mode}.")),
+                    }
+                }
+                ImageEdit::Rotate { degrees, flip } if !matches!(degrees.rem_euclid(360), 0 | 90 | 180 | 270) => return Err("Rotation must be 0, 90, 180, or 270 degrees.".to_string()),
+                ImageEdit::Rotate { flip, .. } if !matches!(flip.as_str(), "none" | "horizontal" | "vertical") => return Err("Mirror choice must be none, horizontal, or vertical.".to_string()),
+                ImageEdit::Crop { width, height, mode, aspect_width, aspect_height, .. } if mode == "rectangle" && (*width == 0 || *height == 0) => return Err("Crop rectangle must have positive dimensions.".to_string()),
+                ImageEdit::Crop { mode, aspect_width, aspect_height, .. } if mode == "aspectRatio" && (*aspect_width == 0 || *aspect_height == 0) => return Err("Aspect ratio dimensions must be positive.".to_string()),
+                ImageEdit::Crop { mode, .. } if !matches!(mode.as_str(), "rectangle" | "aspectRatio") => return Err(format!("Unsupported crop mode: {mode}.")),
+                ImageEdit::Tone { brightness, contrast, saturation, exposure } if !(-100..=100).contains(brightness) => return Err("Brightness must be between -100 and 100.".to_string()),
+                ImageEdit::Tone { contrast, .. } if !(-100.0..=100.0).contains(contrast) => return Err("Contrast must be between -100 and 100.".to_string()),
+                ImageEdit::Tone { saturation, .. } if !(-100.0..=100.0).contains(saturation) => return Err("Saturation must be between -100 and 100.".to_string()),
+                ImageEdit::Tone { exposure, .. } if !(-100.0..=100.0).contains(exposure) => return Err("Exposure must be between -100 and 100.".to_string()),
+                ImageEdit::Watermark { opacity, text, logo_path, .. } if *opacity > 100 => return Err("Watermark opacity must be between 0 and 100.".to_string()),
+                ImageEdit::Watermark { text, logo_path, .. } if text.as_deref().is_none_or(|value| value.trim().is_empty()) && logo_path.is_none() => return Err("Provide watermark text or a logo image.".to_string()),
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+}
+
+pub fn inspect_edit_preview(request: &ImageEditPreviewRequest) -> Result<ImagePreview, String> {
+    let plan = request.plan.canonicalized();
+    plan.validate()?;
+    let source = crate::kit::images::load_image(&request.path)?;
+    let (edited, _, _) = apply_edit_plan(&plan, source, crate::kit::images::detect_format(&request.path))?;
+    encode_preview(edited)
+}
+
+pub fn export_edit_plan(plan: &ImageEditPlan, input: PathBuf) -> JobOutcome {
+    let plan = plan.canonicalized();
+    if let Err(error) = plan.validate() { return failure(input, error); }
+    let source = match crate::kit::images::load_image(&input) {
+        Ok(image) => image,
+        Err(error) => return failure(input, error),
+    };
+    let (edited, format, quality) = match apply_edit_plan(&plan, source, crate::kit::images::detect_format(&input)) {
+        Ok(value) => value,
+        Err(error) => return failure(input, error),
+    };
+    let bytes = match crate::kit::images::encode(&edited, format, quality) {
+        Ok(bytes) => bytes,
+        Err(error) => return failure(input, error),
+    };
+    let output = match OutputNaming::reserve_destination(&input, &plan.output_location, &plan.suffix, format.extension()) {
+        Ok(output) => output,
+        Err(error) => return failure(input, format!("Could not reserve edited image output: {error}")),
+    };
+    if let Err(error) = std::fs::write(output.path(), bytes) {
+        return failure(input, format!("Could not save edited image: {error}"));
+    }
+    match output.publish() {
+        Ok(path) => JobOutcome { input_path: input, output_paths: vec![path], detail: format!("Applied {} edits in one export.", plan.edits.len()), failure: None },
+        Err(error) => failure(input, format!("Could not publish edited image: {error}")),
+    }
+}
+
+fn encode_preview(image: DynamicImage) -> Result<ImagePreview, String> {
+    let width = image.width();
+    let height = image.height();
+    let preview = image.thumbnail(1200, 900).to_rgba8();
+    let mut bytes = Vec::new();
+    PngEncoder::new(&mut bytes)
+        .write_image(preview.as_raw(), preview.width(), preview.height(), image::ExtendedColorType::Rgba8)
+        .map_err(|error| format!("Could not encode image preview: {error}"))?;
+    Ok(ImagePreview { width, height, data_url: format!("data:image/png;base64,{}", STANDARD.encode(bytes)) })
+}
+
+fn apply_edit_plan(plan: &ImageEditPlan, mut image: DynamicImage, mut format: crate::kit::images::OutputFormat) -> Result<(DynamicImage, crate::kit::images::OutputFormat, u8), String> {
+    let mut quality = 90;
+    let source_width = image.width();
+    let source_height = image.height();
+    let mut geometry = Vec::new();
+    for edit in &plan.edits {
+        match edit {
+            ImageEdit::Convert { format: requested } => format = parse_output_format(requested)?,
+            ImageEdit::Compress { quality: requested, lossless } => { quality = if *lossless { 100 } else { *requested }; },
+            ImageEdit::Resize { width, height, mode, percentage, longest_side, resampling, keep_aspect_ratio } => {
+                let request = ResizeRequest { paths: vec![], width: *width, height: *height, mode: mode.clone(), resampling: resampling.clone(), keep_aspect_ratio: *keep_aspect_ratio, percentage: *percentage, longest_side: *longest_side, output_location: OutputLocation::AlongsideInput };
+                let old_width = image.width();
+                let old_height = image.height();
+                let (width, height) = resize_dimensions(image.width(), image.height(), &request)?;
+                let filter = match resampling.as_str() { "nearest" => image::imageops::FilterType::Nearest, "bicubic" => image::imageops::FilterType::CatmullRom, _ => image::imageops::FilterType::Lanczos3 };
+                image = image.resize_exact(width, height, filter);
+                geometry.push(ImageGeometryStep::Resize { from_width: old_width, from_height: old_height, to_width: width, to_height: height });
+            }
+            ImageEdit::Rotate { degrees, flip } => {
+                let old_width = image.width();
+                let old_height = image.height();
+                image = match degrees.rem_euclid(360) { 90 => image.rotate90(), 180 => image.rotate180(), 270 => image.rotate270(), 0 => image, _ => return Err("Rotation must be 0, 90, 180, or 270 degrees.".to_string()) };
+                geometry.push(ImageGeometryStep::Rotate { width: old_width, height: old_height, degrees: degrees.rem_euclid(360) });
+                let current_width = image.width();
+                let current_height = image.height();
+                image = match flip.as_str() { "none" => image, "horizontal" => DynamicImage::ImageRgba8(image::imageops::flip_horizontal(&image.to_rgba8())), "vertical" => DynamicImage::ImageRgba8(image::imageops::flip_vertical(&image.to_rgba8())), _ => return Err("Mirror choice must be none, horizontal, or vertical.".to_string()) };
+                if flip == "horizontal" { geometry.push(ImageGeometryStep::FlipHorizontal { width: current_width }); }
+                if flip == "vertical" { geometry.push(ImageGeometryStep::FlipVertical { height: current_height }); }
+            }
+            ImageEdit::Crop { x, y, width, height, mode, aspect_width, aspect_height, anchor } => {
+                let request = CropRequest { paths: vec![], x: *x, y: *y, width: *width, height: *height, mode: mode.clone(), aspect_width: *aspect_width, aspect_height: *aspect_height, anchor: anchor.clone(), output_location: OutputLocation::AlongsideInput };
+                let (x, y, width, height) = crop_rect(source_width, source_height, &request)?;
+                let crop = map_source_rect((x, y, width, height), &geometry)?;
+                image = image.crop_imm(crop.0, crop.1, crop.2, crop.3);
+            }
+            ImageEdit::Tone { brightness, contrast, saturation, exposure } => {
+                let mut rgba = image::imageops::brighten(&image, *brightness);
+                let exposure = 2.0_f32.powf(*exposure / 100.0);
+                let saturation = (1.0 + *saturation / 100.0).max(0.0);
+                for pixel in rgba.pixels_mut() {
+                    let [red, green, blue, alpha] = pixel.0;
+                    let average = (red as f32 + green as f32 + blue as f32) / 3.0;
+                    pixel.0 = [
+                        ((average + (red as f32 - average) * saturation) * exposure).clamp(0.0, 255.0) as u8,
+                        ((average + (green as f32 - average) * saturation) * exposure).clamp(0.0, 255.0) as u8,
+                        ((average + (blue as f32 - average) * saturation) * exposure).clamp(0.0, 255.0) as u8,
+                        alpha,
+                    ];
+                }
+                image = DynamicImage::ImageRgba8(rgba).adjust_contrast(*contrast);
+            }
+            ImageEdit::Watermark { text, logo_path, opacity, x, y } => {
+                let request = WatermarkRequest { paths: vec![], opacity: *opacity, text: text.clone(), logo_path: logo_path.clone(), x: *x, y: *y, output_location: OutputLocation::AlongsideInput };
+                image = apply_watermark(image, &request)?;
+            }
+        }
+    }
+    Ok((image, format, quality.clamp(1, 100)))
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ImageGeometryStep {
+    Resize { from_width: u32, from_height: u32, to_width: u32, to_height: u32 },
+    Rotate { width: u32, height: u32, degrees: i32 },
+    FlipHorizontal { width: u32 },
+    FlipVertical { height: u32 },
+}
+
+fn map_source_rect(mut rect: (u32, u32, u32, u32), geometry: &[ImageGeometryStep]) -> Result<(u32, u32, u32, u32), String> {
+    for step in geometry {
+        let (x, y, width, height) = rect;
+        let right = x.checked_add(width).ok_or_else(|| "Crop rectangle exceeds coordinate bounds.".to_string())?;
+        let bottom = y.checked_add(height).ok_or_else(|| "Crop rectangle exceeds coordinate bounds.".to_string())?;
+        rect = match step {
+            ImageGeometryStep::Resize { from_width, from_height, to_width, to_height } => (
+                scale_floor(x, *from_width, *to_width),
+                scale_floor(y, *from_height, *to_height),
+                scale_ceil(right, *from_width, *to_width) - scale_floor(x, *from_width, *to_width),
+                scale_ceil(bottom, *from_height, *to_height) - scale_floor(y, *from_height, *to_height),
+            ),
+            ImageGeometryStep::Rotate { width: image_width, height: image_height, degrees } => match degrees {
+                90 => (*image_height - bottom, x, height, width),
+                180 => (*image_width - right, *image_height - bottom, width, height),
+                270 => (y, *image_width - right, height, width),
+                _ => (x, y, width, height),
+            },
+            ImageGeometryStep::FlipHorizontal { width: image_width } => (*image_width - right, y, width, height),
+            ImageGeometryStep::FlipVertical { height: image_height } => (x, *image_height - bottom, width, height),
+        };
+    }
+    Ok(rect)
+}
+
+fn scale_floor(value: u32, from: u32, to: u32) -> u32 { ((value as u64 * to as u64) / from as u64) as u32 }
+fn scale_ceil(value: u32, from: u32, to: u32) -> u32 { ((value as u64 * to as u64 + from as u64 - 1) / from as u64) as u32 }
+
+pub(crate) fn parse_output_format(format: &str) -> Result<crate::kit::images::OutputFormat, String> {
+    match format.to_ascii_lowercase().as_str() {
+        "jpg" | "jpeg" => Ok(crate::kit::images::OutputFormat::Jpeg),
+        "png" => Ok(crate::kit::images::OutputFormat::Png),
+        "webp" => Ok(crate::kit::images::OutputFormat::WebP),
+        "heic" => Ok(crate::kit::images::OutputFormat::Heic),
+        _ => Err(format!("Unsupported image format: {format}.")),
+    }
+}
+
+pub fn inspect_preview(request: &ImagePreviewRequest) -> Result<ImagePreview, String> {
+    let image = crate::kit::images::load_image(&request.path).map_err(|error| format!("Could not preview image: {error}"))?;
+    let width = image.width();
+    let height = image.height();
+    let preview = image.thumbnail(1200, 900).to_rgba8();
+    let mut bytes = Vec::new();
+    PngEncoder::new(&mut bytes)
+        .write_image(
+            preview.as_raw(),
+            preview.width(),
+            preview.height(),
+            image::ExtendedColorType::Rgba8,
+        )
+        .map_err(|error| format!("Could not encode image preview: {error}"))?;
+    Ok(ImagePreview {
+        width,
+        height,
+        data_url: format!("data:image/png;base64,{}", STANDARD.encode(bytes)),
+    })
+}
+
+pub fn inspect_tiff_pages(request: &TiffPreviewRequest) -> Result<Vec<ImagePreview>, String> {
+    read_tiff_pages(&request.path)?
+        .iter()
+        .map(|page| tiff_page_to_dynamic(page).and_then(encode_preview))
+        .collect()
+}
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -71,7 +379,18 @@ pub struct GifCreateRequest {
 pub struct GifExtractRequest { pub paths: Vec<PathBuf>, pub output_location: OutputLocation }
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TiffRequest { pub paths: Vec<PathBuf>, pub output_location: OutputLocation }
+pub struct TiffPageRef { pub path: PathBuf, pub page: usize }
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TiffRequest {
+    pub paths: Vec<PathBuf>,
+    #[serde(default)]
+    pub pages: Option<Vec<TiffPageRef>>,
+    pub output_location: OutputLocation,
+}
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TiffPreviewRequest { pub path: PathBuf }
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MetadataRequest { pub paths: Vec<PathBuf>, pub output_location: OutputLocation }
@@ -173,83 +492,180 @@ pub fn tone(request: &ToneRequest, input: PathBuf) -> JobOutcome {
 }
 pub fn watermark(request: &WatermarkRequest, input: PathBuf) -> JobOutcome {
     transform(&request.paths, input, &request.output_location, "-watermarked", |image| {
-        let mut image = image.to_rgba8();
-        let original_alpha = image.pixels().map(|pixel| pixel.0[3]).collect::<Vec<_>>();
-        let alpha = request.opacity.min(100) as u16 * 255 / 100;
-        let mut watermark = image::RgbaImage::new(image.width(), image.height());
-        if let Some(text) = request.text.as_deref().filter(|text| !text.trim().is_empty()) {
-            draw_text(&mut watermark, text, request.x, request.y, alpha as u8);
-        }
-        if let Some(path) = request.logo_path.as_ref() {
-            let logo = image::open(path).map_err(|error| format!("Could not read watermark logo: {error}"))?.to_rgba8();
-            image::imageops::overlay(&mut watermark, &logo, request.x as i64, request.y as i64);
-        }
-        if watermark.pixels().all(|pixel| pixel.0[3] == 0) {
-            return Err("Provide watermark text or a logo image.".to_string());
-        }
-        image::imageops::overlay(&mut image, &watermark, 0, 0);
-        for (pixel, alpha) in image.pixels_mut().zip(original_alpha) { pixel.0[3] = alpha; }
-        Ok(DynamicImage::ImageRgba8(image))
+        apply_watermark(image, request)
     })
+}
+
+fn apply_watermark(image: DynamicImage, request: &WatermarkRequest) -> Result<DynamicImage, String> {
+    let mut image = image.to_rgba8();
+    let original_alpha = image.pixels().map(|pixel| pixel.0[3]).collect::<Vec<_>>();
+    let alpha = request.opacity.min(100) as u16 * 255 / 100;
+    let mut watermark = image::RgbaImage::new(image.width(), image.height());
+    if let Some(text) = request.text.as_deref().filter(|text| !text.trim().is_empty()) {
+        draw_text(&mut watermark, text, request.x, request.y, alpha as u8)?;
+    }
+    if let Some(path) = request.logo_path.as_ref() {
+        let logo = crate::kit::images::load_image(path)?.to_rgba8();
+        image::imageops::overlay(&mut watermark, &logo, request.x as i64, request.y as i64);
+    }
+    if watermark.pixels().all(|pixel| pixel.0[3] == 0) {
+        return Err("Provide watermark text or a logo image.".to_string());
+    }
+    image::imageops::overlay(&mut image, &watermark, 0, 0);
+    for (pixel, alpha) in image.pixels_mut().zip(original_alpha) { pixel.0[3] = alpha; }
+    Ok(DynamicImage::ImageRgba8(image))
 }
 
 fn default_watermark_position() -> u32 { 16 }
 
-fn draw_text(canvas: &mut image::RgbaImage, text: &str, x: u32, y: u32, alpha: u8) {
-    let scale = 3;
-    for (index, character) in text.chars().enumerate() {
-        let glyph = glyph(character);
-        let origin_x = x.saturating_add(index as u32 * 6 * scale);
-        for (row, bits) in glyph.iter().enumerate() {
-            for column in 0..5 {
-                if bits & (1 << (4 - column)) != 0 {
-                    for dy in 0..scale { for dx in 0..scale {
-                        let px = origin_x + column * scale + dx;
-                        let py = y + row as u32 * scale + dy;
-                        if px < canvas.width() && py < canvas.height() { canvas.put_pixel(px, py, image::Rgba([255, 255, 255, alpha])); }
-                    }}
-                }
+const WATERMARK_FONT_RESOURCE: &str = "watermarkFont";
+const WATERMARK_FONT_FILE: &str = "DejaVuSans.ttf";
+const WATERMARK_FONT_SIZE: f32 = 32.0;
+const INCLUDED_WATERMARK_FONT: &[u8] = include_bytes!("../../../resources/fonts/DejaVuSans.ttf");
+
+fn watermark_font_bytes() -> Result<Vec<u8>, String> {
+    let bundled_root = crate::kit::resources::application_resource_root()
+        .map(|root| root.join("resources").join("fonts"));
+    if let Some(root) = bundled_root.filter(|root| root.join("manifest.json").is_file()) {
+        let resource = crate::kit::resources::resolve(
+            WATERMARK_FONT_RESOURCE,
+            &root,
+            "TOOLBOX_WATERMARK_FONT_PATH",
+            WATERMARK_FONT_FILE,
+        )?;
+        return std::fs::read(&resource.path)
+            .map_err(|error| format!("Could not read bundled watermark font: {error}"));
+    }
+    Ok(INCLUDED_WATERMARK_FONT.to_vec())
+}
+
+fn draw_text(canvas: &mut image::RgbaImage, text: &str, x: u32, y: u32, alpha: u8) -> Result<(), String> {
+    let bytes = watermark_font_bytes()?;
+    let font = fontdue::Font::from_bytes(bytes.clone(), fontdue::FontSettings::default())
+        .map_err(|error| format!("Could not parse bundled watermark font: {error}"))?;
+    let mut face = rustybuzz::Face::from_slice(&bytes, 0)
+        .ok_or_else(|| "Could not parse bundled watermark font for shaping.".to_string())?;
+    face.set_pixels_per_em(Some((WATERMARK_FONT_SIZE as u16, WATERMARK_FONT_SIZE as u16)));
+
+    let unsupported = text
+        .chars()
+        .filter(|character| !font.has_glyph(*character))
+        .collect::<BTreeSet<_>>();
+    if !unsupported.is_empty() {
+        return Err(unsupported_watermark_characters(unsupported));
+    }
+
+    let mut buffer = rustybuzz::UnicodeBuffer::new();
+    buffer.push_str(text);
+    buffer.set_direction(rustybuzz::Direction::LeftToRight);
+    buffer.guess_segment_properties();
+    let glyph_buffer = rustybuzz::shape(&face, &[], buffer);
+    let glyph_count = u32::from(font.glyph_count());
+    let mut unsupported_shaped = BTreeSet::new();
+    let mut has_invalid_glyph = false;
+    for info in glyph_buffer.glyph_infos() {
+        if info.glyph_id == 0 || info.glyph_id >= glyph_count || info.glyph_id > u32::from(u16::MAX) {
+            has_invalid_glyph = true;
+            if let Some(character) = text.get(info.cluster as usize..).and_then(|value| value.chars().next()) {
+                unsupported_shaped.insert(character);
             }
         }
     }
+    if !unsupported_shaped.is_empty() {
+        return Err(unsupported_watermark_characters(unsupported_shaped));
+    }
+    if has_invalid_glyph {
+        return Err("Unsupported watermark text: shaping produced a missing glyph.".to_string());
+    }
+
+    let scale = WATERMARK_FONT_SIZE / face.units_per_em() as f32;
+    let ascent = font
+        .horizontal_line_metrics(WATERMARK_FONT_SIZE)
+        .map(|metrics| metrics.ascent)
+        .unwrap_or(WATERMARK_FONT_SIZE * 0.8);
+    let baseline_y = y as f32 + ascent;
+    let mut pen_x = 0.0_f32;
+    for (info, position) in glyph_buffer.glyph_infos().iter().zip(glyph_buffer.glyph_positions()) {
+        let glyph_id = info.glyph_id as u16;
+        let (metrics, bitmap) = font.rasterize_indexed(glyph_id, WATERMARK_FONT_SIZE);
+        let glyph_x = (x as f32
+            + (pen_x + position.x_offset as f32) * scale
+            + metrics.bounds.xmin)
+            .floor() as i64;
+        let glyph_y = (baseline_y
+            - position.y_offset as f32 * scale
+            - metrics.bounds.height
+            - metrics.bounds.ymin)
+            .floor() as i64;
+        for row in 0..metrics.height {
+            for column in 0..metrics.width {
+                let coverage = bitmap[row * metrics.width + column];
+                let glyph_alpha = ((u16::from(coverage) * u16::from(alpha) + 127) / 255) as u8;
+                if glyph_alpha == 0 { continue; }
+                let px = glyph_x + column as i64;
+                let py = glyph_y + row as i64;
+                if px < 0 || py < 0 || px >= canvas.width() as i64 || py >= canvas.height() as i64 { continue; }
+                blend_watermark_pixel(canvas.get_pixel_mut(px as u32, py as u32), glyph_alpha);
+            }
+        }
+        pen_x += position.x_advance as f32;
+    }
+    Ok(())
 }
 
-fn glyph(character: char) -> [u8; 7] {
-    match character.to_ascii_uppercase() {
-        'A' => [0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
-        'B' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110],
-        'C' => [0b01111, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b01111],
-        'D' => [0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110],
-        'E' => [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111],
-        'L' => [0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111],
-        'O' => [0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
-        'R' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001],
-        'T' => [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100],
-        'U' => [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
-        ' ' => [0; 7],
-        _ => [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b00000, 0b00100],
-    }
+fn blend_watermark_pixel(pixel: &mut Rgba<u8>, source_alpha: u8) {
+    let source_alpha = u16::from(source_alpha);
+    let destination_alpha = u16::from(pixel.0[3]);
+    let output_alpha = source_alpha + ((destination_alpha * (255 - source_alpha) + 127) / 255);
+    pixel.0 = [255, 255, 255, output_alpha.min(255) as u8];
+}
+
+fn unsupported_watermark_characters(characters: impl IntoIterator<Item = char>) -> String {
+    let details = characters
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|character| {
+            let codepoint = format!("U+{:04X}", character as u32);
+            if character.is_control() || character.is_whitespace() {
+                format!("{codepoint} ({character:?})")
+            } else {
+                format!("{codepoint} ({character})")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("Unsupported watermark characters: {details}.")
 }
 pub fn icon_set(request: &IconSetRequest, input: PathBuf) -> JobOutcome {
     let image = match image::open(&input) { Ok(image) => image, Err(error) => return failure(input, format!("Could not read image: {error}")) };
     let (prefix, sizes) = match icon_plan(&request.preset, &request.sizes) { Ok(plan) => plan, Err(error) => return failure(input, error) };
     let mut outputs = Vec::new();
     for &size in &sizes {
-        let output = OutputNaming::get_destination(&input, &request.output_location, &format!("-{prefix}-{size}"), "png");
-        if let Err(error) = image.resize_exact(size, size, image::imageops::FilterType::Lanczos3).save(&output) {
-            for created in &outputs { let _ = std::fs::remove_file(created); }
-            return failure(input, format!("Could not save icon: {error}"));
+        let output = match OutputNaming::reserve_destination(&input, &request.output_location, &format!("-{prefix}-{size}"), "png") {
+            Ok(output) => output,
+            Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not reserve icon output: {error}"))),
+        };
+        if let Err(error) = image.resize_exact(size, size, image::imageops::FilterType::Lanczos3).save(output.path()) {
+            return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not save icon: {error}")));
         }
-        outputs.push(output);
+        match output.publish() {
+            Ok(path) => outputs.push(path),
+            Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not publish icon output: {error}"))),
+        }
     }
     if request.preset == "macos" {
-        let icns = OutputNaming::get_destination(&input, &request.output_location, "-macos-icon", "icns");
-        if let Err(error) = write_icns(&icns, &sizes, &outputs) {
-            for created in &outputs { let _ = std::fs::remove_file(created); }
-            let _ = std::fs::remove_file(&icns);
-            return failure(input, format!("Could not save macOS ICNS container: {error}"));
+        let icns = match OutputNaming::reserve_destination(&input, &request.output_location, "-macos-icon", "icns") {
+            Ok(output) => output,
+            Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not reserve macOS icon output: {error}"))),
+        };
+        if let Err(error) = write_icns(icns.path(), &sizes, &outputs) {
+            return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not save macOS ICNS container: {error}")));
         }
-        outputs.push(icns);
+        match icns.publish() {
+            Ok(path) => outputs.push(path),
+            Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not publish macOS ICNS output: {error}"))),
+        }
     }
     let detail = match request.preset.as_str() {
         "macos" => "macOS PNG and ICNS icon set saved.",
@@ -308,17 +724,35 @@ fn icon_plan(preset: &str, custom_sizes: &[u32]) -> Result<(&'static str, Vec<u3
 
 pub fn gif_create(request: &GifCreateRequest) -> JobOutcome {
     let Some(input) = request.paths.first().cloned() else { return failure(PathBuf::new(), "Select at least one image.".to_string()); };
-    let output = OutputNaming::get_destination(&input, &request.output_location, "-animated", "gif");
-    let file = match File::create(&output) { Ok(file) => file, Err(error) => return failure(input, error.to_string()) };
-    let mut encoder = image::codecs::gif::GifEncoder::new(file);
-    if request.loop_forever { if let Err(error) = encoder.set_repeat(image::codecs::gif::Repeat::Infinite) { let _ = std::fs::remove_file(&output); return failure(input, format!("Could not configure GIF loop: {error}")); } }
-    let images = request.paths.iter().map(|path| image::open(path).map(|image| image.to_rgba8()).map_err(|error| error.to_string())).collect::<Result<Vec<_>, _>>();
-    let images = match images { Ok(images) => images, Err(error) => { let _ = std::fs::remove_file(&output); return failure(input, format!("Could not create GIF: {error}")); } };
-    let width = images.iter().map(|image| image.width()).max().unwrap_or(0);
-    let height = images.iter().map(|image| image.height()).max().unwrap_or(0);
-    let delay = image::Delay::from_numer_denom_ms(request.frame_delay_ms.clamp(1, 60_000), 1);
-    let frames = images.into_iter().map(|image| { let mut canvas = image::RgbaImage::new(width, height); image::imageops::overlay(&mut canvas, &image, 0, 0); image::Frame::from_parts(canvas, 0, 0, delay) }).collect::<Vec<_>>();
-    match encoder.encode_frames(frames) { Ok(_) => JobOutcome { input_path: input, output_paths: vec![output], detail: "GIF saved".to_string(), failure: None }, Err(error) => { let _ = std::fs::remove_file(&output); failure(input, format!("Could not create GIF: {error}")) } }
+    let (output, file) = match OutputNaming::create_destination(&input, &request.output_location, "-animated", "gif") {
+        Ok(destination) => destination,
+        Err(error) => return failure(input, error.to_string()),
+    };
+    let encode_result = {
+        let mut encoder = image::codecs::gif::GifEncoder::new(file);
+        if request.loop_forever { if let Err(error) = encoder.set_repeat(image::codecs::gif::Repeat::Infinite) { return failure(input, format!("Could not configure GIF loop: {error}")); } }
+        let mut images = Vec::with_capacity(request.paths.len());
+        for path in &request.paths {
+            match image::open(path) {
+                Ok(image) => images.push(image.to_rgba8()),
+                Err(error) => {
+                    return failure(path.clone(), format!("Could not create GIF from {}: {error}", path.display()));
+                }
+            }
+        }
+        let width = images.iter().map(|image| image.width()).max().unwrap_or(0);
+        let height = images.iter().map(|image| image.height()).max().unwrap_or(0);
+        let delay = image::Delay::from_numer_denom_ms(request.frame_delay_ms.clamp(1, 60_000), 1);
+        let frames = images.into_iter().map(|image| { let mut canvas = image::RgbaImage::new(width, height); image::imageops::overlay(&mut canvas, &image, 0, 0); image::Frame::from_parts(canvas, 0, 0, delay) }).collect::<Vec<_>>();
+        encoder.encode_frames(frames)
+    };
+    match encode_result {
+        Ok(_) => match output.publish() {
+            Ok(path) => JobOutcome { input_path: input, output_paths: vec![path], detail: "GIF saved".to_string(), failure: None },
+            Err(error) => failure(input, format!("Could not publish GIF output: {error}")),
+        },
+        Err(error) => failure(input, format!("Could not create GIF: {error}")),
+    }
 }
 
 fn default_gif_delay_ms() -> u32 { 100 }
@@ -331,51 +765,109 @@ pub fn gif_extract(request: &GifExtractRequest, input: PathBuf) -> JobOutcome {
     let mut outputs = Vec::new();
     let mut timing = Vec::new();
     for (index, frame) in frames.into_iter().enumerate() {
-        let output = OutputNaming::get_destination(&input, &request.output_location, &format!("-frame-{}", index + 1), "png");
+        let output = match OutputNaming::reserve_destination(&input, &request.output_location, &format!("-frame-{}", index + 1), "png") {
+            Ok(output) => output,
+            Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not reserve GIF frame output: {error}"))),
+        };
         let (numerator, denominator) = frame.delay().numer_denom_ms();
         let delay_ms = (numerator as u64 * 1000 / denominator.max(1) as u64).max(1);
-        if let Err(error) = frame.into_buffer().save(&output) {
-            for created in &outputs { let _ = std::fs::remove_file(created); }
-            return failure(input, error.to_string());
+        if let Err(error) = frame.into_buffer().save(output.path()) {
+            return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(error.to_string()));
         }
+        let output = match output.publish() {
+            Ok(output) => output,
+            Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not publish GIF frame output: {error}"))),
+        };
         timing.push(serde_json::json!({ "file": output, "delayMs": delay_ms }));
         outputs.push(output);
     }
-    let timing_path = OutputNaming::get_destination(&input, &request.output_location, "-frame-timing", "json");
-    if let Err(error) = std::fs::write(&timing_path, serde_json::to_vec_pretty(&timing).unwrap_or_default()) {
-        for created in &outputs { let _ = std::fs::remove_file(created); }
-        return failure(input, format!("Could not save GIF timing manifest: {error}"));
+    let timing_path = match OutputNaming::reserve_destination(&input, &request.output_location, "-frame-timing", "json") {
+        Ok(output) => output,
+        Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not reserve GIF timing output: {error}"))),
+    };
+    let timing_bytes = match serde_json::to_vec_pretty(&timing) {
+        Ok(bytes) => bytes,
+        Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not encode GIF timing manifest: {error}"))),
+    };
+    if let Err(error) = std::fs::write(timing_path.path(), timing_bytes) {
+        return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not save GIF timing manifest: {error}")));
     }
-    outputs.push(timing_path);
+    outputs.push(match timing_path.publish() {
+        Ok(path) => path,
+        Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not publish GIF timing manifest: {error}"))),
+    });
     JobOutcome { input_path: input, output_paths: outputs, detail: "GIF frames saved".to_string(), failure: None }
 }
 
 pub fn tiff(request: &TiffRequest) -> JobOutcome {
     let Some(input) = request.paths.first().cloned() else { return failure(PathBuf::new(), "Select at least one TIFF file.".to_string()); };
-    let mut pages = Vec::new();
-    for path in &request.paths {
-        match read_tiff_pages(path) {
-            Ok(mut decoded) => pages.append(&mut decoded),
-            Err(error) => return failure(input, error),
+    let pages = if let Some(page_refs) = &request.pages {
+        if page_refs.is_empty() { return failure(input, "Select at least one TIFF page.".to_string()); }
+        let mut selected = Vec::with_capacity(page_refs.len());
+        for page_ref in page_refs {
+            if !request.paths.iter().any(|path| path == &page_ref.path) {
+                return failure(page_ref.path.clone(), "The TIFF page selection contains an unselected file.".to_string());
+            }
+            let decoded = match read_tiff_pages(&page_ref.path) {
+                Ok(decoded) => decoded,
+                Err(error) => return failure(page_ref.path.clone(), format!("Could not process {}: {error}", page_ref.path.display())),
+            };
+            let Some(page) = decoded.get(page_ref.page) else {
+                return failure(page_ref.path.clone(), format!("TIFF page {} is outside the document.", page_ref.page + 1));
+            };
+            selected.push(page.clone());
         }
-    }
+        selected
+    } else {
+        let mut pages = Vec::new();
+        for path in &request.paths {
+            match read_tiff_pages(path) {
+                Ok(mut decoded) => pages.append(&mut decoded),
+                Err(error) => return failure(path.clone(), format!("Could not process {}: {error}", path.display())),
+            }
+        }
+        pages
+    };
     let output = if request.paths.len() == 1 {
         let mut outputs = Vec::new();
         for (index, page) in pages.iter().enumerate() {
-            let output = OutputNaming::get_destination(&input, &request.output_location, &format!("-page-{}", index + 1), "tiff");
-            if let Err(error) = write_tiff_page(&output, page) { return failure(input, format!("Could not write TIFF page: {error}")); }
-            outputs.push(output);
+            let output = match OutputNaming::reserve_destination(&input, &request.output_location, &format!("-page-{}", index + 1), "tiff") {
+                Ok(output) => output,
+                Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not reserve TIFF page output: {error}"))),
+            };
+            if let Err(error) = write_tiff_page(output.path(), page) {
+                return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not write TIFF page: {error}")));
+            }
+            outputs.push(match output.publish() {
+                Ok(path) => path,
+                Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not publish TIFF page: {error}"))),
+            });
         }
         return JobOutcome { input_path: input, output_paths: outputs, detail: "TIFF pages saved".to_string(), failure: None };
     } else {
-        OutputNaming::get_destination(&input, &request.output_location, "-combined", "tiff")
+        match OutputNaming::reserve_destination(&input, &request.output_location, "-combined", "tiff") {
+            Ok(output) => output,
+            Err(error) => return failure(input, format!("Could not reserve combined TIFF output: {error}")),
+        }
     };
-    if let Err(error) = write_tiff_pages(&output, &pages) { return failure(input, format!("Could not combine TIFF pages: {error}")); }
-    JobOutcome { input_path: input, output_paths: vec![output], detail: "TIFF pages combined".to_string(), failure: None }
+    if let Err(error) = write_tiff_pages(output.path(), &pages) { return failure(input, format!("Could not combine TIFF pages: {error}")); }
+    match output.publish() {
+        Ok(path) => JobOutcome { input_path: input, output_paths: vec![path], detail: "TIFF pages combined".to_string(), failure: None },
+        Err(error) => failure(input, format!("Could not publish combined TIFF: {error}")),
+    }
 }
 
 #[derive(Clone)]
 enum TiffPage { Gray { width: u32, height: u32, data: Vec<u8> }, Rgb { width: u32, height: u32, data: Vec<u8> }, Rgba { width: u32, height: u32, data: Vec<u8> } }
+
+fn tiff_page_to_dynamic(page: &TiffPage) -> Result<DynamicImage, String> {
+    match page {
+        TiffPage::Gray { width, height, data } => ImageBuffer::<Luma<u8>, _>::from_raw(*width, *height, data.clone()).map(DynamicImage::ImageLuma8),
+        TiffPage::Rgb { width, height, data } => ImageBuffer::<Rgb<u8>, _>::from_raw(*width, *height, data.clone()).map(DynamicImage::ImageRgb8),
+        TiffPage::Rgba { width, height, data } => ImageBuffer::<Rgba<u8>, _>::from_raw(*width, *height, data.clone()).map(DynamicImage::ImageRgba8),
+    }
+    .ok_or_else(|| "TIFF page pixel data has an invalid length.".to_string())
+}
 
 fn read_tiff_pages(path: &std::path::Path) -> Result<Vec<TiffPage>, String> {
     let file = File::open(path).map_err(|error| format!("Could not open TIFF: {error}"))?;
@@ -431,25 +923,40 @@ pub fn inspect_metadata(input: PathBuf) -> Result<MetadataReport, String> {
 
 pub fn strip_metadata(request: &MetadataRequest, input: PathBuf) -> JobOutcome {
     let image = match image::open(&input) { Ok(image) => image, Err(error) => return failure(input, format!("Could not read image: {error}")) };
-    let output = OutputNaming::get_destination(&input, &request.output_location, "-stripped", input.extension().and_then(|extension| extension.to_str()).unwrap_or("png"));
-    let format = ImageFormat::from_path(&output).unwrap_or(ImageFormat::Png);
-    if let Err(error) = image.save_with_format(&output, format) { return failure(input, format!("Could not save metadata-free image: {error}")); }
-    match inspect_metadata(output.clone()) {
-        Ok(report) if !report.exif && !report.xmp && !report.icc => JobOutcome { input_path: input, output_paths: vec![output], detail: "Metadata removed and verified".to_string(), failure: None },
-        Ok(_) => { let _ = std::fs::remove_file(&output); failure(input, "Image encoder retained metadata that could not be removed safely.".to_string()) },
-        Err(error) => { let _ = std::fs::remove_file(&output); failure(input, format!("Could not verify metadata removal: {error}")) },
+    let output = match OutputNaming::reserve_destination(&input, &request.output_location, "-stripped", input.extension().and_then(|extension| extension.to_str()).unwrap_or("png")) {
+        Ok(output) => output,
+        Err(error) => return failure(input, format!("Could not reserve metadata-free image output: {error}")),
+    };
+    let format = ImageFormat::from_path(output.path()).unwrap_or(ImageFormat::Png);
+    if let Err(error) = image.save_with_format(output.path(), format) { return failure(input, format!("Could not save metadata-free image: {error}")); }
+    match inspect_metadata(output.path().to_path_buf()) {
+        Ok(report) if !report.exif && !report.xmp && !report.icc => match output.publish() {
+            Ok(path) => JobOutcome { input_path: input, output_paths: vec![path], detail: "Metadata removed and verified".to_string(), failure: None },
+            Err(error) => failure(input, format!("Could not publish metadata-free image: {error}")),
+        },
+        Ok(_) => failure(input, "Image encoder retained metadata that could not be removed safely.".to_string()),
+        Err(error) => failure(input, format!("Could not verify metadata removal: {error}")),
     }
 }
 
 fn contains(bytes: &[u8], needle: &[u8]) -> bool { bytes.windows(needle.len()).any(|window| window == needle) }
 
 fn transform<F>(_: &[PathBuf], input: PathBuf, location: &OutputLocation, suffix: &str, edit: F) -> JobOutcome where F: FnOnce(DynamicImage) -> Result<DynamicImage, String> {
-    let image = match image::open(&input) { Ok(image) => image, Err(error) => return failure(input, format!("Could not read image: {error}")) };
+    let image = match crate::kit::images::load_image(&input) { Ok(image) => image, Err(error) => return failure(input, format!("Could not read image: {error}")) };
     let image = match edit(image) { Ok(image) => image, Err(error) => return failure(input, error) };
     let extension = input.extension().and_then(|extension| extension.to_str()).unwrap_or("png");
-    let output = OutputNaming::get_destination(&input, location, suffix, extension);
-    let format = ImageFormat::from_path(&output).unwrap_or(ImageFormat::Png);
-    match image.save_with_format(&output, format) { Ok(_) => JobOutcome { input_path: input, output_paths: vec![output], detail: "Image saved".to_string(), failure: None }, Err(error) => failure(input, format!("Could not save image: {error}")) }
+    let output = match OutputNaming::reserve_destination(&input, location, suffix, extension) {
+        Ok(output) => output,
+        Err(error) => return failure(input, format!("Could not reserve image output: {error}")),
+    };
+    let format = ImageFormat::from_path(output.path()).unwrap_or(ImageFormat::Png);
+    match image.save_with_format(output.path(), format) {
+        Ok(_) => match output.publish() {
+            Ok(path) => JobOutcome { input_path: input, output_paths: vec![path], detail: "Image saved".to_string(), failure: None },
+            Err(error) => failure(input, format!("Could not publish image: {error}")),
+        },
+        Err(error) => failure(input, format!("Could not save image: {error}")),
+    }
 }
 
 fn failure(input_path: PathBuf, error: String) -> JobOutcome { JobOutcome::failure(input_path, ToolError::processing(error)) }
@@ -457,6 +964,7 @@ fn failure(input_path: PathBuf, error: String) -> JobOutcome { JobOutcome::failu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::{Digest, Sha256};
     fn path(name: &str) -> PathBuf { std::env::temp_dir().join(format!("toolbox_tiff_{}_{}", std::process::id(), name)) }
 
     #[test]
@@ -467,7 +975,7 @@ mod tests {
         encoder.write_image::<tiff::encoder::colortype::Gray8>(2, 1, &[10, 20]).unwrap();
         encoder.write_image::<tiff::encoder::colortype::Gray8>(2, 1, &[30, 40]).unwrap();
 
-        let split = tiff(&TiffRequest { paths: vec![input.clone()], output_location: OutputLocation::AlongsideInput });
+        let split = tiff(&TiffRequest { paths: vec![input.clone()], pages: None, output_location: OutputLocation::AlongsideInput });
         assert_eq!(split.output_paths.len(), 2);
         assert_eq!(read_tiff_pages(&split.output_paths[0]).unwrap().len(), 1);
         assert_eq!(read_tiff_pages(&split.output_paths[1]).unwrap().len(), 1);
@@ -476,7 +984,7 @@ mod tests {
         let second = path("second.tiff");
         write_tiff_page(&first, &TiffPage::Gray { width: 1, height: 1, data: vec![1] }).unwrap();
         write_tiff_page(&second, &TiffPage::Gray { width: 1, height: 1, data: vec![2] }).unwrap();
-        let combined = tiff(&TiffRequest { paths: vec![first.clone(), second.clone()], output_location: OutputLocation::AlongsideInput });
+        let combined = tiff(&TiffRequest { paths: vec![first.clone(), second.clone()], pages: None, output_location: OutputLocation::AlongsideInput });
         let pages = read_tiff_pages(&combined.output_paths[0]).unwrap();
         assert_eq!(pages.len(), 2);
         assert!(matches!(&pages[0], TiffPage::Gray { data, .. } if data == &vec![1]));
@@ -495,9 +1003,42 @@ mod tests {
         let file = File::create(&input).unwrap();
         let mut encoder = tiff::encoder::TiffEncoder::new(file).unwrap();
         encoder.write_image::<tiff::encoder::colortype::Gray16>(1, 1, &[1]).unwrap();
-        let result = tiff(&TiffRequest { paths: vec![input.clone()], output_location: OutputLocation::AlongsideInput });
+        let result = tiff(&TiffRequest { paths: vec![input.clone()], pages: None, output_location: OutputLocation::AlongsideInput });
         assert!(result.failure.is_some());
         let _ = std::fs::remove_file(input);
+    }
+
+    #[test]
+    fn selected_tiff_pages_follow_explicit_cross_file_order() {
+        let two_page = path("ordered-two-page.tiff");
+        let one_page = path("ordered-one-page.tiff");
+        let file = File::create(&two_page).unwrap();
+        let mut encoder = tiff::encoder::TiffEncoder::new(file).unwrap();
+        encoder.write_image::<tiff::encoder::colortype::Gray8>(2, 1, &[10, 20]).unwrap();
+        encoder.write_image::<tiff::encoder::colortype::Gray8>(2, 1, &[30, 40]).unwrap();
+        write_tiff_page(&one_page, &TiffPage::Gray { width: 1, height: 1, data: vec![2] }).unwrap();
+
+        let outcome = tiff(&TiffRequest {
+            paths: vec![two_page.clone(), one_page.clone()],
+            pages: Some(vec![
+                TiffPageRef { path: two_page.clone(), page: 1 },
+                TiffPageRef { path: one_page.clone(), page: 0 },
+                TiffPageRef { path: two_page.clone(), page: 0 },
+            ]),
+            output_location: OutputLocation::AlongsideInput,
+        });
+
+        assert!(outcome.failure.is_none(), "selected TIFF pages failed: {:?}", outcome.failure);
+        let output = outcome.output_paths.first().unwrap().clone();
+        let pages = read_tiff_pages(&output).unwrap();
+        assert_eq!(pages.len(), 3);
+        assert!(matches!(&pages[0], TiffPage::Gray { data, .. } if data == &vec![30, 40]));
+        assert!(matches!(&pages[1], TiffPage::Gray { data, .. } if data == &vec![2]));
+        assert!(matches!(&pages[2], TiffPage::Gray { data, .. } if data == &vec![10, 20]));
+
+        let _ = std::fs::remove_file(two_page);
+        let _ = std::fs::remove_file(one_page);
+        let _ = std::fs::remove_file(output);
     }
 
     #[test]
@@ -525,6 +1066,104 @@ mod tests {
     }
 
     #[test]
+    fn text_watermark_supports_ascii_latin_combining_and_non_latin_text() {
+        let mut canvas = image::RgbaImage::new(640, 96);
+        draw_text(&mut canvas, "ASCII Café e\u{301} Ж", 4, 4, 200).unwrap();
+        assert!(canvas.pixels().any(|pixel| pixel.0[3] > 0));
+
+        for text in ["Watermark", "Café", "e\u{301}", "Ж"] {
+            let mut sample = image::RgbaImage::new(160, 64);
+            draw_text(&mut sample, text, 4, 4, 255).unwrap();
+            assert!(sample.pixels().any(|pixel| pixel.0[3] > 0), "{text:?} did not rasterize");
+        }
+    }
+
+    #[test]
+    fn unsupported_mixed_text_fails_without_reserving_or_writing_output() {
+        let input = path("watermark-unsupported.png");
+        let stem = input.file_stem().and_then(|value| value.to_str()).unwrap();
+        let output = input.with_file_name(format!("{stem}-watermarked.png"));
+        let alternate_output = input.with_file_name(format!("{stem}-watermarked-1.png"));
+        let _ = std::fs::remove_file(&input);
+        let _ = std::fs::remove_file(&output);
+        let _ = std::fs::remove_file(&alternate_output);
+        image::RgbaImage::from_pixel(64, 64, image::Rgba([10, 20, 30, 91])).save(&input).unwrap();
+        let source_bytes = std::fs::read(&input).unwrap();
+        let existing_bytes = b"existing output must remain intact";
+        std::fs::write(&output, existing_bytes).unwrap();
+
+        let result = watermark(&WatermarkRequest {
+            paths: vec![input.clone()],
+            opacity: 80,
+            text: Some("Café Ж \u{10FFFF}".to_string()),
+            logo_path: None,
+            x: 4,
+            y: 4,
+            output_location: OutputLocation::AlongsideInput,
+        }, input.clone());
+
+        let error = result.failure.as_ref().expect("unsupported text must fail");
+        assert!(error.message.contains("Unsupported watermark characters"));
+        assert!(error.message.contains("U+10FFFF"));
+        assert!(result.output_paths.is_empty());
+        assert_eq!(std::fs::read(&input).unwrap(), source_bytes);
+        assert_eq!(std::fs::read(&output).unwrap(), existing_bytes);
+        assert!(!alternate_output.exists());
+
+        let _ = std::fs::remove_file(input);
+        let _ = std::fs::remove_file(output);
+        let _ = std::fs::remove_file(alternate_output);
+    }
+
+    #[test]
+    fn repeated_text_watermark_rendering_is_deterministic() {
+        fn digest(text: &str) -> [u8; 32] {
+            let mut canvas = image::RgbaImage::new(320, 96);
+            draw_text(&mut canvas, text, 8, 8, 173).unwrap();
+            Sha256::digest(canvas.as_raw()).into()
+        }
+
+        assert_eq!(digest("Café e\u{301} Ж"), digest("Café e\u{301} Ж"));
+    }
+
+    #[test]
+    fn watermark_preserves_source_alpha_and_existing_outputs_on_collision() {
+        let input = path("watermark-safety.png");
+        let stem = input.file_stem().and_then(|value| value.to_str()).unwrap();
+        let existing_output = input.with_file_name(format!("{stem}-watermarked.png"));
+        let expected_output = input.with_file_name(format!("{stem}-watermarked-1.png"));
+        let _ = std::fs::remove_file(&input);
+        let _ = std::fs::remove_file(&existing_output);
+        image::RgbaImage::from_pixel(64, 64, image::Rgba([10, 20, 30, 91])).save(&input).unwrap();
+        let source_bytes = std::fs::read(&input).unwrap();
+        let existing_bytes = b"do not overwrite this output";
+        std::fs::write(&existing_output, existing_bytes).unwrap();
+
+        let result = watermark(&WatermarkRequest {
+            paths: vec![input.clone()],
+            opacity: 50,
+            text: Some("Safe".to_string()),
+            logo_path: None,
+            x: 4,
+            y: 4,
+            output_location: OutputLocation::AlongsideInput,
+        }, input.clone());
+
+        assert!(result.failure.is_none(), "watermark failed: {:?}", result.failure);
+        let output = result.output_paths.first().expect("watermark output");
+        assert_eq!(output, &expected_output);
+        assert_eq!(std::fs::read(&input).unwrap(), source_bytes);
+        assert_eq!(std::fs::read(&existing_output).unwrap(), existing_bytes);
+        let output_image = image::open(output).unwrap().to_rgba8();
+        assert!(output_image.pixels().any(|pixel| pixel.0[0..3] != [10, 20, 30]));
+        assert!(output_image.pixels().all(|pixel| pixel.0[3] == 91));
+
+        let _ = std::fs::remove_file(input);
+        let _ = std::fs::remove_file(existing_output);
+        let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
     fn gif_creation_preserves_order_timing_and_canvas() {
         let first = path("gif-first.png");
         let second = path("gif-second.png");
@@ -542,6 +1181,115 @@ mod tests {
         let _ = std::fs::remove_file(first);
         let _ = std::fs::remove_file(second);
         let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn concurrent_gif_jobs_with_same_named_inputs_never_share_an_output() {
+        use std::collections::HashSet;
+        use std::sync::{Arc, Barrier};
+
+        let root = std::env::temp_dir().join(format!(
+            "toolbox_gif_collision_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let output_directory = root.join("outputs");
+        std::fs::create_dir_all(&output_directory).unwrap();
+        let existing_output = output_directory.join("frame-animated.gif");
+        let existing_bytes = b"existing output must remain intact";
+        std::fs::write(&existing_output, existing_bytes).unwrap();
+
+        let worker_count = 8usize;
+        let mut inputs = Vec::with_capacity(worker_count);
+        for index in 0..worker_count {
+            let input_directory = root.join(format!("input-{index}"));
+            std::fs::create_dir_all(&input_directory).unwrap();
+            let input = input_directory.join("frame.png");
+            image::RgbaImage::from_pixel(2, 2, image::Rgba([index as u8 * 24, 80, 160, 255]))
+                .save(&input)
+                .unwrap();
+            inputs.push(input);
+        }
+
+        let barrier = Arc::new(Barrier::new(worker_count));
+        let handles = inputs
+            .iter()
+            .cloned()
+            .map(|input| {
+                let barrier = Arc::clone(&barrier);
+                let output_directory = output_directory.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    gif_create(&GifCreateRequest {
+                        paths: vec![input],
+                        frame_delay_ms: 100,
+                        loop_forever: true,
+                        output_location: OutputLocation::CustomFolder(output_directory),
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        let outcomes = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect::<Vec<_>>();
+
+        assert!(outcomes.iter().all(|outcome| outcome.failure.is_none()));
+        let outputs = outcomes
+            .iter()
+            .map(|outcome| outcome.output_paths[0].clone())
+            .collect::<Vec<_>>();
+        assert_eq!(outputs.iter().collect::<HashSet<_>>().len(), worker_count);
+        assert_eq!(std::fs::read(&existing_output).unwrap(), existing_bytes);
+        for output in &outputs {
+            let decoder = image::codecs::gif::GifDecoder::new(BufReader::new(File::open(output).unwrap())).unwrap();
+            let frames = decoder.into_frames().collect_frames().unwrap();
+            assert_eq!(frames.len(), 1);
+            assert_eq!(frames[0].buffer().dimensions(), (2, 2));
+            assert!(std::fs::metadata(output).unwrap().len() > 0);
+        }
+        let output_entries = std::fs::read_dir(&output_directory).unwrap().count();
+        assert_eq!(output_entries, worker_count + 1);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_gif_job_removes_reserved_output_and_claim() {
+        let root = std::env::temp_dir().join(format!(
+            "toolbox_gif_cleanup_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let input_directory = root.join("input");
+        let output_directory = root.join("outputs");
+        std::fs::create_dir_all(&input_directory).unwrap();
+        std::fs::create_dir_all(&output_directory).unwrap();
+        let input = input_directory.join("frame.png");
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([20, 40, 60, 255]))
+            .save(&input)
+            .unwrap();
+        let existing_output = output_directory.join("frame-animated.gif");
+        let existing_bytes = b"existing output must remain intact";
+        std::fs::write(&existing_output, existing_bytes).unwrap();
+
+        let result = gif_create(&GifCreateRequest {
+            paths: vec![input, input_directory.join("missing.png")],
+            frame_delay_ms: 100,
+            loop_forever: true,
+            output_location: OutputLocation::CustomFolder(output_directory.clone()),
+        });
+
+        assert!(result.failure.is_some());
+        assert_eq!(std::fs::read(&existing_output).unwrap(), existing_bytes);
+        assert_eq!(std::fs::read_dir(&output_directory).unwrap().count(), 1);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -602,5 +1350,234 @@ mod tests {
         assert_eq!(resize_dimensions(400, 200, &longest).unwrap(), (100, 50));
         let invalid = ResizeRequest { mode: "percentage".to_string(), percentage: 0, ..longest };
         assert!(resize_dimensions(400, 200, &invalid).is_err());
+    }
+
+    #[test]
+    fn composed_plan_applies_ordered_edits_once_without_mutating_source() {
+        let input = path("composed-plan.png");
+        image::RgbaImage::from_fn(4, 2, |x, y| image::Rgba([x as u8 * 40, y as u8 * 80, 10, 255]))
+            .save(&input)
+            .unwrap();
+        let source = std::fs::read(&input).unwrap();
+        let plan = ImageEditPlan {
+            edits: vec![
+                ImageEdit::Resize {
+                    width: 4,
+                    height: 2,
+                    mode: "exact".to_string(),
+                    percentage: 0,
+                    longest_side: 0,
+                    resampling: "nearest".to_string(),
+                    keep_aspect_ratio: false,
+                },
+                ImageEdit::Rotate {
+                    degrees: 90,
+                    flip: "none".to_string(),
+                },
+                ImageEdit::Crop {
+                    x: 0,
+                    y: 0,
+                    width: 2,
+                    height: 2,
+                    mode: "rectangle".to_string(),
+                    aspect_width: 0,
+                    aspect_height: 0,
+                    anchor: "center".to_string(),
+                },
+            ],
+            output_location: OutputLocation::AlongsideInput,
+            suffix: "-edited".to_string(),
+        };
+
+        let preview = inspect_edit_preview(&ImageEditPreviewRequest { path: input.clone(), plan: plan.clone() }).unwrap();
+        assert_eq!((preview.width, preview.height), (2, 2));
+        let result = export_edit_plan(&plan, input.clone());
+        assert!(result.failure.is_none(), "{}", result.failure.clone().unwrap_or_default());
+        assert_eq!(std::fs::read(&input).unwrap(), source);
+        let output = result.output_paths.first().unwrap();
+        let edited = image::open(output).unwrap();
+        assert_eq!((edited.width(), edited.height()), (2, 2));
+        let output_name = output.file_name().and_then(|name| name.to_str()).unwrap();
+        let claim = output.with_file_name(format!(".{output_name}.toolbox-reservation"));
+        assert!(!claim.exists());
+        assert!(!std::fs::read_dir(input.parent().unwrap()).unwrap().filter_map(Result::ok).any(|entry| {
+            entry.file_name().to_str().is_some_and(|name| name.starts_with(".composed-plan-edited.png.toolbox-tmp-"))
+        }));
+
+        let _ = std::fs::remove_file(input);
+        let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn source_space_crop_replacement_uses_latest_region_before_later_edits() {
+        let input = path("source-space-crops.png");
+        let mut source = image::RgbaImage::from_pixel(10, 8, image::Rgba([0, 0, 0, 255]));
+        for y in 0..3 {
+            for x in 0..2 {
+                source.put_pixel(x, y, image::Rgba([255, 0, 0, 255]));
+            }
+        }
+        for y in 5..7 {
+            for x in 7..10 {
+                source.put_pixel(x, y, image::Rgba([0, 255, 0, 255]));
+            }
+        }
+        source.save(&input).unwrap();
+        let plan = ImageEditPlan {
+            edits: vec![
+                ImageEdit::Crop {
+                    x: 0,
+                    y: 0,
+                    width: 2,
+                    height: 3,
+                    mode: "rectangle".to_string(),
+                    aspect_width: 2,
+                    aspect_height: 3,
+                    anchor: "center".to_string(),
+                },
+                ImageEdit::Rotate {
+                    degrees: 90,
+                    flip: "none".to_string(),
+                },
+                ImageEdit::Crop {
+                    x: 7,
+                    y: 5,
+                    width: 3,
+                    height: 2,
+                    mode: "rectangle".to_string(),
+                    aspect_width: 3,
+                    aspect_height: 2,
+                    anchor: "center".to_string(),
+                },
+            ],
+            output_location: OutputLocation::AlongsideInput,
+            suffix: "-edited".to_string(),
+        };
+
+        let preview = inspect_edit_preview(&ImageEditPreviewRequest { path: input.clone(), plan: plan.clone() }).unwrap();
+        assert_eq!((preview.width, preview.height), (2, 3));
+        let result = export_edit_plan(&plan, input.clone());
+        assert!(result.failure.is_none(), "{}", result.failure.clone().unwrap_or_default());
+        let output = result.output_paths.first().unwrap();
+        let edited = image::open(output).unwrap().to_rgba8();
+        assert_eq!(edited.dimensions(), (2, 3));
+        assert!(edited.pixels().all(|pixel| pixel.0 == [0, 255, 0, 255]));
+
+        let _ = std::fs::remove_file(input);
+        let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn source_space_crop_maps_through_rotation_before_execution() {
+        let input = path("rotate-before-source-crop.png");
+        image::RgbaImage::from_pixel(100, 60, image::Rgba([40, 80, 120, 255])).save(&input).unwrap();
+        let plan = ImageEditPlan {
+            edits: vec![
+                ImageEdit::Rotate { degrees: 90, flip: "none".to_string() },
+                ImageEdit::Crop {
+                    x: 0, y: 0, width: 100, height: 60, mode: "rectangle".to_string(),
+                    aspect_width: 100, aspect_height: 60, anchor: "center".to_string(),
+                },
+            ],
+            output_location: OutputLocation::AlongsideInput,
+            suffix: "-edited".to_string(),
+        };
+
+        let preview = inspect_edit_preview(&ImageEditPreviewRequest { path: input.clone(), plan: plan.clone() }).unwrap();
+        assert_eq!((preview.width, preview.height), (60, 100));
+        let result = export_edit_plan(&plan, input.clone());
+        assert!(result.failure.is_none(), "{}", result.failure.clone().unwrap_or_default());
+        let output = result.output_paths.first().unwrap();
+        let edited = image::open(output).unwrap();
+        assert_eq!((edited.width(), edited.height()), (60, 100));
+
+        let _ = std::fs::remove_file(input);
+        let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn aspect_crop_uses_source_geometry_for_preview_and_export() {
+        let input = path("aspect-source-crop.png");
+        image::RgbaImage::from_fn(100, 60, |x, _| if x < 40 {
+            image::Rgba([255, 0, 0, 255])
+        } else {
+            image::Rgba([0, 255, 0, 255])
+        }).save(&input).unwrap();
+        let plan = ImageEditPlan {
+            edits: vec![
+                ImageEdit::Rotate { degrees: 90, flip: "none".to_string() },
+                ImageEdit::Crop {
+                    x: 0, y: 0, width: 1, height: 1, mode: "aspectRatio".to_string(),
+                    aspect_width: 1, aspect_height: 1, anchor: "right".to_string(),
+                },
+            ],
+            output_location: OutputLocation::AlongsideInput,
+            suffix: "-edited".to_string(),
+        };
+
+        let request = CropRequest {
+            paths: vec![], x: 0, y: 0, width: 1, height: 1, mode: "aspectRatio".to_string(),
+            aspect_width: 1, aspect_height: 1, anchor: "right".to_string(),
+            output_location: OutputLocation::AlongsideInput,
+        };
+        assert_eq!(crop_rect(100, 60, &request).unwrap(), (40, 0, 60, 60));
+        let preview = inspect_edit_preview(&ImageEditPreviewRequest { path: input.clone(), plan: plan.clone() }).unwrap();
+        assert_eq!((preview.width, preview.height), (60, 60));
+        let result = export_edit_plan(&plan, input.clone());
+        assert!(result.failure.is_none(), "{}", result.failure.clone().unwrap_or_default());
+        let output = result.output_paths.first().unwrap();
+        let edited = image::open(output).unwrap().to_rgba8();
+        assert_eq!((edited.width(), edited.height()), (60, 60));
+        assert!(edited.pixels().all(|pixel| pixel.0 == [0, 255, 0, 255]));
+
+        let _ = std::fs::remove_file(input);
+        let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn source_space_crop_maps_through_resize_before_execution() {
+        let input = path("resize-before-source-crop.png");
+        image::RgbaImage::from_pixel(100, 60, image::Rgba([40, 80, 120, 255])).save(&input).unwrap();
+        let plan = ImageEditPlan {
+            edits: vec![
+                ImageEdit::Resize {
+                    width: 50, height: 30, mode: "exact".to_string(), percentage: 0, longest_side: 0,
+                    resampling: "nearest".to_string(), keep_aspect_ratio: false,
+                },
+                ImageEdit::Crop {
+                    x: 0, y: 0, width: 100, height: 60, mode: "rectangle".to_string(),
+                    aspect_width: 100, aspect_height: 60, anchor: "center".to_string(),
+                },
+            ],
+            output_location: OutputLocation::AlongsideInput,
+            suffix: "-edited".to_string(),
+        };
+
+        let preview = inspect_edit_preview(&ImageEditPreviewRequest { path: input.clone(), plan: plan.clone() }).unwrap();
+        assert_eq!((preview.width, preview.height), (50, 30));
+        let result = export_edit_plan(&plan, input.clone());
+        assert!(result.failure.is_none(), "{}", result.failure.clone().unwrap_or_default());
+        let output = result.output_paths.first().unwrap();
+        let edited = image::open(output).unwrap();
+        assert_eq!((edited.width(), edited.height()), (50, 30));
+
+        let _ = std::fs::remove_file(input);
+        let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn composed_plan_rejects_invalid_editor_values() {
+        let plan = ImageEditPlan {
+            edits: vec![ImageEdit::Tone {
+                brightness: 101,
+                contrast: 0.0,
+                saturation: 0.0,
+                exposure: 0.0,
+            }],
+            output_location: OutputLocation::AlongsideInput,
+            suffix: "-edited".to_string(),
+        };
+
+        assert_eq!(plan.validate().unwrap_err(), "Brightness must be between -100 and 100.");
     }
 }

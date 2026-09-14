@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "architecture": "all",
+  "resources": {
+    "watermarkFont": {
+      "path": "DejaVuSans.ttf",
+      "version": "2.37",
+      "sha256": "7da195a74c55bef988d0d48f9508bd5d849425c1770dba5d7bfc6ce9ed848954",
+      "license": "Bitstream Vera Fonts License / Arev Fonts License / public domain DejaVu changes; see LICENSE.txt",
+      "sourceUrl": "https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_2_37/dejavu-fonts-ttf-2.37.zip",
+      "maxBytes": 1000000
+    },
+    "signatureSatisfyFont": {
+      "path": "Satisfy-Regular.ttf",
+      "version": "1.001",
+      "sha256": "55bb141a0a23a32278d5fa7fd2e853824faa173b94774660ebeddb106be07c80",
+      "license": "Apache License 2.0; see Satisfy-LICENSE.txt",
+      "sourceUrl": "https://github.com/google/fonts/tree/main/apache/satisfy",
+      "maxBytes": 1000000
+    },
+    "signaturePacificoFont": {
+      "path": "Pacifico-Regular.ttf",
+      "version": "7.003",
+      "sha256": "5b6c0d5334a7bf77dea52b975c5a0c408878c0f7115ed5b6fb151f634b7bf701",
+      "license": "SIL Open Font License 1.1; see Pacifico-LICENSE.txt",
+      "sourceUrl": "https://github.com/google/fonts/tree/main/ofl/pacifico",
+      "maxBytes": 1000000
+    }
+  }
+}
