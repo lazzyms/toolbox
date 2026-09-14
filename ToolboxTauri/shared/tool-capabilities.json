@@ -1,7 +1,7 @@
 [
   { "command": "remove_password", "acceptedExtensions": [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"], "inputCardinality": "multiple", "supportsPageSelection": false, "supportsPreview": false, "nativeAvailability": "available" },
   { "command": "protect_pdf", "acceptedExtensions": [".pdf"], "inputCardinality": "multiple", "supportsPageSelection": false, "supportsPreview": false, "nativeAvailability": "available" },
-  { "command": "protect_office", "acceptedExtensions": [".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"], "inputCardinality": "multiple", "supportsPageSelection": false, "supportsPreview": false, "nativeAvailability": "unavailable" },
+  { "command": "protect_office", "acceptedExtensions": [".docx", ".xlsx"], "inputCardinality": "multiple", "supportsPageSelection": false, "supportsPreview": false, "nativeAvailability": "available" },
   { "command": "compress_images", "acceptedExtensions": [".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif"], "inputCardinality": "single", "supportsPageSelection": false, "supportsPreview": true, "nativeAvailability": "available" },
   { "command": "convert_images", "acceptedExtensions": [".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif"], "inputCardinality": "single", "supportsPageSelection": false, "supportsPreview": true, "nativeAvailability": "available" },
   { "command": "export_pdf_scene", "acceptedExtensions": [".pdf"], "inputCardinality": "single", "supportsPageSelection": true, "supportsPreview": true, "nativeAvailability": "available" },

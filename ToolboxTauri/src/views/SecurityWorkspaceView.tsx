@@ -76,14 +76,14 @@ export const SecurityWorkspaceView = ({ utility }: { utility: ToolDefinition }) 
               {isPdfProtection
                 ? "Add a password to each selected PDF. The originals stay untouched."
                 : isOfficeProtection
-                  ? "Add a password to each selected Office file. The originals stay untouched."
+                  ? "Add a password to selected DOCX and XLSX files. The originals stay untouched."
                 : "Use the existing password to save an unlocked copy of each selected PDF or Office file."}
             </p>
             <p className="workspace-note">
               {isPdfProtection
                 ? "PDF files only"
                 : isOfficeProtection
-                  ? "Word, Excel, and PowerPoint files"
+                  ? "DOCX and XLSX files only"
                 : "PDF, Word, Excel, and PowerPoint files"}
             </p>
           </div>

@@ -788,25 +788,26 @@ test("remove password exposes one cross-format document tool", async ({ page }) 
     await expect(page.locator(".workspace-primary-action")).toBeEnabled();
 });
 
-test("Office protection exposes all formats but clearly remains unavailable", async ({ page }) => {
+test("Office protection exposes DOCX and XLSX protection", async ({ page }) => {
     const utility = UtilityRegistry.find((item) => item.id === "office-protect");
     expect(utility).toBeDefined();
     expect(workspaceForTool("office-protect")?.id).toBe("file-security");
     expect(utility?.command).toBe("protect_office");
     expect(utility?.capability.acceptedExtensions).toEqual([
-        ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+        ".docx", ".xlsx",
     ]);
-    expect(utility?.capability.nativeAvailability).toBe("unavailable");
-    expect(utility?.status).toBe("unavailable");
+    expect(utility?.capability.nativeAvailability).toBe("available");
+    expect(utility?.status).toBe("implemented");
 
     await page.goto("/");
     await page.getByRole("button", { name: "Open Protect Office Files" }).click();
     await expect(page.getByRole("heading", { name: "Protect Office Files" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Choose files to process" })).toHaveCount(0);
-    const unavailablePanel = page.locator('div[role="status"]');
-    await expect(unavailablePanel).toContainText("verified local writer");
-    await expect(unavailablePanel).toContainText("No Office output will be created");
-    await expect.poll(async () => page.evaluate(() => (window as TestWindow).__toolboxInvocations ?? [])).toHaveLength(0);
+    await expect(page.getByRole("button", { name: "Choose files to process" })).toBeVisible();
+    await expect(page.getByText("Add a password to selected DOCX and XLSX files. The originals stay untouched.", { exact: true })).toBeVisible();
+    await expect(page.getByText("DOCX and XLSX files only", { exact: true })).toBeVisible();
+    await chooseFixture(page, "/local/document.docx");
+    await page.locator('input[type="password"]').fill("test-password");
+    await expect(page.locator(".workspace-primary-action")).toBeEnabled();
 });
 
 test("every output exposes native file actions and keeps action errors inline", async ({ page }) => {
@@ -1006,12 +1007,14 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
     await page.goto("/");
     await page.getByRole("button", { name: `Open ${utility.title}` }).click();
 
-    const selectedFixturePath = utility.capability.acceptedExtensions.some((extension) => extension.toLowerCase() === ".pdf")
-        ? pdfFixturePath
-        : fixturePath;
+    const selectedFixturePath = utility.id === "office-protect"
+        ? "/local/document.docx"
+        : utility.capability.acceptedExtensions.some((extension) => extension.toLowerCase() === ".pdf")
+            ? pdfFixturePath
+            : fixturePath;
     await chooseFixture(page, selectedFixturePath);
 
-    if (utility.id === "pdf-unlock" || utility.id === "pdf-protect") {
+    if (utility.id === "pdf-unlock" || utility.id === "pdf-protect" || utility.id === "office-protect") {
         await page.locator('input[type="password"]').fill("test-password");
     }
     if (workspaceForTool(utility.id)?.id === "pdf-editor") {

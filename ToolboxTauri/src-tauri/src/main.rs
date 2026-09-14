@@ -30,17 +30,9 @@ async fn protect_pdf(request: PdfRequest) -> Vec<JobOutcome> {
 
 #[tauri::command]
 async fn protect_office(request: PasswordRequest) -> Vec<JobOutcome> {
-    if request.paths.is_empty() {
-        return vec![JobOutcome::failure(
-            std::path::PathBuf::new(),
-            ToolError::invalid_input("Select at least one input file."),
-        )];
-    }
-    request
-        .paths
-        .into_iter()
-        .map(|path| OfficeProcessor::protect(path, &request.password, &request.output_location))
-        .collect()
+    BatchRunner::run("protect_office", request.paths, |path| {
+        OfficeProcessor::protect(path, &request.password, &request.output_location)
+    })
 }
 
 #[tauri::command]
@@ -839,7 +831,7 @@ mod command_tests {
     #[test]
     fn office_protection_command_isolates_docx_xlsx_success_from_legacy_rejections() {
         let root = sandbox("office-protect-command");
-        let extensions = ["docx", "xlsx", "doc", "xls", "ppt", "pptx"];
+        let extensions = ["docx", "doc", "xlsx", "xls", "ppt", "pptx"];
         let inputs = extensions
             .iter()
             .map(|extension| root.join(format!("source.{extension}")))
@@ -865,14 +857,20 @@ mod command_tests {
         }));
 
         assert_eq!(outcomes.len(), extensions.len());
-        for index in 0..2 {
-            assert!(outcomes[index].failure.is_none(), "{}", outcomes[index].failure.clone().unwrap_or_default());
-            assert_eq!(outcomes[index].output_paths.len(), 1);
-            assert!(outcomes[index].output_paths[0].is_file());
-        }
-        for index in 2..extensions.len() {
-            assert!(outcomes[index].output_paths.is_empty());
-            assert!(outcomes[index].failure.as_ref().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::Unavailable)));
+        assert_eq!(
+            outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(),
+            inputs,
+            "BatchRunner must preserve the requested input order",
+        );
+        for (extension, outcome) in extensions.iter().zip(&outcomes) {
+            if matches!(*extension, "docx" | "xlsx") {
+                assert!(outcome.failure.is_none(), "{}", outcome.failure.clone().unwrap_or_default());
+                assert_eq!(outcome.output_paths.len(), 1);
+                assert!(outcome.output_paths[0].is_file());
+            } else {
+                assert!(outcome.output_paths.is_empty());
+                assert!(outcome.failure.as_ref().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput)));
+            }
         }
         for (input, original) in inputs.iter().zip(originals) {
             assert_eq!(std::fs::read(input).unwrap(), original, "Office source was modified: {}", input.display());
