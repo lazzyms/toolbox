@@ -12,8 +12,10 @@ use zip::ZipArchive;
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::ToolError;
+use crate::kit::office_agile::{encrypt_ooxml, verify_ooxml};
 
 const OFFICE_EXTENSIONS: [&str; 6] = ["doc", "docx", "xls", "xlsx", "ppt", "pptx"];
+const PROTECTED_OFFICE_EXTENSIONS: [&str; 2] = ["docx", "xlsx"];
 const CFB_MAGIC: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
 
 pub struct OfficeProcessor;
@@ -21,6 +23,12 @@ pub struct OfficeProcessor;
 impl OfficeProcessor {
     pub fn supports_extension(extension: &str) -> bool {
         OFFICE_EXTENSIONS
+            .iter()
+            .any(|supported| supported.eq_ignore_ascii_case(extension))
+    }
+
+    pub fn supports_protection_extension(extension: &str) -> bool {
+        PROTECTED_OFFICE_EXTENSIONS
             .iter()
             .any(|supported| supported.eq_ignore_ascii_case(extension))
     }
@@ -108,15 +116,129 @@ impl OfficeProcessor {
 
     pub fn protect(
         input_path: PathBuf,
-        _password: &str,
-        _output_location: &OutputLocation,
+        password: &str,
+        output_location: &OutputLocation,
     ) -> JobOutcome {
-        JobOutcome::failure(
-            input_path,
-            ToolError::unavailable(
-                "Office protection is unavailable: this build has no verified local writer for DOC, DOCX, XLS, XLSX, PPT, or PPTX.",
-            ),
-        )
+        if password.is_empty() {
+            return JobOutcome::failure(
+                input_path,
+                ToolError::invalid_input("Enter the document password."),
+            );
+        }
+
+        let Some(extension) = input_path.extension().and_then(|extension| extension.to_str()) else {
+            return JobOutcome::failure(
+                input_path,
+                ToolError::invalid_input("Only DOCX and XLSX files can be protected."),
+            );
+        };
+        let normalized_extension = extension.to_ascii_lowercase();
+        if !Self::supports_protection_extension(&normalized_extension) {
+            if Self::supports_extension(&normalized_extension) {
+                return JobOutcome::failure(
+                    input_path,
+                    ToolError::unavailable(
+                        "Native Office protection supports DOCX and XLSX only; .doc, .xls, .ppt, and .pptx are unsupported.",
+                    ),
+                );
+            }
+            return JobOutcome::failure(
+                input_path,
+                ToolError::invalid_input("Only DOCX and XLSX files can be protected."),
+            );
+        }
+
+        if !input_path.is_file() {
+            return JobOutcome::failure(
+                input_path,
+                ToolError::invalid_input("Input path is not a regular file."),
+            );
+        }
+
+        let raw = match std::fs::read(&input_path) {
+            Ok(raw) => raw,
+            Err(error) => {
+                return JobOutcome::failure(
+                    input_path,
+                    ToolError::processing(format!("Could not read the Office document: {error}")),
+                )
+            }
+        };
+        if !is_ooxml_package(&raw, &normalized_extension) {
+            return JobOutcome::failure(
+                input_path,
+                ToolError::invalid_input(format!(
+                    "The input is not a valid {normalized_extension} OOXML package."
+                )),
+            );
+        }
+
+        let output_path = match OutputNaming::reserve_destination(
+            &input_path,
+            output_location,
+            "-protected",
+            extension,
+        ) {
+            Ok(output) => output,
+            Err(error) => return JobOutcome::failure(input_path, ToolError::processing(format!("Could not reserve the protected document: {error}"))),
+        };
+
+        let encrypted = match encrypt_ooxml(&raw, password) {
+            Ok(encrypted) => encrypted,
+            Err(error) => {
+                return JobOutcome::failure(
+                    input_path,
+                    ToolError::processing(format!("Could not encrypt the Office document: {error}")),
+                )
+            }
+        };
+
+        let mut output = match OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(output_path.path())
+        {
+            Ok(output) => output,
+            Err(error) => {
+                return JobOutcome::failure(
+                    input_path,
+                    ToolError::processing(format!("Could not create the protected document: {error}")),
+                )
+            }
+        };
+        if let Err(error) = output.write_all(&encrypted).and_then(|_| output.flush()) {
+            return JobOutcome::failure(
+                input_path,
+                ToolError::processing(format!("Could not write the protected document: {error}")),
+            );
+        }
+        drop(output);
+
+        let written = match std::fs::read(output_path.path()) {
+            Ok(written) => written,
+            Err(error) => {
+                return JobOutcome::failure(
+                    input_path,
+                    ToolError::processing(format!("Could not read the protected document for verification: {error}")),
+                )
+            }
+        };
+        if let Err(error) = verify_ooxml(&written, password, &raw) {
+            return JobOutcome::failure(
+                input_path,
+                ToolError::processing(format!("The protected Office document could not be verified: {error}")),
+            );
+        }
+
+        match output_path.publish() {
+            Ok(path) => JobOutcome {
+                input_path,
+                output_paths: vec![path],
+                detail: "Office document protected and verified".to_string(),
+                failure: None,
+            },
+            Err(error) => JobOutcome::failure(input_path, ToolError::processing(format!("Could not publish the protected document: {error}"))),
+        }
     }
 }
 
@@ -1131,8 +1253,9 @@ mod tests {
     };
     use crate::kit::common::OutputLocation;
     use crate::kit::contracts::ErrorKind;
+    use crate::kit::office_agile::verify_ooxml;
     use cfb::CompoundFile;
-    use std::io::{Cursor, Write};
+    use std::io::{Cursor, Read, Seek, SeekFrom, Write};
     use std::path::PathBuf;
     use zip::{write::SimpleFileOptions, ZipWriter};
 
@@ -1153,7 +1276,7 @@ mod tests {
         record
     }
 
-    fn minimal_ooxml_package(extension: &str) -> Vec<u8> {
+    pub(crate) fn minimal_ooxml_package(extension: &str) -> Vec<u8> {
         let (main_part, content_types, main_xml, relationship_type):
             (&str, &[u8], &[u8], &str) = match extension {
             "docx" => (
@@ -1299,10 +1422,24 @@ mod tests {
         assert!(OfficeProcessor::supports_extension("PpTx"));
     }
 
-    #[test]
-    fn office_protection_is_explicitly_unavailable_for_all_formats() {
+    fn tamper_encrypted_package(encrypted: Vec<u8>) -> Vec<u8> {
+        let mut compound = CompoundFile::open(Cursor::new(encrypted)).unwrap();
+        {
+            let mut stream = compound.open_stream("/EncryptedPackage").unwrap();
+            stream.seek(SeekFrom::Start(8)).unwrap();
+            let mut byte = [0_u8; 1];
+            stream.read_exact(&mut byte).unwrap();
+            byte[0] ^= 1;
+            stream.seek(SeekFrom::Start(8)).unwrap();
+            stream.write_all(&byte).unwrap();
+        }
+        compound.flush().unwrap();
+        compound.into_inner().into_inner()
+    }
+
+    fn test_directory(label: &str) -> PathBuf {
         let directory = std::env::temp_dir().join(format!(
-            "toolbox-office-protect-{}-{}",
+            "toolbox-office-{label}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -1310,32 +1447,172 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(&directory).unwrap();
+        directory
+    }
 
-        for extension in ["doc", "docx", "xls", "xlsx", "ppt", "pptx"] {
+    #[test]
+    fn protects_docx_and_xlsx_with_exact_agile_round_trip() {
+        let directory = test_directory("protect");
+        let output_directory = directory.join("output");
+        std::fs::create_dir_all(&output_directory).unwrap();
+
+        for extension in ["docx", "xlsx"] {
             let input = directory.join(format!("source.{extension}"));
-            let fixture = if matches!(extension, "docx" | "xlsx" | "pptx") {
+            let fixture = minimal_ooxml_package(extension);
+            std::fs::write(&input, &fixture).unwrap();
+            let original = std::fs::read(&input).unwrap();
+
+            let outcome = OfficeProcessor::protect(
+                input.clone(),
+                "secret",
+                &OutputLocation::CustomFolder(output_directory.clone()),
+            );
+
+            assert!(outcome.failure.is_none(), "{}", outcome.failure.clone().unwrap_or_default());
+            assert_eq!(outcome.detail, "Office document protected and verified");
+            assert_eq!(outcome.output_paths.len(), 1);
+            assert_eq!(
+                outcome.output_paths[0],
+                output_directory.join(format!("source-protected.{extension}"))
+            );
+            let encrypted = std::fs::read(&outcome.output_paths[0]).unwrap();
+            assert_eq!(verify_ooxml(&encrypted, "secret", &original), Ok(()));
+            assert_eq!(std::fs::read(&input).unwrap(), original);
+        }
+
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[test]
+    fn protected_output_collision_gets_a_unique_destination_without_overwriting() {
+        let directory = test_directory("collision");
+        let output_directory = directory.join("output");
+        std::fs::create_dir_all(&output_directory).unwrap();
+        let input = directory.join("source.docx");
+        let original = minimal_ooxml_package("docx");
+        std::fs::write(&input, &original).unwrap();
+
+        let first = OfficeProcessor::protect(
+            input.clone(),
+            "secret",
+            &OutputLocation::CustomFolder(output_directory.clone()),
+        );
+        assert!(first.failure.is_none(), "{}", first.failure.clone().unwrap_or_default());
+        let first_path = first.output_paths[0].clone();
+        let first_bytes = std::fs::read(&first_path).unwrap();
+
+        let second = OfficeProcessor::protect(
+            input.clone(),
+            "secret",
+            &OutputLocation::CustomFolder(output_directory.clone()),
+        );
+        assert!(second.failure.is_none(), "{}", second.failure.clone().unwrap_or_default());
+        let second_path = second.output_paths[0].clone();
+
+        assert_eq!(first_path, output_directory.join("source-protected.docx"));
+        assert_eq!(second_path, output_directory.join("source-protected-1.docx"));
+        assert_ne!(first_path, second_path);
+        assert_eq!(std::fs::read(&first_path).unwrap(), first_bytes);
+        assert_eq!(verify_ooxml(&first_bytes, "secret", &original), Ok(()));
+        assert_eq!(
+            verify_ooxml(&std::fs::read(&second_path).unwrap(), "secret", &original),
+            Ok(())
+        );
+
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[test]
+    fn wrong_password_and_tampering_fail_verification_without_public_output() {
+        let directory = test_directory("verification");
+        let output_directory = directory.join("output");
+        std::fs::create_dir_all(&output_directory).unwrap();
+        let package = minimal_ooxml_package("docx");
+        let encrypted = crate::kit::office_agile::encrypt_ooxml(&package, "secret").unwrap();
+
+        assert!(verify_ooxml(&encrypted, "wrong", &package).is_err());
+        assert!(verify_ooxml(&tamper_encrypted_package(encrypted), "secret", &package).is_err());
+        assert_eq!(std::fs::read_dir(&output_directory).unwrap().count(), 0);
+
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[test]
+    fn protection_rejects_legacy_and_unsupported_formats_without_output() {
+        let directory = test_directory("formats");
+        let output_directory = directory.join("output");
+        std::fs::create_dir_all(&output_directory).unwrap();
+
+        for extension in ["doc", "xls", "ppt", "pptx", "odt"] {
+            let input = directory.join(format!("source.{extension}"));
+            let fixture = if extension == "pptx" {
                 minimal_ooxml_package(extension)
             } else {
-                cfb_with_streams(&[("/fixture", b"Office fixture")])
+                b"Office fixture".to_vec()
             };
             std::fs::write(&input, &fixture).unwrap();
 
             let outcome = OfficeProcessor::protect(
                 input.clone(),
                 "secret",
-                &OutputLocation::AlongsideInput,
+                &OutputLocation::CustomFolder(output_directory.clone()),
             );
 
-            assert!(matches!(
-                outcome.failure.as_ref().map(|error| &error.kind),
-                Some(ErrorKind::Unavailable)
-            ));
+            if extension == "odt" {
+                assert!(matches!(
+                    outcome.failure.as_ref().map(|error| &error.kind),
+                    Some(ErrorKind::InvalidInput)
+                ));
+            } else {
+                assert!(matches!(
+                    outcome.failure.as_ref().map(|error| &error.kind),
+                    Some(ErrorKind::Unavailable)
+                ));
+            }
             assert!(outcome.output_paths.is_empty());
             assert_eq!(std::fs::read(&input).unwrap(), fixture);
-            assert!(!directory.join(format!("source-protected.{extension}")).exists());
+            assert_eq!(std::fs::read_dir(&output_directory).unwrap().count(), 0);
         }
 
-        std::fs::remove_dir_all(directory).unwrap();
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[test]
+    fn protection_validates_password_regular_file_and_package_before_reserving() {
+        let directory = test_directory("validation");
+        let output_directory = directory.join("output");
+        std::fs::create_dir_all(&output_directory).unwrap();
+        let location = OutputLocation::CustomFolder(output_directory.clone());
+
+        let input = directory.join("source.docx");
+        std::fs::write(&input, minimal_ooxml_package("docx")).unwrap();
+        let empty_password = OfficeProcessor::protect(input.clone(), "", &location);
+        assert!(matches!(
+            empty_password.failure.as_ref().map(|error| &error.kind),
+            Some(ErrorKind::InvalidInput)
+        ));
+        assert!(empty_password.output_paths.is_empty());
+
+        let input_directory = directory.join("folder.docx");
+        std::fs::create_dir_all(&input_directory).unwrap();
+        let directory_input = OfficeProcessor::protect(input_directory, "secret", &location);
+        assert!(matches!(
+            directory_input.failure.as_ref().map(|error| &error.kind),
+            Some(ErrorKind::InvalidInput)
+        ));
+        assert!(directory_input.output_paths.is_empty());
+
+        let malformed = directory.join("malformed.xlsx");
+        std::fs::write(&malformed, b"not an OOXML package").unwrap();
+        let malformed_input = OfficeProcessor::protect(malformed, "secret", &location);
+        assert!(matches!(
+            malformed_input.failure.as_ref().map(|error| &error.kind),
+            Some(ErrorKind::InvalidInput)
+        ));
+        assert!(malformed_input.output_paths.is_empty());
+        assert_eq!(std::fs::read_dir(&output_directory).unwrap().count(), 0);
+
+        std::fs::remove_dir_all(&directory).unwrap();
     }
 
     #[test]
@@ -1517,4 +1794,9 @@ mod tests {
     fn native_xor_password_verifier_matches_the_office_binary_vector() {
         assert_eq!(password_verifier_method1(b"VelvetSweatshop"), 0x9a0a);
     }
+}
+
+#[cfg(test)]
+pub(crate) fn test_minimal_ooxml_package(extension: &str) -> Vec<u8> {
+    tests::minimal_ooxml_package(extension)
 }

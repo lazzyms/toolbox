@@ -30,9 +30,17 @@ async fn protect_pdf(request: PdfRequest) -> Vec<JobOutcome> {
 
 #[tauri::command]
 async fn protect_office(request: PasswordRequest) -> Vec<JobOutcome> {
-    BatchRunner::run("protect_office", request.paths, |path| {
-        OfficeProcessor::protect(path, &request.password, &request.output_location)
-    })
+    if request.paths.is_empty() {
+        return vec![JobOutcome::failure(
+            std::path::PathBuf::new(),
+            ToolError::invalid_input("Select at least one input file."),
+        )];
+    }
+    request
+        .paths
+        .into_iter()
+        .map(|path| OfficeProcessor::protect(path, &request.password, &request.output_location))
+        .collect()
 }
 
 #[tauri::command]
@@ -381,6 +389,7 @@ mod command_tests {
     use super::*;
     use crate::kit::common::OutputLocation;
     use crate::kit::images::tools::{CropRequest, GifCreateRequest, GifExtractRequest, ImageEdit, ImageEditExportRequest, ImageEditPlan, ImageEditPreviewRequest, IconSetRequest, MetadataRequest, ResizeRequest, RotateRequest, TiffRequest, ToneRequest, WatermarkRequest};
+    use crate::kit::office::test_minimal_ooxml_package;
     use crate::kit::pdf::editor::{AddPdfPagesRequest, CropPdfRequest, EditPdfRequest, OrganizePdfRequest, PageScope, PdfEditMode, PdfEditOperation, PdfEditSessionPlan, PdfEditSessionRequest, PdfOverlay, PdfOverlayPosition, PdfRect, RotatePage, SignPdfRequest};
     use crate::kit::pdf::remaining::{CompressPdfRequest, ImagesToPdfRequest, MergePdfRequest, PageOverlayRequest, PageSelectionRequest, PdfToImagesRequest, PdfToTextRequest};
     use crate::kit::vision::VisionRequest;
@@ -828,15 +837,20 @@ mod command_tests {
     }
 
     #[test]
-    fn office_protection_command_reports_unavailable_for_all_six_formats_without_output() {
-        let root = sandbox("office-protect-unavailable");
-        let extensions = ["doc", "docx", "xls", "xlsx", "ppt", "pptx"];
+    fn office_protection_command_isolates_docx_xlsx_success_from_legacy_rejections() {
+        let root = sandbox("office-protect-command");
+        let extensions = ["docx", "xlsx", "doc", "xls", "ppt", "pptx"];
         let inputs = extensions
             .iter()
             .map(|extension| root.join(format!("source.{extension}")))
             .collect::<Vec<_>>();
-        for input in &inputs {
-            std::fs::write(input, b"Office fixture").unwrap();
+        for (extension, input) in extensions.iter().zip(&inputs) {
+            let fixture = if matches!(*extension, "docx" | "xlsx") {
+                test_minimal_ooxml_package(extension)
+            } else {
+                b"Legacy Office fixture".to_vec()
+            };
+            std::fs::write(input, fixture).unwrap();
         }
         let originals = inputs
             .iter()
@@ -851,14 +865,19 @@ mod command_tests {
         }));
 
         assert_eq!(outcomes.len(), extensions.len());
-        assert!(outcomes.iter().all(|outcome| {
-            outcome.output_paths.is_empty()
-                && outcome.failure.as_ref().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::Unavailable))
-        }));
+        for index in 0..2 {
+            assert!(outcomes[index].failure.is_none(), "{}", outcomes[index].failure.clone().unwrap_or_default());
+            assert_eq!(outcomes[index].output_paths.len(), 1);
+            assert!(outcomes[index].output_paths[0].is_file());
+        }
+        for index in 2..extensions.len() {
+            assert!(outcomes[index].output_paths.is_empty());
+            assert!(outcomes[index].failure.as_ref().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::Unavailable)));
+        }
         for (input, original) in inputs.iter().zip(originals) {
             assert_eq!(std::fs::read(input).unwrap(), original, "Office source was modified: {}", input.display());
         }
-        assert_eq!(std::fs::read_dir(root.join("output")).unwrap().count(), 0);
+        assert_eq!(std::fs::read_dir(root.join("output")).unwrap().count(), 2);
 
         let _ = std::fs::remove_dir_all(root);
     }
