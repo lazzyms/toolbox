@@ -520,8 +520,12 @@ mod tests {
         let original = fs::read(&input).unwrap();
         fs::create_dir_all(&output_root).unwrap();
         let engine = fake_ocr_engine(false);
+        let tessdata = path("selected-eng.traineddata");
+        fs::write(&tessdata, b"fake tessdata").unwrap();
         let old_engine = std::env::var_os("TOOLBOX_TESSERACT_PATH");
+        let old_tessdata = std::env::var_os("TOOLBOX_TESSDATA_PATH");
         std::env::set_var("TOOLBOX_TESSERACT_PATH", &engine);
+        std::env::set_var("TOOLBOX_TESSDATA_PATH", &tessdata);
 
         let outcome = ocr_pdf(&VisionRequest {
             paths: vec![input.clone()],
@@ -536,7 +540,12 @@ mod tests {
             Some(value) => std::env::set_var("TOOLBOX_TESSERACT_PATH", value),
             None => std::env::remove_var("TOOLBOX_TESSERACT_PATH"),
         }
+        match old_tessdata {
+            Some(value) => std::env::set_var("TOOLBOX_TESSDATA_PATH", value),
+            None => std::env::remove_var("TOOLBOX_TESSDATA_PATH"),
+        }
         let _ = fs::remove_file(&engine);
+        let _ = fs::remove_file(&tessdata);
         let _ = fs::remove_file(&input);
         let _ = fs::remove_dir_all(&output_root);
 
@@ -556,9 +565,13 @@ mod tests {
         let original = fs::read(&input).unwrap();
         fs::create_dir_all(&output_root).unwrap();
         let engine = fake_ocr_engine(true);
+        let tessdata = path("failed-eng.traineddata");
+        fs::write(&tessdata, b"fake tessdata").unwrap();
         let before_workspaces = ocr_workspaces();
         let old_engine = std::env::var_os("TOOLBOX_TESSERACT_PATH");
+        let old_tessdata = std::env::var_os("TOOLBOX_TESSDATA_PATH");
         std::env::set_var("TOOLBOX_TESSERACT_PATH", &engine);
+        std::env::set_var("TOOLBOX_TESSDATA_PATH", &tessdata);
 
         let outcome = ocr_pdf(&VisionRequest {
             paths: vec![input.clone()],
@@ -573,7 +586,12 @@ mod tests {
             Some(value) => std::env::set_var("TOOLBOX_TESSERACT_PATH", value),
             None => std::env::remove_var("TOOLBOX_TESSERACT_PATH"),
         }
+        match old_tessdata {
+            Some(value) => std::env::set_var("TOOLBOX_TESSDATA_PATH", value),
+            None => std::env::remove_var("TOOLBOX_TESSDATA_PATH"),
+        }
         let _ = fs::remove_file(&engine);
+        let _ = fs::remove_file(&tessdata);
         let _ = fs::remove_file(&input);
         let _ = fs::remove_dir_all(&output_root);
 
