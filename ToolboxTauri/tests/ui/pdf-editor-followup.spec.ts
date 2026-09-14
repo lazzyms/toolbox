@@ -181,6 +181,19 @@ test('signature supports a draggable local image and a typed font-backed box', a
   expect(scene.pages[0].objects[1]).toMatchObject({ signatureMode: 'text', text: 'A. Local', fontFamily: 'Times-Italic' });
 });
 
+test('typed signature property keeps focus for every character', async ({ page }) => {
+  await openEditor(page);
+  await page.getByRole('button', { name: 'Signature', exact: true }).click();
+  await dragOnCanvas(page, .3, .3, .22, .1);
+  const input = page.getByRole('textbox', { name: 'Signature text' });
+  await input.fill('');
+  for (const character of 'A. Local') {
+    await input.press(character === ' ' ? 'Space' : character);
+    await expect(input).toBeFocused();
+  }
+  await expect(input).toHaveValue('A. Local');
+});
+
 test('watermarks expose move and resize handles and export resized geometry', async ({ page }) => {
   await openEditor(page);
   await page.getByRole('button', { name: 'Watermark', exact: true }).click();
