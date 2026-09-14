@@ -15,6 +15,8 @@ const KEY_DATA_SALT_SIZE: usize = 16;
 const PACKAGE_KEY_SIZE: usize = 32;
 const SEGMENT_SIZE: usize = 4096;
 const SPIN_COUNT: u32 = 100_000;
+const AGILE_ENCRYPTION_INFO_VERSION: [u8; 4] = [0x04, 0x00, 0x04, 0x00];
+const AGILE_ENCRYPTION_INFO_FLAGS: u32 = 0x40;
 
 const VERIFIER_HASH_INPUT_BLOCK_KEY: [u8; 8] = [
     0xFE, 0xA7, 0xD2, 0x76, 0x3B, 0x4B, 0x9E, 0x79,
@@ -90,8 +92,8 @@ pub(crate) fn encrypt_ooxml(package: &[u8], password: &str) -> Result<Vec<u8>, S
         &encrypted_key_value,
     );
     let mut encryption_info_stream = Vec::with_capacity(8 + encryption_info.len());
-    encryption_info_stream.extend_from_slice(&[0x04, 0x00, 0x04, 0x00]);
-    encryption_info_stream.extend_from_slice(&0x40_u32.to_le_bytes());
+    encryption_info_stream.extend_from_slice(&AGILE_ENCRYPTION_INFO_VERSION);
+    encryption_info_stream.extend_from_slice(&AGILE_ENCRYPTION_INFO_FLAGS.to_le_bytes());
     encryption_info_stream.extend_from_slice(encryption_info.as_bytes());
 
     let mut compound = CompoundFile::create(Cursor::new(Vec::new()))
@@ -134,11 +136,21 @@ pub(crate) fn encrypt_ooxml(package: &[u8], password: &str) -> Result<Vec<u8>, S
     Ok(compound.into_inner().into_inner())
 }
 
-pub(crate) fn verify_ooxml(
-    encrypted: &[u8],
-    password: &str,
-    expected_package: &[u8],
-) -> Result<(), String> {
+pub(crate) fn is_agile_ooxml(encrypted: &[u8]) -> Result<bool, String> {
+    let mut compound = CompoundFile::open(Cursor::new(encrypted.to_vec()))
+        .map_err(|error| format!("Could not open the encrypted Office container: {error}"))?;
+    if !compound.is_stream("/EncryptionInfo") {
+        return Ok(false);
+    }
+
+    let encryption_info = read_compound_stream(&mut compound, "/EncryptionInfo")?;
+    if encryption_info.len() < 8 {
+        return Err("The EncryptionInfo stream is incomplete.".to_string());
+    }
+    Ok(is_agile_encryption_info(&encryption_info))
+}
+
+pub(crate) fn decrypt_ooxml(encrypted: &[u8], password: &str) -> Result<Vec<u8>, String> {
     let mut compound = CompoundFile::open(Cursor::new(encrypted.to_vec()))
         .map_err(|error| format!("Could not open the encrypted Office container: {error}"))?;
     let encryption_info = read_compound_stream(&mut compound, "/EncryptionInfo")?;
@@ -146,7 +158,7 @@ pub(crate) fn verify_ooxml(
     let parameters = parse_encryption_info(&encryption_info)?;
 
     let password_hash = iterated_password_hash(&parameters.password_salt, password);
-    let package_key = decrypt_aes_cbc(
+    let package_key: [u8; PACKAGE_KEY_SIZE] = decrypt_aes_cbc(
         &derive_key(&password_hash, &ENCRYPTED_KEY_VALUE_BLOCK_KEY),
         &parameters.password_salt,
         &parameters.encrypted_key_value,
@@ -175,23 +187,25 @@ pub(crate) fn verify_ooxml(
     let package_length = u32::from_le_bytes(
         encrypted_package[..4]
             .try_into()
-            .expect("the package length header is four bytes"),
+            .map_err(|_| "The EncryptedPackage length header is invalid.".to_string())?,
     );
     if encrypted_package[4..8] != [0_u8; 4] {
         return Err("The EncryptedPackage stream has an invalid reserved header.".to_string());
     }
-    if usize::try_from(package_length).ok() != Some(expected_package.len()) {
-        return Err("The declared OOXML package length did not match the expected package.".to_string());
+    let package_length = usize::try_from(package_length)
+        .map_err(|_| "The OOXML package length is not supported on this platform.".to_string())?;
+    let expected_encrypted_length = encrypted_package_length(package_length)?;
+    if encrypted_package.len() != expected_encrypted_length {
+        return Err("The EncryptedPackage stream has an invalid ciphertext length.".to_string());
     }
 
-    let mut plaintext = Vec::with_capacity(expected_package.len());
-    let mut remaining = usize::try_from(package_length)
-        .map_err(|_| "The OOXML package length is not supported on this platform.".to_string())?;
+    let mut plaintext = Vec::with_capacity(package_length);
+    let mut remaining = package_length;
     let mut encrypted_offset = 8usize;
     let mut segment_index = 0_u32;
     while remaining > 0 {
         let segment_length = remaining.min(SEGMENT_SIZE);
-        let ciphertext_length = (segment_length + BLOCK_SIZE - 1) / BLOCK_SIZE * BLOCK_SIZE;
+        let ciphertext_length = padded_segment_length(segment_length)?;
         let ciphertext_end = encrypted_offset
             .checked_add(ciphertext_length)
             .ok_or_else(|| "The EncryptedPackage stream length overflowed.".to_string())?;
@@ -204,7 +218,7 @@ pub(crate) fn verify_ooxml(
         iv_input.extend_from_slice(&segment_index.to_le_bytes());
         let segment_iv: [u8; BLOCK_SIZE] = Sha512::digest(iv_input)[..BLOCK_SIZE]
             .try_into()
-            .expect("SHA-512 has at least 16 bytes");
+            .map_err(|_| "The Agile segment IV has an invalid length.".to_string())?;
         let decrypted_segment = decrypt_aes_cbc(&package_key, &segment_iv, ciphertext)?;
         plaintext.extend_from_slice(&decrypted_segment[..segment_length]);
 
@@ -214,11 +228,8 @@ pub(crate) fn verify_ooxml(
             .checked_add(1)
             .ok_or_else(|| "The OOXML package has too many encryption segments.".to_string())?;
     }
-    if encrypted_offset != encrypted_package.len() {
-        return Err("The EncryptedPackage stream has an invalid ciphertext length.".to_string());
-    }
 
-    let integrity_key = decrypt_aes_cbc(
+    let integrity_key: [u8; KEY_DATA_SALT_SIZE] = decrypt_aes_cbc(
         &package_key,
         &derive_iv(&parameters.key_data_salt, &INTEGRITY_KEY_BLOCK_KEY),
         &parameters.encrypted_hmac_key,
@@ -235,10 +246,53 @@ pub(crate) fn verify_ooxml(
         return Err("The Agile package integrity HMAC did not match.".to_string());
     }
 
+    Ok(plaintext)
+}
+
+pub(crate) fn verify_ooxml(
+    encrypted: &[u8],
+    password: &str,
+    expected_package: &[u8],
+) -> Result<(), String> {
+    let plaintext = decrypt_ooxml(encrypted, password)?;
+
     if plaintext != expected_package {
         return Err("The decrypted OOXML package did not match the expected package.".to_string());
     }
     Ok(())
+}
+
+fn is_agile_encryption_info(encryption_info: &[u8]) -> bool {
+    let flags = AGILE_ENCRYPTION_INFO_FLAGS.to_le_bytes();
+    encryption_info.get(..4) == Some(AGILE_ENCRYPTION_INFO_VERSION.as_slice())
+        && encryption_info.get(4..8) == Some(flags.as_slice())
+}
+
+fn encrypted_package_length(package_length: usize) -> Result<usize, String> {
+    let mut encrypted_length = 8usize;
+    let mut remaining = package_length;
+    let mut segment_index = 0_u32;
+    while remaining > 0 {
+        let segment_length = remaining.min(SEGMENT_SIZE);
+        encrypted_length = encrypted_length
+            .checked_add(padded_segment_length(segment_length)?)
+            .ok_or_else(|| "The EncryptedPackage stream length overflowed.".to_string())?;
+        remaining -= segment_length;
+        segment_index = segment_index
+            .checked_add(1)
+            .ok_or_else(|| "The OOXML package has too many encryption segments.".to_string())?;
+    }
+    Ok(encrypted_length)
+}
+
+fn padded_segment_length(segment_length: usize) -> Result<usize, String> {
+    let rounded_length = segment_length
+        .checked_add(BLOCK_SIZE - 1)
+        .ok_or_else(|| "The EncryptedPackage stream length overflowed.".to_string())?
+        / BLOCK_SIZE;
+    rounded_length
+        .checked_mul(BLOCK_SIZE)
+        .ok_or_else(|| "The EncryptedPackage stream length overflowed.".to_string())
 }
 
 fn random_bytes<const N: usize>() -> Result<[u8; N], String> {
