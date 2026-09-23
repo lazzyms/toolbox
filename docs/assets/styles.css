@@ -710,7 +710,9 @@ h2 { font-size: clamp(2rem, 4vw, 3.6rem); letter-spacing: -.06em; line-height: 1
 .cta { margin-top: 2.25rem; }
 .btn-lg { height: 3.25rem; padding-inline: 1.5rem; border-radius: 999px; font-size: .9375rem; }
 .btn-default { background: var(--brand); color: white; box-shadow: 0 10px 25px color-mix(in oklab, var(--brand) 28%, transparent); }
-.btn-default:hover { background: var(--brand-deep); }
+.btn-default:hover, .btn-default:focus-visible { background: var(--brand-deep); }
+[data-theme="dark"] .btn-default { background: #2f7bff; color: #071027; }
+[data-theme="dark"] .btn-default:hover, [data-theme="dark"] .btn-default:focus-visible { background: #1654d8; color: white; }
 .btn-outline { background: color-mix(in oklab, var(--card) 72%, transparent); backdrop-filter: blur(10px); border-color: var(--border-strong); }
 .cta-note, .dl-fallback { font-size: .75rem; }
 

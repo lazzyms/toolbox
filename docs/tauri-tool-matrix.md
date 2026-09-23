@@ -1,12 +1,15 @@
 # Tauri tool matrix
 
 The [Tauri registry](../ToolboxTauri/src/registry/index.ts) defines the catalog,
-category, display order, command, and availability for `main`. It currently
-includes document, PDF, and image utilities. OCR PDF, Blur Faces, and Remove
-Background are marked unavailable because their offline resources are not bundled.
+category, display order, command, and availability for `main`. It includes
+document, PDF, and image utilities. On `main`, OCR PDF, Blur Faces, and Remove
+Background are implemented with bundled offline resources. This matrix describes
+the source tree; a published release may predate changes on `main`.
 
 `implemented` records the application status. It does not establish full parity
-with every requirement in the [historical parity specification](tauri-parity-spec.md).
+with every requirement in the
+[historical parity specification](tauri-parity-spec.md) or confirm that a tagged
+release includes that implementation.
 The [verification reference](parity-verification-harness.md) describes the checks
 that exist today.
 
@@ -25,7 +28,7 @@ that exist today.
 | pdf-split | PDF | implemented | split_pdf | pdf-split |
 | pdf-image-extract | PDF | implemented | extract_pdf_images | pdf-image-extract |
 | pdf-sign | PDF | implemented | sign_pdf | pdf-sign |
-| pdf-ocr | PDF | unavailable | ocr_pdf | pdf-ocr |
+| pdf-ocr | PDF | implemented | ocr_pdf | pdf-ocr |
 | pdf-remove-pages | PDF | implemented | remove_pdf_pages | pdf-remove-pages |
 | pdf-extract-pages | PDF | implemented | extract_pdf_pages | pdf-extract-pages |
 | pdf-organize | PDF | implemented | organize_pdf | pdf-organize |
@@ -42,16 +45,15 @@ that exist today.
 | image-metadata | Images | implemented | image_metadata | image-metadata |
 | image-tone | Images | implemented | adjust_image_tone | image-tone |
 | tiff-pages | Images | implemented | process_tiff_pages | tiff-pages |
-| image-blur-faces | Images | unavailable | blur_faces | image-blur-faces |
-| image-remove-bg | Images | unavailable | remove_image_background | image-remove-bg |
+| image-blur-faces | Images | implemented | blur_faces | image-blur-faces |
+| image-remove-bg | Images | implemented | remove_image_background | image-remove-bg |
 
 The `pdf-unlock` ID remains stable for saved navigation. Its current title is
 **Remove Password**, and it handles PDF, Word, Excel, and PowerPoint documents.
 **Edit PDF** adds text, highlights, shapes, and notes through `edit_pdf`.
 
-The three unavailable tools display an explanation before file selection.
-The [vision adapter reference](tauri-vision-engines.md) describes the native
-commands and their current limitations.
+These offline tools use the bundled adapters described in the
+[vision adapter reference](tauri-vision-engines.md).
 
 The `Verification` column contains registry identifiers, not proof that a
 matching fixture or recipe passed. `npm run check:matrix`, run from

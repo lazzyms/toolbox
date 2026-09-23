@@ -1,9 +1,9 @@
 # Offline vision engines
 
-OCR PDF, Blur Faces, and Remove Background are present in the native command
-surface but marked `unavailable` in the current registry. The React view stops at
-that registry state, so it does not select or process files for these features.
-The current release does not bundle their offline resources.
+On `main`, OCR PDF, Blur Faces, and Remove Background are registered as
+`implemented`; the release build stages their offline adapters and resources.
+The latest published application release may predate this source change, so
+check its version before claiming that a downloadable build includes these tools.
 
 | Feature | Adapter variable | Default executable | Output |
 | --- | --- | --- | --- |
@@ -12,9 +12,10 @@ The current release does not bundle their offline resources.
 | Background removal | `TOOLBOX_BACKGROUND_REMOVAL_PATH` | `toolbox-background-removal` | `-cutout.png` |
 
 Adapters receive the input path followed by the output path, except OCR, which
-receives the input path and writes text to `stdout`. A future release bundle must
-ship signed adapters and their model assets for each supported platform. The
-application does not fall back to a network service or create an identity copy.
+receives the input path and writes text to `stdout`. The release build stages the
+vision adapter, Tesseract, and their model/data assets for supported platform
+targets. The application does not fall back to a network service or create an
+identity copy.
 
 The native resolver checks the bundled `vision/manifest.json` first. Development
 overrides use the variables in the table, and PATH lookup is the final fallback
