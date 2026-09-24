@@ -5,6 +5,14 @@
   const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
   const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
+  const localDemo = $('#product-demo-local');
+  const hostedDemo = $('#product-demo-youtube');
+  if (location.protocol === 'https:' && localDemo && hostedDemo) {
+    hostedDemo.src = hostedDemo.dataset.src;
+    hostedDemo.hidden = false;
+    localDemo.hidden = true;
+  }
+
   /* ───────────────────────── appearance ───────────────────────── */
 
   const root = document.documentElement;
