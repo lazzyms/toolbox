@@ -229,3 +229,96 @@ jobs:
           gh pr merge "$pr_url" --squash \
             --subject "Publish Tauri $VERSION update manifest [skip ci]" \
             --body "Publishes the signed updater manifest for Tauri $VERSION."
+
+  product-demo:
+    name: Render product demo for the release
+    needs: [version, build, publish]
+    runs-on: macos-26
+    env:
+      VERSION: ${{ needs.version.outputs.value }}
+      GH_TOKEN: ${{ github.token }}
+      HYPERFRAMES_NO_TELEMETRY: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.version.outputs.source_sha }}
+      - uses: actions/download-artifact@v7
+        with:
+          name: toolbox-macos-aarch64
+          path: ${{ runner.temp }}/product-demo-release
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install video encoder
+        run: |
+          if ! command -v ffmpeg >/dev/null 2>&1; then brew install ffmpeg; fi
+      - name: Install and open the released macOS app
+        run: |
+          set -euo pipefail
+          app_dir="$RUNNER_TEMP/product-demo-install"
+          mkdir -p "$app_dir"
+          tar -xzf "$RUNNER_TEMP/product-demo-release/Toolbox-macos-aarch64.app.tar.gz" -C "$app_dir"
+          app_path="$app_dir/Toolbox.app"
+          test -d "$app_path"
+          codesign --verify --deep --strict "$app_path"
+          echo "TOOLBOX_DEMO_APP=$app_path" >> "$GITHUB_ENV"
+          open -n "$app_path"
+      - name: Capture a real PDF edit in Toolbox
+        run: |
+          set -euo pipefail
+          demo_dir="$RUNNER_TEMP/product-demo"
+          mkdir -p "$demo_dir"
+          input_pdf="$demo_dir/toolbox-product-demo-input.pdf"
+          output_pdf="$demo_dir/toolbox-product-demo-input-edited.pdf"
+          node scripts/product-demo/create-demo-pdf.mjs "$input_pdf"
+          input_sha="$(shasum -a 256 "$input_pdf" | awk '{print $1}')"
+
+          captured=false
+          for attempt in $(seq 1 30); do
+            if node scripts/product-demo/capture-window.mjs \
+              --app "$TOOLBOX_DEMO_APP" \
+              --output "$demo_dir/toolbox-demo-home.png"; then
+              captured=true
+              break
+            fi
+            sleep 1
+          done
+          test "$captured" = true
+
+          osascript scripts/product-demo/use-toolbox.applescript "$input_pdf"
+          for attempt in $(seq 1 30); do
+            if test -s "$output_pdf"; then break; fi
+            sleep 1
+          done
+          test -s "$output_pdf"
+          test "$input_sha" = "$(shasum -a 256 "$input_pdf" | awk '{print $1}')"
+          node scripts/product-demo/flatten-screenshot.mjs \
+            "$demo_dir/toolbox-demo-home.png" \
+            "$demo_dir/toolbox-demo-home.jpg"
+
+          node scripts/product-demo/capture-window.mjs \
+            --app "$TOOLBOX_DEMO_APP" \
+            --output "$demo_dir/toolbox-demo-edit-success.png"
+          node scripts/product-demo/flatten-screenshot.mjs \
+            "$demo_dir/toolbox-demo-edit-success.png" \
+            "$demo_dir/toolbox-demo-edit-success.jpg"
+      - name: Render and verify the product demo
+        run: |
+          node scripts/product-demo/render-demo.mjs \
+            --home "$RUNNER_TEMP/product-demo/toolbox-demo-home.jpg" \
+            --edit "$RUNNER_TEMP/product-demo/toolbox-demo-edit-success.jpg" \
+            --output "$RUNNER_TEMP/Toolbox-product-demo.mp4" \
+            --poster "$RUNNER_TEMP/Toolbox-product-demo-poster.jpg"
+      - name: Attach video and license notice to the release
+        run: |
+          gh release upload "tauri-v$VERSION" \
+            "$RUNNER_TEMP/Toolbox-product-demo.mp4" \
+            "$RUNNER_TEMP/Toolbox-product-demo-poster.jpg" \
+            docs/assets/toolbox-product-demo-attribution.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
+          {
+            echo "## Product demo video"
+            echo "Rendered from the macOS app archive published with tauri-v$VERSION."
+            echo "Attached: Toolbox-product-demo.mp4 and its poster and music attribution."
+          } >> "$GITHUB_STEP_SUMMARY"
