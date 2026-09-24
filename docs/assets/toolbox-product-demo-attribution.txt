@@ -1,0 +1,14 @@
+Toolbox product demo music
+
+Track: “Close Up” by Michael Ramir C.
+Source: https://mixkit.co/free-stock-music/tag/technology/
+License: Mixkit Stock Music Free License
+License terms: https://mixkit.co/license/modal/musicFree/
+
+The video uses a 20.2-second excerpt with fades and low background level.
+The source MP3 is downloaded for rendering, checksum-verified, and is not
+redistributed as a standalone audio file. Mixkit's license does not require
+attribution; this notice is included for clarity.
+
+UI click and reveal sound effects: Kenney Interface Sounds, CC0.
+Source: https://kenney.nl/assets/interface-sounds

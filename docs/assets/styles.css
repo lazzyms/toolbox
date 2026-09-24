@@ -466,6 +466,17 @@ details .accordion-content p { font-size: .875rem; color: var(--muted-foreground
 .screenshots-heading { max-width: 42rem; }
 .screenshots-heading h2 { margin-top: .75rem; }
 .screenshots-heading > p:last-child { margin-top: 1rem; color: var(--muted-foreground); font-size: 1rem; }
+.product-demo { margin: 2.5rem 0 0; }
+.product-demo-frame {
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 1.25rem;
+  background: #111;
+  box-shadow: var(--shadow-lg), 0 0 0 1px color-mix(in srgb, var(--foreground) 4%, transparent);
+}
+.product-demo-video { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; background: #111; }
+.product-demo figcaption { margin-top: .875rem; color: var(--muted-foreground); font-size: .8125rem; line-height: 1.6; }
+.product-demo figcaption a { text-decoration: underline; text-underline-offset: 3px; }
 .screenshot-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.25rem; margin-top: 2.5rem; }
 .screenshot-card { margin: 0; }
 .screenshot-frame {
