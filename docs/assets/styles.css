@@ -474,7 +474,8 @@ details .accordion-content p { font-size: .875rem; color: var(--muted-foreground
   background: #111;
   box-shadow: var(--shadow-lg), 0 0 0 1px color-mix(in srgb, var(--foreground) 4%, transparent);
 }
-.product-demo-video { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; background: #111; }
+.product-demo-video { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; border: 0; background: #111; }
+.product-demo-video[hidden] { display: none; }
 .product-demo figcaption { margin-top: .875rem; color: var(--muted-foreground); font-size: .8125rem; line-height: 1.6; }
 .product-demo figcaption a { text-decoration: underline; text-underline-offset: 3px; }
 .screenshot-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.25rem; margin-top: 2.5rem; }

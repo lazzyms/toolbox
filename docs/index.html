@@ -194,6 +194,7 @@
       <figure class="product-demo">
         <div class="product-demo-frame">
           <video
+            id="product-demo-local"
             class="product-demo-video"
             controls
             playsinline
@@ -206,9 +207,22 @@
             <source src="assets/toolbox-product-demo.mp4" type="video/mp4">
             Your browser does not support embedded video. <a href="assets/toolbox-product-demo.mp4">Open the Toolbox product demo</a>.
           </video>
+          <iframe
+            id="product-demo-youtube"
+            class="product-demo-video"
+            width="1920"
+            height="1080"
+            data-src="https://www.youtube-nocookie.com/embed/NEoblimFvug"
+            title="Toolbox demo: edit a fictional PDF and save a separate copy on this device"
+            loading="lazy"
+            referrerpolicy="strict-origin-when-cross-origin"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+            allowfullscreen
+            hidden
+          ></iframe>
         </div>
         <figcaption>
-          A real PDF edit in the installed macOS app, using a fictional sample file.
+          A real PDF edit in the installed macOS app, using a fictional sample file. <a href="https://youtu.be/NEoblimFvug" rel="noopener">Watch on YouTube</a>.
           Music: <a href="https://mixkit.co/free-stock-music/tag/technology/">“Close Up” by Michael Ramir C.</a>, under the
           <a href="https://mixkit.co/license/modal/musicFree/">Mixkit Stock Music Free License</a>.
         </figcaption>
