@@ -50,6 +50,11 @@ jobs:
         working-directory: ToolboxTauri
         run: |
           choco install qpdf tesseract -y
+          $tesseractDirectory = Join-Path $env:ProgramFiles 'Tesseract-OCR'
+          if (-not (Test-Path (Join-Path $tesseractDirectory 'tesseract.exe'))) {
+            throw 'Could not locate the installed Tesseract executable'
+          }
+          $tesseractDirectory | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           $popplerVersion = '26.02.0-0'
           $popplerSha256 = '993e4a94376ed712fafc7058d724ea0b943d118bbd2305cd9ed55174eb85cda5'
           $popplerArchive = Join-Path $env:RUNNER_TEMP "poppler-$popplerVersion.zip"
