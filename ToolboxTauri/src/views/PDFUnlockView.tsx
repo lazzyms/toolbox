@@ -26,6 +26,7 @@ export const PDFUnlockView = ({ utility }: { utility: ToolDefinition }) => {
 
                     <button
                         disabled={loading || files.length === 0 || !password}
+                        aria-label="Remove Password from selected files"
                         onClick={run}
                         className="bg-blue-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors"
                     >

@@ -56,7 +56,7 @@ on enterTextInField(processRef, labelText, fieldText)
 				try
 					set candidateValue to value of candidate as text
 				end try
-				if candidateRole is "AXTextField" and (candidateName contains labelText or candidateDescription contains labelText or candidateValue contains labelText) then
+				if (candidateRole is "AXTextField" or candidateRole is "AXSecureTextField") and (candidateName contains labelText or candidateDescription contains labelText or candidateValue contains labelText) then
 					perform action "AXPress" of candidate
 					keystroke "a" using {command down}
 					keystroke fieldText
@@ -69,22 +69,18 @@ on enterTextInField(processRef, labelText, fieldText)
 end enterTextInField
 
 on run argv
-	if (count of argv) is not 2 then error "Pass the Toolbox process ID and absolute path to the demo PDF"
+	if (count of argv) is not 3 then error "Pass the Toolbox process ID, demo input directory, and shared PDF password"
 	set processID to item 1 of argv as integer
-	set fixturePath to item 2 of argv
+	set fixtureDirectory to item 2 of argv
+	set demoPassword to item 3 of argv
 
 	tell application "System Events"
 		set toolboxProcess to first application process whose unix id is processID
 		set frontmost of toolboxProcess to true
 		delay 3
 
-		if my enterTextInField(toolboxProcess, "Search tools", "Edit PDF") is false then
-			error "Could not search the Toolbox library"
-		end if
-		delay 0.4
-
-		if my findAndPress(toolboxProcess, "AXButton", "Edit PDF") is false then
-			error "Could not open Edit PDF from the Toolbox library"
+		if my findAndPress(toolboxProcess, "AXButton", "Remove Password") is false then
+			error "Could not open Remove Password from Quick Access"
 		end if
 		delay 1
 
@@ -95,19 +91,22 @@ on run argv
 
 		keystroke "g" using {command down, shift down}
 		delay 0.3
-		keystroke fixturePath
+		keystroke fixtureDirectory
 		key code 36
-		delay 0.5
+		delay 0.6
+		key code 125
+		delay 0.15
+		key code 125 using {shift down}
+		delay 0.15
+		key code 125 using {shift down}
+		delay 0.15
 		key code 36
 		delay 1
 
-		if my enterTextInField(toolboxProcess, "Edit text", "Files stay on this device.") is false then
-			error "Could not enter the PDF annotation text"
-		end if
-		delay 0.2
-
-		if my findAndPress(toolboxProcess, "AXButton", "Edit PDF") is false then
-			error "Could not run the PDF edit"
+		if my enterTextInField(toolboxProcess, "Enter password", demoPassword) is false then
+			if my enterTextInField(toolboxProcess, "File Password", demoPassword) is false then
+				error "Could not enter the shared PDF password"
+			end if
 		end if
 	end tell
 end run

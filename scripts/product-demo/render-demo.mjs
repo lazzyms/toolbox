@@ -10,7 +10,7 @@ function parseArgs(args) {
   const options = {};
   for (let index = 0; index < args.length; index += 1) {
     const name = args[index];
-    if (!["--home", "--edit", "--output", "--poster", "--project-dir"].includes(name)) {
+    if (!["--home", "--edit", "--output", "--poster", "--poster-at", "--project-dir", "--template"].includes(name)) {
       throw new Error(`Unexpected argument: ${name}`);
     }
     const value = args[index + 1];
@@ -30,6 +30,10 @@ function parseArgs(args) {
   }
   if (extname(options.output).toLowerCase() !== ".mp4") {
     throw new Error("The video output must use the .mp4 extension");
+  }
+  options.posterAt = Number(options.posterAt ?? 5.6);
+  if (!Number.isFinite(options.posterAt) || options.posterAt < 0) {
+    throw new Error("--poster-at must be a non-negative number of seconds");
   }
   return options;
 }
@@ -68,6 +72,7 @@ try {
       homeScreenshot: options.home,
       editScreenshot: options.edit,
       projectDir: projectPath,
+      templateDir: options.template,
     });
   }
 
@@ -101,7 +106,7 @@ try {
     "error",
     "-y",
     "-ss",
-    "5.6",
+    String(options.posterAt),
     "-i",
     outputPath,
     "-frames:v",

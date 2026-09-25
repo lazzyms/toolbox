@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { access, mkdir, stat } from "node:fs/promises";
+import { access, mkdir, realpath, stat } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
 function parseArgs(args) {
@@ -25,7 +25,7 @@ function parseArgs(args) {
 }
 
 const options = parseArgs(process.argv.slice(2));
-const appPath = resolve(options.app);
+const appPath = await realpath(resolve(options.app));
 const executablePath = `${appPath}/Contents/MacOS/toolbox`;
 const outputPath = resolve(options.output);
 try {
@@ -54,8 +54,7 @@ function run(argv) {
     const title = window.objectForKey("kCGWindowName")?.js;
     const layer = Number(window.objectForKey("kCGWindowLayer")?.js);
     if (ownerPid === expectedPid && layer === 0 && title === "Toolbox") {
-      console.log(String(window.objectForKey("kCGWindowNumber").js));
-      return;
+      return String(window.objectForKey("kCGWindowNumber").js);
     }
   }
   throw new Error("Could not locate the visible Toolbox window");

@@ -7,10 +7,11 @@ import { fileURLToPath } from "node:url";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
 const MUSIC_URL = "https://assets.mixkit.co/music/1167/1167.mp3";
+const MUSIC_TRACK_URL = "https://mixkit.co/free-stock-music/rhythmic-underscore/";
 const MUSIC_SHA256 = "a7f05a29d07a84d38072ccd2b35204bca812db86e75b2a837e71cc144d3e739b";
 const TEMPLATE_DIR = join(dirname(fileURLToPath(import.meta.url)), "composition");
 
-export async function prepareDemoProject({ homeScreenshot, editScreenshot, projectDir }) {
+export async function prepareDemoProject({ homeScreenshot, editScreenshot, projectDir, templateDir = TEMPLATE_DIR }) {
   if (!homeScreenshot || !editScreenshot || !projectDir) {
     throw new Error("homeScreenshot, editScreenshot, and projectDir are required");
   }
@@ -19,7 +20,7 @@ export async function prepareDemoProject({ homeScreenshot, editScreenshot, proje
   const editPath = resolve(editScreenshot);
   const projectPath = resolve(projectDir);
   await mkdir(projectPath, { recursive: false });
-  await cp(TEMPLATE_DIR, projectPath, { recursive: true });
+  await cp(resolve(templateDir), projectPath, { recursive: true });
   await mkdir(join(projectPath, "assets", "music"), { recursive: true });
   await copyFile(homePath, join(projectPath, "assets", "toolbox-home.jpg"));
   await copyFile(editPath, join(projectPath, "assets", "toolbox-edit-success.jpg"));
@@ -73,7 +74,7 @@ export async function prepareDemoProject({ homeScreenshot, editScreenshot, proje
 
   await writeFile(
     join(projectPath, "music-source.txt"),
-    `Mixkit source: ${MUSIC_URL}\nSHA-256: ${MUSIC_SHA256}\n` +
+    `Mixkit audio: ${MUSIC_URL}\nTrack page: ${MUSIC_TRACK_URL}\nSHA-256: ${MUSIC_SHA256}\n` +
       "Track: Close Up by Michael Ramir C.\nLicense: Mixkit Stock Music Free License.\n",
     { flag: "wx" },
   );
@@ -85,18 +86,18 @@ function parseArgs(args) {
   const options = {};
   for (let index = 0; index < args.length; index += 1) {
     const name = args[index];
-    if (!["--home", "--edit", "--project-dir"].includes(name)) {
+    if (!["--home", "--edit", "--project-dir", "--template"].includes(name)) {
       throw new Error(`Unexpected argument: ${name}`);
     }
     const value = args[index + 1];
     if (!value || value.startsWith("--")) {
       throw new Error(`Missing value for ${name}`);
     }
-    options[{ "--home": "homeScreenshot", "--edit": "editScreenshot", "--project-dir": "projectDir" }[name]] = value;
+    options[{ "--home": "homeScreenshot", "--edit": "editScreenshot", "--project-dir": "projectDir", "--template": "templateDir" }[name]] = value;
     index += 1;
   }
   if (!options.homeScreenshot || !options.editScreenshot || !options.projectDir) {
-    throw new Error("Usage: prepare-demo.mjs --home <image> --edit <image> --project-dir <directory>");
+    throw new Error("Usage: prepare-demo.mjs --home <image> --edit <image> --project-dir <directory> [--template <directory>]");
   }
   if (!isAbsolute(options.projectDir)) {
     options.projectDir = resolve(options.projectDir);
