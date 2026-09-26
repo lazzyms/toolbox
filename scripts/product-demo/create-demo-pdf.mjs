@@ -3,16 +3,27 @@
 import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
-const outputPath = process.argv[2];
-if (!outputPath) {
-  throw new Error("Usage: node create-demo-pdf.mjs <output.pdf>");
+const args = process.argv.slice(2);
+const outputPath = args[0];
+let title = "Toolbox product demo";
+for (let index = 1; index < args.length; index += 1) {
+  if (args[index] !== "--title" || !args[index + 1] || args[index + 1].startsWith("--")) {
+    throw new Error(`Unexpected or incomplete argument: ${args[index]}`);
+  }
+  title = args[index + 1];
+  index += 1;
 }
+if (!outputPath) {
+  throw new Error("Usage: node create-demo-pdf.mjs <output.pdf> [--title <fictional document title>]");
+}
+
+const pdfText = (value) => value.replaceAll("\\", "\\\\").replaceAll("(", "\\(").replaceAll(")", "\\)");
 
 const content = [
   "BT",
   "/F1 24 Tf",
   "72 700 Td",
-  "(Toolbox product demo) Tj",
+  `(${pdfText(title)}) Tj`,
   "/F1 15 Tf",
   "0 -38 Td",
   "(Fictional example PDF; no personal data.) Tj",

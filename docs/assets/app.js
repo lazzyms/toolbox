@@ -5,12 +5,15 @@
   const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
   const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-  const localDemo = $('#product-demo-local');
-  const hostedDemo = $('#product-demo-youtube');
-  if (location.protocol === 'https:' && localDemo && hostedDemo) {
-    hostedDemo.src = hostedDemo.dataset.src;
-    hostedDemo.hidden = false;
-    localDemo.hidden = true;
+  if (location.protocol === 'https:') {
+    for (const demo of $$('.product-demo')) {
+      const localDemo = $('video.product-demo-video', demo);
+      const hostedDemo = $('iframe.product-demo-video[data-src]', demo);
+      if (!localDemo || !hostedDemo) continue;
+      hostedDemo.src = hostedDemo.dataset.src;
+      hostedDemo.hidden = false;
+      localDemo.hidden = true;
+    }
   }
 
   /* ───────────────────────── appearance ───────────────────────── */

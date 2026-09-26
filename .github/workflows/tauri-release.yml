@@ -268,6 +268,13 @@ jobs:
           codesign --verify --deep --strict "$app_path"
           echo "TOOLBOX_DEMO_APP=$app_path" >> "$GITHUB_ENV"
           open -n "$app_path"
+          for attempt in $(seq 1 30); do
+            toolbox_pid="$(pgrep -f "^$app_path/Contents/MacOS/toolbox$")" || true
+            if test -n "$toolbox_pid"; then break; fi
+            sleep 1
+          done
+          test -n "$toolbox_pid"
+          echo "TOOLBOX_DEMO_PID=$toolbox_pid" >> "$GITHUB_ENV"
       - name: Capture a real PDF edit in Toolbox
         run: |
           set -euo pipefail
@@ -290,7 +297,7 @@ jobs:
           done
           test "$captured" = true
 
-          osascript scripts/product-demo/use-toolbox.applescript "$input_pdf"
+          osascript scripts/product-demo/use-toolbox.applescript "$TOOLBOX_DEMO_PID" "$input_pdf"
           for attempt in $(seq 1 30); do
             if test -s "$output_pdf"; then break; fi
             sleep 1
@@ -307,6 +314,60 @@ jobs:
           node scripts/product-demo/flatten-screenshot.mjs \
             "$demo_dir/toolbox-demo-edit-success.png" \
             "$demo_dir/toolbox-demo-edit-success.jpg"
+      - name: Capture a real batch password removal in Toolbox
+        run: |
+          set -euo pipefail
+          demo_dir="$RUNNER_TEMP/product-demo"
+          input_dir="$demo_dir/remove-password-inputs"
+          password='batch-demo-2026'
+          qpdf="$TOOLBOX_DEMO_APP/Contents/Resources/qpdf-bin/qpdf"
+          test -x "$qpdf"
+          mkdir -p "$input_dir"
+          node scripts/product-demo/create-protected-demo-pdfs.mjs \
+            --directory "$input_dir" \
+            --qpdf "$qpdf"
+          for filename in project-brief meeting-notes budget-summary; do
+            shasum -a 256 "$input_dir/$filename.pdf" >> "$demo_dir/remove-password-inputs.before.sha256"
+          done
+
+          osascript scripts/product-demo/prepare-toolbox-remove-password.applescript "$TOOLBOX_DEMO_PID" "$input_dir" "$password"
+          node scripts/product-demo/capture-window.mjs \
+            --app "$TOOLBOX_DEMO_APP" \
+            --output "$demo_dir/toolbox-remove-password-before.png"
+          node scripts/product-demo/flatten-screenshot.mjs \
+            "$demo_dir/toolbox-remove-password-before.png" \
+            "$demo_dir/toolbox-remove-password-before.jpg"
+
+          osascript scripts/product-demo/run-toolbox-remove-password.applescript "$TOOLBOX_DEMO_PID"
+          for filename in project-brief meeting-notes budget-summary; do
+            input="$input_dir/$filename.pdf"
+            output="$input_dir/$filename-unlocked.pdf"
+            for attempt in $(seq 1 30); do
+              if test -s "$output"; then break; fi
+              sleep 1
+            done
+            test -s "$output"
+            "$qpdf" --check "$output"
+            encryption="$("$qpdf" --show-encryption "$output")"
+            if [[ "$encryption" != *"File is not encrypted"* ]]; then
+              echo "Expected an unlocked PDF: $output"
+              echo "$encryption"
+              exit 1
+            fi
+            original_encryption="$("$qpdf" --show-encryption "--password=$password" "$input")"
+            [[ "$original_encryption" == *"R = 6"* ]]
+          done
+          for filename in project-brief meeting-notes budget-summary; do
+            shasum -a 256 "$input_dir/$filename.pdf" >> "$demo_dir/remove-password-inputs.after.sha256"
+          done
+          cmp "$demo_dir/remove-password-inputs.before.sha256" "$demo_dir/remove-password-inputs.after.sha256"
+          osascript scripts/product-demo/show-toolbox-remove-password-results.applescript "$TOOLBOX_DEMO_PID"
+          node scripts/product-demo/capture-window.mjs \
+            --app "$TOOLBOX_DEMO_APP" \
+            --output "$demo_dir/toolbox-remove-password-success.png"
+          node scripts/product-demo/flatten-screenshot.mjs \
+            "$demo_dir/toolbox-remove-password-success.png" \
+            "$demo_dir/toolbox-remove-password-success.jpg"
       - name: Render and verify the product demo
         run: |
           node scripts/product-demo/render-demo.mjs \
@@ -314,16 +375,26 @@ jobs:
             --edit "$RUNNER_TEMP/product-demo/toolbox-demo-edit-success.jpg" \
             --output "$RUNNER_TEMP/Toolbox-product-demo.mp4" \
             --poster "$RUNNER_TEMP/Toolbox-product-demo-poster.jpg"
+          node scripts/product-demo/render-demo.mjs \
+            --home "$RUNNER_TEMP/product-demo/toolbox-remove-password-before.jpg" \
+            --edit "$RUNNER_TEMP/product-demo/toolbox-remove-password-success.jpg" \
+            --template scripts/product-demo/remove-password-composition \
+            --output "$RUNNER_TEMP/Toolbox-remove-password-batch-demo.mp4" \
+            --poster-at 12.7 \
+            --poster "$RUNNER_TEMP/Toolbox-remove-password-batch-demo-poster.jpg"
       - name: Attach video and license notice to the release
         run: |
           gh release upload "tauri-v$VERSION" \
             "$RUNNER_TEMP/Toolbox-product-demo.mp4" \
             "$RUNNER_TEMP/Toolbox-product-demo-poster.jpg" \
+            "$RUNNER_TEMP/Toolbox-remove-password-batch-demo.mp4" \
+            "$RUNNER_TEMP/Toolbox-remove-password-batch-demo-poster.jpg" \
             docs/assets/toolbox-product-demo-attribution.txt \
+            docs/assets/toolbox-remove-password-demo-attribution.txt \
             --repo "$GITHUB_REPOSITORY" \
             --clobber
           {
             echo "## Product demo video"
             echo "Rendered from the macOS app archive published with tauri-v$VERSION."
-            echo "Attached: Toolbox-product-demo.mp4 and its poster and music attribution."
+            echo "Attached both product demos: Toolbox-product-demo.mp4 and Toolbox-remove-password-batch-demo.mp4, their posters, and music attribution."
           } >> "$GITHUB_STEP_SUMMARY"
