@@ -1,8 +1,13 @@
 import { useEffect, useState } from "react";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { confirm } from "@tauri-apps/plugin-dialog";
 import packageInfo from "../../package.json";
 import qrCode from "../assets/BuyMeACoffeeQR.png";
+import {
+  isAnalyticsOptedOut,
+  setAnalyticsOptOut,
+} from "../analytics";
 
 interface SettingsPanelProps {
   onClose: () => void;
@@ -12,8 +17,11 @@ export const SettingsPanel = ({ onClose }: SettingsPanelProps) => {
   const [theme, setTheme] = useState<"dark" | "light">(
     () => (localStorage.getItem("toolbox-theme") as "dark" | "light") || "dark",
   );
-  const [updateState, setUpdateState] = useState<"idle" | "checking" | "available" | "current" | "failed">("idle");
+  const [updateState, setUpdateState] = useState<"idle" | "checking" | "available" | "installing" | "current" | "failed">("idle");
   const [updateVersion, setUpdateVersion] = useState<string | null>(null);
+  const [analyticsOptOut, setAnalyticsOptOutState] = useState<boolean>(() =>
+    isAnalyticsOptedOut(window.localStorage),
+  );
   useEffect(() => {
     document.body.dataset.theme = theme;
     localStorage.setItem("toolbox-theme", theme);
@@ -29,11 +37,21 @@ export const SettingsPanel = ({ onClose }: SettingsPanelProps) => {
       }
       setUpdateVersion(update.version);
       setUpdateState("available");
+      const approved = await confirm(
+        `Toolbox ${update.version} is available. Download and install it now? The app will restart.`,
+        { title: "Update available", kind: "info" },
+      );
+      if (!approved) return;
+      setUpdateState("installing");
       await update.downloadAndInstall();
       await relaunch();
     } catch {
       setUpdateState("failed");
     }
+  };
+  const toggleAnalyticsOptOut = (optedOut: boolean) => {
+    setAnalyticsOptOutState(optedOut);
+    setAnalyticsOptOut(window.localStorage, optedOut);
   };
   return (
     <div className="settings-overlay" role="presentation">
@@ -98,14 +116,30 @@ export const SettingsPanel = ({ onClose }: SettingsPanelProps) => {
           </section>
           <section aria-labelledby="updates-title">
             <h3 id="updates-title">Updates</h3>
-            <button type="button" onClick={() => void checkForUpdates()} disabled={updateState === "checking"}>
-              {updateState === "checking" ? "Checking..." : "Check for updates"}
+            <button type="button" onClick={() => void checkForUpdates()} disabled={updateState === "checking" || updateState === "installing"}>
+              {updateState === "checking" ? "Checking..." : updateState === "installing" ? "Installing..." : "Check for updates"}
             </button>
             <p role="status" aria-live="polite">
               {updateState === "current" && "Toolbox is up to date."}
-              {updateState === "available" && updateVersion && `Installing Toolbox ${updateVersion}...`}
+              {updateState === "available" && updateVersion && `Toolbox ${updateVersion} is available. Check again when you want to install it.`}
+              {updateState === "installing" && updateVersion && `Installing Toolbox ${updateVersion}...`}
               {updateState === "failed" && "Could not check for updates."}
             </p>
+          </section>
+          <section aria-labelledby="privacy-title">
+            <h3 id="privacy-title">Privacy</h3>
+            <p>
+              Toolbox counts installs and app opens with PostHog to gauge
+              usage. No personal data is collected.
+            </p>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={analyticsOptOut}
+                onChange={(e) => toggleAnalyticsOptOut(e.target.checked)}
+              />
+              Don’t send anonymous usage counts
+            </label>
           </section>
         </div>
       </section>
