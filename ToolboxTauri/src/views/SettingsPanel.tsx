@@ -26,6 +26,13 @@ export const SettingsPanel = ({ onClose }: SettingsPanelProps) => {
     document.body.dataset.theme = theme;
     localStorage.setItem("toolbox-theme", theme);
   }, [theme]);
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
   const checkForUpdates = async () => {
     setUpdateState("checking");
     try {

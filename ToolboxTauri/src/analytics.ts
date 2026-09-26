@@ -5,10 +5,11 @@
 // random UUID generated on this device — it is not tied to any user, machine,
 // or account, and no PII is ever sent.
 //
-// Setup: create a free PostHog Cloud project at https://posthog.com and paste
-// its project API key below. EU-region projects must use
-// "https://eu.i.posthog.com/capture/" as the capture URL.
-// Until a real key is set, all events are silently skipped.
+// Setup: create a free PostHog Cloud project at https://posthog.com and set
+// VITE_POSTHOG_KEY to its project API key at build time. EU-region projects
+// must use "https://eu.i.posthog.com/capture/" as the capture URL (override
+// with VITE_POSTHOG_CAPTURE_URL). Until a real key is set, all events are
+// silently skipped.
 
 export const INSTALL_MARKER = "toolbox.analytics.install-recorded";
 export const DISTINCT_ID_KEY = "toolbox.analytics.distinct-id";
@@ -17,14 +18,39 @@ export const OPT_OUT_KEY = "toolbox.analytics.opt-out";
 type StorageLike = Pick<Storage, "getItem" | "setItem">;
 type EventLogger = (name: string, parameters: Record<string, string>) => void;
 
-const POSTHOG_API_KEY = "phc_REPLACE_WITH_YOUR_POSTHOG_PROJECT_KEY";
-const POSTHOG_CAPTURE_URL = "https://us.i.posthog.com/capture/";
+function readBuildVar(name: string, fallback: string): string {
+  // Vite exposes VITE_* vars via import.meta.env at build time.
+  // In Node/test contexts import.meta.env may be undefined, so fall back
+  // to process.env — this also makes the module unit-testable.
+  try {
+    const env = (import.meta as { env?: Record<string, string | undefined> })
+      .env;
+    if (env?.[name]) return env[name] as string;
+  } catch {
+    /* import.meta.env unavailable outside Vite */
+  }
+  try {
+    if (typeof process !== "undefined") return process.env?.[name] ?? fallback;
+  } catch {
+    /* ignore */
+  }
+  return fallback;
+}
 
-function isConfigured(): boolean {
-  return (
-    POSTHOG_API_KEY.startsWith("phc_") &&
-    POSTHOG_API_KEY !== "phc_REPLACE_WITH_YOUR_POSTHOG_PROJECT_KEY"
+function getPosthogKey(): string {
+  return readBuildVar("VITE_POSTHOG_KEY", "");
+}
+
+function getCaptureUrl(): string {
+  return readBuildVar(
+    "VITE_POSTHOG_CAPTURE_URL",
+    "https://us.i.posthog.com/capture/",
   );
+}
+
+export function isConfigured(): boolean {
+  const key = getPosthogKey();
+  return key.startsWith("phc_") && key.length > 10;
 }
 
 export function recordFirstInstall(
@@ -49,17 +75,27 @@ function getDistinctId(storage: StorageLike): string {
   return fresh;
 }
 
-async function capture(
+type FetchLike = (
+  input: string,
+  init?: Record<string, unknown>,
+) => Promise<unknown>;
+
+// Exported for tests: sends one event to PostHog. Silently skips when no
+// valid project key is configured. The fetch implementation is injectable so
+// tests never hit the real network.
+export async function captureEvent(
   event: string,
   distinctId: string,
   parameters: Record<string, string>,
+  fetchImpl: FetchLike = fetch,
 ): Promise<void> {
+  const key = getPosthogKey();
   if (!isConfigured()) return;
-  await fetch(POSTHOG_CAPTURE_URL, {
+  await fetchImpl(getCaptureUrl(), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      api_key: POSTHOG_API_KEY,
+      api_key: key,
       event,
       distinct_id: distinctId,
       properties: { ...parameters, $lib: "toolbox-tauri" },
@@ -76,19 +112,41 @@ export function setAnalyticsOptOut(storage: StorageLike, optedOut: boolean): voi
   storage.setItem(OPT_OUT_KEY, optedOut ? "1" : "0");
 }
 
-export async function initializeInstallAnalytics(): Promise<void> {
-  if (import.meta.env.DEV) return;
+export interface AnalyticsDeps {
+  storage: StorageLike;
+  isDev: boolean;
+  fetchImpl?: FetchLike;
+}
+
+// Exported for tests: the testable core of initializeInstallAnalytics.
+export async function initializeInstallAnalyticsWith(
+  deps: AnalyticsDeps,
+): Promise<void> {
+  if (deps.isDev) return;
 
   try {
-    const storage = window.localStorage;
+    const storage = deps.storage;
     if (isAnalyticsOptedOut(storage)) return;
 
     const distinctId = getDistinctId(storage);
     recordFirstInstall(storage, (name, parameters) => {
-      void capture(name, distinctId, parameters);
+      // Fire-and-forget: analytics must never break the app.
+      captureEvent(name, distinctId, parameters, deps.fetchImpl).catch(() => {});
     });
-    await capture("app_opened", distinctId, { app_platform: "tauri" });
+    await captureEvent(
+      "app_opened",
+      distinctId,
+      { app_platform: "tauri" },
+      deps.fetchImpl,
+    );
   } catch (error) {
     console.warn("Toolbox analytics unavailable", error);
   }
+}
+
+export async function initializeInstallAnalytics(): Promise<void> {
+  await initializeInstallAnalyticsWith({
+    storage: window.localStorage,
+    isDev: import.meta.env.DEV,
+  });
 }
