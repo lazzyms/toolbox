@@ -101,6 +101,27 @@ test("sends nothing when no PostHog key is configured", async () => {
   });
 });
 
+test("does not burn the first_install marker while unconfigured", async () => {
+  const calls: CapturedCall[] = [];
+  const storage = new MemoryStorage();
+  const deps = {
+    storage,
+    isDev: false,
+    fetchImpl: mockFetch(calls),
+  };
+
+  await withPosthogKey(undefined, () => initializeInstallAnalyticsWith(deps));
+  assert.equal(storage.getItem(INSTALL_MARKER), null);
+
+  await withPosthogKey("phc_testkey123456", () =>
+    initializeInstallAnalyticsWith(deps),
+  );
+  const events = calls.map((call) =>
+    JSON.parse(call.init.body as string).event,
+  );
+  assert.deepEqual(events, ["first_install", "app_opened"]);
+});
+
 test("sends nothing in dev builds", async () => {
   await withPosthogKey("phc_testkey123456", async () => {
     const calls: CapturedCall[] = [];

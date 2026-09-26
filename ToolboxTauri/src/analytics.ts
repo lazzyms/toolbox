@@ -127,6 +127,9 @@ export async function initializeInstallAnalyticsWith(
   try {
     const storage = deps.storage;
     if (isAnalyticsOptedOut(storage)) return;
+    // Don't burn the first_install marker when no project key is configured:
+    // a later correctly-configured build must still be able to count this install.
+    if (!isConfigured()) return;
 
     const distinctId = getDistinctId(storage);
     recordFirstInstall(storage, (name, parameters) => {

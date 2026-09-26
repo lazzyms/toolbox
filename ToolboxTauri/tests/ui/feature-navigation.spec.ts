@@ -236,6 +236,87 @@ test("settings checks for and installs available updates", async ({ page }) => {
     await expect(dialog.getByRole("status")).toHaveText("Toolbox is up to date.");
 });
 
+async function mockUpdateAvailable(page: Page, dialogChoice: string | null) {
+    await page.evaluate(
+        ({ dialogChoice }) => {
+            const internals = (window as unknown as { __TAURI_INTERNALS__: { invoke: (cmd: string, args: unknown) => Promise<unknown> } }).__TAURI_INTERNALS__;
+            const origInvoke = internals.invoke.bind(internals);
+            internals.invoke = async (command: string, args: unknown) => {
+                if (command === "plugin:updater|check") {
+                    return {
+                        rid: 1,
+                        currentVersion: "1.0.12",
+                        version: "9.9.9",
+                        date: "2026-09-27",
+                        body: "test update",
+                    };
+                }
+                if (command === "plugin:dialog|message") return dialogChoice;
+                return origInvoke(command, args);
+            };
+        },
+        { dialogChoice },
+    );
+}
+
+async function invokedCommands(page: Page): Promise<string[]> {
+    return page.evaluate(() =>
+        ((window as unknown as { __toolboxInvocations?: Array<{ command: string }> }).__toolboxInvocations ?? []).map(
+            (invocation) => invocation.command,
+        ),
+    );
+}
+
+test("settings asks before installing and does nothing when declined", async ({ page }) => {
+    await page.goto("/");
+    // Native confirm dialog returns null => user declined.
+    await mockUpdateAvailable(page, null);
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Settings" });
+    await dialog.getByRole("button", { name: "Check for updates" }).click();
+    await expect(dialog.getByRole("status")).toHaveText(
+        "Toolbox 9.9.9 is available. Check again when you want to install it.",
+    );
+    expect(await invokedCommands(page)).not.toContain("plugin:updater|download_and_install");
+});
+
+test("settings downloads and installs after the update is confirmed", async ({ page }) => {
+    await page.goto("/");
+    // Native confirm dialog returns the custom "Install update" label => user approved.
+    await mockUpdateAvailable(page, "Install update");
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Settings" });
+    await dialog.getByRole("button", { name: "Check for updates" }).click();
+    await expect(dialog.getByRole("status")).toHaveText("Installing Toolbox 9.9.9...");
+    expect(await invokedCommands(page)).toContain("plugin:updater|download_and_install");
+});
+
+test("settings privacy opt-out persists across reloads", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Settings" });
+    const checkbox = dialog.getByRole("checkbox", { name: /anonymous usage counts/ });
+    await expect(checkbox).toBeVisible();
+    await expect(dialog).toContainText("Version 1.0.12");
+    await checkbox.check();
+    await expect(checkbox).toBeChecked();
+
+    await page.reload();
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await expect(
+        page.getByRole("dialog", { name: "Settings" }).getByRole("checkbox", { name: /anonymous usage counts/ }),
+    ).toBeChecked();
+});
+
+test("escape closes the settings dialog", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Settings" });
+    await expect(dialog).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(dialog).not.toBeVisible();
+});
+
 test("tool cards render their design icon masks", async ({ page }) => {
     await page.goto("/");
     const icons = page.locator(".tool-card .card-icon > span");
