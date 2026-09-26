@@ -282,8 +282,8 @@ test("settings asks before installing and does nothing when declined", async ({ 
 
 test("settings downloads and installs after the update is confirmed", async ({ page }) => {
     await page.goto("/");
-    // Native confirm dialog returns the custom "Install update" label => user approved.
-    await mockUpdateAvailable(page, "Install update");
+    // Native confirm dialog returns "Ok" (default button label) => user approved.
+    await mockUpdateAvailable(page, "Ok");
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "Settings" });
     await dialog.getByRole("button", { name: "Check for updates" }).click();
