@@ -314,7 +314,9 @@ test("search arrows navigate visible results and Enter opens the focused result"
     await page.goto("/");
     await page.getByRole("button", { name: "Open Remove Password" }).click();
     await page.getByRole("button", { name: "← All tools" }).click();
-    await expect(page.locator(".recent-section")).toBeVisible();
+    await expect(page.locator(".recent-section")).toHaveCount(0);
+    await expect(page.locator(".workspace-toolbar + .tool-library-section")).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath("phase2-command-center-gallery.png") });
 
     const search = page.getByRole("textbox", { name: "Search tools" });
     await search.fill("Protect");

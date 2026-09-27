@@ -389,31 +389,6 @@ export const MainPage = () => {
                 placeholder="Find a tool or action"
               />
             </div>
-            {filter === "all" && recentPreviewTools.length > 0 && !search.trim() && (
-              <Section className="recent-section" title="Pick up where you left off">
-                <div className="recent-grid">
-                  {recentPreviewTools.map((tool) => (
-                    <button
-                      key={tool.id}
-                      type="button"
-                      className="recent-card"
-                      data-command-result={tool.id}
-                      onKeyDown={handleCommandResultKeyDown}
-                      onClick={() => openTool(tool)}
-                    >
-                      <span className="card-icon">
-                        <TablerIcon name={iconName(tool)} />
-                      </span>
-                      <span>
-                        <strong>{tool.title}</strong>
-                        <small>{tool.category} utility</small>
-                      </span>
-                      <em>Open →</em>
-                    </button>
-                  ))}
-                </div>
-              </Section>
-            )}
             <Section className="tool-library-section" title="Tool library">
               <SegmentedControl
                 className="filter-row"

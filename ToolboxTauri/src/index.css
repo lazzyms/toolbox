@@ -301,46 +301,6 @@ select:focus-visible {
   color: var(--muted);
   font-size: 13px;
 }
-.recent-section {
-  margin-bottom: 34px;
-}
-.recent-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-}
-.recent-card {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: 12px;
-  align-items: center;
-  padding: 14px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: transparent;
-  text-align: left;
-}
-.recent-card:hover {
-  background: var(--surface);
-  border-color: var(--muted);
-}
-.recent-card strong,
-.recent-card small {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.recent-card strong {
-  font-size: 13px;
-}
-.recent-card small,
-.recent-card em {
-  color: var(--muted);
-  font-size: 11px;
-  font-style: normal;
-}
 .card-icon {
   display: grid;
   place-items: center;
@@ -1312,7 +1272,6 @@ select:focus-visible {
     grid-template-columns: 1fr;
     gap: 22px;
   }
-  .recent-grid,
   .tool-grid {
     grid-template-columns: 1fr;
   }
