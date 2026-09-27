@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import path from "node:path";
-import { UtilityRegistry, workspaceForTool } from "../../src/registry";
+import { ToolWorkspaceRegistry, UtilityRegistry, workspaceForTool } from "../../src/registry";
 
 const fixturePath = path.resolve("src-tauri/icons/icon.png");
 const fixtureName = path.basename(fixturePath);
@@ -270,6 +270,84 @@ test("favorites and recent navigation show their intended libraries", async ({ p
         page.getByRole("radiogroup", { name: "Tool library filters" })
             .getByRole("radio", { name: "Recent" }),
     ).toHaveAttribute("aria-checked", "true");
+
+    await page.reload();
+    await workspaceNav.getByRole("button", { name: "Favorites" }).click();
+    await expect(page.locator(".tool-card")).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "Open Remove Password" })).toBeVisible();
+    await workspaceNav.getByRole("button", { name: "Recent" }).click();
+    await expect(page.locator(".tool-card")).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "Open Remove Password" })).toBeVisible();
+});
+
+test("all five workspace cards open their workspace", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.locator(".tool-card")).toHaveCount(ToolWorkspaceRegistry.length);
+
+    for (const workspace of ToolWorkspaceRegistry) {
+        await page.getByRole("button", { name: `Open ${workspace.title}`, exact: true }).click();
+        await expect(page.locator(".workspace-title")).toHaveText(workspace.title);
+        await page.getByRole("button", { name: "← All tools" }).click();
+    }
+});
+
+test("search finds and opens all 33 registered tool actions", async ({ page }) => {
+    await page.goto("/");
+    const search = page.getByRole("textbox", { name: "Search tools" });
+    expect(UtilityRegistry).toHaveLength(33);
+
+    for (const utility of UtilityRegistry) {
+        await search.fill(utility.title);
+        const result = page.getByRole("button", { name: `Open ${utility.title}`, exact: true });
+        await expect(result).toBeVisible();
+        await result.click();
+        if (utility.status === "unavailable") {
+            await expect(page.getByText("Unavailable in this build.", { exact: true })).toBeVisible();
+        } else {
+            await expect(page.locator(".workspace-title")).toHaveText(workspaceForTool(utility.id)?.title);
+        }
+        await page.getByRole("button", { name: "← All tools" }).click();
+    }
+});
+
+test("search arrows navigate visible results and Enter opens the focused result", async ({ page }, testInfo) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Remove Password" }).click();
+    await page.getByRole("button", { name: "← All tools" }).click();
+    await expect(page.locator(".recent-section")).toBeVisible();
+
+    const search = page.getByRole("textbox", { name: "Search tools" });
+    await search.fill("Protect");
+    await expect(page.locator(".recent-section")).toHaveCount(0);
+    await expect(page.locator("button[data-command-result]")).toHaveCount(3);
+    const removePassword = page.getByRole("button", { name: "Open Remove Password", exact: true });
+    const protectPdf = page.getByRole("button", { name: "Open Protect PDF", exact: true });
+    const protectOfficeFiles = page.getByRole("button", { name: "Open Protect Office Files", exact: true });
+
+    await page.keyboard.press("ArrowDown");
+    await expect(removePassword).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(protectPdf).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(protectOfficeFiles).toBeFocused();
+    await page.keyboard.press("ArrowUp");
+    await expect(protectPdf).toBeFocused();
+    await page.keyboard.press("ArrowUp");
+    await expect(removePassword).toBeFocused();
+    await page.keyboard.press("ArrowUp");
+    await expect(search).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ArrowDown");
+    await expect(protectPdf).toBeFocused();
+    await page.screenshot({ path: testInfo.outputPath("phase2-command-center-search.png") });
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".workspace-title")).toHaveText("Protect & unlock files");
+
+    await page.getByRole("button", { name: "← All tools" }).click();
+    await search.fill("no matching tool");
+    await expect(page.getByText("No matching tools", { exact: true })).toBeVisible();
+    await page.keyboard.press("ArrowDown");
+    await expect(search).toBeFocused();
 });
 
 test("workspace cards expose an accessible open action without favorite navigation", async ({ page }) => {

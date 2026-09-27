@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentType,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import {
   ToolWorkspaceRegistry,
   UtilityRegistry,
@@ -95,6 +103,7 @@ export const MainPage = () => {
   const [filter, setFilter] = useState<LibraryFilter>("all");
   const [search, setSearch] = useState("");
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const commandCenterRef = useRef<HTMLElement>(null);
   const searchShortcut = navigator.platform.toLowerCase().includes("win")
     ? "Ctrl + K"
     : "⌘ + K";
@@ -111,6 +120,7 @@ export const MainPage = () => {
         .filter(Boolean) as ToolDefinition[],
     [recent],
   );
+  const normalizedSearch = search.trim().toLowerCase();
   const recentPreviewTools = recentTools.slice(0, 3);
   const visibleWorkspaces = useMemo(
     () =>
@@ -122,11 +132,11 @@ export const MainPage = () => {
             (filter === "favorites" && favorites.includes(tool.id)) ||
             (filter !== "recent" && filter !== "favorites" && tool.category === filter);
           const searchText = `${tool.title} ${tool.blurb} ${workspace.title} ${workspace.blurb}`.toLowerCase();
-          return matchesScope && searchText.includes(search.toLowerCase());
+          return matchesScope && searchText.includes(normalizedSearch);
         });
         return { workspace, actions };
       }).filter(({ actions }) => actions.length > 0),
-    [filter, search, favorites, recent],
+    [filter, normalizedSearch, favorites, recent],
   );
   const openTool = (tool: ToolDefinition) => {
     setWorkspaceSourceAction(null);
@@ -148,6 +158,36 @@ export const MainPage = () => {
       localStorage.setItem("toolbox-favorites", JSON.stringify(next));
       return next;
     });
+  const commandResults = () =>
+    Array.from(
+      commandCenterRef.current?.querySelectorAll<HTMLButtonElement>(
+        "button[data-command-result]",
+      ) ?? [],
+    ).filter((button) => !button.disabled);
+  const handleSearchKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== "ArrowDown") return;
+
+    const firstResult = commandResults()[0];
+    if (!firstResult) return;
+
+    event.preventDefault();
+    firstResult.focus();
+  };
+  const handleCommandResultKeyDown = (
+    event: ReactKeyboardEvent<HTMLButtonElement>,
+  ) => {
+    const direction = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0;
+    if (direction === 0) return;
+
+    const results = commandResults();
+    const currentIndex = results.indexOf(event.currentTarget);
+    if (currentIndex < 0) return;
+
+    event.preventDefault();
+    const nextResult = results[currentIndex + direction];
+    if (nextResult) nextResult.focus();
+    else if (direction < 0) searchInputRef.current?.focus();
+  };
   const selectLibrary = (
     nextFilter: LibraryFilter,
   ) => {
@@ -272,7 +312,7 @@ export const MainPage = () => {
           <strong>Private by default</strong>Files stay on this device.
         </p>
       </aside>
-      <main className="command-center" aria-label="Tool detail">
+      <main className="command-center" aria-label="Tool detail" ref={commandCenterRef}>
         <header className="topbar">
           <span className="breadcrumb">
             Toolbox <span>/ Command center</span>
@@ -343,12 +383,13 @@ export const MainPage = () => {
                 labelHidden
                 leading={<span aria-hidden="true">⌕</span>}
                 trailing={<kbd aria-hidden="true">{searchShortcut}</kbd>}
+                onKeyDown={handleSearchKeyDown}
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
                 placeholder="Find a tool or action"
               />
             </div>
-            {filter === "all" && recentPreviewTools.length > 0 && (
+            {filter === "all" && recentPreviewTools.length > 0 && !search.trim() && (
               <Section className="recent-section" title="Pick up where you left off">
                 <div className="recent-grid">
                   {recentPreviewTools.map((tool) => (
@@ -356,6 +397,8 @@ export const MainPage = () => {
                       key={tool.id}
                       type="button"
                       className="recent-card"
+                      data-command-result={tool.id}
+                      onKeyDown={handleCommandResultKeyDown}
                       onClick={() => openTool(tool)}
                     >
                       <span className="card-icon">
@@ -401,7 +444,9 @@ export const MainPage = () => {
                             className="workspace-action-button"
                             variant="ghost"
                             size="sm"
+                            data-command-result={tool.id}
                             aria-label={`Open ${tool.title}`}
+                            onKeyDown={handleCommandResultKeyDown}
                             onClick={() => openTool(tool)}
                           >
                             <span className="card-icon">
