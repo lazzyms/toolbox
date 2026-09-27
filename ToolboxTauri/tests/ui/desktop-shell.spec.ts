@@ -17,6 +17,8 @@ type TestWindow = Window & {
     __toolboxListeners?: Record<string, number>;
     __toolboxEmit?: (event: string, payload: unknown) => void;
     __toolboxDialogResults?: Array<string | string[] | null>;
+    __toolboxHoldActivationAcks?: () => void;
+    __toolboxResolveActivationAck?: (activationId: string) => void;
 };
 
 test.beforeEach(async ({ page }) => {
@@ -24,9 +26,16 @@ test.beforeEach(async ({ page }) => {
         const invocations: Array<{ command: string; args: unknown }> = [];
         const callbacks = new Map<number, (event: unknown) => void>();
         const listeners: Record<string, number> = {};
+        const pendingActivationAcks = new Map<string, () => void>();
+        let holdActivationAcks = false;
         let nextCallbackId = 1;
         (window as TestWindow).__toolboxInvocations = invocations;
         (window as TestWindow).__toolboxListeners = listeners;
+        (window as TestWindow).__toolboxHoldActivationAcks = () => { holdActivationAcks = true; };
+        (window as TestWindow).__toolboxResolveActivationAck = (activationId) => {
+            pendingActivationAcks.get(activationId)?.();
+            pendingActivationAcks.delete(activationId);
+        };
         (window as TestWindow).__toolboxEmit = (event, payload) => {
             const callbackId = listeners[event];
             if (callbackId) callbacks.get(callbackId)?.({ event, id: 1, payload });
@@ -45,6 +54,11 @@ test.beforeEach(async ({ page }) => {
             unregisterCallback: (id) => callbacks.delete(id),
             invoke: async (command, args) => {
                 invocations.push({ command, args });
+                if (command === "acknowledge_activation" && holdActivationAcks) {
+                    const { activationId } = args as { activationId: string };
+                    await new Promise<void>((resolve) => pendingActivationAcks.set(activationId, resolve));
+                    return null;
+                }
                 if (command === "plugin:event|listen") {
                     const listenArgs = args as { event: string; handler: number };
                     listeners[listenArgs.event] = listenArgs.handler;
@@ -145,6 +159,25 @@ test("hands off a second activation without overwriting the in-flight intake", a
         return accepted;
     }).toEqual([acknowledge("activation-burst-1"), acknowledge("activation-burst-2")]);
     await expect(page.getByText(path.basename(secondPath), { exact: true })).toBeVisible();
+});
+
+test("Escape cancels queued file activations while an acknowledgement is pending", async ({ page }) => {
+    await page.goto("/");
+    await page.evaluate(() => (window as TestWindow).__toolboxHoldActivationAcks?.());
+
+    await emitShellEvent(page, { kind: "files", activationId: "activation-escape-first", workspace: "pdf-editor", paths: [pdfPath] });
+    await expect.poll(async () => (await invocations(page)).some((call) => call.command === "acknowledge_activation" && JSON.stringify(call.args) === JSON.stringify({ activationId: "activation-escape-first" }))).toBe(true);
+    await emitShellEvent(page, { kind: "files", activationId: "activation-escape-queued", workspace: "pdf-editor", paths: ["/tmp/queued-document.pdf"] });
+
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("heading", { name: "Ready to process" })).toBeVisible();
+    await page.evaluate(() => (window as TestWindow).__toolboxResolveActivationAck?.("activation-escape-first"));
+    await page.waitForTimeout(100);
+
+    await expect(page.getByRole("heading", { name: "Ready to process" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "← All tools" })).toHaveCount(0);
+    await expect(page.getByText("queued-document.pdf", { exact: true })).toHaveCount(0);
+    expect((await invocations(page)).some((call) => call.command === "acknowledge_activation" && JSON.stringify(call.args) === JSON.stringify({ activationId: "activation-escape-queued" }))).toBe(false);
 });
 
 test("reports rejected files and mixed batches without accepting or acknowledging them", async ({ page }) => {
