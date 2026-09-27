@@ -132,20 +132,20 @@ jobs:
           '{"bundle": {"createUpdaterArtifacts": false, "resources": ["resources/*"]}}' |
             Out-File -Encoding ascii resources-qpdf.json
 
-      - name: Stage offline vision adapter
-        run: npm run stage:vision
-        working-directory: ToolboxTauri
-
-      - name: Stage offline OCR resources
-        run: npm run stage:ocr
-        working-directory: ToolboxTauri
-
       - name: Run kit tests
         run: cargo test
         working-directory: ToolboxTauri/src-tauri
 
       - name: Run native E2E matrix
         run: npm run test:native:e2e
+        working-directory: ToolboxTauri
+
+      - name: Stage offline vision adapter
+        run: npm run stage:vision
+        working-directory: ToolboxTauri
+
+      - name: Stage offline OCR resources
+        run: npm run stage:ocr
         working-directory: ToolboxTauri
 
       - name: Verify the tool matrix

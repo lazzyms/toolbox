@@ -80,16 +80,16 @@ jobs:
           Copy-Item $pdftotext.FullName src-tauri\resources\pdftotext.exe -Force
           & src-tauri\resources\qpdf.exe --version
 
+      - name: Run Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+        working-directory: ToolboxTauri
+
       - name: Stage offline vision adapter
         run: npm run stage:vision
         working-directory: ToolboxTauri
 
       - name: Stage offline OCR resources
         run: npm run stage:ocr
-        working-directory: ToolboxTauri
-
-      - name: Run Rust tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
         working-directory: ToolboxTauri
 
       - name: Build unsigned MSIX
