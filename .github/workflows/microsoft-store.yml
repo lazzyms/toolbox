@@ -81,7 +81,7 @@ jobs:
           & src-tauri\resources\qpdf.exe --version
 
       - name: Run Rust tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        run: cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1
         working-directory: ToolboxTauri
 
       - name: Stage offline vision adapter

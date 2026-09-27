@@ -152,7 +152,7 @@ jobs:
         if: runner.os == 'macOS'
         working-directory: ToolboxTauri
         run: printf '{"version":"%s"}\n' "$VERSION" > release-config.json
-      - run: cargo test
+      - run: cargo test -- --test-threads=1
         working-directory: ToolboxTauri/src-tauri
       - name: Run native E2E matrix
         run: npm run test:native:e2e
