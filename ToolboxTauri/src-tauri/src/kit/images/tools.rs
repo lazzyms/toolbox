@@ -138,8 +138,15 @@ pub fn inspect_edit_preview(request: &ImageEditPreviewRequest) -> Result<ImagePr
     let plan = request.plan.canonicalized();
     plan.validate()?;
     let source = crate::kit::images::load_image(&request.path)?;
-    let (edited, _, _) = apply_edit_plan(&plan, source, crate::kit::images::detect_format(&request.path))?;
-    encode_preview(edited)
+    let (edited, format, quality) = apply_edit_plan(&plan, source, crate::kit::images::detect_format(&request.path))?;
+    let encoded = crate::kit::images::encode(&edited, format, quality)?;
+    let preview_source = match format {
+        crate::kit::images::OutputFormat::Heic => heif::decode(&encoded)
+            .map_err(|error| format!("Could not decode edited HEIC preview: {error}"))?,
+        _ => image::load_from_memory(&encoded)
+            .map_err(|error| format!("Could not decode edited image preview: {error}"))?,
+    };
+    encode_preview(preview_source)
 }
 
 pub fn export_edit_plan(plan: &ImageEditPlan, input: PathBuf) -> JobOutcome {

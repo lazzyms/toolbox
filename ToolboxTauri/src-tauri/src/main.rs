@@ -640,6 +640,10 @@ mod command_tests {
         let root = sandbox("all");
         let image = root.join("image.png"); write_png(&image, 256, 44);
         let image_two = root.join("image-two.png"); write_png(&image_two, 256, 88);
+        let lossy_image = root.join("lossy-image.jpg");
+        image::RgbImage::from_fn(64, 64, |x, y| {
+            if (x / 2 + y / 2) % 2 == 0 { image::Rgb([255, 0, 0]) } else { image::Rgb([0, 255, 255]) }
+        }).save_with_format(&lossy_image, image::ImageFormat::Jpeg).unwrap();
         let animated = root.join("animated.gif");
         {
             use image::codecs::gif::{GifEncoder, Repeat};
@@ -654,6 +658,7 @@ mod command_tests {
         let pdf_two = root.join("document-two.pdf"); make_pdf(&pdf_two, 1);
         let plain_pdf_bytes = std::fs::read(&pdf).unwrap();
         let plain_image_bytes = std::fs::read(&image).unwrap();
+        let plain_lossy_image_bytes = std::fs::read(&lossy_image).unwrap();
         let animated_bytes = std::fs::read(&animated).unwrap();
         let tiff_bytes = std::fs::read(&tiff).unwrap();
 
@@ -775,6 +780,23 @@ mod command_tests {
             .collect::<Vec<_>>();
         assert!(differing_pixels.is_empty(), "native image export pixels must match the verified edit preview; first differences: {differing_pixels:?}");
         outputs.extend(composed_image_outputs);
+        let lossy_image_plan = ImageEditPlan {
+            edits: vec![ImageEdit::Compress { quality: 40, lossless: false }],
+            output_location: location(&root, "lossy image editor"),
+            suffix: "-session".into(),
+        };
+        let lossy_image_preview = inspect_image_edit_preview(ImageEditPreviewRequest { path: lossy_image.clone(), plan: lossy_image_plan.clone() }).expect("lossy image preview should be available");
+        let lossy_preview_bytes = STANDARD.decode(lossy_image_preview.data_url.split_once(',').expect("lossy preview must contain a data URL payload").1).unwrap();
+        let lossy_preview_pixels = image::load_from_memory(&lossy_preview_bytes).unwrap().to_rgba8();
+        let lossy_image_outputs = assert_success("lossy composed image editor", export_image_edit_plan(ImageEditExportRequest { paths: vec![lossy_image.clone()], plan: lossy_image_plan }));
+        let lossy_export_pixels = image::open(&lossy_image_outputs[0]).unwrap().to_rgba8();
+        assert_eq!(lossy_export_pixels.dimensions(), lossy_preview_pixels.dimensions(), "lossy export dimensions must match the verified edit preview");
+        let lossy_differing_pixels = lossy_export_pixels.pixels().zip(lossy_preview_pixels.pixels()).enumerate()
+            .filter_map(|(index, (exported, previewed))| (exported.0 != previewed.0).then_some((index, exported.0, previewed.0)))
+            .take(5)
+            .collect::<Vec<_>>();
+        assert!(lossy_differing_pixels.is_empty(), "lossy image export pixels must match the verified edit preview; first differences: {lossy_differing_pixels:?}");
+        outputs.extend(lossy_image_outputs);
         outputs.extend(assert_success("metadata", image_metadata(MetadataRequest { paths: vec![image.clone()], output_location: location(&root, "metadata") })));
         outputs.extend(assert_success("tone", adjust_image_tone(ToneRequest { paths: vec![image.clone()], brightness: 20, contrast: 0.0, saturation: 0.0, exposure: 0.0, output_location: location(&root, "tone") })));
         outputs.extend(assert_aggregate_success("tiff", &[tiff.clone()], process_tiff_pages(TiffRequest { paths: vec![tiff.clone()], pages: None, output_location: location(&root, "tiff") })));
@@ -783,6 +805,7 @@ mod command_tests {
 
         assert_eq!(std::fs::read(&pdf).unwrap(), plain_pdf_bytes, "native E2E commands must not modify their PDF input");
         assert_eq!(std::fs::read(&image).unwrap(), plain_image_bytes, "native E2E commands must not modify their image input");
+        assert_eq!(std::fs::read(&lossy_image).unwrap(), plain_lossy_image_bytes, "native E2E commands must not modify their lossy image input");
         assert_eq!(std::fs::read(&animated).unwrap(), animated_bytes, "native E2E commands must not modify their GIF input");
         assert_eq!(std::fs::read(&tiff).unwrap(), tiff_bytes, "native E2E commands must not modify their TIFF input");
         assert!(!outputs.is_empty(), "native E2E matrix must exercise every producing command");
