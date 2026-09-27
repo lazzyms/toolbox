@@ -7,12 +7,13 @@ test.beforeEach(async ({ page }) => {
     w.calls = [];
     w.sceneTextDelays = {};
     w.sceneTextResponses = {};
+    w.dialogNext = null;
     w.__TAURI_INTERNALS__ = {
       metadata: { currentWindow: { label: 'main' }, currentWebview: { label: 'main', windowLabel: 'main' } },
       transformCallback: () => 1, unregisterCallback: () => {},
       invoke: async (command: string, args: any) => {
         w.calls.push({ command, args });
-        if (command === 'plugin:dialog|open') return '/local/scene-fixture.pdf';
+        if (command === 'plugin:dialog|open') return w.dialogNext ?? '/local/scene-fixture.pdf';
         if (command === 'inspect_pdf_scene') return { path: '/local/scene-fixture.pdf', pages: [0, 1, 2].map(index => ({ index, width: 612, height: 792, preview: null })) };
         if (command === 'inspect_pdf_scene_page') {
           const pageIndex = args.request.pageIndex;
@@ -101,6 +102,122 @@ test('scene preview cache misses use one indexed batch request', async ({ page }
   expect(previewCalls).toHaveLength(1);
   expect(previewCalls[0].args).toMatchObject({ request: { pageIndices: [0, 1] } });
   expect(await page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'preview_pdf_scene').length)).toBe(0);
+});
+
+test('PDF editor toolbar uses roving keyboard focus and the inspector follows the active tool', async ({ page }) => {
+  await openEditor(page);
+  const toolbar = page.getByRole('toolbar', { name: 'PDF editor tools' });
+  const select = toolbar.getByRole('button', { name: 'Select', exact: true });
+  await select.focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(toolbar.getByRole('button', { name: 'Text', exact: true })).toBeFocused();
+  await page.keyboard.press('Home');
+  await expect(select).toBeFocused();
+
+  const inspector = page.getByRole('complementary', { name: 'PDF editor inspector' });
+  await expect(inspector).toBeVisible();
+  await expect(inspector.getByRole('region', { name: 'Properties' })).toBeVisible();
+  await toolbar.getByRole('button', { name: 'Shape', exact: true }).click();
+  await expect(inspector.getByRole('combobox', { name: 'Shape type' })).toBeVisible();
+});
+
+test('page actions menu supports keyboard navigation, Escape focus return, and outside dismissal', async ({ page }) => {
+  await openEditor(page);
+  const trigger = page.getByRole('button', { name: 'Page actions' });
+  await expect(trigger).toHaveAttribute('aria-haspopup', 'menu');
+  await trigger.focus();
+  await page.keyboard.press('Enter');
+  const menu = page.getByRole('menu', { name: 'Page actions' });
+  await expect(menu).toBeVisible();
+  const thumbnailSidebar = page.getByRole('complementary', { name: 'PDF page thumbnails' });
+  const sidebarBounds = await thumbnailSidebar.boundingBox();
+  const menuBounds = await menu.boundingBox();
+  expect(sidebarBounds).not.toBeNull();
+  expect(menuBounds).not.toBeNull();
+  expect(menuBounds!.x).toBeGreaterThanOrEqual(sidebarBounds!.x + sidebarBounds!.width);
+  expect(menuBounds!.y + menuBounds!.height).toBeLessThanOrEqual(page.viewportSize()!.height);
+  await expect(page.getByRole('menuitem', { name: 'Merge PDF' })).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(page.getByRole('menuitem', { name: 'Split PDF' })).toBeFocused();
+  await page.keyboard.press('Home');
+  await expect(page.getByRole('menuitem', { name: 'Merge PDF' })).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(menu).toBeHidden();
+  await expect(trigger).toBeFocused();
+
+  await trigger.click();
+  await expect(menu).toBeVisible();
+  await page.getByRole('heading', { name: 'PDF editor' }).click();
+  await expect(menu).toBeHidden();
+});
+
+for (const [utility, command] of [['Merge PDF', 'merge_pdfs'], ['Split PDF', 'split_pdf']] as const) {
+  test(`page actions open ${utility} with the current source and do not run it`, async ({ page }) => {
+    await openEditor(page);
+    await page.getByRole('button', { name: 'Page actions' }).click();
+    await page.getByRole('menuitem', { name: utility }).click();
+    await expect(page.getByRole('heading', { name: 'PDF conversion', exact: true })).toBeFocused();
+    await expect(page.getByRole('toolbar', { name: 'PDF conversion tools' }).getByRole('button', { name: utility, exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'scene-fixture.pdf', exact: true })).toBeVisible();
+    expect(await page.evaluate((command) => (window as any).calls.filter((call: any) => call.command === command).length, command)).toBe(0);
+    if (utility === 'Merge PDF') {
+      await page.evaluate(() => { (window as any).dialogNext = '/local/second-scene-fixture.pdf'; });
+      await page.getByRole('button', { name: 'Choose files to process' }).click();
+      await expect(page.getByRole('button', { name: 'second-scene-fixture.pdf', exact: true })).toBeVisible();
+    }
+    await page.getByRole('button', { name: `Export ${utility}`, exact: true }).click();
+    await expect.poll(() => page.evaluate((command) => (window as any).calls.filter((call: any) => call.command === command).at(-1)?.args.request.paths, command))
+      .toEqual(utility === 'Merge PDF' ? ['/local/scene-fixture.pdf', '/local/second-scene-fixture.pdf'] : ['/local/scene-fixture.pdf']);
+  });
+}
+
+test('non-adjacent page selection rotates only the selected pages', async ({ page }) => {
+  await openEditor(page);
+  await page.getByRole('button', { name: 'Page 1', exact: true }).click();
+  await page.getByRole('button', { name: 'Page 3', exact: true }).click({ modifiers: ['ControlOrMeta'] });
+  await expect(page.getByRole('button', { name: 'Page 1', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: 'Page 2', exact: true })).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.getByRole('button', { name: 'Page 3', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await page.getByRole('button', { name: 'Rotate selected pages' }).click();
+  const result = await exported(page);
+  expect(result.pages.map((item: any) => item.rotation)).toEqual([90, 0, 90]);
+});
+
+test('inspector property edits stay in scene history and undo and redo exactly', async ({ page }) => {
+  await openEditor(page);
+  await draw(page, 'Shape', .3);
+  await page.getByRole('button', { name: 'Select', exact: true }).click();
+  await page.getByRole('button', { name: 'shape object 1', exact: true }).click();
+  const inspector = page.getByRole('complementary', { name: 'PDF editor inspector' });
+  const shape = inspector.getByRole('combobox', { name: 'Shape type' });
+  await shape.selectOption('triangle');
+  let result = await exported(page);
+  expect(result.pages[0].objects[0].shape).toBe('triangle');
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  result = await exported(page);
+  expect(result.pages[0].objects[0].shape).toBe('square');
+  await page.getByRole('button', { name: 'Redo', exact: true }).click();
+  result = await exported(page);
+  expect(result.pages[0].objects[0].shape).toBe('triangle');
+});
+
+test('page numbering adds editable number objects to every page', async ({ page }) => {
+  await openEditor(page);
+  await page.getByRole('button', { name: 'Page numbers', exact: true }).click();
+  const result = await exported(page);
+  expect(result.pages.map((item: any) => item.objects.map((object: any) => object.text))).toEqual([['1'], ['2'], ['3']]);
+  expect(result.pages.every((item: any) => item.objects[0].kind === 'text')).toBe(true);
+});
+
+test('PDF scene history retains exactly the latest 100 edits', async ({ page }) => {
+  await openEditor(page);
+  const addPage = page.getByRole('button', { name: 'Add blank page' });
+  for (let index = 0; index < 101; index += 1) await addPage.click();
+  await expect(page.getByRole('button', { name: 'Page 102, blank', exact: true })).toBeVisible();
+  const undo = page.getByRole('button', { name: 'Undo', exact: true });
+  for (let index = 0; index < 100; index += 1) await undo.click();
+  const result = await exported(page);
+  expect(result.pages).toHaveLength(4);
 });
 
 test('pointer-down does not request another preview before the scene changes', async ({ page }) => {

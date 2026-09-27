@@ -16,6 +16,7 @@ import {
 import type { ToolDefinition, WorkspaceId } from "../contracts";
 import { TablerIcon } from "../components/TablerIcon";
 import type { WorkspaceSourceAction } from "../components/ToolScaffold";
+import type { PdfEditorNavigation } from "./PDFEditorWorkspaceView";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
@@ -90,6 +91,9 @@ type LibraryFilter = (typeof libraryFilters)[number]["value"];
 
 export const MainPage = () => {
   const [selectedTool, setSelectedTool] = useState<ToolDefinition | null>(null);
+  const [initialPaths, setInitialPaths] = useState<readonly string[]>([]);
+  const workspaceHeadingRef = useRef<HTMLHeadingElement>(null);
+  const focusWorkspaceHeadingOnNavigation = useRef(false);
   const [workspaceSourceAction, setWorkspaceSourceAction] = useState<WorkspaceSourceAction | null>(null);
   const publishWorkspaceSourceAction = useCallback((action: WorkspaceSourceAction | null) => {
     setWorkspaceSourceAction(() => action);
@@ -133,8 +137,9 @@ export const MainPage = () => {
       }).filter(({ actions }) => actions.length > 0),
     [filter, normalizedSearch, favorites, recent],
   );
-  const openTool = (tool: ToolDefinition) => {
+  const openTool = (tool: ToolDefinition, paths: readonly string[] = []) => {
     setWorkspaceSourceAction(null);
+    setInitialPaths([...paths]);
     setSelectedTool(tool);
     setRecent((current) => {
       const next = [tool.id, ...current.filter((id) => id !== tool.id)].slice(
@@ -144,6 +149,12 @@ export const MainPage = () => {
       localStorage.setItem("toolbox-recent", JSON.stringify(next));
       return next;
     });
+  };
+  const navigateToPdfUtility: PdfEditorNavigation = ({ utilityId, initialPaths: paths }) => {
+    const tool = UtilityRegistry.find((item) => item.id === utilityId);
+    if (!tool) return;
+    focusWorkspaceHeadingOnNavigation.current = true;
+    openTool(tool, paths);
   };
   const toggleFavorite = (id: string) =>
     setFavorites((current) => {
@@ -194,6 +205,11 @@ export const MainPage = () => {
   const selectedWorkspace = selectedTool
     ? workspaceForTool(selectedTool.id)
     : undefined;
+  useEffect(() => {
+    if (!focusWorkspaceHeadingOnNavigation.current || selectedWorkspace?.id !== "pdf-convert") return;
+    focusWorkspaceHeadingOnNavigation.current = false;
+    workspaceHeadingRef.current?.focus();
+  }, [selectedTool, selectedWorkspace?.id]);
   useEffect(() => {
     document.body.dataset.theme =
       (localStorage.getItem("toolbox-theme") as "dark" | "light") || "dark";
@@ -347,7 +363,9 @@ export const MainPage = () => {
             <Card className={`tool-workspace-card ${selectedWorkspace.id === "pdf-editor" ? "py-0" : ""}`}>
               {selectedWorkspace.id === "pdf-editor" ? (
                 <CardContent className="tool-view py-0">
-                  <ViewFor utility={selectedTool} onWorkspaceSourceAction={publishWorkspaceSourceAction} />
+                  <ViewFor utility={selectedTool} initialPaths={initialPaths}
+                    onNavigate={navigateToPdfUtility}
+                    onWorkspaceSourceAction={publishWorkspaceSourceAction} />
                 </CardContent>
               ) : (
                 <>
@@ -357,7 +375,7 @@ export const MainPage = () => {
                       {selectedWorkspace.title} workspace
                     </div>
                     <div className="tool-workspace-heading">
-                      <CardTitle className="workspace-card-title"><h1 className="workspace-title">{selectedWorkspace.title}</h1></CardTitle>
+                      <CardTitle className="workspace-card-title"><h1 ref={workspaceHeadingRef} tabIndex={-1} className="workspace-title">{selectedWorkspace.title}</h1></CardTitle>
                       <CardDescription><p>{selectedWorkspace.blurb}</p></CardDescription>
                     </div>
                     <CardAction>
@@ -374,7 +392,7 @@ export const MainPage = () => {
                     </CardAction>
                   </CardHeader>
                   <CardContent className="tool-view">
-                    <ViewFor utility={selectedTool} />
+                    <ViewFor utility={selectedTool} initialPaths={initialPaths} />
                   </CardContent>
                 </>
               )}
@@ -513,13 +531,19 @@ export const MainPage = () => {
   );
 };
 
-const ViewFor = ({ utility, onWorkspaceSourceAction }: { utility: ToolDefinition; onWorkspaceSourceAction?: (action: WorkspaceSourceAction | null) => void }) => {
+const ViewFor = ({ utility, initialPaths, onNavigate, onWorkspaceSourceAction }: {
+  utility: ToolDefinition;
+  initialPaths?: readonly string[];
+  onNavigate?: PdfEditorNavigation;
+  onWorkspaceSourceAction?: (action: WorkspaceSourceAction | null) => void;
+}) => {
   if (utility.capability.nativeAvailability === "unavailable") {
     return <UnavailableToolView utility={utility} />;
   }
   const workspace = workspaceForTool(utility.id);
   if (!workspace) return <PlannedToolView utility={utility} />;
-  if (workspace.id === "pdf-editor") return <PDFEditorWorkspaceView utility={utility} onWorkspaceSourceAction={onWorkspaceSourceAction} />;
+  if (workspace.id === "pdf-editor") return <PDFEditorWorkspaceView utility={utility} onNavigate={onNavigate} onWorkspaceSourceAction={onWorkspaceSourceAction} />;
+  if (workspace.id === "pdf-convert") return <PDFConversionWorkspaceView utility={utility} initialPaths={initialPaths} />;
   const View = workspaceViews[workspace.id];
   return <View utility={utility} />;
 };
