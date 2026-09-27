@@ -1,0 +1,4 @@
+{
+  "pdf-editor": ["pdf"],
+  "image-editor": ["png", "jpg", "jpeg", "webp", "heic", "heif"]
+}

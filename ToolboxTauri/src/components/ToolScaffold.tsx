@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
-import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
+import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import type { ToolDefinition, JobOutcome, Progress } from '../contracts';
+import type { ShellEvent } from '../hooks/useShellBridge';
 import { ResultList } from './ResultList';
 import { TablerIcon } from './TablerIcon';
 
@@ -18,6 +19,9 @@ interface ToolScaffoldProps {
     onWorkspaceSourceAction?: (action: WorkspaceSourceAction | null) => void;
     showFileOrdering?: boolean;
     initialPaths?: readonly string[];
+    fileActivation?: Extract<ShellEvent, { kind: 'files' }>;
+    onActivationAccepted?: (activationId: string) => void;
+    onFilesChange?: (paths: readonly string[]) => void;
     children: (props: {
         files: string[];
         run: () => Promise<void>;
@@ -30,11 +34,12 @@ interface ToolScaffoldProps {
     }) => React.ReactNode;
 }
 
-export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, initialPaths = [], children }: ToolScaffoldProps) => {
+export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, children }: ToolScaffoldProps) => {
     const [files, setFiles] = useState<string[]>(() => [...initialPaths]);
     const [results, setResults] = useState<JobOutcome[]>([]);
     const [loading, setLoading] = useState(false);
     const [selectedFileIndex, setSelectedFileIndex] = useState(0);
+    const [acceptedActivationId, setAcceptedActivationId] = useState<string | null>(null);
     const runGeneration = useRef(0);
     const browseRef = useRef<WorkspaceSourceAction>(() => undefined);
     const inputPolicy = utility.capability;
@@ -74,6 +79,25 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         setResults([]);
         setSelectedFileIndex((index) => Math.min(index, Math.max(files.length - 1, 0)));
     }, [files]);
+
+    useEffect(() => {
+        if (!fileActivation) return;
+        setFiles([...fileActivation.paths]);
+        setResults([]);
+        setSelectedFileIndex(0);
+        setAcceptedActivationId(fileActivation.activationId);
+    }, [fileActivation?.activationId]);
+
+    useEffect(() => {
+        if (!fileActivation || acceptedActivationId !== fileActivation.activationId) return;
+        void invoke('acknowledge_activation', { activationId: fileActivation.activationId }).then(() => {
+            onActivationAccepted?.(fileActivation.activationId);
+        });
+    }, [acceptedActivationId, fileActivation, onActivationAccepted]);
+
+    useEffect(() => {
+        onFilesChange?.(files);
+    }, [files, onFilesChange]);
 
     const failureFor = (inputPath: string, kind: 'invalidInput' | 'unavailable', message: string): JobOutcome => ({
         inputPath,
@@ -147,20 +171,6 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
             return next;
         });
     };
-
-    useEffect(() => {
-        if (typeof window === 'undefined' || !("__TAURI_INTERNALS__" in window)) return;
-        const appWindow = getCurrentWebviewWindow();
-        const unlisten = appWindow.onDragDropEvent((event) => {
-            if (event.payload.type === 'drop') {
-                const paths = (event.payload as { type: 'drop'; paths: string[] }).paths;
-                addFiles(paths);
-            }
-        });
-        return () => {
-            unlisten.then((dispose) => dispose());
-        };
-    }, [inputPolicy.inputCardinality]);
 
     const browse = async () => {
         try {

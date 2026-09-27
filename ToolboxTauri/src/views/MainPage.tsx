@@ -7,6 +7,9 @@ import {
   type ComponentType,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
+import shellFileTypes from "../../shared/shell-file-types.json" with { type: "json" };
 import {
   ToolWorkspaceRegistry,
   UtilityRegistry,
@@ -20,7 +23,15 @@ import type { PdfEditorNavigation } from "./PDFEditorWorkspaceView";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import { Dialog, DialogTrigger } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { SecurityWorkspaceView } from "./SecurityWorkspaceView";
@@ -30,6 +41,8 @@ import { ImageEditorWorkspaceView } from "./ImageEditorWorkspaceView";
 import { MediaWorkspaceView } from "./MediaWorkspaceView";
 import { PlannedToolView, UnavailableToolView } from "./PlannedToolView";
 import { SettingsPanel } from "./SettingsPanel";
+import { useShellBridge } from "../hooks/useShellBridge";
+import type { ShellCommand, ShellEvent } from "../hooks/useShellBridge";
 
 const workspaceViews = {
   "file-security": SecurityWorkspaceView,
@@ -94,6 +107,14 @@ export const MainPage = () => {
   const [initialPaths, setInitialPaths] = useState<readonly string[]>([]);
   const workspaceHeadingRef = useRef<HTMLHeadingElement>(null);
   const focusWorkspaceHeadingOnNavigation = useRef(false);
+  const [fileActivation, setFileActivation] = useState<Extract<ShellEvent, { kind: "files" }> | null>(null);
+  const [rejectedFiles, setRejectedFiles] = useState<Extract<ShellEvent, { kind: "rejected-files" }> | null>(null);
+  const [activeDocumentPath, setActiveDocumentPath] = useState<string | null>(null);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [viewZoom, setViewZoom] = useState(() => Number(localStorage.getItem("toolbox-view-zoom") || "1"));
+  const activationInFlight = useRef<string | null>(null);
+  const queuedActivations = useRef<Extract<ShellEvent, { kind: "files" }>[]>([]);
+  const acceptedActivationIds = useRef<string[]>([]);
   const [workspaceSourceAction, setWorkspaceSourceAction] = useState<WorkspaceSourceAction | null>(null);
   const publishWorkspaceSourceAction = useCallback((action: WorkspaceSourceAction | null) => {
     setWorkspaceSourceAction(() => action);
@@ -137,7 +158,11 @@ export const MainPage = () => {
       }).filter(({ actions }) => actions.length > 0),
     [filter, normalizedSearch, favorites, recent],
   );
-  const openTool = (tool: ToolDefinition, paths: readonly string[] = []) => {
+  const openTool = useCallback((tool: ToolDefinition, paths: readonly string[] = []) => {
+    setFileActivation(null);
+    activationInFlight.current = null;
+    queuedActivations.current = [];
+    setActiveDocumentPath(paths[0] ?? null);
     setWorkspaceSourceAction(null);
     setInitialPaths([...paths]);
     setSelectedTool(tool);
@@ -149,13 +174,23 @@ export const MainPage = () => {
       localStorage.setItem("toolbox-recent", JSON.stringify(next));
       return next;
     });
-  };
-  const navigateToPdfUtility: PdfEditorNavigation = ({ utilityId, initialPaths: paths }) => {
+  }, []);
+  const closeWorkspace = useCallback(() => {
+    setWorkspaceSourceAction(null);
+    setSelectedTool(null);
+    setInitialPaths([]);
+    setFileActivation(null);
+    setActiveDocumentPath(null);
+    activationInFlight.current = null;
+    queuedActivations.current = [];
+  }, []);
+  const navigateToPdfUtility: PdfEditorNavigation = useCallback(({ utilityId, initialPaths: paths }) => {
     const tool = UtilityRegistry.find((item) => item.id === utilityId);
-    if (!tool) return;
-    focusWorkspaceHeadingOnNavigation.current = true;
-    openTool(tool, paths);
-  };
+    if (tool) {
+      focusWorkspaceHeadingOnNavigation.current = true;
+      openTool(tool, paths);
+    }
+  }, [openTool]);
   const toggleFavorite = (id: string) =>
     setFavorites((current) => {
       const next = current.includes(id)
@@ -201,10 +236,145 @@ export const MainPage = () => {
     setSearch("");
     setWorkspaceSourceAction(null);
     setSelectedTool(null);
+    setFileActivation(null);
+    setActiveDocumentPath(null);
+    activationInFlight.current = null;
+    queuedActivations.current = [];
   };
   const selectedWorkspace = selectedTool
     ? workspaceForTool(selectedTool.id)
     : undefined;
+  const openFilesFromMenu = useCallback(async () => {
+    const extensions = [...new Set([...shellFileTypes["pdf-editor"], ...shellFileTypes["image-editor"]])];
+    const picked = await open({ multiple: false, filters: [{ name: "Supported documents", extensions }] });
+    const paths = Array.isArray(picked) ? picked : picked ? [picked] : [];
+    if (paths.length) await invoke("open_paths", { paths });
+  }, []);
+  const dispatchEditorCommand = useCallback((command: Exclude<ShellCommand, "search" | "open" | "zoom-in" | "zoom-out" | "zoom-reset" | "toggle-theme" | "shortcuts">) => {
+    window.dispatchEvent(new CustomEvent("toolbox:editor-command", { detail: command }));
+  }, []);
+  const activateFile = useCallback((event: Extract<ShellEvent, { kind: "files" }>) => {
+    const id = event.workspace === "pdf-editor" ? "pdf-edit" : "heic-convert";
+    const tool = UtilityRegistry.find((item) => item.id === id);
+    if (!tool) return;
+    setRejectedFiles(null);
+    setInitialPaths([]);
+    setFileActivation(event);
+    setActiveDocumentPath(event.paths[0] ?? null);
+    setSelectedTool(tool);
+    setWorkspaceSourceAction(null);
+    setRecent((current) => {
+      const next = [tool.id, ...current.filter((item) => item !== tool.id)].slice(0, 8);
+      localStorage.setItem("toolbox-recent", JSON.stringify(next));
+      return next;
+    });
+  }, []);
+  const handleShellEvent = useCallback((event: ShellEvent) => {
+    if (event.kind === "files") {
+      if (acceptedActivationIds.current.includes(event.activationId)
+        || activationInFlight.current === event.activationId
+        || queuedActivations.current.some((queued) => queued.activationId === event.activationId)) return;
+      if (activationInFlight.current) {
+        queuedActivations.current.push(event);
+        return;
+      }
+      activationInFlight.current = event.activationId;
+      activateFile(event);
+      return;
+    }
+    if (event.kind === "rejected-files") {
+      setRejectedFiles(event);
+      return;
+    }
+    switch (event.command) {
+      case "search":
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+        break;
+      case "open":
+        void openFilesFromMenu();
+        break;
+      case "undo":
+      case "redo":
+      case "export":
+        dispatchEditorCommand(event.command);
+        break;
+      case "zoom-in":
+      case "zoom-out":
+      case "zoom-reset":
+        setViewZoom((current) => event.command === "zoom-reset" ? 1 : Math.min(1.5, Math.max(0.75, current + (event.command === "zoom-in" ? 0.1 : -0.1))));
+        break;
+      case "toggle-theme": {
+        const theme = document.body.dataset.theme === "light" ? "dark" : "light";
+        document.body.dataset.theme = theme;
+        localStorage.setItem("toolbox-theme", theme);
+        break;
+      }
+      case "shortcuts":
+        setShortcutsOpen(true);
+        break;
+    }
+  }, [activateFile, dispatchEditorCommand, openFilesFromMenu]);
+  const acceptActivation = useCallback((activationId: string) => {
+    if (activationInFlight.current !== activationId) return;
+    acceptedActivationIds.current.push(activationId);
+    if (acceptedActivationIds.current.length > 64) acceptedActivationIds.current.shift();
+    const next = queuedActivations.current.shift() ?? null;
+    activationInFlight.current = next?.activationId ?? null;
+    if (next) {
+      activateFile(next);
+      return;
+    }
+    setFileActivation(null);
+  }, [activateFile]);
+  const publishDocumentPath = useCallback((paths: readonly string[]) => setActiveDocumentPath(paths[0] ?? null), []);
+  useShellBridge(handleShellEvent);
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    const name = activeDocumentPath?.split(/[\\/]/).pop();
+    const title = selectedWorkspace ? name ? `Toolbox — ${name}` : `Toolbox — ${selectedWorkspace.title}` : "Toolbox";
+    void invoke("set_document_title", { title }).catch(() => undefined);
+  }, [activeDocumentPath, selectedWorkspace?.id]);
+  useEffect(() => {
+    document.documentElement.style.zoom = viewZoom === 1 ? "" : String(viewZoom);
+    localStorage.setItem("toolbox-view-zoom", String(viewZoom));
+  }, [viewZoom]);
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      if (event.key === "Escape") {
+        if (settingsOpen) {
+          event.preventDefault();
+          setSettingsOpen(false);
+          return;
+        }
+        if (shortcutsOpen) {
+          event.preventDefault();
+          setShortcutsOpen(false);
+          return;
+        }
+        const target = event.target instanceof HTMLElement ? event.target : null;
+        if (target?.closest('[role="menu"], [role="dialog"], input, textarea, [contenteditable="true"]')) return;
+        if (selectedTool) {
+          event.preventDefault();
+          closeWorkspace();
+        }
+        return;
+      }
+      if (!(event.metaKey || event.ctrlKey)) return;
+      const key = event.key.toLowerCase();
+      const command = key === "k" ? "search" : key === "o" ? "open" : key === "z" ? (event.shiftKey ? "redo" : "undo") : key === "e" ? "export" : null;
+      if (!command) return;
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      if (key === "z" && target?.closest("input, textarea, [contenteditable='true']")) return;
+      event.preventDefault();
+      if (command === "search") handleShellEvent({ kind: "command", command });
+      else if (command === "open") handleShellEvent({ kind: "command", command });
+      else dispatchEditorCommand(command);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [closeWorkspace, dispatchEditorCommand, handleShellEvent, selectedTool, settingsOpen, shortcutsOpen]);
   useEffect(() => {
     if (!focusWorkspaceHeadingOnNavigation.current || selectedWorkspace?.id !== "pdf-convert") return;
     focusWorkspaceHeadingOnNavigation.current = false;
@@ -215,18 +385,6 @@ export const MainPage = () => {
       (localStorage.getItem("toolbox-theme") as "dark" | "light") || "dark";
   }, []);
   useEffect(() => {
-    const focusSearch = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "k") return;
-
-      event.preventDefault();
-      searchInputRef.current?.focus();
-      searchInputRef.current?.select();
-    };
-
-    window.addEventListener("keydown", focusSearch);
-    return () => window.removeEventListener("keydown", focusSearch);
-  }, []);
-  useEffect(() => {
     const openFromCompatibilityNav = (event: Event) => {
       const id = (event as CustomEvent<string>).detail;
       const tool = UtilityRegistry.find((item) => item.id === id);
@@ -235,7 +393,7 @@ export const MainPage = () => {
     window.addEventListener("toolbox:open", openFromCompatibilityNav);
     return () =>
       window.removeEventListener("toolbox:open", openFromCompatibilityNav);
-  });
+  }, [openTool]);
 
   return (
     <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
@@ -341,11 +499,31 @@ export const MainPage = () => {
             </div>
           )}
         </header>
+        {rejectedFiles && (
+          <Card role="alert" aria-live="assertive" className="mx-6 my-3 border-destructive/50">
+            <CardHeader>
+              <CardTitle>Some files could not be opened</CardTitle>
+              <CardDescription>{rejectedFiles.reason}</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ul className="list-disc space-y-1 pl-5">
+                {rejectedFiles.paths.map((path) => (
+                  <li key={path}>{path.split(/[\\/]/).pop() || path}</li>
+                ))}
+              </ul>
+            </CardContent>
+            <CardFooter>
+              <Button variant="outline" onClick={() => setRejectedFiles(null)}>
+                Dismiss
+              </Button>
+            </CardFooter>
+          </Card>
+        )}
         {selectedTool && selectedWorkspace ? (
           <section className={`tool-workspace ${selectedWorkspace.id === "pdf-editor" ? "pdf-studio" : ""}`} id="tool-detail">
             {selectedWorkspace.id === "pdf-editor" ? (
               <div className="pdf-editor-header-line">
-                <Button className="back-link" variant="ghost" size="sm" onClick={() => { setWorkspaceSourceAction(null); setSelectedTool(null); }}>← All tools</Button>
+                <Button className="back-link" variant="ghost" size="sm" onClick={closeWorkspace}>← All tools</Button>
                 <h1 className="workspace-title">{selectedWorkspace.title}</h1>
                 {workspaceSourceAction && <Button variant="default" size="sm" className="pdf-editor-open-files" aria-label="Choose files to process" title="Open files" onClick={() => void workspaceSourceAction()}>Open files</Button>}
                 <Button
@@ -359,11 +537,14 @@ export const MainPage = () => {
                   {favorites.includes(selectedTool.id) ? "★" : "☆"}
                 </Button>
               </div>
-            ) : <Button className="back-link" variant="ghost" size="sm" onClick={() => setSelectedTool(null)}>← All tools</Button>}
+            ) : <Button className="back-link" variant="ghost" size="sm" onClick={closeWorkspace}>← All tools</Button>}
             <Card className={`tool-workspace-card ${selectedWorkspace.id === "pdf-editor" ? "py-0" : ""}`}>
               {selectedWorkspace.id === "pdf-editor" ? (
                 <CardContent className="tool-view py-0">
                   <ViewFor utility={selectedTool} initialPaths={initialPaths}
+                    fileActivation={fileActivation?.workspace === selectedWorkspace.id ? fileActivation : undefined}
+                    onActivationAccepted={acceptActivation}
+                    onFilesChange={publishDocumentPath}
                     onNavigate={navigateToPdfUtility}
                     onWorkspaceSourceAction={publishWorkspaceSourceAction} />
                 </CardContent>
@@ -392,7 +573,15 @@ export const MainPage = () => {
                     </CardAction>
                   </CardHeader>
                   <CardContent className="tool-view">
-                    <ViewFor utility={selectedTool} initialPaths={initialPaths} />
+                    <ViewFor
+                      utility={selectedTool}
+                      initialPaths={initialPaths}
+                      fileActivation={fileActivation?.workspace === selectedWorkspace.id ? fileActivation : undefined}
+                      onActivationAccepted={acceptActivation}
+                      onFilesChange={publishDocumentPath}
+                      onNavigate={selectedWorkspace.id === "pdf-editor" ? navigateToPdfUtility : undefined}
+                      onWorkspaceSourceAction={publishWorkspaceSourceAction}
+                    />
                   </CardContent>
                 </>
               )}
@@ -525,15 +714,36 @@ export const MainPage = () => {
           </footer>
         )}
       </main>
+      <Dialog open={shortcutsOpen} onOpenChange={setShortcutsOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Keyboard shortcuts</DialogTitle>
+            <DialogDescription>Use these shortcuts to navigate and edit.</DialogDescription>
+          </DialogHeader>
+          <dl className="grid grid-cols-[1fr_auto] items-center gap-x-8 gap-y-3 text-sm">
+            <dt>Search tools</dt><dd><kbd>⌘ K / Ctrl K</kbd></dd>
+            <dt>Open file</dt><dd><kbd>⌘ O / Ctrl O</kbd></dd>
+            <dt>Undo</dt><dd><kbd>⌘ Z / Ctrl Z</kbd></dd>
+            <dt>Redo</dt><dd><kbd>⇧ ⌘ Z / Ctrl Shift Z</kbd></dd>
+            <dt>Export</dt><dd><kbd>⌘ E / Ctrl E</kbd></dd>
+          </dl>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShortcutsOpen(false)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
     <SettingsPanel />
     </Dialog>
   );
 };
 
-const ViewFor = ({ utility, initialPaths, onNavigate, onWorkspaceSourceAction }: {
+const ViewFor = ({ utility, initialPaths, fileActivation, onActivationAccepted, onFilesChange, onNavigate, onWorkspaceSourceAction }: {
   utility: ToolDefinition;
   initialPaths?: readonly string[];
+  fileActivation?: Extract<ShellEvent, { kind: "files" }>;
+  onActivationAccepted?: (activationId: string) => void;
+  onFilesChange?: (paths: readonly string[]) => void;
   onNavigate?: PdfEditorNavigation;
   onWorkspaceSourceAction?: (action: WorkspaceSourceAction | null) => void;
 }) => {
@@ -542,7 +752,8 @@ const ViewFor = ({ utility, initialPaths, onNavigate, onWorkspaceSourceAction }:
   }
   const workspace = workspaceForTool(utility.id);
   if (!workspace) return <PlannedToolView utility={utility} />;
-  if (workspace.id === "pdf-editor") return <PDFEditorWorkspaceView utility={utility} onNavigate={onNavigate} onWorkspaceSourceAction={onWorkspaceSourceAction} />;
+  if (workspace.id === "pdf-editor") return <PDFEditorWorkspaceView utility={utility} onNavigate={onNavigate} onWorkspaceSourceAction={onWorkspaceSourceAction} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange} />;
+  if (workspace.id === "image-editor") return <ImageEditorWorkspaceView utility={utility} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange} onWorkspaceSourceAction={onWorkspaceSourceAction} />;
   if (workspace.id === "pdf-convert") return <PDFConversionWorkspaceView utility={utility} initialPaths={initialPaths} />;
   const View = workspaceViews[workspace.id];
   return <View utility={utility} />;

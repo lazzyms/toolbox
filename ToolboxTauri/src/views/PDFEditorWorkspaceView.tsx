@@ -4,6 +4,7 @@ import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { ToolScaffold } from '../components/ToolScaffold';
 import type { WorkspaceSourceAction } from '../components/ToolScaffold';
+import type { ShellEvent } from '../hooks/useShellBridge';
 import type { ToolDefinition, ToolResult } from '../contracts';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
@@ -81,14 +82,24 @@ function handleToolbarKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
   buttons[next].focus();
 }
 
-export const PDFEditorWorkspaceView = ({ utility, onNavigate, onWorkspaceSourceAction }: {
+export const PDFEditorWorkspaceView = ({
+  utility,
+  onNavigate,
+  onWorkspaceSourceAction,
+  fileActivation,
+  onActivationAccepted,
+  onFilesChange,
+}: {
   utility: ToolDefinition;
   onNavigate?: PdfEditorNavigation;
   onWorkspaceSourceAction?: (action: WorkspaceSourceAction | null) => void;
+  fileActivation?: Extract<ShellEvent, { kind: 'files' }>;
+  onActivationAccepted?: (activationId: string) => void;
+  onFilesChange?: (paths: readonly string[]) => void;
 }) => {
   const session = useRef<{ path: string; scene: PdfScene } | null>(null);
   const initialTool: SceneTool = utility.id === 'pdf-crop' ? 'crop' : utility.id === 'pdf-watermark' ? 'watermark' : utility.id === 'pdf-sign' ? 'signature' : 'select';
-  return <ToolScaffold utility={utility} variant="workspace" sessionKey="pdf-editor-scene" onWorkspaceSourceAction={onWorkspaceSourceAction}
+  return <ToolScaffold utility={utility} variant="workspace" sessionKey="pdf-editor-scene" onWorkspaceSourceAction={onWorkspaceSourceAction} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange}
     onRun={async (paths) => {
       const [inputPath] = paths;
       if (!inputPath || !session.current || session.current.path !== inputPath) throw new Error('Select exactly one open PDF before exporting.');
@@ -156,6 +167,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
   const currentIndex = scene.pages.findIndex((item) => item.id === page?.id);
   const serializedScene = JSON.stringify(scene);
   const previewKey = path ? previewCacheKey(path, currentIndex, serializedScene, PREVIEW_RENDER_SETTINGS) : null;
+  const exactPreview = preview?.key === previewKey ? preview.value : null;
   const selectedSignature = selected?.kind === 'signature' ? selected : null;
 
   useEffect(() => {
@@ -276,6 +288,16 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
     past: [...value.past, value.present], present: value.future[0], future: value.future.slice(1),
   } : value); };
   const reset = () => { if (document) commit(sceneFromDocument(document)); setSelectedId(null); };
+  useEffect(() => {
+    const onShellCommand = (event: Event) => {
+      const command = (event as CustomEvent<string>).detail;
+      if (command === 'undo') undo();
+      else if (command === 'redo') redo();
+      else if (command === 'export' && page && !exporting && !renderError && !rendering && exactPreview) void onExport();
+    };
+    window.addEventListener('toolbox:editor-command', onShellCommand);
+    return () => window.removeEventListener('toolbox:editor-command', onShellCommand);
+  }, [exactPreview, exporting, onExport, page, redo, renderError, rendering, undo]);
   const updateObject = (patch: Partial<SceneObject>, field: string) => {
     if (!selected || !page) return;
     commit({ pages: scene.pages.map((item) => item.id === page.id ? { ...page,
@@ -353,7 +375,6 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
     return { ...item, objects: [...item.objects, { ...makeObject('text', { x: b.x + b.width / 2 - 20, y: b.y + Math.max(0, b.height - 30), width: Math.min(40, b.width), height: Math.min(20, b.height) }), text: String(index + 1), fontSize: 12 }] };
   }) });
   const dirty = document && !same(scene, sceneFromDocument(document));
-  const exactPreview = preview?.key === previewKey ? preview.value : null;
   const endGroup = () => { group.current = null; };
   const selectedKind = selected?.kind ?? tool;
   const activeColor = selected?.color ?? (tool === 'highlight' ? highlightColor : color);

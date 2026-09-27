@@ -2,6 +2,7 @@
 
 mod file_actions;
 mod kit;
+mod shell;
 
 use crate::file_actions::{open_output_path, reveal_output_path};
 use crate::kit::common::JobOutcome;
@@ -13,6 +14,7 @@ use crate::kit::contracts::{command_supports_preview, validate_command_inputs, v
 use crate::kit::common::batch_runner::BatchRunner;
 use crate::kit::password::PasswordProcessor;
 use crate::kit::office::OfficeProcessor;
+use tauri::Manager;
 
 #[tauri::command]
 async fn remove_password(request: PasswordRequest) -> Vec<JobOutcome> {
@@ -316,6 +318,10 @@ where
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
+            shell::shell_ready,
+            shell::acknowledge_activation,
+            shell::open_paths,
+            shell::set_document_title,
             open_output_path,
             reveal_output_path,
             remove_password,
@@ -365,11 +371,35 @@ fn main() {
             inspect_image_edit_preview,
             export_image_edit_plan
         ])
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            shell::focus(app);
+            let paths = argv.into_iter().skip(1).collect::<Vec<_>>();
+            if !paths.is_empty() {
+                shell::dispatch(app, shell::parse_paths(paths));
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .setup(|app| {
+            app.manage(shell::ShellState::default());
+            shell::install_geometry(app)?;
+            shell::menu(app)?;
+            let startup_paths = std::env::args().skip(1).collect::<Vec<_>>();
+            if !startup_paths.is_empty() {
+                shell::dispatch(app.handle(), shell::parse_paths(startup_paths));
+            }
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            shell::handle_window_event(window, event);
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+                shell::handle_drop(window.app_handle(), paths.clone());
+            }
+        })
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| shell::handle_run_event(app, &event));
 }
 
 #[cfg(test)]

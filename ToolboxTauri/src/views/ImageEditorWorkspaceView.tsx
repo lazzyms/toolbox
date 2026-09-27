@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ToolScaffold } from "../components/ToolScaffold";
+import type { WorkspaceSourceAction } from "../components/ToolScaffold";
+import type { ShellEvent } from "../hooks/useShellBridge";
 import { WorkspaceCommandRail } from "../components/WorkspaceCommandRail";
 import { toolsForWorkspaceId, UtilityRegistry } from "../registry";
 import type {
@@ -122,7 +124,19 @@ const imageEditLabel = (edit: ImageEditOperation) => {
   return `Crop ${edit.width} × ${edit.height}`;
 };
 
-export const ImageEditorWorkspaceView = ({ utility }: { utility: ToolDefinition }) => {
+export const ImageEditorWorkspaceView = ({
+  utility,
+  fileActivation,
+  onActivationAccepted,
+  onFilesChange,
+  onWorkspaceSourceAction,
+}: {
+  utility: ToolDefinition;
+  fileActivation?: Extract<ShellEvent, { kind: "files" }>;
+  onActivationAccepted?: (activationId: string) => void;
+  onFilesChange?: (paths: readonly string[]) => void;
+  onWorkspaceSourceAction?: (action: WorkspaceSourceAction | null) => void;
+}) => {
   const [format, setFormat] = useState<ConvertImagesRequest["format"]>("png");
   const [quality, setQuality] = useState(80);
   const [lossless, setLossless] = useState(false);
@@ -176,6 +190,10 @@ export const ImageEditorWorkspaceView = ({ utility }: { utility: ToolDefinition 
       variant="workspace"
       sessionKey="image-editor"
       utility={activeUtility}
+      fileActivation={fileActivation}
+      onActivationAccepted={onActivationAccepted}
+      onFilesChange={onFilesChange}
+      onWorkspaceSourceAction={onWorkspaceSourceAction}
       onRun={(paths) => {
         if (activeUtility.id === "heic-convert") {
           return invoke<ToolResult>("convert_images", {
@@ -521,6 +539,16 @@ const ImageEditorControls = ({
   const previewError = sourcePreviewError || (previewValidation?.status === "error" ? previewValidation.message : "");
   const hasEdits = plan.edits.length > 0 || draft !== null;
   const previewIsValid = previewValidation?.key === previewPlanKey && previewValidation.status === "valid";
+  useEffect(() => {
+    const onShellCommand = (event: Event) => {
+      const command = (event as CustomEvent<string>).detail;
+      if (command === "undo" && canUndo) onUndo();
+      else if (command === "redo" && canRedo) onRedo();
+      else if (command === "export" && files.length > 0 && hasEdits && previewIsValid && !loading) void runCombined();
+    };
+    window.addEventListener("toolbox:editor-command", onShellCommand);
+    return () => window.removeEventListener("toolbox:editor-command", onShellCommand);
+  }, [canRedo, canUndo, files.length, hasEdits, loading, onRedo, onUndo, previewIsValid, runCombined]);
   const selectedCropPreset = cropMode !== "aspectRatio"
     ? "free"
     : sourcePreview && aspectRatioMatches(cropWidth, cropHeight, sourcePreview.width, sourcePreview.height)
