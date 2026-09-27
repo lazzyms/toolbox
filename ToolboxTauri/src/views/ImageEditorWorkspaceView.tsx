@@ -33,6 +33,15 @@ import { Switch } from "../components/ui/switch";
 
 const imageEditorActions = toolsForWorkspaceId("image-editor");
 const imageEditorIds = new Set<string>(imageEditorActions.map((tool) => tool.id));
+const cropAspectPresets = [
+  { value: "1:1", label: "Square · 1:1", width: 1, height: 1 },
+  { value: "4:3", label: "Classic · 4:3", width: 4, height: 3 },
+  { value: "3:2", label: "Photo · 3:2", width: 3, height: 2 },
+  { value: "16:9", label: "Wide · 16:9", width: 16, height: 9 },
+  { value: "9:16", label: "Portrait · 9:16", width: 9, height: 16 },
+] as const;
+const aspectRatioMatches = (firstWidth: number, firstHeight: number, secondWidth: number, secondHeight: number) =>
+  firstWidth > 0 && firstHeight > 0 && Math.abs(firstWidth / firstHeight - secondWidth / secondHeight) < 0.001;
 
 type ImageEditorDraftValues = {
   format: ConvertImagesRequest["format"];
@@ -47,6 +56,8 @@ type ImageEditorDraftValues = {
   degrees: number;
   flip: string;
   cropMode: string;
+  cropWidth: number;
+  cropHeight: number;
   cropX: number;
   cropY: number;
   anchor: string;
@@ -56,6 +67,8 @@ type ImageEditorDraftValues = {
   exposure: number;
   watermarkText: string;
   watermarkOpacity: number;
+  watermarkX: number;
+  watermarkY: number;
 };
 
 const buildImageEditDraft = (id: string, values: ImageEditorDraftValues): ImageEditOperation => {
@@ -76,19 +89,19 @@ const buildImageEditDraft = (id: string, values: ImageEditorDraftValues): ImageE
     kind: "crop",
     x: values.cropX,
     y: values.cropY,
-    width: values.width,
-    height: values.height,
+    width: values.cropWidth,
+    height: values.cropHeight,
     mode: values.cropMode,
-    aspectWidth: values.width,
-    aspectHeight: values.height,
+    aspectWidth: values.cropWidth,
+    aspectHeight: values.cropHeight,
     anchor: values.anchor,
   };
   if (id === "image-watermark") return {
     kind: "watermark",
     text: values.watermarkText,
     opacity: values.watermarkOpacity,
-    x: values.cropX,
-    y: values.cropY,
+    x: values.watermarkX,
+    y: values.watermarkY,
   };
   return {
     kind: "tone",
@@ -121,7 +134,9 @@ export const ImageEditorWorkspaceView = ({ utility }: { utility: ToolDefinition 
   const [keepRatio, setKeepRatio] = useState(true);
   const [degrees, setDegrees] = useState(0);
   const [flip, setFlip] = useState("none");
-  const [cropMode, setCropMode] = useState("rectangle");
+  const [cropMode, setCropMode] = useState("aspectRatio");
+  const [cropWidth, setCropWidth] = useState(4);
+  const [cropHeight, setCropHeight] = useState(3);
   const [cropX, setCropX] = useState(0);
   const [cropY, setCropY] = useState(0);
   const [anchor, setAnchor] = useState("center");
@@ -131,6 +146,8 @@ export const ImageEditorWorkspaceView = ({ utility }: { utility: ToolDefinition 
   const [exposure, setExposure] = useState(0);
   const [watermarkText, setWatermarkText] = useState("Toolbox");
   const [watermarkOpacity, setWatermarkOpacity] = useState(20);
+  const [watermarkX, setWatermarkX] = useState(0);
+  const [watermarkY, setWatermarkY] = useState(0);
   const [history, setHistory] = useState<ImageEditHistory>(() => createImageEditHistory());
   const [committedDraftKey, setCommittedDraftKey] = useState<string | null>(null);
   const [activeToolId, setActiveToolId] = useState<AtomicToolId>(
@@ -142,8 +159,8 @@ export const ImageEditorWorkspaceView = ({ utility }: { utility: ToolDefinition 
   const activeUtility = UtilityRegistry.find((item) => item.id === activeToolId) ?? utility;
   const draft = buildImageEditDraft(activeUtility.id, {
     format, quality, lossless, width, height, resizeMode, percentage, resampling, keepRatio,
-    degrees, flip, cropMode, cropX, cropY, anchor, brightness, contrast, saturation, exposure,
-    watermarkText, watermarkOpacity,
+    degrees, flip, cropMode, cropWidth, cropHeight, cropX, cropY, anchor, brightness, contrast, saturation, exposure,
+    watermarkText, watermarkOpacity, watermarkX, watermarkY,
   });
   const draftKey = JSON.stringify(draft);
   const liveDraft = draftKey === committedDraftKey ? null : draft;
@@ -180,12 +197,12 @@ export const ImageEditorWorkspaceView = ({ utility }: { utility: ToolDefinition 
         }
         if (activeUtility.id === "crop") {
           return invoke<ToolResult>("crop_images", {
-            request: { paths, x: cropX, y: cropY, width, height, mode: cropMode, aspectWidth: width, aspectHeight: height, anchor, outputLocation: "alongsideInput" },
+            request: { paths, x: cropX, y: cropY, width: cropWidth, height: cropHeight, mode: cropMode, aspectWidth: cropWidth, aspectHeight: cropHeight, anchor, outputLocation: "alongsideInput" },
           });
         }
         if (activeUtility.id === "image-watermark") {
           return invoke<ToolResult>("watermark_images", {
-            request: { paths, opacity: watermarkOpacity, text: watermarkText, x: cropX, y: cropY, outputLocation: "alongsideInput" },
+            request: { paths, opacity: watermarkOpacity, text: watermarkText, x: watermarkX, y: watermarkY, outputLocation: "alongsideInput" },
           });
         }
         return invoke<ToolResult>("adjust_image_tone", {
@@ -221,6 +238,10 @@ export const ImageEditorWorkspaceView = ({ utility }: { utility: ToolDefinition 
         setFlip,
         cropMode,
         setCropMode,
+        cropWidth,
+        setCropWidth,
+        cropHeight,
+        setCropHeight,
         cropX,
         setCropX,
         cropY,
@@ -239,6 +260,10 @@ export const ImageEditorWorkspaceView = ({ utility }: { utility: ToolDefinition 
         setWatermarkText,
         watermarkOpacity,
         setWatermarkOpacity,
+        watermarkX,
+        setWatermarkX,
+        watermarkY,
+        setWatermarkY,
         plan: history.present,
         draft: liveDraft,
         canUndo: history.past.length > 0,
@@ -296,6 +321,10 @@ type ImageEditorControlsProps = {
   setFlip: (value: string) => void;
   cropMode: string;
   setCropMode: (value: string) => void;
+  cropWidth: number;
+  setCropWidth: (value: number) => void;
+  cropHeight: number;
+  setCropHeight: (value: number) => void;
   cropX: number;
   setCropX: (value: number) => void;
   cropY: number;
@@ -314,6 +343,10 @@ type ImageEditorControlsProps = {
   setWatermarkText: (value: string) => void;
   watermarkOpacity: number;
   setWatermarkOpacity: (value: number) => void;
+  watermarkX: number;
+  setWatermarkX: (value: number) => void;
+  watermarkY: number;
+  setWatermarkY: (value: number) => void;
   plan: ImageEditPlan;
   draft: ImageEditOperation | null;
   canUndo: boolean;
@@ -360,6 +393,10 @@ const ImageEditorControls = ({
   setFlip,
   cropMode,
   setCropMode,
+  cropWidth,
+  setCropWidth,
+  cropHeight,
+  setCropHeight,
   cropX,
   setCropX,
   cropY,
@@ -378,6 +415,10 @@ const ImageEditorControls = ({
   setWatermarkText,
   watermarkOpacity,
   setWatermarkOpacity,
+  watermarkX,
+  setWatermarkX,
+  watermarkY,
+  setWatermarkY,
   plan,
   draft,
   canUndo,
@@ -480,6 +521,45 @@ const ImageEditorControls = ({
   const previewError = sourcePreviewError || (previewValidation?.status === "error" ? previewValidation.message : "");
   const hasEdits = plan.edits.length > 0 || draft !== null;
   const previewIsValid = previewValidation?.key === previewPlanKey && previewValidation.status === "valid";
+  const selectedCropPreset = cropMode !== "aspectRatio"
+    ? "free"
+    : sourcePreview && aspectRatioMatches(cropWidth, cropHeight, sourcePreview.width, sourcePreview.height)
+      ? "original"
+      : cropAspectPresets.find((preset) => aspectRatioMatches(cropWidth, cropHeight, preset.width, preset.height))?.value ?? "custom";
+  const cropAspectOptions = [
+    { value: "free", label: "Free crop" },
+    { value: "original", label: "Original", disabled: !sourcePreview },
+    ...cropAspectPresets.map(({ value, label }) => ({ value, label })),
+    { value: "custom", label: "Custom", disabled: true },
+  ];
+  const selectCropPreset = (presetValue: string) => {
+    if (presetValue === "free") {
+      setCropMode("rectangle");
+      setCropX(0);
+      setCropY(0);
+      setCropWidth(sourcePreview?.width ?? cropWidth);
+      setCropHeight(sourcePreview?.height ?? cropHeight);
+      return;
+    }
+    if (presetValue === "original" && sourcePreview) {
+      setCropMode("aspectRatio");
+      setCropX(0);
+      setCropY(0);
+      setCropWidth(sourcePreview.width);
+      setCropHeight(sourcePreview.height);
+      setAnchor("center");
+      return;
+    }
+    const preset = cropAspectPresets.find(({ value }) => value === presetValue);
+    if (preset) {
+      setCropMode("aspectRatio");
+      setCropX(0);
+      setCropY(0);
+      setCropWidth(preset.width);
+      setCropHeight(preset.height);
+      setAnchor("center");
+    }
+  };
 
   const pointInPreview = (event: React.PointerEvent<HTMLDivElement>) => {
     const bounds = previewStageRef.current?.getBoundingClientRect();
@@ -492,11 +572,11 @@ const ImageEditorControls = ({
   };
   const beginImageDrag = (event: React.PointerEvent<HTMLDivElement>) => {
     const interactionPreview = utility.id === "crop" ? sourcePreview : resultPreview ?? sourcePreview;
-    if (!interactionPreview || (utility.id === "crop" && cropMode !== "rectangle") || (utility.id !== "crop" && utility.id !== "image-watermark")) return;
+    if (!interactionPreview || (utility.id !== "crop" && utility.id !== "image-watermark")) return;
     const point = pointInPreview(event);
     if (!point) return;
     dragOffset.current = utility.id === "crop"
-      ? { x: point.x - cropX, y: point.y - cropY }
+      ? { x: point.x - (cropRect?.x ?? cropX), y: point.y - (cropRect?.y ?? cropY) }
       : { x: 0, y: 0 };
     activePointerId.current = event.pointerId;
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -508,11 +588,14 @@ const ImageEditorControls = ({
     const point = pointInPreview(event);
     if (!point) return;
     if (utility.id === "crop") {
-      setCropX(Math.round(Math.min(Math.max(point.x - dragOffset.current.x, 0), Math.max(interactionPreview.width - width, 0))));
-      setCropY(Math.round(Math.min(Math.max(point.y - dragOffset.current.y, 0), Math.max(interactionPreview.height - height, 0))));
+      const currentCropWidth = cropRect?.width ?? cropWidth;
+      const currentCropHeight = cropRect?.height ?? cropHeight;
+      setCropX(Math.round(Math.min(Math.max(point.x - dragOffset.current.x, 0), Math.max(interactionPreview.width - currentCropWidth, 0))));
+      setCropY(Math.round(Math.min(Math.max(point.y - dragOffset.current.y, 0), Math.max(interactionPreview.height - currentCropHeight, 0))));
+      if (cropMode === "aspectRatio") setAnchor("custom");
     } else {
-      setCropX(Math.round(point.x));
-      setCropY(Math.round(point.y));
+      setWatermarkX(Math.round(point.x));
+      setWatermarkY(Math.round(point.y));
     }
   };
   const endImageDrag = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -521,12 +604,12 @@ const ImageEditorControls = ({
   const interactionPreview = utility.id === "crop" ? sourcePreview : resultPreview ?? sourcePreview;
   const cropRect = utility.id === "crop" && sourcePreview
     ? resolveImageCropRect(sourcePreview.width, sourcePreview.height, {
-      kind: "crop", x: cropX, y: cropY, width, height, mode: cropMode,
-      aspectWidth: width, aspectHeight: height, anchor,
+      kind: "crop", x: cropX, y: cropY, width: cropWidth, height: cropHeight, mode: cropMode,
+      aspectWidth: cropWidth, aspectHeight: cropHeight, anchor,
     })
     : null;
   const cropOverlay = cropRect && sourcePreview ? { left: `${cropRect.x / sourcePreview.width * 100}%`, top: `${cropRect.y / sourcePreview.height * 100}%`, width: `${cropRect.width / sourcePreview.width * 100}%`, height: `${cropRect.height / sourcePreview.height * 100}%` } : null;
-  const watermarkOverlay = utility.id === "image-watermark" && interactionPreview ? { left: `${Math.min(cropX / interactionPreview.width * 100, 94)}%`, top: `${Math.min(cropY / interactionPreview.height * 100, 94)}%` } : null;
+  const watermarkOverlay = utility.id === "image-watermark" && interactionPreview ? { left: `${Math.min(watermarkX / interactionPreview.width * 100, 94)}%`, top: `${Math.min(watermarkY / interactionPreview.height * 100, 94)}%` } : null;
   const primaryPreview = utility.id === "crop" ? sourcePreview : resultPreview ?? sourcePreview;
   const primaryPreviewAlt = utility.id === "crop" ? `Original image preview of ${inputPath?.split(/[\\/]/).pop() ?? "selected image"}` : `Preview of ${inputPath?.split(/[\\/]/).pop() ?? "selected image"}`;
   const selectTool = (nextToolId: AtomicToolId) => {
@@ -556,7 +639,7 @@ const ImageEditorControls = ({
             onPointerCancel={endImageDrag}
           >
             <img src={primaryPreview.dataUrl} alt={primaryPreviewAlt} />
-            {cropOverlay && <div className="image-editor-crop-overlay" aria-label="Crop selection" style={cropOverlay} />}
+            {cropOverlay && <div className="image-editor-crop-overlay" aria-label="Crop selection" style={cropOverlay}><div className="image-editor-crop-grid" aria-hidden="true"><span /><span /><span /><span /></div></div>}
             {watermarkOverlay && <div className="image-editor-watermark-overlay" aria-label="Watermark preview" style={watermarkOverlay}>{watermarkText || "Watermark"}</div>}
           </div>
         ) : (
@@ -627,18 +710,23 @@ const ImageEditorControls = ({
         )}
         {utility.id === "crop" && (
           <>
-            <div className="workspace-field-grid">
-              <div className="workspace-field"><Label htmlFor="image-crop-mode">Crop mode</Label><NativeSelect id="image-crop-mode" aria-label="Crop mode" value={cropMode} onChange={(event) => setCropMode(event.target.value)}><option value="rectangle">Rectangle</option><option value="aspectRatio">Aspect ratio</option></NativeSelect></div>
-              {cropMode === "aspectRatio" ? (
-                <div className="workspace-field"><Label htmlFor="image-crop-anchor">Anchor</Label><NativeSelect id="image-crop-anchor" aria-label="Crop anchor" value={anchor} onChange={(event) => setAnchor(event.target.value)}>{["center", "top", "bottom", "left", "right"].map((value) => <option key={value} value={value}>{value[0].toUpperCase() + value.slice(1)}</option>)}</NativeSelect></div>
-              ) : <span aria-hidden="true" />}
-            </div>
-            <div className="workspace-field-grid">
-              <div className="workspace-field"><Label htmlFor="image-crop-width">Width</Label><Input id="image-crop-width" aria-label="Crop width" type="number" min="1" value={width} onChange={(event) => setWidth(Number(event.target.value))} /></div>
-              <div className="workspace-field"><Label htmlFor="image-crop-height">Height</Label><Input id="image-crop-height" aria-label="Crop height" type="number" min="1" value={height} onChange={(event) => setHeight(Number(event.target.value))} /></div>
-              <div className="workspace-field"><Label htmlFor="image-crop-left">Left</Label><Input id="image-crop-left" aria-label="Crop left" type="number" min="0" value={cropX} onChange={(event) => setCropX(Number(event.target.value))} /></div>
-              <div className="workspace-field"><Label htmlFor="image-crop-top">Top</Label><Input id="image-crop-top" aria-label="Crop top" type="number" min="0" value={cropY} onChange={(event) => setCropY(Number(event.target.value))} /></div>
-            </div>
+            <div className="workspace-field"><Label htmlFor="image-crop-aspect">Aspect ratio</Label><NativeSelect id="image-crop-aspect" aria-label="Aspect ratio" value={selectedCropPreset} onChange={(event) => selectCropPreset(event.target.value)}>{cropAspectOptions.map((option) => <option key={option.value} value={option.value} disabled={option.disabled}>{option.label}</option>)}</NativeSelect></div>
+            {cropMode === "aspectRatio" ? (
+              <>
+                <div className="workspace-field-grid">
+                  <div className="workspace-field"><Label htmlFor="image-crop-aspect-width">Aspect width</Label><Input id="image-crop-aspect-width" aria-label="Aspect width" type="number" min="1" value={cropWidth} onChange={(event) => setCropWidth(Number(event.target.value))} /></div>
+                  <div className="workspace-field"><Label htmlFor="image-crop-aspect-height">Aspect height</Label><Input id="image-crop-aspect-height" aria-label="Aspect height" type="number" min="1" value={cropHeight} onChange={(event) => setCropHeight(Number(event.target.value))} /></div>
+                </div>
+                <div className="workspace-field"><Label htmlFor="image-crop-anchor">Crop anchor</Label><NativeSelect id="image-crop-anchor" aria-label="Crop anchor" value={anchor} onChange={(event) => setAnchor(event.target.value)}>{["center", "top", "bottom", "left", "right", ...(anchor === "custom" ? ["custom"] : [])].map((value) => <option key={value} value={value}>{value === "custom" ? "Custom position" : value[0].toUpperCase() + value.slice(1)}</option>)}</NativeSelect></div>
+              </>
+            ) : (
+              <div className="workspace-field-grid">
+                <div className="workspace-field"><Label htmlFor="image-crop-width">Crop width</Label><Input id="image-crop-width" aria-label="Crop width" type="number" min="1" max={sourcePreview?.width} value={cropWidth} onChange={(event) => setCropWidth(Number(event.target.value))} /></div>
+                <div className="workspace-field"><Label htmlFor="image-crop-height">Crop height</Label><Input id="image-crop-height" aria-label="Crop height" type="number" min="1" max={sourcePreview?.height} value={cropHeight} onChange={(event) => setCropHeight(Number(event.target.value))} /></div>
+                <div className="workspace-field"><Label htmlFor="image-crop-left">Crop left</Label><Input id="image-crop-left" aria-label="Crop left" type="number" min="0" value={cropX} onChange={(event) => setCropX(Number(event.target.value))} /></div>
+                <div className="workspace-field"><Label htmlFor="image-crop-top">Crop top</Label><Input id="image-crop-top" aria-label="Crop top" type="number" min="0" value={cropY} onChange={(event) => setCropY(Number(event.target.value))} /></div>
+              </div>
+            )}
           </>
         )}
         {utility.id === "image-watermark" && (
@@ -646,8 +734,8 @@ const ImageEditorControls = ({
             <div className="workspace-field"><Label htmlFor="image-watermark-text">Watermark text</Label><Input id="image-watermark-text" aria-label="Watermark text" value={watermarkText} onChange={(event) => setWatermarkText(event.target.value)} /></div>
             <div className="workspace-field"><div className="workspace-field-heading"><Label id="image-watermark-opacity-label">Opacity</Label><output>{watermarkOpacity}%</output></div><Slider aria-labelledby="image-watermark-opacity-label" min={1} max={100} value={[watermarkOpacity]} onValueChange={([value]) => value !== undefined && setWatermarkOpacity(value)} /></div>
             <div className="workspace-field-grid">
-              <div className="workspace-field"><Label htmlFor="image-watermark-left">Left</Label><Input id="image-watermark-left" aria-label="Watermark left" type="number" min="0" value={cropX} onChange={(event) => setCropX(Number(event.target.value))} /></div>
-              <div className="workspace-field"><Label htmlFor="image-watermark-top">Top</Label><Input id="image-watermark-top" aria-label="Watermark top" type="number" min="0" value={cropY} onChange={(event) => setCropY(Number(event.target.value))} /></div>
+              <div className="workspace-field"><Label htmlFor="image-watermark-left">Watermark left</Label><Input id="image-watermark-left" aria-label="Watermark left" type="number" min="0" value={watermarkX} onChange={(event) => setWatermarkX(Number(event.target.value))} /></div>
+              <div className="workspace-field"><Label htmlFor="image-watermark-top">Watermark top</Label><Input id="image-watermark-top" aria-label="Watermark top" type="number" min="0" value={watermarkY} onChange={(event) => setWatermarkY(Number(event.target.value))} /></div>
             </div>
           </>
         )}
@@ -660,7 +748,7 @@ const ImageEditorControls = ({
             <p className="workspace-panel-label">Edit stack</p>
             <p className="workspace-panel-copy">Preview changes together and export them once.</p>
           </div>
-          <p className="workspace-panel-copy">Edits are append-only. Removing or reordering individual operations is deferred.</p>
+          <p className="workspace-panel-copy">Edits are applied in order. Undo removes one edit at a time.</p>
           <p aria-live="polite">{plan.edits.length} committed edit{plan.edits.length === 1 ? "" : "s"}{draft ? " plus current draft" : ""}</p>
           {plan.edits.length > 0 && (
             <ol className="image-edit-timeline">

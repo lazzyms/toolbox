@@ -731,7 +731,7 @@ test("Image editor previews a reversible edit stack and exports one combined pla
     await expect(page.getByRole("button", { name: "Undo" })).toBeDisabled();
     await expect(page.getByRole("button", { name: "Redo" })).toBeDisabled();
     await expect(page.getByRole("button", { name: "Reset edits" })).toBeDisabled();
-    await expect(page.getByText("Edits are append-only. Removing or reordering individual operations is deferred.", { exact: true })).toBeVisible();
+    await expect(page.getByText("Edits are applied in order. Undo removes one edit at a time.", { exact: true })).toBeVisible();
     await expect(page.locator('[role="tablist"]')).toHaveCount(0);
     await expect(page.getByRole("toolbar", { name: "Image editor tools" })).toBeVisible();
     await expect(page.locator(".workspace-primary-action")).toHaveCount(1);
@@ -762,6 +762,7 @@ test("Image crop keeps the source interaction surface and shows a separate resul
     await page.getByRole("button", { name: "Open Image editor", exact: true }).click();
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await page.getByRole("toolbar", { name: "Image editor tools" }).getByRole("button", { name: "Crop Images", exact: true }).click();
+    await page.getByLabel("Aspect ratio").selectOption("free");
     await page.getByLabel("Crop width").fill("160");
     await page.getByLabel("Crop height").fill("120");
     await page.getByLabel("Crop left").fill("80");
@@ -784,11 +785,38 @@ test("Image crop keeps the source interaction surface and shows a separate resul
     await expect(overlay).toHaveAttribute("style", /top: 37\.5%/);
 });
 
+test("Image crop offers aspect presets with a rule-of-thirds grid", async ({ page }, testInfo) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Image editor", exact: true }).click();
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await page.getByRole("toolbar", { name: "Image editor tools" }).getByRole("button", { name: "Crop Images", exact: true }).click();
+    await page.getByLabel("Aspect ratio").selectOption("1:1");
+
+    const overlay = page.getByLabel("Crop selection");
+    await expect(overlay).toHaveAttribute("style", /left: 12\.5%/);
+    await expect(overlay).toHaveAttribute("style", /width: 75%/);
+    await expect(overlay).toHaveAttribute("style", /height: 100%/);
+    await expect(page.locator(".image-editor-crop-grid > span")).toHaveCount(4);
+    await expect(page.getByRole("region", { name: "Crop result preview" })).toContainText("480 × 480px");
+    await page.screenshot({ path: testInfo.outputPath("image-crop-presets.png") });
+
+    await page.getByRole("button", { name: "Add edit to plan" }).click();
+    const previewInvocation = await page.evaluate(() =>
+        [...(window as TestWindow).__toolboxInvocations ?? []]
+            .reverse()
+            .find(({ command }) => command === "inspect_image_edit_preview"),
+    );
+    expect(previewInvocation?.args).toMatchObject({
+        request: { plan: { edits: [{ kind: "crop", mode: "aspectRatio", aspectWidth: 1, aspectHeight: 1 }] } },
+    });
+});
+
 test("Image crop cancels a global pointer interruption before a later move", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Open Image editor", exact: true }).click();
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await page.getByRole("toolbar", { name: "Image editor tools" }).getByRole("button", { name: "Crop Images", exact: true }).click();
+    await page.getByLabel("Aspect ratio").selectOption("free");
     await page.getByLabel("Crop width").fill("160");
     await page.getByLabel("Crop height").fill("120");
     await page.getByLabel("Crop left").fill("80");
@@ -813,10 +841,8 @@ test("Image aspect crop uses the anchored maximum-fit geometry for overlay and r
     await page.getByRole("button", { name: "Open Image editor", exact: true }).click();
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await page.getByRole("toolbar", { name: "Image editor tools" }).getByRole("button", { name: "Crop Images", exact: true }).click();
-    await page.getByLabel("Crop mode").selectOption("aspectRatio");
-    await page.getByLabel("Crop width").fill("1");
-    await page.getByLabel("Crop height").fill("1");
-    await page.getByLabel("Anchor").selectOption("right");
+    await page.getByLabel("Aspect ratio").selectOption("1:1");
+    await page.getByLabel("Crop anchor").selectOption("right");
 
     const overlay = page.getByLabel("Crop selection");
     await expect(overlay).toHaveAttribute("style", /left: 25%/);
@@ -826,18 +852,46 @@ test("Image aspect crop uses the anchored maximum-fit geometry for overlay and r
     await expect(page.getByRole("region", { name: "Crop result preview" })).toContainText("480 × 480px");
 });
 
+test("Image aspect crop can move while keeping its preset ratio", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Image editor", exact: true }).click();
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await page.getByRole("toolbar", { name: "Image editor tools" }).getByRole("button", { name: "Crop Images", exact: true }).click();
+    await page.getByLabel("Aspect ratio").selectOption("1:1");
+
+    const stage = (await page.locator(".image-editor-preview-stage").boundingBox())!;
+    await page.mouse.move(stage.x + stage.width * 0.5, stage.y + stage.height * 0.5);
+    await page.mouse.down();
+    await page.mouse.move(stage.x + stage.width * 0.6, stage.y + stage.height * 0.5, { steps: 3 });
+    await page.mouse.up();
+
+    const overlay = page.getByLabel("Crop selection");
+    await expect(page.getByLabel("Aspect ratio")).toHaveValue("1:1");
+    await expect(page.getByLabel("Crop anchor")).toHaveValue("custom");
+    await expect(overlay).toHaveAttribute("style", /left: 22\.5%/);
+    await expect(overlay).toHaveAttribute("style", /width: 75%/);
+    await expect.poll(async () => page.evaluate(() =>
+        [...(window as TestWindow).__toolboxInvocations ?? []]
+            .reverse()
+            .find(({ command }) => command === "inspect_image_edit_preview")?.args,
+    )).toMatchObject({
+        request: { plan: { edits: [{ kind: "crop", mode: "aspectRatio", x: 144, y: 0, aspectWidth: 1, aspectHeight: 1, anchor: "custom" }] } },
+    });
+});
+
 test("Image crop clears an old result and disables export after invalid preview validation", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Open Image editor", exact: true }).click();
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await page.getByRole("toolbar", { name: "Image editor tools" }).getByRole("button", { name: "Crop Images", exact: true }).click();
+    await page.getByLabel("Aspect ratio").selectOption("free");
     await page.getByLabel("Crop width").fill("160");
     await page.getByLabel("Crop height").fill("120");
     await expect(page.getByRole("region", { name: "Crop result preview" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Export edited images" })).toBeEnabled();
 
-    await page.getByLabel("Crop mode").selectOption("aspectRatio");
-    await page.getByLabel("Crop width").fill("0");
+    await page.getByLabel("Aspect ratio").selectOption("1:1");
+    await page.getByLabel("Aspect width").fill("0");
 
     await expect(page.getByText("Aspect ratio dimensions must be positive.", { exact: true })).toBeVisible();
     await expect(page.getByRole("region", { name: "Crop result preview" })).toHaveCount(0);
@@ -848,19 +902,24 @@ test("Image editor history can undo, redo, and reset the composed plan", async (
     await page.goto("/");
     await page.getByRole("button", { name: "Open Image editor", exact: true }).click();
     await page.getByRole("button", { name: "Choose files to process" }).click();
+    await page.getByRole("toolbar", { name: "Image editor tools" }).getByRole("button", { name: "Resize Images" }).click();
+    await page.getByLabel("Width").fill("320");
+    await page.getByRole("button", { name: "Add edit to plan" }).click();
     await page.getByRole("toolbar", { name: "Image editor tools" }).getByRole("button", { name: "Rotate and Flip Images" }).click();
     await page.getByLabel("Rotation").selectOption("90");
     await page.getByRole("button", { name: "Add edit to plan" }).click();
 
     await expect(page.getByRole("button", { name: "Undo" })).toBeEnabled();
-    await expect(page.getByText("1 committed edit", { exact: true })).toBeVisible();
+    await expect(page.getByText("2 committed edits", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Undo" }).click();
-    await expect(page.getByRole("button", { name: "Export edited images" })).toBeDisabled();
+    await expect(page.getByText("1 committed edit", { exact: true })).toBeVisible();
+    await expect(page.locator(".image-edit-timeline li")).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "Export edited images" })).toBeEnabled();
     await expect(page.getByRole("button", { name: "Redo" })).toBeEnabled();
 
     await page.getByRole("button", { name: "Redo" }).click();
     await expect(page.getByRole("button", { name: "Export edited images" })).toBeEnabled();
-    await expect(page.getByText("1 committed edit", { exact: true })).toBeVisible();
+    await expect(page.getByText("2 committed edits", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Reset edits" }).click();
     await expect(page.getByRole("button", { name: "Export edited images" })).toBeDisabled();
     await expect(page.getByText("0 committed edits", { exact: true })).toBeVisible();
@@ -1325,7 +1384,10 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
         if (utility.id === "compress") await page.getByRole("switch", { name: "Preserve original pixels" }).click();
         if (utility.id === "resize") await page.getByLabel("Width").fill("640");
         if (utility.id === "rotate") await page.getByLabel("Rotation").selectOption("90");
-        if (utility.id === "crop") await page.getByLabel("Crop width").fill("320");
+        if (utility.id === "crop") {
+            await page.getByLabel("Aspect ratio").selectOption("free");
+            await page.getByLabel("Crop width").fill("320");
+        }
         if (utility.id === "image-watermark") await page.getByLabel("Watermark text").fill("Test watermark");
         if (utility.id === "image-tone") await page.getByRole("slider", { name: "Brightness" }).press("End");
     }

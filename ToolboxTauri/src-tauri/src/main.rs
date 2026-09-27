@@ -385,6 +385,7 @@ mod command_tests {
     use crate::kit::pdf::editor::{AddPdfPagesRequest, CropPdfRequest, EditPdfRequest, OrganizePdfRequest, PageScope, PdfEditMode, PdfEditOperation, PdfEditSessionPlan, PdfEditSessionRequest, PdfOverlay, PdfOverlayPosition, PdfRect, RotatePage, SignPdfRequest};
     use crate::kit::pdf::remaining::{CompressPdfRequest, ImagesToPdfRequest, MergePdfRequest, PageOverlayRequest, PageSelectionRequest, PdfToImagesRequest, PdfToTextRequest};
     use crate::kit::vision::VisionRequest;
+    use base64::{engine::general_purpose::STANDARD, Engine};
     use image::Rgba;
     use std::path::PathBuf;
     use std::future::Future;
@@ -754,14 +755,26 @@ mod command_tests {
         let image_plan = ImageEditPlan {
             edits: vec![
                 ImageEdit::Resize { width: 128, height: 128, mode: "exact".into(), percentage: 100, longest_side: 128, resampling: "lanczos".into(), keep_aspect_ratio: false },
+                ImageEdit::Crop { x: 0, y: 10, width: 16, height: 9, mode: "aspectRatio".into(), aspect_width: 16, aspect_height: 9, anchor: "custom".into() },
                 ImageEdit::Rotate { degrees: 90, flip: "horizontal".into() },
+                ImageEdit::Tone { brightness: 12, contrast: 6.0, saturation: 8.0, exposure: 4.0 },
             ],
             output_location: location(&root, "composed image editor"),
             suffix: "-session".into(),
         };
         let image_preview = inspect_image_edit_preview(ImageEditPreviewRequest { path: image.clone(), plan: image_plan.clone() }).expect("composed image preview should be available");
-        assert_eq!((image_preview.width, image_preview.height), (128, 128), "composed image preview must reflect the complete edit plan");
-        outputs.extend(assert_success("composed image editor", export_image_edit_plan(ImageEditExportRequest { paths: vec![image.clone()], plan: image_plan })));
+        assert_eq!((image_preview.width, image_preview.height), (72, 128), "composed image preview must reflect the complete edit plan");
+        let preview_bytes = STANDARD.decode(image_preview.data_url.split_once(',').expect("preview must contain a data URL payload").1).unwrap();
+        let preview_pixels = image::load_from_memory(&preview_bytes).unwrap().to_rgba8();
+        let composed_image_outputs = assert_success("composed image editor", export_image_edit_plan(ImageEditExportRequest { paths: vec![image.clone()], plan: image_plan }));
+        let exported_pixels = image::open(&composed_image_outputs[0]).unwrap().to_rgba8();
+        assert_eq!(exported_pixels.dimensions(), preview_pixels.dimensions(), "exported image dimensions must match the verified edit preview");
+        let differing_pixels = exported_pixels.pixels().zip(preview_pixels.pixels()).enumerate()
+            .filter_map(|(index, (exported, previewed))| (exported.0 != previewed.0).then_some((index, exported.0, previewed.0)))
+            .take(5)
+            .collect::<Vec<_>>();
+        assert!(differing_pixels.is_empty(), "native image export pixels must match the verified edit preview; first differences: {differing_pixels:?}");
+        outputs.extend(composed_image_outputs);
         outputs.extend(assert_success("metadata", image_metadata(MetadataRequest { paths: vec![image.clone()], output_location: location(&root, "metadata") })));
         outputs.extend(assert_success("tone", adjust_image_tone(ToneRequest { paths: vec![image.clone()], brightness: 20, contrast: 0.0, saturation: 0.0, exposure: 0.0, output_location: location(&root, "tone") })));
         outputs.extend(assert_aggregate_success("tiff", &[tiff.clone()], process_tiff_pages(TiffRequest { paths: vec![tiff.clone()], pages: None, output_location: location(&root, "tiff") })));
