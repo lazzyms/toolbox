@@ -67,7 +67,7 @@ export const ResultList = ({ results, progress, loading }: { results: JobOutcome
     };
 
     if (loading) {
-        return <p className="text-sm text-slate-500">Processing {progress.completed} of {progress.total} files...</p>;
+        return <p className="ds-muted-copy">Processing {progress.completed} of {progress.total} files...</p>;
     }
     if (results.length === 0) return null;
 

@@ -87,7 +87,7 @@ function Artwork({ page, object }: { page: ScenePage; object: SceneObject }) {
   if (object.kind === 'signature') {
     if (object.signatureMode === 'image') return object.signaturePreview
       ? <image href={object.signaturePreview} x={r.x} y={r.y} width={r.width} height={r.height} preserveAspectRatio="xMidYMid meet" opacity={object.opacity} />
-      : <rect {...r} fill="var(--scene-image-placeholder, #eef2ff)" stroke={object.color} strokeDasharray="5 4" opacity={object.opacity} />;
+      : <rect {...r} fill="var(--scene-image-placeholder)" stroke={object.color} strokeDasharray="5 4" opacity={object.opacity} />;
     if (object.signatureMode === 'text') return <svg x={r.x} y={r.y} width={r.width} height={r.height} overflow="hidden">
       <text fill={object.color} opacity={object.opacity} fontSize={object.fontSize} fontFamily={cssFont(object.fontFamily)} fontWeight={fontWeight(object.fontFamily)} fontStyle={fontStyle(object.fontFamily)} dominantBaseline="hanging">
         {object.text.split('\n').map((line, i) => <tspan key={i} x={0} y={i * object.fontSize * 1.2}>{line}</tspan>)}
@@ -340,7 +340,7 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
   const exact = renderedPreview && !draft && !editingId;
   return <div className="scene-canvas" ref={host}>
     <svg ref={surface} className={`scene-canvas-page scene-tool-${tool}${panning ? ' scene-pan-active' : spaceHeld ? ' scene-space-pan' : ''}`} aria-label="PDF page canvas" role="group" width={transform.width * scale} height={transform.height * scale} viewBox={`0 0 ${transform.width} ${transform.height}`} onPointerDown={down} onPointerMove={move} onPointerUp={e => finish(e)} onPointerCancel={e => finish(e, true)} onLostPointerCapture={e => finish(e, true)} onDoubleClick={doubleClick}>
-      <rect width={transform.width} height={transform.height} fill="white" />
+      <rect width={transform.width} height={transform.height} fill="var(--color-document-page)" />
       {exact && <image href={renderedPreview.dataUrl} width={transform.width} height={transform.height} preserveAspectRatio="none" pointerEvents="none" />}
       <g ref={coordinates} transform={transform.matrix}>
         {!exact && <g pointerEvents="none">
@@ -348,7 +348,7 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
           {shown.objects.map(object => <Artwork key={object.id} page={page} object={object} />)}
         </g>}
         {tool === 'highlight' && textRuns.length > 0 && <g className="scene-text-layer" aria-label="Selectable PDF text">
-          {textRuns.map((run, index) => <text key={`${index}-${run.x}-${run.y}`} className="scene-text-run" data-text-run="true" x={run.x} y={run.y + run.height} fontSize={Math.max(6, run.height)} fontFamily="Helvetica, Arial, sans-serif" fill="#000" opacity="0.001">{run.text}</text>)}
+          {textRuns.map((run, index) => <text key={`${index}-${run.x}-${run.y}`} className="scene-text-run" data-text-run="true" x={run.x} y={run.y + run.height} fontSize={Math.max(6, run.height)} fontFamily="Helvetica, Arial, sans-serif" fill="currentColor" opacity="0.001">{run.text}</text>)}
         </g>}
         {shown.objects.map((object, index) => <g key={object.id}>
           <rect {...object.rect} data-object={object.id} tabIndex={0} role="button" aria-label={`${object.kind} object ${index + 1}`} aria-pressed={selectedId === object.id} className={`scene-object-hit scene-object-${object.kind}`} onFocus={() => onSelect(object.id)} onKeyDown={e => key(e, object)} onDoubleClick={e => beginTextEdit(e, object)} />
@@ -356,7 +356,7 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
             <textarea ref={editInput} aria-label="Edit text object" value={editingText} onChange={event => setEditingText(event.target.value)} onBlur={() => finishTextEdit(true)} onPointerDown={event => event.stopPropagation()} onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); finishTextEdit(false); } else if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); finishTextEdit(true); } }} />
           </foreignObject>}
           {selectedId === object.id && editingId !== object.id && <g className="scene-selection">
-            <rect {...object.rect} fill="none" stroke="var(--scene-accent, #2563eb)" strokeWidth={1.5 / scale} pointerEvents="none" />
+            <rect {...object.rect} fill="none" stroke="var(--scene-accent)" strokeWidth={1.5 / scale} pointerEvents="none" />
             {object.kind !== 'watermark' && (['nw', 'ne', 'sw', 'se'] as const).map(corner => <rect key={corner} data-object={object.id} data-corner={corner} x={(corner.includes('w') ? object.rect.x : object.rect.x + object.rect.width) - 5 / scale} y={(corner.includes('n') ? object.rect.y : object.rect.y + object.rect.height) - 5 / scale} width={10 / scale} height={10 / scale} tabIndex={0} role="button" aria-label={`Resize ${object.kind} ${corner}`} className="scene-resize-handle" strokeWidth={1 / scale} onKeyDown={e => key(e, object, corner)} />)}
           </g>}
         </g>)}
