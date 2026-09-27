@@ -6,6 +6,7 @@ import { toolsForWorkspaceId, UtilityRegistry } from "../registry";
 import { parsePageRange, selectedPageLabel } from "../shared/workspaceValidation";
 import type { PdfDocument } from "../features/pdf-editor/contracts";
 import type { AtomicToolId, ToolDefinition, ToolResult } from "../contracts";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -355,11 +356,14 @@ const ConversionControls = ({
           </CardContent>
         </Card>
       )}
-      {outputPreviewLimitation && <p className="workspace-note" role="status">{outputPreviewLimitation}</p>}
-      {activeUtility.capability.nativeAvailability === "unavailable" && <p className="workspace-note" role="alert">{activeUtility.title} is unavailable in this build.</p>}
+      {outputPreviewLimitation && <Badge variant="outline" className="max-w-full whitespace-normal" role="status">{outputPreviewLimitation}</Badge>}
+      {activeUtility.capability.nativeAvailability === "unavailable" && <Badge variant="outline" className="max-w-full whitespace-normal" role="alert">{activeUtility.title} is unavailable in this build.</Badge>}
 
-      <div>
-        <p className="workspace-panel-label">Choose an output</p>
+      <div className="workspace-panel-intro">
+        <div className="flex items-center justify-between gap-3">
+          <p className="workspace-panel-label">Choose an output</p>
+          <Badge variant="outline">On this device</Badge>
+        </div>
         <p className="workspace-panel-copy">
           Keep one source surface and switch between page conversion, extraction,
           document assembly, splitting, and compression outcomes.
