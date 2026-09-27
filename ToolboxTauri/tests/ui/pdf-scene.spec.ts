@@ -360,3 +360,72 @@ for (const theme of ['light', 'dark']) test(`scene preview and inline tools rema
   expect(remote).toEqual([]);
   await page.screenshot({ path: testInfo.outputPath(`scene-${theme}.png`) });
 });
+
+test('Escape cancels a canvas gesture before pointer release', async ({ page }) => {
+  await openEditor(page);
+  await page.getByRole('button', { name: 'Text', exact: true }).click();
+  const canvas = (await page.getByRole('group', { name: 'PDF page canvas' }).boundingBox())!;
+  await page.mouse.move(canvas.x + canvas.width * .2, canvas.y + canvas.height * .2);
+  await page.mouse.down();
+  await page.mouse.move(canvas.x + canvas.width * .5, canvas.y + canvas.height * .25, { steps: 4 });
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+
+  await expect(page.locator('.scene-object-hit')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeDisabled();
+});
+
+test('Escape releases pointer capture while cancelling object movement', async ({ page }, testInfo) => {
+  await openEditor(page);
+  await draw(page, 'Text', .2);
+  await page.getByRole('button', { name: 'Select', exact: true }).click();
+
+  const object = page.getByRole('button', { name: 'text object 1', exact: true });
+  const originalX = await object.getAttribute('x');
+  const originalY = await object.getAttribute('y');
+  const bounds = (await object.boundingBox())!;
+  await page.evaluate(() => window.addEventListener('pointerdown', event => {
+    (window as any).__scenePointerId = event.pointerId;
+  }, { once: true }));
+  await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(bounds.x + bounds.width / 2 + 40, bounds.y + bounds.height / 2 + 20);
+  await page.keyboard.press('Escape');
+
+  const hasPointerCapture = await page.evaluate(() => {
+    const pointerId = (window as any).__scenePointerId;
+    return (document.querySelector('.scene-canvas-page') as SVGSVGElement).hasPointerCapture(pointerId);
+  });
+  expect(hasPointerCapture).toBe(false);
+  await page.mouse.up();
+  await expect(object).toHaveAttribute('x', originalX!);
+  await expect(object).toHaveAttribute('y', originalY!);
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await expect(page.locator('.scene-object-hit')).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath('escape-releases-pointer-capture.png') });
+});
+
+test('Escape discards inline text edits without changing the committed scene', async ({ page }) => {
+  await openEditor(page);
+  await draw(page, 'Text', .2);
+  await page.getByRole('button', { name: 'Select', exact: true }).click();
+  await page.getByRole('button', { name: 'text object 1', exact: true }).dblclick();
+
+  const editor = page.getByRole('textbox', { name: 'Edit text object' });
+  const originalText = await editor.inputValue();
+  await editor.fill('Discard this draft');
+  await editor.press('Escape');
+  await expect(editor).toHaveCount(0);
+
+  const scene = await exported(page);
+  expect(scene.pages[0].objects[0].text).toBe(originalText);
+});
+
+test('one signature drag stays in one undo step', async ({ page }) => {
+  await openEditor(page);
+  await draw(page, 'Signature', .2);
+  await expect(page.locator('.scene-object-hit')).toHaveCount(1);
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await expect(page.locator('.scene-object-hit')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Redo', exact: true })).toBeEnabled();
+});
