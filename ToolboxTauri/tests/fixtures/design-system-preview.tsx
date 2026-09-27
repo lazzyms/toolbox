@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
-import "../../src/design-system/primitives.css";
-import "../../src/design-system/tokens.css";
+import "../../src/index.css";
 import {
   Badge,
   Button,
