@@ -7,11 +7,44 @@ const sourceDirectory = path.resolve(scriptDirectory, "../src");
 const tokenFile = path.join(sourceDirectory, "design-system/tokens.css");
 const extensions = new Set([".css", ".js", ".jsx", ".ts", ".tsx", ".svg"]);
 const colorValue = /#[\da-f]{3,8}\b|\b(?:rgba?|hsla?|oklab|oklch|lab|lch)\s*\(/gi;
+const colorPropertyNames = [
+  "color",
+  "background",
+  "background-color",
+  "backgroundColor",
+  "border",
+  "border-[a-z-]+",
+  "borderColor",
+  "borderTopColor",
+  "borderRightColor",
+  "borderBottomColor",
+  "borderLeftColor",
+  "borderBlockColor",
+  "borderBlockStartColor",
+  "borderBlockEndColor",
+  "borderInlineColor",
+  "borderInlineStartColor",
+  "borderInlineEndColor",
+  "outline",
+  "outline-[a-z-]+",
+  "outlineColor",
+  "fill",
+  "stroke",
+  "stop-color",
+  "stopColor",
+  "box-shadow",
+  "boxShadow",
+  "text-shadow",
+  "textShadow",
+];
 const namedColors = new Set(
   "aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue blueviolet brown burlywood cadetblue chartreuse chocolate coral cornflowerblue cornsilk crimson cyan darkblue darkcyan darkgoldenrod darkgray darkgreen darkgrey darkkhaki darkmagenta darkolivegreen darkorange darkorchid darkred darksalmon darkseagreen darkslateblue darkslategray darkslategrey darkturquoise darkviolet deeppink deepskyblue dimgray dimgrey dodgerblue firebrick floralwhite forestgreen fuchsia gainsboro ghostwhite gold goldenrod gray green greenyellow grey honeydew hotpink indianred indigo ivory khaki lavender lavenderblush lawngreen lemonchiffon lightblue lightcoral lightcyan lightgoldenrodyellow lightgray lightgreen lightgrey lightpink lightsalmon lightseagreen lightskyblue lightslategray lightslategrey lightsteelblue lightyellow lime limegreen linen magenta maroon mediumaquamarine mediumblue mediumorchid mediumpurple mediumseagreen mediumslateblue mediumspringgreen mediumturquoise mediumvioletred midnightblue mintcream mistyrose moccasin navajowhite navy oldlace olive olivedrab orange orangered orchid palegoldenrod palegreen paleturquoise palevioletred papayawhip peachpuff peru pink plum powderblue purple rebeccapurple red rosybrown royalblue saddlebrown salmon sandybrown seagreen seashell sienna silver skyblue slateblue slategray slategrey snow springgreen steelblue tan teal thistle tomato turquoise violet wheat white whitesmoke yellow yellowgreen".split(" "),
 );
 const colorDeclaration =
-  /\b(?:color|background(?:-color)?|border(?:-[a-z-]+)?|outline(?:-[a-z-]+)?|fill|stroke|stop-color|box-shadow|text-shadow)\s*[:=]\s*([^;{}]+)/gi;
+  new RegExp(
+    `\\b(?:${colorPropertyNames.join("|")})\\s*[:=]\\s*([^;{}]+)`,
+    "gi",
+  );
 
 function sourceFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
