@@ -1,0 +1,3 @@
+Toolbox is a desktop toolkit for PDF, document, and image work. Files are processed on-device and never uploaded.
+
+Music attribution: Happy Beats & Business Moves Vol. 1 by Sascha Ende — ende.app, CC BY 4.0.

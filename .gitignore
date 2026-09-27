@@ -6,3 +6,4 @@ dist/
 .vscode/
 .DS_Store
 *.xcuserstate
+.env

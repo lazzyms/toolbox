@@ -12,24 +12,164 @@ use crate::kit::vision;
 use crate::kit::contracts::{CompressImagesRequest, ConvertImagesRequest, PasswordRequest, PdfRequest};
 use crate::kit::common::batch_runner::BatchRunner;
 use crate::kit::password::PasswordProcessor;
+use opentelemetry::logs::{LogRecord, Logger, LoggerProvider, Severity};
+use opentelemetry_otlp::{Protocol, WithExportConfig, WithHttpConfig};
+use opentelemetry_sdk::logs::SdkLoggerProvider;
+use posthog_rs::{Client, ClientOptions, Event};
+use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+type PostHogClient = Arc<Client>;
+
+static POSTHOG_CLIENT: OnceLock<Option<PostHogClient>> = OnceLock::new();
+static POSTHOG_LOG_PROVIDER: OnceLock<Option<SdkLoggerProvider>> = OnceLock::new();
+
+fn emit_tool_run_log(tool: &str, input_count: usize, successful_input_count: usize, failed_input_count: usize, output_count: usize) {
+    let Some(provider) = POSTHOG_LOG_PROVIDER.get().and_then(Option::as_ref) else {
+        return;
+    };
+
+    let logger = provider.logger("toolbox.posthog");
+    let mut record = logger.create_log_record();
+    record.set_severity_number(Severity::Info);
+    record.set_severity_text("INFO");
+    record.set_body("tool_run_completed".into());
+    record.add_attribute("tool", tool.to_owned());
+    record.add_attribute("input_count", input_count as i64);
+    record.add_attribute("successful_input_count", successful_input_count as i64);
+    record.add_attribute("failed_input_count", failed_input_count as i64);
+    record.add_attribute("output_count", output_count as i64);
+    logger.emit(record);
+}
+
+fn emit_lifecycle_log(message: &'static str) {
+    let Some(provider) = POSTHOG_LOG_PROVIDER.get().and_then(Option::as_ref) else {
+        return;
+    };
+
+    let logger = provider.logger("toolbox.posthog");
+    let mut record = logger.create_log_record();
+    record.set_severity_number(Severity::Info);
+    record.set_severity_text("INFO");
+    record.set_body(message.into());
+    logger.emit(record);
+}
+
+fn capture_tool_run(tool: &str, outcomes: &[JobOutcome]) {
+    let successful_inputs = outcomes.iter().filter(|outcome| outcome.failure.is_none()).count();
+    let failed_inputs = outcomes.len() - successful_inputs;
+    let output_count: usize = outcomes.iter().map(|outcome| outcome.output_paths.len()).sum();
+
+    if let Some(client) = POSTHOG_CLIENT.get().and_then(Option::as_ref) {
+        let delivery_id = format!(
+            "personless-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        );
+        let mut event = Event::new("tool_run_completed", &delivery_id);
+        let _ = event.insert_prop("$process_person_profile", false);
+        let _ = event.insert_prop("tool", tool);
+        let _ = event.insert_prop("input_count", outcomes.len());
+        let _ = event.insert_prop("successful_input_count", successful_inputs);
+        let _ = event.insert_prop("failed_input_count", failed_inputs);
+        let _ = event.insert_prop("output_count", output_count);
+        client.capture(event);
+    }
+
+    emit_tool_run_log(tool, outcomes.len(), successful_inputs, failed_inputs, output_count);
+}
+
+macro_rules! track_tool_run {
+    ($tool:literal, $run:expr) => {{
+        let outcomes = $run;
+        capture_tool_run($tool, &outcomes);
+        outcomes
+    }};
+}
+
+fn posthog_log_provider() -> Option<SdkLoggerProvider> {
+    let token = std::env::var("POSTHOG_PROJECT_TOKEN")
+        .ok()
+        .filter(|value| !value.trim().is_empty())?;
+    let host = std::env::var("POSTHOG_HOST")
+        .ok()
+        .filter(|value| !value.trim().is_empty())?;
+    let endpoint = format!("{}/i/v1/logs", host.trim_end_matches('/'));
+    let headers = HashMap::from([("Authorization".to_owned(), format!("Bearer {token}"))]);
+
+    let exporter = match opentelemetry_otlp::LogExporter::builder()
+        .with_http()
+        .with_protocol(Protocol::HttpBinary)
+        .with_endpoint(endpoint)
+        .with_headers(headers)
+        .build()
+    {
+        Ok(exporter) => exporter,
+        Err(error) => {
+            if cfg!(debug_assertions) {
+                eprintln!("PostHog log exporter could not be configured: {error}");
+            }
+            return None;
+        }
+    };
+
+    Some(
+        SdkLoggerProvider::builder()
+            .with_batch_exporter(exporter)
+            .build(),
+    )
+}
+
+fn posthog_client() -> Option<PostHogClient> {
+    let token = std::env::var("POSTHOG_PROJECT_TOKEN")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    let host = std::env::var("POSTHOG_HOST")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+
+    let (token, host) = match (token, host) {
+        (Some(token), Some(host)) => (token, host),
+        (None, _) => {
+            if cfg!(debug_assertions) {
+                panic!("POSTHOG_PROJECT_TOKEN variable required by PostHog is missing or un-configured, this causes events to be silently missed. This error stops appearing once POSTHOG_PROJECT_TOKEN is configured");
+            }
+            return None;
+        }
+        (_, None) => {
+            if cfg!(debug_assertions) {
+                panic!("POSTHOG_HOST variable required by PostHog is missing or un-configured, this causes events to be silently missed. This error stops appearing once POSTHOG_HOST is configured");
+            }
+            return None;
+        }
+    };
+
+    let options = ClientOptions::from((token.as_str(), host.as_str()));
+    Some(Arc::new(tauri::async_runtime::block_on(
+        posthog_rs::client(options),
+    )))
+}
 
 #[tauri::command]
 async fn remove_password(request: PasswordRequest) -> Vec<JobOutcome> {
-    BatchRunner::run(request.paths, |path| {
+    track_tool_run!("remove_password", BatchRunner::run(request.paths, |path| {
         PasswordProcessor::remove_password(path, &request.password, &request.output_location)
-    })
+    }))
 }
 
 #[tauri::command]
 async fn protect_pdf(request: PdfRequest) -> Vec<JobOutcome> {
-    BatchRunner::run(request.paths, |path| {
+    track_tool_run!("protect_pdf", BatchRunner::run(request.paths, |path| {
         PDFProcessor::protect(path, &request.password, &request.output_location)
-    })
+    }))
 }
 
 #[tauri::command]
 async fn compress_images(request: CompressImagesRequest) -> Vec<JobOutcome> {
-    BatchRunner::run(request.paths, |path| {
+    track_tool_run!("compress_images", BatchRunner::run(request.paths, |path| {
         ImageProcessor::run(path, ImageOptions {
             target_format: None,
             quality: if request.lossless { 0 } else { request.quality },
@@ -37,7 +177,7 @@ async fn compress_images(request: CompressImagesRequest) -> Vec<JobOutcome> {
             suffix: "-compressed".to_string(),
             output_location: request.output_location.clone(),
         })
-    })
+    }))
 }
 
 #[tauri::command]
@@ -50,7 +190,7 @@ async fn convert_images(request: ConvertImagesRequest) -> Vec<JobOutcome> {
         _ => OutputFormat::Png,
     };
 
-    BatchRunner::run(request.paths, |path| {
+    track_tool_run!("convert_images", BatchRunner::run(request.paths, |path| {
         ImageProcessor::run(path, ImageOptions {
             target_format: Some(img_format),
             quality: 80,
@@ -58,7 +198,7 @@ async fn convert_images(request: ConvertImagesRequest) -> Vec<JobOutcome> {
             suffix: "-converted".to_string(),
             output_location: request.output_location.clone(),
         })
-    })
+    }))
 }
 
 #[derive(serde::Deserialize)]
@@ -74,37 +214,37 @@ fn inspect_pdf(request: InspectPdfRequest) -> Result<metadata::PdfDocumentMetada
 
 #[tauri::command]
 async fn crop_pdf(request: editor::CropPdfRequest) -> Vec<JobOutcome> {
-    BatchRunner::run(request.paths.clone(), |path| editor::crop(&request, path))
+    track_tool_run!("crop_pdf", BatchRunner::run(request.paths.clone(), |path| editor::crop(&request, path)))
 }
 
 #[tauri::command]
 async fn sign_pdf(request: editor::SignPdfRequest) -> Vec<JobOutcome> {
-    BatchRunner::run(request.paths.clone(), |path| editor::sign(&request, path))
+    track_tool_run!("sign_pdf", BatchRunner::run(request.paths.clone(), |path| editor::sign(&request, path)))
 }
 
 #[tauri::command]
 async fn edit_pdf(request: editor::EditPdfRequest) -> Vec<JobOutcome> {
-    BatchRunner::run(request.paths.clone(), |path| editor::edit(&request, path))
+    track_tool_run!("edit_pdf", BatchRunner::run(request.paths.clone(), |path| editor::edit(&request, path)))
 }
 
 #[tauri::command]
 async fn organize_pdf(request: editor::OrganizePdfRequest) -> Vec<JobOutcome> {
-    BatchRunner::run(request.paths.clone(), |path| editor::organize(&request, path))
+    track_tool_run!("organize_pdf", BatchRunner::run(request.paths.clone(), |path| editor::organize(&request, path)))
 }
 
 #[tauri::command]
 async fn add_page_numbers(request: remaining::PageOverlayRequest) -> Vec<JobOutcome> {
-    BatchRunner::run(request.paths.clone(), |path| remaining::add_page_numbers(&request, path))
+    track_tool_run!("add_page_numbers", BatchRunner::run(request.paths.clone(), |path| remaining::add_page_numbers(&request, path)))
 }
 
 #[tauri::command]
 async fn watermark_pdf(request: remaining::PageOverlayRequest) -> Vec<JobOutcome> {
-    BatchRunner::run(request.paths.clone(), |path| remaining::watermark(&request, path))
+    track_tool_run!("watermark_pdf", BatchRunner::run(request.paths.clone(), |path| remaining::watermark(&request, path)))
 }
 
 #[tauri::command]
 async fn compress_pdf(request: remaining::CompressPdfRequest) -> Vec<JobOutcome> {
-    BatchRunner::run(request.paths.clone(), |path| remaining::compress(&request, path))
+    track_tool_run!("compress_pdf", BatchRunner::run(request.paths.clone(), |path| remaining::compress(&request, path)))
 }
 
 #[tauri::command]
@@ -119,7 +259,7 @@ async fn extract_pdf_pages(request: remaining::PageSelectionRequest) -> Vec<JobO
 
 #[tauri::command]
 async fn merge_pdfs(request: remaining::MergePdfRequest) -> Vec<JobOutcome> {
-    vec![remaining::merge(&request)]
+    track_tool_run!("merge_pdfs", vec![remaining::merge(&request)])
 }
 
 #[tauri::command]
@@ -129,12 +269,12 @@ async fn split_pdf(request: remaining::PageSelectionRequest) -> Vec<JobOutcome> 
 
 #[tauri::command]
 async fn pdf_to_images(request: remaining::PdfToImagesRequest) -> Vec<JobOutcome> {
-    BatchRunner::run(request.paths.clone(), |path| remaining::to_images(&request, path))
+    track_tool_run!("pdf_to_images", BatchRunner::run(request.paths.clone(), |path| remaining::to_images(&request, path)))
 }
 
 #[tauri::command]
 async fn pdf_to_text(request: remaining::PdfToTextRequest) -> Vec<JobOutcome> {
-    BatchRunner::run(request.paths.clone(), |path| remaining::to_text(&request, path))
+    track_tool_run!("pdf_to_text", BatchRunner::run(request.paths.clone(), |path| remaining::to_text(&request, path)))
 }
 
 #[tauri::command]
@@ -144,17 +284,17 @@ async fn extract_pdf_images(request: remaining::PdfToTextRequest) -> Vec<JobOutc
 
 #[tauri::command]
 async fn images_to_pdf(request: remaining::ImagesToPdfRequest) -> Vec<JobOutcome> {
-    vec![remaining::images_to_pdf(&request)]
+    track_tool_run!("images_to_pdf", vec![remaining::images_to_pdf(&request)])
 }
 
 #[tauri::command]
-async fn ocr_pdf(request: vision::VisionRequest) -> Vec<JobOutcome> { BatchRunner::run(request.paths.clone(), |path| vision::ocr_pdf(&request, path)) }
+async fn ocr_pdf(request: vision::VisionRequest) -> Vec<JobOutcome> { track_tool_run!("ocr_pdf", BatchRunner::run(request.paths.clone(), |path| vision::ocr_pdf(&request, path))) }
 #[tauri::command]
 async fn blur_faces(request: vision::VisionRequest) -> Vec<JobOutcome> { BatchRunner::run(request.paths.clone(), |path| vision::blur_faces(&request, path)) }
 #[tauri::command]
-async fn remove_image_background(request: vision::VisionRequest) -> Vec<JobOutcome> { BatchRunner::run(request.paths.clone(), |path| vision::remove_background(&request, path)) }
+async fn remove_image_background(request: vision::VisionRequest) -> Vec<JobOutcome> { track_tool_run!("remove_image_background", BatchRunner::run(request.paths.clone(), |path| vision::remove_background(&request, path))) }
 #[tauri::command]
-async fn resize_images(request: tools::ResizeRequest) -> Vec<JobOutcome> { BatchRunner::run(request.paths.clone(), |path| tools::resize(&request, path)) }
+async fn resize_images(request: tools::ResizeRequest) -> Vec<JobOutcome> { track_tool_run!("resize_images", BatchRunner::run(request.paths.clone(), |path| tools::resize(&request, path))) }
 #[tauri::command]
 async fn rotate_images(request: tools::RotateRequest) -> Vec<JobOutcome> { BatchRunner::run(request.paths.clone(), |path| tools::rotate(&request, path)) }
 #[tauri::command]
@@ -177,7 +317,15 @@ async fn image_metadata(request: tools::MetadataRequest) -> Vec<JobOutcome> { Ba
 fn inspect_image_metadata(request: tools::MetadataRequest) -> Vec<Result<tools::MetadataReport, String>> { request.paths.into_iter().map(tools::inspect_metadata).collect() }
 
 fn main() {
-    tauri::Builder::default()
+    let posthog_client = posthog_client();
+    let posthog_log_provider =
+        tauri::async_runtime::block_on(async { posthog_log_provider() });
+    let _ = POSTHOG_CLIENT.set(posthog_client.clone());
+    let _ = POSTHOG_LOG_PROVIDER.set(posthog_log_provider);
+    emit_lifecycle_log("posthog_log_exporter_initialized");
+
+    let app = tauri::Builder::default()
+        .manage(posthog_client.clone())
         .invoke_handler(tauri::generate_handler![
             open_output_path,
             reveal_output_path,
@@ -218,9 +366,23 @@ fn main() {
         ])
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .run(tauri::generate_context!())
+        .plugin(tauri_plugin_updater::Builder::new().build());
+
+    app.run(tauri::generate_context!())
         .expect("error while running tauri application");
+
+    emit_lifecycle_log("toolbox_application_shutting_down");
+    if let Some(provider) = POSTHOG_LOG_PROVIDER.get().and_then(Option::as_ref) {
+        let _ = provider.force_flush();
+        let _ = provider.shutdown();
+    }
+
+    if let Some(client) = posthog_client {
+        tauri::async_runtime::block_on(async {
+            client.flush().await;
+            client.shutdown().await;
+        });
+    }
 }
 
 #[cfg(test)]
