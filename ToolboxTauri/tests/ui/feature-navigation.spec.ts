@@ -320,6 +320,18 @@ test("search arrows navigate visible results and Enter opens the focused result"
 
     const search = page.getByRole("textbox", { name: "Search tools" });
     await search.fill("Protect");
+    const composingArrowPrevented = await search.evaluate((input) => {
+        const event = new KeyboardEvent("keydown", {
+            key: "ArrowDown",
+            bubbles: true,
+            cancelable: true,
+            isComposing: true,
+        });
+        input.dispatchEvent(event);
+        return event.defaultPrevented;
+    });
+    expect(composingArrowPrevented).toBe(false);
+    await expect(search).toBeFocused();
     await expect(page.locator(".recent-section")).toHaveCount(0);
     await expect(page.locator("button[data-command-result]")).toHaveCount(3);
     const removePassword = page.getByRole("button", { name: "Open Remove Password", exact: true });

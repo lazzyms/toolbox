@@ -165,7 +165,7 @@ export const MainPage = () => {
       ) ?? [],
     ).filter((button) => !button.disabled);
   const handleSearchKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
-    if (event.key !== "ArrowDown") return;
+    if (event.nativeEvent.isComposing || event.key !== "ArrowDown") return;
 
     const firstResult = commandResults()[0];
     if (!firstResult) return;
