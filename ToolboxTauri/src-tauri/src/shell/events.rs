@@ -27,6 +27,7 @@ pub(crate) enum ShellCommand {
 #[serde(tag = "kind", rename_all = "kebab-case", rename_all_fields = "camelCase")]
 pub(crate) enum ShellEvent {
     Files { activation_id: String, workspace: WorkspaceId, paths: Vec<String> },
+    DroppedFiles { paths: Vec<String> },
     Command { command: ShellCommand },
     RejectedFiles { paths: Vec<String>, reason: String },
 }

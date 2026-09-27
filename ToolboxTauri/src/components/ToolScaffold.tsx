@@ -1,8 +1,9 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import { TOOL_DROP_EVENT } from '../hooks/useShellBridge';
 import type { ToolDefinition, JobOutcome, Progress } from '../contracts';
 import type { ShellEvent } from '../hooks/useShellBridge';
 import { ResultList } from './ResultList';
@@ -149,7 +150,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
     const run = () => runWith(onRun);
     const runCombined = () => runWith(onRunCombined ?? onRun);
 
-    const addFiles = (paths: string[], replaceSingle = false) => {
+    const addFiles = useCallback((paths: string[], replaceSingle = false) => {
         setFiles((prev) => {
             const existing = new Set(prev);
             const fresh = paths.filter((p) => !existing.has(p));
@@ -159,7 +160,17 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
             }
             return fresh.length ? [...prev, ...fresh] : prev;
         });
-    };
+    }, [inputPolicy.inputCardinality]);
+
+    useEffect(() => {
+        const handleDroppedFiles = (event: Event) => {
+            const paths = (event as CustomEvent<unknown>).detail;
+            if (!Array.isArray(paths) || !paths.every((path) => typeof path === 'string')) return;
+            addFiles(paths, inputPolicy.inputCardinality === 'single' && paths.length === 1);
+        };
+        window.addEventListener(TOOL_DROP_EVENT, handleDroppedFiles);
+        return () => window.removeEventListener(TOOL_DROP_EVENT, handleDroppedFiles);
+    }, [addFiles, inputPolicy.inputCardinality]);
 
     const moveSelectedFile = (delta: -1 | 1) => {
         setFiles((current) => {

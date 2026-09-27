@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
 export const SHELL_EVENT = "toolbox://shell-event";
+export const TOOL_DROP_EVENT = "toolbox:tool-drop";
 
 export type ShellCommand =
   | "search"
@@ -20,6 +21,7 @@ export type ShellWorkspace = "pdf-editor" | "image-editor";
 
 export type ShellEvent =
   | { kind: "files"; activationId: string; workspace: ShellWorkspace; paths: string[] }
+  | { kind: "dropped-files"; paths: string[] }
   | { kind: "command"; command: ShellCommand }
   | { kind: "rejected-files"; paths: string[]; reason: string };
 

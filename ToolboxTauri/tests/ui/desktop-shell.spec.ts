@@ -8,6 +8,7 @@ const preview = "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://w
 type ShellCommand = "search" | "open" | "undo" | "redo" | "export";
 type ShellEvent =
     | { kind: "files"; activationId: string; workspace: "pdf-editor" | "image-editor"; paths: string[] }
+    | { kind: "dropped-files"; paths: string[] }
     | { kind: "command"; command: ShellCommand }
     | { kind: "rejected-files"; paths: string[]; reason: string };
 
@@ -59,6 +60,7 @@ test.beforeEach(async ({ page }) => {
                 if (command === "inspect_pdf_scene") return { path: pdfPath, pages: [{ index: 0, width: 612, height: 792, preview }] };
                 if (command === "inspect_pdf_scene_page") return { index: 0, width: 612, height: 792, preview, textRuns: [] };
                 if (command === "preview_pdf_scene_pages") return (args as { request: { pageIndices: number[] } }).request.pageIndices.map((pageIndex) => ({ pageIndex, preview: { dataUrl: preview, width: 612, height: 792 } }));
+                if (command === "inspect_tiff_pages") return [{ width: 640, height: 480, dataUrl: preview }];
                 if (command === "export_pdf_scene") return [{ inputPath: pdfPath, outputPaths: [`${pdfPath}.edited.pdf`], detail: "Exported", failure: null }];
                 if (command.startsWith("plugin:")) return null;
                 return null;
@@ -159,6 +161,50 @@ test("reports rejected files and mixed batches without accepting or acknowledgin
     expect(calls.filter((call) => call.command === "acknowledge_activation")).toHaveLength(0);
     await expect(page.getByRole("heading", { name: "Ready to process" })).toBeVisible();
     await expect(page.getByText("0 files open", { exact: true })).toHaveCount(0);
+});
+
+test("routes dropped files through the active tool input contract", async ({ page }) => {
+    await page.goto("/");
+
+    const officePath = "/tmp/contract.docx";
+    await page.getByRole("button", { name: "Open Protect Office Files", exact: true }).click();
+    await emitShellEvent(page, { kind: "dropped-files", paths: [officePath] });
+    await expect(page.getByText("contract.docx", { exact: true })).toBeVisible();
+    await expect(page.locator(".file-selection-count")).toHaveText("1 file open");
+    await expect(page.getByRole("alert")).toHaveCount(0);
+
+    await page.getByRole("button", { name: "← All tools" }).click();
+    const tiffPath = "/tmp/archive.tiff";
+    await page.getByRole("button", { name: "Open Split and Combine TIFF", exact: true }).click();
+    await emitShellEvent(page, { kind: "dropped-files", paths: [tiffPath] });
+    await expect(page.getByText("archive.tiff", { exact: true })).toBeVisible();
+    await expect(page.getByRole("alert")).toHaveCount(0);
+
+    await page.getByRole("button", { name: "← All tools" }).click();
+    const gifPath = "/tmp/animation.gif";
+    await page.getByRole("button", { name: "Open Extract GIF Frames", exact: true }).click();
+    await emitShellEvent(page, { kind: "dropped-files", paths: [gifPath] });
+    await expect(page.getByText("animation.gif", { exact: true })).toBeVisible();
+    await expect(page.getByRole("alert")).toHaveCount(0);
+
+    await emitShellEvent(page, { kind: "dropped-files", paths: [officePath] });
+    await expect(page.getByRole("alert")).toContainText("not supported by Extract GIF Frames");
+
+    await page.getByRole("button", { name: "← All tools" }).click();
+    await emitShellEvent(page, { kind: "dropped-files", paths: ["/tmp/unknown.xyz"] });
+    await expect(page.getByRole("alert")).toContainText("Open a tool before dropping files here.");
+});
+
+test("keeps multi-file drops intact for ordered tools", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Images to PDF", exact: true }).click();
+
+    const imagePaths = ["/tmp/cover.jpg", "/tmp/inside.jpg"];
+    await emitShellEvent(page, { kind: "dropped-files", paths: imagePaths });
+    await expect(page.locator(".file-selection-count")).toHaveText("2 files open");
+    await expect(page.getByText("cover.jpg", { exact: true })).toBeVisible();
+    await expect(page.getByText("inside.jpg", { exact: true })).toBeVisible();
+    await expect(page.getByRole("alert")).toHaveCount(0);
 });
 
 test("native undo, redo, and export commands target the active editor", async ({ page }) => {

@@ -42,7 +42,7 @@ import { MediaWorkspaceView } from "./MediaWorkspaceView";
 import { PlannedToolView, UnavailableToolView } from "./PlannedToolView";
 import { SettingsPanel } from "./SettingsPanel";
 import { useShellBridge } from "../hooks/useShellBridge";
-import type { ShellCommand, ShellEvent } from "../hooks/useShellBridge";
+import { TOOL_DROP_EVENT, type ShellCommand, type ShellEvent } from "../hooks/useShellBridge";
 
 const workspaceViews = {
   "file-security": SecurityWorkspaceView,
@@ -286,6 +286,15 @@ export const MainPage = () => {
       setRejectedFiles(event);
       return;
     }
+    if (event.kind === "dropped-files") {
+      setRejectedFiles(null);
+      if (!selectedTool) {
+        setRejectedFiles({ kind: "rejected-files", paths: event.paths, reason: "Open a tool before dropping files here." });
+      } else {
+        window.dispatchEvent(new CustomEvent(TOOL_DROP_EVENT, { detail: event.paths }));
+      }
+      return;
+    }
     switch (event.command) {
       case "search":
         searchInputRef.current?.focus();
@@ -314,7 +323,7 @@ export const MainPage = () => {
         setShortcutsOpen(true);
         break;
     }
-  }, [activateFile, dispatchEditorCommand, openFilesFromMenu]);
+  }, [activateFile, dispatchEditorCommand, openFilesFromMenu, selectedTool]);
   const acceptActivation = useCallback((activationId: string) => {
     if (activationInFlight.current !== activationId) return;
     acceptedActivationIds.current.push(activationId);
