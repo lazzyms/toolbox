@@ -110,6 +110,7 @@ export const SecurityWorkspaceView = ({ utility }: { utility: ToolDefinition }) 
           </label>
           <button
             type="button"
+            aria-label={activeUtility.id === "pdf-unlock" ? "Remove Password from selected files" : activeUtility.shortTitle}
             disabled={loading || files.length === 0 || password.length === 0}
             onClick={run}
             className="workspace-primary-action"

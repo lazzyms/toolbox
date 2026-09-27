@@ -1,12 +1,16 @@
 # Tauri tool matrix
 
-The [Tauri registry](../ToolboxTauri/src/registry/index.ts) defines the catalog,
-category, display order, command, and availability for `main`. It currently
-includes document, PDF, and image utilities. OCR PDF, Blur Faces, and Remove
-Background are marked unavailable because their offline resources are not bundled.
+`UtilityMetadata` in the [Tauri registry](../ToolboxTauri/src/registry/index.ts)
+defines the catalog, category, display order, command, and verification ID.
+`shared/tool-capabilities.json` records each command's availability for
+`main`. The app combines those files into its utility registry. OCR PDF,
+Blur Faces, and Remove Background remain unavailable. A published release may
+predate changes on `main`.
 
 `implemented` records the application status. It does not establish full parity
-with every requirement in the [historical parity specification](tauri-parity-spec.md).
+with every requirement in the
+[historical parity specification](tauri-parity-spec.md) or confirm that a tagged
+release includes that implementation.
 The [verification reference](parity-verification-harness.md) describes the checks
 that exist today.
 
@@ -19,6 +23,7 @@ that exist today.
 | pdf-crop | PDF | implemented | crop_pdf | pdf-crop |
 | pdf-edit | PDF | implemented | edit_pdf | pdf-edit |
 | pdf-protect | PDF | implemented | protect_pdf | protect-pdf |
+| office-protect | Documents | implemented | protect_office | protect-office |
 | images-to-pdf | PDF | implemented | images_to_pdf | images-to-pdf |
 | pdf-to-images | PDF | implemented | pdf_to_images | pdf-to-images |
 | pdf-to-text | PDF | implemented | pdf_to_text | pdf-to-text |
@@ -49,9 +54,8 @@ The `pdf-unlock` ID remains stable for saved navigation. Its current title is
 **Remove Password**, and it handles PDF, Word, Excel, and PowerPoint documents.
 **Edit PDF** adds text, highlights, shapes, and notes through `edit_pdf`.
 
-The three unavailable tools display an explanation before file selection.
-The [vision adapter reference](tauri-vision-engines.md) describes the native
-commands and their current limitations.
+These offline tools use the bundled adapters described in the
+[vision adapter reference](tauri-vision-engines.md).
 
 The `Verification` column contains registry identifiers, not proof that a
 matching fixture or recipe passed. `npm run check:matrix`, run from

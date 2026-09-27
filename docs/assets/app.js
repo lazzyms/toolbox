@@ -5,6 +5,17 @@
   const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
   const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
+  if (location.protocol === 'https:') {
+    for (const demo of $$('.product-demo')) {
+      const localDemo = $('video.product-demo-video', demo);
+      const hostedDemo = $('iframe.product-demo-video[data-src]', demo);
+      if (!localDemo || !hostedDemo) continue;
+      hostedDemo.src = hostedDemo.dataset.src;
+      hostedDemo.hidden = false;
+      localDemo.hidden = true;
+    }
+  }
+
   /* ───────────────────────── appearance ───────────────────────── */
 
   const root = document.documentElement;
@@ -45,7 +56,7 @@
   const toolIcons = {
     'pdf-unlock': 'remove-password', 'pdf-page-numbers': 'page-numbers',
     'pdf-merge': 'merge-pdf', 'pdf-watermark': 'watermark-pdf', 'pdf-crop': 'crop-pdf',
-    'pdf-edit': 'edit-pdf', 'pdf-protect': 'protect-pdf', 'images-to-pdf': 'images-to-pdf',
+    'pdf-edit': 'edit-pdf', 'pdf-protect': 'protect-pdf', 'office-protect': 'protect-pdf', 'images-to-pdf': 'images-to-pdf',
     'pdf-to-images': 'pdf-to-images', 'pdf-to-text': 'pdf-to-text', 'pdf-split': 'split-pdf',
     'pdf-image-extract': 'extract-images', 'pdf-sign': 'signature', 'pdf-ocr': 'ocr-pdf',
     'pdf-remove-pages': 'file-minus', 'pdf-extract-pages': 'extract-pages',
@@ -71,7 +82,7 @@
   // Keep platform download destinations in one place when cutting a new release.
   const downloads = {
     macos: {
-      href: 'https://github.com/lazzyms/toolbox/releases/download/tauri-v1.0.0/Toolbox-1.0.0-macos.dmg',
+      href: 'https://github.com/lazzyms/toolbox/releases/download/tauri-v1.0.11/Toolbox-1.0.11-macos.dmg',
       label: 'Download for macOS',
       detail: 'Apple silicon · DMG',
     },

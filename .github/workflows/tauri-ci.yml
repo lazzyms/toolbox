@@ -81,7 +81,14 @@ jobs:
 
       - name: Install qpdf (Windows)
         if: runner.os == 'Windows'
-        run: choco install qpdf poppler tesseract -y
+        shell: pwsh
+        run: |
+          choco install qpdf poppler tesseract -y
+          $tesseractDirectory = Join-Path $env:ProgramFiles 'Tesseract-OCR'
+          if (-not (Test-Path (Join-Path $tesseractDirectory 'tesseract.exe'))) {
+            throw 'Could not locate the installed Tesseract executable'
+          }
+          $tesseractDirectory | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Stage qpdf as Windows bundle resources
         if: runner.os == 'Windows'

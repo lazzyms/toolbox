@@ -466,6 +466,18 @@ details .accordion-content p { font-size: .875rem; color: var(--muted-foreground
 .screenshots-heading { max-width: 42rem; }
 .screenshots-heading h2 { margin-top: .75rem; }
 .screenshots-heading > p:last-child { margin-top: 1rem; color: var(--muted-foreground); font-size: 1rem; }
+.product-demo { margin: 2.5rem 0 0; }
+.product-demo-frame {
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 1.25rem;
+  background: #111;
+  box-shadow: var(--shadow-lg), 0 0 0 1px color-mix(in srgb, var(--foreground) 4%, transparent);
+}
+.product-demo-video { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; border: 0; background: #111; }
+.product-demo-video[hidden] { display: none; }
+.product-demo figcaption { margin-top: .875rem; color: var(--muted-foreground); font-size: .8125rem; line-height: 1.6; }
+.product-demo figcaption a { text-decoration: underline; text-underline-offset: 3px; }
 .screenshot-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.25rem; margin-top: 2.5rem; }
 .screenshot-card { margin: 0; }
 .screenshot-frame {
@@ -710,7 +722,9 @@ h2 { font-size: clamp(2rem, 4vw, 3.6rem); letter-spacing: -.06em; line-height: 1
 .cta { margin-top: 2.25rem; }
 .btn-lg { height: 3.25rem; padding-inline: 1.5rem; border-radius: 999px; font-size: .9375rem; }
 .btn-default { background: var(--brand); color: white; box-shadow: 0 10px 25px color-mix(in oklab, var(--brand) 28%, transparent); }
-.btn-default:hover { background: var(--brand-deep); }
+.btn-default:hover, .btn-default:focus-visible { background: var(--brand-deep); }
+[data-theme="dark"] .btn-default { background: #2f7bff; color: #071027; }
+[data-theme="dark"] .btn-default:hover, [data-theme="dark"] .btn-default:focus-visible { background: #1654d8; color: white; }
 .btn-outline { background: color-mix(in oklab, var(--card) 72%, transparent); backdrop-filter: blur(10px); border-color: var(--border-strong); }
 .cta-note, .dl-fallback { font-size: .75rem; }
 

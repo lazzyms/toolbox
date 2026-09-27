@@ -71,5 +71,7 @@ build sets `VITE_ENABLE_UPDATES=true`, asks before installing, verifies the
 payload with the bundled public key, and relaunches after installation.
 
 The UI keeps original inputs unchanged, appends collision-safe operation suffixes,
-and exposes per-output Open and Reveal actions. The three vision features remain
-explicitly unavailable because their offline resources are not bundled.
+and exposes per-output Open and Reveal actions. The latest published Tauri 1.0.11
+build predates the offline vision and OCR resource integration on `main`, so those
+features remain unavailable in that public download until a newer release is
+published.

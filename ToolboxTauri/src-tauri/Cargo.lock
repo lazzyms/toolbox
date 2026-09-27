@@ -1862,19 +1862,6 @@ checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
 
 [[package]]
 name = "hashbrown"
-version = "0.16.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
-dependencies = [
- "allocator-api2",
- "equivalent",
- "foldhash",
- "serde",
- "serde_core",
-]
-
-[[package]]
-name = "hashbrown"
 version = "0.15.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1"
@@ -1882,6 +1869,19 @@ dependencies = [
  "allocator-api2",
  "equivalent",
  "foldhash 0.1.5",
+]
+
+[[package]]
+name = "hashbrown"
+version = "0.16.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
+dependencies = [
+ "allocator-api2",
+ "equivalent",
+ "foldhash 0.2.0",
+ "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -4242,19 +4242,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
-name = "safetensors"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "79b079b829cb27a1c3c374341345ed2e8b2c0c839034522cee576c140bd7f846"
-dependencies = [
- "hashbrown 0.16.1",
- "libc",
- "serde",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
 name = "rustybuzz"
 version = "0.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4270,6 +4257,19 @@ dependencies = [
  "unicode-ccc",
  "unicode-properties",
  "unicode-script",
+]
+
+[[package]]
+name = "safetensors"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "79b079b829cb27a1c3c374341345ed2e8b2c0c839034522cee576c140bd7f846"
+dependencies = [
+ "hashbrown 0.16.1",
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -5565,7 +5565,7 @@ checksum = "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"
 
 [[package]]
 name = "toolbox"
-version = "1.0.5"
+version = "1.0.13"
 dependencies = [
  "aes 0.8.4",
  "base64 0.22.1",
