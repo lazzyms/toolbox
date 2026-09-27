@@ -53,15 +53,13 @@ async function withPosthogKey<T>(
 
 test("records the first install once and ignores later app launches", () => {
   const storage = new MemoryStorage();
-  const events: Array<{ name: string; parameters: Record<string, string> }> = [];
-  const logEvent = (name: string, parameters: Record<string, string>) => {
-    events.push({ name, parameters });
+  const events: Array<{ name: string }> = [];
+  const logEvent = (name: string) => {
+    events.push({ name });
   };
 
   assert.equal(recordFirstInstall(storage, logEvent), "recorded");
-  assert.deepEqual(events, [
-    { name: "first_install", parameters: { app_platform: "tauri" } },
-  ]);
+  assert.deepEqual(events, [{ name: "first_install" }]);
   assert.equal(storage.getItem(INSTALL_MARKER), "1");
 
   assert.equal(recordFirstInstall(storage, logEvent), "already-recorded");
@@ -180,7 +178,6 @@ test("capture payload carries api key, event, distinct id and properties", async
     await captureEvent(
       "app_opened",
       "test-distinct-id",
-      { app_platform: "tauri" },
       mockFetch(calls),
     );
 
@@ -205,7 +202,6 @@ test("capture respects a custom capture url (EU projects)", async () => {
       await captureEvent(
         "app_opened",
         "test-distinct-id",
-        {},
         mockFetch(calls),
       );
       assert.equal(calls[0].url, "https://eu.i.posthog.com/capture/");

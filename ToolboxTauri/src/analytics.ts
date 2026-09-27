@@ -16,25 +16,20 @@ export const DISTINCT_ID_KEY = "toolbox.analytics.distinct-id";
 export const OPT_OUT_KEY = "toolbox.analytics.opt-out";
 
 type StorageLike = Pick<Storage, "getItem" | "setItem">;
-type EventLogger = (name: string, parameters: Record<string, string>) => void;
+type AnalyticsEvent = "first_install" | "app_opened";
+type EventLogger = (name: AnalyticsEvent) => void;
 
 function readBuildVar(name: string, fallback: string): string {
-  // Vite exposes VITE_* vars via import.meta.env at build time.
-  // In Node/test contexts import.meta.env may be undefined, so fall back
-  // to process.env — this also makes the module unit-testable.
-  try {
-    const env = (import.meta as { env?: Record<string, string | undefined> })
-      .env;
-    if (env?.[name]) return env[name] as string;
-  } catch {
-    /* import.meta.env unavailable outside Vite */
-  }
-  try {
-    if (typeof process !== "undefined") return process.env?.[name] ?? fallback;
-  } catch {
-    /* ignore */
-  }
-  return fallback;
+  const env = (import.meta as { env?: Record<string, string | undefined> }).env;
+  const viteValue = env?.[name];
+  if (viteValue) return viteValue;
+
+  const processLike: unknown = Reflect.get(globalThis, "process");
+  if (typeof processLike !== "object" || processLike === null) return fallback;
+  const processEnv: unknown = Reflect.get(processLike, "env");
+  if (typeof processEnv !== "object" || processEnv === null) return fallback;
+  const processValue: unknown = Reflect.get(processEnv, name);
+  return typeof processValue === "string" ? processValue : fallback;
 }
 
 function getPosthogKey(): string {
@@ -59,7 +54,7 @@ export function recordFirstInstall(
 ): "recorded" | "already-recorded" {
   if (storage.getItem(INSTALL_MARKER)) return "already-recorded";
 
-  log("first_install", { app_platform: "tauri" });
+  log("first_install");
   storage.setItem(INSTALL_MARKER, "1");
   return "recorded";
 }
@@ -84,11 +79,11 @@ type FetchLike = (
 // valid project key is configured. The fetch implementation is injectable so
 // tests never hit the real network.
 export async function captureEvent(
-  event: string,
+  event: AnalyticsEvent,
   distinctId: string,
-  parameters: Record<string, string>,
   fetchImpl: FetchLike = fetch,
 ): Promise<void> {
+  if (event !== "first_install" && event !== "app_opened") return;
   const key = getPosthogKey();
   if (!isConfigured()) return;
   await fetchImpl(getCaptureUrl(), {
@@ -99,7 +94,7 @@ export async function captureEvent(
       event,
       distinct_id: distinctId,
       properties: {
-        ...parameters,
+        app_platform: "tauri",
         $lib: "toolbox-tauri",
         $geoip_disable: true,
       },
@@ -136,14 +131,13 @@ export async function initializeInstallAnalyticsWith(
     if (!isConfigured()) return;
 
     const distinctId = getDistinctId(storage);
-    recordFirstInstall(storage, (name, parameters) => {
+    recordFirstInstall(storage, (name) => {
       // Fire-and-forget: analytics must never break the app.
-      captureEvent(name, distinctId, parameters, deps.fetchImpl).catch(() => {});
+      captureEvent(name, distinctId, deps.fetchImpl).catch(() => {});
     });
     await captureEvent(
       "app_opened",
       distinctId,
-      { app_platform: "tauri" },
       deps.fetchImpl,
     );
   } catch (error) {

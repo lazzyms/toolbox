@@ -2,6 +2,60 @@ export type ToolCategory = "PDF" | "Images" | "Documents";
 
 export type ToolStatus = "implemented" | "planned" | "unavailable";
 
+export type AtomicToolId =
+  | "pdf-unlock"
+  | "pdf-page-numbers"
+  | "pdf-merge"
+  | "pdf-watermark"
+  | "pdf-crop"
+  | "pdf-edit"
+  | "pdf-protect"
+  | "office-protect"
+  | "images-to-pdf"
+  | "pdf-to-images"
+  | "pdf-to-text"
+  | "pdf-split"
+  | "pdf-image-extract"
+  | "pdf-sign"
+  | "pdf-ocr"
+  | "pdf-remove-pages"
+  | "pdf-extract-pages"
+  | "pdf-organize"
+  | "pdf-compress"
+  | "heic-convert"
+  | "compress"
+  | "resize"
+  | "rotate"
+  | "crop"
+  | "icon-set"
+  | "gif-create"
+  | "gif-extract"
+  | "image-watermark"
+  | "image-metadata"
+  | "image-tone"
+  | "tiff-pages"
+  | "image-blur-faces"
+  | "image-remove-bg";
+
+export type WorkspaceId =
+  | "file-security"
+  | "pdf-editor"
+  | "pdf-convert"
+  | "image-editor"
+  | "media-tools";
+
+export type ToolInputCardinality = "single" | "multiple" | "ordered";
+
+export type NativeAvailability = "available" | "unavailable";
+
+export interface ToolCapability {
+  acceptedExtensions: readonly string[];
+  inputCardinality: ToolInputCardinality;
+  supportsPageSelection: boolean;
+  supportsPreview: boolean;
+  nativeAvailability: NativeAvailability;
+}
+
 export type OutputLocation = "alongsideInput" | { customFolder: string };
 
 export type JobState = "running" | "success" | "mixed" | "failure";
@@ -9,6 +63,7 @@ export type JobState = "running" | "success" | "mixed" | "failure";
 export type ToolCommand =
   | "remove_password"
   | "protect_pdf"
+  | "protect_office"
   | "compress_images"
   | "convert_images"
   | "inspect_pdf"
@@ -49,12 +104,21 @@ export interface ToolError {
   message: string;
 }
 
-export interface JobOutcome {
+export interface SuccessfulJobOutcome {
   inputPath: string;
   outputPaths: string[];
   detail: string;
-  failure: ToolError | null;
+  failure: null;
 }
+
+export interface FailedJobOutcome {
+  inputPath: string;
+  outputPaths: string[];
+  detail: string;
+  failure: ToolError;
+}
+
+export type JobOutcome = SuccessfulJobOutcome | FailedJobOutcome;
 
 export type ToolResult = JobOutcome[];
 
@@ -63,8 +127,14 @@ export interface Progress {
   total: number;
 }
 
+export interface ImagePreview {
+  width: number;
+  height: number;
+  dataUrl: string;
+}
+
 export interface ToolDefinition {
-  id: string;
+  id: AtomicToolId;
   title: string;
   shortTitle: string;
   blurb: string;
@@ -72,6 +142,7 @@ export interface ToolDefinition {
   tint: string;
   category: ToolCategory;
   status: ToolStatus;
+  capability: ToolCapability;
   command: ToolCommand;
   verification: string;
   view:
@@ -80,6 +151,7 @@ export interface ToolDefinition {
     | "pdf-crop"
     | "pdf-edit"
     | "pdf-sign"
+    | "office-protect"
     | "pdf-organize"
     | "pdf-page-numbers"
     | "pdf-watermark"
@@ -108,6 +180,17 @@ export interface ToolDefinition {
     | "tiff-pages"
     | "image-metadata"
     | "planned";
+}
+
+export interface ToolWorkspaceDefinition {
+  id: WorkspaceId;
+  title: string;
+  blurb: string;
+  symbol: string;
+  tint: string;
+  category: ToolCategory;
+  categories: ToolCategory[];
+  toolIds: AtomicToolId[];
 }
 
 export interface ToolRequest {
