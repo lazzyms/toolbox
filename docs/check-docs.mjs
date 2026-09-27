@@ -5,9 +5,15 @@ import { runInNewContext } from 'node:vm';
 
 const docs = new URL('./', import.meta.url);
 const registrySource = readFileSync(new URL('../ToolboxTauri/src/registry/index.ts', docs), 'utf8');
-const registryLiteral = registrySource.match(/export const UtilityRegistry[^=]*=\s*(\[[\s\S]*?\n\]);/);
-assert(registryLiteral, 'Registry must expose a literal UtilityRegistry array');
-const registry = JSON.parse(JSON.stringify(runInNewContext(registryLiteral[1], {}, { timeout: 1000 })));
+const registryLiteral = registrySource.match(/const UtilityMetadata[^=]*=\s*(\[[\s\S]*?\n\]);/);
+assert(registryLiteral, 'Registry must expose a literal UtilityMetadata array');
+const metadata = JSON.parse(JSON.stringify(runInNewContext(registryLiteral[1], {}, { timeout: 1000 })));
+const sharedCapabilities = JSON.parse(readFileSync(new URL('../ToolboxTauri/shared/tool-capabilities.json', docs), 'utf8'));
+const availabilityByCommand = new Map(sharedCapabilities.map((capability) => [capability.command, capability.nativeAvailability]));
+const registry = metadata.map((tool) => ({
+  ...tool,
+  status: availabilityByCommand.get(tool.command) === 'unavailable' ? 'unavailable' : 'implemented',
+}));
 const fields = ['id', 'category', 'status', 'command', 'verification'];
 const matrixRows = readFileSync(new URL('tauri-tool-matrix.md', docs), 'utf8')
   .split('\n').filter(line => line.startsWith('|')).map(line => line.split('|').slice(1, -1).map(cell => cell.trim()));
@@ -15,7 +21,7 @@ const matrixStart = matrixRows.findIndex(row => row.join('|') === 'ID|Category|S
 assert(matrixStart >= 0, 'Matrix must include the registry table');
 const matrix = matrixRows.slice(matrixStart);
 const comparisons = [
-  [registry.length, 32, 'Registry tool count'],
+  [registry.length, 33, 'Registry tool count'],
   [new Set(registry.map(tool => tool.id)).size, registry.length, 'Unique registry IDs'],
   [matrix[0], ['ID', 'Category', 'Status', 'Command', 'Verification'], 'Matrix columns'],
   [matrix[1], ['---', '---', '---', '---', '---'], 'Matrix separator'],
@@ -28,11 +34,11 @@ const iconTable = appSource.match(/const toolIcons = \{([\s\S]*?)\n  \};/);
 assert(iconTable, 'Docs must define the shared tool icon table');
 const toolIcons = new Map([...iconTable[1].matchAll(/(?:'([^']+)'|([a-z][\w-]*)):\s*'([^']+)'/g)]
   .map(match => [match[1] || match[2], match[3]]));
-const releaseBase = 'https://github.com/lazzyms/toolbox/releases/download/tauri-v1.0.0/';
+const releaseBase = 'https://github.com/lazzyms/toolbox/releases/download/tauri-v1.0.13/';
 const downloadAssets = {
-  macos: `${releaseBase}Toolbox-1.0.0-macos.dmg`,
-  'windows-x64': 'https://apps.microsoft.com/detail/9N5R8W4GJVH4',
-  'windows-arm64': 'https://apps.microsoft.com/detail/9N5R8W4GJVH4',
+  macos: `${releaseBase}Toolbox-1.0.13-macos.dmg`,
+  'windows-x64': `${releaseBase}Toolbox-windows-x86_64-setup.exe`,
+  'windows-arm64': `${releaseBase}Toolbox-windows-arm64-setup.exe`,
 };
 const publicSources = pages;
 for (const [name, source] of publicSources) {

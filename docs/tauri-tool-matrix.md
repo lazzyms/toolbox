@@ -19,6 +19,7 @@ that exist today.
 | pdf-crop | PDF | implemented | crop_pdf | pdf-crop |
 | pdf-edit | PDF | implemented | edit_pdf | pdf-edit |
 | pdf-protect | PDF | implemented | protect_pdf | protect-pdf |
+| office-protect | Documents | implemented | protect_office | protect-office |
 | images-to-pdf | PDF | implemented | images_to_pdf | images-to-pdf |
 | pdf-to-images | PDF | implemented | pdf_to_images | pdf-to-images |
 | pdf-to-text | PDF | implemented | pdf_to_text | pdf-to-text |
