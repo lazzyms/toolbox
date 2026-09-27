@@ -98,7 +98,11 @@ export async function captureEvent(
       api_key: key,
       event,
       distinct_id: distinctId,
-      properties: { ...parameters, $lib: "toolbox-tauri" },
+      properties: {
+        ...parameters,
+        $lib: "toolbox-tauri",
+        $geoip_disable: true,
+      },
     }),
     keepalive: true,
   });

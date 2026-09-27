@@ -192,6 +192,7 @@ test("capture payload carries api key, event, distinct id and properties", async
     assert.equal(body.distinct_id, "test-distinct-id");
     assert.equal(body.properties.app_platform, "tauri");
     assert.equal(body.properties.$lib, "toolbox-tauri");
+    assert.equal(body.properties.$geoip_disable, true);
   });
 });
 
