@@ -78,6 +78,7 @@ jobs:
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       TOOLBOX_REQUIRE_QPDF: '1'
       VITE_ENABLE_UPDATES: 'true'
+      VITE_POSTHOG_KEY: ${{ secrets.POSTHOG_PROJECT_KEY }}
     steps:
       - uses: actions/checkout@v7
         with:

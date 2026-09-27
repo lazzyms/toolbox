@@ -500,4 +500,27 @@ mod command_tests {
         cleanup(&out.iter().flat_map(|job| job.output_paths.clone()).collect::<Vec<_>>());
         let _ = std::fs::remove_file(valid);
     }
+
+    // Regression test: organize_pdf with AlongsideInput must save the output
+    // next to the input and report it (guards against false-success).
+    #[test]
+    fn organize_alongside_input_writes_output() {
+        let root = sandbox("organize-repro");
+        let input = root.join("sample.pdf");
+        make_pdf(&input, 3);
+        let outputs = assert_success(
+            "organize alongside",
+            organize_pdf(OrganizePdfRequest {
+                paths: vec![input.clone()],
+                page_order: vec![2, 0, 1],
+                delete_pages: vec![],
+                rotate_pages: vec![],
+                scope: PageScope::All,
+                output_location: OutputLocation::AlongsideInput,
+            }),
+        );
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].parent(), Some(root.as_path()));
+        assert!(outputs[0].exists(), "organize output must exist on disk");
+    }
 }
