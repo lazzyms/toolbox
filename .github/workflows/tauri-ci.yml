@@ -1,8 +1,9 @@
 name: Tauri Build
 
 # Branch build for the Tauri port (issue #95, distribution setup). Every push to
-# `main` (or a `ci/**` rehearsal branch) verifies the Rust kit with the test
-# suite and produces unsigned installers for both platforms as runnable artifacts.
+# `main` (or a `ci/**` rehearsal branch) and every pull request verifies the
+# Rust kit with the test suite and produces unsigned installers for both
+# platforms as runnable artifacts.
 # Nothing is signed, tagged, or released here: public releases are handled by the
 # Tauri release workflow after the required signing credentials are configured.
 # Updater artifacts are disabled for this unsigned verification build so Tauri
@@ -12,6 +13,7 @@ on:
     branches:
       - main
       - 'ci/**'
+  pull_request:
   workflow_dispatch:
 
 permissions:
