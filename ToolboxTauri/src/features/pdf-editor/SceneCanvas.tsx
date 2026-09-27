@@ -164,13 +164,13 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
       setSpaceHeld(false);
       cancelGesture();
     };
-    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keydown', onKeyDown, true);
     window.addEventListener('keyup', onKeyUp);
     window.addEventListener('pointerup', cancelGesture);
     window.addEventListener('pointercancel', cancelGesture);
     window.addEventListener('blur', onBlur);
     return () => {
-      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keydown', onKeyDown, true);
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('pointerup', cancelGesture);
       window.removeEventListener('pointercancel', cancelGesture);

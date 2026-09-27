@@ -371,6 +371,7 @@ test('Escape cancels a canvas gesture before pointer release', async ({ page }) 
   await page.keyboard.press('Escape');
   await page.mouse.up();
 
+  await expect(page.getByRole('group', { name: 'PDF page canvas' })).toBeVisible();
   await expect(page.locator('.scene-object-hit')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeDisabled();
 });
@@ -392,6 +393,7 @@ test('Escape releases pointer capture while cancelling object movement', async (
   await page.mouse.move(bounds.x + bounds.width / 2 + 40, bounds.y + bounds.height / 2 + 20);
   await page.keyboard.press('Escape');
 
+  await expect(page.getByRole('group', { name: 'PDF page canvas' })).toBeVisible();
   const hasPointerCapture = await page.evaluate(() => {
     const pointerId = (window as any).__scenePointerId;
     return (document.querySelector('.scene-canvas-page') as SVGSVGElement).hasPointerCapture(pointerId);
