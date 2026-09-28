@@ -223,6 +223,61 @@ jobs:
             throw 'MSI installer was not produced'
           }
 
+      - name: Prepare native desktop smoke evidence
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $evidenceDirectory = Join-Path $env:RUNNER_TEMP 'toolbox-desktop-smoke'
+          New-Item -Path $evidenceDirectory -ItemType Directory -Force | Out-Null
+          $reportPath = Join-Path $evidenceDirectory 'desktop-smoke-report.json'
+          $report = [ordered]@{
+            schemaVersion = 1
+            platform = 'windows'
+            executable = 'ToolboxTauri/src-tauri/target/release/toolbox.exe'
+            startedAt = [DateTime]::UtcNow.ToString('o')
+            status = 'setup_pending'
+            workspaces = @()
+            setupError = $null
+          }
+          $report | ConvertTo-Json -Depth 5 | Set-Content -Path $reportPath -Encoding utf8
+
+      - name: Install Windows WebDriver
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $reportPath = Join-Path (Join-Path $env:RUNNER_TEMP 'toolbox-desktop-smoke') 'desktop-smoke-report.json'
+          try {
+            cargo install tauri-driver --locked
+            if ($LASTEXITCODE -ne 0) { throw "cargo install tauri-driver failed with exit code $LASTEXITCODE" }
+
+            cargo install --git https://github.com/chippers/msedgedriver-tool
+            if ($LASTEXITCODE -ne 0) { throw "cargo install msedgedriver-tool failed with exit code $LASTEXITCODE" }
+
+            & "$HOME/.cargo/bin/msedgedriver-tool.exe"
+            if ($LASTEXITCODE -ne 0) { throw "msedgedriver-tool failed with exit code $LASTEXITCODE" }
+            $PWD.Path | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          } catch {
+            $report = Get-Content -Raw -Path $reportPath | ConvertFrom-Json -AsHashtable
+            $report.status = 'failed'
+            $report.setupError = $_.Exception.Message
+            $report.finishedAt = [DateTime]::UtcNow.ToString('o')
+            $report | ConvertTo-Json -Depth 5 | Set-Content -Path $reportPath -Encoding utf8
+            throw
+          }
+
+      - name: Run native Windows desktop smoke
+        if: runner.os == 'Windows'
+        run: npm run test:desktop:smoke
+        working-directory: ToolboxTauri
+
+      - name: Upload native desktop smoke evidence
+        if: always() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v7
+        with:
+          name: toolbox-windows-desktop-smoke
+          path: ${{ runner.temp }}/toolbox-desktop-smoke/
+          if-no-files-found: warn
+
       - name: Upload installers
         uses: actions/upload-artifact@v7
         with:
