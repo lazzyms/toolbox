@@ -285,7 +285,38 @@ jobs:
 
       - name: Run native Windows desktop smoke
         if: runner.os == 'Windows'
-        run: npm run test:desktop:smoke
+        shell: pwsh
+        run: |
+          $policyPath = 'HKLM:\Software\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments'
+          $appName = 'toolbox.exe'
+          $policyExisted = Test-Path $policyPath
+          $previousArguments = $null
+          $hadPreviousArguments = $false
+          if ($policyExisted) {
+            $existingPolicy = Get-ItemProperty -Path $policyPath
+            $hadPreviousArguments = $existingPolicy.PSObject.Properties.Name -contains $appName
+            if ($hadPreviousArguments) {
+              $previousArguments = $existingPolicy.$appName
+            }
+          }
+
+          $smokeExitCode = 1
+          try {
+            New-Item -Path $policyPath -Force | Out-Null
+            New-ItemProperty -Path $policyPath -Name $appName -Value '--remote-debugging-port=0' -PropertyType String -Force | Out-Null
+            npm run test:desktop:smoke
+            $smokeExitCode = $LASTEXITCODE
+          } finally {
+            if ($hadPreviousArguments) {
+              New-ItemProperty -Path $policyPath -Name $appName -Value $previousArguments -PropertyType String -Force | Out-Null
+            } else {
+              Remove-ItemProperty -Path $policyPath -Name $appName -ErrorAction SilentlyContinue
+            }
+            if (-not $policyExisted) {
+              Remove-Item -Path $policyPath -ErrorAction SilentlyContinue
+            }
+          }
+          exit $smokeExitCode
         working-directory: ToolboxTauri
 
       - name: Inspect WebView2 debugging port
