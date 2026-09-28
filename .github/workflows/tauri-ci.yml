@@ -233,13 +233,31 @@ jobs:
           $report = [ordered]@{
             schemaVersion = 1
             platform = 'windows'
-            executable = 'ToolboxTauri/src-tauri/target/release/toolbox.exe'
+            executable = 'ToolboxTauri/src-tauri/target/debug/toolbox.exe'
             startedAt = [DateTime]::UtcNow.ToString('o')
             status = 'setup_pending'
             workspaces = @()
             setupError = $null
           }
           $report | ConvertTo-Json -Depth 5 | Set-Content -Path $reportPath -Encoding utf8
+
+      - name: Build Windows WebDriver executable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: ToolboxTauri
+        run: |
+          $reportPath = Join-Path (Join-Path $env:RUNNER_TEMP 'toolbox-desktop-smoke') 'desktop-smoke-report.json'
+          try {
+            npm run tauri build -- --debug --no-bundle
+            if ($LASTEXITCODE -ne 0) { throw "Debug app build failed with exit code $LASTEXITCODE" }
+          } catch {
+            $report = Get-Content -Raw -Path $reportPath | ConvertFrom-Json -AsHashtable
+            $report.status = 'failed'
+            $report.setupError = "Debug app build failed: $($_.Exception.Message)"
+            $report.finishedAt = [DateTime]::UtcNow.ToString('o')
+            $report | ConvertTo-Json -Depth 5 | Set-Content -Path $reportPath -Encoding utf8
+            throw
+          }
 
       - name: Install Windows WebDriver
         if: runner.os == 'Windows'

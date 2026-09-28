@@ -24,7 +24,7 @@ type DesktopSmokeReport = {
 
 const outputDirectory = resolve(process.env.RUNNER_TEMP ?? process.env.TEMP ?? ".", "toolbox-desktop-smoke");
 const reportPath = join(outputDirectory, "desktop-smoke-report.json");
-const executable = resolve("src-tauri/target/release/toolbox.exe");
+const executable = resolve("src-tauri/target/debug/toolbox.exe");
 const report: DesktopSmokeReport = {
   schemaVersion: 1,
   platform: "windows",
@@ -99,7 +99,7 @@ async function run(): Promise<void> {
   if (process.platform !== "win32") throw new Error("The desktop smoke runner must run on Windows");
   if (basename(executable).toLowerCase() !== "toolbox.exe") throw new Error(`Unexpected app executable: ${executable}`);
 
-  driverProcess = spawn("tauri-driver", [], { stdio: "ignore", windowsHide: true });
+  driverProcess = spawn("tauri-driver", [], { stdio: "inherit", windowsHide: true });
   driverProcess.once("error", (error) => {
     driverStartError = error;
     report.setupError = `Could not start tauri-driver: ${error.message}`;
