@@ -4,6 +4,7 @@ import { ToolScaffold } from "../components/ToolScaffold";
 import { WorkspaceCommandRail } from "../components/WorkspaceCommandRail";
 import { toolsForWorkspaceId, UtilityRegistry } from "../registry";
 import type { AtomicToolId, PasswordRequest, PDFRequest, ToolDefinition, ToolResult } from "../contracts";
+import { useToolAvailability } from "../ToolAvailabilityContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,17 +15,22 @@ const securityActions = toolsForWorkspaceId("file-security");
 const securityIds = new Set<string>(securityActions.map((tool) => tool.id));
 
 export const SecurityWorkspaceView = ({ utility }: { utility: ToolDefinition }) => {
+  const availability = useToolAvailability();
+  const availableActions = availability.filter(securityActions);
+  const preferredTool = securityIds.has(utility.id) && availability.allows(utility.id)
+    ? utility.id
+    : availableActions[0]?.id ?? utility.id;
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [activeToolId, setActiveToolId] = useState<AtomicToolId>(
-    securityIds.has(utility.id) ? utility.id : "pdf-unlock",
+    preferredTool,
   );
   useEffect(() => {
-    setActiveToolId(securityIds.has(utility.id) ? utility.id : "pdf-unlock");
-  }, [utility.id]);
-  const activeUtility = securityIds.has(utility.id)
+    setActiveToolId(preferredTool);
+  }, [preferredTool]);
+  const activeUtility = availability.allows(activeToolId)
     ? UtilityRegistry.find((item) => item.id === activeToolId) ?? utility
-    : UtilityRegistry.find((item) => item.id === activeToolId) ?? utility;
+    : UtilityRegistry.find((item) => item.id === preferredTool) ?? utility;
   const isPdfProtection = activeUtility.id === "pdf-protect";
   const isOfficeProtection = activeUtility.id === "office-protect";
 
@@ -68,9 +74,9 @@ export const SecurityWorkspaceView = ({ utility }: { utility: ToolDefinition }) 
         <Card className="workspace-control-panel py-0">
           <CardContent className="workspace-control-panel-content grid gap-4 p-4">
           <WorkspaceCommandRail
-            actions={securityActions}
+            actions={availableActions}
             activeId={activeToolId}
-            onSelect={setActiveToolId}
+            onSelect={(id) => { if (availability.allows(id)) setActiveToolId(id); }}
             label="File security tools"
           />
           <div>

@@ -14,9 +14,10 @@ import {
   ToolWorkspaceRegistry,
   UtilityRegistry,
   toolsForWorkspace,
+  toolsForWorkspaceId,
   workspaceForTool,
 } from "../registry";
-import type { ToolDefinition, WorkspaceId } from "../contracts";
+import type { AtomicToolId, ToolDefinition, WorkspaceId } from "../contracts";
 import { TablerIcon } from "../components/TablerIcon";
 import type { WorkspaceSourceAction } from "../components/ToolScaffold";
 import type { PdfEditorNavigation } from "./PDFEditorWorkspaceView";
@@ -43,6 +44,7 @@ import { PlannedToolView, UnavailableToolView } from "./PlannedToolView";
 import { SettingsPanel } from "./SettingsPanel";
 import { useShellBridge } from "../hooks/useShellBridge";
 import { TOOL_DROP_EVENT, type ShellCommand, type ShellEvent } from "../hooks/useShellBridge";
+import { useToolAvailability } from "../ToolAvailabilityContext";
 
 const workspaceViews = {
   "file-security": SecurityWorkspaceView,
@@ -103,6 +105,7 @@ const libraryFilters = [
 type LibraryFilter = (typeof libraryFilters)[number]["value"];
 
 export const MainPage = () => {
+  const availability = useToolAvailability();
   const [selectedTool, setSelectedTool] = useState<ToolDefinition | null>(null);
   const [initialPaths, setInitialPaths] = useState<readonly string[]>([]);
   const workspaceHeadingRef = useRef<HTMLHeadingElement>(null);
@@ -137,15 +140,16 @@ export const MainPage = () => {
     () =>
       recent
         .map((id) => UtilityRegistry.find((tool) => tool.id === id))
-        .filter(Boolean) as ToolDefinition[],
-    [recent],
+        .filter((tool): tool is ToolDefinition => Boolean(tool))
+        .filter((tool) => availability.allows(tool.id)),
+    [recent, availability],
   );
   const normalizedSearch = search.trim().toLowerCase();
   const recentPreviewTools = recentTools.slice(0, 3);
   const visibleWorkspaces = useMemo(
     () =>
       ToolWorkspaceRegistry.map((workspace) => {
-        const actions = toolsForWorkspace(workspace).filter((tool) => {
+        const actions = availability.filter(toolsForWorkspace(workspace)).filter((tool) => {
           const matchesScope =
             filter === "all" ||
             (filter === "recent" && recent.includes(tool.id)) ||
@@ -156,9 +160,10 @@ export const MainPage = () => {
         });
         return { workspace, actions };
       }).filter(({ actions }) => actions.length > 0),
-    [filter, normalizedSearch, favorites, recent],
+    [filter, normalizedSearch, favorites, recent, availability],
   );
   const openTool = useCallback((tool: ToolDefinition, paths: readonly string[] = []) => {
+    if (!availability.allows(tool.id)) return;
     setFileActivation(null);
     activationInFlight.current = null;
     queuedActivations.current = [];
@@ -174,7 +179,7 @@ export const MainPage = () => {
       localStorage.setItem("toolbox-recent", JSON.stringify(next));
       return next;
     });
-  }, []);
+  }, [availability]);
   const closeWorkspace = useCallback(() => {
     setWorkspaceSourceAction(null);
     setSelectedTool(null);
@@ -186,11 +191,11 @@ export const MainPage = () => {
   }, []);
   const navigateToPdfUtility: PdfEditorNavigation = useCallback(({ utilityId, initialPaths: paths }) => {
     const tool = UtilityRegistry.find((item) => item.id === utilityId);
-    if (tool) {
+    if (tool && availability.allows(tool.id)) {
       focusWorkspaceHeadingOnNavigation.current = true;
       openTool(tool, paths);
     }
-  }, [openTool]);
+  }, [availability, openTool]);
   const toggleFavorite = (id: string) =>
     setFavorites((current) => {
       const next = current.includes(id)
@@ -254,9 +259,14 @@ export const MainPage = () => {
     window.dispatchEvent(new CustomEvent("toolbox:editor-command", { detail: command }));
   }, []);
   const activateFile = useCallback((event: Extract<ShellEvent, { kind: "files" }>) => {
-    const id = event.workspace === "pdf-editor" ? "pdf-edit" : "heic-convert";
-    const tool = UtilityRegistry.find((item) => item.id === id);
-    if (!tool) return;
+    const preferredId: AtomicToolId = event.workspace === "pdf-editor" ? "pdf-edit" : "heic-convert";
+    const actions = toolsForWorkspaceId(event.workspace);
+    const tool = actions.find((item) => item.id === preferredId && availability.allows(item.id))
+      ?? actions.find((item) => availability.allows(item.id));
+    if (!tool) {
+      setRejectedFiles({ kind: "rejected-files", paths: event.paths, reason: `No enabled tools are available for ${event.workspace === "pdf-editor" ? "PDF" : "image"} files.` });
+      return false;
+    }
     setRejectedFiles(null);
     setInitialPaths([]);
     setFileActivation(event);
@@ -268,7 +278,22 @@ export const MainPage = () => {
       localStorage.setItem("toolbox-recent", JSON.stringify(next));
       return next;
     });
-  }, []);
+    return true;
+  }, [availability]);
+  const startNextActivation = useCallback((event: Extract<ShellEvent, { kind: "files" }>) => {
+    let next: Extract<ShellEvent, { kind: "files" }> | null = event;
+    while (next) {
+      if (activateFile(next)) {
+        activationInFlight.current = next.activationId;
+        return;
+      }
+      acceptedActivationIds.current.push(next.activationId);
+      if (acceptedActivationIds.current.length > 64) acceptedActivationIds.current.shift();
+      next = queuedActivations.current.shift() ?? null;
+    }
+    activationInFlight.current = null;
+    setFileActivation(null);
+  }, [activateFile]);
   const handleShellEvent = useCallback((event: ShellEvent) => {
     if (event.kind === "files") {
       if (acceptedActivationIds.current.includes(event.activationId)
@@ -278,8 +303,7 @@ export const MainPage = () => {
         queuedActivations.current.push(event);
         return;
       }
-      activationInFlight.current = event.activationId;
-      activateFile(event);
+      startNextActivation(event);
       return;
     }
     if (event.kind === "rejected-files") {
@@ -323,19 +347,19 @@ export const MainPage = () => {
         setShortcutsOpen(true);
         break;
     }
-  }, [activateFile, dispatchEditorCommand, openFilesFromMenu, selectedTool]);
+  }, [dispatchEditorCommand, openFilesFromMenu, selectedTool, startNextActivation]);
   const acceptActivation = useCallback((activationId: string) => {
     if (activationInFlight.current !== activationId) return;
     acceptedActivationIds.current.push(activationId);
     if (acceptedActivationIds.current.length > 64) acceptedActivationIds.current.shift();
     const next = queuedActivations.current.shift() ?? null;
-    activationInFlight.current = next?.activationId ?? null;
     if (next) {
-      activateFile(next);
+      startNextActivation(next);
       return;
     }
+    activationInFlight.current = null;
     setFileActivation(null);
-  }, [activateFile]);
+  }, [startNextActivation]);
   const publishDocumentPath = useCallback((paths: readonly string[]) => setActiveDocumentPath(paths[0] ?? null), []);
   useShellBridge(handleShellEvent);
   useEffect(() => {
@@ -452,7 +476,7 @@ export const MainPage = () => {
             <nav className="quick-tools">
               {(recentPreviewTools.length
                 ? recentPreviewTools
-                : UtilityRegistry.slice(0, 4)
+                : availability.filter(UtilityRegistry).slice(0, 4)
               ).map(
                 (tool) => (
               <Button
@@ -717,7 +741,7 @@ export const MainPage = () => {
         </p>
         {!selectedTool && (
           <footer className="command-status-bar" role="status">
-            <span>{UtilityRegistry.length} tools</span>
+            <span>{availability.filter(UtilityRegistry).length} tools</span>
             <span>On-device processing</span>
           </footer>
         )}
