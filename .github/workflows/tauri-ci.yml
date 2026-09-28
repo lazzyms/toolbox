@@ -288,6 +288,21 @@ jobs:
         run: npm run test:desktop:smoke
         working-directory: ToolboxTauri
 
+      - name: Inspect WebView2 debugging port
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dataDirectory = Join-Path $env:RUNNER_TEMP 'toolbox-webview2-user-data'
+          $portFiles = Get-ChildItem -Path $dataDirectory -Filter DevToolsActivePort -File -Recurse -ErrorAction SilentlyContinue
+          if (-not $portFiles) {
+            Write-Host "No DevToolsActivePort found under $dataDirectory"
+          } else {
+            foreach ($portFile in $portFiles) {
+              Write-Host "Found DevToolsActivePort at $($portFile.FullName)"
+              Get-Content -Raw -Path $portFile.FullName
+            }
+          }
+
       - name: Upload native desktop smoke evidence
         if: always() && runner.os == 'Windows'
         uses: actions/upload-artifact@v7

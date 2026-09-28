@@ -17,6 +17,7 @@ type DesktopSmokeReport = {
   startedAt: string;
   finishedAt?: string;
   status: "running" | "passed" | "failed";
+  webviewUserDataFolder?: string;
   homeScreenshot?: string;
   workspaces: WorkspaceEvidence[];
   setupError?: string;
@@ -24,6 +25,7 @@ type DesktopSmokeReport = {
 
 const outputDirectory = resolve(process.env.RUNNER_TEMP ?? process.env.TEMP ?? ".", "toolbox-desktop-smoke");
 const reportPath = join(outputDirectory, "desktop-smoke-report.json");
+const webviewUserDataFolder = resolve(process.env.RUNNER_TEMP ?? process.env.TEMP ?? ".", "toolbox-webview2-user-data");
 const executable = resolve("src-tauri/target/debug/toolbox.exe");
 const report: DesktopSmokeReport = {
   schemaVersion: 1,
@@ -31,6 +33,7 @@ const report: DesktopSmokeReport = {
   executable,
   startedAt: new Date().toISOString(),
   status: "running",
+  webviewUserDataFolder,
   workspaces: ToolWorkspaceRegistry.map(({ id, title }) => ({ workspaceId: id, title, status: "not-run" })),
 };
 
@@ -98,6 +101,7 @@ async function run(): Promise<void> {
   await persistReport();
   if (process.platform !== "win32") throw new Error("The desktop smoke runner must run on Windows");
   if (basename(executable).toLowerCase() !== "toolbox.exe") throw new Error(`Unexpected app executable: ${executable}`);
+  await mkdir(webviewUserDataFolder, { recursive: true });
 
   driverProcess = spawn("tauri-driver", [], { stdio: "inherit", windowsHide: true });
   driverProcess.once("error", (error) => {
@@ -110,7 +114,10 @@ async function run(): Promise<void> {
     .usingServer("http://127.0.0.1:4444")
     .withCapabilities({
       browserName: "wry",
-      "tauri:options": { application: executable },
+      "tauri:options": {
+        application: executable,
+        webviewOptions: { userDataFolder: webviewUserDataFolder },
+      },
     })
     .build();
 
@@ -171,6 +178,7 @@ async function run(): Promise<void> {
 try {
   await run();
 } catch (error) {
+  console.error("Native Windows desktop smoke failed:", error);
   report.status = "failed";
   if (!report.workspaces.some((item) => item.status === "failed")) {
     report.setupError = error instanceof Error ? error.message : String(error);
