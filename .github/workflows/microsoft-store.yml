@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Submit the built package to the Microsoft Store
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -24,6 +30,7 @@ jobs:
       TOOLBOX_REQUIRE_QPDF: '1'
       TOOLBOX_QPDF_PATH: ${{ github.workspace }}\ToolboxTauri\src-tauri\resources\qpdf.exe
       TOOLBOX_PDFTOPPM_PATH: ${{ github.workspace }}\ToolboxTauri\src-tauri\resources\pdftoppm.exe
+      PUBLISH_TO_STORE: ${{ inputs.publish }}
     steps:
       - uses: actions/checkout@v4
 
@@ -116,6 +123,11 @@ jobs:
           AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
           AZURE_AD_APPLICATION_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
         run: |
+          if ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch' -and $env:PUBLISH_TO_STORE -ne 'true') {
+            Write-Host 'Build-only dispatch requested; skipping Microsoft Store publication.'
+            'publish=false' >> $env:GITHUB_OUTPUT
+            exit 0
+          }
           $required = @(
             $env:AZURE_AD_TENANT_ID,
             $env:SELLER_ID,
