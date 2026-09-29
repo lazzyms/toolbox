@@ -223,6 +223,125 @@ jobs:
             throw 'MSI installer was not produced'
           }
 
+      - name: Prepare native desktop smoke evidence
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $evidenceDirectory = Join-Path $env:RUNNER_TEMP 'toolbox-desktop-smoke'
+          New-Item -Path $evidenceDirectory -ItemType Directory -Force | Out-Null
+          $reportPath = Join-Path $evidenceDirectory 'desktop-smoke-report.json'
+          $report = [ordered]@{
+            schemaVersion = 1
+            platform = 'windows'
+            executable = 'ToolboxTauri/src-tauri/target/debug/toolbox.exe'
+            startedAt = [DateTime]::UtcNow.ToString('o')
+            status = 'setup_pending'
+            workspaces = @()
+            setupError = $null
+          }
+          $report | ConvertTo-Json -Depth 5 | Set-Content -Path $reportPath -Encoding utf8
+
+      - name: Build Windows WebDriver executable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: ToolboxTauri
+        run: |
+          $reportPath = Join-Path (Join-Path $env:RUNNER_TEMP 'toolbox-desktop-smoke') 'desktop-smoke-report.json'
+          try {
+            npm run tauri build -- --debug --no-bundle
+            if ($LASTEXITCODE -ne 0) { throw "Debug app build failed with exit code $LASTEXITCODE" }
+          } catch {
+            $report = Get-Content -Raw -Path $reportPath | ConvertFrom-Json -AsHashtable
+            $report.status = 'failed'
+            $report.setupError = "Debug app build failed: $($_.Exception.Message)"
+            $report.finishedAt = [DateTime]::UtcNow.ToString('o')
+            $report | ConvertTo-Json -Depth 5 | Set-Content -Path $reportPath -Encoding utf8
+            throw
+          }
+
+      - name: Install Windows WebDriver
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $reportPath = Join-Path (Join-Path $env:RUNNER_TEMP 'toolbox-desktop-smoke') 'desktop-smoke-report.json'
+          try {
+            cargo install tauri-driver --locked
+            if ($LASTEXITCODE -ne 0) { throw "cargo install tauri-driver failed with exit code $LASTEXITCODE" }
+
+            cargo install --git https://github.com/chippers/msedgedriver-tool
+            if ($LASTEXITCODE -ne 0) { throw "cargo install msedgedriver-tool failed with exit code $LASTEXITCODE" }
+
+            & "$HOME/.cargo/bin/msedgedriver-tool.exe"
+            if ($LASTEXITCODE -ne 0) { throw "msedgedriver-tool failed with exit code $LASTEXITCODE" }
+            $PWD.Path | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          } catch {
+            $report = Get-Content -Raw -Path $reportPath | ConvertFrom-Json -AsHashtable
+            $report.status = 'failed'
+            $report.setupError = $_.Exception.Message
+            $report.finishedAt = [DateTime]::UtcNow.ToString('o')
+            $report | ConvertTo-Json -Depth 5 | Set-Content -Path $reportPath -Encoding utf8
+            throw
+          }
+
+      - name: Run native Windows desktop smoke
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $policyPath = 'HKLM:\Software\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments'
+          $appName = 'toolbox.exe'
+          $policyExisted = Test-Path $policyPath
+          $previousArguments = $null
+          $hadPreviousArguments = $false
+          if ($policyExisted) {
+            $existingPolicy = Get-ItemProperty -Path $policyPath
+            $hadPreviousArguments = $existingPolicy.PSObject.Properties.Name -contains $appName
+            if ($hadPreviousArguments) {
+              $previousArguments = $existingPolicy.$appName
+            }
+          }
+
+          $smokeExitCode = 1
+          try {
+            New-Item -Path $policyPath -Force | Out-Null
+            New-ItemProperty -Path $policyPath -Name $appName -Value '--remote-debugging-port=0' -PropertyType String -Force | Out-Null
+            npm run test:desktop:smoke
+            $smokeExitCode = $LASTEXITCODE
+          } finally {
+            if ($hadPreviousArguments) {
+              New-ItemProperty -Path $policyPath -Name $appName -Value $previousArguments -PropertyType String -Force | Out-Null
+            } else {
+              Remove-ItemProperty -Path $policyPath -Name $appName -ErrorAction SilentlyContinue
+            }
+            if (-not $policyExisted) {
+              Remove-Item -Path $policyPath -ErrorAction SilentlyContinue
+            }
+          }
+          exit $smokeExitCode
+        working-directory: ToolboxTauri
+
+      - name: Inspect WebView2 debugging port
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dataDirectory = Join-Path $env:RUNNER_TEMP 'toolbox-webview2-user-data'
+          $portFiles = Get-ChildItem -Path $dataDirectory -Filter DevToolsActivePort -File -Recurse -ErrorAction SilentlyContinue
+          if (-not $portFiles) {
+            Write-Host "No DevToolsActivePort found under $dataDirectory"
+          } else {
+            foreach ($portFile in $portFiles) {
+              Write-Host "Found DevToolsActivePort at $($portFile.FullName)"
+              Get-Content -Raw -Path $portFile.FullName
+            }
+          }
+
+      - name: Upload native desktop smoke evidence
+        if: always() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v7
+        with:
+          name: toolbox-windows-desktop-smoke
+          path: ${{ runner.temp }}/toolbox-desktop-smoke/
+          if-no-files-found: warn
+
       - name: Upload installers
         uses: actions/upload-artifact@v7
         with:
