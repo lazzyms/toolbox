@@ -17,6 +17,7 @@ interface ToolScaffoldProps {
     sessionKey?: string;
     onWorkspaceSourceAction?: (action: WorkspaceSourceAction | null) => void;
     showFileOrdering?: boolean;
+    initialPaths?: readonly string[];
     children: (props: {
         files: string[];
         run: () => Promise<void>;
@@ -29,8 +30,8 @@ interface ToolScaffoldProps {
     }) => React.ReactNode;
 }
 
-export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, children }: ToolScaffoldProps) => {
-    const [files, setFiles] = useState<string[]>([]);
+export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, initialPaths = [], children }: ToolScaffoldProps) => {
+    const [files, setFiles] = useState<string[]>(() => [...initialPaths]);
     const [results, setResults] = useState<JobOutcome[]>([]);
     const [loading, setLoading] = useState(false);
     const [selectedFileIndex, setSelectedFileIndex] = useState(0);
