@@ -4,6 +4,7 @@ import { ToolScaffold } from "../components/ToolScaffold";
 import { WorkspaceCommandRail } from "../components/WorkspaceCommandRail";
 import { toolsForWorkspaceId, UtilityRegistry } from "../registry";
 import type { AtomicToolId, PasswordRequest, PDFRequest, ToolDefinition, ToolResult } from "../contracts";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -73,7 +74,10 @@ export const SecurityWorkspaceView = ({ utility }: { utility: ToolDefinition }) 
             label="File security tools"
           />
           <div>
-            <h2 className="workspace-active-command">{activeUtility.title}</h2>
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="workspace-active-command">{activeUtility.title}</h2>
+              <Badge variant="outline">On this device</Badge>
+            </div>
             <p className="workspace-panel-label">
               {isPdfProtection || isOfficeProtection ? "Protect a file" : "Unlock a file"}
             </p>
@@ -84,13 +88,13 @@ export const SecurityWorkspaceView = ({ utility }: { utility: ToolDefinition }) 
                   ? "Add a password to selected DOCX and XLSX files. The originals stay untouched."
                 : "Use the existing password to save an unlocked copy of each selected PDF or Office file."}
             </p>
-            <p className="workspace-note">
+            <Badge variant="outline" className="max-w-full whitespace-normal">
               {isPdfProtection
                 ? "PDF files only"
                 : isOfficeProtection
                   ? "DOCX and XLSX files only"
                 : "PDF, Word, Excel, and PowerPoint files"}
-            </p>
+            </Badge>
           </div>
           <div className="workspace-field">
             <Label htmlFor="security-password">{isPdfProtection || isOfficeProtection ? "New password" : "Current password"}</Label>

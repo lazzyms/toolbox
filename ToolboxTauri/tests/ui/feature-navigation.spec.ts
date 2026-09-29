@@ -127,7 +127,7 @@ if (command === "preview_pdf_scene_pages") return (args as { request: { pageIndi
     }, { fixturePath, pdfFixturePath, mockedOutputPaths });
 });
 
-test("every registered feature opens its detail pane", async ({ page }) => {
+test("every registered feature opens its detail pane", async ({ page }, testInfo) => {
     await page.goto("/");
     await expect(page.locator(".topbar--home").getByRole("textbox", { name: "Search tools" })).toBeVisible();
 
@@ -144,10 +144,20 @@ test("every registered feature opens its detail pane", async ({ page }) => {
         await navigationButton.click();
         if (utility.status === "unavailable") {
             await expect(page.getByText("Unavailable in this build.", { exact: true })).toBeVisible();
+            await expect(page.getByText("This tool requires an offline vision resource that is not bundled. Files will not be selected or processed.")).toBeVisible();
         } else {
             await expect(page.getByRole("heading", { name: workspaceForTool(utility.id)?.title, exact: true })).toBeVisible();
         }
         await expect(page.locator('p.sr-only[role="status"]')).toHaveText(`${workspaceForTool(utility.id)?.title ?? utility.title} workspace open.`);
+        const workspaceArtifact = new Map([
+            ["icon-set", "media-workspace.png"],
+            ["pdf-to-images", "pdf-conversion-workspace.png"],
+            ["pdf-unlock", "security-workspace.png"],
+        ]).get(utility.id);
+        if (workspaceArtifact) {
+            await expect(page.getByText("On this device", { exact: true })).toBeVisible();
+            await page.screenshot({ path: testInfo.outputPath(workspaceArtifact) });
+        }
     }
 });
 

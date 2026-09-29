@@ -4,6 +4,7 @@ import { ToolScaffold } from "../components/ToolScaffold";
 import { WorkspaceCommandRail } from "../components/WorkspaceCommandRail";
 import { toolsForWorkspaceId, UtilityRegistry } from "../registry";
 import type { AtomicToolId, ImagePreview, ToolDefinition, ToolResult } from "../contracts";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -109,7 +110,10 @@ export const MediaWorkspaceView = ({ utility }: { utility: ToolDefinition }) => 
             label="Media workspace tools"
           />
           <div>
-            <h2 className="workspace-active-command">{activeUtility.title}</h2>
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="workspace-active-command">{activeUtility.title}</h2>
+              <Badge variant="outline">On this device</Badge>
+            </div>
             <p className="workspace-panel-label">Specialized media outcome</p>
             <p className="workspace-panel-copy">Keep the same selected files while choosing a sequence, icon, or explicit metadata result.</p>
           </div>
