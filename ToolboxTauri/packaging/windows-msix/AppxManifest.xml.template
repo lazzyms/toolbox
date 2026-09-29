@@ -40,6 +40,22 @@
         BackgroundColor="transparent"
         Square44x44Logo="Assets\Square44x44Logo.png"
         Square150x150Logo="Assets\Square150x150Logo.png" />
+      <Extensions>
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="toolbox-documents">
+            <uap:DisplayName>Toolbox documents</uap:DisplayName>
+            <uap:SupportedFileTypes>
+              <uap:FileType>.pdf</uap:FileType>
+              <uap:FileType>.png</uap:FileType>
+              <uap:FileType>.jpg</uap:FileType>
+              <uap:FileType>.jpeg</uap:FileType>
+              <uap:FileType>.webp</uap:FileType>
+              <uap:FileType>.heic</uap:FileType>
+              <uap:FileType>.heif</uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+      </Extensions>
     </Application>
   </Applications>
 </Package>

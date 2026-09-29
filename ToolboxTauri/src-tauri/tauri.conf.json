@@ -32,6 +32,10 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "fileAssociations": [
+      { "ext": ["pdf"], "name": "PDF document", "description": "PDF document", "role": "Viewer" },
+      { "ext": ["png", "jpg", "jpeg", "webp", "heic", "heif"], "name": "Image", "description": "Image file", "role": "Viewer" }
+    ],
     "createUpdaterArtifacts": true,
     "resources": ["resources/vision", "resources/ocr", "resources/fonts/*"],
     "macOS": {
