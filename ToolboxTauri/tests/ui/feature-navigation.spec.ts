@@ -266,12 +266,19 @@ test("favorites and recent navigation show their intended libraries", async ({ p
     await workspaceNav.getByRole("button", { name: "Recent" }).click();
     await expect(page.locator(".tool-card")).toHaveCount(1);
     await expect(page.getByRole("button", { name: "Open Remove Password" })).toBeVisible();
+    await expect(
+        page.getByRole("radiogroup", { name: "Tool library filters" })
+            .getByRole("radio", { name: "Recent" }),
+    ).toHaveAttribute("aria-checked", "true");
 });
 
-test("tool cards open from the card surface without favorite navigation", async ({ page }) => {
+test("workspace cards expose an accessible open action without favorite navigation", async ({ page }) => {
     await page.goto("/");
     const card = page.locator(".tool-card").first();
-    await card.click();
+    await expect(card).not.toHaveAttribute("tabindex");
+    const openWorkspace = card.getByRole("button", { name: "Open Protect & unlock files" });
+    await expect(openWorkspace).toBeVisible();
+    await openWorkspace.click();
     await expect(page.getByRole("heading", { name: "Remove Password", exact: true })).toBeVisible();
 
     await page.getByRole("button", { name: "← All tools" }).click();

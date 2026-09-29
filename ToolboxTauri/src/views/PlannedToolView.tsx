@@ -4,7 +4,7 @@ import { ToolScaffold } from "../components/ToolScaffold";
 export const PlannedToolView = ({ utility }: { utility: ToolDefinition }) => (
     <ToolScaffold utility={utility} onRun={async () => []}>
         {() => (
-            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+            <div className="ds-callout ds-callout--warning">
                 This tool is listed in the migration matrix. Its Tauri command and verification are not implemented yet.
             </div>
         )}
@@ -17,12 +17,12 @@ export const UnavailableToolView = ({ utility }: { utility: ToolDefinition }) =>
     return (
     <div className="flex h-full flex-col">
         <div className="mb-6">
-            <h2 className="text-3xl font-bold text-slate-900">{utility.title}</h2>
-            <p className="text-slate-500">{utility.blurb}</p>
+            <h2 className="ds-view-title text-3xl font-bold">{utility.title}</h2>
+            <p className="ds-view-description">{utility.blurb}</p>
         </div>
-        <div className="rounded-xl border border-slate-200 bg-white p-5 text-sm text-slate-700" role="status">
-            <p className="font-semibold">Unavailable in this build.</p>
-            <p className="mt-2">Mode: {mode}. {explanation}</p>
+        <div className="ds-callout ds-callout--neutral" role="status">
+            <p className="ds-callout__title">Unavailable in this build.</p>
+            <p className="ds-callout__message">Mode: {mode}. {explanation}</p>
         </div>
     </div>
     );
