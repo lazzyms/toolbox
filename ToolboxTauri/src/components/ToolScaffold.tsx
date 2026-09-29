@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { open } from '@tauri-apps/plugin-dialog';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
 import type { ToolDefinition, JobOutcome, Progress } from '../contracts';
 import { ResultList } from './ResultList';
 import { TablerIcon } from './TablerIcon';
@@ -193,8 +195,8 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 <span className="file-selection-count">{files.length} {files.length === 1 ? 'file' : 'files'} open</span>
                 {inputPolicy.inputCardinality === 'ordered' && showFileOrdering && (
                     <span className="file-selection-order" aria-label="Selected file ordering">
-                        <button
-                            type="button"
+                        <Button
+                            size="icon-sm"
                             aria-label="Move selected file up"
                             disabled={selectedFileIndex === 0}
                             onClick={(event) => {
@@ -203,9 +205,9 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                             }}
                         >
                             ↑
-                        </button>
-                        <button
-                            type="button"
+                        </Button>
+                        <Button
+                            size="icon-sm"
                             aria-label="Move selected file down"
                             disabled={selectedFileIndex >= files.length - 1}
                             onClick={(event) => {
@@ -214,49 +216,55 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                             }}
                         >
                             ↓
-                        </button>
+                        </Button>
                     </span>
                 )}
-                {variant !== 'workspace' && <button type="button" onClick={clearFiles} className="file-selection-clear">
+                {variant !== 'workspace' && <Button variant="ghost" size="sm" onClick={clearFiles} className="file-selection-clear">
                     Close file{files.length === 1 ? '' : 's'}
-                </button>}
+                </Button>}
             </div>
-            <div className="file-selection-list">
+            <Card className="file-selection-list max-h-40 overflow-y-auto py-0">
+                <CardContent className="file-selection-list-content flex flex-col gap-1 p-2">
                 {files.map((f, index) => (
-                    <button
-                        type="button"
+                    <Button
+                        variant={selectedFileIndex === index ? 'secondary' : 'ghost'}
+                        size="sm"
                         key={f}
                         className="file-selection-item"
                         data-selected={selectedFileIndex === index ? 'true' : undefined}
+                        aria-pressed={selectedFileIndex === index}
                         onClick={(event) => {
                             event.stopPropagation();
                             setSelectedFileIndex(index);
                         }}
                     >
                         {f.split(/[\\/]/).pop()}
-                    </button>
+                    </Button>
                 ))}
-            </div>
+                </CardContent>
+            </Card>
         </div>
     );
 
     const workspaceSource = (
-        <section className="workspace-source-bar" aria-label="Open document" data-empty={files.length === 0 ? 'true' : 'false'}>
+        <Card role="region" className="workspace-source-bar py-0" aria-label="Open document" data-empty={files.length === 0 ? 'true' : 'false'}>
+            <CardContent className="workspace-source-content py-3">
             <div className="workspace-source-copy">
                 <span className="workspace-source-kicker">Source</span>
                 <strong>{files.length ? `${files.length} ${files.length === 1 ? 'file' : 'files'} open` : 'Open a file to begin'}</strong>
                 <span>{files.length ? 'Export saves a new copy. Your original stays unchanged.' : 'Drop files here or browse from this device.'}</span>
             </div>
             <div className="workspace-source-actions">
-                <button type="button" className="workspace-source-open" aria-label="Choose files to process" onClick={() => void browse()}>
+                <Button variant="default" size="sm" className="workspace-source-open" aria-label="Choose files to process" onClick={() => void browse()}>
                     <TablerIcon name="folder-open" />
                     {files.length ? inputPolicy.inputCardinality === 'single' ? 'Replace file' : 'Add files' : 'Open files'}
-                </button>
-                {files.length > 0 && <button type="button" className="workspace-source-clear" onClick={clearFiles}>Close</button>}
+                </Button>
+                {files.length > 0 && <Button variant="ghost" size="sm" className="workspace-source-clear" onClick={clearFiles}>Close</Button>}
             </div>
             {files.length > 0 && fileSelection}
             {inputPolicyIssue && <p className="workspace-note" role="alert">{inputPolicyIssue}</p>}
-        </section>
+            </CardContent>
+        </Card>
     );
 
     return (
@@ -267,29 +275,22 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                     <p>{utility.blurb}</p>
                 </div>
 
-                <div
-                    role="button"
-                    tabIndex={0}
-                    aria-label="Choose files to process"
-                    onClick={browse}
-                    onKeyDown={(event) => {
-                        if (event.key === 'Enter' || event.key === ' ') {
-                            event.preventDefault();
-                            void browse();
-                        }
-                    }}
-                    className="file-dropzone"
-                >
+                <Card role="region" aria-label="Input files" className="file-dropzone flex-1 border-dashed">
+                    <CardContent className="file-dropzone-content flex flex-1 flex-col items-center justify-center gap-6 p-6">
                     <div className="file-dropzone-copy">
                         <div className="file-dropzone-icon" aria-hidden="true">
                             <TablerIcon name="file-minus" className="file-dropzone-icon-glyph" />
                         </div>
                         <p>Drag & Drop files here</p>
-                        <p>or click to browse</p>
+                        <p>or</p>
+                        <Button variant="ghost" size="sm" onClick={() => void browse()}>
+                            <TablerIcon name="folder-open" /> Browse files
+                        </Button>
                     </div>
 
                     {files.length > 0 && fileSelection}
-                </div>
+                    </CardContent>
+                </Card>
             </>}
 
             {children({

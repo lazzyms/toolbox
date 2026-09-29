@@ -23,6 +23,13 @@ import {
   type ImageEditPlan,
   type ImageEditHistory,
 } from "../features/image-editor/session";
+import { Button } from "../components/ui/button";
+import { Card, CardContent } from "../components/ui/card";
+import { Input } from "../components/ui/input";
+import { Label } from "../components/ui/label";
+import { NativeSelect } from "../components/ui/native-select";
+import { Slider } from "../components/ui/slider";
+import { Switch } from "../components/ui/switch";
 
 const imageEditorActions = toolsForWorkspaceId("image-editor");
 const imageEditorIds = new Set<string>(imageEditorActions.map((tool) => tool.id));
@@ -536,7 +543,8 @@ const ImageEditorControls = ({
         onSelect={selectTool}
         label="Image editor tools"
       />
-      <section className="image-editor-preview" aria-label="Image preview">
+      <Card className="image-editor-preview" role="region" aria-label="Image preview">
+        <CardContent className="image-editor-preview-content grid min-h-[340px] place-items-center overflow-hidden p-0">
         {primaryPreview ? (
           <div
             ref={previewStageRef}
@@ -560,50 +568,94 @@ const ImageEditorControls = ({
         )}
         {primaryPreview && <span className="image-editor-dimensions">{primaryPreview.width} × {primaryPreview.height}px</span>}
         {previewError && <span className="image-editor-preview-error" role="status">{previewError}</span>}
-        {utility.id === "crop" && resultPreview && <section className="image-editor-result-preview" aria-label="Crop result preview">
+        {utility.id === "crop" && resultPreview && <Card className="image-editor-result-preview py-0" role="region" aria-label="Crop result preview">
+          <CardContent className="image-editor-result-preview-content grid gap-2 p-2">
           <p className="workspace-panel-label">Resulting crop</p>
           <img src={resultPreview.dataUrl} alt={`Resulting crop preview of ${inputPath?.split(/[\\/]/).pop() ?? "selected image"}`} />
           <span>{resultPreview.width} × {resultPreview.height}px</span>
-        </section>}
-      </section>
-      <section className="image-editor-controls" aria-label="Image adjustments">
+          </CardContent>
+        </Card>}
+        </CardContent>
+      </Card>
+      <Card className="image-editor-controls py-0" role="region" aria-label="Image adjustments">
+        <CardContent className="image-editor-controls-content grid gap-4 p-4">
         <div className="workspace-panel-intro">
           <h2 className="workspace-active-command">{utility.title}</h2>
           <p className="workspace-panel-copy">Change the outcome without leaving the image editor.</p>
         </div>
         {utility.id === "heic-convert" && (
-          <label className="workspace-field">
-            <span>Target format</span>
-            <select aria-label="Target format" value={format} onChange={(event) => setFormat(event.target.value as ConvertImagesRequest["format"])}>
-              <option value="png">PNG</option>
-              <option value="jpg">JPEG</option>
-              <option value="webp">WebP</option>
-              <option value="heic">HEIC</option>
-            </select>
-          </label>
+          <div className="workspace-field">
+            <Label htmlFor="image-target-format">Target format</Label>
+            <NativeSelect id="image-target-format" aria-label="Target format" value={format} onChange={(event) => setFormat(event.target.value as ConvertImagesRequest["format"])}>
+              <option value="png">PNG</option><option value="jpg">JPEG</option><option value="webp">WebP</option><option value="heic">HEIC</option>
+            </NativeSelect>
+          </div>
         )}
         {utility.id === "compress" && (
           <>
-            <label className="workspace-field">
-              <span>Quality <output>{quality}%</output></span>
-              <input aria-label="Compression quality" type="range" min="1" max="100" value={quality} onChange={(event) => setQuality(Number(event.target.value))} />
-            </label>
-            <label className="workspace-check"><input aria-label="Lossless compression" type="checkbox" checked={lossless} onChange={(event) => setLossless(event.target.checked)} /> Preserve original pixels</label>
+            <div className="workspace-field">
+              <div className="workspace-field-heading"><Label id="image-quality-label">Quality</Label><output>{quality}%</output></div>
+              <Slider aria-labelledby="image-quality-label" min={1} max={100} value={[quality]} onValueChange={([value]) => value !== undefined && setQuality(value)} />
+            </div>
+            <div className="workspace-check"><Label htmlFor="image-lossless">Preserve original pixels</Label><Switch id="image-lossless" checked={lossless} onCheckedChange={setLossless} /></div>
           </>
         )}
         {utility.id === "resize" && (
           <>
-            <label className="workspace-field"><span>Resize mode</span><select aria-label="Resize mode" value={resizeMode} onChange={(event) => setResizeMode(event.target.value)}><option value="exact">Exact size</option><option value="percentage">Percentage</option><option value="longestSide">Longest side</option></select></label>
-            {resizeMode === "percentage" ? <label className="workspace-field"><span>Scale <output>{percentage}%</output></span><input aria-label="Resize percentage" type="number" min="1" max="1000" value={percentage} onChange={(event) => setPercentage(Number(event.target.value))} /></label> : <div className="workspace-field-grid"><label className="workspace-field"><span>Width</span><input aria-label="Width" type="number" min="1" value={width} onChange={(event) => setWidth(Number(event.target.value))} /></label><label className="workspace-field"><span>{resizeMode === "longestSide" ? "Longest side" : "Height"}</span>{resizeMode === "longestSide" ? <input aria-label="Longest side" type="number" min="1" value={width} onChange={(event) => setWidth(Number(event.target.value))} /> : <input aria-label="Height" type="number" min="1" value={height} onChange={(event) => setHeight(Number(event.target.value))} />}</label></div>}
-            <label className="workspace-check"><input type="checkbox" checked={keepRatio} onChange={(event) => setKeepRatio(event.target.checked)} /> Preserve aspect ratio</label>
-            <label className="workspace-field"><span>Resampling</span><select aria-label="Resampling" value={resampling} onChange={(event) => setResampling(event.target.value)}><option value="lanczos">Lanczos — best quality</option><option value="bicubic">Bicubic — balanced</option><option value="nearest">Nearest — sharp edges</option></select></label>
+            <div className="workspace-field"><Label htmlFor="image-resize-mode">Resize mode</Label><NativeSelect id="image-resize-mode" aria-label="Resize mode" value={resizeMode} onChange={(event) => setResizeMode(event.target.value)}>
+              <option value="exact">Exact size</option><option value="percentage">Percentage</option><option value="longestSide">Longest side</option>
+            </NativeSelect></div>
+            {resizeMode === "percentage" ? (
+              <div className="workspace-field"><Label htmlFor="image-resize-percentage">Scale</Label><Input id="image-resize-percentage" aria-label="Resize percentage" type="number" min="1" max="1000" value={percentage} onChange={(event) => setPercentage(Number(event.target.value))} /></div>
+            ) : (
+              <div className="workspace-field-grid">
+                <div className="workspace-field"><Label htmlFor="image-resize-width">Width</Label><Input id="image-resize-width" aria-label="Width" type="number" min="1" value={width} onChange={(event) => setWidth(Number(event.target.value))} /></div>
+                <div className="workspace-field"><Label htmlFor="image-resize-height">{resizeMode === "longestSide" ? "Longest side" : "Height"}</Label><Input id="image-resize-height" aria-label={resizeMode === "longestSide" ? "Longest side" : "Height"} type="number" min="1" value={resizeMode === "longestSide" ? width : height} onChange={(event) => { if (resizeMode === "longestSide") setWidth(Number(event.target.value)); else setHeight(Number(event.target.value)); }} /></div>
+              </div>
+            )}
+            <div className="workspace-check"><Label htmlFor="image-keep-ratio">Preserve aspect ratio</Label><Switch id="image-keep-ratio" checked={keepRatio} onCheckedChange={setKeepRatio} /></div>
+            <div className="workspace-field"><Label htmlFor="image-resampling">Resampling</Label><NativeSelect id="image-resampling" aria-label="Resampling" value={resampling} onChange={(event) => setResampling(event.target.value)}>
+              <option value="lanczos">Lanczos — best quality</option><option value="bicubic">Bicubic — balanced</option><option value="nearest">Nearest — sharp edges</option>
+            </NativeSelect></div>
           </>
         )}
-        {utility.id === "rotate" && <div className="workspace-field-grid"><label className="workspace-field"><span>Rotation</span><select aria-label="Rotation" value={degrees} onChange={(event) => setDegrees(Number(event.target.value))}><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select></label><label className="workspace-field"><span>Flip</span><select aria-label="Mirror" value={flip} onChange={(event) => setFlip(event.target.value)}><option value="none">None</option><option value="horizontal">Horizontal</option><option value="vertical">Vertical</option></select></label></div>}
-        {utility.id === "crop" && <><div className="workspace-field-grid"><label className="workspace-field"><span>Crop mode</span><select aria-label="Crop mode" value={cropMode} onChange={(event) => setCropMode(event.target.value)}><option value="rectangle">Rectangle</option><option value="aspectRatio">Aspect ratio</option></select></label>{cropMode === "aspectRatio" ? <label className="workspace-field"><span>Anchor</span><select aria-label="Crop anchor" value={anchor} onChange={(event) => setAnchor(event.target.value)}><option value="center">Center</option><option value="top">Top</option><option value="bottom">Bottom</option><option value="left">Left</option><option value="right">Right</option></select></label> : <span />}</div><div className="workspace-field-grid"><label className="workspace-field"><span>Width</span><input aria-label="Crop width" type="number" min="1" value={width} onChange={(event) => setWidth(Number(event.target.value))} /></label><label className="workspace-field"><span>Height</span><input aria-label="Crop height" type="number" min="1" value={height} onChange={(event) => setHeight(Number(event.target.value))} /></label><label className="workspace-field"><span>Left</span><input aria-label="Crop left" type="number" min="0" value={cropX} onChange={(event) => setCropX(Number(event.target.value))} /></label><label className="workspace-field"><span>Top</span><input aria-label="Crop top" type="number" min="0" value={cropY} onChange={(event) => setCropY(Number(event.target.value))} /></label></div></>}
-        {utility.id === "image-watermark" && <><label className="workspace-field"><span>Watermark text</span><input aria-label="Watermark text" value={watermarkText} onChange={(event) => setWatermarkText(event.target.value)} /></label><label className="workspace-field"><span>Opacity <output>{watermarkOpacity}%</output></span><input aria-label="Watermark opacity" type="range" min="1" max="100" value={watermarkOpacity} onChange={(event) => setWatermarkOpacity(Number(event.target.value))} /></label><div className="workspace-field-grid"><label className="workspace-field"><span>Left</span><input aria-label="Watermark left" type="number" min="0" value={cropX} onChange={(event) => setCropX(Number(event.target.value))} /></label><label className="workspace-field"><span>Top</span><input aria-label="Watermark top" type="number" min="0" value={cropY} onChange={(event) => setCropY(Number(event.target.value))} /></label></div></>}
-        {utility.id === "image-tone" && <><ToneControl label="Brightness" value={brightness} onChange={setBrightness} /><ToneControl label="Contrast" value={contrast} onChange={setContrast} /><ToneControl label="Saturation" value={saturation} onChange={setSaturation} /><ToneControl label="Exposure" value={exposure} onChange={setExposure} /></>}
-        <section className="image-editor-history" aria-label="Image edit history">
+        {utility.id === "rotate" && (
+          <div className="workspace-field-grid">
+            <div className="workspace-field"><Label htmlFor="image-rotation">Rotation</Label><NativeSelect id="image-rotation" aria-label="Rotation" value={degrees} onChange={(event) => setDegrees(Number(event.target.value))}>{[0, 90, 180, 270].map((value) => <option key={value} value={value}>{value}°</option>)}</NativeSelect></div>
+            <div className="workspace-field"><Label htmlFor="image-flip">Flip</Label><NativeSelect id="image-flip" aria-label="Mirror" value={flip} onChange={(event) => setFlip(event.target.value)}><option value="none">None</option><option value="horizontal">Horizontal</option><option value="vertical">Vertical</option></NativeSelect></div>
+          </div>
+        )}
+        {utility.id === "crop" && (
+          <>
+            <div className="workspace-field-grid">
+              <div className="workspace-field"><Label htmlFor="image-crop-mode">Crop mode</Label><NativeSelect id="image-crop-mode" aria-label="Crop mode" value={cropMode} onChange={(event) => setCropMode(event.target.value)}><option value="rectangle">Rectangle</option><option value="aspectRatio">Aspect ratio</option></NativeSelect></div>
+              {cropMode === "aspectRatio" ? (
+                <div className="workspace-field"><Label htmlFor="image-crop-anchor">Anchor</Label><NativeSelect id="image-crop-anchor" aria-label="Crop anchor" value={anchor} onChange={(event) => setAnchor(event.target.value)}>{["center", "top", "bottom", "left", "right"].map((value) => <option key={value} value={value}>{value[0].toUpperCase() + value.slice(1)}</option>)}</NativeSelect></div>
+              ) : <span aria-hidden="true" />}
+            </div>
+            <div className="workspace-field-grid">
+              <div className="workspace-field"><Label htmlFor="image-crop-width">Width</Label><Input id="image-crop-width" aria-label="Crop width" type="number" min="1" value={width} onChange={(event) => setWidth(Number(event.target.value))} /></div>
+              <div className="workspace-field"><Label htmlFor="image-crop-height">Height</Label><Input id="image-crop-height" aria-label="Crop height" type="number" min="1" value={height} onChange={(event) => setHeight(Number(event.target.value))} /></div>
+              <div className="workspace-field"><Label htmlFor="image-crop-left">Left</Label><Input id="image-crop-left" aria-label="Crop left" type="number" min="0" value={cropX} onChange={(event) => setCropX(Number(event.target.value))} /></div>
+              <div className="workspace-field"><Label htmlFor="image-crop-top">Top</Label><Input id="image-crop-top" aria-label="Crop top" type="number" min="0" value={cropY} onChange={(event) => setCropY(Number(event.target.value))} /></div>
+            </div>
+          </>
+        )}
+        {utility.id === "image-watermark" && (
+          <>
+            <div className="workspace-field"><Label htmlFor="image-watermark-text">Watermark text</Label><Input id="image-watermark-text" aria-label="Watermark text" value={watermarkText} onChange={(event) => setWatermarkText(event.target.value)} /></div>
+            <div className="workspace-field"><div className="workspace-field-heading"><Label id="image-watermark-opacity-label">Opacity</Label><output>{watermarkOpacity}%</output></div><Slider aria-labelledby="image-watermark-opacity-label" min={1} max={100} value={[watermarkOpacity]} onValueChange={([value]) => value !== undefined && setWatermarkOpacity(value)} /></div>
+            <div className="workspace-field-grid">
+              <div className="workspace-field"><Label htmlFor="image-watermark-left">Left</Label><Input id="image-watermark-left" aria-label="Watermark left" type="number" min="0" value={cropX} onChange={(event) => setCropX(Number(event.target.value))} /></div>
+              <div className="workspace-field"><Label htmlFor="image-watermark-top">Top</Label><Input id="image-watermark-top" aria-label="Watermark top" type="number" min="0" value={cropY} onChange={(event) => setCropY(Number(event.target.value))} /></div>
+            </div>
+          </>
+        )}
+        {utility.id === "image-tone" && <>
+          {([["Brightness", brightness, setBrightness], ["Contrast", contrast, setContrast], ["Saturation", saturation, setSaturation], ["Exposure", exposure, setExposure]] as const).map(([label, value, onChange]) => <div className="workspace-field" key={label}><div className="workspace-field-heading"><Label id={`image-tone-${label.toLowerCase()}-label`}>{label}</Label><output>{value}</output></div><Slider aria-labelledby={`image-tone-${label.toLowerCase()}-label`} min={-100} max={100} value={[value]} onValueChange={([next]) => next !== undefined && onChange(next)} /></div>)}
+        </>}
+        <Card role="region" className="image-editor-history py-0" aria-label="Image edit history">
+          <CardContent className="image-editor-history-content py-4">
           <div className="workspace-panel-intro">
             <p className="workspace-panel-label">Edit stack</p>
             <p className="workspace-panel-copy">Preview changes together and export them once.</p>
@@ -616,22 +668,17 @@ const ImageEditorControls = ({
             </ol>
           )}
           <div className="workspace-button-row">
-            <button type="button" aria-label="Undo" onClick={onUndo} disabled={!canUndo}>Undo</button>
-            <button type="button" aria-label="Redo" onClick={onRedo} disabled={!canRedo}>Redo</button>
-            <button type="button" aria-label="Reset edits" onClick={onReset} disabled={!canUndo && !canRedo && plan.edits.length === 0 && !draft}>Reset edits</button>
+            <Button variant="ghost" size="sm" aria-label="Undo" onClick={onUndo} disabled={!canUndo}>Undo</Button>
+            <Button variant="ghost" size="sm" aria-label="Redo" onClick={onRedo} disabled={!canRedo}>Redo</Button>
+            <Button variant="destructive" size="sm" aria-label="Reset edits" onClick={onReset} disabled={!canUndo && !canRedo && plan.edits.length === 0 && !draft}>Reset edits</Button>
           </div>
-          <button type="button" aria-label="Add edit to plan" onClick={onAddEdit} disabled={!draft}>Add edit to plan</button>
-        </section>
+          <Button variant="default" size="sm" aria-label="Add edit to plan" onClick={onAddEdit} disabled={!draft}>Add edit to plan</Button>
+          </CardContent>
+        </Card>
         <p aria-live="polite" className="workspace-note">{plan.edits.length + (draft ? 1 : 0)} edits will be applied to each selected image.</p>
-        <button type="button" aria-label="Export edited images" disabled={loading || files.length === 0 || !hasEdits || !previewIsValid} onClick={runCombined} className="workspace-primary-action">Export edited images</button>
-      </section>
+        <Button variant="default" aria-label="Export edited images" disabled={loading || files.length === 0 || !hasEdits || !previewIsValid} onClick={runCombined} className="workspace-primary-action">Export edited images</Button>
+        </CardContent>
+      </Card>
     </div>
   );
 };
-
-const ToneControl = ({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) => (
-  <label className="workspace-field">
-    <span>{label} <output>{value}</output></span>
-    <input aria-label={label} type="range" min="-100" max="100" value={value} onChange={(event) => onChange(Number(event.target.value))} />
-  </label>
-);

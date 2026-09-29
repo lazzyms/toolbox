@@ -4,6 +4,10 @@ import { ToolScaffold } from "../components/ToolScaffold";
 import { WorkspaceCommandRail } from "../components/WorkspaceCommandRail";
 import { toolsForWorkspaceId, UtilityRegistry } from "../registry";
 import type { AtomicToolId, PasswordRequest, PDFRequest, ToolDefinition, ToolResult } from "../contracts";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Card, CardContent } from "@/components/ui/card";
 
 const securityActions = toolsForWorkspaceId("file-security");
 const securityIds = new Set<string>(securityActions.map((tool) => tool.id));
@@ -60,7 +64,8 @@ export const SecurityWorkspaceView = ({ utility }: { utility: ToolDefinition }) 
       }
     >
       {({ files, run, loading }) => (
-        <div className="workspace-control-panel">
+        <Card className="workspace-control-panel py-0">
+          <CardContent className="workspace-control-panel-content grid gap-4 p-4">
           <WorkspaceCommandRail
             actions={securityActions}
             activeId={activeToolId}
@@ -87,37 +92,39 @@ export const SecurityWorkspaceView = ({ utility }: { utility: ToolDefinition }) 
                 : "PDF, Word, Excel, and PowerPoint files"}
             </p>
           </div>
-          <label className="workspace-field">
-            <span>{isPdfProtection || isOfficeProtection ? "New password" : "Current password"}</span>
-            <span className="workspace-password-field">
-              <input
-                aria-label={isPdfProtection || isOfficeProtection ? "New password" : "Current password"}
+          <div className="workspace-field">
+            <Label htmlFor="security-password">{isPdfProtection || isOfficeProtection ? "New password" : "Current password"}</Label>
+            <div className="workspace-password-field">
+              <Input
+                id="security-password"
                 type={showPassword ? "text" : "password"}
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
                 placeholder="Enter password"
                 autoComplete="off"
               />
-              <button
-                type="button"
+              <Button
+                variant="ghost"
+                size="sm"
                 className="workspace-inline-button"
-                aria-pressed={showPassword}
+                aria-label={`${showPassword ? "Hide" : "Show"} ${isPdfProtection || isOfficeProtection ? "new" : "current"} password`}
                 onClick={() => setShowPassword((visible) => !visible)}
               >
                 {showPassword ? "Hide" : "Show"}
-              </button>
-            </span>
-          </label>
-          <button
-            type="button"
+              </Button>
+            </div>
+          </div>
+          <Button
+            variant="default"
             aria-label={activeUtility.id === "pdf-unlock" ? "Remove Password from selected files" : activeUtility.shortTitle}
             disabled={loading || files.length === 0 || password.length === 0}
             onClick={run}
             className="workspace-primary-action"
           >
             {activeUtility.shortTitle}
-          </button>
-        </div>
+          </Button>
+          </CardContent>
+        </Card>
       )}
     </ToolScaffold>
   );

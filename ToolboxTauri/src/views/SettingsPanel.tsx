@@ -8,12 +8,14 @@ import {
   isAnalyticsOptedOut,
   setAnalyticsOptOut,
 } from "../analytics";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { DialogClose, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
-interface SettingsPanelProps {
-  onClose: () => void;
-}
-
-export const SettingsPanel = ({ onClose }: SettingsPanelProps) => {
+export const SettingsPanel = () => {
   const [theme, setTheme] = useState<"dark" | "light">(
     () => (localStorage.getItem("toolbox-theme") as "dark" | "light") || "dark",
   );
@@ -26,13 +28,6 @@ export const SettingsPanel = ({ onClose }: SettingsPanelProps) => {
     document.body.dataset.theme = theme;
     localStorage.setItem("toolbox-theme", theme);
   }, [theme]);
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
   const checkForUpdates = async () => {
     setUpdateState("checking");
     try {
@@ -61,53 +56,53 @@ export const SettingsPanel = ({ onClose }: SettingsPanelProps) => {
     setAnalyticsOptOut(window.localStorage, optedOut);
   };
   return (
-    <div className="settings-overlay" role="presentation">
-      <section
-        className="settings-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="settings-title"
-      >
-        <header className="settings-header">
-          <h2 id="settings-title">Settings</h2>
-          <button type="button" aria-label="Close settings" onClick={onClose}>
-            Close
-          </button>
-        </header>
+    <DialogContent className="settings-dialog" showCloseButton={false}>
+        <DialogHeader className="settings-header">
+          <DialogTitle>Settings</DialogTitle>
+          <DialogClose asChild>
+            <Button variant="ghost" size="sm" aria-label="Close settings">
+              Close
+            </Button>
+          </DialogClose>
+          <DialogDescription className="sr-only">
+            Manage Toolbox appearance, privacy, and updates.
+          </DialogDescription>
+        </DialogHeader>
         <div className="settings-content">
           <section aria-labelledby="appearance-title">
             <h3 id="appearance-title">Appearance</h3>
             <p>Choose how Toolbox looks on this device.</p>
-            <div className="theme-switcher" role="group" aria-label="Theme">
-              <button
-                type="button"
-                aria-pressed={theme === "dark"}
-                onClick={() => setTheme("dark")}
-              >
-                Dark
-              </button>
-              <button
-                type="button"
-                aria-pressed={theme === "light"}
-                onClick={() => setTheme("light")}
-              >
-                Light
-              </button>
-            </div>
+            <ToggleGroup
+              type="single"
+              variant="outline"
+              size="sm"
+              className="theme-switcher"
+              aria-label="Theme"
+              value={theme}
+              onValueChange={(value) => {
+                if (value) setTheme(value as "dark" | "light");
+              }}
+            >
+              <ToggleGroupItem value="dark">Dark</ToggleGroupItem>
+              <ToggleGroupItem value="light">Light</ToggleGroupItem>
+            </ToggleGroup>
           </section>
           <section aria-labelledby="app-info-title">
             <h3 id="app-info-title">App info</h3>
-            <div className="settings-info">
+            <Card className="settings-info py-0">
+              <CardContent className="settings-info-content grid gap-2 py-4">
               <strong>Toolbox</strong>
               <span>Version {packageInfo.version}</span>
               <p>
                 Private, local-first utilities for everyday PDF and image work.
               </p>
-            </div>
+              </CardContent>
+            </Card>
           </section>
           <section aria-labelledby="support-title">
             <h3 id="support-title">Support Toolbox</h3>
-            <div className="support-info">
+            <Card className="support-info py-0">
+              <CardContent className="support-info-content flex items-center gap-4 py-4">
               <img
                 src={qrCode}
                 width="112"
@@ -119,19 +114,22 @@ export const SettingsPanel = ({ onClose }: SettingsPanelProps) => {
                 <br />
                 If you’d like to support development, scan the QR code.
               </p>
-            </div>
+              </CardContent>
+            </Card>
           </section>
           <section aria-labelledby="updates-title">
             <h3 id="updates-title">Updates</h3>
-            <button type="button" onClick={() => void checkForUpdates()} disabled={updateState === "checking" || updateState === "installing"}>
+            <Button variant="default" size="sm" onClick={() => void checkForUpdates()} disabled={updateState === "checking" || updateState === "installing"}>
               {updateState === "checking" ? "Checking..." : updateState === "installing" ? "Installing..." : "Check for updates"}
-            </button>
-            <p role="status" aria-live="polite">
-              {updateState === "current" && "Toolbox is up to date."}
-              {updateState === "available" && updateVersion && `Toolbox ${updateVersion} is available. Check again when you want to install it.`}
-              {updateState === "installing" && updateVersion && `Installing Toolbox ${updateVersion}...`}
-              {updateState === "failed" && "Could not check for updates."}
-            </p>
+            </Button>
+            {updateState !== "idle" && (
+              <p className="settings-update-status" role="status" aria-live="polite">
+                {updateState === "current" && "Toolbox is up to date."}
+                {updateState === "available" && updateVersion && `Toolbox ${updateVersion} is available. Check again when you want to install it.`}
+                {updateState === "installing" && updateVersion && `Installing Toolbox ${updateVersion}...`}
+                {updateState === "failed" && "Could not check for updates."}
+              </p>
+            )}
           </section>
           <section aria-labelledby="privacy-title">
             <h3 id="privacy-title">Privacy</h3>
@@ -139,17 +137,16 @@ export const SettingsPanel = ({ onClose }: SettingsPanelProps) => {
               Toolbox counts installs and app opens with PostHog to gauge
               usage. No personal data is collected.
             </p>
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
+            <div className="settings-privacy-toggle">
+              <Label htmlFor="analytics-opt-out">Don’t send anonymous usage counts</Label>
+              <Switch
+                id="analytics-opt-out"
                 checked={analyticsOptOut}
-                onChange={(e) => toggleAnalyticsOptOut(e.target.checked)}
+                onCheckedChange={toggleAnalyticsOptOut}
               />
-              Don’t send anonymous usage counts
-            </label>
+            </div>
           </section>
         </div>
-      </section>
-    </div>
+    </DialogContent>
   );
 };

@@ -1,9 +1,12 @@
 import { UtilityRegistry } from "../registry";
+import { Button } from "@/components/ui/button";
 
 export const UtilityIndex = () => (
   <nav className="utility-index" aria-label="Utilities" aria-hidden="true">
     {UtilityRegistry.map((tool) => (
-      <button
+      <Button
+        variant="ghost"
+        size="sm"
         key={tool.id}
         type="button"
         tabIndex={-1}
@@ -15,7 +18,7 @@ export const UtilityIndex = () => (
         }
       >
         {tool.shortTitle}
-      </button>
+      </Button>
     ))}
   </nav>
 );

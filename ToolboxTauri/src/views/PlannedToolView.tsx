@@ -1,12 +1,15 @@
 import type { ToolDefinition } from "../contracts";
 import { ToolScaffold } from "../components/ToolScaffold";
+import { Badge } from "../components/ui/badge";
+import { Card } from "../components/ui/card";
 
 export const PlannedToolView = ({ utility }: { utility: ToolDefinition }) => (
     <ToolScaffold utility={utility} onRun={async () => []}>
         {() => (
-            <div className="ds-callout ds-callout--warning">
+            <Card className="planned-tool-callout">
+                <Badge variant="outline">Planned</Badge>
                 This tool is listed in the migration matrix. Its Tauri command and verification are not implemented yet.
-            </div>
+            </Card>
         )}
     </ToolScaffold>
 );
@@ -17,13 +20,13 @@ export const UnavailableToolView = ({ utility }: { utility: ToolDefinition }) =>
     return (
     <div className="flex h-full flex-col">
         <div className="mb-6">
-            <h2 className="ds-view-title text-3xl font-bold">{utility.title}</h2>
-            <p className="ds-view-description">{utility.blurb}</p>
+            <h2 className="text-3xl font-bold">{utility.title}</h2>
+            <p className="text-muted-foreground">{utility.blurb}</p>
         </div>
-        <div className="ds-callout ds-callout--neutral" role="status">
-            <p className="ds-callout__title">Unavailable in this build.</p>
-            <p className="ds-callout__message">Mode: {mode}. {explanation}</p>
-        </div>
+        <Card className="planned-tool-callout" role="status">
+            <Badge variant="outline">Unavailable in this build.</Badge>
+            <p>Mode: {mode}. {explanation}</p>
+        </Card>
     </div>
     );
 };

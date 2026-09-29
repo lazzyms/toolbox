@@ -4,6 +4,14 @@ import { ToolScaffold } from "../components/ToolScaffold";
 import { WorkspaceCommandRail } from "../components/WorkspaceCommandRail";
 import { toolsForWorkspaceId, UtilityRegistry } from "../registry";
 import type { AtomicToolId, ImagePreview, ToolDefinition, ToolResult } from "../contracts";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { NativeSelect } from "@/components/ui/native-select";
+import { Switch } from "@/components/ui/switch";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
 type TiffFrame = { key: string; path: string; page: number; preview: ImagePreview };
 export type TiffInspection =
@@ -92,7 +100,8 @@ export const MediaWorkspaceView = ({ utility }: { utility: ToolDefinition }) => 
       }}
     >
       {({ files, run, loading, selectedFileIndex, selectFile }) => (
-        <div className="workspace-control-panel">
+        <Card className="workspace-control-panel py-0">
+          <CardContent className="workspace-control-panel-content grid gap-4 p-4">
           <WorkspaceCommandRail
             actions={mediaActions}
             activeId={activeToolId}
@@ -121,29 +130,29 @@ export const MediaWorkspaceView = ({ utility }: { utility: ToolDefinition }) => 
 
           {activeUtility.id === "icon-set" && (
             <>
-              <label className="workspace-field">
-                <span>Icon preset</span>
-                <select aria-label="Icon preset" value={iconPreset} onChange={(event) => selectPreset(event.target.value)}>
+              <div className="workspace-field">
+                <Label htmlFor="icon-preset">Icon preset</Label>
+                <NativeSelect id="icon-preset" aria-label="Icon preset" value={iconPreset} onChange={(event) => selectPreset(event.target.value)}>
                   <option value="macos">macOS</option>
                   <option value="favicon">Favicon</option>
                   <option value="ios">iOS</option>
                   <option value="android">Android</option>
                   <option value="custom">Custom</option>
-                </select>
-              </label>
+                </NativeSelect>
+              </div>
               <fieldset className="workspace-fieldset">
                 <legend>Icon sizes</legend>
                 <div className="icon-size-grid" aria-label="Icon size presets">
                   {iconSizesByPreset[iconPreset].map((size) => (
-                    <label key={size} className="workspace-check icon-size-option">
-                      <input
-                        type="checkbox"
+                    <Label key={size} className="workspace-check" htmlFor={`icon-size-${size}`}>
+                      <Checkbox
+                        id={`icon-size-${size}`}
                         aria-label={`Icon size ${size}px`}
                         checked={iconSizes.includes(size)}
-                        onChange={(event) => setIconSizes((current) => event.target.checked ? [...new Set([...current, size])].sort((left, right) => left - right) : current.filter((value) => value !== size))}
+                        onCheckedChange={(checked) => setIconSizes((current) => checked ? [...new Set([...current, size])].sort((left, right) => left - right) : current.filter((value) => value !== size))}
                       />
-                      {size}px
-                    </label>
+                      <span>{size}px</span>
+                    </Label>
                   ))}
                 </div>
               </fieldset>
@@ -152,27 +161,57 @@ export const MediaWorkspaceView = ({ utility }: { utility: ToolDefinition }) => 
 
           {activeUtility.id === "gif-create" && (
             <div className="workspace-field-grid">
-              <label className="workspace-field"><span>Frame delay</span><input aria-label="Frame delay in milliseconds" type="number" min="1" max="60000" value={delay} onChange={(event) => setDelay(Number(event.target.value))} /></label>
-              <label className="workspace-check"><input aria-label="Loop animation" type="checkbox" checked={loop} onChange={(event) => setLoop(event.target.checked)} /> Loop animation</label>
+              <div className="workspace-field">
+                <Label htmlFor="frame-delay">Frame delay</Label>
+                <Input
+                  id="frame-delay"
+                  type="number"
+                  aria-label="Frame delay in milliseconds"
+                  min="1"
+                  max="60000"
+                  value={delay}
+                  onChange={(event) => setDelay(Number(event.target.value))}
+                />
+              </div>
+              <div className="media-toggle-field">
+                <Label htmlFor="gif-loop">Loop animation</Label>
+                <Switch id="gif-loop" checked={loop} onCheckedChange={setLoop} />
+              </div>
             </div>
           )}
 
           {activeUtility.id === "image-metadata" && (
             <>
-              <fieldset className="workspace-fieldset">
-                <legend>Metadata mode</legend>
-                <label className="workspace-check"><input type="radio" name="metadata-mode" checked={metadataMode === "inspect"} onChange={() => setMetadataMode("inspect")} /> Inspect metadata</label>
-                <label className="workspace-check"><input type="radio" name="metadata-mode" checked={metadataMode === "strip"} onChange={() => setMetadataMode("strip")} /> Remove metadata in a new copy</label>
-              </fieldset>
-              <button type="button" className="workspace-secondary-action" disabled={loading || files.length === 0} onClick={async () => setReport(await invoke<unknown[]>("inspect_image_metadata", { request: { paths: files, outputLocation: "alongsideInput" } }))}>Inspect metadata</button>
+              <ToggleGroup
+                type="single"
+                variant="outline"
+                size="sm"
+                aria-label="Metadata mode"
+                value={metadataMode}
+                onValueChange={(value) => {
+                  if (value) setMetadataMode(value as typeof metadataMode);
+                }}
+              >
+                <ToggleGroupItem value="inspect">Inspect metadata</ToggleGroupItem>
+                <ToggleGroupItem value="strip">Remove metadata in a new copy</ToggleGroupItem>
+              </ToggleGroup>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={loading || files.length === 0}
+                onClick={async () => setReport(await invoke<unknown[]>("inspect_image_metadata", { request: { paths: files, outputLocation: "alongsideInput" } }))}
+              >
+                Inspect metadata
+              </Button>
               {report.length > 0 && <pre className="workspace-report">{JSON.stringify(report, null, 2)}</pre>}
             </>
           )}
 
-          <button type="button" disabled={loading || files.length === 0 || (activeUtility.id === "tiff-pages" && !isCurrentTiffInspection(tiffInspection, files)) || (activeUtility.id === "image-metadata" && metadataMode === "inspect")} onClick={run} className="workspace-primary-action">
+          <Button variant="default" disabled={loading || files.length === 0 || (activeUtility.id === "tiff-pages" && !isCurrentTiffInspection(tiffInspection, files)) || (activeUtility.id === "image-metadata" && metadataMode === "inspect")} onClick={run} className="workspace-primary-action">
             {activeUtility.id === "image-metadata" ? "Remove metadata" : activeUtility.shortTitle}
-          </button>
-        </div>
+          </Button>
+          </CardContent>
+        </Card>
       )}
     </ToolScaffold>
   );
@@ -251,7 +290,8 @@ const MediaFrameOrder = ({
   const tiffFrames = isCurrentTiffInspection(tiffInspection, files) ? tiffInspection.frames : [];
 
   return (
-    <section className="media-frame-order" role="region" aria-label="Frame order">
+    <Card className="media-frame-order py-0" role="region" aria-label="Frame order">
+      <CardContent className="media-frame-order-content py-4">
       <p className="workspace-panel-label">Frame order</p>
       <p className="workspace-panel-copy">The output follows this order. Select a frame, then move it with the arrows.</p>
       {isTiff && tiffInspection.kind === "loading" && <p className="workspace-note" role="status">Reading TIFF pages on this device.</p>}
@@ -263,11 +303,11 @@ const MediaFrameOrder = ({
           const page = isTiff ? (item as TiffFrame).page : null;
           return (
             <li key={isTiff ? (item as TiffFrame).key : file} data-selected={index === selectedIndex ? "true" : undefined}>
-              <button type="button" onClick={() => selectIndex(index)} aria-label={"Frame " + (index + 1)}>
+              <Button variant={index === selectedIndex ? "secondary" : "ghost"} size="sm" aria-pressed={index === selectedIndex} onClick={() => selectIndex(index)} aria-label={"Frame " + (index + 1)}>
                 <span>{index + 1}</span>
                 {activeUtility.capability.supportsPreview && preview && <img className="media-frame-preview" src={preview.dataUrl} alt={"Preview of frame " + (index + 1)} />}
                 {file.split(/[\\/]/).pop()}{page === null ? "" : " · page " + (page + 1)}
-              </button>
+              </Button>
             </li>
           );
         })}
@@ -275,10 +315,11 @@ const MediaFrameOrder = ({
       {((isTiff && tiffFrames.length === 0 && tiffInspection.kind !== "error") || (!isTiff && files.length === 0)) && <p className="workspace-note">Select frames to arrange them here.</p>}
       {isTiff && tiffFrames.length > 0 && (
         <div className="file-selection-order" aria-label="Selected TIFF page ordering">
-          <button type="button" aria-label="Move selected TIFF page up" disabled={selectedIndex === 0} onClick={() => moveTiffFrame(-1)}>↑</button>
-          <button type="button" aria-label="Move selected TIFF page down" disabled={selectedIndex >= tiffFrames.length - 1} onClick={() => moveTiffFrame(1)}>↓</button>
+          <Button variant="ghost" size="icon-sm" aria-label="Move selected TIFF page up" disabled={selectedIndex === 0} onClick={() => moveTiffFrame(-1)}>↑</Button>
+          <Button variant="ghost" size="icon-sm" aria-label="Move selected TIFF page down" disabled={selectedIndex >= tiffFrames.length - 1} onClick={() => moveTiffFrame(1)}>↓</Button>
         </div>
       )}
-    </section>
+      </CardContent>
+    </Card>
   );
 };

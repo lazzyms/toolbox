@@ -6,6 +6,13 @@ import { toolsForWorkspaceId, UtilityRegistry } from "../registry";
 import { parsePageRange, selectedPageLabel } from "../shared/workspaceValidation";
 import type { PdfDocument } from "../features/pdf-editor/contracts";
 import type { AtomicToolId, ToolDefinition, ToolResult } from "../contracts";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { NativeSelect } from "@/components/ui/native-select";
+import { Slider } from "@/components/ui/slider";
 
 const conversionActions = toolsForWorkspaceId("pdf-convert");
 const conversionIds = new Set<string>(conversionActions.map((tool) => tool.id));
@@ -305,7 +312,8 @@ const ConversionControls = ({
   const previewRegionLabel = outputPreviewLimitation ? "Source page selection" : "Conversion preview";
 
   return (
-    <div className="workspace-control-panel">
+    <Card className="workspace-control-panel py-0">
+      <CardContent className="workspace-control-panel-content grid gap-4 p-4">
       <WorkspaceCommandRail
         actions={conversionActions}
         activeId={activeToolId}
@@ -313,7 +321,8 @@ const ConversionControls = ({
         label="PDF conversion tools"
       />
       {needsPageSelection && (
-        <section className="conversion-preview" role="region" aria-label={previewRegionLabel}>
+        <Card className="conversion-preview py-0" role="region" aria-label={previewRegionLabel}>
+          <CardContent className="conversion-preview-content py-4">
           <div className="workspace-panel-intro">
             <p className="workspace-panel-label">{outputPreviewLimitation ? "Source page selection" : "Page selection"}</p>
             <p className="workspace-panel-copy">{outputPreviewLimitation ? "Choose exactly which source pages this conversion should include." : "Preview the rendered output and choose exactly what this conversion should include."}</p>
@@ -321,23 +330,28 @@ const ConversionControls = ({
           {inspectedDocument ? (
             <div className="conversion-page-grid">
               {inspectedDocument.pages.map((page) => (
-                <label className="conversion-page-card" key={page.index}>
-                  <input
-                    type="checkbox"
-                    aria-label={`Page ${page.index + 1}`}
-                    checked={selectedPages.includes(page.index)}
-                    onChange={() => togglePage(page.index)}
-                  />
-                  {page.preview ? <img src={page.preview} alt={`Source page preview ${page.index + 1}`} /> : <span className="conversion-page-placeholder">Source preview unavailable</span>}
-                  <span>Page {page.index + 1}</span>
-                </label>
+                <Card className="conversion-page-card py-0" key={page.index}>
+                  <CardContent className="grid gap-2 p-2">
+                    <Label className="conversion-page-choice cursor-pointer flex-col items-stretch gap-2" htmlFor={`conversion-page-${page.index}`}>
+                      <Checkbox
+                        id={`conversion-page-${page.index}`}
+                        aria-label={`Page ${page.index + 1}`}
+                        checked={selectedPages.includes(page.index)}
+                        onCheckedChange={() => togglePage(page.index)}
+                      />
+                      {page.preview ? <img src={page.preview} alt={`Source page preview ${page.index + 1}`} /> : <span className="conversion-page-placeholder">Source preview unavailable</span>}
+                      <span>Page {page.index + 1}</span>
+                    </Label>
+                  </CardContent>
+                </Card>
               ))}
             </div>
           ) : (
             <p className="workspace-note">{inspection.kind === "error" && inspection.path === inputPath ? inspectError : "Select a PDF to load its page previews."}</p>
           )}
           {inspectedDocument && <p className="workspace-note">{selectionIssue?.message || selectedPageLabel(selectionCount)}</p>}
-        </section>
+          </CardContent>
+        </Card>
       )}
       {outputPreviewLimitation && <p className="workspace-note" role="status">{outputPreviewLimitation}</p>}
       {activeUtility.capability.nativeAvailability === "unavailable" && <p className="workspace-note" role="alert">{activeUtility.title} is unavailable in this build.</p>}
@@ -351,24 +365,25 @@ const ConversionControls = ({
       </div>
       {activeUtility.id === "pdf-to-images" && (
         <div className="workspace-field-grid">
-          <label className="workspace-field">
-            <span>Resolution</span>
-            <select aria-label="Render DPI" value={dpi} onChange={(event) => setDpi(event.target.value)}>
+          <div className="workspace-field">
+            <Label htmlFor="render-dpi">Resolution</Label>
+            <NativeSelect id="render-dpi" aria-label="Render DPI" value={dpi} onChange={(event) => setDpi(event.target.value)}>
               <option value="72">72 DPI</option>
               <option value="150">150 DPI</option>
               <option value="300">300 DPI</option>
-            </select>
-          </label>
-          <label className="workspace-field">
-            <span>Format</span>
-            <select aria-label="Output format" value={format} onChange={(event) => setFormat(event.target.value)}>
+            </NativeSelect>
+          </div>
+          <div className="workspace-field">
+            <Label htmlFor="image-format">Format</Label>
+            <NativeSelect id="image-format" aria-label="Output format" value={format} onChange={(event) => setFormat(event.target.value)}>
               <option value="jpg">JPEG</option>
               <option value="png">PNG</option>
-            </select>
-          </label>
-          <label className="workspace-field workspace-field-wide">
-            <span>Pages</span>
-            <input
+            </NativeSelect>
+          </div>
+          <div className="workspace-field workspace-field-wide">
+            <Label htmlFor="image-page-range">Pages</Label>
+            <Input
+              id="image-page-range"
               aria-label="Page range"
               value={pageRange}
               onChange={(event) => {
@@ -380,7 +395,7 @@ const ConversionControls = ({
               }}
               placeholder="All pages, or 1-3"
             />
-          </label>
+          </div>
         </div>
       )}
       {activeUtility.id === "pdf-to-text" && (
@@ -401,27 +416,54 @@ const ConversionControls = ({
       )}
       {activeUtility.id === "pdf-split" && (
         <div className="workspace-field-grid">
-          <label className="workspace-field"><span>Split mode</span><select aria-label="Split mode" value={splitMode} onChange={(event) => setSplitMode(event.target.value as typeof splitMode)}><option value="pages">Every page</option><option value="ranges">Ranges</option><option value="chunks">Fixed-size chunks</option></select></label>
-          {splitMode === "ranges" && <label className="workspace-field"><span>Ranges</span><input aria-label="Page ranges" value={pageRange} onChange={(event) => setPageRange(event.target.value)} placeholder="1-3, 4-8, 9-" /></label>}
-          {splitMode === "chunks" && <label className="workspace-field"><span>Pages per file</span><input aria-label="Pages per file" type="number" min="1" value={chunkSize} onChange={(event) => setChunkSize(Number(event.target.value))} /></label>}
+          <div className="workspace-field">
+            <Label htmlFor="split-mode">Split mode</Label>
+            <NativeSelect id="split-mode" aria-label="Split mode" value={splitMode} onChange={(event) => setSplitMode(event.target.value as typeof splitMode)}>
+              <option value="pages">Every page</option>
+              <option value="ranges">Ranges</option>
+              <option value="chunks">Fixed-size chunks</option>
+            </NativeSelect>
+          </div>
+          {splitMode === "ranges" && (
+            <div className="workspace-field">
+              <Label htmlFor="split-ranges">Ranges</Label>
+              <Input id="split-ranges" aria-label="Page ranges" value={pageRange} onChange={(event) => setPageRange(event.target.value)} placeholder="1-3, 4-8, 9-" />
+            </div>
+          )}
+          {splitMode === "chunks" && (
+            <div className="workspace-field">
+              <Label htmlFor="split-chunk-size">Pages per file</Label>
+              <Input id="split-chunk-size" aria-label="Pages per file" type="number" min="1" value={chunkSize} onChange={(event) => setChunkSize(Number(event.target.value))} />
+            </div>
+          )}
         </div>
       )}
       {rangeSelectionIssue && <p className="workspace-note" role="alert">{rangeSelectionIssue}</p>}
       {activeUtility.id === "pdf-extract-pages" && (
-        <label className="workspace-field"><span>Pages or ranges</span><input aria-label="Page numbers or ranges" value={pageRange} onChange={(event) => { const value = event.target.value; setPageRange(value); if (!inspectedDocument) return; const parsed = parsePageRange(value, inspectedDocument.pages.length); setSelectedPages(Array.isArray(parsed) ? parsed : []); }} placeholder="1-3, 7" /></label>
+        <div className="workspace-field">
+          <Label htmlFor="extract-pages-range">Pages or ranges</Label>
+          <Input id="extract-pages-range" aria-label="Page numbers or ranges" value={pageRange} onChange={(event) => { const value = event.target.value; setPageRange(value); if (!inspectedDocument) return; const parsed = parsePageRange(value, inspectedDocument.pages.length); setSelectedPages(Array.isArray(parsed) ? parsed : []); }} placeholder="1-3, 7" />
+        </div>
       )}
       {activeUtility.id === "pdf-compress" && (
-        <label className="workspace-field"><span>Compression quality <output>{quality}%</output></span><input aria-label="PDF quality" type="range" min="1" max="100" value={quality} onChange={(event) => setQuality(Number(event.target.value))} /></label>
+        <div className="workspace-field slider-field">
+          <div className="slider-label-row">
+            <Label id="compression-quality-label">Compression quality</Label>
+            <output>{quality}%</output>
+          </div>
+          <Slider aria-label="Compression quality" aria-labelledby="compression-quality-label" min={1} max={100} value={[quality]} onValueChange={([value]) => setQuality(value)} />
+        </div>
       )}
-      <button
-        type="button"
+      <Button
+        variant="default"
         disabled={loading || !canExport || (needsPageSelection && (!inspectedDocument || selectionCount === 0 || selectionIssue !== null))}
         onClick={run}
         className="workspace-primary-action"
         aria-label={`Export ${activeUtility.title}`}
       >
         Export {activeUtility.shortTitle}
-      </button>
-    </div>
+      </Button>
+      </CardContent>
+    </Card>
   );
 };
