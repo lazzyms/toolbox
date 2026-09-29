@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "test:ui": "playwright test",
+    "test:ui:flags": "node scripts/test-tool-flags-e2e.mjs",
     "test:desktop:smoke": "tsx tests/desktop-smoke/windows-smoke.ts",
     "test:analytics": "tsx --test tests/analytics.test.ts",
     "test:capabilities": "tsx --test tests/capability-registry.test.ts",

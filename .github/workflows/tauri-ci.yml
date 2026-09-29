@@ -1,12 +1,5 @@
 name: Tauri Build
 
-# Branch build for the Tauri port (issue #95, distribution setup). Every push to
-# `main` (or a `ci/**` rehearsal branch) verifies the Rust kit with the test
-# suite and produces unsigned installers for both platforms as runnable artifacts.
-# Nothing is signed, tagged, or released here: public releases are handled by the
-# Tauri release workflow after the required signing credentials are configured.
-# Updater artifacts are disabled for this unsigned verification build so Tauri
-# does not require the release workflow's private signing key.
 on:
   push:
     branches:
@@ -30,11 +23,15 @@ jobs:
         include:
           - os: macos-26
             name: macOS
+            platform: macos
           - os: windows-latest
             name: Windows
+            platform: windows
     runs-on: ${{ matrix.os }}
     env:
       TOOLBOX_REQUIRE_QPDF: '1'
+      VITE_POSTHOG_KEY: ${{ secrets.POSTHOG_PROJECT_KEY }}
+      VITE_TOOLBOX_TARGET_PLATFORM: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v7
 
@@ -69,6 +66,11 @@ jobs:
 
       - name: Run UI automation
         run: npm run test:ui
+        working-directory: ToolboxTauri
+
+      - name: Run production tool-flag E2E
+        if: matrix.platform == 'macos'
+        run: npm run test:ui:flags
         working-directory: ToolboxTauri
 
       - name: Run analytics tests

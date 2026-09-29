@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { UtilityRegistry } from '../../src/registry';
 
 const svg = "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="612" height="792"><rect width="612" height="792" fill="white"/><text x="60" y="85" font-size="24">A local test document</text></svg>');
 test.beforeEach(async ({ page }) => {
@@ -170,6 +171,82 @@ for (const [utility, command] of [['Merge PDF', 'merge_pdfs'], ['Split PDF', 'sp
       .toEqual(utility === 'Merge PDF' ? ['/local/scene-fixture.pdf', '/local/second-scene-fixture.pdf'] : ['/local/scene-fixture.pdf']);
   });
 }
+
+test('PostHog flags select tools per OS in search and PDF page actions', async ({ page }, testInfo) => {
+  const platform = process.env.TOOLBOX_EXPECTED_PLATFORM;
+  test.skip(platform !== 'macos' && platform !== 'windows');
+  const targetPlatform = platform as 'macos' | 'windows';
+  const otherPlatform = targetPlatform === 'macos' ? 'windows' : 'macos';
+  const mergeEnabled = targetPlatform === 'windows';
+  const featureFlags: Record<string, boolean> = {};
+  for (const { id } of UtilityRegistry) {
+    const available = id !== 'pdf-to-text';
+    featureFlags[`tool-${id}-${targetPlatform}`] = available && (id !== 'pdf-merge' || mergeEnabled);
+    featureFlags[`tool-${id}-${otherPlatform}`] = available && (id !== 'pdf-merge' || !mergeEnabled);
+  }
+  const flagRequests: Array<{ url: string; body: Record<string, unknown> }> = [];
+  let failFlagRequests = false;
+  let failedFlagRequestCount = 0;
+  await page.route('**/capture/**', route => route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }));
+  await page.route('**/flags/**', async route => {
+    if (failFlagRequests) {
+      failedFlagRequestCount += 1;
+      await route.abort();
+      return;
+    }
+    flagRequests.push({ url: route.request().url(), body: route.request().postDataJSON() });
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ featureFlags, errorsWhileComputingFlags: false }) });
+  });
+
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: 'Tool library', exact: true })).toBeVisible();
+  const mergeTool = page.getByRole('button', { name: 'Open Merge PDF', exact: true });
+  if (mergeEnabled) await expect(mergeTool).toBeVisible();
+  else await expect(mergeTool).toHaveCount(0);
+
+  const search = page.getByRole('textbox', { name: 'Search tools' });
+  await search.fill('Merge PDF');
+  if (mergeEnabled) await expect(mergeTool).toBeVisible();
+  else await expect(mergeTool).toHaveCount(0);
+  await search.fill('PDF to Text');
+  const pdfToTextTool = page.getByRole('button', { name: 'Open PDF to Text', exact: true });
+  await expect(pdfToTextTool).toHaveCount(0);
+  await search.fill('');
+
+  await page.getByRole('button', { name: 'Open Edit PDF', exact: true }).click();
+  await page.getByRole('button', { name: 'Choose files to process' }).click();
+  await expect(page.getByRole('group', { name: 'PDF page canvas' })).toBeVisible();
+  const pageActions = page.getByRole('button', { name: 'Page actions' });
+  await expect(pageActions).toBeEnabled();
+  await pageActions.click();
+  const menu = page.getByRole('menu', { name: 'Page actions' });
+  await expect(menu).toBeVisible();
+  const mergeAction = menu.getByRole('menuitem', { name: 'Merge PDF', exact: true });
+  if (mergeEnabled) {
+    await expect(mergeAction).toBeVisible();
+    await mergeAction.click();
+    await expect(page.getByRole('heading', { name: 'PDF conversion', exact: true })).toBeFocused();
+    await expect(page.getByRole('toolbar', { name: 'PDF conversion tools' }).getByRole('button', { name: 'Merge PDF', exact: true })).toBeVisible();
+  } else {
+    await expect(mergeAction).toHaveCount(0);
+    await expect(menu.getByRole('menuitem', { name: 'Split PDF', exact: true })).toBeVisible();
+  }
+
+  await expect.poll(() => flagRequests.length).toBe(1);
+  expect(flagRequests[0].url).toBe('https://us.i.posthog.com/flags/?v=2');
+  expect(flagRequests[0].body).toMatchObject({ api_key: 'phc_toolbox_e2e_flags', geoip_disable: true });
+  expect(typeof flagRequests[0].body.distinct_id).toBe('string');
+  await page.screenshot({ path: testInfo.outputPath(`tool-flags-${targetPlatform}.png`), fullPage: true });
+
+  failFlagRequests = true;
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Tool library', exact: true })).toBeVisible();
+  if (mergeEnabled) await expect(mergeTool).toBeVisible();
+  else await expect(mergeTool).toHaveCount(0);
+  await search.fill('PDF to Text');
+  await expect(pdfToTextTool).toHaveCount(0);
+  expect(failedFlagRequestCount).toBe(1);
+});
 
 test('non-adjacent page selection rotates only the selected pages', async ({ page }) => {
   await openEditor(page);

@@ -4,9 +4,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { AtomicToolId, ToolDefinition } from "../contracts";
 import { TablerIcon } from "./TablerIcon";
+import { useToolAvailability } from "../ToolAvailabilityContext";
 
 interface WorkspaceCommandRailProps {
-  actions: ToolDefinition[];
+  actions: readonly ToolDefinition[];
   activeId: AtomicToolId;
   onSelect: (id: AtomicToolId) => void;
   label: string;
@@ -55,6 +56,7 @@ export const WorkspaceCommandRail = ({
   onSelect,
   label,
 }: WorkspaceCommandRailProps) => {
+  const availability = useToolAvailability();
   const [orientation, setOrientation] = useState<ToolbarOrientation>(getToolbarOrientation);
 
   useEffect(() => {
@@ -75,7 +77,7 @@ export const WorkspaceCommandRail = ({
         aria-orientation={orientation}
         onKeyDown={(event) => handleToolbarKeyDown(event, orientation)}
       >
-        {actions.map((tool) => {
+        {availability.filter(actions).map((tool) => {
           const unavailable = tool.capability.nativeAvailability === "unavailable";
           return (
             <Button
@@ -89,7 +91,7 @@ export const WorkspaceCommandRail = ({
               aria-label={tool.title}
               title={unavailable ? `${tool.title} is unavailable in this build` : tool.blurb}
               disabled={unavailable}
-              onClick={() => onSelect(tool.id)}
+              onClick={() => { if (availability.allows(tool.id)) onSelect(tool.id); }}
             >
               <span className="workspace-command-icon" aria-hidden="true">
                 <TablerIcon name={tool.symbol} />

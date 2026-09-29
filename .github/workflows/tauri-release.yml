@@ -61,14 +61,17 @@ jobs:
         include:
           - os: macos-26
             name: macOS
+            platform: macos
             target: aarch64-apple-darwin
             artifact: macos-aarch64
           - os: windows-latest
             name: Windows x86_64
+            platform: windows
             target: x86_64-pc-windows-msvc
             artifact: windows-x86_64
           - os: windows-11-arm
             name: Windows arm64
+            platform: windows
             target: aarch64-pc-windows-msvc
             artifact: windows-arm64
     runs-on: ${{ matrix.os }}
@@ -79,6 +82,7 @@ jobs:
       TOOLBOX_REQUIRE_QPDF: '1'
       VITE_ENABLE_UPDATES: 'true'
       VITE_POSTHOG_KEY: ${{ secrets.POSTHOG_PROJECT_KEY }}
+      VITE_TOOLBOX_TARGET_PLATFORM: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v7
         with:

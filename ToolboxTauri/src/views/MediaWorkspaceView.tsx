@@ -4,6 +4,7 @@ import { ToolScaffold } from "../components/ToolScaffold";
 import { WorkspaceCommandRail } from "../components/WorkspaceCommandRail";
 import { toolsForWorkspaceId, UtilityRegistry } from "../registry";
 import type { AtomicToolId, ImagePreview, ToolDefinition, ToolResult } from "../contracts";
+import { useToolAvailability } from "../ToolAvailabilityContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -37,6 +38,11 @@ const iconSizesByPreset: Record<string, number[]> = {
 };
 
 export const MediaWorkspaceView = ({ utility }: { utility: ToolDefinition }) => {
+  const availability = useToolAvailability();
+  const availableActions = availability.filter(mediaActions);
+  const preferredTool = mediaIds.has(utility.id) && availability.allows(utility.id)
+    ? utility.id
+    : availableActions[0]?.id ?? utility.id;
   const [delay, setDelay] = useState(100);
   const [loop, setLoop] = useState(true);
   const [iconPreset, setIconPreset] = useState("macos");
@@ -46,12 +52,14 @@ export const MediaWorkspaceView = ({ utility }: { utility: ToolDefinition }) => 
   const [selectedTiffFrameIndex, setSelectedTiffFrameIndex] = useState(0);
   const [tiffInspection, setTiffInspection] = useState<TiffInspection>({ kind: "idle" });
   const [activeToolId, setActiveToolId] = useState<AtomicToolId>(
-    mediaIds.has(utility.id) ? utility.id : "icon-set",
+    preferredTool,
   );
   useEffect(() => {
-    setActiveToolId(mediaIds.has(utility.id) ? utility.id : "icon-set");
-  }, [utility.id]);
-  const activeUtility = UtilityRegistry.find((item) => item.id === activeToolId) ?? utility;
+    setActiveToolId(preferredTool);
+  }, [preferredTool]);
+  const activeUtility = availability.allows(activeToolId)
+    ? UtilityRegistry.find((item) => item.id === activeToolId) ?? utility
+    : UtilityRegistry.find((item) => item.id === preferredTool) ?? utility;
 
   useEffect(() => {
     setReport([]);
@@ -104,9 +112,9 @@ export const MediaWorkspaceView = ({ utility }: { utility: ToolDefinition }) => 
         <Card className="workspace-control-panel py-0">
           <CardContent className="workspace-control-panel-content grid gap-4 p-4">
           <WorkspaceCommandRail
-            actions={mediaActions}
+            actions={availableActions}
             activeId={activeToolId}
-            onSelect={setActiveToolId}
+            onSelect={(id) => { if (availability.allows(id)) setActiveToolId(id); }}
             label="Media workspace tools"
           />
           <div>

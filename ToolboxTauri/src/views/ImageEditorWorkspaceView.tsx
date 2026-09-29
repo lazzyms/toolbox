@@ -5,6 +5,7 @@ import type { WorkspaceSourceAction } from "../components/ToolScaffold";
 import type { ShellEvent } from "../hooks/useShellBridge";
 import { WorkspaceCommandRail } from "../components/WorkspaceCommandRail";
 import { toolsForWorkspaceId, UtilityRegistry } from "../registry";
+import { useToolAvailability } from "../ToolAvailabilityContext";
 import type {
   AtomicToolId,
   CompressImagesRequest,
@@ -137,6 +138,11 @@ export const ImageEditorWorkspaceView = ({
   onFilesChange?: (paths: readonly string[]) => void;
   onWorkspaceSourceAction?: (action: WorkspaceSourceAction | null) => void;
 }) => {
+  const availability = useToolAvailability();
+  const availableActions = availability.filter(imageEditorActions);
+  const preferredTool = imageEditorIds.has(utility.id) && availability.allows(utility.id)
+    ? utility.id
+    : availableActions[0]?.id ?? utility.id;
   const [format, setFormat] = useState<ConvertImagesRequest["format"]>("png");
   const [quality, setQuality] = useState(80);
   const [lossless, setLossless] = useState(false);
@@ -165,12 +171,14 @@ export const ImageEditorWorkspaceView = ({
   const [history, setHistory] = useState<ImageEditHistory>(() => createImageEditHistory());
   const [committedDraftKey, setCommittedDraftKey] = useState<string | null>(null);
   const [activeToolId, setActiveToolId] = useState<AtomicToolId>(
-    imageEditorIds.has(utility.id) ? utility.id : "heic-convert",
+    preferredTool,
   );
   useEffect(() => {
-    setActiveToolId(imageEditorIds.has(utility.id) ? utility.id : "heic-convert");
-  }, [utility.id]);
-  const activeUtility = UtilityRegistry.find((item) => item.id === activeToolId) ?? utility;
+    setActiveToolId(preferredTool);
+  }, [preferredTool]);
+  const activeUtility = availability.allows(activeToolId)
+    ? UtilityRegistry.find((item) => item.id === activeToolId) ?? utility
+    : UtilityRegistry.find((item) => item.id === preferredTool) ?? utility;
   const draft = buildImageEditDraft(activeUtility.id, {
     format, quality, lossless, width, height, resizeMode, percentage, resampling, keepRatio,
     degrees, flip, cropMode, cropWidth, cropHeight, cropX, cropY, anchor, brightness, contrast, saturation, exposure,
@@ -231,7 +239,7 @@ export const ImageEditorWorkspaceView = ({
         request: { paths, plan: editPlan },
       })}
     >
-      {(props) => <ImageEditorControls {...props} utility={activeUtility} activeToolId={activeToolId} onSelectTool={setActiveToolId} {...{
+      {(props) => <ImageEditorControls {...props} actions={availableActions} utility={activeUtility} activeToolId={activeToolId} onSelectTool={(id) => { if (availability.allows(id)) setActiveToolId(id); }} {...{
         format,
         setFormat,
         quality,
@@ -309,6 +317,7 @@ export const ImageEditorWorkspaceView = ({
 };
 
 type ImageEditorControlsProps = {
+  actions: readonly ToolDefinition[];
   files: string[];
   runCombined: () => Promise<void>;
   loading: boolean;
@@ -381,6 +390,7 @@ type ImagePreviewValidation =
   | { key: string; status: "error"; message: string };
 
 const ImageEditorControls = ({
+  actions,
   files,
   runCombined,
   loading,
@@ -446,6 +456,7 @@ const ImageEditorControls = ({
   onRedo,
   onReset,
 }: ImageEditorControlsProps) => {
+  const availability = useToolAvailability();
   const [sourcePreview, setSourcePreview] = useState<ImagePreview | null>(null);
   const [resultPreview, setResultPreview] = useState<ImagePreview | null>(null);
   const [sourcePreviewError, setSourcePreviewError] = useState("");
@@ -641,7 +652,7 @@ const ImageEditorControls = ({
   const primaryPreview = utility.id === "crop" ? sourcePreview : resultPreview ?? sourcePreview;
   const primaryPreviewAlt = utility.id === "crop" ? `Original image preview of ${inputPath?.split(/[\\/]/).pop() ?? "selected image"}` : `Preview of ${inputPath?.split(/[\\/]/).pop() ?? "selected image"}`;
   const selectTool = (nextToolId: AtomicToolId) => {
-    if (nextToolId === activeToolId) return;
+    if (nextToolId === activeToolId || !availability.allows(nextToolId)) return;
     if (draft) onAddEdit();
     onSelectTool(nextToolId);
   };
@@ -649,7 +660,7 @@ const ImageEditorControls = ({
   return (
     <div className="image-editor-layout">
       <WorkspaceCommandRail
-        actions={imageEditorActions}
+        actions={actions}
         activeId={activeToolId}
         onSelect={selectTool}
         label="Image editor tools"

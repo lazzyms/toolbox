@@ -6,6 +6,7 @@ import { toolsForWorkspaceId, UtilityRegistry } from "../registry";
 import { parsePageRange, selectedPageLabel } from "../shared/workspaceValidation";
 import type { PdfDocument } from "../features/pdf-editor/contracts";
 import type { AtomicToolId, ToolDefinition, ToolResult } from "../contracts";
+import { useToolAvailability } from "../ToolAvailabilityContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -60,6 +61,11 @@ const pdfToImagesOutputSummary = (selectedPages: number[], dpi: string, format: 
 };
 
 export const PDFConversionWorkspaceView = ({ utility, initialPaths = [] }: { utility: ToolDefinition; initialPaths?: readonly string[] }) => {
+  const availability = useToolAvailability();
+  const availableActions = availability.filter(conversionActions);
+  const preferredTool = conversionIds.has(utility.id) && availability.allows(utility.id)
+    ? utility.id
+    : availableActions[0]?.id ?? utility.id;
   const [dpi, setDpi] = useState("150");
   const [format, setFormat] = useState("jpg");
   const [pageRange, setPageRange] = useState("");
@@ -70,12 +76,14 @@ export const PDFConversionWorkspaceView = ({ utility, initialPaths = [] }: { uti
   const [selectedPages, setSelectedPages] = useState<number[]>([]);
   const [inspectError, setInspectError] = useState("");
   const [activeToolId, setActiveToolId] = useState<AtomicToolId>(
-    conversionIds.has(utility.id) ? utility.id : "pdf-to-images",
+    preferredTool,
   );
   useEffect(() => {
-    setActiveToolId(conversionIds.has(utility.id) ? utility.id : "pdf-to-images");
-  }, [utility.id]);
-  const activeUtility = UtilityRegistry.find((item) => item.id === activeToolId) ?? utility;
+    setActiveToolId(preferredTool);
+  }, [preferredTool]);
+  const activeUtility = availability.allows(activeToolId)
+    ? UtilityRegistry.find((item) => item.id === activeToolId) ?? utility
+    : UtilityRegistry.find((item) => item.id === preferredTool) ?? utility;
 
   return (
     <ToolScaffold
@@ -153,9 +161,10 @@ export const PDFConversionWorkspaceView = ({ utility, initialPaths = [] }: { uti
     >
       {({ files, run, loading }) => (
         <ConversionControls
+          actions={availableActions}
           activeUtility={activeUtility}
           activeToolId={activeToolId}
-          onSelectTool={setActiveToolId}
+          onSelectTool={(id) => { if (availability.allows(id)) setActiveToolId(id); }}
           files={files}
           run={run}
           loading={loading}
@@ -184,6 +193,7 @@ export const PDFConversionWorkspaceView = ({ utility, initialPaths = [] }: { uti
 };
 
 type ConversionControlsProps = {
+  actions: readonly ToolDefinition[];
   activeUtility: ToolDefinition;
   activeToolId: AtomicToolId;
   onSelectTool: (id: AtomicToolId) => void;
@@ -211,6 +221,7 @@ type ConversionControlsProps = {
 };
 
 const ConversionControls = ({
+  actions,
   activeUtility,
   activeToolId,
   onSelectTool,
@@ -318,7 +329,7 @@ const ConversionControls = ({
     <Card className="workspace-control-panel py-0">
       <CardContent className="workspace-control-panel-content grid gap-4 p-4">
       <WorkspaceCommandRail
-        actions={conversionActions}
+        actions={actions}
         activeId={activeToolId}
         onSelect={onSelectTool}
         label="PDF conversion tools"

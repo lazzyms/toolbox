@@ -1,16 +1,3 @@
-// Anonymous install analytics via PostHog (free tier: 1M events/month, no card).
-//
-// What is collected: `first_install` (once) and `app_opened` (per launch),
-// each with `{ app_platform: "tauri" }`. Nothing else. The distinct_id is a
-// random UUID generated on this device — it is not tied to any user, machine,
-// or account, and no PII is ever sent.
-//
-// Setup: create a free PostHog Cloud project at https://posthog.com and set
-// VITE_POSTHOG_KEY to its project API key at build time. EU-region projects
-// must use "https://eu.i.posthog.com/capture/" as the capture URL (override
-// with VITE_POSTHOG_CAPTURE_URL). Until a real key is set, all events are
-// silently skipped.
-
 export const INSTALL_MARKER = "toolbox.analytics.install-recorded";
 export const DISTINCT_ID_KEY = "toolbox.analytics.distinct-id";
 export const OPT_OUT_KEY = "toolbox.analytics.opt-out";
@@ -43,6 +30,13 @@ function getCaptureUrl(): string {
   );
 }
 
+function getPosthogFlagsUrl(): string {
+  const url = new URL(getCaptureUrl());
+  url.pathname = url.pathname.replace(/\/capture\/?$/, "/flags/");
+  url.search = "?v=2";
+  return url.toString();
+}
+
 export function isConfigured(): boolean {
   const key = getPosthogKey();
   return key.startsWith("phc_") && key.length > 10;
@@ -70,14 +64,22 @@ function getDistinctId(storage: StorageLike): string {
   return fresh;
 }
 
+export function getToolFlagRequestCredentials(
+  storage: StorageLike,
+): { apiKey: string; distinctId: string; endpoint: string } | null {
+  if (isAnalyticsOptedOut(storage) || !isConfigured()) return null;
+  return {
+    apiKey: getPosthogKey(),
+    distinctId: getDistinctId(storage),
+    endpoint: getPosthogFlagsUrl(),
+  };
+}
+
 type FetchLike = (
   input: string,
   init?: Record<string, unknown>,
 ) => Promise<unknown>;
 
-// Exported for tests: sends one event to PostHog. Silently skips when no
-// valid project key is configured. The fetch implementation is injectable so
-// tests never hit the real network.
 export async function captureEvent(
   event: AnalyticsEvent,
   distinctId: string,
@@ -117,7 +119,6 @@ export interface AnalyticsDeps {
   fetchImpl?: FetchLike;
 }
 
-// Exported for tests: the testable core of initializeInstallAnalytics.
 export async function initializeInstallAnalyticsWith(
   deps: AnalyticsDeps,
 ): Promise<void> {
@@ -126,13 +127,10 @@ export async function initializeInstallAnalyticsWith(
   try {
     const storage = deps.storage;
     if (isAnalyticsOptedOut(storage)) return;
-    // Don't burn the first_install marker when no project key is configured:
-    // a later correctly-configured build must still be able to count this install.
     if (!isConfigured()) return;
 
     const distinctId = getDistinctId(storage);
     recordFirstInstall(storage, (name) => {
-      // Fire-and-forget: analytics must never break the app.
       captureEvent(name, distinctId, deps.fetchImpl).catch(() => {});
     });
     await captureEvent(
