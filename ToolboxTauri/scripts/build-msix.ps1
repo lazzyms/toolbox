@@ -118,6 +118,7 @@ $msixVersion = Get-MsixVersion $Version
 if (-not (Test-Path -LiteralPath $storeConfigPath) -or -not (Test-Path -LiteralPath $manifestTemplatePath)) {
     throw "Store packaging configuration or manifest template is missing."
 }
+$storeConfig = Get-Content -Raw -LiteralPath $storeConfigPath | ConvertFrom-Json
 
 if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
 New-Item -ItemType Directory -Force -Path (Join-Path $stage "Assets") | Out-Null
@@ -146,8 +147,10 @@ foreach ($releaseDirectory in $releaseDirectories) {
 if ($null -eq $executable) { throw "Could not find the release executable for $MainBinaryName ($Target)." }
 Copy-Item -LiteralPath $executable.FullName -Destination (Join-Path $stage "$MainBinaryName.exe") -Force
 
-$resources = $config.bundle.PSObject.Properties["resources"]
-$externalBin = $config.bundle.PSObject.Properties["externalBin"]
+$resources = $storeConfig.bundle.PSObject.Properties["resources"]
+if (-not $resources) { $resources = $config.bundle.PSObject.Properties["resources"] }
+$externalBin = $storeConfig.bundle.PSObject.Properties["externalBin"]
+if (-not $externalBin) { $externalBin = $config.bundle.PSObject.Properties["externalBin"] }
 if ($resources) { Copy-ConfiguredInputs $resources.Value "resources" }
 if ($externalBin) { Copy-ConfiguredInputs $externalBin.Value "externalBin" }
 
