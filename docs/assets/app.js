@@ -82,7 +82,7 @@
   // Keep platform download destinations in one place when cutting a new release.
   const downloads = {
     macos: {
-      href: 'https://github.com/lazzyms/toolbox/releases/download/tauri-v1.0.11/Toolbox-1.0.11-macos.dmg',
+      href: 'https://github.com/lazzyms/toolbox/releases/download/tauri-v1.0.15/Toolbox-1.0.15-macos.dmg',
       label: 'Download for macOS',
       detail: 'Apple silicon · DMG',
     },
