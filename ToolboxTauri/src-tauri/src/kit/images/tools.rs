@@ -138,8 +138,15 @@ pub fn inspect_edit_preview(request: &ImageEditPreviewRequest) -> Result<ImagePr
     let plan = request.plan.canonicalized();
     plan.validate()?;
     let source = crate::kit::images::load_image(&request.path)?;
-    let (edited, _, _) = apply_edit_plan(&plan, source, crate::kit::images::detect_format(&request.path))?;
-    encode_preview(edited)
+    let (edited, format, quality) = apply_edit_plan(&plan, source, crate::kit::images::detect_format(&request.path))?;
+    let encoded = crate::kit::images::encode(&edited, format, quality)?;
+    let preview_source = match format {
+        crate::kit::images::OutputFormat::Heic => heif::decode(&encoded)
+            .map_err(|error| format!("Could not decode edited HEIC preview: {error}"))?,
+        _ => image::load_from_memory(&encoded)
+            .map_err(|error| format!("Could not decode edited image preview: {error}"))?,
+    };
+    encode_preview(preview_source)
 }
 
 pub fn export_edit_plan(plan: &ImageEditPlan, input: PathBuf) -> JobOutcome {
@@ -173,7 +180,11 @@ pub fn export_edit_plan(plan: &ImageEditPlan, input: PathBuf) -> JobOutcome {
 fn encode_preview(image: DynamicImage) -> Result<ImagePreview, String> {
     let width = image.width();
     let height = image.height();
-    let preview = image.thumbnail(1200, 900).to_rgba8();
+    let preview = if width <= 1200 && height <= 900 {
+        image.to_rgba8()
+    } else {
+        image.thumbnail(1200, 900).to_rgba8()
+    };
     let mut bytes = Vec::new();
     PngEncoder::new(&mut bytes)
         .write_image(preview.as_raw(), preview.width(), preview.height(), image::ExtendedColorType::Rgba8)
@@ -464,8 +475,10 @@ fn crop_rect(image_width: u32, image_height: u32, request: &CropRequest) -> Resu
             (width, (width as f64 / ratio).round() as u32)
         };
         if width == 0 || height == 0 || width > image_width || height > image_height { return Err("Aspect ratio crop does not fit inside the image.".to_string()); }
-        let x = match request.anchor.as_str() { "left" => 0, "right" => image_width - width, _ => (image_width - width) / 2 };
-        let y = match request.anchor.as_str() { "top" => 0, "bottom" => image_height - height, _ => (image_height - height) / 2 };
+        let max_x = image_width - width;
+        let max_y = image_height - height;
+        let x = match request.anchor.as_str() { "left" => 0, "right" => max_x, "custom" => request.x.min(max_x), _ => max_x / 2 };
+        let y = match request.anchor.as_str() { "top" => 0, "bottom" => max_y, "custom" => request.y.min(max_y), _ => max_y / 2 };
         Ok((x, y, width, height))
     } else if request.mode == "rectangle" {
         if request.width == 0 || request.height == 0 || request.x.saturating_add(request.width) > image_width || request.y.saturating_add(request.height) > image_height { return Err("Crop rectangle must fit inside the image.".to_string()); }

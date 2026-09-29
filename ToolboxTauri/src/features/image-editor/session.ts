@@ -86,9 +86,11 @@ export const resolveImageCropRect = (
   const [width, height] = sourceWidth / sourceHeight > ratio
     ? [Math.round(sourceHeight * ratio), sourceHeight]
     : [sourceWidth, Math.round(sourceWidth / ratio)];
+  const maxX = sourceWidth - width;
+  const maxY = sourceHeight - height;
   return {
-    x: crop.anchor === "left" ? 0 : crop.anchor === "right" ? sourceWidth - width : Math.floor((sourceWidth - width) / 2),
-    y: crop.anchor === "top" ? 0 : crop.anchor === "bottom" ? sourceHeight - height : Math.floor((sourceHeight - height) / 2),
+    x: crop.anchor === "custom" ? Math.min(crop.x, maxX) : crop.anchor === "left" ? 0 : crop.anchor === "right" ? maxX : Math.floor(maxX / 2),
+    y: crop.anchor === "custom" ? Math.min(crop.y, maxY) : crop.anchor === "top" ? 0 : crop.anchor === "bottom" ? maxY : Math.floor(maxY / 2),
     width,
     height,
   };
