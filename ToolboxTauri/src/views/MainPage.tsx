@@ -588,7 +588,6 @@ export const MainPage = () => {
                       fileActivation={fileActivation?.workspace === selectedWorkspace.id ? fileActivation : undefined}
                       onActivationAccepted={acceptActivation}
                       onFilesChange={publishDocumentPath}
-                      onNavigate={selectedWorkspace.id === "pdf-editor" ? navigateToPdfUtility : undefined}
                       onWorkspaceSourceAction={publishWorkspaceSourceAction}
                     />
                   </CardContent>

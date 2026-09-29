@@ -170,11 +170,11 @@ test("Escape cancels queued file activations while an acknowledgement is pending
     await emitShellEvent(page, { kind: "files", activationId: "activation-escape-queued", workspace: "pdf-editor", paths: ["/tmp/queued-document.pdf"] });
 
     await page.keyboard.press("Escape");
-    await expect(page.getByRole("heading", { name: "Ready to process" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Tool library" })).toBeVisible();
     await page.evaluate(() => (window as TestWindow).__toolboxResolveActivationAck?.("activation-escape-first"));
     await page.waitForTimeout(100);
 
-    await expect(page.getByRole("heading", { name: "Ready to process" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Tool library" })).toBeVisible();
     await expect(page.getByRole("button", { name: "← All tools" })).toHaveCount(0);
     await expect(page.getByText("queued-document.pdf", { exact: true })).toHaveCount(0);
     expect((await invocations(page)).some((call) => call.command === "acknowledge_activation" && JSON.stringify(call.args) === JSON.stringify({ activationId: "activation-escape-queued" }))).toBe(false);
@@ -192,7 +192,7 @@ test("reports rejected files and mixed batches without accepting or acknowledgin
     await expect(page.getByRole("alert")).toContainText("Choose PDF and image files separately.");
     const calls = await invocations(page);
     expect(calls.filter((call) => call.command === "acknowledge_activation")).toHaveLength(0);
-    await expect(page.getByRole("heading", { name: "Ready to process" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Tool library" })).toBeVisible();
     await expect(page.getByText("0 files open", { exact: true })).toHaveCount(0);
 });
 
@@ -302,5 +302,5 @@ test("Escape closes the topmost settings surface before leaving the workspace", 
     await expect(page.getByRole("heading", { name: "PDF editor", exact: true })).toBeVisible();
 
     await page.keyboard.press("Escape");
-    await expect(page.getByRole("heading", { name: "Ready to process" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Tool library" })).toBeVisible();
 });
