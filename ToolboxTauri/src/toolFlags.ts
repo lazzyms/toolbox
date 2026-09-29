@@ -9,6 +9,16 @@ export type ToolAvailabilitySnapshot = Readonly<{
   enabledByTool: Readonly<Record<AtomicToolId, boolean>>;
 }>;
 
+export type ToolAvailabilityStartup =
+  | Readonly<{
+      state: "ready";
+      snapshot: ToolAvailabilitySnapshot;
+    }>
+  | Readonly<{
+      state: "pending";
+      resolve: () => Promise<ToolAvailabilitySnapshot>;
+    }>;
+
 const toolIds = UtilityRegistry.map(({ id }) => id);
 const evaluationTimeoutMs = 900;
 const snapshotStorageKey = (platform: "macos" | "windows") =>
@@ -23,6 +33,10 @@ function enabledSnapshot(platform: ToolPlatform): ToolAvailabilitySnapshot {
     platform,
     enabledByTool: Object.freeze(enabledByTool),
   });
+}
+
+function normalizePlatform(platform: unknown): ToolPlatform {
+  return platform === "macos" || platform === "windows" ? platform : "unsupported";
 }
 
 function parseFeatureFlags(value: unknown): Record<string, unknown> | null {
@@ -142,17 +156,10 @@ async function requestSnapshot(
   }
 }
 
-export async function loadToolAvailability(input: {
-  platform: unknown;
-  isDev: boolean;
-}): Promise<ToolAvailabilitySnapshot> {
+function loadSupportedToolAvailability(
+  platform: "macos" | "windows",
+): Promise<ToolAvailabilitySnapshot> {
   if (launchAvailability) return launchAvailability;
-  const platform: ToolPlatform = input.platform === "macos" || input.platform === "windows"
-    ? input.platform
-    : "unsupported";
-  if (input.isDev || platform === "unsupported") {
-    return enabledSnapshot(platform);
-  }
   launchAvailability = (async () => {
     const fallback = enabledSnapshot(platform);
     try {
@@ -166,4 +173,34 @@ export async function loadToolAvailability(input: {
     }
   })();
   return launchAvailability;
+}
+
+export function createToolAvailabilityStartup(input: {
+  platform: unknown;
+  isDev: boolean;
+}): ToolAvailabilityStartup {
+  const platform = normalizePlatform(input.platform);
+  if (input.isDev || platform === "unsupported") {
+    return Object.freeze({
+      state: "ready",
+      snapshot: enabledSnapshot(platform),
+    });
+  }
+  let resolution: Promise<ToolAvailabilitySnapshot> | null = null;
+  return Object.freeze({
+    state: "pending",
+    resolve: () => {
+      if (!resolution) resolution = loadSupportedToolAvailability(platform);
+      return resolution;
+    },
+  });
+}
+
+export async function loadToolAvailability(input: {
+  platform: unknown;
+  isDev: boolean;
+}): Promise<ToolAvailabilitySnapshot> {
+  if (launchAvailability) return launchAvailability;
+  const startup = createToolAvailabilityStartup(input);
+  return startup.state === "ready" ? startup.snapshot : startup.resolve();
 }
