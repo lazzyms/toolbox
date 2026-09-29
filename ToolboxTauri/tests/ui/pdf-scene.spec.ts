@@ -1,0 +1,510 @@
+import { test, expect, type Page } from '@playwright/test';
+import { UtilityRegistry } from '../../src/registry';
+
+const svg = "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="612" height="792"><rect width="612" height="792" fill="white"/><text x="60" y="85" font-size="24">A local test document</text></svg>');
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(({ svg }) => {
+    const w = window as any;
+    w.calls = [];
+    w.sceneTextDelays = {};
+    w.sceneTextResponses = {};
+    w.dialogNext = null;
+    w.__TAURI_INTERNALS__ = {
+      metadata: { currentWindow: { label: 'main' }, currentWebview: { label: 'main', windowLabel: 'main' } },
+      transformCallback: () => 1, unregisterCallback: () => {},
+      invoke: async (command: string, args: any) => {
+        w.calls.push({ command, args });
+        if (command === 'plugin:dialog|open') return w.dialogNext ?? '/local/scene-fixture.pdf';
+        if (command === 'inspect_pdf_scene') return { path: '/local/scene-fixture.pdf', pages: [0, 1, 2].map(index => ({ index, width: 612, height: 792, preview: null })) };
+        if (command === 'inspect_pdf_scene_page') {
+          const pageIndex = args.request.pageIndex;
+          const delay = w.sceneTextDelays[pageIndex] ?? 0;
+          if (delay) await new Promise(resolve => setTimeout(resolve, delay));
+          const key = `${args.request.path}:${pageIndex}`;
+          const response = (w.sceneTextResponses[key] ?? 0) + 1;
+          w.sceneTextResponses[key] = response;
+          return { index: pageIndex, width: 612, height: 792, preview: svg, textRuns: [{ text: `${args.request.path} page ${pageIndex} response ${response}`, x: 60, y: 55, width: 250, height: 25 }] };
+        }
+        if (command === 'preview_pdf_scene_pages') {
+          if (w.previewFailure) throw new Error(w.previewFailureMessage ?? 'Renderer unavailable');
+          if (w.previewDelay) await new Promise(resolve => setTimeout(resolve, w.previewDelay));
+          return args.request.pageIndices.map((pageIndex: number) => ({ pageIndex, preview: { dataUrl: svg, width: 612, height: 792 } }));
+        }
+        if (command === 'export_pdf_scene') return [{ inputPath: '/local/scene-fixture.pdf', outputPaths: ['/local/scene-fixture-edited-1.pdf'], detail: 'PDF scene exported', failure: null }];
+        return null;
+      },
+    };
+    w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
+  }, { svg });
+});
+
+async function openEditor(page: Page) {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open Edit PDF', exact: true }).click();
+  await page.getByRole('button', { name: 'Choose files to process' }).click();
+  await expect(page.getByRole('group', { name: 'PDF page canvas' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeEnabled();
+}
+async function draw(page: Page, tool: string, y: number, x = 0.2) {
+  await page.getByRole('toolbar', { name: 'PDF editor tools' }).getByRole('button', { name: tool, exact: true }).click();
+  const box = (await page.getByRole('group', { name: 'PDF page canvas' }).boundingBox())!;
+  await page.mouse.move(box.x + box.width * x, box.y + box.height * y);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * (x + .35), box.y + box.height * (y + .07), { steps: 6 });
+  await page.mouse.up();
+}
+async function exported(page: Page) {
+  await page.getByRole('button', { name: 'Export PDF', exact: true }).click();
+  return page.evaluate(() => (window as any).calls.filter((c: any) => c.command === 'export_pdf_scene').at(-1).args.request.scene);
+}
+
+test('PDF editor toolbars use roving keyboard focus and render the workspace', async ({ page }, testInfo) => {
+  await openEditor(page);
+  const tools = page.getByRole('toolbar', { name: 'PDF editor tools' });
+  const selectTool = tools.getByRole('button', { name: 'Select', exact: true });
+  const textTool = tools.getByRole('button', { name: 'Text', exact: true });
+  await selectTool.focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(textTool).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(textTool).toHaveAttribute('aria-pressed', 'true');
+  await page.keyboard.press('End');
+  await expect(tools.getByRole('button', { name: 'Export PDF', exact: true })).toBeFocused();
+  await page.keyboard.press('Home');
+  await expect(selectTool).toBeFocused();
+  await expect(page.getByRole('toolbar', { name: 'PDF page and zoom controls' })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('pdf-editor-workspace.png'), fullPage: true });
+});
+
+test('PDF editor keeps the back link, title, and empty-state open action compact', async ({ page }) => {
+  const consoleErrors: string[] = [];
+  const pageErrors: string[] = [];
+  page.on('console', message => {
+    if (message.type() === 'error') consoleErrors.push(message.text());
+  });
+  page.on('pageerror', error => pageErrors.push(error.message));
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open Edit PDF', exact: true }).click();
+  await expect(page.locator('.pdf-editor-header-line')).toContainText('PDF editor');
+  await expect(page.locator('.pdf-editor-header-line')).toContainText('Open files');
+  await expect(page.getByRole('button', { name: 'Choose files to process' })).toBeVisible();
+  await expect(page.locator('.workspace-source-bar[data-empty="true"]')).toBeHidden();
+  await expect(page.getByRole('button', { name: '← All tools', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Choose files to process' }).click();
+  await expect(page.getByRole('group', { name: 'PDF page canvas' })).toBeVisible();
+  await expect(page.locator('[aria-label="Object properties"]')).toHaveCount(0);
+  expect(consoleErrors).toEqual([]);
+  expect(pageErrors).toEqual([]);
+});
+
+test('scene preview cache misses use one indexed batch request', async ({ page }) => {
+  await openEditor(page);
+  const previewCalls = await page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'preview_pdf_scene_pages'));
+  expect(previewCalls).toHaveLength(1);
+  expect(previewCalls[0].args).toMatchObject({ request: { pageIndices: [0, 1] } });
+  expect(await page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'preview_pdf_scene').length)).toBe(0);
+});
+
+test('PDF editor toolbar uses roving keyboard focus and the inspector follows the active tool', async ({ page }) => {
+  await openEditor(page);
+  const toolbar = page.getByRole('toolbar', { name: 'PDF editor tools' });
+  const select = toolbar.getByRole('button', { name: 'Select', exact: true });
+  await select.focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(toolbar.getByRole('button', { name: 'Text', exact: true })).toBeFocused();
+  await page.keyboard.press('Home');
+  await expect(select).toBeFocused();
+
+  const inspector = page.getByRole('complementary', { name: 'PDF editor inspector' });
+  await expect(inspector).toBeVisible();
+  await expect(inspector.getByRole('region', { name: 'Properties' })).toBeVisible();
+  await toolbar.getByRole('button', { name: 'Shape', exact: true }).click();
+  await expect(inspector.getByRole('combobox', { name: 'Shape type' })).toBeVisible();
+});
+
+test('page actions menu supports keyboard navigation, Escape focus return, and outside dismissal', async ({ page }) => {
+  await openEditor(page);
+  const trigger = page.getByRole('button', { name: 'Page actions' });
+  await expect(trigger).toHaveAttribute('aria-haspopup', 'menu');
+  await trigger.focus();
+  await page.keyboard.press('Enter');
+  const menu = page.getByRole('menu', { name: 'Page actions' });
+  await expect(menu).toBeVisible();
+  const thumbnailSidebar = page.getByRole('complementary', { name: 'PDF page thumbnails' });
+  const sidebarBounds = await thumbnailSidebar.boundingBox();
+  const menuBounds = await menu.boundingBox();
+  expect(sidebarBounds).not.toBeNull();
+  expect(menuBounds).not.toBeNull();
+  expect(menuBounds!.x).toBeGreaterThanOrEqual(sidebarBounds!.x + sidebarBounds!.width);
+  expect(menuBounds!.y + menuBounds!.height).toBeLessThanOrEqual(page.viewportSize()!.height);
+  await expect(page.getByRole('menuitem', { name: 'Merge PDF' })).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(page.getByRole('menuitem', { name: 'Split PDF' })).toBeFocused();
+  await page.keyboard.press('Home');
+  await expect(page.getByRole('menuitem', { name: 'Merge PDF' })).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(menu).toBeHidden();
+  await expect(trigger).toBeFocused();
+
+  await trigger.click();
+  await expect(menu).toBeVisible();
+  await page.getByRole('heading', { name: 'PDF editor' }).click();
+  await expect(menu).toBeHidden();
+});
+
+for (const [utility, command] of [['Merge PDF', 'merge_pdfs'], ['Split PDF', 'split_pdf']] as const) {
+  test(`page actions open ${utility} with the current source and do not run it`, async ({ page }) => {
+    await openEditor(page);
+    await page.getByRole('button', { name: 'Page actions' }).click();
+    await page.getByRole('menuitem', { name: utility }).click();
+    await expect(page.getByRole('heading', { name: 'PDF conversion', exact: true })).toBeFocused();
+    await expect(page.getByRole('toolbar', { name: 'PDF conversion tools' }).getByRole('button', { name: utility, exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'scene-fixture.pdf', exact: true })).toBeVisible();
+    expect(await page.evaluate((command) => (window as any).calls.filter((call: any) => call.command === command).length, command)).toBe(0);
+    if (utility === 'Merge PDF') {
+      await page.evaluate(() => { (window as any).dialogNext = '/local/second-scene-fixture.pdf'; });
+      await page.getByRole('button', { name: 'Choose files to process' }).click();
+      await expect(page.getByRole('button', { name: 'second-scene-fixture.pdf', exact: true })).toBeVisible();
+    }
+    await page.getByRole('button', { name: `Export ${utility}`, exact: true }).click();
+    await expect.poll(() => page.evaluate((command) => (window as any).calls.filter((call: any) => call.command === command).at(-1)?.args.request.paths, command))
+      .toEqual(utility === 'Merge PDF' ? ['/local/scene-fixture.pdf', '/local/second-scene-fixture.pdf'] : ['/local/scene-fixture.pdf']);
+  });
+}
+
+test('PostHog flags select tools per OS in search and PDF page actions', async ({ page }, testInfo) => {
+  const platform = process.env.TOOLBOX_EXPECTED_PLATFORM;
+  test.skip(platform !== 'macos' && platform !== 'windows');
+  const targetPlatform = platform as 'macos' | 'windows';
+  const otherPlatform = targetPlatform === 'macos' ? 'windows' : 'macos';
+  const mergeEnabled = targetPlatform === 'windows';
+  const featureFlags: Record<string, boolean> = {};
+  for (const { id } of UtilityRegistry) {
+    const available = id !== 'pdf-to-text';
+    featureFlags[`tool-${id}-${targetPlatform}`] = available && (id !== 'pdf-merge' || mergeEnabled);
+    featureFlags[`tool-${id}-${otherPlatform}`] = available && (id !== 'pdf-merge' || !mergeEnabled);
+  }
+  const flagRequests: Array<{ url: string; body: Record<string, unknown> }> = [];
+  let failFlagRequests = false;
+  let failedFlagRequestCount = 0;
+  await page.route('**/capture/**', route => route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }));
+  await page.route('**/flags/**', async route => {
+    if (failFlagRequests) {
+      failedFlagRequestCount += 1;
+      await route.abort();
+      return;
+    }
+    flagRequests.push({ url: route.request().url(), body: route.request().postDataJSON() });
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ featureFlags, errorsWhileComputingFlags: false }) });
+  });
+
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: 'Tool library', exact: true })).toBeVisible();
+  const mergeTool = page.getByRole('button', { name: 'Open Merge PDF', exact: true });
+  if (mergeEnabled) await expect(mergeTool).toBeVisible();
+  else await expect(mergeTool).toHaveCount(0);
+
+  const search = page.getByRole('textbox', { name: 'Search tools' });
+  await search.fill('Merge PDF');
+  if (mergeEnabled) await expect(mergeTool).toBeVisible();
+  else await expect(mergeTool).toHaveCount(0);
+  await search.fill('PDF to Text');
+  const pdfToTextTool = page.getByRole('button', { name: 'Open PDF to Text', exact: true });
+  await expect(pdfToTextTool).toHaveCount(0);
+  await search.fill('');
+
+  await page.getByRole('button', { name: 'Open Edit PDF', exact: true }).click();
+  await page.getByRole('button', { name: 'Choose files to process' }).click();
+  await expect(page.getByRole('group', { name: 'PDF page canvas' })).toBeVisible();
+  const pageActions = page.getByRole('button', { name: 'Page actions' });
+  await expect(pageActions).toBeEnabled();
+  await pageActions.click();
+  const menu = page.getByRole('menu', { name: 'Page actions' });
+  await expect(menu).toBeVisible();
+  const mergeAction = menu.getByRole('menuitem', { name: 'Merge PDF', exact: true });
+  if (mergeEnabled) {
+    await expect(mergeAction).toBeVisible();
+    await mergeAction.click();
+    await expect(page.getByRole('heading', { name: 'PDF conversion', exact: true })).toBeFocused();
+    await expect(page.getByRole('toolbar', { name: 'PDF conversion tools' }).getByRole('button', { name: 'Merge PDF', exact: true })).toBeVisible();
+  } else {
+    await expect(mergeAction).toHaveCount(0);
+    await expect(menu.getByRole('menuitem', { name: 'Split PDF', exact: true })).toBeVisible();
+  }
+
+  await expect.poll(() => flagRequests.length).toBe(1);
+  expect(flagRequests[0].url).toBe('https://us.i.posthog.com/flags/?v=2');
+  expect(flagRequests[0].body).toMatchObject({ api_key: 'phc_toolbox_e2e_flags', geoip_disable: true });
+  expect(typeof flagRequests[0].body.distinct_id).toBe('string');
+  await page.screenshot({ path: testInfo.outputPath(`tool-flags-${targetPlatform}.png`), fullPage: true });
+
+  failFlagRequests = true;
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Tool library', exact: true })).toBeVisible();
+  if (mergeEnabled) await expect(mergeTool).toBeVisible();
+  else await expect(mergeTool).toHaveCount(0);
+  await search.fill('PDF to Text');
+  await expect(pdfToTextTool).toHaveCount(0);
+  expect(failedFlagRequestCount).toBe(1);
+});
+
+test('non-adjacent page selection rotates only the selected pages', async ({ page }) => {
+  await openEditor(page);
+  await page.getByRole('button', { name: 'Page 1', exact: true }).click();
+  await page.getByRole('button', { name: 'Page 3', exact: true }).click({ modifiers: ['ControlOrMeta'] });
+  await expect(page.getByRole('button', { name: 'Page 1', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: 'Page 2', exact: true })).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.getByRole('button', { name: 'Page 3', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await page.getByRole('button', { name: 'Rotate selected pages' }).click();
+  const result = await exported(page);
+  expect(result.pages.map((item: any) => item.rotation)).toEqual([90, 0, 90]);
+});
+
+test('inspector property edits stay in scene history and undo and redo exactly', async ({ page }) => {
+  await openEditor(page);
+  await draw(page, 'Shape', .3);
+  await page.getByRole('button', { name: 'Select', exact: true }).click();
+  await page.getByRole('button', { name: 'shape object 1', exact: true }).click();
+  const inspector = page.getByRole('complementary', { name: 'PDF editor inspector' });
+  const shape = inspector.getByRole('combobox', { name: 'Shape type' });
+  await shape.selectOption('triangle');
+  let result = await exported(page);
+  expect(result.pages[0].objects[0].shape).toBe('triangle');
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  result = await exported(page);
+  expect(result.pages[0].objects[0].shape).toBe('square');
+  await page.getByRole('button', { name: 'Redo', exact: true }).click();
+  result = await exported(page);
+  expect(result.pages[0].objects[0].shape).toBe('triangle');
+});
+
+test('page numbering adds editable number objects to every page', async ({ page }) => {
+  await openEditor(page);
+  await page.getByRole('button', { name: 'Page numbers', exact: true }).click();
+  const result = await exported(page);
+  expect(result.pages.map((item: any) => item.objects.map((object: any) => object.text))).toEqual([['1'], ['2'], ['3']]);
+  expect(result.pages.every((item: any) => item.objects[0].kind === 'text')).toBe(true);
+});
+
+test('PDF scene history retains exactly the latest 100 edits', async ({ page }) => {
+  await openEditor(page);
+  const addPage = page.getByRole('button', { name: 'Add blank page' });
+  for (let index = 0; index < 101; index += 1) await addPage.click();
+  await expect(page.getByRole('button', { name: 'Page 102, blank', exact: true })).toBeVisible();
+  const undo = page.getByRole('button', { name: 'Undo', exact: true });
+  for (let index = 0; index < 100; index += 1) await undo.click();
+  const result = await exported(page);
+  expect(result.pages).toHaveLength(4);
+});
+
+test('pointer-down does not request another preview before the scene changes', async ({ page }) => {
+  await openEditor(page);
+  const canvas = (await page.getByRole('group', { name: 'PDF page canvas' }).boundingBox())!;
+  const before = await page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'preview_pdf_scene_pages').length);
+  await page.getByRole('button', { name: 'Text', exact: true }).click();
+  await page.mouse.move(canvas.x + canvas.width * .2, canvas.y + canvas.height * .2);
+  await page.mouse.down();
+  await page.waitForTimeout(250);
+  expect(await page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'preview_pdf_scene_pages').length)).toBe(before);
+  expect(await page.locator('.scene-canvas image').count()).toBeGreaterThan(0);
+  await page.mouse.up();
+});
+
+test('scene lazily requests text for the current source page', async ({ page }) => {
+  await openEditor(page);
+  await expect.poll(() => page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'inspect_pdf_scene_page').map((call: any) => call.args.request.pageIndex))).toEqual([0]);
+  await page.getByRole('button', { name: 'Highlight', exact: true }).click();
+  await expect(page.locator('[data-text-run]')).toHaveCount(1);
+  await page.getByRole('button', { name: 'Page 2', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'inspect_pdf_scene_page').map((call: any) => call.args.request.pageIndex))).toEqual([0, 1]);
+});
+
+test('scene ignores stale page text responses after changing pages', async ({ page }) => {
+  await page.goto('/');
+  await page.evaluate(() => { (window as any).sceneTextDelays[0] = 300; });
+  await page.getByRole('button', { name: 'Open Edit PDF', exact: true }).click();
+  await page.getByRole('button', { name: 'Choose files to process' }).click();
+  await expect(page.getByRole('group', { name: 'PDF page canvas' })).toBeVisible();
+  await page.getByRole('button', { name: 'Page 2', exact: true }).click();
+  await page.getByRole('button', { name: 'Highlight', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'inspect_pdf_scene_page').map((call: any) => call.args.request.pageIndex))).toEqual([0, 1]);
+  await expect.poll(() => page.evaluate(() => (window as any).sceneTextResponses['/local/scene-fixture.pdf:0'])).toBe(1);
+  await expect.poll(() => page.locator('[data-text-run]').allTextContents()).toEqual(['/local/scene-fixture.pdf page 1 response 1']);
+  await page.getByRole('button', { name: 'Page 1', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'inspect_pdf_scene_page').map((call: any) => call.args.request.pageIndex))).toEqual([0, 1, 0]);
+  await expect.poll(() => page.locator('[data-text-run]').allTextContents()).toEqual(['/local/scene-fixture.pdf page 0 response 2']);
+});
+
+test('scene composes every mark kind, moves and resizes, then exports once', async ({ page }) => {
+  await openEditor(page);
+  for (const [i, name] of ['Text', 'Highlight', 'Shape', 'Signature'].entries()) await draw(page, name, .15 + i * .14);
+  await page.getByRole('button', { name: 'Watermark', exact: true }).click();
+  await page.getByRole('button', { name: 'Add fixed watermark', exact: true }).click();
+  await expect(page.locator('.scene-object-hit')).toHaveCount(5);
+  await page.getByRole('button', { name: 'Select', exact: true }).click();
+  const text = page.getByRole('button', { name: 'text object 1', exact: true });
+  await text.focus();
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Shift+ArrowRight');
+  await page.getByRole('button', { name: 'Resize text se', exact: true }).focus();
+  await page.keyboard.press('Shift+ArrowRight');
+  const result = await exported(page);
+  expect(result.pages[0].objects.map((o: any) => o.kind)).toEqual(['text', 'highlight', 'shape', 'signature', 'watermark']);
+  expect(result.pages[0].objects[0].rect.x).toBeCloseTo(612 * .2 + 10, 0);
+  expect(result.pages[0].objects[0].rect.width).toBeGreaterThan(612 * .35 + 8);
+  expect(result.pages[0].objects[3]).toMatchObject({ signatureMode: 'text', fontFamily: 'Satisfy' });
+  expect(await page.evaluate(() => (window as any).calls.filter((c: any) => c.command === 'export_pdf_scene').length)).toBe(1);
+});
+
+test('scene crop and thumbnail insert rotate reorder delete share undo redo reset', async ({ page }) => {
+  await openEditor(page);
+  await draw(page, 'Crop', .1, .1);
+  await page.getByRole('button', { name: 'Add blank page' }).click();
+  await expect(page.getByRole('button', { name: 'Page 2, blank', exact: true })).toHaveAttribute('aria-current', 'page');
+  await draw(page, 'Shape', .3);
+  await page.getByRole('button', { name: 'Rotate selected pages' }).click();
+  await page.getByRole('button', { name: 'Move page earlier' }).click();
+  let result = await exported(page);
+  expect(result.pages[0]).toMatchObject({ sourceIndex: null, rotation: 90 });
+  expect(result.pages[0].objects).toHaveLength(1);
+  expect(result.pages[1].crop).not.toBeNull();
+  await page.getByRole('button', { name: 'Delete selected pages' }).click();
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  result = await exported(page);
+  expect(result.pages).toHaveLength(4);
+  await page.getByRole('button', { name: 'Redo', exact: true }).click();
+  result = await exported(page);
+  expect(result.pages).toHaveLength(3);
+  await page.getByRole('button', { name: 'Reset edits' }).click();
+  result = await exported(page);
+  expect(result.pages.map((p: any) => p.sourceIndex)).toEqual([0, 1, 2]);
+  expect(result.pages.every((p: any) => p.crop === null && !p.objects.length && !p.rotation)).toBe(true);
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  expect(await page.getByRole('button', { name: 'Reset edits' }).isEnabled()).toBe(true);
+});
+
+test('scene drag reorders selected thumbnails together and protects the last page', async ({ page }) => {
+  await openEditor(page);
+  await page.getByRole('button', { name: 'Page 2', exact: true }).click({ modifiers: ['Shift'] });
+  await page.getByRole('button', { name: 'Page 3', exact: true }).dragTo(page.getByRole('button', { name: 'Page 1', exact: true }));
+  const result = await exported(page);
+  expect(result.pages.map((p: any) => p.sourceIndex)).toEqual([2, 0, 1]);
+  await page.getByRole('button', { name: 'Page 1', exact: true }).click();
+  await page.getByRole('button', { name: 'Page 3', exact: true }).click({ modifiers: ['Shift'] });
+  await expect(page.getByRole('button', { name: 'Delete selected pages' })).toBeDisabled();
+});
+
+test('scene rejects stale and failed previews without exposing an unverified export', async ({ page }) => {
+  await openEditor(page);
+  await expect.poll(() => page.locator('.scene-canvas image').evaluateAll((images) => images.map((image) => image.getAttribute('href')))).toContain(svg);
+  await page.evaluate(() => { (window as any).previewDelay = 350; });
+  await draw(page, 'Text', .2);
+  await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeDisabled();
+  await expect.poll(() => page.locator('.scene-canvas image').evaluateAll((images) => images.map((image) => image.getAttribute('href')))).toContain(svg);
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await expect(page.locator('.scene-object-hit')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeEnabled();
+  await page.evaluate(() => { (window as any).previewFailure = true; });
+  await draw(page, 'Shape', .4);
+  await expect.poll(() => page.locator('.scene-canvas image').evaluateAll((images) => images.map((image) => image.getAttribute('href')))).toContain(svg);
+  await expect(page.getByRole('alert')).toContainText('Renderer unavailable');
+  await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeDisabled();
+});
+
+test('scene explains unsafe PDF preview failures without exposing native wrappers', async ({ page }) => {
+  await openEditor(page);
+  await page.evaluate(() => {
+    (window as any).previewFailure = true;
+    (window as any).previewFailureMessage = 'Error: This tagged PDF contains structure mappings that cannot be remapped by scene edits; scene export was rejected before output';
+  });
+  await draw(page, 'Shape', .4);
+  await expect(page.getByRole('alert')).toHaveText('This tagged PDF uses accessibility structure that cannot be preserved after this edit. Undo the page edit or use a copy without tagged structure. Export is disabled until the preview can be verified.');
+});
+
+for (const theme of ['light', 'dark']) test(`scene preview and inline tools remain above the fold in ${theme}`, async ({ page }, testInfo) => {
+  await page.addInitScript(theme => localStorage.setItem('toolbox-theme', theme), theme);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const remote: string[] = [];
+  page.on('request', request => { if (!/^(http:\/\/(127\.0\.0\.1|localhost)|data:)/.test(request.url())) remote.push(request.url()); });
+  await openEditor(page);
+  const canvas = (await page.getByRole('group', { name: 'PDF page canvas' }).boundingBox())!;
+  await page.screenshot({ path: testInfo.outputPath(`scene-${theme}.png`) });
+  expect(canvas.y).toBeLessThan(230);
+  expect(canvas.height).toBeGreaterThan(440);
+  expect(canvas.y + canvas.height).toBeLessThan(800);
+  const toolbar = (await page.getByRole('toolbar', { name: 'PDF editor tools' }).boundingBox())!;
+  expect(toolbar.y + toolbar.height).toBeLessThan(canvas.y);
+  expect(remote).toEqual([]);
+  await page.screenshot({ path: testInfo.outputPath(`scene-${theme}.png`) });
+});
+
+test('Escape cancels a canvas gesture before pointer release', async ({ page }) => {
+  await openEditor(page);
+  await page.getByRole('button', { name: 'Text', exact: true }).click();
+  const canvas = (await page.getByRole('group', { name: 'PDF page canvas' }).boundingBox())!;
+  await page.mouse.move(canvas.x + canvas.width * .2, canvas.y + canvas.height * .2);
+  await page.mouse.down();
+  await page.mouse.move(canvas.x + canvas.width * .5, canvas.y + canvas.height * .25, { steps: 4 });
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+
+  await expect(page.getByRole('group', { name: 'PDF page canvas' })).toBeVisible();
+  await expect(page.locator('.scene-object-hit')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeDisabled();
+});
+
+test('Escape releases pointer capture while cancelling object movement', async ({ page }, testInfo) => {
+  await openEditor(page);
+  await draw(page, 'Text', .2);
+  await page.getByRole('button', { name: 'Select', exact: true }).click();
+
+  const object = page.getByRole('button', { name: 'text object 1', exact: true });
+  const originalX = await object.getAttribute('x');
+  const originalY = await object.getAttribute('y');
+  const bounds = (await object.boundingBox())!;
+  await page.evaluate(() => window.addEventListener('pointerdown', event => {
+    (window as any).__scenePointerId = event.pointerId;
+  }, { once: true }));
+  await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(bounds.x + bounds.width / 2 + 40, bounds.y + bounds.height / 2 + 20);
+  await page.keyboard.press('Escape');
+
+  await expect(page.getByRole('group', { name: 'PDF page canvas' })).toBeVisible();
+  const hasPointerCapture = await page.evaluate(() => {
+    const pointerId = (window as any).__scenePointerId;
+    return (document.querySelector('.scene-canvas-page') as SVGSVGElement).hasPointerCapture(pointerId);
+  });
+  expect(hasPointerCapture).toBe(false);
+  await page.mouse.up();
+  await expect(object).toHaveAttribute('x', originalX!);
+  await expect(object).toHaveAttribute('y', originalY!);
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await expect(page.locator('.scene-object-hit')).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath('escape-releases-pointer-capture.png') });
+});
+
+test('Escape discards inline text edits without changing the committed scene', async ({ page }) => {
+  await openEditor(page);
+  await draw(page, 'Text', .2);
+  await page.getByRole('button', { name: 'Select', exact: true }).click();
+  await page.getByRole('button', { name: 'text object 1', exact: true }).dblclick();
+
+  const editor = page.getByRole('textbox', { name: 'Edit text object' });
+  const originalText = await editor.inputValue();
+  await editor.fill('Discard this draft');
+  await editor.press('Escape');
+  await expect(editor).toHaveCount(0);
+
+  const scene = await exported(page);
+  expect(scene.pages[0].objects[0].text).toBe(originalText);
+});
+
+test('one signature drag stays in one undo step', async ({ page }) => {
+  await openEditor(page);
+  await draw(page, 'Signature', .2);
+  await expect(page.locator('.scene-object-hit')).toHaveCount(1);
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await expect(page.locator('.scene-object-hit')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Redo', exact: true })).toBeEnabled();
+});

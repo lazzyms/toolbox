@@ -1,0 +1,29 @@
+.scene-canvas { width: 100%; height: 100%; min-height: 160px; min-width: 0; overflow: auto; display: flex; align-items: safe center; justify-content: safe center; background: var(--pdf-scene-canvas); }
+:root {
+  --pdf-scene-canvas: oklch(0.269 0 0);
+  --pdf-document-page: oklch(1 0 0);
+  --pdf-document-text: oklch(0.22 0 0);
+  --pdf-document-highlight: oklch(0.9 0.14 95);
+  --pdf-scene-placeholder: oklch(0.205 0 0);
+  --pdf-scene-overlay: color-mix(in oklch, var(--primary) 12%, transparent);
+  --pdf-scene-selection: var(--primary);
+}
+body[data-theme="light"] {
+  --pdf-scene-canvas: oklch(0.94 0 0);
+}
+@font-face { font-family: "Toolbox Satisfy"; src: url("/fonts/Satisfy-Regular.ttf") format("truetype"); font-display: swap; }
+@font-face { font-family: "Toolbox Pacifico"; src: url("/fonts/Pacifico-Regular.ttf") format("truetype"); font-display: swap; }
+.scene-canvas-page { flex: none; overflow: hidden; touch-action: none; user-select: none; filter: drop-shadow(0 1px 4px rgb(0 0 0 / 14%)); }
+.scene-tool-select { cursor: default; }
+.scene-tool-text, .scene-tool-highlight, .scene-tool-shape, .scene-tool-signature, .scene-tool-crop { cursor: crosshair; }
+.scene-tool-watermark { cursor: default; }
+.scene-object-hit { fill: transparent; stroke: none; cursor: move; pointer-events: all; }
+.scene-object-watermark { cursor: default; }
+.scene-object-hit:focus-visible { outline: none; stroke: var(--pdf-scene-selection); stroke-width: 2px; vector-effect: non-scaling-stroke; }
+.scene-resize-handle { fill: var(--pdf-document-page); stroke: var(--pdf-scene-selection); cursor: nwse-resize; }
+.scene-resize-handle[data-corner="ne"], .scene-resize-handle[data-corner="sw"] { cursor: nesw-resize; }
+.scene-resize-handle:focus-visible { fill: var(--ring); outline: none; }
+.scene-crop-outline { fill: var(--pdf-scene-overlay); stroke: var(--pdf-scene-selection); stroke-dasharray: 6 4; }
+.scene-text-layer { user-select: text; pointer-events: all; }
+.scene-text-run { user-select: text; cursor: text; }
+.scene-inline-text-editor { overflow: visible; pointer-events: all; }

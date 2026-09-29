@@ -5,9 +5,19 @@ import { runInNewContext } from 'node:vm';
 
 const docs = new URL('./', import.meta.url);
 const registrySource = readFileSync(new URL('../ToolboxTauri/src/registry/index.ts', docs), 'utf8');
-const registryLiteral = registrySource.match(/export const UtilityRegistry[^=]*=\s*(\[[\s\S]*?\n\]);/);
-assert(registryLiteral, 'Registry must expose a literal UtilityRegistry array');
-const registry = JSON.parse(JSON.stringify(runInNewContext(registryLiteral[1], {}, { timeout: 1000 })));
+const metadataLiteral = registrySource.match(/const UtilityMetadata[^=]*=\s*(\[[\s\S]*?\n\]);/);
+assert(metadataLiteral, 'Registry must expose a literal UtilityMetadata array');
+const metadata = JSON.parse(JSON.stringify(runInNewContext(metadataLiteral[1], {}, { timeout: 1000 })));
+const capabilities = JSON.parse(readFileSync(new URL('../ToolboxTauri/shared/tool-capabilities.json', docs), 'utf8'));
+const capabilitiesByCommand = new Map(capabilities.map(capability => [capability.command, capability]));
+const registry = metadata.map(tool => {
+  const capability = capabilitiesByCommand.get(tool.command);
+  assert(capability, `Registry command ${tool.command} must have a shared capability`);
+  return {
+    ...tool,
+    status: capability.nativeAvailability === 'unavailable' ? 'unavailable' : 'implemented',
+  };
+});
 const fields = ['id', 'category', 'status', 'command', 'verification'];
 const matrixRows = readFileSync(new URL('tauri-tool-matrix.md', docs), 'utf8')
   .split('\n').filter(line => line.startsWith('|')).map(line => line.split('|').slice(1, -1).map(cell => cell.trim()));
@@ -15,7 +25,7 @@ const matrixStart = matrixRows.findIndex(row => row.join('|') === 'ID|Category|S
 assert(matrixStart >= 0, 'Matrix must include the registry table');
 const matrix = matrixRows.slice(matrixStart);
 const comparisons = [
-  [registry.length, 32, 'Registry tool count'],
+  [registry.length, 33, 'Registry tool count'],
   [new Set(registry.map(tool => tool.id)).size, registry.length, 'Unique registry IDs'],
   [matrix[0], ['ID', 'Category', 'Status', 'Command', 'Verification'], 'Matrix columns'],
   [matrix[1], ['---', '---', '---', '---', '---'], 'Matrix separator'],
@@ -33,7 +43,7 @@ const release = {
 };
 const pageMetadata = [
   ['index.html', 'Toolbox | Local file utilities for macOS and Windows', 'Local PDF, Office, and image utilities for macOS and Windows. Remove passwords, edit PDFs, and convert, compress, or resize images without uploading files.', 'https://lazzyms.github.io/toolbox/'],
-  ['pdf.html', 'PDF and document tools | Toolbox', '18 local PDF and document utilities for macOS and Windows. Remove passwords, edit, merge, split, sign, protect, and organize files.', 'https://lazzyms.github.io/toolbox/pdf.html'],
+  ['pdf.html', 'PDF and document tools | Toolbox', '19 local PDF and document utilities for macOS and Windows. Edit, merge, split, sign, and organize PDFs. Protect PDFs and DOCX or XLSX files, and remove passwords from supported files.', 'https://lazzyms.github.io/toolbox/pdf.html'],
   ['images.html', 'Image tools | Toolbox', '14 local image utilities for macOS and Windows. Convert, compress, resize, crop, watermark, and inspect images in batches.', 'https://lazzyms.github.io/toolbox/images.html'],
   ['privacy.html', 'Privacy Policy | Toolbox', 'Toolbox privacy policy: files stay on your device, with limited anonymous install and app-open analytics in release builds.', 'https://lazzyms.github.io/toolbox/privacy.html'],
   ['terms.html', 'Terms of Use | Toolbox', 'Terms of use for the Toolbox website and desktop application. Toolbox is free software released under the MIT License.', 'https://lazzyms.github.io/toolbox/terms.html'],

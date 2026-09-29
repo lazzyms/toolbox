@@ -1,12 +1,5 @@
 name: Tauri Build
 
-# Branch build for the Tauri port (issue #95, distribution setup). Every push to
-# `main` (or a `ci/**` rehearsal branch) verifies the Rust kit with the test
-# suite and produces unsigned installers for both platforms as runnable artifacts.
-# Nothing is signed, tagged, or released here: public releases are handled by the
-# Tauri release workflow after the required signing credentials are configured.
-# Updater artifacts are disabled for this unsigned verification build so Tauri
-# does not require the release workflow's private signing key.
 on:
   push:
     branches:
@@ -30,11 +23,15 @@ jobs:
         include:
           - os: macos-26
             name: macOS
+            platform: macos
           - os: windows-latest
             name: Windows
+            platform: windows
     runs-on: ${{ matrix.os }}
     env:
       TOOLBOX_REQUIRE_QPDF: '1'
+      VITE_POSTHOG_KEY: ${{ secrets.POSTHOG_PROJECT_KEY }}
+      VITE_TOOLBOX_TARGET_PLATFORM: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v7
 
@@ -69,6 +66,11 @@ jobs:
 
       - name: Run UI automation
         run: npm run test:ui
+        working-directory: ToolboxTauri
+
+      - name: Run production tool-flag E2E
+        if: matrix.platform == 'macos'
+        run: npm run test:ui:flags
         working-directory: ToolboxTauri
 
       - name: Run analytics tests
@@ -109,6 +111,9 @@ jobs:
           $pdftoppm = Get-ChildItem $popplerExtract -Recurse -Filter pdftoppm.exe |
             Select-Object -First 1
           if (-not $pdftoppm) { throw 'Could not locate pdftoppm.exe in the Poppler archive' }
+          $pdftotext = Get-ChildItem $popplerExtract -Recurse -Filter pdftotext.exe |
+            Select-Object -First 1
+          if (-not $pdftotext) { throw 'Could not locate pdftotext.exe in the Poppler archive' }
           $env:PATH = "$($pdftoppm.DirectoryName);$env:PATH"
           $pdftoppm.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           New-Item -ItemType Directory -Force -Path src-tauri\resources | Out-Null
@@ -123,9 +128,19 @@ jobs:
           Copy-Item $pdftoppm.FullName src-tauri\resources\pdftoppm.exe -Force
           Get-ChildItem $pdftoppm.DirectoryName -Filter *.dll |
             Copy-Item -Destination src-tauri\resources -Force
+          Write-Host "Staging $($pdftotext.FullName)"
+          Copy-Item $pdftotext.FullName src-tauri\resources\pdftotext.exe -Force
           & src-tauri\resources\qpdf.exe --version
           '{"bundle": {"createUpdaterArtifacts": false, "resources": ["resources/*"]}}' |
             Out-File -Encoding ascii resources-qpdf.json
+
+      - name: Run kit tests
+        run: cargo test -- --test-threads=1
+        working-directory: ToolboxTauri/src-tauri
+
+      - name: Run native E2E matrix
+        run: npm run test:native:e2e
+        working-directory: ToolboxTauri
 
       - name: Stage offline vision adapter
         run: npm run stage:vision
@@ -133,14 +148,6 @@ jobs:
 
       - name: Stage offline OCR resources
         run: npm run stage:ocr
-        working-directory: ToolboxTauri
-
-      - name: Run kit tests
-        run: cargo test
-        working-directory: ToolboxTauri/src-tauri
-
-      - name: Run native E2E matrix
-        run: npm run test:native:e2e
         working-directory: ToolboxTauri
 
       - name: Verify the tool matrix
@@ -207,12 +214,135 @@ jobs:
             Select-Object -First 1
           if (-not $pdftoppm) { throw 'pdftoppm.exe was not included in the Windows release tree' }
           & $pdftoppm.FullName -h | Out-Null
+          $pdftotext = Get-ChildItem src-tauri\target\release -Recurse -Filter pdftotext.exe |
+            Select-Object -First 1
+          if (-not $pdftotext) { throw 'pdftotext.exe was not included in the Windows release tree' }
+          & $pdftotext.FullName -h | Out-Null
           if (-not (Get-ChildItem src-tauri\target\release\bundle\nsis -Filter *.exe)) {
             throw 'NSIS installer was not produced'
           }
           if (-not (Get-ChildItem src-tauri\target\release\bundle\msi -Filter *.msi)) {
             throw 'MSI installer was not produced'
           }
+
+      - name: Prepare native desktop smoke evidence
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $evidenceDirectory = Join-Path $env:RUNNER_TEMP 'toolbox-desktop-smoke'
+          New-Item -Path $evidenceDirectory -ItemType Directory -Force | Out-Null
+          $reportPath = Join-Path $evidenceDirectory 'desktop-smoke-report.json'
+          $report = [ordered]@{
+            schemaVersion = 1
+            platform = 'windows'
+            executable = 'ToolboxTauri/src-tauri/target/debug/toolbox.exe'
+            startedAt = [DateTime]::UtcNow.ToString('o')
+            status = 'setup_pending'
+            workspaces = @()
+            setupError = $null
+          }
+          $report | ConvertTo-Json -Depth 5 | Set-Content -Path $reportPath -Encoding utf8
+
+      - name: Build Windows WebDriver executable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: ToolboxTauri
+        run: |
+          $reportPath = Join-Path (Join-Path $env:RUNNER_TEMP 'toolbox-desktop-smoke') 'desktop-smoke-report.json'
+          try {
+            npm run tauri build -- --debug --no-bundle
+            if ($LASTEXITCODE -ne 0) { throw "Debug app build failed with exit code $LASTEXITCODE" }
+          } catch {
+            $report = Get-Content -Raw -Path $reportPath | ConvertFrom-Json -AsHashtable
+            $report.status = 'failed'
+            $report.setupError = "Debug app build failed: $($_.Exception.Message)"
+            $report.finishedAt = [DateTime]::UtcNow.ToString('o')
+            $report | ConvertTo-Json -Depth 5 | Set-Content -Path $reportPath -Encoding utf8
+            throw
+          }
+
+      - name: Install Windows WebDriver
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $reportPath = Join-Path (Join-Path $env:RUNNER_TEMP 'toolbox-desktop-smoke') 'desktop-smoke-report.json'
+          try {
+            cargo install tauri-driver --locked
+            if ($LASTEXITCODE -ne 0) { throw "cargo install tauri-driver failed with exit code $LASTEXITCODE" }
+
+            cargo install --git https://github.com/chippers/msedgedriver-tool
+            if ($LASTEXITCODE -ne 0) { throw "cargo install msedgedriver-tool failed with exit code $LASTEXITCODE" }
+
+            & "$HOME/.cargo/bin/msedgedriver-tool.exe"
+            if ($LASTEXITCODE -ne 0) { throw "msedgedriver-tool failed with exit code $LASTEXITCODE" }
+            $PWD.Path | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          } catch {
+            $report = Get-Content -Raw -Path $reportPath | ConvertFrom-Json -AsHashtable
+            $report.status = 'failed'
+            $report.setupError = $_.Exception.Message
+            $report.finishedAt = [DateTime]::UtcNow.ToString('o')
+            $report | ConvertTo-Json -Depth 5 | Set-Content -Path $reportPath -Encoding utf8
+            throw
+          }
+
+      - name: Run native Windows desktop smoke
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $policyPath = 'HKLM:\Software\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments'
+          $appName = 'toolbox.exe'
+          $policyExisted = Test-Path $policyPath
+          $previousArguments = $null
+          $hadPreviousArguments = $false
+          if ($policyExisted) {
+            $existingPolicy = Get-ItemProperty -Path $policyPath
+            $hadPreviousArguments = $existingPolicy.PSObject.Properties.Name -contains $appName
+            if ($hadPreviousArguments) {
+              $previousArguments = $existingPolicy.$appName
+            }
+          }
+
+          $smokeExitCode = 1
+          try {
+            New-Item -Path $policyPath -Force | Out-Null
+            New-ItemProperty -Path $policyPath -Name $appName -Value '--remote-debugging-port=0' -PropertyType String -Force | Out-Null
+            npm run test:desktop:smoke
+            $smokeExitCode = $LASTEXITCODE
+          } finally {
+            if ($hadPreviousArguments) {
+              New-ItemProperty -Path $policyPath -Name $appName -Value $previousArguments -PropertyType String -Force | Out-Null
+            } else {
+              Remove-ItemProperty -Path $policyPath -Name $appName -ErrorAction SilentlyContinue
+            }
+            if (-not $policyExisted) {
+              Remove-Item -Path $policyPath -ErrorAction SilentlyContinue
+            }
+          }
+          exit $smokeExitCode
+        working-directory: ToolboxTauri
+
+      - name: Inspect WebView2 debugging port
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dataDirectory = Join-Path $env:RUNNER_TEMP 'toolbox-webview2-user-data'
+          $portFiles = Get-ChildItem -Path $dataDirectory -Filter DevToolsActivePort -File -Recurse -ErrorAction SilentlyContinue
+          if (-not $portFiles) {
+            Write-Host "No DevToolsActivePort found under $dataDirectory"
+          } else {
+            foreach ($portFile in $portFiles) {
+              Write-Host "Found DevToolsActivePort at $($portFile.FullName)"
+              Get-Content -Raw -Path $portFile.FullName
+            }
+          }
+
+      - name: Upload native desktop smoke evidence
+        if: always() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v7
+        with:
+          name: toolbox-windows-desktop-smoke
+          path: ${{ runner.temp }}/toolbox-desktop-smoke/
+          if-no-files-found: warn
 
       - name: Upload installers
         uses: actions/upload-artifact@v7

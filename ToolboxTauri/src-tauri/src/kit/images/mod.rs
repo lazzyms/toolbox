@@ -19,7 +19,7 @@ pub enum OutputFormat {
 }
 
 impl OutputFormat {
-    fn extension(self) -> &'static str {
+    pub(crate) fn extension(self) -> &'static str {
         match self {
             OutputFormat::Jpeg => "jpg",
             OutputFormat::Png => "png",
@@ -45,7 +45,7 @@ fn lower_ext(path: &std::path::Path) -> Option<String> {
         .map(|s| s.to_ascii_lowercase())
 }
 
-fn detect_format(path: &std::path::Path) -> OutputFormat {
+pub(crate) fn detect_format(path: &std::path::Path) -> OutputFormat {
     match lower_ext(path).as_deref() {
         Some("jpg" | "jpeg") => OutputFormat::Jpeg,
         Some("webp") => OutputFormat::WebP,
@@ -60,7 +60,7 @@ fn detect_format(path: &std::path::Path) -> OutputFormat {
 // HEIC has no decoder in the image crate, so fall back to heif-rs when the
 // extension says HEIF but image::open refused it. Everything else errors
 // normally so a genuinely corrupt file is surfaced as such.
-fn load_image(path: &std::path::Path) -> Result<image::DynamicImage, String> {
+pub(crate) fn load_image(path: &std::path::Path) -> Result<image::DynamicImage, String> {
     match image::open(path) {
         Ok(img) => Ok(img),
         Err(first) => {
@@ -77,7 +77,7 @@ fn load_image(path: &std::path::Path) -> Result<image::DynamicImage, String> {
 // Encoders write to a buffer first: WebP and HEIC only expose buffer encoders
 // anyway, and buffering lets the no-inflation guard compare sizes before
 // touching the destination (JPEG/PNG write through the same path).
-fn encode(img: &image::DynamicImage, format: OutputFormat, quality: u8) -> Result<Vec<u8>, String> {
+pub(crate) fn encode(img: &image::DynamicImage, format: OutputFormat, quality: u8) -> Result<Vec<u8>, String> {
     match format {
         OutputFormat::Jpeg => {
             let rgb = img.to_rgb8();
@@ -132,9 +132,15 @@ impl ImageProcessor {
 
         if options.quality == 0 && options.target_format.is_none() {
             let extension = input_path.extension().and_then(|e| e.to_str()).unwrap_or("bin");
-            let output_path = OutputNaming::get_destination(&input_path, &options.output_location, &options.suffix, extension);
-            return match std::fs::copy(&input_path, &output_path) {
-                Ok(_) => JobOutcome { input_path, output_paths: vec![output_path], detail: "Kept original bytes (lossless mode)".to_string(), failure: None },
+            let output_path = match OutputNaming::reserve_destination(&input_path, &options.output_location, &options.suffix, extension) {
+                Ok(output) => output,
+                Err(error) => return JobOutcome::failure(input_path, ToolError::processing(format!("Could not reserve output: {error}"))),
+            };
+            return match std::fs::copy(&input_path, output_path.path()) {
+                Ok(_) => match output_path.publish() {
+                    Ok(path) => JobOutcome { input_path, output_paths: vec![path], detail: "Kept original bytes (lossless mode)".to_string(), failure: None },
+                    Err(error) => JobOutcome::failure(input_path, ToolError::processing(format!("Could not publish output: {error}"))),
+                },
                 Err(error) => JobOutcome { input_path, output_paths: vec![], detail: String::new(), failure: Some(ToolError::processing(format!("Lossless copy failed: {error}"))) },
             };
         }
@@ -162,12 +168,15 @@ impl ImageProcessor {
             .unwrap_or_else(|| detect_format(&input_path));
         let extension = format.extension();
 
-        let output_path = OutputNaming::get_destination(
+        let output_path = match OutputNaming::reserve_destination(
             &input_path,
             &options.output_location,
             &options.suffix,
             extension,
-        );
+        ) {
+            Ok(output) => output,
+            Err(error) => return JobOutcome::failure(input_path, ToolError::processing(format!("Could not reserve output: {error}"))),
+        };
 
         let quality = options.quality.clamp(1, 100);
         let bytes = match encode(&img, format, quality) {
@@ -182,7 +191,7 @@ impl ImageProcessor {
             }
         };
 
-        if let Err(e) = std::fs::write(&output_path, bytes) {
+        if let Err(e) = std::fs::write(output_path.path(), bytes) {
             return JobOutcome {
                 input_path,
                 output_paths: vec![],
@@ -191,22 +200,24 @@ impl ImageProcessor {
             };
         }
 
-        if let Err(error) = validate_encoded_output(&output_path, img.width(), img.height(), format) {
-            let _ = std::fs::remove_file(&output_path);
+        if let Err(error) = validate_encoded_output(output_path.path(), img.width(), img.height(), format) {
             return JobOutcome { input_path, output_paths: vec![], detail: String::new(), failure: Some(ToolError::processing(error)) };
         }
 
-        let new_bytes = std::fs::metadata(&output_path).map(|m| m.len()).unwrap_or(0);
+        let new_bytes = std::fs::metadata(output_path.path()).map(|m| m.len()).unwrap_or(0);
 
         if options.keep_smaller_original && new_bytes >= original_bytes {
-            let _ = std::fs::remove_file(&output_path);
-            let fallback_path = OutputNaming::get_destination(
+            drop(output_path);
+            let fallback_path = match OutputNaming::reserve_destination(
                 &input_path,
                 &options.output_location,
                 &options.suffix,
                 input_path.extension().and_then(|e| e.to_str()).unwrap_or("bin"),
-            );
-            if let Err(e) = std::fs::copy(&input_path, &fallback_path) {
+            ) {
+                Ok(output) => output,
+                Err(error) => return JobOutcome::failure(input_path, ToolError::processing(format!("Could not reserve fallback output: {error}"))),
+            };
+            if let Err(e) = std::fs::copy(&input_path, fallback_path.path()) {
                 return JobOutcome {
                     input_path,
                     output_paths: vec![],
@@ -214,19 +225,25 @@ impl ImageProcessor {
                     failure: Some(ToolError::processing(format!("Fallback copy failed: {}", e))),
                 };
             }
-            return JobOutcome {
-                input_path,
-                output_paths: vec![fallback_path],
-                detail: "Kept original (compressed version was larger)".to_string(),
-                failure: None,
+            return match fallback_path.publish() {
+                Ok(path) => JobOutcome {
+                    input_path,
+                    output_paths: vec![path],
+                    detail: "Kept original (compressed version was larger)".to_string(),
+                    failure: None,
+                },
+                Err(error) => JobOutcome::failure(input_path, ToolError::processing(format!("Could not publish fallback output: {error}"))),
             };
         }
 
-        JobOutcome {
-            input_path,
-            output_paths: vec![output_path],
-            detail: format!("Saved as {}", extension),
-            failure: None,
+        match output_path.publish() {
+            Ok(path) => JobOutcome {
+                input_path,
+                output_paths: vec![path],
+                detail: format!("Saved as {}", extension),
+                failure: None,
+            },
+            Err(error) => JobOutcome::failure(input_path, ToolError::processing(format!("Could not publish output: {error}"))),
         }
     }
 }

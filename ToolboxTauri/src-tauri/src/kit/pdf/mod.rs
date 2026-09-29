@@ -1,16 +1,612 @@
 pub mod metadata;
+pub mod scene;
 pub mod editor;
 pub mod remaining;
 
-use std::path::PathBuf;
-use std::process::Command;
+use std::collections::HashSet;
+use std::fs;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::thread;
+use std::time::{Duration, Instant};
 
-use lopdf::{Document, LoadOptions};
+use lopdf::{Document, LoadOptions, Object, ObjectId};
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::ToolError;
 
 pub struct PDFProcessor;
+
+pub(crate) const PDF_MAX_PAGE_POINTS: f32 = 14_400.0;
+pub(crate) const PDF_PREVIEW_MAX_DIMENSION: u32 = 1_600;
+pub(crate) const PDF_PREVIEW_MAX_PIXELS: u64 = 2_560_000;
+pub(crate) const PDF_PREVIEW_MAX_BYTES: u64 = 20 * 1024 * 1024;
+pub(crate) const PDF_PREVIEW_TIMEOUT: Duration = Duration::from_secs(15);
+pub(crate) const PDF_HELPER_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+pub(crate) const PDF_TEXT_MAX_OUTPUT_BYTES: usize = 10 * 1024 * 1024;
+pub(crate) const PDF_TEXT_MAX_ERROR_BYTES: usize = 1024 * 1024;
+pub(crate) const PDF_TEXT_TIMEOUT: Duration = Duration::from_secs(15);
+
+fn read_helper_output<R: Read>(mut reader: R, stream: &'static str, maximum: usize) -> Result<Vec<u8>, String> {
+    let mut output = Vec::new();
+    let mut buffer = [0_u8; 8192];
+    loop {
+        let count = reader.read(&mut buffer).map_err(|error| format!("Could not read PDF helper {stream}: {error}"))?;
+        if count == 0 {
+            return Ok(output);
+        }
+        if output.len().saturating_add(count) > maximum {
+            return Err(format!("PDF helper {stream} output exceeds its limit."));
+        }
+        output.extend_from_slice(&buffer[..count]);
+    }
+}
+
+fn spawn_helper_reader<R: Read + Send + 'static>(reader: R, stream: &'static str, maximum: usize) -> Receiver<Result<Vec<u8>, String>> {
+    let (sender, receiver) = mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let _ = sender.send(read_helper_output(reader, stream, maximum));
+    });
+    receiver
+}
+
+fn poll_helper_reader(receiver: &Receiver<Result<Vec<u8>, String>>, stream: &'static str) -> Result<Option<Result<Vec<u8>, String>>, String> {
+    match receiver.try_recv() {
+        Ok(result) => Ok(Some(result)),
+        Err(TryRecvError::Empty) => Ok(None),
+        Err(TryRecvError::Disconnected) => Err(format!("PDF helper {stream} reader stopped unexpectedly.")),
+    }
+}
+
+pub(crate) fn run_bounded_helper(mut command: Command, deadline: Instant, max_stdout: usize, max_stderr: usize, timeout_message: &str) -> Result<std::process::Output, String> {
+    if Instant::now() >= deadline {
+        return Err(timeout_message.to_string());
+    }
+    let mut child = command.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|error| format!("Could not run PDF helper: {error}"))?;
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("PDF helper stdout was not captured.".to_string());
+        }
+    };
+    let stderr = match child.stderr.take() {
+        Some(stderr) => stderr,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("PDF helper stderr was not captured.".to_string());
+        }
+    };
+    let stdout_reader = spawn_helper_reader(stdout, "stdout", max_stdout);
+    let stderr_reader = spawn_helper_reader(stderr, "stderr", max_stderr);
+    let mut status = None;
+    let mut stdout_result = None;
+    let mut stderr_result = None;
+    let mut timed_out = false;
+
+    loop {
+        if stdout_result.is_none() {
+            stdout_result = poll_helper_reader(&stdout_reader, "stdout")?;
+        }
+        if stderr_result.is_none() {
+            stderr_result = poll_helper_reader(&stderr_reader, "stderr")?;
+        }
+        if stdout_result.as_ref().is_some_and(Result::is_err) || stderr_result.as_ref().is_some_and(Result::is_err) {
+            if status.is_none() {
+                let _ = child.kill();
+                status = Some(child.wait().map_err(|error| format!("Could not stop PDF helper: {error}"))?);
+            }
+        } else if status.is_none() {
+            status = child.try_wait().map_err(|error| {
+                let _ = child.kill();
+                let _ = child.wait();
+                format!("Could not read PDF helper status: {error}")
+            })?;
+        }
+
+        if status.is_some() && stdout_result.is_some() && stderr_result.is_some() {
+            break;
+        }
+        if Instant::now() >= deadline {
+            timed_out = true;
+            let _ = child.kill();
+            let _ = child.wait();
+            break;
+        }
+        thread::sleep(Duration::from_millis(10).min(deadline.saturating_duration_since(Instant::now())));
+    }
+
+    if timed_out {
+        return Err(timeout_message.to_string());
+    }
+    let status = status.ok_or("PDF helper did not report a status.")?;
+    let stdout = stdout_result.ok_or("PDF helper stdout was not read.")??;
+    let stderr = stderr_result.ok_or("PDF helper stderr was not read.")??;
+    Ok(std::process::Output { status, stdout, stderr })
+}
+
+pub(crate) fn helper_available(command: Command) -> bool {
+    run_bounded_helper(
+        command,
+        Instant::now() + PDF_HELPER_PROBE_TIMEOUT,
+        64 * 1024,
+        PDF_TEXT_MAX_ERROR_BYTES,
+        "PDF helper probe timed out.",
+    )
+    .map(|output| output.status.success())
+    .unwrap_or(false)
+}
+
+pub(crate) fn preview_png_dimensions(bytes: &[u8]) -> Result<(u32, u32), String> {
+    if bytes.len() < 24 || &bytes[..8] != b"\x89PNG\r\n\x1a\n" || &bytes[12..16] != b"IHDR" {
+        return Err("PDF helper did not produce a PNG preview.".to_string());
+    }
+    let width = u32::from_be_bytes(bytes[16..20].try_into().expect("PNG width has four bytes"));
+    let height = u32::from_be_bytes(bytes[20..24].try_into().expect("PNG height has four bytes"));
+    let pixels = u64::from(width).checked_mul(u64::from(height)).ok_or_else(|| "PDF preview dimensions overflowed.".to_string())?;
+    if width == 0 || height == 0 || width > PDF_PREVIEW_MAX_DIMENSION || height > PDF_PREVIEW_MAX_DIMENSION || pixels > PDF_PREVIEW_MAX_PIXELS {
+        return Err("PDF preview exceeds its raster size limit.".to_string());
+    }
+    Ok((width, height))
+}
+
+pub(crate) fn read_preview_png(path: &Path) -> Result<(Vec<u8>, u32, u32), String> {
+    let size = fs::metadata(path).map_err(|error| format!("Could not inspect PDF preview: {error}"))?.len();
+    if size > PDF_PREVIEW_MAX_BYTES {
+        return Err("PDF preview exceeds its file-size limit.".to_string());
+    }
+    let bytes = fs::read(path).map_err(|error| format!("Could not read PDF preview: {error}"))?;
+    let (width, height) = preview_png_dimensions(&bytes)?;
+    image::load_from_memory_with_format(&bytes, image::ImageFormat::Png).map_err(|error| format!("PDF helper did not produce a valid PNG preview: {error}"))?;
+    Ok((bytes, width, height))
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PdfMutationPreflight {
+    pub(crate) pages_root: ObjectId,
+    pub(crate) pages: Vec<ObjectId>,
+    pub(crate) annotated_pages: HashSet<ObjectId>,
+    pub(crate) has_navigation: bool,
+    pub(crate) has_form_structure: bool,
+    pub(crate) has_tagged_structure: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum PdfMutationIntent {
+    General,
+    ReorderOnly,
+    ValidateOnly,
+}
+
+impl PdfMutationPreflight {
+    pub(crate) fn enforce_policy(&self, intent: PdfMutationIntent) -> Result<(), String> {
+        if matches!(intent, PdfMutationIntent::General) && (self.has_navigation || self.has_form_structure) {
+            return Err("This PDF contains navigation or form structures that could be invalidated by this mutation; use an unstructured PDF copy".to_string());
+        }
+        if !matches!(intent, PdfMutationIntent::ValidateOnly) && self.has_tagged_structure {
+            return Err("This tagged PDF contains a StructTreeRoot or ParentTree that could be invalidated by this mutation; use an untagged PDF copy".to_string());
+        }
+        Ok(())
+    }
+}
+
+pub(crate) fn resolve<'a>(document: &'a Document, mut value: &'a Object) -> Result<&'a Object, String> {
+    let mut seen = HashSet::new();
+    while let Object::Reference(id) = value {
+        if !seen.insert(*id) {
+            return Err("Cyclic PDF reference".to_string());
+        }
+        value = document.get_object(*id).map_err(|error| error.to_string())?;
+    }
+    Ok(value)
+}
+
+pub(crate) fn inherited(document: &Document, mut id: ObjectId, key: &[u8]) -> Result<Option<Object>, String> {
+    let mut seen = HashSet::new();
+    loop {
+        if !seen.insert(id) {
+            return Err("Cyclic PDF page tree".to_string());
+        }
+        let page_tree = document.get_dictionary(id).map_err(|error| error.to_string())?;
+        if let Ok(value) = page_tree.get(key) {
+            return Ok(Some(resolve(document, value)?.clone()));
+        }
+        match page_tree.get(b"Parent") {
+            Ok(parent) => id = parent.as_reference().map_err(|error| error.to_string())?,
+            Err(_) => return Ok(None),
+        }
+    }
+}
+
+fn invalid_annotation(detail: &str) -> String {
+    format!("PDF annotation structure is invalid ({detail}); mutation was rejected before output")
+}
+
+fn invalid_form_structure(detail: &str) -> String {
+    format!("PDF form/widget structure is invalid ({detail}); mutation was rejected before output")
+}
+
+fn annotation_rect_is_valid(document: &Document, annotation: &lopdf::Dictionary) -> Result<(), String> {
+    let rect = annotation.get(b"Rect").map_err(|_| invalid_annotation("an annotation is missing Rect"))?;
+    let values = resolve(document, rect)
+        .map_err(|_| invalid_annotation("an annotation Rect could not be resolved"))?
+        .as_array()
+        .map_err(|_| invalid_annotation("an annotation Rect is not an array"))?;
+    if values.len() != 4 {
+        return Err(invalid_annotation("an annotation Rect must have four values"));
+    }
+    let values = values
+        .iter()
+        .map(|value| resolve(document, value).and_then(crate::kit::pdf::metadata::number))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| invalid_annotation("an annotation Rect contains a non-numeric value"))?;
+    if values.iter().any(|value| !value.is_finite()) || values[2] <= values[0] || values[3] <= values[1] {
+        return Err(invalid_annotation("an annotation Rect has invalid dimensions"));
+    }
+    Ok(())
+}
+
+fn validate_form_field(
+    document: &Document,
+    id: ObjectId,
+    expected_parent: Option<ObjectId>,
+    inherited_field_type: Option<Vec<u8>>,
+    reachable: &mut HashSet<ObjectId>,
+    visiting: &mut HashSet<ObjectId>,
+    widget_ids: &mut HashSet<ObjectId>,
+) -> Result<(), String> {
+    if !visiting.insert(id) {
+        return Err(invalid_form_structure("the field tree contains a cycle"));
+    }
+
+    let result = (|| {
+        let field = document
+            .get_dictionary(id)
+            .map_err(|_| invalid_form_structure("a field is not an indirect dictionary"))?;
+        let parent = match field.get(b"Parent") {
+            Ok(value) => Some(value.as_reference().map_err(|_| invalid_form_structure("a field Parent is not an indirect reference"))?),
+            Err(_) => None,
+        };
+        if parent != expected_parent {
+            return Err(invalid_form_structure("a field Parent does not match its field tree"));
+        }
+
+        if !reachable.insert(id) {
+            return Ok(());
+        }
+
+        let own_field_type = match field.get(b"FT") {
+            Ok(value) => Some(
+                resolve(document, value)
+                    .map_err(|_| invalid_form_structure("a field type could not be resolved"))?
+                    .as_name()
+                    .map_err(|_| invalid_form_structure("a field type is not a name"))?
+                    .to_vec(),
+            ),
+            Err(_) => None,
+        };
+        let field_type = own_field_type.or(inherited_field_type);
+        let subtype = match field.get(b"Subtype") {
+            Ok(value) => Some(
+                resolve(document, value)
+                    .map_err(|_| invalid_form_structure("a field subtype could not be resolved"))?
+                    .as_name()
+                    .map_err(|_| invalid_form_structure("a field subtype is not a name"))?
+                    .to_vec(),
+            ),
+            Err(_) => None,
+        };
+        if subtype.as_deref() == Some(b"Widget".as_slice()) {
+            if field_type.is_none() {
+                return Err(invalid_form_structure("a widget has no effective field type"));
+            }
+            widget_ids.insert(id);
+        }
+
+        if let Ok(kids) = field.get(b"Kids") {
+            let kids = resolve(document, kids)
+                .map_err(|_| invalid_form_structure("field Kids could not be resolved"))?
+                .as_array()
+                .map_err(|_| invalid_form_structure("field Kids is not an array"))?;
+            for kid in kids {
+                let kid_id = kid
+                    .as_reference()
+                    .map_err(|_| invalid_form_structure("field Kids must contain indirect references"))?;
+                validate_form_field(document, kid_id, Some(id), field_type.clone(), reachable, visiting, widget_ids)?;
+            }
+        }
+        Ok(())
+    })();
+
+    visiting.remove(&id);
+    result
+}
+
+fn validate_form_widgets(document: &Document, page_widget_ids: &HashSet<ObjectId>) -> Result<(), String> {
+    let catalog = document
+        .trailer
+        .get(b"Root")
+        .map_err(|_| invalid_form_structure("the catalog is missing"))?
+        .as_reference()
+        .map_err(|_| invalid_form_structure("the catalog is not an indirect dictionary"))?;
+    let catalog = document
+        .get_dictionary(catalog)
+        .map_err(|_| invalid_form_structure("the catalog is not a dictionary"))?;
+    let Some(acro_form_value) = catalog.get(b"AcroForm").ok() else {
+        if page_widget_ids.is_empty() {
+            return Ok(());
+        }
+        return Err(invalid_form_structure("a page widget is not attached to an AcroForm"));
+    };
+    let acro_form = resolve(document, acro_form_value)
+        .map_err(|_| invalid_form_structure("AcroForm could not be resolved"))?
+        .as_dict()
+        .map_err(|_| invalid_form_structure("AcroForm is not a dictionary"))?;
+    let fields = acro_form
+        .get(b"Fields")
+        .map_err(|_| invalid_form_structure("AcroForm Fields is missing"))?;
+    let fields = resolve(document, fields)
+        .map_err(|_| invalid_form_structure("AcroForm Fields could not be resolved"))?
+        .as_array()
+        .map_err(|_| invalid_form_structure("AcroForm Fields is not an array"))?;
+
+    let mut reachable = HashSet::new();
+    let mut visiting = HashSet::new();
+    let mut form_widget_ids = HashSet::new();
+    for field in fields {
+        let field_id = field
+            .as_reference()
+            .map_err(|_| invalid_form_structure("AcroForm Fields must contain indirect references"))?;
+        validate_form_field(document, field_id, None, None, &mut reachable, &mut visiting, &mut form_widget_ids)?;
+    }
+    if form_widget_ids.len() != page_widget_ids.len() || form_widget_ids.iter().any(|id| !page_widget_ids.contains(id)) {
+        return Err(invalid_form_structure("page widgets and AcroForm fields are not attached to the same field tree"));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_page_annotations(document: &Document, pages: &[ObjectId]) -> Result<HashSet<ObjectId>, String> {
+    let mut annotated_pages = HashSet::new();
+    let mut page_widget_ids = HashSet::new();
+    for (page_index, page_id) in pages.iter().enumerate() {
+        let page = document
+            .get_dictionary(*page_id)
+            .map_err(|_| invalid_annotation(&format!("page {} is not a dictionary", page_index + 1)))?;
+        let Some(annots_value) = page.get(b"Annots").ok() else {
+            continue;
+        };
+        let annotations = resolve(document, annots_value)
+            .map_err(|_| invalid_annotation(&format!("page {} Annots could not be resolved", page_index + 1)))?
+            .as_array()
+            .map_err(|_| invalid_annotation(&format!("page {} Annots is not an array", page_index + 1)))?;
+        if annotations.is_empty() {
+            continue;
+        }
+        annotated_pages.insert(*page_id);
+        for (annotation_index, entry) in annotations.iter().enumerate() {
+            let annotation_id = entry.as_reference().map_err(|_| {
+                invalid_annotation(&format!("page {} annotation {} must be an indirect reference", page_index + 1, annotation_index + 1))
+            })?;
+            let annotation = document.get_dictionary(annotation_id).map_err(|_| {
+                invalid_annotation(&format!("page {} annotation {} is not an indirect dictionary", page_index + 1, annotation_index + 1))
+            })?;
+            let type_is_annotation = annotation
+                .get(b"Type")
+                .ok()
+                .and_then(|value| resolve(document, value).ok())
+                .and_then(|value| value.as_name().ok())
+                == Some(b"Annot".as_slice());
+            let subtype = annotation
+                .get(b"Subtype")
+                .ok()
+                .and_then(|value| resolve(document, value).ok())
+                .and_then(|value| value.as_name().ok());
+            if !type_is_annotation || subtype.is_none() {
+                return Err(invalid_annotation(&format!("page {} annotation {} is missing a valid Type or Subtype", page_index + 1, annotation_index + 1)));
+            }
+            if let Ok(page_reference) = annotation.get(b"P") {
+                let referenced_page = page_reference.as_reference().map_err(|_| {
+                    invalid_annotation(&format!("page {} annotation {} /P must be an indirect reference to its owning page", page_index + 1, annotation_index + 1))
+                })?;
+                if referenced_page != *page_id {
+                    return Err(invalid_annotation(&format!("page {} annotation {} /P must reference its owning page", page_index + 1, annotation_index + 1)));
+                }
+            }
+            annotation_rect_is_valid(document, annotation)?;
+            if subtype == Some(b"Widget".as_slice()) {
+                page_widget_ids.insert(annotation_id);
+            }
+        }
+    }
+    validate_form_widgets(document, &page_widget_ids)?;
+    Ok(annotated_pages)
+}
+
+fn box_values(document: &Document, value: &Object) -> Result<[f32; 4], String> {
+    let values = resolve(document, value)?.as_array().map_err(|error| error.to_string())?;
+    if values.len() != 4 {
+        return Err("PDF page box must have four values.".to_string());
+    }
+    let values = values
+        .iter()
+        .map(|value| crate::kit::pdf::metadata::number(resolve(document, value)?))
+        .collect::<Result<Vec<_>, _>>()?;
+    let result = [values[0], values[1], values[2], values[3]];
+    if result.iter().any(|value| !value.is_finite()) || result[2] <= result[0] || result[3] <= result[1] {
+        return Err("PDF page box has invalid dimensions.".to_string());
+    }
+    Ok(result)
+}
+
+pub(crate) fn set_page_box_family(document: &mut Document, page_id: ObjectId, new_box: [f32; 4], clamp_ancillary: bool) -> Result<(), String> {
+    let mut ancillary = Vec::new();
+    for key in ["BleedBox", "TrimBox", "ArtBox"] {
+        if let Some(value) = inherited(document, page_id, key.as_bytes())? {
+            ancillary.push((key, box_values(document, &value)?));
+        }
+    }
+    let new_box_object = Object::Array(new_box.iter().copied().map(Object::Real).collect());
+    let page = document.get_dictionary_mut(page_id).map_err(|error| error.to_string())?;
+    page.set("MediaBox", new_box_object.clone());
+    page.set("CropBox", new_box_object.clone());
+    for (key, old_box) in ancillary {
+        let value = if !clamp_ancillary {
+            new_box
+        } else {
+            let clamped = [
+                old_box[0].max(new_box[0]).min(new_box[2]),
+                old_box[1].max(new_box[1]).min(new_box[3]),
+                old_box[2].max(new_box[0]).min(new_box[2]),
+                old_box[3].max(new_box[1]).min(new_box[3]),
+            ];
+            if clamped[2] > clamped[0] && clamped[3] > clamped[1] { clamped } else { new_box }
+        };
+        page.set(key, Object::Array(value.iter().copied().map(Object::Real).collect()));
+    }
+    Ok(())
+}
+
+fn has_catalog_entry(document: &Document, catalog: ObjectId, key: &[u8]) -> Result<bool, String> {
+    Ok(document.get_dictionary(catalog).map_err(|error| error.to_string())?.get(key).is_ok())
+}
+
+fn field_has_signature(document: &Document, value: &Object, seen: &mut HashSet<ObjectId>) -> Result<bool, String> {
+    let id = value.as_reference().map_err(|error| error.to_string())?;
+    if !seen.insert(id) {
+        return Err("Cyclic PDF form field tree".to_string());
+    }
+    let field = document.get_dictionary(id).map_err(|error| error.to_string())?;
+    if field.get(b"FT").ok().and_then(|value| value.as_name().ok()) == Some(b"Sig") {
+        return Ok(true);
+    }
+    let Some(kids) = field.get(b"Kids").ok() else {
+        return Ok(false);
+    };
+    resolve(document, kids)?.as_array().map_err(|error| error.to_string())?.iter()
+        .map(|kid| field_has_signature(document, kid, seen))
+        .collect::<Result<Vec<_>, _>>()
+        .map(|values| values.into_iter().any(|value| value))
+}
+
+fn is_signature_dictionary(value: &Object) -> bool {
+    let dictionary = match value {
+        Object::Dictionary(dictionary) => dictionary,
+        Object::Stream(stream) => &stream.dict,
+        _ => return false,
+    };
+    dictionary.get(b"Type").ok().and_then(|value| value.as_name().ok()) == Some(b"Sig") || dictionary.has(b"ByteRange")
+}
+
+fn document_has_signature(document: &Document, catalog: ObjectId, pages: &[ObjectId]) -> Result<bool, String> {
+    let catalog_dictionary = document.get_dictionary(catalog).map_err(|error| error.to_string())?;
+    if let Ok(perms) = catalog_dictionary.get(b"Perms") {
+        resolve(document, perms)?.as_dict().map_err(|error| error.to_string())?;
+        return Ok(true);
+    }
+    if document.objects.values().any(is_signature_dictionary) {
+        return Ok(true);
+    }
+    if let Ok(acro_form) = catalog_dictionary.get(b"AcroForm") {
+        let acro_form = resolve(document, acro_form)?.as_dict().map_err(|error| error.to_string())?;
+        if acro_form.get(b"SigFlags").ok().and_then(|value| value.as_i64().ok()).is_some_and(|flags| flags != 0) {
+            return Ok(true);
+        }
+        if let Some(fields) = acro_form.get(b"Fields").ok() {
+            let mut seen = HashSet::new();
+            if resolve(document, fields)?.as_array().map_err(|error| error.to_string())?.iter()
+                .map(|field| field_has_signature(document, field, &mut seen))
+                .collect::<Result<Vec<_>, _>>()?.into_iter().any(|value| value) {
+                return Ok(true);
+            }
+        }
+    }
+    pages.iter().map(|page| {
+        let Some(annotations) = document.get_dictionary(*page).map_err(|error| error.to_string())?.get(b"Annots").ok() else {
+            return Ok(false);
+        };
+        resolve(document, annotations)?.as_array().map_err(|error| error.to_string())?.iter()
+            .map(|annotation| {
+                let id = annotation.as_reference().map_err(|error| error.to_string())?;
+                Ok(document.get_dictionary(id).map_err(|error| error.to_string())?.get(b"FT").ok().and_then(|value| value.as_name().ok()) == Some(b"Sig"))
+            })
+            .collect::<Result<Vec<_>, String>>()
+            .map(|values| values.into_iter().any(|value| value))
+    }).collect::<Result<Vec<_>, String>>().map(|values| values.into_iter().any(|value| value))
+}
+
+fn page_has_internal_navigation(document: &Document, page: ObjectId) -> Result<bool, String> {
+    let Some(annotations) = document.get_dictionary(page).map_err(|error| error.to_string())?.get(b"Annots").ok() else {
+        return Ok(false);
+    };
+    let annotations = resolve(document, annotations)?.as_array().map_err(|error| error.to_string())?;
+    annotations.iter().map(|annotation| {
+        let annotation = resolve(document, annotation)?.as_dict().map_err(|error| error.to_string())?;
+        if annotation.get(b"Dest").is_ok() {
+            return Ok(true);
+        }
+        let Some(action) = annotation.get(b"A").ok() else {
+            return Ok(false);
+        };
+        Ok(resolve(document, action)?.as_dict().map_err(|error| error.to_string())?.get(b"D").is_ok())
+    }).collect::<Result<Vec<_>, String>>().map(|values| values.into_iter().any(|value| value))
+}
+
+pub(crate) fn mutation_preflight(document: &Document, intent: PdfMutationIntent) -> Result<PdfMutationPreflight, String> {
+    if document.is_encrypted() {
+        return Err("Unlock the PDF before editing".to_string());
+    }
+    let catalog = document.trailer.get(b"Root").map_err(|error| error.to_string())?.as_reference().map_err(|error| error.to_string())?;
+    let pages_root = document.get_dictionary(catalog).map_err(|error| error.to_string())?.get(b"Pages").map_err(|error| error.to_string())?.as_reference().map_err(|error| error.to_string())?;
+    let pages = document.get_pages().values().copied().collect::<Vec<_>>();
+    let unsupported = || "PDF uses a nested or unsupported page tree; mutation was rejected before output".to_string();
+    let root = document.get_dictionary(pages_root).map_err(|_| unsupported())?;
+    if root.get(b"Type").map_err(|_| unsupported())?.as_name().map_err(|_| unsupported())? != b"Pages" {
+        return Err(unsupported());
+    }
+    let kids = root.get(b"Kids").map_err(|_| unsupported())?.as_array().map_err(|_| unsupported())?;
+    let mut seen_kids = HashSet::new();
+    for kid in kids {
+        let page_id = kid.as_reference().map_err(|_| unsupported())?;
+        if !seen_kids.insert(page_id) {
+            return Err("PDF page-tree is malformed (duplicate /Kids page reference); mutation was rejected before output".to_string());
+        }
+    }
+    let count = root.get(b"Count").map_err(|_| "PDF page-tree /Count is missing; mutation was rejected before output".to_string())?;
+    let count = resolve(document, count).map_err(|_| "PDF page-tree /Count is invalid; mutation was rejected before output".to_string())?.as_i64()
+        .map_err(|_| "PDF page-tree /Count is invalid; mutation was rejected before output".to_string())?;
+    if count < 0 || usize::try_from(count).ok() != Some(pages.len()) {
+        return Err("PDF page-tree /Count does not match the flattened page count; mutation was rejected before output".to_string());
+    }
+    if kids.len() != pages.len() {
+        return Err(unsupported());
+    }
+    for (index, kid) in kids.iter().enumerate() {
+        let page_id = kid.as_reference().map_err(|_| unsupported())?;
+        let page = document.get_dictionary(page_id).map_err(|_| unsupported())?;
+        if page.get(b"Type").map_err(|_| unsupported())?.as_name().map_err(|_| unsupported())? != b"Page"
+            || page_id != pages[index]
+            || page.get(b"Parent").map_err(|_| unsupported())?.as_reference().map_err(|_| unsupported())? != pages_root {
+            return Err(unsupported());
+        }
+    }
+    if document_has_signature(document, catalog, &pages)? {
+        return Err("Digitally signed PDFs cannot be edited because this mutation would invalidate the signature; remove the signature or use an unsigned copy".to_string());
+    }
+    let annotated_pages = validate_page_annotations(document, &pages)?;
+    let page_navigation = pages.iter().map(|page| page_has_internal_navigation(document, *page)).collect::<Result<Vec<_>, _>>()?.into_iter().any(|present| present);
+    let has_navigation = [b"Outlines".as_slice(), b"Names", b"Dests", b"PageLabels", b"OpenAction"]
+        .into_iter().map(|key| has_catalog_entry(document, catalog, key)).collect::<Result<Vec<_>, _>>()?.into_iter().any(|present| present);
+    let has_navigation = has_navigation || page_navigation;
+    let has_form_structure = has_catalog_entry(document, catalog, b"AcroForm")?;
+    let has_tagged_structure = has_catalog_entry(document, catalog, b"StructTreeRoot")?;
+    let preflight = PdfMutationPreflight { pages_root, pages, annotated_pages, has_navigation, has_form_structure, has_tagged_structure };
+    preflight.enforce_policy(intent)?;
+    Ok(preflight)
+}
 
 impl PDFProcessor {
     pub fn remove_password(input_path: PathBuf, password: &str, output_location: &OutputLocation) -> JobOutcome {
@@ -20,12 +616,15 @@ impl PDFProcessor {
         if input_path.extension().and_then(|extension| extension.to_str()).is_none_or(|extension| !extension.eq_ignore_ascii_case("pdf")) {
             return JobOutcome { input_path, output_paths: vec![], detail: "".to_string(), failure: Some(ToolError::invalid_input("Only PDF files can be unlocked.")) };
         }
-        let output_path = OutputNaming::get_destination(
+        let output_path = match OutputNaming::reserve_destination(
             &input_path,
             output_location,
             "-unlocked",
             "pdf",
-        );
+        ) {
+            Ok(output) => output,
+            Err(error) => return JobOutcome::failure(input_path, ToolError::processing(format!("Could not reserve unlocked PDF output: {error}"))),
+        };
 
         // Reading an encrypted PDF without a password makes lopdf drop every
         // object except the /Encrypt dictionary (objects == 1), so decrypting
@@ -62,13 +661,16 @@ impl PDFProcessor {
                     .map(|((id, _), _)| *id)
                     .max()
                     .unwrap_or(0);
-                match doc.save(&output_path) {
-                    Ok(_) => match Document::load(&output_path) {
-                        Ok(verified) if !verified.is_encrypted() && verified.get_pages().len() == page_count && verified.objects.len() > 1 => JobOutcome { input_path, output_paths: vec![output_path], detail: "PDF Unlocked and verified".to_string(), failure: None },
-                        Ok(_) => { let _ = std::fs::remove_file(&output_path); JobOutcome { input_path, output_paths: vec![], detail: "".to_string(), failure: Some(ToolError::processing("Unlocked PDF failed verification.")) } },
-                        Err(error) => { let _ = std::fs::remove_file(&output_path); JobOutcome { input_path, output_paths: vec![], detail: "".to_string(), failure: Some(ToolError::processing(format!("Unlocked PDF could not be reopened: {error}"))) } },
+                match doc.save(output_path.path()) {
+                    Ok(_) => match Document::load(output_path.path()) {
+                        Ok(verified) if !verified.is_encrypted() && verified.get_pages().len() == page_count && verified.objects.len() > 1 => match output_path.publish() {
+                            Ok(path) => JobOutcome { input_path, output_paths: vec![path], detail: "PDF Unlocked and verified".to_string(), failure: None },
+                            Err(error) => JobOutcome::failure(input_path, ToolError::processing(format!("Could not publish unlocked PDF output: {error}"))),
+                        },
+                        Ok(_) => JobOutcome { input_path, output_paths: vec![], detail: "".to_string(), failure: Some(ToolError::processing("Unlocked PDF failed verification.")) },
+                        Err(error) => JobOutcome { input_path, output_paths: vec![], detail: "".to_string(), failure: Some(ToolError::processing(format!("Unlocked PDF could not be reopened: {error}"))) },
                     },
-                    Err(e) => { let _ = std::fs::remove_file(&output_path); JobOutcome { input_path, output_paths: vec![], detail: "".to_string(), failure: Some(ToolError::processing(format!("Save failed: {}", e))) } },
+                    Err(e) => JobOutcome { input_path, output_paths: vec![], detail: "".to_string(), failure: Some(ToolError::processing(format!("Save failed: {}", e))) },
                 }
             }
             Err(e) => JobOutcome {
@@ -84,12 +686,15 @@ impl PDFProcessor {
     /// /Encrypt dictionary that other readers (macOS PDFKit) cannot decrypt, so
     /// protection shells out to a correct, cross-platform AES-256 writer.
     pub fn protect(input_path: PathBuf, password: &str, output_location: &OutputLocation) -> JobOutcome {
-        let output_path = OutputNaming::get_destination(
+        let output_path = match OutputNaming::reserve_destination(
             &input_path,
             output_location,
             "-protected",
             "pdf",
-        );
+        ) {
+            Ok(output) => output,
+            Err(error) => return JobOutcome::failure(input_path, ToolError::processing(format!("Could not reserve protected PDF output: {error}"))),
+        };
 
         if let Some(ref e) = input_path.extension().map(|e| e.to_string_lossy().to_lowercase()) {
             if e != "pdf" {
@@ -124,18 +729,22 @@ impl PDFProcessor {
             .arg("256")
             .arg("--")
             .arg(&input_path)
-            .arg(&output_path)
+            .arg(output_path.path())
             .output();
 
         match status {
             Ok(out) if out.status.success() => {
-                let encrypted = Document::load(&output_path).map(|document| document.is_encrypted()).unwrap_or(false);
-                let readable = Document::load_with_options(&output_path, lopdf::LoadOptions::with_password(password)).map(|document| !document.is_encrypted()).unwrap_or(false);
-                if encrypted && readable { JobOutcome { input_path, output_paths: vec![output_path], detail: "PDF Protected with verified AES-256 encryption".to_string(), failure: None } }
-                else { let _ = std::fs::remove_file(&output_path); JobOutcome { input_path, output_paths: vec![], detail: "".to_string(), failure: Some(ToolError::processing("qpdf produced an output that could not be verified as password-protected.")) } }
+                let encrypted = Document::load(output_path.path()).map(|document| document.is_encrypted()).unwrap_or(false);
+                let readable = Document::load_with_options(output_path.path(), lopdf::LoadOptions::with_password(password)).map(|document| !document.is_encrypted()).unwrap_or(false);
+                if encrypted && readable {
+                    match output_path.publish() {
+                        Ok(path) => JobOutcome { input_path, output_paths: vec![path], detail: "PDF Protected with verified AES-256 encryption".to_string(), failure: None },
+                        Err(error) => JobOutcome::failure(input_path, ToolError::processing(format!("Could not publish protected PDF output: {error}"))),
+                    }
+                }
+                else { JobOutcome { input_path, output_paths: vec![], detail: "".to_string(), failure: Some(ToolError::processing("qpdf produced an output that could not be verified as password-protected.")) } }
             }
             Ok(out) => {
-                let _ = std::fs::remove_file(&output_path);
                 JobOutcome { input_path, output_paths: vec![], detail: "".to_string(), failure: Some(ToolError::processing(
                     String::from_utf8_lossy(&out.stderr).trim().lines().last().map(|l| l.to_string()).unwrap_or_else(|| "qpdf failed to protect the PDF.".to_string()),
                 )) }

@@ -1,40 +1,22 @@
-# Toolbox Tauri feature map
+# Toolbox verification map
 
-The primary surface is the cross-platform Tauri desktop window. Every registry entry below has a dedicated verification recipe. Implemented entries invoke a typed Rust command through Tauri IPC; unavailable entries document the prerequisite that currently prevents the user path.
+Read this index, launch a dedicated development instance, and run Doctor before driving a feature. The map follows Toolbox's command center, task workspaces, and Settings panel.
 
-| Feature | Entry point | Automated proof |
-| --- | --- | --- |
-| [Remove Password](unlock-pdf.md) | Documents → Remove Password | PDF and Office password removal |
-| [Page numbers](pdf-page-numbers.md) | PDF → Page Numbers | page geometry and overlay |
-| [Merge PDF](pdf-merge.md) | PDF → Merge | qpdf output page count |
-| [Watermark PDF](pdf-watermark.md) | PDF → Watermark | overlay output and original preservation |
-| [Crop PDF](pdf-crop.md) | PDF → Crop | MediaBox and selected scope |
-| [Edit PDF](pdf-edit.md) | PDF → Edit | typed annotation output and original preservation |
-| [Protect PDF](protect-pdf.md) | PDF → Protect | encrypted output round-trip |
-| [Images to PDF](images-to-pdf.md) | PDF → Images to PDF | page count and dimensions |
-| [PDF to Images](pdf-to-images.md) | PDF → PDF to Images | rendered image output |
-| [PDF to Text](pdf-to-text.md) | PDF → PDF to Text | extracted selectable text |
-| [Split PDF](pdf-split.md) | PDF → Split | one output per page |
-| [Extract PDF images](pdf-image-extract.md) | PDF → Extract Images | original JPEG bytes |
-| [Sign PDF](pdf-sign.md) | PDF → Sign | visible overlay output |
-| [OCR PDF](pdf-ocr.md) | PDF → OCR | adapter success or explicit unsupported |
-| [Remove pages](pdf-remove-pages.md) | PDF → Remove Pages | selected pages absent |
-| [Extract pages](pdf-extract-pages.md) | PDF → Extract Pages | selected pages retained |
-| [Organize PDF](pdf-organize.md) | PDF → Organize | order/rotation/delete plan |
-| [Compress PDF](pdf-compress.md) | PDF → Compress | valid smaller or preserved output |
-| [Convert image format](convert-image-format.md) | Images → Convert | valid target bytes |
-| [Compress images](compress-images.md) | Images → Compress | no inflation and original preservation |
-| [Resize images](resize-images.md) | Images → Resize | expected dimensions |
-| [Rotate images](rotate-images.md) | Images → Rotate | expected orientation |
-| [Crop images](crop-images.md) | Images → Crop | expected pixel rectangle |
-| [App icons](image-icons.md) | Images → Icons | preset outputs |
-| [Create GIF](gif-create.md) | Images → GIF Maker | animated frame count |
-| [Extract GIF frames](gif-extract.md) | Images → Frames | frame outputs |
-| [Image watermark](image-watermark.md) | Images → Watermark | changed output and original preservation |
-| [Image metadata](image-metadata.md) | Images → Metadata | output metadata policy |
-| [Image tone](image-tone.md) | Images → Tone | changed pixel values |
-| [TIFF pages](tiff-pages.md) | Images → TIFF Pages | TIFF output validity |
-| [Blur faces](image-blur-faces.md) | Images → Blur Faces | adapter success or explicit unsupported |
-| [Remove background](image-remove-bg.md) | Images → Cutout | adapter success or explicit unsupported |
+## Baseline
 
-Cross-cutting coverage includes native file selection and drop paths, per-file result isolation, collision-safe output naming, keyboard operation, Windows path display, and `npm run check:release`.
+- Build and run the separate macOS app with the verification config in [verify-toolbox](../SKILL.md).
+- Drive the native window whose webview URL is `tauri://localhost`.
+- Keep port 1420 and any app window from another run untouched.
+- Drive only the `com.toolbox.desktop.verify` window launched by this run.
+- Copy input files into the run's `scratch/` directory before processing.
+- Use the real file picker and native commands for integrated proof.
+- The Tauri overlay gives the macOS verification bundle its own app identifier. This map does not cover Windows or Linux launch paths.
+- The Playwright specs replace Tauri IPC with stubs. Do not use them to claim that a native operation wrote an output.
+
+## Features
+
+- [Command center](./command-center.md) covers search, filters, favorites, recent tools, quick access, and workspace navigation.
+- [PDF workflows](./pdf-workflows.md) covers the PDF editor and PDF conversions.
+- [Image workflows](./image-workflows.md) covers image editing and media utilities.
+- [File security](./file-security.md) covers password removal and file protection.
+- [Settings](./settings.md) covers appearance, app information, updates, and privacy preferences.

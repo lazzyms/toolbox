@@ -61,14 +61,17 @@ jobs:
         include:
           - os: macos-26
             name: macOS
+            platform: macos
             target: aarch64-apple-darwin
             artifact: macos-aarch64
           - os: windows-latest
             name: Windows x86_64
+            platform: windows
             target: x86_64-pc-windows-msvc
             artifact: windows-x86_64
           - os: windows-11-arm
             name: Windows arm64
+            platform: windows
             target: aarch64-pc-windows-msvc
             artifact: windows-arm64
     runs-on: ${{ matrix.os }}
@@ -78,6 +81,8 @@ jobs:
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       TOOLBOX_REQUIRE_QPDF: '1'
       VITE_ENABLE_UPDATES: 'true'
+      VITE_POSTHOG_KEY: ${{ secrets.POSTHOG_PROJECT_KEY }}
+      VITE_TOOLBOX_TARGET_PLATFORM: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -135,6 +140,8 @@ jobs:
           Expand-Archive -Path $popplerArchive -DestinationPath $popplerExtract -Force
           $pdftoppm = Get-ChildItem $popplerExtract -Recurse -Filter pdftoppm.exe | Select-Object -First 1
           if (-not $pdftoppm) { throw 'Could not locate pdftoppm.exe in the Poppler archive' }
+          $pdftotext = Get-ChildItem $popplerExtract -Recurse -Filter pdftotext.exe | Select-Object -First 1
+          if (-not $pdftotext) { throw 'Could not locate pdftotext.exe in the Poppler archive' }
           $env:PATH = "$($pdftoppm.DirectoryName);$env:PATH"
           $pdftoppm.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           New-Item -ItemType Directory -Force -Path src-tauri\resources | Out-Null
@@ -143,21 +150,22 @@ jobs:
           Get-ChildItem $qpdf.DirectoryName -Filter *.dll | Copy-Item -Destination src-tauri\resources -Force
           Copy-Item $pdftoppm.FullName src-tauri\resources\pdftoppm.exe -Force
           Get-ChildItem $pdftoppm.DirectoryName -Filter *.dll | Copy-Item -Destination src-tauri\resources -Force
+          Copy-Item $pdftotext.FullName src-tauri\resources\pdftotext.exe -Force
           @{version=$env:VERSION; bundle=@{resources=@('resources/*')}} | ConvertTo-Json -Compress | Out-File -Encoding ascii release-config.json
       - name: Write macOS version config
         if: runner.os == 'macOS'
         working-directory: ToolboxTauri
         run: printf '{"version":"%s"}\n' "$VERSION" > release-config.json
+      - run: cargo test -- --test-threads=1
+        working-directory: ToolboxTauri/src-tauri
+      - name: Run native E2E matrix
+        run: npm run test:native:e2e
+        working-directory: ToolboxTauri
       - name: Stage offline vision adapter
         run: npm run stage:vision -- ${{ matrix.target }}
         working-directory: ToolboxTauri
       - name: Stage offline OCR resources
         run: npm run stage:ocr -- ${{ matrix.target }}
-        working-directory: ToolboxTauri
-      - run: cargo test
-        working-directory: ToolboxTauri/src-tauri
-      - name: Run native E2E matrix
-        run: npm run test:native:e2e
         working-directory: ToolboxTauri
       - name: Build macOS
         if: runner.os == 'macOS'

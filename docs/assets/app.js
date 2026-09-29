@@ -56,7 +56,7 @@
   const toolIcons = {
     'pdf-unlock': 'remove-password', 'pdf-page-numbers': 'page-numbers',
     'pdf-merge': 'merge-pdf', 'pdf-watermark': 'watermark-pdf', 'pdf-crop': 'crop-pdf',
-    'pdf-edit': 'edit-pdf', 'pdf-protect': 'protect-pdf', 'images-to-pdf': 'images-to-pdf',
+    'pdf-edit': 'edit-pdf', 'pdf-protect': 'protect-pdf', 'office-protect': 'protect-pdf', 'images-to-pdf': 'images-to-pdf',
     'pdf-to-images': 'pdf-to-images', 'pdf-to-text': 'pdf-to-text', 'pdf-split': 'split-pdf',
     'pdf-image-extract': 'extract-images', 'pdf-sign': 'signature', 'pdf-ocr': 'ocr-pdf',
     'pdf-remove-pages': 'file-minus', 'pdf-extract-pages': 'extract-pages',
