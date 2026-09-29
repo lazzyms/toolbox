@@ -13,9 +13,9 @@
     "test:native:e2e": "cargo test --manifest-path src-tauri/Cargo.toml every_registered_command_runs_with_real_fixtures_in_isolated_sandboxes",
     "stage:vision": "node scripts/stage-vision-resources.mjs",
     "stage:ocr": "node scripts/stage-ocr-resources.mjs",
-    "check:design-system-colors": "node scripts/check-design-system-colors.mjs",
+    "check:shadcn-components": "node scripts/check-shadcn-components.mjs",
     "check:matrix": "npm run test:capabilities && node scripts/check-tool-matrix.mjs",
-    "check:release": "npm run check:design-system-colors && npm run check:matrix && node scripts/check-release-readiness.mjs",
+    "check:release": "npm run check:shadcn-components && npm run check:matrix && node scripts/check-release-readiness.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
   },
@@ -24,6 +24,10 @@
     "@tauri-apps/plugin-dialog": "^2",
     "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-updater": "^2.11.0",
+    "class-variance-authority": "^0.7.1",
+    "cn": "^0.4.0",
+    "lucide-react": "^1.48.0",
+    "radix-ui": "^1.6.7",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

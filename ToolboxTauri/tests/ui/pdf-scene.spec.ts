@@ -56,6 +56,24 @@ async function exported(page: Page) {
   return page.evaluate(() => (window as any).calls.filter((c: any) => c.command === 'export_pdf_scene').at(-1).args.request.scene);
 }
 
+test('PDF editor toolbars use roving keyboard focus and render the workspace', async ({ page }, testInfo) => {
+  await openEditor(page);
+  const tools = page.getByRole('toolbar', { name: 'PDF editor tools' });
+  const selectTool = tools.getByRole('button', { name: 'Select', exact: true });
+  const textTool = tools.getByRole('button', { name: 'Text', exact: true });
+  await selectTool.focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(textTool).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(textTool).toHaveAttribute('aria-pressed', 'true');
+  await page.keyboard.press('End');
+  await expect(tools.getByRole('button', { name: 'Export PDF', exact: true })).toBeFocused();
+  await page.keyboard.press('Home');
+  await expect(selectTool).toBeFocused();
+  await expect(page.getByRole('toolbar', { name: 'PDF page and zoom controls' })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('pdf-editor-workspace.png'), fullPage: true });
+});
+
 test('PDF editor keeps the back link, title, and empty-state open action compact', async ({ page }) => {
   const consoleErrors: string[] = [];
   const pageErrors: string[] = [];

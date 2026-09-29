@@ -1,5 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { JobOutcome, Progress } from "../contracts";
 
 type OutputAction = "open" | "reveal";
@@ -67,25 +70,26 @@ export const ResultList = ({ results, progress, loading }: { results: JobOutcome
     };
 
     if (loading) {
-        return <p className="ds-muted-copy">Processing {progress.completed} of {progress.total} files...</p>;
+        return <p className="muted-copy">Processing {progress.completed} of {progress.total} files...</p>;
     }
     if (results.length === 0) return null;
 
     const failures = results.filter((result) => result.failure !== null).length;
     return (
         <div className="result-list" aria-live="polite">
-            <p className="result-summary">
+            <p className="result-summary" role="status">
                 {failures === 0 ? `${results.length} files completed` : `${failures} of ${results.length} files failed`}
             </p>
             {results.map((result, resultIndex) => (
-                <div key={result.inputPath} className="result-card">
-                    <div className="result-heading">
-                        <span className="result-input" title={result.inputPath}>{outputName(result.inputPath)}</span>
-                        <span className={`result-status ${result.failure ? "result-status-failure" : "result-status-success"}`}>
+                <Card role="article" key={result.inputPath} className="result-card py-0">
+                    <CardHeader className="result-heading py-3">
+                        <CardTitle className="result-input" title={result.inputPath}>{outputName(result.inputPath)}</CardTitle>
+                        <Badge variant={result.failure ? "destructive" : "secondary"}>
                             {result.failure?.message ?? result.detail}
-                        </span>
-                    </div>
+                        </Badge>
+                    </CardHeader>
                     {result.outputPaths.length > 0 && (
+                        <CardContent className="result-outputs-content py-3">
                         <ul className="result-outputs">
                             {result.outputPaths.map((path, index) => {
                                 const id = outputId(resultIndex, index);
@@ -94,28 +98,31 @@ export const ResultList = ({ results, progress, loading }: { results: JobOutcome
                                     <li key={id} className="result-output">
                                         <span className="result-output-name" title={path}>{outputName(path)}</span>
                                         <div className="result-output-actions">
-                                            <button
-                                                type="button"
+                                            <Button
+                                                variant="ghost"
+                                                size="sm"
                                                 disabled={state.pending !== null}
                                                 onClick={() => void runAction(id, path, "open")}
                                             >
                                                 {state.pending === "open" ? "Opening..." : "Open file"}
-                                            </button>
-                                            <button
-                                                type="button"
+                                            </Button>
+                                            <Button
+                                                variant="ghost"
+                                                size="sm"
                                                 disabled={state.pending !== null}
                                                 onClick={() => void runAction(id, path, "reveal")}
                                             >
                                                 {state.pending === "reveal" ? "Showing..." : revealButtonLabel()}
-                                            </button>
+                                            </Button>
                                         </div>
                                         {state.error && <p className="result-action-error" role="alert">{state.error}</p>}
                                     </li>
                                 );
                             })}
                         </ul>
+                        </CardContent>
                     )}
-                </div>
+                </Card>
             ))}
         </div>
     );

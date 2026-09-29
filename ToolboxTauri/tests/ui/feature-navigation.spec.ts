@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import path from "node:path";
-import { UtilityRegistry, workspaceForTool } from "../../src/registry";
+import { ToolWorkspaceRegistry, UtilityRegistry, workspaceForTool } from "../../src/registry";
 
 const fixturePath = path.resolve("src-tauri/icons/icon.png");
 const fixtureName = path.basename(fixturePath);
@@ -129,7 +129,7 @@ if (command === "preview_pdf_scene_pages") return (args as { request: { pageIndi
 
 test("every registered feature opens its detail pane", async ({ page }) => {
     await page.goto("/");
-    await expect(page.getByRole("heading", { name: "Ready to process" })).toBeVisible();
+    await expect(page.locator(".topbar--home").getByRole("textbox", { name: "Search tools" })).toBeVisible();
 
     for (const [index, utility] of UtilityRegistry.entries()) {
         if (index > 0) {
@@ -204,7 +204,7 @@ test("settings highlight matches navigation items", async ({ page }) => {
     expect(settingsStyle.borderTopWidth).toBe("0px");
 
     await settings.click();
-    await expect(settings).toHaveAttribute("aria-current", "page");
+    await expect(page.locator("button.settings-link")).toHaveAttribute("aria-current", "page");
 });
 
 test("file upload surface follows the selected theme", async ({ page }) => {
@@ -212,7 +212,7 @@ test("file upload surface follows the selected theme", async ({ page }) => {
     const utility = UtilityRegistry[0];
     await page.getByRole("button", { name: `Open ${utility.title}` }).click();
 
-    const sourceBar = page.getByRole("region", { name: "Open document" });
+    const sourceBar = page.locator(".workspace-source-bar");
     const readSurface = () => sourceBar.evaluate((node) => ({
         background: getComputedStyle(node).backgroundColor,
         border: getComputedStyle(node).borderTopColor,
@@ -222,11 +222,11 @@ test("file upload surface follows the selected theme", async ({ page }) => {
     const settings = page.getByRole("button", { name: "Settings", exact: true });
     await settings.click();
     const dialog = page.getByRole("dialog", { name: "Settings" });
-    await dialog.getByRole("button", { name: "Dark" }).click();
+    await dialog.getByRole("radio", { name: "Dark" }).click();
     await expect.poll(() => page.locator("body").getAttribute("data-theme")).toBe("dark");
     await page.mouse.move(0, 0);
     const darkSurface = await readSurface();
-    await dialog.getByRole("button", { name: "Light" }).click();
+    await dialog.getByRole("radio", { name: "Light" }).click();
     await expect.poll(() => page.locator("body").getAttribute("data-theme")).toBe("light");
     await page.mouse.move(0, 0);
     await expect.poll(async () => (await readSurface()).background).not.toBe(darkSurface.background);
@@ -236,7 +236,7 @@ test("file upload surface follows the selected theme", async ({ page }) => {
     expect(lightSurface.border).not.toBe(darkSurface.border);
     expect(lightSurface.copy).not.toBe(darkSurface.copy);
 
-    await dialog.getByRole("button", { name: "Dark" }).click();
+    await dialog.getByRole("radio", { name: "Dark" }).click();
     await page.mouse.move(0, 0);
     await expect.poll(readSurface).toEqual(darkSurface);
 });
@@ -246,12 +246,18 @@ test("favorites and recent navigation show their intended libraries", async ({ p
     const workspaceNav = page.locator('nav[aria-label="Workspace navigation"]');
 
     await workspaceNav.getByRole("button", { name: "Favorites" }).click();
-    await expect(page.getByRole("heading", { name: "Favorites", exact: true })).toBeVisible();
+    await expect(
+        page.getByRole("radiogroup", { name: "Tool library filters" })
+            .getByRole("radio", { name: "Favorites", exact: true }),
+    ).toHaveAttribute("aria-checked", "true");
     await expect(page.getByText("No favorite tools yet", { exact: true })).toBeVisible();
     await expect(workspaceNav.getByRole("button", { name: "Favorites" })).toHaveAttribute("aria-current", "page");
 
     await workspaceNav.getByRole("button", { name: "Recent" }).click();
-    await expect(page.getByRole("heading", { name: "Recent", exact: true })).toBeVisible();
+    await expect(
+        page.getByRole("radiogroup", { name: "Tool library filters" })
+            .getByRole("radio", { name: "Recent", exact: true }),
+    ).toHaveAttribute("aria-checked", "true");
     await expect(page.getByText("No recent tools yet", { exact: true })).toBeVisible();
     await expect(workspaceNav.getByRole("button", { name: "Recent" })).toHaveAttribute("aria-current", "page");
 
@@ -270,6 +276,120 @@ test("favorites and recent navigation show their intended libraries", async ({ p
         page.getByRole("radiogroup", { name: "Tool library filters" })
             .getByRole("radio", { name: "Recent" }),
     ).toHaveAttribute("aria-checked", "true");
+
+    await page.reload();
+    await workspaceNav.getByRole("button", { name: "Favorites" }).click();
+    await expect(page.locator(".tool-card")).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "Open Remove Password" })).toBeVisible();
+    await workspaceNav.getByRole("button", { name: "Recent" }).click();
+    await expect(page.locator(".tool-card")).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "Open Remove Password" })).toBeVisible();
+});
+
+test("all five workspace cards open their workspace", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.locator(".tool-card")).toHaveCount(ToolWorkspaceRegistry.length);
+
+    for (const workspace of ToolWorkspaceRegistry) {
+        await page.getByRole("button", { name: `Open ${workspace.title}`, exact: true }).click();
+        await expect(page.locator(".workspace-title")).toHaveText(workspace.title);
+        await page.getByRole("button", { name: "← All tools" }).click();
+    }
+});
+
+test("search finds and opens all 33 registered tool actions", async ({ page }) => {
+    await page.goto("/");
+    const search = page.getByRole("textbox", { name: "Search tools" });
+    expect(UtilityRegistry).toHaveLength(33);
+
+    for (const utility of UtilityRegistry) {
+        await search.fill(utility.title);
+        const result = page.getByRole("button", { name: `Open ${utility.title}`, exact: true });
+        await expect(result).toBeVisible();
+        await result.click();
+        if (utility.status === "unavailable") {
+            await expect(page.getByText("Unavailable in this build.", { exact: true })).toBeVisible();
+        } else {
+            await expect(page.locator(".workspace-title")).toHaveText(workspaceForTool(utility.id)?.title);
+        }
+        await page.getByRole("button", { name: "← All tools" }).click();
+    }
+});
+
+test("search arrows navigate visible results and Enter opens the focused result", async ({ page }, testInfo) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Remove Password" }).click();
+    await page.getByRole("button", { name: "← All tools" }).click();
+    await expect(page.locator(".recent-section")).toHaveCount(0);
+    await expect(page.locator(".topbar--home + .tool-library-section")).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath("phase2-command-center-gallery.png") });
+
+    const search = page.getByRole("textbox", { name: "Search tools" });
+    await search.fill("Protect");
+    const composingArrowPrevented = await search.evaluate((input) => {
+        const event = new KeyboardEvent("keydown", {
+            key: "ArrowDown",
+            bubbles: true,
+            cancelable: true,
+            isComposing: true,
+        });
+        input.dispatchEvent(event);
+        return event.defaultPrevented;
+    });
+    expect(composingArrowPrevented).toBe(false);
+    await expect(search).toBeFocused();
+    await expect(page.locator(".recent-section")).toHaveCount(0);
+    await expect(page.locator("button[data-command-result]")).toHaveCount(3);
+    const removePassword = page.getByRole("button", { name: "Open Remove Password", exact: true });
+    const protectPdf = page.getByRole("button", { name: "Open Protect PDF", exact: true });
+    const protectOfficeFiles = page.getByRole("button", { name: "Open Protect Office Files", exact: true });
+
+    await page.keyboard.press("ArrowDown");
+    await expect(removePassword).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(protectPdf).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(protectOfficeFiles).toBeFocused();
+    await page.keyboard.press("ArrowUp");
+    await expect(protectPdf).toBeFocused();
+    await page.keyboard.press("ArrowUp");
+    await expect(removePassword).toBeFocused();
+    await page.keyboard.press("ArrowUp");
+    await expect(search).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ArrowDown");
+    await expect(protectPdf).toBeFocused();
+    await page.screenshot({ path: testInfo.outputPath("phase2-command-center-search.png") });
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".workspace-title")).toHaveText("Protect & unlock files");
+
+    await page.getByRole("button", { name: "← All tools" }).click();
+    await search.fill("no matching tool");
+    await expect(page.getByText("No matching tools", { exact: true })).toBeVisible();
+    await page.keyboard.press("ArrowDown");
+    await expect(search).toBeFocused();
+});
+
+test("home search lives in the top bar while the privacy badge stays in workspaces", async ({ page }, testInfo) => {
+    await page.goto("/");
+    const homeTopbar = page.locator(".topbar--home");
+    const search = homeTopbar.getByRole("textbox", { name: "Search tools" });
+
+    await expect(search).toBeVisible();
+    await expect(homeTopbar.getByText("On-device workspace", { exact: true })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "All tools", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("radio", { name: "All", exact: true })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath("home-topbar-desktop.png") });
+
+    await page.getByRole("button", { name: "Open Remove Password" }).click();
+    await expect(page.locator(".topbar--home")).toHaveCount(0);
+    await expect(page.locator(".topbar").getByText("On-device workspace", { exact: true })).toBeVisible();
+    await expect(page.locator(".topbar").getByRole("textbox", { name: "Search tools" })).toHaveCount(0);
+
+    await page.getByRole("button", { name: "← All tools" }).click();
+    await page.setViewportSize({ width: 700, height: 900 });
+    await expect(page.locator(".topbar--home").getByRole("textbox", { name: "Search tools" })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath("home-topbar-narrow.png") });
 });
 
 test("workspace cards expose an accessible open action without favorite navigation", async ({ page }) => {
@@ -283,7 +403,8 @@ test("workspace cards expose an accessible open action without favorite navigati
 
     await page.getByRole("button", { name: "← All tools" }).click();
     await page.locator(".tool-card").first().getByRole("button", { name: "Add Remove Password to favorites" }).click();
-    await expect(page.getByRole("heading", { name: "All tools", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "All tools", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("radio", { name: "All", exact: true })).toBeVisible();
 });
 
 test("Windows labels the reveal action as opening the file location", async ({ page }) => {
@@ -293,7 +414,7 @@ test("Windows labels the reveal action as opening the file location", async ({ p
     await page.goto("/");
     await page.getByRole("button", { name: "Open Compress Images" }).click();
     await page.getByRole("button", { name: "Choose files to process" }).click();
-    await page.getByLabel("Lossless compression").check();
+    await page.getByRole("switch", { name: "Preserve original pixels" }).click();
     await page.locator(".workspace-primary-action").click();
     await expect(page.getByRole("button", { name: "Open file location" })).toHaveCount(2);
 });
@@ -366,26 +487,99 @@ test("settings privacy opt-out persists across reloads", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "Settings" });
-    const checkbox = dialog.getByRole("checkbox", { name: /anonymous usage counts/ });
-    await expect(checkbox).toBeVisible();
+    const privacyToggle = dialog.getByRole("switch", { name: /anonymous usage counts/ });
+    await expect(privacyToggle).toBeVisible();
     await expect(dialog).toContainText("Version 1.0.13");
-    await checkbox.check();
-    await expect(checkbox).toBeChecked();
+    await privacyToggle.click();
+    await expect(privacyToggle).toHaveAttribute("aria-checked", "true");
 
     await page.reload();
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await expect(
-        page.getByRole("dialog", { name: "Settings" }).getByRole("checkbox", { name: /anonymous usage counts/ }),
-    ).toBeChecked();
+        page.getByRole("dialog", { name: "Settings" }).getByRole("switch", { name: /anonymous usage counts/ }),
+    ).toHaveAttribute("aria-checked", "true");
+});
+
+test("settings use shared theme and privacy controls in both palettes", async ({ page }, testInfo) => {
+    for (const theme of ["dark", "light"] as const) {
+        await page.goto("/");
+        await page.evaluate((nextTheme) => {
+            localStorage.setItem("toolbox-theme", nextTheme);
+            document.body.dataset.theme = nextTheme;
+        }, theme);
+        await page.reload();
+        await page.getByRole("button", { name: "Settings", exact: true }).click();
+
+        const dialog = page.getByRole("dialog", { name: "Settings" });
+        await page.screenshot({ path: testInfo.outputPath(`settings-${theme}.png`) });
+        const themeControl = dialog.getByRole("radiogroup", { name: "Theme" });
+        await expect(themeControl.getByRole("radio", { name: theme === "dark" ? "Dark" : "Light" }))
+            .toHaveAttribute("aria-checked", "true");
+
+        const privacyToggle = dialog.getByRole("switch", { name: /anonymous usage counts/ });
+        const before = await privacyToggle.getAttribute("aria-checked");
+        await privacyToggle.click();
+        await expect(privacyToggle).toHaveAttribute("aria-checked", before === "true" ? "false" : "true");
+    }
+});
+
+test("workspace command rails follow the responsive toolbar keyboard contract", async ({ page }, testInfo) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Image editor", exact: true }).click();
+    const rail = page.getByRole("toolbar", { name: "Image editor tools" });
+    const commands = rail.getByRole("button");
+    const commandCount = await commands.count();
+    expect(commandCount).toBeGreaterThan(2);
+    const first = commands.first();
+    const second = commands.nth(1);
+    const last = commands.nth(commandCount - 1);
+    await expect(rail).toHaveAttribute("aria-orientation", "vertical");
+    await first.focus();
+    await page.screenshot({ path: testInfo.outputPath("workspace-command-rail.png") });
+
+    await page.keyboard.press("ArrowRight");
+    await expect(first).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(second).toBeFocused();
+    await page.keyboard.press("ArrowUp");
+    await expect(first).toBeFocused();
+    await page.keyboard.press("End");
+    await expect(last).toBeFocused();
+    await page.keyboard.press("Home");
+    await expect(first).toBeFocused();
+
+    await page.setViewportSize({ width: 900, height: 720 });
+    await expect(rail).toHaveAttribute("aria-orientation", "horizontal");
+    await page.screenshot({ path: testInfo.outputPath("workspace-command-rail-narrow.png") });
+    await first.focus();
+    await page.keyboard.press("ArrowDown");
+    await expect(first).toBeFocused();
+    await page.keyboard.press("ArrowRight");
+    await expect(second).toBeFocused();
+    await page.keyboard.press("ArrowLeft");
+    await expect(first).toBeFocused();
+    await page.keyboard.press("End");
+    await expect(last).toBeFocused();
+    await page.keyboard.press("Home");
+    await expect(first).toBeFocused();
 });
 
 test("escape closes the settings dialog", async ({ page }) => {
     await page.goto("/");
-    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    const settingsTrigger = page.getByRole("button", { name: "Settings", exact: true });
+    await settingsTrigger.focus();
+    await settingsTrigger.click();
     const dialog = page.getByRole("dialog", { name: "Settings" });
     await expect(dialog).toBeVisible();
+    await dialog.getByRole("switch", { name: /anonymous usage counts/ }).focus();
+    await page.keyboard.press("Tab");
+    await expect.poll(() => page.evaluate(() => {
+        const dialog = document.querySelector('[role="dialog"]');
+        return dialog?.contains(document.activeElement) ?? false;
+    })).toBe(true);
     await page.keyboard.press("Escape");
     await expect(dialog).not.toBeVisible();
+    await expect(settingsTrigger).toBeFocused();
 });
 
 test("tool cards render their design icon masks", async ({ page }) => {
@@ -676,6 +870,9 @@ test("PDF to Images identifies source selection and summarizes its non-previewab
   await page.goto("/");
   await page.getByRole("button", { name: "Open PDF to Images" }).click();
   await chooseFixture(page, pdfFixturePath);
+  const pageCard = page.locator(".conversion-page-card");
+  await expect(pageCard).toHaveAttribute("data-slot", "card");
+  await expect(pageCard.locator('[data-slot="card-content"]')).toHaveCount(1);
   await expect(page.getByRole("region", { name: "Source page selection" })).toBeVisible();
   await expect(page.getByRole("region", { name: "Conversion preview" })).toHaveCount(0);
   await expect(page.getByRole("checkbox", { name: "Page 1" })).toBeChecked();
@@ -688,7 +885,7 @@ test("PDF to Images identifies source selection and summarizes its non-previewab
   await page.getByLabel("Output format").selectOption("png");
   await expect(page.getByText("Output preview unavailable. Export renders page 1 at 300 DPI as PNG image files.", { exact: true })).toBeVisible();
 
-  await page.getByRole("checkbox", { name: "Page 1" }).uncheck();
+  await page.getByRole("checkbox", { name: "Page 1" }).click();
   await expect(page.locator(".workspace-primary-action")).toBeDisabled();
 });
 
@@ -801,9 +998,14 @@ test("PDF page-scoped conversions send the selected pages and keep OCR gated", a
     await page.goto("/");
     await page.getByRole("button", { name: "Open PDF to Text" }).click();
     await chooseFixture(page, "/local/document.scoped.pdf");
-    await expect(page.getByRole("checkbox", { name: "Page 3" })).toBeVisible();
-    await page.getByRole("checkbox", { name: "Page 1" }).uncheck();
-    await page.getByRole("checkbox", { name: "Page 3" }).uncheck();
+    const pageOne = page.getByRole("checkbox", { name: "Page 1" });
+    const pageThree = page.getByRole("checkbox", { name: "Page 3" });
+    await expect(pageThree).toBeVisible();
+    await page.getByRole("img", { name: "Source page preview 1" }).click();
+    await expect(pageOne).not.toBeChecked();
+    await pageThree.focus();
+    await page.keyboard.press("Space");
+    await expect(pageThree).not.toBeChecked();
     await page.getByRole("button", { name: "Export PDF to Text", exact: true }).click();
 
     const textInvocation = await page.evaluate(() =>
@@ -850,7 +1052,7 @@ test("shared workspace ignores a stale processing completion after action change
     await page.goto("/");
     await page.getByRole("button", { name: "Open Compress Images" }).click();
     await page.getByRole("button", { name: "Choose files to process" }).click();
-    await page.getByLabel("Lossless compression").check();
+    await page.getByRole("switch", { name: "Preserve original pixels" }).click();
     await page.evaluate(() => { (window as TestWindow).__toolboxProcessingDelayMs = 150; });
     await page.getByRole("button", { name: "Export edited images" }).click();
     await page.getByRole("toolbar", { name: "Image editor tools" }).getByRole("button", { name: "Rotate and Flip Images" }).click();
@@ -931,7 +1133,7 @@ test("every output exposes native file actions and keeps action errors inline", 
 
     await page.getByRole("button", { name: "Open Compress Images" }).click();
     await page.getByRole("button", { name: "Choose files to process" }).click();
-    await page.getByLabel("Lossless compression").check();
+    await page.getByRole("switch", { name: "Preserve original pixels" }).click();
     await page.getByRole("button", { name: "Export edited images" }).click();
 
     const outputRows = page.locator(".result-output");
@@ -962,7 +1164,7 @@ test("output action state resets and ignores stale completions", async ({ page }
     await page.goto("/");
     await page.getByRole("button", { name: "Open Compress Images" }).click();
     await page.getByRole("button", { name: "Choose files to process" }).click();
-    await page.getByLabel("Lossless compression").check();
+    await page.getByRole("switch", { name: "Preserve original pixels" }).click();
     const processButton = page.getByRole("button", { name: "Export edited images" });
     await processButton.click();
 
@@ -1036,7 +1238,7 @@ test("page-scoped actions disable export when the explicit selection is empty", 
     await chooseFixture(page, pdfFixturePath);
     const pageCheckbox = page.getByRole("checkbox", { name: "Page 1" });
     await expect(pageCheckbox).toBeChecked();
-    await pageCheckbox.uncheck();
+    await pageCheckbox.click();
     await expect(page.getByRole("button", { name: "Export PDF to Text", exact: true })).toBeDisabled();
 });
 
@@ -1120,12 +1322,12 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
     }
     if (workspaceForTool(utility.id)?.id === "image-editor") {
         if (utility.id === "heic-convert") await page.getByLabel("Target format").selectOption("jpg");
-        if (utility.id === "compress") await page.getByLabel("Lossless compression").check();
+        if (utility.id === "compress") await page.getByRole("switch", { name: "Preserve original pixels" }).click();
         if (utility.id === "resize") await page.getByLabel("Width").fill("640");
         if (utility.id === "rotate") await page.getByLabel("Rotation").selectOption("90");
         if (utility.id === "crop") await page.getByLabel("Crop width").fill("320");
         if (utility.id === "image-watermark") await page.getByLabel("Watermark text").fill("Test watermark");
-        if (utility.id === "image-tone") await page.getByRole("slider", { name: "Brightness" }).fill("10");
+        if (utility.id === "image-tone") await page.getByRole("slider", { name: "Brightness" }).press("End");
     }
     if (utility.id === "pdf-merge") {
         await page.evaluate(() => { (window as TestWindow).__toolboxSecondPick = true; });

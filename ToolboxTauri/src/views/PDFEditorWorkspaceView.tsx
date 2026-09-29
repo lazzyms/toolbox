@@ -4,8 +4,14 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { ToolScaffold } from '../components/ToolScaffold';
 import type { WorkspaceSourceAction } from '../components/ToolScaffold';
 import type { ToolDefinition, ToolResult } from '../contracts';
-import { colorTokens, readColorToken } from '../design-system';
+import { Button } from '../components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
+import { Input } from '../components/ui/input';
+import { Label } from '../components/ui/label';
+import { NativeSelect } from '../components/ui/native-select';
+import { Slider } from '../components/ui/slider';
 import type { PdfDocument, PdfPage, PdfTextRun } from '../features/pdf-editor/contracts';
+import { colorTokens, readColorToken } from '../features/pdf-editor/colorTokens';
 import { SceneCanvas } from '../features/pdf-editor/SceneCanvas';
 import { sceneFromDocument, visibleBounds } from '../features/pdf-editor/scene';
 import type { PdfScene, SceneObject, ScenePage, ScenePreview, SceneRect, SceneShape, SceneTool, SignatureMode, WatermarkPattern } from '../features/pdf-editor/scene';
@@ -41,6 +47,33 @@ const signatureFontOptions = [
 const watermarkFontSizes = [18, 24, 32, 40, 48, 56, 64, 72, 88, 104, 120];
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 type History = { past: PdfScene[]; present: PdfScene; future: PdfScene[] };
+
+function keepToolbarTabStop(toolbar: HTMLDivElement | null) {
+  const buttons = Array.from(toolbar?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? []);
+  const active = buttons.indexOf(document.activeElement as HTMLButtonElement);
+  buttons.forEach((button, index) => { button.tabIndex = index === (active >= 0 ? active : 0) ? 0 : -1; });
+}
+
+function handleToolbarFocus(event: React.FocusEvent<HTMLDivElement>) {
+  const target = event.target;
+  if (!(target instanceof HTMLButtonElement) || target.disabled) return;
+  const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'));
+  buttons.forEach((button) => { button.tabIndex = button === target ? 0 : -1; });
+}
+
+function handleToolbarKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+  if (event.altKey || event.ctrlKey || event.metaKey) return;
+  const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'));
+  const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
+  if (current < 0 || buttons.length === 0) return;
+  const next = event.key === 'ArrowRight' ? (current + 1) % buttons.length
+    : event.key === 'ArrowLeft' ? (current - 1 + buttons.length) % buttons.length
+      : event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : -1;
+  if (next < 0) return;
+  event.preventDefault();
+  buttons.forEach((button, index) => { button.tabIndex = index === next ? 0 : -1; });
+  buttons[next].focus();
+}
 
 export const PDFEditorWorkspaceView = ({ utility, onWorkspaceSourceAction }: { utility: ToolDefinition; onWorkspaceSourceAction?: (action: WorkspaceSourceAction | null) => void }) => {
   const session = useRef<{ path: string; scene: PdfScene } | null>(null);
@@ -96,9 +129,15 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onScene }: {
   const [renderError, setRenderError] = useState<string | null>(null);
   const group = useRef<string | null>(null);
   const draggedPage = useRef<string | null>(null);
+  const toolsToolbar = useRef<HTMLDivElement>(null);
+  const bottomToolbar = useRef<HTMLDivElement>(null);
   const previewCache = useRef(createPreviewCache());
   const previewGeneration = useRef<GenerationState>({ current: 0 });
   const textGeneration = useRef<GenerationState>({ current: 0 });
+  useLayoutEffect(() => {
+    keepToolbarTabStop(toolsToolbar.current);
+    keepToolbarTabStop(bottomToolbar.current);
+  });
   const scene = history.present;
   const page = scene.pages.find((item) => item.id === currentId) ?? scene.pages[0];
   const selected = page?.objects.find((object) => object.id === selectedId);
@@ -322,96 +361,101 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onScene }: {
     const input = event.target instanceof HTMLElement && (['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target.tagName) || event.target.isContentEditable);
     if (!input && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); event.shiftKey ? redo() : undo(); }
   }}>
-    <div className="scene-tools" role="toolbar" aria-label="PDF editor tools">
-      {tools.map((item) => <button key={item.id} type="button" aria-label={item.label} aria-description={toolGuidance[item.id]} title={toolGuidance[item.id]} aria-pressed={tool === item.id}
-        onClick={() => { endGroup(); setTool(item.id); setSelectedId(null); }} disabled={!page}><span aria-hidden="true">{item.glyph}</span>{item.label}</button>)}
+    <div ref={toolsToolbar} className="scene-tools" role="toolbar" aria-label="PDF editor tools" aria-orientation="horizontal" onFocusCapture={handleToolbarFocus} onKeyDown={handleToolbarKeyDown}>
+      {tools.map((item) => <Button key={item.id} variant={tool === item.id ? "secondary" : "ghost"} size="sm" aria-label={item.label} aria-description={toolGuidance[item.id]} title={toolGuidance[item.id]} aria-pressed={tool === item.id}
+        onClick={() => { endGroup(); setTool(item.id); setSelectedId(null); }} disabled={!page}><span aria-hidden="true">{item.glyph}</span>{item.label}</Button>)}
       <span className="scene-toolbar-divider" />
-      <button type="button" aria-label="Undo" title="Undo (⌘Z / Ctrl+Z)" disabled={!history.past.length} onClick={undo}>↶</button>
-      <button type="button" aria-label="Redo" title="Redo (⇧⌘Z / Ctrl+Shift+Z)" disabled={!history.future.length} onClick={redo}>↷</button>
-      <button type="button" aria-label="Reset edits" disabled={!dirty} onClick={reset}>Reset</button>
-      <button type="button" className="workspace-primary-action scene-export" aria-label="Export PDF" disabled={!page || exporting || Boolean(renderError) || rendering || !exactPreview}
-        onClick={() => void onExport()}>{exporting ? 'Exporting…' : 'Export PDF'}</button>
+      <Button variant="ghost" size="icon-sm" aria-label="Undo" title="Undo (⌘Z / Ctrl+Z)" disabled={!history.past.length} onClick={undo}>↶</Button>
+      <Button variant="ghost" size="icon-sm" aria-label="Redo" title="Redo (⇧⌘Z / Ctrl+Shift+Z)" disabled={!history.future.length} onClick={redo}>↷</Button>
+      <Button variant="destructive" size="sm" aria-label="Reset edits" disabled={!dirty} onClick={reset}>Reset</Button>
+      <Button variant="default" size="sm" className="workspace-primary-action scene-export" aria-label="Export PDF" disabled={!page || exporting || Boolean(renderError) || rendering || !exactPreview}
+        onClick={() => void onExport()}>{exporting ? 'Exporting…' : 'Export PDF'}</Button>
     </div>
-    {showProperties && <div className="scene-properties" aria-label="Object properties">
+    {showProperties && <section className="scene-properties" aria-label="Object properties">
       {selectedKind === 'text' && <>
-        <label>Size<input aria-label="Font size" type="number" min="6" max="144" value={selected?.fontSize ?? fontSize}
-          onChange={(event) => { const value = Math.max(6, Math.min(144, Number(event.target.value) || 6)); selected ? updateObject({ fontSize: value }, 'font') : setFontSize(value); }} onBlur={endGroup} /></label>
+        <div className="scene-property-field"><Label htmlFor="scene-text-size">Size</Label><Input id="scene-text-size" aria-label="Font size" type="number" min="6" max="144" value={selected?.fontSize ?? fontSize}
+          onChange={(event) => { const value = Math.max(6, Math.min(144, Number(event.target.value) || 6)); selected ? updateObject({ fontSize: value }, 'font') : setFontSize(value); }} onBlur={endGroup} /></div>
       </>}
-      {selectedKind === 'shape' && <label>Shape<select aria-label="Shape type" value={activeShape} onChange={(event) => selected ? updateObject({ shape: event.target.value as SceneShape }, 'shape') : setShape(event.target.value as SceneShape)}>
-        <option value="square">Square</option><option value="round">Round</option><option value="triangle">Triangle</option><option value="line">Line</option><option value="dotted-line">Dotted line</option>
-        <option value="arrow-left">Arrow left</option><option value="arrow-right">Arrow right</option><option value="arrow-up">Arrow up</option><option value="arrow-down">Arrow down</option>
-      </select></label>}
+      {selectedKind === 'shape' && <div className="scene-property-field"><Label htmlFor="scene-shape-type">Shape</Label><NativeSelect id="scene-shape-type" aria-label="Shape type" size="sm" value={activeShape}
+        onChange={(event) => selected ? updateObject({ shape: event.target.value as SceneShape }, 'shape') : setShape(event.target.value as SceneShape)}
+        >
+          <option value="square">Square</option><option value="round">Round</option><option value="triangle">Triangle</option>
+          <option value="line">Line</option><option value="dotted-line">Dotted line</option><option value="arrow-left">Arrow left</option>
+          <option value="arrow-right">Arrow right</option><option value="arrow-up">Arrow up</option><option value="arrow-down">Arrow down</option>
+        </NativeSelect></div>}
       {selectedKind === 'signature' && <>
-        <label>Mode<select aria-label="Signature mode" value={activeSignatureMode} onChange={(event) => { const value = event.target.value as SignatureMode; selected ? updateObject({ signatureMode: value, strokes: [] }, 'signature-mode') : setSignatureMode(value); }}>
-          <option value="image">Choose image</option><option value="text">Type signature</option>
-        </select></label>
+        <div className="scene-property-field"><Label htmlFor="scene-signature-mode">Mode</Label><NativeSelect id="scene-signature-mode" aria-label="Signature mode" size="sm" value={activeSignatureMode}
+          onChange={(event) => { const value = event.target.value as SignatureMode; selected ? updateObject({ signatureMode: value, strokes: [] }, 'signature-mode') : setSignatureMode(value); }}
+          ><option value="image">Choose image</option><option value="text">Type signature</option></NativeSelect></div>
         {activeSignatureMode === 'image' ? <>
-          <button type="button" onClick={() => void chooseSignatureImage()}>Choose signature image</button>
+          <Button variant="ghost" size="sm" onClick={() => void chooseSignatureImage()}>Choose signature image</Button>
           <span className="scene-property-note">{activeSignaturePath ? activeSignaturePath.split(/[\\/]/).pop() : 'No image chosen'}</span>
         </> : <>
-          <label>Signature<input aria-label="Signature text" value={activeSignatureText}
+          <div className="scene-property-field"><Label htmlFor="scene-signature-text">Signature</Label><Input id="scene-signature-text" aria-label="Signature text" value={activeSignatureText}
             onChange={(event) => selectedSignature ? setSignatureTextDraft(event.target.value) : setSignatureText(event.target.value)}
             onBlur={() => {
               if (selectedSignature && signatureTextDraft !== selectedSignature.text) updateObject({ text: signatureTextDraft }, 'signature-text');
               endGroup();
-            }} /></label>
-          <label>Font<select aria-label="Signature font" value={activeSignatureFont} onChange={(event) => selected ? updateObject({ fontFamily: event.target.value }, 'signature-font') : setSignatureFont(event.target.value)}>
-            {signatureFontOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-          </select></label>
+            }} /></div>
+          <div className="scene-property-field"><Label htmlFor="scene-signature-font">Font</Label><NativeSelect id="scene-signature-font" aria-label="Signature font" size="sm" value={activeSignatureFont}
+            onChange={(event) => selected ? updateObject({ fontFamily: event.target.value }, 'signature-font') : setSignatureFont(event.target.value)}
+            >{signatureFontOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</NativeSelect></div>
         </>}
-        <label>Size<input aria-label="Font size" type="number" min="8" max="144" value={selected?.fontSize ?? Math.max(18, fontSize)}
-          onChange={(event) => { const value = Math.max(8, Math.min(144, Number(event.target.value) || 8)); selected ? updateObject({ fontSize: value }, 'signature-font-size') : setFontSize(value); }} onBlur={endGroup} /></label>
+        <div className="scene-property-field"><Label htmlFor="scene-signature-size">Size</Label><Input id="scene-signature-size" aria-label="Font size" type="number" min="8" max="144" value={selected?.fontSize ?? Math.max(18, fontSize)}
+          onChange={(event) => { const value = Math.max(8, Math.min(144, Number(event.target.value) || 8)); selected ? updateObject({ fontSize: value }, 'signature-font-size') : setFontSize(value); }} onBlur={endGroup} /></div>
         {activeSignatureMode === 'image' && activeSignaturePreview && <img className="scene-signature-mini-preview" alt="Selected signature preview" src={activeSignaturePreview} />}
       </>}
       {(selectedKind === 'watermark') && <>
-        <label>Text<input aria-label="Watermark text" value={activeWatermarkText} onChange={(event) => selected ? updateObject({ text: event.target.value }, 'watermark-text') : setWatermarkText(event.target.value)} onBlur={endGroup} /></label>
-        <label>Size<select aria-label="Watermark font size" value={activeWatermarkFontSize} onChange={(event) => {
+        <div className="scene-property-field"><Label htmlFor="scene-watermark-text">Text</Label><Input id="scene-watermark-text" aria-label="Watermark text" value={activeWatermarkText} onChange={(event) => selected ? updateObject({ text: event.target.value }, 'watermark-text') : setWatermarkText(event.target.value)} onBlur={endGroup} /></div>
+        <div className="scene-property-field"><Label htmlFor="scene-watermark-size">Size</Label><NativeSelect id="scene-watermark-size" aria-label="Watermark font size" size="sm" value={activeWatermarkFontSize} onChange={(event) => {
           const value = Number(event.target.value);
           selected ? updateObject({ fontSize: value }, 'watermark-font-size') : setWatermarkFontSize(value);
-        }}>
-          {watermarkFontSizes.map((value) => <option key={value} value={value}>{value} pt</option>)}
-        </select></label>
-        <label>Pattern<select aria-label="Watermark pattern" value={activeWatermarkPattern} onChange={(event) => selected ? updateObject({ watermarkPattern: event.target.value as WatermarkPattern }, 'watermark-pattern') : setWatermarkPattern(event.target.value as WatermarkPattern)}>
-          <option value="across-page">Across page</option><option value="bottom-right-to-top-left">Bottom-right to top-left</option><option value="top-right-to-bottom-left">Top-right to bottom-left</option><option value="center-horizontal">Centre horizontal</option><option value="center-vertical">Centre vertical</option>
-        </select></label>
-        {selected && <button type="button" onClick={addFixedWatermark}>Add fixed watermark</button>}
+        }}>{watermarkFontSizes.map((value) => <option key={value} value={value}>{value} pt</option>)}</NativeSelect></div>
+        <div className="scene-property-field"><Label htmlFor="scene-watermark-pattern">Pattern</Label><NativeSelect id="scene-watermark-pattern" aria-label="Watermark pattern" size="sm" value={activeWatermarkPattern}
+          onChange={(event) => selected ? updateObject({ watermarkPattern: event.target.value as WatermarkPattern }, 'watermark-pattern') : setWatermarkPattern(event.target.value as WatermarkPattern)}
+          ><option value="across-page">Across page</option><option value="bottom-right-to-top-left">Bottom-right to top-left</option><option value="top-right-to-bottom-left">Top-right to bottom-left</option><option value="center-horizontal">Centre horizontal</option><option value="center-vertical">Centre vertical</option></NativeSelect></div>
+        {selected && <Button variant="ghost" size="sm" onClick={addFixedWatermark}>Add fixed watermark</Button>}
       </>}
       {(selected || !['select', 'crop'].includes(tool)) && <>
-        <label>Color<input type="color" aria-label="Object color" value={activeColor} onChange={(event) => {
+        <Label className="scene-color-field">Color<input type="color" aria-label="Object color" value={activeColor} onChange={(event) => {
           if (selected) updateObject({ color: event.target.value }, 'color'); else if (tool === 'highlight') setHighlightColor(event.target.value); else setColor(event.target.value);
-        }} onBlur={endGroup} /></label>
-        <label>Opacity<input aria-label="Object opacity" type="range" min="5" max="100" value={Math.round(activeOpacity * 100)}
-          onChange={(event) => { const value = Number(event.target.value) / 100; if (selected) updateObject({ opacity: value }, 'opacity'); else if (tool === 'highlight') setHighlightOpacity(value); else setOpacity(value); }} onBlur={endGroup} /></label>
+        }} onBlur={endGroup} /></Label>
+        <div className="scene-property-slider"><Label id="scene-object-opacity-label">Object opacity</Label><output>{Math.round(activeOpacity * 100)}%</output><Slider aria-labelledby="scene-object-opacity-label" min={5} max={100} value={[Math.round(activeOpacity * 100)]}
+          onValueChange={([value]) => { if (value === undefined) return; const opacity = value / 100; if (selected) updateObject({ opacity }, 'opacity'); else if (tool === 'highlight') setHighlightOpacity(opacity); else setOpacity(opacity); }} /></div>
       </>}
-      {selected && <><button type="button" onClick={() => { commitPage({ ...page, objects: page.objects.filter((item) => item.id !== selected.id) }); setSelectedId(null); }}>Delete object</button>
-        <button type="button" onClick={() => commitPage({ ...page, objects: [...page.objects.filter((item) => item.id !== selected.id), selected] })}>Bring to front</button></>}
-      {tool === 'crop' && <><span>Drag a rectangle on the page to crop.</span><button type="button" disabled={!page?.crop} onClick={() => commitPage({ ...page, crop: null })}>Remove crop</button></>}
+      {selected && <><Button variant="destructive" size="sm" onClick={() => { commitPage({ ...page, objects: page.objects.filter((item) => item.id !== selected.id) }); setSelectedId(null); }}>Delete object</Button>
+        <Button variant="ghost" size="sm" onClick={() => commitPage({ ...page, objects: [...page.objects.filter((item) => item.id !== selected.id), selected] })}>Bring to front</Button></>}
+      {tool === 'crop' && <><span>Drag a rectangle on the page to crop.</span><Button variant="destructive" size="sm" disabled={!page?.crop} onClick={() => commitPage({ ...page, crop: null })}>Remove crop</Button></>}
       {tool === 'select' && !selected && <span>Select an object to move or resize it. Shift-click thumbnails to select pages.</span>}
       {tool === 'highlight' && <span>{document?.pages[page?.sourceIndex ?? -1]?.textRuns?.length ? 'Drag across selectable PDF text, or draw a highlight area.' : 'Drag across the page to highlight an area.'}</span>}
       {tool === 'signature' && !selected && <span>{signatureMode === 'image' ? 'Choose an image, then drag its box onto the page.' : 'Type a signature, choose its font, then drag a box onto the page.'}</span>}
-      {tool === 'watermark' && !selected && <><span>Fixed placement: choose a pattern and add it to the page.</span><button type="button" onClick={addFixedWatermark}>Add fixed watermark</button></>}
+      {tool === 'watermark' && !selected && <><span>Fixed placement: choose a pattern and add it to the page.</span><Button variant="ghost" size="sm" onClick={addFixedWatermark}>Add fixed watermark</Button></>}
       <span className="scene-render-status" role="status">{rendering ? 'Rendering on device…' : exactPreview ? 'Export preview · on device' : 'Local document'}</span>
-    </div>}
+    </section>}
     {error && <p role="alert" className="scene-error">{error}</p>}
     {renderError && <p role="alert" className="scene-error">{renderError} Export is disabled until the preview can be verified.</p>}
-    {!page ? <div className="scene-empty"><strong>{loading ? 'Opening PDF…' : 'Open a PDF to edit'}</strong><span>Text, markup, signatures and page edits in one document.<br />Files stay on your device. Export creates a new copy.</span></div> : <>
+    {!page ? <Card className="scene-empty"><CardHeader className="my-auto items-center text-center"><CardTitle role="heading" aria-level={2}>{loading ? 'Opening PDF…' : 'Open a PDF to edit'}</CardTitle><CardDescription>Text, markup, signatures and page edits in one document.<br />Files stay on your device. Export creates a new copy.</CardDescription></CardHeader></Card> : <>
       <div className="scene-document">
-        <aside className="scene-thumbnails" aria-label="PDF page thumbnails">
-          <div className="scene-page-actions"><button type="button" aria-label="Add blank page" title="Insert blank page after this page" onClick={insertPage}>＋</button>
-            <button type="button" aria-label="Delete selected pages" title="Delete selected pages" disabled={targets.length >= scene.pages.length} onClick={deletePages}>−</button></div>
+        <Card className="scene-thumbnails py-0" role="complementary" aria-label="PDF page thumbnails">
+          <CardContent className="scene-thumbnails-content p-2">
+          <div className="scene-page-actions">
+            <Button variant="ghost" size="icon-sm" aria-label="Add blank page" title="Insert blank page after this page" onClick={insertPage}>＋</Button>
+            <Button variant="destructive" size="icon-sm" aria-label="Delete selected pages" title="Delete selected pages" disabled={targets.length >= scene.pages.length} onClick={deletePages}>−</Button>
+          </div>
           {scene.pages.map((item, index) => {
             const cached = thumbnails[item.id];
             const thumbnailKey = path ? previewCacheKey(path, index, serializedScene, PREVIEW_RENDER_SETTINGS) : null;
             const thumb = cached?.key === thumbnailKey ? cached.value.dataUrl : item.sourceIndex === null ? null : document?.pages[item.sourceIndex]?.preview;
-            return <button key={item.id} type="button" className="scene-thumbnail" aria-label={`Page ${index + 1}${item.sourceIndex === null ? ', blank' : ''}`}
+            return <Button key={item.id} variant={targets.includes(item.id) ? "secondary" : "ghost"} size="sm" className="scene-thumbnail h-auto min-h-0" aria-label={'Page ' + (index + 1) + (item.sourceIndex === null ? ', blank' : '')}
               aria-current={page.id === item.id ? 'page' : undefined} aria-pressed={targets.includes(item.id)} draggable
               onDragStart={() => { draggedPage.current = item.id; }} onDragEnd={() => { draggedPage.current = null; }} onDragOver={(event) => event.preventDefault()} onDrop={() => movePages(item.id)}
               onClick={(event) => selectPage(item.id, event.metaKey || event.ctrlKey, event.shiftKey)}>
               {thumb ? <img alt={`Thumbnail of page ${index + 1}`} src={thumb} /> : <span className="scene-blank-thumb" />}
               <span>{index + 1}</span><small>{item.objects.length ? `${item.objects.length} marks` : item.sourceIndex === null ? 'Blank' : ''}</small>
-            </button>;
+            </Button>;
           })}
-        </aside>
+          </CardContent>
+        </Card>
         <div className="scene-canvas-column">
           <SceneCanvas page={page} sourcePreview={page.sourceIndex === null ? null : document?.pages[page.sourceIndex]?.preview ?? null}
             textRuns={page.sourceIndex === null ? [] : document?.pages[page.sourceIndex]?.textRuns ?? []}
@@ -419,19 +463,19 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onScene }: {
             onCommit={commitPage} makeObject={makeObject} />
         </div>
       </div>
-      <footer className="scene-bottom-bar">
-        <button type="button" aria-label="Previous page" disabled={currentIndex <= 0} onClick={() => selectPage(scene.pages[currentIndex - 1].id)}>‹</button>
+      <div ref={bottomToolbar} className="scene-bottom-bar" role="toolbar" aria-label="PDF page and zoom controls" aria-orientation="horizontal" onFocusCapture={handleToolbarFocus} onKeyDown={handleToolbarKeyDown}>
+        <Button variant="ghost" size="icon-sm" aria-label="Previous page" disabled={currentIndex <= 0} onClick={() => selectPage(scene.pages[currentIndex - 1].id)}>‹</Button>
         <span>Page {currentIndex + 1} of {scene.pages.length}</span>
-        <button type="button" aria-label="Next page" disabled={currentIndex >= scene.pages.length - 1} onClick={() => selectPage(scene.pages[currentIndex + 1].id)}>›</button>
+        <Button variant="ghost" size="icon-sm" aria-label="Next page" disabled={currentIndex >= scene.pages.length - 1} onClick={() => selectPage(scene.pages[currentIndex + 1].id)}>›</Button>
         <span className="scene-toolbar-divider" />
-        <button type="button" aria-label="Zoom out" disabled={zoom <= 0.5} onClick={() => setZoom((value) => Math.max(0.5, value - 0.25))}>−</button>
-        <button type="button" aria-label="Fit page" onClick={() => setZoom(1)}>{Math.round(zoom * 100)}% · Fit</button>
-        <button type="button" aria-label="Zoom in" disabled={zoom >= 3} onClick={() => setZoom((value) => Math.min(3, value + 0.25))}>＋</button>
-        <button type="button" aria-label="Rotate selected pages" onClick={() => commit({ pages: scene.pages.map((item) => targets.includes(item.id) ? { ...item, rotation: (item.rotation + 90) % 360 } : item) })}>Rotate ↻</button>
-        <button type="button" aria-label="Move page earlier" disabled={currentIndex <= 0} onClick={() => shiftPage(-1)}>Move ←</button>
-        <button type="button" aria-label="Move page later" disabled={currentIndex >= scene.pages.length - 1} onClick={() => shiftPage(1)}>Move →</button>
-        <button type="button" onClick={pageNumbers}>Page numbers</button><span className="scene-original-note">Original unchanged</span>
-      </footer>
+        <Button variant="ghost" size="icon-sm" aria-label="Zoom out" disabled={zoom <= 0.5} onClick={() => setZoom((value) => Math.max(0.5, value - 0.25))}>−</Button>
+        <Button variant="ghost" size="sm" aria-label="Fit page" onClick={() => setZoom(1)}>{Math.round(zoom * 100)}% · Fit</Button>
+        <Button variant="ghost" size="icon-sm" aria-label="Zoom in" disabled={zoom >= 3} onClick={() => setZoom((value) => Math.min(3, value + 0.25))}>＋</Button>
+        <Button variant="ghost" size="sm" aria-label="Rotate selected pages" onClick={() => commit({ pages: scene.pages.map((item) => targets.includes(item.id) ? { ...item, rotation: (item.rotation + 90) % 360 } : item) })}>Rotate ↻</Button>
+        <Button variant="ghost" size="sm" aria-label="Move page earlier" disabled={currentIndex <= 0} onClick={() => shiftPage(-1)}>Move ←</Button>
+        <Button variant="ghost" size="sm" aria-label="Move page later" disabled={currentIndex >= scene.pages.length - 1} onClick={() => shiftPage(1)}>Move →</Button>
+        <Button variant="ghost" size="sm" onClick={pageNumbers}>Page numbers</Button><span className="scene-original-note">Original unchanged</span>
+      </div>
     </>}
   </section>;
 }

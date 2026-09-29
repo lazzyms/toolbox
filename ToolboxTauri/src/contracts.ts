@@ -139,7 +139,6 @@ export interface ToolDefinition {
   shortTitle: string;
   blurb: string;
   symbol: string;
-  tint: string;
   category: ToolCategory;
   status: ToolStatus;
   capability: ToolCapability;
@@ -187,7 +186,6 @@ export interface ToolWorkspaceDefinition {
   title: string;
   blurb: string;
   symbol: string;
-  tint: string;
   category: ToolCategory;
   categories: ToolCategory[];
   toolIds: AtomicToolId[];
