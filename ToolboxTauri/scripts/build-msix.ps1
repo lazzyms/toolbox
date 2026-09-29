@@ -56,7 +56,7 @@ function Get-MsixVersion([string]$ConfiguredVersion) {
 }
 
 function Copy-IntoStage([string]$Source, [string]$Destination) {
-    $sourcePath = Join-Path $projectRoot $Source
+    $sourcePath = Join-Path $tauriRoot $Source
     $destinationPath = Join-Path $stage ($Destination -replace '/', '\')
     if (Test-Path -LiteralPath $sourcePath -PathType Container) {
         New-Item -ItemType Directory -Force -Path $destinationPath | Out-Null
@@ -77,19 +77,19 @@ function Copy-ConfiguredInputs($Configured, [string]$Kind) {
             $source = $entry
             $wildcard = $source.IndexOfAny([char[]]@('*', '?')) -ge 0
             if ($wildcard) {
-                $matches = Get-ChildItem -Path (Join-Path $projectRoot $source) -File -Recurse
+                $matches = Get-ChildItem -Path (Join-Path $tauriRoot $source) -File -Recurse
                 foreach ($match in $matches) {
-                    $relative = [IO.Path]::GetRelativePath($projectRoot, $match.FullName)
+                    $relative = [IO.Path]::GetRelativePath($tauriRoot, $match.FullName)
                     Copy-IntoStage $relative $relative
                 }
             } else {
                 $name = Split-Path $source -Leaf
                 if ($Kind -eq "externalBin") {
                     $candidates = @($source, "$source-$Target", "$source-$Target.exe", "$source.exe") |
-                        Select-Object -Unique | Where-Object { Test-Path -LiteralPath (Join-Path $projectRoot $_) -PathType Leaf }
+                        Select-Object -Unique | Where-Object { Test-Path -LiteralPath (Join-Path $tauriRoot $_) -PathType Leaf }
                     if (-not $candidates) { throw "Configured external binary does not exist for $Target`: $source" }
                     foreach ($candidate in $candidates) {
-                        $relative = [IO.Path]::GetRelativePath($projectRoot, (Join-Path $projectRoot $candidate))
+                        $relative = [IO.Path]::GetRelativePath($tauriRoot, (Join-Path $tauriRoot $candidate))
                         Copy-IntoStage $relative $relative
                     }
                 } else {

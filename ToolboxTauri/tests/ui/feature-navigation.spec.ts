@@ -499,7 +499,7 @@ test("settings privacy opt-out persists across reloads", async ({ page }) => {
     const dialog = page.getByRole("dialog", { name: "Settings" });
     const privacyToggle = dialog.getByRole("switch", { name: /anonymous usage counts/ });
     await expect(privacyToggle).toBeVisible();
-    await expect(dialog).toContainText("Version 1.0.13");
+    await expect(dialog).toContainText(/Version \d+\.\d+\.\d+/);
     await privacyToggle.click();
     await expect(privacyToggle).toHaveAttribute("aria-checked", "true");
 

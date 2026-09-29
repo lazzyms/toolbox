@@ -1,6 +1,6 @@
 [package]
 name = "toolbox"
-version = "1.0.13"
+version = "1.0.14"
 description = "Cross-platform Toolbox (Tauri port of the macOS utilities app)"
 authors = ["Maulik Sompura"]
 edition = "2021"
