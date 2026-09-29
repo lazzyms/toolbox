@@ -484,7 +484,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
               </>}
               {(selected || !['select', 'crop'].includes(tool)) && <>
                 <div className="scene-inspector-field"><Label htmlFor="scene-object-color">Object color</Label>
-                  <input id="scene-object-color" type="color" value={activeColor} onChange={(event) => {
+                  <input id="scene-object-color" type="color" aria-label="Object color" value={activeColor} onChange={(event) => {
                     if (selected) updateObject({ color: event.target.value }, 'color'); else if (tool === 'highlight') setHighlightColor(event.target.value); else setColor(event.target.value);
                   }} onBlur={endGroup} />
                 </div>
@@ -535,23 +535,27 @@ function PageActionsMenu({ sourcePath, onNavigate }: { sourcePath: string | null
   const [open, setOpen] = useState(false);
   const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!open) return;
-    const menu = document.getElementById('pdf-page-actions-menu') as HTMLDivElement | null;
+    const menu = menuRef.current;
     const items = () => Array.from(menu?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? []);
     items()[0]?.focus();
     const closeOutside = (event: PointerEvent) => {
       if (event.target instanceof Node && !menu?.contains(event.target) && !triggerRef.current?.contains(event.target)) setOpen(false);
     };
-    const closeOnScroll = () => setOpen(false);
+    const closeOnWheelOutside = (event: WheelEvent) => {
+      if (event.target instanceof Node && !menu?.contains(event.target)) setOpen(false);
+    };
+    const closeOnResize = () => setOpen(false);
     window.addEventListener('pointerdown', closeOutside);
-    window.addEventListener('scroll', closeOnScroll, true);
-    window.addEventListener('resize', closeOnScroll);
+    window.addEventListener('wheel', closeOnWheelOutside, { passive: true });
+    window.addEventListener('resize', closeOnResize);
     return () => {
       window.removeEventListener('pointerdown', closeOutside);
-      window.removeEventListener('scroll', closeOnScroll, true);
-      window.removeEventListener('resize', closeOnScroll);
+      window.removeEventListener('wheel', closeOnWheelOutside);
+      window.removeEventListener('resize', closeOnResize);
     };
   }, [open]);
 
@@ -560,7 +564,7 @@ function PageActionsMenu({ sourcePath, onNavigate }: { sourcePath: string | null
     if (restoreFocus) requestAnimationFrame(() => triggerRef.current?.focus());
   };
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    const options = Array.from(document.getElementById('pdf-page-actions-menu')?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? []);
+    const options = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? []);
     const currentIndex = options.indexOf(document.activeElement as HTMLButtonElement);
     if (event.key === 'Escape') {
       event.preventDefault();
@@ -596,10 +600,12 @@ function PageActionsMenu({ sourcePath, onNavigate }: { sourcePath: string | null
     <Button ref={triggerRef} variant="ghost" size="icon-sm" aria-label="Page actions" aria-haspopup="menu" aria-expanded={open} aria-controls="pdf-page-actions-menu"
       title="Merge or split this PDF" disabled={!sourcePath || !onNavigate} onClick={toggleMenu}>⋯</Button>
     {open && menuPosition && typeof document !== 'undefined' && createPortal(
-      <Card id="pdf-page-actions-menu" className="scene-page-actions-popover fixed z-50 w-40 gap-1 p-1" role="menu" aria-label="Page actions" onKeyDown={handleKeyDown} style={menuPosition}>
-        <Button role="menuitem" tabIndex={-1} variant="ghost" size="sm" className="w-full justify-start" onClick={() => navigate('pdf-merge')}>Merge PDF</Button>
-        <Button role="menuitem" tabIndex={-1} variant="ghost" size="sm" className="w-full justify-start" onClick={() => navigate('pdf-split')}>Split PDF</Button>
-      </Card>, document.body,
+      <div id="pdf-page-actions-menu" className="scene-page-actions-popover fixed z-50" role="menu" aria-label="Page actions" ref={menuRef} onKeyDown={handleKeyDown} style={menuPosition}>
+        <Card className="w-40 gap-1 p-1">
+          <Button role="menuitem" tabIndex={-1} variant="ghost" size="sm" className="w-full justify-start" onClick={() => navigate('pdf-merge')}>Merge PDF</Button>
+          <Button role="menuitem" tabIndex={-1} variant="ghost" size="sm" className="w-full justify-start" onClick={() => navigate('pdf-split')}>Split PDF</Button>
+        </Card>
+      </div>, document.body,
     )}
   </>;
 }
