@@ -1,10 +1,16 @@
 name: Microsoft Store
 
 on:
-  push:
+  workflow_run:
+    workflows: [Tauri Release]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
     inputs:
+      version:
+        description: Exact semver to build (blank uses the next Tauri release version)
+        required: false
+        type: string
       publish:
         description: Submit the built package to the Microsoft Store
         required: false
@@ -21,6 +27,10 @@ concurrency:
 jobs:
   build-and-publish:
     name: Build and publish MSIX
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: windows-latest
     env:
       TOOLBOX_MSIX_IDENTITY_NAME: ${{ vars.TOOLBOX_MSIX_IDENTITY_NAME }}
@@ -33,6 +43,49 @@ jobs:
       PUBLISH_TO_STORE: ${{ inputs.publish }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Resolve Store package version
+        id: version
+        shell: pwsh
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          $versionPattern = '^\d+\.\d+\.\d+$'
+          if ($env:EVENT_NAME -eq 'workflow_run') {
+            $releaseTag = git tag --list 'tauri-v[0-9]*' | Where-Object {
+              (git rev-list -n 1 $_).Trim() -eq $env:RELEASE_SHA
+            } | Select-Object -First 1
+            if (-not $releaseTag) {
+              throw "No Tauri release tag points to source commit $env:RELEASE_SHA."
+            }
+            $version = $releaseTag.Substring('tauri-v'.Length)
+          } elseif (-not [string]::IsNullOrWhiteSpace($env:REQUESTED_VERSION)) {
+            $version = $env:REQUESTED_VERSION.Trim()
+          } else {
+            $configured = (Get-Content -Raw ToolboxTauri/src-tauri/tauri.conf.json | ConvertFrom-Json).version
+            if ($configured -notmatch $versionPattern) { throw "Invalid configured version '$configured'." }
+            $latestTag = git tag --list 'tauri-v[0-9]*' |
+              ForEach-Object { $_.Substring('tauri-v'.Length) } |
+              Sort-Object { [version]$_ } -Descending |
+              Select-Object -First 1
+            if (-not $latestTag) {
+              $version = $configured
+            } elseif ([version]$configured -gt [version]$latestTag) {
+              $version = $configured
+            } else {
+              $parts = $latestTag.Split('.')
+              $parts[2] = ([int]$parts[2] + 1).ToString()
+              $version = $parts -join '.'
+            }
+          }
+          if ($version -notmatch $versionPattern) { throw "Invalid Store package version '$version'." }
+          "value=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Building Toolbox Store package version $version."
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -102,7 +155,9 @@ jobs:
       - name: Build unsigned MSIX
         shell: pwsh
         working-directory: ToolboxTauri
-        run: .\scripts\build-msix.ps1
+        env:
+          TOOLBOX_RELEASE_VERSION: ${{ steps.version.outputs.value }}
+        run: .\scripts\build-msix.ps1 -Version $env:TOOLBOX_RELEASE_VERSION
 
       - name: Upload MSIX build artifact
         uses: actions/upload-artifact@v4
