@@ -523,7 +523,7 @@ test("settings use shared theme and privacy controls in both palettes", async ({
     }
 });
 
-test("workspace command rails follow the vertical toolbar keyboard contract", async ({ page }, testInfo) => {
+test("workspace command rails follow the responsive toolbar keyboard contract", async ({ page }, testInfo) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Open Image editor", exact: true }).click();
     const rail = page.getByRole("toolbar", { name: "Image editor tools" });
@@ -533,11 +533,31 @@ test("workspace command rails follow the vertical toolbar keyboard contract", as
     const first = commands.first();
     const second = commands.nth(1);
     const last = commands.nth(commandCount - 1);
+    await expect(rail).toHaveAttribute("aria-orientation", "vertical");
     await first.focus();
     await page.screenshot({ path: testInfo.outputPath("workspace-command-rail.png") });
 
+    await page.keyboard.press("ArrowRight");
+    await expect(first).toBeFocused();
     await page.keyboard.press("ArrowDown");
     await expect(second).toBeFocused();
+    await page.keyboard.press("ArrowUp");
+    await expect(first).toBeFocused();
+    await page.keyboard.press("End");
+    await expect(last).toBeFocused();
+    await page.keyboard.press("Home");
+    await expect(first).toBeFocused();
+
+    await page.setViewportSize({ width: 900, height: 720 });
+    await expect(rail).toHaveAttribute("aria-orientation", "horizontal");
+    await page.screenshot({ path: testInfo.outputPath("workspace-command-rail-narrow.png") });
+    await first.focus();
+    await page.keyboard.press("ArrowDown");
+    await expect(first).toBeFocused();
+    await page.keyboard.press("ArrowRight");
+    await expect(second).toBeFocused();
+    await page.keyboard.press("ArrowLeft");
+    await expect(first).toBeFocused();
     await page.keyboard.press("End");
     await expect(last).toBeFocused();
     await page.keyboard.press("Home");
