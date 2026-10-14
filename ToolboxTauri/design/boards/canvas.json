@@ -1,0 +1,562 @@
+{
+"v": 3,
+"createdOnFiles": {
+"v": 1,
+"at": "2026-10-13T10:00:00Z"
+},
+"title": "Toolbox desktop shell",
+"launch": {
+"view": "canvas"
+},
+"pages": [],
+"boards": {
+"Main.dc.html": {
+"x": 0,
+"y": 0,
+"w": 1280,
+"h": 800,
+"title": "Command center: six views, approved",
+"expand": "fill"
+},
+"Empty.dc.html": {
+"x": 1360,
+"y": 0,
+"w": 1280,
+"h": 800,
+"title": "Batch tool: empty (drop target), approved",
+"expand": "fill"
+},
+"Files.dc.html": {
+"x": 2720,
+"y": 0,
+"w": 1280,
+"h": 800,
+"title": "Files added and options, approved",
+"expand": "fill"
+},
+"Destination.dc.html": {
+"x": 4080,
+"y": 0,
+"w": 1280,
+"h": 800,
+"title": "Per-run destination and folder-missing prompt, approved",
+"expand": "fill"
+},
+"Running.dc.html": {
+"x": 0,
+"y": 1160,
+"w": 1280,
+"h": 800,
+"title": "Running, locked, cancel confirmation, approved",
+"expand": "fill"
+},
+"Results.dc.html": {
+"x": 1360,
+"y": 1160,
+"w": 1280,
+"h": 800,
+"title": "Results: succeeded, skipped, failed, approved",
+"expand": "fill"
+},
+"Cancelled.dc.html": {
+"x": 2720,
+"y": 1160,
+"w": 1280,
+"h": 800,
+"title": "Cancelled batch, approved",
+"expand": "fill"
+},
+"LargeBatch.dc.html": {
+"x": 4080,
+"y": 1160,
+"w": 1280,
+"h": 800,
+"title": "Large batch with many warnings, approved",
+"expand": "fill"
+},
+"RowPatterns.dc.html": {
+"x": 0,
+"y": 2320,
+"w": 1280,
+"h": 1120,
+"title": "Result row patterns, approved",
+"expand": "fill"
+},
+"PdfOpen.dc.html": {
+"x": 0,
+"y": 3800,
+"w": 1280,
+"h": 800,
+"title": "Open a PDF: empty, several dropped, locked, signed",
+"expand": "fill"
+},
+"PdfText.dc.html": {
+"x": 1360,
+"y": 3800,
+"w": 1280,
+"h": 800,
+"title": "Viewer with edit toolbar: Add text",
+"expand": "fill"
+},
+"PdfSign.dc.html": {
+"x": 2720,
+"y": 3800,
+"w": 1280,
+"h": 800,
+"title": "Sign: typed or picture signature",
+"expand": "fill"
+},
+"PdfForms.dc.html": {
+"x": 4080,
+"y": 3800,
+"w": 1280,
+"h": 800,
+"title": "Fill forms and flatten",
+"expand": "fill"
+},
+"PdfRedact.dc.html": {
+"x": 5440,
+"y": 3800,
+"w": 1280,
+"h": 800,
+"title": "Redact: mark, then the export disclosure",
+"expand": "fill"
+},
+"PdfMarks.dc.html": {
+"x": 0,
+"y": 4960,
+"w": 1280,
+"h": 800,
+"title": "Watermark, page numbers, header and footer",
+"expand": "fill"
+},
+"PdfEditText.dc.html": {
+"x": 1360,
+"y": 4960,
+"w": 1280,
+"h": 800,
+"title": "Edit existing text: substituted font, too long",
+"expand": "fill"
+},
+"PdfOrganize.dc.html": {
+"x": 2720,
+"y": 4960,
+"w": 1280,
+"h": 800,
+"title": "Organize pages: grid with page actions",
+"expand": "fill"
+},
+"PdfExport.dc.html": {
+"x": 4080,
+"y": 4960,
+"w": 1280,
+"h": 800,
+"title": "Export a copy: review, progress, done, failed, closing",
+"expand": "fill"
+},
+"PdfNarrow.dc.html": {
+"x": 5440,
+"y": 4960,
+"w": 900,
+"h": 800,
+"title": "Narrow window: inspector as a drawer",
+"expand": "fill"
+},
+"PdfCrop.dc.html": {
+"x": 0,
+"y": 6120,
+"w": 1280,
+"h": 800,
+"title": "Crop and resize pages",
+"expand": "fill"
+},
+"PdfDetails.dc.html": {
+"x": 1360,
+"y": 6120,
+"w": 1280,
+"h": 800,
+"title": "Details: privacy report, properties, restrictions",
+"expand": "fill"
+},
+"Split.dc.html": {
+"x": 2720,
+"y": 6120,
+"w": 1280,
+"h": 800,
+"title": "Split: page ranges or every N pages",
+"expand": "fill"
+},
+"Merge.dc.html": {
+"x": 4080,
+"y": 6120,
+"w": 1280,
+"h": 800,
+"title": "Merge: ordered files and save dialog",
+"expand": "fill"
+},
+"Bates.dc.html": {
+"x": 5440,
+"y": 6120,
+"w": 1280,
+"h": 800,
+"title": "Bates numbering: ready and done",
+"expand": "fill"
+},
+"ConvertBatch.dc.html": {
+"x": 0,
+"y": 7280,
+"w": 1280,
+"h": 800,
+"title": "Convert: PDF to images, extract, EPUB, to PDF",
+"expand": "fill"
+},
+"OCR.dc.html": {
+"x": 1360,
+"y": 7280,
+"w": 1280,
+"h": 800,
+"title": "OCR: language packs and output",
+"expand": "fill"
+},
+"ImagesToPdf.dc.html": {
+"x": 2720,
+"y": 7280,
+"w": 1280,
+"h": 800,
+"title": "Images to PDF: ordered pages and save dialog",
+"expand": "fill"
+},
+"FormattedPdf.dc.html": {
+"x": 4080,
+"y": 7280,
+"w": 1280,
+"h": 800,
+"title": "Formatted PDF: blocks, preview, draft",
+"expand": "fill"
+},
+"ImageEdit.dc.html": {
+"x": 0,
+"y": 8440,
+"w": 1280,
+"h": 800,
+"title": "Image Editor: resize, crop, rotate",
+"expand": "fill"
+},
+"ImageConvert.dc.html": {
+"x": 1360,
+"y": 8440,
+"w": 1280,
+"h": 800,
+"title": "Convert image format",
+"expand": "fill"
+},
+"Compress.dc.html": {
+"x": 2720,
+"y": 8440,
+"w": 1280,
+"h": 800,
+"title": "Compress PDFs and images",
+"expand": "fill"
+},
+"CompressResults.dc.html": {
+"x": 4080,
+"y": 8440,
+"w": 1280,
+"h": 800,
+"title": "Compress results: saved, kept, failed",
+"expand": "fill"
+},
+"AppIcons.dc.html": {
+"x": 0,
+"y": 9600,
+"w": 1280,
+"h": 800,
+"title": "App icon set: good and non-square source",
+"expand": "fill"
+},
+"CreateGif.dc.html": {
+"x": 1360,
+"y": 9600,
+"w": 1280,
+"h": 800,
+"title": "Create GIF: frames, preview, save",
+"expand": "fill"
+},
+"ExtractGif.dc.html": {
+"x": 2720,
+"y": 9600,
+"w": 1280,
+"h": 800,
+"title": "Extract GIF frames",
+"expand": "fill"
+},
+"TiffPages.dc.html": {
+"x": 4080,
+"y": 9600,
+"w": 1280,
+"h": 800,
+"title": "TIFF Pages: split or combine",
+"expand": "fill"
+},
+"Settings.dc.html": {
+"x": 0,
+"y": 10760,
+"w": 1280,
+"h": 800,
+"title": "Settings: six sections, use the Section tweak",
+"expand": "fill"
+},
+"Packs.dc.html": {
+"x": 1360,
+"y": 10760,
+"w": 1280,
+"h": 800,
+"title": "Packs: downloading, failed, offline, low space",
+"expand": "fill"
+},
+"Shortcuts.dc.html": {
+"x": 2720,
+"y": 10760,
+"w": 1280,
+"h": 800,
+"title": "Keyboard shortcuts for this platform",
+"expand": "fill"
+},
+"Logo.dc.html": {
+"x": 4080,
+"y": 10760,
+"w": 1280,
+"h": 800,
+"title": "App icon: sizes, platforms, in use",
+"expand": "fill"
+}
+},
+"order": [
+"Main.dc.html",
+"Empty.dc.html",
+"Files.dc.html",
+"Destination.dc.html",
+"Running.dc.html",
+"Results.dc.html",
+"Cancelled.dc.html",
+"LargeBatch.dc.html",
+"RowPatterns.dc.html",
+"PdfOpen.dc.html",
+"PdfText.dc.html",
+"PdfSign.dc.html",
+"PdfForms.dc.html",
+"PdfRedact.dc.html",
+"PdfMarks.dc.html",
+"PdfEditText.dc.html",
+"PdfOrganize.dc.html",
+"PdfExport.dc.html",
+"PdfNarrow.dc.html",
+"PdfCrop.dc.html",
+"PdfDetails.dc.html",
+"Split.dc.html",
+"Merge.dc.html",
+"Bates.dc.html",
+"ConvertBatch.dc.html",
+"OCR.dc.html",
+"ImagesToPdf.dc.html",
+"FormattedPdf.dc.html",
+"ImageEdit.dc.html",
+"ImageConvert.dc.html",
+"Compress.dc.html",
+"CompressResults.dc.html",
+"AppIcons.dc.html",
+"CreateGif.dc.html",
+"ExtractGif.dc.html",
+"TiffPages.dc.html",
+"Settings.dc.html",
+"Packs.dc.html",
+"Shortcuts.dc.html",
+"Logo.dc.html"
+],
+"notes": {
+"row3": {
+"x": 0,
+"y": 2060,
+"text": "Row patterns and pointer actions",
+"kind": "title1",
+"maxW": 6800
+},
+"q3": {
+"x": 1360,
+"y": 2320,
+"w": 360,
+"maxH": 480,
+"fill": "purple",
+"text": "Q3. Pointer actions\n\nA Skipped or Failed reason that a different tool or a pack fixes ends with one secondary button that names the destination, such as 'Open Remove Restrictions' or 'Install script pack'.\n\nOpening a tool keeps the files open and selects that tool in the rail. Installing a pack never retries automatically: the files stay in the list for a new run.\n\nRetry appears only after a wrong password, a timeout or a processing error."
+},
+"save": {
+"x": 1760,
+"y": 2320,
+"w": 360,
+"maxH": 480,
+"fill": "purple",
+"text": "Save step\n\nTools that combine many files into one always open the native save dialog. Toolbox draws no dialog of its own, so the sheet on the Merge board is a placeholder for the system one. It proposes 'lease-agreement-merged.pdf' in the output location.\n\nIf the chosen name already exists, Toolbox writes 'lease-agreement-merged-1.pdf' instead, and the result row says so: 'Renamed to avoid replacing lease-agreement-merged.pdf'."
+},
+"row4": {
+"x": 0,
+"y": 3540,
+"text": "PDF Editor: one document, like a viewer",
+"kind": "title1",
+"maxW": 6800
+},
+"editor": {
+"x": 6800,
+"y": 3800,
+"w": 360,
+"maxH": 560,
+"fill": "blue",
+"text": "PDF Editor model\n\nOne document per window, like Preview or Acrobat. Page thumbnails sit on the left, the page in the middle, and the inspector for the chosen tool on the right.\n\nThe edit toolbar is always visible: Organize, Crop, Edit text, Add text, Sign, Fill forms, Marks, Redact, plus More for Flatten, Split, Merge, Bates, Details and opening the Files view.\n\nEdits are a list of changes that you can undo. The original file is never changed. Export a copy writes a new file and is disabled until something changes."
+},
+"edkeys": {
+"x": 7200,
+"y": 3800,
+"w": 360,
+"maxH": 560,
+"fill": "green",
+"text": "PDF Editor keyboard and screen reader\n\nF6 cycles between the toolbar, thumbnails, page and inspector. The toolbar and thumbnail strip use arrow keys, with Home and End.\n\nEvery mark on the page is a focusable object with a name, such as 'Text box, Signed on 12 October, page 3'. Arrow keys nudge it, Shift+arrow moves it further, and Delete removes it.\n\nUndo and Redo announce what they changed, such as 'Undid Add text'."
+},
+"export": {
+"x": 6800,
+"y": 4960,
+"w": 360,
+"maxH": 560,
+"fill": "purple",
+"text": "Export order and redaction\n\nExport applies changes in a fixed order: fill forms, edit text, overlays, flatten, then redact.\n\nBefore a redacted export, the disclosure says what happens. Affected pages become 300 dpi images. Metadata, XMP and attachments are removed. Annotations, form fields and layers on those pages are removed.\n\nA signature is typed or an uploaded picture. It is not a digital signature, and the Sign panel says so."
+},
+"row6": {
+"x": 0,
+"y": 5860,
+"text": "Other PDF tools",
+"kind": "title1",
+"maxW": 6800
+},
+"row7": {
+"x": 0,
+"y": 7020,
+"text": "PDF Conversion",
+"kind": "title1",
+"maxW": 6800
+},
+"conv": {
+"x": 5440,
+"y": 7280,
+"w": 360,
+"maxH": 560,
+"fill": "blue",
+"text": "One file from many\n\nImages to PDF, Merge, Create GIF, App Icon Set, combining a TIFF and Formatted PDF all make one output. Their run button ends in an ellipsis and opens the native save dialog.\n\nTools that make one file per input use 'Save to' with an example name. A clash gets -1, -2 and so on, and errors stay per file."
+},
+"row8": {
+"x": 0,
+"y": 8180,
+"text": "Images",
+"kind": "title1",
+"maxW": 6800
+},
+"row9": {
+"x": 0,
+"y": 9340,
+"text": "Media",
+"kind": "title1",
+"maxW": 6800
+},
+"row10": {
+"x": 0,
+"y": 10500,
+"text": "Settings, packs, shortcuts and the app icon",
+"kind": "title1",
+"maxW": 6800
+},
+"set": {
+"x": 5440,
+"y": 10760,
+"w": 360,
+"maxH": 560,
+"fill": "green",
+"text": "Settings\n\nSettings opens with Cmd/Ctrl+, from anywhere and replaces the tool rail with its sections. Changes save immediately; there is no Save button.\n\nSwitches are real switches with labels. Every section is reachable with Tab and arrow keys.\n\nPacks never download without asking. A tool that needs a missing pack names it and its size, then sends you to this screen or installs it in place."
+},
+"row1": {
+"x": 0,
+"y": -260,
+"text": "Finding a tool, adding files, choosing where outputs go",
+"kind": "title1",
+"maxW": 6800
+},
+"row2": {
+"x": 0,
+"y": 900,
+"text": "Running a batch and reading the results",
+"kind": "title1",
+"maxW": 6800
+},
+"q8": {
+"x": 5440,
+"y": 0,
+"w": 360,
+"maxH": 480,
+"fill": "blue",
+"text": "Q8. Six views and rail scaling\n\nThe command center lists the six views as sections with their tools inline. Any tool is one click away, and search is focused with Cmd/Ctrl+K.\n\nInside a view, the app sidebar becomes that view's tool rail. It's a plain vertical list that scrolls, so 12 or more tools fit without truncation. Short names come from the registry.\n\nBelow 980 px the rail turns into a horizontal strip under the header. Tools that don't fit go into a More menu. Arrow keys, Home and End work in both layouts."
+},
+"q5": {
+"x": 5840,
+"y": 0,
+"w": 360,
+"maxH": 480,
+"fill": "blue",
+"text": "Q5. Intake\n\nWith no files, the whole center pane is the drop target. Its border becomes solid and its text reads 'Drop to add' while files are dragged over it. Open files is the primary button, with the shortcut beside it. The accepted types are listed under it.\n\nFiles that aren't added are collected in a 'Not added' group under the list, each with its reason. A folder, a duplicate and a wrong type each get their own line. A wrong type can point to the right tool. Nothing in this group blocks the run."
+},
+"q1": {
+"x": 5440,
+"y": 520,
+"w": 360,
+"maxH": 480,
+"fill": "blue",
+"text": "Q1. Destination and per-run marking\n\n'Save to' sits in the options panel, just above the Run button, and is always visible. The default reads 'Next to each original' or names the folder.\n\nChange for this run opens the native folder dialog. The changed line gets a 'This run only' badge and a Reset to default link. Leaving the view clears it.\n\nIf the folder is missing or can't be written, a dialog appears before anything runs. It offers 'Choose another folder' or 'Save next to originals'. An example output name sits beside the destination line."
+},
+"q4": {
+"x": 5840,
+"y": 520,
+"w": 360,
+"maxH": 480,
+"fill": "blue",
+"text": "Q4. Passwords and overrides\n\nOne masked field covers the whole batch. It has a show/hide eye and the note 'Never saved'.\n\nA file with its own password shows a key badge, 'Own password', in the list's Password column. Every other file reads 'Batch password'. The override is set from the row's menu.\n\nAfter a wrong password, the failed row opens an inline password field and Retry, so only that file runs again."
+},
+"q7": {
+"x": 6240,
+"y": 0,
+"w": 360,
+"maxH": 480,
+"fill": "blue",
+"text": "Q7. Shortcut hints\n\nHints appear only on the control they trigger, as a small key cap inside the button:\n- Open files: Cmd/Ctrl+O\n- Run: Cmd/Ctrl+Enter\n- Find a tool: Cmd/Ctrl+K\n- Settings: Cmd/Ctrl+,\n- Cancel: Esc\n\nList hints (Delete removes, Shift or Cmd/Ctrl-click selects) appear as one quiet line above the list once files are added.\n\nAll labels switch between Cmd and Ctrl, and between Finder and File Explorer, by platform. Use the Platform tweak on any screen to see both."
+},
+"q6": {
+"x": 5440,
+"y": 1160,
+"w": 360,
+"maxH": 480,
+"fill": "green",
+"text": "Q6. Progress, cancel, locked state\n\nThe batch strip at the top of the list shows 'Protecting 7 of 24'. Its bar fills one segment per finished file, coloured by result. Rows switch from Waiting to a spinner to their result as each file finishes, and finished outputs can be opened right away.\n\nThe options panel dims, with one line: 'Options are locked until the batch finishes'. The Run button becomes 'Cancel batch' (Esc).\n\nCancel asks first, saying what is kept and what won't run. Cancelled files become Skipped, with the reason 'Cancelled'."
+},
+"q2": {
+"x": 5840,
+"y": 1160,
+"w": 360,
+"maxH": 480,
+"fill": "green",
+"text": "Q2. Three-state rows and large batches\n\nEach row has an icon, a word and a reason, so the state never depends on colour:\n- Succeeded: a check.\n- Skipped: a grey dash. It's a no-op, not a problem.\n- Failed: a red cross.\nWarnings are amber and sit under the output name.\n\nThe summary counts double as filters. In large batches, 'Needs attention' groups rows by reason, so 28 'Signature removed' rows become one group you can expand. The list keeps input order."
+},
+"sr": {
+"x": 6240,
+"y": 1160,
+"w": 360,
+"maxH": 520,
+"fill": "green",
+"text": "Screen-reader announcements\n\nOne polite live region sits on the batch strip:\n- On start: 'Protecting 24 files.'\n- During the run: progress every 5 files or 10 seconds, whichever is later, such as 'Protecting, 10 of 24 done.'\n- On finish: 'Done. 21 protected, 2 skipped, 1 failed.' Focus stays where it was.\n\nEach row is a list item whose accessible name reads as one sentence: file, state, reason, warnings, then output name. Row actions are real buttons, such as 'Open annual-report-protected.pdf'.\n\nThe cancel dialog traps focus and returns it to Cancel batch."
+}
+},
+"designSystems": []
+}

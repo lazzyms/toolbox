@@ -14,6 +14,7 @@
     "stage:vision": "node scripts/stage-vision-resources.mjs",
     "stage:ocr": "node scripts/stage-ocr-resources.mjs",
     "check:shadcn-components": "node scripts/check-shadcn-components.mjs",
+    "design:screens": "node scripts/render-design-screens.mjs",
     "check:matrix": "npm run test:capabilities && node scripts/check-tool-matrix.mjs",
     "check:release": "npm run check:shadcn-components && npm run check:matrix && node scripts/check-release-readiness.mjs",
     "preview": "vite preview",

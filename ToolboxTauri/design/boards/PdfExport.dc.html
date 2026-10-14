@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PDF Editor, export</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+.tb{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;font-size:13px;line-height:1.45;color:var(--fg);background:var(--bg);-webkit-font-smoothing:antialiased}
+.tb.dark{--bg:#0a0a0a;--side:#111111;--panel:#0f0f0f;--raise:#1c1c1c;--fg:#fafafa;--mut:#a3a3a3;--faint:#8a8a8a;--line:rgba(255,255,255,.08);--line2:rgba(255,255,255,.16);--sel:#262626;--pri:#ebebeb;--prifg:#171717;--bad:#ff6b6b;--warn:#f2b552;--ring:#a3a3a3;--scrim:rgba(0,0,0,.6);--well:#1b1b1b}
+.tb.light{--bg:#ffffff;--side:#f7f7f7;--panel:#fcfcfc;--raise:#f2f2f2;--fg:#0a0a0a;--mut:#525252;--faint:#666666;--line:#e8e8e8;--line2:#d4d4d4;--sel:#ebebeb;--pri:#171717;--prifg:#fafafa;--bad:#c10007;--warn:#9a5800;--ring:#525252;--scrim:rgba(0,0,0,.28);--well:#e6e6e6}
+.tb button,.tb input,.tb select,.tb textarea{font:inherit;color:inherit}
+.btn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:7px;border:1px solid var(--line2);background:var(--raise);color:var(--fg);font-weight:500;cursor:pointer;white-space:nowrap;box-sizing:border-box;text-decoration:none}
+.btn.pri{background:var(--pri);color:var(--prifg);border-color:transparent}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--mut)}
+.btn.sm{height:26px;padding:0 9px;font-size:12px}
+.btn.icon{width:30px;padding:0;justify-content:center}
+.btn[disabled]{opacity:.45;cursor:default}
+.kbd{font-size:11px;line-height:16px;padding:0 5px;border-radius:4px;border:1px solid var(--line2);color:var(--mut);font-weight:500}
+.btn.pri .kbd{border-color:currentColor;color:inherit;opacity:.6}
+.tbtn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 9px;border-radius:7px;border:0;background:none;color:var(--mut);cursor:pointer;white-space:nowrap}
+.tbtn[aria-pressed="true"]{background:var(--sel);color:var(--fg);font-weight:500}
+.sep{width:1px;height:20px;background:var(--line2);flex:none}
+.field{height:30px;border-radius:7px;border:1px solid var(--line2);background:var(--bg);padding:0 10px;width:100%;box-sizing:border-box;min-width:0}
+.lbl{font-size:12px;font-weight:600}
+.hint{font-size:12px;color:var(--mut)}
+.seg{display:inline-flex;border:1px solid var(--line2);border-radius:7px;padding:2px;gap:2px}
+.seg button{height:24px;min-width:30px;padding:0 8px;border:0;border-radius:5px;background:none;color:var(--mut);cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
+.seg button[aria-checked="true"],.seg button[aria-pressed="true"]{background:var(--sel);color:var(--fg);font-weight:500}
+.thumb{display:flex;flex-direction:column;align-items:center;gap:4px;width:100%;padding:6px 0;border:0;background:none;border-radius:8px;cursor:pointer;color:var(--mut);font-size:12px}
+.thumb .mini{width:96px;height:124px;background:#ffffff;border:1px solid var(--line2);border-radius:2px;box-sizing:border-box;padding:10px 9px;display:flex;flex-direction:column;gap:4px}
+.thumb .mini i{display:block;height:3px;background:#d6d6d6;border-radius:1px}
+.thumb[aria-current="page"]{background:var(--sel);color:var(--fg);font-weight:500}
+.thumb[aria-current="page"] .mini{outline:2px solid #1d5fd1;outline-offset:1px}
+.paper{background:#ffffff;color:#1f1f1f;box-shadow:0 1px 3px rgba(0,0,0,.25);position:relative;box-sizing:border-box;font-family:"Iowan Old Style","Palatino Linotype",Georgia,serif}
+.paper h3{margin:0 0 6px;font-size:12.5px}
+.paper p{margin:0 0 7px;font-size:10px;line-height:1.5}
+.obj{position:absolute;border:1.5px solid #1d5fd1;background:rgba(29,95,209,.06);padding:4px 6px;box-sizing:border-box;cursor:move;text-align:left;color:#1f1f1f}
+.obj.idle{border:1px dashed rgba(29,95,209,.6);background:none}
+.h{position:absolute;width:7px;height:7px;background:#ffffff;border:1.5px solid #1d5fd1;box-sizing:border-box}
+.olist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
+.olist button{width:100%;text-align:left;border:0;background:none;border-radius:6px;padding:6px 8px;cursor:pointer;display:flex;gap:8px;align-items:baseline}
+.olist button[aria-current="true"]{background:var(--sel)}
+.note{display:flex;gap:10px;padding:10px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--raise)}
+svg.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.tb :focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+a{color:inherit}a:hover{color:var(--mut)}
+.mi{display:flex;gap:10px;align-items:flex-start;width:100%;text-align:left;padding:7px 10px;border:0;background:none;border-radius:6px;cursor:pointer;color:var(--fg);text-decoration:none;box-sizing:border-box}.mi:hover{background:var(--sel)}.mi svg{margin-top:2px}
+.pbadge{position:absolute;right:-6px;top:-6px;width:16px;height:16px;border-radius:50%;background:#1d5fd1;color:#fff;display:grid;place-items:center}
+.pbadge{position:absolute;right:-6px;top:-6px;width:16px;height:16px;border-radius:50%;background:#1d5fd1;color:#fff;display:grid;place-items:center}
+</style>
+</helmet>
+<div class="{{themeClass}}" style="height: 800px; display: flex; flex-direction: column; position: relative; overflow: hidden">
+<div style="flex: 1; display: flex; flex-direction: column; min-height: 0; position: relative"><div aria-hidden="true" inert style="flex: 1; display: flex; flex-direction: column; min-height: 0">
+<header style="height: 48px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 12px; border-bottom: 1px solid var(--line)">
+<a class="btn sm ghost" href="Main.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M5 12l6 6M5 12l6-6"></path></svg>All tools</a>
+<span class="sep" aria-hidden="true"></span>
+<button class="btn sm ghost icon" aria-label="Show page sidebar" aria-pressed="true" aria-controls="pages"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M9 4v16"></path></svg></button>
+<div style="display: flex; flex-direction: column; min-width: 0; line-height: 1.25">
+<h1 style="margin: 0; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">lease-agreement.pdf</h1>
+<span class="hint" style="white-space: nowrap">14 pages. 9 changes not exported</span>
+</div>
+<div style="flex: 1"></div>
+
+<button class="btn sm ghost icon" aria-label="Undo ({{undoKey}})"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14L4 9l5-5"></path><path d="M4 9h11a5 5 0 0 1 0 10h-3"></path></svg></button>
+<button class="btn sm ghost icon" aria-label="Redo ({{redoKey}})" disabled><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 14l5-5-5-5"></path><path d="M20 9H9a5 5 0 0 0 0 10h3"></path></svg></button>
+<span class="sep" aria-hidden="true"></span>
+<div role="group" aria-label="Zoom" style="display: flex; align-items: center; gap: 2px">
+<button class="btn sm ghost icon" aria-label="Zoom out"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"></path></svg></button>
+<label for="zoom" style="position: absolute; width: 1px; height: 1px; overflow: hidden">Zoom</label>
+<select id="zoom" class="field" style="width: 92px; height: 26px; padding: 0 6px"><option>Fit page</option><option>Fit width</option><option selected>100%</option><option>150%</option><option>200%</option></select>
+<button class="btn sm ghost icon" aria-label="Zoom in"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14"></path></svg></button>
+</div>
+<span class="sep" aria-hidden="true"></span>
+<button class="btn sm ghost" aria-label="Find a tool"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"></circle><path d="M21 21l-6-6"></path></svg><span class="kbd">{{findKey}}</span></button>
+<button class="btn sm ghost icon" aria-label="Settings ({{settingsKey}})"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"></path></svg></button>
+<a class="btn pri" href="PdfExport.dc.html">Export<span class="kbd">{{runKey}}</span></a>
+</header>
+<div role="toolbar" aria-label="Edit tools" aria-orientation="horizontal" style="height: 44px; flex: none; display: flex; align-items: center; gap: 2px; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--side); position: relative">
+<a class="tbtn" href="PdfOrganize.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1"></rect><rect x="14" y="3" width="7" height="9" rx="1"></rect><rect x="3" y="15" width="7" height="6" rx="1"></rect><rect x="14" y="15" width="7" height="6" rx="1"></rect></svg>Organize</a>
+<a class="tbtn" href="PdfCrop.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2v14a2 2 0 0 0 2 2h14"></path><path d="M18 22V8a2 2 0 0 0-2-2H2"></path></svg>Crop</a>
+<span class="sep" aria-hidden="true"></span>
+<a class="tbtn" href="PdfEditText.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"></path><path d="M13 7l4 4"></path></svg>Edit text</a>
+<a class="tbtn" href="PdfText.dc.html" aria-pressed="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6V4h14v2M12 4v16M9 20h6"></path></svg>Add text</a>
+<a class="tbtn" href="PdfSign.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17c3 0 4-6 6-6s1 5 3 5 2-3 4-3 2 2 5 2"></path><path d="M3 21h18"></path></svg>Sign</a>
+<a class="tbtn" href="PdfForms.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="5" rx="1"></rect><rect x="3" y="14" width="18" height="5" rx="1"></rect><path d="M6 7.5h4"></path></svg>Fill form</a>
+<span class="sep" aria-hidden="true"></span>
+<a class="tbtn" href="PdfMarks.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4"></path><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"></path><path d="M8 17l8-6"></path></svg>Watermark</a>
+<a class="tbtn" href="PdfMarks.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h16M4 15h16M10 3L8 21M16 3l-2 18"></path></svg>Page numbers</a>
+<a class="tbtn" href="PdfMarks.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2"></rect><path d="M4 7h16M4 17h16"></path></svg>Header and footer</a>
+<span class="sep" aria-hidden="true"></span>
+<a class="tbtn" href="PdfRedact.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="4" rx="1" fill="currentColor"></rect><path d="M3 15h10M3 19h14"></path></svg>Redact</a>
+<button class="tbtn" aria-haspopup="menu" aria-expanded="false" aria-pressed="false" tabindex="-1">More<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></button>
+</div>
+<div style="flex: 1; display: flex; min-height: 0"><nav id="pages" aria-label="Pages" style="width: 148px; flex: none; border-right: 1px solid var(--line); background: var(--side); overflow: auto; padding: 8px 10px; box-sizing: border-box">
+<ol style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px">
+<li><button class="thumb" aria-current="false" aria-label="Page 1" tabindex="-1"><span class="mini" aria-hidden="true" style="position: relative"><i style="width: 60%; height: 4px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i><i style="width: 70%"></i></span><span aria-hidden="true">1</span></button></li>
+<li><button class="thumb" aria-current="false" aria-label="Page 2" tabindex="-1"><span class="mini" aria-hidden="true" style="position: relative"><i style="width: 60%; height: 4px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i><i style="width: 70%"></i></span><span aria-hidden="true">2</span></button></li>
+<li><button class="thumb" aria-current="page" aria-label="Page 3" tabindex="0"><span class="mini" aria-hidden="true" style="position: relative"><i style="width: 60%; height: 4px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i><i style="width: 70%"></i></span><span aria-hidden="true">3</span></button></li>
+<li><button class="thumb" aria-current="false" aria-label="Page 4" tabindex="-1"><span class="mini" aria-hidden="true" style="position: relative"><i style="width: 60%; height: 4px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i><i style="width: 70%"></i></span><span aria-hidden="true">4</span></button></li>
+<li><button class="thumb" aria-current="false" aria-label="Page 5" tabindex="-1"><span class="mini" aria-hidden="true" style="position: relative"><i style="width: 60%; height: 4px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i><i style="width: 70%"></i></span><span aria-hidden="true">5</span></button></li>
+</ol></nav><div style="flex: 1; background: var(--well); display: flex; justify-content: center; padding-top: 20px"><div class="paper" style="width: 500px; height: 647px; padding: 56px 58px"><h3>4. Rent and payment</h3>
+<p>4.1 The Tenant will pay rent of £1,450 per calendar month, in advance, on the first day of each month.</p>
+<p>4.2 Payment is made by standing order to the account named in Schedule 2. The Landlord will confirm each payment in writing on request.</p>
+<p>4.3 If rent is more than 14 days late, the Landlord may charge interest at 3% above the Bank of England base rate on the overdue amount.</p>
+<h3 style="margin-top: 14px">5. Deposit</h3>
+<p>5.1 The Tenant has paid a deposit of £1,673, held in a government-approved tenancy deposit scheme within 30 days of receipt.</p>
+<p>5.2 The deposit will be returned within 10 days of the end of the tenancy, less any agreed deductions for damage beyond fair wear and tear.</p>
+<h3 style="margin-top: 14px">6. Use of the property</h3>
+<p>6.1 The Tenant will use the property as a private home only and will not sublet any part of it without the Landlord's written consent.</p>
+<p>6.2 The Tenant will keep the property clean and in good condition and will report any damage or needed repairs promptly.</p></div></div></div>
+</div>
+<div aria-hidden="true" style="position: absolute; inset: 0; background: var(--scrim)"></div>
+<sc-if value="{{isReview}}" hint-placeholder-val="{{ true }}"><div role="dialog" aria-modal="true" aria-labelledby="xt" style="position: absolute; left: 50%; top: 46%; transform: translate(-50%,-50%); width: 520px; background: var(--panel); border: 1px solid var(--line2); border-radius: 12px; box-shadow: 0 24px 60px rgba(0,0,0,.35); padding: 22px; display: flex; flex-direction: column; gap: 14px">
+<h2 id="xt" style="margin: 0; font-size: 15px; font-weight: 600">Export a copy</h2>
+<div style="display: flex; flex-direction: column; gap: 4px"><span class="lbl" id="chg">Changes, applied in this order</span>
+<ol aria-labelledby="chg" style="list-style: none; margin: 0; padding: 0"><li style="display: flex; gap: 10px; padding: 6px 0; border-top: 1px solid var(--line)"><span class="hint" style="width: 16px; text-align: right">1</span><span style="flex: 1"><span style="display: block">Fill form</span><span class="hint">8 fields on pages 12 and 13</span></span></li><li style="display: flex; gap: 10px; padding: 6px 0; border-top: 1px solid var(--line)"><span class="hint" style="width: 16px; text-align: right">2</span><span style="flex: 1"><span style="display: block">Edit text</span><span class="hint">2 paragraphs on pages 1 and 3</span></span></li><li style="display: flex; gap: 10px; padding: 6px 0; border-top: 1px solid var(--line)"><span class="hint" style="width: 16px; text-align: right">3</span><span style="flex: 1"><span style="display: block">Add text, signatures and page marks</span><span class="hint">2 text boxes, 1 signature, DRAFT watermark on 14 pages</span></span></li><li style="display: flex; gap: 10px; padding: 6px 0; border-top: 1px solid var(--line)"><span class="hint" style="width: 16px; text-align: right">4</span><span style="flex: 1"><span style="display: block">Flatten</span><span class="hint">Form fields and comments</span></span></li><li style="display: flex; gap: 10px; padding: 6px 0; border-top: 1px solid var(--line)"><span class="hint" style="width: 16px; text-align: right">5</span><span style="flex: 1"><span style="display: block">Redact</span><span class="hint">5 marks on pages 9 and 11. Those pages become images.</span></span></li></ol></div>
+<div style="display: grid; grid-template-columns: 1fr; gap: 10px">
+<div style="display: flex; flex-direction: column; gap: 6px"><label class="lbl" for="fn">File name</label><input id="fn" class="field" value="lease-agreement-edited.pdf"><span class="hint">A file with this name already exists, so this copy will be saved as lease-agreement-edited-1.pdf.</span></div>
+<div style="display: flex; flex-direction: column; gap: 6px"><span class="lbl" id="dl">Save to</span><div style="display: flex; gap: 8px; align-items: center"><span aria-labelledby="dl" style="flex: 1; display: flex; gap: 8px; align-items: center; min-width: 0"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2"></path></svg><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{docsDir}}/Leases</span></span><button class="btn sm">Change…</button></div><span class="hint">Same folder as the original.</span></div>
+</div>
+<div style="display: flex; gap: 8px; justify-content: flex-end"><button class="btn">Cancel</button><button class="btn pri">Export<span class="kbd">{{runKey}}</span></button></div>
+</div></sc-if><sc-if value="{{isRun}}" hint-placeholder-val="{{ false }}"><div role="dialog" aria-modal="true" aria-labelledby="rt" style="position: absolute; left: 50%; top: 46%; transform: translate(-50%,-50%); width: 520px; background: var(--panel); border: 1px solid var(--line2); border-radius: 12px; box-shadow: 0 24px 60px rgba(0,0,0,.35); padding: 22px; display: flex; flex-direction: column; gap: 14px">
+<h2 id="rt" style="margin: 0; font-size: 15px; font-weight: 600">Exporting lease-agreement-edited-1.pdf</h2>
+<div role="progressbar" aria-label="Export progress" aria-valuemin="0" aria-valuemax="5" aria-valuenow="4" aria-valuetext="Step 4 of 5, flattening" style="height: 6px; border-radius: 3px; background: var(--raise)"><div style="width: 72%; height: 100%; border-radius: 3px; background: var(--pri)"></div></div>
+<p class="hint" role="status" style="margin: 0">Step 4 of 5: flattening form fields. You can keep viewing the document.</p>
+<div style="display: flex; justify-content: flex-end"><button class="btn">Cancel export</button></div>
+</div></sc-if><sc-if value="{{isDone}}" hint-placeholder-val="{{ false }}"><div role="dialog" aria-modal="true" aria-labelledby="dt" style="position: absolute; left: 50%; top: 46%; transform: translate(-50%,-50%); width: 520px; background: var(--panel); border: 1px solid var(--line2); border-radius: 12px; box-shadow: 0 24px 60px rgba(0,0,0,.35); padding: 22px; display: flex; flex-direction: column; gap: 14px">
+<div style="display: flex; gap: 10px; align-items: center"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--pri); width: 20px; height: 20px"><path d="M5 12l5 5 9-10"></path></svg><h2 id="dt" style="margin: 0; font-size: 15px; font-weight: 600">Exported lease-agreement-edited-1.pdf</h2></div>
+<p class="hint" role="status" style="margin: 0; font-size: 13px">14 pages, 3.4 MB, in {{docsDir}}/Leases. The original lease-agreement.pdf wasn't changed.</p>
+<div style="display: flex; gap: 8px"><button class="btn pri"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4"></path><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"></path></svg>Open copy</button><button class="btn"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2"></path></svg>{{reveal}}</button><div style="flex: 1"></div><button class="btn ghost">Keep editing</button></div>
+<p class="hint" style="margin: 0">Your edits stay here, so you can export again with more changes.</p>
+</div></sc-if><sc-if value="{{isFail}}" hint-placeholder-val="{{ false }}"><div role="alertdialog" aria-modal="true" aria-labelledby="ft" aria-describedby="fd" style="position: absolute; left: 50%; top: 46%; transform: translate(-50%,-50%); width: 520px; background: var(--panel); border: 1px solid var(--line2); border-radius: 12px; box-shadow: 0 24px 60px rgba(0,0,0,.35); padding: 22px; display: flex; flex-direction: column; gap: 14px">
+<div style="display: flex; gap: 10px; align-items: center"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--bad); width: 20px; height: 20px"><circle cx="12" cy="12" r="9"></circle><path d="M9 9l6 6M15 9l-6 6"></path></svg><h2 id="ft" style="margin: 0; font-size: 15px; font-weight: 600">Couldn't export the copy</h2></div>
+<p id="fd" style="margin: 0; font-size: 13px; line-height: 1.5; color: var(--mut)">The Leases folder is read-only. Nothing was saved and your edits are still here. Choose another folder and try again.</p>
+<div style="display: flex; gap: 8px; justify-content: flex-end"><button class="btn">Close</button><button class="btn pri">Choose folder…</button></div>
+</div></sc-if><sc-if value="{{isClose}}" hint-placeholder-val="{{ false }}"><div role="alertdialog" aria-modal="true" aria-labelledby="ct" aria-describedby="cd" style="position: absolute; left: 50%; top: 46%; transform: translate(-50%,-50%); width: 520px; background: var(--panel); border: 1px solid var(--line2); border-radius: 12px; box-shadow: 0 24px 60px rgba(0,0,0,.35); padding: 22px; display: flex; flex-direction: column; gap: 14px; width: 460px">
+<h2 id="ct" style="margin: 0; font-size: 15px; font-weight: 600">Export your changes before closing?</h2>
+<p id="cd" style="margin: 0; font-size: 13px; line-height: 1.5; color: var(--mut)">lease-agreement.pdf has 9 changes that haven't been exported. If you close now, they're lost.</p>
+<div style="display: flex; gap: 8px"><button class="btn" style="color: var(--bad)">Discard changes</button><div style="flex: 1"></div><button class="btn">Cancel</button><button class="btn pri">Export…</button></div>
+</div></sc-if>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "step": {"editor": "enum", "options": ["Review", "Exporting", "Done", "Failed", "Closing with changes"], "default": "Review"}, "$preview": {"width": 1280, "height": 800}}'>
+class Component extends DCLogic {
+renderVals() {
+const win = (this.props.platform ?? 'macOS') === 'Windows';
+const light = (this.props.theme ?? 'dark') === 'light';
+const base = {
+themeClass: light ? 'tb light' : 'tb dark',
+findKey: win ? 'Ctrl+K' : '⌘K',
+settingsKey: win ? 'Ctrl+,' : '⌘,',
+runKey: win ? 'Ctrl+Enter' : '⌘↵',
+openKey: win ? 'Ctrl+O' : '⌘O',
+undoKey: win ? 'Ctrl+Z' : '⌘Z',
+redoKey: win ? 'Ctrl+Y' : '⇧⌘Z',
+dupKey: win ? 'Ctrl+D' : '⌘D',
+selAllKey: win ? 'Ctrl+A' : '⌘A',
+mod: win ? 'Ctrl' : '⌘',
+reveal: win ? 'Show in File Explorer' : 'Show in Finder',
+docsDir: win ? 'C:\\Users\\Asha\\Documents' : '~/Documents'
+};
+const s = this.props.step ?? 'Review';
+const extra = { isReview: s === 'Review', isRun: s === 'Exporting', isDone: s === 'Done', isFail: s === 'Failed', isClose: s === 'Closing with changes' };
+return Object.assign(base, typeof extra === 'undefined' ? {} : extra);
+}
+}
+</script>
+</body>
+</html>

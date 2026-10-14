@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PDF Editor, sign</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+.tb{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;font-size:13px;line-height:1.45;color:var(--fg);background:var(--bg);-webkit-font-smoothing:antialiased}
+.tb.dark{--bg:#0a0a0a;--side:#111111;--panel:#0f0f0f;--raise:#1c1c1c;--fg:#fafafa;--mut:#a3a3a3;--faint:#8a8a8a;--line:rgba(255,255,255,.08);--line2:rgba(255,255,255,.16);--sel:#262626;--pri:#ebebeb;--prifg:#171717;--bad:#ff6b6b;--warn:#f2b552;--ring:#a3a3a3;--scrim:rgba(0,0,0,.6);--well:#1b1b1b}
+.tb.light{--bg:#ffffff;--side:#f7f7f7;--panel:#fcfcfc;--raise:#f2f2f2;--fg:#0a0a0a;--mut:#525252;--faint:#666666;--line:#e8e8e8;--line2:#d4d4d4;--sel:#ebebeb;--pri:#171717;--prifg:#fafafa;--bad:#c10007;--warn:#9a5800;--ring:#525252;--scrim:rgba(0,0,0,.28);--well:#e6e6e6}
+.tb button,.tb input,.tb select,.tb textarea{font:inherit;color:inherit}
+.btn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:7px;border:1px solid var(--line2);background:var(--raise);color:var(--fg);font-weight:500;cursor:pointer;white-space:nowrap;box-sizing:border-box;text-decoration:none}
+.btn.pri{background:var(--pri);color:var(--prifg);border-color:transparent}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--mut)}
+.btn.sm{height:26px;padding:0 9px;font-size:12px}
+.btn.icon{width:30px;padding:0;justify-content:center}
+.btn[disabled]{opacity:.45;cursor:default}
+.kbd{font-size:11px;line-height:16px;padding:0 5px;border-radius:4px;border:1px solid var(--line2);color:var(--mut);font-weight:500}
+.btn.pri .kbd{border-color:currentColor;color:inherit;opacity:.6}
+.tbtn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 9px;border-radius:7px;border:0;background:none;color:var(--mut);cursor:pointer;white-space:nowrap}
+.tbtn[aria-pressed="true"]{background:var(--sel);color:var(--fg);font-weight:500}
+.sep{width:1px;height:20px;background:var(--line2);flex:none}
+.field{height:30px;border-radius:7px;border:1px solid var(--line2);background:var(--bg);padding:0 10px;width:100%;box-sizing:border-box;min-width:0}
+.lbl{font-size:12px;font-weight:600}
+.hint{font-size:12px;color:var(--mut)}
+.seg{display:inline-flex;border:1px solid var(--line2);border-radius:7px;padding:2px;gap:2px}
+.seg button{height:24px;min-width:30px;padding:0 8px;border:0;border-radius:5px;background:none;color:var(--mut);cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
+.seg button[aria-checked="true"],.seg button[aria-pressed="true"]{background:var(--sel);color:var(--fg);font-weight:500}
+.thumb{display:flex;flex-direction:column;align-items:center;gap:4px;width:100%;padding:6px 0;border:0;background:none;border-radius:8px;cursor:pointer;color:var(--mut);font-size:12px}
+.thumb .mini{width:96px;height:124px;background:#ffffff;border:1px solid var(--line2);border-radius:2px;box-sizing:border-box;padding:10px 9px;display:flex;flex-direction:column;gap:4px}
+.thumb .mini i{display:block;height:3px;background:#d6d6d6;border-radius:1px}
+.thumb[aria-current="page"]{background:var(--sel);color:var(--fg);font-weight:500}
+.thumb[aria-current="page"] .mini{outline:2px solid #1d5fd1;outline-offset:1px}
+.paper{background:#ffffff;color:#1f1f1f;box-shadow:0 1px 3px rgba(0,0,0,.25);position:relative;box-sizing:border-box;font-family:"Iowan Old Style","Palatino Linotype",Georgia,serif}
+.paper h3{margin:0 0 6px;font-size:12.5px}
+.paper p{margin:0 0 7px;font-size:10px;line-height:1.5}
+.obj{position:absolute;border:1.5px solid #1d5fd1;background:rgba(29,95,209,.06);padding:4px 6px;box-sizing:border-box;cursor:move;text-align:left;color:#1f1f1f}
+.obj.idle{border:1px dashed rgba(29,95,209,.6);background:none}
+.h{position:absolute;width:7px;height:7px;background:#ffffff;border:1.5px solid #1d5fd1;box-sizing:border-box}
+.olist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
+.olist button{width:100%;text-align:left;border:0;background:none;border-radius:6px;padding:6px 8px;cursor:pointer;display:flex;gap:8px;align-items:baseline}
+.olist button[aria-current="true"]{background:var(--sel)}
+.note{display:flex;gap:10px;padding:10px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--raise)}
+svg.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.tb :focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+a{color:inherit}a:hover{color:var(--mut)}
+.mi{display:flex;gap:10px;align-items:flex-start;width:100%;text-align:left;padding:7px 10px;border:0;background:none;border-radius:6px;cursor:pointer;color:var(--fg);text-decoration:none;box-sizing:border-box}.mi:hover{background:var(--sel)}.mi svg{margin-top:2px}
+.pbadge{position:absolute;right:-6px;top:-6px;width:16px;height:16px;border-radius:50%;background:#1d5fd1;color:#fff;display:grid;place-items:center}
+.tf{position:absolute;pointer-events:none;outline:1.5px solid #1d5fd1;box-sizing:border-box;transform-origin:50% 50%}
+.tf .th{position:absolute;width:10px;height:10px;margin:-5px 0 0 -5px;background:#fff;border:1.5px solid #1d5fd1;border-radius:2px;box-sizing:border-box;box-shadow:0 1px 2px rgba(0,0,0,.3);pointer-events:auto}
+.tf .th::before{content:'';position:absolute;inset:-6px}
+.tf .th.nwse{cursor:nwse-resize}.tf .th.nesw{cursor:nesw-resize}.tf .th.ns{cursor:ns-resize}.tf .th.ew{cursor:ew-resize}
+.tf .th.lock{background:#1d5fd1;border-color:#fff}
+.tf .stem{position:absolute;left:50%;top:-24px;width:1.5px;height:24px;margin-left:-.75px;background:#1d5fd1}
+.tf .rot{position:absolute;left:50%;top:-32px;width:14px;height:14px;margin-left:-7px;border-radius:50%;background:#fff;border:1.5px solid #1d5fd1;box-sizing:border-box;cursor:grab;pointer-events:auto;box-shadow:0 1px 2px rgba(0,0,0,.3)}
+.tf .rot::before{content:'';position:absolute;inset:-6px}
+.tf-chip{position:absolute;transform:translateX(-50%);background:#1b1f27;color:#fff;font:500 10.5px/1 system-ui,sans-serif;padding:5px 8px;border-radius:5px;white-space:nowrap;pointer-events:none;box-shadow:0 2px 6px rgba(0,0,0,.3);z-index:3}
+.tf-guide{position:absolute;background:#e5484d;pointer-events:none;z-index:2}
+.tf-cur{position:absolute;pointer-events:none;z-index:4;filter:drop-shadow(0 1px 1px rgba(0,0,0,.4))}
+.tf-ghost{position:absolute;outline:1px dashed rgba(29,95,209,.7);pointer-events:none}
+.geo{display:grid;grid-template-columns:1fr 1fr;gap:8px}.geo label{display:flex;flex-direction:column;gap:4px}
+</style>
+</helmet>
+<div class="{{themeClass}}" style="height: 800px; display: flex; flex-direction: column; position: relative; overflow: hidden">
+<header style="height: 48px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 12px; border-bottom: 1px solid var(--line)">
+<a class="btn sm ghost" href="Main.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M5 12l6 6M5 12l6-6"></path></svg>All tools</a>
+<span class="sep" aria-hidden="true"></span>
+<button class="btn sm ghost icon" aria-label="Show page sidebar" aria-pressed="true" aria-controls="pages"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M9 4v16"></path></svg></button>
+<div style="display: flex; flex-direction: column; min-width: 0; line-height: 1.25">
+<h1 style="margin: 0; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">lease-agreement.pdf</h1>
+<span class="hint" style="white-space: nowrap">14 pages. 3 changes not exported</span>
+</div>
+<div style="flex: 1"></div>
+
+<button class="btn sm ghost icon" aria-label="Undo place signature ({{undoKey}})"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14L4 9l5-5"></path><path d="M4 9h11a5 5 0 0 1 0 10h-3"></path></svg></button>
+<button class="btn sm ghost icon" aria-label="Redo ({{redoKey}})" disabled><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 14l5-5-5-5"></path><path d="M20 9H9a5 5 0 0 0 0 10h3"></path></svg></button>
+<span class="sep" aria-hidden="true"></span>
+<div role="group" aria-label="Zoom" style="display: flex; align-items: center; gap: 2px">
+<button class="btn sm ghost icon" aria-label="Zoom out"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"></path></svg></button>
+<label for="zoom" style="position: absolute; width: 1px; height: 1px; overflow: hidden">Zoom</label>
+<select id="zoom" class="field" style="width: 92px; height: 26px; padding: 0 6px"><option>Fit page</option><option>Fit width</option><option selected>100%</option><option>150%</option><option>200%</option></select>
+<button class="btn sm ghost icon" aria-label="Zoom in"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14"></path></svg></button>
+</div>
+<span class="sep" aria-hidden="true"></span>
+<button class="btn sm ghost" aria-label="Find a tool"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"></circle><path d="M21 21l-6-6"></path></svg><span class="kbd">{{findKey}}</span></button>
+<button class="btn sm ghost icon" aria-label="Settings ({{settingsKey}})"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"></path></svg></button>
+<a class="btn pri" href="PdfExport.dc.html">Export<span class="kbd">{{runKey}}</span></a>
+</header>
+<div role="toolbar" aria-label="Edit tools" aria-orientation="horizontal" style="height: 44px; flex: none; display: flex; align-items: center; gap: 2px; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--side); position: relative">
+<a class="tbtn" href="PdfOrganize.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1"></rect><rect x="14" y="3" width="7" height="9" rx="1"></rect><rect x="3" y="15" width="7" height="6" rx="1"></rect><rect x="14" y="15" width="7" height="6" rx="1"></rect></svg>Organize</a>
+<a class="tbtn" href="PdfCrop.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2v14a2 2 0 0 0 2 2h14"></path><path d="M18 22V8a2 2 0 0 0-2-2H2"></path></svg>Crop</a>
+<span class="sep" aria-hidden="true"></span>
+<a class="tbtn" href="PdfEditText.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"></path><path d="M13 7l4 4"></path></svg>Edit text</a>
+<a class="tbtn" href="PdfText.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6V4h14v2M12 4v16M9 20h6"></path></svg>Add text</a>
+<a class="tbtn" href="PdfSign.dc.html" aria-pressed="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17c3 0 4-6 6-6s1 5 3 5 2-3 4-3 2 2 5 2"></path><path d="M3 21h18"></path></svg>Sign</a>
+<a class="tbtn" href="PdfForms.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="5" rx="1"></rect><rect x="3" y="14" width="18" height="5" rx="1"></rect><path d="M6 7.5h4"></path></svg>Fill form</a>
+<span class="sep" aria-hidden="true"></span>
+<a class="tbtn" href="PdfMarks.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4"></path><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"></path><path d="M8 17l8-6"></path></svg>Watermark</a>
+<a class="tbtn" href="PdfMarks.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h16M4 15h16M10 3L8 21M16 3l-2 18"></path></svg>Page numbers</a>
+<a class="tbtn" href="PdfMarks.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2"></rect><path d="M4 7h16M4 17h16"></path></svg>Header and footer</a>
+<span class="sep" aria-hidden="true"></span>
+<a class="tbtn" href="PdfRedact.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="4" rx="1" fill="currentColor"></rect><path d="M3 15h10M3 19h14"></path></svg>Redact</a>
+<button class="tbtn" aria-haspopup="menu" aria-expanded="false" aria-pressed="false" tabindex="-1">More<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></button>
+</div>
+<div style="flex: 1; display: flex; min-height: 0">
+<nav id="pages" aria-label="Pages" style="width: 148px; flex: none; border-right: 1px solid var(--line); background: var(--side); overflow: auto; padding: 8px 10px; box-sizing: border-box">
+<ol style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px">
+<li><button class="thumb" aria-current="false" aria-label="Page 10" tabindex="-1"><span class="mini" aria-hidden="true" style="position: relative"><i style="width: 60%; height: 4px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i><i style="width: 70%"></i></span><span aria-hidden="true">10</span></button></li>
+<li><button class="thumb" aria-current="false" aria-label="Page 11" tabindex="-1"><span class="mini" aria-hidden="true" style="position: relative"><i style="width: 60%; height: 4px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i><i style="width: 70%"></i></span><span aria-hidden="true">11</span></button></li>
+<li><button class="thumb" aria-current="false" aria-label="Page 12" tabindex="-1"><span class="mini" aria-hidden="true" style="position: relative"><i style="width: 60%; height: 4px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i><i style="width: 70%"></i></span><span aria-hidden="true">12</span></button></li>
+<li><button class="thumb" aria-current="false" aria-label="Page 13" tabindex="-1"><span class="mini" aria-hidden="true" style="position: relative"><i style="width: 60%; height: 4px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i><i style="width: 70%"></i></span><span aria-hidden="true">13</span></button></li>
+<li><button class="thumb" aria-current="page" aria-label="Page 14, 1 signature" tabindex="0"><span class="mini" aria-hidden="true" style="position: relative"><i style="width: 60%; height: 4px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i><i style="width: 70%"></i><span class="pbadge" aria-hidden="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 11px; height: 11px"><path d="M5 12l5 5 9-10"></path></svg></span></span><span aria-hidden="true">14</span></button></li>
+</ol></nav>
+<main aria-label="Page 14 of 14" style="flex: 1; min-width: 0; background: var(--well); overflow: auto; display: flex; justify-content: center; padding: 20px 0; box-sizing: border-box">
+<div class="paper" role="img" aria-label="Page 14 of lease-agreement.pdf, with a signature placed on the Tenant line" style="width: 500px; height: 647px; flex: none; padding: 56px 58px">
+<h3>14. Signatures</h3>
+<p>By signing below, the Landlord and the Tenant agree to the terms set out in this agreement and its schedules.</p>
+<p>Each party has received a copy of the agreement, the deposit certificate and the property inventory dated 28 September 2026.</p>
+<div style="margin-top: 60px; display: grid; grid-template-columns: 1fr 120px; column-gap: 24px; row-gap: 70px; font-size: 10px">
+<div style="border-top: 1px solid #1f1f1f; padding-top: 4px">Landlord, for Harbour Properties Ltd</div><div style="border-top: 1px solid #1f1f1f; padding-top: 4px">Date</div>
+<div style="border-top: 1px solid #1f1f1f; padding-top: 4px">Tenant, Asha Patel</div><div style="border-top: 1px solid #1f1f1f; padding-top: 4px">Date</div>
+</div>
+<p style="position: absolute; left: 0; right: 0; bottom: 26px; text-align: center; font-size: 9px; color: #6b6b6b">Page 14 of 14</p>
+<button class="obj" aria-label="Signature, page 14: Asha Patel, typed. Selected. Arrow keys move it, Shift+arrow moves it further." style="left: 70px; top: 316px; width: 170px; height: 46px; background: rgba(29,95,209,.05); font-family: 'Snell Roundhand','Segoe Script','Brush Script MT',cursive; font-size: 27px; line-height: 1; color: {{inkHex}}; padding: 6px 8px">Asha Patel</button>
+<div class="tf" aria-hidden="true" style="left: 70px; top: 316px; width: 170px; height: 46px"><span class="th nwse" style="left: 0%; top: 0%"></span><span class="th ns" style="left: 50%; top: 0%"></span><span class="th nesw" style="left: 100%; top: 0%"></span><span class="th ew" style="left: 100%; top: 50%"></span><span class="th nwse" style="left: 100%; top: 100%"></span><span class="th ns" style="left: 50%; top: 100%"></span><span class="th nesw" style="left: 0%; top: 100%"></span><span class="th ew" style="left: 0%; top: 50%"></span><span class="stem"></span><span class="rot"></span></div><sc-if value="{{isDragging}}" hint-placeholder-val="{{ false }}"><span class="tf-chip" aria-hidden="true" style="left: 155px; top: 374px">{{chipText}}</span></sc-if><sc-if value="{{isMoving}}" hint-placeholder-val="{{ false }}"><span class="tf-guide" style="left: 58px; top: 362px; width: 384px; height: 1px"></span><span class="tf-guide" style="left: 70px; top: 290px; width: 1px; height: 90px"></span><span class="tf-cur" style="left: 144px; top: 328px"><svg width="22" height="22" viewBox="0 0 24 24"><path d="M12 1.5l3.5 3.5h-2.3v5.8H19V8.5l3.5 3.5-3.5 3.5v-2.3h-5.8V19h2.3L12 22.5 8.5 19h2.3v-5.8H5v2.3L1.5 12 5 8.5v2.3h5.8V5H8.5z" fill="#111" stroke="#fff" stroke-width="1.3" stroke-linejoin="round"/></svg></span></sc-if><sc-if value="{{isResizing}}" hint-placeholder-val="{{ false }}"><span class="tf-cur" style="left: 229px; top: 351px"><svg width="20" height="20" viewBox="0 0 24 24"><path d="M3 3h8l-2.8 2.8 9.6 9.6L20.6 12.6V21h-8l2.8-2.8-9.6-9.6L3 11.4z" fill="#111" stroke="#fff" stroke-width="1.3" stroke-linejoin="round"/></svg></span></sc-if><sc-if value="{{isRotating}}" hint-placeholder-val="{{ false }}"><span class="tf-cur" style="left: 144px; top: 280px"><svg width="22" height="22" viewBox="0 0 24 24"><path d="M19 12a7 7 0 1 1-2.05-4.95" fill="none" stroke="#fff" stroke-width="4.2" stroke-linecap="round"/><path d="M19 12a7 7 0 1 1-2.05-4.95" fill="none" stroke="#111" stroke-width="2" stroke-linecap="round"/><path d="M20.5 3.5v6h-6z" fill="#111" stroke="#fff" stroke-width="1.2" stroke-linejoin="round"/></svg></span></sc-if>
+<span aria-hidden="true" style="position: absolute; left: 372px; top: 333px; font-family: 'Noto Sans', system-ui, sans-serif; font-size: 11px; color: #1f1f1f">13 Oct 2026</span>
+</div>
+</main>
+<aside aria-labelledby="insp" style="width: 300px; flex: none; border-left: 1px solid var(--line); background: var(--panel); overflow: auto">
+<div style="padding: 16px 18px; display: flex; flex-direction: column; gap: 16px">
+<div style="display: flex; flex-direction: column; gap: 4px">
+<h2 id="insp" style="margin: 0; font-size: 14px; font-weight: 600">Sign</h2>
+<p class="hint" style="margin: 0">Type your name or use a picture of your signature, then click where it goes.</p>
+</div>
+<div role="tablist" aria-label="Signature source" class="seg" style="align-self: stretch; display: grid; grid-template-columns: 1fr 1fr">
+<button role="tab" aria-selected="{{typeSel}}" aria-checked="{{typeSel}}" aria-controls="sigpanel" tabindex="{{typeTab}}">Type</button>
+<button role="tab" aria-selected="{{imgSel}}" aria-checked="{{imgSel}}" aria-controls="sigpanel" tabindex="{{imgTab}}">Picture</button>
+</div>
+<div id="sigpanel" role="tabpanel" style="display: flex; flex-direction: column; gap: 10px">
+<sc-if value="{{isType}}" hint-placeholder-val="{{ true }}">
+<div style="display: flex; flex-direction: column; gap: 6px"><label class="lbl" for="nm">Name</label><input id="nm" class="field" value="Asha Patel"></div>
+<div aria-label="Preview" role="img" style="height: 64px; border-radius: 8px; background: #ffffff; border: 1px solid var(--line2); display: grid; place-items: center; font-family: 'Snell Roundhand','Segoe Script','Brush Script MT',cursive; font-size: 30px; color: {{inkHex}}">Asha Patel</div>
+</sc-if>
+<sc-if value="{{isImg}}" hint-placeholder-val="{{ false }}">
+<button class="btn" style="height: 76px; flex-direction: column; justify-content: center; border-style: dashed; background: none"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 16l5-5 4 4 3-3 6 6"></path><circle cx="15.5" cy="8.5" r="1.5"></circle></svg><span>Choose a PNG or JPG</span><span class="hint" style="font-weight: 400">or drop it on the page</span></button>
+<div role="alert" class="note" style="border-color: var(--bad)"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--bad); margin-top: 1px"><circle cx="12" cy="12" r="9"></circle><path d="M9 9l6 6M15 9l-6 6"></path></svg><span><strong style="font-weight: 600">signature.heic can't be used.</strong> Choose a PNG or JPG. A transparent PNG looks best.</span></div>
+</sc-if>
+</div>
+<div style="display: flex; flex-direction: column; gap: 6px">
+<span class="lbl" id="inkl">Ink</span>
+<div role="radiogroup" aria-labelledby="inkl" style="display: flex; gap: 8px">
+<button role="radio" aria-checked="{{inkBlack}}" aria-label="Black" class="btn icon" style="border-radius: 50%; border-width: 2px; border-color: {{ringBlack}}"><span style="width: 16px; height: 16px; border-radius: 50%; background: #1f1f1f; border: 1px solid var(--line2)"></span></button>
+<button role="radio" aria-checked="{{inkBlue}}" aria-label="Dark blue" class="btn icon" tabindex="-1" style="border-radius: 50%; border-width: 2px; border-color: {{ringBlue}}"><span style="width: 16px; height: 16px; border-radius: 50%; background: #1a3a8f"></span></button>
+<label class="btn icon" style="border-radius: 50%; position: relative" aria-label="Other colour"><input type="color" value="#1f1f1f" style="position: absolute; inset: 0; opacity: 0; cursor: pointer"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14"></path></svg></label>
+</div>
+</div>
+<fieldset style="border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px"><legend class="lbl" style="padding: 0; margin-bottom: 8px">Position and size</legend><div class="geo"><label class="lbl">X<input class="field" value="0.98 in" inputmode="decimal" aria-label="Distance from left, in"></label><label class="lbl">Y<input class="field" value="4.39 in" inputmode="decimal" aria-label="Distance from top, in"></label><label class="lbl">Width<input class="field" value="2.36 in" inputmode="decimal" aria-label="Width, in"></label><label class="lbl">Height<input class="field" value="0.64 in" inputmode="decimal" aria-label="Height, in"></label><label class="lbl">Angle<input class="field" value="0°" inputmode="decimal" aria-label="Angle, degrees"></label></div><label class="chk" style="display: flex; gap: 8px; align-items: center"><input type="checkbox" checked>Keep proportions</label><span class="hint">Drag to move, or drag a handle to resize. With the item selected, arrow keys move it, Shift+arrow moves it further, and {{altKey}}+arrow resizes it.</span></fieldset>
+<span class="hint" style="margin-top: -8px">Corner handles keep proportions. Hold Shift while dragging a side to stretch.</span>
+<fieldset style="border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px">
+<legend class="lbl" style="padding: 0; margin-bottom: 6px">Place on</legend>
+<label style="display: flex; gap: 8px; align-items: center"><input type="radio" name="scope" checked>This page only</label>
+<label style="display: flex; gap: 8px; align-items: center"><input type="radio" name="scope">These pages, for initials</label>
+<input class="field" aria-label="Pages for this signature" placeholder="For example 1-13" disabled>
+</fieldset>
+<div style="border-top: 1px solid var(--line); padding-top: 14px; display: flex; flex-direction: column; gap: 6px">
+<span class="lbl" id="reuse">Use again</span>
+<p class="hint" style="margin: 0">Signatures you place stay here until you close Toolbox. They're never saved to disk.</p>
+<ul class="olist" aria-labelledby="reuse">
+<li><button aria-current="true"><span style="font-family: 'Snell Roundhand','Segoe Script',cursive; font-size: 18px; line-height: 1.1">Asha Patel</span><span class="hint" style="margin-left: auto">Typed</span></button></li>
+<li><button aria-current="false"><span style="font-family: 'Snell Roundhand','Segoe Script',cursive; font-size: 18px; line-height: 1.1">AP</span><span class="hint" style="margin-left: auto">initials.png</span></button></li>
+</ul>
+</div>
+<div class="note"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut); margin-top: 1px"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v6M12 7.5v.5"></path></svg><span class="hint">This adds a picture of a signature. It isn't a certified digital signature.</span></div>
+</div>
+</aside>
+</div>
+<footer style="height: 30px; flex: none; display: flex; align-items: center; gap: 12px; padding: 0 12px; border-top: 1px solid var(--line); background: var(--side)">
+<label class="hint" for="pg" style="display: flex; align-items: center; gap: 6px">Page<input id="pg" class="field" value="14" inputmode="numeric" style="width: 44px; height: 22px; padding: 0 6px; text-align: center"></label><span class="hint">of 14</span>
+<div style="flex: 1"></div>
+<span class="hint" role="status">Signature placed on page 14.</span>
+<span class="sep" aria-hidden="true"></span>
+<span class="hint">The original PDF is never changed</span>
+</footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "source": {"editor": "enum", "options": ["Type", "Picture"], "default": "Type"}, "ink": {"editor": "enum", "options": ["Black", "Dark blue"], "default": "Dark blue"}, "drag": {"editor": "enum", "options": ["Selected", "Moving", "Resizing", "Rotating"], "default": "Selected"}, "$preview": {"width": 1280, "height": 800}}'>
+class Component extends DCLogic {
+renderVals() {
+const win = (this.props.platform ?? 'macOS') === 'Windows';
+const light = (this.props.theme ?? 'dark') === 'light';
+const base = {
+themeClass: light ? 'tb light' : 'tb dark',
+findKey: win ? 'Ctrl+K' : '⌘K',
+settingsKey: win ? 'Ctrl+,' : '⌘,',
+runKey: win ? 'Ctrl+Enter' : '⌘↵',
+openKey: win ? 'Ctrl+O' : '⌘O',
+undoKey: win ? 'Ctrl+Z' : '⌘Z',
+redoKey: win ? 'Ctrl+Y' : '⇧⌘Z',
+dupKey: win ? 'Ctrl+D' : '⌘D',
+selAllKey: win ? 'Ctrl+A' : '⌘A',
+mod: win ? 'Ctrl' : '⌘',
+reveal: win ? 'Show in File Explorer' : 'Show in Finder',
+docsDir: win ? 'C:\\Users\\Asha\\Documents' : '~/Documents'
+};
+const dg = this.props.drag ?? 'Selected';
+const dragX = { isDragging: dg !== 'Selected', isMoving: dg === 'Moving', isResizing: dg === 'Resizing', isRotating: dg === 'Rotating',
+chipText: dg === 'Moving' ? "X 0.98 in, Y 4.39 in. Lined up with the Tenant line" : dg === 'Resizing' ? "2.36 \u00d7 0.64 in" : "4\u00b0", altKey: win ? 'Alt' : 'Option' };
+const tab = this.props.source ?? 'Type';
+const ink = this.props.ink ?? 'Black';
+const t = tab === 'Type';
+const extra = { isType: t, isImg: !t, typeSel: t ? 'true' : 'false', imgSel: t ? 'false' : 'true', typeTab: t ? '0' : '-1', imgTab: t ? '-1' : '0',
+inkHex: ink === 'Black' ? '#1f1f1f' : '#1a3a8f', inkBlack: ink === 'Black' ? 'true' : 'false', inkBlue: ink === 'Black' ? 'false' : 'true',
+ringBlack: ink === 'Black' ? 'var(--fg)' : 'var(--line2)', ringBlue: ink === 'Black' ? 'var(--line2)' : 'var(--fg)', ...dragX };
+return Object.assign(base, typeof extra === 'undefined' ? {} : extra);
+}
+}
+</script>
+</body>
+</html>
