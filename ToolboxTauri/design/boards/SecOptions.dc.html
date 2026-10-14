@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Lock & Unlock, passwords and options</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+.tb{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;font-size:13px;line-height:1.45;color:var(--fg);background:var(--bg);-webkit-font-smoothing:antialiased}
+.tb.dark{--bg:#0a0a0a;--side:#111111;--panel:#0f0f0f;--raise:#1c1c1c;--fg:#fafafa;--mut:#a3a3a3;--faint:#8a8a8a;--line:rgba(255,255,255,.08);--line2:rgba(255,255,255,.16);--sel:#262626;--pri:#ebebeb;--prifg:#171717;--bad:#ff6b6b;--warn:#f2b552;--ring:#a3a3a3;--scrim:rgba(0,0,0,.6)}
+.tb.light{--bg:#ffffff;--side:#f7f7f7;--panel:#fcfcfc;--raise:#f2f2f2;--fg:#0a0a0a;--mut:#525252;--faint:#666666;--line:#e8e8e8;--line2:#d4d4d4;--sel:#ebebeb;--pri:#171717;--prifg:#fafafa;--bad:#c10007;--warn:#9a5800;--ring:#525252;--scrim:rgba(0,0,0,.28)}
+.tb button,.tb input,.tb select{font:inherit;color:inherit}
+.btn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:7px;border:1px solid var(--line2);background:var(--raise);color:var(--fg);font-weight:500;cursor:pointer;white-space:nowrap;box-sizing:border-box;text-decoration:none}
+.btn.pri{background:var(--pri);color:var(--prifg);border-color:transparent}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--mut)}
+.btn.sm{height:26px;padding:0 9px;font-size:12px}
+.btn[disabled]{opacity:.45;cursor:default}
+.kbd{font-size:11px;line-height:16px;padding:0 5px;border-radius:4px;border:1px solid var(--line2);color:var(--mut);font-weight:500}
+.btn.pri .kbd{border-color:currentColor;color:inherit;opacity:.6}
+.nav{display:flex;align-items:center;gap:9px;min-height:30px;padding:0 10px;border-radius:7px;color:var(--mut);text-decoration:none;border:0;background:none;width:100%;text-align:left;cursor:pointer;box-sizing:border-box}
+.nav.on{background:var(--sel);color:var(--fg);font-weight:500}
+.field{height:30px;border-radius:7px;border:1px solid var(--line2);background:var(--bg);padding:0 10px;width:100%;box-sizing:border-box;min-width:0}
+.lbl{font-size:12px;font-weight:600}
+.hint{font-size:12px;color:var(--mut)}
+.row{display:grid;grid-template-columns:20px minmax(0,1fr) 72px 60px 150px;gap:12px;align-items:center;padding:8px 20px;border-bottom:1px solid var(--line)}
+.row.sel{background:var(--sel)}
+.badge{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:999px;border:1px solid var(--line2);font-size:12px;color:var(--fg);white-space:nowrap}
+svg.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.tb :focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+a{color:inherit}a:hover{color:var(--mut)}
+.seg{display:inline-flex;padding:2px;border-radius:8px;background:var(--raise);border:1px solid var(--line)}.seg button{height:26px;padding:0 10px;border:0;border-radius:6px;background:none;cursor:pointer;color:var(--mut)}.seg button[aria-checked=true]{background:var(--bg);color:var(--fg);font-weight:500;box-shadow:0 1px 2px rgba(0,0,0,.2)}
+.note{display:flex;gap:8px;align-items:flex-start;padding:10px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--raise)}
+.opt{display:flex;flex-direction:column;gap:6px}
+fieldset.opt{border:0;margin:0;padding:0}fieldset.opt legend{padding:0;margin-bottom:6px}
+.chk{display:flex;gap:8px;align-items:center}
+.tb.dark{--seg-ok:#d4d4d4;--seg-wait:#2a2a2a}.tb.light{--seg-ok:#262626;--seg-wait:#e5e5e5}
+.seg{display:inline-flex;padding:2px;border-radius:8px;background:var(--raise);border:1px solid var(--line)}
+.seg button{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border:0;border-radius:6px;background:none;cursor:pointer;color:var(--mut);font-weight:500}
+.seg button[aria-checked=true]{background:var(--bg);color:var(--fg);box-shadow:0 1px 2px rgba(0,0,0,.25)}
+.seg[aria-disabled=true]{opacity:.5}
+.row{grid-template-columns:20px minmax(0,1fr) 84px 64px 170px}
+.rrow{display:grid;grid-template-columns:20px minmax(0,1fr) 110px 250px;gap:12px;align-items:center;padding:8px 20px;border-bottom:1px solid var(--line);min-height:36px}
+.chip{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;border-radius:999px;border:1px solid var(--line2);background:transparent;font-size:12px;cursor:pointer;color:var(--mut)}
+.chip[aria-pressed="true"]{background:var(--sel);color:var(--fg);font-weight:500}
+.inl{grid-column:2 / -1;display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;padding:10px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--panel)}
+.inl .opt{flex:1 1 160px}
+.err{font-size:12px;color:var(--bad);display:flex;gap:6px;align-items:center}
+.field[aria-invalid=true]{border-color:var(--bad)}
+.flag{display:flex;gap:10px;align-items:center;margin:0 20px 10px;padding:8px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--raise)}
+.tag{display:inline-flex;align-items:center;height:20px;padding:0 7px;border-radius:999px;border:1px solid var(--line2);font-size:11px;color:var(--mut);white-space:nowrap}
+
+</style>
+</helmet>
+<div class="{{themeClass}}" style="min-height: 800px; display: flex; flex-wrap: wrap">
+<aside aria-label="File Security" style="flex: 1 1 220px; max-width: 232px; background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; padding: 14px 10px; box-sizing: border-box">
+<a class="nav" href="Main.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M5 12l6 6M5 12l6-6"></path></svg>All tools</a>
+<div style="padding: 16px 10px 6px; font-size: 12px; font-weight: 600; color: var(--faint)">File Security</div>
+<nav aria-label="File Security tools" style="display: flex; flex-direction: column; gap: 2px"><button class="nav on" aria-pressed="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg>Lock & Unlock</button><a class="nav" href="PdfDetails.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"></path></svg><span style="display: flex; flex-direction: column"><span>Remove restrictions</span><span class="hint">In PDF Editor</span></span></a></nav>
+<div style="flex: 1"></div>
+<a class="nav" href="Settings.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"></path></svg>Settings<span class="kbd" style="margin-left: auto">{{settingsKey}}</span></a>
+<p class="hint" style="margin: 0; padding: 10px 10px 0">Files stay on this device.</p>
+</aside>
+<div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+<header style="min-height: 52px; display: flex; align-items: center; gap: 14px; padding: 0 20px; border-bottom: 1px solid var(--line); flex-wrap: wrap">
+<h1 style="margin: 0; font-size: 15px; font-weight: 600">Lock & Unlock</h1>
+<span class="hint">{{subtitle}}</span>
+<div style="flex: 1"></div><div role="radiogroup" aria-label="Mode" class="seg"><button role="radio" aria-checked="{{lockOn}}" tabindex="{{lockTab}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg>Lock</button><button role="radio" aria-checked="{{unlockOn}}" tabindex="{{unlockTab}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="15" r="4"></circle><path d="M10.8 12.2L19 4M16 7l2 2"></path></svg>Unlock</button></div>
+<button class="btn ghost"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"></circle><path d="M21 21l-6-6"></path></svg>Find a tool<span class="kbd">{{findKey}}</span></button>
+</header>
+<div style="flex: 1; display: flex; flex-wrap: wrap; min-height: 0">
+<section aria-label="Files" style="flex: 999 1 480px; min-width: 0; display: flex; flex-direction: column">
+<div style="display: flex; align-items: center; gap: 8px; padding: 12px 20px; flex-wrap: wrap"><strong style="font-size: 13px">8 files</strong><span class="hint">{{countHint}}</span><div style="flex: 1"></div><button class="btn sm"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14"></path></svg>Add files<span class="kbd">{{openKey}}</span></button><button class="btn sm">Remove from list</button><button class="btn sm ghost">Clear list</button></div>
+<sc-if value="{{cleared}}" hint-placeholder-val="{{ false }}"><div role="status" class="flag"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><path d="M5 12l5 5 9-10"></path></svg><span style="flex: 1">payroll-september.xlsx uses the batch password again.</span><button class="btn sm">Undo<span class="kbd">{{mod}}Z</span></button></div></sc-if>
+<div class="row hint" style="padding-top: 6px; padding-bottom: 6px; border-top: 1px solid var(--line)"><span></span><span>Name</span><span>Type</span><span style="text-align: right">Size</span><span>Password</span></div>
+<ul aria-label="Files" style="list-style: none; margin: 0; padding: 0; overflow: auto"><sc-for list="{{files}}" as="f" hint-placeholder-count="8">
+<li class="{{f.rowClass}}" aria-selected="{{f.selected}}">
+<span style="color: {{f.icColor}}; display: flex"><sc-if value="{{f.flagged}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l10 18H2z"></path><path d="M12 10v5M12 18v.5"></path></svg></sc-if><sc-if value="{{f.ok}}" hint-placeholder-val="{{ true }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4"></path><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"></path></svg></sc-if></span>
+<span style="min-width: 0; display: flex; flex-direction: column"><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{f.name}}</span><span class="hint" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: {{f.subColor}}">{{f.sub}}</span></span>
+<span class="hint">{{f.type}}</span>
+<span class="hint" style="text-align: right">{{f.size}}</span>
+<span style="display: flex; gap: 4px; align-items: center; flex-wrap: wrap"><sc-if value="{{f.own}}" hint-placeholder-val="{{ false }}"><span class="badge"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 13px; height: 13px"><circle cx="8" cy="15" r="4"></circle><path d="M10.8 12.2L19 4M16 7l2 2"></path></svg>Own password</span></sc-if><sc-if value="{{f.batch}}" hint-placeholder-val="{{ true }}"><span class="hint">Batch password</span></sc-if><sc-if value="{{f.flagged}}" hint-placeholder-val="{{ false }}"><span class="tag">Won&#39;t run</span></sc-if><sc-if value="{{f.ownActions}}" hint-placeholder-val="{{ false }}"><button class="btn sm ghost" style="color: var(--fg)">Change</button><button class="btn sm ghost" style="color: var(--fg)">Use batch password</button></sc-if><sc-if value="{{f.canSet}}" hint-placeholder-val="{{ false }}"><button class="btn sm ghost" style="color: var(--fg)">Set own password</button></sc-if></span>
+</li>
+<sc-if value="{{f.editing}}" hint-placeholder-val="{{ false }}"><li style="display: grid; grid-template-columns: 20px minmax(0,1fr); gap: 12px; padding: 0 20px 12px; border-bottom: 1px solid var(--line); background: var(--sel)"><span></span><div class="inl" role="group" aria-label="Own password for {{f.name}}">
+<div class="opt"><label class="lbl" for="own1">{{ownLabel}}</label><input id="own1" class="field" type="password" value="otter-ledger-7"></div>
+<sc-if value="{{isLock}}" hint-placeholder-val="{{ false }}"><div class="opt"><label class="lbl" for="own2">Confirm</label><input id="own2" class="field" type="password" value="otter-ledger-7"></div></sc-if>
+<button class="btn sm pri">Save password</button><button class="btn sm">Cancel<span class="kbd">Esc</span></button>
+<p class="hint" style="margin: 0; flex-basis: 100%">{{ownHint}}</p></div></li></sc-if>
+</sc-for></ul>
+<sc-if value="{{showNotAdded}}" hint-placeholder-val="{{ false }}"><div role="region" aria-label="Not added" style="margin: 16px 20px 20px; border: 1px solid var(--line); border-radius: 10px"><div style="display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line)"><strong style="font-size: 13px">2 items not added</strong><div style="flex: 1"></div><button class="btn sm ghost">Dismiss</button></div><div style="display: grid; grid-template-columns: minmax(0, 200px) minmax(0, 1fr); column-gap: 16px; row-gap: 8px; padding: 10px 14px"><span>site-photo-04.jpg</span><span class="hint">Not a document. Lock and Unlock take PDF, Word, Excel and PowerPoint files.</span><span>notes.txt</span><span class="hint">Not a document. Lock and Unlock take PDF, Word, Excel and PowerPoint files.</span></div></div></sc-if>
+</section><section aria-label="Options" style="flex: 1 1 300px; max-width: 360px; border-left: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column">
+<div style="padding: 18px 20px; display: flex; flex-direction: column; gap: 20px; flex: 1; overflow: auto"><div style="display: flex; flex-direction: column; gap: 10px"><sc-if value="{{hasBatch}}" hint-placeholder-val="{{ true }}"><div class="opt"><label class="lbl" for="pw">{{pwLabel}}</label><div style="display: flex; gap: 6px"><input id="pw" class="field" type="{{pwType}}" value="harbour-lantern-42"><button class="btn" aria-label="{{pwToggle}}" aria-pressed="{{showPassword}}" style="padding: 0 8px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"></path><circle cx="12" cy="12" r="3"></circle></svg></button></div></div></sc-if><sc-if value="{{noBatch}}" hint-placeholder-val="{{ false }}"><div class="opt"><label class="lbl" for="pw">{{pwLabel}}</label><div style="display: flex; gap: 6px"><input id="pw" class="field" type="{{pwType}}" placeholder="Enter a password"><button class="btn" aria-label="{{pwToggle}}" aria-pressed="{{showPassword}}" style="padding: 0 8px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"></path><circle cx="12" cy="12" r="3"></circle></svg></button></div></div></sc-if><sc-if value="{{isLock}}" hint-placeholder-val="{{ false }}"><sc-if value="{{match}}" hint-placeholder-val="{{ true }}"><div class="opt"><label class="lbl" for="pw2">Confirm new password</label><div style="display: flex; gap: 6px"><input id="pw2" class="field" type="{{pwType}}" value="harbour-lantern-42"><button class="btn" aria-label="{{pwToggle}}" aria-pressed="{{showPassword}}" style="padding: 0 8px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"></path><circle cx="12" cy="12" r="3"></circle></svg></button></div></div></sc-if><sc-if value="{{mismatch}}" hint-placeholder-val="{{ false }}"><div class="opt"><label class="lbl" for="pw2">Confirm new password</label><div style="display: flex; gap: 6px"><input id="pw2" class="field" type="{{pwType}}" value="harbour-lantren-42" aria-invalid="true" aria-describedby="pwerr"><button class="btn" aria-label="{{pwToggle}}" aria-pressed="{{showPassword}}" style="padding: 0 8px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"></path><circle cx="12" cy="12" r="3"></circle></svg></button></div></div><p id="pwerr" class="err" style="margin: 0"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M9 9l6 6M15 9l-6 6"></path></svg>Passwords don't match. Type the new password again.</p></sc-if></sc-if><p class="hint" style="margin: 0">{{pwNote}}</p></div><div style="border-top: 1px solid var(--line); padding-top: 18px; display: flex; flex-direction: column; gap: 8px"><div style="display: flex; align-items: center; gap: 8px"><span class="lbl">Save to</span><span class="badge">This run only</span></div>
+<div style="display: flex; align-items: center; gap: 8px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2"></path></svg><span style="min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{deliveryDir}}</span></div>
+<div style="display: flex; gap: 12px"><button class="btn ghost" style="padding: 0; height: 24px; color: var(--fg); text-decoration: underline; text-underline-offset: 3px">Change for this run</button><button class="btn ghost" style="padding: 0; height: 24px; text-decoration: underline; text-underline-offset: 3px">Reset to default</button></div>
+<p class="hint" style="margin: 0">Your default, next to each original, comes back when you leave this tool.</p></div><div class="note"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut); margin-top: 1px"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"></path></svg><span class="hint" style="color: var(--fg)">Runs on this device with no network. Passwords are never saved and are cleared when you switch mode or leave.</span></div></div>
+<footer style="padding: 14px 20px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 10px"><span id="runwhy" class="hint" style="color: {{footColor}}">{{footHint}}</span><div style="flex: 1"></div><sc-if value="{{runOn}}" hint-placeholder-val="{{ true }}"><button class="btn pri">{{runLabel}}<span class="kbd">{{runKey}}</span></button></sc-if><sc-if value="{{runOff}}" hint-placeholder-val="{{ false }}"><button class="btn pri" disabled aria-describedby="runwhy">{{runLabel}}<span class="kbd">{{runKey}}</span></button></sc-if></footer></section>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "mode": {"editor": "enum", "options": ["Lock", "Unlock"], "default": "Lock"}, "override": {"editor": "enum", "options": ["Setting", "Set", "Cleared"], "default": "Setting"}, "confirm": {"editor": "enum", "options": ["Mismatch", "Match"], "default": "Mismatch"}, "batchPassword": {"editor": "boolean", "default": true}, "showPassword": {"editor": "boolean", "default": false}, "$preview": {"width": 1280, "height": 800}}'>
+class Component extends DCLogic {
+renderVals() {
+const win = (this.props.platform ?? 'macOS') === 'Windows';
+const light = (this.props.theme ?? 'dark') === 'light';
+const base = { themeClass: light ? 'tb light' : 'tb dark', findKey: win ? 'Ctrl+K' : '⌘K', settingsKey: win ? 'Ctrl+,' : '⌘,', openKey: win ? 'Ctrl+O' : '⌘O', runKey: win ? 'Ctrl+Enter' : '⌘↵', mod: win ? 'Ctrl' : '⌘', reveal: win ? 'Show in File Explorer' : 'Show in Finder', docsDir: win ? 'C:\\Users\\Asha\\Documents' : '~/Documents' };
+const lock = (this.props.mode ?? 'Lock') === 'Lock';
+const extra = {};
+base.lockOn = lock ? 'true' : 'false'; base.unlockOn = lock ? 'false' : 'true';
+base.lockTab = lock ? '0' : '-1'; base.unlockTab = lock ? '-1' : '0';
+base.isLock = lock; base.isUnlock = !lock;
+base.subtitle = lock ? 'Add a password to PDF, Word, Excel and PowerPoint files.' : 'Remove a password you know from PDF, Word, Excel and PowerPoint files.';
+base.verb = lock ? 'Lock' : 'Unlock'; base.done = lock ? 'locked' : 'unlocked'; base.suffix = lock ? '-protected' : '-unlocked';
+base.pwLabel = lock ? 'New password for all files' : 'Current password for all files';
+base.accepts = lock ? 'Accepts .pdf, .docx, .xlsx, .pptx' : 'Accepts .pdf, .doc, .docx, .xls, .xlsx, .ppt, .pptx';
+const show = this.props.showPassword ?? false;
+base.pwType = show ? 'text' : 'password'; base.pwToggle = show ? 'Hide password' : 'Show password'; base.showPassword = show ? 'true' : 'false';
+base.example = 'lease-agreement' + base.suffix + '.pdf';
+base.deliveryDir = win ? 'C:\\Users\\Asha\\Documents\\Delivery\\Acme' : '~/Documents/Delivery/Acme';
+base.footColor = 'var(--mut)';
+const ov = this.props.override ?? 'Setting';
+const mm = lock && (this.props.confirm ?? 'Mismatch') === 'Mismatch';
+const hasBatch = this.props.batchPassword ?? true;
+const F = [
+['lease-agreement.pdf', 'Contracts', 'PDF', '1.2 MB', '', ''],
+['vendor-nda-acme.pdf', 'Contracts', 'PDF', '310 KB', '', ''],
+['budget-2027.xlsx', 'Finance', 'Excel', '84 KB', '', ''],
+['payroll-september.xlsx', 'Finance', 'Excel', '212 KB', 'own', ''],
+['board-deck-q3.pptx', 'Board', 'PowerPoint', '6.4 MB', '', ''],
+['offer-letter-chen.docx', 'People', 'Word', '48 KB', '', ''],
+['policy-handbook-2009.doc', 'People', 'Word', '1.1 MB', '', 'legacy'],
+['forecast-2011.xls', 'Finance', 'Excel', '390 KB', '', 'legacy']
+];
+const dir = win ? 'C:\\Users\\Asha\\Documents\\' : '~/Documents/';
+const legacyMsg = { '.doc': 'Lock needs .docx. Save it as .docx in Word, then add it again.', '.xls': 'Lock needs .xlsx. Save it as .xlsx in Excel, then add it again.' };
+const sel = ['payroll-september.xlsx']; const after = { 'payroll-september.xlsx': ov === 'Setting' ? 'edit' : ov === 'Set' ? 'actions' : 'canset' };
+extra.files = F.map((r) => {
+const flagged = lock && r[5] === 'legacy';
+const ext = r[0].slice(r[0].lastIndexOf('.'));
+const own = r[4] === 'own' && ov !== 'Cleared';
+const s = sel.includes(r[0]);
+return { name: r[0], type: r[2], size: r[3], own: own && !flagged, batch: !own && !flagged, flagged: flagged, ok: !flagged,
+sub: flagged ? legacyMsg[ext] : dir + r[1], subColor: flagged ? 'var(--fg)' : 'var(--mut)', icColor: flagged ? 'var(--warn)' : 'var(--mut)',
+selected: s ? 'true' : 'false', rowClass: s ? 'row sel' : 'row', editing: (after[r[0]] || '') === 'edit', ownActions: (after[r[0]] || '') === 'actions', canSet: (after[r[0]] || '') === 'canset' };
+});
+extra.hasFlags = lock;
+extra.hasFlags = false; extra.showNotAdded = false; extra.cleared = ov === 'Cleared';
+extra.match = !mm; extra.mismatch = mm; extra.hasBatch = hasBatch; extra.noBatch = !hasBatch;
+const ownN = ov === 'Cleared' ? 0 : 1; const flagged = lock ? 2 : 0; const runnable = 8 - flagged;
+extra.countHint = lock ? '1 selected. 2 won\'t run in Lock' : '1 selected';
+extra.pwNote = ownN ? `Used for ${runnable - 1} files. 1 file has its own password.` : `Used for all ${runnable} files.`;
+extra.ownLabel = lock ? 'Own new password' : 'Own current password';
+extra.ownHint = lock ? 'Only this file uses it. You\'ll need it to open the locked copy.' : 'Only this file uses it. The batch password is used for the rest.';
+const blocked = mm || !hasBatch;
+extra.runOn = !blocked; extra.runOff = blocked;
+extra.footHint = !hasBatch ? `${runnable - ownN} files have no password yet` : mm ? 'Passwords don\'t match' : 'Saves to Delivery/Acme for this run';
+extra.footColor = blocked ? 'var(--fg)' : 'var(--mut)';
+extra.runLabel = lock ? 'Lock 8 files' : 'Unlock 8 files';
+return Object.assign(base, extra);
+}
+}
+</script>
+</body>
+</html>

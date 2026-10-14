@@ -99,6 +99,16 @@ the board changed first.
 | [ExtractGif](boards/ExtractGif.dc.html) | Extract GIF frames | [default](screens/ExtractGif--default.jpg) |
 | [TiffPages](boards/TiffPages.dc.html) | TIFF Pages: split or combine | [default](screens/TiffPages--default.jpg), [mode-combine](screens/TiffPages--mode-combine.jpg) |
 
+### File Security
+
+| Board | What it shows | States |
+|---|---|---|
+| [SecEmpty](boards/SecEmpty.dc.html) | Lock & Unlock: empty, mode switch, drop | [default](screens/SecEmpty--default.jpg), [mode-unlock](screens/SecEmpty--mode-unlock.jpg), [dragging-true](screens/SecEmpty--dragging-true.jpg), [showPassword-true](screens/SecEmpty--showPassword-true.jpg) |
+| [SecFiles](boards/SecFiles.dc.html) | Files added: flagged rows and not added | [default](screens/SecFiles--default.jpg), [mode-unlock](screens/SecFiles--mode-unlock.jpg), [showPassword-true](screens/SecFiles--showPassword-true.jpg) |
+| [SecOptions](boards/SecOptions.dc.html) | Own password, confirm mismatch, per-run folder | [default](screens/SecOptions--default.jpg), [mode-unlock](screens/SecOptions--mode-unlock.jpg), [override-set](screens/SecOptions--override-set.jpg), [override-cleared](screens/SecOptions--override-cleared.jpg), [confirm-match](screens/SecOptions--confirm-match.jpg), [batchPassword-false](screens/SecOptions--batchPassword-false.jpg), [showPassword-true](screens/SecOptions--showPassword-true.jpg) |
+| [SecRunning](boards/SecRunning.dc.html) | Running: mode and passwords locked | [default](screens/SecRunning--default.jpg), [mode-unlock](screens/SecRunning--mode-unlock.jpg) |
+| [SecResults](boards/SecResults.dc.html) | Results: every lock and unlock outcome | [default](screens/SecResults--default.jpg), [mode-unlock](screens/SecResults--mode-unlock.jpg), [filter-needs-attention](screens/SecResults--filter-needs-attention.jpg), [filter-warnings](screens/SecResults--filter-warnings.jpg), [retryOpen-true](screens/SecResults--retryOpen-true.jpg) |
+
 ### App settings and identity
 
 | Board | What it shows | States |

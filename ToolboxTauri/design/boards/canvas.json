@@ -329,6 +329,46 @@
 "h": 800,
 "title": "App icon: sizes, platforms, in use",
 "expand": "fill"
+},
+"SecEmpty.dc.html": {
+"x": 0,
+"y": 11920,
+"w": 1280,
+"h": 800,
+"title": "Lock & Unlock: empty, mode switch, drop",
+"expand": "fill"
+},
+"SecFiles.dc.html": {
+"x": 1360,
+"y": 11920,
+"w": 1280,
+"h": 800,
+"title": "Files added: flagged rows and not added",
+"expand": "fill"
+},
+"SecOptions.dc.html": {
+"x": 2720,
+"y": 11920,
+"w": 1280,
+"h": 800,
+"title": "Own password, confirm mismatch, per-run folder",
+"expand": "fill"
+},
+"SecRunning.dc.html": {
+"x": 4080,
+"y": 11920,
+"w": 1280,
+"h": 800,
+"title": "Running: mode and passwords locked",
+"expand": "fill"
+},
+"SecResults.dc.html": {
+"x": 5440,
+"y": 11920,
+"w": 1280,
+"h": 800,
+"title": "Results: every lock and unlock outcome",
+"expand": "fill"
 }
 },
 "order": [
@@ -371,7 +411,12 @@
 "Settings.dc.html",
 "Packs.dc.html",
 "Shortcuts.dc.html",
-"Logo.dc.html"
+"Logo.dc.html",
+"SecEmpty.dc.html",
+"SecFiles.dc.html",
+"SecOptions.dc.html",
+"SecRunning.dc.html",
+"SecResults.dc.html"
 ],
 "notes": {
 "row3": {
@@ -478,6 +523,37 @@
 "maxH": 560,
 "fill": "green",
 "text": "Settings\n\nSettings opens with Cmd/Ctrl+, from anywhere and replaces the tool rail with its sections. Changes save immediately; there is no Save button.\n\nSwitches are real switches with labels. Every section is reachable with Tab and arrow keys.\n\nPacks never download without asking. A tool that needs a missing pack names it and its size, then sends you to this screen or installs it in place."
+},
+"row11": {
+"x": 0,
+"y": 11660,
+"text": "File Security: Lock & Unlock",
+"kind": "title1",
+"maxW": 6800
+},
+"sec1": {
+"x": 6800,
+"y": 11920,
+"w": 360,
+"maxH": 560,
+"fill": "blue",
+"text": "Lock & Unlock: mode and passwords\n\nThe view is File Security and its one tool is Lock & Unlock, so the rail never reads File Security twice. Remove restrictions stays in the PDF Editor, and the rail links to it.\n\nLock and Unlock is a segmented control in the header. Switching keeps the file list, clears both password fields and re-checks every row for the new mode. It is disabled while a batch runs.\n\nThe batch password sits at the top of the options with show/hide. Lock adds Confirm under it. A mismatch marks Confirm as invalid with 'Passwords don't match. Type the new password again.' and Run names the reason.\n\nA row's own password opens an inline editor in that row, with Confirm in Lock. Saved rows show 'Own password' with Change and Use batch password. Clearing it shows a status line with Undo."
+},
+"sec2": {
+"x": 7200,
+"y": 11920,
+"w": 360,
+"maxH": 560,
+"fill": "green",
+"text": "Lock & Unlock: intake, flags and results\n\nFiles the other mode accepts stay in the list, flagged with a reason and a Won't run tag, such as a .doc in Lock. A banner offers one action to remove every flagged file. Files no mode accepts go under 'N items not added'.\n\nResults use the shared row pattern. Locked or unlocked rows open or show the copy. A warning row says what changed, such as a removed signature or a -1 rename. Skipped rows say why and point to the fix, such as Unlock it first or Open Remove restrictions. Failed rows say why and whether the file is fine.\n\nRetry appears only for a wrong password (Try another password, with an inline field) or a processing error. It runs only that file. A missing PDF helper fails PDFs only, and Office files still run.\n\nShow all in Finder or File Explorer opens the destination once for many results."
+},
+"sec3": {
+"x": 7600,
+"y": 11920,
+"w": 360,
+"maxH": 560,
+"fill": "purple",
+"text": "Lock & Unlock: local, destination, search\n\nA note in the options says the tool runs on this device with no network, and that passwords are never saved and are cleared on a mode switch or on leaving. Results repeat that passwords were cleared.\n\nSave to defaults to next to each original. Change for this run shows This run only and Reset to default. Copies end in -protected or -unlocked, and nothing is replaced.\n\nCommand center: File Security, lock icon. Find a tool matches lock, unlock, protect, password, encrypt and decrypt.\n\nNew patterns: the mode segmented control, inline row editors, and flagged rows with a Won't run tag."
 },
 "row1": {
 "x": 0,

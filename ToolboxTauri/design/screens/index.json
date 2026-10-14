@@ -719,5 +719,152 @@
     "state": "default",
     "query": "",
     "screen": "Logo--default.jpg"
+  },
+  {
+    "board": "SecEmpty.dc.html",
+    "title": "Lock & Unlock: empty, mode switch, drop",
+    "state": "default",
+    "query": "",
+    "screen": "SecEmpty--default.jpg"
+  },
+  {
+    "board": "SecEmpty.dc.html",
+    "title": "Lock & Unlock: empty, mode switch, drop",
+    "state": "mode-unlock",
+    "query": "mode=Unlock",
+    "screen": "SecEmpty--mode-unlock.jpg"
+  },
+  {
+    "board": "SecEmpty.dc.html",
+    "title": "Lock & Unlock: empty, mode switch, drop",
+    "state": "dragging-true",
+    "query": "dragging=true",
+    "screen": "SecEmpty--dragging-true.jpg"
+  },
+  {
+    "board": "SecEmpty.dc.html",
+    "title": "Lock & Unlock: empty, mode switch, drop",
+    "state": "showPassword-true",
+    "query": "showPassword=true",
+    "screen": "SecEmpty--showPassword-true.jpg"
+  },
+  {
+    "board": "SecFiles.dc.html",
+    "title": "Files added: flagged rows and not added",
+    "state": "default",
+    "query": "",
+    "screen": "SecFiles--default.jpg"
+  },
+  {
+    "board": "SecFiles.dc.html",
+    "title": "Files added: flagged rows and not added",
+    "state": "mode-unlock",
+    "query": "mode=Unlock",
+    "screen": "SecFiles--mode-unlock.jpg"
+  },
+  {
+    "board": "SecFiles.dc.html",
+    "title": "Files added: flagged rows and not added",
+    "state": "showPassword-true",
+    "query": "showPassword=true",
+    "screen": "SecFiles--showPassword-true.jpg"
+  },
+  {
+    "board": "SecOptions.dc.html",
+    "title": "Own password, confirm mismatch, per-run folder",
+    "state": "default",
+    "query": "",
+    "screen": "SecOptions--default.jpg"
+  },
+  {
+    "board": "SecOptions.dc.html",
+    "title": "Own password, confirm mismatch, per-run folder",
+    "state": "mode-unlock",
+    "query": "mode=Unlock",
+    "screen": "SecOptions--mode-unlock.jpg"
+  },
+  {
+    "board": "SecOptions.dc.html",
+    "title": "Own password, confirm mismatch, per-run folder",
+    "state": "override-set",
+    "query": "override=Set",
+    "screen": "SecOptions--override-set.jpg"
+  },
+  {
+    "board": "SecOptions.dc.html",
+    "title": "Own password, confirm mismatch, per-run folder",
+    "state": "override-cleared",
+    "query": "override=Cleared",
+    "screen": "SecOptions--override-cleared.jpg"
+  },
+  {
+    "board": "SecOptions.dc.html",
+    "title": "Own password, confirm mismatch, per-run folder",
+    "state": "confirm-match",
+    "query": "confirm=Match",
+    "screen": "SecOptions--confirm-match.jpg"
+  },
+  {
+    "board": "SecOptions.dc.html",
+    "title": "Own password, confirm mismatch, per-run folder",
+    "state": "batchPassword-false",
+    "query": "batchPassword=false",
+    "screen": "SecOptions--batchPassword-false.jpg"
+  },
+  {
+    "board": "SecOptions.dc.html",
+    "title": "Own password, confirm mismatch, per-run folder",
+    "state": "showPassword-true",
+    "query": "showPassword=true",
+    "screen": "SecOptions--showPassword-true.jpg"
+  },
+  {
+    "board": "SecRunning.dc.html",
+    "title": "Running: mode and passwords locked",
+    "state": "default",
+    "query": "",
+    "screen": "SecRunning--default.jpg"
+  },
+  {
+    "board": "SecRunning.dc.html",
+    "title": "Running: mode and passwords locked",
+    "state": "mode-unlock",
+    "query": "mode=Unlock",
+    "screen": "SecRunning--mode-unlock.jpg"
+  },
+  {
+    "board": "SecResults.dc.html",
+    "title": "Results: every lock and unlock outcome",
+    "state": "default",
+    "query": "",
+    "screen": "SecResults--default.jpg"
+  },
+  {
+    "board": "SecResults.dc.html",
+    "title": "Results: every lock and unlock outcome",
+    "state": "mode-unlock",
+    "query": "mode=Unlock",
+    "screen": "SecResults--mode-unlock.jpg"
+  },
+  {
+    "board": "SecResults.dc.html",
+    "title": "Results: every lock and unlock outcome",
+    "state": "filter-needs-attention",
+    "query": "filter=Needs%20attention",
+    "screen": "SecResults--filter-needs-attention.jpg"
+  },
+  {
+    "board": "SecResults.dc.html",
+    "title": "Results: every lock and unlock outcome",
+    "state": "filter-warnings",
+    "query": "filter=Warnings",
+    "screen": "SecResults--filter-warnings.jpg"
+  },
+  {
+    "board": "SecResults.dc.html",
+    "title": "Results: every lock and unlock outcome",
+    "state": "retryOpen-true",
+    "query": "retryOpen=true",
+    "screen": "SecResults--retryOpen-true.jpg"
   }
 ]
