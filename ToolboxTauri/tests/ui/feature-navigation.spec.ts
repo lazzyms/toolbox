@@ -745,7 +745,7 @@ test("editor command rails keep one document session while changing tools", asyn
 
     await page.getByRole("toolbar", { name: "Image editor tools" }).getByRole("button", { name: "Rotate and Flip Images" }).click();
     await expect(page.getByRole("heading", { name: "Rotate and Flip Images", exact: true })).toBeVisible();
-    await expect(page.locator(".file-selection-count")).toHaveText("1 file open");
+    await expect(page.locator(".file-selection-count")).toHaveText("1 file");
     await page.getByRole("toolbar", { name: "Image editor tools" }).getByRole("button", { name: "Colour and Tone Adjustments" }).click();
     await expect(page.getByRole("slider", { name: "Contrast" })).toBeVisible();
 
@@ -755,7 +755,7 @@ test("editor command rails keep one document session while changing tools", asyn
     await expect(page.getByRole("group", { name: "PDF page canvas" })).toBeVisible();
     await page.getByRole("toolbar", { name: "PDF editor tools" }).getByRole("button", { name: "Crop", exact: true }).click();
     await expect(page.getByText("Drag a rectangle on the page to crop.", { exact: true })).toBeVisible();
-    await expect(page.locator(".file-selection-count")).toHaveText("1 file open");
+    await expect(page.locator(".file-selection-count")).toHaveText("1 file");
 });
 
 test("vision tools explain unavailable resources before file selection", async ({ page }) => {
@@ -974,8 +974,8 @@ test("media and security workspaces expose ordered inputs and format boundaries"
     await expect(page.getByRole("region", { name: "Frame order" })).toBeVisible();
     await expect(page.locator(".media-frame-preview")).toBeVisible();
     await expect.poll(async () => page.evaluate(() => (window as TestWindow).__toolboxInvocations?.filter(({ command }) => command === "inspect_image_preview").length ?? 0)).toBe(1);
-    await expect(page.getByRole("button", { name: "Move selected file up" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Move selected file down" })).toBeVisible();
+    await expect(page.getByRole("button", { name: `Move ${fixtureName} up` })).toBeDisabled();
+    await expect(page.getByRole("button", { name: `Move ${fixtureName} down` })).toBeDisabled();
 
     await page.getByRole("button", { name: "← All tools" }).click();
     await page.getByRole("button", { name: "Open Protect PDF" }).click();
@@ -1049,7 +1049,8 @@ test("PDF conversion visibly rejects retained files when an action changes forma
 
     const rail = page.getByRole("toolbar", { name: "PDF conversion tools" });
     await rail.getByRole("button", { name: "PDF to Text", exact: true }).click();
-    await expect(page.getByText("1 file is not supported by PDF to Text. Close it or switch actions.", { exact: true })).toBeVisible();
+    await expect(page.getByText("1 file won't run with PDF to Text. It stays in the list for other actions.", { exact: true })).toBeVisible();
+    await expect(page.getByRole("option", { name: fixtureName })).toContainText("Won't run");
     await expect(page.getByRole("button", { name: "Export PDF to Text", exact: true })).toBeDisabled();
     const inspections = await page.evaluate(() =>
         (window as TestWindow).__toolboxInvocations?.filter(({ command }) => command === "inspect_pdf") ?? [],
@@ -1458,12 +1459,12 @@ test("single-input replacement keeps the source and edit state after cancellatio
 
     await page.evaluate((path) => { (window as TestWindow).__toolboxDialogResults = [null, path]; }, pdfFixturePath);
     await page.getByRole("button", { name: "Choose files to process" }).click();
-    await expect(page.locator(".file-selection-count")).toHaveText("1 file open");
+    await expect(page.locator(".file-selection-count")).toHaveText("1 file");
     await expect(page.getByText(pdfFixtureName, { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Reset edits" })).toBeEnabled();
 
     await page.getByRole("button", { name: "Choose files to process" }).click();
-    await expect(page.locator(".file-selection-count")).toHaveText("1 file open");
+    await expect(page.locator(".file-selection-count")).toHaveText("1 file");
     await expect(page.getByText(pdfFixtureName, { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Reset edits" })).toBeEnabled();
 });
@@ -1527,7 +1528,7 @@ test("PDF conversion resets the displayed scope when switching actions", async (
 test("GIF extraction does not request a source preview", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Open Extract GIF Frames" }).click();
-    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await chooseFixture(page, "/local/animation.gif");
     await expect(page.getByLabel("Tool detail").getByRole("button", { name: "Frames", exact: true })).toBeEnabled();
 
     const previewInvocations = await page.evaluate(() => (window as TestWindow).__toolboxInvocations?.filter(({ command }) => command === "inspect_image_preview") ?? []);
@@ -1544,11 +1545,14 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
     await page.goto("/");
     await page.getByRole("button", { name: `Open ${utility.title}` }).click();
 
+    const accepts = (extension: string) => utility.capability.acceptedExtensions.some((accepted) => accepted.toLowerCase() === extension);
     const selectedFixturePath = utility.id === "office-protect"
         ? "/local/document.docx"
-        : utility.capability.acceptedExtensions.some((extension) => extension.toLowerCase() === ".pdf")
+        : accepts(".pdf")
             ? pdfFixturePath
-            : fixturePath;
+            : accepts(".png")
+                ? fixturePath
+                : `/local/fixture${utility.capability.acceptedExtensions[0]}`;
     await chooseFixture(page, selectedFixturePath);
 
     if (utility.id === "pdf-unlock" || utility.id === "pdf-protect" || utility.id === "office-protect") {

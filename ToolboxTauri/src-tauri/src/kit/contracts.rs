@@ -287,17 +287,24 @@ pub fn partition_command_inputs(command: &str, paths: &[PathBuf]) -> Result<Vali
         });
     }
     let accepted_extensions = capability.accepted_extensions.join(", ");
-    let (accepted, rejected): (Vec<_>, Vec<_>) = paths.iter().cloned().enumerate().partition(|(_, path)| {
-        path.extension().and_then(|extension| extension.to_str()).map(|extension| {
+    let mut validation = ValidatedCommandInputs { accepted: Vec::new(), rejected: Vec::new() };
+    for (index, path) in paths.iter().cloned().enumerate() {
+        let extension_accepted = path.extension().and_then(|extension| extension.to_str()).is_some_and(|extension| {
             capability.accepted_extensions.iter().any(|accepted| accepted.trim_start_matches('.').eq_ignore_ascii_case(extension))
-        }).unwrap_or(false)
-    });
-    Ok(ValidatedCommandInputs {
-        accepted,
-        rejected: rejected.into_iter().map(|(index, path)| {
-            (index, JobOutcome::failure(path, ToolError::invalid_input(format!("Unsupported input format. Accepted extensions: {accepted_extensions}."))))
-        }).collect(),
-    })
+        });
+        let error = if path.is_dir() {
+            Some(ToolError::invalid_input("Folders aren't processed. Add the files inside the folder instead."))
+        } else if !extension_accepted {
+            Some(ToolError::invalid_input(format!("Unsupported input format. Accepted extensions: {accepted_extensions}.")))
+        } else {
+            None
+        };
+        match error {
+            Some(error) => validation.rejected.push((index, JobOutcome::failure(path, error))),
+            None => validation.accepted.push((index, path)),
+        }
+    }
+    Ok(validation)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -659,6 +666,33 @@ mod tests {
         assert_eq!(validation.accepted, vec![(0, paths[0].clone())]);
         assert_eq!(validation.rejected.len(), 1);
         assert_eq!(validation.rejected[0].0, 1);
+    }
+
+    #[test]
+    fn capability_registry_rejects_a_folder_and_keeps_the_valid_inputs() {
+        let folder = std::env::temp_dir().join(format!("toolbox_contracts_folder_{}.png", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let paths = vec![PathBuf::from("first.png"), folder.clone(), PathBuf::from("notes.txt"), PathBuf::from("second.png")];
+
+        let validation = partition_command_inputs("image_metadata", &paths).unwrap();
+
+        assert_eq!(validation.accepted, vec![(0, paths[0].clone()), (3, paths[3].clone())]);
+        assert_eq!(validation.rejected.iter().map(|(index, _)| *index).collect::<Vec<_>>(), vec![1, 2]);
+        assert!(validation.rejected[0].1.error().is_some_and(|error| matches!(error.kind, ErrorKind::InvalidInput) && error.message.contains("Folders")));
+        assert!(validation.rejected[1].1.error().is_some_and(|error| error.message.contains("Accepted extensions")));
+        std::fs::remove_dir(folder).unwrap();
+    }
+
+    #[test]
+    fn folder_named_like_an_accepted_file_fails_the_whole_ordered_request() {
+        let folder = std::env::temp_dir().join(format!("toolbox_contracts_merge_folder_{}.pdf", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+
+        let outcomes = validate_command_inputs("merge_pdfs", &[PathBuf::from("one.pdf"), folder.clone()]).unwrap_err();
+
+        assert_eq!(outcomes.len(), 2);
+        assert!(outcomes[1].error().is_some_and(|error| error.message.contains("Folders")));
+        std::fs::remove_dir(folder).unwrap();
     }
 
     #[test]

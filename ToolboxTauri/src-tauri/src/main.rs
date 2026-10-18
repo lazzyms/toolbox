@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod file_actions;
+mod intake;
 mod kit;
 mod settings;
 
@@ -318,6 +319,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             open_output_path,
             reveal_output_path,
+            intake::inspect_intake_paths,
             settings::get_output_settings,
             settings::set_output_settings,
             check_output_folder,
