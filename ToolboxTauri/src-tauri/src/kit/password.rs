@@ -82,6 +82,31 @@ fn probe_pdf(bytes: &[u8]) -> Result<ProtectionState, ToolError> {
 pub const NOT_PASSWORD_PROTECTED: &str = "Not password-protected. Nothing to unlock, so no copy was made.";
 pub const PERMISSIONS_ONLY: &str = "Opens without a password. It only has print and copy restrictions. To clear them, use Remove restrictions in PDF Editor.";
 
+pub const WRONG_PASSWORD: &str = "The password didn't open this file.";
+pub const UNSUPPORTED_ENCRYPTION: &str = "Uses an encryption type Toolbox can't open. The password may be right.";
+pub const UNSUPPORTED_LEGACY_ENCRYPTION: &str = "Uses an older encryption type Toolbox can't open. The password may be right.";
+pub const LEGACY_PASSWORD_TOO_LONG: &str = "Older Office files only take passwords up to 15 characters, and this one is longer. Toolbox can't try it.";
+pub const LEGACY_PPT_PICTURES: &str = "Legacy .ppt files with pictures can't be unlocked yet. The file isn't damaged.";
+pub const UNLOCK_NOT_VERIFIED: &str = "The unlocked copy didn't pass verification, so nothing was saved.";
+
+impl ProtectedFormat {
+    fn noun(self) -> &'static str {
+        match self {
+            Self::Pdf => "PDF",
+            Self::Docx | Self::Doc => "Word document",
+            Self::Xlsx | Self::Xls => "Excel workbook",
+            Self::Pptx | Self::Ppt => "PowerPoint presentation",
+        }
+    }
+}
+
+pub fn unreadable(format: ProtectedFormat) -> ToolError {
+    ToolError::processing(format!(
+        "Not a readable {}. The file may be damaged or incomplete. Nothing was saved.",
+        format.noun()
+    ))
+}
+
 pub fn unlock_skip_reason(state: ProtectionState) -> Option<SkipReason> {
     match state {
         ProtectionState::OpenPassword => None,
