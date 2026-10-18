@@ -1229,7 +1229,7 @@ test("media and security workspaces expose ordered inputs and format boundaries"
     await page.getByRole("button", { name: "Open Lock & Unlock" }).click();
     await expect(page.getByText("Accepts .pdf, .doc, .docx, .xls, .xlsx, .ppt, .pptx", { exact: true })).toBeVisible();
     await page.getByRole("radiogroup", { name: "Lock or unlock" }).getByRole("radio", { name: "Lock", exact: true }).click();
-    await expect(page.getByText("Accepts .pdf, .docx, .xlsx", { exact: true })).toBeVisible();
+    await expect(page.getByText("Accepts .pdf, .docx, .xlsx, .pptx", { exact: true })).toBeVisible();
 });
 
 test("TIFF workspace expands internal pages and sends the displayed order", async ({ page }) => {
@@ -1403,7 +1403,7 @@ test("Lock & Unlock locks DOCX and XLSX files in Lock mode now that Protect Offi
     await expect(page.getByRole("button", { name: "Open Protect Office Files" })).toHaveCount(0);
     await page.getByRole("button", { name: "Open Lock & Unlock" }).click();
     await page.getByRole("radiogroup", { name: "Lock or unlock" }).getByRole("radio", { name: "Lock", exact: true }).click();
-    await expect(page.getByText("Accepts .pdf, .docx, .xlsx", { exact: true })).toBeVisible();
+    await expect(page.getByText("Accepts .pdf, .docx, .xlsx, .pptx", { exact: true })).toBeVisible();
     await chooseFixture(page, "/local/document.docx");
     await fillPasswords(page, "test-password");
     await expect(page.locator(".workspace-primary-action")).toBeEnabled();

@@ -34,7 +34,7 @@ export const SecurityWorkspaceView = ({ utility: activeUtility }: { utility: Too
       ...activeUtility,
       resultVerb: "Locked",
       runningVerb: "Locking",
-      capability: { ...activeUtility.capability, outputSuffix: capabilityFor("protect_files").outputSuffix },
+      capability: capabilityFor("protect_files"),
     }
     : activeUtility, [activeUtility, mode]);
 
@@ -82,7 +82,7 @@ export const SecurityWorkspaceView = ({ utility: activeUtility }: { utility: Too
                 : "Each file gets a copy ending in -unlocked that opens without a password. Your originals stay as they are."}
             </p>
             <p className="workspace-note">
-              {mode === "lock" ? "Accepts .pdf, .docx, .xlsx" : "Accepts .pdf, .doc, .docx, .xls, .xlsx, .ppt, .pptx"}
+              {mode === "lock" ? "Accepts .pdf, .docx, .xlsx, .pptx" : "Accepts .pdf, .doc, .docx, .xls, .xlsx, .ppt, .pptx"}
             </p>
           </div>
           <BatchPasswordFields mode={mode} passwords={passwords} files={files} />

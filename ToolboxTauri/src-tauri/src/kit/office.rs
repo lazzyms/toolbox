@@ -23,7 +23,7 @@ use crate::kit::password::{
 };
 
 const OFFICE_EXTENSIONS: [&str; 6] = ["doc", "docx", "xls", "xlsx", "ppt", "pptx"];
-const PROTECTED_OFFICE_EXTENSIONS: [&str; 2] = ["docx", "xlsx"];
+const PROTECTED_OFFICE_EXTENSIONS: [&str; 3] = ["docx", "xlsx", "pptx"];
 const CFB_MAGIC: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
 
 pub struct OfficeProcessor;
@@ -140,22 +140,22 @@ impl OfficeProcessor {
         let Some(extension) = input_path.extension().and_then(|extension| extension.to_str()) else {
             return JobOutcome::failure(
                 input_path,
-                ToolError::invalid_input("Only DOCX and XLSX files can be protected."),
+                ToolError::invalid_input("Only DOCX, XLSX and PPTX files can be protected."),
             );
         };
         let format = match ProtectedFormat::from_extension(extension) {
-            Some(format @ (ProtectedFormat::Docx | ProtectedFormat::Xlsx)) => format,
+            Some(format @ (ProtectedFormat::Docx | ProtectedFormat::Xlsx | ProtectedFormat::Pptx)) => format,
             Some(ProtectedFormat::Pdf) | None => {
                 return JobOutcome::failure(
                     input_path,
-                    ToolError::invalid_input("Only DOCX and XLSX files can be protected."),
+                    ToolError::invalid_input("Only DOCX, XLSX and PPTX files can be protected."),
                 )
             }
             Some(_) => {
                 return JobOutcome::failure(
                     input_path,
                     ToolError::unavailable(
-                        "Native Office protection supports DOCX and XLSX only; .doc, .xls, .ppt, and .pptx are unsupported.",
+                        "Native Office protection supports DOCX, XLSX and PPTX only; .doc, .xls and .ppt are unsupported.",
                     ),
                 )
             }
@@ -1652,12 +1652,12 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn protects_docx_and_xlsx_with_exact_agile_round_trip() {
+    fn protects_docx_xlsx_and_pptx_with_exact_agile_round_trip() {
         let directory = test_directory("protect");
         let output_directory = directory.join("output");
         std::fs::create_dir_all(&output_directory).unwrap();
 
-        for extension in ["docx", "xlsx"] {
+        for extension in ["docx", "xlsx", "pptx"] {
             let input = directory.join(format!("source.{extension}"));
             let fixture = minimal_ooxml_package(extension);
             std::fs::write(&input, &fixture).unwrap();
@@ -1685,14 +1685,14 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn protects_and_removes_password_with_an_exact_docx_and_xlsx_round_trip() {
+    fn protects_and_removes_password_with_an_exact_docx_xlsx_and_pptx_round_trip() {
         let directory = test_directory("round-trip");
         let protected_directory = directory.join("protected");
         let failure_directory = directory.join("failure");
         std::fs::create_dir_all(&protected_directory).unwrap();
         std::fs::create_dir_all(&failure_directory).unwrap();
 
-        for extension in ["docx", "xlsx"] {
+        for extension in ["docx", "xlsx", "pptx"] {
             let input = directory.join(format!("source.{extension}"));
             let original = minimal_ooxml_package(extension);
             std::fs::write(&input, &original).unwrap();
@@ -1820,13 +1820,9 @@ pub(crate) mod tests {
         let output_directory = directory.join("output");
         std::fs::create_dir_all(&output_directory).unwrap();
 
-        for extension in ["doc", "xls", "ppt", "pptx", "odt"] {
+        for extension in ["doc", "xls", "ppt", "odt"] {
             let input = directory.join(format!("source.{extension}"));
-            let fixture = if extension == "pptx" {
-                minimal_ooxml_package(extension)
-            } else {
-                b"Office fixture".to_vec()
-            };
+            let fixture = b"Office fixture".to_vec();
             std::fs::write(&input, &fixture).unwrap();
 
             let outcome = OfficeProcessor::protect(
