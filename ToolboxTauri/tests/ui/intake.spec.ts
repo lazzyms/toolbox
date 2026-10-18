@@ -11,6 +11,7 @@ type IntakeWindow = Window & {
     __invalidInputPaths: string[];
     __skippedPaths: Record<string, { code: string; message: string }>;
     __failures: Record<string, { kind: string; message: string }>;
+    __warnings: Record<string, Array<{ code: string; message: string }>>;
     __outputSettings: unknown;
     __sent: string[];
     __drop: (paths: string[]) => void;
@@ -30,6 +31,7 @@ test.beforeEach(async ({ page }) => {
         win.__invalidInputPaths = [];
         win.__skippedPaths = {};
         win.__failures = {};
+        win.__warnings = {};
         win.__outputSettings = { mode: "alongsideInput", folder: "/Users/test/Documents/Toolbox" };
         // Everything that leaves the page or lands in the console, so a test can prove no password does.
         win.__sent = [];
@@ -96,7 +98,7 @@ test.beforeEach(async ({ page }) => {
                     ? { inputPath, outputPaths: [], detail: "", state: "failed", failure: { kind: "wrongPassword", message: "Wrong password or unsupported encryption.", pointer: null }, reason: null, warnings: [] }
                     : win.__invalidInputPaths.includes(inputPath)
                         ? { inputPath, outputPaths: [], detail: "", state: "failed", failure: { kind: "invalidInput", message: "Only PDF, Word, Excel, and PowerPoint files can be unlocked.", pointer: null }, reason: null, warnings: [] }
-                        : { inputPath, outputPaths: [`${inputPath}.out`], detail: "Test output", state: "succeeded", failure: null, reason: null, warnings: [] });
+                        : { inputPath, outputPaths: [`${inputPath}.out`], detail: "Test output", state: "succeeded", failure: null, reason: null, warnings: win.__warnings[inputPath] ?? [] });
             },
             transformCallback: (callback: (event: unknown) => void) => {
                 const id = nextId++;
@@ -720,6 +722,39 @@ test("Unlock sends the ordered batch with one password and the shell's output fo
     await expect(unsupported).toContainText("Failed, the input can't be used");
     await expect(run).toBeEnabled();
 });
+
+for (const mode of ["Lock", "Unlock"] as const) {
+    test(`${mode} shows the signature removed warning only on the signed PDF's row`, async ({ page }) => {
+        const removed = "Saved. The digital signature was removed, because changing the file breaks it.";
+        const done = mode === "Lock" ? "locked" : "unlocked";
+        await open(page, "Lock & Unlock");
+        await modes(page).getByRole("radio", { name: mode, exact: true }).click();
+        await drop(page, ["/local/lease.pdf", "/local/vendor-nda.pdf", "/local/deck.pptx"]);
+        await page.evaluate(() => {
+            (window as unknown as IntakeWindow).__warnings = { "/local/vendor-nda.pdf": [{ code: "signatureRemoved", message: "native wording" }] };
+        });
+        if (mode === "Lock") await fillBatchLock(page, "batch-secret");
+        else await page.getByLabel("Current password for all files", { exact: true }).fill("batch-secret");
+        await run(page).click();
+
+        await expect(results(page)).toHaveCount(3);
+        const signed = results(page).filter({ hasText: "vendor-nda.pdf" });
+        await expect(signed).toHaveAttribute("data-state", "succeeded");
+        await expect(signed).toHaveAttribute("data-tone", "warn");
+        await expect(signed).toContainText(removed);
+        await expect(signed).not.toContainText("native wording");
+        await expect(signed.locator(".result-row-state .sr-only")).toHaveText(`${mode}ed with a warning`);
+        await expect(signed.getByRole("button", { name: "Open vendor-nda.pdf.out", exact: true })).toBeVisible();
+        for (const name of ["lease.pdf", "deck.pptx"]) {
+            const unsigned = results(page).filter({ hasText: name });
+            await expect(unsigned).toHaveAttribute("data-tone", "ok");
+            await expect(unsigned).not.toContainText(removed);
+            await expect(unsigned.locator(".result-row-state .sr-only")).toHaveText(`${mode}ed`);
+        }
+        await expect(page.locator(".result-summary")).toContainText(`Done. 3 ${done}`);
+        await expect(page.locator(".result-summary")).toContainText(`1 ${done} file has a warning.`);
+    });
+}
 
 test("switching between Lock and Unlock clears every password and Lock takes Word and Excel files in place", async ({ page }) => {
     await open(page, "Lock & Unlock");

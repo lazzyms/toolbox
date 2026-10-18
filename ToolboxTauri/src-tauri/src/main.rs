@@ -1355,6 +1355,47 @@ mod command_tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn locking_and_unlocking_a_signed_pdf_warns_that_the_signature_was_removed_on_that_file_only() {
+        use crate::kit::contracts::{OutcomeWarning, WarningKind};
+        let root = sandbox("signature-removed");
+        let signed = root.join("vendor-nda.pdf");
+        let plain = root.join("lease.pdf");
+        let deck = root.join("deck.pptx");
+        make_pdf(&signed, 1);
+        let mut document = lopdf::Document::load(&signed).unwrap();
+        crate::kit::pdf::tests::sign(&mut document);
+        document.save(&signed).unwrap();
+        make_pdf(&plain, 1);
+        std::fs::write(&deck, test_minimal_ooxml_package("pptx")).unwrap();
+        let inputs = vec![signed.clone(), plain.clone(), deck.clone()];
+        let originals = inputs.iter().map(|input| std::fs::read(input).unwrap()).collect::<Vec<_>>();
+        let removed = vec![OutcomeWarning { kind: WarningKind::SignatureRemoved, message: crate::kit::pdf::SIGNATURE_REMOVED.into() }];
+        let assert_warned_only_on_signed = |outcomes: &[JobOutcome]| {
+            assert_eq!(outcomes.len(), 3);
+            for outcome in outcomes {
+                assert!(outcome.error().is_none(), "{}", outcome.error().cloned().unwrap_or_default());
+                assert_eq!(outcome.output_paths().len(), 1);
+            }
+            assert_eq!(outcomes.iter().map(|outcome| outcome.warnings.clone()).collect::<Vec<_>>(), [removed.clone(), vec![], vec![]]);
+        };
+
+        let locked = lock(&inputs, location(&root, "locked"));
+        assert_warned_only_on_signed(&locked);
+        let unlocked = tauri::async_runtime::block_on(remove_password(RunEvents::silent(), PasswordRequest {
+            paths: locked.iter().map(|outcome| outcome.output_paths()[0].clone()).collect(),
+            password: crate::kit::TEST_PASSWORD.into(),
+            password_overrides: Default::default(),
+            output_location: location(&root, "unlocked"),
+        }));
+        assert_warned_only_on_signed(&unlocked);
+        assert!(opens_without_password(&unlocked[0].output_paths()[0]));
+        for (input, original) in inputs.iter().zip(originals) {
+            assert_eq!(std::fs::read(input).unwrap(), original, "original was modified: {}", input.display());
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     const MISSING_QPDF_CHILD: &str = "TOOLBOX_TEST_MISSING_QPDF_CHILD";
 
     // Other tests resolve qpdf without the env lock, so the missing override is set only in a child test process.
