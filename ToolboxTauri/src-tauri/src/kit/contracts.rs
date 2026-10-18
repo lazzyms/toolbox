@@ -59,14 +59,16 @@ pub struct ConvertImagesRequest {
     pub output_location: OutputLocation,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolError {
     pub kind: ErrorKind,
     pub message: String,
+    #[serde(default)]
+    pub pointer: Option<OutcomePointer>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorKind {
     InvalidInput,
@@ -75,17 +77,32 @@ pub enum ErrorKind {
     Processing,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum OutcomePointer {
+    Tool { tool_id: String },
+    Pack { pack_id: String },
+}
+
 impl ToolError {
+    fn new(kind: ErrorKind, message: impl Into<String>) -> Self {
+        Self { kind, message: message.into(), pointer: None }
+    }
+
     pub fn invalid_input(message: impl Into<String>) -> Self {
-        Self { kind: ErrorKind::InvalidInput, message: message.into() }
+        Self::new(ErrorKind::InvalidInput, message)
     }
 
     pub fn processing(message: impl Into<String>) -> Self {
-        Self { kind: ErrorKind::Processing, message: message.into() }
+        Self::new(ErrorKind::Processing, message)
     }
 
     pub fn unavailable(message: impl Into<String>) -> Self {
-        Self { kind: ErrorKind::Unavailable, message: message.into() }
+        Self::new(ErrorKind::Unavailable, message)
+    }
+
+    pub fn with_pointer(self, pointer: OutcomePointer) -> Self {
+        Self { pointer: Some(pointer), ..self }
     }
 }
 
@@ -255,22 +272,151 @@ pub fn partition_command_inputs(command: &str, paths: &[PathBuf]) -> Result<Vali
     })
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub enum SkipCode {
+    NotProtected,
+    AlreadyProtected,
+    PermissionsPasswordOnly,
+    NoSavings,
+    AlreadyInTargetFormat,
+    RangeEmptyAfterClamping,
+    TextAlreadyPresent,
+    NoEffectiveChange,
+    UnsupportedFormat,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkipReason {
+    pub code: SkipCode,
+    pub message: String,
+    #[serde(default)]
+    pub pointer: Option<OutcomePointer>,
+}
+
+impl SkipReason {
+    pub fn new(code: SkipCode, message: impl Into<String>) -> Self {
+        Self { code, message: message.into(), pointer: None }
+    }
+
+    pub fn with_pointer(self, pointer: OutcomePointer) -> Self {
+        Self { pointer: Some(pointer), ..self }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "code", content = "details", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum WarningKind {
+    SignatureRemoved,
+    FontSubstituted { requested_family: String, actual_family: String },
+    RenamedToAvoidReplacing { chosen_name: String, final_name: String },
+    PrecisionReduced,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutcomeWarning {
+    #[serde(flatten)]
+    pub kind: WarningKind,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OutcomeState {
+    Succeeded { output_paths: Vec<PathBuf> },
+    Skipped { reason: SkipReason },
+    Failed { output_paths: Vec<PathBuf>, error: ToolError },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(into = "JobOutcomeWire", try_from = "JobOutcomeWire")]
 pub struct JobOutcome {
     pub input_path: PathBuf,
-    pub output_paths: Vec<PathBuf>,
     pub detail: String,
-    pub failure: Option<ToolError>,
+    pub warnings: Vec<OutcomeWarning>,
+    pub state: OutcomeState,
 }
 
 impl JobOutcome {
+    pub fn succeeded(input_path: PathBuf, output_paths: Vec<PathBuf>, detail: impl Into<String>) -> Self {
+        Self { input_path, detail: detail.into(), warnings: Vec::new(), state: OutcomeState::Succeeded { output_paths } }
+    }
+
+    pub fn skipped(input_path: PathBuf, reason: SkipReason) -> Self {
+        Self { input_path, detail: String::new(), warnings: Vec::new(), state: OutcomeState::Skipped { reason } }
+    }
+
     pub fn failure(input_path: PathBuf, error: ToolError) -> Self {
         Self::failure_with_outputs(input_path, Vec::new(), error)
     }
 
     pub fn failure_with_outputs(input_path: PathBuf, output_paths: Vec<PathBuf>, error: ToolError) -> Self {
-        Self { input_path, output_paths, detail: String::new(), failure: Some(error) }
+        Self { input_path, detail: String::new(), warnings: Vec::new(), state: OutcomeState::Failed { output_paths, error } }
+    }
+
+    pub fn with_warning(mut self, warning: OutcomeWarning) -> Self {
+        self.warnings.push(warning);
+        self
+    }
+
+    pub fn output_paths(&self) -> &[PathBuf] {
+        match &self.state {
+            OutcomeState::Succeeded { output_paths } | OutcomeState::Failed { output_paths, .. } => output_paths,
+            OutcomeState::Skipped { .. } => &[],
+        }
+    }
+
+    pub fn error(&self) -> Option<&ToolError> {
+        match &self.state {
+            OutcomeState::Failed { error, .. } => Some(error),
+            OutcomeState::Succeeded { .. } | OutcomeState::Skipped { .. } => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum OutcomeStateTag {
+    Succeeded,
+    Skipped,
+    Failed,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JobOutcomeWire {
+    input_path: PathBuf,
+    state: OutcomeStateTag,
+    output_paths: Vec<PathBuf>,
+    detail: String,
+    failure: Option<ToolError>,
+    reason: Option<SkipReason>,
+    warnings: Vec<OutcomeWarning>,
+}
+
+impl From<JobOutcome> for JobOutcomeWire {
+    fn from(outcome: JobOutcome) -> Self {
+        let (state, output_paths, failure, reason) = match outcome.state {
+            OutcomeState::Succeeded { output_paths } => (OutcomeStateTag::Succeeded, output_paths, None, None),
+            OutcomeState::Skipped { reason } => (OutcomeStateTag::Skipped, Vec::new(), None, Some(reason)),
+            OutcomeState::Failed { output_paths, error } => (OutcomeStateTag::Failed, output_paths, Some(error), None),
+        };
+        Self { input_path: outcome.input_path, state, output_paths, detail: outcome.detail, failure, reason, warnings: outcome.warnings }
+    }
+}
+
+impl TryFrom<JobOutcomeWire> for JobOutcome {
+    type Error = String;
+
+    fn try_from(wire: JobOutcomeWire) -> Result<Self, Self::Error> {
+        let state = match (wire.state, wire.failure, wire.reason) {
+            (OutcomeStateTag::Succeeded, None, None) => OutcomeState::Succeeded { output_paths: wire.output_paths },
+            (OutcomeStateTag::Skipped, None, Some(reason)) if wire.output_paths.is_empty() => OutcomeState::Skipped { reason },
+            (OutcomeStateTag::Failed, Some(error), None) => OutcomeState::Failed { output_paths: wire.output_paths, error },
+            (state, _, _) => return Err(format!("Inconsistent {state:?} job outcome for {}.", wire.input_path.display())),
+        };
+        Ok(Self { input_path: wire.input_path, detail: wire.detail, warnings: wire.warnings, state })
     }
 }
 
@@ -281,15 +427,14 @@ mod tests {
 
     #[test]
     fn ipc_result_uses_the_frontend_field_names() {
-        let outcome = JobOutcome {
-            input_path: PathBuf::from("source.pdf"),
-            output_paths: vec![PathBuf::from("source-unlocked.pdf")],
-            detail: "PDF Unlocked".to_string(),
-            failure: None,
-        };
+        let outcome = JobOutcome::succeeded(PathBuf::from("source.pdf"), vec![PathBuf::from("source-unlocked.pdf")], "PDF Unlocked");
         let value = serde_json::to_value(outcome).unwrap();
         assert_eq!(value["inputPath"], "source.pdf");
+        assert_eq!(value["state"], "succeeded");
         assert_eq!(value["outputPaths"][0], "source-unlocked.pdf");
+        assert_eq!(value["detail"], "PDF Unlocked");
+        assert!(value["failure"].is_null() && value["reason"].is_null());
+        assert_eq!(value["warnings"], serde_json::json!([]));
     }
 
     #[test]
@@ -299,8 +444,18 @@ mod tests {
             ToolError::invalid_input("Input file does not exist."),
         );
         let value = serde_json::to_value(outcome).unwrap();
+        assert_eq!(value["state"], "failed");
         assert_eq!(value["failure"]["kind"], "invalidInput");
         assert_eq!(value["failure"]["message"], "Input file does not exist.");
+        assert!(value["failure"]["pointer"].is_null() && value["reason"].is_null());
+
+        let pointed = JobOutcome::failure(
+            PathBuf::from("arabic.pdf"),
+            ToolError::unavailable("Install the script pack.").with_pointer(OutcomePointer::Pack { pack_id: "script-pack".into() }),
+        );
+        let value = serde_json::to_value(pointed).unwrap();
+        assert_eq!(value["failure"]["kind"], "unavailable");
+        assert_eq!(value["failure"]["pointer"], serde_json::json!({ "kind": "pack", "packId": "script-pack" }));
     }
 
     #[test]
@@ -310,12 +465,111 @@ mod tests {
             PathBuf::from("source.gif"),
             vec![output.clone()],
             ToolError::processing("Could not publish the next frame."),
-        );
+        ).with_warning(OutcomeWarning {
+            kind: WarningKind::RenamedToAvoidReplacing { chosen_name: "source-frame-1.png".into(), final_name: "source-frame-1 2.png".into() },
+            message: "Renamed to avoid replacing.".into(),
+        });
         let value = serde_json::to_value(outcome).unwrap();
 
+        assert_eq!(value["state"], "failed");
         assert_eq!(value["outputPaths"], serde_json::json!([output]));
         assert_eq!(value["failure"]["kind"], "processing");
         assert_eq!(value["failure"]["message"], "Could not publish the next frame.");
+        assert_eq!(value["warnings"][0]["code"], "renamedToAvoidReplacing");
+        assert_eq!(value["warnings"][0]["details"], serde_json::json!({ "chosenName": "source-frame-1.png", "finalName": "source-frame-1 2.png" }));
+    }
+
+    #[test]
+    fn skipped_outcomes_carry_a_reason_and_no_outputs() {
+        let reason = SkipReason::new(SkipCode::UnsupportedFormat, "Convert HEIC images first.")
+            .with_pointer(OutcomePointer::Tool { tool_id: "heic-convert".into() });
+        let outcome = JobOutcome::skipped(PathBuf::from("photo.heic"), reason)
+            .with_warning(OutcomeWarning { kind: WarningKind::SignatureRemoved, message: "Signature removed.".into() });
+        assert!(outcome.output_paths().is_empty() && outcome.error().is_none());
+
+        let value = serde_json::to_value(outcome).unwrap();
+        assert_eq!(value["state"], "skipped");
+        assert_eq!(value["outputPaths"], serde_json::json!([]));
+        assert_eq!(value["detail"], "");
+        assert!(value["failure"].is_null());
+        assert_eq!(value["reason"], serde_json::json!({
+            "code": "unsupportedFormat",
+            "message": "Convert HEIC images first.",
+            "pointer": { "kind": "tool", "toolId": "heic-convert" },
+        }));
+        assert_eq!(value["warnings"], serde_json::json!([{ "code": "signatureRemoved", "message": "Signature removed." }]));
+    }
+
+    #[test]
+    fn seeded_codes_serialize_as_stable_camel_case_strings() {
+        let skips = [
+            SkipCode::NotProtected, SkipCode::AlreadyProtected, SkipCode::PermissionsPasswordOnly, SkipCode::NoSavings,
+            SkipCode::AlreadyInTargetFormat, SkipCode::RangeEmptyAfterClamping, SkipCode::TextAlreadyPresent,
+            SkipCode::NoEffectiveChange, SkipCode::UnsupportedFormat, SkipCode::Cancelled,
+        ];
+        assert_eq!(serde_json::to_value(skips).unwrap(), serde_json::json!([
+            "notProtected", "alreadyProtected", "permissionsPasswordOnly", "noSavings", "alreadyInTargetFormat",
+            "rangeEmptyAfterClamping", "textAlreadyPresent", "noEffectiveChange", "unsupportedFormat", "cancelled",
+        ]));
+        let warnings = [
+            WarningKind::SignatureRemoved,
+            WarningKind::FontSubstituted { requested_family: "A".into(), actual_family: "B".into() },
+            WarningKind::RenamedToAvoidReplacing { chosen_name: "a".into(), final_name: "b".into() },
+            WarningKind::PrecisionReduced,
+        ];
+        let codes = warnings.into_iter().map(|kind| serde_json::to_value(kind).unwrap()["code"].clone()).collect::<Vec<_>>();
+        assert_eq!(codes, ["signatureRemoved", "fontSubstituted", "renamedToAvoidReplacing", "precisionReduced"]);
+    }
+
+    #[test]
+    fn job_outcome_samples_match_the_shared_contract_artifact() {
+        let shared: serde_json::Value = serde_json::from_str(include_str!("../../../shared/job-outcome-samples.json")).unwrap();
+        let samples = vec![
+            JobOutcome::succeeded(PathBuf::from("signed.pdf"), vec![PathBuf::from("signed-edited.pdf")], "PDF saved")
+                .with_warning(OutcomeWarning { kind: WarningKind::SignatureRemoved, message: "The digital signature is no longer valid.".into() })
+                .with_warning(OutcomeWarning {
+                    kind: WarningKind::FontSubstituted { requested_family: "Garamond".into(), actual_family: "Times New Roman".into() },
+                    message: "Garamond was replaced with Times New Roman.".into(),
+                }),
+            JobOutcome::skipped(
+                PathBuf::from("photo.heic"),
+                SkipReason::new(SkipCode::UnsupportedFormat, "Convert HEIC images before compressing them.")
+                    .with_pointer(OutcomePointer::Tool { tool_id: "heic-convert".into() }),
+            ).with_warning(OutcomeWarning { kind: WarningKind::PrecisionReduced, message: "The 16-bit source would be reduced to 8-bit.".into() }),
+            JobOutcome::skipped(PathBuf::from("plain.pdf"), SkipReason::new(SkipCode::NotProtected, "This PDF is not password protected.")),
+            JobOutcome::failure_with_outputs(
+                PathBuf::from("scan.pdf"),
+                vec![PathBuf::from("scan-page-1.png")],
+                ToolError::unavailable("Install the script pack to shape this text.")
+                    .with_pointer(OutcomePointer::Pack { pack_id: "script-pack".into() }),
+            ).with_warning(OutcomeWarning {
+                kind: WarningKind::RenamedToAvoidReplacing { chosen_name: "scan-page-1.png".into(), final_name: "scan-page-1 2.png".into() },
+                message: "Saved as scan-page-1 2.png so the existing file was not replaced.".into(),
+            }),
+        ];
+
+        assert_eq!(serde_json::to_value(&samples).unwrap(), shared);
+        assert_eq!(serde_json::from_value::<Vec<JobOutcome>>(shared).unwrap(), samples);
+    }
+
+    #[test]
+    fn inconsistent_outcome_states_are_rejected_when_parsed() {
+        let base = serde_json::json!({ "inputPath": "a.pdf", "outputPaths": [], "detail": "", "failure": null, "reason": null, "warnings": [] });
+        let with = |patch: serde_json::Value| {
+            let mut value = base.clone();
+            value.as_object_mut().unwrap().extend(patch.as_object().unwrap().clone());
+            serde_json::from_value::<JobOutcome>(value)
+        };
+        let reason = serde_json::json!({ "code": "noSavings", "message": "Would not get smaller.", "pointer": null });
+        let failure = serde_json::json!({ "kind": "processing", "message": "Broke.", "pointer": null });
+
+        assert!(with(serde_json::json!({ "state": "succeeded" })).is_ok());
+        assert!(with(serde_json::json!({ "state": "skipped", "reason": reason })).is_ok());
+        assert!(with(serde_json::json!({ "state": "skipped", "reason": reason, "outputPaths": ["a-1.pdf"] })).is_err());
+        assert!(with(serde_json::json!({ "state": "skipped" })).is_err());
+        assert!(with(serde_json::json!({ "state": "failed" })).is_err());
+        assert!(with(serde_json::json!({ "state": "succeeded", "failure": failure })).is_err());
+        assert!(with(serde_json::json!({ "state": "failed", "failure": failure, "reason": reason })).is_err());
     }
 
     #[test]
@@ -344,7 +598,7 @@ mod tests {
         let outcomes = validate_command_inputs("convert_images", &paths).unwrap_err();
 
         assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), paths);
-        assert!(outcomes.iter().all(|outcome| outcome.failure.as_ref().is_some_and(|error| matches!(error.kind, ErrorKind::InvalidInput))));
+        assert!(outcomes.iter().all(|outcome| outcome.error().is_some_and(|error| matches!(error.kind, ErrorKind::InvalidInput))));
     }
 
     #[test]
@@ -352,7 +606,7 @@ mod tests {
         let outcomes = validate_command_inputs("convert_images", &[PathBuf::from("source.pdf")]).unwrap_err();
 
         assert_eq!(outcomes.len(), 1);
-        assert!(outcomes[0].failure.as_ref().is_some_and(|error| error.message.contains("Accepted extensions")));
+        assert!(outcomes[0].error().is_some_and(|error| error.message.contains("Accepted extensions")));
     }
 
     #[test]
@@ -361,8 +615,8 @@ mod tests {
             let outcomes = validate_command_inputs("images_to_pdf", &[PathBuf::from(format!("source.{extension}"))]).unwrap_err();
 
             assert_eq!(outcomes.len(), 1);
-            assert!(outcomes[0].failure.as_ref().is_some_and(|error| matches!(error.kind, ErrorKind::InvalidInput)));
-            assert!(outcomes[0].failure.as_ref().is_some_and(|error| error.message.contains("Accepted extensions")));
+            assert!(outcomes[0].error().is_some_and(|error| matches!(error.kind, ErrorKind::InvalidInput)));
+            assert!(outcomes[0].error().is_some_and(|error| error.message.contains("Accepted extensions")));
         }
     }
 
@@ -381,7 +635,7 @@ mod tests {
         let outcomes = validate_page_selection("pdf_to_text", &[PathBuf::from("source.pdf")], Some(&[])).unwrap_err();
 
         assert_eq!(outcomes.len(), 1);
-        assert!(outcomes[0].failure.as_ref().is_some_and(|error| error.message.contains("at least one page")));
+        assert!(outcomes[0].error().is_some_and(|error| error.message.contains("at least one page")));
     }
 
     #[test]
