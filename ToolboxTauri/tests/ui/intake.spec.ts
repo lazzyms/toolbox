@@ -376,6 +376,53 @@ test("a file's own password is sent as an override and every other file uses the
     await expect(row(page, "b.pdf")).not.toContainText("Own password");
     await page.getByRole("button", { name: "Undo", exact: true }).click();
     await expect(row(page, "b.pdf")).toContainText("Own password");
+
+    await page.getByRole("button", { name: "Use batch password for b.pdf", exact: true }).click();
+    await expect(page.getByTestId("password-usage")).toHaveText("Used for all 3 files.");
+    await page.locator(".workspace-primary-action").click();
+    await expect(results(page)).toHaveCount(3);
+    expect((await passwordRequests(page, "protect_files")).at(-1)).toEqual({
+        paths: ["/local/a.pdf", "/local/b.pdf", "/local/c.pdf"],
+        password: "batch-secret",
+        passwordOverrides: {},
+    });
+});
+
+test("Lock saves a file's own password only once it is confirmed, and Run waits until every file has a password", async ({ page }) => {
+    await openLock(page);
+    await drop(page, ["/local/a.pdf", "/local/b.pdf"]);
+    await expect(page.getByTestId("password-readiness")).toHaveText("2 files have no password yet");
+
+    await row(page, "a.pdf").locator(".file-selection-item").click();
+    await page.getByRole("button", { name: "Set own password for a.pdf", exact: true }).click();
+    const editor = page.getByRole("group", { name: "Own password for a.pdf" });
+    const save = editor.getByRole("button", { name: "Save password" });
+    await expect(save).toBeDisabled();
+    await editor.getByLabel("Own new password", { exact: true }).fill("own-a");
+    await expect(save).toBeDisabled();
+    await editor.getByLabel("Confirm", { exact: true }).fill("own-b");
+    await expect(editor).toContainText("Passwords don't match. Type the new password again.");
+    await expect(save).toBeDisabled();
+    await editor.getByLabel("Confirm", { exact: true }).press("Enter");
+    await expect(editor).toBeVisible();
+    await editor.getByRole("button", { name: "Cancel" }).click();
+    await expect(editor).toHaveCount(0);
+    await expect(row(page, "a.pdf")).not.toContainText("Own password");
+
+    await setOwnPassword(page, "a.pdf", "own-a", "lock");
+    await expect(row(page, "a.pdf")).toContainText("Own password");
+    await expect(page.getByTestId("password-readiness")).toHaveText("1 file has no password yet");
+    await expect(run(page)).toBeDisabled();
+    await setOwnPassword(page, "b.pdf", "own-b", "lock");
+    await expect(page.getByTestId("password-readiness")).toHaveCount(0);
+    await expect(run(page)).toBeEnabled();
+    await run(page).click();
+    await expect(results(page)).toHaveCount(2);
+    expect(await passwordRequests(page, "protect_files")).toEqual([{
+        paths: ["/local/a.pdf", "/local/b.pdf"],
+        password: "",
+        passwordOverrides: { "/local/a.pdf": "own-a", "/local/b.pdf": "own-b" },
+    }]);
 });
 
 test("Lock runs only once both new passwords match and sends one protect_files request", async ({ page }) => {
@@ -436,7 +483,7 @@ test("a wrong password row retries only that file with the password typed for it
     await expect(failedRow).toContainText("The password didn't open this file. Check it, or try the password this file was sent with.");
     await expect(failedRow).toContainText("Failed, wrong password");
     await expect(failedRow).not.toContainText("batch-secret");
-    await expect(page.getByRole("button", { name: /^Retry/ })).toHaveCount(0);
+    await expect(failedRow.getByRole("button", { name: "Retry", exact: true })).toHaveCount(0);
 
     const tryAnother = failedRow.getByRole("button", { name: "Try another password" });
     await expect(tryAnother).toHaveAttribute("aria-expanded", "false");
@@ -450,12 +497,66 @@ test("a wrong password row retries only that file with the password typed for it
 
     await expect(failedRow).toHaveAttribute("data-state", "succeeded");
     await expect(results(page)).toHaveCount(3);
+    await expect(results(page).filter({ hasText: "a.pdf" })).toHaveAttribute("data-state", "succeeded");
+    await expect(results(page).filter({ hasText: "c.pdf" })).toHaveAttribute("data-state", "succeeded");
     await expect(retry).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /^Retry \d+ failed/ })).toHaveCount(0);
     expect(await passwordRequests(page, "remove_password")).toEqual([
         { paths: ["/local/a.pdf", "/local/b.pdf", "/local/c.pdf"], password: "batch-secret", passwordOverrides: { "/local/c.pdf": "own-secret" } },
-        { paths: ["/local/b.pdf"], password: "retry-secret", passwordOverrides: {} },
+        { paths: ["/local/b.pdf"], password: "", passwordOverrides: { "/local/b.pdf": "retry-secret" } },
     ]);
     await expect(row(page, "b.pdf")).not.toContainText("Own password");
+});
+
+test("Retry failed files runs only the wrong-password and processing failures with the current passwords and keeps every finished row", async ({ page }) => {
+    await open(page, "Lock & Unlock");
+    await drop(page, ["/local/a.pdf", "/local/b.pdf", "/local/c.pdf", "/local/d.pdf"]);
+    await page.evaluate(() => {
+        const win = window as unknown as IntakeWindow;
+        win.__wrongPasswordPaths = ["/local/b.pdf"];
+        win.__failures = { "/local/c.pdf": { kind: "processing", message: "The helper stopped." } };
+        win.__invalidInputPaths = ["/local/d.pdf"];
+    });
+    await page.getByLabel("Current password for all files", { exact: true }).fill("batch-secret");
+    await run(page).click();
+    await expect(results(page)).toHaveCount(4);
+
+    const retryFailed = page.getByRole("button", { name: "Retry 2 failed files", exact: true });
+    await expect(retryFailed).toBeEnabled();
+    await setOwnPassword(page, "b.pdf", "own-secret", "unlock");
+    await expect(results(page)).toHaveCount(4);
+    await page.evaluate(() => {
+        const win = window as unknown as IntakeWindow;
+        win.__wrongPasswordPaths = [];
+        win.__failures = {};
+    });
+    await retryFailed.click();
+
+    await expect(results(page).filter({ hasText: "b.pdf" })).toHaveAttribute("data-state", "succeeded");
+    await expect(results(page).filter({ hasText: "c.pdf" })).toHaveAttribute("data-state", "succeeded");
+    await expect(results(page).filter({ hasText: "a.pdf" })).toHaveAttribute("data-state", "succeeded");
+    await expect(results(page).filter({ hasText: "d.pdf" })).toHaveAttribute("data-state", "failed");
+    await expect(page.getByRole("button", { name: /^Retry \d+ failed/ })).toHaveCount(0);
+    expect(await passwordRequests(page, "remove_password")).toEqual([
+        { paths: ["/local/a.pdf", "/local/b.pdf", "/local/c.pdf", "/local/d.pdf"], password: "batch-secret", passwordOverrides: {} },
+        { paths: ["/local/b.pdf", "/local/c.pdf"], password: "batch-secret", passwordOverrides: { "/local/b.pdf": "own-secret" } },
+    ]);
+});
+
+test("Retry failed files waits until every failed file has a password", async ({ page }) => {
+    await open(page, "Lock & Unlock");
+    await drop(page, ["/local/a.pdf", "/local/b.pdf"]);
+    await page.evaluate(() => { (window as unknown as IntakeWindow).__wrongPasswordPaths = ["/local/b.pdf"]; });
+    await setOwnPassword(page, "a.pdf", "own-a", "unlock");
+    await setOwnPassword(page, "b.pdf", "own-b", "unlock");
+    await run(page).click();
+    await expect(results(page)).toHaveCount(2);
+
+    await row(page, "b.pdf").locator(".file-selection-item").click();
+    await page.getByRole("button", { name: "Use batch password for b.pdf", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Retry 1 failed file", exact: true })).toBeDisabled();
+    await page.getByLabel("Current password for all files", { exact: true }).fill("batch-secret");
+    await expect(page.getByRole("button", { name: "Retry 1 failed file", exact: true })).toBeEnabled();
 });
 
 test("passwords clear when a file closes, when the list empties and when the view is left", async ({ page }) => {
@@ -476,9 +577,13 @@ test("passwords clear when a file closes, when the list empties and when the vie
 
     await drop(page, ["/local/a.pdf"]);
     await fillBatchLock(page, "batch-secret");
+    await setOwnPassword(page, "a.pdf", "own-secret", "lock");
     await page.getByRole("button", { name: "← All tools" }).click();
     await openLock(page);
     await expect(page.getByLabel("New password for all files", { exact: true })).toHaveValue("");
+    await drop(page, ["/local/a.pdf"]);
+    await expect(row(page, "a.pdf")).toContainText("Batch password");
+    await expect(row(page, "a.pdf")).not.toContainText("Own password");
 });
 
 test("passwords never reach storage, the network, the console or any other command", async ({ page }) => {

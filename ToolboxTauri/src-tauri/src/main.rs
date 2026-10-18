@@ -1484,47 +1484,62 @@ mod command_tests {
 
     #[test]
     fn unlock_uses_each_override_first_and_the_batch_password_for_every_other_file() {
+        use crate::kit::{TEST_OVERRIDE_PASSWORD, TEST_PASSWORD};
         let root = sandbox("unlock-overrides");
-        let first = locked_docx(&root, "first", "batch-secret");
-        let own = locked_docx(&root, "own", "own-secret");
-        let last = locked_docx(&root, "last", "batch-secret");
-        let inputs = vec![first.clone(), own.clone(), last.clone()];
+        let first = locked_docx(&root, "first", TEST_PASSWORD);
+        let own = locked_docx(&root, "own", TEST_OVERRIDE_PASSWORD);
+        let own_pdf = locked_pdf(&root, "own-pdf", TEST_OVERRIDE_PASSWORD);
+        let last = locked_pdf(&root, "last", TEST_PASSWORD);
+        let inputs = vec![first.clone(), own.clone(), own_pdf.clone(), last.clone()];
         let originals = inputs.iter().map(|input| std::fs::read(input).unwrap()).collect::<Vec<_>>();
 
         let outcomes = tauri::async_runtime::block_on(remove_password(RunEvents::silent(), PasswordRequest {
             paths: inputs.clone(),
-            password: "batch-secret".into(),
-            password_overrides: overrides(&[(&own, "own-secret")]),
+            password: TEST_PASSWORD.into(),
+            password_overrides: overrides(&[(&own, TEST_OVERRIDE_PASSWORD), (&own_pdf, TEST_OVERRIDE_PASSWORD)]),
             output_location: location(&root, "with-override"),
         }));
         assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), inputs);
         for outcome in &outcomes {
             assert!(outcome.error().is_none(), "{}", outcome.error().cloned().unwrap_or_default());
-            assert_eq!(std::fs::read(&outcome.output_paths()[0]).unwrap(), test_minimal_ooxml_package("docx"));
+            assert!(opens_without_password(&outcome.output_paths()[0]));
         }
 
         let without = tauri::async_runtime::block_on(remove_password(RunEvents::silent(), PasswordRequest {
             paths: inputs.clone(),
-            password: "batch-secret".into(),
+            password: TEST_PASSWORD.into(),
             password_overrides: Default::default(),
             output_location: location(&root, "batch-only"),
         }));
-        assert!(without[0].error().is_none() && without[2].error().is_none(), "one wrong password must not stop the other files");
-        let wrong = without[1].error().expect("the batch password must not open the file with its own password");
-        assert_eq!(wrong.kind, crate::kit::contracts::ErrorKind::WrongPassword);
-        assert!(!wrong.message.contains("batch-secret") && !wrong.message.contains("own-secret"));
-        assert!(without[1].output_paths().is_empty());
+        assert!(without[0].error().is_none() && without[3].error().is_none(), "one wrong password must not stop the other files");
+        for failed in [&without[1], &without[2]] {
+            let wrong = failed.error().expect("the batch password must not open a file with its own password");
+            assert_eq!(wrong.kind, crate::kit::contracts::ErrorKind::WrongPassword);
+            assert!(!wrong.message.contains(TEST_PASSWORD) && !wrong.message.contains(TEST_OVERRIDE_PASSWORD));
+            assert!(failed.output_paths().is_empty());
+        }
+        let finished = [&without[0], &without[3]].map(|outcome| {
+            let path = outcome.output_paths()[0].clone();
+            let bytes = std::fs::read(&path).unwrap();
+            let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+            (path, bytes, modified)
+        });
         assert_eq!(std::fs::read_dir(root.join("batch-only")).unwrap().count(), 2);
 
         let retried = tauri::async_runtime::block_on(remove_password(RunEvents::silent(), PasswordRequest {
-            paths: vec![own.clone()],
-            password: "batch-secret".into(),
-            password_overrides: overrides(&[(&own, "own-secret")]),
+            paths: vec![own_pdf.clone()],
+            password: String::new(),
+            password_overrides: overrides(&[(&own_pdf, TEST_OVERRIDE_PASSWORD)]),
             output_location: location(&root, "batch-only"),
         }));
         assert_eq!(retried.len(), 1, "a retry runs only the one file");
         assert!(retried[0].error().is_none(), "{}", retried[0].error().cloned().unwrap_or_default());
+        assert!(opens_without_password(&retried[0].output_paths()[0]));
         assert_eq!(std::fs::read_dir(root.join("batch-only")).unwrap().count(), 3, "the retry adds its output beside the earlier ones");
+        for (path, bytes, modified) in finished {
+            assert_eq!(std::fs::read(&path).unwrap(), bytes, "a retry rewrote an earlier output: {}", path.display());
+            assert_eq!(std::fs::metadata(&path).unwrap().modified().unwrap(), modified, "a retry touched an earlier output: {}", path.display());
+        }
 
         for (input, original) in inputs.iter().zip(originals) {
             assert_eq!(std::fs::read(input).unwrap(), original, "locked original was modified: {}", input.display());
@@ -1775,25 +1790,29 @@ mod command_tests {
     }
 
     #[test]
-    fn lock_gives_an_overridden_word_file_its_own_password() {
-        let root = sandbox("lock-office-overrides");
+    fn lock_gives_an_overridden_file_its_own_password() {
+        let root = sandbox("lock-overrides");
         let shared = root.join("shared.docx");
         let own = root.join("own.docx");
+        let own_pdf = root.join("own.pdf");
         for input in [&shared, &own] { std::fs::write(input, test_minimal_ooxml_package("docx")).unwrap(); }
+        make_pdf(&own_pdf, 1);
 
         let locked = tauri::async_runtime::block_on(protect_files(RunEvents::silent(), PasswordRequest {
-            paths: vec![shared.clone(), own.clone()],
+            paths: vec![shared.clone(), own.clone(), own_pdf.clone()],
             password: crate::kit::TEST_PASSWORD.into(),
-            password_overrides: overrides(&[(&own, crate::kit::TEST_OVERRIDE_PASSWORD)]),
+            password_overrides: overrides(&[(&own, crate::kit::TEST_OVERRIDE_PASSWORD), (&own_pdf, crate::kit::TEST_OVERRIDE_PASSWORD)]),
             output_location: location(&root, "locked"),
         }));
         assert!(locked.iter().all(|outcome| outcome.error().is_none()));
         let opens = |path: &PathBuf, password: &str| {
-            OfficeProcessor::remove_password(path.clone(), password, &location(&root, "check")).error().is_none()
+            crate::kit::password::PasswordProcessor::remove_password(path.clone(), password, &location(&root, "check")).error().is_none()
         };
         assert!(opens(&locked[0].output_paths()[0], crate::kit::TEST_PASSWORD));
-        assert!(opens(&locked[1].output_paths()[0], crate::kit::TEST_OVERRIDE_PASSWORD));
-        assert!(!opens(&locked[1].output_paths()[0], crate::kit::TEST_PASSWORD));
+        for overridden in [&locked[1], &locked[2]] {
+            assert!(opens(&overridden.output_paths()[0], crate::kit::TEST_OVERRIDE_PASSWORD));
+            assert!(!opens(&overridden.output_paths()[0], crate::kit::TEST_PASSWORD));
+        }
 
         let _ = std::fs::remove_dir_all(root);
     }

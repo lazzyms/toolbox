@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { OutputLocation, PasswordRequest, PasswordSet } from "../contracts";
 import { fileName } from "./resultRow";
+import { ShortcutHint } from "./ShortcutHint";
 
 export type PasswordMode = "lock" | "unlock";
 
@@ -202,7 +203,7 @@ const OwnPasswordEditor = ({ mode, name, initial, onSave, onCancel }: {
                 {mode === "lock" && <RevealableInput id={`${id}-own-confirm`} label="Confirm" value={confirm} onChange={setConfirm} visible={false} invalid={mismatch} />}
                 <span className="password-inline-actions">
                     <Button size="sm" disabled={!canSave} onClick={() => onSave(password)}>Save password</Button>
-                    <Button variant="outline" size="sm" onClick={onCancel}>Cancel (Esc)</Button>
+                    <Button variant="outline" size="sm" onClick={onCancel}>Cancel<ShortcutHint id="cancel" /></Button>
                 </span>
             </div>
             <p className="workspace-note">
@@ -275,8 +276,8 @@ export const PasswordRetryForm = ({ name, busy, onRetry, onCancel }: {
             <div className="password-inline-fields">
                 <RevealableInput id={`${id}-retry`} label={`Password for ${name}`} value={password} onChange={setPassword} visible={false} placeholder="Enter this file's password" autoFocus />
                 <span className="password-inline-actions">
-                    <Button size="sm" disabled={busy || password.length === 0} onClick={() => onRetry(password)}>{busy ? "Retrying..." : "Retry this file"}</Button>
-                    <Button variant="outline" size="sm" disabled={busy} onClick={onCancel}>Cancel</Button>
+                    <Button size="sm" disabled={busy || password.length === 0} onClick={() => onRetry(password)}>{busy ? "Retrying..." : "Retry this file"}{!busy && <ShortcutHint id="run" />}</Button>
+                    <Button variant="outline" size="sm" disabled={busy} onClick={onCancel}>Cancel<ShortcutHint id="cancel" /></Button>
                 </span>
             </div>
             <p className="workspace-note">Only this file runs again. Its new password isn't saved.</p>
