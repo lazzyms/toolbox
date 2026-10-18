@@ -1244,6 +1244,56 @@ mod command_tests {
     }
 
     #[test]
+    fn refused_password_inputs_never_reserve_an_output_in_any_password_command() {
+        let root = sandbox("password-refusals");
+        let pdf = root.join("source.pdf");
+        let docx = root.join("source.docx");
+        let text = root.join("notes.txt");
+        let damaged_pdf = root.join("damaged.pdf");
+        let damaged_docx = root.join("damaged.docx");
+        let damaged_xls = root.join("damaged.xls");
+        make_pdf(&pdf, 1);
+        std::fs::write(&docx, test_minimal_ooxml_package("docx")).unwrap();
+        std::fs::write(&text, b"plain text").unwrap();
+        std::fs::write(&damaged_pdf, b"%PDF-1.7 damaged").unwrap();
+        std::fs::write(&damaged_docx, b"not an office package").unwrap();
+        std::fs::write(&damaged_xls, b"not a workbook").unwrap();
+        let unreservable = root.join("missing-output-folder");
+        let request = |paths: Vec<PathBuf>, password: &str| PasswordRequest {
+            paths,
+            password: password.into(),
+            password_overrides: Default::default(),
+            output_location: OutputLocation::CustomFolder(unreservable.clone()),
+        };
+
+        let cases = [
+            ("remove_password wrong type", tauri::async_runtime::block_on(remove_password(RunEvents::silent(), request(vec![text.clone()], "secret")))),
+            ("remove_password empty pdf password", tauri::async_runtime::block_on(remove_password(RunEvents::silent(), request(vec![pdf.clone()], "")))),
+            ("remove_password empty office password", tauri::async_runtime::block_on(remove_password(RunEvents::silent(), request(vec![docx.clone()], "")))),
+            ("protect_pdf wrong type", tauri::async_runtime::block_on(protect_pdf(RunEvents::silent(), request(vec![docx.clone()], "secret")))),
+            ("protect_pdf empty password", tauri::async_runtime::block_on(protect_pdf(RunEvents::silent(), request(vec![pdf.clone()], "")))),
+            ("protect_office wrong type", tauri::async_runtime::block_on(protect_office(RunEvents::silent(), request(vec![text.clone()], "secret")))),
+            ("protect_office empty password", tauri::async_runtime::block_on(protect_office(RunEvents::silent(), request(vec![docx.clone()], "")))),
+            ("remove_password damaged pdf", tauri::async_runtime::block_on(remove_password(RunEvents::silent(), request(vec![damaged_pdf.clone()], "secret")))),
+            ("remove_password damaged docx", tauri::async_runtime::block_on(remove_password(RunEvents::silent(), request(vec![damaged_docx.clone()], "secret")))),
+            ("remove_password damaged xls", tauri::async_runtime::block_on(remove_password(RunEvents::silent(), request(vec![damaged_xls.clone()], "secret")))),
+            ("protect_pdf damaged pdf", tauri::async_runtime::block_on(protect_pdf(RunEvents::silent(), request(vec![damaged_pdf.clone()], "secret")))),
+            ("protect_office damaged docx", tauri::async_runtime::block_on(protect_office(RunEvents::silent(), request(vec![damaged_docx.clone()], "secret")))),
+        ];
+
+        for (name, outcomes) in cases {
+            let error = outcomes[0].error().unwrap_or_else(|| panic!("{name} must be refused"));
+            assert_eq!(error.kind, ErrorKind::InvalidInput, "{name} is refused before any output is reserved: {}", error.message);
+            assert!(outcomes[0].output_paths().is_empty(), "{name} has no output");
+        }
+        assert!(!unreservable.exists(), "a refused input never touches the output location");
+        let mut left = std::fs::read_dir(&root).unwrap().map(|entry| entry.unwrap().file_name()).collect::<Vec<_>>();
+        left.sort();
+        assert_eq!(left, ["damaged.docx", "damaged.pdf", "damaged.xls", "notes.txt", "source.docx", "source.pdf"], "nothing is written beside the inputs");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn protect_pdf_keeps_mixed_office_inputs_isolated_and_round_trips() {
         let root = sandbox("protect-pdf-mixed-office");
         let pdf = root.join("source.pdf");
