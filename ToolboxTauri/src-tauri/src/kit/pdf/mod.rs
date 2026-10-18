@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use lopdf::{Document, LoadOptions, Object, ObjectId};
 
+use crate::kit::common::limits::{self, StoppableHelper};
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::ToolError;
 
@@ -111,7 +112,7 @@ pub(crate) fn run_bounded_helper(mut command: Command, deadline: Instant, max_st
         if status.is_some() && stdout_result.is_some() && stderr_result.is_some() {
             break;
         }
-        if Instant::now() >= deadline {
+        if Instant::now() >= deadline || limits::job_stopped() {
             timed_out = true;
             let _ = child.kill();
             let _ = child.wait();
@@ -715,7 +716,7 @@ impl PDFProcessor {
             .arg("--")
             .arg(&input_path)
             .arg(output_path.path())
-            .output();
+            .output_until_stopped();
 
         match status {
             Ok(out) if out.status.success() => {

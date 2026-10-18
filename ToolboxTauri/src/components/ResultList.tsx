@@ -236,7 +236,7 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
         <div className="result-list">
             <div className="result-summary" role="status" aria-live="polite">
                 <strong>{summary.headline}</strong>
-                {summary.warningHint && <span className="result-summary-hint">{summary.warningHint}</span>}
+                {summary.hints.map((hint) => <span key={hint} className="result-summary-hint">{hint}</span>)}
             </div>
             <Card className="result-card gap-0 py-0">
                 <CardContent className="p-0">

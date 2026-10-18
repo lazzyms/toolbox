@@ -34,12 +34,17 @@ impl<'de> tauri::ipc::CommandArg<'de, tauri::Wry> for RunEvents {
         let run_id = <Option<String> as tauri::ipc::CommandArg<'de, tauri::Wry>>::from_command(tauri::ipc::CommandItem { key: "runId", ..command })?;
         Ok(match run_id {
             None => RunEvents::silent(),
-            Some(run_id) => RunEvents::new(move |event| {
+            Some(run_id) => RunEvents::for_run(run_id.clone(), move |event| {
                 use tauri::Emitter;
                 let _ = webview.emit(BATCH_PROGRESS_EVENT, BatchProgress { run_id: &run_id, event: &event });
             }),
         })
     }
+}
+
+#[tauri::command]
+fn cancel_run(run_id: String) -> bool {
+    crate::kit::common::batch_runner::cancel_run(&run_id)
 }
 
 #[tauri::command]
@@ -438,6 +443,7 @@ fn main() {
             settings::set_output_settings,
             settings::get_last_save_folder,
             check_output_folder,
+            cancel_run,
             remove_password,
             protect_pdf,
             protect_office,
@@ -1429,6 +1435,92 @@ mod command_tests {
             assert_eq!(secret_exposure(&calls, secret), Exposure::default());
         }
         let _ = std::fs::remove_dir_all(inputs[0].parent().unwrap());
+    }
+
+    // One worker makes the order deterministic: two files finish, the third stalls in its helper, the rest wait.
+    #[cfg(unix)]
+    #[test]
+    fn cancelling_mid_batch_keeps_finished_files_ends_the_helper_and_skips_the_rest() {
+        use crate::kit::common::batch_runner::{cancel_run, CANCELLED_BEFORE_START};
+        use crate::kit::common::fake_helper::FakeHelper;
+        use crate::kit::contracts::{ErrorKind, SkipCode};
+        let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
+        let real = crate::kit::pdf::find_qpdf().expect("qpdf is required for the native suite");
+        let root = sandbox("cancel-mid-batch");
+        let inputs = ["first", "second", "stalls", "fourth", "fifth"].map(|stem| root.join(format!("{stem}.pdf"))).to_vec();
+        for input in &inputs { make_pdf(input, 1); }
+        let originals = inputs.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+        let helper = std::sync::Arc::new(FakeHelper::install_stalling_on(&root, "qpdf", Some(&real), "stalls.pdf"));
+        let output = location(&root, "locked");
+
+        let previous = std::env::var_os("TOOLBOX_QPDF_PATH");
+        std::env::set_var("TOOLBOX_QPDF_PATH", &helper.script);
+        let run_id = format!("cancel-test-{}", std::process::id());
+        let canceller = {
+            let (helper, run_id) = (helper.clone(), run_id.clone());
+            std::thread::spawn(move || {
+                let started = std::time::Instant::now();
+                while helper.stalled_pids().is_empty() {
+                    assert!(started.elapsed() < std::time::Duration::from_secs(30), "the slow helper never started");
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                assert!(cancel_run(&run_id), "the running batch is found by its run id");
+                std::time::Instant::now()
+            })
+        };
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = seen.clone();
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
+        let outcomes = pool.install(|| tauri::async_runtime::block_on(protect_pdf(
+            RunEvents::for_run(run_id.clone(), move |event| sink.lock().unwrap().push(event)),
+            PasswordRequest { paths: inputs.clone(), password: "batch-secret".into(), password_overrides: Default::default(), output_location: output.clone() },
+        )));
+        match previous {
+            Some(value) => std::env::set_var("TOOLBOX_QPDF_PATH", value),
+            None => std::env::remove_var("TOOLBOX_QPDF_PATH"),
+        }
+        let cancelled_at = canceller.join().unwrap();
+
+        assert!(cancelled_at.elapsed() < std::time::Duration::from_millis(1500), "the stalled helper is ended, not waited out");
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), inputs, "the response keeps input order");
+        for finished in &outcomes[..2] {
+            assert!(finished.error().is_none(), "{}", finished.error().cloned().unwrap_or_default());
+            assert!(finished.output_paths()[0].is_file(), "a finished file keeps its output");
+        }
+        match &outcomes[2].state {
+            OutcomeState::Failed { output_paths, error } => {
+                assert_eq!(error.kind, ErrorKind::Cancelled);
+                assert_eq!(error.message, "Cancelled while it was running. Nothing was saved.");
+                assert!(output_paths.is_empty());
+            }
+            state => panic!("the file in progress fails as cancelled, got {state:?}"),
+        }
+        for waiting in &outcomes[3..] {
+            match &waiting.state {
+                OutcomeState::Skipped { reason } => {
+                    assert_eq!(reason.code, SkipCode::Cancelled);
+                    assert_eq!(reason.message, CANCELLED_BEFORE_START);
+                }
+                state => panic!("a file that had not started is skipped as cancelled, got {state:?}"),
+            }
+        }
+        let events = seen.lock().unwrap().clone();
+        for (index, outcome) in outcomes.iter().enumerate() {
+            assert!(events.contains(&FileEvent::Finished { index, outcome: outcome.clone() }), "file {index} streams its final outcome");
+        }
+
+        for pid in helper.stalled_pids() {
+            let alive = std::process::Command::new("kill").arg("-0").arg(pid.to_string()).stderr(std::process::Stdio::null()).status().unwrap().success();
+            assert!(!alive, "the stalled helper {pid} was terminated");
+        }
+        assert!(!cancel_run(&run_id), "a finished run is no longer registered");
+        let mut left = std::fs::read_dir(root.join("locked")).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect::<Vec<_>>();
+        left.sort();
+        assert_eq!(left, vec!["first-protected.pdf", "second-protected.pdf"], "no temporary or claim file is left behind");
+        for (input, original) in inputs.iter().zip(originals) {
+            assert_eq!(std::fs::read(input).unwrap(), original, "original was modified: {}", input.display());
+        }
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

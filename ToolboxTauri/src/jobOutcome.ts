@@ -13,7 +13,7 @@ import type {
 } from "./contracts";
 import { UtilityRegistry } from "./registry";
 
-const errorKinds: readonly ErrorKind[] = ["invalidInput", "unavailable", "limitExceeded", "processing", "wrongPassword"];
+const errorKinds: readonly ErrorKind[] = ["invalidInput", "unavailable", "limitExceeded", "processing", "wrongPassword", "cancelled"];
 
 const limitKinds: readonly LimitKind[] = ["fileSize", "pageCount", "time", "decompression"];
 

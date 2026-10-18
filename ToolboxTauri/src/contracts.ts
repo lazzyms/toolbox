@@ -114,7 +114,7 @@ export type OutcomePointer =
 export type LimitKind = "fileSize" | "pageCount" | "time" | "decompression";
 
 export type ToolError = { message: string; pointer: OutcomePointer | null } & (
-  | { kind: "invalidInput" | "unavailable" | "processing" | "wrongPassword" }
+  | { kind: "invalidInput" | "unavailable" | "processing" | "wrongPassword" | "cancelled" }
   | { kind: "limitExceeded"; details: { limit: LimitKind } }
 );
 
