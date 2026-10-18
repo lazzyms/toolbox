@@ -1298,7 +1298,18 @@ test("GIF extraction does not request a source preview", async ({ page }) => {
     expect(previewInvocations).toHaveLength(0);
 });
 
-const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[number]) => {
+type RunRequest = { outputLocation?: unknown; plan?: { outputLocation?: unknown } };
+
+const fakeShellOutputLocation = async (page: Page, outputLocation: unknown) => {
+    await page.route(/\/src\/App\.tsx(\?.*)?$/, async (route) => {
+        const response = await route.fetch();
+        const source = await response.text();
+        expect(source.match(/"alongsideInput"/g)).toHaveLength(1);
+        await route.fulfill({ response, body: source.replace('"alongsideInput"', JSON.stringify(outputLocation)) });
+    });
+};
+
+const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[number], expectedOutputLocation: unknown = "alongsideInput") => {
     await page.goto("/");
     await page.getByRole("button", { name: `Open ${utility.title}` }).click();
 
@@ -1348,7 +1359,10 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
         : workspaceForTool(utility.id)?.id === "pdf-editor" && ["pdf-edit", "pdf-crop", "pdf-watermark", "pdf-sign", "pdf-page-numbers", "pdf-remove-pages", "pdf-organize"].includes(utility.id)
 ? "export_pdf_scene"
             : utility.command;
-    expect(invocations.some(({ command }) => command === composedCommand)).toBe(true);
+    const run = invocations.find(({ command }) => command === composedCommand);
+    expect(run).toBeDefined();
+    const request = (run?.args as { request: RunRequest }).request;
+    expect(composedCommand === "export_image_edit_plan" ? request.plan?.outputLocation : request.outputLocation).toEqual(expectedOutputLocation);
 };
 
 test.describe("registered feature actions", () => {
@@ -1358,6 +1372,23 @@ test.describe("registered feature actions", () => {
         test(`${utility.id} accepts the fixture and runs`, async ({ page }) => {
             test.skip(utility.status !== "implemented", "Tool is not available in this build.");
             await exerciseFeature(page, utility);
+        });
+    }
+});
+
+test.describe("workspace runs send the shell output location", () => {
+    const representativeTools = ["pdf-protect", "pdf-edit", "pdf-to-images", "resize", "icon-set"] as const;
+    const customFolder = { customFolder: "/fake/shell/output" };
+
+    test("one representative tool covers every workspace view", () => {
+        expect(representativeTools.map((id) => workspaceForTool(id)?.id)).toEqual(["file-security", "pdf-editor", "pdf-convert", "image-editor", "media-tools"]);
+    });
+
+    for (const id of representativeTools) {
+        const utility = UtilityRegistry.find((item) => item.id === id)!;
+        test(`${workspaceForTool(id)?.id} sends the shell-provided custom folder from ${id}`, async ({ page }) => {
+            await fakeShellOutputLocation(page, customFolder);
+            await exerciseFeature(page, utility, customFolder);
         });
     }
 });

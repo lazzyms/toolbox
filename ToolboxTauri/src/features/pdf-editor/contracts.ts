@@ -1,3 +1,5 @@
+import type { OutputLocation } from "../../contracts";
+
 export type EditorLayout = "vertical" | "horizontal";
 export type EditorDensity = "compact" | "comfortable";
 
@@ -60,7 +62,7 @@ export interface CropPdfRequest {
     paths: string[];
     rectangle: PdfRect;
     scope: PdfPageScope;
-    outputLocation: "alongsideInput";
+    outputLocation: OutputLocation;
 }
 
 export interface SignPdfRequest extends CropPdfRequest {
@@ -75,7 +77,7 @@ export interface OrganizePdfRequest {
     deletePages: number[];
     rotatePages: { page: number; degrees: number }[];
     scope: PdfPageScope;
-    outputLocation: "alongsideInput";
+    outputLocation: OutputLocation;
 }
 
 export type PdfOverlay =
@@ -99,5 +101,5 @@ export interface PdfEditSessionPlan {
 export interface PdfEditSessionRequest {
     paths: string[];
     plan: PdfEditSessionPlan;
-    outputLocation: "alongsideInput";
+    outputLocation: OutputLocation;
 }
