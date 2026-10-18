@@ -59,3 +59,15 @@ test("inconsistent native outcomes are rejected", () => {
     assert.throws(() => parseJobOutcome(value), /Invalid job outcome/, name);
   }
 });
+
+test("a read-only output folder failure carries the output folder pointer", () => {
+  const readOnly = {
+    ...sample(3),
+    outputPaths: [],
+    failure: { kind: "processing", message: "The output folder is read-only. Nothing was saved.", pointer: { kind: "outputFolder" } },
+    warnings: [],
+  };
+  const outcome = parseJobOutcome(readOnly);
+  assert.ok(outcome.state === "failed");
+  assert.deepEqual(outcome.failure.pointer, { kind: "outputFolder" });
+});

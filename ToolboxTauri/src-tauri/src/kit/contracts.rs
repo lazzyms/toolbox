@@ -11,6 +11,15 @@ pub enum OutputLocation {
     CustomFolder(PathBuf),
 }
 
+impl OutputLocation {
+    pub fn directory_for<'a>(&'a self, input: &'a std::path::Path) -> &'a std::path::Path {
+        match self {
+            OutputLocation::AlongsideInput => input.parent().unwrap_or_else(|| std::path::Path::new(".")),
+            OutputLocation::CustomFolder(folder) => folder,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Progress {
@@ -82,6 +91,7 @@ pub enum ErrorKind {
 pub enum OutcomePointer {
     Tool { tool_id: String },
     Pack { pack_id: String },
+    OutputFolder,
 }
 
 impl ToolError {
@@ -474,6 +484,9 @@ mod tests {
         let value = serde_json::to_value(pointed).unwrap();
         assert_eq!(value["failure"]["kind"], "unavailable");
         assert_eq!(value["failure"]["pointer"], serde_json::json!({ "kind": "pack", "packId": "script-pack" }));
+
+        let read_only = ToolError::processing("The output folder is read-only. Nothing was saved.").with_pointer(OutcomePointer::OutputFolder);
+        assert_eq!(serde_json::to_value(read_only).unwrap()["pointer"], serde_json::json!({ "kind": "outputFolder" }));
     }
 
     #[test]

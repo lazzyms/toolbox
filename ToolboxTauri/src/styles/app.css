@@ -1197,5 +1197,15 @@ body {
   .scene-render-status { display: none; }
 }
 
+.settings-rows { display:grid; gap:18px; }
+.settings-row { display:flex; flex-wrap:wrap; align-items:flex-start; gap:16px; padding-bottom:18px; border-bottom:1px solid var(--border); }
+.settings-row-text { flex:1 1 220px; display:flex; flex-direction:column; gap:3px; min-width:0; }
+.settings-row-title { font-size:13px; font-weight:500; }
+.settings-row-hint { color:var(--muted-foreground); font-size:12px; }
+.settings-row-control { flex:none; max-width:100%; }
+.settings-radio { display:flex; align-items:center; gap:8px; }
+.settings-folder { display:flex; align-items:center; gap:6px; min-width:0; font-size:13px; }
+.settings-folder > svg { width:16px; height:16px; flex:none; color:var(--muted-foreground); }
+.settings-folder-path { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:240px; }
 .settings-privacy-toggle { display:flex; align-items:center; justify-content:space-between; gap:16px; width:100%; }
 .settings-update-status { min-height: 24px; border: 0; padding: 0; background: transparent; color: var(--muted-foreground); font-size: 12px; }

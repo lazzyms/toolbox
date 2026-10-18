@@ -2,6 +2,7 @@
 
 mod file_actions;
 mod kit;
+mod settings;
 
 use crate::file_actions::{open_output_path, reveal_output_path};
 use crate::kit::common::JobOutcome;
@@ -16,28 +17,28 @@ use crate::kit::office::OfficeProcessor;
 
 #[tauri::command]
 async fn remove_password(request: PasswordRequest) -> Vec<JobOutcome> {
-    BatchRunner::run("remove_password", request.paths, |path| {
+    BatchRunner::run("remove_password", request.paths, &request.output_location, |path| {
         PasswordProcessor::remove_password(path, &request.password, &request.output_location)
     })
 }
 
 #[tauri::command]
 async fn protect_pdf(request: PdfRequest) -> Vec<JobOutcome> {
-    BatchRunner::run("protect_pdf", request.paths, |path| {
+    BatchRunner::run("protect_pdf", request.paths, &request.output_location, |path| {
         PDFProcessor::protect(path, &request.password, &request.output_location)
     })
 }
 
 #[tauri::command]
 async fn protect_office(request: PasswordRequest) -> Vec<JobOutcome> {
-    BatchRunner::run("protect_office", request.paths, |path| {
+    BatchRunner::run("protect_office", request.paths, &request.output_location, |path| {
         OfficeProcessor::protect(path, &request.password, &request.output_location)
     })
 }
 
 #[tauri::command]
 async fn compress_images(request: CompressImagesRequest) -> Vec<JobOutcome> {
-    BatchRunner::run("compress_images", request.paths, |path| {
+    BatchRunner::run("compress_images", request.paths, &request.output_location, |path| {
         ImageProcessor::run(path, ImageOptions {
             target_format: None,
             quality: if request.lossless { 0 } else { request.quality },
@@ -60,7 +61,7 @@ async fn convert_images(request: ConvertImagesRequest) -> Vec<JobOutcome> {
         }
     };
 
-    BatchRunner::run("convert_images", request.paths, |path| {
+    BatchRunner::run("convert_images", request.paths, &request.output_location, |path| {
         ImageProcessor::run(path, ImageOptions {
             target_format: Some(img_format),
             quality: 80,
@@ -113,7 +114,7 @@ async fn preview_pdf_scene_pages(request: scene::PreviewPagesRequest) -> Result<
 
 #[tauri::command]
 async fn export_pdf_scene(request: scene::ExportRequest) -> Vec<JobOutcome> {
-    BatchRunner::run("export_pdf_scene", request.paths.clone(), |path| scene::export(&request, path))
+    BatchRunner::run("export_pdf_scene", request.paths.clone(), &request.output_location, |path| scene::export(&request, path))
 }
 
 #[tauri::command]
@@ -123,7 +124,7 @@ async fn crop_pdf(request: editor::CropPdfRequest) -> Vec<JobOutcome> {
         editor::PageScope::Selected { pages } => Some(pages.as_slice()),
     };
     if let Err(outcomes) = validate_page_selection("crop_pdf", &request.paths, explicit_pages) { return outcomes; }
-    BatchRunner::run("crop_pdf", request.paths.clone(), |path| editor::crop(&request, path))
+    BatchRunner::run("crop_pdf", request.paths.clone(), &request.output_location, |path| editor::crop(&request, path))
 }
 
 #[tauri::command]
@@ -133,18 +134,18 @@ async fn sign_pdf(request: editor::SignPdfRequest) -> Vec<JobOutcome> {
         editor::PageScope::Selected { pages } => Some(pages.as_slice()),
     };
     if let Err(outcomes) = validate_page_selection("sign_pdf", &request.paths, explicit_pages) { return outcomes; }
-    BatchRunner::run("sign_pdf", request.paths.clone(), |path| editor::sign(&request, path))
+    BatchRunner::run("sign_pdf", request.paths.clone(), &request.output_location, |path| editor::sign(&request, path))
 }
 
 #[tauri::command]
 async fn edit_pdf(request: editor::EditPdfRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_page_selection("edit_pdf", &request.paths, request.pages.as_deref()) { return outcomes; }
-    BatchRunner::run("edit_pdf", request.paths.clone(), |path| editor::edit(&request, path))
+    BatchRunner::run("edit_pdf", request.paths.clone(), &request.output_location, |path| editor::edit(&request, path))
 }
 
 #[tauri::command]
 async fn edit_pdf_session(request: editor::PdfEditSessionRequest) -> Vec<JobOutcome> {
-    BatchRunner::run("edit_pdf_session", request.paths.clone(), |path| editor::apply_session(&request, path))
+    BatchRunner::run("edit_pdf_session", request.paths.clone(), &request.output_location, |path| editor::apply_session(&request, path))
 }
 
 #[tauri::command]
@@ -154,37 +155,37 @@ async fn organize_pdf(request: editor::OrganizePdfRequest) -> Vec<JobOutcome> {
         editor::PageScope::Selected { pages } => Some(pages.as_slice()),
     };
     if let Err(outcomes) = validate_page_selection("organize_pdf", &request.paths, explicit_pages) { return outcomes; }
-    BatchRunner::run("organize_pdf", request.paths.clone(), |path| editor::organize(&request, path))
+    BatchRunner::run("organize_pdf", request.paths.clone(), &request.output_location, |path| editor::organize(&request, path))
 }
 
 #[tauri::command]
 async fn add_pdf_pages(request: editor::AddPdfPagesRequest) -> Vec<JobOutcome> {
-    BatchRunner::run("add_pdf_pages", request.paths.clone(), |path| editor::add_pages(&request, path))
+    BatchRunner::run("add_pdf_pages", request.paths.clone(), &request.output_location, |path| editor::add_pages(&request, path))
 }
 
 #[tauri::command]
 async fn add_page_numbers(request: remaining::PageOverlayRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_page_selection("add_page_numbers", &request.paths, request.pages.as_deref()) { return outcomes; }
-    BatchRunner::run("add_page_numbers", request.paths.clone(), |path| remaining::add_page_numbers(&request, path))
+    BatchRunner::run("add_page_numbers", request.paths.clone(), &request.output_location, |path| remaining::add_page_numbers(&request, path))
 }
 
 #[tauri::command]
 async fn watermark_pdf(request: remaining::PageOverlayRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_page_selection("watermark_pdf", &request.paths, request.pages.as_deref()) { return outcomes; }
-    BatchRunner::run("watermark_pdf", request.paths.clone(), |path| remaining::watermark(&request, path))
+    BatchRunner::run("watermark_pdf", request.paths.clone(), &request.output_location, |path| remaining::watermark(&request, path))
 }
 
 #[tauri::command]
 async fn compress_pdf(request: remaining::CompressPdfRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_command_inputs("compress_pdf", &request.paths) { return outcomes; }
-    BatchRunner::run("compress_pdf", request.paths.clone(), |path| remaining::compress(&request, path))
+    BatchRunner::run("compress_pdf", request.paths.clone(), &request.output_location, |path| remaining::compress(&request, path))
 }
 
 #[tauri::command]
 async fn remove_pdf_pages(request: remaining::PageSelectionRequest) -> Vec<JobOutcome> {
     let explicit_pages = request.page_ranges.as_deref().filter(|range| !range.trim().is_empty()).is_none().then_some(request.pages.as_slice());
     if let Err(outcomes) = validate_page_selection("remove_pdf_pages", &request.paths, explicit_pages) { return outcomes; }
-    BatchRunner::run("remove_pdf_pages", request.paths.clone(), |path| remaining::remove_pages(&request, path))
+    BatchRunner::run("remove_pdf_pages", request.paths.clone(), &request.output_location, |path| remaining::remove_pages(&request, path))
 }
 
 #[tauri::command]
@@ -192,7 +193,7 @@ async fn extract_pdf_pages(request: remaining::PageSelectionRequest) -> Vec<JobO
     if let Err(outcomes) = validate_command_inputs("extract_pdf_pages", &request.paths) { return outcomes; }
     let explicit_pages = request.page_ranges.as_deref().filter(|range| !range.trim().is_empty()).is_none().then_some(request.pages.as_slice());
     if let Err(outcomes) = validate_page_selection("extract_pdf_pages", &request.paths, explicit_pages) { return outcomes; }
-    BatchRunner::run("extract_pdf_pages", request.paths.clone(), |path| remaining::extract_pages(&request, path))
+    BatchRunner::run("extract_pdf_pages", request.paths.clone(), &request.output_location, |path| remaining::extract_pages(&request, path))
 }
 
 #[tauri::command]
@@ -204,28 +205,28 @@ async fn merge_pdfs(request: remaining::MergePdfRequest) -> Vec<JobOutcome> {
 #[tauri::command]
 async fn split_pdf(request: remaining::PageSelectionRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_command_inputs("split_pdf", &request.paths) { return outcomes; }
-    BatchRunner::run("split_pdf", request.paths.clone(), |path| remaining::split(&request, path))
+    BatchRunner::run("split_pdf", request.paths.clone(), &request.output_location, |path| remaining::split(&request, path))
 }
 
 #[tauri::command]
 async fn pdf_to_images(request: remaining::PdfToImagesRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_command_inputs("pdf_to_images", &request.paths) { return outcomes; }
     if let Err(outcomes) = validate_page_selection("pdf_to_images", &request.paths, request.pages.as_deref()) { return outcomes; }
-    BatchRunner::run("pdf_to_images", request.paths.clone(), |path| remaining::to_images(&request, path))
+    BatchRunner::run("pdf_to_images", request.paths.clone(), &request.output_location, |path| remaining::to_images(&request, path))
 }
 
 #[tauri::command]
 async fn pdf_to_text(request: remaining::PdfToTextRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_command_inputs("pdf_to_text", &request.paths) { return outcomes; }
     if let Err(outcomes) = validate_page_selection("pdf_to_text", &request.paths, request.pages.as_deref()) { return outcomes; }
-    BatchRunner::run("pdf_to_text", request.paths.clone(), |path| remaining::to_text(&request, path))
+    BatchRunner::run("pdf_to_text", request.paths.clone(), &request.output_location, |path| remaining::to_text(&request, path))
 }
 
 #[tauri::command]
 async fn extract_pdf_images(request: remaining::PdfToTextRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_command_inputs("extract_pdf_images", &request.paths) { return outcomes; }
     if let Err(outcomes) = validate_page_selection("extract_pdf_images", &request.paths, request.pages.as_deref()) { return outcomes; }
-    BatchRunner::run("extract_pdf_images", request.paths.clone(), |path| remaining::extract_images(&request, path))
+    BatchRunner::run("extract_pdf_images", request.paths.clone(), &request.output_location, |path| remaining::extract_images(&request, path))
 }
 
 #[tauri::command]
@@ -238,38 +239,38 @@ async fn images_to_pdf(request: remaining::ImagesToPdfRequest) -> Vec<JobOutcome
 async fn ocr_pdf(request: vision::VisionRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_command_inputs("ocr_pdf", &request.paths) { return outcomes; }
     if let Err(outcomes) = validate_page_selection("ocr_pdf", &request.paths, request.pages.as_deref()) { return outcomes; }
-    BatchRunner::run("ocr_pdf", request.paths.clone(), |path| vision::ocr_pdf(&request, path))
+    BatchRunner::run("ocr_pdf", request.paths.clone(), &request.output_location, |path| vision::ocr_pdf(&request, path))
 }
 #[tauri::command]
-async fn blur_faces(request: vision::VisionRequest) -> Vec<JobOutcome> { BatchRunner::run("blur_faces", request.paths.clone(), |path| vision::blur_faces(&request, path)) }
+async fn blur_faces(request: vision::VisionRequest) -> Vec<JobOutcome> { BatchRunner::run("blur_faces", request.paths.clone(), &request.output_location, |path| vision::blur_faces(&request, path)) }
 #[tauri::command]
-async fn remove_image_background(request: vision::VisionRequest) -> Vec<JobOutcome> { BatchRunner::run("remove_image_background", request.paths.clone(), |path| vision::remove_background(&request, path)) }
+async fn remove_image_background(request: vision::VisionRequest) -> Vec<JobOutcome> { BatchRunner::run("remove_image_background", request.paths.clone(), &request.output_location, |path| vision::remove_background(&request, path)) }
 #[tauri::command]
-async fn resize_images(request: tools::ResizeRequest) -> Vec<JobOutcome> { BatchRunner::run("resize_images", request.paths.clone(), |path| tools::resize(&request, path)) }
+async fn resize_images(request: tools::ResizeRequest) -> Vec<JobOutcome> { BatchRunner::run("resize_images", request.paths.clone(), &request.output_location, |path| tools::resize(&request, path)) }
 #[tauri::command]
-async fn rotate_images(request: tools::RotateRequest) -> Vec<JobOutcome> { BatchRunner::run("rotate_images", request.paths.clone(), |path| tools::rotate(&request, path)) }
+async fn rotate_images(request: tools::RotateRequest) -> Vec<JobOutcome> { BatchRunner::run("rotate_images", request.paths.clone(), &request.output_location, |path| tools::rotate(&request, path)) }
 #[tauri::command]
-async fn crop_images(request: tools::CropRequest) -> Vec<JobOutcome> { BatchRunner::run("crop_images", request.paths.clone(), |path| tools::crop(&request, path)) }
+async fn crop_images(request: tools::CropRequest) -> Vec<JobOutcome> { BatchRunner::run("crop_images", request.paths.clone(), &request.output_location, |path| tools::crop(&request, path)) }
 #[tauri::command]
-async fn adjust_image_tone(request: tools::ToneRequest) -> Vec<JobOutcome> { BatchRunner::run("adjust_image_tone", request.paths.clone(), |path| tools::tone(&request, path)) }
+async fn adjust_image_tone(request: tools::ToneRequest) -> Vec<JobOutcome> { BatchRunner::run("adjust_image_tone", request.paths.clone(), &request.output_location, |path| tools::tone(&request, path)) }
 #[tauri::command]
-async fn watermark_images(request: tools::WatermarkRequest) -> Vec<JobOutcome> { BatchRunner::run("watermark_images", request.paths.clone(), |path| tools::watermark(&request, path)) }
+async fn watermark_images(request: tools::WatermarkRequest) -> Vec<JobOutcome> { BatchRunner::run("watermark_images", request.paths.clone(), &request.output_location, |path| tools::watermark(&request, path)) }
 #[tauri::command]
-async fn generate_icon_set(request: tools::IconSetRequest) -> Vec<JobOutcome> { BatchRunner::run("generate_icon_set", request.paths.clone(), |path| tools::icon_set(&request, path)) }
+async fn generate_icon_set(request: tools::IconSetRequest) -> Vec<JobOutcome> { BatchRunner::run("generate_icon_set", request.paths.clone(), &request.output_location, |path| tools::icon_set(&request, path)) }
 #[tauri::command]
 async fn create_gif(request: tools::GifCreateRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_command_inputs("create_gif", &request.paths) { return outcomes; }
     aggregate_outcomes(&request.paths, || tools::gif_create(&request))
 }
 #[tauri::command]
-async fn extract_gif_frames(request: tools::GifExtractRequest) -> Vec<JobOutcome> { BatchRunner::run("extract_gif_frames", request.paths.clone(), |path| tools::gif_extract(&request, path)) }
+async fn extract_gif_frames(request: tools::GifExtractRequest) -> Vec<JobOutcome> { BatchRunner::run("extract_gif_frames", request.paths.clone(), &request.output_location, |path| tools::gif_extract(&request, path)) }
 #[tauri::command]
 async fn process_tiff_pages(request: tools::TiffRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_command_inputs("process_tiff_pages", &request.paths) { return outcomes; }
     aggregate_outcomes(&request.paths, || tools::tiff(&request))
 }
 #[tauri::command]
-async fn image_metadata(request: tools::MetadataRequest) -> Vec<JobOutcome> { BatchRunner::run("image_metadata", request.paths.clone(), |path| tools::strip_metadata(&request, path)) }
+async fn image_metadata(request: tools::MetadataRequest) -> Vec<JobOutcome> { BatchRunner::run("image_metadata", request.paths.clone(), &request.output_location, |path| tools::strip_metadata(&request, path)) }
 #[tauri::command]
 fn inspect_image_metadata(request: tools::MetadataRequest) -> Vec<Result<tools::MetadataReport, String>> { request.paths.into_iter().map(tools::inspect_metadata).collect() }
 
@@ -284,7 +285,7 @@ fn inspect_image_edit_preview(request: tools::ImageEditPreviewRequest) -> Result
 
 #[tauri::command]
 async fn export_image_edit_plan(request: tools::ImageEditExportRequest) -> Vec<JobOutcome> {
-    BatchRunner::run("export_image_edit_plan", request.paths.clone(), |path| tools::export_edit_plan(&request.plan, path))
+    BatchRunner::run("export_image_edit_plan", request.paths.clone(), &request.plan.output_location, |path| tools::export_edit_plan(&request.plan, path))
 }
 
 fn aggregate_outcomes<F>(paths: &[std::path::PathBuf], operation: F) -> Vec<JobOutcome>
@@ -312,6 +313,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             open_output_path,
             reveal_output_path,
+            settings::get_output_settings,
+            settings::set_output_settings,
             remove_password,
             protect_pdf,
             protect_office,
@@ -1115,5 +1118,69 @@ mod command_tests {
         assert_eq!(outputs.len(), 1);
         assert_eq!(outputs[0].parent(), Some(root.as_path()));
         assert!(outputs[0].exists(), "organize output must exist on disk");
+    }
+
+    #[test]
+    fn custom_folder_numbers_same_stem_inputs_from_different_folders() {
+        let root = sandbox("custom-folder-numbering");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("a")).unwrap();
+        std::fs::create_dir_all(root.join("b")).unwrap();
+        let first = root.join("a/photo.png");
+        let second = root.join("b/photo.png");
+        write_png(&first, 32, 1);
+        write_png(&second, 32, 2);
+        let output_location = location(&root, "results");
+
+        let outcomes = tauri::async_runtime::block_on(image_metadata(MetadataRequest {
+            paths: vec![first.clone(), second.clone()], output_location,
+        }));
+
+        let mut outputs = outcomes.iter().flat_map(|outcome| {
+            assert!(outcome.error().is_none(), "{}", outcome.error().cloned().unwrap_or_default());
+            outcome.output_paths().to_vec()
+        }).collect::<Vec<_>>();
+        outputs.sort();
+        assert_eq!(outputs, vec![root.join("results/photo-stripped-1.png"), root.join("results/photo-stripped.png")]);
+        assert!(outputs.iter().all(|output| output.is_file()));
+        assert!(!root.join("a/photo-stripped.png").exists() && !root.join("b/photo-stripped.png").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_only_alongside_folder_fails_only_that_file() {
+        use crate::kit::common::batch_runner::READ_ONLY_OUTPUT_MESSAGE;
+        use crate::kit::contracts::{ErrorKind, OutcomePointer};
+        use std::os::unix::fs::PermissionsExt;
+        let root = sandbox("read-only-alongside");
+        let locked = root.join("locked");
+        let open = root.join("open");
+        for folder in [&locked, &open] {
+            if folder.exists() { std::fs::set_permissions(folder, std::fs::Permissions::from_mode(0o755)).unwrap(); }
+            let _ = std::fs::remove_dir_all(folder);
+            std::fs::create_dir_all(folder).unwrap();
+        }
+        let blocked = locked.join("scan.png");
+        let writable = open.join("scan.png");
+        write_png(&blocked, 32, 3);
+        write_png(&writable, 32, 4);
+        let original = std::fs::read(&blocked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+        let outcomes = tauri::async_runtime::block_on(image_metadata(MetadataRequest {
+            paths: vec![blocked.clone(), writable.clone()], output_location: OutputLocation::AlongsideInput,
+        }));
+        let listing = std::fs::read_dir(&locked).unwrap().map(|entry| entry.unwrap().file_name()).collect::<Vec<_>>();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let error = outcomes[0].error().expect("the read-only folder must fail");
+        assert_eq!(error.kind, ErrorKind::Processing);
+        assert_eq!(error.message, READ_ONLY_OUTPUT_MESSAGE);
+        assert_eq!(error.pointer, Some(OutcomePointer::OutputFolder));
+        assert!(outcomes[0].output_paths().is_empty());
+        assert!(outcomes[1].error().is_none(), "{}", outcomes[1].error().cloned().unwrap_or_default());
+        assert_eq!(outcomes[1].output_paths(), [open.join("scan-stripped.png")]);
+        assert_eq!(std::fs::read(&blocked).unwrap(), original, "originals stay untouched");
+        assert_eq!(listing, vec![std::ffi::OsString::from("scan.png")], "nothing is left in the read-only folder");
     }
 }
