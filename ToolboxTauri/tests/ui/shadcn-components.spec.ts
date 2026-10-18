@@ -51,10 +51,14 @@ test("desktop shell uses neutral shadcn controls in both themes", async ({ page 
   }
 
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  const settings = page.getByRole("dialog", { name: "Settings" });
-  await expect(settings).toBeVisible();
-  await expect(settings.locator('[class*="ds-"]')).toHaveCount(0);
-  await expect(settings.locator("button:not([data-slot])")).toHaveCount(0);
+  const settings = page.locator(".settings-page");
+  const sections = page.getByRole("navigation", { name: "Settings sections" }).getByRole("button");
+  for (const name of await sections.allTextContents()) {
+    await sections.filter({ hasText: name }).click();
+    await expect(page.getByRole("heading", { level: 1, name })).toBeVisible();
+    await expect(settings.locator('[class*="ds-"]')).toHaveCount(0);
+    await expect(settings.locator("button:not([data-slot])")).toHaveCount(0);
+  }
 });
 
 test("feature panels and previews use shadcn Card surfaces", async ({ page }) => {

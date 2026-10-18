@@ -19,7 +19,6 @@ import type { WorkspaceSourceAction } from "../components/ToolScaffold";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import { Dialog, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { SecurityWorkspaceView } from "./SecurityWorkspaceView";
@@ -28,7 +27,7 @@ import { PDFConversionWorkspaceView } from "./PDFConversionWorkspaceView";
 import { ImageEditorWorkspaceView } from "./ImageEditorWorkspaceView";
 import { MediaWorkspaceView } from "./MediaWorkspaceView";
 import { PlannedToolView, UnavailableToolView } from "./PlannedToolView";
-import { SettingsPanel, type SettingsSection } from "./SettingsPanel";
+import { SettingsPage, type SettingsSection } from "./SettingsPage";
 
 const workspaceViews = {
   "file-security": SecurityWorkspaceView,
@@ -94,8 +93,9 @@ export const MainPage = () => {
   const publishWorkspaceSourceAction = useCallback((action: WorkspaceSourceAction | null) => {
     setWorkspaceSourceAction(() => action);
   }, []);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(null);
+  const [focusAfterSettings, setFocusAfterSettings] = useState<"settings" | "search" | null>(null);
+  const settingsTriggerRef = useRef<HTMLButtonElement>(null);
   const [filter, setFilter] = useState<LibraryFilter>("all");
   const [search, setSearch] = useState("");
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -199,18 +199,35 @@ export const MainPage = () => {
     document.body.dataset.theme =
       (localStorage.getItem("toolbox-theme") as "dark" | "light") || "dark";
   }, []);
+  const closeSettings = useCallback(() => {
+    setSettingsSection(null);
+    setFocusAfterSettings("settings");
+  }, []);
+  const findToolFromSettings = useCallback(() => {
+    setSettingsSection(null);
+    setWorkspaceSourceAction(null);
+    setSelectedTool(null);
+    setFocusAfterSettings("search");
+  }, []);
+  useEffect(() => {
+    if (settingsSection || !focusAfterSettings) return;
+    if (focusAfterSettings === "settings") settingsTriggerRef.current?.focus();
+    else searchInputRef.current?.focus();
+    setFocusAfterSettings(null);
+  }, [settingsSection, focusAfterSettings]);
   useEffect(() => {
     const focusSearch = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "k") return;
 
       event.preventDefault();
+      if (settingsSection) return findToolFromSettings();
       searchInputRef.current?.focus();
       searchInputRef.current?.select();
     };
 
     window.addEventListener("keydown", focusSearch);
     return () => window.removeEventListener("keydown", focusSearch);
-  }, []);
+  }, [settingsSection, findToolFromSettings]);
   useEffect(() => {
     const openFromCompatibilityNav = (event: Event) => {
       const id = (event as CustomEvent<string>).detail;
@@ -223,22 +240,15 @@ export const MainPage = () => {
   });
   useEffect(() => {
     const openSettings = (event: Event) => {
-      setSettingsSection((event as CustomEvent<SettingsSection>).detail);
-      setSettingsOpen(true);
+      setSettingsSection((event as CustomEvent<SettingsSection | undefined>).detail ?? "appearance");
     };
     window.addEventListener("toolbox:open-settings", openSettings);
     return () => window.removeEventListener("toolbox:open-settings", openSettings);
   }, []);
 
   return (
-    <Dialog
-      open={settingsOpen}
-      onOpenChange={(open) => {
-        setSettingsOpen(open);
-        if (!open) setSettingsSection(null);
-      }}
-    >
-    <div className="app-shell">
+    <>
+    <div className="app-shell" hidden={settingsSection !== null}>
       <aside className="app-rail" aria-label="Toolbox navigation">
         <div className="brand-lockup">
           <span className="brand-mark">T</span>
@@ -303,15 +313,14 @@ export const MainPage = () => {
           )}
         </nav>
         <div className="rail-spacer" />
-        <DialogTrigger asChild>
-          <Button
-            variant={settingsOpen ? "secondary" : "ghost"}
-            className="settings-link"
-            aria-current={settingsOpen ? "page" : undefined}
-          >
-            Settings
-          </Button>
-        </DialogTrigger>
+        <Button
+          ref={settingsTriggerRef}
+          variant="ghost"
+          className="settings-link"
+          onClick={() => setSettingsSection("appearance")}
+        >
+          Settings
+        </Button>
         <p className="privacy-note">
           <strong>Private by default</strong>Files stay on this device.
         </p>
@@ -523,8 +532,15 @@ export const MainPage = () => {
         )}
       </main>
     </div>
-    <SettingsPanel focusSection={settingsSection} />
-    </Dialog>
+    {settingsSection && (
+      <SettingsPage
+        section={settingsSection}
+        onSectionChange={setSettingsSection}
+        onClose={closeSettings}
+        onFindTool={findToolFromSettings}
+      />
+    )}
+    </>
   );
 };
 
