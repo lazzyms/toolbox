@@ -150,13 +150,41 @@ pub(crate) fn is_agile_ooxml(encrypted: &[u8]) -> Result<bool, String> {
     Ok(is_agile_encryption_info(&encryption_info))
 }
 
-pub(crate) fn decrypt_ooxml(encrypted: &[u8], password: &str) -> Result<Vec<u8>, String> {
-    let mut compound = CompoundFile::open(Cursor::new(encrypted.to_vec()))
-        .map_err(|error| format!("Could not open the encrypted Office container: {error}"))?;
-    let encryption_info = read_compound_stream(&mut compound, "/EncryptionInfo")?;
-    let encrypted_package = read_compound_stream(&mut compound, "/EncryptedPackage")?;
-    let parameters = parse_encryption_info(&encryption_info)?;
+#[derive(Debug)]
+pub(crate) enum AgileDecryptError {
+    WrongPassword,
+    Unsupported(String),
+    Damaged(String),
+}
 
+impl std::fmt::Display for AgileDecryptError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::WrongPassword => formatter.write_str("The Agile password verifier did not match."),
+            Self::Unsupported(message) | Self::Damaged(message) => formatter.write_str(message),
+        }
+    }
+}
+
+pub(crate) fn decrypt_ooxml(encrypted: &[u8], password: &str) -> Result<Vec<u8>, AgileDecryptError> {
+    let mut compound = CompoundFile::open(Cursor::new(encrypted.to_vec())).map_err(|error| {
+        AgileDecryptError::Damaged(format!("Could not open the encrypted Office container: {error}"))
+    })?;
+    let encryption_info =
+        read_compound_stream(&mut compound, "/EncryptionInfo").map_err(AgileDecryptError::Damaged)?;
+    let encrypted_package =
+        read_compound_stream(&mut compound, "/EncryptedPackage").map_err(AgileDecryptError::Damaged)?;
+    let parameters = parse_encryption_info(&encryption_info).map_err(AgileDecryptError::Unsupported)?;
+    let package_key = verified_package_key(&parameters, password)
+        .map_err(AgileDecryptError::Damaged)?
+        .ok_or(AgileDecryptError::WrongPassword)?;
+    decrypt_package(&parameters, &package_key, &encrypted_package).map_err(AgileDecryptError::Damaged)
+}
+
+fn verified_package_key(
+    parameters: &ParsedAgileParameters,
+    password: &str,
+) -> Result<Option<[u8; PACKAGE_KEY_SIZE]>, String> {
     let password_hash = iterated_password_hash(&parameters.password_salt, password);
     let package_key: [u8; PACKAGE_KEY_SIZE] = decrypt_aes_cbc(
         &derive_key(&password_hash, &ENCRYPTED_KEY_VALUE_BLOCK_KEY),
@@ -178,9 +206,16 @@ pub(crate) fn decrypt_ooxml(encrypted: &[u8], password: &str) -> Result<Vec<u8>,
     )?;
     let expected_verifier_hash: [u8; HASH_SIZE] = Sha512::digest(&verifier_hash_input).into();
     if verifier_hash_value != expected_verifier_hash {
-        return Err("The Agile password verifier did not match.".to_string());
+        return Ok(None);
     }
+    Ok(Some(package_key))
+}
 
+fn decrypt_package(
+    parameters: &ParsedAgileParameters,
+    package_key: &[u8; PACKAGE_KEY_SIZE],
+    encrypted_package: &[u8],
+) -> Result<Vec<u8>, String> {
     if encrypted_package.len() < 8 {
         return Err("The EncryptedPackage stream is missing its length header.".to_string());
     }
@@ -219,7 +254,7 @@ pub(crate) fn decrypt_ooxml(encrypted: &[u8], password: &str) -> Result<Vec<u8>,
         let segment_iv: [u8; BLOCK_SIZE] = Sha512::digest(iv_input)[..BLOCK_SIZE]
             .try_into()
             .map_err(|_| "The Agile segment IV has an invalid length.".to_string())?;
-        let decrypted_segment = decrypt_aes_cbc(&package_key, &segment_iv, ciphertext)?;
+        let decrypted_segment = decrypt_aes_cbc(package_key, &segment_iv, ciphertext)?;
         plaintext.extend_from_slice(&decrypted_segment[..segment_length]);
 
         encrypted_offset = ciphertext_end;
@@ -230,18 +265,18 @@ pub(crate) fn decrypt_ooxml(encrypted: &[u8], password: &str) -> Result<Vec<u8>,
     }
 
     let integrity_key: [u8; KEY_DATA_SALT_SIZE] = decrypt_aes_cbc(
-        &package_key,
+        package_key,
         &derive_iv(&parameters.key_data_salt, &INTEGRITY_KEY_BLOCK_KEY),
         &parameters.encrypted_hmac_key,
     )?
     .try_into()
     .map_err(|_| "The Agile integrity key has an invalid length.".to_string())?;
     let integrity_value = decrypt_aes_cbc(
-        &package_key,
+        package_key,
         &derive_iv(&parameters.key_data_salt, &INTEGRITY_VALUE_BLOCK_KEY),
         &parameters.encrypted_hmac_value,
     )?;
-    let computed_integrity = hmac_sha512(&integrity_key, &encrypted_package)?;
+    let computed_integrity = hmac_sha512(&integrity_key, encrypted_package)?;
     if integrity_value != computed_integrity {
         return Err("The Agile package integrity HMAC did not match.".to_string());
     }
@@ -254,7 +289,7 @@ pub(crate) fn verify_ooxml(
     password: &str,
     expected_package: &[u8],
 ) -> Result<(), String> {
-    let plaintext = decrypt_ooxml(encrypted, password)?;
+    let plaintext = decrypt_ooxml(encrypted, password).map_err(|error| error.to_string())?;
 
     if plaintext != expected_package {
         return Err("The decrypted OOXML package did not match the expected package.".to_string());

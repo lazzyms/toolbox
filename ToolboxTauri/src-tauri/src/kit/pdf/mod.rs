@@ -17,7 +17,7 @@ use lopdf::{Document, LoadOptions, Object, ObjectId};
 use crate::kit::common::limits::{self, StoppableHelper};
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::ToolError;
-use crate::kit::password::{probe, unlock_skip_reason, ProtectedFormat, ProtectionState};
+use crate::kit::password::{probe, unlock_skip_reason, unreadable, ProtectedFormat, ProtectionState, UNLOCK_NOT_VERIFIED, UNSUPPORTED_ENCRYPTION, WRONG_PASSWORD};
 
 pub struct PDFProcessor;
 
@@ -610,7 +610,11 @@ pub(crate) fn mutation_preflight(document: &Document, intent: PdfMutationIntent)
     Ok(preflight)
 }
 
-const WRONG_PDF_PASSWORD: &str = "Wrong password or unsupported encryption.";
+fn unlocked_pdf_is_verified(path: &Path, page_count: usize) -> bool {
+    let Ok(bytes) = std::fs::read(path) else { return false };
+    matches!(probe(&bytes, ProtectedFormat::Pdf), Ok(ProtectionState::NotProtected))
+        && Document::load_mem(&bytes).is_ok_and(|verified| verified.get_pages().len() == page_count && verified.objects.len() > 1)
+}
 
 impl PDFProcessor {
     pub fn remove_password(input_path: PathBuf, password: &str, output_location: &OutputLocation) -> JobOutcome {
@@ -620,13 +624,15 @@ impl PDFProcessor {
         if input_path.extension().and_then(|extension| extension.to_str()).is_none_or(|extension| !extension.eq_ignore_ascii_case("pdf")) {
             return JobOutcome::failure(input_path, ToolError::invalid_input("Only PDF files can be unlocked."));
         }
-        let raw = match read_and_probe(&input_path) {
-            Ok((raw, state)) => match unlock_skip_reason(state) {
-                Some(reason) => return JobOutcome::skipped(input_path, reason),
-                None => raw,
-            },
-            Err(error) => return JobOutcome::failure(input_path, error),
+        let raw = match std::fs::read(&input_path) {
+            Ok(raw) => raw,
+            Err(error) => return JobOutcome::failure(input_path, ToolError::processing(format!("Could not read the PDF: {error}"))),
         };
+        match probe(&raw, ProtectedFormat::Pdf).map(unlock_skip_reason) {
+            Ok(None) => {}
+            Ok(Some(reason)) => return JobOutcome::skipped(input_path, reason),
+            Err(_) => return JobOutcome::failure(input_path, unreadable(ProtectedFormat::Pdf)),
+        }
         let output_path = match OutputNaming::reserve_destination(
             &input_path,
             output_location,
@@ -647,7 +653,7 @@ impl PDFProcessor {
                 if doc.is_encrypted() {
                     // Loading with the wrong password can surface a still-encrypted
                     // document rather than an error; treat it as a rejection.
-                    return JobOutcome::failure(input_path, ToolError::wrong_password(WRONG_PDF_PASSWORD));
+                    return JobOutcome::failure(input_path, ToolError::wrong_password(WRONG_PASSWORD));
                 }
                 let mut doc = doc;
                 let page_count = doc.get_pages().len();
@@ -668,21 +674,27 @@ impl PDFProcessor {
                     .max()
                     .unwrap_or(0);
                 match doc.save(output_path.path()) {
-                    Ok(_) => match Document::load(output_path.path()) {
-                        Ok(verified) if !verified.is_encrypted() && verified.get_pages().len() == page_count && verified.objects.len() > 1 => match output_path.publish() {
-                            Ok(path) => JobOutcome::succeeded(input_path, vec![path], "PDF Unlocked and verified"),
-                            Err(error) => JobOutcome::failure(input_path, ToolError::processing(format!("Could not publish unlocked PDF output: {error}"))),
-                        },
-                        Ok(_) => JobOutcome::failure(input_path, ToolError::processing("Unlocked PDF failed verification.")),
-                        Err(error) => JobOutcome::failure(input_path, ToolError::processing(format!("Unlocked PDF could not be reopened: {error}"))),
+                    Ok(_) if unlocked_pdf_is_verified(output_path.path(), page_count) => match output_path.publish() {
+                        Ok(path) => JobOutcome::succeeded(input_path, vec![path], "PDF Unlocked and verified"),
+                        Err(error) => JobOutcome::failure(input_path, ToolError::processing(format!("Could not publish unlocked PDF output: {error}"))),
                     },
+                    Ok(_) => JobOutcome::failure(input_path, ToolError::processing(UNLOCK_NOT_VERIFIED)),
                     Err(e) => JobOutcome::failure(input_path, ToolError::processing(format!("Save failed: {}", e))),
                 }
             }
             Err(lopdf::Error::InvalidPassword | lopdf::Error::Decryption(lopdf::encryption::DecryptionError::IncorrectPassword)) => {
-                JobOutcome::failure(input_path, ToolError::wrong_password(WRONG_PDF_PASSWORD))
+                JobOutcome::failure(input_path, ToolError::wrong_password(WRONG_PASSWORD))
             }
-            Err(e) => JobOutcome::failure(input_path, ToolError::invalid_input(format!("Unsupported or damaged encrypted PDF: {}", e))),
+            Err(
+                lopdf::Error::UnsupportedSecurityHandler(_)
+                | lopdf::Error::Unimplemented(_)
+                | lopdf::Error::Decryption(
+                    lopdf::encryption::DecryptionError::UnsupportedEncryption
+                    | lopdf::encryption::DecryptionError::UnsupportedVersion
+                    | lopdf::encryption::DecryptionError::UnsupportedRevision,
+                ),
+            ) => JobOutcome::failure(input_path, ToolError::unavailable(UNSUPPORTED_ENCRYPTION)),
+            Err(_) => JobOutcome::failure(input_path, unreadable(ProtectedFormat::Pdf)),
         }
     }
 
