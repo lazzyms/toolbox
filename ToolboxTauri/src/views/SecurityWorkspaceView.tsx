@@ -1,20 +1,34 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ToolScaffold } from "../components/ToolScaffold";
+import { ToolScaffold, type RunHandler } from "../components/ToolScaffold";
 import { WorkspaceCommandRail } from "../components/WorkspaceCommandRail";
+import { BatchPasswordFields, FilePasswordCell, passwordReadiness, passwordRequest, usePasswordSet, type PasswordMode, type PasswordState } from "../components/PasswordFields";
 import { toolsForWorkspaceId, UtilityRegistry } from "../registry";
-import type { AtomicToolId, PasswordRequest, PDFRequest, ToolDefinition, ToolResult } from "../contracts";
+import type { AtomicToolId, PasswordSet, ToolDefinition, ToolResult } from "../contracts";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
+
+const commands: Partial<Record<AtomicToolId, string>> = {
+  "pdf-protect": "protect_pdf",
+  "office-protect": "protect_office",
+};
+
+const runWith = (toolId: AtomicToolId, passwords: PasswordSet): RunHandler => (paths, outputLocation, { runId }) =>
+  invoke<ToolResult>(commands[toolId] ?? "remove_password", { runId, request: passwordRequest(paths, passwords, outputLocation) });
+
+// Closing a file drops its own password, and closing every file drops them all.
+const ForgetClosedFiles = ({ files, passwords }: { files: string[]; passwords: PasswordState }) => {
+  useEffect(() => {
+    passwords.keepOnly(files);
+  }, [files]);
+  return null;
+};
 
 const securityActions = toolsForWorkspaceId("file-security");
 const securityIds = new Set<string>(securityActions.map((tool) => tool.id));
 
 export const SecurityWorkspaceView = ({ utility }: { utility: ToolDefinition }) => {
-  const [password, setPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
+  const passwords = usePasswordSet();
   const [activeToolId, setActiveToolId] = useState<AtomicToolId>(
     securityIds.has(utility.id) ? utility.id : "pdf-unlock",
   );
@@ -26,10 +40,10 @@ export const SecurityWorkspaceView = ({ utility }: { utility: ToolDefinition }) 
     : UtilityRegistry.find((item) => item.id === activeToolId) ?? utility;
   const isPdfProtection = activeUtility.id === "pdf-protect";
   const isOfficeProtection = activeUtility.id === "office-protect";
+  const mode: PasswordMode = isPdfProtection || isOfficeProtection ? "lock" : "unlock";
 
   useEffect(() => {
-    setPassword("");
-    setShowPassword(false);
+    passwords.clear();
   }, [activeUtility.id]);
 
   return (
@@ -37,34 +51,17 @@ export const SecurityWorkspaceView = ({ utility }: { utility: ToolDefinition }) 
       variant="workspace"
       sessionKey="file-security"
       utility={activeUtility}
-      onRun={(paths, outputLocation, { runId }) =>
-        isPdfProtection
-          ? invoke<ToolResult>("protect_pdf", { runId,
-              request: {
-                paths,
-                password,
-                outputLocation,
-              } satisfies PDFRequest,
-            })
-          : isOfficeProtection
-            ? invoke<ToolResult>("protect_office", { runId,
-                request: {
-                  paths,
-                  password,
-                  outputLocation,
-                } satisfies PasswordRequest,
-              })
-          : invoke<ToolResult>("remove_password", { runId,
-              request: {
-                paths,
-                password,
-                outputLocation,
-              } satisfies PasswordRequest,
-            })
-      }
+      onRun={runWith(activeUtility.id, passwords.set)}
+      retryWithPassword={(password) => runWith(activeUtility.id, { batch: password, overrides: {} })}
+      renderFileExtra={(path, selected, locked) => (
+        <FilePasswordCell mode={mode} path={path} passwords={passwords} selected={selected} disabled={locked} />
+      )}
     >
-      {({ files, run, loading, destination }) => (
+      {({ files, run, loading, destination }) => {
+        const readiness = passwordReadiness(mode, passwords, files);
+        return (
         <Card className="workspace-control-panel py-0">
+          <ForgetClosedFiles files={files} passwords={passwords} />
           <CardContent className="workspace-control-panel-content grid gap-4 p-4">
           <WorkspaceCommandRail
             actions={securityActions}
@@ -92,33 +89,13 @@ export const SecurityWorkspaceView = ({ utility }: { utility: ToolDefinition }) 
                 : "PDF, Word, Excel, and PowerPoint files"}
             </p>
           </div>
-          <div className="workspace-field">
-            <Label htmlFor="security-password">{isPdfProtection || isOfficeProtection ? "New password" : "Current password"}</Label>
-            <div className="workspace-password-field">
-              <Input
-                id="security-password"
-                type={showPassword ? "text" : "password"}
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                placeholder="Enter password"
-                autoComplete="off"
-              />
-              <Button
-                variant="ghost"
-                size="sm"
-                className="workspace-inline-button"
-                aria-label={`${showPassword ? "Hide" : "Show"} ${isPdfProtection || isOfficeProtection ? "new" : "current"} password`}
-                onClick={() => setShowPassword((visible) => !visible)}
-              >
-                {showPassword ? "Hide" : "Show"}
-              </Button>
-            </div>
-          </div>
+          <BatchPasswordFields mode={mode} passwords={passwords} files={files} />
           {destination}
+          {files.length > 0 && readiness.reason && <p className="workspace-note" data-testid="password-readiness">{readiness.reason}</p>}
           <Button
             variant="default"
             aria-label={activeUtility.id === "pdf-unlock" ? "Remove Password from selected files" : activeUtility.shortTitle}
-            disabled={loading || files.length === 0 || password.length === 0}
+            disabled={loading || files.length === 0 || !readiness.ready}
             onClick={run}
             className="workspace-primary-action"
           >
@@ -126,7 +103,8 @@ export const SecurityWorkspaceView = ({ utility }: { utility: ToolDefinition }) 
           </Button>
           </CardContent>
         </Card>
-      )}
+        );
+      }}
     </ToolScaffold>
   );
 };

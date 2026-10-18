@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,20 +34,37 @@ pub struct ToolRequest {
     pub output_location: OutputLocation,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PdfRequest {
-    pub paths: Vec<PathBuf>,
-    pub password: String,
-    pub output_location: OutputLocation,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// One password for the whole batch, plus per-file overrides keyed by the input path
+/// exactly as the request lists it. An override always wins over the batch password.
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PasswordRequest {
     pub paths: Vec<PathBuf>,
     pub password: String,
+    #[serde(default)]
+    pub password_overrides: HashMap<PathBuf, String>,
     pub output_location: OutputLocation,
+}
+
+impl PasswordRequest {
+    pub fn password_for(&self, path: &Path) -> &str {
+        self.password_overrides.get(path).unwrap_or(&self.password)
+    }
+}
+
+// Passwords must never reach logs, so Debug names the overridden files and hides every secret.
+impl fmt::Debug for PasswordRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut overridden = self.password_overrides.keys().collect::<Vec<_>>();
+        overridden.sort();
+        formatter
+            .debug_struct("PasswordRequest")
+            .field("paths", &self.paths)
+            .field("password", &"<redacted>")
+            .field("password_overrides", &overridden)
+            .field("output_location", &self.output_location)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,6 +102,7 @@ pub enum ErrorKind {
     Unavailable,
     LimitExceeded { limit: LimitKind },
     Processing,
+    WrongPassword,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -123,6 +141,10 @@ impl ToolError {
 
     pub fn limit_exceeded(limit: LimitKind, message: impl Into<String>) -> Self {
         Self::new(ErrorKind::LimitExceeded { limit }, message)
+    }
+
+    pub fn wrong_password(message: impl Into<String>) -> Self {
+        Self::new(ErrorKind::WrongPassword, message)
     }
 
     pub fn with_pointer(self, pointer: OutcomePointer) -> Self {
@@ -471,6 +493,36 @@ impl TryFrom<JobOutcomeWire> for JobOutcome {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn password_requests_prefer_the_override_and_never_print_a_password() {
+        let request: super::PasswordRequest = serde_json::from_value(serde_json::json!({
+            "paths": ["/in/a.pdf", "/in/b.pdf"],
+            "password": "batch-secret",
+            "passwordOverrides": { "/in/b.pdf": "own-secret" },
+            "outputLocation": "alongsideInput",
+        }))
+        .unwrap();
+        assert_eq!(request.password_for(std::path::Path::new("/in/a.pdf")), "batch-secret");
+        assert_eq!(request.password_for(std::path::Path::new("/in/b.pdf")), "own-secret");
+        let printed = format!("{request:?}");
+        assert!(!printed.contains("batch-secret") && !printed.contains("own-secret"), "{printed}");
+        assert!(printed.contains("/in/b.pdf"));
+
+        let without: super::PasswordRequest = serde_json::from_value(serde_json::json!({
+            "paths": ["/in/a.pdf"], "password": "batch-secret", "outputLocation": "alongsideInput",
+        }))
+        .unwrap();
+        assert!(without.password_overrides.is_empty());
+    }
+
+    #[test]
+    fn wrong_password_serializes_as_its_own_failure_kind() {
+        assert_eq!(
+            serde_json::to_value(super::ToolError::wrong_password("Wrong password.")).unwrap(),
+            serde_json::json!({ "kind": "wrongPassword", "message": "Wrong password.", "pointer": null }),
+        );
+    }
+
     use super::*;
     use crate::kit::office::OfficeProcessor;
 

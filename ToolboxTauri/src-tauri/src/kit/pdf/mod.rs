@@ -608,6 +608,8 @@ pub(crate) fn mutation_preflight(document: &Document, intent: PdfMutationIntent)
     Ok(preflight)
 }
 
+const WRONG_PDF_PASSWORD: &str = "Wrong password or unsupported encryption.";
+
 impl PDFProcessor {
     pub fn remove_password(input_path: PathBuf, password: &str, output_location: &OutputLocation) -> JobOutcome {
         if password.is_empty() {
@@ -636,7 +638,7 @@ impl PDFProcessor {
                 if doc.is_encrypted() {
                     // Loading with the wrong password can surface a still-encrypted
                     // document rather than an error; treat it as a rejection.
-                    return JobOutcome::failure(input_path, ToolError::invalid_input("Wrong password or unsupported encryption."));
+                    return JobOutcome::failure(input_path, ToolError::wrong_password(WRONG_PDF_PASSWORD));
                 }
                 let mut doc = doc;
                 let page_count = doc.get_pages().len();
@@ -668,7 +670,10 @@ impl PDFProcessor {
                     Err(e) => JobOutcome::failure(input_path, ToolError::processing(format!("Save failed: {}", e))),
                 }
             }
-            Err(e) => JobOutcome::failure(input_path, ToolError::invalid_input(format!("Wrong password or unsupported encryption: {}", e))),
+            Err(lopdf::Error::InvalidPassword | lopdf::Error::Decryption(lopdf::encryption::DecryptionError::IncorrectPassword)) => {
+                JobOutcome::failure(input_path, ToolError::wrong_password(WRONG_PDF_PASSWORD))
+            }
+            Err(e) => JobOutcome::failure(input_path, ToolError::invalid_input(format!("Unsupported or damaged encrypted PDF: {}", e))),
         }
     }
 
@@ -735,7 +740,7 @@ impl PDFProcessor {
 }
 
 /// Locate qpdf from an explicit override, the installed app resources, or PATH.
-fn find_qpdf() -> Option<PathBuf> {
+pub(crate) fn find_qpdf() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("TOOLBOX_QPDF_PATH") {
         let p = PathBuf::from(p);
         if p.is_file() {
@@ -897,6 +902,7 @@ mod tests {
 
         let unlocked = PDFProcessor::remove_password(protected.output_paths()[0].clone(), "battery staple", &OutputLocation::AlongsideInput);
         assert!(unlocked.error().is_some(), "wrong password must fail");
+        assert_eq!(unlocked.error().map(|error| &error.kind), Some(&crate::kit::contracts::ErrorKind::WrongPassword));
         assert!(unlocked.output_paths().is_empty());
 
         let _ = std::fs::remove_file(&protected.output_paths()[0]);

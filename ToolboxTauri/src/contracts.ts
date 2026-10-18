@@ -114,7 +114,7 @@ export type OutcomePointer =
 export type LimitKind = "fileSize" | "pageCount" | "time" | "decompression";
 
 export type ToolError = { message: string; pointer: OutcomePointer | null } & (
-  | { kind: "invalidInput" | "unavailable" | "processing" }
+  | { kind: "invalidInput" | "unavailable" | "processing" | "wrongPassword" }
   | { kind: "limitExceeded"; details: { limit: LimitKind } }
 );
 
@@ -253,12 +253,17 @@ export interface ToolRequest {
   outputLocation: OutputLocation;
 }
 
-export interface PDFRequest extends ToolRequest {
-  password: string;
+// One password for the whole batch plus per-file overrides keyed by input path.
+// It lives only in view memory: never in settings, storage, logs or analytics.
+export interface PasswordSet {
+  batch: string;
+  overrides: Readonly<Record<string, string>>;
 }
 
+// The native side uses a file's override first and the batch password otherwise.
 export interface PasswordRequest extends ToolRequest {
   password: string;
+  passwordOverrides: Record<string, string>;
 }
 
 export interface CompressImagesRequest extends ToolRequest {

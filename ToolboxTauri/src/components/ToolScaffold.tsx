@@ -40,7 +40,7 @@ export type WorkspaceSourceAction = () => void | Promise<void>;
 
 export type RunContext = { outputPath: string | null; runId: string };
 
-type RunHandler = (files: string[], outputLocation: OutputLocation, run: RunContext) => Promise<JobOutcome[]>;
+export type RunHandler = (files: string[], outputLocation: OutputLocation, run: RunContext) => Promise<JobOutcome[]>;
 
 type PerFileRun = { handler: RunHandler; outputLocation: OutputLocation };
 
@@ -52,6 +52,8 @@ interface ToolScaffoldProps {
     sessionKey?: string;
     onWorkspaceSourceAction?: (action: WorkspaceSourceAction | null) => void;
     showFileOrdering?: boolean;
+    renderFileExtra?: (path: string, selected: boolean, locked: boolean) => React.ReactNode;
+    retryWithPassword?: (password: string) => RunHandler;
     children: (props: {
         files: string[];
         outputLocation: OutputLocation;
@@ -66,7 +68,7 @@ interface ToolScaffoldProps {
     }) => React.ReactNode;
 }
 
-export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, children }: ToolScaffoldProps) => {
+export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, retryWithPassword, children }: ToolScaffoldProps) => {
     const [entries, setEntries] = useState<IntakeEntry[]>([]);
     const [selection, setSelection] = useState<ReadonlySet<string>>(() => new Set());
     const [anchor, setAnchor] = useState<string | null>(null);
@@ -256,12 +258,12 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         void runWith(blocked.handler, location);
     };
 
-    const retry = async (inputPath: string) => {
-        if (!perFileRun) return;
+    const retry = async (inputPath: string, handler = perFileRun?.handler) => {
+        if (!perFileRun || !handler) return;
         const generation = runGeneration.current;
         let retried: JobOutcome[];
         try {
-            retried = parseToolResult(await perFileRun.handler([inputPath], perFileRun.outputLocation, { outputPath: null, runId: crypto.randomUUID() }));
+            retried = parseToolResult(await handler([inputPath], perFileRun.outputLocation, { outputPath: null, runId: crypto.randomUUID() }));
         } catch (error) {
             retried = [failedOutcome(inputPath, 'processing', String(error))];
         }
@@ -524,6 +526,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                                         <span className="file-selection-detail">{wontRun ?? shortenHomePath(parentFolder(entry.path), home)}</span>
                                     </Button>
                                     {wontRun && <Badge variant="outline" className="file-selection-badge">Won't run</Badge>}
+                                    {!wontRun && renderFileExtra?.(entry.path, isSelected, loading)}
                                     {ordered && occurrence > 1 && <Badge variant="outline" className="file-selection-badge" data-tone="warning">{repeatLabel(occurrence)}</Badge>}
                                     {ordered && (
                                         <span className="file-selection-move">
@@ -650,7 +653,8 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 runningVerb={utility.runningVerb}
                 live={live}
                 namedByOutput={resultsNamedByOutput}
-                onRetry={perFileRun ? retry : undefined}
+                onRetry={perFileRun ? (inputPath) => retry(inputPath) : undefined}
+                onRetryWithPassword={perFileRun && retryWithPassword ? (inputPath, password) => retry(inputPath, retryWithPassword(password)) : undefined}
             />
 
             <BlockedDestinationDialog

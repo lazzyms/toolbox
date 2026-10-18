@@ -4,6 +4,11 @@ import type { JobOutcome, LimitKind, OutputSettings } from "../../src/contracts"
 import { ToolWorkspaceRegistry, UtilityRegistry, workspaceForTool } from "../../src/registry";
 import { RetiredToolIds } from "../../src/registry/retiredToolIds";
 
+// Lock asks for the new password twice, so fill every password field in the options panel.
+const fillPasswords = async (page: Page, password: string) => {
+    for (const field of await page.locator('.workspace-control-panel input[type="password"]').all()) await field.fill(password);
+};
+
 const fixturePath = path.resolve("src-tauri/icons/icon.png");
 const fixtureName = path.basename(fixturePath);
 const pdfFixturePath = path.resolve("tests/fixtures/document.pdf");
@@ -1181,7 +1186,7 @@ test("remove password exposes one cross-format document tool", async ({ page }) 
     await page.goto("/");
     await page.getByRole("button", { name: "Open Remove Password" }).click();
     await chooseFixture(page, pdfFixturePath);
-    await page.locator('input[type="password"]').fill("test-password");
+    await fillPasswords(page, "test-password");
     await expect(page.locator(".workspace-primary-action")).toBeEnabled();
 });
 
@@ -1203,7 +1208,7 @@ test("Office protection exposes DOCX and XLSX protection", async ({ page }) => {
     await expect(page.getByText("Add a password to selected DOCX and XLSX files. The originals stay untouched.", { exact: true })).toBeVisible();
     await expect(page.getByText("DOCX and XLSX files only", { exact: true })).toBeVisible();
     await chooseFixture(page, "/local/document.docx");
-    await page.locator('input[type="password"]').fill("test-password");
+    await fillPasswords(page, "test-password");
     await expect(page.locator(".workspace-primary-action")).toBeEnabled();
 });
 
@@ -1218,7 +1223,7 @@ const succeeded = (inputPath: string, outputPaths: string[], extra: Partial<Extr
     ...extra,
 });
 
-const failed = (inputPath: string, kind: "invalidInput" | "unavailable" | "processing", message: string, extra: Partial<Extract<MockOutcome, { state: "failed" }>> = {}): MockOutcome => ({
+const failed = (inputPath: string, kind: "invalidInput" | "unavailable" | "limitExceeded" | "processing" | "wrongPassword", message: string, extra: Partial<Extract<MockOutcome, { state: "failed" }>> = {}): MockOutcome => ({
     inputPath,
     outputPaths: [],
     detail: "",
@@ -1635,7 +1640,7 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
     await chooseFixture(page, selectedFixturePath);
 
     if (utility.id === "pdf-unlock" || utility.id === "pdf-protect" || utility.id === "office-protect") {
-        await page.locator('input[type="password"]').fill("test-password");
+        await fillPasswords(page, "test-password");
     }
     if (workspaceForTool(utility.id)?.id === "pdf-editor") {
         if (utility.id === "pdf-page-numbers") await page.getByRole("button", { name: "Page numbers", exact: true }).click();
@@ -1961,7 +1966,7 @@ test.describe("per-run destination", () => {
         await page.getByRole("button", { name: "Open Protect PDF" }).click();
         await chooseFixture(page, pdfFixturePath);
         await expect(page.getByRole("region", { name: "Destination" }).getByTestId("run-destination-example")).toHaveText("document-protected.pdf");
-        await page.locator('input[type="password"]').fill("test-password");
+        await fillPasswords(page, "test-password");
         await page.locator(".workspace-primary-action").click();
         await page.getByRole("alertdialog").getByRole("button", { name: "Save next to originals" }).click();
         await expect(page.getByText("Test output", { exact: true }).last()).toBeVisible();

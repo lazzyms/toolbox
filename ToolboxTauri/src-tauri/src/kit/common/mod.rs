@@ -1,5 +1,7 @@
 pub mod batch_runner;
 pub mod limits;
+#[cfg(all(test, unix))]
+pub mod fake_helper;
 
 use std::fs::{File, OpenOptions};
 use std::io;

@@ -16,6 +16,7 @@ export interface RowView {
     revealOutput: string | null;
     pointer: RowPointer | null;
     canRetry: boolean;
+    canRetryWithPassword: boolean;
 }
 
 export const fileName = (path: string) => path.split(/[\\/]/).pop() || path;
@@ -37,7 +38,10 @@ const spokenKinds: Record<ErrorKind, string> = {
     unavailable: "Unavailable",
     limitExceeded: "Failed, over the limit",
     processing: "Failed while processing",
+    wrongPassword: "Failed, wrong password",
 };
+
+export const wrongPasswordDetail = "The password didn't open this file. Check it, or try the password this file was sent with.";
 
 export const warningText = (warning: OutcomeWarning): string => {
     switch (warning.code) {
@@ -85,6 +89,7 @@ export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput =
                 revealOutput: first,
                 pointer: null,
                 canRetry: false,
+                canRetryWithPassword: false,
             };
         }
         case "skipped":
@@ -98,20 +103,23 @@ export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput =
                 revealOutput: null,
                 pointer: pointerView(outcome.reason.pointer),
                 canRetry: false,
+                canRetryWithPassword: false,
             };
         case "failed": {
             const unavailable = outcome.failure.kind === "unavailable";
+            const wrongPassword = outcome.failure.kind === "wrongPassword";
             return {
                 ...input,
                 tone: unavailable ? "skip" : "fail",
                 stateLabel: unavailable ? "Unavailable" : "Failed",
                 spokenState: spokenKinds[outcome.failure.kind],
-                detailLines: nonEmpty([outcome.failure.message, ...warnings]),
+                detailLines: nonEmpty([wrongPassword ? wrongPasswordDetail : outcome.failure.message, ...warnings]),
                 openOutput: null,
                 revealOutput: outcome.outputPaths[0] ?? null,
                 pointer: pointerView(outcome.failure.pointer),
                 // A retry reuses the run's output location, so it cannot fix a failure that points at that location.
                 canRetry: isRetryable(outcome.failure) && outcome.failure.pointer?.kind !== "outputFolder",
+                canRetryWithPassword: wrongPassword,
             };
         }
     }

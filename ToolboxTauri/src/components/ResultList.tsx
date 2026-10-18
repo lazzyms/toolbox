@@ -1,11 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
-import { Check, CircleMinus, CircleX, Clock, LoaderCircle, RotateCcw, TriangleAlert } from "lucide-react";
+import { Check, CircleMinus, CircleX, Clock, KeyRound, LoaderCircle, RotateCcw, TriangleAlert } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import type { JobOutcome, OutcomePointer, Progress } from "../contracts";
 import { liveFiles, type LiveFile, type LiveRun } from "./liveRun";
 import { fileName, resultSummary, resultTally, rowView, type RowTone } from "./resultRow";
+import { PasswordRetryForm } from "./PasswordFields";
 
 type RowAction = "open" | "reveal" | "retry";
 
@@ -59,16 +60,19 @@ interface ResultListProps {
     live: LiveRun | null;
     namedByOutput?: boolean;
     onRetry?: (inputPath: string) => Promise<void>;
+    onRetryWithPassword?: (inputPath: string, password: string) => Promise<void>;
 }
 
-export const ResultList = ({ results, progress, loading, resultVerb, runningVerb, live, namedByOutput = false, onRetry }: ResultListProps) => {
+export const ResultList = ({ results, progress, loading, resultVerb, runningVerb, live, namedByOutput = false, onRetry, onRetryWithPassword }: ResultListProps) => {
     const [actionStates, setActionStates] = useState<Record<number, RowActionState>>({});
+    const [passwordRow, setPasswordRow] = useState<number | null>(null);
     const resultSetGeneration = useRef(0);
 
     useEffect(() => {
         const generation = resultSetGeneration.current + 1;
         resultSetGeneration.current = generation;
         setActionStates({});
+        setPasswordRow(null);
         return () => {
             if (resultSetGeneration.current === generation) resultSetGeneration.current += 1;
         };
@@ -150,7 +154,21 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
                             {state.pending === "retry" ? "Retrying..." : "Retry"}
                         </Button>
                     )}
+                    {view.canRetryWithPassword && onRetryWithPassword && !live && (
+                        <Button variant="outline" size="xs" aria-expanded={passwordRow === index} disabled={busy} onClick={() => setPasswordRow(passwordRow === index ? null : index)}>
+                            <KeyRound />
+                            Try another password
+                        </Button>
+                    )}
                 </span>
+                {view.canRetryWithPassword && onRetryWithPassword && !live && passwordRow === index && (
+                    <PasswordRetryForm
+                        name={name}
+                        busy={busy}
+                        onRetry={(password) => void runAction(index, "retry", () => onRetryWithPassword(result.inputPath, password))}
+                        onCancel={() => setPasswordRow(null)}
+                    />
+                )}
                 {state.error && <p className="result-action-error" role="alert">{state.error}</p>}
             </li>
         );
