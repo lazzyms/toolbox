@@ -12,10 +12,35 @@ use crate::kit::images::tools;
 use crate::kit::pdf::{editor, metadata, remaining, scene, PDFProcessor};
 use crate::kit::vision;
 use crate::kit::contracts::{command_supports_preview, validate_command_inputs, validate_page_selection, CompressImagesRequest, ConvertImagesRequest, OutcomeState, PasswordRequest, PdfRequest, ToolError};
-use crate::kit::common::batch_runner::{BatchRunner, FolderCheck};
+use crate::kit::common::batch_runner::{BatchRunner, FileEvent, FolderCheck, RunEvents};
 use crate::kit::password::PasswordProcessor;
 use crate::kit::office::OfficeProcessor;
 use std::sync::Arc;
+
+const BATCH_PROGRESS_EVENT: &str = "batch-progress";
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BatchProgress<'a> {
+    run_id: &'a str,
+    #[serde(flatten)]
+    event: &'a FileEvent,
+}
+
+// Callers that send no runId keep the old silent behavior.
+impl<'de> tauri::ipc::CommandArg<'de, tauri::Wry> for RunEvents {
+    fn from_command(command: tauri::ipc::CommandItem<'de, tauri::Wry>) -> Result<Self, tauri::ipc::InvokeError> {
+        let webview = command.message.webview();
+        let run_id = <Option<String> as tauri::ipc::CommandArg<'de, tauri::Wry>>::from_command(tauri::ipc::CommandItem { key: "runId", ..command })?;
+        Ok(match run_id {
+            None => RunEvents::silent(),
+            Some(run_id) => RunEvents::new(move |event| {
+                use tauri::Emitter;
+                let _ = webview.emit(BATCH_PROGRESS_EVENT, BatchProgress { run_id: &run_id, event: &event });
+            }),
+        })
+    }
+}
 
 #[tauri::command]
 fn check_output_folder(folder: std::path::PathBuf) -> FolderCheck {
@@ -23,33 +48,33 @@ fn check_output_folder(folder: std::path::PathBuf) -> FolderCheck {
 }
 
 #[tauri::command]
-async fn remove_password(request: PasswordRequest) -> Vec<JobOutcome> {
+async fn remove_password(events: RunEvents, request: PasswordRequest) -> Vec<JobOutcome> {
     let request = Arc::new(request);
-    BatchRunner::run("remove_password", request.paths.clone(), &request.output_location, &request, |request, path| {
+    BatchRunner::run(&events, "remove_password", request.paths.clone(), &request.output_location, &request, |request, path| {
         PasswordProcessor::remove_password(path, &request.password, &request.output_location)
     })
 }
 
 #[tauri::command]
-async fn protect_pdf(request: PdfRequest) -> Vec<JobOutcome> {
+async fn protect_pdf(events: RunEvents, request: PdfRequest) -> Vec<JobOutcome> {
     let request = Arc::new(request);
-    BatchRunner::run("protect_pdf", request.paths.clone(), &request.output_location, &request, |request, path| {
+    BatchRunner::run(&events, "protect_pdf", request.paths.clone(), &request.output_location, &request, |request, path| {
         PDFProcessor::protect(path, &request.password, &request.output_location)
     })
 }
 
 #[tauri::command]
-async fn protect_office(request: PasswordRequest) -> Vec<JobOutcome> {
+async fn protect_office(events: RunEvents, request: PasswordRequest) -> Vec<JobOutcome> {
     let request = Arc::new(request);
-    BatchRunner::run("protect_office", request.paths.clone(), &request.output_location, &request, |request, path| {
+    BatchRunner::run(&events, "protect_office", request.paths.clone(), &request.output_location, &request, |request, path| {
         OfficeProcessor::protect(path, &request.password, &request.output_location)
     })
 }
 
 #[tauri::command]
-async fn compress_images(request: CompressImagesRequest) -> Vec<JobOutcome> {
+async fn compress_images(events: RunEvents, request: CompressImagesRequest) -> Vec<JobOutcome> {
     let request = Arc::new(request);
-    BatchRunner::run("compress_images", request.paths.clone(), &request.output_location, &request, |request, path| {
+    BatchRunner::run(&events, "compress_images", request.paths.clone(), &request.output_location, &request, |request, path| {
         ImageProcessor::run(path, ImageOptions {
             target_format: None,
             quality: if request.lossless { 0 } else { request.quality },
@@ -61,7 +86,7 @@ async fn compress_images(request: CompressImagesRequest) -> Vec<JobOutcome> {
 }
 
 #[tauri::command]
-async fn convert_images(request: ConvertImagesRequest) -> Vec<JobOutcome> {
+async fn convert_images(events: RunEvents, request: ConvertImagesRequest) -> Vec<JobOutcome> {
     let img_format = match tools::parse_output_format(&request.format) {
         Ok(format) => format,
         Err(error) => {
@@ -73,7 +98,7 @@ async fn convert_images(request: ConvertImagesRequest) -> Vec<JobOutcome> {
     };
 
     let request = Arc::new(request);
-    BatchRunner::run("convert_images", request.paths.clone(), &request.output_location, &request, move |request, path| {
+    BatchRunner::run(&events, "convert_images", request.paths.clone(), &request.output_location, &request, move |request, path| {
         ImageProcessor::run(path, ImageOptions {
             target_format: Some(img_format),
             quality: 80,
@@ -125,99 +150,99 @@ async fn preview_pdf_scene_pages(request: scene::PreviewPagesRequest) -> Result<
 }
 
 #[tauri::command]
-async fn export_pdf_scene(request: scene::ExportRequest) -> Vec<JobOutcome> {
+async fn export_pdf_scene(events: RunEvents, request: scene::ExportRequest) -> Vec<JobOutcome> {
     let request = Arc::new(request);
-    BatchRunner::run("export_pdf_scene", request.paths.clone(), &request.output_location, &request, scene::export)
+    BatchRunner::run(&events, "export_pdf_scene", request.paths.clone(), &request.output_location, &request, scene::export)
 }
 
 #[tauri::command]
-async fn crop_pdf(request: editor::CropPdfRequest) -> Vec<JobOutcome> {
+async fn crop_pdf(events: RunEvents, request: editor::CropPdfRequest) -> Vec<JobOutcome> {
     let explicit_pages = match &request.scope {
         editor::PageScope::All => None,
         editor::PageScope::Selected { pages } => Some(pages.as_slice()),
     };
     if let Err(outcomes) = validate_page_selection("crop_pdf", &request.paths, explicit_pages) { return outcomes; }
     let request = Arc::new(request);
-    BatchRunner::run("crop_pdf", request.paths.clone(), &request.output_location, &request, editor::crop)
+    BatchRunner::run(&events, "crop_pdf", request.paths.clone(), &request.output_location, &request, editor::crop)
 }
 
 #[tauri::command]
-async fn sign_pdf(request: editor::SignPdfRequest) -> Vec<JobOutcome> {
+async fn sign_pdf(events: RunEvents, request: editor::SignPdfRequest) -> Vec<JobOutcome> {
     let explicit_pages = match &request.scope {
         editor::PageScope::All => None,
         editor::PageScope::Selected { pages } => Some(pages.as_slice()),
     };
     if let Err(outcomes) = validate_page_selection("sign_pdf", &request.paths, explicit_pages) { return outcomes; }
     let request = Arc::new(request);
-    BatchRunner::run("sign_pdf", request.paths.clone(), &request.output_location, &request, editor::sign)
+    BatchRunner::run(&events, "sign_pdf", request.paths.clone(), &request.output_location, &request, editor::sign)
 }
 
 #[tauri::command]
-async fn edit_pdf(request: editor::EditPdfRequest) -> Vec<JobOutcome> {
+async fn edit_pdf(events: RunEvents, request: editor::EditPdfRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_page_selection("edit_pdf", &request.paths, request.pages.as_deref()) { return outcomes; }
     let request = Arc::new(request);
-    BatchRunner::run("edit_pdf", request.paths.clone(), &request.output_location, &request, editor::edit)
+    BatchRunner::run(&events, "edit_pdf", request.paths.clone(), &request.output_location, &request, editor::edit)
 }
 
 #[tauri::command]
-async fn edit_pdf_session(request: editor::PdfEditSessionRequest) -> Vec<JobOutcome> {
+async fn edit_pdf_session(events: RunEvents, request: editor::PdfEditSessionRequest) -> Vec<JobOutcome> {
     let request = Arc::new(request);
-    BatchRunner::run("edit_pdf_session", request.paths.clone(), &request.output_location, &request, editor::apply_session)
+    BatchRunner::run(&events, "edit_pdf_session", request.paths.clone(), &request.output_location, &request, editor::apply_session)
 }
 
 #[tauri::command]
-async fn organize_pdf(request: editor::OrganizePdfRequest) -> Vec<JobOutcome> {
+async fn organize_pdf(events: RunEvents, request: editor::OrganizePdfRequest) -> Vec<JobOutcome> {
     let explicit_pages = match &request.scope {
         editor::PageScope::All => None,
         editor::PageScope::Selected { pages } => Some(pages.as_slice()),
     };
     if let Err(outcomes) = validate_page_selection("organize_pdf", &request.paths, explicit_pages) { return outcomes; }
     let request = Arc::new(request);
-    BatchRunner::run("organize_pdf", request.paths.clone(), &request.output_location, &request, editor::organize)
+    BatchRunner::run(&events, "organize_pdf", request.paths.clone(), &request.output_location, &request, editor::organize)
 }
 
 #[tauri::command]
-async fn add_pdf_pages(request: editor::AddPdfPagesRequest) -> Vec<JobOutcome> {
+async fn add_pdf_pages(events: RunEvents, request: editor::AddPdfPagesRequest) -> Vec<JobOutcome> {
     let request = Arc::new(request);
-    BatchRunner::run("add_pdf_pages", request.paths.clone(), &request.output_location, &request, editor::add_pages)
+    BatchRunner::run(&events, "add_pdf_pages", request.paths.clone(), &request.output_location, &request, editor::add_pages)
 }
 
 #[tauri::command]
-async fn add_page_numbers(request: remaining::PageOverlayRequest) -> Vec<JobOutcome> {
+async fn add_page_numbers(events: RunEvents, request: remaining::PageOverlayRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_page_selection("add_page_numbers", &request.paths, request.pages.as_deref()) { return outcomes; }
     let request = Arc::new(request);
-    BatchRunner::run("add_page_numbers", request.paths.clone(), &request.output_location, &request, remaining::add_page_numbers)
+    BatchRunner::run(&events, "add_page_numbers", request.paths.clone(), &request.output_location, &request, remaining::add_page_numbers)
 }
 
 #[tauri::command]
-async fn watermark_pdf(request: remaining::PageOverlayRequest) -> Vec<JobOutcome> {
+async fn watermark_pdf(events: RunEvents, request: remaining::PageOverlayRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_page_selection("watermark_pdf", &request.paths, request.pages.as_deref()) { return outcomes; }
     let request = Arc::new(request);
-    BatchRunner::run("watermark_pdf", request.paths.clone(), &request.output_location, &request, remaining::watermark)
+    BatchRunner::run(&events, "watermark_pdf", request.paths.clone(), &request.output_location, &request, remaining::watermark)
 }
 
 #[tauri::command]
-async fn compress_pdf(request: remaining::CompressPdfRequest) -> Vec<JobOutcome> {
+async fn compress_pdf(events: RunEvents, request: remaining::CompressPdfRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_command_inputs("compress_pdf", &request.paths) { return outcomes; }
     let request = Arc::new(request);
-    BatchRunner::run("compress_pdf", request.paths.clone(), &request.output_location, &request, remaining::compress)
+    BatchRunner::run(&events, "compress_pdf", request.paths.clone(), &request.output_location, &request, remaining::compress)
 }
 
 #[tauri::command]
-async fn remove_pdf_pages(request: remaining::PageSelectionRequest) -> Vec<JobOutcome> {
+async fn remove_pdf_pages(events: RunEvents, request: remaining::PageSelectionRequest) -> Vec<JobOutcome> {
     let explicit_pages = request.page_ranges.as_deref().filter(|range| !range.trim().is_empty()).is_none().then_some(request.pages.as_slice());
     if let Err(outcomes) = validate_page_selection("remove_pdf_pages", &request.paths, explicit_pages) { return outcomes; }
     let request = Arc::new(request);
-    BatchRunner::run("remove_pdf_pages", request.paths.clone(), &request.output_location, &request, remaining::remove_pages)
+    BatchRunner::run(&events, "remove_pdf_pages", request.paths.clone(), &request.output_location, &request, remaining::remove_pages)
 }
 
 #[tauri::command]
-async fn extract_pdf_pages(request: remaining::PageSelectionRequest) -> Vec<JobOutcome> {
+async fn extract_pdf_pages(events: RunEvents, request: remaining::PageSelectionRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_command_inputs("extract_pdf_pages", &request.paths) { return outcomes; }
     let explicit_pages = request.page_ranges.as_deref().filter(|range| !range.trim().is_empty()).is_none().then_some(request.pages.as_slice());
     if let Err(outcomes) = validate_page_selection("extract_pdf_pages", &request.paths, explicit_pages) { return outcomes; }
     let request = Arc::new(request);
-    BatchRunner::run("extract_pdf_pages", request.paths.clone(), &request.output_location, &request, remaining::extract_pages)
+    BatchRunner::run(&events, "extract_pdf_pages", request.paths.clone(), &request.output_location, &request, remaining::extract_pages)
 }
 
 #[tauri::command]
@@ -233,34 +258,34 @@ async fn run_merge_pdfs(request: &remaining::MergePdfRequest) -> Vec<JobOutcome>
 }
 
 #[tauri::command]
-async fn split_pdf(request: remaining::PageSelectionRequest) -> Vec<JobOutcome> {
+async fn split_pdf(events: RunEvents, request: remaining::PageSelectionRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_command_inputs("split_pdf", &request.paths) { return outcomes; }
     let request = Arc::new(request);
-    BatchRunner::run("split_pdf", request.paths.clone(), &request.output_location, &request, remaining::split)
+    BatchRunner::run(&events, "split_pdf", request.paths.clone(), &request.output_location, &request, remaining::split)
 }
 
 #[tauri::command]
-async fn pdf_to_images(request: remaining::PdfToImagesRequest) -> Vec<JobOutcome> {
+async fn pdf_to_images(events: RunEvents, request: remaining::PdfToImagesRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_command_inputs("pdf_to_images", &request.paths) { return outcomes; }
     if let Err(outcomes) = validate_page_selection("pdf_to_images", &request.paths, request.pages.as_deref()) { return outcomes; }
     let request = Arc::new(request);
-    BatchRunner::run("pdf_to_images", request.paths.clone(), &request.output_location, &request, remaining::to_images)
+    BatchRunner::run(&events, "pdf_to_images", request.paths.clone(), &request.output_location, &request, remaining::to_images)
 }
 
 #[tauri::command]
-async fn pdf_to_text(request: remaining::PdfToTextRequest) -> Vec<JobOutcome> {
+async fn pdf_to_text(events: RunEvents, request: remaining::PdfToTextRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_command_inputs("pdf_to_text", &request.paths) { return outcomes; }
     if let Err(outcomes) = validate_page_selection("pdf_to_text", &request.paths, request.pages.as_deref()) { return outcomes; }
     let request = Arc::new(request);
-    BatchRunner::run("pdf_to_text", request.paths.clone(), &request.output_location, &request, remaining::to_text)
+    BatchRunner::run(&events, "pdf_to_text", request.paths.clone(), &request.output_location, &request, remaining::to_text)
 }
 
 #[tauri::command]
-async fn extract_pdf_images(request: remaining::PdfToTextRequest) -> Vec<JobOutcome> {
+async fn extract_pdf_images(events: RunEvents, request: remaining::PdfToTextRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_command_inputs("extract_pdf_images", &request.paths) { return outcomes; }
     if let Err(outcomes) = validate_page_selection("extract_pdf_images", &request.paths, request.pages.as_deref()) { return outcomes; }
     let request = Arc::new(request);
-    BatchRunner::run("extract_pdf_images", request.paths.clone(), &request.output_location, &request, remaining::extract_images)
+    BatchRunner::run(&events, "extract_pdf_images", request.paths.clone(), &request.output_location, &request, remaining::extract_images)
 }
 
 #[tauri::command]
@@ -276,51 +301,51 @@ async fn run_images_to_pdf(request: &remaining::ImagesToPdfRequest) -> Vec<JobOu
 }
 
 #[tauri::command]
-async fn ocr_pdf(request: vision::VisionRequest) -> Vec<JobOutcome> {
+async fn ocr_pdf(events: RunEvents, request: vision::VisionRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_command_inputs("ocr_pdf", &request.paths) { return outcomes; }
     if let Err(outcomes) = validate_page_selection("ocr_pdf", &request.paths, request.pages.as_deref()) { return outcomes; }
     let request = Arc::new(request);
-    BatchRunner::run("ocr_pdf", request.paths.clone(), &request.output_location, &request, vision::ocr_pdf)
+    BatchRunner::run(&events, "ocr_pdf", request.paths.clone(), &request.output_location, &request, vision::ocr_pdf)
 }
 #[tauri::command]
-async fn blur_faces(request: vision::VisionRequest) -> Vec<JobOutcome> {
+async fn blur_faces(events: RunEvents, request: vision::VisionRequest) -> Vec<JobOutcome> {
     let request = Arc::new(request);
-    BatchRunner::run("blur_faces", request.paths.clone(), &request.output_location, &request, vision::blur_faces)
+    BatchRunner::run(&events, "blur_faces", request.paths.clone(), &request.output_location, &request, vision::blur_faces)
 }
 #[tauri::command]
-async fn remove_image_background(request: vision::VisionRequest) -> Vec<JobOutcome> {
+async fn remove_image_background(events: RunEvents, request: vision::VisionRequest) -> Vec<JobOutcome> {
     let request = Arc::new(request);
-    BatchRunner::run("remove_image_background", request.paths.clone(), &request.output_location, &request, vision::remove_background)
+    BatchRunner::run(&events, "remove_image_background", request.paths.clone(), &request.output_location, &request, vision::remove_background)
 }
 #[tauri::command]
-async fn resize_images(request: tools::ResizeRequest) -> Vec<JobOutcome> {
+async fn resize_images(events: RunEvents, request: tools::ResizeRequest) -> Vec<JobOutcome> {
     let request = Arc::new(request);
-    BatchRunner::run("resize_images", request.paths.clone(), &request.output_location, &request, tools::resize)
+    BatchRunner::run(&events, "resize_images", request.paths.clone(), &request.output_location, &request, tools::resize)
 }
 #[tauri::command]
-async fn rotate_images(request: tools::RotateRequest) -> Vec<JobOutcome> {
+async fn rotate_images(events: RunEvents, request: tools::RotateRequest) -> Vec<JobOutcome> {
     let request = Arc::new(request);
-    BatchRunner::run("rotate_images", request.paths.clone(), &request.output_location, &request, tools::rotate)
+    BatchRunner::run(&events, "rotate_images", request.paths.clone(), &request.output_location, &request, tools::rotate)
 }
 #[tauri::command]
-async fn crop_images(request: tools::CropRequest) -> Vec<JobOutcome> {
+async fn crop_images(events: RunEvents, request: tools::CropRequest) -> Vec<JobOutcome> {
     let request = Arc::new(request);
-    BatchRunner::run("crop_images", request.paths.clone(), &request.output_location, &request, tools::crop)
+    BatchRunner::run(&events, "crop_images", request.paths.clone(), &request.output_location, &request, tools::crop)
 }
 #[tauri::command]
-async fn adjust_image_tone(request: tools::ToneRequest) -> Vec<JobOutcome> {
+async fn adjust_image_tone(events: RunEvents, request: tools::ToneRequest) -> Vec<JobOutcome> {
     let request = Arc::new(request);
-    BatchRunner::run("adjust_image_tone", request.paths.clone(), &request.output_location, &request, tools::tone)
+    BatchRunner::run(&events, "adjust_image_tone", request.paths.clone(), &request.output_location, &request, tools::tone)
 }
 #[tauri::command]
-async fn watermark_images(request: tools::WatermarkRequest) -> Vec<JobOutcome> {
+async fn watermark_images(events: RunEvents, request: tools::WatermarkRequest) -> Vec<JobOutcome> {
     let request = Arc::new(request);
-    BatchRunner::run("watermark_images", request.paths.clone(), &request.output_location, &request, tools::watermark)
+    BatchRunner::run(&events, "watermark_images", request.paths.clone(), &request.output_location, &request, tools::watermark)
 }
 #[tauri::command]
-async fn generate_icon_set(request: tools::IconSetRequest) -> Vec<JobOutcome> {
+async fn generate_icon_set(events: RunEvents, request: tools::IconSetRequest) -> Vec<JobOutcome> {
     let request = Arc::new(request);
-    BatchRunner::run("generate_icon_set", request.paths.clone(), &request.output_location, &request, tools::icon_set)
+    BatchRunner::run(&events, "generate_icon_set", request.paths.clone(), &request.output_location, &request, tools::icon_set)
 }
 #[tauri::command]
 async fn create_gif(app: tauri::AppHandle, request: tools::GifCreateRequest) -> Vec<JobOutcome> {
@@ -334,9 +359,9 @@ async fn run_create_gif(request: &tools::GifCreateRequest) -> Vec<JobOutcome> {
     aggregate_outcomes("create_gif", &request.paths.clone(), move || note_renamed(tools::gif_create(&request), request.output_path.as_deref()))
 }
 #[tauri::command]
-async fn extract_gif_frames(request: tools::GifExtractRequest) -> Vec<JobOutcome> {
+async fn extract_gif_frames(events: RunEvents, request: tools::GifExtractRequest) -> Vec<JobOutcome> {
     let request = Arc::new(request);
-    BatchRunner::run("extract_gif_frames", request.paths.clone(), &request.output_location, &request, tools::gif_extract)
+    BatchRunner::run(&events, "extract_gif_frames", request.paths.clone(), &request.output_location, &request, tools::gif_extract)
 }
 #[tauri::command]
 async fn process_tiff_pages(app: tauri::AppHandle, request: tools::TiffRequest) -> Vec<JobOutcome> {
@@ -350,9 +375,9 @@ async fn run_process_tiff_pages(request: &tools::TiffRequest) -> Vec<JobOutcome>
     aggregate_outcomes("process_tiff_pages", &request.paths.clone(), move || note_renamed(tools::tiff(&request), request.output_path.as_deref()))
 }
 #[tauri::command]
-async fn image_metadata(request: tools::MetadataRequest) -> Vec<JobOutcome> {
+async fn image_metadata(events: RunEvents, request: tools::MetadataRequest) -> Vec<JobOutcome> {
     let request = Arc::new(request);
-    BatchRunner::run("image_metadata", request.paths.clone(), &request.output_location, &request, tools::strip_metadata)
+    BatchRunner::run(&events, "image_metadata", request.paths.clone(), &request.output_location, &request, tools::strip_metadata)
 }
 #[tauri::command]
 fn inspect_image_metadata(request: tools::MetadataRequest) -> Vec<Result<tools::MetadataReport, String>> { request.paths.into_iter().map(tools::inspect_metadata).collect() }
@@ -367,9 +392,9 @@ fn inspect_tiff_pages(request: tools::TiffPreviewRequest) -> Result<Vec<tools::I
 fn inspect_image_edit_preview(request: tools::ImageEditPreviewRequest) -> Result<tools::ImagePreview, String> { tools::inspect_edit_preview(&request) }
 
 #[tauri::command]
-async fn export_image_edit_plan(request: tools::ImageEditExportRequest) -> Vec<JobOutcome> {
+async fn export_image_edit_plan(events: RunEvents, request: tools::ImageEditExportRequest) -> Vec<JobOutcome> {
     let request = Arc::new(request);
-    BatchRunner::run("export_image_edit_plan", request.paths.clone(), &request.plan.output_location, &request, |request, path| tools::export_edit_plan(&request.plan, path))
+    BatchRunner::run(&events, "export_image_edit_plan", request.paths.clone(), &request.plan.output_location, &request, |request, path| tools::export_edit_plan(&request.plan, path))
 }
 
 fn aggregate_outcomes<F>(command: &str, paths: &[std::path::PathBuf], job: F) -> Vec<JobOutcome>
@@ -679,7 +704,7 @@ mod command_tests {
         let root = sandbox("crop-empty-selection");
         let input = root.join("source.pdf"); make_pdf(&input, 1);
         let original = std::fs::read(&input).unwrap();
-        let outcomes = tauri::async_runtime::block_on(crop_pdf(CropPdfRequest {
+        let outcomes = tauri::async_runtime::block_on(crop_pdf(RunEvents::silent(), CropPdfRequest {
             paths: vec![input.clone()],
             rectangle: PdfRect { x: 1.0, y: 1.0, width: 100.0, height: 100.0 },
             scope: PageScope::Selected { pages: vec![] },
@@ -702,7 +727,7 @@ mod command_tests {
         let root = sandbox("sign-empty-selection");
         let input = root.join("source.pdf");
         make_pdf(&input, 1);
-        let outcomes = tauri::async_runtime::block_on(sign_pdf(SignPdfRequest {
+        let outcomes = tauri::async_runtime::block_on(sign_pdf(RunEvents::silent(), SignPdfRequest {
             paths: vec![input.clone()],
             page: 0,
             text: "signed".to_string(),
@@ -724,7 +749,7 @@ mod command_tests {
     fn organize_command_rejects_empty_selected_scope_before_processing() {
         let root = sandbox("organize-empty-selection");
         let input = root.join("source.pdf"); make_pdf(&input, 1);
-        let outcomes = tauri::async_runtime::block_on(organize_pdf(OrganizePdfRequest {
+        let outcomes = tauri::async_runtime::block_on(organize_pdf(RunEvents::silent(), OrganizePdfRequest {
             paths: vec![input.clone()], page_order: vec![], delete_pages: vec![], rotate_pages: vec![],
             scope: PageScope::Selected { pages: vec![] }, output_location: location(&root, "organize-empty"),
         }));
@@ -835,7 +860,7 @@ mod command_tests {
         let good = root.join("good.pdf");
         make_pdf(&good, 1);
         let originals = [Original::of(offender), Original::of(&good)];
-        let outcomes = tauri::async_runtime::block_on(pdf_to_text(PdfToTextRequest {
+        let outcomes = tauri::async_runtime::block_on(pdf_to_text(RunEvents::silent(), PdfToTextRequest {
             paths: vec![offender.clone(), good.clone()], pages: None, output_location: location(root, name),
         }));
         for original in &originals { original.assert_untouched(); }
@@ -881,7 +906,7 @@ mod command_tests {
         let good = root.join("good.png");
         write_png(&good, 32, 9);
         let originals = [std::fs::read(&offender).unwrap(), std::fs::read(&good).unwrap()];
-        let outcomes = tauri::async_runtime::block_on(image_metadata(MetadataRequest {
+        let outcomes = tauri::async_runtime::block_on(image_metadata(RunEvents::silent(), MetadataRequest {
             paths: vec![offender.clone(), good.clone()], output_location: location(&root, "out"),
         }));
         assert_eq!([std::fs::read(&offender).unwrap(), std::fs::read(&good).unwrap()], originals);
@@ -903,7 +928,7 @@ mod command_tests {
         let limits = crate::kit::common::limits::ToolLimits { max_duration: std::time::Duration::from_secs(1), ..crate::kit::common::limits::recorded("pdf_to_text").unwrap() };
         let job_released = Arc::clone(&released);
         let job_slow = slow.clone();
-        let outcomes = BatchRunner::run_with_limits("pdf_to_text", request.paths.clone(), &request.output_location, Some(limits), &request, move |request, path| {
+        let outcomes = BatchRunner::run_with_limits(&RunEvents::silent(), "pdf_to_text", request.paths.clone(), &request.output_location, Some(limits), &request, move |request, path| {
             while path == job_slow && !job_released.load(Ordering::SeqCst) { std::thread::sleep(std::time::Duration::from_millis(10)); }
             remaining::to_text(request, path)
         });
@@ -937,7 +962,7 @@ mod command_tests {
         let tiff_bytes = std::fs::read(&tiff).unwrap();
 
         let protected = root.join("protected.pdf");
-        let protected_result = protect_pdf(PdfRequest { paths: vec![pdf.clone()], password: "test-password".into(), output_location: OutputLocation::AlongsideInput });
+        let protected_result = protect_pdf(RunEvents::silent(), PdfRequest { paths: vec![pdf.clone()], password: "test-password".into(), output_location: OutputLocation::AlongsideInput });
         let protected_output = assert_success("protect fixture", protected_result)[0].clone();
         std::fs::rename(protected_output, &protected).unwrap();
 
@@ -976,14 +1001,14 @@ mod command_tests {
         assert!(preview_width > 0 && preview_height > 0, "preview dimensions must be positive");
         assert!(preview_width > preview_height, "a 90-degree page should preview in landscape orientation");
         assert!(preview["dataUrl"].as_str().is_some_and(|value| value.starts_with("data:image/png;base64,")));
-        outputs.extend(named(&mut naming, "export_pdf_scene", pdf.clone(), assert_success("PDF scene", export_pdf_scene(scene::ExportRequest { paths: vec![pdf.clone()], scene: visual_scene, output_location: OutputLocation::AlongsideInput }))));
-        outputs.extend(named(&mut naming, "remove_password", protected.clone(), assert_success("unlock", remove_password(PasswordRequest { paths: vec![protected], password: "test-password".into(), output_location: location(&root, "unlock") }))));
-        outputs.extend(named(&mut naming, "add_page_numbers", pdf.clone(), assert_success("page numbers", add_page_numbers(PageOverlayRequest { paths: vec![pdf.clone()], text: "1".into(), opacity: 100, position: Some("bottom-right".into()), logo_path: None, pages: None, start_number: Some(1), font_size: Some(12), output_location: location(&root, "page numbers") }))));
+        outputs.extend(named(&mut naming, "export_pdf_scene", pdf.clone(), assert_success("PDF scene", export_pdf_scene(RunEvents::silent(), scene::ExportRequest { paths: vec![pdf.clone()], scene: visual_scene, output_location: OutputLocation::AlongsideInput }))));
+        outputs.extend(named(&mut naming, "remove_password", protected.clone(), assert_success("unlock", remove_password(RunEvents::silent(), PasswordRequest { paths: vec![protected], password: "test-password".into(), output_location: location(&root, "unlock") }))));
+        outputs.extend(named(&mut naming, "add_page_numbers", pdf.clone(), assert_success("page numbers", add_page_numbers(RunEvents::silent(), PageOverlayRequest { paths: vec![pdf.clone()], text: "1".into(), opacity: 100, position: Some("bottom-right".into()), logo_path: None, pages: None, start_number: Some(1), font_size: Some(12), output_location: location(&root, "page numbers") }))));
         outputs.extend(named(&mut naming, "merge_pdfs", pdf.clone(), assert_aggregate_success("merge", &[pdf.clone(), pdf_two.clone()], run_merge_pdfs(&MergePdfRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: location(&root, "merge"), output_path: None }))));
-        outputs.extend(named(&mut naming, "watermark_pdf", pdf.clone(), assert_success("watermark pdf", watermark_pdf(PageOverlayRequest { paths: vec![pdf.clone()], text: "TEST".into(), opacity: 70, position: Some("center".into()), logo_path: None, pages: None, start_number: None, font_size: None, output_location: location(&root, "watermark pdf") }))));
-        outputs.extend(named(&mut naming, "crop_pdf", pdf.clone(), assert_success("crop pdf", crop_pdf(CropPdfRequest { paths: vec![pdf.clone()], rectangle: PdfRect { x: 0.5, y: 0.5, width: 500.0, height: 700.0 }, scope: PageScope::All, output_location: location(&root, "crop pdf") }))));
-        outputs.extend(named(&mut naming, "edit_pdf", pdf.clone(), assert_success("edit pdf", edit_pdf(EditPdfRequest { paths: vec![pdf.clone()], mode: "highlight".into(), text: "TEST NOTE".into(), pages: None, rectangle: PdfRect { x: 40.0, y: 650.0, width: 220.0, height: 60.0 }, output_location: location(&root, "edit pdf") }))));
-        outputs.extend(named(&mut naming, "edit_pdf_session", pdf.clone(), assert_success("composed pdf editor", edit_pdf_session(PdfEditSessionRequest {
+        outputs.extend(named(&mut naming, "watermark_pdf", pdf.clone(), assert_success("watermark pdf", watermark_pdf(RunEvents::silent(), PageOverlayRequest { paths: vec![pdf.clone()], text: "TEST".into(), opacity: 70, position: Some("center".into()), logo_path: None, pages: None, start_number: None, font_size: None, output_location: location(&root, "watermark pdf") }))));
+        outputs.extend(named(&mut naming, "crop_pdf", pdf.clone(), assert_success("crop pdf", crop_pdf(RunEvents::silent(), CropPdfRequest { paths: vec![pdf.clone()], rectangle: PdfRect { x: 0.5, y: 0.5, width: 500.0, height: 700.0 }, scope: PageScope::All, output_location: location(&root, "crop pdf") }))));
+        outputs.extend(named(&mut naming, "edit_pdf", pdf.clone(), assert_success("edit pdf", edit_pdf(RunEvents::silent(), EditPdfRequest { paths: vec![pdf.clone()], mode: "highlight".into(), text: "TEST NOTE".into(), pages: None, rectangle: PdfRect { x: 40.0, y: 650.0, width: 220.0, height: 60.0 }, output_location: location(&root, "edit pdf") }))));
+        outputs.extend(named(&mut naming, "edit_pdf_session", pdf.clone(), assert_success("composed pdf editor", edit_pdf_session(RunEvents::silent(), PdfEditSessionRequest {
             paths: vec![pdf.clone()],
             plan: PdfEditSessionPlan {
                 page_order: vec![1, 0],
@@ -996,23 +1021,23 @@ mod command_tests {
             },
             output_location: location(&root, "composed pdf editor"),
         }))));
-        outputs.extend(named(&mut naming, "protect_pdf", pdf_two.clone(), assert_success("protect", protect_pdf(PdfRequest { paths: vec![pdf_two.clone()], password: "another-password".into(), output_location: location(&root, "protect") }))));
+        outputs.extend(named(&mut naming, "protect_pdf", pdf_two.clone(), assert_success("protect", protect_pdf(RunEvents::silent(), PdfRequest { paths: vec![pdf_two.clone()], password: "another-password".into(), output_location: location(&root, "protect") }))));
         outputs.extend(named(&mut naming, "images_to_pdf", image.clone(), assert_aggregate_success("images to pdf", &[image.clone(), image_two.clone()], run_images_to_pdf(&ImagesToPdfRequest { paths: vec![image.clone(), image_two.clone()], output_location: location(&root, "images to pdf"), output_path: None }))));
-        outputs.extend(named(&mut naming, "pdf_to_images", pdf.clone(), assert_success("pdf to images", pdf_to_images(PdfToImagesRequest { paths: vec![pdf.clone()], dpi: 72, format: "png".into(), page_range: None, pages: None, output_location: location(&root, "pdf to images") }))));
-        let selected_image_outputs = assert_success("pdf selected pages to images", pdf_to_images(PdfToImagesRequest { paths: vec![pdf.clone()], dpi: 72, format: "png".into(), page_range: None, pages: Some(vec![1]), output_location: location(&root, "pdf selected pages to images") }));
+        outputs.extend(named(&mut naming, "pdf_to_images", pdf.clone(), assert_success("pdf to images", pdf_to_images(RunEvents::silent(), PdfToImagesRequest { paths: vec![pdf.clone()], dpi: 72, format: "png".into(), page_range: None, pages: None, output_location: location(&root, "pdf to images") }))));
+        let selected_image_outputs = assert_success("pdf selected pages to images", pdf_to_images(RunEvents::silent(), PdfToImagesRequest { paths: vec![pdf.clone()], dpi: 72, format: "png".into(), page_range: None, pages: Some(vec![1]), output_location: location(&root, "pdf selected pages to images") }));
         assert_eq!(selected_image_outputs.len(), 1, "selected PDF page rendering must produce only the selected page");
         outputs.extend(named(&mut naming, "pdf_to_images", pdf.clone(), selected_image_outputs));
-        outputs.extend(named(&mut naming, "pdf_to_text", pdf.clone(), assert_success("pdf to text", pdf_to_text(PdfToTextRequest { paths: vec![pdf.clone()], pages: None, output_location: location(&root, "pdf to text") }))));
-        outputs.extend(named(&mut naming, "split_pdf", pdf.clone(), assert_success("split", split_pdf(PageSelectionRequest { paths: vec![pdf.clone()], pages: vec![], page_ranges: None, split_mode: Some("pages".into()), chunk_size: None, output_location: location(&root, "split") }))));
-        outputs.extend(named(&mut naming, "extract_pdf_images", image_pdf.clone(), assert_success("extract pdf images", extract_pdf_images(PdfToTextRequest { paths: vec![image_pdf.clone()], pages: None, output_location: location(&root, "extract pdf images") }))));
-        outputs.extend(named(&mut naming, "sign_pdf", pdf.clone(), assert_success("sign", sign_pdf(SignPdfRequest { paths: vec![pdf.clone()], page: 0, text: "Signed".into(), signature_path: None, rectangle: PdfRect { x: 40.0, y: 40.0, width: 180.0, height: 60.0 }, scope: PageScope::All, output_location: location(&root, "sign") }))));
-        outputs.extend(named(&mut naming, "ocr_pdf", pdf.clone(), assert_ocr_adapter("ocr", ocr_pdf(VisionRequest { paths: vec![pdf.clone()], pages: None, output_location: location(&root, "ocr") }))));
-        outputs.extend(named(&mut naming, "remove_pdf_pages", pdf.clone(), assert_success("remove pages", remove_pdf_pages(PageSelectionRequest { paths: vec![pdf.clone()], pages: vec![0], page_ranges: None, split_mode: None, chunk_size: None, output_location: location(&root, "remove pages") }))));
-        outputs.extend(named(&mut naming, "extract_pdf_pages", pdf.clone(), assert_success("extract pages", extract_pdf_pages(PageSelectionRequest { paths: vec![pdf.clone()], pages: vec![], page_ranges: Some("1".into()), split_mode: None, chunk_size: None, output_location: location(&root, "extract pages") }))));
-        outputs.extend(named(&mut naming, "organize_pdf", pdf.clone(), assert_success("organize", organize_pdf(OrganizePdfRequest { paths: vec![pdf.clone()], page_order: vec![1, 0], delete_pages: vec![], rotate_pages: vec![RotatePage { page: 0, degrees: 90 }], scope: PageScope::All, output_location: location(&root, "organize") }))));
+        outputs.extend(named(&mut naming, "pdf_to_text", pdf.clone(), assert_success("pdf to text", pdf_to_text(RunEvents::silent(), PdfToTextRequest { paths: vec![pdf.clone()], pages: None, output_location: location(&root, "pdf to text") }))));
+        outputs.extend(named(&mut naming, "split_pdf", pdf.clone(), assert_success("split", split_pdf(RunEvents::silent(), PageSelectionRequest { paths: vec![pdf.clone()], pages: vec![], page_ranges: None, split_mode: Some("pages".into()), chunk_size: None, output_location: location(&root, "split") }))));
+        outputs.extend(named(&mut naming, "extract_pdf_images", image_pdf.clone(), assert_success("extract pdf images", extract_pdf_images(RunEvents::silent(), PdfToTextRequest { paths: vec![image_pdf.clone()], pages: None, output_location: location(&root, "extract pdf images") }))));
+        outputs.extend(named(&mut naming, "sign_pdf", pdf.clone(), assert_success("sign", sign_pdf(RunEvents::silent(), SignPdfRequest { paths: vec![pdf.clone()], page: 0, text: "Signed".into(), signature_path: None, rectangle: PdfRect { x: 40.0, y: 40.0, width: 180.0, height: 60.0 }, scope: PageScope::All, output_location: location(&root, "sign") }))));
+        outputs.extend(named(&mut naming, "ocr_pdf", pdf.clone(), assert_ocr_adapter("ocr", ocr_pdf(RunEvents::silent(), VisionRequest { paths: vec![pdf.clone()], pages: None, output_location: location(&root, "ocr") }))));
+        outputs.extend(named(&mut naming, "remove_pdf_pages", pdf.clone(), assert_success("remove pages", remove_pdf_pages(RunEvents::silent(), PageSelectionRequest { paths: vec![pdf.clone()], pages: vec![0], page_ranges: None, split_mode: None, chunk_size: None, output_location: location(&root, "remove pages") }))));
+        outputs.extend(named(&mut naming, "extract_pdf_pages", pdf.clone(), assert_success("extract pages", extract_pdf_pages(RunEvents::silent(), PageSelectionRequest { paths: vec![pdf.clone()], pages: vec![], page_ranges: Some("1".into()), split_mode: None, chunk_size: None, output_location: location(&root, "extract pages") }))));
+        outputs.extend(named(&mut naming, "organize_pdf", pdf.clone(), assert_success("organize", organize_pdf(RunEvents::silent(), OrganizePdfRequest { paths: vec![pdf.clone()], page_order: vec![1, 0], delete_pages: vec![], rotate_pages: vec![RotatePage { page: 0, degrees: 90 }], scope: PageScope::All, output_location: location(&root, "organize") }))));
         let added = assert_success(
             "add pages",
-            add_pdf_pages(AddPdfPagesRequest {
+            add_pdf_pages(RunEvents::silent(), AddPdfPagesRequest {
                 paths: vec![pdf.clone()],
                 position: "after".into(),
                 page: 0,
@@ -1023,16 +1048,16 @@ mod command_tests {
         let added_document = lopdf::Document::load(&added[0]).unwrap();
         assert_eq!(added_document.get_pages().len(), 4, "add pages must insert the requested number of pages");
         outputs.extend(named(&mut naming, "add_pdf_pages", pdf.clone(), added));
-        outputs.extend(named(&mut naming, "compress_pdf", pdf.clone(), assert_success("compress pdf", compress_pdf(CompressPdfRequest { paths: vec![pdf.clone()], quality: 80, output_location: location(&root, "compress pdf") }))));
-        outputs.extend(named(&mut naming, "convert_images", image.clone(), assert_success("convert", convert_images(ConvertImagesRequest { paths: vec![image.clone()], format: "jpg".into(), output_location: location(&root, "convert") }))));
-        outputs.extend(named(&mut naming, "compress_images", image.clone(), assert_success("compress images", compress_images(CompressImagesRequest { paths: vec![image.clone()], quality: 80, lossless: false, output_location: location(&root, "compress images") }))));
-        outputs.extend(named(&mut naming, "resize_images", image.clone(), assert_success("resize", resize_images(ResizeRequest { paths: vec![image.clone()], width: 128, height: 128, mode: "exact".into(), resampling: "lanczos".into(), keep_aspect_ratio: true, percentage: 100, longest_side: 128, output_location: location(&root, "resize") }))));
-        outputs.extend(named(&mut naming, "rotate_images", image.clone(), assert_success("rotate", rotate_images(RotateRequest { paths: vec![image.clone()], degrees: 90, flip: "none".into(), output_location: location(&root, "rotate") }))));
-        outputs.extend(named(&mut naming, "crop_images", image.clone(), assert_success("crop image", crop_images(CropRequest { paths: vec![image.clone()], x: 0, y: 0, width: 128, height: 128, mode: "rectangle".into(), aspect_width: 128, aspect_height: 128, anchor: "center".into(), output_location: location(&root, "crop image") }))));
-        outputs.extend(named(&mut naming, "generate_icon_set", image.clone(), assert_success("icons", generate_icon_set(IconSetRequest { paths: vec![image.clone()], preset: "favicon".into(), sizes: vec![], output_location: location(&root, "icons") }))));
+        outputs.extend(named(&mut naming, "compress_pdf", pdf.clone(), assert_success("compress pdf", compress_pdf(RunEvents::silent(), CompressPdfRequest { paths: vec![pdf.clone()], quality: 80, output_location: location(&root, "compress pdf") }))));
+        outputs.extend(named(&mut naming, "convert_images", image.clone(), assert_success("convert", convert_images(RunEvents::silent(), ConvertImagesRequest { paths: vec![image.clone()], format: "jpg".into(), output_location: location(&root, "convert") }))));
+        outputs.extend(named(&mut naming, "compress_images", image.clone(), assert_success("compress images", compress_images(RunEvents::silent(), CompressImagesRequest { paths: vec![image.clone()], quality: 80, lossless: false, output_location: location(&root, "compress images") }))));
+        outputs.extend(named(&mut naming, "resize_images", image.clone(), assert_success("resize", resize_images(RunEvents::silent(), ResizeRequest { paths: vec![image.clone()], width: 128, height: 128, mode: "exact".into(), resampling: "lanczos".into(), keep_aspect_ratio: true, percentage: 100, longest_side: 128, output_location: location(&root, "resize") }))));
+        outputs.extend(named(&mut naming, "rotate_images", image.clone(), assert_success("rotate", rotate_images(RunEvents::silent(), RotateRequest { paths: vec![image.clone()], degrees: 90, flip: "none".into(), output_location: location(&root, "rotate") }))));
+        outputs.extend(named(&mut naming, "crop_images", image.clone(), assert_success("crop image", crop_images(RunEvents::silent(), CropRequest { paths: vec![image.clone()], x: 0, y: 0, width: 128, height: 128, mode: "rectangle".into(), aspect_width: 128, aspect_height: 128, anchor: "center".into(), output_location: location(&root, "crop image") }))));
+        outputs.extend(named(&mut naming, "generate_icon_set", image.clone(), assert_success("icons", generate_icon_set(RunEvents::silent(), IconSetRequest { paths: vec![image.clone()], preset: "favicon".into(), sizes: vec![], output_location: location(&root, "icons") }))));
         outputs.extend(named(&mut naming, "create_gif", image.clone(), assert_aggregate_success("create gif", &[image.clone(), image_two.clone()], run_create_gif(&GifCreateRequest { paths: vec![image.clone(), image_two.clone()], frame_delay_ms: 100, loop_forever: true, output_location: location(&root, "create gif"), output_path: None }))));
-        outputs.extend(named(&mut naming, "extract_gif_frames", animated.clone(), assert_success("extract gif", extract_gif_frames(GifExtractRequest { paths: vec![animated.clone()], output_location: location(&root, "extract gif") }))));
-        outputs.extend(named(&mut naming, "watermark_images", image.clone(), assert_success("watermark image", watermark_images(WatermarkRequest { paths: vec![image.clone()], opacity: 70, text: Some("TEST".into()), logo_path: None, x: 16, y: 16, output_location: location(&root, "watermark image") }))));
+        outputs.extend(named(&mut naming, "extract_gif_frames", animated.clone(), assert_success("extract gif", extract_gif_frames(RunEvents::silent(), GifExtractRequest { paths: vec![animated.clone()], output_location: location(&root, "extract gif") }))));
+        outputs.extend(named(&mut naming, "watermark_images", image.clone(), assert_success("watermark image", watermark_images(RunEvents::silent(), WatermarkRequest { paths: vec![image.clone()], opacity: 70, text: Some("TEST".into()), logo_path: None, x: 16, y: 16, output_location: location(&root, "watermark image") }))));
         let image_plan = ImageEditPlan {
             edits: vec![
                 ImageEdit::Resize { width: 128, height: 128, mode: "exact".into(), percentage: 100, longest_side: 128, resampling: "lanczos".into(), keep_aspect_ratio: false },
@@ -1042,15 +1067,15 @@ mod command_tests {
         };
         let image_preview = inspect_image_edit_preview(ImageEditPreviewRequest { path: image.clone(), plan: image_plan.clone() }).expect("composed image preview should be available");
         assert_eq!((image_preview.width, image_preview.height), (128, 128), "composed image preview must reflect the complete edit plan");
-        outputs.extend(named(&mut naming, "export_image_edit_plan", image.clone(), assert_success("composed image editor", export_image_edit_plan(ImageEditExportRequest { paths: vec![image.clone()], plan: image_plan }))));
-        outputs.extend(named(&mut naming, "image_metadata", image.clone(), assert_success("metadata", image_metadata(MetadataRequest { paths: vec![image.clone()], output_location: location(&root, "metadata") }))));
-        outputs.extend(named(&mut naming, "adjust_image_tone", image.clone(), assert_success("tone", adjust_image_tone(ToneRequest { paths: vec![image.clone()], brightness: 20, contrast: 0.0, saturation: 0.0, exposure: 0.0, output_location: location(&root, "tone") }))));
+        outputs.extend(named(&mut naming, "export_image_edit_plan", image.clone(), assert_success("composed image editor", export_image_edit_plan(RunEvents::silent(), ImageEditExportRequest { paths: vec![image.clone()], plan: image_plan }))));
+        outputs.extend(named(&mut naming, "image_metadata", image.clone(), assert_success("metadata", image_metadata(RunEvents::silent(), MetadataRequest { paths: vec![image.clone()], output_location: location(&root, "metadata") }))));
+        outputs.extend(named(&mut naming, "adjust_image_tone", image.clone(), assert_success("tone", adjust_image_tone(RunEvents::silent(), ToneRequest { paths: vec![image.clone()], brightness: 20, contrast: 0.0, saturation: 0.0, exposure: 0.0, output_location: location(&root, "tone") }))));
         outputs.extend(named(&mut naming, "process_tiff_pages", tiff.clone(), assert_aggregate_success("tiff", &[tiff.clone()], run_process_tiff_pages(&TiffRequest { paths: vec![tiff.clone()], pages: None, output_location: location(&root, "tiff"), output_path: None }))));
-        outputs.extend(named(&mut naming, "blur_faces", image.clone(), assert_vision_adapter("face blur", blur_faces(VisionRequest { paths: vec![image.clone()], pages: None, output_location: location(&root, "face blur") }))));
-        outputs.extend(named(&mut naming, "remove_image_background", image.clone(), assert_vision_adapter("background removal", remove_image_background(VisionRequest { paths: vec![image.clone()], pages: None, output_location: location(&root, "background removal") }))));
+        outputs.extend(named(&mut naming, "blur_faces", image.clone(), assert_vision_adapter("face blur", blur_faces(RunEvents::silent(), VisionRequest { paths: vec![image.clone()], pages: None, output_location: location(&root, "face blur") }))));
+        outputs.extend(named(&mut naming, "remove_image_background", image.clone(), assert_vision_adapter("background removal", remove_image_background(RunEvents::silent(), VisionRequest { paths: vec![image.clone()], pages: None, output_location: location(&root, "background removal") }))));
         let docx = root.join("document.docx");
         std::fs::write(&docx, test_minimal_ooxml_package("docx")).unwrap();
-        outputs.extend(named(&mut naming, "protect_office", docx.clone(), assert_success("protect office", protect_office(PasswordRequest { paths: vec![docx.clone()], password: "office-password".into(), output_location: location(&root, "protect office") }))));
+        outputs.extend(named(&mut naming, "protect_office", docx.clone(), assert_success("protect office", protect_office(RunEvents::silent(), PasswordRequest { paths: vec![docx.clone()], password: "office-password".into(), output_location: location(&root, "protect office") }))));
         assert_outputs_use_declared_suffixes(&naming);
 
         assert_eq!(std::fs::read(&pdf).unwrap(), plain_pdf_bytes, "native E2E commands must not modify their PDF input");
@@ -1070,7 +1095,7 @@ mod command_tests {
         let src = temp_path("cmd_convert.png");
         write_png(&src, 256, 44);
 
-        let heic = tauri::async_runtime::block_on(convert_images(ConvertImagesRequest {
+        let heic = tauri::async_runtime::block_on(convert_images(RunEvents::silent(), ConvertImagesRequest {
             paths: vec![src.clone()], format: "heic".to_string(), output_location: OutputLocation::AlongsideInput,
         }));
         assert!(heic[0].error().is_none(), "{}", heic[0].error().cloned().unwrap_or_default());
@@ -1081,7 +1106,7 @@ mod command_tests {
         let bytes = std::fs::read(&heic[0].output_paths()[0]).unwrap();
         assert!(heif::decode(&bytes).is_ok(), "command output must be real HEIC");
 
-        let webp = tauri::async_runtime::block_on(convert_images(ConvertImagesRequest {
+        let webp = tauri::async_runtime::block_on(convert_images(RunEvents::silent(), ConvertImagesRequest {
             paths: vec![src.clone()], format: "webp".to_string(), output_location: OutputLocation::AlongsideInput,
         }));
         assert!(webp[0].error().is_none(), "{}", webp[0].error().cloned().unwrap_or_default());
@@ -1100,7 +1125,7 @@ mod command_tests {
         write_png(&a, 128, 1);
         write_png(&b, 128, 2);
 
-        let out = tauri::async_runtime::block_on(convert_images(ConvertImagesRequest {
+        let out = tauri::async_runtime::block_on(convert_images(RunEvents::silent(), ConvertImagesRequest {
             paths: vec![a.clone(), b.clone()], format: "jpg".to_string(), output_location: OutputLocation::AlongsideInput,
         }));
         assert_eq!(out.len(), 2);
@@ -1135,7 +1160,7 @@ mod command_tests {
             .collect::<Vec<_>>();
         let output_folder = location(&root, "output");
 
-        let outcomes = tauri::async_runtime::block_on(protect_office(PasswordRequest {
+        let outcomes = tauri::async_runtime::block_on(protect_office(RunEvents::silent(), PasswordRequest {
             paths: inputs.clone(),
             password: "secret".into(),
             output_location: output_folder,
@@ -1166,6 +1191,48 @@ mod command_tests {
     }
 
     #[test]
+    fn batch_events_start_and_finish_every_file_once_and_match_the_ordered_response() {
+        let root = sandbox("batch-events-mixed");
+        let first = root.join("first.pdf");
+        let broken = root.join("broken.pdf");
+        let office = root.join("notes.docx");
+        let last = root.join("last.pdf");
+        make_pdf(&first, 2);
+        std::fs::write(&broken, b"not a pdf").unwrap();
+        std::fs::write(&office, b"Office fixture").unwrap();
+        make_pdf(&last, 1);
+        let inputs = vec![first.clone(), broken.clone(), office.clone(), last.clone()];
+        let originals = inputs.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = seen.clone();
+        let outcomes = tauri::async_runtime::block_on(protect_pdf(RunEvents::new(move |event| sink.lock().unwrap().push(event)), PdfRequest {
+            paths: inputs.clone(),
+            password: "secret".into(),
+            output_location: location(&root, "protected"),
+        }));
+        let events = seen.lock().unwrap().clone();
+
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), inputs);
+        assert!(outcomes[0].error().is_none() && outcomes[3].error().is_none());
+        assert!(outcomes[1].error().is_some());
+        assert!(outcomes[2].error().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput)));
+        assert_eq!(events.len(), inputs.len() * 2);
+        for index in 0..inputs.len() {
+            let started = events.iter().position(|event| *event == FileEvent::Started { index }).expect("every file starts once");
+            let finished = events.iter().enumerate().filter_map(|(position, event)| match event {
+                FileEvent::Finished { index: finished, outcome } if *finished == index => Some((position, outcome)),
+                _ => None,
+            }).collect::<Vec<_>>();
+            assert_eq!(finished.len(), 1, "file {index} finishes exactly once");
+            assert!(started < finished[0].0, "file {index} starts before it finishes");
+            assert_eq!(finished[0].1, &outcomes[index], "the streamed outcome is the final outcome");
+        }
+        for (path, original) in inputs.iter().zip(originals) { assert_eq!(std::fs::read(path).unwrap(), original); }
+        assert_eq!(std::fs::read_dir(root.join("protected")).unwrap().count(), 2);
+    }
+
+    #[test]
     fn protect_pdf_keeps_mixed_office_inputs_isolated_and_round_trips() {
         let root = sandbox("protect-pdf-mixed-office");
         let pdf = root.join("source.pdf");
@@ -1175,7 +1242,7 @@ mod command_tests {
         let pdf_original = std::fs::read(&pdf).unwrap();
         let office_original = std::fs::read(&office).unwrap();
 
-        let outcomes = tauri::async_runtime::block_on(protect_pdf(PdfRequest {
+        let outcomes = tauri::async_runtime::block_on(protect_pdf(RunEvents::silent(), PdfRequest {
             paths: vec![pdf.clone(), office.clone()],
             password: "secret".into(),
             output_location: location(&root, "protected"),
@@ -1191,7 +1258,7 @@ mod command_tests {
         assert_eq!(std::fs::read(&office).unwrap(), office_original);
         assert_eq!(std::fs::read_dir(root.join("protected")).unwrap().count(), 1);
 
-        let unlocked = tauri::async_runtime::block_on(remove_password(PasswordRequest {
+        let unlocked = tauri::async_runtime::block_on(remove_password(RunEvents::silent(), PasswordRequest {
             paths: outcomes[0].output_paths().to_vec(),
             password: "secret".into(),
             output_location: location(&root, "unlocked"),
@@ -1210,7 +1277,7 @@ mod command_tests {
             let src = root.join("source.png");
             write_png(&src, 32, 4);
             let original = std::fs::read(&src).unwrap();
-            let outcomes = tauri::async_runtime::block_on(convert_images(ConvertImagesRequest {
+            let outcomes = tauri::async_runtime::block_on(convert_images(RunEvents::silent(), ConvertImagesRequest {
                 paths: vec![src.clone()], format: format.to_string(), output_location: location(&root, "output"),
             }));
             assert_eq!(outcomes.len(), 1);
@@ -1229,7 +1296,7 @@ mod command_tests {
         write_png(&src, 128, 7);
         let before = std::fs::metadata(&src).unwrap().len();
 
-        let out = tauri::async_runtime::block_on(compress_images(CompressImagesRequest {
+        let out = tauri::async_runtime::block_on(compress_images(RunEvents::silent(), CompressImagesRequest {
             paths: vec![src.clone()], quality: 50, lossless: false, output_location: OutputLocation::AlongsideInput,
         }));
         assert!(out[0].error().is_none(), "{}", out[0].error().cloned().unwrap_or_default());
@@ -1250,7 +1317,7 @@ mod command_tests {
         let missing = temp_path("cmd_mixed_missing.png");
         write_png(&valid, 64, 9);
 
-        let out = tauri::async_runtime::block_on(image_metadata(MetadataRequest {
+        let out = tauri::async_runtime::block_on(image_metadata(RunEvents::silent(), MetadataRequest {
             paths: vec![valid.clone(), missing.clone()],
             output_location: OutputLocation::AlongsideInput,
         }));
@@ -1269,7 +1336,7 @@ mod command_tests {
         let pdf = root.join("document.pdf");
         make_pdf(&pdf, 2);
 
-        let outcomes = tauri::async_runtime::block_on(pdf_to_text(PdfToTextRequest {
+        let outcomes = tauri::async_runtime::block_on(pdf_to_text(RunEvents::silent(), PdfToTextRequest {
             paths: vec![pdf.clone()],
             pages: Some(Vec::new()),
             output_location: location(&root, "text"),
@@ -1292,7 +1359,7 @@ mod command_tests {
         make_pdf(&second_pdf, 2);
         write_png(&image, 8, 4);
 
-        let wrong_format = tauri::async_runtime::block_on(pdf_to_text(PdfToTextRequest {
+        let wrong_format = tauri::async_runtime::block_on(pdf_to_text(RunEvents::silent(), PdfToTextRequest {
             paths: vec![image.clone()],
             pages: Some(vec![0]),
             output_location: location(&root, "wrong-format"),
@@ -1301,7 +1368,7 @@ mod command_tests {
         assert!(wrong_format[0].output_paths().is_empty());
         assert!(wrong_format[0].error().is_some_and(|error| error.message.contains("Accepted extensions")));
 
-        let wrong_cardinality = tauri::async_runtime::block_on(split_pdf(PageSelectionRequest {
+        let wrong_cardinality = tauri::async_runtime::block_on(split_pdf(RunEvents::silent(), PageSelectionRequest {
             paths: vec![pdf.clone(), second_pdf.clone()],
             pages: vec![],
             page_ranges: None,
@@ -1312,7 +1379,7 @@ mod command_tests {
         assert_eq!(wrong_cardinality.len(), 2);
         assert!(wrong_cardinality.iter().all(|outcome| outcome.output_paths().is_empty() && outcome.error().is_some()));
 
-        let selected = tauri::async_runtime::block_on(pdf_to_text(PdfToTextRequest {
+        let selected = tauri::async_runtime::block_on(pdf_to_text(RunEvents::silent(), PdfToTextRequest {
             paths: vec![pdf.clone()],
             pages: Some(vec![1]),
             output_location: location(&root, "selected-text"),
@@ -1335,7 +1402,7 @@ mod command_tests {
         let existing = root.join("image-compressed.png");
         std::fs::write(&existing, b"existing output").unwrap();
 
-        let outcomes = tauri::async_runtime::block_on(compress_images(CompressImagesRequest {
+        let outcomes = tauri::async_runtime::block_on(compress_images(RunEvents::silent(), CompressImagesRequest {
             paths: vec![image.clone()],
             quality: 80,
             lossless: false,
@@ -1359,7 +1426,7 @@ mod command_tests {
         make_pdf(&input, 3);
         let outputs = assert_success(
             "organize alongside",
-            organize_pdf(OrganizePdfRequest {
+            organize_pdf(RunEvents::silent(), OrganizePdfRequest {
                 paths: vec![input.clone()],
                 page_order: vec![2, 0, 1],
                 delete_pages: vec![],
@@ -1385,7 +1452,7 @@ mod command_tests {
         write_png(&second, 32, 2);
         let output_location = location(&root, "results");
 
-        let outcomes = tauri::async_runtime::block_on(image_metadata(MetadataRequest {
+        let outcomes = tauri::async_runtime::block_on(image_metadata(RunEvents::silent(), MetadataRequest {
             paths: vec![first.clone(), second.clone()], output_location,
         }));
 
@@ -1420,7 +1487,7 @@ mod command_tests {
         let original = std::fs::read(&blocked).unwrap();
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
 
-        let outcomes = tauri::async_runtime::block_on(image_metadata(MetadataRequest {
+        let outcomes = tauri::async_runtime::block_on(image_metadata(RunEvents::silent(), MetadataRequest {
             paths: vec![blocked.clone(), writable.clone()], output_location: OutputLocation::AlongsideInput,
         }));
         let listing = std::fs::read_dir(&locked).unwrap().map(|entry| entry.unwrap().file_name()).collect::<Vec<_>>();

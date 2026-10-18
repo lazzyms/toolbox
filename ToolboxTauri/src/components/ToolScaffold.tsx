@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { open } from '@tauri-apps/plugin-dialog';
 import { Badge } from '@/components/ui/badge';
@@ -11,6 +12,7 @@ import { failedOutcome, parseToolResult } from '../jobOutcome';
 import { toolsForWorkspace, workspaceForTool } from '../registry';
 import { shortenHomePath, useHomeDir } from '../homePath';
 import { ResultList } from './ResultList';
+import { BATCH_PROGRESS_EVENT, foldRunEvent, parseRunEvent, startRun, type LiveRun } from './liveRun';
 import { BlockedDestinationDialog, RunDestination, exampleOutputName, sameLocation, type BlockedDestination, type FolderCheck } from './RunDestination';
 import { TablerIcon } from './TablerIcon';
 import { chooseManyToOneSavePath } from './saveStep';
@@ -36,7 +38,9 @@ const repeatLabel = (occurrence: number) => occurrence === 2 ? 'Added twice' : `
 
 export type WorkspaceSourceAction = () => void | Promise<void>;
 
-type RunHandler = (files: string[], outputLocation: OutputLocation, outputPath: string | null) => Promise<JobOutcome[]>;
+export type RunContext = { outputPath: string | null; runId: string };
+
+type RunHandler = (files: string[], outputLocation: OutputLocation, run: RunContext) => Promise<JobOutcome[]>;
 
 type PerFileRun = { handler: RunHandler; outputLocation: OutputLocation };
 
@@ -76,6 +80,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
     const [results, setResults] = useState<JobOutcome[]>([]);
     const [resultsNamedByOutput, setResultsNamedByOutput] = useState(false);
     const [loading, setLoading] = useState(false);
+    const [live, setLive] = useState<LiveRun | null>(null);
     const [perFileRun, setPerFileRun] = useState<PerFileRun | null>(null);
     const defaultLocation = useOutputLocation();
     const [runOverride, setRunOverride] = useState<OutputLocation | null>(null);
@@ -105,6 +110,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         runGeneration.current += 1;
         setResults([]);
         setLoading(false);
+        setLive(null);
         setSelection(new Set());
         setAnchor(null);
     }, [resolvedSessionKey]);
@@ -113,6 +119,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         runGeneration.current += 1;
         setResults([]);
         setLoading(false);
+        setLive(null);
         setRunOverride(null);
         setBlocked(null);
     }, [utility.id]);
@@ -124,6 +131,25 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         runGeneration.current += 1;
         setResults([]);
     }, [files]);
+
+    const runStreamed = async (handler: RunHandler, paths: string[], location: OutputLocation, outputPath: string | null, generation: number) => {
+        const runId = crypto.randomUUID();
+        setLive(startRun(runId, paths));
+        let unlisten: UnlistenFn | null = null;
+        try {
+            unlisten = await listen(BATCH_PROGRESS_EVENT, ({ payload }) => {
+                const event = parseRunEvent(payload);
+                if (event && generation === runGeneration.current) setLive((run) => run && foldRunEvent(run, event));
+            });
+        } catch {
+            // Without progress events the run still completes and shows its final results.
+        }
+        try {
+            return parseToolResult(await handler(paths, location, { outputPath, runId }));
+        } finally {
+            unlisten?.();
+        }
+    };
 
     const runWith = async (handler: RunHandler, location: OutputLocation = outputLocation) => {
         const generation = ++runGeneration.current;
@@ -167,7 +193,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 if (!outputPath || generation !== runGeneration.current) return;
                 setLoading(true);
             }
-            const processed = runs ? parseToolResult(await handler(validPaths, location, outputPath)) : [];
+            const processed = runs ? await runStreamed(handler, validPaths, location, outputPath, generation) : [];
             const processedByPath = new Map(processed.map((result) => [result.inputPath, result]));
             const nextResults = orderedSelectionRejected
                 ? files.map((path) => invalidPaths.get(path) ?? failedOutcome(path, 'invalidInput', 'Every selected input must use a supported format for this ordered action.'))
@@ -183,7 +209,10 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 setResults([failedOutcome('Tool error', 'processing', String(error))]);
             }
         } finally {
-            if (generation === runGeneration.current) setLoading(false);
+            if (generation === runGeneration.current) {
+                setLoading(false);
+                setLive(null);
+            }
         }
     };
     const run = () => runWith(onRun);
@@ -232,7 +261,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         const generation = runGeneration.current;
         let retried: JobOutcome[];
         try {
-            retried = parseToolResult(await perFileRun.handler([inputPath], perFileRun.outputLocation, null));
+            retried = parseToolResult(await perFileRun.handler([inputPath], perFileRun.outputLocation, { outputPath: null, runId: crypto.randomUUID() }));
         } catch (error) {
             retried = [failedOutcome(inputPath, 'processing', String(error))];
         }
@@ -618,6 +647,8 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 progress={progress}
                 loading={loading}
                 resultVerb={utility.resultVerb}
+                runningVerb={utility.runningVerb}
+                live={live}
                 namedByOutput={resultsNamedByOutput}
                 onRetry={perFileRun ? retry : undefined}
             />

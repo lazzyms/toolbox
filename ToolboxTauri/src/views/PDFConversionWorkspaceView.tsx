@@ -81,21 +81,21 @@ export const PDFConversionWorkspaceView = ({ utility }: { utility: ToolDefinitio
       variant="workspace"
       sessionKey="pdf-convert"
       utility={activeUtility}
-      onRun={(paths, outputLocation, outputPath) => {
+      onRun={(paths, outputLocation, { outputPath, runId }) => {
         const pages = document ? selectedPages : undefined;
         const selectedPageRange = pages?.length ? formatPageRange(pages) : pageRange || null;
         if (activeUtility.id === "images-to-pdf") {
-          return invoke<ToolResult>("images_to_pdf", {
+          return invoke<ToolResult>("images_to_pdf", { runId,
             request: { paths, outputLocation, outputPath },
           });
         }
         if (activeUtility.id === "pdf-merge") {
-          return invoke<ToolResult>("merge_pdfs", {
+          return invoke<ToolResult>("merge_pdfs", { runId,
             request: { paths, outputLocation, outputPath },
           });
         }
         if (activeUtility.id === "pdf-split") {
-          return invoke<ToolResult>("split_pdf", {
+          return invoke<ToolResult>("split_pdf", { runId,
             request: {
               paths,
               pages: [],
@@ -107,7 +107,7 @@ export const PDFConversionWorkspaceView = ({ utility }: { utility: ToolDefinitio
           });
         }
         if (activeUtility.id === "pdf-extract-pages") {
-          return invoke<ToolResult>("extract_pdf_pages", {
+          return invoke<ToolResult>("extract_pdf_pages", { runId,
             request: {
               paths,
               pages: selectedPages,
@@ -117,12 +117,12 @@ export const PDFConversionWorkspaceView = ({ utility }: { utility: ToolDefinitio
           });
         }
         if (activeUtility.id === "pdf-compress") {
-          return invoke<ToolResult>("compress_pdf", {
+          return invoke<ToolResult>("compress_pdf", { runId,
             request: { paths, quality, outputLocation },
           });
         }
         if (activeUtility.id === "pdf-to-images") {
-          return invoke<ToolResult>("pdf_to_images", {
+          return invoke<ToolResult>("pdf_to_images", { runId,
             request: {
               paths,
               dpi: Number(dpi),
@@ -134,16 +134,16 @@ export const PDFConversionWorkspaceView = ({ utility }: { utility: ToolDefinitio
           });
         }
         if (activeUtility.id === "pdf-to-text") {
-          return invoke<ToolResult>("pdf_to_text", {
+          return invoke<ToolResult>("pdf_to_text", { runId,
             request: { paths, pages: pages ?? null, outputLocation },
           });
         }
         if (activeUtility.id === "pdf-ocr") {
-          return invoke<ToolResult>("ocr_pdf", {
+          return invoke<ToolResult>("ocr_pdf", { runId,
             request: { paths, pages: pages ?? null, outputLocation },
           });
         }
-        return invoke<ToolResult>("extract_pdf_images", {
+        return invoke<ToolResult>("extract_pdf_images", { runId,
           request: { paths, pages: pages ?? null, outputLocation },
         });
       }}

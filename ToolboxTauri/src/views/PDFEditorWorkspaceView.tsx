@@ -79,10 +79,10 @@ export const PDFEditorWorkspaceView = ({ utility, onWorkspaceSourceAction }: { u
   const session = useRef<{ path: string; scene: PdfScene } | null>(null);
   const initialTool: SceneTool = utility.id === 'pdf-crop' ? 'crop' : utility.id === 'pdf-watermark' ? 'watermark' : utility.id === 'pdf-sign' ? 'signature' : 'select';
   return <ToolScaffold utility={utility} variant="workspace" sessionKey="pdf-editor-scene" onWorkspaceSourceAction={onWorkspaceSourceAction}
-    onRun={async (paths, outputLocation) => {
+    onRun={async (paths, outputLocation, { runId }) => {
       const [inputPath] = paths;
       if (!inputPath || !session.current || session.current.path !== inputPath) throw new Error('Select exactly one open PDF before exporting.');
-      const results = await invoke<ToolResult>('export_pdf_scene', { request: { paths, scene: session.current.scene, outputLocation } });
+      const results = await invoke<ToolResult>('export_pdf_scene', { runId, request: { paths, scene: session.current.scene, outputLocation } });
       return results.map((result) => result.failure ? { ...result, failure: { ...result.failure, message: pdfEditorErrorMessage(result.failure.message, 'export') } } : result);
     }}>
     {({ files, run, loading, destination }) => {

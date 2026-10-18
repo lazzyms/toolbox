@@ -193,6 +193,7 @@ export interface ToolDefinition {
   title: string;
   shortTitle: string;
   resultVerb: string;
+  runningVerb: string;
   blurb: string;
   symbol: string;
   category: ToolCategory;

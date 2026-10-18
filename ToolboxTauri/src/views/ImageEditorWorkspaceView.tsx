@@ -161,40 +161,40 @@ export const ImageEditorWorkspaceView = ({ utility }: { utility: ToolDefinition 
       variant="workspace"
       sessionKey="image-editor"
       utility={activeUtility}
-      onRun={(paths, outputLocation) => {
+      onRun={(paths, outputLocation, { runId }) => {
         if (activeUtility.id === "heic-convert") {
-          return invoke<ToolResult>("convert_images", {
+          return invoke<ToolResult>("convert_images", { runId,
             request: { paths, format, outputLocation } satisfies ConvertImagesRequest,
           });
         }
         if (activeUtility.id === "compress") {
-          return invoke<ToolResult>("compress_images", {
+          return invoke<ToolResult>("compress_images", { runId,
             request: { paths, quality, lossless, outputLocation } satisfies CompressImagesRequest,
           });
         }
         if (activeUtility.id === "resize") {
-          return invoke<ToolResult>("resize_images", {
+          return invoke<ToolResult>("resize_images", { runId,
             request: { paths, width, height, mode: resizeMode, percentage, longestSide: width, resampling, keepAspectRatio: keepRatio, outputLocation },
           });
         }
         if (activeUtility.id === "rotate") {
-          return invoke<ToolResult>("rotate_images", { request: { paths, degrees, flip, outputLocation } });
+          return invoke<ToolResult>("rotate_images", { runId, request: { paths, degrees, flip, outputLocation } });
         }
         if (activeUtility.id === "crop") {
-          return invoke<ToolResult>("crop_images", {
+          return invoke<ToolResult>("crop_images", { runId,
             request: { paths, x: cropX, y: cropY, width, height, mode: cropMode, aspectWidth: width, aspectHeight: height, anchor, outputLocation },
           });
         }
         if (activeUtility.id === "image-watermark") {
-          return invoke<ToolResult>("watermark_images", {
+          return invoke<ToolResult>("watermark_images", { runId,
             request: { paths, opacity: watermarkOpacity, text: watermarkText, x: cropX, y: cropY, outputLocation },
           });
         }
-        return invoke<ToolResult>("adjust_image_tone", {
+        return invoke<ToolResult>("adjust_image_tone", { runId,
           request: { paths, brightness, contrast, saturation, exposure, outputLocation },
         });
       }}
-      onRunCombined={(paths, outputLocation) => invoke<ToolResult>("export_image_edit_plan", {
+      onRunCombined={(paths, outputLocation, { runId }) => invoke<ToolResult>("export_image_edit_plan", { runId,
         request: { paths, plan: imageEditRequestPlan(editPlan, outputLocation) },
       })}
     >
