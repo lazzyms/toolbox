@@ -1,0 +1,16 @@
+{
+  "minimumVersion": "9.0.0",
+  "windows": {
+    "version": "12.4.2",
+    "archives": {
+      "x86_64-pc-windows-msvc": {
+        "url": "https://github.com/qpdf/qpdf/releases/download/v12.4.2/qpdf-12.4.2-msvc64.zip",
+        "sha256": "db87077e683630c1217e0e8f9a20a9749d952ab676e881c3689187763a5de25d"
+      },
+      "aarch64-pc-windows-msvc": {
+        "url": "https://github.com/qpdf/qpdf/releases/download/v12.4.2/qpdf-12.4.2-msvc-arm64.zip",
+        "sha256": "2b5d7740a2513d8a841116692dc2cf7efe83f35262386ebab18bed35fbf15ab1"
+      }
+    }
+  }
+}

@@ -250,6 +250,27 @@ mod tests {
         assert!(locate_helper(&QPDF, &locations).is_err());
     }
 
+    fn parse_version(text: &str) -> Option<(u32, u32, u32)> {
+        let mut parts = text.trim().splitn(3, '.').map(|part| part.parse::<u32>().ok());
+        Some((parts.next()??, parts.next()??, parts.next()??))
+    }
+
+    #[test]
+    fn resolved_qpdf_meets_the_pinned_minimum_version() {
+        let Ok(qpdf) = resolve_helper(&QPDF) else {
+            if std::env::var_os("TOOLBOX_REQUIRE_QPDF").is_some() { panic!("qpdf is required for this test run"); }
+            eprintln!("skipping: qpdf not available");
+            return;
+        };
+        let pin: serde_json::Value = serde_json::from_str(include_str!("../../../qpdf-pin.json")).unwrap();
+        let minimum = pin["minimumVersion"].as_str().and_then(parse_version).expect("qpdf-pin.json has a minimumVersion");
+        let output = Command::new(&qpdf).arg("--version").output().unwrap();
+        let reported = String::from_utf8_lossy(&output.stdout);
+        let version = reported.lines().find_map(|line| line.strip_prefix("qpdf version ")).and_then(parse_version)
+            .unwrap_or_else(|| panic!("{} did not report a qpdf version: {reported}", qpdf.display()));
+        assert!(version >= minimum, "{} reports {version:?}, below the pinned minimum {minimum:?}", qpdf.display());
+    }
+
     #[test]
     fn bundled_watermark_font_manifest_is_pinned_and_verified() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/fonts");
