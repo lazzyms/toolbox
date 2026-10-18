@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use lopdf::Document;
 
 use crate::kit::common::{JobOutcome, OutputLocation};
-use crate::kit::contracts::ToolError;
+use crate::kit::contracts::{SkipCode, SkipReason, ToolError};
 use crate::kit::office::{self, OfficeProcessor};
 use crate::kit::pdf::PDFProcessor;
 
@@ -79,6 +79,17 @@ fn probe_pdf(bytes: &[u8]) -> Result<ProtectionState, ToolError> {
     })
 }
 
+pub const NOT_PASSWORD_PROTECTED: &str = "Not password-protected. Nothing to unlock, so no copy was made.";
+pub const PERMISSIONS_ONLY: &str = "Opens without a password. It only has print and copy restrictions. To clear them, use Remove restrictions in PDF Editor.";
+
+pub fn unlock_skip_reason(state: ProtectionState) -> Option<SkipReason> {
+    match state {
+        ProtectionState::OpenPassword => None,
+        ProtectionState::NotProtected => Some(SkipReason::new(SkipCode::NotProtected, NOT_PASSWORD_PROTECTED)),
+        ProtectionState::PermissionsOnly => Some(SkipReason::new(SkipCode::PermissionsPasswordOnly, PERMISSIONS_ONLY)),
+    }
+}
+
 pub struct PasswordProcessor;
 
 impl PasswordProcessor {
@@ -103,7 +114,7 @@ fn unsupported(input_path: PathBuf) -> JobOutcome {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::{probe, PasswordProcessor, ProtectedFormat, ProtectionState};
     use crate::kit::common::OutputLocation;
     use crate::kit::contracts::ErrorKind;
@@ -131,7 +142,7 @@ mod tests {
         assert!(outcome.output_paths().is_empty());
     }
 
-    fn pdf(encryption: Option<(&str, &str)>) -> Vec<u8> {
+    pub(crate) fn pdf(encryption: Option<(&str, &str)>) -> Vec<u8> {
         let mut document = Document::with_version("1.7");
         let pages_id = document.new_object_id();
         let content_id = document.add_object(Stream::new(dictionary! {}, b"BT ET".to_vec()));
@@ -161,13 +172,13 @@ mod tests {
         bytes
     }
 
-    fn word_document(flags: u16) -> Vec<u8> {
+    pub(crate) fn word_document(flags: u16) -> Vec<u8> {
         let mut word = vec![0u8; 100];
         word[10..12].copy_from_slice(&flags.to_le_bytes());
         cfb_with_streams(&[("/WordDocument", &word), ("/0Table", &[0x11; 16])])
     }
 
-    fn workbook(encrypted: bool) -> Vec<u8> {
+    pub(crate) fn workbook(encrypted: bool) -> Vec<u8> {
         let mut stream = biff_record(0x0809, &[0, 6, 5, 0]);
         if encrypted {
             stream.extend_from_slice(&biff_record(0x002F, &[0, 0, 0x34, 0x12]));

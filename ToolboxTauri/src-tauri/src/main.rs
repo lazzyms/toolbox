@@ -1489,6 +1489,86 @@ mod command_tests {
     }
 
     #[test]
+    fn unlock_skips_files_that_need_no_work_without_writing_or_reserving_a_name() {
+        use crate::kit::contracts::{OutcomeState, SkipCode};
+        use crate::kit::office::tests::ppt_plain_fixture;
+        use crate::kit::password::tests::{pdf, word_document, workbook};
+        use crate::kit::password::{NOT_PASSWORD_PROTECTED, PERMISSIONS_ONLY};
+
+        let root = sandbox("unlock-skips");
+        let plain_dir = root.join("plain");
+        std::fs::create_dir_all(&plain_dir).unwrap();
+        let plain = |name: &str, bytes: Vec<u8>| {
+            let path = plain_dir.join(name);
+            std::fs::write(&path, bytes).unwrap();
+            path
+        };
+        let skipped_plain = vec![
+            plain("lease.pdf", pdf(None)),
+            plain("budget.xlsx", test_minimal_ooxml_package("xlsx")),
+            plain("offer.docx", test_minimal_ooxml_package("docx")),
+            plain("deck.pptx", test_minimal_ooxml_package("pptx")),
+            plain("minutes.doc", word_document(0)),
+            plain("ledger.xls", workbook(false)),
+            plain("kickoff.ppt", ppt_plain_fixture()),
+        ];
+        let restricted = plain("brochure.pdf", pdf(Some(("owner", ""))));
+        let locked_lease = locked_pdf(&root, "lease", "batch-secret");
+        let locked_lease = {
+            let renamed = locked_lease.with_file_name("lease.pdf");
+            std::fs::rename(&locked_lease, &renamed).unwrap();
+            renamed
+        };
+        let locked_budget = locked_office(&root, "budget", "xlsx", "batch-secret");
+        let locked_budget = {
+            let renamed = locked_budget.with_file_name("budget.xlsx");
+            std::fs::rename(&locked_budget, &renamed).unwrap();
+            renamed
+        };
+
+        let mut inputs = skipped_plain.clone();
+        inputs.push(restricted.clone());
+        inputs.push(locked_lease.clone());
+        inputs.push(locked_budget.clone());
+        let originals = inputs.iter().map(|input| std::fs::read(input).unwrap()).collect::<Vec<_>>();
+        let beside_plain = file_names(&plain_dir);
+
+        let outcomes = tauri::async_runtime::block_on(remove_password(RunEvents::silent(), PasswordRequest {
+            paths: inputs.clone(),
+            password: "batch-secret".into(),
+            password_overrides: Default::default(),
+            output_location: location(&root, "unlocked"),
+        }));
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), inputs, "one outcome per input, in input order");
+
+        for (input, outcome) in skipped_plain.iter().zip(&outcomes) {
+            let OutcomeState::Skipped { reason } = &outcome.state else { panic!("{} should be skipped, got {:?}", input.display(), outcome.state) };
+            assert_eq!(reason.code, SkipCode::NotProtected, "{}", input.display());
+            assert_eq!(reason.message, NOT_PASSWORD_PROTECTED);
+            assert!(reason.pointer.is_none());
+        }
+        let OutcomeState::Skipped { reason } = &outcomes[skipped_plain.len()].state else { panic!("a permissions-only PDF is skipped, got {:?}", outcomes[skipped_plain.len()].state) };
+        assert_eq!(reason.code, SkipCode::PermissionsPasswordOnly);
+        assert_eq!(reason.message, PERMISSIONS_ONLY);
+        assert!(reason.message.contains("Remove restrictions"));
+        assert!(reason.pointer.is_none(), "Remove restrictions is not a registered tool yet");
+
+        for outcome in &outcomes[skipped_plain.len() + 1..] {
+            assert!(matches!(outcome.state, OutcomeState::Succeeded { .. }), "{}: {:?}", outcome.input_path.display(), outcome.state);
+        }
+        assert_eq!(
+            file_names(&root.join("unlocked")),
+            vec!["budget-unlocked.xlsx".to_string(), "lease-unlocked.pdf".to_string()],
+            "skipped files with the same names wrote nothing and reserved no name ahead of the locked ones",
+        );
+        assert_eq!(file_names(&plain_dir), beside_plain, "nothing is written beside the skipped inputs");
+        for (input, original) in inputs.iter().zip(originals) {
+            assert_eq!(std::fs::read(input).unwrap(), original, "original was modified: {}", input.display());
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn protect_office_locks_the_overridden_file_with_its_own_password() {
         let root = sandbox("protect-office-overrides");
         let shared = root.join("shared.docx");

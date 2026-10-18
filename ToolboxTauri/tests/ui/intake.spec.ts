@@ -14,6 +14,7 @@ type IntakeWindow = Window & {
     __processingDelayMs: number;
     __wrongPasswordPaths: string[];
     __invalidInputPaths: string[];
+    __skippedPaths: Record<string, { code: string; message: string }>;
     __outputSettings: unknown;
     __sent: string[];
     __drop: (paths: string[]) => void;
@@ -31,6 +32,7 @@ test.beforeEach(async ({ page }) => {
         win.__processingDelayMs = 0;
         win.__wrongPasswordPaths = [];
         win.__invalidInputPaths = [];
+        win.__skippedPaths = {};
         win.__outputSettings = { mode: "alongsideInput", folder: "/Users/test/Documents/Toolbox" };
         // Everything that leaves the page or lands in the console, so a test can prove no password does.
         win.__sent = [];
@@ -89,7 +91,9 @@ test.beforeEach(async ({ page }) => {
                 if (command.startsWith("inspect_")) throw "No preview in this test.";
                 if (win.__processingDelayMs) await new Promise((resolve) => window.setTimeout(resolve, win.__processingDelayMs));
                 const { request } = args as { request: { paths: string[] } };
-                return request.paths.map((inputPath) => win.__wrongPasswordPaths.includes(inputPath)
+                return request.paths.map((inputPath) => win.__skippedPaths[inputPath]
+                    ? { inputPath, outputPaths: [], detail: "", state: "skipped", failure: null, reason: { ...win.__skippedPaths[inputPath], pointer: null }, warnings: [] }
+                    : win.__wrongPasswordPaths.includes(inputPath)
                     ? { inputPath, outputPaths: [], detail: "", state: "failed", failure: { kind: "wrongPassword", message: "Wrong password or unsupported encryption.", pointer: null }, reason: null, warnings: [] }
                     : win.__invalidInputPaths.includes(inputPath)
                         ? { inputPath, outputPaths: [], detail: "", state: "failed", failure: { kind: "invalidInput", message: "Only PDF, Word, Excel, and PowerPoint files can be unlocked.", pointer: null }, reason: null, warnings: [] }
@@ -562,4 +566,42 @@ test("switching between Lock and Unlock clears every password and keeps Protect 
     await page.getByRole("button", { name: "Open Protect PDF", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Protect PDF", exact: true })).toBeVisible();
     expect(await requestFor(page, "remove_password")).toEqual([]);
+});
+
+test("Unlock shows files that need no work as Skipped rows with their reason, apart from failures in the summary", async ({ page }) => {
+    const notProtected = "Not password-protected. Nothing to unlock, so no copy was made.";
+    const permissionsOnly = "Opens without a password. It only has print and copy restrictions. To clear them, use Remove restrictions in PDF Editor.";
+    await open(page, "Lock & Unlock");
+    await drop(page, ["/local/lease.pdf", "/local/offer.docx", "/local/budget.xlsx", "/local/brochure.pdf", "/local/deck.pptx", "/local/payroll.xlsx", "/local/renamed.docx"]);
+    await page.evaluate(({ notProtected, permissionsOnly }) => {
+        const win = window as unknown as IntakeWindow;
+        win.__skippedPaths = {
+            "/local/offer.docx": { code: "notProtected", message: notProtected },
+            "/local/brochure.pdf": { code: "permissionsPasswordOnly", message: permissionsOnly },
+        };
+        win.__wrongPasswordPaths = ["/local/payroll.xlsx"];
+        win.__invalidInputPaths = ["/local/renamed.docx"];
+    }, { notProtected, permissionsOnly });
+    await page.getByLabel("Current password for all files", { exact: true }).fill("batch-secret");
+    await page.locator(".workspace-primary-action").click();
+
+    await expect(results(page)).toHaveCount(7);
+    await expect(page.locator(".result-summary strong")).toHaveText("Done. 3 unlocked, 2 skipped, 2 failed");
+    for (const [name, reason] of [["offer.docx", notProtected], ["brochure.pdf", permissionsOnly]]) {
+        const skipped = results(page).filter({ hasText: name });
+        await expect(skipped).toHaveAttribute("data-state", "skipped");
+        await expect(skipped).toHaveAttribute("data-tone", "skip");
+        await expect(skipped).toContainText(reason);
+        await expect(skipped.locator(".result-row-state")).toContainText("Skipped");
+        await expect(skipped.getByRole("button")).toHaveCount(0);
+    }
+    for (const name of ["payroll.xlsx", "renamed.docx"]) {
+        const failed = results(page).filter({ hasText: name });
+        await expect(failed).toHaveAttribute("data-state", "failed");
+        await expect(failed).toHaveAttribute("data-tone", "fail");
+        await expect(failed.locator(".result-row-state")).toContainText("Failed");
+    }
+    const unlocked = results(page).filter({ hasText: "lease.pdf" });
+    await expect(unlocked.getByRole("button", { name: "Open lease.pdf.out", exact: true })).toBeVisible();
+    await expect(unlocked.getByRole("button", { name: /^Show in .*: lease\.pdf\.out$/ })).toBeVisible();
 });

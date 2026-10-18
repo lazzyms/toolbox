@@ -17,7 +17,7 @@ use lopdf::{Document, LoadOptions, Object, ObjectId};
 use crate::kit::common::limits::{self, StoppableHelper};
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::ToolError;
-use crate::kit::password::{probe, ProtectedFormat};
+use crate::kit::password::{probe, unlock_skip_reason, ProtectedFormat, ProtectionState};
 
 pub struct PDFProcessor;
 
@@ -621,7 +621,10 @@ impl PDFProcessor {
             return JobOutcome::failure(input_path, ToolError::invalid_input("Only PDF files can be unlocked."));
         }
         let raw = match read_and_probe(&input_path) {
-            Ok(raw) => raw,
+            Ok((raw, state)) => match unlock_skip_reason(state) {
+                Some(reason) => return JobOutcome::skipped(input_path, reason),
+                None => raw,
+            },
             Err(error) => return JobOutcome::failure(input_path, error),
         };
         let output_path = match OutputNaming::reserve_destination(
@@ -743,11 +746,11 @@ impl PDFProcessor {
     }
 }
 
-fn read_and_probe(input_path: &Path) -> Result<Vec<u8>, ToolError> {
+fn read_and_probe(input_path: &Path) -> Result<(Vec<u8>, ProtectionState), ToolError> {
     let raw = std::fs::read(input_path)
         .map_err(|error| ToolError::invalid_input(format!("Could not read the PDF: {error}")))?;
-    probe(&raw, ProtectedFormat::Pdf)?;
-    Ok(raw)
+    let state = probe(&raw, ProtectedFormat::Pdf)?;
+    Ok((raw, state))
 }
 #[cfg(test)]
 mod tests {
