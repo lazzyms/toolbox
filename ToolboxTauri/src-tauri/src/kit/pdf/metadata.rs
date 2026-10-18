@@ -98,7 +98,7 @@ pub(crate) fn render_preview(path: &Path, page: usize, width: f32, height: f32) 
 }
 
 fn find_pdftoppm() -> Option<PathBuf> {
-    crate::kit::resources::resolve_pdf_renderer().ok()
+    crate::kit::resources::resolve_helper(&crate::kit::resources::PDF_RENDERER).ok()
 }
 
 pub(crate) fn page_bounds(document: &Document, page_id: lopdf::ObjectId) -> Result<(f32, f32, f32, f32), String> {
