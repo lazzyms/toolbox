@@ -357,10 +357,10 @@ test("home sections show six tools and reveal the rest on request", async ({ pag
     }
 });
 
-test("search finds and opens all 32 registered tool actions", async ({ page }) => {
+test("search finds and opens all 31 registered tool actions", async ({ page }) => {
     await page.goto("/");
     const search = page.getByRole("textbox", { name: "Search tools" });
-    expect(UtilityRegistry).toHaveLength(32);
+    expect(UtilityRegistry).toHaveLength(31);
 
     for (const utility of UtilityRegistry) {
         await search.fill(utility.title);
@@ -403,25 +403,30 @@ test("search arrows navigate visible results and Enter opens the focused result"
     });
     expect(composingFindPrevented).toBe(false);
     await expect(search).toBeFocused();
-    await expect(page.locator("button[data-command-result]")).toHaveCount(2);
-    const lockUnlock = page.getByRole("button", { name: "Open Lock & Unlock", exact: true });
-    const protectOfficeFiles = page.getByRole("button", { name: "Open Protect Office Files", exact: true });
+    await expect(page.locator("button[data-command-result]")).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "Open Lock & Unlock", exact: true })).toHaveCount(1);
     await expect(page.getByRole("button", { name: "Open Protect PDF", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Open Protect Office Files", exact: true })).toHaveCount(0);
+
+    await search.fill("Compress");
+    await expect(page.locator("button[data-command-result]")).toHaveCount(2);
+    const compressPdf = page.getByRole("button", { name: "Open Compress PDF", exact: true });
+    const compressImages = page.getByRole("button", { name: "Open Compress Images", exact: true });
 
     await page.keyboard.press("ArrowDown");
-    await expect(lockUnlock).toBeFocused();
+    await expect(compressPdf).toBeFocused();
     await page.keyboard.press("ArrowDown");
-    await expect(protectOfficeFiles).toBeFocused();
+    await expect(compressImages).toBeFocused();
     await page.keyboard.press("ArrowUp");
-    await expect(lockUnlock).toBeFocused();
+    await expect(compressPdf).toBeFocused();
     await page.keyboard.press("ArrowUp");
     await expect(search).toBeFocused();
     await page.keyboard.press("ArrowDown");
     await page.keyboard.press("ArrowDown");
-    await expect(protectOfficeFiles).toBeFocused();
+    await expect(compressImages).toBeFocused();
     await page.screenshot({ path: testInfo.outputPath("phase2-command-center-search.png") });
     await page.keyboard.press("Enter");
-    await expect(page.locator(".workspace-title")).toHaveText("File Security");
+    await expect(page.locator(".workspace-title")).toHaveText("Compress Files");
 
     await page.getByRole("button", { name: "← All tools" }).click();
     await search.fill("no matching tool");
@@ -1224,7 +1229,7 @@ test("media and security workspaces expose ordered inputs and format boundaries"
     await page.getByRole("button", { name: "Open Lock & Unlock" }).click();
     await expect(page.getByText("Accepts .pdf, .doc, .docx, .xls, .xlsx, .ppt, .pptx", { exact: true })).toBeVisible();
     await page.getByRole("radiogroup", { name: "Lock or unlock" }).getByRole("radio", { name: "Lock", exact: true }).click();
-    await expect(page.getByText("Accepts .pdf", { exact: true })).toBeVisible();
+    await expect(page.getByText("Accepts .pdf, .docx, .xlsx", { exact: true })).toBeVisible();
 });
 
 test("TIFF workspace expands internal pages and sends the displayed order", async ({ page }) => {
@@ -1389,25 +1394,19 @@ test("Lock & Unlock exposes one cross-format document tool", async ({ page }) =>
     await expect(page.locator(".workspace-primary-action")).toBeEnabled();
 });
 
-test("Office protection exposes DOCX and XLSX protection", async ({ page }) => {
-    const utility = UtilityRegistry.find((item) => item.id === "office-protect");
-    expect(utility).toBeDefined();
-    expect(workspaceForTool("office-protect")?.id).toBe("file-security");
-    expect(utility?.command).toBe("protect_office");
-    expect(utility?.capability.acceptedExtensions).toEqual([
-        ".docx", ".xlsx",
-    ]);
-    expect(utility?.capability.nativeAvailability).toBe("available");
-    expect(utility?.status).toBe("implemented");
+test("Lock & Unlock locks DOCX and XLSX files in Lock mode now that Protect Office Files is retired", async ({ page }) => {
+    expect(UtilityRegistry.find((item) => item.id === "office-protect")).toBeUndefined();
+    expect(workspaceForTool("office-protect")).toBeUndefined();
+    expect(ToolWorkspaceRegistry.find((workspace) => workspace.id === "file-security")?.toolIds).toEqual(["lock-unlock"]);
 
     await page.goto("/");
-    await page.getByRole("button", { name: "Open Protect Office Files" }).click();
-    await expect(page.getByRole("heading", { name: "Protect Office Files" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Choose files to process" })).toBeVisible();
-    await expect(page.getByText("Add a password to selected DOCX and XLSX files. The originals stay untouched.", { exact: true })).toBeVisible();
-    await expect(page.getByText("DOCX and XLSX files only", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Open Protect Office Files" })).toHaveCount(0);
+    await page.getByRole("button", { name: "Open Lock & Unlock" }).click();
+    await page.getByRole("radiogroup", { name: "Lock or unlock" }).getByRole("radio", { name: "Lock", exact: true }).click();
+    await expect(page.getByText("Accepts .pdf, .docx, .xlsx", { exact: true })).toBeVisible();
     await chooseFixture(page, "/local/document.docx");
     await fillPasswords(page, "test-password");
+    await expect(page.locator(".workspace-primary-action")).toBeEnabled();
     await expect(page.locator(".workspace-primary-action")).toBeEnabled();
 });
 
@@ -1826,16 +1825,14 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
     await openFromHome(page, utility.title);
 
     const accepts = (extension: string) => utility.capability.acceptedExtensions.some((accepted) => accepted.toLowerCase() === extension);
-    const selectedFixturePath = utility.id === "office-protect"
-        ? "/local/document.docx"
-        : accepts(".pdf")
-            ? pdfFixturePath
-            : accepts(".png")
-                ? fixturePath
-                : `/local/fixture${utility.capability.acceptedExtensions[0]}`;
+    const selectedFixturePath = accepts(".pdf")
+        ? pdfFixturePath
+        : accepts(".png")
+            ? fixturePath
+            : `/local/fixture${utility.capability.acceptedExtensions[0]}`;
     await chooseFixture(page, selectedFixturePath);
 
-    if (utility.id === "lock-unlock" || utility.id === "office-protect") {
+    if (utility.id === "lock-unlock") {
         await fillPasswords(page, "test-password");
     }
     if (workspaceForTool(utility.id)?.id === "pdf-editor") {
@@ -1884,7 +1881,7 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
 };
 
 test.describe("registered feature actions", () => {
-    expect(UtilityRegistry).toHaveLength(32);
+    expect(UtilityRegistry).toHaveLength(31);
 
     for (const utility of UtilityRegistry) {
         test(`${utility.id} accepts the fixture and runs with the Settings default`, async ({ page }) => {

@@ -1,10 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
 
-// Lock asks for the new password twice, so fill every password field in the options panel.
-const fillPasswords = async (page: Page, password: string) => {
-    for (const field of await page.locator('.workspace-control-panel input[type="password"]').all()) await field.fill(password);
-};
-
 type PathKind = "file" | "folder" | "unreadable";
 
 type IntakeWindow = Window & {
@@ -141,27 +136,26 @@ const requestFor = async (page: Page, command: string) => {
 };
 
 test("dropped paths are classified, and only files the active tool takes are sent", async ({ page }) => {
-    await open(page, "Protect Office Files");
-    await setKinds(page, { "/local/Scans": "folder", "/local/locked.docx": "unreadable" });
+    await open(page, "Image Metadata");
+    await setKinds(page, { "/local/Scans": "folder", "/local/locked.png": "unreadable" });
 
-    await drop(page, ["/local/lease.docx", "/local/notes.txt", "/local/Scans", "/local/locked.docx", "/local/lease.docx", "/local/budget.pdf", "/local/plan.xlsx"]);
+    await drop(page, ["/local/photo.png", "/local/notes.txt", "/local/Scans", "/local/locked.png", "/local/photo.png", "/local/clip.gif", "/local/scan.tiff"]);
 
-    await expect(rows(page)).toHaveText([/^lease\.docx/, /^budget\.pdf/, /^plan\.xlsx/]);
+    await expect(rows(page)).toHaveText([/^photo\.png/, /^clip\.gif/, /^scan\.tiff/]);
     const notAdded = page.getByRole("region", { name: "Not added" });
     await expect(notAdded.getByText("4 items not added")).toBeVisible();
     await expect(notAdded.getByRole("listitem")).toHaveText([
-        /notes\.txt.*only takes \.pdf, \.doc, \.docx, \.xls, \.xlsx, \.ppt, \.pptx files\./,
+        /notes\.txt.*only takes .*files\./,
         /Scans.*Folders aren't added\. Open the folder and drop the files inside it\./,
-        /locked\.docx.*Couldn't open it\./,
-        /lease\.docx.*Already in the list, so it was added once\./,
+        /locked\.png.*Couldn't open it\./,
+        /photo\.png.*Already in the list, so it was added once\./,
     ]);
-    await expect(rows(page).filter({ hasText: "budget.pdf" })).toContainText("Won't run");
-    await expect(page.getByText("1 file won't run with Protect Office Files. It stays in the list for other actions.")).toBeVisible();
+    await expect(rows(page).filter({ hasText: "clip.gif" })).toContainText("Won't run");
+    await expect(page.getByText("1 file won't run with Image Metadata. It stays in the list for other actions.")).toBeVisible();
 
-    await fillPasswords(page, "test-password");
     await page.locator(".workspace-primary-action").click();
     await expect(page.getByText("Test output").first()).toBeVisible();
-    expect((await requestFor(page, "protect_office")).map((request) => request.paths)).toEqual([["/local/lease.docx", "/local/plan.xlsx"]]);
+    expect((await requestFor(page, "image_metadata")).map((request) => request.paths)).toEqual([["/local/photo.png", "/local/scan.tiff"]]);
 
     await notAdded.getByRole("button", { name: "Dismiss" }).click();
     await expect(notAdded).toHaveCount(0);
@@ -480,10 +474,6 @@ test("passwords clear when a file closes, when the list empties and when the vie
 
     await drop(page, ["/local/a.pdf"]);
     await fillBatchLock(page, "batch-secret");
-    await page.getByRole("toolbar", { name: "File security tools" }).getByRole("button", { name: "Protect Office Files", exact: true }).click();
-    await expect(page.getByLabel("New password for all files", { exact: true })).toHaveValue("");
-
-    await fillBatchLock(page, "batch-secret");
     await page.getByRole("button", { name: "← All tools" }).click();
     await openLock(page);
     await expect(page.getByLabel("New password for all files", { exact: true })).toHaveValue("");
@@ -553,7 +543,7 @@ test("a saved Remove Password favorite and recent open File Security once migrat
 
 test("a saved Protect PDF favorite and recent open File Security after the earlier migration already ran", async ({ page }) => {
     await page.addInitScript(() => {
-        if (localStorage.getItem("toolbox-tool-id-migration") === "2") return;
+        if (localStorage.getItem("toolbox-tool-id-migration") === "3") return;
         localStorage.setItem("toolbox-tool-id-migration", "1");
         localStorage.setItem("toolbox-favorites", JSON.stringify(["pdf-protect", "pdf-merge"]));
         localStorage.setItem("toolbox-recent", JSON.stringify(["pdf-protect"]));
@@ -571,7 +561,77 @@ test("a saved Protect PDF favorite and recent open File Security after the earli
         recent: JSON.parse(localStorage.getItem("toolbox-recent") ?? "null"),
         marker: localStorage.getItem("toolbox-tool-id-migration"),
     }));
-    expect(saved).toEqual({ favorites: ["lock-unlock", "pdf-merge"], recent: ["lock-unlock"], marker: "2" });
+    expect(saved).toEqual({ favorites: ["lock-unlock", "pdf-merge"], recent: ["lock-unlock"], marker: "3" });
+});
+
+test("a saved Protect Office Files favorite and recent open File Security after migration", async ({ page }) => {
+    await page.addInitScript(() => {
+        if (localStorage.getItem("toolbox-tool-id-migration") === "3") return;
+        localStorage.setItem("toolbox-tool-id-migration", "2");
+        localStorage.setItem("toolbox-favorites", JSON.stringify(["pdf-merge", "office-protect"]));
+        localStorage.setItem("toolbox-recent", JSON.stringify(["office-protect", "pdf-merge"]));
+    });
+    await page.goto("/");
+    const chips = page.getByRole("group", { name: "Favorite tools" });
+    await expect(chips.getByRole("button")).toHaveText(["Merge PDF", "Lock & Unlock"]);
+    await chips.getByRole("button", { name: "Lock & Unlock" }).click();
+    await expect(page.locator(".workspace-title")).toHaveText("File Security");
+    await expect(page.getByRole("heading", { name: "Lock & Unlock", exact: true })).toBeVisible();
+    await modes(page).getByRole("radio", { name: "Lock", exact: true }).click();
+    await expect(page.getByText("Accepts .pdf, .docx, .xlsx", { exact: true })).toBeVisible();
+
+    await page.reload();
+    const saved = await page.evaluate(() => ({
+        favorites: JSON.parse(localStorage.getItem("toolbox-favorites") ?? "null"),
+        recent: JSON.parse(localStorage.getItem("toolbox-recent") ?? "null"),
+        marker: localStorage.getItem("toolbox-tool-id-migration"),
+    }));
+    expect(saved).toEqual({ favorites: ["pdf-merge", "lock-unlock"], recent: ["lock-unlock", "pdf-merge"], marker: "3" });
+});
+
+test("Lock sends a mixed PDF, Word and Excel batch in one protect_files request and shows one locked row per file", async ({ page }) => {
+    await openLock(page);
+    await expect(page.getByText("Accepts .pdf, .docx, .xlsx", { exact: true })).toBeVisible();
+    await expect(page.getByText("Each file gets a copy ending in -protected that opens only with the new password. Your originals stay as they are.")).toBeVisible();
+    await drop(page, ["/local/lease.pdf", "/local/offer.docx", "/local/budget.xlsx"]);
+    await expect(rows(page)).toHaveText([/^lease\.pdf/, /^offer\.docx/, /^budget\.xlsx/]);
+    await expect(rows(page).filter({ hasText: "Won't run" })).toHaveCount(0);
+    await fillBatchLock(page, "batch-secret");
+    await expect(run(page)).toHaveAccessibleName("Lock 3 files");
+    await run(page).click();
+
+    await expect(results(page)).toHaveCount(3);
+    await expect(page.locator(".result-summary strong")).toHaveText("Done. 3 locked");
+    for (const name of ["lease.pdf", "offer.docx", "budget.xlsx"]) await expect(results(page).filter({ hasText: name })).toHaveAttribute("data-state", "succeeded");
+    expect(await requestFor(page, "protect_files")).toEqual([{
+        paths: ["/local/lease.pdf", "/local/offer.docx", "/local/budget.xlsx"],
+        password: "batch-secret",
+        passwordOverrides: {},
+        outputLocation: "alongsideInput",
+    }]);
+    expect(await requestFor(page, "remove_password")).toEqual([]);
+});
+
+test("Lock without its PDF helper shows the PDFs as Unavailable and the Word and Excel files as locked", async ({ page }) => {
+    const missing = { kind: "unavailable", message: "This PDF tool is unavailable because a helper it needs is missing from this copy of Toolbox. Reinstall Toolbox to restore it." };
+    await openLock(page);
+    await drop(page, ["/local/lease.pdf", "/local/offer.docx", "/local/scan.pdf", "/local/budget.xlsx"]);
+    await page.evaluate((missing) => {
+        (window as unknown as IntakeWindow).__failures = { "/local/lease.pdf": missing, "/local/scan.pdf": missing };
+    }, missing);
+    await fillBatchLock(page, "batch-secret");
+    await run(page).click();
+
+    await expect(results(page)).toHaveCount(4);
+    expect((await requestFor(page, "protect_files")).map((request) => request.paths)).toEqual([["/local/lease.pdf", "/local/offer.docx", "/local/scan.pdf", "/local/budget.xlsx"]]);
+    for (const name of ["offer.docx", "budget.xlsx"]) await expect(results(page).filter({ hasText: name })).toHaveAttribute("data-state", "succeeded");
+    for (const name of ["lease.pdf", "scan.pdf"]) {
+        const failed = results(page).filter({ hasText: name });
+        await expect(failed).toHaveAttribute("data-state", "failed");
+        await expect(failed).toHaveAttribute("data-tone", "skip");
+        await expect(failed.locator(".result-row-state")).toContainText("Unavailable");
+        await expect(failed).toContainText(missing.message);
+    }
 });
 
 test("Unlock sends the ordered batch with one password and the shell's output folder, and shows one row per file", async ({ page }) => {
@@ -610,7 +670,7 @@ test("Unlock sends the ordered batch with one password and the shell's output fo
     await expect(run).toBeEnabled();
 });
 
-test("switching between Lock and Unlock clears every password and keeps Protect Office Files reachable", async ({ page }) => {
+test("switching between Lock and Unlock clears every password and Lock takes Word and Excel files in place", async ({ page }) => {
     await open(page, "Lock & Unlock");
     await drop(page, ["/local/a.pdf", "/local/b.pdf"]);
     await page.getByLabel("Current password for all files", { exact: true }).fill("batch-secret");
@@ -621,7 +681,8 @@ test("switching between Lock and Unlock clears every password and keeps Protect 
     await expect(page.getByLabel("Confirm new password", { exact: true })).toHaveValue("");
     await expect(row(page, "b.pdf")).not.toContainText("Own password");
     await expect(run(page)).toBeDisabled();
-    await expect(page.getByText("To lock Word and Excel files, use Protect Office Files.")).toBeVisible();
+    await expect(page.getByText("Accepts .pdf, .docx, .xlsx", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Open Protect Office Files" })).toHaveCount(0);
     await fillBatchLock(page, "lock-secret");
     await setOwnPassword(page, "a.pdf", "own-lock-secret", "lock");
 
@@ -632,8 +693,6 @@ test("switching between Lock and Unlock clears every password and keeps Protect 
 
     await modes(page).getByRole("radio", { name: "Lock", exact: true }).click();
     await expect(page.getByLabel("New password for all files", { exact: true })).toHaveValue("");
-    await page.getByRole("button", { name: "Open Protect Office Files", exact: true }).click();
-    await expect(page.getByRole("heading", { name: "Protect Office Files", exact: true })).toBeVisible();
     expect(await requestFor(page, "remove_password")).toEqual([]);
     expect(await requestFor(page, "protect_files")).toEqual([]);
 });

@@ -834,9 +834,10 @@ mod tests {
         let office = native_capability("remove_password").unwrap();
         assert_eq!(office.accepted_extensions, [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"]);
         let lock = native_capability("protect_files").unwrap();
-        assert_eq!((lock.accepted_extensions.as_slice(), lock.output_suffix.as_str()), ([".pdf".to_string()].as_slice(), "-protected"));
+        assert_eq!((lock.accepted_extensions.as_slice(), lock.output_suffix.as_str()), ([".pdf", ".docx", ".xlsx"].map(String::from).as_slice(), "-protected"));
         assert!(lock.native_available);
         assert!(native_capability("protect_pdf").is_none(), "the PDF protect command is retired");
+        assert!(native_capability("protect_office").is_none(), "the Office protect command is retired");
         let images = native_capability("images_to_pdf").unwrap();
         assert_eq!(images.input_cardinality, InputCardinality::Ordered);
         assert!(!images.accepted_extensions.contains(&".tif".to_string()));

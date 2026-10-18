@@ -107,6 +107,6 @@ test("shared cards keep generated anatomy and variants own selected appearance",
 
   const commandRail = page.locator(".workspace-command-rail");
   await expect(commandRail.locator('[data-slot="card"]')).toHaveCount(0);
-  await expect(commandRail.locator(".workspace-command")).toHaveCount(2);
+  await expect(commandRail.locator(".workspace-command")).toHaveCount(1);
   await expect(commandRail.locator('.workspace-command[aria-pressed="true"]')).toHaveAttribute("data-variant", "secondary");
 });

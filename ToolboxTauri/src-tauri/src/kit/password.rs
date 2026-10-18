@@ -133,7 +133,8 @@ impl PasswordProcessor {
     pub fn protect(input_path: PathBuf, password: &str, output_location: &OutputLocation) -> JobOutcome {
         match ProtectedFormat::from_path(&input_path) {
             Some(ProtectedFormat::Pdf) => PDFProcessor::protect(input_path, password, output_location),
-            _ => JobOutcome::failure(input_path, ToolError::invalid_input("Only PDF files can be locked.")),
+            Some(ProtectedFormat::Docx | ProtectedFormat::Xlsx) => OfficeProcessor::protect(input_path, password, output_location),
+            _ => JobOutcome::failure(input_path, ToolError::invalid_input("Only PDF, Word and Excel files can be locked.")),
         }
     }
 }

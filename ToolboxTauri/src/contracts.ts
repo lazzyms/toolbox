@@ -9,7 +9,6 @@ export type AtomicToolId =
   | "pdf-watermark"
   | "pdf-crop"
   | "pdf-edit"
-  | "office-protect"
   | "images-to-pdf"
   | "pdf-to-images"
   | "pdf-to-text"
@@ -72,7 +71,6 @@ export type JobState = "running" | "success" | "mixed" | "failure";
 export type ToolCommand =
   | "remove_password"
   | "protect_files"
-  | "protect_office"
   | "compress_images"
   | "convert_images"
   | "inspect_pdf"
@@ -207,7 +205,6 @@ export interface ToolDefinition {
     | "pdf-crop"
     | "pdf-edit"
     | "pdf-sign"
-    | "office-protect"
     | "pdf-organize"
     | "pdf-page-numbers"
     | "pdf-watermark"
