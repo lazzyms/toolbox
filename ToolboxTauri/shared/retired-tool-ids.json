@@ -1,6 +1,7 @@
 {
-  "version": 1,
+  "version": 2,
   "retired": {
-    "pdf-unlock": "lock-unlock"
+    "pdf-unlock": "lock-unlock",
+    "pdf-protect": "lock-unlock"
   }
 }

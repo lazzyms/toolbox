@@ -1,5 +1,5 @@
 {
-  "minimumVersion": "9.0.0",
+  "minimumVersion": "11.0.0",
   "windows": {
     "version": "12.4.2",
     "archives": {

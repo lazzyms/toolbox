@@ -31,11 +31,11 @@ impl FakeHelper {
         Self::write(directory, name, delegate, "")
     }
 
-    /// Like `install`, but a call whose arguments mention `marker` writes part of its last
-    /// argument, records its pid and then hangs until it is killed.
+    /// Like `install`, but a call whose arguments mention `marker` writes part of its output
+    /// (qpdf's second argument), records its pid and then hangs until it is killed.
     pub fn install_stalling_on(directory: &Path, name: &str, delegate: Option<&Path>, marker: &str) -> Self {
         let stall = format!(
-            "case \"$*\" in *'{marker}'*) for last; do :; done; printf partial > \"$last\"; echo $$ > \"$record.pid.part\"; mv \"$record.pid.part\" \"$record.pid\"; exec sleep 30;; esac\n"
+            "case \"$*\" in *'{marker}'*) printf partial > \"$2\"; echo $$ > \"$record.pid.part\"; mv \"$record.pid.part\" \"$record.pid\"; exec sleep 30;; esac\n"
         );
         Self::write(directory, name, delegate, &stall)
     }

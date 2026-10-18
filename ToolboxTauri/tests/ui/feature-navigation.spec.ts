@@ -357,10 +357,10 @@ test("home sections show six tools and reveal the rest on request", async ({ pag
     }
 });
 
-test("search finds and opens all 33 registered tool actions", async ({ page }) => {
+test("search finds and opens all 32 registered tool actions", async ({ page }) => {
     await page.goto("/");
     const search = page.getByRole("textbox", { name: "Search tools" });
-    expect(UtilityRegistry).toHaveLength(33);
+    expect(UtilityRegistry).toHaveLength(32);
 
     for (const utility of UtilityRegistry) {
         await search.fill(utility.title);
@@ -403,26 +403,22 @@ test("search arrows navigate visible results and Enter opens the focused result"
     });
     expect(composingFindPrevented).toBe(false);
     await expect(search).toBeFocused();
-    await expect(page.locator("button[data-command-result]")).toHaveCount(3);
+    await expect(page.locator("button[data-command-result]")).toHaveCount(2);
     const lockUnlock = page.getByRole("button", { name: "Open Lock & Unlock", exact: true });
-    const protectPdf = page.getByRole("button", { name: "Open Protect PDF", exact: true });
     const protectOfficeFiles = page.getByRole("button", { name: "Open Protect Office Files", exact: true });
+    await expect(page.getByRole("button", { name: "Open Protect PDF", exact: true })).toHaveCount(0);
 
     await page.keyboard.press("ArrowDown");
     await expect(lockUnlock).toBeFocused();
     await page.keyboard.press("ArrowDown");
-    await expect(protectPdf).toBeFocused();
-    await page.keyboard.press("ArrowDown");
     await expect(protectOfficeFiles).toBeFocused();
-    await page.keyboard.press("ArrowUp");
-    await expect(protectPdf).toBeFocused();
     await page.keyboard.press("ArrowUp");
     await expect(lockUnlock).toBeFocused();
     await page.keyboard.press("ArrowUp");
     await expect(search).toBeFocused();
     await page.keyboard.press("ArrowDown");
     await page.keyboard.press("ArrowDown");
-    await expect(protectPdf).toBeFocused();
+    await expect(protectOfficeFiles).toBeFocused();
     await page.screenshot({ path: testInfo.outputPath("phase2-command-center-search.png") });
     await page.keyboard.press("Enter");
     await expect(page.locator(".workspace-title")).toHaveText("File Security");
@@ -735,7 +731,7 @@ test("window shortcuts reach search and settings from every workspace view", asy
 });
 
 const runShortcutCases = [
-    { tool: "Protect PDF", file: pdfFixturePath, command: "protect_pdf", ready: (page: Page) => fillPasswords(page, "test-password") },
+    { tool: "Lock & Unlock", file: pdfFixturePath, command: "remove_password", ready: (page: Page) => fillPasswords(page, "test-password") },
     { tool: "Compress PDF", file: pdfFixturePath, command: "compress_pdf", ready: async () => undefined },
     { tool: "Compress Images", file: fixturePath, command: "compress_images", ready: async () => undefined },
     { tool: "Image Metadata", file: fixturePath, command: "image_metadata", ready: async () => undefined },
@@ -762,7 +758,8 @@ for (const { tool, file, command, ready } of runShortcutCases) {
 
 test("shortcuts stay out of text fields and composition, and Run still fires from a field", async ({ page }) => {
     await page.goto("/");
-    await page.getByRole("button", { name: "Open Protect PDF", exact: true }).click();
+    await page.getByRole("button", { name: "Open Lock & Unlock", exact: true }).click();
+    await page.getByRole("radiogroup", { name: "Lock or unlock" }).getByRole("radio", { name: "Lock", exact: true }).click();
     await chooseFixture(page, pdfFixturePath);
     await fillPasswords(page, "test-password");
     const field = page.locator('.workspace-control-panel input[type="password"]').first();
@@ -781,10 +778,10 @@ test("shortcuts stay out of text fields and composition, and Run still fires fro
         return event.defaultPrevented;
     }));
     expect(composingPrevented).toEqual([false, false]);
-    expect(await invocationCount(page, "protect_pdf")).toBe(0);
+    expect(await invocationCount(page, "protect_files")).toBe(0);
 
     await page.keyboard.press("Meta+Enter");
-    await expect.poll(() => invocationCount(page, "protect_pdf")).toBe(1);
+    await expect.poll(() => invocationCount(page, "protect_files")).toBe(1);
 });
 
 for (const { platform, labels } of [
@@ -1224,11 +1221,10 @@ test("media and security workspaces expose ordered inputs and format boundaries"
     await expect(page.getByRole("button", { name: `Move ${fixtureName} down` })).toBeDisabled();
 
     await page.getByRole("button", { name: "← All tools" }).click();
-    await page.getByRole("button", { name: "Open Protect PDF" }).click();
-    await expect(page.getByText("PDF files only", { exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "← All tools" }).click();
     await page.getByRole("button", { name: "Open Lock & Unlock" }).click();
     await expect(page.getByText("Accepts .pdf, .doc, .docx, .xls, .xlsx, .ppt, .pptx", { exact: true })).toBeVisible();
+    await page.getByRole("radiogroup", { name: "Lock or unlock" }).getByRole("radio", { name: "Lock", exact: true }).click();
+    await expect(page.getByText("Accepts .pdf", { exact: true })).toBeVisible();
 });
 
 test("TIFF workspace expands internal pages and sends the displayed order", async ({ page }) => {
@@ -1839,7 +1835,7 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
                 : `/local/fixture${utility.capability.acceptedExtensions[0]}`;
     await chooseFixture(page, selectedFixturePath);
 
-    if (utility.id === "lock-unlock" || utility.id === "pdf-protect" || utility.id === "office-protect") {
+    if (utility.id === "lock-unlock" || utility.id === "office-protect") {
         await fillPasswords(page, "test-password");
     }
     if (workspaceForTool(utility.id)?.id === "pdf-editor") {
@@ -1888,7 +1884,7 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
 };
 
 test.describe("registered feature actions", () => {
-    expect(UtilityRegistry).toHaveLength(33);
+    expect(UtilityRegistry).toHaveLength(32);
 
     for (const utility of UtilityRegistry) {
         test(`${utility.id} accepts the fixture and runs with the Settings default`, async ({ page }) => {
@@ -1899,7 +1895,7 @@ test.describe("registered feature actions", () => {
 });
 
 test.describe("workspace runs send the stored output location", () => {
-    const representativeTools = ["pdf-protect", "pdf-edit", "pdf-to-images", "resize", "pdf-compress", "icon-set"] as const;
+    const representativeTools = ["lock-unlock", "pdf-edit", "pdf-to-images", "resize", "pdf-compress", "icon-set"] as const;
     const customFolder = { customFolder: "/fake/shell/output" };
 
     test("one representative tool covers every workspace view", () => {
@@ -2023,7 +2019,7 @@ test.describe("Settings output location", () => {
 
 const runRequests = (page: Page) => page.evaluate(() =>
     ((window as TestWindow).__toolboxInvocations ?? [])
-        .filter(({ command }) => command === "export_image_edit_plan" || command === "protect_pdf")
+        .filter(({ command }) => command === "export_image_edit_plan" || command === "protect_files")
         .map(({ command, args }) => {
             const request = (args as { request: RunRequest }).request;
             return command === "export_image_edit_plan" ? request.plan?.outputLocation : request.outputLocation;
@@ -2163,7 +2159,8 @@ test.describe("per-run destination", () => {
         await storeOutputSettings(page, { mode: "customFolder", folder: "/gone/Protected" });
         await page.addInitScript(() => { (window as TestWindow).__toolboxFolderChecks = { "/gone/Protected": "missing" }; });
         await page.goto("/");
-        await page.getByRole("button", { name: "Open Protect PDF" }).click();
+        await page.getByRole("button", { name: "Open Lock & Unlock" }).click();
+        await page.getByRole("radiogroup", { name: "Lock or unlock" }).getByRole("radio", { name: "Lock", exact: true }).click();
         await chooseFixture(page, pdfFixturePath);
         await expect(page.getByRole("region", { name: "Destination" }).getByTestId("run-destination-example")).toHaveText("document-protected.pdf");
         await fillPasswords(page, "test-password");

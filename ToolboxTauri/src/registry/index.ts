@@ -12,7 +12,6 @@ const UtilityMetadata: Array<Omit<ToolDefinition, "capability" | "status">> = [
     { id: "pdf-watermark", title: "Watermark PDF", shortTitle: "Watermark", resultVerb: "Watermarked", runningVerb: "Watermarking", blurb: "Stamp text across PDF pages.", symbol: "droplet", category: "PDF", command: "watermark_pdf", verification: "pdf-watermark", view: "pdf-watermark" },
     { id: "pdf-crop", title: "Crop PDF", shortTitle: "Crop", resultVerb: "Cropped", runningVerb: "Cropping", blurb: "Hide content outside a selected page rectangle.", symbol: "crop", category: "PDF", command: "crop_pdf", verification: "pdf-crop", view: "pdf-crop" },
     { id: "pdf-edit", title: "Edit PDF", shortTitle: "Edit", resultVerb: "Edited", runningVerb: "Editing", blurb: "Add text, highlights, shapes, and notes to a PDF.", symbol: "wand", category: "PDF", command: "edit_pdf", verification: "pdf-edit", view: "pdf-edit" },
-    { id: "pdf-protect", title: "Protect PDF", shortTitle: "Protect", resultVerb: "Protected", runningVerb: "Protecting", blurb: "Add a password so only you can open a PDF.", symbol: "lock", category: "PDF", command: "protect_pdf", verification: "protect-pdf", view: "pdf-protect" },
     { id: "office-protect", title: "Protect Office Files", shortTitle: "Protect Office", resultVerb: "Protected", runningVerb: "Protecting", blurb: "Protect DOCX and XLSX files with a verified local writer.", symbol: "lock", category: "Documents", command: "protect_office", verification: "protect-office", view: "office-protect" },
     { id: "images-to-pdf", title: "Images to PDF", shortTitle: "Images to PDF", resultVerb: "Converted", runningVerb: "Converting", blurb: "Turn photos and scans into one PDF.", symbol: "photo", category: "PDF", command: "images_to_pdf", verification: "images-to-pdf", view: "images-to-pdf" },
     { id: "pdf-to-images", title: "PDF to Images", shortTitle: "PDF to Images", resultVerb: "Converted", runningVerb: "Converting", blurb: "Render PDF pages to JPEG images at 72 to 300 dpi.", symbol: "photo", category: "PDF", command: "pdf_to_images", verification: "pdf-to-images", view: "pdf-to-images" },
@@ -66,7 +65,7 @@ export const ToolWorkspaceRegistry: ToolWorkspaceDefinition[] = [
         symbol: "lock",
         category: "Documents",
         categories: ["Documents", "PDF"],
-        toolIds: ["lock-unlock", "pdf-protect", "office-protect"],
+        toolIds: ["lock-unlock", "office-protect"],
     },
     {
         id: "pdf-editor",

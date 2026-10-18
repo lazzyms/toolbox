@@ -1,21 +1,20 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ToolScaffold, type RunHandler } from "../components/ToolScaffold";
 import { BatchPasswordFields, FilePasswordCell, passwordReadiness, passwordRequest, usePasswordSet, type PasswordMode, type PasswordState } from "../components/PasswordFields";
-import type { AtomicToolId, PasswordSet, ToolDefinition, ToolResult } from "../contracts";
+import type { AtomicToolId, PasswordSet, ToolCommand, ToolDefinition, ToolResult } from "../contracts";
+import { capabilityFor } from "../registry/capabilities";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ShortcutHint } from "../components/ShortcutHint";
 import { shortcutTarget } from "../shortcuts";
 
-const commands: Partial<Record<AtomicToolId, string>> = {
-  "pdf-protect": "protect_pdf",
-  "office-protect": "protect_office",
-};
+const commandFor = (toolId: AtomicToolId, mode: PasswordMode): ToolCommand =>
+  toolId === "office-protect" ? "protect_office" : mode === "lock" ? "protect_files" : "remove_password";
 
-const runWith = (toolId: AtomicToolId, passwords: PasswordSet): RunHandler => (paths, outputLocation, { runId }) =>
-  invoke<ToolResult>(commands[toolId] ?? "remove_password", { runId, request: passwordRequest(paths, passwords, outputLocation) });
+const runWith = (command: ToolCommand, passwords: PasswordSet): RunHandler => (paths, outputLocation, { runId }) =>
+  invoke<ToolResult>(command, { runId, request: passwordRequest(paths, passwords, outputLocation) });
 
 // Closing a file drops its own password, and closing every file drops them all.
 const ForgetClosedFiles = ({ files, passwords }: { files: string[]; passwords: PasswordState }) => {
@@ -32,12 +31,19 @@ const fileCount = (count: number) => `${count} ${count === 1 ? "file" : "files"}
 export const SecurityWorkspaceView = ({ utility: activeUtility }: { utility: ToolDefinition }) => {
   const passwords = usePasswordSet();
   const [chosenMode, setChosenMode] = useState<PasswordMode>("unlock");
-  const isPdfProtection = activeUtility.id === "pdf-protect";
   const isOfficeProtection = activeUtility.id === "office-protect";
   const isLockUnlock = activeUtility.id === "lock-unlock";
   const mode: PasswordMode = isLockUnlock ? chosenMode : "lock";
-  // Lock inside Lock & Unlock is not wired to a command yet, so Protect PDF and Protect Office Files keep that job.
-  const lockPending = isLockUnlock && mode === "lock";
+  const command = commandFor(activeUtility.id, mode);
+  const lockingWithLockUnlock = isLockUnlock && mode === "lock";
+  const utility = useMemo<ToolDefinition>(() => lockingWithLockUnlock
+    ? {
+      ...activeUtility,
+      resultVerb: "Locked",
+      runningVerb: "Locking",
+      capability: { ...activeUtility.capability, outputSuffix: capabilityFor("protect_files").outputSuffix },
+    }
+    : activeUtility, [activeUtility, lockingWithLockUnlock]);
 
   useEffect(() => {
     passwords.clear();
@@ -47,17 +53,15 @@ export const SecurityWorkspaceView = ({ utility: activeUtility }: { utility: Too
     <ToolScaffold
       variant="workspace"
       sessionKey="file-security"
-      utility={activeUtility}
-      onRun={runWith(activeUtility.id, passwords.set)}
-      retryWithPassword={(password) => runWith(activeUtility.id, { batch: password, overrides: {} })}
+      utility={utility}
+      onRun={runWith(command, passwords.set)}
+      retryWithPassword={(password) => runWith(command, { batch: password, overrides: {} })}
       renderFileExtra={(path, selected, locked) => (
         <FilePasswordCell mode={mode} path={path} passwords={passwords} selected={selected} disabled={locked} />
       )}
     >
       {({ files, run, loading, destination }) => {
-        const readiness = lockPending
-          ? { ready: false, reason: "To lock files for now, use Protect PDF or Protect Office Files." }
-          : passwordReadiness(mode, passwords, files);
+        const readiness = passwordReadiness(mode, passwords, files);
         const verb = mode === "lock" ? "Lock" : "Unlock";
         const runLabel = isLockUnlock ? (files.length === 0 ? `${verb} files` : `${verb} ${fileCount(files.length)}`) : activeUtility.shortTitle;
         return (
@@ -82,35 +86,30 @@ export const SecurityWorkspaceView = ({ utility: activeUtility }: { utility: Too
               </ToggleGroup>
             )}
             <p className="workspace-panel-copy">
-              {isPdfProtection
-                ? "Add a password to each selected PDF. The originals stay untouched."
-                : isOfficeProtection
-                  ? "Add a password to selected DOCX and XLSX files. The originals stay untouched."
-                  : lockPending
-                    ? "Add a password to PDF, Word and Excel files."
-                    : "Each file gets a copy ending in -unlocked that opens without a password. Your originals stay as they are."}
+              {isOfficeProtection
+                ? "Add a password to selected DOCX and XLSX files. The originals stay untouched."
+                : mode === "lock"
+                  ? "Each PDF gets a copy ending in -protected that opens only with the new password. Your originals stay as they are."
+                  : "Each file gets a copy ending in -unlocked that opens without a password. Your originals stay as they are."}
             </p>
             <p className="workspace-note">
-              {isPdfProtection
-                ? "PDF files only"
-                : isOfficeProtection
-                  ? "DOCX and XLSX files only"
+              {isOfficeProtection
+                ? "DOCX and XLSX files only"
+                : mode === "lock"
+                  ? "Accepts .pdf"
                   : "Accepts .pdf, .doc, .docx, .xls, .xlsx, .ppt, .pptx"}
             </p>
           </div>
-          {lockPending ? (
+          {isLockUnlock && mode === "lock" && (
             <div className="grid gap-2">
-              <Button variant="outline" size="sm" onClick={() => openTool("pdf-protect")}>Open Protect PDF</Button>
+              <p className="workspace-note">To lock Word and Excel files, use Protect Office Files.</p>
               <Button variant="outline" size="sm" onClick={() => openTool("office-protect")}>Open Protect Office Files</Button>
             </div>
-          ) : (
-            <>
-              <BatchPasswordFields mode={mode} passwords={passwords} files={files} />
-              {destination}
-              {isLockUnlock && <p className="workspace-note">An existing name gets -1, -2 and so on. Nothing is replaced.</p>}
-            </>
           )}
-          {(files.length > 0 || lockPending) && readiness.reason && <p className="workspace-note" data-testid="password-readiness">{readiness.reason}</p>}
+          <BatchPasswordFields mode={mode} passwords={passwords} files={files} />
+          {destination}
+          {isLockUnlock && <p className="workspace-note">An existing name gets -1, -2 and so on. Nothing is replaced.</p>}
+          {files.length > 0 && readiness.reason && <p className="workspace-note" data-testid="password-readiness">{readiness.reason}</p>}
           <Button
             variant="default"
             aria-label={runLabel}

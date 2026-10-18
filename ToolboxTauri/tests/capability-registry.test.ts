@@ -41,8 +41,8 @@ test("UI capabilities are the shared native contract facts", () => {
   assert.equal(capabilitiesByCommand.get("remove_password")?.outputSuffix, "-unlocked");
   assert.equal(capabilitiesByCommand.get("remove_password")?.inputCardinality, "multiple");
   assert.equal(UtilityRegistry.find(({ id }) => id === "lock-unlock")?.command, "remove_password");
-  assert.deepEqual(capabilitiesByCommand.get("protect_pdf")?.acceptedExtensions, [".pdf"]);
-  assert.equal(capabilitiesByCommand.get("protect_pdf")?.nativeAvailability, "available");
+  assert.deepEqual(capabilitiesByCommand.get("protect_files")?.acceptedExtensions, [".pdf"]);
+  assert.equal(capabilitiesByCommand.get("protect_files")?.nativeAvailability, "available");
   assert.deepEqual(capabilitiesByCommand.get("protect_office")?.acceptedExtensions, [
     ".docx", ".xlsx",
   ]);
@@ -81,7 +81,7 @@ test("every tool declares one output suffix and many-to-one tools take ordered i
     SharedCapabilityRegistry.map(({ command, outputSuffix }) => [command, outputSuffix]),
   );
   assert.equal(suffixes.get("merge_pdfs"), "-merged");
-  assert.equal(suffixes.get("protect_pdf"), "-protected");
+  assert.equal(suffixes.get("protect_files"), "-protected");
   assert.equal(suffixes.get("pdf_to_images"), "-images");
 });
 

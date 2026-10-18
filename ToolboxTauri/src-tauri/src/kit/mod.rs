@@ -15,6 +15,11 @@ mod retired_tool_ids;
 pub(crate) static PROCESS_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
+pub(crate) const TEST_PASSWORD: &str = "toolbox-test-password";
+#[cfg(test)]
+pub(crate) const TEST_OVERRIDE_PASSWORD: &str = "toolbox-test-override";
+
+#[cfg(test)]
 mod fidelity_tests {
     use super::fidelity::{describe, ContentShape, MetadataPolicy, OrientationPolicy};
     use image::codecs::gif::{GifEncoder, Repeat};
