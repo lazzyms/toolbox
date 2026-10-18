@@ -17,6 +17,7 @@ use lopdf::{Document, LoadOptions, Object, ObjectId};
 use crate::kit::common::limits::{self, StoppableHelper};
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::ToolError;
+use crate::kit::password::{probe, ProtectedFormat};
 
 pub struct PDFProcessor;
 
@@ -619,6 +620,10 @@ impl PDFProcessor {
         if input_path.extension().and_then(|extension| extension.to_str()).is_none_or(|extension| !extension.eq_ignore_ascii_case("pdf")) {
             return JobOutcome::failure(input_path, ToolError::invalid_input("Only PDF files can be unlocked."));
         }
+        let raw = match read_and_probe(&input_path) {
+            Ok(raw) => raw,
+            Err(error) => return JobOutcome::failure(input_path, error),
+        };
         let output_path = match OutputNaming::reserve_destination(
             &input_path,
             output_location,
@@ -633,7 +638,7 @@ impl PDFProcessor {
         // object except the /Encrypt dictionary (objects == 1), so decrypting
         // afterwards writes a corrupt skeleton file. The password must be given
         // at load time so lopdf decrypts each object as it parses it.
-        let loaded = Document::load_with_options(&input_path, LoadOptions::with_password(password));
+        let loaded = Document::load_mem_with_options(&raw, LoadOptions::with_password(password));
         match loaded {
             Ok(doc) => {
                 if doc.is_encrypted() {
@@ -682,6 +687,15 @@ impl PDFProcessor {
     /// /Encrypt dictionary that other readers (macOS PDFKit) cannot decrypt, so
     /// protection shells out to a correct, cross-platform AES-256 writer.
     pub fn protect(input_path: PathBuf, password: &str, output_location: &OutputLocation) -> JobOutcome {
+        if ProtectedFormat::from_path(&input_path) != Some(ProtectedFormat::Pdf) {
+            return JobOutcome::failure(input_path, ToolError::invalid_input("Only PDF files can be protected."));
+        }
+        if password.is_empty() {
+            return JobOutcome::failure(input_path, ToolError::invalid_input("A non-empty password is required."));
+        }
+        if let Err(error) = read_and_probe(&input_path) {
+            return JobOutcome::failure(input_path, error);
+        }
         let output_path = match OutputNaming::reserve_destination(
             &input_path,
             output_location,
@@ -691,15 +705,6 @@ impl PDFProcessor {
             Ok(output) => output,
             Err(error) => return JobOutcome::failure(input_path, ToolError::processing(format!("Could not reserve protected PDF output: {error}"))),
         };
-
-        if let Some(ref e) = input_path.extension().map(|e| e.to_string_lossy().to_lowercase()) {
-            if e != "pdf" {
-                return JobOutcome::failure(input_path, ToolError::invalid_input("Only PDF files can be protected."));
-            }
-        }
-        if password.is_empty() {
-            return JobOutcome::failure(input_path, ToolError::invalid_input("A non-empty password is required."));
-        }
 
         let Some(qpdf) = find_qpdf() else {
             return JobOutcome::failure(input_path, ToolError::unavailable(
@@ -738,6 +743,13 @@ impl PDFProcessor {
             Err(e) => JobOutcome::failure(input_path, ToolError::unavailable(format!("Could not run qpdf: {}", e))),
         }
     }
+}
+
+fn read_and_probe(input_path: &Path) -> Result<Vec<u8>, ToolError> {
+    let raw = std::fs::read(input_path)
+        .map_err(|error| ToolError::invalid_input(format!("Could not read the PDF: {error}")))?;
+    probe(&raw, ProtectedFormat::Pdf)?;
+    Ok(raw)
 }
 
 /// Locate qpdf from an explicit override, the installed app resources, or PATH.
