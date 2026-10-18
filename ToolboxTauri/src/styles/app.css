@@ -1099,8 +1099,13 @@ body {
 .settings-page-header { height:52px; flex:none; display:flex; align-items:center; gap:14px; padding:0 20px; border-bottom:1px solid var(--border); }
 .settings-page-header h1 { margin:0; font-size:15px; font-weight:600; }
 .settings-page-header p { margin:0; color:var(--muted-foreground); font-size:12px; }
-.settings-page-header kbd { padding:0 4px; border:1px solid var(--border); border-radius:4px; color:var(--muted-foreground); font-family:inherit; font-size:11px; }
 .settings-scroll { flex:1; min-height:0; overflow:auto; }
+.settings-shortcut-search { display:grid; gap:4px; max-width:320px; }
+.settings-shortcut-group { display:flex; flex-direction:column; max-width:640px; }
+.settings-shortcut-group h2 { margin:0 0 6px; font-size:13px; font-weight:600; }
+.settings-shortcut-group dl { margin:0; }
+.settings-shortcut-row { display:flex; justify-content:space-between; gap:12px; padding:7px 0; border-bottom:1px solid var(--border); }
+.settings-shortcut-row dd { margin:0; }
 .settings-content { display:grid; gap:22px; max-width:696px; padding:24px 28px; }
 .settings-note-content { display:flex; align-items:flex-start; gap:10px; padding:12px 14px; font-size:12px; color:var(--muted-foreground); }
 .settings-note-content p { margin:0; }
@@ -1476,11 +1481,21 @@ body {
   justify-content: flex-end;
   gap: 12px;
 }
-.run-controls-footer kbd {
-  padding: 0 4px;
+kbd.shortcut-hint {
+  padding: 0 5px;
   border: 1px solid var(--border);
   border-radius: 4px;
   color: var(--muted-foreground);
   font-family: inherit;
   font-size: 11px;
+  font-weight: 500;
+  line-height: 16px;
+}
+[data-variant="default"] > kbd.shortcut-hint {
+  border-color: currentColor;
+  color: inherit;
+  opacity: 0.6;
+}
+.settings-link kbd.shortcut-hint {
+  margin-left: auto;
 }

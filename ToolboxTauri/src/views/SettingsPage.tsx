@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ComponentType } from "react";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
-import { ArrowLeft, Check, Eye, Folder, Info, LoaderCircle, Search, Shield, type LucideIcon } from "lucide-react";
+import { ArrowLeft, Check, Eye, Folder, Info, List, LoaderCircle, Search, Shield, type LucideIcon } from "lucide-react";
 import packageInfo from "../../package.json";
 import qrCode from "../assets/BuyMeACoffeeQR.png";
 import appIcon from "../../src-tauri/icons/128x128.png";
@@ -13,14 +13,15 @@ import {
 import { useOutputSettings } from "../outputLocation";
 import { shortenHomePath, useHomeDir } from "../homePath";
 import type { OutputMode } from "../contracts";
+import { ShortcutHint } from "../components/ShortcutHint";
+import { isWindows, shortcutAria, shortcutLabel, shortcuts } from "../shortcuts";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-
-const isWindows = () => navigator.platform.toLowerCase().includes("win");
 
 const AppearanceSection = () => {
   const [theme, setTheme] = useState<"dark" | "light">(
@@ -235,13 +236,56 @@ const AboutSection = () => (
   </>
 );
 
+const shortcutGroups = ["Everywhere", "Batch tools"] as const;
+
+const KeyboardShortcutsSection = () => {
+  const [query, setQuery] = useState("");
+  const needle = query.trim().toLowerCase();
+  const matching = shortcuts.filter((item) => item.action.toLowerCase().includes(needle));
+  return (
+    <>
+      <div className="settings-shortcut-search">
+        <Label htmlFor="settings-shortcut-search">Search shortcuts</Label>
+        <Input
+          id="settings-shortcut-search"
+          type="search"
+          placeholder="Type an action, like undo"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+        />
+      </div>
+      {shortcutGroups.map((group) => {
+        const rows = matching.filter((item) => item.group === group);
+        return rows.length > 0 && (
+          <section key={group} className="settings-shortcut-group" aria-label={group}>
+            <h2>{group}</h2>
+            <dl>
+              {rows.map((item) => (
+                <div key={item.id} className="settings-shortcut-row">
+                  <dt>{item.action}</dt>
+                  <dd><kbd className="shortcut-hint">{shortcutLabel(item.id)}</kbd></dd>
+                </div>
+              ))}
+            </dl>
+          </section>
+        );
+      })}
+      {matching.length === 0 && <p className="settings-row-hint" role="status">No shortcuts match.</p>}
+      <p className="settings-row-hint">
+        Every button can be reached with Tab. Arrow keys move inside toolbars, lists and page grids. Shortcuts cannot be changed yet.
+      </p>
+    </>
+  );
+};
+
 const sections = [
   { id: "appearance", title: "Appearance", Icon: Eye, Content: AppearanceSection },
   { id: "output-location", title: "Output location", Icon: Folder, Content: OutputLocationSection },
   { id: "privacy", title: "Privacy", Icon: Shield, Content: PrivacySection },
   { id: "updates", title: "Updates", Icon: LoaderCircle, Content: UpdatesSection },
   { id: "about-and-support", title: "About and support", Icon: Info, Content: AboutSection },
-] as const satisfies ReadonlyArray<{ id: string; title: string; Icon: LucideIcon; Content: ComponentType }>;
+  { id: "keyboard-shortcuts", title: "Keyboard shortcuts", Icon: List, Content: KeyboardShortcutsSection, hint: "Shown for the computer you are on." },
+] as const satisfies ReadonlyArray<{ id: string; title: string; Icon: LucideIcon; Content: ComponentType; hint?: string }>;
 
 export type SettingsSection = (typeof sections)[number]["id"];
 
@@ -302,12 +346,12 @@ export const SettingsPage = ({
       <main className="settings-main">
         <header className="settings-page-header" data-tauri-drag-region>
           <h1 id="settings-section-title">{active.title}</h1>
-          <p>Changes save as you make them.</p>
+          <p>{"hint" in active ? active.hint : "Changes save as you make them."}</p>
           <span className="topbar__drag-region" aria-hidden="true" data-tauri-drag-region />
-          <Button variant="ghost" size="sm" aria-keyshortcuts={isWindows() ? "Control+K" : "Meta+K"} onClick={onFindTool}>
+          <Button variant="ghost" size="sm" aria-keyshortcuts={shortcutAria("find")} onClick={onFindTool}>
             <Search aria-hidden="true" />
             Find a tool
-            <kbd aria-hidden="true">{isWindows() ? "Ctrl K" : "⌘K"}</kbd>
+            <ShortcutHint id="find" />
           </Button>
         </header>
         <div className="settings-scroll">

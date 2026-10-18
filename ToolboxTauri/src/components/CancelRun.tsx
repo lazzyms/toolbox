@@ -3,6 +3,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import type { LiveRun } from './liveRun';
+import { ShortcutHint } from './ShortcutHint';
+import { matchShortcut, shortcutAria } from '../shortcuts';
 
 export interface RunTally {
     finished: number;
@@ -30,7 +32,7 @@ export const CancelRun = ({ run }: { run: LiveRun }) => {
     useEffect(() => {
         if (requested) return;
         const onKeyDown = (event: KeyboardEvent) => {
-            if (event.key !== 'Escape' || event.defaultPrevented || confirming) return;
+            if (confirming || matchShortcut(event, 'window') !== 'cancel') return;
             event.preventDefault();
             setConfirming(true);
         };
@@ -50,9 +52,9 @@ export const CancelRun = ({ run }: { run: LiveRun }) => {
             <p className="run-controls-lock">Options are locked until the batch finishes.</p>
             <div className="run-controls-footer">
                 <span className="run-controls-hint">{`${tally.finished} of ${run.paths.length} done`}</span>
-                <Button variant="outline" size="sm" disabled={requested} onClick={() => setConfirming(true)}>
+                <Button variant="outline" size="sm" disabled={requested} aria-keyshortcuts={shortcutAria('cancel')} onClick={() => setConfirming(true)}>
                     Cancel batch
-                    <kbd aria-hidden="true">Esc</kbd>
+                    <ShortcutHint id="cancel" />
                 </Button>
             </div>
             <Dialog open={confirming} onOpenChange={setConfirming}>

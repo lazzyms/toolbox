@@ -12,6 +12,8 @@ import { failedOutcome, parseToolResult } from '../jobOutcome';
 import { toolsForWorkspace, workspaceForTool } from '../registry';
 import { shortenHomePath, useHomeDir } from '../homePath';
 import { CancelRun } from './CancelRun';
+import { ShortcutHint } from './ShortcutHint';
+import { isWindows, matchShortcut, shortcutTarget } from '../shortcuts';
 import { ResultList } from './ResultList';
 import { BATCH_PROGRESS_EVENT, foldRunEvent, parseRunEvent, startRun, type LiveRun } from './liveRun';
 import { BlockedDestinationDialog, RunDestination, exampleOutputName, sameLocation, type BlockedDestination, type FolderCheck } from './RunDestination';
@@ -33,7 +35,6 @@ import {
     type NotAdded,
 } from './intake';
 
-const isWindows = () => typeof navigator !== 'undefined' && navigator.platform.toLowerCase().includes('win');
 
 const repeatLabel = (occurrence: number) => occurrence === 2 ? 'Added twice' : `Added ${occurrence} times`;
 
@@ -393,20 +394,26 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
 
     const listKeyDown = (event: React.KeyboardEvent<HTMLUListElement>) => {
         if (loading) return;
-        if (event.key === 'Delete' || event.key === 'Backspace') {
+        const delta = event.key === 'ArrowUp' ? -1 : event.key === 'ArrowDown' ? 1 : 0;
+        const index = entries.findIndex((entry) => entry.key === anchor);
+        if (delta && (event.metaKey || event.ctrlKey)) {
+            event.preventDefault();
+            if (ordered && index >= 0) moveTo(entries[index].key, index + delta);
+            return;
+        }
+        const shortcut = matchShortcut(event.nativeEvent, 'file-list');
+        if (shortcut === 'remove') {
             event.preventDefault();
             removeEntries(selection);
             return;
         }
-        if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
-        const index = entries.findIndex((entry) => entry.key === anchor);
-        if (index < 0) return;
-        const delta = event.key === 'ArrowUp' ? -1 : 1;
-        event.preventDefault();
-        if (event.metaKey || event.ctrlKey) {
-            if (ordered) moveTo(entries[index].key, index + delta);
+        if (shortcut === 'selectAll') {
+            event.preventDefault();
+            setSelection(new Set(entries.map((entry) => entry.key)));
             return;
         }
+        if (shortcut !== 'move' || index < 0) return;
+        event.preventDefault();
         const target = entries[index + delta];
         if (!target) return;
         if (event.shiftKey) setSelection((current) => new Set([...current, target.key]));
@@ -581,9 +588,10 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 <span>{entries.length ? 'Export saves a new copy. Your original stays unchanged.' : 'Drop files here or browse from this device.'}</span>
             </div>
             <div className="workspace-source-actions">
-                <Button variant="default" size="sm" className="workspace-source-open" aria-label="Choose files to process" disabled={loading} onClick={() => void browse()}>
+                <Button variant="default" size="sm" className="workspace-source-open" aria-label="Choose files to process" disabled={loading} {...shortcutTarget('open')} onClick={() => void browse()}>
                     <TablerIcon name="folder-open" />
                     {entries.length ? inputPolicy.inputCardinality === 'single' ? 'Replace file' : 'Add files' : 'Open files'}
+                    <ShortcutHint id="open" />
                 </Button>
                 {entries.length > 0 && <Button variant="ghost" size="sm" className="workspace-source-clear" disabled={loading} onClick={clearFiles}>Clear list</Button>}
             </div>
@@ -609,8 +617,9 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                         </div>
                         <p>Drag & Drop files here</p>
                         <p>or</p>
-                        <Button variant="ghost" size="sm" disabled={loading} onClick={() => void browse()}>
+                        <Button variant="ghost" size="sm" disabled={loading} {...shortcutTarget('open')} onClick={() => void browse()}>
                             <TablerIcon name="folder-open" /> Browse files
+                            <ShortcutHint id="open" />
                         </Button>
                     </div>
 

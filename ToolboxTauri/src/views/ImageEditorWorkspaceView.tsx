@@ -32,6 +32,8 @@ import { Label } from "../components/ui/label";
 import { NativeSelect } from "../components/ui/native-select";
 import { Slider } from "../components/ui/slider";
 import { Switch } from "../components/ui/switch";
+import { ShortcutHint } from "../components/ShortcutHint";
+import { shortcutTarget } from "../shortcuts";
 
 const imageEditorActions = toolsForWorkspaceId("image-editor");
 const imageEditorIds = new Set<string>(imageEditorActions.map((tool) => tool.id));
@@ -683,7 +685,7 @@ const ImageEditorControls = ({
         </Card>
         <p aria-live="polite" className="workspace-note">{plan.edits.length + (draft ? 1 : 0)} edits will be applied to each selected image.</p>
         {destination}
-        <Button variant="default" aria-label="Export edited images" disabled={loading || files.length === 0 || !hasEdits || !previewIsValid} onClick={runCombined} className="workspace-primary-action">Export edited images</Button>
+        <Button variant="default" aria-label="Export edited images" disabled={loading || files.length === 0 || !hasEdits || !previewIsValid} onClick={runCombined} className="workspace-primary-action" {...shortcutTarget("run")}>Export edited images<ShortcutHint id="run" /></Button>
         </CardContent>
       </Card>
     </div>

@@ -7,6 +7,8 @@ import { toolsForWorkspaceId, UtilityRegistry } from "../registry";
 import type { AtomicToolId, PasswordSet, ToolDefinition, ToolResult } from "../contracts";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { ShortcutHint } from "../components/ShortcutHint";
+import { shortcutTarget } from "../shortcuts";
 
 const commands: Partial<Record<AtomicToolId, string>> = {
   "pdf-protect": "protect_pdf",
@@ -98,8 +100,10 @@ export const SecurityWorkspaceView = ({ utility }: { utility: ToolDefinition }) 
             disabled={loading || files.length === 0 || !readiness.ready}
             onClick={run}
             className="workspace-primary-action"
+            {...shortcutTarget("run")}
           >
             {activeUtility.shortTitle}
+            <ShortcutHint id="run" />
           </Button>
           </CardContent>
         </Card>
