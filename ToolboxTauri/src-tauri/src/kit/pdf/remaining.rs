@@ -99,7 +99,7 @@ pub fn merge(request: &MergePdfRequest) -> JobOutcome {
         Ok(output) => output,
         Err(error) => return failure(first, format!("Could not reserve merged PDF output: {error}")),
     };
-    let Some(qpdf) = qpdf() else { return failure(first, "qpdf is required to merge PDFs but was not found.".to_string()); };
+    let qpdf = match qpdf() { Ok(qpdf) => qpdf, Err(error) => return JobOutcome::failure(first, ToolError::unavailable(error)) };
     let result = Command::new(qpdf).arg("--empty").arg("--pages").args(&request.paths).arg("--").arg(output.path()).output_until_stopped();
     match result {
         Ok(result) if result.status.success() => match Document::load(output.path()) {
@@ -123,7 +123,7 @@ pub fn split(request: &PageSelectionRequest, input: PathBuf) -> JobOutcome {
         return failure(input, error);
     }
     let location = &request.output_location;
-    let Some(qpdf) = qpdf() else { return failure(input, "qpdf is required to split PDFs but was not found.".to_string()); };
+    let qpdf = match qpdf() { Ok(qpdf) => qpdf, Err(error) => return JobOutcome::failure(input, ToolError::unavailable(error)) };
     let workspace = match SplitWorkspace::new() {
         Ok(workspace) => workspace,
         Err(error) => return failure(input, format!("Could not create a private split workspace: {error}")),
@@ -559,7 +559,7 @@ pub fn watermark(request: &PageOverlayRequest, input: PathBuf) -> JobOutcome {
 pub fn compress(request: &CompressPdfRequest, input: PathBuf) -> JobOutcome {
     let source = match load_existing_document_for_mutation(&input) { Ok(document) => document, Err(error) => return failure(input, error) };
     let page_count = source.get_pages().len();
-    let Some(qpdf) = qpdf() else { return failure(input, "qpdf is required to compress PDFs but was not found. Set TOOLBOX_QPDF_PATH or add qpdf to PATH.".to_string()); };
+    let qpdf = match qpdf() { Ok(qpdf) => qpdf, Err(error) => return JobOutcome::failure(input, ToolError::unavailable(error)) };
     let output = match OutputNaming::reserve_destination(&input, &request.output_location, "-compressed", "pdf") {
         Ok(output) => output,
         Err(error) => return failure(input, format!("Could not reserve compressed PDF output: {error}")),
@@ -784,7 +784,7 @@ fn load_existing_document_for_mutation(input: &Path) -> Result<Document, String>
 }
 
 fn escape(text: &str) -> String { text.replace('\\', "\\\\").replace('(', "\\(").replace(')', "\\)") }
-fn qpdf() -> Option<PathBuf> { std::env::var_os("TOOLBOX_QPDF_PATH").map(PathBuf::from).filter(|path| path.is_file()).or_else(|| Command::new("qpdf").arg("--version").output().ok().filter(|result| result.status.success()).map(|_| PathBuf::from("qpdf"))) }
+fn qpdf() -> Result<PathBuf, String> { crate::kit::resources::resolve_helper(&crate::kit::resources::QPDF) }
 fn tool(variable: &str, command: &str) -> Option<PathBuf> {
     std::env::var_os(variable).map(PathBuf::from).filter(|path| !path.as_os_str().is_empty() && path.is_file())
         .or_else(|| crate::kit::resources::application_resource_root().and_then(|root| [root.join("pdf-bin").join(command), root.join("resources").join(command), root.join(command)].into_iter().find(|path| path.is_file())))
@@ -1303,7 +1303,7 @@ mod tests {
 
     fn run_split_with_sentinel(name: &str, split_mode: &str, page_ranges: Option<&str>, chunk_size: Option<usize>, sentinel_name: &str, expected_count: usize) {
         let _lock = SPLIT_TEST_LOCK.lock().unwrap();
-        if qpdf().is_none() {
+        if qpdf().is_err() {
             eprintln!("skipping: qpdf not available");
             return;
         }
@@ -1358,7 +1358,7 @@ mod tests {
     #[test]
     fn split_failure_leaves_no_partial_destinations() {
         let _lock = SPLIT_TEST_LOCK.lock().unwrap();
-        if qpdf().is_none() {
+        if qpdf().is_err() {
             eprintln!("skipping: qpdf not available");
             return;
         }
