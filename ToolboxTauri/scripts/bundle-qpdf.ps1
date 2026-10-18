@@ -1,29 +1,47 @@
-# Bundles a qpdf.exe alongside the built Windows Toolbox executable so Protect
-# works out of the box. Run after `npm run tauri build`.
-#
-# Copies qpdf.exe next to toolbox.exe in the release dir. Tauri's NSIS/MSI
-# bundles pick up extra files that live in the release directory when they are
-# listed via the bundle `resources` config; placing qpdf.exe beside the binary
-# keeps the NSIS installer able to include it.
+# Stages the exact qpdf release pinned in qpdf-pin.json for one Windows target into
+# the bundle resources directory, so the installer ships a native qpdf.exe and its DLLs.
+# The archive must match its pinned SHA-256, and the staged qpdf.exe must be native to
+# the target and at or above the pinned minimum. Run before `npm run tauri build`.
 param(
-    [string]$ReleaseDir = "$PSScriptRoot\..\src-tauri\target\release"
+    [Parameter(Mandatory = $true)]
+    [ValidateSet("x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc")]
+    [string]$Target,
+    [string]$ResourcesDir = (Join-Path $PSScriptRoot "..\src-tauri\resources"),
+    [string]$Archive
 )
 
 $ErrorActionPreference = "Stop"
 
-$exe = Join-Path $ReleaseDir "toolbox.exe"
-if (-not (Test-Path $exe)) {
-    Write-Error "bundle-qpdf: toolbox.exe not found in $ReleaseDir"
+$pin = Get-Content (Join-Path $PSScriptRoot "..\qpdf-pin.json") -Raw | ConvertFrom-Json
+$entry = $pin.windows.archives.$Target
+if (-not $entry) { throw "bundle-qpdf: qpdf-pin.json has no archive for $Target" }
+
+$work = Join-Path ([System.IO.Path]::GetTempPath()) "toolbox-qpdf-$($pin.windows.version)-$Target"
+if (Test-Path $work) { Remove-Item $work -Recurse -Force }
+New-Item -ItemType Directory -Force -Path $work | Out-Null
+
+if (-not $Archive) {
+    $Archive = Join-Path $work "qpdf-$($pin.windows.version).zip"
+    Invoke-WebRequest -Uri $entry.url -OutFile $Archive
+}
+$actual = (Get-FileHash $Archive -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actual -ne $entry.sha256) {
+    throw "bundle-qpdf: qpdf archive SHA-256 $actual does not match the pinned $($entry.sha256) for $Target"
 }
 
-$qpdf = Get-Command qpdf -ErrorAction SilentlyContinue
-if (-not $qpdf) {
-    Write-Error "bundle-qpdf: qpdf not found; install it (choco install qpdf / scoop install qpdf) or add it to PATH"
+$extracted = Join-Path $work "extracted"
+Expand-Archive -Path $Archive -DestinationPath $extracted -Force
+$qpdf = Get-ChildItem $extracted -Recurse -Filter qpdf.exe | Select-Object -First 1
+if (-not $qpdf) { throw "bundle-qpdf: the pinned qpdf archive has no qpdf.exe" }
+
+function Assert-Qpdf([string]$Path) {
+    & node (Join-Path $PSScriptRoot "check-release-readiness.mjs") --qpdf $Path --target $Target
+    if ($LASTEXITCODE -ne 0) { throw "bundle-qpdf: refusing qpdf at $Path" }
 }
 
-Copy-Item $qpdf.Source (Join-Path $ReleaseDir "qpdf.exe") -Force
-Write-Host "bundle-qpdf: embedded qpdf.exe -> $ReleaseDir\qpdf.exe"
-
-# The Rust runtime also checks TOOLBOX_QPDF_PATH before PATH, so a QPDF sibling
-# is discovered in dev/testing; in the installed app the NSIS/MSI path must list
-# qpdf.exe as an extra bundle resource so it ships next to toolbox.exe.
+Assert-Qpdf $qpdf.FullName
+New-Item -ItemType Directory -Force -Path $ResourcesDir | Out-Null
+Copy-Item $qpdf.FullName (Join-Path $ResourcesDir "qpdf.exe") -Force
+Get-ChildItem $qpdf.DirectoryName -Filter *.dll | Copy-Item -Destination $ResourcesDir -Force
+Assert-Qpdf (Join-Path $ResourcesDir "qpdf.exe")
+Write-Host "bundle-qpdf: staged qpdf $($pin.windows.version) for $Target -> $ResourcesDir"

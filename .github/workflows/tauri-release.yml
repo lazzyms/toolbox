@@ -117,7 +117,7 @@ jobs:
         shell: pwsh
         working-directory: ToolboxTauri
         run: |
-          choco install qpdf tesseract -y
+          choco install tesseract -y
           $tesseractDirectory = Join-Path $env:ProgramFiles 'Tesseract-OCR'
           if (-not (Test-Path (Join-Path $tesseractDirectory 'tesseract.exe'))) {
             throw 'Could not locate the installed Tesseract executable'
@@ -141,9 +141,7 @@ jobs:
           $env:PATH = "$($pdftoppm.DirectoryName);$env:PATH"
           $pdftoppm.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           New-Item -ItemType Directory -Force -Path src-tauri\resources | Out-Null
-          $qpdf = Get-ChildItem "$env:ChocolateyInstall\lib\qpdf" -Recurse -Filter qpdf.exe | Select-Object -First 1
-          Copy-Item $qpdf.FullName src-tauri\resources\qpdf.exe -Force
-          Get-ChildItem $qpdf.DirectoryName -Filter *.dll | Copy-Item -Destination src-tauri\resources -Force
+          ./scripts/bundle-qpdf.ps1 -Target ${{ matrix.target }} -ResourcesDir src-tauri\resources
           Copy-Item $pdftoppm.FullName src-tauri\resources\pdftoppm.exe -Force
           Get-ChildItem $pdftoppm.DirectoryName -Filter *.dll | Copy-Item -Destination src-tauri\resources -Force
           Copy-Item $pdftotext.FullName src-tauri\resources\pdftotext.exe -Force
