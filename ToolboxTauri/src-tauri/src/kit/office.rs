@@ -14,7 +14,7 @@ use zip::ZipArchive;
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::ToolError;
 use crate::kit::office_agile::{decrypt_ooxml, encrypt_ooxml, is_agile_ooxml, verify_ooxml};
-use crate::kit::password::{probe, ProtectedFormat};
+use crate::kit::password::{probe, unlock_skip_reason, ProtectedFormat};
 
 const OFFICE_EXTENSIONS: [&str; 6] = ["doc", "docx", "xls", "xlsx", "ppt", "pptx"];
 const PROTECTED_OFFICE_EXTENSIONS: [&str; 2] = ["docx", "xlsx"];
@@ -81,8 +81,10 @@ impl OfficeProcessor {
                 )
             }
         };
-        if let Err(error) = probe(&raw, format) {
-            return JobOutcome::failure(input_path, error);
+        match probe(&raw, format).map(unlock_skip_reason) {
+            Ok(None) => {}
+            Ok(Some(reason)) => return JobOutcome::skipped(input_path, reason),
+            Err(error) => return JobOutcome::failure(input_path, error),
         }
         let output_path = match OutputNaming::reserve_destination(
             &input_path,
