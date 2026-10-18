@@ -80,18 +80,19 @@ test.beforeEach(async ({ page }) => {
     });
 });
 
-const startProtecting = async (page: Page, paths: string[]) => {
+const startLocking = async (page: Page, paths: string[]) => {
     await page.goto("/");
-    await page.getByRole("button", { name: "Open Protect PDF", exact: true }).click();
+    await page.getByRole("button", { name: "Open Lock & Unlock", exact: true }).click();
+    await page.getByRole("radiogroup", { name: "Lock or unlock" }).getByRole("radio", { name: "Lock", exact: true }).click();
     await expect.poll(() => page.evaluate(() => (window as unknown as LiveWindow).__invocations.some(({ command, args }) =>
         command === "plugin:event|listen" && (args as { event: string }).event === "tauri://drag-drop"))).toBe(true);
     await page.evaluate((paths) => (window as unknown as LiveWindow).__drop(paths), paths);
     await expect(page.getByRole("listbox").getByRole("option")).toHaveCount(paths.length);
     for (const field of await page.locator('.workspace-control-panel input[type="password"]').all()) await field.fill("test-password");
     await page.locator(".workspace-primary-action").click();
-    await expect.poll(() => page.evaluate(() => (window as unknown as LiveWindow).__invocations.some(({ command }) => command === "protect_pdf"))).toBe(true);
+    await expect.poll(() => page.evaluate(() => (window as unknown as LiveWindow).__invocations.some(({ command }) => command === "protect_files"))).toBe(true);
     const runId = await page.evaluate(() => {
-        const invocation = (window as unknown as LiveWindow).__invocations.find(({ command }) => command === "protect_pdf");
+        const invocation = (window as unknown as LiveWindow).__invocations.find(({ command }) => command === "protect_files");
         return (invocation?.args as { runId: string }).runId;
     });
     expect(runId).toMatch(/\S+/);
@@ -101,11 +102,11 @@ const startProtecting = async (page: Page, paths: string[]) => {
 
 test("rows stream in input order, the count follows finished files, and early rows open mid-run", async ({ page }) => {
     const paths = ["/local/lease.pdf", "/local/survey.pdf", "/local/minutes.pdf"];
-    const { emit } = await startProtecting(page, paths);
+    const { emit } = await startLocking(page, paths);
 
-    const status = page.getByRole("status").filter({ hasText: /^Protecting/ });
+    const status = page.getByRole("status").filter({ hasText: /^Locking/ });
     const rows = page.getByRole("list", { name: "Files and results" }).getByRole("listitem");
-    await expect(status.locator("strong")).toHaveText("Protecting 0 of 3");
+    await expect(status.locator("strong")).toHaveText("Locking 0 of 3");
     await expect(rows).toHaveText([/^lease\.pdf.*Waiting/, /^survey\.pdf.*Waiting/, /^minutes\.pdf.*Waiting/]);
     await expect(page.locator(".live-run-bar > span")).toHaveCount(3);
 
@@ -113,9 +114,9 @@ test("rows stream in input order, the count follows finished files, and early ro
     await emit({ index: 1, phase: "started" });
     await emit({ index: 1, phase: "finished", outcome: succeeded(paths[1]) });
 
-    await expect(status.locator("strong")).toHaveText("Protecting 1 of 3");
-    await expect(status).toContainText("1 protected so far. Finished files can be opened now.");
-    await expect(rows).toHaveText([/^lease\.pdf.*Protecting/, /^survey\.pdf.*Protected/, /^minutes\.pdf.*Waiting/]);
+    await expect(status.locator("strong")).toHaveText("Locking 1 of 3");
+    await expect(status).toContainText("1 locked so far. Finished files can be opened now.");
+    await expect(rows).toHaveText([/^lease\.pdf.*Locking/, /^survey\.pdf.*Locked/, /^minutes\.pdf.*Waiting/]);
     expect(await page.locator(".live-run-bar > span").evaluateAll((spans) => spans.map((span) => span.getAttribute("data-tone")))).toEqual(["wait", "ok", "wait"]);
 
     await rows.nth(1).getByRole("button", { name: "Open survey-protected.pdf" }).click();
@@ -130,30 +131,30 @@ test("rows stream in input order, the count follows finished files, and early ro
     } }));
     await emit({ index: 9, phase: "started" });
     await emit({ index: 0, phase: "finished", outcome: failed(paths[0]) });
-    await expect(status.locator("strong")).toHaveText("Protecting 2 of 3");
-    await expect(status).toContainText("1 protected, 1 failed so far.");
+    await expect(status.locator("strong")).toHaveText("Locking 2 of 3");
+    await expect(status).toContainText("1 locked, 1 failed so far.");
     await expect(rows.nth(0)).toContainText("This PDF is damaged.");
     await expect(rows.nth(2)).toContainText("Waiting");
     await expect(rows.nth(0).getByRole("button", { name: /Retry/ })).toHaveCount(0);
 
     await page.evaluate((outcomes) => (window as unknown as LiveWindow).__finish(outcomes), [failed(paths[0]), succeeded(paths[1]), succeeded(paths[2])]);
 
-    await expect(page.getByRole("status").filter({ hasText: /^Done\./ }).locator("strong")).toHaveText("Done. 2 protected, 1 failed");
+    await expect(page.getByRole("status").filter({ hasText: /^Done\./ }).locator("strong")).toHaveText("Done. 2 locked, 1 failed");
     await expect(page.getByRole("list", { name: "Files and results" })).toHaveCount(0);
-    await expect(page.getByRole("list", { name: "Results" }).getByRole("listitem")).toHaveText([/^lease\.pdf.*Failed/, /^survey\.pdf.*Protected/, /^minutes\.pdf.*Protected/]);
+    await expect(page.getByRole("list", { name: "Results" }).getByRole("listitem")).toHaveText([/^lease\.pdf.*Failed/, /^survey\.pdf.*Locked/, /^minutes\.pdf.*Locked/]);
     await expect(page.locator(".live-run-bar")).toHaveCount(0);
     expect(await page.evaluate(() => (window as unknown as LiveWindow).__invocations.some(({ command }) => command === "plugin:event|unlisten"))).toBe(true);
 });
 
 test("over 60 files the bar shows proportions with the board note", async ({ page }) => {
     const paths = Array.from({ length: 61 }, (_, index) => `/local/scan-${index + 1}.pdf`);
-    const { emit } = await startProtecting(page, paths);
+    const { emit } = await startLocking(page, paths);
 
     await emit({ index: 0, phase: "finished", outcome: succeeded(paths[0]) });
     await emit({ index: 1, phase: "finished", outcome: failed(paths[1]) });
 
     await expect(page.getByText("Over 60 files, the bar shows proportions. Rows for finished files can be opened now.")).toBeVisible();
-    await expect(page.getByRole("status").filter({ hasText: /^Protecting/ })).toHaveText(/Protecting 2 of 61\s*1 protected, 1 failed so far\.$/);
+    await expect(page.getByRole("status").filter({ hasText: /^Locking/ })).toHaveText(/Locking 2 of 61\s*1 locked, 1 failed so far\.$/);
     const grow = await page.locator('.live-run-bar[data-mode="proportional"] > span').evaluateAll((spans) =>
         spans.map((span) => [span.getAttribute("data-tone"), (span as HTMLElement).style.flexGrow]));
     expect(grow).toEqual([["ok", "1"], ["skip", "0"], ["fail", "1"], ["wait", "59"]]);
@@ -162,7 +163,7 @@ test("over 60 files the bar shows proportions with the board note", async ({ pag
 
 test("cancel asks first, sends the run id, and ends with cancelled rows and counts", async ({ page }) => {
     const paths = ["/local/lease.pdf", "/local/survey.pdf", "/local/minutes.pdf", "/local/deed.pdf", "/local/notes.pdf"];
-    const { runId, emit } = await startProtecting(page, paths);
+    const { runId, emit } = await startLocking(page, paths);
     await emit({ index: 0, phase: "finished", outcome: succeeded(paths[0]) });
     await emit({ index: 1, phase: "finished", outcome: succeeded(paths[1]) });
     await emit({ index: 2, phase: "started" });
@@ -192,11 +193,11 @@ test("cancel asks first, sends the run id, and ends with cancelled rows and coun
         [succeeded(paths[0]), succeeded(paths[1]), cancelledWhileRunning, notStarted(paths[3]), notStarted(paths[4])]);
 
     const summary = page.getByRole("status").filter({ hasText: /^Cancelled\./ });
-    await expect(summary.locator("strong")).toHaveText("Cancelled. 2 protected, 2 skipped as cancelled, 1 failed");
+    await expect(summary.locator("strong")).toHaveText("Cancelled. 2 locked, 2 skipped as cancelled, 1 failed");
     await expect(summary).toContainText("Finished files were kept. Nothing was half-written.");
     await expect(page.getByRole("list", { name: "Results" }).getByRole("listitem")).toHaveText([
-        /^lease\.pdf.*Protected/,
-        /^survey\.pdf.*Protected/,
+        /^lease\.pdf.*Locked/,
+        /^survey\.pdf.*Locked/,
         /^minutes\.pdf.*Cancelled while it was running\. Nothing was saved\..*Failed/,
         /^deed\.pdf.*Cancelled before it started.*Skipped/,
         /^notes\.pdf.*Cancelled before it started.*Skipped/,

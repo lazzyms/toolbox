@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from "react";
-import { Eye, EyeOff, KeyRound } from "lucide-react";
+import { CircleX, Eye, EyeOff, KeyRound } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -161,7 +161,7 @@ export const BatchPasswordFields = ({ mode, passwords, files }: { mode: Password
                     placeholder="Type it again"
                 />
             )}
-            {mismatch && <p id={`${id}-mismatch`} className="password-error" role="alert">Passwords don't match. Type the new password again.</p>}
+            {mismatch && <p id={`${id}-mismatch`} className="password-error" role="alert"><CircleX aria-hidden="true" />Passwords don't match. Type the new password again.</p>}
             {usage && <p className="workspace-note" data-testid="password-usage">{usage}</p>}
             {cleared && (
                 <p className="password-cleared" role="status">

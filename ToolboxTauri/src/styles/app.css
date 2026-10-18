@@ -1394,7 +1394,8 @@ body {
 
 /* Batch password with per-file overrides */
 .password-options { display: grid; gap: 10px; }
-.password-error { margin: 0; color: var(--destructive); font-size: 12px; line-height: 1.5; }
+.password-error { margin: 0; color: var(--destructive); font-size: 12px; line-height: 1.5; display: flex; gap: 6px; align-items: flex-start; }
+.password-error svg { flex: none; width: 14px; height: 14px; margin-top: 2px; }
 .password-cleared { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--muted-foreground); font-size: 12px; }
 .file-selection-row:has(.password-inline) { flex-wrap: wrap; }
 .file-password { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 2px; }

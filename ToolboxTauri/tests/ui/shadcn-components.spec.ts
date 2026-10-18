@@ -66,7 +66,7 @@ test("feature panels and previews use shadcn Card surfaces", async ({ page }) =>
   await page.goto("/");
 
   const surfacesByTool = [
-    { tool: "Protect PDF", selectors: [".workspace-control-panel"] },
+    { tool: "Lock & Unlock", selectors: [".workspace-control-panel"] },
     { tool: "Create GIF", selectors: [".workspace-control-panel"] },
     { tool: "PDF to Images", selectors: [".workspace-control-panel", ".conversion-preview"] },
     { tool: "Resize Images", selectors: [".image-editor-controls", ".image-editor-preview"] },
@@ -99,7 +99,7 @@ test("shared cards keep generated anatomy and variants own selected appearance",
   await expect(emptyState.locator('[data-slot="card-footer"]')).toHaveCount(1);
 
   await page.getByRole("navigation", { name: "Workspace navigation" }).getByRole("button", { name: "All tools" }).click();
-  await page.getByRole("button", { name: "Open Protect PDF", exact: true }).click();
+  await page.getByRole("button", { name: "Open Lock & Unlock", exact: true }).click();
 
   const sourceBar = page.locator(".workspace-source-bar");
   await expect.poll(() => sourceBar.evaluate((element) => getComputedStyle(element).borderRadius)).toBe("14px");
@@ -107,6 +107,6 @@ test("shared cards keep generated anatomy and variants own selected appearance",
 
   const commandRail = page.locator(".workspace-command-rail");
   await expect(commandRail.locator('[data-slot="card"]')).toHaveCount(0);
-  await expect(commandRail.locator(".workspace-command")).toHaveCount(3);
+  await expect(commandRail.locator(".workspace-command")).toHaveCount(2);
   await expect(commandRail.locator('.workspace-command[aria-pressed="true"]')).toHaveAttribute("data-variant", "secondary");
 });

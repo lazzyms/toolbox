@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use lopdf::{Document, LoadOptions, Object, ObjectId};
 
-use crate::kit::common::limits::{self, StoppableHelper};
+use crate::kit::common::limits;
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::ToolError;
 use crate::kit::password::{probe, unlock_skip_reason, unreadable, ProtectedFormat, ProtectionState, UNLOCK_NOT_VERIFIED, UNSUPPORTED_ENCRYPTION, WRONG_PASSWORD};
@@ -62,11 +62,24 @@ fn poll_helper_reader(receiver: &Receiver<Result<Vec<u8>, String>>, stream: &'st
     }
 }
 
-pub(crate) fn run_bounded_helper(mut command: Command, deadline: Instant, max_stdout: usize, max_stderr: usize, timeout_message: &str) -> Result<std::process::Output, String> {
+pub(crate) fn run_bounded_helper(command: Command, deadline: Instant, max_stdout: usize, max_stderr: usize, timeout_message: &str) -> Result<std::process::Output, String> {
+    run_bounded_helper_with_input(command, None, deadline, max_stdout, max_stderr, timeout_message)
+}
+
+pub(crate) fn run_bounded_helper_with_input(mut command: Command, input: Option<Vec<u8>>, deadline: Instant, max_stdout: usize, max_stderr: usize, timeout_message: &str) -> Result<std::process::Output, String> {
     if Instant::now() >= deadline {
         return Err(timeout_message.to_string());
     }
+    if input.is_some() {
+        command.stdin(Stdio::piped());
+    }
     let mut child = command.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|error| format!("Could not run PDF helper: {error}"))?;
+    if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
+        thread::spawn(move || {
+            use std::io::Write;
+            let _ = stdin.write_all(&input);
+        });
+    }
     let stdout = match child.stdout.take() {
         Some(stdout) => stdout,
         None => {
@@ -708,54 +721,62 @@ impl PDFProcessor {
         if password.is_empty() {
             return JobOutcome::failure(input_path, ToolError::invalid_input("A non-empty password is required."));
         }
-        if let Err(error) = read_and_probe(&input_path) {
-            return JobOutcome::failure(input_path, error);
+        if password.contains(['\n', '\r']) {
+            return JobOutcome::failure(input_path, ToolError::invalid_input("Passwords can't contain line breaks."));
         }
+        let raw = match read_and_probe(&input_path) {
+            Ok((_, ProtectionState::OpenPassword)) => return JobOutcome::failure(input_path, ToolError::invalid_input("Already has a password. Unlock it first, then lock it again.")),
+            Ok((raw, _)) => raw,
+            Err(error) => return JobOutcome::failure(input_path, error),
+        };
+        let page_count = match Document::load_mem(&raw) {
+            Ok(document) => document.get_pages().len(),
+            Err(_) => return JobOutcome::failure(input_path, unreadable(ProtectedFormat::Pdf)),
+        };
         let qpdf = match crate::kit::resources::resolve_helper(&crate::kit::resources::QPDF) {
             Ok(qpdf) => qpdf,
             Err(error) => return JobOutcome::failure(input_path, ToolError::unavailable(error)),
         };
-        let output_path = match OutputNaming::reserve_destination(
-            &input_path,
-            output_location,
-            "-protected",
-            "pdf",
-        ) {
+        let output_path = match OutputNaming::reserve_destination(&input_path, output_location, "-protected", "pdf") {
             Ok(output) => output,
             Err(error) => return JobOutcome::failure(input_path, ToolError::processing(format!("Could not reserve protected PDF output: {error}"))),
         };
 
-
-        let status = Command::new(&qpdf)
-            .arg("--encrypt")
-            .arg(password)
-            .arg(password)
-            .arg("256")
-            .arg("--")
-            .arg(&input_path)
-            .arg(output_path.path())
-            .output_until_stopped();
-
-        match status {
-            Ok(out) if out.status.success() => {
-                let encrypted = Document::load(output_path.path()).map(|document| document.is_encrypted()).unwrap_or(false);
-                let readable = Document::load_with_options(output_path.path(), lopdf::LoadOptions::with_password(password)).map(|document| !document.is_encrypted()).unwrap_or(false);
-                if encrypted && readable {
-                    match output_path.publish() {
-                        Ok(path) => JobOutcome::succeeded(input_path, vec![path], "PDF Protected with verified AES-256 encryption"),
-                        Err(error) => JobOutcome::failure(input_path, ToolError::processing(format!("Could not publish protected PDF output: {error}"))),
-                    }
-                }
-                else { JobOutcome::failure(input_path, ToolError::processing("qpdf produced an output that could not be verified as password-protected.")) }
-            }
-            Ok(out) => {
-                JobOutcome::failure(input_path, ToolError::processing(
-                    String::from_utf8_lossy(&out.stderr).trim().lines().last().map(|l| l.to_string()).unwrap_or_else(|| "qpdf failed to protect the PDF.".to_string()),
-                ))
-            },
-            Err(e) => JobOutcome::failure(input_path, ToolError::unavailable(format!("Could not run qpdf: {}", e))),
+        let mut command = Command::new(&qpdf);
+        command.arg(&input_path).arg(output_path.path()).args(["--encrypt", "@-", "--bits=256", "--"]);
+        let options = format!("--user-password={password}\n--owner-password={password}\n").into_bytes();
+        let limit = pdf_lock_time_limit(page_count);
+        let timed_out = format!("Locking took longer than {} seconds and was stopped. Nothing was saved.", limit.as_secs());
+        let output = match run_bounded_helper_with_input(command, Some(options), Instant::now() + limit, PDF_TEXT_MAX_ERROR_BYTES, PDF_TEXT_MAX_ERROR_BYTES, &timed_out) {
+            Ok(output) => output,
+            Err(message) if message == timed_out => return JobOutcome::failure(input_path, ToolError::limit_exceeded(crate::kit::contracts::LimitKind::Time, message)),
+            Err(message) => return JobOutcome::failure(input_path, ToolError::unavailable(message)),
+        };
+        if !output.status.success() {
+            let detail = String::from_utf8_lossy(&output.stderr).trim().lines().last().map(str::to_string).unwrap_or_else(|| "qpdf failed to protect the PDF.".to_string());
+            return JobOutcome::failure(input_path, ToolError::processing(detail));
+        }
+        if !locked_pdf_is_verified(output_path.path(), password, page_count) {
+            return JobOutcome::failure(input_path, ToolError::processing("The locked copy didn't pass verification, so nothing was saved."));
+        }
+        match output_path.publish() {
+            Ok(path) => JobOutcome::succeeded(input_path, vec![path], "PDF Protected with verified AES-256 encryption"),
+            Err(error) => JobOutcome::failure(input_path, ToolError::processing(format!("Could not publish protected PDF output: {error}"))),
         }
     }
+}
+
+pub(crate) const PDF_LOCK_TIME_PER_FILE: Duration = Duration::from_secs(15);
+pub(crate) const PDF_LOCK_TIME_PER_PAGE: Duration = Duration::from_millis(50);
+
+fn pdf_lock_time_limit(page_count: usize) -> Duration {
+    PDF_LOCK_TIME_PER_FILE + PDF_LOCK_TIME_PER_PAGE * u32::try_from(page_count).unwrap_or(u32::MAX)
+}
+
+fn locked_pdf_is_verified(path: &Path, password: &str, page_count: usize) -> bool {
+    let Ok(bytes) = std::fs::read(path) else { return false };
+    matches!(probe(&bytes, ProtectedFormat::Pdf), Ok(ProtectionState::OpenPassword))
+        && Document::load_mem_with_options(&bytes, LoadOptions::with_password(password)).is_ok_and(|opened| !opened.is_encrypted() && opened.get_pages().len() == page_count)
 }
 
 fn read_and_probe(input_path: &Path) -> Result<(Vec<u8>, ProtectionState), ToolError> {
@@ -916,5 +937,16 @@ mod tests {
         assert_eq!(out.error().map(|error| &error.kind), Some(&crate::kit::contracts::ErrorKind::Unavailable));
         assert!(!src.with_file_name("noqpdf-protected.pdf").exists(), "a missing helper must not reserve an output");
         let _ = std::fs::remove_file(&src);
+    }
+
+    #[test]
+    fn the_lock_deadline_is_fifteen_seconds_per_file_plus_fifty_milliseconds_per_page() {
+        assert_eq!(PDF_LOCK_TIME_PER_FILE, Duration::from_secs(15));
+        assert_eq!(PDF_LOCK_TIME_PER_PAGE, Duration::from_millis(50));
+        assert_eq!(pdf_lock_time_limit(1), Duration::from_millis(15_050));
+        assert_eq!(pdf_lock_time_limit(200), Duration::from_secs(25));
+        let longest = limits::recorded("protect_files").unwrap();
+        assert_eq!(pdf_lock_time_limit(longest.max_pages.unwrap() as usize), Duration::from_secs(265));
+        assert!(pdf_lock_time_limit(longest.max_pages.unwrap() as usize) < longest.max_duration, "qpdf's own deadline ends a long lock before the job limit does");
     }
 }
