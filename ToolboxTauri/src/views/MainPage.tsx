@@ -28,6 +28,7 @@ import { ImageEditorWorkspaceView } from "./ImageEditorWorkspaceView";
 import { MediaWorkspaceView } from "./MediaWorkspaceView";
 import { PlannedToolView, UnavailableToolView } from "./PlannedToolView";
 import { SettingsPage, type SettingsSection } from "./SettingsPage";
+import { favoritesStorageKey, recentStorageKey } from "../savedToolIds";
 
 const workspaceViews = {
   "file-security": SecurityWorkspaceView,
@@ -104,10 +105,10 @@ export const MainPage = () => {
     ? "Ctrl + K"
     : "⌘ + K";
   const [favorites, setFavorites] = useState<string[]>(() =>
-    JSON.parse(localStorage.getItem("toolbox-favorites") || "[]"),
+    JSON.parse(localStorage.getItem(favoritesStorageKey) || "[]"),
   );
   const [recent, setRecent] = useState<string[]>(() =>
-    JSON.parse(localStorage.getItem("toolbox-recent") || "[]"),
+    JSON.parse(localStorage.getItem(recentStorageKey) || "[]"),
   );
   const recentTools = useMemo(
     () =>
@@ -142,7 +143,7 @@ export const MainPage = () => {
         0,
         8,
       );
-      localStorage.setItem("toolbox-recent", JSON.stringify(next));
+      localStorage.setItem(recentStorageKey, JSON.stringify(next));
       return next;
     });
   };
@@ -151,7 +152,7 @@ export const MainPage = () => {
       const next = current.includes(id)
         ? current.filter((item) => item !== id)
         : [...current, id];
-      localStorage.setItem("toolbox-favorites", JSON.stringify(next));
+      localStorage.setItem(favoritesStorageKey, JSON.stringify(next));
       return next;
     });
   const commandResults = () =>

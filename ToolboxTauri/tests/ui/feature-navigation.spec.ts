@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import path from "node:path";
 import type { JobOutcome, OutputSettings } from "../../src/contracts";
 import { ToolWorkspaceRegistry, UtilityRegistry, workspaceForTool } from "../../src/registry";
+import { RetiredToolIds } from "../../src/registry/retiredToolIds";
 
 const fixturePath = path.resolve("src-tauri/icons/icon.png");
 const fixtureName = path.basename(fixturePath);
@@ -304,6 +305,33 @@ test("favorites and recent navigation show their intended libraries", async ({ p
     await workspaceNav.getByRole("button", { name: "Recent" }).click();
     await expect(page.locator(".tool-card")).toHaveCount(1);
     await expect(page.getByRole("button", { name: "Open Remove Password" })).toBeVisible();
+});
+
+test("saved favorites and recents survive the startup id migration and only show registered tools", async ({ page }) => {
+    await page.addInitScript(() => {
+        localStorage.setItem("toolbox-favorites", JSON.stringify(["pdf-merge", "mystery-tool"]));
+        localStorage.setItem("toolbox-recent", JSON.stringify(["mystery-tool", "pdf-unlock"]));
+    });
+    await page.goto("/");
+    const workspaceNav = page.locator('nav[aria-label="Workspace navigation"]');
+
+    await workspaceNav.getByRole("button", { name: "Favorites" }).click();
+    await expect(page.locator(".tool-card")).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "Open Merge PDF" })).toBeVisible();
+    await workspaceNav.getByRole("button", { name: "Recent" }).click();
+    await expect(page.locator(".tool-card")).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "Open Remove Password" })).toBeVisible();
+
+    const stored = await page.evaluate(() => ({
+        favorites: JSON.parse(localStorage.getItem("toolbox-favorites") ?? "null"),
+        recent: JSON.parse(localStorage.getItem("toolbox-recent") ?? "null"),
+        marker: localStorage.getItem("toolbox-tool-id-migration"),
+    }));
+    expect(stored).toEqual(
+        RetiredToolIds.version === 0
+            ? { favorites: ["pdf-merge", "mystery-tool"], recent: ["mystery-tool", "pdf-unlock"], marker: null }
+            : { favorites: ["pdf-merge"], recent: ["pdf-unlock"], marker: String(RetiredToolIds.version) },
+    );
 });
 
 test("all five workspace cards open their workspace", async ({ page }) => {
