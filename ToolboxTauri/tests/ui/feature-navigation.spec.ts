@@ -287,20 +287,20 @@ test("favorites navigation shows saved tools as chips and as a filtered library"
     await expect(chips).toHaveCount(0);
 
     await workspaceNav.getByRole("button", { name: "All tools" }).click();
-    await page.getByRole("button", { name: "Open Remove Password" }).click();
-    await page.getByRole("button", { name: "Add Remove Password to favorites" }).click();
+    await page.getByRole("button", { name: "Open Lock & Unlock" }).click();
+    await page.getByRole("button", { name: "Add Lock & Unlock to favorites" }).click();
     await page.getByRole("button", { name: "← All tools" }).click();
-    await expect(chips.getByRole("button")).toHaveText(["Remove Password"]);
+    await expect(chips.getByRole("button")).toHaveText(["Lock & Unlock"]);
     await workspaceNav.getByRole("button", { name: "Favorites" }).click();
     await expect(page.locator("button[data-command-result]")).toHaveCount(1);
-    await expect(page.getByRole("button", { name: "Open Remove Password" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Open Lock & Unlock" })).toBeVisible();
 
     await page.reload();
-    await expect(chips.getByRole("button")).toHaveText(["Remove Password"]);
-    await chips.getByRole("button", { name: "Remove Password" }).click();
+    await expect(chips.getByRole("button")).toHaveText(["Lock & Unlock"]);
+    await chips.getByRole("button", { name: "Lock & Unlock" }).click();
     await expect(page.locator(".workspace-title")).toHaveText("File Security");
     const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("toolbox-recent") ?? "[]"));
-    expect(stored[0]).toBe("pdf-unlock");
+    expect(stored[0]).toBe("lock-unlock");
 });
 
 test("saved favorites and recents survive the startup id migration and only show registered tools", async ({ page }) => {
@@ -321,11 +321,7 @@ test("saved favorites and recents survive the startup id migration and only show
         recent: JSON.parse(localStorage.getItem("toolbox-recent") ?? "null"),
         marker: localStorage.getItem("toolbox-tool-id-migration"),
     }));
-    expect(stored).toEqual(
-        RetiredToolIds.version === 0
-            ? { favorites: ["pdf-merge", "mystery-tool"], recent: ["mystery-tool", "pdf-unlock"], marker: null }
-            : { favorites: ["pdf-merge"], recent: ["pdf-unlock"], marker: String(RetiredToolIds.version) },
-    );
+    expect(stored).toEqual({ favorites: ["pdf-merge"], recent: ["lock-unlock"], marker: String(RetiredToolIds.version) });
 });
 
 test("all six home view sections list their tools and open their view", async ({ page }) => {
@@ -382,7 +378,7 @@ test("search finds and opens all 33 registered tool actions", async ({ page }) =
 
 test("search arrows navigate visible results and Enter opens the focused result", async ({ page }, testInfo) => {
     await page.goto("/");
-    await page.getByRole("button", { name: "Open Remove Password" }).click();
+    await page.getByRole("button", { name: "Open Lock & Unlock" }).click();
     await page.getByRole("button", { name: "← All tools" }).click();
     await expect(page.locator(".topbar--home + .tool-library-section")).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath("phase2-command-center-gallery.png") });
@@ -408,12 +404,12 @@ test("search arrows navigate visible results and Enter opens the focused result"
     expect(composingFindPrevented).toBe(false);
     await expect(search).toBeFocused();
     await expect(page.locator("button[data-command-result]")).toHaveCount(3);
-    const removePassword = page.getByRole("button", { name: "Open Remove Password", exact: true });
+    const lockUnlock = page.getByRole("button", { name: "Open Lock & Unlock", exact: true });
     const protectPdf = page.getByRole("button", { name: "Open Protect PDF", exact: true });
     const protectOfficeFiles = page.getByRole("button", { name: "Open Protect Office Files", exact: true });
 
     await page.keyboard.press("ArrowDown");
-    await expect(removePassword).toBeFocused();
+    await expect(lockUnlock).toBeFocused();
     await page.keyboard.press("ArrowDown");
     await expect(protectPdf).toBeFocused();
     await page.keyboard.press("ArrowDown");
@@ -421,7 +417,7 @@ test("search arrows navigate visible results and Enter opens the focused result"
     await page.keyboard.press("ArrowUp");
     await expect(protectPdf).toBeFocused();
     await page.keyboard.press("ArrowUp");
-    await expect(removePassword).toBeFocused();
+    await expect(lockUnlock).toBeFocused();
     await page.keyboard.press("ArrowUp");
     await expect(search).toBeFocused();
     await page.keyboard.press("ArrowDown");
@@ -449,7 +445,7 @@ test("home search lives in the top bar while the privacy badge stays in workspac
     await expect(page.getByRole("heading", { level: 1, name: "Tool library" })).toBeAttached();
     await page.screenshot({ path: testInfo.outputPath("home-topbar-desktop.png") });
 
-    await page.getByRole("button", { name: "Open Remove Password" }).click();
+    await page.getByRole("button", { name: "Open Lock & Unlock" }).click();
     await expect(page.locator(".topbar--home")).toHaveCount(0);
     await expect(page.locator(".topbar").getByText("On-device workspace", { exact: true })).toBeVisible();
     await expect(page.locator(".topbar").getByRole("textbox", { name: "Search tools" })).toHaveCount(0);
@@ -468,8 +464,8 @@ test("view sections expose an accessible open action and keep favoriting in the 
     const openWorkspace = section.getByRole("button", { name: "Open File Security", exact: true });
     await expect(openWorkspace).toHaveText("Open view");
     await openWorkspace.click();
-    await expect(page.getByRole("heading", { name: "Remove Password", exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Add Remove Password to favorites" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Lock & Unlock", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Add Lock & Unlock to favorites" })).toBeVisible();
 });
 
 test("Windows labels the reveal action for File Explorer", async ({ page }) => {
@@ -1231,8 +1227,8 @@ test("media and security workspaces expose ordered inputs and format boundaries"
     await page.getByRole("button", { name: "Open Protect PDF" }).click();
     await expect(page.getByText("PDF files only", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "← All tools" }).click();
-    await page.getByRole("button", { name: "Open Remove Password" }).click();
-    await expect(page.getByText("PDF, Word, Excel, and PowerPoint files", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Open Lock & Unlock" }).click();
+    await expect(page.getByText("Accepts .pdf, .doc, .docx, .xls, .xlsx, .ppt, .pptx", { exact: true })).toBeVisible();
 });
 
 test("TIFF workspace expands internal pages and sends the displayed order", async ({ page }) => {
@@ -1383,15 +1379,15 @@ test("command K focuses the tool search", async ({ page }) => {
     await expect(search).toBeFocused();
 });
 
-test("remove password exposes one cross-format document tool", async ({ page }) => {
-    const utility = UtilityRegistry.find((item) => item.id === "pdf-unlock");
+test("Lock & Unlock exposes one cross-format document tool", async ({ page }) => {
+    const utility = UtilityRegistry.find((item) => item.id === "lock-unlock");
     expect(utility).toBeDefined();
-    expect(utility?.title).toBe("Remove Password");
+    expect(utility?.title).toBe("Lock & Unlock");
     expect(utility?.category).toBe("Documents");
     expect(utility?.command).toBe("remove_password");
 
     await page.goto("/");
-    await page.getByRole("button", { name: "Open Remove Password" }).click();
+    await page.getByRole("button", { name: "Open Lock & Unlock" }).click();
     await chooseFixture(page, pdfFixturePath);
     await fillPasswords(page, "test-password");
     await expect(page.locator(".workspace-primary-action")).toBeEnabled();
@@ -1528,7 +1524,7 @@ test("result rows show succeeded, skipped and failed states with warnings and po
             detail: "",
             state: "skipped",
             failure: null,
-            reason: { code: "alreadyProtected", message: "Already password-protected. Remove the password first, then protect it again.", pointer: { kind: "tool", toolId: "pdf-unlock" } },
+            reason: { code: "alreadyProtected", message: "Already password-protected. Remove the password first, then protect it again.", pointer: { kind: "tool", toolId: "lock-unlock" } },
             warnings: [],
         },
         succeeded("/local/menu-spring.docx", ["/local/menu-spring.pdf"], {
@@ -1581,8 +1577,8 @@ test("result rows show succeeded, skipped and failed states with warnings and po
     await rows.nth(5).getByRole("button", { name: "Install script pack", exact: true }).click();
     expect(await page.evaluate(() => (window as unknown as { __installPackRequests: string[] }).__installPackRequests)).toEqual(["script-pack"]);
 
-    await rows.nth(2).getByRole("button", { name: "Open Remove Password", exact: true }).click();
-    await expect(page.getByRole("heading", { name: "Remove Password", exact: true })).toBeVisible();
+    await rows.nth(2).getByRole("button", { name: "Open Lock & Unlock", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Lock & Unlock", exact: true })).toBeVisible();
 });
 
 test("a read-only output folder failure points to the output location setting instead of Retry", async ({ page }) => {
@@ -1843,7 +1839,7 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
                 : `/local/fixture${utility.capability.acceptedExtensions[0]}`;
     await chooseFixture(page, selectedFixturePath);
 
-    if (utility.id === "pdf-unlock" || utility.id === "pdf-protect" || utility.id === "office-protect") {
+    if (utility.id === "lock-unlock" || utility.id === "pdf-protect" || utility.id === "office-protect") {
         await fillPasswords(page, "test-password");
     }
     if (workspaceForTool(utility.id)?.id === "pdf-editor") {

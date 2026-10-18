@@ -13,7 +13,7 @@ interface WorkspaceCommandRailProps {
 }
 
 const designIconByToolId: Record<AtomicToolId, string> = {
-  "pdf-unlock": "remove-password",
+  "lock-unlock": "remove-password",
   "pdf-page-numbers": "page-numbers",
   "pdf-merge": "merge-pdf",
   "pdf-watermark": "watermark-pdf",

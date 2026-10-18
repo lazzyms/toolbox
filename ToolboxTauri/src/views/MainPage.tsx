@@ -82,7 +82,7 @@ export const MainPage = () => {
       ToolWorkspaceRegistry.map((workspace) => {
         const actions = toolsForWorkspace(workspace).filter((tool) => {
           const matchesScope = filter === "all" || favorites.includes(tool.id);
-          const searchText = `${tool.title} ${tool.blurb} ${workspace.title} ${workspace.blurb}`.toLowerCase();
+          const searchText = `${tool.title} ${tool.blurb} ${tool.keywords?.join(" ") ?? ""} ${workspace.title} ${workspace.blurb}`.toLowerCase();
           return matchesScope && searchText.includes(normalizedSearch);
         });
         return { workspace, actions };
