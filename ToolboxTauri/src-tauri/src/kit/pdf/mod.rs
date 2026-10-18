@@ -17,7 +17,7 @@ use lopdf::{Document, LoadOptions, Object, ObjectId};
 use crate::kit::common::limits;
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::ToolError;
-use crate::kit::password::{probe, unlock_skip_reason, unreadable, ProtectedFormat, ProtectionState, UNLOCK_NOT_VERIFIED, UNSUPPORTED_ENCRYPTION, WRONG_PASSWORD};
+use crate::kit::password::{lock_skip_reason, probe, unlock_skip_reason, unreadable, ProtectedFormat, ProtectionState, UNLOCK_NOT_VERIFIED, UNSUPPORTED_ENCRYPTION, WRONG_PASSWORD};
 
 pub struct PDFProcessor;
 
@@ -725,8 +725,10 @@ impl PDFProcessor {
             return JobOutcome::failure(input_path, ToolError::invalid_input("Passwords can't contain line breaks."));
         }
         let raw = match read_and_probe(&input_path) {
-            Ok((_, ProtectionState::OpenPassword)) => return JobOutcome::failure(input_path, ToolError::invalid_input("Already has a password. Unlock it first, then lock it again.")),
-            Ok((raw, _)) => raw,
+            Ok((raw, state)) => match lock_skip_reason(state) {
+                Some(reason) => return JobOutcome::skipped(input_path, reason),
+                None => raw,
+            },
             Err(error) => return JobOutcome::failure(input_path, error),
         };
         let page_count = match Document::load_mem(&raw) {

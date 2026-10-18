@@ -653,6 +653,38 @@ test("Lock without its PDF helper shows the PDFs as Unavailable and the Word and
     }
 });
 
+test("Lock shows already-protected files as Skipped rows with their reason, apart from Unavailable failures in the summary", async ({ page }) => {
+    const already = { code: "alreadyProtected", message: "Already password-protected. Unlock it first, then lock it again." };
+    const missing = { kind: "unavailable", message: "This PDF tool is unavailable because a helper it needs is missing from this copy of Toolbox. Reinstall Toolbox to restore it." };
+    await openLock(page);
+    await drop(page, ["/local/lease.pdf", "/local/invoice.pdf", "/local/offer.docx", "/local/payroll.docx", "/local/statement.pdf", "/local/deck.pptx"]);
+    await page.evaluate(({ already, missing }) => {
+        const win = window as unknown as IntakeWindow;
+        win.__skippedPaths = { "/local/invoice.pdf": already, "/local/payroll.docx": already };
+        win.__failures = { "/local/statement.pdf": missing };
+    }, { already, missing });
+    await fillBatchLock(page, "batch-secret");
+    await run(page).click();
+
+    await expect(results(page)).toHaveCount(6);
+    await expect(page.locator(".result-summary strong")).toHaveText("Done. 3 locked, 2 skipped, 1 failed");
+    for (const name of ["lease.pdf", "offer.docx", "deck.pptx"]) await expect(results(page).filter({ hasText: name })).toHaveAttribute("data-state", "succeeded");
+    for (const name of ["invoice.pdf", "payroll.docx"]) {
+        const skipped = results(page).filter({ hasText: name });
+        await expect(skipped).toHaveAttribute("data-state", "skipped");
+        await expect(skipped).toHaveAttribute("data-tone", "skip");
+        await expect(skipped).toContainText(already.message);
+        await expect(skipped.locator(".result-row-state")).toContainText("Skipped");
+        await expect(skipped.getByRole("button")).toHaveCount(0);
+    }
+    const unavailable = results(page).filter({ hasText: "statement.pdf" });
+    await expect(unavailable).toHaveAttribute("data-state", "failed");
+    await expect(unavailable).toHaveAttribute("data-tone", "skip");
+    await expect(unavailable.locator(".result-row-state")).toContainText("Unavailable");
+    await expect(unavailable).toContainText(missing.message);
+    await expect(unavailable.getByRole("button", { name: /^Retry/ })).toHaveCount(0);
+});
+
 test("Unlock sends the ordered batch with one password and the shell's output folder, and shows one row per file", async ({ page }) => {
     await page.addInitScript(() => {
         (window as unknown as IntakeWindow).__outputSettings = { mode: "customFolder", folder: "/Users/test/Unlocked" };

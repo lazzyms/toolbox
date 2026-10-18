@@ -17,7 +17,7 @@ use crate::kit::office_agile::{
     decrypt_ooxml, encrypt_ooxml, is_agile_ooxml, verify_ooxml, AgileDecryptError,
 };
 use crate::kit::password::{
-    probe, unlock_skip_reason, unreadable, ProtectedFormat, ProtectionState,
+    legacy_lock_unavailable, lock_skip_reason, probe, unlock_skip_reason, unreadable, ProtectedFormat, ProtectionState,
     LEGACY_PASSWORD_TOO_LONG, LEGACY_PPT_PICTURES, UNLOCK_NOT_VERIFIED, UNSUPPORTED_ENCRYPTION,
     UNSUPPORTED_LEGACY_ENCRYPTION, WRONG_PASSWORD,
 };
@@ -151,14 +151,7 @@ impl OfficeProcessor {
                     ToolError::invalid_input("Only DOCX, XLSX and PPTX files can be protected."),
                 )
             }
-            Some(_) => {
-                return JobOutcome::failure(
-                    input_path,
-                    ToolError::unavailable(
-                        "Native Office protection supports DOCX, XLSX and PPTX only; .doc, .xls and .ppt are unsupported.",
-                    ),
-                )
-            }
+            Some(legacy) => return JobOutcome::failure(input_path, legacy_lock_unavailable(legacy)),
         };
         let normalized_extension = format.extension();
 
@@ -178,8 +171,10 @@ impl OfficeProcessor {
                 )
             }
         };
-        if let Err(error) = probe(&raw, format) {
-            return JobOutcome::failure(input_path, error);
+        match probe(&raw, format).map(lock_skip_reason) {
+            Ok(None) => {}
+            Ok(Some(reason)) => return JobOutcome::skipped(input_path, reason),
+            Err(error) => return JobOutcome::failure(input_path, error),
         }
         if !is_ooxml_package(&raw, normalized_extension) {
             return JobOutcome::failure(
