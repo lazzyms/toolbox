@@ -1,4 +1,5 @@
 use rayon::prelude::*;
+use crate::kit::common::limits::{self, ToolLimits};
 use crate::kit::common::JobOutcome;
 use crate::kit::contracts::{partition_command_inputs, OutcomePointer, OutputLocation, ToolError};
 use std::collections::HashMap;
@@ -6,20 +7,38 @@ use std::fs::OpenOptions;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 pub struct BatchRunner;
 
 pub const READ_ONLY_OUTPUT_MESSAGE: &str = "The output folder is read-only. Nothing was saved.";
 
 impl BatchRunner {
-    pub fn run<F>(
+    pub fn run<R, F>(
         command: &str,
         inputs: Vec<PathBuf>,
         location: &OutputLocation,
+        request: &Arc<R>,
         job: F,
     ) -> Vec<JobOutcome>
     where
-        F: Fn(PathBuf) -> JobOutcome + Sync + Send,
+        R: Send + Sync + 'static,
+        F: Fn(&R, PathBuf) -> JobOutcome + Send + Sync + 'static,
+    {
+        Self::run_with_limits(command, inputs, location, limits::recorded(command), request, job)
+    }
+
+    pub fn run_with_limits<R, F>(
+        command: &str,
+        inputs: Vec<PathBuf>,
+        location: &OutputLocation,
+        limits: Option<ToolLimits>,
+        request: &Arc<R>,
+        job: F,
+    ) -> Vec<JobOutcome>
+    where
+        R: Send + Sync + 'static,
+        F: Fn(&R, PathBuf) -> JobOutcome + Send + Sync + 'static,
     {
         // rayon::into_par_iter automatically uses the system core count for the thread pool,
         // matching the original Swift `ProcessInfo.processInfo.activeProcessorCount` behavior.
@@ -41,7 +60,14 @@ impl BatchRunner {
                         ));
                     }
                 }
-                let processed = runnable.into_par_iter().map(|(index, path)| (index, job(path))).collect::<Vec<_>>();
+                let job = Arc::new(job);
+                let processed = runnable.into_par_iter().map(|(index, path)| {
+                    let Some(limits) = limits else {
+                        return (index, JobOutcome::failure(path, ToolError::processing(format!("No processing limits are recorded for {command}."))));
+                    };
+                    let (job, request) = (Arc::clone(&job), Arc::clone(request));
+                    (index, limits.run_each(path, move |path| job(&request, path)))
+                }).collect::<Vec<_>>();
                 for (index, outcome) in processed { outcomes[index] = Some(outcome); }
                 outcomes.into_iter().map(Option::unwrap).collect()
             }

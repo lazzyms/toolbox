@@ -1,4 +1,5 @@
 pub mod batch_runner;
+pub mod limits;
 
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -26,8 +27,7 @@ impl OutputReservation {
     }
 
     pub fn publish(self) -> io::Result<PathBuf> {
-        std::fs::hard_link(&self.temporary_path, &self.path)?;
-        Ok(self.path.clone())
+        limits::publish_within_time(|| std::fs::hard_link(&self.temporary_path, &self.path).map(|()| self.path.clone()))
     }
 }
 

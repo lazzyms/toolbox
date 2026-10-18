@@ -71,6 +71,7 @@ pub struct ConvertImagesRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolError {
+    #[serde(flatten)]
     pub kind: ErrorKind,
     pub message: String,
     #[serde(default)]
@@ -78,12 +79,21 @@ pub struct ToolError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(tag = "kind", content = "details", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ErrorKind {
     InvalidInput,
     Unavailable,
-    LimitExceeded,
+    LimitExceeded { limit: LimitKind },
     Processing,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LimitKind {
+    FileSize,
+    PageCount,
+    Time,
+    Decompression,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -109,6 +119,10 @@ impl ToolError {
 
     pub fn unavailable(message: impl Into<String>) -> Self {
         Self::new(ErrorKind::Unavailable, message)
+    }
+
+    pub fn limit_exceeded(limit: LimitKind, message: impl Into<String>) -> Self {
+        Self::new(ErrorKind::LimitExceeded { limit }, message)
     }
 
     pub fn with_pointer(self, pointer: OutcomePointer) -> Self {
@@ -584,6 +598,11 @@ mod tests {
                 kind: WarningKind::RenamedToAvoidReplacing { chosen_name: "scan-page-1.png".into(), final_name: "scan-page-1 2.png".into() },
                 message: "Saved as scan-page-1 2.png so the existing file was not replaced.".into(),
             }),
+            JobOutcome::failure_with_outputs(
+                PathBuf::from("drawings.pdf"),
+                vec![PathBuf::from("drawings-page-1.png")],
+                ToolError::limit_exceeded(LimitKind::Time, "Took longer than 5 minutes and was stopped. 1 part was saved before it stopped."),
+            ),
         ];
 
         assert_eq!(serde_json::to_value(&samples).unwrap(), shared);

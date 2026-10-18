@@ -105,19 +105,20 @@ export type ToolCommand =
   | "process_tiff_pages"
   | "image_metadata";
 
-export type ErrorKind =
-  "invalidInput" | "unavailable" | "limitExceeded" | "processing";
 
 export type OutcomePointer =
   | { kind: "tool"; toolId: AtomicToolId }
   | { kind: "pack"; packId: string }
   | { kind: "outputFolder" };
 
-export interface ToolError {
-  kind: ErrorKind;
-  message: string;
-  pointer: OutcomePointer | null;
-}
+export type LimitKind = "fileSize" | "pageCount" | "time" | "decompression";
+
+export type ToolError = { message: string; pointer: OutcomePointer | null } & (
+  | { kind: "invalidInput" | "unavailable" | "processing" }
+  | { kind: "limitExceeded"; details: { limit: LimitKind } }
+);
+
+export type ErrorKind = ToolError["kind"];
 
 export type SkipCode =
   | "notProtected"

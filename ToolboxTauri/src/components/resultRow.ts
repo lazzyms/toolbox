@@ -1,4 +1,4 @@
-import type { ErrorKind, JobOutcome, OutcomePointer, OutcomeWarning } from "../contracts";
+import type { ErrorKind, JobOutcome, OutcomePointer, OutcomeWarning, ToolError } from "../contracts";
 import { UtilityRegistry } from "../registry";
 
 export type RowTone = "ok" | "warn" | "skip" | "fail";
@@ -20,11 +20,16 @@ export interface RowView {
 
 export const fileName = (path: string) => path.split(/[\\/]/).pop() || path;
 
-export const retryableKinds: Record<ErrorKind, boolean> = {
-    invalidInput: false,
-    unavailable: false,
-    limitExceeded: false,
-    processing: true,
+const isRetryable = (failure: ToolError): boolean => {
+    switch (failure.kind) {
+        case "processing":
+            return true;
+        case "limitExceeded":
+            // Size, page count and expansion belong to the file, so only a run that ran out of time can pass on another try.
+            return failure.details.limit === "time";
+        default:
+            return false;
+    }
 };
 
 const spokenKinds: Record<ErrorKind, string> = {
@@ -106,7 +111,7 @@ export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput =
                 revealOutput: outcome.outputPaths[0] ?? null,
                 pointer: pointerView(outcome.failure.pointer),
                 // A retry reuses the run's output location, so it cannot fix a failure that points at that location.
-                canRetry: retryableKinds[outcome.failure.kind] && outcome.failure.pointer?.kind !== "outputFolder",
+                canRetry: isRetryable(outcome.failure) && outcome.failure.pointer?.kind !== "outputFolder",
             };
         }
     }

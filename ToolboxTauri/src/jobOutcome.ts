@@ -2,6 +2,7 @@ import type {
   AtomicToolId,
   ErrorKind,
   JobOutcome,
+  LimitKind,
   OutcomePointer,
   OutcomeWarning,
   SkipCode,
@@ -13,6 +14,8 @@ import type {
 import { UtilityRegistry } from "./registry";
 
 const errorKinds: readonly ErrorKind[] = ["invalidInput", "unavailable", "limitExceeded", "processing"];
+
+const limitKinds: readonly LimitKind[] = ["fileSize", "pageCount", "time", "decompression"];
 
 const skipCodes: readonly SkipCode[] = [
   "notProtected",
@@ -67,11 +70,11 @@ const parsePointer = (value: unknown, path: string): OutcomePointer | null => {
 
 const parseToolError = (value: unknown, path: string): ToolError => {
   const error = record(value, path);
-  return {
-    kind: member(error.kind, errorKinds, `${path}.kind`),
-    message: text(error.message, `${path}.message`),
-    pointer: parsePointer(error.pointer, `${path}.pointer`),
-  };
+  const kind = member(error.kind, errorKinds, `${path}.kind`);
+  const base = { message: text(error.message, `${path}.message`), pointer: parsePointer(error.pointer, `${path}.pointer`) };
+  if (kind !== "limitExceeded") return { ...base, kind };
+  const details = record(error.details, `${path}.details`);
+  return { ...base, kind, details: { limit: member(details.limit, limitKinds, `${path}.details.limit`) } };
 };
 
 const parseSkipReason = (value: unknown, path: string): SkipReason => {
@@ -127,7 +130,7 @@ export const parseJobOutcome = (value: unknown, path = "outcome"): JobOutcome =>
 export const parseToolResult = (value: unknown): ToolResult =>
   Array.isArray(value) ? value.map((outcome, index) => parseJobOutcome(outcome, `outcome[${index}]`)) : fail("result", "an array");
 
-export const failedOutcome = (inputPath: string, kind: ErrorKind, message: string): JobOutcome => ({
+export const failedOutcome = (inputPath: string, kind: Exclude<ErrorKind, "limitExceeded">, message: string): JobOutcome => ({
   inputPath,
   state: "failed",
   outputPaths: [],
