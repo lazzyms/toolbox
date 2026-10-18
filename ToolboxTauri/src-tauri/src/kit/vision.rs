@@ -9,6 +9,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use image::GenericImageView;
 use lopdf::Document;
 
+use crate::kit::common::limits::{self, StoppableHelper};
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::ToolError;
 use crate::kit::pdf::metadata::page_bounds;
@@ -253,7 +254,7 @@ fn run_command(mut command: Command, deadline: Instant) -> Result<std::process::
                 let _ = child.kill();
                 break child.wait().map_err(|error| format!("Could not stop OCR helper: {error}"))?;
             }
-            None if Instant::now() >= deadline => {
+            None if Instant::now() >= deadline || limits::job_stopped() => {
                 timed_out = true;
                 let _ = child.kill();
                 break child.wait().map_err(|error| format!("Could not stop OCR helper: {error}"))?;
@@ -324,7 +325,7 @@ fn run_image_adapter(request: &VisionRequest, input: PathBuf, mode: &str, resour
         Ok(model) => model,
         Err(error) => return unavailable(input, error),
     };
-    match Command::new(engine).arg("--mode").arg(mode).arg("--input").arg(&input).arg("--output").arg(output.path()).arg("--model").arg(model).output() {
+    match Command::new(engine).arg("--mode").arg(mode).arg("--input").arg(&input).arg("--output").arg(output.path()).arg("--model").arg(model).output_until_stopped() {
         Ok(result) if result.status.success() && output.path().is_file() => {
             let validation = match validation {
                 ImageAdapterValidation::FaceBlur => validate_face_blur(&input, output.path()),

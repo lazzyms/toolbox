@@ -1460,3 +1460,27 @@ body {
 .password-inline-fields > .workspace-field { flex: 1 1 180px; }
 .password-inline-actions { display: inline-flex; gap: 6px; }
 .result-password-retry { grid-column: 2 / -1; padding: 4px 0 0; }
+.run-controls {
+  display: grid;
+  gap: 10px;
+}
+.run-controls-lock,
+.run-controls-hint {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.run-controls-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+.run-controls-footer kbd {
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--muted-foreground);
+  font-family: inherit;
+  font-size: 11px;
+}

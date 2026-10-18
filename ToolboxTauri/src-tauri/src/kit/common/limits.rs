@@ -3,13 +3,18 @@ use flate2::read::ZlibDecoder;
 use std::cell::RefCell;
 use std::io::{self, Cursor, Read};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Output, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const MB: u64 = 1_000_000;
 const GB: u64 = 1_000_000_000;
 const FIVE_MINUTES: Duration = Duration::from_secs(5 * 60);
+const STOP_POLL: Duration = Duration::from_millis(20);
+// Long enough for a stopped helper to exit and the job to drop its reservations, short enough that cancel feels immediate.
+const CANCEL_GRACE: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ToolLimits {
@@ -41,11 +46,11 @@ pub fn recorded(command: &str) -> Option<ToolLimits> {
 }
 
 impl ToolLimits {
-    pub fn run_each<F>(self, input: PathBuf, job: F) -> JobOutcome
+    pub fn run_each<F>(self, input: PathBuf, cancel: &CancelFlag, job: F) -> JobOutcome
     where
         F: FnOnce(PathBuf) -> JobOutcome + Send + 'static,
     {
-        run_timed(input.clone(), self.max_duration, move || match self.check(&input) {
+        run_timed(input.clone(), self.max_duration, cancel, move || match self.check(&input) {
             Ok(()) => job(input),
             Err(error) => JobOutcome::failure(input, error),
         })
@@ -57,7 +62,7 @@ impl ToolLimits {
     {
         let inputs = inputs.to_vec();
         let first = inputs.first().cloned().unwrap_or_default();
-        run_timed(first, self.max_duration, move || {
+        run_timed(first, self.max_duration, &CancelFlag::default(), move || {
             match inputs.iter().find_map(|input| self.check(input).err().map(|error| (input, error))) {
                 Some((input, error)) => JobOutcome::failure(input.clone(), error),
                 None => job(),
@@ -265,6 +270,52 @@ thread_local! {
     static CLOCK: RefCell<Option<Arc<Clock>>> = const { RefCell::new(None) };
 }
 
+#[derive(Clone, Default)]
+pub struct CancelFlag(Arc<AtomicBool>);
+
+impl CancelFlag {
+    pub fn cancel(&self) { self.0.store(true, Ordering::Release) }
+    pub fn is_cancelled(&self) -> bool { self.0.load(Ordering::Acquire) }
+    pub fn same_as(&self, other: &CancelFlag) -> bool { Arc::ptr_eq(&self.0, &other.0) }
+}
+
+/// True once the job on this thread was cancelled or ran out of time, so helpers it starts should stop.
+pub fn job_stopped() -> bool {
+    CLOCK.with(|clock| clock.borrow().as_ref().is_some_and(|clock| clock.published.lock().unwrap_or_else(PoisonError::into_inner).is_none()))
+}
+
+fn stopped_error() -> io::Error { io::Error::new(io::ErrorKind::Interrupted, "Processing was stopped.") }
+
+pub trait StoppableHelper {
+    /// Runs a helper like `Command::output`, but terminates it as soon as the job that started it is stopped.
+    fn output_until_stopped(&mut self) -> io::Result<Output>;
+}
+
+impl StoppableHelper for Command {
+    fn output_until_stopped(&mut self) -> io::Result<Output> {
+        if job_stopped() { return Err(stopped_error()); }
+        let mut child = self.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+        fn drain(pipe: Option<impl Read + Send + 'static>) -> std::thread::JoinHandle<Vec<u8>> {
+            std::thread::spawn(move || {
+                let mut bytes = Vec::new();
+                if let Some(mut pipe) = pipe { let _ = pipe.read_to_end(&mut bytes); }
+                bytes
+            })
+        }
+        let (stdout, stderr) = (drain(child.stdout.take()), drain(child.stderr.take()));
+        let status = loop {
+            if let Some(status) = child.try_wait()? { break status; }
+            if job_stopped() {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(stopped_error());
+            }
+            std::thread::sleep(STOP_POLL);
+        };
+        Ok(Output { status, stdout: stdout.join().unwrap_or_default(), stderr: stderr.join().unwrap_or_default() })
+    }
+}
+
 pub fn publish_within_time(publish: impl FnOnce() -> io::Result<PathBuf>) -> io::Result<PathBuf> {
     let Some(clock) = CLOCK.with(|clock| clock.borrow().clone()) else { return publish() };
     let mut published = clock.published.lock().unwrap_or_else(PoisonError::into_inner);
@@ -276,8 +327,8 @@ pub fn publish_within_time(publish: impl FnOnce() -> io::Result<PathBuf>) -> io:
     Ok(path)
 }
 
-// A thread cannot be killed, so a job past its limit keeps running detached and every later publish is refused.
-fn run_timed<F>(input: PathBuf, max_duration: Duration, job: F) -> JobOutcome
+// A thread cannot be killed, so a stopped job runs on detached while its helpers are terminated and every later publish is refused.
+fn run_timed<F>(input: PathBuf, max_duration: Duration, cancel: &CancelFlag, job: F) -> JobOutcome
 where
     F: FnOnce() -> JobOutcome + Send + 'static,
 {
@@ -291,16 +342,34 @@ where
     if let Err(error) = spawned {
         return JobOutcome::failure(input, ToolError::processing(format!("Could not start processing: {error}")));
     }
-    let result = receiver.recv_timeout(max_duration);
+    enum Stopped { Cancelled, TimedOut, Vanished }
+    let deadline = Instant::now() + max_duration;
+    let ended = loop {
+        if cancel.is_cancelled() { break receiver.try_recv().map_err(|_| Stopped::Cancelled); }
+        let left = deadline.saturating_duration_since(Instant::now());
+        match receiver.recv_timeout(left.min(STOP_POLL)) {
+            Ok(outcome) => break Ok(outcome),
+            Err(RecvTimeoutError::Timeout) if left.is_zero() => break Err(Stopped::TimedOut),
+            Err(RecvTimeoutError::Timeout) => continue,
+            Err(RecvTimeoutError::Disconnected) => break Err(Stopped::Vanished),
+        }
+    };
     let saved = || clock.published.lock().unwrap_or_else(PoisonError::into_inner).take().unwrap_or_default();
-    match result {
+    match ended {
         Ok(outcome) => outcome,
-        Err(RecvTimeoutError::Timeout) => {
+        Err(Stopped::Cancelled) => {
+            let saved = saved();
+            // Waiting lets the job see the stop, end its helper and drop its unpublished reservations with their temporary files.
+            let _ = receiver.recv_timeout(CANCEL_GRACE);
+            let message = format!("Cancelled while it was running. {}", saved_label(saved.len()));
+            JobOutcome::failure_with_outputs(input, saved, ToolError::cancelled(message))
+        }
+        Err(Stopped::TimedOut) => {
             let saved = saved();
             let message = format!("Took longer than {} and was stopped. {}", duration_label(max_duration), saved_label(saved.len()));
             JobOutcome::failure_with_outputs(input, saved, ToolError::limit_exceeded(LimitKind::Time, message))
         }
-        Err(RecvTimeoutError::Disconnected) => {
+        Err(Stopped::Vanished) => {
             let saved = saved();
             let message = format!("Processing stopped unexpectedly. {}", saved_label(saved.len()));
             JobOutcome::failure_with_outputs(input, saved, ToolError::processing(message))
@@ -537,7 +606,7 @@ mod tests {
         let (late_sender, late_result) = mpsc::channel();
         let limits = ToolLimits { max_duration: Duration::from_millis(100), ..small() };
         let started = Instant::now();
-        let outcome = limits.run_each(input.clone(), {
+        let outcome = limits.run_each(input.clone(), &CancelFlag::default(), {
             let (first, late) = (first.clone(), late.clone());
             move |input| {
                 publish_within_time(|| std::fs::write(&first, b"1").map(|()| first.clone())).unwrap();
@@ -561,9 +630,49 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_cancelled_job_ends_its_helper_reports_saved_parts_and_cannot_publish_more() {
+        let root = sandbox("cancelled");
+        let input = root.join("slow.pdf");
+        std::fs::write(&input, b"%PDF-1.7\n").unwrap();
+        let (first, late) = (root.join("slow-1.txt"), root.join("slow-2.txt"));
+        let (helper_sender, helper_result) = mpsc::channel();
+        let (late_sender, late_result) = mpsc::channel();
+        let cancel = CancelFlag::default();
+        let canceller = {
+            let cancel = cancel.clone();
+            std::thread::spawn(move || { std::thread::sleep(Duration::from_millis(150)); cancel.cancel(); Instant::now() })
+        };
+        let outcome = small().run_each(input.clone(), &cancel, {
+            let (first, late) = (first.clone(), late.clone());
+            move |input| {
+                publish_within_time(|| std::fs::write(&first, b"1").map(|()| first.clone())).unwrap();
+                let _ = helper_sender.send(Command::new("sleep").arg("30").output_until_stopped().map_err(|error| error.kind()));
+                let _ = late_sender.send(publish_within_time(|| std::fs::write(&late, b"2").map(|()| late.clone())));
+                JobOutcome::succeeded(input, vec![first, late], "done")
+            }
+        });
+
+        let cancelled_at = canceller.join().unwrap();
+        assert!(cancelled_at.elapsed() < Duration::from_secs(2), "the helper is ended, not waited for");
+        match &outcome.state {
+            OutcomeState::Failed { output_paths, error } => {
+                assert_eq!(output_paths, &vec![first.clone()]);
+                assert_eq!(error.kind, ErrorKind::Cancelled);
+                assert_eq!(error.message, "Cancelled while it was running. 1 part was saved before it stopped.");
+            }
+            state => panic!("expected a cancelled failure, got {state:?}"),
+        }
+        assert_eq!(helper_result.recv().unwrap().unwrap_err(), io::ErrorKind::Interrupted);
+        assert!(late_result.recv().unwrap().is_err(), "a publish after cancel is refused");
+        assert!(!late.exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn a_panicking_job_fails_only_its_own_file() {
-        let outcome = small().run_each(PathBuf::from("missing.png"), |_| panic!("decoder bug"));
+        let outcome = small().run_each(PathBuf::from("missing.png"), &CancelFlag::default(), |_| panic!("decoder bug"));
         assert!(matches!(outcome.error(), Some(ToolError { kind: ErrorKind::Processing, .. })));
         assert_eq!(outcome.error().unwrap().message, "Processing stopped unexpectedly. Nothing was saved.");
     }

@@ -103,6 +103,7 @@ pub enum ErrorKind {
     LimitExceeded { limit: LimitKind },
     Processing,
     WrongPassword,
+    Cancelled,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -145,6 +146,10 @@ impl ToolError {
 
     pub fn wrong_password(message: impl Into<String>) -> Self {
         Self::new(ErrorKind::WrongPassword, message)
+    }
+
+    pub fn cancelled(message: impl Into<String>) -> Self {
+        Self::new(ErrorKind::Cancelled, message)
     }
 
     pub fn with_pointer(self, pointer: OutcomePointer) -> Self {
@@ -520,6 +525,14 @@ mod tests {
         assert_eq!(
             serde_json::to_value(super::ToolError::wrong_password("Wrong password.")).unwrap(),
             serde_json::json!({ "kind": "wrongPassword", "message": "Wrong password.", "pointer": null }),
+        );
+    }
+
+    #[test]
+    fn cancelled_serializes_as_its_own_failure_kind() {
+        assert_eq!(
+            serde_json::to_value(super::ToolError::cancelled("Cancelled while it was running.")).unwrap(),
+            serde_json::json!({ "kind": "cancelled", "message": "Cancelled while it was running.", "pointer": null }),
         );
     }
 
