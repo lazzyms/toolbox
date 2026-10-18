@@ -183,6 +183,7 @@ export interface ToolDefinition {
   id: AtomicToolId;
   title: string;
   shortTitle: string;
+  resultVerb: string;
   blurb: string;
   symbol: string;
   category: ToolCategory;

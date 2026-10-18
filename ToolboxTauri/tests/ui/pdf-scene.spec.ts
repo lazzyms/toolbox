@@ -41,7 +41,9 @@ async function openEditor(page: Page) {
   await page.getByRole('button', { name: 'Open Edit PDF', exact: true }).click();
   await page.getByRole('button', { name: 'Choose files to process' }).click();
   await expect(page.getByRole('group', { name: 'PDF page canvas' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeEnabled();
+  await expect.poll(() => page.evaluate(() => (window as any).calls.some((call: any) => call.command === 'preview_pdf_scene_pages'))).toBe(true);
+  await expect(page.locator('.scene-canvas image').first()).toBeAttached();
+  await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeDisabled();
 }
 async function draw(page: Page, tool: string, y: number, x = 0.2) {
   await page.getByRole('toolbar', { name: 'PDF editor tools' }).getByRole('button', { name: tool, exact: true }).click();
@@ -58,6 +60,8 @@ async function exported(page: Page) {
 
 test('PDF editor toolbars use roving keyboard focus and render the workspace', async ({ page }, testInfo) => {
   await openEditor(page);
+  await draw(page, 'Shape', .4);
+  await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeEnabled();
   const tools = page.getByRole('toolbar', { name: 'PDF editor tools' });
   const selectTool = tools.getByRole('button', { name: 'Select', exact: true });
   const textTool = tools.getByRole('button', { name: 'Text', exact: true });
@@ -182,9 +186,8 @@ test('scene crop and thumbnail insert rotate reorder delete share undo redo rese
   result = await exported(page);
   expect(result.pages).toHaveLength(3);
   await page.getByRole('button', { name: 'Reset edits' }).click();
-  result = await exported(page);
-  expect(result.pages.map((p: any) => p.sourceIndex)).toEqual([0, 1, 2]);
-  expect(result.pages.every((p: any) => p.crop === null && !p.objects.length && !p.rotation)).toBe(true);
+  await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: /^Page \d/ })).toHaveText(['1', '2', '3'].map((n) => new RegExp(n)));
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
   expect(await page.getByRole('button', { name: 'Reset edits' }).isEnabled()).toBe(true);
 });
@@ -200,6 +203,20 @@ test('scene drag reorders selected thumbnails together and protects the last pag
   await expect(page.getByRole('button', { name: 'Delete selected pages' })).toBeDisabled();
 });
 
+test('Export stays disabled until the document has an effective change', async ({ page }) => {
+  await openEditor(page);
+  const exportButton = page.getByRole('button', { name: 'Export PDF', exact: true });
+  await expect(exportButton).toBeDisabled();
+  await draw(page, 'Shape', .4);
+  await expect(exportButton).toBeEnabled();
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await expect(exportButton).toBeDisabled();
+  await page.getByRole('button', { name: 'Redo', exact: true }).click();
+  await expect(exportButton).toBeEnabled();
+  await exportButton.click();
+  expect(await page.evaluate(() => (window as any).calls.filter((c: any) => c.command === 'export_pdf_scene'))).toHaveLength(1);
+});
+
 test('scene rejects stale and failed previews without exposing an unverified export', async ({ page }) => {
   await openEditor(page);
   await expect.poll(() => page.locator('.scene-canvas image').evaluateAll((images) => images.map((image) => image.getAttribute('href')))).toContain(svg);
@@ -209,7 +226,7 @@ test('scene rejects stale and failed previews without exposing an unverified exp
   await expect.poll(() => page.locator('.scene-canvas image').evaluateAll((images) => images.map((image) => image.getAttribute('href')))).toContain(svg);
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await expect(page.locator('.scene-object-hit')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeDisabled();
   await page.evaluate(() => { (window as any).previewFailure = true; });
   await draw(page, 'Shape', .4);
   await expect.poll(() => page.locator('.scene-canvas image').evaluateAll((images) => images.map((image) => image.getAttribute('href')))).toContain(svg);

@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import path from "node:path";
+import type { JobOutcome } from "../../src/contracts";
 import { ToolWorkspaceRegistry, UtilityRegistry, workspaceForTool } from "../../src/registry";
 
 const fixturePath = path.resolve("src-tauri/icons/icon.png");
@@ -8,15 +9,7 @@ const pdfFixturePath = path.resolve("tests/fixtures/document.pdf");
 const pdfFixtureName = path.basename(pdfFixturePath);
 const mockedOutputPaths = [`${fixturePath}.output-one`, `${fixturePath}.output-two`];
 
-type MockOutcome = {
-    inputPath: string;
-    state: "succeeded" | "failed";
-    outputPaths: string[];
-    detail: string;
-    failure: { kind: string; message: string; pointer: null } | null;
-    reason: null;
-    warnings: [];
-};
+type MockOutcome = JobOutcome;
 
 type TestWindow = Window & {
     __toolboxInvocations?: Array<{ command: string; args: unknown }>;
@@ -413,7 +406,7 @@ test("workspace cards expose an accessible open action without favorite navigati
     await expect(page.getByRole("radio", { name: "All", exact: true })).toBeVisible();
 });
 
-test("Windows labels the reveal action as opening the file location", async ({ page }) => {
+test("Windows labels the reveal action for File Explorer", async ({ page }) => {
     await page.addInitScript(() => {
         Object.defineProperty(window.navigator, "platform", { configurable: true, value: "Win32" });
     });
@@ -422,7 +415,8 @@ test("Windows labels the reveal action as opening the file location", async ({ p
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await page.getByRole("switch", { name: "Preserve original pixels" }).click();
     await page.locator(".workspace-primary-action").click();
-    await expect(page.getByRole("button", { name: "Open file location" })).toHaveCount(2);
+    await expect(page.getByRole("button", { name: "Show in File Explorer: icon.png.output-one", exact: true })).toHaveText("Show in File Explorer");
+    await expect(page.getByRole("button", { name: /Show in Finder/ })).toHaveCount(0);
 });
 
 test("settings checks for and installs available updates", async ({ page }) => {
@@ -1111,65 +1105,205 @@ test("Office protection exposes DOCX and XLSX protection", async ({ page }) => {
     await expect(page.locator(".workspace-primary-action")).toBeEnabled();
 });
 
-test("every output exposes native file actions and keeps action errors inline", async ({ page }) => {
-    const failedOutput = `${fixturePath}.partial-output`;
-    const outputs = [...mockedOutputPaths, failedOutput];
-    await page.goto("/");
-    await page.evaluate(({ fixturePath, mockedOutputPaths, failedOutput }) => {
-        (window as TestWindow).__toolboxProcessingResults = [
-            {
-                inputPath: fixturePath,
-                outputPaths: mockedOutputPaths,
-                detail: "Test output",
-                state: "succeeded",
-                failure: null,
-                reason: null,
-                warnings: [],
-            },
-            {
-                inputPath: `${fixturePath}.failed-input`,
-                outputPaths: [failedOutput],
-                detail: "",
-                state: "failed",
-                failure: { kind: "processing", message: "Processing failed", pointer: null },
-                reason: null,
-                warnings: [],
-            },
-        ];
-        (window as TestWindow).__toolboxActionFailure = {
-            command: "reveal_output_path",
-            path: failedOutput,
-            message: "Could not reveal test output",
-        };
-    }, { fixturePath, mockedOutputPaths, failedOutput });
+const succeeded = (inputPath: string, outputPaths: string[], extra: Partial<Extract<MockOutcome, { state: "succeeded" }>> = {}): MockOutcome => ({
+    inputPath,
+    outputPaths,
+    detail: "",
+    state: "succeeded",
+    failure: null,
+    reason: null,
+    warnings: [],
+    ...extra,
+});
 
+const failed = (inputPath: string, kind: "invalidInput" | "unavailable" | "limitExceeded" | "processing", message: string, extra: Partial<Extract<MockOutcome, { state: "failed" }>> = {}): MockOutcome => ({
+    inputPath,
+    outputPaths: [],
+    detail: "",
+    state: "failed",
+    failure: { kind, message, pointer: null },
+    reason: null,
+    warnings: [],
+    ...extra,
+});
+
+const runCompressImagesWith = async (page: Page, outcomes: MockOutcome[]) => {
+    await page.goto("/");
+    await page.evaluate((outcomes) => {
+        (window as TestWindow).__toolboxProcessingResults = outcomes;
+    }, outcomes);
     await page.getByRole("button", { name: "Open Compress Images" }).click();
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await page.getByRole("switch", { name: "Preserve original pixels" }).click();
     await page.getByRole("button", { name: "Export edited images" }).click();
+    return page.getByRole("list", { name: "Results" }).getByRole("listitem");
+};
 
-    const outputRows = page.locator(".result-output");
-    await expect(outputRows).toHaveCount(outputs.length);
-    await expect(page.getByRole("button", { name: "Open file" })).toHaveCount(outputs.length);
-    await expect(page.getByRole("button", { name: "Show in Finder" })).toHaveCount(outputs.length);
+const resultSummaryStatus = (page: Page) => page.getByRole("status").filter({ hasText: "Done." });
 
-    for (let index = 0; index < outputs.length; index += 1) {
-        await outputRows.nth(index).getByRole("button", { name: "Open file" }).click();
-        await outputRows.nth(index).getByRole("button", { name: "Show in Finder" }).click();
-    }
+const fileActionInvocations = (page: Page) => page.evaluate(() =>
+    ((window as TestWindow).__toolboxInvocations ?? []).filter(({ command }) =>
+        command === "open_output_path" || command === "reveal_output_path"
+    ),
+);
 
-    const actionInvocations = await page.evaluate(() =>
-        ((window as TestWindow).__toolboxInvocations ?? []).filter(({ command }) =>
-            command === "open_output_path" || command === "reveal_output_path"
-        ),
+test("every output exposes native file actions and keeps action errors inline", async ({ page }) => {
+    const splitOutputs = ["a-01.pdf", "a-02.pdf", "a-12.pdf"].map((name) => `/local/out/${name}`);
+    const folderOutput = "/local/out/brochure-pages";
+    const partialOutput = "/local/out/drawings-part-1.pdf";
+    const rows = await runCompressImagesWith(page, [
+        succeeded(fixturePath, [mockedOutputPaths[0]], { detail: "Test output" }),
+        succeeded("/local/annual-report.pdf", splitOutputs),
+        succeeded("/local/brochure.pdf", [folderOutput]),
+        failed("/local/drawings.pdf", "processing", "Took longer than 5 minutes and was stopped.", { outputPaths: [partialOutput] }),
+    ]);
+    await page.evaluate((partialOutput) => {
+        (window as TestWindow).__toolboxActionFailure = {
+            command: "reveal_output_path",
+            path: partialOutput,
+            message: "Could not reveal test output",
+        };
+    }, partialOutput);
+
+    await expect(rows).toHaveCount(4);
+    await expect(rows.nth(0)).toContainText("icon.png.output-one");
+    await expect(rows.nth(0)).toContainText("Test output");
+    await expect(rows.nth(1)).toContainText("3 files, a-01.pdf to a-12.pdf");
+    await expect(rows.nth(1).getByRole("button", { name: "Open a-01.pdf", exact: true })).toHaveText("Open first");
+    await expect(rows.nth(3).getByRole("button", { name: /^Open / })).toHaveCount(0);
+
+    await rows.nth(0).getByRole("button", { name: "Open icon.png.output-one", exact: true }).click();
+    await rows.nth(0).getByRole("button", { name: "Show in Finder: icon.png.output-one", exact: true }).click();
+    await rows.nth(1).getByRole("button", { name: "Open a-01.pdf", exact: true }).click();
+    await rows.nth(1).getByRole("button", { name: "Show in Finder: a-01.pdf", exact: true }).click();
+    await rows.nth(2).getByRole("button", { name: "Show in Finder: brochure-pages", exact: true }).click();
+    await rows.nth(3).getByRole("button", { name: "Show in Finder: drawings-part-1.pdf", exact: true }).click();
+
+    expect(await fileActionInvocations(page)).toEqual([
+        { command: "open_output_path", args: { path: mockedOutputPaths[0] } },
+        { command: "reveal_output_path", args: { path: mockedOutputPaths[0] } },
+        { command: "open_output_path", args: { path: splitOutputs[0] } },
+        { command: "reveal_output_path", args: { path: splitOutputs[0] } },
+        { command: "reveal_output_path", args: { path: folderOutput } },
+        { command: "reveal_output_path", args: { path: partialOutput } },
+    ]);
+    await expect(rows.nth(3).getByRole("alert")).toHaveText("Could not reveal test output");
+    await expect(page.getByRole("alert")).toHaveCount(1);
+    await expect(resultSummaryStatus(page)).toHaveText("Done. 3 compressed, 1 failed");
+});
+
+test("result rows show succeeded, skipped and failed states with warnings and pointers in input order", async ({ page }) => {
+    const rows = await runCompressImagesWith(page, [
+        succeeded("/local/lease-agreement.pdf", ["/local/lease-agreement-protected.pdf"]),
+        succeeded("/local/vendor-nda.pdf", ["/local/vendor-nda-protected.pdf"], {
+            warnings: [{ code: "signatureRemoved", message: "native wording" }],
+        }),
+        {
+            inputPath: "/local/invoice-0425.pdf",
+            outputPaths: [],
+            detail: "",
+            state: "skipped",
+            failure: null,
+            reason: { code: "alreadyProtected", message: "Already password-protected. Remove the password first, then protect it again.", pointer: { kind: "tool", toolId: "pdf-unlock" } },
+            warnings: [],
+        },
+        succeeded("/local/menu-spring.docx", ["/local/menu-spring.pdf"], {
+            warnings: [
+                { code: "fontSubstituted", message: "native wording", details: { requestedFamily: "Brandon Grotesque", actualFamily: "Helvetica" } },
+                { code: "renamedToAvoidReplacing", message: "native wording", details: { chosenName: "menu-spring.pdf", finalName: "menu-spring-1.pdf" } },
+            ],
+        }),
+        failed("/local/site-survey-scan.pdf", "invalidInput", "Not a readable PDF. The file may be damaged or incomplete."),
+        failed("/local/temple-scan.png", "unavailable", "Recognising Gujarati text needs the Indic script pack.", {
+            failure: { kind: "unavailable", message: "Recognising Gujarati text needs the Indic script pack.", pointer: { kind: "pack", packId: "script-pack" } },
+        }),
+    ]);
+
+    await expect(rows).toHaveCount(6);
+    const names = ["lease-agreement.pdf", "vendor-nda.pdf", "invoice-0425.pdf", "menu-spring.docx", "site-survey-scan.pdf", "temple-scan.png"];
+    for (const [index, name] of names.entries()) await expect(rows.nth(index)).toContainText(name);
+    await expect(rows.nth(0)).toHaveAttribute("data-tone", "ok");
+    await expect(rows.nth(1)).toHaveAttribute("data-tone", "warn");
+    await expect(rows.nth(2)).toHaveAttribute("data-tone", "skip");
+    await expect(rows.nth(4)).toHaveAttribute("data-tone", "fail");
+    await expect(rows.nth(5)).toHaveAttribute("data-tone", "skip");
+
+    await expect(rows.nth(0)).toContainText("lease-agreement-protected.pdf");
+    await expect(rows.nth(0)).toContainText("Compressed");
+    await expect(rows.nth(1)).toContainText("The digital signature was removed, because protecting a file changes it.");
+    await expect(rows.nth(1)).not.toContainText("native wording");
+    await expect(rows.nth(1)).toContainText("Compressed with a warning");
+    await expect(rows.nth(3)).toContainText("The font Brandon Grotesque wasn’t available, so Helvetica was used.");
+    await expect(rows.nth(3)).toContainText("Saved as menu-spring-1.pdf. Renamed to avoid replacing an existing file.");
+    await expect(rows.nth(3)).toContainText("Compressed with warnings");
+    await expect(rows.nth(2)).toContainText("Skipped");
+    await expect(rows.nth(2)).toContainText("Already password-protected.");
+    await expect(rows.nth(2).getByRole("button", { name: /^(Open|Show in)/ })).toHaveCount(1);
+    await expect(rows.nth(4)).toContainText("Not a readable PDF.");
+    await expect(rows.nth(4)).toContainText("Failed, the input can't be used");
+    await expect(rows.nth(5)).toContainText("Unavailable");
+
+    await expect(resultSummaryStatus(page)).toHaveAttribute("aria-live", "polite");
+    await expect(resultSummaryStatus(page)).toContainText("Done. 3 compressed, 1 skipped, 2 failed");
+    await expect(resultSummaryStatus(page)).toContainText("2 compressed files have warnings.");
+    await expect(page.getByRole("button", { name: /^Retry/ })).toHaveCount(0);
+
+    await page.evaluate(() => {
+        window.addEventListener("toolbox:install-pack", (event) => {
+            (window as unknown as { __installPackRequests: string[] }).__installPackRequests.push((event as CustomEvent<string>).detail);
+        });
+        (window as unknown as { __installPackRequests: string[] }).__installPackRequests = [];
+    });
+    await rows.nth(5).getByRole("button", { name: "Install script pack", exact: true }).click();
+    expect(await page.evaluate(() => (window as unknown as { __installPackRequests: string[] }).__installPackRequests)).toEqual(["script-pack"]);
+
+    await rows.nth(2).getByRole("button", { name: "Open Remove Password", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Remove Password", exact: true })).toBeVisible();
+});
+
+test("Retry is offered only after processing failures and re-runs only that file with the same options", async ({ page }) => {
+    const timedOut = "/local/drawings-full-set.pdf";
+    const rows = await runCompressImagesWith(page, [
+        succeeded(fixturePath, [mockedOutputPaths[0]]),
+        failed(timedOut, "processing", "Took longer than 5 minutes and was stopped. Nothing was saved."),
+        failed("/local/scan.pdf", "invalidInput", "Wrong password or unsupported encryption."),
+        failed("/local/site-photos.zip", "limitExceeded", "Larger than the 4 GB limit for one archive."),
+        failed("/local/temple-scan.png", "unavailable", "Needs the script pack."),
+    ]);
+
+    await expect(rows).toHaveCount(5);
+    const retryButtons = page.getByRole("button", { name: /^Retry/ });
+    await expect(retryButtons).toHaveCount(1);
+    await expect(rows.nth(1).getByRole("button", { name: "Retry drawings-full-set.pdf", exact: true })).toBeVisible();
+
+    await page.evaluate((timedOut) => {
+        (window as TestWindow).__toolboxProcessingResults = [{
+            inputPath: timedOut,
+            outputPaths: [`${timedOut}.compressed.pdf`],
+            detail: "",
+            state: "succeeded",
+            failure: null,
+            reason: null,
+            warnings: [],
+        }];
+    }, timedOut);
+    await rows.nth(1).getByRole("button", { name: "Retry drawings-full-set.pdf", exact: true }).click();
+
+    await expect(rows.nth(1)).toHaveAttribute("data-state", "succeeded");
+    await expect(rows.nth(1)).toContainText("drawings-full-set.pdf.compressed.pdf");
+    await expect(rows).toHaveCount(5);
+    await expect(rows.nth(2)).toHaveAttribute("data-state", "failed");
+    await expect(retryButtons).toHaveCount(0);
+    await expect(resultSummaryStatus(page)).toHaveText("Done. 2 compressed, 3 failed");
+
+    const runs = await page.evaluate(() =>
+        ((window as TestWindow).__toolboxInvocations ?? []).filter(({ command }) => command === "export_image_edit_plan"),
     );
-    expect(actionInvocations).toEqual(outputs.flatMap((path) => [
-        { command: "open_output_path", args: { path } },
-        { command: "reveal_output_path", args: { path } },
-    ]));
-    await expect(page.getByRole("alert")).toHaveText("Could not reveal test output");
-    await expect(page.getByText("1 of 2 files failed", { exact: true })).toBeVisible();
-    await expect(page.getByText("Processing failed", { exact: true })).toBeVisible();
+    expect(runs).toHaveLength(2);
+    const [first, retry] = runs.map((run) => (run.args as { request: { paths: string[]; plan: unknown } }).request);
+    expect(first.paths).toEqual([fixturePath]);
+    expect(retry.paths).toEqual([timedOut]);
+    expect(retry.plan).toEqual(first.plan);
 });
 
 test("output action state resets and ignores stale completions", async ({ page }) => {
@@ -1198,14 +1332,14 @@ test("output action state resets and ignores stale completions", async ({ page }
         }];
     }, { path: mockedOutputPaths[0] });
 
-    await page.locator(".result-output").first().getByRole("button", { name: "Open file" }).click();
+    await page.getByRole("button", { name: "Open icon.png.output-one", exact: true }).click();
     await processButton.click();
 
     await expect(page.getByText("New result set", { exact: true })).toBeVisible();
-    await expect(page.locator(".result-output")).toHaveCount(1);
+    await expect(page.getByRole("list", { name: "Results" }).getByRole("listitem")).toHaveCount(1);
     await page.waitForTimeout(200);
     await expect(page.getByText("Stale action failure", { exact: true })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Open file" })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "Open icon.png.output-one.next-output", exact: true })).toBeEnabled();
 });
 
 test("single-input actions report every selected file instead of truncating the selection", async ({ page }) => {
@@ -1220,7 +1354,7 @@ test("single-input actions report every selected file instead of truncating the 
     await expect(exportButton).toBeEnabled();
     await exportButton.click();
 
-    await expect(page.getByText("2 of 2 files failed", { exact: true })).toBeVisible();
+    await expect(page.getByRole("status").filter({ hasText: "Done." })).toHaveText("Done. 0 compressed, 2 failed");
     const processingInvocations = await page.evaluate(() =>
         ((window as TestWindow).__toolboxInvocations ?? []).filter(({ command }) => command === "compress_pdf"),
     );
@@ -1343,8 +1477,10 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
         else if (utility.id === "pdf-organize") await page.getByRole("button", { name: "Add blank page", exact: true }).click();
         else if (utility.id === "pdf-remove-pages") {
             await page.getByRole("button", { name: "Add blank page", exact: true }).click();
+            await page.getByRole("button", { name: "Page 1", exact: true }).click();
             await page.getByRole("button", { name: "Delete selected pages", exact: true }).click();
-        } else await drawSceneMark(page, utility.id === "pdf-sign" ? "Signature" : utility.id === "pdf-watermark" ? "Watermark" : utility.id === "pdf-crop" ? "Crop" : "Text");
+        } else if (utility.id === "pdf-watermark") await page.getByRole("button", { name: "Add fixed watermark", exact: true }).click();
+        else await drawSceneMark(page, utility.id === "pdf-sign" ? "Signature" : utility.id === "pdf-watermark" ? "Watermark" : utility.id === "pdf-crop" ? "Crop" : "Text");
     }
     if (workspaceForTool(utility.id)?.id === "image-editor") {
         if (utility.id === "heic-convert") await page.getByLabel("Target format").selectOption("jpg");

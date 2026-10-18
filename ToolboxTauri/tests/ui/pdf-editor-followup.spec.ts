@@ -34,7 +34,9 @@ async function openEditor(page: Page) {
   await page.getByRole('button', { name: 'Open Edit PDF', exact: true }).click();
   await page.getByRole('button', { name: 'Choose files to process' }).click();
   await expect(page.getByRole('group', { name: 'PDF page canvas' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeEnabled();
+  await expect.poll(() => page.evaluate(() => (window as any).calls.some((call: any) => call.command === 'preview_pdf_scene_pages'))).toBe(true);
+  await expect(page.locator('.scene-canvas image').first()).toBeAttached();
+  await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeDisabled();
 }
 
 async function dragOnCanvas(page: Page, x: number, y: number, width = 0.28, height = 0.08) {

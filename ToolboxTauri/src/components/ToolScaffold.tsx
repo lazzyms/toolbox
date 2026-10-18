@@ -11,6 +11,10 @@ import { TablerIcon } from './TablerIcon';
 
 export type WorkspaceSourceAction = () => void | Promise<void>;
 
+type RunHandler = (files: string[], outputLocation: OutputLocation) => Promise<JobOutcome[]>;
+
+type PerFileRun = { handler: RunHandler; outputLocation: OutputLocation };
+
 interface ToolScaffoldProps {
     utility: ToolDefinition;
     onRun: (files: string[], outputLocation: OutputLocation) => Promise<JobOutcome[]>;
@@ -36,6 +40,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
     const [files, setFiles] = useState<string[]>([]);
     const [results, setResults] = useState<JobOutcome[]>([]);
     const [loading, setLoading] = useState(false);
+    const [perFileRun, setPerFileRun] = useState<PerFileRun | null>(null);
     const [selectedFileIndex, setSelectedFileIndex] = useState(0);
     const outputLocation = useOutputLocation();
     const runGeneration = useRef(0);
@@ -78,10 +83,11 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         setSelectedFileIndex((index) => Math.min(index, Math.max(files.length - 1, 0)));
     }, [files]);
 
-    const runWith = async (handler: (files: string[], outputLocation: OutputLocation) => Promise<JobOutcome[]>) => {
+    const runWith = async (handler: RunHandler) => {
         const generation = ++runGeneration.current;
         setLoading(true);
         setResults([]);
+        setPerFileRun(inputPolicy.manyToOne ? null : { handler, outputLocation });
         try {
             const cardinalityError = inputPolicy.inputCardinality === 'single' && files.length > 1
                 ? `This action accepts one input file, but ${files.length} were selected.`
@@ -120,6 +126,20 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
     };
     const run = () => runWith(onRun);
     const runCombined = () => runWith(onRunCombined ?? onRun);
+
+    const retry = async (inputPath: string) => {
+        if (!perFileRun) return;
+        const generation = runGeneration.current;
+        let retried: JobOutcome[];
+        try {
+            retried = parseToolResult(await perFileRun.handler([inputPath], perFileRun.outputLocation));
+        } catch (error) {
+            retried = [failedOutcome(inputPath, 'processing', String(error))];
+        }
+        const replacement = retried.find((result) => result.inputPath === inputPath);
+        if (!replacement || generation !== runGeneration.current) return;
+        setResults((current) => current.map((result) => result.inputPath === inputPath ? replacement : result));
+    };
 
     const addFiles = (paths: string[], replaceSingle = false) => {
         setFiles((prev) => {
@@ -302,7 +322,13 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 moveSelectedFile,
             })}
 
-            <ResultList results={results} progress={progress} loading={loading} />
+            <ResultList
+                results={results}
+                progress={progress}
+                loading={loading}
+                resultVerb={utility.resultVerb}
+                onRetry={perFileRun ? retry : undefined}
+            />
         </div>
     );
 };
