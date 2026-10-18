@@ -42,6 +42,7 @@ export type WorkspaceId =
   | "pdf-editor"
   | "pdf-convert"
   | "image-editor"
+  | "compress-files"
   | "media-tools";
 
 export type ToolInputCardinality = "single" | "multiple" | "ordered";

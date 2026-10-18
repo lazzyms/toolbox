@@ -1,8 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ToolScaffold } from "../components/ToolScaffold";
-import { WorkspaceCommandRail } from "../components/WorkspaceCommandRail";
-import { toolsForWorkspaceId, UtilityRegistry } from "../registry";
 import { parsePageRange, selectedPageLabel } from "../shared/workspaceValidation";
 import type { PdfDocument } from "../features/pdf-editor/contracts";
 import type { AtomicToolId, ToolDefinition, ToolResult } from "../contracts";
@@ -12,13 +10,10 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
-import { Slider } from "@/components/ui/slider";
 import { ShortcutHint } from "../components/ShortcutHint";
 import { shortcutTarget } from "../shortcuts";
 
-const conversionActions = toolsForWorkspaceId("pdf-convert");
-const conversionIds = new Set<string>(conversionActions.map((tool) => tool.id));
-const nonInspectingConversionIds = new Set(["images-to-pdf", "pdf-merge", "pdf-split", "pdf-compress"]);
+const nonInspectingConversionIds = new Set(["images-to-pdf", "pdf-merge", "pdf-split"]);
 const outputPreviewLimitations: Partial<Record<AtomicToolId, string>> = {
   "images-to-pdf": "Output preview unavailable. Export combines the selected images into one PDF in file order.",
   "pdf-merge": "Output preview unavailable. Export merges the selected PDFs in file order.",
@@ -26,7 +21,6 @@ const outputPreviewLimitations: Partial<Record<AtomicToolId, string>> = {
   "pdf-to-text": "Output preview unavailable. Export creates a text file from the selected pages.",
   "pdf-image-extract": "Output preview unavailable. Export extracts embedded JPEG images from the selected pages.",
   "pdf-extract-pages": "Output preview unavailable. Export creates a PDF containing the selected pages.",
-  "pdf-compress": "Output preview unavailable. Export creates a compressed PDF copy while preserving page geometry.",
   "pdf-ocr": "Output preview unavailable. OCR is unavailable in this build.",
 };
 type PdfInspectionState =
@@ -60,23 +54,15 @@ const pdfToImagesOutputSummary = (selectedPages: number[], dpi: string, format: 
   return `Output preview unavailable. Export renders ${pageSummary} at ${dpi} DPI as ${formatLabel} image files.`;
 };
 
-export const PDFConversionWorkspaceView = ({ utility }: { utility: ToolDefinition }) => {
+export const PDFConversionWorkspaceView = ({ utility: activeUtility }: { utility: ToolDefinition }) => {
   const [dpi, setDpi] = useState("150");
   const [format, setFormat] = useState("jpg");
   const [pageRange, setPageRange] = useState("");
   const [splitMode, setSplitMode] = useState<"pages" | "ranges" | "chunks">("pages");
   const [chunkSize, setChunkSize] = useState(2);
-  const [quality, setQuality] = useState(80);
   const [document, setDocument] = useState<PdfDocument | null>(null);
   const [selectedPages, setSelectedPages] = useState<number[]>([]);
   const [inspectError, setInspectError] = useState("");
-  const [activeToolId, setActiveToolId] = useState<AtomicToolId>(
-    conversionIds.has(utility.id) ? utility.id : "pdf-to-images",
-  );
-  useEffect(() => {
-    setActiveToolId(conversionIds.has(utility.id) ? utility.id : "pdf-to-images");
-  }, [utility.id]);
-  const activeUtility = UtilityRegistry.find((item) => item.id === activeToolId) ?? utility;
 
   return (
     <ToolScaffold
@@ -118,11 +104,6 @@ export const PDFConversionWorkspaceView = ({ utility }: { utility: ToolDefinitio
             },
           });
         }
-        if (activeUtility.id === "pdf-compress") {
-          return invoke<ToolResult>("compress_pdf", { runId,
-            request: { paths, quality, outputLocation },
-          });
-        }
         if (activeUtility.id === "pdf-to-images") {
           return invoke<ToolResult>("pdf_to_images", { runId,
             request: {
@@ -155,8 +136,6 @@ export const PDFConversionWorkspaceView = ({ utility }: { utility: ToolDefinitio
           destination={destination}
           runLabel={runLabel}
           activeUtility={activeUtility}
-          activeToolId={activeToolId}
-          onSelectTool={setActiveToolId}
           files={files}
           run={run}
           loading={loading}
@@ -170,8 +149,6 @@ export const PDFConversionWorkspaceView = ({ utility }: { utility: ToolDefinitio
           setSplitMode={setSplitMode}
           chunkSize={chunkSize}
           setChunkSize={setChunkSize}
-          quality={quality}
-          setQuality={setQuality}
           document={document}
           setDocument={setDocument}
           selectedPages={selectedPages}
@@ -188,8 +165,6 @@ type ConversionControlsProps = {
   destination: React.ReactNode;
   runLabel: string | null;
   activeUtility: ToolDefinition;
-  activeToolId: AtomicToolId;
-  onSelectTool: (id: AtomicToolId) => void;
   files: string[];
   run: () => Promise<void>;
   loading: boolean;
@@ -203,8 +178,6 @@ type ConversionControlsProps = {
   setSplitMode: (value: "pages" | "ranges" | "chunks") => void;
   chunkSize: number;
   setChunkSize: (value: number) => void;
-  quality: number;
-  setQuality: (value: number) => void;
   document: PdfDocument | null;
   setDocument: (value: PdfDocument | null) => void;
   selectedPages: number[];
@@ -217,8 +190,6 @@ const ConversionControls = ({
   destination,
   runLabel,
   activeUtility,
-  activeToolId,
-  onSelectTool,
   files,
   run,
   loading,
@@ -232,8 +203,6 @@ const ConversionControls = ({
   setSplitMode,
   chunkSize,
   setChunkSize,
-  quality,
-  setQuality,
   document,
   setDocument,
   selectedPages,
@@ -322,12 +291,6 @@ const ConversionControls = ({
   return (
     <Card className="workspace-control-panel py-0">
       <CardContent className="workspace-control-panel-content grid gap-4 p-4">
-      <WorkspaceCommandRail
-        actions={conversionActions}
-        activeId={activeToolId}
-        onSelect={onSelectTool}
-        label="PDF conversion tools"
-      />
       {needsPageSelection && (
         <Card className="conversion-preview py-0" role="region" aria-label={previewRegionLabel}>
           <CardContent className="conversion-preview-content py-4">
@@ -368,7 +331,7 @@ const ConversionControls = ({
         <p className="workspace-panel-label">Choose an output</p>
         <p className="workspace-panel-copy">
           Keep one source surface and switch between page conversion, extraction,
-          document assembly, splitting, and compression outcomes.
+          document assembly, and splitting outcomes.
         </p>
       </div>
       {activeUtility.id === "pdf-to-images" && (
@@ -451,15 +414,6 @@ const ConversionControls = ({
         <div className="workspace-field">
           <Label htmlFor="extract-pages-range">Pages or ranges</Label>
           <Input id="extract-pages-range" aria-label="Page numbers or ranges" value={pageRange} onChange={(event) => { const value = event.target.value; setPageRange(value); if (!inspectedDocument) return; const parsed = parsePageRange(value, inspectedDocument.pages.length); setSelectedPages(Array.isArray(parsed) ? parsed : []); }} placeholder="1-3, 7" />
-        </div>
-      )}
-      {activeUtility.id === "pdf-compress" && (
-        <div className="workspace-field slider-field">
-          <div className="slider-label-row">
-            <Label id="compression-quality-label">Compression quality</Label>
-            <output>{quality}%</output>
-          </div>
-          <Slider aria-label="Compression quality" aria-labelledby="compression-quality-label" min={1} max={100} value={[quality]} onValueChange={([value]) => setQuality(value)} />
         </div>
       )}
       {destination}

@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 
 test("desktop shell uses neutral shadcn controls in both themes", async ({ page }, testInfo) => {
   await page.goto("/");
+  await page.getByRole("navigation", { name: "Workspace navigation" }).getByRole("button", { name: "Favorites" }).click();
 
   const body = page.locator("body");
   const buttons = page.locator("button");
@@ -34,17 +35,17 @@ test("desktop shell uses neutral shadcn controls in both themes", async ({ page 
       expect(Number(neutralOklch?.[1]), `${theme} ${token} chroma`).toBe(0);
     }
 
-    const cardSurface = await page.locator(".tool-card").first().evaluate((element) => ({
+    const cardSurface = await page.locator(".tool-empty-state").first().evaluate((element) => ({
       background: getComputedStyle(element).backgroundColor,
       token: getComputedStyle(document.body).getPropertyValue("--card").trim(),
       borderToken: getComputedStyle(document.body).getPropertyValue("--border").trim(),
     }));
     const normalizedBorderToken = cardSurface.borderToken.replace(/\/\s*([\d.]+)%/, (_, percent) => `/ ${Number(percent) / 100}`);
     await expect.poll(async () =>
-      page.locator(".tool-card").first().evaluate((element) => getComputedStyle(element).backgroundColor),
+      page.locator(".tool-empty-state").first().evaluate((element) => getComputedStyle(element).backgroundColor),
     ).toBe(cardSurface.token);
     await expect.poll(async () =>
-      page.locator(".tool-card").first().evaluate((element) => getComputedStyle(element).borderColor),
+      page.locator(".tool-empty-state").first().evaluate((element) => getComputedStyle(element).borderColor),
     ).toBe(normalizedBorderToken);
 
     await page.screenshot({ path: testInfo.outputPath(`toolbox-${theme}.png`), fullPage: false });
@@ -65,10 +66,10 @@ test("feature panels and previews use shadcn Card surfaces", async ({ page }) =>
   await page.goto("/");
 
   const surfacesByTool = [
-    { tool: "Protect PDF", selectors: [".workspace-control-panel", ".workspace-command-rail"] },
-    { tool: "Create GIF", selectors: [".workspace-control-panel", ".workspace-command-rail"] },
-    { tool: "PDF to Images", selectors: [".workspace-control-panel", ".workspace-command-rail", ".conversion-preview"] },
-    { tool: "Resize Images", selectors: [".workspace-command-rail", ".image-editor-controls", ".image-editor-preview"] },
+    { tool: "Protect PDF", selectors: [".workspace-control-panel"] },
+    { tool: "Create GIF", selectors: [".workspace-control-panel"] },
+    { tool: "PDF to Images", selectors: [".workspace-control-panel", ".conversion-preview"] },
+    { tool: "Resize Images", selectors: [".image-editor-controls", ".image-editor-preview"] },
     { tool: "Edit PDF", selectors: [".scene-empty"] },
   ];
 
@@ -90,12 +91,14 @@ test("feature panels and previews use shadcn Card surfaces", async ({ page }) =>
 
 test("shared cards keep generated anatomy and variants own selected appearance", async ({ page }) => {
   await page.goto("/");
+  await page.getByRole("navigation", { name: "Workspace navigation" }).getByRole("button", { name: "Favorites" }).click();
 
-  const toolCard = page.locator(".tool-card").first();
-  await expect.poll(() => toolCard.evaluate((element) => getComputedStyle(element).borderRadius)).toBe("14px");
-  await expect(toolCard.locator('[data-slot="card-header"]')).toHaveCount(1);
-  await expect(toolCard.locator('[data-slot="card-footer"]')).toHaveCount(1);
+  const emptyState = page.locator(".tool-empty-state");
+  await expect.poll(() => emptyState.evaluate((element) => getComputedStyle(element).borderRadius)).toBe("14px");
+  await expect(emptyState.locator('[data-slot="card-header"]')).toHaveCount(1);
+  await expect(emptyState.locator('[data-slot="card-footer"]')).toHaveCount(1);
 
+  await page.getByRole("navigation", { name: "Workspace navigation" }).getByRole("button", { name: "All tools" }).click();
   await page.getByRole("button", { name: "Open Protect PDF", exact: true }).click();
 
   const sourceBar = page.locator(".workspace-source-bar");
@@ -103,7 +106,7 @@ test("shared cards keep generated anatomy and variants own selected appearance",
   await expect(sourceBar.locator('[data-slot="card-content"]')).toHaveCount(1);
 
   const commandRail = page.locator(".workspace-command-rail");
-  await expect(commandRail.locator('[data-slot="card-header"]')).toHaveCount(1);
-  await expect(commandRail.locator('[data-slot="card-content"]')).toHaveCount(1);
+  await expect(commandRail.locator('[data-slot="card"]')).toHaveCount(0);
+  await expect(commandRail.locator(".workspace-command")).toHaveCount(3);
   await expect(commandRail.locator('.workspace-command[aria-pressed="true"]')).toHaveAttribute("data-variant", "secondary");
 });

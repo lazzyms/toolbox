@@ -1,11 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ToolScaffold } from "../components/ToolScaffold";
-import { WorkspaceCommandRail } from "../components/WorkspaceCommandRail";
-import { toolsForWorkspaceId, UtilityRegistry } from "../registry";
 import type {
-  AtomicToolId,
-  CompressImagesRequest,
   ConvertImagesRequest,
   ImagePreview,
   OutputLocation,
@@ -35,13 +31,8 @@ import { Switch } from "../components/ui/switch";
 import { ShortcutHint } from "../components/ShortcutHint";
 import { shortcutTarget } from "../shortcuts";
 
-const imageEditorActions = toolsForWorkspaceId("image-editor");
-const imageEditorIds = new Set<string>(imageEditorActions.map((tool) => tool.id));
-
 type ImageEditorDraftValues = {
   format: ConvertImagesRequest["format"];
-  quality: number;
-  lossless: boolean;
   width: number;
   height: number;
   resizeMode: string;
@@ -64,7 +55,6 @@ type ImageEditorDraftValues = {
 
 const buildImageEditDraft = (id: string, values: ImageEditorDraftValues): ImageEditOperation => {
   if (id === "heic-convert") return { kind: "convert", format: values.format };
-  if (id === "compress") return { kind: "compress", quality: values.quality, lossless: values.lossless };
   if (id === "resize") return {
     kind: "resize",
     width: values.width,
@@ -113,10 +103,8 @@ const imageEditLabel = (edit: ImageEditOperation) => {
   return `Crop ${edit.width} × ${edit.height}`;
 };
 
-export const ImageEditorWorkspaceView = ({ utility }: { utility: ToolDefinition }) => {
+export const ImageEditorWorkspaceView = ({ utility: activeUtility }: { utility: ToolDefinition }) => {
   const [format, setFormat] = useState<ConvertImagesRequest["format"]>("png");
-  const [quality, setQuality] = useState(80);
-  const [lossless, setLossless] = useState(false);
   const [width, setWidth] = useState(1024);
   const [height, setHeight] = useState(768);
   const [resizeMode, setResizeMode] = useState("exact");
@@ -137,24 +125,29 @@ export const ImageEditorWorkspaceView = ({ utility }: { utility: ToolDefinition 
   const [watermarkOpacity, setWatermarkOpacity] = useState(20);
   const [history, setHistory] = useState<ImageEditHistory>(() => createImageEditHistory());
   const [committedDraftKey, setCommittedDraftKey] = useState<string | null>(null);
-  const [activeToolId, setActiveToolId] = useState<AtomicToolId>(
-    imageEditorIds.has(utility.id) ? utility.id : "heic-convert",
-  );
-  useEffect(() => {
-    setActiveToolId(imageEditorIds.has(utility.id) ? utility.id : "heic-convert");
-  }, [utility.id]);
-  const activeUtility = UtilityRegistry.find((item) => item.id === activeToolId) ?? utility;
   const draft = buildImageEditDraft(activeUtility.id, {
-    format, quality, lossless, width, height, resizeMode, percentage, resampling, keepRatio,
+    format, width, height, resizeMode, percentage, resampling, keepRatio,
     degrees, flip, cropMode, cropX, cropY, anchor, brightness, contrast, saturation, exposure,
     watermarkText, watermarkOpacity,
   });
   const draftKey = JSON.stringify(draft);
   const liveDraft = draftKey === committedDraftKey ? null : draft;
+  const previousLiveDraft = useRef<{ toolId: string; draft: ImageEditOperation | null } | null>(null);
 
+  // A tool switch keeps the outgoing tool's unsaved change as a committed edit.
+  // The tool id check stops a remount of the same tool from committing its draft.
   useEffect(() => {
+    const carried = previousLiveDraft.current;
+    if (carried?.draft && carried.toolId !== activeUtility.id) {
+      const edit = carried.draft;
+      setHistory((current) => commitImageEdit(current, edit));
+    }
     setCommittedDraftKey(draftKey);
   }, [activeUtility.id]);
+
+  useEffect(() => {
+    previousLiveDraft.current = { toolId: activeUtility.id, draft: liveDraft };
+  });
 
   const editPlan = planWithDraft(history.present, liveDraft);
 
@@ -167,11 +160,6 @@ export const ImageEditorWorkspaceView = ({ utility }: { utility: ToolDefinition 
         if (activeUtility.id === "heic-convert") {
           return invoke<ToolResult>("convert_images", { runId,
             request: { paths, format, outputLocation } satisfies ConvertImagesRequest,
-          });
-        }
-        if (activeUtility.id === "compress") {
-          return invoke<ToolResult>("compress_images", { runId,
-            request: { paths, quality, lossless, outputLocation } satisfies CompressImagesRequest,
           });
         }
         if (activeUtility.id === "resize") {
@@ -200,13 +188,9 @@ export const ImageEditorWorkspaceView = ({ utility }: { utility: ToolDefinition 
         request: { paths, plan: imageEditRequestPlan(editPlan, outputLocation) },
       })}
     >
-      {(props) => <ImageEditorControls {...props} utility={activeUtility} activeToolId={activeToolId} onSelectTool={setActiveToolId} {...{
+      {(props) => <ImageEditorControls {...props} utility={activeUtility} {...{
         format,
         setFormat,
-        quality,
-        setQuality,
-        lossless,
-        setLossless,
         width,
         setWidth,
         height,
@@ -276,14 +260,8 @@ type ImageEditorControlsProps = {
   runCombined: () => Promise<void>;
   loading: boolean;
   utility: ToolDefinition;
-  activeToolId: AtomicToolId;
-  onSelectTool: (id: AtomicToolId) => void;
   format: ConvertImagesRequest["format"];
   setFormat: (value: ConvertImagesRequest["format"]) => void;
-  quality: number;
-  setQuality: (value: number) => void;
-  lossless: boolean;
-  setLossless: (value: boolean) => void;
   width: number;
   setWidth: (value: number) => void;
   height: number;
@@ -342,14 +320,8 @@ const ImageEditorControls = ({
   runCombined,
   loading,
   utility,
-  activeToolId,
-  onSelectTool,
   format,
   setFormat,
-  quality,
-  setQuality,
-  lossless,
-  setLossless,
   width,
   setWidth,
   height,
@@ -537,20 +509,9 @@ const ImageEditorControls = ({
   const watermarkOverlay = utility.id === "image-watermark" && interactionPreview ? { left: `${Math.min(cropX / interactionPreview.width * 100, 94)}%`, top: `${Math.min(cropY / interactionPreview.height * 100, 94)}%` } : null;
   const primaryPreview = utility.id === "crop" ? sourcePreview : resultPreview ?? sourcePreview;
   const primaryPreviewAlt = utility.id === "crop" ? `Original image preview of ${inputPath?.split(/[\\/]/).pop() ?? "selected image"}` : `Preview of ${inputPath?.split(/[\\/]/).pop() ?? "selected image"}`;
-  const selectTool = (nextToolId: AtomicToolId) => {
-    if (nextToolId === activeToolId) return;
-    if (draft) onAddEdit();
-    onSelectTool(nextToolId);
-  };
 
   return (
     <div className="image-editor-layout">
-      <WorkspaceCommandRail
-        actions={imageEditorActions}
-        activeId={activeToolId}
-        onSelect={selectTool}
-        label="Image editor tools"
-      />
       <Card className="image-editor-preview" role="region" aria-label="Image preview">
         <CardContent className="image-editor-preview-content grid min-h-[340px] place-items-center overflow-hidden p-0">
         {primaryPreview ? (
@@ -598,15 +559,6 @@ const ImageEditorControls = ({
               <option value="png">PNG</option><option value="jpg">JPEG</option><option value="webp">WebP</option><option value="heic">HEIC</option>
             </NativeSelect>
           </div>
-        )}
-        {utility.id === "compress" && (
-          <>
-            <div className="workspace-field">
-              <div className="workspace-field-heading"><Label id="image-quality-label">Quality</Label><output>{quality}%</output></div>
-              <Slider aria-labelledby="image-quality-label" min={1} max={100} value={[quality]} onValueChange={([value]) => value !== undefined && setQuality(value)} />
-            </div>
-            <div className="workspace-check"><Label htmlFor="image-lossless">Preserve original pixels</Label><Switch id="image-lossless" checked={lossless} onCheckedChange={setLossless} /></div>
-          </>
         )}
         {utility.id === "resize" && (
           <>
