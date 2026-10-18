@@ -99,7 +99,7 @@ export const MediaWorkspaceView = ({ utility }: { utility: ToolDefinition }) => 
         });
       }}
     >
-      {({ files, outputLocation, run, loading, selectedFileIndex, selectFile }) => (
+      {({ files, outputLocation, run, loading, selectedFileIndex, selectFile, destination }) => (
         <Card className="workspace-control-panel py-0">
           <CardContent className="workspace-control-panel-content grid gap-4 p-4">
           <WorkspaceCommandRail
@@ -207,6 +207,7 @@ export const MediaWorkspaceView = ({ utility }: { utility: ToolDefinition }) => 
             </>
           )}
 
+          {destination}
           <Button variant="default" disabled={loading || files.length === 0 || (activeUtility.id === "tiff-pages" && !isCurrentTiffInspection(tiffInspection, files)) || (activeUtility.id === "image-metadata" && metadataMode === "inspect")} onClick={run} className="workspace-primary-action">
             {activeUtility.id === "image-metadata" ? "Remove metadata" : activeUtility.shortTitle}
           </Button>

@@ -1,0 +1,105 @@
+import { FolderIcon } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import type { OutputLocation } from '../contracts';
+import { shortenHomePath, useHomeDir } from '../homePath';
+
+export type FolderCheck = 'ready' | 'missing' | 'unwritable';
+
+export type BlockedDestination = { folder: string; check: Exclude<FolderCheck, 'ready'> };
+
+const ALONGSIDE_LABEL = 'Next to each original';
+
+const describe = (location: OutputLocation, home: string | null) =>
+    location === 'alongsideInput' ? ALONGSIDE_LABEL : shortenHomePath(location.customFolder, home);
+
+const folderName = (folder: string) => folder.split(/[\\/]/).filter(Boolean).pop() ?? folder;
+
+export const sameLocation = (a: OutputLocation, b: OutputLocation) =>
+    a === 'alongsideInput' || b === 'alongsideInput' ? a === b : a.customFolder === b.customFolder;
+
+export const exampleOutputName = (inputPath: string, suffix: string) => {
+    const name = inputPath.split(/[\\/]/).pop() ?? inputPath;
+    const dot = name.lastIndexOf('.');
+    return dot > 0 ? `${name.slice(0, dot)}${suffix}${name.slice(dot)}` : `${name}${suffix}`;
+};
+
+interface RunDestinationProps {
+    location: OutputLocation;
+    defaultLocation: OutputLocation;
+    overridden: boolean;
+    toolTitle: string;
+    exampleName: string | null;
+    onChange: () => void;
+    onReset: () => void;
+}
+
+export const RunDestination = ({ location, defaultLocation, overridden, toolTitle, exampleName, onChange, onReset }: RunDestinationProps) => {
+    const home = useHomeDir();
+    return (
+    <section aria-label="Destination" className="run-destination">
+        <div className="run-destination-heading">
+            <span className="run-destination-label">Save to</span>
+            {overridden && <Badge variant="outline">This run only</Badge>}
+        </div>
+        <div className="run-destination-path">
+            <FolderIcon aria-hidden="true" />
+            <span data-testid="run-destination-path">{describe(location, home)}</span>
+        </div>
+        <div className="run-destination-actions">
+            {overridden ? <>
+                <Button variant="link" size="sm" onClick={onChange}>Change</Button>
+                <Button variant="link" size="sm" onClick={onReset}>Reset to default</Button>
+            </> : <Button variant="link" size="sm" onClick={onChange}>Change for this run</Button>}
+        </div>
+        {overridden && (
+            <p className="run-destination-hint">
+                Your default is {defaultLocation === 'alongsideInput' ? 'next to each original' : shortenHomePath(defaultLocation.customFolder, home)}. This change ends when you leave {toolTitle}.
+            </p>
+        )}
+        {exampleName && (
+            <div className="run-destination-example">
+                <span className="run-destination-hint">Example</span>
+                <span data-testid="run-destination-example">{exampleName}</span>
+            </div>
+        )}
+        {exampleName && !overridden && (
+            <p className="run-destination-hint">An existing name gets -1, -2 and so on. Nothing is replaced.</p>
+        )}
+    </section>
+    );
+};
+
+interface BlockedDestinationDialogProps {
+    blocked: BlockedDestination | null;
+    onCancel: () => void;
+    onSaveAlongside: () => void;
+    onChooseAnother: () => void;
+}
+
+export const BlockedDestinationDialog = ({ blocked, onCancel, onSaveAlongside, onChooseAnother }: BlockedDestinationDialogProps) => (
+    <Dialog open={blocked !== null} onOpenChange={(open) => { if (!open) onCancel(); }}>
+        {blocked && (
+            <DialogContent role="alertdialog" showCloseButton={false} className="sm:max-w-[440px]">
+                <DialogHeader>
+                    <DialogTitle>
+                        {blocked.check === 'missing'
+                            ? `The folder ${folderName(blocked.folder)} is missing`
+                            : `The folder ${folderName(blocked.folder)} can't be written to`}
+                    </DialogTitle>
+                    <DialogDescription className="[overflow-wrap:anywhere]">
+                        {blocked.check === 'missing'
+                            ? `Toolbox can't find ${blocked.folder}. It may have been moved or renamed, or it's on a drive that isn't connected. Nothing has run yet.`
+                            : `Toolbox can't save files in ${blocked.folder}. Check its permissions or choose another folder. Nothing has run yet.`}
+                    </DialogDescription>
+                </DialogHeader>
+                <DialogFooter>
+                    <Button variant="ghost" onClick={onCancel}>Cancel</Button>
+                    <Button variant="outline" onClick={onSaveAlongside}>Save next to originals</Button>
+                    <Button onClick={onChooseAnother}>Choose another folder</Button>
+                </DialogFooter>
+            </DialogContent>
+        )}
+    </Dialog>
+);

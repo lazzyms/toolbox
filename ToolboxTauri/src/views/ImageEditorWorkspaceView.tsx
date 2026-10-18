@@ -268,6 +268,7 @@ export const ImageEditorWorkspaceView = ({ utility }: { utility: ToolDefinition 
 };
 
 type ImageEditorControlsProps = {
+  destination: React.ReactNode;
   files: string[];
   outputLocation: OutputLocation;
   runCombined: () => Promise<void>;
@@ -333,6 +334,7 @@ type ImagePreviewValidation =
   | { key: string; status: "error"; message: string };
 
 const ImageEditorControls = ({
+  destination,
   files,
   outputLocation,
   runCombined,
@@ -680,6 +682,7 @@ const ImageEditorControls = ({
           </CardContent>
         </Card>
         <p aria-live="polite" className="workspace-note">{plan.edits.length + (draft ? 1 : 0)} edits will be applied to each selected image.</p>
+        {destination}
         <Button variant="default" aria-label="Export edited images" disabled={loading || files.length === 0 || !hasEdits || !previewIsValid} onClick={runCombined} className="workspace-primary-action">Export edited images</Button>
         </CardContent>
       </Card>

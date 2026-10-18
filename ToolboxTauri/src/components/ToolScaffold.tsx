@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { open } from '@tauri-apps/plugin-dialog';
 import { Button } from '@/components/ui/button';
@@ -7,6 +8,7 @@ import type { ToolDefinition, JobOutcome, OutputLocation, Progress } from '../co
 import { useOutputLocation } from '../outputLocation';
 import { failedOutcome, parseToolResult } from '../jobOutcome';
 import { ResultList } from './ResultList';
+import { BlockedDestinationDialog, RunDestination, exampleOutputName, sameLocation, type BlockedDestination, type FolderCheck } from './RunDestination';
 import { TablerIcon } from './TablerIcon';
 
 export type WorkspaceSourceAction = () => void | Promise<void>;
@@ -33,6 +35,7 @@ interface ToolScaffoldProps {
         selectedFileIndex: number;
         selectFile: (index: number) => void;
         moveSelectedFile: (delta: -1 | 1) => void;
+        destination: React.ReactNode;
     }) => React.ReactNode;
 }
 
@@ -42,7 +45,10 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
     const [loading, setLoading] = useState(false);
     const [perFileRun, setPerFileRun] = useState<PerFileRun | null>(null);
     const [selectedFileIndex, setSelectedFileIndex] = useState(0);
-    const outputLocation = useOutputLocation();
+    const defaultLocation = useOutputLocation();
+    const [runOverride, setRunOverride] = useState<OutputLocation | null>(null);
+    const [blocked, setBlocked] = useState<(BlockedDestination & { handler: RunHandler }) | null>(null);
+    const outputLocation = runOverride ?? defaultLocation;
     const runGeneration = useRef(0);
     const browseRef = useRef<WorkspaceSourceAction>(() => undefined);
     const inputPolicy = utility.capability;
@@ -75,7 +81,12 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         runGeneration.current += 1;
         setResults([]);
         setLoading(false);
+        setRunOverride(null);
+        setBlocked(null);
     }, [utility.id]);
+
+    const overrideWith = (location: OutputLocation) =>
+        setRunOverride(sameLocation(location, defaultLocation) ? null : location);
 
     useEffect(() => {
         runGeneration.current += 1;
@@ -83,12 +94,20 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         setSelectedFileIndex((index) => Math.min(index, Math.max(files.length - 1, 0)));
     }, [files]);
 
-    const runWith = async (handler: RunHandler) => {
+    const runWith = async (handler: RunHandler, location: OutputLocation = outputLocation) => {
         const generation = ++runGeneration.current;
         setLoading(true);
         setResults([]);
-        setPerFileRun(inputPolicy.manyToOne ? null : { handler, outputLocation });
+        setPerFileRun(null);
         try {
+            if (location !== 'alongsideInput') {
+                const check = await invoke<FolderCheck>('check_output_folder', { folder: location.customFolder });
+                if (check !== 'ready') {
+                    if (generation === runGeneration.current) setBlocked({ folder: location.customFolder, check, handler });
+                    return;
+                }
+            }
+            if (!inputPolicy.manyToOne) setPerFileRun({ handler, outputLocation: location });
             const cardinalityError = inputPolicy.inputCardinality === 'single' && files.length > 1
                 ? `This action accepts one input file, but ${files.length} were selected.`
                 : null;
@@ -108,7 +127,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 return true;
             });
             const orderedSelectionRejected = inputPolicy.inputCardinality === 'ordered' && invalidPaths.size > 0;
-            const processed = orderedSelectionRejected || validPaths.length === 0 ? [] : parseToolResult(await handler(validPaths, outputLocation));
+            const processed = orderedSelectionRejected || validPaths.length === 0 ? [] : parseToolResult(await handler(validPaths, location));
             const processedByPath = new Map(processed.map((result) => [result.inputPath, result]));
             const nextResults = orderedSelectionRejected
                 ? files.map((path) => invalidPaths.get(path) ?? failedOutcome(path, 'invalidInput', 'Every selected input must use a supported format for this ordered action.'))
@@ -126,6 +145,44 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
     };
     const run = () => runWith(onRun);
     const runCombined = () => runWith(onRunCombined ?? onRun);
+
+    const chooseRunFolder = async () => {
+        const picked = await open({ directory: true, multiple: false });
+        return typeof picked === 'string' ? picked : null;
+    };
+
+    const changeForRun = async () => {
+        try {
+            const folder = await chooseRunFolder();
+            if (folder) overrideWith({ customFolder: folder });
+        } catch (e) {
+            setResults([failedOutcome('Dialog error', 'processing', String(e))]);
+        }
+    };
+
+    const saveBlockedAlongside = () => {
+        if (!blocked) return;
+        setBlocked(null);
+        overrideWith('alongsideInput');
+        void runWith(blocked.handler, 'alongsideInput');
+    };
+
+    const chooseBlockedFolder = async () => {
+        if (!blocked) return;
+        let folder: string | null;
+        try {
+            folder = await chooseRunFolder();
+        } catch (e) {
+            setBlocked(null);
+            setResults([failedOutcome('Dialog error', 'processing', String(e))]);
+            return;
+        }
+        if (!folder) return;
+        const location = { customFolder: folder };
+        setBlocked(null);
+        overrideWith(location);
+        void runWith(blocked.handler, location);
+    };
 
     const retry = async (inputPath: string) => {
         if (!perFileRun) return;
@@ -320,6 +377,17 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 selectedFileIndex,
                 selectFile: setSelectedFileIndex,
                 moveSelectedFile,
+                destination: (
+                    <RunDestination
+                        location={outputLocation}
+                        defaultLocation={defaultLocation}
+                        overridden={runOverride !== null}
+                        toolTitle={utility.title}
+                        exampleName={files[0] ? exampleOutputName(files[0], inputPolicy.outputSuffix) : null}
+                        onChange={() => void changeForRun()}
+                        onReset={() => setRunOverride(null)}
+                    />
+                ),
             })}
 
             <ResultList
@@ -328,6 +396,13 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 loading={loading}
                 resultVerb={utility.resultVerb}
                 onRetry={perFileRun ? retry : undefined}
+            />
+
+            <BlockedDestinationDialog
+                blocked={blocked}
+                onCancel={() => setBlocked(null)}
+                onSaveAlongside={saveBlockedAlongside}
+                onChooseAnother={() => void chooseBlockedFolder()}
             />
         </div>
     );

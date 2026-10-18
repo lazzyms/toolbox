@@ -22,6 +22,7 @@ type TestWindow = Window & {
     __toolboxSecondPick?: boolean;
     __toolboxDialogResults?: Array<string | string[] | null>;
     __toolboxOutputSettings?: OutputSettings;
+    __toolboxFolderChecks?: Record<string, "ready" | "missing" | "unwritable">;
 };
 
 const defaultOutputSettings: OutputSettings = { mode: "alongsideInput", folder: "/Users/test/Documents/Toolbox" };
@@ -46,6 +47,7 @@ test.beforeEach(async ({ page }) => {
                     (window as TestWindow).__toolboxOutputSettings = settings;
                     return settings;
                 }
+                if (command === "check_output_folder") return (window as TestWindow).__toolboxFolderChecks?.[(args as { folder: string }).folder] ?? "ready";
                 if (command === "plugin:dialog|open") {
                     const dialogResults = (window as TestWindow).__toolboxDialogResults;
                     if (dialogResults?.length) return dialogResults.shift() ?? null;
@@ -1727,5 +1729,162 @@ test.describe("Settings output location", () => {
         await dialog.getByRole("button", { name: "Choose output folder" }).click();
         await expect(dialog.getByRole("alert")).toHaveText("Could not use /picked/output as the output folder: Permission denied");
         await expect(saveResults.getByRole("radio", { name: "Next to each original" })).toBeChecked();
+    });
+});
+
+const runRequests = (page: Page) => page.evaluate(() =>
+    ((window as TestWindow).__toolboxInvocations ?? [])
+        .filter(({ command }) => command === "export_image_edit_plan" || command === "protect_pdf")
+        .map(({ command, args }) => {
+            const request = (args as { request: RunRequest }).request;
+            return command === "export_image_edit_plan" ? request.plan?.outputLocation : request.outputLocation;
+        }));
+
+const openResizeWithFixture = async (page: Page) => {
+    await page.getByRole("button", { name: "Open Resize Images" }).click();
+    await chooseFixture(page, fixturePath);
+    await page.getByLabel("Width").fill("640");
+    await page.getByRole("button", { name: "Add edit to plan" }).click();
+};
+
+const runAndWait = async (page: Page) => {
+    await page.locator(".workspace-primary-action").click();
+    await expect(page.getByText("Test output", { exact: true }).last()).toBeVisible();
+};
+
+const changeForRun = async (page: Page, folder: string) => {
+    await page.evaluate((folder) => { (window as TestWindow).__toolboxDialogResults = [folder]; }, folder);
+    await page.getByRole("region", { name: "Destination" }).getByRole("button", { name: "Change for this run" }).click();
+};
+
+test.describe("per-run destination", () => {
+    test("shows the default destination and an example name built from the declared suffix", async ({ page }) => {
+        const resize = UtilityRegistry.find((item) => item.id === "resize")!;
+        await page.goto("/");
+        await page.getByRole("button", { name: "Open Resize Images" }).click();
+        const destination = page.getByRole("region", { name: "Destination" });
+        await expect(destination.getByTestId("run-destination-path")).toHaveText("Next to each original");
+        await expect(destination.getByTestId("run-destination-example")).toHaveCount(0);
+        await chooseFixture(page, fixturePath);
+        await expect(destination.getByTestId("run-destination-example")).toHaveText(`icon${resize.capability.outputSuffix}.png`);
+        await expect(destination.getByTestId("run-destination-example")).toHaveText("icon-resized.png");
+        await expect(destination.getByText("An existing name gets -1, -2 and so on. Nothing is replaced.")).toBeVisible();
+        await expect(destination.getByText("This run only")).toHaveCount(0);
+    });
+
+    test("a per-run folder in the home folder is shown with ~ and sent in full", async ({ page }) => {
+        await page.goto("/");
+        await openResizeWithFixture(page);
+        const destination = page.getByRole("region", { name: "Destination" });
+        await changeForRun(page, "/Users/test/Documents/Protected");
+        await expect(destination.getByTestId("run-destination-path")).toHaveText("~/Documents/Protected");
+        await runAndWait(page);
+        expect(await runRequests(page)).toEqual([{ customFolder: "/Users/test/Documents/Protected" }]);
+    });
+
+    test("a per-run folder is sent in the request, marked, reset with one action, and never written to Settings", async ({ page }) => {
+        await page.goto("/");
+        await openResizeWithFixture(page);
+        const destination = page.getByRole("region", { name: "Destination" });
+        await changeForRun(page, "/picked/run");
+
+        await expect(destination.getByText("This run only")).toBeVisible();
+        await expect(destination.getByTestId("run-destination-path")).toHaveText("/picked/run");
+        await expect(destination.getByText("Your default is next to each original. This change ends when you leave Resize Images.")).toBeVisible();
+        const folderDialog = await page.evaluate(() =>
+            ((window as TestWindow).__toolboxInvocations ?? []).filter(({ command }) => command === "plugin:dialog|open").pop()?.args as { options: { directory: boolean } },
+        );
+        expect(folderDialog.options).toMatchObject({ directory: true, multiple: false });
+
+        await runAndWait(page);
+        expect(await runRequests(page)).toEqual([{ customFolder: "/picked/run" }]);
+        expect(await outputSettingsWrites(page)).toEqual([]);
+
+        await destination.getByRole("button", { name: "Reset to default" }).click();
+        await expect(destination.getByText("This run only")).toHaveCount(0);
+        await expect(destination.getByTestId("run-destination-path")).toHaveText("Next to each original");
+        await runAndWait(page);
+        await expect.poll(() => runRequests(page)).toEqual([{ customFolder: "/picked/run" }, "alongsideInput"]);
+        expect(await outputSettingsWrites(page)).toEqual([]);
+        expect(await page.evaluate(() => (window as TestWindow).__toolboxOutputSettings)).toBeUndefined();
+    });
+
+    test("leaving and returning to the view shows the default destination again", async ({ page }) => {
+        await storeOutputSettings(page, { mode: "customFolder", folder: "/kept/output" });
+        await page.goto("/");
+        await page.getByRole("button", { name: "Open Resize Images" }).click();
+        const destination = page.getByRole("region", { name: "Destination" });
+        await expect(destination.getByTestId("run-destination-path")).toHaveText("/kept/output");
+        await changeForRun(page, "/picked/run");
+        await expect(destination.getByTestId("run-destination-path")).toHaveText("/picked/run");
+        await expect(destination.getByText("Your default is /kept/output. This change ends when you leave Resize Images.")).toBeVisible();
+
+        await page.getByRole("button", { name: "← All tools" }).click();
+        await expect(destination).toHaveCount(0);
+        await page.getByRole("button", { name: "Open Resize Images" }).click();
+        await expect(destination.getByTestId("run-destination-path")).toHaveText("/kept/output");
+        await expect(destination.getByText("This run only")).toHaveCount(0);
+        expect(await outputSettingsWrites(page)).toEqual([]);
+    });
+
+    test("switching to another tool in the workspace resets the per-run folder", async ({ page }) => {
+        await page.goto("/");
+        await page.getByRole("button", { name: "Open Resize Images" }).click();
+        const destination = page.getByRole("region", { name: "Destination" });
+        await changeForRun(page, "/picked/run");
+        await expect(destination.getByText("This run only")).toBeVisible();
+
+        await page.getByRole("toolbar", { name: "Image editor tools" }).getByRole("button", { name: "Rotate and Flip Images" }).click();
+        await expect(destination.getByTestId("run-destination-path")).toHaveText("Next to each original");
+        await expect(destination.getByText("This run only")).toHaveCount(0);
+    });
+
+    for (const check of ["missing", "unwritable"] as const) {
+        test(`${check === "missing" ? "a missing" : "an unwritable"} custom folder blocks the run and offers another folder`, async ({ page }) => {
+            await storeOutputSettings(page, { mode: "customFolder", folder: "/gone/Protected" });
+            await page.addInitScript((check) => { (window as TestWindow).__toolboxFolderChecks = { "/gone/Protected": check }; }, check);
+            await page.goto("/");
+            await openResizeWithFixture(page);
+            await page.locator(".workspace-primary-action").click();
+
+            const prompt = page.getByRole("alertdialog");
+            await expect(prompt.getByRole("heading")).toHaveText(check === "missing" ? "The folder Protected is missing" : "The folder Protected can't be written to");
+            await expect(prompt).toContainText("/gone/Protected");
+            await expect(prompt).toContainText("Nothing has run yet.");
+            expect(await runRequests(page)).toEqual([]);
+
+            await prompt.getByRole("button", { name: "Cancel" }).click();
+            await expect(prompt).toHaveCount(0);
+            expect(await runRequests(page)).toEqual([]);
+
+            await page.locator(".workspace-primary-action").click();
+            await expect(prompt).toBeVisible();
+            await page.evaluate(() => { (window as TestWindow).__toolboxDialogResults = ["/picked/another"]; });
+            await prompt.getByRole("button", { name: "Choose another folder" }).click();
+            await expect(page.getByText("Test output", { exact: true }).last()).toBeVisible();
+            expect(await runRequests(page)).toEqual([{ customFolder: "/picked/another" }]);
+            const destination = page.getByRole("region", { name: "Destination" });
+            await expect(destination.getByTestId("run-destination-path")).toHaveText("/picked/another");
+            await expect(destination.getByText("This run only")).toBeVisible();
+            expect(await outputSettingsWrites(page)).toEqual([]);
+        });
+    }
+
+    test("a blocked run can save next to the originals instead", async ({ page }) => {
+        await storeOutputSettings(page, { mode: "customFolder", folder: "/gone/Protected" });
+        await page.addInitScript(() => { (window as TestWindow).__toolboxFolderChecks = { "/gone/Protected": "missing" }; });
+        await page.goto("/");
+        await page.getByRole("button", { name: "Open Protect PDF" }).click();
+        await chooseFixture(page, pdfFixturePath);
+        await expect(page.getByRole("region", { name: "Destination" }).getByTestId("run-destination-example")).toHaveText("document-protected.pdf");
+        await page.locator('input[type="password"]').fill("test-password");
+        await page.locator(".workspace-primary-action").click();
+        await page.getByRole("alertdialog").getByRole("button", { name: "Save next to originals" }).click();
+        await expect(page.getByText("Test output", { exact: true }).last()).toBeVisible();
+        expect(await runRequests(page)).toEqual(["alongsideInput"]);
+        const destination = page.getByRole("region", { name: "Destination" });
+        await expect(destination.getByText("This run only")).toBeVisible();
+        await expect(destination.getByTestId("run-destination-path")).toHaveText("Next to each original");
+        expect(await outputSettingsWrites(page)).toEqual([]);
     });
 });

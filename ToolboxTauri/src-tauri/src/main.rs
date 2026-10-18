@@ -11,9 +11,14 @@ use crate::kit::images::tools;
 use crate::kit::pdf::{editor, metadata, remaining, scene, PDFProcessor};
 use crate::kit::vision;
 use crate::kit::contracts::{command_supports_preview, validate_command_inputs, validate_page_selection, CompressImagesRequest, ConvertImagesRequest, OutcomeState, PasswordRequest, PdfRequest, ToolError};
-use crate::kit::common::batch_runner::BatchRunner;
+use crate::kit::common::batch_runner::{BatchRunner, FolderCheck};
 use crate::kit::password::PasswordProcessor;
 use crate::kit::office::OfficeProcessor;
+
+#[tauri::command]
+fn check_output_folder(folder: std::path::PathBuf) -> FolderCheck {
+    crate::kit::common::batch_runner::check_output_folder(&folder)
+}
 
 #[tauri::command]
 async fn remove_password(request: PasswordRequest) -> Vec<JobOutcome> {
@@ -315,6 +320,7 @@ fn main() {
             reveal_output_path,
             settings::get_output_settings,
             settings::set_output_settings,
+            check_output_folder,
             remove_password,
             protect_pdf,
             protect_office,
