@@ -16,6 +16,8 @@ import {
 import type { ToolDefinition, WorkspaceId } from "../contracts";
 import { TablerIcon } from "../components/TablerIcon";
 import type { WorkspaceSourceAction } from "../components/ToolScaffold";
+import { ShortcutHint } from "../components/ShortcutHint";
+import { matchShortcut, pressShortcutTarget, shortcutAria, shortcutLabel, shortcutTarget } from "../shortcuts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
@@ -101,9 +103,6 @@ export const MainPage = () => {
   const [search, setSearch] = useState("");
   const searchInputRef = useRef<HTMLInputElement>(null);
   const commandCenterRef = useRef<HTMLElement>(null);
-  const searchShortcut = navigator.platform.toLowerCase().includes("win")
-    ? "Ctrl + K"
-    : "⌘ + K";
   const [favorites, setFavorites] = useState<string[]>(() =>
     JSON.parse(localStorage.getItem(favoritesStorageKey) || "[]"),
   );
@@ -217,18 +216,25 @@ export const MainPage = () => {
     setFocusAfterSettings(null);
   }, [settingsSection, focusAfterSettings]);
   useEffect(() => {
-    const focusSearch = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "k") return;
-
-      event.preventDefault();
-      if (settingsSection) return findToolFromSettings();
-      searchInputRef.current?.focus();
-      searchInputRef.current?.select();
+    const onShortcut = (event: KeyboardEvent) => {
+      const id = matchShortcut(event, "window");
+      if (id === "find") {
+        event.preventDefault();
+        if (settingsSection || selectedTool) return findToolFromSettings();
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+      } else if (id === "settings" || id === "shortcuts") {
+        event.preventDefault();
+        setSettingsSection(id === "settings" ? "appearance" : "keyboard-shortcuts");
+      } else if ((id === "run" || id === "open") && !settingsSection) {
+        event.preventDefault();
+        pressShortcutTarget(commandCenterRef.current, id);
+      }
     };
 
-    window.addEventListener("keydown", focusSearch);
-    return () => window.removeEventListener("keydown", focusSearch);
-  }, [settingsSection, findToolFromSettings]);
+    window.addEventListener("keydown", onShortcut);
+    return () => window.removeEventListener("keydown", onShortcut);
+  }, [settingsSection, selectedTool, findToolFromSettings]);
   useEffect(() => {
     const openFromCompatibilityNav = (event: Event) => {
       const id = (event as CustomEvent<string>).detail;
@@ -318,9 +324,11 @@ export const MainPage = () => {
           ref={settingsTriggerRef}
           variant="ghost"
           className="settings-link"
+          aria-keyshortcuts={shortcutAria("settings")}
           onClick={() => setSettingsSection("appearance")}
         >
           Settings
+          <ShortcutHint id="settings" />
         </Button>
         <p className="privacy-note">
           <strong>Private by default</strong>Files stay on this device.
@@ -346,7 +354,7 @@ export const MainPage = () => {
                 onChange={(event) => setSearch(event.target.value)}
                 placeholder="Find a tool or action"
               />
-              <kbd aria-hidden="true">{searchShortcut}</kbd>
+              <kbd aria-hidden="true">{shortcutLabel("find")}</kbd>
             </div>
           )}
         </header>
@@ -356,7 +364,7 @@ export const MainPage = () => {
               <div className="pdf-editor-header-line">
                 <Button className="back-link" variant="ghost" size="sm" onClick={() => { setWorkspaceSourceAction(null); setSelectedTool(null); }}>← All tools</Button>
                 <h1 className="workspace-title">{selectedWorkspace.title}</h1>
-                {workspaceSourceAction && <Button variant="default" size="sm" className="pdf-editor-open-files" aria-label="Choose files to process" title="Open files" onClick={() => void workspaceSourceAction()}>Open files</Button>}
+                {workspaceSourceAction && <Button variant="default" size="sm" className="pdf-editor-open-files" aria-label="Choose files to process" title="Open files" {...shortcutTarget("open")} onClick={() => void workspaceSourceAction()}>Open files<ShortcutHint id="open" /></Button>}
                 <Button
                   variant={favorites.includes(selectedTool.id) ? "secondary" : "ghost"}
                   size="icon-sm"

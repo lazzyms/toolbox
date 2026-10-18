@@ -13,6 +13,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Slider } from "@/components/ui/slider";
+import { ShortcutHint } from "../components/ShortcutHint";
+import { shortcutTarget } from "../shortcuts";
 
 const conversionActions = toolsForWorkspaceId("pdf-convert");
 const conversionIds = new Set<string>(conversionActions.map((tool) => tool.id));
@@ -467,8 +469,10 @@ const ConversionControls = ({
         onClick={run}
         className="workspace-primary-action"
         aria-label={`Export ${activeUtility.title}`}
+        {...shortcutTarget("run")}
       >
         {runLabel ?? `Export ${activeUtility.shortTitle}`}
+        <ShortcutHint id="run" />
       </Button>
       </CardContent>
     </Card>

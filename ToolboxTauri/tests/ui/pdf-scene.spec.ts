@@ -217,6 +217,26 @@ test('Export stays disabled until the document has an effective change', async (
   expect(await page.evaluate(() => (window as any).calls.filter((c: any) => c.command === 'export_pdf_scene'))).toHaveLength(1);
 });
 
+test('Cmd+O opens a PDF in the editor and Cmd+Enter exports only once there is a change', async ({ page }) => {
+  const count = (command: string) => page.evaluate((command) => (window as any).calls.filter((c: any) => c.command === command).length, command);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open Edit PDF', exact: true }).click();
+  await expect(page.locator('.pdf-editor-open-files')).toContainText('⌘O');
+  await page.locator('body').press('Meta+O');
+  await expect(page.getByRole('group', { name: 'PDF page canvas' })).toBeVisible();
+  expect(await count('plugin:dialog|open')).toBe(1);
+  await expect(page.locator('.scene-canvas image').first()).toBeAttached();
+
+  await page.locator('body').press('Meta+Enter');
+  expect(await count('export_pdf_scene')).toBe(0);
+  await draw(page, 'Shape', .4);
+  const exportButton = page.getByRole('button', { name: 'Export PDF', exact: true });
+  await expect(exportButton).toContainText('⌘↵');
+  await expect(exportButton).toBeEnabled();
+  await page.locator('body').press('Meta+Enter');
+  await expect.poll(() => count('export_pdf_scene')).toBe(1);
+});
+
 test('scene rejects stale and failed previews without exposing an unverified export', async ({ page }) => {
   await openEditor(page);
   await expect.poll(() => page.locator('.scene-canvas image').evaluateAll((images) => images.map((image) => image.getAttribute('href')))).toContain(svg);

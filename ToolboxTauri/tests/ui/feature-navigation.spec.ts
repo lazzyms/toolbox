@@ -398,6 +398,12 @@ test("search arrows navigate visible results and Enter opens the focused result"
         return event.defaultPrevented;
     });
     expect(composingArrowPrevented).toBe(false);
+    const composingFindPrevented = await search.evaluate((input) => {
+        const event = new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true, cancelable: true, isComposing: true });
+        input.dispatchEvent(event);
+        return event.defaultPrevented;
+    });
+    expect(composingFindPrevented).toBe(false);
     await expect(search).toBeFocused();
     await expect(page.locator(".recent-section")).toHaveCount(0);
     await expect(page.locator("button[data-command-result]")).toHaveCount(3);
@@ -621,6 +627,119 @@ test("workspace command rails follow the responsive toolbar keyboard contract", 
     await expect(first).toBeFocused();
 });
 
+const invocationCount = (page: Page, command: string) =>
+    page.evaluate((command) => ((window as TestWindow).__toolboxInvocations ?? []).filter((invocation) => invocation.command === command).length, command);
+
+test("window shortcuts reach search and settings from every workspace view", async ({ page }) => {
+    await page.goto("/");
+    const search = page.getByRole("textbox", { name: "Search tools" });
+    for (const workspace of ToolWorkspaceRegistry) {
+        const utility = UtilityRegistry.find((item) => item.status !== "unavailable" && workspaceForTool(item.id)?.id === workspace.id)!;
+        await page.getByRole("button", { name: `Open ${utility.title}`, exact: true }).click();
+        await expect(page.locator(".workspace-title")).toHaveText(workspace.title);
+
+        await page.locator("body").press("Meta+,");
+        await expect(page.getByRole("heading", { level: 1, name: "Appearance" })).toBeVisible();
+        await page.keyboard.press("Escape");
+        await expect(page.locator(".workspace-title")).toHaveText(workspace.title);
+
+        await page.locator("body").press("Meta+/");
+        await expect(page.getByRole("heading", { level: 1, name: "Keyboard shortcuts" })).toBeVisible();
+        await page.keyboard.press("Escape");
+        await expect(page.locator(".workspace-title")).toHaveText(workspace.title);
+
+        await page.locator("body").press("Meta+K");
+        await expect(search).toBeFocused();
+        await expect(page.getByRole("heading", { name: "Tool library" })).toBeVisible();
+    }
+});
+
+const runShortcutCases = [
+    { tool: "Protect PDF", file: pdfFixturePath, command: "protect_pdf", ready: (page: Page) => fillPasswords(page, "test-password") },
+    { tool: "Compress PDF", file: pdfFixturePath, command: "compress_pdf", ready: async () => undefined },
+    { tool: "Compress Images", file: fixturePath, command: "export_image_edit_plan", ready: (page: Page) => page.getByRole("switch", { name: "Preserve original pixels" }).click() },
+    { tool: "Image Metadata", file: fixturePath, command: "image_metadata", ready: async () => undefined },
+];
+
+for (const { tool, file, command, ready } of runShortcutCases) {
+    test(`${tool} opens the picker with Cmd+O and runs with Cmd+Enter only when its run button is enabled`, async ({ page }) => {
+        await page.goto("/");
+        await page.getByRole("button", { name: `Open ${tool}`, exact: true }).click();
+        await page.locator("body").press("Meta+Enter");
+        expect(await invocationCount(page, command)).toBe(0);
+
+        await page.evaluate((file) => { (window as TestWindow).__toolboxDialogResults = [file]; }, file);
+        await page.locator("body").press("Meta+O");
+        await expect(page.getByText(path.basename(file), { exact: true })).toBeVisible();
+        expect(await invocationCount(page, "plugin:dialog|open")).toBe(1);
+
+        await ready(page);
+        await expect(page.locator(".workspace-primary-action")).toBeEnabled();
+        await page.locator("body").press("Meta+Enter");
+        await expect.poll(() => invocationCount(page, command)).toBe(1);
+    });
+}
+
+test("shortcuts stay out of text fields and composition, and Run still fires from a field", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Protect PDF", exact: true }).click();
+    await chooseFixture(page, pdfFixturePath);
+    await fillPasswords(page, "test-password");
+    const field = page.locator('.workspace-control-panel input[type="password"]').first();
+    await field.focus();
+
+    for (const key of ["Meta+O", "Meta+,", "Meta+/", "Meta+K"]) await page.keyboard.press(key);
+    await expect(field).toBeFocused();
+    await expect(page.locator(".workspace-title")).toHaveText("Protect & unlock files");
+    expect(await invocationCount(page, "plugin:dialog|open")).toBe(1);
+
+    const composingPrevented = await field.evaluate((input) => [true, false].map((isComposing) => {
+        const event = new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true, cancelable: true, isComposing });
+        // Some input methods report composition only through keyCode 229.
+        if (!isComposing) Object.defineProperty(event, "keyCode", { value: 229 });
+        input.dispatchEvent(event);
+        return event.defaultPrevented;
+    }));
+    expect(composingPrevented).toEqual([false, false]);
+    expect(await invocationCount(page, "protect_pdf")).toBe(0);
+
+    await page.keyboard.press("Meta+Enter");
+    await expect.poll(() => invocationCount(page, "protect_pdf")).toBe(1);
+});
+
+for (const { platform, labels } of [
+    { platform: "MacIntel", labels: { find: "⌘K", settings: "⌘,", help: "⌘/", open: "⌘O", run: "⌘↵", close: "⌘W", aria: "Meta+Enter" } },
+    { platform: "Win32", labels: { find: "Ctrl+K", settings: "Ctrl+,", help: "Ctrl+/", open: "Ctrl+O", run: "Ctrl+Enter", close: "Alt+F4", aria: "Control+Enter" } },
+]) {
+    test(`shortcut hints use the ${platform === "Win32" ? "Windows" : "macOS"} modifier`, async ({ page }) => {
+        await page.addInitScript((platform) => {
+            Object.defineProperty(window.navigator, "platform", { configurable: true, value: platform });
+        }, platform);
+        await page.goto("/");
+        await expect(page.locator(".search-box kbd")).toHaveText(labels.find);
+        const settings = page.getByRole("button", { name: "Settings", exact: true });
+        await expect(settings).toContainText(labels.settings);
+
+        await page.getByRole("button", { name: "Open Compress PDF", exact: true }).click();
+        await expect(page.getByRole("button", { name: "Choose files to process" })).toContainText(labels.open);
+        const run = page.locator(".workspace-primary-action");
+        await expect(run).toContainText(labels.run);
+        await expect(run).toHaveAttribute("aria-keyshortcuts", labels.aria);
+
+        await settings.click();
+        await page.getByRole("navigation", { name: "Settings sections" }).getByRole("button", { name: "Keyboard shortcuts" }).click();
+        const list = page.getByRole("region", { name: "Keyboard shortcuts", exact: true });
+        await expect(page.getByText("Shown for the computer you are on.")).toBeVisible();
+        await expect(list.getByRole("region", { name: "Everywhere" }).locator("dd")).toHaveText([labels.find, labels.settings, labels.help, labels.open, labels.close]);
+        await expect(list.getByRole("region", { name: "Batch tools" }).locator("dt")).toHaveText(["Start the run", "Cancel the run", "Select all files", "Remove selected files", "Move through the list"]);
+
+        await list.getByRole("searchbox", { name: "Search shortcuts" }).fill("select all");
+        await expect(list.locator("dt")).toHaveText(["Select all files"]);
+        await list.getByRole("searchbox", { name: "Search shortcuts" }).fill("undo");
+        await expect(list.getByText("No shortcuts match.")).toBeVisible();
+    });
+}
+
 const openSettingsSection = async (page: Page, name: string, openSettings = true) => {
     if (openSettings) await page.getByRole("button", { name: "Settings", exact: true }).click();
     await page.getByRole("navigation", { name: "Settings sections" }).getByRole("button", { name, exact: true }).click();
@@ -660,7 +779,7 @@ test("the settings sidebar switches sections and lists only the built ones", asy
     await page.goto("/");
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     const sections = page.getByRole("navigation", { name: "Settings sections" });
-    await expect(sections.getByRole("button")).toHaveText(["Appearance", "Output location", "Privacy", "Updates", "About and support"]);
+    await expect(sections.getByRole("button")).toHaveText(["Appearance", "Output location", "Privacy", "Updates", "About and support", "Keyboard shortcuts"]);
     await expect(page.getByText("Changes save as you make them.")).toBeVisible();
 
     const about = await openSettingsSection(page, "About and support", false);
@@ -2014,7 +2133,7 @@ test.describe("many-to-one save step", () => {
             await expect(destination.getByTestId("run-destination-example")).toHaveCount(0);
             await expect(destination.getByTestId("run-destination-path")).toHaveCount(0);
             await expect(destination.getByRole("button", { name: "Change for this run" })).toHaveCount(0);
-            await expect(page.locator(".workspace-primary-action")).toHaveText(testCase.runLabel);
+            await expect(page.locator(".workspace-primary-action")).toHaveText(`${testCase.runLabel}⌘↵`);
 
             const dialog = await startRun(page);
             const folder = testCase.files[0].slice(0, testCase.files[0].lastIndexOf("/"));
@@ -2130,7 +2249,7 @@ test.describe("many-to-one save step", () => {
 
     test("one TIFF splits into pages without the save step", async ({ page }) => {
         await openWithFiles(page, "Split and Combine TIFF", ["/local/tiff/two-page.tiff"]);
-        await expect(page.locator(".workspace-primary-action")).toHaveText("TIFF Pages");
+        await expect(page.locator(".workspace-primary-action")).toHaveText("TIFF Pages⌘↵");
         await page.locator(".workspace-primary-action").click();
         await expect.poll(() => requestsFor(page, "process_tiff_pages")).toHaveLength(1);
         await expect(page.getByRole("dialog")).toHaveCount(0);
