@@ -83,7 +83,7 @@ fn the_retired_table_rejects_drift_prone_rows() {
     assert!(parse_retired_tool_ids(r#"{"version":1,"retired":{"a-tool":"b-tool","b-tool":"removed"}}"#).is_err());
     assert!(parse_retired_tool_ids(r#"{"version":-1,"retired":{}}"#).is_err());
     assert!(parse_retired_tool_ids(r#"{"version":1,"retired":{},"aliases":{}}"#).is_err());
-    assert!(parse_retired_tool_ids(r#"{"version":1,"retired":{"a-tool":"removed","b-tool":"pdf-unlock"}}"#).is_ok());
+    assert!(parse_retired_tool_ids(r#"{"version":1,"retired":{"a-tool":"removed","b-tool":"lock-unlock"}}"#).is_ok());
 }
 
 #[test]

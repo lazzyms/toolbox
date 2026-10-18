@@ -13,6 +13,8 @@ type IntakeWindow = Window & {
     __dialogResult: string | string[] | null;
     __processingDelayMs: number;
     __wrongPasswordPaths: string[];
+    __invalidInputPaths: string[];
+    __outputSettings: unknown;
     __sent: string[];
     __drop: (paths: string[]) => void;
 };
@@ -28,6 +30,8 @@ test.beforeEach(async ({ page }) => {
         win.__dialogResult = null;
         win.__processingDelayMs = 0;
         win.__wrongPasswordPaths = [];
+        win.__invalidInputPaths = [];
+        win.__outputSettings = { mode: "alongsideInput", folder: "/Users/test/Documents/Toolbox" };
         // Everything that leaves the page or lands in the console, so a test can prove no password does.
         win.__sent = [];
         const record = (value: unknown) => win.__sent.push(typeof value === "string" ? value : JSON.stringify(value) ?? String(value));
@@ -78,7 +82,7 @@ test.beforeEach(async ({ page }) => {
                     return (args as { paths: string[] }).paths.map((path) => ({ path, kind: win.__pathKinds[path] ?? "file" }));
                 }
                 if (command === "plugin:dialog|open") return win.__dialogResult;
-                if (command === "get_output_settings") return { mode: "alongsideInput", folder: "/Users/test/Documents/Toolbox" };
+                if (command === "get_output_settings") return win.__outputSettings;
                 if (command === "check_output_folder") return "ready";
                 if (command === "plugin:path|resolve_directory") return "/Users/test";
                 if (command.startsWith("plugin:")) return null;
@@ -87,7 +91,9 @@ test.beforeEach(async ({ page }) => {
                 const { request } = args as { request: { paths: string[] } };
                 return request.paths.map((inputPath) => win.__wrongPasswordPaths.includes(inputPath)
                     ? { inputPath, outputPaths: [], detail: "", state: "failed", failure: { kind: "wrongPassword", message: "Wrong password or unsupported encryption.", pointer: null }, reason: null, warnings: [] }
-                    : { inputPath, outputPaths: [`${inputPath}.out`], detail: "Test output", state: "succeeded", failure: null, reason: null, warnings: [] });
+                    : win.__invalidInputPaths.includes(inputPath)
+                        ? { inputPath, outputPaths: [], detail: "", state: "failed", failure: { kind: "invalidInput", message: "Only PDF, Word, Excel, and PowerPoint files can be unlocked.", pointer: null }, reason: null, warnings: [] }
+                        : { inputPath, outputPaths: [`${inputPath}.out`], detail: "Test output", state: "succeeded", failure: null, reason: null, warnings: [] });
             },
             transformCallback: (callback: (event: unknown) => void) => {
                 const id = nextId++;
@@ -360,7 +366,7 @@ test("a file's own password is sent as an override and every other file uses the
 });
 
 test("every file with its own password can run without a batch password", async ({ page }) => {
-    await open(page, "Remove Password");
+    await open(page, "Lock & Unlock");
     await drop(page, ["/local/a.pdf"]);
     await expect(page.getByTestId("password-readiness")).toHaveText("1 file has no password yet");
     await expect(page.locator(".workspace-primary-action")).toBeDisabled();
@@ -372,7 +378,7 @@ test("every file with its own password can run without a batch password", async 
 });
 
 test("a wrong password row retries only that file with the password typed for it", async ({ page }) => {
-    await open(page, "Remove Password");
+    await open(page, "Lock & Unlock");
     await drop(page, ["/local/a.pdf", "/local/b.pdf", "/local/c.pdf"]);
     await page.evaluate(() => { (window as unknown as IntakeWindow).__wrongPasswordPaths = ["/local/b.pdf"]; });
     await page.getByLabel("Current password for all files", { exact: true }).fill("batch-secret");
@@ -424,7 +430,7 @@ test("passwords clear when a file closes, when the list empties and when the vie
 
     await drop(page, ["/local/a.pdf"]);
     await fillBatchLock(page, "batch-secret");
-    await page.getByRole("toolbar", { name: "File security tools" }).getByRole("button", { name: "Remove Password", exact: true }).click();
+    await page.getByRole("toolbar", { name: "File security tools" }).getByRole("button", { name: "Lock & Unlock", exact: true }).click();
     await expect(page.getByLabel("Current password for all files", { exact: true })).toHaveValue("");
 
     await page.getByLabel("Current password for all files", { exact: true }).fill("batch-secret");
@@ -434,7 +440,7 @@ test("passwords clear when a file closes, when the list empties and when the vie
 });
 
 test("passwords never reach storage, the network, the console or any other command", async ({ page }) => {
-    await open(page, "Remove Password");
+    await open(page, "Lock & Unlock");
     await drop(page, ["/local/a.pdf", "/local/b.pdf"]);
     await page.evaluate(() => { (window as unknown as IntakeWindow).__wrongPasswordPaths = ["/local/a.pdf"]; });
     await page.getByLabel("Current password for all files", { exact: true }).fill("batch-secret");
@@ -459,4 +465,101 @@ test("passwords never reach storage, the network, the console or any other comma
     for (const secret of ["batch-secret", "own-secret", "retry-secret"]) {
         for (const [where, text] of Object.entries(seen)) expect(text, `${secret} found in ${where}`).not.toContain(secret);
     }
+});
+
+test("every File Security search term finds one Lock & Unlock entry that opens the view", async ({ page }) => {
+    await page.goto("/");
+    const search = page.getByRole("textbox", { name: "Search tools" });
+    for (const term of ["lock", "unlock", "protect", "password", "encrypt", "decrypt"]) {
+        await search.fill(term);
+        await expect(page.getByRole("button", { name: "Open File Security", exact: true }), term).toHaveCount(1);
+        await expect(page.locator('button[data-command-result="lock-unlock"]'), term).toHaveCount(1);
+    }
+    await page.getByRole("button", { name: "Open Lock & Unlock", exact: true }).click();
+    await expect(page.locator(".workspace-title")).toHaveText("File Security");
+    await expect(page.getByRole("radiogroup", { name: "Lock or unlock" }).getByRole("radio", { name: "Unlock", exact: true })).toHaveAttribute("aria-checked", "true");
+});
+
+test("a saved Remove Password favorite and recent open File Security once migrated and leave no retired id behind", async ({ page }) => {
+    await page.addInitScript(() => {
+        if (localStorage.getItem("toolbox-tool-id-migration")) return;
+        localStorage.setItem("toolbox-favorites", JSON.stringify(["pdf-unlock", "pdf-merge"]));
+        localStorage.setItem("toolbox-recent", JSON.stringify(["pdf-unlock"]));
+    });
+    await page.goto("/");
+    const chips = page.getByRole("group", { name: "Favorite tools" });
+    await expect(chips.getByRole("button")).toHaveText(["Lock & Unlock", "Merge PDF"]);
+    await chips.getByRole("button", { name: "Lock & Unlock" }).click();
+    await expect(page.locator(".workspace-title")).toHaveText("File Security");
+    await expect(page.getByRole("heading", { name: "Lock & Unlock", exact: true })).toBeVisible();
+
+    await page.reload();
+    const saved = await page.evaluate(() => ({
+        favorites: JSON.parse(localStorage.getItem("toolbox-favorites") ?? "null"),
+        recent: JSON.parse(localStorage.getItem("toolbox-recent") ?? "null"),
+    }));
+    expect(saved).toEqual({ favorites: ["lock-unlock", "pdf-merge"], recent: ["lock-unlock"] });
+});
+
+test("Unlock sends the ordered batch with one password and the shell's output folder, and shows one row per file", async ({ page }) => {
+    await page.addInitScript(() => {
+        (window as unknown as IntakeWindow).__outputSettings = { mode: "customFolder", folder: "/Users/test/Unlocked" };
+    });
+    await open(page, "Lock & Unlock");
+    await expect(page.locator(".workspace-primary-action")).toHaveText(/^Unlock files/);
+    await drop(page, ["/local/lease.pdf", "/local/budget.xlsx", "/local/site-photo.jpg", "/local/deck.pptx", "/local/renamed.docx", "/local/notes.txt", "/local/minutes.doc"]);
+    await expect(rows(page)).toHaveText([/lease\.pdf/, /budget\.xlsx/, /deck\.pptx/, /renamed\.docx/, /minutes\.doc/]);
+    await page.evaluate(() => {
+        const win = window as unknown as IntakeWindow;
+        win.__wrongPasswordPaths = ["/local/budget.xlsx"];
+        win.__invalidInputPaths = ["/local/renamed.docx"];
+    });
+    await page.getByLabel("Current password for all files", { exact: true }).fill("batch-secret");
+    const run = page.locator(".workspace-primary-action");
+    await expect(run).toBeEnabled();
+    await expect(run).toHaveText(/^Unlock 5 files/);
+    await run.click();
+
+    await expect(results(page)).toHaveCount(5);
+    expect(await requestFor(page, "remove_password")).toEqual([{
+        paths: ["/local/lease.pdf", "/local/budget.xlsx", "/local/deck.pptx", "/local/renamed.docx", "/local/minutes.doc"],
+        password: "batch-secret",
+        passwordOverrides: {},
+        outputLocation: { customFolder: "/Users/test/Unlocked" },
+    }]);
+    await expect(results(page).filter({ hasText: "lease.pdf" })).toHaveAttribute("data-state", "succeeded");
+    await expect(results(page).filter({ hasText: "deck.pptx" })).toHaveAttribute("data-state", "succeeded");
+    await expect(results(page).filter({ hasText: "minutes.doc" })).toHaveAttribute("data-state", "succeeded");
+    await expect(results(page).filter({ hasText: "budget.xlsx" })).toContainText("Failed, wrong password");
+    const unsupported = results(page).filter({ hasText: "renamed.docx" });
+    await expect(unsupported).toHaveAttribute("data-state", "failed");
+    await expect(unsupported).toContainText("Failed, the input can't be used");
+    await expect(run).toBeEnabled();
+});
+
+test("switching between Lock and Unlock clears every password and keeps Protect PDF and Protect Office Files reachable", async ({ page }) => {
+    await open(page, "Lock & Unlock");
+    await drop(page, ["/local/a.pdf", "/local/b.docx"]);
+    await page.getByLabel("Current password for all files", { exact: true }).fill("batch-secret");
+    await setOwnPassword(page, "b.docx", "own-secret", "unlock");
+    const modes = page.getByRole("radiogroup", { name: "Lock or unlock" });
+
+    await modes.getByRole("radio", { name: "Lock", exact: true }).click();
+    await expect(page.getByTestId("password-readiness")).toHaveText("To lock files for now, use Protect PDF or Protect Office Files.");
+    await expect(page.locator(".workspace-primary-action")).toBeDisabled();
+    await expect(page.locator(".workspace-control-panel input")).toHaveCount(0);
+
+    await modes.getByRole("radio", { name: "Unlock", exact: true }).click();
+    await expect(page.getByLabel("Current password for all files", { exact: true })).toHaveValue("");
+    await expect(row(page, "b.docx")).not.toContainText("Own password");
+    await expect(rows(page)).toHaveCount(2);
+
+    await modes.getByRole("radio", { name: "Lock", exact: true }).click();
+    await page.getByRole("button", { name: "Open Protect Office Files", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Protect Office Files", exact: true })).toBeVisible();
+    await page.getByRole("toolbar", { name: "File security tools" }).getByRole("button", { name: "Lock & Unlock", exact: true }).click();
+    await page.getByRole("radiogroup", { name: "Lock or unlock" }).getByRole("radio", { name: "Lock", exact: true }).click();
+    await page.getByRole("button", { name: "Open Protect PDF", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Protect PDF", exact: true })).toBeVisible();
+    expect(await requestFor(page, "remove_password")).toEqual([]);
 });

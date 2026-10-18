@@ -36,7 +36,7 @@ class MemoryStorage {
 const fixtureTable = parseRetiredToolIds({
   version: 2,
   retired: {
-    "file-unlock": "pdf-unlock",
+    "file-unlock": "lock-unlock",
     "pdf-compress-legacy": "pdf-compress",
     "pdf-remove-blank-pages": "pdf-organize",
     "pdf-inspect": "removed",
@@ -44,11 +44,11 @@ const fixtureTable = parseRetiredToolIds({
 });
 
 const seededLists = () => ({
-  [favoritesStorageKey]: ["file-unlock", "pdf-merge", "pdf-unlock", "pdf-inspect", "mystery-tool", "pdf-merge", 7],
+  [favoritesStorageKey]: ["file-unlock", "pdf-merge", "lock-unlock", "pdf-inspect", "mystery-tool", "pdf-merge", 7],
   [recentStorageKey]: ["pdf-remove-blank-pages", "pdf-compress-legacy", "pdf-organize", "never-shipped", "pdf-compress"],
 });
 
-const migratedFavorites = ["pdf-unlock", "pdf-merge"];
+const migratedFavorites = ["lock-unlock", "pdf-merge"];
 const migratedRecent = ["pdf-organize", "pdf-compress"];
 
 test("saved favorites and recents move to replacements, drop removed and unknown ids, and keep first positions", () => {
@@ -116,11 +116,20 @@ test("the shipped table runs at most once and leaves a marker only when it has a
   assert.equal(storage.getItem(toolIdMigrationStorageKey), RetiredToolIds.version === 0 ? null : String(RetiredToolIds.version));
 });
 
+test("the shipped table sends the retired Remove Password id to Lock & Unlock", () => {
+  assert.equal(RetiredToolIds.replacements.get("pdf-unlock"), "lock-unlock");
+  assert.ok(!registeredToolIds.has("pdf-unlock"));
+  const storage = new MemoryStorage({ [favoritesStorageKey]: ["pdf-unlock", "pdf-merge"], [recentStorageKey]: ["pdf-merge", "pdf-unlock"] });
+  migrateSavedToolIds(storage);
+  assert.deepEqual(storage.list(favoritesStorageKey), ["lock-unlock", "pdf-merge"]);
+  assert.deepEqual(storage.list(recentStorageKey), ["pdf-merge", "lock-unlock"]);
+});
+
 test("the retired tool id table rejects ids that are still registered or map nowhere", () => {
   const table = (retired: Record<string, unknown>, version: unknown = 1) => () => parseRetiredToolIds({ version, retired });
-  assert.throws(table({ "pdf-unlock": "pdf-protect" }), /still a registered tool/);
+  assert.throws(table({ "lock-unlock": "pdf-protect" }), /still a registered tool/);
   assert.throws(table({ "file-unlock": "file-lock" }), /registered tool id or removed/);
-  assert.throws(table({ "file-unlock": "file-lock", "file-lock": "pdf-unlock" }), /registered tool id or removed/);
+  assert.throws(table({ "file-unlock": "file-lock", "file-lock": "lock-unlock" }), /registered tool id or removed/);
   assert.throws(table({ "file-unlock": null }), /registered tool id or removed/);
   assert.throws(table({}, -1), /non-negative integer version/);
   assert.throws(() => parseRetiredToolIds({ version: 1, retired: {}, aliases: {} }), /only version and retired/);

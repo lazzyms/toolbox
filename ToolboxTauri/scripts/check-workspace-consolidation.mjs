@@ -22,6 +22,8 @@ const expectedWorkspaces = ["file-security", "pdf-editor", "pdf-convert", "image
 const declaredWorkspaces = [...workspaceSource.matchAll(/^\s*id: "([^"]+)"/gm)].map((match) => match[1]);
 if (declaredWorkspaces.join() !== expectedWorkspaces.join()) failures.push(`expected workspaces ${expectedWorkspaces.join(", ")}, found ${declaredWorkspaces.join(", ")}`);
 const membersOf = (id) => [...(workspaceSource.match(new RegExp(`id: "${id}"[\\s\\S]*?toolIds:\\s*\\[([\\s\\S]*?)\\]`))?.[1] ?? "").matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+if (membersOf("file-security").join() !== "lock-unlock,pdf-protect,office-protect") failures.push("file-security must hold exactly lock-unlock, pdf-protect and office-protect");
+if (atomicIds.includes("pdf-unlock") || workspaceIds.includes("pdf-unlock")) failures.push("pdf-unlock is retired and must not be registered");
 if (membersOf("compress-files").join() !== "pdf-compress,compress") failures.push("compress-files must hold exactly pdf-compress and compress");
 if (!membersOf("pdf-convert").includes("pdf-ocr")) failures.push("pdf-ocr must belong to the PDF conversion workspace");
 if (membersOf("media-tools").includes("pdf-ocr")) failures.push("pdf-ocr must not belong to the media workspace");

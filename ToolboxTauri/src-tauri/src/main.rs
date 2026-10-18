@@ -1334,8 +1334,12 @@ mod command_tests {
     }
 
     fn locked_docx(root: &PathBuf, name: &str, password: &str) -> PathBuf {
-        let source = root.join(format!("{name}.docx"));
-        std::fs::write(&source, test_minimal_ooxml_package("docx")).unwrap();
+        locked_office(root, name, "docx", password)
+    }
+
+    fn locked_office(root: &PathBuf, name: &str, extension: &str, password: &str) -> PathBuf {
+        let source = root.join(format!("{name}.{extension}"));
+        std::fs::write(&source, test_minimal_ooxml_package(extension)).unwrap();
         let locked = OfficeProcessor::protect(source, password, &location(root, "locked"));
         assert!(locked.error().is_none(), "{}", locked.error().cloned().unwrap_or_default());
         locked.output_paths()[0].clone()
@@ -1391,6 +1395,95 @@ mod command_tests {
 
         for (input, original) in inputs.iter().zip(originals) {
             assert_eq!(std::fs::read(input).unwrap(), original, "locked original was modified: {}", input.display());
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn locked_pdf(root: &PathBuf, name: &str, password: &str) -> PathBuf {
+        let source = root.join(format!("{name}.pdf"));
+        make_pdf(&source, 2);
+        let locked = PDFProcessor::protect(source, password, &location(root, "locked"));
+        assert!(locked.error().is_none(), "{}", locked.error().cloned().unwrap_or_default());
+        locked.output_paths()[0].clone()
+    }
+
+    fn file_names(folder: &PathBuf) -> Vec<String> {
+        let mut names = std::fs::read_dir(folder).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect::<Vec<_>>();
+        names.sort();
+        names
+    }
+
+    fn opens_without_password(path: &PathBuf) -> bool {
+        let format = crate::kit::password::ProtectedFormat::from_path(path).unwrap();
+        crate::kit::password::probe(&std::fs::read(path).unwrap(), format).unwrap() == crate::kit::password::ProtectionState::NotProtected
+    }
+
+    #[test]
+    fn unlock_runs_a_mixed_pdf_and_xlsx_batch_per_file_without_touching_the_originals() {
+        let root = sandbox("unlock-mixed-batch");
+        let pdfs = [locked_pdf(&root, "lease", "batch-secret"), locked_pdf(&root, "vendor-nda", "batch-secret")];
+        let sheets = ["budget", "payroll", "inventory", "forecast"].map(|name| locked_office(&root, name, "xlsx", "batch-secret"));
+        let other = locked_office(&root, "other-password", "xlsx", "other-secret");
+        let inputs_dir = root.join("locked");
+        let photo = inputs_dir.join("site-photo.png");
+        let notes = inputs_dir.join("notes.txt");
+        write_png(&photo, 8, 40);
+        std::fs::write(&notes, b"meeting notes").unwrap();
+        let inputs = vec![
+            pdfs[0].clone(), sheets[0].clone(), photo.clone(), sheets[1].clone(), other.clone(),
+            pdfs[1].clone(), notes.clone(), sheets[2].clone(), sheets[3].clone(),
+        ];
+        let originals = inputs.iter().map(|input| std::fs::read(input).unwrap()).collect::<Vec<_>>();
+        let beside_inputs = file_names(&inputs_dir);
+        let unlock = |output_location: OutputLocation, paths: Vec<PathBuf>| tauri::async_runtime::block_on(remove_password(RunEvents::silent(), PasswordRequest {
+            paths,
+            password: "batch-secret".into(),
+            password_overrides: Default::default(),
+            output_location,
+        }));
+
+        let custom = location(&root, "unlocked");
+        let outcomes = unlock(custom.clone(), inputs.clone());
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), inputs, "one outcome per input, in input order");
+        for (input, outcome) in inputs.iter().zip(&outcomes) {
+            if [&photo, &notes, &other].contains(&input) {
+                assert!(outcome.output_paths().is_empty(), "{} must not produce an output", input.display());
+                continue;
+            }
+            assert!(outcome.error().is_none(), "{}: {}", input.display(), outcome.error().cloned().unwrap_or_default());
+            let output = &outcome.output_paths()[0];
+            assert_eq!(output.parent().unwrap(), root.join("unlocked"));
+            let stem = input.file_stem().unwrap().to_string_lossy();
+            let extension = input.extension().unwrap().to_string_lossy();
+            assert_eq!(output.file_name().unwrap().to_string_lossy(), format!("{stem}-unlocked.{extension}"));
+            assert!(opens_without_password(output), "{} still needs a password", output.display());
+            if extension == "xlsx" {
+                assert_eq!(std::fs::read(output).unwrap(), test_minimal_ooxml_package("xlsx"));
+            }
+        }
+        let wrong = outcomes[4].error().expect("a file locked with another password fails on its own");
+        assert_eq!(wrong.kind, ErrorKind::WrongPassword);
+        assert!(!wrong.message.contains("batch-secret") && !wrong.message.contains("other-secret"));
+        for unsupported in [&outcomes[2], &outcomes[6]] {
+            assert_eq!(unsupported.error().expect("an image or text file fails on its own").kind, ErrorKind::InvalidInput);
+        }
+        assert_eq!(std::fs::read_dir(root.join("unlocked")).unwrap().count(), 6, "every output lands in the custom folder");
+        assert_eq!(file_names(&inputs_dir), beside_inputs, "nothing is written beside the inputs");
+
+        let again = vec![pdfs[0].clone(), sheets[0].clone()];
+        for _ in 0..2 {
+            assert!(unlock(custom.clone(), again.clone()).iter().all(|outcome| outcome.error().is_none()));
+        }
+        let unlocked_names = file_names(&root.join("unlocked"));
+        for name in ["lease-protected-unlocked.pdf", "lease-protected-unlocked-1.pdf", "lease-protected-unlocked-2.pdf", "budget-protected-unlocked.xlsx", "budget-protected-unlocked-1.xlsx", "budget-protected-unlocked-2.xlsx"] {
+            assert!(unlocked_names.iter().any(|existing| existing == name), "{name} missing from {unlocked_names:?}");
+        }
+
+        let alongside = unlock(OutputLocation::AlongsideInput, again.clone());
+        assert!(alongside.iter().all(|outcome| outcome.error().is_none() && outcome.output_paths()[0].parent() == Some(inputs_dir.as_path())));
+
+        for (input, original) in inputs.iter().zip(originals) {
+            assert_eq!(std::fs::read(input).unwrap(), original, "original was modified: {}", input.display());
         }
         let _ = std::fs::remove_dir_all(root);
     }

@@ -3,7 +3,7 @@ export type ToolCategory = "PDF" | "Images" | "Documents";
 export type ToolStatus = "implemented" | "planned" | "unavailable";
 
 export type AtomicToolId =
-  | "pdf-unlock"
+  | "lock-unlock"
   | "pdf-page-numbers"
   | "pdf-merge"
   | "pdf-watermark"
@@ -196,6 +196,7 @@ export interface ToolDefinition {
   resultVerb: string;
   runningVerb: string;
   blurb: string;
+  keywords?: readonly string[];
   symbol: string;
   category: ToolCategory;
   status: ToolStatus;
@@ -203,7 +204,7 @@ export interface ToolDefinition {
   command: ToolCommand;
   verification: string;
   view:
-    | "pdf-unlock"
+    | "lock-unlock"
     | "pdf-protect"
     | "pdf-crop"
     | "pdf-edit"
