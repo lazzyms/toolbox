@@ -136,6 +136,8 @@ pub struct NativeCapability {
     pub supports_preview: bool,
     #[serde(rename = "nativeAvailability", deserialize_with = "deserialize_native_availability")]
     pub native_available: bool,
+    pub output_suffix: String,
+    pub many_to_one: bool,
 }
 
 static CAPABILITY_REGISTRY: OnceLock<Vec<NativeCapability>> = OnceLock::new();
@@ -179,8 +181,24 @@ fn parse_capability_registry(raw: &str) -> Result<Vec<NativeCapability>, String>
                 ));
             }
         }
+        if !is_valid_output_suffix(&capability.output_suffix) {
+            return Err(format!(
+                "{} has an invalid output suffix {}.",
+                capability.command, capability.output_suffix
+            ));
+        }
     }
     Ok(capabilities)
+}
+
+fn is_valid_output_suffix(suffix: &str) -> bool {
+    suffix.is_empty()
+        || suffix.strip_prefix('-').is_some_and(|rest| {
+            rest.split('-').all(|segment| {
+                !segment.is_empty()
+                    && segment.chars().all(|character| character.is_ascii_lowercase() || character.is_ascii_digit())
+            })
+        })
 }
 
 pub fn native_capabilities() -> &'static [NativeCapability] {
@@ -666,7 +684,21 @@ mod tests {
             assert_eq!(capability.supports_page_selection, row["supportsPageSelection"].as_bool().unwrap());
             assert_eq!(capability.supports_preview, row["supportsPreview"].as_bool().unwrap());
             assert_eq!(capability.native_available, row["nativeAvailability"] == "available");
+            assert_eq!(capability.output_suffix, row["outputSuffix"].as_str().unwrap());
+            assert_eq!(capability.many_to_one, row["manyToOne"].as_bool().unwrap());
+            assert_eq!(
+                capability.many_to_one,
+                capability.input_cardinality == InputCardinality::Ordered,
+                "{command} many-to-one must match its ordered inputs"
+            );
         }
+        let mut many_to_one = native_capabilities()
+            .iter()
+            .filter(|capability| capability.many_to_one)
+            .map(|capability| capability.command.as_str())
+            .collect::<Vec<_>>();
+        many_to_one.sort_unstable();
+        assert_eq!(many_to_one, ["create_gif", "images_to_pdf", "merge_pdfs", "process_tiff_pages"]);
 
         let office = native_capability("remove_password").unwrap();
         assert_eq!(office.accepted_extensions, [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"]);
@@ -687,12 +719,32 @@ mod tests {
 
     #[test]
     fn shared_capability_parser_rejects_duplicate_and_unknown_contract_data() {
-        let row = r#"{"command":"test","acceptedExtensions":[".pdf"],"inputCardinality":"single","supportsPageSelection":false,"supportsPreview":false,"nativeAvailability":"available"}"#;
+        let row = r#"{"command":"test","acceptedExtensions":[".pdf"],"inputCardinality":"single","supportsPageSelection":false,"supportsPreview":false,"nativeAvailability":"available","outputSuffix":"-tested","manyToOne":false}"#;
+        assert_eq!(parse_capability_registry(&format!("[{row}]")).unwrap()[0].output_suffix, "-tested");
         assert!(parse_capability_registry(&format!("[{row},{row}]")).unwrap_err().contains("Duplicate"));
         let unknown = format!("[{}]", row.replace('}', ",\"unknown\":true}"));
         assert!(parse_capability_registry(&unknown)
             .unwrap_err()
             .contains("unknown field"));
+    }
+
+    #[test]
+    fn shared_capability_parser_requires_exactly_one_valid_output_suffix() {
+        let row = r#"{"command":"test","acceptedExtensions":[".pdf"],"inputCardinality":"single","supportsPageSelection":false,"supportsPreview":false,"nativeAvailability":"available","outputSuffix":"-tested","manyToOne":false}"#;
+        let missing_suffix = format!("[{}]", row.replace(",\"outputSuffix\":\"-tested\"", ""));
+        assert!(parse_capability_registry(&missing_suffix).unwrap_err().contains("missing field `outputSuffix`"));
+        let missing_flag = format!("[{}]", row.replace(",\"manyToOne\":false", ""));
+        assert!(parse_capability_registry(&missing_flag).unwrap_err().contains("missing field `manyToOne`"));
+        let duplicate_suffix = format!("[{}]", row.replace('}', ",\"outputSuffix\":\"-other\"}"));
+        assert!(parse_capability_registry(&duplicate_suffix).unwrap_err().contains("duplicate field `outputSuffix`"));
+        let list_suffix = format!("[{}]", row.replace("\"-tested\"", "[\"-a\",\"-b\"]"));
+        assert!(parse_capability_registry(&list_suffix).is_err());
+        for invalid in ["tested", "-", "-Tested", "--tested", "-tested-", "-tested.pdf"] {
+            let raw = format!("[{}]", row.replace("-tested", invalid));
+            assert!(parse_capability_registry(&raw).unwrap_err().contains("invalid output suffix"), "{invalid}");
+        }
+        let flag = format!("[{}]", row.replace("\"manyToOne\":false", "\"manyToOne\":\"yes\""));
+        assert!(parse_capability_registry(&flag).is_err());
     }
 
     #[test]

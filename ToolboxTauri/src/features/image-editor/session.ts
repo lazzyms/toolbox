@@ -30,7 +30,6 @@ export type ImageEditOperation =
 
 export interface ImageEditPlan {
   edits: ImageEditOperation[];
-  suffix: string;
 }
 
 export const imageEditRequestPlan = (plan: ImageEditPlan, outputLocation: OutputLocation) => ({ ...plan, outputLocation });
@@ -45,7 +44,6 @@ export type ImageCropRect = { x: number; y: number; width: number; height: numbe
 
 export const emptyImageEditPlan = (): ImageEditPlan => ({
   edits: [],
-  suffix: "-edited",
 });
 
 export const createImageEditHistory = (): ImageEditHistory => ({
