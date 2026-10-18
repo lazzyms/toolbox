@@ -13,15 +13,15 @@ const requiredComponents = [
   "dialog", "radio-group", "slider", "switch", "textarea", "toggle-group",
 ];
 const cardSurfaceClasses = [
-  "tool-card", "tool-workspace-card", "workspace-control-panel", "workspace-source-bar",
-  "workspace-command-rail", "conversion-preview", "media-frame-order", "image-editor-preview",
+  "tool-workspace-card", "workspace-control-panel", "workspace-source-bar",
+  "conversion-preview", "media-frame-order", "image-editor-preview",
   "image-editor-controls", "image-editor-result-preview", "image-editor-history",
   "file-dropzone", "file-selection-list", "result-card", "settings-info", "support-info",
   "scene-empty", "scene-thumbnails", "conversion-page-card",
 ];
 const buttonClasses = [
-  "rail-link", "quick-tool-link", "settings-link", "favorite-button",
-  "workspace-action-button", "workspace-inline-button", "file-selection-item",
+  "rail-link", "back-link", "settings-link", "favorite-button", "favorite-chip",
+  "view-open-link", "view-tool-link", "workspace-inline-button", "file-selection-item",
   "workspace-command", "scene-thumbnail", "workspace-source-open", "workspace-source-clear",
   "pdf-editor-open-files",
 ];

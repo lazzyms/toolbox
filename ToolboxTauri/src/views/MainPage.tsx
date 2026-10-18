@@ -13,20 +13,22 @@ import {
   toolsForWorkspace,
   workspaceForTool,
 } from "../registry";
-import type { ToolDefinition, WorkspaceId } from "../contracts";
+import type { ToolDefinition, ToolWorkspaceDefinition, WorkspaceId } from "../contracts";
 import { TablerIcon } from "../components/TablerIcon";
-import type { WorkspaceSourceAction } from "../components/ToolScaffold";
+import { RunStateContext, type WorkspaceSourceAction } from "../components/ToolScaffold";
 import { ShortcutHint } from "../components/ShortcutHint";
+import { WorkspaceCommandRail } from "../components/WorkspaceCommandRail";
 import { matchShortcut, pressShortcutTarget, shortcutAria, shortcutLabel, shortcutTarget } from "../shortcuts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Separator } from "@/components/ui/separator";
 import { SecurityWorkspaceView } from "./SecurityWorkspaceView";
 import { PDFEditorWorkspaceView } from "./PDFEditorWorkspaceView";
 import { PDFConversionWorkspaceView } from "./PDFConversionWorkspaceView";
 import { ImageEditorWorkspaceView } from "./ImageEditorWorkspaceView";
+import { CompressFilesWorkspaceView } from "./CompressFilesWorkspaceView";
 import { MediaWorkspaceView } from "./MediaWorkspaceView";
 import { PlannedToolView, UnavailableToolView } from "./PlannedToolView";
 import { SettingsPage, type SettingsSection } from "./SettingsPage";
@@ -37,58 +39,18 @@ const workspaceViews = {
   "pdf-editor": PDFEditorWorkspaceView,
   "pdf-convert": PDFConversionWorkspaceView,
   "image-editor": ImageEditorWorkspaceView,
+  "compress-files": CompressFilesWorkspaceView,
   "media-tools": MediaWorkspaceView,
 } satisfies Record<WorkspaceId, ComponentType<{ utility: ToolDefinition }>>;
 
-const designIconByToolId: Record<string, string> = {
-  "pdf-unlock": "remove-password",
-  "pdf-page-numbers": "page-numbers",
-  "pdf-merge": "merge-pdf",
-  "pdf-watermark": "watermark-pdf",
-  "pdf-crop": "crop-pdf",
-  "pdf-edit": "edit-pdf",
-  "pdf-protect": "protect-pdf",
-  "office-protect": "protect-pdf",
-  "images-to-pdf": "images-to-pdf",
-  "pdf-to-images": "pdf-to-images",
-  "pdf-to-text": "pdf-to-text",
-  "pdf-split": "split-pdf",
-  "pdf-image-extract": "extract-images",
-  "pdf-sign": "signature",
-  "pdf-ocr": "ocr-pdf",
-  "pdf-remove-pages": "file-minus",
-  "pdf-extract-pages": "extract-pages",
-  "pdf-organize": "organize-pdf",
-  "pdf-compress": "compress-pdf",
-  "heic-convert": "convert-format",
-  compress: "compress-images",
-  resize: "resize-images",
-  rotate: "rotate-images",
-  crop: "crop-images",
-  "icon-set": "generate-icons",
-  "gif-create": "create-gif",
-  "gif-extract": "extract-gif",
-  "image-watermark": "watermark-images",
-  "image-metadata": "image-metadata",
-  "image-tone": "image-tone",
-  "tiff-pages": "layers",
-  "image-blur-faces": "face-id",
-  "image-remove-bg": "wand",
+const visibleToolsPerView = 6;
+
+type LibraryFilter = "all" | "favorites";
+
+const firstOpenableTool = (workspace: ToolWorkspaceDefinition) => {
+  const tools = toolsForWorkspace(workspace);
+  return tools.find((tool) => tool.capability.nativeAvailability !== "unavailable") ?? tools[0];
 };
-
-const iconName = (tool: ToolDefinition) =>
-  designIconByToolId[tool.id] ?? tool.symbol;
-
-const libraryFilters = [
-  { value: "all", label: "All" },
-  { value: "PDF", label: "PDF" },
-  { value: "Images", label: "Images" },
-  { value: "Documents", label: "Documents" },
-  { value: "favorites", label: "Favorites" },
-  { value: "recent", label: "Recent" },
-] as const;
-
-type LibraryFilter = (typeof libraryFilters)[number]["value"];
 
 export const MainPage = () => {
   const [selectedTool, setSelectedTool] = useState<ToolDefinition | null>(null);
@@ -96,55 +58,46 @@ export const MainPage = () => {
   const publishWorkspaceSourceAction = useCallback((action: WorkspaceSourceAction | null) => {
     setWorkspaceSourceAction(() => action);
   }, []);
+  const [running, setRunning] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(null);
   const [focusAfterSettings, setFocusAfterSettings] = useState<"settings" | "search" | null>(null);
   const settingsTriggerRef = useRef<HTMLButtonElement>(null);
   const [filter, setFilter] = useState<LibraryFilter>("all");
   const [search, setSearch] = useState("");
+  const [expandedViews, setExpandedViews] = useState<WorkspaceId[]>([]);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const commandCenterRef = useRef<HTMLElement>(null);
   const [favorites, setFavorites] = useState<string[]>(() =>
     JSON.parse(localStorage.getItem(favoritesStorageKey) || "[]"),
   );
-  const [recent, setRecent] = useState<string[]>(() =>
-    JSON.parse(localStorage.getItem(recentStorageKey) || "[]"),
-  );
-  const recentTools = useMemo(
-    () =>
-      recent
-        .map((id) => UtilityRegistry.find((tool) => tool.id === id))
-        .filter(Boolean) as ToolDefinition[],
-    [recent],
+  const favoriteTools = useMemo(
+    () => favorites
+      .map((id) => UtilityRegistry.find((tool) => tool.id === id))
+      .filter(Boolean) as ToolDefinition[],
+    [favorites],
   );
   const normalizedSearch = search.trim().toLowerCase();
-  const recentPreviewTools = recentTools.slice(0, 3);
   const visibleWorkspaces = useMemo(
     () =>
       ToolWorkspaceRegistry.map((workspace) => {
         const actions = toolsForWorkspace(workspace).filter((tool) => {
-          const matchesScope =
-            filter === "all" ||
-            (filter === "recent" && recent.includes(tool.id)) ||
-            (filter === "favorites" && favorites.includes(tool.id)) ||
-            (filter !== "recent" && filter !== "favorites" && tool.category === filter);
+          const matchesScope = filter === "all" || favorites.includes(tool.id);
           const searchText = `${tool.title} ${tool.blurb} ${workspace.title} ${workspace.blurb}`.toLowerCase();
           return matchesScope && searchText.includes(normalizedSearch);
         });
         return { workspace, actions };
       }).filter(({ actions }) => actions.length > 0),
-    [filter, normalizedSearch, favorites, recent],
+    [filter, normalizedSearch, favorites],
   );
   const openTool = (tool: ToolDefinition) => {
     setWorkspaceSourceAction(null);
     setSelectedTool(tool);
-    setRecent((current) => {
-      const next = [tool.id, ...current.filter((id) => id !== tool.id)].slice(
-        0,
-        8,
-      );
-      localStorage.setItem(recentStorageKey, JSON.stringify(next));
-      return next;
-    });
+    const recent: string[] = JSON.parse(localStorage.getItem(recentStorageKey) || "[]");
+    localStorage.setItem(recentStorageKey, JSON.stringify([tool.id, ...recent.filter((id) => id !== tool.id)].slice(0, 8)));
+  };
+  const goHome = () => {
+    setWorkspaceSourceAction(null);
+    setSelectedTool(null);
   };
   const toggleFavorite = (id: string) =>
     setFavorites((current) => {
@@ -184,17 +137,17 @@ export const MainPage = () => {
     if (nextResult) nextResult.focus();
     else if (direction < 0) searchInputRef.current?.focus();
   };
-  const selectLibrary = (
-    nextFilter: LibraryFilter,
-  ) => {
+  const selectLibrary = (nextFilter: LibraryFilter) => {
     setFilter(nextFilter);
     setSearch("");
-    setWorkspaceSourceAction(null);
-    setSelectedTool(null);
+    goHome();
   };
   const selectedWorkspace = selectedTool
     ? workspaceForTool(selectedTool.id)
     : undefined;
+  const railWorkspace = selectedTool && selectedWorkspace && selectedWorkspace.id !== "pdf-editor"
+    ? selectedWorkspace
+    : null;
   useEffect(() => {
     document.body.dataset.theme =
       (localStorage.getItem("toolbox-theme") as "dark" | "light") || "dark";
@@ -253,72 +206,74 @@ export const MainPage = () => {
     return () => window.removeEventListener("toolbox:open-settings", openSettings);
   }, []);
 
+  const favoriteButton = (tool: ToolDefinition) => (
+    <Button
+      variant={favorites.includes(tool.id) ? "secondary" : "ghost"}
+      size="icon-sm"
+      className="favorite-button"
+      aria-label={favorites.includes(tool.id) ? `Remove ${tool.title} from favorites` : `Add ${tool.title} to favorites`}
+      aria-pressed={favorites.includes(tool.id)}
+      onClick={() => toggleFavorite(tool.id)}
+    >
+      {favorites.includes(tool.id) ? "★" : "☆"}
+    </Button>
+  );
+
   return (
     <>
-    <div className="app-shell" hidden={settingsSection !== null}>
-      <aside className="app-rail" aria-label="Toolbox navigation">
-        <div className="brand-lockup">
-          <span className="brand-mark">T</span>
-          <span>Toolbox</span>
-        </div>
-        <p className="eyebrow">Workspace</p>
-        <nav className="rail-nav" aria-label="Workspace navigation">
-          {(["all", "favorites", "recent"] as const).map((item) => (
-            <Button
-              className="rail-link"
-              key={item}
-              variant={filter === item ? "secondary" : "ghost"}
-              aria-current={filter === item ? "page" : undefined}
-              onClick={() => selectLibrary(item)}
-              aria-label={
-                item === "all"
-                  ? "All tools"
-                  : item[0].toUpperCase() + item.slice(1)
-              }
-            >
-              {item === "all"
-                ? "All tools"
-                : item[0].toUpperCase() + item.slice(1)}
-            </Button>
-          ))}
-        </nav>
-        <p className="eyebrow category-label">Categories</p>
-        <nav className="rail-nav" aria-label="Tool categories">
-          {(["PDF", "Images", "Documents"] as const).map((item) => (
-            <Button
-              className="rail-link"
-              key={item}
-              variant={filter === item ? "secondary" : "ghost"}
-              aria-current={filter === item ? "page" : undefined}
-              onClick={() => selectLibrary(item)}
-              aria-label={item}
-            >
-              {item}
-            </Button>
-          ))}
-        </nav>
-        <p className="eyebrow category-label">Quick access</p>
-            <nav className="quick-tools">
-              {(recentPreviewTools.length
-                ? recentPreviewTools
-                : UtilityRegistry.slice(0, 4)
-              ).map(
-                (tool) => (
-              <Button
-                className="quick-tool-link"
-                key={tool.id}
-                variant={selectedTool?.id === tool.id ? "secondary" : "ghost"}
-                onClick={() => openTool(tool)}
-                aria-current={selectedTool?.id === tool.id ? "page" : undefined}
-              >
-                <span className="card-icon quick-tool-icon">
-                  <TablerIcon name={iconName(tool)} />
-                </span>
-                {tool.shortTitle}
-              </Button>
-            ),
-          )}
-        </nav>
+    <div className={`app-shell ${railWorkspace ? "app-shell--view" : ""}`} hidden={settingsSection !== null}>
+      <aside className="app-rail" aria-label={railWorkspace ? railWorkspace.title : "Toolbox navigation"}>
+        {railWorkspace && selectedTool ? (
+          <>
+            <Button className="rail-link back-link" variant="ghost" onClick={goHome}>← All tools</Button>
+            <p className="eyebrow view-rail-heading">{railWorkspace.title}</p>
+            <WorkspaceCommandRail
+              actions={toolsForWorkspace(railWorkspace)}
+              activeId={selectedTool.id}
+              onSelect={(id) => {
+                const tool = UtilityRegistry.find((item) => item.id === id);
+                if (tool && tool.id !== selectedTool.id) openTool(tool);
+              }}
+              label={`${railWorkspace.title} tools`}
+              disabled={running}
+            />
+          </>
+        ) : (
+          <>
+            <div className="brand-lockup">
+              <span className="brand-mark">T</span>
+              <span>Toolbox</span>
+            </div>
+            <nav className="rail-nav" aria-label="Workspace navigation">
+              {(["all", "favorites"] as const).map((item) => (
+                <Button
+                  className="rail-link"
+                  key={item}
+                  variant={!selectedTool && filter === item ? "secondary" : "ghost"}
+                  aria-current={!selectedTool && filter === item ? "page" : undefined}
+                  onClick={() => selectLibrary(item)}
+                >
+                  {item === "all" ? "All tools" : "Favorites"}
+                </Button>
+              ))}
+            </nav>
+            <p className="eyebrow category-label">Views</p>
+            <nav className="rail-nav" aria-label="Views">
+              {ToolWorkspaceRegistry.map((workspace) => (
+                <Button
+                  className="rail-link"
+                  key={workspace.id}
+                  variant={selectedWorkspace?.id === workspace.id ? "secondary" : "ghost"}
+                  aria-current={selectedWorkspace?.id === workspace.id ? "page" : undefined}
+                  onClick={() => openTool(firstOpenableTool(workspace))}
+                >
+                  <TablerIcon name={workspace.symbol} className="rail-link-icon" />
+                  {workspace.title}
+                </Button>
+              ))}
+            </nav>
+          </>
+        )}
         <div className="rail-spacer" />
         <Button
           ref={settingsTriggerRef}
@@ -330,15 +285,15 @@ export const MainPage = () => {
           Settings
           <ShortcutHint id="settings" />
         </Button>
-        <p className="privacy-note">
-          <strong>Private by default</strong>Files stay on this device.
-        </p>
+        <p className="privacy-note">Files stay on this device.</p>
       </aside>
       <main className="command-center" aria-label="Tool detail" ref={commandCenterRef}>
         <header className={`topbar ${selectedTool ? "" : "topbar--home"}`}>
-          <span className="breadcrumb" data-tauri-drag-region>
-            Toolbox <span>/ Command center</span>
-          </span>
+          {selectedTool && (
+            <span className="breadcrumb" data-tauri-drag-region>
+              Toolbox <span>/ Command center</span>
+            </span>
+          )}
           <span className="topbar__drag-region" aria-hidden="true" data-tauri-drag-region />
           {selectedTool ? (
             <Badge variant="secondary">On-device workspace</Badge>
@@ -352,7 +307,7 @@ export const MainPage = () => {
                 onKeyDown={handleSearchKeyDown}
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                placeholder="Find a tool or action"
+                placeholder="Find a tool, like merge, OCR or compress"
               />
               <kbd aria-hidden="true">{shortcutLabel("find")}</kbd>
             </div>
@@ -360,23 +315,14 @@ export const MainPage = () => {
         </header>
         {selectedTool && selectedWorkspace ? (
           <section className={`tool-workspace ${selectedWorkspace.id === "pdf-editor" ? "pdf-studio" : ""}`} id="tool-detail">
-            {selectedWorkspace.id === "pdf-editor" ? (
+            {selectedWorkspace.id === "pdf-editor" && (
               <div className="pdf-editor-header-line">
-                <Button className="back-link" variant="ghost" size="sm" onClick={() => { setWorkspaceSourceAction(null); setSelectedTool(null); }}>← All tools</Button>
+                <Button className="back-link" variant="ghost" size="sm" onClick={goHome}>← All tools</Button>
                 <h1 className="workspace-title">{selectedWorkspace.title}</h1>
                 {workspaceSourceAction && <Button variant="default" size="sm" className="pdf-editor-open-files" aria-label="Choose files to process" title="Open files" {...shortcutTarget("open")} onClick={() => void workspaceSourceAction()}>Open files<ShortcutHint id="open" /></Button>}
-                <Button
-                  variant={favorites.includes(selectedTool.id) ? "secondary" : "ghost"}
-                  size="icon-sm"
-                  className="favorite-button"
-                  aria-label={favorites.includes(selectedTool.id) ? `Remove ${selectedTool.title} from favorites` : `Add ${selectedTool.title} to favorites`}
-                  aria-pressed={favorites.includes(selectedTool.id)}
-                  onClick={() => toggleFavorite(selectedTool.id)}
-                >
-                  {favorites.includes(selectedTool.id) ? "★" : "☆"}
-                </Button>
+                {favoriteButton(selectedTool)}
               </div>
-            ) : <Button className="back-link" variant="ghost" size="sm" onClick={() => setSelectedTool(null)}>← All tools</Button>}
+            )}
             <Card className={`tool-workspace-card ${selectedWorkspace.id === "pdf-editor" ? "py-0" : ""}`}>
               {selectedWorkspace.id === "pdf-editor" ? (
                 <CardContent className="tool-view py-0">
@@ -393,152 +339,101 @@ export const MainPage = () => {
                       <CardTitle className="workspace-card-title"><h1 className="workspace-title">{selectedWorkspace.title}</h1></CardTitle>
                       <CardDescription><p>{selectedWorkspace.blurb}</p></CardDescription>
                     </div>
-                    <CardAction>
-                      <Button
-                        variant={favorites.includes(selectedTool.id) ? "secondary" : "ghost"}
-                        size="icon-sm"
-                        className="favorite-button"
-                        aria-label={favorites.includes(selectedTool.id) ? `Remove ${selectedTool.title} from favorites` : `Add ${selectedTool.title} to favorites`}
-                        aria-pressed={favorites.includes(selectedTool.id)}
-                        onClick={() => toggleFavorite(selectedTool.id)}
-                      >
-                        {favorites.includes(selectedTool.id) ? "★" : "☆"}
-                      </Button>
-                    </CardAction>
+                    <CardAction>{favoriteButton(selectedTool)}</CardAction>
                   </CardHeader>
                   <CardContent className="tool-view">
-                    <ViewFor utility={selectedTool} />
+                    <RunStateContext.Provider value={setRunning}>
+                      <ViewFor utility={selectedTool} />
+                    </RunStateContext.Provider>
                   </CardContent>
                 </>
               )}
             </Card>
           </section>
         ) : (
-          <>
-            <section className="tool-library-section" aria-labelledby="tool-library-title">
-              <h2 id="tool-library-title">Tool library</h2>
-              <ToggleGroup
-                type="single"
-                variant="outline"
-                size="sm"
-                className="filter-row"
-                aria-label="Tool library filters"
-                value={filter}
-                onValueChange={(value) => {
-                  if (value) selectLibrary(value as LibraryFilter);
-                }}
-              >
-                {libraryFilters.map((item) => (
-                  <ToggleGroupItem key={item.value} value={item.value}>
-                    {item.label}
-                  </ToggleGroupItem>
-                ))}
-              </ToggleGroup>
-              <div className="tool-grid">
-                {visibleWorkspaces.map(({ workspace, actions }) => (
-                  <Card
-                    role="article"
-                    className="tool-card workspace-card"
-                    key={workspace.id}
-                  >
-                    <CardHeader className="workspace-card-header">
-                      <span className="workspace-card-eyebrow">
-                        {actions.length} {actions.length === 1 ? "action" : "actions"} · {workspace.categories.join(" + ")}
-                      </span>
-                      <CardTitle className="workspace-card-title"><h3>{workspace.title}</h3></CardTitle>
-                      <CardDescription className="workspace-card-description"><p>{workspace.blurb}</p></CardDescription>
-                    </CardHeader>
-                    <CardContent className="workspace-action-list">
-                      {actions.map((tool) => (
-                        <div className="workspace-action-row" key={tool.id}>
-                          <Button
-                            type="button"
-                            className="workspace-action-button"
-                            variant="ghost"
-                            size="sm"
-                            data-command-result={tool.id}
-                            aria-label={`Open ${tool.title}`}
-                            onKeyDown={handleCommandResultKeyDown}
-                            onClick={() => openTool(tool)}
-                          >
-                            <span className="card-icon">
-                              <TablerIcon name={iconName(tool)} />
-                            </span>
-                            <span>
-                              <strong>{tool.title}</strong>
-                              <small>{tool.blurb}</small>
-                            </span>
-                          </Button>
-                          <Button
-                            variant={favorites.includes(tool.id) ? "secondary" : "ghost"}
-                            size="icon-sm"
-                            className="favorite-button"
-                            aria-label={
-                              favorites.includes(tool.id)
-                                ? `Remove ${tool.title} from favorites`
-                                : `Add ${tool.title} to favorites`
-                            }
-                            aria-pressed={favorites.includes(tool.id)}
-                            onClick={() => toggleFavorite(tool.id)}
-                          >
-                            {favorites.includes(tool.id) ? "★" : "☆"}
-                          </Button>
-                        </div>
-                      ))}
-                    </CardContent>
-                    <CardFooter className="workspace-card-footer">
-                      <span>One file surface · {actions.length} outcomes</span>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => openTool(actions[0])}
-                        aria-label={`Open ${workspace.title}`}
-                      >
-                        Open workspace →
-                      </Button>
-                    </CardFooter>
-                  </Card>
+          <section className="tool-library-section" aria-labelledby="tool-library-title">
+            <h1 id="tool-library-title" className="sr-only">Tool library</h1>
+            {favoriteTools.length > 0 && (
+              <div className="favorite-chips" role="group" aria-label="Favorite tools">
+                <span className="favorite-chips-label">Favorites</span>
+                {favoriteTools.map((tool) => (
+                  <Button key={tool.id} variant="outline" size="sm" className="favorite-chip" onClick={() => openTool(tool)}>
+                    {tool.title}
+                  </Button>
                 ))}
               </div>
-              {visibleWorkspaces.length === 0 && (
-                <Card className="tool-empty-state" role="status">
-                  <CardHeader>
-                  <CardTitle><h3>{
-                    filter === "favorites" && !search
-                      ? "No favorite tools yet"
-                      : filter === "recent" && !search
-                        ? "No recent tools yet"
-                        : "No matching tools"
-                  }</h3></CardTitle>
-                  <CardDescription><p>{
-                    filter === "favorites" && !search
-                      ? "Save a tool with the star to keep it here."
-                      : filter === "recent" && !search
-                        ? "Open a tool and it will appear here."
-                        : "Try another term or clear the current filters."
-                  }</p></CardDescription>
-                  </CardHeader>
-                  <CardFooter>
-                  <Button variant="ghost" onClick={() => selectLibrary("all")}>
-                    Browse all tools
-                  </Button>
-                  </CardFooter>
-                </Card>
-              )}
-            </section>
-          </>
+            )}
+            <div className="view-grid">
+              {visibleWorkspaces.map(({ workspace, actions }) => {
+                const expanded = normalizedSearch !== "" || filter === "favorites" || expandedViews.includes(workspace.id);
+                const shown = expanded ? actions : actions.slice(0, visibleToolsPerView);
+                const hiddenCount = actions.length - shown.length;
+                const titleId = `view-section-${workspace.id}`;
+                return (
+                  <section className="view-section" key={workspace.id} aria-labelledby={titleId}>
+                    <Separator />
+                    <div className="view-section-heading">
+                      <h2 id={titleId}>{workspace.title}</h2>
+                      <Button variant="link" size="sm" className="view-open-link" aria-label={`Open ${workspace.title}`} onClick={() => openTool(firstOpenableTool(workspace))}>
+                        Open view
+                      </Button>
+                    </div>
+                    <div className="view-tool-list">
+                      {shown.map((tool) => (
+                        <Button
+                          type="button"
+                          key={tool.id}
+                          className="view-tool-link"
+                          variant="ghost"
+                          size="sm"
+                          data-command-result={tool.id}
+                          aria-label={`Open ${tool.title}`}
+                          title={tool.blurb}
+                          onKeyDown={handleCommandResultKeyDown}
+                          onClick={() => openTool(tool)}
+                        >
+                          {tool.title}
+                        </Button>
+                      ))}
+                      {hiddenCount > 0 && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="view-tool-link view-more-tools"
+                          onClick={() => setExpandedViews((current) => [...current, workspace.id])}
+                        >
+                          {hiddenCount} more {hiddenCount === 1 ? "tool" : "tools"}
+                        </Button>
+                      )}
+                    </div>
+                  </section>
+                );
+              })}
+            </div>
+            {visibleWorkspaces.length === 0 && (
+              <Card className="tool-empty-state" role="status">
+                <CardHeader>
+                <CardTitle><h3>{filter === "favorites" && !search ? "No favorite tools yet" : "No matching tools"}</h3></CardTitle>
+                <CardDescription><p>{
+                  filter === "favorites" && !search
+                    ? "Save a tool with the star in its view to keep it here."
+                    : "Try another term or clear the current filters."
+                }</p></CardDescription>
+                </CardHeader>
+                <CardFooter>
+                <Button variant="ghost" onClick={() => selectLibrary("all")}>
+                  Browse all tools
+                </Button>
+                </CardFooter>
+              </Card>
+            )}
+          </section>
         )}
         <p className="sr-only" role="status" aria-live="polite">
           {selectedTool
             ? `${selectedWorkspace?.title ?? selectedTool.title} workspace open.`
             : "No tool selected."}
         </p>
-        {!selectedTool && (
-          <footer className="command-status-bar" role="status">
-            <span>{UtilityRegistry.length} tools</span>
-            <span>On-device processing</span>
-          </footer>
-        )}
       </main>
     </div>
     {settingsSection && (

@@ -177,12 +177,12 @@ test("the picker filters by the active tool and allows one file only for single-
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await expect(rows(page)).toHaveCount(2);
 
-    await page.getByRole("toolbar", { name: "PDF conversion tools" }).getByRole("button", { name: "Images to PDF", exact: true }).click();
+    await page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "Images to PDF", exact: true }).click();
     await page.evaluate(() => { (window as unknown as IntakeWindow).__dialogResult = ["/local/scan.png"]; });
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await expect(rows(page)).toHaveCount(3);
 
-    await page.getByRole("toolbar", { name: "PDF conversion tools" }).getByRole("button", { name: "Compress PDF", exact: true }).click();
+    await page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "Split PDF", exact: true }).click();
     await page.evaluate(() => { (window as unknown as IntakeWindow).__dialogResult = "/local/c.pdf"; });
     await page.getByRole("button", { name: "Choose files to process" }).click();
 
@@ -288,7 +288,7 @@ test("intake, options and the file list lock while a run is in progress", async 
     await expect(page.getByRole("button", { name: "Move a.pdf down" })).toBeDisabled();
     await expect(page.getByRole("button", { name: "Drag a.pdf to reorder" })).toBeDisabled();
     await expect(rows(page).first().getByRole("button", { name: /^a\.pdf/ })).toBeDisabled();
-    await expect(page.getByRole("toolbar", { name: "PDF conversion tools" }).getByRole("button", { name: "Split PDF", exact: true })).toBeDisabled();
+    await expect(page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "Split PDF", exact: true })).toBeDisabled();
     await drop(page, ["/local/late.pdf"]);
     await expect(rows(page)).toHaveCount(2);
 
@@ -428,7 +428,7 @@ test("passwords clear when a file closes, when the list empties and when the vie
     await expect(page.getByLabel("Current password for all files", { exact: true })).toHaveValue("");
 
     await page.getByLabel("Current password for all files", { exact: true }).fill("batch-secret");
-    await page.locator('nav[aria-label="Workspace navigation"]').getByRole("button", { name: "All tools" }).click();
+    await page.getByRole("button", { name: "← All tools" }).click();
     await page.getByRole("button", { name: "Open Protect PDF", exact: true }).click();
     await expect(page.getByLabel("New password for all files", { exact: true })).toHaveValue("");
 });
@@ -444,7 +444,7 @@ test("passwords never reach storage, the network, the console or any other comma
     await page.getByLabel("Password for a.pdf", { exact: true }).fill("retry-secret");
     await page.getByRole("button", { name: "Retry this file" }).click();
     await expect(results(page)).toHaveCount(2);
-    await page.locator('nav[aria-label="Workspace navigation"]').getByRole("button", { name: "All tools" }).click();
+    await page.getByRole("button", { name: "← All tools" }).click();
 
     const seen = await page.evaluate(() => {
         const win = window as unknown as IntakeWindow;

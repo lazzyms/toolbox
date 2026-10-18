@@ -1,9 +1,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ToolScaffold } from "../components/ToolScaffold";
-import { WorkspaceCommandRail } from "../components/WorkspaceCommandRail";
-import { toolsForWorkspaceId, UtilityRegistry } from "../registry";
-import type { AtomicToolId, ImagePreview, ToolDefinition, ToolResult } from "../contracts";
+import type { ImagePreview, ToolDefinition, ToolResult } from "../contracts";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -26,9 +24,6 @@ export const tiffInspectionKey = (files: string[]) => files.join("\u0000");
 export const isCurrentTiffInspection = (inspection: TiffInspection, files: string[]): inspection is Extract<TiffInspection, { kind: "ready" }> =>
   inspection.kind === "ready" && inspection.key === tiffInspectionKey(files);
 
-const mediaActions = toolsForWorkspaceId("media-tools");
-const mediaIds = new Set<string>(mediaActions.map((tool) => tool.id));
-
 const iconSizesByPreset: Record<string, number[]> = {
   macos: [16, 32, 128, 256, 512, 1024],
   favicon: [16, 32, 48, 64, 128, 256],
@@ -37,7 +32,7 @@ const iconSizesByPreset: Record<string, number[]> = {
   custom: [16, 32, 64, 128, 256, 512],
 };
 
-export const MediaWorkspaceView = ({ utility }: { utility: ToolDefinition }) => {
+export const MediaWorkspaceView = ({ utility: activeUtility }: { utility: ToolDefinition }) => {
   const [delay, setDelay] = useState(100);
   const [loop, setLoop] = useState(true);
   const [iconPreset, setIconPreset] = useState("macos");
@@ -46,13 +41,6 @@ export const MediaWorkspaceView = ({ utility }: { utility: ToolDefinition }) => 
   const [report, setReport] = useState<unknown[]>([]);
   const [selectedTiffFrameIndex, setSelectedTiffFrameIndex] = useState(0);
   const [tiffInspection, setTiffInspection] = useState<TiffInspection>({ kind: "idle" });
-  const [activeToolId, setActiveToolId] = useState<AtomicToolId>(
-    mediaIds.has(utility.id) ? utility.id : "icon-set",
-  );
-  useEffect(() => {
-    setActiveToolId(mediaIds.has(utility.id) ? utility.id : "icon-set");
-  }, [utility.id]);
-  const activeUtility = UtilityRegistry.find((item) => item.id === activeToolId) ?? utility;
 
   useEffect(() => {
     setReport([]);
@@ -105,12 +93,6 @@ export const MediaWorkspaceView = ({ utility }: { utility: ToolDefinition }) => 
       {({ files, outputLocation, run, loading, selectedFileIndex, selectFile, destination, runLabel }) => (
         <Card className="workspace-control-panel py-0">
           <CardContent className="workspace-control-panel-content grid gap-4 p-4">
-          <WorkspaceCommandRail
-            actions={mediaActions}
-            activeId={activeToolId}
-            onSelect={setActiveToolId}
-            label="Media workspace tools"
-          />
           <div>
             <h2 className="workspace-active-command">{activeUtility.title}</h2>
             <p className="workspace-panel-label">Specialized media outcome</p>
