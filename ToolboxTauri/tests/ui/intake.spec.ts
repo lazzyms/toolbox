@@ -78,6 +78,11 @@ const drop = async (page: Page, paths: string[]) => {
 const setKinds = (page: Page, kinds: Record<string, PathKind>) =>
     page.evaluate((kinds) => { (window as unknown as IntakeWindow).__pathKinds = kinds; }, kinds);
 
+const runAndSave = async (page: Page) => {
+    await page.locator(".workspace-primary-action").click();
+    await page.getByRole("dialog").getByRole("button", { name: "Save" }).click();
+};
+
 const rows = (page: Page) => page.getByRole("listbox").getByRole("option");
 
 const requestFor = async (page: Page, command: string) => {
@@ -125,8 +130,8 @@ test("ordered tools keep repeated drops in the order they arrive", async ({ page
     expect(badgeColor).toBe(probe);
     await expect(page.getByRole("region", { name: "Not added" })).toHaveCount(0);
 
-    await page.locator(".workspace-primary-action").click();
-    await expect(page.getByText("Test output").first()).toBeVisible();
+    await runAndSave(page);
+    await expect(page.getByText(/^Done\./)).toBeVisible();
     expect((await requestFor(page, "merge_pdfs")).map((request) => request.paths)).toEqual([["/local/a.pdf", "/local/b.pdf", "/local/a.pdf"]]);
 });
 
@@ -205,8 +210,8 @@ test("drag and keyboard reorder set the order sent in the request", async ({ pag
     await expect(page.getByRole("button", { name: "Move c.pdf up" })).toBeDisabled();
     await expect(page.getByRole("button", { name: "Move b.pdf down" })).toBeDisabled();
 
-    await page.locator(".workspace-primary-action").click();
-    await expect(page.getByText("Test output").first()).toBeVisible();
+    await runAndSave(page);
+    await expect(page.getByText(/^Done\./)).toBeVisible();
     expect((await requestFor(page, "merge_pdfs")).map((request) => request.paths)).toEqual([["/local/c.pdf", "/local/a.pdf", "/local/b.pdf"]]);
 });
 
@@ -215,19 +220,18 @@ test("intake, options and the file list lock while a run is in progress", async 
     await drop(page, ["/local/a.pdf", "/local/b.pdf"]);
     await page.evaluate(() => { (window as unknown as IntakeWindow).__processingDelayMs = 1500; });
 
-    await page.locator(".workspace-primary-action").click();
+    await runAndSave(page);
     await expect(page.getByRole("button", { name: "Choose files to process" })).toBeDisabled();
     await expect(page.getByRole("button", { name: "Clear list" })).toBeDisabled();
     await expect(page.getByRole("button", { name: "Remove from list" })).toBeDisabled();
     await expect(page.getByRole("button", { name: "Move a.pdf down" })).toBeDisabled();
     await expect(page.getByRole("button", { name: "Drag a.pdf to reorder" })).toBeDisabled();
     await expect(rows(page).first().getByRole("button", { name: /^a\.pdf/ })).toBeDisabled();
-    await expect(page.getByRole("button", { name: "Change for this run" })).toBeDisabled();
     await expect(page.getByRole("toolbar", { name: "PDF conversion tools" }).getByRole("button", { name: "Split PDF", exact: true })).toBeDisabled();
     await drop(page, ["/local/late.pdf"]);
     await expect(rows(page)).toHaveCount(2);
 
-    await expect(page.getByText("Test output").first()).toBeVisible();
+    await expect(page.getByText(/^Done\./)).toBeVisible();
     await expect(page.getByRole("button", { name: "Choose files to process" })).toBeEnabled();
     await expect(page.getByRole("button", { name: "Move a.pdf down" })).toBeEnabled();
     await drop(page, ["/local/late.pdf"]);

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { readdirSync, readFileSync } from "node:fs";
 import test from "node:test";
+import { saveStepAppliesTo, saveStepCommands, saveStepFor } from "../src/registry/saveSteps.ts";
 import {
   parseCapabilityRegistry,
   SharedCapabilityRegistry,
@@ -57,7 +59,7 @@ test("UI capabilities are the shared native contract facts", () => {
   assert.equal(capabilitiesByCommand.get("remove_image_background")?.nativeAvailability, "unavailable");
 });
 
-test("every tool declares one output suffix and many-to-one tools use the save step", () => {
+test("every tool declares one output suffix and many-to-one tools take ordered inputs", () => {
   for (const capability of SharedCapabilityRegistry) {
     assert.match(capability.outputSuffix, /^-[a-z0-9]+(-[a-z0-9]+)*$/, capability.command);
     assert.equal(
@@ -78,6 +80,43 @@ test("every tool declares one output suffix and many-to-one tools use the save s
   assert.equal(suffixes.get("merge_pdfs"), "-merged");
   assert.equal(suffixes.get("protect_pdf"), "-protected");
   assert.equal(suffixes.get("pdf_to_images"), "-images");
+});
+
+test("every many-to-one tool opens the save step and sends the chosen path", () => {
+  const viewSources = readdirSync(new URL("../src/views/", import.meta.url))
+    .filter((name) => name.endsWith(".tsx"))
+    .map((name) => readFileSync(new URL(`../src/views/${name}`, import.meta.url), "utf8"));
+  const requestFor = (command: string) => {
+    for (const source of viewSources) {
+      const start = source.indexOf(`invoke<ToolResult>("${command}"`);
+      if (start === -1) continue;
+      const open = source.indexOf("request: {", start) + "request: ".length;
+      let depth = 0;
+      for (let index = open; index < source.length; index += 1) {
+        if (source[index] === "{") depth += 1;
+        if (source[index] === "}") depth -= 1;
+        if (depth === 0) return source.slice(open, index + 1);
+      }
+    }
+    return null;
+  };
+
+  for (const utility of UtilityRegistry) {
+    const step = saveStepFor(utility);
+    if (!utility.capability.manyToOne) {
+      assert.equal(step, null, `${utility.command} makes one file per input and must not open the save step`);
+      continue;
+    }
+    assert.ok(step, `${utility.command} is many-to-one and must use the save step`);
+    assert.ok(saveStepAppliesTo(step, 2), `${utility.command} must save a combine through the step`);
+    assert.match(step.runLabel, /…$/, `${utility.command} opens a dialog, so its run label ends with an ellipsis`);
+    assert.match(requestFor(utility.command) ?? "", /\boutputPath\b/, `${utility.command} must send the chosen path`);
+  }
+  assert.deepEqual(
+    saveStepCommands().sort(),
+    SharedCapabilityRegistry.filter(({ manyToOne }) => manyToOne).map(({ command }) => command).sort(),
+  );
+  assert.throws(() => saveStepFor({ command: "unknown_combiner", capability: { manyToOne: true } }), /has no save step/);
 });
 
 test("workspace membership covers every registered utility exactly once", () => {

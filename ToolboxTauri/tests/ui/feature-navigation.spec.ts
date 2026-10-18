@@ -24,6 +24,13 @@ type TestWindow = Window & {
     __toolboxDialogResults?: Array<string | string[] | null>;
     __toolboxOutputSettings?: OutputSettings;
     __toolboxFolderChecks?: Record<string, "ready" | "missing" | "unwritable">;
+    __toolboxLastSaveFolder?: string;
+};
+
+const confirmSave = async (page: Page) => {
+    const dialog = page.getByRole("dialog");
+    await dialog.getByRole("button", { name: "Save" }).click();
+    await expect(dialog).toHaveCount(0);
 };
 
 const defaultOutputSettings: OutputSettings = { mode: "alongsideInput", folder: "/Users/test/Documents/Toolbox" };
@@ -48,6 +55,7 @@ test.beforeEach(async ({ page }) => {
                     (window as TestWindow).__toolboxOutputSettings = settings;
                     return settings;
                 }
+                if (command === "get_last_save_folder") return (window as TestWindow).__toolboxLastSaveFolder ?? "/Users/test/Documents";
                 if (command === "check_output_folder") return (window as TestWindow).__toolboxFolderChecks?.[(args as { folder: string }).folder] ?? "ready";
                 if (command === "plugin:dialog|open") {
                     const dialogResults = (window as TestWindow).__toolboxDialogResults;
@@ -1031,6 +1039,7 @@ test("TIFF workspace expands internal pages and sends the displayed order", asyn
     await expect(frames.nth(0)).toContainText("two-page.tiff · page 2");
 
     await page.locator(".workspace-primary-action").click();
+    await confirmSave(page);
     const invocation = await page.evaluate(() =>
         (window as TestWindow).__toolboxInvocations?.find(({ command }) => command === "process_tiff_pages"),
     );
@@ -1130,6 +1139,7 @@ test("TIFF export waits for inspection of the current file set", async ({ page }
     expect(invocation).toBeUndefined();
     await expect(page.locator(".workspace-primary-action")).toBeEnabled();
     await page.locator(".workspace-primary-action").click();
+    await confirmSave(page);
     const currentInvocation = await page.evaluate(() =>
         (window as TestWindow).__toolboxInvocations?.find(({ command }) => command === "process_tiff_pages"),
     );
@@ -1616,6 +1626,7 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
     const action = page.locator(".workspace-primary-action");
     await expect(action).toBeEnabled();
     await action.click();
+    if (["pdf-merge", "images-to-pdf", "gif-create"].includes(utility.id)) await confirmSave(page);
 
     await expect(page.getByText("Test output", { exact: true })).toBeVisible();
     const invocations = await page.evaluate(() => (window as TestWindow).__toolboxInvocations ?? []);
@@ -1918,5 +1929,232 @@ test.describe("per-run destination", () => {
         await expect(destination.getByText("This run only")).toBeVisible();
         await expect(destination.getByTestId("run-destination-path")).toHaveText("Next to each original");
         expect(await outputSettingsWrites(page)).toEqual([]);
+    });
+});
+
+test.describe("many-to-one save step", () => {
+    const saveStepCases = [
+        { tool: "Merge PDF", command: "merge_pdfs", files: ["/local/leases/lease-agreement.pdf", "/local/leases/lease-addendum.pdf"], title: "Save the merged PDF", name: "lease-agreement-merged.pdf", summary: "2 files, joined top to bottom.", runLabel: "Merge…" },
+        { tool: "Images to PDF", command: "images_to_pdf", files: ["/local/scans/IMG_4012.jpg", "/local/scans/receipt-scan.png"], title: "Save the combined PDF", name: "IMG_4012-combined.pdf", summary: "2 images, one per page.", runLabel: "Make PDF…" },
+        { tool: "Create GIF", command: "create_gif", files: ["/local/frames/frame-1.png", "/local/frames/frame-2.png"], title: "Save the GIF", name: "frame-1-animated.gif", summary: "2 frames, in the order shown.", runLabel: "Make GIF…" },
+        { tool: "Split and Combine TIFF", command: "process_tiff_pages", files: ["/local/tiff/two-page.tiff", "/local/tiff/one-page.tiff"], title: "Save the combined TIFF", name: "two-page-combined.tiff", summary: "2 TIFF files, combined in the order shown.", runLabel: "Make TIFF…" },
+    ] as const;
+    const merge = saveStepCases[0];
+
+    const openWithFiles = async (page: Page, tool: string, files: readonly string[]) => {
+        await page.goto("/");
+        await page.getByRole("button", { name: `Open ${tool}` }).click();
+        await page.evaluate((files) => { (window as TestWindow).__toolboxDialogResults = [[...files]]; }, files);
+        await page.getByRole("button", { name: "Choose files to process" }).click();
+    };
+    const startRun = async (page: Page) => {
+        const action = page.locator(".workspace-primary-action");
+        await expect(action).toBeEnabled();
+        await action.click();
+        return page.getByRole("dialog");
+    };
+    const requestsFor = (page: Page, command: string) => page.evaluate((command) =>
+        ((window as TestWindow).__toolboxInvocations ?? []).filter((invocation) => invocation.command === command).map(({ args }) => (args as { request: Record<string, unknown> }).request),
+    command);
+    const commandCount = (page: Page, command: string) => page.evaluate((command) =>
+        ((window as TestWindow).__toolboxInvocations ?? []).filter((invocation) => invocation.command === command).length,
+    command);
+
+    for (const testCase of saveStepCases) {
+        test(`${testCase.command} asks for a name and folder in the app before it runs`, async ({ page }) => {
+            await openWithFiles(page, testCase.tool, testCase.files);
+            const destination = page.getByRole("region", { name: "Destination" });
+            await expect(destination).toContainText("You choose a name and folder when you start, because this makes one file.");
+            await expect(destination.getByTestId("run-destination-example")).toHaveCount(0);
+            await expect(destination.getByTestId("run-destination-path")).toHaveCount(0);
+            await expect(destination.getByRole("button", { name: "Change for this run" })).toHaveCount(0);
+            await expect(page.locator(".workspace-primary-action")).toHaveText(testCase.runLabel);
+
+            const dialog = await startRun(page);
+            const folder = testCase.files[0].slice(0, testCase.files[0].lastIndexOf("/"));
+            await expect(dialog.getByRole("heading", { name: testCase.title })).toBeVisible();
+            await expect(dialog.getByLabel("File name")).toHaveValue(testCase.name);
+            await expect(dialog.getByTestId("save-folder")).toHaveText(folder);
+            await expect(dialog).toHaveAccessibleDescription(testCase.summary);
+            await expect(page.getByText(/Processing \d+ of \d+ files/)).toHaveCount(0);
+            expect(await requestsFor(page, testCase.command)).toEqual([]);
+
+            await dialog.getByRole("button", { name: "Save" }).click();
+            await expect(dialog).toHaveCount(0);
+            await expect.poll(() => requestsFor(page, testCase.command)).toHaveLength(1);
+            const [request] = await requestsFor(page, testCase.command);
+            expect(request).toMatchObject({ paths: testCase.files, outputLocation: "alongsideInput", outputPath: `${folder}/${testCase.name}` });
+            expect(await commandCount(page, "plugin:dialog|save")).toBe(0);
+        });
+    }
+
+    for (const theme of ["light", "dark"] as const) {
+        test(`the proposed folder follows the custom output location and reads from home in the ${theme} theme`, async ({ page }) => {
+            await page.setViewportSize({ width: 1280, height: 800 });
+            await page.addInitScript((theme) => { localStorage.setItem("toolbox-theme", theme); }, theme);
+            await storeOutputSettings(page, { mode: "customFolder", folder: "/Users/test/Documents/Leases" });
+            await openWithFiles(page, merge.tool, merge.files);
+            const dialog = await startRun(page);
+            await expect(dialog.getByTestId("save-folder")).toHaveText("~/Documents/Leases");
+            await expect(page.locator("body")).toHaveAttribute("data-theme", theme);
+            const screenshotDir = process.env.SAVE_STEP_SCREENSHOT_DIR;
+            if (screenshotDir) await page.screenshot({ path: path.join(screenshotDir, `save-dialog-${theme}.png`), animations: "disabled" });
+
+            await dialog.getByRole("button", { name: "Save" }).click();
+            await expect.poll(() => requestsFor(page, "merge_pdfs")).toHaveLength(1);
+            expect((await requestsFor(page, "merge_pdfs"))[0]).toMatchObject({ outputLocation: { customFolder: "/Users/test/Documents/Leases" }, outputPath: "/Users/test/Documents/Leases/lease-agreement-merged.pdf" });
+        });
+    }
+
+    for (const testCase of saveStepCases) {
+        test(`cancelling the ${testCase.command} save dialog sends no request`, async ({ page }) => {
+            await openWithFiles(page, testCase.tool, testCase.files);
+            const dialog = await startRun(page);
+            await dialog.getByRole("button", { name: "Cancel" }).click();
+            await expect(dialog).toHaveCount(0);
+            await expect(page.locator(".workspace-primary-action")).toBeEnabled();
+            expect(await requestsFor(page, testCase.command)).toEqual([]);
+            await expect(page.getByRole("list", { name: "Results" }).getByRole("listitem")).toHaveCount(0);
+        });
+    }
+
+    test("Escape closes the save dialog without a request", async ({ page }) => {
+        await openWithFiles(page, merge.tool, merge.files);
+        const dialog = await startRun(page);
+        await expect(dialog.getByLabel("File name")).toBeFocused();
+        await page.keyboard.press("Escape");
+        await expect(dialog).toHaveCount(0);
+        expect(await requestsFor(page, "merge_pdfs")).toEqual([]);
+    });
+
+    test("Change… picks another folder with the native folder dialog", async ({ page }) => {
+        await openWithFiles(page, merge.tool, merge.files);
+        const dialog = await startRun(page);
+        await page.evaluate(() => { (window as TestWindow).__toolboxDialogResults = ["/Users/test/Desktop/Signed"]; });
+        await dialog.getByRole("button", { name: "Change…" }).click();
+        await expect(dialog.getByTestId("save-folder")).toHaveText("~/Desktop/Signed");
+        const folderDialogs = await page.evaluate(() =>
+            ((window as TestWindow).__toolboxInvocations ?? []).filter(({ command }) => command === "plugin:dialog|open").map(({ args }) => (args as { options: unknown }).options),
+        );
+        expect(folderDialogs.at(-1)).toMatchObject({ directory: true, multiple: false, defaultPath: "/local/leases" });
+
+        await page.evaluate(() => { (window as TestWindow).__toolboxDialogResults = [null]; });
+        await dialog.getByRole("button", { name: "Change…" }).click();
+        await expect(dialog.getByTestId("save-folder")).toHaveText("~/Desktop/Signed");
+
+        await dialog.getByRole("button", { name: "Save" }).click();
+        await expect.poll(() => requestsFor(page, "merge_pdfs")).toHaveLength(1);
+        expect((await requestsFor(page, "merge_pdfs"))[0]).toMatchObject({ outputPath: "/Users/test/Desktop/Signed/lease-agreement-merged.pdf" });
+    });
+
+    test("the file name must be present, stay in the folder, and gets the tool's extension", async ({ page }) => {
+        await openWithFiles(page, merge.tool, merge.files);
+        const dialog = await startRun(page);
+        const name = dialog.getByLabel("File name");
+        const save = dialog.getByRole("button", { name: "Save" });
+
+        await name.fill("   ");
+        await expect(dialog.getByRole("alert")).toHaveText("Enter a file name.");
+        await expect(name).toHaveAttribute("aria-invalid", "true");
+        await expect(save).toBeDisabled();
+        await name.press("Enter");
+
+        await name.fill("../lease");
+        await expect(dialog.getByRole("alert")).toHaveText("A file name can’t contain / or \\.");
+        await expect(save).toBeDisabled();
+        await name.fill("folder\\lease.pdf");
+        await expect(save).toBeDisabled();
+        expect(await requestsFor(page, "merge_pdfs")).toEqual([]);
+
+        await name.fill("Lease pack");
+        await expect(dialog.getByRole("alert")).toHaveCount(0);
+        await name.press("Enter");
+        await expect.poll(() => requestsFor(page, "merge_pdfs")).toHaveLength(1);
+        expect((await requestsFor(page, "merge_pdfs"))[0]).toMatchObject({ outputPath: "/local/leases/Lease pack.pdf" });
+    });
+
+    test("a name that already has the extension keeps it once", async ({ page }) => {
+        await openWithFiles(page, merge.tool, merge.files);
+        const dialog = await startRun(page);
+        await dialog.getByLabel("File name").fill("Lease Pack.PDF");
+        await dialog.getByRole("button", { name: "Save" }).click();
+        await expect.poll(() => requestsFor(page, "merge_pdfs")).toHaveLength(1);
+        expect((await requestsFor(page, "merge_pdfs"))[0]).toMatchObject({ outputPath: "/local/leases/Lease Pack.PDF" });
+    });
+
+    test("one TIFF splits into pages without the save step", async ({ page }) => {
+        await openWithFiles(page, "Split and Combine TIFF", ["/local/tiff/two-page.tiff"]);
+        await expect(page.locator(".workspace-primary-action")).toHaveText("TIFF Pages");
+        await page.locator(".workspace-primary-action").click();
+        await expect.poll(() => requestsFor(page, "process_tiff_pages")).toHaveLength(1);
+        await expect(page.getByRole("dialog")).toHaveCount(0);
+        expect((await requestsFor(page, "process_tiff_pages"))[0]).toMatchObject({ outputPath: null });
+    });
+
+    for (const theme of ["light", "dark"] as const) {
+        test(`a renamed save shows one row named by the output with the warning once in the ${theme} theme`, async ({ page }) => {
+            await page.setViewportSize({ width: 1280, height: 800 });
+            await page.addInitScript((theme) => { localStorage.setItem("toolbox-theme", theme); }, theme);
+            await openWithFiles(page, merge.tool, ["/local/statements/statement-q3.pdf", "/local/statements/statement-q4.pdf"]);
+            const renamed = { code: "renamedToAvoidReplacing" as const, message: "native wording", details: { chosenName: "statement-q3-merged.pdf", finalName: "statement-q3-merged-1.pdf" } };
+            await page.evaluate((outcomes) => { (window as TestWindow).__toolboxProcessingResults = outcomes; }, [
+                succeeded("/local/statements/statement-q3.pdf", ["/local/statements/statement-q3-merged-1.pdf"], { warnings: [renamed] }),
+            ]);
+            const dialog = await startRun(page);
+            await dialog.getByRole("button", { name: "Save" }).click();
+            const rows = page.getByRole("list", { name: "Results" }).getByRole("listitem");
+            await expect(rows).toHaveCount(1);
+            await expect(rows.nth(0)).toHaveAttribute("data-tone", "warn");
+            const rowName = rows.nth(0).locator(".result-row-name");
+            await expect(rowName).toHaveText("statement-q3-merged-1.pdf");
+            await expect(rowName).toHaveAttribute("title", "/local/statements/statement-q3-merged-1.pdf");
+            await expect(rows.nth(0).getByText("Saved as statement-q3-merged-1.pdf. Renamed to avoid replacing an existing file.")).toHaveCount(1);
+            await expect(rows.nth(0)).not.toContainText("native wording");
+            await expect(resultSummaryStatus(page)).toContainText("Done. 1 merged");
+            await expect(page.locator("body")).toHaveAttribute("data-theme", theme);
+            const screenshotDir = process.env.SAVE_STEP_SCREENSHOT_DIR;
+            if (screenshotDir) {
+                await rows.nth(0).scrollIntoViewIfNeeded();
+                await page.screenshot({ path: path.join(screenshotDir, `save-result-${theme}.png`), animations: "disabled" });
+            }
+        });
+    }
+
+    test("a combined result without a warning is named by the output and drops the repeated output line", async ({ page }) => {
+        await openWithFiles(page, merge.tool, merge.files);
+        await page.evaluate((outcomes) => { (window as TestWindow).__toolboxProcessingResults = outcomes; }, [
+            succeeded("/local/leases/lease-agreement.pdf", ["/local/leases/lease-agreement-merged.pdf"]),
+        ]);
+        const dialog = await startRun(page);
+        await dialog.getByRole("button", { name: "Save" }).click();
+        const rows = page.getByRole("list", { name: "Results" }).getByRole("listitem");
+        await expect(rows).toHaveCount(1);
+        await expect(rows.nth(0)).toHaveAttribute("data-tone", "ok");
+        await expect(rows.nth(0).locator(".result-row-name")).toHaveText("lease-agreement-merged.pdf");
+        await expect(rows.nth(0).locator(".result-row-detail")).toHaveCount(0);
+        await expect(resultSummaryStatus(page)).toContainText("Done. 1 merged");
+    });
+
+    test("a created-document save opens in the last-used folder, or else Documents", async ({ page }) => {
+        await page.goto("/");
+        const chooseCreated = () => page.evaluate(`import("/src/components/saveStep.ts").then((step) => step.chooseCreatedDocumentSavePath({ title: "Save the new PDF", extension: "pdf" }, "Untitled.pdf"))`);
+        const dialog = page.getByRole("dialog", { name: "Save the new PDF" });
+
+        const first = chooseCreated();
+        await expect(dialog.getByTestId("save-folder")).toHaveText("~/Documents");
+        await expect(dialog.getByLabel("File name")).toHaveValue("Untitled.pdf");
+        await dialog.getByRole("button", { name: "Save" }).click();
+        expect(await first).toBe("/Users/test/Documents/Untitled.pdf");
+
+        await page.evaluate(() => { (window as TestWindow).__toolboxLastSaveFolder = "/Users/test/Leases"; });
+        const second = chooseCreated();
+        await expect(dialog.getByTestId("save-folder")).toHaveText("~/Leases");
+        await dialog.getByRole("button", { name: "Save" }).click();
+        expect(await second).toBe("/Users/test/Leases/Untitled.pdf");
+
+        const cancelled = chooseCreated();
+        await dialog.getByRole("button", { name: "Cancel" }).click();
+        expect(await cancelled).toBeNull();
+        expect(await commandCount(page, "plugin:dialog|save")).toBe(0);
     });
 });

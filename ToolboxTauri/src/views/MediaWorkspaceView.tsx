@@ -67,7 +67,7 @@ export const MediaWorkspaceView = ({ utility }: { utility: ToolDefinition }) => 
       sessionKey="media-tools"
       utility={activeUtility}
       showFileOrdering={activeUtility.id !== "tiff-pages"}
-      onRun={(paths, outputLocation) => {
+      onRun={(paths, outputLocation, outputPath) => {
         if (activeUtility.id === "icon-set") {
           return invoke<ToolResult>("generate_icon_set", {
             request: { paths, preset: iconPreset, sizes: iconSizes, outputLocation },
@@ -75,7 +75,7 @@ export const MediaWorkspaceView = ({ utility }: { utility: ToolDefinition }) => 
         }
         if (activeUtility.id === "gif-create") {
           return invoke<ToolResult>("create_gif", {
-            request: { paths, frameDelayMs: delay, loopForever: loop, outputLocation },
+            request: { paths, frameDelayMs: delay, loopForever: loop, outputLocation, outputPath },
           });
         }
         if (activeUtility.id === "gif-extract") {
@@ -91,6 +91,7 @@ export const MediaWorkspaceView = ({ utility }: { utility: ToolDefinition }) => 
                 ? tiffInspection.frames.map(({ path, page }) => ({ path, page }))
                 : [],
               outputLocation,
+              outputPath,
             },
           });
         }
@@ -99,7 +100,7 @@ export const MediaWorkspaceView = ({ utility }: { utility: ToolDefinition }) => 
         });
       }}
     >
-      {({ files, outputLocation, run, loading, selectedFileIndex, selectFile, destination }) => (
+      {({ files, outputLocation, run, loading, selectedFileIndex, selectFile, destination, runLabel }) => (
         <Card className="workspace-control-panel py-0">
           <CardContent className="workspace-control-panel-content grid gap-4 p-4">
           <WorkspaceCommandRail
@@ -209,7 +210,7 @@ export const MediaWorkspaceView = ({ utility }: { utility: ToolDefinition }) => 
 
           {destination}
           <Button variant="default" disabled={loading || files.length === 0 || (activeUtility.id === "tiff-pages" && !isCurrentTiffInspection(tiffInspection, files)) || (activeUtility.id === "image-metadata" && metadataMode === "inspect")} onClick={run} className="workspace-primary-action">
-            {activeUtility.id === "image-metadata" ? "Remove metadata" : activeUtility.shortTitle}
+            {runLabel ?? (activeUtility.id === "image-metadata" ? "Remove metadata" : activeUtility.shortTitle)}
           </Button>
           </CardContent>
         </Card>

@@ -6,6 +6,8 @@ export type RowTone = "ok" | "warn" | "skip" | "fail";
 export type RowPointer = { label: string; pointer: OutcomePointer };
 
 export interface RowView {
+    name: string;
+    fullPath: string;
     tone: RowTone;
     stateLabel: string;
     spokenState: string;
@@ -60,17 +62,20 @@ const outputSummary = (paths: string[]) =>
 
 const nonEmpty = (lines: string[]) => lines.filter((line) => line.trim().length > 0);
 
-export const rowView = (outcome: JobOutcome, resultVerb: string): RowView => {
+export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput = false): RowView => {
     const warnings = outcome.warnings.map(warningText);
+    const input = { name: fileName(outcome.inputPath), fullPath: outcome.inputPath };
     switch (outcome.state) {
         case "succeeded": {
             const first = outcome.outputPaths[0] ?? null;
             const warned = warnings.length > 0;
+            const byOutput = namedByOutput && first !== null;
             return {
+                ...(byOutput ? { name: fileName(first), fullPath: first } : input),
                 tone: warned ? "warn" : "ok",
                 stateLabel: resultVerb,
                 spokenState: warned ? `${resultVerb} with ${warnings.length === 1 ? "a warning" : "warnings"}` : resultVerb,
-                detailLines: nonEmpty(warned ? [...warnings, outcome.detail] : [first ? outputSummary(outcome.outputPaths) : "", outcome.detail]),
+                detailLines: nonEmpty(warned ? [...warnings, outcome.detail] : [first && !byOutput ? outputSummary(outcome.outputPaths) : "", outcome.detail]),
                 openOutput: first ? { path: first, label: outcome.outputPaths.length > 1 ? "Open first" : "Open" } : null,
                 revealOutput: first,
                 pointer: null,
@@ -79,6 +84,7 @@ export const rowView = (outcome: JobOutcome, resultVerb: string): RowView => {
         }
         case "skipped":
             return {
+                ...input,
                 tone: "skip",
                 stateLabel: "Skipped",
                 spokenState: "Skipped",
@@ -91,6 +97,7 @@ export const rowView = (outcome: JobOutcome, resultVerb: string): RowView => {
         case "failed": {
             const unavailable = outcome.failure.kind === "unavailable";
             return {
+                ...input,
                 tone: unavailable ? "skip" : "fail",
                 stateLabel: unavailable ? "Unavailable" : "Failed",
                 spokenState: spokenKinds[outcome.failure.kind],

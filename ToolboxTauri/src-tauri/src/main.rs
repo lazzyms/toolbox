@@ -6,7 +6,7 @@ mod kit;
 mod settings;
 
 use crate::file_actions::{open_output_path, reveal_output_path};
-use crate::kit::common::JobOutcome;
+use crate::kit::common::{note_renamed, JobOutcome};
 use crate::kit::images::{ImageProcessor, Options as ImageOptions};
 use crate::kit::images::tools;
 use crate::kit::pdf::{editor, metadata, remaining, scene, PDFProcessor};
@@ -203,9 +203,14 @@ async fn extract_pdf_pages(request: remaining::PageSelectionRequest) -> Vec<JobO
 }
 
 #[tauri::command]
-async fn merge_pdfs(request: remaining::MergePdfRequest) -> Vec<JobOutcome> {
+async fn merge_pdfs(app: tauri::AppHandle, request: remaining::MergePdfRequest) -> Vec<JobOutcome> {
+    let outcomes = run_merge_pdfs(&request).await;
+    settings::remember_chosen_save(&app, request.output_path.as_deref(), outcomes)
+}
+
+async fn run_merge_pdfs(request: &remaining::MergePdfRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_command_inputs("merge_pdfs", &request.paths) { return outcomes; }
-    aggregate_outcomes(&request.paths, || remaining::merge(&request))
+    aggregate_outcomes(&request.paths, || note_renamed(remaining::merge(request), request.output_path.as_deref()))
 }
 
 #[tauri::command]
@@ -236,9 +241,14 @@ async fn extract_pdf_images(request: remaining::PdfToTextRequest) -> Vec<JobOutc
 }
 
 #[tauri::command]
-async fn images_to_pdf(request: remaining::ImagesToPdfRequest) -> Vec<JobOutcome> {
+async fn images_to_pdf(app: tauri::AppHandle, request: remaining::ImagesToPdfRequest) -> Vec<JobOutcome> {
+    let outcomes = run_images_to_pdf(&request).await;
+    settings::remember_chosen_save(&app, request.output_path.as_deref(), outcomes)
+}
+
+async fn run_images_to_pdf(request: &remaining::ImagesToPdfRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_command_inputs("images_to_pdf", &request.paths) { return outcomes; }
-    aggregate_outcomes(&request.paths, || remaining::images_to_pdf(&request))
+    aggregate_outcomes(&request.paths, || note_renamed(remaining::images_to_pdf(request), request.output_path.as_deref()))
 }
 
 #[tauri::command]
@@ -264,16 +274,26 @@ async fn watermark_images(request: tools::WatermarkRequest) -> Vec<JobOutcome> {
 #[tauri::command]
 async fn generate_icon_set(request: tools::IconSetRequest) -> Vec<JobOutcome> { BatchRunner::run("generate_icon_set", request.paths.clone(), &request.output_location, |path| tools::icon_set(&request, path)) }
 #[tauri::command]
-async fn create_gif(request: tools::GifCreateRequest) -> Vec<JobOutcome> {
+async fn create_gif(app: tauri::AppHandle, request: tools::GifCreateRequest) -> Vec<JobOutcome> {
+    let outcomes = run_create_gif(&request).await;
+    settings::remember_chosen_save(&app, request.output_path.as_deref(), outcomes)
+}
+
+async fn run_create_gif(request: &tools::GifCreateRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_command_inputs("create_gif", &request.paths) { return outcomes; }
-    aggregate_outcomes(&request.paths, || tools::gif_create(&request))
+    aggregate_outcomes(&request.paths, || note_renamed(tools::gif_create(request), request.output_path.as_deref()))
 }
 #[tauri::command]
 async fn extract_gif_frames(request: tools::GifExtractRequest) -> Vec<JobOutcome> { BatchRunner::run("extract_gif_frames", request.paths.clone(), &request.output_location, |path| tools::gif_extract(&request, path)) }
 #[tauri::command]
-async fn process_tiff_pages(request: tools::TiffRequest) -> Vec<JobOutcome> {
+async fn process_tiff_pages(app: tauri::AppHandle, request: tools::TiffRequest) -> Vec<JobOutcome> {
+    let outcomes = run_process_tiff_pages(&request).await;
+    settings::remember_chosen_save(&app, request.output_path.as_deref(), outcomes)
+}
+
+async fn run_process_tiff_pages(request: &tools::TiffRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_command_inputs("process_tiff_pages", &request.paths) { return outcomes; }
-    aggregate_outcomes(&request.paths, || tools::tiff(&request))
+    aggregate_outcomes(&request.paths, || note_renamed(tools::tiff(request), request.output_path.as_deref()))
 }
 #[tauri::command]
 async fn image_metadata(request: tools::MetadataRequest) -> Vec<JobOutcome> { BatchRunner::run("image_metadata", request.paths.clone(), &request.output_location, |path| tools::strip_metadata(&request, path)) }
@@ -299,6 +319,7 @@ where
     F: FnOnce() -> JobOutcome,
 {
     let aggregate = operation();
+    if matches!(aggregate.state, OutcomeState::Succeeded { .. }) { return vec![aggregate]; }
     paths.iter().cloned().map(|input_path| {
         let state = match &aggregate.state {
             OutcomeState::Failed { output_paths, error } if input_path != aggregate.input_path => OutcomeState::Failed {
@@ -322,6 +343,7 @@ fn main() {
             intake::inspect_intake_paths,
             settings::get_output_settings,
             settings::set_output_settings,
+            settings::get_last_save_folder,
             check_output_folder,
             remove_password,
             protect_pdf,
@@ -457,16 +479,13 @@ mod command_tests {
     fn assert_aggregate_success<F>(name: &str, paths: &[PathBuf], future: F) -> Vec<PathBuf>
     where F: Future<Output = Vec<JobOutcome>> {
         let outcomes = tauri::async_runtime::block_on(future);
-        assert_eq!(outcomes.len(), paths.len(), "{name} should return one outcome per input");
-        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), paths, "{name} must preserve input order");
-        let shared_outputs = outcomes[0].output_paths().to_vec();
-        assert!(!shared_outputs.is_empty(), "{name} must report an aggregate output");
-        for outcome in &outcomes {
-            assert!(outcome.error().is_none(), "{name} failed for {}: {}", outcome.input_path.display(), outcome.error().cloned().unwrap_or_default());
-            assert_eq!(outcome.output_paths(), shared_outputs, "{name} must report the shared aggregate output for every input");
-            for output in outcome.output_paths() { assert!(output.is_file(), "{name} reported missing output {}", output.display()); }
-        }
-        shared_outputs
+        assert_eq!(outcomes.len(), 1, "{name} makes one file, so it reports one outcome");
+        let outcome = &outcomes[0];
+        assert_eq!(outcome.input_path, paths[0], "{name} reports the combined file against the first input");
+        assert!(outcome.error().is_none(), "{name} failed: {}", outcome.error().cloned().unwrap_or_default());
+        assert!(!outcome.output_paths().is_empty(), "{name} must report an aggregate output");
+        for output in outcome.output_paths() { assert!(output.is_file(), "{name} reported missing output {}", output.display()); }
+        outcome.output_paths().to_vec()
     }
 
     fn assert_aggregate_failure<F>(name: &str, paths: &[PathBuf], failed_path: &PathBuf, future: F)
@@ -480,7 +499,60 @@ mod command_tests {
     }
 
     #[test]
-    fn aggregate_commands_report_ordered_successes_and_missing_inputs() {
+    fn many_to_one_commands_never_replace_an_explicitly_chosen_existing_path() {
+        use crate::kit::contracts::WarningKind;
+        let root = sandbox("chosen-path");
+        let image = root.join("first.png"); write_png(&image, 32, 44);
+        let image_two = root.join("second.png"); write_png(&image_two, 32, 88);
+        let pdf = root.join("first.pdf"); make_pdf(&pdf, 1);
+        let pdf_two = root.join("second.pdf"); make_pdf(&pdf_two, 2);
+        let tiff = root.join("first.tiff"); image::open(&image).unwrap().save(&tiff).unwrap();
+        let tiff_two = root.join("second.tiff"); image::open(&image_two).unwrap().save(&tiff_two).unwrap();
+        let chosen_folder = root.join("chosen");
+        std::fs::create_dir_all(&chosen_folder).unwrap();
+        let inputs = [&image, &image_two, &pdf, &pdf_two, &tiff, &tiff_two].map(|path| (path.clone(), std::fs::read(path).unwrap()));
+
+        let chosen = |name: &str| {
+            let path = chosen_folder.join(name);
+            std::fs::write(&path, format!("existing {name}")).unwrap();
+            path
+        };
+        let merge = chosen("statement.pdf");
+        let combined = chosen("scans.pdf");
+        let gif = chosen("loop.gif");
+        let tiff_out = chosen("pages.tiff");
+        let runs = [
+            (merge.clone(), "statement-1.pdf", tauri::async_runtime::block_on(run_merge_pdfs(&MergePdfRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: OutputLocation::AlongsideInput, output_path: Some(merge.clone()) }))),
+            (combined.clone(), "scans-1.pdf", tauri::async_runtime::block_on(run_images_to_pdf(&ImagesToPdfRequest { paths: vec![image.clone(), image_two.clone()], output_location: OutputLocation::AlongsideInput, output_path: Some(combined.clone()) }))),
+            (gif.clone(), "loop-1.gif", tauri::async_runtime::block_on(run_create_gif(&GifCreateRequest { paths: vec![image.clone(), image_two.clone()], frame_delay_ms: 100, loop_forever: true, output_location: OutputLocation::AlongsideInput, output_path: Some(gif.clone()) }))),
+            (tiff_out.clone(), "pages-1.tiff", tauri::async_runtime::block_on(run_process_tiff_pages(&TiffRequest { paths: vec![tiff.clone(), tiff_two.clone()], pages: None, output_location: OutputLocation::AlongsideInput, output_path: Some(tiff_out.clone()) }))),
+        ];
+        for (existing, expected_name, outcomes) in runs {
+            let chosen_name = existing.file_name().unwrap().to_string_lossy().into_owned();
+            assert_eq!(outcomes.len(), 1, "{chosen_name} makes one file, so it reports one outcome");
+            let outcome = &outcomes[0];
+            assert!(outcome.error().is_none(), "{chosen_name} failed: {:?}", outcome.error());
+            assert_eq!(outcome.output_paths(), [chosen_folder.join(expected_name)]);
+            assert_eq!(outcome.warnings.iter().map(|warning| warning.kind.clone()).collect::<Vec<_>>(), [WarningKind::RenamedToAvoidReplacing { chosen_name: chosen_name.clone(), final_name: expected_name.into() }]);
+            assert_eq!(std::fs::read(&existing).unwrap(), format!("existing {chosen_name}").into_bytes(), "{chosen_name} must stay byte-identical");
+            assert!(chosen_folder.join(expected_name).metadata().unwrap().len() > 0);
+        }
+        for (path, bytes) in inputs { assert_eq!(std::fs::read(&path).unwrap(), bytes, "{} must not change", path.display()); }
+
+        let fresh = chosen_folder.join("fresh.pdf");
+        let outcomes = tauri::async_runtime::block_on(run_merge_pdfs(&MergePdfRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: OutputLocation::AlongsideInput, output_path: Some(fresh.clone()) }));
+        assert_eq!(outcomes[0].output_paths(), [fresh]);
+        assert!(outcomes[0].warnings.is_empty());
+
+        let missing_folder = root.join("gone/out.pdf");
+        let outcomes = tauri::async_runtime::block_on(run_merge_pdfs(&MergePdfRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: OutputLocation::AlongsideInput, output_path: Some(missing_folder.clone()) }));
+        assert!(outcomes.iter().all(|outcome| outcome.error().is_some() && outcome.output_paths().is_empty()));
+        assert!(!missing_folder.exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn aggregate_commands_report_one_combined_success_and_each_missing_input() {
         let root = sandbox("aggregate-outcomes");
         let image = root.join("first.png"); write_png(&image, 32, 44);
         let image_two = root.join("second.png"); write_png(&image_two, 32, 88);
@@ -493,29 +565,29 @@ mod command_tests {
         let missing_gif_frame = root.join("missing.gif.png");
         let missing_tiff = root.join("missing.tiff");
 
-        assert_aggregate_success("merge valid inputs", &[pdf.clone(), pdf_two.clone()], merge_pdfs(MergePdfRequest {
-            paths: vec![pdf.clone(), pdf_two.clone()], output_location: location(&root, "merge-valid"),
+        assert_aggregate_success("merge valid inputs", &[pdf.clone(), pdf_two.clone()], run_merge_pdfs(&MergePdfRequest {
+            paths: vec![pdf.clone(), pdf_two.clone()], output_location: location(&root, "merge-valid"), output_path: None,
         }));
-        assert_aggregate_failure("merge missing later input", &[pdf.clone(), missing_pdf.clone()], &missing_pdf, merge_pdfs(MergePdfRequest {
-            paths: vec![pdf.clone(), missing_pdf.clone()], output_location: location(&root, "merge-missing"),
+        assert_aggregate_failure("merge missing later input", &[pdf.clone(), missing_pdf.clone()], &missing_pdf, run_merge_pdfs(&MergePdfRequest {
+            paths: vec![pdf.clone(), missing_pdf.clone()], output_location: location(&root, "merge-missing"), output_path: None,
         }));
-        assert_aggregate_success("images-to-pdf valid inputs", &[image.clone(), image_two.clone()], images_to_pdf(ImagesToPdfRequest {
-            paths: vec![image.clone(), image_two.clone()], output_location: location(&root, "images-valid"),
+        assert_aggregate_success("images-to-pdf valid inputs", &[image.clone(), image_two.clone()], run_images_to_pdf(&ImagesToPdfRequest {
+            paths: vec![image.clone(), image_two.clone()], output_location: location(&root, "images-valid"), output_path: None,
         }));
-        assert_aggregate_failure("images-to-pdf missing later input", &[image.clone(), missing_image.clone()], &missing_image, images_to_pdf(ImagesToPdfRequest {
-            paths: vec![image.clone(), missing_image.clone()], output_location: location(&root, "images-missing"),
+        assert_aggregate_failure("images-to-pdf missing later input", &[image.clone(), missing_image.clone()], &missing_image, run_images_to_pdf(&ImagesToPdfRequest {
+            paths: vec![image.clone(), missing_image.clone()], output_location: location(&root, "images-missing"), output_path: None,
         }));
-        assert_aggregate_success("GIF valid inputs", &[image.clone(), image_two.clone()], create_gif(GifCreateRequest {
-            paths: vec![image.clone(), image_two.clone()], frame_delay_ms: 100, loop_forever: true, output_location: location(&root, "gif-valid"),
+        assert_aggregate_success("GIF valid inputs", &[image.clone(), image_two.clone()], run_create_gif(&GifCreateRequest {
+            paths: vec![image.clone(), image_two.clone()], frame_delay_ms: 100, loop_forever: true, output_location: location(&root, "gif-valid"), output_path: None,
         }));
-        assert_aggregate_failure("GIF missing later input", &[image.clone(), missing_gif_frame.clone()], &missing_gif_frame, create_gif(GifCreateRequest {
-            paths: vec![image.clone(), missing_gif_frame.clone()], frame_delay_ms: 100, loop_forever: true, output_location: location(&root, "gif-missing"),
+        assert_aggregate_failure("GIF missing later input", &[image.clone(), missing_gif_frame.clone()], &missing_gif_frame, run_create_gif(&GifCreateRequest {
+            paths: vec![image.clone(), missing_gif_frame.clone()], frame_delay_ms: 100, loop_forever: true, output_location: location(&root, "gif-missing"), output_path: None,
         }));
-        assert_aggregate_success("TIFF valid inputs", &[tiff.clone(), tiff_two.clone()], process_tiff_pages(TiffRequest {
-            paths: vec![tiff.clone(), tiff_two.clone()], pages: None, output_location: location(&root, "tiff-valid"),
+        assert_aggregate_success("TIFF valid inputs", &[tiff.clone(), tiff_two.clone()], run_process_tiff_pages(&TiffRequest {
+            paths: vec![tiff.clone(), tiff_two.clone()], pages: None, output_location: location(&root, "tiff-valid"), output_path: None,
         }));
-        assert_aggregate_failure("TIFF missing later input", &[tiff.clone(), missing_tiff.clone()], &missing_tiff, process_tiff_pages(TiffRequest {
-            paths: vec![tiff.clone(), missing_tiff.clone()], pages: None, output_location: location(&root, "tiff-missing"),
+        assert_aggregate_failure("TIFF missing later input", &[tiff.clone(), missing_tiff.clone()], &missing_tiff, run_process_tiff_pages(&TiffRequest {
+            paths: vec![tiff.clone(), missing_tiff.clone()], pages: None, output_location: location(&root, "tiff-missing"), output_path: None,
         }));
 
         let _ = std::fs::remove_dir_all(root);
@@ -698,7 +770,8 @@ mod command_tests {
         std::fs::rename(protected_output, &protected).unwrap();
 
         let image_pdf = root.join("image-pdf.pdf");
-        let image_pdf_result = images_to_pdf(ImagesToPdfRequest { paths: vec![image.clone()], output_location: OutputLocation::AlongsideInput });
+        let image_pdf_request = ImagesToPdfRequest { paths: vec![image.clone()], output_location: OutputLocation::AlongsideInput, output_path: None };
+        let image_pdf_result = run_images_to_pdf(&image_pdf_request);
         let image_pdf_output = assert_success("images-to-pdf fixture", image_pdf_result)[0].clone();
         std::fs::rename(image_pdf_output, &image_pdf).unwrap();
 
@@ -734,7 +807,7 @@ mod command_tests {
         outputs.extend(named(&mut naming, "export_pdf_scene", pdf.clone(), assert_success("PDF scene", export_pdf_scene(scene::ExportRequest { paths: vec![pdf.clone()], scene: visual_scene, output_location: OutputLocation::AlongsideInput }))));
         outputs.extend(named(&mut naming, "remove_password", protected.clone(), assert_success("unlock", remove_password(PasswordRequest { paths: vec![protected], password: "test-password".into(), output_location: location(&root, "unlock") }))));
         outputs.extend(named(&mut naming, "add_page_numbers", pdf.clone(), assert_success("page numbers", add_page_numbers(PageOverlayRequest { paths: vec![pdf.clone()], text: "1".into(), opacity: 100, position: Some("bottom-right".into()), logo_path: None, pages: None, start_number: Some(1), font_size: Some(12), output_location: location(&root, "page numbers") }))));
-        outputs.extend(named(&mut naming, "merge_pdfs", pdf.clone(), assert_aggregate_success("merge", &[pdf.clone(), pdf_two.clone()], merge_pdfs(MergePdfRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: location(&root, "merge") }))));
+        outputs.extend(named(&mut naming, "merge_pdfs", pdf.clone(), assert_aggregate_success("merge", &[pdf.clone(), pdf_two.clone()], run_merge_pdfs(&MergePdfRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: location(&root, "merge"), output_path: None }))));
         outputs.extend(named(&mut naming, "watermark_pdf", pdf.clone(), assert_success("watermark pdf", watermark_pdf(PageOverlayRequest { paths: vec![pdf.clone()], text: "TEST".into(), opacity: 70, position: Some("center".into()), logo_path: None, pages: None, start_number: None, font_size: None, output_location: location(&root, "watermark pdf") }))));
         outputs.extend(named(&mut naming, "crop_pdf", pdf.clone(), assert_success("crop pdf", crop_pdf(CropPdfRequest { paths: vec![pdf.clone()], rectangle: PdfRect { x: 0.5, y: 0.5, width: 500.0, height: 700.0 }, scope: PageScope::All, output_location: location(&root, "crop pdf") }))));
         outputs.extend(named(&mut naming, "edit_pdf", pdf.clone(), assert_success("edit pdf", edit_pdf(EditPdfRequest { paths: vec![pdf.clone()], mode: "highlight".into(), text: "TEST NOTE".into(), pages: None, rectangle: PdfRect { x: 40.0, y: 650.0, width: 220.0, height: 60.0 }, output_location: location(&root, "edit pdf") }))));
@@ -752,7 +825,7 @@ mod command_tests {
             output_location: location(&root, "composed pdf editor"),
         }))));
         outputs.extend(named(&mut naming, "protect_pdf", pdf_two.clone(), assert_success("protect", protect_pdf(PdfRequest { paths: vec![pdf_two.clone()], password: "another-password".into(), output_location: location(&root, "protect") }))));
-        outputs.extend(named(&mut naming, "images_to_pdf", image.clone(), assert_aggregate_success("images to pdf", &[image.clone(), image_two.clone()], images_to_pdf(ImagesToPdfRequest { paths: vec![image.clone(), image_two.clone()], output_location: location(&root, "images to pdf") }))));
+        outputs.extend(named(&mut naming, "images_to_pdf", image.clone(), assert_aggregate_success("images to pdf", &[image.clone(), image_two.clone()], run_images_to_pdf(&ImagesToPdfRequest { paths: vec![image.clone(), image_two.clone()], output_location: location(&root, "images to pdf"), output_path: None }))));
         outputs.extend(named(&mut naming, "pdf_to_images", pdf.clone(), assert_success("pdf to images", pdf_to_images(PdfToImagesRequest { paths: vec![pdf.clone()], dpi: 72, format: "png".into(), page_range: None, pages: None, output_location: location(&root, "pdf to images") }))));
         let selected_image_outputs = assert_success("pdf selected pages to images", pdf_to_images(PdfToImagesRequest { paths: vec![pdf.clone()], dpi: 72, format: "png".into(), page_range: None, pages: Some(vec![1]), output_location: location(&root, "pdf selected pages to images") }));
         assert_eq!(selected_image_outputs.len(), 1, "selected PDF page rendering must produce only the selected page");
@@ -785,7 +858,7 @@ mod command_tests {
         outputs.extend(named(&mut naming, "rotate_images", image.clone(), assert_success("rotate", rotate_images(RotateRequest { paths: vec![image.clone()], degrees: 90, flip: "none".into(), output_location: location(&root, "rotate") }))));
         outputs.extend(named(&mut naming, "crop_images", image.clone(), assert_success("crop image", crop_images(CropRequest { paths: vec![image.clone()], x: 0, y: 0, width: 128, height: 128, mode: "rectangle".into(), aspect_width: 128, aspect_height: 128, anchor: "center".into(), output_location: location(&root, "crop image") }))));
         outputs.extend(named(&mut naming, "generate_icon_set", image.clone(), assert_success("icons", generate_icon_set(IconSetRequest { paths: vec![image.clone()], preset: "favicon".into(), sizes: vec![], output_location: location(&root, "icons") }))));
-        outputs.extend(named(&mut naming, "create_gif", image.clone(), assert_aggregate_success("create gif", &[image.clone(), image_two.clone()], create_gif(GifCreateRequest { paths: vec![image.clone(), image_two.clone()], frame_delay_ms: 100, loop_forever: true, output_location: location(&root, "create gif") }))));
+        outputs.extend(named(&mut naming, "create_gif", image.clone(), assert_aggregate_success("create gif", &[image.clone(), image_two.clone()], run_create_gif(&GifCreateRequest { paths: vec![image.clone(), image_two.clone()], frame_delay_ms: 100, loop_forever: true, output_location: location(&root, "create gif"), output_path: None }))));
         outputs.extend(named(&mut naming, "extract_gif_frames", animated.clone(), assert_success("extract gif", extract_gif_frames(GifExtractRequest { paths: vec![animated.clone()], output_location: location(&root, "extract gif") }))));
         outputs.extend(named(&mut naming, "watermark_images", image.clone(), assert_success("watermark image", watermark_images(WatermarkRequest { paths: vec![image.clone()], opacity: 70, text: Some("TEST".into()), logo_path: None, x: 16, y: 16, output_location: location(&root, "watermark image") }))));
         let image_plan = ImageEditPlan {
@@ -800,7 +873,7 @@ mod command_tests {
         outputs.extend(named(&mut naming, "export_image_edit_plan", image.clone(), assert_success("composed image editor", export_image_edit_plan(ImageEditExportRequest { paths: vec![image.clone()], plan: image_plan }))));
         outputs.extend(named(&mut naming, "image_metadata", image.clone(), assert_success("metadata", image_metadata(MetadataRequest { paths: vec![image.clone()], output_location: location(&root, "metadata") }))));
         outputs.extend(named(&mut naming, "adjust_image_tone", image.clone(), assert_success("tone", adjust_image_tone(ToneRequest { paths: vec![image.clone()], brightness: 20, contrast: 0.0, saturation: 0.0, exposure: 0.0, output_location: location(&root, "tone") }))));
-        outputs.extend(named(&mut naming, "process_tiff_pages", tiff.clone(), assert_aggregate_success("tiff", &[tiff.clone()], process_tiff_pages(TiffRequest { paths: vec![tiff.clone()], pages: None, output_location: location(&root, "tiff") }))));
+        outputs.extend(named(&mut naming, "process_tiff_pages", tiff.clone(), assert_aggregate_success("tiff", &[tiff.clone()], run_process_tiff_pages(&TiffRequest { paths: vec![tiff.clone()], pages: None, output_location: location(&root, "tiff"), output_path: None }))));
         outputs.extend(named(&mut naming, "blur_faces", image.clone(), assert_vision_adapter("face blur", blur_faces(VisionRequest { paths: vec![image.clone()], pages: None, output_location: location(&root, "face blur") }))));
         outputs.extend(named(&mut naming, "remove_image_background", image.clone(), assert_vision_adapter("background removal", remove_image_background(VisionRequest { paths: vec![image.clone()], pages: None, output_location: location(&root, "background removal") }))));
         let docx = root.join("document.docx");

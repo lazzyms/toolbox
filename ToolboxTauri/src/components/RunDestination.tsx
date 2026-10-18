@@ -31,11 +31,12 @@ interface RunDestinationProps {
     overridden: boolean;
     toolTitle: string;
     exampleName: string | null;
+    savesOneFile?: boolean;
     onChange: () => void;
     onReset: () => void;
 }
 
-export const RunDestination = ({ location, defaultLocation, overridden, toolTitle, exampleName, onChange, onReset }: RunDestinationProps) => {
+export const RunDestination = ({ location, defaultLocation, overridden, toolTitle, exampleName, savesOneFile = false, onChange, onReset }: RunDestinationProps) => {
     const home = useHomeDir();
     return (
     <section aria-label="Destination" className="run-destination">
@@ -43,6 +44,7 @@ export const RunDestination = ({ location, defaultLocation, overridden, toolTitl
             <span className="run-destination-label">Save to</span>
             {overridden && <Badge variant="outline">This run only</Badge>}
         </div>
+        {!savesOneFile && <>
         <div className="run-destination-path">
             <FolderIcon aria-hidden="true" />
             <span data-testid="run-destination-path">{describe(location, home)}</span>
@@ -57,6 +59,10 @@ export const RunDestination = ({ location, defaultLocation, overridden, toolTitl
             <p className="run-destination-hint">
                 Your default is {defaultLocation === 'alongsideInput' ? 'next to each original' : shortenHomePath(defaultLocation.customFolder, home)}. This change ends when you leave {toolTitle}.
             </p>
+        )}
+        </>}
+        {savesOneFile && (
+            <p className="run-destination-hint">You choose a name and folder when you start, because this makes one file.</p>
         )}
         {exampleName && (
             <div className="run-destination-example">
