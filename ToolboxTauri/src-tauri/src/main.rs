@@ -1466,6 +1466,35 @@ mod command_tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn locking_a_mixed_batch_into_a_per_run_folder_numbers_collisions_and_leaves_nothing_beside_the_inputs() {
+        let root = sandbox("protect-files-per-run-folder");
+        let inputs_dir = root.join("inputs");
+        std::fs::create_dir_all(&inputs_dir).unwrap();
+        let inputs = mixed_lock_batch(&inputs_dir);
+        let originals = inputs.iter().map(|input| std::fs::read(input).unwrap()).collect::<Vec<_>>();
+        let beside_inputs = file_names(&inputs_dir);
+        let output = location(&root, "this-run");
+        let OutputLocation::CustomFolder(folder) = &output else { unreachable!() };
+        std::fs::write(folder.join("report-protected.pdf"), b"an earlier copy").unwrap();
+
+        let outputs = |outcomes: Vec<JobOutcome>| outcomes.iter().map(|outcome| {
+            assert!(outcome.error().is_none(), "{}", outcome.error().cloned().unwrap_or_default());
+            outcome.output_paths()[0].clone()
+        }).collect::<Vec<_>>();
+        let first = outputs(lock(&inputs, output.clone()));
+        let second = outputs(lock(&inputs, output.clone()));
+
+        assert_eq!(first, ["report-protected-1.pdf", "lease-protected.docx", "budget-protected.xlsx", "deck-protected.pptx"].map(|name| folder.join(name)));
+        assert_eq!(second, ["report-protected-2.pdf", "lease-protected-1.docx", "budget-protected-1.xlsx", "deck-protected-1.pptx"].map(|name| folder.join(name)));
+        assert_eq!(std::fs::read(folder.join("report-protected.pdf")).unwrap(), b"an earlier copy");
+        assert_eq!(file_names(&inputs_dir), beside_inputs, "nothing is written beside the inputs");
+        for (input, original) in inputs.iter().zip(&originals) {
+            assert_eq!(&std::fs::read(input).unwrap(), original, "original was modified: {}", input.display());
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     fn locked_docx(root: &PathBuf, name: &str, password: &str) -> PathBuf {
         locked_office(root, name, "docx", password)
     }

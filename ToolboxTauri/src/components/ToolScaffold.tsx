@@ -32,6 +32,7 @@ import {
     parseInspection,
     rangeKeys,
     type InspectedPath,
+    type IntakeCopy,
     type IntakeEntry,
     type NotAdded,
 } from './intake';
@@ -60,6 +61,7 @@ interface ToolScaffoldProps {
     showFileOrdering?: boolean;
     renderFileExtra?: (path: string, selected: boolean, locked: boolean) => React.ReactNode;
     retryWithPassword?: (inputPath: string, password: string) => RunHandler;
+    intakeCopy?: IntakeCopy;
     children: (props: {
         files: string[];
         outputLocation: OutputLocation;
@@ -77,7 +79,7 @@ interface ToolScaffoldProps {
     }) => React.ReactNode;
 }
 
-export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, retryWithPassword, children }: ToolScaffoldProps) => {
+export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, retryWithPassword, intakeCopy, children }: ToolScaffoldProps) => {
     const [entries, setEntries] = useState<IntakeEntry[]>([]);
     const [selection, setSelection] = useState<ReadonlySet<string>>(() => new Set());
     const [anchor, setAnchor] = useState<string | null>(null);
@@ -104,7 +106,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
     const workspace = variant === 'workspace' ? workspaceForTool(utility.id) : undefined;
     const intakeTools = useMemo(() => workspace ? toolsForWorkspace(workspace) : [utility], [workspace, utility]);
     const ordered = inputPolicy.inputCardinality === 'ordered' && showFileOrdering;
-    const statuses = useMemo(() => entryStatuses(entries, utility), [entries, utility]);
+    const statuses = useMemo(() => entryStatuses(entries, utility, intakeCopy?.unsupported), [entries, utility, intakeCopy]);
     const runnable = useMemo(() => statuses.filter((status) => status.wontRun === null), [statuses]);
     const files = useMemo(() => runnable.map((status) => status.entry.path), [runnable]);
     const flagged = statuses.filter((status) => status.wontRun !== null);
@@ -315,7 +317,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
             selectOnly(entry.key);
             return;
         }
-        const policy = intakePolicyFor(workspace?.title ?? utility.title, intakeTools, utility);
+        const policy = { ...intakePolicyFor(workspace?.title ?? utility.title, intakeTools, utility), notAcceptedMessage: intakeCopy?.notAccepted };
         const classified = classifyIntake(entries.map((entry) => entry.path), incoming, policy);
         setNotAdded(classified.notAdded);
         if (classified.added.length) setEntries((current) => [...current, ...newEntries(classified.added)]);
@@ -470,11 +472,16 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         ? `Files run top to bottom. Drag a row, or select it and press ${modifier}+Up or ${modifier}+Down.`
         : `Shift-click or ${isWindows() ? 'Ctrl-click' : '⌘-click'} to select. Delete removes files from the list, not from disk.`;
 
+    const selectionNote = [
+        selection.size > 0 ? `${selection.size} selected` : null,
+        intakeCopy?.countHint(flagged.length, entries.length) ?? null,
+    ].filter(Boolean).join('. ');
+
     const fileSelection = (
         <div className="file-selection" data-locked={loading ? 'true' : undefined}>
             <div className="file-selection-header">
                 <span className="file-selection-count">{entries.length} {entries.length === 1 ? 'file' : 'files'}</span>
-                {selection.size > 0 && <span className="file-selection-selected">{selection.size} selected</span>}
+                {selectionNote && <span className="file-selection-selected">{selectionNote}</span>}
                 <span className="file-selection-actions">
                     <Button variant="outline" size="sm" disabled={loading || selection.size === 0} onClick={() => removeEntries(selection)}>
                         Remove from list
@@ -488,7 +495,9 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
             {flagged.length > 0 && (
                 <div className="file-selection-flagged">
                     <p className="workspace-note">
-                        {flagged.length} {flagged.length === 1 ? "file won't" : "files won't"} run with {utility.title}. {flagged.length === 1 ? 'It stays' : 'They stay'} in the list for other actions.
+                        {intakeCopy
+                            ? intakeCopy.flaggedNotice(flagged.length)
+                            : `${flagged.length} ${flagged.length === 1 ? "file won't" : "files won't"} run with ${utility.title}. ${flagged.length === 1 ? 'It stays' : 'They stay'} in the list for other actions.`}
                     </p>
                     <Button variant="outline" size="sm" disabled={loading} onClick={() => removeEntries(new Set(flagged.map((status) => status.entry.key)))}>
                         Remove {flagged.length} flagged {flagged.length === 1 ? 'file' : 'files'}
