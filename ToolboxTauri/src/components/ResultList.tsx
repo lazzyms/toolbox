@@ -57,13 +57,14 @@ interface ResultListProps {
     loading: boolean;
     resultVerb: string;
     runningVerb: string;
+    runningDetail?: string;
     live: LiveRun | null;
     namedByOutput?: boolean;
     onRetry?: (inputPath: string) => Promise<void>;
     onRetryWithPassword?: (inputPath: string, password: string) => Promise<void>;
 }
 
-export const ResultList = ({ results, progress, loading, resultVerb, runningVerb, live, namedByOutput = false, onRetry, onRetryWithPassword }: ResultListProps) => {
+export const ResultList = ({ results, progress, loading, resultVerb, runningVerb, runningDetail, live, namedByOutput = false, onRetry, onRetryWithPassword }: ResultListProps) => {
     const [actionStates, setActionStates] = useState<Record<number, RowActionState>>({});
     const [passwordRow, setPasswordRow] = useState<number | null>(null);
     const resultSetGeneration = useRef(0);
@@ -214,6 +215,7 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
                                         <span className="result-row-icon" aria-hidden="true"><Icon /></span>
                                         <span className="result-row-text">
                                             <span className="result-row-name" title={file.inputPath}>{fileName(file.inputPath)}</span>
+                                            {running && runningDetail && <span className="result-row-detail">{runningDetail}</span>}
                                         </span>
                                         <span className="result-row-state">{label}</span>
                                         <span className="result-row-actions" />

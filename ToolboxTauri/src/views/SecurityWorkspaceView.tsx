@@ -99,7 +99,7 @@ export const SecurityWorkspaceView = ({ utility: activeUtility }: { utility: Too
               type="single"
               variant="outline"
               size="sm"
-              aria-label="Lock or unlock"
+              aria-label="Mode"
               value={mode}
               onValueChange={(value) => {
                 if (value) setMode(value as PasswordMode);
@@ -120,6 +120,7 @@ export const SecurityWorkspaceView = ({ utility: activeUtility }: { utility: Too
           <BatchPasswordFields mode={mode} passwords={passwords} files={files} />
           {destination}
           <p className="workspace-note">An existing name gets -1, -2 and so on. Nothing is replaced.</p>
+          <p className="workspace-note">Runs on this device with no network. Passwords are never saved and are cleared when you switch mode or leave.</p>
           {files.length > 0 && readiness.reason && <p className="workspace-note" data-testid="password-readiness">{readiness.reason}</p>}
           {!readiness.reason && failingHint && <p className="workspace-note" data-testid="failing-files">{failingHint}</p>}
           <Button

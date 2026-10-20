@@ -764,7 +764,7 @@ for (const { tool, file, command, ready } of runShortcutCases) {
 test("shortcuts stay out of text fields and composition, and Run still fires from a field", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Open Lock & Unlock", exact: true }).click();
-    await page.getByRole("radiogroup", { name: "Lock or unlock" }).getByRole("radio", { name: "Lock", exact: true }).click();
+    await page.getByRole("radiogroup", { name: "Mode" }).getByRole("radio", { name: "Lock", exact: true }).click();
     await chooseFixture(page, pdfFixturePath);
     await fillPasswords(page, "test-password");
     const field = page.locator('.workspace-control-panel input[type="password"]').first();
@@ -1228,7 +1228,7 @@ test("media and security workspaces expose ordered inputs and format boundaries"
     await page.getByRole("button", { name: "← All tools" }).click();
     await page.getByRole("button", { name: "Open Lock & Unlock" }).click();
     await expect(page.getByText("Accepts .pdf, .doc, .docx, .xls, .xlsx, .ppt, .pptx", { exact: true })).toBeVisible();
-    await page.getByRole("radiogroup", { name: "Lock or unlock" }).getByRole("radio", { name: "Lock", exact: true }).click();
+    await page.getByRole("radiogroup", { name: "Mode" }).getByRole("radio", { name: "Lock", exact: true }).click();
     await expect(page.getByText("Accepts .pdf, .doc, .docx, .xls, .xlsx, .ppt, .pptx", { exact: true })).toBeVisible();
 });
 
@@ -1402,7 +1402,7 @@ test("Lock & Unlock locks DOCX and XLSX files in Lock mode now that Protect Offi
     await page.goto("/");
     await expect(page.getByRole("button", { name: "Open Protect Office Files" })).toHaveCount(0);
     await page.getByRole("button", { name: "Open Lock & Unlock" }).click();
-    await page.getByRole("radiogroup", { name: "Lock or unlock" }).getByRole("radio", { name: "Lock", exact: true }).click();
+    await page.getByRole("radiogroup", { name: "Mode" }).getByRole("radio", { name: "Lock", exact: true }).click();
     await expect(page.getByText("Accepts .pdf, .doc, .docx, .xls, .xlsx, .ppt, .pptx", { exact: true })).toBeVisible();
     await chooseFixture(page, "/local/document.docx");
     await fillPasswords(page, "test-password");
@@ -2157,7 +2157,7 @@ test.describe("per-run destination", () => {
         await page.addInitScript(() => { (window as TestWindow).__toolboxFolderChecks = { "/gone/Protected": "missing" }; });
         await page.goto("/");
         await page.getByRole("button", { name: "Open Lock & Unlock" }).click();
-        await page.getByRole("radiogroup", { name: "Lock or unlock" }).getByRole("radio", { name: "Lock", exact: true }).click();
+        await page.getByRole("radiogroup", { name: "Mode" }).getByRole("radio", { name: "Lock", exact: true }).click();
         await chooseFixture(page, pdfFixturePath);
         await expect(page.getByRole("region", { name: "Destination" }).getByTestId("run-destination-example")).toHaveText("document-protected.pdf");
         await fillPasswords(page, "test-password");

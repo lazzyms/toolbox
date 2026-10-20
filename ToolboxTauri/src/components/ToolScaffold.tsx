@@ -700,7 +700,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
             })}
             </fieldset>
 
-            {loading && live && !inputPolicy.manyToOne && <CancelRun key={live.runId} run={live} />}
+            {loading && live && !inputPolicy.manyToOne && <CancelRun key={live.runId} run={live} lockedNote={utility.lockedNote} />}
 
             <ResultList
                 results={results}
@@ -708,6 +708,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 loading={loading}
                 resultVerb={utility.resultVerb}
                 runningVerb={utility.runningVerb}
+                runningDetail={utility.runningDetail}
                 live={live}
                 namedByOutput={resultsNamedByOutput}
                 onRetry={perFileRun ? (inputPath) => rerun([inputPath]) : undefined}

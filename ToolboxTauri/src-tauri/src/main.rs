@@ -1208,33 +1208,100 @@ mod command_tests {
         let inputs = vec![first.clone(), broken.clone(), office.clone(), last.clone()];
         let originals = inputs.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
 
-        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let sink = seen.clone();
-        let outcomes = tauri::async_runtime::block_on(protect_files(RunEvents::new(move |event| sink.lock().unwrap().push(event)), PasswordRequest {
+        let (outcomes, events) = recorded(|events| protect_files(events, PasswordRequest {
             paths: inputs.clone(),
             password: "secret".into(),
             password_overrides: Default::default(),
             output_location: location(&root, "protected"),
         }));
-        let events = seen.lock().unwrap().clone();
 
         assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), inputs);
         assert!(outcomes[0].error().is_none() && outcomes[3].error().is_none());
         assert!(outcomes[1].error().is_some());
         assert!(outcomes[2].error().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput)));
-        assert_eq!(events.len(), inputs.len() * 2);
-        for index in 0..inputs.len() {
-            let started = events.iter().position(|event| *event == FileEvent::Started { index }).expect("every file starts once");
+        assert_every_file_streams(&events, &outcomes);
+        for (path, original) in inputs.iter().zip(originals) { assert_eq!(std::fs::read(path).unwrap(), original); }
+        assert_eq!(std::fs::read_dir(root.join("protected")).unwrap().count(), 2);
+    }
+
+    // Runs a command with a sink that records every per-file event it emits.
+    fn recorded<F>(command: impl FnOnce(RunEvents) -> F) -> (Vec<JobOutcome>, Vec<FileEvent>)
+    where F: Future<Output = Vec<JobOutcome>> {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = seen.clone();
+        let outcomes = tauri::async_runtime::block_on(command(RunEvents::new(move |event| sink.lock().unwrap().push(event))));
+        let events = seen.lock().unwrap().clone();
+        (outcomes, events)
+    }
+
+    // Each file starts once, then finishes once with the same outcome the ordered response returns.
+    fn assert_every_file_streams(events: &[FileEvent], outcomes: &[JobOutcome]) {
+        assert_eq!(events.len(), outcomes.len() * 2, "two events per file and nothing else");
+        for index in 0..outcomes.len() {
+            let started = events.iter().filter(|event| **event == FileEvent::Started { index }).count();
+            assert_eq!(started, 1, "file {index} starts exactly once");
+            let started_at = events.iter().position(|event| *event == FileEvent::Started { index }).unwrap();
             let finished = events.iter().enumerate().filter_map(|(position, event)| match event {
                 FileEvent::Finished { index: finished, outcome } if *finished == index => Some((position, outcome)),
                 _ => None,
             }).collect::<Vec<_>>();
             assert_eq!(finished.len(), 1, "file {index} finishes exactly once");
-            assert!(started < finished[0].0, "file {index} starts before it finishes");
-            assert_eq!(finished[0].1, &outcomes[index], "the streamed outcome is the final outcome");
+            assert!(started_at < finished[0].0, "file {index} starts before it finishes");
+            assert_eq!(finished[0].1, &outcomes[index], "the streamed outcome for file {index} is the final outcome");
         }
-        for (path, original) in inputs.iter().zip(originals) { assert_eq!(std::fs::read(path).unwrap(), original); }
-        assert_eq!(std::fs::read_dir(root.join("protected")).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn lock_and_unlock_stream_a_progress_event_for_every_file_in_a_mixed_batch() {
+        use crate::kit::{TEST_OVERRIDE_PASSWORD, TEST_PASSWORD};
+        let root = sandbox("lock-unlock-events");
+        let mut lock_inputs = mixed_lock_batch(&root);
+        let broken = root.join("broken.pdf");
+        let legacy = root.join("minutes.doc");
+        std::fs::write(&broken, b"not a pdf").unwrap();
+        std::fs::write(&legacy, b"legacy word file").unwrap();
+        lock_inputs.extend([broken.clone(), legacy.clone()]);
+        let lock_originals = lock_inputs.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+
+        let (locked, lock_events) = recorded(|events| protect_files(events, PasswordRequest {
+            paths: lock_inputs.clone(),
+            password: TEST_PASSWORD.into(),
+            password_overrides: Default::default(),
+            output_location: location(&root, "protected"),
+        }));
+
+        assert_eq!(locked.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), lock_inputs);
+        assert_every_file_streams(&lock_events, &locked);
+        for outcome in &locked[..4] { assert!(outcome.error().is_none(), "{}", outcome.error().cloned().unwrap_or_default()); }
+        assert!(locked[4].error().is_some() && locked[5].error().is_some(), "the broken and legacy files fail on their own");
+        for (path, original) in lock_inputs.iter().zip(&lock_originals) { assert_eq!(&std::fs::read(path).unwrap(), original, "original was modified: {}", path.display()); }
+
+        let own = locked_pdf(&root, "own", TEST_OVERRIDE_PASSWORD);
+        let plain = root.join("plain.pdf");
+        make_pdf(&plain, 1);
+        let mut unlock_inputs = locked[..4].iter().map(|outcome| outcome.output_paths()[0].clone()).collect::<Vec<_>>();
+        unlock_inputs.extend([own.clone(), plain.clone(), broken.clone()]);
+        let unlock_originals = unlock_inputs.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+
+        let (unlocked, unlock_events) = recorded(|events| remove_password(events, PasswordRequest {
+            paths: unlock_inputs.clone(),
+            password: TEST_PASSWORD.into(),
+            password_overrides: overrides(&[(&own, "not-the-password")]),
+            output_location: location(&root, "unlocked"),
+        }));
+
+        assert_eq!(unlocked.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), unlock_inputs);
+        assert_every_file_streams(&unlock_events, &unlocked);
+        for outcome in &unlocked[..4] {
+            assert!(outcome.error().is_none(), "{}", outcome.error().cloned().unwrap_or_default());
+            assert!(opens_without_password(&outcome.output_paths()[0]));
+        }
+        assert!(unlocked[4].error().is_some_and(|error| error.kind == ErrorKind::WrongPassword), "a wrong override fails only its own file");
+        assert!(matches!(unlocked[5].state, crate::kit::contracts::OutcomeState::Skipped { .. }), "an unprotected file is skipped");
+        assert!(unlocked[6].error().is_some(), "a broken file fails on its own");
+        for (path, original) in unlock_inputs.iter().zip(&unlock_originals) { assert_eq!(&std::fs::read(path).unwrap(), original, "input was modified: {}", path.display()); }
+        assert_eq!(file_names(&root.join("unlocked")).len(), 4, "only the unlocked files are written");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

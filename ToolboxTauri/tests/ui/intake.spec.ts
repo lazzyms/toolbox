@@ -336,7 +336,7 @@ const fillBatchLock = async (page: Page, password: string) => {
 
 const results = (page: Page) => page.getByRole("list", { name: "Results" }).getByRole("listitem");
 
-const modes = (page: Page) => page.getByRole("radiogroup", { name: "Lock or unlock" });
+const modes = (page: Page) => page.getByRole("radiogroup", { name: "Mode" });
 
 const openLock = async (page: Page) => {
     await open(page, "Lock & Unlock");
@@ -624,7 +624,7 @@ test("every File Security search term finds one Lock & Unlock entry that opens t
     }
     await page.getByRole("button", { name: "Open Lock & Unlock", exact: true }).click();
     await expect(page.locator(".workspace-title")).toHaveText("File Security");
-    await expect(page.getByRole("radiogroup", { name: "Lock or unlock" }).getByRole("radio", { name: "Unlock", exact: true })).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByRole("radiogroup", { name: "Mode" }).getByRole("radio", { name: "Unlock", exact: true })).toHaveAttribute("aria-checked", "true");
 });
 
 test("a saved Remove Password favorite and recent open File Security once migrated and leave no retired id behind", async ({ page }) => {

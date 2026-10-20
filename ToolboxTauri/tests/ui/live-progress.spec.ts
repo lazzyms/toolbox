@@ -83,7 +83,7 @@ test.beforeEach(async ({ page }) => {
 const startLocking = async (page: Page, paths: string[]) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Open Lock & Unlock", exact: true }).click();
-    await page.getByRole("radiogroup", { name: "Lock or unlock" }).getByRole("radio", { name: "Lock", exact: true }).click();
+    await page.getByRole("radiogroup", { name: "Mode" }).getByRole("radio", { name: "Lock", exact: true }).click();
     await expect.poll(() => page.evaluate(() => (window as unknown as LiveWindow).__invocations.some(({ command, args }) =>
         command === "plugin:event|listen" && (args as { event: string }).event === "tauri://drag-drop"))).toBe(true);
     await page.evaluate((paths) => (window as unknown as LiveWindow).__drop(paths), paths);
@@ -169,7 +169,7 @@ test("cancel asks first, sends the run id, and ends with cancelled rows and coun
     await emit({ index: 2, phase: "started" });
 
     const controls = page.getByRole("group", { name: "Running batch" });
-    await expect(controls).toContainText("Options are locked until the batch finishes.");
+    await expect(controls).toContainText("Mode, passwords and files are locked until the batch finishes.");
     await expect(controls).toContainText("2 of 5 done");
     const cancelRequests = () => page.evaluate(() => (window as unknown as LiveWindow).__invocations.filter(({ command }) => command === "cancel_run").map(({ args }) => args));
 
