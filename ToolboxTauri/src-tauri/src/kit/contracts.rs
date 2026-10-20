@@ -353,7 +353,6 @@ pub fn partition_command_inputs(command: &str, paths: &[PathBuf]) -> Result<Vali
 pub enum SkipCode {
     NotProtected,
     AlreadyProtected,
-    PermissionsPasswordOnly,
     NoSavings,
     AlreadyInTargetFormat,
     RangeEmptyAfterClamping,
@@ -620,12 +619,12 @@ mod tests {
     #[test]
     fn seeded_codes_serialize_as_stable_camel_case_strings() {
         let skips = [
-            SkipCode::NotProtected, SkipCode::AlreadyProtected, SkipCode::PermissionsPasswordOnly, SkipCode::NoSavings,
+            SkipCode::NotProtected, SkipCode::AlreadyProtected, SkipCode::NoSavings,
             SkipCode::AlreadyInTargetFormat, SkipCode::RangeEmptyAfterClamping, SkipCode::TextAlreadyPresent,
             SkipCode::NoEffectiveChange, SkipCode::UnsupportedFormat, SkipCode::Cancelled,
         ];
         assert_eq!(serde_json::to_value(skips).unwrap(), serde_json::json!([
-            "notProtected", "alreadyProtected", "permissionsPasswordOnly", "noSavings", "alreadyInTargetFormat",
+            "notProtected", "alreadyProtected", "noSavings", "alreadyInTargetFormat",
             "rangeEmptyAfterClamping", "textAlreadyPresent", "noEffectiveChange", "unsupportedFormat", "cancelled",
         ]));
         let warnings = [

@@ -674,9 +674,6 @@ fn unlocked_pdf_is_verified(path: &Path, page_count: usize) -> bool {
 
 impl PDFProcessor {
     pub fn remove_password(input_path: PathBuf, password: &str, output_location: &OutputLocation) -> JobOutcome {
-        if password.is_empty() {
-            return JobOutcome::failure(input_path, ToolError::invalid_input("Enter the PDF password."));
-        }
         if input_path.extension().and_then(|extension| extension.to_str()).is_none_or(|extension| !extension.eq_ignore_ascii_case("pdf")) {
             return JobOutcome::failure(input_path, ToolError::invalid_input("Only PDF files can be unlocked."));
         }
@@ -684,10 +681,18 @@ impl PDFProcessor {
             Ok(raw) => raw,
             Err(error) => return JobOutcome::failure(input_path, ToolError::processing(format!("Could not read the PDF: {error}"))),
         };
-        match probe(&raw, ProtectedFormat::Pdf).map(unlock_skip_reason) {
-            Ok(None) => {}
-            Ok(Some(reason)) => return JobOutcome::skipped(input_path, reason),
+        let state = match probe(&raw, ProtectedFormat::Pdf) {
+            Ok(state) => state,
             Err(_) => return JobOutcome::failure(input_path, unreadable(ProtectedFormat::Pdf)),
+        };
+        if let Some(reason) = unlock_skip_reason(state) {
+            return JobOutcome::skipped(input_path, reason);
+        }
+        if state == ProtectionState::PermissionsOnly {
+            return Self::remove_restrictions(input_path, &raw, output_location);
+        }
+        if password.is_empty() {
+            return JobOutcome::failure(input_path, ToolError::invalid_input("Enter the PDF password."));
         }
         let output_path = match OutputNaming::reserve_destination(
             &input_path,
@@ -752,6 +757,43 @@ impl PDFProcessor {
                 ),
             ) => JobOutcome::failure(input_path, ToolError::unavailable(UNSUPPORTED_ENCRYPTION)),
             Err(_) => JobOutcome::failure(input_path, unreadable(ProtectedFormat::Pdf)),
+        }
+    }
+
+    /// The PDF opens with the empty user password and only its owner password
+    /// restricts it, so qpdf decrypts it with no password from the user.
+    fn remove_restrictions(input_path: PathBuf, raw: &[u8], output_location: &OutputLocation) -> JobOutcome {
+        let (page_count, signed) = match Document::load_mem(raw) {
+            Ok(document) => (document.get_pages().len(), has_signed_signature_field(&document)),
+            Err(_) => return JobOutcome::failure(input_path, unreadable(ProtectedFormat::Pdf)),
+        };
+        let qpdf = match crate::kit::resources::resolve_helper(&crate::kit::resources::QPDF) {
+            Ok(qpdf) => qpdf,
+            Err(error) => return JobOutcome::failure(input_path, ToolError::unavailable(error)),
+        };
+        let output_path = match OutputNaming::reserve_destination(&input_path, output_location, "-unlocked", "pdf") {
+            Ok(output) => output,
+            Err(error) => return JobOutcome::failure(input_path, ToolError::processing(format!("Could not reserve unlocked PDF output: {error}"))),
+        };
+        let mut command = Command::new(&qpdf);
+        command.arg(&input_path).arg(output_path.path()).arg("--decrypt");
+        let limit = pdf_lock_time_limit(page_count);
+        let timed_out = format!("Unlocking took longer than {} seconds and was stopped. Nothing was saved.", limit.as_secs());
+        let output = match run_bounded_helper_with_input(command, None, Instant::now() + limit, PDF_TEXT_MAX_ERROR_BYTES, PDF_TEXT_MAX_ERROR_BYTES, &timed_out) {
+            Ok(output) => output,
+            Err(message) if message == timed_out => return JobOutcome::failure(input_path, ToolError::limit_exceeded(crate::kit::contracts::LimitKind::Time, message)),
+            Err(message) => return JobOutcome::failure(input_path, ToolError::unavailable(message)),
+        };
+        // qpdf exits 3 when it wrote the file but repaired something along the way; verification decides.
+        if !matches!(output.status.code(), Some(0 | 3)) {
+            return JobOutcome::failure(input_path, unreadable(ProtectedFormat::Pdf));
+        }
+        if !unlocked_pdf_is_verified(output_path.path(), page_count) {
+            return JobOutcome::failure(input_path, ToolError::processing(UNLOCK_NOT_VERIFIED));
+        }
+        match output_path.publish() {
+            Ok(path) => note_signature_removed(JobOutcome::succeeded(input_path, vec![path], "Unlocked. Restrictions removed."), signed),
+            Err(error) => JobOutcome::failure(input_path, ToolError::processing(format!("Could not publish unlocked PDF output: {error}"))),
         }
     }
 

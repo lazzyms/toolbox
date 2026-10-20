@@ -121,7 +121,6 @@ export type ErrorKind = ToolError["kind"];
 export type SkipCode =
   | "notProtected"
   | "alreadyProtected"
-  | "permissionsPasswordOnly"
   | "noSavings"
   | "alreadyInTargetFormat"
   | "rangeEmptyAfterClamping"
