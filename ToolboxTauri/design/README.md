@@ -72,7 +72,7 @@ the board changed first.
 | [PdfExport](boards/PdfExport.dc.html) | Export a copy: review, progress, done, failed, closing | [default](screens/PdfExport--default.jpg), [step-exporting](screens/PdfExport--step-exporting.jpg), [step-done](screens/PdfExport--step-done.jpg), [step-failed](screens/PdfExport--step-failed.jpg), [step-closing-with-changes](screens/PdfExport--step-closing-with-changes.jpg) |
 | [PdfNarrow](boards/PdfNarrow.dc.html) | Narrow window: inspector as a drawer | [default](screens/PdfNarrow--default.jpg), [inspector-closed](screens/PdfNarrow--inspector-closed.jpg) |
 | [PdfCrop](boards/PdfCrop.dc.html) | Crop and resize pages | [default](screens/PdfCrop--default.jpg), [mode-resize-pages](screens/PdfCrop--mode-resize-pages.jpg), [drag-moving](screens/PdfCrop--drag-moving.jpg), [drag-resizing](screens/PdfCrop--drag-resizing.jpg) |
-| [PdfDetails](boards/PdfDetails.dc.html) | Details: privacy report, properties, restrictions | [default](screens/PdfDetails--default.jpg), [tab-properties](screens/PdfDetails--tab-properties.jpg), [tab-restrictions](screens/PdfDetails--tab-restrictions.jpg) |
+| [PdfDetails](boards/PdfDetails.dc.html) | Details: privacy report and properties | [default](screens/PdfDetails--default.jpg), [tab-properties](screens/PdfDetails--tab-properties.jpg) |
 
 ### PDF tools and conversion
 
