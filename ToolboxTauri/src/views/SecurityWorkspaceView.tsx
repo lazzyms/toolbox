@@ -37,9 +37,10 @@ const modernFormat: Record<string, { extension: string; app: string }> = {
 const intakeCopy: Record<PasswordMode, IntakeCopy> = {
   lock: {
     notAccepted: NOT_A_DOCUMENT,
-    unsupported: (path) => {
+    unsupported: () => NOT_A_DOCUMENT,
+    willFail: (path) => {
       const modern = modernFormat[extensionOf(path)];
-      return modern ? `Lock needs ${modern.extension}. Save it as ${modern.extension} in ${modern.app}, then add it again.` : NOT_A_DOCUMENT;
+      return modern ? `Legacy ${extensionOf(path)} files can't be locked. Save it as ${modern.extension} in ${modern.app}, then add it again.` : null;
     },
     flaggedNotice: (count) => `${fileCount(count)} can't be locked. Lock needs .docx, .xlsx or .pptx. ${count === 1 ? "It'd" : "They'd"} fail if you ran now.`,
     countHint: (flagged, total) => flagged > 0 ? `${flagged} won't run in Lock` : total === 1 ? "It can be locked" : `All ${total} can be locked`,
@@ -81,8 +82,9 @@ export const SecurityWorkspaceView = ({ utility: activeUtility }: { utility: Too
         <FilePasswordCell mode={mode} path={path} passwords={passwords} selected={selected} disabled={locked} />
       )}
     >
-      {({ files, run, loading, destination, failedFiles, retryFailed, retrying }) => {
-        const readiness = passwordReadiness(mode, passwords, files);
+      {({ files, failingFiles, run, loading, destination, failedFiles, retryFailed, retrying }) => {
+        const readiness = passwordReadiness(mode, passwords, files.filter((path) => !failingFiles.includes(path)));
+        const failingHint = failingFiles.length > 0 ? `${failingFiles.length} flagged ${failingFiles.length === 1 ? "file" : "files"} will fail` : null;
         const retryReadiness = passwordReadiness(mode, passwords, failedFiles);
         const retryLabel = `Retry ${failedFiles.length} failed ${failedFiles.length === 1 ? "file" : "files"}`;
         const verb = mode === "lock" ? "Lock" : "Unlock";
@@ -112,13 +114,14 @@ export const SecurityWorkspaceView = ({ utility: activeUtility }: { utility: Too
                 : "Each file gets a copy ending in -unlocked that opens without a password. Your originals stay as they are."}
             </p>
             <p className="workspace-note">
-              {mode === "lock" ? "Accepts .pdf, .docx, .xlsx, .pptx" : "Accepts .pdf, .doc, .docx, .xls, .xlsx, .ppt, .pptx"}
+              Accepts .pdf, .doc, .docx, .xls, .xlsx, .ppt, .pptx
             </p>
           </div>
           <BatchPasswordFields mode={mode} passwords={passwords} files={files} />
           {destination}
           <p className="workspace-note">An existing name gets -1, -2 and so on. Nothing is replaced.</p>
           {files.length > 0 && readiness.reason && <p className="workspace-note" data-testid="password-readiness">{readiness.reason}</p>}
+          {!readiness.reason && failingHint && <p className="workspace-note" data-testid="failing-files">{failingHint}</p>}
           <Button
             variant="default"
             aria-label={runLabel}

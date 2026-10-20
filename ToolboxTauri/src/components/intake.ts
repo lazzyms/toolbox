@@ -20,14 +20,18 @@ export type IntakePolicy = {
 export type IntakeCopy = {
     notAccepted: string;
     unsupported: (path: string) => string;
+    willFail?: (path: string) => string | null;
     flaggedNotice: (count: number) => string;
     countHint: (flagged: number, total: number) => string;
 };
 
+// A wontRun file stays out of the run. A willFail file is sent and fails on its own result row.
+export type EntryFlag = { kind: 'wontRun' | 'willFail'; message: string };
+
 export type EntryStatus = {
     entry: IntakeEntry;
     occurrence: number;
-    wontRun: string | null;
+    flag: EntryFlag | null;
 };
 
 const pathKinds: ReadonlySet<string> = new Set<PathKind>(['file', 'folder', 'unreadable']);
@@ -99,19 +103,23 @@ export const classifyIntake = (existing: string[], incoming: InspectedPath[], po
 export const entryStatuses = (
     entries: IntakeEntry[],
     tool: ToolDefinition,
-    unsupported = (_path: string) => `${tool.title} only takes ${extensionList(tool.capability.acceptedExtensions)}.`,
+    copy: Partial<Pick<IntakeCopy, 'unsupported' | 'willFail'>> = {},
 ): EntryStatus[] => {
+    const unsupported = copy.unsupported ?? (() => `${tool.title} only takes ${extensionList(tool.capability.acceptedExtensions)}.`);
     const seen = new Map<string, number>();
     const repeats = allowsRepeats(tool);
     return entries.map((entry) => {
         const occurrence = (seen.get(entry.path) ?? 0) + 1;
         seen.set(entry.path, occurrence);
-        const wontRun = !accepts(tool.capability.acceptedExtensions, entry.path)
-            ? unsupported(entry.path)
+        const willFail = copy.willFail?.(entry.path) ?? null;
+        const flag: EntryFlag | null = !accepts(tool.capability.acceptedExtensions, entry.path)
+            ? { kind: 'wontRun', message: unsupported(entry.path) }
             : occurrence > 1 && !repeats
-                ? `${tool.title} runs each file once.`
-                : null;
-        return { entry, occurrence, wontRun };
+                ? { kind: 'wontRun', message: `${tool.title} runs each file once.` }
+                : willFail !== null
+                    ? { kind: 'willFail', message: willFail }
+                    : null;
+        return { entry, occurrence, flag };
     });
 };
 

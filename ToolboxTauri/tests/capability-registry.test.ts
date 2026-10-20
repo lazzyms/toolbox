@@ -41,7 +41,7 @@ test("UI capabilities are the shared native contract facts", () => {
   assert.equal(capabilitiesByCommand.get("remove_password")?.outputSuffix, "-unlocked");
   assert.equal(capabilitiesByCommand.get("remove_password")?.inputCardinality, "multiple");
   assert.equal(UtilityRegistry.find(({ id }) => id === "lock-unlock")?.command, "remove_password");
-  assert.deepEqual(capabilitiesByCommand.get("protect_files")?.acceptedExtensions, [".pdf", ".docx", ".xlsx", ".pptx"]);
+  assert.deepEqual(capabilitiesByCommand.get("protect_files")?.acceptedExtensions, [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"]);
   assert.equal(capabilitiesByCommand.get("protect_files")?.nativeAvailability, "available");
   assert.equal(capabilitiesByCommand.get("protect_office"), undefined);
   assert.deepEqual(capabilitiesByCommand.get("images_to_pdf")?.acceptedExtensions, [

@@ -1140,7 +1140,7 @@ mod command_tests {
     }
 
     #[test]
-    fn lock_skips_already_protected_files_and_refuses_legacy_formats_while_modern_files_lock() {
+    fn lock_skips_already_protected_files_and_fails_each_legacy_file_with_its_save_as_message_while_modern_files_lock() {
         use crate::kit::contracts::{OutcomeState, SkipCode};
         use crate::kit::office::tests::ppt_plain_fixture;
         use crate::kit::password::tests::{pdf, word_document, workbook};
@@ -1177,12 +1177,9 @@ mod command_tests {
                 (Expect::AlreadyProtected, OutcomeState::Skipped { reason }) => {
                     assert_eq!((&reason.code, reason.message.as_str()), (&SkipCode::AlreadyProtected, already), "{name}");
                 }
-                (Expect::Legacy(message), OutcomeState::Failed { output_paths, .. }) => {
+                (Expect::Legacy(message), OutcomeState::Failed { output_paths, error }) => {
                     assert!(output_paths.is_empty(), "{name}");
-                    let direct = PasswordProcessor::protect(root.join(name), crate::kit::TEST_PASSWORD, &location(&root, "output"));
-                    let error = direct.error().unwrap_or_else(|| panic!("{name} must be refused"));
-                    assert_eq!((&error.kind, error.message.as_str()), (&ErrorKind::Unavailable, *message), "{name}");
-                    assert!(direct.output_paths().is_empty(), "{name}");
+                    assert_eq!((&error.kind, error.message.as_str()), (&ErrorKind::InvalidInput, *message), "{name}");
                 }
                 (_, state) => panic!("{name} ended as {state:?}"),
             }
