@@ -12,6 +12,8 @@ import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { ShortcutHint } from "../components/ShortcutHint";
+import { shortcutTarget } from "../shortcuts";
 
 type TiffFrame = { key: string; path: string; page: number; preview: ImagePreview };
 export type TiffInspection =
@@ -209,8 +211,9 @@ export const MediaWorkspaceView = ({ utility }: { utility: ToolDefinition }) => 
           )}
 
           {destination}
-          <Button variant="default" disabled={loading || files.length === 0 || (activeUtility.id === "tiff-pages" && !isCurrentTiffInspection(tiffInspection, files)) || (activeUtility.id === "image-metadata" && metadataMode === "inspect")} onClick={run} className="workspace-primary-action">
+          <Button variant="default" disabled={loading || files.length === 0 || (activeUtility.id === "tiff-pages" && !isCurrentTiffInspection(tiffInspection, files)) || (activeUtility.id === "image-metadata" && metadataMode === "inspect")} onClick={run} className="workspace-primary-action" {...shortcutTarget("run")}>
             {runLabel ?? (activeUtility.id === "image-metadata" ? "Remove metadata" : activeUtility.shortTitle)}
+            <ShortcutHint id="run" />
           </Button>
           </CardContent>
         </Card>

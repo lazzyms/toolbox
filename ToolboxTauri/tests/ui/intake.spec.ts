@@ -223,6 +223,31 @@ test("click, Shift-click and Cmd-click select rows, and removal only edits the l
     await expect(page.getByText("Shift-click or ⌘-click to select. Delete removes files from the list, not from disk.")).toBeVisible();
 });
 
+test("in the file list Cmd+A selects every file, arrows move the selection and Backspace removes it", async ({ page }) => {
+    await open(page, "Protect PDF");
+    await drop(page, ["/local/one.pdf", "/local/two.pdf", "/local/three.pdf"]);
+    const item = (name: string) => rows(page).filter({ hasText: name }).getByRole("button", { name: new RegExp(`^${name}`) });
+
+    await page.locator("body").press("Meta+a");
+    await expect(page.getByText(/selected$/)).toHaveCount(0);
+
+    await item("one.pdf").click();
+    await item("one.pdf").press("Meta+a");
+    await expect(page.getByText("3 selected")).toBeVisible();
+    for (const row of await rows(page).all()) await expect(row).toHaveAttribute("aria-selected", "true");
+
+    await page.keyboard.press("ArrowDown");
+    await expect(page.getByText("1 selected")).toBeVisible();
+    await expect(rows(page).filter({ hasText: "two.pdf" })).toHaveAttribute("aria-selected", "true");
+    await expect(item("two.pdf")).toBeFocused();
+    await page.keyboard.press("ArrowUp");
+    await expect(rows(page).filter({ hasText: "one.pdf" })).toHaveAttribute("aria-selected", "true");
+    await expect(item("one.pdf")).toBeFocused();
+
+    await page.keyboard.press("Backspace");
+    await expect(rows(page)).toHaveText([/^two\.pdf/, /^three\.pdf/]);
+});
+
 test("drag and keyboard reorder set the order sent in the request", async ({ page }) => {
     await open(page, "Merge PDF");
     await drop(page, ["/local/a.pdf", "/local/b.pdf", "/local/c.pdf"]);
