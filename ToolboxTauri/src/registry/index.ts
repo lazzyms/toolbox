@@ -6,7 +6,7 @@ import type {
 import { capabilityFor } from "./capabilities";
 
 const UtilityMetadata: Array<Omit<ToolDefinition, "capability" | "status">> = [
-    { id: "pdf-unlock", title: "Remove Password", shortTitle: "Remove Password", resultVerb: "Unlocked", runningVerb: "Unlocking", blurb: "Save an unlocked copy of a PDF, Word, Excel, or PowerPoint file.", symbol: "lock-open", category: "Documents", command: "remove_password", verification: "remove-password", view: "pdf-unlock" },
+    { id: "lock-unlock", title: "Lock & Unlock", shortTitle: "Lock & Unlock", resultVerb: "Unlocked", runningVerb: "Unlocking", blurb: "Remove a password you know from PDF, Word, Excel and PowerPoint files.", keywords: ["lock", "unlock", "protect", "password", "encrypt", "decrypt"], symbol: "lock-open", category: "Documents", command: "remove_password", verification: "lock-unlock", view: "lock-unlock" },
     { id: "pdf-page-numbers", title: "Add PDF Page Numbers", shortTitle: "Page Numbers", resultVerb: "Numbered", runningVerb: "Numbering", blurb: "Stamp page numbers onto a PDF.", symbol: "numbers", category: "PDF", command: "add_page_numbers", verification: "pdf-page-numbers", view: "pdf-page-numbers" },
     { id: "pdf-merge", title: "Merge PDF", shortTitle: "Merge", resultVerb: "Merged", runningVerb: "Merging", blurb: "Combine several PDFs into one file.", symbol: "files", category: "PDF", command: "merge_pdfs", verification: "pdf-merge", view: "pdf-merge" },
     { id: "pdf-watermark", title: "Watermark PDF", shortTitle: "Watermark", resultVerb: "Watermarked", runningVerb: "Watermarking", blurb: "Stamp text across PDF pages.", symbol: "droplet", category: "PDF", command: "watermark_pdf", verification: "pdf-watermark", view: "pdf-watermark" },
@@ -66,7 +66,7 @@ export const ToolWorkspaceRegistry: ToolWorkspaceDefinition[] = [
         symbol: "lock",
         category: "Documents",
         categories: ["Documents", "PDF"],
-        toolIds: ["pdf-unlock", "pdf-protect", "office-protect"],
+        toolIds: ["lock-unlock", "pdf-protect", "office-protect"],
     },
     {
         id: "pdf-editor",
