@@ -4,6 +4,7 @@ import { ToolScaffold } from "../components/ToolScaffold";
 import type { WorkspaceSourceAction } from "../components/ToolScaffold";
 import type { ShellEvent } from "../hooks/useShellBridge";
 import type {
+  AtomicToolId,
   ConvertImagesRequest,
   ImagePreview,
   OutputLocation,
@@ -32,6 +33,8 @@ import { Slider } from "../components/ui/slider";
 import { Switch } from "../components/ui/switch";
 import { ShortcutHint } from "../components/ShortcutHint";
 import { shortcutTarget } from "../shortcuts";
+import { UtilityRegistry, workspaceById } from "../registry";
+import { useToolAvailability } from "../ToolAvailabilityContext";
 
 const cropAspectPresets = [
   { value: "1:1", label: "Square · 1:1", width: 1, height: 1 },
@@ -119,14 +122,55 @@ const imageEditLabel = (edit: ImageEditOperation) => {
   return `Crop ${edit.width} × ${edit.height}`;
 };
 
+const editImageTabLabel: Partial<Record<AtomicToolId, string>> = { "image-tone": "Adjust" };
+
+/** Resize, Crop, Rotate, Adjust and Watermark share one edit plan and switch as tabs. */
+const EditImageTabs = ({ activeId, onSelect }: { activeId: AtomicToolId; onSelect: (id: AtomicToolId) => void }) => {
+  const availability = useToolAvailability();
+  const tools = availability.filter(UtilityRegistry.filter((tool) => workspaceById("image-editor")?.editor?.toolIds.includes(tool.id)));
+  if (!tools.some((tool) => tool.id === activeId)) return null;
+  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+    if (!step) return;
+    event.preventDefault();
+    const list = event.currentTarget;
+    const index = tools.findIndex((tool) => tool.id === activeId);
+    onSelect(tools[(index + step + tools.length) % tools.length].id);
+    requestAnimationFrame(() => list.querySelector<HTMLButtonElement>('[aria-selected="true"]')?.focus());
+  };
+  return (
+    <div className="edit-image-tabs" role="tablist" aria-label="Edit Image" onKeyDown={onKeyDown}>
+      {tools.map((tool) => (
+        <Button
+          key={tool.id}
+          type="button"
+          role="tab"
+          size="sm"
+          variant={tool.id === activeId ? "secondary" : "ghost"}
+          aria-selected={tool.id === activeId}
+          tabIndex={tool.id === activeId ? 0 : -1}
+          onClick={() => { if (tool.id !== activeId) onSelect(tool.id); }}
+        >
+          {editImageTabLabel[tool.id] ?? tool.shortTitle}
+        </Button>
+      ))}
+    </div>
+  );
+};
+
 export const ImageEditorWorkspaceView = ({
   utility: activeUtility,
+  initialPaths,
+  onSelectTool,
   fileActivation,
   onActivationAccepted,
   onFilesChange,
   onWorkspaceSourceAction,
 }: {
   utility: ToolDefinition;
+  initialPaths?: readonly string[];
+  /** Switches to another Edit Image tab; the view stays open with its files and edit plan. */
+  onSelectTool?: (id: AtomicToolId) => void;
   fileActivation?: Extract<ShellEvent, { kind: "files" }>;
   onActivationAccepted?: (activationId: string) => void;
   onFilesChange?: (paths: readonly string[]) => void;
@@ -188,6 +232,7 @@ export const ImageEditorWorkspaceView = ({
       variant="workspace"
       sessionKey="image-editor"
       utility={activeUtility}
+      initialPaths={initialPaths}
       fileActivation={fileActivation}
       onActivationAccepted={onActivationAccepted}
       onFilesChange={onFilesChange}
@@ -224,7 +269,7 @@ export const ImageEditorWorkspaceView = ({
         request: { paths, plan: imageEditRequestPlan(editPlan, outputLocation) },
       })}
     >
-      {(props) => <ImageEditorControls {...props} utility={activeUtility} {...{
+      {(props) => <ImageEditorControls {...props} utility={activeUtility} onSelectTool={onSelectTool} {...{
         format,
         setFormat,
         width,
@@ -304,6 +349,7 @@ type ImageEditorControlsProps = {
   runCombined: () => Promise<void>;
   loading: boolean;
   utility: ToolDefinition;
+  onSelectTool?: (id: AtomicToolId) => void;
   format: ConvertImagesRequest["format"];
   setFormat: (value: ConvertImagesRequest["format"]) => void;
   width: number;
@@ -372,6 +418,7 @@ const ImageEditorControls = ({
   runCombined,
   loading,
   utility,
+  onSelectTool,
   format,
   setFormat,
   width,
@@ -660,6 +707,7 @@ const ImageEditorControls = ({
       </Card>
       <Card className="image-editor-controls py-0" role="region" aria-label="Image adjustments">
         <CardContent className="image-editor-controls-content grid gap-4 p-4">
+        {onSelectTool && <EditImageTabs activeId={utility.id} onSelect={onSelectTool} />}
         <div className="workspace-panel-intro">
           <h2 className="workspace-active-command">{utility.title}</h2>
           <p className="workspace-panel-copy">Change the outcome without leaving the image editor.</p>

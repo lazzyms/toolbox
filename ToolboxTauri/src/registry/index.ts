@@ -1,4 +1,5 @@
 import type {
+    AtomicToolId,
     ToolDefinition,
     ToolWorkspaceDefinition,
     WorkspaceId,
@@ -23,7 +24,7 @@ const UtilityMetadata: Array<Omit<ToolDefinition, "capability" | "status">> = [
     { id: "pdf-extract-pages", title: "Extract PDF Pages", shortTitle: "Extract Pages", resultVerb: "Extracted", runningVerb: "Extracting", blurb: "Pull selected page ranges into a new PDF.", symbol: "file-search", category: "PDF", command: "extract_pdf_pages", verification: "pdf-extract-pages", view: "pdf-extract-pages" },
     { id: "pdf-organize", title: "Organize PDF", shortTitle: "Organize", resultVerb: "Organized", runningVerb: "Organizing", blurb: "Reorder, rotate, remove, or add blank PDF pages and save an organized copy.", symbol: "layout-grid", category: "PDF", command: "organize_pdf", verification: "pdf-organize", view: "pdf-organize" },
     { id: "pdf-compress", title: "Compress PDF", shortTitle: "Compress", resultVerb: "Compressed", runningVerb: "Compressing", blurb: "Shrink PDF stream data without changing page geometry.", symbol: "file-download", category: "PDF", command: "compress_pdf", verification: "pdf-compress", view: "pdf-compress" },
-    { id: "pdf-rotate", title: "Rotate PDF", shortTitle: "Rotate", resultVerb: "Rotated", runningVerb: "Rotating", blurb: "Turn all pages, or just the ones you pick.", symbol: "rotate", category: "PDF", command: "rotate_pdf", verification: "pdf-rotate", view: "pdf-rotate" },
+    { id: "pdf-rotate", title: "Rotate PDFs", shortTitle: "Rotate", resultVerb: "Rotated", runningVerb: "Rotating", blurb: "Turn all pages, or just the ones you pick.", symbol: "rotate", category: "PDF", command: "rotate_pdf", verification: "pdf-rotate", view: "pdf-rotate" },
     { id: "pdf-repair", title: "Repair PDF", shortTitle: "Repair", resultVerb: "Repaired", runningVerb: "Repairing", blurb: "Fix a damaged PDF that won't open properly.", symbol: "tool", category: "PDF", command: "repair_pdf", verification: "pdf-repair", view: "pdf-repair" },
     { id: "pdf-redact", title: "Redact PDF", shortTitle: "Redact", resultVerb: "Redacted", runningVerb: "Redacting", blurb: "Black out private details so they can't be recovered.", symbol: "eye-off", category: "PDF", command: "redact_pdf", verification: "pdf-redact", view: "pdf-redact" },
     { id: "pdf-compare", title: "Compare PDFs", shortTitle: "Compare", resultVerb: "Compared", runningVerb: "Comparing", blurb: "See what text changed between two versions of a PDF.", symbol: "git-compare", category: "PDF", command: "compare_pdfs", verification: "pdf-compare", view: "pdf-compare" },
@@ -73,23 +74,33 @@ export const ToolWorkspaceRegistry: ToolWorkspaceDefinition[] = [
     {
         id: "pdf-editor",
         title: "PDF Editor",
-        blurb: "Open a PDF and work on its content, pages, overlays, and final output from one editor surface.",
+        blurb: "Open a PDF and work on its content and pages, or merge, split and fix whole files.",
         symbol: "edit-pdf",
         category: "PDF",
         categories: ["PDF"],
         toolIds: [
             "pdf-edit",
-            "pdf-crop",
             "pdf-watermark",
             "pdf-sign",
-            "pdf-page-numbers",
             "pdf-remove-pages",
             "pdf-organize",
+            "pdf-merge",
+            "pdf-split",
+            "pdf-crop",
+            "pdf-page-numbers",
+            "pdf-redact",
             "pdf-rotate",
             "pdf-repair",
-            "pdf-redact",
             "pdf-compare",
+            "pdf-extract-pages",
         ],
+        editor: {
+            title: "Edit PDF",
+            blurb: "Add text, highlights, shapes, signatures and watermarks, or delete pages.",
+            symbol: "edit-pdf",
+            toolIds: ["pdf-edit", "pdf-watermark", "pdf-sign", "pdf-remove-pages"],
+        },
+        moreToolIds: ["pdf-rotate", "pdf-repair", "pdf-compare", "pdf-extract-pages"],
     },
     {
         id: "pdf-convert",
@@ -98,25 +109,22 @@ export const ToolWorkspaceRegistry: ToolWorkspaceDefinition[] = [
         symbol: "arrows-exchange",
         category: "PDF",
         categories: ["PDF"],
-        toolIds: [
-            "pdf-to-images",
-            "pdf-to-text",
-            "pdf-image-extract",
-            "images-to-pdf",
-            "pdf-ocr",
-            "pdf-merge",
-            "pdf-split",
-            "pdf-extract-pages",
-        ],
+        toolIds: ["pdf-to-images", "images-to-pdf", "pdf-ocr", "pdf-to-text", "pdf-image-extract"],
     },
     {
         id: "image-editor",
         title: "Image Editor",
-        blurb: "Tune, crop, resize, rotate, flip, watermark, or convert images in one photo-style workspace.",
+        blurb: "Resize, crop, rotate, adjust or watermark many images at once, convert them, or remove their metadata.",
         symbol: "image-tone",
         category: "Images",
         categories: ["Images"],
-        toolIds: ["heic-convert", "resize", "rotate", "crop", "image-watermark", "image-tone"],
+        toolIds: ["resize", "crop", "rotate", "image-tone", "image-watermark", "heic-convert", "image-metadata"],
+        editor: {
+            title: "Edit Image",
+            blurb: "Resize, crop, rotate, adjust or watermark many images at once.",
+            symbol: "image-tone",
+            toolIds: ["resize", "crop", "rotate", "image-tone", "image-watermark"],
+        },
     },
     {
         id: "compress-files",
@@ -130,7 +138,7 @@ export const ToolWorkspaceRegistry: ToolWorkspaceDefinition[] = [
     {
         id: "media-tools",
         title: "Media",
-        blurb: "Generate icons, work with GIF and TIFF sequences, inspect metadata, and access optional vision tools.",
+        blurb: "Generate icons, work with GIF and TIFF sequences, and access optional vision tools.",
         symbol: "layers",
         category: "Images",
         categories: ["Images", "PDF"],
@@ -139,7 +147,6 @@ export const ToolWorkspaceRegistry: ToolWorkspaceDefinition[] = [
             "gif-create",
             "gif-extract",
             "tiff-pages",
-            "image-metadata",
             "image-blur-faces",
             "image-remove-bg",
         ],
@@ -161,3 +168,40 @@ export const toolsForWorkspaceId = (workspaceId: WorkspaceId) => {
 
 export const workspaceForTool = (toolId: string) =>
     ToolWorkspaceRegistry.find((workspace) => workspace.toolIds.includes(toolId as ToolDefinition["id"]));
+
+/** One line in a view's tool list: a single tool, or the view's editor with its tools as tabs. */
+export interface WorkspaceEntry {
+    key: string;
+    title: string;
+    blurb: string;
+    symbol: string;
+    /** The tools this entry stands for. Opening the entry opens the first one. */
+    tools: ToolDefinition[];
+    more: boolean;
+}
+
+/**
+ * List entries for a view, built from the tools the caller can open, in list order with More last.
+ * `groupEditor: false` lists editor tools by their own names, for search results and favorites.
+ */
+export const workspaceEntries = (
+    workspace: ToolWorkspaceDefinition,
+    tools: readonly ToolDefinition[],
+    { groupEditor = true }: { groupEditor?: boolean } = {},
+): WorkspaceEntry[] => {
+    const editorTools = tools.filter((tool) => workspace.editor?.toolIds.includes(tool.id));
+    const entries = tools.flatMap((tool): WorkspaceEntry[] => {
+        const more = workspace.moreToolIds?.includes(tool.id) ?? false;
+        if (!groupEditor || !workspace.editor?.toolIds.includes(tool.id)) {
+            return [{ key: tool.id, title: tool.title, blurb: tool.blurb, symbol: tool.symbol, tools: [tool], more }];
+        }
+        if (tool !== editorTools[0]) return [];
+        const { title, blurb, symbol } = workspace.editor;
+        return [{ key: `${workspace.id}-editor`, title, blurb, symbol, tools: editorTools, more }];
+    });
+    return [...entries.filter((entry) => !entry.more), ...entries.filter((entry) => entry.more)];
+};
+
+/** PDF Editor tools that open the full-window page editor rather than a batch screen. */
+const pdfSceneToolIds: readonly AtomicToolId[] = ["pdf-edit", "pdf-crop", "pdf-watermark", "pdf-sign", "pdf-page-numbers", "pdf-remove-pages", "pdf-organize"];
+export const isPdfSceneTool = (id: AtomicToolId) => pdfSceneToolIds.includes(id);

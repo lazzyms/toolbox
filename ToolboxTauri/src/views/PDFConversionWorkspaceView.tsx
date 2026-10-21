@@ -60,7 +60,7 @@ const pdfToImagesOutputSummary = (selectedPages: number[], dpi: string, format: 
   return `Output preview unavailable. Export renders ${pageSummary} at ${dpi} DPI as ${formatLabel} image files.`;
 };
 
-export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPaths = [] }: { utility: ToolDefinition; initialPaths?: readonly string[] }) => {
+export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPaths = [], onFilesChange }: { utility: ToolDefinition; initialPaths?: readonly string[]; onFilesChange?: (paths: readonly string[]) => void }) => {
   const [dpi, setDpi] = useState("150");
   const [format, setFormat] = useState("jpg");
   const [pageRange, setPageRange] = useState("");
@@ -79,6 +79,7 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
       sessionKey="pdf-convert"
       utility={activeUtility}
       initialPaths={initialPaths}
+      onFilesChange={onFilesChange}
       onRun={(paths, outputLocation, { outputPath, runId }) => {
         const pages = document ? selectedPages : undefined;
         const selectedPageRange = pages?.length ? formatPageRange(pages) : pageRange || null;

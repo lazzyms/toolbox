@@ -32,7 +32,7 @@ const iconSizesByPreset: Record<string, number[]> = {
   custom: [16, 32, 64, 128, 256, 512],
 };
 
-export const MediaWorkspaceView = ({ utility: activeUtility }: { utility: ToolDefinition }) => {
+export const MediaWorkspaceView = ({ utility: activeUtility, initialPaths, onFilesChange }: { utility: ToolDefinition; initialPaths?: readonly string[]; onFilesChange?: (paths: readonly string[]) => void }) => {
   const [delay, setDelay] = useState(100);
   const [loop, setLoop] = useState(true);
   const [iconPreset, setIconPreset] = useState("macos");
@@ -56,6 +56,8 @@ export const MediaWorkspaceView = ({ utility: activeUtility }: { utility: ToolDe
       variant="workspace"
       sessionKey="media-tools"
       utility={activeUtility}
+      initialPaths={initialPaths}
+      onFilesChange={onFilesChange}
       showFileOrdering={activeUtility.id !== "tiff-pages"}
       onRun={(paths, outputLocation, { outputPath, runId }) => {
         if (activeUtility.id === "icon-set") {

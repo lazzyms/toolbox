@@ -255,7 +255,12 @@ export interface ToolWorkspaceDefinition {
   symbol: string;
   category: ToolCategory;
   categories: ToolCategory[];
+  /** Every tool in the view, in list order. Each tool belongs to exactly one view. */
   toolIds: AtomicToolId[];
+  /** Tools shown as one entry whose tabs or modes are those tools. The entry opens the first one. */
+  editor?: { title: string; blurb: string; symbol: string; toolIds: AtomicToolId[] };
+  /** Tools listed after the main tools, under More. */
+  moreToolIds?: AtomicToolId[];
 }
 
 export interface ToolRequest {

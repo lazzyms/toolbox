@@ -1203,6 +1203,13 @@ body {
   gap: 8px;
   text-align: left;
 }
+.workspace-command-group {
+  margin: 10px 8px 2px;
+  color: var(--muted-foreground);
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+}
 .workspace-command-icon {
   display: grid;
   width: 28px;
@@ -1267,6 +1274,14 @@ body {
 .image-editor-controls-content {
   min-width: 0;
 }
+.edit-image-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 9px;
+  background: var(--muted);
+}
 .image-editor-controls .workspace-active-command {
   font-size: 16px;
 }
@@ -1280,6 +1295,11 @@ body {
   .workspace-command {
     flex: 0 0 auto;
     min-width: 112px;
+  }
+  .workspace-command-group {
+    flex: 0 0 auto;
+    align-self: center;
+    margin: 0 4px;
   }
   .image-editor-layout {
     grid-template-columns: 1fr;

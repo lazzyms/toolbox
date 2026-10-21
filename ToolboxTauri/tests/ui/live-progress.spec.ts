@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { openToolBySearch } from "./open-tool";
 
 type Outcome = { inputPath: string; outputPaths: string[]; detail: string; state: string; failure: unknown; reason: unknown; warnings: unknown[] };
 
@@ -82,7 +83,7 @@ test.beforeEach(async ({ page }) => {
 
 const startLocking = async (page: Page, paths: string[]) => {
     await page.goto("/");
-    await page.getByRole("button", { name: "Open Lock & Unlock", exact: true }).click();
+    await openToolBySearch(page, "Lock & Unlock");
     await page.getByRole("radiogroup", { name: "Mode" }).getByRole("radio", { name: "Lock", exact: true }).click();
     await expect.poll(() => page.evaluate(() => (window as unknown as LiveWindow).__invocations.some(({ command, args }) =>
         command === "plugin:event|listen" && (args as { event: string }).event === "toolbox://shell-event"))).toBe(true);

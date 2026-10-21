@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { openToolBySearch } from "./open-tool";
 
 const svg = "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="612" height="792"><rect width="612" height="792" fill="white"/><text x="60" y="85" font-size="24">Selectable local PDF text</text></svg>');
 const signatureAssetUrl = 'asset://localhost/' + encodeURIComponent('/local/signature.png');
@@ -31,7 +32,7 @@ test.beforeEach(async ({ page }) => {
 
 async function openEditor(page: Page) {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Open Edit PDF', exact: true }).click();
+  await openToolBySearch(page, "Edit PDF");
   await page.getByRole('button', { name: 'Choose files to process' }).click();
   await expect(page.getByRole('group', { name: 'PDF page canvas' })).toBeVisible();
   await expect.poll(() => page.evaluate(() => (window as any).calls.some((call: any) => call.command === 'preview_pdf_scene_pages'))).toBe(true);

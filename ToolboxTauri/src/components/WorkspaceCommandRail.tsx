@@ -1,12 +1,15 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { Button } from "@/components/ui/button";
-import type { AtomicToolId, ToolDefinition } from "../contracts";
+import type { AtomicToolId, ToolDefinition, ToolWorkspaceDefinition } from "../contracts";
+import { workspaceEntries } from "../registry";
 import { TablerIcon } from "./TablerIcon";
 import { useToolAvailability } from "../ToolAvailabilityContext";
 
 interface WorkspaceCommandRailProps {
   actions: readonly ToolDefinition[];
+  /** Groups the view's editor tools into one entry and lists More tools last. */
+  workspace?: ToolWorkspaceDefinition;
   activeId: AtomicToolId;
   onSelect: (id: AtomicToolId) => void;
   label: string;
@@ -91,6 +94,7 @@ const handleToolbarKeyDown = (
  */
 export const WorkspaceCommandRail = ({
   actions,
+  workspace,
   activeId,
   onSelect,
   label,
@@ -99,6 +103,10 @@ export const WorkspaceCommandRail = ({
   const availability = useToolAvailability();
   const [orientation, setOrientation] = useState<ToolbarOrientation>(getToolbarOrientation);
   const listRef = useRef<HTMLDivElement>(null);
+  const tools = availability.filter(actions);
+  const entries = workspace
+    ? workspaceEntries(workspace, tools)
+    : tools.map((tool) => ({ key: tool.id, title: tool.title, blurb: tool.blurb, symbol: tool.symbol, tools: [tool], more: false }));
 
   useEffect(() => {
     const updateOrientation = () => setOrientation(getToolbarOrientation());
@@ -120,30 +128,34 @@ export const WorkspaceCommandRail = ({
         aria-orientation={orientation}
         onKeyDown={(event) => handleToolbarKeyDown(event, orientation)}
       >
-        {availability.filter(actions).map((tool) => {
+        {entries.map((entry, index) => {
+          const [tool] = entry.tools;
+          const active = entry.tools.some(({ id }) => id === activeId);
           const unavailable = tool.capability.nativeAvailability === "unavailable";
           return (
-            <Button
-              variant={activeId === tool.id ? "secondary" : "ghost"}
-              size="sm"
-              key={tool.id}
-              type="button"
-              className="workspace-command"
-              aria-pressed={activeId === tool.id}
-              tabIndex={activeId === tool.id ? 0 : -1}
-              aria-label={tool.title}
-              title={unavailable ? `${tool.title} is unavailable in this build` : tool.blurb}
-              disabled={unavailable || disabled}
-              onClick={() => { if (availability.allows(tool.id)) onSelect(tool.id); }}
-            >
-              <span className="workspace-command-icon" aria-hidden="true">
-                <TablerIcon name={designIconByToolId[tool.id]} />
-              </span>
-              <span className="workspace-command-copy">
-                {tool.title}
-                {unavailable && <small>Unavailable</small>}
-              </span>
-            </Button>
+            <Fragment key={entry.key}>
+              {entry.more && !entries[index - 1]?.more && <p className="workspace-command-group">More</p>}
+              <Button
+                variant={active ? "secondary" : "ghost"}
+                size="sm"
+                type="button"
+                className="workspace-command"
+                aria-pressed={active}
+                tabIndex={active ? 0 : -1}
+                aria-label={entry.title}
+                title={unavailable ? `${entry.title} is unavailable in this build` : entry.blurb}
+                disabled={unavailable || disabled}
+                onClick={() => { if (!active && availability.allows(tool.id)) onSelect(tool.id); }}
+              >
+                <span className="workspace-command-icon" aria-hidden="true">
+                  <TablerIcon name={designIconByToolId[tool.id]} />
+                </span>
+                <span className="workspace-command-copy">
+                  {entry.title}
+                  {unavailable && <small>Unavailable</small>}
+                </span>
+              </Button>
+            </Fragment>
           );
         })}
       </div>

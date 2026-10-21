@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { openToolBySearch } from "./open-tool";
 
 type Outcome = { inputPath: string; outputPaths: string[]; detail: string; state: string; failure: unknown; reason: unknown; warnings: unknown[] };
 
@@ -78,7 +79,7 @@ const finish = (page: Page, outcomes: Outcome[]) => page.evaluate((outcomes) => 
 
 const openSecurity = async (page: Page) => {
     await page.goto("/");
-    await page.getByRole("button", { name: "Open Lock & Unlock", exact: true }).click();
+    await openToolBySearch(page, "Lock & Unlock");
     await expect.poll(() => page.evaluate(() => (window as unknown as SecurityWindow).__invocations.some(({ command, args }) =>
         command === "plugin:event|listen" && (args as { event: string }).event === "toolbox://shell-event"))).toBe(true);
 };

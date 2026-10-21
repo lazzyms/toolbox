@@ -9,6 +9,8 @@ import {
 import {
   ToolWorkspaceRegistry,
   UtilityRegistry,
+  toolsForWorkspace,
+  workspaceEntries,
 } from "../src/registry/index.ts";
 
 test("UI capabilities are the shared native contract facts", () => {
@@ -128,6 +130,27 @@ test("workspace membership covers every registered utility exactly once", () => 
     [...workspaceToolIds].sort(),
     UtilityRegistry.map(({ id }) => id).sort(),
   );
+});
+
+test("workspace entries group editor tools into one entry and list More tools last", () => {
+  const entryIds = (workspaceId: string, options?: { groupEditor?: boolean }) => {
+    const workspace = ToolWorkspaceRegistry.find(({ id }) => id === workspaceId)!;
+    return workspaceEntries(workspace, toolsForWorkspace(workspace), options)
+      .map((entry) => `${entry.more ? "more:" : ""}${entry.tools.map(({ id }) => id).join("+")}`);
+  };
+
+  assert.deepEqual(entryIds("pdf-editor"), [
+    "pdf-edit+pdf-watermark+pdf-sign+pdf-remove-pages",
+    "pdf-organize", "pdf-merge", "pdf-split", "pdf-crop", "pdf-page-numbers", "pdf-redact",
+    "more:pdf-rotate", "more:pdf-repair", "more:pdf-compare", "more:pdf-extract-pages",
+  ]);
+  assert.deepEqual(entryIds("image-editor"), ["resize+crop+rotate+image-tone+image-watermark", "heic-convert", "image-metadata"]);
+  assert.deepEqual(entryIds("image-editor", { groupEditor: false }), ["resize", "crop", "rotate", "image-tone", "image-watermark", "heic-convert", "image-metadata"]);
+
+  const pdfEditor = ToolWorkspaceRegistry.find(({ id }) => id === "pdf-editor")!;
+  const [editEntry] = workspaceEntries(pdfEditor, toolsForWorkspace(pdfEditor).filter(({ id }) => id !== "pdf-edit"));
+  assert.equal(editEntry.title, "Edit PDF");
+  assert.equal(editEntry.tools[0].id, "pdf-watermark", "a hidden tool leaves the group led by the next one");
 });
 
 test("shared capability parsing rejects drift-prone shapes", () => {

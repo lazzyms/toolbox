@@ -60,7 +60,7 @@ const signatureFontOptions = [
 const watermarkFontSizes = [18, 24, 32, 40, 48, 56, 64, 72, 88, 104, 120];
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 type History = { past: PdfScene[]; present: PdfScene; future: PdfScene[] };
-export type ExistingPdfUtilityId = 'pdf-merge' | 'pdf-split';
+export type ExistingPdfUtilityId = 'pdf-merge' | 'pdf-split' | 'pdf-redact';
 export type PdfEditorNavigation = (navigation: {
   utilityId: ExistingPdfUtilityId;
   initialPaths: readonly [string, ...string[]];
@@ -95,6 +95,7 @@ function handleToolbarKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
 
 export const PDFEditorWorkspaceView = ({
   utility,
+  initialPaths,
   onNavigate,
   onWorkspaceSourceAction,
   fileActivation,
@@ -102,6 +103,7 @@ export const PDFEditorWorkspaceView = ({
   onFilesChange,
 }: {
   utility: ToolDefinition;
+  initialPaths?: readonly string[];
   onNavigate?: PdfEditorNavigation;
   onWorkspaceSourceAction?: (action: WorkspaceSourceAction | null) => void;
   fileActivation?: Extract<ShellEvent, { kind: 'files' }>;
@@ -114,7 +116,7 @@ export const PDFEditorWorkspaceView = ({
   const initialTool = availability.allows(toolFlagBySceneTool[requestedTool])
     ? requestedTool
     : tools.find((item) => availability.allows(toolFlagBySceneTool[item.id]))?.id ?? null;
-  return <ToolScaffold utility={utility} variant="workspace" sessionKey="pdf-editor-scene" onWorkspaceSourceAction={onWorkspaceSourceAction} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange}
+  return <ToolScaffold utility={utility} variant="workspace" sessionKey="pdf-editor-scene" initialPaths={initialPaths} onWorkspaceSourceAction={onWorkspaceSourceAction} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange}
     onRun={async (paths, outputLocation, { runId }) => {
       const [inputPath] = paths;
       if (!inputPath || !session.current || session.current.path !== inputPath) throw new Error('Select exactly one open PDF before exporting.');
@@ -426,6 +428,10 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
     <div ref={toolsToolbar} className="scene-tools" role="toolbar" aria-label="PDF editor tools" aria-orientation="horizontal" onFocusCapture={handleToolbarFocus} onKeyDown={handleToolbarKeyDown}>
       {tools.filter((item) => availability.allows(toolFlagBySceneTool[item.id])).map((item) => <Button key={item.id} variant={tool === item.id ? "secondary" : "ghost"} size="sm" aria-label={item.label} aria-description={toolGuidance[item.id]} title={toolGuidance[item.id]} aria-pressed={tool === item.id}
         onClick={() => { if (!availability.allows(toolFlagBySceneTool[item.id])) return; endGroup(); setTool(item.id); setSelectedId(null); }} disabled={!page}><span aria-hidden="true">{item.glyph}</span>{item.label}</Button>)}
+      {/* Redaction removes content for good, so it runs on a saved copy in its own screen with a confirmation step. */}
+      {availability.allows('pdf-redact') && onNavigate && <Button variant="ghost" size="sm" aria-label="Redact"
+        title={dirty ? 'Export or reset your edits before redacting' : 'Black out private details in a copy of this PDF'}
+        disabled={!page || !path || Boolean(dirty)} onClick={() => { if (path) onNavigate({ utilityId: 'pdf-redact', initialPaths: [path] }); }}><span aria-hidden="true">▮</span>Redact</Button>}
       <span className="scene-toolbar-divider" />
       <Button variant="ghost" size="icon-sm" aria-label="Undo" title="Undo (⌘Z / Ctrl+Z)" disabled={!history.past.length} onClick={undo}>↶</Button>
       <Button variant="ghost" size="icon-sm" aria-label="Redo" title="Redo (⇧⌘Z / Ctrl+Shift+Z)" disabled={!history.future.length} onClick={redo}>↷</Button>

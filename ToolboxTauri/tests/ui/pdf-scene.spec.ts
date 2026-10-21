@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { openToolBySearch } from "./open-tool";
 import { UtilityRegistry } from '../../src/registry';
 
 const svg = "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="612" height="792"><rect width="612" height="792" fill="white"/><text x="60" y="85" font-size="24">A local test document</text></svg>');
@@ -40,7 +41,7 @@ test.beforeEach(async ({ page }) => {
 
 async function openEditor(page: Page) {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Open Edit PDF', exact: true }).click();
+  await openToolBySearch(page, "Edit PDF");
   await page.getByRole('button', { name: 'Choose files to process' }).click();
   await expect(page.getByRole('group', { name: 'PDF page canvas' })).toBeVisible();
   await expect.poll(() => page.evaluate(() => (window as any).calls.some((call: any) => call.command === 'preview_pdf_scene_pages'))).toBe(true);
@@ -88,7 +89,7 @@ test('PDF editor keeps the back link, title, and empty-state open action compact
   });
   page.on('pageerror', error => pageErrors.push(error.message));
   await page.goto('/');
-  await page.getByRole('button', { name: 'Open Edit PDF', exact: true }).click();
+  await openToolBySearch(page, "Edit PDF");
   await expect(page.locator('.pdf-editor-header-line')).toContainText('PDF Editor');
   await expect(page.locator('.pdf-editor-header-line')).toContainText('Open files');
   await expect(page.getByRole('button', { name: 'Choose files to process' })).toBeVisible();
@@ -161,16 +162,17 @@ for (const [utility, command] of [['Merge PDF', 'merge_pdfs'], ['Split PDF', 'sp
     await openEditor(page);
     await page.getByRole('button', { name: 'Page actions' }).click();
     await page.getByRole('menuitem', { name: utility }).click();
-    await expect(page.getByRole('heading', { name: 'PDF conversion', exact: true })).toBeFocused();
-    await expect(page.getByRole('toolbar', { name: 'PDF conversion tools' }).getByRole('button', { name: utility, exact: true })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'scene-fixture.pdf', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'PDF Editor', exact: true })).toBeFocused();
+    await expect(page.getByRole('toolbar', { name: 'PDF Editor tools' }).getByRole('button', { name: utility, exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'scene-fixture.pdf /local', exact: true })).toBeVisible();
     expect(await page.evaluate((command) => (window as any).calls.filter((call: any) => call.command === command).length, command)).toBe(0);
     if (utility === 'Merge PDF') {
       await page.evaluate(() => { (window as any).dialogNext = '/local/second-scene-fixture.pdf'; });
       await page.getByRole('button', { name: 'Choose files to process' }).click();
-      await expect(page.getByRole('button', { name: 'second-scene-fixture.pdf', exact: true })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'second-scene-fixture.pdf /local', exact: true })).toBeVisible();
     }
-    await page.getByRole('button', { name: `Export ${utility}`, exact: true }).click();
+    await page.locator('.workspace-primary-action').click();
+    if (utility === 'Merge PDF') await page.getByRole('dialog').getByRole('button', { name: 'Save' }).click();
     await expect.poll(() => page.evaluate((command) => (window as any).calls.filter((call: any) => call.command === command).at(-1)?.args.request.paths, command))
       .toEqual(utility === 'Merge PDF' ? ['/local/scene-fixture.pdf', '/local/second-scene-fixture.pdf'] : ['/local/scene-fixture.pdf']);
   });
@@ -217,7 +219,7 @@ test('PostHog flags select tools per OS in search and PDF page actions', async (
   await expect(pdfToTextTool).toHaveCount(0);
   await search.fill('');
 
-  await page.getByRole('button', { name: 'Open Edit PDF', exact: true }).click();
+  await openToolBySearch(page, "Edit PDF");
   await page.getByRole('button', { name: 'Choose files to process' }).click();
   await expect(page.getByRole('group', { name: 'PDF page canvas' })).toBeVisible();
   const pageActions = page.getByRole('button', { name: 'Page actions' });
@@ -229,8 +231,8 @@ test('PostHog flags select tools per OS in search and PDF page actions', async (
   if (mergeEnabled) {
     await expect(mergeAction).toBeVisible();
     await mergeAction.click();
-    await expect(page.getByRole('heading', { name: 'PDF conversion', exact: true })).toBeFocused();
-    await expect(page.getByRole('toolbar', { name: 'PDF conversion tools' }).getByRole('button', { name: 'Merge PDF', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'PDF Editor', exact: true })).toBeFocused();
+    await expect(page.getByRole('toolbar', { name: 'PDF Editor tools' }).getByRole('button', { name: 'Merge PDF', exact: true })).toBeVisible();
   } else {
     await expect(mergeAction).toHaveCount(0);
     await expect(menu.getByRole('menuitem', { name: 'Split PDF', exact: true })).toBeVisible();
@@ -326,7 +328,7 @@ test('scene lazily requests text for the current source page', async ({ page }) 
 test('scene ignores stale page text responses after changing pages', async ({ page }) => {
   await page.goto('/');
   await page.evaluate(() => { (window as any).sceneTextDelays[0] = 300; });
-  await page.getByRole('button', { name: 'Open Edit PDF', exact: true }).click();
+  await openToolBySearch(page, "Edit PDF");
   await page.getByRole('button', { name: 'Choose files to process' }).click();
   await expect(page.getByRole('group', { name: 'PDF page canvas' })).toBeVisible();
   await page.getByRole('button', { name: 'Page 2', exact: true }).click();
@@ -414,7 +416,7 @@ test('Export stays disabled until the document has an effective change', async (
 test('Cmd+O opens a PDF in the editor and Cmd+Enter exports only once there is a change', async ({ page }) => {
   const count = (command: string) => page.evaluate((command) => (window as any).calls.filter((c: any) => c.command === command).length, command);
   await page.goto('/');
-  await page.getByRole('button', { name: 'Open Edit PDF', exact: true }).click();
+  await openToolBySearch(page, "Edit PDF");
   await expect(page.locator('.pdf-editor-open-files')).toContainText('⌘O');
   await page.locator('body').press('Meta+O');
   await expect(page.getByRole('group', { name: 'PDF page canvas' })).toBeVisible();

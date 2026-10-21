@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { openToolBySearch } from "./open-tool";
 
 test("desktop shell uses neutral shadcn controls in both themes", async ({ page }, testInfo) => {
   await page.goto("/");
@@ -75,14 +76,14 @@ test("feature panels and previews use shadcn Card surfaces", async ({ page }) =>
 
   for (const { tool, selectors } of surfacesByTool) {
     await page.goto("/");
-    await page.getByRole("button", { name: `Open ${tool}`, exact: true }).click();
+    await openToolBySearch(page, tool);
     for (const selector of selectors) {
       await expect(page.locator(selector)).toHaveAttribute("data-slot", "card");
     }
   }
 
   await page.goto("/");
-  await page.getByRole("button", { name: "Open Edit PDF", exact: true }).click();
+  await openToolBySearch(page, "Edit PDF");
   const emptyScene = page.locator(".scene-empty");
   await expect(emptyScene.locator('[data-slot="card-header"]')).toHaveCount(1);
   await expect(emptyScene.getByRole("heading", { name: "Open a PDF to edit" })).toBeVisible();
@@ -99,7 +100,7 @@ test("shared cards keep generated anatomy and variants own selected appearance",
   await expect(emptyState.locator('[data-slot="card-footer"]')).toHaveCount(1);
 
   await page.getByRole("navigation", { name: "Workspace navigation" }).getByRole("button", { name: "All tools" }).click();
-  await page.getByRole("button", { name: "Open Lock & Unlock", exact: true }).click();
+  await openToolBySearch(page, "Lock & Unlock");
 
   const sourceBar = page.locator(".workspace-source-bar");
   await expect.poll(() => sourceBar.evaluate((element) => getComputedStyle(element).borderRadius)).toBe("14px");

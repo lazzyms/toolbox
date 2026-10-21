@@ -8,7 +8,8 @@ const registry = read("src/registry/index.ts");
 const atomicSource = registry.split("export const UtilityRegistry")[0];
 const atomicIds = [...atomicSource.matchAll(/\{ id: "([^"]+)"/g)].map((match) => match[1]);
 const workspaceSource = registry.split("export const ToolWorkspaceRegistry")[1] ?? "";
-const workspaceIds = [...workspaceSource.matchAll(/toolIds:\s*\[([\s\S]*?)\]/g)]
+// A view's editor lists a subset of its toolIds, so only the view's own toolIds count toward membership.
+const workspaceIds = [...workspaceSource.matchAll(/(?<!editor:\s*\{[^}]*)toolIds:\s*\[([\s\S]*?)\]/g)]
   .flatMap((match) => [...match[1].matchAll(/"([^"]+)"/g)].map((item) => item[1]));
 
 const failures = [];
@@ -29,6 +30,10 @@ for (const retired of ["pdf-unlock", "pdf-protect", "office-protect"]) {
 if (membersOf("compress-files").join() !== "pdf-compress,compress") failures.push("compress-files must hold exactly pdf-compress and compress");
 if (!membersOf("pdf-convert").includes("pdf-ocr")) failures.push("pdf-ocr must belong to the PDF conversion workspace");
 if (membersOf("media-tools").includes("pdf-ocr")) failures.push("pdf-ocr must not belong to the media workspace");
+for (const id of ["pdf-merge", "pdf-split", "pdf-crop", "pdf-page-numbers", "pdf-rotate", "pdf-repair", "pdf-compare", "pdf-redact"]) {
+  if (!membersOf("pdf-editor").includes(id)) failures.push(`${id} must belong to the PDF Editor`);
+}
+if (!membersOf("image-editor").includes("image-metadata")) failures.push("image-metadata must belong to the Image Editor");
 
 const mainPage = read("src/views/MainPage.tsx");
 const legacyViews = [

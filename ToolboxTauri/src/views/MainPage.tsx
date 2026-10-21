@@ -15,7 +15,9 @@ import {
   UtilityRegistry,
   toolsForWorkspace,
   toolsForWorkspaceId,
+  workspaceEntries,
   workspaceForTool,
+  isPdfSceneTool,
 } from "../registry";
 import type { AtomicToolId, ToolDefinition, WorkspaceId } from "../contracts";
 import { TablerIcon } from "../components/TablerIcon";
@@ -66,7 +68,8 @@ export const MainPage = () => {
   const focusWorkspaceHeadingOnNavigation = useRef(false);
   const [fileActivation, setFileActivation] = useState<Extract<ShellEvent, { kind: "files" }> | null>(null);
   const [rejectedFiles, setRejectedFiles] = useState<Extract<ShellEvent, { kind: "rejected-files" }> | null>(null);
-  const [activeDocumentPath, setActiveDocumentPath] = useState<string | null>(null);
+  const [openPaths, setOpenPaths] = useState<readonly string[]>([]);
+  const activeDocumentPath = openPaths[0] ?? null;
   const [viewZoom, setViewZoom] = useState(() => Number(localStorage.getItem("toolbox-view-zoom") || "1"));
   const activationInFlight = useRef<string | null>(null);
   const queuedActivations = useRef<Extract<ShellEvent, { kind: "files" }>[]>([]);
@@ -105,10 +108,11 @@ export const MainPage = () => {
       ToolWorkspaceRegistry.map((workspace) => {
         const actions = availability.filter(toolsForWorkspace(workspace)).filter((tool) => {
           const matchesScope = filter === "all" || favorites.includes(tool.id);
-          const searchText = `${tool.title} ${tool.blurb} ${tool.keywords?.join(" ") ?? ""} ${workspace.title} ${workspace.blurb}`.toLowerCase();
+          const editorTitle = workspace.editor?.toolIds.includes(tool.id) ? workspace.editor.title : "";
+          const searchText = `${tool.title} ${tool.blurb} ${tool.keywords?.join(" ") ?? ""} ${editorTitle} ${workspace.title} ${workspace.blurb}`.toLowerCase();
           return matchesScope && searchText.includes(normalizedSearch);
         });
-        return { workspace, actions };
+        return { workspace, actions, entries: workspaceEntries(workspace, actions, { groupEditor: filter === "all" && !normalizedSearch }) };
       }).filter(({ actions }) => actions.length > 0),
     [filter, normalizedSearch, favorites, availability],
   );
@@ -117,19 +121,24 @@ export const MainPage = () => {
     setFileActivation(null);
     activationInFlight.current = null;
     queuedActivations.current = [];
-    setActiveDocumentPath(paths[0] ?? null);
+    setOpenPaths(paths);
     setWorkspaceSourceAction(null);
     setInitialPaths([...paths]);
     setSelectedTool(tool);
     const recent: string[] = JSON.parse(localStorage.getItem(recentStorageKey) || "[]");
     localStorage.setItem(recentStorageKey, JSON.stringify([tool.id, ...recent.filter((id) => id !== tool.id)].slice(0, 8)));
   }, [availability]);
+  /** Switches tools inside the open view and keeps its files open. */
+  const selectViewTool = useCallback((id: AtomicToolId) => {
+    const tool = UtilityRegistry.find((item) => item.id === id);
+    if (tool && tool.id !== selectedTool?.id) openTool(tool, openPaths);
+  }, [openPaths, openTool, selectedTool?.id]);
   const goHome = useCallback(() => {
     setWorkspaceSourceAction(null);
     setSelectedTool(null);
     setInitialPaths([]);
     setFileActivation(null);
-    setActiveDocumentPath(null);
+    setOpenPaths([]);
     activationInFlight.current = null;
     queuedActivations.current = [];
   }, []);
@@ -186,7 +195,9 @@ export const MainPage = () => {
   const selectedWorkspace = selectedTool
     ? workspaceForTool(selectedTool.id)
     : undefined;
-  const railWorkspace = selectedTool && selectedWorkspace && selectedWorkspace.id !== "pdf-editor"
+  // The PDF scene editor fills the window; every other tool, including the PDF Editor's batch tools, gets the view rail.
+  const sceneView = selectedTool ? isPdfSceneTool(selectedTool.id) : false;
+  const railWorkspace = selectedTool && selectedWorkspace && !sceneView
     ? selectedWorkspace
     : null;
   const openFilesFromMenu = useCallback(async () => {
@@ -210,7 +221,7 @@ export const MainPage = () => {
     setRejectedFiles(null);
     setInitialPaths([]);
     setFileActivation(event);
-    setActiveDocumentPath(event.paths[0] ?? null);
+    setOpenPaths(event.paths);
     setSelectedTool(tool);
     setWorkspaceSourceAction(null);
     const recent: string[] = JSON.parse(localStorage.getItem(recentStorageKey) || "[]");
@@ -303,7 +314,7 @@ export const MainPage = () => {
     activationInFlight.current = null;
     setFileActivation(null);
   }, [startNextActivation]);
-  const publishDocumentPath = useCallback((paths: readonly string[]) => setActiveDocumentPath(paths[0] ?? null), []);
+  const publishDocumentPath = useCallback((paths: readonly string[]) => setOpenPaths(paths), []);
   useShellBridge(handleShellEvent);
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
@@ -344,10 +355,10 @@ export const MainPage = () => {
     return () => window.removeEventListener("keydown", onEscape);
   }, [goHome, selectedTool, settingsSection]);
   useEffect(() => {
-    if (!focusWorkspaceHeadingOnNavigation.current || selectedWorkspace?.id !== "pdf-convert") return;
+    if (!focusWorkspaceHeadingOnNavigation.current || !selectedTool || sceneView) return;
     focusWorkspaceHeadingOnNavigation.current = false;
     workspaceHeadingRef.current?.focus();
-  }, [selectedTool, selectedWorkspace?.id]);
+  }, [selectedTool, sceneView]);
   useEffect(() => {
     document.body.dataset.theme =
       (localStorage.getItem("toolbox-theme") as "dark" | "light") || "dark";
@@ -432,11 +443,9 @@ export const MainPage = () => {
             <p className="eyebrow view-rail-heading">{railWorkspace.title}</p>
             <WorkspaceCommandRail
               actions={availability.filter(toolsForWorkspace(railWorkspace))}
+              workspace={railWorkspace}
               activeId={selectedTool.id}
-              onSelect={(id) => {
-                const tool = UtilityRegistry.find((item) => item.id === id);
-                if (tool && tool.id !== selectedTool.id) openTool(tool);
-              }}
+              onSelect={selectViewTool}
               label={`${railWorkspace.title} tools`}
               disabled={running}
             />
@@ -537,8 +546,8 @@ export const MainPage = () => {
           </Card>
         )}
         {selectedTool && selectedWorkspace ? (
-          <section className={`tool-workspace ${selectedWorkspace.id === "pdf-editor" ? "pdf-studio" : ""}`} id="tool-detail">
-            {selectedWorkspace.id === "pdf-editor" && (
+          <section className={`tool-workspace ${sceneView ? "pdf-studio" : ""}`} id="tool-detail">
+            {sceneView && (
               <div className="pdf-editor-header-line">
                 <Button className="back-link" variant="ghost" size="sm" onClick={goHome}>← All tools</Button>
                 <h1 className="workspace-title">{selectedWorkspace.title}</h1>
@@ -546,8 +555,8 @@ export const MainPage = () => {
                 {favoriteButton(selectedTool)}
               </div>
             )}
-            <Card className={`tool-workspace-card ${selectedWorkspace.id === "pdf-editor" ? "py-0" : ""}`}>
-              {selectedWorkspace.id === "pdf-editor" ? (
+            <Card className={`tool-workspace-card ${sceneView ? "py-0" : ""}`}>
+              {sceneView ? (
                 <CardContent className="tool-view py-0">
                   <ViewFor utility={selectedTool} initialPaths={initialPaths}
                     fileActivation={fileActivation?.workspace === selectedWorkspace.id ? fileActivation : undefined}
@@ -577,6 +586,7 @@ export const MainPage = () => {
                         fileActivation={fileActivation?.workspace === selectedWorkspace.id ? fileActivation : undefined}
                         onActivationAccepted={acceptActivation}
                         onFilesChange={publishDocumentPath}
+                        onSelectTool={selectViewTool}
                         onWorkspaceSourceAction={publishWorkspaceSourceAction}
                       />
                     </RunStateContext.Provider>
@@ -599,10 +609,10 @@ export const MainPage = () => {
               </div>
             )}
             <div className="view-grid">
-              {visibleWorkspaces.map(({ workspace, actions }) => {
+              {visibleWorkspaces.map(({ workspace, actions, entries }) => {
                 const expanded = normalizedSearch !== "" || filter === "favorites" || expandedViews.includes(workspace.id);
-                const shown = expanded ? actions : actions.slice(0, visibleToolsPerView);
-                const hiddenCount = actions.length - shown.length;
+                const shown = expanded ? entries : entries.slice(0, visibleToolsPerView);
+                const hiddenCount = entries.length - shown.length;
                 const titleId = `view-section-${workspace.id}`;
                 return (
                   <section className="view-section" key={workspace.id} aria-labelledby={titleId}>
@@ -614,20 +624,20 @@ export const MainPage = () => {
                       </Button>
                     </div>
                     <div className="view-tool-list">
-                      {shown.map((tool) => (
+                      {shown.map((entry) => (
                         <Button
                           type="button"
-                          key={tool.id}
+                          key={entry.key}
                           className="view-tool-link"
                           variant="ghost"
                           size="sm"
-                          data-command-result={tool.id}
-                          aria-label={`Open ${tool.title}`}
-                          title={tool.blurb}
+                          data-command-result={entry.tools[0].id}
+                          aria-label={`Open ${entry.title}`}
+                          title={entry.blurb}
                           onKeyDown={handleCommandResultKeyDown}
-                          onClick={() => openTool(tool)}
+                          onClick={() => openTool(entry.tools[0])}
                         >
-                          {tool.title}
+                          {entry.title}
                         </Button>
                       ))}
                       {hiddenCount > 0 && (
@@ -683,13 +693,14 @@ export const MainPage = () => {
   );
 };
 
-const ViewFor = ({ utility, initialPaths, fileActivation, onActivationAccepted, onFilesChange, onNavigate, onWorkspaceSourceAction }: {
+const ViewFor = ({ utility, initialPaths, fileActivation, onActivationAccepted, onFilesChange, onNavigate, onSelectTool, onWorkspaceSourceAction }: {
   utility: ToolDefinition;
   initialPaths?: readonly string[];
   fileActivation?: Extract<ShellEvent, { kind: "files" }>;
   onActivationAccepted?: (activationId: string) => void;
   onFilesChange?: (paths: readonly string[]) => void;
   onNavigate?: PdfEditorNavigation;
+  onSelectTool?: (id: AtomicToolId) => void;
   onWorkspaceSourceAction?: (action: WorkspaceSourceAction | null) => void;
 }) => {
   if (utility.capability.nativeAvailability === "unavailable") {
@@ -697,9 +708,11 @@ const ViewFor = ({ utility, initialPaths, fileActivation, onActivationAccepted, 
   }
   const workspace = workspaceForTool(utility.id);
   if (!workspace) return <PlannedToolView utility={utility} />;
-  if (workspace.id === "pdf-editor") return <PDFEditorWorkspaceView utility={utility} onNavigate={onNavigate} onWorkspaceSourceAction={onWorkspaceSourceAction} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange} />;
-  if (workspace.id === "image-editor") return <ImageEditorWorkspaceView utility={utility} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange} onWorkspaceSourceAction={onWorkspaceSourceAction} />;
-  if (workspace.id === "pdf-convert") return <PDFConversionWorkspaceView utility={utility} initialPaths={initialPaths} />;
+  // Views are chosen by tool: the PDF Editor holds both the scene editor and batch PDF tools.
+  if (isPdfSceneTool(utility.id)) return <PDFEditorWorkspaceView utility={utility} initialPaths={initialPaths} onNavigate={onNavigate} onWorkspaceSourceAction={onWorkspaceSourceAction} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange} />;
+  if (workspace.id === "pdf-editor" || workspace.id === "pdf-convert") return <PDFConversionWorkspaceView utility={utility} initialPaths={initialPaths} onFilesChange={onFilesChange} />;
+  if (workspace.id === "image-editor" && utility.id !== "image-metadata") return <ImageEditorWorkspaceView utility={utility} initialPaths={initialPaths} onSelectTool={onSelectTool} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange} onWorkspaceSourceAction={onWorkspaceSourceAction} />;
+  if (utility.id === "image-metadata") return <MediaWorkspaceView utility={utility} initialPaths={initialPaths} onFilesChange={onFilesChange} />;
   const View = workspaceViews[workspace.id];
   return <View utility={utility} />;
 };

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { openToolBySearch } from "./open-tool";
 
 type PathKind = "file" | "folder" | "unreadable";
 
@@ -113,7 +114,7 @@ test.beforeEach(async ({ page }) => {
 
 const open = async (page: Page, title: string) => {
     await page.goto("/");
-    await page.getByRole("button", { name: `Open ${title}`, exact: true }).click();
+    await openToolBySearch(page, title);
 };
 
 const drop = async (page: Page, paths: string[]) => {
@@ -138,12 +139,12 @@ const requestFor = async (page: Page, command: string) => {
 };
 
 test("dropped paths are classified, and only files the active tool takes are sent", async ({ page }) => {
-    await open(page, "Image Metadata");
+    await open(page, "Generate App Icons");
     await setKinds(page, { "/local/Scans": "folder", "/local/locked.png": "unreadable" });
 
-    await drop(page, ["/local/photo.png", "/local/notes.txt", "/local/Scans", "/local/locked.png", "/local/photo.png", "/local/clip.gif", "/local/scan.tiff"]);
+    await drop(page, ["/local/photo.png", "/local/notes.txt", "/local/Scans", "/local/locked.png", "/local/photo.png", "/local/clip.gif"]);
 
-    await expect(rows(page)).toHaveText([/^photo\.png/, /^clip\.gif/, /^scan\.tiff/]);
+    await expect(rows(page)).toHaveText([/^photo\.png/, /^clip\.gif/]);
     const notAdded = page.getByRole("region", { name: "Not added" });
     await expect(notAdded.getByText("4 items not added")).toBeVisible();
     await expect(notAdded.getByRole("listitem")).toHaveText([
@@ -153,11 +154,11 @@ test("dropped paths are classified, and only files the active tool takes are sen
         /photo\.png.*Already in the list, so it was added once\./,
     ]);
     await expect(rows(page).filter({ hasText: "clip.gif" })).toContainText("Won't run");
-    await expect(page.getByText("1 file won't run with Image Metadata. It stays in the list for other actions.")).toBeVisible();
+    await expect(page.getByText("1 file won't run with Generate App Icons. It stays in the list for other actions.")).toBeVisible();
 
     await page.locator(".workspace-primary-action").click();
     await expect(page.getByText("Test output").first()).toBeVisible();
-    expect((await requestFor(page, "image_metadata")).map((request) => request.paths)).toEqual([["/local/photo.png", "/local/scan.tiff"]]);
+    expect((await requestFor(page, "generate_icon_set")).map((request) => request.paths)).toEqual([["/local/photo.png"]]);
 
     await notAdded.getByRole("button", { name: "Dismiss" }).click();
     await expect(notAdded).toHaveCount(0);
@@ -182,29 +183,31 @@ test("ordered tools keep repeated drops in the order they arrive", async ({ page
 });
 
 test("the picker filters by the active tool and allows one file only for single-input tools", async ({ page }) => {
+    const pickerOptions = () => page.evaluate(() => (window as unknown as IntakeWindow).__invocations
+        .filter(({ command }) => command === "plugin:dialog|open")
+        .map(({ args }) => (args as { options: { multiple: boolean; filters: Array<{ extensions: string[] }> } }).options)
+        .map(({ multiple, filters }) => ({ multiple, extensions: filters[0].extensions })));
+
     await open(page, "Merge PDF");
     await page.evaluate(() => { (window as unknown as IntakeWindow).__dialogResult = ["/local/a.pdf", "/local/b.pdf"]; });
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await expect(rows(page)).toHaveCount(2);
 
-    await page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "Images to PDF", exact: true }).click();
-    await page.evaluate(() => { (window as unknown as IntakeWindow).__dialogResult = ["/local/scan.png"]; });
-    await page.getByRole("button", { name: "Choose files to process" }).click();
-    await expect(rows(page)).toHaveCount(3);
-
-    await page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "Split PDF", exact: true }).click();
+    await page.getByRole("toolbar", { name: "PDF Editor tools" }).getByRole("button", { name: "Split PDF", exact: true }).click();
+    await expect(rows(page)).toHaveCount(2);
     await page.evaluate(() => { (window as unknown as IntakeWindow).__dialogResult = "/local/c.pdf"; });
     await page.getByRole("button", { name: "Choose files to process" }).click();
-
-    const dialogs = await page.evaluate(() => (window as unknown as IntakeWindow).__invocations
-        .filter(({ command }) => command === "plugin:dialog|open")
-        .map(({ args }) => (args as { options: { multiple: boolean; filters: Array<{ extensions: string[] }> } }).options));
-    expect(dialogs.map(({ multiple, filters }) => ({ multiple, extensions: filters[0].extensions }))).toEqual([
+    await expect(rows(page)).toHaveText([/^c\.pdf/]);
+    expect(await pickerOptions()).toEqual([
         { multiple: true, extensions: ["pdf"] },
-        { multiple: true, extensions: ["png", "jpg", "jpeg", "webp", "heic"] },
         { multiple: false, extensions: ["pdf"] },
     ]);
-    await expect(rows(page)).toHaveText([/^c\.pdf/]);
+
+    await open(page, "Images to PDF");
+    await page.evaluate(() => { (window as unknown as IntakeWindow).__dialogResult = ["/local/scan.png"]; });
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await expect(rows(page)).toHaveText([/scan\.png/]);
+    expect(await pickerOptions()).toEqual([{ multiple: true, extensions: ["png", "jpg", "jpeg", "webp", "heic"] }]);
 });
 
 test("click, Shift-click and Cmd-click select rows, and removal only edits the list", async ({ page }) => {
@@ -298,7 +301,7 @@ test("intake, options and the file list lock while a run is in progress", async 
     await expect(page.getByRole("button", { name: "Move a.pdf down" })).toBeDisabled();
     await expect(page.getByRole("button", { name: "Drag a.pdf to reorder" })).toBeDisabled();
     await expect(rows(page).first().getByRole("button", { name: /^a\.pdf/ })).toBeDisabled();
-    await expect(page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "Split PDF", exact: true })).toBeDisabled();
+    await expect(page.getByRole("toolbar", { name: "PDF Editor tools" }).getByRole("button", { name: "Split PDF", exact: true })).toBeDisabled();
     await drop(page, ["/local/late.pdf"]);
     await expect(rows(page)).toHaveCount(2);
 
@@ -622,7 +625,7 @@ test("every File Security search term finds one Lock & Unlock entry that opens t
         await expect(page.getByRole("button", { name: "Open File Security", exact: true }), term).toHaveCount(1);
         await expect(page.locator('button[data-command-result="lock-unlock"]'), term).toHaveCount(1);
     }
-    await page.getByRole("button", { name: "Open Lock & Unlock", exact: true }).click();
+    await openToolBySearch(page, "Lock & Unlock");
     await expect(page.locator(".workspace-title")).toHaveText("File Security");
     await expect(page.getByRole("radiogroup", { name: "Mode" }).getByRole("radio", { name: "Unlock", exact: true })).toHaveAttribute("aria-checked", "true");
 });
