@@ -1,9 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ToolScaffold, type RunHandler } from "../components/ToolScaffold";
-import { WorkspaceCommandRail } from "../components/WorkspaceCommandRail";
 import { BatchPasswordFields, FilePasswordCell, passwordReadiness, passwordRequest, usePasswordSet, type PasswordMode, type PasswordState } from "../components/PasswordFields";
-import { toolsForWorkspaceId, UtilityRegistry } from "../registry";
 import type { AtomicToolId, PasswordSet, ToolDefinition, ToolResult } from "../contracts";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -26,20 +24,8 @@ const ForgetClosedFiles = ({ files, passwords }: { files: string[]; passwords: P
   return null;
 };
 
-const securityActions = toolsForWorkspaceId("file-security");
-const securityIds = new Set<string>(securityActions.map((tool) => tool.id));
-
-export const SecurityWorkspaceView = ({ utility }: { utility: ToolDefinition }) => {
+export const SecurityWorkspaceView = ({ utility: activeUtility }: { utility: ToolDefinition }) => {
   const passwords = usePasswordSet();
-  const [activeToolId, setActiveToolId] = useState<AtomicToolId>(
-    securityIds.has(utility.id) ? utility.id : "pdf-unlock",
-  );
-  useEffect(() => {
-    setActiveToolId(securityIds.has(utility.id) ? utility.id : "pdf-unlock");
-  }, [utility.id]);
-  const activeUtility = securityIds.has(utility.id)
-    ? UtilityRegistry.find((item) => item.id === activeToolId) ?? utility
-    : UtilityRegistry.find((item) => item.id === activeToolId) ?? utility;
   const isPdfProtection = activeUtility.id === "pdf-protect";
   const isOfficeProtection = activeUtility.id === "office-protect";
   const mode: PasswordMode = isPdfProtection || isOfficeProtection ? "lock" : "unlock";
@@ -65,12 +51,6 @@ export const SecurityWorkspaceView = ({ utility }: { utility: ToolDefinition }) 
         <Card className="workspace-control-panel py-0">
           <ForgetClosedFiles files={files} passwords={passwords} />
           <CardContent className="workspace-control-panel-content grid gap-4 p-4">
-          <WorkspaceCommandRail
-            actions={securityActions}
-            activeId={activeToolId}
-            onSelect={setActiveToolId}
-            label="File security tools"
-          />
           <div>
             <h2 className="workspace-active-command">{activeUtility.title}</h2>
             <p className="workspace-panel-label">

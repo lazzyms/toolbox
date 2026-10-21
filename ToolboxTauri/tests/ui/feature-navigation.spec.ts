@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import path from "node:path";
 import type { JobOutcome, LimitKind, OutputSettings } from "../../src/contracts";
-import { ToolWorkspaceRegistry, UtilityRegistry, workspaceForTool } from "../../src/registry";
+import { ToolWorkspaceRegistry, UtilityRegistry, toolsForWorkspace, workspaceForTool } from "../../src/registry";
 import { RetiredToolIds } from "../../src/registry/retiredToolIds";
 
 // Lock asks for the new password twice, so fill every password field in the options panel.
@@ -38,7 +38,17 @@ const confirmSave = async (page: Page) => {
     await expect(dialog).toHaveCount(0);
 };
 
-const defaultOutputSettings: OutputSettings = { mode: "alongsideInput", folder: "/Users/test/Documents/Toolbox" };
+const expandViews = async (page: Page) => {
+    const more = page.locator(".view-more-tools");
+    while (await more.count()) await more.first().click();
+};
+
+const openFromHome = async (page: Page, title: string) => {
+    await expandViews(page);
+    await page.getByRole("button", { name: `Open ${title}`, exact: true }).click();
+};
+
+const defaultOutputSettings: OutputSettings ={ mode: "alongsideInput", folder: "/Users/test/Documents/Toolbox" };
 
 test.beforeEach(async ({ page }) => {
     await page.addInitScript(({ fixturePath, pdfFixturePath, mockedOutputPaths, defaultOutputSettings }) => {
@@ -155,6 +165,7 @@ if (command === "preview_pdf_scene_pages") return (args as { request: { pageIndi
 test("every registered feature opens its detail pane", async ({ page }) => {
     await page.goto("/");
     await expect(page.locator(".topbar--home").getByRole("textbox", { name: "Search tools" })).toBeVisible();
+    await expandViews(page);
 
     for (const [index, utility] of UtilityRegistry.entries()) {
         if (index > 0) {
@@ -176,31 +187,21 @@ test("every registered feature opens its detail pane", async ({ page }) => {
     }
 });
 
-test("sidebar quick access pairs design icons with labels", async ({ page }) => {
+test("sidebar views pair design icons with labels and open each view", async ({ page }) => {
     await page.goto("/");
-    const quickAccess = page.locator("nav.quick-tools");
-    await expect(quickAccess).toBeVisible();
-    await expect(quickAccess.getByRole("button")).toHaveCount(4);
-    await expect(quickAccess.locator('[aria-hidden="true"]')).toHaveCount(4);
+    const views = page.getByRole("navigation", { name: "Views" });
+    await expect(views.getByRole("button")).toHaveText(ToolWorkspaceRegistry.map((workspace) => workspace.title));
+    await expect(views.locator('.rail-link-icon[aria-hidden="true"]')).toHaveCount(ToolWorkspaceRegistry.length);
 
-    const iconMetrics = await quickAccess.locator(".quick-tool-icon").first().evaluate((node) => {
-        const icon = node.querySelector("span");
-        const box = node.getBoundingClientRect();
-        const glyph = icon?.getBoundingClientRect();
-        return {
-            color: getComputedStyle(node).color,
-            boxWidth: box.width,
-            boxHeight: box.height,
-            glyphWidth: glyph?.width ?? 0,
-            glyphHeight: glyph?.height ?? 0,
-        };
-    });
+    const glyph = await views.locator(".rail-link-icon").first().evaluate((node) => node.getBoundingClientRect());
+    expect(glyph.width).toBeGreaterThanOrEqual(15);
+    expect(glyph.height).toBeGreaterThanOrEqual(15);
 
-    expect(iconMetrics.color).not.toBe("rgb(153, 153, 153)");
-    expect(iconMetrics.boxWidth).toBeGreaterThanOrEqual(26);
-    expect(iconMetrics.boxHeight).toBeGreaterThanOrEqual(26);
-    expect(iconMetrics.glyphWidth).toBeGreaterThanOrEqual(15);
-    expect(iconMetrics.glyphHeight).toBeGreaterThanOrEqual(15);
+    for (const workspace of ToolWorkspaceRegistry) {
+        await views.getByRole("button", { name: workspace.title, exact: true }).click();
+        await expect(page.locator(".workspace-title")).toHaveText(workspace.title);
+        await page.getByRole("button", { name: "← All tools" }).first().click();
+    }
 });
 
 test("settings highlight matches navigation items", async ({ page }) => {
@@ -239,7 +240,7 @@ test("settings highlight matches navigation items", async ({ page }) => {
 test("file upload surface follows the selected theme", async ({ page }) => {
     await page.goto("/");
     const utility = UtilityRegistry[0];
-    await page.getByRole("button", { name: `Open ${utility.title}` }).click();
+    await openFromHome(page, utility.title);
 
     const sourceBar = page.locator(".workspace-source-bar");
     const readSurface = () => sourceBar.evaluate((node) => ({
@@ -275,49 +276,31 @@ test("file upload surface follows the selected theme", async ({ page }) => {
     await expect.poll(readSurface).toEqual(darkSurface);
 });
 
-test("favorites and recent navigation show their intended libraries", async ({ page }) => {
+test("favorites navigation shows saved tools as chips and as a filtered library", async ({ page }) => {
     await page.goto("/");
     const workspaceNav = page.locator('nav[aria-label="Workspace navigation"]');
+    const chips = page.getByRole("group", { name: "Favorite tools" });
 
     await workspaceNav.getByRole("button", { name: "Favorites" }).click();
-    await expect(
-        page.getByRole("radiogroup", { name: "Tool library filters" })
-            .getByRole("radio", { name: "Favorites", exact: true }),
-    ).toHaveAttribute("aria-checked", "true");
     await expect(page.getByText("No favorite tools yet", { exact: true })).toBeVisible();
     await expect(workspaceNav.getByRole("button", { name: "Favorites" })).toHaveAttribute("aria-current", "page");
-
-    await workspaceNav.getByRole("button", { name: "Recent" }).click();
-    await expect(
-        page.getByRole("radiogroup", { name: "Tool library filters" })
-            .getByRole("radio", { name: "Recent", exact: true }),
-    ).toHaveAttribute("aria-checked", "true");
-    await expect(page.getByText("No recent tools yet", { exact: true })).toBeVisible();
-    await expect(workspaceNav.getByRole("button", { name: "Recent" })).toHaveAttribute("aria-current", "page");
+    await expect(chips).toHaveCount(0);
 
     await workspaceNav.getByRole("button", { name: "All tools" }).click();
-    await page.getByRole("button", { name: "Add Remove Password to favorites" }).click();
-    await workspaceNav.getByRole("button", { name: "Favorites" }).click();
-    await expect(page.locator(".tool-card")).toHaveCount(1);
-    await expect(page.getByRole("button", { name: "Open Remove Password" })).toBeVisible();
-
     await page.getByRole("button", { name: "Open Remove Password" }).click();
+    await page.getByRole("button", { name: "Add Remove Password to favorites" }).click();
     await page.getByRole("button", { name: "← All tools" }).click();
-    await workspaceNav.getByRole("button", { name: "Recent" }).click();
-    await expect(page.locator(".tool-card")).toHaveCount(1);
+    await expect(chips.getByRole("button")).toHaveText(["Remove Password"]);
+    await workspaceNav.getByRole("button", { name: "Favorites" }).click();
+    await expect(page.locator("button[data-command-result]")).toHaveCount(1);
     await expect(page.getByRole("button", { name: "Open Remove Password" })).toBeVisible();
-    await expect(
-        page.getByRole("radiogroup", { name: "Tool library filters" })
-            .getByRole("radio", { name: "Recent" }),
-    ).toHaveAttribute("aria-checked", "true");
 
     await page.reload();
-    await workspaceNav.getByRole("button", { name: "Favorites" }).click();
-    await expect(page.locator(".tool-card")).toHaveCount(1);
-    await expect(page.getByRole("button", { name: "Open Remove Password" })).toBeVisible();
-    await workspaceNav.getByRole("button", { name: "Recent" }).click();
-    await expect(page.locator(".tool-card")).toHaveCount(1);
-    await expect(page.getByRole("button", { name: "Open Remove Password" })).toBeVisible();
+    await expect(chips.getByRole("button")).toHaveText(["Remove Password"]);
+    await chips.getByRole("button", { name: "Remove Password" }).click();
+    await expect(page.locator(".workspace-title")).toHaveText("File Security");
+    const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("toolbox-recent") ?? "[]"));
+    expect(stored[0]).toBe("pdf-unlock");
 });
 
 test("saved favorites and recents survive the startup id migration and only show registered tools", async ({ page }) => {
@@ -328,12 +311,10 @@ test("saved favorites and recents survive the startup id migration and only show
     await page.goto("/");
     const workspaceNav = page.locator('nav[aria-label="Workspace navigation"]');
 
+    await expect(page.getByRole("group", { name: "Favorite tools" }).getByRole("button")).toHaveText(["Merge PDF"]);
     await workspaceNav.getByRole("button", { name: "Favorites" }).click();
-    await expect(page.locator(".tool-card")).toHaveCount(1);
+    await expect(page.locator("button[data-command-result]")).toHaveCount(1);
     await expect(page.getByRole("button", { name: "Open Merge PDF" })).toBeVisible();
-    await workspaceNav.getByRole("button", { name: "Recent" }).click();
-    await expect(page.locator(".tool-card")).toHaveCount(1);
-    await expect(page.getByRole("button", { name: "Open Remove Password" })).toBeVisible();
 
     const stored = await page.evaluate(() => ({
         favorites: JSON.parse(localStorage.getItem("toolbox-favorites") ?? "null"),
@@ -347,14 +328,36 @@ test("saved favorites and recents survive the startup id migration and only show
     );
 });
 
-test("all five workspace cards open their workspace", async ({ page }) => {
+test("all six home view sections list their tools and open their view", async ({ page }) => {
     await page.goto("/");
-    await expect(page.locator(".tool-card")).toHaveCount(ToolWorkspaceRegistry.length);
+    const sections = page.locator(".view-section");
+    await expect(sections.locator("h2")).toHaveText(ToolWorkspaceRegistry.map((workspace) => workspace.title));
+    await expandViews(page);
+
+    for (const [index, workspace] of ToolWorkspaceRegistry.entries()) {
+        const titles = toolsForWorkspace(workspace).map((tool) => tool.title);
+        await expect(sections.nth(index).locator("button[data-command-result]")).toHaveText(titles);
+    }
 
     for (const workspace of ToolWorkspaceRegistry) {
         await page.getByRole("button", { name: `Open ${workspace.title}`, exact: true }).click();
         await expect(page.locator(".workspace-title")).toHaveText(workspace.title);
-        await page.getByRole("button", { name: "← All tools" }).click();
+        await page.getByRole("button", { name: "← All tools" }).first().click();
+    }
+});
+
+test("home sections show six tools and reveal the rest on request", async ({ page }) => {
+    await page.goto("/");
+    for (const [index, workspace] of ToolWorkspaceRegistry.entries()) {
+        const section = page.locator(".view-section").nth(index);
+        const hidden = workspace.toolIds.length - Math.min(6, workspace.toolIds.length);
+        await expect(section.locator("button[data-command-result]")).toHaveCount(workspace.toolIds.length - hidden);
+        await expect(section.locator(".view-more-tools")).toHaveCount(hidden > 0 ? 1 : 0);
+        if (hidden > 0) {
+            await expect(section.locator(".view-more-tools")).toHaveText(`${hidden} more ${hidden === 1 ? "tool" : "tools"}`);
+            await section.locator(".view-more-tools").click();
+            await expect(section.locator("button[data-command-result]")).toHaveCount(workspace.toolIds.length);
+        }
     }
 });
 
@@ -381,7 +384,6 @@ test("search arrows navigate visible results and Enter opens the focused result"
     await page.goto("/");
     await page.getByRole("button", { name: "Open Remove Password" }).click();
     await page.getByRole("button", { name: "← All tools" }).click();
-    await expect(page.locator(".recent-section")).toHaveCount(0);
     await expect(page.locator(".topbar--home + .tool-library-section")).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath("phase2-command-center-gallery.png") });
 
@@ -405,7 +407,6 @@ test("search arrows navigate visible results and Enter opens the focused result"
     });
     expect(composingFindPrevented).toBe(false);
     await expect(search).toBeFocused();
-    await expect(page.locator(".recent-section")).toHaveCount(0);
     await expect(page.locator("button[data-command-result]")).toHaveCount(3);
     const removePassword = page.getByRole("button", { name: "Open Remove Password", exact: true });
     const protectPdf = page.getByRole("button", { name: "Open Protect PDF", exact: true });
@@ -428,7 +429,7 @@ test("search arrows navigate visible results and Enter opens the focused result"
     await expect(protectPdf).toBeFocused();
     await page.screenshot({ path: testInfo.outputPath("phase2-command-center-search.png") });
     await page.keyboard.press("Enter");
-    await expect(page.locator(".workspace-title")).toHaveText("Protect & unlock files");
+    await expect(page.locator(".workspace-title")).toHaveText("File Security");
 
     await page.getByRole("button", { name: "← All tools" }).click();
     await search.fill("no matching tool");
@@ -445,7 +446,7 @@ test("home search lives in the top bar while the privacy badge stays in workspac
     await expect(search).toBeVisible();
     await expect(homeTopbar.getByText("On-device workspace", { exact: true })).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "All tools", exact: true })).toHaveCount(0);
-    await expect(page.getByRole("radio", { name: "All", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Tool library" })).toBeAttached();
     await page.screenshot({ path: testInfo.outputPath("home-topbar-desktop.png") });
 
     await page.getByRole("button", { name: "Open Remove Password" }).click();
@@ -459,19 +460,16 @@ test("home search lives in the top bar while the privacy badge stays in workspac
     await page.screenshot({ path: testInfo.outputPath("home-topbar-narrow.png") });
 });
 
-test("workspace cards expose an accessible open action without favorite navigation", async ({ page }) => {
+test("view sections expose an accessible open action and keep favoriting in the tool view", async ({ page }) => {
     await page.goto("/");
-    const card = page.locator(".tool-card").first();
-    await expect(card).not.toHaveAttribute("tabindex");
-    const openWorkspace = card.getByRole("button", { name: "Open Protect & unlock files" });
-    await expect(openWorkspace).toBeVisible();
+    const section = page.locator(".view-section").first();
+    await expect(section).not.toHaveAttribute("tabindex");
+    await expect(section.getByRole("button", { name: /favorites/ })).toHaveCount(0);
+    const openWorkspace = section.getByRole("button", { name: "Open File Security", exact: true });
+    await expect(openWorkspace).toHaveText("Open view");
     await openWorkspace.click();
     await expect(page.getByRole("heading", { name: "Remove Password", exact: true })).toBeVisible();
-
-    await page.getByRole("button", { name: "← All tools" }).click();
-    await page.locator(".tool-card").first().getByRole("button", { name: "Add Remove Password to favorites" }).click();
-    await expect(page.getByRole("heading", { name: "All tools", exact: true })).toHaveCount(0);
-    await expect(page.getByRole("radio", { name: "All", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Add Remove Password to favorites" })).toBeVisible();
 });
 
 test("Windows labels the reveal action for File Explorer", async ({ page }) => {
@@ -481,7 +479,6 @@ test("Windows labels the reveal action for File Explorer", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Open Compress Images" }).click();
     await page.getByRole("button", { name: "Choose files to process" }).click();
-    await page.getByRole("switch", { name: "Preserve original pixels" }).click();
     await page.locator(".workspace-primary-action").click();
     await expect(page.getByRole("button", { name: "Show in File Explorer: icon.png.output-one", exact: true })).toHaveText("Show in File Explorer");
     await expect(page.getByRole("button", { name: /Show in Finder/ })).toHaveCount(0);
@@ -588,8 +585,8 @@ test("settings use shared theme and privacy controls in both palettes", async ({
 
 test("workspace command rails follow the responsive toolbar keyboard contract", async ({ page }, testInfo) => {
     await page.goto("/");
-    await page.getByRole("button", { name: "Open Image editor", exact: true }).click();
-    const rail = page.getByRole("toolbar", { name: "Image editor tools" });
+    await page.getByRole("button", { name: "Open Image Editor", exact: true }).click();
+    const rail = page.getByRole("toolbar", { name: "Image Editor tools" });
     const commands = rail.getByRole("button");
     const commandCount = await commands.count();
     expect(commandCount).toBeGreaterThan(2);
@@ -627,6 +624,93 @@ test("workspace command rails follow the responsive toolbar keyboard contract", 
     await expect(first).toBeFocused();
 });
 
+test("each view rail lists exactly its own tools and compression lives only in Compress Files", async ({ page }) => {
+    for (const workspace of ToolWorkspaceRegistry.filter(({ id }) => id !== "pdf-editor")) {
+        await page.goto("/");
+        await page.getByRole("navigation", { name: "Views" }).getByRole("button", { name: workspace.title, exact: true }).click();
+        const rail = page.getByRole("toolbar", { name: `${workspace.title} tools` });
+        await expect(rail.getByRole("button")).toHaveText(toolsForWorkspace(workspace).map(({ title }) => title).map((title) => new RegExp(`^${title}`)));
+    }
+
+    const compress = ToolWorkspaceRegistry.find(({ id }) => id === "compress-files")!;
+    expect(toolsForWorkspace(compress).map(({ title }) => title)).toEqual(["Compress PDF", "Compress Images"]);
+    for (const workspace of ToolWorkspaceRegistry.filter(({ id }) => id !== "compress-files")) {
+        expect(toolsForWorkspace(workspace).map(({ id }) => id)).not.toContain("pdf-compress");
+        expect(toolsForWorkspace(workspace).map(({ id }) => id)).not.toContain("compress");
+    }
+});
+
+test("Compress Files keeps the open files across tool switches and runs each native command with its own options", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("navigation", { name: "Views" }).getByRole("button", { name: "Compress Files", exact: true }).click();
+    const rail = page.getByRole("toolbar", { name: "Compress Files tools" });
+    await expect(rail.getByRole("button", { name: "Compress PDF", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await chooseFixture(page, pdfFixturePath);
+
+    await rail.getByRole("button", { name: "Compress Images", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Compress Images", exact: true })).toBeVisible();
+    await expect(page.locator(".file-selection-count")).toHaveText("1 file");
+    await expect(page.getByText(pdfFixtureName, { exact: true })).toBeVisible();
+
+    await rail.getByRole("button", { name: "Compress PDF", exact: true }).click();
+    await expect(page.locator(".file-selection-count")).toHaveText("1 file");
+    await page.getByRole("button", { name: "Export Compress PDF", exact: true }).click();
+    await expect(page.getByText("Test output", { exact: true }).last()).toBeVisible();
+
+    await rail.getByRole("button", { name: "Compress Images", exact: true }).click();
+    await chooseFixture(page, fixturePath);
+    await page.getByRole("switch", { name: "Preserve original pixels" }).click();
+    await page.getByRole("button", { name: "Export Compress Images", exact: true }).click();
+    await expect.poll(() => invocationCount(page, "compress_images")).toBe(1);
+
+    const requests = await page.evaluate(() => ((window as TestWindow).__toolboxInvocations ?? [])
+        .filter(({ command }) => command === "compress_pdf" || command === "compress_images")
+        .map(({ command, args }) => ({ command, request: (args as { request: unknown }).request })));
+    expect(requests).toEqual([
+        { command: "compress_pdf", request: { paths: [pdfFixturePath], quality: 80, outputLocation: "alongsideInput" } },
+        { command: "compress_images", request: { paths: [fixturePath], quality: 80, lossless: true, outputLocation: "alongsideInput" } },
+    ]);
+});
+
+for (const layout of [
+    { name: "vertical", viewport: { width: 1280, height: 360 }, forward: "ArrowDown", backward: "ArrowUp", ignored: "ArrowRight" },
+    { name: "narrow horizontal", viewport: { width: 900, height: 720 }, forward: "ArrowRight", backward: "ArrowLeft", ignored: "ArrowDown" },
+] as const) {
+    test(`a twelve-tool rail stays usable in the ${layout.name} layout with arrows, Home and End`, async ({ page }, testInfo) => {
+        await page.setViewportSize(layout.viewport);
+        await page.goto("/tests/ui/harness/rail.html");
+        const rail = page.getByRole("toolbar", { name: "Harness tools" });
+        const commands = rail.getByRole("button");
+        await expect(commands).toHaveCount(12);
+        await expect(rail).toHaveAttribute("aria-orientation", layout.name === "vertical" ? "vertical" : "horizontal");
+        await expect(commands.nth(11)).not.toBeInViewport();
+
+        await commands.first().focus();
+        await page.keyboard.press(layout.ignored);
+        await expect(commands.first()).toBeFocused();
+        await page.keyboard.press(layout.forward);
+        await expect(commands.nth(1)).toBeFocused();
+        await page.keyboard.press(layout.backward);
+        await expect(commands.first()).toBeFocused();
+        await page.keyboard.press(layout.backward);
+        await expect(commands.nth(11)).toBeFocused();
+        await expect(commands.nth(11)).toBeInViewport();
+        await page.keyboard.press("Home");
+        await expect(commands.first()).toBeFocused();
+        await expect(commands.first()).toBeInViewport();
+        await page.keyboard.press("End");
+        await expect(commands.nth(11)).toBeFocused();
+        await expect(commands.nth(11)).toBeInViewport();
+        await expect(commands.nth(11)).toHaveAttribute("tabindex", "0");
+        await expect(commands.first()).toHaveAttribute("tabindex", "-1");
+
+        await page.keyboard.press("Enter");
+        await expect(page.getByTestId("active-tool")).toHaveText(UtilityRegistry[11].id);
+        await expect(commands.nth(11)).toHaveAttribute("aria-pressed", "true");
+        await page.screenshot({ path: testInfo.outputPath(`rail-harness-${layout.name.replace(" ", "-")}.png`) });
+    });
+}
+
 const invocationCount = (page: Page, command: string) =>
     page.evaluate((command) => ((window as TestWindow).__toolboxInvocations ?? []).filter((invocation) => invocation.command === command).length, command);
 
@@ -657,7 +741,7 @@ test("window shortcuts reach search and settings from every workspace view", asy
 const runShortcutCases = [
     { tool: "Protect PDF", file: pdfFixturePath, command: "protect_pdf", ready: (page: Page) => fillPasswords(page, "test-password") },
     { tool: "Compress PDF", file: pdfFixturePath, command: "compress_pdf", ready: async () => undefined },
-    { tool: "Compress Images", file: fixturePath, command: "export_image_edit_plan", ready: (page: Page) => page.getByRole("switch", { name: "Preserve original pixels" }).click() },
+    { tool: "Compress Images", file: fixturePath, command: "compress_images", ready: async () => undefined },
     { tool: "Image Metadata", file: fixturePath, command: "image_metadata", ready: async () => undefined },
 ];
 
@@ -690,7 +774,7 @@ test("shortcuts stay out of text fields and composition, and Run still fires fro
 
     for (const key of ["Meta+O", "Meta+,", "Meta+/", "Meta+K"]) await page.keyboard.press(key);
     await expect(field).toBeFocused();
-    await expect(page.locator(".workspace-title")).toHaveText("Protect & unlock files");
+    await expect(page.locator(".workspace-title")).toHaveText("File Security");
     expect(await invocationCount(page, "plugin:dialog|open")).toBe(1);
 
     const composingPrevented = await field.evaluate((input) => [true, false].map((isComposing) => {
@@ -805,17 +889,23 @@ test("Find a tool on the settings page opens the tool search", async ({ page }) 
     await expect(page.getByRole("textbox", { name: "Search tools" })).toBeFocused();
 });
 
-test("tool cards render their design icon masks", async ({ page }) => {
+test("view links and rail tools render their design icon masks", async ({ page }) => {
     await page.goto("/");
-    const icons = page.locator(".tool-card .card-icon > span");
-    await expect(icons).toHaveCount(UtilityRegistry.length);
+    const masks = (selector: string) => page.locator(selector).evaluateAll((nodes) => nodes.map((node) => getComputedStyle(node).maskImage));
+    const viewMasks = await masks('nav[aria-label="Views"] .rail-link-icon');
+    expect(viewMasks).toHaveLength(ToolWorkspaceRegistry.length);
+    expect(viewMasks.every((mask) => mask !== "none")).toBe(true);
 
-    const maskImages = await icons.evaluateAll((nodes) =>
-        nodes.map((node) => getComputedStyle(node).maskImage),
-    );
-
-    expect(maskImages.every((maskImage) => maskImage !== "none")).toBe(true);
-    expect(new Set(maskImages).size).toBeGreaterThan(1);
+    const railMasks: string[] = [];
+    for (const workspace of ToolWorkspaceRegistry.filter((item) => item.id !== "pdf-editor")) {
+        await page.getByRole("navigation", { name: "Views" }).getByRole("button", { name: workspace.title, exact: true }).click();
+        const icons = await masks(".workspace-command-icon > span");
+        expect(icons).toHaveLength(workspace.toolIds.length);
+        railMasks.push(...icons);
+        await page.getByRole("button", { name: "← All tools" }).click();
+    }
+    expect(railMasks.every((mask) => mask !== "none")).toBe(true);
+    expect(new Set(railMasks).size).toBeGreaterThan(1);
 });
 
 test("search shortcut stays in one inline keycap", async ({ page }) => {
@@ -888,7 +978,7 @@ test("pdf editor renders page previews", async ({ page }) => {
 
 test("PDF editor inserts editable blank pages from thumbnails", async ({ page }) => {
     await page.goto("/");
-    await page.getByRole("button", { name: "Open Organize PDF" }).click();
+    await openFromHome(page, "Organize PDF");
     await chooseFixture(page, pdfFixturePath);
     await page.getByRole("button", { name: "Add blank page", exact: true }).click();
     await drawSceneMark(page, "Shape");
@@ -899,18 +989,18 @@ test("PDF editor inserts editable blank pages from thumbnails", async ({ page })
 
 test("editor command rails keep one document session while changing tools", async ({ page }) => {
     await page.goto("/");
-    await page.getByRole("button", { name: "Open Image editor", exact: true }).click();
+    await page.getByRole("button", { name: "Open Image Editor", exact: true }).click();
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await expect(page.getByRole("img", { name: `Preview of ${fixtureName}` })).toBeVisible();
 
-    await page.getByRole("toolbar", { name: "Image editor tools" }).getByRole("button", { name: "Rotate and Flip Images" }).click();
+    await page.getByRole("toolbar", { name: "Image Editor tools" }).getByRole("button", { name: "Rotate and Flip Images" }).click();
     await expect(page.getByRole("heading", { name: "Rotate and Flip Images", exact: true })).toBeVisible();
     await expect(page.locator(".file-selection-count")).toHaveText("1 file");
-    await page.getByRole("toolbar", { name: "Image editor tools" }).getByRole("button", { name: "Colour and Tone Adjustments" }).click();
+    await page.getByRole("toolbar", { name: "Image Editor tools" }).getByRole("button", { name: "Colour and Tone Adjustments" }).click();
     await expect(page.getByRole("slider", { name: "Contrast" })).toBeVisible();
 
     await page.getByRole("button", { name: "← All tools" }).click();
-    await page.getByRole("button", { name: "Open PDF editor", exact: true }).click();
+    await page.getByRole("button", { name: "Open PDF Editor", exact: true }).click();
     await chooseFixture(page, pdfFixturePath);
     await expect(page.getByRole("group", { name: "PDF page canvas" })).toBeVisible();
     await page.getByRole("toolbar", { name: "PDF editor tools" }).getByRole("button", { name: "Crop", exact: true }).click();
@@ -925,7 +1015,7 @@ test("vision tools explain unavailable resources before file selection", async (
         expect(utility).toBeDefined();
         if (!utility) continue;
         if (index > 0) await page.getByRole("button", { name: "← All tools" }).click();
-        await page.getByRole("button", { name: `Open ${utility.title}` }).click();
+        await openFromHome(page, utility.title);
         await expect(page.getByText("Unavailable in this build.", { exact: true })).toBeVisible();
         await expect(page.getByRole("button", { name: "Choose files to process" })).toHaveCount(0);
     }
@@ -948,7 +1038,7 @@ test("PDF editor protects the last page and supports unified history", async ({ 
 
 test("Image editor previews a reversible edit stack and exports one combined plan", async ({ page }) => {
     await page.goto("/");
-    await page.getByRole("button", { name: "Open Image editor", exact: true }).click();
+    await page.getByRole("button", { name: "Open Image Editor", exact: true }).click();
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await expect(page.getByRole("img", { name: `Preview of ${fixtureName}` })).toBeVisible();
     await expect(page.getByRole("button", { name: "Undo" })).toBeDisabled();
@@ -956,17 +1046,17 @@ test("Image editor previews a reversible edit stack and exports one combined pla
     await expect(page.getByRole("button", { name: "Reset edits" })).toBeDisabled();
     await expect(page.getByText("Edits are append-only. Removing or reordering individual operations is deferred.", { exact: true })).toBeVisible();
     await expect(page.locator('[role="tablist"]')).toHaveCount(0);
-    await expect(page.getByRole("toolbar", { name: "Image editor tools" })).toBeVisible();
+    await expect(page.getByRole("toolbar", { name: "Image Editor tools" })).toBeVisible();
     await expect(page.locator(".workspace-primary-action")).toHaveCount(1);
 
-    await page.getByRole("toolbar", { name: "Image editor tools" }).getByRole("button", { name: "Resize Images" }).click();
+    await page.getByRole("toolbar", { name: "Image Editor tools" }).getByRole("button", { name: "Resize Images" }).click();
     await page.getByLabel("Width").fill("320");
     await expect.poll(async () =>
         (await page.evaluate(() => (window as TestWindow).__toolboxInvocations ?? []))
             .some(({ command }) => command === "inspect_image_edit_preview"),
     ).toBe(true);
     await page.getByRole("button", { name: "Add edit to plan" }).click();
-    await page.getByRole("toolbar", { name: "Image editor tools" }).getByRole("button", { name: "Rotate and Flip Images" }).click();
+    await page.getByRole("toolbar", { name: "Image Editor tools" }).getByRole("button", { name: "Rotate and Flip Images" }).click();
     await page.getByLabel("Rotation").selectOption("90");
     await page.getByRole("button", { name: "Add edit to plan" }).click();
     await expect(page.getByText("2 committed edits", { exact: true })).toBeVisible();
@@ -982,9 +1072,9 @@ test("Image editor previews a reversible edit stack and exports one combined pla
 
 test("Image crop keeps the source interaction surface and shows a separate result", async ({ page }) => {
     await page.goto("/");
-    await page.getByRole("button", { name: "Open Image editor", exact: true }).click();
+    await page.getByRole("button", { name: "Open Image Editor", exact: true }).click();
     await page.getByRole("button", { name: "Choose files to process" }).click();
-    await page.getByRole("toolbar", { name: "Image editor tools" }).getByRole("button", { name: "Crop Images", exact: true }).click();
+    await page.getByRole("toolbar", { name: "Image Editor tools" }).getByRole("button", { name: "Crop Images", exact: true }).click();
     await page.getByLabel("Crop width").fill("160");
     await page.getByLabel("Crop height").fill("120");
     await page.getByLabel("Crop left").fill("80");
@@ -1009,9 +1099,9 @@ test("Image crop keeps the source interaction surface and shows a separate resul
 
 test("Image crop cancels a global pointer interruption before a later move", async ({ page }) => {
     await page.goto("/");
-    await page.getByRole("button", { name: "Open Image editor", exact: true }).click();
+    await page.getByRole("button", { name: "Open Image Editor", exact: true }).click();
     await page.getByRole("button", { name: "Choose files to process" }).click();
-    await page.getByRole("toolbar", { name: "Image editor tools" }).getByRole("button", { name: "Crop Images", exact: true }).click();
+    await page.getByRole("toolbar", { name: "Image Editor tools" }).getByRole("button", { name: "Crop Images", exact: true }).click();
     await page.getByLabel("Crop width").fill("160");
     await page.getByLabel("Crop height").fill("120");
     await page.getByLabel("Crop left").fill("80");
@@ -1033,9 +1123,9 @@ test("Image crop cancels a global pointer interruption before a later move", asy
 
 test("Image aspect crop uses the anchored maximum-fit geometry for overlay and result", async ({ page }) => {
     await page.goto("/");
-    await page.getByRole("button", { name: "Open Image editor", exact: true }).click();
+    await page.getByRole("button", { name: "Open Image Editor", exact: true }).click();
     await page.getByRole("button", { name: "Choose files to process" }).click();
-    await page.getByRole("toolbar", { name: "Image editor tools" }).getByRole("button", { name: "Crop Images", exact: true }).click();
+    await page.getByRole("toolbar", { name: "Image Editor tools" }).getByRole("button", { name: "Crop Images", exact: true }).click();
     await page.getByLabel("Crop mode").selectOption("aspectRatio");
     await page.getByLabel("Crop width").fill("1");
     await page.getByLabel("Crop height").fill("1");
@@ -1051,9 +1141,9 @@ test("Image aspect crop uses the anchored maximum-fit geometry for overlay and r
 
 test("Image crop clears an old result and disables export after invalid preview validation", async ({ page }) => {
     await page.goto("/");
-    await page.getByRole("button", { name: "Open Image editor", exact: true }).click();
+    await page.getByRole("button", { name: "Open Image Editor", exact: true }).click();
     await page.getByRole("button", { name: "Choose files to process" }).click();
-    await page.getByRole("toolbar", { name: "Image editor tools" }).getByRole("button", { name: "Crop Images", exact: true }).click();
+    await page.getByRole("toolbar", { name: "Image Editor tools" }).getByRole("button", { name: "Crop Images", exact: true }).click();
     await page.getByLabel("Crop width").fill("160");
     await page.getByLabel("Crop height").fill("120");
     await expect(page.getByRole("region", { name: "Crop result preview" })).toBeVisible();
@@ -1069,9 +1159,9 @@ test("Image crop clears an old result and disables export after invalid preview 
 
 test("Image editor history can undo, redo, and reset the composed plan", async ({ page }) => {
     await page.goto("/");
-    await page.getByRole("button", { name: "Open Image editor", exact: true }).click();
+    await page.getByRole("button", { name: "Open Image Editor", exact: true }).click();
     await page.getByRole("button", { name: "Choose files to process" }).click();
-    await page.getByRole("toolbar", { name: "Image editor tools" }).getByRole("button", { name: "Rotate and Flip Images" }).click();
+    await page.getByRole("toolbar", { name: "Image Editor tools" }).getByRole("button", { name: "Rotate and Flip Images" }).click();
     await page.getByLabel("Rotation").selectOption("90");
     await page.getByRole("button", { name: "Add edit to plan" }).click();
 
@@ -1116,7 +1206,7 @@ test("PDF range splitting rejects a blank range and accepts a range", async ({ p
     await page.goto("/");
     await page.getByRole("button", { name: "Open PDF to Images" }).click();
     await chooseFixture(page, pdfFixturePath);
-    await page.getByRole("toolbar", { name: "PDF conversion tools" }).getByRole("button", { name: "Split PDF" }).click();
+    await page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "Split PDF" }).click();
     await page.getByLabel("Split mode").selectOption("ranges");
 
     await expect(page.getByRole("alert")).toHaveText("Enter at least one page range to split by ranges.");
@@ -1188,15 +1278,14 @@ test("non-previewable PDF conversions identify source selection and show determi
     await expect(page.getByText("Output preview unavailable. Export creates a text file from the selected pages.", { exact: true })).toBeVisible();
     await expect(page.getByRole("img", { name: "Source page preview 1" })).toBeVisible();
 
-    await page.getByRole("toolbar", { name: "PDF conversion tools" }).getByRole("button", { name: "Extract PDF Pages", exact: true }).click();
+    await page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "Extract PDF Pages", exact: true }).click();
     await expect(page.getByText("Output preview unavailable. Export creates a PDF containing the selected pages.", { exact: true })).toBeVisible();
 
-    const rail = page.getByRole("toolbar", { name: "PDF conversion tools" });
+    const rail = page.getByRole("toolbar", { name: "PDF Conversion tools" });
     for (const [action, summary] of [
         ["Images to PDF", "Output preview unavailable. Export combines the selected images into one PDF in file order."],
         ["Merge PDF", "Output preview unavailable. Export merges the selected PDFs in file order."],
         ["Split PDF", "Output preview unavailable. Export creates separate PDF files using the selected split mode."],
-        ["Compress PDF", "Output preview unavailable. Export creates a compressed PDF copy while preserving page geometry."],
     ] as const) {
         await rail.getByRole("button", { name: action, exact: true }).click();
         await expect(page.getByText(summary, { exact: true })).toBeVisible();
@@ -1208,7 +1297,7 @@ test("PDF conversion visibly rejects retained files when an action changes forma
     await page.getByRole("button", { name: "Open Images to PDF" }).click();
     await chooseFixture(page, fixturePath);
 
-    const rail = page.getByRole("toolbar", { name: "PDF conversion tools" });
+    const rail = page.getByRole("toolbar", { name: "PDF Conversion tools" });
     await rail.getByRole("button", { name: "PDF to Text", exact: true }).click();
     await expect(page.getByText("1 file won't run with PDF to Text. It stays in the list for other actions.", { exact: true })).toBeVisible();
     await expect(page.getByRole("option", { name: fixtureName })).toContainText("Won't run");
@@ -1238,7 +1327,7 @@ test("PDF page-scoped conversions send the selected pages and keep OCR gated", a
     );
     expect(textInvocation?.args).toMatchObject({ request: { paths: ["/local/document.scoped.pdf"], pages: [1] } });
 
-    const ocrButton = page.getByRole("toolbar", { name: "PDF conversion tools" }).getByRole("button", { name: "OCR PDF", exact: true });
+    const ocrButton = page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "OCR PDF", exact: true });
     await expect(ocrButton).toBeDisabled();
     await expect(ocrButton).toHaveAttribute("title", "OCR PDF is unavailable in this build");
 });
@@ -1278,10 +1367,9 @@ test("shared workspace ignores a stale processing completion after action change
     await page.goto("/");
     await page.getByRole("button", { name: "Open Compress Images" }).click();
     await page.getByRole("button", { name: "Choose files to process" }).click();
-    await page.getByRole("switch", { name: "Preserve original pixels" }).click();
     await page.evaluate(() => { (window as TestWindow).__toolboxProcessingDelayMs = 150; });
-    await page.getByRole("button", { name: "Export edited images" }).click();
-    await page.getByRole("toolbar", { name: "Image editor tools" }).getByRole("button", { name: "Rotate and Flip Images" }).click();
+    await page.getByRole("button", { name: "Export Compress Images" }).click();
+    await page.getByRole("toolbar", { name: "Compress Files tools" }).getByRole("button", { name: "Compress PDF" }).click();
     await page.waitForTimeout(220);
     await expect(page.getByText("Test output", { exact: true })).toHaveCount(0);
 });
@@ -1371,8 +1459,7 @@ const runCompressImagesWith = async (page: Page, outcomes: MockOutcome[]) => {
     }, outcomes);
     await page.getByRole("button", { name: "Open Compress Images" }).click();
     await page.getByRole("button", { name: "Choose files to process" }).click();
-    await page.getByRole("switch", { name: "Preserve original pixels" }).click();
-    await page.getByRole("button", { name: "Export edited images" }).click();
+    await page.getByRole("button", { name: "Export Compress Images" }).click();
     return page.getByRole("list", { name: "Results" }).getByRole("listitem");
 };
 
@@ -1558,13 +1645,12 @@ test("Retry is offered only after processing failures and time limits and re-run
     await expect(resultSummaryStatus(page)).toHaveText("Done. 2 compressed, 3 failed");
 
     const runs = await page.evaluate(() =>
-        ((window as TestWindow).__toolboxInvocations ?? []).filter(({ command }) => command === "export_image_edit_plan"),
+        ((window as TestWindow).__toolboxInvocations ?? []).filter(({ command }) => command === "compress_images"),
     );
     expect(runs).toHaveLength(2);
-    const [first, retry] = runs.map((run) => (run.args as { request: { paths: string[]; plan: unknown } }).request);
+    const [first, retry] = runs.map((run) => (run.args as { request: { paths: string[] } }).request);
     expect(first.paths).toEqual([fixturePath]);
-    expect(retry.paths).toEqual([timedOut]);
-    expect(retry.plan).toEqual(first.plan);
+    expect(retry).toEqual({ ...first, paths: [timedOut] });
 });
 
 test("files over a limit fail alone with the limit message while the other rows render normally", async ({ page }) => {
@@ -1601,8 +1687,7 @@ test("output action state resets and ignores stale completions", async ({ page }
     await page.goto("/");
     await page.getByRole("button", { name: "Open Compress Images" }).click();
     await page.getByRole("button", { name: "Choose files to process" }).click();
-    await page.getByRole("switch", { name: "Preserve original pixels" }).click();
-    const processButton = page.getByRole("button", { name: "Export edited images" });
+    const processButton = page.getByRole("button", { name: "Export Compress Images" });
     await processButton.click();
 
     await page.evaluate(({ path }) => {
@@ -1639,15 +1724,15 @@ test("single-input actions report every selected file instead of truncating the 
     await chooseFixture(page, pdfFixturePath);
     await page.evaluate(() => { (window as TestWindow).__toolboxSecondPick = true; });
     await page.getByRole("button", { name: "Choose files to process" }).click();
-    await page.getByRole("button", { name: "Compress PDF", exact: true }).click();
+    await page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "Split PDF", exact: true }).click();
 
-    const exportButton = page.getByRole("button", { name: "Export Compress PDF", exact: true });
+    const exportButton = page.getByRole("button", { name: "Export Split PDF", exact: true });
     await expect(exportButton).toBeEnabled();
     await exportButton.click();
 
-    await expect(page.getByRole("status").filter({ hasText: "Done." })).toHaveText("Done. 0 compressed, 2 failed");
+    await expect(page.getByRole("status").filter({ hasText: "Done." })).toHaveText("Done. 0 split, 2 failed");
     const processingInvocations = await page.evaluate(() =>
-        ((window as TestWindow).__toolboxInvocations ?? []).filter(({ command }) => command === "compress_pdf"),
+        ((window as TestWindow).__toolboxInvocations ?? []).filter(({ command }) => command === "split_pdf"),
     );
     expect(processingInvocations).toHaveLength(0);
     await expect(page.getByText("This action accepts one input file, but 2 were selected.", { exact: true })).toHaveCount(2);
@@ -1684,7 +1769,7 @@ test("page-scoped actions disable export when the explicit selection is empty", 
 
 test("PDF replacement clears stale inspection state while inspection is pending or rejected", async ({ page }) => {
     await page.goto("/");
-    await page.getByRole("button", { name: "Open Extract PDF Pages" }).click();
+    await openFromHome(page, "Extract PDF Pages");
     await chooseFixture(page, pdfFixturePath);
     await expect(page.getByRole("checkbox", { name: "Page 1" })).toBeChecked();
     await expect(page.getByRole("button", { name: "Export Extract PDF Pages", exact: true })).toBeEnabled();
@@ -1713,9 +1798,9 @@ test("PDF conversion resets the displayed scope when switching actions", async (
     await page.getByRole("textbox", { name: "Page range" }).fill("1");
     await expect(page.getByRole("checkbox", { name: "Page 2" })).not.toBeChecked();
 
-    await page.getByRole("toolbar", { name: "PDF conversion tools" }).getByRole("button", { name: "PDF to Text", exact: true }).click();
+    await page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "PDF to Text", exact: true }).click();
     await expect(page.getByRole("checkbox", { name: "Page 3" })).toBeVisible();
-    await page.getByRole("toolbar", { name: "PDF conversion tools" }).getByRole("button", { name: "PDF to Images", exact: true }).click();
+    await page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "PDF to Images", exact: true }).click();
     await expect(page.getByRole("checkbox", { name: "Page 3" })).toBeVisible();
 
     await expect(page.getByRole("textbox", { name: "Page range" })).toHaveValue("");
@@ -1746,7 +1831,7 @@ const storeOutputSettings = async (page: Page, settings: OutputSettings) => {
 
 const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[number], expectedOutputLocation: unknown = "alongsideInput") => {
     await page.goto("/");
-    await page.getByRole("button", { name: `Open ${utility.title}` }).click();
+    await openFromHome(page, utility.title);
 
     const accepts = (extension: string) => utility.capability.acceptedExtensions.some((accepted) => accepted.toLowerCase() === extension);
     const selectedFixturePath = utility.id === "office-protect"
@@ -1773,13 +1858,13 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
     }
     if (workspaceForTool(utility.id)?.id === "image-editor") {
         if (utility.id === "heic-convert") await page.getByLabel("Target format").selectOption("jpg");
-        if (utility.id === "compress") await page.getByRole("switch", { name: "Preserve original pixels" }).click();
         if (utility.id === "resize") await page.getByLabel("Width").fill("640");
         if (utility.id === "rotate") await page.getByLabel("Rotation").selectOption("90");
         if (utility.id === "crop") await page.getByLabel("Crop width").fill("320");
         if (utility.id === "image-watermark") await page.getByLabel("Watermark text").fill("Test watermark");
         if (utility.id === "image-tone") await page.getByRole("slider", { name: "Brightness" }).press("End");
     }
+    if (utility.id === "compress") await page.getByRole("switch", { name: "Preserve original pixels" }).click();
     if (utility.id === "pdf-merge") {
         await page.evaluate(() => { (window as TestWindow).__toolboxSecondPick = true; });
         await page.getByRole("button", { name: "Choose files to process" }).click();
@@ -1818,11 +1903,11 @@ test.describe("registered feature actions", () => {
 });
 
 test.describe("workspace runs send the stored output location", () => {
-    const representativeTools = ["pdf-protect", "pdf-edit", "pdf-to-images", "resize", "icon-set"] as const;
+    const representativeTools = ["pdf-protect", "pdf-edit", "pdf-to-images", "resize", "pdf-compress", "icon-set"] as const;
     const customFolder = { customFolder: "/fake/shell/output" };
 
     test("one representative tool covers every workspace view", () => {
-        expect(representativeTools.map((id) => workspaceForTool(id)?.id)).toEqual(["file-security", "pdf-editor", "pdf-convert", "image-editor", "media-tools"]);
+        expect(representativeTools.map((id) => workspaceForTool(id)?.id)).toEqual(["file-security", "pdf-editor", "pdf-convert", "image-editor", "compress-files", "media-tools"]);
     });
 
     for (const id of representativeTools) {
@@ -2042,7 +2127,7 @@ test.describe("per-run destination", () => {
         await changeForRun(page, "/picked/run");
         await expect(destination.getByText("This run only")).toBeVisible();
 
-        await page.getByRole("toolbar", { name: "Image editor tools" }).getByRole("button", { name: "Rotate and Flip Images" }).click();
+        await page.getByRole("toolbar", { name: "Image Editor tools" }).getByRole("button", { name: "Rotate and Flip Images" }).click();
         await expect(destination.getByTestId("run-destination-path")).toHaveText("Next to each original");
         await expect(destination.getByText("This run only")).toHaveCount(0);
     });

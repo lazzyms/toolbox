@@ -87,7 +87,7 @@ test('PDF editor keeps the back link, title, and empty-state open action compact
   page.on('pageerror', error => pageErrors.push(error.message));
   await page.goto('/');
   await page.getByRole('button', { name: 'Open Edit PDF', exact: true }).click();
-  await expect(page.locator('.pdf-editor-header-line')).toContainText('PDF editor');
+  await expect(page.locator('.pdf-editor-header-line')).toContainText('PDF Editor');
   await expect(page.locator('.pdf-editor-header-line')).toContainText('Open files');
   await expect(page.getByRole('button', { name: 'Choose files to process' })).toBeVisible();
   await expect(page.locator('.workspace-source-bar[data-empty="true"]')).toBeHidden();

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { createContext, useContext, useState, useEffect, useMemo, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
@@ -39,6 +39,9 @@ import {
 const repeatLabel = (occurrence: number) => occurrence === 2 ? 'Added twice' : `Added ${occurrence} times`;
 
 export type WorkspaceSourceAction = () => void | Promise<void>;
+
+// The view rail lives outside the scaffold, so a run reports here to lock it like the options fieldset.
+export const RunStateContext = createContext<((running: boolean) => void) | null>(null);
 
 export type RunContext = { outputPath: string | null; runId: string };
 
@@ -337,6 +340,12 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
     };
 
     browseRef.current = browse;
+    const reportRunState = useContext(RunStateContext);
+    useEffect(() => {
+        if (!reportRunState) return;
+        reportRunState(loading);
+        return () => reportRunState(false);
+    }, [loading, reportRunState]);
     useEffect(() => {
         if (variant !== 'workspace' || !onWorkspaceSourceAction) return;
         onWorkspaceSourceAction(entries.length === 0 ? () => browseRef.current() : null);
