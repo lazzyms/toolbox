@@ -48,13 +48,15 @@ export const SecurityWorkspaceView = ({ utility: activeUtility }: { utility: Too
       sessionKey="file-security"
       utility={utility}
       onRun={runWith(command, passwords.set)}
-      retryWithPassword={(password) => runWith(command, { batch: password, overrides: {} })}
+      retryWithPassword={(inputPath, password) => runWith(command, { batch: "", overrides: { [inputPath]: password } })}
       renderFileExtra={(path, selected, locked) => (
         <FilePasswordCell mode={mode} path={path} passwords={passwords} selected={selected} disabled={locked} />
       )}
     >
-      {({ files, run, loading, destination }) => {
+      {({ files, run, loading, destination, failedFiles, retryFailed, retrying }) => {
         const readiness = passwordReadiness(mode, passwords, files);
+        const retryReadiness = passwordReadiness(mode, passwords, failedFiles);
+        const retryLabel = `Retry ${failedFiles.length} failed ${failedFiles.length === 1 ? "file" : "files"}`;
         const verb = mode === "lock" ? "Lock" : "Unlock";
         const runLabel = files.length === 0 ? `${verb} files` : `${verb} ${fileCount(files.length)}`;
         return (
@@ -100,6 +102,15 @@ export const SecurityWorkspaceView = ({ utility: activeUtility }: { utility: Too
             {runLabel}
             <ShortcutHint id="run" />
           </Button>
+          {failedFiles.length > 0 && (
+            <Button
+              variant="outline"
+              disabled={loading || retrying || !retryReadiness.ready}
+              onClick={() => void retryFailed()}
+            >
+              {retrying ? "Retrying..." : retryLabel}
+            </Button>
+          )}
           </CardContent>
         </Card>
         );

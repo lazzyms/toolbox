@@ -15,6 +15,7 @@ import { CancelRun } from './CancelRun';
 import { ShortcutHint } from './ShortcutHint';
 import { isWindows, matchShortcut, shortcutTarget } from '../shortcuts';
 import { ResultList } from './ResultList';
+import { rowView } from './resultRow';
 import { BATCH_PROGRESS_EVENT, foldRunEvent, parseRunEvent, startRun, type LiveRun } from './liveRun';
 import { BlockedDestinationDialog, RunDestination, exampleOutputName, sameLocation, type BlockedDestination, type FolderCheck } from './RunDestination';
 import { TablerIcon } from './TablerIcon';
@@ -58,7 +59,7 @@ interface ToolScaffoldProps {
     onWorkspaceSourceAction?: (action: WorkspaceSourceAction | null) => void;
     showFileOrdering?: boolean;
     renderFileExtra?: (path: string, selected: boolean, locked: boolean) => React.ReactNode;
-    retryWithPassword?: (password: string) => RunHandler;
+    retryWithPassword?: (inputPath: string, password: string) => RunHandler;
     children: (props: {
         files: string[];
         outputLocation: OutputLocation;
@@ -70,6 +71,9 @@ interface ToolScaffoldProps {
         selectFile: (index: number) => void;
         destination: React.ReactNode;
         runLabel: string | null;
+        failedFiles: string[];
+        retryFailed: () => Promise<void>;
+        retrying: boolean;
     }) => React.ReactNode;
 }
 
@@ -89,6 +93,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
     const [loading, setLoading] = useState(false);
     const [live, setLive] = useState<LiveRun | null>(null);
     const [perFileRun, setPerFileRun] = useState<PerFileRun | null>(null);
+    const [retrying, setRetrying] = useState(false);
     const defaultLocation = useOutputLocation();
     const [runOverride, setRunOverride] = useState<OutputLocation | null>(null);
     const [blocked, setBlocked] = useState<(BlockedDestination & { handler: RunHandler }) | null>(null);
@@ -263,18 +268,34 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         void runWith(blocked.handler, location);
     };
 
-    const retry = async (inputPath: string, handler = perFileRun?.handler) => {
-        if (!perFileRun || !handler) return;
+    const rerun = async (paths: string[], handler = perFileRun?.handler) => {
+        if (!perFileRun || !handler || paths.length === 0) return;
         const generation = runGeneration.current;
-        let retried: JobOutcome[];
+        let rerunResults: JobOutcome[];
         try {
-            retried = parseToolResult(await handler([inputPath], perFileRun.outputLocation, { outputPath: null, runId: crypto.randomUUID() }));
+            rerunResults = parseToolResult(await handler(paths, perFileRun.outputLocation, { outputPath: null, runId: crypto.randomUUID() }));
         } catch (error) {
-            retried = [failedOutcome(inputPath, 'processing', String(error))];
+            rerunResults = paths.map((path) => failedOutcome(path, 'processing', String(error)));
         }
-        const replacement = retried.find((result) => result.inputPath === inputPath);
-        if (!replacement || generation !== runGeneration.current) return;
-        setResults((current) => current.map((result) => result.inputPath === inputPath ? replacement : result));
+        if (generation !== runGeneration.current) return;
+        const replacements = new Map(rerunResults.filter((result) => paths.includes(result.inputPath)).map((result) => [result.inputPath, result]));
+        setResults((current) => current.map((result) => replacements.get(result.inputPath) ?? result));
+    };
+
+    const failedFiles = perFileRun
+        ? results.filter((result) => {
+            const view = rowView(result, utility.resultVerb);
+            return view.canRetry || (retryWithPassword !== undefined && view.canRetryWithPassword);
+        }).map((result) => result.inputPath)
+        : [];
+
+    const retryFailed = async () => {
+        setRetrying(true);
+        try {
+            await rerun(failedFiles, onRun);
+        } finally {
+            setRetrying(false);
+        }
     };
 
     const newEntries = (paths: string[]) => paths.map((path) => ({ key: `entry-${++nextEntryKey.current}`, path }));
@@ -661,6 +682,9 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                     />
                 ),
                 runLabel: savesOneFile ? saveStep.runLabel : null,
+                failedFiles,
+                retryFailed,
+                retrying,
             })}
             </fieldset>
 
@@ -674,8 +698,8 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 runningVerb={utility.runningVerb}
                 live={live}
                 namedByOutput={resultsNamedByOutput}
-                onRetry={perFileRun ? (inputPath) => retry(inputPath) : undefined}
-                onRetryWithPassword={perFileRun && retryWithPassword ? (inputPath, password) => retry(inputPath, retryWithPassword(password)) : undefined}
+                onRetry={perFileRun ? (inputPath) => rerun([inputPath]) : undefined}
+                onRetryWithPassword={perFileRun && retryWithPassword ? (inputPath, password) => rerun([inputPath], retryWithPassword(inputPath, password)) : undefined}
             />
 
             <BlockedDestinationDialog
