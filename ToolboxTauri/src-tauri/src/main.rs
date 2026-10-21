@@ -1241,12 +1241,14 @@ mod command_tests {
     fn refused_password_inputs_never_reserve_an_output_in_any_password_command() {
         let root = sandbox("password-refusals");
         let pdf = root.join("source.pdf");
+        let locked = root.join("locked.pdf");
         let docx = root.join("source.docx");
         let text = root.join("notes.txt");
         let damaged_pdf = root.join("damaged.pdf");
         let damaged_docx = root.join("damaged.docx");
         let damaged_xls = root.join("damaged.xls");
         make_pdf(&pdf, 1);
+        std::fs::write(&locked, crate::kit::password::tests::pdf(Some(("owner", "user")))).unwrap();
         std::fs::write(&docx, test_minimal_ooxml_package("docx")).unwrap();
         std::fs::write(&text, b"plain text").unwrap();
         std::fs::write(&damaged_pdf, b"%PDF-1.7 damaged").unwrap();
@@ -1262,7 +1264,7 @@ mod command_tests {
 
         let cases = [
             ("remove_password wrong type", ErrorKind::InvalidInput, tauri::async_runtime::block_on(remove_password(RunEvents::silent(), request(vec![text.clone()], "secret")))),
-            ("remove_password empty pdf password", ErrorKind::InvalidInput, tauri::async_runtime::block_on(remove_password(RunEvents::silent(), request(vec![pdf.clone()], "")))),
+            ("remove_password empty pdf password", ErrorKind::InvalidInput, tauri::async_runtime::block_on(remove_password(RunEvents::silent(), request(vec![locked.clone()], "")))),
             ("remove_password empty office password", ErrorKind::InvalidInput, tauri::async_runtime::block_on(remove_password(RunEvents::silent(), request(vec![docx.clone()], "")))),
             ("protect_files wrong type", ErrorKind::InvalidInput, tauri::async_runtime::block_on(protect_files(RunEvents::silent(), request(vec![text.clone()], "secret")))),
             ("protect_files empty password", ErrorKind::InvalidInput, tauri::async_runtime::block_on(protect_files(RunEvents::silent(), request(vec![pdf.clone()], "")))),
@@ -1283,7 +1285,7 @@ mod command_tests {
         assert!(!unreservable.exists(), "a refused input never touches the output location");
         let mut left = std::fs::read_dir(&root).unwrap().map(|entry| entry.unwrap().file_name()).collect::<Vec<_>>();
         left.sort();
-        assert_eq!(left, ["damaged.docx", "damaged.pdf", "damaged.xls", "notes.txt", "source.docx", "source.pdf"], "nothing is written beside the inputs");
+        assert_eq!(left, ["damaged.docx", "damaged.pdf", "damaged.xls", "locked.pdf", "notes.txt", "source.docx", "source.pdf"], "nothing is written beside the inputs");
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1667,7 +1669,7 @@ mod command_tests {
         use crate::kit::contracts::{OutcomeState, SkipCode};
         use crate::kit::office::tests::ppt_plain_fixture;
         use crate::kit::password::tests::{pdf, word_document, workbook};
-        use crate::kit::password::{NOT_PASSWORD_PROTECTED, PERMISSIONS_ONLY};
+        use crate::kit::password::NOT_PASSWORD_PROTECTED;
 
         let root = sandbox("unlock-skips");
         let plain_dir = root.join("plain");
@@ -1686,7 +1688,6 @@ mod command_tests {
             plain("ledger.xls", workbook(false)),
             plain("kickoff.ppt", ppt_plain_fixture()),
         ];
-        let restricted = plain("brochure.pdf", pdf(Some(("owner", ""))));
         let locked_lease = locked_pdf(&root, "lease", "batch-secret");
         let locked_lease = {
             let renamed = locked_lease.with_file_name("lease.pdf");
@@ -1701,7 +1702,6 @@ mod command_tests {
         };
 
         let mut inputs = skipped_plain.clone();
-        inputs.push(restricted.clone());
         inputs.push(locked_lease.clone());
         inputs.push(locked_budget.clone());
         let originals = inputs.iter().map(|input| std::fs::read(input).unwrap()).collect::<Vec<_>>();
@@ -1721,13 +1721,7 @@ mod command_tests {
             assert_eq!(reason.message, NOT_PASSWORD_PROTECTED);
             assert!(reason.pointer.is_none());
         }
-        let OutcomeState::Skipped { reason } = &outcomes[skipped_plain.len()].state else { panic!("a permissions-only PDF is skipped, got {:?}", outcomes[skipped_plain.len()].state) };
-        assert_eq!(reason.code, SkipCode::PermissionsPasswordOnly);
-        assert_eq!(reason.message, PERMISSIONS_ONLY);
-        assert!(reason.message.contains("Remove restrictions"));
-        assert!(reason.pointer.is_none(), "Remove restrictions is not a registered tool yet");
-
-        for outcome in &outcomes[skipped_plain.len() + 1..] {
+        for outcome in &outcomes[skipped_plain.len()..] {
             assert!(matches!(outcome.state, OutcomeState::Succeeded { .. }), "{}: {:?}", outcome.input_path.display(), outcome.state);
         }
         assert_eq!(
@@ -1736,6 +1730,79 @@ mod command_tests {
             "skipped files with the same names wrote nothing and reserved no name ahead of the locked ones",
         );
         assert_eq!(file_names(&plain_dir), beside_plain, "nothing is written beside the skipped inputs");
+        for (input, original) in inputs.iter().zip(originals) {
+            assert_eq!(std::fs::read(input).unwrap(), original, "original was modified: {}", input.display());
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn unlock_clears_print_and_copy_restrictions_without_a_password_while_open_passwords_still_need_theirs() {
+        use crate::kit::contracts::OutcomeState;
+        use crate::kit::password::tests::pdf;
+        use crate::kit::password::WRONG_PASSWORD;
+
+        let qpdf = crate::kit::resources::resolve_helper(&crate::kit::resources::QPDF).expect("qpdf is required for the native suite");
+        let root = sandbox("unlock-restrictions");
+        let inputs_dir = root.join("inputs");
+        std::fs::create_dir_all(&inputs_dir).unwrap();
+        let brochure = inputs_dir.join("brochure.pdf");
+        std::fs::write(&brochure, pdf(Some(("owner-secret", "")))).unwrap();
+        let catalog_plain = root.join("catalog-plain.pdf");
+        make_pdf(&catalog_plain, 3);
+        let catalog = inputs_dir.join("catalog.pdf");
+        let encrypted = std::process::Command::new(&qpdf)
+            .arg(&catalog_plain).arg(&catalog)
+            .args(["--encrypt", "--user-password=", "--owner-password=owner-secret", "--bits=256", "--print=none", "--extract=n", "--"])
+            .status().unwrap();
+        assert!(encrypted.success(), "qpdf made the AES-256 owner-only fixture");
+        let lease = locked_pdf(&root, "lease", "open-secret");
+        let vendor = locked_pdf(&root, "vendor", "open-secret");
+        for restricted in [&brochure, &catalog] {
+            assert_eq!(crate::kit::password::probe(&std::fs::read(restricted).unwrap(), crate::kit::password::ProtectedFormat::Pdf).unwrap(), crate::kit::password::ProtectionState::PermissionsOnly, "{}", restricted.display());
+        }
+
+        let output = location(&root, "unlocked");
+        let OutputLocation::CustomFolder(output_dir) = &output else { unreachable!() };
+        std::fs::write(output_dir.join("brochure-unlocked.pdf"), b"keep me").unwrap();
+        let inputs = vec![brochure.clone(), lease.clone(), catalog.clone(), vendor.clone()];
+        let originals = inputs.iter().map(|input| std::fs::read(input).unwrap()).collect::<Vec<_>>();
+
+        let outcomes = tauri::async_runtime::block_on(remove_password(RunEvents::silent(), PasswordRequest {
+            paths: inputs.clone(),
+            password: String::new(),
+            password_overrides: [(vendor.clone(), "not-it".to_string())].into_iter().collect(),
+            output_location: output.clone(),
+        }));
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), inputs, "one outcome per input, in input order");
+
+        for (outcome, name, pages) in [(&outcomes[0], "brochure-unlocked-1.pdf", 1), (&outcomes[2], "catalog-unlocked.pdf", 3)] {
+            assert!(matches!(outcome.state, OutcomeState::Succeeded { .. }), "{}: {:?}", outcome.input_path.display(), outcome.state);
+            assert_eq!(outcome.detail, "Unlocked. Restrictions removed.");
+            assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
+            let path = &outcome.output_paths()[0];
+            assert_eq!(path, &output_dir.join(name));
+            assert!(opens_without_password(path), "{} still has encryption", path.display());
+            let unlocked = lopdf::Document::load(path).unwrap();
+            assert!(unlocked.trailer.get(b"Encrypt").is_err(), "{} keeps an /Encrypt dictionary", path.display());
+            assert_eq!(unlocked.get_pages().len(), pages);
+            let check = std::process::Command::new(&qpdf).arg("--show-encryption").arg(path).output().unwrap();
+            assert!(String::from_utf8_lossy(&check.stdout).contains("File is not encrypted"), "{}", String::from_utf8_lossy(&check.stdout));
+        }
+        assert_eq!(std::fs::read(output_dir.join("brochure-unlocked.pdf")).unwrap(), b"keep me", "an existing output is never replaced");
+
+        let missing = outcomes[1].error().expect("an open-password PDF with no password fails on its own");
+        assert_eq!(missing.kind, ErrorKind::InvalidInput);
+        assert_eq!(missing.message, "Enter the PDF password.");
+        let wrong = outcomes[3].error().expect("an open-password PDF with the wrong password fails on its own");
+        assert_eq!(wrong.kind, ErrorKind::WrongPassword);
+        assert_eq!(wrong.message, WRONG_PASSWORD);
+        assert!(outcomes[1].output_paths().is_empty() && outcomes[3].output_paths().is_empty());
+        assert_eq!(
+            file_names(output_dir),
+            vec!["brochure-unlocked-1.pdf".to_string(), "brochure-unlocked.pdf".to_string(), "catalog-unlocked.pdf".to_string()],
+            "failed files leave nothing behind",
+        );
         for (input, original) in inputs.iter().zip(originals) {
             assert_eq!(std::fs::read(input).unwrap(), original, "original was modified: {}", input.display());
         }

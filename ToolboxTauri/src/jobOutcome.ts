@@ -20,7 +20,6 @@ const limitKinds: readonly LimitKind[] = ["fileSize", "pageCount", "time", "deco
 const skipCodes: readonly SkipCode[] = [
   "notProtected",
   "alreadyProtected",
-  "permissionsPasswordOnly",
   "noSavings",
   "alreadyInTargetFormat",
   "rangeEmptyAfterClamping",
