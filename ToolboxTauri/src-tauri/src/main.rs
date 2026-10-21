@@ -1140,56 +1140,61 @@ mod command_tests {
     }
 
     #[test]
-    fn lock_isolates_docx_xlsx_and_pptx_success_from_legacy_rejections() {
-        let root = sandbox("lock-office-command");
-        let extensions = ["docx", "doc", "xlsx", "xls", "ppt", "pptx"];
-        let inputs = extensions
-            .iter()
-            .map(|extension| root.join(format!("source.{extension}")))
-            .collect::<Vec<_>>();
-        for (extension, input) in extensions.iter().zip(&inputs) {
-            let fixture = if matches!(*extension, "docx" | "xlsx" | "pptx") {
-                test_minimal_ooxml_package(extension)
-            } else {
-                b"Legacy Office fixture".to_vec()
-            };
-            std::fs::write(input, fixture).unwrap();
-        }
-        let originals = inputs
-            .iter()
-            .map(|input| std::fs::read(input).unwrap())
-            .collect::<Vec<_>>();
-        let output_folder = location(&root, "output");
+    fn lock_skips_already_protected_files_and_refuses_legacy_formats_while_modern_files_lock() {
+        use crate::kit::contracts::{OutcomeState, SkipCode};
+        use crate::kit::office::tests::ppt_plain_fixture;
+        use crate::kit::password::tests::{pdf, word_document, workbook};
+        enum Expect { Locked, AlreadyProtected, Legacy(&'static str) }
+        let already = "Already password-protected. Unlock it first, then lock it again.";
+        let fixtures = sandbox("lock-skip-fixtures");
+        let root = sandbox("lock-skip-and-legacy");
+        let cases: Vec<(&str, Vec<u8>, Expect)> = vec![
+            ("signed.pdf", pdf(Some(("owner", "user"))), Expect::AlreadyProtected),
+            ("invoice.pdf", std::fs::read(locked_pdf(&fixtures, "invoice", crate::kit::TEST_OVERRIDE_PASSWORD)).unwrap(), Expect::AlreadyProtected),
+            ("offer.docx", test_minimal_ooxml_package("docx"), Expect::Locked),
+            ("payroll.docx", std::fs::read(locked_docx(&fixtures, "payroll", crate::kit::TEST_OVERRIDE_PASSWORD)).unwrap(), Expect::AlreadyProtected),
+            ("minutes.doc", word_document(0), Expect::Legacy("Legacy .doc files can't be locked. Save it as .docx in Word, then add it again.")),
+            ("budget.xlsx", test_minimal_ooxml_package("xlsx"), Expect::Locked),
+            ("ledger.xls", workbook(false), Expect::Legacy("Legacy .xls files can't be locked. Save it as .xlsx in Excel, then add it again.")),
+            ("old-deck.ppt", ppt_plain_fixture(), Expect::Legacy("Legacy .ppt files can't be locked. Save it as .pptx in PowerPoint, then add it again.")),
+            ("deck.pptx", test_minimal_ooxml_package("pptx"), Expect::Locked),
+        ];
+        let inputs = cases.iter().map(|(name, bytes, _)| {
+            let input = root.join(name);
+            std::fs::write(&input, bytes).unwrap();
+            input
+        }).collect::<Vec<_>>();
 
-        let outcomes = tauri::async_runtime::block_on(protect_files(RunEvents::silent(), PasswordRequest {
-            paths: inputs.clone(),
-            password: crate::kit::TEST_PASSWORD.into(),
-            password_overrides: Default::default(),
-            output_location: output_folder,
-        }));
+        let outcomes = lock(&inputs, location(&root, "output"));
 
-        assert_eq!(outcomes.len(), extensions.len());
-        assert_eq!(
-            outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(),
-            inputs,
-            "BatchRunner must preserve the requested input order",
-        );
-        for (extension, outcome) in extensions.iter().zip(&outcomes) {
-            if matches!(*extension, "docx" | "xlsx" | "pptx") {
-                assert!(outcome.error().is_none(), "{}", outcome.error().cloned().unwrap_or_default());
-                assert_eq!(outcome.output_paths().len(), 1);
-                assert!(outcome.output_paths()[0].is_file());
-            } else {
-                assert!(outcome.output_paths().is_empty());
-                assert!(outcome.error().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput)));
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), inputs, "BatchRunner must preserve the requested input order");
+        for ((name, original, expect), outcome) in cases.iter().zip(&outcomes) {
+            match (expect, &outcome.state) {
+                (Expect::Locked, OutcomeState::Succeeded { output_paths }) => {
+                    let stem = name.rsplit_once('.').unwrap();
+                    assert_eq!(output_paths, &[root.join("output").join(format!("{}-protected.{}", stem.0, stem.1))], "{name}");
+                }
+                (Expect::AlreadyProtected, OutcomeState::Skipped { reason }) => {
+                    assert_eq!((&reason.code, reason.message.as_str()), (&SkipCode::AlreadyProtected, already), "{name}");
+                }
+                (Expect::Legacy(message), OutcomeState::Failed { output_paths, .. }) => {
+                    assert!(output_paths.is_empty(), "{name}");
+                    let direct = PasswordProcessor::protect(root.join(name), crate::kit::TEST_PASSWORD, &location(&root, "output"));
+                    let error = direct.error().unwrap_or_else(|| panic!("{name} must be refused"));
+                    assert_eq!((&error.kind, error.message.as_str()), (&ErrorKind::Unavailable, *message), "{name}");
+                    assert!(direct.output_paths().is_empty(), "{name}");
+                }
+                (_, state) => panic!("{name} ended as {state:?}"),
             }
+            assert_eq!(&std::fs::read(root.join(name)).unwrap(), original, "original was modified: {name}");
         }
-        for (input, original) in inputs.iter().zip(originals) {
-            assert_eq!(std::fs::read(input).unwrap(), original, "Office source was modified: {}", input.display());
-        }
-        assert_eq!(std::fs::read_dir(root.join("output")).unwrap().count(), 3);
+        let mut written = std::fs::read_dir(root.join("output")).unwrap().map(|entry| entry.unwrap().file_name()).collect::<Vec<_>>();
+        written.sort();
+        assert_eq!(written, ["budget-protected.xlsx", "deck-protected.pptx", "offer-protected.docx"], "skipped and refused files write and reserve nothing");
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), cases.len() + 1, "nothing is written beside the inputs");
 
         let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(fixtures);
     }
 
     #[test]
@@ -1417,21 +1422,6 @@ mod command_tests {
         assert_eq!(first.output_paths(), [folder.join("report-protected-1.pdf")]);
         assert_eq!(second.output_paths(), [folder.join("report-protected-2.pdf")]);
         assert_eq!(std::fs::read(folder.join("report-protected.pdf")).unwrap(), b"an earlier copy");
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn locking_a_pdf_that_already_has_a_password_is_refused_without_an_output() {
-        let root = sandbox("protect-files-already-locked");
-        let locked = locked_pdf(&root, "already", crate::kit::TEST_PASSWORD);
-        let outcome = tauri::async_runtime::block_on(protect_files(RunEvents::silent(), PasswordRequest {
-            paths: vec![locked],
-            password: crate::kit::TEST_OVERRIDE_PASSWORD.into(),
-            password_overrides: Default::default(),
-            output_location: location(&root, "again"),
-        })).remove(0);
-        assert_eq!(outcome.error().map(|error| error.kind.clone()), Some(ErrorKind::InvalidInput));
-        assert!(std::fs::read_dir(root.join("again")).unwrap().next().is_none());
         let _ = std::fs::remove_dir_all(root);
     }
 
