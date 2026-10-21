@@ -108,13 +108,13 @@ pub fn unreadable(format: ProtectedFormat) -> ToolError {
     ))
 }
 
-pub fn legacy_lock_unavailable(format: ProtectedFormat) -> ToolError {
+pub fn legacy_lock_refused(format: ProtectedFormat) -> ToolError {
     let (modern, app) = match format {
         ProtectedFormat::Doc => (ProtectedFormat::Docx, "Word"),
         ProtectedFormat::Xls => (ProtectedFormat::Xlsx, "Excel"),
         _ => (ProtectedFormat::Pptx, "PowerPoint"),
     };
-    ToolError::unavailable(format!(
+    ToolError::invalid_input(format!(
         "Legacy .{} files can't be locked. Save it as .{} in {app}, then add it again.",
         format.extension(),
         modern.extension()

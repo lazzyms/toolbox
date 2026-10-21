@@ -685,7 +685,7 @@ test("a saved Protect Office Files favorite and recent open File Security after 
     await expect(page.locator(".workspace-title")).toHaveText("File Security");
     await expect(page.getByRole("heading", { name: "Lock & Unlock", exact: true })).toBeVisible();
     await modes(page).getByRole("radio", { name: "Lock", exact: true }).click();
-    await expect(page.getByText("Accepts .pdf, .docx, .xlsx, .pptx", { exact: true })).toBeVisible();
+    await expect(page.getByText("Accepts .pdf, .doc, .docx, .xls, .xlsx, .ppt, .pptx", { exact: true })).toBeVisible();
 
     await page.reload();
     const saved = await page.evaluate(() => ({
@@ -698,7 +698,7 @@ test("a saved Protect Office Files favorite and recent open File Security after 
 
 test("Lock sends a mixed PDF, Word, Excel and PowerPoint batch in one protect_files request and shows one locked row per file", async ({ page }) => {
     await openLock(page);
-    await expect(page.getByText("Accepts .pdf, .docx, .xlsx, .pptx", { exact: true })).toBeVisible();
+    await expect(page.getByText("Accepts .pdf, .doc, .docx, .xls, .xlsx, .ppt, .pptx", { exact: true })).toBeVisible();
     await expect(page.getByText("Each file gets a copy ending in -protected that opens only with the new password. Your originals stay as they are.")).toBeVisible();
     await drop(page, ["/local/lease.pdf", "/local/offer.docx", "/local/budget.xlsx"]);
     await page.evaluate(() => { (window as unknown as IntakeWindow).__dialogResult = ["/local/deck.pptx"]; });
@@ -706,7 +706,7 @@ test("Lock sends a mixed PDF, Word, Excel and PowerPoint batch in one protect_fi
     const dialogs = await page.evaluate(() => (window as unknown as IntakeWindow).__invocations
         .filter(({ command }) => command === "plugin:dialog|open")
         .map(({ args }) => (args as { options: { filters: Array<{ extensions: string[] }> } }).options.filters[0].extensions));
-    expect(dialogs).toEqual([["pdf", "docx", "xlsx", "pptx"]]);
+    expect(dialogs).toEqual([["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx"]]);
     await expect(rows(page)).toHaveText([/^lease\.pdf/, /^offer\.docx/, /^budget\.xlsx/, /^deck\.pptx/]);
     await expect(rows(page).filter({ hasText: "Won't run" })).toHaveCount(0);
     await fillBatchLock(page, "batch-secret");
@@ -725,24 +725,52 @@ test("Lock sends a mixed PDF, Word, Excel and PowerPoint batch in one protect_fi
     expect(await requestFor(page, "remove_password")).toEqual([]);
 });
 
-test("Lock flags legacy Office files as Won't run and sends only the files it can lock", async ({ page }) => {
+test("Lock flags legacy Office files as failing, still sends them, and shows each as its own Failed row", async ({ page }) => {
+    const legacy = {
+        "/local/minutes.doc": "Legacy .doc files can't be locked. Save it as .docx in Word, then add it again.",
+        "/local/ledger.xls": "Legacy .xls files can't be locked. Save it as .xlsx in Excel, then add it again.",
+        "/local/old-deck.ppt": "Legacy .ppt files can't be locked. Save it as .pptx in PowerPoint, then add it again.",
+    };
     await openLock(page);
+    await page.evaluate((legacy) => {
+        (window as unknown as IntakeWindow).__failures = Object.fromEntries(Object.entries(legacy).map(([path, message]) => [path, { kind: "invalidInput", message }]));
+    }, legacy);
     await drop(page, ["/local/minutes.doc", "/local/deck.pptx", "/local/ledger.xls", "/local/old-deck.ppt"]);
-    for (const name of ["minutes.doc", "ledger.xls", "old-deck.ppt"]) await expect(row(page, name)).toContainText("Won't run");
+    for (const [path, message] of Object.entries(legacy)) {
+        const flagged = row(page, path.split("/").pop() ?? path);
+        await expect(flagged).toContainText("Won't run");
+        await expect(flagged).toContainText(message);
+        await expect(flagged.getByRole("button", { name: /password/i })).toHaveCount(0);
+    }
     await expect(row(page, "deck.pptx")).not.toContainText("Won't run");
+    await expect(page.locator(".file-selection-selected")).toHaveText("3 won't run in Lock");
+    await expect(page.getByText("3 files can't be locked. Lock needs .docx, .xlsx or .pptx. They'd fail if you ran now.", { exact: true })).toBeVisible();
+    await expect(page.getByTestId("password-readiness")).toHaveText("1 file has no password yet");
+    await expect(page.getByTestId("failing-files")).toHaveCount(0);
     await fillBatchLock(page, "batch-secret");
-    await expect(run(page)).toHaveAccessibleName("Lock 1 file");
+    await expect(page.getByTestId("failing-files")).toHaveText("3 flagged files will fail");
+    await expect(run(page)).toHaveAccessibleName("Lock 4 files");
     await run(page).click();
 
-    await expect(results(page)).toHaveCount(1);
-    expect((await requestFor(page, "protect_files")).map((request) => request.paths)).toEqual([["/local/deck.pptx"]]);
+    expect((await requestFor(page, "protect_files")).map((request) => request.paths)).toEqual([["/local/minutes.doc", "/local/deck.pptx", "/local/ledger.xls", "/local/old-deck.ppt"]]);
+    await expect(results(page)).toHaveCount(4);
+    await expect(results(page).filter({ hasText: "deck.pptx" })).toHaveAttribute("data-state", "succeeded");
+    for (const [path, message] of Object.entries(legacy)) {
+        const failed = results(page).filter({ hasText: path.split("/").pop() ?? path });
+        await expect(failed).toHaveAttribute("data-state", "failed");
+        await expect(failed).toHaveAttribute("data-tone", "fail");
+        await expect(failed.locator(".result-row-state")).toContainText("Failed");
+        await expect(failed).toContainText(message);
+        await expect(failed.getByRole("button", { name: /^Retry/ })).toHaveCount(0);
+    }
+    await expect(page.getByRole("button", { name: /^Retry \d+ failed/ })).toHaveCount(0);
 });
 
 const fileDialogFilters = (page: Page) => page.evaluate(() => (window as unknown as IntakeWindow).__invocations
     .filter(({ command, args }) => command === "plugin:dialog|open" && !(args as { options: { directory?: boolean } }).options.directory)
     .map(({ args }) => (args as { options: { filters: Array<{ extensions: string[] }> } }).options.filters[0].extensions));
 
-test("the picker filter and the flagged files follow the mode, and flagged files never hold back Run", async ({ page }) => {
+test("the flagged files follow the mode, both pickers take legacy Office files, and flagged files count toward Run", async ({ page }) => {
     const notADocument = "Not a document. Lock and Unlock take PDF, Word, Excel and PowerPoint files.";
     const banner = page.getByText("2 files can't be locked. Lock needs .docx, .xlsx or .pptx. They'd fail if you ran now.", { exact: true });
     const header = page.locator(".file-selection-selected");
@@ -759,9 +787,9 @@ test("the picker filter and the flagged files follow the mode, and flagged files
 
     await modes(page).getByRole("radio", { name: "Lock", exact: true }).click();
     await expect(row(page, "minutes.doc")).toContainText("Won't run");
-    await expect(row(page, "minutes.doc")).toContainText("Lock needs .docx. Save it as .docx in Word, then add it again.");
+    await expect(row(page, "minutes.doc")).toContainText("Legacy .doc files can't be locked. Save it as .docx in Word, then add it again.");
     await expect(row(page, "ledger.xls")).toContainText("Won't run");
-    await expect(row(page, "ledger.xls")).toContainText("Lock needs .xlsx. Save it as .xlsx in Excel, then add it again.");
+    await expect(row(page, "ledger.xls")).toContainText("Legacy .xls files can't be locked. Save it as .xlsx in Excel, then add it again.");
     for (const name of ["deck.pptx", "lease.pdf"]) await expect(row(page, name)).not.toContainText("Won't run");
     await expect(header).toHaveText("2 won't run in Lock");
     await expect(banner).toBeVisible();
@@ -770,12 +798,13 @@ test("the picker filter and the flagged files follow the mode, and flagged files
     await expect(notAdded.getByRole("listitem")).toHaveText([`scan.png${notADocument}`]);
     expect(await fileDialogFilters(page)).toEqual([
         ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx"],
-        ["pdf", "docx", "xlsx", "pptx"],
+        ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx"],
     ]);
 
     await fillBatchLock(page, "batch-secret");
     await expect(run(page)).toBeEnabled();
-    await expect(run(page)).toHaveAccessibleName("Lock 2 files");
+    await expect(run(page)).toHaveAccessibleName("Lock 4 files");
+    await expect(page.getByTestId("failing-files")).toHaveText("2 flagged files will fail");
 
     await modes(page).getByRole("radio", { name: "Unlock", exact: true }).click();
     await expect(rows(page).filter({ hasText: "Won't run" })).toHaveCount(0);
@@ -784,7 +813,7 @@ test("the picker filter and the flagged files follow the mode, and flagged files
 
     await modes(page).getByRole("radio", { name: "Lock", exact: true }).click();
     await page.getByRole("button", { name: "Choose files to process" }).click();
-    expect((await fileDialogFilters(page)).at(-1)).toEqual(["pdf", "docx", "xlsx", "pptx"]);
+    expect((await fileDialogFilters(page)).at(-1)).toEqual(["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx"]);
     await page.getByRole("button", { name: "Remove 2 flagged files" }).click();
     await expect(rows(page)).toHaveText([/^deck\.pptx/, /^lease\.pdf/]);
     await expect(banner).toHaveCount(0);
@@ -970,7 +999,7 @@ test("switching between Lock and Unlock clears every password and Lock takes Wor
     await expect(page.getByLabel("Confirm new password", { exact: true })).toHaveValue("");
     await expect(row(page, "b.pdf")).not.toContainText("Own password");
     await expect(run(page)).toBeDisabled();
-    await expect(page.getByText("Accepts .pdf, .docx, .xlsx, .pptx", { exact: true })).toBeVisible();
+    await expect(page.getByText("Accepts .pdf, .doc, .docx, .xls, .xlsx, .ppt, .pptx", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Open Protect Office Files" })).toHaveCount(0);
     await fillBatchLock(page, "lock-secret");
     await setOwnPassword(page, "a.pdf", "own-lock-secret", "lock");

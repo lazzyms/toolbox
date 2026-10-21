@@ -17,7 +17,7 @@ use crate::kit::office_agile::{
     decrypt_ooxml, encrypt_ooxml, is_agile_ooxml, verify_ooxml, AgileDecryptError,
 };
 use crate::kit::password::{
-    legacy_lock_unavailable, lock_skip_reason, probe, unlock_skip_reason, unreadable, ProtectedFormat, ProtectionState,
+    legacy_lock_refused, lock_skip_reason, probe, unlock_skip_reason, unreadable, ProtectedFormat, ProtectionState,
     LEGACY_PASSWORD_TOO_LONG, LEGACY_PPT_PICTURES, UNLOCK_NOT_VERIFIED, UNSUPPORTED_ENCRYPTION,
     UNSUPPORTED_LEGACY_ENCRYPTION, WRONG_PASSWORD,
 };
@@ -151,7 +151,7 @@ impl OfficeProcessor {
                     ToolError::invalid_input("Only DOCX, XLSX and PPTX files can be protected."),
                 )
             }
-            Some(legacy) => return JobOutcome::failure(input_path, legacy_lock_unavailable(legacy)),
+            Some(legacy) => return JobOutcome::failure(input_path, legacy_lock_refused(legacy)),
         };
         let normalized_extension = format.extension();
 
@@ -1826,17 +1826,10 @@ pub(crate) mod tests {
                 &OutputLocation::CustomFolder(output_directory.clone()),
             );
 
-            if extension == "odt" {
-                assert!(matches!(
-                    outcome.error().map(|error| &error.kind),
-                    Some(ErrorKind::InvalidInput)
-                ));
-            } else {
-                assert!(matches!(
-                    outcome.error().map(|error| &error.kind),
-                    Some(ErrorKind::Unavailable)
-                ));
-            }
+            assert!(matches!(
+                outcome.error().map(|error| &error.kind),
+                Some(ErrorKind::InvalidInput)
+            ));
             assert!(outcome.output_paths().is_empty());
             assert_eq!(std::fs::read(&input).unwrap(), fixture);
             assert_eq!(std::fs::read_dir(&output_directory).unwrap().count(), 0);

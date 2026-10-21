@@ -64,6 +64,7 @@ interface ToolScaffoldProps {
     intakeCopy?: IntakeCopy;
     children: (props: {
         files: string[];
+        failingFiles: string[];
         outputLocation: OutputLocation;
         run: () => Promise<void>;
         runCombined: () => Promise<void>;
@@ -106,10 +107,11 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
     const workspace = variant === 'workspace' ? workspaceForTool(utility.id) : undefined;
     const intakeTools = useMemo(() => workspace ? toolsForWorkspace(workspace) : [utility], [workspace, utility]);
     const ordered = inputPolicy.inputCardinality === 'ordered' && showFileOrdering;
-    const statuses = useMemo(() => entryStatuses(entries, utility, intakeCopy?.unsupported), [entries, utility, intakeCopy]);
-    const runnable = useMemo(() => statuses.filter((status) => status.wontRun === null), [statuses]);
+    const statuses = useMemo(() => entryStatuses(entries, utility, intakeCopy), [entries, utility, intakeCopy]);
+    const runnable = useMemo(() => statuses.filter((status) => status.flag?.kind !== 'wontRun'), [statuses]);
     const files = useMemo(() => runnable.map((status) => status.entry.path), [runnable]);
-    const flagged = statuses.filter((status) => status.wontRun !== null);
+    const failingFiles = useMemo(() => runnable.filter((status) => status.flag !== null).map((status) => status.entry.path), [runnable]);
+    const flagged = statuses.filter((status) => status.flag !== null);
     const selectedFileIndex = Math.max(runnable.findIndex((status) => status.entry.key === anchor), 0);
     const saveStep = saveStepFor(utility);
     const savesOneFile = saveStepAppliesTo(saveStep, files.length);
@@ -514,7 +516,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                         aria-disabled={loading || undefined}
                         onKeyDown={listKeyDown}
                     >
-                        {statuses.map(({ entry, occurrence, wontRun }, index) => {
+                        {statuses.map(({ entry, occurrence, flag }, index) => {
                             const name = fileName(entry.path);
                             const isSelected = selection.has(entry.key);
                             return (
@@ -524,7 +526,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                                     aria-selected={isSelected}
                                     aria-label={ordered ? `${index + 1} of ${entries.length}, ${name}` : name}
                                     data-intake-key={entry.key}
-                                    data-wont-run={wontRun ? 'true' : undefined}
+                                    data-flag={flag?.kind}
                                     data-dragging={dragKey === entry.key ? 'true' : undefined}
                                     data-drop-target={dropTargetKey === entry.key && dragKey !== entry.key ? 'true' : undefined}
                                     className="file-selection-row"
@@ -570,10 +572,10 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                                         }}
                                     >
                                         <span className="file-selection-name">{name}</span>
-                                        <span className="file-selection-detail">{wontRun ?? shortenHomePath(parentFolder(entry.path), home)}</span>
+                                        <span className="file-selection-detail">{flag?.message ?? shortenHomePath(parentFolder(entry.path), home)}</span>
                                     </Button>
-                                    {wontRun && <Badge variant="outline" className="file-selection-badge">Won't run</Badge>}
-                                    {!wontRun && renderFileExtra?.(entry.path, isSelected, loading)}
+                                    {flag && <Badge variant="outline" className="file-selection-badge">Won't run</Badge>}
+                                    {!flag && renderFileExtra?.(entry.path, isSelected, loading)}
                                     {ordered && occurrence > 1 && <Badge variant="outline" className="file-selection-badge" data-tone="warning">{repeatLabel(occurrence)}</Badge>}
                                     {ordered && (
                                         <span className="file-selection-move">
@@ -671,6 +673,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
             <fieldset className="tool-scaffold-options" disabled={loading} aria-busy={loading || undefined}>
             {children({
                 files,
+                failingFiles,
                 outputLocation,
                 run,
                 runCombined,

@@ -748,7 +748,7 @@ body {
   text-align: left;
   text-overflow: ellipsis;
 }
-.file-selection-row[data-wont-run="true"] .file-selection-name {
+.file-selection-row[data-flag] .file-selection-name {
   color: var(--muted-foreground);
 }
 .file-selection-badge,
