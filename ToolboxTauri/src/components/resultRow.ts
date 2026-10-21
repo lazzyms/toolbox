@@ -47,7 +47,7 @@ export const wrongPasswordDetail = "The password didn't open this file. Check it
 export const warningText = (warning: OutcomeWarning): string => {
     switch (warning.code) {
         case "signatureRemoved":
-            return "The digital signature was removed, because protecting a file changes it.";
+            return "Saved. The digital signature was removed, because changing the file breaks it.";
         case "fontSubstituted":
             return `The font ${warning.details.requestedFamily} wasn’t available, so ${warning.details.actualFamily} was used.`;
         case "renamedToAvoidReplacing":

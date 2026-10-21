@@ -1,6 +1,6 @@
 # PDF workflows
 
-PDF workflows group page editing and conversion actions behind the PDF category and the command center.
+PDF workflows group page editing and conversion actions under the PDF Editor and PDF Conversion views.
 
 ## Sub-features
 
@@ -23,10 +23,9 @@ PDF workflows group page editing and conversion actions behind the PDF category 
 
 ## How to get to it (user POV)
 
-- Choose `PDF` under Tool categories and select the desired action.
+- Choose `PDF Editor` or `PDF Conversion` under Views in the sidebar and select the desired action.
 - Search `Search tools` for an exact action title such as `Edit PDF` or `Merge PDF`.
-- Choose an action in Quick access or Recent if it is visible there.
-- Choose `Open PDF editor` or `Open PDF conversion` from the corresponding Tool library card.
+- Choose `Open PDF Editor` or `Open PDF Conversion` from the corresponding Tool library card.
 
 ## Driving it with CUA desktop control
 
@@ -48,6 +47,7 @@ Preconditions:
 
 - The `PDF editor tools` toolbar and the page and zoom controls have keyboard navigation. Use their accessible names instead of screen coordinates.
 - A page preview can be unavailable or still rendering. `Export PDF` must remain disabled until the preview can be verified.
-- The repository does not include a PDF fixture. Create a disposable PDF with the `Images to PDF` action as described in the main skill, or bring a non-sensitive local sample and copy it into scratch.
+- `helpers/make-fixtures.sh` writes a one-page `plain.pdf` into scratch. Use it instead of any personal PDF.
+- Merge and Split are moving into the PDF Editor view (lazzyms/toolbox#700). Find them by search until the move lands.
 - OCR depends on the offline OCR adapter. An unavailable adapter is a capability result, not a zero-page result.
 - File operations create new outputs. Never select a checked-in asset as the direct input when the operation writes beside its source.

@@ -17,13 +17,13 @@ use crate::kit::office_agile::{
     decrypt_ooxml, encrypt_ooxml, is_agile_ooxml, verify_ooxml, AgileDecryptError,
 };
 use crate::kit::password::{
-    probe, unlock_skip_reason, unreadable, ProtectedFormat, ProtectionState,
+    legacy_lock_refused, lock_skip_reason, probe, unlock_skip_reason, unreadable, ProtectedFormat, ProtectionState,
     LEGACY_PASSWORD_TOO_LONG, LEGACY_PPT_PICTURES, UNLOCK_NOT_VERIFIED, UNSUPPORTED_ENCRYPTION,
     UNSUPPORTED_LEGACY_ENCRYPTION, WRONG_PASSWORD,
 };
 
 const OFFICE_EXTENSIONS: [&str; 6] = ["doc", "docx", "xls", "xlsx", "ppt", "pptx"];
-const PROTECTED_OFFICE_EXTENSIONS: [&str; 2] = ["docx", "xlsx"];
+const PROTECTED_OFFICE_EXTENSIONS: [&str; 3] = ["docx", "xlsx", "pptx"];
 const CFB_MAGIC: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
 
 pub struct OfficeProcessor;
@@ -140,25 +140,18 @@ impl OfficeProcessor {
         let Some(extension) = input_path.extension().and_then(|extension| extension.to_str()) else {
             return JobOutcome::failure(
                 input_path,
-                ToolError::invalid_input("Only DOCX and XLSX files can be protected."),
+                ToolError::invalid_input("Only DOCX, XLSX and PPTX files can be protected."),
             );
         };
         let format = match ProtectedFormat::from_extension(extension) {
-            Some(format @ (ProtectedFormat::Docx | ProtectedFormat::Xlsx)) => format,
+            Some(format @ (ProtectedFormat::Docx | ProtectedFormat::Xlsx | ProtectedFormat::Pptx)) => format,
             Some(ProtectedFormat::Pdf) | None => {
                 return JobOutcome::failure(
                     input_path,
-                    ToolError::invalid_input("Only DOCX and XLSX files can be protected."),
+                    ToolError::invalid_input("Only DOCX, XLSX and PPTX files can be protected."),
                 )
             }
-            Some(_) => {
-                return JobOutcome::failure(
-                    input_path,
-                    ToolError::unavailable(
-                        "Native Office protection supports DOCX and XLSX only; .doc, .xls, .ppt, and .pptx are unsupported.",
-                    ),
-                )
-            }
+            Some(legacy) => return JobOutcome::failure(input_path, legacy_lock_refused(legacy)),
         };
         let normalized_extension = format.extension();
 
@@ -178,8 +171,10 @@ impl OfficeProcessor {
                 )
             }
         };
-        if let Err(error) = probe(&raw, format) {
-            return JobOutcome::failure(input_path, error);
+        match probe(&raw, format).map(lock_skip_reason) {
+            Ok(None) => {}
+            Ok(Some(reason)) => return JobOutcome::skipped(input_path, reason),
+            Err(error) => return JobOutcome::failure(input_path, error),
         }
         if !is_ooxml_package(&raw, normalized_extension) {
             return JobOutcome::failure(
@@ -1652,12 +1647,12 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn protects_docx_and_xlsx_with_exact_agile_round_trip() {
+    fn protects_docx_xlsx_and_pptx_with_exact_agile_round_trip() {
         let directory = test_directory("protect");
         let output_directory = directory.join("output");
         std::fs::create_dir_all(&output_directory).unwrap();
 
-        for extension in ["docx", "xlsx"] {
+        for extension in ["docx", "xlsx", "pptx"] {
             let input = directory.join(format!("source.{extension}"));
             let fixture = minimal_ooxml_package(extension);
             std::fs::write(&input, &fixture).unwrap();
@@ -1685,14 +1680,14 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn protects_and_removes_password_with_an_exact_docx_and_xlsx_round_trip() {
+    fn protects_and_removes_password_with_an_exact_docx_xlsx_and_pptx_round_trip() {
         let directory = test_directory("round-trip");
         let protected_directory = directory.join("protected");
         let failure_directory = directory.join("failure");
         std::fs::create_dir_all(&protected_directory).unwrap();
         std::fs::create_dir_all(&failure_directory).unwrap();
 
-        for extension in ["docx", "xlsx"] {
+        for extension in ["docx", "xlsx", "pptx"] {
             let input = directory.join(format!("source.{extension}"));
             let original = minimal_ooxml_package(extension);
             std::fs::write(&input, &original).unwrap();
@@ -1820,13 +1815,9 @@ pub(crate) mod tests {
         let output_directory = directory.join("output");
         std::fs::create_dir_all(&output_directory).unwrap();
 
-        for extension in ["doc", "xls", "ppt", "pptx", "odt"] {
+        for extension in ["doc", "xls", "ppt", "odt"] {
             let input = directory.join(format!("source.{extension}"));
-            let fixture = if extension == "pptx" {
-                minimal_ooxml_package(extension)
-            } else {
-                b"Office fixture".to_vec()
-            };
+            let fixture = b"Office fixture".to_vec();
             std::fs::write(&input, &fixture).unwrap();
 
             let outcome = OfficeProcessor::protect(
@@ -1835,17 +1826,10 @@ pub(crate) mod tests {
                 &OutputLocation::CustomFolder(output_directory.clone()),
             );
 
-            if extension == "odt" {
-                assert!(matches!(
-                    outcome.error().map(|error| &error.kind),
-                    Some(ErrorKind::InvalidInput)
-                ));
-            } else {
-                assert!(matches!(
-                    outcome.error().map(|error| &error.kind),
-                    Some(ErrorKind::Unavailable)
-                ));
-            }
+            assert!(matches!(
+                outcome.error().map(|error| &error.kind),
+                Some(ErrorKind::InvalidInput)
+            ));
             assert!(outcome.output_paths().is_empty());
             assert_eq!(std::fs::read(&input).unwrap(), fixture);
             assert_eq!(std::fs::read_dir(&output_directory).unwrap().count(), 0);

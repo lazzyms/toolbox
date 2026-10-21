@@ -59,7 +59,7 @@ fieldset.opt{border:0;margin:0;padding:0}fieldset.opt legend{padding:0;margin-bo
 <aside aria-label="File Security" style="flex: 1 1 220px; max-width: 232px; background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; padding: 14px 10px; box-sizing: border-box">
 <a class="nav" href="Main.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M5 12l6 6M5 12l6-6"></path></svg>All tools</a>
 <div style="padding: 16px 10px 6px; font-size: 12px; font-weight: 600; color: var(--faint)">File Security</div>
-<nav aria-label="File Security tools" style="display: flex; flex-direction: column; gap: 2px"><button class="nav on" aria-pressed="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg>Lock & Unlock</button><a class="nav" href="PdfDetails.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"></path></svg><span style="display: flex; flex-direction: column"><span>Remove restrictions</span><span class="hint">In PDF Editor</span></span></a></nav>
+<nav aria-label="File Security tools" style="display: flex; flex-direction: column; gap: 2px"><button class="nav on" aria-pressed="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg>Lock & Unlock</button></nav>
 <div style="flex: 1"></div>
 <a class="nav" href="Settings.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"></path></svg>Settings<span class="kbd" style="margin-left: auto">{{settingsKey}}</span></a>
 <p class="hint" style="margin: 0; padding: 10px 10px 0">Files stay on this device.</p>
@@ -111,7 +111,7 @@ base.isLock = lock; base.isUnlock = !lock;
 base.subtitle = lock ? 'Add a password to PDF, Word, Excel and PowerPoint files.' : 'Remove a password you know from PDF, Word, Excel and PowerPoint files.';
 base.verb = lock ? 'Lock' : 'Unlock'; base.done = lock ? 'locked' : 'unlocked'; base.suffix = lock ? '-protected' : '-unlocked';
 base.pwLabel = lock ? 'New password for all files' : 'Current password for all files';
-base.accepts = lock ? 'Accepts .pdf, .docx, .xlsx, .pptx' : 'Accepts .pdf, .doc, .docx, .xls, .xlsx, .ppt, .pptx';
+base.accepts = 'Accepts .pdf, .doc, .docx, .xls, .xlsx, .ppt, .pptx';
 const show = this.props.showPassword ?? false;
 base.pwType = show ? 'text' : 'password'; base.pwToggle = show ? 'Hide password' : 'Show password'; base.showPassword = show ? 'true' : 'false';
 base.example = 'lease-agreement' + base.suffix + '.pdf';
@@ -138,7 +138,7 @@ const U = [
 { k: 'ok', name: 'budget-2027.xlsx' },
 { k: 'ok', name: 'board-deck-q3.pptx' },
 { k: 'skip', name: 'offer-letter-chen.docx', detail: 'Not password-protected. Nothing to unlock, so no copy was made.' },
-{ k: 'skip', name: 'brochure-2026.pdf', detail: 'Opens without a password. It only has print and copy restrictions.', pointer: 'Open Remove restrictions' },
+{ k: 'ok', name: 'brochure-2026.pdf', detail: 'Unlocked. Restrictions removed.' },
 { k: 'failPw', name: 'payroll-september.xlsx', detail: 'The password didn\'t open this file. Check it, or try the password this file was sent with.' },
 { k: 'fail', name: 'archive-ledger-2004.xls', detail: 'Uses an older encryption type Toolbox can\'t open. The password may be right.' },
 { k: 'fail', name: 'sales-kickoff-2012.ppt', detail: 'Legacy .ppt files with pictures can\'t be unlocked yet. The file isn\'t damaged.' },

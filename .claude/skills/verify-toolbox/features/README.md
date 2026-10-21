@@ -1,6 +1,6 @@
 # Toolbox verification map
 
-Read this index, launch a dedicated development instance, and run Doctor before driving a feature. The map follows Toolbox's command center, task workspaces, and Settings panel.
+Read this index, launch the verification bundle, and run `helpers/doctor.sh` before driving a feature. The map follows Toolbox's home view, its sidebar Views, the tool workspaces, and Settings.
 
 ## Baseline
 
@@ -15,8 +15,8 @@ Read this index, launch a dedicated development instance, and run Doctor before 
 
 ## Features
 
-- [Command center](./command-center.md) covers search, filters, favorites, recent tools, quick access, and workspace navigation.
-- [PDF workflows](./pdf-workflows.md) covers the PDF editor and PDF conversions.
-- [Image workflows](./image-workflows.md) covers image editing and media utilities.
-- [File security](./file-security.md) covers password removal and file protection.
+- [Command center](./command-center.md) covers the home sidebar, Views, tool search, favorites, and opening a workspace.
+- [PDF workflows](./pdf-workflows.md) covers the PDF Editor and PDF Conversion views.
+- [Image workflows](./image-workflows.md) covers the Image Editor and Media views.
+- [File security](./file-security.md) covers Lock & Unlock. Proven end to end on 2026-10-20 with `lock-unlock` in Unlock mode.
 - [Settings](./settings.md) covers appearance, app information, updates, and privacy preferences.

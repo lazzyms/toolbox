@@ -353,7 +353,6 @@ pub fn partition_command_inputs(command: &str, paths: &[PathBuf]) -> Result<Vali
 pub enum SkipCode {
     NotProtected,
     AlreadyProtected,
-    PermissionsPasswordOnly,
     NoSavings,
     AlreadyInTargetFormat,
     RangeEmptyAfterClamping,
@@ -620,12 +619,12 @@ mod tests {
     #[test]
     fn seeded_codes_serialize_as_stable_camel_case_strings() {
         let skips = [
-            SkipCode::NotProtected, SkipCode::AlreadyProtected, SkipCode::PermissionsPasswordOnly, SkipCode::NoSavings,
+            SkipCode::NotProtected, SkipCode::AlreadyProtected, SkipCode::NoSavings,
             SkipCode::AlreadyInTargetFormat, SkipCode::RangeEmptyAfterClamping, SkipCode::TextAlreadyPresent,
             SkipCode::NoEffectiveChange, SkipCode::UnsupportedFormat, SkipCode::Cancelled,
         ];
         assert_eq!(serde_json::to_value(skips).unwrap(), serde_json::json!([
-            "notProtected", "alreadyProtected", "permissionsPasswordOnly", "noSavings", "alreadyInTargetFormat",
+            "notProtected", "alreadyProtected", "noSavings", "alreadyInTargetFormat",
             "rangeEmptyAfterClamping", "textAlreadyPresent", "noEffectiveChange", "unsupportedFormat", "cancelled",
         ]));
         let warnings = [
@@ -833,9 +832,11 @@ mod tests {
 
         let office = native_capability("remove_password").unwrap();
         assert_eq!(office.accepted_extensions, [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"]);
-        let pdf_protection = native_capability("protect_pdf").unwrap();
-        assert_eq!(pdf_protection.accepted_extensions, [".pdf"]);
-        assert!(pdf_protection.native_available);
+        let lock = native_capability("protect_files").unwrap();
+        assert_eq!((lock.accepted_extensions.as_slice(), lock.output_suffix.as_str()), ([".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"].map(String::from).as_slice(), "-protected"));
+        assert!(lock.native_available);
+        assert!(native_capability("protect_pdf").is_none(), "the PDF protect command is retired");
+        assert!(native_capability("protect_office").is_none(), "the Office protect command is retired");
         let images = native_capability("images_to_pdf").unwrap();
         assert_eq!(images.input_cardinality, InputCardinality::Ordered);
         assert!(!images.accepted_extensions.contains(&".tif".to_string()));
@@ -879,11 +880,11 @@ mod tests {
     }
 
     #[test]
-    fn native_office_protection_accepts_docx_and_xlsx_only() {
-        for extension in ["docx", "xlsx", "DOCX", "XLSX"] {
+    fn native_office_protection_accepts_docx_xlsx_and_pptx_only() {
+        for extension in ["docx", "xlsx", "pptx", "DOCX", "XLSX", "PPTX"] {
             assert!(OfficeProcessor::supports_protection_extension(extension));
         }
-        for extension in ["doc", "xls", "ppt", "pptx"] {
+        for extension in ["doc", "xls", "ppt"] {
             assert!(!OfficeProcessor::supports_protection_extension(extension));
         }
     }

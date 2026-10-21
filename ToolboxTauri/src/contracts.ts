@@ -9,8 +9,6 @@ export type AtomicToolId =
   | "pdf-watermark"
   | "pdf-crop"
   | "pdf-edit"
-  | "pdf-protect"
-  | "office-protect"
   | "images-to-pdf"
   | "pdf-to-images"
   | "pdf-to-text"
@@ -72,8 +70,7 @@ export type JobState = "running" | "success" | "mixed" | "failure";
 
 export type ToolCommand =
   | "remove_password"
-  | "protect_pdf"
-  | "protect_office"
+  | "protect_files"
   | "compress_images"
   | "convert_images"
   | "inspect_pdf"
@@ -124,7 +121,6 @@ export type ErrorKind = ToolError["kind"];
 export type SkipCode =
   | "notProtected"
   | "alreadyProtected"
-  | "permissionsPasswordOnly"
   | "noSavings"
   | "alreadyInTargetFormat"
   | "rangeEmptyAfterClamping"
@@ -195,6 +191,8 @@ export interface ToolDefinition {
   shortTitle: string;
   resultVerb: string;
   runningVerb: string;
+  runningDetail?: string;
+  lockedNote?: string;
   blurb: string;
   keywords?: readonly string[];
   symbol: string;
@@ -205,11 +203,9 @@ export interface ToolDefinition {
   verification: string;
   view:
     | "lock-unlock"
-    | "pdf-protect"
     | "pdf-crop"
     | "pdf-edit"
     | "pdf-sign"
-    | "office-protect"
     | "pdf-organize"
     | "pdf-page-numbers"
     | "pdf-watermark"

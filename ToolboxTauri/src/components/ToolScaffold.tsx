@@ -15,6 +15,7 @@ import { CancelRun } from './CancelRun';
 import { ShortcutHint } from './ShortcutHint';
 import { isWindows, matchShortcut, shortcutTarget } from '../shortcuts';
 import { ResultList } from './ResultList';
+import { rowView } from './resultRow';
 import { BATCH_PROGRESS_EVENT, foldRunEvent, parseRunEvent, startRun, type LiveRun } from './liveRun';
 import { BlockedDestinationDialog, RunDestination, exampleOutputName, sameLocation, type BlockedDestination, type FolderCheck } from './RunDestination';
 import { TablerIcon } from './TablerIcon';
@@ -31,6 +32,7 @@ import {
     parseInspection,
     rangeKeys,
     type InspectedPath,
+    type IntakeCopy,
     type IntakeEntry,
     type NotAdded,
 } from './intake';
@@ -58,9 +60,11 @@ interface ToolScaffoldProps {
     onWorkspaceSourceAction?: (action: WorkspaceSourceAction | null) => void;
     showFileOrdering?: boolean;
     renderFileExtra?: (path: string, selected: boolean, locked: boolean) => React.ReactNode;
-    retryWithPassword?: (password: string) => RunHandler;
+    retryWithPassword?: (inputPath: string, password: string) => RunHandler;
+    intakeCopy?: IntakeCopy;
     children: (props: {
         files: string[];
+        failingFiles: string[];
         outputLocation: OutputLocation;
         run: () => Promise<void>;
         runCombined: () => Promise<void>;
@@ -70,10 +74,13 @@ interface ToolScaffoldProps {
         selectFile: (index: number) => void;
         destination: React.ReactNode;
         runLabel: string | null;
+        failedFiles: string[];
+        retryFailed: () => Promise<void>;
+        retrying: boolean;
     }) => React.ReactNode;
 }
 
-export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, retryWithPassword, children }: ToolScaffoldProps) => {
+export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, retryWithPassword, intakeCopy, children }: ToolScaffoldProps) => {
     const [entries, setEntries] = useState<IntakeEntry[]>([]);
     const [selection, setSelection] = useState<ReadonlySet<string>>(() => new Set());
     const [anchor, setAnchor] = useState<string | null>(null);
@@ -89,6 +96,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
     const [loading, setLoading] = useState(false);
     const [live, setLive] = useState<LiveRun | null>(null);
     const [perFileRun, setPerFileRun] = useState<PerFileRun | null>(null);
+    const [retrying, setRetrying] = useState(false);
     const defaultLocation = useOutputLocation();
     const [runOverride, setRunOverride] = useState<OutputLocation | null>(null);
     const [blocked, setBlocked] = useState<(BlockedDestination & { handler: RunHandler }) | null>(null);
@@ -99,10 +107,11 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
     const workspace = variant === 'workspace' ? workspaceForTool(utility.id) : undefined;
     const intakeTools = useMemo(() => workspace ? toolsForWorkspace(workspace) : [utility], [workspace, utility]);
     const ordered = inputPolicy.inputCardinality === 'ordered' && showFileOrdering;
-    const statuses = useMemo(() => entryStatuses(entries, utility), [entries, utility]);
-    const runnable = useMemo(() => statuses.filter((status) => status.wontRun === null), [statuses]);
+    const statuses = useMemo(() => entryStatuses(entries, utility, intakeCopy), [entries, utility, intakeCopy]);
+    const runnable = useMemo(() => statuses.filter((status) => status.flag?.kind !== 'wontRun'), [statuses]);
     const files = useMemo(() => runnable.map((status) => status.entry.path), [runnable]);
-    const flagged = statuses.filter((status) => status.wontRun !== null);
+    const failingFiles = useMemo(() => runnable.filter((status) => status.flag !== null).map((status) => status.entry.path), [runnable]);
+    const flagged = statuses.filter((status) => status.flag !== null);
     const selectedFileIndex = Math.max(runnable.findIndex((status) => status.entry.key === anchor), 0);
     const saveStep = saveStepFor(utility);
     const savesOneFile = saveStepAppliesTo(saveStep, files.length);
@@ -263,18 +272,34 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         void runWith(blocked.handler, location);
     };
 
-    const retry = async (inputPath: string, handler = perFileRun?.handler) => {
-        if (!perFileRun || !handler) return;
+    const rerun = async (paths: string[], handler = perFileRun?.handler) => {
+        if (!perFileRun || !handler || paths.length === 0) return;
         const generation = runGeneration.current;
-        let retried: JobOutcome[];
+        let rerunResults: JobOutcome[];
         try {
-            retried = parseToolResult(await handler([inputPath], perFileRun.outputLocation, { outputPath: null, runId: crypto.randomUUID() }));
+            rerunResults = parseToolResult(await handler(paths, perFileRun.outputLocation, { outputPath: null, runId: crypto.randomUUID() }));
         } catch (error) {
-            retried = [failedOutcome(inputPath, 'processing', String(error))];
+            rerunResults = paths.map((path) => failedOutcome(path, 'processing', String(error)));
         }
-        const replacement = retried.find((result) => result.inputPath === inputPath);
-        if (!replacement || generation !== runGeneration.current) return;
-        setResults((current) => current.map((result) => result.inputPath === inputPath ? replacement : result));
+        if (generation !== runGeneration.current) return;
+        const replacements = new Map(rerunResults.filter((result) => paths.includes(result.inputPath)).map((result) => [result.inputPath, result]));
+        setResults((current) => current.map((result) => replacements.get(result.inputPath) ?? result));
+    };
+
+    const failedFiles = perFileRun
+        ? results.filter((result) => {
+            const view = rowView(result, utility.resultVerb);
+            return view.canRetry || (retryWithPassword !== undefined && view.canRetryWithPassword);
+        }).map((result) => result.inputPath)
+        : [];
+
+    const retryFailed = async () => {
+        setRetrying(true);
+        try {
+            await rerun(failedFiles, onRun);
+        } finally {
+            setRetrying(false);
+        }
     };
 
     const newEntries = (paths: string[]) => paths.map((path) => ({ key: `entry-${++nextEntryKey.current}`, path }));
@@ -294,7 +319,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
             selectOnly(entry.key);
             return;
         }
-        const policy = intakePolicyFor(workspace?.title ?? utility.title, intakeTools, utility);
+        const policy = { ...intakePolicyFor(workspace?.title ?? utility.title, intakeTools, utility), notAcceptedMessage: intakeCopy?.notAccepted };
         const classified = classifyIntake(entries.map((entry) => entry.path), incoming, policy);
         setNotAdded(classified.notAdded);
         if (classified.added.length) setEntries((current) => [...current, ...newEntries(classified.added)]);
@@ -449,11 +474,16 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         ? `Files run top to bottom. Drag a row, or select it and press ${modifier}+Up or ${modifier}+Down.`
         : `Shift-click or ${isWindows() ? 'Ctrl-click' : '⌘-click'} to select. Delete removes files from the list, not from disk.`;
 
+    const selectionNote = [
+        selection.size > 0 ? `${selection.size} selected` : null,
+        intakeCopy?.countHint(flagged.length, entries.length) ?? null,
+    ].filter(Boolean).join('. ');
+
     const fileSelection = (
         <div className="file-selection" data-locked={loading ? 'true' : undefined}>
             <div className="file-selection-header">
                 <span className="file-selection-count">{entries.length} {entries.length === 1 ? 'file' : 'files'}</span>
-                {selection.size > 0 && <span className="file-selection-selected">{selection.size} selected</span>}
+                {selectionNote && <span className="file-selection-selected">{selectionNote}</span>}
                 <span className="file-selection-actions">
                     <Button variant="outline" size="sm" disabled={loading || selection.size === 0} onClick={() => removeEntries(selection)}>
                         Remove from list
@@ -467,7 +497,9 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
             {flagged.length > 0 && (
                 <div className="file-selection-flagged">
                     <p className="workspace-note">
-                        {flagged.length} {flagged.length === 1 ? "file won't" : "files won't"} run with {utility.title}. {flagged.length === 1 ? 'It stays' : 'They stay'} in the list for other actions.
+                        {intakeCopy
+                            ? intakeCopy.flaggedNotice(flagged.length)
+                            : `${flagged.length} ${flagged.length === 1 ? "file won't" : "files won't"} run with ${utility.title}. ${flagged.length === 1 ? 'It stays' : 'They stay'} in the list for other actions.`}
                     </p>
                     <Button variant="outline" size="sm" disabled={loading} onClick={() => removeEntries(new Set(flagged.map((status) => status.entry.key)))}>
                         Remove {flagged.length} flagged {flagged.length === 1 ? 'file' : 'files'}
@@ -484,7 +516,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                         aria-disabled={loading || undefined}
                         onKeyDown={listKeyDown}
                     >
-                        {statuses.map(({ entry, occurrence, wontRun }, index) => {
+                        {statuses.map(({ entry, occurrence, flag }, index) => {
                             const name = fileName(entry.path);
                             const isSelected = selection.has(entry.key);
                             return (
@@ -494,7 +526,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                                     aria-selected={isSelected}
                                     aria-label={ordered ? `${index + 1} of ${entries.length}, ${name}` : name}
                                     data-intake-key={entry.key}
-                                    data-wont-run={wontRun ? 'true' : undefined}
+                                    data-flag={flag?.kind}
                                     data-dragging={dragKey === entry.key ? 'true' : undefined}
                                     data-drop-target={dropTargetKey === entry.key && dragKey !== entry.key ? 'true' : undefined}
                                     className="file-selection-row"
@@ -540,10 +572,10 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                                         }}
                                     >
                                         <span className="file-selection-name">{name}</span>
-                                        <span className="file-selection-detail">{wontRun ?? shortenHomePath(parentFolder(entry.path), home)}</span>
+                                        <span className="file-selection-detail">{flag?.message ?? shortenHomePath(parentFolder(entry.path), home)}</span>
                                     </Button>
-                                    {wontRun && <Badge variant="outline" className="file-selection-badge">Won't run</Badge>}
-                                    {!wontRun && renderFileExtra?.(entry.path, isSelected, loading)}
+                                    {flag && <Badge variant="outline" className="file-selection-badge">Won't run</Badge>}
+                                    {!flag && renderFileExtra?.(entry.path, isSelected, loading)}
                                     {ordered && occurrence > 1 && <Badge variant="outline" className="file-selection-badge" data-tone="warning">{repeatLabel(occurrence)}</Badge>}
                                     {ordered && (
                                         <span className="file-selection-move">
@@ -641,6 +673,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
             <fieldset className="tool-scaffold-options" disabled={loading} aria-busy={loading || undefined}>
             {children({
                 files,
+                failingFiles,
                 outputLocation,
                 run,
                 runCombined,
@@ -661,10 +694,13 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                     />
                 ),
                 runLabel: savesOneFile ? saveStep.runLabel : null,
+                failedFiles,
+                retryFailed,
+                retrying,
             })}
             </fieldset>
 
-            {loading && live && !inputPolicy.manyToOne && <CancelRun key={live.runId} run={live} />}
+            {loading && live && !inputPolicy.manyToOne && <CancelRun key={live.runId} run={live} lockedNote={utility.lockedNote} />}
 
             <ResultList
                 results={results}
@@ -672,10 +708,11 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 loading={loading}
                 resultVerb={utility.resultVerb}
                 runningVerb={utility.runningVerb}
+                runningDetail={utility.runningDetail}
                 live={live}
                 namedByOutput={resultsNamedByOutput}
-                onRetry={perFileRun ? (inputPath) => retry(inputPath) : undefined}
-                onRetryWithPassword={perFileRun && retryWithPassword ? (inputPath, password) => retry(inputPath, retryWithPassword(password)) : undefined}
+                onRetry={perFileRun ? (inputPath) => rerun([inputPath]) : undefined}
+                onRetryWithPassword={perFileRun && retryWithPassword ? (inputPath, password) => rerun([inputPath], retryWithPassword(inputPath, password)) : undefined}
             />
 
             <BlockedDestinationDialog

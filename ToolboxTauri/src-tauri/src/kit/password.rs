@@ -79,8 +79,8 @@ fn probe_pdf(bytes: &[u8]) -> Result<ProtectionState, ToolError> {
     })
 }
 
+pub const ALREADY_PASSWORD_PROTECTED: &str = "Already password-protected. Unlock it first, then lock it again.";
 pub const NOT_PASSWORD_PROTECTED: &str = "Not password-protected. Nothing to unlock, so no copy was made.";
-pub const PERMISSIONS_ONLY: &str = "Opens without a password. It only has print and copy restrictions. To clear them, use Remove restrictions in PDF Editor.";
 
 pub const WRONG_PASSWORD: &str = "The password didn't open this file.";
 pub const UNSUPPORTED_ENCRYPTION: &str = "Uses an encryption type Toolbox can't open. The password may be right.";
@@ -107,11 +107,30 @@ pub fn unreadable(format: ProtectedFormat) -> ToolError {
     ))
 }
 
+pub fn legacy_lock_refused(format: ProtectedFormat) -> ToolError {
+    let (modern, app) = match format {
+        ProtectedFormat::Doc => (ProtectedFormat::Docx, "Word"),
+        ProtectedFormat::Xls => (ProtectedFormat::Xlsx, "Excel"),
+        _ => (ProtectedFormat::Pptx, "PowerPoint"),
+    };
+    ToolError::invalid_input(format!(
+        "Legacy .{} files can't be locked. Save it as .{} in {app}, then add it again.",
+        format.extension(),
+        modern.extension()
+    ))
+}
+
+pub fn lock_skip_reason(state: ProtectionState) -> Option<SkipReason> {
+    match state {
+        ProtectionState::OpenPassword => Some(SkipReason::new(SkipCode::AlreadyProtected, ALREADY_PASSWORD_PROTECTED)),
+        ProtectionState::NotProtected | ProtectionState::PermissionsOnly => None,
+    }
+}
+
 pub fn unlock_skip_reason(state: ProtectionState) -> Option<SkipReason> {
     match state {
-        ProtectionState::OpenPassword => None,
         ProtectionState::NotProtected => Some(SkipReason::new(SkipCode::NotProtected, NOT_PASSWORD_PROTECTED)),
-        ProtectionState::PermissionsOnly => Some(SkipReason::new(SkipCode::PermissionsPasswordOnly, PERMISSIONS_ONLY)),
+        ProtectionState::OpenPassword | ProtectionState::PermissionsOnly => None,
     }
 }
 
@@ -127,6 +146,14 @@ impl PasswordProcessor {
             Some(ProtectedFormat::Pdf) => PDFProcessor::remove_password(input_path, password, output_location),
             Some(_) => OfficeProcessor::remove_password(input_path, password, output_location),
             None => unsupported(input_path),
+        }
+    }
+
+    pub fn protect(input_path: PathBuf, password: &str, output_location: &OutputLocation) -> JobOutcome {
+        match ProtectedFormat::from_path(&input_path) {
+            Some(ProtectedFormat::Pdf) => PDFProcessor::protect(input_path, password, output_location),
+            Some(_) => OfficeProcessor::protect(input_path, password, output_location),
+            None => JobOutcome::failure(input_path, ToolError::invalid_input("Only PDF, DOCX, XLSX and PPTX files can be locked.")),
         }
     }
 }
