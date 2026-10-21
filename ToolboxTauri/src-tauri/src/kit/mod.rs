@@ -8,6 +8,8 @@ pub mod pdf;
 pub mod vision;
 pub mod fidelity;
 pub mod resources;
+#[cfg(test)]
+mod retired_tool_ids;
 
 #[cfg(test)]
 pub(crate) static PROCESS_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
