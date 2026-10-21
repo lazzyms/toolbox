@@ -10,9 +10,12 @@ const mockedOutputPaths = [`${fixturePath}.output-one`, `${fixturePath}.output-t
 
 type MockOutcome = {
     inputPath: string;
+    state: "succeeded" | "failed";
     outputPaths: string[];
     detail: string;
-    failure: { kind: string; message: string } | null;
+    failure: { kind: string; message: string; pointer: null } | null;
+    reason: null;
+    warnings: [];
 };
 
 type TestWindow = Window & {
@@ -115,7 +118,10 @@ if (command === "preview_pdf_scene_pages") return (args as { request: { pageIndi
                     inputPath: fixturePath,
                     outputPaths: mockedOutputPaths,
                     detail: "Test output",
+                    state: "succeeded",
                     failure: null,
+                    reason: null,
+                    warnings: [],
                 }];
             },
             transformCallback: () => 1,
@@ -1115,13 +1121,19 @@ test("every output exposes native file actions and keeps action errors inline", 
                 inputPath: fixturePath,
                 outputPaths: mockedOutputPaths,
                 detail: "Test output",
+                state: "succeeded",
                 failure: null,
+                reason: null,
+                warnings: [],
             },
             {
                 inputPath: `${fixturePath}.failed-input`,
                 outputPaths: [failedOutput],
                 detail: "",
-                failure: { kind: "processing", message: "Processing failed" },
+                state: "failed",
+                failure: { kind: "processing", message: "Processing failed", pointer: null },
+                reason: null,
+                warnings: [],
             },
         ];
         (window as TestWindow).__toolboxActionFailure = {
@@ -1179,7 +1191,10 @@ test("output action state resets and ignores stale completions", async ({ page }
             inputPath: `${path}.next-input`,
             outputPaths: [`${path}.next-output`],
             detail: "New result set",
+            state: "succeeded",
             failure: null,
+            reason: null,
+            warnings: [],
         }];
     }, { path: mockedOutputPaths[0] });
 

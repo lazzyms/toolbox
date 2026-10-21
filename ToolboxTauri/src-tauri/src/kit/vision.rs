@@ -405,7 +405,7 @@ fn validate_face_blur(input: &std::path::Path, output: &std::path::Path) -> Resu
     Ok(())
 }
 
-fn success(input_path: PathBuf, output: PathBuf, detail: &str) -> JobOutcome { JobOutcome { input_path, output_paths: vec![output], detail: detail.to_string(), failure: None } }
+fn success(input_path: PathBuf, output: PathBuf, detail: &str) -> JobOutcome { JobOutcome::succeeded(input_path, vec![output], detail.to_string()) }
 fn failure(input_path: PathBuf, error: String) -> JobOutcome { JobOutcome::failure(input_path, ToolError::processing(error)) }
 fn unavailable(input_path: PathBuf, error: String) -> JobOutcome { JobOutcome::failure(input_path, ToolError::unavailable(error)) }
 fn stderr(result: std::process::Output, fallback: &str) -> String { String::from_utf8_lossy(&result.stderr).trim().lines().last().filter(|line| !line.is_empty()).unwrap_or(fallback).to_string() }
@@ -532,8 +532,8 @@ mod tests {
             pages: Some(vec![0]),
             output_location: crate::kit::common::OutputLocation::CustomFolder(output_root.clone()),
         }, input.clone());
-        let text = outcome.output_paths.first().and_then(|path| fs::read_to_string(path).ok());
-        let output_path = outcome.output_paths.first().cloned();
+        let text = outcome.output_paths().first().and_then(|path| fs::read_to_string(path).ok());
+        let output_path = outcome.output_paths().first().cloned();
         let input_after = fs::read(&input).unwrap();
 
         match old_engine {
@@ -549,7 +549,7 @@ mod tests {
         let _ = fs::remove_file(&input);
         let _ = fs::remove_dir_all(&output_root);
 
-        assert!(outcome.failure.is_none(), "selected OCR failed: {:?}", outcome.failure);
+        assert!(outcome.error().is_none(), "selected OCR failed: {:?}", outcome.error());
         assert_eq!(text.as_deref(), Some("selected page one"));
         assert_eq!(output_path.as_deref().and_then(Path::parent), Some(output_root.as_path()));
         assert_eq!(input_after, original);
@@ -595,8 +595,8 @@ mod tests {
         let _ = fs::remove_file(&input);
         let _ = fs::remove_dir_all(&output_root);
 
-        assert!(outcome.failure.as_ref().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::Processing)));
-        assert!(outcome.output_paths.is_empty());
+        assert!(outcome.error().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::Processing)));
+        assert!(outcome.output_paths().is_empty());
         assert_eq!(before_workspaces, after_workspaces);
         assert_eq!(original, input_after);
         assert_eq!(output_entries, 0);

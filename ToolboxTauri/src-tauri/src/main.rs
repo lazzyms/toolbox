@@ -9,7 +9,7 @@ use crate::kit::images::{ImageProcessor, Options as ImageOptions};
 use crate::kit::images::tools;
 use crate::kit::pdf::{editor, metadata, remaining, scene, PDFProcessor};
 use crate::kit::vision;
-use crate::kit::contracts::{command_supports_preview, validate_command_inputs, validate_page_selection, CompressImagesRequest, ConvertImagesRequest, PasswordRequest, PdfRequest, ToolError};
+use crate::kit::contracts::{command_supports_preview, validate_command_inputs, validate_page_selection, CompressImagesRequest, ConvertImagesRequest, OutcomeState, PasswordRequest, PdfRequest, ToolError};
 use crate::kit::common::batch_runner::BatchRunner;
 use crate::kit::password::PasswordProcessor;
 use crate::kit::office::OfficeProcessor;
@@ -292,25 +292,19 @@ where
     F: FnOnce() -> JobOutcome,
 {
     let aggregate = operation();
-    match aggregate.failure {
-        None => paths.iter().cloned().map(|input_path| JobOutcome {
-            input_path,
-            output_paths: aggregate.output_paths.clone(),
-            detail: aggregate.detail.clone(),
-            failure: None,
-        }).collect(),
-        Some(error) => paths.iter().cloned().map(|input_path| {
-            let error = if input_path == aggregate.input_path {
-                error.clone()
-            } else {
-                ToolError::processing(format!(
+    paths.iter().cloned().map(|input_path| {
+        let state = match &aggregate.state {
+            OutcomeState::Failed { output_paths, error } if input_path != aggregate.input_path => OutcomeState::Failed {
+                output_paths: output_paths.clone(),
+                error: ToolError::processing(format!(
                     "Aggregate operation stopped because {} failed: {}",
                     aggregate.input_path.display(), error.message
-                ))
-            };
-            JobOutcome::failure_with_outputs(input_path, aggregate.output_paths.clone(), error)
-        }).collect(),
-    }
+                )),
+            },
+            state => state.clone(),
+        };
+        JobOutcome { input_path, state, ..aggregate.clone() }
+    }).collect()
 }
 
 fn main() {
@@ -443,10 +437,10 @@ mod command_tests {
         let outcomes = tauri::async_runtime::block_on(future);
         assert_eq!(outcomes.len(), 1, "{name} should return one input outcome");
         let outcome = &outcomes[0];
-        assert!(outcome.failure.is_none(), "{name} failed: {}", outcome.failure.clone().unwrap_or_default());
-        assert!(!outcome.output_paths.is_empty(), "{name} must report an output");
-        for output in &outcome.output_paths { assert!(output.is_file(), "{name} reported missing output {}", output.display()); }
-        outcome.output_paths.clone()
+        assert!(outcome.error().is_none(), "{name} failed: {}", outcome.error().cloned().unwrap_or_default());
+        assert!(!outcome.output_paths().is_empty(), "{name} must report an output");
+        for output in outcome.output_paths() { assert!(output.is_file(), "{name} reported missing output {}", output.display()); }
+        outcome.output_paths().to_vec()
     }
 
     fn assert_aggregate_success<F>(name: &str, paths: &[PathBuf], future: F) -> Vec<PathBuf>
@@ -454,12 +448,12 @@ mod command_tests {
         let outcomes = tauri::async_runtime::block_on(future);
         assert_eq!(outcomes.len(), paths.len(), "{name} should return one outcome per input");
         assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), paths, "{name} must preserve input order");
-        let shared_outputs = outcomes[0].output_paths.clone();
+        let shared_outputs = outcomes[0].output_paths().to_vec();
         assert!(!shared_outputs.is_empty(), "{name} must report an aggregate output");
         for outcome in &outcomes {
-            assert!(outcome.failure.is_none(), "{name} failed for {}: {}", outcome.input_path.display(), outcome.failure.clone().unwrap_or_default());
-            assert_eq!(outcome.output_paths, shared_outputs, "{name} must report the shared aggregate output for every input");
-            for output in &outcome.output_paths { assert!(output.is_file(), "{name} reported missing output {}", output.display()); }
+            assert!(outcome.error().is_none(), "{name} failed for {}: {}", outcome.input_path.display(), outcome.error().cloned().unwrap_or_default());
+            assert_eq!(outcome.output_paths(), shared_outputs, "{name} must report the shared aggregate output for every input");
+            for output in outcome.output_paths() { assert!(output.is_file(), "{name} reported missing output {}", output.display()); }
         }
         shared_outputs
     }
@@ -469,9 +463,9 @@ mod command_tests {
         let outcomes = tauri::async_runtime::block_on(future);
         assert_eq!(outcomes.len(), paths.len(), "{name} should return one outcome per input");
         assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), paths, "{name} must preserve input order");
-        assert!(outcomes.iter().all(|outcome| outcome.output_paths.is_empty() && outcome.failure.is_some()), "{name} must fail every input when the aggregate cannot run");
+        assert!(outcomes.iter().all(|outcome| outcome.output_paths().is_empty() && outcome.error().is_some()), "{name} must fail every input when the aggregate cannot run");
         let failed = outcomes.iter().find(|outcome| outcome.input_path == *failed_path).expect("missing input must have an outcome");
-        assert!(failed.failure.as_ref().is_some_and(|error| error.message.contains(&failed_path.display().to_string())), "{name} must identify the failed input");
+        assert!(failed.error().is_some_and(|error| error.message.contains(&failed_path.display().to_string())), "{name} must identify the failed input");
     }
 
     #[test]
@@ -529,8 +523,8 @@ mod command_tests {
         });
 
         assert_eq!(outcomes.len(), paths.len());
-        assert!(outcomes.iter().all(|outcome| outcome.failure.is_some()));
-        assert!(outcomes.iter().all(|outcome| outcome.output_paths == vec![published.clone()]));
+        assert!(outcomes.iter().all(|outcome| outcome.error().is_some()));
+        assert!(outcomes.iter().all(|outcome| outcome.output_paths() == vec![published.clone()]));
     }
 
     #[test]
@@ -547,9 +541,9 @@ mod command_tests {
 
         assert_eq!(outcomes.len(), 1);
         assert_eq!(outcomes[0].input_path, input);
-        assert!(outcomes[0].output_paths.is_empty());
-        assert!(outcomes[0].failure.as_ref().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput)));
-        assert!(outcomes[0].failure.as_ref().is_some_and(|error| error.message.contains("at least one page")));
+        assert!(outcomes[0].output_paths().is_empty());
+        assert!(outcomes[0].error().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput)));
+        assert!(outcomes[0].error().is_some_and(|error| error.message.contains("at least one page")));
         assert_eq!(std::fs::read(&input).unwrap(), original);
         assert_eq!(std::fs::read_dir(root.join("crop-empty")).unwrap().count(), 0);
 
@@ -573,9 +567,9 @@ mod command_tests {
 
         assert_eq!(outcomes.len(), 1);
         assert_eq!(outcomes[0].input_path, input);
-        assert!(outcomes[0].output_paths.is_empty());
-        assert!(outcomes[0].failure.as_ref().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput)));
-        assert!(outcomes[0].failure.as_ref().is_some_and(|error| error.message.contains("at least one page")));
+        assert!(outcomes[0].output_paths().is_empty());
+        assert!(outcomes[0].error().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput)));
+        assert!(outcomes[0].error().is_some_and(|error| error.message.contains("at least one page")));
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -590,9 +584,9 @@ mod command_tests {
 
         assert_eq!(outcomes.len(), 1);
         assert_eq!(outcomes[0].input_path, input);
-        assert!(outcomes[0].output_paths.is_empty());
-        assert!(outcomes[0].failure.as_ref().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput)));
-        assert!(outcomes[0].failure.as_ref().is_some_and(|error| error.message.contains("at least one page")));
+        assert!(outcomes[0].output_paths().is_empty());
+        assert!(outcomes[0].error().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput)));
+        assert!(outcomes[0].error().is_some_and(|error| error.message.contains("at least one page")));
         assert_eq!(std::fs::read_dir(root.join("organize-empty")).unwrap().count(), 0);
 
         let _ = std::fs::remove_dir_all(root);
@@ -604,14 +598,14 @@ mod command_tests {
         assert_eq!(outcomes.len(), 1, "{name} should return one input outcome");
         let outcome = &outcomes[0];
         let resources_staged = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/vision/manifest.json").is_file();
-        if let Some(error) = &outcome.failure {
+        if let Some(error) = outcome.error() {
             if matches!(error.kind, crate::kit::contracts::ErrorKind::Unavailable) {
                 assert!(!resources_staged && std::env::var_os("TOOLBOX_REQUIRE_VISION_RESOURCES").is_none(), "{name} resources were staged but the adapter was unavailable: {error}");
             }
-            assert!(outcome.output_paths.is_empty(), "{name} must not report an output after an adapter failure");
+            assert!(outcome.output_paths().is_empty(), "{name} must not report an output after an adapter failure");
         } else {
-            assert!(!outcome.output_paths.is_empty(), "{name} adapter reported success without an output");
-            for output in &outcome.output_paths { assert!(output.is_file(), "{name} reported missing output {}", output.display()); }
+            assert!(!outcome.output_paths().is_empty(), "{name} adapter reported success without an output");
+            for output in outcome.output_paths() { assert!(output.is_file(), "{name} reported missing output {}", output.display()); }
         }
     }
 
@@ -621,14 +615,14 @@ mod command_tests {
         assert_eq!(outcomes.len(), 1, "{name} should return one input outcome");
         let outcome = &outcomes[0];
         let resources_staged = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/ocr/manifest.json").is_file();
-        if let Some(error) = &outcome.failure {
+        if let Some(error) = outcome.error() {
             if matches!(error.kind, crate::kit::contracts::ErrorKind::Unavailable) {
                 assert!(!resources_staged && std::env::var_os("TOOLBOX_REQUIRE_OCR_RESOURCES").is_none(), "{name} resources were staged but OCR was unavailable: {error}");
             }
         } else {
-            assert!(!outcome.output_paths.is_empty(), "{name} reported success without an output");
-            for output in &outcome.output_paths { assert!(output.is_file(), "{name} reported missing output {}", output.display()); }
-            let text = std::fs::read_to_string(&outcome.output_paths[0]).unwrap_or_default();
+            assert!(!outcome.output_paths().is_empty(), "{name} reported success without an output");
+            for output in outcome.output_paths() { assert!(output.is_file(), "{name} reported missing output {}", output.display()); }
+            let text = std::fs::read_to_string(&outcome.output_paths()[0]).unwrap_or_default();
             assert!(text.contains("Toolbox page"), "{name} did not extract the fixture text: {text:?}");
         }
     }
@@ -788,23 +782,23 @@ mod command_tests {
         let heic = tauri::async_runtime::block_on(convert_images(ConvertImagesRequest {
             paths: vec![src.clone()], format: "heic".to_string(), output_location: OutputLocation::AlongsideInput,
         }));
-        assert!(heic[0].failure.is_none(), "{}", heic[0].failure.clone().unwrap_or_default());
+        assert!(heic[0].error().is_none(), "{}", heic[0].error().cloned().unwrap_or_default());
         assert_eq!(
-            heic[0].output_paths[0].extension().and_then(|e| e.to_str()),
+            heic[0].output_paths()[0].extension().and_then(|e| e.to_str()),
             Some("heic")
         );
-        let bytes = std::fs::read(&heic[0].output_paths[0]).unwrap();
+        let bytes = std::fs::read(&heic[0].output_paths()[0]).unwrap();
         assert!(heif::decode(&bytes).is_ok(), "command output must be real HEIC");
 
         let webp = tauri::async_runtime::block_on(convert_images(ConvertImagesRequest {
             paths: vec![src.clone()], format: "webp".to_string(), output_location: OutputLocation::AlongsideInput,
         }));
-        assert!(webp[0].failure.is_none(), "{}", webp[0].failure.clone().unwrap_or_default());
-        let bytes = std::fs::read(&webp[0].output_paths[0]).unwrap();
+        assert!(webp[0].error().is_none(), "{}", webp[0].error().cloned().unwrap_or_default());
+        let bytes = std::fs::read(&webp[0].output_paths()[0]).unwrap();
         assert_eq!(&bytes[..4], b"RIFF", "command output must be real WebP");
 
-        cleanup(&heic[0].output_paths);
-        cleanup(&webp[0].output_paths);
+        cleanup(&heic[0].output_paths());
+        cleanup(&webp[0].output_paths());
         let _ = std::fs::remove_file(&src);
     }
 
@@ -819,11 +813,11 @@ mod command_tests {
             paths: vec![a.clone(), b.clone()], format: "jpg".to_string(), output_location: OutputLocation::AlongsideInput,
         }));
         assert_eq!(out.len(), 2);
-        assert!(out.iter().all(|job| job.failure.as_ref().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput))));
-        assert!(out.iter().all(|job| job.output_paths.is_empty()));
+        assert!(out.iter().all(|job| job.error().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput))));
+        assert!(out.iter().all(|job| job.output_paths().is_empty()));
 
-        cleanup(&out[0].output_paths);
-        cleanup(&out[1].output_paths);
+        cleanup(&out[0].output_paths());
+        cleanup(&out[1].output_paths());
         let _ = std::fs::remove_file(&a);
         let _ = std::fs::remove_file(&b);
     }
@@ -864,12 +858,12 @@ mod command_tests {
         );
         for (extension, outcome) in extensions.iter().zip(&outcomes) {
             if matches!(*extension, "docx" | "xlsx") {
-                assert!(outcome.failure.is_none(), "{}", outcome.failure.clone().unwrap_or_default());
-                assert_eq!(outcome.output_paths.len(), 1);
-                assert!(outcome.output_paths[0].is_file());
+                assert!(outcome.error().is_none(), "{}", outcome.error().cloned().unwrap_or_default());
+                assert_eq!(outcome.output_paths().len(), 1);
+                assert!(outcome.output_paths()[0].is_file());
             } else {
-                assert!(outcome.output_paths.is_empty());
-                assert!(outcome.failure.as_ref().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput)));
+                assert!(outcome.output_paths().is_empty());
+                assert!(outcome.error().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput)));
             }
         }
         for (input, original) in inputs.iter().zip(originals) {
@@ -897,23 +891,23 @@ mod command_tests {
         }));
 
         assert_eq!(outcomes.len(), 2);
-        assert!(outcomes[0].failure.is_none());
-        assert_eq!(outcomes[0].output_paths.len(), 1);
-        assert!(outcomes[0].output_paths[0].is_file());
-        assert!(outcomes[1].output_paths.is_empty());
-        assert!(outcomes[1].failure.as_ref().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput)));
+        assert!(outcomes[0].error().is_none());
+        assert_eq!(outcomes[0].output_paths().len(), 1);
+        assert!(outcomes[0].output_paths()[0].is_file());
+        assert!(outcomes[1].output_paths().is_empty());
+        assert!(outcomes[1].error().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput)));
         assert_eq!(std::fs::read(&pdf).unwrap(), pdf_original);
         assert_eq!(std::fs::read(&office).unwrap(), office_original);
         assert_eq!(std::fs::read_dir(root.join("protected")).unwrap().count(), 1);
 
         let unlocked = tauri::async_runtime::block_on(remove_password(PasswordRequest {
-            paths: outcomes[0].output_paths.clone(),
+            paths: outcomes[0].output_paths().to_vec(),
             password: "secret".into(),
             output_location: location(&root, "unlocked"),
         }));
-        assert!(unlocked[0].failure.is_none());
-        assert_eq!(unlocked[0].output_paths.len(), 1);
-        assert!(unlocked[0].output_paths[0].is_file());
+        assert!(unlocked[0].error().is_none());
+        assert_eq!(unlocked[0].output_paths().len(), 1);
+        assert!(unlocked[0].output_paths()[0].is_file());
 
         let _ = std::fs::remove_dir_all(root);
     }
@@ -929,9 +923,9 @@ mod command_tests {
                 paths: vec![src.clone()], format: format.to_string(), output_location: location(&root, "output"),
             }));
             assert_eq!(outcomes.len(), 1);
-            assert!(outcomes[0].failure.as_ref().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput)));
-            assert!(outcomes[0].failure.as_ref().is_some_and(|error| error.message.contains("Unsupported image format")));
-            assert!(outcomes[0].output_paths.is_empty());
+            assert!(outcomes[0].error().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput)));
+            assert!(outcomes[0].error().is_some_and(|error| error.message.contains("Unsupported image format")));
+            assert!(outcomes[0].output_paths().is_empty());
             assert_eq!(std::fs::read(&src).unwrap(), original);
             assert_eq!(std::fs::read_dir(root.join("output")).unwrap().count(), 0);
             let _ = std::fs::remove_dir_all(root);
@@ -947,15 +941,15 @@ mod command_tests {
         let out = tauri::async_runtime::block_on(compress_images(CompressImagesRequest {
             paths: vec![src.clone()], quality: 50, lossless: false, output_location: OutputLocation::AlongsideInput,
         }));
-        assert!(out[0].failure.is_none(), "{}", out[0].failure.clone().unwrap_or_default());
+        assert!(out[0].error().is_none(), "{}", out[0].error().cloned().unwrap_or_default());
         assert_eq!(
-            out[0].output_paths[0].extension().and_then(|e| e.to_str()),
+            out[0].output_paths()[0].extension().and_then(|e| e.to_str()),
             Some("png"),
             "compress keeps the source format"
         );
         assert_eq!(std::fs::metadata(&src).unwrap().len(), before, "originals untouched");
 
-        cleanup(&out[0].output_paths);
+        cleanup(&out[0].output_paths());
         let _ = std::fs::remove_file(&src);
     }
 
@@ -971,10 +965,10 @@ mod command_tests {
         }));
         assert_eq!(out.len(), 2);
         assert_eq!(out.iter().map(|job| job.input_path.clone()).collect::<Vec<_>>(), vec![valid.clone(), missing.clone()]);
-        assert!(out.iter().any(|job| job.failure.is_none()));
-        assert!(out.iter().any(|job| job.failure.is_some()));
+        assert!(out.iter().any(|job| job.error().is_none()));
+        assert!(out.iter().any(|job| job.error().is_some()));
 
-        cleanup(&out.iter().flat_map(|job| job.output_paths.clone()).collect::<Vec<_>>());
+        cleanup(&out.iter().flat_map(|job| job.output_paths().to_vec()).collect::<Vec<_>>());
         let _ = std::fs::remove_file(valid);
     }
 
@@ -992,8 +986,8 @@ mod command_tests {
 
         assert_eq!(outcomes.len(), 1);
         assert_eq!(outcomes[0].input_path, pdf);
-        assert!(outcomes[0].output_paths.is_empty());
-        assert!(outcomes[0].failure.as_ref().is_some_and(|error| error.message.contains("at least one page")));
+        assert!(outcomes[0].output_paths().is_empty());
+        assert!(outcomes[0].error().is_some_and(|error| error.message.contains("at least one page")));
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1013,8 +1007,8 @@ mod command_tests {
             output_location: location(&root, "wrong-format"),
         }));
         assert_eq!(wrong_format.len(), 1);
-        assert!(wrong_format[0].output_paths.is_empty());
-        assert!(wrong_format[0].failure.as_ref().is_some_and(|error| error.message.contains("Accepted extensions")));
+        assert!(wrong_format[0].output_paths().is_empty());
+        assert!(wrong_format[0].error().is_some_and(|error| error.message.contains("Accepted extensions")));
 
         let wrong_cardinality = tauri::async_runtime::block_on(split_pdf(PageSelectionRequest {
             paths: vec![pdf.clone(), second_pdf.clone()],
@@ -1025,19 +1019,19 @@ mod command_tests {
             output_location: location(&root, "wrong-cardinality"),
         }));
         assert_eq!(wrong_cardinality.len(), 2);
-        assert!(wrong_cardinality.iter().all(|outcome| outcome.output_paths.is_empty() && outcome.failure.is_some()));
+        assert!(wrong_cardinality.iter().all(|outcome| outcome.output_paths().is_empty() && outcome.error().is_some()));
 
         let selected = tauri::async_runtime::block_on(pdf_to_text(PdfToTextRequest {
             paths: vec![pdf.clone()],
             pages: Some(vec![1]),
             output_location: location(&root, "selected-text"),
         }));
-        let output = selected[0].output_paths.first().expect("selected text should produce an output");
+        let output = selected[0].output_paths().first().expect("selected text should produce an output");
         let text = std::fs::read_to_string(output).unwrap();
         assert!(text.contains("Toolbox page 2"), "selected text: {text}");
         assert!(!text.contains("Toolbox page 1"), "unselected text: {text}");
 
-        cleanup(&selected.iter().flat_map(|outcome| outcome.output_paths.clone()).collect::<Vec<_>>());
+        cleanup(&selected.iter().flat_map(|outcome| outcome.output_paths().to_vec()).collect::<Vec<_>>());
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1057,11 +1051,11 @@ mod command_tests {
             output_location: OutputLocation::AlongsideInput,
         }));
 
-        assert!(outcomes[0].failure.is_none(), "{}", outcomes[0].failure.clone().unwrap_or_default());
-        assert_ne!(outcomes[0].output_paths[0], existing);
+        assert!(outcomes[0].error().is_none(), "{}", outcomes[0].error().cloned().unwrap_or_default());
+        assert_ne!(outcomes[0].output_paths()[0], existing);
         assert_eq!(std::fs::read(&existing).unwrap(), b"existing output");
         assert_eq!(std::fs::read(&image).unwrap(), original);
-        cleanup(&outcomes[0].output_paths);
+        cleanup(&outcomes[0].output_paths());
         let _ = std::fs::remove_dir_all(root);
     }
 

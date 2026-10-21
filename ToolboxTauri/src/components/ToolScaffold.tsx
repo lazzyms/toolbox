@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import type { ToolDefinition, JobOutcome, OutputLocation, Progress } from '../contracts';
 import { useOutputLocation } from '../outputLocation';
+import { failedOutcome, parseToolResult } from '../jobOutcome';
 import { ResultList } from './ResultList';
 import { TablerIcon } from './TablerIcon';
 
@@ -77,13 +78,6 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         setSelectedFileIndex((index) => Math.min(index, Math.max(files.length - 1, 0)));
     }, [files]);
 
-    const failureFor = (inputPath: string, kind: 'invalidInput' | 'unavailable', message: string): JobOutcome => ({
-        inputPath,
-        outputPaths: [],
-        detail: '',
-        failure: { kind, message },
-    });
-
     const runWith = async (handler: (files: string[], outputLocation: OutputLocation) => Promise<JobOutcome[]>) => {
         const generation = ++runGeneration.current;
         setLoading(true);
@@ -98,27 +92,27 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
             const invalidPaths = new Map<string, JobOutcome>();
             const validPaths = files.filter((path) => {
                 if (cardinalityError) {
-                    invalidPaths.set(path, failureFor(path, 'invalidInput', cardinalityError));
+                    invalidPaths.set(path, failedOutcome(path, 'invalidInput', cardinalityError));
                     return false;
                 }
                 if (availabilityError) {
-                    invalidPaths.set(path, failureFor(path, 'unavailable', availabilityError));
+                    invalidPaths.set(path, failedOutcome(path, 'unavailable', availabilityError));
                     return false;
                 }
                 return true;
             });
             const orderedSelectionRejected = inputPolicy.inputCardinality === 'ordered' && invalidPaths.size > 0;
-            const processed = orderedSelectionRejected || validPaths.length === 0 ? [] : await handler(validPaths, outputLocation);
+            const processed = orderedSelectionRejected || validPaths.length === 0 ? [] : parseToolResult(await handler(validPaths, outputLocation));
             const processedByPath = new Map(processed.map((result) => [result.inputPath, result]));
             const nextResults = orderedSelectionRejected
-                ? files.map((path) => invalidPaths.get(path) ?? failureFor(path, 'invalidInput', 'Every selected input must use a supported format for this ordered action.'))
+                ? files.map((path) => invalidPaths.get(path) ?? failedOutcome(path, 'invalidInput', 'Every selected input must use a supported format for this ordered action.'))
                 : invalidPaths.size === 0
                     ? processed
                 : files.map((path) => invalidPaths.get(path) ?? processedByPath.get(path)).filter((result): result is JobOutcome => result !== undefined);
             if (generation === runGeneration.current) setResults(nextResults);
         } catch (error) {
             if (generation === runGeneration.current) {
-                setResults([{ inputPath: 'Tool error', outputPaths: [], failure: { kind: 'processing', message: String(error) }, detail: '' }]);
+                setResults([failedOutcome('Tool error', 'processing', String(error))]);
             }
         } finally {
             if (generation === runGeneration.current) setLoading(false);
@@ -174,7 +168,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
             });
             addFiles(Array.isArray(picked) ? picked : picked ? [picked] : [], inputPolicy.inputCardinality === 'single');
         } catch (e) {
-            setResults([{ inputPath: 'Dialog error', outputPaths: [], failure: { kind: 'processing', message: String(e) }, detail: '' }]);
+            setResults([failedOutcome('Dialog error', 'processing', String(e))]);
         }
     };
 

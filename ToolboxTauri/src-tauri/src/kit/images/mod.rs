@@ -138,28 +138,23 @@ impl ImageProcessor {
             };
             return match std::fs::copy(&input_path, output_path.path()) {
                 Ok(_) => match output_path.publish() {
-                    Ok(path) => JobOutcome { input_path, output_paths: vec![path], detail: "Kept original bytes (lossless mode)".to_string(), failure: None },
+                    Ok(path) => JobOutcome::succeeded(input_path, vec![path], "Kept original bytes (lossless mode)"),
                     Err(error) => JobOutcome::failure(input_path, ToolError::processing(format!("Could not publish output: {error}"))),
                 },
-                Err(error) => JobOutcome { input_path, output_paths: vec![], detail: String::new(), failure: Some(ToolError::processing(format!("Lossless copy failed: {error}"))) },
+                Err(error) => JobOutcome::failure(input_path, ToolError::processing(format!("Lossless copy failed: {error}"))),
             };
         }
 
         if options.target_format.is_some() {
             if let Err(error) = reject_animated_input(&input_path) {
-                return JobOutcome { input_path, output_paths: vec![], detail: String::new(), failure: Some(ToolError::processing(error)) };
+                return JobOutcome::failure(input_path, ToolError::processing(error));
             }
         }
 
         let img = match load_image(&input_path) {
             Ok(i) => i,
             Err(e) => {
-                return JobOutcome {
-                    input_path,
-                    output_paths: vec![],
-                    detail: "".to_string(),
-                    failure: Some(ToolError::processing(e)),
-                };
+                return JobOutcome::failure(input_path, ToolError::processing(e));
             }
         };
 
@@ -182,26 +177,16 @@ impl ImageProcessor {
         let bytes = match encode(&img, format, quality) {
             Ok(b) => b,
             Err(e) => {
-                return JobOutcome {
-                    input_path,
-                    output_paths: vec![],
-                    detail: "".to_string(),
-                    failure: Some(ToolError::processing(e)),
-                };
+                return JobOutcome::failure(input_path, ToolError::processing(e));
             }
         };
 
         if let Err(e) = std::fs::write(output_path.path(), bytes) {
-            return JobOutcome {
-                input_path,
-                output_paths: vec![],
-                detail: "".to_string(),
-                failure: Some(ToolError::processing(format!("Write failed: {}", e))),
-            };
+            return JobOutcome::failure(input_path, ToolError::processing(format!("Write failed: {}", e)));
         }
 
         if let Err(error) = validate_encoded_output(output_path.path(), img.width(), img.height(), format) {
-            return JobOutcome { input_path, output_paths: vec![], detail: String::new(), failure: Some(ToolError::processing(error)) };
+            return JobOutcome::failure(input_path, ToolError::processing(error));
         }
 
         let new_bytes = std::fs::metadata(output_path.path()).map(|m| m.len()).unwrap_or(0);
@@ -218,31 +203,16 @@ impl ImageProcessor {
                 Err(error) => return JobOutcome::failure(input_path, ToolError::processing(format!("Could not reserve fallback output: {error}"))),
             };
             if let Err(e) = std::fs::copy(&input_path, fallback_path.path()) {
-                return JobOutcome {
-                    input_path,
-                    output_paths: vec![],
-                    detail: "".to_string(),
-                    failure: Some(ToolError::processing(format!("Fallback copy failed: {}", e))),
-                };
+                return JobOutcome::failure(input_path, ToolError::processing(format!("Fallback copy failed: {}", e)));
             }
             return match fallback_path.publish() {
-                Ok(path) => JobOutcome {
-                    input_path,
-                    output_paths: vec![path],
-                    detail: "Kept original (compressed version was larger)".to_string(),
-                    failure: None,
-                },
+                Ok(path) => JobOutcome::succeeded(input_path, vec![path], "Kept original (compressed version was larger)"),
                 Err(error) => JobOutcome::failure(input_path, ToolError::processing(format!("Could not publish fallback output: {error}"))),
             };
         }
 
         match output_path.publish() {
-            Ok(path) => JobOutcome {
-                input_path,
-                output_paths: vec![path],
-                detail: format!("Saved as {}", extension),
-                failure: None,
-            },
+            Ok(path) => JobOutcome::succeeded(input_path, vec![path], format!("Saved as {}", extension)),
             Err(error) => JobOutcome::failure(input_path, ToolError::processing(format!("Could not publish output: {error}"))),
         }
     }
@@ -298,11 +268,11 @@ mod tests {
             },
         );
 
-        assert!(out.failure.is_none(), "{}", out.failure.clone().unwrap_or_default());
-        assert_eq!(out.output_paths.len(), 1);
-        assert_eq!(out.output_paths[0].extension().and_then(|e| e.to_str()), Some("jpg"));
+        assert!(out.error().is_none(), "{}", out.error().cloned().unwrap_or_default());
+        assert_eq!(out.output_paths().len(), 1);
+        assert_eq!(out.output_paths()[0].extension().and_then(|e| e.to_str()), Some("jpg"));
 
-        cleanup(&out.output_paths);
+        cleanup(&out.output_paths());
         let _ = std::fs::remove_file(&src);
     }
 
@@ -325,14 +295,14 @@ mod tests {
             },
         );
 
-        assert!(out.failure.is_none(), "{}", out.failure.clone().unwrap_or_default());
-        assert_eq!(out.output_paths.len(), 1);
-        assert_ne!(&out.output_paths[0], &src, "must never write over the input");
+        assert!(out.error().is_none(), "{}", out.error().cloned().unwrap_or_default());
+        assert_eq!(out.output_paths().len(), 1);
+        assert_ne!(&out.output_paths()[0], &src, "must never write over the input");
 
         let after = std::fs::metadata(&src).unwrap().len();
         assert_eq!(before, after, "originals must never be modified");
 
-        cleanup(&out.output_paths);
+        cleanup(&out.output_paths());
         let _ = std::fs::remove_file(&src);
     }
 
@@ -342,9 +312,9 @@ mod tests {
         let original = b"deliberate source bytes";
         std::fs::write(&src, original).unwrap();
         let out = ImageProcessor::run(src.clone(), Options { target_format: None, quality: 0, keep_smaller_original: true, suffix: "-compressed".to_string(), output_location: OutputLocation::AlongsideInput });
-        assert!(out.failure.is_none(), "{}", out.failure.clone().unwrap_or_default());
-        assert_eq!(std::fs::read(&out.output_paths[0]).unwrap(), original);
-        cleanup(&out.output_paths);
+        assert!(out.error().is_none(), "{}", out.error().cloned().unwrap_or_default());
+        assert_eq!(std::fs::read(&out.output_paths()[0]).unwrap(), original);
+        cleanup(&out.output_paths());
         let _ = std::fs::remove_file(src);
     }
 
@@ -367,14 +337,14 @@ mod tests {
                 output_location: OutputLocation::AlongsideInput,
             },
         );
-        assert!(heic.failure.is_none(), "{}", heic.failure.clone().unwrap_or_default());
+        assert!(heic.error().is_none(), "{}", heic.error().cloned().unwrap_or_default());
         assert_eq!(
-            heic.output_paths[0].extension().and_then(|e| e.to_str()),
+            heic.output_paths()[0].extension().and_then(|e| e.to_str()),
             Some("heic")
         );
 
         let back = ImageProcessor::run(
-            heic.output_paths[0].clone(),
+            heic.output_paths()[0].clone(),
             Options {
                 target_format: Some(OutputFormat::Png),
                 quality: 80,
@@ -383,12 +353,12 @@ mod tests {
                 output_location: OutputLocation::AlongsideInput,
             },
         );
-        assert!(back.failure.is_none(), "{}", back.failure.clone().unwrap_or_default());
-        let back_img = image::open(&back.output_paths[0]).unwrap();
+        assert!(back.error().is_none(), "{}", back.error().cloned().unwrap_or_default());
+        let back_img = image::open(&back.output_paths()[0]).unwrap();
         assert_eq!((back_img.width(), back_img.height()), (256, 256));
 
-        cleanup(&heic.output_paths);
-        cleanup(&back.output_paths);
+        cleanup(&heic.output_paths());
+        cleanup(&back.output_paths());
         let _ = std::fs::remove_file(&src);
     }
 
@@ -410,18 +380,18 @@ mod tests {
             },
         );
 
-        assert!(out.failure.is_none(), "{}", out.failure.clone().unwrap_or_default());
+        assert!(out.error().is_none(), "{}", out.error().cloned().unwrap_or_default());
         assert_eq!(
-            out.output_paths[0].extension().and_then(|e| e.to_str()),
+            out.output_paths()[0].extension().and_then(|e| e.to_str()),
             Some("webp")
         );
-        let data = std::fs::read(&out.output_paths[0]).unwrap();
+        let data = std::fs::read(&out.output_paths()[0]).unwrap();
         assert_eq!(&data[..4], b"RIFF", "webpx must produce a real lossy webp container");
         assert_eq!(&data[8..12], b"WEBP");
         let dec = image::load_from_memory(&data).unwrap();
         assert_eq!(dec.width(), 256);
 
-        cleanup(&out.output_paths);
+        cleanup(&out.output_paths());
         let _ = std::fs::remove_file(&src);
     }
 
@@ -441,9 +411,9 @@ mod tests {
         encoder.encode_frames(frames).unwrap();
         let before = std::fs::read(&src).unwrap();
         let result = ImageProcessor::run(src.clone(), Options { target_format: Some(OutputFormat::Png), quality: 80, keep_smaller_original: false, suffix: "-converted".to_string(), output_location: OutputLocation::AlongsideInput });
-        assert!(result.failure.is_some());
+        assert!(result.error().is_some());
         assert_eq!(std::fs::read(&src).unwrap(), before);
-        cleanup(&result.output_paths);
+        cleanup(&result.output_paths());
         let _ = std::fs::remove_file(src);
     }
 }

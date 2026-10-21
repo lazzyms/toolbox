@@ -53,7 +53,7 @@ mod tests {
         let input = PathBuf::from("archive.zip");
         let outcome = PasswordProcessor::remove_password(input, "secret", &OutputLocation::AlongsideInput);
 
-        assert!(matches!(outcome.failure.as_ref().map(|error| &error.kind), Some(ErrorKind::InvalidInput)));
-        assert!(outcome.output_paths.is_empty());
+        assert!(matches!(outcome.error().map(|error| &error.kind), Some(ErrorKind::InvalidInput)));
+        assert!(outcome.output_paths().is_empty());
     }
 }

@@ -103,12 +103,7 @@ impl OfficeProcessor {
                 })
             }) {
             Ok(()) => match output_path.publish() {
-                Ok(path) => JobOutcome {
-                    input_path,
-                    output_paths: vec![path],
-                    detail: "Office document unlocked and verified".to_string(),
-                    failure: None,
-                },
+                Ok(path) => JobOutcome::succeeded(input_path, vec![path], "Office document unlocked and verified"),
                 Err(error) => JobOutcome::failure(input_path, ToolError::processing(format!("Could not publish the unlocked document: {error}"))),
             },
             Err(error) => JobOutcome::failure(input_path, error.into_tool_error()),
@@ -232,12 +227,7 @@ impl OfficeProcessor {
         }
 
         match output_path.publish() {
-            Ok(path) => JobOutcome {
-                input_path,
-                output_paths: vec![path],
-                detail: "Office document protected and verified".to_string(),
-                failure: None,
-            },
+            Ok(path) => JobOutcome::succeeded(input_path, vec![path], "Office document protected and verified"),
             Err(error) => JobOutcome::failure(input_path, ToolError::processing(format!("Could not publish the protected document: {error}"))),
         }
     }
@@ -1498,14 +1488,14 @@ mod tests {
                 &OutputLocation::CustomFolder(output_directory.clone()),
             );
 
-            assert!(outcome.failure.is_none(), "{}", outcome.failure.clone().unwrap_or_default());
+            assert!(outcome.error().is_none(), "{}", outcome.error().cloned().unwrap_or_default());
             assert_eq!(outcome.detail, "Office document protected and verified");
-            assert_eq!(outcome.output_paths.len(), 1);
+            assert_eq!(outcome.output_paths().len(), 1);
             assert_eq!(
-                outcome.output_paths[0],
+                outcome.output_paths()[0],
                 output_directory.join(format!("source-protected.{extension}"))
             );
-            let encrypted = std::fs::read(&outcome.output_paths[0]).unwrap();
+            let encrypted = std::fs::read(&outcome.output_paths()[0]).unwrap();
             assert_eq!(verify_ooxml(&encrypted, "secret", &original), Ok(()));
             assert_eq!(std::fs::read(&input).unwrap(), original);
         }
@@ -1533,11 +1523,11 @@ mod tests {
                 &OutputLocation::CustomFolder(protected_directory.clone()),
             );
             assert!(
-                protected.failure.is_none(),
+                protected.error().is_none(),
                 "{}",
-                protected.failure.clone().unwrap_or_default()
+                protected.error().cloned().unwrap_or_default()
             );
-            let protected_path = protected.output_paths[0].clone();
+            let protected_path = protected.output_paths()[0].clone();
             let protected_before = std::fs::read(&protected_path).unwrap();
 
             let unlocked = OfficeProcessor::remove_password(
@@ -1546,13 +1536,13 @@ mod tests {
                 &OutputLocation::CustomFolder(protected_directory.clone()),
             );
             assert!(
-                unlocked.failure.is_none(),
+                unlocked.error().is_none(),
                 "{}",
-                unlocked.failure.clone().unwrap_or_default()
+                unlocked.error().cloned().unwrap_or_default()
             );
-            assert_eq!(unlocked.output_paths.len(), 1);
+            assert_eq!(unlocked.output_paths().len(), 1);
             assert_eq!(
-                std::fs::read(&unlocked.output_paths[0]).unwrap(),
+                std::fs::read(&unlocked.output_paths()[0]).unwrap(),
                 original
             );
             assert_eq!(std::fs::read(&input).unwrap(), source_before);
@@ -1563,8 +1553,8 @@ mod tests {
                 "wrong",
                 &OutputLocation::CustomFolder(failure_directory.clone()),
             );
-            assert!(wrong_password.failure.is_some());
-            assert!(wrong_password.output_paths.is_empty());
+            assert!(wrong_password.error().is_some());
+            assert!(wrong_password.output_paths().is_empty());
             assert_eq!(std::fs::read_dir(&failure_directory).unwrap().count(), 0);
             assert_eq!(std::fs::read(&input).unwrap(), source_before);
             assert_eq!(std::fs::read(&protected_path).unwrap(), protected_before);
@@ -1576,8 +1566,8 @@ mod tests {
                 "secret",
                 &OutputLocation::CustomFolder(failure_directory.clone()),
             );
-            assert!(tampered.failure.is_some());
-            assert!(tampered.output_paths.is_empty());
+            assert!(tampered.error().is_some());
+            assert!(tampered.output_paths().is_empty());
             assert_eq!(std::fs::read_dir(&failure_directory).unwrap().count(), 0);
             assert_eq!(std::fs::read(&input).unwrap(), source_before);
             assert_eq!(std::fs::read(&protected_path).unwrap(), protected_before);
@@ -1600,8 +1590,8 @@ mod tests {
             "secret",
             &OutputLocation::CustomFolder(output_directory.clone()),
         );
-        assert!(first.failure.is_none(), "{}", first.failure.clone().unwrap_or_default());
-        let first_path = first.output_paths[0].clone();
+        assert!(first.error().is_none(), "{}", first.error().cloned().unwrap_or_default());
+        let first_path = first.output_paths()[0].clone();
         let first_bytes = std::fs::read(&first_path).unwrap();
 
         let second = OfficeProcessor::protect(
@@ -1609,8 +1599,8 @@ mod tests {
             "secret",
             &OutputLocation::CustomFolder(output_directory.clone()),
         );
-        assert!(second.failure.is_none(), "{}", second.failure.clone().unwrap_or_default());
-        let second_path = second.output_paths[0].clone();
+        assert!(second.error().is_none(), "{}", second.error().cloned().unwrap_or_default());
+        let second_path = second.output_paths()[0].clone();
 
         assert_eq!(first_path, output_directory.join("source-protected.docx"));
         assert_eq!(second_path, output_directory.join("source-protected-1.docx"));
@@ -1663,16 +1653,16 @@ mod tests {
 
             if extension == "odt" {
                 assert!(matches!(
-                    outcome.failure.as_ref().map(|error| &error.kind),
+                    outcome.error().map(|error| &error.kind),
                     Some(ErrorKind::InvalidInput)
                 ));
             } else {
                 assert!(matches!(
-                    outcome.failure.as_ref().map(|error| &error.kind),
+                    outcome.error().map(|error| &error.kind),
                     Some(ErrorKind::Unavailable)
                 ));
             }
-            assert!(outcome.output_paths.is_empty());
+            assert!(outcome.output_paths().is_empty());
             assert_eq!(std::fs::read(&input).unwrap(), fixture);
             assert_eq!(std::fs::read_dir(&output_directory).unwrap().count(), 0);
         }
@@ -1691,28 +1681,28 @@ mod tests {
         std::fs::write(&input, minimal_ooxml_package("docx")).unwrap();
         let empty_password = OfficeProcessor::protect(input.clone(), "", &location);
         assert!(matches!(
-            empty_password.failure.as_ref().map(|error| &error.kind),
+            empty_password.error().map(|error| &error.kind),
             Some(ErrorKind::InvalidInput)
         ));
-        assert!(empty_password.output_paths.is_empty());
+        assert!(empty_password.output_paths().is_empty());
 
         let input_directory = directory.join("folder.docx");
         std::fs::create_dir_all(&input_directory).unwrap();
         let directory_input = OfficeProcessor::protect(input_directory, "secret", &location);
         assert!(matches!(
-            directory_input.failure.as_ref().map(|error| &error.kind),
+            directory_input.error().map(|error| &error.kind),
             Some(ErrorKind::InvalidInput)
         ));
-        assert!(directory_input.output_paths.is_empty());
+        assert!(directory_input.output_paths().is_empty());
 
         let malformed = directory.join("malformed.xlsx");
         std::fs::write(&malformed, b"not an OOXML package").unwrap();
         let malformed_input = OfficeProcessor::protect(malformed, "secret", &location);
         assert!(matches!(
-            malformed_input.failure.as_ref().map(|error| &error.kind),
+            malformed_input.error().map(|error| &error.kind),
             Some(ErrorKind::InvalidInput)
         ));
-        assert!(malformed_input.output_paths.is_empty());
+        assert!(malformed_input.output_paths().is_empty());
         assert_eq!(std::fs::read_dir(&output_directory).unwrap().count(), 0);
 
         std::fs::remove_dir_all(&directory).unwrap();
@@ -1723,8 +1713,8 @@ mod tests {
         let input = PathBuf::from("presentation.odp");
         let outcome = OfficeProcessor::remove_password(input.clone(), "secret", &OutputLocation::AlongsideInput);
 
-        assert!(matches!(outcome.failure.as_ref().map(|error| &error.kind), Some(ErrorKind::InvalidInput)));
-        assert!(outcome.output_paths.is_empty());
+        assert!(matches!(outcome.error().map(|error| &error.kind), Some(ErrorKind::InvalidInput)));
+        assert!(outcome.output_paths().is_empty());
         assert_eq!(outcome.input_path, input);
     }
 
@@ -1733,8 +1723,8 @@ mod tests {
         let input = PathBuf::from("report.docx");
         let outcome = OfficeProcessor::remove_password(input, "", &OutputLocation::AlongsideInput);
 
-        assert!(matches!(outcome.failure.as_ref().map(|error| &error.kind), Some(ErrorKind::InvalidInput)));
-        assert!(outcome.output_paths.is_empty());
+        assert!(matches!(outcome.error().map(|error| &error.kind), Some(ErrorKind::InvalidInput)));
+        assert!(outcome.output_paths().is_empty());
     }
 
     #[test]
@@ -1866,10 +1856,10 @@ mod tests {
         );
 
         assert!(matches!(
-            outcome.failure.as_ref().map(|error| &error.kind),
+            outcome.error().map(|error| &error.kind),
             Some(ErrorKind::Unavailable)
         ));
-        assert!(outcome.output_paths.is_empty());
+        assert!(outcome.output_paths().is_empty());
         assert_eq!(std::fs::read(&input).unwrap(), original);
         assert!(!directory.join("presentation-unlocked.ppt").exists());
         std::fs::remove_dir_all(directory).unwrap();

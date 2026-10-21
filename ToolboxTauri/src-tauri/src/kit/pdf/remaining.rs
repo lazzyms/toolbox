@@ -99,7 +99,7 @@ pub fn merge(request: &MergePdfRequest) -> JobOutcome {
     match result {
         Ok(result) if result.status.success() => match Document::load(output.path()) {
             Ok(document) if document.get_pages().len() == expected_pages => match output.publish() {
-                Ok(path) => JobOutcome { input_path: first, output_paths: vec![path], detail: format!("{} PDFs merged in input order", request.paths.len()), failure: None },
+                Ok(path) => JobOutcome::succeeded(first, vec![path], format!("{} PDFs merged in input order", request.paths.len())),
                 Err(error) => failure(first, format!("Could not publish merged PDF output: {error}")),
             },
             Ok(document) => failure(first, format!("Merged PDF page count mismatch: expected {expected_pages}, got {}.", document.get_pages().len())),
@@ -135,7 +135,7 @@ pub fn split(request: &PageSelectionRequest, input: PathBuf) -> JobOutcome {
             } else {
                 "PDF split".to_string()
             };
-            JobOutcome { input_path: input, output_paths: outputs, detail, failure: None }
+            JobOutcome::succeeded(input, outputs, detail)
         }
         Err(outcome) => outcome,
     }
@@ -391,7 +391,7 @@ fn materialize_rendered_images(input: &Path, location: &OutputLocation, generate
         };
         outputs.push(destination);
     }
-    JobOutcome { input_path: input.to_path_buf(), output_paths: outputs, detail: "PDF rendered to images".to_string(), failure: None }
+    JobOutcome::succeeded(input.to_path_buf(), outputs, "PDF rendered to images")
 }
 
 pub fn to_text(request: &PdfToTextRequest, input: PathBuf) -> JobOutcome {
@@ -412,7 +412,7 @@ pub fn to_text(request: &PdfToTextRequest, input: PathBuf) -> JobOutcome {
             if text.is_empty() { return failure(input, "PDF contains no selectable text; scanned PDFs require OCR.".to_string()); }
             match fs::write(output.path(), text) {
                 Ok(_) => match output.publish() {
-                    Ok(path) => JobOutcome { input_path: input, output_paths: vec![path], detail: "PDF text extracted in page order".to_string(), failure: None },
+                    Ok(path) => JobOutcome::succeeded(input, vec![path], "PDF text extracted in page order"),
                     Err(error) => failure(input, format!("Could not publish text output: {error}")),
                 },
                 Err(error) => failure(input, format!("Could not write text output: {error}")),
@@ -467,7 +467,7 @@ fn publish_extracted_images(input: PathBuf, reservations: Vec<OutputReservation>
             Err(error) => return JobOutcome::failure_with_outputs(input, outputs, ToolError::processing(format!("Could not publish extracted image: {error}"))),
         }
     }
-    JobOutcome { input_path: input, output_paths: outputs, detail: "Embedded JPEG images extracted without recompression".to_string(), failure: None }
+    JobOutcome::succeeded(input, outputs, "Embedded JPEG images extracted without recompression")
 }
 
 fn extraction_failure(input: &Path, reservations: Vec<OutputReservation>, message: impl Into<String>) -> JobOutcome {
@@ -507,7 +507,7 @@ pub fn images_to_pdf(request: &ImagesToPdfRequest) -> JobOutcome {
     document.trailer.set("Root", catalog_id);
     match document.save(output.path()) {
         Ok(_) => match output.publish() {
-            Ok(path) => JobOutcome { input_path: first, output_paths: vec![path], detail: "Images combined into PDF".to_string(), failure: None },
+            Ok(path) => JobOutcome::succeeded(first, vec![path], "Images combined into PDF"),
             Err(error) => failure(first, format!("Could not publish combined PDF: {error}")),
         },
         Err(error) => failure(first, format!("Save failed: {error}")),
@@ -565,7 +565,7 @@ pub fn compress(request: &CompressPdfRequest, input: PathBuf) -> JobOutcome {
     match result {
         Ok(result) if result.status.success() => match Document::load(output.path()) {
             Ok(verified) if verified.get_pages().len() == page_count => match output.publish() {
-                Ok(path) => JobOutcome { input_path: input, output_paths: vec![path], detail: format!("PDF compressed at quality {quality}"), failure: None },
+                Ok(path) => JobOutcome::succeeded(input, vec![path], format!("PDF compressed at quality {quality}")),
                 Err(error) => failure(input, format!("Could not publish compressed PDF: {error}")),
             },
             Ok(_) => failure(input, "Compressed PDF changed its page count.".to_string()),
@@ -634,7 +634,7 @@ fn parse_page_number(value: &str) -> Result<usize, String> {
 fn save(mut document: Document, input: PathBuf, output: OutputReservation, detail: &str) -> JobOutcome {
     match document.save(output.path()) {
         Ok(_) => match output.publish() {
-            Ok(path) => JobOutcome { input_path: input, output_paths: vec![path], detail: detail.to_string(), failure: None },
+            Ok(path) => JobOutcome::succeeded(input, vec![path], detail.to_string()),
             Err(error) => failure(input, format!("Could not publish PDF output: {error}")),
         },
         Err(error) => failure(input, format!("Save failed: {error}")),
@@ -709,7 +709,7 @@ where F: Fn(usize, OverlayPageGeometry, &str, &str) -> String {
     }
     match document.save(output.path()) {
         Ok(_) => match output.publish() {
-            Ok(path) => JobOutcome { input_path: input, output_paths: vec![path], detail: "PDF saved".to_string(), failure: None },
+            Ok(path) => JobOutcome::succeeded(input, vec![path], "PDF saved"),
             Err(error) => failure(input, format!("Could not publish PDF output: {error}")),
         },
         Err(error) => failure(input, format!("Save failed: {error}")),
@@ -757,7 +757,7 @@ fn watermark_image(request: &PageOverlayRequest, input: PathBuf, logo: &PathBuf)
     }
     match document.save(output.path()) {
         Ok(_) => match output.publish() {
-            Ok(path) => JobOutcome { input_path: input, output_paths: vec![path], detail: "PDF image watermark applied".to_string(), failure: None },
+            Ok(path) => JobOutcome::succeeded(input, vec![path], "PDF image watermark applied"),
             Err(error) => failure(input, format!("Could not publish watermarked PDF: {error}")),
         },
         Err(error) => failure(input, format!("Save failed: {error}")),
@@ -954,8 +954,8 @@ mod tests {
                 font_size: None, output_location: OutputLocation::CustomFolder(output),
             };
             let outcome = if case == "numbers" { add_page_numbers(&request, input.clone()) } else { watermark(&request, input.clone()) };
-            assert!(outcome.failure.is_none(), "{case}: {:?}", outcome.failure);
-            let output_document = Document::load(outcome.output_paths.first().unwrap()).unwrap();
+            assert!(outcome.error().is_none(), "{case}: {:?}", outcome.error());
+            let output_document = Document::load(outcome.output_paths().first().unwrap()).unwrap();
             for page_id in output_document.get_pages().values().copied() {
                 let page = output_document.get_dictionary(page_id).unwrap();
                 let resources = page.get(b"Resources").unwrap().as_dict().unwrap();
@@ -993,8 +993,8 @@ mod tests {
                 font_size: None, output_location: OutputLocation::CustomFolder(output),
             };
             let outcome = if case == "numbers" { add_page_numbers(&request, input.clone()) } else { watermark(&request, input.clone()) };
-            assert!(outcome.failure.is_none(), "{case}: {:?}", outcome.failure);
-            let output_document = Document::load(outcome.output_paths.first().unwrap()).unwrap();
+            assert!(outcome.error().is_none(), "{case}: {:?}", outcome.error());
+            let output_document = Document::load(outcome.output_paths().first().unwrap()).unwrap();
             for page_id in output_document.get_pages().values().copied() {
                 let page = output_document.get_dictionary(page_id).unwrap();
                 let resources = page.get(b"Resources").unwrap().as_dict().unwrap();
@@ -1033,8 +1033,8 @@ mod tests {
             position: Some("bottom-right".into()), logo_path: None, pages: None,
             start_number: None, font_size: None, output_location: OutputLocation::CustomFolder(output.clone()),
         }, input.clone());
-        assert!(numbered.failure.is_none(), "page numbers failed: {:?}", numbered.failure);
-        let numbered_document = Document::load(numbered.output_paths.first().unwrap()).unwrap();
+        assert!(numbered.error().is_none(), "page numbers failed: {:?}", numbered.error());
+        let numbered_document = Document::load(numbered.output_paths().first().unwrap()).unwrap();
         let numbered_page = numbered_document.get_pages().values().next().copied().unwrap();
         let numbered_content = String::from_utf8_lossy(&numbered_document.get_page_content(numbered_page)).into_owned();
         assert!(numbered_content.contains("226 300 Td"), "number coordinates: {numbered_content}");
@@ -1048,13 +1048,13 @@ mod tests {
             position: Some("bottom-right".into()), logo_path: Some(logo), pages: None,
             start_number: None, font_size: None, output_location: OutputLocation::CustomFolder(output),
         }, input.clone());
-        assert!(watermarked.failure.is_none(), "logo watermark failed: {:?}", watermarked.failure);
-        let watermarked_document = Document::load(watermarked.output_paths.first().unwrap()).unwrap();
+        assert!(watermarked.error().is_none(), "logo watermark failed: {:?}", watermarked.error());
+        let watermarked_document = Document::load(watermarked.output_paths().first().unwrap()).unwrap();
         let watermarked_page = watermarked_document.get_pages().values().next().copied().unwrap();
         let watermarked_content = String::from_utf8_lossy(&watermarked_document.get_page_content(watermarked_page)).into_owned();
         assert!(watermarked_content.contains("40 0 0 30 186 180 cm"), "logo coordinates: {watermarked_content}");
 
-        for output in numbered.output_paths.into_iter().chain(watermarked.output_paths) { let _ = fs::remove_file(output); }
+        for output in numbered.output_paths().into_iter().chain(watermarked.output_paths()) { let _ = fs::remove_file(output); }
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1105,8 +1105,8 @@ mod tests {
                     }
                     _ => unreachable!(),
                 };
-                assert!(outcome.failure.is_some(), "{kind} {operation}: {:?}", outcome.failure);
-                assert!(outcome.output_paths.is_empty());
+                assert!(outcome.error().is_some(), "{kind} {operation}: {:?}", outcome.error());
+                assert!(outcome.output_paths().is_empty());
                 assert_eq!(fs::read_dir(output).unwrap().count(), 0, "{kind} {operation}");
                 fs::remove_dir_all(root).unwrap();
             }
@@ -1141,9 +1141,9 @@ mod tests {
             Some(value) => std::env::set_var("TOOLBOX_PDFTOPPM_PATH", value),
             None => std::env::remove_var("TOOLBOX_PDFTOPPM_PATH"),
         }
-        assert!(outcome.failure.is_none(), "numeric image export failed: {:?}", outcome.failure);
-        assert_eq!(outcome.output_paths.len(), 12);
-        for (index, output) in outcome.output_paths.iter().enumerate() {
+        assert!(outcome.error().is_none(), "numeric image export failed: {:?}", outcome.error());
+        assert_eq!(outcome.output_paths().len(), 12);
+        for (index, output) in outcome.output_paths().iter().enumerate() {
             assert_eq!(output.file_stem().unwrap().to_str().unwrap(), format!("document-images-{}", index + 1));
             assert_eq!(fs::read_to_string(output).unwrap(), format!("page-{}", index + 1));
         }
@@ -1181,8 +1181,8 @@ mod tests {
         image_extraction_fixture(&input);
         let outcome=extract_images(&PdfToTextRequest { paths:vec![input.clone()], pages:None, output_location:OutputLocation::AlongsideInput },input.clone());
 
-        assert!(outcome.failure.is_some(),"expected unsupported image filter to fail");
-        assert!(outcome.output_paths.is_empty());
+        assert!(outcome.error().is_some(),"expected unsupported image filter to fail");
+        assert!(outcome.output_paths().is_empty());
         assert_eq!(fs::read_dir(&temp).unwrap().count(),1);
         assert!(!temp.join("source-image-1-0.jpg").exists());
         fs::remove_dir_all(temp).unwrap();
@@ -1201,7 +1201,7 @@ mod tests {
 
         let outcome=extraction_failure(&input,vec![reservation],"extraction stopped");
 
-        assert!(outcome.failure.is_some());
+        assert!(outcome.error().is_some());
         assert_eq!(fs::read(destination).unwrap(),b"competing replacement");
         fs::remove_dir_all(temp).unwrap();
     }
@@ -1227,8 +1227,8 @@ mod tests {
 
         let outcome = publish_extracted_images(input.clone(), vec![first, second]);
 
-        assert!(outcome.failure.is_some());
-        assert_eq!(outcome.output_paths, vec![first_destination.clone()]);
+        assert!(outcome.error().is_some());
+        assert_eq!(outcome.output_paths(), vec![first_destination.clone()]);
         assert_eq!(fs::read(&first_destination).unwrap(), b"first extracted image");
         assert_eq!(fs::read(&second_destination).unwrap(), b"competing replacement");
         fs::remove_dir_all(temp).unwrap();
@@ -1250,10 +1250,10 @@ mod tests {
 
         let outcome = materialize_rendered_images(&input, &OutputLocation::CustomFolder(output_folder.clone()), &[first, invalid]);
 
-        assert!(outcome.failure.is_some());
-        assert_eq!(outcome.output_paths.len(), 1);
-        assert!(outcome.output_paths[0].is_file());
-        assert_eq!(fs::read(&outcome.output_paths[0]).unwrap(), b"rendered image");
+        assert!(outcome.error().is_some());
+        assert_eq!(outcome.output_paths().len(), 1);
+        assert!(outcome.output_paths()[0].is_file());
+        assert_eq!(fs::read(&outcome.output_paths()[0]).unwrap(), b"rendered image");
         assert_eq!(fs::read_dir(&output_folder).unwrap().count(), 1);
         fs::remove_dir_all(temp).unwrap();
     }
@@ -1274,10 +1274,10 @@ mod tests {
 
         let outcome = materialize_split_outputs(&input, &OutputLocation::CustomFolder(output_folder.clone()), &[first, invalid]).unwrap_err();
 
-        assert!(outcome.failure.is_some());
-        assert_eq!(outcome.output_paths.len(), 1);
-        assert!(outcome.output_paths[0].is_file());
-        assert_eq!(fs::read(&outcome.output_paths[0]).unwrap(), b"first split");
+        assert!(outcome.error().is_some());
+        assert_eq!(outcome.output_paths().len(), 1);
+        assert!(outcome.output_paths()[0].is_file());
+        assert_eq!(fs::read(&outcome.output_paths()[0]).unwrap(), b"first split");
         assert_eq!(fs::read_dir(&output_folder).unwrap().count(), 1);
         fs::remove_dir_all(temp).unwrap();
     }
@@ -1314,10 +1314,10 @@ mod tests {
 
         let outcome = split(&split_request(OutputLocation::CustomFolder(output_folder.clone()), split_mode, page_ranges, chunk_size), input.clone());
 
-        assert!(outcome.failure.is_none(), "split failed: {:?}", outcome.failure);
+        assert!(outcome.error().is_none(), "split failed: {:?}", outcome.error());
         assert_eq!(outcome.input_path, input);
-        assert_split_outputs(&outcome.output_paths, expected_count);
-        assert!(!outcome.output_paths.contains(&sentinel));
+        assert_split_outputs(&outcome.output_paths(), expected_count);
+        assert!(!outcome.output_paths().contains(&sentinel));
         assert_eq!(fs::read(&sentinel).unwrap(), sentinel_bytes);
         let temp_after = split_temp_entries();
         assert_eq!(temp_after, temp_before, "split temporary directories were not cleaned");
@@ -1346,8 +1346,8 @@ mod tests {
         let outcome = split(&split_request(OutputLocation::AlongsideInput, "ranges", Some("  "), None), input.clone());
 
         assert_eq!(outcome.input_path, input);
-        assert!(matches!(outcome.failure.as_ref().map(|error| &error.kind), Some(crate::kit::contracts::ErrorKind::InvalidInput)));
-        assert!(outcome.output_paths.is_empty());
+        assert!(matches!(outcome.error().map(|error| &error.kind), Some(crate::kit::contracts::ErrorKind::InvalidInput)));
+        assert!(outcome.output_paths().is_empty());
     }
 
     #[test]
@@ -1369,8 +1369,8 @@ mod tests {
         let outcome = split(&split_request(OutputLocation::CustomFolder(output_folder.clone()), "pages", None, None), input.clone());
 
         assert_eq!(outcome.input_path, input);
-        assert!(outcome.failure.is_some());
-        assert!(outcome.output_paths.is_empty());
+        assert!(outcome.error().is_some());
+        assert!(outcome.output_paths().is_empty());
         assert_eq!(fs::read(&sentinel).unwrap(), b"sentinel");
         assert_eq!(fs::read_dir(&output_folder).unwrap().count(), 1);
         assert_eq!(split_temp_entries(), temp_before, "split temporary directories were not cleaned after failure");
@@ -1429,14 +1429,14 @@ mod tests {
             position: Some("bottom-right".to_string()), logo_path: None, pages: None,
             start_number: None, font_size: None, output_location: OutputLocation::AlongsideInput,
         }, input.clone());
-        assert!(numbered.failure.is_none(), "page numbers failed: {:?}", numbered.failure);
+        assert!(numbered.error().is_none(), "page numbers failed: {:?}", numbered.error());
 
         let watermark = watermark(&PageOverlayRequest {
             paths: vec![input.clone()], text: "TEST".to_string(), opacity: 70,
             position: Some("center".to_string()), logo_path: None, pages: None,
             start_number: None, font_size: None, output_location: OutputLocation::AlongsideInput,
         }, input.clone());
-        assert!(watermark.failure.is_none(), "watermark failed: {:?}", watermark.failure);
+        assert!(watermark.error().is_none(), "watermark failed: {:?}", watermark.error());
 
         let cropped = crate::kit::pdf::editor::crop(&crate::kit::pdf::editor::CropPdfRequest {
             paths: vec![input.clone()],
@@ -1444,9 +1444,9 @@ mod tests {
             scope: crate::kit::pdf::editor::PageScope::All,
             output_location: OutputLocation::AlongsideInput,
         }, input.clone());
-        assert!(cropped.failure.is_none(), "crop failed: {:?}", cropped.failure);
+        assert!(cropped.error().is_none(), "crop failed: {:?}", cropped.error());
 
-        for output in numbered.output_paths.into_iter().chain(watermark.output_paths).chain(cropped.output_paths) {
+        for output in numbered.output_paths().into_iter().chain(watermark.output_paths()).chain(cropped.output_paths()) {
             let _ = std::fs::remove_file(output);
         }
         let _ = std::fs::remove_file(input);

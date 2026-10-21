@@ -99,26 +99,70 @@ export type ToolCommand =
 export type ErrorKind =
   "invalidInput" | "unavailable" | "limitExceeded" | "processing";
 
+export type OutcomePointer =
+  | { kind: "tool"; toolId: AtomicToolId }
+  | { kind: "pack"; packId: string };
+
 export interface ToolError {
   kind: ErrorKind;
   message: string;
+  pointer: OutcomePointer | null;
 }
 
-export interface SuccessfulJobOutcome {
+export type SkipCode =
+  | "notProtected"
+  | "alreadyProtected"
+  | "permissionsPasswordOnly"
+  | "noSavings"
+  | "alreadyInTargetFormat"
+  | "rangeEmptyAfterClamping"
+  | "textAlreadyPresent"
+  | "noEffectiveChange"
+  | "unsupportedFormat"
+  | "cancelled";
+
+export interface SkipReason {
+  code: SkipCode;
+  message: string;
+  pointer: OutcomePointer | null;
+}
+
+export type OutcomeWarning =
+  | { code: "signatureRemoved"; message: string }
+  | { code: "fontSubstituted"; message: string; details: { requestedFamily: string; actualFamily: string } }
+  | { code: "renamedToAvoidReplacing"; message: string; details: { chosenName: string; finalName: string } }
+  | { code: "precisionReduced"; message: string };
+
+export type WarningCode = OutcomeWarning["code"];
+
+interface JobOutcomeBase {
   inputPath: string;
-  outputPaths: string[];
   detail: string;
+  warnings: OutcomeWarning[];
+}
+
+export interface SucceededJobOutcome extends JobOutcomeBase {
+  state: "succeeded";
+  outputPaths: string[];
   failure: null;
+  reason: null;
 }
 
-export interface FailedJobOutcome {
-  inputPath: string;
+export interface SkippedJobOutcome extends JobOutcomeBase {
+  state: "skipped";
+  outputPaths: [];
+  failure: null;
+  reason: SkipReason;
+}
+
+export interface FailedJobOutcome extends JobOutcomeBase {
+  state: "failed";
   outputPaths: string[];
-  detail: string;
   failure: ToolError;
+  reason: null;
 }
 
-export type JobOutcome = SuccessfulJobOutcome | FailedJobOutcome;
+export type JobOutcome = SucceededJobOutcome | SkippedJobOutcome | FailedJobOutcome;
 
 export type ToolResult = JobOutcome[];
 
