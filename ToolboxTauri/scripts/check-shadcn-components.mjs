@@ -10,18 +10,18 @@ const configPath = path.join(projectDirectory, "components.json");
 const themePath = path.join(sourceDirectory, "styles/theme.css");
 const requiredComponents = [
   "badge", "button", "card", "checkbox", "input", "label", "native-select",
-  "dialog", "slider", "switch", "textarea", "toggle-group",
+  "dialog", "radio-group", "slider", "switch", "textarea", "toggle-group",
 ];
 const cardSurfaceClasses = [
-  "tool-card", "tool-workspace-card", "workspace-control-panel", "workspace-source-bar",
-  "workspace-command-rail", "conversion-preview", "media-frame-order", "image-editor-preview",
+  "tool-workspace-card", "workspace-control-panel", "workspace-source-bar",
+  "conversion-preview", "media-frame-order", "image-editor-preview",
   "image-editor-controls", "image-editor-result-preview", "image-editor-history",
   "file-dropzone", "file-selection-list", "result-card", "settings-info", "support-info",
   "scene-empty", "scene-thumbnails", "conversion-page-card",
 ];
 const buttonClasses = [
-  "rail-link", "quick-tool-link", "settings-link", "favorite-button",
-  "workspace-action-button", "workspace-inline-button", "file-selection-item",
+  "rail-link", "back-link", "settings-link", "favorite-button", "favorite-chip",
+  "view-open-link", "view-tool-link", "workspace-inline-button", "file-selection-item",
   "workspace-command", "scene-thumbnail", "workspace-source-open", "workspace-source-clear",
   "pdf-editor-open-files",
 ];
@@ -45,6 +45,7 @@ const forbiddenProperties = {
   slider: /^(?:background(?:-.+)?|border(?:-.+)?|box-shadow|color|outline(?:-.+)?|padding(?:-.+)?)$/,
   checkbox: /^(?:background(?:-.+)?|border(?:-.+)?|box-shadow|color|outline(?:-.+)?|padding(?:-.+)?)$/,
   switch: /^(?:background(?:-.+)?|border(?:-.+)?|box-shadow|color|outline(?:-.+)?|padding(?:-.+)?)$/,
+  radio: /^(?:background(?:-.+)?|border(?:-.+)?|box-shadow|color|outline(?:-.+)?|padding(?:-.+)?)$/,
   toggle: /^(?:background(?:-.+)?|border(?:-.+)?|box-shadow|color|outline(?:-.+)?|padding(?:-.+)?)$/,
 };
 const componentSlots = new Map([
@@ -60,6 +61,7 @@ const componentSlots = new Map([
   ["slider", "slider"],
   ["checkbox", "checkbox"],
   ["switch", "switch"],
+  ["radio-group-item", "radio"],
   ["toggle", "toggle"],
   ["toggle-group", "toggle"],
 ]);

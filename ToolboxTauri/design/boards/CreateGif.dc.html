@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Create GIF</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+.tb{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;font-size:13px;line-height:1.45;color:var(--fg);background:var(--bg);-webkit-font-smoothing:antialiased}
+.tb.dark{--bg:#0a0a0a;--side:#111111;--panel:#0f0f0f;--raise:#1c1c1c;--fg:#fafafa;--mut:#a3a3a3;--faint:#8a8a8a;--line:rgba(255,255,255,.08);--line2:rgba(255,255,255,.16);--sel:#262626;--pri:#ebebeb;--prifg:#171717;--bad:#ff6b6b;--warn:#f2b552;--ring:#a3a3a3;--scrim:rgba(0,0,0,.6)}
+.tb.light{--bg:#ffffff;--side:#f7f7f7;--panel:#fcfcfc;--raise:#f2f2f2;--fg:#0a0a0a;--mut:#525252;--faint:#666666;--line:#e8e8e8;--line2:#d4d4d4;--sel:#ebebeb;--pri:#171717;--prifg:#fafafa;--bad:#c10007;--warn:#9a5800;--ring:#525252;--scrim:rgba(0,0,0,.28)}
+.tb button,.tb input,.tb select{font:inherit;color:inherit}
+.btn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:7px;border:1px solid var(--line2);background:var(--raise);color:var(--fg);font-weight:500;cursor:pointer;white-space:nowrap;box-sizing:border-box;text-decoration:none}
+.btn.pri{background:var(--pri);color:var(--prifg);border-color:transparent}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--mut)}
+.btn.sm{height:26px;padding:0 9px;font-size:12px}
+.btn[disabled]{opacity:.45;cursor:default}
+.kbd{font-size:11px;line-height:16px;padding:0 5px;border-radius:4px;border:1px solid var(--line2);color:var(--mut);font-weight:500}
+.btn.pri .kbd{border-color:currentColor;color:inherit;opacity:.6}
+.nav{display:flex;align-items:center;gap:9px;min-height:30px;padding:0 10px;border-radius:7px;color:var(--mut);text-decoration:none;border:0;background:none;width:100%;text-align:left;cursor:pointer;box-sizing:border-box}
+.nav.on{background:var(--sel);color:var(--fg);font-weight:500}
+.field{height:30px;border-radius:7px;border:1px solid var(--line2);background:var(--bg);padding:0 10px;width:100%;box-sizing:border-box;min-width:0}
+.lbl{font-size:12px;font-weight:600}
+.hint{font-size:12px;color:var(--mut)}
+.row{display:grid;grid-template-columns:20px minmax(0,1fr) 72px 60px 150px;gap:12px;align-items:center;padding:8px 20px;border-bottom:1px solid var(--line)}
+.row.sel{background:var(--sel)}
+.badge{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:999px;border:1px solid var(--line2);font-size:12px;color:var(--fg);white-space:nowrap}
+svg.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.tb :focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+a{color:inherit}a:hover{color:var(--mut)}
+.seg{display:inline-flex;padding:2px;border-radius:8px;background:var(--raise);border:1px solid var(--line)}.seg button{height:26px;padding:0 10px;border:0;border-radius:6px;background:none;cursor:pointer;color:var(--mut)}.seg button[aria-checked=true]{background:var(--bg);color:var(--fg);font-weight:500;box-shadow:0 1px 2px rgba(0,0,0,.2)}
+.note{display:flex;gap:8px;align-items:flex-start;padding:10px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--raise)}
+.opt{display:flex;flex-direction:column;gap:6px}
+fieldset.opt{border:0;margin:0;padding:0}fieldset.opt legend{padding:0;margin-bottom:6px}
+.chk{display:flex;gap:8px;align-items:center}
+
+</style>
+</helmet>
+<div class="{{themeClass}}" style="min-height: 800px; display: flex; flex-wrap: wrap">
+<aside aria-label="Media" style="flex: 1 1 220px; max-width: 232px; background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; padding: 14px 10px; box-sizing: border-box">
+<a class="nav" href="Main.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M5 12l6 6M5 12l6-6"></path></svg>All tools</a>
+<div style="padding: 16px 10px 6px; font-size: 12px; font-weight: 600; color: var(--faint)">Media</div>
+<nav aria-label="Media tools" style="display: flex; flex-direction: column; gap: 2px"><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 16l5-5 4 4 3-3 6 6"></path><circle cx="15.5" cy="8.5" r="1.5"></circle></svg>App Icon Set</button><button class="nav on" aria-pressed="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4l13 8-13 8z"></path></svg>Create GIF</button><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5z"></path><path d="M3 13l9 5 9-5"></path></svg>Extract GIF Frames</button><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6v16H4zM14 4h6v16h-6z"></path></svg>TIFF Pages</button></nav>
+<div style="flex: 1"></div>
+<a class="nav" href="Settings.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"></path></svg>Settings<span class="kbd" style="margin-left: auto">{{settingsKey}}</span></a>
+<p class="hint" style="margin: 0; padding: 10px 10px 0">Files stay on this device.</p>
+</aside>
+<div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+<header style="min-height: 52px; display: flex; align-items: center; gap: 14px; padding: 0 20px; border-bottom: 1px solid var(--line); flex-wrap: wrap">
+<h1 style="margin: 0; font-size: 15px; font-weight: 600">Create GIF</h1>
+<span class="hint">Turn a sequence of images into an animated GIF.</span>
+<div style="flex: 1"></div>
+<button class="btn ghost"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"></circle><path d="M21 21l-6-6"></path></svg>Find a tool<span class="kbd">{{findKey}}</span></button>
+</header>
+<div style="flex: 1; display: flex; flex-wrap: wrap; min-height: 0">
+<section aria-label="Frames" style="flex: 999 1 480px; min-width: 0; display: flex; flex-direction: column">
+<div style="display: flex; align-items: center; gap: 8px; padding: 12px 20px; flex-wrap: wrap"><strong style="font-size: 13px">8 frames</strong><span class="hint">1.6 seconds per loop</span><div style="flex: 1"></div><button class="btn sm"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14"></path></svg>Add images<span class="kbd">{{openKey}}</span></button><button class="btn sm">Reverse order</button><button class="btn sm ghost">Clear list</button></div>
+<ol role="listbox" aria-label="Frames, in order" aria-orientation="horizontal" style="list-style: none; margin: 0; padding: 0 20px; display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 8px"><li role="option" aria-selected="false" tabindex="-1" aria-label="Frame 1, frame-01.png" style="display: flex; flex-direction: column; gap: 4px; padding: 6px; border-radius: 9px; border: 1px solid var(--line); background: var(--panel)"><span aria-hidden="true" style="height: 64px; border-radius: 5px; background: linear-gradient(90deg, #6a4c93, #c19ee0)"></span><span class="hint">1</span></li><li role="option" aria-selected="false" tabindex="-1" aria-label="Frame 2, frame-02.png" style="display: flex; flex-direction: column; gap: 4px; padding: 6px; border-radius: 9px; border: 1px solid var(--line); background: var(--panel)"><span aria-hidden="true" style="height: 64px; border-radius: 5px; background: linear-gradient(120deg, #6a4c93, #c19ee0)"></span><span class="hint">2</span></li><li role="option" aria-selected="true" tabindex="0" aria-label="Frame 3, frame-03.png" style="display: flex; flex-direction: column; gap: 4px; padding: 6px; border-radius: 9px; border: 1px solid var(--ring); background: var(--panel)"><span aria-hidden="true" style="height: 64px; border-radius: 5px; background: linear-gradient(150deg, #6a4c93, #c19ee0)"></span><span class="hint">3</span></li><li role="option" aria-selected="false" tabindex="-1" aria-label="Frame 4, frame-04.png" style="display: flex; flex-direction: column; gap: 4px; padding: 6px; border-radius: 9px; border: 1px solid var(--line); background: var(--panel)"><span aria-hidden="true" style="height: 64px; border-radius: 5px; background: linear-gradient(180deg, #6a4c93, #c19ee0)"></span><span class="hint">4</span></li><li role="option" aria-selected="false" tabindex="-1" aria-label="Frame 5, frame-05.png" style="display: flex; flex-direction: column; gap: 4px; padding: 6px; border-radius: 9px; border: 1px solid var(--line); background: var(--panel)"><span aria-hidden="true" style="height: 64px; border-radius: 5px; background: linear-gradient(210deg, #6a4c93, #c19ee0)"></span><span class="hint">5</span></li><li role="option" aria-selected="false" tabindex="-1" aria-label="Frame 6, frame-06.png" style="display: flex; flex-direction: column; gap: 4px; padding: 6px; border-radius: 9px; border: 1px solid var(--line); background: var(--panel)"><span aria-hidden="true" style="height: 64px; border-radius: 5px; background: linear-gradient(240deg, #6a4c93, #c19ee0)"></span><span class="hint">6</span></li><li role="option" aria-selected="false" tabindex="-1" aria-label="Frame 7, frame-07.png" style="display: flex; flex-direction: column; gap: 4px; padding: 6px; border-radius: 9px; border: 1px solid var(--line); background: var(--panel)"><span aria-hidden="true" style="height: 64px; border-radius: 5px; background: linear-gradient(270deg, #6a4c93, #c19ee0)"></span><span class="hint">7</span></li><li role="option" aria-selected="false" tabindex="-1" aria-label="Frame 8, frame-08.png" style="display: flex; flex-direction: column; gap: 4px; padding: 6px; border-radius: 9px; border: 1px solid var(--line); background: var(--panel)"><span aria-hidden="true" style="height: 64px; border-radius: 5px; background: linear-gradient(300deg, #6a4c93, #c19ee0)"></span><span class="hint">8</span></li></ol>
+<p class="hint" style="margin: 0; padding: 8px 20px 14px">Select a frame and press {{mod}}+Left or {{mod}}+Right to move it. Delete removes it.</p>
+<div style="padding: 0 20px 20px; display: flex; flex-direction: column; gap: 8px"><span class="lbl">Preview</span>
+<div style="display: flex; gap: 14px; align-items: center; flex-wrap: wrap"><span role="img" aria-label="Preview, showing frame 3 of 8" style="width: 240px; height: 160px; border-radius: 10px; background: linear-gradient(150deg, #6a4c93, #c19ee0)"></span>
+<span style="display: flex; flex-direction: column; gap: 6px"><button class="btn sm" aria-pressed="false"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4l13 8-13 8z"></path></svg>Play preview</button><span class="hint">Preview does not play on its own when Reduce motion is on.</span></span></div></div></section><section aria-label="Options" style="flex: 1 1 300px; max-width: 360px; border-left: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column">
+<div style="padding: 18px 20px; display: flex; flex-direction: column; gap: 20px; flex: 1; overflow: auto"><div class="opt"><label class="lbl" for="dl">Time per frame</label><select id="dl" class="field"><option>0.1 s</option><option selected>0.2 s</option><option>0.5 s</option><option>1 s</option><option>Custom…</option></select></div>
+<fieldset class="opt"><legend class="lbl">Repeat</legend><div role="radiogroup" aria-label="Repeat" class="seg"><button role="radio" aria-checked="true">Forever</button><button role="radio" aria-checked="false" tabindex="-1">Once</button><button role="radio" aria-checked="false" tabindex="-1">Custom</button></div></fieldset>
+<div class="opt"><label class="lbl" for="w">Width, pixels</label><input id="w" class="field" value="480" inputmode="numeric"><span class="hint">Frames of different sizes are fitted to the first frame.</span></div>
+<div class="opt"><label class="lbl" for="cl">Colours</label><select id="cl" class="field"><option>256, best quality</option><option>128</option><option>64, smallest file</option></select><span class="hint">Estimated size about 1.2 MB.</span></div><div style="border-top: 1px solid var(--line); padding-top: 18px; display: flex; flex-direction: column; gap: 8px"><span class="lbl">Save to</span><span class="hint">You choose a name and folder when you start, because this makes one file.</span></div></div>
+<footer style="padding: 14px 20px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 10px"><span class="hint">Originals stay as they are</span><div style="flex: 1"></div><button class="btn pri">Make GIF…<span class="kbd">{{runKey}}</span></button></footer>
+</section>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "$preview": {"width": 1280, "height": 800}}'>
+class Component extends DCLogic {
+renderVals() {
+const win = (this.props.platform ?? 'macOS') === 'Windows';
+const light = (this.props.theme ?? 'dark') === 'light';
+const base = { themeClass: light ? 'tb light' : 'tb dark', findKey: win ? 'Ctrl+K' : '⌘K', settingsKey: win ? 'Ctrl+,' : '⌘,', openKey: win ? 'Ctrl+O' : '⌘O', runKey: win ? 'Ctrl+Enter' : '⌘↵', mod: win ? 'Ctrl' : '⌘', reveal: win ? 'Show in File Explorer' : 'Show in Finder', docsDir: win ? 'C:\\Users\\Asha\\Documents' : '~/Documents' };
+const extra = {};
+return Object.assign(base, extra);
+}
+}
+</script>
+</body>
+</html>

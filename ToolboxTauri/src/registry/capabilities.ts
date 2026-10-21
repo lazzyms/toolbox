@@ -12,6 +12,8 @@ const capabilityKeys = new Set([
   "supportsPageSelection",
   "supportsPreview",
   "nativeAvailability",
+  "outputSuffix",
+  "manyToOne",
 ]);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -35,6 +37,8 @@ const parseCapability = (value: unknown): SharedCapability => {
     supportsPageSelection,
     supportsPreview,
     nativeAvailability,
+    outputSuffix,
+    manyToOne,
   } = value;
   if (typeof command !== "string" || command.length === 0) {
     throw new Error("Each shared capability needs a command.");
@@ -60,6 +64,12 @@ const parseCapability = (value: unknown): SharedCapability => {
   if (nativeAvailability !== "available" && nativeAvailability !== "unavailable") {
     throw new Error(`${command} has invalid native availability.`);
   }
+  if (typeof outputSuffix !== "string" || !/^(-[a-z0-9]+)*$/.test(outputSuffix)) {
+    throw new Error(`${command} needs exactly one valid output suffix.`);
+  }
+  if (typeof manyToOne !== "boolean") {
+    throw new Error(`${command} has an invalid many-to-one flag.`);
+  }
   return {
     command,
     acceptedExtensions,
@@ -67,6 +77,8 @@ const parseCapability = (value: unknown): SharedCapability => {
     supportsPageSelection,
     supportsPreview,
     nativeAvailability,
+    outputSuffix,
+    manyToOne,
   };
 };
 
@@ -95,6 +107,8 @@ for (const capability of SharedCapabilityRegistry) {
     supportsPageSelection: capability.supportsPageSelection,
     supportsPreview: capability.supportsPreview,
     nativeAvailability: capability.nativeAvailability,
+    outputSuffix: capability.outputSuffix,
+    manyToOne: capability.manyToOne,
   });
 }
 

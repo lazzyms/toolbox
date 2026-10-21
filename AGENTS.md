@@ -30,6 +30,13 @@ New processing behavior belongs in the native kit and must remain deterministic,
 local, and testable. UI views should use the shared `ToolScaffold` and preserve
 per-file failure isolation.
 
+## UI design source of truth
+
+- `ToolboxTauri/design/` is the source of truth for the UI. Its boards decide layout, states, visible text, interaction, keyboard behavior, and accessibility. Read `ToolboxTauri/design/README.md` and the relevant board and screens before any UI change.
+- When the app and a board disagree, the board is correct. Do not add, remove, or rename UI that a board does not show. Get the board changed first.
+- Build boards with the component rules below. Use board CSS only as a visual reference. If a board cannot be built within those rules, report the conflict and do not invent a variant.
+- After a board changes, run `npm run design:screens` and commit the boards and screens together.
+
 ## UI components
 
 - Use only shadcn/ui components from `ToolboxTauri/src/components/ui/` for app controls and reusable surfaces. Import them directly where they are used.
@@ -39,7 +46,7 @@ per-file failure isolation.
 - Do not add a parallel component library, custom control wrappers, or a replacement for a shadcn component. Do not copy a generated component outside `src/components/ui/`. Compose shadcn components with semantic HTML for app layout.
 - Let generated shadcn styles control component appearance. Do not re-skin Cards, controls, badges, or dialogs with CSS; use generated Card anatomy, Button variants, component sizes, and class names for local layout or density. Keep CSS for app layout and feature-specific canvas geometry.
 - Build PDF and image editing geometry with their existing canvas and SVG elements. Use shadcn buttons and fields for controls around those surfaces.
-- Keep `components.json` on shadcn's `new-york` style and `neutral` base. Keep shared surfaces, actions, and focus states neutral. Reserve color for file content and clear status meaning.
+- Keep `components.json` on shadcn's `new-york` style and `neutral` base. Keep shared surfaces, actions, and focus states neutral. Reserve color for file content and clear status meaning. One exception: the PDF and image editing canvas draws selection frames, resize and rotate handles, crop areas, and the text-editing caret in selection blue `#1d5fd1`, with red `#e5484d` alignment guides, as the design boards show. Keep that color in the canvas geometry CSS; do not apply it to shadcn controls.
 - Run `npm run check:shadcn-components` after UI changes; it enforces these component and theme rules.
 
 ## Invariants

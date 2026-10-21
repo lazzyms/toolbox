@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PDF Editor, details and privacy</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+.tb{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;font-size:13px;line-height:1.45;color:var(--fg);background:var(--bg);-webkit-font-smoothing:antialiased}
+.tb.dark{--bg:#0a0a0a;--side:#111111;--panel:#0f0f0f;--raise:#1c1c1c;--fg:#fafafa;--mut:#a3a3a3;--faint:#8a8a8a;--line:rgba(255,255,255,.08);--line2:rgba(255,255,255,.16);--sel:#262626;--pri:#ebebeb;--prifg:#171717;--bad:#ff6b6b;--warn:#f2b552;--ring:#a3a3a3;--scrim:rgba(0,0,0,.6);--well:#1b1b1b}
+.tb.light{--bg:#ffffff;--side:#f7f7f7;--panel:#fcfcfc;--raise:#f2f2f2;--fg:#0a0a0a;--mut:#525252;--faint:#666666;--line:#e8e8e8;--line2:#d4d4d4;--sel:#ebebeb;--pri:#171717;--prifg:#fafafa;--bad:#c10007;--warn:#9a5800;--ring:#525252;--scrim:rgba(0,0,0,.28);--well:#e6e6e6}
+.tb button,.tb input,.tb select,.tb textarea{font:inherit;color:inherit}
+.btn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:7px;border:1px solid var(--line2);background:var(--raise);color:var(--fg);font-weight:500;cursor:pointer;white-space:nowrap;box-sizing:border-box;text-decoration:none}
+.btn.pri{background:var(--pri);color:var(--prifg);border-color:transparent}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--mut)}
+.btn.sm{height:26px;padding:0 9px;font-size:12px}
+.btn.icon{width:30px;padding:0;justify-content:center}
+.btn[disabled]{opacity:.45;cursor:default}
+.kbd{font-size:11px;line-height:16px;padding:0 5px;border-radius:4px;border:1px solid var(--line2);color:var(--mut);font-weight:500}
+.btn.pri .kbd{border-color:currentColor;color:inherit;opacity:.6}
+.tbtn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 9px;border-radius:7px;border:0;background:none;color:var(--mut);cursor:pointer;white-space:nowrap}
+.tbtn[aria-pressed="true"]{background:var(--sel);color:var(--fg);font-weight:500}
+.sep{width:1px;height:20px;background:var(--line2);flex:none}
+.field{height:30px;border-radius:7px;border:1px solid var(--line2);background:var(--bg);padding:0 10px;width:100%;box-sizing:border-box;min-width:0}
+.lbl{font-size:12px;font-weight:600}
+.hint{font-size:12px;color:var(--mut)}
+.seg{display:inline-flex;border:1px solid var(--line2);border-radius:7px;padding:2px;gap:2px}
+.seg button{height:24px;min-width:30px;padding:0 8px;border:0;border-radius:5px;background:none;color:var(--mut);cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
+.seg button[aria-checked="true"],.seg button[aria-pressed="true"]{background:var(--sel);color:var(--fg);font-weight:500}
+.thumb{display:flex;flex-direction:column;align-items:center;gap:4px;width:100%;padding:6px 0;border:0;background:none;border-radius:8px;cursor:pointer;color:var(--mut);font-size:12px}
+.thumb .mini{width:96px;height:124px;background:#ffffff;border:1px solid var(--line2);border-radius:2px;box-sizing:border-box;padding:10px 9px;display:flex;flex-direction:column;gap:4px}
+.thumb .mini i{display:block;height:3px;background:#d6d6d6;border-radius:1px}
+.thumb[aria-current="page"]{background:var(--sel);color:var(--fg);font-weight:500}
+.thumb[aria-current="page"] .mini{outline:2px solid #1d5fd1;outline-offset:1px}
+.paper{background:#ffffff;color:#1f1f1f;box-shadow:0 1px 3px rgba(0,0,0,.25);position:relative;box-sizing:border-box;font-family:"Iowan Old Style","Palatino Linotype",Georgia,serif}
+.paper h3{margin:0 0 6px;font-size:12.5px}
+.paper p{margin:0 0 7px;font-size:10px;line-height:1.5}
+.obj{position:absolute;border:1.5px solid #1d5fd1;background:rgba(29,95,209,.06);padding:4px 6px;box-sizing:border-box;cursor:move;text-align:left;color:#1f1f1f}
+.obj.idle{border:1px dashed rgba(29,95,209,.6);background:none}
+.h{position:absolute;width:7px;height:7px;background:#ffffff;border:1.5px solid #1d5fd1;box-sizing:border-box}
+.olist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
+.olist button{width:100%;text-align:left;border:0;background:none;border-radius:6px;padding:6px 8px;cursor:pointer;display:flex;gap:8px;align-items:baseline}
+.olist button[aria-current="true"]{background:var(--sel)}
+.note{display:flex;gap:10px;padding:10px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--raise)}
+svg.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.tb :focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+a{color:inherit}a:hover{color:var(--mut)}
+.mi{display:flex;gap:10px;align-items:flex-start;width:100%;text-align:left;padding:7px 10px;border:0;background:none;border-radius:6px;cursor:pointer;color:var(--fg);text-decoration:none;box-sizing:border-box}.mi:hover{background:var(--sel)}.mi svg{margin-top:2px}
+.pbadge{position:absolute;right:-6px;top:-6px;width:16px;height:16px;border-radius:50%;background:#1d5fd1;color:#fff;display:grid;place-items:center}
+</style>
+</helmet>
+<div class="{{themeClass}}" style="height: 800px; display: flex; flex-direction: column; position: relative; overflow: hidden">
+<header style="height: 48px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 12px; border-bottom: 1px solid var(--line)">
+<a class="btn sm ghost" href="Main.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M5 12l6 6M5 12l6-6"></path></svg>All tools</a>
+<span class="sep" aria-hidden="true"></span>
+<button class="btn sm ghost icon" aria-label="Show page sidebar" aria-pressed="true" aria-controls="pages"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M9 4v16"></path></svg></button>
+<div style="display: flex; flex-direction: column; min-width: 0; line-height: 1.25">
+<h1 style="margin: 0; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">lease-agreement.pdf</h1>
+<span class="hint" style="white-space: nowrap">14 pages. No changes yet</span>
+</div>
+<div style="flex: 1"></div>
+
+<button class="btn sm ghost icon" aria-label="Undo ({{undoKey}})"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14L4 9l5-5"></path><path d="M4 9h11a5 5 0 0 1 0 10h-3"></path></svg></button>
+<button class="btn sm ghost icon" aria-label="Redo ({{redoKey}})" disabled><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 14l5-5-5-5"></path><path d="M20 9H9a5 5 0 0 0 0 10h3"></path></svg></button>
+<span class="sep" aria-hidden="true"></span>
+<div role="group" aria-label="Zoom" style="display: flex; align-items: center; gap: 2px">
+<button class="btn sm ghost icon" aria-label="Zoom out"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"></path></svg></button>
+<label for="zoom" style="position: absolute; width: 1px; height: 1px; overflow: hidden">Zoom</label>
+<select id="zoom" class="field" style="width: 92px; height: 26px; padding: 0 6px"><option>Fit page</option><option>Fit width</option><option selected>100%</option><option>150%</option><option>200%</option></select>
+<button class="btn sm ghost icon" aria-label="Zoom in"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14"></path></svg></button>
+</div>
+<span class="sep" aria-hidden="true"></span>
+<button class="btn sm ghost" aria-label="Find a tool"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"></circle><path d="M21 21l-6-6"></path></svg><span class="kbd">{{findKey}}</span></button>
+<button class="btn sm ghost icon" aria-label="Settings ({{settingsKey}})"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"></path></svg></button>
+<button class="btn pri" disabled aria-describedby="exr">Export<span class="kbd">{{runKey}}</span></button><span id="exr" class="hint" style="position: absolute; width: 1px; height: 1px; overflow: hidden">Make a change to export</span>
+</header>
+<div role="toolbar" aria-label="Edit tools" aria-orientation="horizontal" style="height: 44px; flex: none; display: flex; align-items: center; gap: 2px; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--side); position: relative">
+<a class="tbtn" href="PdfOrganize.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1"></rect><rect x="14" y="3" width="7" height="9" rx="1"></rect><rect x="3" y="15" width="7" height="6" rx="1"></rect><rect x="14" y="15" width="7" height="6" rx="1"></rect></svg>Organize</a>
+<a class="tbtn" href="PdfCrop.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2v14a2 2 0 0 0 2 2h14"></path><path d="M18 22V8a2 2 0 0 0-2-2H2"></path></svg>Crop</a>
+<span class="sep" aria-hidden="true"></span>
+<a class="tbtn" href="PdfEditText.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"></path><path d="M13 7l4 4"></path></svg>Edit text</a>
+<a class="tbtn" href="PdfText.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6V4h14v2M12 4v16M9 20h6"></path></svg>Add text</a>
+<a class="tbtn" href="PdfSign.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17c3 0 4-6 6-6s1 5 3 5 2-3 4-3 2 2 5 2"></path><path d="M3 21h18"></path></svg>Sign</a>
+<a class="tbtn" href="PdfForms.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="5" rx="1"></rect><rect x="3" y="14" width="18" height="5" rx="1"></rect><path d="M6 7.5h4"></path></svg>Fill form</a>
+<span class="sep" aria-hidden="true"></span>
+<a class="tbtn" href="PdfMarks.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4"></path><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"></path><path d="M8 17l8-6"></path></svg>Watermark</a>
+<a class="tbtn" href="PdfMarks.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h16M4 15h16M10 3L8 21M16 3l-2 18"></path></svg>Page numbers</a>
+<a class="tbtn" href="PdfMarks.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2"></rect><path d="M4 7h16M4 17h16"></path></svg>Header and footer</a>
+<span class="sep" aria-hidden="true"></span>
+<a class="tbtn" href="PdfRedact.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="4" rx="1" fill="currentColor"></rect><path d="M3 15h10M3 19h14"></path></svg>Redact</a>
+<button class="tbtn" aria-haspopup="menu" aria-expanded="false" aria-pressed="true" tabindex="-1">More<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></button>
+</div>
+<div style="flex: 1; display: flex; min-height: 0">
+<main aria-labelledby="dh" style="flex: 1; min-width: 0; overflow: auto; padding: 22px 32px; display: flex; flex-direction: column; gap: 16px">
+<div style="display: flex; align-items: center; gap: 14px"><h2 id="dh" style="margin: 0; font-size: 16px; font-weight: 600; flex: 1">Document details and privacy</h2><a class="btn sm ghost" href="PdfText.dc.html">Back to pages</a></div>
+<div role="tablist" aria-label="Details" style="display: flex; gap: 4px; border-bottom: 1px solid var(--line)">
+<button role="tab" class="tbtn" aria-selected="{{s1}}" aria-pressed="{{s1}}">Privacy report<span class="hint">9 found</span></button><button role="tab" class="tbtn" aria-selected="{{s2}}" aria-pressed="{{s2}}" tabindex="-1">Properties</button></div>
+<div role="tabpanel"><sc-if value="{{t1}}" hint-placeholder-val="{{ true }}"><div style="display: flex; flex-direction: column; gap: 12px">
+<p class="hint" style="margin: 0; font-size: 13px">Things in this PDF that could reveal more than the pages show. Nothing is changed until you export.</p>
+<table style="width: 100%; border-collapse: collapse; font-size: 12.5px"><caption style="position: absolute; width: 1px; height: 1px; overflow: hidden">Privacy report, 14 categories</caption>
+<thead><tr><th scope="col" style="text-align: left; padding: 6px 10px" class="lbl">What</th><th scope="col" style="text-align: left; padding: 6px 10px" class="lbl">In this file</th><th scope="col" style="text-align: left; padding: 6px 10px" class="lbl">Details</th></tr></thead><tbody><tr style="border-top: 1px solid var(--line)"><th scope="row" style="text-align: left; font-weight: 400; padding: 8px 10px">Author and creator app</th><td style="padding: 8px 10px"><span style="color: var(--warn)">Found</span></td><td class="hint" style="padding: 8px 10px">Author “A. Patel”, made with Microsoft Word</td></tr><tr style="border-top: 1px solid var(--line)"><th scope="row" style="text-align: left; font-weight: 400; padding: 8px 10px">Title, subject and keywords</th><td style="padding: 8px 10px"><span style="color: var(--warn)">Found</span></td><td class="hint" style="padding: 8px 10px">Title “Lease draft v3”</td></tr><tr style="border-top: 1px solid var(--line)"><th scope="row" style="text-align: left; font-weight: 400; padding: 8px 10px">Created and modified dates</th><td style="padding: 8px 10px"><span style="color: var(--warn)">Found</span></td><td class="hint" style="padding: 8px 10px">28 Sep 2026, 13 Oct 2026</td></tr><tr style="border-top: 1px solid var(--line)"><th scope="row" style="text-align: left; font-weight: 400; padding: 8px 10px">XMP metadata</th><td style="padding: 8px 10px"><span style="color: var(--warn)">Found</span></td><td class="hint" style="padding: 8px 10px">Edit history from 2 apps</td></tr><tr style="border-top: 1px solid var(--line)"><th scope="row" style="text-align: left; font-weight: 400; padding: 8px 10px">Comments</th><td style="padding: 8px 10px"><span style="color: var(--warn)">Found</span></td><td class="hint" style="padding: 8px 10px">2 comments on pages 4 and 9</td></tr><tr style="border-top: 1px solid var(--line)"><th scope="row" style="text-align: left; font-weight: 400; padding: 8px 10px">Attachments</th><td style="padding: 8px 10px"><span style="color: var(--warn)">Found</span></td><td class="hint" style="padding: 8px 10px">inventory-photos.zip, 4.2 MB</td></tr><tr style="border-top: 1px solid var(--line)"><th scope="row" style="text-align: left; font-weight: 400; padding: 8px 10px">Form fields</th><td style="padding: 8px 10px"><span style="color: var(--warn)">Found</span></td><td class="hint" style="padding: 8px 10px">9 fields</td></tr><tr style="border-top: 1px solid var(--line)"><th scope="row" style="text-align: left; font-weight: 400; padding: 8px 10px">JavaScript</th><td style="padding: 8px 10px"><span class="hint">None</span></td><td class="hint" style="padding: 8px 10px"></td></tr><tr style="border-top: 1px solid var(--line)"><th scope="row" style="text-align: left; font-weight: 400; padding: 8px 10px">Links to websites</th><td style="padding: 8px 10px"><span style="color: var(--warn)">Found</span></td><td class="hint" style="padding: 8px 10px">3 links</td></tr><tr style="border-top: 1px solid var(--line)"><th scope="row" style="text-align: left; font-weight: 400; padding: 8px 10px">Hidden layers</th><td style="padding: 8px 10px"><span class="hint">None</span></td><td class="hint" style="padding: 8px 10px"></td></tr><tr style="border-top: 1px solid var(--line)"><th scope="row" style="text-align: left; font-weight: 400; padding: 8px 10px">Text hidden under images</th><td style="padding: 8px 10px"><span class="hint">None</span></td><td class="hint" style="padding: 8px 10px"></td></tr><tr style="border-top: 1px solid var(--line)"><th scope="row" style="text-align: left; font-weight: 400; padding: 8px 10px">Embedded fonts</th><td style="padding: 8px 10px"><span style="color: var(--warn)">Found</span></td><td class="hint" style="padding: 8px 10px">4 fonts, normal</td></tr><tr style="border-top: 1px solid var(--line)"><th scope="row" style="text-align: left; font-weight: 400; padding: 8px 10px">Thumbnails stored in the file</th><td style="padding: 8px 10px"><span class="hint">None</span></td><td class="hint" style="padding: 8px 10px"></td></tr><tr style="border-top: 1px solid var(--line)"><th scope="row" style="text-align: left; font-weight: 400; padding: 8px 10px">Digital signatures</th><td style="padding: 8px 10px"><span class="hint">None</span></td><td class="hint" style="padding: 8px 10px"></td></tr></tbody></table>
+<div style="display: flex; gap: 8px"><button class="btn pri">Remove metadata, comments and attachments</button><button class="btn">Choose what to remove…</button></div>
+</div></sc-if><sc-if value="{{t2}}" hint-placeholder-val="{{ false }}"><div style="display: flex; flex-direction: column; gap: 10px; max-width: 640px"><p class="hint" style="margin: 0; font-size: 13px">Keep a value as it is, set a new one, or clear it in the exported copy.</p><div style="display: grid; grid-template-columns: 160px 100px 1fr; gap: 10px; align-items: center"><label for="pTit">Title</label><select class="field" aria-label="Title, action"><option>Keep</option><option selected>Set</option><option>Clear</option></select><input id="pTit" class="field" value="Tenancy agreement, 22 Wren Street" ></div><div style="display: grid; grid-template-columns: 160px 100px 1fr; gap: 10px; align-items: center"><label for="pAut">Author</label><select class="field" aria-label="Author, action"><option>Keep</option><option>Set</option><option selected>Clear</option></select><input id="pAut" class="field" value="A. Patel" disabled></div><div style="display: grid; grid-template-columns: 160px 100px 1fr; gap: 10px; align-items: center"><label for="pSub">Subject</label><select class="field" aria-label="Subject, action"><option selected>Keep</option><option>Set</option><option>Clear</option></select><input id="pSub" class="field" value="" disabled></div><div style="display: grid; grid-template-columns: 160px 100px 1fr; gap: 10px; align-items: center"><label for="pKey">Keywords</label><select class="field" aria-label="Keywords, action"><option selected>Keep</option><option>Set</option><option>Clear</option></select><input id="pKey" class="field" value="" disabled></div><div style="display: grid; grid-template-columns: 160px 100px 1fr; gap: 10px; align-items: center"><label for="pCre">Creator app</label><select class="field" aria-label="Creator app, action"><option>Keep</option><option>Set</option><option selected>Clear</option></select><input id="pCre" class="field" value="Microsoft Word" disabled></div><div style="display: grid; grid-template-columns: 160px 100px 1fr; gap: 10px; align-items: center"><label for="pCre">Created</label><select class="field" aria-label="Created, action"><option selected>Keep</option><option>Set</option><option>Clear</option></select><input id="pCre" class="field" value="28 Sep 2026 10:41" disabled></div><div style="display: grid; grid-template-columns: 160px 100px 1fr; gap: 10px; align-items: center"><label for="pMod">Modified</label><select class="field" aria-label="Modified, action"><option selected>Keep</option><option>Set</option><option>Clear</option></select><input id="pMod" class="field" value="13 Oct 2026 09:02" disabled></div><span class="hint">Modified is set to the export time unless you keep it.</span></div></sc-if></div>
+</main>
+<aside aria-label="File" style="width: 260px; flex: none; border-left: 1px solid var(--line); background: var(--panel); padding: 18px; display: flex; flex-direction: column; gap: 10px; font-size: 12.5px">
+<span class="mini" aria-hidden="true" style="width: 120px; height: 155px; padding: 12px; gap: 6px"><i style="width: 60%; height: 5px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i></span>
+<dl style="margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 6px 10px"><dt class="hint">Size</dt><dd style="margin: 0">2.1 MB</dd><dt class="hint">Pages</dt><dd style="margin: 0">14, Letter</dd><dt class="hint">PDF version</dt><dd style="margin: 0">1.7</dd><dt class="hint">Location</dt><dd style="margin: 0; word-break: break-all">{{docsDir}}/Leases</dd></dl>
+</aside></div>
+<footer style="height: 30px; flex: none; display: flex; align-items: center; gap: 12px; padding: 0 12px; border-top: 1px solid var(--line); background: var(--side)">
+<label class="hint" for="pg" style="display: flex; align-items: center; gap: 6px">Page<input id="pg" class="field" value="1" inputmode="numeric" style="width: 44px; height: 22px; padding: 0 6px; text-align: center"></label><span class="hint">of 14</span>
+<div style="flex: 1"></div>
+<span class="hint" role="status">{{statusMsg}}</span>
+<span class="sep" aria-hidden="true"></span>
+<span class="hint">Changes apply to the copy only</span>
+</footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "tab": {"editor": "enum", "options": ["Privacy report", "Properties"], "default": "Privacy report"}, "$preview": {"width": 1280, "height": 800}}'>
+class Component extends DCLogic {
+renderVals() {
+const win = (this.props.platform ?? 'macOS') === 'Windows';
+const light = (this.props.theme ?? 'dark') === 'light';
+const base = {
+themeClass: light ? 'tb light' : 'tb dark',
+findKey: win ? 'Ctrl+K' : '⌘K',
+settingsKey: win ? 'Ctrl+,' : '⌘,',
+runKey: win ? 'Ctrl+Enter' : '⌘↵',
+openKey: win ? 'Ctrl+O' : '⌘O',
+undoKey: win ? 'Ctrl+Z' : '⌘Z',
+redoKey: win ? 'Ctrl+Y' : '⇧⌘Z',
+dupKey: win ? 'Ctrl+D' : '⌘D',
+selAllKey: win ? 'Ctrl+A' : '⌘A',
+mod: win ? 'Ctrl' : '⌘',
+reveal: win ? 'Show in File Explorer' : 'Show in Finder',
+docsDir: win ? 'C:\\Users\\Asha\\Documents' : '~/Documents'
+};
+const t = this.props.tab ?? 'Privacy report';
+const extra = { t1: t === 'Privacy report', t2: t === 'Properties', s1: t === 'Privacy report' ? 'true' : 'false', s2: t === 'Properties' ? 'true' : 'false', statusMsg: '9 of 14 privacy checks found something.' };
+return Object.assign(base, typeof extra === 'undefined' ? {} : extra);
+}
+}
+</script>
+</body>
+</html>

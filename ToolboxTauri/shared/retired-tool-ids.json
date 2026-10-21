@@ -1,0 +1,8 @@
+{
+  "version": 3,
+  "retired": {
+    "pdf-unlock": "lock-unlock",
+    "pdf-protect": "lock-unlock",
+    "office-protect": "lock-unlock"
+  }
+}

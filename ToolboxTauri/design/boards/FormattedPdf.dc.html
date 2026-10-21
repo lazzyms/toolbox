@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Formatted PDF</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+.tb{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;font-size:13px;line-height:1.45;color:var(--fg);background:var(--bg);-webkit-font-smoothing:antialiased}
+.tb.dark{--bg:#0a0a0a;--side:#111111;--panel:#0f0f0f;--raise:#1c1c1c;--fg:#fafafa;--mut:#a3a3a3;--faint:#8a8a8a;--line:rgba(255,255,255,.08);--line2:rgba(255,255,255,.16);--sel:#262626;--pri:#ebebeb;--prifg:#171717;--bad:#ff6b6b;--warn:#f2b552;--ring:#a3a3a3;--scrim:rgba(0,0,0,.6)}
+.tb.light{--bg:#ffffff;--side:#f7f7f7;--panel:#fcfcfc;--raise:#f2f2f2;--fg:#0a0a0a;--mut:#525252;--faint:#666666;--line:#e8e8e8;--line2:#d4d4d4;--sel:#ebebeb;--pri:#171717;--prifg:#fafafa;--bad:#c10007;--warn:#9a5800;--ring:#525252;--scrim:rgba(0,0,0,.28)}
+.tb button,.tb input,.tb select{font:inherit;color:inherit}
+.btn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:7px;border:1px solid var(--line2);background:var(--raise);color:var(--fg);font-weight:500;cursor:pointer;white-space:nowrap;box-sizing:border-box;text-decoration:none}
+.btn.pri{background:var(--pri);color:var(--prifg);border-color:transparent}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--mut)}
+.btn.sm{height:26px;padding:0 9px;font-size:12px}
+.btn[disabled]{opacity:.45;cursor:default}
+.kbd{font-size:11px;line-height:16px;padding:0 5px;border-radius:4px;border:1px solid var(--line2);color:var(--mut);font-weight:500}
+.btn.pri .kbd{border-color:currentColor;color:inherit;opacity:.6}
+.nav{display:flex;align-items:center;gap:9px;min-height:30px;padding:0 10px;border-radius:7px;color:var(--mut);text-decoration:none;border:0;background:none;width:100%;text-align:left;cursor:pointer;box-sizing:border-box}
+.nav.on{background:var(--sel);color:var(--fg);font-weight:500}
+.field{height:30px;border-radius:7px;border:1px solid var(--line2);background:var(--bg);padding:0 10px;width:100%;box-sizing:border-box;min-width:0}
+.lbl{font-size:12px;font-weight:600}
+.hint{font-size:12px;color:var(--mut)}
+.row{display:grid;grid-template-columns:20px minmax(0,1fr) 72px 60px 150px;gap:12px;align-items:center;padding:8px 20px;border-bottom:1px solid var(--line)}
+.row.sel{background:var(--sel)}
+.badge{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:999px;border:1px solid var(--line2);font-size:12px;color:var(--fg);white-space:nowrap}
+svg.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.tb :focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+a{color:inherit}a:hover{color:var(--mut)}
+.seg{display:inline-flex;padding:2px;border-radius:8px;background:var(--raise);border:1px solid var(--line)}.seg button{height:26px;padding:0 10px;border:0;border-radius:6px;background:none;cursor:pointer;color:var(--mut)}.seg button[aria-checked=true]{background:var(--bg);color:var(--fg);font-weight:500;box-shadow:0 1px 2px rgba(0,0,0,.2)}
+.note{display:flex;gap:8px;align-items:flex-start;padding:10px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--raise)}
+.opt{display:flex;flex-direction:column;gap:6px}
+fieldset.opt{border:0;margin:0;padding:0}fieldset.opt legend{padding:0;margin-bottom:6px}
+.chk{display:flex;gap:8px;align-items:center}
+
+</style>
+</helmet>
+<div class="{{themeClass}}" style="min-height: 800px; display: flex; flex-wrap: wrap">
+<aside aria-label="PDF Conversion" style="flex: 1 1 220px; max-width: 232px; background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; padding: 14px 10px; box-sizing: border-box">
+<a class="nav" href="Main.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M5 12l6 6M5 12l6-6"></path></svg>All tools</a>
+<div style="padding: 16px 10px 6px; font-size: 12px; font-weight: 600; color: var(--faint)">PDF Conversion</div>
+<nav aria-label="PDF Conversion tools" style="display: flex; flex-direction: column; gap: 2px"><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 16l5-5 4 4 3-3 6 6"></path><circle cx="15.5" cy="8.5" r="1.5"></circle></svg>PDF to Images</button><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5z"></path><path d="M3 13l9 5 9-5"></path></svg>Extract from PDF</button><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4"></path><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"></path></svg>PDF to EPUB</button><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4"></path><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"></path></svg>Convert to PDF</button><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 16l5-5 4 4 3-3 6 6"></path><circle cx="15.5" cy="8.5" r="1.5"></circle></svg>Images to PDF</button><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"></path><path d="M13 7l4 4"></path></svg>OCR</button><button class="nav on" aria-pressed="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6V4h14v2M12 4v16M9 20h6"></path></svg>Formatted PDF</button></nav>
+<div style="flex: 1"></div>
+<a class="nav" href="Settings.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"></path></svg>Settings<span class="kbd" style="margin-left: auto">{{settingsKey}}</span></a>
+<p class="hint" style="margin: 0; padding: 10px 10px 0">Files stay on this device.</p>
+</aside>
+<div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+<header style="min-height: 52px; display: flex; align-items: center; gap: 14px; padding: 0 20px; border-bottom: 1px solid var(--line); flex-wrap: wrap">
+<h1 style="margin: 0; font-size: 15px; font-weight: 600">Formatted PDF</h1>
+<span class="hint">Build a simple PDF from headings, text, lists, tables and images.</span>
+<div style="flex: 1"></div>
+<button class="btn ghost"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"></circle><path d="M21 21l-6-6"></path></svg>Find a tool<span class="kbd">{{findKey}}</span></button>
+</header>
+<div style="flex: 1; display: flex; flex-wrap: wrap; min-height: 0">
+<section aria-label="Document blocks" style="flex: 999 1 420px; min-width: 0; display: flex; flex-direction: column">
+<div role="toolbar" aria-label="Add a block" style="display: flex; align-items: center; gap: 6px; padding: 12px 20px; flex-wrap: wrap"><span class="lbl" style="margin-right: 4px">Add</span>
+<button class="btn sm">Heading</button><button class="btn sm">Paragraph</button><button class="btn sm">List</button><button class="btn sm">Table</button><button class="btn sm">Image…</button><button class="btn sm">Page break</button>
+<div style="flex: 1"></div><span class="hint" role="status">{{saved}}</span></div>
+<sc-if value="{{restored}}" hint-placeholder-val="{{ false }}"><div class="note" role="status" style="margin: 0 20px 10px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut); margin-top: 1px"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v6M12 7.5v.5"></path></svg><span class="hint" style="flex: 1"><strong style="font-weight: 600; color: var(--fg)">Restored your draft from yesterday, 6:42 pm.</strong> Drafts are kept on this computer until you discard them.</span><button class="btn sm">Start over</button></div></sc-if>
+<ol role="listbox" aria-label="Blocks, in order" style="list-style: none; margin: 0; padding: 0 20px 20px; display: flex; flex-direction: column; gap: 8px; overflow: auto"><li role="option" aria-selected="true" tabindex="0" aria-label="Block 1, Heading" style="display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: 9px; border: 1px solid var(--ring); background: var(--panel)">
+<span aria-hidden="true" style="color: var(--mut); margin-top: 2px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="6" r="1"></circle><circle cx="15" cy="6" r="1"></circle><circle cx="9" cy="12" r="1"></circle><circle cx="15" cy="12" r="1"></circle><circle cx="9" cy="18" r="1"></circle><circle cx="15" cy="18" r="1"></circle></svg></span>
+<span style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px"><span class="hint">Heading</span><input class="field" aria-label="Heading text" value="Move-out checklist" style="font-size: 15px; font-weight: 600"></span>
+<span style="display: flex; gap: 2px"><button class="btn sm ghost" aria-label="Move block 1 up" style="padding: 0 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"></path></svg></button><button class="btn sm ghost" aria-label="Move block 1 down" style="padding: 0 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"></path></svg></button><button class="btn sm ghost" aria-label="Delete block 1" style="padding: 0 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"></path></svg></button></span></li><li role="option" aria-selected="false" tabindex="-1" aria-label="Block 2, Paragraph" style="display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: 9px; border: 1px solid var(--line); background: var(--panel)">
+<span aria-hidden="true" style="color: var(--mut); margin-top: 2px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="6" r="1"></circle><circle cx="15" cy="6" r="1"></circle><circle cx="9" cy="12" r="1"></circle><circle cx="15" cy="12" r="1"></circle><circle cx="9" cy="18" r="1"></circle><circle cx="15" cy="18" r="1"></circle></svg></span>
+<span style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px"><span class="hint">Paragraph</span><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">Return all keys to the front desk by 5 pm on the last day of the lease…</span></span>
+<span style="display: flex; gap: 2px"><button class="btn sm ghost" aria-label="Move block 2 up" style="padding: 0 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"></path></svg></button><button class="btn sm ghost" aria-label="Move block 2 down" style="padding: 0 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"></path></svg></button><button class="btn sm ghost" aria-label="Delete block 2" style="padding: 0 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"></path></svg></button></span></li><li role="option" aria-selected="false" tabindex="-1" aria-label="Block 3, List" style="display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: 9px; border: 1px solid var(--line); background: var(--panel)">
+<span aria-hidden="true" style="color: var(--mut); margin-top: 2px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="6" r="1"></circle><circle cx="15" cy="6" r="1"></circle><circle cx="9" cy="12" r="1"></circle><circle cx="15" cy="12" r="1"></circle><circle cx="9" cy="18" r="1"></circle><circle cx="15" cy="18" r="1"></circle></svg></span>
+<span style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px"><span class="hint">List</span><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">3 items: Clean appliances, Patch nail holes, Photograph each room</span></span>
+<span style="display: flex; gap: 2px"><button class="btn sm ghost" aria-label="Move block 3 up" style="padding: 0 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"></path></svg></button><button class="btn sm ghost" aria-label="Move block 3 down" style="padding: 0 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"></path></svg></button><button class="btn sm ghost" aria-label="Delete block 3" style="padding: 0 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"></path></svg></button></span></li><li role="option" aria-selected="false" tabindex="-1" aria-label="Block 4, Table" style="display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: 9px; border: 1px solid var(--line); background: var(--panel)">
+<span aria-hidden="true" style="color: var(--mut); margin-top: 2px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="6" r="1"></circle><circle cx="15" cy="6" r="1"></circle><circle cx="9" cy="12" r="1"></circle><circle cx="15" cy="12" r="1"></circle><circle cx="9" cy="18" r="1"></circle><circle cx="15" cy="18" r="1"></circle></svg></span>
+<span style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px"><span class="hint">Table</span><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">3 columns, 4 rows: Room, Condition, Notes</span></span>
+<span style="display: flex; gap: 2px"><button class="btn sm ghost" aria-label="Move block 4 up" style="padding: 0 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"></path></svg></button><button class="btn sm ghost" aria-label="Move block 4 down" style="padding: 0 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"></path></svg></button><button class="btn sm ghost" aria-label="Delete block 4" style="padding: 0 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"></path></svg></button></span></li><li role="option" aria-selected="false" tabindex="-1" aria-label="Block 5, Page break" style="display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: 9px; border: 1px solid var(--line); background: var(--panel)">
+<span aria-hidden="true" style="color: var(--mut); margin-top: 2px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="6" r="1"></circle><circle cx="15" cy="6" r="1"></circle><circle cx="9" cy="12" r="1"></circle><circle cx="15" cy="12" r="1"></circle><circle cx="9" cy="18" r="1"></circle><circle cx="15" cy="18" r="1"></circle></svg></span>
+<span style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px"><span class="hint">Page break</span><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap"><span class="hint">Starts a new page</span></span></span>
+<span style="display: flex; gap: 2px"><button class="btn sm ghost" aria-label="Move block 5 up" style="padding: 0 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"></path></svg></button><button class="btn sm ghost" aria-label="Move block 5 down" style="padding: 0 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"></path></svg></button><button class="btn sm ghost" aria-label="Delete block 5" style="padding: 0 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"></path></svg></button></span></li><li role="option" aria-selected="false" tabindex="-1" aria-label="Block 6, Image" style="display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: 9px; border: 1px solid var(--line); background: var(--panel)">
+<span aria-hidden="true" style="color: var(--mut); margin-top: 2px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="6" r="1"></circle><circle cx="15" cy="6" r="1"></circle><circle cx="9" cy="12" r="1"></circle><circle cx="15" cy="12" r="1"></circle><circle cx="9" cy="18" r="1"></circle><circle cx="15" cy="18" r="1"></circle></svg></span>
+<span style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px"><span class="hint">Image</span><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">floorplan.png, 1200 × 900</span></span>
+<span style="display: flex; gap: 2px"><button class="btn sm ghost" aria-label="Move block 6 up" style="padding: 0 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"></path></svg></button><button class="btn sm ghost" aria-label="Move block 6 down" style="padding: 0 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"></path></svg></button><button class="btn sm ghost" aria-label="Delete block 6" style="padding: 0 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"></path></svg></button></span></li></ol>
+<p class="hint" style="margin: 0; padding: 0 20px 16px">Select a block and press {{mod}}+Up or {{mod}}+Down to move it. Delete removes it, {{mod}}+Z brings it back.</p></section><section aria-label="Preview" style="flex: 1 1 340px; max-width: 420px; border-left: 1px solid var(--line); background: var(--raise); display: flex; flex-direction: column">
+<div style="display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap"><span class="lbl">Preview</span><span class="hint">Page 1 of 2</span><div style="flex: 1"></div>
+<label class="hint" style="display: flex; gap: 6px; align-items: center">Page<select class="field" style="height: 26px; width: auto"><option>A4</option><option>Letter</option></select></label>
+<label class="hint" style="display: flex; gap: 6px; align-items: center">Font<select class="field" style="height: 26px; width: auto"><option>Sans</option><option>Serif</option></select></label></div>
+<div style="flex: 1; padding: 20px; display: grid; place-items: start center; overflow: auto">
+<div role="img" aria-label="Page 1 preview: heading, paragraph, list and table" style="width: 260px; height: 368px; background: #fff; color: #222; border-radius: 3px; box-shadow: 0 2px 10px rgba(0,0,0,.3); padding: 24px 22px; box-sizing: border-box; display: flex; flex-direction: column; gap: 8px; font-size: 7px; line-height: 1.4">
+<strong style="font-size: 13px; outline: 2px solid #1d5fd1; outline-offset: 2px">Move-out checklist</strong><span>Return all keys to the front desk by 5 pm on the last day of the lease. Leave the parking fob in the kitchen drawer.</span>
+<span>• Clean appliances<br>• Patch nail holes<br>• Photograph each room</span>
+<span style="display: grid; grid-template-columns: 1fr 1fr 1.4fr; border: 1px solid #bbb"><span style="border: 1px solid #ddd; padding: 2px 3px; font-weight: 600">Room</span><span style="border: 1px solid #ddd; padding: 2px 3px; font-weight: 600">Condition</span><span style="border: 1px solid #ddd; padding: 2px 3px; font-weight: 600">Notes</span><span style="border: 1px solid #ddd; padding: 2px 3px">Kitchen</span><span style="border: 1px solid #ddd; padding: 2px 3px">Good</span><span style="border: 1px solid #ddd; padding: 2px 3px"></span><span style="border: 1px solid #ddd; padding: 2px 3px">Bath</span><span style="border: 1px solid #ddd; padding: 2px 3px">Fair</span><span style="border: 1px solid #ddd; padding: 2px 3px">Grout</span><span style="border: 1px solid #ddd; padding: 2px 3px">Bedroom</span><span style="border: 1px solid #ddd; padding: 2px 3px">Good</span><span style="border: 1px solid #ddd; padding: 2px 3px"></span></span></div></div>
+<footer style="padding: 14px 16px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 8px; flex-wrap: wrap"><button class="btn ghost">Discard draft…</button><div style="flex: 1"></div><button class="btn pri">Save PDF…<span class="kbd">{{runKey}}</span></button></footer>
+</section>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "draft": {"editor": "enum", "options": ["New", "Restored"], "default": "New"}, "$preview": {"width": 1280, "height": 800}}'>
+class Component extends DCLogic {
+renderVals() {
+const win = (this.props.platform ?? 'macOS') === 'Windows';
+const light = (this.props.theme ?? 'dark') === 'light';
+const base = { themeClass: light ? 'tb light' : 'tb dark', findKey: win ? 'Ctrl+K' : '⌘K', settingsKey: win ? 'Ctrl+,' : '⌘,', openKey: win ? 'Ctrl+O' : '⌘O', runKey: win ? 'Ctrl+Enter' : '⌘↵', mod: win ? 'Ctrl' : '⌘', reveal: win ? 'Show in File Explorer' : 'Show in Finder', docsDir: win ? 'C:\\Users\\Asha\\Documents' : '~/Documents' };
+const r = (this.props.draft ?? 'New') === 'Restored';
+const extra = { restored: r, saved: r ? 'Draft restored' : 'Draft saved on this computer, just now' };
+return Object.assign(base, extra);
+}
+}
+</script>
+</body>
+</html>

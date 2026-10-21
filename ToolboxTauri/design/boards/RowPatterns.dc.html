@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Result row patterns</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+.tb{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;font-size:13px;line-height:1.45;color:var(--fg);background:var(--bg);-webkit-font-smoothing:antialiased}
+.tb.dark{--bg:#0a0a0a;--side:#111111;--panel:#0f0f0f;--raise:#1c1c1c;--fg:#fafafa;--mut:#a3a3a3;--faint:#8a8a8a;--line:rgba(255,255,255,.08);--line2:rgba(255,255,255,.16);--sel:#262626;--pri:#ebebeb;--prifg:#171717;--bad:#ff6b6b;--warn:#f2b552;--ring:#a3a3a3}
+.tb.light{--bg:#ffffff;--side:#f7f7f7;--panel:#fcfcfc;--raise:#f2f2f2;--fg:#0a0a0a;--mut:#525252;--faint:#666666;--line:#e8e8e8;--line2:#d4d4d4;--sel:#ebebeb;--pri:#171717;--prifg:#fafafa;--bad:#c10007;--warn:#9a5800;--ring:#525252}
+.tb button,.tb input{font:inherit;color:inherit}
+.btn{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 9px;font-size:12px;border-radius:7px;border:1px solid var(--line2);background:var(--raise);color:var(--fg);font-weight:500;cursor:pointer;white-space:nowrap;box-sizing:border-box}
+.btn.ghost{background:transparent;border-color:transparent}
+.field{height:26px;border-radius:7px;border:1px solid var(--line2);background:var(--bg);padding:0 8px;width:180px;box-sizing:border-box;font-size:12px}
+.hint{font-size:12px;color:var(--mut)}
+.rrow{display:grid;grid-template-columns:20px minmax(0,1fr) 110px minmax(0,340px);gap:12px;align-items:center;padding:9px 0;border-bottom:1px solid var(--line);min-height:36px}
+.sec{font-size:12px;font-weight:600;color:var(--faint);padding:22px 0 6px;border-bottom:1px solid var(--line2)}
+svg.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.tb :focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+</style>
+</helmet>
+<div class="{{themeClass}}" style="min-height: 1120px; padding: 32px 48px; box-sizing: border-box">
+<div style="max-width: 1180px">
+<h1 style="margin: 0; font-size: 17px; font-weight: 600">Result rows</h1>
+<p class="hint" style="margin: 6px 0 0; max-width: 680px">Every view uses this one row. The icon shape carries the state, colour only reinforces it. The detail line says what happened and what to do next. Actions appear only when they can work.</p>
+<sc-for list="{{sections}}" as="sec" hint-placeholder-count="4">
+<div class="sec">{{sec.title}}</div>
+<ul style="list-style: none; margin: 0; padding: 0">
+<sc-for list="{{sec.rows}}" as="r" hint-placeholder-count="4">
+<li class="rrow">
+<span style="color: {{r.color}}; display: flex">
+<sc-if value="{{r.isOk}}" hint-placeholder-val="{{ true }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l5 5L20 7"></path></svg></sc-if>
+<sc-if value="{{r.isWarn}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9.5 17h-19z"></path><path d="M12 10v4M12 17.5v.01"></path></svg></sc-if>
+<sc-if value="{{r.isSkip}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M8.5 12h7"></path></svg></sc-if>
+<sc-if value="{{r.isFail}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M9 9l6 6M15 9l-6 6"></path></svg></sc-if>
+</span>
+<span style="min-width: 0; display: flex; flex-direction: column"><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{r.name}}</span><span class="hint">{{r.detail}}</span></span>
+<span style="color: {{r.color}}">{{r.state}}</span>
+<span style="display: flex; gap: 4px; justify-content: flex-end; flex-wrap: wrap; align-items: center">
+<sc-if value="{{r.hasField}}" hint-placeholder-val="{{ false }}"><input class="field" type="password" aria-label="Password for {{r.name}}" placeholder="Password for this file"></sc-if>
+<sc-for list="{{r.actions}}" as="a" hint-placeholder-count="2"><button class="btn {{a.cls}}">{{a.label}}</button></sc-for>
+</span>
+</li>
+</sc-for>
+</ul>
+</sc-for>
+<div class="sec">Before a run</div>
+<div style="display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; margin-top: 10px; border: 1px solid var(--line2); border-radius: 8px; max-width: 680px">
+<span style="color: var(--bad); display: flex; padding-top: 1px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M9 9l6 6M15 9l-6 6"></path></svg></span>
+<span style="display: flex; flex-direction: column; gap: 2px; flex: 1"><strong style="font-weight: 600">Couldn't open plan-scan.pdf</strong><span class="hint">It's in use by another app or you don't have permission to read it. Close it elsewhere, then add it again. The other files are unaffected.</span></span>
+<button class="btn ghost">Dismiss</button>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark"},"platform":{"editor":"enum","options":["macOS","Windows"],"default":"macOS"},"$preview":{"width":1280,"height":1120}}'>
+class Component extends DCLogic {
+renderVals() {
+const win = (this.props.platform ?? 'macOS') === 'Windows';
+const light = (this.props.theme ?? 'dark') === 'light';
+const reveal = win ? 'Show in File Explorer' : 'Show in Finder';
+const ghost = (l) => ({ label: l, cls: 'ghost' });
+const btn = (l) => ({ label: l, cls: '' });
+const out = [ghost('Open'), ghost(reveal)];
+const mk = (k, name, state, detail, actions, extra) => Object.assign({
+name: name, state: state, detail: detail, actions: actions || [],
+isOk: k === 'ok', isWarn: k === 'warn', isSkip: k === 'skip', isFail: k === 'fail',
+color: k === 'ok' ? 'var(--fg)' : k === 'warn' ? 'var(--warn)' : k === 'skip' ? 'var(--mut)' : 'var(--bad)',
+hasField: false
+}, extra || {});
+const sections = [
+{ title: 'Succeeded', rows: [
+mk('ok', 'lease-agreement.pdf', 'Protected', 'lease-agreement-protected.pdf', out),
+mk('ok', 'annual-report.pdf', 'Split', '12 files, annual-report-part-01.pdf to annual-report-part-12.pdf', [ghost('Open first'), ghost(reveal)]),
+mk('ok', 'brochure.pdf', 'Converted', '24 images in the folder brochure-pages', [ghost('Open folder')])
+] },
+{ title: 'Succeeded with a warning', rows: [
+mk('warn', 'vendor-nda-acme.pdf', 'Protected', 'The digital signature was removed, because protecting a file changes it.', out),
+mk('warn', 'menu-spring.docx', 'Converted', 'The font Brandon Grotesque wasn’t available, so Helvetica was used.', out),
+mk('warn', 'statement-q3.pdf', 'Protected', 'Saved as statement-q3-protected-1.pdf. Renamed to avoid replacing an existing file.', out)
+] },
+{ title: 'Skipped', rows: [
+mk('skip', 'invoice-0425.pdf', 'Skipped', 'Has no restrictions to remove. Use Remove Password if it asks for one when opening.', [btn('Open Remove Password')]),
+mk('skip', 'tenancy-addendum.pdf', 'Skipped', 'Cancelled before it started', []),
+mk('skip', 'temple-scan.png', 'Unavailable', 'Recognising Gujarati text needs the Indic script pack. Retry would fail the same way.', [btn('Install script pack')])
+] },
+{ title: 'Failed', rows: [
+mk('fail', 'payroll-september.pdf', 'Failed', 'Wrong password. Enter this file’s password and retry.', [btn('Retry')], { hasField: true }),
+mk('fail', 'contract-0081.pdf', 'Failed', 'The output folder is read-only. Nothing was saved.', [btn('Choose output folder')]),
+mk('fail', 'site-photos.zip', 'Failed', 'Larger than the 4 GB limit for one archive. Split it or compress fewer files.', []),
+mk('fail', 'drawings-full-set.pdf', 'Failed', 'Took longer than 5 minutes and was stopped. 3 of 8 parts were saved before it stopped.', [ghost(reveal), btn('Retry')])
+] }
+];
+return { themeClass: light ? 'tb light' : 'tb dark', sections: sections };
+}
+}
+</script>
+</body>
+</html>

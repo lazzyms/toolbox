@@ -78,12 +78,10 @@ pub fn focus(app: &AppHandle) {
     window::focus_main_window(app);
 }
 
+// The frontend decides where a drop goes: into the open tool, or through `open_paths` from home.
 pub fn handle_drop(app: &AppHandle, paths: Vec<std::path::PathBuf>) {
     let paths = paths.into_iter().map(|path| path.to_string_lossy().into_owned()).collect::<Vec<_>>();
-    match activation::parse_external_paths(paths.clone()) {
-        event @ ShellEvent::Files { .. } => dispatch(app, event),
-        _ => dispatch(app, ShellEvent::DroppedFiles { paths }),
-    }
+    dispatch(app, ShellEvent::DroppedFiles { paths });
 }
 
 pub fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {

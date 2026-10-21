@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::kit::common::limits::StoppableHelper;
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming, OutputReservation};
 use crate::kit::contracts::ToolError;
 use super::metadata::{page_bounds, page_rotation};
@@ -50,6 +51,8 @@ pub struct PageSelectionRequest {
 pub struct MergePdfRequest {
     pub paths: Vec<PathBuf>,
     pub output_location: OutputLocation,
+    #[serde(default)]
+    pub output_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -68,6 +71,8 @@ pub struct PdfToImagesRequest {
 pub struct ImagesToPdfRequest {
     pub paths: Vec<PathBuf>,
     pub output_location: OutputLocation,
+    #[serde(default)]
+    pub output_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -76,6 +81,15 @@ pub struct PdfToTextRequest {
     pub paths: Vec<PathBuf>,
     #[serde(default)] pub pages: Option<Vec<usize>>,
     pub output_location: OutputLocation,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComparePdfsRequest {
+    pub paths: Vec<PathBuf>,
+    pub output_location: OutputLocation,
+    #[serde(default)]
+    pub output_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -99,16 +113,16 @@ pub fn merge(request: &MergePdfRequest) -> JobOutcome {
         };
         expected_pages += document.get_pages().len();
     }
-    let output = match OutputNaming::reserve_destination(&first, &request.output_location, "-merged", "pdf") {
+    let output = match OutputNaming::reserve_single_output(request.output_path.as_deref(), &first, &request.output_location, "-merged", "pdf") {
         Ok(output) => output,
         Err(error) => return failure(first, format!("Could not reserve merged PDF output: {error}")),
     };
-    let Some(qpdf) = qpdf() else { return failure(first, "qpdf is required to merge PDFs but was not found.".to_string()); };
-    let result = Command::new(qpdf).arg("--empty").arg("--pages").args(&request.paths).arg("--").arg(output.path()).output();
+    let qpdf = match qpdf() { Ok(qpdf) => qpdf, Err(error) => return JobOutcome::failure(first, ToolError::unavailable(error)) };
+    let result = Command::new(qpdf).arg("--empty").arg("--pages").args(&request.paths).arg("--").arg(output.path()).output_until_stopped();
     match result {
         Ok(result) if result.status.success() => match Document::load(output.path()) {
             Ok(document) if document.get_pages().len() == expected_pages => match output.publish() {
-                Ok(path) => JobOutcome { input_path: first, output_paths: vec![path], detail: format!("{} PDFs merged in input order", request.paths.len()), failure: None },
+                Ok(path) => JobOutcome::succeeded(first, vec![path], format!("{} PDFs merged in input order", request.paths.len())),
                 Err(error) => failure(first, format!("Could not publish merged PDF output: {error}")),
             },
             Ok(document) => failure(first, format!("Merged PDF page count mismatch: expected {expected_pages}, got {}.", document.get_pages().len())),
@@ -127,7 +141,7 @@ pub fn split(request: &PageSelectionRequest, input: PathBuf) -> JobOutcome {
         return failure(input, error);
     }
     let location = &request.output_location;
-    let Some(qpdf) = qpdf() else { return failure(input, "qpdf is required to split PDFs but was not found.".to_string()); };
+    let qpdf = match qpdf() { Ok(qpdf) => qpdf, Err(error) => return JobOutcome::failure(input, ToolError::unavailable(error)) };
     let workspace = match SplitWorkspace::new() {
         Ok(workspace) => workspace,
         Err(error) => return failure(input, format!("Could not create a private split workspace: {error}")),
@@ -144,7 +158,7 @@ pub fn split(request: &PageSelectionRequest, input: PathBuf) -> JobOutcome {
             } else {
                 "PDF split".to_string()
             };
-            JobOutcome { input_path: input, output_paths: outputs, detail, failure: None }
+            JobOutcome::succeeded(input, outputs, detail)
         }
         Err(outcome) => outcome,
     }
@@ -179,7 +193,7 @@ fn generate_split_outputs(request: &PageSelectionRequest, input: &Path, qpdf: &P
     if request.split_mode.as_deref() == Some("chunks") {
         let Some(size) = request.chunk_size.filter(|size| *size > 0) else { return Err("Chunk size must be greater than zero.".to_string()); };
         let output = workspace.path().join(format!("{stem}-split.pdf"));
-        let result = Command::new(qpdf).arg(input).arg(format!("--split-pages={size}")).arg(&output).output().map_err(|error| format!("Could not run qpdf: {error}"))?;
+        let result = Command::new(qpdf).arg(input).arg(format!("--split-pages={size}")).arg(&output).output_until_stopped().map_err(|error| format!("Could not run qpdf: {error}"))?;
         if !result.status.success() { return Err(stderr(result, "qpdf failed to split PDF chunks.")); }
         return collect_split_outputs(workspace.path(), "qpdf reported success but produced no chunk files.");
     }
@@ -189,7 +203,7 @@ fn generate_split_outputs(request: &PageSelectionRequest, input: &Path, qpdf: &P
         let mut outputs = Vec::with_capacity(ranges.len());
         for (number, (start, end)) in ranges.into_iter().enumerate() {
             let output = workspace.path().join(format!("{stem}-split-{number}.pdf"));
-            let result = Command::new(qpdf).arg(input).arg("--pages").arg(input).arg(format!("{start}-{end}")).arg("--").arg(&output).output().map_err(|error| format!("Could not run qpdf: {error}"))?;
+            let result = Command::new(qpdf).arg(input).arg("--pages").arg(input).arg(format!("{start}-{end}")).arg("--").arg(&output).output_until_stopped().map_err(|error| format!("Could not run qpdf: {error}"))?;
             if !result.status.success() { return Err(stderr(result, "qpdf failed to split the selected ranges.")); }
             if !output.is_file() { return Err("qpdf reported success but produced no range file.".to_string()); }
             outputs.push(output);
@@ -197,7 +211,7 @@ fn generate_split_outputs(request: &PageSelectionRequest, input: &Path, qpdf: &P
         return Ok(outputs);
     }
     let pattern = workspace.path().join(format!("{stem}-split-page-%d.pdf"));
-    let result = Command::new(qpdf).arg(input).arg("--split-pages").arg(&pattern).output().map_err(|error| format!("Could not run qpdf: {error}"))?;
+    let result = Command::new(qpdf).arg(input).arg("--split-pages").arg(&pattern).output_until_stopped().map_err(|error| format!("Could not run qpdf: {error}"))?;
     if !result.status.success() { return Err(stderr(result, "qpdf failed to split the PDF.")); }
     collect_split_outputs(workspace.path(), "qpdf reported success but produced no split files.")
 }
@@ -301,7 +315,7 @@ pub fn to_images(request: &PdfToImagesRequest, input: PathBuf) -> JobOutcome {
         let last = match last.trim().parse::<usize>() { Ok(page) if page >= first => page, _ => return failure(input, "Page range must be ascending and use positive page numbers.".to_string()) };
         command.arg("-f").arg(first.to_string()).arg("-l").arg(last.to_string());
     }
-    let output = command.arg(&input).arg(&prefix).output();
+    let output = command.arg(&input).arg(&prefix).output_until_stopped();
     match output {
         Ok(result) if result.status.success() => {
             let mut outputs = fs::read_dir(prefix.parent().unwrap_or_else(|| std::path::Path::new("."))).ok().into_iter().flatten().filter_map(Result::ok).map(|entry| entry.path()).filter(|path| path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with(prefix.file_name().and_then(|stem| stem.to_str()).unwrap_or("")) && path.extension().is_some_and(|ext| ext == extension))).collect::<Vec<_>>();
@@ -368,7 +382,7 @@ fn render_selected_pages(
             .arg("-singlefile")
             .arg(input)
             .arg(&page_prefix)
-            .output();
+            .output_until_stopped();
         match result {
             Ok(result) if result.status.success() && output.exists() => outputs.push(output),
             Ok(result) => return Err(stderr(result, "pdftoppm failed to render the selected PDF page.")),
@@ -400,7 +414,7 @@ fn materialize_rendered_images(input: &Path, location: &OutputLocation, generate
         };
         outputs.push(destination);
     }
-    JobOutcome { input_path: input.to_path_buf(), output_paths: outputs, detail: "PDF rendered to images".to_string(), failure: None }
+    JobOutcome::succeeded(input.to_path_buf(), outputs, "PDF rendered to images")
 }
 
 pub fn to_text(request: &PdfToTextRequest, input: PathBuf) -> JobOutcome {
@@ -421,7 +435,7 @@ pub fn to_text(request: &PdfToTextRequest, input: PathBuf) -> JobOutcome {
             if text.is_empty() { return failure(input, "PDF contains no selectable text; scanned PDFs require OCR.".to_string()); }
             match fs::write(output.path(), text) {
                 Ok(_) => match output.publish() {
-                    Ok(path) => JobOutcome { input_path: input, output_paths: vec![path], detail: "PDF text extracted in page order".to_string(), failure: None },
+                    Ok(path) => JobOutcome::succeeded(input, vec![path], "PDF text extracted in page order"),
                     Err(error) => failure(input, format!("Could not publish text output: {error}")),
                 },
                 Err(error) => failure(input, format!("Could not write text output: {error}")),
@@ -476,7 +490,7 @@ fn publish_extracted_images(input: PathBuf, reservations: Vec<OutputReservation>
             Err(error) => return JobOutcome::failure_with_outputs(input, outputs, ToolError::processing(format!("Could not publish extracted image: {error}"))),
         }
     }
-    JobOutcome { input_path: input, output_paths: outputs, detail: "Embedded JPEG images extracted without recompression".to_string(), failure: None }
+    JobOutcome::succeeded(input, outputs, "Embedded JPEG images extracted without recompression")
 }
 
 fn extraction_failure(input: &Path, reservations: Vec<OutputReservation>, message: impl Into<String>) -> JobOutcome {
@@ -497,7 +511,7 @@ fn selected_pdf_pages(document: &Document, requested: Option<&Vec<usize>>) -> Re
 
 pub fn images_to_pdf(request: &ImagesToPdfRequest) -> JobOutcome {
     let Some(first) = request.paths.first().cloned() else { return failure(PathBuf::new(), "Select at least one image.".to_string()); };
-    let output = match OutputNaming::reserve_destination(&first, &request.output_location, "-combined", "pdf") {
+    let output = match OutputNaming::reserve_single_output(request.output_path.as_deref(), &first, &request.output_location, "-combined", "pdf") {
         Ok(output) => output,
         Err(error) => return failure(first, format!("Could not reserve combined PDF output: {error}")),
     };
@@ -516,7 +530,7 @@ pub fn images_to_pdf(request: &ImagesToPdfRequest) -> JobOutcome {
     document.trailer.set("Root", catalog_id);
     match document.save(output.path()) {
         Ok(_) => match output.publish() {
-            Ok(path) => JobOutcome { input_path: first, output_paths: vec![path], detail: "Images combined into PDF".to_string(), failure: None },
+            Ok(path) => JobOutcome::succeeded(first, vec![path], "Images combined into PDF"),
             Err(error) => failure(first, format!("Could not publish combined PDF: {error}")),
         },
         Err(error) => failure(first, format!("Save failed: {error}")),
@@ -528,7 +542,7 @@ fn image_as_jpeg(path: &PathBuf) -> Result<(Vec<u8>, u32, u32), String> {
     if matches!(extension.as_str(), "gif" | "tif" | "tiff") { return Err("Animated or multi-frame image inputs are not supported for image-to-PDF conversion.".to_string()); }
     let image = if matches!(extension.as_str(), "heic" | "heif") {
         let converted = std::env::temp_dir().join(format!("toolbox_heic_{}_{}.jpg", std::process::id(), path.file_name().and_then(|name| name.to_str()).unwrap_or("input")));
-        let result = Command::new("sips").arg("-s").arg("format").arg("jpeg").arg(path).arg("--out").arg(&converted).output()
+        let result = Command::new("sips").arg("-s").arg("format").arg("jpeg").arg(path).arg("--out").arg(&converted).output_until_stopped()
             .map_err(|error| format!("Could not run the HEIC decoder: {error}"))?;
         if !result.status.success() { return Err(stderr(result, "HEIC decoding is unavailable on this system.")); }
         let decoded = image::open(&converted).map_err(|error| format!("Could not decode HEIC image: {error}"));
@@ -563,18 +577,18 @@ pub fn watermark(request: &PageOverlayRequest, input: PathBuf) -> JobOutcome {
 pub fn compress(request: &CompressPdfRequest, input: PathBuf) -> JobOutcome {
     let source = match load_existing_document_for_mutation(&input) { Ok(document) => document, Err(error) => return failure(input, error) };
     let page_count = source.get_pages().len();
-    let Some(qpdf) = qpdf() else { return failure(input, "qpdf is required to compress PDFs but was not found. Set TOOLBOX_QPDF_PATH or add qpdf to PATH.".to_string()); };
+    let qpdf = match qpdf() { Ok(qpdf) => qpdf, Err(error) => return JobOutcome::failure(input, ToolError::unavailable(error)) };
     let output = match OutputNaming::reserve_destination(&input, &request.output_location, "-compressed", "pdf") {
         Ok(output) => output,
         Err(error) => return failure(input, format!("Could not reserve compressed PDF output: {error}")),
     };
     let quality = request.quality.clamp(1, 100);
     let level = ((100_u16.saturating_sub(quality as u16) * 8) / 99 + 1).to_string();
-    let result = Command::new(qpdf).arg("--object-streams=generate").arg("--stream-data=compress").arg("--recompress-flate").arg(format!("--compression-level={level}")).arg(&input).arg(output.path()).output();
+    let result = Command::new(qpdf).arg("--object-streams=generate").arg("--stream-data=compress").arg("--recompress-flate").arg(format!("--compression-level={level}")).arg(&input).arg(output.path()).output_until_stopped();
     match result {
         Ok(result) if result.status.success() => match Document::load(output.path()) {
             Ok(verified) if verified.get_pages().len() == page_count => match output.publish() {
-                Ok(path) => JobOutcome { input_path: input, output_paths: vec![path], detail: format!("PDF compressed at quality {quality}"), failure: None },
+                Ok(path) => JobOutcome::succeeded(input, vec![path], format!("PDF compressed at quality {quality}")),
                 Err(error) => failure(input, format!("Could not publish compressed PDF: {error}")),
             },
             Ok(_) => failure(input, "Compressed PDF changed its page count.".to_string()),
@@ -611,7 +625,7 @@ pub fn rotate(request: &RotatePdfRequest, input: PathBuf) -> JobOutcome {
 }
 
 pub fn repair(request: &PdfToTextRequest, input: PathBuf) -> JobOutcome {
-    let Some(qpdf) = qpdf() else { return failure(input, "qpdf is required to repair PDFs but was not found.".to_string()); };
+    let qpdf = match qpdf() { Ok(qpdf) => qpdf, Err(error) => return JobOutcome::failure(input, ToolError::unavailable(error)) };
     let output = match OutputNaming::reserve_destination(&input, &request.output_location, "-repaired", "pdf") {
         Ok(output) => output,
         Err(error) => return failure(input, format!("Could not reserve repaired PDF output: {error}")),
@@ -625,7 +639,7 @@ pub fn repair(request: &PdfToTextRequest, input: PathBuf) -> JobOutcome {
     };
     match Document::load(output.path()) {
         Ok(document) if !document.get_pages().is_empty() => match output.publish() {
-            Ok(path) => JobOutcome { input_path: input, output_paths: vec![path], detail: detail.to_string(), failure: None },
+            Ok(path) => JobOutcome::succeeded(input, vec![path], detail),
             Err(error) => failure(input, format!("Could not publish repaired PDF: {error}")),
         },
         Ok(_) => failure(input, "The repaired PDF has no readable pages.".to_string()),
@@ -634,7 +648,7 @@ pub fn repair(request: &PdfToTextRequest, input: PathBuf) -> JobOutcome {
 }
 
 /// Line-level differences between two PDFs' selectable text, page by page, written as a text report.
-pub fn compare(request: &PdfToTextRequest) -> JobOutcome {
+pub fn compare(request: &ComparePdfsRequest) -> JobOutcome {
     let [first, second] = request.paths.as_slice() else {
         return failure(request.paths.first().cloned().unwrap_or_default(), "Select exactly two PDFs to compare.".to_string());
     };
@@ -658,13 +672,13 @@ pub fn compare(request: &PdfToTextRequest) -> JobOutcome {
         report.push_str(&format!("\nPage {}\n{}\n", index + 1, section.join("\n")));
     }
     let detail = if changed_pages == 0 { report.push_str("\nNo text differences found.\n"); "No text differences found".to_string() } else { format!("{changed_pages} page(s) with differences") };
-    let output = match OutputNaming::reserve_destination(first, &request.output_location, "-comparison", "txt") {
+    let output = match OutputNaming::reserve_single_output(request.output_path.as_deref(), first, &request.output_location, "-comparison", "txt") {
         Ok(output) => output,
         Err(error) => return failure(first.clone(), format!("Could not reserve comparison report: {error}")),
     };
     if let Err(error) = fs::write(output.path(), report) { return failure(first.clone(), format!("Could not write comparison report: {error}")); }
     match output.publish() {
-        Ok(path) => JobOutcome { input_path: first.clone(), output_paths: vec![path], detail, failure: None },
+        Ok(path) => JobOutcome::succeeded(first.clone(), vec![path], detail),
         Err(error) => failure(first.clone(), format!("Could not publish comparison report: {error}")),
     }
 }
@@ -756,7 +770,7 @@ fn parse_page_number(value: &str) -> Result<usize, String> {
 fn save(mut document: Document, input: PathBuf, output: OutputReservation, detail: &str) -> JobOutcome {
     match document.save(output.path()) {
         Ok(_) => match output.publish() {
-            Ok(path) => JobOutcome { input_path: input, output_paths: vec![path], detail: detail.to_string(), failure: None },
+            Ok(path) => JobOutcome::succeeded(input, vec![path], detail.to_string()),
             Err(error) => failure(input, format!("Could not publish PDF output: {error}")),
         },
         Err(error) => failure(input, format!("Save failed: {error}")),
@@ -831,7 +845,7 @@ where F: Fn(usize, OverlayPageGeometry, &str, &str) -> String {
     }
     match document.save(output.path()) {
         Ok(_) => match output.publish() {
-            Ok(path) => JobOutcome { input_path: input, output_paths: vec![path], detail: "PDF saved".to_string(), failure: None },
+            Ok(path) => JobOutcome::succeeded(input, vec![path], "PDF saved"),
             Err(error) => failure(input, format!("Could not publish PDF output: {error}")),
         },
         Err(error) => failure(input, format!("Save failed: {error}")),
@@ -879,7 +893,7 @@ fn watermark_image(request: &PageOverlayRequest, input: PathBuf, logo: &PathBuf)
     }
     match document.save(output.path()) {
         Ok(_) => match output.publish() {
-            Ok(path) => JobOutcome { input_path: input, output_paths: vec![path], detail: "PDF image watermark applied".to_string(), failure: None },
+            Ok(path) => JobOutcome::succeeded(input, vec![path], "PDF image watermark applied"),
             Err(error) => failure(input, format!("Could not publish watermarked PDF: {error}")),
         },
         Err(error) => failure(input, format!("Save failed: {error}")),
@@ -901,7 +915,7 @@ fn load_existing_document_for_mutation(input: &Path) -> Result<Document, String>
 }
 
 fn escape(text: &str) -> String { text.replace('\\', "\\\\").replace('(', "\\(").replace(')', "\\)") }
-fn qpdf() -> Option<PathBuf> { super::find_qpdf() }
+fn qpdf() -> Result<PathBuf, String> { crate::kit::resources::resolve_helper(&crate::kit::resources::QPDF) }
 pub(super) fn pdftoppm() -> Option<PathBuf> { tool("TOOLBOX_PDFTOPPM_PATH", "pdftoppm") }
 fn tool(variable: &str, command: &str) -> Option<PathBuf> {
     std::env::var_os(variable).map(PathBuf::from).filter(|path| !path.as_os_str().is_empty() && path.is_file())
@@ -1077,8 +1091,8 @@ mod tests {
                 font_size: None, output_location: OutputLocation::CustomFolder(output),
             };
             let outcome = if case == "numbers" { add_page_numbers(&request, input.clone()) } else { watermark(&request, input.clone()) };
-            assert!(outcome.failure.is_none(), "{case}: {:?}", outcome.failure);
-            let output_document = Document::load(outcome.output_paths.first().unwrap()).unwrap();
+            assert!(outcome.error().is_none(), "{case}: {:?}", outcome.error());
+            let output_document = Document::load(outcome.output_paths().first().unwrap()).unwrap();
             for page_id in output_document.get_pages().values().copied() {
                 let page = output_document.get_dictionary(page_id).unwrap();
                 let resources = page.get(b"Resources").unwrap().as_dict().unwrap();
@@ -1116,8 +1130,8 @@ mod tests {
                 font_size: None, output_location: OutputLocation::CustomFolder(output),
             };
             let outcome = if case == "numbers" { add_page_numbers(&request, input.clone()) } else { watermark(&request, input.clone()) };
-            assert!(outcome.failure.is_none(), "{case}: {:?}", outcome.failure);
-            let output_document = Document::load(outcome.output_paths.first().unwrap()).unwrap();
+            assert!(outcome.error().is_none(), "{case}: {:?}", outcome.error());
+            let output_document = Document::load(outcome.output_paths().first().unwrap()).unwrap();
             for page_id in output_document.get_pages().values().copied() {
                 let page = output_document.get_dictionary(page_id).unwrap();
                 let resources = page.get(b"Resources").unwrap().as_dict().unwrap();
@@ -1156,8 +1170,8 @@ mod tests {
             position: Some("bottom-right".into()), logo_path: None, pages: None,
             start_number: None, font_size: None, output_location: OutputLocation::CustomFolder(output.clone()),
         }, input.clone());
-        assert!(numbered.failure.is_none(), "page numbers failed: {:?}", numbered.failure);
-        let numbered_document = Document::load(numbered.output_paths.first().unwrap()).unwrap();
+        assert!(numbered.error().is_none(), "page numbers failed: {:?}", numbered.error());
+        let numbered_document = Document::load(numbered.output_paths().first().unwrap()).unwrap();
         let numbered_page = numbered_document.get_pages().values().next().copied().unwrap();
         let numbered_content = String::from_utf8_lossy(&numbered_document.get_page_content(numbered_page)).into_owned();
         assert!(numbered_content.contains("226 300 Td"), "number coordinates: {numbered_content}");
@@ -1171,13 +1185,13 @@ mod tests {
             position: Some("bottom-right".into()), logo_path: Some(logo), pages: None,
             start_number: None, font_size: None, output_location: OutputLocation::CustomFolder(output),
         }, input.clone());
-        assert!(watermarked.failure.is_none(), "logo watermark failed: {:?}", watermarked.failure);
-        let watermarked_document = Document::load(watermarked.output_paths.first().unwrap()).unwrap();
+        assert!(watermarked.error().is_none(), "logo watermark failed: {:?}", watermarked.error());
+        let watermarked_document = Document::load(watermarked.output_paths().first().unwrap()).unwrap();
         let watermarked_page = watermarked_document.get_pages().values().next().copied().unwrap();
         let watermarked_content = String::from_utf8_lossy(&watermarked_document.get_page_content(watermarked_page)).into_owned();
         assert!(watermarked_content.contains("40 0 0 30 186 180 cm"), "logo coordinates: {watermarked_content}");
 
-        for output in numbered.output_paths.into_iter().chain(watermarked.output_paths) { let _ = fs::remove_file(output); }
+        for output in numbered.output_paths().into_iter().chain(watermarked.output_paths()) { let _ = fs::remove_file(output); }
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1228,8 +1242,8 @@ mod tests {
                     }
                     _ => unreachable!(),
                 };
-                assert!(outcome.failure.is_some(), "{kind} {operation}: {:?}", outcome.failure);
-                assert!(outcome.output_paths.is_empty());
+                assert!(outcome.error().is_some(), "{kind} {operation}: {:?}", outcome.error());
+                assert!(outcome.output_paths().is_empty());
                 assert_eq!(fs::read_dir(output).unwrap().count(), 0, "{kind} {operation}");
                 fs::remove_dir_all(root).unwrap();
             }
@@ -1241,7 +1255,7 @@ mod tests {
     fn pdf_to_images_keeps_twelve_pages_in_numeric_order() {
         use std::os::unix::fs::PermissionsExt;
 
-        let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
+        let _guard = crate::kit::lock_process_env();
         let root = split_fixture_root("numeric-images");
         let input = root.join("document.pdf");
         let output_folder = root.join("outputs");
@@ -1264,9 +1278,9 @@ mod tests {
             Some(value) => std::env::set_var("TOOLBOX_PDFTOPPM_PATH", value),
             None => std::env::remove_var("TOOLBOX_PDFTOPPM_PATH"),
         }
-        assert!(outcome.failure.is_none(), "numeric image export failed: {:?}", outcome.failure);
-        assert_eq!(outcome.output_paths.len(), 12);
-        for (index, output) in outcome.output_paths.iter().enumerate() {
+        assert!(outcome.error().is_none(), "numeric image export failed: {:?}", outcome.error());
+        assert_eq!(outcome.output_paths().len(), 12);
+        for (index, output) in outcome.output_paths().iter().enumerate() {
             assert_eq!(output.file_stem().unwrap().to_str().unwrap(), format!("document-images-{}", index + 1));
             assert_eq!(fs::read_to_string(output).unwrap(), format!("page-{}", index + 1));
         }
@@ -1304,8 +1318,8 @@ mod tests {
         image_extraction_fixture(&input);
         let outcome=extract_images(&PdfToTextRequest { paths:vec![input.clone()], pages:None, output_location:OutputLocation::AlongsideInput },input.clone());
 
-        assert!(outcome.failure.is_some(),"expected unsupported image filter to fail");
-        assert!(outcome.output_paths.is_empty());
+        assert!(outcome.error().is_some(),"expected unsupported image filter to fail");
+        assert!(outcome.output_paths().is_empty());
         assert_eq!(fs::read_dir(&temp).unwrap().count(),1);
         assert!(!temp.join("source-image-1-0.jpg").exists());
         fs::remove_dir_all(temp).unwrap();
@@ -1324,7 +1338,7 @@ mod tests {
 
         let outcome=extraction_failure(&input,vec![reservation],"extraction stopped");
 
-        assert!(outcome.failure.is_some());
+        assert!(outcome.error().is_some());
         assert_eq!(fs::read(destination).unwrap(),b"competing replacement");
         fs::remove_dir_all(temp).unwrap();
     }
@@ -1350,8 +1364,8 @@ mod tests {
 
         let outcome = publish_extracted_images(input.clone(), vec![first, second]);
 
-        assert!(outcome.failure.is_some());
-        assert_eq!(outcome.output_paths, vec![first_destination.clone()]);
+        assert!(outcome.error().is_some());
+        assert_eq!(outcome.output_paths(), vec![first_destination.clone()]);
         assert_eq!(fs::read(&first_destination).unwrap(), b"first extracted image");
         assert_eq!(fs::read(&second_destination).unwrap(), b"competing replacement");
         fs::remove_dir_all(temp).unwrap();
@@ -1373,10 +1387,10 @@ mod tests {
 
         let outcome = materialize_rendered_images(&input, &OutputLocation::CustomFolder(output_folder.clone()), &[first, invalid]);
 
-        assert!(outcome.failure.is_some());
-        assert_eq!(outcome.output_paths.len(), 1);
-        assert!(outcome.output_paths[0].is_file());
-        assert_eq!(fs::read(&outcome.output_paths[0]).unwrap(), b"rendered image");
+        assert!(outcome.error().is_some());
+        assert_eq!(outcome.output_paths().len(), 1);
+        assert!(outcome.output_paths()[0].is_file());
+        assert_eq!(fs::read(&outcome.output_paths()[0]).unwrap(), b"rendered image");
         assert_eq!(fs::read_dir(&output_folder).unwrap().count(), 1);
         fs::remove_dir_all(temp).unwrap();
     }
@@ -1397,10 +1411,10 @@ mod tests {
 
         let outcome = materialize_split_outputs(&input, &OutputLocation::CustomFolder(output_folder.clone()), &[first, invalid]).unwrap_err();
 
-        assert!(outcome.failure.is_some());
-        assert_eq!(outcome.output_paths.len(), 1);
-        assert!(outcome.output_paths[0].is_file());
-        assert_eq!(fs::read(&outcome.output_paths[0]).unwrap(), b"first split");
+        assert!(outcome.error().is_some());
+        assert_eq!(outcome.output_paths().len(), 1);
+        assert!(outcome.output_paths()[0].is_file());
+        assert_eq!(fs::read(&outcome.output_paths()[0]).unwrap(), b"first split");
         assert_eq!(fs::read_dir(&output_folder).unwrap().count(), 1);
         fs::remove_dir_all(temp).unwrap();
     }
@@ -1421,7 +1435,7 @@ mod tests {
 
     fn run_split_with_sentinel(name: &str, split_mode: &str, page_ranges: Option<&str>, chunk_size: Option<usize>, sentinel_name: &str, expected_count: usize) {
         let _lock = SPLIT_TEST_LOCK.lock().unwrap();
-        if qpdf().is_none() {
+        if qpdf().is_err() {
             eprintln!("skipping: qpdf not available");
             return;
         }
@@ -1437,10 +1451,10 @@ mod tests {
 
         let outcome = split(&split_request(OutputLocation::CustomFolder(output_folder.clone()), split_mode, page_ranges, chunk_size), input.clone());
 
-        assert!(outcome.failure.is_none(), "split failed: {:?}", outcome.failure);
+        assert!(outcome.error().is_none(), "split failed: {:?}", outcome.error());
         assert_eq!(outcome.input_path, input);
-        assert_split_outputs(&outcome.output_paths, expected_count);
-        assert!(!outcome.output_paths.contains(&sentinel));
+        assert_split_outputs(&outcome.output_paths(), expected_count);
+        assert!(!outcome.output_paths().contains(&sentinel));
         assert_eq!(fs::read(&sentinel).unwrap(), sentinel_bytes);
         let temp_after = split_temp_entries();
         assert_eq!(temp_after, temp_before, "split temporary directories were not cleaned");
@@ -1469,14 +1483,14 @@ mod tests {
         let outcome = split(&split_request(OutputLocation::AlongsideInput, "ranges", Some("  "), None), input.clone());
 
         assert_eq!(outcome.input_path, input);
-        assert!(matches!(outcome.failure.as_ref().map(|error| &error.kind), Some(crate::kit::contracts::ErrorKind::InvalidInput)));
-        assert!(outcome.output_paths.is_empty());
+        assert!(matches!(outcome.error().map(|error| &error.kind), Some(crate::kit::contracts::ErrorKind::InvalidInput)));
+        assert!(outcome.output_paths().is_empty());
     }
 
     #[test]
     fn split_failure_leaves_no_partial_destinations() {
         let _lock = SPLIT_TEST_LOCK.lock().unwrap();
-        if qpdf().is_none() {
+        if qpdf().is_err() {
             eprintln!("skipping: qpdf not available");
             return;
         }
@@ -1492,8 +1506,8 @@ mod tests {
         let outcome = split(&split_request(OutputLocation::CustomFolder(output_folder.clone()), "pages", None, None), input.clone());
 
         assert_eq!(outcome.input_path, input);
-        assert!(outcome.failure.is_some());
-        assert!(outcome.output_paths.is_empty());
+        assert!(outcome.error().is_some());
+        assert!(outcome.output_paths().is_empty());
         assert_eq!(fs::read(&sentinel).unwrap(), b"sentinel");
         assert_eq!(fs::read_dir(&output_folder).unwrap().count(), 1);
         assert_eq!(split_temp_entries(), temp_before, "split temporary directories were not cleaned after failure");
@@ -1552,14 +1566,14 @@ mod tests {
             position: Some("bottom-right".to_string()), logo_path: None, pages: None,
             start_number: None, font_size: None, output_location: OutputLocation::AlongsideInput,
         }, input.clone());
-        assert!(numbered.failure.is_none(), "page numbers failed: {:?}", numbered.failure);
+        assert!(numbered.error().is_none(), "page numbers failed: {:?}", numbered.error());
 
         let watermark = watermark(&PageOverlayRequest {
             paths: vec![input.clone()], text: "TEST".to_string(), opacity: 70,
             position: Some("center".to_string()), logo_path: None, pages: None,
             start_number: None, font_size: None, output_location: OutputLocation::AlongsideInput,
         }, input.clone());
-        assert!(watermark.failure.is_none(), "watermark failed: {:?}", watermark.failure);
+        assert!(watermark.error().is_none(), "watermark failed: {:?}", watermark.error());
 
         let cropped = crate::kit::pdf::editor::crop(&crate::kit::pdf::editor::CropPdfRequest {
             paths: vec![input.clone()],
@@ -1567,9 +1581,9 @@ mod tests {
             scope: crate::kit::pdf::editor::PageScope::All,
             output_location: OutputLocation::AlongsideInput,
         }, input.clone());
-        assert!(cropped.failure.is_none(), "crop failed: {:?}", cropped.failure);
+        assert!(cropped.error().is_none(), "crop failed: {:?}", cropped.error());
 
-        for output in numbered.output_paths.into_iter().chain(watermark.output_paths).chain(cropped.output_paths) {
+        for output in numbered.output_paths().into_iter().chain(watermark.output_paths()).chain(cropped.output_paths()) {
             let _ = std::fs::remove_file(output);
         }
         let _ = std::fs::remove_file(input);
@@ -1605,20 +1619,20 @@ mod tests {
         document.save(&input).unwrap();
 
         let outcome = rotate(&RotatePdfRequest { paths: vec![input.clone()], degrees: 180, pages: Some(vec![0]), output_location: OutputLocation::AlongsideInput }, input.clone());
-        assert!(outcome.failure.is_none(), "{:?}", outcome.failure);
-        let rotated = Document::load(&outcome.output_paths[0]).unwrap();
+        assert!(outcome.error().is_none(), "{:?}", outcome.error());
+        let rotated = Document::load(&outcome.output_paths()[0]).unwrap();
         let pages = rotated.get_pages();
         assert_eq!(page_rotation(&rotated, pages[&1]), 90);
         assert_eq!(page_rotation(&rotated, pages[&2]), 0);
-        assert!(rotate(&RotatePdfRequest { paths: vec![], degrees: 45, pages: None, output_location: OutputLocation::AlongsideInput }, input.clone()).failure.is_some());
-        assert!(rotate(&RotatePdfRequest { paths: vec![], degrees: 90, pages: Some(vec![5]), output_location: OutputLocation::AlongsideInput }, input.clone()).failure.is_some());
-        let _ = fs::remove_file(&outcome.output_paths[0]);
+        assert!(rotate(&RotatePdfRequest { paths: vec![], degrees: 45, pages: None, output_location: OutputLocation::AlongsideInput }, input.clone()).error().is_some());
+        assert!(rotate(&RotatePdfRequest { paths: vec![], degrees: 90, pages: Some(vec![5]), output_location: OutputLocation::AlongsideInput }, input.clone()).error().is_some());
+        let _ = fs::remove_file(&outcome.output_paths()[0]);
         let _ = fs::remove_file(input);
     }
 
     #[test]
     fn repairs_a_pdf_with_a_broken_cross_reference_table() {
-        if qpdf().is_none() { return; }
+        if qpdf().is_err() { return; }
         let input = text_pdf("repair", &["intact text"]);
         let mut bytes = fs::read(&input).unwrap();
         let xref = bytes.windows(4).rposition(|window| window == b"xref").unwrap();
@@ -1627,17 +1641,17 @@ mod tests {
         fs::write(&input, &bytes).unwrap();
 
         let outcome = repair(&PdfToTextRequest { pages: None, paths: vec![input.clone()], output_location: OutputLocation::AlongsideInput }, input.clone());
-        assert!(outcome.failure.is_none(), "{:?}", outcome.failure);
+        assert!(outcome.error().is_none(), "{:?}", outcome.error());
         assert_eq!(outcome.detail, "PDF repaired");
         assert_eq!(fs::read(&input).unwrap(), bytes, "repair must not modify the original");
-        let repaired = Document::load(&outcome.output_paths[0]).unwrap();
+        let repaired = Document::load(&outcome.output_paths()[0]).unwrap();
         assert!(repaired.extract_text(&[1]).unwrap().contains("intact text"));
-        let _ = fs::remove_file(&outcome.output_paths[0]);
+        let _ = fs::remove_file(&outcome.output_paths()[0]);
 
         fs::write(&input, b"not a pdf at all").unwrap();
         let broken = repair(&PdfToTextRequest { pages: None, paths: vec![input.clone()], output_location: OutputLocation::AlongsideInput }, input.clone());
-        assert!(broken.failure.is_some());
-        assert!(broken.output_paths.is_empty());
+        assert!(broken.error().is_some());
+        assert!(broken.output_paths().is_empty());
         let _ = fs::remove_file(input);
     }
 
@@ -1645,16 +1659,16 @@ mod tests {
     fn compares_text_page_by_page() {
         let old = text_pdf("compare_old", &["Title\nPrice 10\nFooter", "Same page"]);
         let new = text_pdf("compare_new", &["Title\nPrice 12\nFooter", "Same page", "Appendix"]);
-        let outcome = compare(&PdfToTextRequest { pages: None, paths: vec![old.clone(), new.clone()], output_location: OutputLocation::AlongsideInput });
-        assert!(outcome.failure.is_none(), "{:?}", outcome.failure);
+        let outcome = compare(&ComparePdfsRequest { paths: vec![old.clone(), new.clone()], output_location: OutputLocation::AlongsideInput, output_path: None });
+        assert!(outcome.error().is_none(), "{:?}", outcome.error());
         assert_eq!(outcome.detail, "2 page(s) with differences");
-        let report = fs::read_to_string(&outcome.output_paths[0]).unwrap();
+        let report = fs::read_to_string(&outcome.output_paths()[0]).unwrap();
         assert!(report.starts_with(&format!("Original: {} (lines marked -)\nNew version: {} (lines marked +)\n", old.file_name().unwrap().to_string_lossy(), new.file_name().unwrap().to_string_lossy())), "{report}");
         assert!(report.contains("Page 1\n- Price 10\n+ Price 12"), "{report}");
         assert!(!report.contains("Page 2"), "{report}");
         assert!(report.contains("Page 3\nOnly in"), "{report}");
-        assert!(compare(&PdfToTextRequest { pages: None, paths: vec![old.clone()], output_location: OutputLocation::AlongsideInput }).failure.is_some());
-        for path in [&outcome.output_paths[0], &old, &new] { let _ = fs::remove_file(path); }
+        assert!(compare(&ComparePdfsRequest { paths: vec![old.clone()], output_location: OutputLocation::AlongsideInput, output_path: None }).error().is_some());
+        for path in [&outcome.output_paths()[0], &old, &new] { let _ = fs::remove_file(path); }
     }
 
     #[test]
@@ -1674,8 +1688,8 @@ mod tests {
             scope: crate::kit::pdf::editor::PageScope::Selected { pages: vec![0] },
             output_location: OutputLocation::AlongsideInput,
         }, input.clone());
-        assert!(outcome.failure.is_none(), "{:?}", outcome.failure);
-        let output = &outcome.output_paths[0];
+        assert!(outcome.error().is_none(), "{:?}", outcome.error());
+        let output = &outcome.output_paths()[0];
         let redacted = Document::load(output).unwrap();
         assert_eq!(redacted.get_pages().len(), 2);
         assert!(!redacted.extract_text(&[1]).unwrap_or_default().contains("SECRET123"));
@@ -1701,8 +1715,8 @@ mod tests {
             scope: crate::kit::pdf::editor::PageScope::Selected { pages: vec![0] },
             output_location: OutputLocation::AlongsideInput,
         }, input.clone());
-        assert!(outcome.failure.is_none(), "{:?}", outcome.failure);
-        let output = &outcome.output_paths[0];
+        assert!(outcome.error().is_none(), "{:?}", outcome.error());
+        let output = &outcome.output_paths()[0];
         let signed = Document::load(output).unwrap();
         let first = signed.extract_text(&[1]).unwrap();
         assert!(first.contains("original text"), "existing content must be kept: {first}");

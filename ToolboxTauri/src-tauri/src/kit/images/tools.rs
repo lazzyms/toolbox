@@ -64,8 +64,6 @@ pub enum ImageEdit {
 pub struct ImageEditPlan {
     pub edits: Vec<ImageEdit>,
     pub output_location: OutputLocation,
-    #[serde(default = "default_edit_suffix")]
-    pub suffix: String,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -81,8 +79,6 @@ pub struct ImageEditExportRequest {
     pub paths: Vec<PathBuf>,
     pub plan: ImageEditPlan,
 }
-
-fn default_edit_suffix() -> String { "-edited".to_string() }
 
 impl ImageEditPlan {
     fn canonicalized(&self) -> Self {
@@ -164,7 +160,7 @@ pub fn export_edit_plan(plan: &ImageEditPlan, input: PathBuf) -> JobOutcome {
         Ok(bytes) => bytes,
         Err(error) => return failure(input, error),
     };
-    let output = match OutputNaming::reserve_destination(&input, &plan.output_location, &plan.suffix, format.extension()) {
+    let output = match OutputNaming::reserve_destination(&input, &plan.output_location, "-edited", format.extension()) {
         Ok(output) => output,
         Err(error) => return failure(input, format!("Could not reserve edited image output: {error}")),
     };
@@ -172,7 +168,7 @@ pub fn export_edit_plan(plan: &ImageEditPlan, input: PathBuf) -> JobOutcome {
         return failure(input, format!("Could not save edited image: {error}"));
     }
     match output.publish() {
-        Ok(path) => JobOutcome { input_path: input, output_paths: vec![path], detail: format!("Applied {} edits in one export.", plan.edits.len()), failure: None },
+        Ok(path) => JobOutcome::succeeded(input, vec![path], format!("Applied {} edits in one export.", plan.edits.len())),
         Err(error) => failure(input, format!("Could not publish edited image: {error}")),
     }
 }
@@ -384,6 +380,8 @@ pub struct GifCreateRequest {
     #[serde(default = "default_gif_delay_ms")] pub frame_delay_ms: u32,
     #[serde(default = "default_gif_loop")] pub loop_forever: bool,
     pub output_location: OutputLocation,
+    #[serde(default)]
+    pub output_path: Option<PathBuf>,
 }
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -398,6 +396,8 @@ pub struct TiffRequest {
     #[serde(default)]
     pub pages: Option<Vec<TiffPageRef>>,
     pub output_location: OutputLocation,
+    #[serde(default)]
+    pub output_path: Option<PathBuf>,
 }
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -687,7 +687,7 @@ pub fn icon_set(request: &IconSetRequest, input: PathBuf) -> JobOutcome {
         "android" => "Android PNG icon set saved.",
         _ => "Custom PNG icon set saved.",
     };
-    JobOutcome { input_path: input, output_paths: outputs, detail: detail.to_string(), failure: None }
+    JobOutcome::succeeded(input, outputs, detail.to_string())
 }
 
 fn write_icns(output: &Path, sizes: &[u32], pngs: &[PathBuf]) -> Result<(), String> {
@@ -737,7 +737,7 @@ fn icon_plan(preset: &str, custom_sizes: &[u32]) -> Result<(&'static str, Vec<u3
 
 pub fn gif_create(request: &GifCreateRequest) -> JobOutcome {
     let Some(input) = request.paths.first().cloned() else { return failure(PathBuf::new(), "Select at least one image.".to_string()); };
-    let (output, file) = match OutputNaming::create_destination(&input, &request.output_location, "-animated", "gif") {
+    let (output, file) = match OutputNaming::create_single_output(request.output_path.as_deref(), &input, &request.output_location, "-animated", "gif") {
         Ok(destination) => destination,
         Err(error) => return failure(input, error.to_string()),
     };
@@ -761,7 +761,7 @@ pub fn gif_create(request: &GifCreateRequest) -> JobOutcome {
     };
     match encode_result {
         Ok(_) => match output.publish() {
-            Ok(path) => JobOutcome { input_path: input, output_paths: vec![path], detail: "GIF saved".to_string(), failure: None },
+            Ok(path) => JobOutcome::succeeded(input, vec![path], "GIF saved"),
             Err(error) => failure(input, format!("Could not publish GIF output: {error}")),
         },
         Err(error) => failure(input, format!("Could not create GIF: {error}")),
@@ -809,7 +809,7 @@ pub fn gif_extract(request: &GifExtractRequest, input: PathBuf) -> JobOutcome {
         Ok(path) => path,
         Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not publish GIF timing manifest: {error}"))),
     });
-    JobOutcome { input_path: input, output_paths: outputs, detail: "GIF frames saved".to_string(), failure: None }
+    JobOutcome::succeeded(input, outputs, "GIF frames saved")
 }
 
 pub fn tiff(request: &TiffRequest) -> JobOutcome {
@@ -856,16 +856,16 @@ pub fn tiff(request: &TiffRequest) -> JobOutcome {
                 Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not publish TIFF page: {error}"))),
             });
         }
-        return JobOutcome { input_path: input, output_paths: outputs, detail: "TIFF pages saved".to_string(), failure: None };
+        return JobOutcome::succeeded(input, outputs, "TIFF pages saved");
     } else {
-        match OutputNaming::reserve_destination(&input, &request.output_location, "-combined", "tiff") {
+        match OutputNaming::reserve_single_output(request.output_path.as_deref(), &input, &request.output_location, "-combined", "tiff") {
             Ok(output) => output,
             Err(error) => return failure(input, format!("Could not reserve combined TIFF output: {error}")),
         }
     };
     if let Err(error) = write_tiff_pages(output.path(), &pages) { return failure(input, format!("Could not combine TIFF pages: {error}")); }
     match output.publish() {
-        Ok(path) => JobOutcome { input_path: input, output_paths: vec![path], detail: "TIFF pages combined".to_string(), failure: None },
+        Ok(path) => JobOutcome::succeeded(input, vec![path], "TIFF pages combined"),
         Err(error) => failure(input, format!("Could not publish combined TIFF: {error}")),
     }
 }
@@ -944,7 +944,7 @@ pub fn strip_metadata(request: &MetadataRequest, input: PathBuf) -> JobOutcome {
     if let Err(error) = image.save_with_format(output.path(), format) { return failure(input, format!("Could not save metadata-free image: {error}")); }
     match inspect_metadata(output.path().to_path_buf()) {
         Ok(report) if !report.exif && !report.xmp && !report.icc => match output.publish() {
-            Ok(path) => JobOutcome { input_path: input, output_paths: vec![path], detail: "Metadata removed and verified".to_string(), failure: None },
+            Ok(path) => JobOutcome::succeeded(input, vec![path], "Metadata removed and verified"),
             Err(error) => failure(input, format!("Could not publish metadata-free image: {error}")),
         },
         Ok(_) => failure(input, "Image encoder retained metadata that could not be removed safely.".to_string()),
@@ -965,7 +965,7 @@ fn transform<F>(_: &[PathBuf], input: PathBuf, location: &OutputLocation, suffix
     let format = ImageFormat::from_path(output.path()).unwrap_or(ImageFormat::Png);
     match image.save_with_format(output.path(), format) {
         Ok(_) => match output.publish() {
-            Ok(path) => JobOutcome { input_path: input, output_paths: vec![path], detail: "Image saved".to_string(), failure: None },
+            Ok(path) => JobOutcome::succeeded(input, vec![path], "Image saved"),
             Err(error) => failure(input, format!("Could not publish image: {error}")),
         },
         Err(error) => failure(input, format!("Could not save image: {error}")),
@@ -988,26 +988,26 @@ mod tests {
         encoder.write_image::<tiff::encoder::colortype::Gray8>(2, 1, &[10, 20]).unwrap();
         encoder.write_image::<tiff::encoder::colortype::Gray8>(2, 1, &[30, 40]).unwrap();
 
-        let split = tiff(&TiffRequest { paths: vec![input.clone()], pages: None, output_location: OutputLocation::AlongsideInput });
-        assert_eq!(split.output_paths.len(), 2);
-        assert_eq!(read_tiff_pages(&split.output_paths[0]).unwrap().len(), 1);
-        assert_eq!(read_tiff_pages(&split.output_paths[1]).unwrap().len(), 1);
+        let split = tiff(&TiffRequest { paths: vec![input.clone()], pages: None, output_location: OutputLocation::AlongsideInput, output_path: None });
+        assert_eq!(split.output_paths().len(), 2);
+        assert_eq!(read_tiff_pages(&split.output_paths()[0]).unwrap().len(), 1);
+        assert_eq!(read_tiff_pages(&split.output_paths()[1]).unwrap().len(), 1);
 
         let first = path("first.tiff");
         let second = path("second.tiff");
         write_tiff_page(&first, &TiffPage::Gray { width: 1, height: 1, data: vec![1] }).unwrap();
         write_tiff_page(&second, &TiffPage::Gray { width: 1, height: 1, data: vec![2] }).unwrap();
-        let combined = tiff(&TiffRequest { paths: vec![first.clone(), second.clone()], pages: None, output_location: OutputLocation::AlongsideInput });
-        let pages = read_tiff_pages(&combined.output_paths[0]).unwrap();
+        let combined = tiff(&TiffRequest { paths: vec![first.clone(), second.clone()], pages: None, output_location: OutputLocation::AlongsideInput, output_path: None });
+        let pages = read_tiff_pages(&combined.output_paths()[0]).unwrap();
         assert_eq!(pages.len(), 2);
         assert!(matches!(&pages[0], TiffPage::Gray { data, .. } if data == &vec![1]));
         assert!(matches!(&pages[1], TiffPage::Gray { data, .. } if data == &vec![2]));
 
-        for output in split.output_paths { let _ = std::fs::remove_file(output); }
+        for output in split.output_paths() { let _ = std::fs::remove_file(output); }
         let _ = std::fs::remove_file(input);
         let _ = std::fs::remove_file(first);
         let _ = std::fs::remove_file(second);
-        let _ = std::fs::remove_file(combined.output_paths[0].clone());
+        let _ = std::fs::remove_file(combined.output_paths()[0].clone());
     }
 
     #[test]
@@ -1016,8 +1016,8 @@ mod tests {
         let file = File::create(&input).unwrap();
         let mut encoder = tiff::encoder::TiffEncoder::new(file).unwrap();
         encoder.write_image::<tiff::encoder::colortype::Gray16>(1, 1, &[1]).unwrap();
-        let result = tiff(&TiffRequest { paths: vec![input.clone()], pages: None, output_location: OutputLocation::AlongsideInput });
-        assert!(result.failure.is_some());
+        let result = tiff(&TiffRequest { paths: vec![input.clone()], pages: None, output_location: OutputLocation::AlongsideInput, output_path: None });
+        assert!(result.error().is_some());
         let _ = std::fs::remove_file(input);
     }
 
@@ -1038,11 +1038,11 @@ mod tests {
                 TiffPageRef { path: one_page.clone(), page: 0 },
                 TiffPageRef { path: two_page.clone(), page: 0 },
             ]),
-            output_location: OutputLocation::AlongsideInput,
+            output_location: OutputLocation::AlongsideInput, output_path: None,
         });
 
-        assert!(outcome.failure.is_none(), "selected TIFF pages failed: {:?}", outcome.failure);
-        let output = outcome.output_paths.first().unwrap().clone();
+        assert!(outcome.error().is_none(), "selected TIFF pages failed: {:?}", outcome.error());
+        let output = outcome.output_paths().first().unwrap().clone();
         let pages = read_tiff_pages(&output).unwrap();
         assert_eq!(pages.len(), 3);
         assert!(matches!(&pages[0], TiffPage::Gray { data, .. } if data == &vec![30, 40]));
@@ -1070,7 +1070,7 @@ mod tests {
         let image = image::RgbaImage::from_pixel(64, 32, image::Rgba([10, 20, 30, 77]));
         image.save(&input).unwrap();
         let result = watermark(&WatermarkRequest { paths: vec![input.clone()], opacity: 50, text: Some("TOOL".to_string()), logo_path: None, x: 2, y: 2, output_location: OutputLocation::AlongsideInput }, input.clone());
-        let output = result.output_paths.first().unwrap();
+        let output = result.output_paths().first().unwrap();
         let output_image = image::open(output).unwrap().to_rgba8();
         assert!(output_image.pixels().any(|pixel| pixel.0[0..3] != [10, 20, 30]));
         assert!(output_image.pixels().all(|pixel| pixel.0[3] == 77));
@@ -1115,10 +1115,10 @@ mod tests {
             output_location: OutputLocation::AlongsideInput,
         }, input.clone());
 
-        let error = result.failure.as_ref().expect("unsupported text must fail");
+        let error = result.error().expect("unsupported text must fail");
         assert!(error.message.contains("Unsupported watermark characters"));
         assert!(error.message.contains("U+10FFFF"));
-        assert!(result.output_paths.is_empty());
+        assert!(result.output_paths().is_empty());
         assert_eq!(std::fs::read(&input).unwrap(), source_bytes);
         assert_eq!(std::fs::read(&output).unwrap(), existing_bytes);
         assert!(!alternate_output.exists());
@@ -1162,8 +1162,8 @@ mod tests {
             output_location: OutputLocation::AlongsideInput,
         }, input.clone());
 
-        assert!(result.failure.is_none(), "watermark failed: {:?}", result.failure);
-        let output = result.output_paths.first().expect("watermark output");
+        assert!(result.error().is_none(), "watermark failed: {:?}", result.error());
+        let output = result.output_paths().first().expect("watermark output");
         assert_eq!(output, &expected_output);
         assert_eq!(std::fs::read(&input).unwrap(), source_bytes);
         assert_eq!(std::fs::read(&existing_output).unwrap(), existing_bytes);
@@ -1182,8 +1182,8 @@ mod tests {
         let second = path("gif-second.png");
         image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 0, 0, 128])).save(&first).unwrap();
         image::RgbaImage::from_pixel(2, 2, image::Rgba([0, 255, 0, 255])).save(&second).unwrap();
-        let result = gif_create(&GifCreateRequest { paths: vec![first.clone(), second.clone()], frame_delay_ms: 250, loop_forever: true, output_location: OutputLocation::AlongsideInput });
-        let output = result.output_paths.first().unwrap();
+        let result = gif_create(&GifCreateRequest { paths: vec![first.clone(), second.clone()], frame_delay_ms: 250, loop_forever: true, output_location: OutputLocation::AlongsideInput, output_path: None });
+        let output = result.output_paths().first().unwrap();
         let file = File::open(output).unwrap();
         let decoder = image::codecs::gif::GifDecoder::new(BufReader::new(file)).unwrap();
         let frames = decoder.into_frames().collect_frames().unwrap();
@@ -1240,7 +1240,7 @@ mod tests {
                         paths: vec![input],
                         frame_delay_ms: 100,
                         loop_forever: true,
-                        output_location: OutputLocation::CustomFolder(output_directory),
+                        output_location: OutputLocation::CustomFolder(output_directory), output_path: None,
                     })
                 })
             })
@@ -1250,10 +1250,10 @@ mod tests {
             .map(|handle| handle.join().unwrap())
             .collect::<Vec<_>>();
 
-        assert!(outcomes.iter().all(|outcome| outcome.failure.is_none()));
+        assert!(outcomes.iter().all(|outcome| outcome.error().is_none()));
         let outputs = outcomes
             .iter()
-            .map(|outcome| outcome.output_paths[0].clone())
+            .map(|outcome| outcome.output_paths()[0].clone())
             .collect::<Vec<_>>();
         assert_eq!(outputs.iter().collect::<HashSet<_>>().len(), worker_count);
         assert_eq!(std::fs::read(&existing_output).unwrap(), existing_bytes);
@@ -1296,10 +1296,10 @@ mod tests {
             paths: vec![input, input_directory.join("missing.png")],
             frame_delay_ms: 100,
             loop_forever: true,
-            output_location: OutputLocation::CustomFolder(output_directory.clone()),
+            output_location: OutputLocation::CustomFolder(output_directory.clone()), output_path: None,
         });
 
-        assert!(result.failure.is_some());
+        assert!(result.error().is_some());
         assert_eq!(std::fs::read(&existing_output).unwrap(), existing_bytes);
         assert_eq!(std::fs::read_dir(&output_directory).unwrap().count(), 1);
         std::fs::remove_dir_all(root).unwrap();
@@ -1319,13 +1319,13 @@ mod tests {
         let input = path("macos-icon-source.png");
         image::RgbaImage::from_pixel(2, 2, image::Rgba([10, 20, 30, 255])).save(&input).unwrap();
         let result = icon_set(&IconSetRequest { paths: vec![input.clone()], preset: "macos".to_string(), sizes: vec![], output_location: OutputLocation::AlongsideInput }, input.clone());
-        assert!(result.failure.is_none());
-        let icns = result.output_paths.iter().find(|output| output.extension().is_some_and(|extension| extension == "icns")).unwrap();
+        assert!(result.error().is_none());
+        let icns = result.output_paths().iter().find(|output| output.extension().is_some_and(|extension| extension == "icns")).unwrap();
         let bytes = std::fs::read(icns).unwrap();
         assert!(bytes.starts_with(b"icns"));
         assert_eq!(u32::from_be_bytes(bytes[4..8].try_into().unwrap()) as usize, bytes.len());
         assert!(bytes.windows(4).any(|item| item == b"icp4"));
-        for output in result.output_paths { let _ = std::fs::remove_file(output); }
+        for output in result.output_paths() { let _ = std::fs::remove_file(output); }
         let _ = std::fs::remove_file(input);
     }
 
@@ -1345,12 +1345,12 @@ mod tests {
         image.put_pixel(1, 0, image::Rgba([0, 255, 0, 255]));
         image.save(&input).unwrap();
         let result = rotate(&RotateRequest { paths: vec![input.clone()], degrees: 0, flip: "horizontal".to_string(), output_location: OutputLocation::AlongsideInput }, input.clone());
-        let output = result.output_paths.first().unwrap();
+        let output = result.output_paths().first().unwrap();
         let pixels = image::open(output).unwrap().to_rgba8();
         assert_eq!(pixels.dimensions(), (2, 1));
         assert_eq!(pixels.get_pixel(0, 0).0, [0, 255, 0, 255]);
         let invalid = rotate(&RotateRequest { paths: vec![input.clone()], degrees: 0, flip: "diagonal".to_string(), output_location: OutputLocation::AlongsideInput }, input.clone());
-        assert!(invalid.failure.is_some());
+        assert!(invalid.error().is_some());
         let _ = std::fs::remove_file(input);
         let _ = std::fs::remove_file(output);
     }
@@ -1399,15 +1399,14 @@ mod tests {
                 },
             ],
             output_location: OutputLocation::AlongsideInput,
-            suffix: "-edited".to_string(),
         };
 
         let preview = inspect_edit_preview(&ImageEditPreviewRequest { path: input.clone(), plan: plan.clone() }).unwrap();
         assert_eq!((preview.width, preview.height), (2, 2));
         let result = export_edit_plan(&plan, input.clone());
-        assert!(result.failure.is_none(), "{}", result.failure.clone().unwrap_or_default());
+        assert!(result.error().is_none(), "{}", result.error().cloned().unwrap_or_default());
         assert_eq!(std::fs::read(&input).unwrap(), source);
-        let output = result.output_paths.first().unwrap();
+        let output = result.output_paths().first().unwrap();
         let edited = image::open(output).unwrap();
         assert_eq!((edited.width(), edited.height()), (2, 2));
         let output_name = output.file_name().and_then(|name| name.to_str()).unwrap();
@@ -1464,14 +1463,13 @@ mod tests {
                 },
             ],
             output_location: OutputLocation::AlongsideInput,
-            suffix: "-edited".to_string(),
         };
 
         let preview = inspect_edit_preview(&ImageEditPreviewRequest { path: input.clone(), plan: plan.clone() }).unwrap();
         assert_eq!((preview.width, preview.height), (2, 3));
         let result = export_edit_plan(&plan, input.clone());
-        assert!(result.failure.is_none(), "{}", result.failure.clone().unwrap_or_default());
-        let output = result.output_paths.first().unwrap();
+        assert!(result.error().is_none(), "{}", result.error().cloned().unwrap_or_default());
+        let output = result.output_paths().first().unwrap();
         let edited = image::open(output).unwrap().to_rgba8();
         assert_eq!(edited.dimensions(), (2, 3));
         assert!(edited.pixels().all(|pixel| pixel.0 == [0, 255, 0, 255]));
@@ -1493,14 +1491,13 @@ mod tests {
                 },
             ],
             output_location: OutputLocation::AlongsideInput,
-            suffix: "-edited".to_string(),
         };
 
         let preview = inspect_edit_preview(&ImageEditPreviewRequest { path: input.clone(), plan: plan.clone() }).unwrap();
         assert_eq!((preview.width, preview.height), (60, 100));
         let result = export_edit_plan(&plan, input.clone());
-        assert!(result.failure.is_none(), "{}", result.failure.clone().unwrap_or_default());
-        let output = result.output_paths.first().unwrap();
+        assert!(result.error().is_none(), "{}", result.error().cloned().unwrap_or_default());
+        let output = result.output_paths().first().unwrap();
         let edited = image::open(output).unwrap();
         assert_eq!((edited.width(), edited.height()), (60, 100));
 
@@ -1525,7 +1522,6 @@ mod tests {
                 },
             ],
             output_location: OutputLocation::AlongsideInput,
-            suffix: "-edited".to_string(),
         };
 
         let request = CropRequest {
@@ -1537,8 +1533,8 @@ mod tests {
         let preview = inspect_edit_preview(&ImageEditPreviewRequest { path: input.clone(), plan: plan.clone() }).unwrap();
         assert_eq!((preview.width, preview.height), (60, 60));
         let result = export_edit_plan(&plan, input.clone());
-        assert!(result.failure.is_none(), "{}", result.failure.clone().unwrap_or_default());
-        let output = result.output_paths.first().unwrap();
+        assert!(result.error().is_none(), "{}", result.error().cloned().unwrap_or_default());
+        let output = result.output_paths().first().unwrap();
         let edited = image::open(output).unwrap().to_rgba8();
         assert_eq!((edited.width(), edited.height()), (60, 60));
         assert!(edited.pixels().all(|pixel| pixel.0 == [0, 255, 0, 255]));
@@ -1563,14 +1559,13 @@ mod tests {
                 },
             ],
             output_location: OutputLocation::AlongsideInput,
-            suffix: "-edited".to_string(),
         };
 
         let preview = inspect_edit_preview(&ImageEditPreviewRequest { path: input.clone(), plan: plan.clone() }).unwrap();
         assert_eq!((preview.width, preview.height), (50, 30));
         let result = export_edit_plan(&plan, input.clone());
-        assert!(result.failure.is_none(), "{}", result.failure.clone().unwrap_or_default());
-        let output = result.output_paths.first().unwrap();
+        assert!(result.error().is_none(), "{}", result.error().cloned().unwrap_or_default());
+        let output = result.output_paths().first().unwrap();
         let edited = image::open(output).unwrap();
         assert_eq!((edited.width(), edited.height()), (50, 30));
 
@@ -1588,7 +1583,6 @@ mod tests {
                 exposure: 0.0,
             }],
             output_location: OutputLocation::AlongsideInput,
-            suffix: "-edited".to_string(),
         };
 
         assert_eq!(plan.validate().unwrap_err(), "Brightness must be between -100 and 100.");

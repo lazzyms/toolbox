@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { openToolBySearch } from "./open-tool";
 import path from "node:path";
 
 const pdfPath = path.resolve("tests/fixtures/document.pdf");
@@ -113,7 +114,7 @@ test("subscribes before readiness and routes typed native shell commands", async
 
 test("publishes the selected workspace and document title to the native window", async ({ page }) => {
     await page.goto("/");
-    await page.getByRole("button", { name: "Open Edit PDF" }).click();
+    await openToolBySearch(page, "Edit PDF");
     await expect.poll(async () => (await invocations(page)).filter((call) => call.command === "set_document_title")).toContainEqual({
         command: "set_document_title",
         args: { title: expect.any(String) },
@@ -200,41 +201,41 @@ test("routes dropped files through the active tool input contract", async ({ pag
     await page.goto("/");
 
     const officePath = "/tmp/contract.docx";
-    await page.getByRole("button", { name: "Open Protect Office Files", exact: true }).click();
+    await openToolBySearch(page, "Lock & Unlock");
     await emitShellEvent(page, { kind: "dropped-files", paths: [officePath] });
     await expect(page.getByText("contract.docx", { exact: true })).toBeVisible();
-    await expect(page.locator(".file-selection-count")).toHaveText("1 file open");
+    await expect(page.locator(".file-selection-count")).toHaveText("1 file");
     await expect(page.getByRole("alert")).toHaveCount(0);
 
     await page.getByRole("button", { name: "← All tools" }).click();
     const tiffPath = "/tmp/archive.tiff";
-    await page.getByRole("button", { name: "Open Split and Combine TIFF", exact: true }).click();
+    await openToolBySearch(page, "Split and Combine TIFF");
     await emitShellEvent(page, { kind: "dropped-files", paths: [tiffPath] });
     await expect(page.getByText("archive.tiff", { exact: true })).toBeVisible();
     await expect(page.getByRole("alert")).toHaveCount(0);
 
     await page.getByRole("button", { name: "← All tools" }).click();
     const gifPath = "/tmp/animation.gif";
-    await page.getByRole("button", { name: "Open Extract GIF Frames", exact: true }).click();
+    await openToolBySearch(page, "Extract GIF Frames");
     await emitShellEvent(page, { kind: "dropped-files", paths: [gifPath] });
     await expect(page.getByText("animation.gif", { exact: true })).toBeVisible();
     await expect(page.getByRole("alert")).toHaveCount(0);
 
     await emitShellEvent(page, { kind: "dropped-files", paths: [officePath] });
-    await expect(page.getByRole("alert")).toContainText("not supported by Extract GIF Frames");
+    await expect(page.getByText("1 item not added", { exact: true })).toBeVisible();
 
     await page.getByRole("button", { name: "← All tools" }).click();
     await emitShellEvent(page, { kind: "dropped-files", paths: ["/tmp/unknown.xyz"] });
-    await expect(page.getByRole("alert")).toContainText("Open a tool before dropping files here.");
+    await expect.poll(async () => (await invocations(page)).filter((call) => call.command === "open_paths").map((call) => call.args)).toEqual([{ paths: ["/tmp/unknown.xyz"] }]);
 });
 
 test("keeps multi-file drops intact for ordered tools", async ({ page }) => {
     await page.goto("/");
-    await page.getByRole("button", { name: "Open Images to PDF", exact: true }).click();
+    await openToolBySearch(page, "Images to PDF");
 
     const imagePaths = ["/tmp/cover.jpg", "/tmp/inside.jpg"];
     await emitShellEvent(page, { kind: "dropped-files", paths: imagePaths });
-    await expect(page.locator(".file-selection-count")).toHaveText("2 files open");
+    await expect(page.locator(".file-selection-count")).toHaveText("2 files");
     await expect(page.getByText("cover.jpg", { exact: true })).toBeVisible();
     await expect(page.getByText("inside.jpg", { exact: true })).toBeVisible();
     await expect(page.getByRole("alert")).toHaveCount(0);
@@ -268,6 +269,7 @@ test("keyboard shortcuts focus search, open a document, undo, redo, and export",
     await expect.poll(async () => (await invocations(page)).some((call) => call.command === "shell_ready")).toBe(true);
     await page.keyboard.press("Control+k");
     await expect(page.getByRole("textbox", { name: "Search tools" })).toBeFocused();
+    await page.getByRole("textbox", { name: "Search tools" }).blur();
 
     await page.keyboard.press("Control+o");
     await expect.poll(async () => (await invocations(page)).some((call) => call.command === "open_paths")).toBe(true);
@@ -294,12 +296,12 @@ test("keyboard shortcuts focus search, open a document, undo, redo, and export",
 
 test("Escape closes the topmost settings surface before leaving the workspace", async ({ page }) => {
     await page.goto("/");
-    await page.getByRole("button", { name: "Open Edit PDF" }).click();
+    await openToolBySearch(page, "Edit PDF");
     await page.getByRole("button", { name: "Settings", exact: true }).click();
-    await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible();
+    await expect(page.getByRole("complementary", { name: "Settings" })).toBeVisible();
     await page.keyboard.press("Escape");
-    await expect(page.getByRole("dialog", { name: "Settings" })).toBeHidden();
-    await expect(page.getByRole("heading", { name: "PDF editor", exact: true })).toBeVisible();
+    await expect(page.getByRole("complementary", { name: "Settings" })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "PDF Editor", exact: true })).toBeVisible();
 
     await page.keyboard.press("Escape");
     await expect(page.getByRole("heading", { name: "Tool library" })).toBeVisible();

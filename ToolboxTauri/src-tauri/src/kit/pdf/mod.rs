@@ -14,8 +14,10 @@ use std::time::{Duration, Instant};
 
 use lopdf::{Document, LoadOptions, Object, ObjectId};
 
+use crate::kit::common::limits;
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
-use crate::kit::contracts::ToolError;
+use crate::kit::contracts::{OutcomeWarning, ToolError, WarningKind};
+use crate::kit::password::{lock_skip_reason, probe, unlock_skip_reason, unreadable, ProtectedFormat, ProtectionState, UNLOCK_NOT_VERIFIED, UNSUPPORTED_ENCRYPTION, WRONG_PASSWORD};
 
 pub struct PDFProcessor;
 
@@ -60,11 +62,24 @@ fn poll_helper_reader(receiver: &Receiver<Result<Vec<u8>, String>>, stream: &'st
     }
 }
 
-pub(crate) fn run_bounded_helper(mut command: Command, deadline: Instant, max_stdout: usize, max_stderr: usize, timeout_message: &str) -> Result<std::process::Output, String> {
+pub(crate) fn run_bounded_helper(command: Command, deadline: Instant, max_stdout: usize, max_stderr: usize, timeout_message: &str) -> Result<std::process::Output, String> {
+    run_bounded_helper_with_input(command, None, deadline, max_stdout, max_stderr, timeout_message)
+}
+
+pub(crate) fn run_bounded_helper_with_input(mut command: Command, input: Option<Vec<u8>>, deadline: Instant, max_stdout: usize, max_stderr: usize, timeout_message: &str) -> Result<std::process::Output, String> {
     if Instant::now() >= deadline {
         return Err(timeout_message.to_string());
     }
+    if input.is_some() {
+        command.stdin(Stdio::piped());
+    }
     let mut child = command.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|error| format!("Could not run PDF helper: {error}"))?;
+    if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
+        thread::spawn(move || {
+            use std::io::Write;
+            let _ = stdin.write_all(&input);
+        });
+    }
     let stdout = match child.stdout.take() {
         Some(stdout) => stdout,
         None => {
@@ -111,7 +126,7 @@ pub(crate) fn run_bounded_helper(mut command: Command, deadline: Instant, max_st
         if status.is_some() && stdout_result.is_some() && stderr_result.is_some() {
             break;
         }
-        if Instant::now() >= deadline {
+        if Instant::now() >= deadline || limits::job_stopped() {
             timed_out = true;
             let _ = child.kill();
             let _ = child.wait();
@@ -538,6 +553,49 @@ fn document_has_signature(document: &Document, catalog: ObjectId, pages: &[Objec
     }).collect::<Result<Vec<_>, String>>().map(|values| values.into_iter().any(|value| value))
 }
 
+pub const SIGNATURE_REMOVED: &str = "Saved. The digital signature was removed, because changing the file breaks it.";
+
+pub fn has_signed_signature_field(document: &Document) -> bool {
+    let mut seen = HashSet::new();
+    let fields = document.catalog().ok()
+        .and_then(|catalog| resolve(document, catalog.get(b"AcroForm").ok()?).ok()?.as_dict().ok())
+        .and_then(|form| resolve(document, form.get(b"Fields").ok()?).ok()?.as_array().ok())
+        .into_iter()
+        .flatten();
+    let pages = document.get_pages();
+    // A widget can be left out of the field tree, so page annotations are checked after the tree supplies inherited field types.
+    let widgets = pages.values()
+        .filter_map(|page| resolve(document, document.get_dictionary(*page).ok()?.get(b"Annots").ok()?).ok()?.as_array().ok())
+        .flatten();
+    fields.chain(widgets).any(|field| field_is_signed(document, field, None, &mut seen))
+}
+
+fn field_is_signed<'a>(document: &'a Document, value: &'a Object, inherited_type: Option<&'a [u8]>, seen: &mut HashSet<ObjectId>) -> bool {
+    if let Object::Reference(id) = value {
+        if !seen.insert(*id) {
+            return false;
+        }
+    }
+    let Some(field) = resolve(document, value).ok().and_then(|value| value.as_dict().ok()) else {
+        return false;
+    };
+    let field_type = field.get(b"FT").ok().and_then(|value| value.as_name().ok()).or(inherited_type);
+    let has_value = field.get(b"V").ok().and_then(|value| resolve(document, value).ok()).is_some_and(|value| value.as_dict().is_ok());
+    if field_type == Some(b"Sig") && has_value {
+        return true;
+    }
+    field.get(b"Kids").ok()
+        .and_then(|kids| resolve(document, kids).ok()?.as_array().ok())
+        .is_some_and(|kids| kids.iter().any(|kid| field_is_signed(document, kid, field_type, seen)))
+}
+
+pub fn note_signature_removed(outcome: JobOutcome, signed: bool) -> JobOutcome {
+    if !signed {
+        return outcome;
+    }
+    outcome.with_warning(OutcomeWarning { kind: WarningKind::SignatureRemoved, message: SIGNATURE_REMOVED.to_string() })
+}
+
 fn page_has_internal_navigation(document: &Document, page: ObjectId) -> Result<bool, String> {
     let Some(annotations) = document.get_dictionary(page).map_err(|error| error.to_string())?.get(b"Annots").ok() else {
         return Ok(false);
@@ -608,13 +666,33 @@ pub(crate) fn mutation_preflight(document: &Document, intent: PdfMutationIntent)
     Ok(preflight)
 }
 
+fn unlocked_pdf_is_verified(path: &Path, page_count: usize) -> bool {
+    let Ok(bytes) = std::fs::read(path) else { return false };
+    matches!(probe(&bytes, ProtectedFormat::Pdf), Ok(ProtectionState::NotProtected))
+        && Document::load_mem(&bytes).is_ok_and(|verified| verified.get_pages().len() == page_count && verified.objects.len() > 1)
+}
+
 impl PDFProcessor {
     pub fn remove_password(input_path: PathBuf, password: &str, output_location: &OutputLocation) -> JobOutcome {
-        if password.is_empty() {
-            return JobOutcome { input_path, output_paths: vec![], detail: "".to_string(), failure: Some(ToolError::invalid_input("Enter the PDF password.")) };
-        }
         if input_path.extension().and_then(|extension| extension.to_str()).is_none_or(|extension| !extension.eq_ignore_ascii_case("pdf")) {
-            return JobOutcome { input_path, output_paths: vec![], detail: "".to_string(), failure: Some(ToolError::invalid_input("Only PDF files can be unlocked.")) };
+            return JobOutcome::failure(input_path, ToolError::invalid_input("Only PDF files can be unlocked."));
+        }
+        let raw = match std::fs::read(&input_path) {
+            Ok(raw) => raw,
+            Err(error) => return JobOutcome::failure(input_path, ToolError::processing(format!("Could not read the PDF: {error}"))),
+        };
+        let state = match probe(&raw, ProtectedFormat::Pdf) {
+            Ok(state) => state,
+            Err(_) => return JobOutcome::failure(input_path, unreadable(ProtectedFormat::Pdf)),
+        };
+        if let Some(reason) = unlock_skip_reason(state) {
+            return JobOutcome::skipped(input_path, reason);
+        }
+        if state == ProtectionState::PermissionsOnly {
+            return Self::remove_restrictions(input_path, &raw, output_location);
+        }
+        if password.is_empty() {
+            return JobOutcome::failure(input_path, ToolError::invalid_input("Enter the PDF password."));
         }
         let output_path = match OutputNaming::reserve_destination(
             &input_path,
@@ -630,21 +708,17 @@ impl PDFProcessor {
         // object except the /Encrypt dictionary (objects == 1), so decrypting
         // afterwards writes a corrupt skeleton file. The password must be given
         // at load time so lopdf decrypts each object as it parses it.
-        let loaded = Document::load_with_options(&input_path, LoadOptions::with_password(password));
+        let loaded = Document::load_mem_with_options(&raw, LoadOptions::with_password(password));
         match loaded {
             Ok(doc) => {
                 if doc.is_encrypted() {
                     // Loading with the wrong password can surface a still-encrypted
                     // document rather than an error; treat it as a rejection.
-                    return JobOutcome {
-                        input_path,
-                        output_paths: vec![],
-                        detail: "".to_string(),
-                        failure: Some(ToolError::invalid_input("Wrong password or unsupported encryption.")),
-                    };
+                    return JobOutcome::failure(input_path, ToolError::wrong_password(WRONG_PASSWORD));
                 }
                 let mut doc = doc;
                 let page_count = doc.get_pages().len();
+                let signed = has_signed_signature_field(&doc);
                 // Loading an encrypted PDF can leave the original trailer's
                 // `/Size` higher than the surviving object table. Keep the
                 // rewritten xref table truthful so strict PDF validators do
@@ -662,23 +736,64 @@ impl PDFProcessor {
                     .max()
                     .unwrap_or(0);
                 match doc.save(output_path.path()) {
-                    Ok(_) => match Document::load(output_path.path()) {
-                        Ok(verified) if !verified.is_encrypted() && verified.get_pages().len() == page_count && verified.objects.len() > 1 => match output_path.publish() {
-                            Ok(path) => JobOutcome { input_path, output_paths: vec![path], detail: "PDF Unlocked and verified".to_string(), failure: None },
-                            Err(error) => JobOutcome::failure(input_path, ToolError::processing(format!("Could not publish unlocked PDF output: {error}"))),
-                        },
-                        Ok(_) => JobOutcome { input_path, output_paths: vec![], detail: "".to_string(), failure: Some(ToolError::processing("Unlocked PDF failed verification.")) },
-                        Err(error) => JobOutcome { input_path, output_paths: vec![], detail: "".to_string(), failure: Some(ToolError::processing(format!("Unlocked PDF could not be reopened: {error}"))) },
+                    Ok(_) if unlocked_pdf_is_verified(output_path.path(), page_count) => match output_path.publish() {
+                        Ok(path) => note_signature_removed(JobOutcome::succeeded(input_path, vec![path], "PDF Unlocked and verified"), signed),
+                        Err(error) => JobOutcome::failure(input_path, ToolError::processing(format!("Could not publish unlocked PDF output: {error}"))),
                     },
-                    Err(e) => JobOutcome { input_path, output_paths: vec![], detail: "".to_string(), failure: Some(ToolError::processing(format!("Save failed: {}", e))) },
+                    Ok(_) => JobOutcome::failure(input_path, ToolError::processing(UNLOCK_NOT_VERIFIED)),
+                    Err(e) => JobOutcome::failure(input_path, ToolError::processing(format!("Save failed: {}", e))),
                 }
             }
-            Err(e) => JobOutcome {
-                input_path,
-                output_paths: vec![],
-                detail: "".to_string(),
-                failure: Some(ToolError::invalid_input(format!("Wrong password or unsupported encryption: {}", e))),
-            },
+            Err(lopdf::Error::InvalidPassword | lopdf::Error::Decryption(lopdf::encryption::DecryptionError::IncorrectPassword)) => {
+                JobOutcome::failure(input_path, ToolError::wrong_password(WRONG_PASSWORD))
+            }
+            Err(
+                lopdf::Error::UnsupportedSecurityHandler(_)
+                | lopdf::Error::Unimplemented(_)
+                | lopdf::Error::Decryption(
+                    lopdf::encryption::DecryptionError::UnsupportedEncryption
+                    | lopdf::encryption::DecryptionError::UnsupportedVersion
+                    | lopdf::encryption::DecryptionError::UnsupportedRevision,
+                ),
+            ) => JobOutcome::failure(input_path, ToolError::unavailable(UNSUPPORTED_ENCRYPTION)),
+            Err(_) => JobOutcome::failure(input_path, unreadable(ProtectedFormat::Pdf)),
+        }
+    }
+
+    /// The PDF opens with the empty user password and only its owner password
+    /// restricts it, so qpdf decrypts it with no password from the user.
+    fn remove_restrictions(input_path: PathBuf, raw: &[u8], output_location: &OutputLocation) -> JobOutcome {
+        let (page_count, signed) = match Document::load_mem(raw) {
+            Ok(document) => (document.get_pages().len(), has_signed_signature_field(&document)),
+            Err(_) => return JobOutcome::failure(input_path, unreadable(ProtectedFormat::Pdf)),
+        };
+        let qpdf = match crate::kit::resources::resolve_helper(&crate::kit::resources::QPDF) {
+            Ok(qpdf) => qpdf,
+            Err(error) => return JobOutcome::failure(input_path, ToolError::unavailable(error)),
+        };
+        let output_path = match OutputNaming::reserve_destination(&input_path, output_location, "-unlocked", "pdf") {
+            Ok(output) => output,
+            Err(error) => return JobOutcome::failure(input_path, ToolError::processing(format!("Could not reserve unlocked PDF output: {error}"))),
+        };
+        let mut command = Command::new(&qpdf);
+        command.arg(&input_path).arg(output_path.path()).arg("--decrypt");
+        let limit = pdf_lock_time_limit(page_count);
+        let timed_out = format!("Unlocking took longer than {} seconds and was stopped. Nothing was saved.", limit.as_secs());
+        let output = match run_bounded_helper_with_input(command, None, Instant::now() + limit, PDF_TEXT_MAX_ERROR_BYTES, PDF_TEXT_MAX_ERROR_BYTES, &timed_out) {
+            Ok(output) => output,
+            Err(message) if message == timed_out => return JobOutcome::failure(input_path, ToolError::limit_exceeded(crate::kit::contracts::LimitKind::Time, message)),
+            Err(message) => return JobOutcome::failure(input_path, ToolError::unavailable(message)),
+        };
+        // qpdf exits 3 when it wrote the file but repaired something along the way; verification decides.
+        if !matches!(output.status.code(), Some(0 | 3)) {
+            return JobOutcome::failure(input_path, unreadable(ProtectedFormat::Pdf));
+        }
+        if !unlocked_pdf_is_verified(output_path.path(), page_count) {
+            return JobOutcome::failure(input_path, ToolError::processing(UNLOCK_NOT_VERIFIED));
+        }
+        match output_path.publish() {
+            Ok(path) => note_signature_removed(JobOutcome::succeeded(input_path, vec![path], "Unlocked. Restrictions removed."), signed),
+            Err(error) => JobOutcome::failure(input_path, ToolError::processing(format!("Could not publish unlocked PDF output: {error}"))),
         }
     }
 
@@ -686,113 +801,80 @@ impl PDFProcessor {
     /// /Encrypt dictionary that other readers (macOS PDFKit) cannot decrypt, so
     /// protection shells out to a correct, cross-platform AES-256 writer.
     pub fn protect(input_path: PathBuf, password: &str, output_location: &OutputLocation) -> JobOutcome {
-        let output_path = match OutputNaming::reserve_destination(
-            &input_path,
-            output_location,
-            "-protected",
-            "pdf",
-        ) {
+        if ProtectedFormat::from_path(&input_path) != Some(ProtectedFormat::Pdf) {
+            return JobOutcome::failure(input_path, ToolError::invalid_input("Only PDF files can be protected."));
+        }
+        if password.is_empty() {
+            return JobOutcome::failure(input_path, ToolError::invalid_input("A non-empty password is required."));
+        }
+        if password.contains(['\n', '\r']) {
+            return JobOutcome::failure(input_path, ToolError::invalid_input("Passwords can't contain line breaks."));
+        }
+        let raw = match read_and_probe(&input_path) {
+            Ok((raw, state)) => match lock_skip_reason(state) {
+                Some(reason) => return JobOutcome::skipped(input_path, reason),
+                None => raw,
+            },
+            Err(error) => return JobOutcome::failure(input_path, error),
+        };
+        let (page_count, signed) = match Document::load_mem(&raw) {
+            Ok(document) => (document.get_pages().len(), has_signed_signature_field(&document)),
+            Err(_) => return JobOutcome::failure(input_path, unreadable(ProtectedFormat::Pdf)),
+        };
+        let qpdf = match crate::kit::resources::resolve_helper(&crate::kit::resources::QPDF) {
+            Ok(qpdf) => qpdf,
+            Err(error) => return JobOutcome::failure(input_path, ToolError::unavailable(error)),
+        };
+        let output_path = match OutputNaming::reserve_destination(&input_path, output_location, "-protected", "pdf") {
             Ok(output) => output,
             Err(error) => return JobOutcome::failure(input_path, ToolError::processing(format!("Could not reserve protected PDF output: {error}"))),
         };
 
-        if let Some(ref e) = input_path.extension().map(|e| e.to_string_lossy().to_lowercase()) {
-            if e != "pdf" {
-                return JobOutcome {
-                    input_path,
-                    output_paths: vec![],
-                    detail: "".to_string(),
-                    failure: Some(ToolError::invalid_input("Only PDF files can be protected.")),
-                };
-            }
-        }
-        if password.is_empty() {
-            return JobOutcome { input_path, output_paths: vec![], detail: "".to_string(), failure: Some(ToolError::invalid_input("A non-empty password is required.")) };
-        }
-
-        let Some(qpdf) = find_qpdf() else {
-            return JobOutcome {
-                input_path,
-                output_paths: vec![],
-                detail: "".to_string(),
-                failure: Some(ToolError::unavailable(
-                    "qpdf is required to protect PDFs but was not found. \
-                     Set TOOLBOX_QPDF_PATH or add qpdf to PATH.",
-                )),
-            };
+        let mut command = Command::new(&qpdf);
+        command.arg(&input_path).arg(output_path.path()).args(["--encrypt", "@-", "--bits=256", "--"]);
+        let options = format!("--user-password={password}\n--owner-password={password}\n").into_bytes();
+        let limit = pdf_lock_time_limit(page_count);
+        let timed_out = format!("Locking took longer than {} seconds and was stopped. Nothing was saved.", limit.as_secs());
+        let output = match run_bounded_helper_with_input(command, Some(options), Instant::now() + limit, PDF_TEXT_MAX_ERROR_BYTES, PDF_TEXT_MAX_ERROR_BYTES, &timed_out) {
+            Ok(output) => output,
+            Err(message) if message == timed_out => return JobOutcome::failure(input_path, ToolError::limit_exceeded(crate::kit::contracts::LimitKind::Time, message)),
+            Err(message) => return JobOutcome::failure(input_path, ToolError::unavailable(message)),
         };
-
-        let status = Command::new(&qpdf)
-            .arg("--encrypt")
-            .arg(password)
-            .arg(password)
-            .arg("256")
-            .arg("--")
-            .arg(&input_path)
-            .arg(output_path.path())
-            .output();
-
-        match status {
-            Ok(out) if out.status.success() => {
-                let encrypted = Document::load(output_path.path()).map(|document| document.is_encrypted()).unwrap_or(false);
-                let readable = Document::load_with_options(output_path.path(), lopdf::LoadOptions::with_password(password)).map(|document| !document.is_encrypted()).unwrap_or(false);
-                if encrypted && readable {
-                    match output_path.publish() {
-                        Ok(path) => JobOutcome { input_path, output_paths: vec![path], detail: "PDF Protected with verified AES-256 encryption".to_string(), failure: None },
-                        Err(error) => JobOutcome::failure(input_path, ToolError::processing(format!("Could not publish protected PDF output: {error}"))),
-                    }
-                }
-                else { JobOutcome { input_path, output_paths: vec![], detail: "".to_string(), failure: Some(ToolError::processing("qpdf produced an output that could not be verified as password-protected.")) } }
-            }
-            Ok(out) => {
-                JobOutcome { input_path, output_paths: vec![], detail: "".to_string(), failure: Some(ToolError::processing(
-                    String::from_utf8_lossy(&out.stderr).trim().lines().last().map(|l| l.to_string()).unwrap_or_else(|| "qpdf failed to protect the PDF.".to_string()),
-                )) }
-            },
-            Err(e) => JobOutcome {
-                input_path,
-                output_paths: vec![],
-                detail: "".to_string(),
-                failure: Some(ToolError::unavailable(format!("Could not run qpdf: {}", e))),
-            },
+        if !output.status.success() {
+            let detail = String::from_utf8_lossy(&output.stderr).trim().lines().last().map(str::to_string).unwrap_or_else(|| "qpdf failed to protect the PDF.".to_string());
+            return JobOutcome::failure(input_path, ToolError::processing(detail));
+        }
+        if !locked_pdf_is_verified(output_path.path(), password, page_count) {
+            return JobOutcome::failure(input_path, ToolError::processing("The locked copy didn't pass verification, so nothing was saved."));
+        }
+        match output_path.publish() {
+            Ok(path) => note_signature_removed(JobOutcome::succeeded(input_path, vec![path], "PDF Protected with verified AES-256 encryption"), signed),
+            Err(error) => JobOutcome::failure(input_path, ToolError::processing(format!("Could not publish protected PDF output: {error}"))),
         }
     }
 }
 
-/// Locate qpdf from an explicit override, the installed app resources, or PATH.
-pub(crate) fn find_qpdf() -> Option<PathBuf> {
-    if let Ok(p) = std::env::var("TOOLBOX_QPDF_PATH") {
-        let p = PathBuf::from(p);
-        if p.is_file() {
-            return Some(p);
-        }
-    }
+pub(crate) const PDF_LOCK_TIME_PER_FILE: Duration = Duration::from_secs(15);
+pub(crate) const PDF_LOCK_TIME_PER_PAGE: Duration = Duration::from_millis(50);
 
-    if let Ok(exe) = std::env::current_exe() {
-        let exe_dir = exe.parent()?;
-        let candidates = [
-            exe_dir.join("qpdf.exe"),
-            exe_dir.join("resources").join("qpdf.exe"),
-            exe_dir.parent()?.join("Resources").join("qpdf-bin").join("qpdf"),
-        ];
-        for candidate in candidates {
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-    }
-
-    // Fall back to a `qpdf` on PATH (dev / non-bundled runs).
-    Command::new("qpdf")
-        .arg("--version")
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|_| PathBuf::from("qpdf"))
+fn pdf_lock_time_limit(page_count: usize) -> Duration {
+    PDF_LOCK_TIME_PER_FILE + PDF_LOCK_TIME_PER_PAGE * u32::try_from(page_count).unwrap_or(u32::MAX)
 }
 
+fn locked_pdf_is_verified(path: &Path, password: &str, page_count: usize) -> bool {
+    let Ok(bytes) = std::fs::read(path) else { return false };
+    matches!(probe(&bytes, ProtectedFormat::Pdf), Ok(ProtectionState::OpenPassword))
+        && Document::load_mem_with_options(&bytes, LoadOptions::with_password(password)).is_ok_and(|opened| !opened.is_encrypted() && opened.get_pages().len() == page_count)
+}
+
+fn read_and_probe(input_path: &Path) -> Result<(Vec<u8>, ProtectionState), ToolError> {
+    let raw = std::fs::read(input_path)
+        .map_err(|error| ToolError::invalid_input(format!("Could not read the PDF: {error}")))?;
+    let state = probe(&raw, ProtectedFormat::Pdf)?;
+    Ok((raw, state))
+}
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use lopdf::dictionary;
     use lopdf::Object;
@@ -802,7 +884,7 @@ mod tests {
     }
 
     fn qpdf_available() -> bool {
-        find_qpdf().is_some()
+        crate::kit::resources::resolve_helper(&crate::kit::resources::QPDF).is_ok()
     }
 
     fn require_qpdf() -> bool {
@@ -860,24 +942,24 @@ mod tests {
         make_pdf(&src);
 
         let protected = PDFProcessor::protect(src.clone(), "hunter2", &OutputLocation::AlongsideInput);
-        assert!(protected.failure.is_none(), "{}", protected.failure.clone().unwrap_or_default());
-        assert_eq!(protected.output_paths.len(), 1);
+        assert!(protected.error().is_none(), "{}", protected.error().cloned().unwrap_or_default());
+        assert_eq!(protected.output_paths().len(), 1);
 
         // the protected file must decrypt correctly with the password
-        let enc = Document::load_with_options(&protected.output_paths[0], lopdf::LoadOptions::with_password("hunter2"));
+        let enc = Document::load_with_options(&protected.output_paths()[0], lopdf::LoadOptions::with_password("hunter2"));
         assert!(enc.is_ok());
         let enc = enc.unwrap();
         assert!(!enc.is_encrypted());
         assert!(enc.objects.len() > 1, "protected PDF lost its objects");
 
         // protects and saves an encrypted file distinct from the input
-        assert_ne!(&protected.output_paths[0], &src);
+        assert_ne!(&protected.output_paths()[0], &src);
 
-        let unlocked = PDFProcessor::remove_password(protected.output_paths[0].clone(), "hunter2", &OutputLocation::AlongsideInput);
-        assert!(unlocked.failure.is_none(), "{}", unlocked.failure.clone().unwrap_or_default());
+        let unlocked = PDFProcessor::remove_password(protected.output_paths()[0].clone(), "hunter2", &OutputLocation::AlongsideInput);
+        assert!(unlocked.error().is_none(), "{}", unlocked.error().cloned().unwrap_or_default());
 
         // the unlocked copy must load as a plain (non-encrypted) document
-        let loaded = Document::load(&unlocked.output_paths[0]);
+        let loaded = Document::load(&unlocked.output_paths()[0]);
         assert!(loaded.is_ok());
         let loaded = loaded.unwrap();
         assert!(!loaded.is_encrypted());
@@ -893,9 +975,9 @@ mod tests {
             loaded.objects.iter().any(|(_, o)| matches!(o, Object::Stream(_))),
             "unlocked PDF must keep its content stream"
         );
-        let qpdf_check = std::process::Command::new(find_qpdf().unwrap())
+        let qpdf_check = std::process::Command::new(crate::kit::resources::resolve_helper(&crate::kit::resources::QPDF).unwrap())
             .arg("--check")
-            .arg(&unlocked.output_paths[0])
+            .arg(&unlocked.output_paths()[0])
             .output()
             .unwrap();
         assert!(
@@ -904,8 +986,8 @@ mod tests {
             String::from_utf8_lossy(&qpdf_check.stderr)
         );
 
-        let _ = std::fs::remove_file(&protected.output_paths[0]);
-        let _ = std::fs::remove_file(&unlocked.output_paths[0]);
+        let _ = std::fs::remove_file(&protected.output_paths()[0]);
+        let _ = std::fs::remove_file(&unlocked.output_paths()[0]);
         let _ = std::fs::remove_file(&src);
     }
 
@@ -918,13 +1000,14 @@ mod tests {
         make_pdf(&src);
 
         let protected = PDFProcessor::protect(src.clone(), "correct horse", &OutputLocation::AlongsideInput);
-        assert!(protected.failure.is_none());
+        assert!(protected.error().is_none());
 
-        let unlocked = PDFProcessor::remove_password(protected.output_paths[0].clone(), "battery staple", &OutputLocation::AlongsideInput);
-        assert!(unlocked.failure.is_some(), "wrong password must fail");
-        assert!(unlocked.output_paths.is_empty());
+        let unlocked = PDFProcessor::remove_password(protected.output_paths()[0].clone(), "battery staple", &OutputLocation::AlongsideInput);
+        assert!(unlocked.error().is_some(), "wrong password must fail");
+        assert_eq!(unlocked.error().map(|error| &error.kind), Some(&crate::kit::contracts::ErrorKind::WrongPassword));
+        assert!(unlocked.output_paths().is_empty());
 
-        let _ = std::fs::remove_file(&protected.output_paths[0]);
+        let _ = std::fs::remove_file(&protected.output_paths()[0]);
         let _ = std::fs::remove_file(&src);
     }
 
@@ -939,7 +1022,107 @@ mod tests {
         let src = temp_path("noqpdf.pdf");
         make_pdf(&src);
         let out = PDFProcessor::protect(src.clone(), "x", &OutputLocation::AlongsideInput);
-        assert!(out.failure.is_some());
+        assert_eq!(out.error().map(|error| &error.kind), Some(&crate::kit::contracts::ErrorKind::Unavailable));
+        assert!(!src.with_file_name("noqpdf-protected.pdf").exists(), "a missing helper must not reserve an output");
         let _ = std::fs::remove_file(&src);
+    }
+
+    fn signature_value() -> lopdf::Dictionary {
+        dictionary! {
+            "Type" => "Sig", "Filter" => "Adobe.PPKLite", "SubFilter" => "adbe.pkcs7.detached",
+            "ByteRange" => vec![0.into(), 10.into(), 20.into(), 30.into()],
+            "Contents" => Object::String(vec![0; 16], lopdf::StringFormat::Hexadecimal),
+        }
+    }
+
+    fn first_page(document: &Document) -> ObjectId {
+        *document.get_pages().values().next().unwrap()
+    }
+
+    fn attach_widget(document: &mut Document, widget: ObjectId) {
+        let page = first_page(document);
+        document.get_dictionary_mut(page).unwrap().set("Annots", vec![Object::Reference(widget)]);
+    }
+
+    fn set_form_fields(document: &mut Document, fields: Vec<Object>) {
+        let form = document.add_object(dictionary! { "Fields" => fields, "SigFlags" => 3 });
+        document.catalog_mut().unwrap().set("AcroForm", form);
+    }
+
+    pub(crate) fn add_signature_field(document: &mut Document, value: Option<lopdf::Dictionary>) {
+        let page = first_page(document);
+        let mut field = dictionary! {
+            "Type" => "Annot", "Subtype" => "Widget", "FT" => "Sig", "T" => "Signature1",
+            "Rect" => vec![10.into(), 10.into(), 80.into(), 30.into()], "P" => page,
+        };
+        if let Some(value) = value {
+            let value = document.add_object(value);
+            field.set("V", value);
+        }
+        let field = document.add_object(field);
+        attach_widget(document, field);
+        set_form_fields(document, vec![Object::Reference(field)]);
+    }
+
+    pub(crate) fn sign(document: &mut Document) {
+        add_signature_field(document, Some(signature_value()));
+    }
+
+    fn fixture(name: &str, build: impl FnOnce(&mut Document)) -> (&str, Document) {
+        let path = temp_path(&format!("signature-{name}.pdf"));
+        make_pdf(&path);
+        let mut document = Document::load(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        build(&mut document);
+        (name, document)
+    }
+
+    #[test]
+    fn a_pdf_is_signed_only_when_a_signature_field_holds_a_signature_value() {
+        let cases = [
+            (fixture("plain", |_| {}), false),
+            (fixture("signed field", sign), true),
+            (fixture("empty signature field", |document| add_signature_field(document, None)), false),
+            (fixture("null signature value", |document| {
+                let field = document.add_object(dictionary! { "FT" => "Sig", "V" => Object::Null });
+                set_form_fields(document, vec![Object::Reference(field)]);
+            }), false),
+            (fixture("text field with a value", |document| {
+                let field = document.add_object(dictionary! { "FT" => "Tx", "V" => Object::string_literal("Asha") });
+                set_form_fields(document, vec![Object::Reference(field)]);
+            }), false),
+            (fixture("kid inherits the signature type", |document| {
+                let value = document.add_object(signature_value());
+                let parent = document.new_object_id();
+                let kid = document.add_object(dictionary! { "Parent" => parent, "Subtype" => "Widget", "V" => value });
+                document.objects.insert(parent, dictionary! { "FT" => "Sig", "T" => "Approval", "Kids" => vec![Object::Reference(kid)] }.into());
+                attach_widget(document, kid);
+                set_form_fields(document, vec![Object::Reference(parent)]);
+            }), true),
+            (fixture("signed widget outside the field tree", |document| {
+                let value = document.add_object(signature_value());
+                let widget = document.add_object(dictionary! { "Subtype" => "Widget", "FT" => "Sig", "V" => value });
+                attach_widget(document, widget);
+            }), true),
+            (fixture("cyclic field tree", |document| {
+                let field = document.new_object_id();
+                document.objects.insert(field, dictionary! { "FT" => "Sig", "Kids" => vec![Object::Reference(field)] }.into());
+                set_form_fields(document, vec![Object::Reference(field)]);
+            }), false),
+        ];
+        for ((name, document), expected) in cases {
+            assert_eq!(has_signed_signature_field(&document), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn the_lock_deadline_is_fifteen_seconds_per_file_plus_fifty_milliseconds_per_page() {
+        assert_eq!(PDF_LOCK_TIME_PER_FILE, Duration::from_secs(15));
+        assert_eq!(PDF_LOCK_TIME_PER_PAGE, Duration::from_millis(50));
+        assert_eq!(pdf_lock_time_limit(1), Duration::from_millis(15_050));
+        assert_eq!(pdf_lock_time_limit(200), Duration::from_secs(25));
+        let longest = limits::recorded("protect_files").unwrap();
+        assert_eq!(pdf_lock_time_limit(longest.max_pages.unwrap() as usize), Duration::from_secs(265));
+        assert!(pdf_lock_time_limit(longest.max_pages.unwrap() as usize) < longest.max_duration, "qpdf's own deadline ends a long lock before the job limit does");
     }
 }

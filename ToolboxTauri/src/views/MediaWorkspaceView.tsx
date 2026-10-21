@@ -1,11 +1,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ToolScaffold } from "../components/ToolScaffold";
-import { WorkspaceCommandRail } from "../components/WorkspaceCommandRail";
-import { toolsForWorkspaceId, UtilityRegistry } from "../registry";
-import type { AtomicToolId, ImagePreview, ToolDefinition, ToolResult } from "../contracts";
-import { useToolAvailability } from "../ToolAvailabilityContext";
-import { Badge } from "@/components/ui/badge";
+import type { ImagePreview, ToolDefinition, ToolResult } from "../contracts";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -14,6 +10,8 @@ import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { ShortcutHint } from "../components/ShortcutHint";
+import { shortcutTarget } from "../shortcuts";
 
 type TiffFrame = { key: string; path: string; page: number; preview: ImagePreview };
 export type TiffInspection =
@@ -26,9 +24,6 @@ export const tiffInspectionKey = (files: string[]) => files.join("\u0000");
 export const isCurrentTiffInspection = (inspection: TiffInspection, files: string[]): inspection is Extract<TiffInspection, { kind: "ready" }> =>
   inspection.kind === "ready" && inspection.key === tiffInspectionKey(files);
 
-const mediaActions = toolsForWorkspaceId("media-tools");
-const mediaIds = new Set<string>(mediaActions.map((tool) => tool.id));
-
 const iconSizesByPreset: Record<string, number[]> = {
   macos: [16, 32, 128, 256, 512, 1024],
   favicon: [16, 32, 48, 64, 128, 256],
@@ -37,12 +32,7 @@ const iconSizesByPreset: Record<string, number[]> = {
   custom: [16, 32, 64, 128, 256, 512],
 };
 
-export const MediaWorkspaceView = ({ utility }: { utility: ToolDefinition }) => {
-  const availability = useToolAvailability();
-  const availableActions = availability.filter(mediaActions);
-  const preferredTool = mediaIds.has(utility.id) && availability.allows(utility.id)
-    ? utility.id
-    : availableActions[0]?.id ?? utility.id;
+export const MediaWorkspaceView = ({ utility: activeUtility, initialPaths, onFilesChange }: { utility: ToolDefinition; initialPaths?: readonly string[]; onFilesChange?: (paths: readonly string[]) => void }) => {
   const [delay, setDelay] = useState(100);
   const [loop, setLoop] = useState(true);
   const [iconPreset, setIconPreset] = useState("macos");
@@ -51,15 +41,6 @@ export const MediaWorkspaceView = ({ utility }: { utility: ToolDefinition }) => 
   const [report, setReport] = useState<unknown[]>([]);
   const [selectedTiffFrameIndex, setSelectedTiffFrameIndex] = useState(0);
   const [tiffInspection, setTiffInspection] = useState<TiffInspection>({ kind: "idle" });
-  const [activeToolId, setActiveToolId] = useState<AtomicToolId>(
-    preferredTool,
-  );
-  useEffect(() => {
-    setActiveToolId(preferredTool);
-  }, [preferredTool]);
-  const activeUtility = availability.allows(activeToolId)
-    ? UtilityRegistry.find((item) => item.id === activeToolId) ?? utility
-    : UtilityRegistry.find((item) => item.id === preferredTool) ?? utility;
 
   useEffect(() => {
     setReport([]);
@@ -75,53 +56,47 @@ export const MediaWorkspaceView = ({ utility }: { utility: ToolDefinition }) => 
       variant="workspace"
       sessionKey="media-tools"
       utility={activeUtility}
+      initialPaths={initialPaths}
+      onFilesChange={onFilesChange}
       showFileOrdering={activeUtility.id !== "tiff-pages"}
-      onRun={(paths) => {
+      onRun={(paths, outputLocation, { outputPath, runId }) => {
         if (activeUtility.id === "icon-set") {
-          return invoke<ToolResult>("generate_icon_set", {
-            request: { paths, preset: iconPreset, sizes: iconSizes, outputLocation: "alongsideInput" },
+          return invoke<ToolResult>("generate_icon_set", { runId,
+            request: { paths, preset: iconPreset, sizes: iconSizes, outputLocation },
           });
         }
         if (activeUtility.id === "gif-create") {
-          return invoke<ToolResult>("create_gif", {
-            request: { paths, frameDelayMs: delay, loopForever: loop, outputLocation: "alongsideInput" },
+          return invoke<ToolResult>("create_gif", { runId,
+            request: { paths, frameDelayMs: delay, loopForever: loop, outputLocation, outputPath },
           });
         }
         if (activeUtility.id === "gif-extract") {
-          return invoke<ToolResult>("extract_gif_frames", {
-            request: { paths, outputLocation: "alongsideInput" },
+          return invoke<ToolResult>("extract_gif_frames", { runId,
+            request: { paths, outputLocation },
           });
         }
         if (activeUtility.id === "tiff-pages") {
-          return invoke<ToolResult>("process_tiff_pages", {
+          return invoke<ToolResult>("process_tiff_pages", { runId,
             request: {
               paths,
               pages: isCurrentTiffInspection(tiffInspection, paths)
                 ? tiffInspection.frames.map(({ path, page }) => ({ path, page }))
                 : [],
-              outputLocation: "alongsideInput",
+              outputLocation,
+              outputPath,
             },
           });
         }
-        return invoke<ToolResult>("image_metadata", {
-          request: { paths, outputLocation: "alongsideInput" },
+        return invoke<ToolResult>("image_metadata", { runId,
+          request: { paths, outputLocation },
         });
       }}
     >
-      {({ files, run, loading, selectedFileIndex, selectFile }) => (
+      {({ files, outputLocation, run, loading, selectedFileIndex, selectFile, destination, runLabel }) => (
         <Card className="workspace-control-panel py-0">
           <CardContent className="workspace-control-panel-content grid gap-4 p-4">
-          <WorkspaceCommandRail
-            actions={availableActions}
-            activeId={activeToolId}
-            onSelect={(id) => { if (availability.allows(id)) setActiveToolId(id); }}
-            label="Media workspace tools"
-          />
           <div>
-            <div className="flex items-center justify-between gap-3">
-              <h2 className="workspace-active-command">{activeUtility.title}</h2>
-              <Badge variant="outline">On this device</Badge>
-            </div>
+            <h2 className="workspace-active-command">{activeUtility.title}</h2>
             <p className="workspace-panel-label">Specialized media outcome</p>
             <p className="workspace-panel-copy">Keep the same selected files while choosing a sequence, icon, or explicit metadata result.</p>
           </div>
@@ -211,7 +186,7 @@ export const MediaWorkspaceView = ({ utility }: { utility: ToolDefinition }) => 
                 variant="ghost"
                 size="sm"
                 disabled={loading || files.length === 0}
-                onClick={async () => setReport(await invoke<unknown[]>("inspect_image_metadata", { request: { paths: files, outputLocation: "alongsideInput" } }))}
+                onClick={async () => setReport(await invoke<unknown[]>("inspect_image_metadata", { request: { paths: files, outputLocation } }))}
               >
                 Inspect metadata
               </Button>
@@ -219,8 +194,10 @@ export const MediaWorkspaceView = ({ utility }: { utility: ToolDefinition }) => 
             </>
           )}
 
-          <Button variant="default" disabled={loading || files.length === 0 || (activeUtility.id === "tiff-pages" && !isCurrentTiffInspection(tiffInspection, files)) || (activeUtility.id === "image-metadata" && metadataMode === "inspect")} onClick={run} className="workspace-primary-action">
-            {activeUtility.id === "image-metadata" ? "Remove metadata" : activeUtility.shortTitle}
+          {destination}
+          <Button variant="default" disabled={loading || files.length === 0 || (activeUtility.id === "tiff-pages" && !isCurrentTiffInspection(tiffInspection, files)) || (activeUtility.id === "image-metadata" && metadataMode === "inspect")} onClick={run} className="workspace-primary-action" {...shortcutTarget("run")}>
+            {runLabel ?? (activeUtility.id === "image-metadata" ? "Remove metadata" : activeUtility.shortTitle)}
+            <ShortcutHint id="run" />
           </Button>
           </CardContent>
         </Card>

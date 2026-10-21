@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -9,6 +9,15 @@ use std::sync::OnceLock;
 pub enum OutputLocation {
     AlongsideInput,
     CustomFolder(PathBuf),
+}
+
+impl OutputLocation {
+    pub fn directory_for<'a>(&'a self, input: &'a std::path::Path) -> &'a std::path::Path {
+        match self {
+            OutputLocation::AlongsideInput => input.parent().unwrap_or_else(|| std::path::Path::new(".")),
+            OutputLocation::CustomFolder(folder) => folder,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,20 +34,37 @@ pub struct ToolRequest {
     pub output_location: OutputLocation,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PdfRequest {
-    pub paths: Vec<PathBuf>,
-    pub password: String,
-    pub output_location: OutputLocation,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// One password for the whole batch, plus per-file overrides keyed by the input path
+/// exactly as the request lists it. An override always wins over the batch password.
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PasswordRequest {
     pub paths: Vec<PathBuf>,
     pub password: String,
+    #[serde(default)]
+    pub password_overrides: HashMap<PathBuf, String>,
     pub output_location: OutputLocation,
+}
+
+impl PasswordRequest {
+    pub fn password_for(&self, path: &Path) -> &str {
+        self.password_overrides.get(path).unwrap_or(&self.password)
+    }
+}
+
+// Passwords must never reach logs, so Debug names the overridden files and hides every secret.
+impl fmt::Debug for PasswordRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut overridden = self.password_overrides.keys().collect::<Vec<_>>();
+        overridden.sort();
+        formatter
+            .debug_struct("PasswordRequest")
+            .field("paths", &self.paths)
+            .field("password", &"<redacted>")
+            .field("password_overrides", &overridden)
+            .field("output_location", &self.output_location)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,33 +85,75 @@ pub struct ConvertImagesRequest {
     pub output_location: OutputLocation,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolError {
+    #[serde(flatten)]
     pub kind: ErrorKind,
     pub message: String,
+    #[serde(default)]
+    pub pointer: Option<OutcomePointer>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "details", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ErrorKind {
     InvalidInput,
     Unavailable,
-    LimitExceeded,
+    LimitExceeded { limit: LimitKind },
     Processing,
+    WrongPassword,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LimitKind {
+    FileSize,
+    PageCount,
+    Time,
+    Decompression,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum OutcomePointer {
+    Tool { tool_id: String },
+    Pack { pack_id: String },
+    OutputFolder,
 }
 
 impl ToolError {
+    fn new(kind: ErrorKind, message: impl Into<String>) -> Self {
+        Self { kind, message: message.into(), pointer: None }
+    }
+
     pub fn invalid_input(message: impl Into<String>) -> Self {
-        Self { kind: ErrorKind::InvalidInput, message: message.into() }
+        Self::new(ErrorKind::InvalidInput, message)
     }
 
     pub fn processing(message: impl Into<String>) -> Self {
-        Self { kind: ErrorKind::Processing, message: message.into() }
+        Self::new(ErrorKind::Processing, message)
     }
 
     pub fn unavailable(message: impl Into<String>) -> Self {
-        Self { kind: ErrorKind::Unavailable, message: message.into() }
+        Self::new(ErrorKind::Unavailable, message)
+    }
+
+    pub fn limit_exceeded(limit: LimitKind, message: impl Into<String>) -> Self {
+        Self::new(ErrorKind::LimitExceeded { limit }, message)
+    }
+
+    pub fn wrong_password(message: impl Into<String>) -> Self {
+        Self::new(ErrorKind::WrongPassword, message)
+    }
+
+    pub fn cancelled(message: impl Into<String>) -> Self {
+        Self::new(ErrorKind::Cancelled, message)
+    }
+
+    pub fn with_pointer(self, pointer: OutcomePointer) -> Self {
+        Self { pointer: Some(pointer), ..self }
     }
 }
 
@@ -119,6 +187,8 @@ pub struct NativeCapability {
     pub supports_preview: bool,
     #[serde(rename = "nativeAvailability", deserialize_with = "deserialize_native_availability")]
     pub native_available: bool,
+    pub output_suffix: String,
+    pub many_to_one: bool,
 }
 
 static CAPABILITY_REGISTRY: OnceLock<Vec<NativeCapability>> = OnceLock::new();
@@ -162,8 +232,24 @@ fn parse_capability_registry(raw: &str) -> Result<Vec<NativeCapability>, String>
                 ));
             }
         }
+        if !is_valid_output_suffix(&capability.output_suffix) {
+            return Err(format!(
+                "{} has an invalid output suffix {}.",
+                capability.command, capability.output_suffix
+            ));
+        }
     }
     Ok(capabilities)
+}
+
+fn is_valid_output_suffix(suffix: &str) -> bool {
+    suffix.is_empty()
+        || suffix.strip_prefix('-').is_some_and(|rest| {
+            rest.split('-').all(|segment| {
+                !segment.is_empty()
+                    && segment.chars().all(|character| character.is_ascii_lowercase() || character.is_ascii_digit())
+            })
+        })
 }
 
 pub fn native_capabilities() -> &'static [NativeCapability] {
@@ -242,54 +328,226 @@ pub fn partition_command_inputs(command: &str, paths: &[PathBuf]) -> Result<Vali
         });
     }
     let accepted_extensions = capability.accepted_extensions.join(", ");
-    let (accepted, rejected): (Vec<_>, Vec<_>) = paths.iter().cloned().enumerate().partition(|(_, path)| {
-        path.extension().and_then(|extension| extension.to_str()).map(|extension| {
+    let mut validation = ValidatedCommandInputs { accepted: Vec::new(), rejected: Vec::new() };
+    for (index, path) in paths.iter().cloned().enumerate() {
+        let extension_accepted = path.extension().and_then(|extension| extension.to_str()).is_some_and(|extension| {
             capability.accepted_extensions.iter().any(|accepted| accepted.trim_start_matches('.').eq_ignore_ascii_case(extension))
-        }).unwrap_or(false)
-    });
-    Ok(ValidatedCommandInputs {
-        accepted,
-        rejected: rejected.into_iter().map(|(index, path)| {
-            (index, JobOutcome::failure(path, ToolError::invalid_input(format!("Unsupported input format. Accepted extensions: {accepted_extensions}."))))
-        }).collect(),
-    })
+        });
+        let error = if path.is_dir() {
+            Some(ToolError::invalid_input("Folders aren't processed. Add the files inside the folder instead."))
+        } else if !extension_accepted {
+            Some(ToolError::invalid_input(format!("Unsupported input format. Accepted extensions: {accepted_extensions}.")))
+        } else {
+            None
+        };
+        match error {
+            Some(error) => validation.rejected.push((index, JobOutcome::failure(path, error))),
+            None => validation.accepted.push((index, path)),
+        }
+    }
+    Ok(validation)
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub enum SkipCode {
+    NotProtected,
+    AlreadyProtected,
+    NoSavings,
+    AlreadyInTargetFormat,
+    RangeEmptyAfterClamping,
+    TextAlreadyPresent,
+    NoEffectiveChange,
+    UnsupportedFormat,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkipReason {
+    pub code: SkipCode,
+    pub message: String,
+    #[serde(default)]
+    pub pointer: Option<OutcomePointer>,
+}
+
+impl SkipReason {
+    pub fn new(code: SkipCode, message: impl Into<String>) -> Self {
+        Self { code, message: message.into(), pointer: None }
+    }
+
+    pub fn with_pointer(self, pointer: OutcomePointer) -> Self {
+        Self { pointer: Some(pointer), ..self }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "code", content = "details", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum WarningKind {
+    SignatureRemoved,
+    FontSubstituted { requested_family: String, actual_family: String },
+    RenamedToAvoidReplacing { chosen_name: String, final_name: String },
+    PrecisionReduced,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutcomeWarning {
+    #[serde(flatten)]
+    pub kind: WarningKind,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OutcomeState {
+    Succeeded { output_paths: Vec<PathBuf> },
+    Skipped { reason: SkipReason },
+    Failed { output_paths: Vec<PathBuf>, error: ToolError },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(into = "JobOutcomeWire", try_from = "JobOutcomeWire")]
 pub struct JobOutcome {
     pub input_path: PathBuf,
-    pub output_paths: Vec<PathBuf>,
     pub detail: String,
-    pub failure: Option<ToolError>,
+    pub warnings: Vec<OutcomeWarning>,
+    pub state: OutcomeState,
 }
 
 impl JobOutcome {
+    pub fn succeeded(input_path: PathBuf, output_paths: Vec<PathBuf>, detail: impl Into<String>) -> Self {
+        Self { input_path, detail: detail.into(), warnings: Vec::new(), state: OutcomeState::Succeeded { output_paths } }
+    }
+
+    pub fn skipped(input_path: PathBuf, reason: SkipReason) -> Self {
+        Self { input_path, detail: String::new(), warnings: Vec::new(), state: OutcomeState::Skipped { reason } }
+    }
+
     pub fn failure(input_path: PathBuf, error: ToolError) -> Self {
         Self::failure_with_outputs(input_path, Vec::new(), error)
     }
 
     pub fn failure_with_outputs(input_path: PathBuf, output_paths: Vec<PathBuf>, error: ToolError) -> Self {
-        Self { input_path, output_paths, detail: String::new(), failure: Some(error) }
+        Self { input_path, detail: String::new(), warnings: Vec::new(), state: OutcomeState::Failed { output_paths, error } }
+    }
+
+    pub fn with_warning(mut self, warning: OutcomeWarning) -> Self {
+        self.warnings.push(warning);
+        self
+    }
+
+    pub fn output_paths(&self) -> &[PathBuf] {
+        match &self.state {
+            OutcomeState::Succeeded { output_paths } | OutcomeState::Failed { output_paths, .. } => output_paths,
+            OutcomeState::Skipped { .. } => &[],
+        }
+    }
+
+    pub fn error(&self) -> Option<&ToolError> {
+        match &self.state {
+            OutcomeState::Failed { error, .. } => Some(error),
+            OutcomeState::Succeeded { .. } | OutcomeState::Skipped { .. } => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum OutcomeStateTag {
+    Succeeded,
+    Skipped,
+    Failed,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JobOutcomeWire {
+    input_path: PathBuf,
+    state: OutcomeStateTag,
+    output_paths: Vec<PathBuf>,
+    detail: String,
+    failure: Option<ToolError>,
+    reason: Option<SkipReason>,
+    warnings: Vec<OutcomeWarning>,
+}
+
+impl From<JobOutcome> for JobOutcomeWire {
+    fn from(outcome: JobOutcome) -> Self {
+        let (state, output_paths, failure, reason) = match outcome.state {
+            OutcomeState::Succeeded { output_paths } => (OutcomeStateTag::Succeeded, output_paths, None, None),
+            OutcomeState::Skipped { reason } => (OutcomeStateTag::Skipped, Vec::new(), None, Some(reason)),
+            OutcomeState::Failed { output_paths, error } => (OutcomeStateTag::Failed, output_paths, Some(error), None),
+        };
+        Self { input_path: outcome.input_path, state, output_paths, detail: outcome.detail, failure, reason, warnings: outcome.warnings }
+    }
+}
+
+impl TryFrom<JobOutcomeWire> for JobOutcome {
+    type Error = String;
+
+    fn try_from(wire: JobOutcomeWire) -> Result<Self, Self::Error> {
+        let state = match (wire.state, wire.failure, wire.reason) {
+            (OutcomeStateTag::Succeeded, None, None) => OutcomeState::Succeeded { output_paths: wire.output_paths },
+            (OutcomeStateTag::Skipped, None, Some(reason)) if wire.output_paths.is_empty() => OutcomeState::Skipped { reason },
+            (OutcomeStateTag::Failed, Some(error), None) => OutcomeState::Failed { output_paths: wire.output_paths, error },
+            (state, _, _) => return Err(format!("Inconsistent {state:?} job outcome for {}.", wire.input_path.display())),
+        };
+        Ok(Self { input_path: wire.input_path, detail: wire.detail, warnings: wire.warnings, state })
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn password_requests_prefer_the_override_and_never_print_a_password() {
+        let request: super::PasswordRequest = serde_json::from_value(serde_json::json!({
+            "paths": ["/in/a.pdf", "/in/b.pdf"],
+            "password": "batch-secret",
+            "passwordOverrides": { "/in/b.pdf": "own-secret" },
+            "outputLocation": "alongsideInput",
+        }))
+        .unwrap();
+        assert_eq!(request.password_for(std::path::Path::new("/in/a.pdf")), "batch-secret");
+        assert_eq!(request.password_for(std::path::Path::new("/in/b.pdf")), "own-secret");
+        let printed = format!("{request:?}");
+        assert!(!printed.contains("batch-secret") && !printed.contains("own-secret"), "{printed}");
+        assert!(printed.contains("/in/b.pdf"));
+
+        let without: super::PasswordRequest = serde_json::from_value(serde_json::json!({
+            "paths": ["/in/a.pdf"], "password": "batch-secret", "outputLocation": "alongsideInput",
+        }))
+        .unwrap();
+        assert!(without.password_overrides.is_empty());
+    }
+
+    #[test]
+    fn wrong_password_serializes_as_its_own_failure_kind() {
+        assert_eq!(
+            serde_json::to_value(super::ToolError::wrong_password("Wrong password.")).unwrap(),
+            serde_json::json!({ "kind": "wrongPassword", "message": "Wrong password.", "pointer": null }),
+        );
+    }
+
+    #[test]
+    fn cancelled_serializes_as_its_own_failure_kind() {
+        assert_eq!(
+            serde_json::to_value(super::ToolError::cancelled("Cancelled while it was running.")).unwrap(),
+            serde_json::json!({ "kind": "cancelled", "message": "Cancelled while it was running.", "pointer": null }),
+        );
+    }
+
     use super::*;
     use crate::kit::office::OfficeProcessor;
 
     #[test]
     fn ipc_result_uses_the_frontend_field_names() {
-        let outcome = JobOutcome {
-            input_path: PathBuf::from("source.pdf"),
-            output_paths: vec![PathBuf::from("source-unlocked.pdf")],
-            detail: "PDF Unlocked".to_string(),
-            failure: None,
-        };
+        let outcome = JobOutcome::succeeded(PathBuf::from("source.pdf"), vec![PathBuf::from("source-unlocked.pdf")], "PDF Unlocked");
         let value = serde_json::to_value(outcome).unwrap();
         assert_eq!(value["inputPath"], "source.pdf");
+        assert_eq!(value["state"], "succeeded");
         assert_eq!(value["outputPaths"][0], "source-unlocked.pdf");
+        assert_eq!(value["detail"], "PDF Unlocked");
+        assert!(value["failure"].is_null() && value["reason"].is_null());
+        assert_eq!(value["warnings"], serde_json::json!([]));
     }
 
     #[test]
@@ -299,8 +557,21 @@ mod tests {
             ToolError::invalid_input("Input file does not exist."),
         );
         let value = serde_json::to_value(outcome).unwrap();
+        assert_eq!(value["state"], "failed");
         assert_eq!(value["failure"]["kind"], "invalidInput");
         assert_eq!(value["failure"]["message"], "Input file does not exist.");
+        assert!(value["failure"]["pointer"].is_null() && value["reason"].is_null());
+
+        let pointed = JobOutcome::failure(
+            PathBuf::from("arabic.pdf"),
+            ToolError::unavailable("Install the script pack.").with_pointer(OutcomePointer::Pack { pack_id: "script-pack".into() }),
+        );
+        let value = serde_json::to_value(pointed).unwrap();
+        assert_eq!(value["failure"]["kind"], "unavailable");
+        assert_eq!(value["failure"]["pointer"], serde_json::json!({ "kind": "pack", "packId": "script-pack" }));
+
+        let read_only = ToolError::processing("The output folder is read-only. Nothing was saved.").with_pointer(OutcomePointer::OutputFolder);
+        assert_eq!(serde_json::to_value(read_only).unwrap()["pointer"], serde_json::json!({ "kind": "outputFolder" }));
     }
 
     #[test]
@@ -310,12 +581,116 @@ mod tests {
             PathBuf::from("source.gif"),
             vec![output.clone()],
             ToolError::processing("Could not publish the next frame."),
-        );
+        ).with_warning(OutcomeWarning {
+            kind: WarningKind::RenamedToAvoidReplacing { chosen_name: "source-frame-1.png".into(), final_name: "source-frame-1 2.png".into() },
+            message: "Renamed to avoid replacing.".into(),
+        });
         let value = serde_json::to_value(outcome).unwrap();
 
+        assert_eq!(value["state"], "failed");
         assert_eq!(value["outputPaths"], serde_json::json!([output]));
         assert_eq!(value["failure"]["kind"], "processing");
         assert_eq!(value["failure"]["message"], "Could not publish the next frame.");
+        assert_eq!(value["warnings"][0]["code"], "renamedToAvoidReplacing");
+        assert_eq!(value["warnings"][0]["details"], serde_json::json!({ "chosenName": "source-frame-1.png", "finalName": "source-frame-1 2.png" }));
+    }
+
+    #[test]
+    fn skipped_outcomes_carry_a_reason_and_no_outputs() {
+        let reason = SkipReason::new(SkipCode::UnsupportedFormat, "Convert HEIC images first.")
+            .with_pointer(OutcomePointer::Tool { tool_id: "heic-convert".into() });
+        let outcome = JobOutcome::skipped(PathBuf::from("photo.heic"), reason)
+            .with_warning(OutcomeWarning { kind: WarningKind::SignatureRemoved, message: "Signature removed.".into() });
+        assert!(outcome.output_paths().is_empty() && outcome.error().is_none());
+
+        let value = serde_json::to_value(outcome).unwrap();
+        assert_eq!(value["state"], "skipped");
+        assert_eq!(value["outputPaths"], serde_json::json!([]));
+        assert_eq!(value["detail"], "");
+        assert!(value["failure"].is_null());
+        assert_eq!(value["reason"], serde_json::json!({
+            "code": "unsupportedFormat",
+            "message": "Convert HEIC images first.",
+            "pointer": { "kind": "tool", "toolId": "heic-convert" },
+        }));
+        assert_eq!(value["warnings"], serde_json::json!([{ "code": "signatureRemoved", "message": "Signature removed." }]));
+    }
+
+    #[test]
+    fn seeded_codes_serialize_as_stable_camel_case_strings() {
+        let skips = [
+            SkipCode::NotProtected, SkipCode::AlreadyProtected, SkipCode::NoSavings,
+            SkipCode::AlreadyInTargetFormat, SkipCode::RangeEmptyAfterClamping, SkipCode::TextAlreadyPresent,
+            SkipCode::NoEffectiveChange, SkipCode::UnsupportedFormat, SkipCode::Cancelled,
+        ];
+        assert_eq!(serde_json::to_value(skips).unwrap(), serde_json::json!([
+            "notProtected", "alreadyProtected", "noSavings", "alreadyInTargetFormat",
+            "rangeEmptyAfterClamping", "textAlreadyPresent", "noEffectiveChange", "unsupportedFormat", "cancelled",
+        ]));
+        let warnings = [
+            WarningKind::SignatureRemoved,
+            WarningKind::FontSubstituted { requested_family: "A".into(), actual_family: "B".into() },
+            WarningKind::RenamedToAvoidReplacing { chosen_name: "a".into(), final_name: "b".into() },
+            WarningKind::PrecisionReduced,
+        ];
+        let codes = warnings.into_iter().map(|kind| serde_json::to_value(kind).unwrap()["code"].clone()).collect::<Vec<_>>();
+        assert_eq!(codes, ["signatureRemoved", "fontSubstituted", "renamedToAvoidReplacing", "precisionReduced"]);
+    }
+
+    #[test]
+    fn job_outcome_samples_match_the_shared_contract_artifact() {
+        let shared: serde_json::Value = serde_json::from_str(include_str!("../../../shared/job-outcome-samples.json")).unwrap();
+        let samples = vec![
+            JobOutcome::succeeded(PathBuf::from("signed.pdf"), vec![PathBuf::from("signed-edited.pdf")], "PDF saved")
+                .with_warning(OutcomeWarning { kind: WarningKind::SignatureRemoved, message: "The digital signature is no longer valid.".into() })
+                .with_warning(OutcomeWarning {
+                    kind: WarningKind::FontSubstituted { requested_family: "Garamond".into(), actual_family: "Times New Roman".into() },
+                    message: "Garamond was replaced with Times New Roman.".into(),
+                }),
+            JobOutcome::skipped(
+                PathBuf::from("photo.heic"),
+                SkipReason::new(SkipCode::UnsupportedFormat, "Convert HEIC images before compressing them.")
+                    .with_pointer(OutcomePointer::Tool { tool_id: "heic-convert".into() }),
+            ).with_warning(OutcomeWarning { kind: WarningKind::PrecisionReduced, message: "The 16-bit source would be reduced to 8-bit.".into() }),
+            JobOutcome::skipped(PathBuf::from("plain.pdf"), SkipReason::new(SkipCode::NotProtected, "This PDF is not password protected.")),
+            JobOutcome::failure_with_outputs(
+                PathBuf::from("scan.pdf"),
+                vec![PathBuf::from("scan-page-1.png")],
+                ToolError::unavailable("Install the script pack to shape this text.")
+                    .with_pointer(OutcomePointer::Pack { pack_id: "script-pack".into() }),
+            ).with_warning(OutcomeWarning {
+                kind: WarningKind::RenamedToAvoidReplacing { chosen_name: "scan-page-1.png".into(), final_name: "scan-page-1 2.png".into() },
+                message: "Saved as scan-page-1 2.png so the existing file was not replaced.".into(),
+            }),
+            JobOutcome::failure_with_outputs(
+                PathBuf::from("drawings.pdf"),
+                vec![PathBuf::from("drawings-page-1.png")],
+                ToolError::limit_exceeded(LimitKind::Time, "Took longer than 5 minutes and was stopped. 1 part was saved before it stopped."),
+            ),
+        ];
+
+        assert_eq!(serde_json::to_value(&samples).unwrap(), shared);
+        assert_eq!(serde_json::from_value::<Vec<JobOutcome>>(shared).unwrap(), samples);
+    }
+
+    #[test]
+    fn inconsistent_outcome_states_are_rejected_when_parsed() {
+        let base = serde_json::json!({ "inputPath": "a.pdf", "outputPaths": [], "detail": "", "failure": null, "reason": null, "warnings": [] });
+        let with = |patch: serde_json::Value| {
+            let mut value = base.clone();
+            value.as_object_mut().unwrap().extend(patch.as_object().unwrap().clone());
+            serde_json::from_value::<JobOutcome>(value)
+        };
+        let reason = serde_json::json!({ "code": "noSavings", "message": "Would not get smaller.", "pointer": null });
+        let failure = serde_json::json!({ "kind": "processing", "message": "Broke.", "pointer": null });
+
+        assert!(with(serde_json::json!({ "state": "succeeded" })).is_ok());
+        assert!(with(serde_json::json!({ "state": "skipped", "reason": reason })).is_ok());
+        assert!(with(serde_json::json!({ "state": "skipped", "reason": reason, "outputPaths": ["a-1.pdf"] })).is_err());
+        assert!(with(serde_json::json!({ "state": "skipped" })).is_err());
+        assert!(with(serde_json::json!({ "state": "failed" })).is_err());
+        assert!(with(serde_json::json!({ "state": "succeeded", "failure": failure })).is_err());
+        assert!(with(serde_json::json!({ "state": "failed", "failure": failure, "reason": reason })).is_err());
     }
 
     #[test]
@@ -344,7 +719,7 @@ mod tests {
         let outcomes = validate_command_inputs("convert_images", &paths).unwrap_err();
 
         assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), paths);
-        assert!(outcomes.iter().all(|outcome| outcome.failure.as_ref().is_some_and(|error| matches!(error.kind, ErrorKind::InvalidInput))));
+        assert!(outcomes.iter().all(|outcome| outcome.error().is_some_and(|error| matches!(error.kind, ErrorKind::InvalidInput))));
     }
 
     #[test]
@@ -352,7 +727,7 @@ mod tests {
         let outcomes = validate_command_inputs("convert_images", &[PathBuf::from("source.pdf")]).unwrap_err();
 
         assert_eq!(outcomes.len(), 1);
-        assert!(outcomes[0].failure.as_ref().is_some_and(|error| error.message.contains("Accepted extensions")));
+        assert!(outcomes[0].error().is_some_and(|error| error.message.contains("Accepted extensions")));
     }
 
     #[test]
@@ -361,8 +736,8 @@ mod tests {
             let outcomes = validate_command_inputs("images_to_pdf", &[PathBuf::from(format!("source.{extension}"))]).unwrap_err();
 
             assert_eq!(outcomes.len(), 1);
-            assert!(outcomes[0].failure.as_ref().is_some_and(|error| matches!(error.kind, ErrorKind::InvalidInput)));
-            assert!(outcomes[0].failure.as_ref().is_some_and(|error| error.message.contains("Accepted extensions")));
+            assert!(outcomes[0].error().is_some_and(|error| matches!(error.kind, ErrorKind::InvalidInput)));
+            assert!(outcomes[0].error().is_some_and(|error| error.message.contains("Accepted extensions")));
         }
     }
 
@@ -377,11 +752,38 @@ mod tests {
     }
 
     #[test]
+    fn capability_registry_rejects_a_folder_and_keeps_the_valid_inputs() {
+        let folder = std::env::temp_dir().join(format!("toolbox_contracts_folder_{}.png", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let paths = vec![PathBuf::from("first.png"), folder.clone(), PathBuf::from("notes.txt"), PathBuf::from("second.png")];
+
+        let validation = partition_command_inputs("image_metadata", &paths).unwrap();
+
+        assert_eq!(validation.accepted, vec![(0, paths[0].clone()), (3, paths[3].clone())]);
+        assert_eq!(validation.rejected.iter().map(|(index, _)| *index).collect::<Vec<_>>(), vec![1, 2]);
+        assert!(validation.rejected[0].1.error().is_some_and(|error| matches!(error.kind, ErrorKind::InvalidInput) && error.message.contains("Folders")));
+        assert!(validation.rejected[1].1.error().is_some_and(|error| error.message.contains("Accepted extensions")));
+        std::fs::remove_dir(folder).unwrap();
+    }
+
+    #[test]
+    fn folder_named_like_an_accepted_file_fails_the_whole_ordered_request() {
+        let folder = std::env::temp_dir().join(format!("toolbox_contracts_merge_folder_{}.pdf", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+
+        let outcomes = validate_command_inputs("merge_pdfs", &[PathBuf::from("one.pdf"), folder.clone()]).unwrap_err();
+
+        assert_eq!(outcomes.len(), 2);
+        assert!(outcomes[1].error().is_some_and(|error| error.message.contains("Folders")));
+        std::fs::remove_dir(folder).unwrap();
+    }
+
+    #[test]
     fn page_capability_rejects_an_explicit_empty_selection() {
         let outcomes = validate_page_selection("pdf_to_text", &[PathBuf::from("source.pdf")], Some(&[])).unwrap_err();
 
         assert_eq!(outcomes.len(), 1);
-        assert!(outcomes[0].failure.as_ref().is_some_and(|error| error.message.contains("at least one page")));
+        assert!(outcomes[0].error().is_some_and(|error| error.message.contains("at least one page")));
     }
 
     #[test]
@@ -412,13 +814,29 @@ mod tests {
             assert_eq!(capability.supports_page_selection, row["supportsPageSelection"].as_bool().unwrap());
             assert_eq!(capability.supports_preview, row["supportsPreview"].as_bool().unwrap());
             assert_eq!(capability.native_available, row["nativeAvailability"] == "available");
+            assert_eq!(capability.output_suffix, row["outputSuffix"].as_str().unwrap());
+            assert_eq!(capability.many_to_one, row["manyToOne"].as_bool().unwrap());
+            assert_eq!(
+                capability.many_to_one,
+                capability.input_cardinality == InputCardinality::Ordered,
+                "{command} many-to-one must match its ordered inputs"
+            );
         }
+        let mut many_to_one = native_capabilities()
+            .iter()
+            .filter(|capability| capability.many_to_one)
+            .map(|capability| capability.command.as_str())
+            .collect::<Vec<_>>();
+        many_to_one.sort_unstable();
+        assert_eq!(many_to_one, ["compare_pdfs", "create_gif", "images_to_pdf", "merge_pdfs", "process_tiff_pages"]);
 
         let office = native_capability("remove_password").unwrap();
         assert_eq!(office.accepted_extensions, [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"]);
-        let pdf_protection = native_capability("protect_pdf").unwrap();
-        assert_eq!(pdf_protection.accepted_extensions, [".pdf"]);
-        assert!(pdf_protection.native_available);
+        let lock = native_capability("protect_files").unwrap();
+        assert_eq!((lock.accepted_extensions.as_slice(), lock.output_suffix.as_str()), ([".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"].map(String::from).as_slice(), "-protected"));
+        assert!(lock.native_available);
+        assert!(native_capability("protect_pdf").is_none(), "the PDF protect command is retired");
+        assert!(native_capability("protect_office").is_none(), "the Office protect command is retired");
         let images = native_capability("images_to_pdf").unwrap();
         assert_eq!(images.input_cardinality, InputCardinality::Ordered);
         assert!(!images.accepted_extensions.contains(&".tif".to_string()));
@@ -433,7 +851,8 @@ mod tests {
 
     #[test]
     fn shared_capability_parser_rejects_duplicate_and_unknown_contract_data() {
-        let row = r#"{"command":"test","acceptedExtensions":[".pdf"],"inputCardinality":"single","supportsPageSelection":false,"supportsPreview":false,"nativeAvailability":"available"}"#;
+        let row = r#"{"command":"test","acceptedExtensions":[".pdf"],"inputCardinality":"single","supportsPageSelection":false,"supportsPreview":false,"nativeAvailability":"available","outputSuffix":"-tested","manyToOne":false}"#;
+        assert_eq!(parse_capability_registry(&format!("[{row}]")).unwrap()[0].output_suffix, "-tested");
         assert!(parse_capability_registry(&format!("[{row},{row}]")).unwrap_err().contains("Duplicate"));
         let unknown = format!("[{}]", row.replace('}', ",\"unknown\":true}"));
         assert!(parse_capability_registry(&unknown)
@@ -442,11 +861,30 @@ mod tests {
     }
 
     #[test]
-    fn native_office_protection_accepts_docx_and_xlsx_only() {
-        for extension in ["docx", "xlsx", "DOCX", "XLSX"] {
+    fn shared_capability_parser_requires_exactly_one_valid_output_suffix() {
+        let row = r#"{"command":"test","acceptedExtensions":[".pdf"],"inputCardinality":"single","supportsPageSelection":false,"supportsPreview":false,"nativeAvailability":"available","outputSuffix":"-tested","manyToOne":false}"#;
+        let missing_suffix = format!("[{}]", row.replace(",\"outputSuffix\":\"-tested\"", ""));
+        assert!(parse_capability_registry(&missing_suffix).unwrap_err().contains("missing field `outputSuffix`"));
+        let missing_flag = format!("[{}]", row.replace(",\"manyToOne\":false", ""));
+        assert!(parse_capability_registry(&missing_flag).unwrap_err().contains("missing field `manyToOne`"));
+        let duplicate_suffix = format!("[{}]", row.replace('}', ",\"outputSuffix\":\"-other\"}"));
+        assert!(parse_capability_registry(&duplicate_suffix).unwrap_err().contains("duplicate field `outputSuffix`"));
+        let list_suffix = format!("[{}]", row.replace("\"-tested\"", "[\"-a\",\"-b\"]"));
+        assert!(parse_capability_registry(&list_suffix).is_err());
+        for invalid in ["tested", "-", "-Tested", "--tested", "-tested-", "-tested.pdf"] {
+            let raw = format!("[{}]", row.replace("-tested", invalid));
+            assert!(parse_capability_registry(&raw).unwrap_err().contains("invalid output suffix"), "{invalid}");
+        }
+        let flag = format!("[{}]", row.replace("\"manyToOne\":false", "\"manyToOne\":\"yes\""));
+        assert!(parse_capability_registry(&flag).is_err());
+    }
+
+    #[test]
+    fn native_office_protection_accepts_docx_xlsx_and_pptx_only() {
+        for extension in ["docx", "xlsx", "pptx", "DOCX", "XLSX", "PPTX"] {
             assert!(OfficeProcessor::supports_protection_extension(extension));
         }
-        for extension in ["doc", "xls", "ppt", "pptx"] {
+        for extension in ["doc", "xls", "ppt"] {
             assert!(!OfficeProcessor::supports_protection_extension(extension));
         }
     }

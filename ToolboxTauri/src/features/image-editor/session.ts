@@ -1,4 +1,4 @@
-import type { ConvertImagesRequest } from "../../contracts";
+import type { ConvertImagesRequest, OutputLocation } from "../../contracts";
 
 export type ImageEditOperation =
   | { kind: "convert"; format: ConvertImagesRequest["format"] }
@@ -30,9 +30,9 @@ export type ImageEditOperation =
 
 export interface ImageEditPlan {
   edits: ImageEditOperation[];
-  outputLocation: "alongsideInput";
-  suffix: string;
 }
+
+export const imageEditRequestPlan = (plan: ImageEditPlan, outputLocation: OutputLocation) => ({ ...plan, outputLocation });
 
 export interface ImageEditHistory {
   past: ImageEditPlan[];
@@ -44,8 +44,6 @@ export type ImageCropRect = { x: number; y: number; width: number; height: numbe
 
 export const emptyImageEditPlan = (): ImageEditPlan => ({
   edits: [],
-  outputLocation: "alongsideInput",
-  suffix: "-edited",
 });
 
 export const createImageEditHistory = (): ImageEditHistory => ({

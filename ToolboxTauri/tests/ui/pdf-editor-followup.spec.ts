@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { openToolBySearch } from "./open-tool";
 
 const svg = "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="612" height="792"><rect width="612" height="792" fill="white"/><text x="60" y="85" font-size="24">Selectable local PDF text</text></svg>');
 const signatureAssetUrl = 'asset://localhost/' + encodeURIComponent('/local/signature.png');
@@ -21,7 +22,7 @@ test.beforeEach(async ({ page }) => {
         }
         if (command === 'inspect_pdf_scene') return { path: '/local/scene-fixture.pdf', pages: [{ index: 0, width: 612, height: 792, preview: svg, textRuns: [{ text: 'Selectable local PDF text', x: 60, y: 55, width: 250, height: 25 }] }] };
         if (command === 'preview_pdf_scene_pages') return args.request.pageIndices.map((pageIndex: number) => ({ pageIndex, preview: { dataUrl: svg, width: 612, height: 792 } }));
-        if (command === 'export_pdf_scene') return [{ inputPath: '/local/scene-fixture.pdf', outputPaths: ['/local/scene-fixture-edited-1.pdf'], detail: 'PDF scene exported', failure: null }];
+        if (command === 'export_pdf_scene') return [{ inputPath: '/local/scene-fixture.pdf', outputPaths: ['/local/scene-fixture-edited-1.pdf'], state: 'succeeded', detail: 'PDF scene exported', failure: null, reason: null, warnings: [] }];
         return null;
       },
     };
@@ -31,10 +32,12 @@ test.beforeEach(async ({ page }) => {
 
 async function openEditor(page: Page) {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Open Edit PDF', exact: true }).click();
+  await openToolBySearch(page, "Edit PDF");
   await page.getByRole('button', { name: 'Choose files to process' }).click();
   await expect(page.getByRole('group', { name: 'PDF page canvas' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeEnabled();
+  await expect.poll(() => page.evaluate(() => (window as any).calls.some((call: any) => call.command === 'preview_pdf_scene_pages'))).toBe(true);
+  await expect(page.locator('.scene-canvas image').first()).toBeAttached();
+  await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeDisabled();
 }
 
 async function dragOnCanvas(page: Page, x: number, y: number, width = 0.28, height = 0.08) {

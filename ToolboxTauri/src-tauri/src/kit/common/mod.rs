@@ -1,4 +1,7 @@
 pub mod batch_runner;
+pub mod limits;
+#[cfg(all(test, unix))]
+pub mod fake_helper;
 
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -6,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 pub use crate::kit::contracts::JobOutcome;
 pub use crate::kit::contracts::OutputLocation;
+use crate::kit::contracts::{OutcomeState, OutcomeWarning, WarningKind};
 
 pub struct OutputNaming;
 
@@ -25,8 +29,7 @@ impl OutputReservation {
     }
 
     pub fn publish(self) -> io::Result<PathBuf> {
-        std::fs::hard_link(&self.temporary_path, &self.path)?;
-        Ok(self.path.clone())
+        limits::publish_within_time(|| std::fs::hard_link(&self.temporary_path, &self.path).map(|()| self.path.clone()))
     }
 }
 
@@ -37,6 +40,30 @@ impl Drop for OutputReservation {
     }
 }
 
+pub struct FolderReservation {
+    path: PathBuf,
+    published: bool,
+}
+
+impl FolderReservation {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn publish(mut self) -> PathBuf {
+        self.published = true;
+        self.path.clone()
+    }
+}
+
+impl Drop for FolderReservation {
+    fn drop(&mut self) {
+        if !self.published {
+            let _ = std::fs::remove_dir(&self.path);
+        }
+    }
+}
+
 impl OutputNaming {
     pub fn reserve_destination(
         input_path: &Path,
@@ -44,9 +71,17 @@ impl OutputNaming {
         suffix: &str,
         extension: &str,
     ) -> io::Result<OutputReservation> {
-        Self::allocate(input_path, location, suffix, extension, |path| {
+        Self::allocate(input_path, location, suffix, Some(extension), |path| {
             Self::reserve_candidate(path).map(|reservation| reservation.map(|(reservation, _)| reservation))
         })
+    }
+
+    pub fn reserve_folder(
+        input_path: &Path,
+        location: &OutputLocation,
+        suffix: &str,
+    ) -> io::Result<FolderReservation> {
+        Self::allocate(input_path, location, suffix, None, Self::reserve_folder_candidate)
     }
 
     pub fn create_destination(
@@ -55,7 +90,7 @@ impl OutputNaming {
         suffix: &str,
         extension: &str,
     ) -> io::Result<(OutputReservation, File)> {
-        Self::allocate(input_path, location, suffix, extension, |path| {
+        Self::allocate(input_path, location, suffix, Some(extension), |path| {
             Self::reserve_candidate(path)
         })
     }
@@ -64,28 +99,72 @@ impl OutputNaming {
         Self::reserve_candidate(path).map(|reservation| reservation.map(|(reservation, _)| reservation))
     }
 
-    fn allocate<T, F>(
+    pub fn reserve_single_output(
+        chosen_path: Option<&Path>,
         input_path: &Path,
         location: &OutputLocation,
         suffix: &str,
         extension: &str,
+    ) -> io::Result<OutputReservation> {
+        Self::create_single_output(chosen_path, input_path, location, suffix, extension).map(|(reservation, _)| reservation)
+    }
+
+    pub fn create_single_output(
+        chosen_path: Option<&Path>,
+        input_path: &Path,
+        location: &OutputLocation,
+        suffix: &str,
+        extension: &str,
+    ) -> io::Result<(OutputReservation, File)> {
+        let Some(chosen) = chosen_path else {
+            return Self::create_destination(input_path, location, suffix, extension);
+        };
+        let directory = chosen.parent().filter(|parent| chosen.is_absolute() && parent.is_dir()).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, format!("{} is not in a folder that exists", chosen.display()))
+        })?;
+        let name = chosen.file_name().and_then(|value| value.to_str()).filter(|value| !value.is_empty()).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "the chosen file name is empty")
+        })?;
+        let extension = extension.trim_start_matches('.');
+        let stem = match chosen.extension().and_then(|value| value.to_str()) {
+            Some(existing) if existing.eq_ignore_ascii_case(extension) => chosen.file_stem().and_then(|value| value.to_str()).unwrap_or(name),
+            _ => name,
+        };
+        Self::allocate_in(directory, stem, "", Some(extension), Self::reserve_candidate)
+    }
+
+    fn allocate<T, F>(
+        input_path: &Path,
+        location: &OutputLocation,
+        suffix: &str,
+        extension: Option<&str>,
+        claim: F,
+    ) -> io::Result<T>
+    where
+        F: FnMut(&Path) -> io::Result<Option<T>>,
+    {
+        let directory = location.directory_for(input_path);
+        let stem = input_path.file_stem().and_then(|value| value.to_str()).unwrap_or("");
+        Self::allocate_in(&directory, stem, suffix, extension, claim)
+    }
+
+    fn allocate_in<T, F>(
+        directory: &Path,
+        stem: &str,
+        suffix: &str,
+        extension: Option<&str>,
         mut claim: F,
     ) -> io::Result<T>
     where
         F: FnMut(&Path) -> io::Result<Option<T>>,
     {
-        let directory = match location {
-            OutputLocation::AlongsideInput => input_path.parent().unwrap_or_else(|| Path::new(".")),
-            OutputLocation::CustomFolder(folder) => folder,
-        };
-        let stem = input_path.file_stem().and_then(|value| value.to_str()).unwrap_or("");
-        let extension = extension.trim_start_matches('.');
+        let extension = extension.map(|value| format!(".{}", value.trim_start_matches('.'))).unwrap_or_default();
         let mut counter = 0usize;
         loop {
             let name = if counter == 0 {
-                format!("{stem}{suffix}.{extension}")
+                format!("{stem}{suffix}{extension}")
             } else {
-                format!("{stem}{suffix}-{counter}.{extension}")
+                format!("{stem}{suffix}-{counter}{extension}")
             };
             if let Some(reservation) = claim(&directory.join(name))? {
                 return Ok(reservation);
@@ -129,6 +208,25 @@ impl OutputNaming {
         }, file)))
     }
 
+    fn reserve_folder_candidate(path: &Path) -> io::Result<Option<FolderReservation>> {
+        if path.exists() {
+            return Ok(None);
+        }
+        let claim_path = Self::claim_path(path);
+        match OpenOptions::new().write(true).create_new(true).open(&claim_path) {
+            Ok(claim) => drop(claim),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => return Ok(None),
+            Err(error) => return Err(error),
+        }
+        let created = std::fs::create_dir(path);
+        let _ = std::fs::remove_file(&claim_path);
+        match created {
+            Ok(()) => Ok(Some(FolderReservation { path: path.to_path_buf(), published: false })),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
     fn claim_path(path: &Path) -> PathBuf {
         let name = path.file_name().and_then(|value| value.to_str()).unwrap_or("output");
         path.with_file_name(format!(".{name}.toolbox-reservation"))
@@ -152,6 +250,20 @@ impl OutputNaming {
         }
         Err(io::Error::new(io::ErrorKind::AlreadyExists, "could not allocate a unique temporary output"))
     }
+}
+
+
+pub fn note_renamed(outcome: JobOutcome, chosen_path: Option<&Path>) -> JobOutcome {
+    let Some(chosen) = chosen_path else { return outcome };
+    let renamed = match &outcome.state {
+        OutcomeState::Succeeded { output_paths } => output_paths.first().filter(|published| published.as_path() != chosen).cloned(),
+        _ => None,
+    };
+    let Some(published) = renamed else { return outcome };
+    let file_name = |path: &Path| path.file_name().map(|value| value.to_string_lossy().into_owned()).unwrap_or_default();
+    let (chosen_name, final_name) = (file_name(chosen), file_name(&published));
+    let message = format!("Saved as {final_name} so the existing {chosen_name} was not replaced.");
+    outcome.with_warning(OutcomeWarning { kind: WarningKind::RenamedToAvoidReplacing { chosen_name, final_name }, message })
 }
 
 #[cfg(test)]
@@ -231,6 +343,104 @@ mod tests {
         assert!(!destination.exists());
         assert!(!temporary.exists());
         assert!(!claim.exists());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    fn folder_root(name: &str) -> (PathBuf, PathBuf) {
+        let root = std::env::temp_dir().join(format!("toolbox_folder_{name}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let input = root.join("scan.pdf");
+        std::fs::write(&input, b"source").unwrap();
+        (root, input)
+    }
+
+    #[test]
+    fn folder_outputs_number_like_files_and_never_reuse_a_previous_run() {
+        let (root, input) = folder_root("numbering");
+        let alongside = OutputLocation::AlongsideInput;
+
+        let first = OutputNaming::reserve_folder(&input, &alongside, "-images").unwrap().publish();
+        assert_eq!(first, root.join("scan-images"));
+        assert!(first.is_dir());
+        let second = OutputNaming::reserve_folder(&input, &alongside, "-images").unwrap().publish();
+        assert_eq!(second, root.join("scan-images-1"));
+        std::fs::write(root.join("scan-images-2"), b"a file, not a folder").unwrap();
+        let third = OutputNaming::reserve_folder(&input, &alongside, "-images").unwrap().publish();
+        assert_eq!(third, root.join("scan-images-3"));
+        let file = OutputNaming::reserve_destination(&input, &alongside, "-images", "png").unwrap();
+        assert_eq!(file.destination_path(), root.join("scan-images.png"));
+        drop(file);
+
+        assert_eq!(std::fs::read_dir(&first).unwrap().count(), 0);
+        let names = std::fs::read_dir(&root)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            names,
+            ["scan-images", "scan-images-1", "scan-images-2", "scan-images-3", "scan.pdf"]
+                .into_iter()
+                .map(str::to_string)
+                .collect()
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn folder_outputs_honor_custom_folders_and_pending_claims() {
+        let (root, input) = folder_root("custom");
+        let custom = root.join("exports");
+        std::fs::create_dir(&custom).unwrap();
+        let location = OutputLocation::CustomFolder(custom.clone());
+        std::fs::write(OutputNaming::claim_path(&custom.join("scan-frames")), b"").unwrap();
+
+        let folder = OutputNaming::reserve_folder(&input, &location, "-frames").unwrap().publish();
+        assert_eq!(folder, custom.join("scan-frames-1"));
+        assert!(!OutputNaming::claim_path(&folder).exists());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unpublished_empty_folder_reservations_are_removed() {
+        let (root, input) = folder_root("drop");
+        let reservation = OutputNaming::reserve_folder(&input, &OutputLocation::AlongsideInput, "-split").unwrap();
+        let path = reservation.path().to_path_buf();
+        assert!(path.is_dir());
+        drop(reservation);
+        assert!(!path.exists());
+        assert!(!OutputNaming::claim_path(&path).exists());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn parallel_folder_reservations_never_share_a_folder() {
+        let (root, input) = folder_root("parallel");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(16));
+        let handles = (0..16)
+            .map(|_| {
+                let input = input.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    OutputNaming::reserve_folder(&input, &OutputLocation::AlongsideInput, "-pages").unwrap().publish()
+                })
+            })
+            .collect::<Vec<_>>();
+        let folders = handles.into_iter().map(|handle| handle.join().unwrap()).collect::<Vec<_>>();
+
+        let unique = folders.iter().collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(unique.len(), 16);
+        let mut expected = vec![root.join("scan-pages")];
+        expected.extend((1..16).map(|counter| root.join(format!("scan-pages-{counter}"))));
+        assert_eq!(unique, expected.iter().collect());
+        assert!(std::fs::read_dir(&root)
+            .unwrap()
+            .all(|entry| !entry.unwrap().file_name().to_string_lossy().ends_with(".toolbox-reservation")));
 
         std::fs::remove_dir_all(root).unwrap();
     }

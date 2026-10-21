@@ -1,12 +1,10 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ToolScaffold } from "../components/ToolScaffold";
-import { WorkspaceCommandRail } from "../components/WorkspaceCommandRail";
-import { toolsForWorkspaceId, UtilityRegistry } from "../registry";
 import { parsePageRange, selectedPageLabel } from "../shared/workspaceValidation";
 import { displayedBoxToPdfRect, type DisplayedBox, type PdfDocument } from "../features/pdf-editor";
 import type { AtomicToolId, ToolDefinition, ToolResult } from "../contracts";
-import { useToolAvailability } from "../ToolAvailabilityContext";
+import { failedOutcome } from "../jobOutcome";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -14,11 +12,10 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
-import { Slider } from "@/components/ui/slider";
+import { ShortcutHint } from "../components/ShortcutHint";
+import { shortcutTarget } from "../shortcuts";
 
-const conversionActions = toolsForWorkspaceId("pdf-convert");
-const conversionIds = new Set<string>(conversionActions.map((tool) => tool.id));
-const nonInspectingConversionIds = new Set(["images-to-pdf", "pdf-merge", "pdf-split", "pdf-compress", "pdf-repair", "pdf-compare"]);
+const nonInspectingConversionIds = new Set(["images-to-pdf", "pdf-merge", "pdf-split", "pdf-repair", "pdf-compare"]);
 const outputPreviewLimitations: Partial<Record<AtomicToolId, string>> = {
   "images-to-pdf": "Output preview unavailable. Export combines the selected images into one PDF in file order.",
   "pdf-merge": "Output preview unavailable. Export merges the selected PDFs in file order.",
@@ -26,7 +23,6 @@ const outputPreviewLimitations: Partial<Record<AtomicToolId, string>> = {
   "pdf-to-text": "Output preview unavailable. Export creates a text file from the selected pages.",
   "pdf-image-extract": "Output preview unavailable. Export extracts embedded JPEG images from the selected pages.",
   "pdf-extract-pages": "Output preview unavailable. Export creates a PDF containing the selected pages.",
-  "pdf-compress": "Output preview unavailable. Export creates a compressed PDF copy while preserving page geometry.",
   "pdf-ocr": "Output preview unavailable. OCR is unavailable in this build.",
   "pdf-rotate": "Output preview unavailable. Export saves a copy with the selected pages turned.",
   "pdf-repair": "Output preview unavailable. Export rebuilds each PDF and saves a fixed copy next to it.",
@@ -64,32 +60,17 @@ const pdfToImagesOutputSummary = (selectedPages: number[], dpi: string, format: 
   return `Output preview unavailable. Export renders ${pageSummary} at ${dpi} DPI as ${formatLabel} image files.`;
 };
 
-export const PDFConversionWorkspaceView = ({ utility, initialPaths = [] }: { utility: ToolDefinition; initialPaths?: readonly string[] }) => {
-  const availability = useToolAvailability();
-  const availableActions = availability.filter(conversionActions);
-  const preferredTool = conversionIds.has(utility.id) && availability.allows(utility.id)
-    ? utility.id
-    : availableActions[0]?.id ?? utility.id;
+export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPaths = [], onFilesChange }: { utility: ToolDefinition; initialPaths?: readonly string[]; onFilesChange?: (paths: readonly string[]) => void }) => {
   const [dpi, setDpi] = useState("150");
   const [format, setFormat] = useState("jpg");
   const [pageRange, setPageRange] = useState("");
   const [splitMode, setSplitMode] = useState<"pages" | "ranges" | "chunks">("pages");
   const [chunkSize, setChunkSize] = useState(2);
-  const [quality, setQuality] = useState(80);
   const [degrees, setDegrees] = useState(90);
   const [redactBox, setRedactBox] = useState<DisplayedBox | null>(null);
   const [document, setDocument] = useState<PdfDocument | null>(null);
   const [selectedPages, setSelectedPages] = useState<number[]>([]);
   const [inspectError, setInspectError] = useState("");
-  const [activeToolId, setActiveToolId] = useState<AtomicToolId>(
-    preferredTool,
-  );
-  useEffect(() => {
-    setActiveToolId(preferredTool);
-  }, [preferredTool]);
-  const activeUtility = availability.allows(activeToolId)
-    ? UtilityRegistry.find((item) => item.id === activeToolId) ?? utility
-    : UtilityRegistry.find((item) => item.id === preferredTool) ?? utility;
 
   return (
     <ToolScaffold
@@ -98,110 +79,105 @@ export const PDFConversionWorkspaceView = ({ utility, initialPaths = [] }: { uti
       sessionKey="pdf-convert"
       utility={activeUtility}
       initialPaths={initialPaths}
-      onRun={(paths) => {
+      onFilesChange={onFilesChange}
+      onRun={(paths, outputLocation, { outputPath, runId }) => {
         const pages = document ? selectedPages : undefined;
         const selectedPageRange = pages?.length ? formatPageRange(pages) : pageRange || null;
         if (activeUtility.id === "images-to-pdf") {
-          return invoke<ToolResult>("images_to_pdf", {
-            request: { paths, outputLocation: "alongsideInput" },
+          return invoke<ToolResult>("images_to_pdf", { runId,
+            request: { paths, outputLocation, outputPath },
           });
         }
         if (activeUtility.id === "pdf-merge") {
-          return invoke<ToolResult>("merge_pdfs", {
-            request: { paths, outputLocation: "alongsideInput" },
+          return invoke<ToolResult>("merge_pdfs", { runId,
+            request: { paths, outputLocation, outputPath },
           });
         }
         if (activeUtility.id === "pdf-split") {
-          return invoke<ToolResult>("split_pdf", {
+          return invoke<ToolResult>("split_pdf", { runId,
             request: {
               paths,
               pages: [],
               pageRanges: splitMode === "ranges" ? pageRange || null : null,
               splitMode,
               chunkSize: splitMode === "chunks" ? chunkSize : null,
-              outputLocation: "alongsideInput",
+              outputLocation,
             },
           });
         }
         if (activeUtility.id === "pdf-extract-pages") {
-          return invoke<ToolResult>("extract_pdf_pages", {
+          return invoke<ToolResult>("extract_pdf_pages", { runId,
             request: {
               paths,
               pages: selectedPages,
               pageRanges: pageRange || null,
-              outputLocation: "alongsideInput",
+              outputLocation,
             },
-          });
-        }
-        if (activeUtility.id === "pdf-compress") {
-          return invoke<ToolResult>("compress_pdf", {
-            request: { paths, quality, outputLocation: "alongsideInput" },
           });
         }
         if (activeUtility.id === "pdf-rotate") {
           const somePages = document && selectedPages.length < document.pages.length;
-          return invoke<ToolResult>("rotate_pdf", {
-            request: { paths, degrees, pages: somePages ? selectedPages : null, outputLocation: "alongsideInput" },
+          return invoke<ToolResult>("rotate_pdf", { runId,
+            request: { paths, degrees, pages: somePages ? selectedPages : null, outputLocation },
           });
         }
         if (activeUtility.id === "pdf-repair") {
-          return invoke<ToolResult>("repair_pdf", {
-            request: { paths, outputLocation: "alongsideInput" },
+          return invoke<ToolResult>("repair_pdf", { runId,
+            request: { paths, outputLocation },
           });
         }
         if (activeUtility.id === "pdf-compare") {
-          return invoke<ToolResult>("compare_pdfs", {
-            request: { paths, outputLocation: "alongsideInput" },
+          return invoke<ToolResult>("compare_pdfs", { runId,
+            request: { paths, outputLocation, outputPath },
           });
         }
         if (activeUtility.id === "pdf-redact") {
           const drawnOn = document?.pages[selectedPages[0] ?? 0];
           if (!redactBox || !drawnOn) {
-            return Promise.resolve([{ inputPath: paths[0] ?? "", outputPaths: [], detail: "", failure: { kind: "invalidInput", message: "Draw a box over what you want to hide first." } }]);
+            return Promise.resolve([failedOutcome(paths[0] ?? "", "invalidInput", "Draw a box over what you want to hide first.")]);
           }
           const allPages = selectedPages.length === document.pages.length;
-          return invoke<ToolResult>("redact_pdf", {
+          return invoke<ToolResult>("redact_pdf", { runId,
             request: {
               paths,
               rectangle: displayedBoxToPdfRect(redactBox, drawnOn),
               scope: allPages ? "all" : { selected: { pages: selectedPages } },
-              outputLocation: "alongsideInput",
+              outputLocation,
             },
           });
         }
         if (activeUtility.id === "pdf-to-images") {
-          return invoke<ToolResult>("pdf_to_images", {
+          return invoke<ToolResult>("pdf_to_images", { runId,
             request: {
               paths,
               dpi: Number(dpi),
               format,
               pageRange: selectedPageRange,
               pages: pages ?? null,
-              outputLocation: "alongsideInput",
+              outputLocation,
             },
           });
         }
         if (activeUtility.id === "pdf-to-text") {
-          return invoke<ToolResult>("pdf_to_text", {
-            request: { paths, pages: pages ?? null, outputLocation: "alongsideInput" },
+          return invoke<ToolResult>("pdf_to_text", { runId,
+            request: { paths, pages: pages ?? null, outputLocation },
           });
         }
         if (activeUtility.id === "pdf-ocr") {
-          return invoke<ToolResult>("ocr_pdf", {
-            request: { paths, pages: pages ?? null, outputLocation: "alongsideInput" },
+          return invoke<ToolResult>("ocr_pdf", { runId,
+            request: { paths, pages: pages ?? null, outputLocation },
           });
         }
-        return invoke<ToolResult>("extract_pdf_images", {
-          request: { paths, pages: pages ?? null, outputLocation: "alongsideInput" },
+        return invoke<ToolResult>("extract_pdf_images", { runId,
+          request: { paths, pages: pages ?? null, outputLocation },
         });
       }}
     >
-      {({ files, run, loading, selectedFileIndex, moveSelectedFile }) => (
+      {({ files, run, loading, destination, runLabel }) => (
         <ConversionControls
-          actions={availableActions}
+          destination={destination}
+          runLabel={runLabel}
           activeUtility={activeUtility}
-          activeToolId={activeToolId}
-          onSelectTool={(id) => { if (availability.allows(id)) setActiveToolId(id); }}
           files={files}
           run={run}
           loading={loading}
@@ -215,13 +191,10 @@ export const PDFConversionWorkspaceView = ({ utility, initialPaths = [] }: { uti
           setSplitMode={setSplitMode}
           chunkSize={chunkSize}
           setChunkSize={setChunkSize}
-          quality={quality}
-          setQuality={setQuality}
           degrees={degrees}
           setDegrees={setDegrees}
           redactBox={redactBox}
           setRedactBox={setRedactBox}
-          swapFiles={() => moveSelectedFile(selectedFileIndex === 0 ? 1 : -1)}
           document={document}
           setDocument={setDocument}
           selectedPages={selectedPages}
@@ -235,10 +208,9 @@ export const PDFConversionWorkspaceView = ({ utility, initialPaths = [] }: { uti
 };
 
 type ConversionControlsProps = {
-  actions: readonly ToolDefinition[];
+  destination: React.ReactNode;
+  runLabel: string | null;
   activeUtility: ToolDefinition;
-  activeToolId: AtomicToolId;
-  onSelectTool: (id: AtomicToolId) => void;
   files: string[];
   run: () => Promise<void>;
   loading: boolean;
@@ -252,13 +224,10 @@ type ConversionControlsProps = {
   setSplitMode: (value: "pages" | "ranges" | "chunks") => void;
   chunkSize: number;
   setChunkSize: (value: number) => void;
-  quality: number;
-  setQuality: (value: number) => void;
   degrees: number;
   setDegrees: (value: number) => void;
   redactBox: DisplayedBox | null;
   setRedactBox: (value: DisplayedBox | null) => void;
-  swapFiles: () => void;
   document: PdfDocument | null;
   setDocument: (value: PdfDocument | null) => void;
   selectedPages: number[];
@@ -268,10 +237,9 @@ type ConversionControlsProps = {
 };
 
 const ConversionControls = ({
-  actions,
+  destination,
+  runLabel,
   activeUtility,
-  activeToolId,
-  onSelectTool,
   files,
   run,
   loading,
@@ -285,13 +253,10 @@ const ConversionControls = ({
   setSplitMode,
   chunkSize,
   setChunkSize,
-  quality,
-  setQuality,
   degrees,
   setDegrees,
   redactBox,
   setRedactBox,
-  swapFiles,
   document,
   setDocument,
   selectedPages,
@@ -384,12 +349,6 @@ const ConversionControls = ({
   return (
     <Card className="workspace-control-panel py-0">
       <CardContent className="workspace-control-panel-content grid gap-4 p-4">
-      <WorkspaceCommandRail
-        actions={actions}
-        activeId={activeToolId}
-        onSelect={onSelectTool}
-        label="PDF conversion tools"
-      />
       {needsPageSelection && (
         <Card className="conversion-preview py-0" role="region" aria-label={previewRegionLabel}>
           <CardContent className="conversion-preview-content py-4">
@@ -433,7 +392,7 @@ const ConversionControls = ({
         </div>
         <p className="workspace-panel-copy">
           Keep one source surface and switch between page conversion, extraction,
-          document assembly, splitting, and compression outcomes.
+          document assembly, and splitting outcomes.
         </p>
       </div>
       {activeUtility.id === "pdf-to-images" && (
@@ -536,7 +495,7 @@ const ConversionControls = ({
           <div className="grid gap-2" aria-live="polite">
             <p className="workspace-note">Original: <strong>{fileName(files[0])}</strong></p>
             <p className="workspace-note">New version: <strong>{fileName(files[1])}</strong></p>
-            <Button variant="outline" size="sm" className="justify-self-start" onClick={swapFiles}>Swap original and new version</Button>
+            <p className="workspace-note">Drag the files in the list to swap them.</p>
           </div>
         ) : (
           <p className="workspace-note" role="status">Choose exactly two PDFs: the original and the new version.</p>
@@ -545,23 +504,17 @@ const ConversionControls = ({
       {activeUtility.id === "pdf-redact" && redactPage?.preview && (
         <RedactionArea page={redactPage.index} preview={redactPage.preview} aspectRatio={redactPage.width / redactPage.height} box={redactBox} onChange={setRedactBox} />
       )}
-      {activeUtility.id === "pdf-compress" && (
-        <div className="workspace-field slider-field">
-          <div className="slider-label-row">
-            <Label id="compression-quality-label">Compression quality</Label>
-            <output>{quality}%</output>
-          </div>
-          <Slider aria-label="Compression quality" aria-labelledby="compression-quality-label" min={1} max={100} value={[quality]} onValueChange={([value]) => setQuality(value)} />
-        </div>
-      )}
+      {destination}
       <Button
         variant="default"
         disabled={loading || !canExport || (needsPageSelection && (!inspectedDocument || selectionCount === 0 || selectionIssue !== null)) || (activeUtility.id === "pdf-redact" && !redactBox)}
         onClick={run}
         className="workspace-primary-action"
         aria-label={`Export ${activeUtility.title}`}
+        {...shortcutTarget("run")}
       >
-        Export {activeUtility.shortTitle}
+        {runLabel ?? `Export ${activeUtility.shortTitle}`}
+        <ShortcutHint id="run" />
       </Button>
       </CardContent>
     </Card>

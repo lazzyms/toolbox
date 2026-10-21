@@ -9,6 +9,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use image::GenericImageView;
 use lopdf::Document;
 
+use crate::kit::common::limits::{self, StoppableHelper};
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::ToolError;
 use crate::kit::pdf::metadata::page_bounds;
@@ -253,7 +254,7 @@ fn run_command(mut command: Command, deadline: Instant) -> Result<std::process::
                 let _ = child.kill();
                 break child.wait().map_err(|error| format!("Could not stop OCR helper: {error}"))?;
             }
-            None if Instant::now() >= deadline => {
+            None if Instant::now() >= deadline || limits::job_stopped() => {
                 timed_out = true;
                 let _ = child.kill();
                 break child.wait().map_err(|error| format!("Could not stop OCR helper: {error}"))?;
@@ -324,7 +325,7 @@ fn run_image_adapter(request: &VisionRequest, input: PathBuf, mode: &str, resour
         Ok(model) => model,
         Err(error) => return unavailable(input, error),
     };
-    match Command::new(engine).arg("--mode").arg(mode).arg("--input").arg(&input).arg("--output").arg(output.path()).arg("--model").arg(model).output() {
+    match Command::new(engine).arg("--mode").arg(mode).arg("--input").arg(&input).arg("--output").arg(output.path()).arg("--model").arg(model).output_until_stopped() {
         Ok(result) if result.status.success() && output.path().is_file() => {
             let validation = match validation {
                 ImageAdapterValidation::FaceBlur => validate_face_blur(&input, output.path()),
@@ -405,7 +406,7 @@ fn validate_face_blur(input: &std::path::Path, output: &std::path::Path) -> Resu
     Ok(())
 }
 
-fn success(input_path: PathBuf, output: PathBuf, detail: &str) -> JobOutcome { JobOutcome { input_path, output_paths: vec![output], detail: detail.to_string(), failure: None } }
+fn success(input_path: PathBuf, output: PathBuf, detail: &str) -> JobOutcome { JobOutcome::succeeded(input_path, vec![output], detail.to_string()) }
 fn failure(input_path: PathBuf, error: String) -> JobOutcome { JobOutcome::failure(input_path, ToolError::processing(error)) }
 fn unavailable(input_path: PathBuf, error: String) -> JobOutcome { JobOutcome::failure(input_path, ToolError::unavailable(error)) }
 fn stderr(result: std::process::Output, fallback: &str) -> String { String::from_utf8_lossy(&result.stderr).trim().lines().last().filter(|line| !line.is_empty()).unwrap_or(fallback).to_string() }
@@ -458,7 +459,7 @@ mod tests {
 
     #[test]
     fn selected_ocr_pages_preserve_document_order_and_reject_out_of_range_pages() {
-        let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
+        let _guard = crate::kit::lock_process_env();
         let input = path("selected-pages-scope.pdf");
         make_pdf(&input, 2);
 
@@ -470,7 +471,7 @@ mod tests {
 
     #[test]
     fn selected_ocr_pages_reject_excessive_render_pixels_before_starting_helpers() {
-        let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
+        let _guard = crate::kit::lock_process_env();
         let input = path("oversized-page.pdf");
         make_pdf(&input, 1);
         let mut document = Document::load(&input).unwrap();
@@ -513,7 +514,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn selected_ocr_page_cannot_process_an_excluded_page() {
-        let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
+        let _guard = crate::kit::lock_process_env();
         let input = path("selected-pages.pdf");
         let output_root = path("selected-pages-output");
         make_pdf(&input, 2);
@@ -532,8 +533,8 @@ mod tests {
             pages: Some(vec![0]),
             output_location: crate::kit::common::OutputLocation::CustomFolder(output_root.clone()),
         }, input.clone());
-        let text = outcome.output_paths.first().and_then(|path| fs::read_to_string(path).ok());
-        let output_path = outcome.output_paths.first().cloned();
+        let text = outcome.output_paths().first().and_then(|path| fs::read_to_string(path).ok());
+        let output_path = outcome.output_paths().first().cloned();
         let input_after = fs::read(&input).unwrap();
 
         match old_engine {
@@ -549,7 +550,7 @@ mod tests {
         let _ = fs::remove_file(&input);
         let _ = fs::remove_dir_all(&output_root);
 
-        assert!(outcome.failure.is_none(), "selected OCR failed: {:?}", outcome.failure);
+        assert!(outcome.error().is_none(), "selected OCR failed: {:?}", outcome.error());
         assert_eq!(text.as_deref(), Some("selected page one"));
         assert_eq!(output_path.as_deref().and_then(Path::parent), Some(output_root.as_path()));
         assert_eq!(input_after, original);
@@ -558,7 +559,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn failed_selected_ocr_cleans_private_workspace_and_reserved_output() {
-        let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
+        let _guard = crate::kit::lock_process_env();
         let input = path("failed-selected-pages.pdf");
         let output_root = path("failed-selected-pages-output");
         make_pdf(&input, 2);
@@ -595,8 +596,8 @@ mod tests {
         let _ = fs::remove_file(&input);
         let _ = fs::remove_dir_all(&output_root);
 
-        assert!(outcome.failure.as_ref().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::Processing)));
-        assert!(outcome.output_paths.is_empty());
+        assert!(outcome.error().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::Processing)));
+        assert!(outcome.output_paths().is_empty());
         assert_eq!(before_workspaces, after_workspaces);
         assert_eq!(original, input_after);
         assert_eq!(output_entries, 0);
@@ -605,7 +606,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn ocr_workspace_is_private_and_removed_on_drop() {
-        let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
+        let _guard = crate::kit::lock_process_env();
         let workspace = super::OcrWorkspace::new().unwrap();
         let path = workspace.0.clone();
         use std::os::unix::fs::PermissionsExt;

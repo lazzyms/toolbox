@@ -718,7 +718,7 @@ impl TempDir {
 }
 impl Drop for TempDir { fn drop(&mut self) { let _=fs::remove_dir_all(&self.0); } }
 fn renderer()->Result<PathBuf,String> {
-    crate::kit::resources::resolve_pdf_renderer()
+    crate::kit::resources::resolve_helper(&crate::kit::resources::PDF_RENDERER)
 }
 
 fn text_extractor()->Option<PathBuf> {
@@ -860,7 +860,7 @@ pub fn export(request:&ExportRequest,input:PathBuf)->JobOutcome {
             return reservation.publish().map_err(err);
         } Err("Could not reserve a unique export filename".into())
     })();
-    match result { Ok(path)=>JobOutcome{input_path:input,output_paths:vec![path],detail:"PDF scene exported".into(),failure:None},Err(e)=>JobOutcome::failure(input,ToolError::processing(e)) }
+    match result { Ok(path)=>JobOutcome::succeeded(input, vec![path], "PDF scene exported"),Err(e)=>JobOutcome::failure(input,ToolError::processing(e)) }
 }
 
 #[cfg(test)]
@@ -1037,7 +1037,7 @@ mod tests {
     fn renderer_uses_bundled_pdftoppm_when_path_and_override_are_unavailable() {
         use std::os::unix::fs::PermissionsExt;
 
-        let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
+        let _guard = crate::kit::lock_process_env();
         let temp = TempDir::new().unwrap();
         let pdf_bin = temp.0.join("pdf-bin");
         fs::create_dir(&pdf_bin).unwrap();
@@ -1091,7 +1091,7 @@ mod tests {
 
     #[test]
     fn inspect_returns_page_metadata_without_invoking_pdftoppm() {
-        let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
+        let _guard = crate::kit::lock_process_env();
         let temp = TempDir::new().unwrap();
         let input = temp.0.join("source.pdf");
         fixture(&input);
@@ -1112,7 +1112,7 @@ mod tests {
 
     #[test]
     fn inspect_page_validates_bounds_and_returns_only_the_requested_text_runs() {
-        let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
+        let _guard = crate::kit::lock_process_env();
         if text_extractor().is_none() || renderer().is_err() { return; }
         let temp = TempDir::new().unwrap();
         let input = temp.0.join("page-text.pdf");
@@ -1149,7 +1149,7 @@ mod tests {
 
     #[test]
     fn inspect_then_noop_export_preserves_annotated_rotated_offset_pdf_geometry() {
-        let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
+        let _guard = crate::kit::lock_process_env();
         if renderer().is_err() { return; }
         let temp = TempDir::new().unwrap();
         let input = temp.0.join("annotated-rotated-offset.pdf");
@@ -1162,8 +1162,8 @@ mod tests {
             objects: vec![],
         }).collect() };
         let outcome = export(&ExportRequest { paths: vec![input.clone()], scene, output_location: OutputLocation::AlongsideInput }, input.clone());
-        assert!(outcome.failure.is_none(), "no-op export failed: {:?}", outcome.failure);
-        let output = outcome.output_paths.first().unwrap();
+        assert!(outcome.error().is_none(), "no-op export failed: {:?}", outcome.error());
+        let output = outcome.output_paths().first().unwrap();
         let output_document = Document::load(output).unwrap();
         let page = output_document.get_pages().values().next().copied().unwrap();
         assert_eq!(bounds(&output_document, &inherited(&output_document, page, b"MediaBox").unwrap().unwrap()).unwrap(), [10., 20., 250., 360.]);
@@ -1192,8 +1192,8 @@ mod tests {
             objects: vec![object(Kind::Text)],
         }] };
         let outcome = export(&ExportRequest { paths: vec![input.clone()], scene, output_location: OutputLocation::AlongsideInput }, input.clone());
-        assert!(outcome.failure.is_none(), "overlay export failed: {:?}", outcome.failure);
-        let output = outcome.output_paths.first().unwrap();
+        assert!(outcome.error().is_none(), "overlay export failed: {:?}", outcome.error());
+        let output = outcome.output_paths().first().unwrap();
         let output_document = Document::load(output).unwrap();
         let page_id = output_document.get_pages().values().next().copied().unwrap();
         assert_eq!(bounds(&output_document, &inherited(&output_document, page_id, b"MediaBox").unwrap().unwrap()).unwrap(), [10., 20., 250., 360.]);
@@ -1224,10 +1224,10 @@ mod tests {
         let occupied=temp.0.join("source-edited-1.pdf"); fs::write(&occupied,b"existing output").unwrap();
         let request=ExportRequest {paths:vec![input.clone()],scene:scene(),output_location:OutputLocation::AlongsideInput};
         let a=export(&request,input.clone()); let b=export(&request,input.clone());
-        assert!(a.failure.is_none(),"{:?}",a.failure); assert!(b.failure.is_none());
-        assert_ne!(a.output_paths,b.output_paths); assert_ne!(a.output_paths[0],input);
+        assert!(a.error().is_none(),"{:?}",a.error()); assert!(b.error().is_none());
+        assert_ne!(a.output_paths(),b.output_paths()); assert_ne!(a.output_paths()[0],input);
         assert_eq!(fs::read(&input).unwrap(),original); assert_eq!(fs::read(occupied).unwrap(),b"existing output");
-        assert_eq!(Document::load(&a.output_paths[0]).unwrap().get_pages().len(),3);
+        assert_eq!(Document::load(&a.output_paths()[0]).unwrap().get_pages().len(),3);
     }
     #[test]
     fn scene_reservation_does_not_replace_a_competing_destination() {
@@ -1248,7 +1248,7 @@ mod tests {
         let mut s=scene(); s.pages[0].source_index=Some(90); assert!(compose(&input,&s).is_err());
         let mut s=scene(); s.pages[1].objects[0].text="unsupported \u{1f600}".into();
         let result=export(&ExportRequest {paths:vec![],scene:s,output_location:OutputLocation::AlongsideInput},input.clone());
-        assert!(result.failure.is_some()); assert!(result.output_paths.is_empty());
+        assert!(result.error().is_some()); assert!(result.output_paths().is_empty());
         assert_eq!(fs::read_dir(&temp.0).unwrap().count(),1);
         assert!(compose(&input,&PdfScene{pages:vec![]}).is_err());
     }
@@ -1268,7 +1268,7 @@ mod tests {
 
     #[test]
     fn preview_pages_returns_ordered_indexed_previews_from_one_normalized_scene() {
-        let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
+        let _guard = crate::kit::lock_process_env();
         let renderer=match renderer() { Ok(r)=>r,Err(e)=>{if std::env::var_os("TOOLBOX_REQUIRE_PDF_RENDERER").is_some(){panic!("{e}")}; eprintln!("Renderer unavailable: {e}");return;} };
         let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); fixture(&input);
         let before=fs::read(&input).unwrap();
@@ -1288,15 +1288,15 @@ mod tests {
 
     #[test]
     fn preview_and_export_are_pixel_identical_and_temp_storage_is_cleaned() {
-        let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
+        let _guard = crate::kit::lock_process_env();
         let renderer=match renderer() { Ok(r)=>r,Err(e)=>{if std::env::var_os("TOOLBOX_REQUIRE_PDF_RENDERER").is_some(){panic!("{e}")}; eprintln!("Renderer unavailable: {e}");return;} };
         let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); fixture(&input);
         let before=fs::read(&input).unwrap();
         let request=ExportRequest{paths:vec![input.clone()],scene:scene(),output_location:OutputLocation::AlongsideInput};
-        let exported=export(&request,input.clone()); assert!(exported.failure.is_none());
+        let exported=export(&request,input.clone()); assert!(exported.error().is_none());
         for index in 0..3 {
             let preview=preview(&PreviewRequest{path:input.clone(),scene:scene(),page_index:index}).unwrap();
-            let actual=render(&exported.output_paths[0],index,&renderer,&temp).unwrap();
+            let actual=render(&exported.output_paths()[0],index,&renderer,&temp).unwrap();
             assert_eq!(preview.data_url,actual.data_url,"page {index} differs between preview and export");
         }
         assert_eq!(fs::read(&input).unwrap(),before);
@@ -1491,8 +1491,8 @@ mod tests {
         let temp=TempDir::new().unwrap(); let input=temp.0.join("nested.pdf"); nested_fixture(&input);
         let scene=PdfScene { pages:vec![ScenePage { source_index:Some(0), width:300., height:200., rotation:0, crop:None, source_rotation:None, source_box:None, objects:vec![] }, ScenePage { source_index:Some(1), width:612., height:792., rotation:0, crop:None, source_rotation:None, source_box:None, objects:vec![] }] };
         let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
-        assert!(result.failure.as_ref().is_some_and(|error| error.message.contains("nested")));
-        assert!(result.output_paths.is_empty());
+        assert!(result.error().is_some_and(|error| error.message.contains("nested")));
+        assert!(result.output_paths().is_empty());
         assert!(!input.with_file_name("nested-edited-1.pdf").exists());
     }
     #[test]
@@ -1503,8 +1503,8 @@ mod tests {
         source.get_dictionary_mut(page).unwrap().set("Annots",vec![Object::Reference(annotation)]); source.save(&input).unwrap();
         let scene=PdfScene { pages:vec![ScenePage { source_index:Some(0), width:300., height:200., rotation:0, crop:Some(Rect{x:0.,y:0.,width:100.,height:100.}), source_rotation:None, source_box:None, objects:vec![] }] };
         let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
-        assert!(result.failure.as_ref().is_some_and(|error| error.message.contains("annotation")));
-        assert!(result.output_paths.is_empty());
+        assert!(result.error().is_some_and(|error| error.message.contains("annotation")));
+        assert!(result.output_paths().is_empty());
         assert!(!input.with_file_name("annotated-edited-1.pdf").exists());
     }
     #[test]
@@ -1521,8 +1521,8 @@ mod tests {
             ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]},
         ] };
         let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
-        assert!(result.failure.as_ref().is_some_and(|error| error.message.contains("Digitally signed")));
-        assert!(result.output_paths.is_empty());
+        assert!(result.error().is_some_and(|error| error.message.contains("Digitally signed")));
+        assert!(result.output_paths().is_empty());
         assert!(!input.with_file_name("signed-edited-1.pdf").exists());
     }
     #[test]
@@ -1546,8 +1546,8 @@ mod tests {
                 ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]},
             ] };
             let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
-            assert!(result.failure.as_ref().is_some_and(|error| error.message.contains("Digitally signed")), "{name}: {:?}", result.failure);
-            assert!(result.output_paths.is_empty());
+            assert!(result.error().is_some_and(|error| error.message.contains("Digitally signed")), "{name}: {:?}", result.error());
+            assert!(result.output_paths().is_empty());
             assert!(!input.with_file_name(format!("{name}-edited-1.pdf")).exists());
         }
     }
@@ -1564,8 +1564,8 @@ mod tests {
             ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]},
         ] };
         let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
-        assert!(result.failure.as_ref().is_some_and(|error| error.message.contains("destinations")), "{:?}", result.failure);
-        assert!(result.output_paths.is_empty());
+        assert!(result.error().is_some_and(|error| error.message.contains("destinations")), "{:?}", result.error());
+        assert!(result.output_paths().is_empty());
         assert!(!input.with_file_name("navigation-edited-1.pdf").exists());
     }
 
@@ -1584,8 +1584,8 @@ mod tests {
             ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]},
         ] };
         let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
-        assert!(result.failure.is_none(), "{result:?}");
-        assert_eq!(result.output_paths.len(), 1);
+        assert!(result.error().is_none(), "{result:?}");
+        assert_eq!(result.output_paths().len(), 1);
         assert!(input.with_file_name("box-origin-navigation-edited-1.pdf").exists());
     }
     #[test]
@@ -1600,8 +1600,8 @@ mod tests {
         source.save(&input).unwrap();
         let scene=PdfScene { pages:vec![ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]}] };
         let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
-        assert!(result.failure.as_ref().is_some_and(|error| error.message.contains("tagged PDF")), "{:?}", result.failure);
-        assert!(result.output_paths.is_empty());
+        assert!(result.error().is_some_and(|error| error.message.contains("tagged PDF")), "{:?}", result.error());
+        assert!(result.output_paths().is_empty());
         assert!(!input.with_file_name("tagged-edited-1.pdf").exists());
     }
 
@@ -1628,8 +1628,8 @@ mod tests {
         let mut overlay = identity;
         overlay.pages[0].objects.push(object(Kind::Text));
         let result = export(&ExportRequest { paths: vec![input.clone()], scene: overlay, output_location: OutputLocation::AlongsideInput }, input.clone());
-        assert!(result.failure.as_ref().is_some_and(|error| error.message.contains("tagged PDF")), "{result:?}");
-        assert!(result.output_paths.is_empty());
+        assert!(result.error().is_some_and(|error| error.message.contains("tagged PDF")), "{result:?}");
+        assert!(result.output_paths().is_empty());
         assert!(!input.with_file_name("tagged-overlay-edited-1.pdf").exists());
     }
 }

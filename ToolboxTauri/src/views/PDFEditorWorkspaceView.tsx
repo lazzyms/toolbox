@@ -20,6 +20,8 @@ import { sceneFromDocument, visibleBounds } from '../features/pdf-editor/scene';
 import type { PdfScene, SceneObject, ScenePage, ScenePreview, SceneRect, SceneShape, SceneTool, SignatureMode, WatermarkPattern } from '../features/pdf-editor/scene';
 import { PREVIEW_CACHE_MAX_ENTRIES, PREVIEW_RENDER_SETTINGS, createPreviewCache, pdfEditorErrorMessage, previewCacheKey, requestWithGeneration } from './pdfPreviewHelpers';
 import type { GenerationState } from './pdfPreviewHelpers';
+import { ShortcutHint } from '../components/ShortcutHint';
+import { shortcutTarget } from '../shortcuts';
 
 export { createPreviewCache, previewCacheKey, requestWithGeneration } from './pdfPreviewHelpers';
 
@@ -58,7 +60,7 @@ const signatureFontOptions = [
 const watermarkFontSizes = [18, 24, 32, 40, 48, 56, 64, 72, 88, 104, 120];
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 type History = { past: PdfScene[]; present: PdfScene; future: PdfScene[] };
-export type ExistingPdfUtilityId = 'pdf-merge' | 'pdf-split';
+export type ExistingPdfUtilityId = 'pdf-merge' | 'pdf-split' | 'pdf-redact';
 export type PdfEditorNavigation = (navigation: {
   utilityId: ExistingPdfUtilityId;
   initialPaths: readonly [string, ...string[]];
@@ -93,6 +95,7 @@ function handleToolbarKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
 
 export const PDFEditorWorkspaceView = ({
   utility,
+  initialPaths,
   onNavigate,
   onWorkspaceSourceAction,
   fileActivation,
@@ -100,6 +103,7 @@ export const PDFEditorWorkspaceView = ({
   onFilesChange,
 }: {
   utility: ToolDefinition;
+  initialPaths?: readonly string[];
   onNavigate?: PdfEditorNavigation;
   onWorkspaceSourceAction?: (action: WorkspaceSourceAction | null) => void;
   fileActivation?: Extract<ShellEvent, { kind: 'files' }>;
@@ -112,20 +116,23 @@ export const PDFEditorWorkspaceView = ({
   const initialTool = availability.allows(toolFlagBySceneTool[requestedTool])
     ? requestedTool
     : tools.find((item) => availability.allows(toolFlagBySceneTool[item.id]))?.id ?? null;
-  return <ToolScaffold utility={utility} variant="workspace" sessionKey="pdf-editor-scene" onWorkspaceSourceAction={onWorkspaceSourceAction} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange}
-    onRun={async (paths) => {
+  return <ToolScaffold utility={utility} variant="workspace" sessionKey="pdf-editor-scene" initialPaths={initialPaths} onWorkspaceSourceAction={onWorkspaceSourceAction} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange}
+    onRun={async (paths, outputLocation, { runId }) => {
       const [inputPath] = paths;
       if (!inputPath || !session.current || session.current.path !== inputPath) throw new Error('Select exactly one open PDF before exporting.');
-      const results = await invoke<ToolResult>('export_pdf_scene', { request: { paths, scene: session.current.scene, outputLocation: 'alongsideInput' } });
+      const results = await invoke<ToolResult>('export_pdf_scene', { runId, request: { paths, scene: session.current.scene, outputLocation } });
       return results.map((result) => result.failure ? { ...result, failure: { ...result.failure, message: pdfEditorErrorMessage(result.failure.message, 'export') } } : result);
     }}>
-    {({ files, run, loading }) => {
+    {({ files, run, loading, destination }) => {
       const inputPath = files.length === 1 ? files[0] ?? null : null;
-      return <PDFSceneSession key={inputPath ?? 'empty'} path={inputPath} initialTool={initialTool}
-      exporting={loading} onExport={run}
-      onNavigate={onNavigate}
-      onScene={(path, scene) => { session.current = path && scene ? { path, scene } : null; }} />}
-    }
+      return <>
+        <PDFSceneSession key={inputPath ?? 'empty'} path={inputPath} initialTool={initialTool}
+          exporting={loading} onExport={run}
+          onNavigate={onNavigate}
+          onScene={(path, scene) => { session.current = path && scene ? { path, scene } : null; }} />
+        <Card className="pdf-scene-destination py-0"><CardContent className="py-3">{destination}</CardContent></Card>
+      </>;
+    }}
   </ToolScaffold>;
 };
 
@@ -421,12 +428,16 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
     <div ref={toolsToolbar} className="scene-tools" role="toolbar" aria-label="PDF editor tools" aria-orientation="horizontal" onFocusCapture={handleToolbarFocus} onKeyDown={handleToolbarKeyDown}>
       {tools.filter((item) => availability.allows(toolFlagBySceneTool[item.id])).map((item) => <Button key={item.id} variant={tool === item.id ? "secondary" : "ghost"} size="sm" aria-label={item.label} aria-description={toolGuidance[item.id]} title={toolGuidance[item.id]} aria-pressed={tool === item.id}
         onClick={() => { if (!availability.allows(toolFlagBySceneTool[item.id])) return; endGroup(); setTool(item.id); setSelectedId(null); }} disabled={!page}><span aria-hidden="true">{item.glyph}</span>{item.label}</Button>)}
+      {/* Redaction removes content for good, so it runs on a saved copy in its own screen with a confirmation step. */}
+      {availability.allows('pdf-redact') && onNavigate && <Button variant="ghost" size="sm" aria-label="Redact"
+        title={dirty ? 'Export or reset your edits before redacting' : 'Black out private details in a copy of this PDF'}
+        disabled={!page || !path || Boolean(dirty)} onClick={() => { if (path) onNavigate({ utilityId: 'pdf-redact', initialPaths: [path] }); }}><span aria-hidden="true">▮</span>Redact</Button>}
       <span className="scene-toolbar-divider" />
       <Button variant="ghost" size="icon-sm" aria-label="Undo" title="Undo (⌘Z / Ctrl+Z)" disabled={!history.past.length} onClick={undo}>↶</Button>
       <Button variant="ghost" size="icon-sm" aria-label="Redo" title="Redo (⇧⌘Z / Ctrl+Shift+Z)" disabled={!history.future.length} onClick={redo}>↷</Button>
       <Button variant="destructive" size="sm" aria-label="Reset edits" disabled={!dirty} onClick={reset}>Reset</Button>
-      <Button variant="default" size="sm" className="workspace-primary-action scene-export" aria-label="Export PDF" disabled={!page || exporting || Boolean(renderError) || rendering || !exactPreview}
-        onClick={() => void onExport()}>{exporting ? 'Exporting…' : 'Export PDF'}</Button>
+      <Button variant="default" size="sm" className="workspace-primary-action scene-export" aria-label="Export PDF" disabled={!page || !dirty || exporting || Boolean(renderError) || rendering || !exactPreview}
+        {...shortcutTarget('run')} onClick={() => void onExport()}>{exporting ? 'Exporting…' : 'Export PDF'}<ShortcutHint id="run" /></Button>
     </div>
     {error && <p role="alert" className="scene-error">{error}</p>}
     {renderError && <p role="alert" className="scene-error">{renderError} Export is disabled until the preview can be verified.</p>}

@@ -3,14 +3,12 @@ export type ToolCategory = "PDF" | "Images" | "Documents";
 export type ToolStatus = "implemented" | "planned" | "unavailable";
 
 export type AtomicToolId =
-  | "pdf-unlock"
+  | "lock-unlock"
   | "pdf-page-numbers"
   | "pdf-merge"
   | "pdf-watermark"
   | "pdf-crop"
   | "pdf-edit"
-  | "pdf-protect"
-  | "office-protect"
   | "images-to-pdf"
   | "pdf-to-images"
   | "pdf-to-text"
@@ -46,6 +44,7 @@ export type WorkspaceId =
   | "pdf-editor"
   | "pdf-convert"
   | "image-editor"
+  | "compress-files"
   | "media-tools";
 
 export type ToolInputCardinality = "single" | "multiple" | "ordered";
@@ -58,16 +57,24 @@ export interface ToolCapability {
   supportsPageSelection: boolean;
   supportsPreview: boolean;
   nativeAvailability: NativeAvailability;
+  outputSuffix: string;
+  manyToOne: boolean;
 }
 
 export type OutputLocation = "alongsideInput" | { customFolder: string };
+
+export type OutputMode = "alongsideInput" | "customFolder";
+
+export interface OutputSettings {
+  mode: OutputMode;
+  folder: string;
+}
 
 export type JobState = "running" | "success" | "mixed" | "failure";
 
 export type ToolCommand =
   | "remove_password"
-  | "protect_pdf"
-  | "protect_office"
+  | "protect_files"
   | "compress_images"
   | "convert_images"
   | "inspect_pdf"
@@ -104,29 +111,74 @@ export type ToolCommand =
   | "process_tiff_pages"
   | "image_metadata";
 
-export type ErrorKind =
-  "invalidInput" | "unavailable" | "limitExceeded" | "processing";
 
-export interface ToolError {
-  kind: ErrorKind;
+export type OutcomePointer =
+  | { kind: "tool"; toolId: AtomicToolId }
+  | { kind: "pack"; packId: string }
+  | { kind: "outputFolder" };
+
+export type LimitKind = "fileSize" | "pageCount" | "time" | "decompression";
+
+export type ToolError = { message: string; pointer: OutcomePointer | null } & (
+  | { kind: "invalidInput" | "unavailable" | "processing" | "wrongPassword" | "cancelled" }
+  | { kind: "limitExceeded"; details: { limit: LimitKind } }
+);
+
+export type ErrorKind = ToolError["kind"];
+
+export type SkipCode =
+  | "notProtected"
+  | "alreadyProtected"
+  | "noSavings"
+  | "alreadyInTargetFormat"
+  | "rangeEmptyAfterClamping"
+  | "textAlreadyPresent"
+  | "noEffectiveChange"
+  | "unsupportedFormat"
+  | "cancelled";
+
+export interface SkipReason {
+  code: SkipCode;
   message: string;
+  pointer: OutcomePointer | null;
 }
 
-export interface SuccessfulJobOutcome {
+export type OutcomeWarning =
+  | { code: "signatureRemoved"; message: string }
+  | { code: "fontSubstituted"; message: string; details: { requestedFamily: string; actualFamily: string } }
+  | { code: "renamedToAvoidReplacing"; message: string; details: { chosenName: string; finalName: string } }
+  | { code: "precisionReduced"; message: string };
+
+export type WarningCode = OutcomeWarning["code"];
+
+interface JobOutcomeBase {
   inputPath: string;
-  outputPaths: string[];
   detail: string;
+  warnings: OutcomeWarning[];
+}
+
+export interface SucceededJobOutcome extends JobOutcomeBase {
+  state: "succeeded";
+  outputPaths: string[];
   failure: null;
+  reason: null;
 }
 
-export interface FailedJobOutcome {
-  inputPath: string;
+export interface SkippedJobOutcome extends JobOutcomeBase {
+  state: "skipped";
+  outputPaths: [];
+  failure: null;
+  reason: SkipReason;
+}
+
+export interface FailedJobOutcome extends JobOutcomeBase {
+  state: "failed";
   outputPaths: string[];
-  detail: string;
   failure: ToolError;
+  reason: null;
 }
 
-export type JobOutcome = SuccessfulJobOutcome | FailedJobOutcome;
+export type JobOutcome = SucceededJobOutcome | SkippedJobOutcome | FailedJobOutcome;
 
 export type ToolResult = JobOutcome[];
 
@@ -145,7 +197,12 @@ export interface ToolDefinition {
   id: AtomicToolId;
   title: string;
   shortTitle: string;
+  resultVerb: string;
+  runningVerb: string;
+  runningDetail?: string;
+  lockedNote?: string;
   blurb: string;
+  keywords?: readonly string[];
   symbol: string;
   category: ToolCategory;
   status: ToolStatus;
@@ -153,12 +210,10 @@ export interface ToolDefinition {
   command: ToolCommand;
   verification: string;
   view:
-    | "pdf-unlock"
-    | "pdf-protect"
+    | "lock-unlock"
     | "pdf-crop"
     | "pdf-edit"
     | "pdf-sign"
-    | "office-protect"
     | "pdf-organize"
     | "pdf-page-numbers"
     | "pdf-watermark"
@@ -200,7 +255,12 @@ export interface ToolWorkspaceDefinition {
   symbol: string;
   category: ToolCategory;
   categories: ToolCategory[];
+  /** Every tool in the view, in list order. Each tool belongs to exactly one view. */
   toolIds: AtomicToolId[];
+  /** Tools shown as one entry whose tabs or modes are those tools. The entry opens the first one. */
+  editor?: { title: string; blurb: string; symbol: string; toolIds: AtomicToolId[] };
+  /** Tools listed after the main tools, under More. */
+  moreToolIds?: AtomicToolId[];
 }
 
 export interface ToolRequest {
@@ -208,12 +268,17 @@ export interface ToolRequest {
   outputLocation: OutputLocation;
 }
 
-export interface PDFRequest extends ToolRequest {
-  password: string;
+// One password for the whole batch plus per-file overrides keyed by input path.
+// It lives only in view memory: never in settings, storage, logs or analytics.
+export interface PasswordSet {
+  batch: string;
+  overrides: Readonly<Record<string, string>>;
 }
 
+// The native side uses a file's override first and the batch password otherwise.
 export interface PasswordRequest extends ToolRequest {
   password: string;
+  passwordOverrides: Record<string, string>;
 }
 
 export interface CompressImagesRequest extends ToolRequest {

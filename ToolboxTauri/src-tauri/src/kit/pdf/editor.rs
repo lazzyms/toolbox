@@ -589,7 +589,7 @@ pub fn redact(request: &RedactPdfRequest, input: PathBuf) -> JobOutcome {
         document.prune_objects();
         Ok(())
     });
-    if outcome.failure.is_none() { outcome.detail = "Area permanently removed; redacted pages are now images".to_string(); }
+    if outcome.error().is_none() { outcome.detail = "Area permanently removed; redacted pages are now images".to_string(); }
     outcome
 }
 
@@ -675,12 +675,7 @@ pub fn apply_session(request: &PdfEditSessionRequest, input: PathBuf) -> JobOutc
     }
     match document.save(output.path()) {
         Ok(_) => match output.publish() {
-            Ok(path) => JobOutcome {
-                input_path: input,
-                output_paths: vec![path],
-                detail: "PDF edit session saved".to_string(),
-                failure: None,
-            },
+            Ok(path) => JobOutcome::succeeded(input, vec![path], "PDF edit session saved"),
             Err(error) => failure(input, format!("Could not publish PDF edit output: {error}")),
         },
         Err(error) => failure(input, format!("Save failed: {error}")),
@@ -986,7 +981,7 @@ where F: FnOnce(&mut Document, &[lopdf::ObjectId], &PdfMutationPreflight) -> Res
     };
     match document.save(output.path()) {
         Ok(_) => match output.publish() {
-            Ok(path) => JobOutcome { input_path: input, output_paths: vec![path], detail: "PDF saved".to_string(), failure: None },
+            Ok(path) => JobOutcome::succeeded(input, vec![path], "PDF saved"),
             Err(error) => failure(input, format!("Could not publish PDF output: {error}")),
         },
         Err(error) => failure(input, format!("Save failed: {error}")),
@@ -1222,8 +1217,8 @@ mod session_tests {
             source.clone(),
         );
 
-        assert!(outcome.failure.is_some());
-        assert!(outcome.output_paths.is_empty());
+        assert!(outcome.error().is_some());
+        assert!(outcome.output_paths().is_empty());
         assert_eq!(std::fs::read(&source).unwrap(), source_bytes);
         assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
         let _ = std::fs::remove_file(source);
@@ -1249,8 +1244,8 @@ mod session_tests {
             source.clone(),
         );
 
-        assert!(outcome.failure.is_some());
-        assert!(outcome.output_paths.is_empty());
+        assert!(outcome.error().is_some());
+        assert!(outcome.output_paths().is_empty());
         assert_eq!(std::fs::read(&source).unwrap(), source_bytes);
         assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
         let _ = std::fs::remove_file(source);
@@ -1288,8 +1283,8 @@ mod session_tests {
             source.clone(),
         );
 
-        assert!(sign_outcome.failure.is_some());
-        assert!(edit_outcome.failure.is_some());
+        assert!(sign_outcome.error().is_some());
+        assert!(edit_outcome.error().is_some());
         assert_eq!(std::fs::read(&source).unwrap(), source_bytes);
         assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
         let _ = std::fs::remove_file(source);
@@ -1327,8 +1322,8 @@ mod session_tests {
         );
 
         for (name, outcome) in [("session", session_outcome), ("edit", edit_outcome)] {
-            assert!(outcome.failure.as_ref().is_some_and(|error| error.message == "Unlock the PDF before editing"), "{name}: {:?}", outcome.failure);
-            assert!(outcome.output_paths.is_empty(), "{name} must not produce an output");
+            assert!(outcome.error().is_some_and(|error| error.message == "Unlock the PDF before editing"), "{name}: {:?}", outcome.error());
+            assert!(outcome.output_paths().is_empty(), "{name} must not produce an output");
         }
         assert_eq!(std::fs::read(&source).unwrap(), original);
         assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
@@ -1359,8 +1354,8 @@ mod session_tests {
             source.clone(),
         );
 
-        assert!(outcome.failure.is_none(), "sign failed: {:?}", outcome.failure);
-        let output = outcome.output_paths.first().expect("sign should produce an output");
+        assert!(outcome.error().is_none(), "sign failed: {:?}", outcome.error());
+        let output = outcome.output_paths().first().expect("sign should produce an output");
         let output_document = Document::load(output).unwrap();
         let output_page = output_document.get_pages().values().next().copied().unwrap();
         let contents = output_document.get_dictionary(output_page).unwrap().get(b"Contents").unwrap().as_array().unwrap();
@@ -1389,8 +1384,8 @@ mod session_tests {
             source.clone(),
         );
 
-        assert!(outcome.failure.is_none(), "sign failed: {:?}", outcome.failure);
-        let output = outcome.output_paths.first().expect("sign should produce an output");
+        assert!(outcome.error().is_none(), "sign failed: {:?}", outcome.error());
+        let output = outcome.output_paths().first().expect("sign should produce an output");
         let document = Document::load(output).unwrap();
         for (index, page_id) in document.get_pages().values().copied().enumerate() {
             let content_bytes = document.get_page_content(page_id);
@@ -1489,8 +1484,8 @@ mod session_tests {
             scope: PageScope::All,
             output_location: editor_request_location(&output_dir),
         }, source.clone());
-        assert!(outcome.failure.is_none(), "crop failed: {:?}", outcome.failure);
-        let output_document = Document::load(outcome.output_paths.first().unwrap()).unwrap();
+        assert!(outcome.error().is_none(), "crop failed: {:?}", outcome.error());
+        let output_document = Document::load(outcome.output_paths().first().unwrap()).unwrap();
         let page = output_document.get_pages().values().next().copied().unwrap();
         let page = output_document.get_dictionary(page).unwrap();
         for key in [b"MediaBox".as_slice(), b"CropBox", b"BleedBox", b"ArtBox"] {
@@ -1499,7 +1494,7 @@ mod session_tests {
         assert_eq!(page.get(b"TrimBox").unwrap().as_array().unwrap().iter().map(|value| value.as_i64().unwrap() as f32).collect::<Vec<_>>(), vec![100.0, 100.0, 150.0, 200.0]);
 
         let _ = std::fs::remove_file(source);
-        let _ = std::fs::remove_file(outcome.output_paths.first().unwrap());
+        let _ = std::fs::remove_file(outcome.output_paths().first().unwrap());
         let _ = std::fs::remove_dir(output_dir);
     }
 
@@ -1524,8 +1519,8 @@ mod session_tests {
                 paths: vec![source.clone()], rectangle: PdfRect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 },
                 scope: PageScope::All, output_location: editor_request_location(&output_dir),
             }, source.clone());
-            assert!(outcome.failure.as_ref().is_some_and(|error| error.message.contains("navigation")), "{name}: {:?}", outcome.failure);
-            assert!(outcome.output_paths.is_empty());
+            assert!(outcome.error().is_some_and(|error| error.message.contains("navigation")), "{name}: {:?}", outcome.error());
+            assert!(outcome.output_paths().is_empty());
             assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
             let _ = std::fs::remove_file(source);
             let _ = std::fs::remove_dir(output_dir);
@@ -1545,8 +1540,8 @@ mod session_tests {
                 paths: vec![source.clone()], rectangle: PdfRect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 },
                 scope: PageScope::All, output_location: editor_request_location(&output_dir),
             }, source.clone());
-            assert!(outcome.failure.as_ref().is_some_and(|error| error.message.contains("page-tree")), "count {count}: {:?}", outcome.failure);
-            assert!(outcome.output_paths.is_empty());
+            assert!(outcome.error().is_some_and(|error| error.message.contains("page-tree")), "count {count}: {:?}", outcome.error());
+            assert!(outcome.output_paths().is_empty());
             assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
             let _ = std::fs::remove_file(source);
             let _ = std::fs::remove_dir(output_dir);
@@ -1568,8 +1563,8 @@ mod session_tests {
             output_location: location(&output_dir),
         }, source.clone());
 
-        assert!(outcome.failure.as_ref().is_some_and(|error| error.message.contains("duplicate")), "unexpected result: {:?}", outcome.failure);
-        assert!(outcome.output_paths.is_empty());
+        assert!(outcome.error().is_some_and(|error| error.message.contains("duplicate")), "unexpected result: {:?}", outcome.error());
+        assert!(outcome.output_paths().is_empty());
         assert_eq!(std::fs::read(&source).unwrap(), original);
         assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
         let _ = std::fs::remove_file(source);
@@ -1592,8 +1587,8 @@ mod session_tests {
             scope: PageScope::All, output_location: location(&output_dir),
         }, source.clone());
 
-        assert!(outcome.failure.as_ref().is_some_and(|error| error.message.contains("annotation")), "unexpected result: {:?}", outcome.failure);
-        assert!(outcome.output_paths.is_empty());
+        assert!(outcome.error().is_some_and(|error| error.message.contains("annotation")), "unexpected result: {:?}", outcome.error());
+        assert!(outcome.output_paths().is_empty());
         assert_eq!(std::fs::read(&source).unwrap(), original);
         assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
         let _ = std::fs::remove_file(source);
@@ -1620,8 +1615,8 @@ mod session_tests {
                 scope: PageScope::All, output_location: location(&output_dir),
             }, source.clone());
 
-            assert!(outcome.failure.as_ref().is_some_and(|error| error.message.contains("annotation")), "{name}: {:?}", outcome.failure);
-            assert!(outcome.output_paths.is_empty());
+            assert!(outcome.error().is_some_and(|error| error.message.contains("annotation")), "{name}: {:?}", outcome.error());
+            assert!(outcome.output_paths().is_empty());
             assert_eq!(std::fs::read(&source).unwrap(), original);
             assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
             let _ = std::fs::remove_file(source);
@@ -1644,8 +1639,8 @@ mod session_tests {
             scope: PageScope::All, output_location: location(&output_dir),
         }, source.clone());
 
-        assert!(outcome.failure.is_none(), "reorder failed: {:?}", outcome.failure);
-        let output = outcome.output_paths.first().unwrap();
+        assert!(outcome.error().is_none(), "reorder failed: {:?}", outcome.error());
+        let output = outcome.output_paths().first().unwrap();
         let document = Document::load(output).unwrap();
         let pages = document.get_pages().values().copied().collect::<Vec<_>>();
         assert!(document.get_dictionary(pages[0]).unwrap().get(b"Annots").is_err());
@@ -1695,8 +1690,8 @@ mod session_tests {
                 _ => unreachable!(),
             };
 
-            assert!(outcome.failure.is_none(), "{case}: {:?}", outcome.failure);
-            let output = outcome.output_paths.first().unwrap();
+            assert!(outcome.error().is_none(), "{case}: {:?}", outcome.error());
+            let output = outcome.output_paths().first().unwrap();
             assert_reordered_navigation_and_form_references(output, &original_pages, widget);
             assert_eq!(std::fs::read(&source).unwrap(), original);
             let _ = std::fs::remove_file(source);
@@ -1732,8 +1727,8 @@ mod session_tests {
             output_location: location(&output_dir),
         }, source.clone());
 
-        assert!(outcome.failure.as_ref().is_some_and(|error| error.message.contains("owning page")), "unexpected result: {:?}", outcome.failure);
-        assert!(outcome.output_paths.is_empty());
+        assert!(outcome.error().is_some_and(|error| error.message.contains("owning page")), "unexpected result: {:?}", outcome.error());
+        assert!(outcome.output_paths().is_empty());
         assert_eq!(std::fs::read(&source).unwrap(), original);
         assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
         let _ = std::fs::remove_file(source);
@@ -1761,8 +1756,8 @@ mod session_tests {
                 scope: PageScope::All, output_location: location(&output_dir),
             }, source.clone());
 
-            assert!(outcome.failure.is_some(), "{name}: malformed annotation must fail");
-            assert!(outcome.output_paths.is_empty());
+            assert!(outcome.error().is_some(), "{name}: malformed annotation must fail");
+            assert!(outcome.output_paths().is_empty());
             assert_eq!(std::fs::read(&source).unwrap(), original);
             assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
             let _ = std::fs::remove_file(source);
@@ -1860,8 +1855,8 @@ mod session_tests {
                 plan: PdfEditSessionPlan { page_order: vec![], delete_pages: vec![0], rotate_pages: vec![], operations: vec![operation] },
                 output_location: location(&output_dir),
             }, source.clone());
-            assert!(outcome.failure.as_ref().is_some_and(|error| error.message.contains("scheduled for deletion")), "{name}: {:?}", outcome.failure);
-            assert!(outcome.output_paths.is_empty());
+            assert!(outcome.error().is_some_and(|error| error.message.contains("scheduled for deletion")), "{name}: {:?}", outcome.error());
+            assert!(outcome.output_paths().is_empty());
             assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
             let _ = std::fs::remove_file(source);
             let _ = std::fs::remove_dir(output_dir);
@@ -1914,8 +1909,8 @@ mod session_tests {
         };
 
         let outcome = apply_session(&request, source.clone());
-        assert!(outcome.failure.is_none(), "composed session failed: {:?}", outcome.failure);
-        let output = outcome.output_paths.first().expect("session should produce one output");
+        assert!(outcome.error().is_none(), "composed session failed: {:?}", outcome.error());
+        let output = outcome.output_paths().first().expect("session should produce one output");
         let document = Document::load(output).expect("composed output should reopen");
         assert_eq!(document.get_pages().len(), 3);
         let output_bytes = std::fs::read(output).expect("composed output should be readable");
@@ -1953,8 +1948,8 @@ mod session_tests {
             output_location: location(&output_dir),
         }, source.clone());
 
-        assert!(outcome.failure.as_ref().is_some_and(|error| error.message.contains("CropBox")), "unexpected result: {:?}", outcome.failure);
-        assert!(outcome.output_paths.is_empty());
+        assert!(outcome.error().is_some_and(|error| error.message.contains("CropBox")), "unexpected result: {:?}", outcome.error());
+        assert!(outcome.output_paths().is_empty());
         assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
         assert_eq!(std::fs::read(&source).expect("source should remain readable"), source_bytes);
         let _ = std::fs::remove_file(source);
@@ -1984,8 +1979,8 @@ mod session_tests {
             paths: vec![source.clone()], page_order: vec![3, 1], delete_pages: vec![],
             rotate_pages: vec![], scope: PageScope::Selected { pages: vec![1, 3] }, output_location: location(&output_dir),
         }, source.clone());
-        assert!(outcome.failure.is_none(), "selected organize failed: {:?}", outcome.failure);
-        let output = outcome.output_paths.first().expect("organize should produce an output");
+        assert!(outcome.error().is_none(), "selected organize failed: {:?}", outcome.error());
+        let output = outcome.output_paths().first().expect("organize should produce an output");
         let output_document = Document::load(output).expect("organized PDF should reopen");
         let order = output_document.get_pages().values().copied().collect::<Vec<_>>();
         let contents = order.iter().map(|page| String::from_utf8_lossy(&output_document.get_page_content(*page)).into_owned()).collect::<Vec<_>>();
@@ -2008,8 +2003,8 @@ mod session_tests {
             scope: PageScope::All, output_location: location(&output_dir),
         }, source.clone());
 
-        assert!(outcome.failure.as_ref().is_some_and(|error| error.message.contains("nested or unsupported")), "{:?}", outcome.failure);
-        assert!(outcome.output_paths.is_empty());
+        assert!(outcome.error().is_some_and(|error| error.message.contains("nested or unsupported")), "{:?}", outcome.error());
+        assert!(outcome.output_paths().is_empty());
         assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
 
         let _ = std::fs::remove_file(source);
@@ -2056,8 +2051,8 @@ mod session_tests {
                 _ => unreachable!(),
             };
 
-            assert!(outcome.failure.as_ref().is_some_and(|error| error.message.contains("Digitally signed")), "{case}: {:?}", outcome.failure);
-            assert!(outcome.output_paths.is_empty());
+            assert!(outcome.error().is_some_and(|error| error.message.contains("Digitally signed")), "{case}: {:?}", outcome.error());
+            assert!(outcome.output_paths().is_empty());
             assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
             let _ = std::fs::remove_file(source);
             let _ = std::fs::remove_dir(output_dir);
@@ -2104,8 +2099,8 @@ mod session_tests {
                 _ => unreachable!(),
             };
 
-            assert!(outcome.failure.as_ref().is_some_and(|error| error.message.contains("navigation")), "{case}: {:?}", outcome.failure);
-            assert!(outcome.output_paths.is_empty());
+            assert!(outcome.error().is_some_and(|error| error.message.contains("navigation")), "{case}: {:?}", outcome.error());
+            assert!(outcome.output_paths().is_empty());
             assert_eq!(std::fs::read(&source).unwrap(), original);
             assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
             let _ = std::fs::remove_file(source);
@@ -2142,8 +2137,8 @@ mod session_tests {
                 _ => unreachable!(),
             };
 
-            assert!(outcome.failure.as_ref().is_some_and(|error| error.message.contains("tagged PDF")), "{case}: {:?}", outcome.failure);
-            assert!(outcome.output_paths.is_empty());
+            assert!(outcome.error().is_some_and(|error| error.message.contains("tagged PDF")), "{case}: {:?}", outcome.error());
+            assert!(outcome.output_paths().is_empty());
             assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
             let _ = std::fs::remove_file(source);
             let _ = std::fs::remove_dir(output_dir);
@@ -2167,8 +2162,8 @@ mod session_tests {
                 }, source.clone()),
                 _ => unreachable!(),
             };
-            assert!(outcome.failure.as_ref().is_some_and(|error| error.message.contains("nested or unsupported")), "{case}: {:?}", outcome.failure);
-            assert!(outcome.output_paths.is_empty());
+            assert!(outcome.error().is_some_and(|error| error.message.contains("nested or unsupported")), "{case}: {:?}", outcome.error());
+            assert!(outcome.output_paths().is_empty());
             assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
             let _ = std::fs::remove_file(source);
             let _ = std::fs::remove_dir(output_dir);
