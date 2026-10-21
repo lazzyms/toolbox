@@ -148,8 +148,9 @@ export const PDFConversionWorkspaceView = ({ utility }: { utility: ToolDefinitio
         });
       }}
     >
-      {({ files, run, loading }) => (
+      {({ files, run, loading, destination }) => (
         <ConversionControls
+          destination={destination}
           activeUtility={activeUtility}
           activeToolId={activeToolId}
           onSelectTool={setActiveToolId}
@@ -181,6 +182,7 @@ export const PDFConversionWorkspaceView = ({ utility }: { utility: ToolDefinitio
 };
 
 type ConversionControlsProps = {
+  destination: React.ReactNode;
   activeUtility: ToolDefinition;
   activeToolId: AtomicToolId;
   onSelectTool: (id: AtomicToolId) => void;
@@ -208,6 +210,7 @@ type ConversionControlsProps = {
 };
 
 const ConversionControls = ({
+  destination,
   activeUtility,
   activeToolId,
   onSelectTool,
@@ -454,6 +457,7 @@ const ConversionControls = ({
           <Slider aria-label="Compression quality" aria-labelledby="compression-quality-label" min={1} max={100} value={[quality]} onValueChange={([value]) => setQuality(value)} />
         </div>
       )}
+      {destination}
       <Button
         variant="default"
         disabled={loading || !canExport || (needsPageSelection && (!inspectedDocument || selectionCount === 0 || selectionIssue !== null))}

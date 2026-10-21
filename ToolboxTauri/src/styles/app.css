@@ -1023,6 +1023,57 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.run-destination {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+.pdf-scene-destination .run-destination {
+  padding-top: 0;
+  border-top: 0;
+}
+.run-destination-label {
+  font-size: 12px;
+  font-weight: 600;
+}
+.run-destination-heading,
+.run-destination-path,
+.run-destination-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.run-destination-path {
+  align-items: flex-start;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.run-destination-path svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  color: var(--muted-foreground);
+}
+.run-destination-actions {
+  gap: 14px;
+}
+.run-destination-hint {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.run-destination-example {
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--muted);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
 .workspace-command-rail {
   min-width: 0;
 }

@@ -85,12 +85,15 @@ export const PDFEditorWorkspaceView = ({ utility, onWorkspaceSourceAction }: { u
       const results = await invoke<ToolResult>('export_pdf_scene', { request: { paths, scene: session.current.scene, outputLocation } });
       return results.map((result) => result.failure ? { ...result, failure: { ...result.failure, message: pdfEditorErrorMessage(result.failure.message, 'export') } } : result);
     }}>
-    {({ files, run, loading }) => {
+    {({ files, run, loading, destination }) => {
       const inputPath = files.length === 1 ? files[0] ?? null : null;
-      return <PDFSceneSession key={inputPath ?? 'empty'} path={inputPath} initialTool={initialTool}
-      exporting={loading} onExport={run}
-      onScene={(path, scene) => { session.current = path && scene ? { path, scene } : null; }} />}
-    }
+      return <>
+        <PDFSceneSession key={inputPath ?? 'empty'} path={inputPath} initialTool={initialTool}
+          exporting={loading} onExport={run}
+          onScene={(path, scene) => { session.current = path && scene ? { path, scene } : null; }} />
+        <Card className="pdf-scene-destination py-0"><CardContent className="py-3">{destination}</CardContent></Card>
+      </>;
+    }}
   </ToolScaffold>;
 };
 

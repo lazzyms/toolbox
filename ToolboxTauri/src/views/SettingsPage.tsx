@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type ComponentType } from "react";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
-import { homeDir } from "@tauri-apps/api/path";
 import { ArrowLeft, Check, Eye, Folder, Info, LoaderCircle, Search, Shield, type LucideIcon } from "lucide-react";
 import packageInfo from "../../package.json";
 import qrCode from "../assets/BuyMeACoffeeQR.png";
@@ -12,6 +11,7 @@ import {
   setAnalyticsOptOut,
 } from "../analytics";
 import { useOutputSettings } from "../outputLocation";
+import { shortenHomePath, useHomeDir } from "../homePath";
 import type { OutputMode } from "../contracts";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -21,26 +21,6 @@ import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
 const isWindows = () => navigator.platform.toLowerCase().includes("win");
-
-export const shortenHomePath = (path: string, home: string | null) => {
-  if (!home) return path;
-  const base = home.replace(/[\\/]+$/, "");
-  if (path === base) return "~";
-  const separator = path.charAt(base.length);
-  return path.startsWith(base) && (separator === "/" || separator === "\\")
-    ? `~${path.slice(base.length)}`
-    : path;
-};
-
-const useHomeDir = () => {
-  const [home, setHome] = useState<string | null>(null);
-  useEffect(() => {
-    let current = true;
-    homeDir().then((dir) => { if (current) setHome(dir); }, () => undefined);
-    return () => { current = false; };
-  }, []);
-  return home;
-};
 
 const AppearanceSection = () => {
   const [theme, setTheme] = useState<"dark" | "light">(

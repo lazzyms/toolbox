@@ -67,3 +67,58 @@ fn is_read_only(directory: &Path) -> bool {
         Err(error) => matches!(error.kind(), io::ErrorKind::PermissionDenied | io::ErrorKind::ReadOnlyFilesystem),
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FolderCheck { Ready, Missing, Unwritable }
+
+pub fn check_output_folder(folder: &Path) -> FolderCheck {
+    if !folder.is_dir() { FolderCheck::Missing }
+    else if is_read_only(folder) { FolderCheck::Unwritable }
+    else { FolderCheck::Ready }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sandbox(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("toolbox-folder-check-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    #[test]
+    fn writable_folder_is_ready_and_left_empty() {
+        let root = sandbox("ready");
+        assert_eq!(check_output_folder(&root), FolderCheck::Ready);
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0, "the probe leaves nothing behind");
+    }
+
+    #[test]
+    fn missing_folder_and_file_path_report_missing() {
+        let root = sandbox("missing");
+        let file = root.join("notes.txt");
+        std::fs::write(&file, b"keep").unwrap();
+        assert_eq!(check_output_folder(&root.join("Protected")), FolderCheck::Missing);
+        assert_eq!(check_output_folder(&file), FolderCheck::Missing);
+        assert!(!root.join("Protected").exists(), "the check never creates the folder");
+        assert_eq!(std::fs::read(&file).unwrap(), b"keep");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_only_folder_reports_unwritable() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = sandbox("unwritable");
+        let locked = root.join("locked");
+        std::fs::create_dir_all(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let check = check_output_folder(&locked);
+        let listing = std::fs::read_dir(&locked).unwrap().count();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(check, FolderCheck::Unwritable);
+        assert_eq!(listing, 0);
+    }
+}

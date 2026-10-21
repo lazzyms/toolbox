@@ -63,7 +63,7 @@ export const SecurityWorkspaceView = ({ utility }: { utility: ToolDefinition }) 
             })
       }
     >
-      {({ files, run, loading }) => (
+      {({ files, run, loading, destination }) => (
         <Card className="workspace-control-panel py-0">
           <CardContent className="workspace-control-panel-content grid gap-4 p-4">
           <WorkspaceCommandRail
@@ -114,6 +114,7 @@ export const SecurityWorkspaceView = ({ utility }: { utility: ToolDefinition }) 
               </Button>
             </div>
           </div>
+          {destination}
           <Button
             variant="default"
             aria-label={activeUtility.id === "pdf-unlock" ? "Remove Password from selected files" : activeUtility.shortTitle}
