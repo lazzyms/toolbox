@@ -1423,7 +1423,7 @@ mod command_tests {
     #[cfg(unix)]
     fn protect_pdfs_through_fake_qpdf(name: &str) -> (Vec<PathBuf>, Vec<crate::kit::common::fake_helper::Invocation>, Vec<JobOutcome>) {
         use crate::kit::common::fake_helper::FakeHelper;
-        let real = crate::kit::pdf::find_qpdf().expect("qpdf is required for the native suite");
+        let real = crate::kit::resources::resolve_helper(&crate::kit::resources::QPDF).expect("qpdf is required for the native suite");
         let root = sandbox(name);
         let inputs = ["first", "own", "last"].map(|stem| root.join(format!("{stem}.pdf"))).to_vec();
         for input in &inputs { make_pdf(input, 1); }
@@ -1495,7 +1495,7 @@ mod command_tests {
         use crate::kit::common::fake_helper::FakeHelper;
         use crate::kit::contracts::{ErrorKind, SkipCode};
         let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
-        let real = crate::kit::pdf::find_qpdf().expect("qpdf is required for the native suite");
+        let real = crate::kit::resources::resolve_helper(&crate::kit::resources::QPDF).expect("qpdf is required for the native suite");
         let root = sandbox("cancel-mid-batch");
         let inputs = ["first", "second", "stalls", "fourth", "fifth"].map(|stem| root.join(format!("{stem}.pdf"))).to_vec();
         for input in &inputs { make_pdf(input, 1); }

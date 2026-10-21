@@ -718,7 +718,7 @@ impl TempDir {
 }
 impl Drop for TempDir { fn drop(&mut self) { let _=fs::remove_dir_all(&self.0); } }
 fn renderer()->Result<PathBuf,String> {
-    crate::kit::resources::resolve_pdf_renderer()
+    crate::kit::resources::resolve_helper(&crate::kit::resources::PDF_RENDERER)
 }
 
 fn text_extractor()->Option<PathBuf> {

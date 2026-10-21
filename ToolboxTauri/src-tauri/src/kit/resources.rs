@@ -48,27 +48,69 @@ fn resource_root_from_runtime() -> Option<PathBuf> {
     if parent.file_name().and_then(|name| name.to_str()) == Some("MacOS") { parent.parent().map(|root| root.join("Resources")) } else { Some(parent.to_path_buf()) }
 }
 
-pub(crate) fn resolve_pdf_renderer() -> Result<PathBuf, String> {
-    let executable = if cfg!(windows) { "pdftoppm.exe" } else { "pdftoppm" };
-    if let Some(path) = std::env::var_os("TOOLBOX_PDFTOPPM_PATH").filter(|path| !path.is_empty()).map(PathBuf::from) {
-        if path.is_file() { return Ok(path); }
-        return Err("TOOLBOX_PDFTOPPM_PATH does not point to a file.".to_string());
-    }
+pub(crate) struct Helper {
+    name: &'static str,
+    override_var: &'static str,
+    bundled_dir: &'static str,
+    probe: &'static str,
+    unavailable: &'static str,
+}
 
-    if let Some(root) = application_resource_root() {
-        for path in [root.join("pdf-bin").join(executable), root.join("resources").join(executable), root.join(executable)] {
-            if !path.is_file() { continue; }
-            let mut command = Command::new(&path);
-            command.arg("-h");
-            if crate::kit::pdf::helper_available(command) { return Ok(path); }
+pub(crate) const PDF_RENDERER: Helper = Helper {
+    name: "pdftoppm",
+    override_var: "TOOLBOX_PDFTOPPM_PATH",
+    bundled_dir: "pdf-bin",
+    probe: "-h",
+    unavailable: "pdftoppm is required for PDF previews. Set TOOLBOX_PDFTOPPM_PATH or add it to PATH.",
+};
+
+pub(crate) const QPDF: Helper = Helper {
+    name: "qpdf",
+    override_var: "TOOLBOX_QPDF_PATH",
+    bundled_dir: "qpdf-bin",
+    probe: "--version",
+    unavailable: "This PDF tool is unavailable because a helper it needs is missing from this copy of Toolbox. Reinstall Toolbox to restore it.",
+};
+
+struct HelperLocations {
+    development_override: Option<PathBuf>,
+    executable_dir: Option<PathBuf>,
+    resource_root: Option<PathBuf>,
+    system_path: Option<std::ffi::OsString>,
+}
+
+impl HelperLocations {
+    fn of_process(helper: &Helper) -> Self {
+        Self {
+            development_override: std::env::var_os(helper.override_var).filter(|path| !path.is_empty()).map(PathBuf::from),
+            executable_dir: std::env::current_exe().ok().and_then(|executable| executable.parent().map(Path::to_path_buf)),
+            resource_root: application_resource_root(),
+            system_path: std::env::var_os("PATH"),
         }
     }
+}
 
-    let path = PathBuf::from(executable);
-    let mut command = Command::new(&path);
-    command.arg("-h");
-    if crate::kit::pdf::helper_available(command) { return Ok(path); }
-    Err("pdftoppm is required for PDF previews. Set TOOLBOX_PDFTOPPM_PATH or add it to PATH.".to_string())
+pub(crate) fn resolve_helper(helper: &Helper) -> Result<PathBuf, String> {
+    locate_helper(helper, &HelperLocations::of_process(helper))
+}
+
+fn locate_helper(helper: &Helper, locations: &HelperLocations) -> Result<PathBuf, String> {
+    if let Some(path) = &locations.development_override {
+        if path.is_file() { return Ok(path.clone()); }
+        return Err(format!("{} does not point to a file.", helper.override_var));
+    }
+    let executable = if cfg!(windows) { format!("{}.exe", helper.name) } else { helper.name.to_string() };
+    let beside_executable = locations.executable_dir.iter().map(|dir| dir.join(&executable));
+    let bundled = locations.resource_root.iter()
+        .flat_map(|root| [root.join(helper.bundled_dir).join(&executable), root.join("resources").join(&executable), root.join(&executable)]);
+    let on_path = locations.system_path.iter().flat_map(std::env::split_paths).map(|dir| dir.join(&executable));
+    beside_executable.chain(bundled).chain(on_path)
+        .find(|path| path.is_file() && {
+            let mut command = Command::new(path);
+            command.arg(helper.probe);
+            crate::kit::pdf::helper_available(command)
+        })
+        .ok_or_else(|| helper.unavailable.to_string())
 }
 
 pub fn resolve(name: &str, bundled_root: &Path, override_var: &str, path_name: &str) -> Result<ResolvedResource, String> {
@@ -147,6 +189,65 @@ mod tests {
         fs::write(root.join("manifest.json"), serde_json::to_vec(&ResourceManifest { version: 1, architecture: std::env::consts::ARCH.to_string(), resources }).unwrap()).unwrap();
         assert!(resolve("adapter", &root, "TOOLBOX_TEST_OVERRIDE", "adapter").is_err());
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    fn fake_executable(path: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, b"#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        path.to_path_buf()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn qpdf_lookup_prefers_override_then_executable_dir_then_bundled_resources_then_system_path() {
+        let root = root();
+        let development_override = fake_executable(&root.join("override/qpdf"));
+        let beside_executable = fake_executable(&root.join("app/qpdf"));
+        let bundled = fake_executable(&root.join("Resources/qpdf-bin/qpdf"));
+        let on_path = fake_executable(&root.join("system/qpdf"));
+        let mut locations = HelperLocations {
+            development_override: Some(development_override.clone()),
+            executable_dir: Some(root.join("app")),
+            resource_root: Some(root.join("Resources")),
+            system_path: Some(std::env::join_paths([root.join("empty"), root.join("system")]).unwrap()),
+        };
+
+        assert_eq!(locate_helper(&QPDF, &locations), Ok(development_override));
+        locations.development_override = None;
+        assert_eq!(locate_helper(&QPDF, &locations), Ok(beside_executable.clone()));
+        fs::remove_file(&beside_executable).unwrap();
+        assert_eq!(locate_helper(&QPDF, &locations), Ok(bundled.clone()));
+        fs::remove_file(&bundled).unwrap();
+        assert_eq!(locate_helper(&QPDF, &locations), Ok(on_path.clone()));
+        fs::remove_file(&on_path).unwrap();
+        let missing = locate_helper(&QPDF, &locations).unwrap_err();
+        assert_eq!(missing, QPDF.unavailable);
+        assert!(!missing.contains("TOOLBOX_") && !missing.contains("PATH"), "{missing}");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn qpdf_lookup_finds_bundled_resources_copy_and_skips_helpers_that_do_not_run() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = root();
+        let broken = fake_executable(&root.join("Resources/qpdf-bin/qpdf"));
+        fs::write(&broken, b"#!/bin/sh\nexit 1\n").unwrap();
+        fs::set_permissions(&broken, fs::Permissions::from_mode(0o755)).unwrap();
+        let resources_subdir = fake_executable(&root.join("Resources/resources/qpdf"));
+        let locations = HelperLocations { development_override: None, executable_dir: Some(root.join("app")), resource_root: Some(root.join("Resources")), system_path: None };
+        assert_eq!(locate_helper(&QPDF, &locations), Ok(resources_subdir));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn qpdf_override_that_is_not_a_file_does_not_fall_back() {
+        let root = root();
+        let locations = HelperLocations { development_override: Some(root.join("missing/qpdf")), executable_dir: None, resource_root: None, system_path: std::env::var_os("PATH") };
+        assert!(locate_helper(&QPDF, &locations).is_err());
     }
 
     #[test]

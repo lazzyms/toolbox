@@ -696,6 +696,10 @@ impl PDFProcessor {
         if let Err(error) = read_and_probe(&input_path) {
             return JobOutcome::failure(input_path, error);
         }
+        let qpdf = match crate::kit::resources::resolve_helper(&crate::kit::resources::QPDF) {
+            Ok(qpdf) => qpdf,
+            Err(error) => return JobOutcome::failure(input_path, ToolError::unavailable(error)),
+        };
         let output_path = match OutputNaming::reserve_destination(
             &input_path,
             output_location,
@@ -706,12 +710,6 @@ impl PDFProcessor {
             Err(error) => return JobOutcome::failure(input_path, ToolError::processing(format!("Could not reserve protected PDF output: {error}"))),
         };
 
-        let Some(qpdf) = find_qpdf() else {
-            return JobOutcome::failure(input_path, ToolError::unavailable(
-                    "qpdf is required to protect PDFs but was not found. \
-                     Set TOOLBOX_QPDF_PATH or add qpdf to PATH.",
-                ));
-        };
 
         let status = Command::new(&qpdf)
             .arg("--encrypt")
@@ -751,39 +749,6 @@ fn read_and_probe(input_path: &Path) -> Result<Vec<u8>, ToolError> {
     probe(&raw, ProtectedFormat::Pdf)?;
     Ok(raw)
 }
-
-/// Locate qpdf from an explicit override, the installed app resources, or PATH.
-pub(crate) fn find_qpdf() -> Option<PathBuf> {
-    if let Ok(p) = std::env::var("TOOLBOX_QPDF_PATH") {
-        let p = PathBuf::from(p);
-        if p.is_file() {
-            return Some(p);
-        }
-    }
-
-    if let Ok(exe) = std::env::current_exe() {
-        let exe_dir = exe.parent()?;
-        let candidates = [
-            exe_dir.join("qpdf.exe"),
-            exe_dir.join("resources").join("qpdf.exe"),
-            exe_dir.parent()?.join("Resources").join("qpdf-bin").join("qpdf"),
-        ];
-        for candidate in candidates {
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-    }
-
-    // Fall back to a `qpdf` on PATH (dev / non-bundled runs).
-    Command::new("qpdf")
-        .arg("--version")
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|_| PathBuf::from("qpdf"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -795,7 +760,7 @@ mod tests {
     }
 
     fn qpdf_available() -> bool {
-        find_qpdf().is_some()
+        crate::kit::resources::resolve_helper(&crate::kit::resources::QPDF).is_ok()
     }
 
     fn require_qpdf() -> bool {
@@ -886,7 +851,7 @@ mod tests {
             loaded.objects.iter().any(|(_, o)| matches!(o, Object::Stream(_))),
             "unlocked PDF must keep its content stream"
         );
-        let qpdf_check = std::process::Command::new(find_qpdf().unwrap())
+        let qpdf_check = std::process::Command::new(crate::kit::resources::resolve_helper(&crate::kit::resources::QPDF).unwrap())
             .arg("--check")
             .arg(&unlocked.output_paths()[0])
             .output()
@@ -933,7 +898,8 @@ mod tests {
         let src = temp_path("noqpdf.pdf");
         make_pdf(&src);
         let out = PDFProcessor::protect(src.clone(), "x", &OutputLocation::AlongsideInput);
-        assert!(out.error().is_some());
+        assert_eq!(out.error().map(|error| &error.kind), Some(&crate::kit::contracts::ErrorKind::Unavailable));
+        assert!(!src.with_file_name("noqpdf-protected.pdf").exists(), "a missing helper must not reserve an output");
         let _ = std::fs::remove_file(&src);
     }
 }
