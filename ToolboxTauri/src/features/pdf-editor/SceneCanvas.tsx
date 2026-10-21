@@ -115,6 +115,8 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
   const surface = useRef<SVGSVGElement>(null);
   const coordinates = useRef<SVGGElement>(null);
   const gesture = useRef<Gesture | null>(null);
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
   const lastObjectId = useRef<string | null>(null);
   const spacePressed = useRef(false);
   const editInput = useRef<HTMLTextAreaElement>(null);
@@ -124,6 +126,15 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
   const [editingText, setEditingText] = useState('');
   const [spaceHeld, setSpaceHeld] = useState(false);
   const [panning, setPanning] = useState(false);
+  function cancelGesture() {
+    const active = gesture.current;
+    if (!active) return;
+    gesture.current = null;
+    setDraft(null);
+    setPanning(false);
+    if (active.mode === 'text-selection') window.getSelection()?.removeAllRanges();
+    if (surface.current?.hasPointerCapture(active.pointerId)) surface.current.releasePointerCapture(active.pointerId);
+  }
   useLayoutEffect(() => {
     if (!host.current) return;
     const observer = new ResizeObserver(([entry]) => setSize({ width: entry.contentRect.width, height: entry.contentRect.height }));
@@ -132,16 +143,13 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
   }, []);
   useEffect(() => { gesture.current = null; setDraft(null); setEditingId(null); setPanning(false); window.getSelection()?.removeAllRanges(); }, [page]);
   useEffect(() => {
-    const clearGesture = () => {
-      const active = gesture.current;
-      if (!active) return;
-      gesture.current = null;
-      setDraft(null);
-      setPanning(false);
-      if (active.mode === 'text-selection') window.getSelection()?.removeAllRanges();
-      if (surface.current?.hasPointerCapture(active.pointerId)) surface.current.releasePointerCapture(active.pointerId);
-    };
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape' && gesture.current) {
+        event.preventDefault();
+        cancelGesture();
+        onSelectRef.current(null);
+        return;
+      }
       if (event.key !== ' ') return;
       spacePressed.current = true;
       setSpaceHeld(true);
@@ -154,18 +162,18 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     const onBlur = () => {
       spacePressed.current = false;
       setSpaceHeld(false);
-      clearGesture();
+      cancelGesture();
     };
-    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keydown', onKeyDown, true);
     window.addEventListener('keyup', onKeyUp);
-    window.addEventListener('pointerup', clearGesture);
-    window.addEventListener('pointercancel', clearGesture);
+    window.addEventListener('pointerup', cancelGesture);
+    window.addEventListener('pointercancel', cancelGesture);
     window.addEventListener('blur', onBlur);
     return () => {
-      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keydown', onKeyDown, true);
       window.removeEventListener('keyup', onKeyUp);
-      window.removeEventListener('pointerup', clearGesture);
-      window.removeEventListener('pointercancel', clearGesture);
+      window.removeEventListener('pointerup', cancelGesture);
+      window.removeEventListener('pointercancel', cancelGesture);
       window.removeEventListener('blur', onBlur);
       const active = gesture.current;
       gesture.current = null;
@@ -321,7 +329,7 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     else if (g.mode === 'create') onSelect(null);
   }
   function key(event: KeyboardEvent<SVGElement>, object: SceneObject, corner?: string) {
-    if (event.key === 'Escape') { gesture.current = null; setDraft(null); onSelect(null); return; }
+    if (event.key === 'Escape') { cancelGesture(); onSelect(null); return; }
     if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(object.id); return; }
     const steps: Record<string, ScenePoint> = { ArrowLeft: { x: -1, y: 0 }, ArrowRight: { x: 1, y: 0 }, ArrowUp: { x: 0, y: -1 }, ArrowDown: { x: 0, y: 1 } };
     const step = steps[event.key];

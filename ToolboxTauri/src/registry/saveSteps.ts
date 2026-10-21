@@ -14,6 +14,8 @@ const count = (value: number, one: string, many: string) => `${value} ${value ==
 const manyToOneSaveSteps: Record<string, ManyToOneSaveStep> = {
   merge_pdfs: { title: "Save the merged PDF", extension: "pdf", runLabel: "Merge…", minimumInputs: 1, summary: (n) => `${count(n, "file", "files")}, joined top to bottom.` },
   images_to_pdf: { title: "Save the combined PDF", extension: "pdf", runLabel: "Make PDF…", minimumInputs: 1, summary: (n) => `${count(n, "image", "images")}, one per page.` },
+  // A comparison reads exactly two PDFs and writes one text report.
+  compare_pdfs: { title: "Save the comparison report", extension: "txt", runLabel: "Compare…", minimumInputs: 2, summary: () => "2 PDFs, compared line by line." },
   create_gif: { title: "Save the GIF", extension: "gif", runLabel: "Make GIF…", minimumInputs: 1, summary: (n) => `${count(n, "frame", "frames")}, in the order shown.` },
   // One TIFF splits into pages, so only a combine of two or more makes one file.
   process_tiff_pages: { title: "Save the combined TIFF", extension: "tiff", runLabel: "Make TIFF…", minimumInputs: 2, summary: (n) => `${count(n, "TIFF file", "TIFF files")}, combined in the order shown.` },

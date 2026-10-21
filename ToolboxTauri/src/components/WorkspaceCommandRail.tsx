@@ -3,9 +3,10 @@ import type { KeyboardEvent } from "react";
 import { Button } from "@/components/ui/button";
 import type { AtomicToolId, ToolDefinition } from "../contracts";
 import { TablerIcon } from "./TablerIcon";
+import { useToolAvailability } from "../ToolAvailabilityContext";
 
 interface WorkspaceCommandRailProps {
-  actions: ToolDefinition[];
+  actions: readonly ToolDefinition[];
   activeId: AtomicToolId;
   onSelect: (id: AtomicToolId) => void;
   label: string;
@@ -30,6 +31,10 @@ const designIconByToolId: Record<AtomicToolId, string> = {
   "pdf-extract-pages": "extract-pages",
   "pdf-organize": "organize-pdf",
   "pdf-compress": "compress-pdf",
+  "pdf-rotate": "rotate-pdf",
+  "pdf-repair": "repair-pdf",
+  "pdf-redact": "redact-pdf",
+  "pdf-compare": "compare-pdf",
   "heic-convert": "convert-format",
   compress: "compress-images",
   resize: "resize-images",
@@ -91,6 +96,7 @@ export const WorkspaceCommandRail = ({
   label,
   disabled = false,
 }: WorkspaceCommandRailProps) => {
+  const availability = useToolAvailability();
   const [orientation, setOrientation] = useState<ToolbarOrientation>(getToolbarOrientation);
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -114,7 +120,7 @@ export const WorkspaceCommandRail = ({
         aria-orientation={orientation}
         onKeyDown={(event) => handleToolbarKeyDown(event, orientation)}
       >
-        {actions.map((tool) => {
+        {availability.filter(actions).map((tool) => {
           const unavailable = tool.capability.nativeAvailability === "unavailable";
           return (
             <Button
@@ -128,7 +134,7 @@ export const WorkspaceCommandRail = ({
               aria-label={tool.title}
               title={unavailable ? `${tool.title} is unavailable in this build` : tool.blurb}
               disabled={unavailable || disabled}
-              onClick={() => onSelect(tool.id)}
+              onClick={() => { if (availability.allows(tool.id)) onSelect(tool.id); }}
             >
               <span className="workspace-command-icon" aria-hidden="true">
                 <TablerIcon name={designIconByToolId[tool.id]} />

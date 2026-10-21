@@ -828,7 +828,7 @@ mod tests {
             .map(|capability| capability.command.as_str())
             .collect::<Vec<_>>();
         many_to_one.sort_unstable();
-        assert_eq!(many_to_one, ["create_gif", "images_to_pdf", "merge_pdfs", "process_tiff_pages"]);
+        assert_eq!(many_to_one, ["compare_pdfs", "create_gif", "images_to_pdf", "merge_pdfs", "process_tiff_pages"]);
 
         let office = native_capability("remove_password").unwrap();
         assert_eq!(office.accepted_extensions, [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"]);

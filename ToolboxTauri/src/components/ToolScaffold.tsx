@@ -1,12 +1,12 @@
 import { createContext, useContext, useState, useEffect, useMemo, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { open } from '@tauri-apps/plugin-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import type { ToolDefinition, JobOutcome, OutputLocation, Progress } from '../contracts';
+import { TOOL_DROP_EVENT, type ShellEvent } from '../hooks/useShellBridge';
 import { useOutputLocation } from '../outputLocation';
 import { failedOutcome, parseToolResult } from '../jobOutcome';
 import { toolsForWorkspace, workspaceForTool } from '../registry';
@@ -62,6 +62,10 @@ interface ToolScaffoldProps {
     renderFileExtra?: (path: string, selected: boolean, locked: boolean) => React.ReactNode;
     retryWithPassword?: (inputPath: string, password: string) => RunHandler;
     intakeCopy?: IntakeCopy;
+    initialPaths?: readonly string[];
+    fileActivation?: Extract<ShellEvent, { kind: 'files' }>;
+    onActivationAccepted?: (activationId: string) => void;
+    onFilesChange?: (paths: readonly string[]) => void;
     children: (props: {
         files: string[];
         failingFiles: string[];
@@ -80,15 +84,16 @@ interface ToolScaffoldProps {
     }) => React.ReactNode;
 }
 
-export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, retryWithPassword, intakeCopy, children }: ToolScaffoldProps) => {
-    const [entries, setEntries] = useState<IntakeEntry[]>([]);
+export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, retryWithPassword, intakeCopy, initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, children }: ToolScaffoldProps) => {
+    const nextEntryKey = useRef(0);
+    const newEntries = (paths: readonly string[]) => paths.map((path) => ({ key: `entry-${++nextEntryKey.current}`, path }));
+    const [entries, setEntries] = useState<IntakeEntry[]>(() => newEntries(initialPaths));
     const [selection, setSelection] = useState<ReadonlySet<string>>(() => new Set());
     const [anchor, setAnchor] = useState<string | null>(null);
     const [notAdded, setNotAdded] = useState<NotAdded[]>([]);
     const [moveStatus, setMoveStatus] = useState('');
     const [dragKey, setDragKey] = useState<string | null>(null);
     const [dropTargetKey, setDropTargetKey] = useState<string | null>(null);
-    const nextEntryKey = useRef(0);
     const rowButtons = useRef(new Map<string, HTMLButtonElement>());
     const home = useHomeDir();
     const [results, setResults] = useState<JobOutcome[]>([]);
@@ -302,8 +307,6 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         }
     };
 
-    const newEntries = (paths: string[]) => paths.map((path) => ({ key: `entry-${++nextEntryKey.current}`, path }));
-
     const selectOnly = (key: string | null) => {
         setSelection(new Set(key ? [key] : []));
         setAnchor(key);
@@ -340,15 +343,39 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         if (!loading) void dropPaths(paths);
     };
 
+    // The native shell owns window drops and forwards them here once a tool is open.
     useEffect(() => {
-        if (typeof window === 'undefined' || !("__TAURI_INTERNALS__" in window)) return;
-        const unlisten = getCurrentWebviewWindow().onDragDropEvent((event) => {
-            if (event.payload.type === 'drop') dropRef.current(event.payload.paths);
-        });
-        return () => {
-            unlisten.then((dispose) => dispose());
+        const handleDroppedFiles = (event: Event) => {
+            const paths = (event as CustomEvent<unknown>).detail;
+            if (Array.isArray(paths) && paths.every((path) => typeof path === 'string')) dropRef.current(paths);
         };
+        window.addEventListener(TOOL_DROP_EVENT, handleDroppedFiles);
+        return () => window.removeEventListener(TOOL_DROP_EVENT, handleDroppedFiles);
     }, []);
+
+    // Files opened from Finder, Explorer or the dock replace the current files once.
+    const [acceptedActivationId, setAcceptedActivationId] = useState<string | null>(null);
+    useEffect(() => {
+        if (!fileActivation || loading) return;
+        const activated = newEntries(fileActivation.paths);
+        setEntries(activated);
+        setResults([]);
+        setNotAdded([]);
+        selectOnly(activated[0]?.key ?? null);
+        setAcceptedActivationId(fileActivation.activationId);
+    }, [fileActivation?.activationId]);
+
+    useEffect(() => {
+        if (!fileActivation || acceptedActivationId !== fileActivation.activationId) return;
+        void invoke('acknowledge_activation', { activationId: fileActivation.activationId }).then(() => {
+            onActivationAccepted?.(fileActivation.activationId);
+        });
+    }, [acceptedActivationId, fileActivation, onActivationAccepted]);
+
+    const entryPaths = useMemo(() => entries.map((entry) => entry.path), [entries]);
+    useEffect(() => {
+        onFilesChange?.(entryPaths);
+    }, [entryPaths, onFilesChange]);
 
     const browse = async () => {
         if (loading) return;

@@ -72,7 +72,7 @@ test("every tool declares one output suffix and many-to-one tools take ordered i
     SharedCapabilityRegistry.filter(({ manyToOne }) => manyToOne)
       .map(({ command }) => command)
       .sort(),
-    ["create_gif", "images_to_pdf", "merge_pdfs", "process_tiff_pages"],
+    ["compare_pdfs", "create_gif", "images_to_pdf", "merge_pdfs", "process_tiff_pages"],
   );
   const suffixes = new Map(
     SharedCapabilityRegistry.map(({ command, outputSuffix }) => [command, outputSuffix]),

@@ -13,7 +13,7 @@ const workspaceIds = [...workspaceSource.matchAll(/toolIds:\s*\[([\s\S]*?)\]/g)]
 
 const failures = [];
 const unique = (values) => new Set(values).size === values.length;
-const expectedAtomicToolCount = 31;
+const expectedAtomicToolCount = 35;
 if (atomicIds.length !== expectedAtomicToolCount || !unique(atomicIds)) failures.push(`expected ${expectedAtomicToolCount} unique atomic IDs, found ${atomicIds.length}`);
 if (workspaceIds.length !== atomicIds.length || !unique(workspaceIds)) failures.push("workspace membership must contain each atomic ID exactly once");
 if (atomicIds.some((id) => !workspaceIds.includes(id)) || workspaceIds.some((id) => !atomicIds.includes(id))) failures.push("workspace membership and atomic registry differ");

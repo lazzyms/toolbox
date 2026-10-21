@@ -2,10 +2,12 @@ use image::codecs::jpeg::JpegEncoder;
 use image::ImageEncoder;
 use lopdf::{dictionary, Document, Object, ObjectId};
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::ToolError;
-use super::metadata::{effective_crop_bounds, page_bounds};
+use super::metadata::{effective_crop_bounds, page_bounds, page_rotation};
 use super::{inherited, mutation_preflight, PdfMutationIntent, PdfMutationPreflight};
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -186,6 +188,15 @@ pub enum PdfOverlay {
         #[serde(default)]
         pages: Option<Vec<usize>>,
     },
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RedactPdfRequest {
+    pub paths: Vec<PathBuf>,
+    pub rectangle: PdfRect,
+    #[serde(default = "default_scope")] pub scope: PageScope,
+    pub output_location: OutputLocation,
 }
 
 fn default_scope() -> PageScope { PageScope::All }
@@ -524,6 +535,79 @@ pub fn edit(request: &EditPdfRequest, input: PathBuf) -> JobOutcome {
         }
         Ok(())
     })
+}
+
+/// Permanently removes everything under the rectangle: each target page is flattened to an image with
+/// the area painted black, and its original text, vectors, and annotations are dropped from the file.
+pub fn redact(request: &RedactPdfRequest, input: PathBuf) -> JobOutcome {
+    let mut outcome = transform_pdf(input, &request.output_location, "-redacted", PdfMutationIntent::General, |document, pages, _preflight| {
+        validate_rect(&request.rectangle)?;
+        let targets = scoped_indices(&request.scope, pages.len())?;
+        let renderer = super::remaining::pdftoppm().ok_or("The PDF renderer (pdftoppm) is required to redact but was not found.")?;
+        let mut rotations = Vec::new();
+        for index in &targets {
+            let page_id = pages[*index];
+            rotations.push(page_rotation(document, page_id));
+            document.get_dictionary_mut(page_id).map_err(|e| e.to_string())?.set("Rotate", 0);
+        }
+        let workspace = RedactionWorkspace::new()?;
+        let unrotated = workspace.0.join("source.pdf");
+        document.save(&unrotated).map_err(|error| format!("Could not prepare the PDF for redaction: {error}"))?;
+        for (index, rotation) in targets.into_iter().zip(rotations) {
+            let page_id = pages[index];
+            let [left, bottom, right, top] = effective_crop_bounds(document, page_id)?;
+            let (x0, y0) = (request.rectangle.x.max(left), request.rectangle.y.max(bottom));
+            let (x1, y1) = ((request.rectangle.x + request.rectangle.width).min(right), (request.rectangle.y + request.rectangle.height).min(top));
+            if x0 >= x1 || y0 >= y1 { return Err(format!("The redaction box is outside page {}.", index + 1)); }
+            let prefix = workspace.0.join(format!("page-{}", index + 1));
+            let number = (index + 1).to_string();
+            let result = Command::new(&renderer).args(["-r", "200", "-png", "-singlefile", "-f", &number, "-l", &number]).arg(&unrotated).arg(&prefix).output()
+                .map_err(|error| format!("Could not run the PDF renderer: {error}"))?;
+            if !result.status.success() { return Err(format!("Could not render page {} for redaction.", index + 1)); }
+            let mut image = image::open(prefix.with_extension("png")).map_err(|error| format!("Could not read rendered page {}: {error}", index + 1))?.to_rgb8();
+            let (width, height) = image.dimensions();
+            let (scale_x, scale_y) = (width as f32 / (right - left), height as f32 / (top - bottom));
+            let pixel = |value: f32, limit: u32| (value.max(0.0) as u32).min(limit);
+            let (px0, px1) = (pixel(((x0 - left) * scale_x).floor(), width), pixel(((x1 - left) * scale_x).ceil(), width));
+            let (py0, py1) = (pixel(((top - y1) * scale_y).floor(), height), pixel(((top - y0) * scale_y).ceil(), height));
+            for y in py0..py1 { for x in px0..px1 { image.put_pixel(x, y, image::Rgb([0, 0, 0])); } }
+            let mut bytes = Vec::new();
+            JpegEncoder::new_with_quality(&mut bytes, 90).write_image(image.as_raw(), width, height, image::ExtendedColorType::Rgb8).map_err(|error| format!("Could not encode redacted page: {error}"))?;
+            let image_id = document.add_object(Object::Stream(lopdf::Stream::new(dictionary! {
+                "Type" => "XObject", "Subtype" => "Image", "Width" => width as i64,
+                "Height" => height as i64, "ColorSpace" => "DeviceRGB", "BitsPerComponent" => 8,
+                "Filter" => "DCTDecode",
+            }, bytes)));
+            let content = format!("q {} 0 0 {} {left} {bottom} cm /Iredact Do Q", right - left, top - bottom);
+            let content_id = document.add_object(Object::Stream(lopdf::Stream::new(dictionary! {}, content.into_bytes())));
+            let page = document.get_dictionary_mut(page_id).map_err(|e| e.to_string())?;
+            page.set("Contents", content_id);
+            page.set("Resources", dictionary! { "XObject" => dictionary! { "Iredact" => image_id } });
+            page.set("Rotate", rotation);
+            page.remove(b"Annots");
+        }
+        document.prune_objects();
+        Ok(())
+    });
+    if outcome.error().is_none() { outcome.detail = "Area permanently removed; redacted pages are now images".to_string(); }
+    outcome
+}
+
+/// A private temp folder for redaction renders, removed when dropped.
+struct RedactionWorkspace(PathBuf);
+
+impl RedactionWorkspace {
+    fn new() -> Result<Self, String> {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let path = std::env::temp_dir().join(format!("toolbox-redact-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).map_err(|error| format!("Could not create a temporary folder: {error}"))?;
+        Ok(Self(path))
+    }
+}
+
+impl Drop for RedactionWorkspace {
+    fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
 }
 
 pub fn apply_session(request: &PdfEditSessionRequest, input: PathBuf) -> JobOutcome {

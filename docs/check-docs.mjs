@@ -35,10 +35,10 @@ const pages = new Map(readdirSync(docs).filter(name => name.endsWith('.html'))
   .map(name => [name, readFileSync(new URL(name, docs), 'utf8')]));
 const appSource = readFileSync(new URL('assets/app.js', docs), 'utf8');
 const release = {
-  tag: 'tauri-v1.0.11',
-  version: '1.0.11',
-  publishedDate: 'September 9, 2026',
-  macosDmgUrl: 'https://github.com/lazzyms/toolbox/releases/download/tauri-v1.0.11/Toolbox-1.0.11-macos.dmg',
+  tag: 'tauri-v1.0.16',
+  version: '1.0.16',
+  publishedDate: 'September 29, 2026',
+  macosDmgUrl: 'https://github.com/lazzyms/toolbox/releases/download/tauri-v1.0.16/Toolbox-1.0.16-macos.dmg',
   windowsStoreUrl: 'https://apps.microsoft.com/detail/9N5R8W4GJVH4',
 };
 const pageMetadata = [

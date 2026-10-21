@@ -3,6 +3,7 @@ import path from "node:path";
 import type { JobOutcome, LimitKind, OutputSettings } from "../../src/contracts";
 import { ToolWorkspaceRegistry, UtilityRegistry, toolsForWorkspace, workspaceForTool } from "../../src/registry";
 import { RetiredToolIds } from "../../src/registry/retiredToolIds";
+import { displayedBoxToPdfRect } from "../../src/features/pdf-editor/geometry";
 
 // Lock asks for the new password twice, so fill every password field in the options panel.
 const fillPasswords = async (page: Page, password: string) => {
@@ -162,7 +163,7 @@ if (command === "preview_pdf_scene_pages") return (args as { request: { pageIndi
     }, { fixturePath, pdfFixturePath, mockedOutputPaths, defaultOutputSettings });
 });
 
-test("every registered feature opens its detail pane", async ({ page }) => {
+test("every registered feature opens its detail pane", async ({ page }, testInfo) => {
     await page.goto("/");
     await expect(page.locator(".topbar--home").getByRole("textbox", { name: "Search tools" })).toBeVisible();
     await expandViews(page);
@@ -180,10 +181,20 @@ test("every registered feature opens its detail pane", async ({ page }) => {
         await navigationButton.click();
         if (utility.status === "unavailable") {
             await expect(page.getByText("Unavailable in this build.", { exact: true })).toBeVisible();
+            await expect(page.getByText("This tool requires an offline vision resource that is not bundled. Files will not be selected or processed.")).toBeVisible();
         } else {
             await expect(page.getByRole("heading", { name: workspaceForTool(utility.id)?.title, exact: true })).toBeVisible();
         }
         await expect(page.locator('p.sr-only[role="status"]')).toHaveText(`${workspaceForTool(utility.id)?.title ?? utility.title} workspace open.`);
+        const workspaceArtifact = new Map([
+            ["icon-set", "media-workspace.png"],
+            ["pdf-to-images", "pdf-conversion-workspace.png"],
+            ["pdf-unlock", "security-workspace.png"],
+        ]).get(utility.id);
+        if (workspaceArtifact) {
+            await expect(page.getByText("On this device", { exact: true })).toBeVisible();
+            await page.screenshot({ path: testInfo.outputPath(workspaceArtifact) });
+        }
     }
 });
 
@@ -357,10 +368,10 @@ test("home sections show six tools and reveal the rest on request", async ({ pag
     }
 });
 
-test("search finds and opens all 31 registered tool actions", async ({ page }) => {
+test(`search finds and opens all ${UtilityRegistry.length} registered tool actions`, async ({ page }) => {
     await page.goto("/");
     const search = page.getByRole("textbox", { name: "Search tools" });
-    expect(UtilityRegistry).toHaveLength(31);
+    expect(UtilityRegistry).toHaveLength(35);
 
     for (const utility of UtilityRegistry) {
         await search.fill(utility.title);
@@ -948,12 +959,26 @@ const drawSceneMark = async (page: Page, tool: string) => {
     await page.mouse.up();
 };
 
+const drawRedactionBox = async (page: Page, from = { x: .25, y: .1 }, to = { x: .75, y: .3 }) => {
+    const area = page.getByRole("region", { name: "Redaction area" });
+    await expect(area).toBeVisible();
+    await area.scrollIntoViewIfNeeded();
+    const box = (await area.boundingBox())!;
+    await page.mouse.move(box.x + box.width * from.x, box.y + box.height * from.y);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width * to.x, box.y + box.height * to.y, { steps: 5 });
+    await page.mouse.up();
+};
+
+const lastInvocation = (page: Page, command: string) => page.evaluate((command) =>
+    ((window as TestWindow).__toolboxInvocations ?? []).filter((invocation) => invocation.command === command).at(-1), command);
+
 const chooseFixture = async (page: Page, selectedPath: string) => {
     await page.evaluate((fixture) => {
         (window as TestWindow).__toolboxDialogResults = [fixture];
     }, selectedPath);
     await page.getByRole("button", { name: "Choose files to process" }).click();
-    await expect(page.getByText(path.basename(selectedPath), { exact: true })).toBeVisible();
+    await expect(page.getByText(path.basename(selectedPath), { exact: true }).first()).toBeVisible();
 };
 
 test("crop is applied visually and exported as part of the scene", async ({ page }) => {
@@ -1042,7 +1067,7 @@ test("Image editor previews a reversible edit stack and exports one combined pla
     await expect(page.getByRole("button", { name: "Undo" })).toBeDisabled();
     await expect(page.getByRole("button", { name: "Redo" })).toBeDisabled();
     await expect(page.getByRole("button", { name: "Reset edits" })).toBeDisabled();
-    await expect(page.getByText("Edits are append-only. Removing or reordering individual operations is deferred.", { exact: true })).toBeVisible();
+    await expect(page.getByText("Edits are applied in order. Undo removes one edit at a time.", { exact: true })).toBeVisible();
     await expect(page.locator('[role="tablist"]')).toHaveCount(0);
     await expect(page.getByRole("toolbar", { name: "Image Editor tools" })).toBeVisible();
     await expect(page.locator(".workspace-primary-action")).toHaveCount(1);
@@ -1073,6 +1098,7 @@ test("Image crop keeps the source interaction surface and shows a separate resul
     await page.getByRole("button", { name: "Open Image Editor", exact: true }).click();
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await page.getByRole("toolbar", { name: "Image Editor tools" }).getByRole("button", { name: "Crop Images", exact: true }).click();
+    await page.getByLabel("Aspect ratio").selectOption("free");
     await page.getByLabel("Crop width").fill("160");
     await page.getByLabel("Crop height").fill("120");
     await page.getByLabel("Crop left").fill("80");
@@ -1095,11 +1121,38 @@ test("Image crop keeps the source interaction surface and shows a separate resul
     await expect(overlay).toHaveAttribute("style", /top: 37\.5%/);
 });
 
+test("Image crop offers aspect presets with a rule-of-thirds grid", async ({ page }, testInfo) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Image editor", exact: true }).click();
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await page.getByRole("toolbar", { name: "Image editor tools" }).getByRole("button", { name: "Crop Images", exact: true }).click();
+    await page.getByLabel("Aspect ratio").selectOption("1:1");
+
+    const overlay = page.getByLabel("Crop selection");
+    await expect(overlay).toHaveAttribute("style", /left: 12\.5%/);
+    await expect(overlay).toHaveAttribute("style", /width: 75%/);
+    await expect(overlay).toHaveAttribute("style", /height: 100%/);
+    await expect(page.locator(".image-editor-crop-grid > span")).toHaveCount(4);
+    await expect(page.getByRole("region", { name: "Crop result preview" })).toContainText("480 × 480px");
+    await page.screenshot({ path: testInfo.outputPath("image-crop-presets.png") });
+
+    await page.getByRole("button", { name: "Add edit to plan" }).click();
+    const previewInvocation = await page.evaluate(() =>
+        [...(window as TestWindow).__toolboxInvocations ?? []]
+            .reverse()
+            .find(({ command }) => command === "inspect_image_edit_preview"),
+    );
+    expect(previewInvocation?.args).toMatchObject({
+        request: { plan: { edits: [{ kind: "crop", mode: "aspectRatio", aspectWidth: 1, aspectHeight: 1 }] } },
+    });
+});
+
 test("Image crop cancels a global pointer interruption before a later move", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Open Image Editor", exact: true }).click();
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await page.getByRole("toolbar", { name: "Image Editor tools" }).getByRole("button", { name: "Crop Images", exact: true }).click();
+    await page.getByLabel("Aspect ratio").selectOption("free");
     await page.getByLabel("Crop width").fill("160");
     await page.getByLabel("Crop height").fill("120");
     await page.getByLabel("Crop left").fill("80");
@@ -1124,10 +1177,8 @@ test("Image aspect crop uses the anchored maximum-fit geometry for overlay and r
     await page.getByRole("button", { name: "Open Image Editor", exact: true }).click();
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await page.getByRole("toolbar", { name: "Image Editor tools" }).getByRole("button", { name: "Crop Images", exact: true }).click();
-    await page.getByLabel("Crop mode").selectOption("aspectRatio");
-    await page.getByLabel("Crop width").fill("1");
-    await page.getByLabel("Crop height").fill("1");
-    await page.getByLabel("Anchor").selectOption("right");
+    await page.getByLabel("Aspect ratio").selectOption("1:1");
+    await page.getByLabel("Crop anchor").selectOption("right");
 
     const overlay = page.getByLabel("Crop selection");
     await expect(overlay).toHaveAttribute("style", /left: 25%/);
@@ -1137,18 +1188,46 @@ test("Image aspect crop uses the anchored maximum-fit geometry for overlay and r
     await expect(page.getByRole("region", { name: "Crop result preview" })).toContainText("480 × 480px");
 });
 
+test("Image aspect crop can move while keeping its preset ratio", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Image editor", exact: true }).click();
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await page.getByRole("toolbar", { name: "Image editor tools" }).getByRole("button", { name: "Crop Images", exact: true }).click();
+    await page.getByLabel("Aspect ratio").selectOption("1:1");
+
+    const stage = (await page.locator(".image-editor-preview-stage").boundingBox())!;
+    await page.mouse.move(stage.x + stage.width * 0.5, stage.y + stage.height * 0.5);
+    await page.mouse.down();
+    await page.mouse.move(stage.x + stage.width * 0.6, stage.y + stage.height * 0.5, { steps: 3 });
+    await page.mouse.up();
+
+    const overlay = page.getByLabel("Crop selection");
+    await expect(page.getByLabel("Aspect ratio")).toHaveValue("1:1");
+    await expect(page.getByLabel("Crop anchor")).toHaveValue("custom");
+    await expect(overlay).toHaveAttribute("style", /left: 22\.5%/);
+    await expect(overlay).toHaveAttribute("style", /width: 75%/);
+    await expect.poll(async () => page.evaluate(() =>
+        [...(window as TestWindow).__toolboxInvocations ?? []]
+            .reverse()
+            .find(({ command }) => command === "inspect_image_edit_preview")?.args,
+    )).toMatchObject({
+        request: { plan: { edits: [{ kind: "crop", mode: "aspectRatio", x: 144, y: 0, aspectWidth: 1, aspectHeight: 1, anchor: "custom" }] } },
+    });
+});
+
 test("Image crop clears an old result and disables export after invalid preview validation", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Open Image Editor", exact: true }).click();
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await page.getByRole("toolbar", { name: "Image Editor tools" }).getByRole("button", { name: "Crop Images", exact: true }).click();
+    await page.getByLabel("Aspect ratio").selectOption("free");
     await page.getByLabel("Crop width").fill("160");
     await page.getByLabel("Crop height").fill("120");
     await expect(page.getByRole("region", { name: "Crop result preview" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Export edited images" })).toBeEnabled();
 
-    await page.getByLabel("Crop mode").selectOption("aspectRatio");
-    await page.getByLabel("Crop width").fill("0");
+    await page.getByLabel("Aspect ratio").selectOption("1:1");
+    await page.getByLabel("Aspect width").fill("0");
 
     await expect(page.getByText("Aspect ratio dimensions must be positive.", { exact: true })).toBeVisible();
     await expect(page.getByRole("region", { name: "Crop result preview" })).toHaveCount(0);
@@ -1164,14 +1243,16 @@ test("Image editor history can undo, redo, and reset the composed plan", async (
     await page.getByRole("button", { name: "Add edit to plan" }).click();
 
     await expect(page.getByRole("button", { name: "Undo" })).toBeEnabled();
-    await expect(page.getByText("1 committed edit", { exact: true })).toBeVisible();
+    await expect(page.getByText("2 committed edits", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Undo" }).click();
-    await expect(page.getByRole("button", { name: "Export edited images" })).toBeDisabled();
+    await expect(page.getByText("1 committed edit", { exact: true })).toBeVisible();
+    await expect(page.locator(".image-edit-timeline li")).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "Export edited images" })).toBeEnabled();
     await expect(page.getByRole("button", { name: "Redo" })).toBeEnabled();
 
     await page.getByRole("button", { name: "Redo" }).click();
     await expect(page.getByRole("button", { name: "Export edited images" })).toBeEnabled();
-    await expect(page.getByText("1 committed edit", { exact: true })).toBeVisible();
+    await expect(page.getByText("2 committed edits", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Reset edits" }).click();
     await expect(page.getByRole("button", { name: "Export edited images" })).toBeDisabled();
     await expect(page.getByText("0 committed edits", { exact: true })).toBeVisible();
@@ -1327,6 +1408,77 @@ test("PDF page-scoped conversions send the selected pages and keep OCR gated", a
     const ocrButton = page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "OCR PDF", exact: true });
     await expect(ocrButton).toBeDisabled();
     await expect(ocrButton).toHaveAttribute("title", "OCR PDF is unavailable in this build");
+});
+
+test("rotate PDF sends the chosen direction and zero-based pages", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Rotate PDF" }).click();
+    await chooseFixture(page, "/local/document.scoped.pdf");
+    await page.getByLabel("Rotation direction").selectOption("270");
+    await page.getByRole("button", { name: "Export Rotate PDF", exact: true }).click();
+    expect((await lastInvocation(page, "rotate_pdf"))?.args).toMatchObject({ request: { paths: ["/local/document.scoped.pdf"], degrees: 270, pages: null } });
+
+    await page.getByRole("checkbox", { name: "Page 2" }).click();
+    await page.getByRole("button", { name: "Export Rotate PDF", exact: true }).click();
+    expect((await lastInvocation(page, "rotate_pdf"))?.args).toMatchObject({ request: { degrees: 270, pages: [0, 2] } });
+});
+
+test("compare PDF needs exactly two files and can swap the original", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Compare PDF" }).click();
+    await chooseFixture(page, "/local/original.pdf");
+    const exportCompare = page.getByRole("button", { name: "Export Compare PDF", exact: true });
+    await expect(page.getByText("Choose exactly two PDFs: the original and the new version.", { exact: true })).toBeVisible();
+    await expect(exportCompare).toBeDisabled();
+
+    await chooseFixture(page, "/local/revised.pdf");
+    await expect(page.getByText("Original: original.pdf", { exact: true })).toBeVisible();
+    await expect(page.getByText("New version: revised.pdf", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Swap original and new version" }).click();
+    await expect(page.getByText("Original: revised.pdf", { exact: true })).toBeVisible();
+    await exportCompare.click();
+    expect((await lastInvocation(page, "compare_pdfs"))?.args).toMatchObject({ request: { paths: ["/local/revised.pdf", "/local/original.pdf"] } });
+});
+
+test("redact PDF waits for a box and sends it in PDF points", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Redact PDF" }).click();
+    await chooseFixture(page, pdfFixturePath);
+    const exportRedact = page.getByRole("button", { name: "Export Redact PDF", exact: true });
+    await expect(exportRedact).toBeDisabled();
+    await drawRedactionBox(page);
+    await expect(page.getByLabel("Redaction box")).toBeVisible();
+    await exportRedact.click();
+    const request = ((await lastInvocation(page, "redact_pdf"))?.args as { request: { rectangle: { x: number; y: number; width: number; height: number }; scope: unknown } }).request;
+    expect(request.scope).toBe("all");
+    expect(request.rectangle.x).toBeCloseTo(153, -1);
+    expect(request.rectangle.width).toBeCloseTo(306, -1);
+    expect(request.rectangle.y).toBeCloseTo(554, -1);
+    expect(request.rectangle.height).toBeCloseTo(158, -1);
+});
+
+test("redaction boxes drawn on rotated pages map back to unrotated PDF points", () => {
+    const page = { index: 0, width: 600, height: 800, pageBox: [0, 0, 600, 800] as [number, number, number, number] };
+    const topLeftCorner = { left: 0, top: 0, right: .5, bottom: .25 };
+    expect(displayedBoxToPdfRect(topLeftCorner, { ...page, rotation: 0 })).toEqual({ x: 0, y: 600, width: 300, height: 200 });
+    expect(displayedBoxToPdfRect(topLeftCorner, { ...page, rotation: 90 })).toEqual({ x: 0, y: 0, width: 150, height: 400 });
+    expect(displayedBoxToPdfRect(topLeftCorner, { ...page, rotation: 180 })).toEqual({ x: 300, y: 0, width: 300, height: 200 });
+    expect(displayedBoxToPdfRect(topLeftCorner, { ...page, rotation: 270 })).toEqual({ x: 450, y: 400, width: 150, height: 400 });
+});
+
+test("redact PDF only touches the first page unless more pages are checked", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Redact PDF" }).click();
+    await chooseFixture(page, "/local/document.scoped.pdf");
+    await expect(page.getByRole("checkbox", { name: "Page 1" })).toBeChecked();
+    await expect(page.getByRole("checkbox", { name: "Page 2" })).not.toBeChecked();
+    await drawRedactionBox(page);
+    await page.getByRole("button", { name: "Export Redact PDF", exact: true }).click();
+    expect((await lastInvocation(page, "redact_pdf"))?.args).toMatchObject({ request: { scope: { selected: { pages: [0] } } } });
+
+    await page.getByRole("checkbox", { name: "Page 3" }).click();
+    await page.getByRole("button", { name: "Export Redact PDF", exact: true }).click();
+    expect((await lastInvocation(page, "redact_pdf"))?.args).toMatchObject({ request: { scope: { selected: { pages: [0, 2] } } } });
 });
 
 test("TIFF export waits for inspection of the current file set", async ({ page }) => {
@@ -1849,12 +2001,16 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
         if (utility.id === "heic-convert") await page.getByLabel("Target format").selectOption("jpg");
         if (utility.id === "resize") await page.getByLabel("Width").fill("640");
         if (utility.id === "rotate") await page.getByLabel("Rotation").selectOption("90");
-        if (utility.id === "crop") await page.getByLabel("Crop width").fill("320");
+        if (utility.id === "crop") {
+            await page.getByLabel("Aspect ratio").selectOption("free");
+            await page.getByLabel("Crop width").fill("320");
+        }
         if (utility.id === "image-watermark") await page.getByLabel("Watermark text").fill("Test watermark");
         if (utility.id === "image-tone") await page.getByRole("slider", { name: "Brightness" }).press("End");
     }
     if (utility.id === "compress") await page.getByRole("switch", { name: "Preserve original pixels" }).click();
-    if (utility.id === "pdf-merge") {
+    if (utility.id === "pdf-redact") await drawRedactionBox(page);
+    if (utility.id === "pdf-merge" || utility.id === "pdf-compare") {
         await page.evaluate(() => { (window as TestWindow).__toolboxSecondPick = true; });
         await page.getByRole("button", { name: "Choose files to process" }).click();
     }
@@ -1881,7 +2037,7 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
 };
 
 test.describe("registered feature actions", () => {
-    expect(UtilityRegistry).toHaveLength(31);
+    expect(UtilityRegistry).toHaveLength(35);
 
     for (const utility of UtilityRegistry) {
         test(`${utility.id} accepts the fixture and runs with the Settings default`, async ({ page }) => {

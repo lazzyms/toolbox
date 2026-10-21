@@ -4,6 +4,7 @@ mod file_actions;
 mod intake;
 mod kit;
 mod settings;
+mod shell;
 
 use crate::file_actions::{open_output_path, reveal_output_path};
 use crate::kit::common::{note_renamed, JobOutcome};
@@ -40,6 +41,7 @@ impl<'de> tauri::ipc::CommandArg<'de, tauri::Wry> for RunEvents {
         })
     }
 }
+use tauri::Manager;
 
 #[tauri::command]
 fn cancel_run(run_id: String) -> bool {
@@ -217,6 +219,37 @@ async fn watermark_pdf(events: RunEvents, request: remaining::PageOverlayRequest
     if let Err(outcomes) = validate_page_selection("watermark_pdf", &request.paths, request.pages.as_deref()) { return outcomes; }
     let request = Arc::new(request);
     BatchRunner::run(&events, "watermark_pdf", request.paths.clone(), &request.output_location, &request, remaining::watermark)
+}
+
+#[tauri::command]
+async fn rotate_pdf(events: RunEvents, request: remaining::RotatePdfRequest) -> Vec<JobOutcome> {
+    if let Err(outcomes) = validate_page_selection("rotate_pdf", &request.paths, request.pages.as_deref()) { return outcomes; }
+    let request = Arc::new(request);
+    BatchRunner::run(&events, "rotate_pdf", request.paths.clone(), &request.output_location, &request, remaining::rotate)
+}
+
+#[tauri::command]
+async fn repair_pdf(events: RunEvents, request: remaining::PdfToTextRequest) -> Vec<JobOutcome> {
+    let request = Arc::new(request);
+    BatchRunner::run(&events, "repair_pdf", request.paths.clone(), &request.output_location, &request, remaining::repair)
+}
+
+#[tauri::command]
+async fn redact_pdf(events: RunEvents, request: editor::RedactPdfRequest) -> Vec<JobOutcome> {
+    let request = Arc::new(request);
+    BatchRunner::run(&events, "redact_pdf", request.paths.clone(), &request.output_location, &request, editor::redact)
+}
+
+#[tauri::command]
+async fn compare_pdfs(app: tauri::AppHandle, request: remaining::ComparePdfsRequest) -> Vec<JobOutcome> {
+    let outcomes = run_compare_pdfs(&request).await;
+    settings::remember_chosen_save(&app, request.output_path.as_deref(), outcomes)
+}
+
+async fn run_compare_pdfs(request: &remaining::ComparePdfsRequest) -> Vec<JobOutcome> {
+    if let Err(outcomes) = validate_command_inputs("compare_pdfs", &request.paths) { return outcomes; }
+    let request = request.clone();
+    aggregate_outcomes("compare_pdfs", &request.paths.clone(), move || note_renamed(remaining::compare(&request), request.output_path.as_deref()))
 }
 
 #[tauri::command]
@@ -426,6 +459,10 @@ fn combine_aggregate(paths: &[std::path::PathBuf], aggregate: JobOutcome) -> Vec
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
+            shell::shell_ready,
+            shell::acknowledge_activation,
+            shell::open_paths,
+            shell::set_document_title,
             open_output_path,
             reveal_output_path,
             intake::inspect_intake_paths,
@@ -453,6 +490,10 @@ fn main() {
             ,add_page_numbers,
             watermark_pdf,
             compress_pdf,
+            rotate_pdf,
+            repair_pdf,
+            redact_pdf,
+            compare_pdfs,
             remove_pdf_pages,
             extract_pdf_pages
             ,merge_pdfs,
@@ -480,11 +521,35 @@ fn main() {
             inspect_image_edit_preview,
             export_image_edit_plan
         ])
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            shell::focus(app);
+            let paths = argv.into_iter().skip(1).collect::<Vec<_>>();
+            if !paths.is_empty() {
+                shell::dispatch(app, shell::parse_paths(paths));
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .setup(|app| {
+            app.manage(shell::ShellState::default());
+            shell::install_geometry(app)?;
+            shell::menu(app)?;
+            let startup_paths = std::env::args().skip(1).collect::<Vec<_>>();
+            if !startup_paths.is_empty() {
+                shell::dispatch(app.handle(), shell::parse_paths(startup_paths));
+            }
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            shell::handle_window_event(window, event);
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+                shell::handle_drop(window.app_handle(), paths.clone());
+            }
+        })
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| shell::handle_run_event(app, &event));
 }
 
 #[cfg(test)]
@@ -498,9 +563,10 @@ mod command_tests {
     use crate::kit::contracts::{ErrorKind, LimitKind};
     use crate::kit::images::tools::{CropRequest, GifCreateRequest, GifExtractRequest, ImageEdit, ImageEditExportRequest, ImageEditPlan, ImageEditPreviewRequest, IconSetRequest, MetadataRequest, ResizeRequest, RotateRequest, TiffRequest, ToneRequest, WatermarkRequest};
     use crate::kit::office::{test_minimal_ooxml_package, OfficeProcessor};
-    use crate::kit::pdf::editor::{AddPdfPagesRequest, CropPdfRequest, EditPdfRequest, OrganizePdfRequest, PageScope, PdfEditMode, PdfEditOperation, PdfEditSessionPlan, PdfEditSessionRequest, PdfOverlay, PdfOverlayPosition, PdfRect, RotatePage, SignPdfRequest};
-    use crate::kit::pdf::remaining::{CompressPdfRequest, ImagesToPdfRequest, MergePdfRequest, PageOverlayRequest, PageSelectionRequest, PdfToImagesRequest, PdfToTextRequest};
+    use crate::kit::pdf::editor::{AddPdfPagesRequest, CropPdfRequest, EditPdfRequest, OrganizePdfRequest, PageScope, PdfEditMode, PdfEditOperation, PdfEditSessionPlan, PdfEditSessionRequest, PdfOverlay, PdfOverlayPosition, PdfRect, RedactPdfRequest, RotatePage, SignPdfRequest};
+    use crate::kit::pdf::remaining::{CompressPdfRequest, ImagesToPdfRequest, MergePdfRequest, PageOverlayRequest, PageSelectionRequest, PdfToImagesRequest, PdfToTextRequest, RotatePdfRequest, ComparePdfsRequest};
     use crate::kit::vision::VisionRequest;
+    use base64::{engine::general_purpose::STANDARD, Engine};
     use image::Rgba;
     use std::path::PathBuf;
     use std::future::Future;
@@ -942,6 +1008,10 @@ mod command_tests {
         let root = sandbox("all");
         let image = root.join("image.png"); write_png(&image, 256, 44);
         let image_two = root.join("image-two.png"); write_png(&image_two, 256, 88);
+        let lossy_image = root.join("lossy-image.jpg");
+        image::RgbImage::from_fn(64, 64, |x, y| {
+            if (x / 2 + y / 2) % 2 == 0 { image::Rgb([255, 0, 0]) } else { image::Rgb([0, 255, 255]) }
+        }).save_with_format(&lossy_image, image::ImageFormat::Jpeg).unwrap();
         let animated = root.join("animated.gif");
         {
             use image::codecs::gif::{GifEncoder, Repeat};
@@ -956,6 +1026,7 @@ mod command_tests {
         let pdf_two = root.join("document-two.pdf"); make_pdf(&pdf_two, 1);
         let plain_pdf_bytes = std::fs::read(&pdf).unwrap();
         let plain_image_bytes = std::fs::read(&image).unwrap();
+        let plain_lossy_image_bytes = std::fs::read(&lossy_image).unwrap();
         let animated_bytes = std::fs::read(&animated).unwrap();
         let tiff_bytes = std::fs::read(&tiff).unwrap();
 
@@ -1047,6 +1118,10 @@ mod command_tests {
         assert_eq!(added_document.get_pages().len(), 4, "add pages must insert the requested number of pages");
         outputs.extend(named(&mut naming, "add_pdf_pages", pdf.clone(), added));
         outputs.extend(named(&mut naming, "compress_pdf", pdf.clone(), assert_success("compress pdf", compress_pdf(RunEvents::silent(), serde_json::from_value::<CompressPdfRequest>(serde_json::json!({ "paths": [pdf.clone()], "quality": 80, "outputLocation": location(&root, "compress pdf") })).expect("Compress Files view payload for compress_pdf")))));
+        outputs.extend(named(&mut naming, "rotate_pdf", pdf.clone(), assert_success("rotate pdf", rotate_pdf(RunEvents::silent(), RotatePdfRequest { paths: vec![pdf.clone()], degrees: 90, pages: Some(vec![1]), output_location: location(&root, "rotate pdf") }))));
+        outputs.extend(named(&mut naming, "repair_pdf", pdf.clone(), assert_success("repair pdf", repair_pdf(RunEvents::silent(), PdfToTextRequest { pages: None, paths: vec![pdf.clone()], output_location: location(&root, "repair pdf") }))));
+        outputs.extend(named(&mut naming, "redact_pdf", pdf.clone(), assert_success("redact pdf", redact_pdf(RunEvents::silent(), RedactPdfRequest { paths: vec![pdf.clone()], rectangle: PdfRect { x: 40.0, y: 650.0, width: 220.0, height: 60.0 }, scope: PageScope::All, output_location: location(&root, "redact pdf") }))));
+        outputs.extend(named(&mut naming, "compare_pdfs", pdf.clone(), assert_aggregate_success("compare pdfs", &[pdf.clone(), pdf_two.clone()], run_compare_pdfs(&ComparePdfsRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: location(&root, "compare pdfs"), output_path: None }))));
         outputs.extend(named(&mut naming, "convert_images", image.clone(), assert_success("convert", convert_images(RunEvents::silent(), ConvertImagesRequest { paths: vec![image.clone()], format: "jpg".into(), output_location: location(&root, "convert") }))));
         outputs.extend(named(&mut naming, "compress_images", image.clone(), assert_success("compress images", compress_images(RunEvents::silent(), serde_json::from_value::<CompressImagesRequest>(serde_json::json!({ "paths": [image.clone()], "quality": 80, "lossless": false, "outputLocation": location(&root, "compress images") })).expect("Compress Files view payload for compress_images")))));
         outputs.extend(named(&mut naming, "resize_images", image.clone(), assert_success("resize", resize_images(RunEvents::silent(), ResizeRequest { paths: vec![image.clone()], width: 128, height: 128, mode: "exact".into(), resampling: "lanczos".into(), keep_aspect_ratio: true, percentage: 100, longest_side: 128, output_location: location(&root, "resize") }))));
@@ -1059,13 +1134,41 @@ mod command_tests {
         let image_plan = ImageEditPlan {
             edits: vec![
                 ImageEdit::Resize { width: 128, height: 128, mode: "exact".into(), percentage: 100, longest_side: 128, resampling: "lanczos".into(), keep_aspect_ratio: false },
+                ImageEdit::Crop { x: 0, y: 10, width: 16, height: 9, mode: "aspectRatio".into(), aspect_width: 16, aspect_height: 9, anchor: "custom".into() },
                 ImageEdit::Rotate { degrees: 90, flip: "horizontal".into() },
+                ImageEdit::Tone { brightness: 12, contrast: 6.0, saturation: 8.0, exposure: 4.0 },
             ],
             output_location: location(&root, "composed image editor"),
         };
         let image_preview = inspect_image_edit_preview(ImageEditPreviewRequest { path: image.clone(), plan: image_plan.clone() }).expect("composed image preview should be available");
-        assert_eq!((image_preview.width, image_preview.height), (128, 128), "composed image preview must reflect the complete edit plan");
-        outputs.extend(named(&mut naming, "export_image_edit_plan", image.clone(), assert_success("composed image editor", export_image_edit_plan(RunEvents::silent(), ImageEditExportRequest { paths: vec![image.clone()], plan: image_plan }))));
+        assert_eq!((image_preview.width, image_preview.height), (72, 128), "composed image preview must reflect the complete edit plan");
+        let preview_bytes = STANDARD.decode(image_preview.data_url.split_once(',').expect("preview must contain a data URL payload").1).unwrap();
+        let preview_pixels = image::load_from_memory(&preview_bytes).unwrap().to_rgba8();
+        let composed_image_outputs = assert_success("composed image editor", export_image_edit_plan(RunEvents::silent(), ImageEditExportRequest { paths: vec![image.clone()], plan: image_plan }));
+        let exported_pixels = image::open(&composed_image_outputs[0]).unwrap().to_rgba8();
+        assert_eq!(exported_pixels.dimensions(), preview_pixels.dimensions(), "exported image dimensions must match the verified edit preview");
+        let differing_pixels = exported_pixels.pixels().zip(preview_pixels.pixels()).enumerate()
+            .filter_map(|(index, (exported, previewed))| (exported.0 != previewed.0).then_some((index, exported.0, previewed.0)))
+            .take(5)
+            .collect::<Vec<_>>();
+        assert!(differing_pixels.is_empty(), "native image export pixels must match the verified edit preview; first differences: {differing_pixels:?}");
+        outputs.extend(named(&mut naming, "export_image_edit_plan", image.clone(), composed_image_outputs));
+        let lossy_image_plan = ImageEditPlan {
+            edits: vec![ImageEdit::Compress { quality: 40, lossless: false }],
+            output_location: location(&root, "lossy image editor"),
+        };
+        let lossy_image_preview = inspect_image_edit_preview(ImageEditPreviewRequest { path: lossy_image.clone(), plan: lossy_image_plan.clone() }).expect("lossy image preview should be available");
+        let lossy_preview_bytes = STANDARD.decode(lossy_image_preview.data_url.split_once(',').expect("lossy preview must contain a data URL payload").1).unwrap();
+        let lossy_preview_pixels = image::load_from_memory(&lossy_preview_bytes).unwrap().to_rgba8();
+        let lossy_image_outputs = assert_success("lossy composed image editor", export_image_edit_plan(RunEvents::silent(), ImageEditExportRequest { paths: vec![lossy_image.clone()], plan: lossy_image_plan }));
+        let lossy_export_pixels = image::open(&lossy_image_outputs[0]).unwrap().to_rgba8();
+        assert_eq!(lossy_export_pixels.dimensions(), lossy_preview_pixels.dimensions(), "lossy export dimensions must match the verified edit preview");
+        let lossy_differing_pixels = lossy_export_pixels.pixels().zip(lossy_preview_pixels.pixels()).enumerate()
+            .filter_map(|(index, (exported, previewed))| (exported.0 != previewed.0).then_some((index, exported.0, previewed.0)))
+            .take(5)
+            .collect::<Vec<_>>();
+        assert!(lossy_differing_pixels.is_empty(), "lossy image export pixels must match the verified edit preview; first differences: {lossy_differing_pixels:?}");
+        outputs.extend(named(&mut naming, "export_image_edit_plan", lossy_image.clone(), lossy_image_outputs));
         outputs.extend(named(&mut naming, "image_metadata", image.clone(), assert_success("metadata", image_metadata(RunEvents::silent(), MetadataRequest { paths: vec![image.clone()], output_location: location(&root, "metadata") }))));
         outputs.extend(named(&mut naming, "adjust_image_tone", image.clone(), assert_success("tone", adjust_image_tone(RunEvents::silent(), ToneRequest { paths: vec![image.clone()], brightness: 20, contrast: 0.0, saturation: 0.0, exposure: 0.0, output_location: location(&root, "tone") }))));
         outputs.extend(named(&mut naming, "process_tiff_pages", tiff.clone(), assert_aggregate_success("tiff", &[tiff.clone()], run_process_tiff_pages(&TiffRequest { paths: vec![tiff.clone()], pages: None, output_location: location(&root, "tiff"), output_path: None }))));
@@ -1081,6 +1184,7 @@ mod command_tests {
 
         assert_eq!(std::fs::read(&pdf).unwrap(), plain_pdf_bytes, "native E2E commands must not modify their PDF input");
         assert_eq!(std::fs::read(&image).unwrap(), plain_image_bytes, "native E2E commands must not modify their image input");
+        assert_eq!(std::fs::read(&lossy_image).unwrap(), plain_lossy_image_bytes, "native E2E commands must not modify their lossy image input");
         assert_eq!(std::fs::read(&animated).unwrap(), animated_bytes, "native E2E commands must not modify their GIF input");
         assert_eq!(std::fs::read(&tiff).unwrap(), tiff_bytes, "native E2E commands must not modify their TIFF input");
         assert!(!outputs.is_empty(), "native E2E matrix must exercise every producing command");

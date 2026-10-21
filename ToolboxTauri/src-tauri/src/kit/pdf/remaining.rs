@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::kit::common::limits::StoppableHelper;
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming, OutputReservation};
 use crate::kit::contracts::ToolError;
-use super::metadata::page_bounds;
+use super::metadata::{page_bounds, page_rotation};
 use super::{mutation_preflight, PdfMutationIntent};
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -79,6 +79,24 @@ pub struct ImagesToPdfRequest {
 #[serde(rename_all = "camelCase")]
 pub struct PdfToTextRequest {
     pub paths: Vec<PathBuf>,
+    #[serde(default)] pub pages: Option<Vec<usize>>,
+    pub output_location: OutputLocation,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComparePdfsRequest {
+    pub paths: Vec<PathBuf>,
+    pub output_location: OutputLocation,
+    #[serde(default)]
+    pub output_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RotatePdfRequest {
+    pub paths: Vec<PathBuf>,
+    pub degrees: i32,
     #[serde(default)] pub pages: Option<Vec<usize>>,
     pub output_location: OutputLocation,
 }
@@ -581,6 +599,119 @@ pub fn compress(request: &CompressPdfRequest, input: PathBuf) -> JobOutcome {
     }
 }
 
+pub fn rotate(request: &RotatePdfRequest, input: PathBuf) -> JobOutcome {
+    let degrees = request.degrees.rem_euclid(360) as i64;
+    if ![90, 180, 270].contains(&degrees) { return failure(input, "Choose a rotation of 90, 180, or 270 degrees.".to_string()); }
+    let mut document = match Document::load(&input) { Ok(document) => document, Err(error) => return failure(input, error.to_string()) };
+    if document.is_encrypted() { return failure(input, "Unlock the PDF before rotating it.".to_string()); }
+    let pages = document.get_pages().values().copied().collect::<Vec<_>>();
+    if let Some(selected) = &request.pages {
+        if selected.is_empty() { return failure(input, "Select at least one page to rotate.".to_string()); }
+        if selected.iter().any(|page| *page >= pages.len()) { return failure(input, "A page to rotate is outside the document.".to_string()); }
+    }
+    let mut rotated = 0;
+    for (index, page_id) in pages.into_iter().enumerate() {
+        if request.pages.as_ref().is_some_and(|selected| !selected.contains(&index)) { continue; }
+        let rotation = (page_rotation(&document, page_id) + degrees).rem_euclid(360);
+        match document.get_dictionary_mut(page_id) { Ok(page) => page.set("Rotate", rotation), Err(error) => return failure(input, error.to_string()) }
+        rotated += 1;
+    }
+    let noun = if rotated == 1 { "page" } else { "pages" };
+    let output = match OutputNaming::reserve_destination(&input, &request.output_location, "-rotated", "pdf") {
+        Ok(output) => output,
+        Err(error) => return failure(input, format!("Could not reserve rotated PDF output: {error}")),
+    };
+    save(document, input, output, &format!("{rotated} {noun} rotated {degrees}°"))
+}
+
+pub fn repair(request: &PdfToTextRequest, input: PathBuf) -> JobOutcome {
+    let qpdf = match qpdf() { Ok(qpdf) => qpdf, Err(error) => return JobOutcome::failure(input, ToolError::unavailable(error)) };
+    let output = match OutputNaming::reserve_destination(&input, &request.output_location, "-repaired", "pdf") {
+        Ok(output) => output,
+        Err(error) => return failure(input, format!("Could not reserve repaired PDF output: {error}")),
+    };
+    let result = match Command::new(qpdf).arg(&input).arg(output.path()).output() { Ok(result) => result, Err(error) => return failure(input, format!("Could not run qpdf: {error}")) };
+    // qpdf exits 3 when it had to recover from damage but still wrote a usable file.
+    let detail = match result.status.code() {
+        Some(0) => "No damage found; saved a clean copy",
+        Some(3) => "PDF repaired",
+        _ => return failure(input, format!("This PDF is too damaged to repair. {}", stderr(result, ""))),
+    };
+    match Document::load(output.path()) {
+        Ok(document) if !document.get_pages().is_empty() => match output.publish() {
+            Ok(path) => JobOutcome::succeeded(input, vec![path], detail),
+            Err(error) => failure(input, format!("Could not publish repaired PDF: {error}")),
+        },
+        Ok(_) => failure(input, "The repaired PDF has no readable pages.".to_string()),
+        Err(error) => failure(input, format!("The repaired PDF could not be opened: {error}")),
+    }
+}
+
+/// Line-level differences between two PDFs' selectable text, page by page, written as a text report.
+pub fn compare(request: &ComparePdfsRequest) -> JobOutcome {
+    let [first, second] = request.paths.as_slice() else {
+        return failure(request.paths.first().cloned().unwrap_or_default(), "Select exactly two PDFs to compare.".to_string());
+    };
+    let first_pages = match page_texts(first) { Ok(pages) => pages, Err(error) => return failure(first.clone(), error) };
+    let second_pages = match page_texts(second) { Ok(pages) => pages, Err(error) => return failure(first.clone(), error) };
+    if first_pages.iter().chain(&second_pages).all(|lines| lines.is_empty()) {
+        return failure(first.clone(), "Neither PDF has selectable text. Run OCR on scanned PDFs first.".to_string());
+    }
+    let name = |path: &PathBuf| path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+    let mut report = format!("Original: {} (lines marked -)\nNew version: {} (lines marked +)\n", name(first), name(second));
+    let mut changed_pages = 0;
+    for index in 0..first_pages.len().max(second_pages.len()) {
+        let section = match (first_pages.get(index), second_pages.get(index)) {
+            (Some(old), Some(new)) => diff_lines(old, new),
+            (Some(_), None) => vec![format!("Only in {}", name(first))],
+            (None, Some(_)) => vec![format!("Only in {}", name(second))],
+            (None, None) => vec![],
+        };
+        if section.is_empty() { continue; }
+        changed_pages += 1;
+        report.push_str(&format!("\nPage {}\n{}\n", index + 1, section.join("\n")));
+    }
+    let detail = if changed_pages == 0 { report.push_str("\nNo text differences found.\n"); "No text differences found".to_string() } else { format!("{changed_pages} page(s) with differences") };
+    let output = match OutputNaming::reserve_single_output(request.output_path.as_deref(), first, &request.output_location, "-comparison", "txt") {
+        Ok(output) => output,
+        Err(error) => return failure(first.clone(), format!("Could not reserve comparison report: {error}")),
+    };
+    if let Err(error) = fs::write(output.path(), report) { return failure(first.clone(), format!("Could not write comparison report: {error}")); }
+    match output.publish() {
+        Ok(path) => JobOutcome::succeeded(first.clone(), vec![path], detail),
+        Err(error) => failure(first.clone(), format!("Could not publish comparison report: {error}")),
+    }
+}
+
+fn page_texts(path: &PathBuf) -> Result<Vec<Vec<String>>, String> {
+    let document = Document::load(path).map_err(|error| format!("Could not read {}: {error}", path.display()))?;
+    Ok(document.get_pages().keys().map(|page| {
+        let text = document.extract_text(&[*page]).unwrap_or_default();
+        normalize_pdf_text(&text).lines().map(str::trim).filter(|line| !line.is_empty()).map(str::to_string).collect()
+    }).collect())
+}
+
+/// Longest-common-subsequence line diff; very long pages fall back to listing both sides.
+fn diff_lines(old: &[String], new: &[String]) -> Vec<String> {
+    if old == new { return vec![]; }
+    if old.len() * new.len() > 4_000_000 {
+        return old.iter().map(|line| format!("- {line}")).chain(new.iter().map(|line| format!("+ {line}"))).collect();
+    }
+    let mut lengths = vec![vec![0u32; new.len() + 1]; old.len() + 1];
+    for i in (0..old.len()).rev() {
+        for j in (0..new.len()).rev() {
+            lengths[i][j] = if old[i] == new[j] { lengths[i + 1][j + 1] + 1 } else { lengths[i + 1][j].max(lengths[i][j + 1]) };
+        }
+    }
+    let (mut i, mut j, mut lines) = (0, 0, Vec::new());
+    while i < old.len() || j < new.len() {
+        if i < old.len() && j < new.len() && old[i] == new[j] { i += 1; j += 1; }
+        else if i < old.len() && (j == new.len() || lengths[i + 1][j] >= lengths[i][j + 1]) { lines.push(format!("- {}", old[i])); i += 1; }
+        else { lines.push(format!("+ {}", new[j])); j += 1; }
+    }
+    lines
+}
+
 pub fn remove_pages(request: &PageSelectionRequest, input: PathBuf) -> JobOutcome {
     let mut document = match load_existing_document_for_mutation(&input) { Ok(document) => document, Err(error) => return failure(input, error) };
     let pages = document.get_pages();
@@ -785,6 +916,7 @@ fn load_existing_document_for_mutation(input: &Path) -> Result<Document, String>
 
 fn escape(text: &str) -> String { text.replace('\\', "\\\\").replace('(', "\\(").replace(')', "\\)") }
 fn qpdf() -> Result<PathBuf, String> { crate::kit::resources::resolve_helper(&crate::kit::resources::QPDF) }
+pub(super) fn pdftoppm() -> Option<PathBuf> { tool("TOOLBOX_PDFTOPPM_PATH", "pdftoppm") }
 fn tool(variable: &str, command: &str) -> Option<PathBuf> {
     std::env::var_os(variable).map(PathBuf::from).filter(|path| !path.as_os_str().is_empty() && path.is_file())
         .or_else(|| crate::kit::resources::application_resource_root().and_then(|root| [root.join("pdf-bin").join(command), root.join("resources").join(command), root.join(command)].into_iter().find(|path| path.is_file())))
@@ -1455,5 +1587,143 @@ mod tests {
             let _ = std::fs::remove_file(output);
         }
         let _ = std::fs::remove_file(input);
+    }
+
+    fn text_pdf(name: &str, pages: &[&str]) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("toolbox_{name}_{}.pdf", std::process::id()));
+        let mut document = Document::with_version("1.7");
+        let pages_id = document.new_object_id();
+        let font_id = document.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
+        let kids = pages.iter().map(|text| {
+            let lines = text.lines().enumerate().map(|(index, line)| format!("BT /F1 12 Tf 72 {} Td ({line}) Tj ET", 700 - index * 20)).collect::<Vec<_>>().join("\n");
+            let contents_id = document.add_object(Stream::new(dictionary! {}, lines.into_bytes()));
+            Object::Reference(document.add_object(dictionary! {
+                "Type" => "Page", "Parent" => pages_id, "Contents" => contents_id,
+                "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+                "Resources" => dictionary! { "Font" => dictionary! { "F1" => font_id } },
+            }))
+        }).collect::<Vec<_>>();
+        document.objects.insert(pages_id, dictionary! { "Type" => "Pages", "Count" => kids.len() as i64, "Kids" => kids }.into());
+        let catalog_id = document.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+        document.trailer.set("Root", catalog_id);
+        document.save(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn rotates_only_selected_pages_on_top_of_existing_rotation() {
+        let input = text_pdf("rotate", &["one", "two"]);
+        let mut document = Document::load(&input).unwrap();
+        let first = *document.get_pages().get(&1).unwrap();
+        document.get_dictionary_mut(first).unwrap().set("Rotate", 270);
+        document.save(&input).unwrap();
+
+        let outcome = rotate(&RotatePdfRequest { paths: vec![input.clone()], degrees: 180, pages: Some(vec![0]), output_location: OutputLocation::AlongsideInput }, input.clone());
+        assert!(outcome.error().is_none(), "{:?}", outcome.error());
+        let rotated = Document::load(&outcome.output_paths()[0]).unwrap();
+        let pages = rotated.get_pages();
+        assert_eq!(page_rotation(&rotated, pages[&1]), 90);
+        assert_eq!(page_rotation(&rotated, pages[&2]), 0);
+        assert!(rotate(&RotatePdfRequest { paths: vec![], degrees: 45, pages: None, output_location: OutputLocation::AlongsideInput }, input.clone()).error().is_some());
+        assert!(rotate(&RotatePdfRequest { paths: vec![], degrees: 90, pages: Some(vec![5]), output_location: OutputLocation::AlongsideInput }, input.clone()).error().is_some());
+        let _ = fs::remove_file(&outcome.output_paths()[0]);
+        let _ = fs::remove_file(input);
+    }
+
+    #[test]
+    fn repairs_a_pdf_with_a_broken_cross_reference_table() {
+        if qpdf().is_err() { return; }
+        let input = text_pdf("repair", &["intact text"]);
+        let mut bytes = fs::read(&input).unwrap();
+        let xref = bytes.windows(4).rposition(|window| window == b"xref").unwrap();
+        bytes.truncate(xref);
+        bytes.extend_from_slice(b"xref\ngarbage\n%%EOF\n");
+        fs::write(&input, &bytes).unwrap();
+
+        let outcome = repair(&PdfToTextRequest { pages: None, paths: vec![input.clone()], output_location: OutputLocation::AlongsideInput }, input.clone());
+        assert!(outcome.error().is_none(), "{:?}", outcome.error());
+        assert_eq!(outcome.detail, "PDF repaired");
+        assert_eq!(fs::read(&input).unwrap(), bytes, "repair must not modify the original");
+        let repaired = Document::load(&outcome.output_paths()[0]).unwrap();
+        assert!(repaired.extract_text(&[1]).unwrap().contains("intact text"));
+        let _ = fs::remove_file(&outcome.output_paths()[0]);
+
+        fs::write(&input, b"not a pdf at all").unwrap();
+        let broken = repair(&PdfToTextRequest { pages: None, paths: vec![input.clone()], output_location: OutputLocation::AlongsideInput }, input.clone());
+        assert!(broken.error().is_some());
+        assert!(broken.output_paths().is_empty());
+        let _ = fs::remove_file(input);
+    }
+
+    #[test]
+    fn compares_text_page_by_page() {
+        let old = text_pdf("compare_old", &["Title\nPrice 10\nFooter", "Same page"]);
+        let new = text_pdf("compare_new", &["Title\nPrice 12\nFooter", "Same page", "Appendix"]);
+        let outcome = compare(&ComparePdfsRequest { paths: vec![old.clone(), new.clone()], output_location: OutputLocation::AlongsideInput, output_path: None });
+        assert!(outcome.error().is_none(), "{:?}", outcome.error());
+        assert_eq!(outcome.detail, "2 page(s) with differences");
+        let report = fs::read_to_string(&outcome.output_paths()[0]).unwrap();
+        assert!(report.starts_with(&format!("Original: {} (lines marked -)\nNew version: {} (lines marked +)\n", old.file_name().unwrap().to_string_lossy(), new.file_name().unwrap().to_string_lossy())), "{report}");
+        assert!(report.contains("Page 1\n- Price 10\n+ Price 12"), "{report}");
+        assert!(!report.contains("Page 2"), "{report}");
+        assert!(report.contains("Page 3\nOnly in"), "{report}");
+        assert!(compare(&ComparePdfsRequest { paths: vec![old.clone()], output_location: OutputLocation::AlongsideInput, output_path: None }).error().is_some());
+        for path in [&outcome.output_paths()[0], &old, &new] { let _ = fs::remove_file(path); }
+    }
+
+    #[test]
+    fn diffs_lines_by_longest_common_subsequence() {
+        let lines = |text: &str| text.split(' ').map(str::to_string).collect::<Vec<_>>();
+        assert!(diff_lines(&lines("a b c"), &lines("a b c")).is_empty());
+        assert_eq!(diff_lines(&lines("a b c"), &lines("a x c d")), vec!["- b", "+ x", "+ d"]);
+    }
+
+    #[test]
+    fn redaction_removes_text_under_the_box_from_the_file() {
+        if pdftoppm().is_none() { return; }
+        let input = text_pdf("redact", &["SECRET123\nkeep this line", "OTHERPAGE"]);
+        let outcome = crate::kit::pdf::editor::redact(&crate::kit::pdf::editor::RedactPdfRequest {
+            paths: vec![input.clone()],
+            rectangle: crate::kit::pdf::editor::PdfRect { x: 60.0, y: 690.0, width: 200.0, height: 30.0 },
+            scope: crate::kit::pdf::editor::PageScope::Selected { pages: vec![0] },
+            output_location: OutputLocation::AlongsideInput,
+        }, input.clone());
+        assert!(outcome.error().is_none(), "{:?}", outcome.error());
+        let output = &outcome.output_paths()[0];
+        let redacted = Document::load(output).unwrap();
+        assert_eq!(redacted.get_pages().len(), 2);
+        assert!(!redacted.extract_text(&[1]).unwrap_or_default().contains("SECRET123"));
+        assert!(redacted.extract_text(&[2]).unwrap().contains("OTHERPAGE"));
+        let mut decompressed = redacted.clone();
+        decompressed.decompress();
+        let bytes = { let path = std::env::temp_dir().join(format!("toolbox_redact_check_{}.pdf", std::process::id())); decompressed.save(&path).unwrap(); let bytes = fs::read(&path).unwrap(); let _ = fs::remove_file(path); bytes };
+        assert!(!bytes.windows(9).any(|window| window == b"SECRET123"), "redacted text is still in the file");
+        assert!(fs::read(&input).unwrap().windows(9).any(|window| window == b"SECRET123"), "original must be unchanged");
+        let _ = fs::remove_file(output);
+        let _ = fs::remove_file(input);
+    }
+
+    #[test]
+    fn signature_is_added_to_pages_with_a_single_content_stream() {
+        let input = text_pdf("sign_single_stream", &["original text", "second page"]);
+        let outcome = crate::kit::pdf::editor::sign(&crate::kit::pdf::editor::SignPdfRequest {
+            paths: vec![input.clone()],
+            page: 0,
+            text: "ToolboxSignature".to_string(),
+            signature_path: None,
+            rectangle: crate::kit::pdf::editor::PdfRect { x: 72.0, y: 100.0, width: 200.0, height: 40.0 },
+            scope: crate::kit::pdf::editor::PageScope::Selected { pages: vec![0] },
+            output_location: OutputLocation::AlongsideInput,
+        }, input.clone());
+        assert!(outcome.error().is_none(), "{:?}", outcome.error());
+        let output = &outcome.output_paths()[0];
+        let signed = Document::load(output).unwrap();
+        let first = signed.extract_text(&[1]).unwrap();
+        assert!(first.contains("original text"), "existing content must be kept: {first}");
+        assert!(first.contains("ToolboxSignature"), "signature missing: {first}");
+        assert!(!signed.extract_text(&[2]).unwrap().contains("ToolboxSignature"));
+        assert!(!fs::read(&input).unwrap().windows(16).any(|window| window == b"ToolboxSignature"), "original must be unchanged");
+        let _ = fs::remove_file(output);
+        let _ = fs::remove_file(input);
     }
 }

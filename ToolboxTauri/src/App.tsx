@@ -5,9 +5,19 @@ import { MainPage } from "./views/MainPage";
 import { UtilityIndex } from "./components/UtilityIndex";
 import { SaveDialogHost } from "./components/SaveDialog";
 import { OutputLocationContext, OutputSettingsContext, outputLocationFor } from "./outputLocation";
+import { ToolAvailabilityProvider } from "./ToolAvailabilityContext";
+import {
+  createToolAvailabilityStartup,
+  type ToolAvailabilitySnapshot,
+} from "./toolFlags";
 import type { OutputSettings } from "./contracts";
 
 const unreadableSettings: OutputSettings = { mode: "alongsideInput", folder: "" };
+
+const toolAvailabilityStartup = {
+  platform: import.meta.env.VITE_TOOLBOX_TARGET_PLATFORM,
+  isDev: import.meta.env.DEV,
+};
 
 const parseOutputSettings = (value: unknown): OutputSettings => {
   const candidate = value as Partial<OutputSettings> | null;
@@ -17,10 +27,20 @@ const parseOutputSettings = (value: unknown): OutputSettings => {
 
 export default function App() {
   const [outputSettings, setOutputSettings] = useState<OutputSettings | null>(null);
+  const [startup] = useState(() => createToolAvailabilityStartup(toolAvailabilityStartup));
+  const [availability, setAvailability] = useState<ToolAvailabilitySnapshot | null>(() =>
+    startup.state === "ready" ? startup.snapshot : null,
+  );
 
   useEffect(() => {
     void initializeInstallAnalytics();
   }, []);
+
+  useEffect(() => {
+    if (startup.state === "pending") {
+      void startup.resolve().then(setAvailability);
+    }
+  }, [startup]);
 
   useEffect(() => {
     invoke<unknown>("get_output_settings").then(
@@ -36,16 +56,19 @@ export default function App() {
   const store = useMemo(() => outputSettings && { settings: outputSettings, save }, [outputSettings, save]);
   const outputLocation = useMemo(() => outputSettings && outputLocationFor(outputSettings), [outputSettings]);
 
+  if (!availability) return <div role="status" className="app-launch-loading">Loading Toolbox…</div>;
   // Runs started before the stored setting arrives would silently use the wrong destination.
   if (!store || !outputLocation) return null;
 
   return (
-    <OutputSettingsContext.Provider value={store}>
-      <OutputLocationContext.Provider value={outputLocation}>
-        <MainPage />
-        <UtilityIndex />
-        <SaveDialogHost />
-      </OutputLocationContext.Provider>
-    </OutputSettingsContext.Provider>
+    <ToolAvailabilityProvider snapshot={availability}>
+      <OutputSettingsContext.Provider value={store}>
+        <OutputLocationContext.Provider value={outputLocation}>
+          <MainPage />
+          <UtilityIndex />
+          <SaveDialogHost />
+        </OutputLocationContext.Provider>
+      </OutputSettingsContext.Provider>
+    </ToolAvailabilityProvider>
   );
 }
