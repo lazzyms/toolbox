@@ -86,7 +86,7 @@ const startProtecting = async (page: Page, paths: string[]) => {
         command === "plugin:event|listen" && (args as { event: string }).event === "tauri://drag-drop"))).toBe(true);
     await page.evaluate((paths) => (window as unknown as LiveWindow).__drop(paths), paths);
     await expect(page.getByRole("listbox").getByRole("option")).toHaveCount(paths.length);
-    await page.locator('input[type="password"]').fill("test-password");
+    for (const field of await page.locator('.workspace-control-panel input[type="password"]').all()) await field.fill("test-password");
     await page.locator(".workspace-primary-action").click();
     await expect.poll(() => page.evaluate(() => (window as unknown as LiveWindow).__invocations.some(({ command }) => command === "protect_pdf"))).toBe(true);
     const runId = await page.evaluate(() => {

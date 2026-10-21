@@ -244,9 +244,8 @@ enum OfficeError {
 impl OfficeError {
     fn into_tool_error(self) -> ToolError {
         match self {
-            Self::InvalidInput(message) | Self::WrongPassword(message) => {
-                ToolError::invalid_input(message)
-            }
+            Self::InvalidInput(message) => ToolError::invalid_input(message),
+            Self::WrongPassword(message) => ToolError::wrong_password(message),
             Self::Unsupported(message) => ToolError::unavailable(message),
             Self::Processing(message) => ToolError::processing(message),
         }
@@ -1553,7 +1552,10 @@ mod tests {
                 "wrong",
                 &OutputLocation::CustomFolder(failure_directory.clone()),
             );
-            assert!(wrong_password.error().is_some());
+            assert_eq!(
+                wrong_password.error().map(|error| &error.kind),
+                Some(&crate::kit::contracts::ErrorKind::WrongPassword)
+            );
             assert!(wrong_password.output_paths().is_empty());
             assert_eq!(std::fs::read_dir(&failure_directory).unwrap().count(), 0);
             assert_eq!(std::fs::read(&input).unwrap(), source_before);

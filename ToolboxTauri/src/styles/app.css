@@ -1447,3 +1447,16 @@ body {
 .settings-folder > svg { width:16px; height:16px; flex:none; color:var(--muted-foreground); }
 .settings-folder-path { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:240px; }
 .settings-update-status { min-height: 24px; border: 0; padding: 0; background: transparent; color: var(--muted-foreground); font-size: 12px; }
+
+/* Batch password with per-file overrides */
+.password-options { display: grid; gap: 10px; }
+.password-error { margin: 0; color: var(--destructive); font-size: 12px; line-height: 1.5; }
+.password-cleared { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--muted-foreground); font-size: 12px; }
+.file-selection-row:has(.password-inline) { flex-wrap: wrap; }
+.file-password { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 2px; }
+.file-password-hint { padding: 0 6px; color: var(--muted-foreground); font-size: 12px; white-space: nowrap; }
+.password-inline { flex-basis: 100%; display: grid; gap: 4px; padding: 4px 8px 8px; }
+.password-inline-fields { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; }
+.password-inline-fields > .workspace-field { flex: 1 1 180px; }
+.password-inline-actions { display: inline-flex; gap: 6px; }
+.result-password-retry { grid-column: 2 / -1; padding: 4px 0 0; }
