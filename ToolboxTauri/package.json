@@ -18,7 +18,8 @@
     "check:shadcn-components": "node scripts/check-shadcn-components.mjs",
     "design:screens": "node scripts/render-design-screens.mjs",
     "check:matrix": "npm run test:capabilities && npm run test:outcomes && npm run test:retired-ids && node scripts/check-tool-matrix.mjs && node scripts/check-workspace-consolidation.mjs",
-    "check:release": "npm run check:shadcn-components && npm run check:matrix && node scripts/check-release-readiness.mjs",
+    "test:qpdf-release": "node --test tests/qpdf-release-readiness.test.mjs",
+    "check:release": "npm run check:shadcn-components && npm run check:matrix && npm run test:qpdf-release && node scripts/check-release-readiness.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
   },

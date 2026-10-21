@@ -8,8 +8,11 @@
 # we copy qpdf plus its non-system dylib closure into Contents/Resources/qpdf-bin/
 # and rebase every install name to @loader_path so the whole set travels inside
 # the bundle with no host libraries required (macOS /usr/lib & /System are exempt).
+# A qpdf below the minimum in qpdf-pin.json, or not native to TOOLBOX_TARGET, is refused.
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TARGET="${TOOLBOX_TARGET:-aarch64-apple-darwin}"
 APP="${1:-$(pwd)/src-tauri/target/release/bundle/macos/Toolbox.app}"
 QPDF_BIN="${QPDF:-$(command -v qpdf || true)}"
 PDFTOPPM_BIN="${PDFTOPPM:-$(command -v pdftoppm || true)}"
@@ -24,6 +27,13 @@ if [[ -z "$QPDF_BIN" ]]; then
   echo "bundle-qpdf: qpdf not found; install it (brew install qpdf) or set QPDF" >&2
   exit 1
 fi
+check_qpdf() {
+  node "$SCRIPT_DIR/check-release-readiness.mjs" --qpdf "$1" --target "$TARGET" >&2 || {
+    echo "bundle-qpdf: refusing qpdf at $1" >&2
+    exit 1
+  }
+}
+check_qpdf "$QPDF_BIN"
 if [[ -z "$PDFTOPPM_BIN" ]]; then
   echo "bundle-qpdf: pdftoppm not found; install it (brew install poppler) or set PDFTOPPM" >&2
   exit 1
@@ -153,9 +163,7 @@ codesign --force --sign "$SIGNING_IDENTITY" "$APP"
 codesign --verify --deep --strict "$APP"
 
 echo "bundle-qpdf: embedded self-contained PDF/OCR helpers -> $RES/{qpdf-bin,pdf-bin,resources/ocr/bin}"
-VERSION="$("$RES/qpdf-bin/qpdf" --version 2>/dev/null | head -1)"
-[[ -n "$VERSION" ]] || { echo "bundle-qpdf: qpdf --version failed" >&2; exit 1; }
-echo "$VERSION"
+check_qpdf "$RES/qpdf-bin/qpdf"
 "$RES/pdf-bin/pdftoppm" -h >/dev/null
 "$RES/pdf-bin/pdftotext" -h >/dev/null
 "$RES/resources/ocr/bin/tesseract" --version >/dev/null
