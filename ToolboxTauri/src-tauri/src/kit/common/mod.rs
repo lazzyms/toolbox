@@ -106,10 +106,7 @@ impl OutputNaming {
     where
         F: FnMut(&Path) -> io::Result<Option<T>>,
     {
-        let directory = match location {
-            OutputLocation::AlongsideInput => input_path.parent().unwrap_or_else(|| Path::new(".")),
-            OutputLocation::CustomFolder(folder) => folder,
-        };
+        let directory = location.directory_for(input_path);
         let stem = input_path.file_stem().and_then(|value| value.to_str()).unwrap_or("");
         let extension = extension.map(|value| format!(".{}", value.trim_start_matches('.'))).unwrap_or_default();
         let mut counter = 0usize;

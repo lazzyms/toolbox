@@ -10,7 +10,7 @@ const configPath = path.join(projectDirectory, "components.json");
 const themePath = path.join(sourceDirectory, "styles/theme.css");
 const requiredComponents = [
   "badge", "button", "card", "checkbox", "input", "label", "native-select",
-  "dialog", "slider", "switch", "textarea", "toggle-group",
+  "dialog", "radio-group", "slider", "switch", "textarea", "toggle-group",
 ];
 const cardSurfaceClasses = [
   "tool-card", "tool-workspace-card", "workspace-control-panel", "workspace-source-bar",
@@ -45,6 +45,7 @@ const forbiddenProperties = {
   slider: /^(?:background(?:-.+)?|border(?:-.+)?|box-shadow|color|outline(?:-.+)?|padding(?:-.+)?)$/,
   checkbox: /^(?:background(?:-.+)?|border(?:-.+)?|box-shadow|color|outline(?:-.+)?|padding(?:-.+)?)$/,
   switch: /^(?:background(?:-.+)?|border(?:-.+)?|box-shadow|color|outline(?:-.+)?|padding(?:-.+)?)$/,
+  radio: /^(?:background(?:-.+)?|border(?:-.+)?|box-shadow|color|outline(?:-.+)?|padding(?:-.+)?)$/,
   toggle: /^(?:background(?:-.+)?|border(?:-.+)?|box-shadow|color|outline(?:-.+)?|padding(?:-.+)?)$/,
 };
 const componentSlots = new Map([
@@ -60,6 +61,7 @@ const componentSlots = new Map([
   ["slider", "slider"],
   ["checkbox", "checkbox"],
   ["switch", "switch"],
+  ["radio-group-item", "radio"],
   ["toggle", "toggle"],
   ["toggle-group", "toggle"],
 ]);

@@ -48,6 +48,7 @@ export const warningText = (warning: OutcomeWarning): string => {
 const pointerView = (pointer: OutcomePointer | null): RowPointer | null => {
     if (!pointer) return null;
     if (pointer.kind === "pack") return { label: `Install ${pointer.packId.replace(/-/g, " ")}`, pointer };
+    if (pointer.kind === "outputFolder") return { label: "Choose output folder", pointer };
     const tool = UtilityRegistry.find((item) => item.id === pointer.toolId);
     return tool ? { label: `Open ${tool.title}`, pointer } : null;
 };
@@ -97,7 +98,8 @@ export const rowView = (outcome: JobOutcome, resultVerb: string): RowView => {
                 openOutput: null,
                 revealOutput: outcome.outputPaths[0] ?? null,
                 pointer: pointerView(outcome.failure.pointer),
-                canRetry: retryableKinds[outcome.failure.kind],
+                // A retry reuses the run's output location, so it cannot fix a failure that points at that location.
+                canRetry: retryableKinds[outcome.failure.kind] && outcome.failure.pointer?.kind !== "outputFolder",
             };
         }
     }

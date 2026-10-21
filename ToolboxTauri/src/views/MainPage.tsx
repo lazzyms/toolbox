@@ -28,7 +28,7 @@ import { PDFConversionWorkspaceView } from "./PDFConversionWorkspaceView";
 import { ImageEditorWorkspaceView } from "./ImageEditorWorkspaceView";
 import { MediaWorkspaceView } from "./MediaWorkspaceView";
 import { PlannedToolView, UnavailableToolView } from "./PlannedToolView";
-import { SettingsPanel } from "./SettingsPanel";
+import { SettingsPanel, type SettingsSection } from "./SettingsPanel";
 
 const workspaceViews = {
   "file-security": SecurityWorkspaceView,
@@ -95,6 +95,7 @@ export const MainPage = () => {
     setWorkspaceSourceAction(() => action);
   }, []);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(null);
   const [filter, setFilter] = useState<LibraryFilter>("all");
   const [search, setSearch] = useState("");
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -220,9 +221,23 @@ export const MainPage = () => {
     return () =>
       window.removeEventListener("toolbox:open", openFromCompatibilityNav);
   });
+  useEffect(() => {
+    const openSettings = (event: Event) => {
+      setSettingsSection((event as CustomEvent<SettingsSection>).detail);
+      setSettingsOpen(true);
+    };
+    window.addEventListener("toolbox:open-settings", openSettings);
+    return () => window.removeEventListener("toolbox:open-settings", openSettings);
+  }, []);
 
   return (
-    <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+    <Dialog
+      open={settingsOpen}
+      onOpenChange={(open) => {
+        setSettingsOpen(open);
+        if (!open) setSettingsSection(null);
+      }}
+    >
     <div className="app-shell">
       <aside className="app-rail" aria-label="Toolbox navigation">
         <div className="brand-lockup">
@@ -508,7 +523,7 @@ export const MainPage = () => {
         )}
       </main>
     </div>
-    <SettingsPanel />
+    <SettingsPanel focusSection={settingsSection} />
     </Dialog>
   );
 };

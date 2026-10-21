@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import path from "node:path";
-import type { JobOutcome } from "../../src/contracts";
+import type { JobOutcome, OutputSettings } from "../../src/contracts";
 import { ToolWorkspaceRegistry, UtilityRegistry, workspaceForTool } from "../../src/registry";
 
 const fixturePath = path.resolve("src-tauri/icons/icon.png");
@@ -21,10 +21,13 @@ type TestWindow = Window & {
     __toolboxActionFailure?: { command: string; path: string; message: string; delayMs?: number };
     __toolboxSecondPick?: boolean;
     __toolboxDialogResults?: Array<string | string[] | null>;
+    __toolboxOutputSettings?: OutputSettings;
 };
 
+const defaultOutputSettings: OutputSettings = { mode: "alongsideInput", folder: "/Users/test/Documents/Toolbox" };
+
 test.beforeEach(async ({ page }) => {
-    await page.addInitScript(({ fixturePath, pdfFixturePath, mockedOutputPaths }) => {
+    await page.addInitScript(({ fixturePath, pdfFixturePath, mockedOutputPaths, defaultOutputSettings }) => {
         const invocations: Array<{ command: string; args: unknown }> = [];
         (window as TestWindow).__toolboxInvocations = invocations;
         Object.defineProperty(window.navigator, "platform", { configurable: true, value: "MacIntel" });
@@ -37,6 +40,12 @@ test.beforeEach(async ({ page }) => {
             invoke: async (command, args) => {
                 invocations.push({ command, args });
 
+                if (command === "get_output_settings") return (window as TestWindow).__toolboxOutputSettings ?? defaultOutputSettings;
+                if (command === "set_output_settings") {
+                    const { settings } = args as { settings: OutputSettings };
+                    (window as TestWindow).__toolboxOutputSettings = settings;
+                    return settings;
+                }
                 if (command === "plugin:dialog|open") {
                     const dialogResults = (window as TestWindow).__toolboxDialogResults;
                     if (dialogResults?.length) return dialogResults.shift() ?? null;
@@ -123,7 +132,7 @@ if (command === "preview_pdf_scene_pages") return (args as { request: { pageIndi
         window.__TAURI_EVENT_PLUGIN_INTERNALS__ = {
             unregisterListener: () => undefined,
         };
-    }, { fixturePath, pdfFixturePath, mockedOutputPaths });
+    }, { fixturePath, pdfFixturePath, mockedOutputPaths, defaultOutputSettings });
 });
 
 test("every registered feature opens its detail pane", async ({ page }) => {
@@ -1261,6 +1270,27 @@ test("result rows show succeeded, skipped and failed states with warnings and po
     await expect(page.getByRole("heading", { name: "Remove Password", exact: true })).toBeVisible();
 });
 
+test("a read-only output folder failure points to the output location setting instead of Retry", async ({ page }) => {
+    const rows = await runCompressImagesWith(page, [
+        failed("/locked/scan.png", "processing", "The output folder is read-only. Nothing was saved.", {
+            failure: { kind: "processing", message: "The output folder is read-only. Nothing was saved.", pointer: { kind: "outputFolder" } },
+        }),
+        succeeded(fixturePath, [mockedOutputPaths[0]]),
+    ]);
+
+    await expect(rows).toHaveCount(2);
+    await expect(rows.nth(0)).toHaveAttribute("data-tone", "fail");
+    await expect(rows.nth(0)).toContainText("The output folder is read-only. Nothing was saved.");
+    await expect(rows.nth(1)).toHaveAttribute("data-state", "succeeded");
+    await expect(page.getByRole("button", { name: /^Retry/ })).toHaveCount(0);
+
+    await rows.nth(0).getByRole("button", { name: "Choose output folder", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Settings" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole("radio", { name: "Next to each original" })).toBeFocused();
+    await expect(dialog.getByRole("heading", { name: "Output location" })).toBeInViewport();
+});
+
 test("Retry is offered only after processing failures and re-runs only that file with the same options", async ({ page }) => {
     const timedOut = "/local/drawings-full-set.pdf";
     const rows = await runCompressImagesWith(page, [
@@ -1449,13 +1479,8 @@ test("GIF extraction does not request a source preview", async ({ page }) => {
 
 type RunRequest = { outputLocation?: unknown; plan?: { outputLocation?: unknown } };
 
-const fakeShellOutputLocation = async (page: Page, outputLocation: unknown) => {
-    await page.route(/\/src\/App\.tsx(\?.*)?$/, async (route) => {
-        const response = await route.fetch();
-        const source = await response.text();
-        expect(source.match(/"alongsideInput"/g)).toHaveLength(1);
-        await route.fulfill({ response, body: source.replace('"alongsideInput"', JSON.stringify(outputLocation)) });
-    });
+const storeOutputSettings = async (page: Page, settings: OutputSettings) => {
+    await page.addInitScript((settings) => { (window as TestWindow).__toolboxOutputSettings = settings; }, settings);
 };
 
 const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[number], expectedOutputLocation: unknown = "alongsideInput") => {
@@ -1520,14 +1545,14 @@ test.describe("registered feature actions", () => {
     expect(UtilityRegistry).toHaveLength(33);
 
     for (const utility of UtilityRegistry) {
-        test(`${utility.id} accepts the fixture and runs`, async ({ page }) => {
+        test(`${utility.id} accepts the fixture and runs with the Settings default`, async ({ page }) => {
             test.skip(utility.status !== "implemented", "Tool is not available in this build.");
             await exerciseFeature(page, utility);
         });
     }
 });
 
-test.describe("workspace runs send the shell output location", () => {
+test.describe("workspace runs send the stored output location", () => {
     const representativeTools = ["pdf-protect", "pdf-edit", "pdf-to-images", "resize", "icon-set"] as const;
     const customFolder = { customFolder: "/fake/shell/output" };
 
@@ -1537,9 +1562,109 @@ test.describe("workspace runs send the shell output location", () => {
 
     for (const id of representativeTools) {
         const utility = UtilityRegistry.find((item) => item.id === id)!;
-        test(`${workspaceForTool(id)?.id} sends the shell-provided custom folder from ${id}`, async ({ page }) => {
-            await fakeShellOutputLocation(page, customFolder);
+        test(`${workspaceForTool(id)?.id} sends the stored custom folder from ${id}`, async ({ page }) => {
+            await storeOutputSettings(page, { mode: "customFolder", folder: customFolder.customFolder });
             await exerciseFeature(page, utility, customFolder);
         });
     }
+
+    test("a stored folder keeps its path while the mode is alongside", async ({ page }) => {
+        await storeOutputSettings(page, { mode: "alongsideInput", folder: "/fake/shell/output" });
+        await exerciseFeature(page, UtilityRegistry.find((item) => item.id === "resize")!, "alongsideInput");
+    });
+});
+
+const openOutputSettings = async (page: Page) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Settings" });
+    return { dialog, saveResults: dialog.getByRole("radiogroup", { name: "Save results" }) };
+};
+
+const outputSettingsWrites = (page: Page) => page.evaluate(() =>
+    ((window as TestWindow).__toolboxInvocations ?? [])
+        .filter(({ command }) => command === "set_output_settings")
+        .map(({ args }) => (args as { settings: OutputSettings }).settings),
+);
+
+test.describe("Settings output location", () => {
+    test("defaults to next to each original and shows the default folder", async ({ page }) => {
+        const { dialog, saveResults } = await openOutputSettings(page);
+        await expect(dialog.getByRole("heading", { name: "Output location" })).toBeVisible();
+        await expect(saveResults.getByRole("radio", { name: "Next to each original" })).toBeChecked();
+        await expect(saveResults.getByRole("radio", { name: "Always in one folder" })).not.toBeChecked();
+        await expect(dialog.getByText("/Users/test/Documents/Toolbox", { exact: true })).toBeVisible();
+        await expect(dialog.getByText("Always on", { exact: true })).toBeVisible();
+        expect(await outputSettingsWrites(page)).toEqual([]);
+    });
+
+    test("saves the folder dialog result through the settings command and runs use it", async ({ page }) => {
+        const { dialog, saveResults } = await openOutputSettings(page);
+        await page.evaluate(() => { (window as TestWindow).__toolboxDialogResults = ["/picked/output"]; });
+        await dialog.getByRole("button", { name: "Choose output folder" }).click();
+
+        await expect(saveResults.getByRole("radio", { name: "Always in one folder" })).toBeChecked();
+        await expect(dialog.getByText("/picked/output", { exact: true })).toBeVisible();
+        expect(await outputSettingsWrites(page)).toEqual([{ mode: "customFolder", folder: "/picked/output" }]);
+        const dialogOpen = await page.evaluate(() =>
+            ((window as TestWindow).__toolboxInvocations ?? []).find(({ command }) => command === "plugin:dialog|open")?.args as { options: { directory: boolean; defaultPath?: string } },
+        );
+        expect(dialogOpen.options).toMatchObject({ directory: true, defaultPath: "/Users/test/Documents/Toolbox" });
+
+        await page.keyboard.press("Escape");
+        await page.getByRole("button", { name: "Open Resize Images" }).click();
+        await chooseFixture(page, fixturePath);
+        await page.getByLabel("Width").fill("640");
+        await page.getByRole("button", { name: "Add edit to plan" }).click();
+        await page.locator(".workspace-primary-action").click();
+        await expect(page.getByText("Test output", { exact: true })).toBeVisible();
+        const run = await page.evaluate(() =>
+            ((window as TestWindow).__toolboxInvocations ?? []).find(({ command }) => command === "export_image_edit_plan")?.args as { request: RunRequest },
+        );
+        expect(run.request.plan?.outputLocation).toEqual({ customFolder: "/picked/output" });
+    });
+
+    test("a cancelled folder dialog saves nothing", async ({ page }) => {
+        const { dialog, saveResults } = await openOutputSettings(page);
+        await page.evaluate(() => { (window as TestWindow).__toolboxDialogResults = [null]; });
+        await dialog.getByRole("button", { name: "Choose output folder" }).click();
+        await expect.poll(() => page.evaluate(() => ((window as TestWindow).__toolboxInvocations ?? []).some(({ command }) => command === "plugin:dialog|open"))).toBe(true);
+        expect(await outputSettingsWrites(page)).toEqual([]);
+        await expect(saveResults.getByRole("radio", { name: "Next to each original" })).toBeChecked();
+    });
+
+    test("switching modes saves through the settings command and keeps the folder", async ({ page }) => {
+        const { saveResults } = await openOutputSettings(page);
+        await saveResults.getByRole("radio", { name: "Always in one folder" }).click();
+        await expect(saveResults.getByRole("radio", { name: "Always in one folder" })).toBeChecked();
+        await saveResults.getByRole("radio", { name: "Next to each original" }).click();
+        await expect(saveResults.getByRole("radio", { name: "Next to each original" })).toBeChecked();
+        expect(await outputSettingsWrites(page)).toEqual([
+            { mode: "customFolder", folder: "/Users/test/Documents/Toolbox" },
+            { mode: "alongsideInput", folder: "/Users/test/Documents/Toolbox" },
+        ]);
+    });
+
+    test("the stored setting loads at startup", async ({ page }) => {
+        await storeOutputSettings(page, { mode: "customFolder", folder: "/kept/output" });
+        const { dialog, saveResults } = await openOutputSettings(page);
+        await expect(saveResults.getByRole("radio", { name: "Always in one folder" })).toBeChecked();
+        await expect(dialog.getByText("/kept/output", { exact: true })).toBeVisible();
+    });
+
+    test("a rejected save shows the native error and keeps the previous choice", async ({ page }) => {
+        await page.addInitScript(() => {
+            const internals = window.__TAURI_INTERNALS__ as { invoke: (command: string, args: unknown) => Promise<unknown> };
+            const invoke = internals.invoke;
+            internals.invoke = async (command, args) => {
+                if (command === "set_output_settings") throw "Could not use /picked/output as the output folder: Permission denied";
+                return invoke(command, args);
+            };
+        });
+        const { dialog, saveResults } = await openOutputSettings(page);
+        await page.evaluate(() => { (window as TestWindow).__toolboxDialogResults = ["/picked/output"]; });
+        await dialog.getByRole("button", { name: "Choose output folder" }).click();
+        await expect(dialog.getByRole("alert")).toHaveText("Could not use /picked/output as the output folder: Permission denied");
+        await expect(saveResults.getByRole("radio", { name: "Next to each original" })).toBeChecked();
+    });
 });

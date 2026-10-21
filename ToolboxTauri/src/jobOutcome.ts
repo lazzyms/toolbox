@@ -61,7 +61,8 @@ const parsePointer = (value: unknown, path: string): OutcomePointer | null => {
     return toolIds.has(toolId) ? { kind: "tool", toolId: toolId as AtomicToolId } : fail(`${path}.toolId`, "a registered tool id");
   }
   if (pointer.kind === "pack") return { kind: "pack", packId: text(pointer.packId, `${path}.packId`) };
-  return fail(`${path}.kind`, "tool or pack");
+  if (pointer.kind === "outputFolder") return { kind: "outputFolder" };
+  return fail(`${path}.kind`, "tool, pack or outputFolder");
 };
 
 const parseToolError = (value: unknown, path: string): ToolError => {

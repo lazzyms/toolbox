@@ -32,6 +32,8 @@ const revealButtonLabel = () => {
 const followPointer = (pointer: OutcomePointer) => {
     if (pointer.kind === "tool") {
         window.dispatchEvent(new CustomEvent("toolbox:open", { detail: pointer.toolId }));
+    } else if (pointer.kind === "outputFolder") {
+        window.dispatchEvent(new CustomEvent("toolbox:open-settings", { detail: "output-location" }));
     } else {
         window.dispatchEvent(new CustomEvent("toolbox:install-pack", { detail: pointer.packId }));
     }

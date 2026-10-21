@@ -60,6 +60,13 @@ export interface ToolCapability {
 
 export type OutputLocation = "alongsideInput" | { customFolder: string };
 
+export type OutputMode = "alongsideInput" | "customFolder";
+
+export interface OutputSettings {
+  mode: OutputMode;
+  folder: string;
+}
+
 export type JobState = "running" | "success" | "mixed" | "failure";
 
 export type ToolCommand =
@@ -103,7 +110,8 @@ export type ErrorKind =
 
 export type OutcomePointer =
   | { kind: "tool"; toolId: AtomicToolId }
-  | { kind: "pack"; packId: string };
+  | { kind: "pack"; packId: string }
+  | { kind: "outputFolder" };
 
 export interface ToolError {
   kind: ErrorKind;
