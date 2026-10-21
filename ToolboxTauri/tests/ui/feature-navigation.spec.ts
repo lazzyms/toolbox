@@ -111,6 +111,7 @@ if (command === "preview_pdf_scene_pages") return (args as { request: { pageIndi
                     return { width, height, dataUrl: `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='${width}' height='${height}'%3E%3Crect width='100%25' height='100%25' fill='white'/%3E%3C/svg%3E` };
                 }
                 if (command === "inspect_image_metadata") return ["fixture image"];
+                if (command === "plugin:path|resolve_directory") return "/Users/test";
                 if (command.startsWith("plugin:")) return null;
 
                 const processingDelay = (window as TestWindow).__toolboxProcessingDelayMs;
@@ -212,7 +213,11 @@ test("settings highlight matches navigation items", async ({ page }) => {
     expect(settingsStyle.borderTopWidth).toBe("0px");
 
     await settings.click();
-    await expect(page.locator("button.settings-link")).toHaveAttribute("aria-current", "page");
+    const sections = page.getByRole("navigation", { name: "Settings sections" });
+    await expect(sections.getByRole("button", { name: "Appearance" })).toHaveAttribute("aria-pressed", "true");
+    await expect(sections.getByRole("button", { name: "Appearance" })).toBeFocused();
+    await expect(page.getByRole("heading", { level: 1, name: "Appearance" })).toBeVisible();
+    await expect(settings).toBeHidden();
 });
 
 test("file upload surface follows the selected theme", async ({ page }) => {
@@ -228,13 +233,18 @@ test("file upload surface follows the selected theme", async ({ page }) => {
     }));
 
     const settings = page.getByRole("button", { name: "Settings", exact: true });
-    await settings.click();
-    const dialog = page.getByRole("dialog", { name: "Settings" });
-    await dialog.getByRole("radio", { name: "Dark" }).click();
+    const theme = page.getByRole("radiogroup", { name: "Theme" });
+    const chooseTheme = async (name: "Dark" | "Light") => {
+        await settings.click();
+        await theme.getByRole("radio", { name }).click();
+        await page.keyboard.press("Escape");
+        await expect(sourceBar).toBeVisible();
+    };
+    await chooseTheme("Dark");
     await expect.poll(() => page.locator("body").getAttribute("data-theme")).toBe("dark");
     await page.mouse.move(0, 0);
     const darkSurface = await readSurface();
-    await dialog.getByRole("radio", { name: "Light" }).click();
+    await chooseTheme("Light");
     await expect.poll(() => page.locator("body").getAttribute("data-theme")).toBe("light");
     await page.mouse.move(0, 0);
     await expect.poll(async () => (await readSurface()).background).not.toBe(darkSurface.background);
@@ -244,7 +254,7 @@ test("file upload surface follows the selected theme", async ({ page }) => {
     expect(lightSurface.border).not.toBe(darkSurface.border);
     expect(lightSurface.copy).not.toBe(darkSurface.copy);
 
-    await dialog.getByRole("radio", { name: "Dark" }).click();
+    await chooseTheme("Dark");
     await page.mouse.move(0, 0);
     await expect.poll(readSurface).toEqual(darkSurface);
 });
@@ -430,11 +440,10 @@ test("Windows labels the reveal action for File Explorer", async ({ page }) => {
 
 test("settings checks for and installs available updates", async ({ page }) => {
     await page.goto("/");
-    await page.getByRole("button", { name: "Settings", exact: true }).click();
-    const dialog = page.getByRole("dialog", { name: "Settings" });
-    await expect(dialog.getByRole("button", { name: "Check for updates" })).toBeVisible();
-    await dialog.getByRole("button", { name: "Check for updates" }).click();
-    await expect(dialog.getByRole("status")).toHaveText("Toolbox is up to date.");
+    const updates = await openSettingsSection(page, "Updates");
+    await expect(updates.getByRole("status")).toHaveText("Check for updatesVersion 1.0.13.");
+    await updates.getByRole("button", { name: "Check now" }).click();
+    await expect(updates.getByRole("status")).toHaveText("Toolbox is up to dateVersion 1.0.13.");
 });
 
 async function mockUpdateAvailable(page: Page, dialogChoice: string | null) {
@@ -472,11 +481,10 @@ test("settings asks before installing and does nothing when declined", async ({ 
     await page.goto("/");
     // Native confirm dialog returns null => user declined.
     await mockUpdateAvailable(page, null);
-    await page.getByRole("button", { name: "Settings", exact: true }).click();
-    const dialog = page.getByRole("dialog", { name: "Settings" });
-    await dialog.getByRole("button", { name: "Check for updates" }).click();
-    await expect(dialog.getByRole("status")).toHaveText(
-        "Toolbox 9.9.9 is available. Check again when you want to install it.",
+    const updates = await openSettingsSection(page, "Updates");
+    await updates.getByRole("button", { name: "Check now" }).click();
+    await expect(updates.getByRole("status")).toHaveText(
+        "Version 9.9.9 is availableCheck again when you want to install it.",
     );
     expect(await invokedCommands(page)).not.toContain("plugin:updater|download_and_install");
 });
@@ -485,28 +493,26 @@ test("settings downloads and installs after the update is confirmed", async ({ p
     await page.goto("/");
     // Native confirm dialog returns "Ok" (default button label) => user approved.
     await mockUpdateAvailable(page, "Ok");
-    await page.getByRole("button", { name: "Settings", exact: true }).click();
-    const dialog = page.getByRole("dialog", { name: "Settings" });
-    await dialog.getByRole("button", { name: "Check for updates" }).click();
-    await expect(dialog.getByRole("status")).toHaveText("Installing Toolbox 9.9.9...");
+    const updates = await openSettingsSection(page, "Updates");
+    await updates.getByRole("button", { name: "Check now" }).click();
+    await expect(updates.getByRole("status")).toHaveText("Installing version 9.9.9Toolbox restarts when it finishes.");
     expect(await invokedCommands(page)).toContain("plugin:updater|download_and_install");
 });
 
 test("settings privacy opt-out persists across reloads", async ({ page }) => {
     await page.goto("/");
-    await page.getByRole("button", { name: "Settings", exact: true }).click();
-    const dialog = page.getByRole("dialog", { name: "Settings" });
-    const privacyToggle = dialog.getByRole("switch", { name: /anonymous usage counts/ });
-    await expect(privacyToggle).toBeVisible();
-    await expect(dialog).toContainText("Version 1.0.13");
-    await privacyToggle.click();
+    const privacy = await openSettingsSection(page, "Privacy");
+    await expect(privacy).toContainText("Your files never leave this device.");
+    const privacyToggle = privacy.getByRole("switch", { name: "Share anonymous usage counts" });
     await expect(privacyToggle).toHaveAttribute("aria-checked", "true");
+    await privacyToggle.click();
+    await expect(privacyToggle).toHaveAttribute("aria-checked", "false");
+    expect(await page.evaluate(() => localStorage.getItem("toolbox.analytics.opt-out"))).toBe("1");
 
     await page.reload();
-    await page.getByRole("button", { name: "Settings", exact: true }).click();
     await expect(
-        page.getByRole("dialog", { name: "Settings" }).getByRole("switch", { name: /anonymous usage counts/ }),
-    ).toHaveAttribute("aria-checked", "true");
+        (await openSettingsSection(page, "Privacy")).getByRole("switch", { name: "Share anonymous usage counts" }),
+    ).toHaveAttribute("aria-checked", "false");
 });
 
 test("settings use shared theme and privacy controls in both palettes", async ({ page }, testInfo) => {
@@ -519,13 +525,12 @@ test("settings use shared theme and privacy controls in both palettes", async ({
         await page.reload();
         await page.getByRole("button", { name: "Settings", exact: true }).click();
 
-        const dialog = page.getByRole("dialog", { name: "Settings" });
         await page.screenshot({ path: testInfo.outputPath(`settings-${theme}.png`) });
-        const themeControl = dialog.getByRole("radiogroup", { name: "Theme" });
+        const themeControl = page.getByRole("radiogroup", { name: "Theme" });
         await expect(themeControl.getByRole("radio", { name: theme === "dark" ? "Dark" : "Light" }))
             .toHaveAttribute("aria-checked", "true");
 
-        const privacyToggle = dialog.getByRole("switch", { name: /anonymous usage counts/ });
+        const privacyToggle = (await openSettingsSection(page, "Privacy", false)).getByRole("switch", { name: "Share anonymous usage counts" });
         const before = await privacyToggle.getAttribute("aria-checked");
         await privacyToggle.click();
         await expect(privacyToggle).toHaveAttribute("aria-checked", before === "true" ? "false" : "true");
@@ -573,22 +578,69 @@ test("workspace command rails follow the responsive toolbar keyboard contract", 
     await expect(first).toBeFocused();
 });
 
-test("escape closes the settings dialog", async ({ page }) => {
+const openSettingsSection = async (page: Page, name: string, openSettings = true) => {
+    if (openSettings) await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByRole("navigation", { name: "Settings sections" }).getByRole("button", { name, exact: true }).click();
+    await expect(page.getByRole("heading", { level: 1, name, exact: true })).toBeVisible();
+    return page.getByRole("region", { name, exact: true });
+};
+
+test("escape leaves the settings page and returns focus to the Settings button", async ({ page }) => {
     await page.goto("/");
     const settingsTrigger = page.getByRole("button", { name: "Settings", exact: true });
-    await settingsTrigger.focus();
     await settingsTrigger.click();
-    const dialog = page.getByRole("dialog", { name: "Settings" });
-    await expect(dialog).toBeVisible();
-    await dialog.getByRole("switch", { name: /anonymous usage counts/ }).focus();
-    await page.keyboard.press("Tab");
-    await expect.poll(() => page.evaluate(() => {
-        const dialog = document.querySelector('[role="dialog"]');
-        return dialog?.contains(document.activeElement) ?? false;
-    })).toBe(true);
+    const privacy = await openSettingsSection(page, "Privacy", false);
+    await privacy.getByRole("switch", { name: "Share anonymous usage counts" }).focus();
     await page.keyboard.press("Escape");
-    await expect(dialog).not.toBeVisible();
+    await expect(page.getByRole("complementary", { name: "Settings" })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Tool library" })).toBeVisible();
     await expect(settingsTrigger).toBeFocused();
+});
+
+test("All tools on the settings page returns to the open tool with its files", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Resize Images" }).click();
+    await chooseFixture(page, fixturePath);
+    const sourceFile = page.getByText(path.basename(fixturePath), { exact: true });
+
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Appearance" })).toBeVisible();
+    await expect(sourceFile).toBeHidden();
+    await page.getByRole("complementary", { name: "Settings" }).getByRole("button", { name: "All tools" }).click();
+
+    await expect(page.getByRole("heading", { level: 1, name: workspaceForTool("resize")!.title, exact: true })).toBeVisible();
+    await expect(sourceFile).toBeVisible();
+    await expect(page.getByRole("button", { name: "Settings", exact: true })).toBeFocused();
+});
+
+test("the settings sidebar switches sections and lists only the built ones", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    const sections = page.getByRole("navigation", { name: "Settings sections" });
+    await expect(sections.getByRole("button")).toHaveText(["Appearance", "Output location", "Privacy", "Updates", "About and support"]);
+    await expect(page.getByText("Changes save as you make them.")).toBeVisible();
+
+    const about = await openSettingsSection(page, "About and support", false);
+    await expect(sections.getByRole("button", { name: "About and support" })).toHaveAttribute("aria-pressed", "true");
+    await expect(sections.getByRole("button", { name: "Appearance" })).toHaveAttribute("aria-pressed", "false");
+    await expect(about).toContainText("Version 1.0.13 for macOS");
+    await expect(about.getByRole("img", { name: "Buy Me a Coffee donation QR code" })).toBeVisible();
+    await expect(about).toContainText("Support Toolbox");
+});
+
+test("Find a tool on the settings page opens the tool search", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Resize Images" }).click();
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    const findTool = page.getByRole("button", { name: "Find a tool" });
+    await expect(findTool).toHaveAttribute("aria-keyshortcuts", "Meta+K");
+    await expect(findTool).toContainText("⌘K");
+    await findTool.click();
+    await expect(page.getByRole("textbox", { name: "Search tools" })).toBeFocused();
+
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.keyboard.press("Meta+k");
+    await expect(page.getByRole("textbox", { name: "Search tools" })).toBeFocused();
 });
 
 test("tool cards render their design icon masks", async ({ page }) => {
@@ -1285,10 +1337,13 @@ test("a read-only output folder failure points to the output location setting in
     await expect(page.getByRole("button", { name: /^Retry/ })).toHaveCount(0);
 
     await rows.nth(0).getByRole("button", { name: "Choose output folder", exact: true }).click();
-    const dialog = page.getByRole("dialog", { name: "Settings" });
-    await expect(dialog).toBeVisible();
-    await expect(dialog.getByRole("radio", { name: "Next to each original" })).toBeFocused();
-    await expect(dialog.getByRole("heading", { name: "Output location" })).toBeInViewport();
+    const settings = page.getByRole("region", { name: "Output location" });
+    await expect(settings.getByRole("radio", { name: "Next to each original" })).toBeFocused();
+    await expect(page.getByRole("heading", { name: "Output location" })).toBeInViewport();
+    await expect(page.getByRole("navigation", { name: "Settings sections" }).getByRole("button", { name: "Output location" })).toHaveAttribute("aria-pressed", "true");
+
+    await page.keyboard.press("Escape");
+    await expect(rows.nth(0)).toContainText("The output folder is read-only. Nothing was saved.");
 });
 
 test("Retry is offered only after processing failures and re-runs only that file with the same options", async ({ page }) => {
@@ -1576,8 +1631,7 @@ test.describe("workspace runs send the stored output location", () => {
 
 const openOutputSettings = async (page: Page) => {
     await page.goto("/");
-    await page.getByRole("button", { name: "Settings", exact: true }).click();
-    const dialog = page.getByRole("dialog", { name: "Settings" });
+    const dialog = await openSettingsSection(page, "Output location");
     return { dialog, saveResults: dialog.getByRole("radiogroup", { name: "Save results" }) };
 };
 
@@ -1590,10 +1644,11 @@ const outputSettingsWrites = (page: Page) => page.evaluate(() =>
 test.describe("Settings output location", () => {
     test("defaults to next to each original and shows the default folder", async ({ page }) => {
         const { dialog, saveResults } = await openOutputSettings(page);
-        await expect(dialog.getByRole("heading", { name: "Output location" })).toBeVisible();
+        await expect(page.getByRole("heading", { level: 1, name: "Output location" })).toBeVisible();
         await expect(saveResults.getByRole("radio", { name: "Next to each original" })).toBeChecked();
         await expect(saveResults.getByRole("radio", { name: "Always in one folder" })).not.toBeChecked();
-        await expect(dialog.getByText("/Users/test/Documents/Toolbox", { exact: true })).toBeVisible();
+        await expect(dialog.getByText("~/Documents/Toolbox", { exact: true })).toBeVisible();
+        await expect(dialog.getByText("~/Documents/Toolbox", { exact: true })).toHaveAttribute("title", "/Users/test/Documents/Toolbox");
         await expect(dialog.getByText("Always on", { exact: true })).toBeVisible();
         expect(await outputSettingsWrites(page)).toEqual([]);
     });
@@ -1643,6 +1698,12 @@ test.describe("Settings output location", () => {
             { mode: "customFolder", folder: "/Users/test/Documents/Toolbox" },
             { mode: "alongsideInput", folder: "/Users/test/Documents/Toolbox" },
         ]);
+    });
+
+    test("only a path inside the home folder is shortened", async ({ page }) => {
+        await storeOutputSettings(page, { mode: "customFolder", folder: "/Users/tester/output" });
+        const { dialog } = await openOutputSettings(page);
+        await expect(dialog.getByText("/Users/tester/output", { exact: true })).toBeVisible();
     });
 
     test("the stored setting loads at startup", async ({ page }) => {
