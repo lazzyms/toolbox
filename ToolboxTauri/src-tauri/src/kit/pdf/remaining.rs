@@ -1255,7 +1255,7 @@ mod tests {
     fn pdf_to_images_keeps_twelve_pages_in_numeric_order() {
         use std::os::unix::fs::PermissionsExt;
 
-        let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
+        let _guard = crate::kit::lock_process_env();
         let root = split_fixture_root("numeric-images");
         let input = root.join("document.pdf");
         let output_folder = root.join("outputs");

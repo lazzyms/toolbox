@@ -1037,7 +1037,7 @@ mod tests {
     fn renderer_uses_bundled_pdftoppm_when_path_and_override_are_unavailable() {
         use std::os::unix::fs::PermissionsExt;
 
-        let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
+        let _guard = crate::kit::lock_process_env();
         let temp = TempDir::new().unwrap();
         let pdf_bin = temp.0.join("pdf-bin");
         fs::create_dir(&pdf_bin).unwrap();
@@ -1091,7 +1091,7 @@ mod tests {
 
     #[test]
     fn inspect_returns_page_metadata_without_invoking_pdftoppm() {
-        let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
+        let _guard = crate::kit::lock_process_env();
         let temp = TempDir::new().unwrap();
         let input = temp.0.join("source.pdf");
         fixture(&input);
@@ -1112,7 +1112,7 @@ mod tests {
 
     #[test]
     fn inspect_page_validates_bounds_and_returns_only_the_requested_text_runs() {
-        let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
+        let _guard = crate::kit::lock_process_env();
         if text_extractor().is_none() || renderer().is_err() { return; }
         let temp = TempDir::new().unwrap();
         let input = temp.0.join("page-text.pdf");
@@ -1149,7 +1149,7 @@ mod tests {
 
     #[test]
     fn inspect_then_noop_export_preserves_annotated_rotated_offset_pdf_geometry() {
-        let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
+        let _guard = crate::kit::lock_process_env();
         if renderer().is_err() { return; }
         let temp = TempDir::new().unwrap();
         let input = temp.0.join("annotated-rotated-offset.pdf");
@@ -1268,7 +1268,7 @@ mod tests {
 
     #[test]
     fn preview_pages_returns_ordered_indexed_previews_from_one_normalized_scene() {
-        let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
+        let _guard = crate::kit::lock_process_env();
         let renderer=match renderer() { Ok(r)=>r,Err(e)=>{if std::env::var_os("TOOLBOX_REQUIRE_PDF_RENDERER").is_some(){panic!("{e}")}; eprintln!("Renderer unavailable: {e}");return;} };
         let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); fixture(&input);
         let before=fs::read(&input).unwrap();
@@ -1288,7 +1288,7 @@ mod tests {
 
     #[test]
     fn preview_and_export_are_pixel_identical_and_temp_storage_is_cleaned() {
-        let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
+        let _guard = crate::kit::lock_process_env();
         let renderer=match renderer() { Ok(r)=>r,Err(e)=>{if std::env::var_os("TOOLBOX_REQUIRE_PDF_RENDERER").is_some(){panic!("{e}")}; eprintln!("Renderer unavailable: {e}");return;} };
         let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); fixture(&input);
         let before=fs::read(&input).unwrap();

@@ -1004,7 +1004,7 @@ mod command_tests {
 
     #[test]
     fn every_registered_command_runs_with_real_fixtures_in_isolated_sandboxes() {
-        let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
+        let _guard = crate::kit::lock_process_env();
         let root = sandbox("all");
         let image = root.join("image.png"); write_png(&image, 256, 44);
         let image_two = root.join("image-two.png"); write_png(&image_two, 256, 88);
@@ -1572,7 +1572,7 @@ mod command_tests {
     #[test]
     fn without_qpdf_a_mixed_lock_fails_only_the_pdfs_as_unavailable() {
         if std::env::var_os(MISSING_QPDF_CHILD).is_none() {
-            let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
+            let _guard = crate::kit::lock_process_env();
             let missing = sandbox("missing-qpdf-helper").join("qpdf-not-installed");
             let child = std::process::Command::new(std::env::current_exe().unwrap())
                 .args(["command_tests::without_qpdf_a_mixed_lock_fails_only_the_pdfs_as_unavailable", "--exact", "--nocapture", "--test-threads=1"])
@@ -2087,7 +2087,7 @@ mod command_tests {
     fn locking_keeps_every_password_out_of_qpdf_arguments_and_environment() {
         use crate::kit::common::fake_helper::{secret_exposure, Exposure, FakeHelper};
         use crate::kit::{TEST_OVERRIDE_PASSWORD, TEST_PASSWORD};
-        let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
+        let _guard = crate::kit::lock_process_env();
         let real = crate::kit::resources::resolve_helper(&crate::kit::resources::QPDF).expect("qpdf is required for the native suite");
         let root = sandbox("protect-files-fake-qpdf");
         let inputs = ["first", "own", "last"].map(|stem| root.join(format!("{stem}.pdf"))).to_vec();
@@ -2113,7 +2113,13 @@ mod command_tests {
             .filter(|call| inputs.iter().any(|input| call.arguments.contains(&input.display().to_string())))
             .collect::<Vec<_>>();
 
-        assert_eq!(calls.len(), 3, "the helper runs once per file");
+        assert_eq!(
+            calls.len(),
+            3,
+            "the helper runs once per file; calls: {:?}; errors: {:?}",
+            helper.invocations().iter().map(|call| &call.arguments).collect::<Vec<_>>(),
+            outcomes.iter().map(|outcome| outcome.error()).collect::<Vec<_>>()
+        );
         for call in &calls {
             assert_eq!(call.arguments.len(), 6, "{:?}", call.arguments);
             assert_eq!(call.arguments[2..], ["--encrypt", "@-", "--bits=256", "--"], "only non-secret options reach the command line");
@@ -2138,7 +2144,7 @@ mod command_tests {
         use crate::kit::common::batch_runner::{cancel_run, CANCELLED_BEFORE_START};
         use crate::kit::common::fake_helper::FakeHelper;
         use crate::kit::contracts::{ErrorKind, SkipCode};
-        let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
+        let _guard = crate::kit::lock_process_env();
         let real = crate::kit::resources::resolve_helper(&crate::kit::resources::QPDF).expect("qpdf is required for the native suite");
         let root = sandbox("cancel-mid-batch");
         let inputs = ["first", "second", "stalls", "fourth", "fifth"].map(|stem| root.join(format!("{stem}.pdf"))).to_vec();

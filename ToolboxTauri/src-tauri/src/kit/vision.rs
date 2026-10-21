@@ -459,7 +459,7 @@ mod tests {
 
     #[test]
     fn selected_ocr_pages_preserve_document_order_and_reject_out_of_range_pages() {
-        let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
+        let _guard = crate::kit::lock_process_env();
         let input = path("selected-pages-scope.pdf");
         make_pdf(&input, 2);
 
@@ -471,7 +471,7 @@ mod tests {
 
     #[test]
     fn selected_ocr_pages_reject_excessive_render_pixels_before_starting_helpers() {
-        let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
+        let _guard = crate::kit::lock_process_env();
         let input = path("oversized-page.pdf");
         make_pdf(&input, 1);
         let mut document = Document::load(&input).unwrap();
@@ -514,7 +514,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn selected_ocr_page_cannot_process_an_excluded_page() {
-        let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
+        let _guard = crate::kit::lock_process_env();
         let input = path("selected-pages.pdf");
         let output_root = path("selected-pages-output");
         make_pdf(&input, 2);
@@ -559,7 +559,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn failed_selected_ocr_cleans_private_workspace_and_reserved_output() {
-        let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
+        let _guard = crate::kit::lock_process_env();
         let input = path("failed-selected-pages.pdf");
         let output_root = path("failed-selected-pages-output");
         make_pdf(&input, 2);
@@ -606,7 +606,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn ocr_workspace_is_private_and_removed_on_drop() {
-        let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
+        let _guard = crate::kit::lock_process_env();
         let workspace = super::OcrWorkspace::new().unwrap();
         let path = workspace.0.clone();
         use std::os::unix::fs::PermissionsExt;

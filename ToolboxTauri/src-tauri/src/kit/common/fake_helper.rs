@@ -51,7 +51,7 @@ impl FakeHelper {
         std::fs::write(
             &script,
             format!(
-                "#!/bin/sh\nrecord='{}'/call-$$\nprintf '%s\\n' \"$@\" > \"$record.args\"\nenv > \"$record.env\"\n{before_hand_off}{hand_off}\n",
+                "#!/bin/sh\nrecord=$(mktemp '{}'/call-XXXXXX)\nprintf '%s\\n' \"$@\" > \"$record.args\"\nenv > \"$record.env\"\n{before_hand_off}{hand_off}\n",
                 records.display()
             ),
         )

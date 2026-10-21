@@ -14,6 +14,13 @@ mod retired_tool_ids;
 #[cfg(test)]
 pub(crate) static PROCESS_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// Serializes tests that change process environment. A failed test must not fail every later one,
+/// so a poisoned lock is still handed out.
+#[cfg(test)]
+pub(crate) fn lock_process_env() -> std::sync::MutexGuard<'static, ()> {
+    PROCESS_ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 #[cfg(test)]
 pub(crate) const TEST_PASSWORD: &str = "toolbox-test-password";
 #[cfg(test)]

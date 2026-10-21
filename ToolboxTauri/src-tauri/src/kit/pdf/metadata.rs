@@ -170,7 +170,7 @@ mod tests {
 
     #[test]
     fn reads_page_dimensions_without_normalizing_mixed_sizes() {
-        let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
+        let _guard = crate::kit::lock_process_env();
         let path = std::env::temp_dir().join(format!("toolbox_metadata_{}.pdf", std::process::id()));
         let mut document = Document::with_version("1.7");
         let pages_id = document.new_object_id();

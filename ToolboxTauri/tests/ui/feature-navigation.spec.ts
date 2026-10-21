@@ -924,6 +924,7 @@ test("search shortcut stays in one inline keycap", async ({ page }) => {
 
 test("desktop scrolling stays inside the command pane", async ({ page }) => {
     await page.goto("/");
+    await expect(page.locator(".command-center")).toBeVisible();
     const layout = await page.evaluate(() => ({
         documentOverflow: getComputedStyle(document.documentElement).overflow,
         bodyOverflow: getComputedStyle(document.body).overflow,

@@ -415,6 +415,8 @@ test('Export stays disabled until the document has an effective change', async (
 
 test('Cmd+O opens a PDF in the editor and Cmd+Enter exports only once there is a change', async ({ page }) => {
   const count = (command: string) => page.evaluate((command) => (window as any).calls.filter((c: any) => c.command === command).length, command);
+  // The hints and keys below are the macOS ones; pin the platform so the test means the same on Windows.
+  await page.addInitScript(() => Object.defineProperty(window.navigator, 'platform', { configurable: true, value: 'MacIntel' }));
   await page.goto('/');
   await openToolBySearch(page, "Edit PDF");
   await expect(page.locator('.pdf-editor-open-files')).toContainText('⌘O');
