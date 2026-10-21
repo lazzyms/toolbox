@@ -733,13 +733,148 @@ body {
   font-size: 13px;
   font-weight: 600;
 }
+.file-selection-selected {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.file-selection-actions {
+  display: inline-flex;
+  gap: 6px;
+  margin-left: auto;
+}
 .file-selection-clear {
   flex: 0 0 auto;
 }
+.file-selection-hint,
+.file-selection-status {
+  margin: 0 0 8px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.file-selection-status {
+  margin: 8px 0 0;
+}
+.file-selection-flagged {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.file-selection-flagged .workspace-note {
+  margin: 0;
+}
+.file-selection-rows,
+.intake-not-added-rows {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.file-selection-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  border-radius: 6px;
+}
+.file-selection-row[data-dragging="true"] {
+  opacity: .5;
+}
+.file-selection-row[data-drop-target="true"] {
+  box-shadow: inset 0 2px 0 var(--ring);
+}
+.file-selection-handle {
+  cursor: grab;
+  touch-action: none;
+}
+.file-selection-index {
+  min-width: 18px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
 .file-selection-item {
+  flex: 1 1 auto;
+  justify-content: flex-start;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.file-selection-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.file-selection-detail {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 400;
+  text-align: left;
+  text-overflow: ellipsis;
+}
+.file-selection-row[data-wont-run="true"] .file-selection-name {
+  color: var(--muted-foreground);
+}
+.file-selection-badge,
+.file-selection-move {
+  flex: 0 0 auto;
+}
+.file-selection-move {
+  display: inline-flex;
+  gap: 2px;
+}
+.file-selection[data-locked="true"] .file-selection-handle {
+  cursor: default;
+}
+.intake-not-added {
+  width: 100%;
+  margin-top: 8px;
+}
+.intake-not-added-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+.intake-not-added-rows li {
+  display: grid;
+  grid-template-columns: 16px minmax(0, max-content) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.intake-not-added-rows svg {
+  width: 14px;
+  height: 14px;
+  color: var(--muted-foreground);
+}
+.intake-not-added-name {
+  overflow: hidden;
+  color: var(--foreground);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.intake-not-added-message {
+  color: var(--muted-foreground);
+}
+.tool-scaffold-options {
+  display: contents;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
 }
 .result-list {
   display: grid;
@@ -780,6 +915,7 @@ body {
 .result-row:last-child {
   border-bottom: 0;
 }
+.file-selection-badge[data-tone="warning"] { color: var(--warning); }
 .result-row[data-tone="ok"] { --result-tone: var(--foreground); }
 .result-row[data-tone="warn"] { --result-tone: var(--warning); }
 .result-row[data-tone="skip"] { --result-tone: var(--muted-foreground); }
@@ -1008,20 +1144,8 @@ body {
   max-width: none;
   margin: 0;
 }
-.tool-scaffold-workspace .file-selection-header {
-  margin-bottom: 8px;
-}
-.tool-scaffold-workspace .file-selection-list-content {
-  display: flex;
-  gap: 7px;
-  overflow-x: auto;
-}
-.tool-scaffold-workspace .file-selection-item {
-  flex: 0 0 auto;
-  max-width: 260px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.tool-scaffold-workspace .workspace-source-content > .intake-not-added {
+  grid-column: 1 / -1;
 }
 .run-destination {
   display: grid;
@@ -1152,7 +1276,8 @@ body {
 .pdf-studio .workspace-source-content:has(.file-selection-list) .workspace-source-copy { display: none; }
 .pdf-studio .workspace-source-content .file-selection { grid-column: 1; grid-row: 1; }
 .pdf-studio .workspace-source-actions { grid-column: 2; grid-row: 1; }
-.pdf-studio .file-selection-header { display: none; }
+.pdf-studio .file-selection-header,
+.pdf-studio .file-selection-hint { display: none; }
 .pdf-studio .workspace-primary-action { width: 100%; }
 .pdf-studio .result-list:not(:empty) { padding: 16px; }
 .workspace-control-panel-content:has(.workspace-command-rail) {
