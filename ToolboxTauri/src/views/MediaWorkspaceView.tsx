@@ -67,20 +67,20 @@ export const MediaWorkspaceView = ({ utility }: { utility: ToolDefinition }) => 
       sessionKey="media-tools"
       utility={activeUtility}
       showFileOrdering={activeUtility.id !== "tiff-pages"}
-      onRun={(paths) => {
+      onRun={(paths, outputLocation) => {
         if (activeUtility.id === "icon-set") {
           return invoke<ToolResult>("generate_icon_set", {
-            request: { paths, preset: iconPreset, sizes: iconSizes, outputLocation: "alongsideInput" },
+            request: { paths, preset: iconPreset, sizes: iconSizes, outputLocation },
           });
         }
         if (activeUtility.id === "gif-create") {
           return invoke<ToolResult>("create_gif", {
-            request: { paths, frameDelayMs: delay, loopForever: loop, outputLocation: "alongsideInput" },
+            request: { paths, frameDelayMs: delay, loopForever: loop, outputLocation },
           });
         }
         if (activeUtility.id === "gif-extract") {
           return invoke<ToolResult>("extract_gif_frames", {
-            request: { paths, outputLocation: "alongsideInput" },
+            request: { paths, outputLocation },
           });
         }
         if (activeUtility.id === "tiff-pages") {
@@ -90,16 +90,16 @@ export const MediaWorkspaceView = ({ utility }: { utility: ToolDefinition }) => 
               pages: isCurrentTiffInspection(tiffInspection, paths)
                 ? tiffInspection.frames.map(({ path, page }) => ({ path, page }))
                 : [],
-              outputLocation: "alongsideInput",
+              outputLocation,
             },
           });
         }
         return invoke<ToolResult>("image_metadata", {
-          request: { paths, outputLocation: "alongsideInput" },
+          request: { paths, outputLocation },
         });
       }}
     >
-      {({ files, run, loading, selectedFileIndex, selectFile }) => (
+      {({ files, outputLocation, run, loading, selectedFileIndex, selectFile }) => (
         <Card className="workspace-control-panel py-0">
           <CardContent className="workspace-control-panel-content grid gap-4 p-4">
           <WorkspaceCommandRail
@@ -199,7 +199,7 @@ export const MediaWorkspaceView = ({ utility }: { utility: ToolDefinition }) => 
                 variant="ghost"
                 size="sm"
                 disabled={loading || files.length === 0}
-                onClick={async () => setReport(await invoke<unknown[]>("inspect_image_metadata", { request: { paths: files, outputLocation: "alongsideInput" } }))}
+                onClick={async () => setReport(await invoke<unknown[]>("inspect_image_metadata", { request: { paths: files, outputLocation } }))}
               >
                 Inspect metadata
               </Button>

@@ -3,7 +3,8 @@ import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { open } from '@tauri-apps/plugin-dialog';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
-import type { ToolDefinition, JobOutcome, Progress } from '../contracts';
+import type { ToolDefinition, JobOutcome, OutputLocation, Progress } from '../contracts';
+import { useOutputLocation } from '../outputLocation';
 import { ResultList } from './ResultList';
 import { TablerIcon } from './TablerIcon';
 
@@ -11,14 +12,15 @@ export type WorkspaceSourceAction = () => void | Promise<void>;
 
 interface ToolScaffoldProps {
     utility: ToolDefinition;
-    onRun: (files: string[]) => Promise<JobOutcome[]>;
-    onRunCombined?: (files: string[]) => Promise<JobOutcome[]>;
+    onRun: (files: string[], outputLocation: OutputLocation) => Promise<JobOutcome[]>;
+    onRunCombined?: (files: string[], outputLocation: OutputLocation) => Promise<JobOutcome[]>;
     variant?: 'standard' | 'workspace';
     sessionKey?: string;
     onWorkspaceSourceAction?: (action: WorkspaceSourceAction | null) => void;
     showFileOrdering?: boolean;
     children: (props: {
         files: string[];
+        outputLocation: OutputLocation;
         run: () => Promise<void>;
         runCombined: () => Promise<void>;
         loading: boolean;
@@ -34,6 +36,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
     const [results, setResults] = useState<JobOutcome[]>([]);
     const [loading, setLoading] = useState(false);
     const [selectedFileIndex, setSelectedFileIndex] = useState(0);
+    const outputLocation = useOutputLocation();
     const runGeneration = useRef(0);
     const browseRef = useRef<WorkspaceSourceAction>(() => undefined);
     const inputPolicy = utility.capability;
@@ -81,7 +84,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         failure: { kind, message },
     });
 
-    const runWith = async (handler: (files: string[]) => Promise<JobOutcome[]>) => {
+    const runWith = async (handler: (files: string[], outputLocation: OutputLocation) => Promise<JobOutcome[]>) => {
         const generation = ++runGeneration.current;
         setLoading(true);
         setResults([]);
@@ -105,7 +108,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 return true;
             });
             const orderedSelectionRejected = inputPolicy.inputCardinality === 'ordered' && invalidPaths.size > 0;
-            const processed = orderedSelectionRejected || validPaths.length === 0 ? [] : await handler(validPaths);
+            const processed = orderedSelectionRejected || validPaths.length === 0 ? [] : await handler(validPaths, outputLocation);
             const processedByPath = new Map(processed.map((result) => [result.inputPath, result]));
             const nextResults = orderedSelectionRejected
                 ? files.map((path) => invalidPaths.get(path) ?? failureFor(path, 'invalidInput', 'Every selected input must use a supported format for this ordered action.'))
@@ -295,6 +298,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
 
             {children({
                 files,
+                outputLocation,
                 run,
                 runCombined,
                 loading,

@@ -37,13 +37,13 @@ export const SecurityWorkspaceView = ({ utility }: { utility: ToolDefinition }) 
       variant="workspace"
       sessionKey="file-security"
       utility={activeUtility}
-      onRun={(paths) =>
+      onRun={(paths, outputLocation) =>
         isPdfProtection
           ? invoke<ToolResult>("protect_pdf", {
               request: {
                 paths,
                 password,
-                outputLocation: "alongsideInput",
+                outputLocation,
               } satisfies PDFRequest,
             })
           : isOfficeProtection
@@ -51,14 +51,14 @@ export const SecurityWorkspaceView = ({ utility }: { utility: ToolDefinition }) 
                 request: {
                   paths,
                   password,
-                  outputLocation: "alongsideInput",
+                  outputLocation,
                 } satisfies PasswordRequest,
               })
           : invoke<ToolResult>("remove_password", {
               request: {
                 paths,
                 password,
-                outputLocation: "alongsideInput",
+                outputLocation,
               } satisfies PasswordRequest,
             })
       }

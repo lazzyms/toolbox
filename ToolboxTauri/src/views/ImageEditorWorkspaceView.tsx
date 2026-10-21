@@ -8,12 +8,14 @@ import type {
   CompressImagesRequest,
   ConvertImagesRequest,
   ImagePreview,
+  OutputLocation,
   ToolDefinition,
   ToolResult,
 } from "../contracts";
 import {
   commitImageEdit,
   createImageEditHistory,
+  imageEditRequestPlan,
   planWithDraft,
   redoImageEdit,
   resolveImageCropRect,
@@ -159,41 +161,41 @@ export const ImageEditorWorkspaceView = ({ utility }: { utility: ToolDefinition 
       variant="workspace"
       sessionKey="image-editor"
       utility={activeUtility}
-      onRun={(paths) => {
+      onRun={(paths, outputLocation) => {
         if (activeUtility.id === "heic-convert") {
           return invoke<ToolResult>("convert_images", {
-            request: { paths, format, outputLocation: "alongsideInput" } satisfies ConvertImagesRequest,
+            request: { paths, format, outputLocation } satisfies ConvertImagesRequest,
           });
         }
         if (activeUtility.id === "compress") {
           return invoke<ToolResult>("compress_images", {
-            request: { paths, quality, lossless, outputLocation: "alongsideInput" } satisfies CompressImagesRequest,
+            request: { paths, quality, lossless, outputLocation } satisfies CompressImagesRequest,
           });
         }
         if (activeUtility.id === "resize") {
           return invoke<ToolResult>("resize_images", {
-            request: { paths, width, height, mode: resizeMode, percentage, longestSide: width, resampling, keepAspectRatio: keepRatio, outputLocation: "alongsideInput" },
+            request: { paths, width, height, mode: resizeMode, percentage, longestSide: width, resampling, keepAspectRatio: keepRatio, outputLocation },
           });
         }
         if (activeUtility.id === "rotate") {
-          return invoke<ToolResult>("rotate_images", { request: { paths, degrees, flip, outputLocation: "alongsideInput" } });
+          return invoke<ToolResult>("rotate_images", { request: { paths, degrees, flip, outputLocation } });
         }
         if (activeUtility.id === "crop") {
           return invoke<ToolResult>("crop_images", {
-            request: { paths, x: cropX, y: cropY, width, height, mode: cropMode, aspectWidth: width, aspectHeight: height, anchor, outputLocation: "alongsideInput" },
+            request: { paths, x: cropX, y: cropY, width, height, mode: cropMode, aspectWidth: width, aspectHeight: height, anchor, outputLocation },
           });
         }
         if (activeUtility.id === "image-watermark") {
           return invoke<ToolResult>("watermark_images", {
-            request: { paths, opacity: watermarkOpacity, text: watermarkText, x: cropX, y: cropY, outputLocation: "alongsideInput" },
+            request: { paths, opacity: watermarkOpacity, text: watermarkText, x: cropX, y: cropY, outputLocation },
           });
         }
         return invoke<ToolResult>("adjust_image_tone", {
-          request: { paths, brightness, contrast, saturation, exposure, outputLocation: "alongsideInput" },
+          request: { paths, brightness, contrast, saturation, exposure, outputLocation },
         });
       }}
-      onRunCombined={(paths) => invoke<ToolResult>("export_image_edit_plan", {
-        request: { paths, plan: editPlan },
+      onRunCombined={(paths, outputLocation) => invoke<ToolResult>("export_image_edit_plan", {
+        request: { paths, plan: imageEditRequestPlan(editPlan, outputLocation) },
       })}
     >
       {(props) => <ImageEditorControls {...props} utility={activeUtility} activeToolId={activeToolId} onSelectTool={setActiveToolId} {...{
@@ -267,6 +269,7 @@ export const ImageEditorWorkspaceView = ({ utility }: { utility: ToolDefinition 
 
 type ImageEditorControlsProps = {
   files: string[];
+  outputLocation: OutputLocation;
   runCombined: () => Promise<void>;
   loading: boolean;
   utility: ToolDefinition;
@@ -331,6 +334,7 @@ type ImagePreviewValidation =
 
 const ImageEditorControls = ({
   files,
+  outputLocation,
   runCombined,
   loading,
   utility,
@@ -458,7 +462,7 @@ const ImageEditorControls = ({
     setResultPreview(null);
     setPreviewValidation({ key: previewPlanKey, status: "pending" });
     void invoke<ImagePreview>("inspect_image_edit_preview", {
-      request: { path: inputPath, plan: nextPlan },
+      request: { path: inputPath, plan: imageEditRequestPlan(nextPlan, outputLocation) },
     })
       .then((value) => {
         if (!current) return;

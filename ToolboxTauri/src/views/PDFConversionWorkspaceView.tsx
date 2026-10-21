@@ -81,17 +81,17 @@ export const PDFConversionWorkspaceView = ({ utility }: { utility: ToolDefinitio
       variant="workspace"
       sessionKey="pdf-convert"
       utility={activeUtility}
-      onRun={(paths) => {
+      onRun={(paths, outputLocation) => {
         const pages = document ? selectedPages : undefined;
         const selectedPageRange = pages?.length ? formatPageRange(pages) : pageRange || null;
         if (activeUtility.id === "images-to-pdf") {
           return invoke<ToolResult>("images_to_pdf", {
-            request: { paths, outputLocation: "alongsideInput" },
+            request: { paths, outputLocation },
           });
         }
         if (activeUtility.id === "pdf-merge") {
           return invoke<ToolResult>("merge_pdfs", {
-            request: { paths, outputLocation: "alongsideInput" },
+            request: { paths, outputLocation },
           });
         }
         if (activeUtility.id === "pdf-split") {
@@ -102,7 +102,7 @@ export const PDFConversionWorkspaceView = ({ utility }: { utility: ToolDefinitio
               pageRanges: splitMode === "ranges" ? pageRange || null : null,
               splitMode,
               chunkSize: splitMode === "chunks" ? chunkSize : null,
-              outputLocation: "alongsideInput",
+              outputLocation,
             },
           });
         }
@@ -112,13 +112,13 @@ export const PDFConversionWorkspaceView = ({ utility }: { utility: ToolDefinitio
               paths,
               pages: selectedPages,
               pageRanges: pageRange || null,
-              outputLocation: "alongsideInput",
+              outputLocation,
             },
           });
         }
         if (activeUtility.id === "pdf-compress") {
           return invoke<ToolResult>("compress_pdf", {
-            request: { paths, quality, outputLocation: "alongsideInput" },
+            request: { paths, quality, outputLocation },
           });
         }
         if (activeUtility.id === "pdf-to-images") {
@@ -129,22 +129,22 @@ export const PDFConversionWorkspaceView = ({ utility }: { utility: ToolDefinitio
               format,
               pageRange: selectedPageRange,
               pages: pages ?? null,
-              outputLocation: "alongsideInput",
+              outputLocation,
             },
           });
         }
         if (activeUtility.id === "pdf-to-text") {
           return invoke<ToolResult>("pdf_to_text", {
-            request: { paths, pages: pages ?? null, outputLocation: "alongsideInput" },
+            request: { paths, pages: pages ?? null, outputLocation },
           });
         }
         if (activeUtility.id === "pdf-ocr") {
           return invoke<ToolResult>("ocr_pdf", {
-            request: { paths, pages: pages ?? null, outputLocation: "alongsideInput" },
+            request: { paths, pages: pages ?? null, outputLocation },
           });
         }
         return invoke<ToolResult>("extract_pdf_images", {
-          request: { paths, pages: pages ?? null, outputLocation: "alongsideInput" },
+          request: { paths, pages: pages ?? null, outputLocation },
         });
       }}
     >
