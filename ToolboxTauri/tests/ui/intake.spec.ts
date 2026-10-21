@@ -738,6 +738,104 @@ test("Lock flags legacy Office files as Won't run and sends only the files it ca
     expect((await requestFor(page, "protect_files")).map((request) => request.paths)).toEqual([["/local/deck.pptx"]]);
 });
 
+const fileDialogFilters = (page: Page) => page.evaluate(() => (window as unknown as IntakeWindow).__invocations
+    .filter(({ command, args }) => command === "plugin:dialog|open" && !(args as { options: { directory?: boolean } }).options.directory)
+    .map(({ args }) => (args as { options: { filters: Array<{ extensions: string[] }> } }).options.filters[0].extensions));
+
+test("the picker filter and the flagged files follow the mode, and flagged files never hold back Run", async ({ page }) => {
+    const notADocument = "Not a document. Lock and Unlock take PDF, Word, Excel and PowerPoint files.";
+    const banner = page.getByText("2 files can't be locked. Lock needs .docx, .xlsx or .pptx. They'd fail if you ran now.", { exact: true });
+    const header = page.locator(".file-selection-selected");
+    await open(page, "Lock & Unlock");
+    await page.evaluate(() => { (window as unknown as IntakeWindow).__dialogResult = ["/local/minutes.doc", "/local/deck.pptx"]; });
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await drop(page, ["/local/site-photo.jpg", "/local/ledger.xls", "/local/lease.pdf"]);
+    const notAdded = page.getByRole("region", { name: "Not added" });
+    await expect(notAdded.getByRole("listitem")).toHaveText([`site-photo.jpg${notADocument}`]);
+    await expect(rows(page)).toHaveText([/^minutes\.doc/, /^deck\.pptx/, /^ledger\.xls/, /^lease\.pdf/]);
+    await expect(rows(page).filter({ hasText: "Won't run" })).toHaveCount(0);
+    await expect(header).toHaveText("All 4 can be unlocked");
+    await expect(banner).toHaveCount(0);
+
+    await modes(page).getByRole("radio", { name: "Lock", exact: true }).click();
+    await expect(row(page, "minutes.doc")).toContainText("Won't run");
+    await expect(row(page, "minutes.doc")).toContainText("Lock needs .docx. Save it as .docx in Word, then add it again.");
+    await expect(row(page, "ledger.xls")).toContainText("Won't run");
+    await expect(row(page, "ledger.xls")).toContainText("Lock needs .xlsx. Save it as .xlsx in Excel, then add it again.");
+    for (const name of ["deck.pptx", "lease.pdf"]) await expect(row(page, name)).not.toContainText("Won't run");
+    await expect(header).toHaveText("2 won't run in Lock");
+    await expect(banner).toBeVisible();
+    await page.evaluate(() => { (window as unknown as IntakeWindow).__dialogResult = ["/local/scan.png"]; });
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await expect(notAdded.getByRole("listitem")).toHaveText([`scan.png${notADocument}`]);
+    expect(await fileDialogFilters(page)).toEqual([
+        ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx"],
+        ["pdf", "docx", "xlsx", "pptx"],
+    ]);
+
+    await fillBatchLock(page, "batch-secret");
+    await expect(run(page)).toBeEnabled();
+    await expect(run(page)).toHaveAccessibleName("Lock 2 files");
+
+    await modes(page).getByRole("radio", { name: "Unlock", exact: true }).click();
+    await expect(rows(page).filter({ hasText: "Won't run" })).toHaveCount(0);
+    await expect(banner).toHaveCount(0);
+    await expect(run(page)).toHaveAccessibleName("Unlock 4 files");
+
+    await modes(page).getByRole("radio", { name: "Lock", exact: true }).click();
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    expect((await fileDialogFilters(page)).at(-1)).toEqual(["pdf", "docx", "xlsx", "pptx"]);
+    await page.getByRole("button", { name: "Remove 2 flagged files" }).click();
+    await expect(rows(page)).toHaveText([/^deck\.pptx/, /^lease\.pdf/]);
+    await expect(banner).toHaveCount(0);
+    await expect(header).toHaveText("All 2 can be locked");
+    await fillBatchLock(page, "batch-secret");
+    await run(page).click();
+
+    await expect(results(page)).toHaveCount(2);
+    expect((await requestFor(page, "protect_files")).map((request) => request.paths)).toEqual([["/local/deck.pptx", "/local/lease.pdf"]]);
+    expect(await requestFor(page, "remove_password")).toEqual([]);
+});
+
+test("Lock & Unlock shows the app-wide destination and sends a per-run folder in both modes without writing Settings", async ({ page }) => {
+    await page.addInitScript(() => {
+        (window as unknown as IntakeWindow).__outputSettings = { mode: "customFolder", folder: "/Users/test/Documents/Toolbox" };
+    });
+    await openLock(page);
+    const destination = page.getByRole("region", { name: "Destination" });
+    await expect(destination.getByTestId("run-destination-path")).toHaveText("~/Documents/Toolbox");
+    await expect(destination.getByText("This run only")).toHaveCount(0);
+    await drop(page, ["/local/lease.pdf", "/local/budget.xlsx"]);
+
+    await page.evaluate(() => { (window as unknown as IntakeWindow).__dialogResult = "/Users/test/Delivery/Acme"; });
+    await destination.getByRole("button", { name: "Change for this run" }).click();
+    await expect(destination.getByTestId("run-destination-path")).toHaveText("~/Delivery/Acme");
+    await expect(destination.getByText("This run only")).toBeVisible();
+    const folderDialog = await page.evaluate(() => (window as unknown as IntakeWindow).__invocations
+        .filter(({ command }) => command === "plugin:dialog|open").pop()?.args as { options: { directory: boolean; multiple: boolean } });
+    expect(folderDialog.options).toMatchObject({ directory: true, multiple: false });
+
+    await fillBatchLock(page, "batch-secret");
+    await run(page).click();
+    await expect(results(page)).toHaveCount(2);
+
+    await modes(page).getByRole("radio", { name: "Unlock", exact: true }).click();
+    await expect(destination.getByTestId("run-destination-path")).toHaveText("~/Delivery/Acme");
+    await page.getByLabel("Current password for all files", { exact: true }).fill("batch-secret");
+    await run(page).click();
+    await expect(results(page)).toHaveCount(2);
+
+    const perRun = { customFolder: "/Users/test/Delivery/Acme" };
+    expect((await requestFor(page, "protect_files")).map((request) => (request as { outputLocation?: unknown }).outputLocation)).toEqual([perRun]);
+    expect((await requestFor(page, "remove_password")).map((request) => (request as { outputLocation?: unknown }).outputLocation)).toEqual([perRun]);
+    const invocations = await page.evaluate(() => (window as unknown as IntakeWindow).__invocations.map(({ command }) => command));
+    expect(invocations).not.toContain("set_output_settings");
+    expect(await page.evaluate(() => (window as unknown as IntakeWindow).__outputSettings)).toEqual({ mode: "customFolder", folder: "/Users/test/Documents/Toolbox" });
+
+    await destination.getByRole("button", { name: "Reset to default" }).click();
+    await expect(destination.getByTestId("run-destination-path")).toHaveText("~/Documents/Toolbox");
+});
+
 test("Lock without its PDF helper shows the PDFs as Unavailable and the Word and Excel files as locked", async ({ page }) => {
     const missing = { kind: "unavailable", message: "This PDF tool is unavailable because a helper it needs is missing from this copy of Toolbox. Reinstall Toolbox to restore it." };
     await openLock(page);

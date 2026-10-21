@@ -14,6 +14,14 @@ export type IntakePolicy = {
     label: string;
     acceptedExtensions: string[];
     allowsRepeats: boolean;
+    notAcceptedMessage?: string;
+};
+
+export type IntakeCopy = {
+    notAccepted: string;
+    unsupported: (path: string) => string;
+    flaggedNotice: (count: number) => string;
+    countHint: (flagged: number, total: number) => string;
 };
 
 export type EntryStatus = {
@@ -62,7 +70,7 @@ export const intakePolicyFor = (label: string, tools: ToolDefinition[], active: 
 
 export const notAddedMessage = (reason: NotAddedReason, policy: IntakePolicy) => {
     switch (reason) {
-        case 'notAccepted': return `${policy.label} only takes ${extensionList(policy.acceptedExtensions)}.`;
+        case 'notAccepted': return policy.notAcceptedMessage ?? `${policy.label} only takes ${extensionList(policy.acceptedExtensions)}.`;
         case 'folder': return "Folders aren't added. Open the folder and drop the files inside it.";
         case 'duplicate': return 'Already in the list, so it was added once.';
         case 'unreadable': return "Couldn't open it. It may be in use by another app, or you don't have permission to read it. The other files are unaffected.";
@@ -88,14 +96,18 @@ export const classifyIntake = (existing: string[], incoming: InspectedPath[], po
     return { added, notAdded };
 };
 
-export const entryStatuses = (entries: IntakeEntry[], tool: ToolDefinition): EntryStatus[] => {
+export const entryStatuses = (
+    entries: IntakeEntry[],
+    tool: ToolDefinition,
+    unsupported = (_path: string) => `${tool.title} only takes ${extensionList(tool.capability.acceptedExtensions)}.`,
+): EntryStatus[] => {
     const seen = new Map<string, number>();
     const repeats = allowsRepeats(tool);
     return entries.map((entry) => {
         const occurrence = (seen.get(entry.path) ?? 0) + 1;
         seen.set(entry.path, occurrence);
         const wontRun = !accepts(tool.capability.acceptedExtensions, entry.path)
-            ? `${tool.title} only takes ${extensionList(tool.capability.acceptedExtensions)}.`
+            ? unsupported(entry.path)
             : occurrence > 1 && !repeats
                 ? `${tool.title} runs each file once.`
                 : null;

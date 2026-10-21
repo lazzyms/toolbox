@@ -4,6 +4,7 @@ import { ToolScaffold, type RunHandler } from "../components/ToolScaffold";
 import { BatchPasswordFields, FilePasswordCell, passwordReadiness, passwordRequest, usePasswordSet, type PasswordMode, type PasswordState } from "../components/PasswordFields";
 import type { PasswordSet, ToolCommand, ToolDefinition, ToolResult } from "../contracts";
 import { capabilityFor } from "../registry/capabilities";
+import { extensionOf, type IntakeCopy } from "../components/intake";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -24,6 +25,32 @@ const ForgetClosedFiles = ({ files, passwords }: { files: string[]; passwords: P
 };
 
 const fileCount = (count: number) => `${count} ${count === 1 ? "file" : "files"}`;
+
+const NOT_A_DOCUMENT = "Not a document. Lock and Unlock take PDF, Word, Excel and PowerPoint files.";
+
+const modernFormat: Record<string, { extension: string; app: string }> = {
+  ".doc": { extension: ".docx", app: "Word" },
+  ".xls": { extension: ".xlsx", app: "Excel" },
+  ".ppt": { extension: ".pptx", app: "PowerPoint" },
+};
+
+const intakeCopy: Record<PasswordMode, IntakeCopy> = {
+  lock: {
+    notAccepted: NOT_A_DOCUMENT,
+    unsupported: (path) => {
+      const modern = modernFormat[extensionOf(path)];
+      return modern ? `Lock needs ${modern.extension}. Save it as ${modern.extension} in ${modern.app}, then add it again.` : NOT_A_DOCUMENT;
+    },
+    flaggedNotice: (count) => `${fileCount(count)} can't be locked. Lock needs .docx, .xlsx or .pptx. ${count === 1 ? "It'd" : "They'd"} fail if you ran now.`,
+    countHint: (flagged, total) => flagged > 0 ? `${flagged} won't run in Lock` : total === 1 ? "It can be locked" : `All ${total} can be locked`,
+  },
+  unlock: {
+    notAccepted: NOT_A_DOCUMENT,
+    unsupported: () => NOT_A_DOCUMENT,
+    flaggedNotice: (count) => `${fileCount(count)} can't be unlocked. ${count === 1 ? "It'd" : "They'd"} fail if you ran now.`,
+    countHint: (flagged, total) => flagged > 0 ? `${flagged} won't run in Unlock` : total === 1 ? "It can be unlocked" : `All ${total} can be unlocked`,
+  },
+};
 
 export const SecurityWorkspaceView = ({ utility: activeUtility }: { utility: ToolDefinition }) => {
   const passwords = usePasswordSet();
@@ -47,6 +74,7 @@ export const SecurityWorkspaceView = ({ utility: activeUtility }: { utility: Too
       variant="workspace"
       sessionKey="file-security"
       utility={utility}
+      intakeCopy={intakeCopy[mode]}
       onRun={runWith(command, passwords.set)}
       retryWithPassword={(inputPath, password) => runWith(command, { batch: "", overrides: { [inputPath]: password } })}
       renderFileExtra={(path, selected, locked) => (
