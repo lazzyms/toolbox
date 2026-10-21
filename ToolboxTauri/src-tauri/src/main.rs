@@ -2096,12 +2096,16 @@ mod command_tests {
 
         let previous = std::env::var_os("TOOLBOX_QPDF_PATH");
         std::env::set_var("TOOLBOX_QPDF_PATH", &helper.script);
-        let outcomes = tauri::async_runtime::block_on(protect_files(RunEvents::silent(), PasswordRequest {
+        // One worker, as in the cancel test: on hosted macOS runners, parallel first runs of the
+        // freshly written fake script hung before it started. This test checks where passwords go,
+        // and the parallel batch is covered with the real helper elsewhere.
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
+        let outcomes = pool.install(|| tauri::async_runtime::block_on(protect_files(RunEvents::silent(), PasswordRequest {
             paths: inputs.clone(),
             password: TEST_PASSWORD.into(),
             password_overrides: overrides(&[(&inputs[1], TEST_OVERRIDE_PASSWORD)]),
             output_location: location(&root, "locked"),
-        }));
+        })));
         match previous {
             Some(value) => std::env::set_var("TOOLBOX_QPDF_PATH", value),
             None => std::env::remove_var("TOOLBOX_QPDF_PATH"),
