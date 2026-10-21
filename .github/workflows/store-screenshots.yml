@@ -87,9 +87,24 @@ jobs:
           Add-Type -AssemblyName System.Windows.Forms
           [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
 
+      # msedgedriver attaches through a WebView2 debugging port; the policy is scoped to toolbox.exe and removed afterwards.
       - name: Capture screenshots
+        shell: pwsh
         working-directory: ToolboxTauri
-        run: node scripts/capture-store-screenshots.mjs
+        run: |
+          $policyPath = 'HKLM:\Software\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments'
+          $policyExisted = Test-Path $policyPath
+          $exitCode = 1
+          try {
+            New-Item -Path $policyPath -Force | Out-Null
+            New-ItemProperty -Path $policyPath -Name 'toolbox.exe' -Value '--remote-debugging-port=0' -PropertyType String -Force | Out-Null
+            node scripts/capture-store-screenshots.mjs
+            $exitCode = $LASTEXITCODE
+          } finally {
+            Remove-ItemProperty -Path $policyPath -Name 'toolbox.exe' -ErrorAction SilentlyContinue
+            if (-not $policyExisted) { Remove-Item -Path $policyPath -ErrorAction SilentlyContinue }
+          }
+          exit $exitCode
 
       - name: Upload screenshots
         if: always()
