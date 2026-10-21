@@ -4,7 +4,7 @@ import { ToolScaffold } from "../components/ToolScaffold";
 import { WorkspaceCommandRail } from "../components/WorkspaceCommandRail";
 import { toolsForWorkspaceId, UtilityRegistry } from "../registry";
 import { parsePageRange, selectedPageLabel } from "../shared/workspaceValidation";
-import type { PdfDocument } from "../features/pdf-editor/contracts";
+import { displayedBoxToPdfRect, type DisplayedBox, type PdfDocument } from "../features/pdf-editor";
 import type { AtomicToolId, ToolDefinition, ToolResult } from "../contracts";
 import { useToolAvailability } from "../ToolAvailabilityContext";
 import { Badge } from "@/components/ui/badge";
@@ -18,7 +18,7 @@ import { Slider } from "@/components/ui/slider";
 
 const conversionActions = toolsForWorkspaceId("pdf-convert");
 const conversionIds = new Set<string>(conversionActions.map((tool) => tool.id));
-const nonInspectingConversionIds = new Set(["images-to-pdf", "pdf-merge", "pdf-split", "pdf-compress"]);
+const nonInspectingConversionIds = new Set(["images-to-pdf", "pdf-merge", "pdf-split", "pdf-compress", "pdf-repair", "pdf-compare"]);
 const outputPreviewLimitations: Partial<Record<AtomicToolId, string>> = {
   "images-to-pdf": "Output preview unavailable. Export combines the selected images into one PDF in file order.",
   "pdf-merge": "Output preview unavailable. Export merges the selected PDFs in file order.",
@@ -28,6 +28,10 @@ const outputPreviewLimitations: Partial<Record<AtomicToolId, string>> = {
   "pdf-extract-pages": "Output preview unavailable. Export creates a PDF containing the selected pages.",
   "pdf-compress": "Output preview unavailable. Export creates a compressed PDF copy while preserving page geometry.",
   "pdf-ocr": "Output preview unavailable. OCR is unavailable in this build.",
+  "pdf-rotate": "Output preview unavailable. Export saves a copy with the selected pages turned.",
+  "pdf-repair": "Output preview unavailable. Export rebuilds each PDF and saves a fixed copy next to it.",
+  "pdf-redact": "Output preview unavailable. Export saves a copy with the boxed area removed for good. Redacted pages become images.",
+  "pdf-compare": "Output preview unavailable. Export creates a text file listing every line that changed, page by page.",
 };
 type PdfInspectionState =
   | { kind: "idle" }
@@ -72,6 +76,8 @@ export const PDFConversionWorkspaceView = ({ utility, initialPaths = [] }: { uti
   const [splitMode, setSplitMode] = useState<"pages" | "ranges" | "chunks">("pages");
   const [chunkSize, setChunkSize] = useState(2);
   const [quality, setQuality] = useState(80);
+  const [degrees, setDegrees] = useState(90);
+  const [redactBox, setRedactBox] = useState<DisplayedBox | null>(null);
   const [document, setDocument] = useState<PdfDocument | null>(null);
   const [selectedPages, setSelectedPages] = useState<number[]>([]);
   const [inspectError, setInspectError] = useState("");
@@ -132,6 +138,37 @@ export const PDFConversionWorkspaceView = ({ utility, initialPaths = [] }: { uti
             request: { paths, quality, outputLocation: "alongsideInput" },
           });
         }
+        if (activeUtility.id === "pdf-rotate") {
+          const somePages = document && selectedPages.length < document.pages.length;
+          return invoke<ToolResult>("rotate_pdf", {
+            request: { paths, degrees, pages: somePages ? selectedPages : null, outputLocation: "alongsideInput" },
+          });
+        }
+        if (activeUtility.id === "pdf-repair") {
+          return invoke<ToolResult>("repair_pdf", {
+            request: { paths, outputLocation: "alongsideInput" },
+          });
+        }
+        if (activeUtility.id === "pdf-compare") {
+          return invoke<ToolResult>("compare_pdfs", {
+            request: { paths, outputLocation: "alongsideInput" },
+          });
+        }
+        if (activeUtility.id === "pdf-redact") {
+          const drawnOn = document?.pages[selectedPages[0] ?? 0];
+          if (!redactBox || !drawnOn) {
+            return Promise.resolve([{ inputPath: paths[0] ?? "", outputPaths: [], detail: "", failure: { kind: "invalidInput", message: "Draw a box over what you want to hide first." } }]);
+          }
+          const allPages = selectedPages.length === document.pages.length;
+          return invoke<ToolResult>("redact_pdf", {
+            request: {
+              paths,
+              rectangle: displayedBoxToPdfRect(redactBox, drawnOn),
+              scope: allPages ? "all" : { selected: { pages: selectedPages } },
+              outputLocation: "alongsideInput",
+            },
+          });
+        }
         if (activeUtility.id === "pdf-to-images") {
           return invoke<ToolResult>("pdf_to_images", {
             request: {
@@ -159,7 +196,7 @@ export const PDFConversionWorkspaceView = ({ utility, initialPaths = [] }: { uti
         });
       }}
     >
-      {({ files, run, loading }) => (
+      {({ files, run, loading, selectedFileIndex, moveSelectedFile }) => (
         <ConversionControls
           actions={availableActions}
           activeUtility={activeUtility}
@@ -180,6 +217,11 @@ export const PDFConversionWorkspaceView = ({ utility, initialPaths = [] }: { uti
           setChunkSize={setChunkSize}
           quality={quality}
           setQuality={setQuality}
+          degrees={degrees}
+          setDegrees={setDegrees}
+          redactBox={redactBox}
+          setRedactBox={setRedactBox}
+          swapFiles={() => moveSelectedFile(selectedFileIndex === 0 ? 1 : -1)}
           document={document}
           setDocument={setDocument}
           selectedPages={selectedPages}
@@ -212,6 +254,11 @@ type ConversionControlsProps = {
   setChunkSize: (value: number) => void;
   quality: number;
   setQuality: (value: number) => void;
+  degrees: number;
+  setDegrees: (value: number) => void;
+  redactBox: DisplayedBox | null;
+  setRedactBox: (value: DisplayedBox | null) => void;
+  swapFiles: () => void;
   document: PdfDocument | null;
   setDocument: (value: PdfDocument | null) => void;
   selectedPages: number[];
@@ -240,6 +287,11 @@ const ConversionControls = ({
   setChunkSize,
   quality,
   setQuality,
+  degrees,
+  setDegrees,
+  redactBox,
+  setRedactBox,
+  swapFiles,
   document,
   setDocument,
   selectedPages,
@@ -269,6 +321,7 @@ const ConversionControls = ({
     setSelectedPages([]);
     setPageRange("");
     setInspectError("");
+    setRedactBox(null);
     if (!inputPath || inputPolicyIssue) {
       setInspection({ kind: "idle" });
       return;
@@ -284,7 +337,8 @@ const ConversionControls = ({
       .then((value) => {
         if (!current) return;
         setDocument(value);
-        setSelectedPages(value.pages.map((page) => page.index));
+        // Blacking out every page by accident is easy to miss, so redaction starts on the first page only.
+        setSelectedPages(activeUtility.id === "pdf-redact" ? value.pages.slice(0, 1).map((page) => page.index) : value.pages.map((page) => page.index));
         setPageRange("");
         setInspection({ kind: "ready", path: inputPath });
       })
@@ -296,7 +350,7 @@ const ConversionControls = ({
     return () => {
       current = false;
     };
-  }, [activeUtility.id, inputPath, inputPolicyIssue, setDocument, setInspectError, setPageRange, setSelectedPages]);
+  }, [activeUtility.id, inputPath, inputPolicyIssue, setDocument, setInspectError, setPageRange, setRedactBox, setSelectedPages]);
 
   const togglePage = (page: number) => {
     const nextPages = selectedPages.includes(page)
@@ -313,10 +367,12 @@ const ConversionControls = ({
   const selectionCount = inspectedDocument ? selectedPages.length : 0;
   const needsPageSelection = activeUtility.capability.supportsPageSelection;
   const needsMultipleInputs = activeUtility.id === "pdf-merge";
+  const compareIssue = activeUtility.id === "pdf-compare" && files.length !== 2;
+  const redactPage = activeUtility.id === "pdf-redact" ? inspectedDocument?.pages[selectedPages[0] ?? -1] : undefined;
   const rangeSelectionIssue = activeUtility.id === "pdf-split" && splitMode === "ranges" && !pageRange.trim()
     ? "Enter at least one page range to split by ranges."
     : null;
-  const canExport = files.length > 0 && activeUtility.capability.nativeAvailability === "available" && (!needsMultipleInputs || files.length > 1) && rangeSelectionIssue === null
+  const canExport = files.length > 0 && activeUtility.capability.nativeAvailability === "available" && (!needsMultipleInputs || files.length > 1) && rangeSelectionIssue === null && !compareIssue
     && (nonInspectingConversionIds.has(activeUtility.id) || inspectionReady);
   const outputPreviewLimitation = activeUtility.id === "pdf-to-images"
     ? pdfToImagesOutputSummary(selectedPages, dpi, format)
@@ -462,6 +518,33 @@ const ConversionControls = ({
           <Input id="extract-pages-range" aria-label="Page numbers or ranges" value={pageRange} onChange={(event) => { const value = event.target.value; setPageRange(value); if (!inspectedDocument) return; const parsed = parsePageRange(value, inspectedDocument.pages.length); setSelectedPages(Array.isArray(parsed) ? parsed : []); }} placeholder="1-3, 7" />
         </div>
       )}
+      {activeUtility.id === "pdf-rotate" && (
+        <div className="workspace-field">
+          <Label htmlFor="rotate-direction">Direction</Label>
+          <NativeSelect id="rotate-direction" aria-label="Rotation direction" value={String(degrees)} onChange={(event) => setDegrees(Number(event.target.value))}>
+            <option value="90">Clockwise 90°</option>
+            <option value="270">Counterclockwise 90°</option>
+            <option value="180">180°</option>
+          </NativeSelect>
+        </div>
+      )}
+      {activeUtility.id === "pdf-repair" && (
+        <p className="workspace-note">Toolbox rebuilds each PDF and saves a fixed copy next to it.</p>
+      )}
+      {activeUtility.id === "pdf-compare" && (
+        files.length === 2 ? (
+          <div className="grid gap-2" aria-live="polite">
+            <p className="workspace-note">Original: <strong>{fileName(files[0])}</strong></p>
+            <p className="workspace-note">New version: <strong>{fileName(files[1])}</strong></p>
+            <Button variant="outline" size="sm" className="justify-self-start" onClick={swapFiles}>Swap original and new version</Button>
+          </div>
+        ) : (
+          <p className="workspace-note" role="status">Choose exactly two PDFs: the original and the new version.</p>
+        )
+      )}
+      {activeUtility.id === "pdf-redact" && redactPage?.preview && (
+        <RedactionArea page={redactPage.index} preview={redactPage.preview} aspectRatio={redactPage.width / redactPage.height} box={redactBox} onChange={setRedactBox} />
+      )}
       {activeUtility.id === "pdf-compress" && (
         <div className="workspace-field slider-field">
           <div className="slider-label-row">
@@ -473,7 +556,7 @@ const ConversionControls = ({
       )}
       <Button
         variant="default"
-        disabled={loading || !canExport || (needsPageSelection && (!inspectedDocument || selectionCount === 0 || selectionIssue !== null))}
+        disabled={loading || !canExport || (needsPageSelection && (!inspectedDocument || selectionCount === 0 || selectionIssue !== null)) || (activeUtility.id === "pdf-redact" && !redactBox)}
         onClick={run}
         className="workspace-primary-action"
         aria-label={`Export ${activeUtility.title}`}
@@ -482,5 +565,50 @@ const ConversionControls = ({
       </Button>
       </CardContent>
     </Card>
+  );
+};
+
+const fileName = (path: string) => path.split(/[\\/]/).pop() ?? path;
+
+const clampFraction = (value: number) => Math.min(Math.max(value, 0), 1);
+
+const RedactionArea = ({ page, preview, aspectRatio, box, onChange }: { page: number; preview: string; aspectRatio: number; box: DisplayedBox | null; onChange: (box: DisplayedBox | null) => void }) => {
+  const [start, setStart] = useState<{ x: number; y: number } | null>(null);
+  const fractionAt = (event: React.PointerEvent<HTMLDivElement>) => {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    return { x: clampFraction((event.clientX - bounds.left) / bounds.width), y: clampFraction((event.clientY - bounds.top) / bounds.height) };
+  };
+  const boxFrom = (from: { x: number; y: number }, to: { x: number; y: number }): DisplayedBox => ({
+    left: Math.min(from.x, to.x), top: Math.min(from.y, to.y), right: Math.max(from.x, to.x), bottom: Math.max(from.y, to.y),
+  });
+  return (
+    <div className="grid gap-2">
+      <p className="workspace-note">Drag over the details you want to hide on page {page + 1}. The same area is removed on every checked page.</p>
+      <div
+        role="region"
+        aria-label="Redaction area"
+        className="relative cursor-crosshair touch-none select-none border"
+        style={{ aspectRatio }}
+        onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); const point = fractionAt(event); setStart(point); onChange(null); }}
+        onPointerMove={(event) => { if (start) onChange(boxFrom(start, fractionAt(event))); }}
+        onPointerUp={(event) => {
+          if (!start) return;
+          const next = boxFrom(start, fractionAt(event));
+          setStart(null);
+          onChange(next.right - next.left > 0.005 && next.bottom - next.top > 0.005 ? next : null);
+        }}
+        onPointerCancel={() => { setStart(null); onChange(null); }}
+      >
+        <img src={preview} alt={`Page ${page + 1} to redact`} draggable={false} className="block size-full" />
+        {box && (
+          <div
+            aria-label="Redaction box"
+            className="absolute bg-black/80"
+            style={{ left: `${box.left * 100}%`, top: `${box.top * 100}%`, width: `${(box.right - box.left) * 100}%`, height: `${(box.bottom - box.top) * 100}%` }}
+          />
+        )}
+      </div>
+      {box && <Button variant="outline" size="sm" className="justify-self-start" onClick={() => onChange(null)}>Clear box</Button>}
+    </div>
   );
 };

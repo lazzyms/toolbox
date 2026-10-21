@@ -177,6 +177,27 @@ async fn watermark_pdf(request: remaining::PageOverlayRequest) -> Vec<JobOutcome
 }
 
 #[tauri::command]
+async fn rotate_pdf(request: remaining::RotatePdfRequest) -> Vec<JobOutcome> {
+    BatchRunner::run("rotate_pdf", request.paths.clone(), |path| remaining::rotate(&request, path))
+}
+
+#[tauri::command]
+async fn repair_pdf(request: remaining::PdfToTextRequest) -> Vec<JobOutcome> {
+    BatchRunner::run("repair_pdf", request.paths.clone(), |path| remaining::repair(&request, path))
+}
+
+#[tauri::command]
+async fn redact_pdf(request: editor::RedactPdfRequest) -> Vec<JobOutcome> {
+    BatchRunner::run("redact_pdf", request.paths.clone(), |path| editor::redact(&request, path))
+}
+
+#[tauri::command]
+async fn compare_pdfs(request: remaining::PdfToTextRequest) -> Vec<JobOutcome> {
+    if let Err(outcomes) = validate_command_inputs("compare_pdfs", &request.paths) { return outcomes; }
+    aggregate_outcomes(&request.paths, || remaining::compare(&request))
+}
+
+#[tauri::command]
 async fn compress_pdf(request: remaining::CompressPdfRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_command_inputs("compress_pdf", &request.paths) { return outcomes; }
     BatchRunner::run("compress_pdf", request.paths.clone(), |path| remaining::compress(&request, path))
@@ -344,6 +365,10 @@ fn main() {
             ,add_page_numbers,
             watermark_pdf,
             compress_pdf,
+            rotate_pdf,
+            repair_pdf,
+            redact_pdf,
+            compare_pdfs,
             remove_pdf_pages,
             extract_pdf_pages
             ,merge_pdfs,
@@ -412,8 +437,8 @@ mod command_tests {
     use crate::kit::common::OutputLocation;
     use crate::kit::images::tools::{CropRequest, GifCreateRequest, GifExtractRequest, ImageEdit, ImageEditExportRequest, ImageEditPlan, ImageEditPreviewRequest, IconSetRequest, MetadataRequest, ResizeRequest, RotateRequest, TiffRequest, ToneRequest, WatermarkRequest};
     use crate::kit::office::test_minimal_ooxml_package;
-    use crate::kit::pdf::editor::{AddPdfPagesRequest, CropPdfRequest, EditPdfRequest, OrganizePdfRequest, PageScope, PdfEditMode, PdfEditOperation, PdfEditSessionPlan, PdfEditSessionRequest, PdfOverlay, PdfOverlayPosition, PdfRect, RotatePage, SignPdfRequest};
-    use crate::kit::pdf::remaining::{CompressPdfRequest, ImagesToPdfRequest, MergePdfRequest, PageOverlayRequest, PageSelectionRequest, PdfToImagesRequest, PdfToTextRequest};
+    use crate::kit::pdf::editor::{AddPdfPagesRequest, CropPdfRequest, EditPdfRequest, OrganizePdfRequest, PageScope, PdfEditMode, PdfEditOperation, PdfEditSessionPlan, PdfEditSessionRequest, PdfOverlay, PdfOverlayPosition, PdfRect, RedactPdfRequest, RotatePage, SignPdfRequest};
+    use crate::kit::pdf::remaining::{CompressPdfRequest, ImagesToPdfRequest, MergePdfRequest, PageOverlayRequest, PageSelectionRequest, PdfToImagesRequest, PdfToTextRequest, RotatePdfRequest};
     use crate::kit::vision::VisionRequest;
     use base64::{engine::general_purpose::STANDARD, Engine};
     use image::Rgba;
@@ -778,6 +803,10 @@ mod command_tests {
         assert_eq!(added_document.get_pages().len(), 4, "add pages must insert the requested number of pages");
         outputs.extend(added);
         outputs.extend(assert_success("compress pdf", compress_pdf(CompressPdfRequest { paths: vec![pdf.clone()], quality: 80, output_location: location(&root, "compress pdf") })));
+        outputs.extend(assert_success("rotate pdf", rotate_pdf(RotatePdfRequest { paths: vec![pdf.clone()], degrees: 90, pages: Some(vec![1]), output_location: location(&root, "rotate pdf") })));
+        outputs.extend(assert_success("repair pdf", repair_pdf(PdfToTextRequest { pages: None, paths: vec![pdf.clone()], output_location: location(&root, "repair pdf") })));
+        outputs.extend(assert_success("redact pdf", redact_pdf(RedactPdfRequest { paths: vec![pdf.clone()], rectangle: PdfRect { x: 40.0, y: 650.0, width: 220.0, height: 60.0 }, scope: PageScope::All, output_location: location(&root, "redact pdf") })));
+        outputs.extend(assert_aggregate_success("compare pdfs", &[pdf.clone(), pdf_two.clone()], compare_pdfs(PdfToTextRequest { pages: None, paths: vec![pdf.clone(), pdf_two.clone()], output_location: location(&root, "compare pdfs") })));
         outputs.extend(assert_success("convert", convert_images(ConvertImagesRequest { paths: vec![image.clone()], format: "jpg".into(), output_location: location(&root, "convert") })));
         outputs.extend(assert_success("compress images", compress_images(CompressImagesRequest { paths: vec![image.clone()], quality: 80, lossless: false, output_location: location(&root, "compress images") })));
         outputs.extend(assert_success("resize", resize_images(ResizeRequest { paths: vec![image.clone()], width: 128, height: 128, mode: "exact".into(), resampling: "lanczos".into(), keep_aspect_ratio: true, percentage: 100, longest_side: 128, output_location: location(&root, "resize") })));

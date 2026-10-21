@@ -145,6 +145,16 @@ pub(crate) fn effective_crop_bounds(document: &Document, page_id: lopdf::ObjectI
     Ok(result)
 }
 
+/// A page's effective /Rotate, following inheritance from its page-tree parents.
+pub(crate) fn page_rotation(document: &Document, page_id: lopdf::ObjectId) -> i64 {
+    let mut node = document.get_dictionary(page_id).ok();
+    while let Some(dictionary) = node {
+        if let Ok(rotation) = dictionary.get(b"Rotate").and_then(Object::as_i64) { return rotation.rem_euclid(360); }
+        node = dictionary.get(b"Parent").and_then(Object::as_reference).ok().and_then(|parent| document.get_dictionary(parent).ok());
+    }
+    0
+}
+
 pub(crate) fn number(value: &Object) -> Result<f32, String> {
     match value {
         Object::Integer(value) => Ok(*value as f32),
