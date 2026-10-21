@@ -11,6 +11,7 @@ import { useOutputLocation } from '../outputLocation';
 import { failedOutcome, parseToolResult } from '../jobOutcome';
 import { toolsForWorkspace, workspaceForTool } from '../registry';
 import { shortenHomePath, useHomeDir } from '../homePath';
+import { CancelRun } from './CancelRun';
 import { ResultList } from './ResultList';
 import { BATCH_PROGRESS_EVENT, foldRunEvent, parseRunEvent, startRun, type LiveRun } from './liveRun';
 import { BlockedDestinationDialog, RunDestination, exampleOutputName, sameLocation, type BlockedDestination, type FolderCheck } from './RunDestination';
@@ -644,6 +645,8 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 runLabel: savesOneFile ? saveStep.runLabel : null,
             })}
             </fieldset>
+
+            {loading && live && !inputPolicy.manyToOne && <CancelRun key={live.runId} run={live} />}
 
             <ResultList
                 results={results}

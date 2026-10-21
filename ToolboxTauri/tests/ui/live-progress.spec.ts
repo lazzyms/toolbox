@@ -63,6 +63,7 @@ test.beforeEach(async ({ page }) => {
                 if (command === "inspect_intake_paths") return (args as { paths: string[] }).paths.map((path) => ({ path, kind: "file" }));
                 if (command === "get_output_settings") return { mode: "alongsideInput", folder: "/Users/test/Documents/Toolbox" };
                 if (command === "check_output_folder") return "ready";
+                if (command === "cancel_run") return true;
                 if (command === "plugin:path|resolve_directory") return "/Users/test";
                 if (command.startsWith("plugin:") || command === "open_output_path" || command === "reveal_output_path") return null;
                 if (command.startsWith("inspect_")) throw "No preview in this test.";
@@ -157,4 +158,51 @@ test("over 60 files the bar shows proportions with the board note", async ({ pag
         spans.map((span) => [span.getAttribute("data-tone"), (span as HTMLElement).style.flexGrow]));
     expect(grow).toEqual([["ok", "1"], ["skip", "0"], ["fail", "1"], ["wait", "59"]]);
     await expect(page.getByRole("list", { name: "Files and results" }).getByRole("listitem")).toHaveCount(61);
+});
+
+test("cancel asks first, sends the run id, and ends with cancelled rows and counts", async ({ page }) => {
+    const paths = ["/local/lease.pdf", "/local/survey.pdf", "/local/minutes.pdf", "/local/deed.pdf", "/local/notes.pdf"];
+    const { runId, emit } = await startProtecting(page, paths);
+    await emit({ index: 0, phase: "finished", outcome: succeeded(paths[0]) });
+    await emit({ index: 1, phase: "finished", outcome: succeeded(paths[1]) });
+    await emit({ index: 2, phase: "started" });
+
+    const controls = page.getByRole("group", { name: "Running batch" });
+    await expect(controls).toContainText("Options are locked until the batch finishes.");
+    await expect(controls).toContainText("2 of 5 done");
+    const cancelRequests = () => page.evaluate(() => (window as unknown as LiveWindow).__invocations.filter(({ command }) => command === "cancel_run").map(({ args }) => args));
+
+    const dialog = page.getByRole("alertdialog");
+    await page.keyboard.press("Escape");
+    await expect(dialog.getByRole("heading")).toHaveText("Cancel this batch?");
+    await expect(dialog).toContainText("The 2 finished files keep their outputs. The file in progress is stopped and leaves nothing half-written. The other 2 files won't be processed.");
+    await dialog.getByRole("button", { name: "Keep running" }).click();
+    await expect(dialog).toHaveCount(0);
+    expect(await cancelRequests()).toEqual([]);
+
+    await controls.getByRole("button", { name: "Cancel batch" }).click();
+    await dialog.getByRole("button", { name: "Cancel batch" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(cancelRequests).toEqual([{ runId }]);
+    await expect(controls.getByRole("button", { name: "Cancel batch" })).toBeDisabled();
+
+    const cancelledWhileRunning: Outcome = { ...failed(paths[2]), failure: { kind: "cancelled", message: "Cancelled while it was running. Nothing was saved.", pointer: null } };
+    const notStarted = (inputPath: string): Outcome => ({ ...failed(inputPath), state: "skipped", failure: null, reason: { code: "cancelled", message: "Cancelled before it started" } });
+    await page.evaluate((outcomes) => (window as unknown as LiveWindow).__finish(outcomes),
+        [succeeded(paths[0]), succeeded(paths[1]), cancelledWhileRunning, notStarted(paths[3]), notStarted(paths[4])]);
+
+    const summary = page.getByRole("status").filter({ hasText: /^Cancelled\./ });
+    await expect(summary.locator("strong")).toHaveText("Cancelled. 2 protected, 2 skipped as cancelled, 1 failed");
+    await expect(summary).toContainText("Finished files were kept. Nothing was half-written.");
+    await expect(page.getByRole("list", { name: "Results" }).getByRole("listitem")).toHaveText([
+        /^lease\.pdf.*Protected/,
+        /^survey\.pdf.*Protected/,
+        /^minutes\.pdf.*Cancelled while it was running\. Nothing was saved\..*Failed/,
+        /^deed\.pdf.*Cancelled before it started.*Skipped/,
+        /^notes\.pdf.*Cancelled before it started.*Skipped/,
+    ]);
+    await expect(controls).toHaveCount(0);
+    await expect(page.locator(".workspace-primary-action")).toBeEnabled();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
 });

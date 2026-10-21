@@ -28,6 +28,19 @@ pub struct Exposure {
 
 impl FakeHelper {
     pub fn install(directory: &Path, name: &str, delegate: Option<&Path>) -> Self {
+        Self::write(directory, name, delegate, "")
+    }
+
+    /// Like `install`, but a call whose arguments mention `marker` writes part of its last
+    /// argument, records its pid and then hangs until it is killed.
+    pub fn install_stalling_on(directory: &Path, name: &str, delegate: Option<&Path>, marker: &str) -> Self {
+        let stall = format!(
+            "case \"$*\" in *'{marker}'*) for last; do :; done; printf partial > \"$last\"; echo $$ > \"$record.pid.part\"; mv \"$record.pid.part\" \"$record.pid\"; exec sleep 30;; esac\n"
+        );
+        Self::write(directory, name, delegate, &stall)
+    }
+
+    fn write(directory: &Path, name: &str, delegate: Option<&Path>, before_hand_off: &str) -> Self {
         let records = directory.join(format!("{name}-calls"));
         std::fs::create_dir_all(&records).unwrap();
         let script = directory.join(name);
@@ -38,7 +51,7 @@ impl FakeHelper {
         std::fs::write(
             &script,
             format!(
-                "#!/bin/sh\nrecord='{}'/call-$$\nprintf '%s\\n' \"$@\" > \"$record.args\"\nenv > \"$record.env\"\n{hand_off}\n",
+                "#!/bin/sh\nrecord='{}'/call-$$\nprintf '%s\\n' \"$@\" > \"$record.args\"\nenv > \"$record.env\"\n{before_hand_off}{hand_off}\n",
                 records.display()
             ),
         )
@@ -47,6 +60,16 @@ impl FakeHelper {
         permissions.set_mode(0o755);
         std::fs::set_permissions(&script, permissions).unwrap();
         Self { script, records }
+    }
+
+    /// Pids of the calls that stalled, so a test can check they were terminated.
+    pub fn stalled_pids(&self) -> Vec<u32> {
+        std::fs::read_dir(&self.records)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|extension| extension == "pid"))
+            .map(|path| std::fs::read_to_string(path).unwrap().trim().parse().unwrap())
+            .collect()
     }
 
     pub fn invocations(&self) -> Vec<Invocation> {

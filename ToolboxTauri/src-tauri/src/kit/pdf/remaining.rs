@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::kit::common::limits::StoppableHelper;
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming, OutputReservation};
 use crate::kit::contracts::ToolError;
 use super::metadata::page_bounds;
@@ -99,7 +100,7 @@ pub fn merge(request: &MergePdfRequest) -> JobOutcome {
         Err(error) => return failure(first, format!("Could not reserve merged PDF output: {error}")),
     };
     let Some(qpdf) = qpdf() else { return failure(first, "qpdf is required to merge PDFs but was not found.".to_string()); };
-    let result = Command::new(qpdf).arg("--empty").arg("--pages").args(&request.paths).arg("--").arg(output.path()).output();
+    let result = Command::new(qpdf).arg("--empty").arg("--pages").args(&request.paths).arg("--").arg(output.path()).output_until_stopped();
     match result {
         Ok(result) if result.status.success() => match Document::load(output.path()) {
             Ok(document) if document.get_pages().len() == expected_pages => match output.publish() {
@@ -174,7 +175,7 @@ fn generate_split_outputs(request: &PageSelectionRequest, input: &Path, qpdf: &P
     if request.split_mode.as_deref() == Some("chunks") {
         let Some(size) = request.chunk_size.filter(|size| *size > 0) else { return Err("Chunk size must be greater than zero.".to_string()); };
         let output = workspace.path().join(format!("{stem}-split.pdf"));
-        let result = Command::new(qpdf).arg(input).arg(format!("--split-pages={size}")).arg(&output).output().map_err(|error| format!("Could not run qpdf: {error}"))?;
+        let result = Command::new(qpdf).arg(input).arg(format!("--split-pages={size}")).arg(&output).output_until_stopped().map_err(|error| format!("Could not run qpdf: {error}"))?;
         if !result.status.success() { return Err(stderr(result, "qpdf failed to split PDF chunks.")); }
         return collect_split_outputs(workspace.path(), "qpdf reported success but produced no chunk files.");
     }
@@ -184,7 +185,7 @@ fn generate_split_outputs(request: &PageSelectionRequest, input: &Path, qpdf: &P
         let mut outputs = Vec::with_capacity(ranges.len());
         for (number, (start, end)) in ranges.into_iter().enumerate() {
             let output = workspace.path().join(format!("{stem}-split-{number}.pdf"));
-            let result = Command::new(qpdf).arg(input).arg("--pages").arg(input).arg(format!("{start}-{end}")).arg("--").arg(&output).output().map_err(|error| format!("Could not run qpdf: {error}"))?;
+            let result = Command::new(qpdf).arg(input).arg("--pages").arg(input).arg(format!("{start}-{end}")).arg("--").arg(&output).output_until_stopped().map_err(|error| format!("Could not run qpdf: {error}"))?;
             if !result.status.success() { return Err(stderr(result, "qpdf failed to split the selected ranges.")); }
             if !output.is_file() { return Err("qpdf reported success but produced no range file.".to_string()); }
             outputs.push(output);
@@ -192,7 +193,7 @@ fn generate_split_outputs(request: &PageSelectionRequest, input: &Path, qpdf: &P
         return Ok(outputs);
     }
     let pattern = workspace.path().join(format!("{stem}-split-page-%d.pdf"));
-    let result = Command::new(qpdf).arg(input).arg("--split-pages").arg(&pattern).output().map_err(|error| format!("Could not run qpdf: {error}"))?;
+    let result = Command::new(qpdf).arg(input).arg("--split-pages").arg(&pattern).output_until_stopped().map_err(|error| format!("Could not run qpdf: {error}"))?;
     if !result.status.success() { return Err(stderr(result, "qpdf failed to split the PDF.")); }
     collect_split_outputs(workspace.path(), "qpdf reported success but produced no split files.")
 }
@@ -296,7 +297,7 @@ pub fn to_images(request: &PdfToImagesRequest, input: PathBuf) -> JobOutcome {
         let last = match last.trim().parse::<usize>() { Ok(page) if page >= first => page, _ => return failure(input, "Page range must be ascending and use positive page numbers.".to_string()) };
         command.arg("-f").arg(first.to_string()).arg("-l").arg(last.to_string());
     }
-    let output = command.arg(&input).arg(&prefix).output();
+    let output = command.arg(&input).arg(&prefix).output_until_stopped();
     match output {
         Ok(result) if result.status.success() => {
             let mut outputs = fs::read_dir(prefix.parent().unwrap_or_else(|| std::path::Path::new("."))).ok().into_iter().flatten().filter_map(Result::ok).map(|entry| entry.path()).filter(|path| path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with(prefix.file_name().and_then(|stem| stem.to_str()).unwrap_or("")) && path.extension().is_some_and(|ext| ext == extension))).collect::<Vec<_>>();
@@ -363,7 +364,7 @@ fn render_selected_pages(
             .arg("-singlefile")
             .arg(input)
             .arg(&page_prefix)
-            .output();
+            .output_until_stopped();
         match result {
             Ok(result) if result.status.success() && output.exists() => outputs.push(output),
             Ok(result) => return Err(stderr(result, "pdftoppm failed to render the selected PDF page.")),
@@ -523,7 +524,7 @@ fn image_as_jpeg(path: &PathBuf) -> Result<(Vec<u8>, u32, u32), String> {
     if matches!(extension.as_str(), "gif" | "tif" | "tiff") { return Err("Animated or multi-frame image inputs are not supported for image-to-PDF conversion.".to_string()); }
     let image = if matches!(extension.as_str(), "heic" | "heif") {
         let converted = std::env::temp_dir().join(format!("toolbox_heic_{}_{}.jpg", std::process::id(), path.file_name().and_then(|name| name.to_str()).unwrap_or("input")));
-        let result = Command::new("sips").arg("-s").arg("format").arg("jpeg").arg(path).arg("--out").arg(&converted).output()
+        let result = Command::new("sips").arg("-s").arg("format").arg("jpeg").arg(path).arg("--out").arg(&converted).output_until_stopped()
             .map_err(|error| format!("Could not run the HEIC decoder: {error}"))?;
         if !result.status.success() { return Err(stderr(result, "HEIC decoding is unavailable on this system.")); }
         let decoded = image::open(&converted).map_err(|error| format!("Could not decode HEIC image: {error}"));
@@ -565,7 +566,7 @@ pub fn compress(request: &CompressPdfRequest, input: PathBuf) -> JobOutcome {
     };
     let quality = request.quality.clamp(1, 100);
     let level = ((100_u16.saturating_sub(quality as u16) * 8) / 99 + 1).to_string();
-    let result = Command::new(qpdf).arg("--object-streams=generate").arg("--stream-data=compress").arg("--recompress-flate").arg(format!("--compression-level={level}")).arg(&input).arg(output.path()).output();
+    let result = Command::new(qpdf).arg("--object-streams=generate").arg("--stream-data=compress").arg("--recompress-flate").arg(format!("--compression-level={level}")).arg(&input).arg(output.path()).output_until_stopped();
     match result {
         Ok(result) if result.status.success() => match Document::load(output.path()) {
             Ok(verified) if verified.get_pages().len() == page_count => match output.publish() {

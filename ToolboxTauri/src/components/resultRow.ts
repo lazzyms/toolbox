@@ -39,6 +39,7 @@ const spokenKinds: Record<ErrorKind, string> = {
     limitExceeded: "Failed, over the limit",
     processing: "Failed while processing",
     wrongPassword: "Failed, wrong password",
+    cancelled: "Failed, cancelled while it was running",
 };
 
 export const wrongPasswordDetail = "The password didn't open this file. Check it, or try the password this file was sent with.";
@@ -127,15 +128,21 @@ export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput =
 
 export interface ResultSummary {
     headline: string;
-    warningHint: string | null;
+    hints: string[];
 }
+
+const skippedAsCancelled = (result: JobOutcome) => result.state === "skipped" && result.reason.code === "cancelled";
+
+const isCancelled = (result: JobOutcome) => skippedAsCancelled(result) || (result.state === "failed" && result.failure.kind === "cancelled");
 
 export const resultTally = (results: JobOutcome[], resultVerb: string): string => {
     const count = (state: JobOutcome["state"]) => results.filter((result) => result.state === state).length;
-    const skipped = count("skipped");
+    const cancelled = results.filter(skippedAsCancelled).length;
+    const skipped = count("skipped") - cancelled;
     const failed = count("failed");
     const parts = [`${count("succeeded")} ${resultVerb.toLowerCase()}`];
     if (skipped > 0) parts.push(`${skipped} skipped`);
+    if (cancelled > 0) parts.push(`${cancelled} skipped as cancelled`);
     if (failed > 0) parts.push(`${failed} failed`);
     return parts.join(", ");
 };
@@ -143,8 +150,13 @@ export const resultTally = (results: JobOutcome[], resultVerb: string): string =
 export const resultSummary = (results: JobOutcome[], resultVerb: string): ResultSummary => {
     const verb = resultVerb.toLowerCase();
     const warned = results.filter((result) => result.state === "succeeded" && result.warnings.length > 0).length;
+    const cancelled = results.some(isCancelled);
+    const hints = [
+        cancelled ? "Finished files were kept. Nothing was half-written." : null,
+        warned === 0 ? null : `${warned} ${verb} ${warned === 1 ? "file has a warning" : "files have warnings"}.`,
+    ];
     return {
-        headline: `Done. ${resultTally(results, resultVerb)}`,
-        warningHint: warned === 0 ? null : `${warned} ${verb} ${warned === 1 ? "file has a warning" : "files have warnings"}.`,
+        headline: `${cancelled ? "Cancelled" : "Done"}. ${resultTally(results, resultVerb)}`,
+        hints: hints.filter((hint): hint is string => hint !== null),
     };
 };

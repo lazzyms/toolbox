@@ -1,13 +1,13 @@
 use rayon::prelude::*;
-use crate::kit::common::limits::{self, ToolLimits};
+use crate::kit::common::limits::{self, CancelFlag, ToolLimits};
 use crate::kit::common::JobOutcome;
-use crate::kit::contracts::{partition_command_inputs, OutcomePointer, OutputLocation, ToolError};
+use crate::kit::contracts::{partition_command_inputs, OutcomePointer, OutputLocation, SkipCode, SkipReason, ToolError};
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
 pub struct BatchRunner;
 
@@ -18,15 +18,48 @@ pub enum FileEvent {
     Finished { index: usize, outcome: JobOutcome },
 }
 
-pub struct RunEvents(Option<Box<dyn Fn(FileEvent) + Send + Sync>>);
+/// A run's link to the view that started it. Progress goes out through the sink and a cancel comes back in by run id.
+pub struct RunEvents {
+    sink: Option<Box<dyn Fn(FileEvent) + Send + Sync>>,
+    cancel: CancelFlag,
+    run_id: Option<String>,
+}
+
+static RUNNING: LazyLock<Mutex<HashMap<String, CancelFlag>>> = LazyLock::new(Default::default);
+
+fn running() -> std::sync::MutexGuard<'static, HashMap<String, CancelFlag>> {
+    RUNNING.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Asks the run with this id to stop. False when no such run is in progress.
+pub fn cancel_run(run_id: &str) -> bool {
+    running().get(run_id).map(CancelFlag::cancel).is_some()
+}
+
+pub const CANCELLED_BEFORE_START: &str = "Cancelled before it started";
 
 impl RunEvents {
-    pub fn silent() -> Self { Self(None) }
-    pub fn new(sink: impl Fn(FileEvent) + Send + Sync + 'static) -> Self { Self(Some(Box::new(sink))) }
-    fn emit(&self, event: FileEvent) { if let Some(sink) = &self.0 { sink(event) } }
+    pub fn silent() -> Self { Self { sink: None, cancel: CancelFlag::default(), run_id: None } }
+    pub fn new(sink: impl Fn(FileEvent) + Send + Sync + 'static) -> Self {
+        Self { sink: Some(Box::new(sink)), cancel: CancelFlag::default(), run_id: None }
+    }
+    pub fn for_run(run_id: String, sink: impl Fn(FileEvent) + Send + Sync + 'static) -> Self {
+        let cancel = CancelFlag::default();
+        running().insert(run_id.clone(), cancel.clone());
+        Self { sink: Some(Box::new(sink)), cancel, run_id: Some(run_id) }
+    }
+    fn emit(&self, event: FileEvent) { if let Some(sink) = &self.sink { sink(event) } }
     fn settled(&self, index: usize, outcome: &JobOutcome) {
         self.emit(FileEvent::Started { index });
         self.emit(FileEvent::Finished { index, outcome: outcome.clone() });
+    }
+}
+
+impl Drop for RunEvents {
+    fn drop(&mut self) {
+        let Some(run_id) = &self.run_id else { return };
+        let mut running = running();
+        if running.get(run_id).is_some_and(|flag| flag.same_as(&self.cancel)) { running.remove(run_id); }
     }
 }
 
@@ -86,11 +119,16 @@ impl BatchRunner {
                 }
                 let job = Arc::new(job);
                 let processed = runnable.into_par_iter().map(|(index, path)| {
+                    if events.cancel.is_cancelled() {
+                        let outcome = JobOutcome::skipped(path, SkipReason::new(SkipCode::Cancelled, CANCELLED_BEFORE_START));
+                        events.settled(index, &outcome);
+                        return (index, outcome);
+                    }
                     events.emit(FileEvent::Started { index });
                     let outcome = match limits {
                         Some(limits) => {
                             let (job, request) = (Arc::clone(&job), Arc::clone(request));
-                            limits.run_each(path, move |path| job(&request, path))
+                            limits.run_each(path, &events.cancel, move |path| job(&request, path))
                         }
                         None => JobOutcome::failure(path, ToolError::processing(format!("No processing limits are recorded for {command}."))),
                     };
