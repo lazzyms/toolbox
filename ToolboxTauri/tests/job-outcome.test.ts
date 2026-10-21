@@ -13,9 +13,9 @@ test("native-shaped outcomes parse into the TypeScript contract for all three st
   const outcomes = parseToolResult(nativeSamples);
 
   assert.deepEqual(outcomes, nativeSamples);
-  assert.deepEqual(outcomes.map((outcome) => outcome.state), ["succeeded", "skipped", "skipped", "failed"]);
+  assert.deepEqual(outcomes.map((outcome) => outcome.state), ["succeeded", "skipped", "skipped", "failed", "failed"]);
 
-  const [succeeded, pointedSkip, plainSkip, failed] = outcomes;
+  const [succeeded, pointedSkip, plainSkip, failed, limited] = outcomes;
   assert.equal(succeeded.state === "succeeded" && succeeded.outputPaths[0], "signed-edited.pdf");
   assert.deepEqual(succeeded.warnings.map((warning) => warning.code), ["signatureRemoved", "fontSubstituted"]);
   assert.deepEqual(
@@ -33,6 +33,10 @@ test("native-shaped outcomes parse into the TypeScript contract for all three st
   assert.equal(failed.failure.kind, "unavailable");
   assert.deepEqual(failed.failure.pointer, { kind: "pack", packId: "script-pack" });
   assert.deepEqual(failed.outputPaths, ["scan-page-1.png"], "failure keeps already published outputs");
+
+  assert.ok(limited.state === "failed" && limited.failure.kind === "limitExceeded");
+  assert.equal(limited.failure.details.limit, "time");
+  assert.deepEqual(limited.outputPaths, ["drawings-page-1.png"], "a stopped run keeps the parts it saved");
 });
 
 test("outcomes from before the state field are rejected at the boundary", () => {
@@ -47,6 +51,8 @@ test("inconsistent native outcomes are rejected", () => {
   const unknownSkipCode = { ...sample(2), reason: { code: "bored", message: "No.", pointer: null } };
   const unknownToolPointer = { ...sample(1), reason: { ...(sample(1).reason as object), pointer: { kind: "tool", toolId: "retired-tool" } } };
   const fontWarningWithoutDetails = { ...sample(0), warnings: [{ code: "fontSubstituted", message: "Changed." }] };
+  const limitWithoutDetails = { ...sample(4), failure: { kind: "limitExceeded", message: "Too big.", pointer: null } };
+  const unknownLimit = { ...sample(4), failure: { kind: "limitExceeded", details: { limit: "patience" }, message: "Too big.", pointer: null } };
 
   for (const [name, value] of Object.entries({
     skippedWithOutputs,
@@ -55,6 +61,8 @@ test("inconsistent native outcomes are rejected", () => {
     unknownSkipCode,
     unknownToolPointer,
     fontWarningWithoutDetails,
+    limitWithoutDetails,
+    unknownLimit,
   })) {
     assert.throws(() => parseJobOutcome(value), /Invalid job outcome/, name);
   }

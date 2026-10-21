@@ -57,5 +57,19 @@
         "message": "Saved as scan-page-1 2.png so the existing file was not replaced."
       }
     ]
+  },
+  {
+    "inputPath": "drawings.pdf",
+    "state": "failed",
+    "outputPaths": ["drawings-page-1.png"],
+    "detail": "",
+    "failure": {
+      "kind": "limitExceeded",
+      "details": { "limit": "time" },
+      "message": "Took longer than 5 minutes and was stopped. 1 part was saved before it stopped.",
+      "pointer": null
+    },
+    "reason": null,
+    "warnings": []
   }
 ]

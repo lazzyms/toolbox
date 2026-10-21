@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import path from "node:path";
-import type { JobOutcome, OutputSettings } from "../../src/contracts";
+import type { JobOutcome, LimitKind, OutputSettings } from "../../src/contracts";
 import { ToolWorkspaceRegistry, UtilityRegistry, workspaceForTool } from "../../src/registry";
 import { RetiredToolIds } from "../../src/registry/retiredToolIds";
 
@@ -1218,12 +1218,23 @@ const succeeded = (inputPath: string, outputPaths: string[], extra: Partial<Extr
     ...extra,
 });
 
-const failed = (inputPath: string, kind: "invalidInput" | "unavailable" | "limitExceeded" | "processing", message: string, extra: Partial<Extract<MockOutcome, { state: "failed" }>> = {}): MockOutcome => ({
+const failed = (inputPath: string, kind: "invalidInput" | "unavailable" | "processing", message: string, extra: Partial<Extract<MockOutcome, { state: "failed" }>> = {}): MockOutcome => ({
     inputPath,
     outputPaths: [],
     detail: "",
     state: "failed",
     failure: { kind, message, pointer: null },
+    reason: null,
+    warnings: [],
+    ...extra,
+});
+
+const overLimit = (inputPath: string, limit: LimitKind, message: string, extra: Partial<Extract<MockOutcome, { state: "failed" }>> = {}): MockOutcome => ({
+    inputPath,
+    outputPaths: [],
+    detail: "",
+    state: "failed",
+    failure: { kind: "limitExceeded", details: { limit }, message, pointer: null },
     reason: null,
     warnings: [],
     ...extra,
@@ -1257,7 +1268,7 @@ test("every output exposes native file actions and keeps action errors inline", 
         succeeded(fixturePath, [mockedOutputPaths[0]], { detail: "Test output" }),
         succeeded("/local/annual-report.pdf", splitOutputs),
         succeeded("/local/brochure.pdf", [folderOutput]),
-        failed("/local/drawings.pdf", "processing", "Took longer than 5 minutes and was stopped.", { outputPaths: [partialOutput] }),
+        overLimit("/local/drawings.pdf", "time", "Took longer than 5 minutes and was stopped. 1 part was saved before it stopped.", { outputPaths: [partialOutput] }),
     ]);
     await page.evaluate((partialOutput) => {
         (window as TestWindow).__toolboxActionFailure = {
@@ -1387,13 +1398,13 @@ test("a read-only output folder failure points to the output location setting in
     await expect(rows.nth(0)).toContainText("The output folder is read-only. Nothing was saved.");
 });
 
-test("Retry is offered only after processing failures and re-runs only that file with the same options", async ({ page }) => {
+test("Retry is offered only after processing failures and time limits and re-runs only that file with the same options", async ({ page }) => {
     const timedOut = "/local/drawings-full-set.pdf";
     const rows = await runCompressImagesWith(page, [
         succeeded(fixturePath, [mockedOutputPaths[0]]),
-        failed(timedOut, "processing", "Took longer than 5 minutes and was stopped. Nothing was saved."),
+        overLimit(timedOut, "time", "Took longer than 5 minutes and was stopped. Nothing was saved."),
         failed("/local/scan.pdf", "invalidInput", "Wrong password or unsupported encryption."),
-        failed("/local/site-photos.zip", "limitExceeded", "Larger than the 4 GB limit for one archive."),
+        overLimit("/local/site-plan.png", "fileSize", "Larger than the 250 MB limit for one image. Reduce its size and try again."),
         failed("/local/temple-scan.png", "unavailable", "Needs the script pack."),
     ]);
 
@@ -1430,6 +1441,36 @@ test("Retry is offered only after processing failures and re-runs only that file
     expect(first.paths).toEqual([fixturePath]);
     expect(retry.paths).toEqual([timedOut]);
     expect(retry.plan).toEqual(first.plan);
+});
+
+test("files over a limit fail alone with the limit message while the other rows render normally", async ({ page }) => {
+    const limits: Array<[string, LimitKind, string]> = [
+        ["/local/site-plan.png", "fileSize", "Larger than the 250 MB limit for one image. Reduce its size and try again."],
+        ["/local/poster.png", "decompression", "This image expands to more than 500 MB when opened, which is over the limit. It may be damaged or unsafe to open."],
+        ["/local/animation.gif", "pageCount", "More than 1,000 frames, over the limit for one GIF. Use fewer frames and try again."],
+    ];
+    const rows = await runCompressImagesWith(page, [
+        succeeded(fixturePath, [mockedOutputPaths[0]], { detail: "Test output" }),
+        ...limits.map(([path, limit, message]) => overLimit(path, limit, message)),
+        failed("/local/broken.png", "processing", "The image could not be read."),
+    ]);
+
+    await expect(rows).toHaveCount(5);
+    await expect(rows.nth(0)).toHaveAttribute("data-state", "succeeded");
+    await expect(rows.nth(0)).toContainText("icon.png.output-one");
+    await expect(rows.nth(0)).toContainText("Test output");
+    await expect(rows.nth(0).getByRole("button", { name: "Open icon.png.output-one", exact: true })).toBeVisible();
+    for (const [index, [path, , message]] of limits.entries()) {
+        const row = rows.nth(index + 1);
+        await expect(row).toHaveAttribute("data-state", "failed");
+        await expect(row).toContainText(path.split("/").pop()!);
+        await expect(row).toContainText(message);
+        await expect(row).toContainText("Failed, over the limit");
+        await expect(row.getByRole("button", { name: /^Retry/ })).toHaveCount(0);
+    }
+    await expect(rows.nth(4)).toContainText("The image could not be read.");
+    await expect(rows.nth(4).getByRole("button", { name: "Retry broken.png", exact: true })).toBeVisible();
+    await expect(resultSummaryStatus(page)).toHaveText("Done. 1 compressed, 4 failed");
 });
 
 test("output action state resets and ignores stale completions", async ({ page }) => {
