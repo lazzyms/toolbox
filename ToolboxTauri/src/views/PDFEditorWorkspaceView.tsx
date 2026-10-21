@@ -368,7 +368,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onScene }: {
       <Button variant="ghost" size="icon-sm" aria-label="Undo" title="Undo (⌘Z / Ctrl+Z)" disabled={!history.past.length} onClick={undo}>↶</Button>
       <Button variant="ghost" size="icon-sm" aria-label="Redo" title="Redo (⇧⌘Z / Ctrl+Shift+Z)" disabled={!history.future.length} onClick={redo}>↷</Button>
       <Button variant="destructive" size="sm" aria-label="Reset edits" disabled={!dirty} onClick={reset}>Reset</Button>
-      <Button variant="default" size="sm" className="workspace-primary-action scene-export" aria-label="Export PDF" disabled={!page || exporting || Boolean(renderError) || rendering || !exactPreview}
+      <Button variant="default" size="sm" className="workspace-primary-action scene-export" aria-label="Export PDF" disabled={!page || !dirty || exporting || Boolean(renderError) || rendering || !exactPreview}
         onClick={() => void onExport()}>{exporting ? 'Exporting…' : 'Export PDF'}</Button>
     </div>
     {showProperties && <section className="scene-properties" aria-label="Object properties">
