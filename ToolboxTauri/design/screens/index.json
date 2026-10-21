@@ -393,24 +393,17 @@
   },
   {
     "board": "PdfDetails.dc.html",
-    "title": "Details: privacy report, properties, restrictions",
+    "title": "Details: privacy report and properties",
     "state": "default",
     "query": "",
     "screen": "PdfDetails--default.jpg"
   },
   {
     "board": "PdfDetails.dc.html",
-    "title": "Details: privacy report, properties, restrictions",
+    "title": "Details: privacy report and properties",
     "state": "tab-properties",
     "query": "tab=Properties",
     "screen": "PdfDetails--tab-properties.jpg"
-  },
-  {
-    "board": "PdfDetails.dc.html",
-    "title": "Details: privacy report, properties, restrictions",
-    "state": "tab-restrictions",
-    "query": "tab=Restrictions",
-    "screen": "PdfDetails--tab-restrictions.jpg"
   },
   {
     "board": "Split.dc.html",

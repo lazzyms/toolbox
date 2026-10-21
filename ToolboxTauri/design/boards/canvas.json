@@ -175,7 +175,7 @@
 "y": 6120,
 "w": 1280,
 "h": 800,
-"title": "Details: privacy report, properties, restrictions",
+"title": "Details: privacy report and properties",
 "expand": "fill"
 },
 "Split.dc.html": {
@@ -432,7 +432,7 @@
 "w": 360,
 "maxH": 480,
 "fill": "purple",
-"text": "Q3. Pointer actions\n\nA Skipped or Failed reason that a different tool or a pack fixes ends with one secondary button that names the destination, such as 'Open Remove Restrictions' or 'Install script pack'.\n\nOpening a tool keeps the files open and selects that tool in the rail. Installing a pack never retries automatically: the files stay in the list for a new run.\n\nRetry appears only after a wrong password, a timeout or a processing error."
+"text": "Q3. Pointer actions\n\nA Skipped or Failed reason that a different tool or a pack fixes ends with one secondary button that names the destination, such as 'Install script pack'.\n\nOpening a tool keeps the files open and selects that tool in the rail. Installing a pack never retries automatically: the files stay in the list for a new run.\n\nRetry appears only after a wrong password, a timeout or a processing error."
 },
 "save": {
 "x": 1760,
@@ -537,7 +537,7 @@
 "w": 360,
 "maxH": 560,
 "fill": "blue",
-"text": "Lock & Unlock: mode and passwords\n\nThe view is File Security and its one tool is Lock & Unlock, so the rail never reads File Security twice. Remove restrictions stays in the PDF Editor, and the rail links to it.\n\nLock and Unlock is a segmented control in the header. Switching keeps the file list, clears both password fields and re-checks every row for the new mode. It is disabled while a batch runs.\n\nThe batch password sits at the top of the options with show/hide. Lock adds Confirm under it. A mismatch marks Confirm as invalid with 'Passwords don't match. Type the new password again.' and Run names the reason.\n\nA row's own password opens an inline editor in that row, with Confirm in Lock. Saved rows show 'Own password' with Change and Use batch password. Clearing it shows a status line with Undo."
+"text": "Lock & Unlock: mode and passwords\n\nThe view is File Security and its one tool is Lock & Unlock, so the rail never reads File Security twice. Unlock also removes restrictions from PDFs that open without a password, with no password needed, and saves an unlocked copy.\n\nLock and Unlock is a segmented control in the header. Switching keeps the file list, clears both password fields and re-checks every row for the new mode. It is disabled while a batch runs.\n\nThe batch password sits at the top of the options with show/hide. Lock adds Confirm under it. A mismatch marks Confirm as invalid with 'Passwords don't match. Type the new password again.' and Run names the reason.\n\nA row's own password opens an inline editor in that row, with Confirm in Lock. Saved rows show 'Own password' with Change and Use batch password. Clearing it shows a status line with Undo."
 },
 "sec2": {
 "x": 7200,
@@ -545,7 +545,7 @@
 "w": 360,
 "maxH": 560,
 "fill": "green",
-"text": "Lock & Unlock: intake, flags and results\n\nFiles the other mode accepts stay in the list, flagged with a reason and a Won't run tag, such as a .doc in Lock. A banner offers one action to remove every flagged file. Files no mode accepts go under 'N items not added'.\n\nResults use the shared row pattern. Locked or unlocked rows open or show the copy. A warning row says what changed, such as a removed signature or a -1 rename. Skipped rows say why and point to the fix, such as Unlock it first or Open Remove restrictions. Failed rows say why and whether the file is fine.\n\nRetry appears only for a wrong password (Try another password, with an inline field) or a processing error. It runs only that file. A missing PDF helper fails PDFs only, and Office files still run.\n\nShow all in Finder or File Explorer opens the destination once for many results."
+"text": "Lock & Unlock: intake, flags and results\n\nFiles the other mode accepts stay in the list, flagged with a reason and a Won't run tag, such as a .doc in Lock. A banner offers one action to remove every flagged file. Files no mode accepts go under 'N items not added'.\n\nResults use the shared row pattern. Locked or unlocked rows open or show the copy. A warning row says what changed, such as a removed signature or a -1 rename. Skipped rows say why and point to the fix, such as Unlock it first. Failed rows say why and whether the file is fine.\n\nRetry appears only for a wrong password (Try another password, with an inline field) or a processing error. It runs only that file. A missing PDF helper fails PDFs only, and Office files still run.\n\nShow all in Finder or File Explorer opens the destination once for many results."
 },
 "sec3": {
 "x": 7600,
