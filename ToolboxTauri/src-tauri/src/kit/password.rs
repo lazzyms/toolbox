@@ -1,28 +1,96 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+use lopdf::Document;
 
 use crate::kit::common::{JobOutcome, OutputLocation};
 use crate::kit::contracts::ToolError;
-use crate::kit::office::OfficeProcessor;
+use crate::kit::office::{self, OfficeProcessor};
 use crate::kit::pdf::PDFProcessor;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProtectionState {
+    NotProtected,
+    OpenPassword,
+    PermissionsOnly,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProtectedFormat {
+    Pdf,
+    Docx,
+    Xlsx,
+    Pptx,
+    Doc,
+    Xls,
+    Ppt,
+}
+
+impl ProtectedFormat {
+    pub fn from_extension(extension: &str) -> Option<Self> {
+        Some(match extension.to_ascii_lowercase().as_str() {
+            "pdf" => Self::Pdf,
+            "docx" => Self::Docx,
+            "xlsx" => Self::Xlsx,
+            "pptx" => Self::Pptx,
+            "doc" => Self::Doc,
+            "xls" => Self::Xls,
+            "ppt" => Self::Ppt,
+            _ => return None,
+        })
+    }
+
+    pub fn from_path(path: &Path) -> Option<Self> {
+        path.extension().and_then(|extension| extension.to_str()).and_then(Self::from_extension)
+    }
+
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Pdf => "pdf",
+            Self::Docx => "docx",
+            Self::Xlsx => "xlsx",
+            Self::Pptx => "pptx",
+            Self::Doc => "doc",
+            Self::Xls => "xls",
+            Self::Ppt => "ppt",
+        }
+    }
+}
+
+pub fn probe(bytes: &[u8], format: ProtectedFormat) -> Result<ProtectionState, ToolError> {
+    if format == ProtectedFormat::Pdf {
+        return probe_pdf(bytes);
+    }
+    Ok(if office::is_encrypted(bytes, format.extension())? {
+        ProtectionState::OpenPassword
+    } else {
+        ProtectionState::NotProtected
+    })
+}
+
+fn probe_pdf(bytes: &[u8]) -> Result<ProtectionState, ToolError> {
+    let document = Document::load_mem(bytes)
+        .map_err(|error| ToolError::invalid_input(format!("Unsupported or damaged PDF: {error}")))?;
+    Ok(if document.is_encrypted() {
+        ProtectionState::OpenPassword
+    } else if document.was_encrypted() {
+        ProtectionState::PermissionsOnly
+    } else {
+        ProtectionState::NotProtected
+    })
+}
 
 pub struct PasswordProcessor;
 
 impl PasswordProcessor {
     pub fn supports_extension(extension: &str) -> bool {
-        extension.eq_ignore_ascii_case("pdf") || OfficeProcessor::supports_extension(extension)
+        ProtectedFormat::from_extension(extension).is_some()
     }
 
     pub fn remove_password(input_path: PathBuf, password: &str, output_location: &OutputLocation) -> JobOutcome {
-        let Some(extension) = input_path.extension().and_then(|extension| extension.to_str()) else {
-            return unsupported(input_path);
-        };
-
-        if extension.eq_ignore_ascii_case("pdf") {
-            PDFProcessor::remove_password(input_path, password, output_location)
-        } else if OfficeProcessor::supports_extension(extension) {
-            OfficeProcessor::remove_password(input_path, password, output_location)
-        } else {
-            unsupported(input_path)
+        match ProtectedFormat::from_path(&input_path) {
+            Some(ProtectedFormat::Pdf) => PDFProcessor::remove_password(input_path, password, output_location),
+            Some(_) => OfficeProcessor::remove_password(input_path, password, output_location),
+            None => unsupported(input_path),
         }
     }
 }
@@ -36,15 +104,21 @@ fn unsupported(input_path: PathBuf) -> JobOutcome {
 
 #[cfg(test)]
 mod tests {
-    use super::PasswordProcessor;
+    use super::{probe, PasswordProcessor, ProtectedFormat, ProtectionState};
     use crate::kit::common::OutputLocation;
     use crate::kit::contracts::ErrorKind;
+    use crate::kit::office::tests::{cfb_with_streams, biff_record, minimal_ooxml_package, ppt_fixture, ppt_plain_fixture};
+    use crate::kit::office_agile::encrypt_ooxml;
+    use lopdf::{dictionary, Document, EncryptionState, EncryptionVersion, Object, Permissions, Stream, StringFormat};
     use std::path::PathBuf;
 
     #[test]
     fn recognizes_pdf_and_all_supported_office_extensions() {
-        for extension in ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx"] {
+        for extension in ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "PDF", "Docx"] {
             assert!(PasswordProcessor::supports_extension(extension), "{extension} should be supported");
+        }
+        for extension in ["zip", "odt", "txt", ""] {
+            assert!(!PasswordProcessor::supports_extension(extension), "{extension} should not be supported");
         }
     }
 
@@ -55,5 +129,94 @@ mod tests {
 
         assert!(matches!(outcome.error().map(|error| &error.kind), Some(ErrorKind::InvalidInput)));
         assert!(outcome.output_paths().is_empty());
+    }
+
+    fn pdf(encryption: Option<(&str, &str)>) -> Vec<u8> {
+        let mut document = Document::with_version("1.7");
+        let pages_id = document.new_object_id();
+        let content_id = document.add_object(Stream::new(dictionary! {}, b"BT ET".to_vec()));
+        let page_id = document.add_object(dictionary! {
+            "Type" => "Page", "Parent" => pages_id, "Contents" => content_id,
+            "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+        });
+        document.objects.insert(pages_id, dictionary! { "Type" => "Pages", "Kids" => vec![Object::Reference(page_id)], "Count" => 1 }.into());
+        let catalog_id = document.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+        document.trailer.set("Root", catalog_id);
+        if let Some((owner_password, user_password)) = encryption {
+            document.trailer.set("ID", Object::Array(vec![
+                Object::String(b"toolbox-probe-id-1".to_vec(), StringFormat::Literal),
+                Object::String(b"toolbox-probe-id-2".to_vec(), StringFormat::Literal),
+            ]));
+            let state = EncryptionState::try_from(EncryptionVersion::V2 {
+                document: &document,
+                owner_password,
+                user_password,
+                key_length: 128,
+                permissions: Permissions::PRINTABLE,
+            }).unwrap();
+            document.encrypt(&state).unwrap();
+        }
+        let mut bytes = Vec::new();
+        document.save_to(&mut bytes).unwrap();
+        bytes
+    }
+
+    fn word_document(flags: u16) -> Vec<u8> {
+        let mut word = vec![0u8; 100];
+        word[10..12].copy_from_slice(&flags.to_le_bytes());
+        cfb_with_streams(&[("/WordDocument", &word), ("/0Table", &[0x11; 16])])
+    }
+
+    fn workbook(encrypted: bool) -> Vec<u8> {
+        let mut stream = biff_record(0x0809, &[0, 6, 5, 0]);
+        if encrypted {
+            stream.extend_from_slice(&biff_record(0x002F, &[0, 0, 0x34, 0x12]));
+        }
+        stream.extend_from_slice(&biff_record(0x000A, &[]));
+        cfb_with_streams(&[("/Workbook", &stream)])
+    }
+
+    #[test]
+    fn probe_reports_the_protection_state_of_every_format() {
+        let cases: Vec<(&str, Vec<u8>, ProtectedFormat, ProtectionState)> = vec![
+            ("plain pdf", pdf(None), ProtectedFormat::Pdf, ProtectionState::NotProtected),
+            ("open-password pdf", pdf(Some(("owner", "user"))), ProtectedFormat::Pdf, ProtectionState::OpenPassword),
+            ("permissions-only pdf", pdf(Some(("owner", ""))), ProtectedFormat::Pdf, ProtectionState::PermissionsOnly),
+            ("plain docx", minimal_ooxml_package("docx"), ProtectedFormat::Docx, ProtectionState::NotProtected),
+            ("encrypted docx", encrypt_ooxml(&minimal_ooxml_package("docx"), "secret").unwrap(), ProtectedFormat::Docx, ProtectionState::OpenPassword),
+            ("plain xlsx", minimal_ooxml_package("xlsx"), ProtectedFormat::Xlsx, ProtectionState::NotProtected),
+            ("encrypted xlsx", encrypt_ooxml(&minimal_ooxml_package("xlsx"), "secret").unwrap(), ProtectedFormat::Xlsx, ProtectionState::OpenPassword),
+            ("plain pptx", minimal_ooxml_package("pptx"), ProtectedFormat::Pptx, ProtectionState::NotProtected),
+            ("encrypted pptx", encrypt_ooxml(&minimal_ooxml_package("pptx"), "secret").unwrap(), ProtectedFormat::Pptx, ProtectionState::OpenPassword),
+            ("plain doc", word_document(0), ProtectedFormat::Doc, ProtectionState::NotProtected),
+            ("encrypted doc", word_document(0x0100), ProtectedFormat::Doc, ProtectionState::OpenPassword),
+            ("obfuscated doc", word_document(0x8100), ProtectedFormat::Doc, ProtectionState::OpenPassword),
+            ("plain xls", workbook(false), ProtectedFormat::Xls, ProtectionState::NotProtected),
+            ("encrypted xls", workbook(true), ProtectedFormat::Xls, ProtectionState::OpenPassword),
+            ("plain ppt", ppt_plain_fixture(), ProtectedFormat::Ppt, ProtectionState::NotProtected),
+            ("encrypted ppt", ppt_fixture(true, false), ProtectedFormat::Ppt, ProtectionState::OpenPassword),
+        ];
+        for (name, bytes, format, expected) in cases {
+            assert_eq!(probe(&bytes, format).unwrap_or_else(|error| panic!("{name}: {}", error.message)), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn probe_refuses_bytes_that_are_not_the_named_format() {
+        let cases = [
+            (b"not a pdf".to_vec(), ProtectedFormat::Pdf),
+            (b"not an office file".to_vec(), ProtectedFormat::Docx),
+            (minimal_ooxml_package("xlsx"), ProtectedFormat::Docx),
+            (cfb_with_streams(&[("/Other", b"data")]), ProtectedFormat::Pptx),
+            (cfb_with_streams(&[("/Other", b"data")]), ProtectedFormat::Doc),
+            (cfb_with_streams(&[("/WordDocument", &[0u8; 8])]), ProtectedFormat::Doc),
+            (cfb_with_streams(&[("/Workbook", &[0x09, 0x08, 0xFF])]), ProtectedFormat::Xls),
+            (cfb_with_streams(&[("/Current User", &[0u8; 4])]), ProtectedFormat::Ppt),
+            (b"PK\x03\x04truncated".to_vec(), ProtectedFormat::Xls),
+        ];
+        for (bytes, format) in cases {
+            let error = probe(&bytes, format).expect_err("unreadable bytes have no protection state");
+            assert_eq!(error.kind, ErrorKind::InvalidInput, "{format:?}: {}", error.message);
+        }
     }
 }

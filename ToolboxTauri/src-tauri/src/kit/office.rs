@@ -14,6 +14,7 @@ use zip::ZipArchive;
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::ToolError;
 use crate::kit::office_agile::{decrypt_ooxml, encrypt_ooxml, is_agile_ooxml, verify_ooxml};
+use crate::kit::password::{probe, ProtectedFormat};
 
 const OFFICE_EXTENSIONS: [&str; 6] = ["doc", "docx", "xls", "xlsx", "ppt", "pptx"];
 const PROTECTED_OFFICE_EXTENSIONS: [&str; 2] = ["docx", "xlsx"];
@@ -54,14 +55,16 @@ impl OfficeProcessor {
                 ),
             );
         };
-        if !Self::supports_extension(extension) {
+        let Some(format) = ProtectedFormat::from_extension(extension)
+            .filter(|format| *format != ProtectedFormat::Pdf)
+        else {
             return JobOutcome::failure(
                 input_path,
                 ToolError::invalid_input(
                     "Only Word, Excel, and PowerPoint files can be unlocked.",
                 ),
             );
-        }
+        };
         if !input_path.is_file() {
             return JobOutcome::failure(
                 input_path,
@@ -78,6 +81,9 @@ impl OfficeProcessor {
                 )
             }
         };
+        if let Err(error) = probe(&raw, format) {
+            return JobOutcome::failure(input_path, error);
+        }
         let output_path = match OutputNaming::reserve_destination(
             &input_path,
             output_location,
@@ -128,21 +134,24 @@ impl OfficeProcessor {
                 ToolError::invalid_input("Only DOCX and XLSX files can be protected."),
             );
         };
-        let normalized_extension = extension.to_ascii_lowercase();
-        if !Self::supports_protection_extension(&normalized_extension) {
-            if Self::supports_extension(&normalized_extension) {
+        let format = match ProtectedFormat::from_extension(extension) {
+            Some(format @ (ProtectedFormat::Docx | ProtectedFormat::Xlsx)) => format,
+            Some(ProtectedFormat::Pdf) | None => {
+                return JobOutcome::failure(
+                    input_path,
+                    ToolError::invalid_input("Only DOCX and XLSX files can be protected."),
+                )
+            }
+            Some(_) => {
                 return JobOutcome::failure(
                     input_path,
                     ToolError::unavailable(
                         "Native Office protection supports DOCX and XLSX only; .doc, .xls, .ppt, and .pptx are unsupported.",
                     ),
-                );
+                )
             }
-            return JobOutcome::failure(
-                input_path,
-                ToolError::invalid_input("Only DOCX and XLSX files can be protected."),
-            );
-        }
+        };
+        let normalized_extension = format.extension();
 
         if !input_path.is_file() {
             return JobOutcome::failure(
@@ -160,7 +169,10 @@ impl OfficeProcessor {
                 )
             }
         };
-        if !is_ooxml_package(&raw, &normalized_extension) {
+        if let Err(error) = probe(&raw, format) {
+            return JobOutcome::failure(input_path, error);
+        }
+        if !is_ooxml_package(&raw, normalized_extension) {
             return JobOutcome::failure(
                 input_path,
                 ToolError::invalid_input(format!(
@@ -302,6 +314,59 @@ fn decrypt_office_bytes(raw: &[u8], extension: &str, password: &str) -> Result<V
         "ppt" => decrypt_ppt(raw, password),
         _ => Err(invalid("Only Word, Excel, and PowerPoint files can be unlocked.")),
     }
+}
+
+pub(crate) fn is_encrypted(raw: &[u8], extension: &str) -> Result<bool, ToolError> {
+    let encrypted = match extension {
+        "docx" | "xlsx" | "pptx" => ooxml_is_encrypted(raw, extension),
+        "doc" => doc_is_encrypted(raw),
+        "xls" => xls_is_encrypted(raw),
+        "ppt" => ppt_is_encrypted(raw),
+        _ => Err(invalid("Only Word, Excel, and PowerPoint files can be unlocked.")),
+    };
+    encrypted.map_err(OfficeError::into_tool_error)
+}
+
+fn ooxml_is_encrypted(raw: &[u8], extension: &str) -> Result<bool, OfficeError> {
+    if is_ooxml_package(raw, extension) {
+        return Ok(false);
+    }
+    let not_office = || invalid("The file is not a supported Office document.");
+    if !raw.starts_with(&CFB_MAGIC) {
+        return Err(not_office());
+    }
+    let file = open_cfb(raw)?;
+    if file.is_stream("/EncryptionInfo") && file.is_stream("/EncryptedPackage") {
+        Ok(true)
+    } else {
+        Err(not_office())
+    }
+}
+
+fn doc_is_encrypted(raw: &[u8]) -> Result<bool, OfficeError> {
+    let word = read_cfb_stream(&mut open_cfb(raw)?, "/WordDocument")?;
+    if word.len() < 32 {
+        return Err(invalid("The Word document is truncated."));
+    }
+    Ok(read_u16(&word, 10)? & 0x0100 != 0)
+}
+
+fn xls_is_encrypted(raw: &[u8]) -> Result<bool, OfficeError> {
+    let mut file = open_cfb(raw)?;
+    let workbook_name = if file.is_stream("/Workbook") { "/Workbook" } else { "/Book" };
+    let workbook = read_cfb_stream(&mut file, workbook_name)?;
+    Ok(parse_biff_records(&workbook)?.iter().any(|record| record.id == 0x002F))
+}
+
+fn ppt_is_encrypted(raw: &[u8]) -> Result<bool, OfficeError> {
+    let mut file = open_cfb(raw)?;
+    let current_user = read_cfb_stream(&mut file, "/Current User")?;
+    let document = read_cfb_stream(&mut file, "/PowerPoint Document")?;
+    if current_user.len() < 20 || read_u16(&current_user, 2)? != 0x0FF6 {
+        return Err(invalid("The PowerPoint Current User stream is malformed."));
+    }
+    let current_edit = parse_ppt_edit(&document, read_u32(&current_user, 16)? as usize)?;
+    Ok(current_edit.encryption_persist_id.is_some())
 }
 
 fn verify_unlocked_bytes(bytes: Vec<u8>, extension: &str) -> Result<Vec<u8>, OfficeError> {
@@ -1263,7 +1328,7 @@ fn remove_ppt_persist_entry(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::{
         decrypt_doc, decrypt_office_bytes, decrypt_ppt, decrypt_xls, make_cryptoapi_key,
         make_rc4_key, password_verifier_method1, password_verifier_method2, open_cfb,
@@ -1278,7 +1343,7 @@ mod tests {
     use std::path::PathBuf;
     use zip::{write::SimpleFileOptions, ZipWriter};
 
-    fn cfb_with_streams(streams: &[(&str, &[u8])]) -> Vec<u8> {
+    pub(crate) fn cfb_with_streams(streams: &[(&str, &[u8])]) -> Vec<u8> {
         let mut file = CompoundFile::create(Cursor::new(Vec::new())).unwrap();
         for (name, data) in streams {
             file.create_stream(*name).unwrap().write_all(data).unwrap();
@@ -1287,7 +1352,7 @@ mod tests {
         file.into_inner().into_inner()
     }
 
-    fn biff_record(id: u16, payload: &[u8]) -> Vec<u8> {
+    pub(crate) fn biff_record(id: u16, payload: &[u8]) -> Vec<u8> {
         let mut record = Vec::with_capacity(4 + payload.len());
         record.extend_from_slice(&id.to_le_bytes());
         record.extend_from_slice(&(payload.len() as u16).to_le_bytes());
@@ -1373,7 +1438,14 @@ mod tests {
         info
     }
 
-    fn ppt_fixture(with_content: bool, with_pictures: bool) -> Vec<u8> {
+    pub(crate) fn ppt_plain_fixture() -> Vec<u8> {
+        let document = ppt_record(0x0FF5, &[0u8; 0x1C]);
+        let mut current_user = vec![0u8; 20];
+        current_user[2..4].copy_from_slice(&0x0FF6u16.to_le_bytes());
+        cfb_with_streams(&[("/Current User", &current_user), ("/PowerPoint Document", &document)])
+    }
+
+    pub(crate) fn ppt_fixture(with_content: bool, with_pictures: bool) -> Vec<u8> {
         let password = "secret";
         let salt = [0x31u8; 16];
         let info = cryptoapi_info(password, salt, 128);
