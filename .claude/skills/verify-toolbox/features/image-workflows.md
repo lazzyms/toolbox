@@ -21,10 +21,9 @@ Image workflows edit images and provide utilities for icon sets, animation frame
 
 ## How to get to it (user POV)
 
-- Choose `Images` under Tool categories and select the desired action.
+- Choose `Image Editor` or `Media` under Views in the sidebar and select the desired action.
 - Search `Search tools` for an exact action title such as `Compress Images` or `Create GIF`.
-- Choose a visible action in Quick access or Recent.
-- Choose `Open Image editor` or `Open Media utilities` from the corresponding Tool library card.
+- Choose `Open Image Editor` or `Open Media` from the corresponding Tool library card.
 
 ## Driving it with CUA desktop control
 
