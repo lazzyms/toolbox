@@ -64,8 +64,6 @@ pub enum ImageEdit {
 pub struct ImageEditPlan {
     pub edits: Vec<ImageEdit>,
     pub output_location: OutputLocation,
-    #[serde(default = "default_edit_suffix")]
-    pub suffix: String,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -81,8 +79,6 @@ pub struct ImageEditExportRequest {
     pub paths: Vec<PathBuf>,
     pub plan: ImageEditPlan,
 }
-
-fn default_edit_suffix() -> String { "-edited".to_string() }
 
 impl ImageEditPlan {
     fn canonicalized(&self) -> Self {
@@ -157,7 +153,7 @@ pub fn export_edit_plan(plan: &ImageEditPlan, input: PathBuf) -> JobOutcome {
         Ok(bytes) => bytes,
         Err(error) => return failure(input, error),
     };
-    let output = match OutputNaming::reserve_destination(&input, &plan.output_location, &plan.suffix, format.extension()) {
+    let output = match OutputNaming::reserve_destination(&input, &plan.output_location, "-edited", format.extension()) {
         Ok(output) => output,
         Err(error) => return failure(input, format!("Could not reserve edited image output: {error}")),
     };
@@ -1386,7 +1382,6 @@ mod tests {
                 },
             ],
             output_location: OutputLocation::AlongsideInput,
-            suffix: "-edited".to_string(),
         };
 
         let preview = inspect_edit_preview(&ImageEditPreviewRequest { path: input.clone(), plan: plan.clone() }).unwrap();
@@ -1451,7 +1446,6 @@ mod tests {
                 },
             ],
             output_location: OutputLocation::AlongsideInput,
-            suffix: "-edited".to_string(),
         };
 
         let preview = inspect_edit_preview(&ImageEditPreviewRequest { path: input.clone(), plan: plan.clone() }).unwrap();
@@ -1480,7 +1474,6 @@ mod tests {
                 },
             ],
             output_location: OutputLocation::AlongsideInput,
-            suffix: "-edited".to_string(),
         };
 
         let preview = inspect_edit_preview(&ImageEditPreviewRequest { path: input.clone(), plan: plan.clone() }).unwrap();
@@ -1512,7 +1505,6 @@ mod tests {
                 },
             ],
             output_location: OutputLocation::AlongsideInput,
-            suffix: "-edited".to_string(),
         };
 
         let request = CropRequest {
@@ -1550,7 +1542,6 @@ mod tests {
                 },
             ],
             output_location: OutputLocation::AlongsideInput,
-            suffix: "-edited".to_string(),
         };
 
         let preview = inspect_edit_preview(&ImageEditPreviewRequest { path: input.clone(), plan: plan.clone() }).unwrap();
@@ -1575,7 +1566,6 @@ mod tests {
                 exposure: 0.0,
             }],
             output_location: OutputLocation::AlongsideInput,
-            suffix: "-edited".to_string(),
         };
 
         assert_eq!(plan.validate().unwrap_err(), "Brightness must be between -100 and 100.");

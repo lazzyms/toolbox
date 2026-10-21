@@ -54,6 +54,8 @@ export interface ToolCapability {
   supportsPageSelection: boolean;
   supportsPreview: boolean;
   nativeAvailability: NativeAvailability;
+  outputSuffix: string;
+  manyToOne: boolean;
 }
 
 export type OutputLocation = "alongsideInput" | { customFolder: string };
