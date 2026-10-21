@@ -16,7 +16,7 @@ use lopdf::{Document, LoadOptions, Object, ObjectId};
 
 use crate::kit::common::limits;
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
-use crate::kit::contracts::ToolError;
+use crate::kit::contracts::{OutcomeWarning, ToolError, WarningKind};
 use crate::kit::password::{lock_skip_reason, probe, unlock_skip_reason, unreadable, ProtectedFormat, ProtectionState, UNLOCK_NOT_VERIFIED, UNSUPPORTED_ENCRYPTION, WRONG_PASSWORD};
 
 pub struct PDFProcessor;
@@ -553,6 +553,49 @@ fn document_has_signature(document: &Document, catalog: ObjectId, pages: &[Objec
     }).collect::<Result<Vec<_>, String>>().map(|values| values.into_iter().any(|value| value))
 }
 
+pub const SIGNATURE_REMOVED: &str = "Saved. The digital signature was removed, because changing the file breaks it.";
+
+pub fn has_signed_signature_field(document: &Document) -> bool {
+    let mut seen = HashSet::new();
+    let fields = document.catalog().ok()
+        .and_then(|catalog| resolve(document, catalog.get(b"AcroForm").ok()?).ok()?.as_dict().ok())
+        .and_then(|form| resolve(document, form.get(b"Fields").ok()?).ok()?.as_array().ok())
+        .into_iter()
+        .flatten();
+    let pages = document.get_pages();
+    // A widget can be left out of the field tree, so page annotations are checked after the tree supplies inherited field types.
+    let widgets = pages.values()
+        .filter_map(|page| resolve(document, document.get_dictionary(*page).ok()?.get(b"Annots").ok()?).ok()?.as_array().ok())
+        .flatten();
+    fields.chain(widgets).any(|field| field_is_signed(document, field, None, &mut seen))
+}
+
+fn field_is_signed<'a>(document: &'a Document, value: &'a Object, inherited_type: Option<&'a [u8]>, seen: &mut HashSet<ObjectId>) -> bool {
+    if let Object::Reference(id) = value {
+        if !seen.insert(*id) {
+            return false;
+        }
+    }
+    let Some(field) = resolve(document, value).ok().and_then(|value| value.as_dict().ok()) else {
+        return false;
+    };
+    let field_type = field.get(b"FT").ok().and_then(|value| value.as_name().ok()).or(inherited_type);
+    let has_value = field.get(b"V").ok().and_then(|value| resolve(document, value).ok()).is_some_and(|value| value.as_dict().is_ok());
+    if field_type == Some(b"Sig") && has_value {
+        return true;
+    }
+    field.get(b"Kids").ok()
+        .and_then(|kids| resolve(document, kids).ok()?.as_array().ok())
+        .is_some_and(|kids| kids.iter().any(|kid| field_is_signed(document, kid, field_type, seen)))
+}
+
+pub fn note_signature_removed(outcome: JobOutcome, signed: bool) -> JobOutcome {
+    if !signed {
+        return outcome;
+    }
+    outcome.with_warning(OutcomeWarning { kind: WarningKind::SignatureRemoved, message: SIGNATURE_REMOVED.to_string() })
+}
+
 fn page_has_internal_navigation(document: &Document, page: ObjectId) -> Result<bool, String> {
     let Some(annotations) = document.get_dictionary(page).map_err(|error| error.to_string())?.get(b"Annots").ok() else {
         return Ok(false);
@@ -670,6 +713,7 @@ impl PDFProcessor {
                 }
                 let mut doc = doc;
                 let page_count = doc.get_pages().len();
+                let signed = has_signed_signature_field(&doc);
                 // Loading an encrypted PDF can leave the original trailer's
                 // `/Size` higher than the surviving object table. Keep the
                 // rewritten xref table truthful so strict PDF validators do
@@ -688,7 +732,7 @@ impl PDFProcessor {
                     .unwrap_or(0);
                 match doc.save(output_path.path()) {
                     Ok(_) if unlocked_pdf_is_verified(output_path.path(), page_count) => match output_path.publish() {
-                        Ok(path) => JobOutcome::succeeded(input_path, vec![path], "PDF Unlocked and verified"),
+                        Ok(path) => note_signature_removed(JobOutcome::succeeded(input_path, vec![path], "PDF Unlocked and verified"), signed),
                         Err(error) => JobOutcome::failure(input_path, ToolError::processing(format!("Could not publish unlocked PDF output: {error}"))),
                     },
                     Ok(_) => JobOutcome::failure(input_path, ToolError::processing(UNLOCK_NOT_VERIFIED)),
@@ -731,8 +775,8 @@ impl PDFProcessor {
             },
             Err(error) => return JobOutcome::failure(input_path, error),
         };
-        let page_count = match Document::load_mem(&raw) {
-            Ok(document) => document.get_pages().len(),
+        let (page_count, signed) = match Document::load_mem(&raw) {
+            Ok(document) => (document.get_pages().len(), has_signed_signature_field(&document)),
             Err(_) => return JobOutcome::failure(input_path, unreadable(ProtectedFormat::Pdf)),
         };
         let qpdf = match crate::kit::resources::resolve_helper(&crate::kit::resources::QPDF) {
@@ -762,7 +806,7 @@ impl PDFProcessor {
             return JobOutcome::failure(input_path, ToolError::processing("The locked copy didn't pass verification, so nothing was saved."));
         }
         match output_path.publish() {
-            Ok(path) => JobOutcome::succeeded(input_path, vec![path], "PDF Protected with verified AES-256 encryption"),
+            Ok(path) => note_signature_removed(JobOutcome::succeeded(input_path, vec![path], "PDF Protected with verified AES-256 encryption"), signed),
             Err(error) => JobOutcome::failure(input_path, ToolError::processing(format!("Could not publish protected PDF output: {error}"))),
         }
     }
@@ -788,7 +832,7 @@ fn read_and_probe(input_path: &Path) -> Result<(Vec<u8>, ProtectionState), ToolE
     Ok((raw, state))
 }
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use lopdf::dictionary;
     use lopdf::Object;
@@ -939,6 +983,94 @@ mod tests {
         assert_eq!(out.error().map(|error| &error.kind), Some(&crate::kit::contracts::ErrorKind::Unavailable));
         assert!(!src.with_file_name("noqpdf-protected.pdf").exists(), "a missing helper must not reserve an output");
         let _ = std::fs::remove_file(&src);
+    }
+
+    fn signature_value() -> lopdf::Dictionary {
+        dictionary! {
+            "Type" => "Sig", "Filter" => "Adobe.PPKLite", "SubFilter" => "adbe.pkcs7.detached",
+            "ByteRange" => vec![0.into(), 10.into(), 20.into(), 30.into()],
+            "Contents" => Object::String(vec![0; 16], lopdf::StringFormat::Hexadecimal),
+        }
+    }
+
+    fn first_page(document: &Document) -> ObjectId {
+        *document.get_pages().values().next().unwrap()
+    }
+
+    fn attach_widget(document: &mut Document, widget: ObjectId) {
+        let page = first_page(document);
+        document.get_dictionary_mut(page).unwrap().set("Annots", vec![Object::Reference(widget)]);
+    }
+
+    fn set_form_fields(document: &mut Document, fields: Vec<Object>) {
+        let form = document.add_object(dictionary! { "Fields" => fields, "SigFlags" => 3 });
+        document.catalog_mut().unwrap().set("AcroForm", form);
+    }
+
+    pub(crate) fn add_signature_field(document: &mut Document, value: Option<lopdf::Dictionary>) {
+        let page = first_page(document);
+        let mut field = dictionary! {
+            "Type" => "Annot", "Subtype" => "Widget", "FT" => "Sig", "T" => "Signature1",
+            "Rect" => vec![10.into(), 10.into(), 80.into(), 30.into()], "P" => page,
+        };
+        if let Some(value) = value {
+            let value = document.add_object(value);
+            field.set("V", value);
+        }
+        let field = document.add_object(field);
+        attach_widget(document, field);
+        set_form_fields(document, vec![Object::Reference(field)]);
+    }
+
+    pub(crate) fn sign(document: &mut Document) {
+        add_signature_field(document, Some(signature_value()));
+    }
+
+    fn fixture(name: &str, build: impl FnOnce(&mut Document)) -> (&str, Document) {
+        let path = temp_path(&format!("signature-{name}.pdf"));
+        make_pdf(&path);
+        let mut document = Document::load(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        build(&mut document);
+        (name, document)
+    }
+
+    #[test]
+    fn a_pdf_is_signed_only_when_a_signature_field_holds_a_signature_value() {
+        let cases = [
+            (fixture("plain", |_| {}), false),
+            (fixture("signed field", sign), true),
+            (fixture("empty signature field", |document| add_signature_field(document, None)), false),
+            (fixture("null signature value", |document| {
+                let field = document.add_object(dictionary! { "FT" => "Sig", "V" => Object::Null });
+                set_form_fields(document, vec![Object::Reference(field)]);
+            }), false),
+            (fixture("text field with a value", |document| {
+                let field = document.add_object(dictionary! { "FT" => "Tx", "V" => Object::string_literal("Asha") });
+                set_form_fields(document, vec![Object::Reference(field)]);
+            }), false),
+            (fixture("kid inherits the signature type", |document| {
+                let value = document.add_object(signature_value());
+                let parent = document.new_object_id();
+                let kid = document.add_object(dictionary! { "Parent" => parent, "Subtype" => "Widget", "V" => value });
+                document.objects.insert(parent, dictionary! { "FT" => "Sig", "T" => "Approval", "Kids" => vec![Object::Reference(kid)] }.into());
+                attach_widget(document, kid);
+                set_form_fields(document, vec![Object::Reference(parent)]);
+            }), true),
+            (fixture("signed widget outside the field tree", |document| {
+                let value = document.add_object(signature_value());
+                let widget = document.add_object(dictionary! { "Subtype" => "Widget", "FT" => "Sig", "V" => value });
+                attach_widget(document, widget);
+            }), true),
+            (fixture("cyclic field tree", |document| {
+                let field = document.new_object_id();
+                document.objects.insert(field, dictionary! { "FT" => "Sig", "Kids" => vec![Object::Reference(field)] }.into());
+                set_form_fields(document, vec![Object::Reference(field)]);
+            }), false),
+        ];
+        for ((name, document), expected) in cases {
+            assert_eq!(has_signed_signature_field(&document), expected, "{name}");
+        }
     }
 
     #[test]

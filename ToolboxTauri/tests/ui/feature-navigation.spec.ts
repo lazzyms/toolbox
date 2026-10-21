@@ -1545,7 +1545,7 @@ test("result rows show succeeded, skipped and failed states with warnings and po
 
     await expect(rows.nth(0)).toContainText("lease-agreement-protected.pdf");
     await expect(rows.nth(0)).toContainText("Compressed");
-    await expect(rows.nth(1)).toContainText("The digital signature was removed, because protecting a file changes it.");
+    await expect(rows.nth(1)).toContainText("Saved. The digital signature was removed, because changing the file breaks it.");
     await expect(rows.nth(1)).not.toContainText("native wording");
     await expect(rows.nth(1)).toContainText("Compressed with a warning");
     await expect(rows.nth(3)).toContainText("The font Brandon Grotesque wasn’t available, so Helvetica was used.");
