@@ -13,6 +13,8 @@ import { shortenHomePath, useHomeDir } from '../homePath';
 import { ResultList } from './ResultList';
 import { BlockedDestinationDialog, RunDestination, exampleOutputName, sameLocation, type BlockedDestination, type FolderCheck } from './RunDestination';
 import { TablerIcon } from './TablerIcon';
+import { chooseManyToOneSavePath } from './saveStep';
+import { saveStepAppliesTo, saveStepFor } from '../registry/saveSteps';
 import { ArrowDown, ArrowUp, FileIcon, FolderIcon, GripVertical, XIcon } from 'lucide-react';
 import {
     classifyIntake,
@@ -34,14 +36,14 @@ const repeatLabel = (occurrence: number) => occurrence === 2 ? 'Added twice' : `
 
 export type WorkspaceSourceAction = () => void | Promise<void>;
 
-type RunHandler = (files: string[], outputLocation: OutputLocation) => Promise<JobOutcome[]>;
+type RunHandler = (files: string[], outputLocation: OutputLocation, outputPath: string | null) => Promise<JobOutcome[]>;
 
 type PerFileRun = { handler: RunHandler; outputLocation: OutputLocation };
 
 interface ToolScaffoldProps {
     utility: ToolDefinition;
-    onRun: (files: string[], outputLocation: OutputLocation) => Promise<JobOutcome[]>;
-    onRunCombined?: (files: string[], outputLocation: OutputLocation) => Promise<JobOutcome[]>;
+    onRun: RunHandler;
+    onRunCombined?: RunHandler;
     variant?: 'standard' | 'workspace';
     sessionKey?: string;
     onWorkspaceSourceAction?: (action: WorkspaceSourceAction | null) => void;
@@ -56,6 +58,7 @@ interface ToolScaffoldProps {
         selectedFileIndex: number;
         selectFile: (index: number) => void;
         destination: React.ReactNode;
+        runLabel: string | null;
     }) => React.ReactNode;
 }
 
@@ -71,6 +74,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
     const rowButtons = useRef(new Map<string, HTMLButtonElement>());
     const home = useHomeDir();
     const [results, setResults] = useState<JobOutcome[]>([]);
+    const [resultsNamedByOutput, setResultsNamedByOutput] = useState(false);
     const [loading, setLoading] = useState(false);
     const [perFileRun, setPerFileRun] = useState<PerFileRun | null>(null);
     const defaultLocation = useOutputLocation();
@@ -88,6 +92,8 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
     const files = useMemo(() => runnable.map((status) => status.entry.path), [runnable]);
     const flagged = statuses.filter((status) => status.wontRun !== null);
     const selectedFileIndex = Math.max(runnable.findIndex((status) => status.entry.key === anchor), 0);
+    const saveStep = saveStepFor(utility);
+    const savesOneFile = saveStepAppliesTo(saveStep, files.length);
     const progress: Progress = {
         completed: loading ? 0 : Math.min(results.length, files.length),
         total: files.length,
@@ -123,6 +129,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         const generation = ++runGeneration.current;
         setLoading(true);
         setResults([]);
+        setResultsNamedByOutput(false);
         setPerFileRun(null);
         try {
             if (location !== 'alongsideInput') {
@@ -152,14 +159,25 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 return true;
             });
             const orderedSelectionRejected = inputPolicy.inputCardinality === 'ordered' && invalidPaths.size > 0;
-            const processed = orderedSelectionRejected || validPaths.length === 0 ? [] : parseToolResult(await handler(validPaths, location));
+            const runs = !orderedSelectionRejected && validPaths.length > 0;
+            let outputPath: string | null = null;
+            if (runs && saveStepAppliesTo(saveStep, validPaths.length)) {
+                setLoading(false);
+                outputPath = await chooseManyToOneSavePath(saveStep, validPaths, location, inputPolicy.outputSuffix, saveStep.summary(validPaths.length));
+                if (!outputPath || generation !== runGeneration.current) return;
+                setLoading(true);
+            }
+            const processed = runs ? parseToolResult(await handler(validPaths, location, outputPath)) : [];
             const processedByPath = new Map(processed.map((result) => [result.inputPath, result]));
             const nextResults = orderedSelectionRejected
                 ? files.map((path) => invalidPaths.get(path) ?? failedOutcome(path, 'invalidInput', 'Every selected input must use a supported format for this ordered action.'))
                 : invalidPaths.size === 0
                     ? processed
                 : files.map((path) => invalidPaths.get(path) ?? processedByPath.get(path)).filter((result): result is JobOutcome => result !== undefined);
-            if (generation === runGeneration.current) setResults(nextResults);
+            if (generation === runGeneration.current) {
+                setResults(nextResults);
+                setResultsNamedByOutput(outputPath !== null);
+            }
         } catch (error) {
             if (generation === runGeneration.current) {
                 setResults([failedOutcome('Tool error', 'processing', String(error))]);
@@ -214,7 +232,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         const generation = runGeneration.current;
         let retried: JobOutcome[];
         try {
-            retried = parseToolResult(await perFileRun.handler([inputPath], perFileRun.outputLocation));
+            retried = parseToolResult(await perFileRun.handler([inputPath], perFileRun.outputLocation, null));
         } catch (error) {
             retried = [failedOutcome(inputPath, 'processing', String(error))];
         }
@@ -585,11 +603,13 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                         defaultLocation={defaultLocation}
                         overridden={runOverride !== null}
                         toolTitle={utility.title}
-                        exampleName={files[0] ? exampleOutputName(files[0], inputPolicy.outputSuffix) : null}
+                        exampleName={files[0] && !savesOneFile ? exampleOutputName(files[0], inputPolicy.outputSuffix) : null}
+                        savesOneFile={saveStep !== null && (files.length === 0 || savesOneFile)}
                         onChange={() => void changeForRun()}
                         onReset={() => setRunOverride(null)}
                     />
                 ),
+                runLabel: savesOneFile ? saveStep.runLabel : null,
             })}
             </fieldset>
 
@@ -598,6 +618,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 progress={progress}
                 loading={loading}
                 resultVerb={utility.resultVerb}
+                namedByOutput={resultsNamedByOutput}
                 onRetry={perFileRun ? retry : undefined}
             />
 

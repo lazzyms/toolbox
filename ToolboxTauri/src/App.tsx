@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { initializeInstallAnalytics } from "./analytics";
 import { MainPage } from "./views/MainPage";
 import { UtilityIndex } from "./components/UtilityIndex";
+import { SaveDialogHost } from "./components/SaveDialog";
 import { OutputLocationContext, OutputSettingsContext, outputLocationFor } from "./outputLocation";
 import type { OutputSettings } from "./contracts";
 
@@ -43,6 +44,7 @@ export default function App() {
       <OutputLocationContext.Provider value={outputLocation}>
         <MainPage />
         <UtilityIndex />
+        <SaveDialogHost />
       </OutputLocationContext.Provider>
     </OutputSettingsContext.Provider>
   );

@@ -369,6 +369,8 @@ pub struct GifCreateRequest {
     #[serde(default = "default_gif_delay_ms")] pub frame_delay_ms: u32,
     #[serde(default = "default_gif_loop")] pub loop_forever: bool,
     pub output_location: OutputLocation,
+    #[serde(default)]
+    pub output_path: Option<PathBuf>,
 }
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -383,6 +385,8 @@ pub struct TiffRequest {
     #[serde(default)]
     pub pages: Option<Vec<TiffPageRef>>,
     pub output_location: OutputLocation,
+    #[serde(default)]
+    pub output_path: Option<PathBuf>,
 }
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -720,7 +724,7 @@ fn icon_plan(preset: &str, custom_sizes: &[u32]) -> Result<(&'static str, Vec<u3
 
 pub fn gif_create(request: &GifCreateRequest) -> JobOutcome {
     let Some(input) = request.paths.first().cloned() else { return failure(PathBuf::new(), "Select at least one image.".to_string()); };
-    let (output, file) = match OutputNaming::create_destination(&input, &request.output_location, "-animated", "gif") {
+    let (output, file) = match OutputNaming::create_single_output(request.output_path.as_deref(), &input, &request.output_location, "-animated", "gif") {
         Ok(destination) => destination,
         Err(error) => return failure(input, error.to_string()),
     };
@@ -841,7 +845,7 @@ pub fn tiff(request: &TiffRequest) -> JobOutcome {
         }
         return JobOutcome::succeeded(input, outputs, "TIFF pages saved");
     } else {
-        match OutputNaming::reserve_destination(&input, &request.output_location, "-combined", "tiff") {
+        match OutputNaming::reserve_single_output(request.output_path.as_deref(), &input, &request.output_location, "-combined", "tiff") {
             Ok(output) => output,
             Err(error) => return failure(input, format!("Could not reserve combined TIFF output: {error}")),
         }
@@ -971,7 +975,7 @@ mod tests {
         encoder.write_image::<tiff::encoder::colortype::Gray8>(2, 1, &[10, 20]).unwrap();
         encoder.write_image::<tiff::encoder::colortype::Gray8>(2, 1, &[30, 40]).unwrap();
 
-        let split = tiff(&TiffRequest { paths: vec![input.clone()], pages: None, output_location: OutputLocation::AlongsideInput });
+        let split = tiff(&TiffRequest { paths: vec![input.clone()], pages: None, output_location: OutputLocation::AlongsideInput, output_path: None });
         assert_eq!(split.output_paths().len(), 2);
         assert_eq!(read_tiff_pages(&split.output_paths()[0]).unwrap().len(), 1);
         assert_eq!(read_tiff_pages(&split.output_paths()[1]).unwrap().len(), 1);
@@ -980,7 +984,7 @@ mod tests {
         let second = path("second.tiff");
         write_tiff_page(&first, &TiffPage::Gray { width: 1, height: 1, data: vec![1] }).unwrap();
         write_tiff_page(&second, &TiffPage::Gray { width: 1, height: 1, data: vec![2] }).unwrap();
-        let combined = tiff(&TiffRequest { paths: vec![first.clone(), second.clone()], pages: None, output_location: OutputLocation::AlongsideInput });
+        let combined = tiff(&TiffRequest { paths: vec![first.clone(), second.clone()], pages: None, output_location: OutputLocation::AlongsideInput, output_path: None });
         let pages = read_tiff_pages(&combined.output_paths()[0]).unwrap();
         assert_eq!(pages.len(), 2);
         assert!(matches!(&pages[0], TiffPage::Gray { data, .. } if data == &vec![1]));
@@ -999,7 +1003,7 @@ mod tests {
         let file = File::create(&input).unwrap();
         let mut encoder = tiff::encoder::TiffEncoder::new(file).unwrap();
         encoder.write_image::<tiff::encoder::colortype::Gray16>(1, 1, &[1]).unwrap();
-        let result = tiff(&TiffRequest { paths: vec![input.clone()], pages: None, output_location: OutputLocation::AlongsideInput });
+        let result = tiff(&TiffRequest { paths: vec![input.clone()], pages: None, output_location: OutputLocation::AlongsideInput, output_path: None });
         assert!(result.error().is_some());
         let _ = std::fs::remove_file(input);
     }
@@ -1021,7 +1025,7 @@ mod tests {
                 TiffPageRef { path: one_page.clone(), page: 0 },
                 TiffPageRef { path: two_page.clone(), page: 0 },
             ]),
-            output_location: OutputLocation::AlongsideInput,
+            output_location: OutputLocation::AlongsideInput, output_path: None,
         });
 
         assert!(outcome.error().is_none(), "selected TIFF pages failed: {:?}", outcome.error());
@@ -1165,7 +1169,7 @@ mod tests {
         let second = path("gif-second.png");
         image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 0, 0, 128])).save(&first).unwrap();
         image::RgbaImage::from_pixel(2, 2, image::Rgba([0, 255, 0, 255])).save(&second).unwrap();
-        let result = gif_create(&GifCreateRequest { paths: vec![first.clone(), second.clone()], frame_delay_ms: 250, loop_forever: true, output_location: OutputLocation::AlongsideInput });
+        let result = gif_create(&GifCreateRequest { paths: vec![first.clone(), second.clone()], frame_delay_ms: 250, loop_forever: true, output_location: OutputLocation::AlongsideInput, output_path: None });
         let output = result.output_paths().first().unwrap();
         let file = File::open(output).unwrap();
         let decoder = image::codecs::gif::GifDecoder::new(BufReader::new(file)).unwrap();
@@ -1223,7 +1227,7 @@ mod tests {
                         paths: vec![input],
                         frame_delay_ms: 100,
                         loop_forever: true,
-                        output_location: OutputLocation::CustomFolder(output_directory),
+                        output_location: OutputLocation::CustomFolder(output_directory), output_path: None,
                     })
                 })
             })
@@ -1279,7 +1283,7 @@ mod tests {
             paths: vec![input, input_directory.join("missing.png")],
             frame_delay_ms: 100,
             loop_forever: true,
-            output_location: OutputLocation::CustomFolder(output_directory.clone()),
+            output_location: OutputLocation::CustomFolder(output_directory.clone()), output_path: None,
         });
 
         assert!(result.error().is_some());

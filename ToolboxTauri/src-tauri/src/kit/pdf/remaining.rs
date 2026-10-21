@@ -50,6 +50,8 @@ pub struct PageSelectionRequest {
 pub struct MergePdfRequest {
     pub paths: Vec<PathBuf>,
     pub output_location: OutputLocation,
+    #[serde(default)]
+    pub output_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -68,6 +70,8 @@ pub struct PdfToImagesRequest {
 pub struct ImagesToPdfRequest {
     pub paths: Vec<PathBuf>,
     pub output_location: OutputLocation,
+    #[serde(default)]
+    pub output_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -90,7 +94,7 @@ pub fn merge(request: &MergePdfRequest) -> JobOutcome {
         };
         expected_pages += document.get_pages().len();
     }
-    let output = match OutputNaming::reserve_destination(&first, &request.output_location, "-merged", "pdf") {
+    let output = match OutputNaming::reserve_single_output(request.output_path.as_deref(), &first, &request.output_location, "-merged", "pdf") {
         Ok(output) => output,
         Err(error) => return failure(first, format!("Could not reserve merged PDF output: {error}")),
     };
@@ -488,7 +492,7 @@ fn selected_pdf_pages(document: &Document, requested: Option<&Vec<usize>>) -> Re
 
 pub fn images_to_pdf(request: &ImagesToPdfRequest) -> JobOutcome {
     let Some(first) = request.paths.first().cloned() else { return failure(PathBuf::new(), "Select at least one image.".to_string()); };
-    let output = match OutputNaming::reserve_destination(&first, &request.output_location, "-combined", "pdf") {
+    let output = match OutputNaming::reserve_single_output(request.output_path.as_deref(), &first, &request.output_location, "-combined", "pdf") {
         Ok(output) => output,
         Err(error) => return failure(first, format!("Could not reserve combined PDF output: {error}")),
     };

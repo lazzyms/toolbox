@@ -81,17 +81,17 @@ export const PDFConversionWorkspaceView = ({ utility }: { utility: ToolDefinitio
       variant="workspace"
       sessionKey="pdf-convert"
       utility={activeUtility}
-      onRun={(paths, outputLocation) => {
+      onRun={(paths, outputLocation, outputPath) => {
         const pages = document ? selectedPages : undefined;
         const selectedPageRange = pages?.length ? formatPageRange(pages) : pageRange || null;
         if (activeUtility.id === "images-to-pdf") {
           return invoke<ToolResult>("images_to_pdf", {
-            request: { paths, outputLocation },
+            request: { paths, outputLocation, outputPath },
           });
         }
         if (activeUtility.id === "pdf-merge") {
           return invoke<ToolResult>("merge_pdfs", {
-            request: { paths, outputLocation },
+            request: { paths, outputLocation, outputPath },
           });
         }
         if (activeUtility.id === "pdf-split") {
@@ -148,9 +148,10 @@ export const PDFConversionWorkspaceView = ({ utility }: { utility: ToolDefinitio
         });
       }}
     >
-      {({ files, run, loading, destination }) => (
+      {({ files, run, loading, destination, runLabel }) => (
         <ConversionControls
           destination={destination}
+          runLabel={runLabel}
           activeUtility={activeUtility}
           activeToolId={activeToolId}
           onSelectTool={setActiveToolId}
@@ -183,6 +184,7 @@ export const PDFConversionWorkspaceView = ({ utility }: { utility: ToolDefinitio
 
 type ConversionControlsProps = {
   destination: React.ReactNode;
+  runLabel: string | null;
   activeUtility: ToolDefinition;
   activeToolId: AtomicToolId;
   onSelectTool: (id: AtomicToolId) => void;
@@ -211,6 +213,7 @@ type ConversionControlsProps = {
 
 const ConversionControls = ({
   destination,
+  runLabel,
   activeUtility,
   activeToolId,
   onSelectTool,
@@ -465,7 +468,7 @@ const ConversionControls = ({
         className="workspace-primary-action"
         aria-label={`Export ${activeUtility.title}`}
       >
-        Export {activeUtility.shortTitle}
+        {runLabel ?? `Export ${activeUtility.shortTitle}`}
       </Button>
       </CardContent>
     </Card>

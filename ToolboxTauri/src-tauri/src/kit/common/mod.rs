@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 pub use crate::kit::contracts::JobOutcome;
 pub use crate::kit::contracts::OutputLocation;
+use crate::kit::contracts::{OutcomeState, OutcomeWarning, WarningKind};
 
 pub struct OutputNaming;
 
@@ -96,9 +97,58 @@ impl OutputNaming {
         Self::reserve_candidate(path).map(|reservation| reservation.map(|(reservation, _)| reservation))
     }
 
+    pub fn reserve_single_output(
+        chosen_path: Option<&Path>,
+        input_path: &Path,
+        location: &OutputLocation,
+        suffix: &str,
+        extension: &str,
+    ) -> io::Result<OutputReservation> {
+        Self::create_single_output(chosen_path, input_path, location, suffix, extension).map(|(reservation, _)| reservation)
+    }
+
+    pub fn create_single_output(
+        chosen_path: Option<&Path>,
+        input_path: &Path,
+        location: &OutputLocation,
+        suffix: &str,
+        extension: &str,
+    ) -> io::Result<(OutputReservation, File)> {
+        let Some(chosen) = chosen_path else {
+            return Self::create_destination(input_path, location, suffix, extension);
+        };
+        let directory = chosen.parent().filter(|parent| chosen.is_absolute() && parent.is_dir()).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, format!("{} is not in a folder that exists", chosen.display()))
+        })?;
+        let name = chosen.file_name().and_then(|value| value.to_str()).filter(|value| !value.is_empty()).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "the chosen file name is empty")
+        })?;
+        let extension = extension.trim_start_matches('.');
+        let stem = match chosen.extension().and_then(|value| value.to_str()) {
+            Some(existing) if existing.eq_ignore_ascii_case(extension) => chosen.file_stem().and_then(|value| value.to_str()).unwrap_or(name),
+            _ => name,
+        };
+        Self::allocate_in(directory, stem, "", Some(extension), Self::reserve_candidate)
+    }
+
     fn allocate<T, F>(
         input_path: &Path,
         location: &OutputLocation,
+        suffix: &str,
+        extension: Option<&str>,
+        claim: F,
+    ) -> io::Result<T>
+    where
+        F: FnMut(&Path) -> io::Result<Option<T>>,
+    {
+        let directory = location.directory_for(input_path);
+        let stem = input_path.file_stem().and_then(|value| value.to_str()).unwrap_or("");
+        Self::allocate_in(&directory, stem, suffix, extension, claim)
+    }
+
+    fn allocate_in<T, F>(
+        directory: &Path,
+        stem: &str,
         suffix: &str,
         extension: Option<&str>,
         mut claim: F,
@@ -106,8 +156,6 @@ impl OutputNaming {
     where
         F: FnMut(&Path) -> io::Result<Option<T>>,
     {
-        let directory = location.directory_for(input_path);
-        let stem = input_path.file_stem().and_then(|value| value.to_str()).unwrap_or("");
         let extension = extension.map(|value| format!(".{}", value.trim_start_matches('.'))).unwrap_or_default();
         let mut counter = 0usize;
         loop {
@@ -200,6 +248,20 @@ impl OutputNaming {
         }
         Err(io::Error::new(io::ErrorKind::AlreadyExists, "could not allocate a unique temporary output"))
     }
+}
+
+
+pub fn note_renamed(outcome: JobOutcome, chosen_path: Option<&Path>) -> JobOutcome {
+    let Some(chosen) = chosen_path else { return outcome };
+    let renamed = match &outcome.state {
+        OutcomeState::Succeeded { output_paths } => output_paths.first().filter(|published| published.as_path() != chosen).cloned(),
+        _ => None,
+    };
+    let Some(published) = renamed else { return outcome };
+    let file_name = |path: &Path| path.file_name().map(|value| value.to_string_lossy().into_owned()).unwrap_or_default();
+    let (chosen_name, final_name) = (file_name(chosen), file_name(&published));
+    let message = format!("Saved as {final_name} so the existing {chosen_name} was not replaced.");
+    outcome.with_warning(OutcomeWarning { kind: WarningKind::RenamedToAvoidReplacing { chosen_name, final_name }, message })
 }
 
 #[cfg(test)]

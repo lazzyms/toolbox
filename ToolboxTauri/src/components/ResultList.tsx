@@ -44,10 +44,11 @@ interface ResultListProps {
     progress: Progress;
     loading: boolean;
     resultVerb: string;
+    namedByOutput?: boolean;
     onRetry?: (inputPath: string) => Promise<void>;
 }
 
-export const ResultList = ({ results, progress, loading, resultVerb, onRetry }: ResultListProps) => {
+export const ResultList = ({ results, progress, loading, resultVerb, namedByOutput = false, onRetry }: ResultListProps) => {
     const [actionStates, setActionStates] = useState<Record<number, RowActionState>>({});
     const resultSetGeneration = useRef(0);
 
@@ -92,16 +93,16 @@ export const ResultList = ({ results, progress, loading, resultVerb, onRetry }: 
                 <CardContent className="p-0">
                     <ul className="result-rows" aria-label="Results">
                         {results.map((result, index) => {
-                            const view = rowView(result, resultVerb);
+                            const view = rowView(result, resultVerb, namedByOutput);
                             const state = actionStates[index] ?? idleActionState;
                             const busy = state.pending !== null;
-                            const name = fileName(result.inputPath);
+                            const name = view.name;
                             const Icon = toneIcons[view.tone];
                             return (
                                 <li key={`${index}:${result.inputPath}`} className="result-row" data-tone={view.tone} data-state={result.state}>
                                     <span className="result-row-icon" aria-hidden="true"><Icon /></span>
                                     <span className="result-row-text">
-                                        <span className="result-row-name" title={result.inputPath}>{name}</span>
+                                        <span className="result-row-name" title={view.fullPath}>{name}</span>
                                         {view.detailLines.map((line, lineIndex) => (
                                             <span key={lineIndex} className="result-row-detail">{line}</span>
                                         ))}
