@@ -170,7 +170,6 @@ export const BatchPasswordFields = ({ mode, passwords, files }: { mode: Password
                     <Button variant="ghost" size="xs" onClick={passwords.undoClear}>Undo</Button>
                 </p>
             )}
-            <p className="workspace-note">Passwords are never saved and are cleared when you switch mode or leave.</p>
         </div>
     );
 };

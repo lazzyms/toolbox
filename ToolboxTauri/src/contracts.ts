@@ -191,6 +191,8 @@ export interface ToolDefinition {
   shortTitle: string;
   resultVerb: string;
   runningVerb: string;
+  runningDetail?: string;
+  lockedNote?: string;
   blurb: string;
   keywords?: readonly string[];
   symbol: string;

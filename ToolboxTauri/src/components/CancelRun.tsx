@@ -24,7 +24,7 @@ export const cancelConsequences = ({ finished, running, waiting }: RunTally): st
     waiting === 1 ? "The other file won't be processed." : waiting > 1 ? `The other ${waiting} files won't be processed.` : null,
 ].filter((sentence): sentence is string => sentence !== null).join(' ');
 
-export const CancelRun = ({ run }: { run: LiveRun }) => {
+export const CancelRun = ({ run, lockedNote = 'Options are locked until the batch finishes.' }: { run: LiveRun; lockedNote?: string }) => {
     const [confirming, setConfirming] = useState(false);
     const [requested, setRequested] = useState(false);
     const tally = tallyRun(run);
@@ -49,7 +49,7 @@ export const CancelRun = ({ run }: { run: LiveRun }) => {
 
     return (
         <div className="run-controls" role="group" aria-label="Running batch">
-            <p className="run-controls-lock">Options are locked until the batch finishes.</p>
+            <p className="run-controls-lock">{lockedNote}</p>
             <div className="run-controls-footer">
                 <span className="run-controls-hint">{`${tally.finished} of ${run.paths.length} done`}</span>
                 <Button variant="outline" size="sm" disabled={requested} aria-keyshortcuts={shortcutAria('cancel')} onClick={() => setConfirming(true)}>
