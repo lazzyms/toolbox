@@ -250,7 +250,7 @@ export const MainPage = () => {
     if (event.kind === "dropped-files") {
       setRejectedFiles(null);
       if (!selectedTool) {
-        setRejectedFiles({ kind: "rejected-files", paths: event.paths, reason: "Open a tool before dropping files here." });
+        void invoke("open_paths", { paths: event.paths });
       } else {
         window.dispatchEvent(new CustomEvent(TOOL_DROP_EVENT, { detail: event.paths }));
       }
@@ -330,6 +330,19 @@ export const MainPage = () => {
     document.addEventListener("keydown", onEditorKey);
     return () => document.removeEventListener("keydown", onEditorKey);
   }, [dispatchEditorCommand, settingsSection]);
+  // Escape leaves the open workspace unless something on top of it, or a running batch, owns the key.
+  useEffect(() => {
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented || settingsSection || !selectedTool) return;
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      if (target?.closest('[role="menu"], [role="dialog"], [role="alertdialog"], input, textarea, select, [contenteditable="true"]')) return;
+      if (document.querySelector('.run-controls, [role="dialog"], [role="alertdialog"], [role="menu"]')) return;
+      event.preventDefault();
+      goHome();
+    };
+    window.addEventListener("keydown", onEscape);
+    return () => window.removeEventListener("keydown", onEscape);
+  }, [goHome, selectedTool, settingsSection]);
   useEffect(() => {
     if (!focusWorkspaceHeadingOnNavigation.current || selectedWorkspace?.id !== "pdf-convert") return;
     focusWorkspaceHeadingOnNavigation.current = false;
@@ -366,6 +379,9 @@ export const MainPage = () => {
       } else if (id === "settings" || id === "shortcuts") {
         event.preventDefault();
         setSettingsSection(id === "settings" ? "appearance" : "keyboard-shortcuts");
+      } else if (id === "open" && !settingsSection && !selectedTool) {
+        event.preventDefault();
+        void openFilesFromMenu();
       } else if ((id === "run" || id === "open") && !settingsSection) {
         event.preventDefault();
         pressShortcutTarget(commandCenterRef.current, id);
@@ -374,7 +390,7 @@ export const MainPage = () => {
 
     window.addEventListener("keydown", onShortcut);
     return () => window.removeEventListener("keydown", onShortcut);
-  }, [settingsSection, selectedTool, findToolFromSettings]);
+  }, [settingsSection, selectedTool, findToolFromSettings, openFilesFromMenu]);
   useEffect(() => {
     const openFromCompatibilityNav = (event: Event) => {
       const id = (event as CustomEvent<string>).detail;

@@ -43,7 +43,7 @@ test.beforeEach(async ({ page }) => {
                 if (listener.event === name) callbacks.get(listener.handler)?.({ event: name, id, payload });
             }
         };
-        win.__drop = (paths) => dispatch("tauri://drag-drop", { paths, position: { x: 10, y: 10 } });
+        win.__drop = (paths) => dispatch("toolbox://shell-event", { kind: "dropped-files", paths });
         win.__emit = (payload) => dispatch("batch-progress", payload);
         win.__finish = (outcomes) => finish?.(outcomes);
         window.__TAURI_INTERNALS__ = {
@@ -65,7 +65,7 @@ test.beforeEach(async ({ page }) => {
                 if (command === "check_output_folder") return "ready";
                 if (command === "cancel_run") return true;
                 if (command === "plugin:path|resolve_directory") return "/Users/test";
-                if (command.startsWith("plugin:") || command === "open_output_path" || command === "reveal_output_path") return null;
+                if (command.startsWith("plugin:") || command === "shell_ready" || command === "open_output_path" || command === "reveal_output_path") return null;
                 if (command.startsWith("inspect_")) throw "No preview in this test.";
                 return new Promise((resolve) => { finish = resolve; });
             },
@@ -85,7 +85,7 @@ const startLocking = async (page: Page, paths: string[]) => {
     await page.getByRole("button", { name: "Open Lock & Unlock", exact: true }).click();
     await page.getByRole("radiogroup", { name: "Mode" }).getByRole("radio", { name: "Lock", exact: true }).click();
     await expect.poll(() => page.evaluate(() => (window as unknown as LiveWindow).__invocations.some(({ command, args }) =>
-        command === "plugin:event|listen" && (args as { event: string }).event === "tauri://drag-drop"))).toBe(true);
+        command === "plugin:event|listen" && (args as { event: string }).event === "toolbox://shell-event"))).toBe(true);
     await page.evaluate((paths) => (window as unknown as LiveWindow).__drop(paths), paths);
     await expect(page.getByRole("listbox").getByRole("option")).toHaveCount(paths.length);
     for (const field of await page.locator('.workspace-control-panel input[type="password"]').all()) await field.fill("test-password");

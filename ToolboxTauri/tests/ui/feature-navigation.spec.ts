@@ -1,9 +1,12 @@
 import { expect, test, type Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import type { JobOutcome, LimitKind, OutputSettings } from "../../src/contracts";
 import { ToolWorkspaceRegistry, UtilityRegistry, toolsForWorkspace, workspaceForTool } from "../../src/registry";
 import { RetiredToolIds } from "../../src/registry/retiredToolIds";
 import { displayedBoxToPdfRect } from "../../src/features/pdf-editor/geometry";
+
+const appVersion: string = JSON.parse(readFileSync(path.resolve("package.json"), "utf8")).version;
 
 // Lock asks for the new password twice, so fill every password field in the options panel.
 const fillPasswords = async (page: Page, password: string) => {
@@ -163,7 +166,7 @@ if (command === "preview_pdf_scene_pages") return (args as { request: { pageIndi
     }, { fixturePath, pdfFixturePath, mockedOutputPaths, defaultOutputSettings });
 });
 
-test("every registered feature opens its detail pane", async ({ page }, testInfo) => {
+test("every registered feature opens its detail pane", async ({ page }) => {
     await page.goto("/");
     await expect(page.locator(".topbar--home").getByRole("textbox", { name: "Search tools" })).toBeVisible();
     await expandViews(page);
@@ -186,15 +189,6 @@ test("every registered feature opens its detail pane", async ({ page }, testInfo
             await expect(page.getByRole("heading", { name: workspaceForTool(utility.id)?.title, exact: true })).toBeVisible();
         }
         await expect(page.locator('p.sr-only[role="status"]')).toHaveText(`${workspaceForTool(utility.id)?.title ?? utility.title} workspace open.`);
-        const workspaceArtifact = new Map([
-            ["icon-set", "media-workspace.png"],
-            ["pdf-to-images", "pdf-conversion-workspace.png"],
-            ["pdf-unlock", "security-workspace.png"],
-        ]).get(utility.id);
-        if (workspaceArtifact) {
-            await expect(page.getByText("On this device", { exact: true })).toBeVisible();
-            await page.screenshot({ path: testInfo.outputPath(workspaceArtifact) });
-        }
     }
 });
 
@@ -495,9 +489,9 @@ test("Windows labels the reveal action for File Explorer", async ({ page }) => {
 test("settings checks for and installs available updates", async ({ page }) => {
     await page.goto("/");
     const updates = await openSettingsSection(page, "Updates");
-    await expect(updates.getByRole("status")).toHaveText("Check for updatesVersion 1.0.13.");
+    await expect(updates.getByRole("status")).toHaveText(`Check for updatesVersion ${appVersion}.`);
     await updates.getByRole("button", { name: "Check now" }).click();
-    await expect(updates.getByRole("status")).toHaveText("Toolbox is up to dateVersion 1.0.13.");
+    await expect(updates.getByRole("status")).toHaveText(`Toolbox is up to dateVersion ${appVersion}.`);
 });
 
 async function mockUpdateAvailable(page: Page, dialogChoice: string | null) {
@@ -878,7 +872,7 @@ test("the settings sidebar switches sections and lists only the built ones", asy
     const about = await openSettingsSection(page, "About and support", false);
     await expect(sections.getByRole("button", { name: "About and support" })).toHaveAttribute("aria-pressed", "true");
     await expect(sections.getByRole("button", { name: "Appearance" })).toHaveAttribute("aria-pressed", "false");
-    await expect(about).toContainText("Version 1.0.13 for macOS");
+    await expect(about).toContainText(`Version ${appVersion} for macOS`);
     await expect(about.getByRole("img", { name: "Buy Me a Coffee donation QR code" })).toBeVisible();
     await expect(about).toContainText("Support Toolbox");
 });

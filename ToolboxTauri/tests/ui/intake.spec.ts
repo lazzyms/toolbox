@@ -62,7 +62,7 @@ test.beforeEach(async ({ page }) => {
         Object.defineProperty(window.navigator, "platform", { configurable: true, value: "MacIntel" });
         win.__drop = (paths) => {
             for (const [id, listener] of listeners) {
-                if (listener.event === "tauri://drag-drop") callbacks.get(listener.handler)?.({ event: listener.event, id, payload: { paths, position: { x: 10, y: 10 } } });
+                if (listener.event === "toolbox://shell-event") callbacks.get(listener.handler)?.({ event: listener.event, id, payload: { kind: "dropped-files", paths } });
             }
         };
         window.__TAURI_INTERNALS__ = {
@@ -86,7 +86,7 @@ test.beforeEach(async ({ page }) => {
                 if (command === "get_output_settings") return win.__outputSettings;
                 if (command === "check_output_folder") return "ready";
                 if (command === "plugin:path|resolve_directory") return "/Users/test";
-                if (command.startsWith("plugin:")) return null;
+                if (command.startsWith("plugin:") || command === "shell_ready") return null;
                 if (command.startsWith("inspect_")) throw "No preview in this test.";
                 if (win.__processingDelayMs) await new Promise((resolve) => window.setTimeout(resolve, win.__processingDelayMs));
                 const { request } = args as { request: { paths: string[] } };
@@ -118,7 +118,7 @@ const open = async (page: Page, title: string) => {
 
 const drop = async (page: Page, paths: string[]) => {
     await expect.poll(() => page.evaluate(() => (window as unknown as IntakeWindow).__invocations.some(({ command, args }) =>
-        command === "plugin:event|listen" && (args as { event: string }).event === "tauri://drag-drop"))).toBe(true);
+        command === "plugin:event|listen" && (args as { event: string }).event === "toolbox://shell-event"))).toBe(true);
     await page.evaluate((paths) => (window as unknown as IntakeWindow).__drop(paths), paths);
 };
 
