@@ -5,12 +5,12 @@ File security lets you remove an existing password or protect a PDF or supported
 ## Sub-features
 
 - `password-remove` removes a known password from a PDF or supported Office file.
-- `lock-unlock` in Lock mode protects PDF, DOCX and XLSX files with a new password in one batch and writes copies ending in `-protected`.
+- `lock-unlock` in Lock mode protects PDF, DOCX, XLSX and PPTX files with a new password in one batch and writes copies ending in `-protected`.
 
 ## How to get to it (user POV)
 
 - Choose `Documents` under Tool categories and select `Remove Password` or `Lock & Unlock`.
-- Open `Lock & Unlock` and switch to `Lock` to protect PDFs, Word and Excel files.
+- Open `Lock & Unlock` and switch to `Lock` to protect PDFs and Word, Excel and PowerPoint files.
 - Search `Search tools` for the exact action title.
 - Choose a visible action in Quick access or Recent.
 - Choose `Open Protect & unlock files` on the Tool library card.
@@ -25,12 +25,12 @@ Preconditions:
 
 - **Remove a password.** Open `Remove Password`, choose `Choose files to process`, select the protected scratch file, and enter its known test password. Choose `Remove Password from selected files`. The result list reports completion and names a new unlocked copy. Confirm the output opens with the test password no longer required and the input remains unchanged.
 - **Protect a PDF.** Open `Lock & Unlock`, switch to `Lock`, select a scratch PDF, enter a disposable new password twice, and choose `Lock 1 file`. Run stays disabled until both fields match. The result list names a copy ending in `-protected`. Reopen that copy and confirm that the new password works.
-- **Protect a mixed batch.** Open `Lock & Unlock`, switch to `Lock`, select a scratch PDF, DOCX and XLSX together, enter a disposable new password twice, and choose `Lock 3 files`. Each row names a copy ending in `-protected`. Confirm each output opens with the test password. Report unsupported legacy Office formats as failures, not successes.
+- **Protect a mixed batch.** Open `Lock & Unlock`, switch to `Lock`, select a scratch PDF, DOCX, XLSX and PPTX together, enter a disposable new password twice, and choose `Lock 4 files`. Each row names a copy ending in `-protected`. Confirm each output opens with the test password. Legacy DOC, XLS and PPT files show `Won't run` in Lock and are not sent.
 - **Restore the run.** Keep only the evidence under `evidence/`. Remove scratch inputs and outputs after recording their names and checks.
 
 ## Gotchas
 
 - `Remove Password` needs the correct existing password. A wrong password must fail without changing the source.
-- Lock supports PDF, DOCX and XLSX. Legacy DOC, XLS and PPT, and PPTX, are not locked yet.
+- Lock supports PDF, DOCX, XLSX and PPTX. Legacy DOC, XLS and PPT are not locked yet.
 - The visible result message does not prove that the output is valid. Reopen the output with the expected password behavior.
 - Passwords belong only in disposable local fixtures and local evidence notes. Do not put them in the shared skill, Git, or a user-facing report.

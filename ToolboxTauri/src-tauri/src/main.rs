@@ -1140,7 +1140,7 @@ mod command_tests {
     }
 
     #[test]
-    fn lock_isolates_docx_xlsx_success_from_legacy_and_powerpoint_rejections() {
+    fn lock_isolates_docx_xlsx_and_pptx_success_from_legacy_rejections() {
         let root = sandbox("lock-office-command");
         let extensions = ["docx", "doc", "xlsx", "xls", "ppt", "pptx"];
         let inputs = extensions
@@ -1148,7 +1148,7 @@ mod command_tests {
             .map(|extension| root.join(format!("source.{extension}")))
             .collect::<Vec<_>>();
         for (extension, input) in extensions.iter().zip(&inputs) {
-            let fixture = if matches!(*extension, "docx" | "xlsx") {
+            let fixture = if matches!(*extension, "docx" | "xlsx" | "pptx") {
                 test_minimal_ooxml_package(extension)
             } else {
                 b"Legacy Office fixture".to_vec()
@@ -1175,7 +1175,7 @@ mod command_tests {
             "BatchRunner must preserve the requested input order",
         );
         for (extension, outcome) in extensions.iter().zip(&outcomes) {
-            if matches!(*extension, "docx" | "xlsx") {
+            if matches!(*extension, "docx" | "xlsx" | "pptx") {
                 assert!(outcome.error().is_none(), "{}", outcome.error().cloned().unwrap_or_default());
                 assert_eq!(outcome.output_paths().len(), 1);
                 assert!(outcome.output_paths()[0].is_file());
@@ -1187,7 +1187,7 @@ mod command_tests {
         for (input, original) in inputs.iter().zip(originals) {
             assert_eq!(std::fs::read(input).unwrap(), original, "Office source was modified: {}", input.display());
         }
-        assert_eq!(std::fs::read_dir(root.join("output")).unwrap().count(), 2);
+        assert_eq!(std::fs::read_dir(root.join("output")).unwrap().count(), 3);
 
         let _ = std::fs::remove_dir_all(root);
     }
@@ -1286,10 +1286,11 @@ mod command_tests {
     }
 
     fn mixed_lock_batch(root: &PathBuf) -> Vec<PathBuf> {
-        let inputs = vec![root.join("report.pdf"), root.join("lease.docx"), root.join("budget.xlsx")];
+        let inputs = vec![root.join("report.pdf"), root.join("lease.docx"), root.join("budget.xlsx"), root.join("deck.pptx")];
         make_pdf(&inputs[0], 1);
         std::fs::write(&inputs[1], test_minimal_ooxml_package("docx")).unwrap();
         std::fs::write(&inputs[2], test_minimal_ooxml_package("xlsx")).unwrap();
+        std::fs::write(&inputs[3], test_minimal_ooxml_package("pptx")).unwrap();
         inputs
     }
 
@@ -1303,7 +1304,7 @@ mod command_tests {
     }
 
     #[test]
-    fn protect_files_locks_a_mixed_pdf_word_and_excel_batch_that_each_reopen_with_the_password() {
+    fn protect_files_locks_a_mixed_pdf_word_excel_and_powerpoint_batch_that_each_reopen_with_the_password() {
         let root = sandbox("protect-files-mixed-office");
         let inputs = mixed_lock_batch(&root);
         let originals = inputs.iter().map(|input| std::fs::read(input).unwrap()).collect::<Vec<_>>();
@@ -1315,7 +1316,7 @@ mod command_tests {
             assert!(outcome.error().is_none(), "{}", outcome.error().cloned().unwrap_or_default());
             outcome.output_paths()[0].clone()
         }).collect::<Vec<_>>();
-        assert_eq!(locked, ["report-protected.pdf", "lease-protected.docx", "budget-protected.xlsx"].map(|name| root.join("protected").join(name)));
+        assert_eq!(locked, ["report-protected.pdf", "lease-protected.docx", "budget-protected.xlsx", "deck-protected.pptx"].map(|name| root.join("protected").join(name)));
         for output in &locked {
             let format = crate::kit::password::ProtectedFormat::from_path(output).unwrap();
             assert_eq!(crate::kit::password::probe(&std::fs::read(output).unwrap(), format).unwrap(), crate::kit::password::ProtectionState::OpenPassword, "{} needs a password", output.display());
@@ -1333,9 +1334,13 @@ mod command_tests {
         for wrong in unlock(crate::kit::TEST_OVERRIDE_PASSWORD, "wrong") {
             assert_eq!(wrong.error().map(|error| error.kind.clone()), Some(ErrorKind::WrongPassword), "{}", wrong.input_path.display());
         }
-        for unlocked in unlock(crate::kit::TEST_PASSWORD, "unlocked") {
+        for (unlocked, original) in unlock(crate::kit::TEST_PASSWORD, "unlocked").iter().zip(&originals) {
             assert!(unlocked.error().is_none(), "{}", unlocked.error().cloned().unwrap_or_default());
-            assert!(opens_without_password(&unlocked.output_paths()[0]), "{} still needs a password", unlocked.output_paths()[0].display());
+            let output = &unlocked.output_paths()[0];
+            assert!(opens_without_password(output), "{} still needs a password", output.display());
+            if output.extension().is_some_and(|extension| extension != "pdf") {
+                assert_eq!(&std::fs::read(output).unwrap(), original, "{} unlocks to the original package", output.display());
+            }
         }
         let reopened = lopdf::Document::load(root.join("unlocked").join("report-protected-unlocked.pdf")).unwrap();
         assert_eq!(reopened.get_pages().len(), 1);
@@ -1384,7 +1389,7 @@ mod command_tests {
         }
         let mut written = std::fs::read_dir(root.join("protected")).unwrap().map(|entry| entry.unwrap().file_name().into_string().unwrap()).collect::<Vec<_>>();
         written.sort();
-        assert_eq!(written, ["budget-protected.xlsx", "lease-protected.docx"]);
+        assert_eq!(written, ["budget-protected.xlsx", "deck-protected.pptx", "lease-protected.docx"]);
         for (input, original) in inputs.iter().zip(originals) {
             assert_eq!(std::fs::read(input).unwrap(), original, "original was modified: {}", input.display());
         }

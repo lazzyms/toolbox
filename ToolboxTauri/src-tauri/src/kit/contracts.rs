@@ -834,7 +834,7 @@ mod tests {
         let office = native_capability("remove_password").unwrap();
         assert_eq!(office.accepted_extensions, [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"]);
         let lock = native_capability("protect_files").unwrap();
-        assert_eq!((lock.accepted_extensions.as_slice(), lock.output_suffix.as_str()), ([".pdf", ".docx", ".xlsx"].map(String::from).as_slice(), "-protected"));
+        assert_eq!((lock.accepted_extensions.as_slice(), lock.output_suffix.as_str()), ([".pdf", ".docx", ".xlsx", ".pptx"].map(String::from).as_slice(), "-protected"));
         assert!(lock.native_available);
         assert!(native_capability("protect_pdf").is_none(), "the PDF protect command is retired");
         assert!(native_capability("protect_office").is_none(), "the Office protect command is retired");
@@ -881,11 +881,11 @@ mod tests {
     }
 
     #[test]
-    fn native_office_protection_accepts_docx_and_xlsx_only() {
-        for extension in ["docx", "xlsx", "DOCX", "XLSX"] {
+    fn native_office_protection_accepts_docx_xlsx_and_pptx_only() {
+        for extension in ["docx", "xlsx", "pptx", "DOCX", "XLSX", "PPTX"] {
             assert!(OfficeProcessor::supports_protection_extension(extension));
         }
-        for extension in ["doc", "xls", "ppt", "pptx"] {
+        for extension in ["doc", "xls", "ppt"] {
             assert!(!OfficeProcessor::supports_protection_extension(extension));
         }
     }
