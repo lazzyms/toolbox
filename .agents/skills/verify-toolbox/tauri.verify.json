@@ -1,0 +1,23 @@
+{
+  "productName": "Toolbox Verification",
+  "identifier": "com.toolbox.desktop.verify",
+  "build": {
+    "beforeBuildCommand": "npm run build"
+  },
+  "bundle": {
+    "createUpdaterArtifacts": false
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Toolbox",
+        "width": 1100,
+        "height": 720,
+        "maximized": true,
+        "minWidth": 800,
+        "minHeight": 560,
+        "resizable": true
+      }
+    ]
+  }
+}

@@ -12,6 +12,9 @@ export default defineConfig({
     testDir: "./tests/ui",
     outputDir,
     fullyParallel: true,
+    // Hosted Windows runners drop dev-server connections now and then (net::ERR_NO_BUFFER_SPACE).
+    // One CI retry absorbs that; a retried test is still reported as flaky.
+    retries: process.env.CI ? 1 : 0,
     reporter: "list",
     use: {
         baseURL,
