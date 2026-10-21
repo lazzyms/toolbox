@@ -128,17 +128,29 @@ test("the shipped table sends the retired Remove Password id to Lock & Unlock", 
 test("the shipped table sends the retired Protect PDF id to Lock & Unlock, also after the first migration ran", () => {
   assert.equal(RetiredToolIds.replacements.get("pdf-protect"), "lock-unlock");
   assert.ok(!registeredToolIds.has("pdf-protect"));
-  const storage = new MemoryStorage({ [favoritesStorageKey]: ["pdf-protect", "office-protect"], [recentStorageKey]: ["pdf-merge", "pdf-protect", "lock-unlock"] });
+  const storage = new MemoryStorage({ [favoritesStorageKey]: ["pdf-protect", "pdf-merge"], [recentStorageKey]: ["pdf-merge", "pdf-protect", "lock-unlock"] });
   storage.setItem(toolIdMigrationStorageKey, "1");
   migrateSavedToolIds(storage);
-  assert.deepEqual(storage.list(favoritesStorageKey), ["lock-unlock", "office-protect"]);
+  assert.deepEqual(storage.list(favoritesStorageKey), ["lock-unlock", "pdf-merge"]);
   assert.deepEqual(storage.list(recentStorageKey), ["pdf-merge", "lock-unlock"]);
-  assert.equal(storage.getItem(toolIdMigrationStorageKey), "2");
+  assert.equal(storage.getItem(toolIdMigrationStorageKey), "3");
+});
+
+test("the shipped table sends the retired Protect Office Files id to Lock & Unlock, also after the second migration ran", () => {
+  assert.equal(RetiredToolIds.version, 3);
+  assert.equal(RetiredToolIds.replacements.get("office-protect"), "lock-unlock");
+  assert.ok(!registeredToolIds.has("office-protect"));
+  const storage = new MemoryStorage({ [favoritesStorageKey]: ["office-protect", "pdf-merge"], [recentStorageKey]: ["lock-unlock", "pdf-merge", "office-protect"] });
+  storage.setItem(toolIdMigrationStorageKey, "2");
+  migrateSavedToolIds(storage);
+  assert.deepEqual(storage.list(favoritesStorageKey), ["lock-unlock", "pdf-merge"]);
+  assert.deepEqual(storage.list(recentStorageKey), ["lock-unlock", "pdf-merge"]);
+  assert.equal(storage.getItem(toolIdMigrationStorageKey), "3");
 });
 
 test("the retired tool id table rejects ids that are still registered or map nowhere", () => {
   const table = (retired: Record<string, unknown>, version: unknown = 1) => () => parseRetiredToolIds({ version, retired });
-  assert.throws(table({ "lock-unlock": "office-protect" }), /still a registered tool/);
+  assert.throws(table({ "pdf-merge": "lock-unlock" }), /still a registered tool/);
   assert.throws(table({ "file-unlock": "file-lock" }), /registered tool id or removed/);
   assert.throws(table({ "file-unlock": "file-lock", "file-lock": "lock-unlock" }), /registered tool id or removed/);
   assert.throws(table({ "file-unlock": null }), /registered tool id or removed/);

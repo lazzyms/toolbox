@@ -13,7 +13,7 @@ const workspaceIds = [...workspaceSource.matchAll(/toolIds:\s*\[([\s\S]*?)\]/g)]
 
 const failures = [];
 const unique = (values) => new Set(values).size === values.length;
-const expectedAtomicToolCount = 32;
+const expectedAtomicToolCount = 31;
 if (atomicIds.length !== expectedAtomicToolCount || !unique(atomicIds)) failures.push(`expected ${expectedAtomicToolCount} unique atomic IDs, found ${atomicIds.length}`);
 if (workspaceIds.length !== atomicIds.length || !unique(workspaceIds)) failures.push("workspace membership must contain each atomic ID exactly once");
 if (atomicIds.some((id) => !workspaceIds.includes(id)) || workspaceIds.some((id) => !atomicIds.includes(id))) failures.push("workspace membership and atomic registry differ");
@@ -22,8 +22,8 @@ const expectedWorkspaces = ["file-security", "pdf-editor", "pdf-convert", "image
 const declaredWorkspaces = [...workspaceSource.matchAll(/^\s*id: "([^"]+)"/gm)].map((match) => match[1]);
 if (declaredWorkspaces.join() !== expectedWorkspaces.join()) failures.push(`expected workspaces ${expectedWorkspaces.join(", ")}, found ${declaredWorkspaces.join(", ")}`);
 const membersOf = (id) => [...(workspaceSource.match(new RegExp(`id: "${id}"[\\s\\S]*?toolIds:\\s*\\[([\\s\\S]*?)\\]`))?.[1] ?? "").matchAll(/"([^"]+)"/g)].map((match) => match[1]);
-if (membersOf("file-security").join() !== "lock-unlock,office-protect") failures.push("file-security must hold exactly lock-unlock and office-protect");
-for (const retired of ["pdf-unlock", "pdf-protect"]) {
+if (membersOf("file-security").join() !== "lock-unlock") failures.push("file-security must hold exactly lock-unlock");
+for (const retired of ["pdf-unlock", "pdf-protect", "office-protect"]) {
   if (atomicIds.includes(retired) || workspaceIds.includes(retired)) failures.push(`${retired} is retired and must not be registered`);
 }
 if (membersOf("compress-files").join() !== "pdf-compress,compress") failures.push("compress-files must hold exactly pdf-compress and compress");

@@ -14,7 +14,6 @@ use crate::kit::vision;
 use crate::kit::contracts::{command_supports_preview, validate_command_inputs, validate_page_selection, CompressImagesRequest, ConvertImagesRequest, OutcomeState, PasswordRequest, ToolError};
 use crate::kit::common::batch_runner::{BatchRunner, FileEvent, FolderCheck, RunEvents};
 use crate::kit::password::PasswordProcessor;
-use crate::kit::office::OfficeProcessor;
 use std::sync::Arc;
 
 const BATCH_PROGRESS_EVENT: &str = "batch-progress";
@@ -67,15 +66,6 @@ async fn protect_files(events: RunEvents, request: PasswordRequest) -> Vec<JobOu
     BatchRunner::run(&events, "protect_files", request.paths.clone(), &request.output_location, &request, |request, path| {
         let password = request.password_for(&path);
         PasswordProcessor::protect(path, password, &request.output_location)
-    })
-}
-
-#[tauri::command]
-async fn protect_office(events: RunEvents, request: PasswordRequest) -> Vec<JobOutcome> {
-    let request = Arc::new(request);
-    BatchRunner::run(&events, "protect_office", request.paths.clone(), &request.output_location, &request, |request, path| {
-        let password = request.password_for(&path);
-        OfficeProcessor::protect(path, password, &request.output_location)
     })
 }
 
@@ -446,7 +436,6 @@ fn main() {
             cancel_run,
             remove_password,
             protect_files,
-            protect_office,
             compress_images,
             convert_images,
             inspect_pdf,
@@ -508,7 +497,7 @@ mod command_tests {
     use crate::kit::common::OutputLocation;
     use crate::kit::contracts::{ErrorKind, LimitKind};
     use crate::kit::images::tools::{CropRequest, GifCreateRequest, GifExtractRequest, ImageEdit, ImageEditExportRequest, ImageEditPlan, ImageEditPreviewRequest, IconSetRequest, MetadataRequest, ResizeRequest, RotateRequest, TiffRequest, ToneRequest, WatermarkRequest};
-    use crate::kit::office::test_minimal_ooxml_package;
+    use crate::kit::office::{test_minimal_ooxml_package, OfficeProcessor};
     use crate::kit::pdf::editor::{AddPdfPagesRequest, CropPdfRequest, EditPdfRequest, OrganizePdfRequest, PageScope, PdfEditMode, PdfEditOperation, PdfEditSessionPlan, PdfEditSessionRequest, PdfOverlay, PdfOverlayPosition, PdfRect, RotatePage, SignPdfRequest};
     use crate::kit::pdf::remaining::{CompressPdfRequest, ImagesToPdfRequest, MergePdfRequest, PageOverlayRequest, PageSelectionRequest, PdfToImagesRequest, PdfToTextRequest};
     use crate::kit::vision::VisionRequest;
@@ -1084,7 +1073,10 @@ mod command_tests {
         outputs.extend(named(&mut naming, "remove_image_background", image.clone(), assert_vision_adapter("background removal", remove_image_background(RunEvents::silent(), VisionRequest { paths: vec![image.clone()], pages: None, output_location: location(&root, "background removal") }))));
         let docx = root.join("document.docx");
         std::fs::write(&docx, test_minimal_ooxml_package("docx")).unwrap();
-        outputs.extend(named(&mut naming, "protect_office", docx.clone(), assert_success("protect office", protect_office(RunEvents::silent(), PasswordRequest { paths: vec![docx.clone()], password: "office-password".into(), password_overrides: Default::default(), output_location: location(&root, "protect office") }))));
+        let docx_bytes = std::fs::read(&docx).unwrap();
+        let locked_docx = assert_success("lock word", protect_files(RunEvents::silent(), PasswordRequest { paths: vec![docx.clone()], password: crate::kit::TEST_PASSWORD.into(), password_overrides: Default::default(), output_location: location(&root, "lock word") }));
+        assert_eq!(locked_docx[0].file_name().and_then(|name| name.to_str()), Some("document-protected.docx"));
+        assert_eq!(std::fs::read(&docx).unwrap(), docx_bytes, "native E2E commands must not modify their Word input");
         assert_outputs_use_declared_suffixes(&naming);
 
         assert_eq!(std::fs::read(&pdf).unwrap(), plain_pdf_bytes, "native E2E commands must not modify their PDF input");
@@ -1148,8 +1140,8 @@ mod command_tests {
     }
 
     #[test]
-    fn office_protection_command_isolates_docx_xlsx_success_from_legacy_rejections() {
-        let root = sandbox("office-protect-command");
+    fn lock_isolates_docx_xlsx_success_from_legacy_and_powerpoint_rejections() {
+        let root = sandbox("lock-office-command");
         let extensions = ["docx", "doc", "xlsx", "xls", "ppt", "pptx"];
         let inputs = extensions
             .iter()
@@ -1169,9 +1161,9 @@ mod command_tests {
             .collect::<Vec<_>>();
         let output_folder = location(&root, "output");
 
-        let outcomes = tauri::async_runtime::block_on(protect_office(RunEvents::silent(), PasswordRequest {
+        let outcomes = tauri::async_runtime::block_on(protect_files(RunEvents::silent(), PasswordRequest {
             paths: inputs.clone(),
-            password: "secret".into(),
+            password: crate::kit::TEST_PASSWORD.into(),
             password_overrides: Default::default(),
             output_location: output_folder,
         }));
@@ -1270,17 +1262,15 @@ mod command_tests {
             ("remove_password wrong type", ErrorKind::InvalidInput, tauri::async_runtime::block_on(remove_password(RunEvents::silent(), request(vec![text.clone()], "secret")))),
             ("remove_password empty pdf password", ErrorKind::InvalidInput, tauri::async_runtime::block_on(remove_password(RunEvents::silent(), request(vec![pdf.clone()], "")))),
             ("remove_password empty office password", ErrorKind::InvalidInput, tauri::async_runtime::block_on(remove_password(RunEvents::silent(), request(vec![docx.clone()], "")))),
-            ("protect_files office file", ErrorKind::InvalidInput, tauri::async_runtime::block_on(protect_files(RunEvents::silent(), request(vec![docx.clone()], "secret")))),
             ("protect_files wrong type", ErrorKind::InvalidInput, tauri::async_runtime::block_on(protect_files(RunEvents::silent(), request(vec![text.clone()], "secret")))),
             ("protect_files empty password", ErrorKind::InvalidInput, tauri::async_runtime::block_on(protect_files(RunEvents::silent(), request(vec![pdf.clone()], "")))),
             ("protect_files password with a line break", ErrorKind::InvalidInput, tauri::async_runtime::block_on(protect_files(RunEvents::silent(), request(vec![pdf.clone()], "two\nlines")))),
-            ("protect_office wrong type", ErrorKind::InvalidInput, tauri::async_runtime::block_on(protect_office(RunEvents::silent(), request(vec![text.clone()], "secret")))),
-            ("protect_office empty password", ErrorKind::InvalidInput, tauri::async_runtime::block_on(protect_office(RunEvents::silent(), request(vec![docx.clone()], "")))),
+            ("protect_files empty office password", ErrorKind::InvalidInput, tauri::async_runtime::block_on(protect_files(RunEvents::silent(), request(vec![docx.clone()], "")))),
             ("remove_password damaged pdf", ErrorKind::Processing, tauri::async_runtime::block_on(remove_password(RunEvents::silent(), request(vec![damaged_pdf.clone()], "secret")))),
             ("remove_password damaged docx", ErrorKind::Processing, tauri::async_runtime::block_on(remove_password(RunEvents::silent(), request(vec![damaged_docx.clone()], "secret")))),
             ("remove_password damaged xls", ErrorKind::Processing, tauri::async_runtime::block_on(remove_password(RunEvents::silent(), request(vec![damaged_xls.clone()], "secret")))),
             ("protect_files damaged pdf", ErrorKind::InvalidInput, tauri::async_runtime::block_on(protect_files(RunEvents::silent(), request(vec![damaged_pdf.clone()], "secret")))),
-            ("protect_office damaged docx", ErrorKind::InvalidInput, tauri::async_runtime::block_on(protect_office(RunEvents::silent(), request(vec![damaged_docx.clone()], "secret")))),
+            ("protect_files damaged docx", ErrorKind::InvalidInput, tauri::async_runtime::block_on(protect_files(RunEvents::silent(), request(vec![damaged_docx.clone()], "secret")))),
         ];
 
         for (name, kind, outcomes) in cases {
@@ -1295,48 +1285,109 @@ mod command_tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    #[test]
-    fn protect_files_locks_pdfs_round_trips_and_turns_office_files_away_alone() {
-        let root = sandbox("protect-files-mixed-office");
-        let pdf = root.join("source.pdf");
-        let office = root.join("source.docx");
-        make_pdf(&pdf, 1);
-        std::fs::write(&office, b"Office fixture").unwrap();
-        let pdf_original = std::fs::read(&pdf).unwrap();
-        let office_original = std::fs::read(&office).unwrap();
+    fn mixed_lock_batch(root: &PathBuf) -> Vec<PathBuf> {
+        let inputs = vec![root.join("report.pdf"), root.join("lease.docx"), root.join("budget.xlsx")];
+        make_pdf(&inputs[0], 1);
+        std::fs::write(&inputs[1], test_minimal_ooxml_package("docx")).unwrap();
+        std::fs::write(&inputs[2], test_minimal_ooxml_package("xlsx")).unwrap();
+        inputs
+    }
 
-        let outcomes = tauri::async_runtime::block_on(protect_files(RunEvents::silent(), PasswordRequest {
-            paths: vec![pdf.clone(), office.clone()],
+    fn lock(inputs: &[PathBuf], output_location: OutputLocation) -> Vec<JobOutcome> {
+        tauri::async_runtime::block_on(protect_files(RunEvents::silent(), PasswordRequest {
+            paths: inputs.to_vec(),
             password: crate::kit::TEST_PASSWORD.into(),
             password_overrides: Default::default(),
-            output_location: location(&root, "protected"),
-        }));
+            output_location,
+        }))
+    }
 
-        assert_eq!(outcomes.len(), 2);
-        assert!(outcomes[0].error().is_none(), "{}", outcomes[0].error().cloned().unwrap_or_default());
-        assert_eq!(outcomes[0].output_paths(), [root.join("protected").join("source-protected.pdf")]);
-        let locked = std::fs::read(&outcomes[0].output_paths()[0]).unwrap();
-        assert_eq!(crate::kit::password::probe(&locked, crate::kit::password::ProtectedFormat::Pdf).unwrap(), crate::kit::password::ProtectionState::OpenPassword);
-        assert!(outcomes[1].output_paths().is_empty());
-        assert_eq!(outcomes[1].error().map(|error| error.kind.clone()), Some(ErrorKind::InvalidInput), "an Office file is turned away alone until Office Lock ships");
-        assert_eq!(std::fs::read(&pdf).unwrap(), pdf_original);
-        assert_eq!(std::fs::read(&office).unwrap(), office_original);
-        assert_eq!(std::fs::read_dir(root.join("protected")).unwrap().count(), 1);
+    #[test]
+    fn protect_files_locks_a_mixed_pdf_word_and_excel_batch_that_each_reopen_with_the_password() {
+        let root = sandbox("protect-files-mixed-office");
+        let inputs = mixed_lock_batch(&root);
+        let originals = inputs.iter().map(|input| std::fs::read(input).unwrap()).collect::<Vec<_>>();
+
+        let outcomes = lock(&inputs, location(&root, "protected"));
+
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), inputs);
+        let locked = outcomes.iter().map(|outcome| {
+            assert!(outcome.error().is_none(), "{}", outcome.error().cloned().unwrap_or_default());
+            outcome.output_paths()[0].clone()
+        }).collect::<Vec<_>>();
+        assert_eq!(locked, ["report-protected.pdf", "lease-protected.docx", "budget-protected.xlsx"].map(|name| root.join("protected").join(name)));
+        for output in &locked {
+            let format = crate::kit::password::ProtectedFormat::from_path(output).unwrap();
+            assert_eq!(crate::kit::password::probe(&std::fs::read(output).unwrap(), format).unwrap(), crate::kit::password::ProtectionState::OpenPassword, "{} needs a password", output.display());
+        }
+        for (input, original) in inputs.iter().zip(&originals) {
+            assert_eq!(&std::fs::read(input).unwrap(), original, "original was modified: {}", input.display());
+        }
 
         let unlock = |password: &str, folder: &str| tauri::async_runtime::block_on(remove_password(RunEvents::silent(), PasswordRequest {
-            paths: outcomes[0].output_paths().to_vec(),
+            paths: locked.clone(),
             password: password.into(),
             password_overrides: Default::default(),
             output_location: location(&root, folder),
-        })).remove(0);
-        let wrong = unlock(crate::kit::TEST_OVERRIDE_PASSWORD, "wrong");
-        assert_eq!(wrong.error().map(|error| error.kind.clone()), Some(ErrorKind::WrongPassword));
-        let unlocked = unlock(crate::kit::TEST_PASSWORD, "unlocked");
-        assert!(unlocked.error().is_none(), "{}", unlocked.error().cloned().unwrap_or_default());
-        let reopened = lopdf::Document::load(&unlocked.output_paths()[0]).unwrap();
-        assert!(!reopened.is_encrypted());
+        }));
+        for wrong in unlock(crate::kit::TEST_OVERRIDE_PASSWORD, "wrong") {
+            assert_eq!(wrong.error().map(|error| error.kind.clone()), Some(ErrorKind::WrongPassword), "{}", wrong.input_path.display());
+        }
+        for unlocked in unlock(crate::kit::TEST_PASSWORD, "unlocked") {
+            assert!(unlocked.error().is_none(), "{}", unlocked.error().cloned().unwrap_or_default());
+            assert!(opens_without_password(&unlocked.output_paths()[0]), "{} still needs a password", unlocked.output_paths()[0].display());
+        }
+        let reopened = lopdf::Document::load(root.join("unlocked").join("report-protected-unlocked.pdf")).unwrap();
         assert_eq!(reopened.get_pages().len(), 1);
+        for (input, original) in inputs.iter().zip(originals) {
+            assert_eq!(std::fs::read(input).unwrap(), original, "original was modified: {}", input.display());
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
 
+    const MISSING_QPDF_CHILD: &str = "TOOLBOX_TEST_MISSING_QPDF_CHILD";
+
+    // Other tests resolve qpdf without the env lock, so the missing override is set only in a child test process.
+    #[test]
+    fn without_qpdf_a_mixed_lock_fails_only_the_pdfs_as_unavailable() {
+        if std::env::var_os(MISSING_QPDF_CHILD).is_none() {
+            let _guard = crate::kit::PROCESS_ENV_LOCK.lock().unwrap();
+            let missing = sandbox("missing-qpdf-helper").join("qpdf-not-installed");
+            let child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["command_tests::without_qpdf_a_mixed_lock_fails_only_the_pdfs_as_unavailable", "--exact", "--nocapture", "--test-threads=1"])
+                .env(MISSING_QPDF_CHILD, "1")
+                .env("TOOLBOX_QPDF_PATH", &missing)
+                .output()
+                .unwrap();
+            let report = format!("{}{}", String::from_utf8_lossy(&child.stdout), String::from_utf8_lossy(&child.stderr));
+            assert!(child.status.success() && report.contains("1 passed"), "{report}");
+            return;
+        }
+        assert!(crate::kit::resources::resolve_helper(&crate::kit::resources::QPDF).is_err(), "the Development override must hide qpdf");
+        let root = sandbox("protect-files-missing-qpdf");
+        let inputs = mixed_lock_batch(&root);
+        let second_pdf = root.join("appendix.pdf");
+        make_pdf(&second_pdf, 1);
+        let inputs = [inputs, vec![second_pdf]].concat();
+        let originals = inputs.iter().map(|input| std::fs::read(input).unwrap()).collect::<Vec<_>>();
+
+        let outcomes = lock(&inputs, location(&root, "protected"));
+
+        for outcome in &outcomes {
+            if outcome.input_path.extension().is_some_and(|extension| extension == "pdf") {
+                assert_eq!(outcome.error().map(|error| error.kind.clone()), Some(ErrorKind::Unavailable), "{}", outcome.input_path.display());
+                assert!(outcome.output_paths().is_empty());
+            } else {
+                assert!(outcome.error().is_none(), "{}", outcome.error().cloned().unwrap_or_default());
+                assert_eq!(outcome.output_paths().len(), 1);
+            }
+        }
+        let mut written = std::fs::read_dir(root.join("protected")).unwrap().map(|entry| entry.unwrap().file_name().into_string().unwrap()).collect::<Vec<_>>();
+        written.sort();
+        assert_eq!(written, ["budget-protected.xlsx", "lease-protected.docx"]);
+        for (input, original) in inputs.iter().zip(originals) {
+            assert_eq!(std::fs::read(input).unwrap(), original, "original was modified: {}", input.display());
+        }
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1688,25 +1739,25 @@ mod command_tests {
     }
 
     #[test]
-    fn protect_office_locks_the_overridden_file_with_its_own_password() {
-        let root = sandbox("protect-office-overrides");
+    fn lock_gives_an_overridden_word_file_its_own_password() {
+        let root = sandbox("lock-office-overrides");
         let shared = root.join("shared.docx");
         let own = root.join("own.docx");
         for input in [&shared, &own] { std::fs::write(input, test_minimal_ooxml_package("docx")).unwrap(); }
 
-        let locked = tauri::async_runtime::block_on(protect_office(RunEvents::silent(), PasswordRequest {
+        let locked = tauri::async_runtime::block_on(protect_files(RunEvents::silent(), PasswordRequest {
             paths: vec![shared.clone(), own.clone()],
-            password: "batch-secret".into(),
-            password_overrides: overrides(&[(&own, "own-secret")]),
+            password: crate::kit::TEST_PASSWORD.into(),
+            password_overrides: overrides(&[(&own, crate::kit::TEST_OVERRIDE_PASSWORD)]),
             output_location: location(&root, "locked"),
         }));
         assert!(locked.iter().all(|outcome| outcome.error().is_none()));
         let opens = |path: &PathBuf, password: &str| {
             OfficeProcessor::remove_password(path.clone(), password, &location(&root, "check")).error().is_none()
         };
-        assert!(opens(&locked[0].output_paths()[0], "batch-secret"));
-        assert!(opens(&locked[1].output_paths()[0], "own-secret"));
-        assert!(!opens(&locked[1].output_paths()[0], "batch-secret"));
+        assert!(opens(&locked[0].output_paths()[0], crate::kit::TEST_PASSWORD));
+        assert!(opens(&locked[1].output_paths()[0], crate::kit::TEST_OVERRIDE_PASSWORD));
+        assert!(!opens(&locked[1].output_paths()[0], crate::kit::TEST_PASSWORD));
 
         let _ = std::fs::remove_dir_all(root);
     }
