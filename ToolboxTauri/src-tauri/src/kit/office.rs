@@ -13,8 +13,14 @@ use zip::ZipArchive;
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::ToolError;
-use crate::kit::office_agile::{decrypt_ooxml, encrypt_ooxml, is_agile_ooxml, verify_ooxml};
-use crate::kit::password::{probe, unlock_skip_reason, ProtectedFormat};
+use crate::kit::office_agile::{
+    decrypt_ooxml, encrypt_ooxml, is_agile_ooxml, verify_ooxml, AgileDecryptError,
+};
+use crate::kit::password::{
+    probe, unlock_skip_reason, unreadable, ProtectedFormat, ProtectionState,
+    LEGACY_PASSWORD_TOO_LONG, LEGACY_PPT_PICTURES, UNLOCK_NOT_VERIFIED, UNSUPPORTED_ENCRYPTION,
+    UNSUPPORTED_LEGACY_ENCRYPTION, WRONG_PASSWORD,
+};
 
 const OFFICE_EXTENSIONS: [&str; 6] = ["doc", "docx", "xls", "xlsx", "ppt", "pptx"];
 const PROTECTED_OFFICE_EXTENSIONS: [&str; 2] = ["docx", "xlsx"];
@@ -84,7 +90,7 @@ impl OfficeProcessor {
         match probe(&raw, format).map(unlock_skip_reason) {
             Ok(None) => {}
             Ok(Some(reason)) => return JobOutcome::skipped(input_path, reason),
-            Err(error) => return JobOutcome::failure(input_path, error),
+            Err(_) => return JobOutcome::failure(input_path, unreadable(format)),
         }
         let output_path = match OutputNaming::reserve_destination(
             &input_path,
@@ -97,7 +103,7 @@ impl OfficeProcessor {
         };
 
         match decrypt_office_bytes(&raw, extension, password)
-            .and_then(|bytes| verify_unlocked_bytes(bytes, extension))
+            .and_then(|bytes| verify_unlocked_bytes(bytes, format))
             .and_then(|bytes| {
                 let mut output = OpenOptions::new()
                     .write(true)
@@ -114,6 +120,7 @@ impl OfficeProcessor {
                 Ok(path) => JobOutcome::succeeded(input_path, vec![path], "Office document unlocked and verified"),
                 Err(error) => JobOutcome::failure(input_path, ToolError::processing(format!("Could not publish the unlocked document: {error}"))),
             },
+            Err(OfficeError::InvalidInput(_)) => JobOutcome::failure(input_path, unreadable(format)),
             Err(error) => JobOutcome::failure(input_path, error.into_tool_error()),
         }
     }
@@ -292,9 +299,13 @@ fn decrypt_office_bytes(raw: &[u8], extension: &str, password: &str) -> Result<V
         if is_agile {
             return match catch_unwind(AssertUnwindSafe(|| decrypt_ooxml(raw, password))) {
                 Ok(Ok(bytes)) => Ok(bytes),
-                Ok(Err(error)) => Err(OfficeError::WrongPassword(format!(
-                    "Wrong password, malformed Office file, or unsupported Agile encryption: {error}"
-                ))),
+                Ok(Err(AgileDecryptError::WrongPassword)) => {
+                    Err(OfficeError::WrongPassword(WRONG_PASSWORD.to_string()))
+                }
+                Ok(Err(AgileDecryptError::Unsupported(_))) => {
+                    Err(OfficeError::Unsupported(UNSUPPORTED_ENCRYPTION.to_string()))
+                }
+                Ok(Err(AgileDecryptError::Damaged(message))) => Err(invalid(message)),
                 Err(_) => Err(invalid(
                     "The Agile Office document could not be decrypted safely.",
                 )),
@@ -371,19 +382,10 @@ fn ppt_is_encrypted(raw: &[u8]) -> Result<bool, OfficeError> {
     Ok(current_edit.encryption_persist_id.is_some())
 }
 
-fn verify_unlocked_bytes(bytes: Vec<u8>, extension: &str) -> Result<Vec<u8>, OfficeError> {
-    let extension = extension.to_ascii_lowercase();
-    let valid = if matches!(extension.as_str(), "docx" | "xlsx" | "pptx") {
-        is_ooxml_package(&bytes, &extension)
-    } else {
-        bytes.starts_with(&CFB_MAGIC)
-    };
-    if valid {
-        Ok(bytes)
-    } else {
-        Err(OfficeError::Processing(
-            "The unlocked Office document could not be verified.".to_string(),
-        ))
+fn verify_unlocked_bytes(bytes: Vec<u8>, format: ProtectedFormat) -> Result<Vec<u8>, OfficeError> {
+    match probe(&bytes, format) {
+        Ok(ProtectionState::NotProtected) => Ok(bytes),
+        _ => Err(OfficeError::Processing(UNLOCK_NOT_VERIFIED.to_string())),
     }
 }
 
@@ -454,14 +456,14 @@ fn has_xml_root(data: &[u8], expected: &[u8]) -> bool {
 
 fn map_modern_decrypt_error(error: office_crypto::DecryptError) -> OfficeError {
     match error {
-        office_crypto::DecryptError::Unimplemented(message) => OfficeError::Unsupported(format!(
-            "This Office encryption variant is not supported by the native adapter: {message}"
-        )),
+        office_crypto::DecryptError::Unimplemented(_) => {
+            OfficeError::Unsupported(UNSUPPORTED_ENCRYPTION.to_string())
+        }
         office_crypto::DecryptError::InvalidHeader
         | office_crypto::DecryptError::InvalidStructure
-        | office_crypto::DecryptError::NotEncrypted => OfficeError::WrongPassword(
-            "Wrong password, malformed Office file, or unsupported Office encryption.".to_string(),
-        ),
+        | office_crypto::DecryptError::NotEncrypted => {
+            invalid("The encrypted Office package is malformed.")
+        }
         office_crypto::DecryptError::IoError(error) => {
             OfficeError::Processing(format!("Could not decrypt the Office document: {error}"))
         }
@@ -683,9 +685,7 @@ fn parse_cryptoapi_info(data: &[u8], offset: usize) -> Result<CryptoApiInfo, Off
     let major = (version & 0xffff) as u16;
     let minor = (version >> 16) as u16;
     if !matches!(major, 2 | 3 | 4) || minor != 2 {
-        return Err(OfficeError::Unsupported(format!(
-            "Office CryptoAPI version {major}.{minor}"
-        )));
+        return Err(OfficeError::Unsupported(UNSUPPORTED_LEGACY_ENCRYPTION.to_string()));
     }
     let header_size = read_u32(data, offset + 8)? as usize;
     let header_start = offset
@@ -744,7 +744,7 @@ fn decrypt_doc(raw: &[u8], password: &str) -> Result<Vec<u8>, OfficeError> {
     if flags & 0x8000 != 0 {
         let chars = legacy_password_chars(password)?;
         if password_verifier_method2(&chars) != i_key {
-            return Err(OfficeError::WrongPassword("The Word document password is incorrect.".to_string()));
+            return Err(OfficeError::WrongPassword(WRONG_PASSWORD.to_string()));
         }
         decrypt_xor_method2(&mut table, &chars, 0);
         if let Some(data) = data_stream.as_mut() {
@@ -777,14 +777,14 @@ fn decrypt_doc(raw: &[u8], password: &str) -> Result<Vec<u8>, OfficeError> {
         let hash = &table[36..52];
         let cipher = LegacyCipher::Rc4 { salt };
         if !cipher.verify(password, verifier, hash) {
-            return Err(OfficeError::WrongPassword("The Word document password is incorrect.".to_string()));
+            return Err(OfficeError::WrongPassword(WRONG_PASSWORD.to_string()));
         }
         cipher
     } else {
         let info = parse_cryptoapi_info(&table, 0)?;
         let cipher = LegacyCipher::CryptoApi { salt: info.salt, key_size: info.key_size };
         if !cipher.verify(password, &info.encrypted_verifier, &info.encrypted_hash) {
-            return Err(OfficeError::WrongPassword("The Word document password is incorrect.".to_string()));
+            return Err(OfficeError::WrongPassword(WRONG_PASSWORD.to_string()));
         }
         cipher
     };
@@ -837,9 +837,7 @@ const XOR_MATRIX: [u16; 105] = [
 fn legacy_password_chars(password: &str) -> Result<Vec<u8>, OfficeError> {
     let chars: Vec<u8> = password.chars().map(|character| character as u32 as u8).collect();
     if chars.is_empty() || chars.len() > 15 {
-        return Err(OfficeError::Unsupported(
-            "Legacy Office XOR encryption supports passwords up to 15 characters.".to_string(),
-        ));
+        return Err(OfficeError::Unsupported(LEGACY_PASSWORD_TOO_LONG.to_string()));
     }
     Ok(chars)
 }
@@ -896,15 +894,10 @@ fn xor_array_method1(password: &[u8]) -> [u8; 16] {
         index -= 1;
         output[index] = xor_ror(password[index], key as u8);
     }
-    index = 15;
-    let mut pad_index = 15 - password.len();
-    while pad_index > 0 {
-        pad_index -= 1;
-        output[index] = xor_ror(PAD_ARRAY[pad_index], (key >> 8) as u8);
-        index -= 1;
-        pad_index -= 1;
-        output[index] = xor_ror(PAD_ARRAY[pad_index], key as u8);
-        index -= 1;
+    let pad_count = 15 - password.len();
+    for step in 0..pad_count.div_ceil(2) * 2 {
+        let key_byte = if step % 2 == 0 { (key >> 8) as u8 } else { key as u8 };
+        output[15 - step] = xor_ror(PAD_ARRAY[pad_count - step], key_byte);
     }
     output
 }
@@ -1003,19 +996,19 @@ fn decrypt_xls(raw: &[u8], password: &str) -> Result<Vec<u8>, OfficeError> {
                 salt.copy_from_slice(&info[6..22]);
                 let candidate = LegacyCipher::Rc4 { salt };
                 if !candidate.verify(password, &info[22..38], &info[38..54]) {
-                    return Err(OfficeError::WrongPassword("The Excel workbook password is incorrect.".to_string()));
+                    return Err(OfficeError::WrongPassword(WRONG_PASSWORD.to_string()));
                 }
                 Some(candidate)
             } else {
                 let api = parse_cryptoapi_info(info, 2)?;
                 let candidate = LegacyCipher::CryptoApi { salt: api.salt, key_size: api.key_size };
                 if !candidate.verify(password, &api.encrypted_verifier, &api.encrypted_hash) {
-                    return Err(OfficeError::WrongPassword("The Excel workbook password is incorrect.".to_string()));
+                    return Err(OfficeError::WrongPassword(WRONG_PASSWORD.to_string()));
                 }
                 Some(candidate)
             }
         }
-        _ => return Err(OfficeError::Unsupported("This Excel encryption type is not supported by the native adapter.".to_string())),
+        _ => return Err(OfficeError::Unsupported(UNSUPPORTED_LEGACY_ENCRYPTION.to_string())),
     };
 
     let mut plain: Vec<i16> = Vec::with_capacity(workbook.len());
@@ -1051,7 +1044,7 @@ fn decrypt_xls(raw: &[u8], password: &str) -> Result<Vec<u8>, OfficeError> {
     } else {
         let chars = legacy_password_chars(password)?;
         if password_verifier_method1(&chars) != read_u16(info, 4)? {
-            return Err(OfficeError::WrongPassword("The Excel workbook password is incorrect.".to_string()));
+            return Err(OfficeError::WrongPassword(WRONG_PASSWORD.to_string()));
         }
         decrypt_xls_xor(&encrypted, &plain, &chars)
     };
@@ -1237,12 +1230,10 @@ fn decrypt_ppt(raw: &[u8], password: &str) -> Result<Vec<u8>, OfficeError> {
     )?;
     let cipher = LegacyCipher::CryptoApi { salt: info.salt, key_size: info.key_size };
     if !cipher.verify(password, &info.encrypted_verifier, &info.encrypted_hash) {
-        return Err(OfficeError::WrongPassword("The PowerPoint presentation password is incorrect.".to_string()));
+        return Err(OfficeError::WrongPassword(WRONG_PASSWORD.to_string()));
     }
     if file.open_stream("/Pictures").is_ok() {
-        return Err(OfficeError::Unsupported(
-            "Encrypted PowerPoint presentations with a /Pictures stream are not supported by the native adapter.".to_string(),
-        ));
+        return Err(OfficeError::Unsupported(LEGACY_PPT_PICTURES.to_string()));
     }
 
     let mut current_user_decrypted = current_user.clone();
@@ -1258,25 +1249,21 @@ fn decrypt_ppt(raw: &[u8], password: &str) -> Result<Vec<u8>, OfficeError> {
     let mut ordered: Vec<(u32, usize)> = persist_objects.into_iter().collect();
     ordered.sort_by_key(|(_, offset)| *offset);
     for (persist_id, offset) in &ordered {
-        let record = ppt_record(&document, *offset);
-        let Ok(record) = record else { continue };
-        if record.record_type == 0x0FF5 || record.record_type == 0x1772 || *offset == crypt_offset {
+        let plain_record = ppt_record(&document, *offset)
+            .is_ok_and(|record| matches!(record.record_type, 0x0FF5 | 0x1772));
+        if plain_record || *offset == crypt_offset {
             continue;
         }
-        let end = record.end;
-        if end <= *offset {
-            continue;
-        }
-        let key_size = (info.key_size as usize).max(1);
-        let block_size = key_size * ((end - *offset) / key_size + 1);
-        let decrypted = decrypt_rekeyed_with_password(
-            &document[*offset..end],
-            password,
-            cipher,
-            block_size,
-            *persist_id,
-        );
-        document[*offset..end].copy_from_slice(&decrypted);
+        let mut header = document
+            .get(*offset..*offset + 8)
+            .ok_or_else(|| invalid("The PowerPoint record is truncated."))?
+            .to_vec();
+        Rc4::new(&cipher.key(password, *persist_id)).apply(&mut header);
+        let end = offset
+            .checked_add(8 + read_u32(&header, 4)? as usize)
+            .filter(|end| *end <= document.len())
+            .ok_or_else(|| invalid("The PowerPoint record is truncated."))?;
+        Rc4::new(&cipher.key(password, *persist_id)).apply(&mut document[*offset..end]);
     }
     write_cfb_stream(&mut file, "/Current User", &current_user_decrypted)?;
     write_cfb_stream(&mut file, "/PowerPoint Document", &document)?;
@@ -1332,10 +1319,14 @@ fn remove_ppt_persist_entry(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::{
-        decrypt_doc, decrypt_office_bytes, decrypt_ppt, decrypt_xls, make_cryptoapi_key,
-        make_rc4_key, password_verifier_method1, password_verifier_method2, open_cfb,
-        read_cfb_stream, xor_array_method1, xor_array_method2, OfficeError, OfficeProcessor,
-        Rc4,
+        decrypt_doc, decrypt_office_bytes, decrypt_ppt, decrypt_rekeyed_with_password,
+        decrypt_xls, make_cryptoapi_key, make_rc4_key, md5_digest, password_verifier_method1,
+        password_verifier_method2, open_cfb, read_cfb_stream, xor_array_method1,
+        xor_array_method2, LegacyCipher, OfficeError, OfficeProcessor, ProtectedFormat, Rc4,
+    };
+    use crate::kit::password::{
+        probe, unreadable, ProtectionState, LEGACY_PASSWORD_TOO_LONG, LEGACY_PPT_PICTURES,
+        UNLOCK_NOT_VERIFIED, UNSUPPORTED_LEGACY_ENCRYPTION, WRONG_PASSWORD,
     };
     use crate::kit::common::OutputLocation;
     use crate::kit::contracts::ErrorKind;
@@ -1448,7 +1439,7 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn ppt_fixture(with_content: bool, with_pictures: bool) -> Vec<u8> {
-        let password = "secret";
+        let password = TEST_PASSWORD;
         let salt = [0x31u8; 16];
         let info = cryptoapi_info(password, salt, 128);
         let crypt = ppt_record(0x2F14, &info);
@@ -1461,7 +1452,7 @@ pub(crate) mod tests {
         if with_content {
             let mut content_encrypted = content_plain.clone();
             let key = make_cryptoapi_key(password, &salt, 128, 2);
-            Rc4::new(&key).apply(&mut content_encrypted[8..]);
+            Rc4::new(&key).apply(&mut content_encrypted);
             document[content_offset..content_offset + content_encrypted.len()]
                 .copy_from_slice(&content_encrypted);
             document[content_offset + content_encrypted.len()..]
@@ -1499,6 +1490,123 @@ pub(crate) mod tests {
                 ("/PowerPoint Document", &document),
             ])
         }
+    }
+
+    pub(crate) const TEST_PASSWORD: &str = "toolbox-test";
+
+    #[derive(Clone, Copy, Debug)]
+    pub(crate) enum LegacyEncryption {
+        Xor,
+        Rc4,
+        CryptoApi,
+    }
+
+    pub(crate) const WORD_TEXT: [u8; 32] = *b"Word text survives a round trip.";
+    pub(crate) const TABLE_TEXT: [u8; 16] = *b"table text bytes";
+    pub(crate) const SHEET_TEXT: [u8; 8] = *b"cell 42!";
+
+    fn keystream(cipher: LegacyCipher, block_size: usize, length: usize) -> Vec<u8> {
+        decrypt_rekeyed_with_password(&vec![0u8; length], TEST_PASSWORD, cipher, block_size, 0)
+    }
+
+    fn rc4_header(salt: [u8; 16]) -> Vec<u8> {
+        let verifier = [0x21u8; 16];
+        let mut sealed = verifier.to_vec();
+        sealed.extend_from_slice(&md5_digest(&verifier));
+        Rc4::new(&make_rc4_key(TEST_PASSWORD, &salt, 0)).apply(&mut sealed);
+        let mut header = 0x0001_0001u32.to_le_bytes().to_vec();
+        header.extend_from_slice(&salt);
+        header.extend_from_slice(&sealed);
+        header
+    }
+
+    fn stream_cipher(encryption: LegacyEncryption, salt: [u8; 16]) -> (Vec<u8>, LegacyCipher) {
+        match encryption {
+            LegacyEncryption::Rc4 => (rc4_header(salt), LegacyCipher::Rc4 { salt }),
+            _ => (
+                cryptoapi_info(TEST_PASSWORD, salt, 128),
+                LegacyCipher::CryptoApi { salt, key_size: 128 },
+            ),
+        }
+    }
+
+    pub(crate) fn locked_doc(encryption: LegacyEncryption) -> Vec<u8> {
+        let mut word = vec![0u8; 68];
+        word.extend_from_slice(&WORD_TEXT);
+        let mut table = TABLE_TEXT.to_vec();
+        if let LegacyEncryption::Xor = encryption {
+            let chars = TEST_PASSWORD.as_bytes();
+            word[10..12].copy_from_slice(&0x8100u16.to_le_bytes());
+            word[14..18].copy_from_slice(&password_verifier_method2(chars).to_le_bytes());
+            let array = xor_array_method2(chars);
+            let obfuscate = |bytes: &mut [u8], stream_offset: usize| {
+                for (index, byte) in bytes.iter_mut().enumerate() {
+                    let key = array[(stream_offset + index) % 16];
+                    if *byte != 0 && *byte != key {
+                        *byte ^= key;
+                    }
+                }
+            };
+            obfuscate(&mut word[68..], 68);
+            obfuscate(&mut table, 0);
+        } else {
+            let (header, cipher) = stream_cipher(encryption, [0x44; 16]);
+            word[10..12].copy_from_slice(&0x0100u16.to_le_bytes());
+            for (byte, key) in word.iter_mut().zip(keystream(cipher, 0x200, 68 + WORD_TEXT.len())).skip(68) {
+                *byte ^= key;
+            }
+            table = [header.clone(), table].concat();
+            for (byte, key) in table.iter_mut().zip(keystream(cipher, 0x200, header.len() + TABLE_TEXT.len())).skip(header.len()) {
+                *byte ^= key;
+            }
+        }
+        cfb_with_streams(&[("/WordDocument", &word), ("/0Table", &table)])
+    }
+
+    pub(crate) fn locked_xls(encryption: LegacyEncryption) -> Vec<u8> {
+        let file_pass = match encryption {
+            LegacyEncryption::Xor => {
+                let mut payload = vec![0u8; 6];
+                payload[4..6].copy_from_slice(&password_verifier_method1(TEST_PASSWORD.as_bytes()).to_le_bytes());
+                payload
+            }
+            _ => [vec![1, 0], stream_cipher(encryption, [0x52; 16]).0].concat(),
+        };
+        let mut workbook = biff_record(0x0809, &[1, 2, 3, 4]);
+        workbook.extend_from_slice(&biff_record(0x002F, &file_pass));
+        let data_start = workbook.len() + 4;
+        workbook.extend_from_slice(&biff_record(0x0203, &SHEET_TEXT));
+        workbook.extend_from_slice(&biff_record(0x000A, &[]));
+        let data = data_start..data_start + SHEET_TEXT.len();
+        if let LegacyEncryption::Xor = encryption {
+            let array = xor_array_method1(TEST_PASSWORD.as_bytes());
+            for (index, position) in data.enumerate() {
+                let key = array[(data_start + SHEET_TEXT.len() + index) % 16];
+                workbook[position] = workbook[position].rotate_left(5) ^ key;
+            }
+        } else {
+            let keys = keystream(stream_cipher(encryption, [0x52; 16]).1, 1024, workbook.len());
+            for position in data {
+                workbook[position] ^= keys[position];
+            }
+        }
+        cfb_with_streams(&[("/Workbook", &workbook)])
+    }
+
+    pub(crate) fn ppt_failing_verification_fixture() -> Vec<u8> {
+        let raw = ppt_fixture(true, false);
+        let mut file = open_cfb(&raw).unwrap();
+        let current_user = read_cfb_stream(&mut file, "/Current User").unwrap();
+        let mut document = read_cfb_stream(&mut file, "/PowerPoint Document").unwrap();
+        let mut directory_body = (1u32 | (3 << 20)).to_le_bytes().to_vec();
+        for offset in [0u32, 300, 192] {
+            directory_body.extend_from_slice(&offset.to_le_bytes());
+        }
+        document[100..124].copy_from_slice(&ppt_record(0x1772, &directory_body));
+        let mut header = ppt_record(0x03E8, &[0u8; 40])[..8].to_vec();
+        Rc4::new(&make_cryptoapi_key(TEST_PASSWORD, &[0x31; 16], 128, 3)).apply(&mut header);
+        document[192..200].copy_from_slice(&header);
+        cfb_with_streams(&[("/Current User", &current_user), ("/PowerPoint Document", &document)])
     }
 
     #[test]
@@ -1817,7 +1925,7 @@ pub(crate) mod tests {
         let malformed = b"PK\x03\x04garbage";
         let error = decrypt_office_bytes(malformed, "docx", "secret").unwrap_err();
         assert!(matches!(error, OfficeError::InvalidInput(_)));
-        let error = super::verify_unlocked_bytes(malformed.to_vec(), "docx").unwrap_err();
+        let error = super::verify_unlocked_bytes(malformed.to_vec(), ProtectedFormat::Docx).unwrap_err();
         assert!(matches!(error, OfficeError::Processing(_)));
         let malformed_zip = malformed_ooxml_package();
         let error = decrypt_office_bytes(&malformed_zip, "docx", "secret").unwrap_err();
@@ -1898,7 +2006,7 @@ pub(crate) mod tests {
     #[test]
     fn powerpoint_final_persist_object_does_not_decrypt_the_tail() {
         let raw = ppt_fixture(true, false);
-        let unlocked = decrypt_ppt(&raw, "secret").unwrap();
+        let unlocked = decrypt_ppt(&raw, TEST_PASSWORD).unwrap();
         let mut file = open_cfb(&unlocked).unwrap();
         let document = read_cfb_stream(&mut file, "/PowerPoint Document").unwrap();
         assert_eq!(&document[312..320], &[0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7]);
@@ -1906,7 +2014,7 @@ pub(crate) mod tests {
 
     #[test]
     fn powerpoint_with_pictures_is_rejected_until_picture_decryption_is_supported() {
-        let error = decrypt_ppt(&ppt_fixture(false, true), "secret").unwrap_err();
+        let error = decrypt_ppt(&ppt_fixture(false, true), TEST_PASSWORD).unwrap_err();
         assert!(matches!(error, OfficeError::Unsupported(_)));
     }
 
@@ -1927,7 +2035,7 @@ pub(crate) mod tests {
 
         let outcome = OfficeProcessor::remove_password(
             input.clone(),
-            "secret",
+            TEST_PASSWORD,
             &OutputLocation::AlongsideInput,
         );
 
@@ -1939,6 +2047,72 @@ pub(crate) mod tests {
         assert_eq!(std::fs::read(&input).unwrap(), original);
         assert!(!directory.join("presentation-unlocked.ppt").exists());
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn every_legacy_encryption_round_trips_to_a_plain_file() {
+        for encryption in [LegacyEncryption::Xor, LegacyEncryption::Rc4, LegacyEncryption::CryptoApi] {
+            let raw = locked_doc(encryption);
+            assert_eq!(probe(&raw, ProtectedFormat::Doc).unwrap(), ProtectionState::OpenPassword);
+            let unlocked = decrypt_doc(&raw, TEST_PASSWORD).unwrap();
+            assert_eq!(probe(&unlocked, ProtectedFormat::Doc).unwrap(), ProtectionState::NotProtected, "{encryption:?} doc");
+            let mut file = open_cfb(&unlocked).unwrap();
+            assert_eq!(read_cfb_stream(&mut file, "/WordDocument").unwrap()[68..], WORD_TEXT, "{encryption:?} doc");
+            let table = read_cfb_stream(&mut file, "/0Table").unwrap();
+            assert_eq!(table[table.len() - TABLE_TEXT.len()..], TABLE_TEXT, "{encryption:?} doc");
+
+            let raw = locked_xls(encryption);
+            assert_eq!(probe(&raw, ProtectedFormat::Xls).unwrap(), ProtectionState::OpenPassword);
+            let unlocked = decrypt_xls(&raw, TEST_PASSWORD).unwrap();
+            assert_eq!(probe(&unlocked, ProtectedFormat::Xls).unwrap(), ProtectionState::NotProtected, "{encryption:?} xls");
+            let workbook = read_cfb_stream(&mut open_cfb(&unlocked).unwrap(), "/Workbook").unwrap();
+            let records = super::parse_biff_records(&workbook).unwrap();
+            let data = records.iter().find(|record| record.id == 0x0203).unwrap();
+            assert_eq!(workbook[data.start + 4..data.end()], SHEET_TEXT, "{encryption:?} xls");
+        }
+        let unlocked = decrypt_ppt(&ppt_fixture(true, false), TEST_PASSWORD).unwrap();
+        assert_eq!(probe(&unlocked, ProtectedFormat::Ppt).unwrap(), ProtectionState::NotProtected);
+        let document = read_cfb_stream(&mut open_cfb(&unlocked).unwrap(), "/PowerPoint Document").unwrap();
+        assert_eq!(document[308..312], *b"ABCD");
+    }
+
+    #[test]
+    fn legacy_failures_each_report_their_own_kind_and_message() {
+        let directory = test_directory("legacy-failures");
+        let write = |name: &str, bytes: Vec<u8>| {
+            let path = directory.join(name);
+            std::fs::write(&path, bytes).unwrap();
+            path
+        };
+        let locked = locked_doc(LegacyEncryption::Rc4);
+        let unsupported_workbook = [biff_record(0x0809, &[1, 2, 3, 4]), biff_record(0x002F, &[2, 0])].concat();
+        let unsupported_xls = cfb_with_streams(&[("/Workbook", &unsupported_workbook)]);
+        let cases = [
+            (write("wrong.doc", locked_doc(LegacyEncryption::CryptoApi)), "not-the-password".to_string(), ErrorKind::WrongPassword, WRONG_PASSWORD.to_string()),
+            (write("long.doc", locked_doc(LegacyEncryption::Xor)), TEST_PASSWORD.repeat(2), ErrorKind::Unavailable, LEGACY_PASSWORD_TOO_LONG.to_string()),
+            (write("long.xls", locked_xls(LegacyEncryption::Xor)), TEST_PASSWORD.repeat(2), ErrorKind::Unavailable, LEGACY_PASSWORD_TOO_LONG.to_string()),
+            (write("pictures.ppt", ppt_fixture(true, true)), TEST_PASSWORD.to_string(), ErrorKind::Unavailable, LEGACY_PPT_PICTURES.to_string()),
+            (write("truncated.doc", locked[..locked.len() / 2].to_vec()), TEST_PASSWORD.to_string(), ErrorKind::Processing, unreadable(ProtectedFormat::Doc).message),
+            (write("unverified.ppt", ppt_failing_verification_fixture()), TEST_PASSWORD.to_string(), ErrorKind::Processing, UNLOCK_NOT_VERIFIED.to_string()),
+            (write("unsupported.xls", unsupported_xls), TEST_PASSWORD.to_string(), ErrorKind::Unavailable, UNSUPPORTED_LEGACY_ENCRYPTION.to_string()),
+        ];
+        for (input, password, kind, message) in cases {
+            let original = std::fs::read(&input).unwrap();
+            let outcome = OfficeProcessor::remove_password(input.clone(), &password, &OutputLocation::AlongsideInput);
+            let error = outcome.error().unwrap_or_else(|| panic!("{} must fail", input.display()));
+            assert_eq!((&error.kind, error.message.as_str()), (&kind, message.as_str()), "{}", input.display());
+            assert!(outcome.output_paths().is_empty());
+            assert_eq!(std::fs::read(&input).unwrap(), original);
+        }
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 7, "a failed unlock leaves nothing behind");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn the_overlapping_persist_object_would_have_passed_the_old_magic_check() {
+        let unlocked = decrypt_ppt(&ppt_failing_verification_fixture(), TEST_PASSWORD).unwrap();
+        assert!(unlocked.starts_with(&super::CFB_MAGIC));
+        assert!(super::verify_unlocked_bytes(unlocked, ProtectedFormat::Ppt).is_err());
     }
 
     #[test]

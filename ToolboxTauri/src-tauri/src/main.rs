@@ -1267,23 +1267,23 @@ mod command_tests {
         };
 
         let cases = [
-            ("remove_password wrong type", tauri::async_runtime::block_on(remove_password(RunEvents::silent(), request(vec![text.clone()], "secret")))),
-            ("remove_password empty pdf password", tauri::async_runtime::block_on(remove_password(RunEvents::silent(), request(vec![pdf.clone()], "")))),
-            ("remove_password empty office password", tauri::async_runtime::block_on(remove_password(RunEvents::silent(), request(vec![docx.clone()], "")))),
-            ("protect_pdf wrong type", tauri::async_runtime::block_on(protect_pdf(RunEvents::silent(), request(vec![docx.clone()], "secret")))),
-            ("protect_pdf empty password", tauri::async_runtime::block_on(protect_pdf(RunEvents::silent(), request(vec![pdf.clone()], "")))),
-            ("protect_office wrong type", tauri::async_runtime::block_on(protect_office(RunEvents::silent(), request(vec![text.clone()], "secret")))),
-            ("protect_office empty password", tauri::async_runtime::block_on(protect_office(RunEvents::silent(), request(vec![docx.clone()], "")))),
-            ("remove_password damaged pdf", tauri::async_runtime::block_on(remove_password(RunEvents::silent(), request(vec![damaged_pdf.clone()], "secret")))),
-            ("remove_password damaged docx", tauri::async_runtime::block_on(remove_password(RunEvents::silent(), request(vec![damaged_docx.clone()], "secret")))),
-            ("remove_password damaged xls", tauri::async_runtime::block_on(remove_password(RunEvents::silent(), request(vec![damaged_xls.clone()], "secret")))),
-            ("protect_pdf damaged pdf", tauri::async_runtime::block_on(protect_pdf(RunEvents::silent(), request(vec![damaged_pdf.clone()], "secret")))),
-            ("protect_office damaged docx", tauri::async_runtime::block_on(protect_office(RunEvents::silent(), request(vec![damaged_docx.clone()], "secret")))),
+            ("remove_password wrong type", ErrorKind::InvalidInput, tauri::async_runtime::block_on(remove_password(RunEvents::silent(), request(vec![text.clone()], "secret")))),
+            ("remove_password empty pdf password", ErrorKind::InvalidInput, tauri::async_runtime::block_on(remove_password(RunEvents::silent(), request(vec![pdf.clone()], "")))),
+            ("remove_password empty office password", ErrorKind::InvalidInput, tauri::async_runtime::block_on(remove_password(RunEvents::silent(), request(vec![docx.clone()], "")))),
+            ("protect_pdf wrong type", ErrorKind::InvalidInput, tauri::async_runtime::block_on(protect_pdf(RunEvents::silent(), request(vec![docx.clone()], "secret")))),
+            ("protect_pdf empty password", ErrorKind::InvalidInput, tauri::async_runtime::block_on(protect_pdf(RunEvents::silent(), request(vec![pdf.clone()], "")))),
+            ("protect_office wrong type", ErrorKind::InvalidInput, tauri::async_runtime::block_on(protect_office(RunEvents::silent(), request(vec![text.clone()], "secret")))),
+            ("protect_office empty password", ErrorKind::InvalidInput, tauri::async_runtime::block_on(protect_office(RunEvents::silent(), request(vec![docx.clone()], "")))),
+            ("remove_password damaged pdf", ErrorKind::Processing, tauri::async_runtime::block_on(remove_password(RunEvents::silent(), request(vec![damaged_pdf.clone()], "secret")))),
+            ("remove_password damaged docx", ErrorKind::Processing, tauri::async_runtime::block_on(remove_password(RunEvents::silent(), request(vec![damaged_docx.clone()], "secret")))),
+            ("remove_password damaged xls", ErrorKind::Processing, tauri::async_runtime::block_on(remove_password(RunEvents::silent(), request(vec![damaged_xls.clone()], "secret")))),
+            ("protect_pdf damaged pdf", ErrorKind::InvalidInput, tauri::async_runtime::block_on(protect_pdf(RunEvents::silent(), request(vec![damaged_pdf.clone()], "secret")))),
+            ("protect_office damaged docx", ErrorKind::InvalidInput, tauri::async_runtime::block_on(protect_office(RunEvents::silent(), request(vec![damaged_docx.clone()], "secret")))),
         ];
 
-        for (name, outcomes) in cases {
+        for (name, kind, outcomes) in cases {
             let error = outcomes[0].error().unwrap_or_else(|| panic!("{name} must be refused"));
-            assert_eq!(error.kind, ErrorKind::InvalidInput, "{name} is refused before any output is reserved: {}", error.message);
+            assert_eq!(error.kind, kind, "{name} is refused before any output is reserved: {}", error.message);
             assert!(outcomes[0].output_paths().is_empty(), "{name} has no output");
         }
         assert!(!unreservable.exists(), "a refused input never touches the output location");
@@ -1562,6 +1562,79 @@ mod command_tests {
             "skipped files with the same names wrote nothing and reserved no name ahead of the locked ones",
         );
         assert_eq!(file_names(&plain_dir), beside_plain, "nothing is written beside the skipped inputs");
+        for (input, original) in inputs.iter().zip(originals) {
+            assert_eq!(std::fs::read(input).unwrap(), original, "original was modified: {}", input.display());
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn unlock_verifies_legacy_outputs_and_reports_each_failure_on_its_own_file() {
+        use crate::kit::office::tests::{locked_doc, locked_xls, ppt_failing_verification_fixture, ppt_fixture, LegacyEncryption, TEST_PASSWORD};
+        use crate::kit::password::{unreadable, ProtectedFormat, LEGACY_PASSWORD_TOO_LONG, LEGACY_PPT_PICTURES, UNLOCK_NOT_VERIFIED, WRONG_PASSWORD};
+
+        let root = sandbox("unlock-legacy-verification");
+        let legacy_dir = root.join("legacy");
+        std::fs::create_dir_all(&legacy_dir).unwrap();
+        let write = |name: &str, bytes: Vec<u8>| {
+            let path = legacy_dir.join(name);
+            std::fs::write(&path, bytes).unwrap();
+            path
+        };
+        let pdf = locked_pdf(&root, "lease", TEST_PASSWORD);
+        let succeeding = vec![
+            write("memo-xor.doc", locked_doc(LegacyEncryption::Xor)),
+            write("memo-rc4.doc", locked_doc(LegacyEncryption::Rc4)),
+            write("memo-cryptoapi.doc", locked_doc(LegacyEncryption::CryptoApi)),
+            write("ledger-xor.xls", locked_xls(LegacyEncryption::Xor)),
+            write("ledger-rc4.xls", locked_xls(LegacyEncryption::Rc4)),
+            write("ledger-cryptoapi.xls", locked_xls(LegacyEncryption::CryptoApi)),
+            write("kickoff.ppt", ppt_fixture(true, false)),
+            locked_office(&root, "offer", "docx", TEST_PASSWORD),
+            pdf.clone(),
+        ];
+        let locked_sheet = locked_xls(LegacyEncryption::Rc4);
+        let locked_lease = std::fs::read(&pdf).unwrap();
+        let wrong = write("wrong.doc", locked_doc(LegacyEncryption::CryptoApi));
+        let long = write("long.xls", locked_xls(LegacyEncryption::Xor));
+        let failing = vec![
+            (write("photos.ppt", ppt_fixture(true, true)), ErrorKind::Unavailable, LEGACY_PPT_PICTURES.to_string()),
+            (long.clone(), ErrorKind::Unavailable, LEGACY_PASSWORD_TOO_LONG.to_string()),
+            (wrong.clone(), ErrorKind::WrongPassword, WRONG_PASSWORD.to_string()),
+            (write("truncated.xls", locked_sheet[..locked_sheet.len() / 2].to_vec()), ErrorKind::Processing, unreadable(ProtectedFormat::Xls).message),
+            (write("truncated.pdf", locked_lease[..locked_lease.len() / 2].to_vec()), ErrorKind::Processing, unreadable(ProtectedFormat::Pdf).message),
+            (write("unverified.ppt", ppt_failing_verification_fixture()), ErrorKind::Processing, UNLOCK_NOT_VERIFIED.to_string()),
+        ];
+        let mut inputs = Vec::new();
+        for (index, input) in succeeding.iter().enumerate() {
+            inputs.push(input.clone());
+            if let Some((failure, _, _)) = failing.get(index) {
+                inputs.push(failure.clone());
+            }
+        }
+        let originals = inputs.iter().map(|input| std::fs::read(input).unwrap()).collect::<Vec<_>>();
+        let beside_inputs = file_names(&legacy_dir);
+
+        let outcomes = tauri::async_runtime::block_on(remove_password(RunEvents::silent(), PasswordRequest {
+            paths: inputs.clone(),
+            password: TEST_PASSWORD.into(),
+            password_overrides: overrides(&[(&long, TEST_PASSWORD.repeat(2).as_str()), (&wrong, "not-the-password")]),
+            output_location: location(&root, "unlocked"),
+        }));
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), inputs, "one outcome per input, in input order");
+
+        for outcome in &outcomes {
+            if let Some((_, kind, message)) = failing.iter().find(|(input, _, _)| *input == outcome.input_path) {
+                let error = outcome.error().unwrap_or_else(|| panic!("{} must fail", outcome.input_path.display()));
+                assert_eq!((&error.kind, error.message.as_str()), (kind, message.as_str()), "{}", outcome.input_path.display());
+                assert!(outcome.output_paths().is_empty(), "{} has no output", outcome.input_path.display());
+                continue;
+            }
+            assert!(outcome.error().is_none(), "{}: {}", outcome.input_path.display(), outcome.error().cloned().unwrap_or_default());
+            assert!(opens_without_password(&outcome.output_paths()[0]), "{} still needs a password", outcome.input_path.display());
+        }
+        assert_eq!(std::fs::read_dir(root.join("unlocked")).unwrap().count(), succeeding.len(), "a failed file leaves no output or temporary file");
+        assert_eq!(file_names(&legacy_dir), beside_inputs, "nothing is written beside the inputs");
         for (input, original) in inputs.iter().zip(originals) {
             assert_eq!(std::fs::read(input).unwrap(), original, "original was modified: {}", input.display());
         }

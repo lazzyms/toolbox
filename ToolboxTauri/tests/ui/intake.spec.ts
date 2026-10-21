@@ -15,6 +15,7 @@ type IntakeWindow = Window & {
     __wrongPasswordPaths: string[];
     __invalidInputPaths: string[];
     __skippedPaths: Record<string, { code: string; message: string }>;
+    __failures: Record<string, { kind: string; message: string }>;
     __outputSettings: unknown;
     __sent: string[];
     __drop: (paths: string[]) => void;
@@ -33,6 +34,7 @@ test.beforeEach(async ({ page }) => {
         win.__wrongPasswordPaths = [];
         win.__invalidInputPaths = [];
         win.__skippedPaths = {};
+        win.__failures = {};
         win.__outputSettings = { mode: "alongsideInput", folder: "/Users/test/Documents/Toolbox" };
         // Everything that leaves the page or lands in the console, so a test can prove no password does.
         win.__sent = [];
@@ -91,7 +93,9 @@ test.beforeEach(async ({ page }) => {
                 if (command.startsWith("inspect_")) throw "No preview in this test.";
                 if (win.__processingDelayMs) await new Promise((resolve) => window.setTimeout(resolve, win.__processingDelayMs));
                 const { request } = args as { request: { paths: string[] } };
-                return request.paths.map((inputPath) => win.__skippedPaths[inputPath]
+                return request.paths.map((inputPath) => win.__failures[inputPath]
+                    ? { inputPath, outputPaths: [], detail: "", state: "failed", failure: { ...win.__failures[inputPath], pointer: null }, reason: null, warnings: [] }
+                    : win.__skippedPaths[inputPath]
                     ? { inputPath, outputPaths: [], detail: "", state: "skipped", failure: null, reason: { ...win.__skippedPaths[inputPath], pointer: null }, warnings: [] }
                     : win.__wrongPasswordPaths.includes(inputPath)
                     ? { inputPath, outputPaths: [], detail: "", state: "failed", failure: { kind: "wrongPassword", message: "Wrong password or unsupported encryption.", pointer: null }, reason: null, warnings: [] }
@@ -604,4 +608,47 @@ test("Unlock shows files that need no work as Skipped rows with their reason, ap
     const unlocked = results(page).filter({ hasText: "lease.pdf" });
     await expect(unlocked.getByRole("button", { name: "Open lease.pdf.out", exact: true })).toBeVisible();
     await expect(unlocked.getByRole("button", { name: /^Show in .*: lease\.pdf\.out$/ })).toBeVisible();
+});
+
+test("Unlock shows each verification and legacy-format failure with its own message on its own row", async ({ page }) => {
+    const failures: Record<string, { kind: string; message: string }> = {
+        "/local/budget.xls": { kind: "unavailable", message: "Uses an older encryption type Toolbox can't open. The password may be right." },
+        "/local/memo.doc": { kind: "unavailable", message: "Older Office files only take passwords up to 15 characters, and this one is longer. Toolbox can't try it." },
+        "/local/photos.ppt": { kind: "unavailable", message: "Legacy .ppt files with pictures can't be unlocked yet. The file isn't damaged." },
+        "/local/offer.docx": { kind: "unavailable", message: "Uses an encryption type Toolbox can't open. The password may be right." },
+        "/local/scan.pdf": { kind: "processing", message: "Not a readable PDF. The file may be damaged or incomplete. Nothing was saved." },
+        "/local/report.pdf": { kind: "processing", message: "The unlocked copy didn't pass verification, so nothing was saved." },
+        "/local/payroll.xlsx": { kind: "wrongPassword", message: "The password didn't open this file." },
+    };
+    await open(page, "Lock & Unlock");
+    await drop(page, ["/local/budget.xls", "/local/lease.pdf", "/local/memo.doc", "/local/photos.ppt", "/local/offer.docx", "/local/scan.pdf", "/local/minutes.doc", "/local/report.pdf", "/local/payroll.xlsx"]);
+    await page.evaluate((failures) => { (window as unknown as IntakeWindow).__failures = failures; }, failures);
+    await page.getByLabel("Current password for all files", { exact: true }).fill("batch-secret");
+    await page.locator(".workspace-primary-action").click();
+
+    await expect(results(page)).toHaveCount(9);
+    for (const name of ["lease.pdf", "minutes.doc"]) await expect(results(page).filter({ hasText: name })).toHaveAttribute("data-state", "succeeded");
+    for (const [path, { kind, message }] of Object.entries(failures)) {
+        const name = path.split("/").pop() ?? path;
+        const failed = results(page).filter({ hasText: name });
+        await expect(failed).toHaveAttribute("data-state", "failed");
+        if (kind !== "wrongPassword") await expect(failed).toContainText(message);
+        for (const other of Object.values(failures)) {
+            if (other.message !== message) await expect(failed).not.toContainText(other.message);
+        }
+        if (kind === "unavailable") {
+            await expect(failed).toHaveAttribute("data-tone", "skip");
+            await expect(failed.locator(".result-row-state")).toContainText("Unavailable");
+            await expect(failed.getByRole("button", { name: /^Retry/ })).toHaveCount(0);
+        }
+        if (kind === "processing") {
+            await expect(failed).toHaveAttribute("data-tone", "fail");
+            await expect(failed.getByRole("button", { name: `Retry ${name}`, exact: true })).toBeVisible();
+        }
+        if (kind === "wrongPassword") {
+            await expect(failed).toHaveAttribute("data-tone", "fail");
+            await expect(failed).toContainText("Failed, wrong password");
+            await expect(failed).toContainText("The password didn't open this file. Check it, or try the password this file was sent with.");
+        }
+    }
 });
