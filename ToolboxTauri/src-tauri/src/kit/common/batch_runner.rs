@@ -11,10 +11,30 @@ use std::sync::Arc;
 
 pub struct BatchRunner;
 
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(tag = "phase", rename_all = "camelCase")]
+pub enum FileEvent {
+    Started { index: usize },
+    Finished { index: usize, outcome: JobOutcome },
+}
+
+pub struct RunEvents(Option<Box<dyn Fn(FileEvent) + Send + Sync>>);
+
+impl RunEvents {
+    pub fn silent() -> Self { Self(None) }
+    pub fn new(sink: impl Fn(FileEvent) + Send + Sync + 'static) -> Self { Self(Some(Box::new(sink))) }
+    fn emit(&self, event: FileEvent) { if let Some(sink) = &self.0 { sink(event) } }
+    fn settled(&self, index: usize, outcome: &JobOutcome) {
+        self.emit(FileEvent::Started { index });
+        self.emit(FileEvent::Finished { index, outcome: outcome.clone() });
+    }
+}
+
 pub const READ_ONLY_OUTPUT_MESSAGE: &str = "The output folder is read-only. Nothing was saved.";
 
 impl BatchRunner {
     pub fn run<R, F>(
+        events: &RunEvents,
         command: &str,
         inputs: Vec<PathBuf>,
         location: &OutputLocation,
@@ -25,10 +45,11 @@ impl BatchRunner {
         R: Send + Sync + 'static,
         F: Fn(&R, PathBuf) -> JobOutcome + Send + Sync + 'static,
     {
-        Self::run_with_limits(command, inputs, location, limits::recorded(command), request, job)
+        Self::run_with_limits(events, command, inputs, location, limits::recorded(command), request, job)
     }
 
     pub fn run_with_limits<R, F>(
+        events: &RunEvents,
         command: &str,
         inputs: Vec<PathBuf>,
         location: &OutputLocation,
@@ -60,13 +81,21 @@ impl BatchRunner {
                         ));
                     }
                 }
+                for (index, outcome) in outcomes.iter().enumerate() {
+                    if let Some(outcome) = outcome { events.settled(index, outcome); }
+                }
                 let job = Arc::new(job);
                 let processed = runnable.into_par_iter().map(|(index, path)| {
-                    let Some(limits) = limits else {
-                        return (index, JobOutcome::failure(path, ToolError::processing(format!("No processing limits are recorded for {command}."))));
+                    events.emit(FileEvent::Started { index });
+                    let outcome = match limits {
+                        Some(limits) => {
+                            let (job, request) = (Arc::clone(&job), Arc::clone(request));
+                            limits.run_each(path, move |path| job(&request, path))
+                        }
+                        None => JobOutcome::failure(path, ToolError::processing(format!("No processing limits are recorded for {command}."))),
                     };
-                    let (job, request) = (Arc::clone(&job), Arc::clone(request));
-                    (index, limits.run_each(path, move |path| job(&request, path)))
+                    events.emit(FileEvent::Finished { index, outcome: outcome.clone() });
+                    (index, outcome)
                 }).collect::<Vec<_>>();
                 for (index, outcome) in processed { outcomes[index] = Some(outcome); }
                 outcomes.into_iter().map(Option::unwrap).collect()
@@ -113,6 +142,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    #[test]
+    fn file_events_use_the_phase_tagged_wire_shape() {
+        let outcome = JobOutcome::failure(PathBuf::from("/in/a.pdf"), ToolError::processing("broken"));
+        assert_eq!(serde_json::to_value(FileEvent::Started { index: 2 }).unwrap(), serde_json::json!({ "phase": "started", "index": 2 }));
+        let finished = serde_json::to_value(FileEvent::Finished { index: 0, outcome: outcome.clone() }).unwrap();
+        assert_eq!(finished["phase"], "finished");
+        assert_eq!(finished["index"], 0);
+        assert_eq!(finished["outcome"], serde_json::to_value(&outcome).unwrap());
     }
 
     #[test]

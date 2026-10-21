@@ -67,24 +67,24 @@ export const MediaWorkspaceView = ({ utility }: { utility: ToolDefinition }) => 
       sessionKey="media-tools"
       utility={activeUtility}
       showFileOrdering={activeUtility.id !== "tiff-pages"}
-      onRun={(paths, outputLocation, outputPath) => {
+      onRun={(paths, outputLocation, { outputPath, runId }) => {
         if (activeUtility.id === "icon-set") {
-          return invoke<ToolResult>("generate_icon_set", {
+          return invoke<ToolResult>("generate_icon_set", { runId,
             request: { paths, preset: iconPreset, sizes: iconSizes, outputLocation },
           });
         }
         if (activeUtility.id === "gif-create") {
-          return invoke<ToolResult>("create_gif", {
+          return invoke<ToolResult>("create_gif", { runId,
             request: { paths, frameDelayMs: delay, loopForever: loop, outputLocation, outputPath },
           });
         }
         if (activeUtility.id === "gif-extract") {
-          return invoke<ToolResult>("extract_gif_frames", {
+          return invoke<ToolResult>("extract_gif_frames", { runId,
             request: { paths, outputLocation },
           });
         }
         if (activeUtility.id === "tiff-pages") {
-          return invoke<ToolResult>("process_tiff_pages", {
+          return invoke<ToolResult>("process_tiff_pages", { runId,
             request: {
               paths,
               pages: isCurrentTiffInspection(tiffInspection, paths)
@@ -95,7 +95,7 @@ export const MediaWorkspaceView = ({ utility }: { utility: ToolDefinition }) => 
             },
           });
         }
-        return invoke<ToolResult>("image_metadata", {
+        return invoke<ToolResult>("image_metadata", { runId,
           request: { paths, outputLocation },
         });
       }}

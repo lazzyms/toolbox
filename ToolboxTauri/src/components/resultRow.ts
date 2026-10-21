@@ -122,17 +122,21 @@ export interface ResultSummary {
     warningHint: string | null;
 }
 
-export const resultSummary = (results: JobOutcome[], resultVerb: string): ResultSummary => {
-    const verb = resultVerb.toLowerCase();
+export const resultTally = (results: JobOutcome[], resultVerb: string): string => {
     const count = (state: JobOutcome["state"]) => results.filter((result) => result.state === state).length;
     const skipped = count("skipped");
     const failed = count("failed");
-    const warned = results.filter((result) => result.state === "succeeded" && result.warnings.length > 0).length;
-    const parts = [`${count("succeeded")} ${verb}`];
+    const parts = [`${count("succeeded")} ${resultVerb.toLowerCase()}`];
     if (skipped > 0) parts.push(`${skipped} skipped`);
     if (failed > 0) parts.push(`${failed} failed`);
+    return parts.join(", ");
+};
+
+export const resultSummary = (results: JobOutcome[], resultVerb: string): ResultSummary => {
+    const verb = resultVerb.toLowerCase();
+    const warned = results.filter((result) => result.state === "succeeded" && result.warnings.length > 0).length;
     return {
-        headline: `Done. ${parts.join(", ")}`,
+        headline: `Done. ${resultTally(results, resultVerb)}`,
         warningHint: warned === 0 ? null : `${warned} ${verb} ${warned === 1 ? "file has a warning" : "files have warnings"}.`,
     };
 };

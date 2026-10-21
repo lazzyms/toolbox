@@ -948,6 +948,51 @@ body {
   justify-content: flex-end;
   gap: 4px;
 }
+.result-row[data-tone="running"] { --result-tone: var(--foreground); }
+.result-row[data-tone="waiting"] {
+  --result-tone: var(--muted-foreground);
+  color: var(--muted-foreground);
+  opacity: 0.6;
+}
+.result-row[data-tone="running"] .result-row-icon svg {
+  animation: result-row-spin 1s linear infinite;
+}
+@keyframes result-row-spin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .result-row[data-tone="running"] .result-row-icon svg { animation: none; }
+}
+.live-run-header {
+  display: grid;
+  gap: 10px;
+}
+.live-run-note {
+  margin: 0;
+}
+.live-run-bar {
+  display: flex;
+  gap: 2px;
+  height: 6px;
+}
+.live-run-bar > span {
+  flex: 1 1 0;
+  min-width: 0;
+  border-radius: 2px;
+  background: var(--border);
+}
+.live-run-bar[data-mode="proportional"] {
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--border);
+}
+.live-run-bar[data-mode="proportional"] > span {
+  border-radius: 0;
+}
+.live-run-bar > span[data-tone="ok"] { background: color-mix(in oklch, var(--foreground) 85%, var(--background)); }
+.live-run-bar > span[data-tone="skip"] { background: var(--muted-foreground); }
+.live-run-bar > span[data-tone="fail"] { background: var(--destructive); }
+.live-run-bar[data-mode="proportional"] > span[data-tone="wait"] { background: transparent; }
 .result-action-error {
   grid-column: 2 / -1;
   margin: 0;
