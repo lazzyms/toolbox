@@ -167,6 +167,7 @@ check_qpdf "$RES/qpdf-bin/qpdf"
 "$RES/pdf-bin/pdftoppm" -h >/dev/null
 "$RES/pdf-bin/pdftotext" -h >/dev/null
 "$RES/resources/ocr/bin/tesseract" --version >/dev/null
+node "$SCRIPT_DIR/third-party-notices.mjs" --binaries "$APP"
 
 # Tauri creates the updater archive before this script injects qpdf. Rebuild it
 # after injection so an update is as self-contained as a fresh install, then

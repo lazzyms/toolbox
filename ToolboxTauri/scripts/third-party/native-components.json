@@ -1,0 +1,409 @@
+{
+  "components": [
+    {
+      "name": "Toolbox",
+      "license": "MIT",
+      "copyright": "Copyright (c) Maulik Sompura",
+      "source": "https://github.com/lazzyms/toolbox",
+      "note": "The Toolbox app and its offline vision adapter. The app binary statically links the libheif, libde265, x265 and libwebp libraries listed below.",
+      "files": ["toolbox", "toolbox.exe", "toolbox-vision-adapter", "toolbox-vision-adapter.exe"]
+    },
+    {
+      "name": "libheif",
+      "version": "1.23.0",
+      "license": "LGPL-3.0-or-later",
+      "copyright": "Copyright (c) struktur AG and the libheif contributors",
+      "source": "https://github.com/strukturag/libheif/archive/refs/tags/v1.23.0.tar.gz",
+      "note": "Statically linked into the Toolbox app through the heif-rs crate, built from https://github.com/vegidio/binaries-heif/releases/tag/26.7.0. To relink against a modified libheif, rebuild Toolbox from its source at https://github.com/lazzyms/toolbox."
+    },
+    {
+      "name": "libde265",
+      "version": "1.1.0",
+      "license": "LGPL-3.0-or-later",
+      "copyright": "Copyright (c) struktur AG and the libde265 contributors",
+      "source": "https://github.com/strukturag/libde265/archive/refs/tags/v1.1.0.tar.gz",
+      "note": "Statically linked into the Toolbox app with libheif."
+    },
+    {
+      "name": "x265",
+      "version": "4.1",
+      "license": "GPL-2.0-or-later",
+      "copyright": "Copyright (c) MulticoreWare, Inc and the x265 contributors",
+      "source": "https://bitbucket.org/multicoreware/x265_git/downloads/x265_4.1.tar.gz",
+      "note": "Statically linked into the Toolbox app with libheif. Because the app binary includes this GPL code, the binary as a whole is distributed under GPL-3.0-or-later; its complete corresponding source is the Toolbox repository at https://github.com/lazzyms/toolbox plus the component sources linked here."
+    },
+    {
+      "name": "libwebp",
+      "license": "BSD-3-Clause",
+      "copyright": "Copyright (c) 2010, Google Inc. All rights reserved.",
+      "source": "https://chromium.googlesource.com/webm/libwebp",
+      "note": "Statically linked into the Toolbox app through the libwebp-sys crate, and shipped as a library with the OCR helper.",
+      "files": ["libwebp*.dll", "libwebp*.dylib", "libwebpmux*.dll", "libwebpmux*.dylib", "libsharpyuv*.dll", "libsharpyuv*.dylib"]
+    },
+    {
+      "name": "qpdf",
+      "license": "Apache-2.0",
+      "copyright": "Copyright (c) 2005-2026 Jay Berkenbilt and the qpdf contributors",
+      "source": "https://github.com/qpdf/qpdf/releases/tag/v12.4.2",
+      "files": ["qpdf", "qpdf.exe", "qpdf*.dll", "libqpdf*.dylib"]
+    },
+    {
+      "name": "Poppler",
+      "license": "GPL-2.0-or-later",
+      "copyright": "Copyright (c) 2005-2026 The Poppler Developers; based on Xpdf, Copyright (c) 1996-2011 Glyph & Cog, LLC",
+      "source": "https://poppler.freedesktop.org/poppler-26.02.0.tar.xz",
+      "note": "Windows builds use the poppler-windows 26.02.0-0 package (https://github.com/oschwartz10612/poppler-windows/releases/tag/v26.02.0-0); macOS builds use Homebrew's poppler.",
+      "files": ["pdftoppm", "pdftoppm.exe", "pdftotext", "pdftotext.exe", "poppler*.dll", "libpoppler*.dylib"]
+    },
+    {
+      "name": "Tesseract OCR",
+      "license": "Apache-2.0",
+      "copyright": "Copyright (c) Google Inc. and the Tesseract contributors",
+      "source": "https://github.com/tesseract-ocr/tesseract",
+      "note": "Windows builds use the UB Mannheim / MSYS2 build (https://github.com/UB-Mannheim/tesseract); sources for its MSYS2 libraries are at https://repo.msys2.org/mingw/sources/. The English language data comes from https://github.com/tesseract-ocr/tessdata_fast under Apache-2.0.",
+      "files": ["tesseract", "tesseract.exe", "libtesseract*.dll", "libtesseract*.dylib"]
+    },
+    {
+      "name": "Leptonica",
+      "license": "BSD-2-Clause",
+      "copyright": "Copyright (c) 2001-2024 Leptonica",
+      "source": "https://github.com/DanBloomberg/leptonica",
+      "files": ["libleptonica*.dll", "libleptonica*.dylib"]
+    },
+    {
+      "name": "cairo",
+      "license": "LGPL-2.1-only OR MPL-1.1",
+      "copyright": "Copyright (c) the cairo contributors",
+      "source": "https://www.cairographics.org/releases/",
+      "files": ["cairo.dll", "libcairo*.dll", "libcairo*.dylib"]
+    },
+    {
+      "name": "pixman",
+      "license": "MIT",
+      "copyright": "Copyright (c) the pixman contributors",
+      "source": "https://www.cairographics.org/releases/",
+      "files": ["pixman*.dll", "libpixman*.dll", "libpixman*.dylib"]
+    },
+    {
+      "name": "Pango",
+      "license": "LGPL-2.1-or-later",
+      "copyright": "Copyright (c) the Pango contributors",
+      "source": "https://download.gnome.org/sources/pango/",
+      "files": ["libpango*.dll", "libpango*.dylib"]
+    },
+    {
+      "name": "GLib",
+      "license": "LGPL-2.1-or-later",
+      "copyright": "Copyright (c) the GLib contributors",
+      "source": "https://download.gnome.org/sources/glib/",
+      "files": ["libglib*.dll", "libgio*.dll", "libgmodule*.dll", "libgobject*.dll", "libglib*.dylib", "libgio*.dylib", "libgmodule*.dylib", "libgobject*.dylib"]
+    },
+    {
+      "name": "HarfBuzz",
+      "license": "MIT",
+      "copyright": "Copyright (c) the HarfBuzz contributors",
+      "source": "https://github.com/harfbuzz/harfbuzz",
+      "files": ["libharfbuzz*.dll", "libharfbuzz*.dylib"]
+    },
+    {
+      "name": "FriBidi",
+      "license": "LGPL-2.1-or-later",
+      "copyright": "Copyright (c) the FriBidi contributors",
+      "source": "https://github.com/fribidi/fribidi",
+      "files": ["libfribidi*.dll", "libfribidi*.dylib"]
+    },
+    {
+      "name": "Graphite2",
+      "license": "LGPL-2.1-or-later OR MPL-2.0 OR GPL-2.0-or-later",
+      "copyright": "Copyright (c) SIL International",
+      "source": "https://github.com/silnrsi/graphite",
+      "files": ["libgraphite2*.dll", "libgraphite2*.dylib"]
+    },
+    {
+      "name": "libthai and libdatrie",
+      "license": "LGPL-2.1-or-later",
+      "copyright": "Copyright (c) Theppitak Karoonboonyanan and the libthai contributors",
+      "source": "https://github.com/tlwg/libthai",
+      "files": ["libthai*.dll", "libdatrie*.dll", "libthai*.dylib", "libdatrie*.dylib"]
+    },
+    {
+      "name": "FreeType",
+      "license": "FTL OR GPL-2.0-or-later",
+      "copyright": "Portions of this software are copyright (c) The FreeType Project (www.freetype.org). All rights reserved.",
+      "source": "https://download.savannah.gnu.org/releases/freetype/",
+      "files": ["freetype*.dll", "libfreetype*.dll", "libfreetype*.dylib"]
+    },
+    {
+      "name": "Fontconfig",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2000-2007 Keith Packard and the Fontconfig contributors",
+      "source": "https://www.freedesktop.org/software/fontconfig/release/",
+      "files": ["fontconfig*.dll", "libfontconfig*.dll", "libfontconfig*.dylib"]
+    },
+    {
+      "name": "Expat",
+      "license": "MIT",
+      "copyright": "Copyright (c) 1998-2000 Thai Open Source Software Center Ltd and Clark Cooper; Copyright (c) 2001-2025 Expat maintainers",
+      "source": "https://github.com/libexpat/libexpat",
+      "files": ["expat.dll", "libexpat*.dll", "libexpat*.dylib"]
+    },
+    {
+      "name": "libjpeg-turbo",
+      "license": "IJG AND BSD-3-Clause AND Zlib",
+      "copyright": "Copyright (c) the libjpeg-turbo Project; this software is based in part on the work of the Independent JPEG Group",
+      "source": "https://github.com/libjpeg-turbo/libjpeg-turbo",
+      "files": ["jpeg*.dll", "libjpeg*.dll", "libjpeg*.dylib", "libturbojpeg*.dylib"]
+    },
+    {
+      "name": "libpng",
+      "license": "libpng-2.0",
+      "copyright": "Copyright (c) 1995-2025 The PNG Reference Library Authors",
+      "source": "http://www.libpng.org/pub/png/libpng.html",
+      "files": ["libpng*.dll", "libpng*.dylib"]
+    },
+    {
+      "name": "LibTIFF",
+      "license": "libtiff",
+      "copyright": "Copyright (c) 1988-1997 Sam Leffler; Copyright (c) 1991-1997 Silicon Graphics, Inc.",
+      "source": "https://libtiff.gitlab.io/libtiff/",
+      "files": ["tiff.dll", "libtiff*.dll", "libtiff*.dylib"]
+    },
+    {
+      "name": "OpenJPEG",
+      "license": "BSD-2-Clause",
+      "copyright": "Copyright (c) the OpenJPEG contributors",
+      "source": "https://github.com/uclouvain/openjpeg",
+      "files": ["openjp2.dll", "libopenjp2*.dll", "libopenjp2*.dylib"]
+    },
+    {
+      "name": "giflib",
+      "license": "MIT",
+      "copyright": "Copyright (c) 1997 Eric S. Raymond",
+      "source": "https://sourceforge.net/projects/giflib/",
+      "files": ["libgif*.dll", "libgif*.dylib"]
+    },
+    {
+      "name": "JBIG-KIT",
+      "version": "2.1",
+      "license": "GPL-2.0-or-later",
+      "copyright": "Copyright (c) Markus Kuhn",
+      "source": "https://www.cl.cam.ac.uk/~mgk25/jbigkit/download/jbigkit-2.1.tar.gz",
+      "files": ["libjbig*.dll", "libjbig*.dylib"]
+    },
+    {
+      "name": "LERC",
+      "license": "Apache-2.0",
+      "copyright": "Copyright (c) 2015 Esri",
+      "source": "https://github.com/Esri/lerc",
+      "files": ["lerc.dll", "liblerc*.dll", "liblerc*.dylib"]
+    },
+    {
+      "name": "Little CMS",
+      "license": "MIT",
+      "copyright": "Copyright (c) 1998-2024 Marti Maria Saguer",
+      "source": "https://github.com/mm2/Little-CMS",
+      "files": ["lcms2.dll", "liblcms2*.dll", "liblcms2*.dylib"]
+    },
+    {
+      "name": "zlib",
+      "license": "Zlib",
+      "copyright": "Copyright (c) 1995-2024 Jean-loup Gailly and Mark Adler",
+      "source": "https://zlib.net/",
+      "files": ["zlib.dll", "zlib1.dll", "libz*.dylib"]
+    },
+    {
+      "name": "libdeflate",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2016 Eric Biggers",
+      "source": "https://github.com/ebiggers/libdeflate",
+      "files": ["deflate.dll", "libdeflate*.dll", "libdeflate*.dylib"]
+    },
+    {
+      "name": "Zstandard",
+      "license": "BSD-3-Clause",
+      "copyright": "Copyright (c) Meta Platforms, Inc. and affiliates.",
+      "source": "https://github.com/facebook/zstd",
+      "files": ["zstd.dll", "libzstd*.dll", "libzstd*.dylib"]
+    },
+    {
+      "name": "XZ Utils (liblzma)",
+      "license": "0BSD",
+      "copyright": "Copyright (c) the XZ Utils authors",
+      "source": "https://tukaani.org/xz/",
+      "files": ["liblzma*.dll", "liblzma*.dylib"]
+    },
+    {
+      "name": "LZ4",
+      "license": "BSD-2-Clause",
+      "copyright": "Copyright (c) 2011-2020, Yann Collet",
+      "source": "https://github.com/lz4/lz4",
+      "files": ["liblz4*.dll", "liblz4*.dylib"]
+    },
+    {
+      "name": "bzip2",
+      "license": "bzip2-1.0.6",
+      "copyright": "Copyright (c) 1996-2019 Julian R Seward",
+      "source": "https://sourceware.org/bzip2/",
+      "files": ["libbz2*.dll", "libbz2*.dylib"]
+    },
+    {
+      "name": "Brotli",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2009, 2010, 2013-2016 by the Brotli Authors.",
+      "source": "https://github.com/google/brotli",
+      "files": ["libbrotli*.dll", "libbrotli*.dylib"]
+    },
+    {
+      "name": "libb2 (BLAKE2)",
+      "license": "CC0-1.0",
+      "copyright": "Written by the BLAKE2 authors and dedicated to the public domain",
+      "source": "https://github.com/BLAKE2/libb2",
+      "files": ["libb2*.dll", "libb2*.dylib"]
+    },
+    {
+      "name": "libarchive",
+      "license": "BSD-2-Clause",
+      "copyright": "Copyright (c) 2003-2018 Tim Kientzle and the libarchive contributors",
+      "source": "https://github.com/libarchive/libarchive",
+      "files": ["libarchive*.dll", "libarchive*.dylib"]
+    },
+    {
+      "name": "curl (libcurl)",
+      "license": "curl",
+      "copyright": "Copyright (c) 1996 - 2026, Daniel Stenberg, <daniel@haxx.se>, and many contributors",
+      "source": "https://curl.se/download/",
+      "files": ["libcurl*.dll", "libcurl*.dylib"]
+    },
+    {
+      "name": "libssh2",
+      "license": "BSD-3-Clause",
+      "copyright": "Copyright (c) the libssh2 project and its contributors",
+      "source": "https://libssh2.org/",
+      "files": ["libssh2*.dll", "libssh2*.dylib"]
+    },
+    {
+      "name": "OpenSSL (libcrypto)",
+      "license": "Apache-2.0",
+      "copyright": "Copyright (c) 1998-2025 The OpenSSL Project Authors",
+      "source": "https://www.openssl.org/source/",
+      "files": ["libcrypto*.dll", "libssl*.dll", "libcrypto*.dylib", "libssl*.dylib"]
+    },
+    {
+      "name": "libpsl",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2014-2024 Tim Ruehsen",
+      "source": "https://github.com/rockdaboot/libpsl",
+      "files": ["libpsl*.dll", "libpsl*.dylib"]
+    },
+    {
+      "name": "libidn2",
+      "license": "LGPL-3.0-or-later OR GPL-2.0-or-later",
+      "copyright": "Copyright (c) 2011-2025 Simon Josefsson and the libidn2 contributors",
+      "source": "https://ftp.gnu.org/gnu/libidn/",
+      "files": ["libidn2*.dll", "libidn2*.dylib"]
+    },
+    {
+      "name": "GNU libunistring",
+      "license": "LGPL-3.0-or-later OR GPL-2.0-or-later",
+      "copyright": "Copyright (c) Free Software Foundation, Inc.",
+      "source": "https://ftp.gnu.org/gnu/libunistring/",
+      "files": ["libunistring*.dll", "libunistring*.dylib"]
+    },
+    {
+      "name": "GNU libiconv",
+      "license": "LGPL-2.1-or-later",
+      "copyright": "Copyright (c) Free Software Foundation, Inc.",
+      "source": "https://ftp.gnu.org/gnu/libiconv/",
+      "files": ["iconv.dll", "charset.dll", "libiconv*.dll", "libcharset*.dll", "libiconv*.dylib", "libcharset*.dylib"]
+    },
+    {
+      "name": "GNU gettext runtime (libintl)",
+      "license": "LGPL-2.1-or-later",
+      "copyright": "Copyright (c) Free Software Foundation, Inc.",
+      "source": "https://ftp.gnu.org/gnu/gettext/",
+      "files": ["libintl*.dll", "libintl*.dylib"]
+    },
+    {
+      "name": "libffi",
+      "license": "MIT",
+      "copyright": "Copyright (c) 1996-2024 Anthony Green, Red Hat, Inc and others.",
+      "source": "https://github.com/libffi/libffi",
+      "files": ["libffi*.dll", "libffi*.dylib"]
+    },
+    {
+      "name": "PCRE2",
+      "license": "BSD-3-Clause WITH PCRE2-exception",
+      "copyright": "Copyright (c) 1997-2024 University of Cambridge",
+      "source": "https://github.com/PCRE2Project/pcre2",
+      "files": ["libpcre2*.dll", "libpcre2*.dylib"]
+    },
+    {
+      "name": "ICU",
+      "license": "Unicode-3.0",
+      "copyright": "Copyright (c) 2016-2025 Unicode, Inc.",
+      "source": "https://github.com/unicode-org/icu",
+      "files": ["libicu*.dll", "libicu*.dylib"]
+    },
+    {
+      "name": "GCC runtime libraries (libgcc, libstdc++)",
+      "license": "GPL-3.0-or-later WITH GCC-exception-3.1",
+      "copyright": "Copyright (c) Free Software Foundation, Inc.",
+      "source": "https://gcc.gnu.org/",
+      "note": "Shipped as MinGW-w64 runtime libraries for the Windows PDF and OCR helpers. Sources: https://repo.msys2.org/mingw/sources/.",
+      "files": ["libgcc_s*.dll", "libstdc++*.dll", "libstdc%2b%2b*.dll"]
+    },
+    {
+      "name": "MinGW-w64 winpthreads",
+      "license": "MIT AND BSD-3-Clause",
+      "copyright": "Copyright (c) 2011 mingw-w64 project; Copyright (c) 1998 John E. Bossom; Copyright (c) 1999-2005 The pthreads-win32 contributors",
+      "source": "https://www.mingw-w64.org/",
+      "files": ["libwinpthread*.dll"]
+    },
+    {
+      "name": "Microsoft Visual C++ Redistributable",
+      "license": "LicenseRef-MSVC-Redistributable",
+      "copyright": "Copyright (c) Microsoft Corporation",
+      "source": "https://learn.microsoft.com/cpp/windows/redistributing-visual-cpp-files",
+      "note": "Runtime libraries shipped with the Windows qpdf helper in GitHub installers, redistributed under the Visual Studio redistributable code terms.",
+      "files": ["vcruntime140*.dll", "msvcp140*.dll", "concrt140.dll", "vccorlib140.dll"]
+    },
+    {
+      "name": "DejaVu Sans font",
+      "version": "2.37",
+      "licenseFile": "src-tauri/resources/fonts/LICENSE.txt",
+      "license": "Bitstream-Vera AND Arev",
+      "copyright": "Copyright (c) 2003 by Bitstream, Inc.; Copyright (c) 2006 by Tavmjong Bah",
+      "source": "https://github.com/dejavu-fonts/dejavu-fonts/releases/tag/version_2_37"
+    },
+    {
+      "name": "Satisfy font",
+      "version": "1.001",
+      "licenseFile": "src-tauri/resources/fonts/Satisfy-LICENSE.txt",
+      "license": "Apache-2.0",
+      "copyright": "Copyright (c) the Satisfy project authors",
+      "source": "https://github.com/google/fonts/tree/main/apache/satisfy"
+    },
+    {
+      "name": "Pacifico font",
+      "version": "7.003",
+      "licenseFile": "src-tauri/resources/fonts/Pacifico-LICENSE.txt",
+      "license": "OFL-1.1",
+      "copyright": "Copyright 2018 The Pacifico Project Authors",
+      "source": "https://github.com/google/fonts/tree/main/ofl/pacifico"
+    },
+    {
+      "name": "YuNet face detection model",
+      "licenseFile": "src-tauri/resources/vision/licenses/yunet-MIT.txt",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2020 Shiqi Yu",
+      "source": "https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet"
+    },
+    {
+      "name": "U2-Net (u2netp) background removal model",
+      "licenseFile": "src-tauri/resources/vision/licenses/u2netp-Apache-2.0.txt",
+      "license": "Apache-2.0",
+      "copyright": "Copyright (c) Xuebin Qin and the U-2-Net authors",
+      "source": "https://github.com/xuebinqin/U-2-Net"
+    }
+  ]
+}

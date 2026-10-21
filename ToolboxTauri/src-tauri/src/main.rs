@@ -6,7 +6,7 @@ mod kit;
 mod settings;
 mod shell;
 
-use crate::file_actions::{open_output_path, reveal_output_path};
+use crate::file_actions::{open_output_path, open_third_party_notices, reveal_output_path};
 use crate::kit::common::{note_renamed, JobOutcome};
 use crate::kit::images::{ImageProcessor, Options as ImageOptions};
 use crate::kit::images::tools;
@@ -457,7 +457,7 @@ fn combine_aggregate(paths: &[std::path::PathBuf], aggregate: JobOutcome) -> Vec
 }
 
 fn main() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             shell::shell_ready,
             shell::acknowledge_activation,
@@ -465,6 +465,7 @@ fn main() {
             shell::set_document_title,
             open_output_path,
             reveal_output_path,
+            open_third_party_notices,
             intake::inspect_intake_paths,
             settings::get_output_settings,
             settings::set_output_settings,
@@ -529,8 +530,10 @@ fn main() {
             }
         }))
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init());
+    #[cfg(feature = "updater")]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    builder
         .setup(|app| {
             app.manage(shell::ShellState::default());
             shell::install_geometry(app)?;

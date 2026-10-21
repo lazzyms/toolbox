@@ -33,3 +33,22 @@ test('relies on the existing dialog-selected file scope for previews', () => {
   assert.ok(defaultCapability.permissions.includes('dialog:default'));
   assert.deepEqual(config.app.security.assetProtocol.scope, [], 'only runtime-selected files may enter the asset scope');
 });
+
+test('compiles the in-app updater only into GitHub builds', () => {
+  const storeConfig = readJson('src-tauri/tauri.windows-store.conf.json');
+  const updaterCapability = readJson('src-tauri/capabilities/updater.json');
+  assert.deepEqual(config.build.features, ['updater']);
+  assert.match(cargoManifest, /^updater = \["dep:tauri-plugin-updater"\]$/m);
+  assert.match(cargoManifest, /^tauri-plugin-updater = \{ version = "2", optional = true \}$/m);
+  assert.ok(!defaultCapability.permissions.includes('updater:default'), 'the Store build must not grant updater access');
+  assert.deepEqual(updaterCapability.permissions, ['updater:default']);
+
+  assert.deepEqual(storeConfig.build.features, [], 'the Store build must drop the updater feature');
+  assert.equal(storeConfig.plugins.updater, null, 'the Store build must not carry updater endpoints');
+  assert.equal(storeConfig.bundle.createUpdaterArtifacts, false);
+});
+
+test('bundles the third-party notices in every build', () => {
+  assert.ok(config.bundle.resources.includes('resources/licenses/*'));
+  assert.ok(readFileSync(resolve(projectRoot, 'src-tauri/resources/licenses/THIRD-PARTY-NOTICES.txt'), 'utf8').startsWith('Toolbox third-party notices'));
+});
