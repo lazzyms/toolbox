@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import path from "node:path";
 import { ToolWorkspaceRegistry, UtilityRegistry, workspaceForTool } from "../../src/registry";
+import { displayedBoxToPdfRect } from "../../src/features/pdf-editor/geometry";
 
 const fixturePath = path.resolve("src-tauri/icons/icon.png");
 const fixtureName = path.basename(fixturePath);
@@ -307,10 +308,10 @@ test("all five workspace cards open their workspace", async ({ page }) => {
     }
 });
 
-test("search finds and opens all 33 registered tool actions", async ({ page }) => {
+test("search finds and opens all 37 registered tool actions", async ({ page }) => {
     await page.goto("/");
     const search = page.getByRole("textbox", { name: "Search tools" });
-    expect(UtilityRegistry).toHaveLength(33);
+    expect(UtilityRegistry).toHaveLength(37);
 
     for (const utility of UtilityRegistry) {
         await search.fill(utility.title);
@@ -647,12 +648,26 @@ const drawSceneMark = async (page: Page, tool: string) => {
     await page.mouse.up();
 };
 
+const drawRedactionBox = async (page: Page, from = { x: .25, y: .1 }, to = { x: .75, y: .3 }) => {
+    const area = page.getByRole("region", { name: "Redaction area" });
+    await expect(area).toBeVisible();
+    await area.scrollIntoViewIfNeeded();
+    const box = (await area.boundingBox())!;
+    await page.mouse.move(box.x + box.width * from.x, box.y + box.height * from.y);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width * to.x, box.y + box.height * to.y, { steps: 5 });
+    await page.mouse.up();
+};
+
+const lastInvocation = (page: Page, command: string) => page.evaluate((command) =>
+    ((window as TestWindow).__toolboxInvocations ?? []).filter((invocation) => invocation.command === command).at(-1), command);
+
 const chooseFixture = async (page: Page, selectedPath: string) => {
     await page.evaluate((fixture) => {
         (window as TestWindow).__toolboxDialogResults = [fixture];
     }, selectedPath);
     await page.getByRole("button", { name: "Choose files to process" }).click();
-    await expect(page.getByText(path.basename(selectedPath), { exact: true })).toBeVisible();
+    await expect(page.getByText(path.basename(selectedPath), { exact: true }).first()).toBeVisible();
 };
 
 test("crop is applied visually and exported as part of the scene", async ({ page }) => {
@@ -1087,6 +1102,77 @@ test("PDF page-scoped conversions send the selected pages and keep OCR gated", a
     await expect(ocrButton).toHaveAttribute("title", "OCR PDF is unavailable in this build");
 });
 
+test("rotate PDF sends the chosen direction and zero-based pages", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Rotate PDF" }).click();
+    await chooseFixture(page, "/local/document.scoped.pdf");
+    await page.getByLabel("Rotation direction").selectOption("270");
+    await page.getByRole("button", { name: "Export Rotate PDF", exact: true }).click();
+    expect((await lastInvocation(page, "rotate_pdf"))?.args).toMatchObject({ request: { paths: ["/local/document.scoped.pdf"], degrees: 270, pages: null } });
+
+    await page.getByRole("checkbox", { name: "Page 2" }).click();
+    await page.getByRole("button", { name: "Export Rotate PDF", exact: true }).click();
+    expect((await lastInvocation(page, "rotate_pdf"))?.args).toMatchObject({ request: { degrees: 270, pages: [0, 2] } });
+});
+
+test("compare PDF needs exactly two files and can swap the original", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Compare PDF" }).click();
+    await chooseFixture(page, "/local/original.pdf");
+    const exportCompare = page.getByRole("button", { name: "Export Compare PDF", exact: true });
+    await expect(page.getByText("Choose exactly two PDFs: the original and the new version.", { exact: true })).toBeVisible();
+    await expect(exportCompare).toBeDisabled();
+
+    await chooseFixture(page, "/local/revised.pdf");
+    await expect(page.getByText("Original: original.pdf", { exact: true })).toBeVisible();
+    await expect(page.getByText("New version: revised.pdf", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Swap original and new version" }).click();
+    await expect(page.getByText("Original: revised.pdf", { exact: true })).toBeVisible();
+    await exportCompare.click();
+    expect((await lastInvocation(page, "compare_pdfs"))?.args).toMatchObject({ request: { paths: ["/local/revised.pdf", "/local/original.pdf"] } });
+});
+
+test("redact PDF waits for a box and sends it in PDF points", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Redact PDF" }).click();
+    await chooseFixture(page, pdfFixturePath);
+    const exportRedact = page.getByRole("button", { name: "Export Redact PDF", exact: true });
+    await expect(exportRedact).toBeDisabled();
+    await drawRedactionBox(page);
+    await expect(page.getByLabel("Redaction box")).toBeVisible();
+    await exportRedact.click();
+    const request = ((await lastInvocation(page, "redact_pdf"))?.args as { request: { rectangle: { x: number; y: number; width: number; height: number }; scope: unknown } }).request;
+    expect(request.scope).toBe("all");
+    expect(request.rectangle.x).toBeCloseTo(153, -1);
+    expect(request.rectangle.width).toBeCloseTo(306, -1);
+    expect(request.rectangle.y).toBeCloseTo(554, -1);
+    expect(request.rectangle.height).toBeCloseTo(158, -1);
+});
+
+test("redaction boxes drawn on rotated pages map back to unrotated PDF points", () => {
+    const page = { index: 0, width: 600, height: 800, pageBox: [0, 0, 600, 800] as [number, number, number, number] };
+    const topLeftCorner = { left: 0, top: 0, right: .5, bottom: .25 };
+    expect(displayedBoxToPdfRect(topLeftCorner, { ...page, rotation: 0 })).toEqual({ x: 0, y: 600, width: 300, height: 200 });
+    expect(displayedBoxToPdfRect(topLeftCorner, { ...page, rotation: 90 })).toEqual({ x: 0, y: 0, width: 150, height: 400 });
+    expect(displayedBoxToPdfRect(topLeftCorner, { ...page, rotation: 180 })).toEqual({ x: 300, y: 0, width: 300, height: 200 });
+    expect(displayedBoxToPdfRect(topLeftCorner, { ...page, rotation: 270 })).toEqual({ x: 450, y: 400, width: 150, height: 400 });
+});
+
+test("redact PDF only touches the first page unless more pages are checked", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Redact PDF" }).click();
+    await chooseFixture(page, "/local/document.scoped.pdf");
+    await expect(page.getByRole("checkbox", { name: "Page 1" })).toBeChecked();
+    await expect(page.getByRole("checkbox", { name: "Page 2" })).not.toBeChecked();
+    await drawRedactionBox(page);
+    await page.getByRole("button", { name: "Export Redact PDF", exact: true }).click();
+    expect((await lastInvocation(page, "redact_pdf"))?.args).toMatchObject({ request: { scope: { selected: { pages: [0] } } } });
+
+    await page.getByRole("checkbox", { name: "Page 3" }).click();
+    await page.getByRole("button", { name: "Export Redact PDF", exact: true }).click();
+    expect((await lastInvocation(page, "redact_pdf"))?.args).toMatchObject({ request: { scope: { selected: { pages: [0, 2] } } } });
+});
+
 test("TIFF export waits for inspection of the current file set", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Open Split and Combine TIFF" }).click();
@@ -1401,7 +1487,8 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
         if (utility.id === "image-watermark") await page.getByLabel("Watermark text").fill("Test watermark");
         if (utility.id === "image-tone") await page.getByRole("slider", { name: "Brightness" }).press("End");
     }
-    if (utility.id === "pdf-merge") {
+    if (utility.id === "pdf-redact") await drawRedactionBox(page);
+    if (utility.id === "pdf-merge" || utility.id === "pdf-compare") {
         await page.evaluate(() => { (window as TestWindow).__toolboxSecondPick = true; });
         await page.getByRole("button", { name: "Choose files to process" }).click();
     }
@@ -1424,7 +1511,7 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
 };
 
 test.describe("registered feature actions", () => {
-    expect(UtilityRegistry).toHaveLength(33);
+    expect(UtilityRegistry).toHaveLength(37);
 
     for (const utility of UtilityRegistry) {
         test(`${utility.id} accepts the fixture and runs`, async ({ page }) => {

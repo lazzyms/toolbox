@@ -760,7 +760,7 @@ impl PDFProcessor {
 }
 
 /// Locate qpdf from an explicit override, the installed app resources, or PATH.
-fn find_qpdf() -> Option<PathBuf> {
+pub(crate) fn find_qpdf() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("TOOLBOX_QPDF_PATH") {
         let p = PathBuf::from(p);
         if p.is_file() {
