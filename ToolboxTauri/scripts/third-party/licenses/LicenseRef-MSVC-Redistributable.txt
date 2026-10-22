@@ -1,0 +1,8 @@
+Microsoft Visual C++ Redistributable runtime libraries
+
+These files are Microsoft runtime components that Microsoft permits developers
+to redistribute with their applications under the "Distributable Code" terms of
+the Microsoft Visual Studio license. They remain the property of Microsoft
+Corporation and are not covered by the Toolbox MIT license. Details:
+https://learn.microsoft.com/cpp/windows/redistributing-visual-cpp-files
+https://visualstudio.microsoft.com/license-terms/

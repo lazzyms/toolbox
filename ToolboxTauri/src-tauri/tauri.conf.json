@@ -7,7 +7,8 @@
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "npm run build",
-    "frontendDist": "../dist"
+    "frontendDist": "../dist",
+    "features": ["updater"]
   },
   "app": {
     "windows": [
@@ -37,7 +38,7 @@
       { "ext": ["png", "jpg", "jpeg", "webp", "heic", "heif"], "name": "Image", "description": "Image file", "role": "Viewer" }
     ],
     "createUpdaterArtifacts": true,
-    "resources": ["resources/vision", "resources/ocr", "resources/fonts/*"],
+    "resources": ["resources/vision", "resources/ocr", "resources/fonts/*", "resources/licenses/*"],
     "macOS": {
       "signingIdentity": "-"
     },

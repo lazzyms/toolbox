@@ -50,14 +50,10 @@ body {
   letter-spacing: -0.02em;
 }
 .brand-mark {
-  display: grid;
-  place-items: center;
+  display: block;
   width: 28px;
   height: 28px;
   border-radius: 8px;
-  background: var(--primary);
-  color: var(--primary-foreground);
-  font-weight: 700;
 }
 .eyebrow {
   margin: 0 12px 10px;
@@ -267,6 +263,11 @@ body {
   width: 100%;
   justify-content: flex-start;
   text-align: left;
+}
+.view-tool-list .view-tool-link small {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 400;
 }
 .tool-empty-state {
   width: 100%;

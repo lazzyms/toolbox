@@ -30,6 +30,7 @@ type TestWindow = Window & {
     __toolboxTiffInspectionDelayMs?: number;
     __toolboxInspectionError?: string;
     __toolboxActionFailure?: { command: string; path: string; message: string; delayMs?: number };
+    __toolboxNoticesFailure?: string;
     __toolboxSecondPick?: boolean;
     __toolboxDialogResults?: Array<string | string[] | null>;
     __toolboxOutputSettings?: OutputSettings;
@@ -86,6 +87,11 @@ test.beforeEach(async ({ page }) => {
                         return `${pdfFixturePath}.second.pdf`;
                     }
                     return fixturePath;
+                }
+                if (command === "open_third_party_notices") {
+                    const failure = (window as TestWindow).__toolboxNoticesFailure;
+                    if (failure) throw failure;
+                    return null;
                 }
                 if (command === "open_output_path" || command === "reveal_output_path") {
                     const failure = (window as TestWindow).__toolboxActionFailure;
@@ -332,7 +338,8 @@ test("all six home view sections list their tools and open their view", async ({
     await expandViews(page);
 
     for (const [index, workspace] of ToolWorkspaceRegistry.entries()) {
-        const titles = workspaceEntries(workspace, toolsForWorkspace(workspace)).map((entry) => entry.title);
+        const titles = workspaceEntries(workspace, toolsForWorkspace(workspace)).map((entry) =>
+            entry.tools[0].capability.nativeAvailability === "unavailable" ? `${entry.title}Unavailable` : entry.title);
         await expect(sections.nth(index).locator("button[data-command-result]")).toHaveText(titles);
     }
 
@@ -357,6 +364,37 @@ test("home sections show six tools and reveal the rest on request", async ({ pag
             await expect(section.locator("button[data-command-result]")).toHaveCount(entries);
         }
     }
+});
+
+test("sidebar brand shows the app icon instead of a letter", async ({ page }) => {
+    await page.goto("/");
+    const lockup = page.locator(".brand-lockup");
+    await expect(lockup).toHaveText("Toolbox");
+    const mark = lockup.locator("img.brand-mark");
+    await expect(mark).toHaveAttribute("alt", "");
+    await expect.poll(() => mark.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth)).toBeGreaterThan(0);
+});
+
+test("home marks tools this build cannot run and keeps them out of the search hint", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.getByRole("textbox", { name: "Search tools" })).toHaveAttribute("placeholder", "Find a tool, like merge, split or compress");
+    await expandViews(page);
+
+    const unavailable = UtilityRegistry.filter((tool) => tool.capability.nativeAvailability === "unavailable");
+    expect(unavailable.map((tool) => tool.title)).toEqual(expect.arrayContaining(["OCR PDF", "Blur Faces", "Remove Background"]));
+    for (const tool of unavailable) {
+        const link = page.locator(`.view-tool-link[data-command-result="${tool.id}"]`);
+        await expect(link).toContainText("Unavailable");
+        await expect(link).toHaveAttribute("title", `${tool.title} is unavailable in this build`);
+        await expect(link).toHaveAccessibleDescription("Unavailable");
+    }
+
+    const available = page.locator('.view-tool-link[data-command-result="pdf-merge"]');
+    await expect(available).not.toContainText("Unavailable");
+    await expect(available).not.toHaveAttribute("aria-describedby", /.+/);
+
+    await page.locator('.view-tool-link[data-command-result="pdf-ocr"]').click();
+    await expect(page.getByText("Unavailable in this build.", { exact: true })).toBeVisible();
 });
 
 test(`search finds and opens all ${UtilityRegistry.length} registered tool actions`, async ({ page }) => {
@@ -873,6 +911,14 @@ test("the settings sidebar switches sections and lists only the built ones", asy
     await expect(about).toContainText(`Version ${appVersion} for macOS`);
     await expect(about.getByRole("img", { name: "Buy Me a Coffee donation QR code" })).toBeVisible();
     await expect(about).toContainText("Support Toolbox");
+
+    await about.getByRole("button", { name: "Open notices" }).click();
+    await expect.poll(() => page.evaluate(() =>
+        ((window as TestWindow).__toolboxInvocations ?? []).filter(({ command }) => command === "open_third_party_notices").length,
+    )).toBe(1);
+    await page.evaluate(() => { (window as TestWindow).__toolboxNoticesFailure = "The third-party notices are missing from this copy of Toolbox. Reinstall Toolbox to restore them."; });
+    await about.getByRole("button", { name: "Open notices" }).click();
+    await expect(about).toContainText("The third-party notices are missing from this copy of Toolbox.");
 });
 
 test("Find a tool on the settings page opens the tool search", async ({ page }) => {

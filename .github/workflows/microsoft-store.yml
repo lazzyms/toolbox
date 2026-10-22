@@ -11,11 +11,6 @@ on:
         description: Exact semver to build (blank uses the next Tauri release version)
         required: false
         type: string
-      publish:
-        description: Submit the built package to the Microsoft Store
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   contents: read
@@ -25,8 +20,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build-and-publish:
-    name: Build and publish MSIX
+  build:
+    name: Build MSIX
     if: >-
       github.event_name != 'workflow_run' ||
       (github.event.workflow_run.head_branch == 'main' &&
@@ -40,7 +35,6 @@ jobs:
       TOOLBOX_REQUIRE_QPDF: '1'
       TOOLBOX_QPDF_PATH: ${{ github.workspace }}\ToolboxTauri\src-tauri\resources\qpdf.exe
       TOOLBOX_PDFTOPPM_PATH: ${{ github.workspace }}\ToolboxTauri\src-tauri\resources\pdftoppm.exe
-      PUBLISH_TO_STORE: ${{ inputs.publish }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -152,6 +146,10 @@ jobs:
         run: npm run stage:ocr
         working-directory: ToolboxTauri
 
+      - name: Verify third-party notices cover shipped binaries
+        run: node scripts/third-party-notices.mjs --binaries src-tauri/resources
+        working-directory: ToolboxTauri
+
       - name: Build unsigned MSIX
         shell: pwsh
         working-directory: ToolboxTauri
@@ -166,52 +164,3 @@ jobs:
           path: ToolboxTauri/.artifacts/msix/*.msix
           if-no-files-found: error
 
-      - name: Configure Microsoft Store CLI
-        uses: microsoft/microsoft-store-apppublisher@v1.1
-
-      - name: Check Microsoft Store credentials
-        id: store-credentials
-        shell: pwsh
-        env:
-          AZURE_AD_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
-          SELLER_ID: ${{ secrets.SELLER_ID }}
-          AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
-          AZURE_AD_APPLICATION_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
-        run: |
-          if ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch' -and $env:PUBLISH_TO_STORE -ne 'true') {
-            Write-Host 'Build-only dispatch requested; skipping Microsoft Store publication.'
-            'publish=false' >> $env:GITHUB_OUTPUT
-            exit 0
-          }
-          $required = @(
-            $env:AZURE_AD_TENANT_ID,
-            $env:SELLER_ID,
-            $env:AZURE_AD_APPLICATION_CLIENT_ID,
-            $env:AZURE_AD_APPLICATION_SECRET
-          )
-          if ($required | Where-Object { [string]::IsNullOrWhiteSpace($_) }) {
-            Write-Warning 'Microsoft Store credentials are incomplete. Skipping Store publication.'
-            'publish=false' >> $env:GITHUB_OUTPUT
-          } else {
-            'publish=true' >> $env:GITHUB_OUTPUT
-          }
-
-      - name: Reconfigure Store credentials
-        if: steps.store-credentials.outputs.publish == 'true'
-        shell: pwsh
-        run: |
-          msstore reconfigure `
-            --tenantId "${{ secrets.AZURE_AD_TENANT_ID }}" `
-            --sellerId "${{ secrets.SELLER_ID }}" `
-            --clientId "${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}" `
-            --clientSecret "${{ secrets.AZURE_AD_APPLICATION_SECRET }}"
-
-      - name: Publish package to Microsoft Store
-        if: steps.store-credentials.outputs.publish == 'true'
-        shell: pwsh
-        run: |
-          $package = Get-ChildItem "${{ github.workspace }}\ToolboxTauri\.artifacts\msix" -Filter *.msix | Select-Object -First 1
-          if (-not $package) { throw 'The MSIX package was not produced.' }
-          msstore publish "${{ github.workspace }}\ToolboxTauri\.artifacts\msix" `
-            --inputFile $package.FullName `
-            --appId "${{ vars.TOOLBOX_MSIX_STORE_ID }}"

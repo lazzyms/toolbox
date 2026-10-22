@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "updater",
+  "description": "In-app updates for builds that include the updater feature",
+  "windows": ["main"],
+  "permissions": [
+    "updater:default"
+  ]
+}

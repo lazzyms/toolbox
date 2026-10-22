@@ -3,9 +3,9 @@
 ## Microsoft Store release
 
 The reserved MSIX product is **Toolbox: PDF & File Tools** (Store ID
-`9N5R8W4GJVH4`). The `microsoft-store.yml` workflow builds the x64 MSIX on
-every push to `main` and publishes it with the [Microsoft Store Developer CLI]
-after the initial Partner Center submission metadata is complete.
+`9N5R8W4GJVH4`). The `microsoft-store.yml` workflow builds the x64 MSIX after
+each Tauri release on `main` and uploads it as the `toolbox-msix` artifact.
+Submit that package to the Store manually in Partner Center.
 
 Privacy policy URL: <https://lazzyms.github.io/toolbox/privacy.html>
 
@@ -16,25 +16,12 @@ Configure these GitHub repository variables:
 - `TOOLBOX_MSIX_PUBLISHER`: `CN=FD70DA91-97ED-48EA-8594-B3F94ADBB4FD`
 - `TOOLBOX_MSIX_PUBLISHER_DISPLAY_NAME`: `Maulik Sompura`
 
-Configure these GitHub repository secrets for the [GitHub Actions Store
-publisher setup]:
-
-- `AZURE_AD_APPLICATION_CLIENT_ID`
-- `AZURE_AD_APPLICATION_SECRET`
-- `AZURE_AD_TENANT_ID`
-- `SELLER_ID`
-
-The first submission still needs to be completed in Partner Center, including
-pricing and availability, category, age rating, Store listing, privacy policy,
-and certification notes. After that draft is publishable, pushes to `main`
-can submit package updates automatically.
+Every Store submission, including the package, listing, screenshots and
+certification notes, is completed in Partner Center.
 
 The workflow uses the committed [MSIX manifest template](../ToolboxTauri/packaging/windows-msix/AppxManifest.xml.template)
 and [MSIX build script](../ToolboxTauri/scripts/build-msix.ps1). The package is
 unsigned locally; Microsoft signs accepted Store packages.
-
-[Microsoft Store Developer CLI]: https://learn.microsoft.com/en-us/windows/apps/publish/msstore-dev-cli/overview
-[GitHub Actions Store publisher setup]: https://learn.microsoft.com/en-us/windows/apps/publish/msstore-dev-cli/github-actions
 
 Run these checks from `ToolboxTauri/` before a release rehearsal:
 

@@ -1,6 +1,12 @@
 {
+  "build": {
+    "features": []
+  },
   "bundle": {
     "createUpdaterArtifacts": false,
     "resources": ["resources/*"]
+  },
+  "plugins": {
+    "updater": null
   }
 }

@@ -35,17 +35,17 @@ const pages = new Map(readdirSync(docs).filter(name => name.endsWith('.html'))
   .map(name => [name, readFileSync(new URL(name, docs), 'utf8')]));
 const appSource = readFileSync(new URL('assets/app.js', docs), 'utf8');
 const release = {
-  tag: 'tauri-v1.0.16',
-  version: '1.0.16',
-  publishedDate: 'September 29, 2026',
-  macosDmgUrl: 'https://github.com/lazzyms/toolbox/releases/download/tauri-v1.0.16/Toolbox-1.0.16-macos.dmg',
+  tag: 'tauri-v1.0.19',
+  version: '1.0.19',
+  publishedDate: 'October 22, 2026',
+  macosDmgUrl: 'https://github.com/lazzyms/toolbox/releases/download/tauri-v1.0.19/Toolbox-1.0.19-macos.dmg',
   windowsStoreUrl: 'https://apps.microsoft.com/detail/9N5R8W4GJVH4',
 };
 const pageMetadata = [
   ['index.html', 'Toolbox | Local file utilities for macOS and Windows', 'Local PDF, Office, and image utilities for macOS and Windows. Remove passwords, edit PDFs, and convert, compress, or resize images without uploading files.', 'https://lazzyms.github.io/toolbox/'],
   ['pdf.html', 'PDF and document tools | Toolbox', '19 local PDF and document utilities for macOS and Windows. Edit, merge, split, sign, and organize PDFs. Protect PDFs and DOCX or XLSX files, and remove passwords from supported files.', 'https://lazzyms.github.io/toolbox/pdf.html'],
   ['images.html', 'Image tools | Toolbox', '14 local image utilities for macOS and Windows. Convert, compress, resize, crop, watermark, and inspect images in batches.', 'https://lazzyms.github.io/toolbox/images.html'],
-  ['privacy.html', 'Privacy Policy | Toolbox', 'Toolbox privacy policy: files stay on your device, with limited anonymous install and app-open analytics in release builds.', 'https://lazzyms.github.io/toolbox/privacy.html'],
+  ['privacy.html', 'Privacy Policy | Toolbox', 'Toolbox privacy policy: files stay on your device. GitHub builds send install and app-open counts with a random ID; the Microsoft Store build sends none.', 'https://lazzyms.github.io/toolbox/privacy.html'],
   ['terms.html', 'Terms of Use | Toolbox', 'Terms of use for the Toolbox website and desktop application. Toolbox is free software released under the MIT License.', 'https://lazzyms.github.io/toolbox/terms.html'],
 ].map(([file, title, description, canonicalUrl]) => ({
   file, title, description, canonicalUrl,

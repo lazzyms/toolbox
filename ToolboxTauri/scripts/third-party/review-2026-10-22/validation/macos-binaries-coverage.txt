@@ -1,0 +1,1 @@
+Every native binary under /private/tmp/claude-501/-Volumes-AgentWorkspaces-Projects-Personal-toolbox--claude-worktrees-hungry-burnell-468269/ade83459-3329-400f-ad27-cd71f8e38af2/scratchpad/maccov has a third-party notice.

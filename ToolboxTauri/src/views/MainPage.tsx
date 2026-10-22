@@ -10,6 +10,7 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import shellFileTypes from "../../shared/shell-file-types.json" with { type: "json" };
+import appIcon from "../../src-tauri/icons/128x128.png";
 import {
   ToolWorkspaceRegistry,
   UtilityRegistry,
@@ -453,7 +454,7 @@ export const MainPage = () => {
         ) : (
           <>
             <div className="brand-lockup">
-              <span className="brand-mark">T</span>
+              <img className="brand-mark" src={appIcon} alt="" />
               <span>Toolbox</span>
             </div>
             <nav className="rail-nav" aria-label="Workspace navigation">
@@ -519,7 +520,7 @@ export const MainPage = () => {
                 onKeyDown={handleSearchKeyDown}
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                placeholder="Find a tool, like merge, OCR or compress"
+                placeholder="Find a tool, like merge, split or compress"
               />
               <kbd aria-hidden="true">{shortcutLabel("find")}</kbd>
             </div>
@@ -624,22 +625,28 @@ export const MainPage = () => {
                       </Button>
                     </div>
                     <div className="view-tool-list">
-                      {shown.map((entry) => (
-                        <Button
-                          type="button"
-                          key={entry.key}
-                          className="view-tool-link"
-                          variant="ghost"
-                          size="sm"
-                          data-command-result={entry.tools[0].id}
-                          aria-label={`Open ${entry.title}`}
-                          title={entry.blurb}
-                          onKeyDown={handleCommandResultKeyDown}
-                          onClick={() => openTool(entry.tools[0])}
-                        >
-                          {entry.title}
-                        </Button>
-                      ))}
+                      {shown.map((entry) => {
+                        const unavailable = entry.tools[0].capability.nativeAvailability === "unavailable";
+                        const statusId = `view-tool-status-${entry.key}`;
+                        return (
+                          <Button
+                            type="button"
+                            key={entry.key}
+                            className="view-tool-link"
+                            variant="ghost"
+                            size="sm"
+                            data-command-result={entry.tools[0].id}
+                            aria-label={`Open ${entry.title}`}
+                            aria-describedby={unavailable ? statusId : undefined}
+                            title={unavailable ? `${entry.title} is unavailable in this build` : entry.blurb}
+                            onKeyDown={handleCommandResultKeyDown}
+                            onClick={() => openTool(entry.tools[0])}
+                          >
+                            {entry.title}
+                            {unavailable && <small id={statusId}>Unavailable</small>}
+                          </Button>
+                        );
+                      })}
                       {hiddenCount > 0 && (
                         <Button
                           variant="ghost"

@@ -72,6 +72,25 @@ pub fn reveal_output_path(path: PathBuf) -> Result<(), String> {
     reveal_file(&path, kind)
 }
 
+const NOTICES_FILE: &str = "THIRD-PARTY-NOTICES.txt";
+
+// Bundles keep resources either directly under the resource root or under a
+// nested resources/ folder, depending on the platform's bundle layout.
+fn third_party_notices_path(root: &Path) -> Option<PathBuf> {
+    [root.join("licenses"), root.join("resources").join("licenses")]
+        .into_iter()
+        .map(|folder| folder.join(NOTICES_FILE))
+        .find(|path| path.is_file())
+}
+
+#[tauri::command]
+pub fn open_third_party_notices() -> Result<(), String> {
+    let path = crate::kit::resources::application_resource_root()
+        .and_then(|root| third_party_notices_path(&root))
+        .ok_or_else(|| "The third-party notices are missing from this copy of Toolbox. Reinstall Toolbox to restore them.".to_string())?;
+    open_file(&path)
+}
+
 #[cfg(target_os = "macos")]
 fn open_file(path: &Path) -> Result<(), String> {
     run_open("/usr/bin/open", &[path.as_os_str().to_owned()], "open", path)
@@ -167,7 +186,7 @@ fn reveal_file(path: &Path, _kind: OutputKind) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{output_kind, OutputKind};
+    use super::{output_kind, third_party_notices_path, OutputKind};
     use std::path::{Path, PathBuf};
 
     fn unique_path(name: &str) -> PathBuf {
@@ -180,6 +199,24 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ))
+    }
+
+    #[test]
+    fn finds_the_bundled_third_party_notices() {
+        let root = crate::kit::resources::application_resource_root().unwrap();
+        let path = third_party_notices_path(&root).unwrap();
+        let notices = std::fs::read_to_string(&path).unwrap();
+        assert!(notices.starts_with("Toolbox third-party notices"));
+        assert!(notices.contains("x265"));
+
+        let nested = unique_path("nested_notices");
+        std::fs::create_dir_all(nested.join("resources").join("licenses")).unwrap();
+        std::fs::write(nested.join("resources").join("licenses").join("THIRD-PARTY-NOTICES.txt"), b"notices").unwrap();
+        let found = third_party_notices_path(&nested);
+        let missing = third_party_notices_path(&nested.join("resources").join("licenses"));
+        std::fs::remove_dir_all(&nested).unwrap();
+        assert_eq!(found, Some(nested.join("resources").join("licenses").join("THIRD-PARTY-NOTICES.txt")));
+        assert_eq!(missing, None);
     }
 
     #[test]
