@@ -178,7 +178,7 @@ impl OutputNaming {
             return Ok(None);
         }
         let claim_path = Self::claim_path(path);
-        let claim = match OpenOptions::new().write(true).create_new(true).open(&claim_path) {
+        let claim = match Self::retry_while_busy(|| OpenOptions::new().write(true).create_new(true).open(&claim_path)) {
             Ok(claim) => claim,
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => return Ok(None),
             Err(error) => return Err(error),
@@ -213,18 +213,36 @@ impl OutputNaming {
             return Ok(None);
         }
         let claim_path = Self::claim_path(path);
-        match OpenOptions::new().write(true).create_new(true).open(&claim_path) {
+        match Self::retry_while_busy(|| OpenOptions::new().write(true).create_new(true).open(&claim_path)) {
             Ok(claim) => drop(claim),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => return Ok(None),
             Err(error) => return Err(error),
         }
-        let created = std::fs::create_dir(path);
+        let created = Self::retry_while_busy(|| std::fs::create_dir(path));
         let _ = std::fs::remove_file(&claim_path);
         match created {
             Ok(()) => Ok(Some(FolderReservation { path: path.to_path_buf(), published: false })),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(None),
             Err(error) => Err(error),
         }
+    }
+
+    /// Windows reports "access denied" while another reservation's claim file or
+    /// abandoned folder is still being deleted, so a busy name is retried briefly
+    /// before the error is treated as real.
+    fn retry_while_busy<T>(mut operation: impl FnMut() -> io::Result<T>) -> io::Result<T> {
+        let attempts = if cfg!(windows) { 50 } else { 1 };
+        let mut result = operation();
+        for _ in 1..attempts {
+            match &result {
+                Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    result = operation();
+                }
+                _ => break,
+            }
+        }
+        result
     }
 
     fn claim_path(path: &Path) -> PathBuf {
@@ -415,6 +433,38 @@ mod tests {
         assert!(!OutputNaming::claim_path(&path).exists());
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn busy_names_are_retried_only_on_windows_and_real_denials_still_fail() {
+        let denied = || io::Error::new(io::ErrorKind::PermissionDenied, "Access is denied.");
+        let mut calls = 0;
+        let transient = OutputNaming::retry_while_busy(|| {
+            calls += 1;
+            if calls < 3 { Err(denied()) } else { Ok(calls) }
+        });
+        if cfg!(windows) {
+            assert_eq!(transient.unwrap(), 3);
+        } else {
+            assert_eq!(transient.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+            assert_eq!(calls, 1);
+        }
+
+        let mut calls = 0;
+        let persistent: io::Result<()> = OutputNaming::retry_while_busy(|| {
+            calls += 1;
+            Err(denied())
+        });
+        assert_eq!(persistent.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(calls, if cfg!(windows) { 50 } else { 1 });
+
+        let mut calls = 0;
+        let other: io::Result<()> = OutputNaming::retry_while_busy(|| {
+            calls += 1;
+            Err(io::Error::new(io::ErrorKind::NotFound, "missing"))
+        });
+        assert_eq!(other.unwrap_err().kind(), io::ErrorKind::NotFound);
+        assert_eq!(calls, 1);
     }
 
     #[test]
