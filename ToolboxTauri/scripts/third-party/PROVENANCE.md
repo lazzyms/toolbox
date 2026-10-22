@@ -64,7 +64,7 @@ that CI installs unpinned, so a later build can differ.
 | u2netp.onnx origin | size 4574861 matches the rembg v0.0.0 asset, but that asset has no published digest; our sha256 starts 309c8469 and ends 4ddd8 | Ask rembg for the digest, or download the asset and compare hashes, before naming rembg (MIT, Daniel Gatis) in the notice |
 | GpgME++ licence | upstream AUTHORS says LGPL-2.0-or-later; Homebrew says LGPL-2.1-or-later | The notice follows upstream; confirm with the gpgmepp maintainers |
 | x265 "whole binary is GPL-3.0-or-later" note | a licensing-strategy question, left unchanged | Counsel review |
-| Windows MSIX contents | no `toolbox-msix` artifact was built | Rerun the Store workflow with `publish=false`, then run `--binaries` on the unpacked MSIX |
+| Windows MSIX contents | no `toolbox-msix` artifact was built | Rerun the Store workflow, then run `--binaries` on the unpacked MSIX |
 
 ## Validation (saved in `review-2026-10-22/validation/`)
 
