@@ -14,6 +14,9 @@ jobs:
     name: Capture Windows Store screenshots
     runs-on: windows-latest
     env:
+      TOOLBOX_MSIX_IDENTITY_NAME: ${{ vars.TOOLBOX_MSIX_IDENTITY_NAME }}
+      TOOLBOX_MSIX_PUBLISHER: ${{ vars.TOOLBOX_MSIX_PUBLISHER }}
+      TOOLBOX_MSIX_PUBLISHER_DISPLAY_NAME: ${{ vars.TOOLBOX_MSIX_PUBLISHER_DISPLAY_NAME }}
       VITE_ENABLE_UPDATES: 'false'
       VITE_TOOLBOX_TARGET_PLATFORM: windows
       TOOLBOX_REQUIRE_QPDF: '1'
@@ -72,7 +75,7 @@ jobs:
           Get-ChildItem $pdftoppm.DirectoryName -Filter *.dll | Copy-Item -Destination src-tauri\resources -Force
           Copy-Item $pdftotext.FullName src-tauri\resources\pdftotext.exe -Force
 
-      # Same resources and build command as scripts/build-msix.ps1, so the screenshots show the Store build's tools.
+      # Same resources as microsoft-store.yml; the app is captured from the MSIX stage folder so it has the Store package's files.
       - name: Stage offline vision adapter
         run: npm run stage:vision
         working-directory: ToolboxTauri
@@ -81,9 +84,10 @@ jobs:
         run: npm run stage:ocr
         working-directory: ToolboxTauri
 
-      - name: Build the Store app
+      - name: Build the unsigned MSIX
+        shell: pwsh
         working-directory: ToolboxTauri
-        run: npm run tauri -- build --no-bundle --target x86_64-pc-windows-msvc --config src-tauri/tauri.windows-store.conf.json
+        run: .\scripts\build-msix.ps1
 
       - name: Install Windows WebDriver
         shell: pwsh

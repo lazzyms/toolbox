@@ -8,7 +8,7 @@ import { join, resolve } from "node:path";
 import { deflateSync } from "node:zlib";
 import webdriver from "selenium-webdriver";
 
-const { Builder, By, Key, until } = webdriver;
+const { Builder, By, until } = webdriver;
 
 if (process.platform !== "win32") throw new Error("Store screenshots must be captured on Windows");
 
@@ -16,13 +16,13 @@ const temp = process.env.RUNNER_TEMP ?? process.env.TEMP ?? ".";
 const outputDirectory = resolve(temp, "toolbox-store-screenshots");
 const samplesDirectory = resolve(temp, "toolbox-store-samples");
 const webviewUserDataFolder = resolve(temp, "toolbox-store-webview2");
-// The Store package is this release build (scripts/build-msix.ps1) with updates disabled.
-const executable = resolve("src-tauri/target/x86_64-pc-windows-msvc/release/toolbox.exe");
+// scripts/build-msix.ps1 stages the exact files the Store package contains.
+const executable = resolve(".artifacts/msix/stage/toolbox.exe");
 const report = {
   startedAt: new Date().toISOString(),
   commit: process.env.GITHUB_SHA ?? null,
   run: process.env.GITHUB_RUN_ID ?? null,
-  build: "release x86_64-pc-windows-msvc, --no-bundle, tauri.windows-store.conf.json, VITE_ENABLE_UPDATES=false, vision and OCR staged",
+  build: "scripts/build-msix.ps1 stage folder (release x86_64-pc-windows-msvc, tauri.windows-store.conf.json, updates off, vision and OCR staged)",
   scenes: [],
 };
 
@@ -317,8 +317,8 @@ async function run() {
       const thumbnails = await renderAllPdfThumbnails();
       // Select pages 2-3 and rotate them, the way Organize is used.
       await clickVisible('//button[contains(@class, "scene-thumbnail") and @aria-label="Page 2"]', "the page 2 thumbnail");
-      const third = await driver.findElement(By.xpath('//button[contains(@class, "scene-thumbnail") and @aria-label="Page 3"]'));
-      await driver.actions({ async: true }).keyDown(Key.SHIFT).click(third).keyUp(Key.SHIFT).perform();
+      // WebView2's WebDriver drops held modifier keys, so send the Shift-click the thumbnail handles.
+      await driver.executeScript("document.querySelector(`.scene-thumbnail[aria-label='Page 3']`).dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, shiftKey: true }));");
       await driver.wait(async () => (await driver.findElements(By.css('.scene-thumbnail[aria-pressed="true"]'))).length === 2, 10_000, "Pages 2-3 were not selected");
       await clickVisible('//button[@aria-label="Rotate selected pages"]', "the Rotate selected pages control");
       await driver.wait(until.elementLocated(By.css('button[aria-label="Reset edits"]:not([disabled])')), 10_000, "Rotation did not change the document");
