@@ -8,7 +8,7 @@ import { join, resolve } from "node:path";
 import { deflateSync } from "node:zlib";
 import webdriver from "selenium-webdriver";
 
-const { Builder, By, until } = webdriver;
+const { Builder, By, Key, until } = webdriver;
 
 if (process.platform !== "win32") throw new Error("Store screenshots must be captured on Windows");
 
@@ -16,8 +16,15 @@ const temp = process.env.RUNNER_TEMP ?? process.env.TEMP ?? ".";
 const outputDirectory = resolve(temp, "toolbox-store-screenshots");
 const samplesDirectory = resolve(temp, "toolbox-store-samples");
 const webviewUserDataFolder = resolve(temp, "toolbox-store-webview2");
-const executable = resolve("src-tauri/target/debug/toolbox.exe");
-const report = { startedAt: new Date().toISOString(), scenes: [] };
+// The Store package is this release build (scripts/build-msix.ps1) with updates disabled.
+const executable = resolve("src-tauri/target/x86_64-pc-windows-msvc/release/toolbox.exe");
+const report = {
+  startedAt: new Date().toISOString(),
+  commit: process.env.GITHUB_SHA ?? null,
+  run: process.env.GITHUB_RUN_ID ?? null,
+  build: "release x86_64-pc-windows-msvc, --no-bundle, tauri.windows-store.conf.json, VITE_ENABLE_UPDATES=false, vision and OCR staged",
+  scenes: [],
+};
 
 // ---------- Sample files ----------
 
@@ -198,7 +205,9 @@ async function clickVisible(xpath, description) {
 const openTool = (title) => clickVisible(`//button[@aria-label=${JSON.stringify(`Open ${title}`)}]`, `the Open ${title} control`);
 
 async function goHome() {
-  if ((await driver.findElements(By.css("main.command-center .tool-library-section"))).length) return;
+  for (const section of await driver.findElements(By.css("main.command-center .tool-library-section"))) {
+    if (await section.isDisplayed().catch(() => false)) return;
+  }
   await clickVisible('//button[normalize-space(.)="← All tools"]', "the All tools control");
   await driver.wait(until.elementLocated(By.css(".tool-library-section")), 10_000);
 }
@@ -220,6 +229,31 @@ async function settle() {
   await driver.wait(() => driver.executeScript("return [...document.images].every((image) => image.complete) && !document.querySelector('[aria-busy=\"true\"]')"), 20_000).catch(() => undefined);
   await pause(1_500);
 }
+
+const thumbnailRendered = (page) => driver.executeScript(
+  "const button = document.querySelector(`.scene-thumbnail[aria-label='Page ${arguments[0]}']`); const image = button?.querySelector('img'); return Boolean(image && image.complete && image.naturalWidth > 0);",
+  page,
+);
+
+// The editor renders thumbnails for the page in view and its neighbours, so visit every page once.
+async function renderAllPdfThumbnails() {
+  await driver.wait(until.elementLocated(By.css(".scene-thumbnail")), 20_000, "PDF page thumbnails did not appear");
+  const count = (await driver.findElements(By.css(".scene-thumbnail"))).length;
+  for (let page = count; page >= 1; page -= 1) {
+    await clickVisible(`//button[contains(@class, "scene-thumbnail") and @aria-label="Page ${page}"]`, `the page ${page} thumbnail`);
+    await driver.wait(() => thumbnailRendered(page), 20_000, `Page ${page} thumbnail did not render`);
+  }
+  await driver.wait(async () => {
+    for (let page = 1; page <= count; page += 1) if (!(await thumbnailRendered(page))) return false;
+    return true;
+  }, 20_000, "Not every PDF page thumbnail rendered");
+  return count;
+}
+
+// Labels of visible controls the app marks as unavailable in this build, kept in the report as captured.
+const unavailableControls = () => driver.executeScript(
+  "return [...document.querySelectorAll('button, a')].filter((element) => element.offsetParent && /\\bUnavailable\\b/i.test(element.innerText)).map((element) => element.innerText.replace(/\\s+/g, ' ').trim());",
+);
 
 function captureWindow(path, rect) {
   const script = [
@@ -267,23 +301,40 @@ async function run() {
   await driver.wait(until.elementLocated(By.css("main.command-center")), 30_000, "Toolbox home did not open");
   await driver.manage().window().maximize().catch(() => undefined);
   await pause(1_000);
+  report.window = await driver.manage().window().getRect();
 
   const scenes = [
     ["home", async () => {}],
     ["pdf-editor", async () => {
       const error = await invoke("open_paths", { paths: [samples.report] });
       if (error) throw new Error(error);
-      await waitForText("Quarterly");
+      return { thumbnails: await renderAllPdfThumbnails() };
     }],
     ["organize-pdf", async () => {
       await openTool("Organize PDF");
-      await dropIntoTool([samples.report]);
-      await waitForText("Northwind quarterly report");
+      await dropIntoTool([samples.brief]);
+      await waitForText("Project brief");
+      const thumbnails = await renderAllPdfThumbnails();
+      // Select pages 2-3 and rotate them, the way Organize is used.
+      await clickVisible('//button[contains(@class, "scene-thumbnail") and @aria-label="Page 2"]', "the page 2 thumbnail");
+      const third = await driver.findElement(By.xpath('//button[contains(@class, "scene-thumbnail") and @aria-label="Page 3"]'));
+      await driver.actions({ async: true }).keyDown(Key.SHIFT).click(third).keyUp(Key.SHIFT).perform();
+      await driver.wait(async () => (await driver.findElements(By.css('.scene-thumbnail[aria-pressed="true"]'))).length === 2, 10_000, "Pages 2-3 were not selected");
+      await clickVisible('//button[@aria-label="Rotate selected pages"]', "the Rotate selected pages control");
+      await driver.wait(until.elementLocated(By.css('button[aria-label="Reset edits"]:not([disabled])')), 10_000, "Rotation did not change the document");
+      // Pages 2-3 stay selected; wait for their rotated thumbnails.
+      for (const page of [2, 3]) await driver.wait(() => thumbnailRendered(page), 20_000, `Rotated page ${page} thumbnail did not render`);
+      return { thumbnails, rotatedPages: [2, 3] };
     }],
     ["image-editor", async () => {
       const error = await invoke("open_paths", { paths: [samples.dusk] });
       if (error) throw new Error(error);
       await waitForText("Lake at dusk");
+      // An opened image lands on Convert Image Format; switch to the Edit Image tools.
+      await clickVisible('//nav[contains(@class, "workspace-command-rail")]//button[@aria-label="Edit Image"]', "the Edit Image tool");
+      await driver.wait(until.elementLocated(By.css('[role="tablist"][aria-label="Edit Image"]')), 10_000, "Edit Image tabs did not appear");
+      await clickVisible('//*[@role="tablist" and @aria-label="Edit Image"]//button[normalize-space(.)="Crop"]', "the Crop tab");
+      await driver.wait(until.elementLocated(By.css(".image-editor-crop-overlay")), 10_000, "Crop selection did not appear");
     }],
     ["compress-images", async () => {
       await openTool("Compress Images");
@@ -316,9 +367,10 @@ async function run() {
   for (const [index, [name, prepare]] of scenes.entries()) {
     try {
       await goHome();
-      await prepare();
+      const details = await prepare();
       await settle();
-      report.scenes.push({ name, status: "captured", file: await capture(index + 1, name) });
+      const file = await capture(index + 1, name);
+      report.scenes.push({ name, status: "captured", file, unavailable: await unavailableControls(), ...details });
     } catch (error) {
       console.error(`Scene ${name} failed:`, error);
       let file;
