@@ -332,7 +332,8 @@ test("all six home view sections list their tools and open their view", async ({
     await expandViews(page);
 
     for (const [index, workspace] of ToolWorkspaceRegistry.entries()) {
-        const titles = workspaceEntries(workspace, toolsForWorkspace(workspace)).map((entry) => entry.title);
+        const titles = workspaceEntries(workspace, toolsForWorkspace(workspace)).map((entry) =>
+            entry.tools[0].capability.nativeAvailability === "unavailable" ? `${entry.title}Unavailable` : entry.title);
         await expect(sections.nth(index).locator("button[data-command-result]")).toHaveText(titles);
     }
 
@@ -357,6 +358,37 @@ test("home sections show six tools and reveal the rest on request", async ({ pag
             await expect(section.locator("button[data-command-result]")).toHaveCount(entries);
         }
     }
+});
+
+test("sidebar brand shows the app icon instead of a letter", async ({ page }) => {
+    await page.goto("/");
+    const lockup = page.locator(".brand-lockup");
+    await expect(lockup).toHaveText("Toolbox");
+    const mark = lockup.locator("img.brand-mark");
+    await expect(mark).toHaveAttribute("alt", "");
+    await expect.poll(() => mark.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth)).toBeGreaterThan(0);
+});
+
+test("home marks tools this build cannot run and keeps them out of the search hint", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.getByRole("textbox", { name: "Search tools" })).toHaveAttribute("placeholder", "Find a tool, like merge, split or compress");
+    await expandViews(page);
+
+    const unavailable = UtilityRegistry.filter((tool) => tool.capability.nativeAvailability === "unavailable");
+    expect(unavailable.map((tool) => tool.title)).toEqual(expect.arrayContaining(["OCR PDF", "Blur Faces", "Remove Background"]));
+    for (const tool of unavailable) {
+        const link = page.locator(`.view-tool-link[data-command-result="${tool.id}"]`);
+        await expect(link).toContainText("Unavailable");
+        await expect(link).toHaveAttribute("title", `${tool.title} is unavailable in this build`);
+        await expect(link).toHaveAccessibleDescription("Unavailable");
+    }
+
+    const available = page.locator('.view-tool-link[data-command-result="pdf-merge"]');
+    await expect(available).not.toContainText("Unavailable");
+    await expect(available).not.toHaveAttribute("aria-describedby", /.+/);
+
+    await page.locator('.view-tool-link[data-command-result="pdf-ocr"]').click();
+    await expect(page.getByText("Unavailable in this build.", { exact: true })).toBeVisible();
 });
 
 test(`search finds and opens all ${UtilityRegistry.length} registered tool actions`, async ({ page }) => {
