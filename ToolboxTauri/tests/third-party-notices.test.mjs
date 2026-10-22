@@ -20,8 +20,18 @@ test("globMatches is case-insensitive and anchors the whole name", () => {
     assert.ok(!globMatches("qpdf*.dll", "notqpdf30.dll"));
 });
 
+test("each macOS TLS library is credited to the project that ships it", () => {
+    const owners = (file) => components.filter((component) => component.files?.some((pattern) => globMatches(pattern, file))).map((component) => component.name);
+    assert.deepEqual(owners("libssl.3.dylib"), ["OpenSSL (libssl, libcrypto)"]);
+    assert.deepEqual(owners("libssl3.dylib"), ["NSS (Network Security Services)"]);
+    assert.deepEqual(owners("libssl-3-x64.dll"), ["OpenSSL (libssl, libcrypto)"]);
+});
+
 test("every native component names a license text that ships in the notices", () => {
     for (const component of components) {
+        for (const file of component.notices ?? []) {
+            assert.ok(existsSync(new URL(`../${file}`, import.meta.url)), `${component.name}: ${file}`);
+        }
         if (component.licenseFile) {
             assert.ok(existsSync(new URL(`../${component.licenseFile}`, import.meta.url)), `${component.name}: ${component.licenseFile}`);
             continue;

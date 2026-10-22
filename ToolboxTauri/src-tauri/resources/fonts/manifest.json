@@ -20,7 +20,7 @@
     },
     "signaturePacificoFont": {
       "path": "Pacifico-Regular.ttf",
-      "version": "7.003",
+      "version": "3.001",
       "sha256": "5b6c0d5334a7bf77dea52b975c5a0c408878c0f7115ed5b6fb151f634b7bf701",
       "license": "SIL Open Font License 1.1; see Pacifico-LICENSE.txt",
       "sourceUrl": "https://github.com/google/fonts/tree/main/ofl/pacifico",

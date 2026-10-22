@@ -1,0 +1,1079 @@
+﻿2026-10-21T19:00:13.8642588Z Current runner version: '2.338.0'
+2026-10-21T19:00:13.8673458Z ##[group]Runner Image Provisioner
+2026-10-21T19:00:13.8674418Z Hosted Compute Agent
+2026-10-21T19:00:13.8675028Z Version: 20261015.610
+2026-10-21T19:00:13.8675713Z Commit: 267fdb4e8bbec4ab5ea31367f3a00d5c480c7656
+2026-10-21T19:00:13.8676548Z Build Date: 2026-10-14T17:06:54Z
+2026-10-21T19:00:13.8677317Z Worker ID: {98bc3f2f-a9c1-49d6-9e91-0902654b4963}
+2026-10-21T19:00:13.8678108Z Region: eastus
+2026-10-21T19:00:13.8678651Z Cloud: Azure
+2026-10-21T19:00:13.8679213Z ##[endgroup]
+2026-10-21T19:00:13.8680709Z ##[group]Operating System
+2026-10-21T19:00:13.8681412Z Microsoft Windows Server 2025
+2026-10-21T19:00:13.8682062Z 10.0.26100
+2026-10-21T19:00:13.8682614Z Datacenter
+2026-10-21T19:00:13.8683129Z ##[endgroup]
+2026-10-21T19:00:13.8683675Z ##[group]Runner Image
+2026-10-21T19:00:13.8684266Z Image: windows-2025-vs2026
+2026-10-21T19:00:13.8685199Z Version: 20261018.275.1
+2026-10-21T19:00:13.8687025Z Included Software: https://github.com/actions/runner-images/blob/win25-vs2026/20261018.275/images/windows/Windows2025-VS2026-Readme.md
+2026-10-21T19:00:13.8688817Z Image Release: https://github.com/actions/runner-images/releases/tag/win25-vs2026%2F20261018.275
+2026-10-21T19:00:13.8689888Z ##[endgroup]
+2026-10-21T19:00:13.8691785Z ##[group]GITHUB_TOKEN Permissions
+2026-10-21T19:00:13.8693914Z Contents: read
+2026-10-21T19:00:13.8694577Z Metadata: read
+2026-10-21T19:00:13.8695176Z ##[endgroup]
+2026-10-21T19:00:13.8697456Z Secret source: Actions
+2026-10-21T19:00:13.8698468Z Cache mode: write
+2026-10-21T19:00:13.8699248Z Prepare workflow directory
+2026-10-21T19:00:13.9228210Z Prepare all required actions
+2026-10-21T19:00:13.9283666Z Getting action download info
+2026-10-21T19:00:14.1201507Z Download action repository 'actions/checkout@v7' (SHA:3d3c42e5aac5ba805825da76410c181273ba90b1)
+2026-10-21T19:00:14.2651930Z Download action repository 'dtolnay/rust-toolchain@stable' (SHA:b725eda525362e7cf34af9a7243cac1e3f01a7ec)
+2026-10-21T19:00:14.3580283Z Download action repository 'swatinem/rust-cache@v2' (SHA:d1527c8f67ef9af357290475d4af4b0fab8f12e0)
+2026-10-21T19:00:14.5943888Z Download action repository 'actions/setup-node@v4' (SHA:49933ea5288caeca8642d1e84afbd3f7d6820020)
+2026-10-21T19:00:14.7816340Z Download action repository 'actions/upload-artifact@v7' (SHA:cf430e030ddbb5b0abf93d22962f4752f3646cd9)
+2026-10-21T19:00:15.0936145Z Complete job name: Windows
+2026-10-21T19:00:15.3152003Z ##[group]Run actions/checkout@v7
+2026-10-21T19:00:15.3154327Z with:
+2026-10-21T19:00:15.3154937Z   repository: lazzyms/toolbox
+2026-10-21T19:00:15.3160171Z   token: ***
+2026-10-21T19:00:15.3160694Z   ssh-strict: true
+2026-10-21T19:00:15.3161216Z   ssh-user: git
+2026-10-21T19:00:15.3161733Z   persist-credentials: true
+2026-10-21T19:00:15.3162308Z   clean: true
+2026-10-21T19:00:15.3162827Z   sparse-checkout-cone-mode: true
+2026-10-21T19:00:15.3163461Z   fetch-depth: 1
+2026-10-21T19:00:15.3163970Z   fetch-tags: false
+2026-10-21T19:00:15.3164499Z   show-progress: true
+2026-10-21T19:00:15.3166029Z   lfs: false
+2026-10-21T19:00:15.3166544Z   submodules: false
+2026-10-21T19:00:15.3167073Z   set-safe-directory: true
+2026-10-21T19:00:15.3167679Z   allow-unsafe-pr-checkout: false
+2026-10-21T19:00:15.3168668Z env:
+2026-10-21T19:00:15.3169158Z   TOOLBOX_REQUIRE_QPDF: 1
+2026-10-21T19:00:15.3170017Z   VITE_POSTHOG_KEY: ***
+2026-10-21T19:00:15.3170602Z   VITE_TOOLBOX_TARGET_PLATFORM: windows
+2026-10-21T19:00:15.3171164Z ##[endgroup]
+2026-10-21T19:00:15.4767667Z Syncing repository: lazzyms/toolbox
+2026-10-21T19:00:15.4769768Z ##[group]Getting Git version info
+2026-10-21T19:00:15.4770479Z Working directory is 'D:\a\toolbox\toolbox'
+2026-10-21T19:00:15.5907217Z [command]"C:\Program Files\Git\bin\git.exe" version
+2026-10-21T19:00:15.9600221Z git version 2.56.0.windows.2
+2026-10-21T19:00:15.9669105Z ##[endgroup]
+2026-10-21T19:00:15.9689583Z Temporarily overriding HOME='D:\a\_temp\453becb2-c421-4b74-88c4-bb8342da597d' before making global git config changes
+2026-10-21T19:00:15.9698405Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-21T19:00:15.9703756Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\toolbox\toolbox
+2026-10-21T19:00:16.0445191Z Deleting the contents of 'D:\a\toolbox\toolbox'
+2026-10-21T19:00:16.0451601Z ##[group]Determining repository object format
+2026-10-21T19:00:16.0454583Z ##[endgroup]
+2026-10-21T19:00:16.0456703Z ##[group]Initializing the repository
+2026-10-21T19:00:16.0462874Z [command]"C:\Program Files\Git\bin\git.exe" init D:\a\toolbox\toolbox
+2026-10-21T19:00:16.1481686Z Initialized empty Git repository in D:/a/toolbox/toolbox/.git/
+2026-10-21T19:00:16.1532960Z [command]"C:\Program Files\Git\bin\git.exe" remote add origin https://github.com/lazzyms/toolbox
+2026-10-21T19:00:16.2273907Z ##[endgroup]
+2026-10-21T19:00:16.2275837Z ##[group]Disabling automatic garbage collection
+2026-10-21T19:00:16.2283001Z [command]"C:\Program Files\Git\bin\git.exe" config --local gc.auto 0
+2026-10-21T19:00:16.2752302Z ##[endgroup]
+2026-10-21T19:00:16.2755248Z ##[group]Setting up auth
+2026-10-21T19:00:16.2757122Z Removing SSH command configuration
+2026-10-21T19:00:16.2765720Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-10-21T19:00:16.3179147Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-10-21T19:00:17.9167254Z Removing HTTP extra header
+2026-10-21T19:00:17.9178800Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-21T19:00:17.9604076Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-10-21T19:00:18.5745166Z Removing includeIf entries pointing to credentials config files
+2026-10-21T19:00:18.5755274Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-21T19:00:18.6176874Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-10-21T19:00:19.2332736Z [command]"C:\Program Files\Git\bin\git.exe" config --file D:\a\_temp\git-credentials-0fc204e0-9937-4191-b211-5cf2b0b02039.config http.https://github.com/.extraheader "AUTHORIZATION: basic ***"
+2026-10-21T19:00:19.2801567Z [command]"C:\Program Files\Git\bin\git.exe" config --local includeIf.gitdir:D:/a/toolbox/toolbox/.git.path D:\a\_temp\git-credentials-0fc204e0-9937-4191-b211-5cf2b0b02039.config
+2026-10-21T19:00:19.3243439Z [command]"C:\Program Files\Git\bin\git.exe" config --local includeIf.gitdir:D:/a/toolbox/toolbox/.git/worktrees/*.path D:\a\_temp\git-credentials-0fc204e0-9937-4191-b211-5cf2b0b02039.config
+2026-10-21T19:00:19.3727397Z [command]"C:\Program Files\Git\bin\git.exe" config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-0fc204e0-9937-4191-b211-5cf2b0b02039.config
+2026-10-21T19:00:19.4152065Z [command]"C:\Program Files\Git\bin\git.exe" config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-0fc204e0-9937-4191-b211-5cf2b0b02039.config
+2026-10-21T19:00:19.4604534Z ##[endgroup]
+2026-10-21T19:00:19.4605333Z ##[group]Fetching the repository
+2026-10-21T19:00:19.4622226Z [command]"C:\Program Files\Git\bin\git.exe" -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +a0e9d46ed0fb0f57d90de47e2733902eb0bd8bed:refs/remotes/origin/genie/store-compliance
+2026-10-21T19:00:21.4345780Z From https://github.com/lazzyms/toolbox
+2026-10-21T19:00:21.4347169Z  * [new ref]         a0e9d46ed0fb0f57d90de47e2733902eb0bd8bed -> origin/genie/store-compliance
+2026-10-21T19:00:21.4421526Z [command]"C:\Program Files\Git\bin\git.exe" branch --list --remote origin/genie/store-compliance
+2026-10-21T19:00:21.4941941Z   origin/genie/store-compliance
+2026-10-21T19:00:21.5000930Z [command]"C:\Program Files\Git\bin\git.exe" rev-parse refs/remotes/origin/genie/store-compliance
+2026-10-21T19:00:21.5508282Z a0e9d46ed0fb0f57d90de47e2733902eb0bd8bed
+2026-10-21T19:00:21.5560938Z ##[endgroup]
+2026-10-21T19:00:21.5561679Z ##[group]Determining the checkout info
+2026-10-21T19:00:21.5563012Z ##[endgroup]
+2026-10-21T19:00:21.5574302Z [command]"C:\Program Files\Git\bin\git.exe" sparse-checkout disable
+2026-10-21T19:00:21.6151620Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all extensions.worktreeConfig
+2026-10-21T19:00:21.6617161Z ##[group]Checking out the ref
+2026-10-21T19:00:21.6628939Z [command]"C:\Program Files\Git\bin\git.exe" checkout --progress --force -B genie/store-compliance refs/remotes/origin/genie/store-compliance
+2026-10-21T19:00:22.0184390Z Switched to a new branch 'genie/store-compliance'
+2026-10-21T19:00:22.0271477Z branch 'genie/store-compliance' set up to track 'origin/genie/store-compliance'.
+2026-10-21T19:00:22.0360012Z ##[endgroup]
+2026-10-21T19:00:22.0928666Z [command]"C:\Program Files\Git\bin\git.exe" log -1 --format=%H
+2026-10-21T19:00:22.1317732Z a0e9d46ed0fb0f57d90de47e2733902eb0bd8bed
+2026-10-21T19:00:22.1971058Z ##[group]Run dtolnay/rust-toolchain@stable
+2026-10-21T19:00:22.1971396Z with:
+2026-10-21T19:00:22.1971577Z   toolchain: stable
+2026-10-21T19:00:22.1971759Z env:
+2026-10-21T19:00:22.1971929Z   TOOLBOX_REQUIRE_QPDF: 1
+2026-10-21T19:00:22.1972521Z   VITE_POSTHOG_KEY: ***
+2026-10-21T19:00:22.1972755Z   VITE_TOOLBOX_TARGET_PLATFORM: windows
+2026-10-21T19:00:22.1973009Z ##[endgroup]
+2026-10-21T19:00:22.2083221Z ##[start-action display=Parse toolchain version;id=__dtolnay_rust-toolchain.parse]
+2026-10-21T19:00:22.2290579Z ##[group]Run if [[ -z $toolchain ]]; then
+2026-10-21T19:00:22.2291009Z if [[ -z $toolchain ]]; then
+2026-10-21T19:00:22.2291601Z   # GitHub does not enforce `required: true` inputs itself. https://github.com/actions/runner/issues/1070
+2026-10-21T19:00:22.2292184Z   echo "'toolchain' is a required input" >&2
+2026-10-21T19:00:22.2292496Z   exit 1
+2026-10-21T19:00:22.2292872Z elif [[ $toolchain =~ ^stable' '[0-9]+' '(year|month|week|day)s?' 'ago$ ]]; then
+2026-10-21T19:00:22.2293314Z   if [[ Windows == macOS ]]; then
+2026-10-21T19:00:22.2293885Z     echo "toolchain=1.$((($(date -v-$(sed 's/stable \([0-9]*\) \(.\).*/\1\2/' <<< $toolchain) +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT
+2026-10-21T19:00:22.2294442Z   else
+2026-10-21T19:00:22.2294858Z     echo "toolchain=1.$((($(date --date "${toolchain#stable }" +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT
+2026-10-21T19:00:22.2295640Z   fi
+2026-10-21T19:00:22.2296162Z elif [[ $toolchain =~ ^stable' 'minus' '[0-9]+' 'releases?$ ]]; then
+2026-10-21T19:00:22.2296802Z   echo "toolchain=1.$((($(date +%s)/60/60/24-16569)/7/6-${toolchain//[^0-9]/}))" >> $GITHUB_OUTPUT
+2026-10-21T19:00:22.2297295Z elif [[ $toolchain =~ ^1\.[0-9]+$ ]]; then
+2026-10-21T19:00:22.2297879Z   echo "toolchain=1.$((i=${toolchain#1.}, c=($(date +%s)/60/60/24-16569)/7/6, i+9*i*(10*i<=c)+90*i*(100*i<=c)))" >> $GITHUB_OUTPUT
+2026-10-21T19:00:22.2298410Z else
+2026-10-21T19:00:22.2298604Z   delimiter=EOF
+2026-10-21T19:00:22.2298915Z   while [[ $toolchain == *$delimiter* ]]; do delimiter+=_; done
+2026-10-21T19:00:22.2299459Z   printf 'toolchain<<%s\n%s\n%s\n' "$delimiter" "$toolchain" "$delimiter" >> $GITHUB_OUTPUT
+2026-10-21T19:00:22.2299892Z fi
+2026-10-21T19:00:22.2321822Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-10-21T19:00:22.2322242Z env:
+2026-10-21T19:00:22.2322428Z   TOOLBOX_REQUIRE_QPDF: 1
+2026-10-21T19:00:22.2323174Z   VITE_POSTHOG_KEY: ***
+2026-10-21T19:00:22.2323479Z   VITE_TOOLBOX_TARGET_PLATFORM: windows
+2026-10-21T19:00:22.2323757Z   toolchain: stable
+2026-10-21T19:00:22.2323951Z ##[endgroup]
+2026-10-21T19:00:22.4115561Z ##[end-action id=__dtolnay_rust-toolchain.parse;outcome=success;conclusion=success;duration_ms=203]
+2026-10-21T19:00:22.4121415Z ##[start-action display=Set $CARGO_HOME;id=__dtolnay_rust-toolchain.__run]
+2026-10-21T19:00:22.4292759Z ##[group]Run echo CARGO_HOME=${CARGO_HOME:-"$USERPROFILE\.cargo"} >> $GITHUB_ENV
+2026-10-21T19:00:22.4293407Z echo CARGO_HOME=${CARGO_HOME:-"$USERPROFILE\.cargo"} >> $GITHUB_ENV
+2026-10-21T19:00:22.4311747Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-10-21T19:00:22.4312179Z env:
+2026-10-21T19:00:22.4312372Z   TOOLBOX_REQUIRE_QPDF: 1
+2026-10-21T19:00:22.4312885Z   VITE_POSTHOG_KEY: ***
+2026-10-21T19:00:22.4313135Z   VITE_TOOLBOX_TARGET_PLATFORM: windows
+2026-10-21T19:00:22.4313401Z ##[endgroup]
+2026-10-21T19:00:22.4917327Z ##[end-action id=__dtolnay_rust-toolchain.__run;outcome=success;conclusion=success;duration_ms=79]
+2026-10-21T19:00:22.4920387Z ##[start-action display=Install rustup if needed;id=__dtolnay_rust-toolchain.__run_2]
+2026-10-21T19:00:22.4930387Z ##[end-action id=__dtolnay_rust-toolchain.__run_2;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-10-21T19:00:22.4935362Z ##[start-action display=Install rustup if needed on windows;id=__dtolnay_rust-toolchain.__run_3]
+2026-10-21T19:00:22.5092804Z ##[group]Run if ! command -v rustup &>/dev/null; then
+2026-10-21T19:00:22.5093201Z if ! command -v rustup &>/dev/null; then
+2026-10-21T19:00:22.5094049Z   curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused --location --silent --show-error --fail https://win.rustup.rs/x86_64 --output 'D:\a\_temp\rustup-init.exe'
+2026-10-21T19:00:22.5095617Z   'D:\a\_temp\rustup-init.exe' --default-toolchain none --no-modify-path -y
+2026-10-21T19:00:22.5096121Z   echo "$CARGO_HOME\bin" >> $GITHUB_PATH
+2026-10-21T19:00:22.5096429Z fi
+2026-10-21T19:00:22.5113671Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-10-21T19:00:22.5114102Z env:
+2026-10-21T19:00:22.5114637Z   TOOLBOX_REQUIRE_QPDF: 1
+2026-10-21T19:00:22.5115259Z   VITE_POSTHOG_KEY: ***
+2026-10-21T19:00:22.5115700Z   VITE_TOOLBOX_TARGET_PLATFORM: windows
+2026-10-21T19:00:22.5116037Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-10-21T19:00:22.5116303Z ##[endgroup]
+2026-10-21T19:00:22.5838437Z ##[end-action id=__dtolnay_rust-toolchain.__run_3;outcome=success;conclusion=success;duration_ms=90]
+2026-10-21T19:00:22.5857027Z ##[start-action display=rustup toolchain install stable;id=__dtolnay_rust-toolchain.__run_4]
+2026-10-21T19:00:22.6010958Z ##[group]Run set -f  # split targets and components on commas and whitespace, without glob expansion
+2026-10-21T19:00:22.6011689Z set -f  # split targets and components on commas and whitespace, without glob expansion
+2026-10-21T19:00:22.6012167Z flags=()
+2026-10-21T19:00:22.6012434Z for t in ${targets//,/ }; do flags+=(--target "$t"); done
+2026-10-21T19:00:22.6012854Z for c in ${components//,/ }; do flags+=(--component "$c"); done
+2026-10-21T19:00:22.6013392Z if [[ $toolchain == nightly && -n $components ]]; then flags+=(--allow-downgrade); fi
+2026-10-21T19:00:22.6013826Z log=$(mktemp)
+2026-10-21T19:00:22.6014053Z trap 'rm -f "$log"' EXIT
+2026-10-21T19:00:22.6014308Z for attempt in 1 2 3 4 5; do
+2026-10-21T19:00:22.6014906Z   if rustup toolchain install "$toolchain" "${flags[@]}" --profile minimal --no-self-update --force-non-host 2>&1 | tee "$log"; then
+2026-10-21T19:00:22.6016017Z     break
+2026-10-21T19:00:22.6016284Z   else
+2026-10-21T19:00:22.6016474Z     status=$?
+2026-10-21T19:00:22.6016682Z   fi
+2026-10-21T19:00:22.6016966Z   if [[ $attempt == 5 ]] || ! grep -Fq 'checksum failed for ' "$log" \
+2026-10-21T19:00:22.6017748Z       || ! grep -Fq 'this is likely due to an ongoing update of the official release server' "$log"; then
+2026-10-21T19:00:22.6018216Z     exit "$status"
+2026-10-21T19:00:22.6018421Z   fi
+2026-10-21T19:00:22.6018776Z   echo "Retrying rustup toolchain install in 30 seconds (retry $attempt of 4)" >&2
+2026-10-21T19:00:22.6019193Z   sleep 30
+2026-10-21T19:00:22.6019379Z done
+2026-10-21T19:00:22.6036187Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-10-21T19:00:22.6036767Z env:
+2026-10-21T19:00:22.6036962Z   TOOLBOX_REQUIRE_QPDF: 1
+2026-10-21T19:00:22.6037440Z   VITE_POSTHOG_KEY: ***
+2026-10-21T19:00:22.6037676Z   VITE_TOOLBOX_TARGET_PLATFORM: windows
+2026-10-21T19:00:22.6037960Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-10-21T19:00:22.6038214Z   toolchain: stable
+2026-10-21T19:00:22.6038421Z   targets: 
+2026-10-21T19:00:22.6038590Z   components: 
+2026-10-21T19:00:22.6038792Z   RUSTUP_PERMIT_COPY_RENAME: 1
+2026-10-21T19:00:22.6039013Z ##[endgroup]
+2026-10-21T19:00:27.1559690Z info: syncing channel updates for stable-x86_64-pc-windows-msvc
+2026-10-21T19:00:27.6473806Z 
+2026-10-21T19:00:27.6632899Z   stable-x86_64-pc-windows-msvc unchanged - rustc 1.99.1 (58cf8f9c3 2026-10-13)
+2026-10-21T19:00:27.6635390Z 
+2026-10-21T19:00:27.7013546Z ##[end-action id=__dtolnay_rust-toolchain.__run_4;outcome=success;conclusion=success;duration_ms=5115]
+2026-10-21T19:00:27.7019373Z ##[start-action display=rustup default stable;id=__dtolnay_rust-toolchain.__run_5]
+2026-10-21T19:00:27.7170001Z ##[group]Run rustup default "$toolchain" --force-non-host
+2026-10-21T19:00:27.7170497Z rustup default "$toolchain" --force-non-host
+2026-10-21T19:00:27.7186612Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-10-21T19:00:27.7187008Z env:
+2026-10-21T19:00:27.7187187Z   TOOLBOX_REQUIRE_QPDF: 1
+2026-10-21T19:00:27.7187845Z   VITE_POSTHOG_KEY: ***
+2026-10-21T19:00:27.7188104Z   VITE_TOOLBOX_TARGET_PLATFORM: windows
+2026-10-21T19:00:27.7188608Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-10-21T19:00:27.7188867Z   toolchain: stable
+2026-10-21T19:00:27.7189052Z ##[endgroup]
+2026-10-21T19:00:27.8021950Z info: using existing install for stable-x86_64-pc-windows-msvc
+2026-10-21T19:00:27.8143418Z info: default toolchain set to stable-x86_64-pc-windows-msvc
+2026-10-21T19:00:27.8146111Z 
+2026-10-21T19:00:27.8425286Z   stable-x86_64-pc-windows-msvc unchanged - rustc 1.99.1 (58cf8f9c3 2026-10-13)
+2026-10-21T19:00:27.8425728Z 
+2026-10-21T19:00:27.8526260Z ##[end-action id=__dtolnay_rust-toolchain.__run_5;outcome=success;conclusion=success;duration_ms=150]
+2026-10-21T19:00:27.8530982Z ##[start-action display=Create cachekey;id=__dtolnay_rust-toolchain.rustc-version]
+2026-10-21T19:00:27.8692778Z ##[group]Run DATE=$(rustc +"$toolchain" --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')
+2026-10-21T19:00:27.8694006Z DATE=$(rustc +"$toolchain" --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')
+2026-10-21T19:00:27.8695344Z HASH=$(rustc +"$toolchain" --version --verbose | sed -ne 's/^commit-hash: //p')
+2026-10-21T19:00:27.8696036Z echo "cachekey=$(echo $DATE$HASH | head -c12)" >> $GITHUB_OUTPUT
+2026-10-21T19:00:27.8712609Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-10-21T19:00:27.8713027Z env:
+2026-10-21T19:00:27.8713229Z   TOOLBOX_REQUIRE_QPDF: 1
+2026-10-21T19:00:27.8713771Z   VITE_POSTHOG_KEY: ***
+2026-10-21T19:00:27.8714047Z   VITE_TOOLBOX_TARGET_PLATFORM: windows
+2026-10-21T19:00:27.8714767Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-10-21T19:00:27.8715119Z   toolchain: stable
+2026-10-21T19:00:27.8715336Z ##[endgroup]
+2026-10-21T19:00:28.9408858Z ##[end-action id=__dtolnay_rust-toolchain.rustc-version;outcome=success;conclusion=success;duration_ms=1087]
+2026-10-21T19:00:28.9412623Z ##[start-action display=Disable incremental compilation;id=__dtolnay_rust-toolchain.__run_6]
+2026-10-21T19:00:28.9594444Z ##[group]Run if [ -z "${CARGO_INCREMENTAL+set}" ]; then
+2026-10-21T19:00:28.9595096Z if [ -z "${CARGO_INCREMENTAL+set}" ]; then
+2026-10-21T19:00:28.9595688Z   echo CARGO_INCREMENTAL=0 >> $GITHUB_ENV
+2026-10-21T19:00:28.9596175Z fi
+2026-10-21T19:00:28.9618880Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-10-21T19:00:28.9619290Z env:
+2026-10-21T19:00:28.9619994Z   TOOLBOX_REQUIRE_QPDF: 1
+2026-10-21T19:00:28.9620498Z   VITE_POSTHOG_KEY: ***
+2026-10-21T19:00:28.9620734Z   VITE_TOOLBOX_TARGET_PLATFORM: windows
+2026-10-21T19:00:28.9621010Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-10-21T19:00:28.9621270Z ##[endgroup]
+2026-10-21T19:00:29.0047909Z ##[end-action id=__dtolnay_rust-toolchain.__run_6;outcome=success;conclusion=success;duration_ms=63]
+2026-10-21T19:00:29.0051078Z ##[start-action display=Enable colors in Cargo output;id=__dtolnay_rust-toolchain.__run_7]
+2026-10-21T19:00:29.0192738Z ##[group]Run if [ -z "${CARGO_TERM_COLOR+set}" ]; then
+2026-10-21T19:00:29.0193413Z if [ -z "${CARGO_TERM_COLOR+set}" ]; then
+2026-10-21T19:00:29.0194166Z   echo CARGO_TERM_COLOR=always >> $GITHUB_ENV
+2026-10-21T19:00:29.0194475Z fi
+2026-10-21T19:00:29.0209408Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-10-21T19:00:29.0209817Z env:
+2026-10-21T19:00:29.0210000Z   TOOLBOX_REQUIRE_QPDF: 1
+2026-10-21T19:00:29.0210468Z   VITE_POSTHOG_KEY: ***
+2026-10-21T19:00:29.0210703Z   VITE_TOOLBOX_TARGET_PLATFORM: windows
+2026-10-21T19:00:29.0210976Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-10-21T19:00:29.0211230Z   CARGO_INCREMENTAL: 0
+2026-10-21T19:00:29.0211437Z ##[endgroup]
+2026-10-21T19:00:29.0643922Z ##[end-action id=__dtolnay_rust-toolchain.__run_7;outcome=success;conclusion=success;duration_ms=59]
+2026-10-21T19:00:29.0648779Z ##[start-action display=Enable Cargo sparse registry;id=__dtolnay_rust-toolchain.__run_8]
+2026-10-21T19:00:29.0807699Z ##[group]Run # implemented in 1.66, stabilized in 1.68, made default in 1.70
+2026-10-21T19:00:29.0808343Z # implemented in 1.66, stabilized in 1.68, made default in 1.70
+2026-10-21T19:00:29.0809145Z if [ -z "${CARGO_REGISTRIES_CRATES_IO_PROTOCOL+set}" -o -f "D:\a\_temp"/.implicit_cargo_registries_crates_io_protocol ]; then
+2026-10-21T19:00:29.0810504Z   if rustc +"$toolchain" --version --verbose | grep -q '^release: 1\.6[89]\.'; then
+2026-10-21T19:00:29.0811138Z     touch "D:\a\_temp"/.implicit_cargo_registries_crates_io_protocol || true
+2026-10-21T19:00:29.0811715Z     echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse >> $GITHUB_ENV
+2026-10-21T19:00:29.0812333Z   elif rustc +"$toolchain" --version --verbose | grep -q '^release: 1\.6[67]\.'; then
+2026-10-21T19:00:29.0812973Z     touch "D:\a\_temp"/.implicit_cargo_registries_crates_io_protocol || true
+2026-10-21T19:00:29.0813527Z     echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=git >> $GITHUB_ENV
+2026-10-21T19:00:29.0813924Z   fi
+2026-10-21T19:00:29.0814123Z fi
+2026-10-21T19:00:29.0831081Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-10-21T19:00:29.0831496Z env:
+2026-10-21T19:00:29.0831682Z   TOOLBOX_REQUIRE_QPDF: 1
+2026-10-21T19:00:29.0832226Z   VITE_POSTHOG_KEY: ***
+2026-10-21T19:00:29.0832464Z   VITE_TOOLBOX_TARGET_PLATFORM: windows
+2026-10-21T19:00:29.0832744Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-10-21T19:00:29.0833013Z   CARGO_INCREMENTAL: 0
+2026-10-21T19:00:29.0833226Z   CARGO_TERM_COLOR: always
+2026-10-21T19:00:29.0833446Z   toolchain: stable
+2026-10-21T19:00:29.0833638Z ##[endgroup]
+2026-10-21T19:00:29.3032902Z ##[end-action id=__dtolnay_rust-toolchain.__run_8;outcome=success;conclusion=success;duration_ms=238]
+2026-10-21T19:00:29.3036959Z ##[start-action display=Work around spurious network errors in curl 8.0;id=__dtolnay_rust-toolchain.__run_9]
+2026-10-21T19:00:29.3203471Z ##[group]Run # https://rust-lang.zulipchat.com/#narrow/stream/246057-t-cargo/topic/timeout.20investigation
+2026-10-21T19:00:29.3204289Z # https://rust-lang.zulipchat.com/#narrow/stream/246057-t-cargo/topic/timeout.20investigation
+2026-10-21T19:00:29.3204959Z if rustc +"$toolchain" --version --verbose | grep -q '^release: 1\.7[01]\.'; then
+2026-10-21T19:00:29.3205451Z   echo CARGO_HTTP_MULTIPLEXING=false >> $GITHUB_ENV
+2026-10-21T19:00:29.3205764Z fi
+2026-10-21T19:00:29.3222646Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-10-21T19:00:29.3223034Z env:
+2026-10-21T19:00:29.3223215Z   TOOLBOX_REQUIRE_QPDF: 1
+2026-10-21T19:00:29.3223666Z   VITE_POSTHOG_KEY: ***
+2026-10-21T19:00:29.3223902Z   VITE_TOOLBOX_TARGET_PLATFORM: windows
+2026-10-21T19:00:29.3224199Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-10-21T19:00:29.3224450Z   CARGO_INCREMENTAL: 0
+2026-10-21T19:00:29.3224653Z   CARGO_TERM_COLOR: always
+2026-10-21T19:00:29.3224854Z   toolchain: stable
+2026-10-21T19:00:29.3225034Z ##[endgroup]
+2026-10-21T19:00:29.4318036Z ##[end-action id=__dtolnay_rust-toolchain.__run_9;outcome=success;conclusion=success;duration_ms=127]
+2026-10-21T19:00:29.4323415Z ##[start-action display=rustc +stable --version --verbose;id=__dtolnay_rust-toolchain.__run_10]
+2026-10-21T19:00:29.4465339Z ##[group]Run rustc +"$toolchain" --version --verbose
+2026-10-21T19:00:29.4465749Z rustc +"$toolchain" --version --verbose
+2026-10-21T19:00:29.4482741Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-10-21T19:00:29.4483220Z env:
+2026-10-21T19:00:29.4483430Z   TOOLBOX_REQUIRE_QPDF: 1
+2026-10-21T19:00:29.4484197Z   VITE_POSTHOG_KEY: ***
+2026-10-21T19:00:29.4484496Z   VITE_TOOLBOX_TARGET_PLATFORM: windows
+2026-10-21T19:00:29.4484853Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-10-21T19:00:29.4485171Z   CARGO_INCREMENTAL: 0
+2026-10-21T19:00:29.4485410Z   CARGO_TERM_COLOR: always
+2026-10-21T19:00:29.4485646Z   toolchain: stable
+2026-10-21T19:00:29.4485870Z ##[endgroup]
+2026-10-21T19:00:29.5442805Z rustc 1.99.1 (58cf8f9c3 2026-10-13)
+2026-10-21T19:00:29.5443464Z binary: rustc
+2026-10-21T19:00:29.5444059Z commit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67
+2026-10-21T19:00:29.5444591Z commit-date: 2026-10-13
+2026-10-21T19:00:29.5444931Z host: x86_64-pc-windows-msvc
+2026-10-21T19:00:29.5445283Z release: 1.99.1
+2026-10-21T19:00:29.5446389Z LLVM version: 23.1.1
+2026-10-21T19:00:29.5623114Z ##[end-action id=__dtolnay_rust-toolchain.__run_10;outcome=success;conclusion=success;duration_ms=129]
+2026-10-21T19:00:29.5914458Z ##[group]Run swatinem/rust-cache@v2
+2026-10-21T19:00:29.5914822Z with:
+2026-10-21T19:00:29.5915050Z   workspaces: ToolboxTauri/src-tauri
+2026-10-21T19:00:29.5915352Z   prefix-key: v0-rust
+2026-10-21T19:00:29.5915627Z   add-job-id-key: true
+2026-10-21T19:00:29.5915887Z   add-rust-environment-hash-key: true
+2026-10-21T19:00:29.5916188Z   cache-targets: true
+2026-10-21T19:00:29.5916426Z   cache-all-crates: false
+2026-10-21T19:00:29.5916687Z   cache-workspace-crates: false
+2026-10-21T19:00:29.5916947Z   save-if: true
+2026-10-21T19:00:29.5917167Z   cache-provider: github
+2026-10-21T19:00:29.5917406Z   cache-bin: true
+2026-10-21T19:00:29.5917622Z   lookup-only: false
+2026-10-21T19:00:29.5917842Z   cmd-format: {0}
+2026-10-21T19:00:29.5918048Z env:
+2026-10-21T19:00:29.5918240Z   TOOLBOX_REQUIRE_QPDF: 1
+2026-10-21T19:00:29.5918790Z   VITE_POSTHOG_KEY: ***
+2026-10-21T19:00:29.5919055Z   VITE_TOOLBOX_TARGET_PLATFORM: windows
+2026-10-21T19:00:29.5919412Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-10-21T19:00:29.5919725Z   CARGO_INCREMENTAL: 0
+2026-10-21T19:00:29.5919964Z   CARGO_TERM_COLOR: always
+2026-10-21T19:00:29.5920203Z ##[endgroup]
+2026-10-21T19:00:32.3150980Z ##[group]Cache Configuration
+2026-10-21T19:00:32.3152499Z Cache Provider:
+2026-10-21T19:00:32.3152891Z     github
+2026-10-21T19:00:32.3153737Z Workspaces:
+2026-10-21T19:00:32.3154569Z     D:\a\toolbox\toolbox\ToolboxTauri\src-tauri
+2026-10-21T19:00:32.3155059Z Cache Paths:
+2026-10-21T19:00:32.3155415Z     C:\Users\runneradmin\.cargo\bin
+2026-10-21T19:00:32.3155878Z     C:\Users\runneradmin\.cargo\.crates.toml
+2026-10-21T19:00:32.3156369Z     C:\Users\runneradmin\.cargo\.crates2.json
+2026-10-21T19:00:32.3156859Z     C:\Users\runneradmin\.cargo\registry
+2026-10-21T19:00:32.3157309Z     C:\Users\runneradmin\.cargo\git
+2026-10-21T19:00:32.3157804Z     D:\a\toolbox\toolbox\ToolboxTauri\src-tauri\target
+2026-10-21T19:00:32.3158291Z Restore Key:
+2026-10-21T19:00:32.3158650Z     v0-rust-build-Windows_NT-x64-e70cdc14
+2026-10-21T19:00:32.3159131Z Cache Key:
+2026-10-21T19:00:32.3159490Z     v0-rust-build-Windows_NT-x64-e70cdc14-f233d106
+2026-10-21T19:00:32.3159973Z .. Prefix:
+2026-10-21T19:00:32.3160303Z   - v0-rust-build-Windows_NT-x64
+2026-10-21T19:00:32.3160760Z .. Environment considered:
+2026-10-21T19:00:32.3161148Z   - Rust Versions:
+2026-10-21T19:00:32.3161670Z     - 1.99.1 x86_64-pc-windows-msvc 58cf8f9c35b355199727627d07ae34a4e2846d67
+2026-10-21T19:00:32.3162297Z   - CARGO_HOME
+2026-10-21T19:00:32.3162629Z   - CARGO_INCREMENTAL
+2026-10-21T19:00:32.3162966Z   - CARGO_TERM_COLOR
+2026-10-21T19:00:32.3163306Z .. Lockfiles considered:
+2026-10-21T19:00:32.3163763Z   - D:\a\toolbox\toolbox\ToolboxTauri\src-tauri\Cargo.lock
+2026-10-21T19:00:32.3164389Z   - D:\a\toolbox\toolbox\ToolboxTauri\src-tauri\Cargo.toml
+2026-10-21T19:00:32.3165195Z ##[endgroup]
+2026-10-21T19:00:32.3165376Z 
+2026-10-21T19:00:32.3165503Z ... Restoring cache ...
+2026-10-21T19:00:32.5315274Z Cache hit for restore-key: v0-rust-build-Windows_NT-x64-e70cdc14-c56c9a93
+2026-10-21T19:00:33.5886983Z Received 171966464 of 1432067789 (12.0%), 161.4 MBs/sec
+2026-10-21T19:00:34.6041542Z Received 390070272 of 1432067789 (27.2%), 183.2 MBs/sec
+2026-10-21T19:00:35.6129733Z Received 549453824 of 1432067789 (38.4%), 172.6 MBs/sec
+2026-10-21T19:00:36.6143132Z Received 784334848 of 1432067789 (54.8%), 185.3 MBs/sec
+2026-10-21T19:00:37.6230340Z Received 943718400 of 1432067789 (65.9%), 178.2 MBs/sec
+2026-10-21T19:00:38.6237838Z Received 1161822208 of 1432067789 (81.1%), 183.1 MBs/sec
+2026-10-21T19:00:39.6307645Z Received 1354760192 of 1432067789 (94.6%), 183.1 MBs/sec
+2026-10-21T19:00:39.9729085Z Received 1432067789 of 1432067789 (100.0%), 184.7 MBs/sec
+2026-10-21T19:00:39.9729882Z Cache Size: ~1366 MB (1432067789 B)
+2026-10-21T19:00:39.9731503Z [command]"C:\Program Files\Git\usr\bin\tar.exe" -xf D:/a/_temp/bba1a0a6-3f7c-452e-8e9f-26fceb54d6a2/cache.tzst -P -C D:/a/toolbox/toolbox --force-local --use-compress-program "zstd -d"
+2026-10-21T19:01:07.5846945Z Cache restored successfully
+2026-10-21T19:01:07.6895196Z Restored from cache key "v0-rust-build-Windows_NT-x64-e70cdc14-c56c9a93" full match: false.
+2026-10-21T19:01:11.1721324Z ##[group]Run actions/setup-node@v4
+2026-10-21T19:01:11.1721859Z with:
+2026-10-21T19:01:11.1722171Z   node-version: 22
+2026-10-21T19:01:11.1722493Z   cache: npm
+2026-10-21T19:01:11.1722918Z   cache-dependency-path: ToolboxTauri/package-lock.json
+2026-10-21T19:01:11.1723470Z   always-auth: false
+2026-10-21T19:01:11.1723811Z   check-latest: false
+2026-10-21T19:01:11.1728297Z   token: ***
+2026-10-21T19:01:11.1728600Z env:
+2026-10-21T19:01:11.1728954Z   TOOLBOX_REQUIRE_QPDF: 1
+2026-10-21T19:01:11.1729541Z   VITE_POSTHOG_KEY: ***
+2026-10-21T19:01:11.1729914Z   VITE_TOOLBOX_TARGET_PLATFORM: windows
+2026-10-21T19:01:11.1730667Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-10-21T19:01:11.1731143Z   CARGO_INCREMENTAL: 0
+2026-10-21T19:01:11.1731506Z   CARGO_TERM_COLOR: always
+2026-10-21T19:01:11.1731872Z   CACHE_ON_FAILURE: false
+2026-10-21T19:01:11.1732215Z ##[endgroup]
+2026-10-21T19:01:11.8184624Z Found in cache @ C:\hostedtoolcache\windows\node\22.23.3\x64
+2026-10-21T19:01:11.8193909Z (node:8292) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-21T19:01:11.8195611Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-21T19:01:11.8199086Z ##[group]Environment details
+2026-10-21T19:01:18.2236500Z node: v22.23.3
+2026-10-21T19:01:18.2237212Z npm: 10.9.9
+2026-10-21T19:01:18.2238044Z yarn: 1.22.22
+2026-10-21T19:01:18.2240072Z ##[endgroup]
+2026-10-21T19:01:18.3224449Z [command]C:\Windows\system32\cmd.exe /D /S /C "C:\hostedtoolcache\windows\node\22.23.3\x64\npm.cmd config get cache"
+2026-10-21T19:01:19.0200230Z C:\npm\cache
+2026-10-21T19:01:19.2401133Z Cache hit for: node-cache-Windows-x64-npm-c6fd9a9234eb383ccf894792b65a29246e94f3feef93cf15f591b88be788eace
+2026-10-21T19:01:19.2524764Z (node:8292) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-10-21T19:01:19.7213097Z Received 56085838 of 56085838 (100.0%), 124.4 MBs/sec
+2026-10-21T19:01:19.7215417Z Cache Size: ~53 MB (56085838 B)
+2026-10-21T19:01:19.7240528Z [command]"C:\Program Files\Git\usr\bin\tar.exe" -xf D:/a/_temp/a3494686-19e3-438f-8ad0-74ebc8f97c17/cache.tzst -P -C D:/a/toolbox/toolbox --force-local --use-compress-program "zstd -d"
+2026-10-21T19:01:20.8346592Z Cache restored successfully
+2026-10-21T19:01:20.8414776Z Cache restored from key: node-cache-Windows-x64-npm-c6fd9a9234eb383ccf894792b65a29246e94f3feef93cf15f591b88be788eace
+2026-10-21T19:01:20.8892743Z ##[group]Run npm ci
+2026-10-21T19:01:20.8893113Z npm ci
+2026-10-21T19:01:20.9580943Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-10-21T19:01:20.9581523Z env:
+2026-10-21T19:01:20.9581835Z   TOOLBOX_REQUIRE_QPDF: 1
+2026-10-21T19:01:20.9582495Z   VITE_POSTHOG_KEY: ***
+2026-10-21T19:01:20.9582879Z   VITE_TOOLBOX_TARGET_PLATFORM: windows
+2026-10-21T19:01:20.9583332Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-10-21T19:01:20.9583792Z   CARGO_INCREMENTAL: 0
+2026-10-21T19:01:20.9584132Z   CARGO_TERM_COLOR: always
+2026-10-21T19:01:20.9584499Z   CACHE_ON_FAILURE: false
+2026-10-21T19:01:20.9584836Z ##[endgroup]
+2026-10-21T19:01:34.4894152Z 
+2026-10-21T19:01:34.4903200Z added 195 packages, and audited 196 packages in 13s
+2026-10-21T19:01:34.4904190Z 
+2026-10-21T19:01:34.4904531Z 16 packages are looking for funding
+2026-10-21T19:01:34.4905184Z   run `npm fund` for details
+2026-10-21T19:01:34.5003319Z 
+2026-10-21T19:01:34.5004384Z 2 high severity vulnerabilities
+2026-10-21T19:01:34.5005189Z 
+2026-10-21T19:01:34.5005429Z To address all issues, run:
+2026-10-21T19:01:34.5006029Z   npm audit fix
+2026-10-21T19:01:34.5006315Z 
+2026-10-21T19:01:34.5006612Z Run `npm audit` for details.
+2026-10-21T19:01:35.8170282Z ##[group]Run npx playwright install chromium
+2026-10-21T19:01:35.8170852Z npx playwright install chromium
+2026-10-21T19:01:35.8253854Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-10-21T19:01:35.8254322Z env:
+2026-10-21T19:01:35.8254573Z   TOOLBOX_REQUIRE_QPDF: 1
+2026-10-21T19:01:35.8255116Z   VITE_POSTHOG_KEY: ***
+2026-10-21T19:01:35.8255424Z   VITE_TOOLBOX_TARGET_PLATFORM: windows
+2026-10-21T19:01:35.8255772Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-10-21T19:01:35.8256111Z   CARGO_INCREMENTAL: 0
+2026-10-21T19:01:35.8256371Z   CARGO_TERM_COLOR: always
+2026-10-21T19:01:35.8256654Z   CACHE_ON_FAILURE: false
+2026-10-21T19:01:35.8256920Z ##[endgroup]
+2026-10-21T19:01:37.8423203Z Downloading Chrome for Testing 151.0.7922.34 (playwright chromium v1234) from https://cdn.playwright.dev/builds/cft/151.0.7922.34/win64/chrome-win64.zip
+2026-10-21T19:01:38.3805167Z |                                                                                |   0% of 191.8 MiB
+2026-10-21T19:01:38.6617420Z |■■■■■■■■                                                                        |  10% of 191.8 MiB
+2026-10-21T19:01:38.8722909Z |■■■■■■■■■■■■■■■■                                                                |  20% of 191.8 MiB
+2026-10-21T19:01:39.0695746Z |■■■■■■■■■■■■■■■■■■■■■■■■                                                        |  30% of 191.8 MiB
+2026-10-21T19:01:39.2609585Z |■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                                |  40% of 191.8 MiB
+2026-10-21T19:01:39.4527846Z |■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                        |  50% of 191.8 MiB
+2026-10-21T19:01:39.6283026Z |■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                |  60% of 191.8 MiB
+2026-10-21T19:01:39.7982641Z |■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                        |  70% of 191.8 MiB
+2026-10-21T19:01:39.9741326Z |■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                |  80% of 191.8 MiB
+2026-10-21T19:01:40.1449983Z |■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■        |  90% of 191.8 MiB
+2026-10-21T19:01:40.3172417Z |■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■| 100% of 191.8 MiB
+2026-10-21T19:01:47.1590703Z Chrome for Testing 151.0.7922.34 (playwright chromium v1234) downloaded to C:\Users\runneradmin\AppData\Local\ms-playwright\chromium-1234
+2026-10-21T19:01:47.1599993Z Downloading FFmpeg (playwright ffmpeg v1011) from https://cdn.playwright.dev/dbazure/download/playwright/builds/ffmpeg/1011/ffmpeg-win64.zip
+2026-10-21T19:01:47.6797573Z |                                                                                |   1% of 1.3 MiB
+2026-10-21T19:01:47.6862830Z |■■■■■■■■                                                                        |  10% of 1.3 MiB
+2026-10-21T19:01:47.6892818Z |■■■■■■■■■■■■■■■■                                                                |  20% of 1.3 MiB
+2026-10-21T19:01:47.6918324Z |■■■■■■■■■■■■■■■■■■■■■■■■                                                        |  30% of 1.3 MiB
+2026-10-21T19:01:47.6939167Z |■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                                |  40% of 1.3 MiB
+2026-10-21T19:01:47.6960270Z |■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                        |  51% of 1.3 MiB
+2026-10-21T19:01:47.6985154Z |■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                |  60% of 1.3 MiB
+2026-10-21T19:01:47.7004456Z |■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                        |  70% of 1.3 MiB
+2026-10-21T19:01:47.7023602Z |■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                |  80% of 1.3 MiB
+2026-10-21T19:01:47.7042910Z |■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■        |  90% of 1.3 MiB
+2026-10-21T19:01:47.7069949Z |■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■| 100% of 1.3 MiB
+2026-10-21T19:01:47.9403886Z FFmpeg (playwright ffmpeg v1011) downloaded to C:\Users\runneradmin\AppData\Local\ms-playwright\ffmpeg-1011
+2026-10-21T19:01:47.9413034Z Downloading Chrome Headless Shell 151.0.7922.34 (playwright chromium-headless-shell v1234) from https://cdn.playwright.dev/builds/cft/151.0.7922.34/win64/chrome-headless-shell-win64.zip
+2026-10-21T19:01:48.4677701Z |                                                                                |   0% of 114.5 MiB
+2026-10-21T19:01:48.6520904Z |■■■■■■■■                                                                        |  10% of 114.5 MiB
+2026-10-21T19:01:48.7907522Z |■■■■■■■■■■■■■■■■                                                                |  20% of 114.5 MiB
+2026-10-21T19:01:48.9158266Z |■■■■■■■■■■■■■■■■■■■■■■■■                                                        |  30% of 114.5 MiB
+2026-10-21T19:01:49.0352330Z |■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                                |  40% of 114.5 MiB
+2026-10-21T19:01:49.2100557Z |■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                        |  50% of 114.5 MiB
+2026-10-21T19:01:49.3206996Z |■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                |  60% of 114.5 MiB
+2026-10-21T19:01:49.4269264Z |■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                        |  70% of 114.5 MiB
+2026-10-21T19:01:49.5282777Z |■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                |  80% of 114.5 MiB
+2026-10-21T19:01:49.6373127Z |■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■        |  90% of 114.5 MiB
+2026-10-21T19:01:49.7404033Z |■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■| 100% of 114.5 MiB
+2026-10-21T19:01:54.1796332Z Chrome Headless Shell 151.0.7922.34 (playwright chromium-headless-shell v1234) downloaded to C:\Users\runneradmin\AppData\Local\ms-playwright\chromium_headless_shell-1234
+2026-10-21T19:01:54.1807266Z Downloading Winldd (playwright winldd v1007) from https://cdn.playwright.dev/dbazure/download/playwright/builds/winldd/1007/winldd-win64.zip
+2026-10-21T19:01:54.6647119Z |■■■■■■■■                                                                        |  12% of 0.1 MiB
+2026-10-21T19:01:54.6649285Z |■■■■■■■■■■■■■■■■                                                                |  25% of 0.1 MiB
+2026-10-21T19:01:54.6667838Z |■■■■■■■■■■■■■■■■■■■■■■■■                                                        |  38% of 0.1 MiB
+2026-10-21T19:01:54.6674718Z |■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                        |  51% of 0.1 MiB
+2026-10-21T19:01:54.6682914Z |■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                        |  70% of 0.1 MiB
+2026-10-21T19:01:54.6688524Z |■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                |  89% of 0.1 MiB
+2026-10-21T19:01:54.6692133Z |■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■| 100% of 0.1 MiB
+2026-10-21T19:01:54.7439120Z Winldd (playwright winldd v1007) downloaded to C:\Users\runneradmin\AppData\Local\ms-playwright\winldd-1007
+2026-10-21T19:01:55.0825788Z ##[group]Run npm run test:ui
+2026-10-21T19:01:55.0826268Z npm run test:ui
+2026-10-21T19:01:55.0906525Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-10-21T19:01:55.0907018Z env:
+2026-10-21T19:01:55.0907344Z   TOOLBOX_REQUIRE_QPDF: 1
+2026-10-21T19:01:55.0907922Z   VITE_POSTHOG_KEY: ***
+2026-10-21T19:01:55.0908296Z   VITE_TOOLBOX_TARGET_PLATFORM: windows
+2026-10-21T19:01:55.0908668Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-10-21T19:01:55.0909072Z   CARGO_INCREMENTAL: 0
+2026-10-21T19:01:55.0909386Z   CARGO_TERM_COLOR: always
+2026-10-21T19:01:55.0909708Z   CACHE_ON_FAILURE: false
+2026-10-21T19:01:55.0910057Z ##[endgroup]
+2026-10-21T19:01:55.8725933Z 
+2026-10-21T19:01:55.8726608Z > toolbox@1.0.14 test:ui
+2026-10-21T19:01:55.8727823Z > playwright test
+2026-10-21T19:01:55.8728194Z 
+2026-10-21T19:02:00.4978490Z 
+2026-10-21T19:02:00.4979217Z Running 258 tests using 2 workers
+2026-10-21T19:02:00.4979585Z 
+2026-10-21T19:02:04.3656443Z   ok   2 tests\ui\desktop-shell.spec.ts:97:1 › subscribes before readiness and routes typed native shell commands (2.4s)
+2026-10-21T19:02:04.4712971Z   ok   1 tests\ui\desktop-shell.spec.ts:115:1 › publishes the selected workspace and document title to the native window (2.5s)
+2026-10-21T19:02:05.6317752Z   ok   3 tests\ui\desktop-shell.spec.ts:128:1 › accepts each typed file activation and acknowledges only after intake (1.3s)
+2026-10-21T19:02:06.0012766Z   ok   4 tests\ui\desktop-shell.spec.ts:139:1 › ignores a replayed activation after its intake was acknowledged (1.5s)
+2026-10-21T19:02:06.6079360Z   ok   5 tests\ui\desktop-shell.spec.ts:150:1 › hands off a second activation without overwriting the in-flight intake (956ms)
+2026-10-21T19:02:07.2643180Z   ok   6 tests\ui\desktop-shell.spec.ts:165:1 › Escape cancels queued file activations while an acknowledgement is pending (1.2s)
+2026-10-21T19:02:07.4544972Z   ok   7 tests\ui\desktop-shell.spec.ts:184:1 › reports rejected files and mixed batches without accepting or acknowledging them (828ms)
+2026-10-21T19:02:09.2296666Z   ok   9 tests\ui\desktop-shell.spec.ts:232:1 › keeps multi-file drops intact for ordered tools (1.8s)
+2026-10-21T19:02:09.8550548Z   ok   8 tests\ui\desktop-shell.spec.ts:200:1 › routes dropped files through the active tool input contract (2.6s)
+2026-10-21T19:02:10.8676078Z   ok  10 tests\ui\desktop-shell.spec.ts:244:1 › native undo, redo, and export commands target the active editor (1.6s)
+2026-10-21T19:02:11.5009714Z   ok  11 tests\ui\desktop-shell.spec.ts:267:1 › keyboard shortcuts focus search, open a document, undo, redo, and export (1.6s)
+2026-10-21T19:02:11.9674483Z   ok  12 tests\ui\desktop-shell.spec.ts:297:1 › Escape closes the topmost settings surface before leaving the workspace (1.1s)
+2026-10-21T19:02:13.8121052Z   ok  14 tests\ui\feature-navigation.spec.ts:197:1 › sidebar views pair design icons with labels and open each view (1.7s)
+2026-10-21T19:02:14.6781494Z   ok  15 tests\ui\feature-navigation.spec.ts:214:1 › settings highlight matches navigation items (844ms)
+2026-10-21T19:02:16.0473185Z   ok  16 tests\ui\feature-navigation.spec.ts:247:1 › file upload surface follows the selected theme (1.3s)
+2026-10-21T19:02:17.6210193Z   ok  17 tests\ui\feature-navigation.spec.ts:286:1 › favorites navigation shows saved tools as chips and as a filtered library (1.6s)
+2026-10-21T19:02:17.9144873Z   ok  13 tests\ui\feature-navigation.spec.ts:177:1 › every registered feature opens its detail pane (6.3s)
+2026-10-21T19:02:18.5707505Z   ok  18 tests\ui\feature-navigation.spec.ts:313:1 › saved favorites and recents survive the startup id migration and only show registered tools (926ms)
+2026-10-21T19:02:19.3469828Z   ok  20 tests\ui\feature-navigation.spec.ts:352:1 › home sections show six tools and reveal the rest on request (756ms)
+2026-10-21T19:02:19.8047911Z   ok  19 tests\ui\feature-navigation.spec.ts:334:1 › all six home view sections list their tools and open their view (1.9s)
+2026-10-21T19:02:21.0390631Z   ok  22 tests\ui\feature-navigation.spec.ts:387:1 › search arrows navigate visible results and Enter opens the focused result (1.2s)
+2026-10-21T19:02:22.1438104Z   ok  23 tests\ui\feature-navigation.spec.ts:446:1 › home search lives in the top bar while the privacy badge stays in workspaces (1.1s)
+2026-10-21T19:02:22.9324977Z   ok  24 tests\ui\feature-navigation.spec.ts:468:1 › view sections expose an accessible open action and keep favoriting in the tool view (766ms)
+2026-10-21T19:02:24.0042817Z   ok  25 tests\ui\feature-navigation.spec.ts:480:1 › Windows labels the reveal action for File Explorer (1.1s)
+2026-10-21T19:02:24.9093307Z   ok  26 tests\ui\feature-navigation.spec.ts:492:1 › settings checks for and installs available updates (885ms)
+2026-10-21T19:02:25.6401873Z   ok  21 tests\ui\feature-navigation.spec.ts:368:1 › search finds and opens all 35 registered tool actions (6.3s)
+2026-10-21T19:02:25.9087783Z   ok  27 tests\ui\feature-navigation.spec.ts:531:1 › settings asks before installing and does nothing when declined (981ms)
+2026-10-21T19:02:26.6645057Z   ok  28 tests\ui\feature-navigation.spec.ts:543:1 › settings downloads and installs after the update is confirmed (1.0s)
+2026-10-21T19:02:27.4885109Z   ok  29 tests\ui\feature-navigation.spec.ts:553:1 › settings privacy opt-out persists across reloads (1.6s)
+2026-10-21T19:02:28.7906731Z   ok  31 tests\ui\feature-navigation.spec.ts:591:1 › workspace command rails follow the responsive toolbar keyboard contract (1.3s)
+2026-10-21T19:02:29.1105331Z   ok  30 tests\ui\feature-navigation.spec.ts:569:1 › settings use shared theme and privacy controls in both palettes (2.4s)
+2026-10-21T19:02:30.7818917Z   ok  33 tests\ui\feature-navigation.spec.ts:649:1 › Compress Files keeps the open files across tool switches and runs each native command with its own options (1.6s)
+2026-10-21T19:02:31.3699751Z   ok  32 tests\ui\feature-navigation.spec.ts:632:1 › each view rail lists exactly its own tools and compression lives only in Compress Files (2.6s)
+2026-10-21T19:02:31.4612603Z   ok  34 tests\ui\feature-navigation.spec.ts:685:5 › a twelve-tool rail stays usable in the vertical layout with arrows, Home and End (661ms)
+2026-10-21T19:02:32.0922220Z   ok  35 tests\ui\feature-navigation.spec.ts:685:5 › a twelve-tool rail stays usable in the narrow horizontal layout with arrows, Home and End (703ms)
+2026-10-21T19:02:33.0678983Z   ok  37 tests\ui\feature-navigation.spec.ts:755:5 › Lock & Unlock opens the picker with Cmd+O and runs with Cmd+Enter only when its run button is enabled (954ms)
+2026-10-21T19:02:33.9895152Z   ok  36 tests\ui\feature-navigation.spec.ts:723:1 › window shortcuts reach search and settings from every workspace view (2.5s)
+2026-10-21T19:02:34.0475158Z   ok  38 tests\ui\feature-navigation.spec.ts:755:5 › Compress PDF opens the picker with Cmd+O and runs with Cmd+Enter only when its run button is enabled (960ms)
+2026-10-21T19:02:35.0483154Z   ok  39 tests\ui\feature-navigation.spec.ts:755:5 › Compress Images opens the picker with Cmd+O and runs with Cmd+Enter only when its run button is enabled (1.0s)
+2026-10-21T19:02:35.1886383Z   ok  40 tests\ui\feature-navigation.spec.ts:755:5 › Image Metadata opens the picker with Cmd+O and runs with Cmd+Enter only when its run button is enabled (1.1s)
+2026-10-21T19:02:36.2947193Z   ok  42 tests\ui\feature-navigation.spec.ts:805:5 › shortcut hints use the macOS modifier (1.1s)
+2026-10-21T19:02:36.3042312Z   ok  41 tests\ui\feature-navigation.spec.ts:773:1 › shortcuts stay out of text fields and composition, and Run still fires from a field (1.2s)
+2026-10-21T19:02:37.3171708Z   ok  44 tests\ui\feature-navigation.spec.ts:841:1 › escape leaves the settings page and returns focus to the Settings button (994ms)
+2026-10-21T19:02:37.4524043Z   ok  43 tests\ui\feature-navigation.spec.ts:805:5 › shortcut hints use the Windows modifier (1.1s)
+2026-10-21T19:02:38.5615203Z   ok  45 tests\ui\feature-navigation.spec.ts:853:1 › All tools on the settings page returns to the open tool with its files (1.2s)
+2026-10-21T19:02:38.6490933Z   ok  46 tests\ui\feature-navigation.spec.ts:869:1 › the settings sidebar switches sections and lists only the built ones (1.2s)
+2026-10-21T19:02:39.8045599Z   ok  47 tests\ui\feature-navigation.spec.ts:892:1 › Find a tool on the settings page opens the tool search (1.2s)
+2026-10-21T19:02:40.3975146Z   ok  48 tests\ui\feature-navigation.spec.ts:907:1 › view links and rail tools render their design icon masks (1.7s)
+2026-10-21T19:02:40.6368938Z   ok  49 tests\ui\feature-navigation.spec.ts:926:1 › search shortcut stays in one inline keycap (802ms)
+2026-10-21T19:02:41.2483320Z   ok  50 tests\ui\feature-navigation.spec.ts:939:1 › desktop scrolling stays inside the command pane (835ms)
+2026-10-21T19:02:42.2296555Z   ok  51 tests\ui\feature-navigation.spec.ts:991:1 › crop is applied visually and exported as part of the scene (1.6s)
+2026-10-21T19:02:42.2679661Z   ok  52 tests\ui\feature-navigation.spec.ts:1001:1 › pdf editor renders page previews (1.0s)
+2026-10-21T19:02:43.8147199Z   ok  54 tests\ui\feature-navigation.spec.ts:1020:1 › editor command rails keep one document session while changing tools (1.5s)
+2026-10-21T19:02:44.0886706Z   ok  53 tests\ui\feature-navigation.spec.ts:1009:1 › PDF editor inserts editable blank pages from thumbnails (1.8s)
+2026-10-21T19:02:44.9925482Z   ok  55 tests\ui\feature-navigation.spec.ts:1041:1 › vision tools explain unavailable resources before file selection (1.2s)
+2026-10-21T19:02:45.6793496Z   ok  56 tests\ui\feature-navigation.spec.ts:1054:1 › PDF editor protects the last page and supports unified history (1.6s)
+2026-10-21T19:02:46.6517535Z   ok  57 tests\ui\feature-navigation.spec.ts:1069:1 › Image editor previews a reversible edit stack and exports one combined plan (1.6s)
+2026-10-21T19:02:47.1077823Z   ok  58 tests\ui\feature-navigation.spec.ts:1103:1 › Image crop keeps the source interaction surface and shows a separate result (1.4s)
+2026-10-21T19:02:48.0861681Z   ok  59 tests\ui\feature-navigation.spec.ts:1131:1 › Image crop offers aspect presets with a rule-of-thirds grid (1.4s)
+2026-10-21T19:02:48.5977721Z   ok  60 tests\ui\feature-navigation.spec.ts:1157:1 › Image crop cancels a global pointer interruption before a later move (1.5s)
+2026-10-21T19:02:49.3126769Z   ok  61 tests\ui\feature-navigation.spec.ts:1182:1 › Image aspect crop uses the anchored maximum-fit geometry for overlay and result (1.2s)
+2026-10-21T19:02:50.0390517Z   ok  62 tests\ui\feature-navigation.spec.ts:1198:1 › Image aspect crop can move while keeping its preset ratio (1.4s)
+2026-10-21T19:02:50.5820149Z   ok  63 tests\ui\feature-navigation.spec.ts:1227:1 › Image crop clears an old result and disables export after invalid preview validation (1.3s)
+2026-10-21T19:02:51.6467115Z   ok  64 tests\ui\feature-navigation.spec.ts:1246:1 › Image editor history can undo, redo, and reset the composed plan (1.6s)
+2026-10-21T19:02:51.6646589Z   ok  65 tests\ui\feature-navigation.spec.ts:1272:1 › PDF to Images identifies source selection and summarizes its non-previewable output (1.1s)
+2026-10-21T19:02:52.8156282Z   ok  66 tests\ui\feature-navigation.spec.ts:1295:1 › PDF range splitting rejects a blank range and accepts a range (1.1s)
+2026-10-21T19:02:53.1200534Z   ok  67 tests\ui\feature-navigation.spec.ts:1309:1 › media and security workspaces expose ordered inputs and format boundaries (1.4s)
+2026-10-21T19:02:54.2630188Z   ok  68 tests\ui\feature-navigation.spec.ts:1326:1 › TIFF workspace expands internal pages and sends the displayed order (1.4s)
+2026-10-21T19:02:55.1026243Z   ok  69 tests\ui\feature-navigation.spec.ts:1360:1 › non-previewable PDF conversions identify source selection and show deterministic output limits (2.0s)
+2026-10-21T19:02:55.4442858Z   ok  70 tests\ui\feature-navigation.spec.ts:1388:1 › PDF conversion visibly rejects retained files when an action changes format (1.2s)
+2026-10-21T19:02:56.3174197Z   ok  71 tests\ui\feature-navigation.spec.ts:1404:1 › PDF page-scoped conversions send the selected pages and keep OCR gated (1.2s)
+2026-10-21T19:02:56.8086452Z   ok  72 tests\ui\feature-navigation.spec.ts:1428:1 › rotate PDF sends the chosen direction and zero-based pages (1.3s)
+2026-10-21T19:02:57.7353298Z   ok  73 tests\ui\feature-navigation.spec.ts:1441:1 › compare PDF needs exactly two files and can swap the original (1.4s)
+2026-10-21T19:02:57.8373198Z   ok  75 tests\ui\feature-navigation.spec.ts:1476:1 › redaction boxes drawn on rotated pages map back to unrotated PDF points (82ms)
+2026-10-21T19:02:58.0052545Z   ok  74 tests\ui\feature-navigation.spec.ts:1459:1 › redact PDF waits for a box and sends it in PDF points (1.2s)
+2026-10-21T19:02:59.2769406Z   ok  76 tests\ui\feature-navigation.spec.ts:1485:1 › redact PDF only touches the first page unless more pages are checked (1.4s)
+2026-10-21T19:02:59.6005731Z   ok  77 tests\ui\feature-navigation.spec.ts:1500:1 › TIFF export waits for inspection of the current file set (1.6s)
+2026-10-21T19:03:00.4010117Z   ok  79 tests\ui\feature-navigation.spec.ts:1542:1 › command K focuses the tool search (776ms)
+2026-10-21T19:03:00.9037183Z   ok  78 tests\ui\feature-navigation.spec.ts:1531:1 › shared workspace ignores a stale processing completion after action changes (1.6s)
+2026-10-21T19:03:01.3773403Z   ok  80 tests\ui\feature-navigation.spec.ts:1551:1 › Lock & Unlock exposes one cross-format document tool (952ms)
+2026-10-21T19:03:02.0659487Z   ok  81 tests\ui\feature-navigation.spec.ts:1565:1 › Lock & Unlock locks DOCX and XLSX files in Lock mode now that Protect Office Files is retired (1.1s)
+2026-10-21T19:03:02.9189479Z   ok  82 tests\ui\feature-navigation.spec.ts:1633:1 › every output exposes native file actions and keeps action errors inline (1.5s)
+2026-10-21T19:03:03.4583806Z   ok  83 tests\ui\feature-navigation.spec.ts:1678:1 › result rows show succeeded, skipped and failed states with warnings and pointers in input order (1.4s)
+2026-10-21T19:03:04.2132714Z   ok  84 tests\ui\feature-navigation.spec.ts:1747:1 › a read-only output folder failure points to the output location setting instead of Retry (1.3s)
+2026-10-21T19:03:04.7254240Z   ok  85 tests\ui\feature-navigation.spec.ts:1771:1 › Retry is offered only after processing failures and time limits and re-runs only that file with the same options (1.3s)
+2026-10-21T19:03:05.4404329Z   ok  86 tests\ui\feature-navigation.spec.ts:1815:1 › files over a limit fail alone with the limit message while the other rows render normally (1.2s)
+2026-10-21T19:03:06.1956919Z   ok  87 tests\ui\feature-navigation.spec.ts:1845:1 › output action state resets and ignores stale completions (1.5s)
+2026-10-21T19:03:06.7056170Z   ok  88 tests\ui\feature-navigation.spec.ts:1880:1 › single-input actions report every selected file instead of truncating the selection (1.3s)
+2026-10-21T19:03:07.6247007Z   ok  90 tests\ui\feature-navigation.spec.ts:1919:1 › page-scoped actions disable export when the explicit selection is empty (901ms)
+2026-10-21T19:03:07.6432166Z   ok  89 tests\ui\feature-navigation.spec.ts:1900:1 › single-input replacement keeps the source and edit state after cancellation or the same path (1.4s)
+2026-10-21T19:03:08.8979150Z   ok  92 tests\ui\feature-navigation.spec.ts:1952:1 › PDF conversion resets the displayed scope when switching actions (1.2s)
+2026-10-21T19:03:09.4630360Z   ok  91 tests\ui\feature-navigation.spec.ts:1929:1 › PDF replacement clears stale inspection state while inspection is pending or rejected (1.8s)
+2026-10-21T19:03:09.7950276Z   ok  93 tests\ui\feature-navigation.spec.ts:1975:1 › GIF extraction does not request a source preview (881ms)
+2026-10-21T19:03:10.6094979Z   ok  94 tests\ui\feature-navigation.spec.ts:2061:9 › registered feature actions › lock-unlock accepts the fixture and runs with the Settings default (1.1s)
+2026-10-21T19:03:11.2184857Z   ok  95 tests\ui\feature-navigation.spec.ts:2061:9 › registered feature actions › pdf-page-numbers accepts the fixture and runs with the Settings default (1.4s)
+2026-10-21T19:03:11.9452496Z   ok  96 tests\ui\feature-navigation.spec.ts:2061:9 › registered feature actions › pdf-merge accepts the fixture and runs with the Settings default (1.3s)
+2026-10-21T19:03:12.7328720Z   ok  97 tests\ui\feature-navigation.spec.ts:2061:9 › registered feature actions › pdf-watermark accepts the fixture and runs with the Settings default (1.5s)
+2026-10-21T19:03:13.4336484Z   ok  98 tests\ui\feature-navigation.spec.ts:2061:9 › registered feature actions › pdf-crop accepts the fixture and runs with the Settings default (1.5s)
+2026-10-21T19:03:14.2457309Z   ok  99 tests\ui\feature-navigation.spec.ts:2061:9 › registered feature actions › pdf-edit accepts the fixture and runs with the Settings default (1.5s)
+2026-10-21T19:03:14.6698188Z   ok 100 tests\ui\feature-navigation.spec.ts:2061:9 › registered feature actions › images-to-pdf accepts the fixture and runs with the Settings default (1.2s)
+2026-10-21T19:03:15.3514408Z   ok 101 tests\ui\feature-navigation.spec.ts:2061:9 › registered feature actions › pdf-to-images accepts the fixture and runs with the Settings default (1.1s)
+2026-10-21T19:03:15.7951227Z   ok 102 tests\ui\feature-navigation.spec.ts:2061:9 › registered feature actions › pdf-to-text accepts the fixture and runs with the Settings default (1.1s)
+2026-10-21T19:03:16.4802717Z   ok 103 tests\ui\feature-navigation.spec.ts:2061:9 › registered feature actions › pdf-split accepts the fixture and runs with the Settings default (1.1s)
+2026-10-21T19:03:16.9073803Z   ok 104 tests\ui\feature-navigation.spec.ts:2061:9 › registered feature actions › pdf-image-extract accepts the fixture and runs with the Settings default (1.1s)
+2026-10-21T19:03:16.9949054Z   -  106 tests\ui\feature-navigation.spec.ts:2061:9 › registered feature actions › pdf-ocr accepts the fixture and runs with the Settings default
+2026-10-21T19:03:18.1648432Z   ok 105 tests\ui\feature-navigation.spec.ts:2061:9 › registered feature actions › pdf-sign accepts the fixture and runs with the Settings default (1.7s)
+2026-10-21T19:03:18.4713844Z   ok 107 tests\ui\feature-navigation.spec.ts:2061:9 › registered feature actions › pdf-remove-pages accepts the fixture and runs with the Settings default (1.5s)
+2026-10-21T19:03:19.2479302Z   ok 108 tests\ui\feature-navigation.spec.ts:2061:9 › registered feature actions › pdf-extract-pages accepts the fixture and runs with the Settings default (1.1s)
+2026-10-21T19:03:19.8692446Z   ok 109 tests\ui\feature-navigation.spec.ts:2061:9 › registered feature actions › pdf-organize accepts the fixture and runs with the Settings default (1.4s)
+2026-10-21T19:03:20.2923313Z   ok 110 tests\ui\feature-navigation.spec.ts:2061:9 › registered feature actions › pdf-compress accepts the fixture and runs with the Settings default (1.0s)
+2026-10-21T19:03:21.1100547Z   ok 111 tests\ui\feature-navigation.spec.ts:2061:9 › registered feature actions › pdf-rotate accepts the fixture and runs with the Settings default (1.2s)
+2026-10-21T19:03:21.3269160Z   ok 112 tests\ui\feature-navigation.spec.ts:2061:9 › registered feature actions › pdf-repair accepts the fixture and runs with the Settings default (1.0s)
+2026-10-21T19:03:22.4116405Z   ok 113 tests\ui\feature-navigation.spec.ts:2061:9 › registered feature actions › pdf-redact accepts the fixture and runs with the Settings default (1.3s)
+2026-10-21T19:03:22.6220582Z   ok 114 tests\ui\feature-navigation.spec.ts:2061:9 › registered feature actions › pdf-compare accepts the fixture and runs with the Settings default (1.3s)
+2026-10-21T19:03:23.6614034Z   ok 115 tests\ui\feature-navigation.spec.ts:2061:9 › registered feature actions › heic-convert accepts the fixture and runs with the Settings default (1.2s)
+2026-10-21T19:03:23.7063370Z   ok 116 tests\ui\feature-navigation.spec.ts:2061:9 › registered feature actions › compress accepts the fixture and runs with the Settings default (1.1s)
+2026-10-21T19:03:24.9054611Z   ok 117 tests\ui\feature-navigation.spec.ts:2061:9 › registered feature actions › resize accepts the fixture and runs with the Settings default (1.2s)
+2026-10-21T19:03:24.9229323Z   ok 118 tests\ui\feature-navigation.spec.ts:2061:9 › registered feature actions › rotate accepts the fixture and runs with the Settings default (1.2s)
+2026-10-21T19:03:26.0399492Z   ok 120 tests\ui\feature-navigation.spec.ts:2061:9 › registered feature actions › icon-set accepts the fixture and runs with the Settings default (1.1s)
+2026-10-21T19:03:26.3026661Z   ok 119 tests\ui\feature-navigation.spec.ts:2061:9 › registered feature actions › crop accepts the fixture and runs with the Settings default (1.4s)
+2026-10-21T19:03:27.3427208Z   ok 122 tests\ui\feature-navigation.spec.ts:2061:9 › registered feature actions › gif-extract accepts the fixture and runs with the Settings default (1.0s)
+2026-10-21T19:03:27.4217742Z   ok 121 tests\ui\feature-navigation.spec.ts:2061:9 › registered feature actions › gif-create accepts the fixture and runs with the Settings default (1.4s)
+2026-10-21T19:03:28.4990972Z   ok 124 tests\ui\feature-navigation.spec.ts:2061:9 › registered feature actions › image-metadata accepts the fixture and runs with the Settings default (1.1s)
+2026-10-21T19:03:28.5836823Z   ok 123 tests\ui\feature-navigation.spec.ts:2061:9 › registered feature actions › image-watermark accepts the fixture and runs with the Settings default (1.2s)
+2026-10-21T19:03:29.6701599Z   ok 126 tests\ui\feature-navigation.spec.ts:2061:9 › registered feature actions › tiff-pages accepts the fixture and runs with the Settings default (1.1s)
+2026-10-21T19:03:29.7244086Z   ok 125 tests\ui\feature-navigation.spec.ts:2061:9 › registered feature actions › image-tone accepts the fixture and runs with the Settings default (1.2s)
+2026-10-21T19:03:29.7707653Z   -  127 tests\ui\feature-navigation.spec.ts:2061:9 › registered feature actions › image-blur-faces accepts the fixture and runs with the Settings default
+2026-10-21T19:03:29.8304034Z   -  128 tests\ui\feature-navigation.spec.ts:2061:9 › registered feature actions › image-remove-bg accepts the fixture and runs with the Settings default
+2026-10-21T19:03:29.8760172Z   ok 129 tests\ui\feature-navigation.spec.ts:2072:5 › workspace runs send the stored output location › one representative tool covers every workspace view (87ms)
+2026-10-21T19:03:31.0188995Z   ok 130 tests\ui\feature-navigation.spec.ts:2078:9 › workspace runs send the stored output location › file-security sends the stored custom folder from lock-unlock (1.2s)
+2026-10-21T19:03:31.5788413Z   ok 131 tests\ui\feature-navigation.spec.ts:2078:9 › workspace runs send the stored output location › pdf-editor sends the stored custom folder from pdf-edit (1.7s)
+2026-10-21T19:03:32.0483261Z   ok 132 tests\ui\feature-navigation.spec.ts:2078:9 › workspace runs send the stored output location › pdf-convert sends the stored custom folder from pdf-to-images (1.0s)
+2026-10-21T19:03:32.8542990Z   ok 133 tests\ui\feature-navigation.spec.ts:2078:9 › workspace runs send the stored output location › image-editor sends the stored custom folder from resize (1.3s)
+2026-10-21T19:03:33.1114326Z   ok 134 tests\ui\feature-navigation.spec.ts:2078:9 › workspace runs send the stored output location › compress-files sends the stored custom folder from pdf-compress (1.0s)
+2026-10-21T19:03:33.9875259Z   ok 135 tests\ui\feature-navigation.spec.ts:2078:9 › workspace runs send the stored output location › media-tools sends the stored custom folder from icon-set (1.1s)
+2026-10-21T19:03:34.4127635Z   ok 136 tests\ui\feature-navigation.spec.ts:2084:5 › workspace runs send the stored output location › a stored folder keeps its path while the mode is alongside (1.3s)
+2026-10-21T19:03:35.0045646Z   ok 137 tests\ui\feature-navigation.spec.ts:2103:5 › Settings output location › defaults to next to each original and shows the default folder (998ms)
+2026-10-21T19:03:35.8797672Z   ok 138 tests\ui\feature-navigation.spec.ts:2114:5 › Settings output location › saves the folder dialog result through the settings command and runs use it (1.5s)
+2026-10-21T19:03:35.9241449Z   ok 139 tests\ui\feature-navigation.spec.ts:2140:5 › Settings output location › a cancelled folder dialog saves nothing (896ms)
+2026-10-21T19:03:36.8468882Z   ok 141 tests\ui\feature-navigation.spec.ts:2161:5 › Settings output location › only a path inside the home folder is shortened (905ms)
+2026-10-21T19:03:36.9661055Z   ok 140 tests\ui\feature-navigation.spec.ts:2149:5 › Settings output location › switching modes saves through the settings command and keeps the folder (1.1s)
+2026-10-21T19:03:37.8405734Z   ok 142 tests\ui\feature-navigation.spec.ts:2167:5 › Settings output location › the stored setting loads at startup (979ms)
+2026-10-21T19:03:38.0459822Z   ok 143 tests\ui\feature-navigation.spec.ts:2174:5 › Settings output location › a rejected save shows the native error and keeps the previous choice (1.0s)
+2026-10-21T19:03:38.9755539Z   ok 144 tests\ui\feature-navigation.spec.ts:2217:5 › per-run destination › shows the default destination and an example name built from the declared suffix (1.1s)
+2026-10-21T19:03:39.4065008Z   ok 145 tests\ui\feature-navigation.spec.ts:2231:5 › per-run destination › a per-run folder in the home folder is shown with ~ and sent in full (1.4s)
+2026-10-21T19:03:40.4066205Z   ok 146 tests\ui\feature-navigation.spec.ts:2241:5 › per-run destination › a per-run folder is sent in the request, marked, reset with one action, and never written to Settings (1.4s)
+2026-10-21T19:03:40.4820611Z   ok 147 tests\ui\feature-navigation.spec.ts:2268:5 › per-run destination › leaving and returning to the view shows the default destination again (1.1s)
+2026-10-21T19:03:41.5632014Z   ok 148 tests\ui\feature-navigation.spec.ts:2286:5 › per-run destination › switching to another tool in the workspace resets the per-run folder (1.1s)
+2026-10-21T19:03:42.2903127Z   ok 149 tests\ui\feature-navigation.spec.ts:2299:9 › per-run destination › a missing custom folder blocks the run and offers another folder (1.8s)
+2026-10-21T19:03:43.1929315Z   ok 150 tests\ui\feature-navigation.spec.ts:2299:9 › per-run destination › an unwritable custom folder blocks the run and offers another folder (1.6s)
+2026-10-21T19:03:43.7305834Z   ok 151 tests\ui\feature-navigation.spec.ts:2329:5 › per-run destination › a blocked run can save next to the originals instead (1.4s)
+2026-10-21T19:03:44.5990164Z   ok 152 tests\ui\feature-navigation.spec.ts:2378:9 › many-to-one save step › merge_pdfs asks for a name and folder in the app before it runs (1.4s)
+2026-10-21T19:03:45.0372067Z   ok 153 tests\ui\feature-navigation.spec.ts:2378:9 › many-to-one save step › images_to_pdf asks for a name and folder in the app before it runs (1.3s)
+2026-10-21T19:03:46.2485646Z   ok 154 tests\ui\feature-navigation.spec.ts:2378:9 › many-to-one save step › create_gif asks for a name and folder in the app before it runs (1.6s)
+2026-10-21T19:03:46.3111620Z   ok 155 tests\ui\feature-navigation.spec.ts:2378:9 › many-to-one save step › process_tiff_pages asks for a name and folder in the app before it runs (1.3s)
+2026-10-21T19:03:47.4702007Z   ok 157 tests\ui\feature-navigation.spec.ts:2406:9 › many-to-one save step › the proposed folder follows the custom output location and reads from home in the dark theme (1.1s)
+2026-10-21T19:03:47.7072017Z   ok 156 tests\ui\feature-navigation.spec.ts:2406:9 › many-to-one save step › the proposed folder follows the custom output location and reads from home in the light theme (1.4s)
+2026-10-21T19:03:48.7006569Z   ok 158 tests\ui\feature-navigation.spec.ts:2424:9 › many-to-one save step › cancelling the merge_pdfs save dialog sends no request (1.2s)
+2026-10-21T19:03:48.8872318Z   ok 159 tests\ui\feature-navigation.spec.ts:2424:9 › many-to-one save step › cancelling the images_to_pdf save dialog sends no request (1.1s)
+2026-10-21T19:03:50.0343309Z   ok 161 tests\ui\feature-navigation.spec.ts:2424:9 › many-to-one save step › cancelling the process_tiff_pages save dialog sends no request (1.1s)
+2026-10-21T19:03:50.1670746Z   ok 160 tests\ui\feature-navigation.spec.ts:2424:9 › many-to-one save step › cancelling the create_gif save dialog sends no request (1.4s)
+2026-10-21T19:03:51.2704885Z   ok 162 tests\ui\feature-navigation.spec.ts:2435:5 › many-to-one save step › Escape closes the save dialog without a request (1.2s)
+2026-10-21T19:03:51.4669502Z   ok 163 tests\ui\feature-navigation.spec.ts:2444:5 › many-to-one save step › Change… picks another folder with the native folder dialog (1.3s)
+2026-10-21T19:03:52.5561459Z   ok 164 tests\ui\feature-navigation.spec.ts:2464:5 › many-to-one save step › the file name must be present, stay in the folder, and gets the tool's extension (1.3s)
+2026-10-21T19:03:52.6153430Z   ok 165 tests\ui\feature-navigation.spec.ts:2490:5 › many-to-one save step › a name that already has the extension keeps it once (1.1s)
+2026-10-21T19:03:53.6510478Z   ok 166 tests\ui\feature-navigation.spec.ts:2499:5 › many-to-one save step › one TIFF splits into pages without the save step (1.1s)
+2026-10-21T19:03:53.9998325Z   ok 167 tests\ui\feature-navigation.spec.ts:2509:9 › many-to-one save step › a renamed save shows one row named by the output with the warning once in the light theme (1.4s)
+2026-10-21T19:03:54.8438650Z   ok 168 tests\ui\feature-navigation.spec.ts:2509:9 › many-to-one save step › a renamed save shows one row named by the output with the warning once in the dark theme (1.2s)
+2026-10-21T19:03:55.2698835Z   ok 169 tests\ui\feature-navigation.spec.ts:2537:5 › many-to-one save step › a combined result without a warning is named by the output and drops the repeated output line (1.2s)
+2026-10-21T19:03:55.9963246Z   ok 170 tests\ui\feature-navigation.spec.ts:2552:5 › many-to-one save step › a created-document save opens in the last-used folder, or else Documents (1.1s)
+2026-10-21T19:03:56.4980541Z   ok 171 tests\ui\feature-navigation.spec.ts:2576:1 › PDF Editor rail lists More tools after a label and keeps files across switches (1.2s)
+2026-10-21T19:03:57.3723130Z   ok 172 tests\ui\feature-navigation.spec.ts:2593:1 › Edit Image tabs switch with arrow keys and keep the files and the edit plan (1.4s)
+2026-10-21T19:03:58.1082459Z   ok 173 tests\ui\feature-navigation.spec.ts:2617:1 › Redact opens from the Edit PDF toolbar with the open file unless edits are unexported (1.6s)
+2026-10-21T19:03:58.9093312Z   ok 174 tests\ui\feature-navigation.spec.ts:2637:1 › search and favorites list folded tools by their own names and open them (1.5s)
+2026-10-21T19:03:59.5769173Z   ok 175 tests\ui\file-security-a11y.spec.ts:112:5 › Lock shows progress and streamed rows from per-file events while the options stay locked (1.4s)
+2026-10-21T19:04:00.3600540Z   ok 176 tests\ui\file-security-a11y.spec.ts:112:5 › Unlock shows progress and streamed rows from per-file events while the options stay locked (1.4s)
+2026-10-21T19:04:01.5947231Z   ok 178 tests\ui\file-security-a11y.spec.ts:200:5 › Lock adds files with Cmd+O and runs with Cmd+Enter (1.2s)
+2026-10-21T19:04:02.2787395Z   ok 177 tests\ui\file-security-a11y.spec.ts:141:1 › the whole Lock flow runs by keyboard only (2.7s)
+2026-10-21T19:04:02.8537968Z   ok 179 tests\ui\file-security-a11y.spec.ts:200:5 › Unlock adds files with Cmd+O and runs with Cmd+Enter (1.2s)
+2026-10-21T19:04:03.5494318Z   ok 180 tests\ui\file-security-a11y.spec.ts:221:1 › every result state and warning has a spoken label, and the privacy note is announced in the options (1.3s)
+2026-10-21T19:04:04.2117773Z   ok 181 tests\ui\intake.spec.ts:141:1 › dropped paths are classified, and only files the active tool takes are sent (1.3s)
+2026-10-21T19:04:04.9500768Z   ok 182 tests\ui\intake.spec.ts:167:1 › ordered tools keep repeated drops in the order they arrive (1.3s)
+2026-10-21T19:04:06.0220803Z   ok 183 tests\ui\intake.spec.ts:185:1 › the picker filters by the active tool and allows one file only for single-input tools (1.8s)
+2026-10-21T19:04:06.4503896Z   ok 184 tests\ui\intake.spec.ts:213:1 › click, Shift-click and Cmd-click select rows, and removal only edits the list (1.5s)
+2026-10-21T19:04:07.1767008Z   ok 185 tests\ui\intake.spec.ts:239:1 › in the file list Cmd+A selects every file, arrows move the selection and Backspace removes it (1.1s)
+2026-10-21T19:04:08.0447643Z   ok 186 tests\ui\intake.spec.ts:264:1 › drag and keyboard reorder set the order sent in the request (1.6s)
+2026-10-21T19:04:09.5428601Z   ok 188 tests\ui\intake.spec.ts:351:1 › a file's own password is sent as an override and every other file uses the batch password (1.5s)
+2026-10-21T19:04:09.8053620Z   ok 187 tests\ui\intake.spec.ts:292:1 › intake, options and the file list lock while a run is in progress (2.6s)
+2026-10-21T19:04:11.0661995Z   ok 190 tests\ui\intake.spec.ts:431:1 › Lock runs only once both new passwords match and sends one protect_files request (1.2s)
+2026-10-21T19:04:11.5617851Z   ok 189 tests\ui\intake.spec.ts:394:1 › Lock saves a file's own password only once it is confirmed, and Run waits until every file has a password (2.0s)
+2026-10-21T19:04:12.3377092Z   ok 191 tests\ui\intake.spec.ts:464:1 › every file with its own password can run without a batch password (1.3s)
+2026-10-21T19:04:13.1292781Z   ok 192 tests\ui\intake.spec.ts:476:1 › a wrong password row retries only that file with the password typed for it (1.5s)
+2026-10-21T19:04:13.7785429Z   ok 193 tests\ui\intake.spec.ts:514:1 › Retry failed files runs only the wrong-password and processing failures with the current passwords and keeps every finished row (1.4s)
+2026-10-21T19:04:14.8636977Z   ok 194 tests\ui\intake.spec.ts:549:1 › Retry failed files waits until every failed file has a password (1.7s)
+2026-10-21T19:04:16.1516884Z   ok 195 tests\ui\intake.spec.ts:565:1 › passwords clear when a file closes, when the list empties and when the view is left (2.4s)
+2026-10-21T19:04:16.4143917Z   ok 196 tests\ui\intake.spec.ts:592:1 › passwords never reach storage, the network, the console or any other command (1.5s)
+2026-10-21T19:04:17.2298765Z   ok 197 tests\ui\intake.spec.ts:620:1 › every File Security search term finds one Lock & Unlock entry that opens the view (1.1s)
+2026-10-21T19:04:17.8054775Z   ok 198 tests\ui\intake.spec.ts:633:1 › a saved Remove Password favorite and recent open File Security once migrated and leave no retired id behind (1.4s)
+2026-10-21T19:04:18.6386714Z   ok 199 tests\ui\intake.spec.ts:654:1 › a saved Protect PDF favorite and recent open File Security after the earlier migration already ran (1.4s)
+2026-10-21T19:04:19.2829432Z   ok 200 tests\ui\intake.spec.ts:677:1 › a saved Protect Office Files favorite and recent open File Security after migration (1.5s)
+2026-10-21T19:04:20.0065619Z   ok 201 tests\ui\intake.spec.ts:702:1 › Lock sends a mixed PDF, Word, Excel and PowerPoint batch in one protect_files request and shows one locked row per file (1.4s)
+2026-10-21T19:04:20.6723432Z   ok 202 tests\ui\intake.spec.ts:731:1 › Lock flags legacy Office files as failing, still sends them, and shows each as its own Failed row (1.4s)
+2026-10-21T19:04:21.7256613Z   ok 203 tests\ui\intake.spec.ts:776:1 › the flagged files follow the mode, both pickers take legacy Office files, and flagged files count toward Run (1.7s)
+2026-10-21T19:04:22.0851328Z   ok 204 tests\ui\intake.spec.ts:832:1 › Lock & Unlock shows the app-wide destination and sends a per-run folder in both modes without writing Settings (1.4s)
+2026-10-21T19:04:23.0639905Z   ok 205 tests\ui\intake.spec.ts:871:1 › Lock without its PDF helper shows the PDFs as Unavailable and the Word and Excel files as locked (1.3s)
+2026-10-21T19:04:23.4226499Z   ok 206 tests\ui\intake.spec.ts:893:1 › Lock shows already-protected files as Skipped rows with their reason, apart from Unavailable failures in the summary (1.3s)
+2026-10-21T19:04:24.2614230Z   ok 207 tests\ui\intake.spec.ts:925:1 › Unlock sends the ordered batch with one password and the shell's output folder, and shows one row per file (1.2s)
+2026-10-21T19:04:24.7262017Z   ok 208 tests\ui\intake.spec.ts:962:5 › Lock shows the signature removed warning only on the signed PDF's row (1.3s)
+2026-10-21T19:04:25.5254457Z   ok 209 tests\ui\intake.spec.ts:962:5 › Unlock shows the signature removed warning only on the signed PDF's row (1.2s)
+2026-10-21T19:04:26.4078289Z   ok 210 tests\ui\intake.spec.ts:994:1 › switching between Lock and Unlock clears every password and Lock takes Word and Excel files in place (1.7s)
+2026-10-21T19:04:26.6982256Z   ok 211 tests\ui\intake.spec.ts:1021:1 › Unlock shows files that need no work as Skipped rows with their reason, apart from failures in the summary (1.1s)
+2026-10-21T19:04:27.9229495Z   ok 212 tests\ui\intake.spec.ts:1058:1 › Unlock shows each verification and legacy-format failure with its own message on its own row (1.5s)
+2026-10-21T19:04:28.2113330Z   ok 213 tests\ui\live-progress.spec.ts:104:1 › rows stream in input order, the count follows finished files, and early rows open mid-run (1.5s)
+2026-10-21T19:04:29.4877078Z   ok 214 tests\ui\live-progress.spec.ts:150:1 › over 60 files the bar shows proportions with the board note (1.5s)
+2026-10-21T19:04:29.8862074Z   ok 215 tests\ui\live-progress.spec.ts:165:1 › cancel asks first, sends the run id, and ends with cancelled rows and counts (1.7s)
+2026-10-21T19:04:31.6226402Z   ok 216 tests\ui\pdf-editor-followup.spec.ts:56:1 › text edits happen in the page box and do not expose a duplicate property input (2.1s)
+2026-10-21T19:04:31.8440189Z   ok 217 tests\ui\pdf-editor-followup.spec.ts:70:1 › highlight can convert a selected source-text range into highlights (1.9s)
+2026-10-21T19:04:33.7287941Z   ok 219 tests\ui\pdf-editor-followup.spec.ts:101:1 › text selection cancels on window blur and leaves later drawing usable (1.9s)
+2026-10-21T19:04:33.7788325Z   ok 218 tests\ui\pdf-editor-followup.spec.ts:84:1 › text selection cancels on outside release and leaves later drawing usable (2.1s)
+2026-10-21T19:04:36.2928675Z   ok 220 tests\ui\pdf-editor-followup.spec.ts:118:1 › space-drag and middle-button pan leave rotated document coordinates unchanged (2.5s)
+2026-10-21T19:04:37.5791084Z   ok 221 tests\ui\pdf-editor-followup.spec.ts:153:1 › shape tool exposes every requested shape and arrow direction (3.8s)
+2026-10-21T19:04:38.6043613Z   ok 222 tests\ui\pdf-editor-followup.spec.ts:165:1 › signature supports a draggable local image and a typed font-backed box (2.3s)
+2026-10-21T19:04:39.4743122Z   ok 223 tests\ui\pdf-editor-followup.spec.ts:187:1 › typed signature property keeps focus for every character (1.8s)
+2026-10-21T19:04:40.8945049Z   ok 224 tests\ui\pdf-editor-followup.spec.ts:200:1 › watermarks stay fixed and expose font size as a dropdown (2.3s)
+2026-10-21T19:04:41.4883769Z   ok 225 tests\ui\pdf-scene.spec.ts:64:1 › PDF editor toolbars use roving keyboard focus and render the workspace (2.0s)
+2026-10-21T19:04:42.0340266Z   ok 226 tests\ui\pdf-scene.spec.ts:84:1 › PDF editor keeps the back link, title, and empty-state open action compact (1.1s)
+2026-10-21T19:04:42.9661778Z   ok 227 tests\ui\pdf-scene.spec.ts:105:1 › scene preview cache misses use one indexed batch request (1.5s)
+2026-10-21T19:04:43.4540542Z   ok 228 tests\ui\pdf-scene.spec.ts:113:1 › PDF editor toolbar uses roving keyboard focus and the inspector follows the active tool (1.4s)
+2026-10-21T19:04:44.4523089Z   ok 229 tests\ui\pdf-scene.spec.ts:130:1 › page actions menu supports keyboard navigation, Escape focus return, and outside dismissal (1.5s)
+2026-10-21T19:04:45.1656055Z   ok 230 tests\ui\pdf-scene.spec.ts:161:3 › page actions open Merge PDF with the current source and do not run it (1.7s)
+2026-10-21T19:04:45.2622343Z   -  232 tests\ui\pdf-scene.spec.ts:181:1 › PostHog flags select tools per OS in search and PDF page actions
+2026-10-21T19:04:45.9174869Z   ok 231 tests\ui\pdf-scene.spec.ts:161:3 › page actions open Split PDF with the current source and do not run it (1.4s)
+2026-10-21T19:04:46.9624238Z   ok 233 tests\ui\pdf-scene.spec.ts:257:1 › non-adjacent page selection rotates only the selected pages (1.7s)
+2026-10-21T19:04:48.5793308Z   ok 234 tests\ui\pdf-scene.spec.ts:269:1 › inspector property edits stay in scene history and undo and redo exactly (2.6s)
+2026-10-21T19:04:48.5871262Z   ok 235 tests\ui\pdf-scene.spec.ts:287:1 › page numbering adds editable number objects to every page (1.6s)
+2026-10-21T19:04:50.4463140Z   ok 237 tests\ui\pdf-scene.spec.ts:306:1 › pointer-down does not request another preview before the scene changes (1.8s)
+2026-10-21T19:04:51.8163234Z   ok 238 tests\ui\pdf-scene.spec.ts:319:1 › scene lazily requests text for the current source page (1.4s)
+2026-10-21T19:04:53.6041388Z   ok 239 tests\ui\pdf-scene.spec.ts:328:1 › scene ignores stale page text responses after changing pages (1.8s)
+2026-10-21T19:04:56.3346699Z   ok 240 tests\ui\pdf-scene.spec.ts:344:1 › scene composes every mark kind, moves and resizes, then exports once (2.7s)
+2026-10-21T19:04:59.3966364Z   ok 241 tests\ui\pdf-scene.spec.ts:365:1 › scene crop and thumbnail insert rotate reorder delete share undo redo reset (3.0s)
+2026-10-21T19:05:01.2741856Z   ok 242 tests\ui\pdf-scene.spec.ts:391:1 › scene drag reorders selected thumbnails together and protects the last page (1.9s)
+2026-10-21T19:05:01.9369577Z   ok 236 tests\ui\pdf-scene.spec.ts:295:1 › PDF scene history retains exactly the latest 100 edits (13.3s)
+2026-10-21T19:05:03.2579845Z   ok 244 tests\ui\pdf-scene.spec.ts:416:1 › Cmd+O opens a PDF in the editor and Cmd+Enter exports only once there is a change (1.3s)
+2026-10-21T19:05:03.6258978Z   ok 243 tests\ui\pdf-scene.spec.ts:402:1 › Export stays disabled until the document has an effective change (2.3s)
+2026-10-21T19:05:05.3967732Z   ok 246 tests\ui\pdf-scene.spec.ts:455:1 › scene explains unsafe PDF preview failures without exposing native wrappers (1.7s)
+2026-10-21T19:05:05.4056244Z   ok 245 tests\ui\pdf-scene.spec.ts:438:1 › scene rejects stale and failed previews without exposing an unverified export (2.1s)
+2026-10-21T19:05:06.9832214Z   ok 247 tests\ui\pdf-scene.spec.ts:465:40 › scene preview and inline tools remain above the fold in light (1.6s)
+2026-10-21T19:05:07.1738285Z   ok 248 tests\ui\pdf-scene.spec.ts:465:40 › scene preview and inline tools remain above the fold in dark (1.7s)
+2026-10-21T19:05:08.6295532Z   ok 249 tests\ui\pdf-scene.spec.ts:482:1 › Escape cancels a canvas gesture before pointer release (1.6s)
+2026-10-21T19:05:09.2792773Z   ok 250 tests\ui\pdf-scene.spec.ts:497:1 › Escape releases pointer capture while cancelling object movement (2.1s)
+2026-10-21T19:05:10.5487752Z   ok 251 tests\ui\pdf-scene.spec.ts:528:1 › Escape discards inline text edits without changing the committed scene (1.9s)
+2026-10-21T19:05:10.8991203Z   ok 252 tests\ui\pdf-scene.spec.ts:544:1 › one signature drag stays in one undo step (1.6s)
+2026-10-21T19:05:11.8010634Z   ok 253 tests\ui\scene-canvas.spec.ts:35:1 › canvas pointer gestures create drag resize and cancel without extra history (1.2s)
+2026-10-21T19:05:11.8017937Z   ok 254 tests\ui\scene-canvas.spec.ts:55:1 › unmounting a text selection clears the gesture before remount (870ms)
+2026-10-21T19:05:12.7259287Z   ok 255 tests\ui\scene-canvas.spec.ts:74:1 › canvas maps drawing through crop and rotation into source coordinates (906ms)
+2026-10-21T19:05:13.9274713Z   ok 256 tests\ui\shadcn-components.spec.ts:4:1 › desktop shell uses neutral shadcn controls in both themes (2.1s)
+2026-10-21T19:05:15.1227212Z   ok 258 tests\ui\shadcn-components.spec.ts:93:1 › shared cards keep generated anatomy and variants own selected appearance (1.2s)
+2026-10-21T19:05:15.8423080Z   ok 257 tests\ui\shadcn-components.spec.ts:66:1 › feature panels and previews use shadcn Card surfaces (3.1s)
+2026-10-21T19:05:16.0694452Z 
+2026-10-21T19:05:16.0702863Z   4 skipped
+2026-10-21T19:05:16.0703421Z   254 passed (3.3m)
+2026-10-21T19:05:16.1583552Z ##[group]Run npm run test:analytics
+2026-10-21T19:05:16.1583950Z npm run test:analytics
+2026-10-21T19:05:16.1660741Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-10-21T19:05:16.1661131Z env:
+2026-10-21T19:05:16.1661351Z   TOOLBOX_REQUIRE_QPDF: 1
+2026-10-21T19:05:16.1661846Z   VITE_POSTHOG_KEY: ***
+2026-10-21T19:05:16.1662123Z   VITE_TOOLBOX_TARGET_PLATFORM: windows
+2026-10-21T19:05:16.1662425Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-10-21T19:05:16.1662722Z   CARGO_INCREMENTAL: 0
+2026-10-21T19:05:16.1662949Z   CARGO_TERM_COLOR: always
+2026-10-21T19:05:16.1663182Z   CACHE_ON_FAILURE: false
+2026-10-21T19:05:16.1663421Z ##[endgroup]
+2026-10-21T19:05:16.9552496Z 
+2026-10-21T19:05:16.9553513Z > toolbox@1.0.14 test:analytics
+2026-10-21T19:05:16.9556735Z > tsx --test tests/analytics.test.ts
+2026-10-21T19:05:16.9557119Z 
+2026-10-21T19:05:17.1874220Z TAP version 13
+2026-10-21T19:05:17.4393640Z # Subtest: records the first install once and ignores later app launches
+2026-10-21T19:05:17.4412832Z ok 1 - records the first install once and ignores later app launches
+2026-10-21T19:05:17.4413939Z   ---
+2026-10-21T19:05:17.4414636Z   duration_ms: 2.3034
+2026-10-21T19:05:17.4415287Z   type: 'test'
+2026-10-21T19:05:17.4416181Z   ...
+2026-10-21T19:05:17.4416918Z # Subtest: opt-out persists in storage
+2026-10-21T19:05:17.4417752Z ok 2 - opt-out persists in storage
+2026-10-21T19:05:17.4418426Z   ---
+2026-10-21T19:05:17.4418971Z   duration_ms: 0.2745
+2026-10-21T19:05:17.4419543Z   type: 'test'
+2026-10-21T19:05:17.4420081Z   ...
+2026-10-21T19:05:17.4420787Z # Subtest: isConfigured requires a PostHog project key
+2026-10-21T19:05:17.4421814Z ok 3 - isConfigured requires a PostHog project key
+2026-10-21T19:05:17.4422547Z   ---
+2026-10-21T19:05:17.4423049Z   duration_ms: 1.2817
+2026-10-21T19:05:17.4423566Z   type: 'test'
+2026-10-21T19:05:17.4424086Z   ...
+2026-10-21T19:05:17.4424877Z # Subtest: sends nothing when no PostHog key is configured
+2026-10-21T19:05:17.4426606Z ok 4 - sends nothing when no PostHog key is configured
+2026-10-21T19:05:17.4427739Z   ---
+2026-10-21T19:05:17.4428306Z   duration_ms: 0.5397
+2026-10-21T19:05:17.4428827Z   type: 'test'
+2026-10-21T19:05:17.4429357Z   ...
+2026-10-21T19:05:17.4430129Z # Subtest: does not burn the first_install marker while unconfigured
+2026-10-21T19:05:17.4431268Z ok 5 - does not burn the first_install marker while unconfigured
+2026-10-21T19:05:17.4432060Z   ---
+2026-10-21T19:05:17.4432581Z   duration_ms: 1.576
+2026-10-21T19:05:17.4433157Z   type: 'test'
+2026-10-21T19:05:17.4433701Z   ...
+2026-10-21T19:05:17.4434398Z # Subtest: sends nothing in dev builds
+2026-10-21T19:05:17.4435220Z ok 6 - sends nothing in dev builds
+2026-10-21T19:05:17.4435870Z   ---
+2026-10-21T19:05:17.4436879Z   duration_ms: 0.3861
+2026-10-21T19:05:17.4437470Z   type: 'test'
+2026-10-21T19:05:17.4438001Z   ...
+2026-10-21T19:05:17.4438781Z # Subtest: sends nothing when the user opted out
+2026-10-21T19:05:17.4439642Z ok 7 - sends nothing when the user opted out
+2026-10-21T19:05:17.4440272Z   ---
+2026-10-21T19:05:17.4440750Z   duration_ms: 0.4021
+2026-10-21T19:05:17.4441249Z   type: 'test'
+2026-10-21T19:05:17.4441700Z   ...
+2026-10-21T19:05:17.4442537Z # Subtest: reuses the anonymous id and records first install only once
+2026-10-21T19:05:17.4443635Z ok 8 - reuses the anonymous id and records first install only once
+2026-10-21T19:05:17.4444721Z   ---
+2026-10-21T19:05:17.4445215Z   duration_ms: 0.8254
+2026-10-21T19:05:17.4445711Z   type: 'test'
+2026-10-21T19:05:17.4446158Z   ...
+2026-10-21T19:05:17.4447032Z # Subtest: capture payload carries api key, event, distinct id and properties
+2026-10-21T19:05:17.4448194Z ok 9 - capture payload carries api key, event, distinct id and properties
+2026-10-21T19:05:17.4449692Z   ---
+2026-10-21T19:05:17.4450247Z   duration_ms: 0.9343
+2026-10-21T19:05:17.4450876Z   type: 'test'
+2026-10-21T19:05:17.4451428Z   ...
+2026-10-21T19:05:17.4455761Z # Subtest: capture respects a custom capture url (EU projects)
+2026-10-21T19:05:17.4457002Z ok 10 - capture respects a custom capture url (EU projects)
+2026-10-21T19:05:17.4457974Z   ---
+2026-10-21T19:05:17.4458641Z   duration_ms: 0.9708
+2026-10-21T19:05:17.4459038Z   type: 'test'
+2026-10-21T19:05:17.4459380Z   ...
+2026-10-21T19:05:17.4662176Z 1..10
+2026-10-21T19:05:17.4662677Z # tests 10
+2026-10-21T19:05:17.4663129Z # suites 0
+2026-10-21T19:05:17.4663830Z # pass 10
+2026-10-21T19:05:17.4664888Z # fail 0
+2026-10-21T19:05:17.4665247Z # cancelled 0
+2026-10-21T19:05:17.4666565Z # skipped 0
+2026-10-21T19:05:17.4667996Z # todo 0
+2026-10-21T19:05:17.4668948Z # duration_ms 299.9829
+2026-10-21T19:05:17.5757945Z ##[group]Run npm run test:updates && npm run test:asset-config && npm run test:notices && npm run check:notices
+2026-10-21T19:05:17.5759298Z npm run test:updates && npm run test:asset-config && npm run test:notices && npm run check:notices
+2026-10-21T19:05:17.5834288Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-10-21T19:05:17.5834715Z env:
+2026-10-21T19:05:17.5834925Z   TOOLBOX_REQUIRE_QPDF: 1
+2026-10-21T19:05:17.5835432Z   VITE_POSTHOG_KEY: ***
+2026-10-21T19:05:17.5835697Z   VITE_TOOLBOX_TARGET_PLATFORM: windows
+2026-10-21T19:05:17.5836019Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-10-21T19:05:17.5836342Z   CARGO_INCREMENTAL: 0
+2026-10-21T19:05:17.5836586Z   CARGO_TERM_COLOR: always
+2026-10-21T19:05:17.5837146Z   CACHE_ON_FAILURE: false
+2026-10-21T19:05:17.5837411Z ##[endgroup]
+2026-10-21T19:05:18.3306280Z 
+2026-10-21T19:05:18.3307001Z > toolbox@1.0.14 test:updates
+2026-10-21T19:05:18.3307827Z > tsx --test tests/updates.test.ts
+2026-10-21T19:05:18.3308702Z 
+2026-10-21T19:05:18.5604220Z TAP version 13
+2026-10-21T19:05:18.7893331Z # Subtest: GitHub and development builds offer in-app updates
+2026-10-21T19:05:18.7901064Z ok 1 - GitHub and development builds offer in-app updates
+2026-10-21T19:05:18.7901668Z   ---
+2026-10-21T19:05:18.7902021Z   duration_ms: 1.0352
+2026-10-21T19:05:18.7902416Z   type: 'test'
+2026-10-21T19:05:18.7902776Z   ...
+2026-10-21T19:05:18.7909672Z # Subtest: the Microsoft Store build leaves updates to the Store
+2026-10-21T19:05:18.7914257Z ok 2 - the Microsoft Store build leaves updates to the Store
+2026-10-21T19:05:18.7915461Z   ---
+2026-10-21T19:05:18.7915844Z   duration_ms: 0.1553
+2026-10-21T19:05:18.7916243Z   type: 'test'
+2026-10-21T19:05:18.7916464Z   ...
+2026-10-21T19:05:18.8104752Z 1..2
+2026-10-21T19:05:18.8105397Z # tests 2
+2026-10-21T19:05:18.8107012Z # suites 0
+2026-10-21T19:05:18.8107835Z # pass 2
+2026-10-21T19:05:18.8108666Z # fail 0
+2026-10-21T19:05:18.8109674Z # cancelled 0
+2026-10-21T19:05:18.8110106Z # skipped 0
+2026-10-21T19:05:18.8111117Z # todo 0
+2026-10-21T19:05:18.8111518Z # duration_ms 272.902
+2026-10-21T19:05:19.1503963Z 
+2026-10-21T19:05:19.1505605Z > toolbox@1.0.14 test:asset-config
+2026-10-21T19:05:19.1506394Z > node --test tests/tauri-asset-config.test.mjs
+2026-10-21T19:05:19.1506819Z 
+2026-10-21T19:05:19.2558199Z TAP version 13
+2026-10-21T19:05:19.3290616Z # Subtest: enables the Tauri v2 asset protocol without a broad static filesystem scope
+2026-10-21T19:05:19.3296212Z ok 1 - enables the Tauri v2 asset protocol without a broad static filesystem scope
+2026-10-21T19:05:19.3297486Z   ---
+2026-10-21T19:05:19.3298267Z   duration_ms: 2.2253
+2026-10-21T19:05:19.3299059Z   type: 'test'
+2026-10-21T19:05:19.3299800Z   ...
+2026-10-21T19:05:19.3307411Z # Subtest: relies on the existing dialog-selected file scope for previews
+2026-10-21T19:05:19.3311358Z ok 2 - relies on the existing dialog-selected file scope for previews
+2026-10-21T19:05:19.3313468Z   ---
+2026-10-21T19:05:19.3313950Z   duration_ms: 0.1864
+2026-10-21T19:05:19.3314378Z   type: 'test'
+2026-10-21T19:05:19.3315480Z   ...
+2026-10-21T19:05:19.3316093Z # Subtest: compiles the in-app updater only into GitHub builds
+2026-10-21T19:05:19.3319956Z ok 3 - compiles the in-app updater only into GitHub builds
+2026-10-21T19:05:19.3320653Z   ---
+2026-10-21T19:05:19.3321054Z   duration_ms: 1.4797
+2026-10-21T19:05:19.3321485Z   type: 'test'
+2026-10-21T19:05:19.3321876Z   ...
+2026-10-21T19:05:19.3322971Z # Subtest: bundles the third-party notices in every build
+2026-10-21T19:05:19.3325663Z ok 4 - bundles the third-party notices in every build
+2026-10-21T19:05:19.3326286Z   ---
+2026-10-21T19:05:19.3326625Z   duration_ms: 4.9792
+2026-10-21T19:05:19.3327018Z   type: 'test'
+2026-10-21T19:05:19.3327371Z   ...
+2026-10-21T19:05:19.3437967Z 1..4
+2026-10-21T19:05:19.3439355Z # tests 4
+2026-10-21T19:05:19.3439912Z # suites 0
+2026-10-21T19:05:19.3441262Z # pass 4
+2026-10-21T19:05:19.3441882Z # fail 0
+2026-10-21T19:05:19.3446342Z # cancelled 0
+2026-10-21T19:05:19.3446715Z # skipped 0
+2026-10-21T19:05:19.3446945Z # todo 0
+2026-10-21T19:05:19.3447234Z # duration_ms 109.4604
+2026-10-21T19:05:19.6699455Z 
+2026-10-21T19:05:19.6700224Z > toolbox@1.0.14 test:notices
+2026-10-21T19:05:19.6700975Z > node --test tests/third-party-notices.test.mjs
+2026-10-21T19:05:19.6701416Z 
+2026-10-21T19:05:19.7763008Z TAP version 13
+2026-10-21T19:05:19.8701945Z # Subtest: licenseIds splits SPDX and legacy slash expressions
+2026-10-21T19:05:19.8710602Z ok 1 - licenseIds splits SPDX and legacy slash expressions
+2026-10-21T19:05:19.8711459Z   ---
+2026-10-21T19:05:19.8712075Z   duration_ms: 2.1185
+2026-10-21T19:05:19.8712719Z   type: 'test'
+2026-10-21T19:05:19.8713332Z   ...
+2026-10-21T19:05:19.8723311Z # Subtest: globMatches is case-insensitive and anchors the whole name
+2026-10-21T19:05:19.8726373Z ok 2 - globMatches is case-insensitive and anchors the whole name
+2026-10-21T19:05:19.8728591Z   ---
+2026-10-21T19:05:19.8729346Z   duration_ms: 0.4304
+2026-10-21T19:05:19.8729790Z   type: 'test'
+2026-10-21T19:05:19.8730144Z   ...
+2026-10-21T19:05:19.8731769Z # Subtest: every native component names a license text that ships in the notices
+2026-10-21T19:05:19.8736048Z ok 3 - every native component names a license text that ships in the notices
+2026-10-21T19:05:19.8738024Z   ---
+2026-10-21T19:05:19.8738723Z   duration_ms: 4.1445
+2026-10-21T19:05:19.8739281Z   type: 'test'
+2026-10-21T19:05:19.8739764Z   ...
+2026-10-21T19:05:19.8741229Z # Subtest: unlistedBinaries flags unknown executables and accepts listed ones
+2026-10-21T19:05:19.8743641Z ok 4 - unlistedBinaries flags unknown executables and accepts listed ones
+2026-10-21T19:05:19.8744949Z   ---
+2026-10-21T19:05:19.8745557Z   duration_ms: 10.9306
+2026-10-21T19:05:19.8746169Z   type: 'test'
+2026-10-21T19:05:19.8746711Z   ...
+2026-10-21T19:05:19.8878072Z 1..4
+2026-10-21T19:05:19.8879524Z # tests 4
+2026-10-21T19:05:19.8879904Z # suites 0
+2026-10-21T19:05:19.8881701Z # pass 4
+2026-10-21T19:05:19.8882096Z # fail 0
+2026-10-21T19:05:19.8883574Z # cancelled 0
+2026-10-21T19:05:19.8884003Z # skipped 0
+2026-10-21T19:05:19.8885395Z # todo 0
+2026-10-21T19:05:19.8885842Z # duration_ms 134.6895
+2026-10-21T19:05:20.2452877Z 
+2026-10-21T19:05:20.2453769Z > toolbox@1.0.14 check:notices
+2026-10-21T19:05:20.2454525Z > node scripts/third-party-notices.mjs --check
+2026-10-21T19:05:20.2454981Z 
+2026-10-21T19:06:02.2129803Z     Updating crates.io index
+2026-10-21T19:06:04.5090713Z THIRD-PARTY-NOTICES.txt is out of date. Run: node scripts/third-party-notices.mjs
+2026-10-21T19:06:04.5624275Z ##[error]Process completed with exit code 1.
+2026-10-21T19:06:04.5923083Z ##[group]Run $dataDirectory = Join-Path $env:RUNNER_TEMP 'toolbox-webview2-user-data'
+2026-10-21T19:06:04.5924005Z $dataDirectory = Join-Path $env:RUNNER_TEMP 'toolbox-webview2-user-data'
+2026-10-21T19:06:04.5924965Z $portFiles = Get-ChildItem -Path $dataDirectory -Filter DevToolsActivePort -File -Recurse -ErrorAction SilentlyContinue
+2026-10-21T19:06:04.5925721Z if (-not $portFiles) {
+2026-10-21T19:06:04.5926485Z   Write-Host "No DevToolsActivePort found under $dataDirectory"
+2026-10-21T19:06:04.5926925Z } else {
+2026-10-21T19:06:04.5927193Z   foreach ($portFile in $portFiles) {
+2026-10-21T19:06:04.5927685Z     Write-Host "Found DevToolsActivePort at $($portFile.FullName)"
+2026-10-21T19:06:04.5928196Z     Get-Content -Raw -Path $portFile.FullName
+2026-10-21T19:06:04.5928573Z   }
+2026-10-21T19:06:04.5928795Z }
+2026-10-21T19:06:04.6025179Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-10-21T19:06:04.6025673Z env:
+2026-10-21T19:06:04.6025929Z   TOOLBOX_REQUIRE_QPDF: 1
+2026-10-21T19:06:04.6026536Z   VITE_POSTHOG_KEY: ***
+2026-10-21T19:06:04.6026852Z   VITE_TOOLBOX_TARGET_PLATFORM: windows
+2026-10-21T19:06:04.6027221Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-10-21T19:06:04.6027565Z   CARGO_INCREMENTAL: 0
+2026-10-21T19:06:04.6027869Z   CARGO_TERM_COLOR: always
+2026-10-21T19:06:04.6028203Z   CACHE_ON_FAILURE: false
+2026-10-21T19:06:04.6028489Z ##[endgroup]
+2026-10-21T19:06:05.1599454Z No DevToolsActivePort found under D:\a\_temp\toolbox-webview2-user-data
+2026-10-21T19:06:05.2294765Z ##[group]Run actions/upload-artifact@v7
+2026-10-21T19:06:05.2295114Z with:
+2026-10-21T19:06:05.2295344Z   name: toolbox-windows-desktop-smoke
+2026-10-21T19:06:05.2295656Z   path: D:\a\_temp/toolbox-desktop-smoke/
+2026-10-21T19:06:05.2295957Z   if-no-files-found: warn
+2026-10-21T19:06:05.2296203Z   compression-level: 6
+2026-10-21T19:06:05.2296421Z   overwrite: false
+2026-10-21T19:06:05.2296642Z   include-hidden-files: false
+2026-10-21T19:06:05.2296881Z   archive: true
+2026-10-21T19:06:05.2297079Z env:
+2026-10-21T19:06:05.2298065Z   TOOLBOX_REQUIRE_QPDF: 1
+2026-10-21T19:06:05.2299991Z   VITE_POSTHOG_KEY: ***
+2026-10-21T19:06:05.2300505Z   VITE_TOOLBOX_TARGET_PLATFORM: windows
+2026-10-21T19:06:05.2301219Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-10-21T19:06:05.2301916Z   CARGO_INCREMENTAL: 0
+2026-10-21T19:06:05.2302474Z   CARGO_TERM_COLOR: always
+2026-10-21T19:06:05.2303043Z   CACHE_ON_FAILURE: false
+2026-10-21T19:06:05.2303583Z ##[endgroup]
+2026-10-21T19:06:05.4298066Z ##[warning]No files were found with the provided path: D:\a\_temp/toolbox-desktop-smoke/. No artifacts will be uploaded.
+2026-10-21T19:06:05.4658421Z Post job cleanup.
+2026-10-21T19:06:05.6890461Z [command]"C:\Program Files\Git\bin\git.exe" version
+2026-10-21T19:06:05.7295092Z git version 2.56.0.windows.2
+2026-10-21T19:06:05.7393525Z Temporarily overriding HOME='D:\a\_temp\16df7050-bf3f-42f0-ba8f-a3f5f11436e8' before making global git config changes
+2026-10-21T19:06:05.7396443Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-21T19:06:05.7412831Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\toolbox\toolbox
+2026-10-21T19:06:05.7988395Z Removing SSH command configuration
+2026-10-21T19:06:05.8001279Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-10-21T19:06:05.8468167Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-10-21T19:06:06.5034055Z Removing HTTP extra header
+2026-10-21T19:06:06.5046218Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-21T19:06:06.5465703Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-10-21T19:06:07.1901862Z Removing includeIf entries pointing to credentials config files
+2026-10-21T19:06:07.1914780Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-21T19:06:07.2309451Z includeif.gitdir:D:/a/toolbox/toolbox/.git.path
+2026-10-21T19:06:07.2310280Z includeif.gitdir:D:/a/toolbox/toolbox/.git/worktrees/*.path
+2026-10-21T19:06:07.2310986Z includeif.gitdir:/github/workspace/.git.path
+2026-10-21T19:06:07.2311708Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-21T19:06:07.2359862Z [command]"C:\Program Files\Git\bin\git.exe" config --local --get-all includeif.gitdir:D:/a/toolbox/toolbox/.git.path
+2026-10-21T19:06:07.2732680Z D:\a\_temp\git-credentials-0fc204e0-9937-4191-b211-5cf2b0b02039.config
+2026-10-21T19:06:07.2782914Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset includeif.gitdir:D:/a/toolbox/toolbox/.git.path D\:\\a\\_temp\\git\-credentials\-0fc204e0\-9937\-4191\-b211\-5cf2b0b02039\.config
+2026-10-21T19:06:07.3208975Z [command]"C:\Program Files\Git\bin\git.exe" config --local --get-all includeif.gitdir:D:/a/toolbox/toolbox/.git/worktrees/*.path
+2026-10-21T19:06:07.3573317Z D:\a\_temp\git-credentials-0fc204e0-9937-4191-b211-5cf2b0b02039.config
+2026-10-21T19:06:07.3621838Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset includeif.gitdir:D:/a/toolbox/toolbox/.git/worktrees/*.path D\:\\a\\_temp\\git\-credentials\-0fc204e0\-9937\-4191\-b211\-5cf2b0b02039\.config
+2026-10-21T19:06:07.4037986Z [command]"C:\Program Files\Git\bin\git.exe" config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-10-21T19:06:07.4493558Z /github/runner_temp/git-credentials-0fc204e0-9937-4191-b211-5cf2b0b02039.config
+2026-10-21T19:06:07.4555660Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset includeif.gitdir:/github/workspace/.git.path \/github\/runner_temp\/git\-credentials\-0fc204e0\-9937\-4191\-b211\-5cf2b0b02039\.config
+2026-10-21T19:06:07.5009160Z [command]"C:\Program Files\Git\bin\git.exe" config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-21T19:06:07.5366046Z /github/runner_temp/git-credentials-0fc204e0-9937-4191-b211-5cf2b0b02039.config
+2026-10-21T19:06:07.5415647Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path \/github\/runner_temp\/git\-credentials\-0fc204e0\-9937\-4191\-b211\-5cf2b0b02039\.config
+2026-10-21T19:06:07.5845587Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-10-21T19:06:08.2005090Z Removing credentials config 'D:\a\_temp\git-credentials-0fc204e0-9937-4191-b211-5cf2b0b02039.config'
+2026-10-21T19:06:08.2248883Z Cleaning up orphan processes
+2026-10-21T19:06:08.2912363Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/setup-node@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

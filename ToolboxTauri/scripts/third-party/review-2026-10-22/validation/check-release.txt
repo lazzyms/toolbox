@@ -1,0 +1,112 @@
+
+> toolbox@1.0.14 check:release
+> npm run check:shadcn-components && npm run check:notices && npm run check:matrix && npm run test:qpdf-release && node scripts/check-release-readiness.mjs
+
+
+> toolbox@1.0.14 check:shadcn-components
+> node scripts/check-shadcn-components.mjs
+
+Verified neutral shadcn components and blocked legacy tints, component CSS re-skinning, native controls, raw dialogs, click-only layout actions, and non-Card reusable surfaces across 53 app source files.
+
+> toolbox@1.0.14 check:notices
+> node scripts/third-party-notices.mjs --check
+
+THIRD-PARTY-NOTICES.txt is up to date.
+
+> toolbox@1.0.14 check:matrix
+> npm run test:capabilities && npm run test:outcomes && npm run test:retired-ids && node scripts/check-tool-matrix.mjs && node scripts/check-workspace-consolidation.mjs
+
+
+> toolbox@1.0.14 test:capabilities
+> tsx --test tests/capability-registry.test.ts
+
+✔ UI capabilities are the shared native contract facts (1.566375ms)
+✔ every tool declares one output suffix and many-to-one tools take ordered inputs (0.220084ms)
+✔ every many-to-one tool opens the save step and sends the chosen path (0.981958ms)
+✔ workspace membership covers every registered utility exactly once (0.090208ms)
+✔ workspace entries group editor tools into one entry and list More tools last (0.303791ms)
+✔ shared capability parsing rejects drift-prone shapes (0.179625ms)
+ℹ tests 6
+ℹ suites 0
+ℹ pass 6
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 143.533542
+
+> toolbox@1.0.14 test:outcomes
+> tsx --test tests/job-outcome.test.ts
+
+✔ native-shaped outcomes parse into the TypeScript contract for all three states (1.712167ms)
+✔ outcomes from before the state field are rejected at the boundary (0.258458ms)
+✔ inconsistent native outcomes are rejected (0.34575ms)
+✔ a read-only output folder failure carries the output folder pointer (0.08375ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 139.92325
+
+> toolbox@1.0.14 test:retired-ids
+> tsx --test tests/retired-tool-ids.test.ts
+
+✔ saved favorites and recents move to replacements, drop removed and unknown ids, and keep first positions (1.535834ms)
+✔ the rewrite does not run again on a later launch (0.091083ms)
+✔ a table with new rows runs once more from the stored marker (0.079666ms)
+✔ a crash mid-migration keeps every favorite and the next launch finishes the same rewrite (0.245417ms)
+✔ unsaved and unreadable lists are left as they are (0.076375ms)
+✔ the shipped table runs at most once and leaves a marker only when it has a version (0.07475ms)
+✔ the shipped table sends the retired Remove Password id to Lock & Unlock (0.09575ms)
+✔ the shipped table sends the retired Protect PDF id to Lock & Unlock, also after the first migration ran (0.065375ms)
+✔ the shipped table sends the retired Protect Office Files id to Lock & Unlock, also after the second migration ran (0.109541ms)
+✔ the retired tool id table rejects ids that are still registered or map nowhere (0.191625ms)
+✔ tool pointer targets declared by native tools are registered and never retired (13.659ms)
+ℹ tests 11
+ℹ suites 0
+ℹ pass 11
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 153.166209
+Tool matrix passed: 35 tools, 35 explicit entries
+Workspace consolidation passed: 35 atomic IDs, 6 workspaces, no legacy workspace views
+
+> toolbox@1.0.14 test:qpdf-release
+> node --test tests/qpdf-release-readiness.test.mjs
+
+✔ passes a native arm64 qpdf for macOS (1.500125ms)
+✔ passes a universal qpdf that carries an arm64 slice for macOS (0.251792ms)
+✔ passes a native x64 qpdf for Windows x86_64 (0.24075ms)
+✔ passes a native arm64 qpdf for Windows arm64 (0.192292ms)
+✔ passes a qpdf exactly at the minimum (0.191458ms)
+✔ fails an emulated x64 qpdf on Windows arm64 (0.19375ms)
+✔ fails an arm64 qpdf on Windows x86_64 (0.170958ms)
+✔ fails an x86_64-only qpdf on macOS arm64 (0.170583ms)
+✔ fails a Windows qpdf staged for macOS (0.182375ms)
+✔ fails a script that is not a native executable (0.2005ms)
+✔ fails a qpdf below the minimum (0.190625ms)
+✔ fails a qpdf that reports no version (0.170458ms)
+✔ fails a missing qpdf without running anything (0.08025ms)
+✔ does not run a qpdf built for another architecture (0.2265ms)
+✔ pins one minimum and exact, checksummed Windows archives for each Windows target (0.115792ms)
+✔ release readiness names the cause when a release qpdf is missing (76.846541ms)
+✔ release readiness names the cause when a release qpdf is emulated (77.626875ms)
+✔ release readiness names the cause when a native release qpdf is too old (513.754791ms)
+✔ release readiness passes a native release qpdf at the pinned minimum (468.280959ms)
+✔ the macOS bundling script refuses a qpdf below the minimum before bundling anything (214.769167ms)
+✔ the macOS bundling script refuses a qpdf that is not a native arm64 binary (90.923291ms)
+✔ the macOS bundling script refuses a qpdf path that does not exist (90.330958ms)
+ℹ tests 22
+ℹ suites 0
+ℹ pass 22
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1663.174417
+Release configuration passed: 5 icons, all Tauri targets, updater and 7 file associations configured, qpdf minimum 11.0.0

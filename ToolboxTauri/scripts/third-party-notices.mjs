@@ -112,6 +112,8 @@ export const buildNotices = () => {
             component.note && `  ${component.note}`,
             component.files && `  Files: ${component.files.join(", ")}`,
             component.licenseFile && `\n${normalize(readFileSync(join(projectRoot, component.licenseFile), "utf8"))}`,
+            // Upstream NOTICE, PATENTS and COPYING files that must be reproduced alongside the license text.
+            ...(component.notices ?? []).map((file) => `\n  ${basename(file)}:\n\n${normalize(readFileSync(join(projectRoot, file), "utf8"))}`),
         ].filter(Boolean).join("\n");
     });
 
@@ -208,7 +210,8 @@ const main = () => {
     }
     const notices = buildNotices();
     if (mode === "--check") {
-        const current = existsSync(outputPath) ? readFileSync(outputPath, "utf8") : "";
+        // Windows checkouts may convert the committed file to CRLF.
+        const current = existsSync(outputPath) ? readFileSync(outputPath, "utf8").replace(/\r\n/g, "\n") : "";
         if (current !== notices) {
             console.error("THIRD-PARTY-NOTICES.txt is out of date. Run: node scripts/third-party-notices.mjs");
             process.exit(1);
