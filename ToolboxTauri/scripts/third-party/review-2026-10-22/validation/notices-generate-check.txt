@@ -1,0 +1,2 @@
+Wrote /Volumes/AgentWorkspaces/Projects/Personal/toolbox/.claude/worktrees/hungry-burnell-468269/ToolboxTauri/src-tauri/resources/licenses/THIRD-PARTY-NOTICES.txt (1271 KB)
+THIRD-PARTY-NOTICES.txt is up to date.

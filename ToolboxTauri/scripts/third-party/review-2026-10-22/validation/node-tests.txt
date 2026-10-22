@@ -1,0 +1,17 @@
+✔ enables the Tauri v2 asset protocol without a broad static filesystem scope (1.737291ms)
+✔ relies on the existing dialog-selected file scope for previews (0.096959ms)
+✔ compiles the in-app updater only into GitHub builds (0.877083ms)
+✔ bundles the third-party notices in every build (1.032833ms)
+✔ licenseIds splits SPDX and legacy slash expressions (2.100709ms)
+✔ globMatches is case-insensitive and anchors the whole name (0.189208ms)
+✔ each macOS TLS library is credited to the project that ships it (2.257625ms)
+✔ every native component names a license text that ships in the notices (0.696708ms)
+✔ unlistedBinaries flags unknown executables and accepts listed ones (2.066458ms)
+ℹ tests 9
+ℹ suites 0
+ℹ pass 9
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 103.981416

@@ -7,6 +7,8 @@ edition = "2021"
 default-run = "toolbox"
 
 [features]
+# The in-app updater. The Microsoft Store build leaves it out because the Store delivers updates.
+updater = ["dep:tauri-plugin-updater"]
 vision-adapter = ["dep:tract-onnx"]
 
 [[bin]]
@@ -21,7 +23,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-process = "2"
-tauri-plugin-updater = "2"
+tauri-plugin-updater = { version = "2", optional = true }
 tauri-plugin-single-instance = "=2.4.0"
 url = "2"
 serde = { version = "1", features = ["derive"] }

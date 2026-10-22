@@ -1,0 +1,40 @@
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.4976630Z   -x <int>                : x-coordinate of the crop area top left corner
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.4977220Z   -y <int>                : y-coordinate of the crop area top left corner
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.4977730Z   -W <int>                : width of crop area in pixels (default is 0)
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.4978260Z   -H <int>                : height of crop area in pixels (default is 0)
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.4978830Z   -layout                 : maintain original physical layout
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.4979360Z   -fixed <fp>             : assume fixed-pitch (or tabular) text
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.4979840Z   -raw                    : keep strings in content stream order
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.4980570Z   -remove-hyphens <string>: end-of-line hyphen handling: none, soft, or all (default: all)
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.4981090Z   -nodiag                 : discard diagonal text
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.4981660Z   -htmlmeta               : generate a simple HTML file, including the meta information
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.4982380Z   -tsv                    : generate a simple TSV file, including the meta information for bounding boxes
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.4983320Z   -enc <string>           : output text encoding name
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.4983700Z   -listenc                : list available encodings
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.4984220Z   -eol <string>           : output end-of-line convention (unix, dos, or mac)
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.4984760Z   -nopgbrk                : don't insert page breaks between pages
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.4985290Z   -urls                   : print the URL of each link next to its link text
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.4986150Z   -bbox                   : output bounding box for each word and page size to html. Sets -htmlmeta
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.4986780Z   -bbox-layout            : like -bbox but with extra layout bounding box data.  Sets -htmlmeta
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.4987430Z   -cropbox                : use the crop box rather than media box
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.4988620Z   -colspacing <fp>        : how much spacing we allow after a word before considering adjacent text to be a new column, as a fraction of the font size (default is 0.7, old releases had a 0.3 default)
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.4989590Z   -opw <string>           : owner password (for encrypted files)
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.4990180Z   -upw <string>           : user password (for encrypted files)
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.4990620Z   -q                      : don't print any messages or errors
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.4991200Z   -v                      : print copyright and version info
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.4991650Z   -h                      : print usage information
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.4992320Z   -help                   : print usage information
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.4992710Z   --help                  : print usage information
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.4993200Z   -?                      : print usage information
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.5999850Z These shipped binaries have no entry in scripts/third-party/native-components.json:
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.6001220Z   /Users/runner/work/toolbox/toolbox/ToolboxTauri/src-tauri/target/release/bundle/macos/Toolbox.app/Contents/Resources/pdf-bin/libassuan.9.dylib
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.6002500Z   /Users/runner/work/toolbox/toolbox/ToolboxTauri/src-tauri/target/release/bundle/macos/Toolbox.app/Contents/Resources/pdf-bin/libgpg-error.0.dylib
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.6003700Z   /Users/runner/work/toolbox/toolbox/ToolboxTauri/src-tauri/target/release/bundle/macos/Toolbox.app/Contents/Resources/pdf-bin/libgpgme.45.dylib
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.6004910Z   /Users/runner/work/toolbox/toolbox/ToolboxTauri/src-tauri/target/release/bundle/macos/Toolbox.app/Contents/Resources/pdf-bin/libgpgmepp.7.dylib
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.6006230Z   /Users/runner/work/toolbox/toolbox/ToolboxTauri/src-tauri/target/release/bundle/macos/Toolbox.app/Contents/Resources/pdf-bin/libnspr4.dylib
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.6008440Z   /Users/runner/work/toolbox/toolbox/ToolboxTauri/src-tauri/target/release/bundle/macos/Toolbox.app/Contents/Resources/pdf-bin/libnss3.dylib
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.6034520Z   /Users/runner/work/toolbox/toolbox/ToolboxTauri/src-tauri/target/release/bundle/macos/Toolbox.app/Contents/Resources/pdf-bin/libnssutil3.dylib
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.6037910Z   /Users/runner/work/toolbox/toolbox/ToolboxTauri/src-tauri/target/release/bundle/macos/Toolbox.app/Contents/Resources/pdf-bin/libplc4.dylib
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.6041180Z   /Users/runner/work/toolbox/toolbox/ToolboxTauri/src-tauri/target/release/bundle/macos/Toolbox.app/Contents/Resources/pdf-bin/libplds4.dylib
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.6047520Z   /Users/runner/work/toolbox/toolbox/ToolboxTauri/src-tauri/target/release/bundle/macos/Toolbox.app/Contents/Resources/pdf-bin/libsmime3.dylib
+macOS	Bundle qpdf into app (macOS)	2026-10-21T19:20:03.6203010Z ##[error]Process completed with exit code 1.

@@ -165,6 +165,10 @@ jobs:
       - name: Stage offline OCR resources
         run: npm run stage:ocr -- ${{ matrix.target }}
         working-directory: ToolboxTauri
+      - name: Verify third-party notices cover Windows resources
+        if: runner.os == 'Windows'
+        run: node scripts/third-party-notices.mjs --binaries src-tauri/resources
+        working-directory: ToolboxTauri
       - name: Build macOS
         if: runner.os == 'macOS'
         working-directory: ToolboxTauri

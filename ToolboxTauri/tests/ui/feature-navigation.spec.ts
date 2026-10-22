@@ -30,6 +30,7 @@ type TestWindow = Window & {
     __toolboxTiffInspectionDelayMs?: number;
     __toolboxInspectionError?: string;
     __toolboxActionFailure?: { command: string; path: string; message: string; delayMs?: number };
+    __toolboxNoticesFailure?: string;
     __toolboxSecondPick?: boolean;
     __toolboxDialogResults?: Array<string | string[] | null>;
     __toolboxOutputSettings?: OutputSettings;
@@ -86,6 +87,11 @@ test.beforeEach(async ({ page }) => {
                         return `${pdfFixturePath}.second.pdf`;
                     }
                     return fixturePath;
+                }
+                if (command === "open_third_party_notices") {
+                    const failure = (window as TestWindow).__toolboxNoticesFailure;
+                    if (failure) throw failure;
+                    return null;
                 }
                 if (command === "open_output_path" || command === "reveal_output_path") {
                     const failure = (window as TestWindow).__toolboxActionFailure;
@@ -873,6 +879,14 @@ test("the settings sidebar switches sections and lists only the built ones", asy
     await expect(about).toContainText(`Version ${appVersion} for macOS`);
     await expect(about.getByRole("img", { name: "Buy Me a Coffee donation QR code" })).toBeVisible();
     await expect(about).toContainText("Support Toolbox");
+
+    await about.getByRole("button", { name: "Open notices" }).click();
+    await expect.poll(() => page.evaluate(() =>
+        ((window as TestWindow).__toolboxInvocations ?? []).filter(({ command }) => command === "open_third_party_notices").length,
+    )).toBe(1);
+    await page.evaluate(() => { (window as TestWindow).__toolboxNoticesFailure = "The third-party notices are missing from this copy of Toolbox. Reinstall Toolbox to restore them."; });
+    await about.getByRole("button", { name: "Open notices" }).click();
+    await expect(about).toContainText("The third-party notices are missing from this copy of Toolbox.");
 });
 
 test("Find a tool on the settings page opens the tool search", async ({ page }) => {

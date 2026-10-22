@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ComponentType } from "react";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { invoke } from "@tauri-apps/api/core";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { ArrowLeft, Check, Eye, Folder, Info, List, LoaderCircle, Search, Shield, type LucideIcon } from "lucide-react";
 import packageInfo from "../../package.json";
@@ -15,6 +16,7 @@ import { shortenHomePath, useHomeDir } from "../homePath";
 import type { OutputMode } from "../contracts";
 import { ShortcutHint } from "../components/ShortcutHint";
 import { isWindows, shortcutAria, shortcutLabel, shortcuts } from "../shortcuts";
+import { inAppUpdatesEnabled } from "../updates";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
@@ -148,7 +150,7 @@ const PrivacySection = () => {
         <div className="settings-row">
           <span className="settings-row-text">
             <Label htmlFor="analytics-share" className="settings-row-title">Share anonymous usage counts</Label>
-            <span className="settings-row-hint">Toolbox counts installs and app opens with PostHog to gauge usage. No personal data is collected.</span>
+            <span className="settings-row-hint">Toolbox sends install and app-open counts with a random install ID to PostHog. It never sends file names or contents.</span>
           </span>
           <Switch id="analytics-share" className="settings-row-control" checked={!optedOut} onCheckedChange={share} />
         </div>
@@ -171,7 +173,18 @@ const updateStatus = (state: UpdateState, version: string | null) => {
   }
 };
 
-const UpdatesSection = () => {
+const StoreUpdatesSection = () => (
+  <Card className="settings-update py-0">
+    <CardContent className="settings-update-content">
+      <span className="settings-row-text">
+        <span className="settings-update-title">Updates come from the Microsoft Store</span>
+        <span className="settings-row-hint">Version {packageInfo.version}. The Store installs new versions for you.</span>
+      </span>
+    </CardContent>
+  </Card>
+);
+
+const InAppUpdatesSection = () => {
   const [state, setState] = useState<UpdateState>("idle");
   const [version, setVersion] = useState<string | null>(null);
   const checkForUpdates = async () => {
@@ -215,6 +228,31 @@ const UpdatesSection = () => {
   );
 };
 
+const UpdatesSection = inAppUpdatesEnabled() ? InAppUpdatesSection : StoreUpdatesSection;
+
+const NoticesCard = () => {
+  const [error, setError] = useState<string | null>(null);
+  const openNotices = async () => {
+    setError(null);
+    try {
+      await invoke("open_third_party_notices");
+    } catch (reason) {
+      setError(String(reason));
+    }
+  };
+  return (
+    <Card className="settings-update py-0">
+      <CardContent className="settings-update-content">
+        <span className="settings-row-text" role="status" aria-live="polite">
+          <span className="settings-update-title">Third-party notices</span>
+          <span className="settings-row-hint">{error ?? "Licenses for the open-source software inside Toolbox."}</span>
+        </span>
+        <Button variant="outline" size="xs" onClick={() => void openNotices()}>Open notices</Button>
+      </CardContent>
+    </Card>
+  );
+};
+
 const AboutSection = () => (
   <>
     <div className="settings-about">
@@ -233,6 +271,7 @@ const AboutSection = () => (
         </span>
       </CardContent>
     </Card>
+    <NoticesCard />
   </>
 );
 

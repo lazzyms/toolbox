@@ -152,6 +152,10 @@ jobs:
         run: npm run stage:ocr
         working-directory: ToolboxTauri
 
+      - name: Verify third-party notices cover shipped binaries
+        run: node scripts/third-party-notices.mjs --binaries src-tauri/resources
+        working-directory: ToolboxTauri
+
       - name: Build unsigned MSIX
         shell: pwsh
         working-directory: ToolboxTauri
