@@ -16,7 +16,7 @@ Pick a run id like `20261020-222027-file-security` and set `run=.verification/ve
 From `ToolboxTauri`, build the verification bundle once per code change and open it:
 
 ```sh
-npm run tauri -- build --debug --config ../.Codex/skills/verify-toolbox/tauri.verify.json
+npm run tauri -- build --debug --config ../.agents/skills/verify-toolbox/tauri.verify.json
 open -n -W "src-tauri/target/debug/bundle/macos/Toolbox Verification.app"
 ```
 
@@ -31,10 +31,10 @@ The app is ready when `list_windows({app:"Toolbox Verification"})` returns a win
 Run the read-only check from anywhere in the repo:
 
 ```sh
-.Codex/skills/verify-toolbox/helpers/doctor.sh
+.agents/skills/verify-toolbox/helpers/doctor.sh
 ```
 
-It checks that `package.json` and `tauri.conf.json` agree, the bundle exists with the verification identifier and the same version, and exactly one verification process runs. Success prints `doctor: OK version=<v> pid=<pid>`. Any failure names the check and exits non-zero. Use that pid for CUA calls. The build needs no account or sign-in.
+It checks that `package.json` and `tauri.conf.json` agree, the bundle exists with the verification identifier and the same version, and exactly one verification process runs. AppKit helpers that map the binary after an Open panel, such as `openAndSavePanelService`, are not counted. Success prints `doctor: OK version=<v> pid=<pid>`. Any failure names the check and exits non-zero. Use that pid for CUA calls. The build needs no account or sign-in.
 
 This recipe targets macOS only. Do not install an MSI or drive an installed app as a substitute.
 
@@ -43,7 +43,7 @@ This recipe targets macOS only. Do not install an MSI or drive an installed app 
 Make disposable inputs first:
 
 ```sh
-.Codex/skills/verify-toolbox/helpers/make-fixtures.sh "$run"
+.agents/skills/verify-toolbox/helpers/make-fixtures.sh "$run"
 ```
 
 It writes `plain.pdf`, a permissions-only `restricted.pdf`, a `legacy.doc` stub and `inputs.sha256` into `$run/scratch/`, then prints their absolute paths. It needs `qpdf` and `openssl`.
@@ -60,9 +60,15 @@ Then drive with CUA in the background:
 - Use one short session label on every call.
 - Read with `get_window_state` and act by element token or by name in `run_steps`, for example `{"click":{"role":"button","name":"Unlock 1 file"}}`.
 - Use an `expect` with `gone:true` to wait for progress text to clear.
-- Choose `Choose files to process` to open the panel. It is a remote sheet. Pick a file with a background pixel click on its icon in a fresh screenshot. `AXOpen` on the row fails there.
+- Press `Choose files to process` by name. The Open panel is a separate window of the app titled `Open`. Its tree is empty and window-scoped screenshots of it go stale, so pick with desktop clicks:
+  1. `list_windows({pid})` for the panel's window id.
+  2. `bring_to_front(pid, panel window id)`. Without it another app can sit on top and take the click.
+  3. `get_desktop_state`, then `click({scope:"desktop", x, y})` on the file's icon. Pass x,y in that screenshot's frame; the tool scales them. Do not double them.
+  4. Take a fresh `get_desktop_state` to confirm the selection and an enabled `Open` button, then desktop-click `Open`.
+  Multi-select in the panel has not worked. Drive multi-file batches one file per open, or record them as source-verified.
 - Never send keystrokes into the Open panel, foreground or background. They do not land, and foreground keystrokes can reach another app.
-- `type_text` into a webview field can misreport delivery. Re-read the field before trusting it.
+- For `type_text` inside `run_steps`, target the field with `element_token`. It can misreport delivery, so re-read the field before trusting it.
+- A webview `<select>` (an `AXPopUpButton`) rejects `set_value`. That failed call opens its menu; then `press_key` down or up and `return` picks the option. Re-read the value.
 
 Never browse the user's own folders in the panel. If it opens anywhere but scratch, cancel and reset the default above.
 
