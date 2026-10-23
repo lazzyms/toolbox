@@ -1,38 +1,42 @@
 # Settings
 
-Settings shows the app version and controls appearance, anonymous usage counts, and update checks.
+Settings is a full page with six sections: Appearance, Output location, Privacy, Updates, About and support, and Keyboard shortcuts. Changes save as you make them.
 
 ## Sub-features
 
-- `theme` selects the Dark or Light appearance.
-- `app-version` shows the version from the running Toolbox build.
+- `theme` selects the Light or Dark appearance. Dark is the default.
+- `output-location` saves results next to each original or always in one folder.
 - `privacy-counts` controls anonymous usage counts.
 - `update-check` checks the configured update endpoint and reports current, available, or failed state.
-- `support` displays Toolbox support information.
+- `app-version` shows the version from the running Toolbox build.
+- `support` shows the support QR code and the third-party notices.
+- `shortcuts` lists keyboard shortcuts with a search field.
 
 ## How to get to it (user POV)
 
-- Choose `Settings` in Toolbox navigation.
-- Choose `Close settings` or press `Escape` to return to the command center.
+- Choose `Settings` at the bottom of the sidebar, or press `super+,`.
+- The `Settings` navigation lists the six sections as checkboxes. The page heading is the chosen section's title.
+- Choose `← All tools`, press `Escape`, or press `super+k` to leave. There is no `Close settings` button.
 
 ## Driving it with CUA desktop control
 
 Preconditions:
 
 - The native Toolbox window passes Doctor.
-- Record the selected theme and privacy toggle state before changing either one.
+- Record the selected theme, output location, and privacy switch before changing any of them.
 - Do not run an update check unless the verification request includes an online check.
 
-- **Open Settings.** Choose `Settings`. The dialog heading is `Settings` and sections include Appearance, App info, Support Toolbox, Updates, and Privacy.
-- **Check the version.** Read the `Version` value under App info and compare it with `npm pkg get version` from `ToolboxTauri`.
-- **Change appearance.** Choose `Dark` or `Light` in the `Theme` control. The selected option and app appearance change. Restore the starting theme.
-- **Check the privacy control.** Read the `Don’t send anonymous usage counts` switch state. If the recipe changes it, restore the recorded state before closing Settings.
-- **Check for updates.** Only when the request permits network access, choose `Check for updates` and wait for the `role=status` result. Do not choose installation or restart controls.
-- **Close Settings.** Choose `Close settings`. The command center returns.
+- **Open Settings.** Choose `Settings`. Confirm the six section checkboxes and the hint "Changes save as you make them."
+- **Change appearance.** In Appearance, choose `Light` or `Dark` in the `Theme` radio group. The whole UI changes. Restore the starting theme.
+- **Read the output location.** In Output location, the `Save results` radio group offers `Next to each original` and `Always in one folder`, with `Choose output folder`. Recipes that check files beside scratch inputs need `Next to each original`.
+- **Read the privacy control.** In Privacy, read the `Share anonymous usage counts` switch. Checked means counts are shared. If the recipe changes it, restore the recorded state.
+- **Check the version.** Updates shows "Version <v>." and About and support shows "Version <v> for macOS". Compare with `npm pkg get version` from `ToolboxTauri`.
+- **Check for updates.** Only when the request permits network access, choose `Check now` and wait for the result. Do not choose installation or restart controls.
+- **Read shortcuts.** Keyboard shortcuts has a `Search shortcuts` field and lists Everywhere and Batch tools shortcuts.
 
 ## Gotchas
 
-- Theme and privacy choices persist in the verification app. Restore values changed by the recipe.
-- `Check for updates` contacts the configured update endpoint. It is not a local-only check.
+- Theme, output location, and privacy choices persist in the verification app. Restore values changed by the recipe.
+- `Check now` contacts the configured update endpoint. It is not a local-only check.
 - An update status does not authorize installation. Stop before any download, install, or relaunch action.
-- The support section contains a QR code. It is display-only for this recipe.
+- About and support contains a donation QR code and `Open notices`. Both are display-only for this recipe.

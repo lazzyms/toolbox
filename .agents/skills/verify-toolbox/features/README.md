@@ -16,7 +16,7 @@ Read this index, launch the verification bundle, and run `helpers/doctor.sh` bef
 ## Features
 
 - [Command center](./command-center.md) covers the home sidebar, Views, tool search, favorites, and opening a workspace.
-- [PDF workflows](./pdf-workflows.md) covers the PDF Editor and PDF Conversion views.
-- [Image workflows](./image-workflows.md) covers the Image Editor and Media views.
-- [File security](./file-security.md) covers Lock & Unlock. Proven end to end on 2026-10-20 with `lock-unlock` in Unlock mode.
-- [Settings](./settings.md) covers appearance, app information, updates, and privacy preferences.
+- [PDF workflows](./pdf-workflows.md) covers the PDF Editor and PDF Conversion views and Compress PDF. Proven end to end on 2026-10-23 with `pdf-to-text`.
+- [Image workflows](./image-workflows.md) covers the Image Editor and Media views and Compress Images. Proven end to end on 2026-10-23 with `image-convert`.
+- [File security](./file-security.md) covers Lock & Unlock. Proven end to end on 2026-10-20 in Unlock mode and on 2026-10-23 in Lock mode.
+- [Settings](./settings.md) covers appearance, output location, privacy, updates, about and support, and keyboard shortcuts.
