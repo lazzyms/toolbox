@@ -2,6 +2,7 @@
 
 mod file_actions;
 mod kit;
+mod quick_action;
 
 use crate::file_actions::{open_output_path, reveal_output_path};
 use crate::kit::common::JobOutcome;
@@ -316,6 +317,36 @@ async fn image_metadata(request: tools::MetadataRequest) -> Vec<JobOutcome> { Ba
 #[tauri::command]
 fn inspect_image_metadata(request: tools::MetadataRequest) -> Vec<Result<tools::MetadataReport, String>> { request.paths.into_iter().map(tools::inspect_metadata).collect() }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct QuickActionSetting { id: &'static str, title: &'static str, enabled: bool }
+
+fn quick_action_settings_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    use tauri::Manager;
+    app.path().app_config_dir().map(|dir| dir.join("quick-actions.json")).map_err(|e| e.to_string())
+}
+
+/// Debug builds skip registration so the menus never point at a throwaway dev binary.
+fn register_quick_actions(enabled: &[quick_action::QuickAction]) -> Result<(), String> {
+    if cfg!(debug_assertions) { return Ok(()); }
+    quick_action::register(&std::env::current_exe().map_err(|e| e.to_string())?, enabled)
+}
+
+#[tauri::command]
+fn get_quick_actions(app: tauri::AppHandle) -> Result<Vec<QuickActionSetting>, String> {
+    let enabled = quick_action::load_enabled(&quick_action_settings_path(&app)?);
+    Ok(quick_action::QuickAction::ALL.into_iter()
+        .map(|action| QuickActionSetting { id: action.id(), title: action.title(), enabled: enabled.contains(&action) })
+        .collect())
+}
+
+#[tauri::command]
+async fn set_quick_actions(app: tauri::AppHandle, ids: Vec<String>) -> Result<(), String> {
+    let enabled: Vec<_> = quick_action::QuickAction::ALL.into_iter().filter(|action| ids.iter().any(|id| id == action.id())).collect();
+    quick_action::save_enabled(&quick_action_settings_path(&app)?, &enabled)?;
+    register_quick_actions(&enabled)
+}
+
 fn main() {
     let posthog_client = posthog_client();
     let posthog_log_provider =
@@ -323,6 +354,13 @@ fn main() {
     let _ = POSTHOG_CLIENT.set(posthog_client.clone());
     let _ = POSTHOG_LOG_PROVIDER.set(posthog_log_provider);
     emit_lifecycle_log("posthog_log_exporter_initialized");
+
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(invocation) = quick_action::parse_args(&args) {
+        let succeeded = run_quick_action(invocation);
+        flush_telemetry(posthog_client);
+        std::process::exit(if succeeded { 0 } else { 1 });
+    }
 
     let app = tauri::Builder::default()
         .manage(posthog_client.clone())
@@ -362,16 +400,46 @@ fn main() {
             extract_gif_frames,
             process_tiff_pages
             ,image_metadata
-            ,inspect_image_metadata
+            ,inspect_image_metadata,
+            get_quick_actions,
+            set_quick_actions
         ])
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_updater::Builder::new().build());
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .setup(|app| {
+            let settings = quick_action_settings_path(app.handle())?;
+            std::thread::spawn(move || {
+                if let Err(error) = register_quick_actions(&quick_action::load_enabled(&settings)) {
+                    eprintln!("Quick actions could not be registered: {error}");
+                }
+            });
+            Ok(())
+        });
 
     app.run(tauri::generate_context!())
         .expect("error while running tauri application");
 
     emit_lifecycle_log("toolbox_application_shutting_down");
+    flush_telemetry(posthog_client);
+}
+
+fn run_quick_action(invocation: Result<quick_action::Invocation, String>) -> bool {
+    match invocation {
+        Ok(quick_action::Invocation { action, paths }) => {
+            let outcomes = action.run(paths);
+            capture_tool_run(action.tool(), &outcomes);
+            quick_action::notify("Toolbox", &quick_action::summary(action, &outcomes));
+            outcomes.iter().all(|outcome| outcome.failure.is_none())
+        }
+        Err(error) => {
+            quick_action::notify("Toolbox", &error);
+            false
+        }
+    }
+}
+
+fn flush_telemetry(posthog_client: Option<PostHogClient>) {
     if let Some(provider) = POSTHOG_LOG_PROVIDER.get().and_then(Option::as_ref) {
         let _ = provider.force_flush();
         let _ = provider.shutdown();

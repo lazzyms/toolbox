@@ -48,6 +48,13 @@ test.beforeEach(async ({ page }) => {
                     return { pages: [{ index: 0, x: 0, y: 0, width: 612, height: 792, preview: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='612' height='792'%3E%3Crect width='100%25' height='100%25' fill='white'/%3E%3C/svg%3E" }] };
                 }
                 if (command === "inspect_image_metadata") return ["fixture image"];
+                if (command === "get_quick_actions") {
+                    return [
+                        { id: "compress-pdf", title: "Compress PDF", enabled: true },
+                        { id: "remove-background", title: "Remove Background", enabled: true },
+                    ];
+                }
+                if (command === "set_quick_actions") return null;
                 if (command.startsWith("plugin:")) return null;
 
                 return (window as TestWindow).__toolboxProcessingResults ?? [{
@@ -481,4 +488,18 @@ test.describe("registered feature actions", () => {
             await exerciseFeature(page, utility);
         });
     }
+});
+
+test("settings lets the user choose which quick actions appear in the file manager", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    const group = page.getByRole("dialog", { name: "Settings" }).getByRole("group", { name: "Quick actions" });
+    const compress = group.getByRole("checkbox", { name: "Compress PDF" });
+    await expect(compress).toBeChecked();
+    await expect(group.getByRole("checkbox", { name: "Remove Background" })).toBeChecked();
+
+    await compress.uncheck();
+    await expect(compress).not.toBeChecked();
+    const saved = await page.evaluate(() => (window as TestWindow).__toolboxInvocations!.filter((call) => call.command === "set_quick_actions").map((call) => call.args));
+    expect(saved).toEqual([{ ids: ["remove-background"] }]);
 });

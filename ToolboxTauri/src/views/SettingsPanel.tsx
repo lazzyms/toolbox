@@ -1,8 +1,15 @@
 import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import packageInfo from "../../package.json";
 import qrCode from "../assets/BuyMeACoffeeQR.png";
+
+interface QuickActionSetting {
+  id: string;
+  title: string;
+  enabled: boolean;
+}
 
 interface SettingsPanelProps {
   onClose: () => void;
@@ -14,6 +21,21 @@ export const SettingsPanel = ({ onClose }: SettingsPanelProps) => {
   );
   const [updateState, setUpdateState] = useState<"idle" | "checking" | "available" | "current" | "failed">("idle");
   const [updateVersion, setUpdateVersion] = useState<string | null>(null);
+  const [quickActions, setQuickActions] = useState<QuickActionSetting[]>([]);
+  const [quickActionError, setQuickActionError] = useState<string | null>(null);
+  useEffect(() => {
+    invoke<QuickActionSetting[]>("get_quick_actions").then(setQuickActions, () => setQuickActionError("Could not load quick actions."));
+  }, []);
+  const toggleQuickAction = async (id: string) => {
+    const next = quickActions.map((action) => (action.id === id ? { ...action, enabled: !action.enabled } : action));
+    setQuickActions(next);
+    try {
+      await invoke("set_quick_actions", { ids: next.filter((action) => action.enabled).map((action) => action.id) });
+      setQuickActionError(null);
+    } catch {
+      setQuickActionError("Could not update quick actions.");
+    }
+  };
   useEffect(() => {
     document.body.dataset.theme = theme;
     localStorage.setItem("toolbox-theme", theme);
@@ -69,6 +91,19 @@ export const SettingsPanel = ({ onClose }: SettingsPanelProps) => {
                 Light
               </button>
             </div>
+          </section>
+          <section aria-labelledby="quick-actions-title">
+            <h3 id="quick-actions-title">Quick actions</h3>
+            <p>Choose the tools that appear when you right-click a file in Finder or File Explorer.</p>
+            <div className="quick-action-options" role="group" aria-label="Quick actions">
+              {quickActions.map((action) => (
+                <label key={action.id}>
+                  <input type="checkbox" checked={action.enabled} onChange={() => void toggleQuickAction(action.id)} />
+                  {action.title}
+                </label>
+              ))}
+            </div>
+            {quickActionError && <p role="alert">{quickActionError}</p>}
           </section>
           <section aria-labelledby="app-info-title">
             <h3 id="app-info-title">App info</h3>

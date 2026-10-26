@@ -38,6 +38,7 @@ webpx = "0.4"
 sha2 = "0.11"
 tiff = "0.11"
 tract-onnx = { version = "0.23.7", optional = true }
+notify-rust = "4"
 posthog-rs = "0.27.0"
 opentelemetry = { version = "0.33.0", default-features = false, features = ["logs"] }
 opentelemetry_sdk = { version = "0.33.0", default-features = false, features = ["logs", "rt-tokio"] }
