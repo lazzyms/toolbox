@@ -6,7 +6,7 @@ mod kit;
 mod settings;
 mod shell;
 
-use crate::file_actions::{open_output_path, open_third_party_notices, reveal_output_path};
+use crate::file_actions::{open_output_path, open_sponsor_page, open_third_party_notices, reveal_output_path};
 use crate::kit::common::{note_renamed, JobOutcome};
 use crate::kit::images::{ImageProcessor, Options as ImageOptions};
 use crate::kit::images::tools;
@@ -466,6 +466,7 @@ fn main() {
             open_output_path,
             reveal_output_path,
             open_third_party_notices,
+            open_sponsor_page,
             intake::inspect_intake_paths,
             settings::get_output_settings,
             settings::set_output_settings,

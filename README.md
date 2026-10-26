@@ -3,7 +3,7 @@
 Toolbox is a cross-platform desktop app for private, local-first PDF, document,
 and image utilities. Files are processed on-device and are never uploaded.
 
-[![Build with Ona](https://ona.com/build-with-ona.svg)](https://app.ona.com/#https://github.com/lazzyms/toolbox)
+[![Sponsor lazzyms](https://img.shields.io/badge/Sponsor-lazzyms-ea4aaa?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/lazzyms)
 
 The Tauri app on `main` is the primary Toolbox app and the repository's
 default branch. The website in [`docs/`](docs/) is kept independently.
@@ -95,3 +95,7 @@ coverage with every behavior change. Use short imperative commit messages and
 open pull requests against `main`.
 
 Toolbox is released under the [MIT License](LICENSE).
+
+## Support
+
+Toolbox is free. If it saves you time, [sponsor it on GitHub](https://github.com/sponsors/lazzyms).
