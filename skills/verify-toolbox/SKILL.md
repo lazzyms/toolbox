@@ -14,10 +14,12 @@ From the repository root, install frontend dependencies once and start the Tauri
 ```bash
 cd ToolboxTauri
 npm ci
-npm run tauri dev
+POSTHOG_PROJECT_TOKEN=x POSTHOG_HOST=http://127.0.0.1:9 npm run tauri dev -- -- --bin toolbox
 ```
 
-The Vite dev server listens on `http://localhost:1420`; Tauri opens a desktop window titled `Toolbox`. On macOS, install qpdf with `brew install qpdf` if PDF protection or unlocking is being exercised. On Windows, install qpdf with `choco install qpdf -y`; release builds bundle it beside the executable through `scripts/bundle-qpdf.ps1`.
+Debug builds panic at startup when `POSTHOG_PROJECT_TOKEN` or `POSTHOG_HOST` is unset; the dummy values above keep telemetry local and unreachable. `--bin toolbox` is required because `src-tauri` also builds `toolbox-vision-adapter`, so a bare `npm run tauri dev` fails with "`cargo run` could not determine which binary to run". On exit the debug binary may print an OpenTelemetry "no reactor running" panic from a background thread; the app itself still runs. Debug builds do not register Finder or File Explorer quick actions.
+
+The Vite dev server listens on `http://localhost:1420`; Tauri opens a desktop window titled `Toolbox`. On macOS, install qpdf with `brew install qpdf` if PDF protection, compression, merging, or splitting is being exercised (PDF unlocking uses the in-process `lopdf` reader and does not need qpdf). On Windows, install qpdf with `choco install qpdf -y`; release builds bundle it beside the executable through `scripts/bundle-qpdf.ps1`.
 
 For automated browser UI coverage of every registered feature, run `npm run test:ui` from `ToolboxTauri/`. The suite starts Vite, selects each of the 32 registry entries in a fresh page, supplies the checked-in app-icon fixture through the dialog bridge, exercises the feature action, and asserts the corresponding Tauri command plus a successful result. This verifies navigation, pane controls, fixture handling, and command dispatch; native processing remains covered by the live drive and native tests below.
 
@@ -25,7 +27,7 @@ For native E2E coverage of all 32 registered commands, run `npm run test:native:
 
 For a packaged smoke run, use `npm run tauri build` and launch the unsigned app produced under `ToolboxTauri/src-tauri/target/release/bundle/`. The build may omit updater artifacts when `TAURI_SIGNING_PRIVATE_KEY` is absent. Never drive a user's installed Toolbox while a verification run is active. Keep one dev instance per run; the dev server port and Tauri window are shared resources.
 
-Teardown: close the Tauri window, stop the `npm run tauri dev` process you started, and remove only the run's scratch directory.
+Teardown: close the Tauri window, stop the `npm run tauri dev`, Vite, and `target/debug/toolbox` processes you started, and remove only the run's scratch directory.
 
 ## Doctor
 
@@ -46,13 +48,15 @@ On a live run, also confirm `http://localhost:1420` answers and that the focused
 
 Use the Tauri desktop window through the platform UI harness (macOS Accessibility/CUA or Windows UI Automation). Prefer visible labels and text; do not use coordinates when a text or role selector is available.
 
-1. Confirm the window title is `Toolbox` and the empty state says `Ready to process`.
-2. Select a tool from the Documents, PDF, or Images category, such as `Remove Password`, `Protect PDF`, `Compress`, or `Convert`.
-3. Click the `Drag & Drop files here` area (or drop real fixture paths) and use the native file dialog to select files. Assert the selected count and filename appear.
+1. Confirm the window title is `Toolbox` and, with `All tools` selected, the heading reads `Ready to process`.
+2. Open a tool. The sidebar `Categories` buttons (`PDF`, `Images`, `Documents`) only filter the tool library; tools themselves open from the library card button `Open <title>` (for example `Open Remove Password`, `Open Compress Images`). Card titles are full titles; `Quick access` and each tool's run button use the short title, and two tools share the short title `Watermark`, so always open by the full card title. The search field `Search tools` (Cmd/Ctrl+K) also filters cards.
+3. Click the dropzone (accessible name `Choose files to process`, visible text `Drag & Drop files here`) or drop real fixture paths, and pick files in the native dialog. Assert `N files selected` and the filenames appear.
 4. Exercise the feature's visible control: `File Password` + `Remove Password`, `Encryption Password` + `Protect PDF`, `Quality` + `Compress Images`, or a target format such as `JPEG` + `Convert Images`.
-5. Wait for `Processing batch…` to disappear and assert the result row is green and contains the expected detail. Inspect the filesystem output and prove the input bytes remain unchanged.
+5. Wait for `Processing 0 of N files...` to disappear and assert the summary `N files completed` (or `X of N files failed`) plus the row's detail text. Inspect the filesystem output and prove the input bytes remain unchanged.
 
-The frontend invokes every command listed in the feature map through Tauri IPC. Do not call commands directly for a live UI proof. PDF rendering uses `pdftoppm`; PDF protection, merging, and splitting use qpdf. Remove Password uses the native Rust Office adapter for Word, Excel, and PowerPoint files and does not require an Office runtime. OCR, face blur, and background removal use offline adapters documented in `docs/tauri-vision-engines.md`; an absent adapter is an expected, explicit unsupported result, not a pass. The surface includes image geometry/effects/formats, PDF conversion/editor/selection tools, accessibility semantics, and release checks.
+A UI walk that opens every `Open <title>` card and checks for the heading and dropzone is a cheap way to cover all 32 entries in one long-lived instance; pair it with `npm run test:native:e2e` for real processing.
+
+The frontend invokes every command listed in the feature map through Tauri IPC. Do not call commands directly for a live UI proof. PDF rendering uses `pdftoppm`; PDF protection, merging, and splitting use qpdf. Remove Password uses the native Rust Office adapter for Word, Excel, and PowerPoint files and does not require an Office runtime. OCR, face blur, and background removal use offline adapters documented in `docs/tauri-vision-engines.md`; all three are registered as implemented, so their file chooser and run button appear; an absent adapter or model shows as a per-file failure such as `Resource <name> is unavailable.` with no output file, which is an expected result, not a pass. The surface includes image geometry/effects/formats, PDF conversion/editor/selection tools, accessibility semantics, and release checks.
 
 ## Evidence
 
