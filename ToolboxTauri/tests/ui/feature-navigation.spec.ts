@@ -909,8 +909,11 @@ test("the settings sidebar switches sections and lists only the built ones", asy
     await expect(sections.getByRole("button", { name: "About and support" })).toHaveAttribute("aria-pressed", "true");
     await expect(sections.getByRole("button", { name: "Appearance" })).toHaveAttribute("aria-pressed", "false");
     await expect(about).toContainText(`Version ${appVersion} for macOS`);
-    await expect(about.getByRole("img", { name: "Buy Me a Coffee donation QR code" })).toBeVisible();
     await expect(about).toContainText("Support Toolbox");
+    await about.getByRole("button", { name: "Sponsor on GitHub" }).click();
+    await expect.poll(() => page.evaluate(() =>
+        ((window as TestWindow).__toolboxInvocations ?? []).filter(({ command }) => command === "open_sponsor_page").length,
+    )).toBe(1);
 
     await about.getByRole("button", { name: "Open notices" }).click();
     await expect.poll(() => page.evaluate(() =>

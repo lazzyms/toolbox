@@ -1048,8 +1048,6 @@ body {
 .settings-about { display:flex; align-items:center; gap:14px; }
 .settings-about img { width:56px; height:56px; border-radius:12px; }
 .settings-about-name { font-size:15px; }
-.settings-support-content { display:flex; align-items:center; gap:18px; padding:16px; }
-.settings-support-content img { width:112px; height:112px; flex:none; border-radius:4px; background:#fff; }
 @media (max-width: 760px) {
   .settings-page { display:block; height:auto; min-height:100vh; overflow:visible; }
   .settings-sidebar { border-right:0; border-bottom:1px solid var(--border); }

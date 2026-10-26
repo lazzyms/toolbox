@@ -5,7 +5,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { ArrowLeft, Check, Eye, Folder, Info, List, LoaderCircle, Search, Shield, type LucideIcon } from "lucide-react";
 import packageInfo from "../../package.json";
-import qrCode from "../assets/BuyMeACoffeeQR.png";
 import appIcon from "../../src-tauri/icons/128x128.png";
 import {
   isAnalyticsOptedOut,
@@ -253,6 +252,29 @@ const NoticesCard = () => {
   );
 };
 
+const SupportCard = () => {
+  const [error, setError] = useState<string | null>(null);
+  const openSponsorPage = async () => {
+    setError(null);
+    try {
+      await invoke("open_sponsor_page");
+    } catch (reason) {
+      setError(String(reason));
+    }
+  };
+  return (
+    <Card className="settings-update py-0">
+      <CardContent className="settings-update-content">
+        <span className="settings-row-text" role="status" aria-live="polite">
+          <span className="settings-update-title">Support Toolbox</span>
+          <span className="settings-row-hint">{error ?? "Toolbox is free. If it saves you time, sponsor it on GitHub."}</span>
+        </span>
+        <Button variant="outline" size="xs" onClick={() => void openSponsorPage()}>Sponsor on GitHub</Button>
+      </CardContent>
+    </Card>
+  );
+};
+
 const AboutSection = () => (
   <>
     <div className="settings-about">
@@ -262,15 +284,7 @@ const AboutSection = () => (
         <span className="settings-row-hint">Version {packageInfo.version} for {isWindows() ? "Windows" : "macOS"}</span>
       </span>
     </div>
-    <Card className="settings-support py-0">
-      <CardContent className="settings-support-content">
-        <img src={qrCode} width="112" height="112" alt="Buy Me a Coffee donation QR code" />
-        <span className="settings-row-text">
-          <strong className="settings-update-title">Support Toolbox</strong>
-          <span className="settings-row-hint">Toolbox is free. If it saves you time, scan the code with your phone.</span>
-        </span>
-      </CardContent>
-    </Card>
+    <SupportCard />
     <NoticesCard />
   </>
 );

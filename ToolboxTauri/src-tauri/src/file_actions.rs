@@ -91,6 +91,13 @@ pub fn open_third_party_notices() -> Result<(), String> {
     open_file(&path)
 }
 
+const SPONSOR_PAGE_URL: &str = "https://github.com/sponsors/lazzyms";
+
+#[tauri::command]
+pub fn open_sponsor_page() -> Result<(), String> {
+    open_file(Path::new(SPONSOR_PAGE_URL))
+}
+
 #[cfg(target_os = "macos")]
 fn open_file(path: &Path) -> Result<(), String> {
     run_open("/usr/bin/open", &[path.as_os_str().to_owned()], "open", path)
