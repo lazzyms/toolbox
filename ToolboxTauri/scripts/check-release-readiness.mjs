@@ -21,6 +21,10 @@ const msixExtensions = [...msixManifest.matchAll(/<uap:FileType>([^<]+)<\/uap:Fi
 if (JSON.stringify(msixExtensions) !== JSON.stringify(canonicalExtensions)) {
   throw new Error(`MSIX file associations differ from shared/shell-file-types.json. Expected ${canonicalExtensions.join(", ")}; received ${msixExtensions.join(", ")}.`);
 }
+const workflow = readFileSync(projectFile("../.github/workflows/tauri-release.yml"), "utf8");
+const notesHeader = readFileSync(projectFile("../.github/release-notes-header.md"), "utf8");
+if (!workflow.includes("--notes-file .github/release-notes-header.md --generate-notes")) throw new Error("Releases must use the first-launch header and generated changelog");
+if (!/Privacy & Security[\s\S]*Open Anyway/.test(notesHeader)) throw new Error("Release notes header must explain the macOS Open Anyway step");
 const pin = readPin();
 console.log(`Release configuration passed: ${requiredIcons.length} icons, all Tauri targets, updater and ${canonicalExtensions.length} file associations configured, qpdf minimum ${pin.minimumVersion}`);
 

@@ -19,8 +19,13 @@ install the Windows build from the
 
 1. Open the downloaded `.dmg` file.
 2. Drag **Toolbox** to **Applications**.
-3. In Applications, Control-click **Toolbox**, choose **Open**, and choose
-   **Open** again if macOS asks for confirmation.
+3. Open Toolbox once. The macOS build is not notarized by Apple yet, so macOS
+   says Toolbox can't be opened. Close the warning.
+4. Open **System Settings > Privacy & Security**, scroll to **Security**, and
+   click **Open Anyway** next to the Toolbox message.
+
+On macOS 14 or earlier, you can instead Control-click **Toolbox** in
+Applications and choose **Open**. You only need to do this once.
 
 ### Windows
 
@@ -28,9 +33,10 @@ Install Toolbox from the
 [Microsoft Store](https://apps.microsoft.com/detail/9N5R8W4GJVH4), which delivers
 the signed MSIX package and Store-managed updates.
 
-The installers bundle the native PDF helpers they need. Remove Password uses a
-native Rust adapter for Word, Excel, and PowerPoint files with no Office runtime
-dependency. Toolbox checks for signed updates shortly after launch and asks before
+The installers bundle the native PDF helpers they need. Remove Password is for
+files whose password you already know; it cannot recover or bypass a password.
+It uses a native Rust adapter for Word, Excel, and PowerPoint files with no
+Office runtime dependency. Toolbox checks for signed updates shortly after launch and asks before
 installing one.
 
 ## Features

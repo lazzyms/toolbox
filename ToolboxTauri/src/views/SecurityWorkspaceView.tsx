@@ -113,6 +113,11 @@ export const SecurityWorkspaceView = ({ utility: activeUtility }: { utility: Too
                 ? "Each file gets a copy ending in -protected that opens only with the new password. Your originals stay as they are."
                 : "Each file gets a copy ending in -unlocked that opens without a password. Your originals stay as they are."}
             </p>
+            {mode === "unlock" && (
+              <p className="workspace-note">
+                For files whose password you already know. Toolbox cannot recover or bypass a forgotten password.
+              </p>
+            )}
             <p className="workspace-note">
               Accepts .pdf, .doc, .docx, .xls, .xlsx, .ppt, .pptx
             </p>
