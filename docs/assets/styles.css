@@ -446,6 +446,8 @@ details .accordion-content p { font-size: .875rem; color: var(--muted-foreground
   text-align: left;
 }
 .download-panel .kicker { margin-bottom: 1rem; }
+.download-note { margin-top: 1rem; font-size: .875rem; color: var(--muted-foreground); }
+.download-note strong { color: var(--foreground); }
 .download-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .75rem; }
 .download-card {
   display: grid;

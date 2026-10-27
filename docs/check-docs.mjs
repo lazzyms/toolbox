@@ -42,8 +42,8 @@ const release = {
   windowsStoreUrl: 'https://apps.microsoft.com/detail/9N5R8W4GJVH4',
 };
 const pageMetadata = [
-  ['index.html', 'Toolbox | Local file utilities for macOS and Windows', 'Local PDF, Office, and image utilities for macOS and Windows. Remove passwords, edit PDFs, and convert, compress, or resize images without uploading files.', 'https://lazzyms.github.io/toolbox/'],
-  ['pdf.html', 'PDF and document tools | Toolbox', '19 local PDF and document utilities for macOS and Windows. Edit, merge, split, sign, and organize PDFs. Protect PDFs and DOCX or XLSX files, and remove passwords from supported files.', 'https://lazzyms.github.io/toolbox/pdf.html'],
+  ['index.html', 'Toolbox | Local file utilities for macOS and Windows', 'Local PDF, Office, and image utilities for macOS and Windows. Remove known passwords, edit PDFs, and convert, compress, or resize images without uploading files.', 'https://lazzyms.github.io/toolbox/'],
+  ['pdf.html', 'PDF and document tools | Toolbox', '19 local PDF and document utilities for macOS and Windows. Edit, merge, split, sign, and organize PDFs. Protect PDFs and DOCX or XLSX files, and remove known passwords from supported files.', 'https://lazzyms.github.io/toolbox/pdf.html'],
   ['images.html', 'Image tools | Toolbox', '14 local image utilities for macOS and Windows. Convert, compress, resize, crop, watermark, and inspect images in batches.', 'https://lazzyms.github.io/toolbox/images.html'],
   ['privacy.html', 'Privacy Policy | Toolbox', 'Toolbox privacy policy: files stay on your device. GitHub builds send install and app-open counts with a random ID; the Microsoft Store build sends none.', 'https://lazzyms.github.io/toolbox/privacy.html'],
   ['terms.html', 'Terms of Use | Toolbox', 'Terms of use for the Toolbox website and desktop application. Toolbox is free software released under the MIT License.', 'https://lazzyms.github.io/toolbox/terms.html'],
@@ -135,6 +135,8 @@ const homepage = pages.get('index.html');
 comparisons.push([homepage.includes(`Tauri ${release.version}`), true, 'Homepage release version']);
 comparisons.push([homepage.includes(`Released ${release.publishedDate}`), true, 'Homepage release date']);
 comparisons.push([homepage.includes(`releases/tag/${release.tag}`), true, 'Homepage release tag']);
+comparisons.push([/id="macos-first-launch"[^>]*>[\s\S]*?Privacy &amp; Security[\s\S]*?Open Anyway/.test(homepage), true, 'Homepage explains macOS first launch beside downloads']);
+comparisons.push([homepage.includes('cannot recover, guess, or bypass a password'), true, 'Homepage says Remove Password needs a known password']);
 const darkCss = readFileSync(new URL('assets/styles.css', docs), 'utf8');
 const darkDefaultCta = darkCss.match(/\[data-theme="dark"\] \.btn-default \{ background: (#[0-9a-f]+); color: (#[0-9a-f]+); \}/i);
 const darkHoverCta = darkCss.match(/\[data-theme="dark"\] \.btn-default:hover, \[data-theme="dark"\] \.btn-default:focus-visible \{ background: (#[0-9a-f]+); color: (white|#[0-9a-f]+); \}/i);

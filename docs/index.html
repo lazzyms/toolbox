@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Toolbox | Local file utilities for macOS and Windows</title>
-<meta name="description" content="Local PDF, Office, and image utilities for macOS and Windows. Remove passwords, edit PDFs, and convert, compress, or resize images without uploading files.">
+<meta name="description" content="Local PDF, Office, and image utilities for macOS and Windows. Remove known passwords, edit PDFs, and convert, compress, or resize images without uploading files.">
 <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="assets/icon.svg">
 <link rel="stylesheet" href="assets/styles.css">
@@ -12,7 +12,7 @@
 
 <meta property="og:type" content="website">
 <meta property="og:title" content="Toolbox | Local file utilities for macOS and Windows">
-<meta property="og:description" content="Local PDF, Office, and image utilities for macOS and Windows. Remove passwords, edit PDFs, and convert, compress, or resize images without uploading files.">
+<meta property="og:description" content="Local PDF, Office, and image utilities for macOS and Windows. Remove known passwords, edit PDFs, and convert, compress, or resize images without uploading files.">
 <meta property="og:url" content="https://lazzyms.github.io/toolbox/">
 <meta property="og:image" content="https://lazzyms.github.io/toolbox/og.jpg">
 <meta property="og:image:type" content="image/jpeg">
@@ -21,7 +21,7 @@
 <meta property="og:image:alt" content="Toolbox social preview showing macOS and Windows availability and local PDF and image tools">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Toolbox | Local file utilities for macOS and Windows">
-<meta name="twitter:description" content="Local PDF, Office, and image utilities for macOS and Windows. Remove passwords, edit PDFs, and convert, compress, or resize images without uploading files.">
+<meta name="twitter:description" content="Local PDF, Office, and image utilities for macOS and Windows. Remove known passwords, edit PDFs, and convert, compress, or resize images without uploading files.">
 <meta name="twitter:image" content="https://lazzyms.github.io/toolbox/og.jpg">
 <meta name="twitter:image:alt" content="Toolbox social preview showing macOS and Windows availability and local PDF and image tools">
 <meta name="theme-color" content="#0a0a0a">
@@ -144,7 +144,7 @@
     <h1>Your files.<br><em>On your device.</em><br>Done.</h1>
 
     <p class="lede">
-      Remove passwords from PDF and Office files. Edit, organize, and protect PDFs.
+      Remove known passwords from PDF and Office files. Edit, organize, and protect PDFs.
       Convert, compress, and resize images in a desktop app for macOS and Windows.
       Your files stay on your computer.
     </p>
@@ -183,6 +183,7 @@
           <span class="download-card-action">Open in Microsoft Store <span aria-hidden="true">↗</span></span>
         </a>
       </div>
+      <p class="download-note" id="macos-first-launch"><strong>First launch on macOS:</strong> Toolbox is not notarized by Apple yet. If macOS says Toolbox can't be opened, open System Settings &gt; Privacy &amp; Security and click Open Anyway. On macOS 14 or earlier, you can Control-click Toolbox in Applications and choose Open instead.</p>
       <div class="cta">
         <a href="https://get.microsoft.com/installer/download/9n5r8w4gjvh4?referrer=appbadge" target="_self">
           <img src="https://get.microsoft.com/images/en-us%20dark.svg" width="200" alt="Get it from Microsoft">
@@ -225,7 +226,7 @@
         </figure>
         <figure class="screenshot-card">
           <div class="screenshot-frame"><img src="assets/screenshot-remove-password.png" data-theme-src-dark="assets/screenshot-remove-password.png" data-theme-src-light="assets/screenshot-remove-password-light.png" alt="Toolbox Remove Password screen with a document drop area and password field" loading="lazy"></div>
-          <figcaption><strong>Remove Password</strong><span>Unlock a PDF or Office file locally, then save a copy beside the original.</span></figcaption>
+          <figcaption><strong>Remove Password</strong><span>Enter the password you already know to save an unlocked copy beside the original.</span></figcaption>
         </figure>
         <figure class="screenshot-card">
           <div class="screenshot-frame"><img src="assets/screenshot-convert-image-format.png" data-theme-src-dark="assets/screenshot-convert-image-format.png" data-theme-src-light="assets/screenshot-convert-image-format-light.png" alt="Toolbox Convert Image Format screen with PNG, JPEG, WebP, and HEIC choices" loading="lazy"></div>
@@ -256,7 +257,7 @@
         <div class="category-copy">
           <p class="category-count">Documents + PDF</p>
           <h3>Work with documents.</h3>
-          <p>Remove PDF and Office passwords. Edit, merge, split, sign, and protect PDFs.</p>
+          <p>Remove known PDF and Office passwords. Edit, merge, split, sign, and protect PDFs.</p>
           <span class="category-link">Explore document tools <span aria-hidden="true">→</span></span>
         </div>
       </a>
@@ -353,7 +354,7 @@
       <details>
         <summary>Can it open a document I've lost the password for?<svg class="chevron" aria-hidden="true"><use href="#i-chevron-down"/></svg></summary>
         <div class="accordion-content">
-          <p>No. Remove Password uses the password you supply. It supports PDF, Word, Excel, and PowerPoint files, including DOC, DOCX, XLS, XLSX, PPT, and PPTX. Unsupported encryption formats return an error.</p>
+          <p>No. Remove Password is for files whose password you already know: you enter it, and Toolbox saves a copy without it. It cannot recover, guess, or bypass a password. It supports PDF, Word, Excel, and PowerPoint files, including DOC, DOCX, XLS, XLSX, PPT, and PPTX. Unsupported encryption formats return an error.</p>
         </div>
       </details>
 
@@ -376,7 +377,7 @@
       <details>
         <summary>How do I install Toolbox?<svg class="chevron" aria-hidden="true"><use href="#i-chevron-down"/></svg></summary>
         <div class="accordion-content">
-          <p>On macOS, open the DMG and drag Toolbox to Applications. If needed, Control-click Toolbox in Applications and choose Open.</p>
+          <p>On macOS, open the DMG and drag Toolbox to Applications. Toolbox is not notarized by Apple yet, so the first launch shows a warning. Open Toolbox once, then open System Settings &gt; Privacy &amp; Security and click Open Anyway. On macOS 14 or earlier, you can Control-click Toolbox in Applications and choose Open instead. You only need to do this once.</p>
           <p>On Windows, install Toolbox from the <a href="https://apps.microsoft.com/detail/9N5R8W4GJVH4">Microsoft Store</a>. Microsoft signs accepted MSIX packages and delivers updates through the Store.</p>
         </div>
       </details>

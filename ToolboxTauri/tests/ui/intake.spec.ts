@@ -928,6 +928,7 @@ test("Unlock sends the ordered batch with one password and the shell's output fo
     });
     await open(page, "Lock & Unlock");
     await expect(page.locator(".workspace-primary-action")).toHaveText(/^Unlock files/);
+    await expect(page.getByText("For files whose password you already know. Toolbox cannot recover or bypass a forgotten password.")).toBeVisible();
     await drop(page, ["/local/lease.pdf", "/local/budget.xlsx", "/local/site-photo.jpg", "/local/deck.pptx", "/local/renamed.docx", "/local/notes.txt", "/local/minutes.doc"]);
     await expect(rows(page)).toHaveText([/lease\.pdf/, /budget\.xlsx/, /deck\.pptx/, /renamed\.docx/, /minutes\.doc/]);
     await page.evaluate(() => {

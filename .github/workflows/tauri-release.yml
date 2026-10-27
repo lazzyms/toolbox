@@ -223,9 +223,12 @@ jobs:
             --arg wa "$(cat release-assets/Toolbox-windows-arm64-setup.exe.sig)" \
             '{version:$v,notes:("Toolbox Tauri " + $v),platforms:{"darwin-aarch64":{url:("https://github.com/lazzyms/toolbox/releases/download/tauri-v"+$v+"/Toolbox-macos-aarch64.app.tar.gz"),signature:$ms},"windows-x86_64":{url:("https://github.com/lazzyms/toolbox/releases/download/tauri-v"+$v+"/Toolbox-windows-x86_64-setup.exe"),signature:$ws},"windows-aarch64":{url:("https://github.com/lazzyms/toolbox/releases/download/tauri-v"+$v+"/Toolbox-windows-arm64-setup.exe"),signature:$wa}}}' \
             > tauri-latest.json
+          previous="$(git tag --list 'tauri-v[0-9]*' --sort=-v:refname | grep -vx "tauri-v$VERSION" | sed -n '1p' || true)"
           gh release create "tauri-v$VERSION" release-assets/* tauri-latest.json \
             --target "$SOURCE_SHA" \
-            --title "Toolbox Tauri $VERSION" --notes "macOS and Windows installers with signed Tauri updater artifacts."
+            --title "Toolbox Tauri $VERSION" \
+            --notes-file .github/release-notes-header.md --generate-notes \
+            ${previous:+--notes-start-tag "$previous"}
       - name: Publish manifest through protected branch PR
         run: |
           set -euo pipefail
