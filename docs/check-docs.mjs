@@ -141,6 +141,7 @@ for (const asset of ['toolbox-quick-actions.mp4', 'toolbox-quick-actions-poster.
   comparisons.push([homepage.includes(`assets/${asset.replace('-attribution.txt', '.mp4')}`) && existsSync(new URL(`assets/${asset}`, docs)), true, `Quick actions demo asset ${asset}`]);
 }
 comparisons.push([/id="quick-actions-demo-local"[\s\S]*?<figcaption>[\s\S]*?12876-happy-beats-business-moves-vol-11[\s\S]*?CC BY 4\.0/.test(homepage), true, 'Homepage credits quick actions demo music']);
+comparisons.push([/id="quick-actions-demo-youtube"[^>]*data-src="https:\/\/www\.youtube-nocookie\.com\/embed\/WIiyJzPiWAo"[^>]*hidden/.test(homepage), true, 'Homepage loads hosted quick actions demo only on HTTPS']);
 const darkCss = readFileSync(new URL('assets/styles.css', docs), 'utf8');
 const darkDefaultCta = darkCss.match(/\[data-theme="dark"\] \.btn-default \{ background: (#[0-9a-f]+); color: (#[0-9a-f]+); \}/i);
 const darkHoverCta = darkCss.match(/\[data-theme="dark"\] \.btn-default:hover, \[data-theme="dark"\] \.btn-default:focus-visible \{ background: (#[0-9a-f]+); color: (white|#[0-9a-f]+); \}/i);
