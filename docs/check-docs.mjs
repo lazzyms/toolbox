@@ -34,11 +34,12 @@ const comparisons = [
 const pages = new Map(readdirSync(docs).filter(name => name.endsWith('.html'))
   .map(name => [name, readFileSync(new URL(name, docs), 'utf8')]));
 const appSource = readFileSync(new URL('assets/app.js', docs), 'utf8');
+// The release workflow syncs the site to the version in the published update manifest.
+const { version: releaseVersion } = JSON.parse(readFileSync(new URL('../tauri-latest.json', docs), 'utf8'));
 const release = {
-  tag: 'tauri-v1.0.19',
-  version: '1.0.19',
-  publishedDate: 'October 22, 2026',
-  macosDmgUrl: 'https://github.com/lazzyms/toolbox/releases/download/tauri-v1.0.19/Toolbox-1.0.19-macos.dmg',
+  tag: `tauri-v${releaseVersion}`,
+  version: releaseVersion,
+  macosDmgUrl: `https://github.com/lazzyms/toolbox/releases/download/tauri-v${releaseVersion}/Toolbox-${releaseVersion}-macos.dmg`,
   windowsStoreUrl: 'https://apps.microsoft.com/detail/9N5R8W4GJVH4',
 };
 const pageMetadata = [
@@ -133,7 +134,7 @@ const releaseBase = `https://github.com/lazzyms/toolbox/releases/download/${rele
 comparisons.push([release.macosDmgUrl, `${releaseBase}Toolbox-${release.version}-macos.dmg`, 'Release tuple is internally consistent']);
 const homepage = pages.get('index.html');
 comparisons.push([homepage.includes(`Tauri ${release.version}`), true, 'Homepage release version']);
-comparisons.push([homepage.includes(`Released ${release.publishedDate}`), true, 'Homepage release date']);
+comparisons.push([/· Released [A-Z][a-z]+ \d{1,2}, \d{4}/.test(homepage), true, 'Homepage release date']);
 comparisons.push([homepage.includes(`releases/tag/${release.tag}`), true, 'Homepage release tag']);
 comparisons.push([/id="macos-first-launch"[^>]*>[\s\S]*?Privacy &amp; Security[\s\S]*?Open Anyway/.test(homepage), true, 'Homepage explains macOS first launch beside downloads']);
 comparisons.push([homepage.includes('cannot recover, guess, or bypass a password'), true, 'Homepage says Remove Password needs a known password']);

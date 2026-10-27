@@ -2,9 +2,9 @@ import { useEffect, useRef, useState, type ComponentType } from "react";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { ArrowLeft, Check, Eye, Folder, Info, List, LoaderCircle, MousePointerClick, Search, Shield, type LucideIcon } from "lucide-react";
-import packageInfo from "../../package.json";
 import appIcon from "../../src-tauri/icons/128x128.png";
 import {
   isAnalyticsOptedOut,
@@ -206,10 +206,21 @@ const PrivacySection = () => {
   );
 };
 
+// The release build sets the version in its Tauri config, so package.json can lag behind.
+const useAppVersion = () => {
+  const [version, setVersion] = useState<string | null>(null);
+  useEffect(() => {
+    let current = true;
+    getVersion().then((value) => { if (current) setVersion(value); }, () => {});
+    return () => { current = false; };
+  }, []);
+  return version;
+};
+
 type UpdateState = "idle" | "checking" | "available" | "installing" | "current" | "failed";
 
-const updateStatus = (state: UpdateState, version: string | null) => {
-  const installed = `Version ${packageInfo.version}.`;
+const updateStatus = (state: UpdateState, version: string | null, appVersion: string | null) => {
+  const installed = appVersion ? `Version ${appVersion}.` : "";
   switch (state) {
     case "idle": return { title: "Check for updates", detail: installed };
     case "checking": return { title: "Checking for updates", detail: installed };
@@ -220,18 +231,22 @@ const updateStatus = (state: UpdateState, version: string | null) => {
   }
 };
 
-const StoreUpdatesSection = () => (
+const StoreUpdatesSection = () => {
+  const appVersion = useAppVersion();
+  return (
   <Card className="settings-update py-0">
     <CardContent className="settings-update-content">
       <span className="settings-row-text">
         <span className="settings-update-title">Updates come from the Microsoft Store</span>
-        <span className="settings-row-hint">Version {packageInfo.version}. The Store installs new versions for you.</span>
+        <span className="settings-row-hint">{appVersion && `Version ${appVersion}. `}The Store installs new versions for you.</span>
       </span>
     </CardContent>
   </Card>
-);
+  );
+};
 
 const InAppUpdatesSection = () => {
+  const appVersion = useAppVersion();
   const [state, setState] = useState<UpdateState>("idle");
   const [version, setVersion] = useState<string | null>(null);
   const checkForUpdates = async () => {
@@ -257,7 +272,7 @@ const InAppUpdatesSection = () => {
       setState("failed");
     }
   };
-  const status = updateStatus(state, version);
+  const status = updateStatus(state, version, appVersion);
   const busy = state === "checking" || state === "installing";
   return (
     <Card className="settings-update py-0">
@@ -323,19 +338,22 @@ const SupportCard = () => {
   );
 };
 
-const AboutSection = () => (
+const AboutSection = () => {
+  const appVersion = useAppVersion();
+  return (
   <>
     <div className="settings-about">
       <img src={appIcon} width="56" height="56" alt="" />
       <span className="settings-row-text">
         <strong className="settings-about-name">Toolbox</strong>
-        <span className="settings-row-hint">Version {packageInfo.version} for {isWindows() ? "Windows" : "macOS"}</span>
+        <span className="settings-row-hint">{appVersion && `Version ${appVersion} `}for {isWindows() ? "Windows" : "macOS"}</span>
       </span>
     </div>
     <SupportCard />
     <NoticesCard />
   </>
-);
+  );
+};
 
 const shortcutGroups = ["Everywhere", "Batch tools"] as const;
 

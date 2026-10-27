@@ -715,8 +715,8 @@ mod tests {
 
     #[test]
     fn capability_registry_rejects_single_input_truncation() {
-        let paths = vec![PathBuf::from("one.png"), PathBuf::from("two.png")];
-        let outcomes = validate_command_inputs("convert_images", &paths).unwrap_err();
+        let paths = vec![PathBuf::from("one.pdf"), PathBuf::from("two.pdf")];
+        let outcomes = validate_command_inputs("split_pdf", &paths).unwrap_err();
 
         assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), paths);
         assert!(outcomes.iter().all(|outcome| outcome.error().is_some_and(|error| matches!(error.kind, ErrorKind::InvalidInput))));

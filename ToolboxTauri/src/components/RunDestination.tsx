@@ -2,7 +2,7 @@ import { FolderIcon } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import type { OutputLocation } from '../contracts';
+import type { OutputLocation, ToolCommand } from '../contracts';
 import { shortenHomePath, useHomeDir } from '../homePath';
 
 export type FolderCheck = 'ready' | 'missing' | 'unwritable';
@@ -19,10 +19,23 @@ const folderName = (folder: string) => folder.split(/[\\/]/).filter(Boolean).pop
 export const sameLocation = (a: OutputLocation, b: OutputLocation) =>
     a === 'alongsideInput' || b === 'alongsideInput' ? a === b : a.customFolder === b.customFolder;
 
-export const exampleOutputName = (inputPath: string, suffix: string) => {
+// Commands that always write a different file type than they read, as named by the native output code.
+const FIXED_OUTPUT_EXTENSIONS: Partial<Record<ToolCommand, string>> = {
+    pdf_to_text: 'txt',
+    ocr_pdf: 'txt',
+    extract_pdf_images: 'jpg',
+    remove_image_background: 'png',
+    blur_faces: 'png',
+    generate_icon_set: 'png',
+    extract_gif_frames: 'png',
+};
+
+export const exampleOutputName = (inputPath: string, command: ToolCommand, suffix: string, extension = FIXED_OUTPUT_EXTENSIONS[command]) => {
     const name = inputPath.split(/[\\/]/).pop() ?? inputPath;
     const dot = name.lastIndexOf('.');
-    return dot > 0 ? `${name.slice(0, dot)}${suffix}${name.slice(dot)}` : `${name}${suffix}`;
+    const stem = dot > 0 ? name.slice(0, dot) : name;
+    const outputExtension = extension ?? (dot > 0 ? name.slice(dot + 1) : '');
+    return outputExtension ? `${stem}${suffix}.${outputExtension}` : `${stem}${suffix}`;
 };
 
 interface RunDestinationProps {

@@ -236,14 +236,15 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git switch --create "$branch"
-          git add tauri-latest.json
+          node ToolboxTauri/scripts/sync-site-release.mjs "$VERSION"
+          git add tauri-latest.json docs
           git commit -m "Publish Tauri $VERSION update manifest [skip ci]"
           git push origin "HEAD:$branch"
           pr_url="$(gh pr create \
             --base main \
             --head "$branch" \
             --title "Publish Tauri $VERSION updater manifest" \
-            --body "Publishes the signed updater manifest for Tauri $VERSION at the protected main endpoint.")"
+            --body "Publishes the signed updater manifest for Tauri $VERSION at the protected main endpoint and points the website downloads at it.")"
           gh pr merge "$pr_url" --squash \
             --subject "Publish Tauri $VERSION update manifest [skip ci]" \
             --body "Publishes the signed updater manifest for Tauri $VERSION."
