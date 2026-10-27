@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Lock & Unlock, results</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+.tb{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;font-size:13px;line-height:1.45;color:var(--fg);background:var(--bg);-webkit-font-smoothing:antialiased}
+.tb.dark{--bg:#0a0a0a;--side:#111111;--panel:#0f0f0f;--raise:#1c1c1c;--fg:#fafafa;--mut:#a3a3a3;--faint:#8a8a8a;--line:rgba(255,255,255,.08);--line2:rgba(255,255,255,.16);--sel:#262626;--pri:#ebebeb;--prifg:#171717;--bad:#ff6b6b;--warn:#f2b552;--ring:#a3a3a3;--scrim:rgba(0,0,0,.6)}
+.tb.light{--bg:#ffffff;--side:#f7f7f7;--panel:#fcfcfc;--raise:#f2f2f2;--fg:#0a0a0a;--mut:#525252;--faint:#666666;--line:#e8e8e8;--line2:#d4d4d4;--sel:#ebebeb;--pri:#171717;--prifg:#fafafa;--bad:#c10007;--warn:#9a5800;--ring:#525252;--scrim:rgba(0,0,0,.28)}
+.tb button,.tb input,.tb select{font:inherit;color:inherit}
+.btn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:7px;border:1px solid var(--line2);background:var(--raise);color:var(--fg);font-weight:500;cursor:pointer;white-space:nowrap;box-sizing:border-box;text-decoration:none}
+.btn.pri{background:var(--pri);color:var(--prifg);border-color:transparent}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--mut)}
+.btn.sm{height:26px;padding:0 9px;font-size:12px}
+.btn[disabled]{opacity:.45;cursor:default}
+.kbd{font-size:11px;line-height:16px;padding:0 5px;border-radius:4px;border:1px solid var(--line2);color:var(--mut);font-weight:500}
+.btn.pri .kbd{border-color:currentColor;color:inherit;opacity:.6}
+.nav{display:flex;align-items:center;gap:9px;min-height:30px;padding:0 10px;border-radius:7px;color:var(--mut);text-decoration:none;border:0;background:none;width:100%;text-align:left;cursor:pointer;box-sizing:border-box}
+.nav.on{background:var(--sel);color:var(--fg);font-weight:500}
+.field{height:30px;border-radius:7px;border:1px solid var(--line2);background:var(--bg);padding:0 10px;width:100%;box-sizing:border-box;min-width:0}
+.lbl{font-size:12px;font-weight:600}
+.hint{font-size:12px;color:var(--mut)}
+.row{display:grid;grid-template-columns:20px minmax(0,1fr) 72px 60px 150px;gap:12px;align-items:center;padding:8px 20px;border-bottom:1px solid var(--line)}
+.row.sel{background:var(--sel)}
+.badge{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:999px;border:1px solid var(--line2);font-size:12px;color:var(--fg);white-space:nowrap}
+svg.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.tb :focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+a{color:inherit}a:hover{color:var(--mut)}
+.seg{display:inline-flex;padding:2px;border-radius:8px;background:var(--raise);border:1px solid var(--line)}.seg button{height:26px;padding:0 10px;border:0;border-radius:6px;background:none;cursor:pointer;color:var(--mut)}.seg button[aria-checked=true]{background:var(--bg);color:var(--fg);font-weight:500;box-shadow:0 1px 2px rgba(0,0,0,.2)}
+.note{display:flex;gap:8px;align-items:flex-start;padding:10px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--raise)}
+.opt{display:flex;flex-direction:column;gap:6px}
+fieldset.opt{border:0;margin:0;padding:0}fieldset.opt legend{padding:0;margin-bottom:6px}
+.chk{display:flex;gap:8px;align-items:center}
+.tb.dark{--seg-ok:#d4d4d4;--seg-wait:#2a2a2a}.tb.light{--seg-ok:#262626;--seg-wait:#e5e5e5}
+.seg{display:inline-flex;padding:2px;border-radius:8px;background:var(--raise);border:1px solid var(--line)}
+.seg button{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border:0;border-radius:6px;background:none;cursor:pointer;color:var(--mut);font-weight:500}
+.seg button[aria-checked=true]{background:var(--bg);color:var(--fg);box-shadow:0 1px 2px rgba(0,0,0,.25)}
+.seg[aria-disabled=true]{opacity:.5}
+.row{grid-template-columns:20px minmax(0,1fr) 84px 64px 170px}
+.rrow{display:grid;grid-template-columns:20px minmax(0,1fr) 110px 250px;gap:12px;align-items:center;padding:8px 20px;border-bottom:1px solid var(--line);min-height:36px}
+.chip{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;border-radius:999px;border:1px solid var(--line2);background:transparent;font-size:12px;cursor:pointer;color:var(--mut)}
+.chip[aria-pressed="true"]{background:var(--sel);color:var(--fg);font-weight:500}
+.inl{grid-column:2 / -1;display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;padding:10px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--panel)}
+.inl .opt{flex:1 1 160px}
+.err{font-size:12px;color:var(--bad);display:flex;gap:6px;align-items:center}
+.field[aria-invalid=true]{border-color:var(--bad)}
+.flag{display:flex;gap:10px;align-items:center;margin:0 20px 10px;padding:8px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--raise)}
+.tag{display:inline-flex;align-items:center;height:20px;padding:0 7px;border-radius:999px;border:1px solid var(--line2);font-size:11px;color:var(--mut);white-space:nowrap}
+
+</style>
+</helmet>
+<div class="{{themeClass}}" style="min-height: 800px; display: flex; flex-wrap: wrap">
+<aside aria-label="File Security" style="flex: 1 1 220px; max-width: 232px; background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; padding: 14px 10px; box-sizing: border-box">
+<a class="nav" href="Main.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M5 12l6 6M5 12l6-6"></path></svg>All tools</a>
+<div style="padding: 16px 10px 6px; font-size: 12px; font-weight: 600; color: var(--faint)">File Security</div>
+<nav aria-label="File Security tools" style="display: flex; flex-direction: column; gap: 2px"><button class="nav on" aria-pressed="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg>Lock & Unlock</button></nav>
+<div style="flex: 1"></div>
+<a class="nav" href="Settings.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"></path></svg>Settings<span class="kbd" style="margin-left: auto">{{settingsKey}}</span></a>
+<p class="hint" style="margin: 0; padding: 10px 10px 0">Files stay on this device.</p>
+</aside>
+<div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+<header style="min-height: 52px; display: flex; align-items: center; gap: 14px; padding: 0 20px; border-bottom: 1px solid var(--line); flex-wrap: wrap">
+<h1 style="margin: 0; font-size: 15px; font-weight: 600">Lock & Unlock</h1>
+<span class="hint">{{subtitle}}</span>
+<div style="flex: 1"></div><div role="radiogroup" aria-label="Mode" class="seg"><button role="radio" aria-checked="{{lockOn}}" tabindex="{{lockTab}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg>Lock</button><button role="radio" aria-checked="{{unlockOn}}" tabindex="{{unlockTab}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="15" r="4"></circle><path d="M10.8 12.2L19 4M16 7l2 2"></path></svg>Unlock</button></div>
+<button class="btn ghost"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"></circle><path d="M21 21l-6-6"></path></svg>Find a tool<span class="kbd">{{findKey}}</span></button>
+</header>
+<div style="flex: 1; display: flex; flex-wrap: wrap; min-height: 0">
+<section aria-label="Results" style="flex: 999 1 480px; min-width: 0; display: flex; flex-direction: column">
+<div style="padding: 14px 20px 12px; display: flex; flex-direction: column; gap: 10px; border-bottom: 1px solid var(--line)">
+<div role="status" aria-live="polite" style="display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap"><strong style="font-size: 15px">{{summary}}</strong><span class="hint">{{warnHint}}</span></div>
+<div aria-hidden="true" style="display: flex; gap: 2px; height: 6px"><sc-for list="{{segments}}" as="s" hint-placeholder-count="10"><span style="flex: 1; border-radius: 2px; background: {{s.bg}}"></span></sc-for></div>
+<div role="group" aria-label="Show" style="display: flex; gap: 6px; flex-wrap: wrap; align-items: center"><sc-for list="{{chips}}" as="c" hint-placeholder-count="3"><button class="chip" aria-pressed="{{c.on}}">{{c.label}}<span style="color: var(--mut)">{{c.n}}</span></button></sc-for><div style="flex: 1"></div><button class="btn sm"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2"></path></svg>{{revealAll}}</button></div>
+</div>
+<ul aria-label="Results" style="list-style: none; margin: 0; padding: 0; overflow: auto"><sc-for list="{{rows}}" as="r" hint-placeholder-count="12"><li class="rrow">
+<span style="color: {{r.color}}; display: flex"><sc-if value="{{r.isOk}}" hint-placeholder-val="{{ true }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l5 5 9-10"></path></svg></sc-if><sc-if value="{{r.isWarn}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l10 18H2z"></path><path d="M12 10v5M12 18v.5"></path></svg></sc-if><sc-if value="{{r.isSkip}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"></path></svg></sc-if><sc-if value="{{r.isFail}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M9 9l6 6M15 9l-6 6"></path></svg></sc-if></span>
+<span style="min-width: 0; display: flex; flex-direction: column"><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{r.name}}</span><span class="hint">{{r.detail}}</span></span>
+<span style="color: {{r.color}}">{{r.state}}</span>
+<span style="display: flex; gap: 4px; justify-content: flex-end; flex-wrap: wrap"><sc-if value="{{r.hasOut}}" hint-placeholder-val="{{ true }}"><button class="btn sm ghost" style="color: var(--fg)" aria-label="Open {{r.out}}">Open</button><button class="btn sm ghost" style="color: var(--fg)" aria-label="{{reveal}}: {{r.out}}">{{reveal}}</button></sc-if><sc-if value="{{r.hasPointer}}" hint-placeholder-val="{{ false }}"><button class="btn sm">{{r.pointer}}</button></sc-if><sc-if value="{{r.canRetryPw}}" hint-placeholder-val="{{ false }}"><button class="btn sm" aria-expanded="{{{{r.retryOpen}}}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="15" r="4"></circle><path d="M10.8 12.2L19 4M16 7l2 2"></path></svg>Try another password</button></sc-if><sc-if value="{{r.canRetry}}" hint-placeholder-val="{{ false }}"><button class="btn sm"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14L4 9l5-5"></path><path d="M4 9h11a5 5 0 0 1 0 10h-3"></path></svg>Retry</button></sc-if></span>
+</li><sc-if value="{{r.retryOpen}}" hint-placeholder-val="{{ false }}"><li style="display: grid; grid-template-columns: 20px minmax(0,1fr); gap: 12px; padding: 0 20px 12px; border-bottom: 1px solid var(--line)"><span></span><div class="inl" role="group" aria-label="Retry {{r.name}} with another password">
+<div class="opt"><label class="lbl" for="rp">Password for {{r.name}}</label><input id="rp" class="field" type="password" placeholder="Enter this file's password"></div>
+<button class="btn sm pri">Retry this file<span class="kbd">{{runKey}}</span></button><button class="btn sm">Cancel<span class="kbd">Esc</span></button>
+<p class="hint" style="margin: 0; flex-basis: 100%">Only this file runs again. Its new password isn't saved.</p></div></li></sc-if></sc-for></ul>
+</section><section aria-label="Options" style="flex: 1 1 300px; max-width: 360px; border-left: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column">
+<div style="padding: 18px 20px; display: flex; flex-direction: column; gap: 20px; flex: 1; overflow: auto"><div style="display: flex; flex-direction: column; gap: 6px"><span class="lbl">Passwords</span><p class="hint" style="margin: 0">Cleared when the batch finished. Retrying a file asks for its password again.</p></div>
+<div style="border-top: 1px solid var(--line); padding-top: 18px; display: flex; flex-direction: column; gap: 8px"><div style="display: flex; align-items: center; gap: 8px"><span class="lbl">Saved to</span><span class="badge">This run only</span></div><span>{{deliveryDir}}</span></div>
+<div style="border-top: 1px solid var(--line); padding-top: 18px; display: flex; flex-direction: column; gap: 6px"><span class="lbl">Retry</span><p class="hint" style="margin: 0">A wrong password offers Try another password. A processing error offers Retry. Either runs only that file and keeps every finished copy.</p></div>
+<div class="note"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut); margin-top: 1px"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"></path></svg><span class="hint" style="color: var(--fg)">Runs on this device with no network. Passwords are never saved and are cleared when you switch mode or leave.</span></div></div>
+<footer style="padding: 14px 20px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 10px; flex-wrap: wrap"><button class="btn">Clear list</button><div style="flex: 1"></div><button class="btn pri">{{retryAll}}<span class="kbd">{{runKey}}</span></button></footer></section>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "mode": {"editor": "enum", "options": ["Lock", "Unlock"], "default": "Lock"}, "filter": {"editor": "enum", "options": ["All", "Needs attention", "Warnings"], "default": "All"}, "retryOpen": {"editor": "boolean", "default": false}, "$preview": {"width": 1280, "height": 800}}'>
+class Component extends DCLogic {
+renderVals() {
+const win = (this.props.platform ?? 'macOS') === 'Windows';
+const light = (this.props.theme ?? 'dark') === 'light';
+const base = { themeClass: light ? 'tb light' : 'tb dark', findKey: win ? 'Ctrl+K' : '⌘K', settingsKey: win ? 'Ctrl+,' : '⌘,', openKey: win ? 'Ctrl+O' : '⌘O', runKey: win ? 'Ctrl+Enter' : '⌘↵', mod: win ? 'Ctrl' : '⌘', reveal: win ? 'Show in File Explorer' : 'Show in Finder', docsDir: win ? 'C:\\Users\\Asha\\Documents' : '~/Documents' };
+const lock = (this.props.mode ?? 'Lock') === 'Lock';
+const extra = {};
+base.lockOn = lock ? 'true' : 'false'; base.unlockOn = lock ? 'false' : 'true';
+base.lockTab = lock ? '0' : '-1'; base.unlockTab = lock ? '-1' : '0';
+base.isLock = lock; base.isUnlock = !lock;
+base.subtitle = lock ? 'Add a password to PDF, Word, Excel and PowerPoint files.' : 'Remove a password you know from PDF, Word, Excel and PowerPoint files.';
+base.verb = lock ? 'Lock' : 'Unlock'; base.done = lock ? 'locked' : 'unlocked'; base.suffix = lock ? '-protected' : '-unlocked';
+base.pwLabel = lock ? 'New password for all files' : 'Current password for all files';
+base.accepts = 'Accepts .pdf, .doc, .docx, .xls, .xlsx, .ppt, .pptx';
+const show = this.props.showPassword ?? false;
+base.pwType = show ? 'text' : 'password'; base.pwToggle = show ? 'Hide password' : 'Show password'; base.showPassword = show ? 'true' : 'false';
+base.example = 'lease-agreement' + base.suffix + '.pdf';
+base.deliveryDir = win ? 'C:\\Users\\Asha\\Documents\\Delivery\\Acme' : '~/Documents/Delivery/Acme';
+base.footColor = 'var(--mut)';
+const filter = this.props.filter ?? 'All';
+const ro = this.props.retryOpen ?? false;
+const sfx = base.suffix; const out = (f) => f.replace(/(\.[a-z]+)$/, sfx + '$1');
+const SIG = 'Saved. The digital signature was removed, because changing the file breaks it.';
+const L = [
+{ k: 'ok', name: 'lease-agreement.pdf' },
+{ k: 'warn', name: 'vendor-nda-acme.pdf', detail: SIG },
+{ k: 'ok', name: 'budget-2027.xlsx' },
+{ k: 'ok', name: 'board-deck-q3.pptx' },
+{ k: 'warn', name: 'offer-letter-chen.docx', o: 'offer-letter-chen-protected-1.docx', detail: 'Saved as offer-letter-chen-protected-1.docx. Renamed to avoid replacing an existing file.' },
+{ k: 'skip', name: 'invoice-0425.pdf', detail: 'Already password-protected. Unlock it first, then lock it again.' },
+{ k: 'fail', name: 'policy-handbook-2009.doc', detail: 'Legacy .doc files can\'t be locked. Save it as .docx in Word, then add it again.' },
+{ k: 'fail', name: 'statement-q3.pdf', detail: 'The PDF helper is missing, so PDFs can\'t be locked. Office files in this batch weren\'t affected. Reinstall Toolbox to restore it.' },
+{ k: 'failRetry', name: 'site-survey-scan.pdf', detail: 'Not a readable PDF. The file may be damaged or incomplete. Nothing was saved.' }
+];
+const U = [
+{ k: 'ok', name: 'lease-agreement.pdf' },
+{ k: 'warn', name: 'vendor-nda-acme.pdf', detail: SIG },
+{ k: 'ok', name: 'budget-2027.xlsx' },
+{ k: 'ok', name: 'board-deck-q3.pptx' },
+{ k: 'skip', name: 'offer-letter-chen.docx', detail: 'Not password-protected. Nothing to unlock, so no copy was made.' },
+{ k: 'ok', name: 'brochure-2026.pdf', detail: 'Unlocked. Restrictions removed.' },
+{ k: 'failPw', name: 'payroll-september.xlsx', detail: 'The password didn\'t open this file. Check it, or try the password this file was sent with.' },
+{ k: 'fail', name: 'archive-ledger-2004.xls', detail: 'Uses an older encryption type Toolbox can\'t open. The password may be right.' },
+{ k: 'fail', name: 'sales-kickoff-2012.ppt', detail: 'Legacy .ppt files with pictures can\'t be unlocked yet. The file isn\'t damaged.' },
+{ k: 'failRetry', name: 'site-survey-scan.pdf', detail: 'Not a readable PDF. The file may be damaged or incomplete. Nothing was saved.' }
+];
+const all = lock ? L : U;
+const isOk = (r) => r.k === 'ok' || r.k === 'warn';
+const okN = all.filter(isOk).length, skipN = all.filter((r) => r.k === 'skip').length, failN = all.length - okN - skipN, warnN = all.filter((r) => r.k === 'warn').length;
+extra.summary = `Done. ${okN} ${base.done}, ${skipN} skipped, ${failN} failed`;
+extra.warnHint = warnN === 1 ? `1 ${base.done} file has a warning.` : `${warnN} ${base.done} files have warnings.`;
+const pass = (r) => filter === 'All' || (filter === 'Warnings' ? r.k === 'warn' : !isOk(r));
+extra.rows = all.filter(pass).map((r) => ({ name: r.name, out: r.o || out(r.name), detail: r.detail || out(r.name),
+isOk: r.k === 'ok', isWarn: r.k === 'warn', isSkip: r.k === 'skip', isFail: r.k.startsWith('fail'),
+state: isOk(r) ? (lock ? 'Locked' : 'Unlocked') : r.k === 'skip' ? 'Skipped' : 'Failed',
+color: r.k === 'warn' ? 'var(--warn)' : r.k === 'skip' ? 'var(--mut)' : isOk(r) ? 'var(--fg)' : 'var(--bad)',
+hasOut: isOk(r), hasPointer: !!r.pointer, pointer: r.pointer || '', canRetry: r.k === 'failRetry', canRetryPw: r.k === 'failPw', retryOpen: r.k === 'failPw' && ro }));
+extra.chips = [['All', all.length], ['Needs attention', all.length - okN], ['Warnings', warnN]].map((c) => ({ label: c[0], n: String(c[1]), on: c[0] === filter ? 'true' : 'false' }));
+extra.segments = all.map((r) => ({ bg: r.k === 'warn' ? 'var(--warn)' : r.k === 'skip' ? 'var(--mut)' : isOk(r) ? 'var(--seg-ok)' : 'var(--bad)' }));
+extra.revealAll = win ? 'Show all in File Explorer' : 'Show all in Finder';
+const retryable = all.filter((r) => r.k === 'failRetry' || r.k === 'failPw').length;
+extra.retryAll = retryable === 1 ? 'Retry 1 failed file' : `Retry ${retryable} failed files`;
+return Object.assign(base, extra);
+}
+}
+</script>
+</body>
+</html>

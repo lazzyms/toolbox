@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PDF Editor, open</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+.tb{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;font-size:13px;line-height:1.45;color:var(--fg);background:var(--bg);-webkit-font-smoothing:antialiased}
+.tb.dark{--bg:#0a0a0a;--side:#111111;--panel:#0f0f0f;--raise:#1c1c1c;--fg:#fafafa;--mut:#a3a3a3;--faint:#8a8a8a;--line:rgba(255,255,255,.08);--line2:rgba(255,255,255,.16);--sel:#262626;--pri:#ebebeb;--prifg:#171717;--bad:#ff6b6b;--warn:#f2b552;--ring:#a3a3a3;--scrim:rgba(0,0,0,.6);--well:#1b1b1b}
+.tb.light{--bg:#ffffff;--side:#f7f7f7;--panel:#fcfcfc;--raise:#f2f2f2;--fg:#0a0a0a;--mut:#525252;--faint:#666666;--line:#e8e8e8;--line2:#d4d4d4;--sel:#ebebeb;--pri:#171717;--prifg:#fafafa;--bad:#c10007;--warn:#9a5800;--ring:#525252;--scrim:rgba(0,0,0,.28);--well:#e6e6e6}
+.tb button,.tb input,.tb select,.tb textarea{font:inherit;color:inherit}
+.btn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:7px;border:1px solid var(--line2);background:var(--raise);color:var(--fg);font-weight:500;cursor:pointer;white-space:nowrap;box-sizing:border-box;text-decoration:none}
+.btn.pri{background:var(--pri);color:var(--prifg);border-color:transparent}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--mut)}
+.btn.sm{height:26px;padding:0 9px;font-size:12px}
+.btn.icon{width:30px;padding:0;justify-content:center}
+.btn[disabled]{opacity:.45;cursor:default}
+.kbd{font-size:11px;line-height:16px;padding:0 5px;border-radius:4px;border:1px solid var(--line2);color:var(--mut);font-weight:500}
+.btn.pri .kbd{border-color:currentColor;color:inherit;opacity:.6}
+.tbtn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 9px;border-radius:7px;border:0;background:none;color:var(--mut);cursor:pointer;white-space:nowrap}
+.tbtn[aria-pressed="true"]{background:var(--sel);color:var(--fg);font-weight:500}
+.sep{width:1px;height:20px;background:var(--line2);flex:none}
+.field{height:30px;border-radius:7px;border:1px solid var(--line2);background:var(--bg);padding:0 10px;width:100%;box-sizing:border-box;min-width:0}
+.lbl{font-size:12px;font-weight:600}
+.hint{font-size:12px;color:var(--mut)}
+.seg{display:inline-flex;border:1px solid var(--line2);border-radius:7px;padding:2px;gap:2px}
+.seg button{height:24px;min-width:30px;padding:0 8px;border:0;border-radius:5px;background:none;color:var(--mut);cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
+.seg button[aria-checked="true"],.seg button[aria-pressed="true"]{background:var(--sel);color:var(--fg);font-weight:500}
+.thumb{display:flex;flex-direction:column;align-items:center;gap:4px;width:100%;padding:6px 0;border:0;background:none;border-radius:8px;cursor:pointer;color:var(--mut);font-size:12px}
+.thumb .mini{width:96px;height:124px;background:#ffffff;border:1px solid var(--line2);border-radius:2px;box-sizing:border-box;padding:10px 9px;display:flex;flex-direction:column;gap:4px}
+.thumb .mini i{display:block;height:3px;background:#d6d6d6;border-radius:1px}
+.thumb[aria-current="page"]{background:var(--sel);color:var(--fg);font-weight:500}
+.thumb[aria-current="page"] .mini{outline:2px solid #1d5fd1;outline-offset:1px}
+.paper{background:#ffffff;color:#1f1f1f;box-shadow:0 1px 3px rgba(0,0,0,.25);position:relative;box-sizing:border-box;font-family:"Iowan Old Style","Palatino Linotype",Georgia,serif}
+.paper h3{margin:0 0 6px;font-size:12.5px}
+.paper p{margin:0 0 7px;font-size:10px;line-height:1.5}
+.obj{position:absolute;border:1.5px solid #1d5fd1;background:rgba(29,95,209,.06);padding:4px 6px;box-sizing:border-box;cursor:move;text-align:left;color:#1f1f1f}
+.obj.idle{border:1px dashed rgba(29,95,209,.6);background:none}
+.h{position:absolute;width:7px;height:7px;background:#ffffff;border:1.5px solid #1d5fd1;box-sizing:border-box}
+.olist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
+.olist button{width:100%;text-align:left;border:0;background:none;border-radius:6px;padding:6px 8px;cursor:pointer;display:flex;gap:8px;align-items:baseline}
+.olist button[aria-current="true"]{background:var(--sel)}
+.note{display:flex;gap:10px;padding:10px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--raise)}
+svg.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.tb :focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+a{color:inherit}a:hover{color:var(--mut)}
+.mi{display:flex;gap:10px;align-items:flex-start;width:100%;text-align:left;padding:7px 10px;border:0;background:none;border-radius:6px;cursor:pointer;color:var(--fg);text-decoration:none;box-sizing:border-box}.mi:hover{background:var(--sel)}.mi svg{margin-top:2px}
+.pbadge{position:absolute;right:-6px;top:-6px;width:16px;height:16px;border-radius:50%;background:#1d5fd1;color:#fff;display:grid;place-items:center}
+.mi{display:flex;gap:10px;align-items:flex-start;width:100%;text-align:left;padding:7px 10px;border:0;background:none;border-radius:6px;cursor:pointer;color:var(--fg);text-decoration:none;box-sizing:border-box}.mi:hover{background:var(--sel)}.mi svg{margin-top:2px}
+.tbtn[disabled]{opacity:.45}
+</style>
+</helmet>
+<div class="{{themeClass}}" style="height: 800px; display: flex; flex-direction: column; position: relative; overflow: hidden">
+<header style="height: 48px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 12px; border-bottom: 1px solid var(--line)">
+<a class="btn sm ghost" href="Main.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M5 12l6 6M5 12l6-6"></path></svg>All tools</a>
+<span class="sep" aria-hidden="true"></span>
+<h1 style="margin: 0; font-size: 13px; font-weight: 600">PDF Editor</h1>
+<div style="flex: 1"></div>
+<button class="btn sm ghost" aria-label="Find a tool"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"></circle><path d="M21 21l-6-6"></path></svg><span class="kbd">{{findKey}}</span></button>
+<button class="btn sm ghost icon" aria-label="Settings ({{settingsKey}})"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"></path></svg></button>
+<button class="btn pri" disabled aria-describedby="exr">Export<span class="kbd">{{runKey}}</span></button><span id="exr" style="position: absolute; width: 1px; height: 1px; overflow: hidden">Open a PDF to export</span>
+</header>
+<div role="toolbar" aria-label="Edit tools, available after you open a PDF" style="height: 44px; flex: none; display: flex; align-items: center; gap: 2px; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--side)"><button class="tbtn" disabled><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1"></rect><rect x="14" y="3" width="7" height="9" rx="1"></rect><rect x="3" y="15" width="7" height="6" rx="1"></rect><rect x="14" y="15" width="7" height="6" rx="1"></rect></svg>Organize</button><button class="tbtn" disabled><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2v14a2 2 0 0 0 2 2h14"></path><path d="M18 22V8a2 2 0 0 0-2-2H2"></path></svg>Crop</button><span class="sep" aria-hidden="true"></span><button class="tbtn" disabled><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"></path><path d="M13 7l4 4"></path></svg>Edit text</button><button class="tbtn" disabled><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6V4h14v2M12 4v16M9 20h6"></path></svg>Add text</button><button class="tbtn" disabled><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17c3 0 4-6 6-6s1 5 3 5 2-3 4-3 2 2 5 2"></path><path d="M3 21h18"></path></svg>Sign</button><button class="tbtn" disabled><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="5" rx="1"></rect><rect x="3" y="14" width="18" height="5" rx="1"></rect><path d="M6 7.5h4"></path></svg>Fill form</button><span class="sep" aria-hidden="true"></span><button class="tbtn" disabled><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4"></path><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"></path><path d="M8 17l8-6"></path></svg>Watermark</button><button class="tbtn" disabled><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h16M4 15h16M10 3L8 21M16 3l-2 18"></path></svg>Page numbers</button><button class="tbtn" disabled><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2"></rect><path d="M4 7h16M4 17h16"></path></svg>Header and footer</button><span class="sep" aria-hidden="true"></span><button class="tbtn" disabled><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="4" rx="1" fill="currentColor"></rect><path d="M3 15h10M3 19h14"></path></svg>Redact</button></div>
+<main style="flex: 1; min-height: 0; background: var(--well); position: relative; display: grid; place-items: center">
+<sc-if value="{{isEmpty}}" hint-placeholder-val="{{ true }}"><div style="width: 520px; display: flex; flex-direction: column; align-items: center; gap: 14px; text-align: center">
+<span style="width: 56px; height: 56px; border-radius: 14px; background: var(--raise); display: grid; place-items: center"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 26px; height: 26px"><path d="M14 3v4a1 1 0 0 0 1 1h4"></path><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"></path></svg></span>
+<h2 style="margin: 0; font-size: 18px; font-weight: 600">Open a PDF to view and edit it</h2>
+<p class="hint" style="margin: 0; max-width: 420px; font-size: 13px">Add text, sign, fill forms, redact, and rearrange pages. When you export, Toolbox saves a copy. Your original is never changed.</p>
+<div style="display: flex; gap: 8px"><button class="btn pri"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2"></path></svg>Open PDF<span class="kbd">{{openKey}}</span></button></div>
+<p class="hint" style="margin: 0">Or drop a PDF anywhere in this window.</p>
+</div></sc-if>
+<sc-if value="{{isChoose}}" hint-placeholder-val="{{ false }}"><div aria-hidden="true" style="position: absolute; inset: 0; background: var(--scrim)"></div><div style="position: relative"><div role="dialog" aria-modal="true" aria-labelledby="chT" aria-describedby="chD" style="width: 460px; background: var(--panel); border: 1px solid var(--line2); border-radius: 12px; box-shadow: 0 24px 60px rgba(0,0,0,.35); padding: 20px; display: flex; flex-direction: column; gap: 14px">
+<h2 id="chT" style="margin: 0; font-size: 15px; font-weight: 600">Which PDF do you want to edit?</h2>
+<p id="chD" class="hint" style="margin: 0">The PDF Editor works on one document at a time. To combine these files, use Merge.</p>
+<fieldset style="border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px"><legend style="position: absolute; width: 1px; height: 1px; overflow: hidden">Dropped PDFs</legend>
+<label class="mi" style="align-items: center"><input type="radio" name="pick" checked><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4"></path><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"></path></svg><span style="flex: 1">lease-agreement.pdf</span><span class="hint">14 pages, 2.1 MB</span></label>
+<label class="mi" style="align-items: center"><input type="radio" name="pick"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4"></path><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"></path></svg><span style="flex: 1">deposit-certificate.pdf</span><span class="hint">2 pages, 340 KB</span></label>
+<label class="mi" style="align-items: center"><input type="radio" name="pick"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4"></path><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"></path></svg><span style="flex: 1">inventory-2026.pdf</span><span class="hint">9 pages, 6.4 MB</span></label>
+</fieldset>
+<div style="display: flex; gap: 8px; align-items: center"><a class="btn ghost" href="Merge.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v5a5 5 0 0 0 5 5h0a5 5 0 0 1 5 5v1M17 4v5a5 5 0 0 1-5 5"></path></svg>Merge all 3 instead</a><div style="flex: 1"></div><button class="btn">Cancel</button><button class="btn pri">Open</button></div>
+</div></div></sc-if>
+<sc-if value="{{isEnc}}" hint-placeholder-val="{{ false }}"><div role="alert" style="width: 480px; background: var(--panel); border: 1px solid var(--line2); border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 12px">
+<div style="display: flex; gap: 10px; align-items: center"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--warn); width: 20px; height: 20px"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg><h2 style="margin: 0; font-size: 15px; font-weight: 600">payslip-sept.pdf needs a password to open</h2></div>
+<p class="hint" style="margin: 0; font-size: 13px">The PDF Editor can't open locked files. Unlock a copy first with Unprotect PDF, then open that copy here.</p>
+<div style="display: flex; gap: 8px"><a class="btn pri" href="Files.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="15" r="4"></circle><path d="M10.8 12.2L19 4M16 7l2 2"></path></svg>Unprotect a copy</a><button class="btn">Open a different PDF</button></div>
+</div></sc-if>
+<sc-if value="{{isSigned}}" hint-placeholder-val="{{ false }}"><div aria-hidden="true" style="position: absolute; inset: 0; background: var(--scrim)"></div><div style="position: relative"><div style="display: flex; flex-direction: column; gap: 12px; width: 560px">
+<div role="alertdialog" aria-modal="true" aria-labelledby="sgT" aria-describedby="sgD" style="background: var(--panel); border: 1px solid var(--line2); border-radius: 12px; box-shadow: 0 24px 60px rgba(0,0,0,.35); padding: 20px; display: flex; flex-direction: column; gap: 12px">
+<div style="display: flex; gap: 10px; align-items: center"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--warn); width: 20px; height: 20px"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"></path></svg><h2 id="sgT" style="margin: 0; font-size: 15px; font-weight: 600">This PDF has a digital signature</h2></div>
+<p id="sgD" style="margin: 0; font-size: 13px; line-height: 1.5; color: var(--mut)">contract-signed.pdf was certified by Harbour Properties Ltd. Any edit you export will make that signature invalid in the copy. The original file keeps its valid signature.</p>
+<label style="display: flex; gap: 8px; align-items: center; font-size: 13px"><input type="checkbox">Don't show this again for this file</label>
+<div style="display: flex; gap: 8px; justify-content: flex-end"><button class="btn">Open a different PDF</button><button class="btn pri">Edit anyway</button></div>
+</div>
+</div></div></sc-if>
+</main>
+<footer style="height: 30px; flex: none; display: flex; align-items: center; padding: 0 12px; border-top: 1px solid var(--line); background: var(--side)"><span class="hint" role="status">{{statusMsg}}</span><div style="flex: 1"></div><span class="hint">Files stay on this computer</span></footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "state": {"editor": "enum", "options": ["No document", "Several dropped", "Locked file", "Signed file"], "default": "No document"}, "$preview": {"width": 1280, "height": 800}}'>
+class Component extends DCLogic {
+renderVals() {
+const win = (this.props.platform ?? 'macOS') === 'Windows';
+const light = (this.props.theme ?? 'dark') === 'light';
+const base = {
+themeClass: light ? 'tb light' : 'tb dark',
+findKey: win ? 'Ctrl+K' : '⌘K',
+settingsKey: win ? 'Ctrl+,' : '⌘,',
+runKey: win ? 'Ctrl+Enter' : '⌘↵',
+openKey: win ? 'Ctrl+O' : '⌘O',
+undoKey: win ? 'Ctrl+Z' : '⌘Z',
+redoKey: win ? 'Ctrl+Y' : '⇧⌘Z',
+dupKey: win ? 'Ctrl+D' : '⌘D',
+selAllKey: win ? 'Ctrl+A' : '⌘A',
+mod: win ? 'Ctrl' : '⌘',
+reveal: win ? 'Show in File Explorer' : 'Show in Finder',
+docsDir: win ? 'C:\\Users\\Asha\\Documents' : '~/Documents'
+};
+const s = this.props.state ?? 'No document';
+const msgs = { 'No document': 'No PDF open.', 'Several dropped': '3 PDFs dropped. Choose one.', 'Locked file': "payslip-sept.pdf wasn't opened.", 'Signed file': 'contract-signed.pdf has a digital signature.' };
+const extra = { isEmpty: s === 'No document', isChoose: s === 'Several dropped', isEnc: s === 'Locked file', isSigned: s === 'Signed file', statusMsg: msgs[s] };
+return Object.assign(base, typeof extra === 'undefined' ? {} : extra);
+}
+}
+</script>
+</body>
+</html>

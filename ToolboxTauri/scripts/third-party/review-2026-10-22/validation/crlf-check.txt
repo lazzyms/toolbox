@@ -1,0 +1,6 @@
+LF copy:
+THIRD-PARTY-NOTICES.txt is up to date.
+exit=0
+CRLF copy (22837 CRLF lines):
+THIRD-PARTY-NOTICES.txt is up to date.
+exit=0

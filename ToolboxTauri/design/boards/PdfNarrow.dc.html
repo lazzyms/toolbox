@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PDF Editor, narrow window</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+.tb{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;font-size:13px;line-height:1.45;color:var(--fg);background:var(--bg);-webkit-font-smoothing:antialiased}
+.tb.dark{--bg:#0a0a0a;--side:#111111;--panel:#0f0f0f;--raise:#1c1c1c;--fg:#fafafa;--mut:#a3a3a3;--faint:#8a8a8a;--line:rgba(255,255,255,.08);--line2:rgba(255,255,255,.16);--sel:#262626;--pri:#ebebeb;--prifg:#171717;--bad:#ff6b6b;--warn:#f2b552;--ring:#a3a3a3;--scrim:rgba(0,0,0,.6);--well:#1b1b1b}
+.tb.light{--bg:#ffffff;--side:#f7f7f7;--panel:#fcfcfc;--raise:#f2f2f2;--fg:#0a0a0a;--mut:#525252;--faint:#666666;--line:#e8e8e8;--line2:#d4d4d4;--sel:#ebebeb;--pri:#171717;--prifg:#fafafa;--bad:#c10007;--warn:#9a5800;--ring:#525252;--scrim:rgba(0,0,0,.28);--well:#e6e6e6}
+.tb button,.tb input,.tb select,.tb textarea{font:inherit;color:inherit}
+.btn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:7px;border:1px solid var(--line2);background:var(--raise);color:var(--fg);font-weight:500;cursor:pointer;white-space:nowrap;box-sizing:border-box;text-decoration:none}
+.btn.pri{background:var(--pri);color:var(--prifg);border-color:transparent}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--mut)}
+.btn.sm{height:26px;padding:0 9px;font-size:12px}
+.btn.icon{width:30px;padding:0;justify-content:center}
+.btn[disabled]{opacity:.45;cursor:default}
+.kbd{font-size:11px;line-height:16px;padding:0 5px;border-radius:4px;border:1px solid var(--line2);color:var(--mut);font-weight:500}
+.btn.pri .kbd{border-color:currentColor;color:inherit;opacity:.6}
+.tbtn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 9px;border-radius:7px;border:0;background:none;color:var(--mut);cursor:pointer;white-space:nowrap}
+.tbtn[aria-pressed="true"]{background:var(--sel);color:var(--fg);font-weight:500}
+.sep{width:1px;height:20px;background:var(--line2);flex:none}
+.field{height:30px;border-radius:7px;border:1px solid var(--line2);background:var(--bg);padding:0 10px;width:100%;box-sizing:border-box;min-width:0}
+.lbl{font-size:12px;font-weight:600}
+.hint{font-size:12px;color:var(--mut)}
+.seg{display:inline-flex;border:1px solid var(--line2);border-radius:7px;padding:2px;gap:2px}
+.seg button{height:24px;min-width:30px;padding:0 8px;border:0;border-radius:5px;background:none;color:var(--mut);cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
+.seg button[aria-checked="true"],.seg button[aria-pressed="true"]{background:var(--sel);color:var(--fg);font-weight:500}
+.thumb{display:flex;flex-direction:column;align-items:center;gap:4px;width:100%;padding:6px 0;border:0;background:none;border-radius:8px;cursor:pointer;color:var(--mut);font-size:12px}
+.thumb .mini{width:96px;height:124px;background:#ffffff;border:1px solid var(--line2);border-radius:2px;box-sizing:border-box;padding:10px 9px;display:flex;flex-direction:column;gap:4px}
+.thumb .mini i{display:block;height:3px;background:#d6d6d6;border-radius:1px}
+.thumb[aria-current="page"]{background:var(--sel);color:var(--fg);font-weight:500}
+.thumb[aria-current="page"] .mini{outline:2px solid #1d5fd1;outline-offset:1px}
+.paper{background:#ffffff;color:#1f1f1f;box-shadow:0 1px 3px rgba(0,0,0,.25);position:relative;box-sizing:border-box;font-family:"Iowan Old Style","Palatino Linotype",Georgia,serif}
+.paper h3{margin:0 0 6px;font-size:12.5px}
+.paper p{margin:0 0 7px;font-size:10px;line-height:1.5}
+.obj{position:absolute;border:1.5px solid #1d5fd1;background:rgba(29,95,209,.06);padding:4px 6px;box-sizing:border-box;cursor:move;text-align:left;color:#1f1f1f}
+.obj.idle{border:1px dashed rgba(29,95,209,.6);background:none}
+.h{position:absolute;width:7px;height:7px;background:#ffffff;border:1.5px solid #1d5fd1;box-sizing:border-box}
+.olist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
+.olist button{width:100%;text-align:left;border:0;background:none;border-radius:6px;padding:6px 8px;cursor:pointer;display:flex;gap:8px;align-items:baseline}
+.olist button[aria-current="true"]{background:var(--sel)}
+.note{display:flex;gap:10px;padding:10px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--raise)}
+svg.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.tb :focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+a{color:inherit}a:hover{color:var(--mut)}
+.mi{display:flex;gap:10px;align-items:flex-start;width:100%;text-align:left;padding:7px 10px;border:0;background:none;border-radius:6px;cursor:pointer;color:var(--fg);text-decoration:none;box-sizing:border-box}.mi:hover{background:var(--sel)}.mi svg{margin-top:2px}
+.pbadge{position:absolute;right:-6px;top:-6px;width:16px;height:16px;border-radius:50%;background:#1d5fd1;color:#fff;display:grid;place-items:center}
+</style>
+</helmet>
+<div class="{{themeClass}}" style="height: 800px; display: flex; flex-direction: column; position: relative; overflow: hidden">
+<header style="height: 48px; flex: none; display: flex; align-items: center; gap: 6px; padding: 0 10px; border-bottom: 1px solid var(--line)">
+<a class="btn sm ghost icon" href="Main.dc.html" aria-label="All tools"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M5 12l6 6M5 12l6-6"></path></svg></a>
+<button class="btn sm ghost icon" aria-label="Show page sidebar" aria-pressed="false" aria-controls="pages"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M9 4v16"></path></svg></button>
+<div style="display: flex; flex-direction: column; min-width: 0; line-height: 1.25; flex: 1"><h1 style="margin: 0; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">lease-agreement.pdf</h1><span class="hint" style="white-space: nowrap">2 changes not exported</span></div>
+<button class="btn sm ghost icon" aria-label="Undo add text ({{undoKey}})"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14L4 9l5-5"></path><path d="M4 9h11a5 5 0 0 1 0 10h-3"></path></svg></button>
+<label for="zoom" style="position: absolute; width: 1px; height: 1px; overflow: hidden">Zoom</label><select id="zoom" class="field" style="width: 84px; height: 26px; padding: 0 6px"><option selected>Fit width</option><option>100%</option></select>
+<button class="btn sm ghost icon" aria-label="Find a tool ({{findKey}})"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"></circle><path d="M21 21l-6-6"></path></svg></button>
+<button class="btn sm ghost icon" aria-label="Settings ({{settingsKey}})"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"></path></svg></button>
+<button class="btn sm ghost icon" aria-label="Show inspector" aria-pressed="{{drawerPressed}}" aria-controls="insp-d"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M15 4v16"></path></svg></button>
+<a class="btn pri sm" href="PdfExport.dc.html">Export</a>
+</header>
+<div role="toolbar" aria-label="Edit tools" aria-orientation="horizontal" style="height: 44px; flex: none; display: flex; align-items: center; gap: 2px; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--side); position: relative">
+<a class="tbtn" href="PdfOrganize.dc.html" aria-pressed="false" aria-label="Organize" tabindex="-1" style="padding: 0 7px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1"></rect><rect x="14" y="3" width="7" height="9" rx="1"></rect><rect x="3" y="15" width="7" height="6" rx="1"></rect><rect x="14" y="15" width="7" height="6" rx="1"></rect></svg></a>
+<a class="tbtn" href="PdfCrop.dc.html" aria-pressed="false" aria-label="Crop" tabindex="-1" style="padding: 0 7px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2v14a2 2 0 0 0 2 2h14"></path><path d="M18 22V8a2 2 0 0 0-2-2H2"></path></svg></a>
+<span class="sep" aria-hidden="true"></span>
+<a class="tbtn" href="PdfEditText.dc.html" aria-pressed="false" aria-label="Edit text" tabindex="-1" style="padding: 0 7px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"></path><path d="M13 7l4 4"></path></svg></a>
+<a class="tbtn" href="PdfText.dc.html" aria-pressed="true" aria-label="Add text" style="padding: 0 7px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6V4h14v2M12 4v16M9 20h6"></path></svg></a>
+<a class="tbtn" href="PdfSign.dc.html" aria-pressed="false" aria-label="Sign" tabindex="-1" style="padding: 0 7px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17c3 0 4-6 6-6s1 5 3 5 2-3 4-3 2 2 5 2"></path><path d="M3 21h18"></path></svg></a>
+<a class="tbtn" href="PdfForms.dc.html" aria-pressed="false" aria-label="Fill form" tabindex="-1" style="padding: 0 7px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="5" rx="1"></rect><rect x="3" y="14" width="18" height="5" rx="1"></rect><path d="M6 7.5h4"></path></svg></a>
+<span class="sep" aria-hidden="true"></span>
+<a class="tbtn" href="PdfMarks.dc.html" aria-pressed="false" aria-label="Watermark" tabindex="-1" style="padding: 0 7px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4"></path><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"></path><path d="M8 17l8-6"></path></svg></a>
+<a class="tbtn" href="PdfMarks.dc.html" aria-pressed="false" aria-label="Page numbers" tabindex="-1" style="padding: 0 7px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h16M4 15h16M10 3L8 21M16 3l-2 18"></path></svg></a>
+<a class="tbtn" href="PdfMarks.dc.html" aria-pressed="false" aria-label="Header and footer" tabindex="-1" style="padding: 0 7px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2"></rect><path d="M4 7h16M4 17h16"></path></svg></a>
+<span class="sep" aria-hidden="true"></span>
+<a class="tbtn" href="PdfRedact.dc.html" aria-pressed="false" aria-label="Redact" tabindex="-1" style="padding: 0 7px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="4" rx="1" fill="currentColor"></rect><path d="M3 15h10M3 19h14"></path></svg></a>
+<button class="tbtn" aria-haspopup="menu" aria-expanded="false" aria-pressed="false" tabindex="-1">More<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></button>
+</div>
+<div style="flex: 1; display: flex; min-height: 0; position: relative">
+<main aria-label="Page 3 of 14" style="flex: 1; min-width: 0; background: var(--well); overflow: auto; display: flex; justify-content: center; padding: 16px 0; box-sizing: border-box">
+<div class="paper" style="width: 560px; height: 725px; flex: none; padding: 62px 64px; font-size: 11.5px"><h3>4. Rent and payment</h3>
+<p>4.1 The Tenant will pay rent of £1,450 per calendar month, in advance, on the first day of each month.</p>
+<p>4.2 Payment is made by standing order to the account named in Schedule 2. The Landlord will confirm each payment in writing on request.</p>
+<p>4.3 If rent is more than 14 days late, the Landlord may charge interest at 3% above the Bank of England base rate on the overdue amount.</p>
+<h3 style="margin-top: 14px">5. Deposit</h3>
+<p>5.1 The Tenant has paid a deposit of £1,673, held in a government-approved tenancy deposit scheme within 30 days of receipt.</p>
+<p>5.2 The deposit will be returned within 10 days of the end of the tenancy, less any agreed deductions for damage beyond fair wear and tear.</p>
+<h3 style="margin-top: 14px">6. Use of the property</h3>
+<p>6.1 The Tenant will use the property as a private home only and will not sublet any part of it without the Landlord's written consent.</p>
+<p>6.2 The Tenant will keep the property clean and in good condition and will report any damage or needed repairs promptly.</p>
+<button class="obj" aria-label="Text box, page 3: Initialled A.P. Selected." style="left: 330px; top: 26px; width: 190px; height: 36px; background: rgba(29,95,209,.05); font-weight: 700; font-size: 13px; color: #1f1f1f; padding: 6px 8px">Initialled A.P.</button></div>
+</main>
+<sc-if value="{{drawer}}" hint-placeholder-val="{{ true }}"><div aria-hidden="true" style="position: absolute; inset: 0; background: var(--scrim)"></div>
+<aside id="insp-d" role="dialog" aria-modal="true" aria-labelledby="dh" style="position: absolute; right: 0; top: 0; bottom: 0; width: 300px; background: var(--panel); border-left: 1px solid var(--line2); box-shadow: -16px 0 32px rgba(0,0,0,.3); display: flex; flex-direction: column">
+<div style="display: flex; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--line)"><h2 id="dh" style="margin: 0; font-size: 14px; font-weight: 600; flex: 1">Add text</h2><button class="btn sm ghost icon" aria-label="Close inspector (Esc)"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button></div>
+<div style="padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; overflow: auto">
+<div style="display: grid; grid-template-columns: 1fr 70px; gap: 8px"><select class="field" aria-label="Font"><option>Noto Sans</option></select><select class="field" aria-label="Size"><option>12 pt</option></select></div>
+<div style="display: flex; gap: 6px"><button class="btn sm icon" aria-label="Bold" aria-pressed="true"><b>B</b></button><button class="btn sm icon" aria-label="Italic" aria-pressed="false"><i>I</i></button><input type="color" class="field" aria-label="Colour" value="#1f1f1f" style="width: 40px; padding: 2px"></div>
+<fieldset style="border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px"><legend class="lbl" style="padding: 0; margin-bottom: 6px">Show this text on</legend><label style="display: flex; gap: 8px; align-items: center"><input type="radio" name="sc" checked>This page only</label><label style="display: flex; gap: 8px; align-items: center"><input type="radio" name="sc">These pages</label></fieldset>
+<div style="display: flex; gap: 6px"><button class="btn sm"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"></rect><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"></path></svg>Duplicate</button><button class="btn sm"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"></path></svg>Delete</button></div>
+<p class="hint" style="margin: 0">Focus returns to the text box when you close this panel.</p>
+</div></aside></sc-if>
+</div>
+<footer style="height: 30px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 10px; border-top: 1px solid var(--line); background: var(--side)"><label class="hint" for="pg" style="display: flex; align-items: center; gap: 6px">Page<input id="pg" class="field" value="3" style="width: 40px; height: 22px; text-align: center"></label><span class="hint">of 14</span><div style="flex: 1"></div><span class="hint" role="status">Text box added on page 3.</span></footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "inspector": {"editor": "enum", "options": ["Open", "Closed"], "default": "Open"}, "$preview": {"width": 900, "height": 800}}'>
+class Component extends DCLogic {
+renderVals() {
+const win = (this.props.platform ?? 'macOS') === 'Windows';
+const light = (this.props.theme ?? 'dark') === 'light';
+const base = {
+themeClass: light ? 'tb light' : 'tb dark',
+findKey: win ? 'Ctrl+K' : '⌘K',
+settingsKey: win ? 'Ctrl+,' : '⌘,',
+runKey: win ? 'Ctrl+Enter' : '⌘↵',
+openKey: win ? 'Ctrl+O' : '⌘O',
+undoKey: win ? 'Ctrl+Z' : '⌘Z',
+redoKey: win ? 'Ctrl+Y' : '⇧⌘Z',
+dupKey: win ? 'Ctrl+D' : '⌘D',
+selAllKey: win ? 'Ctrl+A' : '⌘A',
+mod: win ? 'Ctrl' : '⌘',
+reveal: win ? 'Show in File Explorer' : 'Show in Finder',
+docsDir: win ? 'C:\\Users\\Asha\\Documents' : '~/Documents'
+};
+const d = (this.props.inspector ?? 'Open') === 'Open';
+const extra = { drawer: d, drawerPressed: d ? 'true' : 'false' };
+return Object.assign(base, typeof extra === 'undefined' ? {} : extra);
+}
+}
+</script>
+</body>
+</html>

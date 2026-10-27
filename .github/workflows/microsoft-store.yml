@@ -1,9 +1,16 @@
 name: Microsoft Store
 
 on:
-  push:
+  workflow_run:
+    workflows: [Tauri Release]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
+    inputs:
+      version:
+        description: Exact semver to build (blank uses the next Tauri release version)
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -13,8 +20,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build-and-publish:
-    name: Build and publish MSIX
+  build:
+    name: Build MSIX
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: windows-latest
     env:
       TOOLBOX_MSIX_IDENTITY_NAME: ${{ vars.TOOLBOX_MSIX_IDENTITY_NAME }}
@@ -26,6 +37,49 @@ jobs:
       TOOLBOX_PDFTOPPM_PATH: ${{ github.workspace }}\ToolboxTauri\src-tauri\resources\pdftoppm.exe
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Resolve Store package version
+        id: version
+        shell: pwsh
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          $versionPattern = '^\d+\.\d+\.\d+$'
+          if ($env:EVENT_NAME -eq 'workflow_run') {
+            $releaseTag = git tag --list 'tauri-v[0-9]*' | Where-Object {
+              (git rev-list -n 1 $_).Trim() -eq $env:RELEASE_SHA
+            } | Select-Object -First 1
+            if (-not $releaseTag) {
+              throw "No Tauri release tag points to source commit $env:RELEASE_SHA."
+            }
+            $version = $releaseTag.Substring('tauri-v'.Length)
+          } elseif (-not [string]::IsNullOrWhiteSpace($env:REQUESTED_VERSION)) {
+            $version = $env:REQUESTED_VERSION.Trim()
+          } else {
+            $configured = (Get-Content -Raw ToolboxTauri/src-tauri/tauri.conf.json | ConvertFrom-Json).version
+            if ($configured -notmatch $versionPattern) { throw "Invalid configured version '$configured'." }
+            $latestTag = git tag --list 'tauri-v[0-9]*' |
+              ForEach-Object { $_.Substring('tauri-v'.Length) } |
+              Sort-Object { [version]$_ } -Descending |
+              Select-Object -First 1
+            if (-not $latestTag) {
+              $version = $configured
+            } elseif ([version]$configured -gt [version]$latestTag) {
+              $version = $configured
+            } else {
+              $parts = $latestTag.Split('.')
+              $parts[2] = ([int]$parts[2] + 1).ToString()
+              $version = $parts -join '.'
+            }
+          }
+          if ($version -notmatch $versionPattern) { throw "Invalid Store package version '$version'." }
+          "value=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Building Toolbox Store package version $version."
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -50,6 +104,11 @@ jobs:
         working-directory: ToolboxTauri
         run: |
           choco install qpdf tesseract -y
+          $tesseractDirectory = Join-Path $env:ProgramFiles 'Tesseract-OCR'
+          if (-not (Test-Path (Join-Path $tesseractDirectory 'tesseract.exe'))) {
+            throw 'Could not locate the installed Tesseract executable'
+          }
+          $tesseractDirectory | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           $popplerVersion = '26.02.0-0'
           $popplerSha256 = '993e4a94376ed712fafc7058d724ea0b943d118bbd2305cd9ed55174eb85cda5'
           $popplerArchive = Join-Path $env:RUNNER_TEMP "poppler-$popplerVersion.zip"
@@ -63,6 +122,8 @@ jobs:
           Expand-Archive -Path $popplerArchive -DestinationPath $popplerExtract -Force
           $pdftoppm = Get-ChildItem $popplerExtract -Recurse -Filter pdftoppm.exe | Select-Object -First 1
           if (-not $pdftoppm) { throw 'Could not locate pdftoppm.exe in the Poppler archive' }
+          $pdftotext = Get-ChildItem $popplerExtract -Recurse -Filter pdftotext.exe | Select-Object -First 1
+          if (-not $pdftotext) { throw 'Could not locate pdftotext.exe in the Poppler archive' }
           New-Item -ItemType Directory -Force -Path src-tauri\resources | Out-Null
           $qpdf = Get-ChildItem "$env:ChocolateyInstall\lib\qpdf" -Recurse -Filter qpdf.exe | Select-Object -First 1
           if (-not $qpdf) { throw 'Could not locate qpdf.exe in the Chocolatey package' }
@@ -70,7 +131,12 @@ jobs:
           Get-ChildItem $qpdf.DirectoryName -Filter *.dll | Copy-Item -Destination src-tauri\resources -Force
           Copy-Item $pdftoppm.FullName src-tauri\resources\pdftoppm.exe -Force
           Get-ChildItem $pdftoppm.DirectoryName -Filter *.dll | Copy-Item -Destination src-tauri\resources -Force
+          Copy-Item $pdftotext.FullName src-tauri\resources\pdftotext.exe -Force
           & src-tauri\resources\qpdf.exe --version
+
+      - name: Run Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1
+        working-directory: ToolboxTauri
 
       - name: Stage offline vision adapter
         run: npm run stage:vision
@@ -80,14 +146,16 @@ jobs:
         run: npm run stage:ocr
         working-directory: ToolboxTauri
 
-      - name: Run Rust tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Verify third-party notices cover shipped binaries
+        run: node scripts/third-party-notices.mjs --binaries src-tauri/resources
         working-directory: ToolboxTauri
 
       - name: Build unsigned MSIX
         shell: pwsh
         working-directory: ToolboxTauri
-        run: .\scripts\build-msix.ps1
+        env:
+          TOOLBOX_RELEASE_VERSION: ${{ steps.version.outputs.value }}
+        run: .\scripts\build-msix.ps1 -Version $env:TOOLBOX_RELEASE_VERSION
 
       - name: Upload MSIX build artifact
         uses: actions/upload-artifact@v4
@@ -96,47 +164,3 @@ jobs:
           path: ToolboxTauri/.artifacts/msix/*.msix
           if-no-files-found: error
 
-      - name: Configure Microsoft Store CLI
-        uses: microsoft/microsoft-store-apppublisher@v1.1
-
-      - name: Check Microsoft Store credentials
-        id: store-credentials
-        shell: pwsh
-        env:
-          AZURE_AD_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
-          SELLER_ID: ${{ secrets.SELLER_ID }}
-          AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
-          AZURE_AD_APPLICATION_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
-        run: |
-          $required = @(
-            $env:AZURE_AD_TENANT_ID,
-            $env:SELLER_ID,
-            $env:AZURE_AD_APPLICATION_CLIENT_ID,
-            $env:AZURE_AD_APPLICATION_SECRET
-          )
-          if ($required | Where-Object { [string]::IsNullOrWhiteSpace($_) }) {
-            Write-Warning 'Microsoft Store credentials are incomplete. Skipping Store publication.'
-            'publish=false' >> $env:GITHUB_OUTPUT
-          } else {
-            'publish=true' >> $env:GITHUB_OUTPUT
-          }
-
-      - name: Reconfigure Store credentials
-        if: steps.store-credentials.outputs.publish == 'true'
-        shell: pwsh
-        run: |
-          msstore reconfigure `
-            --tenantId "${{ secrets.AZURE_AD_TENANT_ID }}" `
-            --sellerId "${{ secrets.SELLER_ID }}" `
-            --clientId "${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}" `
-            --clientSecret "${{ secrets.AZURE_AD_APPLICATION_SECRET }}"
-
-      - name: Publish package to Microsoft Store
-        if: steps.store-credentials.outputs.publish == 'true'
-        shell: pwsh
-        run: |
-          $package = Get-ChildItem "${{ github.workspace }}\ToolboxTauri\.artifacts\msix" -Filter *.msix | Select-Object -First 1
-          if (-not $package) { throw 'The MSIX package was not produced.' }
-          msstore publish "${{ github.workspace }}\ToolboxTauri\.artifacts\msix" `
-            --inputFile $package.FullName `
-            --appId "${{ vars.TOOLBOX_MSIX_STORE_ID }}"

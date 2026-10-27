@@ -1,9 +1,15 @@
 import { UtilityRegistry } from "../registry";
+import { Button } from "@/components/ui/button";
+import { useToolAvailability } from "../ToolAvailabilityContext";
 
-export const UtilityIndex = () => (
-  <nav className="utility-index" aria-label="Utilities" aria-hidden="true">
-    {UtilityRegistry.map((tool) => (
-      <button
+export const UtilityIndex = () => {
+  const availability = useToolAvailability();
+  return (
+    <nav className="utility-index" aria-label="Utilities" aria-hidden="true">
+    {availability.filter(UtilityRegistry).map((tool) => (
+      <Button
+        variant="ghost"
+        size="sm"
         key={tool.id}
         type="button"
         tabIndex={-1}
@@ -15,7 +21,8 @@ export const UtilityIndex = () => (
         }
       >
         {tool.shortTitle}
-      </button>
+      </Button>
     ))}
-  </nav>
-);
+    </nav>
+  );
+};

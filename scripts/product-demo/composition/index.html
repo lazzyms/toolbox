@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=1920, height=1080">
+    <title>Toolbox — Private by default</title>
+    <script src="assets/vendor/gsap.min.js"></script>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #171717;
+        --surface: #202020;
+        --surface-2: #292929;
+        --fg: #ededed;
+        --muted: #999999;
+        --border: #3a3a3a;
+        --accent: #60a5fa;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: var(--bg);
+      }
+
+      body {
+        color: var(--fg);
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      #root {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background:
+          radial-gradient(ellipse at 76% 42%, rgba(96, 165, 250, 0.065), transparent 38%),
+          var(--bg);
+      }
+
+      .clip {
+        position: absolute;
+        inset: 0;
+        overflow: hidden;
+        background: transparent;
+      }
+
+      .scene-content {
+        position: absolute;
+        inset: 0;
+      }
+
+      .top-lockup {
+        position: absolute;
+        top: 90px;
+        left: 150px;
+        display: flex;
+        align-items: center;
+        gap: 16px;
+      }
+
+      .brand-mark {
+        display: grid;
+        width: 48px;
+        height: 48px;
+        place-items: center;
+        border-radius: 13px;
+        background: var(--fg);
+        color: var(--bg);
+        font-size: 25px;
+        font-weight: 750;
+        letter-spacing: -0.08em;
+      }
+
+      .brand-name {
+        font-size: 25px;
+        font-weight: 620;
+        letter-spacing: -0.04em;
+      }
+
+      .eyebrow {
+        margin: 0;
+        color: var(--accent);
+        font-size: 15px;
+        font-weight: 680;
+        letter-spacing: 0.18em;
+        line-height: 1.25;
+        text-transform: uppercase;
+      }
+
+      .hero-copy {
+        position: absolute;
+        top: 300px;
+        left: 160px;
+        width: 930px;
+      }
+
+      .hero-title {
+        display: grid;
+        gap: 2px;
+        margin: 24px 0 28px;
+        font-size: 104px;
+        font-weight: 560;
+        letter-spacing: -0.075em;
+        line-height: 0.98;
+      }
+
+      .accent {
+        color: var(--accent);
+      }
+
+      .hero-subtitle {
+        max-width: 750px;
+        margin: 0;
+        color: #c5c5c5;
+        font-size: 30px;
+        font-weight: 420;
+        letter-spacing: -0.025em;
+        line-height: 1.35;
+      }
+
+      .file-stack {
+        position: absolute;
+        top: 250px;
+        right: 190px;
+        display: grid;
+        width: 390px;
+        gap: 18px;
+      }
+
+      .file-tile {
+        display: grid;
+        min-height: 112px;
+        grid-template-columns: 56px 1fr auto;
+        align-items: center;
+        gap: 18px;
+        padding: 18px 22px;
+        border: 1px solid var(--border);
+        border-radius: 15px;
+        background: rgba(32, 32, 32, 0.92);
+        box-shadow: 0 16px 40px rgba(0, 0, 0, 0.2);
+      }
+
+      .file-glyph {
+        display: grid;
+        width: 52px;
+        height: 58px;
+        place-items: center;
+        border: 1px solid #4b4b4b;
+        border-radius: 10px;
+        background: #191919;
+        color: var(--accent);
+        font-size: 14px;
+        font-weight: 750;
+        letter-spacing: 0.04em;
+      }
+
+      .file-tile strong {
+        color: var(--fg);
+        font-size: 21px;
+        font-weight: 570;
+        letter-spacing: -0.02em;
+      }
+
+      .file-tile span:last-child {
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .section-kicker {
+        margin-bottom: 28px;
+      }
+
+      .section-title {
+        margin: 0 0 20px;
+        font-size: 62px;
+        font-weight: 540;
+        letter-spacing: -0.065em;
+        line-height: 1.02;
+      }
+
+      .section-copy {
+        margin: 0;
+        color: #b6b6b6;
+        font-size: 25px;
+        font-weight: 420;
+        letter-spacing: -0.02em;
+        line-height: 1.45;
+      }
+
+      .screen-frame {
+        position: absolute;
+        overflow: hidden;
+        border: 1px solid #454545;
+        border-radius: 15px;
+        background: #101010;
+        box-shadow:
+          0 28px 68px rgba(0, 0, 0, 0.52),
+          0 0 32px rgba(96, 165, 250, 0.08);
+      }
+
+      .screen-frame img {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+
+      .library-frame {
+        top: 250px;
+        left: 105px;
+        width: 1150px;
+      }
+
+      .library-copy {
+        position: absolute;
+        top: 340px;
+        left: 1345px;
+        width: 440px;
+      }
+
+      .library-copy .section-title {
+        margin-top: 22px;
+      }
+
+      .category-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 30px;
+      }
+
+      .category-pill {
+        padding: 10px 14px;
+        border: 1px solid #424242;
+        border-radius: 999px;
+        color: #d0d0d0;
+        font-size: 15px;
+        font-weight: 580;
+        letter-spacing: 0.03em;
+      }
+
+      .edit-frame {
+        top: 220px;
+        left: 75px;
+        width: 1170px;
+      }
+
+      .workflow-copy {
+        position: absolute;
+        top: 220px;
+        left: 1320px;
+        width: 470px;
+      }
+
+      .workflow-title {
+        margin: 22px 0 30px;
+        font-size: 57px;
+        font-weight: 540;
+        letter-spacing: -0.065em;
+        line-height: 1.04;
+      }
+
+      .steps {
+        display: grid;
+        gap: 18px;
+      }
+
+      .step {
+        display: grid;
+        min-height: 82px;
+        grid-template-columns: 50px 1fr;
+        align-items: center;
+        gap: 18px;
+        border-bottom: 1px solid #353535;
+      }
+
+      .step-number {
+        color: var(--accent);
+        font-size: 16px;
+        font-weight: 700;
+        letter-spacing: 0.1em;
+      }
+
+      .step-label {
+        color: #e5e5e5;
+        font-size: 26px;
+        font-weight: 510;
+        letter-spacing: -0.025em;
+      }
+
+      .final-copy {
+        position: absolute;
+        top: 230px;
+        left: 160px;
+        width: 1050px;
+      }
+
+      .final-title {
+        display: grid;
+        gap: 3px;
+        margin: 28px 0 28px;
+        font-size: 100px;
+        font-weight: 550;
+        letter-spacing: -0.075em;
+        line-height: 0.98;
+      }
+
+      .final-note {
+        margin: 0;
+        color: #bdbdbd;
+        font-size: 28px;
+        font-weight: 420;
+        letter-spacing: -0.02em;
+      }
+
+      .final-lockup {
+        position: absolute;
+        right: 190px;
+        bottom: 170px;
+        display: flex;
+        align-items: center;
+        gap: 24px;
+      }
+
+      .final-mark {
+        display: grid;
+        width: 96px;
+        height: 96px;
+        place-items: center;
+        border: 1px solid rgba(237, 237, 237, 0.2);
+        border-radius: 25px;
+        background: linear-gradient(145deg, #f4f4f4, #cfcfcf);
+        color: #171717;
+        font-size: 54px;
+        font-weight: 760;
+        letter-spacing: -0.1em;
+        box-shadow: 0 24px 70px rgba(96, 165, 250, 0.15);
+      }
+
+      .final-brand {
+        display: block;
+        font-size: 56px;
+        font-weight: 610;
+        letter-spacing: -0.065em;
+      }
+
+      .final-caption {
+        display: block;
+        margin-top: 6px;
+        color: var(--muted);
+        font-size: 17px;
+        letter-spacing: 0.02em;
+      }
+    </style>
+  </head>
+  <body>
+    <div data-hf-id="hf-nqzz" id="root" data-composition-id="toolbox-product-demo" data-start="0" data-width="1920" data-height="1080" data-fps="30" data-duration="20.2">
+      <section data-hf-id="hf-4j7b" id="scene-one" class="clip" data-start="0" data-duration="3.3" data-track-index="0">
+        <div data-hf-id="hf-9nfh" id="scene-one-content" class="scene-content">
+          <div data-hf-id="hf-y7ug" class="top-lockup">
+            <span data-hf-id="hf-ig8e" class="brand-mark">T</span>
+            <span data-hf-id="hf-63vn" class="brand-name">Toolbox</span>
+            <span data-hf-id="hf-8fp5" class="eyebrow">Local desktop utilities</span>
+          </div>
+          <div data-hf-id="hf-jloi" class="hero-copy">
+            <p data-hf-id="hf-qzpd" class="eyebrow">Private by default</p>
+            <h1 data-hf-id="hf-e5h7" class="hero-title">
+              <span data-hf-id="hf-vk9x">Your files</span>
+              <span data-hf-id="hf-hwsc" class="accent">stay yours.</span>
+            </h1>
+            <p data-hf-id="hf-nuvg" class="hero-subtitle">Private file tools. Right on your device.</p>
+          </div>
+          <div data-hf-id="hf-2bfc" class="file-stack" aria-label="PDF, image, and document tools">
+            <div data-hf-id="hf-wku7" class="file-tile">
+              <span data-hf-id="hf-aw9g" class="file-glyph">PDF</span>
+              <strong data-hf-id="hf-ikbn">PDF tools</strong>
+              <span data-hf-id="hf-p81i">01</span>
+            </div>
+            <div data-hf-id="hf-eflr" class="file-tile">
+              <span data-hf-id="hf-aw7h" class="file-glyph">IMG</span>
+              <strong data-hf-id="hf-3sp0">Image tools</strong>
+              <span data-hf-id="hf-pmcj">02</span>
+            </div>
+            <div data-hf-id="hf-e1aq" class="file-tile">
+              <span data-hf-id="hf-qqsg" class="file-glyph">DOC</span>
+              <strong data-hf-id="hf-o83w">Document tools</strong>
+              <span data-hf-id="hf-q0nk">03</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section data-hf-id="hf-xe2t" id="scene-two" class="clip" data-start="3.3" data-duration="4.55" data-track-index="1">
+        <div data-hf-id="hf-ozjf" id="scene-two-content" class="scene-content">
+          <div data-hf-id="hf-2wvt" class="screen-frame library-frame">
+            <img data-hf-id="hf-9tpp" src="assets/toolbox-home.jpg" alt="Toolbox home workspace showing its persistent desktop navigation and PDF, image, and document tools.">
+          </div>
+          <div data-hf-id="hf-u3ot" class="library-copy">
+            <p data-hf-id="hf-wad2" class="eyebrow section-kicker">The Toolbox workspace</p>
+            <h2 data-hf-id="hf-yk4s" class="section-title">One desktop home for file work.</h2>
+            <p data-hf-id="hf-tgtl" class="section-copy">Open the tool you need, then get back to your work.</p>
+            <div data-hf-id="hf-j9xz" class="category-row">
+              <span data-hf-id="hf-eysv" class="category-pill">PDF</span>
+              <span data-hf-id="hf-axd9" class="category-pill">Images</span>
+              <span data-hf-id="hf-d80j" class="category-pill">Documents</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section data-hf-id="hf-pkcy" id="scene-three" class="clip" data-start="7.85" data-duration="6.5" data-track-index="2">
+        <div data-hf-id="hf-2m6x" id="scene-three-content" class="scene-content">
+          <div data-hf-id="hf-t9ug" class="screen-frame edit-frame">
+            <img data-hf-id="hf-3r5a" src="assets/toolbox-edit-success.jpg" alt="Toolbox Edit PDF workspace showing the fictional demo PDF and a successful saved copy.">
+          </div>
+          <div data-hf-id="hf-jklj" class="workflow-copy">
+            <p data-hf-id="hf-f2zv" class="eyebrow">A local file workflow</p>
+            <h2 data-hf-id="hf-3tut" class="workflow-title">Pick. Edit. Save.</h2>
+            <div data-hf-id="hf-70xd" class="steps">
+              <div data-hf-id="hf-4skp" class="step" id="step-one">
+                <span data-hf-id="hf-5u9k" class="step-number">01</span>
+                <span data-hf-id="hf-3uy6" class="step-label">Select a file</span>
+              </div>
+              <div data-hf-id="hf-sftb" class="step" id="step-two">
+                <span data-hf-id="hf-4nch" class="step-number">02</span>
+                <span data-hf-id="hf-iz3t" class="step-label">Add an annotation</span>
+              </div>
+              <div data-hf-id="hf-lnn1" class="step" id="step-three">
+                <span data-hf-id="hf-51ni" class="step-number">03</span>
+                <span data-hf-id="hf-sqkx" class="step-label">Save a new copy</span>
+              </div>
+            </div>
+            <p data-hf-id="hf-a7u5" class="section-copy" style="margin-top: 26px; font-size: 20px;">Text, notes, highlights, and shapes.</p>
+          </div>
+        </div>
+      </section>
+
+      <section data-hf-id="hf-6tl7" id="scene-four" class="clip" data-start="14.35" data-duration="5.85" data-track-index="3">
+        <div data-hf-id="hf-3pdj" id="scene-four-content" class="scene-content">
+          <div data-hf-id="hf-thpm" class="final-copy">
+            <p data-hf-id="hf-9il1" class="eyebrow">Private by default</p>
+            <h2 data-hf-id="hf-jim0" class="final-title">
+              <span data-hf-id="hf-x9a7">On your device.</span>
+              <span data-hf-id="hf-lryl" class="accent">Never uploaded.</span>
+            </h2>
+            <p data-hf-id="hf-cl7x" class="final-note">Files stay on this device.</p>
+          </div>
+          <div data-hf-id="hf-b55e" class="final-lockup" id="final-lockup">
+            <span data-hf-id="hf-5d3p" class="final-mark">T</span>
+            <span data-hf-id="hf-uckh">
+              <span data-hf-id="hf-ajuu" class="final-brand">Toolbox</span>
+              <span data-hf-id="hf-36l7" class="final-caption">Private, local-first file utilities</span>
+            </span>
+          </div>
+        </div>
+      </section>
+
+      <audio data-hf-id="hf-30t6" id="music-bed" data-start="0" data-duration="20.2" data-track-index="4" data-volume="0.64" src="assets/music/music-bed.mp3"></audio>
+      <audio data-hf-id="hf-0xu4" id="workflow-click-one" data-start="9.02" data-duration="0.06" data-track-index="5" data-volume="0.42" src="assets/sfx/ui-click.ogg"></audio>
+      <audio data-hf-id="hf-updh" id="workflow-click-two" data-start="10.02" data-duration="0.06" data-track-index="6" data-volume="0.42" src="assets/sfx/ui-click.ogg"></audio>
+      <audio data-hf-id="hf-j40j" id="workflow-click-three" data-start="11.02" data-duration="0.06" data-track-index="7" data-volume="0.42" src="assets/sfx/ui-click.ogg"></audio>
+      <audio data-hf-id="hf-0igb" id="wordmark-reveal" data-start="17.02" data-duration="0.18" data-track-index="8" data-volume="0.42" src="assets/sfx/reveal.ogg"></audio>
+    </div>
+    <script>
+      const tl = gsap.timeline({ paused: true });
+      const fromBottom = { y: 24, opacity: 0 };
+      const fromLeft = { x: -28, opacity: 0 };
+      const fromRight = { x: 28, opacity: 0 };
+
+      tl.fromTo("#scene-one-content", { opacity: 0 }, { opacity: 1, duration: 0.45 }, 0);
+      tl.fromTo(".top-lockup", fromLeft, { x: 0, opacity: 1, duration: 0.55, ease: "power3.out" }, 0.08);
+      tl.fromTo(".hero-copy", fromLeft, { x: 0, opacity: 1, duration: 0.72, ease: "power3.out" }, 0.18);
+      tl.fromTo(".file-tile", fromBottom, { y: 0, opacity: 1, duration: 0.48, stagger: 0.16, ease: "power3.out" }, 0.58);
+      tl.to("#scene-one-content", { opacity: 0, duration: 0.34, ease: "power1.in" }, 2.96);
+
+      tl.fromTo("#scene-two-content", { opacity: 0 }, { opacity: 1, duration: 0.44 }, 3.3);
+      tl.fromTo(".library-frame", fromLeft, { x: 0, opacity: 1, duration: 0.72, ease: "power3.out" }, 3.4);
+      tl.fromTo(".library-copy", fromRight, { x: 0, opacity: 1, duration: 0.62, ease: "power3.out" }, 3.66);
+      tl.fromTo(".category-pill", fromBottom, { y: 0, opacity: 1, duration: 0.38, stagger: 0.12, ease: "power2.out" }, 5.1);
+      tl.to("#scene-two-content", { opacity: 0, duration: 0.34, ease: "power1.in" }, 7.51);
+
+      tl.fromTo("#scene-three-content", { opacity: 0 }, { opacity: 1, duration: 0.4 }, 7.85);
+      tl.fromTo(".edit-frame", fromLeft, { x: 0, opacity: 1, duration: 0.72, ease: "power3.out" }, 7.98);
+      tl.fromTo(".workflow-copy", fromRight, { x: 0, opacity: 1, duration: 0.62, ease: "power3.out" }, 8.15);
+      tl.fromTo("#step-one", fromBottom, { y: 0, opacity: 1, duration: 0.4, ease: "power2.out" }, 9.02);
+      tl.fromTo("#step-two", fromBottom, { y: 0, opacity: 1, duration: 0.4, ease: "power2.out" }, 10.02);
+      tl.fromTo("#step-three", fromBottom, { y: 0, opacity: 1, duration: 0.4, ease: "power2.out" }, 11.02);
+      tl.fromTo(".workflow-copy .section-copy", { opacity: 0 }, { opacity: 1, duration: 0.4 }, 11.7);
+      tl.to("#scene-three-content", { opacity: 0, duration: 0.34, ease: "power1.in" }, 14.01);
+
+      tl.fromTo("#scene-four-content", { opacity: 0 }, { opacity: 1, duration: 0.42 }, 14.35);
+      tl.fromTo(".final-copy", fromLeft, { x: 0, opacity: 1, duration: 0.72, ease: "power3.out" }, 14.52);
+      tl.fromTo("#final-lockup", { y: 22, opacity: 0 }, { y: 0, opacity: 1, duration: 0.64, ease: "power3.out" }, 17.02);
+
+      window.__timelines["toolbox-product-demo"] = tl;
+    </script>
+  </body>
+</html>

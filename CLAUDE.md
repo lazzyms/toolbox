@@ -24,6 +24,14 @@ Native tests can be run with:
 cargo test --manifest-path ToolboxTauri/src-tauri/Cargo.toml
 ```
 
+## UI design
+
+`ToolboxTauri/design/` is the source of truth for the UI. Read
+`ToolboxTauri/design/README.md`, plus the relevant board and its screens, before
+any UI change. When the app and a board disagree, the board is correct. Build
+the boards with the shadcn rules in `AGENTS.md`. After a board changes, refresh
+the screens with `npm run design:screens`.
+
 ## Code layout
 
 - `ToolboxTauri/src/` — React shell, settings, shared components, and feature views

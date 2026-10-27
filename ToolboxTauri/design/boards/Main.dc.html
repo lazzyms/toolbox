@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Command center</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+.tb{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;font-size:13px;line-height:1.45;color:var(--fg);background:var(--bg);-webkit-font-smoothing:antialiased}
+.tb.dark{--bg:#0a0a0a;--side:#111111;--panel:#0f0f0f;--raise:#1c1c1c;--fg:#fafafa;--mut:#a3a3a3;--faint:#8a8a8a;--line:rgba(255,255,255,.08);--line2:rgba(255,255,255,.16);--sel:#262626;--pri:#ebebeb;--prifg:#171717;--bad:#ff6b6b;--warn:#f2b552;--ring:#a3a3a3;--scrim:rgba(0,0,0,.6)}
+.tb.light{--bg:#ffffff;--side:#f7f7f7;--panel:#fcfcfc;--raise:#f2f2f2;--fg:#0a0a0a;--mut:#525252;--faint:#666666;--line:#e8e8e8;--line2:#d4d4d4;--sel:#ebebeb;--pri:#171717;--prifg:#fafafa;--bad:#c10007;--warn:#9a5800;--ring:#525252;--scrim:rgba(0,0,0,.28)}
+.tb button,.tb input{font:inherit;color:inherit}
+.btn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:7px;border:1px solid var(--line2);background:var(--raise);color:var(--fg);font-weight:500;cursor:pointer;white-space:nowrap;box-sizing:border-box;text-decoration:none}
+.btn.pri{background:var(--pri);color:var(--prifg);border-color:transparent}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--mut)}
+.btn[disabled]{opacity:.45;cursor:default}
+.kbd{font-size:11px;line-height:16px;padding:0 5px;border-radius:4px;border:1px solid var(--line2);color:var(--mut);font-weight:500}
+.btn.pri .kbd{border-color:currentColor;color:inherit;opacity:.6}
+.nav{display:flex;align-items:center;gap:9px;min-height:30px;padding:0 10px;border-radius:7px;color:var(--mut);text-decoration:none;border:0;background:none;width:100%;text-align:left;cursor:pointer;box-sizing:border-box}
+.nav.on{background:var(--sel);color:var(--fg);font-weight:500}
+.tool{display:flex;align-items:center;gap:9px;height:30px;padding:0 8px;margin:0 -8px;border-radius:6px;border:0;background:none;color:var(--fg);text-align:left;cursor:pointer;width:calc(100% + 16px);box-sizing:border-box}
+.tool:hover{background:var(--raise)}
+.hint{font-size:12px;color:var(--mut)}
+svg.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.tb :focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+a{color:inherit}a:hover{color:var(--mut)}
+</style>
+</helmet>
+<div class="{{themeClass}}" style="min-height: 800px; display: flex; flex-wrap: wrap">
+<aside aria-label="Toolbox" style="flex: 1 1 220px; max-width: 232px; background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; padding: 14px 10px; box-sizing: border-box">
+<div style="display: flex; align-items: center; gap: 10px; padding: 4px 10px 14px">
+<svg width="26" height="26" viewBox="0 0 1024 1024" aria-hidden="true" focusable="false"><defs><linearGradient id="brand" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#16263c"/><stop offset="1" stop-color="#0b3a63"/></linearGradient></defs><rect x="0" y="0" width="1024" height="1024" rx="232" fill="url(#brand)"/><rect x="372" y="186" width="280" height="150" rx="56" fill="none" stroke="#e9eff7" stroke-width="72"/><rect x="196" y="300" width="632" height="520" rx="96" fill="#e9eff7"/></svg>
+<strong style="font-size: 14px">Toolbox</strong>
+</div>
+<button class="nav on" aria-current="page"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"></path></svg>All tools</button>
+<button class="nav"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 17.8l-6.2 3.2 1.2-6.9-5-4.9 6.9-1L12 2l3.1 6.2 6.9 1-5 4.9 1.2 6.9z"></path></svg>Favorites</button>
+<div style="padding: 18px 10px 6px; font-size: 12px; font-weight: 600; color: var(--faint)">Views</div>
+<a class="nav" href="SecEmpty.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg>File Security</a>
+<a class="nav" href="PdfText.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4"></path><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"></path><path d="M9 15l5-5 2 2-5 5H9z"></path></svg>PDF Editor</a>
+<button class="nav"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10h14l-4-4M17 14H3l4 4"></path></svg>PDF Conversion</button>
+<button class="nav"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 16l5-5 4 4 3-3 6 6"></path><circle cx="15.5" cy="8.5" r="1.5"></circle></svg>Image Editor</button>
+<button class="nav"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v7M9 7l3 3 3-3M12 21v-7M9 17l3-3 3 3M4 12h16"></path></svg>Compress Files</button>
+<button class="nav"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5z"></path><path d="M3 13l9 5 9-5"></path></svg>Media</button>
+<div style="flex: 1"></div>
+<button class="nav"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"></path></svg>Settings<span class="kbd" style="margin-left: auto">{{settingsKey}}</span></button>
+<p class="hint" style="margin: 0; padding: 10px 10px 0">Files stay on this device.</p>
+</aside>
+<main style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+<div style="padding: 28px 40px 8px; display: flex; flex-direction: column; gap: 18px; max-width: 1040px; box-sizing: border-box; width: 100%">
+<label for="find" style="position: absolute; width: 1px; height: 1px; overflow: hidden">Find a tool</label>
+<div style="display: flex; align-items: center; gap: 10px; height: 42px; padding: 0 14px; border: 1px solid var(--line2); border-radius: 10px; background: var(--raise)">
+<svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><circle cx="10" cy="10" r="7"></circle><path d="M21 21l-6-6"></path></svg>
+<input id="find" type="search" placeholder="Find a tool, like merge, OCR or compress" style="flex: 1; border: 0; background: transparent; outline: none; font-size: 14px; min-width: 0">
+<span class="kbd">{{findKey}}</span>
+</div>
+<div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap">
+<span class="hint" style="margin-right: 4px">Favorites</span>
+<button class="btn" style="height: 28px">Merge PDF</button>
+<button class="btn" style="height: 28px">Compress PDF</button>
+<button class="btn" style="height: 28px">Convert Image Format</button>
+</div>
+</div>
+<div style="padding: 12px 40px 40px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); column-gap: 40px; row-gap: 32px; max-width: 1040px; box-sizing: border-box; width: 100%">
+<section aria-labelledby="v1" style="border-top: 1px solid var(--line); padding-top: 14px; display: flex; flex-direction: column; gap: 2px">
+<div style="display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 6px"><h2 id="v1" style="margin: 0; font-size: 14px; font-weight: 600">File Security</h2><a href="SecEmpty.dc.html" class="hint">Open view</a></div>
+<button class="tool">Lock &amp; Unlock</button>
+</section>
+<section aria-labelledby="v2" style="border-top: 1px solid var(--line); padding-top: 14px; display: flex; flex-direction: column; gap: 2px">
+<div style="display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 6px"><h2 id="v2" style="margin: 0; font-size: 14px; font-weight: 600">PDF Editor</h2><a href="PdfText.dc.html" class="hint">Open view</a></div>
+<button class="tool">Edit PDF</button>
+<button class="tool">Organize Pages</button>
+<button class="tool">Merge PDF</button>
+<button class="tool">Split PDF</button>
+<button class="tool">Crop and Resize</button>
+<button class="tool">Page Numbers and Bates</button>
+<button class="tool hint" style="color: var(--mut)">6 more tools</button>
+</section>
+<section aria-labelledby="v3" style="border-top: 1px solid var(--line); padding-top: 14px; display: flex; flex-direction: column; gap: 2px">
+<div style="display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 6px"><h2 id="v3" style="margin: 0; font-size: 14px; font-weight: 600">PDF Conversion</h2><span class="hint">Open view</span></div>
+<button class="tool">PDF to Images</button>
+<button class="tool">Images to PDF</button>
+<button class="tool">Convert to PDF</button>
+<button class="tool">OCR</button>
+<button class="tool">Extract Text and Images</button>
+<button class="tool">PDF to EPUB</button>
+<button class="tool hint" style="color: var(--mut)">2 more tools</button>
+</section>
+<section aria-labelledby="v4" style="border-top: 1px solid var(--line); padding-top: 14px; display: flex; flex-direction: column; gap: 2px">
+<div style="display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 6px"><h2 id="v4" style="margin: 0; font-size: 14px; font-weight: 600">Image Editor</h2><span class="hint">Open view</span></div>
+<button class="tool">Edit Image</button>
+<button class="tool">Convert Image Format</button>
+<button class="tool">Resize and Crop</button>
+<button class="tool">Watermark Images</button>
+<button class="tool">Remove Metadata</button>
+</section>
+<section aria-labelledby="v5" style="border-top: 1px solid var(--line); padding-top: 14px; display: flex; flex-direction: column; gap: 2px">
+<div style="display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 6px"><h2 id="v5" style="margin: 0; font-size: 14px; font-weight: 600">Compress Files</h2><span class="hint">Open view</span></div>
+<button class="tool">Compress PDF</button>
+<button class="tool">Compress Images</button>
+<p class="hint" style="margin: 6px 0 0">Smallest, Balanced or Best quality. Files that wouldn't get smaller are skipped.</p>
+</section>
+<section aria-labelledby="v6" style="border-top: 1px solid var(--line); padding-top: 14px; display: flex; flex-direction: column; gap: 2px">
+<div style="display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 6px"><h2 id="v6" style="margin: 0; font-size: 14px; font-weight: 600">Media</h2><span class="hint">Open view</span></div>
+<button class="tool">App Icons and Favicons</button>
+<button class="tool">Create GIF</button>
+<button class="tool">Extract GIF Frames</button>
+<button class="tool">Split and Combine TIFF</button>
+</section>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark"},"platform":{"editor":"enum","options":["macOS","Windows"],"default":"macOS"},"$preview":{"width":1280,"height":800}}'>
+class Component extends DCLogic {
+renderVals() {
+const win = (this.props.platform ?? 'macOS') === 'Windows';
+const light = (this.props.theme ?? 'dark') === 'light';
+return {
+themeClass: light ? 'tb light' : 'tb dark',
+findKey: win ? 'Ctrl+K' : '⌘K',
+settingsKey: win ? 'Ctrl+,' : '⌘,'
+};
+}
+}
+</script>
+</body>
+</html>

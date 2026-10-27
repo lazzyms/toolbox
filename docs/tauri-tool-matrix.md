@@ -1,10 +1,11 @@
 # Tauri tool matrix
 
-The [Tauri registry](../ToolboxTauri/src/registry/index.ts) defines the catalog,
-category, display order, command, and availability for `main`. It includes
-document, PDF, and image utilities. On `main`, OCR PDF, Blur Faces, and Remove
-Background are implemented with bundled offline resources. This matrix describes
-the source tree; a published release may predate changes on `main`.
+`UtilityMetadata` in the [Tauri registry](../ToolboxTauri/src/registry/index.ts)
+defines the catalog, category, display order, command, and verification ID.
+`shared/tool-capabilities.json` records each command's availability for
+`main`. The app combines those files into its utility registry. OCR PDF,
+Blur Faces, and Remove Background remain unavailable. A published release may
+predate changes on `main`.
 
 `implemented` records the application status. It does not establish full parity
 with every requirement in the
@@ -22,13 +23,14 @@ that exist today.
 | pdf-crop | PDF | implemented | crop_pdf | pdf-crop |
 | pdf-edit | PDF | implemented | edit_pdf | pdf-edit |
 | pdf-protect | PDF | implemented | protect_pdf | protect-pdf |
+| office-protect | Documents | implemented | protect_office | protect-office |
 | images-to-pdf | PDF | implemented | images_to_pdf | images-to-pdf |
 | pdf-to-images | PDF | implemented | pdf_to_images | pdf-to-images |
 | pdf-to-text | PDF | implemented | pdf_to_text | pdf-to-text |
 | pdf-split | PDF | implemented | split_pdf | pdf-split |
 | pdf-image-extract | PDF | implemented | extract_pdf_images | pdf-image-extract |
 | pdf-sign | PDF | implemented | sign_pdf | pdf-sign |
-| pdf-ocr | PDF | implemented | ocr_pdf | pdf-ocr |
+| pdf-ocr | PDF | unavailable | ocr_pdf | pdf-ocr |
 | pdf-remove-pages | PDF | implemented | remove_pdf_pages | pdf-remove-pages |
 | pdf-extract-pages | PDF | implemented | extract_pdf_pages | pdf-extract-pages |
 | pdf-organize | PDF | implemented | organize_pdf | pdf-organize |
@@ -45,8 +47,8 @@ that exist today.
 | image-metadata | Images | implemented | image_metadata | image-metadata |
 | image-tone | Images | implemented | adjust_image_tone | image-tone |
 | tiff-pages | Images | implemented | process_tiff_pages | tiff-pages |
-| image-blur-faces | Images | implemented | blur_faces | image-blur-faces |
-| image-remove-bg | Images | implemented | remove_image_background | image-remove-bg |
+| image-blur-faces | Images | unavailable | blur_faces | image-blur-faces |
+| image-remove-bg | Images | unavailable | remove_image_background | image-remove-bg |
 
 The `pdf-unlock` ID remains stable for saved navigation. Its current title is
 **Remove Password**, and it handles PDF, Word, Excel, and PowerPoint documents.

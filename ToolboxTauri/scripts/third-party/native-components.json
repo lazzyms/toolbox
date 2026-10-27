@@ -1,0 +1,514 @@
+{
+  "components": [
+    {
+      "name": "Toolbox",
+      "license": "MIT",
+      "copyright": "Copyright (c) Maulik Sompura",
+      "source": "https://github.com/lazzyms/toolbox",
+      "note": "The Toolbox app and its offline vision adapter. The app binary statically links the libheif, libde265, x265 and libwebp libraries listed below. Library versions marked \"Windows\" are those found in the Poppler package (PDF helper, pinned by checksum) and the Tesseract installer (OCR helper) that Toolbox 1.0.17 shipped; macOS builds use the Homebrew versions current at build time.",
+      "files": ["toolbox", "toolbox.exe", "toolbox-vision-adapter", "toolbox-vision-adapter.exe"]
+    },
+    {
+      "name": "libheif",
+      "version": "1.23.1",
+      "license": "LGPL-3.0-or-later",
+      "copyright": "Copyright (c) 2017-2020 Struktur AG; Copyright (c) 2017-2026 Dirk Farin",
+      "source": "https://github.com/strukturag/libheif/archive/refs/tags/v1.23.1.tar.gz",
+      "note": "Statically linked into the Toolbox app through the heif-rs crate, built from https://github.com/vegidio/binaries-heif/releases/tag/26.7.0. To relink against a modified libheif, rebuild Toolbox from its source at https://github.com/lazzyms/toolbox."
+    },
+    {
+      "name": "libde265",
+      "version": "1.1.1",
+      "license": "LGPL-3.0-or-later",
+      "copyright": "Copyright (c) 2013-2014 Struktur AG; Copyright (c) 2013-2026 Dirk Farin",
+      "source": "https://github.com/strukturag/libde265/archive/refs/tags/v1.1.1.tar.gz",
+      "note": "Statically linked into the Toolbox app with libheif."
+    },
+    {
+      "name": "x265",
+      "version": "4.2",
+      "license": "GPL-2.0-or-later",
+      "copyright": "Copyright (c) MulticoreWare, Inc and the x265 contributors",
+      "source": "https://download.videolan.org/pub/videolan/x265/x265_4.2.tar.gz",
+      "note": "Statically linked into the Toolbox app with libheif. Because the app binary includes this GPL code, the binary as a whole is distributed under GPL-3.0-or-later; its complete corresponding source is the Toolbox repository at https://github.com/lazzyms/toolbox plus the component sources linked here."
+    },
+    {
+      "name": "libwebp",
+      "version": "1.6.0",
+      "license": "BSD-3-Clause",
+      "copyright": "Copyright (c) 2010, Google Inc. All rights reserved.",
+      "source": "https://github.com/webmproject/libwebp/archive/refs/tags/v1.6.0.tar.gz",
+      "note": "Statically linked into the Toolbox app through the libwebp-sys crate, and shipped as a library with the OCR helper (Windows: 1.6.0, package release inferred from MSYS2 history). Google's patent grant follows.",
+      "files": ["libwebp*.dll", "libwebp*.dylib", "libwebpmux*.dll", "libwebpmux*.dylib", "libsharpyuv*.dll", "libsharpyuv*.dylib"],
+      "notices": ["scripts/third-party/notices/libwebp-1.6.0-PATENTS.txt"]
+    },
+    {
+      "name": "qpdf",
+      "version": "12.4.2",
+      "license": "Apache-2.0",
+      "copyright": "Copyright (c) 2005-2021 Jay Berkenbilt; Copyright (c) 2022-2026 Jay Berkenbilt and Manfred Holger",
+      "source": "https://github.com/qpdf/qpdf/releases/tag/v12.4.2",
+      "note": "GitHub installers for Windows ship the pinned qpdf 12.4.2 MSVC build (scripts/qpdf-pin.json). The Microsoft Store build ships the current Chocolatey qpdf package, a MinGW build whose qpdf DLL statically includes zlib, libjpeg-turbo and OpenSSL (listed below) and comes with its own GCC runtime. macOS builds use Homebrew's qpdf. qpdf's NOTICE file follows.",
+      "files": ["qpdf", "qpdf.exe", "qpdf*.dll", "libqpdf*.dylib"],
+      "notices": ["scripts/third-party/notices/qpdf-12.4.2-NOTICE.md"]
+    },
+    {
+      "name": "Poppler",
+      "license": "GPL-2.0-only OR GPL-3.0-only",
+      "copyright": "Copyright (c) 2005-2026 The Poppler Developers; based on Xpdf, Copyright (c) 1996-2011 Glyph & Cog, LLC",
+      "source": "https://poppler.freedesktop.org/poppler-26.02.0.tar.xz",
+      "note": "Windows builds use the poppler-windows 26.02.0-0 package (https://github.com/oschwartz10612/poppler-windows/releases/tag/v26.02.0-0), a repackage of the conda-forge poppler 26.02.0 build h4b9d284_3. That build's recipe and Windows patches are at https://github.com/conda-forge/poppler-feedstock/tree/b46a81fb3d74/recipe. macOS builds use Homebrew's poppler.",
+      "files": ["pdftoppm", "pdftoppm.exe", "pdftotext", "pdftotext.exe", "poppler*.dll", "libpoppler*.dylib"]
+    },
+    {
+      "name": "Tesseract OCR",
+      "version": "5.5.3",
+      "license": "Apache-2.0",
+      "copyright": "Copyright (c) Google Inc.; (C) Copyright 1992, Hewlett-Packard Ltd.; and the Tesseract contributors",
+      "source": "https://github.com/tesseract-ocr/tesseract/archive/refs/tags/5.5.3.tar.gz",
+      "note": "Windows builds use the official tesseract-ocr 5.5.3.20260724 installer (https://github.com/tesseract-ocr/tesseract/releases/tag/5.5.3), which is cross-compiled with the Debian gcc-mingw-w64 toolchain against MSYS2 libraries; sources for those libraries are at https://repo.msys2.org/mingw/sources/. macOS builds use Homebrew's tesseract. The English language data comes from https://github.com/tesseract-ocr/tessdata_fast under Apache-2.0.",
+      "files": ["tesseract", "tesseract.exe", "libtesseract*.dll", "libtesseract*.dylib"]
+    },
+    {
+      "name": "Leptonica",
+      "license": "BSD-2-Clause",
+      "copyright": "Copyright (C) 2001-2020 Leptonica. All rights reserved.",
+      "source": "https://github.com/DanBloomberg/leptonica",
+      "note": "Windows: 1.87.0 with the OCR helper (inferred from MSYS2 history).",
+      "files": ["libleptonica*.dll", "libleptonica*.dylib"]
+    },
+    {
+      "name": "cairo",
+      "license": "LGPL-2.1-only OR MPL-1.1",
+      "copyright": "Copyright (c) the cairo contributors",
+      "source": "https://www.cairographics.org/releases/",
+      "note": "Windows: 1.18.4 with the PDF and OCR helpers.",
+      "files": ["cairo.dll", "libcairo*.dll", "libcairo*.dylib"]
+    },
+    {
+      "name": "pixman",
+      "license": "MIT",
+      "copyright": "Copyright (c) The Open Group, Digital Equipment Corporation, Keith Packard, Red Hat, Inc. and others; the full list is in the COPYING file below",
+      "source": "https://www.cairographics.org/releases/",
+      "note": "Windows: 0.46.4 with the PDF and OCR helpers.",
+      "files": ["pixman*.dll", "libpixman*.dll", "libpixman*.dylib"],
+      "notices": ["scripts/third-party/notices/pixman-0.46.4-COPYING.txt"]
+    },
+    {
+      "name": "Pango",
+      "license": "LGPL-2.0-or-later",
+      "copyright": "Copyright (c) Red Hat Software and the Pango contributors",
+      "source": "https://download.gnome.org/sources/pango/",
+      "note": "Windows: 1.58.0 with the OCR helper.",
+      "files": ["libpango*.dll", "libpango*.dylib"]
+    },
+    {
+      "name": "GLib",
+      "license": "LGPL-2.1-or-later",
+      "copyright": "Copyright (c) the GLib contributors",
+      "source": "https://download.gnome.org/sources/glib/",
+      "note": "Windows: 2.88.2 with the OCR helper.",
+      "files": ["libglib*.dll", "libgio*.dll", "libgmodule*.dll", "libgobject*.dll", "libglib*.dylib", "libgio*.dylib", "libgmodule*.dylib", "libgobject*.dylib"]
+    },
+    {
+      "name": "HarfBuzz",
+      "license": "MIT-Modern-Variant",
+      "copyright": "Copyright (c) Google, Inc., Behdad Esfahbod, Red Hat, Inc. and others; the full list is in the COPYING file below",
+      "source": "https://github.com/harfbuzz/harfbuzz",
+      "note": "Windows: 14.2.1 with the OCR helper.",
+      "files": ["libharfbuzz*.dll", "libharfbuzz*.dylib"],
+      "notices": ["scripts/third-party/notices/harfbuzz-14.2.1-COPYING.txt"]
+    },
+    {
+      "name": "FriBidi",
+      "license": "LGPL-2.1-or-later",
+      "copyright": "Copyright (C) 1999, 2000 Dov Grobgeld; Copyright (C) 2001, 2002, 2004, 2005 Behdad Esfahbod; Copyright (C) 2004 Sharif FarsiWeb, Inc.",
+      "source": "https://github.com/fribidi/fribidi",
+      "note": "Windows: 1.0.16 with the OCR helper.",
+      "files": ["libfribidi*.dll", "libfribidi*.dylib"]
+    },
+    {
+      "name": "Graphite2",
+      "license": "LGPL-2.1-or-later OR MPL-2.0 OR GPL-2.0-or-later",
+      "copyright": "Copyright (c) SIL International",
+      "source": "https://github.com/silnrsi/graphite",
+      "note": "Windows: 1.3.15 with the OCR helper (inferred from MSYS2 history).",
+      "files": ["libgraphite2*.dll", "libgraphite2*.dylib"]
+    },
+    {
+      "name": "libthai and libdatrie",
+      "license": "LGPL-2.1-or-later",
+      "copyright": "Copyright (c) Theppitak Karoonboonyanan and the libthai contributors",
+      "source": "https://github.com/tlwg/libthai and https://github.com/tlwg/libdatrie",
+      "note": "Windows: libthai 0.1.30 and libdatrie 0.2.14 with the OCR helper (inferred from MSYS2 history).",
+      "files": ["libthai*.dll", "libdatrie*.dll", "libthai*.dylib", "libdatrie*.dylib"]
+    },
+    {
+      "name": "FreeType",
+      "license": "FTL OR GPL-2.0-or-later",
+      "copyright": "Portions of this software are copyright (c) The FreeType Project (www.freetype.org). All rights reserved.",
+      "source": "https://download.savannah.gnu.org/releases/freetype/",
+      "note": "Windows: 2.14.3 with the PDF and OCR helpers.",
+      "files": ["freetype*.dll", "libfreetype*.dll", "libfreetype*.dylib"]
+    },
+    {
+      "name": "Fontconfig",
+      "licenseFile": "scripts/third-party/notices/fontconfig-2.17.1-COPYING.txt",
+      "license": "HPND-sell-variant AND MIT AND MIT-Modern-Variant AND Unicode-3.0",
+      "copyright": "Copyright (c) Keith Packard, Red Hat, Inc., Google, Inc. and others; the full list is in the COPYING file below",
+      "source": "https://www.freedesktop.org/software/fontconfig/release/",
+      "note": "Windows: 2.17.1 with the PDF helper, 2.18.2 with the OCR helper (inferred from MSYS2 history).",
+      "files": ["fontconfig*.dll", "libfontconfig*.dll", "libfontconfig*.dylib"]
+    },
+    {
+      "name": "Expat",
+      "license": "MIT",
+      "copyright": "Copyright (c) 1998-2000 Thai Open Source Software Center Ltd and Clark Cooper; Copyright (c) 2001-2025 Expat maintainers",
+      "source": "https://github.com/libexpat/libexpat",
+      "note": "Windows: 2.8.0 with the PDF helper, 2.8.2 with the OCR helper.",
+      "files": ["expat.dll", "libexpat*.dll", "libexpat*.dylib"]
+    },
+    {
+      "name": "libjpeg-turbo",
+      "license": "IJG AND BSD-3-Clause AND Zlib",
+      "copyright": "Copyright (c) the libjpeg-turbo Project; this software is based in part on the work of the Independent JPEG Group",
+      "source": "https://github.com/libjpeg-turbo/libjpeg-turbo",
+      "note": "Windows: 3.1.4.1 with the PDF helper, 3.2.0 with the OCR helper; also statically linked into the Microsoft Store build's qpdf DLL.",
+      "files": ["jpeg*.dll", "libjpeg*.dll", "libjpeg*.dylib", "libturbojpeg*.dylib"]
+    },
+    {
+      "name": "libpng",
+      "license": "libpng-2.0",
+      "copyright": "Copyright (c) 1995-2026 The PNG Reference Library Authors; Copyright (c) 2018-2026 Cosmin Truta; Copyright (c) 2000-2002, 2004, 2006-2018 Glenn Randers-Pehrson; Copyright (c) 1996-1997 Andreas Dilger; Copyright (c) 1995-1996 Guy Eric Schalnat, Group 42, Inc.",
+      "source": "http://www.libpng.org/pub/png/libpng.html",
+      "note": "Windows: 1.6.58 with the PDF and OCR helpers.",
+      "files": ["libpng*.dll", "libpng*.dylib"]
+    },
+    {
+      "name": "LibTIFF",
+      "license": "libtiff",
+      "copyright": "Copyright (c) 1988-1997 Sam Leffler; Copyright (c) 1991-1997 Silicon Graphics, Inc.",
+      "source": "https://libtiff.gitlab.io/libtiff/",
+      "note": "Windows: 4.7.1 with the PDF helper, 4.7.2 with the OCR helper.",
+      "files": ["tiff.dll", "libtiff*.dll", "libtiff*.dylib"]
+    },
+    {
+      "name": "OpenJPEG",
+      "license": "BSD-2-Clause",
+      "copyright": "Copyright (c) 2002-2014 Universite catholique de Louvain (UCL), Belgium, and others; the full list is in the LICENSE file below",
+      "source": "https://github.com/uclouvain/openjpeg",
+      "note": "Windows: 2.5.4 with the PDF and OCR helpers.",
+      "files": ["openjp2.dll", "libopenjp2*.dll", "libopenjp2*.dylib"],
+      "notices": ["scripts/third-party/notices/openjpeg-2.5.4-LICENSE.txt"]
+    },
+    {
+      "name": "giflib",
+      "license": "MIT",
+      "copyright": "Copyright (c) 1997 Eric S. Raymond",
+      "source": "https://sourceforge.net/projects/giflib/",
+      "note": "Windows: 6.1.3 with the OCR helper (inferred from MSYS2 history).",
+      "files": ["libgif*.dll", "libgif*.dylib"]
+    },
+    {
+      "name": "JBIG-KIT",
+      "version": "2.1",
+      "license": "GPL-2.0-or-later",
+      "copyright": "Copyright (c) 1995-2014 Markus Kuhn",
+      "source": "https://www.cl.cam.ac.uk/~mgk25/jbigkit/download/jbigkit-2.1.tar.gz",
+      "note": "Windows: built from the MSYS2 mingw-w64-jbigkit 2.1 package; its source package is at https://repo.msys2.org/mingw/sources/.",
+      "files": ["libjbig*.dll", "libjbig*.dylib"]
+    },
+    {
+      "name": "LERC",
+      "license": "Apache-2.0",
+      "copyright": "Copyright 2015-2026 Esri",
+      "source": "https://github.com/Esri/lerc",
+      "note": "Windows: 4.1.0 with the PDF helper (inferred), 4.1.1 with the OCR helper (inferred from MSYS2 history). LERC's NOTICE file follows.",
+      "files": ["lerc.dll", "liblerc*.dll", "liblerc*.dylib"],
+      "notices": ["scripts/third-party/notices/lerc-4.1.0-NOTICE.txt"]
+    },
+    {
+      "name": "Little CMS",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2023 Marti Maria Saguer",
+      "source": "https://github.com/mm2/Little-CMS",
+      "note": "Windows: 2.19 with the PDF helper.",
+      "files": ["lcms2.dll", "liblcms2*.dll", "liblcms2*.dylib"]
+    },
+    {
+      "name": "zlib",
+      "license": "Zlib",
+      "copyright": "Copyright (c) 1995-2026 Jean-loup Gailly and Mark Adler",
+      "source": "https://zlib.net/",
+      "note": "Windows: 1.3.2 with the PDF and OCR helpers; also statically linked into the Microsoft Store build's qpdf DLL.",
+      "files": ["zlib.dll", "zlib1.dll", "libz*.dylib"]
+    },
+    {
+      "name": "libdeflate",
+      "license": "MIT",
+      "copyright": "Copyright 2016 Eric Biggers; Copyright 2024 Google LLC",
+      "source": "https://github.com/ebiggers/libdeflate",
+      "note": "Windows: 1.25 with the PDF and OCR helpers.",
+      "files": ["deflate.dll", "libdeflate*.dll", "libdeflate*.dylib"]
+    },
+    {
+      "name": "Zstandard",
+      "license": "BSD-3-Clause OR GPL-2.0-only",
+      "copyright": "Copyright (c) Meta Platforms, Inc. and affiliates.",
+      "source": "https://github.com/facebook/zstd",
+      "note": "Windows: 1.5.7 with the PDF and OCR helpers.",
+      "files": ["zstd.dll", "libzstd*.dll", "libzstd*.dylib"]
+    },
+    {
+      "name": "XZ Utils (liblzma)",
+      "license": "0BSD",
+      "copyright": "Copyright (c) the XZ Utils authors",
+      "source": "https://tukaani.org/xz/",
+      "note": "Windows: 5.8.3 with the PDF and OCR helpers.",
+      "files": ["liblzma*.dll", "liblzma*.dylib"]
+    },
+    {
+      "name": "LZ4",
+      "license": "BSD-2-Clause",
+      "copyright": "Copyright (c) 2011-2020, Yann Collet",
+      "source": "https://github.com/lz4/lz4",
+      "note": "Windows: 1.10.0 with the OCR helper.",
+      "files": ["liblz4*.dll", "liblz4*.dylib"]
+    },
+    {
+      "name": "bzip2",
+      "license": "bzip2-1.0.6",
+      "copyright": "Copyright (c) 1996-2019 Julian R Seward",
+      "source": "https://sourceware.org/bzip2/",
+      "note": "Windows: 1.0.8 with the OCR helper.",
+      "files": ["libbz2*.dll", "libbz2*.dylib"]
+    },
+    {
+      "name": "Brotli",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2009, 2010, 2013-2016 by the Brotli Authors.",
+      "source": "https://github.com/google/brotli",
+      "note": "Windows: 1.2.0 with the OCR helper (inferred from MSYS2 history).",
+      "files": ["libbrotli*.dll", "libbrotli*.dylib"]
+    },
+    {
+      "name": "libb2 (BLAKE2)",
+      "license": "CC0-1.0",
+      "copyright": "Written by the BLAKE2 authors and dedicated to the public domain",
+      "source": "https://github.com/BLAKE2/libb2",
+      "note": "Windows: 0.98.1 with the OCR helper (inferred from MSYS2 history).",
+      "files": ["libb2*.dll", "libb2*.dylib"]
+    },
+    {
+      "name": "libarchive",
+      "license": "BSD-2-Clause AND BSD-3-Clause",
+      "copyright": "Copyright (c) Tim Kientzle and the libarchive contributors; the full status is in the COPYING file below",
+      "source": "https://github.com/libarchive/libarchive",
+      "note": "Windows: 3.8.8 with the OCR helper. Some files are under the UC Regents BSD-3-Clause license, are in the public domain, or can be used under CC0-1.0, OpenSSL or Apache-2.0 terms; libarchive's COPYING file follows.",
+      "files": ["libarchive*.dll", "libarchive*.dylib"],
+      "notices": ["scripts/third-party/notices/libarchive-3.8.8-COPYING.txt"]
+    },
+    {
+      "name": "curl (libcurl)",
+      "license": "curl",
+      "copyright": "Copyright (c) 1996 - 2026, Daniel Stenberg, <daniel@haxx.se>, and many contributors",
+      "source": "https://curl.se/download/",
+      "note": "Windows: 8.20.0 with the PDF helper, 8.21.0 with the OCR helper.",
+      "files": ["libcurl*.dll", "libcurl*.dylib"]
+    },
+    {
+      "name": "libssh2",
+      "license": "BSD-3-Clause",
+      "copyright": "Copyright (C) 2004-2007 Sara Golemon; Copyright (C) 2009-2023 Daniel Stenberg; and others; the full list is in the COPYING file below",
+      "source": "https://libssh2.org/",
+      "note": "Windows: 1.11.1 with the PDF and OCR helpers.",
+      "files": ["libssh2*.dll", "libssh2*.dylib"],
+      "notices": ["scripts/third-party/notices/libssh2-1.11.1-COPYING.txt"]
+    },
+    {
+      "name": "OpenSSL (libssl, libcrypto)",
+      "license": "Apache-2.0",
+      "copyright": "Copyright (c) 1998-2026 The OpenSSL Project Authors; Copyright (c) 1995-1998 Eric A. Young, Tim J. Hudson",
+      "source": "https://www.openssl.org/source/",
+      "note": "Windows: 3.6.2 with the PDF helper; also statically linked into the Microsoft Store build's qpdf DLL.",
+      "files": ["libcrypto*.dll", "libssl*.dll", "libcrypto*.dylib", "libssl.*.dylib"]
+    },
+    {
+      "name": "NSS (Network Security Services)",
+      "license": "MPL-2.0",
+      "copyright": "Copyright (c) the Mozilla Foundation and the NSS contributors",
+      "source": "https://ftp.mozilla.org/pub/security/nss/releases/",
+      "note": "macOS only: linked by Homebrew's poppler for signature support.",
+      "files": ["libnss*.dylib", "libsmime3.dylib", "libssl3.dylib", "libsoftokn3.dylib", "libfreebl*.dylib"]
+    },
+    {
+      "name": "NSPR (Netscape Portable Runtime)",
+      "license": "MPL-2.0",
+      "copyright": "Copyright (c) the Mozilla Foundation and the NSPR contributors",
+      "source": "https://archive.mozilla.org/pub/nspr/releases/",
+      "note": "macOS only: required by NSS.",
+      "files": ["libnspr4.dylib", "libplc4.dylib", "libplds4.dylib"]
+    },
+    {
+      "name": "GPGME",
+      "license": "LGPL-2.1-or-later",
+      "copyright": "Copyright (C) 2001-2025 g10 Code GmbH; Copyright (C) 1991-2013 Free Software Foundation, Inc.; and others listed in its AUTHORS file",
+      "source": "https://gnupg.org/ftp/gcrypt/gpgme/",
+      "note": "macOS only: linked by Homebrew's poppler for signature support.",
+      "files": ["libgpgme.*dylib", "libgpgme-*.dylib"]
+    },
+    {
+      "name": "GpgME++",
+      "license": "LGPL-2.0-or-later",
+      "copyright": "Copyright (C) 1992-2022 Free Software Foundation, Inc.; Copyright (C) 2001-2024 g10 Code GmbH; and others listed in its AUTHORS file",
+      "source": "https://gnupg.org/ftp/gcrypt/gpgmepp/",
+      "note": "macOS only: linked by Homebrew's poppler for signature support.",
+      "files": ["libgpgmepp*.dylib"]
+    },
+    {
+      "name": "libassuan",
+      "license": "LGPL-2.1-or-later",
+      "copyright": "Copyright (C) 2001-2021, 2023-2025 g10 Code GmbH; Copyright (C) 1992-2013 Free Software Foundation, Inc.; and others listed in its AUTHORS file",
+      "source": "https://gnupg.org/ftp/gcrypt/libassuan/",
+      "note": "macOS only: required by GPGME.",
+      "files": ["libassuan*.dylib"]
+    },
+    {
+      "name": "libgpg-error",
+      "license": "LGPL-2.1-or-later",
+      "copyright": "Copyright (C) 2001-2026 g10 Code GmbH; Copyright (C) 1995-2017 Free Software Foundation, Inc.; and others listed in its AUTHORS file",
+      "source": "https://gnupg.org/ftp/gcrypt/libgpg-error/",
+      "note": "macOS only: required by GPGME and libassuan.",
+      "files": ["libgpg-error*.dylib"]
+    },
+    {
+      "name": "libpsl",
+      "license": "MIT",
+      "copyright": "Copyright (C) 2014-2024 Tim Rühsen",
+      "source": "https://github.com/rockdaboot/libpsl",
+      "note": "Windows: 0.21.5 with the OCR helper.",
+      "files": ["libpsl*.dll", "libpsl*.dylib"]
+    },
+    {
+      "name": "libidn2",
+      "license": "LGPL-3.0-or-later OR GPL-2.0-or-later",
+      "copyright": "Copyright (c) 2011-2025 Simon Josefsson and the libidn2 contributors",
+      "source": "https://ftp.gnu.org/gnu/libidn/",
+      "note": "Windows: 2.3.8 with the OCR helper.",
+      "files": ["libidn2*.dll", "libidn2*.dylib"]
+    },
+    {
+      "name": "GNU libunistring",
+      "license": "LGPL-3.0-or-later OR GPL-2.0-or-later",
+      "copyright": "Copyright (c) Free Software Foundation, Inc.",
+      "source": "https://ftp.gnu.org/gnu/libunistring/",
+      "note": "Windows: 1.4.2 with the OCR helper.",
+      "files": ["libunistring*.dll", "libunistring*.dylib"]
+    },
+    {
+      "name": "GNU libiconv",
+      "license": "LGPL-2.1-or-later",
+      "copyright": "Copyright (c) Free Software Foundation, Inc.",
+      "source": "https://ftp.gnu.org/gnu/libiconv/",
+      "note": "Windows: 1.18 with the PDF helper, 1.19 with the OCR helper.",
+      "files": ["iconv.dll", "charset.dll", "libiconv*.dll", "libcharset*.dll", "libiconv*.dylib", "libcharset*.dylib"]
+    },
+    {
+      "name": "GNU gettext runtime (libintl)",
+      "license": "LGPL-2.1-or-later",
+      "copyright": "Copyright (c) Free Software Foundation, Inc.",
+      "source": "https://ftp.gnu.org/gnu/gettext/",
+      "note": "Windows: 1.0 with the OCR helper.",
+      "files": ["libintl*.dll", "libintl*.dylib"]
+    },
+    {
+      "name": "libffi",
+      "license": "MIT",
+      "copyright": "Copyright (c) 1996-2026 Anthony Green, Red Hat, Inc and others.",
+      "source": "https://github.com/libffi/libffi",
+      "note": "Windows: 3.7.1 with the OCR helper.",
+      "files": ["libffi*.dll", "libffi*.dylib"]
+    },
+    {
+      "name": "PCRE2",
+      "license": "BSD-3-Clause WITH PCRE2-exception",
+      "copyright": "Copyright (c) 1997-2007 University of Cambridge; Copyright (c) 2007-2024 Philip Hazel; Copyright (c) 2009-2024 Zoltan Herczeg",
+      "source": "https://github.com/PCRE2Project/pcre2",
+      "note": "Windows: 10.47 with the OCR helper. PCRE2's LICENCE file follows.",
+      "files": ["libpcre2*.dll", "libpcre2*.dylib"],
+      "notices": ["scripts/third-party/notices/pcre2-10.47-LICENCE.md"]
+    },
+    {
+      "name": "ICU",
+      "license": "Unicode-3.0",
+      "copyright": "Copyright (c) 2016-2025 Unicode, Inc.",
+      "source": "https://github.com/unicode-org/icu",
+      "note": "Windows: 78.3 with the OCR helper.",
+      "files": ["libicu*.dll", "libicu*.dylib"]
+    },
+    {
+      "name": "GCC runtime libraries (libgcc, libstdc++)",
+      "license": "GPL-3.0-or-later WITH GCC-exception-3.1",
+      "copyright": "Copyright (c) Free Software Foundation, Inc.",
+      "source": "https://gcc.gnu.org/",
+      "note": "Shipped as MinGW-w64 runtime libraries for the Windows OCR helper and the Microsoft Store build's qpdf helper. The OCR helper's copies come from Debian's gcc-mingw-w64 GCC 14 toolchain (source: https://packages.debian.org/source/gcc-mingw-w64); the qpdf copies come from MSYS2 GCC 16.2.0 (source: https://repo.msys2.org/mingw/sources/).",
+      "files": ["libgcc_s*.dll", "libstdc++*.dll", "libstdc%2b%2b*.dll"]
+    },
+    {
+      "name": "MinGW-w64 winpthreads",
+      "license": "MIT AND BSD-3-Clause",
+      "copyright": "Copyright (c) 2011 mingw-w64 project; Copyright (C) 2010 Lockless Inc.",
+      "source": "https://github.com/mingw-w64/mingw-w64/tree/master/mingw-w64-libraries/winpthreads",
+      "note": "Windows: the MSYS2 build shipped with the OCR helper. winpthreads' COPYING file follows.",
+      "files": ["libwinpthread*.dll"],
+      "notices": ["scripts/third-party/notices/winpthreads-14.0.0-COPYING.txt"]
+    },
+    {
+      "name": "Microsoft Visual C++ Redistributable",
+      "license": "LicenseRef-MSVC-Redistributable",
+      "copyright": "Copyright (c) Microsoft Corporation",
+      "source": "https://learn.microsoft.com/cpp/windows/redistributing-visual-cpp-files",
+      "note": "Runtime libraries shipped with the Windows qpdf helper in GitHub installers, redistributed under the Visual Studio redistributable code terms.",
+      "files": ["vcruntime140*.dll", "msvcp140*.dll", "concrt140.dll", "vccorlib140.dll"]
+    },
+    {
+      "name": "DejaVu Sans font",
+      "version": "2.37",
+      "licenseFile": "src-tauri/resources/fonts/LICENSE.txt",
+      "license": "Bitstream-Vera AND LicenseRef-Arev",
+      "copyright": "Copyright (c) 2003 by Bitstream, Inc.; Copyright (c) 2006 by Tavmjong Bah; DejaVu changes are in public domain",
+      "source": "https://github.com/dejavu-fonts/dejavu-fonts/releases/tag/version_2_37"
+    },
+    {
+      "name": "Satisfy font",
+      "version": "1.001",
+      "licenseFile": "src-tauri/resources/fonts/Satisfy-LICENSE.txt",
+      "license": "Apache-2.0",
+      "copyright": "Copyright (c) 2011 by Font Diner, Inc. All rights reserved.",
+      "source": "https://github.com/google/fonts/tree/main/apache/satisfy",
+      "note": "Satisfy is a trademark of Font Diner, Inc."
+    },
+    {
+      "name": "Pacifico font",
+      "version": "3.001",
+      "licenseFile": "src-tauri/resources/fonts/Pacifico-LICENSE.txt",
+      "license": "OFL-1.1",
+      "copyright": "Copyright 2018 The Pacifico Project Authors",
+      "source": "https://github.com/google/fonts/tree/main/ofl/pacifico"
+    },
+    {
+      "name": "YuNet face detection model",
+      "licenseFile": "src-tauri/resources/vision/licenses/yunet-MIT.txt",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2020 Shiqi Yu",
+      "source": "https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet"
+    },
+    {
+      "name": "U2-Net (u2netp) background removal model",
+      "licenseFile": "src-tauri/resources/vision/licenses/u2netp-Apache-2.0.txt",
+      "license": "Apache-2.0",
+      "copyright": "Copyright (c) Xuebin Qin and the U-2-Net authors",
+      "source": "https://github.com/xuebinqin/U-2-Net"
+    }
+  ]
+}

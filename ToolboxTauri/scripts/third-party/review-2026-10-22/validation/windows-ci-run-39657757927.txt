@@ -1,0 +1,121 @@
+Windows	Run update and bundle config tests	﻿2026-10-21T19:05:17.5757919Z ##[group]Run npm run test:updates && npm run test:asset-config && npm run test:notices && npm run check:notices
+Windows	Run update and bundle config tests	2026-10-21T19:05:17.5759291Z ^[[36;1mnpm run test:updates && npm run test:asset-config && npm run test:notices && npm run check:notices^[[0m
+Windows	Run update and bundle config tests	2026-10-21T19:05:17.5834273Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+Windows	Run update and bundle config tests	2026-10-21T19:05:17.5834712Z env:
+Windows	Run update and bundle config tests	2026-10-21T19:05:17.5834923Z   TOOLBOX_REQUIRE_QPDF: 1
+Windows	Run update and bundle config tests	2026-10-21T19:05:17.5835429Z   VITE_POSTHOG_KEY: ***
+Windows	Run update and bundle config tests	2026-10-21T19:05:17.5835695Z   VITE_TOOLBOX_TARGET_PLATFORM: windows
+Windows	Run update and bundle config tests	2026-10-21T19:05:17.5836016Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+Windows	Run update and bundle config tests	2026-10-21T19:05:17.5836339Z   CARGO_INCREMENTAL: 0
+Windows	Run update and bundle config tests	2026-10-21T19:05:17.5836583Z   CARGO_TERM_COLOR: always
+Windows	Run update and bundle config tests	2026-10-21T19:05:17.5837141Z   CACHE_ON_FAILURE: false
+Windows	Run update and bundle config tests	2026-10-21T19:05:17.5837408Z ##[endgroup]
+Windows	Run update and bundle config tests	2026-10-21T19:05:18.3306227Z 
+Windows	Run update and bundle config tests	2026-10-21T19:05:18.3306995Z > toolbox@1.0.14 test:updates
+Windows	Run update and bundle config tests	2026-10-21T19:05:18.3307720Z > tsx --test tests/updates.test.ts
+Windows	Run update and bundle config tests	2026-10-21T19:05:18.3308694Z 
+Windows	Run update and bundle config tests	2026-10-21T19:05:18.5604171Z TAP version 13
+Windows	Run update and bundle config tests	2026-10-21T19:05:18.7893280Z # Subtest: GitHub and development builds offer in-app updates
+Windows	Run update and bundle config tests	2026-10-21T19:05:18.7901044Z ok 1 - GitHub and development builds offer in-app updates
+Windows	Run update and bundle config tests	2026-10-21T19:05:18.7901663Z   ---
+Windows	Run update and bundle config tests	2026-10-21T19:05:18.7902015Z   duration_ms: 1.0352
+Windows	Run update and bundle config tests	2026-10-21T19:05:18.7902409Z   type: 'test'
+Windows	Run update and bundle config tests	2026-10-21T19:05:18.7902767Z   ...
+Windows	Run update and bundle config tests	2026-10-21T19:05:18.7909647Z # Subtest: the Microsoft Store build leaves updates to the Store
+Windows	Run update and bundle config tests	2026-10-21T19:05:18.7914240Z ok 2 - the Microsoft Store build leaves updates to the Store
+Windows	Run update and bundle config tests	2026-10-21T19:05:18.7915450Z   ---
+Windows	Run update and bundle config tests	2026-10-21T19:05:18.7915837Z   duration_ms: 0.1553
+Windows	Run update and bundle config tests	2026-10-21T19:05:18.7916239Z   type: 'test'
+Windows	Run update and bundle config tests	2026-10-21T19:05:18.7916462Z   ...
+Windows	Run update and bundle config tests	2026-10-21T19:05:18.8104704Z 1..2
+Windows	Run update and bundle config tests	2026-10-21T19:05:18.8105391Z # tests 2
+Windows	Run update and bundle config tests	2026-10-21T19:05:18.8106989Z # suites 0
+Windows	Run update and bundle config tests	2026-10-21T19:05:18.8107824Z # pass 2
+Windows	Run update and bundle config tests	2026-10-21T19:05:18.8108662Z # fail 0
+Windows	Run update and bundle config tests	2026-10-21T19:05:18.8109665Z # cancelled 0
+Windows	Run update and bundle config tests	2026-10-21T19:05:18.8110063Z # skipped 0
+Windows	Run update and bundle config tests	2026-10-21T19:05:18.8111111Z # todo 0
+Windows	Run update and bundle config tests	2026-10-21T19:05:18.8111515Z # duration_ms 272.902
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.1503897Z 
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.1505586Z > toolbox@1.0.14 test:asset-config
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.1506385Z > node --test tests/tauri-asset-config.test.mjs
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.1506811Z 
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.2558125Z TAP version 13
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.3290542Z # Subtest: enables the Tauri v2 asset protocol without a broad static filesystem scope
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.3296168Z ok 1 - enables the Tauri v2 asset protocol without a broad static filesystem scope
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.3297468Z   ---
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.3298253Z   duration_ms: 2.2253
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.3299048Z   type: 'test'
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.3299780Z   ...
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.3307389Z # Subtest: relies on the existing dialog-selected file scope for previews
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.3311341Z ok 2 - relies on the existing dialog-selected file scope for previews
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.3313452Z   ---
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.3313899Z   duration_ms: 0.1864
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.3314374Z   type: 'test'
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.3315472Z   ...
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.3316086Z # Subtest: compiles the in-app updater only into GitHub builds
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.3319935Z ok 3 - compiles the in-app updater only into GitHub builds
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.3320641Z   ---
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.3321048Z   duration_ms: 1.4797
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.3321478Z   type: 'test'
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.3321869Z   ...
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.3322960Z # Subtest: bundles the third-party notices in every build
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.3325644Z ok 4 - bundles the third-party notices in every build
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.3326280Z   ---
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.3326620Z   duration_ms: 4.9792
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.3327011Z   type: 'test'
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.3327364Z   ...
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.3437926Z 1..4
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.3439346Z # tests 4
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.3439904Z # suites 0
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.3441252Z # pass 4
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.3441874Z # fail 0
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.3443061Z # cancelled 0
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.3446710Z # skipped 0
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.3446942Z # todo 0
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.3447232Z # duration_ms 109.4604
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.6699393Z 
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.6700206Z > toolbox@1.0.14 test:notices
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.6700966Z > node --test tests/third-party-notices.test.mjs
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.6701410Z 
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.7762945Z TAP version 13
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.8701892Z # Subtest: licenseIds splits SPDX and legacy slash expressions
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.8710582Z ok 1 - licenseIds splits SPDX and legacy slash expressions
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.8711451Z   ---
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.8712066Z   duration_ms: 2.1185
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.8712710Z   type: 'test'
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.8713321Z   ...
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.8723296Z # Subtest: globMatches is case-insensitive and anchors the whole name
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.8726362Z ok 2 - globMatches is case-insensitive and anchors the whole name
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.8728578Z   ---
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.8729291Z   duration_ms: 0.4304
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.8729775Z   type: 'test'
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.8730140Z   ...
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.8731762Z # Subtest: every native component names a license text that ships in the notices
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.8736035Z ok 3 - every native component names a license text that ships in the notices
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.8738006Z   ---
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.8738711Z   duration_ms: 4.1445
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.8739277Z   type: 'test'
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.8739760Z   ...
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.8741215Z # Subtest: unlistedBinaries flags unknown executables and accepts listed ones
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.8743628Z ok 4 - unlistedBinaries flags unknown executables and accepts listed ones
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.8744935Z   ---
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.8745550Z   duration_ms: 10.9306
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.8746162Z   type: 'test'
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.8746705Z   ...
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.8878032Z 1..4
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.8879507Z # tests 4
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.8879898Z # suites 0
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.8881648Z # pass 4
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.8882091Z # fail 0
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.8883562Z # cancelled 0
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.8883999Z # skipped 0
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.8885383Z # todo 0
+Windows	Run update and bundle config tests	2026-10-21T19:05:19.8885838Z # duration_ms 134.6895
+Windows	Run update and bundle config tests	2026-10-21T19:05:20.2452814Z 
+Windows	Run update and bundle config tests	2026-10-21T19:05:20.2453762Z > toolbox@1.0.14 check:notices
+Windows	Run update and bundle config tests	2026-10-21T19:05:20.2454521Z > node scripts/third-party-notices.mjs --check
+Windows	Run update and bundle config tests	2026-10-21T19:05:20.2454977Z 
+Windows	Run update and bundle config tests	2026-10-21T19:06:02.2129748Z ^[[1m^[[92m    Updating^[[0m crates.io index
+Windows	Run update and bundle config tests	2026-10-21T19:06:04.5090666Z THIRD-PARTY-NOTICES.txt is out of date. Run: node scripts/third-party-notices.mjs
+Windows	Run update and bundle config tests	2026-10-21T19:06:04.5624244Z ##[error]Process completed with exit code 1.

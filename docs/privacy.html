@@ -4,13 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Privacy Policy | Toolbox</title>
-<meta name="description" content="Toolbox privacy policy: files stay on your device, with limited anonymous install and app-open analytics in release builds.">
+<meta name="description" content="Toolbox privacy policy: files stay on your device. GitHub builds send install and app-open counts with a random ID; the Microsoft Store build sends none.">
 <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="assets/styles.css">
 <link rel="canonical" href="https://lazzyms.github.io/toolbox/privacy.html">
 <meta property="og:type" content="website">
 <meta property="og:title" content="Privacy Policy | Toolbox">
-<meta property="og:description" content="Toolbox privacy policy: files stay on your device, with limited anonymous install and app-open analytics in release builds.">
+<meta property="og:description" content="Toolbox privacy policy: files stay on your device. GitHub builds send install and app-open counts with a random ID; the Microsoft Store build sends none.">
 <meta property="og:url" content="https://lazzyms.github.io/toolbox/privacy.html">
 <meta property="og:image" content="https://lazzyms.github.io/toolbox/og.jpg">
 <meta property="og:image:type" content="image/jpeg">
@@ -19,7 +19,7 @@
 <meta property="og:image:alt" content="Toolbox social preview showing macOS and Windows availability and local PDF and image tools">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Privacy Policy | Toolbox">
-<meta name="twitter:description" content="Toolbox privacy policy: files stay on your device, with limited anonymous install and app-open analytics in release builds.">
+<meta name="twitter:description" content="Toolbox privacy policy: files stay on your device. GitHub builds send install and app-open counts with a random ID; the Microsoft Store build sends none.">
 <meta name="twitter:image" content="https://lazzyms.github.io/toolbox/og.jpg">
 <meta name="twitter:image:alt" content="Toolbox social preview showing macOS and Windows availability and local PDF and image tools">
 <meta name="theme-color" content="#0a0a0a">
@@ -40,25 +40,57 @@
   <div class="wrap prose">
     <p class="eyebrow">Toolbox</p>
     <h1>Privacy Policy</h1>
-    <p class="lede">Last updated: September 23, 2026</p>
+    <p class="lede">Last updated: October 22, 2026</p>
 
-    <h2>Website theme preference</h2>
-    <p>Pages with the theme switcher save your explicit <code>light</code> or <code>dark</code> choice in this browser's local storage. That preference stays in this browser and is not sent to Toolbox. The website code does not load analytics or advertising scripts, and does not set tracking cookies.</p>
+    <p>This policy covers the Toolbox desktop application for macOS and Windows and this website. Toolbox is published by Maulik Sompura (“we”). It describes what Toolbox sends over the network, why, and the choices you have.</p>
 
-    <h2>Files and content</h2>
-    <p>Toolbox is a local desktop application. Files you select are processed on your device and are not uploaded to Toolbox servers. Toolbox does not require an account and does not collect filenames, file paths, or file contents through its file-processing features.</p>
+    <h2>Your files stay on your device</h2>
+    <p>Every Toolbox tool, including OCR and document conversion, runs on your computer. Toolbox never uploads the files you open, and never sends file names, file paths, file contents or the results of a run. Toolbox has no accounts and no sign-in.</p>
 
-    <h2>Anonymous analytics</h2>
-    <p>Release builds may use Firebase Analytics to measure installation and app-open events. These events include an anonymous app instance identifier and a platform label such as macOS or Windows. They do not include filenames, paths, file contents, or the results of file operations. Development builds keep this analytics integration inactive.</p>
+    <h2>What each build sends</h2>
+    <h3>Microsoft Store build</h3>
+    <p>The Windows app installed from the Microsoft Store sends no usage data and makes no feature-flag or update requests. The Microsoft Store installs updates. Microsoft handles your download, purchase and update information under the <a href="https://privacy.microsoft.com/privacystatement">Microsoft Privacy Statement</a>.</p>
 
-    <h2>Update checks</h2>
-    <p>Release builds may check the configured update endpoint for application updates. This request may include standard network information required to make the request, such as your IP address, which is handled by the hosting provider. Toolbox does not use update checks to upload your files.</p>
+    <h3>GitHub release builds</h3>
+    <p>The macOS and Windows installers published on GitHub make these requests:</p>
+    <ul>
+      <li><strong>Usage counts.</strong> Toolbox sends a <code>first_install</code> event the first time it runs and an <code>app_opened</code> event each time it starts. Each event carries a random install ID created on your device, the label <code>tauri</code>, and the time. The events go to PostHog, our analytics provider, in its United States region.</li>
+      <li><strong>Tool availability.</strong> Each time Toolbox starts, it sends the same random install ID to PostHog to learn which tools are turned on for your platform. This lets us switch off a tool that is not working. If the request fails, Toolbox uses the tools built into that version.</li>
+      <li><strong>Update checks.</strong> When you choose <strong>Check now</strong> in Settings, Toolbox reads the latest version information from GitHub. If you agree to install an update, Toolbox downloads it from GitHub.</li>
+    </ul>
+    <p>As with any internet request, PostHog and GitHub receive your IP address. Toolbox asks PostHog not to look up your location from it. The install ID is not linked to your name, email address or any account.</p>
 
-    <h2>Third-party services</h2>
-    <p>Firebase Analytics is provided by Google and is subject to <a href="https://policies.google.com/privacy">Google’s Privacy Policy</a>. The Microsoft Store and GitHub may process information when you download or update Toolbox through their services.</p>
+    <h2>How to turn it off</h2>
+    <p>Turn off <strong>Share anonymous usage counts</strong> in Settings &gt; Privacy. Toolbox then stops sending usage counts and tool-availability requests, and uses the tools built into that version. Update checks happen only when you ask for one. Development builds never send usage data.</p>
+
+    <h2>Why we use this data</h2>
+    <p>We use these counts to understand how many people install and open Toolbox, and to turn off a broken tool quickly. Where the GDPR or a similar law applies, we rely on our legitimate interest in keeping Toolbox working and learning whether it is used. You can object at any time by turning off the setting above. We do not use this data for advertising, we do not sell or share it for cross-context behavioral advertising, and we do not combine it with other data about you.</p>
+
+    <h2>Who receives it</h2>
+    <ul>
+      <li><a href="https://posthog.com/privacy">PostHog</a> processes the usage counts and tool-availability requests for us in the United States.</li>
+      <li><a href="https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement">GitHub</a> serves update information, downloads and this website.</li>
+      <li><a href="https://privacy.microsoft.com/privacystatement">Microsoft</a> runs the Microsoft Store.</li>
+    </ul>
+    <p>Each provider handles data under its own privacy policy. If you are outside the United States, your data may be processed there.</p>
+
+    <h2>How long we keep it and how it is protected</h2>
+    <p>Usage events stay in PostHog under the data retention settings of the Toolbox project and are used only in aggregate. All requests use HTTPS. The install ID and your choices stay in the app’s local storage on your device until you uninstall Toolbox or clear its data.</p>
+
+    <h2>Your rights</h2>
+    <p>Depending on where you live, including under the GDPR, the California Consumer Privacy Act and India’s Digital Personal Data Protection Act, you may have the right to know what data we hold about you, to have it corrected or deleted, and to object to its use. Because Toolbox data is tied only to a random install ID, turning off the setting above stops all collection. To make a request, open an issue on the <a href="https://github.com/lazzyms/toolbox/issues">Toolbox GitHub issue tracker</a>. Issues are public, so do not include personal details. We will tell you how to continue privately. You may also complain to your local data protection authority.</p>
+
+    <h2>Children</h2>
+    <p>Toolbox is a general-purpose file tool. It is not directed at children, and we do not knowingly collect personal data from children.</p>
+
+    <h2>Website</h2>
+    <p>Pages with the theme switcher save your <code>light</code> or <code>dark</code> choice in this browser’s local storage. That preference stays in this browser and is not sent to Toolbox. The website loads no analytics or advertising scripts and sets no tracking cookies. GitHub Pages hosts the site and may log requests as described in GitHub’s privacy statement.</p>
+
+    <h2>Open-source components</h2>
+    <p>Toolbox includes open-source components. Their licenses are listed in the <a href="https://github.com/lazzyms/toolbox/blob/main/ToolboxTauri/src-tauri/resources/licenses/THIRD-PARTY-NOTICES.txt">third-party notices</a> and in the app under Settings &gt; About.</p>
 
     <h2>Changes and contact</h2>
-    <p>This policy may be updated when Toolbox’s data practices change. Questions or requests can be raised through the <a href="https://github.com/lazzyms/toolbox/issues">Toolbox GitHub issue tracker</a>.</p>
+    <p>We update this policy when Toolbox’s data practices change, and we change the date at the top. Questions can be raised through the <a href="https://github.com/lazzyms/toolbox/issues">Toolbox GitHub issue tracker</a>.</p>
   </div>
 </main>
 
@@ -67,8 +99,9 @@
     <p>Toolbox. Free and MIT licensed.</p>
     <nav aria-label="Footer">
       <a href="./">Home</a>
-      <a href="https://github.com/lazzyms/toolbox">Source</a>
+      <a href="privacy.html" aria-current="page">Privacy</a>
       <a href="terms.html">Terms</a>
+      <a href="https://github.com/lazzyms/toolbox">Source</a>
       <a href="https://github.com/lazzyms/toolbox/issues">Issues</a>
     </nav>
   </div>

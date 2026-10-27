@@ -1,0 +1,75 @@
+[
+  {
+    "inputPath": "signed.pdf",
+    "state": "succeeded",
+    "outputPaths": ["signed-edited.pdf"],
+    "detail": "PDF saved",
+    "failure": null,
+    "reason": null,
+    "warnings": [
+      { "code": "signatureRemoved", "message": "The digital signature is no longer valid." },
+      {
+        "code": "fontSubstituted",
+        "details": { "requestedFamily": "Garamond", "actualFamily": "Times New Roman" },
+        "message": "Garamond was replaced with Times New Roman."
+      }
+    ]
+  },
+  {
+    "inputPath": "photo.heic",
+    "state": "skipped",
+    "outputPaths": [],
+    "detail": "",
+    "failure": null,
+    "reason": {
+      "code": "unsupportedFormat",
+      "message": "Convert HEIC images before compressing them.",
+      "pointer": { "kind": "tool", "toolId": "heic-convert" }
+    },
+    "warnings": [
+      { "code": "precisionReduced", "message": "The 16-bit source would be reduced to 8-bit." }
+    ]
+  },
+  {
+    "inputPath": "plain.pdf",
+    "state": "skipped",
+    "outputPaths": [],
+    "detail": "",
+    "failure": null,
+    "reason": { "code": "notProtected", "message": "This PDF is not password protected.", "pointer": null },
+    "warnings": []
+  },
+  {
+    "inputPath": "scan.pdf",
+    "state": "failed",
+    "outputPaths": ["scan-page-1.png"],
+    "detail": "",
+    "failure": {
+      "kind": "unavailable",
+      "message": "Install the script pack to shape this text.",
+      "pointer": { "kind": "pack", "packId": "script-pack" }
+    },
+    "reason": null,
+    "warnings": [
+      {
+        "code": "renamedToAvoidReplacing",
+        "details": { "chosenName": "scan-page-1.png", "finalName": "scan-page-1 2.png" },
+        "message": "Saved as scan-page-1 2.png so the existing file was not replaced."
+      }
+    ]
+  },
+  {
+    "inputPath": "drawings.pdf",
+    "state": "failed",
+    "outputPaths": ["drawings-page-1.png"],
+    "detail": "",
+    "failure": {
+      "kind": "limitExceeded",
+      "details": { "limit": "time" },
+      "message": "Took longer than 5 minutes and was stopped. 1 part was saved before it stopped.",
+      "pointer": null
+    },
+    "reason": null,
+    "warnings": []
+  }
+]

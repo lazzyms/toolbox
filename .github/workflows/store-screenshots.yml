@@ -1,0 +1,136 @@
+name: Store screenshots
+
+on:
+  push:
+    branches:
+      - genie/store-screenshots
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    name: Capture Windows Store screenshots
+    runs-on: windows-latest
+    env:
+      TOOLBOX_MSIX_IDENTITY_NAME: ${{ vars.TOOLBOX_MSIX_IDENTITY_NAME }}
+      TOOLBOX_MSIX_PUBLISHER: ${{ vars.TOOLBOX_MSIX_PUBLISHER }}
+      TOOLBOX_MSIX_PUBLISHER_DISPLAY_NAME: ${{ vars.TOOLBOX_MSIX_PUBLISHER_DISPLAY_NAME }}
+      VITE_ENABLE_UPDATES: 'false'
+      VITE_TOOLBOX_TARGET_PLATFORM: windows
+      TOOLBOX_REQUIRE_QPDF: '1'
+      TOOLBOX_QPDF_PATH: ${{ github.workspace }}\ToolboxTauri\src-tauri\resources\qpdf.exe
+      TOOLBOX_PDFTOPPM_PATH: ${{ github.workspace }}\ToolboxTauri\src-tauri\resources\pdftoppm.exe
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ToolboxTauri/src-tauri
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ToolboxTauri/package-lock.json
+
+      - name: Install frontend deps
+        run: npm ci
+        working-directory: ToolboxTauri
+
+      - name: Stage PDF helper resources
+        shell: pwsh
+        working-directory: ToolboxTauri
+        run: |
+          choco install qpdf tesseract -y
+          $tesseractDirectory = Join-Path $env:ProgramFiles 'Tesseract-OCR'
+          if (-not (Test-Path (Join-Path $tesseractDirectory 'tesseract.exe'))) {
+            throw 'Could not locate the installed Tesseract executable'
+          }
+          $tesseractDirectory | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $popplerVersion = '26.02.0-0'
+          $popplerSha256 = '993e4a94376ed712fafc7058d724ea0b943d118bbd2305cd9ed55174eb85cda5'
+          $popplerArchive = Join-Path $env:RUNNER_TEMP "poppler-$popplerVersion.zip"
+          Invoke-WebRequest `
+            -Uri "https://github.com/oschwartz10612/poppler-windows/releases/download/v$popplerVersion/Release-$popplerVersion.zip" `
+            -OutFile $popplerArchive
+          if ((Get-FileHash $popplerArchive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $popplerSha256) {
+            throw 'Poppler archive checksum did not match the pinned release'
+          }
+          $popplerExtract = Join-Path $env:RUNNER_TEMP "poppler-$popplerVersion"
+          Expand-Archive -Path $popplerArchive -DestinationPath $popplerExtract -Force
+          $pdftoppm = Get-ChildItem $popplerExtract -Recurse -Filter pdftoppm.exe | Select-Object -First 1
+          if (-not $pdftoppm) { throw 'Could not locate pdftoppm.exe in the Poppler archive' }
+          $pdftotext = Get-ChildItem $popplerExtract -Recurse -Filter pdftotext.exe | Select-Object -First 1
+          if (-not $pdftotext) { throw 'Could not locate pdftotext.exe in the Poppler archive' }
+          New-Item -ItemType Directory -Force -Path src-tauri\resources | Out-Null
+          $qpdf = Get-ChildItem "$env:ChocolateyInstall\lib\qpdf" -Recurse -Filter qpdf.exe | Select-Object -First 1
+          if (-not $qpdf) { throw 'Could not locate qpdf.exe in the Chocolatey package' }
+          Copy-Item $qpdf.FullName src-tauri\resources\qpdf.exe -Force
+          Get-ChildItem $qpdf.DirectoryName -Filter *.dll | Copy-Item -Destination src-tauri\resources -Force
+          Copy-Item $pdftoppm.FullName src-tauri\resources\pdftoppm.exe -Force
+          Get-ChildItem $pdftoppm.DirectoryName -Filter *.dll | Copy-Item -Destination src-tauri\resources -Force
+          Copy-Item $pdftotext.FullName src-tauri\resources\pdftotext.exe -Force
+
+      # Same resources as microsoft-store.yml; the app is captured from the MSIX stage folder so it has the Store package's files.
+      - name: Stage offline vision adapter
+        run: npm run stage:vision
+        working-directory: ToolboxTauri
+
+      - name: Stage offline OCR resources
+        run: npm run stage:ocr
+        working-directory: ToolboxTauri
+
+      - name: Build the unsigned MSIX
+        shell: pwsh
+        working-directory: ToolboxTauri
+        run: .\scripts\build-msix.ps1
+
+      - name: Install Windows WebDriver
+        shell: pwsh
+        run: |
+          cargo install tauri-driver --locked
+          if ($LASTEXITCODE -ne 0) { throw "cargo install tauri-driver failed with exit code $LASTEXITCODE" }
+          cargo install --git https://github.com/chippers/msedgedriver-tool
+          if ($LASTEXITCODE -ne 0) { throw "cargo install msedgedriver-tool failed with exit code $LASTEXITCODE" }
+          & "$HOME/.cargo/bin/msedgedriver-tool.exe"
+          if ($LASTEXITCODE -ne 0) { throw "msedgedriver-tool failed with exit code $LASTEXITCODE" }
+          $PWD.Path | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Set a 1920x1080 display
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Set-DisplayResolution -Width 1920 -Height 1080 -Force
+          Add-Type -AssemblyName System.Windows.Forms
+          [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+
+      # msedgedriver attaches through a WebView2 debugging port; the policy is scoped to toolbox.exe and removed afterwards.
+      - name: Capture screenshots
+        shell: pwsh
+        working-directory: ToolboxTauri
+        run: |
+          $policyPath = 'HKLM:\Software\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments'
+          $policyExisted = Test-Path $policyPath
+          $exitCode = 1
+          try {
+            New-Item -Path $policyPath -Force | Out-Null
+            New-ItemProperty -Path $policyPath -Name 'toolbox.exe' -Value '--remote-debugging-port=0' -PropertyType String -Force | Out-Null
+            node scripts/capture-store-screenshots.mjs
+            $exitCode = $LASTEXITCODE
+          } finally {
+            Remove-ItemProperty -Path $policyPath -Name 'toolbox.exe' -ErrorAction SilentlyContinue
+            if (-not $policyExisted) { Remove-Item -Path $policyPath -ErrorAction SilentlyContinue }
+          }
+          exit $exitCode
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: toolbox-store-screenshots
+          path: ${{ runner.temp }}/toolbox-store-screenshots/
+          if-no-files-found: warn

@@ -1,10 +1,11 @@
-use crate::kit::common::batch_runner::BatchRunner;
+use crate::kit::common::batch_runner::{BatchRunner, RunEvents};
 use crate::kit::common::JobOutcome;
 use crate::kit::contracts::OutputLocation;
 use crate::kit::images::{ImageProcessor, Options as ImageOptions, OutputFormat};
 use crate::kit::pdf::remaining;
 use crate::kit::vision;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 pub const FLAG: &str = "--quick-action";
 
@@ -83,40 +84,41 @@ impl QuickAction {
         QuickAction::ALL.into_iter().find(|action| action.id() == id)
     }
 
+    /// Each file is its own run because the tool contracts accept one input per run.
     pub fn run(self, paths: Vec<PathBuf>) -> Vec<JobOutcome> {
+        paths.into_iter().flat_map(|path| self.run_batch(vec![path])).collect()
+    }
+
+    fn run_batch(self, paths: Vec<PathBuf>) -> Vec<JobOutcome> {
+        let events = RunEvents::silent();
         let output_location = OutputLocation::AlongsideInput;
         match self {
             QuickAction::CompressPdf => {
-                let request = remaining::CompressPdfRequest { paths: paths.clone(), quality: 80, output_location };
-                BatchRunner::run(paths, |path| remaining::compress(&request, path))
+                let request = Arc::new(remaining::CompressPdfRequest { paths: paths.clone(), quality: 80, output_location: output_location.clone() });
+                BatchRunner::run(&events, self.tool(), paths, &output_location, &request, remaining::compress)
             }
             QuickAction::PdfToImages => {
-                let request = remaining::PdfToImagesRequest { paths: paths.clone(), dpi: 150, format: "png".to_string(), page_range: None, output_location };
-                BatchRunner::run(paths, |path| remaining::to_images(&request, path))
+                let request = Arc::new(remaining::PdfToImagesRequest { paths: paths.clone(), pages: None, dpi: 150, format: "png".to_string(), page_range: None, output_location: output_location.clone() });
+                BatchRunner::run(&events, self.tool(), paths, &output_location, &request, remaining::to_images)
             }
-            QuickAction::CompressImage => BatchRunner::run(paths, |path| ImageProcessor::run(path, ImageOptions {
-                target_format: None,
-                quality: 80,
-                keep_smaller_original: true,
-                suffix: "-compressed".to_string(),
-                output_location: output_location.clone(),
-            })),
-            QuickAction::ConvertToPng | QuickAction::ConvertToJpg => {
-                let format = if self == QuickAction::ConvertToPng { OutputFormat::Png } else { OutputFormat::Jpeg };
-                BatchRunner::run(paths, |path| ImageProcessor::run(path, ImageOptions {
-                    target_format: Some(format),
-                    quality: 80,
-                    keep_smaller_original: false,
-                    suffix: "-converted".to_string(),
-                    output_location: output_location.clone(),
-                }))
+            QuickAction::CompressImage | QuickAction::ConvertToPng | QuickAction::ConvertToJpg => {
+                let options = Arc::new(match self {
+                    QuickAction::ConvertToPng => image_conversion(OutputFormat::Png, &output_location),
+                    QuickAction::ConvertToJpg => image_conversion(OutputFormat::Jpeg, &output_location),
+                    _ => ImageOptions { target_format: None, quality: 80, keep_smaller_original: true, suffix: "-compressed".to_string(), output_location: output_location.clone() },
+                });
+                BatchRunner::run(&events, self.tool(), paths, &output_location, &options, |options: &ImageOptions, path| ImageProcessor::run(path, ImageOptions { suffix: options.suffix.clone(), output_location: options.output_location.clone(), ..*options }))
             }
             QuickAction::RemoveBackground => {
-                let request = vision::VisionRequest { paths: paths.clone(), output_location };
-                BatchRunner::run(paths, |path| vision::remove_background(&request, path))
+                let request = Arc::new(vision::VisionRequest { paths: paths.clone(), pages: None, output_location: output_location.clone() });
+                BatchRunner::run(&events, self.tool(), paths, &output_location, &request, vision::remove_background)
             }
         }
     }
+}
+
+fn image_conversion(format: OutputFormat, output_location: &OutputLocation) -> ImageOptions {
+    ImageOptions { target_format: Some(format), quality: 80, keep_smaller_original: false, suffix: "-converted".to_string(), output_location: output_location.clone() }
 }
 
 pub struct Invocation { pub action: QuickAction, pub paths: Vec<PathBuf> }
@@ -132,11 +134,11 @@ pub fn parse_args(args: &[String]) -> Option<Result<Invocation, String>> {
 }
 
 pub fn summary(action: QuickAction, outcomes: &[JobOutcome]) -> String {
-    let failures: Vec<&JobOutcome> = outcomes.iter().filter(|outcome| outcome.failure.is_some()).collect();
+    let failures: Vec<&JobOutcome> = outcomes.iter().filter(|outcome| outcome.error().is_some()).collect();
     let done = outcomes.len() - failures.len();
-    match failures.first().and_then(|outcome| outcome.failure.as_ref()) {
+    match failures.first().and_then(|outcome| outcome.error()) {
         None => format!("{}: {done} file(s) done.", action.title()),
-        Some(error) => format!("{}: {done} done, {} failed. {error}", action.title(), failures.len()),
+        Some(error) => format!("{}: {done} done, {} failed. {}", action.title(), failures.len(), error.message),
     }
 }
 
@@ -527,9 +529,9 @@ mod tests {
         image::RgbaImage::from_pixel(8, 8, image::Rgba([10, 20, 30, 255])).save(&input).unwrap();
         let before = std::fs::read(&input).unwrap();
         let outcomes = QuickAction::ConvertToJpg.run(vec![input.clone()]);
-        assert!(outcomes[0].failure.is_none(), "{:?}", outcomes[0].failure);
-        assert!(outcomes[0].output_paths[0].is_file());
-        assert_eq!(outcomes[0].output_paths[0].parent(), Some(dir.as_path()));
+        assert!(outcomes[0].error().is_none(), "{:?}", outcomes[0].error());
+        assert!(outcomes[0].output_paths()[0].is_file());
+        assert_eq!(outcomes[0].output_paths()[0].parent(), Some(dir.as_path()));
         assert_eq!(std::fs::read(&input).unwrap(), before, "original untouched");
         assert!(summary(QuickAction::ConvertToJpg, &outcomes).contains("1 file(s) done"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -541,7 +543,7 @@ mod tests {
         let good = dir.join("ok.png");
         image::RgbaImage::from_pixel(8, 8, image::Rgba([1, 2, 3, 255])).save(&good).unwrap();
         let outcomes = QuickAction::CompressImage.run(vec![dir.join("missing.png"), good]);
-        assert_eq!(outcomes.iter().filter(|o| o.failure.is_none()).count(), 1);
+        assert_eq!(outcomes.iter().filter(|o| o.error().is_none()).count(), 1);
         assert!(summary(QuickAction::CompressImage, &outcomes).contains("1 done, 1 failed"));
         let _ = std::fs::remove_dir_all(&dir);
     }

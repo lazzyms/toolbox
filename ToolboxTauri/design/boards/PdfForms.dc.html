@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PDF Editor, fill form</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+.tb{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;font-size:13px;line-height:1.45;color:var(--fg);background:var(--bg);-webkit-font-smoothing:antialiased}
+.tb.dark{--bg:#0a0a0a;--side:#111111;--panel:#0f0f0f;--raise:#1c1c1c;--fg:#fafafa;--mut:#a3a3a3;--faint:#8a8a8a;--line:rgba(255,255,255,.08);--line2:rgba(255,255,255,.16);--sel:#262626;--pri:#ebebeb;--prifg:#171717;--bad:#ff6b6b;--warn:#f2b552;--ring:#a3a3a3;--scrim:rgba(0,0,0,.6);--well:#1b1b1b}
+.tb.light{--bg:#ffffff;--side:#f7f7f7;--panel:#fcfcfc;--raise:#f2f2f2;--fg:#0a0a0a;--mut:#525252;--faint:#666666;--line:#e8e8e8;--line2:#d4d4d4;--sel:#ebebeb;--pri:#171717;--prifg:#fafafa;--bad:#c10007;--warn:#9a5800;--ring:#525252;--scrim:rgba(0,0,0,.28);--well:#e6e6e6}
+.tb button,.tb input,.tb select,.tb textarea{font:inherit;color:inherit}
+.btn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:7px;border:1px solid var(--line2);background:var(--raise);color:var(--fg);font-weight:500;cursor:pointer;white-space:nowrap;box-sizing:border-box;text-decoration:none}
+.btn.pri{background:var(--pri);color:var(--prifg);border-color:transparent}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--mut)}
+.btn.sm{height:26px;padding:0 9px;font-size:12px}
+.btn.icon{width:30px;padding:0;justify-content:center}
+.btn[disabled]{opacity:.45;cursor:default}
+.kbd{font-size:11px;line-height:16px;padding:0 5px;border-radius:4px;border:1px solid var(--line2);color:var(--mut);font-weight:500}
+.btn.pri .kbd{border-color:currentColor;color:inherit;opacity:.6}
+.tbtn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 9px;border-radius:7px;border:0;background:none;color:var(--mut);cursor:pointer;white-space:nowrap}
+.tbtn[aria-pressed="true"]{background:var(--sel);color:var(--fg);font-weight:500}
+.sep{width:1px;height:20px;background:var(--line2);flex:none}
+.field{height:30px;border-radius:7px;border:1px solid var(--line2);background:var(--bg);padding:0 10px;width:100%;box-sizing:border-box;min-width:0}
+.lbl{font-size:12px;font-weight:600}
+.hint{font-size:12px;color:var(--mut)}
+.seg{display:inline-flex;border:1px solid var(--line2);border-radius:7px;padding:2px;gap:2px}
+.seg button{height:24px;min-width:30px;padding:0 8px;border:0;border-radius:5px;background:none;color:var(--mut);cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
+.seg button[aria-checked="true"],.seg button[aria-pressed="true"]{background:var(--sel);color:var(--fg);font-weight:500}
+.thumb{display:flex;flex-direction:column;align-items:center;gap:4px;width:100%;padding:6px 0;border:0;background:none;border-radius:8px;cursor:pointer;color:var(--mut);font-size:12px}
+.thumb .mini{width:96px;height:124px;background:#ffffff;border:1px solid var(--line2);border-radius:2px;box-sizing:border-box;padding:10px 9px;display:flex;flex-direction:column;gap:4px}
+.thumb .mini i{display:block;height:3px;background:#d6d6d6;border-radius:1px}
+.thumb[aria-current="page"]{background:var(--sel);color:var(--fg);font-weight:500}
+.thumb[aria-current="page"] .mini{outline:2px solid #1d5fd1;outline-offset:1px}
+.paper{background:#ffffff;color:#1f1f1f;box-shadow:0 1px 3px rgba(0,0,0,.25);position:relative;box-sizing:border-box;font-family:"Iowan Old Style","Palatino Linotype",Georgia,serif}
+.paper h3{margin:0 0 6px;font-size:12.5px}
+.paper p{margin:0 0 7px;font-size:10px;line-height:1.5}
+.obj{position:absolute;border:1.5px solid #1d5fd1;background:rgba(29,95,209,.06);padding:4px 6px;box-sizing:border-box;cursor:move;text-align:left;color:#1f1f1f}
+.obj.idle{border:1px dashed rgba(29,95,209,.6);background:none}
+.h{position:absolute;width:7px;height:7px;background:#ffffff;border:1.5px solid #1d5fd1;box-sizing:border-box}
+.olist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
+.olist button{width:100%;text-align:left;border:0;background:none;border-radius:6px;padding:6px 8px;cursor:pointer;display:flex;gap:8px;align-items:baseline}
+.olist button[aria-current="true"]{background:var(--sel)}
+.note{display:flex;gap:10px;padding:10px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--raise)}
+svg.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.tb :focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+a{color:inherit}a:hover{color:var(--mut)}
+.mi{display:flex;gap:10px;align-items:flex-start;width:100%;text-align:left;padding:7px 10px;border:0;background:none;border-radius:6px;cursor:pointer;color:var(--fg);text-decoration:none;box-sizing:border-box}.mi:hover{background:var(--sel)}.mi svg{margin-top:2px}
+.pbadge{position:absolute;right:-6px;top:-6px;width:16px;height:16px;border-radius:50%;background:#1d5fd1;color:#fff;display:grid;place-items:center}
+.pbadge{position:absolute;right:-6px;top:-6px;width:16px;height:16px;border-radius:50%;background:#1d5fd1;color:#fff;display:grid;place-items:center}
+</style>
+</helmet>
+<div class="{{themeClass}}" style="height: 800px; display: flex; flex-direction: column; position: relative; overflow: hidden">
+<header style="height: 48px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 12px; border-bottom: 1px solid var(--line)">
+<a class="btn sm ghost" href="Main.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M5 12l6 6M5 12l6-6"></path></svg>All tools</a>
+<span class="sep" aria-hidden="true"></span>
+<button class="btn sm ghost icon" aria-label="Show page sidebar" aria-pressed="true" aria-controls="pages"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M9 4v16"></path></svg></button>
+<div style="display: flex; flex-direction: column; min-width: 0; line-height: 1.25">
+<h1 style="margin: 0; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">lease-agreement.pdf</h1>
+<span class="hint" style="white-space: nowrap">14 pages. 4 changes not exported</span>
+</div>
+<div style="flex: 1"></div>
+
+<button class="btn sm ghost icon" aria-label="Undo typing in Email ({{undoKey}})"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14L4 9l5-5"></path><path d="M4 9h11a5 5 0 0 1 0 10h-3"></path></svg></button>
+<button class="btn sm ghost icon" aria-label="Redo ({{redoKey}})" disabled><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 14l5-5-5-5"></path><path d="M20 9H9a5 5 0 0 0 0 10h3"></path></svg></button>
+<span class="sep" aria-hidden="true"></span>
+<div role="group" aria-label="Zoom" style="display: flex; align-items: center; gap: 2px">
+<button class="btn sm ghost icon" aria-label="Zoom out"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"></path></svg></button>
+<label for="zoom" style="position: absolute; width: 1px; height: 1px; overflow: hidden">Zoom</label>
+<select id="zoom" class="field" style="width: 92px; height: 26px; padding: 0 6px"><option>Fit page</option><option>Fit width</option><option selected>100%</option><option>150%</option><option>200%</option></select>
+<button class="btn sm ghost icon" aria-label="Zoom in"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14"></path></svg></button>
+</div>
+<span class="sep" aria-hidden="true"></span>
+<button class="btn sm ghost" aria-label="Find a tool"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"></circle><path d="M21 21l-6-6"></path></svg><span class="kbd">{{findKey}}</span></button>
+<button class="btn sm ghost icon" aria-label="Settings ({{settingsKey}})"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"></path></svg></button>
+<a class="btn pri" href="PdfExport.dc.html">Export<span class="kbd">{{runKey}}</span></a>
+</header>
+<div role="toolbar" aria-label="Edit tools" aria-orientation="horizontal" style="height: 44px; flex: none; display: flex; align-items: center; gap: 2px; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--side); position: relative">
+<a class="tbtn" href="PdfOrganize.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1"></rect><rect x="14" y="3" width="7" height="9" rx="1"></rect><rect x="3" y="15" width="7" height="6" rx="1"></rect><rect x="14" y="15" width="7" height="6" rx="1"></rect></svg>Organize</a>
+<a class="tbtn" href="PdfCrop.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2v14a2 2 0 0 0 2 2h14"></path><path d="M18 22V8a2 2 0 0 0-2-2H2"></path></svg>Crop</a>
+<span class="sep" aria-hidden="true"></span>
+<a class="tbtn" href="PdfEditText.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"></path><path d="M13 7l4 4"></path></svg>Edit text</a>
+<a class="tbtn" href="PdfText.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6V4h14v2M12 4v16M9 20h6"></path></svg>Add text</a>
+<a class="tbtn" href="PdfSign.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17c3 0 4-6 6-6s1 5 3 5 2-3 4-3 2 2 5 2"></path><path d="M3 21h18"></path></svg>Sign</a>
+<a class="tbtn" href="PdfForms.dc.html" aria-pressed="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="5" rx="1"></rect><rect x="3" y="14" width="18" height="5" rx="1"></rect><path d="M6 7.5h4"></path></svg>Fill form</a>
+<span class="sep" aria-hidden="true"></span>
+<a class="tbtn" href="PdfMarks.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4"></path><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"></path><path d="M8 17l8-6"></path></svg>Watermark</a>
+<a class="tbtn" href="PdfMarks.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h16M4 15h16M10 3L8 21M16 3l-2 18"></path></svg>Page numbers</a>
+<a class="tbtn" href="PdfMarks.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2"></rect><path d="M4 7h16M4 17h16"></path></svg>Header and footer</a>
+<span class="sep" aria-hidden="true"></span>
+<a class="tbtn" href="PdfRedact.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="4" rx="1" fill="currentColor"></rect><path d="M3 15h10M3 19h14"></path></svg>Redact</a>
+<button class="tbtn" aria-haspopup="menu" aria-expanded="false" aria-pressed="false" tabindex="-1">More<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></button>
+</div>
+<div style="flex: 1; display: flex; min-height: 0; position: relative">
+<nav id="pages" aria-label="Pages" style="width: 148px; flex: none; border-right: 1px solid var(--line); background: var(--side); overflow: auto; padding: 8px 10px; box-sizing: border-box">
+<ol style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px">
+<li><button class="thumb" aria-current="false" aria-label="Page 10" tabindex="-1"><span class="mini" aria-hidden="true" style="position: relative"><i style="width: 60%; height: 4px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i><i style="width: 70%"></i></span><span aria-hidden="true">10</span></button></li>
+<li><button class="thumb" aria-current="false" aria-label="Page 11" tabindex="-1"><span class="mini" aria-hidden="true" style="position: relative"><i style="width: 60%; height: 4px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i><i style="width: 70%"></i></span><span aria-hidden="true">11</span></button></li>
+<li><button class="thumb" aria-current="page" aria-label="Page 12, form fields" tabindex="0"><span class="mini" aria-hidden="true" style="position: relative"><i style="width: 60%; height: 4px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i><i style="width: 70%"></i><span class="pbadge" aria-hidden="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 11px; height: 11px"><path d="M5 12l5 5 9-10"></path></svg></span></span><span aria-hidden="true">12</span></button></li>
+<li><button class="thumb" aria-current="false" aria-label="Page 13, form fields" tabindex="-1"><span class="mini" aria-hidden="true" style="position: relative"><i style="width: 60%; height: 4px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i><i style="width: 70%"></i><span class="pbadge" aria-hidden="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 11px; height: 11px"><path d="M5 12l5 5 9-10"></path></svg></span></span><span aria-hidden="true">13</span></button></li>
+<li><button class="thumb" aria-current="false" aria-label="Page 14" tabindex="-1"><span class="mini" aria-hidden="true" style="position: relative"><i style="width: 60%; height: 4px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i><i style="width: 70%"></i></span><span aria-hidden="true">14</span></button></li>
+</ol></nav>
+<main aria-label="Page 12 of 14" style="flex: 1; min-width: 0; background: var(--well); overflow: auto; display: flex; justify-content: center; padding: 20px 0; box-sizing: border-box"><div class="paper" style="width: 500px; height: 647px; flex: none; padding: 48px 58px">
+<h3 style="font-size: 14px">Schedule 3. Tenant details</h3>
+<p>Complete this form and return it with the signed agreement.</p>
+<label style="position: absolute; left: 58px; top: 118px; width: 384px; display: flex; flex-direction: column; gap: 3px; font-size: 9.5px; color: #3b3b3b; font-family: 'Noto Sans', system-ui, sans-serif">Full name<span aria-hidden="true" style="color: #c62828"> *</span><input value="Asha Patel" aria-required="true"  style="height: 22px; border: 1px solid #9aa6bf;  background: #eef3ff; border-radius: 2px; padding: 0 5px; font-size: 11px; color: #1f1f1f; font-family: 'Noto Sans', system-ui, sans-serif"></label>
+<label style="position: absolute; left: 58px; top: 166px; width: 180px; display: flex; flex-direction: column; gap: 3px; font-size: 9.5px; color: #3b3b3b; font-family: 'Noto Sans', system-ui, sans-serif">Date of birth<span aria-hidden="true" style="color: #c62828"> *</span><input value="14/03/1991" aria-required="true"  style="height: 22px; border: 1px solid #9aa6bf;  background: #eef3ff; border-radius: 2px; padding: 0 5px; font-size: 11px; color: #1f1f1f; font-family: 'Noto Sans', system-ui, sans-serif"></label>
+<label style="position: absolute; left: 252px; top: 166px; width: 190px; display: flex; flex-direction: column; gap: 3px; font-size: 9.5px; color: #3b3b3b; font-family: 'Noto Sans', system-ui, sans-serif">Phone<span aria-hidden="true" style="color: #c62828"> *</span><input value="" aria-required="true"  style="height: 22px; border: 1px solid #1d5fd1; box-shadow: 0 0 0 2px rgba(29,95,209,.3); background: #eef3ff; border-radius: 2px; padding: 0 5px; font-size: 11px; color: #1f1f1f; font-family: 'Noto Sans', system-ui, sans-serif"></label>
+<label style="position: absolute; left: 58px; top: 214px; width: 384px; display: flex; flex-direction: column; gap: 3px; font-size: 9.5px; color: #3b3b3b; font-family: 'Noto Sans', system-ui, sans-serif">Email<input value="asha.patel@example.com"   style="height: 22px; border: 1px solid #9aa6bf;  background: #eef3ff; border-radius: 2px; padding: 0 5px; font-size: 11px; color: #1f1f1f; font-family: 'Noto Sans', system-ui, sans-serif"></label>
+<label style="position: absolute; left: 58px; top: 262px; width: 384px; display: flex; flex-direction: column; gap: 3px; font-size: 9.5px; color: #3b3b3b; font-family: 'Noto Sans', system-ui, sans-serif">Previous address<span aria-hidden="true" style="color: #c62828"> *</span><input value="" aria-required="true" aria-invalid="true" aria-describedby="e1" style="height: 22px; border: 1px solid #c62828;  background: #eef3ff; border-radius: 2px; padding: 0 5px; font-size: 11px; color: #1f1f1f; font-family: 'Noto Sans', system-ui, sans-serif"></label>
+<p id="e1" style="position: absolute; left: 58px; top: 306px; margin: 0; font-size: 9px; color: #c62828">Required</p>
+<fieldset style="position: absolute; left: 58px; top: 328px; border: 0; padding: 0; margin: 0; font-size: 9.5px; color: #3b3b3b; font-family: 'Noto Sans', system-ui, sans-serif"><legend style="padding: 0; margin-bottom: 4px">Pets at the property</legend>
+<label style="display: inline-flex; gap: 5px; align-items: center; margin-right: 14px"><input type="radio" name="pets">Yes</label><label style="display: inline-flex; gap: 5px; align-items: center"><input type="radio" name="pets" checked>No</label></fieldset>
+<label style="position: absolute; left: 58px; top: 380px; display: flex; gap: 6px; align-items: center; font-size: 9.5px; color: #3b3b3b; font-family: 'Noto Sans', system-ui, sans-serif"><input type="checkbox" checked>I agree to a credit and reference check</label>
+<label style="position: absolute; left: 58px; top: 412px; width: 200px; display: flex; flex-direction: column; gap: 3px; font-size: 9.5px; color: #3b3b3b; font-family: 'Noto Sans', system-ui, sans-serif">Employment status<select style="height: 22px; border: 1px solid #9aa6bf; background: #eef3ff; font-size: 11px"><option>Employed full time</option></select></label>
+<p style="position: absolute; left: 0; right: 0; bottom: 26px; text-align: center; font-size: 9px; color: #6b6b6b">Page 12 of 14</p>
+</div></main>
+<aside aria-labelledby="insp" style="width: 300px; flex: none; border-left: 1px solid var(--line); background: var(--panel); overflow: auto">
+<div style="padding: 16px 18px; display: flex; flex-direction: column; gap: 14px">
+<div style="display: flex; flex-direction: column; gap: 4px"><h2 id="insp" style="margin: 0; font-size: 14px; font-weight: 600">Fill form</h2>
+<p class="hint" style="margin: 0">Type into the fields on the page. Tab moves to the next field in the order below.</p></div>
+<div class="note"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut); margin-top: 1px"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v6M12 7.5v.5"></path></svg><span class="hint">9 fields on pages 12 and 13. 3 required fields are still empty.</span></div>
+<button class="btn sm" style="align-self: flex-start">Go to next empty required field</button>
+<div style="display: flex; flex-direction: column; gap: 6px"><span class="lbl" id="fl">Fields</span>
+<ol class="olist" aria-labelledby="fl">
+<li><button aria-current="false"><span style="flex: 1">Full name</span><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><path d="M5 12l5 5 9-10"></path></svg></button></li>
+<li><button aria-current="false"><span style="flex: 1">Date of birth</span><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><path d="M5 12l5 5 9-10"></path></svg></button></li>
+<li><button aria-current="true"><span style="flex: 1">Phone</span><span class="hint">Required, empty</span></button></li>
+<li><button aria-current="false"><span style="flex: 1">Email</span><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><path d="M5 12l5 5 9-10"></path></svg></button></li>
+<li><button aria-current="false"><span style="flex: 1">Previous address</span><span class="hint" style="color: var(--bad)">Required, empty</span></button></li>
+<li><button aria-current="false"><span style="flex: 1">Pets at the property</span><span class="hint">No</span></button></li>
+<li><button aria-current="false"><span style="flex: 1">Credit check consent</span><span class="hint">Checked</span></button></li>
+<li><button aria-current="false"><span style="flex: 1">Employment status</span><span class="hint">Employed</span></button></li>
+<li><button aria-current="false"><span style="flex: 1">Emergency contact</span><span class="hint">Page 13, required</span></button></li>
+</ol></div>
+<div style="border-top: 1px solid var(--line); padding-top: 14px; display: flex; flex-direction: column; gap: 8px">
+<span class="lbl">Flatten</span>
+<p class="hint" style="margin: 0">Turns the fields into plain page content in the exported copy, so they can't be changed later.</p>
+<sc-if value="{{flatOn}}" hint-placeholder-val="{{ false }}"><label style="display: flex; gap: 8px; align-items: center"><input type="checkbox" checked>Flatten fields when exporting</label></sc-if><sc-if value="{{flatOff}}" hint-placeholder-val="{{ true }}"><label style="display: flex; gap: 8px; align-items: center"><input type="checkbox">Flatten fields when exporting</label></sc-if>
+</div>
+<button class="btn sm ghost" style="align-self: flex-start">Clear all fields</button>
+</div></aside>
+<sc-if value="{{showFlat}}" hint-placeholder-val="{{ false }}"><div aria-hidden="true" style="position: absolute; inset: 0; background: var(--scrim)"></div>
+<div role="alertdialog" aria-modal="true" aria-labelledby="ft" aria-describedby="fd" style="position: absolute; left: 50%; top: 40%; transform: translate(-50%,-50%); width: 440px; background: var(--panel); border: 1px solid var(--line2); border-radius: 12px; box-shadow: 0 24px 60px rgba(0,0,0,.35); padding: 20px; display: flex; flex-direction: column; gap: 12px">
+<h2 id="ft" style="margin: 0; font-size: 15px; font-weight: 600">Flatten fields in the copy?</h2>
+<p id="fd" style="margin: 0; font-size: 13px; line-height: 1.5; color: var(--mut)">All 9 fields and 2 comments become part of the page in the exported copy. Nobody will be able to change them there. 2 required fields are still empty. You can turn this off before exporting.</p>
+<div style="display: flex; gap: 8px; justify-content: flex-end"><button class="btn">Keep fields editable</button><button class="btn pri">Flatten when exporting</button></div>
+</div></sc-if>
+</div>
+<footer style="height: 30px; flex: none; display: flex; align-items: center; gap: 12px; padding: 0 12px; border-top: 1px solid var(--line); background: var(--side)">
+<label class="hint" for="pg" style="display: flex; align-items: center; gap: 6px">Page<input id="pg" class="field" value="12" inputmode="numeric" style="width: 44px; height: 22px; padding: 0 6px; text-align: center"></label><span class="hint">of 14</span>
+<div style="flex: 1"></div>
+<span class="hint" role="status">Phone is required.</span>
+<span class="sep" aria-hidden="true"></span>
+<span class="hint">Fields are filled in the copy only</span>
+</footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "flatten": {"editor": "enum", "options": ["Off", "Confirming", "On"], "default": "Off"}, "$preview": {"width": 1280, "height": 800}}'>
+class Component extends DCLogic {
+renderVals() {
+const win = (this.props.platform ?? 'macOS') === 'Windows';
+const light = (this.props.theme ?? 'dark') === 'light';
+const base = {
+themeClass: light ? 'tb light' : 'tb dark',
+findKey: win ? 'Ctrl+K' : '⌘K',
+settingsKey: win ? 'Ctrl+,' : '⌘,',
+runKey: win ? 'Ctrl+Enter' : '⌘↵',
+openKey: win ? 'Ctrl+O' : '⌘O',
+undoKey: win ? 'Ctrl+Z' : '⌘Z',
+redoKey: win ? 'Ctrl+Y' : '⇧⌘Z',
+dupKey: win ? 'Ctrl+D' : '⌘D',
+selAllKey: win ? 'Ctrl+A' : '⌘A',
+mod: win ? 'Ctrl' : '⌘',
+reveal: win ? 'Show in File Explorer' : 'Show in Finder',
+docsDir: win ? 'C:\\Users\\Asha\\Documents' : '~/Documents'
+};
+const f = this.props.flatten ?? 'Off';
+const extra = { flatOn: f !== 'Off', flatOff: f === 'Off', showFlat: f === 'Confirming' };
+return Object.assign(base, typeof extra === 'undefined' ? {} : extra);
+}
+}
+</script>
+</body>
+</html>

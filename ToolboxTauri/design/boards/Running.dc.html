@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Protect PDF, running</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+.tb{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;font-size:13px;line-height:1.45;color:var(--fg);background:var(--bg);-webkit-font-smoothing:antialiased}
+.tb.dark{--bg:#0a0a0a;--side:#111111;--panel:#0f0f0f;--raise:#1c1c1c;--fg:#fafafa;--mut:#a3a3a3;--faint:#8a8a8a;--line:rgba(255,255,255,.08);--line2:rgba(255,255,255,.16);--sel:#262626;--pri:#ebebeb;--prifg:#171717;--bad:#ff6b6b;--warn:#f2b552;--ring:#a3a3a3;--scrim:rgba(0,0,0,.6);--seg-ok:#d4d4d4;--seg-wait:#2a2a2a}
+.tb.light{--bg:#ffffff;--side:#f7f7f7;--panel:#fcfcfc;--raise:#f2f2f2;--fg:#0a0a0a;--mut:#525252;--faint:#666666;--line:#e8e8e8;--line2:#d4d4d4;--sel:#ebebeb;--pri:#171717;--prifg:#fafafa;--bad:#c10007;--warn:#9a5800;--ring:#525252;--scrim:rgba(0,0,0,.28);--seg-ok:#262626;--seg-wait:#e5e5e5}
+.tb button,.tb input,.tb select{font:inherit;color:inherit}
+.btn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:7px;border:1px solid var(--line2);background:var(--raise);color:var(--fg);font-weight:500;cursor:pointer;white-space:nowrap;box-sizing:border-box;text-decoration:none}
+.btn.pri{background:var(--pri);color:var(--prifg);border-color:transparent}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--mut)}
+.btn.sm{height:26px;padding:0 9px;font-size:12px}
+.btn[disabled]{opacity:.45;cursor:default}
+.kbd{font-size:11px;line-height:16px;padding:0 5px;border-radius:4px;border:1px solid var(--line2);color:var(--mut);font-weight:500}
+.btn.pri .kbd{border-color:currentColor;color:inherit;opacity:.6}
+.nav{display:flex;align-items:center;gap:9px;min-height:30px;padding:0 10px;border-radius:7px;color:var(--mut);text-decoration:none;border:0;background:none;width:100%;text-align:left;cursor:pointer;box-sizing:border-box}
+.nav.on{background:var(--sel);color:var(--fg);font-weight:500}
+.field{height:30px;border-radius:7px;border:1px solid var(--line2);background:var(--bg);padding:0 10px;width:100%;box-sizing:border-box;min-width:0}
+.lbl{font-size:12px;font-weight:600}
+.hint{font-size:12px;color:var(--mut)}
+.rrow{display:grid;grid-template-columns:20px minmax(0,1fr) 120px 230px;gap:12px;align-items:center;padding:8px 20px;border-bottom:1px solid var(--line);min-height:36px}
+svg.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.tb :focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+a{color:inherit}a:hover{color:var(--mut)}
+</style>
+</helmet>
+<div class="{{themeClass}}" style="min-height: 800px; display: flex; flex-wrap: wrap; position: relative">
+<aside aria-label="File Security" style="flex: 1 1 220px; max-width: 232px; background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; padding: 14px 10px; box-sizing: border-box">
+<a class="nav" href="Main.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M5 12l6 6M5 12l6-6"></path></svg>All tools</a>
+<div style="padding: 16px 10px 6px; font-size: 12px; font-weight: 600; color: var(--faint)">File Security</div>
+<nav aria-label="File Security tools" style="display: flex; flex-direction: column; gap: 2px">
+<button class="nav on" aria-pressed="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg>Protect PDF</button>
+<button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 7.5-2"></path></svg>Remove Password</button>
+<button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"></path><path d="M9 12l2 2 4-4"></path></svg>Remove Restrictions</button>
+<button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4"></path><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"></path><rect x="9" y="14" width="6" height="4" rx="1"></rect></svg>Protect Office Files</button>
+</nav>
+<p class="hint" style="margin: 8px 10px 0">Switching tools waits until the batch finishes.</p>
+<div style="flex: 1"></div>
+<button class="nav"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"></path></svg>Settings<span class="kbd" style="margin-left: auto">{{settingsKey}}</span></button>
+<p class="hint" style="margin: 0; padding: 10px 10px 0">Files stay on this device.</p>
+</aside>
+<div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+<header style="min-height: 52px; display: flex; align-items: center; gap: 14px; padding: 0 20px; border-bottom: 1px solid var(--line); flex-wrap: wrap">
+<h1 style="margin: 0; font-size: 15px; font-weight: 600">Protect PDF</h1>
+<span class="hint">Add an open password to each PDF.</span>
+<div style="flex: 1"></div>
+<button class="btn ghost"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"></circle><path d="M21 21l-6-6"></path></svg>Find a tool<span class="kbd">{{findKey}}</span></button>
+</header>
+<div style="flex: 1; display: flex; flex-wrap: wrap; min-height: 0">
+<section aria-label="Batch" style="flex: 999 1 480px; min-width: 0; display: flex; flex-direction: column">
+<div style="padding: 14px 20px 12px; display: flex; flex-direction: column; gap: 10px; border-bottom: 1px solid var(--line)">
+<div role="status" aria-live="polite" style="display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap">
+<strong style="font-size: 15px">Protecting 7 of 24</strong>
+<span class="hint">6 protected, 1 skipped so far. Finished files can be opened now.</span>
+</div>
+<div aria-hidden="true" style="display: flex; gap: 2px; height: 6px">
+<sc-for list="{{segments}}" as="s" hint-placeholder-count="24"><span style="flex: 1; border-radius: 2px; background: {{s.bg}}"></span></sc-for>
+</div>
+</div>
+<ul aria-label="Files and results" style="list-style: none; margin: 0; padding: 0; overflow: auto">
+<sc-for list="{{rows}}" as="r" hint-placeholder-count="12">
+<li class="rrow" style="opacity: {{r.opacity}}">
+<span style="color: {{r.color}}; display: flex">
+<sc-if value="{{r.isOk}}" hint-placeholder-val="{{ true }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l5 5L20 7"></path></svg></sc-if>
+<sc-if value="{{r.isSkip}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M8.5 12h7"></path></svg></sc-if>
+<sc-if value="{{r.isRun}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9"></path></svg></sc-if>
+<sc-if value="{{r.isWait}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg></sc-if>
+</span>
+<span style="min-width: 0; display: flex; flex-direction: column"><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{r.name}}</span><span class="hint" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{r.detail}}</span></span>
+<span style="color: {{r.color}}">{{r.state}}</span>
+<span style="display: flex; gap: 4px; justify-content: flex-end">
+<sc-if value="{{r.isOk}}" hint-placeholder-val="{{ true }}"><button class="btn sm ghost" style="color: var(--fg)" aria-label="Open {{r.out}}">Open</button><button class="btn sm ghost" style="color: var(--fg)" aria-label="{{reveal}}: {{r.out}}">{{reveal}}</button></sc-if>
+</span>
+</li>
+</sc-for>
+</ul>
+</section>
+<section aria-label="Options, locked" style="flex: 1 1 300px; max-width: 360px; border-left: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column">
+<div style="margin: 14px 20px 0; padding: 8px 10px; border-radius: 8px; background: var(--raise); display: flex; gap: 8px; align-items: center"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg><span class="hint" style="color: var(--fg)">Options are locked until the batch finishes.</span></div>
+<fieldset disabled style="border: 0; margin: 0; padding: 18px 20px; display: flex; flex-direction: column; gap: 20px; flex: 1; opacity: .5">
+<div style="display: flex; flex-direction: column; gap: 6px">
+<label class="lbl" for="pw">Password for all files</label>
+<div style="display: flex; gap: 6px"><input id="pw" class="field" type="password" value="harbour-lantern-42"><button class="btn" aria-label="Show password" style="padding: 0 8px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"></path><circle cx="12" cy="12" r="3"></circle></svg></button></div>
+</div>
+<div style="display: flex; flex-direction: column; gap: 6px">
+<label class="lbl" for="enc">Encryption</label>
+<select id="enc" class="field"><option>AES-256 (recommended)</option></select>
+</div>
+<div style="border-top: 1px solid var(--line); padding-top: 18px; display: flex; flex-direction: column; gap: 8px">
+<span class="lbl">Save to</span>
+<span>Next to each original</span>
+</div>
+</fieldset>
+<footer style="padding: 14px 20px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 10px">
+<span class="hint">7 of 24 done</span>
+<div style="flex: 1"></div>
+<button class="btn">Cancel batch<span class="kbd">Esc</span></button>
+</footer>
+</section>
+</div>
+</div>
+<sc-if value="{{showCancel}}" hint-placeholder-val="{{ true }}">
+<div style="position: absolute; inset: 0; background: var(--scrim); display: flex; align-items: center; justify-content: center; padding: 20px">
+<div role="alertdialog" aria-modal="true" aria-labelledby="ct" aria-describedby="cd" style="width: 100%; max-width: 420px; background: var(--panel); border: 1px solid var(--line2); border-radius: 12px; padding: 22px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 24px 48px rgba(0,0,0,.28)">
+<h2 id="ct" style="margin: 0; font-size: 15px; font-weight: 600">Cancel this batch?</h2>
+<p id="cd" style="margin: 0; color: var(--mut)">The 7 finished files keep their outputs. The file in progress is stopped and leaves nothing half-written. The other 16 files won't be processed.</p>
+<div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 6px">
+<button class="btn">Keep running</button>
+<button class="btn pri">Cancel batch</button>
+</div>
+</div>
+</div>
+</sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark"},"platform":{"editor":"enum","options":["macOS","Windows"],"default":"macOS"},"showCancel":{"editor":"boolean","default":true},"$preview":{"width":1280,"height":800}}'>
+class Component extends DCLogic {
+renderVals() {
+const win = (this.props.platform ?? 'macOS') === 'Windows';
+const light = (this.props.theme ?? 'dark') === 'light';
+const out = (n) => n.replace('.pdf', '-protected.pdf');
+const data = [
+['lease-agreement.pdf', 'ok'], ['vendor-nda-acme.pdf', 'ok'], ['vendor-nda-northwind.pdf', 'ok'],
+['invoice-0425.pdf', 'skip'], ['payroll-september.pdf', 'ok'], ['board-minutes-q3.pdf', 'ok'],
+['statement-q3.pdf', 'ok'], ['site-survey-scan.pdf', 'run'], ['tenancy-addendum.pdf', 'wait'],
+['insurance-renewal.pdf', 'wait'], ['quote-harbourview.pdf', 'wait'], ['tax-summary-2026.pdf', 'wait']
+];
+const rows = data.map((d) => {
+const k = d[1];
+return {
+name: d[0], out: out(d[0]),
+isOk: k === 'ok', isSkip: k === 'skip', isRun: k === 'run', isWait: k === 'wait',
+state: k === 'ok' ? 'Protected' : k === 'skip' ? 'Skipped' : k === 'run' ? 'Protecting' : 'Waiting',
+detail: k === 'ok' ? out(d[0]) : k === 'skip' ? 'Already password-protected' : k === 'run' ? 'Page 18 of 31' : '',
+color: k === 'ok' || k === 'run' ? 'var(--fg)' : 'var(--mut)',
+opacity: k === 'wait' ? '0.6' : '1'
+};
+});
+const segs = [];
+for (let i = 0; i < 24; i++) segs.push({ bg: i === 3 ? 'var(--mut)' : i < 7 ? 'var(--seg-ok)' : 'var(--seg-wait)' });
+return {
+themeClass: light ? 'tb light' : 'tb dark',
+findKey: win ? 'Ctrl+K' : '⌘K',
+settingsKey: win ? 'Ctrl+,' : '⌘,',
+reveal: win ? 'Show in File Explorer' : 'Show in Finder',
+showCancel: this.props.showCancel ?? true,
+rows: rows,
+segments: segs
+};
+}
+}
+</script>
+</body>
+</html>

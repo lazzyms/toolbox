@@ -1,19 +1,32 @@
 import type { ToolDefinition } from "../contracts";
 import { ToolScaffold } from "../components/ToolScaffold";
+import { Badge } from "../components/ui/badge";
+import { Card } from "../components/ui/card";
 
 export const PlannedToolView = ({ utility }: { utility: ToolDefinition }) => (
     <ToolScaffold utility={utility} onRun={async () => []}>
         {() => (
-            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+            <Card className="planned-tool-callout">
+                <Badge variant="outline">Planned</Badge>
                 This tool is listed in the migration matrix. Its Tauri command and verification are not implemented yet.
-            </div>
+            </Card>
         )}
     </ToolScaffold>
 );
 
-export const UnavailableToolView = () => (
-    <div className="rounded-xl border border-slate-200 bg-white p-5 text-sm text-slate-700" role="status">
-        <p className="font-semibold">Unavailable in this build.</p>
-        <p className="mt-2">This build does not include the offline vision resource required by this tool. Files cannot be selected or processed.</p>
+export const UnavailableToolView = ({ utility }: { utility: ToolDefinition }) => {
+    const mode = utility.id === "pdf-ocr" ? "PDF OCR" : utility.id === "image-blur-faces" ? "Face blur" : utility.id === "image-remove-bg" ? "Background removal" : utility.title;
+    const explanation = "This tool requires an offline vision resource that is not bundled. Files will not be selected or processed.";
+    return (
+    <div className="flex h-full flex-col">
+        <div className="mb-6">
+            <h2 className="text-3xl font-bold">{utility.title}</h2>
+            <p className="text-muted-foreground">{utility.blurb}</p>
+        </div>
+        <Card className="planned-tool-callout" role="status">
+            <Badge variant="outline">Unavailable in this build.</Badge>
+            <p>Mode: {mode}. {explanation}</p>
+        </Card>
     </div>
-);
+    );
+};

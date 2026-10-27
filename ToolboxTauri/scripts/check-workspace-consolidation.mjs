@@ -1,0 +1,66 @@
+import fs from "node:fs";
+import path from "node:path";
+import process from "node:process";
+
+const root = process.cwd();
+const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "utf8");
+const registry = read("src/registry/index.ts");
+const atomicSource = registry.split("export const UtilityRegistry")[0];
+const atomicIds = [...atomicSource.matchAll(/\{ id: "([^"]+)"/g)].map((match) => match[1]);
+const workspaceSource = registry.split("export const ToolWorkspaceRegistry")[1] ?? "";
+// A view's editor lists a subset of its toolIds, so only the view's own toolIds count toward membership.
+const workspaceIds = [...workspaceSource.matchAll(/(?<!editor:\s*\{[^}]*)toolIds:\s*\[([\s\S]*?)\]/g)]
+  .flatMap((match) => [...match[1].matchAll(/"([^"]+)"/g)].map((item) => item[1]));
+
+const failures = [];
+const unique = (values) => new Set(values).size === values.length;
+const expectedAtomicToolCount = 35;
+if (atomicIds.length !== expectedAtomicToolCount || !unique(atomicIds)) failures.push(`expected ${expectedAtomicToolCount} unique atomic IDs, found ${atomicIds.length}`);
+if (workspaceIds.length !== atomicIds.length || !unique(workspaceIds)) failures.push("workspace membership must contain each atomic ID exactly once");
+if (atomicIds.some((id) => !workspaceIds.includes(id)) || workspaceIds.some((id) => !atomicIds.includes(id))) failures.push("workspace membership and atomic registry differ");
+
+const expectedWorkspaces = ["file-security", "pdf-editor", "pdf-convert", "image-editor", "compress-files", "media-tools"];
+const declaredWorkspaces = [...workspaceSource.matchAll(/^\s*id: "([^"]+)"/gm)].map((match) => match[1]);
+if (declaredWorkspaces.join() !== expectedWorkspaces.join()) failures.push(`expected workspaces ${expectedWorkspaces.join(", ")}, found ${declaredWorkspaces.join(", ")}`);
+const membersOf = (id) => [...(workspaceSource.match(new RegExp(`id: "${id}"[\\s\\S]*?toolIds:\\s*\\[([\\s\\S]*?)\\]`))?.[1] ?? "").matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+if (membersOf("file-security").join() !== "lock-unlock") failures.push("file-security must hold exactly lock-unlock");
+for (const retired of ["pdf-unlock", "pdf-protect", "office-protect"]) {
+  if (atomicIds.includes(retired) || workspaceIds.includes(retired)) failures.push(`${retired} is retired and must not be registered`);
+}
+if (membersOf("compress-files").join() !== "pdf-compress,compress") failures.push("compress-files must hold exactly pdf-compress and compress");
+if (!membersOf("pdf-convert").includes("pdf-ocr")) failures.push("pdf-ocr must belong to the PDF conversion workspace");
+if (membersOf("media-tools").includes("pdf-ocr")) failures.push("pdf-ocr must not belong to the media workspace");
+for (const id of ["pdf-merge", "pdf-split", "pdf-crop", "pdf-page-numbers", "pdf-rotate", "pdf-repair", "pdf-compare", "pdf-redact"]) {
+  if (!membersOf("pdf-editor").includes(id)) failures.push(`${id} must belong to the PDF Editor`);
+}
+if (!membersOf("image-editor").includes("image-metadata")) failures.push("image-metadata must belong to the Image Editor");
+
+const mainPage = read("src/views/MainPage.tsx");
+const legacyViews = [
+  "PDFConversionView",
+  "PDFEditView",
+  "PDFPageToolView",
+  "PDFPathsView",
+  "PDFProtectView",
+  "PDFSelectionView",
+  "PDFSimpleToolView",
+  "PDFUnlockView",
+  "ImageCompressView",
+  "ImageConvertView",
+  "ImageEffectView",
+  "ImageFormatView",
+  "ImageGeometryView",
+  "ImageMetadataView",
+  "VisionView",
+];
+for (const view of legacyViews) {
+  if (new RegExp(`from ["']\\./${view}["']`).test(mainPage)) failures.push(`${view} is still imported by MainPage`);
+  if (fs.existsSync(path.join(root, "src/views", `${view}.tsx`))) failures.push(`${view}.tsx should be removed after workspace migration`);
+}
+
+if (failures.length) {
+  console.error(failures.map((failure) => `Workspace consolidation failed: ${failure}`).join("\n"));
+  process.exitCode = 1;
+} else {
+  console.log(`Workspace consolidation passed: ${expectedAtomicToolCount} atomic IDs, ${expectedWorkspaces.length} workspaces, no legacy workspace views`);
+}

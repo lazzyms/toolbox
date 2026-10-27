@@ -56,7 +56,7 @@ function Get-MsixVersion([string]$ConfiguredVersion) {
 }
 
 function Copy-IntoStage([string]$Source, [string]$Destination) {
-    $sourcePath = Join-Path $projectRoot $Source
+    $sourcePath = Join-Path $tauriRoot $Source
     $destinationPath = Join-Path $stage ($Destination -replace '/', '\')
     if (Test-Path -LiteralPath $sourcePath -PathType Container) {
         New-Item -ItemType Directory -Force -Path $destinationPath | Out-Null
@@ -77,19 +77,19 @@ function Copy-ConfiguredInputs($Configured, [string]$Kind) {
             $source = $entry
             $wildcard = $source.IndexOfAny([char[]]@('*', '?')) -ge 0
             if ($wildcard) {
-                $matches = Get-ChildItem -Path (Join-Path $projectRoot $source) -File -Recurse
+                $matches = Get-ChildItem -Path (Join-Path $tauriRoot $source) -File -Recurse
                 foreach ($match in $matches) {
-                    $relative = [IO.Path]::GetRelativePath($projectRoot, $match.FullName)
+                    $relative = [IO.Path]::GetRelativePath($tauriRoot, $match.FullName)
                     Copy-IntoStage $relative $relative
                 }
             } else {
                 $name = Split-Path $source -Leaf
                 if ($Kind -eq "externalBin") {
                     $candidates = @($source, "$source-$Target", "$source-$Target.exe", "$source.exe") |
-                        Select-Object -Unique | Where-Object { Test-Path -LiteralPath (Join-Path $projectRoot $_) -PathType Leaf }
+                        Select-Object -Unique | Where-Object { Test-Path -LiteralPath (Join-Path $tauriRoot $_) -PathType Leaf }
                     if (-not $candidates) { throw "Configured external binary does not exist for $Target`: $source" }
                     foreach ($candidate in $candidates) {
-                        $relative = [IO.Path]::GetRelativePath($projectRoot, (Join-Path $projectRoot $candidate))
+                        $relative = [IO.Path]::GetRelativePath($tauriRoot, (Join-Path $tauriRoot $candidate))
                         Copy-IntoStage $relative $relative
                     }
                 } else {
@@ -118,6 +118,7 @@ $msixVersion = Get-MsixVersion $Version
 if (-not (Test-Path -LiteralPath $storeConfigPath) -or -not (Test-Path -LiteralPath $manifestTemplatePath)) {
     throw "Store packaging configuration or manifest template is missing."
 }
+$storeConfig = Get-Content -Raw -LiteralPath $storeConfigPath | ConvertFrom-Json
 
 if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
 New-Item -ItemType Directory -Force -Path (Join-Path $stage "Assets") | Out-Null
@@ -146,8 +147,10 @@ foreach ($releaseDirectory in $releaseDirectories) {
 if ($null -eq $executable) { throw "Could not find the release executable for $MainBinaryName ($Target)." }
 Copy-Item -LiteralPath $executable.FullName -Destination (Join-Path $stage "$MainBinaryName.exe") -Force
 
-$resources = $config.bundle.PSObject.Properties["resources"]
-$externalBin = $config.bundle.PSObject.Properties["externalBin"]
+$resources = $storeConfig.bundle.PSObject.Properties["resources"]
+if (-not $resources) { $resources = $config.bundle.PSObject.Properties["resources"] }
+$externalBin = $storeConfig.bundle.PSObject.Properties["externalBin"]
+if (-not $externalBin) { $externalBin = $config.bundle.PSObject.Properties["externalBin"] }
 if ($resources) { Copy-ConfiguredInputs $resources.Value "resources" }
 if ($externalBin) { Copy-ConfiguredInputs $externalBin.Value "externalBin" }
 

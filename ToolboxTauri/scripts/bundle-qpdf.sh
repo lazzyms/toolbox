@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bundles self-contained qpdf and pdftoppm binaries into a freshly built
+# Bundles self-contained qpdf and Poppler binaries into a freshly built
 # macOS Toolbox.app so PDF protection and rendering work out of the box.
 # Run after `npm run tauri build`.
 #
@@ -8,11 +8,15 @@
 # we copy qpdf plus its non-system dylib closure into Contents/Resources/qpdf-bin/
 # and rebase every install name to @loader_path so the whole set travels inside
 # the bundle with no host libraries required (macOS /usr/lib & /System are exempt).
+# A qpdf below the minimum in qpdf-pin.json, or not native to TOOLBOX_TARGET, is refused.
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TARGET="${TOOLBOX_TARGET:-aarch64-apple-darwin}"
 APP="${1:-$(pwd)/src-tauri/target/release/bundle/macos/Toolbox.app}"
 QPDF_BIN="${QPDF:-$(command -v qpdf || true)}"
 PDFTOPPM_BIN="${PDFTOPPM:-$(command -v pdftoppm || true)}"
+PDFTOTEXT_BIN="${PDFTOTEXT:-$(command -v pdftotext || true)}"
 TESSERACT_BIN="${TESSERACT:-$(command -v tesseract || true)}"
 
 if [[ ! -d "$APP" ]]; then
@@ -23,8 +27,19 @@ if [[ -z "$QPDF_BIN" ]]; then
   echo "bundle-qpdf: qpdf not found; install it (brew install qpdf) or set QPDF" >&2
   exit 1
 fi
+check_qpdf() {
+  node "$SCRIPT_DIR/check-release-readiness.mjs" --qpdf "$1" --target "$TARGET" >&2 || {
+    echo "bundle-qpdf: refusing qpdf at $1" >&2
+    exit 1
+  }
+}
+check_qpdf "$QPDF_BIN"
 if [[ -z "$PDFTOPPM_BIN" ]]; then
   echo "bundle-qpdf: pdftoppm not found; install it (brew install poppler) or set PDFTOPPM" >&2
+  exit 1
+fi
+if [[ -z "$PDFTOTEXT_BIN" ]]; then
+  echo "bundle-qpdf: pdftotext not found; install it (brew install poppler) or set PDFTOTEXT" >&2
   exit 1
 fi
 if [[ -z "$TESSERACT_BIN" ]]; then
@@ -133,6 +148,7 @@ bundle_tool() { # $1 = source binary, $2 = destination directory, $3 = output na
 
 bundle_tool "$QPDF_BIN" "$RES/qpdf-bin" qpdf
 bundle_tool "$PDFTOPPM_BIN" "$RES/pdf-bin" pdftoppm
+bundle_tool "$PDFTOTEXT_BIN" "$RES/pdf-bin" pdftotext
 bundle_tool "$TESSERACT_BIN" "$RES/resources/ocr/bin" tesseract
 
 # Sign the injected binaries with the app's identity or an explicit override.
@@ -147,11 +163,11 @@ codesign --force --sign "$SIGNING_IDENTITY" "$APP"
 codesign --verify --deep --strict "$APP"
 
 echo "bundle-qpdf: embedded self-contained PDF/OCR helpers -> $RES/{qpdf-bin,pdf-bin,resources/ocr/bin}"
-VERSION="$("$RES/qpdf-bin/qpdf" --version 2>/dev/null | head -1)"
-[[ -n "$VERSION" ]] || { echo "bundle-qpdf: qpdf --version failed" >&2; exit 1; }
-echo "$VERSION"
+check_qpdf "$RES/qpdf-bin/qpdf"
 "$RES/pdf-bin/pdftoppm" -h >/dev/null
+"$RES/pdf-bin/pdftotext" -h >/dev/null
 "$RES/resources/ocr/bin/tesseract" --version >/dev/null
+node "$SCRIPT_DIR/third-party-notices.mjs" --binaries "$APP"
 
 # Tauri creates the updater archive before this script injects qpdf. Rebuild it
 # after injection so an update is as self-contained as a fresh install, then

@@ -1,129 +1,753 @@
-import { useState, useEffect } from 'react';
-import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
+import { createContext, useContext, useState, useEffect, useMemo, useRef } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
-import type { ToolDefinition, JobOutcome, Progress } from '../contracts';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import type { ToolDefinition, JobOutcome, OutputLocation, Progress } from '../contracts';
+import { TOOL_DROP_EVENT, type ShellEvent } from '../hooks/useShellBridge';
+import { useOutputLocation } from '../outputLocation';
+import { failedOutcome, parseToolResult } from '../jobOutcome';
+import { toolsForWorkspace, workspaceForTool } from '../registry';
+import { shortenHomePath, useHomeDir } from '../homePath';
+import { CancelRun } from './CancelRun';
+import { ShortcutHint } from './ShortcutHint';
+import { isWindows, matchShortcut, shortcutTarget } from '../shortcuts';
 import { ResultList } from './ResultList';
+import { rowView } from './resultRow';
+import { BATCH_PROGRESS_EVENT, foldRunEvent, parseRunEvent, startRun, type LiveRun } from './liveRun';
+import { BlockedDestinationDialog, RunDestination, exampleOutputName, sameLocation, type BlockedDestination, type FolderCheck } from './RunDestination';
 import { TablerIcon } from './TablerIcon';
+import { chooseManyToOneSavePath } from './saveStep';
+import { saveStepAppliesTo, saveStepFor } from '../registry/saveSteps';
+import { ArrowDown, ArrowUp, FileIcon, FolderIcon, GripVertical, XIcon } from 'lucide-react';
+import {
+    classifyIntake,
+    entryStatuses,
+    fileName,
+    intakePolicyFor,
+    moveEntry,
+    parentFolder,
+    parseInspection,
+    rangeKeys,
+    type InspectedPath,
+    type IntakeCopy,
+    type IntakeEntry,
+    type NotAdded,
+} from './intake';
+
+
+const repeatLabel = (occurrence: number) => occurrence === 2 ? 'Added twice' : `Added ${occurrence} times`;
+
+export type WorkspaceSourceAction = () => void | Promise<void>;
+
+// The view rail lives outside the scaffold, so a run reports here to lock it like the options fieldset.
+export const RunStateContext = createContext<((running: boolean) => void) | null>(null);
+
+export type RunContext = { outputPath: string | null; runId: string };
+
+export type RunHandler = (files: string[], outputLocation: OutputLocation, run: RunContext) => Promise<JobOutcome[]>;
+
+type PerFileRun = { handler: RunHandler; outputLocation: OutputLocation };
 
 interface ToolScaffoldProps {
     utility: ToolDefinition;
-    onRun: (files: string[]) => Promise<JobOutcome[]>;
+    onRun: RunHandler;
+    onRunCombined?: RunHandler;
+    variant?: 'standard' | 'workspace';
+    sessionKey?: string;
+    onWorkspaceSourceAction?: (action: WorkspaceSourceAction | null) => void;
+    showFileOrdering?: boolean;
+    renderFileExtra?: (path: string, selected: boolean, locked: boolean) => React.ReactNode;
+    retryWithPassword?: (inputPath: string, password: string) => RunHandler;
+    intakeCopy?: IntakeCopy;
+    initialPaths?: readonly string[];
+    fileActivation?: Extract<ShellEvent, { kind: 'files' }>;
+    onActivationAccepted?: (activationId: string) => void;
+    onFilesChange?: (paths: readonly string[]) => void;
     children: (props: {
         files: string[];
+        failingFiles: string[];
+        outputLocation: OutputLocation;
         run: () => Promise<void>;
+        runCombined: () => Promise<void>;
         loading: boolean;
         progress: Progress;
+        selectedFileIndex: number;
+        selectFile: (index: number) => void;
+        destination: React.ReactNode;
+        runLabel: string | null;
+        failedFiles: string[];
+        retryFailed: () => Promise<void>;
+        retrying: boolean;
     }) => React.ReactNode;
 }
 
-export const ToolScaffold = ({ onRun, children }: ToolScaffoldProps) => {
-    const [files, setFiles] = useState<string[]>([]);
+export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, retryWithPassword, intakeCopy, initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, children }: ToolScaffoldProps) => {
+    const nextEntryKey = useRef(0);
+    const newEntries = (paths: readonly string[]) => paths.map((path) => ({ key: `entry-${++nextEntryKey.current}`, path }));
+    const [entries, setEntries] = useState<IntakeEntry[]>(() => newEntries(initialPaths));
+    const [selection, setSelection] = useState<ReadonlySet<string>>(() => new Set());
+    const [anchor, setAnchor] = useState<string | null>(null);
+    const [notAdded, setNotAdded] = useState<NotAdded[]>([]);
+    const [moveStatus, setMoveStatus] = useState('');
+    const [dragKey, setDragKey] = useState<string | null>(null);
+    const [dropTargetKey, setDropTargetKey] = useState<string | null>(null);
+    const rowButtons = useRef(new Map<string, HTMLButtonElement>());
+    const home = useHomeDir();
     const [results, setResults] = useState<JobOutcome[]>([]);
+    const [resultsNamedByOutput, setResultsNamedByOutput] = useState(false);
     const [loading, setLoading] = useState(false);
-    const progress: Progress = { completed: loading ? 0 : results.length, total: files.length };
-
-    const run = async () => {
-        setLoading(true);
-        setResults([]);
-        try {
-            setResults(await onRun(files));
-        } catch (error) {
-            setResults([{ inputPath: 'Tool error', outputPaths: [], failure: { kind: 'processing', message: String(error) }, detail: '' }]);
-        } finally {
-            setLoading(false);
-        }
+    const [live, setLive] = useState<LiveRun | null>(null);
+    const [perFileRun, setPerFileRun] = useState<PerFileRun | null>(null);
+    const [retrying, setRetrying] = useState(false);
+    const defaultLocation = useOutputLocation();
+    const [runOverride, setRunOverride] = useState<OutputLocation | null>(null);
+    const [blocked, setBlocked] = useState<(BlockedDestination & { handler: RunHandler }) | null>(null);
+    const outputLocation = runOverride ?? defaultLocation;
+    const runGeneration = useRef(0);
+    const browseRef = useRef<WorkspaceSourceAction>(() => undefined);
+    const inputPolicy = utility.capability;
+    const workspace = variant === 'workspace' ? workspaceForTool(utility.id) : undefined;
+    const intakeTools = useMemo(() => workspace ? toolsForWorkspace(workspace) : [utility], [workspace, utility]);
+    const ordered = inputPolicy.inputCardinality === 'ordered' && showFileOrdering;
+    const statuses = useMemo(() => entryStatuses(entries, utility, intakeCopy), [entries, utility, intakeCopy]);
+    const runnable = useMemo(() => statuses.filter((status) => status.flag?.kind !== 'wontRun'), [statuses]);
+    const files = useMemo(() => runnable.map((status) => status.entry.path), [runnable]);
+    const failingFiles = useMemo(() => runnable.filter((status) => status.flag !== null).map((status) => status.entry.path), [runnable]);
+    const flagged = statuses.filter((status) => status.flag !== null);
+    const selectedFileIndex = Math.max(runnable.findIndex((status) => status.entry.key === anchor), 0);
+    const saveStep = saveStepFor(utility);
+    const savesOneFile = saveStepAppliesTo(saveStep, files.length);
+    const progress: Progress = {
+        completed: loading ? 0 : Math.min(results.length, files.length),
+        total: files.length,
     };
+
+    const resolvedSessionKey = sessionKey ?? utility.id;
 
     useEffect(() => {
-        const appWindow = getCurrentWebviewWindow();
-        const unlisten = appWindow.onDragDropEvent((event) => {
-            if (event.payload.type === 'drop') {
-                const paths = (event.payload as { type: 'drop'; paths: string[] }).paths;
-                // Dedupe: skip paths already in the list
-                setFiles((prev) => {
-                    const existing = new Set(prev);
-                    const fresh = paths.filter((p) => !existing.has(p));
-                    return fresh.length ? [...prev, ...fresh] : prev;
-                });
-            }
-        });
-        return () => {
-            unlisten.then((dispose) => dispose());
-        };
-    }, []);
+        runGeneration.current += 1;
+        setResults([]);
+        setLoading(false);
+        setLive(null);
+        setSelection(new Set());
+        setAnchor(null);
+    }, [resolvedSessionKey]);
 
-    const browse = async () => {
+    useEffect(() => {
+        runGeneration.current += 1;
+        setResults([]);
+        setLoading(false);
+        setLive(null);
+        setRunOverride(null);
+        setBlocked(null);
+    }, [utility.id]);
+
+    const overrideWith = (location: OutputLocation) =>
+        setRunOverride(sameLocation(location, defaultLocation) ? null : location);
+
+    useEffect(() => {
+        runGeneration.current += 1;
+        setResults([]);
+    }, [files]);
+
+    const runStreamed = async (handler: RunHandler, paths: string[], location: OutputLocation, outputPath: string | null, generation: number) => {
+        const runId = crypto.randomUUID();
+        setLive(startRun(runId, paths));
+        let unlisten: UnlistenFn | null = null;
         try {
-            const picked = await open({ multiple: true });
-            setFiles((prev) => {
-                const existing = new Set(prev);
-                const fresh = (Array.isArray(picked) ? picked : picked ? [picked] : []).filter(
-                    (p) => !existing.has(p)
-                );
-                return fresh.length ? [...prev, ...fresh] : prev;
+            unlisten = await listen(BATCH_PROGRESS_EVENT, ({ payload }) => {
+                const event = parseRunEvent(payload);
+                if (event && generation === runGeneration.current) setLive((run) => run && foldRunEvent(run, event));
             });
-        } catch (e) {
-            setResults([{ inputPath: 'Dialog error', outputPaths: [], failure: { kind: 'processing', message: String(e) }, detail: '' }]);
+        } catch {
+            // Without progress events the run still completes and shows its final results.
+        }
+        try {
+            return parseToolResult(await handler(paths, location, { outputPath, runId }));
+        } finally {
+            unlisten?.();
         }
     };
 
+    const runWith = async (handler: RunHandler, location: OutputLocation = outputLocation) => {
+        const generation = ++runGeneration.current;
+        setLoading(true);
+        setResults([]);
+        setResultsNamedByOutput(false);
+        setPerFileRun(null);
+        try {
+            if (location !== 'alongsideInput') {
+                const check = await invoke<FolderCheck>('check_output_folder', { folder: location.customFolder });
+                if (check !== 'ready') {
+                    if (generation === runGeneration.current) setBlocked({ folder: location.customFolder, check, handler });
+                    return;
+                }
+            }
+            if (!inputPolicy.manyToOne) setPerFileRun({ handler, outputLocation: location });
+            const cardinalityError = inputPolicy.inputCardinality === 'single' && files.length > 1
+                ? `This action accepts one input file, but ${files.length} were selected.`
+                : null;
+            const availabilityError = inputPolicy.nativeAvailability === 'unavailable'
+                ? `${utility.title} is unavailable in this build.`
+                : null;
+            const invalidPaths = new Map<string, JobOutcome>();
+            const validPaths = files.filter((path) => {
+                if (cardinalityError) {
+                    invalidPaths.set(path, failedOutcome(path, 'invalidInput', cardinalityError));
+                    return false;
+                }
+                if (availabilityError) {
+                    invalidPaths.set(path, failedOutcome(path, 'unavailable', availabilityError));
+                    return false;
+                }
+                return true;
+            });
+            const orderedSelectionRejected = inputPolicy.inputCardinality === 'ordered' && invalidPaths.size > 0;
+            const runs = !orderedSelectionRejected && validPaths.length > 0;
+            let outputPath: string | null = null;
+            if (runs && saveStepAppliesTo(saveStep, validPaths.length)) {
+                setLoading(false);
+                outputPath = await chooseManyToOneSavePath(saveStep, validPaths, location, inputPolicy.outputSuffix, saveStep.summary(validPaths.length));
+                if (!outputPath || generation !== runGeneration.current) return;
+                setLoading(true);
+            }
+            const processed = runs ? await runStreamed(handler, validPaths, location, outputPath, generation) : [];
+            const processedByPath = new Map(processed.map((result) => [result.inputPath, result]));
+            const nextResults = orderedSelectionRejected
+                ? files.map((path) => invalidPaths.get(path) ?? failedOutcome(path, 'invalidInput', 'Every selected input must use a supported format for this ordered action.'))
+                : invalidPaths.size === 0
+                    ? processed
+                : files.map((path) => invalidPaths.get(path) ?? processedByPath.get(path)).filter((result): result is JobOutcome => result !== undefined);
+            if (generation === runGeneration.current) {
+                setResults(nextResults);
+                setResultsNamedByOutput(outputPath !== null);
+            }
+        } catch (error) {
+            if (generation === runGeneration.current) {
+                setResults([failedOutcome('Tool error', 'processing', String(error))]);
+            }
+        } finally {
+            if (generation === runGeneration.current) {
+                setLoading(false);
+                setLive(null);
+            }
+        }
+    };
+    const run = () => runWith(onRun);
+    const runCombined = () => runWith(onRunCombined ?? onRun);
+
+    const chooseRunFolder = async () => {
+        const picked = await open({ directory: true, multiple: false });
+        return typeof picked === 'string' ? picked : null;
+    };
+
+    const changeForRun = async () => {
+        try {
+            const folder = await chooseRunFolder();
+            if (folder) overrideWith({ customFolder: folder });
+        } catch (e) {
+            setResults([failedOutcome('Dialog error', 'processing', String(e))]);
+        }
+    };
+
+    const saveBlockedAlongside = () => {
+        if (!blocked) return;
+        setBlocked(null);
+        overrideWith('alongsideInput');
+        void runWith(blocked.handler, 'alongsideInput');
+    };
+
+    const chooseBlockedFolder = async () => {
+        if (!blocked) return;
+        let folder: string | null;
+        try {
+            folder = await chooseRunFolder();
+        } catch (e) {
+            setBlocked(null);
+            setResults([failedOutcome('Dialog error', 'processing', String(e))]);
+            return;
+        }
+        if (!folder) return;
+        const location = { customFolder: folder };
+        setBlocked(null);
+        overrideWith(location);
+        void runWith(blocked.handler, location);
+    };
+
+    const rerun = async (paths: string[], handler = perFileRun?.handler) => {
+        if (!perFileRun || !handler || paths.length === 0) return;
+        const generation = runGeneration.current;
+        let rerunResults: JobOutcome[];
+        try {
+            rerunResults = parseToolResult(await handler(paths, perFileRun.outputLocation, { outputPath: null, runId: crypto.randomUUID() }));
+        } catch (error) {
+            rerunResults = paths.map((path) => failedOutcome(path, 'processing', String(error)));
+        }
+        if (generation !== runGeneration.current) return;
+        const replacements = new Map(rerunResults.filter((result) => paths.includes(result.inputPath)).map((result) => [result.inputPath, result]));
+        setResults((current) => current.map((result) => replacements.get(result.inputPath) ?? result));
+    };
+
+    const failedFiles = perFileRun
+        ? results.filter((result) => {
+            const view = rowView(result, utility.resultVerb);
+            return view.canRetry || (retryWithPassword !== undefined && view.canRetryWithPassword);
+        }).map((result) => result.inputPath)
+        : [];
+
+    const retryFailed = async () => {
+        setRetrying(true);
+        try {
+            await rerun(failedFiles, onRun);
+        } finally {
+            setRetrying(false);
+        }
+    };
+
+    const selectOnly = (key: string | null) => {
+        setSelection(new Set(key ? [key] : []));
+        setAnchor(key);
+    };
+
+    const intake = (incoming: InspectedPath[], replaceSingle = false) => {
+        if (inputPolicy.inputCardinality === 'single' && replaceSingle) {
+            const next = incoming[0]?.path;
+            if (!next || (entries.length === 1 && entries[0].path === next)) return;
+            const [entry] = newEntries([next]);
+            setNotAdded([]);
+            setEntries([entry]);
+            selectOnly(entry.key);
+            return;
+        }
+        const policy = { ...intakePolicyFor(workspace?.title ?? utility.title, intakeTools, utility), notAcceptedMessage: intakeCopy?.notAccepted };
+        const classified = classifyIntake(entries.map((entry) => entry.path), incoming, policy);
+        setNotAdded(classified.notAdded);
+        if (classified.added.length) setEntries((current) => [...current, ...newEntries(classified.added)]);
+    };
+
+    const dropPaths = async (paths: string[]) => {
+        let inspected: InspectedPath[];
+        try {
+            inspected = parseInspection(await invoke('inspect_intake_paths', { paths }), paths);
+        } catch {
+            inspected = parseInspection(null, paths);
+        }
+        intake(inspected);
+    };
+
+    const dropRef = useRef<(paths: string[]) => void>(() => undefined);
+    dropRef.current = (paths) => {
+        if (!loading) void dropPaths(paths);
+    };
+
+    // The native shell owns window drops and forwards them here once a tool is open.
+    useEffect(() => {
+        const handleDroppedFiles = (event: Event) => {
+            const paths = (event as CustomEvent<unknown>).detail;
+            if (Array.isArray(paths) && paths.every((path) => typeof path === 'string')) dropRef.current(paths);
+        };
+        window.addEventListener(TOOL_DROP_EVENT, handleDroppedFiles);
+        return () => window.removeEventListener(TOOL_DROP_EVENT, handleDroppedFiles);
+    }, []);
+
+    // Files opened from Finder, Explorer or the dock replace the current files once.
+    const [acceptedActivationId, setAcceptedActivationId] = useState<string | null>(null);
+    useEffect(() => {
+        if (!fileActivation || loading) return;
+        const activated = newEntries(fileActivation.paths);
+        setEntries(activated);
+        setResults([]);
+        setNotAdded([]);
+        selectOnly(activated[0]?.key ?? null);
+        setAcceptedActivationId(fileActivation.activationId);
+    }, [fileActivation?.activationId]);
+
+    useEffect(() => {
+        if (!fileActivation || acceptedActivationId !== fileActivation.activationId) return;
+        void invoke('acknowledge_activation', { activationId: fileActivation.activationId }).then(() => {
+            onActivationAccepted?.(fileActivation.activationId);
+        });
+    }, [acceptedActivationId, fileActivation, onActivationAccepted]);
+
+    const entryPaths = useMemo(() => entries.map((entry) => entry.path), [entries]);
+    useEffect(() => {
+        onFilesChange?.(entryPaths);
+    }, [entryPaths, onFilesChange]);
+
+    const browse = async () => {
+        if (loading) return;
+        try {
+            const picked = await open({
+                multiple: inputPolicy.inputCardinality !== 'single',
+                filters: [{ name: 'Supported files', extensions: inputPolicy.acceptedExtensions.map((extension) => extension.replace(/^\./, '')) }],
+            });
+            const paths = Array.isArray(picked) ? picked : picked ? [picked] : [];
+            if (paths.length) intake(parseInspection(null, paths), true);
+        } catch (e) {
+            setResults([failedOutcome('Dialog error', 'processing', String(e))]);
+        }
+    };
+
+    browseRef.current = browse;
+    const reportRunState = useContext(RunStateContext);
+    useEffect(() => {
+        if (!reportRunState) return;
+        reportRunState(loading);
+        return () => reportRunState(false);
+    }, [loading, reportRunState]);
+    useEffect(() => {
+        if (variant !== 'workspace' || !onWorkspaceSourceAction) return;
+        onWorkspaceSourceAction(entries.length === 0 ? () => browseRef.current() : null);
+        return () => onWorkspaceSourceAction(null);
+    }, [entries.length, onWorkspaceSourceAction, variant]);
+
+    const removeEntries = (keys: ReadonlySet<string>) => {
+        if (loading || keys.size === 0) return;
+        setEntries((current) => current.filter((entry) => !keys.has(entry.key)));
+        selectOnly(null);
+        setMoveStatus('');
+    };
+
+    const clearFiles = () => {
+        if (loading) return;
+        setEntries([]);
+        setResults([]);
+        setNotAdded([]);
+        setMoveStatus('');
+        selectOnly(null);
+    };
+
+    const selectFile = (index: number) => selectOnly(runnable[index]?.entry.key ?? null);
+
+    const clickRow = (key: string, event: React.MouseEvent) => {
+        if (event.shiftKey && anchor) {
+            setSelection(new Set(rangeKeys(entries, anchor, key)));
+            return;
+        }
+        if (event.metaKey || event.ctrlKey) {
+            setSelection((current) => {
+                const next = new Set(current);
+                if (next.has(key)) next.delete(key);
+                else next.add(key);
+                return next;
+            });
+            setAnchor(key);
+            return;
+        }
+        selectOnly(key);
+    };
+
+    const focusRow = (key: string) => requestAnimationFrame(() => rowButtons.current.get(key)?.focus());
+
+    const moveTo = (key: string, toIndex: number) => {
+        if (loading) return;
+        const next = moveEntry(entries, key, toIndex);
+        if (next === entries) return;
+        setEntries(next);
+        selectOnly(key);
+        const moved = next[toIndex];
+        setMoveStatus(`Moved ${fileName(moved.path)} to position ${toIndex + 1}.`);
+        focusRow(key);
+    };
+
+    const listKeyDown = (event: React.KeyboardEvent<HTMLUListElement>) => {
+        if (loading) return;
+        const delta = event.key === 'ArrowUp' ? -1 : event.key === 'ArrowDown' ? 1 : 0;
+        const index = entries.findIndex((entry) => entry.key === anchor);
+        if (delta && (event.metaKey || event.ctrlKey)) {
+            event.preventDefault();
+            if (ordered && index >= 0) moveTo(entries[index].key, index + delta);
+            return;
+        }
+        const shortcut = matchShortcut(event.nativeEvent, 'file-list');
+        if (shortcut === 'remove') {
+            event.preventDefault();
+            removeEntries(selection);
+            return;
+        }
+        if (shortcut === 'selectAll') {
+            event.preventDefault();
+            setSelection(new Set(entries.map((entry) => entry.key)));
+            return;
+        }
+        if (shortcut !== 'move' || index < 0) return;
+        event.preventDefault();
+        const target = entries[index + delta];
+        if (!target) return;
+        if (event.shiftKey) setSelection((current) => new Set([...current, target.key]));
+        else setSelection(new Set([target.key]));
+        setAnchor(target.key);
+        focusRow(target.key);
+    };
+
+    const dropTargetAt = (x: number, y: number) =>
+        document.elementFromPoint(x, y)?.closest<HTMLElement>('[data-intake-key]')?.dataset.intakeKey ?? null;
+
+    const endDrag = (event: React.PointerEvent) => {
+        const key = dragKey;
+        setDragKey(null);
+        setDropTargetKey(null);
+        if (!key) return;
+        const target = dropTargetAt(event.clientX, event.clientY);
+        const toIndex = entries.findIndex((entry) => entry.key === target);
+        if (toIndex >= 0) moveTo(key, toIndex);
+    };
+
+    const modifier = isWindows() ? 'Ctrl' : '⌘';
+    const listHint = ordered
+        ? `Files run top to bottom. Drag a row, or select it and press ${modifier}+Up or ${modifier}+Down.`
+        : `Shift-click or ${isWindows() ? 'Ctrl-click' : '⌘-click'} to select. Delete removes files from the list, not from disk.`;
+
+    const selectionNote = [
+        selection.size > 0 ? `${selection.size} selected` : null,
+        intakeCopy?.countHint(flagged.length, entries.length) ?? null,
+    ].filter(Boolean).join('. ');
+
+    const fileSelection = (
+        <div className="file-selection" data-locked={loading ? 'true' : undefined}>
+            <div className="file-selection-header">
+                <span className="file-selection-count">{entries.length} {entries.length === 1 ? 'file' : 'files'}</span>
+                {selectionNote && <span className="file-selection-selected">{selectionNote}</span>}
+                <span className="file-selection-actions">
+                    <Button variant="outline" size="sm" disabled={loading || selection.size === 0} onClick={() => removeEntries(selection)}>
+                        Remove from list
+                    </Button>
+                    {variant !== 'workspace' && <Button variant="ghost" size="sm" disabled={loading} onClick={clearFiles} className="file-selection-clear">
+                        Clear list
+                    </Button>}
+                </span>
+            </div>
+            <p className="file-selection-hint">{listHint}</p>
+            {flagged.length > 0 && (
+                <div className="file-selection-flagged">
+                    <p className="workspace-note">
+                        {intakeCopy
+                            ? intakeCopy.flaggedNotice(flagged.length)
+                            : `${flagged.length} ${flagged.length === 1 ? "file won't" : "files won't"} run with ${utility.title}. ${flagged.length === 1 ? 'It stays' : 'They stay'} in the list for other actions.`}
+                    </p>
+                    <Button variant="outline" size="sm" disabled={loading} onClick={() => removeEntries(new Set(flagged.map((status) => status.entry.key)))}>
+                        Remove {flagged.length} flagged {flagged.length === 1 ? 'file' : 'files'}
+                    </Button>
+                </div>
+            )}
+            <Card className="file-selection-list max-h-60 overflow-y-auto py-0">
+                <CardContent className="file-selection-list-content p-1">
+                    <ul
+                        className="file-selection-rows"
+                        role="listbox"
+                        aria-multiselectable="true"
+                        aria-label={ordered ? 'Files, in order' : 'Files'}
+                        aria-disabled={loading || undefined}
+                        onKeyDown={listKeyDown}
+                    >
+                        {statuses.map(({ entry, occurrence, flag }, index) => {
+                            const name = fileName(entry.path);
+                            const isSelected = selection.has(entry.key);
+                            return (
+                                <li
+                                    key={entry.key}
+                                    role="option"
+                                    aria-selected={isSelected}
+                                    aria-label={ordered ? `${index + 1} of ${entries.length}, ${name}` : name}
+                                    data-intake-key={entry.key}
+                                    data-flag={flag?.kind}
+                                    data-dragging={dragKey === entry.key ? 'true' : undefined}
+                                    data-drop-target={dropTargetKey === entry.key && dragKey !== entry.key ? 'true' : undefined}
+                                    className="file-selection-row"
+                                >
+                                    {ordered && (
+                                        <Button
+                                            variant="ghost"
+                                            size="icon-sm"
+                                            className="file-selection-handle"
+                                            aria-label={`Drag ${name} to reorder`}
+                                            disabled={loading}
+                                            onPointerDown={(event) => {
+                                                event.currentTarget.setPointerCapture(event.pointerId);
+                                                setDragKey(entry.key);
+                                            }}
+                                            onPointerMove={(event) => {
+                                                if (dragKey) setDropTargetKey(dropTargetAt(event.clientX, event.clientY));
+                                            }}
+                                            onPointerUp={endDrag}
+                                            onPointerCancel={() => {
+                                                setDragKey(null);
+                                                setDropTargetKey(null);
+                                            }}
+                                        >
+                                            <GripVertical aria-hidden="true" />
+                                        </Button>
+                                    )}
+                                    {ordered && <span className="file-selection-index" aria-hidden="true">{index + 1}</span>}
+                                    <Button
+                                        ref={(element) => {
+                                            if (element) rowButtons.current.set(entry.key, element);
+                                            else rowButtons.current.delete(entry.key);
+                                        }}
+                                        variant={isSelected ? 'secondary' : 'ghost'}
+                                        size="sm"
+                                        className="file-selection-item"
+                                        data-selected={isSelected ? 'true' : undefined}
+                                        aria-pressed={isSelected}
+                                        disabled={loading}
+                                        onClick={(event) => {
+                                            event.stopPropagation();
+                                            clickRow(entry.key, event);
+                                        }}
+                                    >
+                                        <span className="file-selection-name">{name}</span>
+                                        <span className="file-selection-detail">{flag?.message ?? shortenHomePath(parentFolder(entry.path), home)}</span>
+                                    </Button>
+                                    {flag && <Badge variant="outline" className="file-selection-badge">Won't run</Badge>}
+                                    {!flag && renderFileExtra?.(entry.path, isSelected, loading)}
+                                    {ordered && occurrence > 1 && <Badge variant="outline" className="file-selection-badge" data-tone="warning">{repeatLabel(occurrence)}</Badge>}
+                                    {ordered && (
+                                        <span className="file-selection-move">
+                                            <Button variant="ghost" size="icon-sm" aria-label={`Move ${name} up`} disabled={loading || index === 0} onClick={() => moveTo(entry.key, index - 1)}>
+                                                <ArrowUp aria-hidden="true" />
+                                            </Button>
+                                            <Button variant="ghost" size="icon-sm" aria-label={`Move ${name} down`} disabled={loading || index === entries.length - 1} onClick={() => moveTo(entry.key, index + 1)}>
+                                                <ArrowDown aria-hidden="true" />
+                                            </Button>
+                                        </span>
+                                    )}
+                                    <Button variant="ghost" size="icon-sm" aria-label={`Remove ${name} from list`} disabled={loading} onClick={() => removeEntries(new Set([entry.key]))}>
+                                        <XIcon aria-hidden="true" />
+                                    </Button>
+                                </li>
+                            );
+                        })}
+                    </ul>
+                </CardContent>
+            </Card>
+            {moveStatus && <p className="file-selection-status" role="status">{moveStatus}</p>}
+        </div>
+    );
+
+    const notAddedNotice = notAdded.length > 0 && (
+        <Card role="region" aria-label="Not added" className="intake-not-added py-0">
+            <CardContent className="intake-not-added-content p-3">
+                <div className="intake-not-added-header">
+                    <strong>{notAdded.length} {notAdded.length === 1 ? 'item' : 'items'} not added</strong>
+                    <Button variant="ghost" size="sm" onClick={() => setNotAdded([])}>Dismiss</Button>
+                </div>
+                <ul className="intake-not-added-rows">
+                    {notAdded.map((item, index) => (
+                        <li key={`${item.path}-${index}`} data-reason={item.reason}>
+                            {item.reason === 'folder' ? <FolderIcon aria-hidden="true" /> : <FileIcon aria-hidden="true" />}
+                            <span className="intake-not-added-name">{fileName(item.path)}</span>
+                            <span className="intake-not-added-message">{item.message}</span>
+                        </li>
+                    ))}
+                </ul>
+            </CardContent>
+        </Card>
+    );
+
+    const workspaceSource = (
+        <Card role="region" className="workspace-source-bar py-0" aria-label="Open document" data-empty={entries.length === 0 ? 'true' : 'false'}>
+            <CardContent className="workspace-source-content py-3">
+            <div className="workspace-source-copy">
+                <span className="workspace-source-kicker">Source</span>
+                <strong>{entries.length ? `${entries.length} ${entries.length === 1 ? 'file' : 'files'} open` : 'Open a file to begin'}</strong>
+                <span>{entries.length ? 'Export saves a new copy. Your original stays unchanged.' : 'Drop files here or browse from this device.'}</span>
+            </div>
+            <div className="workspace-source-actions">
+                <Button variant="default" size="sm" className="workspace-source-open" aria-label="Choose files to process" disabled={loading} {...shortcutTarget('open')} onClick={() => void browse()}>
+                    <TablerIcon name="folder-open" />
+                    {entries.length ? inputPolicy.inputCardinality === 'single' ? 'Replace file' : 'Add files' : 'Open files'}
+                    <ShortcutHint id="open" />
+                </Button>
+                {entries.length > 0 && <Button variant="ghost" size="sm" className="workspace-source-clear" disabled={loading} onClick={clearFiles}>Clear list</Button>}
+            </div>
+            {entries.length > 0 && fileSelection}
+            {notAddedNotice}
+            </CardContent>
+        </Card>
+    );
+
     return (
-        <div className="tool-scaffold">
-            <div
-                role="button"
-                tabIndex={0}
-                aria-label="Choose files to process"
-                onClick={browse}
-                onKeyDown={(event) => {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                        event.preventDefault();
-                        void browse();
-                    }
-                }}
-                className="file-dropzone"
-            >
-                <div className="file-dropzone-copy">
-                    <div className="file-dropzone-icon" aria-hidden="true">
-                        <TablerIcon name="file-minus" className="file-dropzone-icon-glyph" />
-                    </div>
-                    <p>Drag & Drop files here</p>
-                    <p>or click to browse</p>
+        <div className={`tool-scaffold ${variant === 'workspace' ? 'tool-scaffold-workspace' : ''}`}>
+            {variant === 'workspace' ? workspaceSource : <>
+                <div className="tool-scaffold-heading">
+                    <h2>{utility.title}</h2>
+                    <p>{utility.blurb}</p>
                 </div>
 
-                {files.length > 0 && (
-                    <div className="file-selection">
-                        <div className="file-selection-header">
-                            <span className="file-selection-count">{files.length} files selected</span>
-                            <button
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    setFiles([]);
-                                    setResults([]);
-                                }}
-                                className="file-selection-clear"
-                            >
-                                Clear all
-                            </button>
+                <Card role="region" aria-label="Input files" className="file-dropzone flex-1 border-dashed">
+                    <CardContent className="file-dropzone-content flex flex-1 flex-col items-center justify-center gap-6 p-6">
+                    <div className="file-dropzone-copy">
+                        <div className="file-dropzone-icon" aria-hidden="true">
+                            <TablerIcon name="file-minus" className="file-dropzone-icon-glyph" />
                         </div>
-                        <div className="file-selection-list">
-                            {files.map((f) => (
-                                <div key={f} className="file-selection-item">
-                                    {f.split(/[\\/]/).pop()}
-                                </div>
-                            ))}
-                        </div>
+                        <p>Drag & Drop files here</p>
+                        <p>or</p>
+                        <Button variant="ghost" size="sm" disabled={loading} {...shortcutTarget('open')} onClick={() => void browse()}>
+                            <TablerIcon name="folder-open" /> Browse files
+                            <ShortcutHint id="open" />
+                        </Button>
                     </div>
-                )}
-            </div>
 
+                    {entries.length > 0 && fileSelection}
+                    {notAddedNotice}
+                    </CardContent>
+                </Card>
+            </>}
+
+            <fieldset className="tool-scaffold-options" disabled={loading} aria-busy={loading || undefined}>
             {children({
                 files,
+                failingFiles,
+                outputLocation,
                 run,
+                runCombined,
                 loading,
                 progress,
+                selectedFileIndex,
+                selectFile,
+                destination: (
+                    <RunDestination
+                        location={outputLocation}
+                        defaultLocation={defaultLocation}
+                        overridden={runOverride !== null}
+                        toolTitle={utility.title}
+                        exampleName={files[0] && !savesOneFile ? exampleOutputName(files[0], inputPolicy.outputSuffix) : null}
+                        savesOneFile={saveStep !== null && (files.length === 0 || savesOneFile)}
+                        onChange={() => void changeForRun()}
+                        onReset={() => setRunOverride(null)}
+                    />
+                ),
+                runLabel: savesOneFile ? saveStep.runLabel : null,
+                failedFiles,
+                retryFailed,
+                retrying,
             })}
+            </fieldset>
 
-            <ResultList results={results} progress={progress} loading={loading} />
+            {loading && live && !inputPolicy.manyToOne && <CancelRun key={live.runId} run={live} lockedNote={utility.lockedNote} />}
+
+            <ResultList
+                results={results}
+                progress={progress}
+                loading={loading}
+                resultVerb={utility.resultVerb}
+                runningVerb={utility.runningVerb}
+                runningDetail={utility.runningDetail}
+                live={live}
+                namedByOutput={resultsNamedByOutput}
+                onRetry={perFileRun ? (inputPath) => rerun([inputPath]) : undefined}
+                onRetryWithPassword={perFileRun && retryWithPassword ? (inputPath, password) => rerun([inputPath], retryWithPassword(inputPath, password)) : undefined}
+            />
+
+            <BlockedDestinationDialog
+                blocked={blocked}
+                onCancel={() => setBlocked(null)}
+                onSaveAlongside={saveBlockedAlongside}
+                onChooseAnother={() => void chooseBlockedFolder()}
+            />
         </div>
     );
 };
