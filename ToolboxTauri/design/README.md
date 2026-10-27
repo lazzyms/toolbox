@@ -113,7 +113,7 @@ the board changed first.
 
 | Board | What it shows | States |
 |---|---|---|
-| [Settings](boards/Settings.dc.html) | Settings: six sections, use the Section tweak | [default](screens/Settings--default.jpg), [section-output-location](screens/Settings--section-output-location.jpg), [section-packs](screens/Settings--section-packs.jpg), [section-privacy](screens/Settings--section-privacy.jpg), [section-updates](screens/Settings--section-updates.jpg), [section-about-and-support](screens/Settings--section-about-and-support.jpg), [update-ready](screens/Settings--update-ready.jpg) |
+| [Settings](boards/Settings.dc.html) | Settings: seven sections, use the Section tweak | [default](screens/Settings--default.jpg), [section-output-location](screens/Settings--section-output-location.jpg), [section-quick-actions](screens/Settings--section-quick-actions.jpg), [section-packs](screens/Settings--section-packs.jpg), [section-privacy](screens/Settings--section-privacy.jpg), [section-updates](screens/Settings--section-updates.jpg), [section-about-and-support](screens/Settings--section-about-and-support.jpg), [update-ready](screens/Settings--update-ready.jpg) |
 | [Packs](boards/Packs.dc.html) | Packs: downloading, failed, offline, low space | [default](screens/Packs--default.jpg), [state-offline](screens/Packs--state-offline.jpg), [state-low-disk-space](screens/Packs--state-low-disk-space.jpg) |
 | [Shortcuts](boards/Shortcuts.dc.html) | Keyboard shortcuts for this platform | [default](screens/Shortcuts--default.jpg) |
 | [Logo](boards/Logo.dc.html) | App icon: sizes, platforms, in use | [default](screens/Logo--default.jpg) |

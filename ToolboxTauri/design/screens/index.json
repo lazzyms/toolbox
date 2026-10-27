@@ -646,6 +646,13 @@
   {
     "board": "Settings.dc.html",
     "title": "Settings: six sections, use the Section tweak",
+    "state": "section-quick-actions",
+    "query": "section=Quick%20actions",
+    "screen": "Settings--section-quick-actions.jpg"
+  },
+  {
+    "board": "Settings.dc.html",
+    "title": "Settings: six sections, use the Section tweak",
     "state": "section-packs",
     "query": "section=Packs",
     "screen": "Settings--section-packs.jpg"

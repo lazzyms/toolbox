@@ -3,7 +3,7 @@ import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { invoke } from "@tauri-apps/api/core";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
-import { ArrowLeft, Check, Eye, Folder, Info, List, LoaderCircle, Search, Shield, type LucideIcon } from "lucide-react";
+import { ArrowLeft, Check, Eye, Folder, Info, List, LoaderCircle, MousePointerClick, Search, Shield, type LucideIcon } from "lucide-react";
 import packageInfo from "../../package.json";
 import appIcon from "../../src-tauri/icons/128x128.png";
 import {
@@ -19,6 +19,7 @@ import { inAppUpdatesEnabled } from "../updates";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Switch } from "@/components/ui/switch";
@@ -127,6 +128,53 @@ const OutputLocationSection = () => {
         </div>
       </div>
       {saveError && <p className="settings-update-status" role="alert">{saveError}</p>}
+    </>
+  );
+};
+
+type QuickActionSetting = { id: string; title: string; enabled: boolean };
+
+const QuickActionsSection = () => {
+  const [actions, setActions] = useState<QuickActionSetting[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    invoke<QuickActionSetting[]>("get_quick_actions")
+      .then(setActions)
+      .catch(() => setError("Could not load quick actions."));
+  }, []);
+  const toggle = async (id: string, enabled: boolean) => {
+    const next = actions.map((action) => (action.id === id ? { ...action, enabled } : action));
+    setActions(next);
+    try {
+      await invoke("set_quick_actions", { ids: next.filter((action) => action.enabled).map((action) => action.id) });
+      setError(null);
+    } catch {
+      setError("Could not update quick actions.");
+    }
+  };
+  return (
+    <>
+      <div className="settings-rows">
+        <div className="settings-row">
+          <span className="settings-row-text">
+            <span id="quick-actions-title" className="settings-row-title">Right-click menu</span>
+            <span className="settings-row-hint">Choose the tools that appear when you right-click a file in {isWindows() ? "File Explorer" : "Finder"}.</span>
+          </span>
+          <span role="group" aria-label="Quick actions" className="settings-row-control flex flex-col gap-1.5">
+            {actions.map((action) => (
+              <span key={action.id} className="settings-radio">
+                <Checkbox
+                  id={`quick-action-${action.id}`}
+                  checked={action.enabled}
+                  onCheckedChange={(checked) => void toggle(action.id, checked === true)}
+                />
+                <Label htmlFor={`quick-action-${action.id}`}>{action.title}</Label>
+              </span>
+            ))}
+          </span>
+        </div>
+      </div>
+      {error && <p className="settings-update-status" role="alert">{error}</p>}
     </>
   );
 };
@@ -334,6 +382,7 @@ const KeyboardShortcutsSection = () => {
 const sections = [
   { id: "appearance", title: "Appearance", Icon: Eye, Content: AppearanceSection },
   { id: "output-location", title: "Output location", Icon: Folder, Content: OutputLocationSection },
+  { id: "quick-actions", title: "Quick actions", Icon: MousePointerClick, Content: QuickActionsSection },
   { id: "privacy", title: "Privacy", Icon: Shield, Content: PrivacySection },
   { id: "updates", title: "Updates", Icon: LoaderCircle, Content: UpdatesSection },
   { id: "about-and-support", title: "About and support", Icon: Info, Content: AboutSection },

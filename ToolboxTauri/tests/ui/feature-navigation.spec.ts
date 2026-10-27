@@ -71,6 +71,13 @@ test.beforeEach(async ({ page }) => {
             invoke: async (command, args) => {
                 invocations.push({ command, args });
 
+                if (command === "get_quick_actions") {
+                    return [
+                        { id: "compress-pdf", title: "Compress PDF", enabled: true },
+                        { id: "remove-background", title: "Remove Background", enabled: true },
+                    ];
+                }
+                if (command === "set_quick_actions") return null;
                 if (command === "get_output_settings") return (window as TestWindow).__toolboxOutputSettings ?? defaultOutputSettings;
                 if (command === "set_output_settings") {
                     const { settings } = args as { settings: OutputSettings };
@@ -582,6 +589,19 @@ test("settings downloads and installs after the update is confirmed", async ({ p
     expect(await invokedCommands(page)).toContain("plugin:updater|download_and_install");
 });
 
+test("settings lets the user choose which quick actions appear in the file manager", async ({ page }) => {
+    await page.goto("/");
+    const group = (await openSettingsSection(page, "Quick actions")).getByRole("group", { name: "Quick actions" });
+    const compress = group.getByRole("checkbox", { name: "Compress PDF" });
+    await expect(compress).toBeChecked();
+    await expect(group.getByRole("checkbox", { name: "Remove Background" })).toBeChecked();
+
+    await compress.click();
+    await expect(compress).not.toBeChecked();
+    const saved = await page.evaluate(() => (window as TestWindow).__toolboxInvocations!.filter((call) => call.command === "set_quick_actions").map((call) => call.args));
+    expect(saved).toEqual([{ ids: ["remove-background"] }]);
+});
+
 test("settings privacy opt-out persists across reloads", async ({ page }) => {
     await page.goto("/");
     const privacy = await openSettingsSection(page, "Privacy");
@@ -902,7 +922,7 @@ test("the settings sidebar switches sections and lists only the built ones", asy
     await page.goto("/");
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     const sections = page.getByRole("navigation", { name: "Settings sections" });
-    await expect(sections.getByRole("button")).toHaveText(["Appearance", "Output location", "Privacy", "Updates", "About and support", "Keyboard shortcuts"]);
+    await expect(sections.getByRole("button")).toHaveText(["Appearance", "Output location", "Quick actions", "Privacy", "Updates", "About and support", "Keyboard shortcuts"]);
     await expect(page.getByText("Changes save as you make them.")).toBeVisible();
 
     const about = await openSettingsSection(page, "About and support", false);

@@ -3,6 +3,7 @@
 mod file_actions;
 mod intake;
 mod kit;
+mod quick_action;
 mod settings;
 mod shell;
 
@@ -456,7 +457,56 @@ fn combine_aggregate(paths: &[std::path::PathBuf], aggregate: JobOutcome) -> Vec
     }).collect()
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct QuickActionSetting { id: &'static str, title: &'static str, enabled: bool }
+
+fn quick_action_settings_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    use tauri::Manager;
+    app.path().app_config_dir().map(|dir| dir.join("quick-actions.json")).map_err(|e| e.to_string())
+}
+
+/// Debug builds skip registration so the menus never point at a throwaway dev binary.
+fn register_quick_actions(enabled: &[quick_action::QuickAction]) -> Result<(), String> {
+    if cfg!(debug_assertions) { return Ok(()); }
+    quick_action::register(&std::env::current_exe().map_err(|e| e.to_string())?, enabled)
+}
+
+#[tauri::command]
+fn get_quick_actions(app: tauri::AppHandle) -> Result<Vec<QuickActionSetting>, String> {
+    let enabled = quick_action::load_enabled(&quick_action_settings_path(&app)?);
+    Ok(quick_action::QuickAction::ALL.into_iter()
+        .map(|action| QuickActionSetting { id: action.id(), title: action.title(), enabled: enabled.contains(&action) })
+        .collect())
+}
+
+#[tauri::command]
+async fn set_quick_actions(app: tauri::AppHandle, ids: Vec<String>) -> Result<(), String> {
+    let enabled: Vec<_> = quick_action::QuickAction::ALL.into_iter().filter(|action| ids.iter().any(|id| id == action.id())).collect();
+    quick_action::save_enabled(&quick_action_settings_path(&app)?, &enabled)?;
+    register_quick_actions(&enabled)
+}
+
+fn run_quick_action(invocation: Result<quick_action::Invocation, String>) -> bool {
+    match invocation {
+        Ok(quick_action::Invocation { action, paths }) => {
+            let outcomes = action.run(paths);
+            quick_action::notify("Toolbox", &quick_action::summary(action, &outcomes));
+            outcomes.iter().all(|outcome| outcome.error().is_none())
+        }
+        Err(error) => {
+            quick_action::notify("Toolbox", &error);
+            false
+        }
+    }
+}
+
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(invocation) = quick_action::parse_args(&args) {
+        std::process::exit(if run_quick_action(invocation) { 0 } else { 1 });
+    }
+
     let builder = tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             shell::shell_ready,
@@ -521,7 +571,9 @@ fn main() {
             inspect_image_preview,
             inspect_tiff_pages,
             inspect_image_edit_preview,
-            export_image_edit_plan
+            export_image_edit_plan,
+            get_quick_actions,
+            set_quick_actions
         ])
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             shell::focus(app);
@@ -539,6 +591,12 @@ fn main() {
             app.manage(shell::ShellState::default());
             shell::install_geometry(app)?;
             shell::menu(app)?;
+            let quick_action_settings = quick_action_settings_path(app.handle())?;
+            std::thread::spawn(move || {
+                if let Err(error) = register_quick_actions(&quick_action::load_enabled(&quick_action_settings)) {
+                    eprintln!("Quick actions could not be registered: {error}");
+                }
+            });
             let startup_paths = std::env::args().skip(1).collect::<Vec<_>>();
             if !startup_paths.is_empty() {
                 shell::dispatch(app.handle(), shell::parse_paths(startup_paths));

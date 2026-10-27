@@ -1,3 +1,7 @@
+- Never write unit tests after you write code.
+- Highly prefer end-to-end tests as the sole testing mechanism. Use them to verify complex features work. At the end of end-to-end tests, produce a verifiable and repeatable artifact.
+- If you must test a system in isolation, first write all the way it could fail, then write the code.
+
 # Toolbox — Agent Guide
 
 ## Scope
