@@ -50,3 +50,5 @@ change needs automated coverage.
 `main` is the default branch and primary release line. Its release workflow
 publishes signed macOS and Windows artifacts and updater metadata. Do not add
 Swift package files, sources, tests, or workflows to this branch.
+
+Release notes come from the `## Release notes` section of each merged PR (see `.github/pull_request_template.md`); fill it in for users, or write `- None`.

@@ -76,3 +76,5 @@ Single-context domain documentation in `CONTEXT.md` and `docs/adr/`. See `docs/a
 `main` is the default branch and primary release line. Its release workflow
 publishes signed macOS and Windows artifacts plus the updater manifest. Keep the
 release path cross-platform and Tauri based.
+
+Release notes come from the `## Release notes` section of each merged PR (see `.github/pull_request_template.md`); fill it in for users, or write `- None`.

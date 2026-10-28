@@ -78,7 +78,7 @@ jobs:
         working-directory: ToolboxTauri
 
       - name: Run update and bundle config tests
-        run: npm run test:updates && npm run test:document-colors && npm run test:asset-config && npm run test:site-release && npm run test:notices && npm run check:notices
+        run: npm run test:updates && npm run test:document-colors && npm run test:asset-config && npm run test:site-release && npm run test:release-notes && npm run test:notices && npm run check:notices
         working-directory: ToolboxTauri
 
       - name: Install qpdf (macOS)
