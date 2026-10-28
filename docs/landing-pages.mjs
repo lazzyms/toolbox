@@ -18,7 +18,7 @@ const platformAnswer = 'Toolbox runs on macOS (Apple silicon) and Windows. The W
 
 export const landingPages = [
   {
-    file: 'remove-pdf-password.html', category: 'pdf', tool: 'Remove Password',
+    file: 'remove-pdf-password.html', toolId: 'pdf-unlock', category: 'pdf', tool: 'Remove Password',
     title: 'Remove a PDF password offline | Toolbox',
     description: 'Remove the password from a PDF, Word, Excel or PowerPoint file you can open. Free desktop app for Mac and Windows. Files never leave your computer.',
     kicker: 'Remove PDF password', heading: 'Remove a PDF password,<br><em>without uploading it.</em>',
@@ -38,7 +38,7 @@ export const landingPages = [
     related: ['protect-pdf.html', 'compress-pdf.html', 'merge-pdf.html'],
   },
   {
-    file: 'protect-pdf.html', category: 'pdf', tool: 'Protect PDF',
+    file: 'protect-pdf.html', toolId: 'pdf-protect', category: 'pdf', tool: 'Protect PDF',
     title: 'Password protect a PDF offline | Toolbox',
     description: 'Add a password to a PDF, DOCX or XLSX file on your own computer. Free desktop app for Mac and Windows, with no upload.',
     kicker: 'Protect PDF', heading: 'Lock a PDF<br><em>on your own machine.</em>',
@@ -57,7 +57,7 @@ export const landingPages = [
     related: ['remove-pdf-password.html', 'sign-pdf.html', 'edit-pdf.html'],
   },
   {
-    file: 'compress-pdf.html', category: 'pdf', tool: 'Compress PDF',
+    file: 'compress-pdf.html', toolId: 'pdf-compress', category: 'pdf', tool: 'Compress PDF',
     title: 'Compress a PDF offline | Toolbox',
     description: 'Make PDF files smaller on your Mac or Windows PC. Compress several PDFs at once without uploading them. Free desktop app.',
     kicker: 'Compress PDF', heading: 'Smaller PDFs,<br><em>no upload.</em>',
@@ -76,7 +76,7 @@ export const landingPages = [
     related: ['compress-image.html', 'merge-pdf.html', 'split-pdf.html'],
   },
   {
-    file: 'merge-pdf.html', category: 'pdf', tool: 'Merge PDF',
+    file: 'merge-pdf.html', toolId: 'pdf-merge', category: 'pdf', tool: 'Merge PDF',
     title: 'Merge PDF files offline | Toolbox',
     description: 'Combine several PDFs into one file in the order you choose. Free desktop app for Mac and Windows that never uploads your files.',
     kicker: 'Merge PDF', heading: 'Combine PDFs<br><em>in your order.</em>',
@@ -95,7 +95,7 @@ export const landingPages = [
     related: ['split-pdf.html', 'jpg-to-pdf.html', 'compress-pdf.html'],
   },
   {
-    file: 'split-pdf.html', category: 'pdf', tool: 'Split PDF',
+    file: 'split-pdf.html', toolId: 'pdf-split', category: 'pdf', tool: 'Split PDF',
     title: 'Split a PDF offline | Toolbox',
     description: 'Split one PDF into single pages, page ranges or fixed-size chunks. Free desktop app for Mac and Windows with no upload.',
     kicker: 'Split PDF', heading: 'Split a PDF<br><em>into the parts you need.</em>',
@@ -114,7 +114,7 @@ export const landingPages = [
     related: ['merge-pdf.html', 'pdf-to-jpg.html', 'edit-pdf.html'],
   },
   {
-    file: 'pdf-to-jpg.html', category: 'pdf', tool: 'PDF to Images',
+    file: 'pdf-to-jpg.html', toolId: 'pdf-to-images', category: 'pdf', tool: 'PDF to Images',
     title: 'Convert PDF to JPG or PNG offline | Toolbox',
     description: 'Turn PDF pages into JPG or PNG images at 72, 150 or 300 dpi. Free desktop app for Mac and Windows. Files stay on your computer.',
     kicker: 'PDF to JPG', heading: 'PDF pages<br><em>to images.</em>',
@@ -133,7 +133,7 @@ export const landingPages = [
     related: ['jpg-to-pdf.html', 'convert-image.html', 'split-pdf.html'],
   },
   {
-    file: 'jpg-to-pdf.html', category: 'pdf', tool: 'Images to PDF',
+    file: 'jpg-to-pdf.html', toolId: 'images-to-pdf', category: 'pdf', tool: 'Images to PDF',
     title: 'Convert JPG, PNG or HEIC to PDF offline | Toolbox',
     description: 'Turn photos and scans into one PDF in the order you choose. Supports JPG, PNG and HEIC. Free desktop app for Mac and Windows.',
     kicker: 'JPG to PDF', heading: 'Photos and scans<br><em>into one PDF.</em>',
@@ -152,7 +152,7 @@ export const landingPages = [
     related: ['pdf-to-jpg.html', 'merge-pdf.html', 'convert-image.html'],
   },
   {
-    file: 'sign-pdf.html', category: 'pdf', tool: 'Sign PDF',
+    file: 'sign-pdf.html', toolId: 'pdf-sign', category: 'pdf', tool: 'Sign PDF',
     title: 'Sign a PDF offline | Toolbox',
     description: 'Place a typed name or a signature image on one or more PDF pages. Free desktop app for Mac and Windows with no upload.',
     kicker: 'Sign PDF', heading: 'Sign a PDF<br><em>without an upload.</em>',
@@ -171,7 +171,7 @@ export const landingPages = [
     related: ['edit-pdf.html', 'protect-pdf.html', 'merge-pdf.html'],
   },
   {
-    file: 'edit-pdf.html', category: 'pdf', tool: 'Edit PDF',
+    file: 'edit-pdf.html', toolId: 'pdf-edit', category: 'pdf', tool: 'Edit PDF',
     title: 'Edit a PDF offline: add text and notes | Toolbox',
     description: 'Add text, highlights, rectangles and notes to PDF pages, or add a watermark or page numbers. Free desktop app for Mac and Windows.',
     kicker: 'Edit PDF', heading: 'Mark up a PDF<br><em>on your desktop.</em>',
@@ -190,7 +190,7 @@ export const landingPages = [
     related: ['sign-pdf.html', 'split-pdf.html', 'protect-pdf.html'],
   },
   {
-    file: 'compress-image.html', category: 'images', tool: 'Compress Images',
+    file: 'compress-image.html', toolId: 'compress', category: 'images', tool: 'Compress Images',
     title: 'Compress images offline: JPG, PNG, WebP | Toolbox',
     description: 'Make JPG, PNG and WebP images smaller in batches on your Mac or Windows PC. Lossless or lossy modes, no upload. Free desktop app.',
     kicker: 'Compress images', heading: 'Smaller images,<br><em>in batches.</em>',
@@ -209,7 +209,7 @@ export const landingPages = [
     related: ['resize-image.html', 'convert-image.html', 'compress-pdf.html'],
   },
   {
-    file: 'resize-image.html', category: 'images', tool: 'Resize Images',
+    file: 'resize-image.html', toolId: 'resize', category: 'images', tool: 'Resize Images',
     title: 'Resize an image offline | Toolbox',
     description: 'Resize images by pixels, percentage or longest side and keep the aspect ratio. Free desktop app for Mac and Windows with no upload.',
     kicker: 'Resize images', heading: 'Resize an image<br><em>to the exact size.</em>',
@@ -228,7 +228,7 @@ export const landingPages = [
     related: ['compress-image.html', 'convert-image.html', 'jpg-to-pdf.html'],
   },
   {
-    file: 'convert-image.html', category: 'images', tool: 'Convert Image Format',
+    file: 'convert-image.html', toolId: 'heic-convert', category: 'images', tool: 'Convert Image Format',
     title: 'Convert HEIC to JPG, PNG or WebP offline | Toolbox',
     description: 'Convert images between PNG, JPEG, WebP and HEIC, including iPhone HEIC to JPG. Free desktop app for Mac and Windows with no upload.',
     kicker: 'Convert images', heading: 'HEIC, JPG, PNG, WebP.<br><em>Any direction.</em>',
@@ -275,8 +275,9 @@ const byFile = new Map(landingPages.map(page => [page.file, page]));
 
 const header = `<a class="skip" href="#main">Skip to content</a>
 <header class="nav"><div class="wrap nav-inner">
-  <a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true"></span><span class="brand-name">Toolbox</span></a>
-  <nav class="nav-links" aria-label="Sections"><a href="index.html">Overview</a><a href="pdf.html">PDF tools</a><a href="images.html">Image tools</a><a href="index.html#faq">FAQ</a></nav>
+  <a class="brand" href="index.html"><img class="brand-mark" src="assets/app-icon.png" alt="" width="28" height="28"><span class="brand-name">Toolbox</span></a>
+  <div class="tool-search nav-search" data-tool-search hidden><label for="tool-search">Search tools</label><svg class="ico" aria-hidden="true" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="m20 20-3.5-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><input id="tool-search" type="search" placeholder="Search tools" autocomplete="off" spellcheck="false" aria-controls="tool-search-results"><ul id="tool-search-results" class="tool-search-results" hidden></ul><p class="tool-search-status" role="status" aria-live="polite"></p></div>
+  <nav class="nav-links" aria-label="Sections"><a href="index.html#tools">Tools</a><a href="pdf.html">PDF tools</a><a href="images.html">Image tools</a><a href="index.html#faq">FAQ</a></nav>
   <div class="nav-actions"><button id="theme-toggle" class="btn btn-ghost btn-icon" type="button" aria-label="Switch to light appearance"><svg class="ico only-dark" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M19 5l-1.5 1.5M6.5 17.5 5 19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2"/></svg><svg class="ico only-light" aria-hidden="true" viewBox="0 0 24 24"><path fill="currentColor" d="M20.2 15.3A8.5 8.5 0 0 1 8.7 3.8 8.5 8.5 0 1 0 20.2 15.3Z"/></svg></button><a class="btn btn-ghost btn-icon" href="https://github.com/lazzyms/toolbox" aria-label="Toolbox on GitHub"><svg class="ico" aria-hidden="true" viewBox="0 0 24 24"><path fill="currentColor" d="M12 .8a11.2 11.2 0 0 0-3.5 21.8c.5.1.7-.2.7-.6v-2.2c-3 .7-3.7-1.4-3.7-1.4-.5-1.3-1.2-1.6-1.2-1.6-1-.7 0-.7 0-.7 1.1.1 1.7 1.1 1.7 1.1 1 1.7 2.6 1.2 3.2.9.1-.7.4-1.2.7-1.5-2.4-.3-5-1.2-5-5.3 0-1.2.4-2.1 1.1-2.9-.1-.3-.5-1.4.1-2.8 0 0 .9-.3 3 1.1a10.4 10.4 0 0 1 5.5 0c2.1-1.4 3-1.1 3-1.1.6 1.4.2 2.5.1 2.8.7.8 1.1 1.7 1.1 2.9 0 4.1-2.6 5-5 5.3.4.4.8 1.1.8 2.2v3.2c0 .4.2.7.8.6A11.2 11.2 0 0 0 12 .8Z"/></svg></a></div>
 </div></header>`;
 
@@ -317,7 +318,7 @@ export const structuredData = (page, version) => {
 
 export const renderLandingPage = (page, version) => {
   const dmg = `https://github.com/lazzyms/toolbox/releases/download/tauri-v${version}/Toolbox-${version}-macos.dmg`;
-  const download = `<a class="btn btn-default btn-lg" data-dl data-download-auto href="${dmg}"><span data-download-label>Download for macOS</span></a>`;
+  const download = `<div class="cta"><a class="btn btn-default btn-lg" data-dl data-download-platform="macos" href="${dmg}"><svg class="ico" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m-5-5 5 5 5-5M5 21h14"/></svg>Download for macOS</a><a class="btn btn-outline btn-lg" data-dl data-download-platform="windows" href="${storeUrl}"><svg class="ico" aria-hidden="true" viewBox="0 0 24 24" fill="currentColor"><path d="M3 3h8.5v8.5H3zm9.5 0H21v8.5h-8.5zM3 12.5h8.5V21H3zm9.5 0H21V21h-8.5z"/></svg>Get it from Microsoft Store</a></div>`;
   const meta = [
     `<link rel="canonical" href="${pageUrl(page.file)}">`,
     '<meta property="og:type" content="website">',
@@ -340,10 +341,7 @@ export const renderLandingPage = (page, version) => {
         <summary>${html(question)}${chevron}</summary>
         <div class="accordion-content"><p>${html(answer)}</p></div>
       </details>`).join('\n');
-  const related = page.related.map(file => {
-    const target = byFile.get(file);
-    return `    <a class="feature-card guide-card" href="${file}"><p class="feature-label">${html(target.tool)}</p><h3>${html(target.kicker)}</h3><p>${html(target.description)}</p></a>`;
-  }).join('\n');
+  const related = page.related.map(file => `<li><a href="${file}">${html(byFile.get(file).kicker)}</a></li>`).join('');
   return `<!DOCTYPE html>
 <html lang="en" data-theme="dark">
 <head>
@@ -351,7 +349,8 @@ export const renderLandingPage = (page, version) => {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${html(page.title)}</title>
 <meta name="description" content="${html(page.description)}">
-<link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+<link rel="icon" href="assets/favicon-32.png" type="image/png" sizes="32x32">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
 <link rel="stylesheet" href="assets/styles.css">
 ${meta}
 <meta name="theme-color" content="#08090b">
@@ -362,7 +361,7 @@ ${jsonLd(structuredData(page, version))}
 <body>
 ${header}
 <main id="main">
-  <section class="category-hero"><div class="wrap category-hero-inner"><a class="back-link" href="${categories[page.category].file}">← ${categories[page.category].name}</a><p class="kicker">${html(page.kicker)}</p><h1>${page.heading}</h1><p class="lede">${html(page.lede)}</p><div class="cta">${download}</div><p class="cta-note">Free for macOS and Windows · <a href="${storeUrl}">Microsoft Store</a> · No upload, no account</p></div></section>
+  <section class="category-hero"><div class="wrap category-hero-inner"><a class="back-link" href="${categories[page.category].file}">← ${categories[page.category].name}</a><p class="kicker">${html(page.kicker)}</p><h1>${page.heading}</h1><p class="lede">${html(page.lede)}</p>${download}<p class="cta-note">Free · No upload, no account</p></div></section>
   <section class="section"><div class="wrap narrow">
     <h2>How to ${html(page.kicker.charAt(0).toLowerCase() + page.kicker.slice(1))} with Toolbox</h2>
     <ol class="task-steps">
@@ -372,14 +371,9 @@ ${steps}
     <div class="accordion">
 ${faqs}
     </div>
+    <h2 class="task-related-title">Related</h2>
+    <ul class="task-links">${related}</ul>
   </div></section>
-  <section class="section alt"><div class="wrap">
-    <h2>Related tasks</h2>
-    <div class="feature-grid guide-grid">
-${related}
-    </div>
-  </div></section>
-  <section class="category-cta"><div class="wrap"><h2>Your files.<br>Your computer.</h2><p>Toolbox works locally, saves beside your original, and never overwrites it.</p>${download}</div></section>
 </main>
 ${footer}
 <script src="assets/app.js"></script>
@@ -431,17 +425,30 @@ ${landingPages.map(page => `- [${page.kicker}](${pageUrl(page.file)}): ${page.de
 - [Terms](${site}/terms.html)
 `;
 
-// Fills the <!-- task-links:<category|all> --> blocks on the hand-written pages.
-export const fillTaskLinks = source => source.replace(/<!-- task-links:(\w+) -->[\s\S]*?<!-- \/task-links -->/g, (_, category) => {
-  const links = landingPages.filter(page => category === 'all' || page.category === category)
-    .map(page => `<li><a href="${page.file}">${html(page.kicker)}</a></li>`).join('');
-  return `<!-- task-links:${category} --><ul class="task-links">${links}</ul><!-- /task-links -->`;
+// Turns each tool card on the category pages into a link to that tool's guide, and gives every card an anchor.
+const byToolId = new Map(landingPages.filter(page => page.toolId).map(page => [page.toolId, page]));
+const toolCard = /<(?:article|a) class="feature-card"[^>]*data-tool-id="([^"]+)"[^>]*>([\s\S]*?)<\/(?:article|a)>/g;
+export const linkToolCards = source => source.replace(toolCard, (_, id, body) => {
+  const guide = byToolId.get(id);
+  return guide
+    ? `<a class="feature-card" id="tool-${id}" href="${guide.file}" data-tool-id="${id}">${body}</a>`
+    : `<article class="feature-card" id="tool-${id}" data-tool-id="${id}">${body}</article>`;
 });
+
+// The site search index: one entry per tool card, pointing at its guide or its card.
+const text = value => value.replace(/<[^>]+>/g, '').replaceAll('&amp;', '&').trim();
+export const toolIndex = pages => JSON.stringify(Object.entries(pages).flatMap(([file, source]) => [...source.matchAll(toolCard)].map(([, id, body]) => ({
+  name: text(body.match(/<h2>([\s\S]*?)<\/h2>/)[1]),
+  label: text(body.match(/<p class="feature-label">([\s\S]*?)<\/p>/)[1]),
+  description: text(body.match(/<p>([\s\S]*?)<\/p>$/)[1]),
+  href: byToolId.get(id)?.file ?? `${file}#tool-${id}`,
+}))), null, 1) + '\n';
 
 export const buildSite = version => {
   const files = new Map(landingPages.map(page => [page.file, renderLandingPage(page, version)]));
-  for (const file of ['index.html', 'pdf.html', 'images.html']) files.set(file, fillTaskLinks(readFileSync(new URL(file, docs), 'utf8')));
-  const pages = [...new Set([...sitePages(), ...files.keys()])].sort();
+  for (const file of ['pdf.html', 'images.html']) files.set(file, linkToolCards(readFileSync(new URL(file, docs), 'utf8')));
+  files.set('assets/tools.json', toolIndex({ 'pdf.html': files.get('pdf.html'), 'images.html': files.get('images.html') }));
+  const pages = [...new Set([...sitePages(), ...files.keys()])].filter(file => file.endsWith('.html')).sort();
   files.set('sitemap.xml', renderSitemap(pages));
   files.set('robots.txt', robots);
   files.set('llms.txt', renderLlms());

@@ -77,49 +77,6 @@
     }));
   }
 
-  /* ───────────────────────── downloads ───────────────────────── */
-
-  // Keep platform download destinations in one place when cutting a new release.
-  const downloads = {
-    macos: {
-      href: 'https://github.com/lazzyms/toolbox/releases/download/tauri-v1.0.27/Toolbox-1.0.27-macos.dmg',
-      label: 'Download for macOS',
-      detail: 'Apple silicon · DMG',
-    },
-    'windows-x64': {
-      href: 'https://apps.microsoft.com/detail/9N5R8W4GJVH4',
-      label: 'Download for Windows x64',
-      detail: 'Microsoft Store · MSIX app',
-    },
-    'windows-arm64': {
-      href: 'https://apps.microsoft.com/detail/9N5R8W4GJVH4',
-      label: 'Download for Windows ARM64',
-      detail: 'Microsoft Store · MSIX app',
-    },
-  };
-
-  const browserPlatform = [
-    navigator.userAgentData?.platform,
-    navigator.platform,
-    navigator.userAgent,
-  ].filter(Boolean).join(' ').toLowerCase();
-  const detectedPlatform = browserPlatform.includes('win')
-    ? (/(arm64|aarch64)/.test(browserPlatform) ? 'windows-arm64' : 'windows-x64')
-    : browserPlatform.includes('mac') ? 'macos' : null;
-
-  if (detectedPlatform) {
-    const target = downloads[detectedPlatform];
-    for (const link of $$('[data-download-auto]')) {
-      link.href = target.href;
-      link.setAttribute('aria-label', target.label);
-      $('[data-download-label]', link)?.replaceChildren(target.label);
-    }
-    const recommended = $(`[data-download-platform="${detectedPlatform}"]`);
-    recommended?.setAttribute('data-recommended', 'true');
-    recommended?.setAttribute('aria-label', `${target.label} (${target.detail}, recommended)`);
-    $('#dl-note')?.replaceChildren(`Recommended for this device: ${target.detail}. Other installers are listed below.`);
-  }
-
   /* ───────────────────────── nav chrome ───────────────────────── */
 
   const nav = $('.nav');
@@ -127,15 +84,17 @@
   onScroll();
   addEventListener('scroll', onScroll, { passive: true });
 
-  const links = $$('.nav-links a[href^="#"]');
-  const sections = links.map((a) => $(a.getAttribute('href'))).filter(Boolean);
+  // Highlight the nav link for the section in view when it points into this page.
+  const page = (path) => path.replace(/index\.html$/, '');
+  const links = $$('.nav-links a').filter((a) => a.hash && page(a.pathname) === page(location.pathname) && $(a.hash));
+  const sections = links.map((a) => $(a.hash));
   if (sections.length && 'IntersectionObserver' in window) {
     const spy = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
           if (!entry.isIntersecting) continue;
           for (const a of links) {
-            a.setAttribute('aria-current', String(a.getAttribute('href') === `#${entry.target.id}`));
+            a.setAttribute('aria-current', String(a.hash === `#${entry.target.id}`));
           }
         }
       },
@@ -173,5 +132,40 @@
     }, 1500);
     if (document.readyState === 'complete') failsafe();
     else addEventListener('load', failsafe, { once: true });
+  }
+
+  /* ───────────────────────── tool search ───────────────────────── */
+
+  // assets/tools.json is generated from the tool cards by docs/landing-pages.mjs.
+  let tools;
+  const loadTools = () => tools ??= fetch('assets/tools.json').then((response) => response.json());
+  for (const search of $$('[data-tool-search]')) {
+    const input = $('input', search);
+    const list = $('.tool-search-results', search);
+    const status = $('.tool-search-status', search);
+    search.hidden = false;
+    const render = async () => {
+      const words = input.value.toLowerCase().split(/\s+/).filter(Boolean);
+      const matches = words.length ? (await loadTools()).filter((tool) => {
+        const text = `${tool.name} ${tool.label} ${tool.description}`.toLowerCase();
+        return words.every((word) => text.includes(word));
+      }) : [];
+      list.replaceChildren(...matches.slice(0, 8).map((tool) => {
+        const link = Object.assign(document.createElement('a'), { href: tool.href });
+        link.append(Object.assign(document.createElement('strong'), { textContent: tool.name }),
+          Object.assign(document.createElement('span'), { textContent: tool.description }));
+        const item = document.createElement('li');
+        item.append(link);
+        return item;
+      }));
+      list.hidden = !matches.length;
+      status.textContent = words.length ? (matches.length ? `${matches.length} tool${matches.length === 1 ? '' : 's'}` : 'No matching tool') : '';
+    };
+    input.addEventListener('focus', loadTools, { once: true });
+    input.addEventListener('input', render);
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') $('a', list)?.click();
+      if (event.key === 'Escape') { input.value = ''; render(); }
+    });
   }
 })();

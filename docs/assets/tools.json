@@ -1,0 +1,200 @@
+[
+ {
+  "name": "Remove Password",
+  "label": "Access",
+  "description": "Save an unlocked copy of a PDF, Word, Excel, or PowerPoint file when you know its password.",
+  "href": "remove-pdf-password.html"
+ },
+ {
+  "name": "Add PDF Page Numbers",
+  "label": "Pages",
+  "description": "Stamp page numbers onto a PDF, with a position and optional cover-page setting.",
+  "href": "pdf.html#tool-pdf-page-numbers"
+ },
+ {
+  "name": "Merge PDF",
+  "label": "Combine",
+  "description": "Bring several PDFs together in the order you choose.",
+  "href": "merge-pdf.html"
+ },
+ {
+  "name": "Watermark PDF",
+  "label": "Annotate",
+  "description": "Stamp text or an image across PDF pages.",
+  "href": "pdf.html#tool-pdf-watermark"
+ },
+ {
+  "name": "Crop PDF",
+  "label": "Pages",
+  "description": "Hide content outside a selected page rectangle.",
+  "href": "pdf.html#tool-pdf-crop"
+ },
+ {
+  "name": "Edit PDF",
+  "label": "Annotate",
+  "description": "Add text, highlights, rectangle shapes, and notes to selected pages.",
+  "href": "edit-pdf.html"
+ },
+ {
+  "name": "Protect PDF",
+  "label": "Security",
+  "description": "Add a password so only the people you choose can open it.",
+  "href": "protect-pdf.html"
+ },
+ {
+  "name": "Protect Office Files",
+  "label": "Security",
+  "description": "Add a password to a DOCX or XLSX file and save a protected copy.",
+  "href": "pdf.html#tool-office-protect"
+ },
+ {
+  "name": "Images to PDF",
+  "label": "Create",
+  "description": "Turn photos and scans into one PDF, including HEIC images on supported systems.",
+  "href": "jpg-to-pdf.html"
+ },
+ {
+  "name": "PDF to Images",
+  "label": "Export",
+  "description": "Render pages to JPEG or PNG at 72, 150, or 300 dpi.",
+  "href": "pdf-to-jpg.html"
+ },
+ {
+  "name": "PDF to Text",
+  "label": "Extract",
+  "description": "Extract selectable text in page order into a .txt file. Scans need OCR.",
+  "href": "pdf.html#tool-pdf-to-text"
+ },
+ {
+  "name": "Split PDF",
+  "label": "Pages",
+  "description": "Break one PDF into pages, ranges, or fixed-size chunks.",
+  "href": "split-pdf.html"
+ },
+ {
+  "name": "Extract Images",
+  "label": "Extract",
+  "description": "Pull embedded JPEG images out at their original resolution without recompression.",
+  "href": "pdf.html#tool-pdf-image-extract"
+ },
+ {
+  "name": "Sign PDF",
+  "label": "Sign",
+  "description": "Place a typed name or PNG or JPEG signature image on one or more pages. This is a visible mark, not a cryptographic signature.",
+  "href": "sign-pdf.html"
+ },
+ {
+  "name": "OCR PDF",
+  "label": "Unavailable",
+  "description": "Unavailable in the current build. A local OCR adapter is required for scanned text.",
+  "href": "pdf.html#tool-pdf-ocr"
+ },
+ {
+  "name": "Remove PDF Pages",
+  "label": "Pages",
+  "description": "Delete selected pages while keeping everything else in order.",
+  "href": "pdf.html#tool-pdf-remove-pages"
+ },
+ {
+  "name": "Extract PDF Pages",
+  "label": "Pages",
+  "description": "Pull selected pages into a new PDF using ranges such as 1–3, 7.",
+  "href": "pdf.html#tool-pdf-extract-pages"
+ },
+ {
+  "name": "Organize PDF",
+  "label": "Organize",
+  "description": "Reorder, rotate, and delete pages from a visual thumbnail grid.",
+  "href": "pdf.html#tool-pdf-organize"
+ },
+ {
+  "name": "Compress PDF",
+  "label": "Optimize",
+  "description": "Compress PDF stream data while preserving page geometry.",
+  "href": "compress-pdf.html"
+ },
+ {
+  "name": "Convert Image Format",
+  "label": "Convert",
+  "description": "Convert between PNG, JPEG, WebP, and HEIC.",
+  "href": "convert-image.html"
+ },
+ {
+  "name": "Compress Images",
+  "label": "Optimize",
+  "description": "Use a lossless copy mode or trade quality for a smaller encoded file.",
+  "href": "compress-image.html"
+ },
+ {
+  "name": "Resize Images",
+  "label": "Scale",
+  "description": "Scale by pixels, percentage, or longest side while preserving aspect ratio.",
+  "href": "resize-image.html"
+ },
+ {
+  "name": "Rotate and Flip Images",
+  "label": "Transform",
+  "description": "Rotate by right angles or flip horizontally or vertically.",
+  "href": "images.html#tool-rotate"
+ },
+ {
+  "name": "Crop Images",
+  "label": "Crop",
+  "description": "Crop images to a selected aspect ratio or pixel rectangle.",
+  "href": "images.html#tool-crop"
+ },
+ {
+  "name": "Generate App Icons",
+  "label": "Create",
+  "description": "Generate PNG icon sets for macOS, favicon, iOS, and Android. macOS also gets ICNS.",
+  "href": "images.html#tool-icon-set"
+ },
+ {
+  "name": "Create GIF",
+  "label": "Animate",
+  "description": "Animate a batch of still images into a looped GIF.",
+  "href": "images.html#tool-gif-create"
+ },
+ {
+  "name": "Extract GIF Frames",
+  "label": "Extract",
+  "description": "Split an animated GIF into individual PNG frames.",
+  "href": "images.html#tool-gif-extract"
+ },
+ {
+  "name": "Watermark Images",
+  "label": "Annotate",
+  "description": "Stamp text across a batch of images with an opacity setting.",
+  "href": "images.html#tool-image-watermark"
+ },
+ {
+  "name": "Image Metadata",
+  "label": "Privacy",
+  "description": "Inspect metadata markers and save a re-encoded copy without them.",
+  "href": "images.html#tool-image-metadata"
+ },
+ {
+  "name": "Colour and Tone",
+  "label": "Adjust",
+  "description": "Adjust brightness, saturation, and exposure in batches.",
+  "href": "images.html#tool-image-tone"
+ },
+ {
+  "name": "Split and Combine TIFF",
+  "label": "TIFF",
+  "description": "Split one multi-page TIFF, or combine multiple TIFF inputs.",
+  "href": "images.html#tool-tiff-pages"
+ },
+ {
+  "name": "Blur Faces",
+  "label": "Unavailable",
+  "description": "Unavailable in the current build. It needs a local face-blur adapter.",
+  "href": "images.html#tool-image-blur-faces"
+ },
+ {
+  "name": "Remove Background",
+  "label": "Unavailable",
+  "description": "Unavailable in the current build. It needs a local background-removal adapter.",
+  "href": "images.html#tool-image-remove-bg"
+ }
+]

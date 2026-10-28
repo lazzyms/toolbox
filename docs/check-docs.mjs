@@ -130,8 +130,6 @@ comparisons.push([existsSync(socialImagePath), true, 'Social preview image exist
 comparisons.push([existsSync(socialImagePath) && statSync(socialImagePath).size < 200_000, true, 'Social preview image is under 200 KB']);
 comparisons.push([jpegDimensions(socialImage ?? Buffer.alloc(0)), { width: 1200, height: 630 }, 'Social preview JPEG dimensions']);
 comparisons.push([pages.get('privacy.html').includes("local storage") && pages.get('privacy.html').includes('not sent to Toolbox'), true, 'Privacy explains theme preference storage']);
-comparisons.push([appSource.includes(release.macosDmgUrl), true, 'app.js macOS release parity']);
-comparisons.push([appSource.includes(release.windowsStoreUrl), true, 'app.js Windows Store parity']);
 const releaseBase = `https://github.com/lazzyms/toolbox/releases/download/${release.tag}/`;
 comparisons.push([release.macosDmgUrl, `${releaseBase}Toolbox-${release.version}-macos.dmg`, 'Release tuple is internally consistent']);
 const homepage = pages.get('index.html');
@@ -158,8 +156,7 @@ const toolIcons = new Map([...iconTable[1].matchAll(/(?:'([^']+)'|([a-z][\w-]*))
   .map(match => [match[1] || match[2], match[3]]));
 const downloadAssets = {
   macos: release.macosDmgUrl,
-  'windows-x64': release.windowsStoreUrl,
-  'windows-arm64': release.windowsStoreUrl,
+  windows: release.windowsStoreUrl,
 };
 const publicSources = pages;
 for (const [name, source] of publicSources) {

@@ -45,11 +45,27 @@ test('structured data parses and the FAQ schema matches the visible questions', 
   }
 });
 
-test('the home and category pages link every task guide', () => {
-  const home = read('index.html');
+test('every task guide is linked from its tool card, or from the home page', () => {
   for (const page of landingPages) {
-    assert.ok(home.includes(`href="${page.file}"`), `index.html links ${page.file}`);
-    assert.ok(read(`${page.category}.html`).includes(`href="${page.file}"`), `${page.category}.html links ${page.file}`);
+    if (page.toolId) {
+      const card = `<a class="feature-card" id="tool-${page.toolId}" href="${page.file}" data-tool-id="${page.toolId}">`;
+      assert.ok(read(`${page.category}.html`).includes(card), `${page.category}.html card ${page.toolId} links ${page.file}`);
+    } else {
+      assert.ok(read('index.html').includes(`href="${page.file}"`), `index.html links ${page.file}`);
+    }
     for (const related of page.related) assert.ok(landingPages.some((other) => other.file === related), `${page.file} relates to ${related}`);
   }
+});
+
+test('the tool search index lists every tool card, and every result link resolves', () => {
+  const tools = JSON.parse(read('assets/tools.json'));
+  const cards = ['pdf.html', 'images.html'].flatMap((file) => [...read(file).matchAll(/data-tool-id="([^"]+)"/g)].map((match) => match[1]));
+  assert.equal(tools.length, cards.length);
+  for (const tool of tools) {
+    assert.ok(tool.name && tool.description, `${tool.href} has a name and description`);
+    const [file, anchor] = tool.href.split('#');
+    assert.ok(sitePages().includes(file), `${tool.name} links an existing page`);
+    if (anchor) assert.ok(read(file).includes(`id="${anchor}"`), `${tool.name} links an existing card`);
+  }
+  for (const file of sitePages()) assert.match(read(file), /<header class="nav">[\s\S]*?data-tool-search[\s\S]*?<\/header>/, `${file} has the tool search in its header`);
 });
