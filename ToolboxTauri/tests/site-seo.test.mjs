@@ -69,3 +69,10 @@ test('the tool search index lists every tool card, and every result link resolve
   }
   for (const file of sitePages()) assert.match(read(file), /<header class="nav">[\s\S]*?data-tool-search[\s\S]*?<\/header>/, `${file} has the tool search in its header`);
 });
+
+test('the home page shows the Product Hunt badge in the theme it is viewed in', () => {
+  const badge = read('index.html').match(/<a class="ph-badge" href="https:\/\/www\.producthunt\.com\/products\/toolbox-19\?[^"]+" target="_blank" rel="noopener noreferrer"><img ([^>]+)><\/a>/);
+  assert.ok(badge, 'index.html links the Product Hunt launch from the hero');
+  for (const theme of ['dark', 'light']) assert.match(badge[1], new RegExp(`data-theme-src-${theme}="[^"]+post_id=1296025&amp;theme=${theme}"`));
+  assert.match(badge[1], /width="250" height="54"/);
+});
