@@ -2,8 +2,8 @@
 :root {
   --pdf-scene-canvas: oklch(0.269 0 0);
   --pdf-document-page: oklch(1 0 0);
-  --pdf-document-text: oklch(0.22 0 0);
-  --pdf-document-highlight: oklch(0.9 0.14 95);
+  --pdf-document-text: #1b1b1b;
+  --pdf-document-highlight: #fbdd67;
   --pdf-scene-placeholder: oklch(0.205 0 0);
   --pdf-scene-overlay: color-mix(in oklch, var(--primary) 12%, transparent);
   --pdf-scene-selection: var(--primary);

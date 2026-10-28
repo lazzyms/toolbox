@@ -15,6 +15,10 @@ test.beforeEach(async ({ page }) => {
       transformCallback: () => 1, unregisterCallback: () => {},
       invoke: async (command: string, args: any) => {
         w.calls.push({ command, args });
+        // Mirror the native scene contract: kit/pdf/scene.rs rejects any object color that is not #RRGGBB.
+        for (const page of args?.request?.scene?.pages ?? []) for (const object of page.objects) {
+          if (!/^#[0-9a-fA-F]{6}$/.test(object.color)) throw new Error('Color must be #RRGGBB');
+        }
         if (command === 'plugin:dialog|open') return w.dialogNext ?? '/local/scene-fixture.pdf';
         if (command === 'inspect_pdf_scene') return { path: '/local/scene-fixture.pdf', pages: [0, 1, 2].map(index => ({ index, width: 612, height: 792, preview: null })) };
         if (command === 'inspect_pdf_scene_page') {
@@ -339,6 +343,18 @@ test('scene ignores stale page text responses after changing pages', async ({ pa
   await page.getByRole('button', { name: 'Page 1', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'inspect_pdf_scene_page').map((call: any) => call.args.request.pageIndex))).toEqual([0, 1, 0]);
   await expect.poll(() => page.locator('[data-text-run]').allTextContents()).toEqual(['/local/scene-fixture.pdf page 0 response 2']);
+});
+
+test('new text and watermark markup use native colors so Export PDF enables', async ({ page }) => {
+  await openEditor(page);
+  await draw(page, 'Text', .3);
+  await page.getByRole('button', { name: 'Watermark', exact: true }).click();
+  await page.getByRole('button', { name: 'Add fixed watermark', exact: true }).click();
+  await expect(page.locator('.scene-object-hit')).toHaveCount(2);
+  await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeEnabled();
+  await expect(page.getByText(/Preview could not be verified/)).toHaveCount(0);
+  const result = await exported(page);
+  expect(result.pages[0].objects.map((o: any) => [o.kind, o.color])).toEqual([['text', '#1b1b1b'], ['watermark', '#1b1b1b']]);
 });
 
 test('scene composes every mark kind, moves and resizes, then exports once', async ({ page }) => {
