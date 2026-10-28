@@ -7,7 +7,7 @@ The reserved MSIX product is **Toolbox: PDF & File Tools** (Store ID
 each Tauri release on `main` and uploads it as the `toolbox-msix` artifact.
 Submit that package to the Store manually in Partner Center.
 
-Privacy policy URL: <https://lazzyms.github.io/toolbox/privacy.html>
+Privacy policy URL: <https://toolbox.mauliksompura.co.in/privacy.html>
 
 Configure these GitHub repository variables:
 

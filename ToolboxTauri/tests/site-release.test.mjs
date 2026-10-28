@@ -31,3 +31,11 @@ test('syncing the site rewrites pinned links and the release note only', () => {
     '<p class="lede">Last updated: October 22, 2026</p>',
   ].join('\n'));
 });
+
+test('every canonical and social URL uses the custom domain GitHub Pages serves', () => {
+  const domain = readFileSync(resolve(siteRoot, 'CNAME'), 'utf8').trim();
+  const pages = siteReleaseFiles().filter((file) => file.endsWith('.html')).map((file) => readFileSync(file, 'utf8'));
+  const urls = pages.flatMap((source) => [...source.matchAll(/<(?:link rel="canonical" href|meta (?:property|name)="(?:og:url|og:image|twitter:image)" content)="([^"]+)"/g)].map((match) => match[1]));
+  assert.equal(urls.length, pages.length * 4, 'Each page needs canonical, og:url, og:image and twitter:image');
+  for (const url of urls) assert.equal(new URL(url).host, domain, `${url} must use ${domain}`);
+});
