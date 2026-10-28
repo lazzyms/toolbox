@@ -405,6 +405,8 @@ details .accordion-content p { font-size: .875rem; color: var(--muted-foreground
 
 .cta-note { margin-top: .5rem; font-size: .8125rem; color: var(--muted-foreground); }
 .cta-note a { text-decoration: underline; text-underline-offset: 3px; }
+.ph-badge { display: inline-block; margin-top: 1.25rem; }
+.ph-badge img { display: block; }
 
 .download-note { max-width: 42rem; margin: 1rem auto 0; font-size: .8125rem; color: var(--muted-foreground); }
 .download-note strong { color: var(--foreground); }
