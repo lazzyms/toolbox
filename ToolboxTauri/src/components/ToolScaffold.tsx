@@ -66,6 +66,8 @@ interface ToolScaffoldProps {
     fileActivation?: Extract<ShellEvent, { kind: 'files' }>;
     onActivationAccepted?: (activationId: string) => void;
     onFilesChange?: (paths: readonly string[]) => void;
+    /** Overrides the example output name when the view's options decide the output's suffix or type. */
+    exampleName?: (inputPath: string) => string;
     children: (props: {
         files: string[];
         failingFiles: string[];
@@ -84,7 +86,7 @@ interface ToolScaffoldProps {
     }) => React.ReactNode;
 }
 
-export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, retryWithPassword, intakeCopy, initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, children }: ToolScaffoldProps) => {
+export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, retryWithPassword, intakeCopy, initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, exampleName, children }: ToolScaffoldProps) => {
     const nextEntryKey = useRef(0);
     const newEntries = (paths: readonly string[]) => paths.map((path) => ({ key: `entry-${++nextEntryKey.current}`, path }));
     const [entries, setEntries] = useState<IntakeEntry[]>(() => newEntries(initialPaths));
@@ -714,7 +716,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                         defaultLocation={defaultLocation}
                         overridden={runOverride !== null}
                         toolTitle={utility.title}
-                        exampleName={files[0] && !savesOneFile ? exampleOutputName(files[0], inputPolicy.outputSuffix) : null}
+                        exampleName={files[0] && !savesOneFile ? (exampleName ?? ((path) => exampleOutputName(path, utility.command, inputPolicy.outputSuffix)))(files[0]) : null}
                         savesOneFile={saveStep !== null && (files.length === 0 || savesOneFile)}
                         onChange={() => void changeForRun()}
                         onReset={() => setRunOverride(null)}

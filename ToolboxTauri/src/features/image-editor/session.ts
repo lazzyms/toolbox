@@ -103,6 +103,17 @@ const upsertImageEdit = (edits: ImageEditOperation[], edit: ImageEditOperation):
   return nextEdits;
 };
 
+// Mirrors the native export: the last convert edit sets the format, otherwise the input's format is kept.
+export const editedImageExtension = (plan: ImageEditPlan, inputPath: string) => {
+  const convert = plan.edits.filter((edit) => edit.kind === "convert").pop();
+  if (convert) return convert.format;
+  const extension = inputPath.split(".").pop()?.toLowerCase();
+  if (extension === "jpg" || extension === "jpeg") return "jpg";
+  if (extension === "webp") return "webp";
+  if (extension === "heic" || extension === "heif") return "heic";
+  return "png";
+};
+
 export const planWithDraft = (plan: ImageEditPlan, draft: ImageEditOperation | null): ImageEditPlan => ({
   ...plan,
   edits: draft ? upsertImageEdit(plan.edits, draft) : plan.edits,

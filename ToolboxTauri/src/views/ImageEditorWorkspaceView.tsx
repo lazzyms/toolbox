@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ToolScaffold } from "../components/ToolScaffold";
+import { exampleOutputName } from "../components/RunDestination";
 import type { WorkspaceSourceAction } from "../components/ToolScaffold";
 import type { ShellEvent } from "../hooks/useShellBridge";
 import type {
@@ -14,6 +15,7 @@ import type {
 import {
   commitImageEdit,
   createImageEditHistory,
+  editedImageExtension,
   imageEditRequestPlan,
   planWithDraft,
   redoImageEdit,
@@ -237,6 +239,7 @@ export const ImageEditorWorkspaceView = ({
       onActivationAccepted={onActivationAccepted}
       onFilesChange={onFilesChange}
       onWorkspaceSourceAction={onWorkspaceSourceAction}
+      exampleName={(path) => exampleOutputName(path, activeUtility.command, "-edited", editedImageExtension(editPlan, path))}
       onRun={(paths, outputLocation, { runId }) => {
         if (activeUtility.id === "heic-convert") {
           return invoke<ToolResult>("convert_images", { runId,

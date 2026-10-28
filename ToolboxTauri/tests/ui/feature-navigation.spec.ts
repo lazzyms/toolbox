@@ -1,5 +1,4 @@
 import { expect, test, type Page } from "@playwright/test";
-import { readFileSync } from "node:fs";
 import path from "node:path";
 import type { JobOutcome, LimitKind, OutputSettings } from "../../src/contracts";
 import { openToolBySearch } from "./open-tool";
@@ -7,7 +6,8 @@ import { ToolWorkspaceRegistry, UtilityRegistry, isPdfSceneTool, toolsForWorkspa
 import { RetiredToolIds } from "../../src/registry/retiredToolIds";
 import { displayedBoxToPdfRect } from "../../src/features/pdf-editor/geometry";
 
-const appVersion: string = JSON.parse(readFileSync(path.resolve("package.json"), "utf8")).version;
+// Differs from package.json: Settings must show the version the Tauri runtime reports.
+const appVersion = "9.4.2";
 
 // Lock asks for the new password twice, so fill every password field in the options panel.
 const fillPasswords = async (page: Page, password: string) => {
@@ -58,7 +58,7 @@ const openFromHome = async (page: Page, title: string) => {
 const defaultOutputSettings: OutputSettings ={ mode: "alongsideInput", folder: "/Users/test/Documents/Toolbox" };
 
 test.beforeEach(async ({ page }) => {
-    await page.addInitScript(({ fixturePath, pdfFixturePath, mockedOutputPaths, defaultOutputSettings }) => {
+    await page.addInitScript(({ fixturePath, pdfFixturePath, mockedOutputPaths, defaultOutputSettings, appVersion }) => {
         const invocations: Array<{ command: string; args: unknown }> = [];
         (window as TestWindow).__toolboxInvocations = invocations;
         Object.defineProperty(window.navigator, "platform", { configurable: true, value: "MacIntel" });
@@ -78,6 +78,7 @@ test.beforeEach(async ({ page }) => {
                     ];
                 }
                 if (command === "set_quick_actions") return null;
+                if (command === "plugin:app|version") return appVersion;
                 if (command === "get_output_settings") return (window as TestWindow).__toolboxOutputSettings ?? defaultOutputSettings;
                 if (command === "set_output_settings") {
                     const { settings } = args as { settings: OutputSettings };
@@ -178,7 +179,7 @@ if (command === "preview_pdf_scene_pages") return (args as { request: { pageIndi
         window.__TAURI_EVENT_PLUGIN_INTERNALS__ = {
             unregisterListener: () => undefined,
         };
-    }, { fixturePath, pdfFixturePath, mockedOutputPaths, defaultOutputSettings });
+    }, { fixturePath, pdfFixturePath, mockedOutputPaths, defaultOutputSettings, appVersion });
 });
 
 test("every registered feature opens its detail pane", async ({ page }) => {
@@ -1952,6 +1953,27 @@ test("single-input actions report every selected file instead of truncating the 
     await expect(page.getByText("This action accepts one input file, but 2 were selected.", { exact: true })).toHaveCount(2);
 });
 
+for (const batch of [
+    { title: "Compress Images", command: "compress_images", paths: ["/local/beach.png", "/local/forest.jpg"] },
+    { title: "Compress PDF", command: "compress_pdf", paths: ["/local/lease.pdf", "/local/invoice.pdf"] },
+    { title: "Extract GIF Frames", command: "extract_gif_frames", paths: ["/local/wave.gif", "/local/spin.gif"] },
+]) {
+    test(`${batch.title} runs every selected file in one native batch`, async ({ page }) => {
+        await page.goto("/");
+        await openFromHome(page, batch.title);
+        await page.evaluate((paths) => { (window as TestWindow).__toolboxDialogResults = [paths]; }, batch.paths);
+        await page.getByRole("button", { name: "Choose files to process" }).click();
+        await expect(page.locator(".file-selection-count")).toHaveText("2 files");
+
+        await page.locator(".workspace-primary-action").click();
+        await expect.poll(() => invocationCount(page, batch.command)).toBe(1);
+        const request = await page.evaluate((command) => ((window as TestWindow).__toolboxInvocations ?? [])
+            .find((invocation) => invocation.command === command)?.args as { request: { paths: string[] } }, batch.command);
+        expect(request.request.paths).toEqual(batch.paths);
+        await expect(page.getByText(/This action accepts one input file/)).toHaveCount(0);
+    });
+}
+
 test("single-input replacement keeps the source and edit state after cancellation or the same path", async ({ page }) => {
     await page.goto("/");
     await openFromHome(page, "Crop PDF");
@@ -2269,16 +2291,34 @@ const changeForRun = async (page: Page, folder: string) => {
 };
 
 test.describe("per-run destination", () => {
-    test("shows the default destination and an example name built from the declared suffix", async ({ page }) => {
-        const resize = UtilityRegistry.find((item) => item.id === "resize")!;
+    test("example names use the extension each tool writes", async ({ page }) => {
+        await page.goto("/");
+        const example = page.getByRole("region", { name: "Destination" }).getByTestId("run-destination-example");
+
+        await openFromHome(page, "Convert Image Format");
+        await chooseFixture(page, fixturePath);
+        await page.getByLabel("Target format").selectOption("webp");
+        await expect(example).toHaveText("icon-edited.webp");
+
+        await page.goto("/");
+        await openFromHome(page, "PDF to Text");
+        await chooseFixture(page, pdfFixturePath);
+        await expect(example).toHaveText("document-text.txt");
+
+        await page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "PDF to Images", exact: true }).click();
+        await expect(example).toHaveText("document-images.jpg");
+        await page.getByLabel("Output format").selectOption("png");
+        await expect(example).toHaveText("document-images.png");
+    });
+
+    test("shows the default destination and the name the image editor export writes", async ({ page }) => {
         await page.goto("/");
         await openFromHome(page, "Resize Images");
         const destination = page.getByRole("region", { name: "Destination" });
         await expect(destination.getByTestId("run-destination-path")).toHaveText("Next to each original");
         await expect(destination.getByTestId("run-destination-example")).toHaveCount(0);
         await chooseFixture(page, fixturePath);
-        await expect(destination.getByTestId("run-destination-example")).toHaveText(`icon${resize.capability.outputSuffix}.png`);
-        await expect(destination.getByTestId("run-destination-example")).toHaveText("icon-resized.png");
+        await expect(destination.getByTestId("run-destination-example")).toHaveText("icon-edited.png");
         await expect(destination.getByText("An existing name gets -1, -2 and so on. Nothing is replaced.")).toBeVisible();
         await expect(destination.getByText("This run only")).toHaveCount(0);
     });

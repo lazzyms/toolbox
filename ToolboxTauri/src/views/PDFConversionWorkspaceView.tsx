@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ToolScaffold } from "../components/ToolScaffold";
+import { exampleOutputName } from "../components/RunDestination";
 import { parsePageRange, selectedPageLabel } from "../shared/workspaceValidation";
 import { displayedBoxToPdfRect, type DisplayedBox, type PdfDocument } from "../features/pdf-editor";
 import type { AtomicToolId, ToolDefinition, ToolResult } from "../contracts";
@@ -80,6 +81,7 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
       utility={activeUtility}
       initialPaths={initialPaths}
       onFilesChange={onFilesChange}
+      exampleName={activeUtility.id === "pdf-to-images" ? (path) => exampleOutputName(path, "pdf_to_images", activeUtility.capability.outputSuffix, format) : undefined}
       onRun={(paths, outputLocation, { outputPath, runId }) => {
         const pages = document ? selectedPages : undefined;
         const selectedPageRange = pages?.length ? formatPageRange(pages) : pageRange || null;
