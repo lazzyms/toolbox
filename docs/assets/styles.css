@@ -138,42 +138,14 @@ code {
 }
 
 /* ─────────────────────────── brand mark ───────────────────────────
-   The app icon reduced to a monochrome glyph: the toolbox drawn in the
-   foreground colour on a bordered card, so it inverts with the theme. */
+   The app icon itself, the same image the desktop app shows in its sidebar. */
 
 .brand-mark {
-  /* display:block matters outside the nav: as a bare inline <span> in .closer it
-     would ignore width/height and collapse to nothing. */
+  /* display:block keeps it on its own line when centred in .closer. */
   display: block;
   width: 1.75rem; height: 1.75rem; flex: none;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border);
-  background: var(--foreground);
-  position: relative;
 }
-/* toolbox body */
-.brand-mark::before {
-  content: "";
-  position: absolute;
-  left: 20%; right: 20%; top: 47%; bottom: 24%;
-  background: var(--background);
-  border-radius: 2px;
-}
-/* handle */
-.brand-mark::after {
-  content: "";
-  position: absolute;
-  left: 34%; right: 34%; top: 27%; height: 21%;
-  border: 2px solid var(--background);
-  border-bottom: 0;
-  border-radius: 999px 999px 0 0;
-}
-.brand-mark.big {
-  width: 3.5rem; height: 3.5rem; border-radius: var(--radius-xl);
-  margin-bottom: 1.5rem;
-}
-.brand-mark.big::before { border-radius: 4px; }
-.brand-mark.big::after { border-width: 4px; }
+.brand-mark.big { width: 3.5rem; height: 3.5rem; margin-bottom: 1.5rem; }
 
 /* ═══════════════════════ shadcn components ═══════════════════════ */
 
@@ -431,38 +403,11 @@ details .accordion-content p { font-size: .875rem; color: var(--muted-foreground
 
 .cta { display: flex; flex-wrap: wrap; gap: .75rem; justify-content: center; margin-top: 2rem; }
 
-.cta-note, .dl-fallback { font-size: .8125rem; color: var(--muted-foreground); }
-.dl-fallback { margin-top: .75rem; min-height: 1.3em; }
-.cta-note { margin-top: .5rem; }
-.cta-note a, .dl-fallback a { text-decoration: underline; text-underline-offset: 3px; }
+.cta-note { margin-top: .5rem; font-size: .8125rem; color: var(--muted-foreground); }
+.cta-note a { text-decoration: underline; text-underline-offset: 3px; }
 
-.download-panel {
-  max-width: 58rem;
-  margin: clamp(3rem, 6vw, 5rem) auto 0;
-  padding: 1.5rem;
-  border: 1px solid var(--border);
-  border-radius: 1.25rem;
-  background: color-mix(in oklab, var(--card) 88%, transparent);
-  text-align: left;
-}
-.download-panel .kicker { margin-bottom: 1rem; }
-.download-note { margin-top: 1rem; font-size: .875rem; color: var(--muted-foreground); }
+.download-note { max-width: 42rem; margin: 1rem auto 0; font-size: .8125rem; color: var(--muted-foreground); }
 .download-note strong { color: var(--foreground); }
-.download-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .75rem; }
-.download-card {
-  display: grid;
-  gap: .25rem;
-  padding: 1rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--background);
-  transition: border-color .2s, transform .2s, box-shadow .2s;
-}
-.download-card:hover { text-decoration: none; border-color: color-mix(in oklab, var(--brand) 52%, var(--border)); transform: translateY(-2px); box-shadow: var(--shadow-sm); }
-.download-card[data-recommended="true"] { border-color: color-mix(in oklab, var(--brand) 58%, var(--border)); box-shadow: 0 0 0 2px color-mix(in oklab, var(--brand) 14%, transparent); }
-.download-card-title { font-weight: 650; }
-.download-card-meta { color: var(--muted-foreground); font-size: .75rem; }
-.download-card-action { margin-top: .65rem; color: var(--brand); font-size: .75rem; font-weight: 650; }
 
 .screenshots { margin-top: clamp(4rem, 8vw, 7rem); text-align: left; }
 .screenshots-heading { max-width: 42rem; }
@@ -645,8 +590,7 @@ pre .d { color: var(--foreground); font-weight: 600; }
   .card { padding: 1.25rem; }
   .alert { padding: 1.125rem 1.25rem; }
   .cta .btn { width: 100%; }
-  .download-panel { padding: 1.125rem; }
-  .download-grid, .screenshot-grid { grid-template-columns: 1fr; }
+  .screenshot-grid { grid-template-columns: 1fr; }
   .stat b { font-size: 1.625rem; }
 }
 
@@ -703,9 +647,6 @@ h2 { font-size: clamp(2rem, 4vw, 3.6rem); letter-spacing: -.06em; line-height: 1
 .wrap { max-width: 1240px; padding-inline: clamp(1.25rem, 4vw, 3rem); }
 .nav { background: color-mix(in oklab, var(--background) 76%, transparent); }
 .nav-inner { height: 4.25rem; }
-.brand-mark { border: 0; background: linear-gradient(145deg, #62a0ff, #1556dc); box-shadow: 0 5px 18px rgb(24 94 227 / 28%); }
-.brand-mark::before { background: #071027; }
-.brand-mark::after { border-color: #071027; }
 .brand-name { font-family: var(--display); font-size: 1.05rem; }
 .nav-links { gap: 2rem; }
 .nav-links a { font-size: .8125rem; }
@@ -728,7 +669,7 @@ h2 { font-size: clamp(2rem, 4vw, 3.6rem); letter-spacing: -.06em; line-height: 1
 [data-theme="dark"] .btn-default { background: #2f7bff; color: #071027; }
 [data-theme="dark"] .btn-default:hover, [data-theme="dark"] .btn-default:focus-visible { background: #1654d8; color: white; }
 .btn-outline { background: color-mix(in oklab, var(--card) 72%, transparent); backdrop-filter: blur(10px); border-color: var(--border-strong); }
-.cta-note, .dl-fallback { font-size: .75rem; }
+.cta-note { font-size: .75rem; }
 
 .section { padding: clamp(5.5rem, 11vw, 10rem) 0; }
 .section.alt { background: linear-gradient(180deg, color-mix(in oklab, var(--muted) 55%, var(--background)), var(--background)); }
@@ -750,7 +691,7 @@ h2 { font-size: clamp(2rem, 4vw, 3.6rem); letter-spacing: -.06em; line-height: 1
 .code-head { background: color-mix(in oklab, var(--brand) 7%, var(--muted)); }
 .closer { padding: clamp(6rem, 12vw, 11rem) 0; background: radial-gradient(35% 50% at 50% 40%, color-mix(in oklab, var(--brand) 17%, transparent), transparent 75%), var(--background); }
 .closer h2 { max-width: 34rem; margin-inline: auto; }
-.closer .brand-mark.big { box-shadow: 0 15px 40px color-mix(in oklab, var(--brand) 35%, transparent); }
+.closer .brand-mark.big { border-radius: 22%; box-shadow: 0 15px 40px color-mix(in oklab, var(--brand) 35%, transparent); }
 .footer { background: #050608; border-top-color: rgb(255 255 255 / 8%); }
 [data-theme="light"] .footer { background: #111318; color: #c6cbd5; }
 
@@ -794,7 +735,7 @@ h2 { font-size: clamp(2rem, 4vw, 3.6rem); letter-spacing: -.06em; line-height: 1
 .category-cta { padding: clamp(5rem, 11vw, 9rem) 0; text-align: center; background: radial-gradient(35% 80% at 50% 35%, color-mix(in oklab, var(--brand) 14%, transparent), transparent 75%); border-top: 1px solid var(--border); }
 .category-cta h2 { max-width: 34rem; margin-inline: auto; }
 .category-cta p { margin: 1rem auto 0; color: var(--muted-foreground); }
-.category-cta .btn { margin-top: 2rem; }
+.category-hero .cta { justify-content: flex-start; }
 
 /* ── task guides ── */
 .task-steps { margin: 1.5rem 0 0; padding-left: 1.25rem; display: grid; gap: .75rem; color: var(--muted-foreground); }

@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Toolbox | Local file utilities for macOS and Windows</title>
 <meta name="description" content="Local PDF, Office, and image utilities for macOS and Windows. Remove known passwords, edit PDFs, and convert, compress, or resize images without uploading files.">
-<link rel="icon" href="assets/icon.svg" type="image/svg+xml">
-<link rel="apple-touch-icon" href="assets/icon.svg">
+<link rel="icon" href="assets/favicon-32.png" type="image/png" sizes="32x32">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
 <link rel="stylesheet" href="assets/styles.css">
 <link rel="canonical" href="https://toolbox.mauliksompura.co.in/">
 
@@ -138,15 +138,11 @@
 
 <header class="nav">
   <div class="wrap nav-inner">
-    <a class="brand" href="#top">
-      <span class="brand-mark" aria-hidden="true"></span>
+    <a class="brand" href="index.html">
+      <img class="brand-mark" src="assets/app-icon.png" alt="" width="28" height="28">
       <span class="brand-name">Toolbox</span>
     </a>
-    <nav class="nav-links" aria-label="Sections">
-      <a href="#tools">Tools</a>
-      <a href="#why">Why</a>
-      <a href="#faq">FAQ</a>
-    </nav>
+    <nav class="nav-links" aria-label="Sections"><a href="index.html#tools">Tools</a><a href="pdf.html">PDF tools</a><a href="images.html">Image tools</a><a href="index.html#faq">FAQ</a></nav>
     <div class="nav-actions">
       <button id="theme-toggle" class="btn btn-ghost btn-icon" type="button" aria-label="Switch to light appearance">
         <svg class="ico only-dark" aria-hidden="true"><use href="#i-sun"/></svg>
@@ -179,47 +175,10 @@
       Your files stay on your computer.
     </p>
 
-    <div class="cta">
-      <a class="btn btn-default btn-lg" data-dl data-download-auto href="https://github.com/lazzyms/toolbox/releases/download/tauri-v1.0.27/Toolbox-1.0.27-macos.dmg">
-        <svg class="ico" aria-hidden="true"><use href="#i-download"/></svg>
-        <span data-download-label>Download for macOS</span>
-      </a>
-      <a class="btn btn-outline btn-lg" href="https://github.com/lazzyms/toolbox">
-        <svg class="ico" aria-hidden="true"><use href="#i-github"/></svg>
-        View source
-      </a>
-    </div>
-    <p class="dl-fallback" id="dl-note">
-      Your device is detected automatically. Every installer is also listed below.
-    </p>
+    <div class="cta"><a class="btn btn-default btn-lg" data-dl data-download-platform="macos" href="https://github.com/lazzyms/toolbox/releases/download/tauri-v1.0.27/Toolbox-1.0.27-macos.dmg"><svg class="ico" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m-5-5 5 5 5-5M5 21h14"/></svg>Download for macOS</a><a class="btn btn-outline btn-lg" data-dl data-download-platform="windows" href="https://apps.microsoft.com/detail/9N5R8W4GJVH4"><svg class="ico" aria-hidden="true" viewBox="0 0 24 24" fill="currentColor"><path d="M3 3h8.5v8.5H3zm9.5 0H21v8.5h-8.5zM3 12.5h8.5V21H3zm9.5 0H21V21h-8.5z"/></svg>Get it from Microsoft Store</a></div>
     <p class="cta-note">Free and MIT licensed · <a href="https://github.com/lazzyms/toolbox/releases/tag/tauri-v1.0.27">Tauri 1.0.27</a> · Released October 28, 2026</p>
 
-    <div class="download-panel" id="downloads" aria-labelledby="downloads-title">
-      <p class="kicker" id="downloads-title">Download the current release</p>
-      <div class="download-grid">
-        <a class="download-card" data-download-platform="macos" href="https://github.com/lazzyms/toolbox/releases/download/tauri-v1.0.27/Toolbox-1.0.27-macos.dmg">
-          <span class="download-card-title">macOS</span>
-          <span class="download-card-meta">Apple silicon · DMG</span>
-          <span class="download-card-action">Download directly <span aria-hidden="true">↗</span></span>
-        </a>
-        <a class="download-card" data-download-platform="windows-x64" href="https://apps.microsoft.com/detail/9N5R8W4GJVH4">
-          <span class="download-card-title">Windows x64</span>
-          <span class="download-card-meta">Microsoft Store · MSIX app</span>
-          <span class="download-card-action">Open in Microsoft Store <span aria-hidden="true">↗</span></span>
-        </a>
-        <a class="download-card" data-download-platform="windows-arm64" href="https://apps.microsoft.com/detail/9N5R8W4GJVH4">
-          <span class="download-card-title">Windows ARM64</span>
-          <span class="download-card-meta">Microsoft Store · MSIX app</span>
-          <span class="download-card-action">Open in Microsoft Store <span aria-hidden="true">↗</span></span>
-        </a>
-      </div>
-      <p class="download-note" id="macos-first-launch"><strong>First launch on macOS:</strong> Toolbox is not notarized by Apple yet. If macOS says Toolbox can't be opened, open System Settings &gt; Privacy &amp; Security and click Open Anyway. On macOS 14 or earlier, you can Control-click Toolbox in Applications and choose Open instead.</p>
-      <div class="cta">
-        <a href="https://get.microsoft.com/installer/download/9n5r8w4gjvh4?referrer=appbadge" target="_self">
-          <img src="https://get.microsoft.com/images/en-us%20dark.svg" width="200" alt="Get it from Microsoft">
-        </a>
-      </div>
-    </div>
+    <p class="download-note hero-note" id="macos-first-launch"><strong>First launch on macOS:</strong> Toolbox is not notarized by Apple yet. If macOS says Toolbox can't be opened, open System Settings &gt; Privacy &amp; Security and click Open Anyway. On macOS 14 or earlier, you can Control-click Toolbox in Applications and choose Open instead.</p>
 
     <section class="screenshots" aria-labelledby="screenshots-title">
       <div class="screenshots-heading">
@@ -262,44 +221,22 @@
           Music: "Happy Beats &amp; Business Moves Vol. 11" by <a href="https://ende.app/en/song/12876-happy-beats-business-moves-vol-11">Sascha Ende, ENDE.APP</a>, under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.
         </figcaption>
       </figure>
-      <figure class="product-demo">
-        <div class="product-demo-frame">
-          <video
-            id="product-demo-local"
-            class="product-demo-video"
-            controls
-            playsinline
-            preload="metadata"
-            width="1920"
-            height="1080"
-            poster="assets/toolbox-full-usage-poster.jpg"
-            aria-label="Toolbox full-usage tour: browse the tool library, review a PDF, unlock a protected PDF, and export an image as JPEG"
-          >
-            <source src="assets/toolbox-full-usage.mp4" type="video/mp4">
-            Your browser does not support embedded video. <a href="assets/toolbox-full-usage.mp4">Open the Toolbox full-usage video</a>.
-          </video>
-        </div>
-        <figcaption>
-          A full-usage tour captured from Toolbox 1.0.14 on macOS with fictional Northwind Studio files. Source files stay unchanged, and each completed workflow saves a separate copy.
-          Music: "Happy Beats &amp; Business Moves Vol. 12" by <a href="https://ende.app/en/song/12881-happy-beats-business-moves-vol-12">Sascha Ende, ENDE.APP</a>, under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.
-        </figcaption>
-      </figure>
       <div class="screenshot-grid">
         <figure class="screenshot-card">
-          <div class="screenshot-frame"><img src="assets/screenshot-command-center.png" data-theme-src-dark="assets/screenshot-command-center.png" data-theme-src-light="assets/screenshot-command-center-light.png" alt="Toolbox home workspace showing the command center and tool library" loading="lazy"></div>
-          <figcaption><strong>Home workspace</strong><span>Browse local file utilities from one focused command center.</span></figcaption>
+          <div class="screenshot-frame"><img src="assets/screenshot-home.jpg" data-theme-src-dark="assets/screenshot-home.jpg" data-theme-src-light="assets/screenshot-home-light.jpg" alt="Toolbox home screen listing every tool by view, with the tool search at the top" width="1280" height="800" loading="lazy"></div>
+          <figcaption><strong>All tools</strong><span>Every tool grouped by view, with search one keystroke away.</span></figcaption>
         </figure>
         <figure class="screenshot-card">
-          <div class="screenshot-frame"><img src="assets/screenshot-remove-password.png" data-theme-src-dark="assets/screenshot-remove-password.png" data-theme-src-light="assets/screenshot-remove-password-light.png" alt="Toolbox Remove Password screen with a document drop area and password field" loading="lazy"></div>
-          <figcaption><strong>Remove Password</strong><span>Enter the password you already know to save an unlocked copy beside the original.</span></figcaption>
+          <div class="screenshot-frame"><img src="assets/screenshot-pdf-editor.jpg" data-theme-src-dark="assets/screenshot-pdf-editor.jpg" data-theme-src-light="assets/screenshot-pdf-editor-light.jpg" alt="Toolbox PDF Editor with page thumbnails, an editing toolbar and a properties panel" width="1280" height="800" loading="lazy"></div>
+          <figcaption><strong>PDF Editor</strong><span>Add text, highlights, signatures and redactions, then export a copy.</span></figcaption>
         </figure>
         <figure class="screenshot-card">
-          <div class="screenshot-frame"><img src="assets/screenshot-convert-image-format.png" data-theme-src-dark="assets/screenshot-convert-image-format.png" data-theme-src-light="assets/screenshot-convert-image-format-light.png" alt="Toolbox Convert Image Format screen with PNG, JPEG, WebP, and HEIC choices" loading="lazy"></div>
-          <figcaption><strong>Convert Image Format</strong><span>Choose a target format in a focused image workflow.</span></figcaption>
+          <div class="screenshot-frame"><img src="assets/screenshot-image-editor.jpg" data-theme-src-dark="assets/screenshot-image-editor.jpg" data-theme-src-light="assets/screenshot-image-editor-light.jpg" alt="Toolbox Image Editor with resize, rotate, crop, watermark and adjust controls" width="1280" height="800" loading="lazy"></div>
+          <figcaption><strong>Image Editor</strong><span>Resize, crop, rotate, adjust or watermark many images at once.</span></figcaption>
         </figure>
         <figure class="screenshot-card">
-          <div class="screenshot-frame"><img src="assets/screenshot-settings.png" data-theme-src-dark="assets/screenshot-settings.png" data-theme-src-light="assets/screenshot-settings-light.png" alt="Toolbox settings panel showing theme controls and a support QR code" loading="lazy"></div>
-          <figcaption><strong>Settings</strong><span>Switch themes, confirm the installed version, and support development.</span></figcaption>
+          <div class="screenshot-frame"><img src="assets/screenshot-settings.jpg" data-theme-src-dark="assets/screenshot-settings.jpg" data-theme-src-light="assets/screenshot-settings-light.jpg" alt="Toolbox settings with appearance, output location, quick actions, privacy and updates" width="1280" height="800" loading="lazy"></div>
+          <figcaption><strong>Settings</strong><span>Choose the theme, where results are saved, and your right-click actions.</span></figcaption>
         </figure>
       </div>
     </section>
@@ -489,19 +426,10 @@
 
 <section class="closer">
   <div class="wrap">
-    <span class="brand-mark big" aria-hidden="true"></span>
+    <img class="brand-mark big" src="assets/app-icon.png" alt="" width="56" height="56">
     <h2>Finish the file work.</h2>
     <p>PDF, Office, and image tools for macOS and Windows.</p>
-    <div class="cta">
-      <a class="btn btn-default btn-lg" data-dl data-download-auto href="https://github.com/lazzyms/toolbox/releases/download/tauri-v1.0.27/Toolbox-1.0.27-macos.dmg">
-        <svg class="ico" aria-hidden="true"><use href="#i-download"/></svg>
-        <span data-download-label>Download for macOS</span>
-      </a>
-      <a class="btn btn-outline btn-lg" href="https://github.com/lazzyms/toolbox">
-        <svg class="ico" aria-hidden="true"><use href="#i-github"/></svg>
-        View source
-      </a>
-    </div>
+    <div class="cta"><a class="btn btn-default btn-lg" data-dl data-download-platform="macos" href="https://github.com/lazzyms/toolbox/releases/download/tauri-v1.0.27/Toolbox-1.0.27-macos.dmg"><svg class="ico" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m-5-5 5 5 5-5M5 21h14"/></svg>Download for macOS</a><a class="btn btn-outline btn-lg" data-dl data-download-platform="windows" href="https://apps.microsoft.com/detail/9N5R8W4GJVH4"><svg class="ico" aria-hidden="true" viewBox="0 0 24 24" fill="currentColor"><path d="M3 3h8.5v8.5H3zm9.5 0H21v8.5h-8.5zM3 12.5h8.5V21H3zm9.5 0H21V21h-8.5z"/></svg>Get it from Microsoft Store</a></div>
   </div>
 </section>
 
