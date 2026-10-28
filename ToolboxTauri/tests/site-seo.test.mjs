@@ -67,5 +67,5 @@ test('the tool search index lists every tool card, and every result link resolve
     assert.ok(sitePages().includes(file), `${tool.name} links an existing page`);
     if (anchor) assert.ok(read(file).includes(`id="${anchor}"`), `${tool.name} links an existing card`);
   }
-  for (const file of ['index.html', 'pdf.html', 'images.html']) assert.match(read(file), /data-tool-search/, `${file} has the tool search`);
+  for (const file of sitePages()) assert.match(read(file), /<header class="nav">[\s\S]*?data-tool-search[\s\S]*?<\/header>/, `${file} has the tool search in its header`);
 });

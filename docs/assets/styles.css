@@ -585,6 +585,9 @@ pre .d { color: var(--foreground); font-weight: 600; }
 @media (max-width: 860px) {
   .nav-links { display: none; }
 }
+@media (max-width: 420px) {
+  .brand-name { display: none; }
+}
 
 @media (max-width: 560px) {
   .card { padding: 1.25rem; }
@@ -745,16 +748,23 @@ a.feature-card { display: block; }
 a.feature-card h2::after { content: " →"; color: var(--brand); }
 .feature-card { scroll-margin-top: 6rem; }
 .feature-card:target { border-color: var(--brand); }
-.tool-search { position: relative; max-width: 32rem; margin: 2rem 0; }
-.feature-section .tool-search { margin-top: 0; }
+.tool-search { position: relative; display: flex; align-items: center; flex: 0 1 17rem; min-width: 0; }
+.tool-search[hidden] { display: none; }
 .tool-search label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-.tool-search input { width: 100%; padding: .8rem 1rem; border: 1px solid var(--border); border-radius: .75rem; background: var(--card); color: var(--foreground); font: inherit; font-size: 1rem; }
-.tool-search input:focus { outline: 2px solid var(--brand); outline-offset: 2px; }
-.tool-search-results { position: absolute; z-index: 20; inset: calc(100% + .4rem) 0 auto; margin: 0; padding: .35rem; list-style: none; border: 1px solid var(--border); border-radius: .75rem; background: var(--card); box-shadow: 0 18px 40px rgb(0 0 0 / 22%); }
+.tool-search > .ico { position: relative; z-index: 1; margin: 0 -1.8rem 0 .8rem; color: var(--muted-foreground); pointer-events: none; }
+.tool-search input { width: 100%; height: 2.25rem; padding: 0 .9rem 0 2.25rem; border: 1px solid var(--border); border-radius: 999px; background: color-mix(in oklab, var(--card) 70%, transparent); color: var(--foreground); font: inherit; font-size: .875rem; }
+.tool-search input::placeholder { color: var(--muted-foreground); }
+.tool-search input:focus { outline: 2px solid var(--brand); outline-offset: 1px; }
+.tool-search-results { position: absolute; z-index: 60; inset: calc(100% + .5rem) auto auto 0; width: max(100%, 24rem); margin: 0; padding: .35rem; list-style: none; border: 1px solid var(--border); border-radius: .75rem; background: var(--card); box-shadow: 0 18px 40px rgb(0 0 0 / 22%); }
 .tool-search-results a { display: grid; gap: .15rem; padding: .6rem .75rem; border-radius: .5rem; }
 .tool-search-results a:hover, .tool-search-results a:focus-visible { background: var(--muted); outline: none; }
 .tool-search-results span { color: var(--muted-foreground); font-size: .8125rem; line-height: 1.45; }
 .tool-search-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+@media (max-width: 860px) {
+  .nav-inner { gap: .75rem; }
+  .tool-search { position: static; flex: 1 1 auto; max-width: 20rem; margin-left: auto; }
+  .tool-search-results { inset: calc(100% - .25rem) 1rem auto; width: auto; }
+}
 .task-links { display: flex; flex-wrap: wrap; gap: .5rem; margin: 1rem 0 0; padding: 0; list-style: none; }
 .task-links a { display: inline-block; padding: .45rem .85rem; border: 1px solid var(--border); border-radius: 999px; font-size: .875rem; color: var(--muted-foreground); transition: color .15s, border-color .15s; }
 .task-links a:hover { color: var(--foreground); border-color: color-mix(in oklab, var(--brand) 48%, var(--border)); }
