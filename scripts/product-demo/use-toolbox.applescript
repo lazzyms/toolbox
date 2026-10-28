@@ -1,3 +1,8 @@
+-- Toolbox retitles its window "Toolbox — <view or file>" once a tool opens.
+on toolboxWindow(processRef)
+	tell application "System Events" to return first window of processRef whose name starts with "Toolbox"
+end toolboxWindow
+
 on accessibleDescendants(parentElement)
 	tell application "System Events" to set childElements to UI elements of parentElement
 	set allElements to {}
@@ -16,20 +21,23 @@ end accessibleDescendants
 
 on findAndPress(processRef, targetRole, labelText)
 	tell application "System Events"
-		set candidates to my accessibleDescendants(window "Toolbox" of processRef)
+		set candidates to my accessibleDescendants(my toolboxWindow(processRef))
 		repeat with candidate in candidates
 			try
 				set candidateRole to role of candidate as text
 				set candidateName to ""
 				set candidateDescription to ""
-				set candidateValue to ""
+				set candidateEnabled to true
 				try
 					set candidateName to name of candidate as text
 				end try
 				try
 					set candidateDescription to description of candidate as text
 				end try
-				if candidateRole is targetRole and (candidateName contains labelText or candidateDescription contains labelText) then
+				try
+					set candidateEnabled to enabled of candidate
+				end try
+				if candidateRole is targetRole and candidateEnabled and (candidateName contains labelText or candidateDescription contains labelText) then
 					perform action "AXPress" of candidate
 					return true
 				end if
@@ -39,9 +47,18 @@ on findAndPress(processRef, targetRole, labelText)
 	return false
 end findAndPress
 
+-- Controls stay disabled while the editor loads or renders its export preview.
+on pressWhenReady(processRef, targetRole, labelText)
+	repeat 30 times
+		if my findAndPress(processRef, targetRole, labelText) then return true
+		delay 1
+	end repeat
+	return false
+end pressWhenReady
+
 on enterTextInField(processRef, labelText, fieldText)
 	tell application "System Events"
-		set candidates to my accessibleDescendants(window "Toolbox" of processRef)
+		set candidates to my accessibleDescendants(my toolboxWindow(processRef))
 		repeat with candidate in candidates
 			try
 				set candidateRole to role of candidate as text
@@ -101,13 +118,23 @@ on run argv
 		key code 36
 		delay 1
 
-		if my enterTextInField(toolboxProcess, "Edit text", "Files stay on this device.") is false then
+		if my pressWhenReady(toolboxProcess, "AXCheckBox", "Watermark") is false then
+			error "Could not choose the PDF editor watermark tool"
+		end if
+		delay 0.4
+
+		if my findAndPress(toolboxProcess, "AXButton", "Add fixed watermark") is false then
+			error "Could not add the PDF annotation"
+		end if
+		delay 0.6
+
+		if my enterTextInField(toolboxProcess, "Watermark text", "Files stay on this device.") is false then
 			error "Could not enter the PDF annotation text"
 		end if
 		delay 0.2
 
-		if my findAndPress(toolboxProcess, "AXButton", "Edit PDF") is false then
-			error "Could not run the PDF edit"
+		if my pressWhenReady(toolboxProcess, "AXButton", "Export PDF") is false then
+			error "Could not export the edited PDF"
 		end if
 	end tell
 end run

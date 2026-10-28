@@ -53,7 +53,7 @@ function run(argv) {
     const ownerPid = Number(window.objectForKey("kCGWindowOwnerPID")?.js);
     const title = window.objectForKey("kCGWindowName")?.js;
     const layer = Number(window.objectForKey("kCGWindowLayer")?.js);
-    if (ownerPid === expectedPid && layer === 0 && title === "Toolbox") {
+    if (ownerPid === expectedPid && layer === 0 && title?.startsWith("Toolbox")) {
       return String(window.objectForKey("kCGWindowNumber").js);
     }
   }
