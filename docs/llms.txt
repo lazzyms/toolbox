@@ -1,0 +1,38 @@
+# Toolbox
+
+> Toolbox is a free, open source (MIT) desktop app for macOS (Apple silicon) and Windows with local PDF, Office and image tools. It processes files on the user's own computer: it never uploads files, needs no account, and saves results beside the originals without overwriting them.
+
+Download: https://toolbox.mauliksompura.co.in/ (macOS DMG from GitHub releases; Windows from the Microsoft Store: https://apps.microsoft.com/detail/9N5R8W4GJVH4)
+Source: https://github.com/lazzyms/toolbox
+
+## Tasks
+
+- [Remove PDF password](https://toolbox.mauliksompura.co.in/remove-pdf-password.html): Remove the password from a PDF, Word, Excel or PowerPoint file you can open. Free desktop app for Mac and Windows. Files never leave your computer.
+- [Protect PDF](https://toolbox.mauliksompura.co.in/protect-pdf.html): Add a password to a PDF, DOCX or XLSX file on your own computer. Free desktop app for Mac and Windows, with no upload.
+- [Compress PDF](https://toolbox.mauliksompura.co.in/compress-pdf.html): Make PDF files smaller on your Mac or Windows PC. Compress several PDFs at once without uploading them. Free desktop app.
+- [Merge PDF](https://toolbox.mauliksompura.co.in/merge-pdf.html): Combine several PDFs into one file in the order you choose. Free desktop app for Mac and Windows that never uploads your files.
+- [Split PDF](https://toolbox.mauliksompura.co.in/split-pdf.html): Split one PDF into single pages, page ranges or fixed-size chunks. Free desktop app for Mac and Windows with no upload.
+- [PDF to JPG](https://toolbox.mauliksompura.co.in/pdf-to-jpg.html): Turn PDF pages into JPG or PNG images at 72, 150 or 300 dpi. Free desktop app for Mac and Windows. Files stay on your computer.
+- [JPG to PDF](https://toolbox.mauliksompura.co.in/jpg-to-pdf.html): Turn photos and scans into one PDF in the order you choose. Supports JPG, PNG and HEIC. Free desktop app for Mac and Windows.
+- [Sign PDF](https://toolbox.mauliksompura.co.in/sign-pdf.html): Place a typed name or a signature image on one or more PDF pages. Free desktop app for Mac and Windows with no upload.
+- [Edit PDF](https://toolbox.mauliksompura.co.in/edit-pdf.html): Add text, highlights, rectangles and notes to PDF pages, or add a watermark or page numbers. Free desktop app for Mac and Windows.
+- [Compress images](https://toolbox.mauliksompura.co.in/compress-image.html): Make JPG, PNG and WebP images smaller in batches on your Mac or Windows PC. Lossless or lossy modes, no upload. Free desktop app.
+- [Resize images](https://toolbox.mauliksompura.co.in/resize-image.html): Resize images by pixels, percentage or longest side and keep the aspect ratio. Free desktop app for Mac and Windows with no upload.
+- [Convert images](https://toolbox.mauliksompura.co.in/convert-image.html): Convert images between PNG, JPEG, WebP and HEIC, including iPhone HEIC to JPG. Free desktop app for Mac and Windows with no upload.
+- [Offline PDF tools](https://toolbox.mauliksompura.co.in/offline-pdf-tools.html): Free desktop alternative to online PDF and image sites such as iLovePDF and Smallpdf. Merge, split, compress, unlock and convert files without uploading them.
+
+## Tool lists
+
+- [PDF and document tools](https://toolbox.mauliksompura.co.in/pdf.html): remove a known password, protect, merge, split, compress, sign, edit, watermark, crop, organize, add page numbers, convert PDF to images or text, images to PDF.
+- [Image tools](https://toolbox.mauliksompura.co.in/images.html): convert between PNG, JPEG, WebP and HEIC, compress, resize, crop, rotate, watermark, strip metadata, create GIFs, generate app icons.
+
+## Limits
+
+- Remove Password needs the password the user already knows. It cannot recover or bypass passwords.
+- Sign PDF places a visible signature, not a cryptographic one.
+- OCR, background removal and face blurring are not available in the current build.
+
+## Policies
+
+- [Privacy](https://toolbox.mauliksompura.co.in/privacy.html)
+- [Terms](https://toolbox.mauliksompura.co.in/terms.html)

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { landingPages, site } from './landing-pages.mjs';
 import { runInNewContext } from 'node:vm';
 
 const docs = new URL('./', import.meta.url);
@@ -48,6 +49,7 @@ const pageMetadata = [
   ['images.html', 'Image tools | Toolbox', '14 local image utilities for macOS and Windows. Convert, compress, resize, crop, watermark, and inspect images in batches.', 'https://toolbox.mauliksompura.co.in/images.html'],
   ['privacy.html', 'Privacy Policy | Toolbox', 'Toolbox privacy policy: files stay on your device. GitHub builds send install and app-open counts with a random ID; the Microsoft Store build sends none.', 'https://toolbox.mauliksompura.co.in/privacy.html'],
   ['terms.html', 'Terms of Use | Toolbox', 'Terms of use for the Toolbox website and desktop application. Toolbox is free software released under the MIT License.', 'https://toolbox.mauliksompura.co.in/terms.html'],
+  ...landingPages.map(page => [page.file, page.title, page.description, `${site}/${page.file}`]),
 ].map(([file, title, description, canonicalUrl]) => ({
   file, title, description, canonicalUrl,
   ogType: 'website',
