@@ -26,10 +26,9 @@ Toolbox charcoal background. `prepare-demo.mjs` stages a temporary HyperFrames
 project, downloads the Mixkit track, verifies its pinned SHA-256, and creates a
 faded 20.2-second music bed.
 The raw music file is removed with the temporary project. Do not check in the
-source MP3. The checked-in attribution file is also uploaded with each release
-video.
+source MP3. Publish the checked-in attribution file alongside any rendered video.
 
-The product-demo job in tauri-release.yml runs after publishing a release.
-It installs the macOS app archive produced by that same release, captures the
-app window before and after both workflows, renders fresh MP4s, and attaches
-both videos and posters to the release.
+The AppleScript drivers (`use-toolbox.applescript` and the
+`*-remove-password.applescript` files) drive a running macOS build to capture
+the before and after screenshots. They are not run in CI; the release workflow
+no longer renders demos.

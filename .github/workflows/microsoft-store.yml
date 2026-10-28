@@ -20,21 +20,15 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
-    name: Build MSIX
+  version:
+    name: Resolve Store package version
     if: >-
       github.event_name != 'workflow_run' ||
       (github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
-    runs-on: windows-latest
-    env:
-      TOOLBOX_MSIX_IDENTITY_NAME: ${{ vars.TOOLBOX_MSIX_IDENTITY_NAME }}
-      TOOLBOX_MSIX_PUBLISHER: ${{ vars.TOOLBOX_MSIX_PUBLISHER }}
-      TOOLBOX_MSIX_PUBLISHER_DISPLAY_NAME: ${{ vars.TOOLBOX_MSIX_PUBLISHER_DISPLAY_NAME }}
-      TOOLBOX_MSIX_STORE_ID: ${{ vars.TOOLBOX_MSIX_STORE_ID }}
-      TOOLBOX_REQUIRE_QPDF: '1'
-      TOOLBOX_QPDF_PATH: ${{ github.workspace }}\ToolboxTauri\src-tauri\resources\qpdf.exe
-      TOOLBOX_PDFTOPPM_PATH: ${{ github.workspace }}\ToolboxTauri\src-tauri\resources\pdftoppm.exe
+    runs-on: ubuntu-latest
+    outputs:
+      value: ${{ steps.version.outputs.value }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -55,7 +49,8 @@ jobs:
               (git rev-list -n 1 $_).Trim() -eq $env:RELEASE_SHA
             } | Select-Object -First 1
             if (-not $releaseTag) {
-              throw "No Tauri release tag points to source commit $env:RELEASE_SHA."
+              Write-Host "::notice::Tauri Release published nothing for $env:RELEASE_SHA, so there is no Store package to build."
+              exit 0
             }
             $version = $releaseTag.Substring('tauri-v'.Length)
           } elseif (-not [string]::IsNullOrWhiteSpace($env:REQUESTED_VERSION)) {
@@ -80,6 +75,25 @@ jobs:
           if ($version -notmatch $versionPattern) { throw "Invalid Store package version '$version'." }
           "value=$version" >> $env:GITHUB_OUTPUT
           Write-Host "Building Toolbox Store package version $version."
+
+  build:
+    name: Build MSIX
+    needs: version
+    if: needs.version.outputs.value != ''
+    runs-on: windows-latest
+    env:
+      TOOLBOX_MSIX_IDENTITY_NAME: ${{ vars.TOOLBOX_MSIX_IDENTITY_NAME }}
+      TOOLBOX_MSIX_PUBLISHER: ${{ vars.TOOLBOX_MSIX_PUBLISHER }}
+      TOOLBOX_MSIX_PUBLISHER_DISPLAY_NAME: ${{ vars.TOOLBOX_MSIX_PUBLISHER_DISPLAY_NAME }}
+      TOOLBOX_MSIX_STORE_ID: ${{ vars.TOOLBOX_MSIX_STORE_ID }}
+      TOOLBOX_REQUIRE_QPDF: '1'
+      TOOLBOX_QPDF_PATH: ${{ github.workspace }}\ToolboxTauri\src-tauri\resources\qpdf.exe
+      TOOLBOX_PDFTOPPM_PATH: ${{ github.workspace }}\ToolboxTauri\src-tauri\resources\pdftoppm.exe
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -154,7 +168,7 @@ jobs:
         shell: pwsh
         working-directory: ToolboxTauri
         env:
-          TOOLBOX_RELEASE_VERSION: ${{ steps.version.outputs.value }}
+          TOOLBOX_RELEASE_VERSION: ${{ needs.version.outputs.value }}
         run: .\scripts\build-msix.ps1 -Version $env:TOOLBOX_RELEASE_VERSION
 
       - name: Upload MSIX build artifact
