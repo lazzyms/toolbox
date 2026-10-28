@@ -174,4 +174,39 @@
     if (document.readyState === 'complete') failsafe();
     else addEventListener('load', failsafe, { once: true });
   }
+
+  /* ───────────────────────── tool search ───────────────────────── */
+
+  // assets/tools.json is generated from the tool cards by docs/landing-pages.mjs.
+  let tools;
+  const loadTools = () => tools ??= fetch('assets/tools.json').then((response) => response.json());
+  for (const search of $$('[data-tool-search]')) {
+    const input = $('input', search);
+    const list = $('.tool-search-results', search);
+    const status = $('.tool-search-status', search);
+    search.hidden = false;
+    const render = async () => {
+      const words = input.value.toLowerCase().split(/\s+/).filter(Boolean);
+      const matches = words.length ? (await loadTools()).filter((tool) => {
+        const text = `${tool.name} ${tool.label} ${tool.description}`.toLowerCase();
+        return words.every((word) => text.includes(word));
+      }) : [];
+      list.replaceChildren(...matches.slice(0, 8).map((tool) => {
+        const link = Object.assign(document.createElement('a'), { href: tool.href });
+        link.append(Object.assign(document.createElement('strong'), { textContent: tool.name }),
+          Object.assign(document.createElement('span'), { textContent: tool.description }));
+        const item = document.createElement('li');
+        item.append(link);
+        return item;
+      }));
+      list.hidden = !matches.length;
+      status.textContent = words.length ? (matches.length ? `${matches.length} tool${matches.length === 1 ? '' : 's'}` : 'No matching tool') : '';
+    };
+    input.addEventListener('focus', loadTools, { once: true });
+    input.addEventListener('input', render);
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') $('a', list)?.click();
+      if (event.key === 'Escape') { input.value = ''; render(); }
+    });
+  }
 })();
