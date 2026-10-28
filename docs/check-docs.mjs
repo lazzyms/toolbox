@@ -43,16 +43,16 @@ const release = {
   windowsStoreUrl: 'https://apps.microsoft.com/detail/9N5R8W4GJVH4',
 };
 const pageMetadata = [
-  ['index.html', 'Toolbox | Local file utilities for macOS and Windows', 'Local PDF, Office, and image utilities for macOS and Windows. Remove known passwords, edit PDFs, and convert, compress, or resize images without uploading files.', 'https://lazzyms.github.io/toolbox/'],
-  ['pdf.html', 'PDF and document tools | Toolbox', '19 local PDF and document utilities for macOS and Windows. Edit, merge, split, sign, and organize PDFs. Protect PDFs and DOCX or XLSX files, and remove known passwords from supported files.', 'https://lazzyms.github.io/toolbox/pdf.html'],
-  ['images.html', 'Image tools | Toolbox', '14 local image utilities for macOS and Windows. Convert, compress, resize, crop, watermark, and inspect images in batches.', 'https://lazzyms.github.io/toolbox/images.html'],
-  ['privacy.html', 'Privacy Policy | Toolbox', 'Toolbox privacy policy: files stay on your device. GitHub builds send install and app-open counts with a random ID; the Microsoft Store build sends none.', 'https://lazzyms.github.io/toolbox/privacy.html'],
-  ['terms.html', 'Terms of Use | Toolbox', 'Terms of use for the Toolbox website and desktop application. Toolbox is free software released under the MIT License.', 'https://lazzyms.github.io/toolbox/terms.html'],
+  ['index.html', 'Toolbox | Local file utilities for macOS and Windows', 'Local PDF, Office, and image utilities for macOS and Windows. Remove known passwords, edit PDFs, and convert, compress, or resize images without uploading files.', 'https://toolbox.mauliksompura.co.in/'],
+  ['pdf.html', 'PDF and document tools | Toolbox', '19 local PDF and document utilities for macOS and Windows. Edit, merge, split, sign, and organize PDFs. Protect PDFs and DOCX or XLSX files, and remove known passwords from supported files.', 'https://toolbox.mauliksompura.co.in/pdf.html'],
+  ['images.html', 'Image tools | Toolbox', '14 local image utilities for macOS and Windows. Convert, compress, resize, crop, watermark, and inspect images in batches.', 'https://toolbox.mauliksompura.co.in/images.html'],
+  ['privacy.html', 'Privacy Policy | Toolbox', 'Toolbox privacy policy: files stay on your device. GitHub builds send install and app-open counts with a random ID; the Microsoft Store build sends none.', 'https://toolbox.mauliksompura.co.in/privacy.html'],
+  ['terms.html', 'Terms of Use | Toolbox', 'Terms of use for the Toolbox website and desktop application. Toolbox is free software released under the MIT License.', 'https://toolbox.mauliksompura.co.in/terms.html'],
 ].map(([file, title, description, canonicalUrl]) => ({
   file, title, description, canonicalUrl,
   ogType: 'website',
   ogTitle: title, ogDescription: description, ogUrl: canonicalUrl,
-  socialImageUrl: 'https://lazzyms.github.io/toolbox/og.jpg',
+  socialImageUrl: 'https://toolbox.mauliksompura.co.in/og.jpg',
   socialImageAlt: 'Toolbox social preview showing macOS and Windows availability and local PDF and image tools',
 }));
 const tagAttributes = tag => Object.fromEntries(
