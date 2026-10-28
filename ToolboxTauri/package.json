@@ -16,7 +16,7 @@
     "test:outcomes": "tsx --test tests/job-outcome.test.ts",
     "test:retired-ids": "tsx --test tests/retired-tool-ids.test.ts",
     "test:asset-config": "node --test tests/tauri-asset-config.test.mjs",
-    "test:site-release": "node --test tests/site-release.test.mjs",
+    "test:site-release": "node --test tests/site-release.test.mjs tests/site-seo.test.mjs",
     "test:notices": "node --test tests/third-party-notices.test.mjs",
     "notices": "node scripts/third-party-notices.mjs",
     "check:notices": "node scripts/third-party-notices.mjs --check",
