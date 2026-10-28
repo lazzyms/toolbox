@@ -1,3 +1,8 @@
+-- Toolbox retitles its window "Toolbox — <view or file>" once a tool opens.
+on toolboxWindow(processRef)
+	tell application "System Events" to return first window of processRef whose name starts with "Toolbox"
+end toolboxWindow
+
 on accessibleDescendants(parentElement)
 	tell application "System Events" to set childElements to UI elements of parentElement
 	set allElements to {}
@@ -16,20 +21,23 @@ end accessibleDescendants
 
 on findAndPress(processRef, targetRole, labelText)
 	tell application "System Events"
-		set candidates to my accessibleDescendants(window "Toolbox" of processRef)
+		set candidates to my accessibleDescendants(my toolboxWindow(processRef))
 		repeat with candidate in candidates
 			try
 				set candidateRole to role of candidate as text
 				set candidateName to ""
 				set candidateDescription to ""
-				set candidateValue to ""
+				set candidateEnabled to true
 				try
 					set candidateName to name of candidate as text
 				end try
 				try
 					set candidateDescription to description of candidate as text
 				end try
-				if candidateRole is targetRole and (candidateName contains labelText or candidateDescription contains labelText) then
+				try
+					set candidateEnabled to enabled of candidate
+				end try
+				if candidateRole is targetRole and candidateEnabled and (candidateName contains labelText or candidateDescription contains labelText) then
 					perform action "AXPress" of candidate
 					return true
 				end if
@@ -41,7 +49,7 @@ end findAndPress
 
 on enterTextInField(processRef, labelText, fieldText)
 	tell application "System Events"
-		set candidates to my accessibleDescendants(window "Toolbox" of processRef)
+		set candidates to my accessibleDescendants(my toolboxWindow(processRef))
 		repeat with candidate in candidates
 			try
 				set candidateRole to role of candidate as text
@@ -79,10 +87,18 @@ on run argv
 		set frontmost of toolboxProcess to true
 		delay 3
 
-		if my findAndPress(toolboxProcess, "AXButton", "Remove Password") is false then
-			error "Could not open Remove Password from Quick Access"
+		-- The edit demo leaves the PDF editor open; return to the tool library first.
+		if my findAndPress(toolboxProcess, "AXButton", "All tools") then delay 1
+
+		if my findAndPress(toolboxProcess, "AXButton", "Open Lock & Unlock") is false then
+			error "Could not open Lock & Unlock from the Toolbox library"
 		end if
 		delay 1
+
+		if my findAndPress(toolboxProcess, "AXRadioButton", "Unlock") is false then
+			error "Could not switch File Security to Unlock"
+		end if
+		delay 0.4
 
 		if my findAndPress(toolboxProcess, "AXButton", "Choose files to process") is false then
 			error "Could not open the PDF picker"
@@ -103,8 +119,8 @@ on run argv
 		key code 36
 		delay 1
 
-		if my enterTextInField(toolboxProcess, "Enter password", demoPassword) is false then
-			if my enterTextInField(toolboxProcess, "File Password", demoPassword) is false then
+		if my enterTextInField(toolboxProcess, "Current password for all files", demoPassword) is false then
+			if my enterTextInField(toolboxProcess, "Enter password", demoPassword) is false then
 				error "Could not enter the shared PDF password"
 			end if
 		end if
