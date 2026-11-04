@@ -8,7 +8,7 @@ mod settings;
 mod shell;
 
 use crate::file_actions::{open_output_path, open_sponsor_page, open_third_party_notices, reveal_output_path};
-use crate::kit::common::{note_renamed, JobOutcome};
+use crate::kit::common::{note_renamed, with_measured_sizes, JobOutcome};
 use crate::kit::images::{ImageProcessor, Options as ImageOptions};
 use crate::kit::images::tools;
 use crate::kit::pdf::{editor, metadata, remaining, scene, PDFProcessor};
@@ -76,13 +76,13 @@ async fn protect_files(events: RunEvents, request: PasswordRequest) -> Vec<JobOu
 async fn compress_images(events: RunEvents, request: CompressImagesRequest) -> Vec<JobOutcome> {
     let request = Arc::new(request);
     BatchRunner::run(&events, "compress_images", request.paths.clone(), &request.output_location, &request, |request, path| {
-        ImageProcessor::run(path, ImageOptions {
+        with_measured_sizes(ImageProcessor::run(path, ImageOptions {
             target_format: None,
             quality: if request.lossless { 0 } else { request.quality },
             keep_smaller_original: true,
             suffix: "-compressed".to_string(),
             output_location: request.output_location.clone(),
-        })
+        }))
     })
 }
 
@@ -257,7 +257,7 @@ async fn run_compare_pdfs(request: &remaining::ComparePdfsRequest) -> Vec<JobOut
 async fn compress_pdf(events: RunEvents, request: remaining::CompressPdfRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_command_inputs("compress_pdf", &request.paths) { return outcomes; }
     let request = Arc::new(request);
-    BatchRunner::run(&events, "compress_pdf", request.paths.clone(), &request.output_location, &request, remaining::compress)
+    BatchRunner::run(&events, "compress_pdf", request.paths.clone(), &request.output_location, &request, |request, path| with_measured_sizes(remaining::compress(request, path)))
 }
 
 #[tauri::command]
@@ -2328,6 +2328,36 @@ mod command_tests {
 
         cleanup(&out[0].output_paths());
         let _ = std::fs::remove_file(&src);
+    }
+
+    #[test]
+    fn compress_commands_report_sizes_matching_the_files_on_disk() {
+        let root = sandbox("compress-sizes");
+        let pdf = root.join("document.pdf");
+        let image = root.join("image.png");
+        make_pdf(&pdf, 3);
+        write_png(&image, 128, 7);
+
+        let pdf_outcomes = tauri::async_runtime::block_on(compress_pdf(RunEvents::silent(), CompressPdfRequest {
+            paths: vec![pdf.clone()], quality: 50, output_location: location(&root, "pdf"),
+        }));
+        let lossy = tauri::async_runtime::block_on(compress_images(RunEvents::silent(), CompressImagesRequest {
+            paths: vec![image.clone()], quality: 50, lossless: false, output_location: location(&root, "lossy"),
+        }));
+        let lossless = tauri::async_runtime::block_on(compress_images(RunEvents::silent(), CompressImagesRequest {
+            paths: vec![image.clone()], quality: 80, lossless: true, output_location: location(&root, "lossless"),
+        }));
+
+        for outcome in pdf_outcomes.iter().chain(&lossy).chain(&lossless) {
+            assert!(outcome.error().is_none(), "{}", outcome.error().cloned().unwrap_or_default());
+            let [output] = outcome.output_paths() else { panic!("one output expected") };
+            assert_eq!(outcome.original_bytes, Some(std::fs::metadata(&outcome.input_path).unwrap().len()));
+            assert_eq!(outcome.output_bytes, Some(std::fs::metadata(output).unwrap().len()));
+            let value = serde_json::to_value(outcome).unwrap();
+            assert_eq!(value["originalBytes"], outcome.original_bytes.unwrap());
+            assert_eq!(value["outputBytes"], outcome.output_bytes.unwrap());
+        }
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

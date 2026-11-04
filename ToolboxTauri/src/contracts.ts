@@ -155,6 +155,8 @@ interface JobOutcomeBase {
   inputPath: string;
   detail: string;
   warnings: OutcomeWarning[];
+  originalBytes?: number;
+  outputBytes?: number;
 }
 
 export interface SucceededJobOutcome extends JobOutcomeBase {
