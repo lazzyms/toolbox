@@ -772,44 +772,7 @@ fn default_gif_delay_ms() -> u32 { 100 }
 fn default_gif_loop() -> bool { true }
 
 pub fn gif_extract(request: &GifExtractRequest, input: PathBuf) -> JobOutcome {
-    let file = match File::open(&input) { Ok(file) => file, Err(error) => return failure(input, error.to_string()) };
-    let decoder = match image::codecs::gif::GifDecoder::new(BufReader::new(file)) { Ok(decoder) => decoder, Err(error) => return failure(input, error.to_string()) };
-    let frames = match decoder.into_frames().collect_frames() { Ok(frames) => frames, Err(error) => return failure(input, error.to_string()) };
-    let mut outputs = Vec::new();
-    let mut timing = Vec::new();
-    for (index, frame) in frames.into_iter().enumerate() {
-        let output = match OutputNaming::reserve_destination(&input, &request.output_location, &format!("-frame-{}", index + 1), "png") {
-            Ok(output) => output,
-            Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not reserve GIF frame output: {error}"))),
-        };
-        let (numerator, denominator) = frame.delay().numer_denom_ms();
-        let delay_ms = (numerator as u64 * 1000 / denominator.max(1) as u64).max(1);
-        if let Err(error) = frame.into_buffer().save(output.path()) {
-            return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(error.to_string()));
-        }
-        let output = match output.publish() {
-            Ok(output) => output,
-            Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not publish GIF frame output: {error}"))),
-        };
-        timing.push(serde_json::json!({ "file": output, "delayMs": delay_ms }));
-        outputs.push(output);
-    }
-    let timing_path = match OutputNaming::reserve_destination(&input, &request.output_location, "-frame-timing", "json") {
-        Ok(output) => output,
-        Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not reserve GIF timing output: {error}"))),
-    };
-    let timing_bytes = match serde_json::to_vec_pretty(&timing) {
-        Ok(bytes) => bytes,
-        Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not encode GIF timing manifest: {error}"))),
-    };
-    if let Err(error) = std::fs::write(timing_path.path(), timing_bytes) {
-        return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not save GIF timing manifest: {error}")));
-    }
-    outputs.push(match timing_path.publish() {
-        Ok(path) => path,
-        Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not publish GIF timing manifest: {error}"))),
-    });
-    JobOutcome::succeeded(input, outputs, "GIF frames saved")
+    super::gif_extract::extract(request, input)
 }
 
 pub fn tiff(request: &TiffRequest) -> JobOutcome {

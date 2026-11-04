@@ -842,6 +842,7 @@ mod tests {
         assert!(!images.accepted_extensions.contains(&".tif".to_string()));
         assert!(!images.accepted_extensions.contains(&".tiff".to_string()));
         assert!(!native_capability("extract_gif_frames").unwrap().supports_preview);
+        assert_eq!(native_capability("extract_gif_frames").unwrap().input_cardinality, InputCardinality::Multiple);
         let pdf = native_capability("pdf_to_text").unwrap();
         assert!(pdf.supports_page_selection && !pdf.supports_preview);
         assert!(!native_capability("ocr_pdf").unwrap().native_available);

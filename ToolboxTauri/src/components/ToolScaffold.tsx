@@ -15,7 +15,7 @@ import { CancelRun } from './CancelRun';
 import { ShortcutHint } from './ShortcutHint';
 import { isWindows, matchShortcut, shortcutTarget } from '../shortcuts';
 import { ResultList } from './ResultList';
-import { rowView } from './resultRow';
+import { rowView, type OutputGrouping } from './resultRow';
 import { BATCH_PROGRESS_EVENT, foldRunEvent, parseRunEvent, startRun, type LiveRun } from './liveRun';
 import { BlockedDestinationDialog, RunDestination, exampleOutputName, sameLocation, type BlockedDestination, type FolderCheck } from './RunDestination';
 import { TablerIcon } from './TablerIcon';
@@ -67,7 +67,11 @@ interface ToolScaffoldProps {
     onActivationAccepted?: (activationId: string) => void;
     onFilesChange?: (paths: readonly string[]) => void;
     /** Overrides the example output name when the view's options decide the output's suffix or type. */
-    exampleName?: (inputPath: string) => string;
+    exampleName?: (inputPath: string) => string | readonly string[];
+    /** Shows a succeeded file's outputs as one row that expands into its parts. */
+    outputGroup?: OutputGrouping;
+    /** A line after the finished headline, such as a total across files. */
+    resultsHint?: (results: JobOutcome[]) => string | null;
     children: (props: {
         files: string[];
         failingFiles: string[];
@@ -86,7 +90,7 @@ interface ToolScaffoldProps {
     }) => React.ReactNode;
 }
 
-export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, retryWithPassword, intakeCopy, initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, exampleName, children }: ToolScaffoldProps) => {
+export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, retryWithPassword, intakeCopy, initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, exampleName, outputGroup, resultsHint, children }: ToolScaffoldProps) => {
     const nextEntryKey = useRef(0);
     const newEntries = (paths: readonly string[]) => paths.map((path) => ({ key: `entry-${++nextEntryKey.current}`, path }));
     const [entries, setEntries] = useState<IntakeEntry[]>(() => newEntries(initialPaths));
@@ -742,6 +746,8 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 namedByOutput={resultsNamedByOutput}
                 onRetry={perFileRun ? (inputPath) => rerun([inputPath]) : undefined}
                 onRetryWithPassword={perFileRun && retryWithPassword ? (inputPath, password) => rerun([inputPath], retryWithPassword(inputPath, password)) : undefined}
+                outputGroup={outputGroup}
+                resultsHint={resultsHint}
             />
 
             <BlockedDestinationDialog

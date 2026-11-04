@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
-import type { OutputLocation, ToolCommand, ToolDefinition } from "../../contracts";
+import type { JobOutcome, OutputLocation, ToolCommand, ToolDefinition } from "../../contracts";
+import type { OutputGrouping } from "../../components/resultRow";
 
 /** What the shared run hands every Media tool when it builds its request. */
 export interface MediaRunInput {
@@ -38,4 +39,10 @@ export interface MediaTool<Options> {
   runLabel?: string;
   /** Whether the shared file list offers reordering; defaults to true. */
   showFileOrdering?: boolean;
+  /** The example output names for an input, when the shared example would name them wrongly. */
+  exampleName?: (inputPath: string) => string | readonly string[];
+  /** Shows a succeeded file's outputs as one row that expands into its parts. */
+  outputGroup?: OutputGrouping;
+  /** A line after the finished headline, such as a total across files. */
+  resultsHint?: (results: JobOutcome[]) => string | null;
 }

@@ -47,6 +47,9 @@ export const MediaWorkspaceView = ({ utility: activeUtility, initialPaths, onFil
       initialPaths={initialPaths}
       onFilesChange={onFilesChange}
       showFileOrdering={tool.showFileOrdering ?? true}
+      exampleName={tool.exampleName}
+      outputGroup={tool.outputGroup}
+      resultsHint={tool.resultsHint}
       onRun={(paths, outputLocation, { outputPath, runId }) => {
         const { command, request } = buildRequest(toolId, paths, outputLocation, outputPath);
         return invoke<ToolResult>(command, { runId, request });
