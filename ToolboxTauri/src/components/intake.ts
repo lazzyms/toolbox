@@ -138,3 +138,45 @@ export const rangeKeys = (entries: IntakeEntry[], anchor: string, target: string
     if (a < 0 || b < 0) return [target];
     return entries.slice(Math.min(a, b), Math.max(a, b) + 1).map((entry) => entry.key);
 };
+
+/** Facts read from each listed file. A fact that couldn't be read is null and the row leaves it out. */
+export type EntryFacts = { pageCount: number | null; modifiedMs: number | null; sizeBytes: number | null };
+
+export type EntrySort = 'added' | 'nameAsc' | 'nameDesc' | 'modifiedAsc' | 'modifiedDesc';
+
+export type EntrySortOption = { value: EntrySort; label: string };
+
+export const sortNeedsFacts = (sort: EntrySort) => sort === 'modifiedAsc' || sort === 'modifiedDesc';
+
+const names = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
+/** Returns the entries in the chosen order. Ties and files without a date keep their current relative order, dateless files last. */
+export const sortEntries = (entries: IntakeEntry[], sort: EntrySort, facts: (path: string) => EntryFacts | undefined, addedOrder: (entry: IntakeEntry) => number) => {
+    const modified = (entry: IntakeEntry) => facts(entry.path)?.modifiedMs ?? null;
+    const byModified = (direction: 1 | -1) => (a: IntakeEntry, b: IntakeEntry) => {
+        const left = modified(a);
+        const right = modified(b);
+        if (left === null || right === null) return Number(left === null) - Number(right === null);
+        return direction * (left - right);
+    };
+    const compare: Record<EntrySort, (a: IntakeEntry, b: IntakeEntry) => number> = {
+        added: (a, b) => addedOrder(a) - addedOrder(b),
+        nameAsc: (a, b) => names.compare(fileName(a.path), fileName(b.path)),
+        nameDesc: (a, b) => names.compare(fileName(b.path), fileName(a.path)),
+        modifiedAsc: byModified(1),
+        modifiedDesc: byModified(-1),
+    };
+    return [...entries].sort(compare[sort]);
+};
+
+export const parseEntryFacts = (value: unknown): Map<string, EntryFacts> => {
+    const facts = new Map<string, EntryFacts>();
+    if (!Array.isArray(value)) return facts;
+    const number = (field: unknown) => typeof field === 'number' && Number.isFinite(field) ? field : null;
+    for (const item of value) {
+        if (!item || typeof item !== 'object' || typeof (item as { path?: unknown }).path !== 'string') continue;
+        const { path, pageCount, modifiedMs, sizeBytes } = item as Record<string, unknown>;
+        facts.set(path as string, { pageCount: number(pageCount), modifiedMs: number(modifiedMs), sizeBytes: number(sizeBytes) });
+    }
+    return facts;
+};

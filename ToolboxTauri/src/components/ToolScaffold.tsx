@@ -5,6 +5,7 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
 import type { ToolDefinition, JobOutcome, OutputLocation, Progress } from '../contracts';
 import { TOOL_DROP_EVENT, type ShellEvent } from '../hooks/useShellBridge';
 import { useOutputLocation } from '../outputLocation';
@@ -29,8 +30,14 @@ import {
     intakePolicyFor,
     moveEntry,
     parentFolder,
+    parseEntryFacts,
     parseInspection,
     rangeKeys,
+    sortEntries,
+    sortNeedsFacts,
+    type EntryFacts,
+    type EntrySort,
+    type EntrySortOption,
     type InspectedPath,
     type IntakeCopy,
     type IntakeEntry,
@@ -68,6 +75,8 @@ interface ToolScaffoldProps {
     onFilesChange?: (paths: readonly string[]) => void;
     /** Overrides the example output name when the view's options decide the output's suffix or type. */
     exampleName?: (inputPath: string) => string;
+    /** Sorts an ordered list offers. The list keeps the order a sort leaves, so later drags start from it. */
+    sortOptions?: readonly EntrySortOption[];
     children: (props: {
         files: string[];
         failingFiles: string[];
@@ -86,7 +95,7 @@ interface ToolScaffoldProps {
     }) => React.ReactNode;
 }
 
-export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, retryWithPassword, intakeCopy, initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, exampleName, children }: ToolScaffoldProps) => {
+export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, retryWithPassword, intakeCopy, initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, exampleName, sortOptions, children }: ToolScaffoldProps) => {
     const nextEntryKey = useRef(0);
     const newEntries = (paths: readonly string[]) => paths.map((path) => ({ key: `entry-${++nextEntryKey.current}`, path }));
     const [entries, setEntries] = useState<IntakeEntry[]>(() => newEntries(initialPaths));
@@ -96,10 +105,11 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
     const [moveStatus, setMoveStatus] = useState('');
     const [dragKey, setDragKey] = useState<string | null>(null);
     const [dropTargetKey, setDropTargetKey] = useState<string | null>(null);
+    const [sort, setSort] = useState<EntrySort>('added');
     const rowButtons = useRef(new Map<string, HTMLButtonElement>());
     const home = useHomeDir();
     const [results, setResults] = useState<JobOutcome[]>([]);
-    const [resultsNamedByOutput, setResultsNamedByOutput] = useState(false);
+    const [combinedInputs, setCombinedInputs] = useState<string[] | null>(null);
     const [loading, setLoading] = useState(false);
     const [live, setLive] = useState<LiveRun | null>(null);
     const [perFileRun, setPerFileRun] = useState<PerFileRun | null>(null);
@@ -178,7 +188,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         const generation = ++runGeneration.current;
         setLoading(true);
         setResults([]);
-        setResultsNamedByOutput(false);
+        setCombinedInputs(null);
         setPerFileRun(null);
         try {
             if (location !== 'alongsideInput') {
@@ -225,7 +235,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 : files.map((path) => invalidPaths.get(path) ?? processedByPath.get(path)).filter((result): result is JobOutcome => result !== undefined);
             if (generation === runGeneration.current) {
                 setResults(nextResults);
-                setResultsNamedByOutput(outputPath !== null);
+                setCombinedInputs(outputPath === null ? null : validPaths);
             }
         } catch (error) {
             if (generation === runGeneration.current) {
@@ -419,7 +429,25 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         setResults([]);
         setNotAdded([]);
         setMoveStatus('');
+        setSort('added');
         selectOnly(null);
+    };
+
+    const addedOrder = (entry: IntakeEntry) => Number(entry.key.slice('entry-'.length));
+
+    const sortBy = async (next: EntrySort) => {
+        if (loading) return;
+        setSort(next);
+        setMoveStatus('');
+        let facts = new Map<string, EntryFacts>();
+        if (sortNeedsFacts(next)) {
+            try {
+                facts = parseEntryFacts(await invoke('describe_intake_files', { paths: [...new Set(entries.map((entry) => entry.path))] }));
+            } catch {
+                // Files whose dates can't be read sort last, in their current order.
+            }
+        }
+        setEntries((current) => sortEntries(current, next, (path) => facts.get(path), addedOrder));
     };
 
     const selectFile = (index: number) => selectOnly(runnable[index]?.entry.key ?? null);
@@ -513,6 +541,14 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
             <div className="file-selection-header">
                 <span className="file-selection-count">{entries.length} {entries.length === 1 ? 'file' : 'files'}</span>
                 {selectionNote && <span className="file-selection-selected">{selectionNote}</span>}
+                {ordered && sortOptions && (
+                    <label className="file-selection-sort">
+                        <span>Sort by</span>
+                        <NativeSelect size="sm" value={sort} disabled={loading} onChange={(event) => void sortBy(event.target.value as EntrySort)}>
+                            {sortOptions.map((option) => <NativeSelectOption key={option.value} value={option.value}>{option.label}</NativeSelectOption>)}
+                        </NativeSelect>
+                    </label>
+                )}
                 <span className="file-selection-actions">
                     <Button variant="outline" size="sm" disabled={loading || selection.size === 0} onClick={() => removeEntries(selection)}>
                         Remove from list
@@ -739,7 +775,8 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 runningVerb={utility.runningVerb}
                 runningDetail={utility.runningDetail}
                 live={live}
-                namedByOutput={resultsNamedByOutput}
+                combinedInputs={combinedInputs}
+                combined={saveStep?.combined}
                 onRetry={perFileRun ? (inputPath) => rerun([inputPath]) : undefined}
                 onRetryWithPassword={perFileRun && retryWithPassword ? (inputPath, password) => rerun([inputPath], retryWithPassword(inputPath, password)) : undefined}
             />

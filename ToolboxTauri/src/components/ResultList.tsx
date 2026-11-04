@@ -1,11 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
-import { Check, CircleMinus, CircleX, Clock, KeyRound, LoaderCircle, RotateCcw, TriangleAlert } from "lucide-react";
+import { Check, CircleMinus, CircleX, Clock, FileText, KeyRound, LoaderCircle, RotateCcw, TriangleAlert } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import type { JobOutcome, OutcomePointer, Progress } from "../contracts";
+import { shortenHomePath, useHomeDir } from "../homePath";
+import type { CombinedResult } from "../registry/saveSteps";
 import { liveFiles, type LiveFile, type LiveRun } from "./liveRun";
-import { fileName, resultSummary, resultTally, rowView, type RowTone } from "./resultRow";
+import { fileName, resultSummary, resultTally, rowView, warningText, type RowTone } from "./resultRow";
 import { PasswordRetryForm } from "./PasswordFields";
 
 type RowAction = "open" | "reveal" | "retry";
@@ -59,12 +61,15 @@ interface ResultListProps {
     runningVerb: string;
     runningDetail?: string;
     live: LiveRun | null;
-    namedByOutput?: boolean;
+    combinedInputs?: string[] | null;
+    combined?: CombinedResult;
     onRetry?: (inputPath: string) => Promise<void>;
     onRetryWithPassword?: (inputPath: string, password: string) => Promise<void>;
 }
 
-export const ResultList = ({ results, progress, loading, resultVerb, runningVerb, runningDetail, live, namedByOutput = false, onRetry, onRetryWithPassword }: ResultListProps) => {
+export const ResultList = ({ results, progress, loading, resultVerb, runningVerb, runningDetail, live, combinedInputs = null, combined, onRetry, onRetryWithPassword }: ResultListProps) => {
+    const namedByOutput = combinedInputs !== null;
+    const home = useHomeDir();
     const [actionStates, setActionStates] = useState<Record<number, RowActionState>>({});
     const [passwordRow, setPasswordRow] = useState<number | null>(null);
     const resultSetGeneration = useRef(0);
@@ -232,6 +237,72 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
         return <p className="muted-copy">Processing {progress.completed} of {progress.total} files...</p>;
     }
     if (results.length === 0) return null;
+
+    const shared = results[0];
+    if (combined && combinedInputs && results.length === 1 && shared.state === "succeeded" && shared.outputPaths.length === 1) {
+        const output = shared.outputPaths[0];
+        const outputName = fileName(output);
+        const folder = output.slice(0, Math.max(0, output.length - outputName.length - 1));
+        const state = actionStates[0] ?? idleActionState;
+        const busy = state.pending !== null;
+        const [one, many] = combined.input;
+        const inputs = `${combinedInputs.length} ${combinedInputs.length === 1 ? one : many}`;
+        const warningCount = shared.warnings.length;
+        const done = warningCount === 0 ? "Done." : `Done with ${warningCount} ${warningCount === 1 ? "warning" : "warnings"}.`;
+        const inputsHeading = `${inputs} in this ${combined.output}`;
+        return (
+            <div className="result-list" data-combined="true">
+                <div className="result-summary" role="status" aria-live="polite">
+                    <strong>{done} Made 1 {combined.output} from {inputs}</strong>
+                    <span className="result-summary-hint">Every {one} is in, in the order shown.</span>
+                </div>
+                <Card className="result-output gap-0 py-0">
+                    <CardContent className="result-output-content">
+                        <FileText className="result-output-icon" aria-hidden="true" />
+                        <span className="result-row-text">
+                            <strong className="result-row-name" title={output}>{outputName}</strong>
+                            {folder && <span className="result-row-detail">in {shortenHomePath(folder, home)}</span>}
+                            {shared.warnings.map((warning, index) => (
+                                <span key={index} className="result-output-warning">
+                                    <TriangleAlert aria-hidden="true" />
+                                    {warning.code === "renamedToAvoidReplacing"
+                                        ? `Renamed. ${warning.details.chosenName} already exists and was left as it is.`
+                                        : warningText(warning)}
+                                </span>
+                            ))}
+                        </span>
+                        <span className="result-row-actions">
+                            <Button variant="outline" size="sm" aria-label={`Open ${outputName}`} disabled={busy} onClick={() => void runAction(0, "open", () => invoke("open_output_path", { path: output }))}>
+                                {state.pending === "open" ? "Opening..." : "Open"}
+                            </Button>
+                            <Button variant="outline" size="sm" aria-label={`${reveal}: ${outputName}`} disabled={busy} onClick={() => void runAction(0, "reveal", () => invoke("reveal_output_path", { path: output }))}>
+                                {state.pending === "reveal" ? "Showing..." : reveal}
+                            </Button>
+                        </span>
+                        {state.error && <p className="result-action-error" role="alert">{state.error}</p>}
+                    </CardContent>
+                </Card>
+                <h2 className="result-inputs-heading">{inputsHeading}</h2>
+                <Card className="result-card gap-0 py-0">
+                    <CardContent className="p-0">
+                        <ul className="result-rows" aria-label={inputsHeading}>
+                            {combinedInputs.map((input, index) => (
+                                <li key={`${index}:${input}`} className="result-row" data-tone="ok" data-state="succeeded">
+                                    <span className="result-row-icon" aria-hidden="true"><Check /></span>
+                                    <span className="result-row-text">
+                                        <span className="result-row-name" title={input}>{fileName(input)}</span>
+                                        <span className="result-row-detail">{combined.part(index + 1)}</span>
+                                    </span>
+                                    <span className="result-row-state">Added</span>
+                                    <span className="result-row-actions" />
+                                </li>
+                            ))}
+                        </ul>
+                    </CardContent>
+                </Card>
+            </div>
+        );
+    }
 
     const summary = resultSummary(results, resultVerb);
     return (

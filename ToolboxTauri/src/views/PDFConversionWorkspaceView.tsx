@@ -26,6 +26,7 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
       utility={activeUtility}
       initialPaths={initialPaths}
       onFilesChange={onFilesChange}
+      sortOptions={tool.sortOptions}
       exampleName={exampleName ? (path) => exampleName(path, activeUtility, options) : undefined}
       onRun={(paths, outputLocation, run) => tool.request(paths, outputLocation, run, options, { document, selectedPages, pageRange })}
     >

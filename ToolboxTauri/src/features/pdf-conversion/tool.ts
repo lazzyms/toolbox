@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import type { RunContext } from "../../components/ToolScaffold";
 import type { OutputLocation, ToolDefinition, ToolResult } from "../../contracts";
+import type { EntrySortOption } from "../../components/intake";
 import type { PdfDocument } from "../pdf-editor";
 
 export type PageSelection = { document: PdfDocument | null; selectedPages: number[]; pageRange: string };
@@ -20,6 +21,7 @@ export type OptionsPanelProps<Options> = {
 export interface ConversionTool<Options = unknown> {
   initialOptions?: Options;
   inspectsPdf: boolean;
+  sortOptions?: readonly EntrySortOption[];
   initialPages?(document: PdfDocument): number[];
   outputPreview(options: Options, selectedPages: number[]): string;
   exportBlocked?(options: Options, files: string[], pageRange: string): boolean;
