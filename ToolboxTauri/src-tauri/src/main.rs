@@ -12,7 +12,7 @@ use crate::kit::common::{note_renamed, JobOutcome};
 use crate::kit::images::{ImageProcessor, Options as ImageOptions};
 use crate::kit::images::tools;
 use crate::kit::pdf::{editor, metadata, remaining, scene, PDFProcessor};
-use crate::kit::pdf::page_ranges::validate_page_ranges;
+use crate::kit::pdf::page_ranges::{require_page_ranges, validate_page_ranges};
 use crate::kit::vision;
 use crate::kit::contracts::{command_supports_preview, validate_command_inputs, validate_page_selection, CompressImagesRequest, ConvertImagesRequest, OutcomeState, PasswordRequest, ToolError};
 use crate::kit::common::batch_runner::{BatchRunner, FileEvent, FolderCheck, RunEvents};
@@ -159,11 +159,12 @@ async fn export_pdf_scene(events: RunEvents, request: scene::ExportRequest) -> V
 
 #[tauri::command]
 async fn crop_pdf(events: RunEvents, request: editor::CropPdfRequest) -> Vec<JobOutcome> {
-    let explicit_pages = match &request.scope {
-        editor::PageScope::All => None,
-        editor::PageScope::Selected { pages } => Some(pages.as_slice()),
+    let checked = match &request.scope {
+        editor::RangedPageScope::All => Ok(()),
+        editor::RangedPageScope::Selected { pages } => validate_page_selection("crop_pdf", &request.paths, Some(pages.as_slice())),
+        editor::RangedPageScope::Range { ranges } => require_page_ranges(&request.paths, ranges).map(drop),
     };
-    if let Err(outcomes) = validate_page_selection("crop_pdf", &request.paths, explicit_pages) { return outcomes; }
+    if let Err(outcomes) = checked { return outcomes; }
     let request = Arc::new(request);
     BatchRunner::run(&events, "crop_pdf", request.paths.clone(), &request.output_location, &request, editor::crop)
 }
@@ -628,7 +629,7 @@ mod command_tests {
     use crate::kit::contracts::{ErrorKind, LimitKind};
     use crate::kit::images::tools::{CropRequest, GifCreateRequest, GifExtractRequest, ImageEdit, ImageEditExportRequest, ImageEditPlan, ImageEditPreviewRequest, IconSetRequest, MetadataRequest, ResizeRequest, RotateRequest, TiffRequest, ToneRequest, WatermarkRequest};
     use crate::kit::office::{test_minimal_ooxml_package, OfficeProcessor};
-    use crate::kit::pdf::editor::{AddPdfPagesRequest, CropPdfRequest, EditPdfRequest, OrganizePdfRequest, PageScope, PdfEditMode, PdfEditOperation, PdfEditSessionPlan, PdfEditSessionRequest, PdfOverlay, PdfOverlayPosition, PdfRect, RedactPdfRequest, RotatePage, SignPdfRequest};
+    use crate::kit::pdf::editor::{AddPdfPagesRequest, CropPdfRequest, EditPdfRequest, OrganizePdfRequest, PageScope, PdfEditMode, PdfEditOperation, PdfEditSessionPlan, PdfEditSessionRequest, PdfOverlay, PdfOverlayPosition, PdfRect, RangedPageScope, RedactPdfRequest, RotatePage, SignPdfRequest};
     use crate::kit::pdf::remaining::{CompressPdfRequest, ImagesToPdfRequest, MergePdfRequest, PageOverlayRequest, PageSelectionRequest, PdfToImagesRequest, PdfToTextRequest, RotatePdfRequest, ComparePdfsRequest};
     use crate::kit::vision::VisionRequest;
     use base64::{engine::general_purpose::STANDARD, Engine};
@@ -836,7 +837,7 @@ mod command_tests {
         let outcomes = tauri::async_runtime::block_on(crop_pdf(RunEvents::silent(), CropPdfRequest {
             paths: vec![input.clone()],
             rectangle: PdfRect { x: 1.0, y: 1.0, width: 100.0, height: 100.0 },
-            scope: PageScope::Selected { pages: vec![] },
+            scope: RangedPageScope::Selected { pages: vec![] },
             output_location: location(&root, "crop-empty"),
         }));
 
@@ -847,6 +848,70 @@ mod command_tests {
         assert!(outcomes[0].error().is_some_and(|error| error.message.contains("at least one page")));
         assert_eq!(std::fs::read(&input).unwrap(), original);
         assert_eq!(std::fs::read_dir(root.join("crop-empty")).unwrap().count(), 0);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn crop_request(paths: Vec<PathBuf>, scope: RangedPageScope, output_location: OutputLocation) -> CropPdfRequest {
+        CropPdfRequest { paths, rectangle: PdfRect { x: 100.0, y: 100.0, width: 200.0, height: 300.0 }, scope, output_location }
+    }
+
+    fn cropped_pages(path: &std::path::Path) -> Vec<usize> {
+        let document = lopdf::Document::load(path).unwrap();
+        document.get_pages().into_iter().filter(|(_, page)| {
+            let media = document.get_dictionary(*page).unwrap().get(b"MediaBox").unwrap().as_array().unwrap().clone();
+            media.iter().map(|value| value.as_float().unwrap()).collect::<Vec<_>>() == vec![100.0, 100.0, 300.0, 400.0]
+        }).map(|(number, _)| number as usize).collect()
+    }
+
+    #[test]
+    fn crop_command_clamps_a_typed_range_per_file_and_skips_files_with_no_pages_left() {
+        assert!(matches!(serde_json::from_value::<RangedPageScope>(serde_json::json!({ "range": { "ranges": "2-4, 9-" } })).unwrap(), RangedPageScope::Range { ranges } if ranges == "2-4, 9-"));
+        let root = sandbox("crop-clamped-range");
+        let (long, medium, short) = (root.join("long.pdf"), root.join("medium.pdf"), root.join("short.pdf"));
+        make_pdf(&long, 10); make_pdf(&medium, 3); make_pdf(&short, 1);
+        let originals = [&long, &medium, &short].map(|path| std::fs::read(path).unwrap());
+        let request = crop_request(vec![long.clone(), medium.clone(), short.clone()], RangedPageScope::Range { ranges: "2-4, 9-".into() }, location(&root, "out"));
+        let outcomes = request.paths.iter().map(|path| editor::crop(&request, path.clone())).collect::<Vec<_>>();
+
+        assert_eq!(cropped_pages(&outcomes[0].output_paths()[0]), vec![2, 3, 4, 9, 10]);
+        assert_eq!(outcomes[0].detail, "PDF saved");
+        assert_eq!(cropped_pages(&outcomes[1].output_paths()[0]), vec![2, 3]);
+        assert_eq!(outcomes[1].detail, "PDF saved. Shortened pages 2-4 to 2-3 because the PDF has 3 pages. Skipped pages 9- because the PDF has 3 pages.");
+        match &outcomes[2].state {
+            OutcomeState::Skipped { reason } => {
+                assert_eq!(reason.code, crate::kit::contracts::SkipCode::RangeEmptyAfterClamping);
+                assert_eq!(reason.message, "No pages in 2-4, 9- are in this PDF, which has 1 page.");
+            }
+            state => panic!("expected the short file to be skipped, got {state:?}"),
+        }
+        let mut written = std::fs::read_dir(root.join("out")).unwrap().map(|entry| entry.unwrap().file_name().into_string().unwrap()).collect::<Vec<_>>();
+        written.sort();
+        assert_eq!(written, vec!["long-cropped.pdf", "medium-cropped.pdf"]);
+
+        let through_command = tauri::async_runtime::block_on(crop_pdf(RunEvents::silent(), crop_request(vec![short.clone()], RangedPageScope::Range { ranges: "2-4, 9-".into() }, location(&root, "command"))));
+        assert!(matches!(&through_command[..], [outcome] if outcome.input_path == short && matches!(&outcome.state, OutcomeState::Skipped { reason } if reason.code == crate::kit::contracts::SkipCode::RangeEmptyAfterClamping)));
+        assert_eq!(std::fs::read_dir(root.join("command")).unwrap().count(), 0);
+        assert_eq!([&long, &medium, &short].map(|path| std::fs::read(path).unwrap()), originals);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn crop_command_rejects_malformed_ranges_for_every_file_before_writing() {
+        let root = sandbox("crop-malformed-range");
+        let (first, second) = (root.join("first.pdf"), root.join("second.pdf"));
+        make_pdf(&first, 3); make_pdf(&second, 3);
+        for (ranges, reason) in [("4-2", "\"4-2\" runs backwards"), ("0", "\"0\" uses page 0"), ("2, x", "\"x\" isn't a page or range"), (" ", "Enter at least one page or range")] {
+            let outcomes = tauri::async_runtime::block_on(crop_pdf(RunEvents::silent(), crop_request(
+                vec![first.clone(), second.clone()],
+                RangedPageScope::Range { ranges: ranges.into() },
+                location(&root, "out"),
+            )));
+            assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), vec![first.clone(), second.clone()], "{ranges}");
+            assert!(outcomes.iter().all(|outcome| outcome.error().is_some_and(|error| error.kind == ErrorKind::InvalidInput && error.message.contains(reason))), "{ranges}: {outcomes:?}");
+        }
+        assert_eq!(std::fs::read_dir(root.join("out")).unwrap().count(), 0);
 
         let _ = std::fs::remove_dir_all(root);
     }
@@ -1265,7 +1330,7 @@ mod command_tests {
         outputs.extend(named(&mut naming, "add_page_numbers", pdf.clone(), assert_success("page numbers", add_page_numbers(RunEvents::silent(), PageOverlayRequest { paths: vec![pdf.clone()], text: "1".into(), opacity: 100, position: Some("bottom-right".into()), logo_path: None, pages: None, start_number: Some(1), font_size: Some(12), output_location: location(&root, "page numbers") }))));
         outputs.extend(named(&mut naming, "merge_pdfs", pdf.clone(), assert_aggregate_success("merge", &[pdf.clone(), pdf_two.clone()], run_merge_pdfs(&MergePdfRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: location(&root, "merge"), output_path: None }))));
         outputs.extend(named(&mut naming, "watermark_pdf", pdf.clone(), assert_success("watermark pdf", watermark_pdf(RunEvents::silent(), PageOverlayRequest { paths: vec![pdf.clone()], text: "TEST".into(), opacity: 70, position: Some("center".into()), logo_path: None, pages: None, start_number: None, font_size: None, output_location: location(&root, "watermark pdf") }))));
-        outputs.extend(named(&mut naming, "crop_pdf", pdf.clone(), assert_success("crop pdf", crop_pdf(RunEvents::silent(), CropPdfRequest { paths: vec![pdf.clone()], rectangle: PdfRect { x: 0.5, y: 0.5, width: 500.0, height: 700.0 }, scope: PageScope::All, output_location: location(&root, "crop pdf") }))));
+        outputs.extend(named(&mut naming, "crop_pdf", pdf.clone(), assert_success("crop pdf", crop_pdf(RunEvents::silent(), CropPdfRequest { paths: vec![pdf.clone()], rectangle: PdfRect { x: 0.5, y: 0.5, width: 500.0, height: 700.0 }, scope: RangedPageScope::All, output_location: location(&root, "crop pdf") }))));
         outputs.extend(named(&mut naming, "edit_pdf", pdf.clone(), assert_success("edit pdf", edit_pdf(RunEvents::silent(), EditPdfRequest { paths: vec![pdf.clone()], mode: "highlight".into(), text: "TEST NOTE".into(), pages: None, rectangle: PdfRect { x: 40.0, y: 650.0, width: 220.0, height: 60.0 }, output_location: location(&root, "edit pdf") }))));
         outputs.extend(named(&mut naming, "edit_pdf_session", pdf.clone(), assert_success("composed pdf editor", edit_pdf_session(RunEvents::silent(), PdfEditSessionRequest {
             paths: vec![pdf.clone()],

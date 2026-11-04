@@ -781,25 +781,8 @@ fn selected_page_indices(request: &PageSelectionRequest, page_count: usize) -> R
         if request.pages.iter().any(|page| *page >= page_count) { return Err("A selected page is outside the document.".to_string()); }
         return Ok(request.pages.clone());
     };
-    let mut selected = std::collections::BTreeSet::new();
-    for token in raw.split(',').map(str::trim) {
-        if token.is_empty() { return Err("Page ranges cannot contain empty entries.".to_string()); }
-        let (start, end) = match token.split_once('-') {
-            Some((start, end)) => (parse_page_number(start)?, parse_page_number(end)?),
-            None => { let page = parse_page_number(token)?; (page, page) },
-        };
-        if start > end { return Err(format!("Page range {token} is reversed.")); }
-        if end > page_count { return Err(format!("Page range {token} is outside the document.")); }
-        selected.extend((start - 1)..end);
-    }
-    if selected.is_empty() { return Err("Select at least one page.".to_string()); }
-    Ok(selected.into_iter().collect())
-}
-
-fn parse_page_number(value: &str) -> Result<usize, String> {
-    let page = value.trim().parse::<usize>().map_err(|_| format!("Invalid page number: {value}."))?;
-    if page == 0 { return Err("Page numbers start at 1.".to_string()); }
-    Ok(page)
+    let pages = PageRanges::parse(raw)?.within(page_count)?;
+    Ok(pages.into_iter().flat_map(|(first, last)| first - 1..last).collect::<std::collections::BTreeSet<_>>().into_iter().collect())
 }
 
 fn save(mut document: Document, input: PathBuf, output: OutputReservation, detail: &str) -> JobOutcome {
@@ -1637,11 +1620,12 @@ pub(crate) mod tests {
     fn parses_ranges_in_document_order() {
         let selected = selected_page_indices(&request(Some("1-3, 7"), vec![]), 7).unwrap();
         assert_eq!(selected, vec![0, 1, 2, 6]);
+        assert_eq!(selected_page_indices(&request(Some("6-, 2"), vec![]), 7).unwrap(), vec![1, 5, 6]);
     }
 
     #[test]
     fn rejects_invalid_or_out_of_bounds_ranges() {
-        for input in ["", "1-3, nope", "0", "4"] {
+        for input in ["", "1-3, nope", "0", "4", "1-3,,2", "4-"] {
             assert!(selected_page_indices(&request(Some(input), vec![]), 3).is_err(), "{input}");
         }
     }
@@ -1696,7 +1680,7 @@ pub(crate) mod tests {
         let cropped = crate::kit::pdf::editor::crop(&crate::kit::pdf::editor::CropPdfRequest {
             paths: vec![input.clone()],
             rectangle: crate::kit::pdf::editor::PdfRect { x: 0.0, y: 0.0, width: 128.0, height: 128.0 },
-            scope: crate::kit::pdf::editor::PageScope::All,
+            scope: crate::kit::pdf::editor::RangedPageScope::All,
             output_location: OutputLocation::AlongsideInput,
         }, input.clone());
         assert!(cropped.error().is_none(), "crop failed: {:?}", cropped.error());
