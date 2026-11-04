@@ -1,4 +1,5 @@
 pub mod metadata;
+pub mod page_ranges;
 pub mod scene;
 pub mod editor;
 pub mod remaining;

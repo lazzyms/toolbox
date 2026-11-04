@@ -12,6 +12,7 @@ use crate::kit::common::{note_renamed, JobOutcome};
 use crate::kit::images::{ImageProcessor, Options as ImageOptions};
 use crate::kit::images::tools;
 use crate::kit::pdf::{editor, metadata, remaining, scene, PDFProcessor};
+use crate::kit::pdf::page_ranges::validate_page_ranges;
 use crate::kit::vision;
 use crate::kit::contracts::{command_supports_preview, validate_command_inputs, validate_page_selection, CompressImagesRequest, ConvertImagesRequest, OutcomeState, PasswordRequest, ToolError};
 use crate::kit::common::batch_runner::{BatchRunner, FileEvent, FolderCheck, RunEvents};
@@ -292,6 +293,7 @@ async fn run_merge_pdfs(request: &remaining::MergePdfRequest) -> Vec<JobOutcome>
 #[tauri::command]
 async fn split_pdf(events: RunEvents, request: remaining::PageSelectionRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_command_inputs("split_pdf", &request.paths) { return outcomes; }
+    if let Err(outcomes) = validate_page_ranges(&request.paths, request.split_page_ranges()) { return outcomes; }
     let request = Arc::new(request);
     BatchRunner::run(&events, "split_pdf", request.paths.clone(), &request.output_location, &request, remaining::split)
 }
@@ -300,6 +302,7 @@ async fn split_pdf(events: RunEvents, request: remaining::PageSelectionRequest) 
 async fn pdf_to_images(events: RunEvents, request: remaining::PdfToImagesRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_command_inputs("pdf_to_images", &request.paths) { return outcomes; }
     if let Err(outcomes) = validate_page_selection("pdf_to_images", &request.paths, request.pages.as_deref()) { return outcomes; }
+    if let Err(outcomes) = validate_page_ranges(&request.paths, request.page_range()) { return outcomes; }
     let request = Arc::new(request);
     BatchRunner::run(&events, "pdf_to_images", request.paths.clone(), &request.output_location, &request, remaining::to_images)
 }
@@ -333,9 +336,9 @@ async fn run_images_to_pdf(request: &remaining::ImagesToPdfRequest) -> Vec<JobOu
 }
 
 #[tauri::command]
-async fn ocr_pdf(events: RunEvents, request: vision::VisionRequest) -> Vec<JobOutcome> {
+async fn ocr_pdf(events: RunEvents, request: vision::OcrRequest) -> Vec<JobOutcome> {
+    if let Err(outcomes) = vision::validate_ocr_request(&request) { return outcomes; }
     if let Err(outcomes) = validate_command_inputs("ocr_pdf", &request.paths) { return outcomes; }
-    if let Err(outcomes) = validate_page_selection("ocr_pdf", &request.paths, request.pages.as_deref()) { return outcomes; }
     let request = Arc::new(request);
     BatchRunner::run(&events, "ocr_pdf", request.paths.clone(), &request.output_location, &request, vision::ocr_pdf)
 }
@@ -872,6 +875,344 @@ mod command_tests {
     }
 
     #[test]
+    fn ocr_command_rejects_bad_languages_modes_and_ranges_before_any_helper_runs() {
+        let _guard = crate::kit::lock_process_env();
+        let root = sandbox("ocr-boundary");
+        // A valid request must still run nothing here, so the engine is made missing on purpose.
+        let _env = EnvGuard::set(&[("TOOLBOX_RESOURCE_ROOT", Some(root.join("no-resources"))), ("TOOLBOX_TESSERACT_PATH", Some(root.join("missing-tesseract")))]);
+        let input = root.join("scan.pdf");
+        make_pdf(&input, 1);
+        let request = |change: fn(&mut vision::OcrRequest)| {
+            let mut request = vision::OcrRequest { paths: vec![input.clone()], page_range: Some("1".into()), mode: "text".into(), force: false, languages: vec!["eng".into()], output_location: location(&root, "ocr") };
+            change(&mut request);
+            tauri::async_runtime::block_on(ocr_pdf(RunEvents::silent(), request))
+        };
+        let cases: [(fn(&mut vision::OcrRequest), &str); 4] = [
+            (|request| request.languages.clear(), "Choose at least one recognition language."),
+            (|request| request.languages = vec!["eng".into(), "xx".into()], "\"xx\" is not a recognition language Toolbox knows."),
+            (|request| request.mode = "pdfa".into(), "\"pdfa\" is not an OCR output. Choose a searchable PDF or a text file."),
+            (|request| request.page_range = Some("3-1".into()), "runs backwards"),
+        ];
+        for (change, message) in cases {
+            let outcomes = request(change);
+            assert_eq!(outcomes.len(), 1);
+            assert_eq!(outcomes[0].input_path, input);
+            let error = outcomes[0].error().expect(message);
+            assert!(matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput), "{message}: {:?}", error.kind);
+            assert!(error.message.contains(message), "{message}: {}", error.message);
+        }
+        let valid = request(|_| {});
+        assert!(valid[0].error().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::Unavailable)));
+        assert!(!root.join("ocr").read_dir().is_ok_and(|mut entries| entries.next().is_some()));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Sets process variables for one test and puts the old values back when dropped.
+    /// Hold `lock_process_env` for as long as this lives.
+    struct EnvGuard(Vec<(&'static str, Option<std::ffi::OsString>)>);
+
+    impl EnvGuard {
+        fn set(values: &[(&'static str, Option<PathBuf>)]) -> Self {
+            let saved = values.iter().map(|(key, _)| (*key, std::env::var_os(key))).collect();
+            for (key, value) in values {
+                match value { Some(value) => std::env::set_var(key, value), None => std::env::remove_var(key) }
+            }
+            Self(saved)
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (key, value) in self.0.drain(..) {
+                match value { Some(value) => std::env::set_var(key, value), None => std::env::remove_var(key) }
+            }
+        }
+    }
+
+    /// Writes a PDF whose pages are only pictures of text, the way a scanner makes them.
+    /// There is no text layer, so the words can come back only through OCR. A page with
+    /// no lines is a blank white scan.
+    fn scanned_pdf(path: &PathBuf, pages: &[&[&str]]) {
+        use flate2::{write::ZlibEncoder, Compression};
+        use lopdf::{dictionary, Document, Object, Stream};
+        use std::io::Write;
+        const WIDTH: usize = 1275;
+        const HEIGHT: usize = 1650;
+        const SIZE: f32 = 56.0;
+        let font = fontdue::Font::from_bytes(include_bytes!("../resources/fonts/DejaVuSans.ttf") as &[u8], fontdue::FontSettings::default()).unwrap();
+        let mut document = Document::with_version("1.7");
+        let pages_id = document.new_object_id();
+        let mut kids = Vec::new();
+        for lines in pages {
+            let mut pixels = vec![255u8; WIDTH * HEIGHT];
+            for (row, line) in lines.iter().enumerate() {
+                let baseline = 200 + row * 120;
+                let mut pen = 120.0f32;
+                for character in line.chars() {
+                    let (metrics, coverage) = font.rasterize(character, SIZE);
+                    let top = baseline as i32 - metrics.height as i32 - metrics.ymin;
+                    for y in 0..metrics.height {
+                        for x in 0..metrics.width {
+                            let (px, py) = (pen as i32 + metrics.xmin + x as i32, top + y as i32);
+                            if px < 0 || py < 0 || px as usize >= WIDTH || py as usize >= HEIGHT { continue; }
+                            let index = py as usize * WIDTH + px as usize;
+                            pixels[index] = pixels[index].min(255 - coverage[y * metrics.width + x]);
+                        }
+                    }
+                    pen += metrics.advance_width;
+                }
+            }
+            let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+            encoder.write_all(&pixels).unwrap();
+            let mut scan = Stream::new(dictionary! {
+                "Type" => "XObject", "Subtype" => "Image", "Width" => WIDTH as i64, "Height" => HEIGHT as i64,
+                "ColorSpace" => "DeviceGray", "BitsPerComponent" => 8, "Filter" => "FlateDecode",
+            }, encoder.finish().unwrap());
+            scan.allows_compression = false;
+            let scan_id = document.add_object(scan);
+            let content_id = document.add_object(Stream::new(dictionary! {}, b"q 612 0 0 792 0 0 cm /Scan Do Q".to_vec()));
+            let page_id = document.add_object(dictionary! {
+                "Type" => "Page", "Parent" => pages_id,
+                "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+                "Resources" => dictionary! { "XObject" => dictionary! { "Scan" => scan_id } }, "Contents" => content_id,
+            });
+            kids.push(Object::Reference(page_id));
+        }
+        document.objects.insert(pages_id, dictionary! { "Type" => "Pages", "Kids" => kids, "Count" => pages.len() as i64 }.into());
+        let catalog_id = document.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+        document.trailer.set("Root", catalog_id);
+        document.save(path).unwrap();
+    }
+
+    /// Points OCR at a real engine. Staged bundle resources win; otherwise the engine and
+    /// renderer come from PATH and the English data is the copy committed with the app.
+    /// Returns None, so the caller can skip, only when no engine exists and
+    /// TOOLBOX_REQUIRE_OCR_RESOURCES is unset.
+    fn real_ocr_engine() -> Option<EnvGuard> {
+        let resources = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources");
+        if resources.join("ocr/manifest.json").is_file() { return Some(EnvGuard::set(&[])); }
+        let runs = |program: &str, flag: &str| std::process::Command::new(program).arg(flag).output().is_ok_and(|result| result.status.success());
+        if runs("tesseract", "--version") && runs("pdftoppm", "-v") {
+            return Some(EnvGuard::set(&[("TOOLBOX_TESSDATA_PATH", Some(resources.join("ocr/tessdata/eng.traineddata")))]));
+        }
+        assert!(std::env::var_os("TOOLBOX_REQUIRE_OCR_RESOURCES").is_none(), "OCR resources are required but neither a staged bundle nor tesseract and pdftoppm on PATH were found");
+        eprintln!("skipping: no OCR engine is staged or on PATH");
+        None
+    }
+
+    fn ocr_text_request(paths: Vec<PathBuf>, output_location: OutputLocation) -> vision::OcrRequest {
+        vision::OcrRequest { paths, page_range: None, mode: "text".into(), force: false, languages: vec!["eng".into()], output_location }
+    }
+
+    #[test]
+    fn ocr_reads_an_image_only_scan_into_page_ordered_text_and_repeats_it_byte_for_byte() {
+        let _guard = crate::kit::lock_process_env();
+        let Some(_engine) = real_ocr_engine() else { return };
+        let root = sandbox("ocr-scan");
+        let input = root.join("scan.pdf");
+        scanned_pdf(&input, &[&["Quarterly invoice summary", "Northwind shipping ledger"], &["Second page closing remarks", "Thank you for reading"]]);
+        let original = std::fs::read(&input).unwrap();
+        let folder = location(&root, "ocr");
+
+        let first = assert_success("ocr first run", ocr_pdf(RunEvents::silent(), ocr_text_request(vec![input.clone()], folder.clone())));
+        let second = assert_success("ocr second run", ocr_pdf(RunEvents::silent(), ocr_text_request(vec![input.clone()], folder)));
+        let text = std::fs::read_to_string(&first[0]).unwrap();
+        let again = std::fs::read(&second[0]).unwrap();
+        let names = [&first[0], &second[0]].map(|path| path.file_name().unwrap().to_string_lossy().into_owned());
+        let input_after = std::fs::read(&input).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert_eq!(names, ["scan-ocr.txt".to_string(), "scan-ocr-1.txt".to_string()], "a second run gets a numbered name instead of overwriting");
+        assert_eq!(text.as_bytes(), again.as_slice(), "the same scan gives the same text");
+        assert_eq!(input_after, original, "the scan is never changed");
+        assert!(!text.contains('\r'), "lines end in LF: {text:?}");
+        assert!(text.ends_with('\n'), "{text:?}");
+        let pages = text.split('\u{c}').collect::<Vec<_>>();
+        assert_eq!(pages.len(), 2, "one form feed between two pages: {text:?}");
+        for (page, words) in pages.iter().zip([["Quarterly", "invoice", "Northwind", "ledger"], ["Second", "closing", "Thank", "reading"]]) {
+            for word in words { assert!(page.contains(word), "{word} is missing from {page:?}"); }
+        }
+        assert!(pages[0].find("Quarterly") < pages[0].find("Northwind"), "lines keep reading order: {:?}", pages[0]);
+    }
+
+    #[test]
+    fn ocr_reports_locked_and_blank_scans_beside_a_readable_one() {
+        let _guard = crate::kit::lock_process_env();
+        let Some(_engine) = real_ocr_engine() else { return };
+        let root = sandbox("ocr-batch");
+        let locked = root.join("locked.pdf");
+        let blank = root.join("blank.pdf");
+        let readable = root.join("readable.pdf");
+        std::fs::write(&locked, crate::kit::password::tests::pdf(Some(("owner", "user")))).unwrap();
+        scanned_pdf(&blank, &[&[]]);
+        scanned_pdf(&readable, &[&["Toolbox reads this scan"]]);
+        let paths = vec![locked.clone(), blank.clone(), readable.clone()];
+        let originals = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+
+        let outcomes = tauri::async_runtime::block_on(ocr_pdf(RunEvents::silent(), ocr_text_request(paths.clone(), location(&root, "ocr"))));
+        let written = std::fs::read_dir(root.join("ocr")).unwrap().count();
+        let text = outcomes.get(2).and_then(|outcome| outcome.output_paths().first()).and_then(|path| std::fs::read_to_string(path).ok()).unwrap_or_default();
+        let after = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), paths);
+        let locked_error = outcomes[0].error().expect("a locked scan fails");
+        assert_eq!(locked_error.kind, ErrorKind::InvalidInput);
+        assert_eq!(locked_error.message, "It's password-protected. Remove its password in File Security, then run OCR again.");
+        assert_eq!(locked_error.pointer, Some(crate::kit::contracts::OutcomePointer::Tool { tool_id: "lock-unlock".into() }));
+        let blank_error = outcomes[1].error().expect("a blank scan fails");
+        assert_eq!(blank_error.kind, ErrorKind::Processing);
+        assert_eq!(blank_error.message, "OCR completed but found no readable text.");
+        assert!(outcomes[0].output_paths().is_empty() && outcomes[1].output_paths().is_empty());
+        assert!(outcomes[2].error().is_none(), "the readable scan still runs: {:?}", outcomes[2].error());
+        assert!(text.contains("Toolbox reads this scan"), "{text:?}");
+        assert_eq!(written, 1, "only the readable scan writes a file");
+        assert_eq!(after, originals);
+    }
+
+    #[cfg(unix)]
+    fn fake_ocr_helpers(root: &PathBuf) -> [PathBuf; 3] {
+        use std::os::unix::fs::PermissionsExt;
+        let renderer = root.join("fake-pdftoppm");
+        let engine = root.join("fake-tesseract");
+        let tessdata = root.join("eng.traineddata");
+        std::fs::write(&renderer, "#!/bin/sh\ntouch \"${10}.png\"\n").unwrap();
+        std::fs::write(&engine, "#!/bin/sh\nprintf 'recognized words\\n'\n").unwrap();
+        std::fs::write(&tessdata, b"fake tessdata").unwrap();
+        for helper in [&renderer, &engine] { std::fs::set_permissions(helper, std::fs::Permissions::from_mode(0o755)).unwrap(); }
+        [renderer, engine, tessdata]
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ocr_names_the_missing_engine_renderer_or_english_data_for_every_file() {
+        let _guard = crate::kit::lock_process_env();
+        let root = sandbox("ocr-missing");
+        let [renderer, engine, tessdata] = fake_ocr_helpers(&root);
+        let missing = root.join("missing");
+        let inputs = vec![root.join("first.pdf"), root.join("second.pdf")];
+        for input in &inputs { make_pdf(input, 1); }
+        let cases = [
+            ("TOOLBOX_TESSERACT_PATH", "The text recognition engine is missing. Reinstall Toolbox."),
+            ("TOOLBOX_PDFTOPPM_PATH", "The PDF page renderer is missing. Reinstall Toolbox."),
+            ("TOOLBOX_TESSDATA_PATH", "The English recognition data is missing. Reinstall Toolbox."),
+        ];
+        let run = |name: &str| tauri::async_runtime::block_on(ocr_pdf(RunEvents::silent(), ocr_text_request(inputs.clone(), location(&root, name))));
+        for (variable, message) in cases {
+            let values = [("TOOLBOX_PDFTOPPM_PATH", &renderer), ("TOOLBOX_TESSERACT_PATH", &engine), ("TOOLBOX_TESSDATA_PATH", &tessdata)]
+                .map(|(key, value)| (key, Some(if key == variable { missing.clone() } else { value.clone() })));
+            let mut values = values.to_vec();
+            values.push(("TOOLBOX_RESOURCE_ROOT", Some(root.join("no-bundle"))));
+            let env = EnvGuard::set(&values);
+            let outcomes = run(variable);
+            drop(env);
+            assert_eq!(outcomes.len(), 2, "{variable}");
+            for outcome in &outcomes {
+                let error = outcome.error().unwrap_or_else(|| panic!("{variable}: {} ran without its resource", outcome.input_path.display()));
+                assert_eq!(error.kind, ErrorKind::Unavailable, "{variable}");
+                assert_eq!(error.message, message, "{variable}");
+                assert!(outcome.output_paths().is_empty());
+            }
+            assert_eq!(std::fs::read_dir(root.join(variable)).unwrap().count(), 0, "{variable} left an output behind");
+        }
+        let env = EnvGuard::set(&[("TOOLBOX_RESOURCE_ROOT", Some(root.join("no-bundle"))), ("TOOLBOX_PDFTOPPM_PATH", Some(renderer)), ("TOOLBOX_TESSERACT_PATH", Some(engine)), ("TOOLBOX_TESSDATA_PATH", Some(tessdata))]);
+        let restored = run("restored");
+        drop(env);
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(restored.iter().all(|outcome| outcome.error().is_none()), "the same files run once every resource is back: {restored:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ocr_fails_only_the_locked_file_in_a_batch() {
+        let _guard = crate::kit::lock_process_env();
+        let root = sandbox("ocr-locked");
+        let [renderer, engine, tessdata] = fake_ocr_helpers(&root);
+        let _env = EnvGuard::set(&[("TOOLBOX_RESOURCE_ROOT", Some(root.join("no-bundle"))), ("TOOLBOX_PDFTOPPM_PATH", Some(renderer)), ("TOOLBOX_TESSERACT_PATH", Some(engine)), ("TOOLBOX_TESSDATA_PATH", Some(tessdata))]);
+        let first = root.join("first.pdf");
+        let locked = root.join("locked.pdf");
+        let last = root.join("last.pdf");
+        make_pdf(&first, 1);
+        std::fs::write(&locked, crate::kit::password::tests::pdf(Some(("owner", "user")))).unwrap();
+        make_pdf(&last, 2);
+        let locked_original = std::fs::read(&locked).unwrap();
+
+        let outcomes = tauri::async_runtime::block_on(ocr_pdf(RunEvents::silent(), ocr_text_request(vec![first, locked.clone(), last], location(&root, "ocr"))));
+        let locked_after = std::fs::read(&locked).unwrap();
+        let texts = [&outcomes[0], &outcomes[2]].map(|outcome| outcome.output_paths().first().and_then(|path| std::fs::read_to_string(path).ok()));
+        let _ = std::fs::remove_dir_all(&root);
+
+        let error = outcomes[1].error().expect("the locked file fails");
+        assert_eq!(error.kind, ErrorKind::InvalidInput);
+        assert_eq!(error.message, "It's password-protected. Remove its password in File Security, then run OCR again.");
+        assert_eq!(error.pointer, Some(crate::kit::contracts::OutcomePointer::Tool { tool_id: "lock-unlock".into() }));
+        assert!(outcomes[1].output_paths().is_empty());
+        assert_eq!(texts, [Some("recognized words\n".to_string()), Some("recognized words\n\u{c}recognized words\n".to_string())]);
+        assert_eq!(locked_after, locked_original);
+    }
+
+    fn split_ranges_request(paths: Vec<PathBuf>, ranges: &str, output_location: OutputLocation) -> PageSelectionRequest {
+        PageSelectionRequest { paths, pages: vec![], page_ranges: Some(ranges.into()), split_mode: Some("ranges".into()), chunk_size: None, output_location }
+    }
+
+    fn images_range_request(paths: Vec<PathBuf>, range: &str, output_location: OutputLocation) -> PdfToImagesRequest {
+        PdfToImagesRequest { paths, dpi: 72, format: "png".into(), page_range: Some(range.into()), pages: None, output_location }
+    }
+
+    #[test]
+    fn split_and_pdf_to_images_reject_malformed_ranges_before_any_file_runs() {
+        let root = sandbox("malformed-page-ranges");
+        let inputs = vec![root.join("first.pdf"), root.join("second.pdf")];
+        std::fs::write(&inputs[0], b"not a pdf yet").unwrap();
+        make_pdf(&inputs[1], 3);
+        for (range, named) in [("3-1", "\"3-1\""), ("0-2", "\"0-2\""), ("1,,2", "Entry 2"), ("1, two", "\"two\"")] {
+            let split = tauri::async_runtime::block_on(split_pdf(RunEvents::silent(), split_ranges_request(inputs[..1].to_vec(), range, location(&root, "split"))));
+            let images = tauri::async_runtime::block_on(pdf_to_images(RunEvents::silent(), images_range_request(inputs.clone(), range, location(&root, "images"))));
+            for (tool, outcomes, expected) in [("split", split, &inputs[..1]), ("pdf to images", images, &inputs[..])] {
+                assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), expected, "{tool} {range}");
+                for outcome in &outcomes {
+                    let error = outcome.error().unwrap_or_else(|| panic!("{tool} accepted {range}"));
+                    assert_eq!(error.kind, ErrorKind::InvalidInput, "{tool} {range}");
+                    assert!(error.message.contains(named), "{tool} {range}: {}", error.message);
+                    assert!(outcome.output_paths().is_empty(), "{tool} {range}");
+                }
+            }
+        }
+        assert_eq!(std::fs::read_dir(root.join("split")).unwrap().count(), 0);
+        assert_eq!(std::fs::read_dir(root.join("images")).unwrap().count(), 0);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn split_and_pdf_to_images_accept_pages_spans_and_open_ends() {
+        let _split = remaining::tests::SPLIT_TEST_LOCK.lock().unwrap();
+        let _guard = crate::kit::lock_process_env();
+        let root = sandbox("page-range-grammar");
+        let input = root.join("document.pdf");
+        make_pdf(&input, 9);
+
+        let parts = assert_success("split ranges", split_pdf(RunEvents::silent(), split_ranges_request(vec![input.clone()], "1-3, 5, 8-", location(&root, "split"))));
+        let names = parts.iter().map(|path| path.file_name().unwrap().to_string_lossy().into_owned()).collect::<Vec<_>>();
+        assert_eq!(names, ["document-split-0.pdf", "document-split-1.pdf", "document-split-2.pdf"]);
+        let page_counts = parts.iter().map(|path| lopdf::Document::load(path).unwrap().get_pages().len()).collect::<Vec<_>>();
+        assert_eq!(page_counts, [3, 1, 2]);
+
+        let images = assert_success("pdf to images ranges", pdf_to_images(RunEvents::silent(), images_range_request(vec![input.clone()], "1-3, 5, 8-", location(&root, "images"))));
+        let names = images.iter().map(|path| path.file_name().unwrap().to_string_lossy().into_owned()).collect::<Vec<_>>();
+        assert_eq!(names, ["document-images-1.png", "document-images-2.png", "document-images-3.png", "document-images-5.png", "document-images-8.png", "document-images-9.png"]);
+
+        for (tool, outcomes) in [
+            ("split", tauri::async_runtime::block_on(split_pdf(RunEvents::silent(), split_ranges_request(vec![input.clone()], "1, 8-12", location(&root, "split-past-end"))))),
+            ("pdf to images", tauri::async_runtime::block_on(pdf_to_images(RunEvents::silent(), images_range_request(vec![input.clone()], "1, 10-", location(&root, "images-past-end"))))),
+        ] {
+            let error = outcomes[0].error().unwrap_or_else(|| panic!("{tool} accepted pages past the end"));
+            assert_eq!(error.kind, ErrorKind::Processing, "{tool}: {}", error.message);
+            assert!(outcomes[0].output_paths().is_empty(), "{tool}");
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn organize_command_rejects_empty_selected_scope_before_processing() {
         let root = sandbox("organize-empty-selection");
         let input = root.join("source.pdf"); make_pdf(&input, 1);
@@ -921,8 +1262,11 @@ mod command_tests {
         } else {
             assert!(!outcome.output_paths().is_empty(), "{name} reported success without an output");
             for output in outcome.output_paths() { assert!(output.is_file(), "{name} reported missing output {}", output.display()); }
-            let text = std::fs::read_to_string(&outcome.output_paths()[0]).unwrap_or_default();
+            let output = &outcome.output_paths()[0];
+            assert!(output.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.ends_with("-ocr.txt")), "{name} must save a -ocr text file: {}", output.display());
+            let text = std::fs::read_to_string(output).unwrap_or_default();
             assert!(text.contains("Toolbox page"), "{name} did not extract the fixture text: {text:?}");
+            assert!(!text.contains('\r'), "{name} must end lines in LF: {text:?}");
         }
         outcome.output_paths().to_vec()
     }
@@ -1064,8 +1408,72 @@ mod command_tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    fn assert_merge_stopped_by(outcomes: &[JobOutcome], paths: &[PathBuf], offender: &PathBuf, output: &PathBuf, message: &str) {
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), paths);
+        for outcome in outcomes {
+            let error = outcome.error().expect("every merge input fails");
+            assert!(outcome.output_paths().is_empty());
+            if outcome.input_path == *offender {
+                assert_eq!(error.kind, ErrorKind::LimitExceeded { limit: LimitKind::PageCount }, "{}", error.message);
+                assert!(error.message.contains(message), "{} should contain {message}", error.message);
+            } else {
+                assert_eq!(error.kind, ErrorKind::Processing);
+                assert!(error.message.contains(&format!("stopped because {} failed", offender.display())), "{}", error.message);
+            }
+        }
+        assert_eq!(std::fs::read_dir(output).unwrap().count(), 0, "no merged output is published");
+    }
+
+    #[test]
+    fn a_merge_crossing_the_recorded_page_total_fails_on_the_input_that_crossed_it() {
+        let root = sandbox("limit-merge-total");
+        let paths = ["first", "crosses", "last"].map(|stem| root.join(format!("{stem}.pdf"))).to_vec();
+        for (path, pages) in paths.iter().zip([2_500, 2_501, 1]) { make_pdf(path, pages); }
+        let originals = paths.iter().map(Original::of).collect::<Vec<_>>();
+        let output = root.join("out");
+        let outcomes = tauri::async_runtime::block_on(run_merge_pdfs(&MergePdfRequest { paths: paths.clone(), output_location: location(&root, "out"), output_path: None }));
+        for original in &originals { original.assert_untouched(); }
+        assert_eq!(crate::kit::common::limits::recorded("merge_pdfs").unwrap().max_pages, Some(5_000));
+        assert_merge_stopped_by(&outcomes, &paths, &paths[1], &output, "Adding crosses.pdf takes the merged PDF past 5,000 pages, over the limit for one PDF.");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_merge_input_over_the_recorded_page_count_fails_the_merge_on_that_input() {
+        let root = sandbox("limit-merge-input");
+        let paths = vec![root.join("short.pdf"), root.join("long.pdf")];
+        make_pdf(&paths[0], 1);
+        make_pdf(&paths[1], 5_001);
+        let output = root.join("out");
+        let outcomes = tauri::async_runtime::block_on(run_merge_pdfs(&MergePdfRequest { paths: paths.clone(), output_location: location(&root, "out"), output_path: None }));
+        assert_merge_stopped_by(&outcomes, &paths, &paths[1], &output, "More than 5,000 pages, over the limit for one PDF.");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    // Split takes one input per run, so a batch is a run per file into the same folder.
+    #[test]
+    fn a_split_batch_fails_only_the_pdf_over_the_recorded_page_count() {
+        let _split = remaining::tests::SPLIT_TEST_LOCK.lock().unwrap();
+        let root = sandbox("limit-split");
+        let offender = root.join("long.pdf");
+        let good = root.join("good.pdf");
+        make_pdf(&offender, 5_001);
+        make_pdf(&good, 2);
+        let originals = [Original::of(&offender), Original::of(&good)];
+        let output = location(&root, "out");
+        let outcomes = [&offender, &good].into_iter().flat_map(|path| tauri::async_runtime::block_on(split_pdf(RunEvents::silent(), PageSelectionRequest {
+            paths: vec![path.clone()], pages: vec![], page_ranges: None, split_mode: Some("pages".into()), chunk_size: None, output_location: output.clone(),
+        }))).collect::<Vec<_>>();
+        for original in &originals { original.assert_untouched(); }
+        assert_only_offender_limited(&outcomes, &offender, LimitKind::PageCount, "5,000");
+        assert_eq!(outcomes[1].output_paths().len(), 2);
+        assert_eq!(std::fs::read_dir(root.join("out")).unwrap().count(), 2, "only the good PDF's parts are written");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn every_registered_command_runs_with_real_fixtures_in_isolated_sandboxes() {
+        let _split = remaining::tests::SPLIT_TEST_LOCK.lock().unwrap();
         let _guard = crate::kit::lock_process_env();
         let root = sandbox("all");
         let image = root.join("image.png"); write_png(&image, 256, 44);
@@ -1162,7 +1570,7 @@ mod command_tests {
         outputs.extend(named(&mut naming, "split_pdf", pdf.clone(), assert_success("split", split_pdf(RunEvents::silent(), PageSelectionRequest { paths: vec![pdf.clone()], pages: vec![], page_ranges: None, split_mode: Some("pages".into()), chunk_size: None, output_location: location(&root, "split") }))));
         outputs.extend(named(&mut naming, "extract_pdf_images", image_pdf.clone(), assert_success("extract pdf images", extract_pdf_images(RunEvents::silent(), PdfToTextRequest { paths: vec![image_pdf.clone()], pages: None, output_location: location(&root, "extract pdf images") }))));
         outputs.extend(named(&mut naming, "sign_pdf", pdf.clone(), assert_success("sign", sign_pdf(RunEvents::silent(), SignPdfRequest { paths: vec![pdf.clone()], page: 0, text: "Signed".into(), signature_path: None, rectangle: PdfRect { x: 40.0, y: 40.0, width: 180.0, height: 60.0 }, scope: PageScope::All, output_location: location(&root, "sign") }))));
-        outputs.extend(named(&mut naming, "ocr_pdf", pdf.clone(), assert_ocr_adapter("ocr", ocr_pdf(RunEvents::silent(), VisionRequest { paths: vec![pdf.clone()], pages: None, output_location: location(&root, "ocr") }))));
+        outputs.extend(named(&mut naming, "ocr_pdf", pdf.clone(), assert_ocr_adapter("ocr", ocr_pdf(RunEvents::silent(), vision::OcrRequest { paths: vec![pdf.clone()], page_range: None, mode: "text".into(), force: false, languages: vec!["eng".into()], output_location: location(&root, "ocr") }))));
         outputs.extend(named(&mut naming, "remove_pdf_pages", pdf.clone(), assert_success("remove pages", remove_pdf_pages(RunEvents::silent(), PageSelectionRequest { paths: vec![pdf.clone()], pages: vec![0], page_ranges: None, split_mode: None, chunk_size: None, output_location: location(&root, "remove pages") }))));
         outputs.extend(named(&mut naming, "extract_pdf_pages", pdf.clone(), assert_success("extract pages", extract_pdf_pages(RunEvents::silent(), PageSelectionRequest { paths: vec![pdf.clone()], pages: vec![], page_ranges: Some("1".into()), split_mode: None, chunk_size: None, output_location: location(&root, "extract pages") }))));
         outputs.extend(named(&mut naming, "organize_pdf", pdf.clone(), assert_success("organize", organize_pdf(RunEvents::silent(), OrganizePdfRequest { paths: vec![pdf.clone()], page_order: vec![1, 0], delete_pages: vec![], rotate_pages: vec![RotatePage { page: 0, degrees: 90 }], scope: PageScope::All, output_location: location(&root, "organize") }))));
@@ -1234,8 +1642,8 @@ mod command_tests {
         outputs.extend(named(&mut naming, "image_metadata", image.clone(), assert_success("metadata", image_metadata(RunEvents::silent(), MetadataRequest { paths: vec![image.clone()], output_location: location(&root, "metadata") }))));
         outputs.extend(named(&mut naming, "adjust_image_tone", image.clone(), assert_success("tone", adjust_image_tone(RunEvents::silent(), ToneRequest { paths: vec![image.clone()], brightness: 20, contrast: 0.0, saturation: 0.0, exposure: 0.0, output_location: location(&root, "tone") }))));
         outputs.extend(named(&mut naming, "process_tiff_pages", tiff.clone(), assert_aggregate_success("tiff", &[tiff.clone()], run_process_tiff_pages(&TiffRequest { paths: vec![tiff.clone()], pages: None, output_location: location(&root, "tiff"), output_path: None }))));
-        outputs.extend(named(&mut naming, "blur_faces", image.clone(), assert_vision_adapter("face blur", blur_faces(RunEvents::silent(), VisionRequest { paths: vec![image.clone()], pages: None, output_location: location(&root, "face blur") }))));
-        outputs.extend(named(&mut naming, "remove_image_background", image.clone(), assert_vision_adapter("background removal", remove_image_background(RunEvents::silent(), VisionRequest { paths: vec![image.clone()], pages: None, output_location: location(&root, "background removal") }))));
+        outputs.extend(named(&mut naming, "blur_faces", image.clone(), assert_vision_adapter("face blur", blur_faces(RunEvents::silent(), VisionRequest { paths: vec![image.clone()], output_location: location(&root, "face blur") }))));
+        outputs.extend(named(&mut naming, "remove_image_background", image.clone(), assert_vision_adapter("background removal", remove_image_background(RunEvents::silent(), VisionRequest { paths: vec![image.clone()], output_location: location(&root, "background removal") }))));
         let docx = root.join("document.docx");
         std::fs::write(&docx, test_minimal_ooxml_package("docx")).unwrap();
         let docx_bytes = std::fs::read(&docx).unwrap();

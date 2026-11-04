@@ -389,7 +389,8 @@ test("home marks tools this build cannot run and keeps them out of the search hi
     await expandViews(page);
 
     const unavailable = UtilityRegistry.filter((tool) => tool.capability.nativeAvailability === "unavailable");
-    expect(unavailable.map((tool) => tool.title)).toEqual(expect.arrayContaining(["OCR PDF", "Blur Faces", "Remove Background"]));
+    expect(unavailable.map((tool) => tool.title)).toEqual(expect.arrayContaining(["Blur Faces", "Remove Background"]));
+    expect(unavailable.map((tool) => tool.title)).not.toContain("OCR PDF");
     for (const tool of unavailable) {
         const link = page.locator(`.view-tool-link[data-command-result="${tool.id}"]`);
         await expect(link).toContainText("Unavailable");
@@ -401,7 +402,11 @@ test("home marks tools this build cannot run and keeps them out of the search hi
     await expect(available).not.toContainText("Unavailable");
     await expect(available).not.toHaveAttribute("aria-describedby", /.+/);
 
-    await page.locator('.view-tool-link[data-command-result="pdf-ocr"]').click();
+    const ocr = page.locator('.view-tool-link[data-command-result="pdf-ocr"]');
+    await expect(ocr).not.toContainText("Unavailable");
+    await expect(ocr).not.toHaveAttribute("aria-describedby", /.+/);
+
+    await page.locator('.view-tool-link[data-command-result="image-blur-faces"]').click();
     await expect(page.getByText("Unavailable in this build.", { exact: true })).toBeVisible();
 });
 
@@ -1096,7 +1101,7 @@ test("editor command rails keep one document session while changing tools", asyn
 
 test("vision tools explain unavailable resources before file selection", async ({ page }) => {
     await page.goto("/");
-    for (const [index, id] of ["pdf-ocr", "image-blur-faces", "image-remove-bg"].entries()) {
+    for (const [index, id] of ["image-blur-faces", "image-remove-bg"].entries()) {
         const utility = UtilityRegistry.find((item) => item.id === id);
         expect(utility).toBeDefined();
         if (!utility) continue;
@@ -1457,7 +1462,7 @@ test("PDF conversion visibly rejects retained files when an action changes forma
     expect(inspections).toHaveLength(0);
 });
 
-test("PDF page-scoped conversions send the selected pages and keep OCR gated", async ({ page }) => {
+test("PDF page-scoped conversions send the selected pages and reach OCR from the rail", async ({ page }) => {
     await page.goto("/");
     await openFromHome(page, "PDF to Text");
     await chooseFixture(page, "/local/document.scoped.pdf");
@@ -1477,8 +1482,74 @@ test("PDF page-scoped conversions send the selected pages and keep OCR gated", a
     expect(textInvocation?.args).toMatchObject({ request: { paths: ["/local/document.scoped.pdf"], pages: [1] } });
 
     const ocrButton = page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "OCR PDF", exact: true });
-    await expect(ocrButton).toBeDisabled();
-    await expect(ocrButton).toHaveAttribute("title", "OCR PDF is unavailable in this build");
+    await expect(ocrButton).toBeEnabled();
+    await expect(ocrButton).not.toHaveAttribute("title", /unavailable/);
+    await ocrButton.click();
+    await expect(page.getByRole("button", { name: "Export OCR PDF", exact: true })).toBeVisible();
+    await expect(page.getByText("Unavailable in this build.", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Output preview unavailable. Export recognizes the text on each page and saves it as a text file.", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Export OCR PDF", exact: true }).click();
+    expect((await lastInvocation(page, "ocr_pdf"))?.args).toMatchObject({ request: { paths: ["/local/document.scoped.pdf"], pageRange: null, mode: "text" } });
+    await page.getByRole("img", { name: "Source page preview 1" }).click();
+    await expect(pageOne).not.toBeChecked();
+    await page.getByRole("button", { name: "Export OCR PDF", exact: true }).click();
+    expect((await lastInvocation(page, "ocr_pdf"))?.args).toMatchObject({ request: { paths: ["/local/document.scoped.pdf"], pageRange: "2-3", mode: "text" } });
+});
+
+test("OCR sends scans as a text-file request to the folder chosen in Settings", async ({ page }) => {
+    await storeOutputSettings(page, { mode: "customFolder", folder: "/fake/shell/output" });
+    await page.goto("/");
+    await openFromHome(page, "PDF to Text");
+    await page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "OCR PDF", exact: true }).click();
+    await page.evaluate((fixtures) => { (window as TestWindow).__toolboxDialogResults = [fixtures]; }, [pdfFixturePath, "/local/second-scan.pdf"]);
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await expect(page.getByText("second-scan.pdf", { exact: true }).first()).toBeVisible();
+    await page.getByRole("button", { name: "Export OCR PDF", exact: true }).click();
+
+    const invocation = await lastInvocation(page, "ocr_pdf");
+    expect((invocation?.args as { request?: unknown } | undefined)?.request).toEqual({
+        paths: [pdfFixturePath, "/local/second-scan.pdf"],
+        pageRange: null,
+        mode: "text",
+        force: false,
+        languages: ["eng"],
+        outputLocation: { customFolder: "/fake/shell/output" },
+    });
+});
+
+test("OCR shows a missing engine, a locked scan and a blank scan beside a saved text file", async ({ page }) => {
+    const textFile = "/fake/shell/output/document-ocr.txt";
+    const locked = "It's password-protected. Remove its password in File Security, then run OCR again.";
+    await page.goto("/");
+    await page.evaluate((outcomes) => { (window as TestWindow).__toolboxProcessingResults = outcomes; }, [
+        succeeded(pdfFixturePath, [textFile], { detail: "1 page recognized. English." }),
+        failed("/local/no-engine.pdf", "unavailable", "The text recognition engine is missing. Reinstall Toolbox."),
+        failed("/local/locked.pdf", "invalidInput", locked, { failure: { kind: "invalidInput", message: locked, pointer: { kind: "tool", toolId: "lock-unlock" } } }),
+        failed("/local/blank.pdf", "processing", "OCR completed but found no readable text."),
+    ]);
+    await openFromHome(page, "PDF to Text");
+    await page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "OCR PDF", exact: true }).click();
+    await chooseFixture(page, pdfFixturePath);
+    await page.getByRole("button", { name: "Export OCR PDF", exact: true }).click();
+
+    const rows = page.getByRole("list", { name: "Results" }).getByRole("listitem");
+    await expect(rows).toHaveCount(4);
+    await expect(rows.nth(0)).toContainText("document-ocr.txt");
+    await expect(rows.nth(0)).toContainText("1 page recognized. English.");
+    await rows.nth(0).getByRole("button", { name: "Open document-ocr.txt", exact: true }).click();
+    await rows.nth(0).getByRole("button", { name: "Show in Finder: document-ocr.txt", exact: true }).click();
+    expect(await fileActionInvocations(page)).toEqual([
+        { command: "open_output_path", args: { path: textFile } },
+        { command: "reveal_output_path", args: { path: textFile } },
+    ]);
+    await expect(rows.nth(1)).toContainText("Unavailable");
+    await expect(rows.nth(1)).toContainText("The text recognition engine is missing. Reinstall Toolbox.");
+    await expect(rows.nth(2)).toContainText(locked);
+    await expect(rows.nth(3)).toContainText("OCR completed but found no readable text.");
+    for (const index of [1, 2, 3]) await expect(rows.nth(index).getByRole("button", { name: /^Show in Finder|^Open .*\.txt$/ })).toHaveCount(0);
+
+    await rows.nth(2).getByRole("button", { name: "Open Lock & Unlock", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Lock & Unlock", exact: true })).toBeVisible();
 });
 
 test("rotate PDF sends the chosen direction and zero-based pages", async ({ page }) => {
@@ -1896,6 +1967,66 @@ test("files over a limit fail alone with the limit message while the other rows 
     await expect(rows.nth(4)).toContainText("The image could not be read.");
     await expect(rows.nth(4).getByRole("button", { name: "Retry broken.png", exact: true })).toBeVisible();
     await expect(resultSummaryStatus(page)).toHaveText("Done. 1 compressed, 4 failed");
+});
+
+test("a merge over the page limit names the input that crossed it and every other row says the merge stopped there", async ({ page }) => {
+    const files = ["/local/leases/lease-agreement.pdf", "/local/leases/lease-addendum.pdf", "/local/leases/lease-schedule.pdf"];
+    const limitMessage = "Adding lease-addendum.pdf takes the merged PDF past 5,000 pages, over the limit for one PDF. Merge fewer pages and try again.";
+    const stopped = `Aggregate operation stopped because ${files[1]} failed: ${limitMessage}`;
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Merge PDF" }).click();
+    await page.evaluate((files) => { (window as TestWindow).__toolboxDialogResults = [[...files]]; }, files);
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await page.evaluate((outcomes) => { (window as TestWindow).__toolboxProcessingResults = outcomes; }, [
+        failed(files[0], "processing", stopped),
+        overLimit(files[1], "pageCount", limitMessage),
+        failed(files[2], "processing", stopped),
+    ]);
+    await page.locator(".workspace-primary-action").click();
+    await page.getByRole("dialog").getByRole("button", { name: "Save" }).click();
+
+    const rows = page.getByRole("list", { name: "Results" }).getByRole("listitem");
+    await expect(rows).toHaveCount(3);
+    await expect(rows.nth(1)).toHaveAttribute("data-state", "failed");
+    await expect(rows.nth(1)).toContainText("lease-addendum.pdf");
+    await expect(rows.nth(1)).toContainText(limitMessage);
+    await expect(rows.nth(1)).toContainText("Failed, over the limit");
+    await expect(rows.nth(1).getByRole("button", { name: /^Retry/ })).toHaveCount(0);
+    for (const index of [0, 2]) {
+        await expect(rows.nth(index)).toHaveAttribute("data-state", "failed");
+        await expect(rows.nth(index)).toContainText(`stopped because ${files[1]} failed`);
+        await expect(rows.nth(index)).not.toContainText("Failed, over the limit");
+    }
+    await expect(page.getByRole("button", { name: /^Open .*merged/ })).toHaveCount(0);
+});
+
+test("a split over the page limit fails alone and the next PDF in the batch splits normally", async ({ page }) => {
+    const limitMessage = "More than 5,000 pages, over the limit for one PDF. Use fewer pages and try again.";
+    const longFile = "/local/split/drawings-full-set.pdf";
+    const goodFile = "/local/split/annual-report.pdf";
+    const goodOutputs = ["/local/split/annual-report-split-page-1.pdf", "/local/split/annual-report-split-page-2.pdf"];
+    await page.goto("/");
+    await openFromHome(page, "Split PDF");
+    const rows = page.getByRole("list", { name: "Results" }).getByRole("listitem");
+
+    await chooseFixture(page, longFile);
+    await page.evaluate((outcomes) => { (window as TestWindow).__toolboxProcessingResults = outcomes; }, [overLimit(longFile, "pageCount", limitMessage)]);
+    await page.getByRole("button", { name: "Export Split PDF" }).click();
+    await expect(rows).toHaveCount(1);
+    await expect(rows.nth(0)).toHaveAttribute("data-state", "failed");
+    await expect(rows.nth(0)).toContainText("drawings-full-set.pdf");
+    await expect(rows.nth(0)).toContainText(limitMessage);
+    await expect(rows.nth(0)).toContainText("Failed, over the limit");
+
+    await chooseFixture(page, goodFile);
+    await page.evaluate((outcomes) => { (window as TestWindow).__toolboxProcessingResults = outcomes; }, [succeeded(goodFile, goodOutputs)]);
+    await page.getByRole("button", { name: "Export Split PDF" }).click();
+    await expect(rows).toHaveCount(1);
+    await expect(rows.nth(0)).toHaveAttribute("data-state", "succeeded");
+    await expect(rows.nth(0)).not.toContainText(limitMessage);
+    await expect(rows.nth(0)).toContainText("2 files, annual-report-split-page-1.pdf to annual-report-split-page-2.pdf");
+    await expect(rows.nth(0).getByRole("button", { name: "Open annual-report-split-page-1.pdf", exact: true })).toBeVisible();
+    await expect(resultSummaryStatus(page)).toHaveText("Done. 1 split");
 });
 
 test("output action state resets and ignores stale completions", async ({ page }) => {
