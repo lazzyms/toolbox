@@ -13,7 +13,7 @@ import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { NativeSelect } from '../components/ui/native-select';
 import { Slider } from '../components/ui/slider';
-import type { PdfDocument, PdfPage, PdfTextRun } from '../features/pdf-editor/contracts';
+import type { PdfDocument, PdfPage, PdfSceneExportRequest, PdfTextRun } from '../features/pdf-editor/contracts';
 import { colorTokens, readColorToken } from '../features/pdf-editor/colorTokens';
 import { SceneCanvas } from '../features/pdf-editor/SceneCanvas';
 import { sceneFromDocument, visibleBounds } from '../features/pdf-editor/scene';
@@ -120,7 +120,7 @@ export const PDFEditorWorkspaceView = ({
     onRun={async (paths, outputLocation, { runId }) => {
       const [inputPath] = paths;
       if (!inputPath || !session.current || session.current.path !== inputPath) throw new Error('Select exactly one open PDF before exporting.');
-      const results = await invoke<ToolResult>('export_pdf_scene', { runId, request: { paths, scene: session.current.scene, outputLocation } });
+      const results = await invoke<ToolResult>('export_pdf_scene', { runId, request: { paths, scene: session.current.scene, outputLocation } satisfies PdfSceneExportRequest });
       return results.map((result) => result.failure ? { ...result, failure: { ...result.failure, message: pdfEditorErrorMessage(result.failure.message, 'export') } } : result);
     }}>
     {({ files, run, loading, destination }) => {
