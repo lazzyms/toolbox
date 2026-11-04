@@ -15,7 +15,7 @@ import { shortenHomePath, useHomeDir } from "../homePath";
 import type { OutputMode } from "../contracts";
 import { ShortcutHint } from "../components/ShortcutHint";
 import { isWindows, shortcutAria, shortcutLabel, shortcuts } from "../shortcuts";
-import { inAppUpdatesEnabled } from "../updates";
+import { inAppUpdatesEnabled, installIfApproved } from "../updates";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
@@ -260,14 +260,7 @@ const InAppUpdatesSection = () => {
       }
       setVersion(update.version);
       setState("available");
-      const approved = await confirm(
-        `Toolbox ${update.version} is available. Download and install it now? The app will restart.`,
-        { title: "Update available", kind: "info" },
-      );
-      if (!approved) return;
-      setState("installing");
-      await update.downloadAndInstall();
-      await relaunch();
+      await installIfApproved(update, { confirm, relaunch }, () => setState("installing"));
     } catch {
       setState("failed");
     }
