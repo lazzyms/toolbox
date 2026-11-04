@@ -5,12 +5,12 @@ import { UtilityRegistry, toolsForWorkspace, workspaceById } from "../../../src/
 import { ToolAvailabilityProvider } from "../../../src/ToolAvailabilityContext";
 import { OutputLocationContext } from "../../../src/outputLocation";
 import { PDFEditorWorkspaceView } from "../../../src/views/PDFEditorWorkspaceView";
-import type { PdfEditorBatchTool, PdfEditorBatchTools } from "../../../src/features/pdf-editor/batchTools";
-import type { AtomicToolId, ToolCommand, ToolDefinition, ToolWorkspaceDefinition } from "../../../src/contracts";
+import { pdfEditorBatchTools, type PdfEditorBatchTool, type PdfEditorBatchTools } from "../../../src/features/pdf-editor/batchTools";
+import type { AtomicToolId, OutputLocation, ToolCommand, ToolDefinition, ToolWorkspaceDefinition } from "../../../src/contracts";
 import type { ToolAvailabilitySnapshot } from "../../../src/toolFlags";
 import "../../../src/styles/app.css";
 
-// No shipped PDF Editor tool uses the batch surface yet, so the harness adds one that exists only in tests.
+// Besides the shipped batch tools, the harness adds an export tool that exists only in tests.
 const testToolId = "pdf-test-batch" as AtomicToolId;
 const testTool: ToolDefinition = {
   id: testToolId,
@@ -39,7 +39,7 @@ const testBatchTool: PdfEditorBatchTool = {
   description: "Runs the test command on every PDF.",
   request: (paths, outputLocation) => ({ paths, outputLocation, mode: "test" }),
 };
-const batchTools: PdfEditorBatchTools = { [testToolId]: testBatchTool };
+const batchTools: PdfEditorBatchTools = { ...pdfEditorBatchTools, [testToolId]: testBatchTool };
 
 const pdfEditor = workspaceById("pdf-editor")!;
 const workspace: ToolWorkspaceDefinition = { ...pdfEditor, toolIds: [...pdfEditor.toolIds, testToolId] };
@@ -50,9 +50,15 @@ const everyToolEnabled = {
   enabledByTool: Object.fromEntries([...UtilityRegistry, testTool].map((tool) => [tool.id, true])),
 } as ToolAvailabilitySnapshot;
 
+// ?tool= opens another rail tool first, and ?folder= saves to a custom folder instead of next to each file.
+const query = new URLSearchParams(window.location.search);
+const firstTool = tools.find((tool) => tool.id === query.get("tool")) ?? testTool;
+const folder = query.get("folder");
+const outputLocation: OutputLocation = folder ? { customFolder: folder } : "alongsideInput";
+
 // Like the main page, a rail switch reopens the new tool with the files that were open.
 const Harness = () => {
-  const [active, setActive] = useState({ tool: testTool, paths: [] as readonly string[] });
+  const [active, setActive] = useState({ tool: firstTool, paths: [] as readonly string[] });
   const [openPaths, setOpenPaths] = useState<readonly string[]>([]);
   return (
     <div className="app-shell app-shell--view">
@@ -74,7 +80,7 @@ const Harness = () => {
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <ToolAvailabilityProvider snapshot={everyToolEnabled}>
-    <OutputLocationContext.Provider value="alongsideInput">
+    <OutputLocationContext.Provider value={outputLocation}>
       <Harness />
     </OutputLocationContext.Provider>
   </ToolAvailabilityProvider>,

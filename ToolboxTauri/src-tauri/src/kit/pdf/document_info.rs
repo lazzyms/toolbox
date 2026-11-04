@@ -209,20 +209,32 @@ pub struct PdfDocumentInfo {
 }
 
 pub fn read(path: &Path, password: Option<&str>) -> Result<PdfDocumentInfo, ToolError> {
-    let bytes = std::fs::read(path).map_err(|error| ToolError::processing(format!("Could not read the PDF: {error}")))?;
+    load(&read_bytes(path)?, password).map(|document| from_document(&document))
+}
+
+pub(crate) fn read_bytes(path: &Path) -> Result<Vec<u8>, ToolError> {
+    std::fs::read(path).map_err(|error| ToolError::processing(format!("Could not read the PDF: {error}")))
+}
+
+/// Opens a PDF held in memory, decrypting it with the open password when it needs one.
+pub(crate) fn load(bytes: &[u8], password: Option<&str>) -> Result<Document, ToolError> {
     let options = LoadOptions { password: password.map(str::to_owned), ..LoadOptions::default() };
-    let document = Document::load_mem_with_options(&bytes, options).map_err(super::pdf_load_error)?;
+    let document = Document::load_mem_with_options(bytes, options).map_err(super::pdf_load_error)?;
     if document.is_encrypted() {
         return Err(match password {
             Some(_) => ToolError::wrong_password(WRONG_PASSWORD),
             None => ToolError::invalid_input("Enter the PDF password."),
         });
     }
+    Ok(document)
+}
+
+pub(crate) fn from_document(document: &Document) -> PdfDocumentInfo {
     let mut unsupported = Vec::new();
-    let info = read_info(&document, &mut unsupported);
-    let xmp = read_xmp(&document, &mut unsupported);
+    let info = read_info(document, &mut unsupported);
+    let xmp = read_xmp(document, &mut unsupported);
     let conflicts = xmp.as_ref().map(|xmp| conflicts(&info, &xmp.values)).unwrap_or_default();
-    Ok(PdfDocumentInfo { info, xmp, conflicts, unsupported })
+    PdfDocumentInfo { info, xmp, conflicts, unsupported }
 }
 
 fn conflicts(info: &PdfProperties, xmp: &PdfProperties) -> Vec<PropertyConflict> {

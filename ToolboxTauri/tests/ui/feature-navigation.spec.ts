@@ -157,6 +157,11 @@ if (command === "preview_pdf_scene_pages") return (args as { request: { pageIndi
                     return { width, height, dataUrl: `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='${width}' height='${height}'%3E%3Crect width='100%25' height='100%25' fill='white'/%3E%3C/svg%3E` };
                 }
                 if (command === "inspect_image_metadata") return ["fixture image"];
+                if (command === "inspect_pdf_privacy") {
+                    const none = { title: null, author: null, subject: null, keywords: null, creator: null, producer: null, creationDate: null, modificationDate: null };
+                    const report = { pageCount: 1, documentInformation: none, xmp: { summary: null, conflicts: [] }, encryption: null, identifiers: { documentId: null, producer: null }, unsupported: [] };
+                    return (args as { request: { paths: string[] } }).request.paths.map((inputPath) => ({ inputPath, outputPaths: [], detail: JSON.stringify(report), state: "succeeded", failure: null, reason: null, warnings: [] }));
+                }
                 if (command === "plugin:path|resolve_directory") return "/Users/test";
                 if (command.startsWith("plugin:")) return null;
 
@@ -408,7 +413,7 @@ test("home marks tools this build cannot run and keeps them out of the search hi
 test(`search finds and opens all ${UtilityRegistry.length} registered tool actions`, async ({ page }) => {
     await page.goto("/");
     const search = page.getByRole("textbox", { name: "Search tools" });
-    expect(UtilityRegistry).toHaveLength(35);
+    expect(UtilityRegistry).toHaveLength(36);
 
     for (const utility of UtilityRegistry) {
         await search.fill(utility.title);
@@ -2116,6 +2121,13 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
     const action = page.locator(".workspace-primary-action");
     await expect(action).toBeEnabled();
     await action.click();
+    // A read-only report tool sends only the paths and shows a report instead of saved results.
+    if (utility.capability.outputSuffix === "") {
+        await expect(page.getByRole("region", { name: pdfFixtureName, exact: true }).getByText("None found", { exact: true })).toHaveCount(5);
+        const reportRuns = await page.evaluate((command) => ((window as TestWindow).__toolboxInvocations ?? []).filter((call) => call.command === command), utility.command);
+        expect(reportRuns.map(({ args }) => (args as { request: unknown }).request)).toEqual([{ paths: [selectedFixturePath] }]);
+        return;
+    }
     if (["pdf-merge", "pdf-compare", "images-to-pdf", "gif-create"].includes(utility.id)) await confirmSave(page);
 
     await expect(page.getByText("Test output", { exact: true })).toBeVisible();
@@ -2132,7 +2144,7 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
 };
 
 test.describe("registered feature actions", () => {
-    expect(UtilityRegistry).toHaveLength(35);
+    expect(UtilityRegistry).toHaveLength(36);
 
     for (const utility of UtilityRegistry) {
         test(`${utility.id} accepts the fixture and runs with the Settings default`, async ({ page }) => {
@@ -2668,13 +2680,13 @@ test.describe("many-to-one save step", () => {
     });
 });
 
-test("PDF Editor rail lists More tools after a label and keeps files across switches", async ({ page }) => {
+test("PDF Editor rail lists Details and More tools after their labels and keeps files across switches", async ({ page }) => {
     await page.goto("/");
     await openFromHome(page, "Rotate PDFs");
     const rail = page.getByRole("toolbar", { name: "PDF Editor tools" });
-    await expect(rail.getByRole("button")).toHaveText(["Edit PDF", "Organize PDF", "Merge PDF", "Split PDF", "Crop PDF", "Add PDF Page Numbers", "Redact PDF", "Rotate PDFs", "Repair PDF", "Compare PDFs", "Extract PDF Pages"].map((title) => new RegExp(`^${title}`)));
-    await expect(rail.locator(".workspace-command-group")).toHaveText("More");
-    await expect(rail.locator(".workspace-command-group + button")).toHaveAccessibleName("Rotate PDFs");
+    await expect(rail.getByRole("button")).toHaveText(["Edit PDF", "Organize PDF", "Merge PDF", "Split PDF", "Crop PDF", "Add PDF Page Numbers", "Redact PDF", "Privacy Check", "Rotate PDFs", "Repair PDF", "Compare PDFs", "Extract PDF Pages"].map((title) => new RegExp(`^${title}`)));
+    await expect(rail.locator(".workspace-command-group")).toHaveText(["Details", "More"]);
+    await expect(rail.locator(".workspace-command-group + button")).toHaveText([/^Privacy Check/, /^Rotate PDFs/]);
     await expect(rail.getByRole("button", { name: "Rotate PDFs" })).toHaveAttribute("aria-pressed", "true");
 
     await chooseFixture(page, "/local/document.scoped.pdf");
