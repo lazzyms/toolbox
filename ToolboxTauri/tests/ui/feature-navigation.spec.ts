@@ -1048,7 +1048,7 @@ const chooseFixture = async (page: Page, selectedPath: string) => {
     await expect(page.getByText(path.basename(selectedPath), { exact: true }).first()).toBeVisible();
 };
 
-test("image metadata inspection shows the structured report for each file", async ({ page }) => {
+test("image metadata inspection shows labelled categories for each file", async ({ page }) => {
     await page.goto("/");
     await openFromHome(page, "Image Metadata");
     await chooseFixture(page, fixturePath);
@@ -1056,9 +1056,10 @@ test("image metadata inspection shows the structured report for each file", asyn
     await page.getByRole("button", { name: "Inspect metadata", exact: true }).click();
 
     expect((await lastInvocation(page, "inspect_image_metadata"))?.args).toMatchObject({ request: { paths: [fixturePath] } });
-    const report = page.locator(".workspace-report");
-    await expect(report).toContainText('"status": "report"');
-    await expect(report).toContainText('"orientation": 6');
+    const report = page.getByRole("region", { name: `Metadata in ${fixtureName}` });
+    await expect(report.locator(".image-metadata-row").filter({ hasText: "Camera" })).toContainText("Removed");
+    await expect(report.locator(".image-metadata-row").filter({ hasText: "Orientation" })).toContainText("Rotate 90° clockwise to show upright");
+    await expect(report).not.toContainText('"status"');
     expect(await invocationCount(page, "image_metadata")).toBe(0);
 });
 

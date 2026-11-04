@@ -2662,6 +2662,60 @@ mod command_tests {
         }
 
         #[test]
+        fn inspect_returns_one_report_per_readable_file_and_one_error_per_unreadable_file() {
+            let root = sandbox("metadata-mixed-batch");
+            let all = Wanted { exif: true, gps: true, orientation: Some(6), xmp: true, iptc: true, comments: true, icc: true };
+            let folder = root.join("folder.jpg");
+            std::fs::create_dir_all(&folder).unwrap();
+            let truncated = fixtures::jpeg(all);
+            // (path, original bytes when the file exists, expected readable)
+            let mut entries: Vec<(PathBuf, Option<Vec<u8>>, bool)> = vec![
+                (root.join("missing.png"), None, false),
+                (folder.clone(), None, false),
+            ];
+            for (format, extension) in FORMATS {
+                entries.push((root.join(format!("camera.{extension}")), Some(fixture(format, all)), true));
+                entries.push((root.join(format!("plain.{extension}")), Some(fixture(format, Wanted::default())), true));
+            }
+            entries.insert(3, (root.join("notes.txt"), Some(b"not an image".to_vec()), false));
+            entries.insert(6, (root.join("cut.jpg"), Some(truncated[..truncated.len() / 2].to_vec()), false));
+            for (path, bytes, _) in &entries { if let Some(bytes) = bytes { std::fs::write(path, bytes).unwrap(); } }
+
+            let paths = entries.iter().map(|(path, _, _)| path.clone()).collect::<Vec<_>>();
+            let results = inspect_image_metadata(MetadataRequest { paths: paths.clone(), output_location: OutputLocation::AlongsideInput });
+
+            assert_eq!(results.len(), entries.len(), "exactly one result per requested file");
+            let readable = entries.iter().filter(|(_, _, readable)| *readable).count();
+            assert_eq!(results.iter().filter(|result| matches!(result, MetadataInspection::Report(_))).count(), readable, "one report per readable file");
+            assert_eq!(results.iter().filter(|result| matches!(result, MetadataInspection::Error(_))).count(), entries.len() - readable, "one error per unreadable file");
+            for (result, (path, bytes, readable)) in results.iter().zip(&entries) {
+                match result {
+                    MetadataInspection::Report(report) => {
+                        assert!(*readable, "{} should have failed", path.display());
+                        assert_eq!(&report.path, path, "reports keep request order");
+                        let carries = path.file_stem().unwrap() == "camera";
+                        assert_eq!((report.metadata.exif, report.metadata.gps, report.metadata.xmp, report.metadata.icc), (carries, carries, carries, carries), "{}", path.display());
+                        assert_eq!(report.metadata.orientation, carries.then_some(6), "{}", path.display());
+                    }
+                    MetadataInspection::Error(error) => {
+                        assert!(!readable, "{} should have been read: {}", path.display(), error.error.message);
+                        assert_eq!(&error.path, path, "errors keep request order");
+                        assert!(!error.error.message.is_empty());
+                    }
+                }
+                if let Some(bytes) = bytes { assert_eq!(&std::fs::read(path).unwrap(), bytes, "inspection never modifies {}", path.display()); }
+            }
+            let codes = results.iter().filter_map(|result| match result { MetadataInspection::Error(error) => Some(error.error.code), _ => None }).collect::<Vec<_>>();
+            assert_eq!(codes, vec![MetadataErrorCode::Unreadable, MetadataErrorCode::Unreadable, MetadataErrorCode::UnsupportedFormat, MetadataErrorCode::Truncated]);
+
+            let wire = serde_json::to_value(&results).unwrap();
+            let statuses = wire.as_array().unwrap().iter().map(|item| item["status"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+            let expected = entries.iter().map(|(_, _, readable)| if *readable { "report" } else { "error" }.to_string()).collect::<Vec<_>>();
+            assert_eq!(statuses, expected, "every wire item is tagged report or error for the UI");
+            let _ = std::fs::remove_dir_all(root);
+        }
+
+        #[test]
         fn every_truncation_of_every_format_is_an_error_and_never_panics() {
             let all = Wanted { exif: true, gps: true, orientation: Some(8), xmp: true, iptc: true, comments: true, icc: true };
             for (format, _) in FORMATS {

@@ -1493,3 +1493,33 @@ kbd.shortcut-hint {
   gap: 7px;
   overflow-x: auto;
 }
+.image-metadata-report {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.image-metadata-rows {
+  display: grid;
+  margin: 0;
+}
+.image-metadata-row {
+  display: grid;
+  grid-template-columns: minmax(84px, auto) minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+}
+.image-metadata-row:first-child {
+  border-top: 0;
+}
+.image-metadata-row dt {
+  font-weight: 600;
+}
+.image-metadata-row dd {
+  margin: 0;
+}
+.image-metadata-row .workspace-note {
+  margin-top: 0;
+}

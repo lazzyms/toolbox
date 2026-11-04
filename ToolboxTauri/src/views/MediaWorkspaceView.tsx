@@ -12,6 +12,7 @@ import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ShortcutHint } from "../components/ShortcutHint";
 import { shortcutTarget } from "../shortcuts";
+import { ImageMetadataReport } from "./ImageMetadataReport";
 
 type TiffFrame = { key: string; path: string; page: number; preview: ImagePreview };
 export type TiffInspection =
@@ -39,12 +40,28 @@ export const MediaWorkspaceView = ({ utility: activeUtility, initialPaths, onFil
   const [iconSizes, setIconSizes] = useState(iconSizesByPreset.macos);
   const [metadataMode, setMetadataMode] = useState<"inspect" | "strip">("strip");
   const [report, setReport] = useState<ImageMetadataInspection[]>([]);
+  const [inspectError, setInspectError] = useState<string>();
+  const [inspecting, setInspecting] = useState(false);
   const [selectedTiffFrameIndex, setSelectedTiffFrameIndex] = useState(0);
   const [tiffInspection, setTiffInspection] = useState<TiffInspection>({ kind: "idle" });
 
   useEffect(() => {
     setReport([]);
+    setInspectError(undefined);
   }, [activeUtility.id]);
+
+  const inspectMetadata = async (paths: string[], outputLocation: unknown) => {
+    setInspecting(true);
+    setInspectError(undefined);
+    try {
+      setReport(await invoke<ImageMetadataInspection[]>("inspect_image_metadata", { request: { paths, outputLocation } }));
+    } catch (error) {
+      setReport([]);
+      setInspectError(String(error));
+    } finally {
+      setInspecting(false);
+    }
+  };
 
   const selectPreset = (preset: string) => {
     setIconPreset(preset);
@@ -185,12 +202,14 @@ export const MediaWorkspaceView = ({ utility: activeUtility, initialPaths, onFil
               <Button
                 variant="ghost"
                 size="sm"
-                disabled={loading || files.length === 0}
-                onClick={async () => setReport(await invoke<ImageMetadataInspection[]>("inspect_image_metadata", { request: { paths: files, outputLocation } }))}
+                disabled={loading || inspecting || files.length === 0}
+                onClick={() => void inspectMetadata(files, outputLocation)}
               >
                 Inspect metadata
               </Button>
-              {report.length > 0 && <pre className="workspace-report">{JSON.stringify(report, null, 2)}</pre>}
+              {(report.some((inspection) => files.includes(inspection.path)) || inspectError) && (
+                <ImageMetadataReport inspections={report.filter((inspection) => files.includes(inspection.path))} error={inspectError} />
+              )}
             </>
           )}
 
