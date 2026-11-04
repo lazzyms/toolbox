@@ -1,0 +1,3 @@
+# The generated site is compared byte-for-byte with docs/landing-pages.mjs output,
+# which uses LF. Keep LF on every checkout so Windows does not convert it to CRLF.
+docs/** text=auto eol=lf
