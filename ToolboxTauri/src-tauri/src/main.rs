@@ -2522,4 +2522,135 @@ mod command_tests {
         assert_eq!(std::fs::read(&blocked).unwrap(), original, "originals stay untouched");
         assert_eq!(listing, vec![std::ffi::OsString::from("scan.png")], "nothing is left in the read-only folder");
     }
+
+    fn write_tiff(path: &PathBuf, pages: &[image::DynamicImage]) {
+        use tiff::encoder::colortype::{Gray8, RGB16, RGB8, RGBA8};
+        let mut encoder = tiff::encoder::TiffEncoder::new(std::fs::File::create(path).unwrap()).unwrap();
+        for page in pages {
+            let (width, height) = (page.width(), page.height());
+            match page {
+                image::DynamicImage::ImageLuma8(page) => encoder.write_image::<Gray8>(width, height, page.as_raw()),
+                image::DynamicImage::ImageRgb8(page) => encoder.write_image::<RGB8>(width, height, page.as_raw()),
+                image::DynamicImage::ImageRgba8(page) => encoder.write_image::<RGBA8>(width, height, page.as_raw()),
+                image::DynamicImage::ImageRgb16(page) => encoder.write_image::<RGB16>(width, height, page.as_raw()),
+                page => panic!("no TIFF fixture writer for {:?}", page.color()),
+            }
+            .unwrap();
+        }
+    }
+
+    fn tiff_pages(path: &PathBuf) -> Vec<(tiff::ColorType, (u32, u32), Vec<u8>)> {
+        let mut decoder = tiff::decoder::Decoder::new(std::fs::File::open(path).unwrap()).unwrap();
+        let mut pages = Vec::new();
+        loop {
+            let tiff::decoder::DecodingResult::U8(data) = decoder.read_image().unwrap() else { panic!("expected 8-bit TIFF page") };
+            pages.push((decoder.colortype().unwrap(), decoder.dimensions().unwrap(), data));
+            if !decoder.more_images() { return pages; }
+            decoder.next_image().unwrap();
+        }
+    }
+
+    #[test]
+    fn convert_keeps_png_pixels_exact_and_lossy_dimensions_for_every_source_family() {
+        let root = sandbox("convert-source-families");
+        let rgba = image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(30, 20, |x, y| Rgba([x as u8 * 8, y as u8 * 12, (x ^ y) as u8, (x + y) as u8 * 4])));
+        let rgb16 = image::DynamicImage::ImageRgb16(image::ImageBuffer::from_fn(24, 16, |x, y| image::Rgb([(x * 2731) as u16, (y * 4093) as u16, ((x * y) * 97) as u16])));
+        let gray = image::DynamicImage::ImageLuma8(image::GrayImage::from_fn(17, 9, |x, y| image::Luma([(x * 15 ^ y * 7) as u8])));
+        let photo = image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(32, 24, |x, y| image::Rgb([x as u8 * 8, y as u8 * 10, 90])));
+        let heic_bytes = crate::kit::images::encode(&photo, crate::kit::images::OutputFormat::Heic, 80).unwrap();
+        let mut sources: Vec<(PathBuf, image::DynamicImage)> = Vec::new();
+        for (name, image) in [("rgba.png", &rgba), ("deep.png", &rgb16), ("gray.png", &gray), ("photo.jpg", &photo), ("photo.webp", &rgba)] {
+            let path = root.join(name);
+            image.save(&path).unwrap();
+            sources.push((path.clone(), image::open(&path).unwrap()));
+        }
+        for name in ["photo.heic", "photo.heif"] {
+            let path = root.join(name);
+            std::fs::write(&path, &heic_bytes).unwrap();
+            sources.push((path, heif::decode(&heic_bytes).unwrap()));
+        }
+        let originals: Vec<Vec<u8>> = sources.iter().map(|(path, _)| std::fs::read(path).unwrap()).collect();
+
+        for (index, (source, expected)) in sources.iter().enumerate() {
+            let name = source.file_name().unwrap().to_string_lossy().to_string();
+            let png = assert_success(&name, convert_images(RunEvents::silent(), ConvertImagesRequest {
+                paths: vec![source.clone()], format: "png".into(), output_location: location(&root, &format!("png-{index}")),
+            }));
+            let converted = image::open(&png[0]).unwrap();
+            assert_eq!(converted.color(), expected.color(), "{name} keeps its color type in PNG");
+            assert_eq!(converted.as_bytes(), expected.as_bytes(), "{name} keeps its pixels in PNG");
+            for format in ["jpg", "webp", "heic"] {
+                let output = assert_success(&name, convert_images(RunEvents::silent(), ConvertImagesRequest {
+                    paths: vec![source.clone()], format: format.into(), output_location: location(&root, &format!("{format}-{index}")),
+                }));
+                let bytes = std::fs::read(&output[0]).unwrap();
+                let decoded = if format == "heic" { heif::decode(&bytes).unwrap() } else { image::load_from_memory(&bytes).unwrap() };
+                assert_eq!((decoded.width(), decoded.height()), (expected.width(), expected.height()), "{name} as {format} keeps its size");
+            }
+        }
+        for ((source, _), original) in sources.iter().zip(&originals) {
+            assert_eq!(&std::fs::read(source).unwrap(), original, "{} stays untouched", source.display());
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn tiff_split_combine_and_selection_keep_every_page_byte_for_byte() {
+        use crate::kit::images::tools::{TiffPageRef, TiffPreviewRequest};
+        let root = sandbox("tiff-page-bytes");
+        let gray = image::DynamicImage::ImageLuma8(image::GrayImage::from_raw(3, 2, vec![1, 2, 3, 4, 5, 6]).unwrap());
+        let rgb = image::DynamicImage::ImageRgb8(image::RgbImage::from_raw(2, 2, (10..22).collect()).unwrap());
+        let rgba = image::DynamicImage::ImageRgba8(image::RgbaImage::from_raw(2, 1, vec![30, 31, 32, 0, 33, 34, 35, 128]).unwrap());
+        let single = image::DynamicImage::ImageRgb8(image::RgbImage::from_raw(1, 2, vec![40, 41, 42, 43, 44, 45]).unwrap());
+        let multi = root.join("multi.tiff");
+        write_tiff(&multi, &[gray.clone(), rgb.clone(), rgba.clone()]);
+        let other = root.join("single.tif");
+        write_tiff(&other, &[single.clone()]);
+        let originals = [std::fs::read(&multi).unwrap(), std::fs::read(&other).unwrap()];
+        let page = |image: &image::DynamicImage| {
+            let color = match image.color() { image::ColorType::L8 => tiff::ColorType::Gray(8), image::ColorType::Rgb8 => tiff::ColorType::RGB(8), _ => tiff::ColorType::RGBA(8) };
+            (color, (image.width(), image.height()), image.as_bytes().to_vec())
+        };
+
+        let split = assert_success("split", run_process_tiff_pages(&TiffRequest { paths: vec![multi.clone()], pages: None, output_location: location(&root, "split"), output_path: None }));
+        assert_eq!(split.iter().map(tiff_pages).collect::<Vec<_>>(), vec![vec![page(&gray)], vec![page(&rgb)], vec![page(&rgba)]]);
+
+        let combined = assert_aggregate_success("combine", &[multi.clone(), other.clone()], run_process_tiff_pages(&TiffRequest {
+            paths: vec![multi.clone(), other.clone()], pages: None, output_location: location(&root, "combine"), output_path: None,
+        }));
+        assert_eq!(tiff_pages(&combined[0]), vec![page(&gray), page(&rgb), page(&rgba), page(&single)]);
+
+        let selected = assert_aggregate_success("select", &[multi.clone(), other.clone()], run_process_tiff_pages(&TiffRequest {
+            paths: vec![multi.clone(), other.clone()],
+            pages: Some(vec![TiffPageRef { path: other.clone(), page: 0 }, TiffPageRef { path: multi.clone(), page: 2 }, TiffPageRef { path: multi.clone(), page: 0 }]),
+            output_location: location(&root, "select"), output_path: None,
+        }));
+        assert_eq!(tiff_pages(&selected[0]), vec![page(&single), page(&rgba), page(&gray)]);
+
+        let outside = tauri::async_runtime::block_on(run_process_tiff_pages(&TiffRequest {
+            paths: vec![multi.clone()], pages: Some(vec![TiffPageRef { path: multi.clone(), page: 3 }]), output_location: location(&root, "outside"), output_path: None,
+        }));
+        assert_eq!(outside[0].error().map(|error| error.message.as_str()), Some("TIFF page 4 is outside the document."));
+
+        let previews = inspect_tiff_pages(TiffPreviewRequest { path: multi.clone() }).unwrap();
+        assert_eq!(previews.iter().map(|preview| (preview.width, preview.height)).collect::<Vec<_>>(), vec![(3, 2), (2, 2), (2, 1)]);
+
+        assert_eq!([std::fs::read(&multi).unwrap(), std::fs::read(&other).unwrap()], originals, "originals stay untouched");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn tiff_tools_reject_sixteen_bit_pages_with_the_same_message() {
+        use crate::kit::images::tools::TiffPreviewRequest;
+        let root = sandbox("tiff-deep-pages");
+        let deep = root.join("deep.tiff");
+        write_tiff(&deep, &[image::DynamicImage::ImageRgb16(image::ImageBuffer::from_raw(2, 1, vec![1, 2, 3, 4, 5, 6]).unwrap())]);
+        let unsupported = "Unsupported TIFF color type or bit depth: RGB(16)";
+
+        let split = tauri::async_runtime::block_on(run_process_tiff_pages(&TiffRequest { paths: vec![deep.clone()], pages: None, output_location: location(&root, "split"), output_path: None }));
+        assert_eq!(split[0].error().map(|error| error.message.clone()), Some(format!("Could not process {}: {unsupported}", deep.display())));
+        assert!(split[0].output_paths().is_empty());
+        assert_eq!(inspect_tiff_pages(TiffPreviewRequest { path: deep.clone() }).err().as_deref(), Some(unsupported));
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
