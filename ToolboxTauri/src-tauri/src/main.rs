@@ -975,10 +975,10 @@ mod command_tests {
     }
 
     // What one Images to PDF page shows: its media box, the clip rectangle a
-    // fill draws through (if any), the image's drawn rectangle from its `cm`,
-    // and the embedded image stream as stored.
+    // fill draws through (if any), the `cm` matrix and the rectangle it draws
+    // the image into, and the embedded image stream as stored.
     #[derive(Debug)]
-    struct LaidOutPage { media: Vec<f32>, clip: Option<[f32; 4]>, drawn: [f32; 4], image_dict: lopdf::Dictionary, image_bytes: Vec<u8> }
+    struct LaidOutPage { media: Vec<f32>, clip: Option<[f32; 4]>, matrix: [f32; 6], drawn: [f32; 4], image_dict: lopdf::Dictionary, image_bytes: Vec<u8> }
 
     fn laid_out_pages(path: &PathBuf) -> Vec<LaidOutPage> {
         use lopdf::content::Content;
@@ -992,11 +992,14 @@ mod command_tests {
             let clip = operands("re").map(|values| [values[0], values[1], values[2], values[3]]);
             if clip.is_some() { assert!(operations.iter().any(|operation| operation.operator == "W"), "a fill clips to its rectangle"); }
             let cm = operands("cm").expect("every page places its image with cm");
-            assert_eq!((cm[1], cm[2]), (0.0, 0.0), "images are placed without rotation or skew");
+            let matrix = [cm[0], cm[1], cm[2], cm[3], cm[4], cm[5]];
+            let corners = [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)].map(|(u, v)| (cm[0] * u + cm[2] * v + cm[4], cm[1] * u + cm[3] * v + cm[5]));
+            let (left, bottom) = corners.iter().fold((f32::MAX, f32::MAX), |(x, y), corner| (x.min(corner.0), y.min(corner.1)));
+            let (right, top) = corners.iter().fold((f32::MIN, f32::MIN), |(x, y), corner| (x.max(corner.0), y.max(corner.1)));
             let resources = page.get(b"Resources").unwrap().as_dict().unwrap();
             let image_id = resources.get(b"XObject").unwrap().as_dict().unwrap().get(b"Im0").unwrap().as_reference().unwrap();
             let stream = document.get_object(image_id).unwrap().as_stream().unwrap();
-            LaidOutPage { media, clip, drawn: [cm[4], cm[5], cm[0], cm[3]], image_dict: stream.dict.clone(), image_bytes: stream.content.clone() }
+            LaidOutPage { media, clip, matrix, drawn: [left, bottom, right - left, top - bottom], image_dict: stream.dict.clone(), image_bytes: stream.content.clone() }
         }).collect()
     }
 
@@ -1070,6 +1073,7 @@ mod command_tests {
                             assert_close(&page.media, &[0.0, 0.0, page_width, page_height], &name);
                             let content = [inset, inset, page_width - 2.0 * inset, page_height - 2.0 * inset];
                             let [x, y, drawn_width, drawn_height] = page.drawn;
+                            assert_eq!((page.matrix[1], page.matrix[2]), (0.0, 0.0), "{name}: untagged images are placed without rotation or skew");
                             assert!(((drawn_width / drawn_height) - (width / height)).abs() < 0.001, "{name}: the image keeps its aspect ratio");
                             assert_close(&[x + drawn_width / 2.0, y + drawn_height / 2.0], &[content[0] + content[2] / 2.0, content[1] + content[3] / 2.0], &format!("{name}: centred in the margin box"));
                             if fit == "fit" {
@@ -1122,6 +1126,141 @@ mod command_tests {
             let shapes = pages.iter().map(|page| if page.media[2] > page.media[3] { "landscape" } else { "portrait" }).collect::<Vec<_>>();
             assert_eq!(shapes, ["landscape", "portrait", "portrait"], "{size}: wide, tall and square images");
         }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    // An upright 48 × 80 portrait with a different colour in each quadrant,
+    // so every rotation or mirror of it is told apart.
+    fn quadrant_portrait() -> image::RgbImage {
+        let colours = [[220, 30, 30], [30, 200, 40], [30, 40, 220], [230, 220, 30]];
+        image::RgbImage::from_fn(48, 80, |x, y| image::Rgb(colours[usize::from(x >= 24) + 2 * usize::from(y >= 40)]))
+    }
+
+    // The pixels a camera stores for an upright image under EXIF orientation
+    // `tag`, written out per value from the EXIF definition.
+    fn stored_for_tag(upright: &image::RgbImage, tag: u16) -> image::RgbImage {
+        let (width, height) = upright.dimensions();
+        let (stored_width, stored_height) = if tag >= 5 { (height, width) } else { (width, height) };
+        image::RgbImage::from_fn(stored_width, stored_height, |x, y| *upright.get_pixel(match tag {
+            1 => x, 2 => width - 1 - x, 3 => width - 1 - x, 4 => x, 5 => y, 6 => width - 1 - y, 7 => width - 1 - y, _ => y,
+        }, match tag {
+            1 | 2 => y, 3 | 4 => height - 1 - y, 5 | 6 => x, _ => height - 1 - x,
+        }))
+    }
+
+    fn exif_orientation(tag: u16) -> Vec<u8> {
+        let mut tiff = b"MM\0\x2a\0\0\0\x08\0\x01\x01\x12\0\x03\0\0\0\x01".to_vec();
+        tiff.extend_from_slice(&tag.to_be_bytes());
+        tiff.extend_from_slice(&[0, 0, 0, 0, 0, 0]);
+        tiff
+    }
+
+    fn tagged_jpeg(image: &image::RgbImage, tag: u16) -> Vec<u8> {
+        let mut jpeg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 95).encode_image(image).unwrap();
+        let mut exif = b"Exif\0\0".to_vec();
+        exif.extend(exif_orientation(tag));
+        let mut segment = vec![0xFF, 0xE1];
+        segment.extend_from_slice(&((exif.len() + 2) as u16).to_be_bytes());
+        segment.extend(exif);
+        jpeg.splice(2..2, segment);
+        jpeg
+    }
+
+    fn tagged_png(image: &image::RgbImage, tag: u16) -> Vec<u8> {
+        let mut png = Vec::new();
+        image.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let mut body = b"eXIf".to_vec();
+        body.extend(exif_orientation(tag));
+        let mut crc = flate2::Crc::new();
+        crc.update(&body);
+        let mut chunk = ((body.len() - 4) as u32).to_be_bytes().to_vec();
+        chunk.extend(body);
+        chunk.extend_from_slice(&crc.sum().to_be_bytes());
+        png.splice(33..33, chunk);
+        png
+    }
+
+    // Samples the centre of each quadrant of the upright rectangle the page
+    // draws into, follows the `cm` matrix back into the embedded pixels, and
+    // checks each one shows that quadrant's colour.
+    fn assert_upright_on_page(page: &LaidOutPage, stored: &image::RgbImage, upright: &image::RgbImage, context: &str) {
+        let [a, b, c, d, e, f] = page.matrix;
+        let [x, y, width, height] = page.drawn;
+        let determinant = a * d - b * c;
+        for (across, down) in [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)] {
+            let (page_x, page_y) = (x + width * across - e, y + height * (1.0 - down) - f);
+            let (u, v) = ((d * page_x - c * page_y) / determinant, (a * page_y - b * page_x) / determinant);
+            let actual = stored.get_pixel((u * stored.width() as f32) as u32, ((1.0 - v) * stored.height() as f32) as u32);
+            let expected = upright.get_pixel((across * upright.width() as f32) as u32, (down * upright.height() as f32) as u32);
+            assert!(actual.0.iter().zip(expected.0).all(|(actual, expected)| actual.abs_diff(expected) < 40), "{context}: quadrant ({across}, {down}) shows {actual:?}, expected {expected:?}");
+        }
+    }
+
+    #[test]
+    fn images_to_pdf_places_every_orientation_tag_upright_and_keeps_the_jpeg_byte_identical() {
+        let root = sandbox("images-to-pdf-orientation-jpeg");
+        let upright = quadrant_portrait();
+        for tag in 1..=8 {
+            let stored = stored_for_tag(&upright, tag);
+            let path = root.join(format!("exif-{tag}.jpg"));
+            let jpeg = tagged_jpeg(&stored, tag);
+            std::fs::write(&path, &jpeg).unwrap();
+            for (name, layout) in [("match", serde_json::json!({})), ("a4", serde_json::json!({ "pageSize": "a4", "margin": "small", "fit": "fit", "orientation": "automatic" }))] {
+                let context = format!("tag {tag} on {name}");
+                let pages = combine_with(&root, &format!("{tag}-{name}"), std::slice::from_ref(&path), layout);
+                let page = &pages[0];
+                assert_eq!(page.image_bytes, jpeg, "{context}: the JPEG is embedded byte for byte");
+                assert_eq!(page.image_dict.get(b"Filter").unwrap().as_name().unwrap(), b"DCTDecode");
+                assert_eq!((page.image_dict.get(b"Width").unwrap().as_i64().unwrap(), page.image_dict.get(b"Height").unwrap().as_i64().unwrap()), (i64::from(stored.width()), i64::from(stored.height())), "{context}: the embedded data keeps its stored size");
+                if name == "match" {
+                    assert_close(&page.media, &[0.0, 0.0, 48.0, 80.0], &format!("{context}: the page is the upright size"));
+                    assert_close(&page.drawn, &[0.0, 0.0, 48.0, 80.0], &context);
+                } else {
+                    assert!(page.media[3] > page.media[2], "{context}: an upright portrait gets a portrait page");
+                }
+                assert_upright_on_page(page, &image::load_from_memory(&page.image_bytes).unwrap().to_rgb8(), &upright, &context);
+            }
+            assert_eq!(std::fs::read(&path).unwrap(), jpeg, "the source stays unchanged");
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn images_to_pdf_orients_tagged_png_pixels_before_embedding_them() {
+        use std::io::Read;
+        let root = sandbox("images-to-pdf-orientation-png");
+        let upright = quadrant_portrait();
+        for tag in 1..=8 {
+            let path = root.join(format!("exif-{tag}.png"));
+            let png = tagged_png(&stored_for_tag(&upright, tag), tag);
+            std::fs::write(&path, &png).unwrap();
+            let pages = combine_with(&root, &format!("png-{tag}"), std::slice::from_ref(&path), serde_json::json!({}));
+            let page = &pages[0];
+            assert_close(&page.media, &[0.0, 0.0, 48.0, 80.0], &format!("tag {tag}: the page is the upright size"));
+            assert_eq!((page.matrix[1], page.matrix[2]), (0.0, 0.0), "tag {tag}: oriented pixels need no turn on the page");
+            assert_eq!(page.image_dict.get(b"Filter").unwrap().as_name().unwrap(), b"FlateDecode");
+            let mut samples = Vec::new();
+            flate2::read::ZlibDecoder::new(page.image_bytes.as_slice()).read_to_end(&mut samples).unwrap();
+            let decoded = image::RgbImage::from_raw(page.image_dict.get(b"Width").unwrap().as_i64().unwrap() as u32, page.image_dict.get(b"Height").unwrap().as_i64().unwrap() as u32, samples).unwrap();
+            assert_eq!(decoded, upright, "tag {tag}: the PDF holds the upright pixels exactly");
+            assert_eq!(std::fs::read(&path).unwrap(), png, "the source stays unchanged");
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn images_to_pdf_gives_a_tagged_portrait_photo_a_portrait_a4_page() {
+        let root = sandbox("images-to-pdf-orientation-a4");
+        let upright = quadrant_portrait();
+        let stored = stored_for_tag(&upright, 6);
+        assert!(stored.width() > stored.height(), "the camera stored the portrait sideways");
+        let path = root.join("portrait.jpg");
+        std::fs::write(&path, tagged_jpeg(&stored, 6)).unwrap();
+        let pages = combine_with(&root, "a4", std::slice::from_ref(&path), serde_json::json!({ "pageSize": "a4", "margin": "none", "fit": "fit", "orientation": "automatic" }));
+        assert_close(&pages[0].media, &[0.0, 0.0, 595.2756, 841.8898], "portrait A4");
+        assert_close(&pages[0].drawn, &[(595.2756 - 841.8898 * 48.0 / 80.0) / 2.0, 0.0, 841.8898 * 48.0 / 80.0, 841.8898], "the upright photo fits the page height");
+        assert_upright_on_page(&pages[0], &image::load_from_memory(&pages[0].image_bytes).unwrap().to_rgb8(), &upright, "portrait A4");
         let _ = std::fs::remove_dir_all(root);
     }
 
