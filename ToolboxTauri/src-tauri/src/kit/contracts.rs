@@ -175,6 +175,8 @@ pub enum InputCardinality {
     Single,
     Multiple,
     Ordered,
+    /// A creation tool: it takes no input files and accepts no extensions.
+    None,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -214,7 +216,11 @@ fn parse_capability_registry(raw: &str) -> Result<Vec<NativeCapability>, String>
         if capability.command.is_empty() || !commands.insert(capability.command.as_str()) {
             return Err(format!("Duplicate or empty shared capability command {}.", capability.command));
         }
-        if capability.accepted_extensions.is_empty() {
+        if capability.input_cardinality == InputCardinality::None {
+            if !capability.accepted_extensions.is_empty() {
+                return Err(format!("{} takes no input files, so it cannot declare accepted extensions.", capability.command));
+            }
+        } else if capability.accepted_extensions.is_empty() {
             return Err(format!("{} has no accepted extensions.", capability.command));
         }
         let mut extensions = HashSet::new();
@@ -311,6 +317,20 @@ pub fn partition_command_inputs(command: &str, paths: &[PathBuf]) -> Result<Vali
     let Some(capability) = native_capability(command) else {
         return Err(vec![JobOutcome::failure(PathBuf::new(), ToolError::invalid_input(format!("Unknown native command: {command}.")))]);
     };
+    partition_capability_inputs(capability, paths)
+}
+
+fn partition_capability_inputs(capability: &NativeCapability, paths: &[PathBuf]) -> Result<ValidatedCommandInputs, Vec<JobOutcome>> {
+    let command = capability.command.as_str();
+    if capability.input_cardinality == InputCardinality::None {
+        if !capability.native_available {
+            return Err(vec![JobOutcome::failure(PathBuf::new(), ToolError::unavailable(format!("Native command {command} is unavailable in this build.")))]);
+        }
+        return Ok(ValidatedCommandInputs {
+            accepted: Vec::new(),
+            rejected: paths.iter().cloned().enumerate().map(|(index, path)| (index, JobOutcome::failure(path, ToolError::invalid_input("This action creates a new file and takes no input files.")))).collect(),
+        });
+    }
     if paths.is_empty() {
         let error = if capability.native_available { ToolError::invalid_input("Select at least one input file.") } else { ToolError::unavailable(format!("Native command {command} is unavailable in this build.")) };
         return Err(vec![JobOutcome::failure(PathBuf::new(), error)]);
@@ -808,6 +828,7 @@ mod tests {
                     "single" => InputCardinality::Single,
                     "multiple" => InputCardinality::Multiple,
                     "ordered" => InputCardinality::Ordered,
+                    "none" => InputCardinality::None,
                     cardinality => panic!("Unknown input cardinality {cardinality}"),
                 }
             );
@@ -847,6 +868,78 @@ mod tests {
         assert!(!native_capability("ocr_pdf").unwrap().native_available);
         assert!(!native_capability("blur_faces").unwrap().native_available);
         assert!(!native_capability("remove_image_background").unwrap().native_available);
+    }
+
+    fn capability_samples() -> serde_json::Value {
+        serde_json::from_str(include_str!("../../../shared/tool-capability-samples.json")).unwrap()
+    }
+
+    fn sample_capability(command: &str) -> NativeCapability {
+        let samples = capability_samples();
+        let row = samples["accepted"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["command"] == command)
+            .unwrap_or_else(|| panic!("Missing capability sample {command}"));
+        parse_capability_registry(&format!("[{row}]")).unwrap().remove(0)
+    }
+
+    // The TS registry test reads the same samples, so both parsers agree on every row.
+    #[test]
+    fn shared_capability_samples_parse_the_same_natively() {
+        let samples = capability_samples();
+        for row in samples["accepted"].as_array().unwrap() {
+            let parsed = parse_capability_registry(&format!("[{row}]"))
+                .unwrap_or_else(|error| panic!("{} should parse: {error}", row["command"]));
+            let cardinality = match row["inputCardinality"].as_str().unwrap() {
+                "single" => InputCardinality::Single,
+                "multiple" => InputCardinality::Multiple,
+                "ordered" => InputCardinality::Ordered,
+                "none" => InputCardinality::None,
+                cardinality => panic!("Unknown input cardinality {cardinality}"),
+            };
+            assert_eq!(parsed[0].input_cardinality, cardinality);
+            assert_eq!(parsed[0].accepted_extensions.len(), row["acceptedExtensions"].as_array().unwrap().len());
+        }
+        for sample in samples["rejected"].as_array().unwrap() {
+            let error = parse_capability_registry(&format!("[{}]", sample["capability"]))
+                .err()
+                .unwrap_or_else(|| panic!("{} should be rejected", sample["name"]));
+            assert!(error.contains("accepted extension"), "{}: {error}", sample["name"]);
+        }
+        assert_eq!(sample_capability("sample_create_document").input_cardinality, InputCardinality::None);
+    }
+
+    #[test]
+    fn creation_tool_accepts_an_empty_path_list_and_refuses_input_files() {
+        let creation = sample_capability("sample_create_document");
+
+        let validation = partition_capability_inputs(&creation, &[]).unwrap();
+        assert!(validation.accepted.is_empty() && validation.rejected.is_empty());
+
+        let paths = vec![PathBuf::from("source.pdf")];
+        let validation = partition_capability_inputs(&creation, &paths).unwrap();
+        assert!(validation.accepted.is_empty());
+        assert_eq!(validation.rejected.len(), 1);
+        assert!(validation.rejected[0].1.error().is_some_and(|error| matches!(error.kind, ErrorKind::InvalidInput) && error.message.contains("no input files")));
+
+        let unavailable = NativeCapability { native_available: false, ..creation };
+        let outcomes = partition_capability_inputs(&unavailable, &[]).err().unwrap();
+        assert!(outcomes[0].error().is_some_and(|error| matches!(error.kind, ErrorKind::Unavailable)));
+    }
+
+    #[test]
+    fn file_tools_still_require_at_least_one_path() {
+        let sample = sample_capability("sample_convert_files");
+        let outcomes = partition_capability_inputs(&sample, &[]).err().unwrap();
+        assert!(outcomes[0].error().is_some_and(|error| matches!(error.kind, ErrorKind::InvalidInput) && error.message.contains("at least one input file")));
+
+        for command in ["split_pdf", "image_metadata", "merge_pdfs"] {
+            let outcomes = validate_command_inputs(command, &[]).unwrap_err();
+            assert_eq!(outcomes.len(), 1, "{command}");
+            assert!(outcomes[0].error().is_some_and(|error| error.message.contains("at least one input file")), "{command}");
+        }
     }
 
     #[test]

@@ -22,7 +22,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const isInputCardinality = (
   value: unknown,
 ): value is ToolCapability["inputCardinality"] =>
-  value === "single" || value === "multiple" || value === "ordered";
+  value === "single" || value === "multiple" || value === "ordered" || value === "none";
 
 const parseCapability = (value: unknown): SharedCapability => {
   if (!isRecord(value)) throw new Error("Each shared capability must be an object.");
@@ -43,9 +43,15 @@ const parseCapability = (value: unknown): SharedCapability => {
   if (typeof command !== "string" || command.length === 0) {
     throw new Error("Each shared capability needs a command.");
   }
+  if (!isInputCardinality(inputCardinality)) {
+    throw new Error(`${command} has an invalid input cardinality.`);
+  }
+  if (inputCardinality === "none" && Array.isArray(acceptedExtensions) && acceptedExtensions.length > 0) {
+    throw new Error(`${command} takes no input files, so it cannot declare accepted extensions.`);
+  }
   if (
     !Array.isArray(acceptedExtensions) ||
-    acceptedExtensions.length === 0 ||
+    (inputCardinality !== "none" && acceptedExtensions.length === 0) ||
     !acceptedExtensions.every(
       (extension) =>
         typeof extension === "string" &&
@@ -54,9 +60,6 @@ const parseCapability = (value: unknown): SharedCapability => {
     new Set(acceptedExtensions).size !== acceptedExtensions.length
   ) {
     throw new Error(`${command} has invalid accepted extensions.`);
-  }
-  if (!isInputCardinality(inputCardinality)) {
-    throw new Error(`${command} has an invalid input cardinality.`);
   }
   if (typeof supportsPageSelection !== "boolean" || typeof supportsPreview !== "boolean") {
     throw new Error(`${command} has invalid capability flags.`);
