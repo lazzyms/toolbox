@@ -173,6 +173,72 @@ pub fn export_edit_plan(plan: &ImageEditPlan, input: PathBuf) -> JobOutcome {
     }
 }
 
+/// One run of the shared edit stack: every path gets the same steps and its own result.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageEditStackRequest {
+    pub paths: Vec<PathBuf>,
+    pub steps: ImageEditSteps,
+    pub output_location: OutputLocation,
+}
+
+/// The stack holds at most one of each step, and they always run in this order.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImageEditSteps {
+    #[serde(default)] pub crop: Option<CropStep>,
+}
+
+const STACK_QUALITY: u8 = 90;
+
+impl ImageEditSteps {
+    fn suffix(&self) -> Result<&'static str, String> {
+        match self.crop {
+            Some(_) => Ok("-cropped"),
+            None => Err("Add a step to the stack before running.".to_string()),
+        }
+    }
+
+    // Crop runs first, so its rectangle is always measured in source pixels.
+    fn apply(&self, image: DynamicImage) -> Result<DynamicImage, String> {
+        let Some(crop) = &self.crop else { return Ok(image) };
+        let (x, y, width, height) = crop_rect(image.width(), image.height(), crop)?;
+        Ok(image.crop_imm(x, y, width, height))
+    }
+}
+
+/// Decodes the input once, runs the stack and encodes once in the input's format.
+pub fn export_edit_stack(request: &ImageEditStackRequest, input: PathBuf) -> JobOutcome {
+    let suffix = match request.steps.suffix() {
+        Ok(suffix) => suffix,
+        Err(error) => return JobOutcome::failure(input, ToolError::invalid_input(error)),
+    };
+    let format = crate::kit::images::detect_format(&input);
+    let source = match crate::kit::images::load_image(&input) {
+        Ok(image) => image,
+        Err(error) => return failure(input, error),
+    };
+    let edited = match request.steps.apply(source) {
+        Ok(image) => image,
+        Err(error) => return failure(input, error),
+    };
+    let bytes = match crate::kit::images::encode(&edited, format, STACK_QUALITY) {
+        Ok(bytes) => bytes,
+        Err(error) => return failure(input, error),
+    };
+    let output = match OutputNaming::reserve_destination(&input, &request.output_location, suffix, format.extension()) {
+        Ok(output) => output,
+        Err(error) => return failure(input, format!("Could not reserve image output: {error}")),
+    };
+    if let Err(error) = std::fs::write(output.path(), bytes) {
+        return failure(input, format!("Could not save image: {error}"));
+    }
+    match output.publish() {
+        Ok(path) => JobOutcome::succeeded(input, vec![path], "Image saved"),
+        Err(error) => failure(input, format!("Could not publish image: {error}")),
+    }
+}
+
 fn encode_preview(image: DynamicImage) -> Result<ImagePreview, String> {
     let width = image.width();
     let height = image.height();
@@ -218,8 +284,8 @@ fn apply_edit_plan(plan: &ImageEditPlan, mut image: DynamicImage, mut format: cr
                 if flip == "vertical" { geometry.push(ImageGeometryStep::FlipVertical { height: current_height }); }
             }
             ImageEdit::Crop { x, y, width, height, mode, aspect_width, aspect_height, anchor } => {
-                let request = CropRequest { paths: vec![], x: *x, y: *y, width: *width, height: *height, mode: mode.clone(), aspect_width: *aspect_width, aspect_height: *aspect_height, anchor: anchor.clone(), output_location: OutputLocation::AlongsideInput };
-                let (x, y, width, height) = crop_rect(source_width, source_height, &request)?;
+                let step = CropStep { x: *x, y: *y, width: *width, height: *height, mode: mode.clone(), aspect_width: *aspect_width, aspect_height: *aspect_height, anchor: anchor.clone() };
+                let (x, y, width, height) = crop_rect(source_width, source_height, &step)?;
                 let crop = map_source_rect((x, y, width, height), &geometry)?;
                 image = image.crop_imm(crop.0, crop.1, crop.2, crop.3);
             }
@@ -338,11 +404,19 @@ pub struct RotateRequest { pub paths: Vec<PathBuf>, pub degrees: i32, #[serde(de
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CropRequest {
-    pub paths: Vec<PathBuf>, pub x: u32, pub y: u32, pub width: u32, pub height: u32,
+    pub paths: Vec<PathBuf>,
+    #[serde(flatten)] pub crop: CropStep,
+    pub output_location: OutputLocation,
+}
+/// The crop geometry, measured in source pixels. Aspect-ratio mode keeps the largest area of that
+/// ratio each image has, so one setting fits every size in a batch.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CropStep {
+    pub x: u32, pub y: u32, pub width: u32, pub height: u32,
     #[serde(default = "default_crop_mode")] pub mode: String,
     #[serde(default)] pub aspect_width: u32, #[serde(default)] pub aspect_height: u32,
     #[serde(default = "default_crop_anchor")] pub anchor: String,
-    pub output_location: OutputLocation,
 }
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -455,7 +529,7 @@ pub fn rotate(request: &RotateRequest, input: PathBuf) -> JobOutcome {
 fn default_flip() -> String { "none".to_string() }
 pub fn crop(request: &CropRequest, input: PathBuf) -> JobOutcome {
     transform(request.paths.as_slice(), input, &request.output_location, "-cropped", |image| {
-        let (x, y, width, height) = crop_rect(image.width(), image.height(), request)?;
+        let (x, y, width, height) = crop_rect(image.width(), image.height(), &request.crop)?;
         Ok(image.crop_imm(x, y, width, height))
     })
 }
@@ -463,7 +537,7 @@ pub fn crop(request: &CropRequest, input: PathBuf) -> JobOutcome {
 fn default_crop_mode() -> String { "rectangle".to_string() }
 fn default_crop_anchor() -> String { "center".to_string() }
 
-fn crop_rect(image_width: u32, image_height: u32, request: &CropRequest) -> Result<(u32, u32, u32, u32), String> {
+fn crop_rect(image_width: u32, image_height: u32, request: &CropStep) -> Result<(u32, u32, u32, u32), String> {
     if request.mode == "aspectRatio" {
         if request.aspect_width == 0 || request.aspect_height == 0 { return Err("Aspect ratio dimensions must be positive.".to_string()); }
         let ratio = request.aspect_width as f64 / request.aspect_height as f64;
@@ -477,8 +551,10 @@ fn crop_rect(image_width: u32, image_height: u32, request: &CropRequest) -> Resu
         if width == 0 || height == 0 || width > image_width || height > image_height { return Err("Aspect ratio crop does not fit inside the image.".to_string()); }
         let max_x = image_width - width;
         let max_y = image_height - height;
-        let x = match request.anchor.as_str() { "left" => 0, "right" => max_x, "custom" => request.x.min(max_x), _ => max_x / 2 };
-        let y = match request.anchor.as_str() { "top" => 0, "bottom" => max_y, "custom" => request.y.min(max_y), _ => max_y / 2 };
+        // The largest fit leaves room on one axis only, so start and end keep the top or left
+        // part and the bottom or right part of every image, whatever its orientation.
+        let x = match request.anchor.as_str() { "left" | "start" => 0, "right" | "end" => max_x, "custom" => request.x.min(max_x), _ => max_x / 2 };
+        let y = match request.anchor.as_str() { "top" | "start" => 0, "bottom" | "end" => max_y, "custom" => request.y.min(max_y), _ => max_y / 2 };
         Ok((x, y, width, height))
     } else if request.mode == "rectangle" {
         if request.width == 0 || request.height == 0 || request.x.saturating_add(request.width) > image_width || request.y.saturating_add(request.height) > image_height { return Err("Crop rectangle must fit inside the image.".to_string()); }
@@ -1331,9 +1407,13 @@ mod tests {
 
     #[test]
     fn crop_aspect_ratio_is_anchored_and_bounds_checked() {
-        let request = CropRequest { paths: vec![], x: 0, y: 0, width: 1, height: 1, mode: "aspectRatio".to_string(), aspect_width: 1, aspect_height: 1, anchor: "top".to_string(), output_location: OutputLocation::AlongsideInput };
+        let request = CropStep { x: 0, y: 0, width: 1, height: 1, mode: "aspectRatio".to_string(), aspect_width: 1, aspect_height: 1, anchor: "top".to_string() };
         assert_eq!(crop_rect(8, 4, &request).unwrap(), (2, 0, 4, 4));
-        let invalid = CropRequest { mode: "rectangle".to_string(), x: 7, y: 0, width: 2, height: 1, ..request };
+        let start = CropStep { anchor: "start".to_string(), ..request.clone() };
+        assert_eq!((crop_rect(8, 4, &start).unwrap(), crop_rect(4, 8, &start).unwrap()), ((0, 0, 4, 4), (0, 0, 4, 4)));
+        let end = CropStep { anchor: "end".to_string(), ..request.clone() };
+        assert_eq!((crop_rect(8, 4, &end).unwrap(), crop_rect(4, 8, &end).unwrap()), ((4, 0, 4, 4), (0, 4, 4, 4)));
+        let invalid = CropStep { mode: "rectangle".to_string(), x: 7, y: 0, width: 2, height: 1, ..request };
         assert!(crop_rect(8, 4, &invalid).is_err());
     }
 
@@ -1524,10 +1604,9 @@ mod tests {
             output_location: OutputLocation::AlongsideInput,
         };
 
-        let request = CropRequest {
-            paths: vec![], x: 0, y: 0, width: 1, height: 1, mode: "aspectRatio".to_string(),
+        let request = CropStep {
+            x: 0, y: 0, width: 1, height: 1, mode: "aspectRatio".to_string(),
             aspect_width: 1, aspect_height: 1, anchor: "right".to_string(),
-            output_location: OutputLocation::AlongsideInput,
         };
         assert_eq!(crop_rect(100, 60, &request).unwrap(), (40, 0, 60, 60));
         let preview = inspect_edit_preview(&ImageEditPreviewRequest { path: input.clone(), plan: plan.clone() }).unwrap();

@@ -429,6 +429,12 @@ async fn export_image_edit_plan(events: RunEvents, request: tools::ImageEditExpo
     BatchRunner::run(&events, "export_image_edit_plan", request.paths.clone(), &request.plan.output_location, &request, |request, path| tools::export_edit_plan(&request.plan, path))
 }
 
+#[tauri::command]
+async fn export_image_edit_stack(events: RunEvents, request: tools::ImageEditStackRequest) -> Vec<JobOutcome> {
+    let request = Arc::new(request);
+    BatchRunner::run(&events, "export_image_edit_stack", request.paths.clone(), &request.output_location, &request, tools::export_edit_stack)
+}
+
 fn aggregate_outcomes<F>(command: &str, paths: &[std::path::PathBuf], job: F) -> Vec<JobOutcome>
 where
     F: FnOnce() -> JobOutcome + Send + 'static,
@@ -572,6 +578,7 @@ fn main() {
             inspect_tiff_pages,
             inspect_image_edit_preview,
             export_image_edit_plan,
+            export_image_edit_stack,
             get_quick_actions,
             set_quick_actions
         ])
@@ -623,7 +630,7 @@ mod command_tests {
     use super::*;
     use crate::kit::common::OutputLocation;
     use crate::kit::contracts::{ErrorKind, LimitKind};
-    use crate::kit::images::tools::{CropRequest, GifCreateRequest, GifExtractRequest, ImageEdit, ImageEditExportRequest, ImageEditPlan, ImageEditPreviewRequest, IconSetRequest, MetadataRequest, ResizeRequest, RotateRequest, TiffRequest, ToneRequest, WatermarkRequest};
+    use crate::kit::images::tools::{CropRequest, CropStep, ImageEditStackRequest, ImageEditSteps, GifCreateRequest, GifExtractRequest, ImageEdit, ImageEditExportRequest, ImageEditPlan, ImageEditPreviewRequest, IconSetRequest, MetadataRequest, ResizeRequest, RotateRequest, TiffRequest, ToneRequest, WatermarkRequest};
     use crate::kit::office::{test_minimal_ooxml_package, OfficeProcessor};
     use crate::kit::pdf::editor::{AddPdfPagesRequest, CropPdfRequest, EditPdfRequest, OrganizePdfRequest, PageScope, PdfEditMode, PdfEditOperation, PdfEditSessionPlan, PdfEditSessionRequest, PdfOverlay, PdfOverlayPosition, PdfRect, RedactPdfRequest, RotatePage, SignPdfRequest};
     use crate::kit::pdf::remaining::{CompressPdfRequest, ImagesToPdfRequest, MergePdfRequest, PageOverlayRequest, PageSelectionRequest, PdfToImagesRequest, PdfToTextRequest, RotatePdfRequest, ComparePdfsRequest};
@@ -1188,7 +1195,8 @@ mod command_tests {
         outputs.extend(named(&mut naming, "compress_images", image.clone(), assert_success("compress images", compress_images(RunEvents::silent(), serde_json::from_value::<CompressImagesRequest>(serde_json::json!({ "paths": [image.clone()], "quality": 80, "lossless": false, "outputLocation": location(&root, "compress images") })).expect("Compress Files view payload for compress_images")))));
         outputs.extend(named(&mut naming, "resize_images", image.clone(), assert_success("resize", resize_images(RunEvents::silent(), ResizeRequest { paths: vec![image.clone()], width: 128, height: 128, mode: "exact".into(), resampling: "lanczos".into(), keep_aspect_ratio: true, percentage: 100, longest_side: 128, output_location: location(&root, "resize") }))));
         outputs.extend(named(&mut naming, "rotate_images", image.clone(), assert_success("rotate", rotate_images(RunEvents::silent(), RotateRequest { paths: vec![image.clone()], degrees: 90, flip: "none".into(), output_location: location(&root, "rotate") }))));
-        outputs.extend(named(&mut naming, "crop_images", image.clone(), assert_success("crop image", crop_images(RunEvents::silent(), CropRequest { paths: vec![image.clone()], x: 0, y: 0, width: 128, height: 128, mode: "rectangle".into(), aspect_width: 128, aspect_height: 128, anchor: "center".into(), output_location: location(&root, "crop image") }))));
+        outputs.extend(named(&mut naming, "crop_images", image.clone(), assert_success("crop image", crop_images(RunEvents::silent(), CropRequest { paths: vec![image.clone()], crop: CropStep { x: 0, y: 0, width: 128, height: 128, mode: "rectangle".into(), aspect_width: 128, aspect_height: 128, anchor: "center".into() }, output_location: location(&root, "crop image") }))));
+        outputs.extend(named(&mut naming, "export_image_edit_stack", image.clone(), assert_success("edit stack crop", export_image_edit_stack(RunEvents::silent(), ImageEditStackRequest { paths: vec![image.clone()], steps: ImageEditSteps { crop: Some(CropStep { x: 0, y: 0, width: 0, height: 0, mode: "aspectRatio".into(), aspect_width: 4, aspect_height: 5, anchor: "center".into() }) }, output_location: location(&root, "edit stack crop") }))));
         outputs.extend(named(&mut naming, "generate_icon_set", image.clone(), assert_success("icons", generate_icon_set(RunEvents::silent(), IconSetRequest { paths: vec![image.clone()], preset: "favicon".into(), sizes: vec![], output_location: location(&root, "icons") }))));
         outputs.extend(named(&mut naming, "create_gif", image.clone(), assert_aggregate_success("create gif", &[image.clone(), image_two.clone()], run_create_gif(&GifCreateRequest { paths: vec![image.clone(), image_two.clone()], frame_delay_ms: 100, loop_forever: true, output_location: location(&root, "create gif"), output_path: None }))));
         outputs.extend(named(&mut naming, "extract_gif_frames", animated.clone(), assert_success("extract gif", extract_gif_frames(RunEvents::silent(), GifExtractRequest { paths: vec![animated.clone()], output_location: location(&root, "extract gif") }))));
@@ -1283,6 +1291,75 @@ mod command_tests {
         cleanup(&heic[0].output_paths());
         cleanup(&webp[0].output_paths());
         let _ = std::fs::remove_file(&src);
+    }
+
+    #[test]
+    fn edit_stack_crops_a_mixed_batch_through_one_encode_per_file() {
+        let root = sandbox("edit_stack_batch");
+        let png = root.join("wide.png");
+        let jpeg = root.join("tall.jpg");
+        let webp = root.join("square.webp");
+        let heic = root.join("photo.heic");
+        let small = root.join("small.png");
+        let corrupt = root.join("corrupt.jpg");
+        let pattern = |width: u32, height: u32, seed: u8| image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(width, height, |x, y| Rgba([seed, (x * 3) as u8, (y * 5) as u8, 255])));
+        pattern(240, 120, 1).save(&png).unwrap();
+        pattern(90, 200, 2).to_rgb8().save(&jpeg).unwrap();
+        std::fs::write(&webp, crate::kit::images::encode(&pattern(160, 160, 3), crate::kit::images::OutputFormat::WebP, 90).unwrap()).unwrap();
+        std::fs::write(&heic, crate::kit::images::encode(&pattern(128, 96, 4), crate::kit::images::OutputFormat::Heic, 90).unwrap()).unwrap();
+        pattern(40, 40, 5).save(&small).unwrap();
+        std::fs::write(&corrupt, b"not a jpeg").unwrap();
+        let inputs = vec![png.clone(), jpeg.clone(), small.clone(), webp.clone(), corrupt.clone(), heic.clone()];
+        let originals = inputs.iter().map(|path| (Original::of(path), std::fs::read(path).unwrap())).collect::<Vec<_>>();
+        let rectangle = CropStep { x: 10, y: 20, width: 64, height: 48, mode: "rectangle".into(), aspect_width: 0, aspect_height: 0, anchor: "custom".into() };
+        let run = |folder: &str| tauri::async_runtime::block_on(export_image_edit_stack(RunEvents::silent(), ImageEditStackRequest {
+            paths: inputs.clone(), steps: ImageEditSteps { crop: Some(rectangle.clone()) }, output_location: OutputLocation::CustomFolder(root.join(folder)),
+        }));
+        std::fs::create_dir_all(root.join("out")).unwrap();
+        std::fs::create_dir_all(root.join("again")).unwrap();
+
+        let first = run("out");
+        assert_eq!(first.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), inputs, "one outcome per file, in input order");
+        let small_error = first[2].error().expect("a rectangle outside the small image fails only that file");
+        assert!(small_error.message.contains("fit inside"), "{}", small_error.message);
+        assert!(first[4].error().is_some(), "the unreadable file fails on its own");
+        assert!(first[2].output_paths().is_empty() && first[4].output_paths().is_empty());
+        let expected_names = [("wide.png", "wide-cropped.png"), ("tall.jpg", "tall-cropped.jpg"), ("square.webp", "square-cropped.webp"), ("photo.heic", "photo-cropped.heic")];
+        let successes = [&first[0], &first[1], &first[3], &first[5]];
+        for (outcome, (_, expected)) in successes.iter().zip(expected_names) {
+            assert!(outcome.error().is_none(), "{}", outcome.error().cloned().unwrap_or_default());
+            assert_eq!(outcome.output_paths(), [root.join("out").join(expected)]);
+        }
+        for path in [&first[0].output_paths()[0], &first[1].output_paths()[0], &first[3].output_paths()[0]] {
+            let cropped = image::open(path).unwrap();
+            assert_eq!((cropped.width(), cropped.height()), (64, 48), "{} keeps the source-space crop", path.display());
+        }
+        assert_eq!(image::guess_format(&std::fs::read(&first[0].output_paths()[0]).unwrap()).unwrap(), image::ImageFormat::Png);
+        assert_eq!(image::guess_format(&std::fs::read(&first[1].output_paths()[0]).unwrap()).unwrap(), image::ImageFormat::Jpeg);
+        assert_eq!(&std::fs::read(&first[3].output_paths()[0]).unwrap()[..4], b"RIFF");
+        let heic_output = heif::decode(&std::fs::read(&first[5].output_paths()[0]).unwrap()).expect("HEIC input stays HEIC");
+        assert_eq!((heic_output.width(), heic_output.height()), (64, 48));
+
+        let jpeg_source = crate::kit::images::load_image(&jpeg).unwrap().crop_imm(10, 20, 64, 48);
+        assert_eq!(std::fs::read(&first[1].output_paths()[0]).unwrap(), crate::kit::images::encode(&jpeg_source, crate::kit::images::OutputFormat::Jpeg, 90).unwrap(), "JPEG is decoded and encoded once at quality 90");
+
+        let repeated = run("out");
+        for (index, expected) in [(0, "wide-cropped-1.png"), (1, "tall-cropped-1.jpg"), (3, "square-cropped-1.webp"), (5, "photo-cropped-1.heic")] {
+            assert_eq!(repeated[index].output_paths(), [root.join("out").join(expected)], "a second run never overwrites");
+        }
+        let elsewhere = run("again");
+        for index in [0, 1, 3, 5] {
+            assert_eq!(std::fs::read(&first[index].output_paths()[0]).unwrap(), std::fs::read(&elsewhere[index].output_paths()[0]).unwrap(), "the same stack gives the same bytes");
+        }
+        for (original, bytes) in &originals {
+            original.assert_untouched();
+            assert_eq!(&std::fs::read(&original.path).unwrap(), bytes);
+        }
+        let empty = tauri::async_runtime::block_on(export_image_edit_stack(RunEvents::silent(), ImageEditStackRequest {
+            paths: vec![png.clone()], steps: ImageEditSteps::default(), output_location: OutputLocation::CustomFolder(root.join("out")),
+        }));
+        assert!(empty[0].error().is_some_and(|error| matches!(error.kind, ErrorKind::InvalidInput)), "an empty stack never writes");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
