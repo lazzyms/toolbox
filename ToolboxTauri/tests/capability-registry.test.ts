@@ -88,12 +88,17 @@ test("every tool declares one output suffix and many-to-one tools take ordered i
 });
 
 test("every many-to-one tool opens the save step and sends the chosen path", () => {
-  const viewSources = readdirSync(new URL("../src/views/", import.meta.url))
-    .filter((name) => name.endsWith(".tsx"))
-    .map((name) => readFileSync(new URL(`../src/views/${name}`, import.meta.url), "utf8"));
+  // Requests are built in the views and, for media tools, in their feature modules.
+  const sourcesIn = (folder: string): string[] =>
+    readdirSync(new URL(`../src/${folder}/`, import.meta.url), { withFileTypes: true }).flatMap((entry) => {
+      if (entry.isDirectory()) return sourcesIn(`${folder}/${entry.name}`);
+      return /\.tsx?$/.test(entry.name) ? [readFileSync(new URL(`../src/${folder}/${entry.name}`, import.meta.url), "utf8")] : [];
+    });
+  const viewSources = [...sourcesIn("views"), ...sourcesIn("features")];
   const requestFor = (command: string) => {
     for (const source of viewSources) {
-      const start = source.indexOf(`invoke<ToolResult>("${command}"`);
+      const invoked = source.indexOf(`invoke<ToolResult>("${command}"`);
+      const start = invoked === -1 ? source.indexOf(`command: "${command}"`) : invoked;
       if (start === -1) continue;
       const open = source.indexOf("request: {", start) + "request: ".length;
       let depth = 0;

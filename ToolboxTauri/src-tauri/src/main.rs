@@ -769,6 +769,32 @@ mod command_tests {
     }
 
     #[test]
+    fn create_gif_with_an_unreadable_frame_names_that_frame_and_saves_nothing() {
+        let root = sandbox("gif-unreadable-frame");
+        let first = root.join("first.png"); write_png(&first, 24, 10);
+        let broken = root.join("IMG_2212.heic"); std::fs::write(&broken, b"not a heic image").unwrap();
+        let last = root.join("last.png");
+        image::RgbaImage::from_pixel(48, 12, Rgba([1, 2, 3, 40])).save(&last).unwrap();
+        let chosen_folder = root.join("chosen");
+        std::fs::create_dir_all(&chosen_folder).unwrap();
+        let paths = vec![first.clone(), broken.clone(), last.clone()];
+        let inputs = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+
+        let outcomes = tauri::async_runtime::block_on(run_create_gif(&GifCreateRequest {
+            paths: paths.clone(), frame_delay_ms: 100, loop_forever: true, output_location: OutputLocation::AlongsideInput, output_path: Some(chosen_folder.join("first-animated.gif")),
+        }));
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), paths);
+        assert!(outcomes.iter().all(|outcome| outcome.output_paths().is_empty() && outcome.error().is_some()));
+        assert_eq!(
+            outcomes[1].error().unwrap().message,
+            "Frame 2, IMG_2212.heic, isn't a readable HEIC image. Replace or remove frame 2, then make the GIF again. Nothing was saved."
+        );
+        assert_eq!(std::fs::read_dir(&chosen_folder).unwrap().count(), 0, "nothing is published");
+        for (path, bytes) in paths.iter().zip(inputs) { assert_eq!(std::fs::read(path).unwrap(), bytes); }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn aggregate_commands_report_one_combined_success_and_each_missing_input() {
         let root = sandbox("aggregate-outcomes");
         let image = root.join("first.png"); write_png(&image, 32, 44);

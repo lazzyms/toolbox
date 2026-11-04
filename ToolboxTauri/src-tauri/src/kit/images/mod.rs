@@ -500,6 +500,7 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
 }
+pub(crate) mod gif_frames;
 pub mod tools;
 #[cfg(test)]
 pub(crate) mod fixtures;
