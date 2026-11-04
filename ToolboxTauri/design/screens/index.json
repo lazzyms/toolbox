@@ -449,31 +449,87 @@
   },
   {
     "board": "ConvertBatch.dc.html",
-    "title": "Convert: PDF to images, extract, EPUB, to PDF",
+    "title": "PDF to Images: range, picks, estimate, results; extract, EPUB, to PDF",
     "state": "default",
     "query": "",
     "screen": "ConvertBatch--default.jpg"
   },
   {
     "board": "ConvertBatch.dc.html",
-    "title": "Convert: PDF to images, extract, EPUB, to PDF",
+    "title": "PDF to Images: range, picks, estimate, results; extract, EPUB, to PDF",
     "state": "tool-extract-from-pdf",
     "query": "tool=Extract%20from%20PDF",
     "screen": "ConvertBatch--tool-extract-from-pdf.jpg"
   },
   {
     "board": "ConvertBatch.dc.html",
-    "title": "Convert: PDF to images, extract, EPUB, to PDF",
+    "title": "PDF to Images: range, picks, estimate, results; extract, EPUB, to PDF",
     "state": "tool-pdf-to-epub",
     "query": "tool=PDF%20to%20EPUB",
     "screen": "ConvertBatch--tool-pdf-to-epub.jpg"
   },
   {
     "board": "ConvertBatch.dc.html",
-    "title": "Convert: PDF to images, extract, EPUB, to PDF",
+    "title": "PDF to Images: range, picks, estimate, results; extract, EPUB, to PDF",
     "state": "tool-convert-to-pdf",
     "query": "tool=Convert%20to%20PDF",
     "screen": "ConvertBatch--tool-convert-to-pdf.jpg"
+  },
+  {
+    "board": "ConvertBatch.dc.html",
+    "title": "PDF to Images: range, picks, estimate, results; extract, EPUB, to PDF",
+    "state": "state-empty",
+    "query": "state=Empty",
+    "screen": "ConvertBatch--state-empty.jpg"
+  },
+  {
+    "board": "ConvertBatch.dc.html",
+    "title": "PDF to Images: range, picks, estimate, results; extract, EPUB, to PDF",
+    "state": "state-range-and-resolution",
+    "query": "state=Range%20and%20resolution",
+    "screen": "ConvertBatch--state-range-and-resolution.jpg"
+  },
+  {
+    "board": "ConvertBatch.dc.html",
+    "title": "PDF to Images: range, picks, estimate, results; extract, EPUB, to PDF",
+    "state": "state-range-error",
+    "query": "state=Range%20error",
+    "screen": "ConvertBatch--state-range-error.jpg"
+  },
+  {
+    "board": "ConvertBatch.dc.html",
+    "title": "PDF to Images: range, picks, estimate, results; extract, EPUB, to PDF",
+    "state": "state-pick-pages",
+    "query": "state=Pick%20pages",
+    "screen": "ConvertBatch--state-pick-pages.jpg"
+  },
+  {
+    "board": "ConvertBatch.dc.html",
+    "title": "PDF to Images: range, picks, estimate, results; extract, EPUB, to PDF",
+    "state": "state-converting",
+    "query": "state=Converting",
+    "screen": "ConvertBatch--state-converting.jpg"
+  },
+  {
+    "board": "ConvertBatch.dc.html",
+    "title": "PDF to Images: range, picks, estimate, results; extract, EPUB, to PDF",
+    "state": "state-converted",
+    "query": "state=Converted",
+    "screen": "ConvertBatch--state-converted.jpg"
+  },
+  {
+    "board": "ConvertBatch.dc.html",
+    "title": "PDF to Images: range, picks, estimate, results; extract, EPUB, to PDF",
+    "state": "state-renderer-missing",
+    "query": "state=Renderer%20missing",
+    "screen": "ConvertBatch--state-renderer-missing.jpg"
+  },
+  {
+    "board": "ConvertBatch.dc.html",
+    "title": "PDF to Images: range, picks, estimate, results; extract, EPUB, to PDF",
+    "state": "state-rail",
+    "query": "state=Rail",
+    "screen": "ConvertBatch--state-rail.jpg"
   },
   {
     "board": "OCR.dc.html",
@@ -491,10 +547,73 @@
   },
   {
     "board": "ImagesToPdf.dc.html",
-    "title": "Images to PDF: ordered pages and save dialog",
+    "title": "Images to PDF: order, layout, save dialog, combine",
     "state": "default",
     "query": "",
     "screen": "ImagesToPdf--default.jpg"
+  },
+  {
+    "board": "ImagesToPdf.dc.html",
+    "title": "Images to PDF: order, layout, save dialog, combine",
+    "state": "state-empty",
+    "query": "state=Empty",
+    "screen": "ImagesToPdf--state-empty.jpg"
+  },
+  {
+    "board": "ImagesToPdf.dc.html",
+    "title": "Images to PDF: order, layout, save dialog, combine",
+    "state": "state-dragging",
+    "query": "state=Dragging",
+    "screen": "ImagesToPdf--state-dragging.jpg"
+  },
+  {
+    "board": "ImagesToPdf.dc.html",
+    "title": "Images to PDF: order, layout, save dialog, combine",
+    "state": "state-a4-layout",
+    "query": "state=A4%20layout",
+    "screen": "ImagesToPdf--state-a4-layout.jpg"
+  },
+  {
+    "board": "ImagesToPdf.dc.html",
+    "title": "Images to PDF: order, layout, save dialog, combine",
+    "state": "state-save-dialog",
+    "query": "state=Save%20dialog",
+    "screen": "ImagesToPdf--state-save-dialog.jpg"
+  },
+  {
+    "board": "ImagesToPdf.dc.html",
+    "title": "Images to PDF: order, layout, save dialog, combine",
+    "state": "state-combining",
+    "query": "state=Combining",
+    "screen": "ImagesToPdf--state-combining.jpg"
+  },
+  {
+    "board": "ImagesToPdf.dc.html",
+    "title": "Images to PDF: order, layout, save dialog, combine",
+    "state": "state-combined",
+    "query": "state=Combined",
+    "screen": "ImagesToPdf--state-combined.jpg"
+  },
+  {
+    "board": "ImagesToPdf.dc.html",
+    "title": "Images to PDF: order, layout, save dialog, combine",
+    "state": "state-combined-with-warnings",
+    "query": "state=Combined%20with%20warnings",
+    "screen": "ImagesToPdf--state-combined-with-warnings.jpg"
+  },
+  {
+    "board": "ImagesToPdf.dc.html",
+    "title": "Images to PDF: order, layout, save dialog, combine",
+    "state": "state-combine-failed",
+    "query": "state=Combine%20failed",
+    "screen": "ImagesToPdf--state-combine-failed.jpg"
+  },
+  {
+    "board": "ImagesToPdf.dc.html",
+    "title": "Images to PDF: order, layout, save dialog, combine",
+    "state": "state-rail",
+    "query": "state=Rail",
+    "screen": "ImagesToPdf--state-rail.jpg"
   },
   {
     "board": "FormattedPdf.dc.html",
@@ -561,17 +680,66 @@
   },
   {
     "board": "ImageConvert.dc.html",
-    "title": "Convert image format",
+    "title": "Convert image format: mixed batch, skipped, TIFF pages",
     "state": "default",
     "query": "",
     "screen": "ImageConvert--default.jpg"
   },
   {
     "board": "ImageConvert.dc.html",
-    "title": "Convert image format",
+    "title": "Convert image format: mixed batch, skipped, TIFF pages",
     "state": "format-png",
     "query": "format=PNG",
     "screen": "ImageConvert--format-png.jpg"
+  },
+  {
+    "board": "ImageConvert.dc.html",
+    "title": "Convert image format: mixed batch, skipped, TIFF pages",
+    "state": "format-webp",
+    "query": "format=WebP",
+    "screen": "ImageConvert--format-webp.jpg"
+  },
+  {
+    "board": "ImageConvert.dc.html",
+    "title": "Convert image format: mixed batch, skipped, TIFF pages",
+    "state": "format-heic",
+    "query": "format=HEIC",
+    "screen": "ImageConvert--format-heic.jpg"
+  },
+  {
+    "board": "ImageConvert.dc.html",
+    "title": "Convert image format: mixed batch, skipped, TIFF pages",
+    "state": "format-tiff",
+    "query": "format=TIFF",
+    "screen": "ImageConvert--format-tiff.jpg"
+  },
+  {
+    "board": "ImageConvert.dc.html",
+    "title": "Convert image format: mixed batch, skipped, TIFF pages",
+    "state": "state-empty",
+    "query": "state=Empty",
+    "screen": "ImageConvert--state-empty.jpg"
+  },
+  {
+    "board": "ImageConvert.dc.html",
+    "title": "Convert image format: mixed batch, skipped, TIFF pages",
+    "state": "state-converting",
+    "query": "state=Converting",
+    "screen": "ImageConvert--state-converting.jpg"
+  },
+  {
+    "board": "ImageConvert.dc.html",
+    "title": "Convert image format: mixed batch, skipped, TIFF pages",
+    "state": "state-converted",
+    "query": "state=Converted",
+    "screen": "ImageConvert--state-converted.jpg"
+  },
+  {
+    "board": "ImageConvert.dc.html",
+    "title": "Convert image format: mixed batch, skipped, TIFF pages",
+    "state": "state-rail",
+    "query": "state=Rail",
+    "screen": "ImageConvert--state-rail.jpg"
   },
   {
     "board": "Compress.dc.html",
