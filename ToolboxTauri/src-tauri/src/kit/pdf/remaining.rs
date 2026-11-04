@@ -1,15 +1,17 @@
-use image::codecs::jpeg::JpegEncoder;
-use image::DynamicImage;
+use flate2::{write::ZlibEncoder, Compression};
+use image::metadata::Orientation;
+use image::{DynamicImage, GrayImage, Luma};
 use lopdf::{dictionary, Document, Object, Stream};
 use std::fs;
-use std::io::{self, Cursor};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::kit::common::limits::StoppableHelper;
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming, OutputReservation};
-use crate::kit::contracts::ToolError;
+use crate::kit::contracts::{OutcomeWarning, ToolError, WarningKind};
+use crate::kit::images::source::{self, ImageFamily};
 use super::metadata::{page_bounds, page_rotation};
 use super::{mutation_preflight, PdfMutationIntent};
 
@@ -73,6 +75,127 @@ pub struct ImagesToPdfRequest {
     pub output_location: OutputLocation,
     #[serde(default)]
     pub output_path: Option<PathBuf>,
+    #[serde(flatten)]
+    pub layout: PageLayout,
+}
+
+/// How each image sits on its page. Margin, fit and orientation only apply to
+/// A4 and Letter; a "match image" page is always the image's own size.
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PageLayout {
+    #[serde(default)] pub page_size: PageSize,
+    #[serde(default)] pub margin: Option<PageMargin>,
+    #[serde(default)] pub fit: Option<PageFit>,
+    #[serde(default)] pub orientation: Option<PageOrientation>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PageSize { #[default] MatchImage, A4, Letter }
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PageMargin { None, #[default] Small, Large }
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PageFit { #[default] Fit, Fill }
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PageOrientation { #[default] Automatic, Portrait, Landscape }
+
+/// Portrait paper sizes in PDF points: A4 is 210 × 297 mm, Letter 8.5 × 11 in.
+pub const A4_POINTS: (f32, f32) = (595.2756, 841.8898);
+pub const LETTER_POINTS: (f32, f32) = (612.0, 792.0);
+
+impl PageMargin {
+    /// Small is half an inch (12.7 mm), large is one inch (25.4 mm), on every side.
+    pub fn points(self) -> f32 {
+        match self { PageMargin::None => 0.0, PageMargin::Small => 36.0, PageMargin::Large => 72.0 }
+    }
+}
+
+/// Where one image lands: the page's media box size, an optional clip
+/// rectangle (fill only), and the rectangle the image is drawn into, all in points.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PagePlacement {
+    pub page: (f32, f32),
+    pub clip: Option<[f32; 4]>,
+    pub image: [f32; 4],
+}
+
+impl PageLayout {
+    pub fn place(&self, width: u32, height: u32) -> PagePlacement {
+        let (width, height) = (width as f32, height as f32);
+        let (short, long) = match self.page_size {
+            PageSize::MatchImage => return PagePlacement { page: (width, height), clip: None, image: [0.0, 0.0, width, height] },
+            PageSize::A4 => A4_POINTS,
+            PageSize::Letter => LETTER_POINTS,
+        };
+        let landscape = match self.orientation.unwrap_or_default() {
+            PageOrientation::Automatic => width > height,
+            PageOrientation::Portrait => false,
+            PageOrientation::Landscape => true,
+        };
+        let (page_width, page_height) = if landscape { (long, short) } else { (short, long) };
+        let margin = self.margin.unwrap_or_default().points();
+        let (box_width, box_height) = (page_width - 2.0 * margin, page_height - 2.0 * margin);
+        let fill = self.fit.unwrap_or_default() == PageFit::Fill;
+        let (across, down) = (box_width / width, box_height / height);
+        let scale = if fill { across.max(down) } else { across.min(down) };
+        let (drawn_width, drawn_height) = (width * scale, height * scale);
+        let image = [margin + (box_width - drawn_width) / 2.0, margin + (box_height - drawn_height) / 2.0, drawn_width, drawn_height];
+        PagePlacement { page: (page_width, page_height), clip: fill.then_some([margin, margin, box_width, box_height]), image }
+    }
+}
+
+impl PagePlacement {
+    // Fill trims by clipping the drawn image to the page's content box; the
+    // embedded image data itself is never cropped or resampled. A camera
+    // orientation still pending on the embedded data is turned in the matrix.
+    fn content(&self, orientation: Orientation) -> String {
+        let mut content = String::from("q ");
+        if let Some([x, y, width, height]) = self.clip {
+            content.push_str(&format!("{} {} {} {} re W n ", points(x), points(y), points(width), points(height)));
+        }
+        let matrix = CornerMap::of(orientation).matrix(self.image).map(points);
+        content.push_str(&format!("{} cm /Im0 Do Q", matrix.join(" ")));
+        content
+    }
+}
+
+/// Where image's own `apply_orientation` moves a stored image's corners, so
+/// pixels oriented before embedding and a JPEG turned by its placement follow
+/// one rule. Positions are fractions of the upright image from its top-left:
+/// the stored top-left corner, then one step across and one step down.
+struct CornerMap { origin: (f32, f32), across: (f32, f32), down: (f32, f32) }
+
+impl CornerMap {
+    fn of(orientation: Orientation) -> Self {
+        let mut probe = DynamicImage::ImageLuma8(GrayImage::from_fn(2, 2, |column, row| Luma([(column + 2 * row) as u8])));
+        probe.apply_orientation(orientation);
+        let probe = probe.into_luma8();
+        let upright = |corner: u8| probe.enumerate_pixels().find(|(_, _, pixel)| pixel[0] == corner).map(|(column, row, _)| (column as f32, row as f32)).expect("orienting keeps every corner");
+        let (origin, across, down) = (upright(0), upright(1), upright(2));
+        CornerMap { origin, across: (across.0 - origin.0, across.1 - origin.1), down: (down.0 - origin.0, down.1 - origin.1) }
+    }
+
+    fn swaps_sides(&self) -> bool { self.across.0 == 0.0 }
+
+    // The `cm` operands that draw the stored image's unit square (rows bottom
+    // to top) upright into the rectangle [x, y, width, height].
+    fn matrix(&self, [x, y, width, height]: [f32; 4]) -> [f32; 6] {
+        let CornerMap { origin: (p0, q0), across: (p1, q1), down: (p2, q2) } = *self;
+        [width * p1, -height * q1, -width * p2, height * q2, x + width * (p0 + p2), y + height * (1.0 - q0 - q2)]
+    }
+}
+
+fn points(value: f32) -> String {
+    let text = format!("{value:.3}");
+    let text = text.trim_end_matches('0').trim_end_matches('.');
+    if text == "-0" { "0".to_string() } else { text.to_string() }
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -518,11 +641,14 @@ pub fn images_to_pdf(request: &ImagesToPdfRequest) -> JobOutcome {
     let mut document = Document::with_version("1.5");
     let pages_id = document.new_object_id();
     let mut kids = Vec::new();
-    for path in &request.paths {
-        let (jpeg, width, height) = match image_as_jpeg(path) { Ok(value) => value, Err(error) => return failure(path.clone(), format!("Could not process {}: {error}", path.display())) };
-        let image_id = document.add_object(Stream::new(dictionary! { "Type" => "XObject", "Subtype" => "Image", "Width" => width as i64, "Height" => height as i64, "ColorSpace" => "DeviceRGB", "BitsPerComponent" => 8, "Filter" => "DCTDecode" }, jpeg));
-        let content_id = document.add_object(Stream::new(dictionary! {}, format!("q {width} 0 0 {height} 0 0 cm /Im0 Do Q").into_bytes()));
-        let page_id = document.add_object(dictionary! { "Type" => "Page", "Parent" => pages_id, "MediaBox" => vec![0.into(), 0.into(), (width as f32).into(), (height as f32).into()], "Resources" => dictionary! { "XObject" => dictionary! { "Im0" => image_id } }, "Contents" => content_id });
+    let mut reduced = Vec::new();
+    for (index, path) in request.paths.iter().enumerate() {
+        let image = match embed_image(&mut document, path) { Ok(value) => value, Err(error) => return failure(path.clone(), format!("Could not process {}: {error}", path.display())) };
+        if let Some(bits) = image.reduced_from_bits { reduced.push(format!("page {} ({bits}-bit)", index + 1)); }
+        let placement = request.layout.place(image.width, image.height);
+        let content_id = document.add_object(Stream::new(dictionary! {}, placement.content(image.orientation).into_bytes()));
+        let (page_width, page_height) = placement.page;
+        let page_id = document.add_object(dictionary! { "Type" => "Page", "Parent" => pages_id, "MediaBox" => vec![0.into(), 0.into(), page_width.into(), page_height.into()], "Resources" => dictionary! { "XObject" => dictionary! { "Im0" => image.id } }, "Contents" => content_id });
         kids.push(page_id.into());
     }
     document.objects.insert(pages_id, dictionary! { "Type" => "Pages", "Kids" => kids, "Count" => request.paths.len() as i64 }.into());
@@ -530,29 +656,83 @@ pub fn images_to_pdf(request: &ImagesToPdfRequest) -> JobOutcome {
     document.trailer.set("Root", catalog_id);
     match document.save(output.path()) {
         Ok(_) => match output.publish() {
-            Ok(path) => JobOutcome::succeeded(first, vec![path], "Images combined into PDF"),
+            Ok(path) => {
+                let outcome = JobOutcome::succeeded(first, vec![path], "Images combined into PDF");
+                if reduced.is_empty() { return outcome; }
+                outcome.with_warning(OutcomeWarning {
+                    kind: WarningKind::PrecisionReduced,
+                    message: format!("Reduced to 8-bit sRGB to fit in the PDF: {}.", reduced.join(", ")),
+                })
+            }
             Err(error) => failure(first, format!("Could not publish combined PDF: {error}")),
         },
         Err(error) => failure(first, format!("Save failed: {error}")),
     }
 }
 
-fn image_as_jpeg(path: &PathBuf) -> Result<(Vec<u8>, u32, u32), String> {
-    let extension = path.extension().and_then(|value| value.to_str()).unwrap_or("").to_lowercase();
-    if matches!(extension.as_str(), "gif" | "tif" | "tiff") { return Err("Animated or multi-frame image inputs are not supported for image-to-PDF conversion.".to_string()); }
-    let image = if matches!(extension.as_str(), "heic" | "heif") {
-        let converted = std::env::temp_dir().join(format!("toolbox_heic_{}_{}.jpg", std::process::id(), path.file_name().and_then(|name| name.to_str()).unwrap_or("input")));
-        let result = Command::new("sips").arg("-s").arg("format").arg("jpeg").arg(path).arg("--out").arg(&converted).output_until_stopped()
-            .map_err(|error| format!("Could not run the HEIC decoder: {error}"))?;
-        if !result.status.success() { return Err(stderr(result, "HEIC decoding is unavailable on this system.")); }
-        let decoded = image::open(&converted).map_err(|error| format!("Could not decode HEIC image: {error}"));
-        let _ = fs::remove_file(&converted);
-        decoded?
-    } else { image::open(path).map_err(|error| format!("Could not decode image: {error}"))? };
-    let (width, height) = (image.width(), image.height());
-    let mut output = Cursor::new(Vec::new());
-    JpegEncoder::new_with_quality(&mut output, 92).encode_image(&DynamicImage::ImageRgb8(image.to_rgb8())).map_err(|error| format!("Could not encode image as JPEG: {error}"))?;
-    Ok((output.into_inner(), width, height))
+// Width and height are the upright size; orientation is what the page
+// placement still has to apply to the embedded data.
+struct EmbeddedImage {
+    id: lopdf::ObjectId,
+    width: u32,
+    height: u32,
+    orientation: Orientation,
+    reduced_from_bits: Option<u8>,
+}
+
+// A baseline JPEG goes in as its own bytes and is turned upright by its
+// placement; everything else is oriented, then stored without loss as 8-bit
+// Flate samples, with any alpha kept as a soft mask.
+fn embed_image(document: &mut Document, path: &Path) -> Result<EmbeddedImage, String> {
+    if !matches!(ImageFamily::of(path), ImageFamily::Jpeg | ImageFamily::Png | ImageFamily::WebP | ImageFamily::Heif) {
+        return Err("Only PNG, JPEG, WebP, HEIC and HEIF images can be combined into a PDF.".to_string());
+    }
+    let decoded = source::decode(path)?;
+    if decoded.pages.len() != 1 { return Err("Multi-page images can't be combined into a PDF.".to_string()); }
+    let reduced_from_bits = (decoded.bits_per_channel > 8).then_some(decoded.bits_per_channel);
+    let has_alpha = decoded.has_alpha;
+    let baseline_jpeg = decoded.baseline_jpeg.clone();
+    let orientation = decoded.orientation.unwrap_or(Orientation::NoTransforms);
+    let mut page = decoded.into_first_page();
+    if let Some((jpeg, color_space)) = baseline_jpeg.and_then(|bytes| jpeg_color_space(&bytes).map(|space| (bytes, space))) {
+        let (width, height) = (page.width(), page.height());
+        let dict = dictionary! { "Type" => "XObject", "Subtype" => "Image", "Width" => width as i64, "Height" => height as i64, "BitsPerComponent" => 8, "ColorSpace" => color_space, "Filter" => "DCTDecode" };
+        let (width, height) = if CornerMap::of(orientation).swaps_sides() { (height, width) } else { (width, height) };
+        return Ok(EmbeddedImage { id: document.add_object(Stream::new(dict, jpeg)), width, height, orientation, reduced_from_bits });
+    }
+    page.apply_orientation(orientation);
+    let (width, height) = (page.width(), page.height());
+    let image = dictionary! { "Type" => "XObject", "Subtype" => "Image", "Width" => width as i64, "Height" => height as i64, "BitsPerComponent" => 8 };
+    let (samples, color_space) = if page.color().has_color() { (page.to_rgb8().into_raw(), "DeviceRGB") } else { (page.to_luma8().into_raw(), "DeviceGray") };
+    let mut dict = image;
+    dict.set("ColorSpace", color_space);
+    if has_alpha {
+        let alpha = page.to_rgba8().pixels().map(|pixel| pixel[3]).collect::<Vec<_>>();
+        let mask = dictionary! { "Type" => "XObject", "Subtype" => "Image", "Width" => width as i64, "Height" => height as i64, "ColorSpace" => "DeviceGray", "BitsPerComponent" => 8 };
+        dict.set("SMask", document.add_object(flate_stream(mask, &alpha)?));
+    }
+    Ok(EmbeddedImage { id: document.add_object(flate_stream(dict, &samples)?), width, height, orientation: Orientation::NoTransforms, reduced_from_bits })
+}
+
+fn flate_stream(mut dict: lopdf::Dictionary, samples: &[u8]) -> Result<Stream, String> {
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(samples).map_err(|error| format!("Could not compress image: {error}"))?;
+    dict.set("Filter", "FlateDecode");
+    Ok(Stream::new(dict, encoder.finish().map_err(|error| format!("Could not compress image: {error}"))?).with_compression(false))
+}
+
+// The component count in the SOF0 header picks the PDF color space; a
+// four-component (CMYK) JPEG is stored losslessly instead.
+fn jpeg_color_space(bytes: &[u8]) -> Option<&'static str> {
+    let mut at = 2;
+    while let Some(&[0xFF, marker, high, low]) = bytes.get(at..at + 4) {
+        match marker {
+            0xFF => at += 1,
+            0xC0 => return match bytes.get(at + 9)? { 1 => Some("DeviceGray"), 3 => Some("DeviceRGB"), _ => None },
+            _ => at += 2 + usize::from(u16::from_be_bytes([high, low])),
+        }
+    }
+    None
 }
 
 pub fn add_page_numbers(request: &PageOverlayRequest, input: PathBuf) -> JobOutcome {
@@ -870,12 +1050,12 @@ fn number_position(position: Option<&str>, width: f32, height: f32) -> (f32, f32
 fn watermark_image(request: &PageOverlayRequest, input: PathBuf, logo: &PathBuf) -> JobOutcome {
     let mut document = match load_existing_document_for_mutation(&input) { Ok(document) => document, Err(error) => return failure(input, error) };
     if let Err(error) = validate_overlay_scope(request.pages.as_deref(), document.get_pages().len()) { return failure(input, error); }
-    let (bytes, image_width, image_height) = match image_as_jpeg(logo) { Ok(value) => value, Err(error) => return failure(input, error) };
-    let output = match OutputNaming::reserve_destination(&input, &request.output_location, "-watermarked", "pdf") {
+        let output = match OutputNaming::reserve_destination(&input, &request.output_location, "-watermarked", "pdf") {
         Ok(output) => output,
         Err(error) => return failure(input, format!("Could not reserve watermarked PDF output: {error}")),
     };
-    let image_id = document.add_object(Stream::new(dictionary! { "Type" => "XObject", "Subtype" => "Image", "Width" => image_width as i64, "Height" => image_height as i64, "ColorSpace" => "DeviceRGB", "BitsPerComponent" => 8, "Filter" => "DCTDecode" }, bytes));
+    let logo_image = match embed_image(&mut document, logo) { Ok(value) => value, Err(error) => return failure(input, error) };
+    let (image_id, image_width, image_height) = (logo_image.id, logo_image.width, logo_image.height);
     let state_id = document.add_object(dictionary! { "Type" => "ExtGState", "ca" => request.opacity.clamp(1, 100) as f32 / 100.0, "CA" => request.opacity.clamp(1, 100) as f32 / 100.0 });
     for (number, page_id) in document.get_pages().values().copied().enumerate() {
         if request.pages.as_ref().is_some_and(|pages| !pages.contains(&number)) { continue; }
@@ -928,6 +1108,9 @@ fn failure(input_path: PathBuf, error: String) -> JobOutcome { JobOutcome::failu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::codecs::jpeg::JpegEncoder;
+    use image::DynamicImage;
+    use std::io::Cursor;
 
     static SPLIT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -1192,6 +1375,34 @@ mod tests {
         assert!(watermarked_content.contains("40 0 0 30 186 180 cm"), "logo coordinates: {watermarked_content}");
 
         for output in numbered.output_paths().into_iter().chain(watermarked.output_paths()) { let _ = fs::remove_file(output); }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_transparent_png_logo_watermark_keeps_its_alpha_as_a_soft_mask() {
+        let root = split_fixture_root("transparent-logo-watermark");
+        let input = root.join("document.pdf");
+        let output = root.join("outputs");
+        fs::create_dir_all(&output).unwrap();
+        offset_rotated_overlay_fixture(&input);
+        let logo = root.join("logo.png");
+        let pixels = image::RgbaImage::from_fn(40, 30, |x, _| image::Rgba([255, 0, 0, if x < 20 { 0 } else { 255 }]));
+        pixels.save(&logo).unwrap();
+        let original = fs::read(&logo).unwrap();
+
+        let watermarked = watermark(&PageOverlayRequest {
+            paths: vec![input.clone()], text: String::new(), opacity: 70,
+            position: Some("bottom-right".into()), logo_path: Some(logo.clone()), pages: None,
+            start_number: None, font_size: None, output_location: OutputLocation::CustomFolder(output),
+        }, input.clone());
+
+        assert!(watermarked.error().is_none(), "logo watermark failed: {:?}", watermarked.error());
+        let document = Document::load(watermarked.output_paths().first().unwrap()).unwrap();
+        let logo_image = document.objects.values().filter_map(|object| object.as_stream().ok())
+            .find(|stream| stream.dict.get(b"Width").and_then(Object::as_i64).ok() == Some(40) && stream.dict.has(b"SMask"))
+            .expect("the logo is stored with a soft mask");
+        assert_eq!(logo_image.dict.get(b"Filter").unwrap().as_name().unwrap(), b"FlateDecode");
+        assert_eq!(fs::read(&logo).unwrap(), original);
         fs::remove_dir_all(root).unwrap();
     }
 
