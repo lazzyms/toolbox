@@ -565,3 +565,190 @@ test('one signature drag stays in one undo step', async ({ page }) => {
   await expect(page.locator('.scene-object-hit')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Redo', exact: true })).toBeEnabled();
 });
+
+const hitX = (page: Page, index = 0) => page.locator('.scene-object-hit').nth(index).evaluate((rect) => Number(rect.getAttribute('x')));
+const summary = (page: Page) => page.getByRole('list', { name: 'Changes, applied in this fixed order' }).getByRole('listitem');
+
+test('arrow and Shift+arrow nudge by recorded 1 pt and 10 pt steps', async ({ page }) => {
+  await openEditor(page);
+  await draw(page, 'Text', .3);
+  await page.getByRole('button', { name: 'Select', exact: true }).click();
+  await page.getByRole('button', { name: 'text object 1', exact: true }).focus();
+  await expect(page.getByText('Arrow keys nudge it, Shift+arrow nudges further.')).toBeVisible();
+  const start = await hitX(page);
+  await page.keyboard.press('ArrowRight');
+  await expect.poll(() => hitX(page)).toBeCloseTo(start + 1, 5);
+  await page.keyboard.press('Shift+ArrowRight');
+  await expect.poll(() => hitX(page)).toBeCloseTo(start + 11, 5);
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect.poll(() => hitX(page)).toBeCloseTo(start + 1, 5);
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect.poll(() => hitX(page)).toBeCloseTo(start, 5);
+});
+
+test('duplicate copies the selected object with a shortcut or button and is undoable', async ({ page }) => {
+  await openEditor(page);
+  await draw(page, 'Shape', .3);
+  await page.getByRole('button', { name: 'Select', exact: true }).click();
+  await page.getByRole('button', { name: 'shape object 1', exact: true }).focus();
+  const start = await hitX(page);
+  await page.keyboard.press('ControlOrMeta+d');
+  await expect(page.locator('.scene-object-hit')).toHaveCount(2);
+  expect(await hitX(page, 1)).toBeCloseTo(start + 10, 5);
+  await expect(page.getByRole('button', { name: 'shape object 2', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await page.getByRole('button', { name: 'Duplicate', exact: true }).click();
+  await expect(page.locator('.scene-object-hit')).toHaveCount(3);
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(page.locator('.scene-object-hit')).toHaveCount(2);
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(page.locator('.scene-object-hit')).toHaveCount(1);
+  const scene = await exported(page);
+  expect(scene.pages[0].objects).toHaveLength(1);
+});
+
+test('the object list names the type, page and text of every placed object', async ({ page }) => {
+  await openEditor(page);
+  await draw(page, 'Text', .2);
+  await draw(page, 'Shape', .5);
+  await page.getByRole('button', { name: 'Next page' }).click();
+  await draw(page, 'Highlight', .6);
+  await page.getByRole('toolbar', { name: 'PDF editor tools' }).getByRole('button', { name: 'Signature', exact: true }).click();
+  await draw(page, 'Signature', .3);
+  const list = page.getByRole('complementary', { name: 'PDF editor inspector' }).getByRole('list').first();
+  await expect(list.getByRole('button')).toHaveText([/Page 1Text/, /Page 1square/, /Page 2highlighted area/, /Page 2Your signature/]);
+  for (const name of ['Text box, page 1: Text', 'Shape, page 1: square', 'Highlight, page 2: highlighted area', 'Signature, page 2: Your signature'])
+    await expect(list.getByRole('button', { name, exact: true })).toBeVisible();
+  await list.getByRole('button', { name: 'Text box, page 1: Text', exact: true }).click();
+  await expect(page.getByText('Page 1 of 3')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'text object 1', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(list.getByRole('button', { name: 'Text box, page 1: Text', exact: true })).toHaveAttribute('aria-pressed', 'true');
+});
+
+test('undo and redo bindings work across sub-tools and switching keeps the edits', async ({ page }) => {
+  await openEditor(page);
+  await draw(page, 'Text', .2);
+  await draw(page, 'Shape', .5);
+  const tools = page.getByRole('toolbar', { name: 'PDF editor tools' });
+  await tools.getByRole('button', { name: 'Watermark', exact: true }).click();
+  await expect(page.locator('.scene-object-hit')).toHaveCount(2);
+  await tools.getByRole('button', { name: 'Crop', exact: true }).click();
+  await expect(page.locator('.scene-object-hit')).toHaveCount(2);
+  const hits = page.locator('.scene-object-hit');
+  for (const [key, count] of [['Meta+z', 1], ['Meta+Shift+z', 2], ['Control+z', 1], ['Control+Shift+z', 2], ['Control+z', 1], ['Control+y', 2]] as const) {
+    await page.keyboard.press(key);
+    await expect(hits, key).toHaveCount(count);
+  }
+  await expect(tools.getByRole('button', { name: 'Crop', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await tools.getByRole('button', { name: 'Text', exact: true }).click();
+  await page.keyboard.press('ControlOrMeta+z');
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(hits).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Redo' })).toBeEnabled();
+  await page.getByRole('button', { name: 'Redo' }).click();
+  await expect(hits).toHaveCount(1);
+});
+
+test('the export summary lists contributing sub-tools in the fixed order as edits change', async ({ page }) => {
+  await openEditor(page);
+  await expect(page.getByText('No changes to export yet.')).toBeVisible();
+  await draw(page, 'Shape', .5);
+  await expect(summary(page)).toHaveText(['Shape']);
+  await draw(page, 'Text', .2);
+  await expect(summary(page)).toHaveText(['Text', 'Shape']);
+  await page.getByRole('button', { name: 'Watermark', exact: true }).click();
+  await page.getByRole('button', { name: 'Add fixed watermark', exact: true }).click();
+  await page.getByRole('button', { name: 'Rotate selected pages' }).click();
+  await expect(summary(page)).toHaveText(['Text', 'Shape', 'Watermark', 'Organize pages']);
+  await page.keyboard.press('ControlOrMeta+z');
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(summary(page)).toHaveText(['Text', 'Shape']);
+});
+
+test('unexported edits prompt before leaving the view or switching files', async ({ page }) => {
+  await openEditor(page);
+  const status = page.locator('.scene-original-note');
+  await expect(status).toHaveText('Original unchanged');
+  await draw(page, 'Shape', .5);
+  await expect(status).toHaveText('1 change not exported · Original unchanged');
+  await draw(page, 'Text', .2);
+  await expect(status).toHaveText('2 changes not exported · Original unchanged');
+  const prompt = page.getByRole('alertdialog', { name: 'Export your changes before closing?' });
+
+  await page.getByRole('button', { name: '← All tools' }).click();
+  await expect(prompt).toContainText("scene-fixture.pdf has 2 changes that haven't been exported. If you close now, they're lost.");
+  await prompt.getByRole('button', { name: 'Cancel' }).click();
+  await expect(prompt).toHaveCount(0);
+  await expect(page.locator('.scene-object-hit')).toHaveCount(2);
+
+  await page.keyboard.press('ControlOrMeta+k');
+  await expect(prompt).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(prompt).toHaveCount(0);
+  await expect(page.locator('.scene-object-hit')).toHaveCount(2);
+
+  await page.evaluate(() => { (window as any).dialogNext = '/local/other.pdf'; });
+  await page.getByRole('button', { name: 'Choose files to process' }).click();
+  await expect(prompt).toBeVisible();
+  await expect(page.locator('[data-shortcut="run"]')).toBeEnabled();
+  await prompt.getByRole('button', { name: 'Export…' }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).calls.filter((c: any) => c.command === 'export_pdf_scene').length)).toBe(1);
+  await expect(status).toHaveText('Original unchanged');
+  await expect(page.locator('.scene-object-hit')).toHaveCount(2);
+
+  await draw(page, 'Shape', .7);
+  await expect(status).toHaveText('1 change not exported · Original unchanged');
+  await page.keyboard.press('Escape');
+  await expect(prompt).toBeVisible();
+  await prompt.getByRole('button', { name: 'Discard changes' }).click();
+  await expect(page.getByRole('textbox', { name: 'Search tools' })).toBeVisible();
+});
+
+test('replacing an exported file does not prompt and discarding switches files', async ({ page }) => {
+  await openEditor(page);
+  await draw(page, 'Shape', .5);
+  await page.evaluate(() => { (window as any).dialogNext = '/local/other.pdf'; });
+  await page.getByRole('button', { name: 'Choose files to process' }).click();
+  const prompt = page.getByRole('alertdialog', { name: 'Export your changes before closing?' });
+  await prompt.getByRole('button', { name: 'Discard changes' }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).calls.filter((c: any) => c.command === 'inspect_pdf_scene').map((c: any) => c.args.request.path).at(-1))).toBe('/local/other.pdf');
+  await expect(page.locator('.scene-object-hit')).toHaveCount(0);
+  await page.getByRole('button', { name: '← All tools' }).click();
+  await expect(prompt).toHaveCount(0);
+  await expect(page.getByRole('textbox', { name: 'Search tools' })).toBeVisible();
+});
+
+for (const { platform, undo, redo, duplicate } of [
+  { platform: 'MacIntel', undo: '⌘Z', redo: '⇧⌘Z', duplicate: '⌘D' },
+  { platform: 'Win32', undo: 'Ctrl+Z', redo: 'Ctrl+Y', duplicate: 'Ctrl+D' },
+]) test(`PDF editor shortcut labels follow ${platform === 'Win32' ? 'Windows' : 'macOS'}`, async ({ page }) => {
+  await page.addInitScript((platform) => Object.defineProperty(window.navigator, 'platform', { configurable: true, value: platform }), platform);
+  await openEditor(page);
+  await expect(page.getByRole('button', { name: 'Undo' })).toHaveAttribute('title', `Undo (${undo})`);
+  await expect(page.getByRole('button', { name: 'Redo' })).toHaveAttribute('title', `Redo (${redo})`);
+  await draw(page, 'Shape', .5);
+  await page.getByRole('button', { name: 'Select', exact: true }).click();
+  await page.getByRole('button', { name: 'shape object 1', exact: true }).focus();
+  await expect(page.getByRole('button', { name: 'Duplicate', exact: true }).locator('kbd')).toHaveText(duplicate);
+});
+
+for (const theme of ['dark', 'light'] as const) test(`object list, export summary and the unexported prompt render in ${theme}`, async ({ page }, testInfo) => {
+  await page.addInitScript(theme => localStorage.setItem('toolbox-theme', theme), theme);
+  await openEditor(page);
+  await expect(page.locator('body')).toHaveAttribute('data-theme', theme);
+  await draw(page, 'Text', .2);
+  await page.getByRole('button', { name: 'Select', exact: true }).click();
+  await page.getByRole('button', { name: 'Text box, page 1: Text', exact: true }).click();
+  await expect(summary(page)).toHaveText(['Text']);
+  const colors = await page.locator('.scene-inspector-heading').first().evaluate((heading) => {
+    const panel = heading.closest('.scene-inspector-panel')!;
+    return [getComputedStyle(heading).color, getComputedStyle(panel).backgroundColor];
+  });
+  expect(colors[0]).not.toBe(colors[1]);
+  await page.screenshot({ path: testInfo.outputPath(`composition-${theme}.png`) });
+  await page.getByRole('button', { name: '← All tools' }).click();
+  const prompt = page.getByRole('alertdialog', { name: 'Export your changes before closing?' });
+  await expect(prompt).toBeVisible();
+  const promptColors = await prompt.evaluate((dialog) => [getComputedStyle(dialog).color, getComputedStyle(dialog).backgroundColor]);
+  expect(promptColors[0]).not.toBe(promptColors[1]);
+  await page.screenshot({ path: testInfo.outputPath(`unexported-prompt-${theme}.png`) });
+});

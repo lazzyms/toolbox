@@ -42,6 +42,9 @@ const repeatLabel = (occurrence: number) => occurrence === 2 ? 'Added twice' : `
 
 export type WorkspaceSourceAction = () => void | Promise<void>;
 
+/** Asks before work that is not exported yet is dropped; calls proceed to go ahead or cancel to keep it. */
+export type DiscardGuard = (proceed: () => void, cancel?: () => void) => void;
+
 // The view rail lives outside the scaffold, so a run reports here to lock it like the options fieldset.
 export const RunStateContext = createContext<((running: boolean) => void) | null>(null);
 
@@ -66,6 +69,7 @@ interface ToolScaffoldProps {
     fileActivation?: Extract<ShellEvent, { kind: 'files' }>;
     onActivationAccepted?: (activationId: string) => void;
     onFilesChange?: (paths: readonly string[]) => void;
+    confirmDiscard?: DiscardGuard;
     /** Overrides the example output name when the view's options decide the output's suffix or type. */
     exampleName?: (inputPath: string) => string;
     children: (props: {
@@ -86,7 +90,7 @@ interface ToolScaffoldProps {
     }) => React.ReactNode;
 }
 
-export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, retryWithPassword, intakeCopy, initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, exampleName, children }: ToolScaffoldProps) => {
+export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, retryWithPassword, intakeCopy, initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, confirmDiscard, exampleName, children }: ToolScaffoldProps) => {
     const nextEntryKey = useRef(0);
     const newEntries = (paths: readonly string[]) => paths.map((path) => ({ key: `entry-${++nextEntryKey.current}`, path }));
     const [entries, setEntries] = useState<IntakeEntry[]>(() => newEntries(initialPaths));
@@ -309,6 +313,8 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         }
     };
 
+    const discard: DiscardGuard = (proceed, cancel) => confirmDiscard ? confirmDiscard(proceed, cancel) : proceed();
+
     const selectOnly = (key: string | null) => {
         setSelection(new Set(key ? [key] : []));
         setAnchor(key);
@@ -318,10 +324,12 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         if (inputPolicy.inputCardinality === 'single' && replaceSingle) {
             const next = incoming[0]?.path;
             if (!next || (entries.length === 1 && entries[0].path === next)) return;
-            const [entry] = newEntries([next]);
-            setNotAdded([]);
-            setEntries([entry]);
-            selectOnly(entry.key);
+            discard(() => {
+                const [entry] = newEntries([next]);
+                setNotAdded([]);
+                setEntries([entry]);
+                selectOnly(entry.key);
+            });
             return;
         }
         const policy = { ...intakePolicyFor(workspace?.title ?? utility.title, intakeTools, utility), notAcceptedMessage: intakeCopy?.notAccepted };
@@ -359,12 +367,18 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
     const [acceptedActivationId, setAcceptedActivationId] = useState<string | null>(null);
     useEffect(() => {
         if (!fileActivation || loading) return;
-        const activated = newEntries(fileActivation.paths);
-        setEntries(activated);
-        setResults([]);
-        setNotAdded([]);
-        selectOnly(activated[0]?.key ?? null);
-        setAcceptedActivationId(fileActivation.activationId);
+        const { activationId, paths } = fileActivation;
+        discard(() => {
+            const activated = newEntries(paths);
+            setEntries(activated);
+            setResults([]);
+            setNotAdded([]);
+            selectOnly(activated[0]?.key ?? null);
+            setAcceptedActivationId(activationId);
+        }, () => {
+            onFilesChange?.(entryPaths);
+            setAcceptedActivationId(activationId);
+        });
     }, [fileActivation?.activationId]);
 
     useEffect(() => {
@@ -408,18 +422,22 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
 
     const removeEntries = (keys: ReadonlySet<string>) => {
         if (loading || keys.size === 0) return;
-        setEntries((current) => current.filter((entry) => !keys.has(entry.key)));
-        selectOnly(null);
-        setMoveStatus('');
+        discard(() => {
+            setEntries((current) => current.filter((entry) => !keys.has(entry.key)));
+            selectOnly(null);
+            setMoveStatus('');
+        });
     };
 
     const clearFiles = () => {
         if (loading) return;
-        setEntries([]);
-        setResults([]);
-        setNotAdded([]);
-        setMoveStatus('');
-        selectOnly(null);
+        discard(() => {
+            setEntries([]);
+            setResults([]);
+            setNotAdded([]);
+            setMoveStatus('');
+            selectOnly(null);
+        });
     };
 
     const selectFile = (index: number) => selectOnly(runnable[index]?.entry.key ?? null);
