@@ -9,7 +9,7 @@ export interface SubTool {
   suffix: string;
   contributes: (scene: PdfScene, baseline: PdfScene) => boolean;
 }
-export interface SceneExportRequest { paths: string[]; scene: PdfScene; outputLocation: OutputLocation }
+export interface SceneExportRequest { paths: string[]; scene: PdfScene; outputLocation: OutputLocation; outputPath?: string }
 export interface SceneExportPlan { request: SceneExportRequest; contributors: SubToolId[]; suffix: string | null }
 
 export const combinedSuffix = '-edited';
@@ -38,9 +38,15 @@ export const sceneContributors = (scene: PdfScene, baseline: PdfScene): SubTool[
 export const exportSuffix = (contributors: readonly Pick<SubTool, 'suffix'>[]): string | null =>
   contributors.length === 0 ? null : contributors.length === 1 ? contributors[0].suffix : combinedSuffix;
 
-export function planSceneExport({ paths, scene, baseline, outputLocation }: {
-  paths: string[]; scene: PdfScene; baseline: PdfScene; outputLocation: OutputLocation;
+/** Plans one export. `outputPath` is the Export As file chosen in the save step; without it the export takes the
+ * default name (original stem + suffix, then -1, -2) in `outputLocation`. */
+export function planSceneExport({ paths, scene, baseline, outputLocation, outputPath = null }: {
+  paths: string[]; scene: PdfScene; baseline: PdfScene; outputLocation: OutputLocation; outputPath?: string | null;
 }): SceneExportPlan {
   const contributors = sceneContributors(scene, baseline);
-  return { request: { paths, scene, outputLocation }, contributors: contributors.map((tool) => tool.id), suffix: exportSuffix(contributors) };
+  return {
+    request: { paths, scene, outputLocation, ...(outputPath ? { outputPath } : {}) },
+    contributors: contributors.map((tool) => tool.id),
+    suffix: exportSuffix(contributors),
+  };
 }

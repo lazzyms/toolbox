@@ -16,17 +16,22 @@ import { colorTokens, readColorToken } from '../features/pdf-editor/colorTokens'
 import { SceneCanvas } from '../features/pdf-editor/SceneCanvas';
 import { subToolInspectors } from '../features/pdf-editor/SubToolInspectors';
 import type { SubToolInspectorProps } from '../features/pdf-editor/SubToolInspectors';
-import { planSceneExport, sceneContributors } from '../features/pdf-editor/subtools';
+import { combinedSuffix, exportSuffix, planSceneExport, sceneContributors } from '../features/pdf-editor/subtools';
+import { proposedSaveName } from '../components/saveStep';
+import type { SaveDialog } from '../registry/saveSteps';
 import { sceneFromDocument, visibleBounds } from '../features/pdf-editor/scene';
 import type { PdfScene, SceneObject, ScenePage, ScenePreview, SceneRect, SceneShape, SceneTool, SignatureMode, WatermarkPattern } from '../features/pdf-editor/scene';
 import { PREVIEW_CACHE_MAX_ENTRIES, PREVIEW_RENDER_SETTINGS, createPreviewCache, pdfEditorErrorMessage, previewCacheKey, requestWithGeneration } from './pdfPreviewHelpers';
 import type { GenerationState } from './pdfPreviewHelpers';
 import { ShortcutHint } from '../components/ShortcutHint';
-import { shortcutTarget } from '../shortcuts';
+import { shortcutLabel, shortcutTarget } from '../shortcuts';
 
 export { createPreviewCache, previewCacheKey, requestWithGeneration } from './pdfPreviewHelpers';
 
 type IndexedScenePreview = { pageIndex: number; preview: ScenePreview };
+
+const exportAsDialog: SaveDialog = { title: 'Export a copy', extension: 'pdf' };
+const exportAsSummary = 'Saves a new copy with your edits. The original isn’t changed, and an existing file is never replaced.';
 
 const tools: { id: SceneTool; label: string; glyph: string }[] = [
   { id: 'select', label: 'Select', glyph: '↖' }, { id: 'text', label: 'Text', glyph: 'T' },
@@ -106,29 +111,36 @@ export const PDFEditorWorkspaceView = ({
   const initialTool = availability.allows(toolFlagBySceneTool[requestedTool])
     ? requestedTool
     : tools.find((item) => availability.allows(toolFlagBySceneTool[item.id]))?.id ?? null;
+  // The export name follows the sub-tools that change the document, so the destination's example tracks the edits.
+  const [suffix, setSuffix] = useState<string | null>(null);
   return <ToolScaffold utility={utility} variant="workspace" sessionKey="pdf-editor-scene" initialPaths={initialPaths} onWorkspaceSourceAction={onWorkspaceSourceAction} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange}
-    onRun={async (paths, outputLocation, { runId }) => {
+    exampleName={(inputPath) => proposedSaveName(inputPath, suffix ?? combinedSuffix, 'pdf')}
+    onRun={async (paths, outputLocation, { runId, outputPath }) => {
       const [inputPath] = paths;
       if (!inputPath || !session.current || session.current.path !== inputPath) throw new Error('Select exactly one open PDF before exporting.');
-      const { request } = planSceneExport({ paths, scene: session.current.scene, baseline: session.current.baseline, outputLocation });
+      const { request } = planSceneExport({ paths, scene: session.current.scene, baseline: session.current.baseline, outputLocation, outputPath });
       const results = await invoke<ToolResult>('export_pdf_scene', { runId, request });
       return results.map((result) => result.failure ? { ...result, failure: { ...result.failure, message: pdfEditorErrorMessage(result.failure.message, 'export') } } : result);
     }}>
-    {({ files, run, loading, destination }) => {
+    {({ files, run, runSavingAs, loading, destination }) => {
       const inputPath = files.length === 1 ? files[0] ?? null : null;
       return <>
         <PDFSceneSession key={inputPath ?? 'empty'} path={inputPath} initialTool={initialTool}
           exporting={loading} onExport={run}
+          onExportAs={() => runSavingAs({ dialog: exportAsDialog, suffix: suffix ?? combinedSuffix, summary: exportAsSummary })}
           onNavigate={onNavigate}
-          onScene={(path, scene, baseline) => { session.current = path && scene && baseline ? { path, scene, baseline } : null; }} />
+          onScene={(path, scene, baseline) => {
+            session.current = path && scene && baseline ? { path, scene, baseline } : null;
+            setSuffix(scene && baseline ? exportSuffix(sceneContributors(scene, baseline)) : null);
+          }} />
         <Card className="pdf-scene-destination py-0"><CardContent className="py-3">{destination}</CardContent></Card>
       </>;
     }}
   </ToolScaffold>;
 };
 
-function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, onScene }: {
-  path: string | null; initialTool: SceneTool | null; exporting: boolean; onExport: () => Promise<void>;
+function PDFSceneSession({ path, initialTool, exporting, onExport, onExportAs, onNavigate, onScene }: {
+  path: string | null; initialTool: SceneTool | null; exporting: boolean; onExport: () => Promise<void>; onExportAs: () => Promise<void>;
   onNavigate?: PdfEditorNavigation;
   onScene: (path: string | null, scene: PdfScene | null, baseline: PdfScene | null) => void;
 }) {
@@ -181,6 +193,13 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
   const serializedScene = JSON.stringify(scene);
   const previewKey = path ? previewCacheKey(path, currentIndex, serializedScene, PREVIEW_RENDER_SETTINGS) : null;
   const exactPreview = preview?.key === previewKey ? preview.value : null;
+  const dirty = document !== null && sceneContributors(scene, sceneFromDocument(document)).length > 0;
+  const canExport = Boolean(page) && dirty && !exporting && !renderError && !rendering && Boolean(exactPreview);
+  // Why Export is off, said next to it: a copy with no changes would match the original, and a stale preview can't be verified.
+  const exportReason = !page || exporting || renderError ? null
+    : !dirty ? { title: 'Nothing to export yet', detail: `This document has no changes, so a copy would match the original. Use a tool in the toolbar first. ${shortcutLabel('run')} does nothing until then.` }
+      : !exactPreview || rendering ? { title: 'Updating the preview', detail: 'Export turns on once the preview shows your latest edits.' }
+        : null;
   const selectedSignature = selected?.kind === 'signature' ? selected : null;
 
   useEffect(() => {
@@ -306,11 +325,11 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
       const command = (event as CustomEvent<string>).detail;
       if (command === 'undo') undo();
       else if (command === 'redo') redo();
-      else if (command === 'export' && page && !exporting && !renderError && !rendering && exactPreview) void onExport();
+      else if (command === 'export' && canExport) void onExport();
     };
     window.addEventListener('toolbox:editor-command', onShellCommand);
     return () => window.removeEventListener('toolbox:editor-command', onShellCommand);
-  }, [exactPreview, exporting, onExport, page, redo, renderError, rendering, undo]);
+  }, [canExport, onExport, redo, undo]);
   const updateObject = (patch: Partial<SceneObject>, field: string) => {
     if (!selected || !page || !availability.allows(toolFlagByObjectKind[selected.kind])) return;
     commit({ pages: scene.pages.map((item) => item.id === page.id ? { ...page,
@@ -394,7 +413,6 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
     return { ...item, objects: [...item.objects, { ...makeObject('text', { x: b.x + b.width / 2 - 20, y: b.y + Math.max(0, b.height - 30), width: Math.min(40, b.width), height: Math.min(20, b.height) }), text: String(index + 1), fontSize: 12 }] };
     }) });
   };
-  const dirty = document && sceneContributors(scene, sceneFromDocument(document)).length > 0;
   const endGroup = () => { group.current = null; };
   const selectedKind = selected?.kind ?? tool;
   const selectedEnabled = Boolean(selected && availability.allows(toolFlagByObjectKind[selected.kind]));
@@ -428,8 +446,12 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
       <Button variant="ghost" size="icon-sm" aria-label="Undo" title="Undo (⌘Z / Ctrl+Z)" disabled={!history.past.length} onClick={undo}>↶</Button>
       <Button variant="ghost" size="icon-sm" aria-label="Redo" title="Redo (⇧⌘Z / Ctrl+Shift+Z)" disabled={!history.future.length} onClick={redo}>↷</Button>
       <Button variant="destructive" size="sm" aria-label="Reset edits" disabled={!dirty} onClick={reset}>Reset</Button>
-      <Button variant="default" size="sm" className="workspace-primary-action scene-export" aria-label="Export PDF" disabled={!page || !dirty || exporting || Boolean(renderError) || rendering || !exactPreview}
+      <Button variant="outline" size="sm" className="scene-export-as" aria-label="Export As…" disabled={!canExport}
+        aria-describedby={exportReason ? 'scene-export-reason' : undefined} onClick={() => void onExportAs()}>Export As…</Button>
+      <Button variant="default" size="sm" className="workspace-primary-action scene-export" aria-label="Export PDF" disabled={!canExport}
+        aria-describedby={exportReason ? 'scene-export-reason' : undefined}
         {...shortcutTarget('run')} onClick={() => void onExport()}>{exporting ? 'Exporting…' : 'Export PDF'}<ShortcutHint id="run" /></Button>
+      {exportReason && <p id="scene-export-reason" role="status" className="scene-export-reason"><strong>{exportReason.title}</strong> {exportReason.detail}</p>}
     </div>
     {error && <p role="alert" className="scene-error">{error}</p>}
     {renderError && <p role="alert" className="scene-error">{renderError} Export is disabled until the preview can be verified.</p>}
