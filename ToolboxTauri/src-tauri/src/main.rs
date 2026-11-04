@@ -444,13 +444,13 @@ fn combine_aggregate(paths: &[std::path::PathBuf], aggregate: JobOutcome) -> Vec
     if matches!(aggregate.state, OutcomeState::Succeeded { .. }) { return vec![aggregate]; }
     paths.iter().cloned().map(|input_path| {
         let state = match &aggregate.state {
-            OutcomeState::Failed { output_paths, error } if input_path != aggregate.input_path => OutcomeState::Failed {
-                output_paths: output_paths.clone(),
-                error: ToolError::processing(format!(
-                    "Aggregate operation stopped because {} failed: {}",
-                    aggregate.input_path.display(), error.message
-                )),
-            },
+            OutcomeState::Failed { output_paths, error } if input_path != aggregate.input_path => {
+                let message = format!("Aggregate operation stopped because {} failed: {}", aggregate.input_path.display(), error.message);
+                OutcomeState::Failed {
+                    output_paths: output_paths.clone(),
+                    error: if error.kind == crate::kit::contracts::ErrorKind::Unavailable { ToolError::unavailable(message) } else { ToolError::processing(message) },
+                }
+            }
             state => state.clone(),
         };
         JobOutcome { input_path, state, ..aggregate.clone() }
@@ -1668,6 +1668,49 @@ mod command_tests {
         let mut written = std::fs::read_dir(root.join("protected")).unwrap().map(|entry| entry.unwrap().file_name().into_string().unwrap()).collect::<Vec<_>>();
         written.sort();
         assert_eq!(written, ["budget-protected.xlsx", "deck-protected.pptx", "lease-protected.docx"]);
+        for (input, original) in inputs.iter().zip(originals) {
+            assert_eq!(std::fs::read(input).unwrap(), original, "original was modified: {}", input.display());
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn without_qpdf_compress_merge_and_split_fail_each_pdf_as_unavailable() {
+        if std::env::var_os(MISSING_QPDF_CHILD).is_none() {
+            let _guard = crate::kit::lock_process_env();
+            let missing = sandbox("missing-qpdf-pdf-commands").join("qpdf-not-installed");
+            let child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["command_tests::without_qpdf_compress_merge_and_split_fail_each_pdf_as_unavailable", "--exact", "--nocapture", "--test-threads=1"])
+                .env(MISSING_QPDF_CHILD, "1")
+                .env("TOOLBOX_QPDF_PATH", &missing)
+                .output()
+                .unwrap();
+            let report = format!("{}{}", String::from_utf8_lossy(&child.stdout), String::from_utf8_lossy(&child.stderr));
+            assert!(child.status.success() && report.contains("1 passed"), "{report}");
+            return;
+        }
+        assert!(crate::kit::resources::resolve_helper(&crate::kit::resources::QPDF).is_err(), "the Development override must hide qpdf");
+        let root = sandbox("pdf-commands-missing-qpdf");
+        let inputs = vec![root.join("report.pdf"), root.join("appendix.pdf")];
+        make_pdf(&inputs[0], 2);
+        make_pdf(&inputs[1], 3);
+        let originals = inputs.iter().map(|input| std::fs::read(input).unwrap()).collect::<Vec<_>>();
+
+        let runs = [
+            ("compress", tauri::async_runtime::block_on(compress_pdf(RunEvents::silent(), CompressPdfRequest { paths: inputs.clone(), quality: 80, output_location: location(&root, "compress") }))),
+            ("merge", tauri::async_runtime::block_on(run_merge_pdfs(&MergePdfRequest { paths: inputs.clone(), output_location: location(&root, "merge"), output_path: None }))),
+            ("split", tauri::async_runtime::block_on(split_pdf(RunEvents::silent(), PageSelectionRequest { paths: inputs[..1].to_vec(), pages: vec![], page_ranges: None, split_mode: Some("pages".into()), chunk_size: None, output_location: location(&root, "split") }))),
+        ];
+
+        for (name, outcomes) in &runs {
+            let expected = if *name == "split" { &inputs[..1] } else { &inputs[..] };
+            assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), expected, "{name} reports each PDF");
+            for outcome in outcomes {
+                assert_eq!(outcome.error().map(|error| error.kind.clone()), Some(ErrorKind::Unavailable), "{name}: {}", outcome.input_path.display());
+                assert!(outcome.output_paths().is_empty(), "{name}");
+            }
+            assert_eq!(std::fs::read_dir(root.join(name)).unwrap().count(), 0, "{name} left outputs");
+        }
         for (input, original) in inputs.iter().zip(originals) {
             assert_eq!(std::fs::read(input).unwrap(), original, "original was modified: {}", input.display());
         }
