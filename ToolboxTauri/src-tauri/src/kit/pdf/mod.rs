@@ -1130,6 +1130,28 @@ pub(crate) mod tests {
         set_form_fields(document, vec![Object::Reference(field)]);
     }
 
+    /// Encrypts the PDF at `path` in place with a user password, so it opens but reads as encrypted.
+    pub(crate) fn encrypt_pdf(path: &Path) {
+        let mut document = Document::load(path).expect("fixture should load");
+        document.trailer.set(
+            "ID",
+            Object::Array(vec![
+                Object::String(b"toolbox-test-id-1".to_vec(), lopdf::StringFormat::Literal),
+                Object::String(b"toolbox-test-id-2".to_vec(), lopdf::StringFormat::Literal),
+            ]),
+        );
+        let encryption_state = lopdf::EncryptionState::try_from(lopdf::EncryptionVersion::V2 {
+            document: &document,
+            owner_password: "owner",
+            user_password: "user",
+            key_length: 128,
+            permissions: lopdf::Permissions::all(),
+        })
+        .expect("encryption fixture should create an encryption state");
+        document.encrypt(&encryption_state).expect("fixture should encrypt");
+        document.save(path).expect("encrypted fixture should save");
+    }
+
     pub(crate) fn sign(document: &mut Document) {
         add_signature_field(document, Some(signature_value()));
     }

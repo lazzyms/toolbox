@@ -1391,6 +1391,7 @@ body {
 .scene-bottom-bar { width: 100%; flex-wrap: wrap; border-top: 1px solid var(--border); border-bottom: 0; border-radius: 0; padding: 2px 6px; font-size: 10px; gap: 3px; }
 .scene-original-note { margin-left: auto; color: var(--muted-foreground); white-space: nowrap; }
 .scene-empty { min-height: calc(100dvh - 275px); }
+.scene-empty-icon { display: grid; place-items: center; width: 48px; height: 48px; margin: 0 auto 10px; border-radius: 12px; background: var(--muted); }
 .scene-error { padding: 8px 12px; margin: 0; font-size: 12px; color: var(--destructive); }
 .scene-signature-notice { margin: 8px 10px 0; }
 .scene-signature-notice-icon { margin-top: 2px; color: var(--warning); }

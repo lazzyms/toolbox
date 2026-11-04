@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { TriangleAlert } from 'lucide-react';
+import { Lock, TriangleAlert } from 'lucide-react';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { ToolScaffold } from '../components/ToolScaffold';
@@ -22,7 +22,7 @@ import { colorTokens, readColorToken } from '../features/pdf-editor/colorTokens'
 import { SceneCanvas } from '../features/pdf-editor/SceneCanvas';
 import { sceneFromDocument, visibleBounds } from '../features/pdf-editor/scene';
 import type { PdfScene, SceneObject, ScenePage, ScenePreview, SceneRect, SceneShape, SceneTool, SignatureMode, WatermarkPattern } from '../features/pdf-editor/scene';
-import { PREVIEW_CACHE_MAX_ENTRIES, PREVIEW_RENDER_SETTINGS, createPreviewCache, pdfEditorErrorMessage, previewCacheKey, requestWithGeneration } from './pdfPreviewHelpers';
+import { PREVIEW_CACHE_MAX_ENTRIES, PREVIEW_RENDER_SETTINGS, createPreviewCache, isLockedPdfError, pdfEditorErrorMessage, previewCacheKey, requestWithGeneration } from './pdfPreviewHelpers';
 import type { GenerationState } from './pdfPreviewHelpers';
 import { ShortcutHint } from '../components/ShortcutHint';
 import { shortcutTarget } from '../shortcuts';
@@ -127,19 +127,19 @@ export const PDFEditorWorkspaceView = ({
       const results = await invoke<ToolResult>('export_pdf_scene', { runId, request: { paths, scene: session.current.scene, outputLocation } satisfies PdfSceneExportRequest });
       return results.map((result) => result.failure ? { ...result, failure: { ...result.failure, message: pdfEditorErrorMessage(result.failure.message, 'export') } } : result);
     }}>
-    {({ files, run, loading, runDestination, live }) => {
+    {({ files, run, loading, runDestination, live, browse }) => {
       const inputPath = files.length === 1 ? files[0] ?? null : null;
       return <PDFSceneSession key={inputPath ?? 'empty'} path={inputPath} initialTool={initialTool}
-          exporting={loading} exportStep={live?.steps[0]} destination={runDestination} onExport={run}
+          exporting={loading} exportStep={live?.steps[0]} destination={runDestination} onExport={run} onOpenAnother={browse}
           onNavigate={onNavigate}
           onScene={(path, scene) => { session.current = path && scene ? { path, scene } : null; }} />;
     }}
   </ToolScaffold>;
 };
 
-function PDFSceneSession({ path, initialTool, exporting, exportStep, destination, onExport, onNavigate, onScene }: {
+function PDFSceneSession({ path, initialTool, exporting, exportStep, destination, onExport, onOpenAnother, onNavigate, onScene }: {
   path: string | null; initialTool: SceneTool | null; exporting: boolean; exportStep: FileProgress | undefined;
-  destination: RunDestinationControl; onExport: () => Promise<void>;
+  destination: RunDestinationControl; onExport: () => Promise<void>; onOpenAnother: () => void;
   onNavigate?: PdfEditorNavigation;
   onScene: (path: string | null, scene: PdfScene | null) => void;
 }) {
@@ -170,6 +170,7 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
   const [watermarkFontSize, setWatermarkFontSize] = useState(40);
   const [watermarkPattern, setWatermarkPattern] = useState<WatermarkPattern>('across-page');
   const [error, setError] = useState<string | null>(null);
+  const [locked, setLocked] = useState(false);
   const [loading, setLoading] = useState(Boolean(path));
   const [rendering, setRendering] = useState(false);
   const [preview, setPreview] = useState<{ key: string; value: ScenePreview } | null>(null);
@@ -205,7 +206,10 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
       const initial = sceneFromDocument(value);
       setHistory({ past: [], present: initial, future: [] });
       setCurrentId(initial.pages[0].id); setSelectedPages([initial.pages[0].id]);
-    }).catch((reason) => { if (active) setError(pdfEditorErrorMessage(reason, 'open')); }).finally(() => { if (active) setLoading(false); });
+    }).catch((reason) => {
+      if (!active) return;
+      if (isLockedPdfError(reason)) setLocked(true); else setError(pdfEditorErrorMessage(reason, 'open'));
+    }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [path]);
   useEffect(() => {
@@ -450,7 +454,17 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
       <p className="flex-1 text-sm text-muted-foreground"><strong className="font-semibold text-foreground">This PDF is digitally signed.</strong> Any copy you export won't be signed any more. The original keeps its signature.</p>
       <Button variant="ghost" size="sm" aria-label="Dismiss signature notice" onClick={() => setSignatureNoticeDismissedFor(document.path)}>Got it</Button>
     </Card>}
-    {!page ? <Card className="scene-empty"><CardHeader className="my-auto items-center text-center"><CardTitle role="heading" aria-level={2}>{loading ? 'Opening PDF…' : 'Open a PDF to edit'}</CardTitle><CardDescription>Text, markup, signatures and page edits in one document.<br />Files stay on your device. Export creates a new copy.</CardDescription></CardHeader></Card> : <>
+    {!page ? <Card className="scene-empty">{locked && path ? <CardHeader className="my-auto items-center text-center">
+      <span className="scene-empty-icon" aria-hidden="true"><Lock className="size-5" /></span>
+      <div role="alert" className="grid gap-1.5">
+        <CardTitle role="heading" aria-level={2}>{fileName(path)} is password-protected</CardTitle>
+        <CardDescription>Remove its password with File Security first, then open the unlocked copy here.</CardDescription>
+      </div>
+      <div className="mt-1.5 flex justify-center gap-2">
+        <Button size="sm" onClick={() => window.dispatchEvent(new CustomEvent('toolbox:open', { detail: 'lock-unlock' }))}>Open File Security</Button>
+        <Button variant="outline" size="sm" onClick={onOpenAnother}>Open another PDF<ShortcutHint id="open" /></Button>
+      </div>
+    </CardHeader> : <CardHeader className="my-auto items-center text-center"><CardTitle role="heading" aria-level={2}>{loading ? 'Opening PDF…' : 'Open a PDF to edit'}</CardTitle><CardDescription>Text, markup, signatures and page edits in one document.<br />Files stay on your device. Export creates a new copy.</CardDescription></CardHeader>}</Card> : <>
       <div className="scene-document">
         <Card className="scene-thumbnails py-0" role="complementary" aria-label="PDF page thumbnails">
           <CardContent className="scene-thumbnails-content p-2">

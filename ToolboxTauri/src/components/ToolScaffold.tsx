@@ -95,6 +95,8 @@ interface ToolScaffoldProps {
         failedFiles: string[];
         retryFailed: () => Promise<void>;
         retrying: boolean;
+        /** Opens the file picker, as Choose files does; a single-file tool replaces its file. */
+        browse: () => void;
     }) => React.ReactNode;
 }
 
@@ -746,6 +748,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 failedFiles,
                 retryFailed,
                 retrying,
+                browse: () => void browse(),
             })}
             </fieldset>
 
