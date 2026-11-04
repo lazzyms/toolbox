@@ -16,7 +16,7 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
   const [document, setDocument] = useState<PdfDocument | null>(null);
   const [selectedPages, setSelectedPages] = useState<number[]>([]);
   const [inspectError, setInspectError] = useState("");
-  const { exampleName } = tool;
+  const { exampleName, exampleHint } = tool;
 
   return (
     <ToolScaffold
@@ -27,6 +27,7 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
       initialPaths={initialPaths}
       onFilesChange={onFilesChange}
       exampleName={exampleName ? (path) => exampleName(path, activeUtility, options) : undefined}
+      exampleHint={exampleHint}
       onRun={(paths, outputLocation, run) => tool.request(paths, outputLocation, run, options, { document, selectedPages, pageRange })}
     >
       {({ files, run, loading, destination, runLabel }) => (

@@ -279,9 +279,12 @@ pub fn note_renamed(outcome: JobOutcome, chosen_path: Option<&Path>) -> JobOutco
     };
     let Some(published) = renamed else { return outcome };
     let file_name = |path: &Path| path.file_name().map(|value| value.to_string_lossy().into_owned()).unwrap_or_default();
-    let (chosen_name, final_name) = (file_name(chosen), file_name(&published));
+    outcome.with_warning(renamed_warning(file_name(chosen), file_name(&published)))
+}
+
+pub fn renamed_warning(chosen_name: String, final_name: String) -> OutcomeWarning {
     let message = format!("Saved as {final_name} so the existing {chosen_name} was not replaced.");
-    outcome.with_warning(OutcomeWarning { kind: WarningKind::RenamedToAvoidReplacing { chosen_name, final_name }, message })
+    OutcomeWarning { kind: WarningKind::RenamedToAvoidReplacing { chosen_name, final_name }, message }
 }
 
 #[cfg(test)]
