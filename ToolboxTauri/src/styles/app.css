@@ -1133,10 +1133,6 @@ body {
   padding-top: 18px;
   border-top: 1px solid var(--border);
 }
-.pdf-scene-destination .run-destination {
-  padding-top: 0;
-  border-top: 0;
-}
 .run-destination-label {
   font-size: 12px;
   font-weight: 600;
@@ -1363,7 +1359,15 @@ body {
 .scene-tools { display: flex; align-items: center; gap: 5px; padding: 6px 10px; border-bottom: 1px solid var(--border); background: var(--card); }
 .scene-tools { flex-wrap: wrap; padding: 3px 6px; }
 .scene-tools button > span { font-size: 15px; line-height: 18px; min-width: 16px; }
-.pdf-studio .scene-tools .scene-export { width: auto; margin: 0 0 0 auto; }
+.pdf-studio .scene-tools .scene-export { width: auto; margin: 0; }
+.scene-tools .export-destination { margin-left: auto; max-width: 260px; }
+.export-destination-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.export-destination-path { display: flex; align-items: center; gap: 8px; overflow-wrap: anywhere; font-size: 13px; }
+.export-destination-path svg { flex: none; width: 16px; height: 16px; }
+.export-progress { display: flex; align-items: center; gap: 8px; }
+.export-progress-track { display: block; width: 120px; height: 6px; overflow: hidden; border-radius: 3px; background: var(--muted); }
+.export-progress-fill { display: block; height: 100%; background: var(--primary); transition: width 120ms linear; }
+.export-progress-text { color: var(--muted-foreground); font-size: 12px; white-space: nowrap; }
 .scene-toolbar-divider { align-self: stretch; width: 1px; background: var(--border); margin: 2px 3px; }
 .scene-inline-hint, .scene-property-note { color: var(--muted-foreground); font-size: 10px; }
 .scene-signature-mini-preview { width: 58px; height: 28px; object-fit: contain; border: 1px solid var(--border); border-radius: 4px; background: var(--pdf-document-page); }

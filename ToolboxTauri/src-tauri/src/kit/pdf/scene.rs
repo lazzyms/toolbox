@@ -1,10 +1,10 @@
-use std::{collections::{HashMap, HashSet}, fs::{self, OpenOptions}, io::Write, path::{Path, PathBuf}, process::Command, sync::atomic::{AtomicU64, Ordering}, time::{Instant}};
+use std::{collections::{HashMap, HashSet}, fs, io::Write, path::{Path, PathBuf}, process::Command, sync::atomic::{AtomicU64, Ordering}, time::{Instant}};
 use base64::Engine;
 use flate2::{write::ZlibEncoder, Compression};
 use lopdf::{dictionary, Document, Object, ObjectId, Stream};
 use quick_xml::{events::Event, escape::unescape, Reader as XmlReader, XmlVersion};
 use serde::{Deserialize, Serialize};
-use crate::kit::{common::{JobOutcome, OutputLocation, OutputNaming}, contracts::ToolError};
+use crate::kit::{common::{batch_runner::report_progress, JobOutcome, OutputLocation, OutputNaming}, contracts::ToolError};
 use super::metadata::{PdfDocumentMetadata, PdfPageMetadata, PdfTextRun};
 use super::{inherited, resolve, PdfMutationIntent};
 
@@ -517,14 +517,17 @@ fn scene_resources(document: &Document, page_id: ObjectId, xobjects: lopdf::Dict
     Ok(resources)
 }
 
-pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
+pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> { compose_counted(path,scene).map(|(doc,_)|doc) }
+
+/// Composes the scene and also returns how many pages the source had.
+fn compose_counted(path:&Path, scene:&PdfScene)->Result<(Document,usize),String> {
     if scene.pages.is_empty() || scene.pages.len()>2000 { return Err("Scene must contain 1–2000 pages".into()); }
     let mut doc=load(path)?;
     let sources:Vec<_>=doc.get_pages().values().copied().collect();
     let identity = is_identity_scene(&doc, scene, &sources)?;
     let pure_reorder = is_pure_page_reorder(&doc, scene, &sources)?;
     let preflight = scene_preflight(&doc, scene, &sources, identity, pure_reorder)?;
-    if identity { return Ok(doc); }
+    if identity { return Ok((doc,sources.len())); }
     if pure_reorder {
         let order = scene.pages.iter().map(|page| {
             let index = page.source_index.ok_or_else(|| "Pure page reorder is missing a source page".to_string())?;
@@ -533,7 +536,7 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
         let root = doc.get_dictionary_mut(preflight.pages_root).map_err(err)?;
         root.set("Kids", order.iter().map(|page| Object::Reference(*page)).collect::<Vec<_>>());
         root.set("Count", order.len() as i64);
-        return Ok(doc);
+        return Ok((doc,sources.len()));
     }
     let font_specs: [(&str, &str); 9] = [
         ("Helvetica", "SceneFont"), ("Helvetica-Bold", "SceneFontHelveticaBold"),
@@ -546,7 +549,9 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
         "Type" => "Font", "Subtype" => "Type1", "BaseFont" => *base, "Encoding" => "WinAnsiEncoding"
     }))).collect();
     let mut kids=Vec::new();
-    for page in &scene.pages {
+    let total=scene.pages.len();
+    for (done, page) in scene.pages.iter().enumerate() {
+        report_progress(done, total);
         dimensions(page.width,page.height)?;
         if page.rotation%90!=0 { return Err("Rotation must be a multiple of 90".into()); }
         let crop=page.crop.clone().unwrap_or(Rect{x:0.,y:0.,width:page.width,height:page.height});
@@ -698,7 +703,7 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
     }
     doc.objects.get_mut(&preflight.pages_root).ok_or("PDF page-tree root disappeared during scene export")?.as_dict_mut().map_err(err)?.set("Kids",kids);
     doc.objects.get_mut(&preflight.pages_root).ok_or("PDF page-tree root disappeared during scene export")?.as_dict_mut().map_err(err)?.set("Count",scene.pages.len() as i64);
-    Ok(doc)
+    Ok((doc,sources.len()))
 }
 
 static NONCE:AtomicU64=AtomicU64::new(0);
@@ -842,25 +847,35 @@ pub fn inspect_page(path:&Path,page_index:usize)->Result<PdfPageMetadata,String>
     let preview = super::metadata::render_preview(path, page_index + 1, g.width, g.height);
     Ok(PdfPageMetadata{index:page_index,x:g.bbox[0],y:g.bbox[1],width:g.width,height:g.height,rotation:source_rotation,page_box:g.bbox,preview,text_runs:Some(text_runs)})
 }
+/// The detail line for an export, counted against the source so a dropped page reads as removed.
+fn page_summary(scene:&PdfScene, source_pages:usize)->String {
+    let kept=scene.pages.iter().filter(|page| page.source_index.is_some()).count();
+    let referenced=scene.pages.iter().filter_map(|page| page.source_index).collect::<HashSet<_>>().len();
+    let removed=source_pages.saturating_sub(referenced);
+    let rotated=scene.pages.iter().filter(|page| page.rotation.rem_euclid(360)!=0).count();
+    // The scene has no mirror operation yet, so nothing is ever mirrored.
+    let mirrored=0;
+    let added=scene.pages.len()-kept;
+    let pages=if kept==1 { "page" } else { "pages" };
+    let added=if added>0 { format!(", {added} blank added") } else { String::new() };
+    format!("{kept} {pages} kept, {removed} removed, {rotated} rotated, {mirrored} mirrored{added}.")
+}
+
+/// Writes the scene as a new "-edited" copy. The bytes are built in memory first, so a scene that fails leaves nothing behind,
+/// and a write that fails part way is dropped with its reservation instead of being published.
 pub fn export(request:&ExportRequest,input:PathBuf)->JobOutcome {
     let result=(|| {
-        if !matches!(request.output_location,OutputLocation::AlongsideInput) { return Err("Scene exports must be alongside the input".into()); }
+        let (mut doc,source_pages)=compose_counted(&input,&request.scene)?;
         let mut bytes=Vec::new();
-        compose(&input,&request.scene)?.save_to(&mut bytes).map_err(err)?;
-        let parent=input.parent().ok_or("Input has no parent directory")?;
-        let stem=input.file_stem().ok_or("Input has no filename")?.to_string_lossy();
-        for n in 1..=10000 {
-            let candidate=parent.join(format!("{stem}-edited-{n}.pdf"));
-            let reservation=match OutputNaming::reserve_named_candidate(&candidate).map_err(err)? {
-                Some(reservation)=>reservation,
-                None=>continue,
-            };
-            let mut file=OpenOptions::new().write(true).open(reservation.path()).map_err(err)?;
-            file.write_all(&bytes).and_then(|_|file.sync_all()).map_err(err)?;
-            return reservation.publish().map_err(err);
-        } Err("Could not reserve a unique export filename".into())
+        doc.save_to(&mut bytes).map_err(err)?;
+        report_progress(request.scene.pages.len(), request.scene.pages.len());
+        let (reservation,mut file)=OutputNaming::create_destination(&input,&request.output_location,"-edited","pdf").map_err(err)?;
+        file.write_all(&bytes).and_then(|_|file.sync_all()).map_err(err)?;
+        drop(file);
+        let path=reservation.publish().map_err(err)?;
+        Ok::<_,String>((path,page_summary(&request.scene,source_pages)))
     })();
-    match result { Ok(path)=>JobOutcome::succeeded(input, vec![path], "PDF scene exported"),Err(e)=>JobOutcome::failure(input,ToolError::processing(e)) }
+    match result { Ok((path,summary))=>JobOutcome::succeeded(input, vec![path], summary),Err(e)=>JobOutcome::failure(input,ToolError::processing(e)) }
 }
 
 #[cfg(test)]
@@ -1221,13 +1236,84 @@ mod tests {
     fn exports_preserve_original_and_existing_outputs_byte_for_byte() {
         let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); fixture(&input);
         let original=fs::read(&input).unwrap();
-        let occupied=temp.0.join("source-edited-1.pdf"); fs::write(&occupied,b"existing output").unwrap();
+        let occupied=temp.0.join("source-edited.pdf"); fs::write(&occupied,b"existing output").unwrap();
         let request=ExportRequest {paths:vec![input.clone()],scene:scene(),output_location:OutputLocation::AlongsideInput};
         let a=export(&request,input.clone()); let b=export(&request,input.clone());
         assert!(a.error().is_none(),"{:?}",a.error()); assert!(b.error().is_none());
-        assert_ne!(a.output_paths(),b.output_paths()); assert_ne!(a.output_paths()[0],input);
+        assert_eq!(a.output_paths(),[temp.0.join("source-edited-1.pdf")]); assert_eq!(b.output_paths(),[temp.0.join("source-edited-2.pdf")]);
         assert_eq!(fs::read(&input).unwrap(),original); assert_eq!(fs::read(occupied).unwrap(),b"existing output");
         assert_eq!(Document::load(&a.output_paths()[0]).unwrap().get_pages().len(),3);
+    }
+    #[test]
+    fn exports_name_the_first_copy_edited_then_number_later_ones() {
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); fixture(&input);
+        let request=ExportRequest {paths:vec![input.clone()],scene:scene(),output_location:OutputLocation::AlongsideInput};
+        let names=(0..3).map(|_| {
+            let outcome=export(&request,input.clone());
+            assert!(outcome.error().is_none(),"{:?}",outcome.error());
+            outcome.output_paths()[0].file_name().unwrap().to_string_lossy().into_owned()
+        }).collect::<Vec<_>>();
+        assert_eq!(names,["source-edited.pdf","source-edited-1.pdf","source-edited-2.pdf"]);
+        let mut left=fs::read_dir(&temp.0).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect::<Vec<_>>();
+        left.sort();
+        assert_eq!(left,["source-edited-1.pdf","source-edited-2.pdf","source-edited.pdf","source.pdf"]);
+    }
+    #[test]
+    fn export_honours_a_custom_folder_and_writes_nothing_beside_the_input() {
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); fixture(&input);
+        let original=fs::read(&input).unwrap();
+        let folder=temp.0.join("For client"); fs::create_dir(&folder).unwrap();
+        let request=ExportRequest {paths:vec![input.clone()],scene:scene(),output_location:OutputLocation::CustomFolder(folder.clone())};
+        let outcome=export(&request,input.clone());
+        assert!(outcome.error().is_none(),"{:?}",outcome.error());
+        assert_eq!(outcome.output_paths(),[folder.join("source-edited.pdf")]);
+        assert_eq!(fs::read_dir(&folder).unwrap().count(),1);
+        let beside=fs::read_dir(&temp.0).unwrap().map(|entry| entry.unwrap().file_name()).collect::<HashSet<_>>();
+        assert_eq!(beside,HashSet::from(["source.pdf".into(),"For client".into()]));
+        assert_eq!(fs::read(&input).unwrap(),original);
+    }
+    #[test]
+    fn failed_exports_leave_no_output_or_temporary_file() {
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); fixture(&input);
+        let original=fs::read(&input).unwrap();
+        let folder=temp.0.join("out"); fs::create_dir(&folder).unwrap();
+        let mut broken=scene(); broken.pages[1].objects[0].text="unsupported \u{1f600}".into();
+        for location in [OutputLocation::AlongsideInput,OutputLocation::CustomFolder(folder.clone())] {
+            let outcome=export(&ExportRequest {paths:vec![input.clone()],scene:broken.clone(),output_location:location},input.clone());
+            assert!(outcome.error().is_some()); assert!(outcome.output_paths().is_empty());
+        }
+        // A destination that can't be written fails after the scene is built, and must leave no claim or temporary file behind.
+        let missing=temp.0.join("gone");
+        let outcome=export(&ExportRequest {paths:vec![input.clone()],scene:scene(),output_location:OutputLocation::CustomFolder(missing.clone())},input.clone());
+        assert!(outcome.error().is_some()); assert!(!missing.exists());
+        #[cfg(unix)] {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&folder,fs::Permissions::from_mode(0o555)).unwrap();
+            let outcome=export(&ExportRequest {paths:vec![input.clone()],scene:scene(),output_location:OutputLocation::CustomFolder(folder.clone())},input.clone());
+            fs::set_permissions(&folder,fs::Permissions::from_mode(0o755)).unwrap();
+            assert!(outcome.error().is_some());
+        }
+        assert_eq!(fs::read_dir(&folder).unwrap().count(),0);
+        let beside=fs::read_dir(&temp.0).unwrap().map(|entry| entry.unwrap().file_name()).collect::<HashSet<_>>();
+        assert_eq!(beside,HashSet::from(["source.pdf".into(),"out".into()]));
+        assert_eq!(fs::read(&input).unwrap(),original);
+    }
+    #[test]
+    fn export_detail_summarises_kept_removed_rotated_and_mirrored_pages() {
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); fixture(&input);
+        let outcome=export(&ExportRequest {paths:vec![input.clone()],scene:scene(),output_location:OutputLocation::AlongsideInput},input.clone());
+        assert_eq!(outcome.detail,"2 pages kept, 0 removed, 2 rotated, 0 mirrored, 1 blank added.");
+        let mut one=scene(); one.pages.truncate(1);
+        let outcome=export(&ExportRequest {paths:vec![input.clone()],scene:one,output_location:OutputLocation::AlongsideInput},input.clone());
+        assert_eq!(outcome.detail,"1 page kept, 1 removed, 1 rotated, 0 mirrored.");
+    }
+    #[test]
+    fn the_same_scene_exports_byte_identical_copies() {
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); fixture(&input);
+        let request=ExportRequest {paths:vec![input.clone()],scene:scene(),output_location:OutputLocation::AlongsideInput};
+        let first=export(&request,input.clone()); let second=export(&request,input.clone());
+        assert_ne!(first.output_paths(),second.output_paths());
+        assert_eq!(fs::read(&first.output_paths()[0]).unwrap(),fs::read(&second.output_paths()[0]).unwrap());
     }
     #[test]
     fn scene_reservation_does_not_replace_a_competing_destination() {
@@ -1493,7 +1579,7 @@ mod tests {
         let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
         assert!(result.error().is_some_and(|error| error.message.contains("nested")));
         assert!(result.output_paths().is_empty());
-        assert!(!input.with_file_name("nested-edited-1.pdf").exists());
+        assert!(!input.with_file_name("nested-edited.pdf").exists());
     }
     #[test]
     fn scene_rejects_annotation_crop_before_output() {
@@ -1505,7 +1591,7 @@ mod tests {
         let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
         assert!(result.error().is_some_and(|error| error.message.contains("annotation")));
         assert!(result.output_paths().is_empty());
-        assert!(!input.with_file_name("annotated-edited-1.pdf").exists());
+        assert!(!input.with_file_name("annotated-edited.pdf").exists());
     }
     #[test]
     fn scene_rejects_digitally_signed_pdf_before_output() {
@@ -1523,7 +1609,7 @@ mod tests {
         let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
         assert!(result.error().is_some_and(|error| error.message.contains("Digitally signed")));
         assert!(result.output_paths().is_empty());
-        assert!(!input.with_file_name("signed-edited-1.pdf").exists());
+        assert!(!input.with_file_name("signed-edited.pdf").exists());
     }
     #[test]
     fn scene_rejects_catalog_permissions_and_signature_dictionaries_before_output() {
@@ -1548,7 +1634,7 @@ mod tests {
             let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
             assert!(result.error().is_some_and(|error| error.message.contains("Digitally signed")), "{name}: {:?}", result.error());
             assert!(result.output_paths().is_empty());
-            assert!(!input.with_file_name(format!("{name}-edited-1.pdf")).exists());
+            assert!(!input.with_file_name(format!("{name}-edited.pdf")).exists());
         }
     }
     #[test]
@@ -1566,7 +1652,7 @@ mod tests {
         let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
         assert!(result.error().is_some_and(|error| error.message.contains("destinations")), "{:?}", result.error());
         assert!(result.output_paths().is_empty());
-        assert!(!input.with_file_name("navigation-edited-1.pdf").exists());
+        assert!(!input.with_file_name("navigation-edited.pdf").exists());
     }
 
     #[test]
@@ -1586,7 +1672,7 @@ mod tests {
         let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
         assert!(result.error().is_none(), "{result:?}");
         assert_eq!(result.output_paths().len(), 1);
-        assert!(input.with_file_name("box-origin-navigation-edited-1.pdf").exists());
+        assert!(input.with_file_name("box-origin-navigation-edited.pdf").exists());
     }
     #[test]
     fn scene_rejects_tagged_page_removal_before_output() {
@@ -1602,7 +1688,7 @@ mod tests {
         let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
         assert!(result.error().is_some_and(|error| error.message.contains("tagged PDF")), "{:?}", result.error());
         assert!(result.output_paths().is_empty());
-        assert!(!input.with_file_name("tagged-edited-1.pdf").exists());
+        assert!(!input.with_file_name("tagged-edited.pdf").exists());
     }
 
     #[test]
@@ -1630,6 +1716,6 @@ mod tests {
         let result = export(&ExportRequest { paths: vec![input.clone()], scene: overlay, output_location: OutputLocation::AlongsideInput }, input.clone());
         assert!(result.error().is_some_and(|error| error.message.contains("tagged PDF")), "{result:?}");
         assert!(result.output_paths().is_empty());
-        assert!(!input.with_file_name("tagged-overlay-edited-1.pdf").exists());
+        assert!(!input.with_file_name("tagged-overlay-edited.pdf").exists());
     }
 }
