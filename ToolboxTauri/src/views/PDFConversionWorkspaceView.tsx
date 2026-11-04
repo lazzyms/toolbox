@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ToolScaffold } from "../components/ToolScaffold";
 import { exampleOutputName } from "../components/RunDestination";
+import { parseEntryFacts, type EntryFacts } from "../components/intake";
 import { parsePageRange, selectedPageLabel } from "../shared/workspaceValidation";
 import { displayedBoxToPdfRect, type DisplayedBox, type PdfDocument } from "../features/pdf-editor";
 import type { AtomicToolId, ToolDefinition, ToolResult } from "../contracts";
@@ -16,6 +17,7 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { ShortcutHint } from "../components/ShortcutHint";
 import { shortcutTarget } from "../shortcuts";
 
+const unknownFacts: EntryFacts = { pageCount: null, modifiedMs: null, sizeBytes: null };
 const nonInspectingConversionIds = new Set(["images-to-pdf", "pdf-merge", "pdf-split", "pdf-repair", "pdf-compare"]);
 const outputPreviewLimitations: Partial<Record<AtomicToolId, string>> = {
   "images-to-pdf": "Output preview unavailable. Export combines the selected images into one PDF in file order.",
@@ -61,7 +63,7 @@ const pdfToImagesOutputSummary = (selectedPages: number[], dpi: string, format: 
   return `Output preview unavailable. Export renders ${pageSummary} at ${dpi} DPI as ${formatLabel} image files.`;
 };
 
-export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPaths = [], onFilesChange }: { utility: ToolDefinition; initialPaths?: readonly string[]; onFilesChange?: (paths: readonly string[]) => void }) => {
+export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPaths = [], onFilesChange, onSelectTool }: { utility: ToolDefinition; initialPaths?: readonly string[]; onFilesChange?: (paths: readonly string[]) => void; onSelectTool?: (id: AtomicToolId) => void }) => {
   const [dpi, setDpi] = useState("150");
   const [format, setFormat] = useState("jpg");
   const [pageRange, setPageRange] = useState("");
@@ -72,6 +74,33 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
   const [document, setDocument] = useState<PdfDocument | null>(null);
   const [selectedPages, setSelectedPages] = useState<number[]>([]);
   const [inspectError, setInspectError] = useState("");
+  const [listedPaths, setListedPaths] = useState<readonly string[]>(initialPaths);
+  const [facts, setFacts] = useState<ReadonlyMap<string, EntryFacts>>(() => new Map());
+  const describesFiles = activeUtility.id === "pdf-merge";
+
+  const listChanged = useCallback((paths: readonly string[]) => {
+    setListedPaths(paths);
+    onFilesChange?.(paths);
+  }, [onFilesChange]);
+
+  // Merge shows each file's page count, size and date. Files that can't be read simply show none.
+  useEffect(() => {
+    if (!describesFiles) return;
+    const unknown = [...new Set(listedPaths)].filter((path) => !facts.has(path));
+    if (unknown.length === 0) return;
+    let current = true;
+    // Every asked path is remembered, described or not, so a file that can't be read is asked about once.
+    const remember = (described: ReadonlyMap<string, EntryFacts>) => {
+      if (!current) return;
+      setFacts((known) => new Map([...known, ...unknown.map((path) => [path, described.get(path) ?? unknownFacts] as const)]));
+    };
+    invoke("describe_intake_files", { paths: unknown })
+      .then((value) => remember(parseEntryFacts(value)))
+      .catch(() => remember(new Map()));
+    return () => {
+      current = false;
+    };
+  }, [describesFiles, listedPaths, facts]);
 
   return (
     <ToolScaffold
@@ -80,7 +109,9 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
       sessionKey="pdf-convert"
       utility={activeUtility}
       initialPaths={initialPaths}
-      onFilesChange={onFilesChange}
+      onFilesChange={listChanged}
+      entryFacts={describesFiles ? (path) => facts.get(path) : undefined}
+      listHint={describesFiles && listedPaths.length === 1 ? "Add at least one more PDF. You can add the same file again to repeat it." : undefined}
       exampleName={activeUtility.id === "pdf-to-images" ? (path) => exampleOutputName(path, "pdf_to_images", activeUtility.capability.outputSuffix, format) : undefined}
       onRun={(paths, outputLocation, { outputPath, runId }) => {
         const pages = document ? selectedPages : undefined;
@@ -203,6 +234,7 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
           setSelectedPages={setSelectedPages}
           inspectError={inspectError}
           setInspectError={setInspectError}
+          onSelectTool={onSelectTool}
         />
       )}
     </ToolScaffold>
@@ -236,6 +268,7 @@ type ConversionControlsProps = {
   setSelectedPages: (value: number[]) => void;
   inspectError: string;
   setInspectError: (value: string) => void;
+  onSelectTool?: (id: AtomicToolId) => void;
 };
 
 const ConversionControls = ({
@@ -265,6 +298,7 @@ const ConversionControls = ({
   setSelectedPages,
   inspectError,
   setInspectError,
+  onSelectTool,
 }: ConversionControlsProps) => {
   const inputPath = files[0];
   const [inspection, setInspection] = useState<PdfInspectionState>({ kind: "idle" });
@@ -446,7 +480,18 @@ const ConversionControls = ({
         <p className="workspace-note">Images are combined in the order they appear in the selected list.</p>
       )}
       {activeUtility.id === "pdf-merge" && (
-        <p className="workspace-note">Add at least two PDFs. The order in the source list becomes the page order in the merged copy.</p>
+        <>
+          <div className="workspace-field">
+            <span className="text-sm font-medium">Order</span>
+            <p className="workspace-note">Files join top to bottom, every page of each. A file can be listed twice.</p>
+          </div>
+          <Card className="py-0" role="note" aria-label="Organize Pages">
+            <CardContent className="flex flex-col items-start gap-2 p-3">
+              <p className="workspace-note">Need only some pages, or a page order? Use Organize Pages.</p>
+              <Button variant="outline" size="sm" disabled={!onSelectTool} onClick={() => onSelectTool?.("pdf-organize")}>Open Organize Pages</Button>
+            </CardContent>
+          </Card>
+        </>
       )}
       {activeUtility.id === "pdf-split" && (
         <div className="workspace-field-grid">
@@ -507,6 +552,9 @@ const ConversionControls = ({
         <RedactionArea page={redactPage.index} preview={redactPage.preview} aspectRatio={redactPage.width / redactPage.height} box={redactBox} onChange={setRedactBox} />
       )}
       {destination}
+      {needsMultipleInputs && files.length < 2 && (
+        <p className="workspace-note" role="status">{files.length === 1 ? "Merge needs at least 2 PDFs." : "Add at least 2 PDFs."}</p>
+      )}
       <Button
         variant="default"
         disabled={loading || !canExport || (needsPageSelection && (!inspectedDocument || selectionCount === 0 || selectionIssue !== null)) || (activeUtility.id === "pdf-redact" && !redactBox)}

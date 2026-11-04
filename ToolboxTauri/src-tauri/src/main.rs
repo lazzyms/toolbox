@@ -440,18 +440,24 @@ where
     combine_aggregate(paths, aggregate)
 }
 
+/// One output from many inputs: success is one outcome, failure is one outcome per entry so every row explains itself.
+/// Inputs are checked in list order, so the first entry with the failing path is the one that stopped the run.
 fn combine_aggregate(paths: &[std::path::PathBuf], aggregate: JobOutcome) -> Vec<JobOutcome> {
-    if matches!(aggregate.state, OutcomeState::Succeeded { .. }) { return vec![aggregate]; }
-    paths.iter().cloned().map(|input_path| {
-        let state = match &aggregate.state {
-            OutcomeState::Failed { output_paths, error } if input_path != aggregate.input_path => OutcomeState::Failed {
+    let output_paths = match &aggregate.state {
+        OutcomeState::Succeeded { .. } => return vec![aggregate],
+        OutcomeState::Failed { output_paths, .. } => output_paths.clone(),
+        OutcomeState::Skipped { .. } => return paths.iter().cloned().map(|input_path| JobOutcome { input_path, ..aggregate.clone() }).collect(),
+    };
+    let failed_index = paths.iter().position(|path| *path == aggregate.input_path).unwrap_or(0);
+    let failed_name = aggregate.input_path.file_name().map_or_else(|| aggregate.input_path.display().to_string(), |name| name.to_string_lossy().into_owned());
+    let repeated = paths.iter().filter(|path| **path == aggregate.input_path).count() > 1;
+    let cause = if repeated { format!("{failed_name} (entry {})", failed_index + 1) } else { failed_name };
+    paths.iter().cloned().enumerate().map(|(index, input_path)| {
+        let state = if index == failed_index { aggregate.state.clone() } else {
+            OutcomeState::Failed {
                 output_paths: output_paths.clone(),
-                error: ToolError::processing(format!(
-                    "Aggregate operation stopped because {} failed: {}",
-                    aggregate.input_path.display(), error.message
-                )),
-            },
-            state => state.clone(),
+                error: ToolError::processing(format!("Stopped because {cause} failed. Nothing was saved.")),
+            }
         };
         JobOutcome { input_path, state, ..aggregate.clone() }
     }).collect()
@@ -518,6 +524,7 @@ fn main() {
             open_third_party_notices,
             open_sponsor_page,
             intake::inspect_intake_paths,
+            intake::describe_intake_files,
             settings::get_output_settings,
             settings::set_output_settings,
             settings::get_last_save_folder,
@@ -765,6 +772,98 @@ mod command_tests {
         let outcomes = tauri::async_runtime::block_on(run_merge_pdfs(&MergePdfRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: OutputLocation::AlongsideInput, output_path: Some(missing_folder.clone()) }));
         assert!(outcomes.iter().all(|outcome| outcome.error().is_some() && outcome.output_paths().is_empty()));
         assert!(!missing_folder.exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A PDF whose pages each draw one text label, so a merged file's page order can be read back.
+    fn make_labeled_pdf(path: &PathBuf, labels: &[&str]) {
+        use lopdf::{dictionary, Document, Object, Stream};
+        let mut document = Document::with_version("1.7");
+        let pages_id = document.new_object_id();
+        let font_id = document.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
+        let kids = labels.iter().map(|label| {
+            let content_id = document.add_object(Stream::new(dictionary! {}, format!("BT /F1 24 Tf 72 720 Td (label:{label}) Tj ET").into_bytes()));
+            Object::Reference(document.add_object(dictionary! {
+                "Type" => "Page", "Parent" => pages_id, "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+                "Resources" => dictionary! { "Font" => dictionary! { "F1" => font_id } }, "Contents" => content_id,
+            }))
+        }).collect::<Vec<_>>();
+        document.objects.insert(pages_id, dictionary! { "Type" => "Pages", "Kids" => kids, "Count" => labels.len() as i64 }.into());
+        let catalog_id = document.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+        document.trailer.set("Root", catalog_id);
+        document.save(path).unwrap();
+    }
+
+    fn page_labels(path: &PathBuf) -> Vec<String> {
+        let document = lopdf::Document::load(path).unwrap();
+        document.get_pages().values().map(|page_id| {
+            let content = String::from_utf8_lossy(&document.get_page_content(*page_id)).into_owned();
+            let start = content.find("(label:").expect("every merged page keeps its label") + "(label:".len();
+            content[start..start + content[start..].find(')').unwrap()].to_string()
+        }).collect()
+    }
+
+    fn merged(root: &PathBuf, folder: &str, paths: &[&PathBuf]) -> Vec<JobOutcome> {
+        tauri::async_runtime::block_on(run_merge_pdfs(&MergePdfRequest {
+            paths: paths.iter().map(|path| (*path).clone()).collect(), output_location: location(root, folder), output_path: None,
+        }))
+    }
+
+    fn folder_files(root: &PathBuf, folder: &str) -> Vec<PathBuf> {
+        std::fs::read_dir(root.join(folder)).unwrap().map(|entry| entry.unwrap().path()).collect()
+    }
+
+    #[test]
+    fn merge_joins_every_page_of_each_entry_in_list_order() {
+        let root = sandbox("merge-order");
+        let a = root.join("a.pdf"); make_labeled_pdf(&a, &["A1", "A2"]);
+        let b = root.join("b.pdf"); make_labeled_pdf(&b, &["B1", "B2"]);
+        let originals = [&a, &b].map(|path| (path.clone(), std::fs::read(path).unwrap()));
+
+        let forward = merged(&root, "forward", &[&a, &b]);
+        assert_eq!(forward.len(), 1);
+        assert!(forward[0].error().is_none(), "{:?}", forward[0].error());
+        assert_eq!(page_labels(&forward[0].output_paths()[0]), ["A1", "A2", "B1", "B2"]);
+
+        let reversed = merged(&root, "reversed", &[&b, &a]);
+        assert_eq!(page_labels(&reversed[0].output_paths()[0]), ["B1", "B2", "A1", "A2"]);
+        assert_eq!(reversed[0].input_path, b, "the combined result is reported against the first entry");
+
+        // The page-count check counts a repeated file once per entry, so a repeat passes it.
+        let repeated = merged(&root, "repeated", &[&a, &b, &a]);
+        assert!(repeated[0].error().is_none(), "{:?}", repeated[0].error());
+        assert_eq!(page_labels(&repeated[0].output_paths()[0]), ["A1", "A2", "B1", "B2", "A1", "A2"]);
+
+        for (path, bytes) in originals { assert_eq!(std::fs::read(&path).unwrap(), bytes, "{} must stay byte-identical", path.display()); }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn merge_fails_every_entry_and_writes_nothing_when_one_input_is_missing_or_damaged() {
+        let root = sandbox("merge-failure");
+        let a = root.join("a.pdf"); make_labeled_pdf(&a, &["A1", "A2"]);
+        let b = root.join("b.pdf"); make_labeled_pdf(&b, &["B1"]);
+        let damaged = root.join("damaged.pdf"); std::fs::write(&damaged, b"%PDF-1.7\nthis is not a PDF body").unwrap();
+        let missing = root.join("missing.pdf");
+        let originals = [&a, &b, &damaged].map(|path| (path.clone(), std::fs::read(path).unwrap()));
+
+        for (folder, bad) in [("missing", &missing), ("damaged", &damaged)] {
+            let paths = [&a, bad, &b, bad];
+            let outcomes = merged(&root, folder, &paths);
+            assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), paths.map(|path| path.clone()), "{folder}: one outcome per entry, in order");
+            assert!(outcomes.iter().all(|outcome| outcome.error().is_some() && outcome.output_paths().is_empty()), "{folder}: every entry fails");
+            let messages = outcomes.iter().map(|outcome| outcome.error().unwrap().message.clone()).collect::<Vec<_>>();
+            assert!(messages[1].contains(&bad.display().to_string()), "{folder}: the failing entry carries its own error: {}", messages[1]);
+            let bad_name = bad.file_name().unwrap().to_string_lossy();
+            let stopped = format!("Stopped because {bad_name} (entry 2) failed. Nothing was saved.");
+            for index in [0, 2, 3] { assert_eq!(messages[index], stopped, "{folder}: entry {} names the entry that stopped the merge", index + 1); }
+            assert!(folder_files(&root, folder).is_empty(), "{folder}: no output, partial or final, is left behind");
+        }
+
+        let single = merged(&root, "single-missing", &[&a, &missing]);
+        assert_eq!(single[0].error().unwrap().message, "Stopped because missing.pdf failed. Nothing was saved.");
+
+        for (path, bytes) in originals { assert_eq!(std::fs::read(&path).unwrap(), bytes, "{} must stay byte-identical", path.display()); }
         let _ = std::fs::remove_dir_all(root);
     }
 
