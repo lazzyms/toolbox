@@ -87,7 +87,7 @@
 "y": 3800,
 "w": 1280,
 "h": 800,
-"title": "Open a PDF: empty, several dropped, locked, signed",
+"title": "Open a PDF: empty, several dropped, locked, too many pages, signed",
 "expand": "fill"
 },
 "PdfText.dc.html": {
@@ -103,7 +103,7 @@
 "y": 3800,
 "w": 1280,
 "h": 800,
-"title": "Sign: typed or picture signature",
+"title": "Sign: typed or picture signature, use again",
 "expand": "fill"
 },
 "PdfForms.dc.html": {
@@ -111,7 +111,7 @@
 "y": 3800,
 "w": 1280,
 "h": 800,
-"title": "Fill forms and flatten",
+"title": "Fill forms: Tab order, invalid entry, unsupported form, flatten",
 "expand": "fill"
 },
 "PdfRedact.dc.html": {
@@ -119,7 +119,7 @@
 "y": 3800,
 "w": 1280,
 "h": 800,
-"title": "Redact: mark, then the export disclosure",
+"title": "Redact: mark, search, review, export disclosure",
 "expand": "fill"
 },
 "PdfMarks.dc.html": {
@@ -127,7 +127,7 @@
 "y": 4960,
 "w": 1280,
 "h": 800,
-"title": "Watermark, page numbers, header and footer",
+"title": "Watermark, page numbers, header and footer: range and tokens",
 "expand": "fill"
 },
 "PdfEditText.dc.html": {
@@ -135,7 +135,7 @@
 "y": 4960,
 "w": 1280,
 "h": 800,
-"title": "Edit existing text: substituted font, too long",
+"title": "Edit existing text: substituted font, too long, not editable",
 "expand": "fill"
 },
 "PdfOrganize.dc.html": {
@@ -151,7 +151,7 @@
 "y": 4960,
 "w": 1280,
 "h": 800,
-"title": "Export a copy: review, progress, done, failed, closing",
+"title": "Export a copy: review, blocked, progress, done, warnings, failed, closing",
 "expand": "fill"
 },
 "PdfNarrow.dc.html": {
@@ -199,7 +199,7 @@
 "y": 6120,
 "w": 1280,
 "h": 800,
-"title": "Bates numbering: ready and done",
+"title": "Bates numbering: empty, ready, running, done, failed file",
 "expand": "fill"
 },
 "ConvertBatch.dc.html": {
@@ -696,6 +696,126 @@
 "maxH": 860,
 "fill": "orange",
 "text": "Reset, unsaved changes, motion and screen readers\n\nReset… (header) asks first. It's an alert dialog that returns every page to how the PDF was opened, and says it also clears other PDF Editor changes. Opening another PDF with changes asks \"Export your changes first?\" with Export, Cancel and Don't export.\n\nReduced motion: reordering normally slides pages into place over 150 ms, and drops settle the same way. With reduced motion on, pages jump straight to their new place, the drag ghost has no tilt, and rotation applies without turning. Auto-scroll still works but moves in steps.\n\nScreen readers: the grid is a multi-select listbox. Each option is \"Position 12, original page 13, rotated 90° right, mirrored left to right, selected\". The footer status is a polite live region. It says things like \"Pages 4 to 6 moved to position 1\", \"Page 5 rotated 90° right\", \"Pages 8 and 9 mirrored left to right\", \"3 blank pages found and selected: 7, 11 and 16\", \"No blank pages found\" and \"3 pages deleted. 233 left.\" Errors, the last-page message and failed exports are alerts."
+},
+"ep1": {
+"x": 7600,
+"y": 3800,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Edit PDF Q1. Grouping: overlays vs document operations\n\nThe toolbar groups tools by what they do, split by separators: page operations (Organize, Crop), content edits (Edit text, Add text, Sign, Fill form), range overlays (Watermark, Page numbers, Header and footer), then Redact. More holds Flatten, Split, Merge, Bates and Details.\n\nOverlays put a selectable object on the page. It has a blue outline and the inspector edits it, ending with a Remove action such as 'Remove watermark'. Document operations change pages, so they open their own view (Organize) or act on the whole file. They show no object on the page.\n\nThe inspector title always names the active tool."
+},
+"ep2": {
+"x": 8000,
+"y": 3800,
+"w": 360,
+"maxH": 640,
+"fill": "purple",
+"text": "Edit PDF Q2. Export summary, fixed order, disabled Export\n\nPdfExport Review lists every contributing change under 'Changes, applied in this fixed order': forms, edit text, overlays, flatten, then redact. Each row names the tool and its pages.\n\nNothing to export: Export in the header is disabled, and a tooltip explains why: nothing has changed yet, and the run shortcut does nothing.\n\nExport blocked: the Export button is disabled with aria-describedby pointing at the reason, a missing Devanagari script pack. The reason sits directly above the button, with the fix (Install script pack, 38 MB) inside it.\n\nWhile exporting, the document is locked and the background is aria-hidden. Cancel export (Esc) is the only action."
+},
+"ep3": {
+"x": 8400,
+"y": 3800,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Edit PDF Q3. Destination and per-run change\n\nThe empty PdfOpen view says copies save next to the original and that another folder can be picked at export.\n\nIn the Export dialog, Save to shows the folder. The default is 'Same folder as the original.' PdfExport Other folder shows a changed folder with a 'This export only' badge, a 'Reset to default' button and the hint 'Next export goes back to the original's folder.'\n\nBates shows the same pattern in its destination bar: 'This run only' and Reset to default. Its empty state shows the default, the same folder as each original. It follows the shared Q1 rule on the Destination board."
+},
+"ep4": {
+"x": 8800,
+"y": 3800,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "Edit PDF Q4. Form fields, Tab order, required and invalid\n\nFields show as tinted boxes on the page. The focused field has a blue ring. Required fields have a red asterisk in the label, and the inspector's Fields list shows 'Required, empty'. 'Go to next empty required field' jumps to the next one.\n\nPdfForms Tab order: numbered blue badges 1 to 8 sit beside each field, in the order Tab follows. The checkbox 'Show Tab order on the page' turns them on. Tab order comes from the PDF and is shown, not edited.\n\nPdfForms Invalid entry: the field gets a red border, aria-invalid, and an inline reason ('Not a real date') tied by aria-describedby. The Fields list, the summary and the status line name it too."
+},
+"ep5": {
+"x": 9200,
+"y": 3800,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "Edit PDF Q5. Typed signature, reuse, reminder\n\nPdfSign Placing: in the typed mode, the name shows in the chosen signature style before you place it. The picture mode uses an image file instead. Either way, you click the page to place it.\n\nPdfSign Use again: signatures already used are listed with a preview. Picking one and clicking the page places it again. 'Placed so far' lists each copy, and each copy can be moved, resized or deleted on its own. New signature and Clear list are below.\n\nThe reminder stays visible under the intro in both panels: this is a picture of a signature, not a digital signature. The reuse list points to it with aria-describedby."
+},
+"ep6": {
+"x": 9600,
+"y": 3800,
+"w": 360,
+"maxH": 640,
+"fill": "orange",
+"text": "Edit PDF Q6. Range-applied objects\n\nWatermark, page numbers and header and footer are each one object that applies to a page range.\n\nA chip above the page (for example 'Pages 1–14') says which range it covers, with the line 'One watermark, applied to every page in the range. Edit it once, on any page.' Selecting it on any page selects the same object, and every change shows on all pages in the range.\n\nThe Pages section in the inspector sets the range: All, Skip the first page, or These pages. The status line confirms how many pages it covers."
+},
+"ep7": {
+"x": 10000,
+"y": 3800,
+"w": 360,
+"maxH": 640,
+"fill": "orange",
+"text": "Edit PDF Q7. Token insertion\n\nHeader and footer has six labelled boxes: Left, Centre and Right for the header and for the footer. Insert buttons (Page number, Page count, Date, File name) add a token into the box last selected.\n\nTokens show as blue tags inside the box. They are not typed codes such as {date}, so nobody has to learn a syntax. Backspace removes a whole tag. The page preview shows the filled-in values, such as '3 of 14'.\n\nBates Stamp text uses the same tag box and Insert buttons: Bates number, File name, Page in file, Date. Stamp text must contain the Bates number."
+},
+"ep8": {
+"x": 10400,
+"y": 3800,
+"w": 360,
+"maxH": 640,
+"fill": "purple",
+"text": "Edit PDF Q8. Redaction: mark, search, review, disclosure\n\nMarking: drag over anything to remove. Marks are previews until export, are listed in the inspector, and can be resized or removed.\n\nSearch results: 'Find text to redact' lists each match with its page and context. Check the matches to mark, then use Mark selected.\n\nReviewing: 'Preview as exported' shows marks as solid black. Previous and Next step through every mark, with 'Mark 2 of 5' announced, and Remove drops one.\n\nExport disclosure: a dialog shown before a redacted export. It says which pages become 300 dpi images and that their comments, form fields and hidden layers are removed. Metadata, XMP and attachments go too. Export needs 'I've checked the marks on every page' ticked."
+},
+"ep9": {
+"x": 10800,
+"y": 3800,
+"w": 360,
+"maxH": 640,
+"fill": "orange",
+"text": "Edit PDF Q9. Flatten, result warnings, unavailable sub-tool\n\nFlatten confirmation (PdfForms flatten Confirming): a dialog titled 'Flatten fields in the copy?' says what becomes permanent and names the required fields still empty. Its buttons are Keep fields editable and Flatten when exporting.\n\nResult warnings (PdfExport Done with warnings): the copy is saved, and '2 things to check' lists 'Digital signature removed' and 'Font substituted on pages 1 and 3', each with what changed.\n\nUnavailable sub-tool (PdfForms Unsupported form): an XFA form shows a warning in the inspector, explains why, and offers 'Use Add text instead'. Non-editable text (PdfEditText Not editable) offers OCR or Add text."
+},
+"ep10": {
+"x": 11200,
+"y": 3800,
+"w": 360,
+"maxH": 640,
+"fill": "orange",
+"text": "Edit PDF Q10. Errors at open\n\nEncrypted PDF (PdfOpen Locked file): the file isn't opened. Unlock in File Security makes an unlocked copy, and the original stays locked.\n\nLimit exceeded (PdfOpen Too many pages): 'court-bundle.pdf is too large to edit' gives the page count and the limit. It offers Split into parts or another PDF. The 2,000-page limit is a placeholder until engineering measures the real ceiling.\n\nSigned file: opens with a warning that exporting removes the digital signature, which the Done-with-warnings result repeats.\n\nSkipped never happens in Edit PDF. It edits one document, so a no-op export is prevented by disabling Export (Nothing to export)."
+},
+"ep11": {
+"x": 11600,
+"y": 3800,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "Edit PDF Q11. Script-pack prompt\n\nTyping text the bundled fonts can't draw (PdfText scriptPackPrompt) shows the text box with a warning in the inspector. The warning names the script and says the box can't be exported until the pack is installed. 'Install script pack' gives the download size and is installed once for all tools.\n\nIf you export anyway, PdfExport Export blocked repeats the same message and button above the disabled Export. The wording and the Install action match the optional-pack rows in #445 (Packs, PackResults), so the pack is named the same everywhere."
+},
+"ep12": {
+"x": 12000,
+"y": 3800,
+"w": 360,
+"maxH": 640,
+"fill": "purple",
+"text": "Edit PDF Q12. Unexported-changes warning\n\nClosing the window, opening another PDF or going back to All tools with changes that haven't been exported opens 'Export your changes before closing?' (PdfExport Closing with changes). It gives the number of changes and says they're lost on close.\n\nThe buttons are Discard changes, Cancel and Export….\n\nThe header subtitle keeps a running count, such as '1 change not exported', so the warning is never a surprise."
+},
+"ep13": {
+"x": 12400,
+"y": 3800,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "Edit PDF Q13. Focus, screen reader, macOS and Windows\n\nDialogs trap focus and return it to the control that opened them. While a dialog is open, the background is aria-hidden.\n\nDisabled actions point to their reason with aria-describedby: Export, Number files and Export blocked. Status lines are role=status and announce results, such as 'Mark 2 of 5', '3 numbered, 1 failed'.\n\nPlatform labels change with the platform property. ⌘ becomes Ctrl, ⌘↵ becomes Ctrl+Enter, ⇧⌘Z becomes Ctrl+Y, Show in Finder becomes Show in File Explorer, and paths use C:\\Users\\Asha\\… with backslashes. Every board renders in both themes."
+},
+"epb1": {
+"x": 6800,
+"y": 6120,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Bates Q. File order, preview, ranges, unused gap\n\nFiles are listed in numbering order. Each row has a drag grip and Move up, Move down and Remove buttons, so it can be reordered by mouse or keyboard. The Numbers column previews each file's range before anything runs, and the inspector shows an example stamp on a page.\n\nA locked file is flagged before the run. It is skipped and given no numbers, so the set has no gap (Done).\n\nA file that fails during the run keeps the numbers set aside for it, because later files are already stamped. The row shows that range struck through with 'Unused gap', and the banner names it: 'HL000017 to HL000019 are unused.' Copy number list includes the gap."
+},
+"epb2": {
+"x": 7200,
+"y": 6120,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "Bates Q. Empty, running, results\n\nNo files: a drop target with Add PDFs and its shortcut. Number files is disabled with the reason 'Add PDFs first', and the destination reads the same folder as each original.\n\nNumbering: an overall progress bar and per-file progress ('Page 4 of 9'). Add PDFs, Change… and the options are locked. Cancel (Esc) replaces the Run button, and Skip stops just the current file.\n\nResults: saved rows have Open and Show in Finder (Show in File Explorer on Windows), and the banner has Copy number list. This is the only multi-file sub-tool, so it uses a file list instead of the page canvas."
 }
 },
 "designSystems": []
