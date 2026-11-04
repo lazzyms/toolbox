@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 import { ToolScaffold } from "../components/ToolScaffold";
 import { ConversionPanel, conversionToolFor } from "../features/pdf-conversion";
+import type { PagePicks } from "../features/pdf-conversion/tool";
 import type { PdfDocument } from "../features/pdf-editor";
 import type { AtomicToolId, ToolDefinition } from "../contracts";
 
@@ -16,6 +17,7 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
   const [document, setDocument] = useState<PdfDocument | null>(null);
   const [selectedPages, setSelectedPages] = useState<number[]>([]);
   const [inspectError, setInspectError] = useState("");
+  const [picks, setPicks] = useState<PagePicks>({});
   const { exampleName, exampleHint } = tool;
 
   return (
@@ -28,9 +30,9 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
       onFilesChange={onFilesChange}
       exampleName={exampleName ? (path) => exampleName(path, activeUtility, options) : undefined}
       exampleHint={exampleHint}
-      onRun={(paths, outputLocation, run) => tool.request(paths, outputLocation, run, options, { document, selectedPages, pageRange })}
+      onRun={(paths, outputLocation, run) => tool.request(paths, outputLocation, run, options, { document, selectedPages, pageRange, picks })}
     >
-      {({ files, run, loading, destination, runLabel }) => (
+      {({ files, selectedFileIndex, run, loading, destination, runLabel }) => (
         <ConversionPanel
           destination={destination}
           runLabel={runLabel}
@@ -39,6 +41,7 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
           options={options}
           setOptions={setOptions}
           files={files}
+          selectedFileIndex={selectedFileIndex}
           run={run}
           loading={loading}
           pageRange={pageRange}
@@ -49,6 +52,8 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
           setSelectedPages={setSelectedPages}
           inspectError={inspectError}
           setInspectError={setInspectError}
+          picks={picks}
+          setPicks={setPicks}
         />
       )}
     </ToolScaffold>

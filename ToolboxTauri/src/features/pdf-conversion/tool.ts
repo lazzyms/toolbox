@@ -3,7 +3,19 @@ import type { RunContext } from "../../components/ToolScaffold";
 import type { OutputLocation, ToolDefinition, ToolResult } from "../../contracts";
 import type { PdfDocument } from "../pdf-editor";
 
-export type PageSelection = { document: PdfDocument | null; selectedPages: number[]; pageRange: string };
+export type PageSelection = { document: PdfDocument | null; selectedPages: number[]; pageRange: string; picks: PagePicks };
+
+export type PagePicks = Record<string, number[]>;
+
+export type PageCount = number | "pending" | "locked" | "unreadable";
+
+export type BatchPagesProps<Options> = {
+  options: Options;
+  files: string[];
+  pageRange: string;
+  picks: PagePicks;
+  pageCounts: Record<string, PageCount>;
+};
 
 export type OptionsPanelProps<Options> = {
   options: Options;
@@ -13,6 +25,8 @@ export type OptionsPanelProps<Options> = {
   selectedPages: number[];
   pageRange: string;
   choosePageRange: (value: string) => void;
+  picks: PagePicks;
+  pageCounts: Record<string, PageCount>;
 };
 
 export interface ConversionTool<Options = unknown> {
@@ -21,6 +35,8 @@ export interface ConversionTool<Options = unknown> {
   initialPages?(document: PdfDocument): number[];
   outputPreview(options: Options, selectedPages: number[]): string;
   exportBlocked?(options: Options, files: string[], pageRange: string): boolean;
+  pagesPerPdf?(options: Options, pageRange: string, pageCount: number): number[] | null;
+  RunSummary?(props: BatchPagesProps<Options>): ReactNode;
   OptionsPanel?(props: OptionsPanelProps<Options>): ReactNode;
   exampleName?(inputPath: string, utility: ToolDefinition, options: Options): string;
   exampleHint?: string;

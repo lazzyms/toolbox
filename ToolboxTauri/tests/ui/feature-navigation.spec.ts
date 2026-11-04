@@ -1337,14 +1337,15 @@ test("PDF to Images identifies source selection and summarizes its non-previewab
   await expect(page.getByRole("checkbox", { name: "Page 1" })).toBeChecked();
   await expect(page.getByRole("radiogroup", { name: "Resolution" })).toBeVisible();
   await expect(page.getByRole("radiogroup", { name: "Format" })).toBeVisible();
-  await expect(page.getByText("1 page selected", { exact: true })).toBeVisible();
-  await expect(page.getByText("Output preview unavailable. Export renders page 1 at 150 dpi as PNG image files.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Pick pages here to replace the range for this PDF only.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Output preview unavailable. Export renders each PDF's pages at 150 dpi as PNG image files.", { exact: true })).toBeVisible();
 
   await page.getByRole("radiogroup", { name: "Resolution" }).getByRole("radio", { name: "300 dpi" }).click();
   await page.getByRole("radiogroup", { name: "Format" }).getByRole("radio", { name: "WebP" }).click();
-  await expect(page.getByText("Output preview unavailable. Export renders page 1 at 300 dpi as WebP image files.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Output preview unavailable. Export renders each PDF's pages at 300 dpi as WebP image files.", { exact: true })).toBeVisible();
 
   await page.getByRole("checkbox", { name: "Page 1" }).click();
+  await expect(page.getByText("No pages picked. Pick at least one page, or use the range instead.", { exact: true })).toBeVisible();
   await expect(page.locator(".workspace-primary-action")).toBeDisabled();
 });
 
@@ -2091,7 +2092,8 @@ test("PDF conversion resets the displayed scope when switching actions", async (
     await openFromHome(page, "PDF to Images");
     await chooseFixture(page, "/local/document.scoped.pdf");
     await expect(page.getByRole("checkbox", { name: "Page 3" })).toBeVisible();
-    await page.getByRole("textbox", { name: "Page range" }).fill("1");
+    await page.getByRole("radiogroup", { name: "Pages" }).getByRole("radio", { name: "Range" }).click();
+    await page.getByRole("textbox", { name: "Page range for every PDF" }).fill("1");
     await expect(page.getByRole("checkbox", { name: "Page 2" })).not.toBeChecked();
 
     await page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "PDF to Text", exact: true }).click();
@@ -2099,14 +2101,16 @@ test("PDF conversion resets the displayed scope when switching actions", async (
     await page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "PDF to Images", exact: true }).click();
     await expect(page.getByRole("checkbox", { name: "Page 3" })).toBeVisible();
 
-    await expect(page.getByRole("textbox", { name: "Page range" })).toHaveValue("");
+    await page.getByRole("radiogroup", { name: "Pages" }).getByRole("radio", { name: "Range" }).click();
+    await expect(page.getByRole("textbox", { name: "Page range for every PDF" })).toHaveValue("");
+    await page.getByRole("radiogroup", { name: "Pages" }).getByRole("radio", { name: "All pages" }).click();
     await expect(page.getByRole("checkbox", { name: "Page 2" })).toBeChecked();
     await page.getByRole("button", { name: "Export PDF to Images", exact: true }).click();
 
     const invocation = await page.evaluate(() =>
         (window as TestWindow).__toolboxInvocations?.find(({ command }) => command === "pdf_to_images"),
     );
-    expect(invocation?.args).toMatchObject({ request: { pages: [0, 1, 2], pageRange: "1-3" } });
+    expect(invocation?.args).toMatchObject({ request: { picks: [], pageRange: null } });
 });
 
 test("GIF extraction does not request a source preview", async ({ page }) => {

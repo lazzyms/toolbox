@@ -31,14 +31,12 @@ impl PageSpan {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PageRanges(Vec<PageSpan>);
 
-#[cfg_attr(not(test), expect(dead_code, reason = "PDF to Images switches clamping on in #556"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClampedRanges {
     pub spans: Vec<(usize, usize)>,
     pub notes: Vec<String>,
 }
 
-#[cfg_attr(not(test), expect(dead_code, reason = "PDF to Images switches clamping on in #556"))]
 impl ClampedRanges {
     pub fn is_empty(&self) -> bool { self.spans.is_empty() }
 }
@@ -64,7 +62,6 @@ impl PageRanges {
         }).collect()
     }
 
-    #[cfg_attr(not(test), expect(dead_code, reason = "PDF to Images switches clamping on in #556"))]
     pub fn clamp(&self, page_count: usize) -> ClampedRanges {
         let mut clamped = ClampedRanges { spans: Vec::new(), notes: Vec::new() };
         for span in &self.0 {
@@ -121,7 +118,7 @@ fn page_number(entry: &str, value: &str) -> Result<usize, String> {
     }
 }
 
-fn pages_label(count: usize) -> String {
+pub(crate) fn pages_label(count: usize) -> String {
     if count == 1 { "1 page".to_string() } else { format!("{count} pages") }
 }
 
