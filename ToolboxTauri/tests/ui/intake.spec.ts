@@ -13,6 +13,7 @@ type IntakeWindow = Window & {
     __skippedPaths: Record<string, { code: string; message: string }>;
     __failures: Record<string, { kind: string; message: string }>;
     __warnings: Record<string, Array<{ code: string; message: string }>>;
+    __pageCounts: Record<string, number | null>;
     __outputSettings: unknown;
     __sent: string[];
     __drop: (paths: string[]) => void;
@@ -33,6 +34,7 @@ test.beforeEach(async ({ page }) => {
         win.__skippedPaths = {};
         win.__failures = {};
         win.__warnings = {};
+        win.__pageCounts = {};
         win.__outputSettings = { mode: "alongsideInput", folder: "/Users/test/Documents/Toolbox" };
         // Everything that leaves the page or lands in the console, so a test can prove no password does.
         win.__sent = [];
@@ -88,6 +90,7 @@ test.beforeEach(async ({ page }) => {
                 if (command === "check_output_folder") return "ready";
                 if (command === "plugin:path|resolve_directory") return "/Users/test";
                 if (command.startsWith("plugin:") || command === "shell_ready") return null;
+                if (command === "inspect_image_pages") return (args as { request: { paths: string[] } }).request.paths.map((path) => win.__pageCounts[path] ?? 1);
                 if (command.startsWith("inspect_")) throw "No preview in this test.";
                 if (win.__processingDelayMs) await new Promise((resolve) => window.setTimeout(resolve, win.__processingDelayMs));
                 const { request } = args as { request: { paths: string[] } };
@@ -207,7 +210,7 @@ test("the picker filters by the active tool and allows one file only for single-
     await page.evaluate(() => { (window as unknown as IntakeWindow).__dialogResult = ["/local/scan.png"]; });
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await expect(rows(page)).toHaveText([/scan\.png/]);
-    expect(await pickerOptions()).toEqual([{ multiple: true, extensions: ["png", "jpg", "jpeg", "webp", "heic", "heif"] }]);
+    expect(await pickerOptions()).toEqual([{ multiple: true, extensions: ["png", "jpg", "jpeg", "webp", "heic", "heif", "tif", "tiff"] }]);
 });
 
 test("click, Shift-click and Cmd-click select rows, and removal only edits the list", async ({ page }) => {
@@ -1107,7 +1110,7 @@ test("Images to PDF takes HEIC and HEIF, refuses GIF, sends no quality setting a
     const notAdded = page.getByRole("region", { name: "Not added" });
     await expect(notAdded.getByRole("listitem")).toHaveText([/animation\.gif.*only takes .*files\./]);
     await expect(rows(page).filter({ hasText: "Won't run" })).toHaveCount(0);
-    await expect(page.getByText("JPEGs go in as they are. Other images are stored without loss, and transparency is kept.")).toBeVisible();
+    await expect(page.getByText("JPEGs go in as they are. Other images are stored without loss, and transparency is kept. A multi-page TIFF adds one page per TIFF page.")).toBeVisible();
     await page.evaluate(() => {
         (window as unknown as IntakeWindow).__warnings = { "/local/IMG_0001.heic": [{ code: "precisionReduced", message: "Reduced to 8-bit sRGB to fit in the PDF: page 1 (10-bit)." }] };
     });
@@ -1144,6 +1147,53 @@ test("Images to PDF names the unreadable image when the combine fails", async ({
         await expect(row).toContainText(name);
         await expect(row).toHaveAttribute("data-state", "failed");
         await expect(row).toContainText("/local/broken.heic");
+        await expect(row.getByRole("button", { name: /^Open/ })).toHaveCount(0);
+    }
+});
+
+test("Images to PDF takes TIFF and shows how many pages each multi-page TIFF adds", async ({ page }) => {
+    await open(page, "Images to PDF");
+    await page.evaluate(() => { (window as unknown as IntakeWindow).__pageCounts = { "/local/scan-0042.tiff": 3, "/local/receipt.TIF": 1 }; });
+    await drop(page, ["/local/cover.png", "/local/scan-0042.tiff", "/local/receipt.TIF"]);
+
+    await expect(rows(page)).toHaveText([/^1cover\.png/, /^2scan-0042\.tiff.*TIFF, 3 pages/, /^3receipt\.TIF/]);
+    await expect(rows(page).filter({ hasText: "Won't run" })).toHaveCount(0);
+    await expect(rows(page).filter({ hasText: "receipt.TIF" })).not.toContainText("pages");
+    await expect(rows(page).filter({ hasText: "cover.png" })).not.toContainText("pages");
+    const [inspection] = await requestFor(page, "inspect_image_pages");
+    expect(inspection.paths).toEqual(["/local/scan-0042.tiff", "/local/receipt.TIF"]);
+
+    await page.getByRole("button", { name: "Move scan-0042.tiff up" }).click();
+    await expect(rows(page)).toHaveText([/^1scan-0042\.tiff.*TIFF, 3 pages/, /^2cover\.png/, /^3receipt\.TIF/]);
+
+    await runAndSave(page);
+
+    const [request] = await requestFor(page, "images_to_pdf");
+    expect(request.paths).toEqual(["/local/scan-0042.tiff", "/local/cover.png", "/local/receipt.TIF"]);
+    await expect(results(page)).toHaveCount(3);
+});
+
+test("Images to PDF names the unreadable TIFF page when the combine fails", async ({ page }) => {
+    await open(page, "Images to PDF");
+    await page.evaluate(() => { (window as unknown as IntakeWindow).__pageCounts = { "/local/scan-0042.tiff": 3 }; });
+    await drop(page, ["/local/cover.png", "/local/scan-0042.tiff"]);
+    await expect(rows(page).filter({ hasText: "scan-0042.tiff" })).toContainText("TIFF, 3 pages");
+    const reason = "Could not process /local/scan-0042.tiff: TIFF page 2 of 3 can't be read. Unsupported TIFF page: unsupported compression method";
+    await page.evaluate((reason) => {
+        (window as unknown as IntakeWindow).__failures = {
+            "/local/cover.png": { kind: "processing", message: `Aggregate operation stopped because /local/scan-0042.tiff failed: ${reason}` },
+            "/local/scan-0042.tiff": { kind: "processing", message: reason },
+        };
+    }, reason);
+
+    await runAndSave(page);
+
+    await expect(results(page)).toHaveCount(2);
+    const failed = results(page).filter({ hasText: "scan-0042.tiff" }).filter({ hasText: "TIFF page 2 of 3 can't be read" });
+    await expect(failed.first()).toHaveAttribute("data-state", "failed");
+    for (const row of await results(page).all()) {
+        await expect(row).toHaveAttribute("data-state", "failed");
+        await expect(row).toContainText("TIFF page 2 of 3 can't be read");
         await expect(row.getByRole("button", { name: /^Open/ })).toHaveCount(0);
     }
 });

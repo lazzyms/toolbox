@@ -325,6 +325,10 @@ pub fn inspect_tiff_pages(request: &TiffPreviewRequest) -> Result<Vec<ImagePrevi
         .collect()
 }
 
+pub fn inspect_image_pages(request: &ImagePagesRequest) -> Vec<Option<usize>> {
+    request.paths.iter().map(|path| crate::kit::images::source::page_count(path).ok()).collect()
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResizeRequest {
@@ -405,6 +409,9 @@ pub struct TiffRequest {
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TiffPreviewRequest { pub path: PathBuf }
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImagePagesRequest { pub paths: Vec<PathBuf> }
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MetadataRequest { pub paths: Vec<PathBuf>, pub output_location: OutputLocation }

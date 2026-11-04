@@ -421,6 +421,9 @@ fn inspect_image_preview(request: tools::ImagePreviewRequest) -> Result<tools::I
 fn inspect_tiff_pages(request: tools::TiffPreviewRequest) -> Result<Vec<tools::ImagePreview>, String> { tools::inspect_tiff_pages(&request) }
 
 #[tauri::command]
+fn inspect_image_pages(request: tools::ImagePagesRequest) -> Vec<Option<usize>> { tools::inspect_image_pages(&request) }
+
+#[tauri::command]
 fn inspect_image_edit_preview(request: tools::ImageEditPreviewRequest) -> Result<tools::ImagePreview, String> { tools::inspect_edit_preview(&request) }
 
 #[tauri::command]
@@ -570,6 +573,7 @@ fn main() {
             ,inspect_image_metadata,
             inspect_image_preview,
             inspect_tiff_pages,
+            inspect_image_pages,
             inspect_image_edit_preview,
             export_image_edit_plan,
             get_quick_actions,
@@ -971,6 +975,223 @@ mod command_tests {
 
         assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 0, "no PDF and no partial file is left behind");
         for (path, original) in paths.iter().zip(&originals) { assert_eq!(&std::fs::read(path).unwrap(), original); }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    type RawTiffPage = (u32, u32, Vec<(u16, Vec<u32>)>, Vec<u8>);
+
+    fn raw_tiff(pages: &[RawTiffPage]) -> Vec<u8> {
+        const SHORT_TAGS: [u16; 7] = [258, 259, 262, 266, 277, 284, 530];
+        let mut out = vec![b'I', b'I', 42, 0, 0, 0, 0, 0];
+        let mut link = 4;
+        for (width, height, tags, strip) in pages {
+            let strip_offset = out.len() as u32;
+            out.extend_from_slice(strip);
+            if out.len() % 2 == 1 { out.push(0); }
+            let mut entries = tags.clone();
+            entries.extend([(256, vec![*width]), (257, vec![*height]), (273, vec![strip_offset]), (278, vec![*height]), (279, vec![strip.len() as u32])]);
+            entries.sort_by_key(|(tag, _)| *tag);
+            let ifd = out.len();
+            out[link..link + 4].copy_from_slice(&(ifd as u32).to_le_bytes());
+            let tail_start = ifd + 2 + entries.len() * 12 + 4;
+            let mut tail = Vec::new();
+            out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+            for (tag, values) in &entries {
+                let short = SHORT_TAGS.contains(tag);
+                let mut bytes = values.iter().flat_map(|value| if short { (*value as u16).to_le_bytes().to_vec() } else { value.to_le_bytes().to_vec() }).collect::<Vec<_>>();
+                out.extend_from_slice(&tag.to_le_bytes());
+                out.extend_from_slice(&(if short { 3u16 } else { 4 }).to_le_bytes());
+                out.extend_from_slice(&(values.len() as u32).to_le_bytes());
+                if bytes.len() <= 4 {
+                    bytes.resize(4, 0);
+                    out.extend_from_slice(&bytes);
+                } else {
+                    out.extend_from_slice(&((tail_start + tail.len()) as u32).to_le_bytes());
+                    tail.extend_from_slice(&bytes);
+                }
+            }
+            link = out.len();
+            out.extend_from_slice(&[0; 4]);
+            out.extend_from_slice(&tail);
+        }
+        out
+    }
+
+    fn gray_tiff_page(width: u32, height: u32, compression: u32, pixels: Vec<u8>) -> RawTiffPage {
+        (width, height, vec![(258, vec![8]), (259, vec![compression]), (262, vec![1]), (277, vec![1])], pixels)
+    }
+
+    #[test]
+    fn images_to_pdf_adds_every_tiff_page_in_order_at_the_tiff_position() {
+        use image::{DynamicImage, GrayImage, Luma, Rgb, RgbImage, RgbaImage};
+        let root = sandbox("images-to-pdf-tiff-pages");
+        let first = root.join("first.png"); write_png(&first, 16, 30);
+        let gray = GrayImage::from_fn(5, 2, |x, y| Luma([(x * 40 + y * 7) as u8]));
+        let rgb = RgbImage::from_fn(4, 3, |x, y| Rgb([(x * 50) as u8, (y * 60) as u8, 77]));
+        let rgba = RgbaImage::from_fn(3, 2, |x, y| Rgba([10, (x * 70) as u8, (y * 90) as u8, (x * 80 + 20) as u8]));
+        let scan = root.join("scan.tiff");
+        write_tiff(&scan, &[DynamicImage::ImageLuma8(gray.clone()), DynamicImage::ImageRgb8(rgb.clone()), DynamicImage::ImageRgba8(rgba.clone())]);
+        let last = root.join("last.png"); write_png(&last, 18, 90);
+        let paths = vec![first.clone(), scan.clone(), last.clone()];
+        let originals = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+
+        let output = assert_aggregate_success("images to pdf tiff pages", &paths, run_images_to_pdf(&ImagesToPdfRequest {
+            paths: paths.clone(), output_location: location(&root, "out"), output_path: None,
+        }));
+
+        let images = pdf_images(&output[0]);
+        assert_eq!(images.iter().map(|image| image.media_width).collect::<Vec<_>>(), [16.0, 5.0, 4.0, 3.0, 18.0], "each TIFF page becomes one PDF page at the TIFF's place in the list");
+        assert_eq!(images[1].content, gray.into_raw());
+        assert_eq!(images[1].dict.get(b"ColorSpace").unwrap().as_name().unwrap(), b"DeviceGray");
+        assert_eq!(images[2].content, rgb.into_raw());
+        assert!(images[2].mask.is_none());
+        assert_eq!(images[3].content, DynamicImage::ImageRgba8(rgba.clone()).to_rgb8().into_raw());
+        assert_eq!(images[3].mask.as_deref(), Some(rgba.pixels().map(|pixel| pixel[3]).collect::<Vec<_>>().as_slice()), "an alpha TIFF page keeps its soft mask");
+        for image in &images[1..4] { assert_eq!(filter_of(image), b"FlateDecode"); }
+        for (path, original) in paths.iter().zip(&originals) { assert_eq!(&std::fs::read(path).unwrap(), original); }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn images_to_pdf_decodes_group_four_fax_tiff_pixel_for_pixel() {
+        use fax::{encoder::Encoder, Color, VecWriter};
+        let root = sandbox("images-to-pdf-g4");
+        let (width, height) = (37u32, 9u32);
+        let ink = |x: u32, y: u32| (x * 3 + y * 5) % 7 < 3 || x == y;
+        let mut encoder = Encoder::new(VecWriter::new());
+        for y in 0..height {
+            encoder.encode_line((0..width).map(|x| if ink(x, y) { Color::Black } else { Color::White }), width as u16).unwrap();
+        }
+        let fax = root.join("fax.tif");
+        std::fs::write(&fax, fax::tiff::wrap(&encoder.finish().unwrap().finish(), width, height)).unwrap();
+
+        let output = assert_aggregate_success("images to pdf g4", &[fax.clone()], run_images_to_pdf(&ImagesToPdfRequest {
+            paths: vec![fax.clone()], output_location: location(&root, "out"), output_path: None,
+        }));
+
+        let images = pdf_images(&output[0]);
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].dict.get(b"ColorSpace").unwrap().as_name().unwrap(), b"DeviceGray");
+        let expected = (0..height).flat_map(|y| (0..width).map(move |x| if ink(x, y) { 0 } else { 255 })).collect::<Vec<u8>>();
+        assert_eq!(images[0].content, expected, "black fax pixels stay black and white stay white");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn images_to_pdf_decodes_one_dimensional_group_three_fax_tiff_pixel_for_pixel() {
+        const WHITE: [&str; 9] = ["00110101", "000111", "0111", "1000", "1011", "1100", "1110", "1111", "10011"];
+        const BLACK: [&str; 9] = ["0000110111", "010", "11", "10", "011", "0011", "0010", "00011", "000101"];
+        let root = sandbox("images-to-pdf-g3");
+        let rows: [&[usize]; 5] = [&[8], &[2, 3, 3], &[0, 8], &[1, 1, 1, 1, 1, 1, 1, 1], &[5, 2, 1]];
+        let mut bits = String::new();
+        let mut white_is_one = Vec::new();
+        for runs in rows {
+            bits.push_str("000000000001");
+            for (index, run) in runs.iter().enumerate() {
+                bits.push_str(if index % 2 == 0 { WHITE[*run] } else { BLACK[*run] });
+                white_is_one.extend(std::iter::repeat_n(index % 2 == 0, *run));
+            }
+        }
+        while bits.len() % 8 != 0 { bits.push('0'); }
+        let data = bits.as_bytes().chunks(8).map(|byte| u8::from_str_radix(std::str::from_utf8(byte).unwrap(), 2).unwrap()).collect::<Vec<_>>();
+        let page = |photometric: u32, fill_order: u32, strip: Vec<u8>| -> RawTiffPage {
+            (8, rows.len() as u32, vec![(258, vec![1]), (259, vec![3]), (262, vec![photometric]), (266, vec![fill_order]), (277, vec![1]), (292, vec![0])], strip)
+        };
+        let fax = root.join("fax.tiff");
+        std::fs::write(&fax, raw_tiff(&[page(0, 1, data.clone()), page(1, 2, data.iter().map(|byte| byte.reverse_bits()).collect())])).unwrap();
+
+        let output = assert_aggregate_success("images to pdf g3", &[fax.clone()], run_images_to_pdf(&ImagesToPdfRequest {
+            paths: vec![fax.clone()], output_location: location(&root, "out"), output_path: None,
+        }));
+
+        let images = pdf_images(&output[0]);
+        assert_eq!(images.len(), 2);
+        assert_eq!(images[0].content, white_is_one.iter().map(|white| if *white { 255 } else { 0 }).collect::<Vec<u8>>(), "WhiteIsZero Group 3 runs decode to their pixels");
+        assert_eq!(images[1].content, white_is_one.iter().map(|white| if *white { 0 } else { 255 }).collect::<Vec<u8>>(), "BlackIsZero and reversed bit order are honoured");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn images_to_pdf_decodes_jpeg_compressed_tiff() {
+        use image::{Rgb, RgbImage};
+        let root = sandbox("images-to-pdf-jpeg-tiff");
+        let source = RgbImage::from_fn(16, 8, |x, y| Rgb([(x * 15) as u8, (y * 30) as u8, 160]));
+        let mut jpeg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 95).encode_image(&source).unwrap();
+        let expected = image::load_from_memory(&jpeg).unwrap().to_rgb8().into_raw();
+        let tiff = root.join("photo.tif");
+        std::fs::write(&tiff, raw_tiff(&[(16, 8, vec![(258, vec![8, 8, 8]), (259, vec![7]), (262, vec![6]), (277, vec![3]), (530, vec![1, 1])], jpeg)])).unwrap();
+
+        let output = assert_aggregate_success("images to pdf jpeg tiff", &[tiff.clone()], run_images_to_pdf(&ImagesToPdfRequest {
+            paths: vec![tiff.clone()], output_location: location(&root, "out"), output_path: None,
+        }));
+
+        let images = pdf_images(&output[0]);
+        assert_eq!(images.len(), 1);
+        assert_eq!(filter_of(&images[0]), b"FlateDecode");
+        assert_eq!(images[0].content.len(), expected.len());
+        let worst = images[0].content.iter().zip(&expected).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+        assert!(worst <= 3, "the JPEG-in-TIFF page matches the decoded JPEG, worst channel difference {worst}");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn images_to_pdf_names_the_tiff_page_it_cannot_read_and_publishes_nothing() {
+        let root = sandbox("images-to-pdf-tiff-bad-page");
+        let first = root.join("first.png"); write_png(&first, 16, 30);
+        let scan = root.join("scan.tiff");
+        std::fs::write(&scan, raw_tiff(&[gray_tiff_page(2, 2, 1, vec![1, 2, 3, 4]), gray_tiff_page(2, 2, 32809, vec![5, 6, 7, 8]), gray_tiff_page(2, 2, 1, vec![9, 10, 11, 12])])).unwrap();
+        let paths = vec![first.clone(), scan.clone()];
+        let originals = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+        let out = location(&root, "out");
+        let OutputLocation::CustomFolder(folder) = &out else { unreachable!() };
+        let folder = folder.clone();
+
+        let outcomes = tauri::async_runtime::block_on(run_images_to_pdf(&ImagesToPdfRequest { paths: paths.clone(), output_location: out.clone(), output_path: None }));
+        let failed = outcomes.iter().find(|outcome| outcome.input_path == scan).unwrap();
+        let message = &failed.error().unwrap().message;
+        assert!(message.contains(&scan.display().to_string()) && message.contains("TIFF page 2 of 3 can't be read"), "{message}");
+        assert_aggregate_failure("images to pdf tiff bad page", &paths, &scan, run_images_to_pdf(&ImagesToPdfRequest { paths: paths.clone(), output_location: out, output_path: None }));
+
+        assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 0, "no PDF and no partial file is left behind");
+        for (path, original) in paths.iter().zip(&originals) { assert_eq!(&std::fs::read(path).unwrap(), original); }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn inspect_image_pages_counts_tiff_pages_and_one_page_for_other_images() {
+        use crate::kit::images::tools::ImagePagesRequest;
+        let root = sandbox("inspect-image-pages");
+        let png = root.join("photo.png"); write_png(&png, 8, 30);
+        let scan = root.join("scan.tiff");
+        std::fs::write(&scan, raw_tiff(&[gray_tiff_page(1, 1, 1, vec![0]), gray_tiff_page(1, 1, 1, vec![1]), gray_tiff_page(1, 1, 1, vec![2])])).unwrap();
+        let missing = root.join("missing.tif");
+
+        assert_eq!(inspect_image_pages(ImagePagesRequest { paths: vec![png, scan, missing] }), [Some(1), Some(3), None]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn images_to_pdf_stops_at_the_recorded_tiff_page_limit() {
+        use crate::kit::common::limits::MAX_IMAGE_PAGES;
+        let root = sandbox("images-to-pdf-tiff-limit");
+        let first = root.join("first.png"); write_png(&first, 16, 30);
+        let long = root.join("long.tiff");
+        std::fs::write(&long, raw_tiff(&(0..=MAX_IMAGE_PAGES).map(|page| gray_tiff_page(1, 1, 1, vec![page as u8])).collect::<Vec<_>>())).unwrap();
+        let paths = vec![first.clone(), long.clone()];
+        let out = location(&root, "out");
+        let OutputLocation::CustomFolder(folder) = &out else { unreachable!() };
+        let folder = folder.clone();
+
+        let outcomes = tauri::async_runtime::block_on(run_images_to_pdf(&ImagesToPdfRequest { paths: paths.clone(), output_location: out, output_path: None }));
+
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), paths);
+        let error = outcomes[1].error().expect("the TIFF over the page limit must fail");
+        assert_eq!(error.kind, ErrorKind::LimitExceeded { limit: LimitKind::PageCount }, "{}", error.message);
+        assert!(error.message.contains("1,000"), "{}", error.message);
+        assert!(outcomes[0].error().is_some_and(|error| error.message.contains(&long.display().to_string())), "the other image names the TIFF that stopped the combine");
+        assert!(outcomes.iter().all(|outcome| outcome.output_paths().is_empty()));
+        assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 0);
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -2853,7 +3074,7 @@ mod command_tests {
         let root = sandbox("tiff-deep-pages");
         let deep = root.join("deep.tiff");
         write_tiff(&deep, &[image::DynamicImage::ImageRgb16(image::ImageBuffer::from_raw(2, 1, vec![1, 2, 3, 4, 5, 6]).unwrap())]);
-        let unsupported = "Unsupported TIFF color type or bit depth: RGB(16)";
+        let unsupported = "TIFF page 1 of 1 can't be read. Unsupported TIFF color type or bit depth: RGB(16)";
 
         let split = tauri::async_runtime::block_on(run_process_tiff_pages(&TiffRequest { paths: vec![deep.clone()], pages: None, output_location: location(&root, "split"), output_path: None }));
         assert_eq!(split[0].error().map(|error| error.message.clone()), Some(format!("Could not process {}: {unsupported}", deep.display())));
