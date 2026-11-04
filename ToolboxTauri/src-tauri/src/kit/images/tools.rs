@@ -405,9 +405,6 @@ pub struct TiffPreviewRequest { pub path: PathBuf }
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MetadataRequest { pub paths: Vec<PathBuf>, pub output_location: OutputLocation }
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MetadataReport { pub path: PathBuf, pub exif: bool, pub gps: bool, pub xmp: bool, pub icc: bool, pub orientation: bool, pub unsupported: Vec<String> }
 
 pub fn resize(request: &ResizeRequest, input: PathBuf) -> JobOutcome {
     transform(request.paths.as_slice(), input, &request.output_location, "-resized", |image| {
@@ -923,17 +920,6 @@ fn write_encoded_page<W: std::io::Write + Seek>(encoder: &mut tiff::encoder::Tif
         TiffPage::Rgba { width, height, data } => encoder.write_image::<tiff::encoder::colortype::RGBA8>(*width, *height, data).map_err(|error| error.to_string()),
     }
 }
-pub fn inspect_metadata(input: PathBuf) -> Result<MetadataReport, String> {
-    let bytes = std::fs::read(&input).map_err(|error| format!("Could not read image metadata: {error}"))?;
-    let exif = contains(&bytes, b"Exif\0\0");
-    let xmp = contains(&bytes, b"http://ns.adobe.com/xap/1.0/") || contains(&bytes, b"<x:xmpmeta");
-    let icc = contains(&bytes, b"ICC_PROFILE") || contains(&bytes, b"iCCP");
-    let gps = exif && (contains(&bytes, b"GPS") || contains(&bytes, b"gps"));
-    let orientation = exif && (contains(&bytes, b"Orientation") || contains(&bytes, b"orientation"));
-    let supported = exif || xmp || icc;
-    Ok(MetadataReport { path: input, exif, gps, xmp, icc, orientation, unsupported: if supported { Vec::new() } else { vec!["No supported EXIF, GPS, XMP, or ICC metadata marker was recognized.".to_string()] } })
-}
-
 pub fn strip_metadata(request: &MetadataRequest, input: PathBuf) -> JobOutcome {
     let image = match image::open(&input) { Ok(image) => image, Err(error) => return failure(input, format!("Could not read image: {error}")) };
     let output = match OutputNaming::reserve_destination(&input, &request.output_location, "-stripped", input.extension().and_then(|extension| extension.to_str()).unwrap_or("png")) {
@@ -942,7 +928,7 @@ pub fn strip_metadata(request: &MetadataRequest, input: PathBuf) -> JobOutcome {
     };
     let format = ImageFormat::from_path(output.path()).unwrap_or(ImageFormat::Png);
     if let Err(error) = image.save_with_format(output.path(), format) { return failure(input, format!("Could not save metadata-free image: {error}")); }
-    match inspect_metadata(output.path().to_path_buf()) {
+    match crate::kit::images::metadata::read_file(output.path()) {
         Ok(report) if !report.exif && !report.xmp && !report.icc => match output.publish() {
             Ok(path) => JobOutcome::succeeded(input, vec![path], "Metadata removed and verified"),
             Err(error) => failure(input, format!("Could not publish metadata-free image: {error}")),
@@ -951,8 +937,6 @@ pub fn strip_metadata(request: &MetadataRequest, input: PathBuf) -> JobOutcome {
         Err(error) => failure(input, format!("Could not verify metadata removal: {error}")),
     }
 }
-
-fn contains(bytes: &[u8], needle: &[u8]) -> bool { bytes.windows(needle.len()).any(|window| window == needle) }
 
 fn transform<F>(_: &[PathBuf], input: PathBuf, location: &OutputLocation, suffix: &str, edit: F) -> JobOutcome where F: FnOnce(DynamicImage) -> Result<DynamicImage, String> {
     let image = match crate::kit::images::load_image(&input) { Ok(image) => image, Err(error) => return failure(input, format!("Could not read image: {error}")) };
@@ -1052,16 +1036,6 @@ mod tests {
         let _ = std::fs::remove_file(two_page);
         let _ = std::fs::remove_file(one_page);
         let _ = std::fs::remove_file(output);
-    }
-
-    #[test]
-    fn reports_unrecognized_metadata_explicitly() {
-        let input = path("metadata.png");
-        image::RgbaImage::from_pixel(1, 1, image::Rgba([1, 2, 3, 255])).save(&input).unwrap();
-        let report = inspect_metadata(input.clone()).unwrap();
-        assert!(!report.exif && !report.gps && !report.xmp && !report.icc);
-        assert!(!report.unsupported.is_empty());
-        let _ = std::fs::remove_file(input);
     }
 
     #[test]

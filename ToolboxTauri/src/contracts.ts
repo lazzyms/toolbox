@@ -193,6 +193,25 @@ export interface ImagePreview {
   dataUrl: string;
 }
 
+export type ImageMetadataFormat = "jpeg" | "png" | "webp" | "tiff" | "heic";
+
+export type ImageMetadataErrorCode = "unreadable" | "unsupportedFormat" | "truncated" | "corrupt";
+
+export type ImageMetadataInspection =
+  | {
+      status: "report";
+      path: string;
+      format: ImageMetadataFormat;
+      exif: boolean;
+      gps: boolean;
+      xmp: boolean;
+      iptc: boolean;
+      comments: boolean;
+      icc: boolean;
+      orientation: number | null;
+    }
+  | { status: "error"; path: string; code: ImageMetadataErrorCode; message: string };
+
 export interface ToolDefinition {
   id: AtomicToolId;
   title: string;
