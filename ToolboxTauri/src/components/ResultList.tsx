@@ -34,11 +34,11 @@ const segmentTone = (file: LiveFile): SegmentTone => {
     return file.outcome.state === "skipped" ? "skip" : "fail";
 };
 
-const revealButtonLabel = () => {
+const revealButtonLabels = () => {
     const platform = navigator.platform.toLowerCase();
-    if (platform.includes("mac")) return "Show in Finder";
-    if (platform.includes("win")) return "Show in File Explorer";
-    return "Show in file manager";
+    if (platform.includes("mac")) return { full: "Show in Finder", short: "Show in Finder" };
+    if (platform.includes("win")) return { full: "Show in File Explorer", short: "Show in Explorer" };
+    return { full: "Show in file manager", short: "Show in file manager" };
 };
 
 const followPointer = (pointer: OutcomePointer) => {
@@ -60,13 +60,15 @@ interface ResultListProps {
     runningDetail?: string;
     live: LiveRun | null;
     namedByOutput?: boolean;
+    outputNoun?: string;
     onRetry?: (inputPath: string) => Promise<void>;
     onRetryWithPassword?: (inputPath: string, password: string) => Promise<void>;
 }
 
-export const ResultList = ({ results, progress, loading, resultVerb, runningVerb, runningDetail, live, namedByOutput = false, onRetry, onRetryWithPassword }: ResultListProps) => {
+export const ResultList = ({ results, progress, loading, resultVerb, runningVerb, runningDetail, live, namedByOutput = false, outputNoun, onRetry, onRetryWithPassword }: ResultListProps) => {
     const [actionStates, setActionStates] = useState<Record<number, RowActionState>>({});
     const [passwordRow, setPasswordRow] = useState<number | null>(null);
+    const [expandedRows, setExpandedRows] = useState<ReadonlySet<number>>(new Set());
     const resultSetGeneration = useRef(0);
 
     useEffect(() => {
@@ -74,6 +76,7 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
         resultSetGeneration.current = generation;
         setActionStates({});
         setPasswordRow(null);
+        setExpandedRows(new Set());
         return () => {
             if (resultSetGeneration.current === generation) resultSetGeneration.current += 1;
         };
@@ -94,14 +97,23 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
         setActionStates((states) => ({ ...states, [row]: { pending: null, error } }));
     };
 
-    const reveal = revealButtonLabel();
+    const { full: reveal, short: revealShort } = revealButtonLabels();
+
+    const toggleOutputs = (row: number) => setExpandedRows((rows) => {
+        const next = new Set(rows);
+        if (!next.delete(row)) next.add(row);
+        return next;
+    });
 
     const finishedRow = (result: JobOutcome, index: number) => {
-        const view = rowView(result, resultVerb, namedByOutput);
+        const view = rowView(result, resultVerb, namedByOutput, outputNoun);
         const state = actionStates[index] ?? idleActionState;
         const busy = state.pending !== null;
         const name = view.name;
         const Icon = toneIcons[view.tone];
+        const listedOutputs = outputNoun && result.state === "succeeded" && result.outputPaths.length > 1 ? result.outputPaths : null;
+        const expanded = listedOutputs !== null && expandedRows.has(index);
+        const outputListId = `result-outputs-${index}`;
         return (
             <li key={`${index}:${result.inputPath}`} className="result-row" data-tone={view.tone} data-state={result.state}>
                 <span className="result-row-icon" aria-hidden="true"><Icon /></span>
@@ -116,7 +128,12 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
                     <span className="sr-only">{view.spokenState}</span>
                 </span>
                 <span className="result-row-actions">
-                    {view.openOutput && (
+                    {listedOutputs && (
+                        <Button variant="outline" size="xs" aria-expanded={expanded} aria-controls={outputListId} onClick={() => toggleOutputs(index)}>
+                            {expanded ? `Hide ${outputNoun}` : `Show ${listedOutputs.length} ${outputNoun}`}
+                        </Button>
+                    )}
+                    {!listedOutputs && view.openOutput && (
                         <Button
                             variant="ghost"
                             size="xs"
@@ -127,7 +144,7 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
                             {state.pending === "open" ? "Opening..." : view.openOutput.label}
                         </Button>
                     )}
-                    {view.revealOutput && (
+                    {!listedOutputs && view.revealOutput && (
                         <Button
                             variant="ghost"
                             size="xs"
@@ -169,6 +186,24 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
                         onRetry={(password) => void runAction(index, "retry", () => onRetryWithPassword(result.inputPath, password))}
                         onCancel={() => setPasswordRow(null)}
                     />
+                )}
+                {listedOutputs && expanded && (
+                    <ul id={outputListId} className="result-outputs" aria-label={`${outputNoun?.replace(/^./, (letter) => letter.toUpperCase())} from ${name}`}>
+                        {listedOutputs.map((path) => {
+                            const output = fileName(path);
+                            return (
+                                <li key={path}>
+                                    <span className="result-output-name" title={path}>{output}</span>
+                                    <Button variant="ghost" size="xs" aria-label={`Open ${output}`} disabled={busy} onClick={() => void runAction(index, "open", () => invoke("open_output_path", { path }))}>
+                                        Open
+                                    </Button>
+                                    <Button variant="ghost" size="xs" aria-label={`${reveal}: ${output}`} disabled={busy} onClick={() => void runAction(index, "reveal", () => invoke("reveal_output_path", { path }))}>
+                                        {revealShort}
+                                    </Button>
+                                </li>
+                            );
+                        })}
+                    </ul>
                 )}
                 {state.error && <p className="result-action-error" role="alert">{state.error}</p>}
             </li>

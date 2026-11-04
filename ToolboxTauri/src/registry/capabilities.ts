@@ -16,6 +16,14 @@ const capabilityKeys = new Set([
   "manyToOne",
 ]);
 
+const optionalCapabilityKeys = new Set(["outputFormats"]);
+
+const isExtensionList = (value: unknown): value is string[] =>
+  Array.isArray(value) &&
+  value.length > 0 &&
+  value.every((extension) => typeof extension === "string" && /^\.[a-z0-9]+$/.test(extension)) &&
+  new Set(value).size === value.length;
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -27,7 +35,8 @@ const isInputCardinality = (
 const parseCapability = (value: unknown): SharedCapability => {
   if (!isRecord(value)) throw new Error("Each shared capability must be an object.");
   const keys = Object.keys(value);
-  if (keys.length !== capabilityKeys.size || keys.some((key) => !capabilityKeys.has(key))) {
+  const requiredKeys = keys.filter((key) => capabilityKeys.has(key));
+  if (requiredKeys.length !== capabilityKeys.size || keys.some((key) => !capabilityKeys.has(key) && !optionalCapabilityKeys.has(key))) {
     throw new Error("Each shared capability must contain only the contract fields.");
   }
   const {
@@ -39,20 +48,12 @@ const parseCapability = (value: unknown): SharedCapability => {
     nativeAvailability,
     outputSuffix,
     manyToOne,
+    outputFormats,
   } = value;
   if (typeof command !== "string" || command.length === 0) {
     throw new Error("Each shared capability needs a command.");
   }
-  if (
-    !Array.isArray(acceptedExtensions) ||
-    acceptedExtensions.length === 0 ||
-    !acceptedExtensions.every(
-      (extension) =>
-        typeof extension === "string" &&
-        /^\.[a-z0-9]+$/.test(extension),
-    ) ||
-    new Set(acceptedExtensions).size !== acceptedExtensions.length
-  ) {
+  if (!isExtensionList(acceptedExtensions)) {
     throw new Error(`${command} has invalid accepted extensions.`);
   }
   if (!isInputCardinality(inputCardinality)) {
@@ -70,6 +71,9 @@ const parseCapability = (value: unknown): SharedCapability => {
   if (typeof manyToOne !== "boolean") {
     throw new Error(`${command} has an invalid many-to-one flag.`);
   }
+  if (outputFormats !== undefined && !isExtensionList(outputFormats)) {
+    throw new Error(`${command} has invalid output formats.`);
+  }
   return {
     command,
     acceptedExtensions,
@@ -79,6 +83,7 @@ const parseCapability = (value: unknown): SharedCapability => {
     nativeAvailability,
     outputSuffix,
     manyToOne,
+    ...(outputFormats ? { outputFormats } : {}),
   };
 };
 
@@ -109,6 +114,7 @@ for (const capability of SharedCapabilityRegistry) {
     nativeAvailability: capability.nativeAvailability,
     outputSuffix: capability.outputSuffix,
     manyToOne: capability.manyToOne,
+    ...(capability.outputFormats ? { outputFormats: capability.outputFormats } : {}),
   });
 }
 

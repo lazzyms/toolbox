@@ -59,6 +59,7 @@ export interface ToolCapability {
   nativeAvailability: NativeAvailability;
   outputSuffix: string;
   manyToOne: boolean;
+  outputFormats?: readonly string[];
 }
 
 export type OutputLocation = "alongsideInput" | { customFolder: string };
@@ -200,6 +201,7 @@ export interface ToolDefinition {
   resultVerb: string;
   runningVerb: string;
   runningDetail?: string;
+  outputNoun?: string;
   lockedNote?: string;
   blurb: string;
   keywords?: readonly string[];

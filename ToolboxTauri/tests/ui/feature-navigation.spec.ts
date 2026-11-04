@@ -1335,14 +1335,14 @@ test("PDF to Images identifies source selection and summarizes its non-previewab
   await expect(page.getByRole("region", { name: "Source page selection" })).toBeVisible();
   await expect(page.getByRole("region", { name: "Conversion preview" })).toHaveCount(0);
   await expect(page.getByRole("checkbox", { name: "Page 1" })).toBeChecked();
-  await expect(page.getByLabel("Render DPI")).toBeVisible();
-  await expect(page.getByLabel("Output format")).toBeVisible();
+  await expect(page.getByRole("radiogroup", { name: "Resolution" })).toBeVisible();
+  await expect(page.getByRole("radiogroup", { name: "Format" })).toBeVisible();
   await expect(page.getByText("1 page selected", { exact: true })).toBeVisible();
-  await expect(page.getByText("Output preview unavailable. Export renders page 1 at 150 DPI as JPEG image files.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Output preview unavailable. Export renders page 1 at 150 dpi as PNG image files.", { exact: true })).toBeVisible();
 
-  await page.getByLabel("Render DPI").selectOption("300");
-  await page.getByLabel("Output format").selectOption("png");
-  await expect(page.getByText("Output preview unavailable. Export renders page 1 at 300 DPI as PNG image files.", { exact: true })).toBeVisible();
+  await page.getByRole("radiogroup", { name: "Resolution" }).getByRole("radio", { name: "300 dpi" }).click();
+  await page.getByRole("radiogroup", { name: "Format" }).getByRole("radio", { name: "WebP" }).click();
+  await expect(page.getByText("Output preview unavailable. Export renders page 1 at 300 dpi as WebP image files.", { exact: true })).toBeVisible();
 
   await page.getByRole("checkbox", { name: "Page 1" }).click();
   await expect(page.locator(".workspace-primary-action")).toBeDisabled();
@@ -2306,9 +2306,9 @@ test.describe("per-run destination", () => {
         await expect(example).toHaveText("document-text.txt");
 
         await page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "PDF to Images", exact: true }).click();
-        await expect(example).toHaveText("document-images.jpg");
-        await page.getByLabel("Output format").selectOption("png");
-        await expect(example).toHaveText("document-images.png");
+        await expect(example).toHaveText("document-page-01.png");
+        await page.getByRole("radiogroup", { name: "Format" }).getByRole("radio", { name: "JPEG" }).click();
+        await expect(example).toHaveText("document-page-01.jpg");
     });
 
     test("shows the default destination and the name the image editor export writes", async ({ page }) => {
