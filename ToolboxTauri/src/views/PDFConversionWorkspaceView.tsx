@@ -21,8 +21,6 @@ const outputPreviewLimitations: Partial<Record<AtomicToolId, string>> = {
   "images-to-pdf": "Output preview unavailable. Export combines the selected images into one PDF in file order.",
   "pdf-merge": "Output preview unavailable. Export merges the selected PDFs in file order.",
   "pdf-split": "Output preview unavailable. Export creates separate PDF files using the selected split mode.",
-  "pdf-to-text": "Output preview unavailable. Export creates a text file from the selected pages.",
-  "pdf-image-extract": "Output preview unavailable. Export extracts embedded JPEG images from the selected pages.",
   "pdf-extract-pages": "Output preview unavailable. Export creates a PDF containing the selected pages.",
   "pdf-ocr": "Output preview unavailable. OCR is unavailable in this build.",
   "pdf-rotate": "Output preview unavailable. Export saves a copy with the selected pages turned.",
@@ -160,19 +158,12 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
             },
           });
         }
-        if (activeUtility.id === "pdf-to-text") {
-          return invoke<ToolResult>("pdf_to_text", { runId,
-            request: { paths, pages: pages ?? null, outputLocation },
-          });
-        }
         if (activeUtility.id === "pdf-ocr") {
           return invoke<ToolResult>("ocr_pdf", { runId,
             request: { paths, pages: pages ?? null, outputLocation },
           });
         }
-        return invoke<ToolResult>("extract_pdf_images", { runId,
-          request: { paths, pages: pages ?? null, outputLocation },
-        });
+        return Promise.resolve(paths.map((path) => failedOutcome(path, "invalidInput", `${activeUtility.title} doesn't run from PDF Conversion.`)));
       }}
     >
       {({ files, run, loading, destination, runLabel }) => (
@@ -431,16 +422,6 @@ const ConversionControls = ({
             />
           </div>
         </div>
-      )}
-      {activeUtility.id === "pdf-to-text" && (
-        <p className="workspace-note">
-          Selectable text is extracted in page order. Scanned PDFs are reported as needing OCR.
-        </p>
-      )}
-      {activeUtility.id === "pdf-image-extract" && (
-        <p className="workspace-note">
-          Embedded JPEG images are saved at their original resolution when the PDF contains them.
-        </p>
       )}
       {activeUtility.id === "images-to-pdf" && (
         <p className="workspace-note">Images are combined in the order they appear in the selected list.</p>
