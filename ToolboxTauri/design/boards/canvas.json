@@ -143,7 +143,7 @@
 "y": 4960,
 "w": 1280,
 "h": 800,
-"title": "Organize pages: grid with page actions",
+"title": "Organize pages: empty, editing, export and result states",
 "expand": "fill"
 },
 "PdfExport.dc.html": {
@@ -632,6 +632,70 @@
 "maxH": 520,
 "fill": "green",
 "text": "Screen-reader announcements\n\nOne polite live region sits on the batch strip:\n- On start: 'Protecting 24 files.'\n- During the run: progress every 5 files or 10 seconds, whichever is later, such as 'Protecting, 10 of 24 done.'\n- On finish: 'Done. 21 protected, 2 skipped, 1 failed.' Focus stays where it was.\n\nEach row is a list item whose accessible name reads as one sentence: file, state, reason, warnings, then output name. Row actions are real buttons, such as 'Open annual-report-protected.pdf'.\n\nThe cancel dialog traps focus and returns it to Cancel batch."
+},
+"og1": {
+"x": 7200,
+"y": 4960,
+"w": 360,
+"maxH": 860,
+"fill": "blue",
+"text": "Organize: rail and page view\n\nOrganize is the first item in the PDF Editor rail and the place a PDF opens. It's a full-width page grid, not a strip beside the page. Every other rail item (Crop, Edit text, Sign…) shows one page at a time.\n\nTo switch: press Enter or double-click a thumbnail, or use \"Open in page view\" under the preview. That opens the focused page in the last page tool you used, Edit text by default. Choosing Organize in the rail comes back to the grid with the same focus and selection.\n\nThe right panel previews the focused page large, with its position, original page and orientation, so users can check a page without leaving the grid."
+},
+"og2": {
+"x": 7600,
+"y": 4960,
+"w": 360,
+"maxH": 860,
+"fill": "blue",
+"text": "Thumbnails, drag and scrolling\n\nSize: Small, Medium (default) or Large, a segmented control at the right of the Select bar. The choice is remembered for the app, not per file.\n\nEach thumbnail shows its position in bold. A page that moved adds \"· was page 13\". The screen reader always hears both: \"Position 12, original page 13\".\n\nDrag: dragging any selected page carries the whole selection. The pointer shows a small stack with a count badge (3). The pages being moved are dimmed in place. A blue bar with end caps shows where they'll land, always between two pages.\n\nAuto-scroll: 44-pixel bands at the top and bottom of the grid. They appear only during a drag. Hovering a band scrolls that way, faster nearer the edge, and the band says what is coming into view. Esc cancels the drag and nothing moves."
+},
+"og3": {
+"x": 8000,
+"y": 4960,
+"w": 360,
+"maxH": 860,
+"fill": "green",
+"text": "Orientation\n\nOne segmented group in the page actions bar: rotate left, rotate right, mirror left to right, mirror top to bottom, plus a ▾ menu. The menu repeats those four with their shortcuts and adds Rotate 180° and \"Reset orientation of N pages\", which only undoes orientation.\n\nThe thumbnail itself turns and flips, so users see the result. A small badge in the bottom-left corner states it in words and symbols: \"↻ 90°\", \"↺ 90°\", \"↻ 180°\", \"⇋ Mirrored\", \"⇵ Mirrored\", joined with \"·\" when both apply. A page with no change has no badge.\n\nThe preview panel's Orientation line spells it out: \"Rotated 90° right, mirrored left to right\" or \"As in the original\"."
+},
+"og4": {
+"x": 8400,
+"y": 4960,
+"w": 360,
+"maxH": 860,
+"fill": "green",
+"text": "Notices and preflight\n\nNotices sit at the top of the grid, above the pages, as quiet rows with an icon and plain words. They never block the grid.\n\n- Signed PDF: on open. \"This PDF is digitally signed. Any copy you export won't be signed any more. The original keeps its signature.\" Dismissable with Got it. It returns as \"Signature removed\" in the export result.\n- Mirrored pages: whenever any page is mirrored. \"2 mirrored pages will show their text reversed. That's expected…\"\n\nPreflight rejections replace the grid with a centered message, an icon and the next step. No pages are shown and nothing is changed:\n- Password-protected: Open File Security.\n- Damaged or unsupported: Open another PDF.\n- Over the page limit (2,000 is a placeholder until the spec fixes it): Open Split."
+},
+"og5": {
+"x": 8800,
+"y": 4960,
+"w": 360,
+"maxH": 860,
+"fill": "purple",
+"text": "Selecting pages\n\nThe Select bar sits under the page actions: All, Odd, Even, Blank pages, None. \"Blank pages\" sits right after Odd and Even because it's the same kind of action: it only selects.\n\nAfter it runs, the button keeps a \"3 found\" chip. The pages are selected and labelled \"· blank\" in the grid. Focus moves to the first one, and the status line says \"3 blank pages found and selected: 7, 11 and 16. Nothing was removed.\" Users review them, deselect any they want to keep, then press Delete. Finding zero says \"No blank pages found\" and changes nothing. Selecting never adds an undo step.\n\nThe Pages field takes ranges like \"1-3, 7\" and selects them on Enter. It uses the same rules as Split. A page past the end is an error: red border and the message \"Page 250 isn't in this PDF. It has 236 pages…\".\n\nThe count is always visible at the left of the actions bar: \"3 pages selected\", or \"No pages selected\" with the actions disabled."
+},
+"og6": {
+"x": 9200,
+"y": 4960,
+"w": 360,
+"maxH": 860,
+"fill": "purple",
+"text": "Moving, deleting and shortcuts\n\nMove earlier and later go one step. \"Move to…\" opens a small popover with a position field and Start and End buttons. \"Page order\" holds Reverse the selected pages, Reverse the whole document and Interleave a two-sided scan, with a line explaining when to use it.\n\nDelete names the count: \"Delete 3 pages\". With every page selected it's disabled, and an alert explains: \"A PDF needs at least one page…\".\n\nShortcuts: the keyboard button (or ?) opens the full list. The grid is one tab stop. Arrow keys, Home and End move focus. Space selects. Shift plus an arrow extends. ⌘/Ctrl plus an arrow moves the selection. ⌘↑/⌘↓ on Mac and Ctrl+Home/End on Windows move it to the start or end. M opens Move to. Rotate is ⌘R/Ctrl+R, and with Shift it rotates left. H and V mirror. Delete or ⌫ removes. Every Mac label has a Windows label."
+},
+"og7": {
+"x": 9600,
+"y": 4960,
+"w": 360,
+"maxH": 860,
+"fill": "orange",
+"text": "Export, destination and results\n\nNext to Export is a folder button with the destination's short name, by default the original's folder. Clicking it opens a popover with the full path, Choose folder… and Use default. A per-run change shows a \"This export only\" chip and says the Settings default didn't change.\n\nExport is disabled until the previews are ready and while nothing has changed. Undoing back to the original disables it again, with \"Nothing to export yet\". This view never shows Skipped.\n\nRunning: Export becomes a progress bar with \"Page 137 of 236\" and Cancel. Page edits are locked, with a notice saying so.\n\nExported: a dialog with the file (contracts-scan-edited.pdf, then -edited-1), \"233 pages kept, 3 removed, 12 rotated, 2 mirrored\", the folder, and \"Signature removed\" when relevant. Buttons: Open, Show in Finder / Show in File Explorer, and Keep editing.\n\nFailed: names the problem, the folder, and \"Nothing. No partial file was left behind.\"\n\nRemoval blocked: lists what depends on the pages (bookmarks, form fields, tags), says nothing was saved, and offers to restore those pages."
+},
+"og8": {
+"x": 10000,
+"y": 4960,
+"w": 360,
+"maxH": 860,
+"fill": "orange",
+"text": "Reset, unsaved changes, motion and screen readers\n\nReset… (header) asks first. It's an alert dialog that returns every page to how the PDF was opened, and says it also clears other PDF Editor changes. Opening another PDF with changes asks \"Export your changes first?\" with Export, Cancel and Don't export.\n\nReduced motion: reordering normally slides pages into place over 150 ms, and drops settle the same way. With reduced motion on, pages jump straight to their new place, the drag ghost has no tilt, and rotation applies without turning. Auto-scroll still works but moves in steps.\n\nScreen readers: the grid is a multi-select listbox. Each option is \"Position 12, original page 13, rotated 90° right, mirrored left to right, selected\". The footer status is a polite live region. It says things like \"Pages 4 to 6 moved to position 1\", \"Page 5 rotated 90° right\", \"Pages 8 and 9 mirrored left to right\", \"3 blank pages found and selected: 7, 11 and 16\", \"No blank pages found\" and \"3 pages deleted. 233 left.\" Errors, the last-page message and failed exports are alerts."
 }
 },
 "designSystems": []
