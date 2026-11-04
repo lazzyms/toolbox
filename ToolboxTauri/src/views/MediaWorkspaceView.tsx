@@ -34,6 +34,22 @@ export const MediaWorkspaceView = ({ utility: activeUtility, initialPaths, onFil
     mediaTools[id].buildRequest(options[id], { paths, outputLocation, outputPath });
   const canRun = <Id extends MediaToolId>(id: Id, files: string[]) =>
     mediaTools[id].canRun?.(options[id], files) ?? true;
+  const runLabelFor = <Id extends MediaToolId>(id: Id, files: string[]) => {
+    const label = mediaTools[id].runLabel;
+    return typeof label === "function" ? label(options[id], files) : label;
+  };
+  const exampleNameFor = <Id extends MediaToolId>(id: Id) => {
+    const exampleName = mediaTools[id].exampleName;
+    return exampleName && ((path: string) => exampleName(options[id], path));
+  };
+  // A tool's options can change how the shared run treats its inputs, such as TIFF Split versus Combine.
+  const capabilityFor = <Id extends MediaToolId>(id: Id) =>
+    mediaTools[id].capability?.(options[id], activeUtility.capability) ?? activeUtility.capability;
+  const capability = capabilityFor(toolId);
+  const utility = useMemo(
+    () => (capability === activeUtility.capability ? activeUtility : { ...activeUtility, capability }),
+    [activeUtility, capability.inputCardinality, capability.manyToOne],
+  );
   const renderPanel = <Id extends MediaToolId>(id: Id, scaffold: { files: string[]; outputLocation: OutputLocation; loading: boolean; selectedFileIndex: number; selectFile: (index: number) => void }): ReactNode => {
     const Panel = mediaTools[id].Panel;
     return <Panel key={id} utility={activeUtility} options={options[id]} setOptions={setters[id]} {...scaffold} />;
@@ -43,7 +59,8 @@ export const MediaWorkspaceView = ({ utility: activeUtility, initialPaths, onFil
     <ToolScaffold
       variant="workspace"
       sessionKey="media-tools"
-      utility={activeUtility}
+      utility={utility}
+      exampleName={exampleNameFor(toolId)}
       initialPaths={initialPaths}
       onFilesChange={onFilesChange}
       showFileOrdering={tool.showFileOrdering ?? true}
@@ -65,7 +82,7 @@ export const MediaWorkspaceView = ({ utility: activeUtility, initialPaths, onFil
 
           {destination}
           <Button variant="default" disabled={loading || files.length === 0 || !canRun(toolId, files)} onClick={run} className="workspace-primary-action" {...shortcutTarget("run")}>
-            {runLabel ?? tool.runLabel ?? activeUtility.shortTitle}
+            {runLabel ?? runLabelFor(toolId, files) ?? activeUtility.shortTitle}
             <ShortcutHint id="run" />
           </Button>
           </CardContent>

@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { OutputLocation, ToolCommand, ToolDefinition } from "../../contracts";
+import type { OutputLocation, ToolCapability, ToolCommand, ToolDefinition } from "../../contracts";
 
 /** What the shared run hands every Media tool when it builds its request. */
 export interface MediaRunInput {
@@ -35,7 +35,11 @@ export interface MediaTool<Options> {
   /** Whether the options allow a run, beyond having files and not running. */
   canRun?: (options: Options, files: string[]) => boolean;
   /** The run button's label when the shared run has none; defaults to the tool's short title. */
-  runLabel?: string;
+  runLabel?: string | ((options: Options, files: string[]) => string);
   /** Whether the shared file list offers reordering; defaults to true. */
   showFileOrdering?: boolean;
+  /** How the shared run treats the inputs under these options; defaults to the registered capability. */
+  capability?: (options: Options, registered: ToolCapability) => ToolCapability;
+  /** The example output name the destination shows; defaults to the registered suffix. */
+  exampleName?: (options: Options, path: string) => string;
 }

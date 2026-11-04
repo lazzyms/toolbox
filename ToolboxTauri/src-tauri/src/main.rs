@@ -396,15 +396,26 @@ async fn extract_gif_frames(events: RunEvents, request: tools::GifExtractRequest
     BatchRunner::run(&events, "extract_gif_frames", request.paths.clone(), &request.output_location, &request, tools::gif_extract)
 }
 #[tauri::command]
-async fn process_tiff_pages(app: tauri::AppHandle, request: tools::TiffRequest) -> Vec<JobOutcome> {
-    let outcomes = run_process_tiff_pages(&request).await;
-    settings::remember_chosen_save(&app, request.output_path.as_deref(), outcomes)
+async fn process_tiff_pages(app: tauri::AppHandle, events: RunEvents, request: tools::TiffRequest) -> Vec<JobOutcome> {
+    match request.mode {
+        tools::TiffMode::Split => run_split_tiff_pages(&events, request),
+        tools::TiffMode::Combine => {
+            let outcomes = run_combine_tiff_pages(&request).await;
+            settings::remember_chosen_save(&app, request.output_path.as_deref(), outcomes)
+        }
+    }
 }
 
-async fn run_process_tiff_pages(request: &tools::TiffRequest) -> Vec<JobOutcome> {
+/// Split is a per-file batch: a corrupt or one-page TIFF settles alone and the rest still run.
+fn run_split_tiff_pages(events: &RunEvents, request: tools::TiffRequest) -> Vec<JobOutcome> {
+    let request = Arc::new(request);
+    BatchRunner::run(events, "process_tiff_pages", request.paths.clone(), &request.output_location, &request, tools::tiff_split)
+}
+
+async fn run_combine_tiff_pages(request: &tools::TiffRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_command_inputs("process_tiff_pages", &request.paths) { return outcomes; }
     let request = request.clone();
-    aggregate_outcomes("process_tiff_pages", &request.paths.clone(), move || note_renamed(tools::tiff(&request), request.output_path.as_deref()))
+    aggregate_outcomes("process_tiff_pages", &request.paths.clone(), move || note_renamed(tools::tiff_combine(&request), request.output_path.as_deref()))
 }
 #[tauri::command]
 async fn image_metadata(events: RunEvents, request: tools::MetadataRequest) -> Vec<JobOutcome> {
@@ -623,7 +634,7 @@ mod command_tests {
     use super::*;
     use crate::kit::common::OutputLocation;
     use crate::kit::contracts::{ErrorKind, LimitKind};
-    use crate::kit::images::tools::{CropRequest, GifCreateRequest, GifExtractRequest, ImageEdit, ImageEditExportRequest, ImageEditPlan, ImageEditPreviewRequest, IconSetRequest, MetadataRequest, ResizeRequest, RotateRequest, TiffRequest, ToneRequest, WatermarkRequest};
+    use crate::kit::images::tools::{CropRequest, GifCreateRequest, GifExtractRequest, ImageEdit, ImageEditExportRequest, ImageEditPlan, ImageEditPreviewRequest, IconSetRequest, MetadataRequest, ResizeRequest, RotateRequest, TiffMode, TiffRequest, ToneRequest, WatermarkRequest};
     use crate::kit::office::{test_minimal_ooxml_package, OfficeProcessor};
     use crate::kit::pdf::editor::{AddPdfPagesRequest, CropPdfRequest, EditPdfRequest, OrganizePdfRequest, PageScope, PdfEditMode, PdfEditOperation, PdfEditSessionPlan, PdfEditSessionRequest, PdfOverlay, PdfOverlayPosition, PdfRect, RedactPdfRequest, RotatePage, SignPdfRequest};
     use crate::kit::pdf::remaining::{CompressPdfRequest, ImagesToPdfRequest, MergePdfRequest, PageOverlayRequest, PageSelectionRequest, PdfToImagesRequest, PdfToTextRequest, RotatePdfRequest, ComparePdfsRequest};
@@ -742,7 +753,7 @@ mod command_tests {
             (merge.clone(), "statement-1.pdf", tauri::async_runtime::block_on(run_merge_pdfs(&MergePdfRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: OutputLocation::AlongsideInput, output_path: Some(merge.clone()) }))),
             (combined.clone(), "scans-1.pdf", tauri::async_runtime::block_on(run_images_to_pdf(&ImagesToPdfRequest { paths: vec![image.clone(), image_two.clone()], output_location: OutputLocation::AlongsideInput, output_path: Some(combined.clone()) }))),
             (gif.clone(), "loop-1.gif", tauri::async_runtime::block_on(run_create_gif(&GifCreateRequest { paths: vec![image.clone(), image_two.clone()], frame_delay_ms: 100, loop_forever: true, output_location: OutputLocation::AlongsideInput, output_path: Some(gif.clone()) }))),
-            (tiff_out.clone(), "pages-1.tiff", tauri::async_runtime::block_on(run_process_tiff_pages(&TiffRequest { paths: vec![tiff.clone(), tiff_two.clone()], pages: None, output_location: OutputLocation::AlongsideInput, output_path: Some(tiff_out.clone()) }))),
+            (tiff_out.clone(), "pages-1.tiff", tauri::async_runtime::block_on(run_combine_tiff_pages(&TiffRequest { mode: TiffMode::Combine, paths: vec![tiff.clone(), tiff_two.clone()], pages: None, output_location: OutputLocation::AlongsideInput, output_path: Some(tiff_out.clone()) }))),
         ];
         for (existing, expected_name, outcomes) in runs {
             let chosen_name = existing.file_name().unwrap().to_string_lossy().into_owned();
@@ -800,13 +811,64 @@ mod command_tests {
         assert_aggregate_failure("GIF missing later input", &[image.clone(), missing_gif_frame.clone()], &missing_gif_frame, run_create_gif(&GifCreateRequest {
             paths: vec![image.clone(), missing_gif_frame.clone()], frame_delay_ms: 100, loop_forever: true, output_location: location(&root, "gif-missing"), output_path: None,
         }));
-        assert_aggregate_success("TIFF valid inputs", &[tiff.clone(), tiff_two.clone()], run_process_tiff_pages(&TiffRequest {
-            paths: vec![tiff.clone(), tiff_two.clone()], pages: None, output_location: location(&root, "tiff-valid"), output_path: None,
+        assert_aggregate_success("TIFF valid inputs", &[tiff.clone(), tiff_two.clone()], run_combine_tiff_pages(&TiffRequest {
+            mode: TiffMode::Combine, paths: vec![tiff.clone(), tiff_two.clone()], pages: None, output_location: location(&root, "tiff-valid"), output_path: None,
         }));
-        assert_aggregate_failure("TIFF missing later input", &[tiff.clone(), missing_tiff.clone()], &missing_tiff, run_process_tiff_pages(&TiffRequest {
-            paths: vec![tiff.clone(), missing_tiff.clone()], pages: None, output_location: location(&root, "tiff-missing"), output_path: None,
+        assert_aggregate_failure("TIFF missing later input", &[tiff.clone(), missing_tiff.clone()], &missing_tiff, run_combine_tiff_pages(&TiffRequest {
+            mode: TiffMode::Combine, paths: vec![tiff.clone(), missing_tiff.clone()], pages: None, output_location: location(&root, "tiff-missing"), output_path: None,
         }));
 
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn write_tiff(path: &std::path::Path, pages: &[&[u8]]) {
+        let mut encoder = tiff::encoder::TiffEncoder::new(std::fs::File::create(path).unwrap()).unwrap();
+        for data in pages { encoder.write_image::<tiff::encoder::colortype::Gray8>(data.len() as u32, 1, data).unwrap(); }
+    }
+
+    #[test]
+    fn tiff_split_batch_settles_each_file_on_its_own() {
+        let root = sandbox("tiff-split-batch");
+        let two = root.join("scan-0042.tiff"); write_tiff(&two, &[&[1, 2], &[3, 4]]);
+        let three = root.join("scan-0043.tiff"); write_tiff(&three, &[&[5], &[6], &[7]]);
+        let single = root.join("cover.tiff"); write_tiff(&single, &[&[8]]);
+        let corrupt = root.join("broken.tiff"); std::fs::write(&corrupt, b"II*\0not a real tiff").unwrap();
+        let paths = vec![two.clone(), single.clone(), corrupt.clone(), three.clone()];
+        let originals = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+        let out = location(&root, "split");
+        let OutputLocation::CustomFolder(folder) = &out else { unreachable!() };
+        let folder = folder.clone();
+
+        let outcomes = run_split_tiff_pages(&RunEvents::silent(), TiffRequest { mode: TiffMode::Split, paths: paths.clone(), pages: None, output_location: out, output_path: None });
+
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), paths, "each file settles in its own row, in order");
+        let names = |outcome: &JobOutcome| outcome.output_paths().iter().map(|path| path.file_name().unwrap().to_string_lossy().into_owned()).collect::<Vec<_>>();
+        assert!(matches!(outcomes[0].state, OutcomeState::Succeeded { .. }), "{:?}", outcomes[0]);
+        assert_eq!(names(&outcomes[0]), ["scan-0042-page-01.tif", "scan-0042-page-02.tif"]);
+        let OutcomeState::Skipped { reason } = &outcomes[1].state else { panic!("one-page TIFF must be skipped: {:?}", outcomes[1]) };
+        assert_eq!(reason.message, tools::TIFF_SINGLE_PAGE_SKIP);
+        assert!(outcomes[1].output_paths().is_empty());
+        assert!(outcomes[2].error().is_some(), "the corrupt TIFF fails alone: {:?}", outcomes[2]);
+        assert!(outcomes[2].output_paths().is_empty());
+        assert!(matches!(outcomes[3].state, OutcomeState::Succeeded { .. }), "{:?}", outcomes[3]);
+        assert_eq!(names(&outcomes[3]), ["scan-0043-page-01.tif", "scan-0043-page-02.tif", "scan-0043-page-03.tif"]);
+
+        let mut written = std::fs::read_dir(&folder).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect::<Vec<_>>();
+        written.sort();
+        assert_eq!(written, ["scan-0042-page-01.tif", "scan-0042-page-02.tif", "scan-0043-page-01.tif", "scan-0043-page-02.tif", "scan-0043-page-03.tif"], "several files in Split mode are never combined, and skipped or failed files write nothing");
+        for (path, original) in paths.iter().zip(originals) { assert_eq!(std::fs::read(path).unwrap(), original, "split must not modify {}", path.display()); }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn tiff_combine_with_one_file_still_combines() {
+        let root = sandbox("tiff-combine-one");
+        let two = root.join("scan.tiff"); write_tiff(&two, &[&[1, 2], &[3, 4]]);
+        let outcomes = tauri::async_runtime::block_on(run_combine_tiff_pages(&TiffRequest { mode: TiffMode::Combine, paths: vec![two.clone()], pages: None, output_location: location(&root, "combine"), output_path: None }));
+        assert_eq!(outcomes.len(), 1);
+        let outputs = outcomes[0].output_paths();
+        assert_eq!(outputs.len(), 1, "one file in Combine mode makes one TIFF: {:?}", outcomes[0]);
+        assert_eq!(outputs[0].file_name().unwrap(), "scan-combined.tiff");
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -932,7 +994,7 @@ mod command_tests {
         outputs
     }
 
-    // Icon presets and single-file TIFF splitting predate declared suffixes and keep their
+    // Icon presets and TIFF Split mode predate declared suffixes and keep their
     // shipped names, so these are the only outputs allowed a different suffix family.
     const LEGACY_SUFFIX_FAMILIES: &[(&str, &str)] = &[("generate_icon_set", "-favicon"), ("process_tiff_pages", "-page")];
 
@@ -1233,7 +1295,7 @@ mod command_tests {
         outputs.extend(named(&mut naming, "export_image_edit_plan", lossy_image.clone(), lossy_image_outputs));
         outputs.extend(named(&mut naming, "image_metadata", image.clone(), assert_success("metadata", image_metadata(RunEvents::silent(), MetadataRequest { paths: vec![image.clone()], output_location: location(&root, "metadata") }))));
         outputs.extend(named(&mut naming, "adjust_image_tone", image.clone(), assert_success("tone", adjust_image_tone(RunEvents::silent(), ToneRequest { paths: vec![image.clone()], brightness: 20, contrast: 0.0, saturation: 0.0, exposure: 0.0, output_location: location(&root, "tone") }))));
-        outputs.extend(named(&mut naming, "process_tiff_pages", tiff.clone(), assert_aggregate_success("tiff", &[tiff.clone()], run_process_tiff_pages(&TiffRequest { paths: vec![tiff.clone()], pages: None, output_location: location(&root, "tiff"), output_path: None }))));
+        outputs.extend(named(&mut naming, "process_tiff_pages", tiff.clone(), assert_aggregate_success("tiff", &[tiff.clone()], run_combine_tiff_pages(&TiffRequest { mode: TiffMode::Combine, paths: vec![tiff.clone()], pages: None, output_location: location(&root, "tiff"), output_path: None }))));
         outputs.extend(named(&mut naming, "blur_faces", image.clone(), assert_vision_adapter("face blur", blur_faces(RunEvents::silent(), VisionRequest { paths: vec![image.clone()], pages: None, output_location: location(&root, "face blur") }))));
         outputs.extend(named(&mut naming, "remove_image_background", image.clone(), assert_vision_adapter("background removal", remove_image_background(RunEvents::silent(), VisionRequest { paths: vec![image.clone()], pages: None, output_location: location(&root, "background removal") }))));
         let docx = root.join("document.docx");

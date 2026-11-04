@@ -12,6 +12,7 @@ import {
   toolsForWorkspace,
   workspaceEntries,
 } from "../src/registry/index.ts";
+import { isMediaToolId, mediaTools, type MediaOptions, type MediaToolId } from "../src/features/media/index.ts";
 
 test("UI capabilities are the shared native contract facts", () => {
   const capabilitiesByCommand = new Map(
@@ -103,6 +104,17 @@ test("every many-to-one tool opens the save step and sends the chosen path", () 
     return null;
   };
 
+  // Media tools build their requests in src/features/media, so ask them directly, under the options in which
+  // the tool is many-to-one.
+  const manyToOneMediaOptions: Partial<MediaOptions> = {
+    "tiff-pages": { ...mediaTools["tiff-pages"].initialOptions, mode: "combine" },
+  };
+  const mediaRequestFor = <Id extends MediaToolId>(id: Id) => {
+    const tool = mediaTools[id];
+    const options = (manyToOneMediaOptions[id] ?? tool.initialOptions) as MediaOptions[Id];
+    return tool.buildRequest(options, { paths: ["/a", "/b"], outputLocation: "alongsideInput", outputPath: "/chosen" }).request;
+  };
+
   for (const utility of UtilityRegistry) {
     const step = saveStepFor(utility);
     if (!utility.capability.manyToOne) {
@@ -112,13 +124,42 @@ test("every many-to-one tool opens the save step and sends the chosen path", () 
     assert.ok(step, `${utility.command} is many-to-one and must use the save step`);
     assert.ok(saveStepAppliesTo(step, 2), `${utility.command} must save a combine through the step`);
     assert.match(step.runLabel, /…$/, `${utility.command} opens a dialog, so its run label ends with an ellipsis`);
-    assert.match(requestFor(utility.command) ?? "", /\boutputPath\b/, `${utility.command} must send the chosen path`);
+    if (isMediaToolId(utility.id)) {
+      assert.equal(mediaRequestFor(utility.id).outputPath, "/chosen", `${utility.command} must send the chosen path`);
+    } else {
+      assert.match(requestFor(utility.command) ?? "", /\boutputPath\b/, `${utility.command} must send the chosen path`);
+    }
   }
   assert.deepEqual(
     saveStepCommands().sort(),
     SharedCapabilityRegistry.filter(({ manyToOne }) => manyToOne).map(({ command }) => command).sort(),
   );
   assert.throws(() => saveStepFor({ command: "unknown_combiner", capability: { manyToOne: true } }), /has no save step/);
+});
+
+test("TIFF Pages names its mode in every request and is many-to-one only in Combine mode", () => {
+  const utility = UtilityRegistry.find(({ command }) => command === "process_tiff_pages")!;
+  const tool = mediaTools["tiff-pages"];
+  // The registered capability describes Combine; Split is chosen explicitly and runs per file.
+  assert.equal(utility.capability.manyToOne, true);
+  assert.equal(tool.initialOptions.mode, "split");
+  const input = { paths: ["/scans/a.tiff"], outputLocation: "alongsideInput" as const, outputPath: "/chosen.tiff" };
+
+  const split = { ...tool.initialOptions, mode: "split" as const };
+  const splitCapability = tool.capability!(split, utility.capability);
+  assert.equal(splitCapability.manyToOne, false);
+  assert.equal(splitCapability.inputCardinality, "multiple", "a rejected file in Split fails alone");
+  assert.equal(saveStepFor({ command: utility.command, capability: splitCapability }), null, "Split never opens the save step");
+  assert.deepEqual(tool.buildRequest(split, { ...input, paths: ["/scans/a.tiff", "/scans/b.tiff"] }).request, {
+    mode: "split", paths: ["/scans/a.tiff", "/scans/b.tiff"], outputLocation: "alongsideInput",
+  });
+
+  const combine = { ...tool.initialOptions, mode: "combine" as const };
+  assert.equal(tool.capability!(combine, utility.capability), utility.capability);
+  assert.ok(saveStepAppliesTo(saveStepFor(utility), 1), "one file in Combine mode still makes one TIFF through the save step");
+  assert.deepEqual(tool.buildRequest(combine, input).request, {
+    mode: "combine", paths: ["/scans/a.tiff"], pages: [], outputLocation: "alongsideInput", outputPath: "/chosen.tiff",
+  });
 });
 
 test("workspace membership covers every registered utility exactly once", () => {

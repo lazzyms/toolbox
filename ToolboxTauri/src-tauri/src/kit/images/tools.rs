@@ -8,7 +8,7 @@ use std::io::{BufReader, Seek};
 use std::path::{Path, PathBuf};
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
-use crate::kit::contracts::ToolError;
+use crate::kit::contracts::{SkipCode, SkipReason, ToolError};
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -389,9 +389,14 @@ pub struct GifExtractRequest { pub paths: Vec<PathBuf>, pub output_location: Out
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TiffPageRef { pub path: PathBuf, pub page: usize }
+/// The person picks the mode; it is never inferred from how many files were chosen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TiffMode { Split, Combine }
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TiffRequest {
+    pub mode: TiffMode,
     pub paths: Vec<PathBuf>,
     #[serde(default)]
     pub pages: Option<Vec<TiffPageRef>>,
@@ -812,7 +817,41 @@ pub fn gif_extract(request: &GifExtractRequest, input: PathBuf) -> JobOutcome {
     JobOutcome::succeeded(input, outputs, "GIF frames saved")
 }
 
-pub fn tiff(request: &TiffRequest) -> JobOutcome {
+pub const TIFF_SINGLE_PAGE_SKIP: &str = "Only 1 page, so there's nothing to split. No file was made.";
+
+/// Split mode, one input at a time: each page becomes its own TIFF named with a padded page
+/// number so the names sort. A one-page TIFF is skipped rather than copied.
+pub fn tiff_split(request: &TiffRequest, input: PathBuf) -> JobOutcome {
+    if request.pages.is_some() {
+        return JobOutcome::failure(input, ToolError::invalid_input("Split mode writes every page of each TIFF; choosing pages belongs to Combine mode."));
+    }
+    let pages = match read_tiff_pages(&input) {
+        Ok(pages) => pages,
+        Err(error) => return failure(input.clone(), format!("Could not process {}: {error}", input.display())),
+    };
+    if pages.len() == 1 {
+        return JobOutcome::skipped(input, SkipReason::new(SkipCode::NoEffectiveChange, TIFF_SINGLE_PAGE_SKIP));
+    }
+    let width = pages.len().to_string().len().max(2);
+    let mut outputs = Vec::with_capacity(pages.len());
+    for (index, page) in pages.iter().enumerate() {
+        let output = match OutputNaming::reserve_destination(&input, &request.output_location, &format!("-page-{:0width$}", index + 1), "tif") {
+            Ok(output) => output,
+            Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not reserve TIFF page output: {error}"))),
+        };
+        if let Err(error) = write_tiff_page(output.path(), page) {
+            return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not write TIFF page: {error}")));
+        }
+        outputs.push(match output.publish() {
+            Ok(path) => path,
+            Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not publish TIFF page: {error}"))),
+        });
+    }
+    JobOutcome::succeeded(input, outputs, "TIFF pages saved")
+}
+
+/// Combine mode: every chosen page goes into one TIFF, even when only one file was chosen.
+pub fn tiff_combine(request: &TiffRequest) -> JobOutcome {
     let Some(input) = request.paths.first().cloned() else { return failure(PathBuf::new(), "Select at least one TIFF file.".to_string()); };
     let pages = if let Some(page_refs) = &request.pages {
         if page_refs.is_empty() { return failure(input, "Select at least one TIFF page.".to_string()); }
@@ -841,27 +880,9 @@ pub fn tiff(request: &TiffRequest) -> JobOutcome {
         }
         pages
     };
-    let output = if request.paths.len() == 1 {
-        let mut outputs = Vec::new();
-        for (index, page) in pages.iter().enumerate() {
-            let output = match OutputNaming::reserve_destination(&input, &request.output_location, &format!("-page-{}", index + 1), "tiff") {
-                Ok(output) => output,
-                Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not reserve TIFF page output: {error}"))),
-            };
-            if let Err(error) = write_tiff_page(output.path(), page) {
-                return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not write TIFF page: {error}")));
-            }
-            outputs.push(match output.publish() {
-                Ok(path) => path,
-                Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not publish TIFF page: {error}"))),
-            });
-        }
-        return JobOutcome::succeeded(input, outputs, "TIFF pages saved");
-    } else {
-        match OutputNaming::reserve_single_output(request.output_path.as_deref(), &input, &request.output_location, "-combined", "tiff") {
-            Ok(output) => output,
-            Err(error) => return failure(input, format!("Could not reserve combined TIFF output: {error}")),
-        }
+    let output = match OutputNaming::reserve_single_output(request.output_path.as_deref(), &input, &request.output_location, "-combined", "tiff") {
+        Ok(output) => output,
+        Err(error) => return failure(input, format!("Could not reserve combined TIFF output: {error}")),
     };
     if let Err(error) = write_tiff_pages(output.path(), &pages) { return failure(input, format!("Could not combine TIFF pages: {error}")); }
     match output.publish() {
@@ -980,34 +1001,120 @@ mod tests {
     use sha2::{Digest, Sha256};
     fn path(name: &str) -> PathBuf { std::env::temp_dir().join(format!("toolbox_tiff_{}_{}", std::process::id(), name)) }
 
-    #[test]
-    fn splits_and_combines_pages_in_order() {
-        let input = path("source.tiff");
-        let file = File::create(&input).unwrap();
+    fn write_gray_tiff(path: &Path, pages: &[&[u8]]) {
+        let file = File::create(path).unwrap();
         let mut encoder = tiff::encoder::TiffEncoder::new(file).unwrap();
-        encoder.write_image::<tiff::encoder::colortype::Gray8>(2, 1, &[10, 20]).unwrap();
-        encoder.write_image::<tiff::encoder::colortype::Gray8>(2, 1, &[30, 40]).unwrap();
+        for data in pages { encoder.write_image::<tiff::encoder::colortype::Gray8>(data.len() as u32, 1, data).unwrap(); }
+    }
 
-        let split = tiff(&TiffRequest { paths: vec![input.clone()], pages: None, output_location: OutputLocation::AlongsideInput, output_path: None });
-        assert_eq!(split.output_paths().len(), 2);
-        assert_eq!(read_tiff_pages(&split.output_paths()[0]).unwrap().len(), 1);
-        assert_eq!(read_tiff_pages(&split.output_paths()[1]).unwrap().len(), 1);
+    fn request(mode: TiffMode, paths: Vec<PathBuf>) -> TiffRequest {
+        TiffRequest { mode, paths, pages: None, output_location: OutputLocation::AlongsideInput, output_path: None }
+    }
+
+    fn file_name(path: &Path) -> String { path.file_name().unwrap().to_string_lossy().into_owned() }
+
+    #[test]
+    fn split_writes_each_page_with_padded_sortable_names() {
+        let input = path("split-source.tiff");
+        write_gray_tiff(&input, &[&[10, 20], &[30, 40]]);
+        let stem = file_name(&input).trim_end_matches(".tiff").to_string();
+
+        let split = tiff_split(&request(TiffMode::Split, vec![input.clone()]), input.clone());
+        assert!(split.error().is_none(), "split failed: {:?}", split.error());
+        let names = split.output_paths().iter().map(|output| file_name(output)).collect::<Vec<_>>();
+        assert_eq!(names, vec![format!("{stem}-page-01.tif"), format!("{stem}-page-02.tif")]);
+        assert!(matches!(&read_tiff_pages(&split.output_paths()[0]).unwrap()[..], [TiffPage::Gray { data, .. }] if data == &vec![10, 20]));
+        assert!(matches!(&read_tiff_pages(&split.output_paths()[1]).unwrap()[..], [TiffPage::Gray { data, .. }] if data == &vec![30, 40]));
+
+        let again = tiff_split(&request(TiffMode::Split, vec![input.clone()]), input.clone());
+        assert_eq!(file_name(&again.output_paths()[0]), format!("{stem}-page-01-1.tif"), "a second split must not overwrite the first");
+
+        for output in split.output_paths().iter().chain(again.output_paths()) { let _ = std::fs::remove_file(output); }
+        let _ = std::fs::remove_file(input);
+    }
+
+    #[test]
+    fn split_pads_page_numbers_to_the_page_count_width() {
+        let input = path("split-hundred.tiff");
+        let pages = (0..100u8).map(|value| vec![value]).collect::<Vec<_>>();
+        write_gray_tiff(&input, &pages.iter().map(Vec::as_slice).collect::<Vec<_>>());
+
+        let split = tiff_split(&request(TiffMode::Split, vec![input.clone()]), input.clone());
+        let names = split.output_paths().iter().map(|output| file_name(output)).collect::<Vec<_>>();
+        assert_eq!(names.len(), 100);
+        assert!(names[0].ends_with("-page-001.tif") && names[99].ends_with("-page-100.tif"), "{:?}", (&names[0], &names[99]));
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(sorted, names, "padded page names must sort in page order");
+
+        for output in split.output_paths() { let _ = std::fs::remove_file(output); }
+        let _ = std::fs::remove_file(input);
+    }
+
+    #[test]
+    fn split_skips_a_single_page_tiff_without_writing_anything() {
+        let input = path("split-single.tiff");
+        write_gray_tiff(&input, &[&[7]]);
+        let original = std::fs::read(&input).unwrap();
+
+        let outcome = tiff_split(&request(TiffMode::Split, vec![input.clone()]), input.clone());
+        let crate::kit::contracts::OutcomeState::Skipped { reason } = &outcome.state else { panic!("expected skipped, got {outcome:?}") };
+        assert_eq!(reason.code, SkipCode::NoEffectiveChange);
+        assert_eq!(reason.message, TIFF_SINGLE_PAGE_SKIP);
+        assert!(outcome.output_paths().is_empty());
+        let stem = file_name(&input).trim_end_matches(".tiff").to_string();
+        let leftovers = std::fs::read_dir(std::env::temp_dir()).unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| file_name(&entry.path()).starts_with(&format!("{stem}-")))
+            .count();
+        assert_eq!(leftovers, 0, "a skipped TIFF must leave no output behind");
+        assert_eq!(std::fs::read(&input).unwrap(), original);
+        let _ = std::fs::remove_file(input);
+    }
+
+    #[test]
+    fn split_rejects_a_page_selection() {
+        let input = path("split-selection.tiff");
+        write_gray_tiff(&input, &[&[1], &[2]]);
+        let mut selection = request(TiffMode::Split, vec![input.clone()]);
+        selection.pages = Some(vec![TiffPageRef { path: input.clone(), page: 1 }]);
+        let outcome = tiff_split(&selection, input.clone());
+        assert_eq!(outcome.error().map(|error| error.kind.clone()), Some(crate::kit::contracts::ErrorKind::InvalidInput));
+        assert!(outcome.output_paths().is_empty());
+        let _ = std::fs::remove_file(input);
+    }
+
+    #[test]
+    fn combine_follows_combine_mode_for_one_file_and_for_several() {
+        let single = path("combine-single.tiff");
+        write_gray_tiff(&single, &[&[10, 20], &[30, 40]]);
+        let one = tiff_combine(&request(TiffMode::Combine, vec![single.clone()]));
+        assert_eq!(one.output_paths().len(), 1, "one file in Combine mode makes one TIFF, not a split");
+        assert!(file_name(&one.output_paths()[0]).ends_with("-combined.tiff"));
+        assert_eq!(read_tiff_pages(&one.output_paths()[0]).unwrap().len(), 2);
 
         let first = path("first.tiff");
         let second = path("second.tiff");
         write_tiff_page(&first, &TiffPage::Gray { width: 1, height: 1, data: vec![1] }).unwrap();
         write_tiff_page(&second, &TiffPage::Gray { width: 1, height: 1, data: vec![2] }).unwrap();
-        let combined = tiff(&TiffRequest { paths: vec![first.clone(), second.clone()], pages: None, output_location: OutputLocation::AlongsideInput, output_path: None });
+        let combined = tiff_combine(&request(TiffMode::Combine, vec![first.clone(), second.clone()]));
         let pages = read_tiff_pages(&combined.output_paths()[0]).unwrap();
         assert_eq!(pages.len(), 2);
         assert!(matches!(&pages[0], TiffPage::Gray { data, .. } if data == &vec![1]));
         assert!(matches!(&pages[1], TiffPage::Gray { data, .. } if data == &vec![2]));
 
-        for output in split.output_paths() { let _ = std::fs::remove_file(output); }
-        let _ = std::fs::remove_file(input);
-        let _ = std::fs::remove_file(first);
-        let _ = std::fs::remove_file(second);
-        let _ = std::fs::remove_file(combined.output_paths()[0].clone());
+        for output in one.output_paths().iter().chain(combined.output_paths()) { let _ = std::fs::remove_file(output); }
+        for input in [single, first, second] { let _ = std::fs::remove_file(input); }
+    }
+
+    #[test]
+    fn tiff_requests_require_an_explicit_mode() {
+        let missing = serde_json::json!({ "paths": ["/a.tiff"], "outputLocation": "alongsideInput" });
+        assert!(serde_json::from_value::<TiffRequest>(missing).is_err(), "the mode must never be inferred");
+        for (wire, mode) in [("split", TiffMode::Split), ("combine", TiffMode::Combine)] {
+            let request = serde_json::from_value::<TiffRequest>(serde_json::json!({ "mode": wire, "paths": ["/a.tiff"], "outputLocation": "alongsideInput" })).unwrap();
+            assert_eq!(request.mode, mode);
+        }
     }
 
     #[test]
@@ -1016,8 +1123,10 @@ mod tests {
         let file = File::create(&input).unwrap();
         let mut encoder = tiff::encoder::TiffEncoder::new(file).unwrap();
         encoder.write_image::<tiff::encoder::colortype::Gray16>(1, 1, &[1]).unwrap();
-        let result = tiff(&TiffRequest { paths: vec![input.clone()], pages: None, output_location: OutputLocation::AlongsideInput, output_path: None });
-        assert!(result.error().is_some());
+        let split = tiff_split(&request(TiffMode::Split, vec![input.clone()]), input.clone());
+        assert!(split.error().is_some());
+        let combined = tiff_combine(&request(TiffMode::Combine, vec![input.clone()]));
+        assert!(combined.error().is_some());
         let _ = std::fs::remove_file(input);
     }
 
@@ -1031,7 +1140,8 @@ mod tests {
         encoder.write_image::<tiff::encoder::colortype::Gray8>(2, 1, &[30, 40]).unwrap();
         write_tiff_page(&one_page, &TiffPage::Gray { width: 1, height: 1, data: vec![2] }).unwrap();
 
-        let outcome = tiff(&TiffRequest {
+        let outcome = tiff_combine(&TiffRequest {
+            mode: TiffMode::Combine,
             paths: vec![two_page.clone(), one_page.clone()],
             pages: Some(vec![
                 TiffPageRef { path: two_page.clone(), page: 1 },

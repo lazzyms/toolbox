@@ -8,6 +8,7 @@ type MediaWindow = Window & {
     __invocations: Array<{ command: string; args: unknown }>;
     __dialogResults: Array<string | string[] | null>;
     __outputSettings: OutputSettings;
+    __outcomesByPath?: Record<string, Record<string, unknown>>;
 };
 
 const customFolder: OutputSettings = { mode: "customFolder", folder: "/Users/test/Media out" };
@@ -38,7 +39,7 @@ const start = async (page: Page, settings: OutputSettings = { mode: "alongsideIn
                 if (command === "inspect_image_metadata") return [{ path: "fixture", fields: ["Camera"] }];
                 if (command.startsWith("plugin:")) return null;
                 const { request } = (args ?? {}) as { request?: { paths?: string[] } };
-                return (request?.paths ?? []).map((inputPath) => ({
+                return (request?.paths ?? []).map((inputPath) => win.__outcomesByPath?.[inputPath] ?? ({
                     inputPath,
                     outputPaths: [`${inputPath}.out`],
                     detail: "",
@@ -183,9 +184,12 @@ test.describe("Media requests", () => {
         } });
     });
 
-    test("TIFF Pages sends every inspected page in the displayed order and the saved path", async ({ page }) => {
+    const tiffMode = (page: Page) => page.getByRole("radiogroup", { name: "TIFF Pages mode" });
+
+    test("TIFF Pages in Combine mode sends the mode, every inspected page in the displayed order and the saved path", async ({ page }) => {
         await start(page, customFolder);
         await openToolBySearch(page, "Split and Combine TIFF");
+        await tiffMode(page).getByRole("radio", { name: "Combine into one TIFF" }).click();
         await choose(page, ["/local/tiff/two-page.tiff", "/local/tiff/one-page.tiff"]);
 
         const inspector = page.getByRole("region", { name: "Frame order" });
@@ -205,6 +209,7 @@ test.describe("Media requests", () => {
         await expect(pages.nth(1)).toContainText("one-page.tiff · page 1");
 
         expect(await runOnce(page, "process_tiff_pages", "two-page-combined.tiff")).toEqual({ runId, request: {
+            mode: "combine",
             paths: ["/local/tiff/two-page.tiff", "/local/tiff/one-page.tiff"],
             pages: [
                 { path: "/local/tiff/two-page.tiff", page: 0 },
@@ -216,21 +221,74 @@ test.describe("Media requests", () => {
         } });
     });
 
-    test("TIFF Pages splits one file without a saved path", async ({ page }) => {
+    test("TIFF Pages in Combine mode combines one file through the save step", async ({ page }) => {
         await start(page);
         await openToolBySearch(page, "Split and Combine TIFF");
+        await tiffMode(page).getByRole("radio", { name: "Combine into one TIFF" }).click();
         await choose(page, "/local/tiff/two-page.tiff");
         await expect(page.locator(".media-frame-list button")).toHaveCount(2);
+        await expect(page.locator(".workspace-primary-action")).toContainText("Make TIFF…");
 
-        expect(await runOnce(page, "process_tiff_pages")).toEqual({ runId, request: {
+        expect(await runOnce(page, "process_tiff_pages", "two-page-combined.tiff")).toEqual({ runId, request: {
+            mode: "combine",
             paths: ["/local/tiff/two-page.tiff"],
             pages: [
                 { path: "/local/tiff/two-page.tiff", page: 0 },
                 { path: "/local/tiff/two-page.tiff", page: 1 },
             ],
             outputLocation: "alongsideInput",
-            outputPath: null,
+            outputPath: "/local/tiff/two-page-combined.tiff",
         } });
+    });
+
+    test("TIFF Pages splits several files as a batch in the chosen Split mode without a save step", async ({ page }) => {
+        await start(page, customFolder);
+        await openToolBySearch(page, "Split and Combine TIFF");
+        await expect(tiffMode(page).getByRole("radio", { name: "Split pages" })).toBeChecked();
+        await choose(page, ["/local/tiff/two-page.tiff", "/local/tiff/scan-0043.tiff"]);
+        await expect(page.getByRole("region", { name: "Frame order" })).toHaveCount(0);
+        await expect(page.locator(".workspace-primary-action")).toContainText("Split 2 TIFFs");
+        await expect(page.getByTestId("run-destination-example")).toContainText("two-page-page-01.tif");
+
+        expect(await runOnce(page, "process_tiff_pages")).toEqual({ runId, request: {
+            mode: "split",
+            paths: ["/local/tiff/two-page.tiff", "/local/tiff/scan-0043.tiff"],
+            outputLocation: { customFolder: "/Users/test/Media out" },
+        } });
+        await expect(page.getByRole("dialog")).toHaveCount(0);
+    });
+
+    test("TIFF Pages Split shows a skipped one-page TIFF apart from a failed one, with its reason", async ({ page }) => {
+        await start(page);
+        await page.addInitScript(() => {
+            const failed = (inputPath: string, message: string) => ({ inputPath, outputPaths: [], detail: "", state: "failed", failure: { kind: "processing", message, pointer: null }, reason: null, warnings: [] });
+            (window as unknown as MediaWindow).__outcomesByPath = {
+                "/local/tiff/one-page.tiff": { inputPath: "/local/tiff/one-page.tiff", outputPaths: [], detail: "", state: "skipped", failure: null, reason: { code: "noEffectiveChange", message: "Only 1 page, so there's nothing to split. No file was made.", pointer: null }, warnings: [] },
+                "/local/tiff/broken.tiff": failed("/local/tiff/broken.tiff", "Could not process /local/tiff/broken.tiff: Could not read TIFF"),
+            };
+        });
+        await page.reload();
+        await openToolBySearch(page, "Split and Combine TIFF");
+        await choose(page, ["/local/tiff/two-page.tiff", "/local/tiff/one-page.tiff", "/local/tiff/broken.tiff"]);
+        await runOnce(page, "process_tiff_pages");
+
+        const skipped = page.locator('.result-row[data-state="skipped"]');
+        await expect(skipped).toHaveCount(1);
+        await expect(skipped).toHaveAttribute("data-tone", "skip");
+        await expect(skipped).toContainText("one-page.tiff");
+        await expect(skipped).toContainText("Skipped");
+        await expect(skipped).toContainText("Only 1 page, so there's nothing to split. No file was made.");
+        await expect(skipped.getByRole("button", { name: /Retry/ })).toHaveCount(0);
+
+        const failed = page.locator('.result-row[data-state="failed"]');
+        await expect(failed).toHaveCount(1);
+        await expect(failed).toHaveAttribute("data-tone", "fail");
+        await expect(failed).toContainText("broken.tiff");
+        await expect(failed).toContainText("Failed");
+        await expect(failed).toContainText("Could not read TIFF");
+        await expect(failed.getByRole("button", { name: "Retry broken.tiff" })).toBeVisible();
+
+        await expect(page.locator('.result-row[data-state="succeeded"]')).toContainText("two-page.tiff");
     });
 
     test("Image Metadata removes metadata and inspects with the same paths and output location", async ({ page }) => {

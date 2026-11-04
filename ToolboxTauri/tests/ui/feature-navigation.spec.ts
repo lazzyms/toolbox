@@ -1379,9 +1379,10 @@ test("media and security workspaces expose ordered inputs and format boundaries"
     await expect(page.getByText("Accepts .pdf, .doc, .docx, .xls, .xlsx, .ppt, .pptx", { exact: true })).toBeVisible();
 });
 
-test("TIFF workspace expands internal pages and sends the displayed order", async ({ page }) => {
+test("TIFF Combine expands internal pages and sends the displayed order", async ({ page }) => {
     await page.goto("/");
     await openFromHome(page, "Split and Combine TIFF");
+    await page.getByRole("radiogroup", { name: "TIFF Pages mode" }).getByRole("radio", { name: "Combine into one TIFF" }).click();
     await page.evaluate(() => {
         (window as TestWindow).__toolboxDialogResults = [["/local/two-page.tiff", "/local/one-page.tiff"]];
     });
@@ -1553,9 +1554,10 @@ test("redact PDF only touches the first page unless more pages are checked", asy
     expect((await lastInvocation(page, "redact_pdf"))?.args).toMatchObject({ request: { scope: { selected: { pages: [0, 2] } } } });
 });
 
-test("TIFF export waits for inspection of the current file set", async ({ page }) => {
+test("TIFF Combine waits for inspection of the current file set", async ({ page }) => {
     await page.goto("/");
     await openFromHome(page, "Split and Combine TIFF");
+    await page.getByRole("radiogroup", { name: "TIFF Pages mode" }).getByRole("radio", { name: "Combine into one TIFF" }).click();
     await page.evaluate(() => { (window as TestWindow).__toolboxDialogResults = ["/local/one-page.tiff"]; });
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await expect(page.locator(".media-frame-list button")).toHaveCount(1);
@@ -2446,13 +2448,14 @@ test.describe("many-to-one save step", () => {
         { tool: "Merge PDF", command: "merge_pdfs", files: ["/local/leases/lease-agreement.pdf", "/local/leases/lease-addendum.pdf"], title: "Save the merged PDF", name: "lease-agreement-merged.pdf", summary: "2 files, joined top to bottom.", runLabel: "Merge…" },
         { tool: "Images to PDF", command: "images_to_pdf", files: ["/local/scans/IMG_4012.jpg", "/local/scans/receipt-scan.png"], title: "Save the combined PDF", name: "IMG_4012-combined.pdf", summary: "2 images, one per page.", runLabel: "Make PDF…" },
         { tool: "Create GIF", command: "create_gif", files: ["/local/frames/frame-1.png", "/local/frames/frame-2.png"], title: "Save the GIF", name: "frame-1-animated.gif", summary: "2 frames, in the order shown.", runLabel: "Make GIF…" },
-        { tool: "Split and Combine TIFF", command: "process_tiff_pages", files: ["/local/tiff/two-page.tiff", "/local/tiff/one-page.tiff"], title: "Save the combined TIFF", name: "two-page-combined.tiff", summary: "2 TIFF files, combined in the order shown.", runLabel: "Make TIFF…" },
+        { tool: "Split and Combine TIFF", command: "process_tiff_pages", files: ["/local/tiff/two-page.tiff", "/local/tiff/one-page.tiff"], title: "Save the combined TIFF", name: "two-page-combined.tiff", summary: "2 TIFF files, combined in the order shown.", runLabel: "Make TIFF…", mode: "Combine into one TIFF" },
     ] as const;
     const merge = saveStepCases[0];
 
-    const openWithFiles = async (page: Page, tool: string, files: readonly string[]) => {
+    const openWithFiles = async (page: Page, tool: string, files: readonly string[], mode?: string) => {
         await page.goto("/");
         await page.getByRole("button", { name: `Open ${tool}` }).click();
+        if (mode) await page.getByRole("radio", { name: mode }).click();
         await page.evaluate((files) => { (window as TestWindow).__toolboxDialogResults = [[...files]]; }, files);
         await page.getByRole("button", { name: "Choose files to process" }).click();
     };
@@ -2471,7 +2474,7 @@ test.describe("many-to-one save step", () => {
 
     for (const testCase of saveStepCases) {
         test(`${testCase.command} asks for a name and folder in the app before it runs`, async ({ page }) => {
-            await openWithFiles(page, testCase.tool, testCase.files);
+            await openWithFiles(page, testCase.tool, testCase.files, "mode" in testCase ? testCase.mode : undefined);
             const destination = page.getByRole("region", { name: "Destination" });
             await expect(destination).toContainText("You choose a name and folder when you start, because this makes one file.");
             await expect(destination.getByTestId("run-destination-example")).toHaveCount(0);
@@ -2517,7 +2520,7 @@ test.describe("many-to-one save step", () => {
 
     for (const testCase of saveStepCases) {
         test(`cancelling the ${testCase.command} save dialog sends no request`, async ({ page }) => {
-            await openWithFiles(page, testCase.tool, testCase.files);
+            await openWithFiles(page, testCase.tool, testCase.files, "mode" in testCase ? testCase.mode : undefined);
             const dialog = await startRun(page);
             await dialog.getByRole("button", { name: "Cancel" }).click();
             await expect(dialog).toHaveCount(0);
@@ -2591,13 +2594,25 @@ test.describe("many-to-one save step", () => {
         expect((await requestsFor(page, "merge_pdfs"))[0]).toMatchObject({ outputPath: "/local/leases/Lease Pack.PDF" });
     });
 
-    test("one TIFF splits into pages without the save step", async ({ page }) => {
+    test("TIFF Split mode runs without the save step for one file or several", async ({ page }) => {
         await openWithFiles(page, "Split and Combine TIFF", ["/local/tiff/two-page.tiff"]);
-        await expect(page.locator(".workspace-primary-action")).toHaveText("TIFF Pages⌘↵");
+        await expect(page.locator(".workspace-primary-action")).toHaveText("Split 1 TIFF⌘↵");
         await page.locator(".workspace-primary-action").click();
         await expect.poll(() => requestsFor(page, "process_tiff_pages")).toHaveLength(1);
         await expect(page.getByRole("dialog")).toHaveCount(0);
-        expect((await requestsFor(page, "process_tiff_pages"))[0]).toMatchObject({ outputPath: null });
+        const [request] = await requestsFor(page, "process_tiff_pages");
+        expect(request).toMatchObject({ mode: "split", paths: ["/local/tiff/two-page.tiff"] });
+        expect(request).not.toHaveProperty("outputPath");
+        expect(request).not.toHaveProperty("pages");
+    });
+
+    test("TIFF Combine mode opens the save step even for one file", async ({ page }) => {
+        await openWithFiles(page, "Split and Combine TIFF", ["/local/tiff/two-page.tiff"], "Combine into one TIFF");
+        const dialog = await startRun(page);
+        await expect(dialog.getByLabel("File name")).toHaveValue("two-page-combined.tiff");
+        await dialog.getByRole("button", { name: "Save" }).click();
+        await expect.poll(() => requestsFor(page, "process_tiff_pages")).toHaveLength(1);
+        expect((await requestsFor(page, "process_tiff_pages"))[0]).toMatchObject({ mode: "combine", outputPath: "/local/tiff/two-page-combined.tiff" });
     });
 
     for (const theme of ["light", "dark"] as const) {
