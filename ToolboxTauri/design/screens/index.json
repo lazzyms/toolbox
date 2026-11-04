@@ -866,5 +866,229 @@
     "state": "retryOpen-true",
     "query": "retryOpen=true",
     "screen": "SecResults--retryOpen-true.jpg"
+  },
+  {
+    "board": "MediaEmpty.dc.html",
+    "title": "Media creation: empty drop target, all four tools",
+    "state": "default",
+    "query": "",
+    "screen": "MediaEmpty--default.jpg"
+  },
+  {
+    "board": "MediaEmpty.dc.html",
+    "title": "Media creation: empty drop target, all four tools",
+    "state": "tool-create-gif",
+    "query": "tool=Create%20GIF",
+    "screen": "MediaEmpty--tool-create-gif.jpg"
+  },
+  {
+    "board": "MediaEmpty.dc.html",
+    "title": "Media creation: empty drop target, all four tools",
+    "state": "tool-extract-gif-frames",
+    "query": "tool=Extract%20GIF%20Frames",
+    "screen": "MediaEmpty--tool-extract-gif-frames.jpg"
+  },
+  {
+    "board": "MediaEmpty.dc.html",
+    "title": "Media creation: empty drop target, all four tools",
+    "state": "tool-tiff-pages",
+    "query": "tool=TIFF%20Pages",
+    "screen": "MediaEmpty--tool-tiff-pages.jpg"
+  },
+  {
+    "board": "MediaEmpty.dc.html",
+    "title": "Media creation: empty drop target, all four tools",
+    "state": "dragging-true",
+    "query": "dragging=true",
+    "screen": "MediaEmpty--dragging-true.jpg"
+  },
+  {
+    "board": "MediaIcons.dc.html",
+    "title": "App Icon Set: masters, presets, sizes, pad or crop, contact sheet",
+    "state": "default",
+    "query": "",
+    "screen": "MediaIcons--default.jpg"
+  },
+  {
+    "board": "MediaIcons.dc.html",
+    "title": "App Icon Set: masters, presets, sizes, pad or crop, contact sheet",
+    "state": "preset-iphone-and-ipad",
+    "query": "preset=iPhone%20and%20iPad",
+    "screen": "MediaIcons--preset-iphone-and-ipad.jpg"
+  },
+  {
+    "board": "MediaIcons.dc.html",
+    "title": "App Icon Set: masters, presets, sizes, pad or crop, contact sheet",
+    "state": "preset-android",
+    "query": "preset=Android",
+    "screen": "MediaIcons--preset-android.jpg"
+  },
+  {
+    "board": "MediaIcons.dc.html",
+    "title": "App Icon Set: masters, presets, sizes, pad or crop, contact sheet",
+    "state": "preset-website",
+    "query": "preset=Website",
+    "screen": "MediaIcons--preset-website.jpg"
+  },
+  {
+    "board": "MediaIcons.dc.html",
+    "title": "App Icon Set: masters, presets, sizes, pad or crop, contact sheet",
+    "state": "preset-custom-sizes",
+    "query": "preset=Custom%20sizes",
+    "screen": "MediaIcons--preset-custom-sizes.jpg"
+  },
+  {
+    "board": "MediaIcons.dc.html",
+    "title": "App Icon Set: masters, presets, sizes, pad or crop, contact sheet",
+    "state": "square-crop-to-centre",
+    "query": "square=Crop%20to%20centre",
+    "screen": "MediaIcons--square-crop-to-centre.jpg"
+  },
+  {
+    "board": "MediaIcons.dc.html",
+    "title": "App Icon Set: masters, presets, sizes, pad or crop, contact sheet",
+    "state": "sizeOff-true",
+    "query": "sizeOff=true",
+    "screen": "MediaIcons--sizeOff-true.jpg"
+  },
+  {
+    "board": "MediaGif.dc.html",
+    "title": "Create GIF: frame strip, delays, reorder, preview, save dialog",
+    "state": "default",
+    "query": "",
+    "screen": "MediaGif--default.jpg"
+  },
+  {
+    "board": "MediaGif.dc.html",
+    "title": "Create GIF: frame strip, delays, reorder, preview, save dialog",
+    "state": "step-own-delay",
+    "query": "step=Own%20delay",
+    "screen": "MediaGif--step-own-delay.jpg"
+  },
+  {
+    "board": "MediaGif.dc.html",
+    "title": "Create GIF: frame strip, delays, reorder, preview, save dialog",
+    "state": "step-dragging",
+    "query": "step=Dragging",
+    "screen": "MediaGif--step-dragging.jpg"
+  },
+  {
+    "board": "MediaGif.dc.html",
+    "title": "Create GIF: frame strip, delays, reorder, preview, save dialog",
+    "state": "step-save-dialog",
+    "query": "step=Save%20dialog",
+    "screen": "MediaGif--step-save-dialog.jpg"
+  },
+  {
+    "board": "MediaGif.dc.html",
+    "title": "Create GIF: frame strip, delays, reorder, preview, save dialog",
+    "state": "largeGif-true",
+    "query": "largeGif=true",
+    "screen": "MediaGif--largeGif-true.jpg"
+  },
+  {
+    "board": "MediaExtract.dc.html",
+    "title": "Extract GIF Frames: GIFs added, frames and timings",
+    "state": "default",
+    "query": "",
+    "screen": "MediaExtract--default.jpg"
+  },
+  {
+    "board": "MediaExtract.dc.html",
+    "title": "Extract GIF Frames: GIFs added, frames and timings",
+    "state": "notAdded-true",
+    "query": "notAdded=true",
+    "screen": "MediaExtract--notAdded-true.jpg"
+  },
+  {
+    "board": "MediaTiff.dc.html",
+    "title": "TIFF Pages: Split files, Combine page grid, save dialog",
+    "state": "default",
+    "query": "",
+    "screen": "MediaTiff--default.jpg"
+  },
+  {
+    "board": "MediaTiff.dc.html",
+    "title": "TIFF Pages: Split files, Combine page grid, save dialog",
+    "state": "step-combine",
+    "query": "step=Combine",
+    "screen": "MediaTiff--step-combine.jpg"
+  },
+  {
+    "board": "MediaTiff.dc.html",
+    "title": "TIFF Pages: Split files, Combine page grid, save dialog",
+    "state": "step-combine-save-dialog",
+    "query": "step=Combine%20save%20dialog",
+    "screen": "MediaTiff--step-combine-save-dialog.jpg"
+  },
+  {
+    "board": "MediaRunning.dc.html",
+    "title": "Media creation: running, locked options, Cancel",
+    "state": "default",
+    "query": "",
+    "screen": "MediaRunning--default.jpg"
+  },
+  {
+    "board": "MediaRunning.dc.html",
+    "title": "Media creation: running, locked options, Cancel",
+    "state": "tool-create-gif",
+    "query": "tool=Create%20GIF",
+    "screen": "MediaRunning--tool-create-gif.jpg"
+  },
+  {
+    "board": "MediaRunning.dc.html",
+    "title": "Media creation: running, locked options, Cancel",
+    "state": "tool-extract-gif-frames",
+    "query": "tool=Extract%20GIF%20Frames",
+    "screen": "MediaRunning--tool-extract-gif-frames.jpg"
+  },
+  {
+    "board": "MediaRunning.dc.html",
+    "title": "Media creation: running, locked options, Cancel",
+    "state": "tool-tiff-pages",
+    "query": "tool=TIFF%20Pages",
+    "screen": "MediaRunning--tool-tiff-pages.jpg"
+  },
+  {
+    "board": "MediaResults.dc.html",
+    "title": "Media creation: results, grouped outputs, Skipped and Failed",
+    "state": "default",
+    "query": "",
+    "screen": "MediaResults--default.jpg"
+  },
+  {
+    "board": "MediaResults.dc.html",
+    "title": "Media creation: results, grouped outputs, Skipped and Failed",
+    "state": "tool-create-gif",
+    "query": "tool=Create%20GIF",
+    "screen": "MediaResults--tool-create-gif.jpg"
+  },
+  {
+    "board": "MediaResults.dc.html",
+    "title": "Media creation: results, grouped outputs, Skipped and Failed",
+    "state": "tool-create-gif-failed",
+    "query": "tool=Create%20GIF%20failed",
+    "screen": "MediaResults--tool-create-gif-failed.jpg"
+  },
+  {
+    "board": "MediaResults.dc.html",
+    "title": "Media creation: results, grouped outputs, Skipped and Failed",
+    "state": "tool-extract-gif-frames",
+    "query": "tool=Extract%20GIF%20Frames",
+    "screen": "MediaResults--tool-extract-gif-frames.jpg"
+  },
+  {
+    "board": "MediaResults.dc.html",
+    "title": "Media creation: results, grouped outputs, Skipped and Failed",
+    "state": "tool-tiff-split",
+    "query": "tool=TIFF%20Split",
+    "screen": "MediaResults--tool-tiff-split.jpg"
+  },
+  {
+    "board": "MediaResults.dc.html",
+    "title": "Media creation: results, grouped outputs, Skipped and Failed",
+    "state": "tool-tiff-combine",
+    "query": "tool=TIFF%20Combine",
+    "screen": "MediaResults--tool-tiff-combine.jpg"
   }
 ]
