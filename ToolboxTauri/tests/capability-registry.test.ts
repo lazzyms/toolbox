@@ -9,8 +9,10 @@ import {
 import {
   ToolWorkspaceRegistry,
   UtilityRegistry,
+  isPdfSceneTool,
   toolsForWorkspace,
   workspaceEntries,
+  workspaceForTool,
 } from "../src/registry/index.ts";
 
 test("UI capabilities are the shared native contract facts", () => {
@@ -151,6 +153,16 @@ test("workspace entries group editor tools into one entry and list More tools la
   const [editEntry] = workspaceEntries(pdfEditor, toolsForWorkspace(pdfEditor).filter(({ id }) => id !== "pdf-edit"));
   assert.equal(editEntry.title, "Edit PDF");
   assert.equal(editEntry.tools[0].id, "pdf-watermark", "a hidden tool leaves the group led by the next one");
+});
+
+test("Crop and Resize PDF is a PDF Editor batch tool that takes many PDFs", () => {
+  const crop = UtilityRegistry.find(({ id }) => id === "pdf-crop")!;
+  assert.equal(crop.title, "Crop and Resize PDF");
+  assert.equal(crop.command, "crop_pdf");
+  assert.equal(workspaceForTool("pdf-crop")?.id, "pdf-editor");
+  assert.equal(isPdfSceneTool("pdf-crop"), false, "the rail entry opens the batch view, not the page editor");
+  assert.equal(crop.capability.inputCardinality, "multiple");
+  assert.deepEqual(crop.capability.acceptedExtensions, [".pdf"]);
 });
 
 test("shared capability parsing rejects drift-prone shapes", () => {
