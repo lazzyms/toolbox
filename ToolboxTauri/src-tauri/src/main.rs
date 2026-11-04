@@ -769,6 +769,32 @@ mod command_tests {
     }
 
     #[test]
+    fn create_gif_with_an_unreadable_frame_names_that_frame_and_saves_nothing() {
+        let root = sandbox("gif-unreadable-frame");
+        let first = root.join("first.png"); write_png(&first, 24, 10);
+        let broken = root.join("IMG_2212.heic"); std::fs::write(&broken, b"not a heic image").unwrap();
+        let last = root.join("last.png");
+        image::RgbaImage::from_pixel(48, 12, Rgba([1, 2, 3, 40])).save(&last).unwrap();
+        let chosen_folder = root.join("chosen");
+        std::fs::create_dir_all(&chosen_folder).unwrap();
+        let paths = vec![first.clone(), broken.clone(), last.clone()];
+        let inputs = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+
+        let outcomes = tauri::async_runtime::block_on(run_create_gif(&GifCreateRequest {
+            paths: paths.clone(), frame_delay_ms: 100, loop_forever: true, output_location: OutputLocation::AlongsideInput, output_path: Some(chosen_folder.join("first-animated.gif")),
+        }));
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), paths);
+        assert!(outcomes.iter().all(|outcome| outcome.output_paths().is_empty() && outcome.error().is_some()));
+        assert_eq!(
+            outcomes[1].error().unwrap().message,
+            "Frame 2, IMG_2212.heic, isn't a readable HEIC image. Replace or remove frame 2, then make the GIF again. Nothing was saved."
+        );
+        assert_eq!(std::fs::read_dir(&chosen_folder).unwrap().count(), 0, "nothing is published");
+        for (path, bytes) in paths.iter().zip(inputs) { assert_eq!(std::fs::read(path).unwrap(), bytes); }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn aggregate_commands_report_one_combined_success_and_each_missing_input() {
         let root = sandbox("aggregate-outcomes");
         let image = root.join("first.png"); write_png(&image, 32, 44);
@@ -991,6 +1017,37 @@ mod command_tests {
         }));
         for original in &originals { original.assert_untouched(); }
         (good, outcomes)
+    }
+
+    #[test]
+    fn heic_and_oriented_sources_run_through_the_icon_and_gif_commands() {
+        use crate::kit::images::fixtures;
+        let root = sandbox("heic-media-sources");
+        let source = fixtures::red_left_blue_right(64, 32);
+        let heic = root.join("master.heic");
+        let deep = root.join("deep.heif");
+        let oriented = root.join("oriented.jpg");
+        std::fs::write(&heic, fixtures::heic(&source)).unwrap();
+        std::fs::write(&deep, fixtures::heic_10bit(&source)).unwrap();
+        std::fs::write(&oriented, fixtures::jpeg_with_orientation(&source, 6)).unwrap();
+        let inputs = [&heic, &deep, &oriented].map(|path| (path.clone(), std::fs::read(path).unwrap()));
+
+        for (input, warned) in [(&heic, false), (&deep, true), (&oriented, false)] {
+            let outcomes = tauri::async_runtime::block_on(generate_icon_set(RunEvents::silent(), IconSetRequest {
+                paths: vec![input.clone()], preset: "favicon".into(), sizes: vec![], output_location: location(&root, "icons"),
+            }));
+            assert!(outcomes[0].error().is_none(), "{}: {:?}", input.display(), outcomes[0].error());
+            assert_eq!(outcomes[0].warnings.len(), usize::from(warned), "{}", input.display());
+            let first = image::open(&outcomes[0].output_paths()[0]).unwrap();
+            assert!(matches!(first.color(), image::ColorType::Rgb8 | image::ColorType::Rgba8));
+            assert_eq!(fixtures::red_edge(&first), if input == &oriented { "top" } else { "left" });
+        }
+        let gif = assert_aggregate_success("GIF from HEIC frames", &[heic.clone(), deep.clone(), oriented.clone()], run_create_gif(&GifCreateRequest {
+            paths: vec![heic.clone(), deep.clone(), oriented.clone()], frame_delay_ms: 100, loop_forever: true, output_location: location(&root, "gif"), output_path: None,
+        }));
+        assert!(gif[0].extension().is_some_and(|extension| extension == "gif"));
+        for (path, bytes) in inputs { assert_eq!(std::fs::read(&path).unwrap(), bytes, "{} must stay byte-identical", path.display()); }
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

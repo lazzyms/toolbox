@@ -5898,6 +5898,7 @@ dependencies = [
  "flate2",
  "fontdue",
  "getrandom 0.3.4",
+ "gif",
  "heif-rs",
  "hmac",
  "image",
