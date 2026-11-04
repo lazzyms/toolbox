@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { check } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { confirm } from "@tauri-apps/plugin-dialog";
 import { initializeInstallAnalytics } from "./analytics";
+import { scheduleStartupUpdateCheck } from "./updates";
 import { MainPage } from "./views/MainPage";
 import { UtilityIndex } from "./components/UtilityIndex";
 import { SaveDialogHost } from "./components/SaveDialog";
@@ -35,6 +39,8 @@ export default function App() {
   useEffect(() => {
     void initializeInstallAnalytics();
   }, []);
+
+  useEffect(() => scheduleStartupUpdateCheck({ check, confirm, relaunch }), []);
 
   useEffect(() => {
     if (startup.state === "pending") {
