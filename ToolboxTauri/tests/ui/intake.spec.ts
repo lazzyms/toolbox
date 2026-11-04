@@ -1098,3 +1098,47 @@ test("Unlock shows each verification and legacy-format failure with its own mess
         }
     }
 });
+
+test("Convert Image Format sends the batch with one target and shows Skipped, converted and failed rows", async ({ page }) => {
+    const alreadyJpeg = "Already JPEG. JPG and JPEG count as one format.";
+    const paths = ["/local/a.png", "/local/IMG_4013.jpeg", "/local/broken.webp", "/local/d.heic"];
+    await open(page, "Convert Image Format");
+    await drop(page, paths);
+    await page.evaluate((alreadyJpeg) => {
+        const win = window as unknown as IntakeWindow;
+        win.__skippedPaths = { "/local/IMG_4013.jpeg": { code: "alreadyInTargetFormat", message: alreadyJpeg } };
+        win.__failures = { "/local/broken.webp": { kind: "invalidInput", message: "This image could not be read." } };
+    }, alreadyJpeg);
+    const target = page.getByRole("radiogroup", { name: "Convert to" });
+    await target.getByRole("radio", { name: "PNG", exact: true }).click();
+    await target.getByRole("radio", { name: "JPEG", exact: true }).click();
+    await expect(target.getByRole("radio", { name: "JPEG", exact: true })).toBeChecked();
+    await expect(page.getByText("Transparent areas become white, because JPEG has no transparency.")).toBeVisible();
+    await expect(page.getByText(/shared quality of 90/)).toBeVisible();
+    await run(page).click();
+
+    const requests = await requestFor(page, "convert_images");
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({ paths, format: "jpg" });
+    expect(await requestFor(page, "export_image_edit_plan")).toHaveLength(0);
+
+    await expect(results(page)).toHaveCount(4);
+    await expect(page.locator(".result-summary strong")).toContainText("1 skipped, 1 failed");
+    const skipped = results(page).filter({ hasText: "IMG_4013.jpeg" });
+    await expect(skipped).toHaveAttribute("data-state", "skipped");
+    await expect(skipped).toHaveAttribute("data-tone", "skip");
+    await expect(skipped).toContainText(alreadyJpeg);
+    await expect(skipped.locator(".result-row-state")).toContainText("Skipped");
+    await expect(skipped.getByRole("button")).toHaveCount(0);
+    for (const name of ["a.png", "d.heic"]) {
+        const converted = results(page).filter({ hasText: name });
+        await expect(converted).toHaveAttribute("data-state", "succeeded");
+        await expect(converted.getByRole("button", { name: `Open ${name}.out`, exact: true })).toBeVisible();
+        await expect(converted.getByRole("button", { name: new RegExp(`^Show in .*: ${name.replace(".", "\\.")}\\.out$`) })).toBeVisible();
+    }
+    const failed = results(page).filter({ hasText: "broken.webp" });
+    await expect(failed).toHaveAttribute("data-state", "failed");
+    await expect(failed).toHaveAttribute("data-tone", "fail");
+    await expect(failed).toContainText("This image could not be read.");
+    await expect(failed.getByRole("button", { name: "Open broken.webp.out", exact: true })).toHaveCount(0);
+});

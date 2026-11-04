@@ -100,13 +100,7 @@ async fn convert_images(events: RunEvents, request: ConvertImagesRequest) -> Vec
 
     let request = Arc::new(request);
     BatchRunner::run(&events, "convert_images", request.paths.clone(), &request.output_location, &request, move |request, path| {
-        ImageProcessor::run(path, ImageOptions {
-            target_format: Some(img_format),
-            quality: 80,
-            keep_smaller_original: false,
-            suffix: "-converted".to_string(),
-            output_location: request.output_location.clone(),
-        })
+        ImageProcessor::convert(path, img_format, request.output_location.clone())
     })
 }
 
@@ -1285,24 +1279,156 @@ mod command_tests {
         let _ = std::fs::remove_file(&src);
     }
 
+    fn convert_batch(paths: &[PathBuf], format: &str, output_location: OutputLocation) -> Vec<JobOutcome> {
+        tauri::async_runtime::block_on(convert_images(RunEvents::silent(), ConvertImagesRequest {
+            paths: paths.to_vec(), format: format.to_string(), output_location,
+        }))
+    }
+
+    fn skip_message(outcome: &JobOutcome) -> Option<&str> {
+        match &outcome.state {
+            OutcomeState::Skipped { reason } if reason.code == crate::kit::contracts::SkipCode::AlreadyInTargetFormat => Some(reason.message.as_str()),
+            _ => None,
+        }
+    }
+
+    fn decoded_as(bytes: &[u8], format: &str) -> (u32, u32) {
+        if format == "heic" {
+            let image = heif::decode(bytes).expect("output decodes as HEIC");
+            return (image.width(), image.height());
+        }
+        let expected = match format { "jpg" => image::ImageFormat::Jpeg, "png" => image::ImageFormat::Png, _ => image::ImageFormat::WebP };
+        assert_eq!(image::guess_format(bytes).unwrap(), expected, "output is real {format}");
+        let image = image::load_from_memory_with_format(bytes, expected).unwrap();
+        (image.width(), image.height())
+    }
+
+    fn convert_sources(root: &PathBuf) -> Vec<PathBuf> {
+        let picture = image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(64, 48, |x, y| image::Rgb([x as u8 * 4, y as u8 * 5, (x ^ y) as u8])));
+        let heic = root.join("d.heic");
+        std::fs::write(&heic, crate::kit::images::encode(&picture, crate::kit::images::OutputFormat::Heic, 80).unwrap()).unwrap();
+        let mut sources = Vec::new();
+        for name in ["a.png", "b.jpg", "c.webp"] {
+            let path = root.join(name);
+            picture.save(&path).unwrap();
+            sources.push(path);
+        }
+        sources.push(heic);
+        sources
+    }
+
     #[test]
-    fn single_input_convert_rejects_multiple_files() {
-        let a = temp_path("cmd_a.png");
-        let b = temp_path("cmd_b.png");
-        write_png(&a, 128, 1);
-        write_png(&b, 128, 2);
+    fn convert_batch_converts_every_cross_format_pair_into_a_custom_folder() {
+        let root = sandbox("convert-batch-pairs");
+        let sources = convert_sources(&root);
+        let originals: Vec<Vec<u8>> = sources.iter().map(|path| std::fs::read(path).unwrap()).collect();
+        let mut converted = 0;
+        for format in ["jpg", "png", "webp", "heic"] {
+            let folder = root.join(format!("out-{format}"));
+            let outcomes = convert_batch(&sources, format, location(&root, &format!("out-{format}")));
+            assert_eq!(outcomes.len(), sources.len());
+            for (source, outcome) in sources.iter().zip(&outcomes) {
+                let name = source.file_name().unwrap().to_string_lossy();
+                assert_eq!(outcome.input_path, *source);
+                if source.extension().unwrap() == format {
+                    assert!(skip_message(outcome).is_some(), "{name} to {format} is skipped");
+                    assert!(outcome.output_paths().is_empty());
+                    continue;
+                }
+                assert!(outcome.error().is_none(), "{name} to {format}: {}", outcome.error().cloned().unwrap_or_default());
+                let stem = source.file_stem().unwrap().to_string_lossy();
+                assert_eq!(outcome.output_paths(), [folder.join(format!("{stem}-converted.{format}"))]);
+                assert_eq!(decoded_as(&std::fs::read(&outcome.output_paths()[0]).unwrap(), format), (64, 48), "{name} to {format} keeps its size");
+                converted += 1;
+            }
+            assert_eq!(std::fs::read_dir(&folder).unwrap().count(), sources.len() - 1, "only converted files land in {format}");
+        }
+        assert_eq!(converted, 12, "every cross-format pair among HEIC, JPEG, PNG and WebP converts");
+        for (source, original) in sources.iter().zip(&originals) {
+            assert_eq!(&std::fs::read(source).unwrap(), original, "{} stays untouched", source.display());
+        }
+        assert_eq!(std::fs::read_dir(&root).unwrap().filter(|entry| entry.as_ref().unwrap().path().is_file()).count(), sources.len(), "nothing is written next to the originals");
+        let _ = std::fs::remove_dir_all(root);
+    }
 
-        let out = tauri::async_runtime::block_on(convert_images(RunEvents::silent(), ConvertImagesRequest {
-            paths: vec![a.clone(), b.clone()], format: "jpg".to_string(), output_location: OutputLocation::AlongsideInput,
-        }));
-        assert_eq!(out.len(), 2);
-        assert!(out.iter().all(|job| job.error().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput))));
-        assert!(out.iter().all(|job| job.output_paths().is_empty()));
+    #[test]
+    fn convert_skips_files_already_in_the_target_family_without_writing() {
+        let root = sandbox("convert-skip-family");
+        let sources = convert_sources(&root);
+        let jpeg = root.join("e.jpeg");
+        let heif = root.join("f.heif");
+        std::fs::copy(&sources[1], &jpeg).unwrap();
+        std::fs::copy(&sources[3], &heif).unwrap();
+        let cases = [
+            (&sources[0], "png", "Already PNG, so no file was made."),
+            (&sources[1], "jpg", "Already JPEG, so no file was made."),
+            (&jpeg, "jpg", "Already JPEG. JPG and JPEG count as one format."),
+            (&jpeg, "jpeg", "Already JPEG. JPG and JPEG count as one format."),
+            (&sources[2], "webp", "Already WebP, so no file was made."),
+            (&sources[3], "heic", "Already HEIC, so no file was made."),
+            (&heif, "heic", "Already HEIC. HEIC and HEIF count as one format."),
+        ];
+        for (index, (source, format, message)) in cases.into_iter().enumerate() {
+            let original = std::fs::read(source).unwrap();
+            let folder = format!("out-{index}");
+            let outcomes = convert_batch(&[source.clone()], format, location(&root, &folder));
+            assert_eq!(skip_message(&outcomes[0]), Some(message), "{} to {format}", source.display());
+            assert!(outcomes[0].output_paths().is_empty());
+            assert_eq!(std::fs::read_dir(root.join(&folder)).unwrap().count(), 0, "a skipped file makes no output");
+            assert_eq!(std::fs::read(source).unwrap(), original);
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
 
-        cleanup(&out[0].output_paths());
-        cleanup(&out[1].output_paths());
-        let _ = std::fs::remove_file(&a);
-        let _ = std::fs::remove_file(&b);
+    #[test]
+    fn convert_encodes_lossy_targets_at_the_shared_quality_of_90() {
+        let root = sandbox("convert-quality");
+        let source = convert_sources(&root).remove(0);
+        let picture = image::open(&source).unwrap();
+        for (format, target) in [("jpg", crate::kit::images::OutputFormat::Jpeg), ("webp", crate::kit::images::OutputFormat::WebP)] {
+            let outcomes = convert_batch(&[source.clone()], format, location(&root, format));
+            let bytes = std::fs::read(&outcomes[0].output_paths()[0]).unwrap();
+            assert_eq!(bytes, crate::kit::images::encode(&picture, target, crate::kit::images::DEFAULT_QUALITY).unwrap(), "{format} uses quality 90");
+            assert_ne!(bytes, crate::kit::images::encode(&picture, target, 80).unwrap(), "{format} no longer uses quality 80");
+        }
+        assert_eq!(crate::kit::images::DEFAULT_QUALITY, 90);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn convert_fails_an_unreadable_image_alone() {
+        let root = sandbox("convert-unreadable");
+        let sources = convert_sources(&root);
+        let broken = root.join("broken.jpg");
+        std::fs::write(&broken, b"not an image").unwrap();
+        let batch = vec![sources[0].clone(), broken.clone(), sources[2].clone()];
+        let outcomes = convert_batch(&batch, "heic", location(&root, "out"));
+        assert_eq!(outcomes.len(), 3);
+        assert!(outcomes[0].error().is_none() && outcomes[2].error().is_none(), "the readable images still convert");
+        assert_eq!(outcomes[1].input_path, broken);
+        assert!(outcomes[1].error().is_some(), "the unreadable image fails");
+        assert!(outcomes[1].output_paths().is_empty());
+        let mut written: Vec<String> = std::fs::read_dir(root.join("out")).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        written.sort();
+        assert_eq!(written, ["a-converted.heic", "c-converted.heic"]);
+        assert_eq!(std::fs::read(&broken).unwrap(), b"not an image");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn convert_numbers_outputs_instead_of_replacing_existing_files() {
+        let root = sandbox("convert-collision");
+        let source = convert_sources(&root).remove(0);
+        let folder = root.join("out");
+        let existing = folder.join("a-converted.jpg");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(&existing, b"keep me").unwrap();
+        for expected in ["a-converted-1.jpg", "a-converted-2.jpg"] {
+            let outcomes = convert_batch(&[source.clone()], "jpg", OutputLocation::CustomFolder(folder.clone()));
+            assert_eq!(outcomes[0].output_paths(), [folder.join(expected)]);
+        }
+        assert_eq!(std::fs::read(&existing).unwrap(), b"keep me");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -2573,13 +2699,16 @@ mod command_tests {
 
         for (index, (source, expected)) in sources.iter().enumerate() {
             let name = source.file_name().unwrap().to_string_lossy().to_string();
-            let png = assert_success(&name, convert_images(RunEvents::silent(), ConvertImagesRequest {
-                paths: vec![source.clone()], format: "png".into(), output_location: location(&root, &format!("png-{index}")),
-            }));
-            let converted = image::open(&png[0]).unwrap();
-            assert_eq!(converted.color(), expected.color(), "{name} keeps its color type in PNG");
-            assert_eq!(converted.as_bytes(), expected.as_bytes(), "{name} keeps its pixels in PNG");
-            for format in ["jpg", "webp", "heic"] {
+            let family = match source.extension().unwrap().to_str().unwrap() { "jpeg" => "jpg", "heif" => "heic", other => other };
+            if family != "png" {
+                let png = assert_success(&name, convert_images(RunEvents::silent(), ConvertImagesRequest {
+                    paths: vec![source.clone()], format: "png".into(), output_location: location(&root, &format!("png-{index}")),
+                }));
+                let converted = image::open(&png[0]).unwrap();
+                assert_eq!(converted.color(), expected.color(), "{name} keeps its color type in PNG");
+                assert_eq!(converted.as_bytes(), expected.as_bytes(), "{name} keeps its pixels in PNG");
+            }
+            for format in ["jpg", "webp", "heic"].into_iter().filter(|format| *format != family) {
                 let output = assert_success(&name, convert_images(RunEvents::silent(), ConvertImagesRequest {
                     paths: vec![source.clone()], format: format.into(), output_location: location(&root, &format!("{format}-{index}")),
                 }));
