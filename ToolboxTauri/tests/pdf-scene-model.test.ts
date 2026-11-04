@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { insertPageAfter, movePagesBefore, removePages, rotatePages, sceneFromDocument, swapPage } from "../src/features/pdf-editor/scene";
+import { movePagesBefore, removePages, rotatePages, sceneFromDocument, swapPage } from "../src/features/pdf-editor/scene";
 import { parsePageRange } from "../src/shared/workspaceValidation";
 
 test("scene import carries source rotation and page-box baseline", () => {
@@ -50,12 +50,10 @@ test("rotation turns only the selected pages and wraps at 360", () => {
   assert.equal(rotatePages(scene, ["source-0"], -90).pages[0].rotation, 0);
 });
 
-test("swapping and inserting pages change only the page order", () => {
+test("swapping pages changes only the page order", () => {
   const scene = sixPages();
   assert.deepEqual(pageIds(swapPage(scene, 0, 1)).slice(0, 2), ["source-1", "source-0"]);
   assert.equal(swapPage(scene, 0, -1), scene);
-  const blank = { ...scene.pages[0], id: "blank", sourceIndex: null };
-  assert.deepEqual(pageIds(insertPageAfter(scene, 1, blank)).slice(0, 4), ["source-0", "source-1", "blank", "source-2"]);
 });
 
 test("page ranges parse to sorted, unique page indices", () => {

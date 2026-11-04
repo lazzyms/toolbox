@@ -15,7 +15,9 @@ export const previewCacheKey = (path: string, pageIndex: number, serializedScene
   JSON.stringify([path, pageIndex, serializedScene, renderSettings]);
 
 const errorText = (reason: unknown) => {
-  const text = reason instanceof Error ? reason.message : typeof reason === 'string' ? reason : String(reason);
+  const text = reason instanceof Error ? reason.message : typeof reason === 'string' ? reason
+    : typeof reason === 'object' && reason !== null && typeof (reason as { message?: unknown }).message === 'string' ? (reason as { message: string }).message
+      : String(reason);
   return text.replace(/^(?:Error:\s*)+/i, '').trim();
 };
 

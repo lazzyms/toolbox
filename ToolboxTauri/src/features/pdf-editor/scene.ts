@@ -63,12 +63,6 @@ export const sceneFromDocument = (document: PdfDocument): PdfScene => ({
 export const visibleBounds = (page: ScenePage): SceneRect => page.crop ?? { x: 0, y: 0, width: page.width, height: page.height };
 
 // Page-sequence edits. Each takes a scene and page ids and returns the next scene.
-export const insertPageAfter = (scene: PdfScene, index: number, page: ScenePage): PdfScene => {
-  const pages = [...scene.pages];
-  pages.splice(index + 1, 0, page);
-  return { pages };
-};
-
 // Returns null when the selection covers every page, because a PDF keeps at least one.
 export const removePages = (scene: PdfScene, ids: string[]): PdfScene | null => {
   const pages = scene.pages.filter((page) => !ids.includes(page.id));
