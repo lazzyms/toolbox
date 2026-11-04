@@ -2,6 +2,7 @@ pub mod metadata;
 pub mod scene;
 pub mod editor;
 pub mod remaining;
+pub mod unicode_font;
 
 use std::collections::HashSet;
 use std::fs;
