@@ -443,7 +443,7 @@ const ConversionControls = ({
         </p>
       )}
       {activeUtility.id === "images-to-pdf" && (
-        <p className="workspace-note">Images are combined in the order they appear in the selected list.</p>
+        <p className="workspace-note">JPEGs go in as they are. Other images are stored without loss, and transparency is kept.</p>
       )}
       {activeUtility.id === "pdf-merge" && (
         <p className="workspace-note">Add at least two PDFs. The order in the source list becomes the page order in the merged copy.</p>

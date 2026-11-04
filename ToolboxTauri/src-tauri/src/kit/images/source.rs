@@ -38,14 +38,13 @@ impl ImageFamily {
     }
 }
 
-// Facts beyond the pages and family are read by Images to PDF (#550) and the
-// orientation-aware tools that follow it.
-#[allow(dead_code)]
 pub(crate) struct DecodedImage {
     pub pages: Vec<DynamicImage>,
     pub family: ImageFamily,
     pub bits_per_channel: u8,
     pub has_alpha: bool,
+    // Read by the orientation-aware tools that follow #552.
+    #[allow(dead_code)]
     pub orientation: Option<Orientation>,
     pub baseline_jpeg: Option<Vec<u8>>,
 }

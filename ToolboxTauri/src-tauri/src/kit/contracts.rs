@@ -731,14 +731,19 @@ mod tests {
     }
 
     #[test]
-    fn images_to_pdf_rejects_tiff_at_the_native_boundary() {
-        for extension in ["tif", "tiff"] {
+    fn images_to_pdf_rejects_tiff_and_gif_at_the_native_boundary() {
+        for extension in ["tif", "tiff", "gif"] {
             let outcomes = validate_command_inputs("images_to_pdf", &[PathBuf::from(format!("source.{extension}"))]).unwrap_err();
 
             assert_eq!(outcomes.len(), 1);
             assert!(outcomes[0].error().is_some_and(|error| matches!(error.kind, ErrorKind::InvalidInput)));
             assert!(outcomes[0].error().is_some_and(|error| error.message.contains("Accepted extensions")));
         }
+    }
+
+    #[test]
+    fn images_to_pdf_accepts_heic_and_heif_at_the_native_boundary() {
+        assert!(validate_command_inputs("images_to_pdf", &[PathBuf::from("photo.heic"), PathBuf::from("photo.HEIF")]).is_ok());
     }
 
     #[test]
@@ -841,6 +846,8 @@ mod tests {
         assert_eq!(images.input_cardinality, InputCardinality::Ordered);
         assert!(!images.accepted_extensions.contains(&".tif".to_string()));
         assert!(!images.accepted_extensions.contains(&".tiff".to_string()));
+        assert!(!images.accepted_extensions.contains(&".gif".to_string()));
+        assert_eq!(images.accepted_extensions, [".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif"]);
         assert!(!native_capability("extract_gif_frames").unwrap().supports_preview);
         let pdf = native_capability("pdf_to_text").unwrap();
         assert!(pdf.supports_page_selection && !pdf.supports_preview);

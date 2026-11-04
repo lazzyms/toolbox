@@ -207,7 +207,7 @@ test("the picker filters by the active tool and allows one file only for single-
     await page.evaluate(() => { (window as unknown as IntakeWindow).__dialogResult = ["/local/scan.png"]; });
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await expect(rows(page)).toHaveText([/scan\.png/]);
-    expect(await pickerOptions()).toEqual([{ multiple: true, extensions: ["png", "jpg", "jpeg", "webp", "heic"] }]);
+    expect(await pickerOptions()).toEqual([{ multiple: true, extensions: ["png", "jpg", "jpeg", "webp", "heic", "heif"] }]);
 });
 
 test("click, Shift-click and Cmd-click select rows, and removal only edits the list", async ({ page }) => {
@@ -1096,5 +1096,54 @@ test("Unlock shows each verification and legacy-format failure with its own mess
             await expect(failed).toContainText("Failed, wrong password");
             await expect(failed).toContainText("The password didn't open this file. Check it, or try the password this file was sent with.");
         }
+    }
+});
+
+test("Images to PDF takes HEIC and HEIF, refuses GIF, sends no quality setting and shows the precision note", async ({ page }) => {
+    await open(page, "Images to PDF");
+    await drop(page, ["/local/IMG_0001.heic", "/local/IMG_0002.HEIF", "/local/receipt.jpg", "/local/animation.gif"]);
+
+    await expect(rows(page)).toHaveText([/^1IMG_0001\.heic/, /^2IMG_0002\.HEIF/, /^3receipt\.jpg/]);
+    const notAdded = page.getByRole("region", { name: "Not added" });
+    await expect(notAdded.getByRole("listitem")).toHaveText([/animation\.gif.*only takes .*files\./]);
+    await expect(rows(page).filter({ hasText: "Won't run" })).toHaveCount(0);
+    await expect(page.getByText("JPEGs go in as they are. Other images are stored without loss, and transparency is kept.")).toBeVisible();
+    await page.evaluate(() => {
+        (window as unknown as IntakeWindow).__warnings = { "/local/IMG_0001.heic": [{ code: "precisionReduced", message: "Reduced to 8-bit sRGB to fit in the PDF: page 1 (10-bit)." }] };
+    });
+
+    await runAndSave(page);
+
+    const [request] = await requestFor(page, "images_to_pdf");
+    expect(request.paths).toEqual(["/local/IMG_0001.heic", "/local/IMG_0002.HEIF", "/local/receipt.jpg"]);
+    expect(Object.keys(request).sort()).toEqual(["outputLocation", "outputPath", "paths"]);
+    expect(request).not.toHaveProperty("quality");
+    const reduced = results(page).filter({ hasText: "IMG_0001.heic" });
+    await expect(reduced).toHaveAttribute("data-tone", "warn");
+    await expect(reduced).toContainText("Some values were rounded to the precision this format can store.");
+});
+
+test("Images to PDF names the unreadable image when the combine fails", async ({ page }) => {
+    await open(page, "Images to PDF");
+    await drop(page, ["/local/cover.png", "/local/broken.heic", "/local/back.jpg"]);
+    const reason = "Could not process /local/broken.heic: HEIC decode failed: Invalid input";
+    await page.evaluate((reason) => {
+        const stopped = { kind: "processing", message: `Aggregate operation stopped because /local/broken.heic failed: ${reason}` };
+        (window as unknown as IntakeWindow).__failures = {
+            "/local/cover.png": stopped,
+            "/local/broken.heic": { kind: "processing", message: reason },
+            "/local/back.jpg": stopped,
+        };
+    }, reason);
+
+    await runAndSave(page);
+
+    await expect(results(page)).toHaveCount(3);
+    for (const [index, name] of ["cover.png", "broken.heic", "back.jpg"].entries()) {
+        const row = results(page).nth(index);
+        await expect(row).toContainText(name);
+        await expect(row).toHaveAttribute("data-state", "failed");
+        await expect(row).toContainText("/local/broken.heic");
+        await expect(row.getByRole("button", { name: /^Open/ })).toHaveCount(0);
     }
 });

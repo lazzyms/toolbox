@@ -768,6 +768,212 @@ mod command_tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    // The bundled x265 only encodes 8-bit HEVC, so a 10-bit HEIC is made by
+    // rewriting the encoded parameter sets: the hvcC record and the SPS both
+    // declare 10-bit samples. The SPS keeps its length by also shortening the
+    // picture-order-count field, which a single intra frame never reads.
+    fn ten_bit_heic(image: &image::DynamicImage) -> Vec<u8> {
+        struct Reader<'a> { data: &'a [u8], at: usize }
+        impl Reader<'_> {
+            fn bit(&mut self) -> u32 { let bit = (self.data[self.at / 8] >> (7 - self.at % 8)) & 1; self.at += 1; u32::from(bit) }
+            fn bits(&mut self, count: usize) -> u32 { (0..count).fold(0, |value, _| (value << 1) | self.bit()) }
+            fn ue(&mut self) -> u32 { let mut zeros = 0; while self.bit() == 0 { zeros += 1; } ((1 << zeros) - 1) + self.bits(zeros) }
+        }
+        #[derive(Default)]
+        struct Writer { out: Vec<u8>, written: usize }
+        impl Writer {
+            fn bit(&mut self, bit: u32) {
+                if self.written % 8 == 0 { self.out.push(0); }
+                if bit & 1 == 1 { *self.out.last_mut().unwrap() |= 1 << (7 - self.written % 8); }
+                self.written += 1;
+            }
+            fn bits(&mut self, value: u32, count: usize) { for shift in (0..count).rev() { self.bit(value >> shift); } }
+            fn ue(&mut self, value: u32) { let coded = value + 1; let len = 32 - coded.leading_zeros() as usize; self.bits(0, len - 1); self.bits(coded, len); }
+        }
+        fn unescape(data: &[u8]) -> Vec<u8> {
+            let (mut out, mut zeros) = (Vec::new(), 0);
+            for &byte in data { if zeros >= 2 && byte == 3 { zeros = 0; continue; } zeros = if byte == 0 { zeros + 1 } else { 0 }; out.push(byte); }
+            out
+        }
+        fn escape(data: &[u8]) -> Vec<u8> {
+            let (mut out, mut zeros) = (Vec::new(), 0);
+            for &byte in data { if zeros >= 2 && byte <= 3 { out.push(3); zeros = 0; } zeros = if byte == 0 { zeros + 1 } else { 0 }; out.push(byte); }
+            out
+        }
+        fn ten_bit_sps(nal: &[u8]) -> Vec<u8> {
+            let rbsp = unescape(&nal[2..]);
+            let last = rbsp.iter().rposition(|&byte| byte != 0).unwrap();
+            let stop_bit = last * 8 + 7 - rbsp[last].trailing_zeros() as usize;
+            let (mut reader, mut writer) = (Reader { data: &rbsp, at: 0 }, Writer::default());
+            let head = reader.bits(8);
+            assert_eq!((head >> 1) & 7, 0, "fixture expects a single temporal layer");
+            writer.bits(head, 8);
+            for _ in 0..96 { let bit = reader.bit(); writer.bit(bit); }
+            let id = reader.ue(); writer.ue(id);
+            let chroma = reader.ue(); writer.ue(chroma);
+            if chroma == 3 { let bit = reader.bit(); writer.bit(bit); }
+            for _ in 0..2 { let size = reader.ue(); writer.ue(size); }
+            let window = reader.bit(); writer.bit(window);
+            if window == 1 { for _ in 0..4 { let offset = reader.ue(); writer.ue(offset); } }
+            let (luma, chroma_depth, poc) = (reader.ue(), reader.ue(), reader.ue());
+            assert_eq!((luma, chroma_depth, poc), (0, 0, 4), "fixture expects 8-bit x265 parameters");
+            writer.ue(2); writer.ue(2); writer.ue(0);
+            while reader.at < stop_bit { let bit = reader.bit(); writer.bit(bit); }
+            writer.bit(1);
+            while writer.written % 8 != 0 { writer.bit(0); }
+            [&nal[..2], escape(&writer.out).as_slice()].concat()
+        }
+        let mut bytes = heif::encode(image).unwrap();
+        let name = bytes.windows(4).position(|window| window == b"hvcC").unwrap();
+        let size = u32::from_be_bytes(bytes[name - 4..name].try_into().unwrap()) as usize;
+        let body = bytes[name + 4..name - 4 + size].to_vec();
+        let mut patched = body[..23].to_vec();
+        patched[17] = (patched[17] & 0xF8) | 2;
+        patched[18] = (patched[18] & 0xF8) | 2;
+        let mut at = 23;
+        for _ in 0..body[22] {
+            let kind = body[at] & 0x3F;
+            let count = u16::from_be_bytes([body[at + 1], body[at + 2]]);
+            patched.extend_from_slice(&body[at..at + 3]);
+            at += 3;
+            for _ in 0..count {
+                let len = usize::from(u16::from_be_bytes([body[at], body[at + 1]]));
+                let nal = &body[at + 2..at + 2 + len];
+                at += 2 + len;
+                let nal = if kind == 33 { ten_bit_sps(nal) } else { nal.to_vec() };
+                patched.extend_from_slice(&(nal.len() as u16).to_be_bytes());
+                patched.extend_from_slice(&nal);
+            }
+        }
+        assert_eq!(patched.len(), body.len(), "the patched hvcC record must keep its size");
+        bytes[name + 4..name - 4 + size].copy_from_slice(&patched);
+        assert_eq!(heif::probe(&bytes).unwrap().bit_depth, heif::BitDepth::Ten);
+        bytes
+    }
+
+    struct PdfImage { dict: lopdf::Dictionary, content: Vec<u8>, mask: Option<Vec<u8>>, media_width: f32 }
+
+    fn pdf_images(path: &PathBuf) -> Vec<PdfImage> {
+        let document = lopdf::Document::load(path).unwrap();
+        let inflate = |stream: &lopdf::Stream| {
+            assert_eq!(stream.dict.get(b"Filter").unwrap().as_name().unwrap(), b"FlateDecode");
+            let mut out = Vec::new();
+            std::io::Read::read_to_end(&mut flate2::read::ZlibDecoder::new(stream.content.as_slice()), &mut out).unwrap();
+            out
+        };
+        document.get_pages().values().map(|page_id| {
+            let page = document.get_dictionary(*page_id).unwrap();
+            let media_width = page.get(b"MediaBox").unwrap().as_array().unwrap()[2].as_float().unwrap();
+            let resources = page.get(b"Resources").unwrap().as_dict().unwrap();
+            let image_id = resources.get(b"XObject").unwrap().as_dict().unwrap().get(b"Im0").unwrap().as_reference().unwrap();
+            let stream = document.get_object(image_id).unwrap().as_stream().unwrap();
+            let content = if stream.dict.get(b"Filter").unwrap().as_name().unwrap() == b"DCTDecode" { stream.content.clone() } else { inflate(stream) };
+            let mask = stream.dict.get(b"SMask").ok().map(|mask| inflate(document.get_object(mask.as_reference().unwrap()).unwrap().as_stream().unwrap()));
+            PdfImage { dict: stream.dict.clone(), content, mask, media_width }
+        }).collect()
+    }
+
+    fn filter_of(image: &PdfImage) -> &[u8] { image.dict.get(b"Filter").unwrap().as_name().unwrap() }
+
+    #[test]
+    fn images_to_pdf_embeds_jpeg_as_is_and_stores_every_other_image_without_loss() {
+        use image::{DynamicImage, Rgb, RgbImage, RgbaImage};
+        let root = sandbox("images-to-pdf-embed");
+        let rgb = |width: u32, seed: u8| RgbImage::from_fn(width, 12, |x, y| Rgb([seed, (x * 9) as u8, (y * 17) as u8]));
+        let jpeg = root.join("photo.jpg");
+        let mut jpeg_bytes = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg_bytes, 80).encode_image(&rgb(20, 10)).unwrap();
+        std::fs::write(&jpeg, &jpeg_bytes).unwrap();
+        let png = root.join("chart.png"); rgb(21, 40).save(&png).unwrap();
+        let clear = root.join("logo.png");
+        let clear_pixels = RgbaImage::from_fn(22, 12, |x, y| Rgba([200, x as u8, y as u8, (x * 11) as u8]));
+        clear_pixels.save(&clear).unwrap();
+        let webp = root.join("still.webp"); rgb(23, 70).save(&webp).unwrap();
+        let heic = root.join("camera.heic"); std::fs::write(&heic, heif::encode(&DynamicImage::ImageRgb8(rgb(24, 90))).unwrap()).unwrap();
+        let heif_file = root.join("camera.heif"); std::fs::write(&heif_file, heif::encode(&DynamicImage::ImageRgb8(rgb(25, 120))).unwrap()).unwrap();
+        let paths = vec![jpeg.clone(), png.clone(), clear.clone(), webp.clone(), heic.clone(), heif_file.clone()];
+        let originals = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+
+        let outcomes = tauri::async_runtime::block_on(run_images_to_pdf(&ImagesToPdfRequest {
+            paths: paths.clone(), output_location: location(&root, "out"), output_path: None,
+        }));
+
+        assert_eq!(outcomes.len(), 1);
+        assert!(outcomes[0].error().is_none(), "{:?}", outcomes[0].error());
+        assert!(outcomes[0].warnings.is_empty(), "8-bit sources need no precision note: {:?}", outcomes[0].warnings);
+        let images = pdf_images(&outcomes[0].output_paths()[0]);
+        assert_eq!(images.iter().map(|image| image.media_width).collect::<Vec<_>>(), [20.0, 21.0, 22.0, 23.0, 24.0, 25.0], "one page per image, in the requested order");
+        assert_eq!(filter_of(&images[0]), b"DCTDecode");
+        assert_eq!(images[0].content, jpeg_bytes, "the JPEG is embedded byte for byte");
+        assert_eq!(images[1].content, image::open(&png).unwrap().to_rgb8().into_raw(), "the PNG decodes back to the same pixels");
+        assert!(images[1].mask.is_none(), "an opaque PNG needs no soft mask");
+        assert_eq!(images[2].content, image::open(&clear).unwrap().to_rgb8().into_raw());
+        assert_eq!(images[2].mask.as_deref(), Some(clear_pixels.pixels().map(|pixel| pixel[3]).collect::<Vec<_>>().as_slice()), "a transparent PNG keeps its alpha as a soft mask");
+        assert_eq!(images[3].content, image::open(&webp).unwrap().to_rgb8().into_raw(), "the WebP is stored without loss");
+        for (image, source) in images[4..].iter().zip([&heic, &heif_file]) {
+            assert_eq!(image.content, heif::decode(&std::fs::read(source).unwrap()).unwrap().to_rgb8().into_raw(), "{} is decoded in-process and stored without loss", source.display());
+        }
+        for image in &images[1..] {
+            assert_eq!(filter_of(image), b"FlateDecode");
+            assert_eq!(image.dict.get(b"BitsPerComponent").unwrap().as_i64().unwrap(), 8);
+        }
+        for (path, original) in paths.iter().zip(&originals) { assert_eq!(&std::fs::read(path).unwrap(), original, "{} must stay unchanged", path.display()); }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn images_to_pdf_reduces_high_bit_depth_heic_to_eight_bit_with_a_note() {
+        use crate::kit::contracts::{OutcomeWarning, WarningKind};
+        use image::{DynamicImage, Rgb, RgbImage};
+        let root = sandbox("images-to-pdf-ten-bit");
+        let png = root.join("cover.png"); write_png(&png, 16, 30);
+        let sample = DynamicImage::ImageRgb8(RgbImage::from_fn(32, 24, |x, y| Rgb([(x * 8) as u8, (y * 10) as u8, 128])));
+        let deep = root.join("deep.heic"); std::fs::write(&deep, ten_bit_heic(&sample)).unwrap();
+        let deeper = root.join("deep-two.heif"); std::fs::write(&deeper, ten_bit_heic(&sample)).unwrap();
+        let paths = vec![png.clone(), deep.clone(), deeper.clone()];
+        let originals = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+
+        let outcomes = tauri::async_runtime::block_on(run_images_to_pdf(&ImagesToPdfRequest {
+            paths: paths.clone(), output_location: location(&root, "out"), output_path: None,
+        }));
+
+        assert_eq!(outcomes.len(), 1);
+        assert!(outcomes[0].error().is_none(), "{:?}", outcomes[0].error());
+        assert_eq!(outcomes[0].warnings, [OutcomeWarning {
+            kind: WarningKind::PrecisionReduced,
+            message: "Reduced to 8-bit sRGB to fit in the PDF: page 2 (10-bit), page 3 (10-bit).".into(),
+        }], "the combined row carries one note naming every reduced page");
+        let images = pdf_images(&outcomes[0].output_paths()[0]);
+        assert_eq!(images.len(), 3);
+        for image in &images[1..] {
+            assert_eq!(image.dict.get(b"BitsPerComponent").unwrap().as_i64().unwrap(), 8);
+            assert_eq!(image.content.len(), 32 * 24 * 3, "the 10-bit page is stored as 8-bit RGB");
+        }
+        for (path, original) in paths.iter().zip(&originals) { assert_eq!(&std::fs::read(path).unwrap(), original); }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn images_to_pdf_fails_the_combine_and_publishes_nothing_when_one_image_is_unreadable() {
+        let root = sandbox("images-to-pdf-unreadable");
+        let first = root.join("first.png"); write_png(&first, 16, 30);
+        let broken = root.join("broken.heic"); std::fs::write(&broken, b"not really a HEIC file").unwrap();
+        let last = root.join("last.png"); write_png(&last, 16, 90);
+        let paths = vec![first.clone(), broken.clone(), last.clone()];
+        let originals = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+        let out = location(&root, "out");
+        let OutputLocation::CustomFolder(folder) = &out else { unreachable!() };
+        let folder = folder.clone();
+
+        assert_aggregate_failure("images to pdf unreadable", &paths, &broken, run_images_to_pdf(&ImagesToPdfRequest {
+            paths: paths.clone(), output_location: out, output_path: None,
+        }));
+
+        assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 0, "no PDF and no partial file is left behind");
+        for (path, original) in paths.iter().zip(&originals) { assert_eq!(&std::fs::read(path).unwrap(), original); }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn aggregate_commands_report_one_combined_success_and_each_missing_input() {
         let root = sandbox("aggregate-outcomes");
@@ -1098,7 +1304,9 @@ mod command_tests {
         std::fs::rename(protected_output, &protected).unwrap();
 
         let image_pdf = root.join("image-pdf.pdf");
-        let image_pdf_request = ImagesToPdfRequest { paths: vec![image.clone()], output_location: OutputLocation::AlongsideInput, output_path: None };
+        // Images to PDF embeds a JPEG as-is, which is the one kind of image PDF extraction returns without recompression.
+        let photo = root.join("photo.jpg"); image::open(&image).unwrap().to_rgb8().save(&photo).unwrap();
+        let image_pdf_request = ImagesToPdfRequest { paths: vec![photo.clone()], output_location: OutputLocation::AlongsideInput, output_path: None };
         let image_pdf_result = run_images_to_pdf(&image_pdf_request);
         let image_pdf_output = assert_success("images-to-pdf fixture", image_pdf_result)[0].clone();
         std::fs::rename(image_pdf_output, &image_pdf).unwrap();
