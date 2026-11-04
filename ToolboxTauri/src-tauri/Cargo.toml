@@ -52,6 +52,10 @@ tiff = "0.11"
 tract-onnx = { version = "0.23.7", optional = true }
 notify-rust = "4"
 
+[dev-dependencies]
+# Test fixtures need GIF disposal methods, which the image encoder does not expose.
+gif = "0.14"
+
 [profile.release]
 codegen-units = 1
 lto = true

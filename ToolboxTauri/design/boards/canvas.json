@@ -369,6 +369,62 @@
 "h": 800,
 "title": "Results: every lock and unlock outcome",
 "expand": "fill"
+},
+"MediaEmpty.dc.html": {
+"x": 11800,
+"y": 9600,
+"w": 1280,
+"h": 800,
+"title": "Media creation: empty drop target, all four tools",
+"expand": "fill"
+},
+"MediaIcons.dc.html": {
+"x": 13160,
+"y": 9600,
+"w": 1280,
+"h": 800,
+"title": "App Icon Set: masters, presets, sizes, pad or crop, contact sheet",
+"expand": "fill"
+},
+"MediaGif.dc.html": {
+"x": 14520,
+"y": 9600,
+"w": 1280,
+"h": 800,
+"title": "Create GIF: frame strip, delays, reorder, preview, save dialog",
+"expand": "fill"
+},
+"MediaExtract.dc.html": {
+"x": 15880,
+"y": 9600,
+"w": 1280,
+"h": 800,
+"title": "Extract GIF Frames: GIFs added, frames and timings",
+"expand": "fill"
+},
+"MediaTiff.dc.html": {
+"x": 17240,
+"y": 9600,
+"w": 1280,
+"h": 800,
+"title": "TIFF Pages: Split files, Combine page grid, save dialog",
+"expand": "fill"
+},
+"MediaRunning.dc.html": {
+"x": 18600,
+"y": 9600,
+"w": 1280,
+"h": 800,
+"title": "Media creation: running, locked options, Cancel",
+"expand": "fill"
+},
+"MediaResults.dc.html": {
+"x": 19960,
+"y": 9600,
+"w": 1280,
+"h": 800,
+"title": "Media creation: results, grouped outputs, Skipped and Failed",
+"expand": "fill"
 }
 },
 "order": [
@@ -416,7 +472,14 @@
 "SecFiles.dc.html",
 "SecOptions.dc.html",
 "SecRunning.dc.html",
-"SecResults.dc.html"
+"SecResults.dc.html",
+"MediaEmpty.dc.html",
+"MediaIcons.dc.html",
+"MediaGif.dc.html",
+"MediaExtract.dc.html",
+"MediaTiff.dc.html",
+"MediaRunning.dc.html",
+"MediaResults.dc.html"
 ],
 "notes": {
 "row3": {
@@ -632,6 +695,93 @@
 "maxH": 520,
 "fill": "green",
 "text": "Screen-reader announcements\n\nOne polite live region sits on the batch strip:\n- On start: 'Protecting 24 files.'\n- During the run: progress every 5 files or 10 seconds, whichever is later, such as 'Protecting, 10 of 24 done.'\n- On finish: 'Done. 21 protected, 2 skipped, 1 failed.' Focus stays where it was.\n\nEach row is a list item whose accessible name reads as one sentence: file, state, reason, warnings, then output name. Row actions are real buttons, such as 'Open annual-report-protected.pdf'.\n\nThe cancel dialog traps focus and returns it to Cancel batch."
+},
+"row9m": {
+"x": 11800,
+"y": 9340,
+"text": "Media creation tools (#634). These boards replace the four Media boards at the left of this row.",
+"kind": "title1",
+"maxW": 9400
+},
+"m1": {
+"x": 21320,
+"y": 9600,
+"w": 360,
+"maxH": 480,
+"fill": "blue",
+"text": "Media rail with backlog tools hidden\n\nThe rail lists only the four creation tools, in this order: App Icon Set, Create GIF, Extract GIF Frames, TIFF Pages. Blur Faces and Remove Background are hidden, not shown as disabled. They also don't appear in Find a tool, so there are no dead ends.\n\nThe rail keeps the shell pattern: All tools, the tools, Settings, and 'Files stay on this device.' Up and Down move between tools. While a run is going, switching tools waits until it finishes."
+},
+"m2": {
+"x": 21720,
+"y": 9600,
+"w": 360,
+"maxH": 480,
+"fill": "blue",
+"text": "App Icon Set: layout\n\nEach master image makes its own set, so the files list is the master list. Tags on a row say Not square or Will upscale.\n\nThe preview shows the selected master. A segmented control chooses Pad with transparency or Crop to centre. It applies to every non-square master in the run, and images are never stretched. Under it, a contact sheet shows the macOS sizes on the real result. Sizes up to 64 are actual pixels; larger ones are drawn at 96 with their label.\n\nOptions: 'Make icons for' is a list of presets (macOS, iPhone and iPad, Android, Website, Custom). Each has a checkbox and a chevron that opens its size grid and container checkboxes: AppIcon.appiconset and ICNS for macOS, appiconset for iOS, favicon.ico for Website."
+},
+"m3": {
+"x": 22120,
+"y": 9600,
+"w": 360,
+"maxH": 480,
+"fill": "blue",
+"text": "App Icon Set: unticking a size\n\nAppIcon.appiconset and ICNS need every size in their preset. Unticking one size (64 in the sizeOff state) turns those containers off and disables them. The PNGs for the remaining sizes are still made.\n\nA note explains why: 'need every macOS size, so they're off. Tick 64 to turn them back on.' A 'Tick all macOS sizes' button restores the full set. favicon.ico holds whichever Website sizes are ticked, so it never turns off.\n\nCustom sizes are typed (1 to 4096) and shown as removable chips."
+},
+"m4": {
+"x": 22520,
+"y": 9600,
+"w": 360,
+"maxH": 480,
+"fill": "blue",
+"text": "Create GIF: frame strip\n\nFrames are a 6-column grid of thumbnails in play order. Each tile shows its position and delay. Frame 1 is tagged 'Sets size'. Frames that don't match are tagged 'Fitted': they are centred, scaled down to fit and padded with transparency.\n\n'Delay for every frame' (ms) applies to all frames. Selecting a frame shows 'Own delay' for that frame. Clearing it returns the frame to the delay for every frame. Own delays are bold on the tile.\n\nLoop forever is a switch. The preview has Play/Pause and a scrubber. It doesn't autoplay when Reduce motion is on.\n\nReorder: drag (an insertion bar shows the drop point and the source tile dims) or keyboard. A live status line announces each move."
+},
+"m5": {
+"x": 22920,
+"y": 9600,
+"w": 360,
+"maxH": 480,
+"fill": "blue",
+"text": "TIFF Pages: Split or Combine\n\nThe mode is a segmented control in the header, like Lock and Unlock. Switching keeps the added files. It is disabled while a run is going.\n\nSplit: a file list with page count and format per file, and the selected file's pages below. A 1-page file is tagged Skipped before the run. A file Toolbox can't read is flagged 'Won't run', with a banner to remove flagged files.\n\nCombine: a legend of source files (A, B, C) and one grid of every page across files, each labelled with its source letter and page. Pages reorder like GIF frames. Delete leaves a page out without changing any file. Reset pages restores every page in file order.\n\nCompression: LZW (default), Deflate or None. 16-bit pages stay 16-bit."
+},
+"m6": {
+"x": 21320,
+"y": 10120,
+"w": 360,
+"maxH": 480,
+"fill": "green",
+"text": "Results with many outputs\n\nEach input gets one row. Rows with several outputs have a chevron that expands them: icon sets show their macos, ios and web folders; extracted GIFs show the timings file and the PNG range; split TIFFs show their pages. Groups start collapsed except the first.\n\nOpen and Reveal on the group row act on the folder or the first output. Reveal selects all of the group's files. 'Show all in Finder/File Explorer' and 'Expand all' sit above the list.\n\nCreate GIF and TIFF Combine make one file, so their result is one row."
+},
+"m7": {
+"x": 21720,
+"y": 10120,
+"w": 360,
+"maxH": 480,
+"fill": "green",
+"text": "Skipped, Failed and where messages appear\n\nSucceeded, Skipped and Failed rows share one list in input order, with the same filters as other tools (All, Needs attention, Warnings). Skipped uses the dash icon in muted text and says why, e.g. 'Only 1 page, so there's nothing to split. No file was made.'\n\nMessages:\n- Upscale: a tag on the master row before running, and a warning on the result.\n- Bit depth: a hint on the row before running, and a warning on the result.\n- Large GIF: a banner above the frames and an amber size estimate in the options.\n- Renamed: a warning on the result row naming the file it avoided replacing.\n- Unsupported TIFF: flagged 'Won't run' at intake if detectable; otherwise a Failed row naming the page and the compression.\n\nFailures never leave half a set: an icon set or a GIF's frames are saved only when all of them work."
+},
+"m8": {
+"x": 22120,
+"y": 10120,
+"w": 360,
+"maxH": 520,
+"fill": "purple",
+"text": "Keyboard\n\n- Cmd/Ctrl+O: add files (Open files).\n- Cmd/Ctrl+Enter: run.\n- Esc: cancel a run (with the shared confirmation dialog).\n- Delete: remove the selected file, frame or page. In Combine it leaves the page out.\n- Cmd/Ctrl+A: select all. Shift-click or Cmd/Ctrl-click selects several.\n- Frame and page grids: arrow keys move focus, Home and End jump to the ends, and Cmd/Ctrl+Arrow moves the selected items. Each move is announced, e.g. 'Moved IMG_2212.heic to position 3.'\n- Results: Up and Down move between rows. Right expands a group, Left collapses it. Enter opens.\n- Cmd/Ctrl+K: Find a tool. Cmd/Ctrl+, : Settings."
+},
+"m9": {
+"x": 22520,
+"y": 10120,
+"w": 360,
+"maxH": 520,
+"fill": "purple",
+"text": "Destination and save dialogs\n\nApp Icon Set, Extract GIF Frames and TIFF Split make outputs per input. They use the shared 'Save to' block with 'Change for this run' and an example name. Icon sets go into a folder per master (app-icon-icons), with a -1 suffix if the folder exists. No save dialog.\n\nCreate GIF and TIFF Combine make one file. The run button ends in an ellipsis. The system save dialog opens in the output location: next to the first frame or file by default, or the changed folder. It proposes title-card-animated.gif or cover-combined.tif. A name that's taken gets -1 and a warning. Cancel stops before anything is made.\n\nNames are padded so they sort: 2 digits for pages (-page-01) and 3 for frames (-frame-001)."
+},
+"m10": {
+"x": 22920,
+"y": 10120,
+"w": 360,
+"maxH": 480,
+"fill": "purple",
+"text": "Changes to earlier notes\n\nThese boards replace AppIcons, CreateGif, ExtractGif and TiffPages at the left of the Media row.\n\nThe 'One file from many' note lists App Icon Set as a save-dialog tool. Under this design it isn't: each master makes its own folder in the output location, so App Icon Set uses 'Save to' like other per-file tools. The note still holds for Create GIF and TIFF Combine."
 }
 },
 "designSystems": []

@@ -843,6 +843,21 @@ body {
 .result-row:last-child {
   border-bottom: 0;
 }
+.result-rows[data-grouped] .result-row {
+  grid-template-columns: 24px 20px minmax(0, 1fr) 120px minmax(0, 260px);
+  padding-left: 12px;
+}
+.result-row-toggle svg {
+  width: 14px;
+  height: 14px;
+}
+.result-row-part .result-row-icon {
+  color: var(--muted-foreground);
+}
+.result-row-part .result-row-icon,
+.result-row-part .result-row-text {
+  transform: translateX(20px);
+}
 .file-selection-badge[data-tone="warning"] { color: var(--warning); }
 .result-row[data-tone="ok"] { --result-tone: var(--foreground); }
 .result-row[data-tone="warn"] { --result-tone: var(--warning); }
@@ -1176,6 +1191,10 @@ body {
   background: var(--muted);
   font-size: 13px;
   overflow-wrap: anywhere;
+}
+.run-destination-example-names {
+  display: grid;
+  gap: 2px;
 }
 .workspace-command-rail {
   min-width: 0;
