@@ -8,7 +8,13 @@ use image::ImageEncoder;
 use image::AnimationDecoder;
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
-use crate::kit::contracts::ToolError;
+use crate::kit::contracts::{SkipCode, SkipReason, ToolError};
+
+mod source;
+pub(crate) use source::decode;
+use source::ImageFamily;
+
+pub(crate) const DEFAULT_QUALITY: u8 = 90;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum OutputFormat {
@@ -27,6 +33,32 @@ impl OutputFormat {
             OutputFormat::Heic => "heic",
         }
     }
+
+    fn name(self) -> &'static str {
+        match self {
+            OutputFormat::Jpeg => "JPEG",
+            OutputFormat::Png => "PNG",
+            OutputFormat::WebP => "WebP",
+            OutputFormat::Heic => "HEIC",
+        }
+    }
+}
+
+// HEIC/HEIF and JPG/JPEG each name one format, so a file already in the
+// target family makes no output.
+fn already_in_format(path: &std::path::Path, format: OutputFormat) -> Option<String> {
+    let aliases = match (ImageFamily::of(path), format) {
+        (ImageFamily::Jpeg, OutputFormat::Jpeg) => "JPG and JPEG",
+        (ImageFamily::Heif, OutputFormat::Heic) => "HEIC and HEIF",
+        (ImageFamily::Png, OutputFormat::Png) | (ImageFamily::WebP, OutputFormat::WebP) => "",
+        _ => return None,
+    };
+    let name = format.name();
+    if lower_ext(path).as_deref() == Some(format.extension()) {
+        Some(format!("Already {name}, so no file was made."))
+    } else {
+        Some(format!("Already {name}. {aliases} count as one format."))
+    }
 }
 
 pub struct ImageProcessor;
@@ -43,35 +75,6 @@ fn lower_ext(path: &std::path::Path) -> Option<String> {
     path.extension()
         .and_then(|e| e.to_str())
         .map(|s| s.to_ascii_lowercase())
-}
-
-pub(crate) fn detect_format(path: &std::path::Path) -> OutputFormat {
-    match lower_ext(path).as_deref() {
-        Some("jpg" | "jpeg") => OutputFormat::Jpeg,
-        Some("webp") => OutputFormat::WebP,
-        // libheif reads .heif too; the extension tells us HEIC because the
-        // image crate can't (it reports an unsupported format error we
-        // intercept in load_image below)
-        Some("heic" | "heif") => OutputFormat::Heic,
-        _ => OutputFormat::Png,
-    }
-}
-
-// HEIC has no decoder in the image crate, so fall back to heif-rs when the
-// extension says HEIF but image::open refused it. Everything else errors
-// normally so a genuinely corrupt file is surfaced as such.
-pub(crate) fn load_image(path: &std::path::Path) -> Result<image::DynamicImage, String> {
-    match image::open(path) {
-        Ok(img) => Ok(img),
-        Err(first) => {
-            if matches!(lower_ext(path).as_deref(), Some("heic" | "heif")) {
-                let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-                heif::decode(&bytes).map_err(|e| format!("HEIC decode failed: {}", e))
-            } else {
-                Err(format!("Decode failed: {}", first))
-            }
-        }
-    }
 }
 
 // Encoders write to a buffer first: WebP and HEIC only expose buffer encoders
@@ -127,6 +130,19 @@ pub(crate) fn encode(img: &image::DynamicImage, format: OutputFormat, quality: u
 }
 
 impl ImageProcessor {
+    pub fn convert(input_path: PathBuf, format: OutputFormat, output_location: OutputLocation) -> JobOutcome {
+        if let Some(message) = already_in_format(&input_path, format) {
+            return JobOutcome::skipped(input_path, SkipReason::new(SkipCode::AlreadyInTargetFormat, message));
+        }
+        Self::run(input_path, Options {
+            target_format: Some(format),
+            quality: DEFAULT_QUALITY,
+            keep_smaller_original: false,
+            suffix: "-converted".to_string(),
+            output_location,
+        })
+    }
+
     pub fn run(input_path: PathBuf, options: Options) -> JobOutcome {
         let original_bytes = std::fs::metadata(&input_path).map(|m| m.len()).unwrap_or(0);
 
@@ -151,8 +167,8 @@ impl ImageProcessor {
             }
         }
 
-        let img = match load_image(&input_path) {
-            Ok(i) => i,
+        let decoded = match decode(&input_path) {
+            Ok(decoded) => decoded,
             Err(e) => {
                 return JobOutcome::failure(input_path, ToolError::processing(e));
             }
@@ -160,7 +176,8 @@ impl ImageProcessor {
 
         let format = options
             .target_format
-            .unwrap_or_else(|| detect_format(&input_path));
+            .unwrap_or_else(|| decoded.family.output_format());
+        let img = decoded.into_first_page();
         let extension = format.extension();
 
         let output_path = match OutputNaming::reserve_destination(
@@ -185,7 +202,7 @@ impl ImageProcessor {
             return JobOutcome::failure(input_path, ToolError::processing(format!("Write failed: {}", e)));
         }
 
-        if let Err(error) = validate_encoded_output(output_path.path(), img.width(), img.height(), format) {
+        if let Err(error) = validate_encoded_output(output_path.path(), img.width(), img.height()) {
             return JobOutcome::failure(input_path, ToolError::processing(error));
         }
 
@@ -227,10 +244,9 @@ fn reject_animated_input(path: &std::path::Path) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_encoded_output(path: &std::path::Path, width: u32, height: u32, format: OutputFormat) -> Result<(), String> {
+fn validate_encoded_output(path: &std::path::Path, width: u32, height: u32) -> Result<(), String> {
     if !path.is_file() { return Err("Encoder did not produce an output container.".to_string()); }
-    if format == OutputFormat::Heic { return Ok(()); }
-    let output = image::open(path).map_err(|error| format!("Encoded output could not be decoded: {error}"))?;
+    let output = decode(path).map_err(|error| format!("Encoded output could not be decoded: {error}"))?.into_first_page();
     if output.width() != width || output.height() != height { return Err("Encoded output dimensions do not match the source.".to_string()); }
     Ok(())
 }
@@ -397,9 +413,9 @@ mod tests {
 
     #[test]
     fn detection_maps_heic_extension() {
-        assert_eq!(detect_format(std::path::Path::new("x.heic")), OutputFormat::Heic);
-        assert_eq!(detect_format(std::path::Path::new("x.HEIC")), OutputFormat::Heic);
-        assert_eq!(detect_format(std::path::Path::new("x.jpeg")), OutputFormat::Jpeg);
+        assert_eq!(source::ImageFamily::of(std::path::Path::new("x.heic")).output_format(), OutputFormat::Heic);
+        assert_eq!(source::ImageFamily::of(std::path::Path::new("x.HEIC")).output_format(), OutputFormat::Heic);
+        assert_eq!(source::ImageFamily::of(std::path::Path::new("x.jpeg")).output_format(), OutputFormat::Jpeg);
     }
 
     #[test]
