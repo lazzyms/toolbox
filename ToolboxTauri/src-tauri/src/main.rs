@@ -8,9 +8,10 @@ mod settings;
 mod shell;
 
 use crate::file_actions::{open_output_path, open_sponsor_page, open_third_party_notices, reveal_output_path};
-use crate::kit::common::{note_renamed, JobOutcome};
+use crate::kit::common::{note_renamed, with_measured_sizes, JobOutcome};
 use crate::kit::images::{ImageProcessor, Options as ImageOptions};
 use crate::kit::images::tools;
+use crate::kit::compress::{compress_file, CompressFilesRequest};
 use crate::kit::pdf::{editor, metadata, remaining, scene, PDFProcessor};
 use crate::kit::vision;
 use crate::kit::contracts::{command_supports_preview, validate_command_inputs, validate_page_selection, CompressImagesRequest, ConvertImagesRequest, OutcomeState, PasswordRequest, ToolError};
@@ -76,13 +77,13 @@ async fn protect_files(events: RunEvents, request: PasswordRequest) -> Vec<JobOu
 async fn compress_images(events: RunEvents, request: CompressImagesRequest) -> Vec<JobOutcome> {
     let request = Arc::new(request);
     BatchRunner::run(&events, "compress_images", request.paths.clone(), &request.output_location, &request, |request, path| {
-        ImageProcessor::run(path, ImageOptions {
+        with_measured_sizes(ImageProcessor::run(path, ImageOptions {
             target_format: None,
             quality: if request.lossless { 0 } else { request.quality },
             keep_smaller_original: true,
             suffix: "-compressed".to_string(),
             output_location: request.output_location.clone(),
-        })
+        }))
     })
 }
 
@@ -253,11 +254,11 @@ async fn run_compare_pdfs(request: &remaining::ComparePdfsRequest) -> Vec<JobOut
     aggregate_outcomes("compare_pdfs", &request.paths.clone(), move || note_renamed(remaining::compare(&request), request.output_path.as_deref()))
 }
 
+/// Each file is checked and compressed on its own, so an unsupported or locked file fails alone.
 #[tauri::command]
-async fn compress_pdf(events: RunEvents, request: remaining::CompressPdfRequest) -> Vec<JobOutcome> {
-    if let Err(outcomes) = validate_command_inputs("compress_pdf", &request.paths) { return outcomes; }
+async fn compress_files(events: RunEvents, request: CompressFilesRequest) -> Vec<JobOutcome> {
     let request = Arc::new(request);
-    BatchRunner::run(&events, "compress_pdf", request.paths.clone(), &request.output_location, &request, remaining::compress)
+    BatchRunner::run(&events, "compress_files", request.paths.clone(), &request.output_location, &request, compress_file)
 }
 
 #[tauri::command]
@@ -444,13 +445,13 @@ fn combine_aggregate(paths: &[std::path::PathBuf], aggregate: JobOutcome) -> Vec
     if matches!(aggregate.state, OutcomeState::Succeeded { .. }) { return vec![aggregate]; }
     paths.iter().cloned().map(|input_path| {
         let state = match &aggregate.state {
-            OutcomeState::Failed { output_paths, error } if input_path != aggregate.input_path => OutcomeState::Failed {
-                output_paths: output_paths.clone(),
-                error: ToolError::processing(format!(
-                    "Aggregate operation stopped because {} failed: {}",
-                    aggregate.input_path.display(), error.message
-                )),
-            },
+            OutcomeState::Failed { output_paths, error } if input_path != aggregate.input_path => {
+                let message = format!("Aggregate operation stopped because {} failed: {}", aggregate.input_path.display(), error.message);
+                OutcomeState::Failed {
+                    output_paths: output_paths.clone(),
+                    error: if error.kind == crate::kit::contracts::ErrorKind::Unavailable { ToolError::unavailable(message) } else { ToolError::processing(message) },
+                }
+            }
             state => state.clone(),
         };
         JobOutcome { input_path, state, ..aggregate.clone() }
@@ -541,7 +542,7 @@ fn main() {
             add_pdf_pages
             ,add_page_numbers,
             watermark_pdf,
-            compress_pdf,
+            compress_files,
             rotate_pdf,
             repair_pdf,
             redact_pdf,
@@ -626,7 +627,8 @@ mod command_tests {
     use crate::kit::images::tools::{CropRequest, GifCreateRequest, GifExtractRequest, ImageEdit, ImageEditExportRequest, ImageEditPlan, ImageEditPreviewRequest, IconSetRequest, MetadataRequest, ResizeRequest, RotateRequest, TiffRequest, ToneRequest, WatermarkRequest};
     use crate::kit::office::{test_minimal_ooxml_package, OfficeProcessor};
     use crate::kit::pdf::editor::{AddPdfPagesRequest, CropPdfRequest, EditPdfRequest, OrganizePdfRequest, PageScope, PdfEditMode, PdfEditOperation, PdfEditSessionPlan, PdfEditSessionRequest, PdfOverlay, PdfOverlayPosition, PdfRect, RedactPdfRequest, RotatePage, SignPdfRequest};
-    use crate::kit::pdf::remaining::{CompressPdfRequest, ImagesToPdfRequest, MergePdfRequest, PageOverlayRequest, PageSelectionRequest, PdfToImagesRequest, PdfToTextRequest, RotatePdfRequest, ComparePdfsRequest};
+    use crate::kit::compress::CompressLevel;
+    use crate::kit::pdf::remaining::{ImagesToPdfRequest, MergePdfRequest, PageOverlayRequest, PageSelectionRequest, PdfToImagesRequest, PdfToTextRequest, RotatePdfRequest, ComparePdfsRequest};
     use crate::kit::vision::VisionRequest;
     use base64::{engine::general_purpose::STANDARD, Engine};
     use image::Rgba;
@@ -1086,6 +1088,7 @@ mod command_tests {
         let tiff = root.join("image.tiff"); image::open(&image).unwrap().save(&tiff).unwrap();
         let pdf = root.join("document.pdf"); make_pdf(&pdf, 2);
         let pdf_two = root.join("document-two.pdf"); make_pdf(&pdf_two, 1);
+        let compressible_pdf = root.join("compressible.pdf"); make_compressible_pdf(&compressible_pdf);
         let plain_pdf_bytes = std::fs::read(&pdf).unwrap();
         let plain_image_bytes = std::fs::read(&image).unwrap();
         let plain_lossy_image_bytes = std::fs::read(&lossy_image).unwrap();
@@ -1179,7 +1182,7 @@ mod command_tests {
         let added_document = lopdf::Document::load(&added[0]).unwrap();
         assert_eq!(added_document.get_pages().len(), 4, "add pages must insert the requested number of pages");
         outputs.extend(named(&mut naming, "add_pdf_pages", pdf.clone(), added));
-        outputs.extend(named(&mut naming, "compress_pdf", pdf.clone(), assert_success("compress pdf", compress_pdf(RunEvents::silent(), serde_json::from_value::<CompressPdfRequest>(serde_json::json!({ "paths": [pdf.clone()], "quality": 80, "outputLocation": location(&root, "compress pdf") })).expect("Compress Files view payload for compress_pdf")))));
+        outputs.extend(named(&mut naming, "compress_files", compressible_pdf.clone(), assert_success("compress files", compress_files(RunEvents::silent(), serde_json::from_value::<CompressFilesRequest>(serde_json::json!({ "paths": [compressible_pdf.clone()], "level": "medium", "stripExif": false, "outputLocation": location(&root, "compress files") })).expect("Compress Files view payload for compress_files")))));
         outputs.extend(named(&mut naming, "rotate_pdf", pdf.clone(), assert_success("rotate pdf", rotate_pdf(RunEvents::silent(), RotatePdfRequest { paths: vec![pdf.clone()], degrees: 90, pages: Some(vec![1]), output_location: location(&root, "rotate pdf") }))));
         outputs.extend(named(&mut naming, "repair_pdf", pdf.clone(), assert_success("repair pdf", repair_pdf(RunEvents::silent(), PdfToTextRequest { pages: None, paths: vec![pdf.clone()], output_location: location(&root, "repair pdf") }))));
         outputs.extend(named(&mut naming, "redact_pdf", pdf.clone(), assert_success("redact pdf", redact_pdf(RunEvents::silent(), RedactPdfRequest { paths: vec![pdf.clone()], rectangle: PdfRect { x: 40.0, y: 650.0, width: 220.0, height: 60.0 }, scope: PageScope::All, output_location: location(&root, "redact pdf") }))));
@@ -1668,6 +1671,49 @@ mod command_tests {
         let mut written = std::fs::read_dir(root.join("protected")).unwrap().map(|entry| entry.unwrap().file_name().into_string().unwrap()).collect::<Vec<_>>();
         written.sort();
         assert_eq!(written, ["budget-protected.xlsx", "deck-protected.pptx", "lease-protected.docx"]);
+        for (input, original) in inputs.iter().zip(originals) {
+            assert_eq!(std::fs::read(input).unwrap(), original, "original was modified: {}", input.display());
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn without_qpdf_compress_merge_and_split_fail_each_pdf_as_unavailable() {
+        if std::env::var_os(MISSING_QPDF_CHILD).is_none() {
+            let _guard = crate::kit::lock_process_env();
+            let missing = sandbox("missing-qpdf-pdf-commands").join("qpdf-not-installed");
+            let child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["command_tests::without_qpdf_compress_merge_and_split_fail_each_pdf_as_unavailable", "--exact", "--nocapture", "--test-threads=1"])
+                .env(MISSING_QPDF_CHILD, "1")
+                .env("TOOLBOX_QPDF_PATH", &missing)
+                .output()
+                .unwrap();
+            let report = format!("{}{}", String::from_utf8_lossy(&child.stdout), String::from_utf8_lossy(&child.stderr));
+            assert!(child.status.success() && report.contains("1 passed"), "{report}");
+            return;
+        }
+        assert!(crate::kit::resources::resolve_helper(&crate::kit::resources::QPDF).is_err(), "the Development override must hide qpdf");
+        let root = sandbox("pdf-commands-missing-qpdf");
+        let inputs = vec![root.join("report.pdf"), root.join("appendix.pdf")];
+        make_pdf(&inputs[0], 2);
+        make_pdf(&inputs[1], 3);
+        let originals = inputs.iter().map(|input| std::fs::read(input).unwrap()).collect::<Vec<_>>();
+
+        let runs = [
+            ("compress", tauri::async_runtime::block_on(compress_files(RunEvents::silent(), CompressFilesRequest { paths: inputs.clone(), level: CompressLevel::Medium, strip_exif: false, output_location: location(&root, "compress") }))),
+            ("merge", tauri::async_runtime::block_on(run_merge_pdfs(&MergePdfRequest { paths: inputs.clone(), output_location: location(&root, "merge"), output_path: None }))),
+            ("split", tauri::async_runtime::block_on(split_pdf(RunEvents::silent(), PageSelectionRequest { paths: inputs[..1].to_vec(), pages: vec![], page_ranges: None, split_mode: Some("pages".into()), chunk_size: None, output_location: location(&root, "split") }))),
+        ];
+
+        for (name, outcomes) in &runs {
+            let expected = if *name == "split" { &inputs[..1] } else { &inputs[..] };
+            assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), expected, "{name} reports each PDF");
+            for outcome in outcomes {
+                assert_eq!(outcome.error().map(|error| error.kind.clone()), Some(ErrorKind::Unavailable), "{name}: {}", outcome.input_path.display());
+                assert!(outcome.output_paths().is_empty(), "{name}");
+            }
+            assert_eq!(std::fs::read_dir(root.join(name)).unwrap().count(), 0, "{name} left outputs");
+        }
         for (input, original) in inputs.iter().zip(originals) {
             assert_eq!(std::fs::read(input).unwrap(), original, "original was modified: {}", input.display());
         }
@@ -2328,6 +2374,179 @@ mod command_tests {
 
         cleanup(&out[0].output_paths());
         let _ = std::fs::remove_file(&src);
+    }
+
+    #[test]
+    fn compress_commands_report_sizes_matching_the_files_on_disk() {
+        let root = sandbox("compress-sizes");
+        let pdf = root.join("document.pdf");
+        let image = root.join("image.png");
+        make_pdf(&pdf, 3);
+        write_png(&image, 128, 7);
+
+        let pdf_outcomes = tauri::async_runtime::block_on(compress_files(RunEvents::silent(), CompressFilesRequest {
+            paths: vec![pdf.clone()], level: CompressLevel::High, strip_exif: false, output_location: location(&root, "pdf"),
+        }));
+        let lossy = tauri::async_runtime::block_on(compress_images(RunEvents::silent(), CompressImagesRequest {
+            paths: vec![image.clone()], quality: 50, lossless: false, output_location: location(&root, "lossy"),
+        }));
+        let lossless = tauri::async_runtime::block_on(compress_images(RunEvents::silent(), CompressImagesRequest {
+            paths: vec![image.clone()], quality: 80, lossless: true, output_location: location(&root, "lossless"),
+        }));
+
+        for outcome in pdf_outcomes.iter().chain(&lossy).chain(&lossless) {
+            assert!(outcome.error().is_none(), "{}", outcome.error().cloned().unwrap_or_default());
+            let [output] = outcome.output_paths() else { panic!("one output expected") };
+            assert_eq!(outcome.original_bytes, Some(std::fs::metadata(&outcome.input_path).unwrap().len()));
+            assert_eq!(outcome.output_bytes, Some(std::fs::metadata(output).unwrap().len()));
+            let value = serde_json::to_value(outcome).unwrap();
+            assert_eq!(value["originalBytes"], outcome.original_bytes.unwrap());
+            assert_eq!(value["outputBytes"], outcome.output_bytes.unwrap());
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Three pages with inherited, page-level and every optional page box plus a rotation, and
+    /// uncompressed content so a lossless repack has something to save.
+    fn make_compressible_pdf(path: &PathBuf) {
+        use lopdf::{dictionary, Document, Object, Stream};
+        let numbers = |values: [f32; 4]| values.into_iter().map(Object::Real).collect::<Vec<_>>();
+        let mut document = Document::with_version("1.7");
+        let pages_id = document.new_object_id();
+        let font_id = document.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
+        let pages = [
+            dictionary! { "CropBox" => numbers([10.0, 12.5, 600.0, 780.0]), "Rotate" => 90 },
+            dictionary! { "MediaBox" => numbers([0.0, 0.0, 842.0, 595.0]), "BleedBox" => numbers([5.0, 5.0, 837.0, 590.0]), "TrimBox" => numbers([9.0, 9.0, 833.0, 586.0]), "ArtBox" => numbers([20.0, 20.0, 822.0, 575.0]) },
+            dictionary! {},
+        ];
+        let mut kids = Vec::new();
+        for (number, mut page) in pages.into_iter().enumerate() {
+            let text = (0..80).map(|line| format!("BT /F1 9 Tf 36 {} Td (Toolbox page {} line {line} repeats to be repacked) Tj ET\n", 760 - line * 9, number + 1)).collect::<String>();
+            let content_id = document.add_object(Stream::new(dictionary! {}, text.into_bytes()));
+            page.set("Type", "Page");
+            page.set("Parent", pages_id);
+            page.set("Resources", dictionary! { "Font" => dictionary! { "F1" => font_id } });
+            page.set("Contents", content_id);
+            kids.push(Object::Reference(document.add_object(page)));
+        }
+        document.objects.insert(pages_id, dictionary! { "Type" => "Pages", "Kids" => kids, "Count" => 3, "MediaBox" => numbers([0.0, 0.0, 612.0, 792.0]) }.into());
+        let catalog_id = document.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+        document.trailer.set("Root", catalog_id);
+        document.save(path).unwrap();
+    }
+
+    /// Every page's boxes (inherited ones resolved) and rotation, in page order.
+    fn page_geometry(path: &PathBuf) -> Vec<(Vec<Option<Vec<f32>>>, i64)> {
+        let document = lopdf::Document::load(path).unwrap();
+        document.get_pages().into_values().map(|page| {
+            let boxes = [b"MediaBox".as_slice(), b"CropBox", b"BleedBox", b"TrimBox", b"ArtBox"].iter().map(|key| {
+                crate::kit::pdf::inherited(&document, page, key).unwrap().map(|value| value.as_array().unwrap().iter().map(|number| metadata::number(number).unwrap()).collect())
+            }).collect();
+            (boxes, metadata::page_rotation(&document, page))
+        }).collect()
+    }
+
+    fn compress(paths: &[PathBuf], level: CompressLevel, output_location: OutputLocation) -> Vec<JobOutcome> {
+        tauri::async_runtime::block_on(compress_files(RunEvents::silent(), CompressFilesRequest { paths: paths.to_vec(), level, strip_exif: false, output_location }))
+    }
+
+    #[test]
+    fn compress_files_repacks_pdfs_at_every_level_and_keeps_pages_boxes_and_rotation() {
+        let root = sandbox("compress-files-levels");
+        let pdf = root.join("report.pdf");
+        make_compressible_pdf(&pdf);
+        let original = std::fs::read(&pdf).unwrap();
+        let geometry = page_geometry(&pdf);
+        assert_eq!(geometry.len(), 3);
+        assert_eq!(geometry[0].1, 90, "the fixture rotates its first page");
+
+        for level in [CompressLevel::Low, CompressLevel::Medium, CompressLevel::High] {
+            let name = format!("{level:?}");
+            let outcomes = compress(&[pdf.clone()], level, location(&root, &name));
+            let [outcome] = outcomes.as_slice() else { panic!("{name}: one outcome per input") };
+            assert!(outcome.error().is_none(), "{name}: {}", outcome.error().cloned().unwrap_or_default());
+            let [output] = outcome.output_paths() else { panic!("{name}: one output") };
+            assert_eq!(output, &root.join(&name).join("report-compressed.pdf"));
+            assert_eq!(page_geometry(output), geometry, "{name} changed the page geometry");
+            assert_eq!(outcome.original_bytes, Some(original.len() as u64));
+            assert_eq!(outcome.output_bytes, Some(std::fs::metadata(output).unwrap().len()));
+            assert!(outcome.output_bytes < outcome.original_bytes, "{name} must save space");
+        }
+        assert_eq!(std::fs::read(&pdf).unwrap(), original, "the original was modified");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn compress_files_skips_an_already_repacked_pdf_with_both_sizes_and_writes_nothing() {
+        let root = sandbox("compress-files-no-savings");
+        let pdf = root.join("report.pdf");
+        make_compressible_pdf(&pdf);
+        let first = compress(&[pdf.clone()], CompressLevel::Medium, location(&root, "first"));
+        let repacked = first[0].output_paths()[0].clone();
+        let before = std::fs::read(&repacked).unwrap();
+
+        let outcomes = compress(&[repacked.clone()], CompressLevel::High, location(&root, "again"));
+
+        let [outcome] = outcomes.as_slice() else { panic!("one outcome per input") };
+        let OutcomeState::Skipped { reason } = &outcome.state else { panic!("expected a skip, got {:?}", outcome.state) };
+        assert_eq!(reason.code, crate::kit::contracts::SkipCode::NoSavings);
+        assert_eq!(reason.message, "No savings: already well compressed");
+        assert_eq!(outcome.original_bytes, Some(before.len() as u64));
+        assert!(outcome.output_bytes.is_some_and(|bytes| bytes >= before.len() as u64));
+        assert!(outcome.output_paths().is_empty());
+        assert_eq!(std::fs::read_dir(root.join("again")).unwrap().count(), 0, "a skip leaves no file, temp or claim");
+        assert_eq!(std::fs::read(&repacked).unwrap(), before);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn compress_files_fails_a_locked_pdf_and_a_docx_alone_and_reports_in_input_order() {
+        let root = sandbox("compress-files-mixed");
+        let inputs = vec![root.join("locked.pdf"), root.join("report.pdf"), root.join("lease.docx"), root.join("appendix.pdf")];
+        std::fs::write(&inputs[0], crate::kit::password::tests::pdf(Some(("owner", "user")))).unwrap();
+        make_compressible_pdf(&inputs[1]);
+        std::fs::write(&inputs[2], test_minimal_ooxml_package("docx")).unwrap();
+        make_compressible_pdf(&inputs[3]);
+        let originals = inputs.iter().map(|input| std::fs::read(input).unwrap()).collect::<Vec<_>>();
+
+        let outcomes = compress(&inputs, CompressLevel::Medium, location(&root, "out"));
+
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), inputs);
+        let locked = outcomes[0].error().expect("a locked PDF fails");
+        assert_eq!(locked.kind, ErrorKind::InvalidInput);
+        assert_eq!(locked.message, "This PDF is password-protected. Unlock it first, then compress the unlocked copy.");
+        assert_eq!(locked.pointer, Some(crate::kit::contracts::OutcomePointer::Tool { tool_id: "lock-unlock".into() }));
+        let docx = outcomes[2].error().expect("a DOCX fails");
+        assert_eq!(docx.kind, ErrorKind::InvalidInput);
+        for outcome in [&outcomes[1], &outcomes[3]] {
+            assert!(outcome.error().is_none(), "{}", outcome.error().cloned().unwrap_or_default());
+            assert_eq!(outcome.output_paths().len(), 1);
+        }
+        let mut written = std::fs::read_dir(root.join("out")).unwrap().map(|entry| entry.unwrap().file_name().into_string().unwrap()).collect::<Vec<_>>();
+        written.sort();
+        assert_eq!(written, ["appendix-compressed.pdf", "report-compressed.pdf"]);
+        for (input, original) in inputs.iter().zip(originals) {
+            assert_eq!(std::fs::read(input).unwrap(), original, "original was modified: {}", input.display());
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn compress_files_numbers_copies_beside_an_existing_compressed_file() {
+        let root = sandbox("compress-files-collisions");
+        let pdf = root.join("report.pdf");
+        make_compressible_pdf(&pdf);
+        let output = location(&root, "out");
+        let OutputLocation::CustomFolder(folder) = &output else { unreachable!() };
+        std::fs::write(folder.join("report-compressed.pdf"), b"an earlier copy").unwrap();
+
+        let first = compress(&[pdf.clone()], CompressLevel::Medium, output.clone());
+        let second = compress(&[pdf.clone()], CompressLevel::Medium, output.clone());
+
+        assert_eq!(first[0].output_paths(), [folder.join("report-compressed-1.pdf")]);
+        assert_eq!(second[0].output_paths(), [folder.join("report-compressed-2.pdf")]);
+        assert_eq!(std::fs::read(folder.join("report-compressed.pdf")).unwrap(), b"an earlier copy");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

@@ -255,7 +255,7 @@
 "y": 8440,
 "w": 1280,
 "h": 800,
-"title": "Compress PDFs and images",
+"title": "Compress Files: empty, files, options, running",
 "expand": "fill"
 },
 "CompressResults.dc.html": {
@@ -263,7 +263,7 @@
 "y": 8440,
 "w": 1280,
 "h": 800,
-"title": "Compress results: saved, kept, failed",
+"title": "Compress Files results: compressed, skipped, failed",
 "expand": "fill"
 },
 "AppIcons.dc.html": {
@@ -500,7 +500,7 @@
 "y": 8180,
 "text": "Images",
 "kind": "title1",
-"maxW": 6800
+"maxW": 17400
 },
 "row9": {
 "x": 0,
@@ -632,6 +632,78 @@
 "maxH": 520,
 "fill": "green",
 "text": "Screen-reader announcements\n\nOne polite live region sits on the batch strip:\n- On start: 'Protecting 24 files.'\n- During the run: progress every 5 files or 10 seconds, whichever is later, such as 'Protecting, 10 of 24 done.'\n- On finish: 'Done. 21 protected, 2 skipped, 1 failed.' Focus stays where it was.\n\nEach row is a list item whose accessible name reads as one sentence: file, state, reason, warnings, then output name. Row actions are real buttons, such as 'Open annual-report-protected.pdf'.\n\nThe cancel dialog traps focus and returns it to Cancel batch."
+},
+"cf6": {
+"x": 13780,
+"y": 8440,
+"w": 360,
+"maxH": 760,
+"fill": "blue",
+"text": "Compress Files: intake, flags, adding and removing\n\nOne view takes PDF, JPEG, PNG and WebP in the same batch. With no files the center is the drop zone, Open files (Cmd/Ctrl+O) is the main button, and Medium is already selected. Compress stays disabled with 'Add files to run'.\n\nEach row shows name, folder, type and size. Files known before the run are flagged in place: HEIC gets Will skip and the Convert it to JPEG first reason; a .docx and an animated WebP get Won't run. A banner counts them and offers one action to remove them all.\n\nAdding more appends to the end, scrolls to them and selects them. Duplicates go under Not added. Remove from list (Delete/Backspace) never touches the file; the status line says so and offers Undo."
+},
+"cf1": {
+"x": 14180,
+"y": 8440,
+"w": 360,
+"maxH": 760,
+"fill": "blue",
+"text": "Compress Files: Low, Medium, High\n\nStrength is a three-card radio group, Medium by default. Each card has one line on the trade-off, and 'What Medium does' lists what happens per type, so a mixed batch is clear before running.\n\nLow: PDFs are repacked without loss and images inside stay; JPEG is re-saved at high quality; PNG and lossless WebP stay lossless.\nMedium: images inside PDFs are recompressed and scaled down; JPEG and lossy WebP at medium quality.\nHigh: lower quality and resolution; PNG cut to 256 colours with dithering; WebP becomes lossy.\n\nText, transparency and colour profiles always stay. No dpi or quality numbers are shown."
+},
+"cf2": {
+"x": 14580,
+"y": 8440,
+"w": 360,
+"maxH": 760,
+"fill": "blue",
+"text": "Compress Files: Strip EXIF\n\nA switch under Strength, off by default. The line under it changes with the state, so the choice is explained where it is made.\n\nOff: camera, date and GPS details stay in the copies.\nOn: removes them from JPEG, PNG and WebP. Photos stay upright because orientation is applied first. PDFs aren't changed.\n\nThe results panel repeats the setting used for the batch."
+},
+"cf3": {
+"x": 14980,
+"y": 8440,
+"w": 360,
+"maxH": 760,
+"fill": "blue",
+"text": "Compress Files: Save to\n\nSave to shows the default from Settings: Next to each original, or a folder. 'Change for this run' picks a folder for this batch only; the row then shows This run only, Change and Reset to default, and says Save to goes back afterwards.\n\nCopies end in -compressed. An existing name gets -1, -2 and so on. Originals and existing files are never replaced.\n\nWhile running, Strength, Strip EXIF, Save to and the list are locked and dimmed, with one line saying why. Progress is per file, finished copies can be opened at once, and Esc cancels the batch."
+},
+"cf4": {
+"x": 15380,
+"y": 8440,
+"w": 360,
+"maxH": 760,
+"fill": "green",
+"text": "Compress Files results: sizes and savings\n\nThe summary leads with counts (compressed, skipped, failed), then Saved X, N% smaller, with before and after for the compressed files only. The side panel repeats the batch total and says skipped and failed files aren't counted.\n\nEach compressed row shows before -> after, a small bar of the new size against the old, and the percent saved. Sizes use the platform's units.\n\nThe segment bar has one segment per file; for large batches it becomes proportional by outcome."
+},
+"cf5": {
+"x": 15780,
+"y": 8440,
+"w": 360,
+"maxH": 760,
+"fill": "green",
+"text": "Compress Files results: skipped, warned, failed\n\nCompressed: check icon, Open and Show in Finder or File Explorer.\nWarning: compressed, with an amber icon and one line on what changed, such as a removed digital signature. It counts as compressed.\nSkipped: not an error. The file was fine but no copy was written: no savings (the copy would be larger) or HEIC, with Convert Image Format.\nFailed: red, with the reason and the fix. Unsupported type; animated WebP; password-protected (Unlock it first, Open Lock & Unlock); over the page or size limit (Open Split PDF); damaged file; PDF helper missing (a banner, PDFs only, images still run).\n\nThere is no Retry: the same file gives the same result. Fix it, then add it again."
+},
+"cf7": {
+"x": 16180,
+"y": 8440,
+"w": 360,
+"maxH": 760,
+"fill": "green",
+"text": "Compress Files results: open, compare, many files\n\nEvery compressed row has Open and Show in Finder or File Explorer, labelled with the output file name for screen readers. There is no side-by-side preview; Show in Finder selects the copy so Quick Look or the system viewer compares it with the original.\n\nShow all opens each destination folder once with the copies selected. With This run only, it opens that one folder.\n\nFilters (All, Needs attention, Warnings) show counts, so a 186-file batch can be cut to the 15 that need attention. The list scrolls and rows keep their actions. New batch clears the results."
+},
+"cf8": {
+"x": 16580,
+"y": 8440,
+"w": 360,
+"maxH": 760,
+"fill": "purple",
+"text": "Compress Files: command center\n\nOne tile, Compress Files, replaces Compress PDF and Compress Images, with the hint 'PDFs, JPEG, PNG and WebP in one batch'. It keeps the compress icon.\n\nFind a tool matches compress, compression, shrink, reduce size, smaller, optimize, PDF, image, photo, JPEG, PNG and WebP.\n\nA favorite on either old tool becomes a favorite on Compress Files, kept in the same place. Recent and pinned entries move the same way."
+},
+"cf9": {
+"x": 16980,
+"y": 8440,
+"w": 360,
+"maxH": 760,
+"fill": "purple",
+"text": "Compress Files: keyboard, screen readers, platforms\n\nTab order: Open or Add files, the list, Remove, Clear list, then Strength (arrow keys move between cards), Strip EXIF (Space), Save to, Change for this run, and the run button. Cmd/Ctrl+Enter runs; Esc cancels a run.\n\nResults: the summary is a polite live region read once when the batch ends. Filters, then rows, each row's Open, Show in and fix button, then New batch.\n\nWhile running, one polite region reads 'Compressing 6 of 13' at most every few seconds; failures are not read one by one.\n\nmacOS shows Cmd shortcuts and Show in Finder; Windows shows Ctrl and Show in File Explorer, and Delete instead of Backspace. Dark and light use the same tokens as the other boards."
 }
 },
 "designSystems": []
