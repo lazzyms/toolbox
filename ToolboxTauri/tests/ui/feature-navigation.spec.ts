@@ -852,8 +852,8 @@ test("shortcuts stay out of text fields and composition, and Run still fires fro
 });
 
 for (const { platform, labels } of [
-    { platform: "MacIntel", labels: { find: "⌘K", settings: "⌘,", help: "⌘/", open: "⌘O", run: "⌘↵", close: "⌘W", aria: "Meta+Enter" } },
-    { platform: "Win32", labels: { find: "Ctrl+K", settings: "Ctrl+,", help: "Ctrl+/", open: "Ctrl+O", run: "Ctrl+Enter", close: "Alt+F4", aria: "Control+Enter" } },
+    { platform: "MacIntel", labels: { find: "⌘K", settings: "⌘,", help: "⌘/", open: "⌘O", run: "⌘↵", close: "⌘W", aria: "Meta+Enter", editor: ["⌘Z", "⇧⌘Z", "⌘E", "⌘D", "Delete"] } },
+    { platform: "Win32", labels: { find: "Ctrl+K", settings: "Ctrl+,", help: "Ctrl+/", open: "Ctrl+O", run: "Ctrl+Enter", close: "Alt+F4", aria: "Control+Enter", editor: ["Ctrl+Z", "Ctrl+Y", "Ctrl+E", "Ctrl+D", "Delete"] } },
 ]) {
     test(`shortcut hints use the ${platform === "Win32" ? "Windows" : "macOS"} modifier`, async ({ page }) => {
         await page.addInitScript((platform) => {
@@ -877,9 +877,15 @@ for (const { platform, labels } of [
         await expect(list.getByRole("region", { name: "Everywhere" }).locator("dd")).toHaveText([labels.find, labels.settings, labels.help, labels.open, labels.close]);
         await expect(list.getByRole("region", { name: "Batch tools" }).locator("dt")).toHaveText(["Start the run", "Cancel the run", "Select all files", "Remove selected files", "Move through the list"]);
 
+        const editor = list.getByRole("region", { name: "PDF Editor" });
+        await expect(editor.locator("dt")).toHaveText(["Undo", "Redo", "Export a copy", "Duplicate the selected mark", "Delete the selected mark"]);
+        await expect(editor.locator("dd")).toHaveText(labels.editor);
+
         await list.getByRole("searchbox", { name: "Search shortcuts" }).fill("select all");
         await expect(list.locator("dt")).toHaveText(["Select all files"]);
         await list.getByRole("searchbox", { name: "Search shortcuts" }).fill("undo");
+        await expect(list.locator("dt")).toHaveText(["Undo"]);
+        await list.getByRole("searchbox", { name: "Search shortcuts" }).fill("rotate");
         await expect(list.getByText("No shortcuts match.")).toBeVisible();
     });
 }
