@@ -842,6 +842,10 @@ mod tests {
         assert!(!images.accepted_extensions.contains(&".tif".to_string()));
         assert!(!images.accepted_extensions.contains(&".tiff".to_string()));
         assert!(!native_capability("extract_gif_frames").unwrap().supports_preview);
+        for command in ["generate_icon_set", "create_gif"] {
+            let accepted = &native_capability(command).unwrap().accepted_extensions;
+            assert!([".heic", ".heif"].iter().all(|extension| accepted.contains(&extension.to_string())), "{command} must accept HEIC and HEIF sources");
+        }
         let pdf = native_capability("pdf_to_text").unwrap();
         assert!(pdf.supports_page_selection && !pdf.supports_preview);
         assert!(!native_capability("ocr_pdf").unwrap().native_available);
