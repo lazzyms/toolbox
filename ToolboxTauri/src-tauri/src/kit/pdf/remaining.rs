@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::kit::common::limits::StoppableHelper;
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming, OutputReservation};
-use crate::kit::contracts::ToolError;
+use crate::kit::contracts::{OutcomePointer, SkipCode, SkipReason, ToolError};
 use super::metadata::{page_bounds, page_rotation};
 use super::{mutation_preflight, PdfMutationIntent};
 
@@ -24,14 +24,6 @@ pub struct PageOverlayRequest {
     #[serde(default)] pub pages: Option<Vec<usize>>,
     #[serde(default)] pub start_number: Option<u32>,
     #[serde(default)] pub font_size: Option<u16>,
-    pub output_location: OutputLocation,
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CompressPdfRequest {
-    pub paths: Vec<PathBuf>,
-    pub quality: u8,
     pub output_location: OutputLocation,
 }
 
@@ -574,29 +566,69 @@ pub fn watermark(request: &PageOverlayRequest, input: PathBuf) -> JobOutcome {
     }, request.opacity.clamp(1, 100))
 }
 
-pub fn compress(request: &CompressPdfRequest, input: PathBuf) -> JobOutcome {
-    let source = match load_existing_document_for_mutation(&input) { Ok(document) => document, Err(error) => return failure(input, error) };
-    let page_count = source.get_pages().len();
+pub const PDF_PASSWORD_PROTECTED: &str = "This PDF is password-protected. Unlock it first, then compress the unlocked copy.";
+pub const NO_SAVINGS: &str = "No savings: already well compressed";
+const PAGE_BOXES: [&[u8]; 5] = [b"MediaBox", b"CropBox", b"BleedBox", b"TrimBox", b"ArtBox"];
+
+/// Repacks a PDF without loss: object streams, recompressed flate streams at level 9. The copy is
+/// published only when it opens with the same pages, page boxes and rotation and is smaller.
+pub fn compress_lossless(input: PathBuf, location: &OutputLocation) -> JobOutcome {
+    let source = match Document::load(&input) {
+        Ok(document) => document,
+        Err(_) => return JobOutcome::failure(input, crate::kit::password::unreadable(crate::kit::password::ProtectedFormat::Pdf)),
+    };
+    if source.is_encrypted() || source.was_encrypted() {
+        return JobOutcome::failure(input, ToolError::invalid_input(PDF_PASSWORD_PROTECTED)
+            .with_pointer(OutcomePointer::Tool { tool_id: "lock-unlock".into() }));
+    }
+    match super::is_signed(&source) {
+        Ok(false) => {}
+        Ok(true) => return JobOutcome::failure(input, ToolError::invalid_input("Digitally signed PDFs cannot be compressed because rewriting the file would invalidate the signature; use an unsigned copy")),
+        Err(error) => return failure(input, error),
+    }
+    let geometry = match page_geometry(&source) { Ok(geometry) => geometry, Err(error) => return failure(input, error) };
     let qpdf = match qpdf() { Ok(qpdf) => qpdf, Err(error) => return JobOutcome::failure(input, ToolError::unavailable(error)) };
-    let output = match OutputNaming::reserve_destination(&input, &request.output_location, "-compressed", "pdf") {
+    let output = match OutputNaming::reserve_destination(&input, location, "-compressed", "pdf") {
         Ok(output) => output,
         Err(error) => return failure(input, format!("Could not reserve compressed PDF output: {error}")),
     };
-    let quality = request.quality.clamp(1, 100);
-    let level = ((100_u16.saturating_sub(quality as u16) * 8) / 99 + 1).to_string();
-    let result = Command::new(qpdf).arg("--object-streams=generate").arg("--stream-data=compress").arg("--recompress-flate").arg(format!("--compression-level={level}")).arg(&input).arg(output.path()).output_until_stopped();
+    let result = Command::new(qpdf).arg("--object-streams=generate").arg("--recompress-flate").arg("--compression-level=9")
+        .arg(&input).arg(output.path()).output_until_stopped();
     match result {
-        Ok(result) if result.status.success() => match Document::load(output.path()) {
-            Ok(verified) if verified.get_pages().len() == page_count => match output.publish() {
-                Ok(path) => JobOutcome::succeeded(input, vec![path], format!("PDF compressed at quality {quality}")),
-                Err(error) => failure(input, format!("Could not publish compressed PDF: {error}")),
-            },
-            Ok(_) => failure(input, "Compressed PDF changed its page count.".to_string()),
-            Err(error) => failure(input, format!("Compressed PDF could not be verified: {error}")),
-        },
-        Ok(result) => failure(input, stderr(result, "qpdf failed to compress the PDF.")),
-        Err(error) => failure(input, format!("Could not run qpdf: {error}")),
+        // qpdf exits 3 when it succeeded with warnings; verification below decides whether the copy is sound.
+        Ok(result) if result.status.success() || result.status.code() == Some(3) => {}
+        Ok(result) => return failure(input, stderr(result, "qpdf failed to compress the PDF.")),
+        Err(error) => return failure(input, format!("Could not run qpdf: {error}")),
     }
+    match Document::load(output.path()).map_err(|error| error.to_string()).and_then(|copy| page_geometry(&copy)) {
+        Ok(copy) if copy == geometry => {}
+        Ok(_) => return failure(input, "The compressed copy changed its pages, page boxes or rotation, so nothing was saved.".to_string()),
+        Err(error) => return failure(input, format!("Compressed PDF could not be verified: {error}")),
+    }
+    let sizes = fs::metadata(&input).and_then(|original| fs::metadata(output.path()).map(|copy| (original.len(), copy.len())));
+    let (original_bytes, output_bytes) = match sizes { Ok(sizes) => sizes, Err(error) => return failure(input, format!("Could not measure the compressed PDF: {error}")) };
+    if output_bytes >= original_bytes {
+        drop(output);
+        return JobOutcome::skipped(input, SkipReason::new(SkipCode::NoSavings, NO_SAVINGS)).with_sizes(original_bytes, output_bytes);
+    }
+    match output.publish() {
+        Ok(path) => JobOutcome::succeeded(input, vec![path], "PDF repacked without loss").with_sizes(original_bytes, output_bytes),
+        Err(error) => failure(input, format!("Could not publish compressed PDF: {error}")),
+    }
+}
+
+#[derive(Debug, PartialEq)]
+struct PageGeometry { boxes: Vec<Option<Vec<f32>>>, rotation: i64 }
+
+fn page_geometry(document: &Document) -> Result<Vec<PageGeometry>, String> {
+    document.get_pages().into_values().map(|page| {
+        let boxes = PAGE_BOXES.iter().map(|key| super::inherited(document, page, key)?.map(|value| {
+            value.as_array().map_err(|error| error.to_string())?.iter()
+                .map(|number| super::resolve(document, number).and_then(super::metadata::number))
+                .collect::<Result<Vec<_>, _>>()
+        }).transpose()).collect::<Result<Vec<_>, String>>()?;
+        Ok(PageGeometry { boxes, rotation: page_rotation(document, page) })
+    }).collect()
 }
 
 pub fn rotate(request: &RotatePdfRequest, input: PathBuf) -> JobOutcome {
@@ -1199,6 +1231,8 @@ mod tests {
     fn remaining_mutators_reject_unsafe_documents_before_reserving_output() {
         for kind in ["signed", "outline", "tagged"] {
             for operation in ["numbers", "watermark", "image-watermark", "compress", "remove", "extract"] {
+                // Compressing repacks without loss, so only a signature, which any rewrite breaks, stops it.
+                if operation == "compress" && kind != "signed" { continue; }
                 let root = split_fixture_root(&format!("unsafe-{kind}-{operation}"));
                 let input = root.join("document.pdf");
                 let output = root.join("outputs");
@@ -1227,9 +1261,7 @@ mod tests {
                         position: None, logo_path: Some(logo), pages: None, start_number: None,
                         font_size: None, output_location: output_location.clone(),
                     }, input.clone()),
-                    "compress" => compress(&CompressPdfRequest {
-                        paths: vec![input.clone()], quality: 80, output_location: output_location.clone(),
-                    }, input.clone()),
+                    "compress" => compress_lossless(input.clone(), &output_location),
                     "remove" => {
                         let mut request = request(None, vec![0]);
                         request.output_location = output_location.clone();

@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import type { JobOutcome, OutcomePointer, Progress } from "../contracts";
 import { liveFiles, type LiveFile, type LiveRun } from "./liveRun";
-import { fileName, resultSummary, resultTally, rowView, type RowTone } from "./resultRow";
+import { batchTotal, fileName, resultSummary, resultTally, rowView, type RowTone } from "./resultRow";
 import { PasswordRetryForm } from "./PasswordFields";
 
 type RowAction = "open" | "reveal" | "retry";
@@ -234,11 +234,19 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
     if (results.length === 0) return null;
 
     const summary = resultSummary(results, resultVerb);
+    const total = batchTotal(results, resultVerb);
     return (
         <div className="result-list">
             <div className="result-summary" role="status" aria-live="polite">
                 <strong>{summary.headline}</strong>
                 {summary.hints.map((hint) => <span key={hint} className="result-summary-hint">{hint}</span>)}
+                {total && (
+                    <span className="result-summary-total">
+                        <span className="result-summary-saved">{total.savedLine}</span>
+                        <span className="result-summary-hint">{total.totalLine}</span>
+                        <span className="result-summary-hint">{total.note}</span>
+                    </span>
+                )}
             </div>
             <Card className="result-card gap-0 py-0">
                 <CardContent className="p-0">

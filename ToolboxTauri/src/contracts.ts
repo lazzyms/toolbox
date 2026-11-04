@@ -19,7 +19,7 @@ export type AtomicToolId =
   | "pdf-remove-pages"
   | "pdf-extract-pages"
   | "pdf-organize"
-  | "pdf-compress"
+  | "compress-files"
   | "pdf-rotate"
   | "pdf-repair"
   | "pdf-redact"
@@ -84,7 +84,7 @@ export type ToolCommand =
   | "organize_pdf"
   | "add_page_numbers"
   | "watermark_pdf"
-  | "compress_pdf"
+  | "compress_files"
   | "rotate_pdf"
   | "repair_pdf"
   | "redact_pdf"
@@ -219,7 +219,7 @@ export interface ToolDefinition {
     | "pdf-organize"
     | "pdf-page-numbers"
     | "pdf-watermark"
-    | "pdf-compress"
+    | "compress-files"
     | "pdf-rotate"
     | "pdf-repair"
     | "pdf-redact"
@@ -281,6 +281,14 @@ export interface PasswordSet {
 export interface PasswordRequest extends ToolRequest {
   password: string;
   passwordOverrides: Record<string, string>;
+}
+
+/** Low keeps the most detail and High saves the most space. Every PDF is repacked without loss at each level. */
+export type CompressLevel = "low" | "medium" | "high";
+
+export interface CompressFilesRequest extends ToolRequest {
+  level: CompressLevel;
+  stripExif: boolean;
 }
 
 export interface CompressImagesRequest extends ToolRequest {
