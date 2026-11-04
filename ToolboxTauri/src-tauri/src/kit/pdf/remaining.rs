@@ -5,11 +5,11 @@ use std::fs;
 use std::io::{self, Cursor};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crate::kit::common::limits::StoppableHelper;
+use crate::kit::common::limits::{self, StoppableHelper};
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming, OutputReservation};
-use crate::kit::contracts::ToolError;
+use crate::kit::contracts::{LimitKind, ToolError};
 use super::metadata::{page_bounds, page_rotation};
 use super::{mutation_preflight, PdfMutationIntent};
 
@@ -101,9 +101,35 @@ pub struct RotatePdfRequest {
     pub output_location: OutputLocation,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct QpdfDeadline { pub per_file: Duration, pub per_page: Duration }
+
+pub(crate) const QPDF_DEADLINE: QpdfDeadline = QpdfDeadline { per_file: Duration::from_secs(15), per_page: Duration::from_millis(50) };
+
+impl QpdfDeadline {
+    pub(crate) fn limit(self, files: usize, pages: usize) -> Duration {
+        let count = |value: usize| u32::try_from(value).unwrap_or(u32::MAX);
+        self.per_file * count(files) + self.per_page * count(pages)
+    }
+}
+
+fn run_qpdf(command: Command, deadline: Instant, limit: Duration, action: &str) -> Result<std::process::Output, ToolError> {
+    let timed_out = format!("{action} took longer than {} and was stopped. Nothing was saved.", limits::duration_label(limit));
+    match super::run_bounded_helper(command, deadline, super::PDF_TEXT_MAX_ERROR_BYTES, super::PDF_TEXT_MAX_ERROR_BYTES, &timed_out) {
+        Ok(output) => Ok(output),
+        Err(message) if message == timed_out => Err(ToolError::limit_exceeded(LimitKind::Time, message)),
+        Err(message) => Err(ToolError::processing(format!("Could not run qpdf: {message}"))),
+    }
+}
+
 pub fn merge(request: &MergePdfRequest) -> JobOutcome {
+    merge_within(request, QPDF_DEADLINE)
+}
+
+fn merge_within(request: &MergePdfRequest, deadline: QpdfDeadline) -> JobOutcome {
     let Some(first) = request.paths.first().cloned() else { return failure(PathBuf::new(), "Select at least one PDF.".to_string()); };
     if request.paths.len() < 2 { return failure(first, "Select at least two PDFs to merge.".to_string()); }
+    let max_pages = limits::recorded("merge_pdfs").and_then(|limits| limits.max_pages).map_or(u64::MAX, u64::from);
     let mut expected_pages = 0usize;
     for path in &request.paths {
         if path.extension().and_then(|extension| extension.to_str()).is_none_or(|extension| !extension.eq_ignore_ascii_case("pdf")) { return failure(path.clone(), format!("Only PDF inputs can be merged: {}", path.display())); }
@@ -112,14 +138,23 @@ pub fn merge(request: &MergePdfRequest) -> JobOutcome {
             Err(error) => return failure(path.clone(), format!("Could not read {}: {error}", path.display())),
         };
         expected_pages += document.get_pages().len();
+        if expected_pages as u64 > max_pages {
+            let name = path.file_name().map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned());
+            return JobOutcome::failure(path.clone(), ToolError::limit_exceeded(LimitKind::PageCount, format!(
+                "Adding {name} takes the merged PDF past {} pages, over the limit for one PDF. Merge fewer pages and try again.",
+                limits::count_label(max_pages),
+            )));
+        }
     }
     let output = match OutputNaming::reserve_single_output(request.output_path.as_deref(), &first, &request.output_location, "-merged", "pdf") {
         Ok(output) => output,
         Err(error) => return failure(first, format!("Could not reserve merged PDF output: {error}")),
     };
     let qpdf = match qpdf() { Ok(qpdf) => qpdf, Err(error) => return JobOutcome::failure(first, ToolError::unavailable(error)) };
-    let result = Command::new(qpdf).arg("--empty").arg("--pages").args(&request.paths).arg("--").arg(output.path()).output_until_stopped();
-    match result {
+    let mut command = Command::new(qpdf);
+    command.arg("--empty").arg("--pages").args(&request.paths).arg("--").arg(output.path());
+    let limit = deadline.limit(request.paths.len(), expected_pages);
+    match run_qpdf(command, Instant::now() + limit, limit, "Merging") {
         Ok(result) if result.status.success() => match Document::load(output.path()) {
             Ok(document) if document.get_pages().len() == expected_pages => match output.publish() {
                 Ok(path) => JobOutcome::succeeded(first, vec![path], format!("{} PDFs merged in input order", request.paths.len())),
@@ -129,11 +164,15 @@ pub fn merge(request: &MergePdfRequest) -> JobOutcome {
             Err(error) => failure(first, format!("Merged PDF could not be verified: {error}")),
         },
         Ok(result) => failure(first, stderr(result, "qpdf failed to merge the PDFs.")),
-        Err(error) => failure(first, format!("Could not run qpdf: {error}")),
+        Err(error) => JobOutcome::failure(first, error),
     }
 }
 
 pub fn split(request: &PageSelectionRequest, input: PathBuf) -> JobOutcome {
+    split_within(request, input, QPDF_DEADLINE)
+}
+
+fn split_within(request: &PageSelectionRequest, input: PathBuf, deadline: QpdfDeadline) -> JobOutcome {
     if let Err(error) = validate_split_request(request) {
         return JobOutcome::failure(input, ToolError::invalid_input(error));
     }
@@ -152,9 +191,10 @@ pub fn split(request: &PageSelectionRequest, input: PathBuf) -> JobOutcome {
         Ok(workspace) => workspace,
         Err(error) => return failure(input, format!("Could not create a private split workspace: {error}")),
     };
-    let generated = match write_split_spans(&input, &qpdf, workspace.path(), spans) {
+    let limit = deadline.limit(1, page_count);
+    let generated = match write_split_spans(&input, &qpdf, workspace.path(), spans, Instant::now() + limit, limit) {
         Ok(generated) => generated,
-        Err(error) => return failure(input, error),
+        Err(error) => return JobOutcome::failure(input, error),
     };
     match materialize_split_outputs(&input, location, &generated) {
         Ok(outputs) => {
@@ -212,12 +252,14 @@ fn split_spans(request: &PageSelectionRequest, page_count: usize) -> Result<Vec<
     Ok((1..=page_count).map(|page| SplitSpan { suffix: format!("-split-page-{page:0width$}"), first: page, last: page }).collect())
 }
 
-fn write_split_spans(input: &Path, qpdf: &Path, workspace: &Path, spans: Vec<SplitSpan>) -> Result<Vec<(String, PathBuf)>, String> {
+fn write_split_spans(input: &Path, qpdf: &Path, workspace: &Path, spans: Vec<SplitSpan>, deadline: Instant, limit: Duration) -> Result<Vec<(String, PathBuf)>, ToolError> {
     spans.into_iter().enumerate().map(|(index, span)| {
         let part = workspace.join(format!("part-{index}.pdf"));
-        let result = Command::new(qpdf).arg(input).arg("--pages").arg(input).arg(format!("{}-{}", span.first, span.last)).arg("--").arg(&part).output_until_stopped().map_err(|error| format!("Could not run qpdf: {error}"))?;
-        if !result.status.success() { return Err(stderr(result, "qpdf failed to split the PDF.")); }
-        if !part.is_file() { return Err("qpdf reported success but produced no split file.".to_string()); }
+        let mut command = Command::new(qpdf);
+        command.arg(input).arg("--pages").arg(input).arg(format!("{}-{}", span.first, span.last)).arg("--").arg(&part);
+        let result = run_qpdf(command, deadline, limit, "Splitting")?;
+        if !result.status.success() { return Err(ToolError::processing(stderr(result, "qpdf failed to split the PDF."))); }
+        if !part.is_file() { return Err(ToolError::processing("qpdf reported success but produced no split file.")); }
         Ok((span.suffix, part))
     }).collect()
 }
@@ -914,10 +956,10 @@ fn stderr(result: std::process::Output, fallback: &str) -> String { String::from
 fn failure(input_path: PathBuf, error: String) -> JobOutcome { JobOutcome::failure(input_path, ToolError::processing(error)) }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
-    static SPLIT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    pub(crate) static SPLIT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn request(page_ranges: Option<&str>, pages: Vec<usize>) -> PageSelectionRequest {
         PageSelectionRequest {
@@ -1512,6 +1554,77 @@ mod tests {
         assert_eq!(fs::read_dir(&output_folder).unwrap().count(), 1);
         assert_eq!(split_temp_entries(), temp_before, "split temporary directories were not cleaned after failure");
 
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn merge_and_split_qpdf_deadlines_are_fifteen_seconds_per_file_plus_fifty_milliseconds_per_page() {
+        assert_eq!(QPDF_DEADLINE, QpdfDeadline { per_file: Duration::from_secs(15), per_page: Duration::from_millis(50) });
+        assert_eq!(QPDF_DEADLINE.limit(1, 1), Duration::from_millis(15_050));
+        assert_eq!(QPDF_DEADLINE.limit(2, 200), Duration::from_secs(40));
+        let longest = limits::recorded("split_pdf").unwrap();
+        assert_eq!(longest, limits::recorded("merge_pdfs").unwrap());
+        assert_eq!(QPDF_DEADLINE.limit(1, longest.max_pages.unwrap() as usize), Duration::from_secs(265));
+        assert!(QPDF_DEADLINE.limit(1, longest.max_pages.unwrap() as usize) < longest.max_duration, "qpdf's own deadline ends a long split before the job limit does");
+    }
+
+    #[cfg(unix)]
+    fn with_qpdf_stalling_on<T>(root: &Path, marker: &str, run: impl FnOnce() -> T) -> Option<T> {
+        use std::os::unix::fs::PermissionsExt;
+        let _guard = crate::kit::lock_process_env();
+        let Ok(real) = qpdf() else { eprintln!("skipping: qpdf not available"); return None };
+        let script = root.join("qpdf");
+        fs::write(&script, format!("#!/bin/sh\ncase \"$*\" in *'{marker}'*) for last; do :; done; printf partial > \"$last\"; printf %s \"$last\" > '{}'; exec sleep 30;; esac\nexec '{}' \"$@\"\n", root.join("stalled-output").display(), real.display())).unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        let previous = std::env::var_os("TOOLBOX_QPDF_PATH");
+        std::env::set_var("TOOLBOX_QPDF_PATH", &script);
+        let result = run();
+        match previous {
+            Some(value) => std::env::set_var("TOOLBOX_QPDF_PATH", value),
+            None => std::env::remove_var("TOOLBOX_QPDF_PATH"),
+        }
+        Some(result)
+    }
+
+    #[cfg(unix)]
+    fn assert_timed_out_with_nothing_saved(outcome: &JobOutcome, input: &Path, output_folder: &Path, elapsed: Duration, action: &str) {
+        assert_eq!(outcome.input_path, input);
+        let error = outcome.error().expect("the stalled helper fails the file");
+        assert_eq!(error.kind, crate::kit::contracts::ErrorKind::LimitExceeded { limit: LimitKind::Time });
+        assert_eq!(error.message, format!("{action} took longer than 500 milliseconds and was stopped. Nothing was saved."));
+        assert!(elapsed < Duration::from_secs(10), "the helper is stopped at its deadline, not waited out");
+        assert!(outcome.output_paths().is_empty());
+        assert_eq!(fs::read_dir(output_folder).unwrap().count(), 0, "no partial output is left behind");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_merge_whose_qpdf_passes_its_deadline_is_stopped_and_publishes_nothing() {
+        let root = split_fixture_root("merge-deadline");
+        let paths = vec![root.join("first.pdf"), root.join("stalls.pdf")];
+        for path in &paths { split_fixture_pdf(path, 1); }
+        let output_folder = root.join("outputs");
+        fs::create_dir_all(&output_folder).unwrap();
+        let request = MergePdfRequest { paths: paths.clone(), output_location: OutputLocation::CustomFolder(output_folder.clone()), output_path: None };
+        let Some((outcome, elapsed)) = with_qpdf_stalling_on(&root, "stalls.pdf", || { let started = std::time::Instant::now(); (merge_within(&request, QpdfDeadline { per_file: Duration::from_millis(250), per_page: Duration::ZERO }), started.elapsed()) }) else { return };
+        assert_timed_out_with_nothing_saved(&outcome, &paths[0], &output_folder, elapsed, "Merging");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_split_whose_qpdf_passes_its_deadline_is_stopped_and_publishes_no_part() {
+        let _lock = SPLIT_TEST_LOCK.lock().unwrap();
+        let root = split_fixture_root("split-deadline");
+        let input = root.join("document.pdf");
+        split_fixture_pdf(&input, 2);
+        let output_folder = root.join("outputs");
+        fs::create_dir_all(&output_folder).unwrap();
+        let request = split_request(OutputLocation::CustomFolder(output_folder.clone()), "pages", None, None);
+        let Some((outcome, elapsed)) = with_qpdf_stalling_on(&root, " 2-2 ", || { let started = std::time::Instant::now(); (split_within(&request, input.clone(), QpdfDeadline { per_file: Duration::from_millis(300), per_page: Duration::from_millis(100) }), started.elapsed()) }) else { return };
+        assert_timed_out_with_nothing_saved(&outcome, &input, &output_folder, elapsed, "Splitting");
+        let stalled_output = PathBuf::from(fs::read_to_string(root.join("stalled-output")).unwrap());
+        assert!(!stalled_output.parent().unwrap().exists(), "the split workspace is removed");
         let _ = fs::remove_dir_all(root);
     }
 

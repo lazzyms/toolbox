@@ -1898,6 +1898,66 @@ test("files over a limit fail alone with the limit message while the other rows 
     await expect(resultSummaryStatus(page)).toHaveText("Done. 1 compressed, 4 failed");
 });
 
+test("a merge over the page limit names the input that crossed it and every other row says the merge stopped there", async ({ page }) => {
+    const files = ["/local/leases/lease-agreement.pdf", "/local/leases/lease-addendum.pdf", "/local/leases/lease-schedule.pdf"];
+    const limitMessage = "Adding lease-addendum.pdf takes the merged PDF past 5,000 pages, over the limit for one PDF. Merge fewer pages and try again.";
+    const stopped = `Aggregate operation stopped because ${files[1]} failed: ${limitMessage}`;
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open Merge PDF" }).click();
+    await page.evaluate((files) => { (window as TestWindow).__toolboxDialogResults = [[...files]]; }, files);
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await page.evaluate((outcomes) => { (window as TestWindow).__toolboxProcessingResults = outcomes; }, [
+        failed(files[0], "processing", stopped),
+        overLimit(files[1], "pageCount", limitMessage),
+        failed(files[2], "processing", stopped),
+    ]);
+    await page.locator(".workspace-primary-action").click();
+    await page.getByRole("dialog").getByRole("button", { name: "Save" }).click();
+
+    const rows = page.getByRole("list", { name: "Results" }).getByRole("listitem");
+    await expect(rows).toHaveCount(3);
+    await expect(rows.nth(1)).toHaveAttribute("data-state", "failed");
+    await expect(rows.nth(1)).toContainText("lease-addendum.pdf");
+    await expect(rows.nth(1)).toContainText(limitMessage);
+    await expect(rows.nth(1)).toContainText("Failed, over the limit");
+    await expect(rows.nth(1).getByRole("button", { name: /^Retry/ })).toHaveCount(0);
+    for (const index of [0, 2]) {
+        await expect(rows.nth(index)).toHaveAttribute("data-state", "failed");
+        await expect(rows.nth(index)).toContainText(`stopped because ${files[1]} failed`);
+        await expect(rows.nth(index)).not.toContainText("Failed, over the limit");
+    }
+    await expect(page.getByRole("button", { name: /^Open .*merged/ })).toHaveCount(0);
+});
+
+test("a split over the page limit fails alone and the next PDF in the batch splits normally", async ({ page }) => {
+    const limitMessage = "More than 5,000 pages, over the limit for one PDF. Use fewer pages and try again.";
+    const longFile = "/local/split/drawings-full-set.pdf";
+    const goodFile = "/local/split/annual-report.pdf";
+    const goodOutputs = ["/local/split/annual-report-split-page-1.pdf", "/local/split/annual-report-split-page-2.pdf"];
+    await page.goto("/");
+    await openFromHome(page, "Split PDF");
+    const rows = page.getByRole("list", { name: "Results" }).getByRole("listitem");
+
+    await chooseFixture(page, longFile);
+    await page.evaluate((outcomes) => { (window as TestWindow).__toolboxProcessingResults = outcomes; }, [overLimit(longFile, "pageCount", limitMessage)]);
+    await page.getByRole("button", { name: "Export Split PDF" }).click();
+    await expect(rows).toHaveCount(1);
+    await expect(rows.nth(0)).toHaveAttribute("data-state", "failed");
+    await expect(rows.nth(0)).toContainText("drawings-full-set.pdf");
+    await expect(rows.nth(0)).toContainText(limitMessage);
+    await expect(rows.nth(0)).toContainText("Failed, over the limit");
+
+    await chooseFixture(page, goodFile);
+    await page.evaluate((outcomes) => { (window as TestWindow).__toolboxProcessingResults = outcomes; }, [succeeded(goodFile, goodOutputs)]);
+    await page.getByRole("button", { name: "Export Split PDF" }).click();
+    await expect(rows).toHaveCount(1);
+    await expect(rows.nth(0)).toHaveAttribute("data-state", "succeeded");
+    await expect(rows.nth(0)).not.toContainText(limitMessage);
+    await expect(rows.nth(0)).toContainText("2 files, annual-report-split-page-1.pdf to annual-report-split-page-2.pdf");
+    await expect(rows.nth(0).getByRole("button", { name: "Open annual-report-split-page-1.pdf", exact: true })).toBeVisible();
+    await expect(resultSummaryStatus(page)).toHaveText("Done. 1 split");
+});
+
 test("output action state resets and ignores stale completions", async ({ page }) => {
     await page.goto("/");
     await openFromHome(page, "Compress Images");
