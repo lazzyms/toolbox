@@ -73,6 +73,100 @@ pub struct ImagesToPdfRequest {
     pub output_location: OutputLocation,
     #[serde(default)]
     pub output_path: Option<PathBuf>,
+    #[serde(flatten)]
+    pub layout: PageLayout,
+}
+
+/// How each image sits on its page. Margin, fit and orientation only apply to
+/// A4 and Letter; a "match image" page is always the image's own size.
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PageLayout {
+    #[serde(default)] pub page_size: PageSize,
+    #[serde(default)] pub margin: Option<PageMargin>,
+    #[serde(default)] pub fit: Option<PageFit>,
+    #[serde(default)] pub orientation: Option<PageOrientation>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PageSize { #[default] MatchImage, A4, Letter }
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PageMargin { None, #[default] Small, Large }
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PageFit { #[default] Fit, Fill }
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PageOrientation { #[default] Automatic, Portrait, Landscape }
+
+/// Portrait paper sizes in PDF points: A4 is 210 × 297 mm, Letter 8.5 × 11 in.
+pub const A4_POINTS: (f32, f32) = (595.2756, 841.8898);
+pub const LETTER_POINTS: (f32, f32) = (612.0, 792.0);
+
+impl PageMargin {
+    /// Small is half an inch (12.7 mm), large is one inch (25.4 mm), on every side.
+    pub fn points(self) -> f32 {
+        match self { PageMargin::None => 0.0, PageMargin::Small => 36.0, PageMargin::Large => 72.0 }
+    }
+}
+
+/// Where one image lands: the page's media box size, an optional clip
+/// rectangle (fill only), and the rectangle the image is drawn into, all in points.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PagePlacement {
+    pub page: (f32, f32),
+    pub clip: Option<[f32; 4]>,
+    pub image: [f32; 4],
+}
+
+impl PageLayout {
+    pub fn place(&self, width: u32, height: u32) -> PagePlacement {
+        let (width, height) = (width as f32, height as f32);
+        let (short, long) = match self.page_size {
+            PageSize::MatchImage => return PagePlacement { page: (width, height), clip: None, image: [0.0, 0.0, width, height] },
+            PageSize::A4 => A4_POINTS,
+            PageSize::Letter => LETTER_POINTS,
+        };
+        let landscape = match self.orientation.unwrap_or_default() {
+            PageOrientation::Automatic => width > height,
+            PageOrientation::Portrait => false,
+            PageOrientation::Landscape => true,
+        };
+        let (page_width, page_height) = if landscape { (long, short) } else { (short, long) };
+        let margin = self.margin.unwrap_or_default().points();
+        let (box_width, box_height) = (page_width - 2.0 * margin, page_height - 2.0 * margin);
+        let fill = self.fit.unwrap_or_default() == PageFit::Fill;
+        let (across, down) = (box_width / width, box_height / height);
+        let scale = if fill { across.max(down) } else { across.min(down) };
+        let (drawn_width, drawn_height) = (width * scale, height * scale);
+        let image = [margin + (box_width - drawn_width) / 2.0, margin + (box_height - drawn_height) / 2.0, drawn_width, drawn_height];
+        PagePlacement { page: (page_width, page_height), clip: fill.then_some([margin, margin, box_width, box_height]), image }
+    }
+}
+
+impl PagePlacement {
+    // Fill trims by clipping the drawn image to the page's content box; the
+    // embedded image data itself is never cropped or resampled.
+    fn content(&self) -> String {
+        let mut content = String::from("q ");
+        if let Some([x, y, width, height]) = self.clip {
+            content.push_str(&format!("{} {} {} {} re W n ", points(x), points(y), points(width), points(height)));
+        }
+        let [x, y, width, height] = self.image;
+        content.push_str(&format!("{} 0 0 {} {} {} cm /Im0 Do Q", points(width), points(height), points(x), points(y)));
+        content
+    }
+}
+
+fn points(value: f32) -> String {
+    let text = format!("{value:.3}");
+    let text = text.trim_end_matches('0').trim_end_matches('.');
+    if text == "-0" { "0".to_string() } else { text.to_string() }
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -522,9 +616,10 @@ pub fn images_to_pdf(request: &ImagesToPdfRequest) -> JobOutcome {
     for (index, path) in request.paths.iter().enumerate() {
         let image = match embed_image(&mut document, path) { Ok(value) => value, Err(error) => return failure(path.clone(), format!("Could not process {}: {error}", path.display())) };
         if let Some(bits) = image.reduced_from_bits { reduced.push(format!("page {} ({bits}-bit)", index + 1)); }
-        let (width, height) = (image.width, image.height);
-        let content_id = document.add_object(Stream::new(dictionary! {}, format!("q {width} 0 0 {height} 0 0 cm /Im0 Do Q").into_bytes()));
-        let page_id = document.add_object(dictionary! { "Type" => "Page", "Parent" => pages_id, "MediaBox" => vec![0.into(), 0.into(), (width as f32).into(), (height as f32).into()], "Resources" => dictionary! { "XObject" => dictionary! { "Im0" => image.id } }, "Contents" => content_id });
+        let placement = request.layout.place(image.width, image.height);
+        let content_id = document.add_object(Stream::new(dictionary! {}, placement.content().into_bytes()));
+        let (page_width, page_height) = placement.page;
+        let page_id = document.add_object(dictionary! { "Type" => "Page", "Parent" => pages_id, "MediaBox" => vec![0.into(), 0.into(), page_width.into(), page_height.into()], "Resources" => dictionary! { "XObject" => dictionary! { "Im0" => image.id } }, "Contents" => content_id });
         kids.push(page_id.into());
     }
     document.objects.insert(pages_id, dictionary! { "Type" => "Pages", "Kids" => kids, "Count" => request.paths.len() as i64 }.into());

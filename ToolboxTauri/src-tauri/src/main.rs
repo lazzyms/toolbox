@@ -740,7 +740,7 @@ mod command_tests {
         let tiff_out = chosen("pages.tiff");
         let runs = [
             (merge.clone(), "statement-1.pdf", tauri::async_runtime::block_on(run_merge_pdfs(&MergePdfRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: OutputLocation::AlongsideInput, output_path: Some(merge.clone()) }))),
-            (combined.clone(), "scans-1.pdf", tauri::async_runtime::block_on(run_images_to_pdf(&ImagesToPdfRequest { paths: vec![image.clone(), image_two.clone()], output_location: OutputLocation::AlongsideInput, output_path: Some(combined.clone()) }))),
+            (combined.clone(), "scans-1.pdf", tauri::async_runtime::block_on(run_images_to_pdf(&ImagesToPdfRequest { layout: Default::default(), paths: vec![image.clone(), image_two.clone()], output_location: OutputLocation::AlongsideInput, output_path: Some(combined.clone()) }))),
             (gif.clone(), "loop-1.gif", tauri::async_runtime::block_on(run_create_gif(&GifCreateRequest { paths: vec![image.clone(), image_two.clone()], frame_delay_ms: 100, loop_forever: true, output_location: OutputLocation::AlongsideInput, output_path: Some(gif.clone()) }))),
             (tiff_out.clone(), "pages-1.tiff", tauri::async_runtime::block_on(run_process_tiff_pages(&TiffRequest { paths: vec![tiff.clone(), tiff_two.clone()], pages: None, output_location: OutputLocation::AlongsideInput, output_path: Some(tiff_out.clone()) }))),
         ];
@@ -894,7 +894,7 @@ mod command_tests {
         let paths = vec![jpeg.clone(), png.clone(), clear.clone(), webp.clone(), heic.clone(), heif_file.clone()];
         let originals = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
 
-        let outcomes = tauri::async_runtime::block_on(run_images_to_pdf(&ImagesToPdfRequest {
+        let outcomes = tauri::async_runtime::block_on(run_images_to_pdf(&ImagesToPdfRequest { layout: Default::default(),
             paths: paths.clone(), output_location: location(&root, "out"), output_path: None,
         }));
 
@@ -933,7 +933,7 @@ mod command_tests {
         let paths = vec![png.clone(), deep.clone(), deeper.clone()];
         let originals = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
 
-        let outcomes = tauri::async_runtime::block_on(run_images_to_pdf(&ImagesToPdfRequest {
+        let outcomes = tauri::async_runtime::block_on(run_images_to_pdf(&ImagesToPdfRequest { layout: Default::default(),
             paths: paths.clone(), output_location: location(&root, "out"), output_path: None,
         }));
 
@@ -965,12 +965,163 @@ mod command_tests {
         let OutputLocation::CustomFolder(folder) = &out else { unreachable!() };
         let folder = folder.clone();
 
-        assert_aggregate_failure("images to pdf unreadable", &paths, &broken, run_images_to_pdf(&ImagesToPdfRequest {
+        assert_aggregate_failure("images to pdf unreadable", &paths, &broken, run_images_to_pdf(&ImagesToPdfRequest { layout: Default::default(),
             paths: paths.clone(), output_location: out, output_path: None,
         }));
 
         assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 0, "no PDF and no partial file is left behind");
         for (path, original) in paths.iter().zip(&originals) { assert_eq!(&std::fs::read(path).unwrap(), original); }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    // What one Images to PDF page shows: its media box, the clip rectangle a
+    // fill draws through (if any), the image's drawn rectangle from its `cm`,
+    // and the embedded image stream as stored.
+    #[derive(Debug)]
+    struct LaidOutPage { media: Vec<f32>, clip: Option<[f32; 4]>, drawn: [f32; 4], image_dict: lopdf::Dictionary, image_bytes: Vec<u8> }
+
+    fn laid_out_pages(path: &PathBuf) -> Vec<LaidOutPage> {
+        use lopdf::content::Content;
+        let document = lopdf::Document::load(path).unwrap();
+        let number = |object: &lopdf::Object| object.as_float().or_else(|_| object.as_i64().map(|value| value as f32)).unwrap();
+        document.get_pages().values().map(|page_id| {
+            let page = document.get_dictionary(*page_id).unwrap();
+            let media = page.get(b"MediaBox").unwrap().as_array().unwrap().iter().map(number).collect::<Vec<_>>();
+            let operations = Content::decode(&document.get_page_content(*page_id)).unwrap().operations;
+            let operands = |operator: &str| operations.iter().find(|operation| operation.operator == operator).map(|operation| operation.operands.iter().map(number).collect::<Vec<_>>());
+            let clip = operands("re").map(|values| [values[0], values[1], values[2], values[3]]);
+            if clip.is_some() { assert!(operations.iter().any(|operation| operation.operator == "W"), "a fill clips to its rectangle"); }
+            let cm = operands("cm").expect("every page places its image with cm");
+            assert_eq!((cm[1], cm[2]), (0.0, 0.0), "images are placed without rotation or skew");
+            let resources = page.get(b"Resources").unwrap().as_dict().unwrap();
+            let image_id = resources.get(b"XObject").unwrap().as_dict().unwrap().get(b"Im0").unwrap().as_reference().unwrap();
+            let stream = document.get_object(image_id).unwrap().as_stream().unwrap();
+            LaidOutPage { media, clip, drawn: [cm[4], cm[5], cm[0], cm[3]], image_dict: stream.dict.clone(), image_bytes: stream.content.clone() }
+        }).collect()
+    }
+
+    fn assert_close(actual: &[f32], expected: &[f32], context: &str) {
+        assert_eq!(actual.len(), expected.len(), "{context}: {actual:?} vs {expected:?}");
+        for (actual_value, expected_value) in actual.iter().zip(expected) {
+            assert!((actual_value - expected_value).abs() < 0.01, "{context}: {actual:?} should be {expected:?}");
+        }
+    }
+
+    // A wide JPEG (40 × 20), a tall PNG (20 × 30) and a square PNG (24 × 24),
+    // generated here so every orientation rule has a page to act on.
+    fn layout_fixtures(root: &PathBuf) -> (Vec<PathBuf>, Vec<u8>) {
+        use image::{Rgb, RgbImage};
+        let wide = root.join("wide.jpg");
+        let mut jpeg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 85).encode_image(&RgbImage::from_fn(40, 20, |x, y| Rgb([(x * 6) as u8, (y * 12) as u8, 90]))).unwrap();
+        std::fs::write(&wide, &jpeg).unwrap();
+        let tall = root.join("tall.png");
+        RgbImage::from_fn(20, 30, |x, y| Rgb([30, (x * 12) as u8, (y * 8) as u8])).save(&tall).unwrap();
+        let square = root.join("square.png"); write_png(&square, 24, 140);
+        (vec![wide, tall, square], jpeg)
+    }
+
+    fn combine_with(root: &PathBuf, name: &str, paths: &[PathBuf], layout: serde_json::Value) -> Vec<LaidOutPage> {
+        let mut request = serde_json::json!({ "paths": paths, "outputLocation": location(root, name) });
+        request.as_object_mut().unwrap().extend(layout.as_object().unwrap().clone());
+        let request = serde_json::from_value::<ImagesToPdfRequest>(request).expect("PDF Conversion view payload for images_to_pdf");
+        let outcomes = tauri::async_runtime::block_on(run_images_to_pdf(&request));
+        assert_eq!(outcomes.len(), 1, "{name}");
+        assert!(outcomes[0].error().is_none(), "{name}: {:?}", outcomes[0].error());
+        laid_out_pages(&outcomes[0].output_paths()[0])
+    }
+
+    #[test]
+    fn images_to_pdf_match_image_makes_each_page_the_size_of_its_image() {
+        let root = sandbox("images-to-pdf-layout-match");
+        let (paths, _) = layout_fixtures(&root);
+        for (name, layout) in [("default", serde_json::json!({})), ("explicit", serde_json::json!({ "pageSize": "matchImage" }))] {
+            let pages = combine_with(&root, name, &paths, layout);
+            for (page, (width, height)) in pages.iter().zip([(40.0, 20.0), (20.0, 30.0), (24.0, 24.0)]) {
+                assert_close(&page.media, &[0.0, 0.0, width, height], name);
+                assert_close(&page.drawn, &[0.0, 0.0, width, height], name);
+                assert!(page.clip.is_none(), "{name}: a matched page draws the whole image with no clip");
+            }
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn images_to_pdf_lays_out_a4_and_letter_for_every_margin_fit_and_orientation() {
+        let root = sandbox("images-to-pdf-layout-paper");
+        let (paths, jpeg) = layout_fixtures(&root);
+        let originals = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+        let matched = combine_with(&root, "matched", &paths, serde_json::json!({}));
+        let sources = [(40.0_f32, 20.0_f32), (20.0, 30.0), (24.0, 24.0)];
+        // Recorded paper sizes (portrait, points) and margins (points on every side).
+        let sizes = [("a4", 595.2756_f32, 841.8898_f32), ("letter", 612.0, 792.0)];
+        let margins = [("none", 0.0_f32), ("small", 36.0), ("large", 72.0)];
+        let mut combinations = 0;
+        for (size, short, long) in sizes {
+            for (margin, inset) in margins {
+                for fit in ["fit", "fill"] {
+                    for orientation in ["automatic", "portrait", "landscape"] {
+                        let name = format!("{size}-{margin}-{fit}-{orientation}");
+                        let pages = combine_with(&root, &name, &paths, serde_json::json!({ "pageSize": size, "margin": margin, "fit": fit, "orientation": orientation }));
+                        assert_eq!(pages.len(), 3, "{name}: one page per image");
+                        for ((page, (width, height)), plain) in pages.iter().zip(sources).zip(&matched) {
+                            let landscape = match orientation { "automatic" => width > height, "landscape" => true, _ => false };
+                            let (page_width, page_height) = if landscape { (long, short) } else { (short, long) };
+                            assert_close(&page.media, &[0.0, 0.0, page_width, page_height], &name);
+                            let content = [inset, inset, page_width - 2.0 * inset, page_height - 2.0 * inset];
+                            let [x, y, drawn_width, drawn_height] = page.drawn;
+                            assert!(((drawn_width / drawn_height) - (width / height)).abs() < 0.001, "{name}: the image keeps its aspect ratio");
+                            assert_close(&[x + drawn_width / 2.0, y + drawn_height / 2.0], &[content[0] + content[2] / 2.0, content[1] + content[3] / 2.0], &format!("{name}: centred in the margin box"));
+                            if fit == "fit" {
+                                assert!(page.clip.is_none(), "{name}: fit needs no clip");
+                                assert!(x >= inset - 0.01 && y >= inset - 0.01 && drawn_width <= content[2] + 0.01 && drawn_height <= content[3] + 0.01, "{name}: fit stays inside the margins");
+                                assert!((drawn_width - content[2]).abs() < 0.01 || (drawn_height - content[3]).abs() < 0.01, "{name}: fit touches two sides of the margin box");
+                            } else {
+                                assert_close(&page.clip.expect("fill clips to the margin box"), &content, &name);
+                                assert!(drawn_width >= content[2] - 0.01 && drawn_height >= content[3] - 0.01, "{name}: fill covers the margin box");
+                                assert!((drawn_width - content[2]).abs() < 0.01 || (drawn_height - content[3]).abs() < 0.01, "{name}: fill trims only one direction");
+                            }
+                            assert_eq!(page.image_bytes, plain.image_bytes, "{name}: the embedded image data is unchanged by layout");
+                            assert_eq!(page.image_dict, plain.image_dict, "{name}: the image keeps its own size and encoding");
+                        }
+                        assert_eq!(pages[0].image_bytes, jpeg, "{name}: the JPEG is still embedded byte for byte");
+                        combinations += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(combinations, 36);
+        for (path, original) in paths.iter().zip(&originals) { assert_eq!(&std::fs::read(path).unwrap(), original, "{} must stay unchanged", path.display()); }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn images_to_pdf_records_the_exact_placement_for_paper_pages() {
+        let root = sandbox("images-to-pdf-layout-recorded");
+        let (paths, _) = layout_fixtures(&root);
+        let pages = combine_with(&root, "a4-small-fill", &paths[..1], serde_json::json!({ "pageSize": "a4", "margin": "small", "fit": "fill", "orientation": "automatic" }));
+        assert_close(&pages[0].media, &[0.0, 0.0, 841.8898, 595.2756], "A4 landscape for the wide image");
+        assert_close(&pages[0].clip.unwrap(), &[36.0, 36.0, 769.8898, 523.2756], "a small margin is 36 pt");
+        assert_close(&pages[0].drawn, &[-102.3306, 36.0, 1046.5512, 523.2756], "fill trims the left and right edges equally");
+        let pages = combine_with(&root, "letter-large-fit", &paths[1..2], serde_json::json!({ "pageSize": "letter", "margin": "large", "fit": "fit", "orientation": "automatic" }));
+        assert_close(&pages[0].media, &[0.0, 0.0, 612.0, 792.0], "Letter portrait for the tall image");
+        assert!(pages[0].clip.is_none());
+        assert_close(&pages[0].drawn, &[90.0, 72.0, 432.0, 648.0], "a large margin is 72 pt and fit letterboxes the sides");
+        let pages = combine_with(&root, "letter-none-fit", &paths[..1], serde_json::json!({ "pageSize": "letter", "margin": "none", "fit": "fit", "orientation": "automatic" }));
+        assert_close(&pages[0].media, &[0.0, 0.0, 792.0, 612.0], "Letter landscape");
+        assert_close(&pages[0].drawn, &[0.0, 108.0, 792.0, 396.0], "no margin reaches the page edge");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn images_to_pdf_automatic_orientation_turns_wide_images_landscape_and_others_portrait() {
+        let root = sandbox("images-to-pdf-layout-orientation");
+        let (paths, _) = layout_fixtures(&root);
+        for size in ["a4", "letter"] {
+            let pages = combine_with(&root, size, &paths, serde_json::json!({ "pageSize": size, "margin": "small", "fit": "fit", "orientation": "automatic" }));
+            let shapes = pages.iter().map(|page| if page.media[2] > page.media[3] { "landscape" } else { "portrait" }).collect::<Vec<_>>();
+            assert_eq!(shapes, ["landscape", "portrait", "portrait"], "{size}: wide, tall and square images");
+        }
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -994,10 +1145,10 @@ mod command_tests {
         assert_aggregate_failure("merge missing later input", &[pdf.clone(), missing_pdf.clone()], &missing_pdf, run_merge_pdfs(&MergePdfRequest {
             paths: vec![pdf.clone(), missing_pdf.clone()], output_location: location(&root, "merge-missing"), output_path: None,
         }));
-        assert_aggregate_success("images-to-pdf valid inputs", &[image.clone(), image_two.clone()], run_images_to_pdf(&ImagesToPdfRequest {
+        assert_aggregate_success("images-to-pdf valid inputs", &[image.clone(), image_two.clone()], run_images_to_pdf(&ImagesToPdfRequest { layout: Default::default(),
             paths: vec![image.clone(), image_two.clone()], output_location: location(&root, "images-valid"), output_path: None,
         }));
-        assert_aggregate_failure("images-to-pdf missing later input", &[image.clone(), missing_image.clone()], &missing_image, run_images_to_pdf(&ImagesToPdfRequest {
+        assert_aggregate_failure("images-to-pdf missing later input", &[image.clone(), missing_image.clone()], &missing_image, run_images_to_pdf(&ImagesToPdfRequest { layout: Default::default(),
             paths: vec![image.clone(), missing_image.clone()], output_location: location(&root, "images-missing"), output_path: None,
         }));
         assert_aggregate_success("GIF valid inputs", &[image.clone(), image_two.clone()], run_create_gif(&GifCreateRequest {
@@ -1306,7 +1457,7 @@ mod command_tests {
         let image_pdf = root.join("image-pdf.pdf");
         // Images to PDF embeds a JPEG as-is, which is the one kind of image PDF extraction returns without recompression.
         let photo = root.join("photo.jpg"); image::open(&image).unwrap().to_rgb8().save(&photo).unwrap();
-        let image_pdf_request = ImagesToPdfRequest { paths: vec![photo.clone()], output_location: OutputLocation::AlongsideInput, output_path: None };
+        let image_pdf_request = ImagesToPdfRequest { layout: Default::default(), paths: vec![photo.clone()], output_location: OutputLocation::AlongsideInput, output_path: None };
         let image_pdf_result = run_images_to_pdf(&image_pdf_request);
         let image_pdf_output = assert_success("images-to-pdf fixture", image_pdf_result)[0].clone();
         std::fs::rename(image_pdf_output, &image_pdf).unwrap();
@@ -1361,7 +1512,7 @@ mod command_tests {
             output_location: location(&root, "composed pdf editor"),
         }))));
         outputs.extend(named(&mut naming, "protect_files", pdf_two.clone(), assert_success("lock", protect_files(RunEvents::silent(), PasswordRequest { paths: vec![pdf_two.clone()], password: crate::kit::TEST_OVERRIDE_PASSWORD.into(), password_overrides: Default::default(), output_location: location(&root, "protect") }))));
-        outputs.extend(named(&mut naming, "images_to_pdf", image.clone(), assert_aggregate_success("images to pdf", &[image.clone(), image_two.clone()], run_images_to_pdf(&ImagesToPdfRequest { paths: vec![image.clone(), image_two.clone()], output_location: location(&root, "images to pdf"), output_path: None }))));
+        outputs.extend(named(&mut naming, "images_to_pdf", image.clone(), assert_aggregate_success("images to pdf", &[image.clone(), image_two.clone()], run_images_to_pdf(&ImagesToPdfRequest { layout: Default::default(), paths: vec![image.clone(), image_two.clone()], output_location: location(&root, "images to pdf"), output_path: None }))));
         outputs.extend(named(&mut naming, "pdf_to_images", pdf.clone(), assert_success("pdf to images", pdf_to_images(RunEvents::silent(), PdfToImagesRequest { paths: vec![pdf.clone()], dpi: 72, format: "png".into(), page_range: None, pages: None, output_location: location(&root, "pdf to images") }))));
         let selected_image_outputs = assert_success("pdf selected pages to images", pdf_to_images(RunEvents::silent(), PdfToImagesRequest { paths: vec![pdf.clone()], dpi: 72, format: "png".into(), page_range: None, pages: Some(vec![1]), output_location: location(&root, "pdf selected pages to images") }));
         assert_eq!(selected_image_outputs.len(), 1, "selected PDF page rendering must produce only the selected page");

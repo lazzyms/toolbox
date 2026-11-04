@@ -1493,3 +1493,12 @@ kbd.shortcut-hint {
   gap: 7px;
   overflow-x: auto;
 }
+
+/* Images to PDF: page layout options and the paper preview geometry. */
+.images-to-pdf-option { display: grid; gap: 6px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.images-to-pdf-option > legend { margin-bottom: 6px; padding: 0; }
+.images-to-pdf-preview { display: grid; gap: 8px; margin: 0; }
+.images-to-pdf-preview-stage { display: grid; place-items: center; height: 150px; border-radius: 8px; background: var(--muted); }
+.images-to-pdf-paper { display: flex; box-sizing: border-box; overflow: hidden; background: var(--pdf-document-page, oklch(1 0 0)); box-shadow: 0 1px 3px rgb(0 0 0 / 25%); }
+.images-to-pdf-paper img { flex: 1; min-width: 0; min-height: 0; width: 100%; height: 100%; object-fit: contain; }
+.images-to-pdf-paper img[data-fit="fill"] { object-fit: cover; }

@@ -1116,7 +1116,8 @@ test("Images to PDF takes HEIC and HEIF, refuses GIF, sends no quality setting a
 
     const [request] = await requestFor(page, "images_to_pdf");
     expect(request.paths).toEqual(["/local/IMG_0001.heic", "/local/IMG_0002.HEIF", "/local/receipt.jpg"]);
-    expect(Object.keys(request).sort()).toEqual(["outputLocation", "outputPath", "paths"]);
+    expect(Object.keys(request).sort()).toEqual(["outputLocation", "outputPath", "pageSize", "paths"]);
+    expect(request.pageSize).toBe("matchImage");
     expect(request).not.toHaveProperty("quality");
     const reduced = results(page).filter({ hasText: "IMG_0001.heic" });
     await expect(reduced).toHaveAttribute("data-tone", "warn");
