@@ -286,6 +286,15 @@ export interface CompressImagesRequest extends ToolRequest {
   lossless?: boolean;
 }
 
+export type OcrMode = "searchablePdf" | "text";
+
+export interface OcrRequest extends ToolRequest {
+  pageRange: string | null;
+  mode: OcrMode;
+  force: boolean;
+  languages: string[];
+}
+
 export interface ConvertImagesRequest extends ToolRequest {
   format: "jpg" | "png" | "webp" | "heic";
 }

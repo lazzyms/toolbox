@@ -6,6 +6,7 @@ import { parsePageRange, selectedPageLabel } from "../shared/workspaceValidation
 import { displayedBoxToPdfRect, type DisplayedBox, type PdfDocument } from "../features/pdf-editor";
 import type { AtomicToolId, ToolDefinition, ToolResult } from "../contracts";
 import { failedOutcome } from "../jobOutcome";
+import { ocrRequest } from "../ocrRequest";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -167,7 +168,7 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
         }
         if (activeUtility.id === "pdf-ocr") {
           return invoke<ToolResult>("ocr_pdf", { runId,
-            request: { paths, pages: pages ?? null, outputLocation },
+            request: ocrRequest(paths, outputLocation, selectedPageRange),
           });
         }
         return invoke<ToolResult>("extract_pdf_images", { runId,
