@@ -589,6 +589,62 @@ fn field_is_signed<'a>(document: &'a Document, value: &'a Object, inherited_type
         .is_some_and(|kids| kids.iter().any(|kid| field_is_signed(document, kid, field_type, seen)))
 }
 
+/// Takes the signature values out of a copy, so the copy is honestly unsigned rather than carrying a signature that no longer verifies.
+/// The empty signature fields stay, and the original file is never touched.
+pub(crate) fn remove_signatures(document: &mut Document) -> Result<(), String> {
+    let mut seen = HashSet::new();
+    let mut signed = Vec::new();
+    let roots = document.catalog().ok()
+        .and_then(|catalog| resolve(document, catalog.get(b"AcroForm").ok()?).ok()?.as_dict().ok())
+        .and_then(|form| resolve(document, form.get(b"Fields").ok()?).ok()?.as_array().ok())
+        .into_iter().flatten()
+        .chain(document.get_pages().values()
+            .filter_map(|page| resolve(document, document.get_dictionary(*page).ok()?.get(b"Annots").ok()?).ok()?.as_array().ok())
+            .flatten())
+        .cloned().collect::<Vec<_>>();
+    for root in &roots {
+        collect_signed_fields(document, root, None, &mut seen, &mut signed);
+    }
+    for field in signed {
+        let value = document.get_dictionary_mut(field).map_err(|error| error.to_string())?.remove(b"V");
+        if let Some(Object::Reference(value)) = value {
+            document.objects.remove(&value);
+        }
+    }
+    document.catalog_mut().map_err(|error| error.to_string())?.remove(b"Perms");
+    let form = document.catalog().map_err(|error| error.to_string())?.get(b"AcroForm").ok().cloned();
+    match form {
+        Some(Object::Reference(id)) => { document.get_dictionary_mut(id).map_err(|error| error.to_string())?.remove(b"SigFlags"); }
+        Some(Object::Dictionary(_)) => {
+            if let Ok(Object::Dictionary(form)) = document.catalog_mut().map_err(|error| error.to_string())?.get_mut(b"AcroForm") {
+                form.remove(b"SigFlags");
+            }
+        }
+        _ => {}
+    }
+    if has_signed_signature_field(document) {
+        return Err("The digital signature couldn't be removed from the copy, so nothing was saved".to_string());
+    }
+    Ok(())
+}
+
+fn collect_signed_fields(document: &Document, value: &Object, inherited_type: Option<Vec<u8>>, seen: &mut HashSet<ObjectId>, signed: &mut Vec<ObjectId>) {
+    let Object::Reference(id) = value else { return };
+    if !seen.insert(*id) {
+        return;
+    }
+    let Ok(field) = document.get_dictionary(*id) else { return };
+    let field_type = field.get(b"FT").ok().and_then(|value| value.as_name().ok()).map(<[u8]>::to_vec).or(inherited_type);
+    let has_value = field.get(b"V").ok().and_then(|value| resolve(document, value).ok()).is_some_and(|value| value.as_dict().is_ok());
+    if field_type.as_deref() == Some(b"Sig".as_slice()) && has_value {
+        signed.push(*id);
+    }
+    let kids = field.get(b"Kids").ok().and_then(|kids| resolve(document, kids).ok()?.as_array().ok()).cloned().unwrap_or_default();
+    for kid in &kids {
+        collect_signed_fields(document, kid, field_type.clone(), seen, signed);
+    }
+}
+
 pub fn note_signature_removed(outcome: JobOutcome, signed: bool) -> JobOutcome {
     if !signed {
         return outcome;
@@ -614,6 +670,16 @@ fn page_has_internal_navigation(document: &Document, page: ObjectId) -> Result<b
 }
 
 pub(crate) fn mutation_preflight(document: &Document, intent: PdfMutationIntent) -> Result<PdfMutationPreflight, String> {
+    preflight(document, intent, false)
+}
+
+/// The scene export accepts a signed source, because it removes the signature and reports it with the shared warning.
+/// Other signature evidence without a signed field still fails closed, as it does for every other mutation.
+pub(crate) fn signed_mutation_preflight(document: &Document, intent: PdfMutationIntent) -> Result<PdfMutationPreflight, String> {
+    preflight(document, intent, true)
+}
+
+fn preflight(document: &Document, intent: PdfMutationIntent, allow_signed: bool) -> Result<PdfMutationPreflight, String> {
     if document.is_encrypted() {
         return Err("Unlock the PDF before editing".to_string());
     }
@@ -651,7 +717,7 @@ pub(crate) fn mutation_preflight(document: &Document, intent: PdfMutationIntent)
             return Err(unsupported());
         }
     }
-    if document_has_signature(document, catalog, &pages)? {
+    if document_has_signature(document, catalog, &pages)? && !(allow_signed && has_signed_signature_field(document)) {
         return Err("Digitally signed PDFs cannot be edited because this mutation would invalidate the signature; remove the signature or use an unsigned copy".to_string());
     }
     let annotated_pages = validate_page_annotations(document, &pages)?;

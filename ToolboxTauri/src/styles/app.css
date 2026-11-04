@@ -1392,6 +1392,9 @@ body {
 .scene-original-note { margin-left: auto; color: var(--muted-foreground); white-space: nowrap; }
 .scene-empty { min-height: calc(100dvh - 275px); }
 .scene-error { padding: 8px 12px; margin: 0; font-size: 12px; color: var(--destructive); }
+.scene-signature-notice { margin: 8px 10px 0; }
+.scene-signature-notice-icon { margin-top: 2px; color: var(--warning); }
+.scene-signature-notice p { margin: 0; }
 @media (max-width: 900px) {
   .command-center:has(.pdf-scene-workspace) { padding: 8px; }
   .scene-tools { gap: 2px; }
