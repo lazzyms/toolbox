@@ -69,20 +69,32 @@ export function runVersion(path) {
   return match ? match[1] : null;
 }
 
-export function inspectQpdf({ path, target, pin = readPin(), readVersion = runVersion }) {
+function inspectNativeBinary({ name, path, target }) {
   const expected = TARGETS[target];
   if (!expected) throw new Error(`Unsupported release target ${target}; expected one of ${Object.keys(TARGETS).join(", ")}`);
   if (!path || !existsSync(path) || !statSync(path).isFile()) {
-    return { cause: "missing", message: `qpdf is missing at ${path}` };
+    return { cause: "missing", message: `${name} is missing at ${path}` };
   }
   const found = binaryArchitectures(readFileSync(path));
   if (found.format !== expected.format || !found.architectures.includes(expected.architecture)) {
     const described = found.format === "unknown" ? "not a native executable" : `${found.format} ${found.architectures.join("+")}`;
     return {
       cause: "wrong-architecture",
-      message: `qpdf at ${path} is ${described}; ${target} needs a native ${expected.format} ${expected.architecture} binary and would otherwise run emulated or not at all`,
+      message: `${name} at ${path} is ${described}; ${target} needs a native ${expected.format} ${expected.architecture} binary and would otherwise run emulated or not at all`,
     };
   }
+  return { cause: null, message: `${name} is native ${expected.architecture} for ${target}` };
+}
+
+// The bundled page renderer (pdftoppm) has no pinned version; it only has to be native to the target.
+export function inspectRenderer({ path, target }) {
+  return inspectNativeBinary({ name: "page renderer", path, target });
+}
+
+export function inspectQpdf({ path, target, pin = readPin(), readVersion = runVersion }) {
+  const native = inspectNativeBinary({ name: "qpdf", path, target });
+  if (native.cause) return native;
+  const expected = TARGETS[target];
   const version = readVersion(path);
   const parsed = parseVersion(version);
   if (!parsed) return { cause: "unrunnable", message: `qpdf at ${path} did not report a version` };

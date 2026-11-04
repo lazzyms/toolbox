@@ -1800,6 +1800,46 @@ test("result rows show succeeded, skipped and failed states with warnings and po
     await expect(page.getByRole("heading", { name: "Lock & Unlock", exact: true })).toBeVisible();
 });
 
+test("PDF to Images fails a missing renderer, protected and damaged PDFs per file beside the rendered ones", async ({ page }) => {
+    const rendererUnavailable = "Not converted. The page renderer is unavailable. It's a bundled helper that ships inside Toolbox, so this is a problem with this copy of the app, not with your PDF. Reinstall Toolbox to restore it.";
+    const passwordProtected = "It's password-protected. Remove its password, then convert it again.";
+    await page.goto("/");
+    await page.evaluate((outcomes) => {
+        (window as TestWindow).__toolboxProcessingResults = outcomes;
+    }, [
+        succeeded("/local/brochure.pdf", ["/local/out/brochure-images-1.png"]),
+        failed("/local/catalog.pdf", "unavailable", rendererUnavailable),
+        failed("/local/payroll.pdf", "invalidInput", passwordProtected, {
+            failure: { kind: "invalidInput", message: passwordProtected, pointer: { kind: "tool", toolId: "lock-unlock" } },
+        }),
+        failed("/local/truncated.pdf", "processing", "Not a readable PDF. The file may be damaged or incomplete. Nothing was saved."),
+        succeeded("/local/report.pdf", ["/local/out/report-images-1.png"]),
+    ]);
+    await openFromHome(page, "PDF to Images");
+    await chooseFixture(page, pdfFixturePath);
+    await page.getByRole("button", { name: "Export PDF to Images", exact: true }).click();
+    const rows = page.getByRole("list", { name: "Results" }).getByRole("listitem");
+
+    await expect(rows).toHaveCount(5);
+    await expect(rows.nth(0)).toHaveAttribute("data-state", "succeeded");
+    await expect(rows.nth(0)).toContainText("brochure-images-1.png");
+    await expect(rows.nth(4)).toHaveAttribute("data-state", "succeeded");
+    await expect(rows.nth(4)).toContainText("report-images-1.png");
+
+    await expect(rows.nth(1)).toHaveAttribute("data-tone", "skip");
+    await expect(rows.nth(1)).toContainText("Unavailable");
+    await expect(rows.nth(1)).toContainText("bundled helper that ships inside Toolbox, so this is a problem with this copy of the app, not with your PDF");
+
+    await expect(rows.nth(3)).toHaveAttribute("data-tone", "fail");
+    await expect(rows.nth(3)).toContainText("Not a readable PDF.");
+
+    await expect(rows.nth(2)).toHaveAttribute("data-tone", "fail");
+    await expect(rows.nth(2)).toContainText(passwordProtected);
+    await expect(page.getByRole("button", { name: "Open Lock & Unlock", exact: true })).toHaveCount(1);
+    await rows.nth(2).getByRole("button", { name: "Open Lock & Unlock", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Lock & Unlock", exact: true })).toBeVisible();
+});
+
 test("a read-only output folder failure points to the output location setting instead of Retry", async ({ page }) => {
     const rows = await runCompressImagesWith(page, [
         failed("/locked/scan.png", "processing", "The output folder is read-only. Nothing was saved.", {

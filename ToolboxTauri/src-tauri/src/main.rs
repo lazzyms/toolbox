@@ -2522,4 +2522,94 @@ mod command_tests {
         assert_eq!(std::fs::read(&blocked).unwrap(), original, "originals stay untouched");
         assert_eq!(listing, vec![std::ffi::OsString::from("scan.png")], "nothing is left in the read-only folder");
     }
+
+    /// A stand-in for pdftoppm: it writes one image where the real renderer would, and never
+    /// finishes for an input named `slow.pdf`.
+    #[cfg(unix)]
+    fn fake_pdf_renderer(root: &std::path::Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let script = root.join("pdftoppm");
+        std::fs::write(&script, "#!/bin/sh\nsingle=\nfor arg in \"$@\"; do prefix=\"$arg\"; case \"$arg\" in *slow.pdf) exec sleep 30;; -singlefile) single=1;; esac; done\nif [ -n \"$single\" ]; then printf page > \"$prefix.png\"; else printf page > \"$prefix-1.png\"; fi\n").unwrap();
+        let mut permissions = std::fs::metadata(&script).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&script, permissions).unwrap();
+        script
+    }
+
+    fn run_pdf_to_images_with_renderer(renderer: &std::path::Path, paths: Vec<PathBuf>, output_location: OutputLocation) -> Vec<JobOutcome> {
+        let previous = std::env::var_os("TOOLBOX_PDFTOPPM_PATH");
+        std::env::set_var("TOOLBOX_PDFTOPPM_PATH", renderer);
+        let outcomes = tauri::async_runtime::block_on(pdf_to_images(RunEvents::silent(), PdfToImagesRequest {
+            paths, dpi: 72, format: "png".into(), page_range: None, pages: None, output_location,
+        }));
+        match previous {
+            Some(value) => std::env::set_var("TOOLBOX_PDFTOPPM_PATH", value),
+            None => std::env::remove_var("TOOLBOX_PDFTOPPM_PATH"),
+        }
+        outcomes
+    }
+
+    #[test]
+    fn pdf_to_images_fails_each_file_as_unavailable_when_the_renderer_override_points_nowhere() {
+        let _guard = crate::kit::lock_process_env();
+        let root = sandbox("pdf-to-images-no-renderer");
+        let inputs = ["first", "second"].map(|stem| root.join(format!("{stem}.pdf"))).to_vec();
+        for input in &inputs { make_pdf(input, 2); }
+        let output = location(&root, "images");
+
+        let outcomes = run_pdf_to_images_with_renderer(&root.join("missing").join("pdftoppm"), inputs.clone(), output.clone());
+
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), inputs);
+        for outcome in &outcomes {
+            match &outcome.state {
+                OutcomeState::Failed { output_paths, error } => {
+                    assert_eq!(error.kind, ErrorKind::Unavailable);
+                    assert_eq!(error.message, crate::kit::pdf::remaining::PDF_RENDERER_UNAVAILABLE);
+                    assert!(error.message.contains("bundled helper") && error.message.contains("not with your PDF"), "{}", error.message);
+                    assert!(output_paths.is_empty());
+                }
+                other => panic!("a missing renderer must fail the file, got {other:?}"),
+            }
+        }
+        let OutputLocation::CustomFolder(folder) = output else { unreachable!() };
+        assert_eq!(std::fs::read_dir(folder).unwrap().count(), 0, "nothing is saved without a renderer");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pdf_to_images_fails_protected_and_damaged_pdfs_alone_while_the_rest_render() {
+        use crate::kit::contracts::OutcomePointer;
+        let _split = crate::kit::pdf::remaining::tests::SPLIT_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = crate::kit::lock_process_env();
+        let root = sandbox("pdf-to-images-mixed-batch");
+        let renderer = fake_pdf_renderer(&root);
+        let inputs = ["first", "locked", "damaged", "last"].map(|stem| root.join(format!("{stem}.pdf"))).to_vec();
+        make_pdf(&inputs[0], 1);
+        std::fs::write(&inputs[1], crate::kit::password::tests::pdf(Some(("owner", "user")))).unwrap();
+        std::fs::write(&inputs[2], b"%PDF-1.7 damaged").unwrap();
+        make_pdf(&inputs[3], 1);
+        let originals = inputs.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+
+        let outcomes = run_pdf_to_images_with_renderer(&renderer, inputs.clone(), location(&root, "images"));
+
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), inputs, "the response keeps input order");
+        for rendered in [&outcomes[0], &outcomes[3]] {
+            assert!(rendered.error().is_none(), "{}", rendered.error().cloned().unwrap_or_default());
+            assert_eq!(rendered.output_paths().len(), 1);
+            assert!(rendered.output_paths()[0].is_file());
+        }
+        let protected = outcomes[1].error().expect("a password-protected PDF fails");
+        assert_eq!(protected.kind, ErrorKind::InvalidInput);
+        assert_eq!(protected.message, crate::kit::pdf::remaining::PDF_TO_IMAGES_PASSWORD_PROTECTED);
+        assert_eq!(protected.pointer, Some(OutcomePointer::Tool { tool_id: "lock-unlock".into() }), "the row points to Remove Password");
+        assert!(outcomes[1].output_paths().is_empty());
+        let damaged = outcomes[2].error().expect("a damaged PDF fails");
+        assert_eq!(damaged, &crate::kit::password::unreadable(crate::kit::password::ProtectedFormat::Pdf));
+        assert!(outcomes[2].output_paths().is_empty());
+        for (path, original) in inputs.iter().zip(originals) {
+            assert_eq!(std::fs::read(path).unwrap(), original, "originals stay untouched");
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

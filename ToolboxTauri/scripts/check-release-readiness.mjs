@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { inspectQpdf, readPin } from "./qpdf-pin.mjs";
+import { inspectQpdf, inspectRenderer, readPin } from "./qpdf-pin.mjs";
 
 const projectFile = (path) => new URL(`../${path}`, import.meta.url);
 const config = JSON.parse(readFileSync(projectFile("src-tauri/tauri.conf.json"), "utf8"));
@@ -25,11 +25,20 @@ const workflow = readFileSync(projectFile("../.github/workflows/tauri-release.ym
 const notesHeader = readFileSync(projectFile("../.github/release-notes-header.md"), "utf8");
 if (!workflow.includes("node ToolboxTauri/scripts/release-notes.mjs") || !workflow.includes("--notes-file release-notes.md")) throw new Error("Releases must use the first-launch header and the PR release-notes changelog");
 if (!/Privacy & Security[\s\S]*Open Anyway/.test(notesHeader)) throw new Error("Release notes header must explain the macOS Open Anyway step");
+if (!/check-release-readiness\.mjs --renderer \S*pdftoppm\.exe --target \$\{\{ matrix\.target \}\}/.test(workflow)) throw new Error("Windows releases must refuse a page renderer that is missing or not native to the target");
 const pin = readPin();
 console.log(`Release configuration passed: ${requiredIcons.length} icons, all Tauri targets, updater and ${canonicalExtensions.length} file associations configured, qpdf minimum ${pin.minimumVersion}`);
 
-const { values } = parseArgs({ options: { qpdf: { type: "string" }, target: { type: "string" } } });
-if (values.qpdf !== undefined || values.target !== undefined) {
+const { values } = parseArgs({ options: { qpdf: { type: "string" }, renderer: { type: "string" }, target: { type: "string" } } });
+if (values.renderer !== undefined) {
+  const result = inspectRenderer({ path: values.renderer, target: values.target });
+  if (result.cause) {
+    console.error(`page renderer release check failed (${result.cause}): ${result.message}`);
+    process.exit(1);
+  }
+  console.log(`page renderer release check passed: ${result.message}`);
+}
+if (values.qpdf !== undefined || (values.target !== undefined && values.renderer === undefined)) {
   const result = inspectQpdf({ path: values.qpdf, target: values.target, pin });
   if (result.cause) {
     console.error(`qpdf release check failed (${result.cause}): ${result.message}`);
@@ -37,4 +46,3 @@ if (values.qpdf !== undefined || values.target !== undefined) {
   }
   console.log(`qpdf release check passed: ${result.message}`);
 }
-
