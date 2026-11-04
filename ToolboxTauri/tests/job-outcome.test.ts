@@ -13,9 +13,9 @@ test("native-shaped outcomes parse into the TypeScript contract for all three st
   const outcomes = parseToolResult(nativeSamples);
 
   assert.deepEqual(outcomes, nativeSamples);
-  assert.deepEqual(outcomes.map((outcome) => outcome.state), ["succeeded", "skipped", "skipped", "failed", "failed"]);
+  assert.deepEqual(outcomes.map((outcome) => outcome.state), ["succeeded", "skipped", "skipped", "failed", "failed", "succeeded"]);
 
-  const [succeeded, pointedSkip, plainSkip, failed, limited] = outcomes;
+  const [succeeded, pointedSkip, plainSkip, failed, limited, notCarried] = outcomes;
   assert.equal(succeeded.state === "succeeded" && succeeded.outputPaths[0], "signed-edited.pdf");
   assert.deepEqual(succeeded.warnings.map((warning) => warning.code), ["signatureRemoved", "fontSubstituted"]);
   assert.deepEqual(
@@ -37,6 +37,12 @@ test("native-shaped outcomes parse into the TypeScript contract for all three st
   assert.ok(limited.state === "failed" && limited.failure.kind === "limitExceeded");
   assert.equal(limited.failure.details.limit, "time");
   assert.deepEqual(limited.outputPaths, ["drawings-page-1.png"], "a stopped run keeps the parts it saved");
+
+  assert.deepEqual(notCarried.warnings.map((warning) => warning.code), ["bookmarksNotCarried", "tagsNotCarried"]);
+  assert.deepEqual(
+    notCarried.warnings[0].code === "bookmarksNotCarried" && notCarried.warnings[0].details,
+    { into: "the merged file" },
+  );
 });
 
 test("outcomes from before the state field are rejected at the boundary", () => {

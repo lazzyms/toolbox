@@ -54,6 +54,10 @@ export const warningText = (warning: OutcomeWarning): string => {
             return `Saved as ${warning.details.finalName}. Renamed to avoid replacing an existing file.`;
         case "precisionReduced":
             return "Some values were rounded to the precision this format can store.";
+        case "bookmarksNotCarried":
+            return `Bookmarks weren’t carried into ${warning.details.into}.`;
+        case "tagsNotCarried":
+            return `Accessibility tags weren’t carried into ${warning.details.into}.`;
     }
 };
 

@@ -388,6 +388,9 @@ pub enum WarningKind {
     FontSubstituted { requested_family: String, actual_family: String },
     RenamedToAvoidReplacing { chosen_name: String, final_name: String },
     PrecisionReduced,
+    /// `into` names what was saved, such as "the merged file" or "the parts".
+    BookmarksNotCarried { into: String },
+    TagsNotCarried { into: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -632,9 +635,11 @@ mod tests {
             WarningKind::FontSubstituted { requested_family: "A".into(), actual_family: "B".into() },
             WarningKind::RenamedToAvoidReplacing { chosen_name: "a".into(), final_name: "b".into() },
             WarningKind::PrecisionReduced,
+            WarningKind::BookmarksNotCarried { into: "the parts".into() },
+            WarningKind::TagsNotCarried { into: "the parts".into() },
         ];
         let codes = warnings.into_iter().map(|kind| serde_json::to_value(kind).unwrap()["code"].clone()).collect::<Vec<_>>();
-        assert_eq!(codes, ["signatureRemoved", "fontSubstituted", "renamedToAvoidReplacing", "precisionReduced"]);
+        assert_eq!(codes, ["signatureRemoved", "fontSubstituted", "renamedToAvoidReplacing", "precisionReduced", "bookmarksNotCarried", "tagsNotCarried"]);
     }
 
     #[test]
@@ -667,6 +672,9 @@ mod tests {
                 vec![PathBuf::from("drawings-page-1.png")],
                 ToolError::limit_exceeded(LimitKind::Time, "Took longer than 5 minutes and was stopped. 1 part was saved before it stopped."),
             ),
+            JobOutcome::succeeded(PathBuf::from("minutes.pdf"), vec![PathBuf::from("board-merged.pdf")], "Pages 3–5 of board-merged.pdf.")
+                .with_warning(OutcomeWarning { kind: WarningKind::BookmarksNotCarried { into: "the merged file".into() }, message: "Bookmarks weren't carried into the merged file.".into() })
+                .with_warning(OutcomeWarning { kind: WarningKind::TagsNotCarried { into: "the merged file".into() }, message: "Accessibility tags weren't carried into the merged file.".into() }),
         ];
 
         assert_eq!(serde_json::to_value(&samples).unwrap(), shared);
