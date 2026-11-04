@@ -25,7 +25,7 @@ const outputPreviewLimitations: Partial<Record<AtomicToolId, string>> = {
   "pdf-to-text": "Output preview unavailable. Export creates a text file from the selected pages.",
   "pdf-image-extract": "Output preview unavailable. Export extracts embedded JPEG images from the selected pages.",
   "pdf-extract-pages": "Output preview unavailable. Export creates a PDF containing the selected pages.",
-  "pdf-ocr": "Output preview unavailable. OCR is unavailable in this build.",
+  "pdf-ocr": "Output preview unavailable. Export recognizes the text on each page and saves it as a text file.",
   "pdf-rotate": "Output preview unavailable. Export saves a copy with the selected pages turned.",
   "pdf-repair": "Output preview unavailable. Export rebuilds each PDF and saves a fixed copy next to it.",
   "pdf-redact": "Output preview unavailable. Export saves a copy with the boxed area removed for good. Redacted pages become images.",
@@ -167,8 +167,10 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
           });
         }
         if (activeUtility.id === "pdf-ocr") {
+          // Every page picked means no range, so each file in a batch is read in full.
+          const everyPage = document && selectedPages.length === document.pages.length;
           return invoke<ToolResult>("ocr_pdf", { runId,
-            request: ocrRequest(paths, outputLocation, selectedPageRange),
+            request: ocrRequest(paths, outputLocation, everyPage ? pageRange || null : selectedPageRange),
           });
         }
         return invoke<ToolResult>("extract_pdf_images", { runId,
