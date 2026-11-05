@@ -1408,6 +1408,40 @@ body {
 .settings-folder > svg { width:16px; height:16px; flex:none; color:var(--muted-foreground); }
 .settings-folder-path { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:240px; }
 .settings-update-status { min-height: 24px; border: 0; padding: 0; background: transparent; color: var(--muted-foreground); font-size: 12px; }
+.packs { display:flex; flex-direction:column; gap:18px; max-width:680px; }
+.packs-intro { display:flex; align-items:flex-start; gap:16px; }
+.packs-intro-text { flex:1; display:flex; flex-direction:column; gap:6px; min-width:0; }
+.packs-intro h2, .packs-intro p { margin:0; }
+.packs > p { margin:0; }
+.pack-list { list-style:none; margin:0; padding:0; border-top:1px solid var(--border); }
+.pack-row { display:flex; flex-direction:column; gap:10px; padding:12px 0; border-bottom:1px solid var(--border); }
+.pack-row-main { display:grid; grid-template-columns:22px minmax(0,1fr) auto; gap:10px; align-items:center; }
+.pack-row-text { display:flex; flex-direction:column; gap:3px; min-width:0; }
+.pack-row-name { font-size:13px; font-weight:500; }
+.pack-row-end { display:flex; flex-wrap:wrap; align-items:center; justify-content:flex-end; gap:8px; max-width:360px; }
+.pack-row-status { text-align:right; }
+.pack-row-status[data-status="damaged"], .pack-row-status[data-status="failed"] { color:var(--destructive); }
+.pack-row-status[data-status="incompatible"], .pack-row-status[data-status="inUse"] { color:var(--warning); }
+.pack-progress { display:block; width:110px; height:6px; border-radius:3px; background:var(--border); overflow:hidden; }
+.pack-progress > span { display:block; height:100%; background:var(--primary); }
+.packs-banner[data-tone="warning"] .settings-note-content > svg { color:var(--warning); }
+.packs-banner[data-tone="destructive"] .settings-note-content > svg { color:var(--destructive); }
+.packs-banner .settings-note-content > p { flex:1; }
+.pack-facts { display:grid; grid-template-columns:90px minmax(0,1fr); gap:4px 12px; margin:0; padding:10px 12px; border-radius:8px; background:var(--muted); font-size:12px; }
+.pack-facts dt { color:var(--muted-foreground); }
+.pack-facts dd { margin:0; overflow-wrap:anywhere; }
+.pack-chevron { transition:transform .15s; }
+.pack-chevron[data-open="true"] { transform:rotate(90deg); }
+.pack-details { display:grid; grid-template-columns:130px minmax(0,1fr); gap:6px 12px; margin:0 0 0 32px; padding:12px 14px; border-radius:8px; background:var(--muted); font-size:12px; }
+.pack-details dt { color:var(--muted-foreground); }
+.pack-details dd { margin:0; }
+@media (max-width: 560px) {
+  .pack-row-main { grid-template-columns:22px minmax(0,1fr); }
+  .pack-row-end { grid-column:2; justify-content:flex-start; }
+  .pack-row-status { text-align:left; }
+  .pack-details { grid-template-columns:1fr; margin-left:0; }
+  .packs-intro { flex-wrap:wrap; }
+}
 
 /* Batch password with per-file overrides */
 .password-options { display: grid; gap: 10px; }
