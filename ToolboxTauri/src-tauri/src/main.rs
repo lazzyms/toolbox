@@ -880,6 +880,54 @@ mod command_tests {
     }
 
     #[test]
+    fn crop_command_applies_one_relative_rectangle_from_the_view_payload_to_every_page_size() {
+        use lopdf::{Document, Object};
+        let root = sandbox("crop-rectangle-batch");
+        let (a4, letter, turned) = (root.join("a4.pdf"), root.join("letter.pdf"), root.join("turned.pdf"));
+        for (path, media, rotate) in [(&a4, [595.2756, 841.8898], None), (&letter, [612.0, 792.0], None), (&turned, [612.0, 792.0], Some(90))] {
+            make_pdf(path, 1);
+            let mut document = Document::load(path).unwrap();
+            let page = document.get_pages().values().copied().next().unwrap();
+            let page = document.get_dictionary_mut(page).unwrap();
+            page.set("MediaBox", vec![Object::Real(0.0), Object::Real(0.0), Object::Real(media[0]), Object::Real(media[1])]);
+            if let Some(rotate) = rotate { page.set("Rotate", rotate); }
+            document.save(path).unwrap();
+        }
+        let originals = [&a4, &letter, &turned].map(|path| std::fs::read(path).unwrap());
+        // The exact request the Crop and Resize view sends: displayed-page fractions with a top-left origin.
+        let request = serde_json::from_value::<CropPdfRequest>(serde_json::json!({
+            "paths": [a4.clone(), letter.clone(), turned.clone()],
+            "spec": { "kind": "rectangle", "left": 0.25, "top": 0.125, "width": 0.5, "height": 0.75 },
+            "scope": "all",
+            "outputLocation": location(&root, "crop-rectangle"),
+        })).expect("Crop and Resize view payload for crop_pdf");
+        let outcomes = tauri::async_runtime::block_on(crop_pdf(RunEvents::silent(), request));
+
+        assert_eq!(outcomes.len(), 3);
+        for ((outcome, original), path) in outcomes.iter().zip(&originals).zip([&a4, &letter, &turned]) {
+            assert!(outcome.error().is_none(), "{path:?}: {:?}", outcome.error());
+            assert_eq!(&std::fs::read(path).unwrap(), original, "{path:?}: original must stay");
+        }
+        let crop_box = |outcome: &JobOutcome| {
+            let document = Document::load(outcome.output_paths().first().unwrap()).unwrap();
+            let page = document.get_pages().values().copied().next().unwrap();
+            let values = document.get_dictionary(page).unwrap().get(b"CropBox").unwrap().as_array().unwrap().iter().map(|value| value.as_float().unwrap()).collect::<Vec<_>>();
+            [values[0], values[1], values[2], values[3]]
+        };
+        let near = |actual: [f32; 4], expected: [f32; 4]| actual.iter().zip(expected).all(|(a, e)| (a - e).abs() < 0.01);
+        // The same quarter-in, eighth-down area of each upright page, in its own points.
+        let a4_box = crop_box(&outcomes[0]);
+        assert!(near(a4_box, [148.8189, 105.2362, 446.4567, 736.6536]), "{a4_box:?}");
+        let letter_box = crop_box(&outcomes[1]);
+        assert!(near(letter_box, [153.0, 99.0, 459.0, 693.0]), "{letter_box:?}");
+        // On screen the turned page is 792 x 612; its displayed top is the user-space left edge.
+        let turned_box = crop_box(&outcomes[2]);
+        assert!(near(turned_box, [76.5, 198.0, 535.5, 594.0]), "{turned_box:?}");
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn sign_command_rejects_empty_selected_scope_at_the_boundary() {
         let root = sandbox("sign-empty-selection");
         let input = root.join("source.pdf");
