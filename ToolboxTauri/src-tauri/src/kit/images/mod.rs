@@ -7,7 +7,7 @@ use image::{DynamicImage, ImageEncoder};
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::{OutcomeWarning, SkipCode, SkipReason, ToolError, WarningKind};
 
-mod source;
+pub(crate) mod source;
 pub(crate) use source::decode;
 pub(crate) use source::{DecodedImage, ImageFamily};
 
