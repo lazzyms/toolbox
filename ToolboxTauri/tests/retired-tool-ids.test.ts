@@ -37,7 +37,7 @@ const fixtureTable = parseRetiredToolIds({
   version: 2,
   retired: {
     "file-unlock": "lock-unlock",
-    "pdf-compress-legacy": "pdf-compress",
+    "pdf-compress-legacy": "compress-files",
     "pdf-remove-blank-pages": "pdf-organize",
     "pdf-inspect": "removed",
   },
@@ -45,11 +45,11 @@ const fixtureTable = parseRetiredToolIds({
 
 const seededLists = () => ({
   [favoritesStorageKey]: ["file-unlock", "pdf-merge", "lock-unlock", "pdf-inspect", "mystery-tool", "pdf-merge", 7],
-  [recentStorageKey]: ["pdf-remove-blank-pages", "pdf-compress-legacy", "pdf-organize", "never-shipped", "pdf-compress"],
+  [recentStorageKey]: ["pdf-remove-blank-pages", "pdf-compress-legacy", "pdf-organize", "never-shipped", "compress-files"],
 });
 
 const migratedFavorites = ["lock-unlock", "pdf-merge"];
-const migratedRecent = ["pdf-organize", "pdf-compress"];
+const migratedRecent = ["pdf-organize", "compress-files"];
 
 test("saved favorites and recents move to replacements, drop removed and unknown ids, and keep first positions", () => {
   const storage = new MemoryStorage(seededLists());
@@ -133,11 +133,10 @@ test("the shipped table sends the retired Protect PDF id to Lock & Unlock, also 
   migrateSavedToolIds(storage);
   assert.deepEqual(storage.list(favoritesStorageKey), ["lock-unlock", "pdf-merge"]);
   assert.deepEqual(storage.list(recentStorageKey), ["pdf-merge", "lock-unlock"]);
-  assert.equal(storage.getItem(toolIdMigrationStorageKey), "3");
+  assert.equal(storage.getItem(toolIdMigrationStorageKey), String(RetiredToolIds.version));
 });
 
 test("the shipped table sends the retired Protect Office Files id to Lock & Unlock, also after the second migration ran", () => {
-  assert.equal(RetiredToolIds.version, 3);
   assert.equal(RetiredToolIds.replacements.get("office-protect"), "lock-unlock");
   assert.ok(!registeredToolIds.has("office-protect"));
   const storage = new MemoryStorage({ [favoritesStorageKey]: ["office-protect", "pdf-merge"], [recentStorageKey]: ["lock-unlock", "pdf-merge", "office-protect"] });
@@ -145,7 +144,19 @@ test("the shipped table sends the retired Protect Office Files id to Lock & Unlo
   migrateSavedToolIds(storage);
   assert.deepEqual(storage.list(favoritesStorageKey), ["lock-unlock", "pdf-merge"]);
   assert.deepEqual(storage.list(recentStorageKey), ["lock-unlock", "pdf-merge"]);
-  assert.equal(storage.getItem(toolIdMigrationStorageKey), "3");
+  assert.equal(storage.getItem(toolIdMigrationStorageKey), String(RetiredToolIds.version));
+});
+
+test("the shipped table sends the retired Compress PDF id to Compress Files, also after the third migration ran", () => {
+  assert.equal(RetiredToolIds.version, 4);
+  assert.equal(RetiredToolIds.replacements.get("pdf-compress"), "compress-files");
+  assert.ok(!registeredToolIds.has("pdf-compress"));
+  const storage = new MemoryStorage({ [favoritesStorageKey]: ["pdf-compress", "pdf-merge"], [recentStorageKey]: ["pdf-merge", "pdf-compress", "compress-files"] });
+  storage.setItem(toolIdMigrationStorageKey, "3");
+  migrateSavedToolIds(storage);
+  assert.deepEqual(storage.list(favoritesStorageKey), ["compress-files", "pdf-merge"]);
+  assert.deepEqual(storage.list(recentStorageKey), ["pdf-merge", "compress-files"]);
+  assert.equal(storage.getItem(toolIdMigrationStorageKey), "4");
 });
 
 test("the retired tool id table rejects ids that are still registered or map nowhere", () => {
