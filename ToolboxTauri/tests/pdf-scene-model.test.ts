@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  composeOrientation, interleaveDuplexScan, mirrorPages, movePagesBefore, movePagesBy, movePagesTo, movePagesToGap, removePages, resetPageRotation, reversePages, rotatePages, sceneFromDocument, swapPage,
+  composeOrientation, interleaveDuplexScan, mirrorPages, movePagesBefore, movePagesBy, movePagesTo, movePagesToGap, removePages, resetPageRotation, restorePages, reversePages, rotatePages, sceneFromDocument, swapPage,
 } from "../src/features/pdf-editor/scene";
 import { parsePageRange } from "../src/shared/workspaceValidation";
 
@@ -43,6 +43,18 @@ test("removing pages keeps the rest in order and refuses to remove every page", 
   const scene = sixPages();
   assert.deepEqual(pageIds(removePages(scene, ["source-1", "source-4"])!), ["source-0", "source-2", "source-3", "source-5"]);
   assert.equal(removePages(scene, pageIds(scene)), null);
+});
+
+test("restoring removed pages puts them back where they were, as opened, even after other pages moved", () => {
+  const opened = sixPages();
+  const edited = { pages: opened.pages.map((page) => page.id === "source-3" ? { ...page, rotation: 90 } : page) };
+  const removed = removePages(edited, ["source-1", "source-3", "source-4"])!;
+  const moved = movePagesTo(removed, ["source-5"], 0);
+  const restored = restorePages(moved, opened, [4, 3]);
+  assert.deepEqual(pageIds(restored), ["source-5", "source-0", "source-2", "source-3", "source-4"]);
+  assert.equal(restored.pages.find((page) => page.id === "source-3")!.rotation, 0);
+  assert.deepEqual(pageIds(restorePages(removed, opened, [5, 0, 1])), ["source-0", "source-1", "source-2", "source-5"]);
+  assert.equal(restorePages(removed, opened, [0, 2]), removed);
 });
 
 test("rotation turns only the selected pages and wraps at 360", () => {

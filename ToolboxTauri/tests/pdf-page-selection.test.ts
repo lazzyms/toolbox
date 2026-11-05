@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   clearPageSelection, clickPage, extendPageSelection, mirrorAnnouncement, mirroredTextNotice, orientationBadge, orientationLabel, pageOptionName, rotationAnnouncement, selectAllPages, selectPagesByParity,
-  pagePositionsLabel, selectPagesByRange, selectionCountLabel, togglePage,
+  deletePagesLabel, lastPageNotice, pagePositionsLabel, removalAnnouncement, removalRefusal, selectPagesByRange, selectionCountLabel, togglePage,
 } from "../src/features/pdf-editor/pageSelection";
 import type { PageSelection } from "../src/features/pdf-editor/pageSelection";
 
@@ -130,4 +130,24 @@ test("page positions read as a short phrase for announcements", () => {
   assert.equal(pagePositionsLabel([2, 7]), "Pages 2 and 7");
   assert.equal(pagePositionsLabel([1, 2, 3, 7, 9]), "Pages 1 to 3, 7 and 9");
   assert.equal(pagePositionsLabel([9, 1, 8]), "Pages 1, 8 and 9");
+});
+
+test("the delete button and its announcement name the pages they remove", () => {
+  assert.equal(deletePagesLabel(0), "Delete");
+  assert.equal(deletePagesLabel(1), "Delete 1 page");
+  assert.equal(deletePagesLabel(3), "Delete 3 pages");
+  assert.equal(removalAnnouncement([4, 5, 6]), "Pages 4 to 6 removed");
+  assert.equal(removalAnnouncement([2]), "Page 2 removed");
+  assert.equal(lastPageNotice, "A PDF needs at least one page. Deselect the pages you want to keep, then delete the rest.");
+});
+
+test("an export refusal of a removal reads as a title, the pages to keep and one reason per line", () => {
+  assert.deepEqual(removalRefusal("Pages 41 and 42 can’t be removed.\nBookmarks “Schedule 2” and “Signatures” point to pages 41 and 42.\nPage 42 holds fillable form fields."), {
+    title: "Pages 41 and 42 can’t be removed",
+    pages: [41, 42],
+    reasons: ["Bookmarks “Schedule 2” and “Signatures” point to pages 41 and 42.", "Page 42 holds fillable form fields."],
+  });
+  assert.deepEqual(removalRefusal("Pages 2, 4 to 6 and 9 can’t be removed.\nLinks in this PDF point to pages 2, 4 to 6 and 9.")!.pages, [2, 4, 5, 6, 9]);
+  assert.deepEqual(removalRefusal("Page 1 can’t be removed.\nThis PDF has accessibility tags that page 1 is part of.")!.pages, [1]);
+  assert.equal(removalRefusal("This PDF could not be exported safely."), null);
 });

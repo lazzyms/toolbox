@@ -7,7 +7,7 @@ import type { WorkspaceSourceAction } from '../components/ToolScaffold';
 import type { ShellEvent } from '../hooks/useShellBridge';
 import type { AtomicToolId, ToolDefinition, ToolError, ToolResult } from '../contracts';
 import { useToolAvailability } from '../ToolAvailabilityContext';
-import { ArrowLeft, ArrowRight, ArrowDown, ArrowUp, ChevronDown, FlipHorizontal2, FlipVertical2, RefreshCw, RotateCcw, RotateCw, TriangleAlert, Undo2 } from 'lucide-react';
+import { ArrowLeft, ArrowRight, ArrowDown, ArrowUp, ChevronDown, FlipHorizontal2, FlipVertical2, RefreshCw, RotateCcw, RotateCw, Trash2, TriangleAlert, Undo2 } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuTrigger } from '../components/ui/dropdown-menu';
@@ -24,14 +24,14 @@ import { Slider } from '../components/ui/slider';
 import type { PdfDocument, PdfPage, PdfTextRun } from '../features/pdf-editor/contracts';
 import { colorTokens, readColorToken } from '../features/pdf-editor/colorTokens';
 import { SceneCanvas } from '../features/pdf-editor/SceneCanvas';
-import { interleaveDuplexScan, movePagesBefore, movePagesBy, movePagesTo, movePagesToGap, mirrorPages, removePages, resetPageRotation, reversePages, rotatePages, sceneFromDocument, visibleBounds } from '../features/pdf-editor/scene';
+import { interleaveDuplexScan, movePagesBefore, movePagesBy, movePagesTo, movePagesToGap, mirrorPages, removePages, resetPageRotation, restorePages, reversePages, rotatePages, sceneFromDocument, visibleBounds } from '../features/pdf-editor/scene';
 import type { PdfScene, SceneObject, ScenePage, ScenePreview, SceneRect, SceneShape, SceneTool, SignatureMode, WatermarkPattern } from '../features/pdf-editor/scene';
 import { PREVIEW_CACHE_MAX_ENTRIES, PREVIEW_RENDER_SETTINGS, createPreviewCache, pdfEditorErrorMessage, previewCacheKey, requestWithGeneration } from './pdfPreviewHelpers';
 import type { GenerationState } from './pdfPreviewHelpers';
 import { ShortcutHint } from '../components/ShortcutHint';
 import { isWindows, primaryModifierPressed, shortcutTarget } from '../shortcuts';
-import { clearPageSelection, clickPage, extendPageSelection, mirrorAnnouncement, mirroredTextNotice, orientationBadge, orientationLabel, pageOptionName, pagePositionsLabel, rotationAnnouncement, selectAllPages, selectPagesByParity, selectPagesByRange, selectionCountLabel, togglePage } from '../features/pdf-editor/pageSelection';
-import type { PageSelection } from '../features/pdf-editor/pageSelection';
+import { clearPageSelection, clickPage, deletePagesLabel, extendPageSelection, lastPageNotice, mirrorAnnouncement, mirroredTextNotice, orientationBadge, orientationLabel, pageOptionName, pagePositionsLabel, removalAnnouncement, removalRefusal, rotationAnnouncement, selectAllPages, selectPagesByParity, selectPagesByRange, selectionCountLabel, togglePage } from '../features/pdf-editor/pageSelection';
+import type { PageSelection, RemovalRefusal } from '../features/pdf-editor/pageSelection';
 import { createSourceThumbnailQueue } from '../features/pdf-editor/sourceThumbnails';
 import type { SourceThumbnail, SourceThumbnailQueue } from '../features/pdf-editor/sourceThumbnails';
 
@@ -170,17 +170,24 @@ export const PDFEditorWorkspaceView = ({
   const initialTool = availability.allows(toolFlagBySceneTool[requestedTool])
     ? requestedTool
     : tools.find((item) => availability.allows(toolFlagBySceneTool[item.id]))?.id ?? null;
+  // Export refuses a removal that would break the PDF. The session explains it in a dialog and offers to restore the pages.
+  const [refused, setRefused] = useState<{ path: string; refusal: RemovalRefusal } | null>(null);
   return <ToolScaffold utility={utility} variant="workspace" sessionKey="pdf-editor-scene" initialPaths={initialPaths} onWorkspaceSourceAction={onWorkspaceSourceAction} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange}
     onRun={async (paths, outputLocation, { runId }) => {
       const [inputPath] = paths;
       if (!inputPath || !session.current || session.current.path !== inputPath) throw new Error('Select exactly one open PDF before exporting.');
+      setRefused(null);
       const results = await invoke<ToolResult>('export_pdf_scene', { runId, request: { paths, scene: session.current.scene, outputLocation } });
-      return results.map((result) => result.failure ? { ...result, failure: { ...result.failure, message: pdfEditorErrorMessage(result.failure.message, 'export') } } : result);
+      const refusal = results.flatMap((result) => result.failure?.kind === 'invalidInput' ? [removalRefusal(result.failure.message)] : []).find(Boolean);
+      if (refusal) setRefused({ path: inputPath, refusal });
+      return results.map((result) => result.failure && !(result.failure.kind === 'invalidInput' && removalRefusal(result.failure.message))
+        ? { ...result, failure: { ...result.failure, message: pdfEditorErrorMessage(result.failure.message, 'export') } } : result);
     }}>
     {({ files, run, loading, destination, browse, replaceFiles }) => <>
       <PDFSceneFiles files={files} title={utility.shortTitle ?? utility.title} replaceFiles={replaceFiles} onNavigate={onNavigate}>
         {(inputPath) => <PDFSceneSession key={inputPath ?? 'empty'} path={inputPath} initialTool={initialTool}
           exporting={loading} onExport={run} onBrowse={browse}
+          refusal={refused && refused.path === inputPath ? refused.refusal : null} onRefusalClose={() => setRefused(null)}
           onNavigate={onNavigate}
           onScene={(path, scene) => { session.current = path && scene ? { path, scene } : null; }} />}
       </PDFSceneFiles>
@@ -236,8 +243,9 @@ function PDFSceneFiles({ files, title, replaceFiles, onNavigate, children }: {
   </>;
 }
 
-function PDFSceneSession({ path, initialTool, exporting, onExport, onBrowse, onNavigate, onScene }: {
+function PDFSceneSession({ path, initialTool, exporting, onExport, onBrowse, onNavigate, onScene, refusal, onRefusalClose }: {
   path: string | null; initialTool: EditorTool | null; exporting: boolean; onExport: () => Promise<void>;
+  refusal: RemovalRefusal | null; onRefusalClose: () => void;
   onBrowse: () => Promise<void>; onNavigate?: PdfEditorNavigation;
   onScene: (path: string | null, scene: PdfScene | null) => void;
 }) {
@@ -584,6 +592,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onBrowse, onN
     // {mod}+R turns the selected pages right, Shift+{mod}+R turns them left. It never reloads the window.
     if (primary && event.key.toLowerCase() === 'r') { event.preventDefault(); rotateSelection(event.shiftKey ? -90 : 90); return; }
     if (event.metaKey || event.ctrlKey) return;
+    if ((event.key === 'Delete' || event.key === 'Backspace') && !event.shiftKey) { event.preventDefault(); deleteSelection(); return; }
     if (event.key.toLowerCase() === 'm' && !event.shiftKey) {
       if (pageTargets.length && canReorder) { event.preventDefault(); openMoveTo(true); }
       return;
@@ -653,6 +662,31 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onBrowse, onN
   };
   const reverseSelection = () => reorder(reversePages(scene, pageTargets), `${pagePositionsLabel(positionsOf(pageTargets))} reversed`, null);
   const reverseDocument = () => reorder(reversePages(scene, pageOrder), `All ${pageCount} reversed`, null);
+  // Delete, Backspace and the Delete button remove the selected pages as one undo step. A PDF keeps at least one page.
+  const everyPageSelected = pageTargets.length > 0 && pageTargets.length >= scene.pages.length;
+  const canDelete = Boolean(page) && !exporting && availability.allows('pdf-remove-pages') && pageTargets.length > 0 && !everyPageSelected;
+  const deleteSelection = () => {
+    if (!canDelete) return;
+    const positions = positionsOf(pageTargets);
+    const next = removePages(scene, pageTargets);
+    if (!next) return;
+    const focusId = next.pages[Math.min(positions[0] - 1, next.pages.length - 1)].id;
+    const focusInGrid = Boolean(organizeGrid.current?.contains(window.document.activeElement));
+    commit(next); setAnnouncement(removalAnnouncement(positions));
+    setPageSelection(clearPageSelection()); setCurrentId(focusId); setSelectedId(null);
+    if (focusInGrid) requestAnimationFrame(() => organizeGrid.current?.querySelector<HTMLElement>(`[data-page-id="${focusId}"]`)?.focus());
+  };
+  // A refused removal names the original pages that must stay. Restore puts them back where they were, as one undo step.
+  const refusedPages = refusal ? refusal.title.replace(/ can’t be removed$/, '') : '';
+  const refusedPagesLower = refusedPages.charAt(0).toLowerCase() + refusedPages.slice(1);
+  useEffect(() => { if (refusal) setAnnouncement(`Export stopped. ${refusal.title}.`); }, [refusal]);
+  const restoreRefused = () => {
+    if (refusal && document) {
+      const next = restorePages(scene, sceneFromDocument(document), refusal.pages.map((number) => number - 1));
+      if (next !== scene) { commit(next); setAnnouncement(`${refusedPages} restored`); }
+    }
+    onRefusalClose();
+  };
   const interleaveScan = () => reorder(interleaveDuplexScan(scene), `Pages put in reading order: ${duplexExample(scene.pages.length)}`, null);
   const openMoveTo = (fromGrid: boolean) => {
     if (!canReorder || !pageTargets.length) return;
@@ -955,7 +989,17 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onBrowse, onN
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+          {availability.allows('pdf-remove-pages') && <>
+            <span className="scene-organize-spacer" aria-hidden="true" />
+            <Button variant="destructive" size="sm" aria-keyshortcuts={isWindows() ? 'Delete' : 'Backspace'}
+              aria-describedby={everyPageSelected ? 'scene-delete-why' : undefined} disabled={!canDelete} onClick={deleteSelection}>
+              <Trash2 aria-hidden="true" />{deletePagesLabel(pageTargets.length)}
+            </Button>
+          </>}
         </div>
+        {everyPageSelected && availability.allows('pdf-remove-pages') && <p id="scene-delete-why" role="alert" className="scene-organize-delete-why">
+          <TriangleAlert className="scene-organize-notice-icon" aria-hidden="true" /><span>{lastPageNotice}</span>
+        </p>}
       </div>
       <div className="scene-organize-select">
         <span className="scene-organize-hint" id="scene-select-by-label">Select</span>
@@ -1050,6 +1094,20 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onBrowse, onN
           <Button variant="outline" size="sm" disabled={!pageViewTool} onClick={() => { if (pageViewTool) { endGroup(); setTool(pageViewTool); } }}>Open in page view</Button>
         </aside>
       </div>
+      <Dialog open={Boolean(refusal)} onOpenChange={(open) => { if (!open) onRefusalClose(); }}>
+        <DialogContent role="alertdialog" showCloseButton={false} className="scene-removal-blocked">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><TriangleAlert className="text-destructive" aria-hidden="true" />{refusal?.title}</DialogTitle>
+            <DialogDescription>Other parts of this PDF depend on them, so removing them would break it. Nothing was saved.</DialogDescription>
+          </DialogHeader>
+          <ul className="scene-removal-reasons">{refusal?.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>
+          <p className="text-sm text-muted-foreground">Keep {refusedPagesLower} and export again. Your other changes are still here.</p>
+          <DialogFooter>
+            <Button variant="ghost" className="sm:mr-auto" onClick={onRefusalClose}>Keep editing</Button>
+            <Button onClick={restoreRefused}>Restore {refusedPagesLower}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <div className="scene-organize-status">
         <span role="status" aria-live="polite">{dragStatus ?? announcement ?? `Showing ${pageCount}. Previews load as you scroll.`}</span>
         <span className="scene-original-note">Your original is never changed</span>

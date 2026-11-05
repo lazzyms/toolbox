@@ -1,4 +1,4 @@
-use std::{collections::{HashMap, HashSet}, fs::{self, OpenOptions}, io::Write, path::{Path, PathBuf}, process::Command, sync::atomic::{AtomicU64, Ordering}, time::{Instant}};
+use std::{collections::{BTreeMap, BTreeSet, HashMap, HashSet}, fs::{self, OpenOptions}, io::Write, path::{Path, PathBuf}, process::Command, sync::atomic::{AtomicU64, Ordering}, time::{Instant}};
 use base64::Engine;
 use flate2::{write::ZlibEncoder, Compression};
 use lopdf::{dictionary, Document, Object, ObjectId, Stream};
@@ -350,26 +350,18 @@ fn scene_preflight(document: &Document, scene: &PdfScene, source_pages: &[Object
     let pages_root = common.pages_root;
 
     let mut seen = HashSet::new();
-    let mut retained = HashSet::new();
     let mut navigation_geometry_edit = false;
     let annotation_owners = if scene.pages.iter().any(|page| page.mirrored) { annotation_owner_counts(document, source_pages)? } else { HashMap::new() };
     for page in &scene.pages {
         if let Some(index) = page.source_index {
             let source = *source_pages.get(index).ok_or("Scene source page is outside the document")?;
             if !seen.insert(source) { return Err("A source page can appear only once in a scene".into()); }
-            retained.insert(source);
         }
     }
     let has_navigation = common.has_navigation;
     let has_tagged_structure = has_tagged_structure(document, source_pages, common.has_tagged_structure)?;
     if has_tagged_structure && !identity && !pure_reorder {
         return Err("This tagged PDF contains structure mappings that cannot be remapped by scene edits; scene export was rejected before output".into());
-    }
-    if retained.len() != source_pages.len() && (has_navigation || common.has_form_structure) {
-        return Err("This PDF contains navigation or form structures that could target a removed page; scene export was rejected before output".into());
-    }
-    if retained.len() != source_pages.len() && has_tagged_structure {
-        return Err("This tagged PDF contains a StructTreeRoot or ParentTree that could target a removed page; scene export was rejected before output".into());
     }
     for page in &scene.pages {
         if let Some(index) = page.source_index {
@@ -709,8 +701,10 @@ fn is_identity_scene(document: &Document, scene: &PdfScene, source_pages: &[Obje
     Ok(true)
 }
 
+/// Whether the scene only reorders, turns or leaves out source pages, so every kept page stays the same object.
+/// Leaving pages out is checked separately at export by `removal_refusal`.
 fn is_pure_page_reorder(document: &Document, scene: &PdfScene, source_pages: &[ObjectId]) -> Result<bool, String> {
-    if scene.pages.len() != source_pages.len() {
+    if scene.pages.len() > source_pages.len() {
         return Ok(false);
     }
     let mut seen = HashSet::new();
@@ -761,10 +755,12 @@ fn scene_resources(document: &Document, page_id: ObjectId, xobjects: lopdf::Dict
     Ok(resources)
 }
 
-pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
+pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> { compose_document(load(path)?, scene) }
+fn compose_document(mut doc:Document, scene:&PdfScene)->Result<Document,String> {
     if scene.pages.is_empty() || scene.pages.len()>2000 { return Err("Scene must contain 1–2000 pages".into()); }
-    let mut doc=load(path)?;
     let sources:Vec<_>=doc.get_pages().values().copied().collect();
+    // Removed pages leave the file with everything only they used, so their content is not carried along.
+    let removes_pages = scene.pages.iter().filter_map(|page| page.source_index).collect::<HashSet<_>>().len() < sources.len();
     let identity = is_identity_scene(&doc, scene, &sources)?;
     let pure_reorder = is_pure_page_reorder(&doc, scene, &sources)?;
     let preflight = scene_preflight(&doc, scene, &sources, identity, pure_reorder)?;
@@ -778,6 +774,7 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
         let root = doc.get_dictionary_mut(preflight.pages_root).map_err(err)?;
         root.set("Kids", order.iter().map(|page| Object::Reference(*page)).collect::<Vec<_>>());
         root.set("Count", order.len() as i64);
+        if removes_pages { doc.prune_objects(); }
         return Ok(doc);
     }
     // Mirrored pages keep their object ids, so their annotations and every destination that targets
@@ -961,7 +958,180 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
     }
     doc.objects.get_mut(&preflight.pages_root).ok_or("PDF page-tree root disappeared during scene export")?.as_dict_mut().map_err(err)?.set("Kids",kids);
     doc.objects.get_mut(&preflight.pages_root).ok_or("PDF page-tree root disappeared during scene export")?.as_dict_mut().map_err(err)?.set("Count",scene.pages.len() as i64);
+    if removes_pages { doc.prune_objects(); }
     Ok(doc)
+}
+
+/// "page 4", "pages 4 and 5", "pages 2, 4 to 6 and 9": the same wording the editor uses for page positions.
+fn page_list(pages: &BTreeSet<usize>) -> String {
+    let pages = pages.iter().copied().collect::<Vec<_>>();
+    if pages.len() == 1 { return format!("page {}", pages[0]); }
+    let mut parts = Vec::new();
+    let mut start = 0;
+    while start < pages.len() {
+        let mut end = start;
+        while end + 1 < pages.len() && pages[end + 1] == pages[end] + 1 { end += 1; }
+        if end - start >= 2 { parts.push(format!("{} to {}", pages[start], pages[end])); }
+        else { parts.extend(pages[start..=end].iter().map(usize::to_string)); }
+        start = end + 1;
+    }
+    format!("pages {}", english_list(&parts))
+}
+fn english_list(items: &[String]) -> String {
+    match items { [] => String::new(), [one] => one.clone(), [rest @ .., last] => format!("{} and {last}", rest.join(", ")) }
+}
+fn capitalized(text: &str) -> String {
+    let mut chars = text.chars();
+    chars.next().map(|first| first.to_uppercase().chain(chars).collect()).unwrap_or_default()
+}
+/// The page a destination points at: an explicit destination array, a dictionary holding one under /D,
+/// a name looked up in the catalog's /Dests, or a string looked up in the /Names /Dests tree.
+fn destination_page(document: &Document, value: &Object, depth: usize) -> Option<ObjectId> {
+    if depth > 16 { return None; }
+    let catalog = document.catalog().ok()?;
+    match resolve(document, value).ok()? {
+        Object::Array(items) => items.first()?.as_reference().ok(),
+        Object::Dictionary(dictionary) => destination_page(document, dictionary.get(b"D").ok()?, depth + 1),
+        Object::Name(name) => {
+            let dests = resolve(document, catalog.get(b"Dests").ok()?).ok()?.as_dict().ok()?;
+            destination_page(document, dests.get(name).ok()?, depth + 1)
+        }
+        Object::String(name, _) => {
+            let names = resolve(document, catalog.get(b"Names").ok()?).ok()?.as_dict().ok()?;
+            destination_page(document, name_tree_value(document, names.get(b"Dests").ok()?, name, depth + 1)?, depth + 1)
+        }
+        _ => None,
+    }
+}
+fn name_tree_value<'a>(document: &'a Document, node: &'a Object, key: &[u8], depth: usize) -> Option<&'a Object> {
+    if depth > 16 { return None; }
+    let node = resolve(document, node).ok()?.as_dict().ok()?;
+    if let Ok(names) = node.get(b"Names").and_then(Object::as_array) {
+        let found = names.chunks(2).find(|pair| pair[0].as_str().ok() == Some(key)).and_then(|pair| pair.get(1));
+        if found.is_some() { return found; }
+    }
+    resolve(document, node.get(b"Kids").ok()?).ok()?.as_array().ok()?.iter().find_map(|kid| name_tree_value(document, kid, key, depth + 1))
+}
+/// Walks the bookmark tree, collecting the title and page number of each bookmark that targets a removed page.
+fn removed_bookmarks(document: &Document, first: Option<&Object>, removed: &BTreeMap<ObjectId, usize>, found: &mut Vec<(String, usize)>, seen: &mut HashSet<ObjectId>) {
+    let mut next = first.and_then(|value| value.as_reference().ok());
+    while let Some(id) = next {
+        if !seen.insert(id) { return; }
+        let Ok(item) = document.get_dictionary(id) else { return; };
+        let action_target = item.get(b"A").ok().and_then(|action| resolve(document, action).ok()?.as_dict().ok())
+            .filter(|action| action.get(b"S").ok().and_then(|kind| kind.as_name().ok()) == Some(b"GoTo"))
+            .and_then(|action| action.get(b"D").ok());
+        let target = item.get(b"Dest").ok().or(action_target).and_then(|value| destination_page(document, value, 0));
+        if let Some(page) = target.and_then(|page| removed.get(&page)) {
+            let title = item.get(b"Title").ok().and_then(|title| resolve(document, title).ok()).and_then(|title| lopdf::decode_text_string(title).ok());
+            found.push((title.filter(|title| !title.trim().is_empty()).unwrap_or_else(|| "Untitled".into()), *page));
+        }
+        removed_bookmarks(document, item.get(b"First").ok(), removed, found, seen);
+        next = item.get(b"Next").ok().and_then(|value| value.as_reference().ok());
+    }
+}
+/// Removed pages that an explicit destination anywhere in `value` points at.
+fn destination_targets(value: &Object, removed: &BTreeMap<ObjectId, usize>, found: &mut BTreeSet<usize>) {
+    match value {
+        Object::Array(items) => {
+            let explicit = items.get(1).and_then(|kind| kind.as_name().ok()).is_some_and(|kind| matches!(kind, b"XYZ" | b"Fit" | b"FitH" | b"FitV" | b"FitR" | b"FitB" | b"FitBH" | b"FitBV"));
+            match items.first().and_then(|page| page.as_reference().ok()).and_then(|page| removed.get(&page)) {
+                Some(page) if explicit => { found.insert(*page); }
+                _ => for item in items { destination_targets(item, removed, found); },
+            }
+        }
+        Object::Dictionary(dictionary) => for (_, item) in dictionary.iter() { destination_targets(item, removed, found); },
+        Object::Stream(stream) => for (_, item) in stream.dict.iter() { destination_targets(item, removed, found); },
+        _ => {}
+    }
+}
+/// Removed pages that carry tagged content or that a structure element names as its /Pg.
+fn tagged_pages(document: &Document, removed: &BTreeMap<ObjectId, usize>) -> Result<BTreeSet<usize>, String> {
+    let mut found = BTreeSet::new();
+    for (id, page) in removed {
+        let dictionary = document.get_dictionary(*id).map_err(err)?;
+        if dictionary.has(b"StructParents") || page_has_tagged_content(document, *id)? { found.insert(*page); }
+    }
+    fn structure_pages(value: &Object, removed: &BTreeMap<ObjectId, usize>, found: &mut BTreeSet<usize>) {
+        let dictionary = match value {
+            Object::Array(items) => { for item in items { structure_pages(item, removed, found); } return; }
+            Object::Dictionary(dictionary) => dictionary,
+            Object::Stream(stream) => &stream.dict,
+            _ => return,
+        };
+        if let Some(page) = dictionary.get(b"Pg").ok().and_then(|page| page.as_reference().ok()).and_then(|page| removed.get(&page)) { found.insert(*page); }
+        for (_, item) in dictionary.iter() { structure_pages(item, removed, found); }
+    }
+    for object in document.objects.values() { structure_pages(object, removed, &mut found); }
+    Ok(found)
+}
+
+/// Why leaving pages out of the scene would break this PDF, as an InvalidInput error, or None when it is safe.
+/// The first line names the pages that must stay; each following line is one plain-language reason.
+/// Bookmarks, links and named destinations pointing at a removed page, form fields on one, page labels
+/// (which count pages by position) and accessibility tags all refuse the removal before any output.
+fn removal_refusal(document: &Document, scene: &PdfScene) -> Result<Option<ToolError>, String> {
+    let sources = document.get_pages().values().copied().collect::<Vec<_>>();
+    let kept = scene.pages.iter().filter_map(|page| page.source_index).collect::<HashSet<_>>();
+    let removed = sources.iter().enumerate().filter(|(index, _)| !kept.contains(index)).map(|(index, id)| (*id, index + 1)).collect::<BTreeMap<_, _>>();
+    if removed.is_empty() { return Ok(None); }
+    let catalog = document.catalog().map_err(err)?;
+    let mut blocked = BTreeSet::new();
+    let mut reasons = Vec::new();
+
+    let mut bookmarks = Vec::new();
+    let mut outline_items = HashSet::new();
+    if let Some(outlines) = catalog.get(b"Outlines").ok().and_then(|value| resolve(document, value).ok()).and_then(|value| value.as_dict().ok()) {
+        removed_bookmarks(document, outlines.get(b"First").ok(), &removed, &mut bookmarks, &mut outline_items);
+    }
+    if !bookmarks.is_empty() {
+        let titles = bookmarks.iter().map(|(title, _)| format!("“{title}”")).collect::<Vec<_>>();
+        let pages = bookmarks.iter().map(|(_, page)| *page).collect::<BTreeSet<_>>();
+        let (noun, verb) = if titles.len() == 1 { ("Bookmark", "points") } else { ("Bookmarks", "point") };
+        reasons.push(format!("{noun} {} {verb} to {}.", english_list(&titles), page_list(&pages)));
+        blocked.extend(pages);
+    }
+    // Every other explicit destination: links and form actions on kept pages, named destinations, the open action.
+    // Annotations that belong to a removed page leave with it, so they are not counted.
+    let mut removed_annotations = HashSet::new();
+    for id in removed.keys() { removed_annotations.extend(page_annotation_ids(document, *id)?); }
+    let mut linked = BTreeSet::new();
+    for (id, object) in &document.objects {
+        if outline_items.contains(id) || removed_annotations.contains(id) || removed.contains_key(id) { continue; }
+        destination_targets(object, &removed, &mut linked);
+    }
+    if let Some(open_action) = catalog.get(b"OpenAction").ok() { destination_targets(open_action, &removed, &mut linked); }
+    linked.retain(|page| !blocked.contains(page));
+    if !linked.is_empty() {
+        reasons.push(format!("Links in this PDF point to {}.", page_list(&linked)));
+        blocked.extend(linked);
+    }
+    if catalog.has(b"PageLabels") {
+        let pages = removed.values().copied().collect::<BTreeSet<_>>();
+        reasons.push("This PDF numbers its pages with labels that would no longer line up.".into());
+        blocked.extend(pages);
+    }
+    let mut form_pages = BTreeSet::new();
+    for (id, page) in &removed { if page_has_widget(document, *id)? { form_pages.insert(*page); } }
+    if !form_pages.is_empty() {
+        let verb = if form_pages.len() == 1 { "holds" } else { "hold" };
+        reasons.push(format!("{} {verb} fillable form fields.", capitalized(&page_list(&form_pages))));
+        blocked.extend(form_pages);
+    }
+    if has_tagged_structure(document, &sources, catalog.has(b"StructTreeRoot"))? {
+        let tagged = tagged_pages(document, &removed)?;
+        if tagged.is_empty() {
+            reasons.push("This PDF has accessibility tags that would no longer match its pages.".into());
+            blocked.extend(removed.values().copied());
+        } else {
+            let verb = if tagged.len() == 1 { "is" } else { "are" };
+            reasons.push(format!("This PDF has accessibility tags that {} {verb} part of.", page_list(&tagged)));
+            blocked.extend(tagged);
+        }
+    }
+    if reasons.is_empty() { return Ok(None); }
+    let title = format!("{} can’t be removed.", capitalized(&page_list(&blocked)));
+    Ok(Some(ToolError::invalid_input([title].into_iter().chain(reasons).collect::<Vec<_>>().join("\n"))))
 }
 
 static NONCE:AtomicU64=AtomicU64::new(0);
@@ -1164,11 +1334,26 @@ pub fn inspect_page(path:&Path,page_index:usize)->Result<PdfPageMetadata,String>
     let preview = super::metadata::render_preview(path, page_index + 1, g.width, g.height);
     Ok(PdfPageMetadata{index:page_index,x:g.bbox[0],y:g.bbox[1],width:g.width,height:g.height,rotation:source_rotation,page_box:g.bbox,preview,text_runs:Some(text_runs)})
 }
+/// The export summary: how many pages the copy keeps and, when some were left out, how many were removed.
+fn export_detail(scene:&PdfScene, source_pages:usize)->String {
+    let kept=scene.pages.len();
+    let removed=source_pages.saturating_sub(scene.pages.iter().filter_map(|page| page.source_index).collect::<HashSet<_>>().len());
+    if removed==0 { return "PDF scene exported".into(); }
+    format!("PDF scene exported. {kept} {} kept, {removed} removed.", if kept==1 { "page" } else { "pages" })
+}
 pub fn export(request:&ExportRequest,input:PathBuf)->JobOutcome {
-    let result=(|| {
-        if !matches!(request.output_location,OutputLocation::AlongsideInput) { return Err("Scene exports must be alongside the input".into()); }
+    let composed=(|| {
+        if !matches!(request.output_location,OutputLocation::AlongsideInput) { return Err(ToolError::processing("Scene exports must be alongside the input")); }
+        if request.scene.pages.is_empty() { return Err(ToolError::invalid_input("A PDF needs at least one page. Keep at least one page and export again.")); }
+        let document=load(&input).map_err(ToolError::processing)?;
+        if let Some(refusal)=removal_refusal(&document,&request.scene).map_err(ToolError::processing)? { return Err(refusal); }
+        let source_pages=document.get_pages().len();
         let mut bytes=Vec::new();
-        compose(&input,&request.scene)?.save_to(&mut bytes).map_err(err)?;
+        compose_document(document,&request.scene).and_then(|mut document| document.save_to(&mut bytes).map_err(err)).map_err(ToolError::processing)?;
+        Ok((bytes,export_detail(&request.scene,source_pages)))
+    })();
+    let (bytes,detail)=match composed { Ok(composed)=>composed, Err(error)=>return JobOutcome::failure(input,error) };
+    let result=(|| {
         let parent=input.parent().ok_or("Input has no parent directory")?;
         let stem=input.file_stem().ok_or("Input has no filename")?.to_string_lossy();
         for n in 1..=10000 {
@@ -1182,7 +1367,7 @@ pub fn export(request:&ExportRequest,input:PathBuf)->JobOutcome {
             return reservation.publish().map_err(err);
         } Err("Could not reserve a unique export filename".into())
     })();
-    match result { Ok(path)=>JobOutcome::succeeded(input, vec![path], "PDF scene exported"),Err(e)=>JobOutcome::failure(input,ToolError::processing(e)) }
+    match result { Ok(path)=>JobOutcome::succeeded(input, vec![path], detail),Err(e)=>JobOutcome::failure(input,ToolError::processing(e)) }
 }
 
 #[cfg(test)]
@@ -2422,7 +2607,9 @@ mod tests {
         source.save(&input).unwrap();
         let scene=PdfScene { pages:vec![ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0, mirrored: false,crop:None,source_rotation:None,source_box:None,objects:vec![]}] };
         let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
-        assert!(result.error().is_some_and(|error| error.message.contains("tagged PDF")), "{:?}", result.error());
+        let error=result.error().expect("tagged removal should be refused");
+        assert_eq!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput);
+        assert_eq!(error.message, "Page 1 can’t be removed.\nThis PDF has accessibility tags that page 1 is part of.");
         assert!(result.output_paths().is_empty());
         assert!(!input.with_file_name("tagged-edited-1.pdf").exists());
     }
@@ -2578,5 +2765,160 @@ mod tests {
         let error = inspect(&large).expect_err("over the size limit");
         assert_eq!(error.kind, ErrorKind::LimitExceeded { limit: LimitKind::FileSize });
         assert_eq!(error.message, "Larger than the 1 GB limit for one PDF. Reduce its size and try again.");
+    }
+
+    /// Five plain pages, each saying "(Source page N)" in an uncompressed content stream.
+    fn numbered_pages_fixture() -> (Document, Vec<ObjectId>) {
+        let mut d = Document::with_version("1.7");
+        let root = d.new_object_id();
+        let font = d.add_object(dictionary! {"Type"=>"Font", "Subtype"=>"Type1", "BaseFont"=>"Helvetica"});
+        let resources = d.add_object(dictionary! {"Font"=>dictionary! {"F1"=>font}});
+        let pages: Vec<ObjectId> = (1..=5).map(|number| {
+            let content = d.add_object(Stream::new(dictionary!{}, format!("BT /F1 18 Tf 40 700 Td (Source page {number}) Tj ET").into_bytes()));
+            d.add_object(dictionary! {"Type"=>"Page", "Parent"=>root, "MediaBox"=>array(&[0., 0., 612., 792.]), "Resources"=>resources, "Contents"=>content})
+        }).collect();
+        d.objects.insert(root, Object::Dictionary(dictionary! {"Type"=>"Pages", "Kids"=>pages.iter().map(|page| Object::Reference(*page)).collect::<Vec<_>>(), "Count"=>5}));
+        let catalog = d.add_object(dictionary! {"Type"=>"Catalog", "Pages"=>root});
+        d.trailer.set("Root", catalog);
+        (d, pages)
+    }
+    fn kept_scene(sources: &[usize]) -> PdfScene {
+        PdfScene { pages: sources.iter().map(|&index| ScenePage {
+            source_index: Some(index), width: 612., height: 792., rotation: 0, mirrored: false, crop: None,
+            source_rotation: Some(0), source_box: Some(Rect { x: 0., y: 0., width: 612., height: 792. }), objects: vec![],
+        }).collect() }
+    }
+    fn add_widget(d: &mut Document, page: ObjectId, name: &str) -> ObjectId {
+        let widget = d.add_object(dictionary! {"Type"=>"Annot", "Subtype"=>"Widget", "FT"=>"Tx", "T"=>Object::string_literal(name), "Rect"=>array(&[40., 40., 200., 80.]), "P"=>page});
+        d.get_dictionary_mut(page).unwrap().set("Annots", vec![Object::Reference(widget)]);
+        widget
+    }
+    /// Bookmarks with the given titles and target pages, in order, under the catalog's /Outlines.
+    fn add_bookmarks(d: &mut Document, items: &[(&str, ObjectId)]) {
+        let outlines = d.new_object_id();
+        let ids: Vec<ObjectId> = items.iter().map(|_| d.new_object_id()).collect();
+        for (index, ((title, page), id)) in items.iter().zip(&ids).enumerate() {
+            let mut item = dictionary! {"Title"=>Object::string_literal(*title), "Parent"=>outlines, "Dest"=>vec![Object::Reference(*page), Object::Name(b"Fit".to_vec())]};
+            if let Some(next) = ids.get(index + 1) { item.set("Next", *next); }
+            if index > 0 { item.set("Prev", ids[index - 1]); }
+            d.objects.insert(*id, Object::Dictionary(item));
+        }
+        d.objects.insert(outlines, Object::Dictionary(dictionary! {"Type"=>"Outlines", "First"=>ids[0], "Last"=>*ids.last().unwrap(), "Count"=>ids.len() as i64}));
+        let catalog = d.trailer.get(b"Root").unwrap().as_reference().unwrap();
+        d.get_dictionary_mut(catalog).unwrap().set("Outlines", outlines);
+    }
+    fn assert_removal_refused(input: &Path, scene: PdfScene, message: &str) {
+        let before = fs::read(input).unwrap();
+        let result = export(&ExportRequest { paths: vec![input.to_path_buf()], scene, output_location: OutputLocation::AlongsideInput }, input.to_path_buf());
+        let error = result.error().expect("removal should be refused");
+        assert_eq!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput, "{error:?}");
+        assert_eq!(error.message, message);
+        assert!(result.output_paths().is_empty());
+        assert_eq!(fs::read_dir(input.parent().unwrap()).unwrap().count(), 1, "a refused removal must not write any output");
+        assert_eq!(fs::read(input).unwrap(), before, "the original must not change");
+    }
+
+    #[test]
+    fn removing_pages_keeps_the_rest_in_order_and_reports_the_count() {
+        let temp = TempDir::new().unwrap();
+        let input = temp.0.join("five.pdf");
+        let (mut source, pages) = numbered_pages_fixture();
+        // Bookmarks and form fields that only touch kept pages do not block the removal, and survive it.
+        add_bookmarks(&mut source, &[("Start", pages[0]), ("End", pages[4])]);
+        let widget = add_widget(&mut source, pages[2], "kept");
+        let catalog = source.trailer.get(b"Root").unwrap().as_reference().unwrap();
+        let acro_form = source.add_object(dictionary! {"Fields"=>vec![Object::Reference(widget)]});
+        source.get_dictionary_mut(catalog).unwrap().set("AcroForm", acro_form);
+        source.save(&input).unwrap();
+        let before = fs::read(&input).unwrap();
+
+        // Pages 2 and 4 removed; page 5 moved to the front.
+        let result = export(&ExportRequest { paths: vec![input.clone()], scene: kept_scene(&[4, 0, 2]), output_location: OutputLocation::AlongsideInput }, input.clone());
+        assert!(result.error().is_none(), "{:?}", result.error());
+        assert_eq!(result.detail, "PDF scene exported. 3 pages kept, 2 removed.");
+        assert_eq!(fs::read(&input).unwrap(), before, "the original must not change");
+
+        let bytes = fs::read(&result.output_paths()[0]).unwrap();
+        let output = Document::load_mem(&bytes).unwrap();
+        let output_pages: Vec<_> = output.get_pages().values().copied().collect();
+        assert_eq!(output_pages, vec![pages[4], pages[0], pages[2]]);
+        for (page, number) in output_pages.iter().zip([5, 1, 3]) {
+            assert!(String::from_utf8_lossy(&output.get_page_content(*page)).contains(&format!("(Source page {number})")));
+        }
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(!text.contains("(Source page 2)") && !text.contains("(Source page 4)"), "removed pages' content must not stay in the file");
+        assert!(output.get_object(pages[1]).is_err() && output.get_object(pages[3]).is_err(), "removed page objects must not stay in the file");
+        let catalog = output.trailer.get(b"Root").unwrap().as_reference().unwrap();
+        let outlines = output.get_dictionary(catalog).unwrap().get(b"Outlines").unwrap().as_reference().unwrap();
+        let first = output.get_dictionary(outlines).unwrap().get(b"First").unwrap().as_reference().unwrap();
+        let target = output.get_dictionary(first).unwrap().get(b"Dest").unwrap().as_array().unwrap()[0].as_reference().unwrap();
+        assert_eq!(target, pages[0], "a bookmark to a kept page still points at it");
+        let acro_form = output.get_dictionary(catalog).unwrap().get(b"AcroForm").unwrap().as_reference().unwrap();
+        assert_eq!(output.get_dictionary(acro_form).unwrap().get(b"Fields").unwrap().as_array().unwrap(), &vec![Object::Reference(widget)]);
+    }
+
+    #[test]
+    fn removing_every_page_is_refused_without_output() {
+        let temp = TempDir::new().unwrap();
+        let input = temp.0.join("five.pdf");
+        numbered_pages_fixture().0.save(&input).unwrap();
+        assert_removal_refused(&input, PdfScene { pages: vec![] }, "A PDF needs at least one page. Keep at least one page and export again.");
+    }
+
+    #[test]
+    fn removal_that_would_break_bookmarks_or_forms_is_refused_as_invalid_input() {
+        let temp = TempDir::new().unwrap();
+        let input = temp.0.join("five.pdf");
+        let (mut source, pages) = numbered_pages_fixture();
+        add_bookmarks(&mut source, &[("Intro", pages[0]), ("Schedule 2", pages[3]), ("Signatures", pages[4])]);
+        let widget = add_widget(&mut source, pages[4], "signature");
+        let catalog = source.trailer.get(b"Root").unwrap().as_reference().unwrap();
+        let acro_form = source.add_object(dictionary! {"Fields"=>vec![Object::Reference(widget)]});
+        source.get_dictionary_mut(catalog).unwrap().set("AcroForm", acro_form);
+        source.save(&input).unwrap();
+        assert_removal_refused(&input, kept_scene(&[0, 1, 2]),
+            "Pages 4 and 5 can’t be removed.\nBookmarks “Schedule 2” and “Signatures” point to pages 4 and 5.\nPage 5 holds fillable form fields.");
+        assert_removal_refused(&input, kept_scene(&[0, 1, 2, 3]),
+            "Page 5 can’t be removed.\nBookmark “Signatures” points to page 5.\nPage 5 holds fillable form fields.");
+    }
+
+    #[test]
+    fn removal_that_would_break_links_or_page_labels_is_refused_as_invalid_input() {
+        let temp = TempDir::new().unwrap();
+        let input = temp.0.join("links.pdf");
+        let (mut source, pages) = numbered_pages_fixture();
+        let link = source.add_object(dictionary! {"Type"=>"Annot", "Subtype"=>"Link", "Rect"=>array(&[40., 40., 200., 80.]),
+            "A"=>dictionary! {"S"=>"GoTo", "D"=>vec![Object::Reference(pages[2]), Object::Name(b"Fit".to_vec())]}});
+        source.get_dictionary_mut(pages[0]).unwrap().set("Annots", vec![Object::Reference(link)]);
+        source.save(&input).unwrap();
+        assert_removal_refused(&input, kept_scene(&[0, 1, 3, 4]), "Page 3 can’t be removed.\nLinks in this PDF point to page 3.");
+        // A link on a removed page leaves with it, so it does not block the removal.
+        let result = export(&ExportRequest { paths: vec![input.clone()], scene: kept_scene(&[1, 2, 3, 4]), output_location: OutputLocation::AlongsideInput }, input.clone());
+        assert!(result.error().is_none(), "{:?}", result.error());
+        assert_eq!(result.detail, "PDF scene exported. 4 pages kept, 1 removed.");
+
+        let labelled = temp.0.join("labels").with_extension("pdf");
+        let (mut source, _) = numbered_pages_fixture();
+        let catalog = source.trailer.get(b"Root").unwrap().as_reference().unwrap();
+        source.get_dictionary_mut(catalog).unwrap().set("PageLabels", dictionary! {"Nums"=>vec![Object::Integer(0), Object::Dictionary(dictionary! {"S"=>"r"})]});
+        source.save(&labelled).unwrap();
+        let before = fs::read(&labelled).unwrap();
+        let refused = export(&ExportRequest { paths: vec![labelled.clone()], scene: kept_scene(&[0, 3, 4]), output_location: OutputLocation::AlongsideInput }, labelled.clone());
+        let error = refused.error().expect("labelled removal should be refused");
+        assert_eq!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput);
+        assert_eq!(error.message, "Pages 2 and 3 can’t be removed.\nThis PDF numbers its pages with labels that would no longer line up.");
+        assert!(refused.output_paths().is_empty() && !temp.0.join("labels-edited-1.pdf").exists());
+        assert_eq!(fs::read(&labelled).unwrap(), before);
+    }
+
+    #[test]
+    fn previews_of_a_removal_still_render_so_export_can_explain_a_refusal() {
+        let temp = TempDir::new().unwrap();
+        let input = temp.0.join("five.pdf");
+        let (mut source, pages) = numbered_pages_fixture();
+        add_bookmarks(&mut source, &[("Schedule 2", pages[3])]);
+        source.save(&input).unwrap();
+        let composed = compose(&input, &kept_scene(&[0, 1, 2])).expect("a preview composes even when export would refuse");
+        assert_eq!(composed.get_pages().len(), 3);
     }
 }

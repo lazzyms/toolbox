@@ -132,3 +132,28 @@ export const pagePositionsLabel = (positions: number[]) => {
   }
   return `Pages ${listWords(parts)}`;
 };
+
+/** The toolbar's delete button names how many pages it removes. */
+export const deletePagesLabel = (count: number) => (count === 0 ? "Delete" : count === 1 ? "Delete 1 page" : `Delete ${count} pages`);
+
+/** Why the delete button is off while every page is selected. */
+export const lastPageNotice = "A PDF needs at least one page. Deselect the pages you want to keep, then delete the rest.";
+
+/** Announces a removal by the positions the pages had, for example "Pages 4 to 6 removed". */
+export const removalAnnouncement = (positions: number[]) => `${pagePositionsLabel(positions)} removed`;
+
+/**
+ * Export refuses a removal that would break the PDF with a typed InvalidInput error. Its first line names
+ * the original pages that must stay ("Pages 41 and 42 can’t be removed."); each following line is one reason.
+ */
+export type RemovalRefusal = { title: string; pages: number[]; reasons: string[] };
+
+export const removalRefusal = (message: string): RemovalRefusal | null => {
+  const [first, ...reasons] = message.split("\n");
+  const match = /^Pages? (.+) can’t be removed\.$/.exec(first ?? "");
+  if (!match) return null;
+  const pages = [...match[1].matchAll(/(\d+) to (\d+)|(\d+)/g)].flatMap(([, from, to, single]) => single
+    ? [Number(single)]
+    : Array.from({ length: Number(to) - Number(from) + 1 }, (_, index) => Number(from) + index));
+  return { title: first.slice(0, -1), pages, reasons: reasons.filter((reason) => reason.trim()) };
+};

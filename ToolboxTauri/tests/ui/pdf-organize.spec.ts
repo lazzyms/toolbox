@@ -1089,3 +1089,161 @@ test('the reversed-text notice counts mirrored pages before export and goes once
   await expect(notice(page)).toHaveCount(0);
   await expect(exportButton(page)).toBeDisabled();
 });
+
+// Removal. Delete, Backspace and the Delete button remove the selected pages as one undo step. A PDF keeps at least one page.
+const deleteButton = (page: Page) => pageActions(page).getByRole('button', { name: /^Delete/ });
+const lastPageNotice = 'A PDF needs at least one page. Deselect the pages you want to keep, then delete the rest.';
+// Like the native export: the outcome detail counts the pages kept and removed.
+const countRemovals = (page: Page) => page.addInitScript(() => {
+  const w = window as any;
+  const invoke = w.__TAURI_INTERNALS__.invoke;
+  w.__TAURI_INTERNALS__.invoke = (command: string, args: any) => {
+    if (command !== 'export_pdf_scene') return invoke(command, args);
+    w.calls.push({ command, args });
+    const kept = args.request.scene.pages.length;
+    const detail = kept === 5 ? 'PDF scene exported' : `PDF scene exported. ${kept} ${kept === 1 ? 'page' : 'pages'} kept, ${5 - kept} removed.`;
+    return Promise.resolve([{ inputPath: args.request.paths[0], outputPaths: ['/local/report-edited.pdf'], state: 'succeeded', detail, failure: null, reason: null, warnings: [] }]);
+  };
+});
+
+test('Backspace and Delete remove the selected pages, each as one undo step, and focus stays in the grid', async ({ page }) => {
+  await setPlatform(page, 'MacIntel');
+  await countRemovals(page);
+  await openReport(page);
+  await option(page, 2).click();
+  await page.keyboard.press('Backspace');
+  expect(await order(page)).toEqual([1, 3, 4, 5]);
+  await expect(liveStatus(page)).toHaveText('Page 2 removed');
+  await expect(count(page)).toHaveText('No pages selected');
+  await expect(option(page, 2)).toBeFocused();
+  await expect(page.getByText('4 pages. Changes not exported')).toBeVisible();
+  await page.keyboard.press('Meta+z');
+  expect(await order(page)).toEqual([1, 2, 3, 4, 5]);
+
+  await selectRun(page, 3, 4);
+  await page.keyboard.press('Delete');
+  expect(await order(page)).toEqual([1, 2, 5]);
+  await expect(liveStatus(page)).toHaveText('Pages 3 and 4 removed');
+  await expect(option(page, 3)).toBeFocused();
+  // Without a selection the keys do nothing: the focused page alone is never removed by accident.
+  await page.keyboard.press('Backspace');
+  expect(await order(page)).toEqual([1, 2, 5]);
+  await undoButton(page).click();
+  expect(await order(page)).toEqual([1, 2, 3, 4, 5]);
+  await page.keyboard.press('Meta+Shift+z');
+  expect(await order(page)).toEqual([1, 2, 5]);
+
+  expect(await exportedOrder(page)).toEqual([1, 2, 5]);
+  const row = page.getByRole('list', { name: 'Results' }).getByRole('listitem');
+  await expect(row).toHaveAttribute('data-state', 'succeeded');
+  await expect(row).toContainText('PDF scene exported. 3 pages kept, 2 removed.');
+});
+
+test('the Delete button names the count, needs a selection, and removes a typed range as one undo step', async ({ page }) => {
+  await setPlatform(page, 'MacIntel');
+  await openReport(page);
+  await expect(deleteButton(page)).toHaveText('Delete');
+  await expect(deleteButton(page)).toBeDisabled();
+  await expect(deleteButton(page)).toHaveAttribute('aria-keyshortcuts', 'Backspace');
+  await option(page, 2).click();
+  await expect(deleteButton(page)).toHaveText('Delete 1 page');
+  await expect(deleteButton(page)).toBeEnabled();
+
+  const range = page.getByLabel('Pages', { exact: true });
+  await range.fill('1-2, 4');
+  await range.press('Enter');
+  await expect(deleteButton(page)).toHaveText('Delete 3 pages');
+  await deleteButton(page).click();
+  expect(await order(page)).toEqual([3, 5]);
+  await expect(liveStatus(page)).toHaveText('Pages 1, 2 and 4 removed');
+  await expect(deleteButton(page)).toHaveText('Delete');
+  await undoButton(page).click();
+  expect(await order(page)).toEqual([1, 2, 3, 4, 5]);
+  await expect(undoButton(page)).toBeDisabled();
+  await page.keyboard.press('Meta+Shift+z');
+  expect(await exportedOrder(page)).toEqual([3, 5]);
+});
+
+test('Windows names Delete as the key for the Delete button', async ({ page }) => {
+  await setPlatform(page, 'Win32');
+  await openReport(page);
+  await expect(deleteButton(page)).toHaveAttribute('aria-keyshortcuts', 'Delete');
+});
+
+test('the last page is protected: with every page selected, Delete is off and says why', async ({ page }) => {
+  await setPlatform(page, 'MacIntel');
+  await openReport(page);
+  await option(page, 1).click();
+  await page.keyboard.press('Meta+a');
+  await expect(deleteButton(page)).toHaveText('Delete 5 pages');
+  await expect(deleteButton(page)).toBeDisabled();
+  await expect(page.getByRole('alert')).toHaveText(lastPageNotice);
+  await expect(deleteButton(page)).toHaveAccessibleDescription(lastPageNotice);
+  for (const key of ['Backspace', 'Delete']) await page.keyboard.press(key);
+  expect(await order(page)).toEqual([1, 2, 3, 4, 5]);
+  await expect(undoButton(page)).toBeDisabled();
+
+  await option(page, 3).click({ modifiers: ['Meta'] });
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await deleteButton(page).click();
+  expect(await order(page)).toEqual([3]);
+  await option(page, 1).click();
+  await expect(deleteButton(page)).toBeDisabled();
+  await expect(page.getByRole('alert')).toHaveText(lastPageNotice);
+  await page.keyboard.press('Backspace');
+  expect(await order(page)).toEqual([3]);
+});
+
+test('export explains each refused removal, writes nothing, and can restore the pages it needs', async ({ page }) => {
+  await setPlatform(page, 'MacIntel');
+  await page.addInitScript(() => {
+    const w = window as any;
+    const invoke = w.__TAURI_INTERNALS__.invoke;
+    // Like the native export: a removal that would break bookmarks, forms or tags fails as InvalidInput before any output.
+    w.__TAURI_INTERNALS__.invoke = (command: string, args: any) => {
+      if (command !== 'export_pdf_scene') return invoke(command, args);
+      w.calls.push({ command, args });
+      const failure = { kind: 'invalidInput', message: w.refusal, pointer: null };
+      return Promise.resolve([{ inputPath: args.request.paths[0], outputPaths: [], state: 'failed', detail: w.refusal, failure, reason: null, warnings: [] }]);
+    };
+  });
+  await openReport(page);
+  await selectRun(page, 4, 5);
+  await page.keyboard.press('Backspace');
+  expect(await order(page)).toEqual([1, 2, 3]);
+
+  const refusals = [
+    { message: 'Page 4 can’t be removed.\nBookmark “Schedule 2” points to page 4.', title: 'Page 4 can’t be removed', reasons: ['Bookmark “Schedule 2” points to page 4.'], pages: 'page 4' },
+    { message: 'Page 5 can’t be removed.\nPage 5 holds fillable form fields.', title: 'Page 5 can’t be removed', reasons: ['Page 5 holds fillable form fields.'], pages: 'page 5' },
+    { message: 'Pages 4 and 5 can’t be removed.\nThis PDF has accessibility tags that page 4 is part of.', title: 'Pages 4 and 5 can’t be removed', reasons: ['This PDF has accessibility tags that page 4 is part of.'], pages: 'pages 4 and 5' },
+  ];
+  const dialog = page.getByRole('alertdialog');
+  for (const [index, refusal] of refusals.entries()) {
+    await page.evaluate((message) => { (window as any).refusal = message; }, refusal.message);
+    await exportButton(page).click();
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole('heading')).toHaveText(refusal.title);
+    await expect(dialog).toHaveAccessibleDescription('Other parts of this PDF depend on them, so removing them would break it. Nothing was saved.');
+    await expect(dialog.getByRole('listitem')).toHaveText(refusal.reasons);
+    await expect(dialog.getByText(`Keep ${refusal.pages} and export again. Your other changes are still here.`)).toBeVisible();
+    await expect(dialog.getByRole('button', { name: `Restore ${refusal.pages}` })).toBeVisible();
+    await expect(liveStatus(page)).toHaveText(`Export stopped. ${refusal.title}.`);
+    const scene = await page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'export_pdf_scene').at(-1).args.request.scene);
+    expect(scene.pages.map((item: any) => item.sourceIndex + 1)).toEqual([1, 2, 3]);
+    if (index < refusals.length - 1) {
+      await dialog.getByRole('button', { name: 'Keep editing' }).click();
+      await expect(dialog).toHaveCount(0);
+      expect(await order(page)).toEqual([1, 2, 3]);
+    }
+  }
+  await dialog.getByRole('button', { name: 'Restore pages 4 and 5' }).click();
+  await expect(dialog).toHaveCount(0);
+  const row = page.getByRole('list', { name: 'Results' }).getByRole('listitem');
+  await expect(row).toHaveAttribute('data-state', 'failed');
+  await expect(row).toContainText('Pages 4 and 5 can’t be removed.');
+  expect(await order(page)).toEqual([1, 2, 3, 4, 5]);
+  await expect(liveStatus(page)).toHaveText('Pages 4 and 5 restored');
+  await expect(exportButton(page)).toBeDisabled();
+  await undoButton(page).click();
+  expect(await order(page)).toEqual([1, 2, 3]);
+});
