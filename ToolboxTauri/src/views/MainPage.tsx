@@ -25,13 +25,13 @@ import { TablerIcon } from "../components/TablerIcon";
 import { RunStateContext, type WorkspaceSourceAction } from "../components/ToolScaffold";
 import { ShortcutHint } from "../components/ShortcutHint";
 import { WorkspaceCommandRail } from "../components/WorkspaceCommandRail";
-import { matchShortcut, pressShortcutTarget, shortcutAria, shortcutLabel, shortcutTarget } from "../shortcuts";
+import { isWindows, matchShortcut, pressShortcutTarget, shortcutAria, shortcutLabel, shortcutTarget } from "../shortcuts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
-import type { PdfEditorNavigation } from "./PDFEditorWorkspaceView";
+import type { LeaveGuard, PdfEditorNavigation } from "./PDFEditorWorkspaceView";
 import { SecurityWorkspaceView } from "./SecurityWorkspaceView";
 import { PDFEditorWorkspaceView } from "./PDFEditorWorkspaceView";
 import { PDFConversionWorkspaceView } from "./PDFConversionWorkspaceView";
@@ -143,13 +143,19 @@ export const MainPage = () => {
     activationInFlight.current = null;
     queuedActivations.current = [];
   }, []);
+  // The PDF editor guards leaving while it holds unexported changes. The guard returns true when it takes over,
+  // and calls `leave` itself once the person exports or discards the changes.
+  const leaveGuard = useRef<LeaveGuard | null>(null);
+  const registerLeaveGuard = useCallback((guard: LeaveGuard | null) => { leaveGuard.current = guard; }, []);
+  const leaveWorkspace = useCallback((leave: () => void) => { if (!leaveGuard.current?.(leave)) leave(); }, []);
+  const leaveHome = useCallback(() => leaveWorkspace(goHome), [goHome, leaveWorkspace]);
   const navigateToPdfUtility: PdfEditorNavigation = useCallback(({ utilityId, initialPaths: paths }) => {
     const tool = UtilityRegistry.find((item) => item.id === utilityId);
-    if (tool && availability.allows(tool.id)) {
+    if (tool && availability.allows(tool.id)) leaveWorkspace(() => {
       focusWorkspaceHeadingOnNavigation.current = true;
       openTool(tool, paths);
-    }
-  }, [availability, openTool]);
+    });
+  }, [availability, leaveWorkspace, openTool]);
   const toggleFavorite = (id: string) =>
     setFavorites((current) => {
       const next = current.includes(id)
@@ -270,9 +276,11 @@ export const MainPage = () => {
     }
     switch (event.command) {
       case "search":
-        setSettingsSection(null);
-        if (selectedTool) goHome();
-        setFocusAfterSettings("search");
+        leaveWorkspace(() => {
+          setSettingsSection(null);
+          if (selectedTool) goHome();
+          setFocusAfterSettings("search");
+        });
         break;
       case "open":
         // With a tool open, Open adds files to it. Otherwise it opens a document in an editor.
@@ -302,7 +310,7 @@ export const MainPage = () => {
         setSettingsSection("keyboard-shortcuts");
         break;
     }
-  }, [dispatchEditorCommand, goHome, openFilesFromMenu, selectedTool, settingsSection, startNextActivation]);
+  }, [dispatchEditorCommand, goHome, leaveWorkspace, openFilesFromMenu, selectedTool, settingsSection, startNextActivation]);
   const acceptActivation = useCallback((activationId: string) => {
     if (activationInFlight.current !== activationId) return;
     acceptedActivationIds.current.push(activationId);
@@ -332,10 +340,12 @@ export const MainPage = () => {
     const onEditorKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented || settingsSection || event.altKey || !(event.metaKey || event.ctrlKey)) return;
       const key = event.key.toLowerCase();
-      const command = key === "z" ? (event.shiftKey ? "redo" : "undo") : key === "e" ? "export" : null;
+      // Windows also redoes with Ctrl+Y. On macOS, Cmd+Y belongs to other apps' history, so it does nothing here.
+      const command = key === "z" ? (event.shiftKey ? "redo" : "undo")
+        : key === "y" && isWindows() && event.ctrlKey && !event.shiftKey ? "redo" : key === "e" ? "export" : null;
       if (!command) return;
       const target = event.target instanceof HTMLElement ? event.target : null;
-      if (key === "z" && target?.closest("input, textarea, [contenteditable='true']")) return;
+      if (command !== "export" && target?.closest("input, textarea, [contenteditable='true']")) return;
       event.preventDefault();
       dispatchEditorCommand(command);
     };
@@ -350,11 +360,11 @@ export const MainPage = () => {
       if (target?.closest('[role="menu"], [role="dialog"], [role="alertdialog"], input, textarea, select, [contenteditable="true"]')) return;
       if (document.querySelector('.run-controls, [role="dialog"], [role="alertdialog"], [role="menu"]')) return;
       event.preventDefault();
-      goHome();
+      leaveHome();
     };
     window.addEventListener("keydown", onEscape);
     return () => window.removeEventListener("keydown", onEscape);
-  }, [goHome, selectedTool, settingsSection]);
+  }, [leaveHome, selectedTool, settingsSection]);
   useEffect(() => {
     if (!focusWorkspaceHeadingOnNavigation.current || !selectedTool || sceneView) return;
     focusWorkspaceHeadingOnNavigation.current = false;
@@ -385,7 +395,7 @@ export const MainPage = () => {
       const id = matchShortcut(event, "window");
       if (id === "find") {
         event.preventDefault();
-        if (settingsSection || selectedTool) return findToolFromSettings();
+        if (settingsSection || selectedTool) return leaveWorkspace(findToolFromSettings);
         searchInputRef.current?.focus();
         searchInputRef.current?.select();
       } else if (id === "settings" || id === "shortcuts") {
@@ -402,17 +412,17 @@ export const MainPage = () => {
 
     window.addEventListener("keydown", onShortcut);
     return () => window.removeEventListener("keydown", onShortcut);
-  }, [settingsSection, selectedTool, findToolFromSettings, openFilesFromMenu]);
+  }, [settingsSection, selectedTool, findToolFromSettings, leaveWorkspace, openFilesFromMenu]);
   useEffect(() => {
     const openFromCompatibilityNav = (event: Event) => {
       const id = (event as CustomEvent<string>).detail;
       const tool = UtilityRegistry.find((item) => item.id === id);
-      if (tool) openTool(tool);
+      if (tool) leaveWorkspace(() => openTool(tool));
     };
     window.addEventListener("toolbox:open", openFromCompatibilityNav);
     return () =>
       window.removeEventListener("toolbox:open", openFromCompatibilityNav);
-  }, [openTool]);
+  }, [leaveWorkspace, openTool]);
   useEffect(() => {
     const openSettings = (event: Event) => {
       setSettingsSection((event as CustomEvent<SettingsSection | undefined>).detail ?? "appearance");
@@ -550,7 +560,7 @@ export const MainPage = () => {
           <section className={`tool-workspace ${sceneView ? "pdf-studio" : ""}`} id="tool-detail">
             {sceneView && (
               <div className="pdf-editor-header-line">
-                <Button className="back-link" variant="ghost" size="sm" onClick={goHome}>← All tools</Button>
+                <Button className="back-link" variant="ghost" size="sm" onClick={leaveHome}>← All tools</Button>
                 <h1 className="workspace-title">{selectedWorkspace.title}</h1>
                 {workspaceSourceAction && <Button variant="default" size="sm" className="pdf-editor-open-files" aria-label="Choose files to process" title="Open files" {...shortcutTarget("open")} onClick={() => void workspaceSourceAction()}>Open files<ShortcutHint id="open" /></Button>}
                 {favoriteButton(selectedTool)}
@@ -564,6 +574,7 @@ export const MainPage = () => {
                     onActivationAccepted={acceptActivation}
                     onFilesChange={publishDocumentPath}
                     onNavigate={navigateToPdfUtility}
+                    onLeaveGuard={registerLeaveGuard}
                     onWorkspaceSourceAction={publishWorkspaceSourceAction} />
                 </CardContent>
               ) : (
@@ -700,13 +711,14 @@ export const MainPage = () => {
   );
 };
 
-const ViewFor = ({ utility, initialPaths, fileActivation, onActivationAccepted, onFilesChange, onNavigate, onSelectTool, onWorkspaceSourceAction }: {
+const ViewFor = ({ utility, initialPaths, fileActivation, onActivationAccepted, onFilesChange, onNavigate, onLeaveGuard, onSelectTool, onWorkspaceSourceAction }: {
   utility: ToolDefinition;
   initialPaths?: readonly string[];
   fileActivation?: Extract<ShellEvent, { kind: "files" }>;
   onActivationAccepted?: (activationId: string) => void;
   onFilesChange?: (paths: readonly string[]) => void;
   onNavigate?: PdfEditorNavigation;
+  onLeaveGuard?: (guard: LeaveGuard | null) => void;
   onSelectTool?: (id: AtomicToolId) => void;
   onWorkspaceSourceAction?: (action: WorkspaceSourceAction | null) => void;
 }) => {
@@ -716,7 +728,7 @@ const ViewFor = ({ utility, initialPaths, fileActivation, onActivationAccepted, 
   const workspace = workspaceForTool(utility.id);
   if (!workspace) return <PlannedToolView utility={utility} />;
   // Views are chosen by tool: the PDF Editor holds both the scene editor and batch PDF tools.
-  if (isPdfSceneTool(utility.id)) return <PDFEditorWorkspaceView utility={utility} initialPaths={initialPaths} onNavigate={onNavigate} onWorkspaceSourceAction={onWorkspaceSourceAction} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange} />;
+  if (isPdfSceneTool(utility.id)) return <PDFEditorWorkspaceView utility={utility} initialPaths={initialPaths} onNavigate={onNavigate} onLeaveGuard={onLeaveGuard} onWorkspaceSourceAction={onWorkspaceSourceAction} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange} />;
   if (workspace.id === "pdf-editor" || workspace.id === "pdf-convert") return <PDFConversionWorkspaceView utility={utility} initialPaths={initialPaths} onFilesChange={onFilesChange} />;
   if (workspace.id === "image-editor" && utility.id !== "image-metadata") return <ImageEditorWorkspaceView utility={utility} initialPaths={initialPaths} onSelectTool={onSelectTool} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange} onWorkspaceSourceAction={onWorkspaceSourceAction} />;
   if (utility.id === "image-metadata") return <MediaWorkspaceView utility={utility} initialPaths={initialPaths} onFilesChange={onFilesChange} />;

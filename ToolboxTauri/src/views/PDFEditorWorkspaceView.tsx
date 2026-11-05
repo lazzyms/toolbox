@@ -7,7 +7,7 @@ import type { WorkspaceSourceAction } from '../components/ToolScaffold';
 import type { ShellEvent } from '../hooks/useShellBridge';
 import type { AtomicToolId, ToolDefinition, ToolError, ToolResult } from '../contracts';
 import { useToolAvailability } from '../ToolAvailabilityContext';
-import { ArrowLeft, ArrowRight, ArrowDown, ArrowUp, ChevronDown, FlipHorizontal2, FlipVertical2, RefreshCw, RotateCcw, RotateCw, Trash2, TriangleAlert, Undo2 } from 'lucide-react';
+import { ArrowLeft, ArrowRight, ArrowDown, ArrowUp, ChevronDown, FlipHorizontal2, Keyboard, FlipVertical2, RefreshCw, RotateCcw, RotateCw, Trash2, TriangleAlert, Undo2 } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuTrigger } from '../components/ui/dropdown-menu';
@@ -29,9 +29,11 @@ import type { PdfScene, SceneObject, ScenePage, ScenePreview, SceneRect, SceneSh
 import { PREVIEW_CACHE_MAX_ENTRIES, PREVIEW_RENDER_SETTINGS, createPreviewCache, pdfEditorErrorMessage, previewCacheKey, requestWithGeneration } from './pdfPreviewHelpers';
 import type { GenerationState } from './pdfPreviewHelpers';
 import { ShortcutHint } from '../components/ShortcutHint';
-import { isWindows, primaryModifierPressed, shortcutTarget } from '../shortcuts';
+import { isWindows, primaryModifierPressed, shortcutLabel, shortcutTarget } from '../shortcuts';
 import { clearPageSelection, clickPage, deletePagesLabel, extendPageSelection, lastPageNotice, mirrorAnnouncement, mirroredTextNotice, orientationBadge, orientationLabel, pageOptionName, pagePositionsLabel, removalAnnouncement, removalRefusal, rotationAnnouncement, selectAllPages, selectPagesByParity, selectPagesByRange, selectionCountLabel, togglePage } from '../features/pdf-editor/pageSelection';
 import type { PageSelection, RemovalRefusal } from '../features/pdf-editor/pageSelection';
+import { changesLabel, commitScene, markSceneExported, redoScene, startSceneHistory, undoScene, unexportedChanges } from '../features/pdf-editor/history';
+import type { SceneHistory } from '../features/pdf-editor/history';
 import { createSourceThumbnailQueue } from '../features/pdf-editor/sourceThumbnails';
 import type { SourceThumbnail, SourceThumbnailQueue } from '../features/pdf-editor/sourceThumbnails';
 import { blankPagesAnnouncement, blankPagesFailedAnnouncement, blankPagesFoundLabel, blankPagesRunningAnnouncement, blankScenePageIds, createBlankPageFinder } from '../features/pdf-editor/blankPages';
@@ -82,12 +84,29 @@ const signatureFontOptions = [
 ];
 const watermarkFontSizes = [18, 24, 32, 40, 48, 56, 64, 72, 88, 104, 120];
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
-type History = { past: PdfScene[]; present: PdfScene; future: PdfScene[] };
 export type ExistingPdfUtilityId = 'pdf-merge' | 'pdf-split' | 'pdf-redact' | 'lock-unlock';
 export type PdfEditorNavigation = (navigation: {
   utilityId: ExistingPdfUtilityId;
   initialPaths: readonly string[];
 }) => void;
+/** Called before the app leaves the editor. Returns true when it takes over, and calls `leave` itself later. */
+export type LeaveGuard = (leave: () => void) => boolean;
+/** What the open document's session tells the file chooser: unexported changes, and whether Export can run now. */
+type SceneStatus = { changes: number; canExport: boolean };
+/** Every Organize grid shortcut, in the order the shortcut reference lists them, labelled for this platform. */
+const organizeShortcuts = (windows: boolean) => [
+  ['Select all', windows ? 'Ctrl+A' : '⌘A'], ['Clear selection', 'Esc'],
+  ['Add or remove a page', windows ? 'Ctrl+click' : '⌘-click'], ['Select a run of pages', windows ? 'Shift+click' : '⇧-click'],
+  ['Move focus', '← → ↑ ↓'], ['Select the focused page', 'Space'],
+  ['Extend the selection', windows ? 'Shift+Arrow' : '⇧+Arrow'], ['Move pages earlier or later', windows ? 'Ctrl+← →' : '⌘← →'],
+  ['Move pages to the start', windows ? 'Ctrl+Home' : '⌘↑'], ['Move pages to the end', windows ? 'Ctrl+End' : '⌘↓'],
+  ['Move pages to a position', 'M'], ['Rotate right', windows ? 'Ctrl+R' : '⌘R'],
+  ['Rotate left', windows ? 'Ctrl+Shift+R' : '⇧⌘R'], ['Mirror left to right', 'H'],
+  ['Mirror top to bottom', 'V'], ['Delete the selected pages', windows ? 'Delete' : '⌫'],
+  ['Undo', windows ? 'Ctrl+Z' : '⌘Z'], ['Redo', windows ? 'Ctrl+Y' : '⇧⌘Z'],
+  ['Open in page view', windows ? 'Enter' : '↵'], ['Export', shortcutLabel('run')],
+] as const;
+const changesCount = (changes: number) => `${changes} ${changes === 1 ? 'change' : 'changes'}`;
 type ThumbnailSize = 'small' | 'medium' | 'large';
 type OpenFailure = { kind: 'locked' | 'unreadable'; name: string } | { kind: 'tooManyPages' | 'tooLarge'; name: string; message: string };
 
@@ -153,6 +172,7 @@ export const PDFEditorWorkspaceView = ({
   utility,
   initialPaths,
   onNavigate,
+  onLeaveGuard,
   onWorkspaceSourceAction,
   fileActivation,
   onActivationAccepted,
@@ -161,6 +181,7 @@ export const PDFEditorWorkspaceView = ({
   utility: ToolDefinition;
   initialPaths?: readonly string[];
   onNavigate?: PdfEditorNavigation;
+  onLeaveGuard?: (guard: LeaveGuard | null) => void;
   onWorkspaceSourceAction?: (action: WorkspaceSourceAction | null) => void;
   fileActivation?: Extract<ShellEvent, { kind: 'files' }>;
   onActivationAccepted?: (activationId: string) => void;
@@ -174,21 +195,34 @@ export const PDFEditorWorkspaceView = ({
     : tools.find((item) => availability.allows(toolFlagBySceneTool[item.id]))?.id ?? null;
   // Export refuses a removal that would break the PDF. The session explains it in a dialog and offers to restore the pages.
   const [refused, setRefused] = useState<{ path: string; refusal: RemovalRefusal } | null>(null);
+  // The last scene that exported without a failure. Unexported changes count from it.
+  const [exported, setExported] = useState<{ path: string; scene: PdfScene } | null>(null);
+  const exportSucceeded = useRef(false);
+  const [status, setStatus] = useState<{ path: string } & SceneStatus | null>(null);
   return <ToolScaffold utility={utility} variant="workspace" sessionKey="pdf-editor-scene" initialPaths={initialPaths} onWorkspaceSourceAction={onWorkspaceSourceAction} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange}
     onRun={async (paths, outputLocation, { runId }) => {
       const [inputPath] = paths;
       if (!inputPath || !session.current || session.current.path !== inputPath) throw new Error('Select exactly one open PDF before exporting.');
       setRefused(null);
-      const results = await invoke<ToolResult>('export_pdf_scene', { runId, request: { paths, scene: session.current.scene, outputLocation } });
+      exportSucceeded.current = false;
+      const { scene } = session.current;
+      const results = await invoke<ToolResult>('export_pdf_scene', { runId, request: { paths, scene, outputLocation } });
+      if (results.length && results.every((result) => !result.failure)) {
+        exportSucceeded.current = true;
+        setExported({ path: inputPath, scene });
+      }
       const refusal = results.flatMap((result) => result.failure?.kind === 'invalidInput' ? [removalRefusal(result.failure.message)] : []).find(Boolean);
       if (refusal) setRefused({ path: inputPath, refusal });
       return results.map((result) => result.failure && !(result.failure.kind === 'invalidInput' && removalRefusal(result.failure.message))
         ? { ...result, failure: { ...result.failure, message: pdfEditorErrorMessage(result.failure.message, 'export') } } : result);
     }}>
     {({ files, run, loading, destination, browse, replaceFiles }) => <>
-      <PDFSceneFiles files={files} title={utility.shortTitle ?? utility.title} replaceFiles={replaceFiles} onNavigate={onNavigate}>
+      <PDFSceneFiles files={files} title={utility.shortTitle ?? utility.title} replaceFiles={replaceFiles} onNavigate={onNavigate}
+        status={status} onLeaveGuard={onLeaveGuard} exportScene={async () => { await run(); return exportSucceeded.current; }}>
         {(inputPath) => <PDFSceneSession key={inputPath ?? 'empty'} path={inputPath} initialTool={initialTool}
           exporting={loading} onExport={run} onBrowse={browse}
+          exportedScene={exported && exported.path === inputPath ? exported.scene : null}
+          onStatus={(next) => setStatus(inputPath && next ? { path: inputPath, ...next } : null)}
           refusal={refused && refused.path === inputPath ? refused.refusal : null} onRefusalClose={() => setRefused(null)}
           onNavigate={onNavigate}
           onScene={(path, scene) => { session.current = path && scene ? { path, scene } : null; }} />}
@@ -202,25 +236,77 @@ export const PDFEditorWorkspaceView = ({
  * The scene editors work on one PDF. A newly dropped PDF replaces the open one. When several arrive at once,
  * the open document stays put while a dialog asks which one to open, and points to Merge for combining them.
  */
-function PDFSceneFiles({ files, title, replaceFiles, onNavigate, children }: {
+function PDFSceneFiles({ files, title, replaceFiles, onNavigate, status, onLeaveGuard, exportScene, children }: {
   files: string[]; title: string; replaceFiles: (paths: readonly string[]) => void;
-  onNavigate?: PdfEditorNavigation; children: (path: string | null) => React.ReactNode;
+  onNavigate?: PdfEditorNavigation; status: { path: string } & SceneStatus | null;
+  onLeaveGuard?: (guard: LeaveGuard | null) => void; exportScene: () => Promise<boolean>;
+  children: (path: string | null) => React.ReactNode;
 }) {
   const availability = useToolAvailability();
   const openPath = useRef<string | null>(null);
   if (files.length <= 1) openPath.current = files[0] ?? null;
   const incoming = files.length > 1 ? files.filter((path) => path !== openPath.current) : [];
   const [choice, setChoice] = useState<string | null>(null);
+  const changes = status && status.path === openPath.current ? status.changes : 0;
+  const canExport = Boolean(status && status.path === openPath.current && status.canExport);
+  // Opening another PDF, or leaving the editor, loses unexported changes, so it asks first.
+  const [unexported, setUnexported] = useState<{ kind: 'switch'; target: string } | { kind: 'leave'; leave: () => void } | null>(null);
+  const openFile = (target: string) => { if (changes > 0) setUnexported({ kind: 'switch', target }); else replaceFiles([target]); };
   const incomingKey = incoming.join('\n');
   useEffect(() => {
-    if (incoming.length === 1) replaceFiles(incoming);
+    if (incoming.length === 1) openFile(incoming[0]);
     setChoice(incoming[0] ?? null);
   }, [incomingKey]);
+  const hasChanges = changes > 0;
+  useEffect(() => {
+    if (!onLeaveGuard) return;
+    onLeaveGuard(hasChanges ? (leave) => { setUnexported({ kind: 'leave', leave }); return true; } : null);
+    return () => onLeaveGuard(null);
+  }, [hasChanges, onLeaveGuard]);
+  // Export runs on the open PDF alone, so the dropped file is set aside first. Once it exports, the next step runs.
+  const [afterExport, setAfterExport] = useState<{ next: () => void } | null>(null);
+  const latestExport = useRef(exportScene);
+  latestExport.current = exportScene;
+  useEffect(() => {
+    if (!afterExport || files.length !== 1) return;
+    setAfterExport(null);
+    void latestExport.current().then((ok) => { if (ok) afterExport.next(); });
+  }, [afterExport, files.length]);
   const choosing = incoming.length > 1;
   const keepOpenFile = () => replaceFiles(openPath.current ? [openPath.current] : []);
+  const cancelUnexported = () => { if (unexported?.kind === 'switch') keepOpenFile(); setUnexported(null); };
+  const discardChanges = () => {
+    if (unexported?.kind === 'switch') replaceFiles([unexported.target]); else unexported?.leave();
+    setUnexported(null);
+  };
+  const exportFirst = () => {
+    if (!unexported) return;
+    const pending = unexported;
+    if (pending.kind === 'switch') keepOpenFile();
+    setAfterExport({ next: pending.kind === 'switch' ? () => replaceFiles([pending.target]) : pending.leave });
+    setUnexported(null);
+  };
+  const openName = openPath.current ? fileName(openPath.current) : 'This PDF';
   return <>
     {children(openPath.current)}
-    <Dialog open={choosing} onOpenChange={(open) => { if (!open) keepOpenFile(); }}>
+    <Dialog open={unexported !== null} onOpenChange={(open) => { if (!open) cancelUnexported(); }}>
+      <DialogContent role="alertdialog" showCloseButton={false} className="scene-unexported">
+        <DialogHeader>
+          <DialogTitle>{unexported?.kind === 'leave' ? 'Export your changes before closing?' : 'Export your changes first?'}</DialogTitle>
+          <DialogDescription>{unexported?.kind === 'leave'
+            ? `${openName} has ${changesCount(changes)} that ${changes === 1 ? 'hasn’t' : 'haven’t'} been exported. If you close now, ${changes === 1 ? 'it’s' : 'they’re'} lost.`
+            : `${openName} has ${changesCount(changes)} that ${changes === 1 ? 'isn’t' : 'aren’t'} exported. If you open another PDF now, ${changes === 1 ? 'it’s' : 'they’re'} lost. Your original isn’t affected either way.`}</DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          {unexported?.kind === 'leave'
+            ? <Button variant="ghost" className="text-destructive sm:mr-auto" onClick={discardChanges}>Discard changes</Button>
+            : <Button variant="ghost" className="sm:mr-auto" onClick={discardChanges}>Don’t export</Button>}
+          <Button variant="outline" onClick={cancelUnexported}>Cancel</Button>
+          <Button disabled={!canExport} onClick={exportFirst}>Export</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+    <Dialog open={choosing && unexported === null} onOpenChange={(open) => { if (!open) keepOpenFile(); }}>
       <DialogContent showCloseButton={false} className="scene-several-dropped">
         <DialogHeader>
           <DialogTitle>{title} works on one PDF at a time</DialogTitle>
@@ -238,22 +324,23 @@ function PDFSceneFiles({ files, title, replaceFiles, onNavigate, children }: {
         </CardContent></Card>}
         <DialogFooter>
           <Button variant="outline" onClick={keepOpenFile}>Cancel</Button>
-          <Button disabled={!choice} onClick={() => { if (choice) replaceFiles([choice]); }}>Open</Button>
+          <Button disabled={!choice} onClick={() => { if (choice) openFile(choice); }}>Open</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   </>;
 }
 
-function PDFSceneSession({ path, initialTool, exporting, onExport, onBrowse, onNavigate, onScene, refusal, onRefusalClose }: {
+function PDFSceneSession({ path, initialTool, exporting, onExport, onBrowse, onNavigate, onScene, onStatus, exportedScene, refusal, onRefusalClose }: {
   path: string | null; initialTool: EditorTool | null; exporting: boolean; onExport: () => Promise<void>;
   refusal: RemovalRefusal | null; onRefusalClose: () => void;
   onBrowse: () => Promise<void>; onNavigate?: PdfEditorNavigation;
   onScene: (path: string | null, scene: PdfScene | null) => void;
+  onStatus: (status: SceneStatus | null) => void; exportedScene: PdfScene | null;
 }) {
   const availability = useToolAvailability();
   const [document, setDocument] = useState<PdfDocument | null>(null);
-  const [history, setHistory] = useState<History>({ past: [], present: { pages: [] }, future: [] });
+  const [history, setHistory] = useState<SceneHistory>(() => startSceneHistory({ pages: [] }));
   const [tool, setTool] = useState<EditorTool | null>(initialTool);
   const [thumbnailSize, setThumbnailSize] = useState<ThumbnailSize>('medium');
   const [visiblePages, setVisiblePages] = useState<number[]>([]);
@@ -361,7 +448,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onBrowse, onN
       if (!value.pages.length) throw new Error('The PDF has no pages.');
       setDocument(value);
       const initial = sceneFromDocument(value);
-      setHistory({ past: [], present: initial, future: [] });
+      setHistory(startSceneHistory(initial));
       setCurrentId(initial.pages[0].id); setPageSelection(clearPageSelection()); setPageRange(''); setPageRangeError(null); setAnnouncement(null); setBlankSources(null);
     }).catch((reason) => {
       if (!active) return;
@@ -476,19 +563,21 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onBrowse, onN
   const commit = (next: PdfScene, mergeGroup: string | null = null) => {
     const merge = Boolean(mergeGroup && group.current === mergeGroup);
     group.current = mergeGroup;
-    setHistory((previous) => same(previous.present, next) ? previous : ({
-      past: merge ? previous.past : [...previous.past, previous.present].slice(-100), present: next, future: [],
-    }));
+    setHistory((previous) => commitScene(previous, next, merge));
     setPreview(null);
   };
   const commitPage = (next: ScenePage) => commit({ pages: scene.pages.map((item) => item.id === next.id ? next : item) });
-  const undo = () => { group.current = null; setPreview(null); setAnnouncement(null); setHistory((value) => value.past.length ? {
-    past: value.past.slice(0, -1), present: value.past[value.past.length - 1], future: [value.present, ...value.future],
-  } : value); };
-  const redo = () => { group.current = null; setPreview(null); setAnnouncement(null); setHistory((value) => value.future.length ? {
-    past: [...value.past, value.present], present: value.future[0], future: value.future.slice(1),
-  } : value); };
-  const reset = () => { if (document) commit(sceneFromDocument(document)); setSelectedId(null); setAnnouncement(null); };
+  const undo = () => { group.current = null; setPreview(null); setAnnouncement(null); setHistory(undoScene); };
+  const redo = () => { group.current = null; setPreview(null); setAnnouncement(null); setHistory(redoScene); };
+  // Reset asks first. Confirming puts back the scene as it was opened, as one step that Undo can take back.
+  const [confirmingReset, setConfirmingReset] = useState(false);
+  const [showingShortcuts, setShowingShortcuts] = useState(false);
+  const reset = () => {
+    setConfirmingReset(false);
+    if (document) commit(sceneFromDocument(document));
+    setSelectedId(null); setAnnouncement(null);
+  };
+  useEffect(() => { if (exportedScene) setHistory((value) => markSceneExported(value, exportedScene)); }, [exportedScene]);
   useEffect(() => {
     const onShellCommand = (event: Event) => {
       const command = (event as CustomEvent<string>).detail;
@@ -607,6 +696,9 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onBrowse, onN
     }) });
   };
   const dirty = document && !same(scene, sceneFromDocument(document));
+  const canExport = Boolean(page && dirty && !exporting && !renderError && !rendering && exactPreview);
+  const changes = document ? unexportedChanges(history) : 0;
+  useEffect(() => { onStatus(document ? { changes, canExport } : null); }, [document, changes, canExport]);
   const pageViewTool = tools.find((item) => item.id !== 'organize' && availability.allows(toolFlagBySceneTool[item.id]))?.id ?? null;
   // Moving through the grid moves focus only. Selection changes on click, Space, Shift with an arrow key, or the Select buttons.
   const focusGridPage = (index: number, extend: boolean) => {
@@ -638,6 +730,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onBrowse, onN
     // {mod}+R turns the selected pages right, Shift+{mod}+R turns them left. It never reloads the window.
     if (primary && event.key.toLowerCase() === 'r') { event.preventDefault(); rotateSelection(event.shiftKey ? -90 : 90); return; }
     if (event.metaKey || event.ctrlKey) return;
+    if (event.key === '?') { event.preventDefault(); setShowingShortcuts(true); return; }
     if ((event.key === 'Delete' || event.key === 'Backspace') && !event.shiftKey) { event.preventDefault(); deleteSelection(); return; }
     if (event.key.toLowerCase() === 'm' && !event.shiftKey) {
       if (pageTargets.length && canReorder) { event.preventDefault(); openMoveTo(true); }
@@ -882,6 +975,8 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onBrowse, onN
   const endKey = isWindows() ? 'Ctrl+End' : '⌘↓';
   const rotateRightKey = isWindows() ? 'Ctrl+R' : '⌘R';
   const rotateLeftKey = isWindows() ? 'Ctrl+Shift+R' : '⇧⌘R';
+  const undoKey = isWindows() ? 'Ctrl+Z' : '⌘Z';
+  const redoKey = isWindows() ? 'Ctrl+Y' : '⇧⌘Z';
   const selectionCount = selectionCountLabel(pageTargets.length);
   // The focused page shows its source thumbnail turned in CSS, so a rotation shows at once without waiting for a render.
   const focusSource = tool === 'organize' && page?.sourceIndex !== null && page?.sourceIndex !== undefined ? sourceThumbnails?.get(page.sourceIndex) : undefined;
@@ -889,6 +984,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onBrowse, onN
   const selectionLocked = exporting || !page;
   const documentName = path ? fileName(path) : '';
   const pageCount = `${scene.pages.length} ${scene.pages.length === 1 ? 'page' : 'pages'}`;
+  const changesSummary = changesLabel(history, exporting);
   // Mirrored pages show their text reversed. The notice says so before export, and goes once no page is mirrored.
   const mirroredNotice = mirroredTextNotice(scene.pages.filter((item) => item.mirrored).length);
   const endGroup = () => { group.current = null; };
@@ -910,7 +1006,11 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onBrowse, onN
 
   return <section className="pdf-scene-workspace" aria-label="PDF editing session" onKeyDown={(event) => {
     const input = event.target instanceof HTMLElement && (['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target.tagName) || event.target.isContentEditable);
-    if (!input && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); event.shiftKey ? redo() : undo(); }
+    if (input || event.altKey || !(event.metaKey || event.ctrlKey)) return;
+    const key = event.key.toLowerCase();
+    if (key === 'z') { event.preventDefault(); if (event.shiftKey) redo(); else undo(); }
+    // Windows also redoes with Ctrl+Y.
+    else if (key === 'y' && isWindows() && event.ctrlKey && !event.shiftKey) { event.preventDefault(); redo(); }
   }}>
     <div ref={toolsToolbar} className="scene-tools" role="toolbar" aria-label="PDF editor tools" aria-orientation="horizontal" onFocusCapture={handleToolbarFocus} onKeyDown={handleToolbarKeyDown}>
       {tools.filter((item) => availability.allows(toolFlagBySceneTool[item.id])).map((item) => <Button key={item.id} variant={tool === item.id ? "secondary" : "ghost"} size="sm" aria-label={item.label} aria-description={toolGuidance[item.id]} title={toolGuidance[item.id]} aria-pressed={tool === item.id}
@@ -920,10 +1020,12 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onBrowse, onN
         title={dirty ? 'Export or reset your edits before redacting' : 'Black out private details in a copy of this PDF'}
         disabled={!page || !path || Boolean(dirty)} onClick={() => { if (path) onNavigate({ utilityId: 'pdf-redact', initialPaths: [path] }); }}><span aria-hidden="true">▮</span>Redact</Button>}
       <span className="scene-toolbar-divider" />
-      <Button variant="ghost" size="icon-sm" aria-label="Undo" title="Undo (⌘Z / Ctrl+Z)" disabled={!history.past.length} onClick={undo}>↶</Button>
-      <Button variant="ghost" size="icon-sm" aria-label="Redo" title="Redo (⇧⌘Z / Ctrl+Shift+Z)" disabled={!history.future.length} onClick={redo}>↷</Button>
-      <Button variant="destructive" size="sm" aria-label="Reset edits" disabled={!dirty} onClick={reset}>Reset</Button>
-      <Button variant="default" size="sm" className="workspace-primary-action scene-export" aria-label="Export PDF" disabled={!page || !dirty || exporting || Boolean(renderError) || rendering || !exactPreview}
+      <Button variant="ghost" size="icon-sm" aria-label={`Undo (${undoKey})`} title={`Undo (${undoKey})`} aria-keyshortcuts={isWindows() ? 'Control+Z' : 'Meta+Z'}
+        disabled={!history.past.length} onClick={undo}>↶</Button>
+      <Button variant="ghost" size="icon-sm" aria-label={`Redo (${redoKey})`} title={`Redo (${redoKey})`} aria-keyshortcuts={isWindows() ? 'Control+Y Control+Shift+Z' : 'Shift+Meta+Z'}
+        disabled={!history.future.length} onClick={redo}>↷</Button>
+      <Button variant="ghost" size="sm" aria-haspopup="dialog" disabled={!dirty || exporting} onClick={() => setConfirmingReset(true)}>Reset…</Button>
+      <Button variant="default" size="sm" className="workspace-primary-action scene-export" aria-label="Export PDF" disabled={!canExport}
         {...shortcutTarget('run')} onClick={() => void onExport()}>{exporting ? 'Exporting…' : 'Export PDF'}<ShortcutHint id="run" /></Button>
     </div>
     {error && <p role="alert" className="scene-error">{error}</p>}
@@ -956,7 +1058,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onBrowse, onN
       <div className="scene-organize-bar">
         <div className="scene-organize-document">
           <h2>{documentName}</h2>
-          <p>{pageCount}{dirty ? '. Changes not exported' : ''}</p>
+          <p>{pageCount}{changesSummary ? `. ${changesSummary}` : ''}</p>
         </div>
         <div className="scene-organize-actions" role="toolbar" aria-label={`Page actions, ${selectionCount}`} aria-orientation="horizontal">
           <span role="status" className="scene-organize-count">{selectionCount}</span>
@@ -1077,6 +1179,8 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onBrowse, onN
             <ToggleGroupItem value="large">Large</ToggleGroupItem>
           </ToggleGroup>
         </div>
+        <Button variant="ghost" size="sm" aria-label="Keyboard shortcuts (?)" title="Keyboard shortcuts (?)" aria-haspopup="dialog" aria-keyshortcuts="?"
+          onClick={() => setShowingShortcuts(true)}><Keyboard aria-hidden="true" /><kbd aria-hidden="true" className="shortcut-hint">?</kbd></Button>
       </div>
       <div className="scene-organize-body">
         <div className="scene-organize-grid-frame">
@@ -1116,7 +1220,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onBrowse, onN
           <div className="scene-organize-scroll-band" data-edge="bottom" data-active={pageDrag.scrolling?.direction === 1 || undefined} aria-hidden="true"><ArrowDown />{scrollBandText(1)}</div>
         </>}
         </div>
-        <p id="scene-organize-grid-help" className="sr-only">Arrow keys move focus. Space selects. Shift with an arrow key extends the selection. {moveModifier} with an arrow key moves the selected pages. Enter opens the page in page view.</p>
+        <p id="scene-organize-grid-help" className="sr-only">Arrow keys move focus. Space selects. Shift with an arrow key extends the selection. {moveModifier} with an arrow key moves the selected pages. Enter opens the page in page view. Press question mark for all shortcuts.</p>
         {pageDrag && createPortal(<div className="scene-organize-ghost" style={{ left: pageDrag.x, top: pageDrag.y }} aria-hidden="true">
           {pageDrag.ids.length > 2 && <span className="scene-organize-ghost-sheet" data-layer="back" />}
           {pageDrag.ids.length > 1 && <span className="scene-organize-ghost-sheet" data-layer="middle" />}
@@ -1157,6 +1261,18 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onBrowse, onN
             <Button variant="ghost" className="sm:mr-auto" onClick={onRefusalClose}>Keep editing</Button>
             <Button onClick={restoreRefused}>Restore {refusedPagesLower}</Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={showingShortcuts} onOpenChange={setShowingShortcuts}>
+        <DialogContent showCloseButton={false} className="scene-shortcuts-dialog sm:max-w-[640px]">
+          <DialogHeader>
+            <DialogTitle>Organize shortcuts</DialogTitle>
+            <DialogDescription>These work while the page grid has focus.</DialogDescription>
+          </DialogHeader>
+          <dl className="scene-shortcuts" aria-label="Organize shortcuts">
+            {organizeShortcuts(isWindows()).map(([action, key]) => <div key={action}><dt>{action}</dt><dd><kbd className="shortcut-hint">{key}</kbd></dd></div>)}
+          </dl>
+          <DialogFooter><Button onClick={() => setShowingShortcuts(false)}>Close</Button></DialogFooter>
         </DialogContent>
       </Dialog>
       <div className="scene-organize-status">
@@ -1306,6 +1422,18 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onBrowse, onN
         {availability.allows('pdf-page-numbers') && <Button variant="ghost" size="sm" onClick={pageNumbers}>Page numbers</Button>}<span className="scene-original-note">Original unchanged</span>
       </div>
     </>}
+    <Dialog open={confirmingReset} onOpenChange={setConfirmingReset}>
+      <DialogContent role="alertdialog" showCloseButton={false} className="scene-reset">
+        <DialogHeader>
+          <DialogTitle>Reset all page changes?</DialogTitle>
+          <DialogDescription>All {document?.pages.length ?? 0} pages go back to how {documentName} was opened: original order and orientation, with removed pages restored. This also clears changes from other PDF Editor tools. Your original file isn’t affected.</DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setConfirmingReset(false)}>Cancel</Button>
+          <Button onClick={reset}>Reset</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </section>;
 }
 

@@ -3034,6 +3034,52 @@ mod tests {
         assert_eq!(output.get_dictionary(acro_form).unwrap().get(b"Fields").unwrap().as_array().unwrap(), &vec![Object::Reference(widget)]);
     }
 
+    /// The editor's history keeps whole scenes, and undo or redo sends an earlier or later one unchanged. So an
+    /// export after undo and redo must match, byte for byte, an export of that scene built directly.
+    #[test]
+    fn export_after_undo_and_redo_matches_the_equivalent_scene_byte_for_byte() {
+        let temp = TempDir::new().unwrap();
+        let input = temp.0.join("five.pdf");
+        numbered_pages_fixture().0.save(&input).unwrap();
+        let export_bytes = |scene: PdfScene| {
+            let result = export(&ExportRequest { paths: vec![input.clone()], scene, output_location: OutputLocation::AlongsideInput }, input.clone());
+            assert!(result.error().is_none(), "{:?}", result.error());
+            fs::read(&result.output_paths()[0]).unwrap()
+        };
+        let page = |index: usize| serde_json::json!({
+            "sourceIndex": index, "width": 612.0, "height": 792.0, "rotation": 0, "mirrored": false, "crop": null,
+            "sourceRotation": 0, "sourceBox": { "x": 0.0, "y": 0.0, "width": 612.0, "height": 792.0 }, "objects": [],
+        });
+        // Each step is a whole scene, as the editor sends it: move pages 1 and 2 after page 3, rotate the first page,
+        // mirror the second, then delete the last.
+        let mut steps = vec![serde_json::json!({ "pages": (0..5).map(page).collect::<Vec<_>>() })];
+        let mut edit = |change: &dyn Fn(&mut Vec<serde_json::Value>)| {
+            let mut next = steps.last().unwrap().clone();
+            change(next["pages"].as_array_mut().unwrap());
+            steps.push(next);
+        };
+        edit(&|pages| { let moved: Vec<_> = pages.drain(0..2).collect(); pages.splice(1..1, moved); });
+        edit(&|pages| pages[0]["rotation"] = 90.into());
+        edit(&|pages| pages[1]["mirrored"] = true.into());
+        edit(&|pages| { pages.pop(); });
+        let scene_at = |position: usize| serde_json::from_value::<PdfScene>(steps[position].clone()).unwrap();
+
+        let mut mirrored = kept_scene(&[2, 0, 1, 3, 4]);
+        mirrored.pages[0].rotation = 90;
+        mirrored.pages[1].mirrored = true;
+        let mut deleted = mirrored.clone();
+        deleted.pages.pop();
+
+        // Undo the delete, then redo it.
+        let after_undo = export_bytes(scene_at(3));
+        let after_redo = export_bytes(scene_at(4));
+        assert_eq!(after_undo, export_bytes(mirrored), "an export after undo differs from the same scene exported directly");
+        assert_eq!(after_redo, export_bytes(deleted), "an export after redo differs from the same scene exported directly");
+        assert_ne!(after_undo, after_redo);
+        // Undo back to the opened file exports its pages unchanged.
+        assert_eq!(export_bytes(scene_at(0)), export_bytes(kept_scene(&[0, 1, 2, 3, 4])));
+    }
+
     #[test]
     fn removing_every_page_is_refused_without_output() {
         let temp = TempDir::new().unwrap();
