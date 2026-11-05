@@ -1,4 +1,5 @@
-//! Installing a pack from a file the person chose. Local only: nothing here uses the network.
+//! Installing a pack file, chosen by the person or downloaded by [`super::download`]. Local only:
+//! nothing here uses the network.
 //!
 //! A pack file (`.toolboxpack`) is a zip envelope with three entries:
 //! - `pack.json` — an unsigned header, `{ "formatVersion": 1, "id", "version", "target" }`. It says
@@ -18,6 +19,7 @@
 //! what was installed before as it was.
 
 use super::{in_range, list_packs_in, load_catalog, Catalog, CatalogPack, InstalledRecord, PackList, Payload, ALL_TARGETS, INSTALLED_FILE, MANIFEST_FILE, PACKS_DIR, PACK_FORMAT};
+use crate::kit::common::limits::CancelFlag;
 use crate::kit::resources::{verify_resource, ResourceManifest, VerificationFailure};
 use base64::Engine as _;
 use minisign_verify::{PublicKey, Signature};
@@ -115,6 +117,19 @@ pub enum PackInstallErrorKind {
     UnlistedFile { path: String },
     /// Toolbox could not read its own settings or write to its app-data folder.
     Unavailable,
+    /// The person cancelled it. Nothing was installed.
+    Cancelled,
+    /// The disk holding app data has less free space than the download and the installed pack
+    /// need together. Checked before anything is downloaded.
+    #[serde(rename_all = "camelCase")]
+    NotEnoughSpace { needed_bytes: u64, free_bytes: u64 },
+    /// No network: the release server's name could not be looked up, or there is no route.
+    Offline,
+    /// The network works but the release server could not be used: refused, timed out, a
+    /// certificate or HTTP error, or a redirect away from its download hosts.
+    ServerBlocked,
+    /// The download started and then stopped or stalled before it finished.
+    Interrupted,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -127,7 +142,7 @@ pub struct PackInstallError {
 }
 
 impl PackInstallError {
-    fn new(kind: PackInstallErrorKind, message: impl Into<String>) -> Self {
+    pub(super) fn new(kind: PackInstallErrorKind, message: impl Into<String>) -> Self {
         Self { kind, message: message.into() }
     }
 }
@@ -138,7 +153,7 @@ fn fail<T>(kind: PackInstallErrorKind, message: impl Into<String>) -> Result<T> 
     Err(PackInstallError::new(kind, message))
 }
 
-fn unavailable(error: impl std::fmt::Display) -> PackInstallError {
+pub(super) fn unavailable(error: impl std::fmt::Display) -> PackInstallError {
     PackInstallError::new(PackInstallErrorKind::Unavailable, error.to_string())
 }
 
@@ -187,6 +202,17 @@ pub struct InstallContext<'a> {
     pub app_version: &'a str,
     pub public_key: &'a PublicKey,
     pub limits: PackLimits,
+    /// Checked between steps. Once the verified folder starts moving into place it is too late.
+    pub cancel: Option<&'a CancelFlag>,
+}
+
+impl InstallContext<'_> {
+    fn checkpoint(&self) -> Result<()> {
+        match self.cancel {
+            Some(cancel) if cancel.is_cancelled() => fail(PackInstallErrorKind::Cancelled, "The install was cancelled"),
+            _ => Ok(()),
+        }
+    }
 }
 
 #[tauri::command]
@@ -206,7 +232,7 @@ pub async fn install_pack_file(app: tauri::AppHandle, path: PathBuf) -> Result<P
         let catalog = load_catalog().map_err(unavailable)?;
         let public_key = trusted_public_key().map_err(unavailable)?;
         let target = super::current_target();
-        let context = InstallContext { catalog: &catalog, app_data: &app_data, target: &target, app_version: &app_version, public_key: &public_key, limits: PackLimits::DEFAULT };
+        let context = InstallContext { catalog: &catalog, app_data: &app_data, target: &target, app_version: &app_version, public_key: &public_key, limits: PackLimits::DEFAULT, cancel: None };
         install(&path, &context)?;
         Ok(list_packs_in(&catalog, &app_data, &target, &app_version))
     }).await.map_err(unavailable)?
@@ -259,16 +285,20 @@ pub fn install(path: &Path, context: &InstallContext) -> Result<()> {
 
 fn install_staged(path: &Path, context: &InstallContext, staging: &Path) -> Result<()> {
     let limits = &context.limits;
+    context.checkpoint()?;
     let mut envelope = open_envelope(path)?;
     let header = read_header(&mut envelope, limits)?;
     let (_, catalog_payload) = catalog_entry(context.catalog, &header)?;
     let signature = read_entry(&mut envelope, SIGNATURE_ENTRY, limits.metadata_bytes)
         .map_err(|_| PackInstallError::new(PackInstallErrorKind::BadSignature, "The pack file has no readable signature"))?;
     let payload = read_payload(&mut envelope, limits.archive_bytes)?;
+    context.checkpoint()?;
     verify_signature(&payload, &signature, context.public_key)?;
+    context.checkpoint()?;
     if digest_hex(&payload) != catalog_payload.sha256 {
         return fail(PackInstallErrorKind::ChecksumMismatch, "The payload archive's checksum does not match the catalog");
     }
+    context.checkpoint()?;
 
     let mut archive = zip::ZipArchive::new(Cursor::new(payload.as_slice()))
         .map_err(|error| PackInstallError::new(PackInstallErrorKind::Malformed, format!("The payload archive cannot be read: {error}")))?;
@@ -291,8 +321,9 @@ fn install_staged(path: &Path, context: &InstallContext, staging: &Path) -> Resu
 
     let content = staging.join("content");
     fs::create_dir_all(&content).map_err(unavailable)?;
-    extract(&mut archive, &content, limits)?;
-    let files = verify_files(&content, &manifest.resources)?;
+    extract(&mut archive, &content, context)?;
+    let files = verify_files(&content, &manifest.resources, context)?;
+    context.checkpoint()?;
     commit(context, &header, staging, &content, InstalledRecord {
         version: header.version.clone(),
         pack_format: pack.pack_format,
@@ -393,12 +424,14 @@ fn is_inside(path: &Path) -> bool {
 }
 
 /// Extracts every entry into `content`, enforcing the limits on the bytes actually written.
-fn extract<R: Read + Seek>(archive: &mut zip::ZipArchive<R>, content: &Path, limits: &PackLimits) -> Result<()> {
+fn extract<R: Read + Seek>(archive: &mut zip::ZipArchive<R>, content: &Path, context: &InstallContext) -> Result<()> {
+    let limits = &context.limits;
     if archive.len() > limits.entries {
         return fail(PackInstallErrorKind::OverLimit { limit: PackLimit::EntryCount }, format!("The payload has {} entries", archive.len()));
     }
     let mut unpacked = 0u64;
     for index in 0..archive.len() {
+        context.checkpoint()?;
         let entry = archive.by_index(index)
             .map_err(|error| PackInstallError::new(PackInstallErrorKind::Malformed, format!("An archive entry cannot be read: {error}")))?;
         let name = entry.name().to_string();
@@ -439,9 +472,10 @@ fn extract<R: Read + Seek>(archive: &mut zip::ZipArchive<R>, content: &Path, lim
 
 /// Verifies every listed file with the shared verifier, refuses files the manifest does not list,
 /// and returns every file's exact size for the installed record.
-fn verify_files(content: &Path, manifest: &ResourceManifest) -> Result<BTreeMap<String, u64>> {
+fn verify_files(content: &Path, manifest: &ResourceManifest, context: &InstallContext) -> Result<BTreeMap<String, u64>> {
     let mut listed = BTreeSet::from([PathBuf::from(MANIFEST_FILE)]);
     for spec in manifest.resources.values() {
+        context.checkpoint()?;
         let path = spec.path.to_string_lossy().into_owned();
         if !is_inside(&spec.path) {
             return fail(PackInstallErrorKind::Malformed, format!("The manifest lists a path outside the pack: {path:?}"));
@@ -520,19 +554,19 @@ fn commit(context: &InstallContext, header: &Header, staging: &Path, content: &P
     Ok(())
 }
 
-fn remove_tree(path: &Path) -> std::io::Result<()> {
+pub(super) fn remove_tree(path: &Path) -> std::io::Result<()> {
     match fs::remove_dir_all(path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         other => other,
     }
 }
 
-fn digest_hex(bytes: &[u8]) -> String {
+pub(super) fn digest_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::super::{current_target, PackStatus};
     use super::*;
     use crate::kit::resources::{resolve_pack_backed, PackBackedLocations, ResourceSource, ResolvedResource};
@@ -542,7 +576,7 @@ mod tests {
     const APP: &str = "1.0.14";
     const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::STANDARD;
 
-    fn sandbox(name: &str) -> PathBuf {
+    pub(in crate::packs) fn sandbox(name: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!("toolbox-pack-install-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(&path).unwrap();
@@ -550,13 +584,13 @@ mod tests {
     }
 
     /// A throwaway minisign key made for the test. It signs in the legacy mode the updater accepts.
-    struct TestKey {
+    pub(in crate::packs) struct TestKey {
         pair: Ed25519KeyPair,
         id: [u8; 8],
     }
 
     impl TestKey {
-        fn new(id: u8) -> Self {
+        pub(in crate::packs) fn new(id: u8) -> Self {
             let pkcs8 = Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new()).unwrap();
             Self { pair: Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap(), id: [id; 8] }
         }
@@ -567,7 +601,7 @@ mod tests {
             B64.encode(format!("untrusted comment: minisign public key: test\n{}\n", B64.encode(key)))
         }
 
-        fn public_key(&self) -> PublicKey {
+        pub(in crate::packs) fn public_key(&self) -> PublicKey {
             decode_public_key(&self.encoded_public_key()).unwrap()
         }
 
@@ -593,10 +627,10 @@ mod tests {
 
     /// A pack built in code. Each test changes what it needs and builds the file and its catalog.
     #[derive(Clone)]
-    struct Fixture {
-        id: String,
-        version: String,
-        target: String,
+    pub(in crate::packs) struct Fixture {
+        pub(in crate::packs) id: String,
+        pub(in crate::packs) version: String,
+        pub(in crate::packs) target: String,
         pack_format: u32,
         app_versions: serde_json::Value,
         files: Vec<(String, Vec<u8>)>,
@@ -606,7 +640,7 @@ mod tests {
     }
 
     impl Fixture {
-        fn new() -> Self {
+        pub(in crate::packs) fn new() -> Self {
             Self {
                 id: "ocr-hindi".into(),
                 version: "2.0".into(),
@@ -634,7 +668,7 @@ mod tests {
             })).unwrap()
         }
 
-        fn payload(&self) -> Vec<u8> {
+        pub(in crate::packs) fn payload(&self) -> Vec<u8> {
             let manifest = self.manifest();
             let mut entries: Vec<(&str, &[u8])> = vec![(MANIFEST_FILE, &manifest)];
             entries.extend(self.files.iter().chain(&self.extra_entries).map(|(name, bytes)| (name.as_str(), bytes.as_slice())));
@@ -646,7 +680,7 @@ mod tests {
         }
 
         /// The pack file, its payload signed by `key`.
-        fn file(&self, key: &TestKey) -> Vec<u8> {
+        pub(in crate::packs) fn file(&self, key: &TestKey) -> Vec<u8> {
             let payload = self.payload();
             Self::envelope(&self.header(), &payload, Some(key.sign(&payload).as_bytes()))
         }
@@ -666,7 +700,7 @@ mod tests {
             super::super::parse_catalog(&serde_json::json!({ "formatVersion": 1, "packs": [{
                 "id": self.id, "name": "Text recognition, Hindi", "description": "Reads Hindi.", "toolIds": ["pdf-ocr"],
                 "license": "Apache-2.0", "version": self.version, "minPackFormat": 1, "appVersions": { "from": "1.0.0" },
-                "payloads": [{ "target": self.target, "downloadBytes": 1000, "installedBytes": 32505856, "sha256": sha256 }]
+                "payloads": [{ "target": self.target, "downloadBytes": 1000, "installedBytes": 32505856, "sha256": sha256, "path": "packs/ocr-hindi.toolboxpack" }]
             }]}).to_string()).unwrap()
         }
 
@@ -697,7 +731,7 @@ mod tests {
 
         fn install_as(&self, app_version: &str) -> Result<()> {
             let target = current_target();
-            install(&self.file, &InstallContext { catalog: &self.catalog, app_data: &self.app_data, target: &target, app_version, public_key: &self.key, limits: self.limits })
+            install(&self.file, &InstallContext { catalog: &self.catalog, app_data: &self.app_data, target: &target, app_version, public_key: &self.key, limits: self.limits, cancel: None })
         }
 
         fn list(&self, app_version: &str) -> PackList {
@@ -876,7 +910,7 @@ mod tests {
         fs::write(&setup.file, &tampered).unwrap();
         let catalog = new.catalog();
         let target = current_target();
-        let context = InstallContext { catalog: &catalog, app_data: &setup.app_data, target: &target, app_version: APP, public_key: &setup.key, limits: PackLimits::DEFAULT };
+        let context = InstallContext { catalog: &catalog, app_data: &setup.app_data, target: &target, app_version: APP, public_key: &setup.key, limits: PackLimits::DEFAULT, cancel: None };
         assert!(install(&setup.file, &context).is_err());
         assert_eq!(fs::read(setup.app_data.join("packs/ocr-hindi/installed.json")).unwrap(), old_record);
         assert!(setup.app_data.join("packs/ocr-hindi/1.0/tessdata/hin.traineddata").is_file());
@@ -950,6 +984,25 @@ mod tests {
         let error = PackInstallError::new(PackInstallErrorKind::OverLimit { limit: PackLimit::CompressionRatio }, "detail");
         assert_eq!(serde_json::to_value(&error).unwrap()["details"], serde_json::json!({ "limit": "compressionRatio" }));
         assert_eq!(serde_json::to_value(PackInstallError::new(PackInstallErrorKind::BadSignature, "")).unwrap()["kind"], "badSignature");
+        let error = PackInstallError::new(PackInstallErrorKind::NotEnoughSpace { needed_bytes: 310, free_bytes: 120 }, "");
+        assert_eq!(serde_json::to_value(&error).unwrap()["details"], serde_json::json!({ "neededBytes": 310, "freeBytes": 120 }));
+        for (kind, name) in [(PackInstallErrorKind::Offline, "offline"), (PackInstallErrorKind::ServerBlocked, "serverBlocked"), (PackInstallErrorKind::Interrupted, "interrupted"), (PackInstallErrorKind::Cancelled, "cancelled")] {
+            assert_eq!(serde_json::to_value(PackInstallError::new(kind, "")).unwrap()["kind"], name);
+        }
+    }
+
+    #[test]
+    fn a_cancelled_install_stops_before_anything_is_visible_and_a_later_install_works() {
+        let key = TestKey::new(1);
+        let setup = Setup::new("cancelled", &Fixture::new(), &key);
+        let target = current_target();
+        let cancel = CancelFlag::default();
+        cancel.cancel();
+        let context = InstallContext { catalog: &setup.catalog, app_data: &setup.app_data, target: &target, app_version: APP, public_key: &setup.key, limits: setup.limits, cancel: Some(&cancel) };
+        assert_eq!(kind_of(install(&setup.file, &context)), PackInstallErrorKind::Cancelled);
+        setup.assert_untouched("cancelled");
+        setup.install().unwrap();
+        assert_eq!(setup.list(APP).installed_count, 1);
     }
 
     #[test]
@@ -977,7 +1030,7 @@ mod tests {
     #[test]
     fn installing_makes_no_network_request() {
         let source = include_str!("install.rs");
-        let runtime = &source[..source.find("#[cfg(test)]\nmod tests").unwrap()];
+        let runtime = &source[..source.find("#[cfg(test)]\npub(super) mod tests").unwrap()];
         for needle in ["std::net", "TcpStream", "UdpSocket", "ToSocketAddrs", "reqwest", "ureq", "hyper", "tauri_plugin_http", "Command::new"] {
             assert!(!runtime.contains(needle), "install.rs must not use {needle}");
         }

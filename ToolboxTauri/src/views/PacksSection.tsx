@@ -1,10 +1,12 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, TriangleAlert } from "lucide-react";
 import { UtilityRegistry } from "../registry";
 import { isWindows } from "../shortcuts";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 export type PackStatus = "notInstalled" | "installed" | "updateAvailable" | "damaged" | "incompatible";
@@ -39,13 +41,30 @@ export interface PackFileSummary {
   license: string;
 }
 
-/** Why a pack file was not installed: `PackInstallError` in `src-tauri/src/packs/install.rs`. */
+/** Why a pack was not installed: `PackInstallError` in `src-tauri/src/packs/install.rs`. */
 export type PackInstallError = { message: string } & (
+  | { kind: "notEnoughSpace"; details: { neededBytes: number; freeBytes: number } }
   | { kind: "wrongTarget"; details: { target: string } }
   | { kind: "overLimit"; details: { limit: "archiveSize" | "unpackedSize" | "entryCount" | "compressionRatio" } }
   | { kind: "unsafeEntry" | "fileMissing" | "fileChecksumMismatch" | "fileSizeMismatch" | "unlistedFile"; details: { path: string } }
-  | { kind: "notAPack" | "notInCatalog" | "badSignature" | "wrongKey" | "checksumMismatch" | "malformed" | "incompatibleFormat" | "incompatibleApp" | "unavailable" }
+  | { kind: "notAPack" | "notInCatalog" | "badSignature" | "wrongKey" | "checksumMismatch" | "malformed" | "incompatibleFormat" | "incompatibleApp" | "unavailable" | "cancelled" | "offline" | "serverBlocked" | "interrupted" }
 );
+
+/** A `pack-progress` event from `src-tauri/src/packs/download.rs`. */
+export interface PackProgress {
+  runId: string;
+  packId: string;
+  phase: "queued" | "downloading" | "verifying";
+  receivedBytes: number;
+  totalBytes: number;
+}
+
+const PROGRESS_EVENT = "pack-progress";
+
+/** A download started from this view: in progress, or failed with the error its row shows. */
+type Job =
+  | { runId: string; phase: PackProgress["phase"]; receivedBytes: number; totalBytes: number }
+  | { runId: string; phase: "failed"; error: PackInstallError };
 
 const MB = 1024 * 1024;
 const GB = 1024 * MB;
@@ -54,6 +73,14 @@ export const formatBytes = (bytes: number) => {
   if (bytes >= GB) return `${Number((bytes / GB).toFixed(1))} GB`;
   if (bytes >= MB) return `${Math.round(bytes / MB)} MB`;
   return `${Math.ceil(bytes / 1024)} KB`;
+};
+
+/** "7 of 12 MB": the received amount in the total's unit. */
+const formatProgress = (received: number, total: number) => {
+  const [unit, size, round] = total >= GB
+    ? ["GB", GB, (n: number) => Number(n.toFixed(1))] as const
+    : total >= MB ? ["MB", MB, Math.round] as const : ["KB", 1024, Math.ceil] as const;
+  return `${round(Math.min(received, total) / size)} of ${round(total / size)} ${unit}`;
 };
 
 const toolTitles = new Map<string, string>(UtilityRegistry.map(({ id, title }) => [id, title]));
@@ -143,16 +170,61 @@ const PackFacts = ({ facts }: { facts: Array<[string, string]> }) => (
   </dl>
 );
 
-const PackRow = ({ pack, checking }: { pack: PackEntry; checking: boolean }) => {
+/** What a failed download's row says, from the Packs design board. */
+const failedText = (error: PackInstallError) => {
+  switch (error.kind) {
+    case "serverBlocked":
+      return "Couldn't reach the Toolbox release server.";
+    case "notEnoughSpace":
+      return `Needs ${formatBytes(error.details.neededBytes)} free. ${formatBytes(error.details.freeBytes)} is free on this disk.`;
+    case "interrupted":
+    case "unavailable":
+      return "Download stopped before it finished. Nothing was installed.";
+    default:
+      return "The download didn't pass its safety check, so it was deleted. Nothing was installed.";
+  }
+};
+
+type RowActions = { install: () => void; cancel: (runId: string) => void };
+
+const PackRow = ({ pack, checking, job, offline, actions }: { pack: PackEntry; checking: boolean; job: Job | undefined; offline: boolean; actions: RowActions }) => {
   const [open, setOpen] = useState(false);
   const installed = pack.status !== "notInstalled";
   const tools = toolList(pack.toolIds);
   const download = pack.downloadBytes === null ? null : formatBytes(pack.downloadBytes);
-  const status = checking ? "Checking the pack file…" : statusText(pack);
+  const offlineRow = offline && !installed && job === undefined;
+  let status = statusText(pack);
+  let state: string = pack.status;
+  let bar: { label: string; percent: number } | null = null;
+  if (checking) {
+    status = "Checking the pack file…";
+    state = "checking";
+    bar = { label: `Checking ${pack.name}`, percent: 100 };
+  } else if (job?.phase === "failed") {
+    status = failedText(job.error);
+    state = "failed";
+  } else if (job?.phase === "queued") {
+    status = "Waiting. Starts after the downloads above.";
+    state = "queued";
+  } else if (job?.phase === "downloading") {
+    status = formatProgress(job.receivedBytes, job.totalBytes);
+    state = "downloading";
+    bar = { label: `Downloading ${pack.name}`, percent: job.totalBytes > 0 ? Math.floor(Math.min(job.receivedBytes / job.totalBytes, 1) * 100) : 0 };
+  } else if (job?.phase === "verifying") {
+    status = "Checking the download…";
+    state = "verifying";
+    bar = { label: `Checking ${pack.name}`, percent: 100 };
+  } else if (offlineRow) {
+    status = "No internet connection.";
+    state = "offline";
+  }
   const sub = installed
     ? `Used by ${tools}. ${formatBytes(pack.diskBytes)} on this disk.`
     : `Used by ${tools}. ${download} download.`;
   const detailsId = `pack-details-${pack.id}`;
+  const action = (label: string, onClick: () => void, disabled = false) => (
+    <Button variant="outline" size="xs" aria-label={`${label} ${pack.name}`} disabled={disabled} onClick={onClick}>{label}</Button>
+  );
   return (
     <li className="pack-row" aria-label={`${pack.name}, ${status}`}>
       <div className="pack-row-main">
@@ -170,13 +242,16 @@ const PackRow = ({ pack, checking }: { pack: PackEntry; checking: boolean }) => 
           <span className="pack-row-name">{pack.name}</span>
           <span className="settings-row-hint">{sub}</span>
         </span>
-        <span className="pack-row-status settings-row-hint" role="status" data-status={checking ? "checking" : pack.status}>
-          {checking && (
-            <span role="progressbar" aria-label={`Checking ${pack.name}`} aria-valuenow={100} aria-valuemin={0} aria-valuemax={100} className="pack-progress">
-              <span />
+        <span className="pack-row-end">
+          {bar && (
+            <span role="progressbar" aria-label={bar.label} aria-valuenow={bar.percent} aria-valuemin={0} aria-valuemax={100} className="pack-progress">
+              <span style={{ width: `${bar.percent}%` }} />
             </span>
           )}
-          {status}
+          <span className="pack-row-status settings-row-hint" role="status" data-status={state}>{status}</span>
+          {job && job.phase !== "failed" && action("Cancel", () => actions.cancel(job.runId))}
+          {job?.phase === "failed" && action("Try again", actions.install)}
+          {!job && !checking && pack.status === "notInstalled" && action("Install", actions.install, offlineRow)}
         </span>
       </div>
       {open && (
@@ -193,13 +268,26 @@ const PackRow = ({ pack, checking }: { pack: PackEntry; checking: boolean }) => 
   );
 };
 
-/** Lists packs and installs one from a pack file. Downloading, updating and removing arrive later. */
+/** The note above the list for a problem that affects every download, from the Packs design board. */
+const Banner = ({ role, tone, title, text, action }: { role: "status" | "alert"; tone: "warning" | "destructive"; title: string; text: string; action?: { label: string; onClick: () => void } }) => (
+  <Card className="settings-note packs-banner py-0" role={role} data-tone={tone}>
+    <CardContent className="settings-note-content">
+      <TriangleAlert aria-hidden="true" />
+      <p><strong>{title}</strong> {text}</p>
+      {action && <Button variant="outline" size="xs" onClick={action.onClick}>{action.label}</Button>}
+    </CardContent>
+  </Card>
+);
+
+/** Lists packs, downloads and installs them one at a time, and installs one from a pack file. Updating and removing arrive later. */
 export const PacksSection = () => {
   const request = useRef<Promise<PackList> | null>(null);
   const [list, setList] = useState<PackList | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [fileStep, setFileStep] = useState<FileStep | null>(null);
   const [checking, setChecking] = useState<string | null>(null);
+  const [jobs, setJobs] = useState<Record<string, Job>>({});
+  const [offline, setOffline] = useState(false);
   useEffect(() => {
     // One request per visit, even when StrictMode runs this effect twice.
     request.current ??= invoke<PackList>("list_packs");
@@ -209,6 +297,53 @@ export const PacksSection = () => {
       .catch(() => { if (live) setError("Could not load packs."); });
     return () => { live = false; };
   }, []);
+
+  useEffect(() => {
+    let live = true;
+    let stop: UnlistenFn | null = null;
+    listen<PackProgress>(PROGRESS_EVENT, ({ payload }) => {
+      setJobs((current) => {
+        const job = current[payload.packId];
+        if (job?.runId !== payload.runId || job.phase === "failed") return current;
+        return { ...current, [payload.packId]: { runId: job.runId, phase: payload.phase, receivedBytes: payload.receivedBytes, totalBytes: payload.totalBytes } };
+      });
+    })
+      .then((unlisten) => { if (live) stop = unlisten; else unlisten(); })
+      .catch(() => {
+        // Without progress events a download still finishes and shows its final state.
+      });
+    // Offline rows wait for the network to come back before offering Install again.
+    const online = () => setOffline(false);
+    window.addEventListener("online", online);
+    return () => {
+      live = false;
+      stop?.();
+      window.removeEventListener("online", online);
+    };
+  }, []);
+
+  const download = async (pack: PackEntry) => {
+    const runId = crypto.randomUUID();
+    setJobs((current) => ({ ...current, [pack.id]: { runId, phase: "downloading", receivedBytes: 0, totalBytes: pack.downloadBytes ?? 0 } }));
+    let failure: PackInstallError | null = null;
+    try {
+      setList(await invoke<PackList>("install_pack", { packId: pack.id, runId }));
+      setOffline(false);
+    } catch (reason) {
+      failure = asInstallError(reason);
+      if (failure.kind === "offline") setOffline(true);
+    }
+    setJobs((current) => {
+      const { [pack.id]: finished, ...rest } = current;
+      if (finished?.runId !== runId) return current;
+      // Cancelled and offline downloads leave the row as it was; offline shows on every row.
+      return failure && failure.kind !== "cancelled" && failure.kind !== "offline" ? { ...rest, [pack.id]: { runId, phase: "failed", error: failure } } : rest;
+    });
+  };
+
+  const cancel = (runId: string) => {
+    void invoke<boolean>("cancel_run", { runId });
+  };
 
   const chooseFile = async () => {
     setFileStep(null);
@@ -235,6 +370,12 @@ export const PacksSection = () => {
   };
 
   const copy = fileStep?.step === "error" ? errorCopy(fileStep.error) : null;
+  const failures = (list?.packs ?? []).flatMap((pack) => {
+    const job = jobs[pack.id];
+    return job?.phase === "failed" ? [{ pack, error: job.error }] : [];
+  });
+  const blocked = failures.some(({ error }) => error.kind === "serverBlocked");
+  const lowSpace = failures.flatMap(({ pack, error }) => error.kind === "notEnoughSpace" ? [{ pack, ...error.details }] : [])[0];
   return (
     <div className="packs">
       <div className="packs-intro">
@@ -246,8 +387,35 @@ export const PacksSection = () => {
         </div>
         <Button variant="outline" size="xs" disabled={checking !== null} onClick={() => void chooseFile()}>Install from file…</Button>
       </div>
+      {offline ? (
+        <Banner role="status" tone="warning" title="You're offline." text="Installed packs keep working. Connect to the internet to install or update packs, or use Install from file." />
+      ) : blocked ? (
+        <Banner
+          role="alert"
+          tone="destructive"
+          title="Couldn't reach the Toolbox release server."
+          text="Your internet works, but something on this network is blocking downloads from Toolbox. Try again later or on another network, or install from a pack file."
+          action={checking === null ? { label: "Install from file…", onClick: () => void chooseFile() } : undefined}
+        />
+      ) : lowSpace ? (
+        <Banner
+          role="alert"
+          tone="destructive"
+          title={`Not enough space for ${lowSpace.pack.name}.`}
+          text={`It needs ${formatBytes(lowSpace.neededBytes)} free and this disk has ${formatBytes(lowSpace.freeBytes)}. Free up at least ${formatBytes(lowSpace.neededBytes - lowSpace.freeBytes)}, then try again.`}
+        />
+      ) : null}
       <ul className="pack-list" aria-label="Packs">
-        {list?.packs.map((pack) => <PackRow key={pack.id} pack={pack} checking={checking === pack.id} />)}
+        {list?.packs.map((pack) => (
+          <PackRow
+            key={pack.id}
+            pack={pack}
+            checking={checking === pack.id}
+            job={jobs[pack.id]}
+            offline={offline}
+            actions={{ install: () => void download(pack), cancel }}
+          />
+        ))}
       </ul>
       {list && (
         <p className="settings-row-hint" role="status">

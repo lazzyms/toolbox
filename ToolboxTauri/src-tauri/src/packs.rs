@@ -1,7 +1,7 @@
 //! Optional packs: the built-in catalog and what is installed in the app-data folder.
 //!
 //! Listing is read-only and local. It reads the catalog built into the app and the files under
-//! `<app data>/packs`, and never touches the network.
+//! `<app data>/packs`, and never touches the network. Only [`download`] does.
 //!
 //! Installed layout, one folder per pack, in the per-user local app-data folder (non-roaming on
 //! Windows):
@@ -10,6 +10,7 @@
 //! - `packs/<id>/<version>/manifest.json` — the signed pack manifest, a
 //!   [`crate::kit::resources::ResourceManifest`] that discovery reads as the installed pack root.
 
+pub mod download;
 pub mod install;
 
 use serde::{Deserialize, Serialize};
@@ -76,6 +77,9 @@ pub struct Payload {
     pub installed_bytes: u64,
     /// Lowercase hex SHA-256 of the signed payload archive.
     pub sha256: String,
+    /// Where the pack file is on the release server, relative to the server's download base:
+    /// plain path segments joined by `/`, ending in `.toolboxpack`.
+    pub path: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -170,6 +174,11 @@ pub fn parse_catalog(text: &str) -> Result<Catalog, String> {
         let valid_sha = |sha: &str| sha.len() == 64 && sha.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
         if let Some(payload) = pack.payloads.iter().find(|payload| !valid_sha(&payload.sha256)) {
             return Err(format!("Pack {} has a bad checksum for {}", pack.id, payload.target));
+        }
+        // Download locations come only from this catalog, so each must stay under the server's base.
+        let valid_path = |path: &str| path.ends_with(".toolboxpack") && path.split('/').all(install::is_plain_segment);
+        if let Some(payload) = pack.payloads.iter().find(|payload| !valid_path(&payload.path)) {
+            return Err(format!("Pack {} has a bad download path for {}: {:?}", pack.id, payload.target, payload.path));
         }
     }
     Ok(catalog)
@@ -477,8 +486,15 @@ mod tests {
             "minPackFormat": 1, "appVersions": { "from": "0.1" }, "payloads": []
         });
         let mut bad_checksum = pack("a", "1");
-        bad_checksum["payloads"] = serde_json::json!([{ "target": "all", "downloadBytes": 1, "installedBytes": 1, "sha256": "ABC" }]);
-        for packs in [vec![pack("../escape", "1")], vec![pack("a", "1"), pack("a", "1")], vec![pack("a", "one")], vec![pack("a", "1-/../x")], vec![bad_checksum]] {
+        bad_checksum["payloads"] = serde_json::json!([{ "target": "all", "downloadBytes": 1, "installedBytes": 1, "sha256": "ABC", "path": "a.toolboxpack" }]);
+        let with_path = |path: &str| {
+            let mut pack = pack("a", "1");
+            pack["payloads"] = serde_json::json!([{ "target": "all", "downloadBytes": 1, "installedBytes": 1, "sha256": "0".repeat(64), "path": path }]);
+            pack
+        };
+        let bad_paths = ["../a.toolboxpack", "/a.toolboxpack", "a/../b.toolboxpack", "https://elsewhere.example/a.toolboxpack", "a.toolboxpack?x=1", "a//b.toolboxpack", "a.zip", ""].map(|path| vec![with_path(path)]);
+        assert!(parse_catalog(&serde_json::json!({ "formatVersion": 1, "packs": [with_path("packs/a-1/a-1-all.toolboxpack")] }).to_string()).is_ok());
+        for packs in [vec![pack("../escape", "1")], vec![pack("a", "1"), pack("a", "1")], vec![pack("a", "one")], vec![pack("a", "1-/../x")], vec![bad_checksum]].into_iter().chain(bad_paths) {
             assert!(parse_catalog(&serde_json::json!({ "formatVersion": 1, "packs": packs }).to_string()).is_err());
         }
     }
