@@ -28,8 +28,11 @@ export const parsePageRange = (value: string, pageCount: number): number[] | Val
 
     const start = Number(match[1]);
     const end = Number(match[2] ?? match[1]);
-    if (start < 1 || end < start || end > pageCount) {
-      return { field: "pageRange", message: `Pages must be between 1 and ${pageCount}.` };
+    if (start < 1) return { field: "pageRange", message: "Page numbers start at 1." };
+    if (end < start) return { field: "pageRange", message: `Write ${token} from low to high, like ${end}-${start}.` };
+    if (end > pageCount) {
+      const pages = pageCount === 1 ? "1 page" : `${pageCount} pages`;
+      return { field: "pageRange", message: `Page ${end} isn't in this PDF. It has ${pages}, so use numbers from 1 to ${pageCount}.` };
     }
     for (let page = start; page <= end; page += 1) pages.add(page - 1);
   }
