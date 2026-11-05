@@ -1,4 +1,5 @@
 import type { OutputLocation } from "../../contracts";
+import type { PdfScene } from "./scene";
 
 export type EditorLayout = "vertical" | "horizontal";
 export type EditorDensity = "compact" | "comfortable";
@@ -102,4 +103,33 @@ export interface PdfEditSessionRequest {
     paths: string[];
     plan: PdfEditSessionPlan;
     outputLocation: OutputLocation;
+}
+
+// Widget rectangles use scene coordinates: points from the top-left of the unrotated source page.
+export interface PdfFormWidget { page: number; x: number; y: number; width: number; height: number }
+export interface PdfFormField {
+    name: string;
+    label: string | null;
+    type: 'text' | 'checkbox';
+    value: string | boolean;
+    options: string[];
+    flags: number;
+    required: boolean;
+    readOnly: boolean;
+    multiline: boolean;
+    maxLen: number | null;
+    widgets: PdfFormWidget[];
+}
+// Fields arrive in Tab order. `unsupported` explains why a form can't be filled at all.
+export interface PdfFormInspection { fields: PdfFormField[]; unsupported: string | null }
+export interface PdfFormValue { name: string; value: string | boolean }
+
+export interface PdfSceneExportRequest {
+    paths: string[];
+    scene: PdfScene;
+    outputLocation: OutputLocation;
+    formValues?: PdfFormValue[];
+    textEdits?: unknown[];
+    flatten?: boolean;
+    redactions?: unknown[];
 }

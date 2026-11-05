@@ -1,13 +1,15 @@
-import type { PdfDocument, PdfTextRun } from './contracts';
+import type { PdfDocument, PdfFormField, PdfTextRun } from './contracts';
 
 // All geometry is in points, from the top-left of the unrotated visible source page.
 export interface SceneRect { x: number; y: number; width: number; height: number }
 export interface ScenePoint { x: number; y: number }
-export type SceneTool = 'select' | 'text' | 'highlight' | 'shape' | 'signature' | 'watermark' | 'crop';
+export type SceneTool = 'select' | 'text' | 'highlight' | 'shape' | 'signature' | 'form' | 'watermark' | 'crop';
 export type SceneShape = 'square' | 'round' | 'triangle' | 'line' | 'dotted-line' | 'arrow-left' | 'arrow-right' | 'arrow-up' | 'arrow-down';
 export type SignatureMode = 'image' | 'text';
 export type WatermarkPattern = 'across-page' | 'bottom-right-to-top-left' | 'top-right-to-bottom-left' | 'center-horizontal' | 'center-vertical';
 export type HighlightMode = 'area' | 'text-selection';
+export type TextFontFamily = 'Noto Sans' | 'Noto Serif' | 'Noto Sans Mono';
+export type TextAlign = 'left' | 'center' | 'right';
 export interface SceneObject {
   id: string;
   kind: 'text' | 'highlight' | 'shape' | 'signature' | 'watermark';
@@ -26,8 +28,15 @@ export interface SceneObject {
   // exporter uses signaturePath, keeping the file processing on-device.
   signaturePreview?: string | null;
   fontFamily?: string;
+  bold?: boolean;
+  italic?: boolean;
+  align?: TextAlign;
+  // Text boxes only: a page list like "1-3, 7, 10-"; null keeps the box on its own page.
+  pageRange?: string | null;
   watermarkPattern?: WatermarkPattern;
 }
+// Defaults for the next text box; each new text box copies them.
+export interface TextStyle { fontFamily: TextFontFamily; bold: boolean; italic: boolean; align: TextAlign }
 export interface ScenePage {
   id: string;
   sourceIndex: number | null;
@@ -52,6 +61,10 @@ export interface SceneCanvasProps {
   onSelect: (id: string | null) => void;
   onCommit: (page: ScenePage) => void;
   makeObject: (kind: SceneObject['kind'], rect: SceneRect) => SceneObject;
+  // Form fields on this page, in Tab order; shown only while filling the form.
+  formFields?: PdfFormField[];
+  formValue?: (field: PdfFormField) => string | boolean;
+  onFormValue?: (field: PdfFormField, value: string | boolean) => void;
 }
 export const sceneFromDocument = (document: PdfDocument): PdfScene => ({
   pages: document.pages.map((page) => ({ id: `source-${page.index}`, sourceIndex: page.index,
