@@ -991,7 +991,7 @@ mod tests {
         let families = convert.format_families.iter().map(|family| (family.id.as_str(), family.native_available, family.basic_fidelity)).collect::<Vec<_>>();
         assert_eq!(families, [
             ("plain-text", true, false), ("pdf", true, false), ("documents", false, false), ("spreadsheets", false, false),
-            ("presentations", false, false), ("markdown", false, false), ("web-pages", false, false), ("tables", false, false),
+            ("presentations", false, false), ("markdown", true, false), ("web-pages", false, false), ("tables", false, false),
             ("ebooks", false, false), ("legacy-office", false, true), ("mobi", false, false),
         ]);
         assert!(convert.native_available && convert.output_suffix.is_empty() && !convert.many_to_one);

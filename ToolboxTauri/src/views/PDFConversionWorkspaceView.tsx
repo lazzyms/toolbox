@@ -15,7 +15,7 @@ import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { ShortcutHint } from "../components/ShortcutHint";
 import { shortcutTarget } from "../shortcuts";
-import { convertToPdfIntakeCopy, convertToPdfRequest, defaultPlainTextOptions, PlainTextOptionsPanel, type PlainTextOptions } from "./ConvertToPdfControls";
+import { ConvertToPdfOptionsPanel, convertToPdfIntakeCopy, convertToPdfRequest, defaultConvertToPdfOptions, type ConvertToPdfOptions } from "./ConvertToPdfControls";
 
 const nonInspectingConversionIds = new Set(["images-to-pdf", "pdf-merge", "pdf-split", "pdf-repair", "pdf-compare", "convert-to-pdf"]);
 const outputPreviewLimitations: Partial<Record<AtomicToolId, string>> = {
@@ -74,7 +74,7 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
   const [document, setDocument] = useState<PdfDocument | null>(null);
   const [selectedPages, setSelectedPages] = useState<number[]>([]);
   const [inspectError, setInspectError] = useState("");
-  const [plainText, setPlainText] = useState<PlainTextOptions>(defaultPlainTextOptions);
+  const [conversionOptions, setConversionOptions] = useState<ConvertToPdfOptions>(defaultConvertToPdfOptions);
   const intakeCopy = useMemo(() => (activeUtility.id === "convert-to-pdf" ? convertToPdfIntakeCopy(activeUtility) : undefined), [activeUtility]);
 
   return (
@@ -91,7 +91,7 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
         const pages = document ? selectedPages : undefined;
         const selectedPageRange = pages?.length ? formatPageRange(pages) : pageRange || null;
         if (activeUtility.id === "convert-to-pdf") {
-          return invoke<ToolResult>("convert_to_pdf", { runId, request: convertToPdfRequest(paths, outputLocation, plainText) });
+          return invoke<ToolResult>("convert_to_pdf", { runId, request: convertToPdfRequest(paths, outputLocation, conversionOptions) });
         }
         if (activeUtility.id === "images-to-pdf") {
           return invoke<ToolResult>("images_to_pdf", { runId,
@@ -211,8 +211,8 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
           setSelectedPages={setSelectedPages}
           inspectError={inspectError}
           setInspectError={setInspectError}
-          plainText={plainText}
-          setPlainText={setPlainText}
+          conversionOptions={conversionOptions}
+          setConversionOptions={setConversionOptions}
         />
       )}
     </ToolScaffold>
@@ -246,8 +246,8 @@ type ConversionControlsProps = {
   setSelectedPages: (value: number[]) => void;
   inspectError: string;
   setInspectError: (value: string) => void;
-  plainText: PlainTextOptions;
-  setPlainText: (value: PlainTextOptions) => void;
+  conversionOptions: ConvertToPdfOptions;
+  setConversionOptions: (value: ConvertToPdfOptions) => void;
 };
 
 const ConversionControls = ({
@@ -277,8 +277,8 @@ const ConversionControls = ({
   setSelectedPages,
   inspectError,
   setInspectError,
-  plainText,
-  setPlainText,
+  conversionOptions,
+  setConversionOptions,
 }: ConversionControlsProps) => {
   const inputPath = files[0];
   const [inspection, setInspection] = useState<PdfInspectionState>({ kind: "idle" });
@@ -504,7 +504,7 @@ const ConversionControls = ({
         </div>
       )}
       {activeUtility.id === "convert-to-pdf" && (
-        <PlainTextOptionsPanel files={files} options={plainText} onChange={setPlainText} disabled={loading} />
+        <ConvertToPdfOptionsPanel files={files} options={conversionOptions} onChange={setConversionOptions} disabled={loading} />
       )}
       {activeUtility.id === "pdf-repair" && (
         <p className="workspace-note">Toolbox rebuilds each PDF and saves a fixed copy next to it.</p>

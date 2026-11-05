@@ -152,3 +152,68 @@ test("a run without text files leaves plain text options out of the request", as
     await page.locator(".workspace-primary-action").click();
     await expect.poll(() => convertRequest(page)).toEqual({ paths: ["/local/signed.pdf"], outputLocation: "alongsideInput" });
 });
+
+test("the Markdown section appears only while a Markdown file is listed and sits beside the text section", async ({ page }) => {
+    await openConvert(page);
+    await drop(page, ["/local/release-notes.md"]);
+    const markdown = page.getByRole("region", { name: "Markdown options" });
+    await expect(markdown).toBeVisible();
+    await expect(markdown).toContainText("Applies to release-notes.md");
+    await expect(page.getByRole("region", { name: "Plain text options" })).toHaveCount(0);
+    await expect(page.getByText("Options for each format appear here when a file of that format is in the list.", { exact: true })).toHaveCount(0);
+    await expect(markdown.getByLabel("Page size")).toHaveValue("a4");
+    await expect(markdown.getByLabel("Margins")).toHaveValue("normal");
+    await expect(markdown.getByLabel("Body font")).toHaveValue("sans");
+    await expect(markdown.getByRole("radiogroup", { name: "Code blocks" }).getByRole("radio", { name: "Shaded" })).toBeChecked();
+    const contents = markdown.getByRole("checkbox", { name: "Add a table of contents" });
+    await expect(contents).not.toBeChecked();
+    await expect(contents).toHaveAccessibleDescription("Built from the headings, with links to each section.");
+
+    await drop(page, ["/local/guide.markdown", "/local/notes.txt"]);
+    await expect(markdown).toContainText("Applies to 2 Markdown files");
+    await expect(page.getByRole("region", { name: "Plain text options" })).toBeVisible();
+
+    await fileRow(page, "release-notes.md").getByRole("button", { name: /Remove/ }).click();
+    await fileRow(page, "guide.markdown").getByRole("button", { name: /Remove/ }).click();
+    await expect(page.getByRole("region", { name: "Markdown options" })).toHaveCount(0);
+    await expect(page.getByRole("region", { name: "Plain text options" })).toBeVisible();
+});
+
+test("a Markdown run carries only the Markdown section, and the left-out remote note shows on its row", async ({ page }) => {
+    await openConvert(page);
+    await drop(page, ["/local/release-notes.md", "/local/signed.pdf"]);
+    const markdown = page.getByRole("region", { name: "Markdown options" });
+    await markdown.getByLabel("Page size").selectOption("letter");
+    await markdown.getByLabel("Body font").selectOption("serif");
+    await markdown.getByRole("radio", { name: "Plain" }).click();
+    await markdown.getByRole("checkbox", { name: "Add a table of contents" }).click();
+    await page.locator(".workspace-primary-action").click();
+
+    await expect.poll(() => convertRequest(page)).toEqual({
+        paths: ["/local/release-notes.md", "/local/signed.pdf"],
+        outputLocation: "alongsideInput",
+        markdown: { pageSize: "letter", margins: "normal", bodyFont: "serif", codeStyle: "plain", tableOfContents: true },
+    });
+
+    const note = "3 pages. Remote content left out: 2 images from the internet weren't loaded.";
+    await page.evaluate((note) => (window as unknown as ConvertWindow).__finish([
+        { inputPath: "/local/release-notes.md", outputPaths: ["/local/release-notes.pdf"], detail: note, state: "succeeded", failure: null, reason: null, warnings: [], fonts: [] },
+        { inputPath: "/local/signed.pdf", outputPaths: [], detail: "", state: "skipped", failure: null, reason: { code: "alreadyInTargetFormat", message: "Already a PDF. Nothing was made.", pointer: null }, warnings: [] },
+    ]), note);
+    const rows = page.getByRole("list", { name: "Results" }).getByRole("listitem").filter({ has: page.locator(".result-row-name") });
+    const saved = rows.filter({ hasText: "release-notes.md" });
+    await expect(saved).toContainText(note);
+    await expect(saved.getByRole("button", { name: "Open release-notes.pdf" })).toBeVisible();
+});
+
+test("a run with Markdown and text files sends both sections", async ({ page }) => {
+    await openConvert(page);
+    await drop(page, ["/local/notes.txt", "/local/readme.MD"]);
+    await page.locator(".workspace-primary-action").click();
+    await expect.poll(() => convertRequest(page)).toEqual({
+        paths: ["/local/notes.txt", "/local/readme.MD"],
+        outputLocation: "alongsideInput",
+        plainText: { pageSize: "a4", margins: "normal", font: "monospace", encoding: "detect", wrapLines: true },
+        markdown: { pageSize: "a4", margins: "normal", bodyFont: "sans", codeStyle: "shaded", tableOfContents: false },
+    });
+});
