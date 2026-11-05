@@ -118,7 +118,7 @@ export type OutcomePointer =
   | { kind: "pack"; packId: string }
   | { kind: "outputFolder" };
 
-export type LimitKind = "fileSize" | "pageCount" | "time" | "decompression";
+export type LimitKind = "fileSize" | "pageCount" | "time" | "decompression" | "dimensions";
 
 export type ToolError = { message: string; pointer: OutcomePointer | null } & (
   | { kind: "invalidInput" | "unavailable" | "processing" | "wrongPassword" | "cancelled" }

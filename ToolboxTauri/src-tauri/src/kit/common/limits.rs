@@ -22,12 +22,16 @@ pub struct ToolLimits {
     pub max_pages: Option<u32>,
     pub max_expanded_bytes: u64,
     pub max_duration: Duration,
+    /// The longest side, in pixels, a decoded image may have. Only tools that hold the whole image in memory to edit it set one.
+    pub max_side: Option<u32>,
 }
 
 // Expansion stays under the image crate's 512 MiB allocation default so this check, not a decoder error, reports it.
-const PDF: ToolLimits = ToolLimits { max_bytes: GB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES };
-const IMAGE: ToolLimits = ToolLimits { max_bytes: 250 * MB, max_pages: None, max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES };
+const PDF: ToolLimits = ToolLimits { max_bytes: GB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, max_side: None };
+const IMAGE: ToolLimits = ToolLimits { max_bytes: 250 * MB, max_pages: None, max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, max_side: None };
 const PAGED_IMAGE: ToolLimits = ToolLimits { max_pages: Some(1_000), ..IMAGE };
+// The edit stack takes GIFs, so it counts their frames, and it caps each side at the largest size Resize can make.
+const EDIT_IMAGE: ToolLimits = ToolLimits { max_side: Some(16_384), ..PAGED_IMAGE };
 
 pub fn recorded(command: &str) -> Option<ToolLimits> {
     Some(match command {
@@ -35,10 +39,11 @@ pub fn recorded(command: &str) -> Option<ToolLimits> {
         | "organize_pdf" | "add_pdf_pages" | "add_page_numbers" | "watermark_pdf" | "compress_pdf" | "remove_pdf_pages"
         | "extract_pdf_pages" | "merge_pdfs" | "split_pdf" | "pdf_to_images" | "pdf_to_text" | "extract_pdf_images"
         | "ocr_pdf" | "rotate_pdf" | "repair_pdf" | "redact_pdf" | "compare_pdfs" => PDF,
-        "compress_images" | "convert_images" | "export_image_edit_plan" | "export_image_edit_stack" | "images_to_pdf" | "blur_faces"
+        "compress_images" | "convert_images" | "export_image_edit_plan" | "images_to_pdf" | "blur_faces"
         | "remove_image_background" | "resize_images" | "rotate_images" | "crop_images" | "adjust_image_tone"
         | "watermark_images" | "generate_icon_set" | "create_gif" => IMAGE,
         "extract_gif_frames" | "process_tiff_pages" | "image_metadata" => PAGED_IMAGE,
+        "export_image_edit_stack" => EDIT_IMAGE,
         _ => return None,
     })
 }
@@ -79,6 +84,15 @@ impl ToolLimits {
         }
         let Ok(bytes) = std::fs::read(path) else { return Ok(()) };
         let shape = Shape::read(&bytes, self.max_pages.unwrap_or(u32::MAX), self.max_expanded_bytes);
+        if let Some(max_side) = self.max_side {
+            let (width, height) = shape.largest_dimensions;
+            if width.max(height) > u64::from(max_side) {
+                return Err(ToolError::limit_exceeded(
+                    LimitKind::Dimensions,
+                    format!("Too large to edit: {width} × {height}. The limit is {max_side} px on a side."),
+                ));
+            }
+        }
         if shape.largest_part > self.max_expanded_bytes {
             return Err(ToolError::limit_exceeded(
                 LimitKind::Decompression,
@@ -138,6 +152,8 @@ impl Format {
 struct Shape {
     pages: u64,
     largest_part: u64,
+    /// Width and height of the largest decoded picture, or zero when the file has none to measure.
+    largest_dimensions: (u64, u64),
 }
 
 impl Shape {
@@ -149,20 +165,25 @@ impl Shape {
             let pages = if largest_part > max_expanded { 0 } else {
                 lopdf::Document::load_metadata_mem(bytes).map(|metadata| u64::from(metadata.page_count)).unwrap_or(0)
             };
-            Self { pages, largest_part }
+            Self { pages, largest_part, largest_dimensions: (0, 0) }
         } else if bytes.starts_with(b"PK\x03\x04") {
-            Self { pages: 0, largest_part: zip_largest_entry(bytes, max_expanded) }
+            Self { pages: 0, largest_part: zip_largest_entry(bytes, max_expanded), largest_dimensions: (0, 0) }
         } else if bytes.starts_with(b"GIF8") {
             gif_shape(bytes, max_pages)
         } else if bytes.starts_with(b"II*\0") || bytes.starts_with(b"MM\0*") {
             tiff_shape(bytes, max_pages)
         } else if bytes.get(4..8) == Some(b"ftyp") {
-            let largest_part = heif::probe(bytes)
-                .map(|info| u64::from(info.width) * u64::from(info.height) * u64::from(info.color_type.bytes_per_pixel()))
-                .unwrap_or(0);
-            Self { pages: 1, largest_part }
+            match heif::probe(bytes) {
+                Ok(info) => Self {
+                    pages: 1,
+                    largest_part: u64::from(info.width) * u64::from(info.height) * u64::from(info.color_type.bytes_per_pixel()),
+                    largest_dimensions: (u64::from(info.width), u64::from(info.height)),
+                },
+                Err(_) => Self { pages: 1, largest_part: 0, largest_dimensions: (0, 0) },
+            }
         } else {
-            Self { pages: 1, largest_part: raster_bytes(bytes) }
+            let (largest_part, largest_dimensions) = raster_size(bytes);
+            Self { pages: 1, largest_part, largest_dimensions }
         }
     }
 }
@@ -207,7 +228,7 @@ fn zip_largest_entry(bytes: &[u8], max_expanded: u64) -> u64 {
 }
 
 fn gif_shape(bytes: &[u8], max_pages: u32) -> Shape {
-    let Some(screen) = bytes.get(6..13) else { return Shape { pages: 0, largest_part: 0 } };
+    let Some(screen) = bytes.get(6..13) else { return Shape { pages: 0, largest_part: 0, largest_dimensions: (0, 0) } };
     let width = u64::from(u16::from_le_bytes([screen[0], screen[1]]));
     let height = u64::from(u16::from_le_bytes([screen[2], screen[3]]));
     let largest_part = width * height * 4;
@@ -224,7 +245,7 @@ fn gif_shape(bytes: &[u8], max_pages: u32) -> Shape {
             _ => break,
         }
     }
-    Shape { pages, largest_part }
+    Shape { pages, largest_part, largest_dimensions: (width, height) }
 }
 
 fn color_table_len(packed: u8) -> usize {
@@ -240,24 +261,33 @@ fn skip_sub_blocks(bytes: &[u8], mut position: usize) -> usize {
 }
 
 fn tiff_shape(bytes: &[u8], max_pages: u32) -> Shape {
-    let mut shape = Shape { pages: 0, largest_part: 0 };
+    let mut shape = Shape { pages: 0, largest_part: 0, largest_dimensions: (0, 0) };
     let Ok(mut decoder) = tiff::decoder::Decoder::new(Cursor::new(bytes)) else { return shape };
     loop {
         shape.pages += 1;
         if let (Ok((width, height)), Ok(color)) = (decoder.dimensions(), decoder.colortype()) {
             let bits = u64::from(color.bit_depth()) * u64::from(color.num_samples());
             shape.largest_part = shape.largest_part.max((u64::from(width) * u64::from(height) * bits).div_ceil(8));
+            let (largest_width, largest_height) = shape.largest_dimensions;
+            if u64::from(width).max(u64::from(height)) > largest_width.max(largest_height) {
+                shape.largest_dimensions = (u64::from(width), u64::from(height));
+            }
         }
         if shape.pages > u64::from(max_pages) || !decoder.more_images() || decoder.next_image().is_err() { break; }
     }
     shape
 }
 
-fn raster_bytes(bytes: &[u8]) -> u64 {
+fn raster_size(bytes: &[u8]) -> (u64, (u64, u64)) {
     use image::ImageDecoder;
-    let Ok(mut reader) = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format() else { return 0 };
+    let Ok(mut reader) = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format() else { return (0, (0, 0)) };
     reader.no_limits();
-    reader.into_decoder().map(|decoder| decoder.total_bytes()).unwrap_or(0)
+    reader.into_decoder()
+        .map(|decoder| {
+            let (width, height) = decoder.dimensions();
+            (decoder.total_bytes(), (u64::from(width), u64::from(height)))
+        })
+        .unwrap_or((0, (0, 0)))
 }
 
 struct Clock {
@@ -517,7 +547,7 @@ mod tests {
     }
 
     fn small() -> ToolLimits {
-        ToolLimits { max_bytes: 10 * MB, max_pages: Some(3), max_expanded_bytes: 1_000, max_duration: Duration::from_secs(5) }
+        ToolLimits { max_bytes: 10 * MB, max_pages: Some(3), max_expanded_bytes: 1_000, max_duration: Duration::from_secs(5), max_side: None }
     }
 
     fn limit_of(result: Result<(), ToolError>) -> Option<LimitKind> {
@@ -536,8 +566,13 @@ mod tests {
             assert_eq!(limits.max_pages.is_some(), paged, "{}", capability.command);
             assert_eq!(limits.max_duration, FIVE_MINUTES, "{}", capability.command);
         }
-        assert_eq!(recorded("compress_pdf"), Some(ToolLimits { max_bytes: GB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES }));
-        assert_eq!(recorded("resize_images"), Some(ToolLimits { max_bytes: 250 * MB, max_pages: None, max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES }));
+        assert_eq!(recorded("compress_pdf"), Some(ToolLimits { max_bytes: GB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, max_side: None }));
+        assert_eq!(recorded("resize_images"), Some(ToolLimits { max_bytes: 250 * MB, max_pages: None, max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, max_side: None }));
+        assert_eq!(recorded("export_image_edit_stack"), Some(ToolLimits { max_bytes: 250 * MB, max_pages: Some(1_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, max_side: Some(16_384) }));
+        for capability in native_capabilities() {
+            let max_side = recorded(&capability.command).and_then(|limits| limits.max_side);
+            assert_eq!(max_side.is_some(), capability.command == "export_image_edit_stack", "{} should not cap the side", capability.command);
+        }
         assert_eq!(recorded("extract_gif_frames").and_then(|limits| limits.max_pages), Some(1_000));
         assert_eq!(recorded("unknown"), None);
     }

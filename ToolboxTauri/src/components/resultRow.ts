@@ -26,7 +26,7 @@ const isRetryable = (failure: ToolError): boolean => {
         case "processing":
             return true;
         case "limitExceeded":
-            // Size, page count and expansion belong to the file, so only a run that ran out of time can pass on another try.
+            // Size, page count, dimensions and expansion belong to the file, so only a run that ran out of time can pass on another try.
             return failure.details.limit === "time";
         default:
             return false;

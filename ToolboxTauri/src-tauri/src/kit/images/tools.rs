@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::common::watermark::{WatermarkOptions, WatermarkPlacement, WatermarkPosition};
-use crate::kit::contracts::{OutcomeWarning, SkipCode, SkipReason, ToolError, WarningKind};
+use crate::kit::contracts::{OutcomePointer, OutcomeWarning, SkipCode, SkipReason, ToolError, WarningKind};
 use crate::kit::images::{metadata, strip, OutputFormat};
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -280,6 +280,7 @@ fn input_format(path: &Path) -> Option<OutputFormat> {
 }
 
 pub const TRANSPARENCY_FLATTENED: &str = "Transparent areas were flattened onto white, because JPEG has none.";
+pub const ANIMATED_GIF: &str = "Animated GIF. Edit Image works on still images. Extract GIF Frames saves each frame.";
 pub const REDUCED_TO_8_BIT: &str = "Saved as 8-bit sRGB. The original had more colour depth.";
 
 /// Decodes the input once, runs the stack and encodes once, in the chosen format or the input's.
@@ -295,6 +296,11 @@ pub fn export_edit_stack(request: &ImageEditStackRequest, input: PathBuf) -> Job
         },
         None => crate::kit::images::detect_format(&input),
     };
+    // Editing keeps one picture, so an animated GIF would lose its other frames. It fails before
+    // anything is decoded or reserved and points to the tool that saves every frame.
+    if crate::kit::images::is_animated_gif(&input) {
+        return JobOutcome::failure(input, ToolError::invalid_input(ANIMATED_GIF).with_pointer(OutcomePointer::Tool { tool_id: "gif-extract".into() }));
+    }
     let (source, oriented) = match crate::kit::images::load_upright_image(&input) {
         Ok(decoded) => decoded,
         Err(error) => return failure(input, error),

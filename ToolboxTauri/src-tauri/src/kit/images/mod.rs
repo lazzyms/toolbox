@@ -288,6 +288,17 @@ impl ImageProcessor {
     }
 }
 
+/// Whether the file is a GIF with more than one frame. It reads the header and at most two frames.
+pub fn is_animated_gif(path: &std::path::Path) -> bool {
+    use std::io::Read;
+    let Ok(mut file) = File::open(path) else { return false };
+    let mut signature = [0u8; 4];
+    if file.read_exact(&mut signature).is_err() || &signature != b"GIF8" { return false; }
+    let Ok(file) = File::open(path) else { return false };
+    let Ok(decoder) = image::codecs::gif::GifDecoder::new(BufReader::new(file)) else { return false };
+    decoder.into_frames().take(2).count() > 1
+}
+
 fn reject_animated_input(path: &std::path::Path) -> Result<(), String> {
     if lower_ext(path).as_deref() != Some("gif") { return Ok(()); }
     let file = File::open(path).map_err(|error| format!("Could not inspect GIF sequence: {error}"))?;

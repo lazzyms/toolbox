@@ -15,7 +15,7 @@ import { UtilityRegistry } from "./registry";
 
 const errorKinds: readonly ErrorKind[] = ["invalidInput", "unavailable", "limitExceeded", "processing", "wrongPassword", "cancelled"];
 
-const limitKinds: readonly LimitKind[] = ["fileSize", "pageCount", "time", "decompression"];
+const limitKinds: readonly LimitKind[] = ["fileSize", "pageCount", "time", "decompression", "dimensions"];
 
 const skipCodes: readonly SkipCode[] = [
   "notProtected",
