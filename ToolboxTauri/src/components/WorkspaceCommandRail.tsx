@@ -26,6 +26,7 @@ const designIconByToolId: Record<AtomicToolId, string> = {
   "images-to-pdf": "images-to-pdf",
   "pdf-to-images": "pdf-to-images",
   "pdf-to-text": "pdf-to-text",
+  "convert-to-pdf": "convert-format",
   "pdf-split": "split-pdf",
   "pdf-image-extract": "extract-images",
   "pdf-sign": "signature",

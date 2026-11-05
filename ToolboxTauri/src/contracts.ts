@@ -12,6 +12,7 @@ export type AtomicToolId =
   | "images-to-pdf"
   | "pdf-to-images"
   | "pdf-to-text"
+  | "convert-to-pdf"
   | "pdf-split"
   | "pdf-image-extract"
   | "pdf-sign"
@@ -51,8 +52,16 @@ export type ToolInputCardinality = "single" | "multiple" | "ordered";
 
 export type NativeAvailability = "available" | "unavailable";
 
+export interface FormatFamily {
+  id: string;
+  extensions: readonly string[];
+  nativeAvailability: NativeAvailability;
+  basicFidelity: boolean;
+}
+
 export interface ToolCapability {
   acceptedExtensions: readonly string[];
+  formatFamilies?: readonly FormatFamily[];
   inputCardinality: ToolInputCardinality;
   supportsPageSelection: boolean;
   supportsPreview: boolean;
@@ -97,6 +106,7 @@ export type ToolCommand =
   | "pdf_to_text"
   | "extract_pdf_images"
   | "images_to_pdf"
+  | "convert_to_pdf"
   | "ocr_pdf"
   | "blur_faces"
   | "remove_image_background"
@@ -147,14 +157,29 @@ export type OutcomeWarning =
   | { code: "signatureRemoved"; message: string }
   | { code: "fontSubstituted"; message: string; details: { requestedFamily: string; actualFamily: string } }
   | { code: "renamedToAvoidReplacing"; message: string; details: { chosenName: string; finalName: string } }
-  | { code: "precisionReduced"; message: string };
+  | { code: "precisionReduced"; message: string }
+  | { code: "omittedContent"; message: string }
+  | { code: "approximateLayout"; message: string };
 
 export type WarningCode = OutcomeWarning["code"];
+
+export type FontStyle = "regular" | "bold" | "italic" | "boldItalic";
+
+export type FontSource = "embedded" | "system" | "bundled fallback" | "bundled default";
+
+export interface FontUse {
+  requestedFamily: string;
+  requestedStyle: FontStyle;
+  fontUsed: string;
+  styleUsed: FontStyle;
+  source: FontSource;
+}
 
 interface JobOutcomeBase {
   inputPath: string;
   detail: string;
   warnings: OutcomeWarning[];
+  fonts?: FontUse[];
 }
 
 export interface SucceededJobOutcome extends JobOutcomeBase {
@@ -198,6 +223,7 @@ export interface ToolDefinition {
   title: string;
   shortTitle: string;
   resultVerb: string;
+  resultNoun?: string;
   runningVerb: string;
   runningDetail?: string;
   lockedNote?: string;
@@ -230,6 +256,7 @@ export interface ToolDefinition {
     | "pdf-to-text"
     | "pdf-image-extract"
     | "images-to-pdf"
+    | "convert-to-pdf"
     | "pdf-ocr"
     | "image-blur-faces"
     | "image-remove-bg"
