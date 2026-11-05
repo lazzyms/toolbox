@@ -947,6 +947,24 @@ mod tests {
         d.trailer.set("Root",catalog);
         d.save(path).unwrap();
     }
+    fn labelled_pages_fixture(path: &Path, labels: &[&str]) {
+        let mut d = Document::with_version("1.7");
+        let root = d.new_object_id();
+        let font = d.add_object(dictionary! {"Type"=>"Font", "Subtype"=>"Type1", "BaseFont"=>"Helvetica"});
+        let resources = d.add_object(dictionary! {"Font"=>dictionary! {"OriginalFont"=>font}});
+        let kids = labels.iter().map(|label| {
+            let content = d.add_object(Stream::new(dictionary!{}, format!("BT /OriginalFont 18 Tf 40 700 Td ({label}) Tj ET").into_bytes()));
+            Object::Reference(d.add_object(dictionary! {"Type"=>"Page", "Parent"=>root, "MediaBox"=>array(&[0.,0.,612.,792.]), "Resources"=>resources, "Contents"=>content}))
+        }).collect::<Vec<_>>();
+        d.objects.insert(root, Object::Dictionary(dictionary! {"Type"=>"Pages", "Kids"=>kids, "Count"=>labels.len() as i64}));
+        let catalog = d.add_object(dictionary! {"Type"=>"Catalog","Pages"=>root});
+        d.trailer.set("Root",catalog);
+        d.save(path).unwrap();
+    }
+    fn page_labels(path: &Path) -> Vec<String> {
+        let d = Document::load(path).unwrap();
+        d.get_pages().values().map(|page| String::from_utf8_lossy(&d.get_page_content(*page)).into_owned()).collect()
+    }
     fn nested_fixture(path: &Path) {
         let mut d = Document::with_version("1.7");
         let root = d.new_object_id();
@@ -1278,6 +1296,49 @@ mod tests {
         assert_ne!(a.output_paths(),b.output_paths()); assert_ne!(a.output_paths()[0],input);
         assert_eq!(fs::read(&input).unwrap(),original); assert_eq!(fs::read(occupied).unwrap(),b"existing output");
         assert_eq!(Document::load(&a.output_paths()[0]).unwrap().get_pages().len(),3);
+    }
+    #[test]
+    fn export_drops_pages_omitted_from_the_scene_and_keeps_the_remaining_order() {
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("labelled.pdf"); labelled_pages_fixture(&input,&["Page A","Page B","Page C","Page D"]);
+        let original=fs::read(&input).unwrap();
+        let keep=|index| ScenePage{source_index:Some(index),width:612.,height:792.,rotation:0,crop:None,source_rotation:Some(0),source_box:None,objects:vec![]};
+        let outcome=export(&ExportRequest{paths:vec![input.clone()],scene:PdfScene{pages:[0,2,3].map(keep).to_vec()},output_location:OutputLocation::AlongsideInput, sections: Default::default()},input.clone());
+        assert!(outcome.error().is_none(),"{:?}",outcome.error());
+        let labels=page_labels(&outcome.output_paths()[0]);
+        assert_eq!(labels.len(),3);
+        for (content,label) in labels.iter().zip(["Page A","Page C","Page D"]) { assert!(content.contains(&format!("({label})")),"{content}"); }
+        assert!(labels.iter().all(|content| !content.contains("(Page B)")));
+        assert_eq!(fs::read(&input).unwrap(),original);
+    }
+    #[test]
+    fn export_sets_absolute_scene_rotation_and_bakes_source_rotation_into_content() {
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); fixture(&input);
+        let original=fs::read(&input).unwrap();
+        let scene=PdfScene{pages:vec![
+            ScenePage{source_index:Some(1),width:612.,height:792.,rotation:90,crop:None,source_rotation:Some(0),source_box:None,objects:vec![]},
+            ScenePage{source_index:Some(0),width:300.,height:200.,rotation:180,crop:None,source_rotation:Some(90),source_box:None,objects:vec![]},
+        ]};
+        let outcome=export(&ExportRequest{paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput, sections: Default::default()},input.clone());
+        assert!(outcome.error().is_none(),"{:?}",outcome.error());
+        let output=Document::load(&outcome.output_paths()[0]).unwrap();
+        let pages:Vec<_>=output.get_pages().values().copied().collect();
+        assert_eq!(pages.len(),2);
+        assert_eq!(inherited(&output,pages[0],b"Rotate").unwrap().unwrap().as_i64().unwrap(),90);
+        assert_eq!(bounds(&output,&inherited(&output,pages[0],b"MediaBox").unwrap().unwrap()).unwrap(),[0.,0.,612.,792.]);
+        assert_eq!(inherited(&output,pages[1],b"Rotate").unwrap().unwrap().as_i64().unwrap(),180);
+        assert_eq!(bounds(&output,&inherited(&output,pages[1],b"MediaBox").unwrap().unwrap()).unwrap(),[0.,0.,300.,200.]);
+        assert!(String::from_utf8_lossy(&output.get_page_content(pages[1])).contains("0 1 1 0 -30 -20 cm"));
+        assert_eq!(fs::read(&input).unwrap(),original);
+    }
+    #[test]
+    fn export_rejects_a_scene_without_pages_before_output() {
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); fixture(&input);
+        let original=fs::read(&input).unwrap();
+        let outcome=export(&ExportRequest{paths:vec![input.clone()],scene:PdfScene{pages:vec![]},output_location:OutputLocation::AlongsideInput, sections: Default::default()},input.clone());
+        assert!(outcome.error().is_some_and(|error| error.message.contains("1–2000 pages")),"{:?}",outcome.error());
+        assert!(outcome.output_paths().is_empty());
+        assert_eq!(fs::read_dir(&temp.0).unwrap().count(),1);
+        assert_eq!(fs::read(&input).unwrap(),original);
     }
     #[test]
     fn scene_reservation_does_not_replace_a_competing_destination() {
