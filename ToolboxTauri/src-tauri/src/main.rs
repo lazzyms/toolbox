@@ -2803,6 +2803,215 @@ mod command_tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    fn compress_jpegs(paths: &[PathBuf], level: CompressLevel, strip_exif: bool, output_location: OutputLocation) -> Vec<JobOutcome> {
+        tauri::async_runtime::block_on(compress_files(RunEvents::silent(), CompressFilesRequest { paths: paths.to_vec(), level, strip_exif, output_location }))
+    }
+
+    /// A little-endian EXIF block: camera make, the orientation tag and a GPS IFD with a latitude.
+    fn exif_block(orientation: u16) -> Vec<u8> {
+        let entry = |tag: u16, kind: u16, count: u32, value: [u8; 4]| [tag.to_le_bytes().as_slice(), &kind.to_le_bytes(), &count.to_le_bytes(), &value].concat();
+        let turn = orientation.to_le_bytes();
+        let ifd0 = [3u16.to_le_bytes().to_vec(), entry(0x010F, 2, 4, *b"Cam\0"), entry(0x0112, 3, 1, [turn[0], turn[1], 0, 0]), entry(0x8825, 4, 1, 50u32.to_le_bytes()), 0u32.to_le_bytes().to_vec()].concat();
+        let gps = [2u16.to_le_bytes().to_vec(), entry(0x0000, 1, 4, [2, 3, 0, 0]), entry(0x0001, 2, 2, *b"N\0\0\0"), 0u32.to_le_bytes().to_vec()].concat();
+        let tiff = [b"II*\0\x08\0\0\0".as_slice(), &ifd0, &gps].concat();
+        assert_eq!(tiff.len(), 50 + gps.len(), "the GPS IFD sits right after IFD0");
+        tiff
+    }
+
+    fn icc_profile() -> Vec<u8> { (0..=255u8).cycle().take(600).collect() }
+
+    /// Writes `image` as a JPEG at `quality`, with the EXIF block and ICC profile when given.
+    fn write_jpeg(path: &PathBuf, image: &image::RgbImage, quality: u8, exif: Option<Vec<u8>>, icc: bool) -> Vec<u8> {
+        use image::ImageEncoder;
+        let mut bytes = Vec::new();
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, quality);
+        if let Some(exif) = exif { encoder.set_exif_metadata(exif).unwrap(); }
+        if icc { encoder.set_icc_profile(icc_profile()).unwrap(); }
+        encoder.write_image(image.as_raw(), image.width(), image.height(), image::ExtendedColorType::Rgb8).unwrap();
+        std::fs::write(path, &bytes).unwrap();
+        bytes
+    }
+
+    struct JpegFacts { exif: Option<Vec<u8>>, icc: Option<Vec<u8>>, orientation: image::metadata::Orientation, stored: (u32, u32), upright: image::RgbImage }
+
+    fn jpeg_facts(path: &PathBuf) -> JpegFacts {
+        use image::ImageDecoder;
+        let bytes = std::fs::read(path).unwrap();
+        assert_eq!(image::guess_format(&bytes).unwrap(), image::ImageFormat::Jpeg, "{} is not a JPEG", path.display());
+        let mut decoder = image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(&bytes)).unwrap();
+        let (exif, icc, orientation) = (decoder.exif_metadata().unwrap(), decoder.icc_profile().unwrap(), decoder.orientation().unwrap());
+        let mut image = image::DynamicImage::from_decoder(decoder).unwrap();
+        let stored = (image.width(), image.height());
+        image.apply_orientation(orientation);
+        JpegFacts { exif, icc, orientation, stored, upright: image.to_rgb8() }
+    }
+
+    fn mean_difference(left: &image::RgbImage, right: &image::RgbImage) -> f64 {
+        assert_eq!(left.dimensions(), right.dimensions());
+        let total: u64 = left.as_raw().iter().zip(right.as_raw()).map(|(a, b)| u64::from(a.abs_diff(*b))).sum();
+        total as f64 / left.as_raw().len() as f64
+    }
+
+    #[test]
+    fn compress_files_records_the_jpeg_quality_for_each_level_and_never_grows_with_strength() {
+        assert_eq!([CompressLevel::Low, CompressLevel::Medium, CompressLevel::High].map(CompressLevel::jpeg_quality), [85, 75, 50]);
+        let root = sandbox("compress-files-jpeg-levels");
+        let photo = root.join("IMG_4012.jpeg");
+        let source = write_jpeg(&photo, &photo_rgb(320, 240, 7), 100, Some(exif_block(1)), true);
+
+        let mut sizes = Vec::new();
+        for level in [CompressLevel::Low, CompressLevel::Medium, CompressLevel::High] {
+            let name = format!("{level:?}");
+            let outcomes = compress_jpegs(&[photo.clone()], level, false, location(&root, &name));
+            let [outcome] = outcomes.as_slice() else { panic!("one outcome per input") };
+            assert!(outcome.error().is_none(), "{name}: {:?}", outcome.error());
+            let output = &outcome.output_paths()[0];
+            assert_eq!(output, &root.join(&name).join("IMG_4012-compressed.jpeg"), "{name} keeps the JPEG extension");
+            let written = std::fs::read(output).unwrap();
+            assert_eq!(outcome.original_bytes, Some(source.len() as u64));
+            assert_eq!(outcome.output_bytes, Some(written.len() as u64), "{name} reports the size on disk");
+            let reference = quantisation_tables(&jpeg(&image::DynamicImage::ImageRgb8(image::RgbImage::new(8, 8)), level.jpeg_quality()));
+            assert_eq!(quantisation_tables(&written), reference, "{name} is re-saved at quality {}", level.jpeg_quality());
+            assert_eq!(jpeg_facts(output).stored, (320, 240));
+            sizes.push(written.len());
+        }
+        assert!(sizes[2] <= sizes[1] && sizes[1] <= sizes[0], "High <= Medium <= Low, got {sizes:?}");
+        assert_eq!(std::fs::read(&photo).unwrap(), source, "the original is untouched");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn compress_files_keeps_jpeg_exif_gps_and_icc_by_default_and_strip_exif_keeps_only_the_colour_profile() {
+        let root = sandbox("compress-files-jpeg-metadata");
+        let photo = root.join("IMG_4013.jpg");
+        let exif = exif_block(1);
+        let source = write_jpeg(&photo, &photo_rgb(320, 240, 11), 100, Some(exif.clone()), true);
+
+        let kept = compress_jpegs(&[photo.clone()], CompressLevel::Medium, false, location(&root, "kept"));
+        let facts = jpeg_facts(&kept[0].output_paths()[0]);
+        assert_eq!(facts.exif.as_deref(), Some(exif.as_slice()), "EXIF, GPS included, is kept by default");
+        assert_eq!(facts.icc, Some(icc_profile()));
+        assert!(kept[0].detail.contains("EXIF and colour profile kept"), "{}", kept[0].detail);
+
+        let stripped = compress_jpegs(&[photo.clone()], CompressLevel::Medium, true, location(&root, "stripped"));
+        let output = stripped[0].output_paths()[0].clone();
+        let facts = jpeg_facts(&output);
+        assert_eq!(facts.exif, None, "Strip EXIF removes EXIF");
+        assert_eq!(facts.icc, Some(icc_profile()), "the colour profile always stays");
+        let bytes = std::fs::read(&output).unwrap();
+        assert!(!bytes.windows(6).any(|window| window == b"Exif\0\0"), "no EXIF segment remains");
+        assert!(!bytes.windows(4).any(|window| window == b"Cam\0"), "no camera make remains");
+        assert!(stripped[0].detail.contains("EXIF removed, colour profile kept"), "{}", stripped[0].detail);
+        assert_eq!(std::fs::read(&photo).unwrap(), source);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn compress_files_keeps_a_rotated_jpeg_upright_with_strip_exif_on_and_off() {
+        let root = sandbox("compress-files-jpeg-rotated");
+        let photo = root.join("portrait.jpg");
+        // Stored landscape with a red block top-left; orientation 6 shows it rotated a quarter turn clockwise.
+        let stored = image::RgbImage::from_fn(192, 96, |x, y| if x < 96 && y < 48 { image::Rgb([230, 20, 20]) } else { image::Rgb([(x + y) as u8, 120, (x * 2 % 256) as u8]) });
+        write_jpeg(&photo, &stored, 100, Some(exif_block(6)), true);
+        let expected = image::imageops::rotate90(&stored);
+        assert!(mean_difference(&jpeg_facts(&photo).upright, &expected) < 6.0, "the fixture itself displays as expected");
+
+        for (strip_exif, orientation, stored_size) in [(false, image::metadata::Orientation::Rotate90, (192, 96)), (true, image::metadata::Orientation::NoTransforms, (96, 192))] {
+            let name = format!("strip-{strip_exif}");
+            let outcomes = compress_jpegs(&[photo.clone()], CompressLevel::Medium, strip_exif, location(&root, &name));
+            assert!(outcomes[0].error().is_none(), "{name}: {:?}", outcomes[0].error());
+            let facts = jpeg_facts(&outcomes[0].output_paths()[0]);
+            assert_eq!(facts.orientation, orientation, "{name} orientation");
+            assert_eq!(facts.stored, stored_size, "{name} stored size");
+            assert_eq!(facts.upright.dimensions(), (96, 192), "{name} displays as a portrait");
+            let difference = mean_difference(&facts.upright, &expected);
+            assert!(difference < 8.0, "{name} displays upright, mean difference {difference}");
+            assert!(mean_difference(&facts.upright, &image::imageops::rotate270(&stored)) > 20.0, "{name} is not turned the wrong way");
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn compress_files_skips_a_jpeg_that_would_not_shrink_with_both_sizes_and_no_output() {
+        let root = sandbox("compress-files-jpeg-no-savings");
+        let photo = root.join("small.jpg");
+        let source = write_jpeg(&photo, &photo_rgb(160, 120, 3), 40, None, false);
+
+        let outcomes = compress_jpegs(&[photo.clone()], CompressLevel::Low, false, location(&root, "out"));
+
+        let [outcome] = outcomes.as_slice() else { panic!("one outcome per input") };
+        let OutcomeState::Skipped { reason } = &outcome.state else { panic!("expected a skip, got {:?}", outcome.state) };
+        assert_eq!(reason.code, crate::kit::contracts::SkipCode::NoSavings);
+        assert_eq!(reason.message, "No savings: already well compressed");
+        assert_eq!(outcome.original_bytes, Some(source.len() as u64));
+        assert!(outcome.output_bytes.is_some_and(|bytes| bytes >= source.len() as u64));
+        assert_eq!(std::fs::read_dir(root.join("out")).unwrap().count(), 0, "a skip leaves no file, temp or claim");
+        assert_eq!(std::fs::read(&photo).unwrap(), source);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn compress_files_fails_a_truncated_or_cmyk_jpeg_alone_with_no_partial_output() {
+        let root = sandbox("compress-files-jpeg-damaged");
+        let good = root.join("good.jpg");
+        write_jpeg(&good, &photo_rgb(320, 240, 5), 100, None, true);
+        let whole = std::fs::read(&good).unwrap();
+        let truncated = root.join("truncated.jpg");
+        std::fs::write(&truncated, &whole[..whole.len() / 2]).unwrap();
+        // The frame header's component count says four (CMYK); Compress refuses it before decoding.
+        let cmyk = root.join("cmyk.jpg");
+        let mut cmyk_bytes = whole.clone();
+        let sof = cmyk_bytes.windows(2).position(|pair| pair == [0xFF, 0xC0]).unwrap();
+        cmyk_bytes[sof + 9] = 4;
+        std::fs::write(&cmyk, &cmyk_bytes).unwrap();
+        let other = root.join("other.jpg");
+        write_jpeg(&other, &photo_rgb(320, 240, 9), 100, None, true);
+        let inputs = vec![good.clone(), truncated.clone(), cmyk.clone(), other.clone()];
+        let before = inputs.iter().map(|input| std::fs::read(input).unwrap()).collect::<Vec<_>>();
+
+        let outcomes = compress_jpegs(&inputs, CompressLevel::Medium, false, location(&root, "out"));
+
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), inputs, "one outcome per file, in input order");
+        let damaged = outcomes[1].error().expect("the truncated JPEG fails");
+        assert_eq!((damaged.kind.clone(), damaged.message.as_str()), (ErrorKind::Processing, crate::kit::images::compress::ENDS_EARLY));
+        let refused = outcomes[2].error().expect("the CMYK JPEG fails");
+        assert_eq!((refused.kind.clone(), refused.message.as_str()), (ErrorKind::InvalidInput, crate::kit::images::compress::CMYK_UNSUPPORTED));
+        assert!(outcomes[0].error().is_none() && outcomes[3].error().is_none());
+        let mut written = std::fs::read_dir(root.join("out")).unwrap().map(|entry| entry.unwrap().file_name().into_string().unwrap()).collect::<Vec<_>>();
+        written.sort();
+        assert_eq!(written, ["good-compressed.jpg", "other-compressed.jpg"], "no partial output for the failed files");
+        assert_eq!(inputs.iter().map(|input| std::fs::read(input).unwrap()).collect::<Vec<_>>(), before);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn compress_files_runs_pdfs_and_jpegs_in_one_batch_and_repeats_byte_for_byte() {
+        let root = sandbox("compress-files-mixed-jpeg");
+        let inputs = vec![root.join("report.pdf"), root.join("IMG_4012.JPG"), root.join("appendix.pdf"), root.join("IMG_4031.jpeg")];
+        make_compressible_pdf(&inputs[0]);
+        write_jpeg(&inputs[1], &photo_rgb(320, 240, 21), 100, Some(exif_block(1)), true);
+        make_compressible_pdf(&inputs[2]);
+        write_jpeg(&inputs[3], &photo_rgb(240, 320, 22), 100, None, false);
+        let before = inputs.iter().map(|input| std::fs::read(input).unwrap()).collect::<Vec<_>>();
+
+        let runs = ["first", "second"].map(|run| compress_jpegs(&inputs, CompressLevel::Medium, true, location(&root, run)));
+
+        for outcomes in &runs {
+            assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), inputs, "one outcome per file, in input order");
+            for outcome in outcomes {
+                assert!(outcome.error().is_none(), "{}: {:?}", outcome.input_path.display(), outcome.error());
+                assert_eq!(outcome.output_bytes, Some(std::fs::metadata(&outcome.output_paths()[0]).unwrap().len()));
+            }
+        }
+        let names = runs[0].iter().map(|outcome| outcome.output_paths()[0].file_name().unwrap().to_string_lossy().into_owned()).collect::<Vec<_>>();
+        assert_eq!(names, ["report-compressed.pdf", "IMG_4012-compressed.JPG", "appendix-compressed.pdf", "IMG_4031-compressed.jpeg"]);
+        for (first, second) in runs[0].iter().zip(&runs[1]) {
+            assert!(std::fs::read(&first.output_paths()[0]).unwrap() == std::fs::read(&second.output_paths()[0]).unwrap(), "{} differs between runs", first.input_path.display());
+        }
+        assert_eq!(inputs.iter().map(|input| std::fs::read(input).unwrap()).collect::<Vec<_>>(), before, "originals are byte-identical");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn metadata_command_keeps_batch_failures_isolated() {
         let valid = temp_path("cmd_mixed_valid.png");

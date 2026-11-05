@@ -9,6 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::kit::common::limits::StoppableHelper;
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming, OutputReservation};
+use crate::kit::compress::NO_SAVINGS;
 use crate::kit::contracts::{OutcomePointer, SkipCode, SkipReason, ToolError};
 use super::metadata::{page_bounds, page_rotation};
 use super::{mutation_preflight, PdfMutationIntent};
@@ -567,7 +568,6 @@ pub fn watermark(request: &PageOverlayRequest, input: PathBuf) -> JobOutcome {
 }
 
 pub const PDF_PASSWORD_PROTECTED: &str = "This PDF is password-protected. Unlock it first, then compress the unlocked copy.";
-pub const NO_SAVINGS: &str = "No savings: already well compressed";
 const PAGE_BOXES: [&[u8]; 5] = [b"MediaBox", b"CropBox", b"BleedBox", b"TrimBox", b"ArtBox"];
 
 /// Compresses one PDF for Compress Files. With `images`, eligible photographs are first recompressed

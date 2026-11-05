@@ -421,4 +421,5 @@ mod tests {
         let _ = std::fs::remove_file(src);
     }
 }
+pub mod compress;
 pub mod tools;
