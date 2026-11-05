@@ -84,7 +84,11 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
       utility={activeUtility}
       initialPaths={initialPaths}
       onFilesChange={onFilesChange}
-      exampleName={activeUtility.id === "pdf-to-images" ? (path) => exampleOutputName(path, "pdf_to_images", activeUtility.capability.outputSuffix, format) : undefined}
+      exampleName={activeUtility.id === "pdf-to-images"
+        ? (path) => exampleOutputName(path, "pdf_to_images", activeUtility.capability.outputSuffix, format)
+        : activeUtility.id === "pdf-split"
+          ? (path) => splitExampleNames(stemOf(path), splitMode, pagesPerFile)[0] ?? splitPartName(stemOf(path), 1, 1)
+          : undefined}
       onRun={(paths, outputLocation, { outputPath, runId }) => {
         const pages = document ? selectedPages : undefined;
         const selectedPageRange = pages?.length ? formatPageRange(pages) : pageRange || null;
@@ -214,6 +218,17 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
 type SplitModeKind = "ranges" | "everyN";
 
 const pagesPerFileIssue = (value: string) => /^\d+$/.test(value.trim()) && Number(value) >= 1 ? null : "Enter 1 or more pages per file.";
+
+/** Split parts are named by the one-based pages they hold, the same way in both modes. */
+const splitPartName = (stem: string, first: number, last: number) => `${stem}-${first === last ? `page-${first}` : `pages-${first}-${last}`}.pdf`;
+
+/** Example part names for the File names note: two ranges, or the first two every-N parts. */
+const splitExampleNames = (stem: string, mode: SplitModeKind, pagesPerFile: string): string[] => {
+  if (mode === "ranges") return [splitPartName(stem, 1, 3), splitPartName(stem, 5, 5)];
+  if (pagesPerFileIssue(pagesPerFile)) return [];
+  const size = Number(pagesPerFile);
+  return [splitPartName(stem, 1, size), splitPartName(stem, size + 1, size * 2)];
+};
 
 type ConversionControlsProps = {
   destination: React.ReactNode;
@@ -347,7 +362,8 @@ const ConversionControls = ({
   const compareIssue = activeUtility.id === "pdf-compare" && files.length !== 2;
   const redactPage = activeUtility.id === "pdf-redact" ? inspectedDocument?.pages[selectedPages[0] ?? -1] : undefined;
   const splitIssue = activeUtility.id !== "pdf-split" ? null : splitMode === "ranges" ? splitRangesIssue(splitRanges) : pagesPerFileIssue(pagesPerFile);
-  const splitStem = files[0] ? fileName(files[0]).replace(/\.[^.]+$/, "") : "document";
+  const splitStem = files[0] ? stemOf(files[0]) : "document";
+  const splitNames = splitExampleNames(splitStem, splitMode, pagesPerFile);
   const canExport = files.length > 0 && activeUtility.capability.nativeAvailability === "available" && (!needsMultipleInputs || files.length > 1) && splitIssue === null && !compareIssue
     && (nonInspectingConversionIds.has(activeUtility.id) || inspectionReady);
   const outputPreviewLimitation = activeUtility.id === "pdf-to-images"
@@ -516,11 +532,10 @@ const ConversionControls = ({
               <span>{splitIssue}</span>
             </p>
           )}
-          {splitMode === "ranges" && (
+          {splitNames.length > 0 && (
             <div className="workspace-field" role="group" aria-labelledby="split-names-label">
               <span id="split-names-label" className="text-sm leading-none font-medium">File names</span>
-              <p className="workspace-note">{splitStem}-pages-1-3.pdf</p>
-              <p className="workspace-note">{splitStem}-page-5.pdf</p>
+              {splitNames.map((name) => <p key={name} className="workspace-note">{name}</p>)}
             </div>
           )}
         </div>
@@ -576,6 +591,7 @@ const ConversionControls = ({
 };
 
 const fileName = (path: string) => path.split(/[\\/]/).pop() ?? path;
+const stemOf = (path: string) => fileName(path).replace(/\.[^.]+$/, "");
 
 const clampFraction = (value: number) => Math.min(Math.max(value, 0), 1);
 
