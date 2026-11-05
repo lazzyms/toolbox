@@ -177,18 +177,43 @@ pub enum InputCardinality {
     Ordered,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FormatFamily {
+    pub id: String,
+    pub extensions: Vec<String>,
+    #[serde(rename = "nativeAvailability", deserialize_with = "deserialize_native_availability")]
+    pub native_available: bool,
+    #[serde(default)]
+    pub basic_fidelity: bool,
+}
+
+#[derive(Debug, Clone)]
 pub struct NativeCapability {
     pub command: String,
     pub accepted_extensions: Vec<String>,
+    pub format_families: Vec<FormatFamily>,
     pub input_cardinality: InputCardinality,
     pub supports_page_selection: bool,
     pub supports_preview: bool,
-    #[serde(rename = "nativeAvailability", deserialize_with = "deserialize_native_availability")]
     pub native_available: bool,
     pub output_suffix: String,
     pub many_to_one: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SharedCapabilityRow {
+    command: String,
+    accepted_extensions: Option<Vec<String>>,
+    format_families: Option<Vec<FormatFamily>>,
+    input_cardinality: InputCardinality,
+    supports_page_selection: bool,
+    supports_preview: bool,
+    #[serde(rename = "nativeAvailability", deserialize_with = "deserialize_native_availability")]
+    native_available: bool,
+    output_suffix: String,
+    many_to_one: bool,
 }
 
 static CAPABILITY_REGISTRY: OnceLock<Vec<NativeCapability>> = OnceLock::new();
@@ -204,10 +229,55 @@ where
     }
 }
 
+fn accepted_extensions_of(row: &mut SharedCapabilityRow) -> Result<Vec<String>, String> {
+    let command = &row.command;
+    match (row.accepted_extensions.take(), &row.format_families) {
+        (Some(extensions), None) => Ok(extensions),
+        (None, Some(families)) => {
+            if families.is_empty() {
+                return Err(format!("{command} has no format families."));
+            }
+            let mut ids = HashSet::new();
+            for family in families {
+                if !is_valid_family_id(&family.id) || !ids.insert(family.id.as_str()) {
+                    return Err(format!("{command} has an invalid or duplicate format family {}.", family.id));
+                }
+                if family.extensions.is_empty() {
+                    return Err(format!("{command} format family {} has no extensions.", family.id));
+                }
+            }
+            Ok(families.iter().flat_map(|family| family.extensions.iter().cloned()).collect())
+        }
+        _ => Err(format!("{command} must declare either accepted extensions or format families.")),
+    }
+}
+
+fn is_valid_family_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.split('-').all(|segment| {
+            !segment.is_empty() && segment.chars().all(|character| character.is_ascii_lowercase() || character.is_ascii_digit())
+        })
+}
+
 fn parse_capability_registry(raw: &str) -> Result<Vec<NativeCapability>, String> {
-    let capabilities: Vec<NativeCapability> = serde_json::from_str(raw).map_err(|error| error.to_string())?;
-    if capabilities.is_empty() {
+    let rows: Vec<SharedCapabilityRow> = serde_json::from_str(raw).map_err(|error| error.to_string())?;
+    if rows.is_empty() {
         return Err("The shared capability registry is empty.".to_string());
+    }
+    let mut capabilities = Vec::with_capacity(rows.len());
+    for mut row in rows {
+        let accepted_extensions = accepted_extensions_of(&mut row)?;
+        capabilities.push(NativeCapability {
+            command: row.command,
+            accepted_extensions,
+            format_families: row.format_families.unwrap_or_default(),
+            input_cardinality: row.input_cardinality,
+            supports_page_selection: row.supports_page_selection,
+            supports_preview: row.supports_preview,
+            native_available: row.native_available,
+            output_suffix: row.output_suffix,
+            many_to_one: row.many_to_one,
+        });
     }
     let mut commands = HashSet::new();
     for capability in &capabilities {
@@ -858,6 +928,39 @@ mod tests {
         assert!(parse_capability_registry(&unknown)
             .unwrap_err()
             .contains("unknown field"));
+    }
+
+    #[test]
+    fn format_families_derive_accepted_extensions_and_per_family_flags() {
+        let samples: serde_json::Value = serde_json::from_str(include_str!("../../../shared/capability-family-samples.json")).unwrap();
+        let valid = &samples["valid"];
+        let capability = parse_capability_registry(&format!("[{}]", valid["row"])).unwrap().remove(0);
+
+        assert_eq!(capability.accepted_extensions, serde_json::from_value::<Vec<String>>(valid["acceptedExtensions"].clone()).unwrap());
+        let families = capability
+            .format_families
+            .iter()
+            .map(|family| serde_json::json!({
+                "id": family.id,
+                "nativeAvailability": if family.native_available { "available" } else { "unavailable" },
+                "basicFidelity": family.basic_fidelity,
+            }))
+            .collect::<Vec<_>>();
+        assert_eq!(serde_json::Value::Array(families), valid["families"]);
+        assert!(native_capabilities().iter().all(|capability| capability.format_families.is_empty()));
+    }
+
+    #[test]
+    fn format_families_reject_shared_extensions_empty_families_and_mixed_shapes() {
+        let samples: serde_json::Value = serde_json::from_str(include_str!("../../../shared/capability-family-samples.json")).unwrap();
+        let mut base = samples["valid"]["row"].clone();
+        base.as_object_mut().unwrap().remove("formatFamilies");
+        for (name, shape) in samples["invalid"].as_object().unwrap() {
+            let mut row = base.clone();
+            row.as_object_mut().unwrap().extend(shape.as_object().unwrap().clone());
+            assert!(parse_capability_registry(&format!("[{row}]")).is_err(), "{name} must be rejected");
+        }
+        assert!(parse_capability_registry(&format!("[{base}]")).unwrap_err().contains("either accepted extensions or format families"));
     }
 
     #[test]

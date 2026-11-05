@@ -51,8 +51,16 @@ export type ToolInputCardinality = "single" | "multiple" | "ordered";
 
 export type NativeAvailability = "available" | "unavailable";
 
+export interface FormatFamily {
+  id: string;
+  extensions: readonly string[];
+  nativeAvailability: NativeAvailability;
+  basicFidelity: boolean;
+}
+
 export interface ToolCapability {
   acceptedExtensions: readonly string[];
+  formatFamilies?: readonly FormatFamily[];
   inputCardinality: ToolInputCardinality;
   supportsPageSelection: boolean;
   supportsPreview: boolean;
