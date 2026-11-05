@@ -2532,6 +2532,42 @@ mod command_tests {
     }
 
     #[test]
+    fn compress_files_compresses_a_signed_pdf_with_a_signature_removed_warning_on_that_file_only() {
+        use crate::kit::contracts::{OutcomeWarning, WarningKind};
+        let root = sandbox("compress-files-signed");
+        let signed = root.join("vendor-nda.pdf");
+        let plain = root.join("report.pdf");
+        make_compressible_pdf(&signed);
+        let mut document = lopdf::Document::load(&signed).unwrap();
+        crate::kit::pdf::tests::sign(&mut document);
+        document.save(&signed).unwrap();
+        make_compressible_pdf(&plain);
+        let inputs = vec![signed.clone(), plain.clone()];
+        let originals = inputs.iter().map(|input| std::fs::read(input).unwrap()).collect::<Vec<_>>();
+
+        let outcomes = compress(&inputs, CompressLevel::Medium, location(&root, "out"));
+
+        assert_eq!(outcomes.len(), 2);
+        for outcome in &outcomes {
+            assert!(outcome.error().is_none(), "{}", outcome.error().cloned().unwrap_or_default());
+            assert!(matches!(outcome.state, OutcomeState::Succeeded { .. }), "{:?}", outcome.state);
+            assert_eq!(outcome.output_paths().len(), 1);
+            assert!(outcome.output_bytes < outcome.original_bytes);
+        }
+        assert_eq!(outcomes[0].output_paths(), [root.join("out").join("vendor-nda-compressed.pdf")]);
+        assert_eq!(
+            outcomes.iter().map(|outcome| outcome.warnings.clone()).collect::<Vec<_>>(),
+            [vec![OutcomeWarning { kind: WarningKind::SignatureRemoved, message: crate::kit::pdf::SIGNATURE_REMOVED.into() }], vec![]],
+        );
+        let value = serde_json::to_value(&outcomes[0]).unwrap();
+        assert_eq!(value["warnings"][0]["code"], "signatureRemoved");
+        for (input, original) in inputs.iter().zip(originals) {
+            assert_eq!(std::fs::read(input).unwrap(), original, "original was modified: {}", input.display());
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn compress_files_numbers_copies_beside_an_existing_compressed_file() {
         let root = sandbox("compress-files-collisions");
         let pdf = root.join("report.pdf");

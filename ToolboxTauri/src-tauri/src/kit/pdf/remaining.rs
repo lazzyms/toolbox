@@ -583,11 +583,8 @@ pub fn compress_pdf(input: PathBuf, location: &OutputLocation, images: Option<su
         return JobOutcome::failure(input, ToolError::invalid_input(PDF_PASSWORD_PROTECTED)
             .with_pointer(OutcomePointer::Tool { tool_id: "lock-unlock".into() }));
     }
-    match super::is_signed(&source) {
-        Ok(false) => {}
-        Ok(true) => return JobOutcome::failure(input, ToolError::invalid_input("Digitally signed PDFs cannot be compressed because rewriting the file would invalidate the signature; use an unsigned copy")),
-        Err(error) => return failure(input, error),
-    }
+    // Any rewrite breaks a digital signature, so a signed PDF is still compressed but its copy is flagged.
+    let signed = super::has_signed_signature_field(&source);
     let geometry = match page_geometry(&source) { Ok(geometry) => geometry, Err(error) => return failure(input, error) };
     let qpdf = match qpdf() { Ok(qpdf) => qpdf, Err(error) => return JobOutcome::failure(input, ToolError::unavailable(error)) };
     let output = match OutputNaming::reserve_destination(&input, location, "-compressed", "pdf") {
@@ -629,7 +626,7 @@ pub fn compress_pdf(input: PathBuf, location: &OutputLocation, images: Option<su
         return JobOutcome::skipped(input, SkipReason::new(SkipCode::NoSavings, NO_SAVINGS)).with_sizes(original_bytes, output_bytes);
     }
     match output.publish() {
-        Ok(path) => JobOutcome::succeeded(input, vec![path], compressed_detail(recompressed)).with_sizes(original_bytes, output_bytes),
+        Ok(path) => super::note_signature_removed(JobOutcome::succeeded(input, vec![path], compressed_detail(recompressed)).with_sizes(original_bytes, output_bytes), signed),
         Err(error) => failure(input, format!("Could not publish compressed PDF: {error}")),
     }
 }
@@ -1264,9 +1261,7 @@ mod tests {
     #[test]
     fn remaining_mutators_reject_unsafe_documents_before_reserving_output() {
         for kind in ["signed", "outline", "tagged"] {
-            for operation in ["numbers", "watermark", "image-watermark", "compress", "remove", "extract"] {
-                // Compressing repacks without loss, so only a signature, which any rewrite breaks, stops it.
-                if operation == "compress" && kind != "signed" { continue; }
+            for operation in ["numbers", "watermark", "image-watermark", "remove", "extract"] {
                 let root = split_fixture_root(&format!("unsafe-{kind}-{operation}"));
                 let input = root.join("document.pdf");
                 let output = root.join("outputs");
@@ -1295,7 +1290,6 @@ mod tests {
                         position: None, logo_path: Some(logo), pages: None, start_number: None,
                         font_size: None, output_location: output_location.clone(),
                     }, input.clone()),
-                    "compress" => compress_pdf(input.clone(), &output_location, None),
                     "remove" => {
                         let mut request = request(None, vec![0]);
                         request.output_location = output_location.clone();
