@@ -417,4 +417,5 @@ mod tests {
         let _ = std::fs::remove_file(src);
     }
 }
+pub mod metadata;
 pub mod tools;
