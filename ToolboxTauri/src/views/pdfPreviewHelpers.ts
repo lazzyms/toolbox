@@ -15,17 +15,19 @@ export const previewCacheKey = (path: string, pageIndex: number, serializedScene
   JSON.stringify([path, pageIndex, serializedScene, renderSettings]);
 
 const errorText = (reason: unknown) => {
-  const text = reason instanceof Error ? reason.message : typeof reason === 'string' ? reason : String(reason);
+  const text = reason instanceof Error ? reason.message : typeof reason === 'string' ? reason
+    : typeof reason === 'object' && reason !== null && typeof (reason as { message?: unknown }).message === 'string' ? (reason as { message: string }).message
+      : String(reason);
   return text.replace(/^(?:Error:\s*)+/i, '').trim();
 };
 
 export const pdfEditorErrorMessage = (reason: unknown, phase: PdfEditorErrorPhase) => {
   const text = errorText(reason);
   if (/bookmarks? or destinations?/i.test(text)) {
-    return 'This PDF contains bookmarks or destinations that cannot be preserved after this page edit. Undo the crop or rotation, or use a copy without them.';
+    return 'This PDF contains bookmarks or destinations that cannot be preserved after this page edit. Undo the crop, rotation or mirror, or use a copy without them.';
   }
   if (/annotations?|form widgets?/i.test(text)) {
-    return 'This PDF has annotations or form fields that cannot be preserved after this page edit. Undo the crop or rotation, or use a copy without them.';
+    return 'This PDF has annotations or form fields that cannot be preserved after this page edit. Undo the crop, rotation or mirror, or use a copy without them.';
   }
   if (/navigation or form structures?/i.test(text)) {
     return 'This page edit could break bookmarks or form fields. Undo it, or use a copy without those structures.';

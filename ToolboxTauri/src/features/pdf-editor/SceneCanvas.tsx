@@ -353,7 +353,9 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
       {exact && <image href={renderedPreview.dataUrl} width={transform.width} height={transform.height} preserveAspectRatio="none" pointerEvents="none" />}
       <g ref={coordinates} transform={transform.matrix}>
         {!exact && <g pointerEvents="none">
-          {sourcePreview && <image href={sourcePreview} x={0} y={0} width={page.width} height={page.height} preserveAspectRatio="none" />}
+          {/* A mirrored page flips its source around the visible bounds; objects added on top stay as drawn. */}
+          {sourcePreview && <image href={sourcePreview} x={0} y={0} width={page.width} height={page.height} preserveAspectRatio="none"
+            transform={page.mirrored ? `matrix(-1 0 0 1 ${2 * visibleBounds(page).x + visibleBounds(page).width} 0)` : undefined} />}
           {shown.objects.map(object => <Artwork key={object.id} page={page} object={object} />)}
         </g>}
         {tool === 'highlight' && textRuns.length > 0 && <g className="scene-text-layer" aria-label="Selectable PDF text">
