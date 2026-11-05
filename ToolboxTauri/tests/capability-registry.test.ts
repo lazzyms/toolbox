@@ -43,6 +43,12 @@ test("UI capabilities are the shared native contract facts", () => {
   assert.equal(capabilitiesByCommand.get("remove_password")?.outputSuffix, "-unlocked");
   assert.equal(capabilitiesByCommand.get("remove_password")?.inputCardinality, "multiple");
   assert.equal(UtilityRegistry.find(({ id }) => id === "lock-unlock")?.command, "remove_password");
+  assert.equal(capabilitiesByCommand.get("export_image_edit_stack")?.inputCardinality, "multiple");
+  assert.equal(capabilitiesByCommand.get("export_image_edit_stack")?.outputSuffix, "-edited");
+  assert.equal(capabilitiesByCommand.get("crop_images")?.inputCardinality, "single");
+  const crop = UtilityRegistry.find(({ id }) => id === "crop");
+  assert.equal(crop?.command, "export_image_edit_stack");
+  assert.equal(crop?.capability.inputCardinality, "multiple", "Crop accepts a batch because it runs through the shared edit stack");
   assert.deepEqual(capabilitiesByCommand.get("protect_files")?.acceptedExtensions, [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"]);
   assert.equal(capabilitiesByCommand.get("protect_files")?.nativeAvailability, "available");
   assert.equal(capabilitiesByCommand.get("protect_office"), undefined);
