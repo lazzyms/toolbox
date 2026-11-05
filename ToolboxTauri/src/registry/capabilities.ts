@@ -5,7 +5,10 @@ export interface SharedCapability extends ToolCapability {
   command: string;
 }
 
+const optionalCapabilityKeys = new Set(["skippedExtensions"]);
+
 const capabilityKeys = new Set([
+  ...optionalCapabilityKeys,
   "command",
   "acceptedExtensions",
   "inputCardinality",
@@ -27,12 +30,14 @@ const isInputCardinality = (
 const parseCapability = (value: unknown): SharedCapability => {
   if (!isRecord(value)) throw new Error("Each shared capability must be an object.");
   const keys = Object.keys(value);
-  if (keys.length !== capabilityKeys.size || keys.some((key) => !capabilityKeys.has(key))) {
+  const required = [...capabilityKeys].filter((key) => !optionalCapabilityKeys.has(key));
+  if (keys.some((key) => !capabilityKeys.has(key)) || required.some((key) => !keys.includes(key))) {
     throw new Error("Each shared capability must contain only the contract fields.");
   }
   const {
     command,
     acceptedExtensions,
+    skippedExtensions = [],
     inputCardinality,
     supportsPageSelection,
     supportsPreview,
@@ -46,12 +51,13 @@ const parseCapability = (value: unknown): SharedCapability => {
   if (
     !Array.isArray(acceptedExtensions) ||
     acceptedExtensions.length === 0 ||
-    !acceptedExtensions.every(
+    !Array.isArray(skippedExtensions) ||
+    ![...acceptedExtensions, ...skippedExtensions].every(
       (extension) =>
         typeof extension === "string" &&
         /^\.[a-z0-9]+$/.test(extension),
     ) ||
-    new Set(acceptedExtensions).size !== acceptedExtensions.length
+    new Set([...acceptedExtensions, ...skippedExtensions]).size !== acceptedExtensions.length + skippedExtensions.length
   ) {
     throw new Error(`${command} has invalid accepted extensions.`);
   }
@@ -73,6 +79,7 @@ const parseCapability = (value: unknown): SharedCapability => {
   return {
     command,
     acceptedExtensions,
+    skippedExtensions,
     inputCardinality,
     supportsPageSelection,
     supportsPreview,
@@ -103,6 +110,7 @@ const capabilitiesByCommand = new Map<string, ToolCapability>();
 for (const capability of SharedCapabilityRegistry) {
   capabilitiesByCommand.set(capability.command, {
     acceptedExtensions: capability.acceptedExtensions,
+    skippedExtensions: capability.skippedExtensions,
     inputCardinality: capability.inputCardinality,
     supportsPageSelection: capability.supportsPageSelection,
     supportsPreview: capability.supportsPreview,

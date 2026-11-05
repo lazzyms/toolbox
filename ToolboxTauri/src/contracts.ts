@@ -53,6 +53,8 @@ export type NativeAvailability = "available" | "unavailable";
 
 export interface ToolCapability {
   acceptedExtensions: readonly string[];
+  /** Extensions the command takes only to report each file Skipped. The open dialog never offers them. */
+  skippedExtensions: readonly string[];
   inputCardinality: ToolInputCardinality;
   supportsPageSelection: boolean;
   supportsPreview: boolean;

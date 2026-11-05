@@ -36,6 +36,7 @@ type TestWindow = Window & {
     __toolboxOutputSettings?: OutputSettings;
     __toolboxFolderChecks?: Record<string, "ready" | "missing" | "unwritable">;
     __toolboxLastSaveFolder?: string;
+    __toolboxAnimatedPaths?: string[];
 };
 
 const confirmSave = async (page: Page) => {
@@ -155,6 +156,10 @@ if (command === "preview_pdf_scene_pages") return (args as { request: { pageIndi
                         }
                     }
                     return { width, height, dataUrl: `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='${width}' height='${height}'%3E%3Crect width='100%25' height='100%25' fill='white'/%3E%3C/svg%3E` };
+                }
+                if (command === "inspect_intake_paths") {
+                    const animated = (window as TestWindow).__toolboxAnimatedPaths ?? [];
+                    return (args as { paths: string[] }).paths.map((path) => ({ path, kind: "file", animated: animated.includes(path) }));
                 }
                 if (command === "inspect_image_metadata") return ["fixture image"];
                 if (command === "plugin:path|resolve_directory") return "/Users/test";
@@ -1938,6 +1943,81 @@ for (const theme of ["light", "dark"] as const) {
             await expect(rows.nth(index)).not.toContainText(animated);
         }
         await expect(resultSummaryStatus(page).locator("strong")).toHaveText("Done. 4 compressed, 1 skipped, 1 failed");
+    });
+}
+
+for (const theme of ["light", "dark"] as const) {
+    test(`Compress flags HEIC, unsupported and animated files before the run, keeps Run on for the rest, and points the skipped HEIC to Convert Image Format in the ${theme} theme`, async ({ page }) => {
+        await page.addInitScript((theme) => { localStorage.setItem("toolbox-theme", theme); }, theme);
+        await page.goto("/");
+        const paths = ["/local/report.pdf", "/local/IMG_4020.HEIC", "/local/notes.docx", "/local/clip.gif", "/local/readme.txt", "/local/loading-spinner.webp", "/local/IMG_4012.jpg"];
+        const heicSkip = "HEIC isn't compressed. Convert it to JPEG, then compress the copy. No file was written.";
+        await page.evaluate(({ outcomes, animated }) => {
+            (window as TestWindow).__toolboxProcessingResults = outcomes;
+            (window as TestWindow).__toolboxAnimatedPaths = animated;
+        }, {
+            animated: [paths[5]],
+            outcomes: [
+                succeeded(paths[0], ["/local/report-compressed.pdf"], { detail: "PDF repacked without loss", originalBytes: 2_400_000, outputBytes: 1_200_000 }),
+                {
+                    inputPath: paths[1],
+                    outputPaths: [],
+                    detail: "",
+                    state: "skipped",
+                    failure: null,
+                    reason: { code: "unsupportedFormat", message: heicSkip, pointer: { kind: "tool", toolId: "heic-convert" } },
+                    warnings: [],
+                },
+                succeeded(paths[6], ["/local/IMG_4012-compressed.jpg"], { detail: "Re-saved at quality 75. EXIF and colour profile kept.", originalBytes: 3_200_000, outputBytes: 1_600_000 }),
+            ] satisfies MockOutcome[],
+        });
+        await openFromHome(page, "Compress");
+        await expect(page.locator("body")).toHaveAttribute("data-theme", theme);
+        await page.evaluate((paths) => { (window as TestWindow).__toolboxDialogResults = [paths]; }, paths);
+        await page.getByRole("button", { name: "Choose files to process" }).click();
+
+        const filters = await page.evaluate(() => ((window as TestWindow).__toolboxInvocations ?? [])
+            .filter(({ command }) => command === "plugin:dialog|open")
+            .map(({ args }) => (args as { options: { filters: Array<{ extensions: string[] }> } }).options.filters.flatMap((filter) => filter.extensions)));
+        expect(filters).toEqual([["pdf", "jpg", "jpeg", "png", "webp"]]);
+
+        const files = page.getByRole("listbox").getByRole("option");
+        await expect(files).toHaveText([/^report\.pdf/, /^IMG_4020\.HEIC/, /^notes\.docx/, /^clip\.gif/, /^readme\.txt/, /^loading-spinner\.webp/, /^IMG_4012\.jpg/]);
+        const expectFlag = async (index: number, badge: string, message: string) => {
+            await expect(files.nth(index)).toContainText(badge);
+            await expect(files.nth(index)).toContainText(message);
+        };
+        await expectFlag(1, "Will skip", "HEIC isn't compressed, so it will be skipped. Convert it to JPEG first.");
+        await expectFlag(2, "Won't run", "Not a PDF or image. Compress takes PDF, JPEG, PNG and WebP.");
+        await expectFlag(3, "Won't run", "GIF isn't supported. Compress takes PDF, JPEG, PNG and WebP.");
+        await expectFlag(4, "Won't run", "Not a PDF or image. Compress takes PDF, JPEG, PNG and WebP.");
+        await expectFlag(5, "Won't run", "Animated WebP. Only still images can be compressed.");
+        for (const index of [0, 6]) {
+            await expect(files.nth(index)).not.toContainText("Won't run");
+            await expect(files.nth(index)).not.toContainText("Will skip");
+        }
+        await expect(page.getByText("5 files won't be compressed: 1 will be skipped, 4 would fail.")).toBeVisible();
+        await expect(page.getByText("5 won't be compressed")).toBeVisible();
+        await expect(page.getByRole("button", { name: "Remove 5 flagged files" })).toBeEnabled();
+
+        const run = page.getByRole("button", { name: "Compress 3 files", exact: true });
+        await expect(run).toBeEnabled();
+        await run.click();
+        const requests = await page.evaluate(() => ((window as TestWindow).__toolboxInvocations ?? [])
+            .filter(({ command }) => command === "compress_files")
+            .map(({ args }) => (args as { request: { paths: string[] } }).request.paths));
+        expect(requests).toEqual([[paths[0], paths[1], paths[6]]]);
+
+        const rows = page.getByRole("list", { name: "Results" }).getByRole("listitem");
+        await expect(rows).toHaveText([/^report\.pdf/, /^IMG_4020\.HEIC/, /^IMG_4012\.jpg/]);
+        const skipped = rows.nth(1);
+        await expect(skipped).toContainText("Skipped");
+        await expect(skipped).toContainText(heicSkip);
+        await expect(skipped).not.toContainText("→");
+        await expect(resultSummaryStatus(page).locator("strong")).toHaveText("Done. 2 compressed, 1 skipped");
+
+        await skipped.getByRole("button", { name: "Open Convert Image Format" }).click();
+        await expect(page.getByLabel("Target format")).toBeVisible();
     });
 }
 
