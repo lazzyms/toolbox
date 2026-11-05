@@ -117,10 +117,7 @@ impl ImageEditPlan {
                 ImageEdit::Crop { width, height, mode, aspect_width, aspect_height, .. } if mode == "rectangle" && (*width == 0 || *height == 0) => return Err("Crop rectangle must have positive dimensions.".to_string()),
                 ImageEdit::Crop { mode, aspect_width, aspect_height, .. } if mode == "aspectRatio" && (*aspect_width == 0 || *aspect_height == 0) => return Err("Aspect ratio dimensions must be positive.".to_string()),
                 ImageEdit::Crop { mode, .. } if !matches!(mode.as_str(), "rectangle" | "aspectRatio") => return Err(format!("Unsupported crop mode: {mode}.")),
-                ImageEdit::Tone { brightness, contrast, saturation, exposure } if !(-100..=100).contains(brightness) => return Err("Brightness must be between -100 and 100.".to_string()),
-                ImageEdit::Tone { contrast, .. } if !(-100.0..=100.0).contains(contrast) => return Err("Contrast must be between -100 and 100.".to_string()),
-                ImageEdit::Tone { saturation, .. } if !(-100.0..=100.0).contains(saturation) => return Err("Saturation must be between -100 and 100.".to_string()),
-                ImageEdit::Tone { exposure, .. } if !(-100.0..=100.0).contains(exposure) => return Err("Exposure must be between -100 and 100.".to_string()),
+                ImageEdit::Tone { brightness, contrast, saturation, exposure } => ToneStep { brightness: *brightness, contrast: *contrast, saturation: *saturation, exposure: *exposure }.validate()?,
                 ImageEdit::Watermark { opacity, text, logo_path, .. } if *opacity > 100 => return Err("Watermark opacity must be between 0 and 100.".to_string()),
                 ImageEdit::Watermark { text, logo_path, .. } if text.as_deref().is_none_or(|value| value.trim().is_empty()) && logo_path.is_none() => return Err("Provide watermark text or a logo image.".to_string()),
                 _ => {}
@@ -133,7 +130,7 @@ impl ImageEditPlan {
 pub fn inspect_edit_preview(request: &ImageEditPreviewRequest) -> Result<ImagePreview, String> {
     let plan = request.plan.canonicalized();
     plan.validate()?;
-    let source = crate::kit::images::load_image(&request.path)?;
+    let (source, _) = crate::kit::images::load_upright_image(&request.path)?;
     let (edited, format, quality) = apply_edit_plan(&plan, source, crate::kit::images::detect_format(&request.path))?;
     let encoded = crate::kit::images::encode(&edited, format, quality)?;
     let preview_source = match format {
@@ -148,8 +145,8 @@ pub fn inspect_edit_preview(request: &ImageEditPreviewRequest) -> Result<ImagePr
 pub fn export_edit_plan(plan: &ImageEditPlan, input: PathBuf) -> JobOutcome {
     let plan = plan.canonicalized();
     if let Err(error) = plan.validate() { return failure(input, error); }
-    let source = match crate::kit::images::load_image(&input) {
-        Ok(image) => image,
+    let source = match crate::kit::images::load_upright_image(&input) {
+        Ok((image, _)) => image,
         Err(error) => return failure(input, error),
     };
     let (edited, format, quality) = match apply_edit_plan(&plan, source, crate::kit::images::detect_format(&input)) {
@@ -170,6 +167,108 @@ pub fn export_edit_plan(plan: &ImageEditPlan, input: PathBuf) -> JobOutcome {
     match output.publish() {
         Ok(path) => JobOutcome::succeeded(input, vec![path], format!("Applied {} edits in one export.", plan.edits.len())),
         Err(error) => failure(input, format!("Could not publish edited image: {error}")),
+    }
+}
+
+/// One run of the shared edit stack: every path gets the same steps and its own result.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageEditStackRequest {
+    pub paths: Vec<PathBuf>,
+    pub steps: ImageEditSteps,
+    pub output_location: OutputLocation,
+}
+
+/// The stack holds at most one of each step, and they always run in this order.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImageEditSteps {
+    #[serde(default)] pub crop: Option<CropStep>,
+    #[serde(default)] pub resize: Option<ResizeStep>,
+    #[serde(default)] pub rotate: Option<RotateStep>,
+    #[serde(default)] pub tone: Option<ToneStep>,
+}
+
+const STACK_QUALITY: u8 = 90;
+
+/// The per-file note for a run that turned or mirrored the pixels, which always means a new encode.
+pub const REENCODED_AFTER_ROTATING: &str = "Re-encoded at quality 90 after rotating.";
+pub const ORIENTATION_APPLIED_FIRST: &str = "Camera orientation was applied first.";
+
+impl ImageEditSteps {
+    /// One step keeps its tool's suffix; any combination is named -edited.
+    fn suffix(&self) -> Result<&'static str, String> {
+        let present = [self.crop.as_ref().map(|_| "-cropped"), self.resize.as_ref().map(|_| "-resized"), self.rotate.as_ref().map(|_| "-rotated"), self.tone.as_ref().map(|_| "-tone")];
+        let mut suffixes = present.into_iter().flatten();
+        match (suffixes.next(), suffixes.next()) {
+            (None, _) => Err("Add a step to the stack before running.".to_string()),
+            (Some(suffix), None) => Ok(suffix),
+            (Some(_), Some(_)) => Ok("-edited"),
+        }
+    }
+
+    // The order is fixed here, never by the order the steps were added: crop runs first, so its
+    // rectangle is always measured in source pixels, then resize scales what is left, then rotate and
+    // flip turn the result, and tone adjusts the colour of the pixels that are left.
+    fn apply(&self, mut image: DynamicImage) -> Result<DynamicImage, String> {
+        if let Some(crop) = &self.crop {
+            let (x, y, width, height) = crop_rect(image.width(), image.height(), crop)?;
+            image = image.crop_imm(x, y, width, height);
+        }
+        if let Some(resize) = &self.resize {
+            image = resize.apply(image)?;
+        }
+        if let Some(rotate) = &self.rotate {
+            image = rotate.apply(image)?;
+        }
+        if let Some(tone) = &self.tone {
+            image = tone.apply(image)?;
+        }
+        Ok(image)
+    }
+
+    fn detail(&self, oriented: bool) -> String {
+        let rotated = self.rotate.as_ref().is_some_and(|rotate| !rotate.is_neutral());
+        match (oriented, rotated) {
+            (true, true) => format!("{ORIENTATION_APPLIED_FIRST} {REENCODED_AFTER_ROTATING}"),
+            (true, false) => ORIENTATION_APPLIED_FIRST.to_string(),
+            (false, true) => REENCODED_AFTER_ROTATING.to_string(),
+            (false, false) => "Image saved".to_string(),
+        }
+    }
+}
+
+/// Decodes the input once, runs the stack and encodes once in the input's format.
+pub fn export_edit_stack(request: &ImageEditStackRequest, input: PathBuf) -> JobOutcome {
+    let suffix = match request.steps.suffix() {
+        Ok(suffix) => suffix,
+        Err(error) => return JobOutcome::failure(input, ToolError::invalid_input(error)),
+    };
+    let format = crate::kit::images::detect_format(&input);
+    let (source, oriented) = match crate::kit::images::load_upright_image(&input) {
+        Ok(decoded) => decoded,
+        Err(error) => return failure(input, error),
+    };
+    // A step that cannot apply to this image (a crop outside it, a size past the limits) is a
+    // problem with the request, not with the file.
+    let edited = match request.steps.apply(source) {
+        Ok(image) => image,
+        Err(error) => return JobOutcome::failure(input, ToolError::invalid_input(error)),
+    };
+    let bytes = match crate::kit::images::encode(&edited, format, STACK_QUALITY) {
+        Ok(bytes) => bytes,
+        Err(error) => return failure(input, error),
+    };
+    let output = match OutputNaming::reserve_destination(&input, &request.output_location, suffix, format.extension()) {
+        Ok(output) => output,
+        Err(error) => return failure(input, format!("Could not reserve image output: {error}")),
+    };
+    if let Err(error) = std::fs::write(output.path(), bytes) {
+        return failure(input, format!("Could not save image: {error}"));
+    }
+    match output.publish() {
+        Ok(path) => JobOutcome::succeeded(input, vec![path], request.steps.detail(oriented)),
+        Err(error) => failure(input, format!("Could not publish image: {error}")),
     }
 }
 
@@ -198,12 +297,11 @@ fn apply_edit_plan(plan: &ImageEditPlan, mut image: DynamicImage, mut format: cr
             ImageEdit::Convert { format: requested } => format = parse_output_format(requested)?,
             ImageEdit::Compress { quality: requested, lossless } => { quality = if *lossless { 100 } else { *requested }; },
             ImageEdit::Resize { width, height, mode, percentage, longest_side, resampling, keep_aspect_ratio } => {
-                let request = ResizeRequest { paths: vec![], width: *width, height: *height, mode: mode.clone(), resampling: resampling.clone(), keep_aspect_ratio: *keep_aspect_ratio, percentage: *percentage, longest_side: *longest_side, output_location: OutputLocation::AlongsideInput };
+                let step = ResizeStep { width: *width, height: *height, mode: mode.clone(), resampling: resampling.clone(), keep_aspect_ratio: *keep_aspect_ratio, percentage: *percentage, longest_side: *longest_side };
                 let old_width = image.width();
                 let old_height = image.height();
-                let (width, height) = resize_dimensions(image.width(), image.height(), &request)?;
-                let filter = match resampling.as_str() { "nearest" => image::imageops::FilterType::Nearest, "bicubic" => image::imageops::FilterType::CatmullRom, _ => image::imageops::FilterType::Lanczos3 };
-                image = image.resize_exact(width, height, filter);
+                image = step.apply(image)?;
+                let (width, height) = (image.width(), image.height());
                 geometry.push(ImageGeometryStep::Resize { from_width: old_width, from_height: old_height, to_width: width, to_height: height });
             }
             ImageEdit::Rotate { degrees, flip } => {
@@ -218,26 +316,13 @@ fn apply_edit_plan(plan: &ImageEditPlan, mut image: DynamicImage, mut format: cr
                 if flip == "vertical" { geometry.push(ImageGeometryStep::FlipVertical { height: current_height }); }
             }
             ImageEdit::Crop { x, y, width, height, mode, aspect_width, aspect_height, anchor } => {
-                let request = CropRequest { paths: vec![], x: *x, y: *y, width: *width, height: *height, mode: mode.clone(), aspect_width: *aspect_width, aspect_height: *aspect_height, anchor: anchor.clone(), output_location: OutputLocation::AlongsideInput };
-                let (x, y, width, height) = crop_rect(source_width, source_height, &request)?;
+                let step = CropStep { x: *x, y: *y, width: *width, height: *height, mode: mode.clone(), aspect_width: *aspect_width, aspect_height: *aspect_height, anchor: anchor.clone() };
+                let (x, y, width, height) = crop_rect(source_width, source_height, &step)?;
                 let crop = map_source_rect((x, y, width, height), &geometry)?;
                 image = image.crop_imm(crop.0, crop.1, crop.2, crop.3);
             }
             ImageEdit::Tone { brightness, contrast, saturation, exposure } => {
-                let mut rgba = image::imageops::brighten(&image, *brightness);
-                let exposure = 2.0_f32.powf(*exposure / 100.0);
-                let saturation = (1.0 + *saturation / 100.0).max(0.0);
-                for pixel in rgba.pixels_mut() {
-                    let [red, green, blue, alpha] = pixel.0;
-                    let average = (red as f32 + green as f32 + blue as f32) / 3.0;
-                    pixel.0 = [
-                        ((average + (red as f32 - average) * saturation) * exposure).clamp(0.0, 255.0) as u8,
-                        ((average + (green as f32 - average) * saturation) * exposure).clamp(0.0, 255.0) as u8,
-                        ((average + (blue as f32 - average) * saturation) * exposure).clamp(0.0, 255.0) as u8,
-                        alpha,
-                    ];
-                }
-                image = DynamicImage::ImageRgba8(rgba).adjust_contrast(*contrast);
+                image = ToneStep { brightness: *brightness, contrast: *contrast, saturation: *saturation, exposure: *exposure }.apply(image)?;
             }
             ImageEdit::Watermark { text, logo_path, opacity, x, y } => {
                 let request = WatermarkRequest { paths: vec![], opacity: *opacity, text: text.clone(), logo_path: logo_path.clone(), x: *x, y: *y, output_location: OutputLocation::AlongsideInput };
@@ -295,7 +380,7 @@ pub(crate) fn parse_output_format(format: &str) -> Result<crate::kit::images::Ou
 }
 
 pub fn inspect_preview(request: &ImagePreviewRequest) -> Result<ImagePreview, String> {
-    let image = crate::kit::images::load_image(&request.path).map_err(|error| format!("Could not preview image: {error}"))?;
+    let (image, _) = crate::kit::images::load_upright_image(&request.path).map_err(|error| format!("Could not preview image: {error}"))?;
     let width = image.width();
     let height = image.height();
     let preview = image.thumbnail(1200, 900).to_rgba8();
@@ -325,34 +410,67 @@ pub fn inspect_tiff_pages(request: &TiffPreviewRequest) -> Result<Vec<ImagePrevi
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResizeRequest {
-    pub paths: Vec<PathBuf>, pub width: u32, pub height: u32,
+    pub paths: Vec<PathBuf>,
+    #[serde(flatten)] pub resize: ResizeStep,
+    pub output_location: OutputLocation,
+}
+/// How to size each image: a width-and-height box (fitted inside unless the aspect lock is off),
+/// a percentage, or the length of the longer edge.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResizeStep {
+    #[serde(default)] pub width: u32, #[serde(default)] pub height: u32,
     #[serde(default = "default_resize_mode")] pub mode: String,
     #[serde(default = "default_resampling")] pub resampling: String,
     #[serde(default = "default_keep_aspect_ratio")] pub keep_aspect_ratio: bool,
     #[serde(default)] pub percentage: u32, #[serde(default)] pub longest_side: u32,
-    pub output_location: OutputLocation,
 }
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RotateRequest { pub paths: Vec<PathBuf>, pub degrees: i32, #[serde(default = "default_flip")] pub flip: String, pub output_location: OutputLocation }
+pub struct RotateRequest {
+    pub paths: Vec<PathBuf>,
+    #[serde(flatten)] pub rotate: RotateStep,
+    pub output_location: OutputLocation,
+}
+/// A clockwise turn of 0, 90, 180 or 270 degrees, then an optional mirror.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RotateStep {
+    pub degrees: i32,
+    #[serde(default = "default_flip")] pub flip: String,
+}
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CropRequest {
-    pub paths: Vec<PathBuf>, pub x: u32, pub y: u32, pub width: u32, pub height: u32,
+    pub paths: Vec<PathBuf>,
+    #[serde(flatten)] pub crop: CropStep,
+    pub output_location: OutputLocation,
+}
+/// The crop geometry, measured in source pixels. Aspect-ratio mode keeps the largest area of that
+/// ratio each image has, so one setting fits every size in a batch.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CropStep {
+    pub x: u32, pub y: u32, pub width: u32, pub height: u32,
     #[serde(default = "default_crop_mode")] pub mode: String,
     #[serde(default)] pub aspect_width: u32, #[serde(default)] pub aspect_height: u32,
     #[serde(default = "default_crop_anchor")] pub anchor: String,
-    pub output_location: OutputLocation,
 }
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToneRequest {
     pub paths: Vec<PathBuf>,
+    #[serde(flatten)] pub tone: ToneStep,
+    pub output_location: OutputLocation,
+}
+/// Brightness, contrast, saturation and exposure, each from -100 to 100, where 0 leaves it as it is.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToneStep {
     pub brightness: i32,
     pub contrast: f32,
     #[serde(default)] pub saturation: f32,
     #[serde(default)] pub exposure: f32,
-    pub output_location: OutputLocation,
 }
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -405,26 +523,29 @@ pub struct TiffPreviewRequest { pub path: PathBuf }
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MetadataRequest { pub paths: Vec<PathBuf>, pub output_location: OutputLocation }
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MetadataReport { pub path: PathBuf, pub exif: bool, pub gps: bool, pub xmp: bool, pub icc: bool, pub orientation: bool, pub unsupported: Vec<String> }
 
 pub fn resize(request: &ResizeRequest, input: PathBuf) -> JobOutcome {
-    transform(request.paths.as_slice(), input, &request.output_location, "-resized", |image| {
-        let (width, height) = resize_dimensions(image.width(), image.height(), request)?;
-        let filter = match request.resampling.as_str() { "nearest" => image::imageops::FilterType::Nearest, "bicubic" => image::imageops::FilterType::CatmullRom, _ => image::imageops::FilterType::Lanczos3 };
+    transform(request.paths.as_slice(), input, &request.output_location, "-resized", |image| request.resize.apply(image))
+}
+
+impl ResizeStep {
+    fn apply(&self, image: DynamicImage) -> Result<DynamicImage, String> {
+        let (width, height) = resize_dimensions(image.width(), image.height(), self)?;
+        let filter = match self.resampling.as_str() { "nearest" => image::imageops::FilterType::Nearest, "bicubic" => image::imageops::FilterType::CatmullRom, _ => image::imageops::FilterType::Lanczos3 };
         Ok(image.resize_exact(width, height, filter))
-    })
+    }
 }
 
 fn default_resize_mode() -> String { "exact".to_string() }
 fn default_resampling() -> String { "lanczos".to_string() }
 fn default_keep_aspect_ratio() -> bool { true }
 
-fn resize_dimensions(source_width: u32, source_height: u32, request: &ResizeRequest) -> Result<(u32, u32), String> {
+fn resize_dimensions(source_width: u32, source_height: u32, request: &ResizeStep) -> Result<(u32, u32), String> {
+    if request.mode == "exact" && (request.width == 0 || request.height == 0 || request.width > 16384 || request.height > 16384) {
+        return Err("Resize dimensions must be between 1 and 16384 pixels.".to_string());
+    }
     let dimensions = match request.mode.as_str() {
         "exact" if request.keep_aspect_ratio => {
-            if request.width == 0 || request.height == 0 { return Err("Resize dimensions must be positive.".to_string()); }
             let scale = (request.width as f64 / source_width as f64).min(request.height as f64 / source_height as f64);
             (((source_width as f64 * scale).round() as u32).max(1), ((source_height as f64 * scale).round() as u32).max(1))
         }
@@ -444,18 +565,25 @@ fn resize_dimensions(source_width: u32, source_height: u32, request: &ResizeRequ
     Ok(dimensions)
 }
 
-fn scale_dimension(value: u32, percentage: u32) -> u32 { ((value as u64 * percentage as u64 + 50) / 100).max(1).min(16384) as u32 }
+// Not clamped: a result past 16384 px is refused by resize_dimensions rather than silently distorted.
+fn scale_dimension(value: u32, percentage: u32) -> u32 { ((value as u64 * percentage as u64 + 50) / 100).clamp(1, u32::MAX as u64) as u32 }
 pub fn rotate(request: &RotateRequest, input: PathBuf) -> JobOutcome {
-    transform(request.paths.as_slice(), input, &request.output_location, "-rotated", |image| {
-        let image = match request.degrees.rem_euclid(360) { 90 => image.rotate90(), 180 => image.rotate180(), 270 => image.rotate270(), 0 => image, _ => return Err("Rotation must be 0, 90, 180, or 270 degrees.".to_string()) };
-        Ok(match request.flip.as_str() { "none" => image, "horizontal" => DynamicImage::ImageRgba8(image::imageops::flip_horizontal(&image.to_rgba8())), "vertical" => DynamicImage::ImageRgba8(image::imageops::flip_vertical(&image.to_rgba8())), _ => return Err("Mirror choice must be none, horizontal, or vertical.".to_string()) })
-    })
+    transform(request.paths.as_slice(), input, &request.output_location, "-rotated", |image| request.rotate.apply(image))
+}
+
+impl RotateStep {
+    fn apply(&self, image: DynamicImage) -> Result<DynamicImage, String> {
+        let image = match self.degrees.rem_euclid(360) { 90 => image.rotate90(), 180 => image.rotate180(), 270 => image.rotate270(), 0 => image, _ => return Err("Rotation must be 0, 90, 180, or 270 degrees.".to_string()) };
+        Ok(match self.flip.as_str() { "none" => image, "horizontal" => DynamicImage::ImageRgba8(image::imageops::flip_horizontal(&image.to_rgba8())), "vertical" => DynamicImage::ImageRgba8(image::imageops::flip_vertical(&image.to_rgba8())), _ => return Err("Mirror choice must be none, horizontal, or vertical.".to_string()) })
+    }
+
+    fn is_neutral(&self) -> bool { self.degrees.rem_euclid(360) == 0 && self.flip == "none" }
 }
 
 fn default_flip() -> String { "none".to_string() }
 pub fn crop(request: &CropRequest, input: PathBuf) -> JobOutcome {
     transform(request.paths.as_slice(), input, &request.output_location, "-cropped", |image| {
-        let (x, y, width, height) = crop_rect(image.width(), image.height(), request)?;
+        let (x, y, width, height) = crop_rect(image.width(), image.height(), &request.crop)?;
         Ok(image.crop_imm(x, y, width, height))
     })
 }
@@ -463,7 +591,7 @@ pub fn crop(request: &CropRequest, input: PathBuf) -> JobOutcome {
 fn default_crop_mode() -> String { "rectangle".to_string() }
 fn default_crop_anchor() -> String { "center".to_string() }
 
-fn crop_rect(image_width: u32, image_height: u32, request: &CropRequest) -> Result<(u32, u32, u32, u32), String> {
+fn crop_rect(image_width: u32, image_height: u32, request: &CropStep) -> Result<(u32, u32, u32, u32), String> {
     if request.mode == "aspectRatio" {
         if request.aspect_width == 0 || request.aspect_height == 0 { return Err("Aspect ratio dimensions must be positive.".to_string()); }
         let ratio = request.aspect_width as f64 / request.aspect_height as f64;
@@ -477,8 +605,10 @@ fn crop_rect(image_width: u32, image_height: u32, request: &CropRequest) -> Resu
         if width == 0 || height == 0 || width > image_width || height > image_height { return Err("Aspect ratio crop does not fit inside the image.".to_string()); }
         let max_x = image_width - width;
         let max_y = image_height - height;
-        let x = match request.anchor.as_str() { "left" => 0, "right" => max_x, "custom" => request.x.min(max_x), _ => max_x / 2 };
-        let y = match request.anchor.as_str() { "top" => 0, "bottom" => max_y, "custom" => request.y.min(max_y), _ => max_y / 2 };
+        // The largest fit leaves room on one axis only, so start and end keep the top or left
+        // part and the bottom or right part of every image, whatever its orientation.
+        let x = match request.anchor.as_str() { "left" | "start" => 0, "right" | "end" => max_x, "custom" => request.x.min(max_x), _ => max_x / 2 };
+        let y = match request.anchor.as_str() { "top" | "start" => 0, "bottom" | "end" => max_y, "custom" => request.y.min(max_y), _ => max_y / 2 };
         Ok((x, y, width, height))
     } else if request.mode == "rectangle" {
         if request.width == 0 || request.height == 0 || request.x.saturating_add(request.width) > image_width || request.y.saturating_add(request.height) > image_height { return Err("Crop rectangle must fit inside the image.".to_string()); }
@@ -486,22 +616,44 @@ fn crop_rect(image_width: u32, image_height: u32, request: &CropRequest) -> Resu
     } else { Err(format!("Unsupported crop mode: {}.", request.mode)) }
 }
 pub fn tone(request: &ToneRequest, input: PathBuf) -> JobOutcome {
-    transform(&request.paths, input, &request.output_location, "-tone", |image| {
-        let mut image = image::imageops::brighten(&image, request.brightness);
-        let exposure = 2.0_f32.powf(request.exposure.clamp(-100.0, 100.0) / 100.0);
-        let saturation = (1.0 + request.saturation.clamp(-100.0, 100.0) / 100.0).max(0.0);
-        for pixel in image.pixels_mut() {
+    transform(&request.paths, input, &request.output_location, "-tone", |image| request.tone.apply(image))
+}
+
+impl ToneStep {
+    fn validate(&self) -> Result<(), String> {
+        if !(-100..=100).contains(&self.brightness) { return Err("Brightness must be between -100 and 100.".to_string()); }
+        for (name, value) in [("Contrast", self.contrast), ("Saturation", self.saturation), ("Exposure", self.exposure)] {
+            if !(-100.0..=100.0).contains(&value) { return Err(format!("{name} must be between -100 and 100.")); }
+        }
+        Ok(())
+    }
+
+    // A value of 0 leaves the pixels exactly as they were: the colour maths rounds rather than
+    // truncates, and contrast is skipped at 0. Brightness, saturation and exposure leave alpha
+    // alone, but the image crate's contrast also stretches alpha, so each pixel gets its alpha
+    // back afterwards and transparent areas stay transparent.
+    fn apply(&self, image: DynamicImage) -> Result<DynamicImage, String> {
+        self.validate()?;
+        let mut rgba = image::imageops::brighten(&image, self.brightness);
+        let exposure = 2.0_f32.powf(self.exposure / 100.0);
+        let saturation = 1.0 + self.saturation / 100.0;
+        for pixel in rgba.pixels_mut() {
             let [red, green, blue, alpha] = pixel.0;
             let average = (red as f32 + green as f32 + blue as f32) / 3.0;
             pixel.0 = [
-                ((average + (red as f32 - average) * saturation) * exposure).clamp(0.0, 255.0) as u8,
-                ((average + (green as f32 - average) * saturation) * exposure).clamp(0.0, 255.0) as u8,
-                ((average + (blue as f32 - average) * saturation) * exposure).clamp(0.0, 255.0) as u8,
+                ((average + (red as f32 - average) * saturation) * exposure).round().clamp(0.0, 255.0) as u8,
+                ((average + (green as f32 - average) * saturation) * exposure).round().clamp(0.0, 255.0) as u8,
+                ((average + (blue as f32 - average) * saturation) * exposure).round().clamp(0.0, 255.0) as u8,
                 alpha,
             ];
         }
-        Ok(DynamicImage::ImageRgba8(image).adjust_contrast(request.contrast))
-    })
+        if self.contrast == 0.0 { return Ok(DynamicImage::ImageRgba8(rgba)); }
+        let mut contrasted = image::imageops::contrast(&rgba, self.contrast);
+        for (pixel, source) in contrasted.pixels_mut().zip(rgba.pixels()) {
+            pixel.0[3] = source.0[3];
+        }
+        Ok(DynamicImage::ImageRgba8(contrasted))
+    }
 }
 pub fn watermark(request: &WatermarkRequest, input: PathBuf) -> JobOutcome {
     transform(&request.paths, input, &request.output_location, "-watermarked", |image| {
@@ -923,17 +1075,6 @@ fn write_encoded_page<W: std::io::Write + Seek>(encoder: &mut tiff::encoder::Tif
         TiffPage::Rgba { width, height, data } => encoder.write_image::<tiff::encoder::colortype::RGBA8>(*width, *height, data).map_err(|error| error.to_string()),
     }
 }
-pub fn inspect_metadata(input: PathBuf) -> Result<MetadataReport, String> {
-    let bytes = std::fs::read(&input).map_err(|error| format!("Could not read image metadata: {error}"))?;
-    let exif = contains(&bytes, b"Exif\0\0");
-    let xmp = contains(&bytes, b"http://ns.adobe.com/xap/1.0/") || contains(&bytes, b"<x:xmpmeta");
-    let icc = contains(&bytes, b"ICC_PROFILE") || contains(&bytes, b"iCCP");
-    let gps = exif && (contains(&bytes, b"GPS") || contains(&bytes, b"gps"));
-    let orientation = exif && (contains(&bytes, b"Orientation") || contains(&bytes, b"orientation"));
-    let supported = exif || xmp || icc;
-    Ok(MetadataReport { path: input, exif, gps, xmp, icc, orientation, unsupported: if supported { Vec::new() } else { vec!["No supported EXIF, GPS, XMP, or ICC metadata marker was recognized.".to_string()] } })
-}
-
 pub fn strip_metadata(request: &MetadataRequest, input: PathBuf) -> JobOutcome {
     let image = match image::open(&input) { Ok(image) => image, Err(error) => return failure(input, format!("Could not read image: {error}")) };
     let output = match OutputNaming::reserve_destination(&input, &request.output_location, "-stripped", input.extension().and_then(|extension| extension.to_str()).unwrap_or("png")) {
@@ -942,7 +1083,7 @@ pub fn strip_metadata(request: &MetadataRequest, input: PathBuf) -> JobOutcome {
     };
     let format = ImageFormat::from_path(output.path()).unwrap_or(ImageFormat::Png);
     if let Err(error) = image.save_with_format(output.path(), format) { return failure(input, format!("Could not save metadata-free image: {error}")); }
-    match inspect_metadata(output.path().to_path_buf()) {
+    match crate::kit::images::metadata::read_file(output.path()) {
         Ok(report) if !report.exif && !report.xmp && !report.icc => match output.publish() {
             Ok(path) => JobOutcome::succeeded(input, vec![path], "Metadata removed and verified"),
             Err(error) => failure(input, format!("Could not publish metadata-free image: {error}")),
@@ -952,10 +1093,8 @@ pub fn strip_metadata(request: &MetadataRequest, input: PathBuf) -> JobOutcome {
     }
 }
 
-fn contains(bytes: &[u8], needle: &[u8]) -> bool { bytes.windows(needle.len()).any(|window| window == needle) }
-
 fn transform<F>(_: &[PathBuf], input: PathBuf, location: &OutputLocation, suffix: &str, edit: F) -> JobOutcome where F: FnOnce(DynamicImage) -> Result<DynamicImage, String> {
-    let image = match crate::kit::images::load_image(&input) { Ok(image) => image, Err(error) => return failure(input, format!("Could not read image: {error}")) };
+    let image = match crate::kit::images::load_upright_image(&input) { Ok((image, _)) => image, Err(error) => return failure(input, format!("Could not read image: {error}")) };
     let image = match edit(image) { Ok(image) => image, Err(error) => return failure(input, error) };
     let extension = input.extension().and_then(|extension| extension.to_str()).unwrap_or("png");
     let output = match OutputNaming::reserve_destination(&input, location, suffix, extension) {
@@ -1052,16 +1191,6 @@ mod tests {
         let _ = std::fs::remove_file(two_page);
         let _ = std::fs::remove_file(one_page);
         let _ = std::fs::remove_file(output);
-    }
-
-    #[test]
-    fn reports_unrecognized_metadata_explicitly() {
-        let input = path("metadata.png");
-        image::RgbaImage::from_pixel(1, 1, image::Rgba([1, 2, 3, 255])).save(&input).unwrap();
-        let report = inspect_metadata(input.clone()).unwrap();
-        assert!(!report.exif && !report.gps && !report.xmp && !report.icc);
-        assert!(!report.unsupported.is_empty());
-        let _ = std::fs::remove_file(input);
     }
 
     #[test]
@@ -1331,9 +1460,13 @@ mod tests {
 
     #[test]
     fn crop_aspect_ratio_is_anchored_and_bounds_checked() {
-        let request = CropRequest { paths: vec![], x: 0, y: 0, width: 1, height: 1, mode: "aspectRatio".to_string(), aspect_width: 1, aspect_height: 1, anchor: "top".to_string(), output_location: OutputLocation::AlongsideInput };
+        let request = CropStep { x: 0, y: 0, width: 1, height: 1, mode: "aspectRatio".to_string(), aspect_width: 1, aspect_height: 1, anchor: "top".to_string() };
         assert_eq!(crop_rect(8, 4, &request).unwrap(), (2, 0, 4, 4));
-        let invalid = CropRequest { mode: "rectangle".to_string(), x: 7, y: 0, width: 2, height: 1, ..request };
+        let start = CropStep { anchor: "start".to_string(), ..request.clone() };
+        assert_eq!((crop_rect(8, 4, &start).unwrap(), crop_rect(4, 8, &start).unwrap()), ((0, 0, 4, 4), (0, 0, 4, 4)));
+        let end = CropStep { anchor: "end".to_string(), ..request.clone() };
+        assert_eq!((crop_rect(8, 4, &end).unwrap(), crop_rect(4, 8, &end).unwrap()), ((4, 0, 4, 4), (0, 4, 4, 4)));
+        let invalid = CropStep { mode: "rectangle".to_string(), x: 7, y: 0, width: 2, height: 1, ..request };
         assert!(crop_rect(8, 4, &invalid).is_err());
     }
 
@@ -1344,12 +1477,12 @@ mod tests {
         image.put_pixel(0, 0, image::Rgba([255, 0, 0, 255]));
         image.put_pixel(1, 0, image::Rgba([0, 255, 0, 255]));
         image.save(&input).unwrap();
-        let result = rotate(&RotateRequest { paths: vec![input.clone()], degrees: 0, flip: "horizontal".to_string(), output_location: OutputLocation::AlongsideInput }, input.clone());
+        let result = rotate(&RotateRequest { paths: vec![input.clone()], rotate: RotateStep { degrees: 0, flip: "horizontal".to_string() }, output_location: OutputLocation::AlongsideInput }, input.clone());
         let output = result.output_paths().first().unwrap();
         let pixels = image::open(output).unwrap().to_rgba8();
         assert_eq!(pixels.dimensions(), (2, 1));
         assert_eq!(pixels.get_pixel(0, 0).0, [0, 255, 0, 255]);
-        let invalid = rotate(&RotateRequest { paths: vec![input.clone()], degrees: 0, flip: "diagonal".to_string(), output_location: OutputLocation::AlongsideInput }, input.clone());
+        let invalid = rotate(&RotateRequest { paths: vec![input.clone()], rotate: RotateStep { degrees: 0, flip: "diagonal".to_string() }, output_location: OutputLocation::AlongsideInput }, input.clone());
         assert!(invalid.error().is_some());
         let _ = std::fs::remove_file(input);
         let _ = std::fs::remove_file(output);
@@ -1357,12 +1490,18 @@ mod tests {
 
     #[test]
     fn resize_modes_produce_bounded_dimensions() {
-        let percentage = ResizeRequest { paths: vec![], width: 0, height: 0, mode: "percentage".to_string(), resampling: "lanczos".to_string(), keep_aspect_ratio: true, percentage: 50, longest_side: 0, output_location: OutputLocation::AlongsideInput };
+        let percentage = ResizeStep { width: 0, height: 0, mode: "percentage".to_string(), resampling: "lanczos".to_string(), keep_aspect_ratio: true, percentage: 50, longest_side: 0 };
         assert_eq!(resize_dimensions(400, 200, &percentage).unwrap(), (200, 100));
-        let longest = ResizeRequest { mode: "longestSide".to_string(), longest_side: 100, ..percentage };
+        let longest = ResizeStep { mode: "longestSide".to_string(), longest_side: 100, ..percentage.clone() };
         assert_eq!(resize_dimensions(400, 200, &longest).unwrap(), (100, 50));
-        let invalid = ResizeRequest { mode: "percentage".to_string(), percentage: 0, ..longest };
+        assert_eq!(resize_dimensions(200, 400, &longest).unwrap(), (50, 100));
+        let invalid = ResizeStep { mode: "percentage".to_string(), percentage: 0, ..longest.clone() };
         assert!(resize_dimensions(400, 200, &invalid).is_err());
+        let boxed = ResizeStep { mode: "exact".to_string(), width: 100, height: 100, ..percentage.clone() };
+        assert_eq!(resize_dimensions(400, 200, &boxed).unwrap(), (100, 50));
+        assert_eq!(resize_dimensions(400, 200, &ResizeStep { keep_aspect_ratio: false, ..boxed.clone() }).unwrap(), (100, 100));
+        // A box past the limit is refused even when the lock would fit the image inside it.
+        assert!(resize_dimensions(400, 200, &ResizeStep { width: 16385, ..boxed }).is_err());
     }
 
     #[test]
@@ -1524,10 +1663,9 @@ mod tests {
             output_location: OutputLocation::AlongsideInput,
         };
 
-        let request = CropRequest {
-            paths: vec![], x: 0, y: 0, width: 1, height: 1, mode: "aspectRatio".to_string(),
+        let request = CropStep {
+            x: 0, y: 0, width: 1, height: 1, mode: "aspectRatio".to_string(),
             aspect_width: 1, aspect_height: 1, anchor: "right".to_string(),
-            output_location: OutputLocation::AlongsideInput,
         };
         assert_eq!(crop_rect(100, 60, &request).unwrap(), (40, 0, 60, 60));
         let preview = inspect_edit_preview(&ImageEditPreviewRequest { path: input.clone(), plan: plan.clone() }).unwrap();

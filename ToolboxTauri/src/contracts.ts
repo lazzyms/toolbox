@@ -103,6 +103,7 @@ export type ToolCommand =
   | "resize_images"
   | "rotate_images"
   | "crop_images"
+  | "export_image_edit_stack"
   | "adjust_image_tone"
   | "watermark_images"
   | "generate_icon_set"
@@ -192,6 +193,25 @@ export interface ImagePreview {
   height: number;
   dataUrl: string;
 }
+
+export type ImageMetadataFormat = "jpeg" | "png" | "webp" | "tiff" | "heic";
+
+export type ImageMetadataErrorCode = "unreadable" | "unsupportedFormat" | "truncated" | "corrupt";
+
+export type ImageMetadataInspection =
+  | {
+      status: "report";
+      path: string;
+      format: ImageMetadataFormat;
+      exif: boolean;
+      gps: boolean;
+      xmp: boolean;
+      iptc: boolean;
+      comments: boolean;
+      icc: boolean;
+      orientation: number | null;
+    }
+  | { status: "error"; path: string; code: ImageMetadataErrorCode; message: string };
 
 export interface ToolDefinition {
   id: AtomicToolId;

@@ -74,6 +74,26 @@ pub(crate) fn load_image(path: &std::path::Path) -> Result<image::DynamicImage, 
     }
 }
 
+/// Decodes an image and bakes its camera orientation into the pixels once
+/// (`OrientationPolicy::BakePixelsOnce`), so every later pixel step sees the upright
+/// image. Returns whether a non-neutral orientation was applied. HEIC is left as
+/// decoded because libheif already applies its rotation and mirror transforms, and
+/// unreadable metadata never fails an otherwise decodable image.
+pub(crate) fn load_upright_image(path: &std::path::Path) -> Result<(image::DynamicImage, bool), String> {
+    let mut image = load_image(path)?;
+    let orientation = match metadata::read_file(path) {
+        Ok(found) if found.format != metadata::MetadataFormat::Heic => found.orientation,
+        _ => None,
+    };
+    match orientation.filter(|value| *value != 1).and_then(image::metadata::Orientation::from_exif) {
+        Some(orientation) => {
+            image.apply_orientation(orientation);
+            Ok((image, true))
+        }
+        None => Ok((image, false)),
+    }
+}
+
 // Encoders write to a buffer first: WebP and HEIC only expose buffer encoders
 // anyway, and buffering lets the no-inflation guard compare sizes before
 // touching the destination (JPEG/PNG write through the same path).
@@ -417,4 +437,5 @@ mod tests {
         let _ = std::fs::remove_file(src);
     }
 }
+pub mod metadata;
 pub mod tools;

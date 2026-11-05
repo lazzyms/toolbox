@@ -412,7 +412,7 @@ async fn image_metadata(events: RunEvents, request: tools::MetadataRequest) -> V
     BatchRunner::run(&events, "image_metadata", request.paths.clone(), &request.output_location, &request, tools::strip_metadata)
 }
 #[tauri::command]
-fn inspect_image_metadata(request: tools::MetadataRequest) -> Vec<Result<tools::MetadataReport, String>> { request.paths.into_iter().map(tools::inspect_metadata).collect() }
+fn inspect_image_metadata(request: tools::MetadataRequest) -> Vec<crate::kit::images::metadata::MetadataInspection> { request.paths.into_iter().map(crate::kit::images::metadata::inspect).collect() }
 
 #[tauri::command]
 fn inspect_image_preview(request: tools::ImagePreviewRequest) -> Result<tools::ImagePreview, String> { tools::inspect_preview(&request) }
@@ -427,6 +427,12 @@ fn inspect_image_edit_preview(request: tools::ImageEditPreviewRequest) -> Result
 async fn export_image_edit_plan(events: RunEvents, request: tools::ImageEditExportRequest) -> Vec<JobOutcome> {
     let request = Arc::new(request);
     BatchRunner::run(&events, "export_image_edit_plan", request.paths.clone(), &request.plan.output_location, &request, |request, path| tools::export_edit_plan(&request.plan, path))
+}
+
+#[tauri::command]
+async fn export_image_edit_stack(events: RunEvents, request: tools::ImageEditStackRequest) -> Vec<JobOutcome> {
+    let request = Arc::new(request);
+    BatchRunner::run(&events, "export_image_edit_stack", request.paths.clone(), &request.output_location, &request, tools::export_edit_stack)
 }
 
 fn aggregate_outcomes<F>(command: &str, paths: &[std::path::PathBuf], job: F) -> Vec<JobOutcome>
@@ -572,6 +578,7 @@ fn main() {
             inspect_tiff_pages,
             inspect_image_edit_preview,
             export_image_edit_plan,
+            export_image_edit_stack,
             get_quick_actions,
             set_quick_actions
         ])
@@ -623,7 +630,7 @@ mod command_tests {
     use super::*;
     use crate::kit::common::OutputLocation;
     use crate::kit::contracts::{ErrorKind, LimitKind};
-    use crate::kit::images::tools::{CropRequest, GifCreateRequest, GifExtractRequest, ImageEdit, ImageEditExportRequest, ImageEditPlan, ImageEditPreviewRequest, IconSetRequest, MetadataRequest, ResizeRequest, RotateRequest, TiffRequest, ToneRequest, WatermarkRequest};
+    use crate::kit::images::tools::{CropRequest, CropStep, ImageEditStackRequest, ImageEditSteps, GifCreateRequest, GifExtractRequest, ImageEdit, ImageEditExportRequest, ImageEditPlan, ImageEditPreviewRequest, IconSetRequest, MetadataRequest, ResizeRequest, ResizeStep, RotateRequest, RotateStep, TiffRequest, ToneRequest, ToneStep, WatermarkRequest};
     use crate::kit::office::{test_minimal_ooxml_package, OfficeProcessor};
     use crate::kit::pdf::editor::{AddPdfPagesRequest, CropPdfRequest, EditPdfRequest, OrganizePdfRequest, PageScope, PdfEditMode, PdfEditOperation, PdfEditSessionPlan, PdfEditSessionRequest, PdfOverlay, PdfOverlayPosition, PdfRect, RedactPdfRequest, RotatePage, SignPdfRequest};
     use crate::kit::pdf::remaining::{CompressPdfRequest, ImagesToPdfRequest, MergePdfRequest, PageOverlayRequest, PageSelectionRequest, PdfToImagesRequest, PdfToTextRequest, RotatePdfRequest, ComparePdfsRequest};
@@ -1186,9 +1193,10 @@ mod command_tests {
         outputs.extend(named(&mut naming, "compare_pdfs", pdf.clone(), assert_aggregate_success("compare pdfs", &[pdf.clone(), pdf_two.clone()], run_compare_pdfs(&ComparePdfsRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: location(&root, "compare pdfs"), output_path: None }))));
         outputs.extend(named(&mut naming, "convert_images", image.clone(), assert_success("convert", convert_images(RunEvents::silent(), ConvertImagesRequest { paths: vec![image.clone()], format: "jpg".into(), output_location: location(&root, "convert") }))));
         outputs.extend(named(&mut naming, "compress_images", image.clone(), assert_success("compress images", compress_images(RunEvents::silent(), serde_json::from_value::<CompressImagesRequest>(serde_json::json!({ "paths": [image.clone()], "quality": 80, "lossless": false, "outputLocation": location(&root, "compress images") })).expect("Compress Files view payload for compress_images")))));
-        outputs.extend(named(&mut naming, "resize_images", image.clone(), assert_success("resize", resize_images(RunEvents::silent(), ResizeRequest { paths: vec![image.clone()], width: 128, height: 128, mode: "exact".into(), resampling: "lanczos".into(), keep_aspect_ratio: true, percentage: 100, longest_side: 128, output_location: location(&root, "resize") }))));
-        outputs.extend(named(&mut naming, "rotate_images", image.clone(), assert_success("rotate", rotate_images(RunEvents::silent(), RotateRequest { paths: vec![image.clone()], degrees: 90, flip: "none".into(), output_location: location(&root, "rotate") }))));
-        outputs.extend(named(&mut naming, "crop_images", image.clone(), assert_success("crop image", crop_images(RunEvents::silent(), CropRequest { paths: vec![image.clone()], x: 0, y: 0, width: 128, height: 128, mode: "rectangle".into(), aspect_width: 128, aspect_height: 128, anchor: "center".into(), output_location: location(&root, "crop image") }))));
+        outputs.extend(named(&mut naming, "resize_images", image.clone(), assert_success("resize", resize_images(RunEvents::silent(), ResizeRequest { paths: vec![image.clone()], resize: ResizeStep { width: 128, height: 128, mode: "exact".into(), resampling: "lanczos".into(), keep_aspect_ratio: true, percentage: 100, longest_side: 128 }, output_location: location(&root, "resize") }))));
+        outputs.extend(named(&mut naming, "rotate_images", image.clone(), assert_success("rotate", rotate_images(RunEvents::silent(), RotateRequest { paths: vec![image.clone()], rotate: RotateStep { degrees: 90, flip: "none".into() }, output_location: location(&root, "rotate") }))));
+        outputs.extend(named(&mut naming, "crop_images", image.clone(), assert_success("crop image", crop_images(RunEvents::silent(), CropRequest { paths: vec![image.clone()], crop: CropStep { x: 0, y: 0, width: 128, height: 128, mode: "rectangle".into(), aspect_width: 128, aspect_height: 128, anchor: "center".into() }, output_location: location(&root, "crop image") }))));
+        outputs.extend(named(&mut naming, "export_image_edit_stack", image.clone(), assert_success("edit stack", export_image_edit_stack(RunEvents::silent(), ImageEditStackRequest { paths: vec![image.clone()], steps: ImageEditSteps { crop: Some(CropStep { x: 0, y: 0, width: 0, height: 0, mode: "aspectRatio".into(), aspect_width: 4, aspect_height: 5, anchor: "center".into() }), resize: Some(ResizeStep { width: 0, height: 0, mode: "longestSide".into(), resampling: "lanczos".into(), keep_aspect_ratio: true, percentage: 100, longest_side: 64 }), rotate: Some(RotateStep { degrees: 90, flip: "horizontal".into() }), tone: Some(ToneStep { brightness: 10, contrast: 0.0, saturation: -20.0, exposure: 0.0 }) }, output_location: location(&root, "edit stack") }))));
         outputs.extend(named(&mut naming, "generate_icon_set", image.clone(), assert_success("icons", generate_icon_set(RunEvents::silent(), IconSetRequest { paths: vec![image.clone()], preset: "favicon".into(), sizes: vec![], output_location: location(&root, "icons") }))));
         outputs.extend(named(&mut naming, "create_gif", image.clone(), assert_aggregate_success("create gif", &[image.clone(), image_two.clone()], run_create_gif(&GifCreateRequest { paths: vec![image.clone(), image_two.clone()], frame_delay_ms: 100, loop_forever: true, output_location: location(&root, "create gif"), output_path: None }))));
         outputs.extend(named(&mut naming, "extract_gif_frames", animated.clone(), assert_success("extract gif", extract_gif_frames(RunEvents::silent(), GifExtractRequest { paths: vec![animated.clone()], output_location: location(&root, "extract gif") }))));
@@ -1232,7 +1240,7 @@ mod command_tests {
         assert!(lossy_differing_pixels.is_empty(), "lossy image export pixels must match the verified edit preview; first differences: {lossy_differing_pixels:?}");
         outputs.extend(named(&mut naming, "export_image_edit_plan", lossy_image.clone(), lossy_image_outputs));
         outputs.extend(named(&mut naming, "image_metadata", image.clone(), assert_success("metadata", image_metadata(RunEvents::silent(), MetadataRequest { paths: vec![image.clone()], output_location: location(&root, "metadata") }))));
-        outputs.extend(named(&mut naming, "adjust_image_tone", image.clone(), assert_success("tone", adjust_image_tone(RunEvents::silent(), ToneRequest { paths: vec![image.clone()], brightness: 20, contrast: 0.0, saturation: 0.0, exposure: 0.0, output_location: location(&root, "tone") }))));
+        outputs.extend(named(&mut naming, "adjust_image_tone", image.clone(), assert_success("tone", adjust_image_tone(RunEvents::silent(), ToneRequest { paths: vec![image.clone()], tone: ToneStep { brightness: 20, contrast: 0.0, saturation: 0.0, exposure: 0.0 }, output_location: location(&root, "tone") }))));
         outputs.extend(named(&mut naming, "process_tiff_pages", tiff.clone(), assert_aggregate_success("tiff", &[tiff.clone()], run_process_tiff_pages(&TiffRequest { paths: vec![tiff.clone()], pages: None, output_location: location(&root, "tiff"), output_path: None }))));
         outputs.extend(named(&mut naming, "blur_faces", image.clone(), assert_vision_adapter("face blur", blur_faces(RunEvents::silent(), VisionRequest { paths: vec![image.clone()], pages: None, output_location: location(&root, "face blur") }))));
         outputs.extend(named(&mut naming, "remove_image_background", image.clone(), assert_vision_adapter("background removal", remove_image_background(RunEvents::silent(), VisionRequest { paths: vec![image.clone()], pages: None, output_location: location(&root, "background removal") }))));
@@ -1283,6 +1291,428 @@ mod command_tests {
         cleanup(&heic[0].output_paths());
         cleanup(&webp[0].output_paths());
         let _ = std::fs::remove_file(&src);
+    }
+
+    #[test]
+    fn edit_stack_crops_a_mixed_batch_through_one_encode_per_file() {
+        let root = sandbox("edit_stack_batch");
+        let png = root.join("wide.png");
+        let jpeg = root.join("tall.jpg");
+        let webp = root.join("square.webp");
+        let heic = root.join("photo.heic");
+        let small = root.join("small.png");
+        let corrupt = root.join("corrupt.jpg");
+        let pattern = |width: u32, height: u32, seed: u8| image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(width, height, |x, y| Rgba([seed, (x * 3) as u8, (y * 5) as u8, 255])));
+        pattern(240, 120, 1).save(&png).unwrap();
+        pattern(90, 200, 2).to_rgb8().save(&jpeg).unwrap();
+        std::fs::write(&webp, crate::kit::images::encode(&pattern(160, 160, 3), crate::kit::images::OutputFormat::WebP, 90).unwrap()).unwrap();
+        std::fs::write(&heic, crate::kit::images::encode(&pattern(128, 96, 4), crate::kit::images::OutputFormat::Heic, 90).unwrap()).unwrap();
+        pattern(40, 40, 5).save(&small).unwrap();
+        std::fs::write(&corrupt, b"not a jpeg").unwrap();
+        let inputs = vec![png.clone(), jpeg.clone(), small.clone(), webp.clone(), corrupt.clone(), heic.clone()];
+        let originals = inputs.iter().map(|path| (Original::of(path), std::fs::read(path).unwrap())).collect::<Vec<_>>();
+        let rectangle = CropStep { x: 10, y: 20, width: 64, height: 48, mode: "rectangle".into(), aspect_width: 0, aspect_height: 0, anchor: "custom".into() };
+        let run = |folder: &str| tauri::async_runtime::block_on(export_image_edit_stack(RunEvents::silent(), ImageEditStackRequest {
+            paths: inputs.clone(), steps: ImageEditSteps { crop: Some(rectangle.clone()), resize: None, rotate: None, tone: None }, output_location: OutputLocation::CustomFolder(root.join(folder)),
+        }));
+        std::fs::create_dir_all(root.join("out")).unwrap();
+        std::fs::create_dir_all(root.join("again")).unwrap();
+
+        let first = run("out");
+        assert_eq!(first.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), inputs, "one outcome per file, in input order");
+        let small_error = first[2].error().expect("a rectangle outside the small image fails only that file");
+        assert!(small_error.message.contains("fit inside"), "{}", small_error.message);
+        assert!(first[4].error().is_some(), "the unreadable file fails on its own");
+        assert!(first[2].output_paths().is_empty() && first[4].output_paths().is_empty());
+        let expected_names = [("wide.png", "wide-cropped.png"), ("tall.jpg", "tall-cropped.jpg"), ("square.webp", "square-cropped.webp"), ("photo.heic", "photo-cropped.heic")];
+        let successes = [&first[0], &first[1], &first[3], &first[5]];
+        for (outcome, (_, expected)) in successes.iter().zip(expected_names) {
+            assert!(outcome.error().is_none(), "{}", outcome.error().cloned().unwrap_or_default());
+            assert_eq!(outcome.output_paths(), [root.join("out").join(expected)]);
+        }
+        for path in [&first[0].output_paths()[0], &first[1].output_paths()[0], &first[3].output_paths()[0]] {
+            let cropped = image::open(path).unwrap();
+            assert_eq!((cropped.width(), cropped.height()), (64, 48), "{} keeps the source-space crop", path.display());
+        }
+        assert_eq!(image::guess_format(&std::fs::read(&first[0].output_paths()[0]).unwrap()).unwrap(), image::ImageFormat::Png);
+        assert_eq!(image::guess_format(&std::fs::read(&first[1].output_paths()[0]).unwrap()).unwrap(), image::ImageFormat::Jpeg);
+        assert_eq!(&std::fs::read(&first[3].output_paths()[0]).unwrap()[..4], b"RIFF");
+        let heic_output = heif::decode(&std::fs::read(&first[5].output_paths()[0]).unwrap()).expect("HEIC input stays HEIC");
+        assert_eq!((heic_output.width(), heic_output.height()), (64, 48));
+
+        let jpeg_source = crate::kit::images::load_image(&jpeg).unwrap().crop_imm(10, 20, 64, 48);
+        assert_eq!(std::fs::read(&first[1].output_paths()[0]).unwrap(), crate::kit::images::encode(&jpeg_source, crate::kit::images::OutputFormat::Jpeg, 90).unwrap(), "JPEG is decoded and encoded once at quality 90");
+
+        let repeated = run("out");
+        for (index, expected) in [(0, "wide-cropped-1.png"), (1, "tall-cropped-1.jpg"), (3, "square-cropped-1.webp"), (5, "photo-cropped-1.heic")] {
+            assert_eq!(repeated[index].output_paths(), [root.join("out").join(expected)], "a second run never overwrites");
+        }
+        let elsewhere = run("again");
+        for index in [0, 1, 3, 5] {
+            assert_eq!(std::fs::read(&first[index].output_paths()[0]).unwrap(), std::fs::read(&elsewhere[index].output_paths()[0]).unwrap(), "the same stack gives the same bytes");
+        }
+        for (original, bytes) in &originals {
+            original.assert_untouched();
+            assert_eq!(&std::fs::read(&original.path).unwrap(), bytes);
+        }
+        let empty = tauri::async_runtime::block_on(export_image_edit_stack(RunEvents::silent(), ImageEditStackRequest {
+            paths: vec![png.clone()], steps: ImageEditSteps::default(), output_location: OutputLocation::CustomFolder(root.join("out")),
+        }));
+        assert!(empty[0].error().is_some_and(|error| matches!(error.kind, ErrorKind::InvalidInput)), "an empty stack never writes");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn edit_stack_runs_crop_then_resize_in_one_encode_whatever_order_they_arrive_in() {
+        let root = sandbox("edit_stack_resize");
+        let jpeg = root.join("tall.jpg");
+        let png = root.join("wide.png");
+        let pattern = |width: u32, height: u32, seed: u8| image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(width, height, |x, y| Rgba([seed, (x * 7) as u8, (y * 3) as u8, 255])));
+        pattern(200, 300, 1).to_rgb8().save(&jpeg).unwrap();
+        pattern(300, 200, 2).save(&png).unwrap();
+        let originals = [&jpeg, &png].map(|path| (Original::of(path), std::fs::read(path).unwrap()));
+        let run = |steps: &str, paths: Vec<PathBuf>, folder: &str| {
+            std::fs::create_dir_all(root.join(folder)).unwrap();
+            tauri::async_runtime::block_on(export_image_edit_stack(RunEvents::silent(), ImageEditStackRequest {
+                paths, steps: serde_json::from_str::<ImageEditSteps>(steps).unwrap(), output_location: OutputLocation::CustomFolder(root.join(folder)),
+            }))
+        };
+        let crop = r#"{"mode":"rectangle","x":10,"y":20,"width":120,"height":160,"aspectWidth":0,"aspectHeight":0,"anchor":"custom"}"#;
+        let resize = r#"{"mode":"longestSide","longestSide":80,"width":0,"height":0,"percentage":100,"resampling":"lanczos","keepAspectRatio":true}"#;
+
+        let crop_first = run(&format!(r#"{{"crop":{crop},"resize":{resize}}}"#), vec![jpeg.clone(), png.clone()], "crop-first");
+        let resize_first = run(&format!(r#"{{"resize":{resize},"crop":{crop}}}"#), vec![jpeg.clone(), png.clone()], "resize-first");
+        for (index, name) in [(0, "tall-edited.jpg"), (1, "wide-edited.png")] {
+            assert!(crop_first[index].error().is_none(), "{:?}", crop_first[index].error());
+            assert_eq!(crop_first[index].output_paths(), [root.join("crop-first").join(name)], "more than one step is named -edited");
+            assert_eq!(resize_first[index].output_paths(), [root.join("resize-first").join(name)]);
+            assert_eq!(std::fs::read(&crop_first[index].output_paths()[0]).unwrap(), std::fs::read(&resize_first[index].output_paths()[0]).unwrap(), "the order steps were added never changes the output");
+        }
+
+        // Crop is measured in source pixels and runs first; resize then fits the 120 x 160 crop to 80 px on its longer side.
+        let edited = std::fs::read(&crop_first[0].output_paths()[0]).unwrap();
+        let cropped = crate::kit::images::load_image(&jpeg).unwrap().crop_imm(10, 20, 120, 160);
+        let once = crate::kit::images::encode(&cropped.resize_exact(60, 80, image::imageops::FilterType::Lanczos3), crate::kit::images::OutputFormat::Jpeg, 90).unwrap();
+        assert_eq!(edited, once, "JPEG is decoded once, cropped, resized and encoded once at quality 90");
+        let chained_crop = image::load_from_memory(&crate::kit::images::encode(&cropped, crate::kit::images::OutputFormat::Jpeg, 90).unwrap()).unwrap();
+        let chained = crate::kit::images::encode(&chained_crop.resize_exact(60, 80, image::imageops::FilterType::Lanczos3), crate::kit::images::OutputFormat::Jpeg, 90).unwrap();
+        assert_ne!(edited, chained, "a stack is not two chained exports");
+
+        let resized = run(r#"{"resize":{"mode":"exact","width":150,"height":150,"keepAspectRatio":true,"resampling":"bicubic"}}"#, vec![jpeg.clone(), png.clone()], "resize-only");
+        assert_eq!(resized[0].output_paths(), [root.join("resize-only").join("tall-resized.jpg")], "a single Resize step is named -resized");
+        assert_eq!(resized[1].output_paths(), [root.join("resize-only").join("wide-resized.png")]);
+        assert_eq!(image::image_dimensions(&resized[0].output_paths()[0]).unwrap(), (100, 150), "the aspect lock fits each image inside the box");
+        assert_eq!(image::image_dimensions(&resized[1].output_paths()[0]).unwrap(), (150, 100));
+        let stretched = run(r#"{"resize":{"mode":"exact","width":150,"height":150,"keepAspectRatio":false}}"#, vec![png.clone()], "stretched");
+        assert_eq!(image::image_dimensions(&stretched[0].output_paths()[0]).unwrap(), (150, 150), "turning the lock off gives the exact size");
+
+        for (steps, message) in [
+            (r#"{"resize":{"mode":"exact","width":0,"height":150}}"#, "between 1 and 16384"),
+            (r#"{"resize":{"mode":"exact","width":16385,"height":150}}"#, "between 1 and 16384"),
+            (r#"{"resize":{"mode":"longestSide","longestSide":16385}}"#, "between 1 and 16384"),
+            (r#"{"resize":{"mode":"percentage","percentage":0}}"#, "between 1 and 1000"),
+            (r#"{"resize":{"mode":"percentage","percentage":1001}}"#, "between 1 and 1000"),
+        ] {
+            let outcomes = run(steps, vec![jpeg.clone(), png.clone()], "invalid");
+            assert_eq!(outcomes.len(), 2, "{steps}");
+            for outcome in &outcomes {
+                let error = outcome.error().unwrap_or_else(|| panic!("{steps} must fail"));
+                assert!(matches!(error.kind, ErrorKind::InvalidInput), "{steps}: {:?}", error.kind);
+                assert!(error.message.contains(message), "{steps}: {}", error.message);
+                assert!(outcome.output_paths().is_empty());
+            }
+        }
+        assert_eq!(std::fs::read_dir(root.join("invalid")).unwrap().count(), 0, "an invalid size never writes");
+
+        // A size that is only too large for one image fails that file and leaves the rest of the batch alone.
+        let strip = root.join("strip.png");
+        pattern(2000, 10, 3).save(&strip).unwrap();
+        let mixed = run(r#"{"resize":{"mode":"percentage","percentage":1000}}"#, vec![png.clone(), strip.clone()], "mixed");
+        assert_eq!(image::image_dimensions(&mixed[0].output_paths()[0]).unwrap(), (3000, 2000));
+        assert!(mixed[1].error().is_some_and(|error| matches!(error.kind, ErrorKind::InvalidInput)), "20000 px wide is past the limit");
+        assert!(mixed[1].output_paths().is_empty());
+
+        for (original, bytes) in &originals {
+            original.assert_untouched();
+            assert_eq!(&std::fs::read(&original.path).unwrap(), bytes);
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn edit_stack_rotates_and_flips_in_one_step_and_reports_the_re_encode() {
+        use crate::kit::images::tools::REENCODED_AFTER_ROTATING;
+        let root = sandbox("edit_stack_rotate");
+        let jpeg = root.join("photo.jpg");
+        let grid = root.join("grid.png");
+        image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(120, 80, |x, y| Rgba([(x * 2) as u8, (y * 3) as u8, 90, 255]))).to_rgb8().save(&jpeg).unwrap();
+        // Every pixel of the 3 x 2 grid is distinct, so the top-left output pixel names its source.
+        let source = |x: u32, y: u32| Rgba([10 + x as u8 * 80, 20 + y as u8 * 120, 7, 255]);
+        image::RgbaImage::from_fn(3, 2, source).save(&grid).unwrap();
+        let originals = [&jpeg, &grid].map(|path| (Original::of(path), std::fs::read(path).unwrap()));
+        let run = |steps: &str, paths: Vec<PathBuf>, folder: &str| {
+            std::fs::create_dir_all(root.join(folder)).unwrap();
+            tauri::async_runtime::block_on(export_image_edit_stack(RunEvents::silent(), ImageEditStackRequest {
+                paths, steps: serde_json::from_str::<ImageEditSteps>(steps).unwrap(), output_location: OutputLocation::CustomFolder(root.join(folder)),
+            }))
+        };
+
+        let turned = run(r#"{"rotate":{"degrees":90,"flip":"none"}}"#, vec![jpeg.clone()], "jpeg");
+        assert!(turned[0].error().is_none(), "{:?}", turned[0].error());
+        assert_eq!(turned[0].output_paths(), [root.join("jpeg").join("photo-rotated.jpg")], "a single Rotate and Flip step is named -rotated");
+        let reference = crate::kit::images::encode(&crate::kit::images::load_image(&jpeg).unwrap().rotate90(), crate::kit::images::OutputFormat::Jpeg, 90).unwrap();
+        assert_eq!(std::fs::read(&turned[0].output_paths()[0]).unwrap(), reference, "JPEG is decoded, rotated and encoded once at quality 90");
+        assert_eq!(turned[0].detail, REENCODED_AFTER_ROTATING, "the outcome reports the re-encode");
+
+        for (degrees, flip, size, corner) in [
+            (0, "none", (3, 2), (0, 0)), (0, "horizontal", (3, 2), (2, 0)), (0, "vertical", (3, 2), (0, 1)),
+            (90, "none", (2, 3), (0, 1)), (90, "horizontal", (2, 3), (0, 0)), (90, "vertical", (2, 3), (2, 1)),
+            (180, "none", (3, 2), (2, 1)), (180, "horizontal", (3, 2), (0, 1)), (180, "vertical", (3, 2), (2, 0)),
+            (270, "none", (2, 3), (2, 0)), (270, "horizontal", (2, 3), (2, 1)), (270, "vertical", (2, 3), (0, 0)),
+        ] {
+            let folder = format!("{degrees}-{flip}");
+            let outcome = &run(&format!(r#"{{"rotate":{{"degrees":{degrees},"flip":"{flip}"}}}}"#), vec![grid.clone()], &folder)[0];
+            assert!(outcome.error().is_none(), "{folder}: {:?}", outcome.error());
+            assert_eq!(outcome.output_paths(), [root.join(&folder).join("grid-rotated.png")]);
+            let output = image::open(&outcome.output_paths()[0]).unwrap().to_rgba8();
+            assert_eq!(output.dimensions(), size, "{folder}");
+            assert_eq!(*output.get_pixel(0, 0), source(corner.0, corner.1), "{folder}");
+            let expected = if degrees == 0 && flip == "none" { "Image saved" } else { REENCODED_AFTER_ROTATING };
+            assert_eq!(outcome.detail, expected, "{folder}: only a step that changes the pixels reports a re-encode");
+        }
+
+        // Crop and resize run first whatever order the steps arrive in, and the run is still one encode.
+        let crop = r#"{"mode":"rectangle","x":10,"y":10,"width":80,"height":40,"aspectWidth":0,"aspectHeight":0,"anchor":"custom"}"#;
+        let resize = r#"{"mode":"longestSide","longestSide":40,"resampling":"lanczos","keepAspectRatio":true}"#;
+        let rotate = r#"{"degrees":270,"flip":"vertical"}"#;
+        let rotate_first = run(&format!(r#"{{"rotate":{rotate},"resize":{resize},"crop":{crop}}}"#), vec![jpeg.clone()], "rotate-first");
+        let crop_first = run(&format!(r#"{{"crop":{crop},"resize":{resize},"rotate":{rotate}}}"#), vec![jpeg.clone()], "crop-first");
+        assert_eq!(rotate_first[0].output_paths(), [root.join("rotate-first").join("photo-edited.jpg")], "more than one step is named -edited");
+        assert_eq!(rotate_first[0].detail, REENCODED_AFTER_ROTATING);
+        let stacked = std::fs::read(&rotate_first[0].output_paths()[0]).unwrap();
+        assert_eq!(stacked, std::fs::read(&crop_first[0].output_paths()[0]).unwrap(), "the order steps were added never changes the output");
+        let edited = crate::kit::images::load_image(&jpeg).unwrap().crop_imm(10, 10, 80, 40).resize_exact(40, 20, image::imageops::FilterType::Lanczos3).rotate270();
+        let once = crate::kit::images::encode(&image::DynamicImage::ImageRgba8(image::imageops::flip_vertical(&edited.to_rgba8())), crate::kit::images::OutputFormat::Jpeg, 90).unwrap();
+        assert_eq!(stacked, once, "crop, resize, then rotate and flip, encoded once");
+
+        for (steps, message) in [(r#"{"rotate":{"degrees":45,"flip":"none"}}"#, "0, 90, 180, or 270"), (r#"{"rotate":{"degrees":90,"flip":"diagonal"}}"#, "none, horizontal, or vertical")] {
+            let outcomes = run(steps, vec![jpeg.clone(), grid.clone()], "invalid");
+            for outcome in &outcomes {
+                let error = outcome.error().unwrap_or_else(|| panic!("{steps} must fail"));
+                assert!(matches!(error.kind, ErrorKind::InvalidInput), "{steps}: {:?}", error.kind);
+                assert!(error.message.contains(message), "{steps}: {}", error.message);
+            }
+        }
+        assert_eq!(std::fs::read_dir(root.join("invalid")).unwrap().count(), 0, "an invalid rotation never writes");
+
+        for (original, bytes) in &originals {
+            original.assert_untouched();
+            assert_eq!(&std::fs::read(&original.path).unwrap(), bytes);
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn edit_stack_tone_is_deterministic_keeps_alpha_and_rejects_out_of_range_values() {
+        let root = sandbox("edit_stack_tone");
+        let png = root.join("logo.png");
+        // A gradient with a different alpha in every column, from fully clear to opaque.
+        let source = image::RgbaImage::from_fn(64, 32, |x, y| Rgba([(x * 4) as u8, (y * 8) as u8, 120, (x * 4) as u8]));
+        source.save(&png).unwrap();
+        let original = (Original::of(&png), std::fs::read(&png).unwrap());
+        let run = |steps: &str, folder: &str| {
+            std::fs::create_dir_all(root.join(folder)).unwrap();
+            tauri::async_runtime::block_on(export_image_edit_stack(RunEvents::silent(), ImageEditStackRequest {
+                paths: vec![png.clone()], steps: serde_json::from_str::<ImageEditSteps>(steps).unwrap(), output_location: OutputLocation::CustomFolder(root.join(folder)),
+            }))
+        };
+
+        let tone = r#"{"tone":{"brightness":10,"contrast":15,"saturation":-20,"exposure":25}}"#;
+        let first = run(tone, "first");
+        let second = run(tone, "second");
+        assert!(first[0].error().is_none(), "{:?}", first[0].error());
+        assert_eq!(first[0].output_paths(), [root.join("first").join("logo-tone.png")], "a single Colour and Tone step is named -tone");
+        let bytes = std::fs::read(&first[0].output_paths()[0]).unwrap();
+        assert_eq!(bytes, std::fs::read(&second[0].output_paths()[0]).unwrap(), "two runs give the same bytes");
+        let output = image::load_from_memory(&bytes).unwrap().to_rgba8();
+        assert_eq!(output.dimensions(), source.dimensions());
+        assert!(output.pixels().zip(source.pixels()).all(|(out, src)| out.0[3] == src.0[3]), "tone leaves PNG alpha unchanged");
+        assert!(output.pixels().zip(source.pixels()).any(|(out, src)| out.0[..3] != src.0[..3]), "tone changes the colour");
+
+        // All four at zero leaves the colour as it is.
+        let neutral = run(r#"{"tone":{"brightness":0,"contrast":0,"saturation":0,"exposure":0}}"#, "neutral");
+        assert_eq!(image::open(&neutral[0].output_paths()[0]).unwrap().to_rgba8(), source);
+
+        // Tone runs after rotate, whatever order the steps arrive in.
+        let rotate = r#"{"degrees":90,"flip":"none"}"#;
+        let tone_step = r#"{"brightness":10,"contrast":15,"saturation":-20,"exposure":25}"#;
+        let tone_first = run(&format!(r#"{{"tone":{tone_step},"rotate":{rotate}}}"#), "tone-first");
+        let rotate_first = run(&format!(r#"{{"rotate":{rotate},"tone":{tone_step}}}"#), "rotate-first");
+        assert_eq!(tone_first[0].output_paths(), [root.join("tone-first").join("logo-edited.png")]);
+        assert_eq!(std::fs::read(&tone_first[0].output_paths()[0]).unwrap(), std::fs::read(&rotate_first[0].output_paths()[0]).unwrap());
+
+        for (steps, message) in [
+            (r#"{"tone":{"brightness":101,"contrast":0,"saturation":0,"exposure":0}}"#, "Brightness must be between -100 and 100."),
+            (r#"{"tone":{"brightness":0,"contrast":-100.5,"saturation":0,"exposure":0}}"#, "Contrast must be between -100 and 100."),
+            (r#"{"tone":{"brightness":0,"contrast":0,"saturation":150,"exposure":0}}"#, "Saturation must be between -100 and 100."),
+            (r#"{"tone":{"brightness":0,"contrast":0,"saturation":0,"exposure":-101}}"#, "Exposure must be between -100 and 100."),
+        ] {
+            let outcome = &run(steps, "invalid")[0];
+            let error = outcome.error().unwrap_or_else(|| panic!("{steps} must fail"));
+            assert!(matches!(error.kind, ErrorKind::InvalidInput), "{steps}: {:?}", error.kind);
+            assert_eq!(error.message, message);
+        }
+        assert_eq!(std::fs::read_dir(root.join("invalid")).unwrap().count(), 0, "an out-of-range value never writes");
+
+        original.0.assert_untouched();
+        assert_eq!(std::fs::read(&png).unwrap(), original.1);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// An upright 96 x 64 photo with four solid quadrants, stored the way a camera with the
+    /// given EXIF orientation writes it, as a JPEG that carries that orientation tag.
+    fn oriented_jpeg(path: &PathBuf, orientation: u16) {
+        const W: u32 = 96;
+        const H: u32 = 64;
+        let upright = |x: u32, y: u32| quadrant_colour(x < W / 2, y < H / 2);
+        // Where each stored pixel lands in the upright image, written out independently of the
+        // code under test.
+        let (stored_w, stored_h) = if orientation >= 5 { (H, W) } else { (W, H) };
+        let stored = image::RgbImage::from_fn(stored_w, stored_h, |sx, sy| {
+            let (ux, uy) = match orientation {
+                1 => (sx, sy),
+                2 => (W - 1 - sx, sy),
+                3 => (W - 1 - sx, H - 1 - sy),
+                4 => (sx, H - 1 - sy),
+                5 => (sy, sx),
+                6 => (W - 1 - sy, sx),
+                7 => (W - 1 - sy, H - 1 - sx),
+                8 => (sy, H - 1 - sx),
+                _ => unreachable!(),
+            };
+            upright(ux, uy)
+        });
+        let encoded = crate::kit::images::encode(&image::DynamicImage::ImageRgb8(stored), crate::kit::images::OutputFormat::Jpeg, 95).unwrap();
+        let mut payload = b"Exif\0\0".to_vec();
+        payload.extend(crate::kit::images::metadata::fixtures::exif(Some(orientation), false));
+        let mut bytes = encoded[..2].to_vec();
+        bytes.extend([0xFF, 0xE1]);
+        bytes.extend(((payload.len() + 2) as u16).to_be_bytes());
+        bytes.extend(payload);
+        bytes.extend(&encoded[2..]);
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    fn quadrant_colour(left: bool, top: bool) -> image::Rgb<u8> {
+        match (left, top) {
+            (true, true) => image::Rgb([255, 0, 0]),
+            (false, true) => image::Rgb([0, 255, 0]),
+            (true, false) => image::Rgb([0, 0, 255]),
+            (false, false) => image::Rgb([255, 255, 255]),
+        }
+    }
+
+    /// The four corners of an upright result show red, green, blue and white, as the upright photo does.
+    fn assert_upright_corners(image: &image::DynamicImage, label: &str) {
+        let rgb = image.to_rgb8();
+        let (w, h) = rgb.dimensions();
+        for (x, y, left, top) in [(2, 2, true, true), (w - 3, 2, false, true), (2, h - 3, true, false), (w - 3, h - 3, false, false)] {
+            let actual = rgb.get_pixel(x, y).0;
+            let expected = quadrant_colour(left, top).0;
+            assert!(actual.iter().zip(expected).all(|(a, e)| (*a as i32 - e as i32).abs() <= 48), "{label}: pixel ({x}, {y}) is {actual:?}, the upright photo has {expected:?} there");
+        }
+    }
+
+    fn preview_image(preview: &crate::kit::images::tools::ImagePreview) -> image::DynamicImage {
+        let encoded = preview.data_url.strip_prefix("data:image/png;base64,").expect("previews are PNG data URLs");
+        image::load_from_memory(&STANDARD.decode(encoded).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn edit_stack_bakes_every_camera_orientation_once_before_crop_and_resize() {
+        use crate::kit::images::tools::{inspect_edit_preview, inspect_preview, ImageEditPreviewRequest, ImagePreviewRequest, ORIENTATION_APPLIED_FIRST};
+        let root = sandbox("edit_stack_orientation");
+        let crop = r#"{"crop":{"x":0,"y":0,"width":72,"height":48,"mode":"rectangle","aspectWidth":0,"aspectHeight":0,"anchor":"custom"}}"#;
+        let resize = r#"{"resize":{"width":0,"height":0,"mode":"longestSide","percentage":100,"longestSide":48,"resampling":"lanczos","keepAspectRatio":true}}"#;
+        let crop_edit = ImageEdit::Crop { x: 0, y: 0, width: 72, height: 48, mode: "rectangle".into(), aspect_width: 0, aspect_height: 0, anchor: "custom".into() };
+        let resize_edit = ImageEdit::Resize { width: 0, height: 0, mode: "longestSide".into(), percentage: 100, longest_side: 48, resampling: "lanczos".into(), keep_aspect_ratio: true };
+
+        for orientation in 2..=8u16 {
+            let photo = root.join(format!("camera-{orientation}.jpg"));
+            oriented_jpeg(&photo, orientation);
+            assert_eq!(crate::kit::images::metadata::read_file(&photo).unwrap().orientation, Some(orientation as u8), "the fixture carries orientation {orientation}");
+            let original = (Original::of(&photo), std::fs::read(&photo).unwrap());
+
+            let source = inspect_preview(&ImagePreviewRequest { path: photo.clone() }).unwrap();
+            assert_eq!((source.width, source.height), (96, 64), "orientation {orientation}: the source preview is upright, so crop coordinates are upright");
+            assert_upright_corners(&preview_image(&source), &format!("orientation {orientation} source preview"));
+
+            for (label, steps, edit, size) in [("crop", crop, crop_edit.clone(), (72, 48)), ("resize", resize, resize_edit.clone(), (48, 32))] {
+                let folder = root.join(format!("{label}-{orientation}"));
+                std::fs::create_dir_all(&folder).unwrap();
+                let outcome = tauri::async_runtime::block_on(export_image_edit_stack(RunEvents::silent(), ImageEditStackRequest {
+                    paths: vec![photo.clone()], steps: serde_json::from_str::<ImageEditSteps>(steps).unwrap(), output_location: OutputLocation::CustomFolder(folder.clone()),
+                }));
+                assert!(outcome[0].error().is_none(), "orientation {orientation} {label}: {:?}", outcome[0].error());
+                assert_eq!(outcome[0].detail, ORIENTATION_APPLIED_FIRST, "orientation {orientation} {label}: the result says the orientation was applied");
+                let output = &outcome[0].output_paths()[0];
+                let exported = image::open(output).unwrap();
+                assert_eq!((exported.width(), exported.height()), size, "orientation {orientation} {label}: the output has the upright size");
+                assert_upright_corners(&exported, &format!("orientation {orientation} {label} export"));
+                let tag = crate::kit::images::metadata::read_file(output).unwrap().orientation;
+                assert!(matches!(tag, None | Some(1)), "orientation {orientation} {label}: the output carries orientation {tag:?}, so a viewer would turn it again");
+
+                let preview = inspect_edit_preview(&ImageEditPreviewRequest { path: photo.clone(), plan: ImageEditPlan { edits: vec![edit], output_location: OutputLocation::CustomFolder(folder) } }).unwrap();
+                assert_eq!((preview.width, preview.height), size, "orientation {orientation} {label}: preview and export agree on size");
+                assert_upright_corners(&preview_image(&preview), &format!("orientation {orientation} {label} preview"));
+            }
+            original.0.assert_untouched();
+            assert_eq!(std::fs::read(&photo).unwrap(), original.1);
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn edit_stack_reports_orientation_only_when_it_changed_the_pixels() {
+        use crate::kit::images::tools::{ORIENTATION_APPLIED_FIRST, REENCODED_AFTER_ROTATING};
+        let root = sandbox("edit_stack_orientation_notes");
+        let sideways = root.join("sideways.jpg");
+        let neutral = root.join("neutral.jpg");
+        let damaged = root.join("damaged.jpg");
+        oriented_jpeg(&sideways, 6);
+        oriented_jpeg(&neutral, 1);
+        // A decodable JPEG whose EXIF segment is cut short keeps its pixels as decoded.
+        let plain = crate::kit::images::encode(&image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(96, 64, |x, y| quadrant_colour(x < 48, y < 32))), crate::kit::images::OutputFormat::Jpeg, 95).unwrap();
+        let mut broken = plain[..2].to_vec();
+        broken.extend([0xFF, 0xE1, 0x00, 0x0A]);
+        broken.extend(b"Exif\0\0MM");
+        broken.extend(&plain[2..]);
+        std::fs::write(&damaged, broken).unwrap();
+        let run = |steps: &str, path: &PathBuf, folder: &str| {
+            std::fs::create_dir_all(root.join(folder)).unwrap();
+            tauri::async_runtime::block_on(export_image_edit_stack(RunEvents::silent(), ImageEditStackRequest {
+                paths: vec![path.clone()], steps: serde_json::from_str::<ImageEditSteps>(steps).unwrap(), output_location: OutputLocation::CustomFolder(root.join(folder)),
+            })).remove(0)
+        };
+
+        let turned = run(r#"{"rotate":{"degrees":90,"flip":"none"}}"#, &sideways, "turned");
+        assert_eq!(turned.detail, format!("{ORIENTATION_APPLIED_FIRST} {REENCODED_AFTER_ROTATING}"), "both notes show when the stack rotates an oriented photo");
+        let rotated = image::open(&turned.output_paths()[0]).unwrap();
+        assert_eq!((rotated.width(), rotated.height()), (64, 96), "the rotate step turns the upright photo, not the stored pixels");
+        // Upright red top-left turns to the top-right after a clockwise quarter turn.
+        let rgb = rotated.to_rgb8();
+        assert!(rgb.get_pixel(61, 2).0[0] > 200 && rgb.get_pixel(61, 2).0[1] < 60, "{:?}", rgb.get_pixel(61, 2));
+
+        let level = run(r#"{"resize":{"width":0,"height":0,"mode":"longestSide","percentage":100,"longestSide":48,"resampling":"lanczos","keepAspectRatio":true}}"#, &neutral, "level");
+        assert_eq!(level.detail, "Image saved", "a neutral tag changes nothing, so there is nothing to report");
+        assert_upright_corners(&image::open(&level.output_paths()[0]).unwrap(), "neutral orientation");
+
+        assert!(crate::kit::images::metadata::read_file(&damaged).is_err(), "the fixture's EXIF is unreadable");
+        let kept = run(r#"{"resize":{"width":0,"height":0,"mode":"longestSide","percentage":100,"longestSide":48,"resampling":"lanczos","keepAspectRatio":true}}"#, &damaged, "damaged");
+        assert!(kept.error().is_none(), "damaged metadata never fails a decodable image: {:?}", kept.error());
+        assert_eq!(kept.detail, "Image saved");
+        assert_upright_corners(&image::open(&kept.output_paths()[0]).unwrap(), "damaged metadata");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -2521,5 +2951,157 @@ mod command_tests {
         assert_eq!(outcomes[1].output_paths(), [open.join("scan-stripped.png")]);
         assert_eq!(std::fs::read(&blocked).unwrap(), original, "originals stay untouched");
         assert_eq!(listing, vec![std::ffi::OsString::from("scan.png")], "nothing is left in the read-only folder");
+    }
+
+    mod image_metadata_inspection {
+        use super::*;
+        use crate::kit::images::metadata::fixtures::{self, Wanted};
+        use crate::kit::images::metadata::{ImageMetadata, MetadataErrorCode, MetadataFormat, MetadataInspection};
+
+        const FORMATS: [(MetadataFormat, &str); 5] = [(MetadataFormat::Jpeg, "jpg"), (MetadataFormat::Png, "png"), (MetadataFormat::Webp, "webp"), (MetadataFormat::Tiff, "tiff"), (MetadataFormat::Heic, "heic")];
+
+        fn fixture(format: MetadataFormat, wanted: Wanted) -> Vec<u8> {
+            match format {
+                MetadataFormat::Jpeg => fixtures::jpeg(wanted),
+                MetadataFormat::Png => fixtures::png(wanted),
+                MetadataFormat::Webp => fixtures::webp(wanted),
+                MetadataFormat::Tiff => fixtures::tiff(wanted),
+                MetadataFormat::Heic => fixtures::heic(wanted),
+            }
+        }
+
+        fn expected(format: MetadataFormat, wanted: Wanted) -> ImageMetadata {
+            let textual = matches!(format, MetadataFormat::Jpeg | MetadataFormat::Png | MetadataFormat::Tiff);
+            let exif = wanted.exif || wanted.gps || (wanted.orientation.is_some() && format != MetadataFormat::Tiff);
+            ImageMetadata {
+                format, exif, gps: wanted.gps, xmp: wanted.xmp, iptc: wanted.iptc && textual, comments: wanted.comments && textual, icc: wanted.icc,
+                orientation: wanted.orientation.filter(|value| (1..=8).contains(value)).map(|value| value as u8),
+            }
+        }
+
+        fn assert_decodes(format: MetadataFormat, bytes: &[u8]) {
+            match format {
+                MetadataFormat::Heic => { heif::decode(bytes).expect("HEIC fixture must decode"); }
+                _ => { image::load_from_memory(bytes).expect("fixture must decode"); }
+            }
+        }
+
+        fn inspect_files(root: &PathBuf, files: Vec<(String, Vec<u8>)>) -> Vec<MetadataInspection> {
+            let paths = files.iter().map(|(name, bytes)| { let path = root.join(name); std::fs::write(&path, bytes).unwrap(); path }).collect::<Vec<_>>();
+            let reports = inspect_image_metadata(MetadataRequest { paths: paths.clone(), output_location: OutputLocation::AlongsideInput });
+            for (path, (_, bytes)) in paths.iter().zip(&files) { assert_eq!(&std::fs::read(path).unwrap(), bytes, "inspection must not modify {}", path.display()); }
+            assert_eq!(reports.len(), paths.len());
+            for (report, path) in reports.iter().zip(&paths) {
+                let reported = match report { MetadataInspection::Report(report) => &report.path, MetadataInspection::Error(error) => &error.path };
+                assert_eq!(reported, path, "one result per file, in request order");
+            }
+            reports
+        }
+
+        fn report(inspection: &MetadataInspection) -> &ImageMetadata {
+            match inspection { MetadataInspection::Report(report) => &report.metadata, MetadataInspection::Error(error) => panic!("{}: {}", error.path.display(), error.error.message) }
+        }
+
+        fn error_code(inspection: &MetadataInspection) -> MetadataErrorCode {
+            match inspection { MetadataInspection::Error(error) => error.error.code, MetadataInspection::Report(report) => panic!("{} unexpectedly read as {:?}", report.path.display(), report.metadata) }
+        }
+
+        #[test]
+        fn inspect_reports_each_category_for_every_format() {
+            let root = sandbox("metadata-categories");
+            let cases = [
+                ("none", Wanted::default()),
+                ("exif", Wanted { exif: true, ..Wanted::default() }),
+                ("gps", Wanted { gps: true, ..Wanted::default() }),
+                ("xmp", Wanted { xmp: true, ..Wanted::default() }),
+                ("iptc", Wanted { iptc: true, ..Wanted::default() }),
+                ("comments", Wanted { comments: true, ..Wanted::default() }),
+                ("icc", Wanted { icc: true, ..Wanted::default() }),
+                ("all", Wanted { exif: true, gps: true, orientation: Some(6), xmp: true, iptc: true, comments: true, icc: true }),
+            ];
+            for (format, extension) in FORMATS {
+                let files = cases.iter().map(|(name, wanted)| {
+                    let bytes = fixture(format, *wanted);
+                    assert_decodes(format, &bytes);
+                    (format!("{name}.{extension}"), bytes)
+                }).collect::<Vec<_>>();
+                let reports = inspect_files(&root, files);
+                for (inspection, (name, wanted)) in reports.iter().zip(cases) {
+                    assert_eq!(report(inspection), &expected(format, wanted), "{format:?} {name}");
+                }
+            }
+            let wire = serde_json::to_value(&inspect_image_metadata(MetadataRequest { paths: vec![root.join("all.jpg")], output_location: OutputLocation::AlongsideInput })[0]).unwrap();
+            assert_eq!(wire, serde_json::json!({
+                "status": "report", "path": root.join("all.jpg"), "format": "jpeg",
+                "exif": true, "gps": true, "xmp": true, "iptc": true, "comments": true, "icc": true, "orientation": 6,
+            }));
+            let _ = std::fs::remove_dir_all(root);
+        }
+
+        #[test]
+        fn inspect_reports_orientation_values_or_absent() {
+            let root = sandbox("metadata-orientation");
+            for (format, extension) in FORMATS {
+                let values = [None, Some(1), Some(2), Some(3), Some(4), Some(5), Some(6), Some(7), Some(8), Some(9)];
+                let files = values.iter().map(|value| (format!("{}.{extension}", value.map_or("absent".to_string(), |value: u16| value.to_string())), fixture(format, Wanted { orientation: *value, ..Wanted::default() }))).collect();
+                let reports = inspect_files(&root, files);
+                for (inspection, value) in reports.iter().zip(values) {
+                    assert_eq!(report(inspection).orientation, value.filter(|value| *value <= 8).map(|value| value as u8), "{format:?} {value:?}");
+                }
+            }
+            let absent = serde_json::to_value(&inspect_image_metadata(MetadataRequest { paths: vec![root.join("absent.png")], output_location: OutputLocation::AlongsideInput })[0]).unwrap();
+            assert_eq!(absent["orientation"], serde_json::Value::Null);
+            let _ = std::fs::remove_dir_all(root);
+        }
+
+        #[test]
+        fn inspect_returns_typed_errors_per_file_for_damaged_input() {
+            let root = sandbox("metadata-damaged");
+            let all = Wanted { exif: true, gps: true, orientation: Some(3), xmp: true, iptc: true, comments: true, icc: true };
+            let mut files = Vec::new();
+            let mut codes = Vec::new();
+            for (format, extension) in FORMATS {
+                let bytes = fixture(format, all);
+                files.push((format!("truncated.{extension}"), bytes[..bytes.len() * 2 / 3].to_vec()));
+                codes.push(MetadataErrorCode::Truncated);
+                files.push((format!("valid.{extension}"), bytes));
+                codes.push(MetadataErrorCode::Truncated);
+            }
+            let mut bad_crc = fixtures::png(all);
+            bad_crc[40] ^= 0xFF;
+            files.push(("bad-crc.png".into(), bad_crc));
+            codes.push(MetadataErrorCode::Corrupt);
+            let mut bad_exif = fixtures::jpeg(Wanted { exif: true, ..Wanted::default() });
+            bad_exif[12] = b'X';
+            files.push(("bad-exif.jpg".into(), bad_exif));
+            codes.push(MetadataErrorCode::Corrupt);
+            let mut gif = std::io::Cursor::new(Vec::new());
+            image::RgbImage::new(4, 4).write_to(&mut gif, image::ImageFormat::Gif).unwrap();
+            files.push(("animation.gif".into(), gif.into_inner()));
+            codes.push(MetadataErrorCode::UnsupportedFormat);
+
+            let reports = inspect_files(&root, files);
+            for (index, (inspection, code)) in reports.iter().zip(&codes).enumerate() {
+                if index < 10 && index % 2 == 1 { report(inspection); } else { assert_eq!(error_code(inspection), *code, "{inspection:?}"); }
+            }
+            let missing = inspect_image_metadata(MetadataRequest { paths: vec![root.join("missing.png")], output_location: OutputLocation::AlongsideInput });
+            assert_eq!(error_code(&missing[0]), MetadataErrorCode::Unreadable);
+            let wire = serde_json::to_value(&missing[0]).unwrap();
+            assert_eq!((wire["status"].as_str(), wire["code"].as_str(), wire["message"].is_string()), (Some("error"), Some("unreadable"), true));
+            let _ = std::fs::remove_dir_all(root);
+        }
+
+        #[test]
+        fn every_truncation_of_every_format_is_an_error_and_never_panics() {
+            let all = Wanted { exif: true, gps: true, orientation: Some(8), xmp: true, iptc: true, comments: true, icc: true };
+            for (format, _) in FORMATS {
+                for wanted in [Wanted::default(), all] {
+                    let bytes = fixture(format, wanted);
+                    for length in 0..bytes.len() {
+                        assert!(crate::kit::images::metadata::read(&bytes[..length]).is_err(), "{format:?} cut at {length} of {} read as valid", bytes.len());
+                    }
+                }
+            }
+        }
     }
 }
