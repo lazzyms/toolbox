@@ -11,7 +11,7 @@ use crate::file_actions::{open_output_path, open_sponsor_page, open_third_party_
 use crate::kit::common::{note_renamed, JobOutcome};
 use crate::kit::images::{ImageProcessor, Options as ImageOptions};
 use crate::kit::images::tools;
-use crate::kit::pdf::{editor, metadata, remaining, scene, PDFProcessor};
+use crate::kit::pdf::{convert, editor, metadata, remaining, scene, PDFProcessor};
 use crate::kit::vision;
 use crate::kit::contracts::{command_supports_preview, validate_command_inputs, validate_page_selection, CompressImagesRequest, ConvertImagesRequest, OutcomeState, PasswordRequest, ToolError};
 use crate::kit::common::batch_runner::{BatchRunner, FileEvent, FolderCheck, RunEvents};
@@ -305,6 +305,11 @@ async fn pdf_to_images(events: RunEvents, request: remaining::PdfToImagesRequest
 }
 
 #[tauri::command]
+async fn convert_to_pdf(events: RunEvents, request: serde_json::Value) -> Vec<JobOutcome> {
+    convert::run(&events, request)
+}
+
+#[tauri::command]
 async fn pdf_to_text(events: RunEvents, request: remaining::PdfToTextRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_command_inputs("pdf_to_text", &request.paths) { return outcomes; }
     if let Err(outcomes) = validate_page_selection("pdf_to_text", &request.paths, request.pages.as_deref()) { return outcomes; }
@@ -552,6 +557,7 @@ fn main() {
             split_pdf,
             pdf_to_images,
             pdf_to_text,
+            convert_to_pdf,
             extract_pdf_images,
             images_to_pdf,
             ocr_pdf,
@@ -1091,6 +1097,21 @@ mod command_tests {
         let plain_lossy_image_bytes = std::fs::read(&lossy_image).unwrap();
         let animated_bytes = std::fs::read(&animated).unwrap();
         let tiff_bytes = std::fs::read(&tiff).unwrap();
+        let text = root.join("notes.txt"); std::fs::write(&text, b"Caf\xe9 notes\n\tindented line\n").unwrap();
+        let text_bytes = std::fs::read(&text).unwrap();
+        let markdown = root.join("release-notes.md"); std::fs::write(&markdown, "# Release notes\n\n| Step | Result |\n|---|---|\n| build | ok |\n\n```\ncargo test\n```\n\n![chart](image.png)\n\n![logo](https://example.com/logo.png)\n\nSee [the site](https://example.com).\n").unwrap();
+        let markdown_bytes = std::fs::read(&markdown).unwrap();
+        let rich_text = root.join("memo.rtf"); std::fs::write(&rich_text, r"{\rtf1\ansi\deff0{\fonttbl{\f0 Times New Roman;}{\f1 Arial;}}{\info{\title Team memo}}{\f1\b\fs32 Team memo\par}{\i Ship} the {\ul release}.\par\trowd\cellx2000\cellx4000\pard\intbl Owner\cell Date\cell\row\pard Done.\par}").unwrap();
+        let rich_text_bytes = std::fs::read(&rich_text).unwrap();
+        let word = root.join("brief.docx"); std::fs::write(&word, crate::kit::pdf::docx::fixtures::docx(r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Project brief</w:t></w:r></w:p><w:p><w:r><w:t xml:space="preserve">Scope and </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>timeline</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>Phase</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Week</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#, &[("rIdStyles", "styles", "styles.xml", false)], &[("word/styles.xml", br#"<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:rPr><w:b/><w:sz w:val="32"/></w:rPr></w:style></w:styles>"#)])).unwrap();
+        let open_document = root.join("minutes.odt"); std::fs::write(&open_document, crate::kit::pdf::odt::fixtures::odt("", r#"<text:h text:outline-level="1">Meeting minutes</text:h><text:p>Agreed <text:span>actions</text:span></text:p><table:table><table:table-row><table:table-cell><text:p>Owner</text:p></table:table-cell><table:table-cell><text:p>Due</text:p></table:table-cell></table:table-row></table:table>"#, &[], &[])).unwrap();
+        let workbook = root.join("budget.xlsx"); std::fs::write(&workbook, crate::kit::pdf::xlsx::fixtures::xlsx(&[("Budget", "visible", &crate::kit::pdf::xlsx::fixtures::sheet("", r#"<row r="1"><c r="A1" t="inlineStr"><is><t>Quarter</t></is></c><c r="B1" t="inlineStr"><is><t>Spend</t></is></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>Q1</t></is></c><c r="B2"><f>SUM(1,2)</f><v>3</v></c></row>"#, "")), ("Draft", "hidden", &crate::kit::pdf::xlsx::fixtures::sheet("", r#"<row r="1"><c r="A1" t="inlineStr"><is><t>Scratch</t></is></c></row>"#, ""))], "", "", &[])).unwrap();
+        let deck = root.join("launch-deck.pptx"); std::fs::write(&deck, crate::kit::pdf::pptx::fixtures::pptx((960, 540), &[
+            crate::kit::pdf::pptx::fixtures::FixtureSlide { shapes: &crate::kit::pdf::pptx::fixtures::text_shape(Some("title"), (36, 24, 600, 60), "Launch plan", ""), notes: Some("Thank the team"), ..Default::default() },
+            crate::kit::pdf::pptx::fixtures::FixtureSlide { shapes: &crate::kit::pdf::pptx::fixtures::text_shape(Some("title"), (36, 24, 600, 60), "Draft pricing", ""), hidden: true, ..Default::default() },
+        ], &[])).unwrap();
+        let table = root.join("orders.csv"); std::fs::write(&table, "Order;Customer;Note\n1001;\"Smith; Jo\";\"said \"\"hi\"\"\"\n1002;Lee;plain\n").unwrap();
+        let table_bytes = std::fs::read(&table).unwrap();
 
         let protected = root.join("protected.pdf");
         let protected_result = protect_files(RunEvents::silent(), PasswordRequest { paths: vec![pdf.clone()], password: crate::kit::TEST_PASSWORD.into(), password_overrides: Default::default(), output_location: OutputLocation::AlongsideInput });
@@ -1159,6 +1180,62 @@ mod command_tests {
         assert_eq!(selected_image_outputs.len(), 1, "selected PDF page rendering must produce only the selected page");
         outputs.extend(named(&mut naming, "pdf_to_images", pdf.clone(), selected_image_outputs));
         outputs.extend(named(&mut naming, "pdf_to_text", pdf.clone(), assert_success("pdf to text", pdf_to_text(RunEvents::silent(), PdfToTextRequest { paths: vec![pdf.clone()], pages: None, output_location: location(&root, "pdf to text") }))));
+        let converted = assert_success("convert to pdf", convert_to_pdf(RunEvents::silent(), serde_json::json!({ "paths": [text.clone()], "outputLocation": location(&root, "convert to pdf"), "plainText": { "font": "monospace", "encoding": "detect", "wrapLines": true } })));
+        assert!(lopdf::Document::load(&converted[0]).unwrap().extract_text(&[1]).unwrap().contains("Caf\u{e9} notes"), "converted text must stay searchable");
+        outputs.extend(named(&mut naming, "convert_to_pdf", text.clone(), converted));
+        let markdown_outcomes = tauri::async_runtime::block_on(convert_to_pdf(RunEvents::silent(), serde_json::json!({ "paths": [markdown.clone()], "outputLocation": location(&root, "convert markdown to pdf"), "markdown": { "bodyFont": "sans", "codeStyle": "shaded", "tableOfContents": true } })));
+        assert_eq!(markdown_outcomes[0].detail, "2 pages. Remote content left out: 1 image from the internet wasn't loaded.", "{markdown_outcomes:?}");
+        let converted_markdown = markdown_outcomes[0].output_paths().to_vec();
+        let markdown_pdf = lopdf::Document::load(&converted_markdown[0]).unwrap();
+        assert!(markdown_pdf.extract_text(&[1]).unwrap().contains("Contents"), "the table of contents comes first");
+        let markdown_text = markdown_pdf.extract_text(&[2]).unwrap();
+        assert!(["Release notes", "build", "cargo test", "the site"].iter().all(|expected| markdown_text.contains(expected)), "converted Markdown must stay searchable: {markdown_text}");
+        assert!(markdown_pdf.catalog().unwrap().has(b"Outlines"), "headings become bookmarks");
+        outputs.extend(named(&mut naming, "convert_to_pdf", markdown.clone(), converted_markdown));
+        let rich_text_outcomes = tauri::async_runtime::block_on(convert_to_pdf(RunEvents::silent(), serde_json::json!({ "paths": [rich_text.clone()], "outputLocation": location(&root, "convert rich text to pdf") })));
+        assert_eq!(rich_text_outcomes[0].detail, "1 page.", "{rich_text_outcomes:?}");
+        assert!(["Times New Roman", "Arial"].iter().all(|family| rich_text_outcomes[0].fonts.iter().any(|font| font.requested_family == *family)), "requested RTF fonts are reported: {rich_text_outcomes:?}");
+        let converted_rich_text = rich_text_outcomes[0].output_paths().to_vec();
+        let rich_text_text = lopdf::Document::load(&converted_rich_text[0]).unwrap().extract_text(&[1]).unwrap();
+        assert!(["Team memo", "Ship", "release", "Owner", "Date", "Done."].iter().all(|expected| rich_text_text.contains(expected)), "converted RTF must stay searchable: {rich_text_text}");
+        outputs.extend(named(&mut naming, "convert_to_pdf", rich_text.clone(), converted_rich_text));
+        let word_outcomes = tauri::async_runtime::block_on(convert_to_pdf(RunEvents::silent(), serde_json::json!({ "paths": [word.clone()], "outputLocation": location(&root, "convert word to pdf") })));
+        assert_eq!(word_outcomes[0].detail, "1 page.", "{word_outcomes:?}");
+        let converted_word = word_outcomes[0].output_paths().to_vec();
+        let word_pdf = lopdf::Document::load(&converted_word[0]).unwrap();
+        let word_text = word_pdf.extract_text(&[1]).unwrap();
+        assert!(["Project brief", "Scope and", "timeline", "Phase", "Week"].iter().all(|expected| word_text.contains(expected)), "converted DOCX must stay searchable: {word_text}");
+        assert!(word_pdf.catalog().unwrap().has(b"Outlines"), "Word headings become bookmarks");
+        outputs.extend(named(&mut naming, "convert_to_pdf", word.clone(), converted_word));
+        let odt_outcomes = tauri::async_runtime::block_on(convert_to_pdf(RunEvents::silent(), serde_json::json!({ "paths": [open_document.clone()], "outputLocation": location(&root, "convert odt to pdf") })));
+        assert_eq!(odt_outcomes[0].detail, "1 page.", "{odt_outcomes:?}");
+        let converted_odt = odt_outcomes[0].output_paths().to_vec();
+        let odt_pdf = lopdf::Document::load(&converted_odt[0]).unwrap();
+        let odt_text = odt_pdf.extract_text(&[1]).unwrap();
+        assert!(["Meeting minutes", "Agreed", "actions", "Owner", "Due"].iter().all(|expected| odt_text.contains(expected)), "converted ODT must stay searchable: {odt_text}");
+        assert!(odt_pdf.catalog().unwrap().has(b"Outlines"), "ODT headings become bookmarks");
+        outputs.extend(named(&mut naming, "convert_to_pdf", open_document.clone(), converted_odt));
+        let sheet_outcomes = tauri::async_runtime::block_on(convert_to_pdf(RunEvents::silent(), serde_json::json!({ "paths": [workbook.clone()], "outputLocation": location(&root, "convert xlsx to pdf"), "spreadsheets": { "sheets": "visible", "printAreas": true, "fitToWidth": true } })));
+        assert_eq!(sheet_outcomes[0].detail, "1 page. 1 sheet. 1 hidden sheet left out.", "{sheet_outcomes:?}");
+        let converted_sheet = sheet_outcomes[0].output_paths().to_vec();
+        let sheet_text = lopdf::Document::load(&converted_sheet[0]).unwrap().extract_text(&[1]).unwrap();
+        assert!(["Quarter", "Spend", "Q1", "3"].iter().all(|expected| sheet_text.contains(expected)) && !sheet_text.contains("Scratch") && !sheet_text.contains("SUM"), "converted XLSX shows stored values of visible sheets: {sheet_text}");
+        outputs.extend(named(&mut naming, "convert_to_pdf", workbook.clone(), converted_sheet));
+        let deck_outcomes = tauri::async_runtime::block_on(convert_to_pdf(RunEvents::silent(), serde_json::json!({ "paths": [deck.clone()], "outputLocation": location(&root, "convert pptx to pdf"), "presentations": { "speakerNotes": true, "hiddenSlides": false } })));
+        assert_eq!(deck_outcomes[0].detail, "2 pages. 1 slide. 1 hidden slide left out.", "{deck_outcomes:?}");
+        let converted_deck = deck_outcomes[0].output_paths().to_vec();
+        let deck_pdf = lopdf::Document::load(&converted_deck[0]).unwrap();
+        let deck_text = deck_pdf.extract_text(&[1, 2]).unwrap();
+        assert!(["Launch plan", "Speaker notes", "Thank the team"].iter().all(|expected| deck_text.contains(expected)) && !deck_text.contains("Draft pricing"), "converted PPTX prints visible slides and their notes: {deck_text}");
+        outputs.extend(named(&mut naming, "convert_to_pdf", deck.clone(), converted_deck));
+        let table_outcomes = tauri::async_runtime::block_on(convert_to_pdf(RunEvents::silent(), serde_json::json!({ "paths": [table.clone()], "outputLocation": location(&root, "convert table to pdf"), "tables": { "delimiter": "semicolon", "headerRow": true, "encoding": "detect", "orientation": "landscape", "fit": "width" } })));
+        assert_eq!(table_outcomes[0].detail, "1 page. 2 rows, semicolon. Read as UTF-8.", "{table_outcomes:?}");
+        let converted_table = table_outcomes[0].output_paths().to_vec();
+        let table_pdf = lopdf::Document::load(&converted_table[0]).unwrap();
+        let table_text = table_pdf.extract_text(&[1]).unwrap();
+        let mut rest = table_text.as_str();
+        assert!(["Order", "Customer", "Note", "1001", "Smith; Jo", "said \"hi\"", "1002", "Lee", "plain"].iter().all(|expected| rest.find(expected).map(|at| rest = &rest[at + expected.len()..]).is_some()), "converted CSV cells stay in order: {table_text}");
+        outputs.extend(named(&mut naming, "convert_to_pdf", table.clone(), converted_table));
         outputs.extend(named(&mut naming, "split_pdf", pdf.clone(), assert_success("split", split_pdf(RunEvents::silent(), PageSelectionRequest { paths: vec![pdf.clone()], pages: vec![], page_ranges: None, split_mode: Some("pages".into()), chunk_size: None, output_location: location(&root, "split") }))));
         outputs.extend(named(&mut naming, "extract_pdf_images", image_pdf.clone(), assert_success("extract pdf images", extract_pdf_images(RunEvents::silent(), PdfToTextRequest { paths: vec![image_pdf.clone()], pages: None, output_location: location(&root, "extract pdf images") }))));
         outputs.extend(named(&mut naming, "sign_pdf", pdf.clone(), assert_success("sign", sign_pdf(RunEvents::silent(), SignPdfRequest { paths: vec![pdf.clone()], page: 0, text: "Signed".into(), signature_path: None, rectangle: PdfRect { x: 40.0, y: 40.0, width: 180.0, height: 60.0 }, scope: PageScope::All, output_location: location(&root, "sign") }))));
@@ -1249,6 +1326,10 @@ mod command_tests {
         assert_eq!(std::fs::read(&lossy_image).unwrap(), plain_lossy_image_bytes, "native E2E commands must not modify their lossy image input");
         assert_eq!(std::fs::read(&animated).unwrap(), animated_bytes, "native E2E commands must not modify their GIF input");
         assert_eq!(std::fs::read(&tiff).unwrap(), tiff_bytes, "native E2E commands must not modify their TIFF input");
+        assert_eq!(std::fs::read(&text).unwrap(), text_bytes, "native E2E commands must not modify their text input");
+        assert_eq!(std::fs::read(&markdown).unwrap(), markdown_bytes, "native E2E commands must not modify their Markdown input");
+        assert_eq!(std::fs::read(&rich_text).unwrap(), rich_text_bytes, "native E2E commands must not modify their RTF input");
+        assert_eq!(std::fs::read(&table).unwrap(), table_bytes, "native E2E commands must not modify their CSV input");
         assert!(!outputs.is_empty(), "native E2E matrix must exercise every producing command");
         if std::env::var_os("TOOLBOX_KEEP_NATIVE_E2E").is_none() {
             let _ = std::fs::remove_dir_all(root);
