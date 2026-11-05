@@ -2,16 +2,17 @@
 //!
 //! Listing is read-only and local. It reads the catalog built into the app and the files under
 //! `<app data>/packs`, and never touches the network. Only [`download`] does. [`uninstall`] removes
-//! a pack unless a run is using it.
+//! a pack unless a run is using it. [`health`] checks a pack's files at its first use in a session.
 //!
 //! Installed layout, one folder per pack, in the per-user local app-data folder (non-roaming on
 //! Windows):
 //! - `packs/<id>/installed.json` — `{ "version", "packFormat", "appVersions": { "from", "before"? },
-//!   "files": { "<relative path>": <bytes> } }`, written last by [`install`].
+//!   "files": { "<relative path>": <bytes> }, "manifestSha256" }`, written last by [`install`].
 //! - `packs/<id>/<version>/manifest.json` — the signed pack manifest, a
 //!   [`crate::kit::resources::ResourceManifest`] that discovery reads as the installed pack root.
 
 pub mod download;
+pub mod health;
 pub mod install;
 pub mod uninstall;
 
@@ -131,6 +132,10 @@ struct InstalledRecord {
     pub(crate) app_versions: VersionRange,
     /// Every file in the version folder with its exact size, as verified at install.
     pub(crate) files: std::collections::BTreeMap<String, u64>,
+    /// SHA-256 of the signed manifest, so a changed manifest is found at first use. Absent in
+    /// records written before it was added.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) manifest_sha256: Option<String>,
 }
 
 #[tauri::command]
@@ -239,7 +244,7 @@ fn installed_state(pack: &CatalogPack, folder: &Path, app_version: &str, offered
         return (PackStatus::Damaged, None);
     };
     let version = Some(record.version.clone());
-    if !files_intact(&folder.join(&record.version), &record.files) {
+    if health::known_damaged(folder) || !files_intact(&folder.join(&record.version), &record.files) {
         return (PackStatus::Damaged, version);
     }
     let newer_offered = offered && compare_versions(&pack.version, &record.version) == Some(Ordering::Greater);
@@ -253,7 +258,8 @@ fn installed_state(pack: &CatalogPack, folder: &Path, app_version: &str, offered
 }
 
 /// The version folder still has its manifest and every recorded file with its recorded size.
-/// Listing does not hash files; checksums are verified when a pack is installed or used.
+/// Listing does not hash files; checksums are verified at install and at the pack's first use in
+/// a session ([`health`]), and listing reports a pack that check found damaged.
 fn files_intact(version_folder: &Path, files: &std::collections::BTreeMap<String, u64>) -> bool {
     files.contains_key(MANIFEST_FILE) && files.iter().all(|(relative, bytes)| {
         let relative = Path::new(relative);
@@ -282,6 +288,7 @@ fn disk_usage(path: &Path) -> u64 {
 
 /// The folder discovery reads as the installed pack root for `id`: the recorded version's folder.
 /// `None` when nothing is recorded. Discovery verifies every file it uses against the manifest.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn installed_pack_root(app_data: &Path, id: &str) -> Option<PathBuf> {
     let folder = app_data.join(PACKS_DIR).join(id);
     let record: InstalledRecord = serde_json::from_str(&std::fs::read_to_string(folder.join(INSTALLED_FILE)).ok()?).ok()?;

@@ -150,7 +150,12 @@ pub fn resolve_pack_backed(name: &str, locations: &PackBackedLocations) -> Resul
     for (root, source) in manifest_roots {
         let Some(root) = root else { continue };
         let manifest_path = root.join("manifest.json");
-        if !manifest_path.is_file() { continue; }
+        if !manifest_path.is_file() {
+            // An installed pack always has a manifest. Without it the pack is damaged, and nothing
+            // past it may stand in for its files.
+            if source == ResourceSource::InstalledPack { return Err(format!("The installed pack for {name} has no manifest.")); }
+            continue;
+        }
         let manifest = read_manifest(&manifest_path)?;
         let Some(spec) = manifest.resources.get(name) else { continue };
         if !manifest.matches_this_application() { return Err(format!("The manifest for {name} does not match this application.")); }
@@ -163,6 +168,20 @@ pub fn resolve_pack_backed(name: &str, locations: &PackBackedLocations) -> Resul
         Some(_) => Err(format!("Development override for {name} does not point to a file.")),
         None => Err(format!("Resource {name} is unavailable.")),
     }
+}
+
+/// Verifies every resource the manifest under `root` lists, as discovery would before using it.
+/// Returns why the first one that fails does.
+pub fn verify_manifest_root(root: &Path) -> Result<(), String> {
+    let manifest = read_manifest(&root.join("manifest.json"))?;
+    if !manifest.matches_this_application() { return Err("The manifest does not match this application.".to_string()); }
+    for (name, spec) in &manifest.resources {
+        if !spec.path.components().all(|component| matches!(component, std::path::Component::Normal(_))) {
+            return Err(format!("The manifest lists {name} outside its folder."));
+        }
+        verify_resource(&root.join(&spec.path), spec).map_err(|failure| format!("Resource {name} failed verification: {failure:?}."))?;
+    }
+    Ok(())
 }
 
 fn read_manifest(manifest_path: &Path) -> Result<ResourceManifest, String> {
@@ -319,6 +338,13 @@ mod tests {
         fs::write(&development_override, b"override").unwrap();
         let locations = PackBackedLocations { bundled_root: Some(root.join("bundled")), installed_pack_root: Some(root.join("pack")), development_override: Some(development_override) };
         assert_eq!(resolve_pack_backed(name, &locations), Err("Resource ocrLanguage failed verification: ChecksumMismatch.".to_string()));
+        assert_eq!(verify_manifest_root(&root.join("pack")), Err("Resource ocrLanguage failed verification: ChecksumMismatch.".to_string()));
+        // An installed pack that lost its manifest is not skipped either.
+        fs::remove_file(root.join("pack/manifest.json")).unwrap();
+        assert_eq!(resolve_pack_backed(name, &locations), Err("The installed pack for ocrLanguage has no manifest.".to_string()));
+        fs::write(root.join("pack/pack.bin"), b"pack").unwrap();
+        write_manifest_root(&root.join("pack"), name, "pack.bin", b"pack");
+        assert_eq!(verify_manifest_root(&root.join("pack")), Ok(()));
         let _ = fs::remove_dir_all(root);
     }
 
