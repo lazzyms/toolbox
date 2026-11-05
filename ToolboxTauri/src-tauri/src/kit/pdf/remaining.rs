@@ -863,6 +863,10 @@ where F: Fn(usize, OverlayPageGeometry, &str, &str) -> String {
 }
 
 fn watermark_position(position: Option<WatermarkPosition>, width: f32, height: f32) -> (f32, f32) {
+    // An anchor runs between the same corners the placements use, so 0 and 1 land on them exactly.
+    if let Some(WatermarkPosition::Anchor { anchor_x, anchor_y }) = position {
+        return (24.0 + anchor_x * (width - 204.0), 24.0 + (1.0 - anchor_y) * (height - 72.0));
+    }
     let Some(WatermarkPosition::Placement(placement)) = position else { return (width / 4.0, height / 2.0) };
     match placement {
         WatermarkPlacement::TopLeft => (24.0, height - 48.0), WatermarkPlacement::TopRight => (width - 180.0, height - 48.0),

@@ -6,6 +6,7 @@ type StackWindow = Window & {
     __invocations: Array<{ command: string; args: unknown }>;
     __dialogResults: Array<string | string[]>;
     __processingResults?: JobOutcome[];
+    __previewError?: string;
 };
 
 const svg = (width: number, height: number) => `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='${width}' height='${height}'/%3E`;
@@ -29,6 +30,7 @@ test.beforeEach(async ({ page }) => {
                 if (command === "plugin:dialog|open") return win.__dialogResults.shift() ?? null;
                 if (command === "inspect_image_preview") return { width: 640, height: 480, dataUrl: blank };
                 if (command === "inspect_image_edit_preview") {
+                    if (win.__previewError) throw win.__previewError;
                     const edits = (args as { request: { plan: { edits: Array<{ kind: string; mode: string; width: number; height: number; longestSide: number }> } } }).request.plan.edits;
                     const resize = edits.find((edit) => edit.kind === "resize");
                     if (resize?.mode === "longestSide") return { width: resize.longestSide, height: Math.round(resize.longestSide * 0.75), dataUrl: blank };
@@ -39,7 +41,7 @@ test.beforeEach(async ({ page }) => {
                 if (command.startsWith("plugin:")) return null;
                 const request = (args as { request?: { paths?: string[]; steps?: Record<string, unknown> } }).request;
                 const stepNames = Object.keys(request?.steps ?? {});
-                const suffix = stepNames.length > 1 ? "-edited" : ({ resize: "-resized", rotate: "-rotated", tone: "-tone" } as Record<string, string>)[stepNames[0]] ?? "-cropped";
+                const suffix = stepNames.length > 1 ? "-edited" : ({ resize: "-resized", rotate: "-rotated", tone: "-tone", watermark: "-watermarked" } as Record<string, string>)[stepNames[0]] ?? "-cropped";
                 return win.__processingResults ?? (request?.paths ?? []).map((inputPath) => ({
                     inputPath,
                     outputPaths: [inputPath.replace(/(\.\w+)$/, `${suffix}$1`)],
@@ -321,7 +323,7 @@ for (const theme of ["light", "dark"] as const) {
         await page.screenshot({ path: testInfo.outputPath(`resize-step-${theme}.png`), animations: "disabled" });
         await steps(page).getByRole("button", { name: "Add Crop step" }).click();
         const separators = page.locator(".image-edit-stack-separator");
-        await expect(separators).toHaveCount(3);
+        await expect(separators).toHaveCount(4);
         for (const separator of await separators.all()) await expect(separator).toHaveAttribute("aria-hidden", "true");
     });
 }
@@ -566,5 +568,166 @@ for (const theme of ["light", "dark"] as const) {
             expect(color).not.toBe(colors.surface);
         }
         await options.screenshot({ path: testInfo.outputPath(`tone-step-${theme}.png`), animations: "disabled" });
+    });
+}
+
+const openWatermark = (page: Page, paths: string[]) => openTool(page, "Watermark Images", paths);
+const mark = (page: Page) => page.getByRole("group", { name: /^Watermark, / });
+const anchorOf = async (page: Page) => {
+    const edits = await lastPreviewEdits(page) as Array<{ kind: string; position?: unknown }> | undefined;
+    return edits?.find((edit) => edit.kind === "watermark")?.position;
+};
+
+test("choosing Watermark sends every text option in one step", async ({ page }) => {
+    await openWatermark(page, ["/photos/a.png", "/photos/b.jpg"]);
+    await expect(steps(page).getByRole("button", { name: "Step 1 of 1, Watermark, showing its options" })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByRole("status").filter({ hasText: addedMessage("Watermark", 1) })).toBeVisible();
+    await expect(page.getByRole("radiogroup", { name: "Watermark type" }).getByRole("radio", { name: "Text" })).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByText("Same options as the PDF watermark", { exact: true })).toBeVisible();
+    // An empty text names the field instead of running.
+    await expect(page.getByText("Fix the text to run", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Run on 2 images" })).toBeDisabled();
+
+    await page.getByLabel("Text", { exact: true }).fill("© Studio 2026");
+    await page.getByLabel("Size, % of width").fill("40");
+    await page.getByLabel("Opacity").fill("55");
+    await page.getByLabel("Colour", { exact: true }).fill("#ff8800");
+    await page.getByLabel("Angle", { exact: true }).selectOption("45");
+    await page.getByRole("radiogroup", { name: "Position on the image" }).getByRole("radio", { name: "Top left" }).click();
+    await expect(page.getByText("Or drag it in the preview. It lands in the same place on every size.", { exact: true })).toBeVisible();
+    await expect(page.getByTestId("run-destination-example")).toHaveText("a-watermarked.png");
+
+    await page.getByRole("button", { name: "Run on 2 images" }).click();
+    const request = await runRequest(page);
+    expect(request.steps).toEqual({ watermark: { text: "© Studio 2026", color: "#FF8800", size: 0.4, opacity: 55, rotation: 45, position: { anchorX: 0, anchorY: 0 } } });
+    expect(await invocations(page, "watermark_images")).toEqual([]);
+    await expect(page.getByRole("button", { name: "Open a-watermarked.png" })).toBeVisible();
+});
+
+test("a picture watermark sends the logo path, and Tile drops the position grid", async ({ page }) => {
+    await openWatermark(page, ["/photos/a.png"]);
+    await page.getByRole("radiogroup", { name: "Watermark type" }).getByRole("radio", { name: "Picture" }).click();
+    await expect(page.getByText("Colour applies to text only. Pictures keep their own colours.", { exact: true })).toBeVisible();
+    await expect(page.getByText("Choose a picture to run", { exact: true })).toBeVisible();
+    await page.evaluate(() => { (window as unknown as StackWindow).__dialogResults = ["/brand/logo.png"]; });
+    await page.getByRole("button", { name: "Choose a picture for the watermark" }).click();
+    await expect(page.getByText("logo.png", { exact: true })).toBeVisible();
+    await expect.poll(async () => (await invocations(page, "inspect_image_preview")).some(({ args }) => (args as { request: { path: string } }).request.path === "/brand/logo.png")).toBe(true);
+
+    await page.getByRole("radiogroup", { name: "Placement", exact: true }).getByRole("radio", { name: "Tile" }).click();
+    await expect(page.getByRole("radiogroup", { name: "Position on the image" })).toHaveCount(0);
+    await expect(page.getByText("Repeats across the whole image.", { exact: true })).toBeVisible();
+    await expect(page.getByText("Tiles cover the whole image, so there is nothing to drag.", { exact: true })).toBeVisible();
+    await expect(mark(page)).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Run on 1 image" }).click();
+    expect((await runRequest(page)).steps).toEqual({ watermark: { logoPath: "/brand/logo.png", size: 0.3, opacity: 70, rotation: 0, position: "tile" } });
+});
+
+test("the watermark can be dragged and moved with the arrow keys, and a custom angle is sent", async ({ page }) => {
+    await openWatermark(page, ["/photos/a.png"]);
+    await page.getByLabel("Text", { exact: true }).fill("DRAFT");
+    const placed = mark(page);
+    await expect(placed).toHaveAccessibleName("Watermark, DRAFT, bottom right. Selected. Arrow keys move it, Option+arrow resizes it.");
+    await expect(page.getByText("Drag the text to place it, a corner to resize it, or the top handle to turn it. Arrow keys move it.", { exact: true })).toBeVisible();
+
+    await placed.focus();
+    await page.keyboard.press("ArrowLeft");
+    await page.keyboard.press("Shift+ArrowUp");
+    await expect.poll(() => anchorOf(page)).toEqual({ anchorX: 0.98, anchorY: 0.9 });
+    await page.keyboard.press("Alt+ArrowRight");
+    await expect(page.getByLabel("Size, % of width")).toHaveValue("31");
+
+    // Dragging the mark to the top left of the stage moves its anchor there.
+    const stage = await page.locator(".image-editor-preview-stage").first().boundingBox();
+    const box = await placed.boundingBox();
+    if (!stage || !box) throw new Error("The stage and the mark must be on screen.");
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(stage.x + 2, stage.y + 2, { steps: 4 });
+    await page.mouse.up();
+    await expect.poll(() => anchorOf(page)).toEqual({ anchorX: 0, anchorY: 0 });
+    await expect(placed).toHaveAccessibleName(/^Watermark, DRAFT, top left\./);
+
+    await page.getByLabel("Angle", { exact: true }).selectOption("custom");
+    await page.getByLabel("Angle, degrees from −180 to 180").fill("-8");
+    await expect(page.getByLabel("Angle", { exact: true })).toHaveValue("custom");
+    await page.getByLabel("Angle, degrees from −180 to 180").fill("200");
+    await expect(page.getByText("Fix the angle to run", { exact: true })).toBeVisible();
+    await expect(page.getByText("Enter an angle from −180 to 180 degrees.", { exact: true })).toBeVisible();
+    await page.getByLabel("Angle, degrees from −180 to 180").fill("-8");
+
+    await page.getByRole("button", { name: "Run on 1 image" }).click();
+    expect((await runRequest(page)).steps).toEqual({ watermark: { text: "DRAFT", color: "#FFFFFF", size: 0.31, opacity: 70, rotation: -8, position: { anchorX: 0, anchorY: 0 } } });
+});
+
+test("text the watermark font can't draw is named under the field and blocks Run", async ({ page }) => {
+    await openWatermark(page, ["/photos/a.png"]);
+    await page.evaluate(() => { (window as unknown as StackWindow).__previewError = "The watermark font can't draw “🏡”."; });
+    const text = page.getByLabel("Text", { exact: true });
+    await text.fill("Home 🏡");
+    await expect(page.getByText("The watermark font can't draw “🏡”. Remove it, or use a picture instead.", { exact: true })).toBeVisible();
+    await expect(text).toHaveAttribute("aria-invalid", "true");
+    await expect(page.getByText("Fix the text to run", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Run on 1 image" })).toBeDisabled();
+
+    await page.evaluate(() => { (window as unknown as StackWindow).__previewError = undefined; });
+    await text.fill("Home");
+    await expect(page.getByRole("button", { name: "Run on 1 image" })).toBeEnabled();
+});
+
+test("an image the watermark fails on is reported on its own row", async ({ page }) => {
+    await openWatermark(page, ["/photos/a.png", "/photos/broken.png"]);
+    await page.getByLabel("Text", { exact: true }).fill("DRAFT");
+    await page.evaluate(() => {
+        (window as unknown as StackWindow).__processingResults = [
+            { inputPath: "/photos/a.png", outputPaths: ["/photos/a-watermarked.png"], detail: "Image saved", state: "succeeded", failure: null, reason: null, warnings: [] },
+            { inputPath: "/photos/broken.png", outputPaths: [], detail: "", state: "failed", failure: { kind: "processing", message: "This image could not be read.", pointer: null }, reason: null, warnings: [] },
+        ] as JobOutcome[];
+    });
+    await page.getByRole("button", { name: "Run on 2 images" }).click();
+    await expect(page.locator(".result-row")).toHaveCount(2);
+    await expect(page.getByRole("button", { name: "Open a-watermarked.png" })).toBeVisible();
+    await expect(page.locator(".result-row").filter({ hasText: "broken.png" })).toContainText("This image could not be read.");
+});
+
+test("Watermark runs after Colour and Tone and the run is named -edited", async ({ page }) => {
+    await openWatermark(page, ["/photos/a.jpg"]);
+    await page.getByLabel("Text", { exact: true }).fill("DRAFT");
+    await steps(page).getByRole("button", { name: "Add Colour and Tone step" }).click();
+    await toneField(page, "Brightness").fill("10");
+    await expect(page.getByTestId("run-destination-example")).toHaveText("a-edited.jpg");
+    await page.getByRole("button", { name: "Run on 1 image" }).click();
+    const request = await runRequest(page);
+    expect(Object.keys(request.steps)).toEqual(["tone", "watermark"]);
+    expect(request.steps).toMatchObject({ watermark: { text: "DRAFT" } });
+});
+
+for (const theme of ["light", "dark"] as const) {
+    test(`the Watermark step renders readable controls in the ${theme} theme`, async ({ page }, testInfo) => {
+        await page.addInitScript((theme) => { localStorage.setItem("toolbox-theme", theme); }, theme);
+        await openWatermark(page, ["/photos/a.png"]);
+        await expect(page.locator("body")).toHaveAttribute("data-theme", theme);
+        await page.getByLabel("Text", { exact: true }).fill("DRAFT");
+        await expect(mark(page)).toBeVisible();
+        const options = page.getByRole("region", { name: "Options" });
+        const colors = await options.evaluate((node) => {
+            const label = node.querySelector('label[for="image-watermark-size"]');
+            const field = node.querySelector<HTMLInputElement>("#image-watermark-text");
+            const hint = Array.from(node.querySelectorAll("p")).find((p) => p.textContent?.startsWith("Or drag it"));
+            const anchor = node.querySelector('[role="radiogroup"] [role="radio"]');
+            return {
+                surface: getComputedStyle(node).backgroundColor,
+                label: label ? getComputedStyle(label).color : "",
+                field: field ? getComputedStyle(field).color : "",
+                hint: hint ? getComputedStyle(hint).color : "",
+                anchor: anchor ? getComputedStyle(anchor).borderTopColor : "",
+            };
+        });
+        for (const color of [colors.label, colors.field, colors.hint, colors.anchor]) {
+            expect(color).not.toBe("");
+            expect(color).not.toBe(colors.surface);
+        }
+        await page.screenshot({ path: testInfo.outputPath(`watermark-step-${theme}.png`), animations: "disabled" });
     });
 }

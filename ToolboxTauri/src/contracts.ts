@@ -302,7 +302,8 @@ export interface PasswordRequest extends ToolRequest {
 }
 
 export type WatermarkPlacement = "center" | "top-left" | "top-right" | "bottom-left" | "bottom-right" | "tile";
-export type WatermarkPosition = WatermarkPlacement | { x: number; y: number };
+/** A placement, a legacy pen offset in pixels, or an anchor from 0 to 1 that lands the mark in the same relative place on every size. */
+export type WatermarkPosition = WatermarkPlacement | { x: number; y: number } | { anchorX: number; anchorY: number };
 
 // Mirrors kit::common::watermark::WatermarkOptions.
 export interface WatermarkOptions {
