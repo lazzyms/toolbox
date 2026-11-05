@@ -134,6 +134,11 @@ async fn inspect_pdf_scene(request: InspectPdfRequest) -> Result<metadata::PdfDo
 }
 
 #[tauri::command]
+async fn inspect_pdf_form(request: InspectPdfRequest) -> Result<scene::FormInspection, String> {
+    tauri::async_runtime::spawn_blocking(move || scene::inspect_form(&request.path)).await.map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 async fn inspect_pdf_scene_page(request: InspectPdfScenePageRequest) -> Result<metadata::PdfPageMetadata, String> {
     tauri::async_runtime::spawn_blocking(move || scene::inspect_page(&request.path, request.page_index)).await.map_err(|error| error.to_string())?
 }
@@ -530,6 +535,7 @@ fn main() {
             inspect_pdf,
             inspect_pdf_scene,
             inspect_pdf_scene_page,
+            inspect_pdf_form,
             preview_pdf_scene,
             preview_pdf_scene_pages,
             export_pdf_scene,

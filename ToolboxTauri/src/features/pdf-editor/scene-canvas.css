@@ -37,4 +37,6 @@ body[data-theme="light"] {
 .scene-crop-outline { fill: var(--pdf-scene-overlay); stroke: var(--pdf-scene-selection); stroke-dasharray: 6 4; }
 .scene-text-layer { user-select: text; pointer-events: all; }
 .scene-text-run { user-select: text; cursor: text; }
-.scene-inline-text-editor { overflow: visible; pointer-events: all; }
+.scene-inline-text-editor, .scene-form-field { overflow: visible; pointer-events: all; }
+/* Form fields sit on the white document page, so their controls use document colors in either theme. */
+.scene-form-field { color: var(--pdf-document-text); color-scheme: light; --foreground: var(--pdf-document-text); --input: oklch(0.55 0.12 255 / 40%); --ring: oklch(0.55 0.12 255); --primary: oklch(0.205 0 0); --primary-foreground: oklch(0.985 0 0); --muted-foreground: oklch(0.556 0 0); }

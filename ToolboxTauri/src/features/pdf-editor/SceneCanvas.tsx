@@ -1,5 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { KeyboardEvent, MouseEvent as ReactMouseEvent, PointerEvent } from 'react';
+import { Checkbox } from '../../components/ui/checkbox';
+import { Input } from '../../components/ui/input';
 import { Textarea } from '../../components/ui/textarea';
 import { visibleBounds } from './scene';
 import type { SceneCanvasProps, SceneObject, ScenePage, ScenePoint, SceneRect, SceneShape, WatermarkPattern } from './scene';
@@ -111,7 +113,7 @@ function Artwork({ page, object }: { page: ScenePage; object: SceneObject }) {
   return shapeArtwork(object.shape, r, object.color, object.opacity);
 }
 
-export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPreview, tool, selectedId, zoom, onSelect, onCommit, makeObject }: SceneCanvasProps) {
+export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPreview, tool, selectedId, zoom, onSelect, onCommit, makeObject, formFields = [], formValue, onFormValue }: SceneCanvasProps) {
   const host = useRef<HTMLDivElement>(null);
   const surface = useRef<SVGSVGElement>(null);
   const coordinates = useRef<SVGGElement>(null);
@@ -232,6 +234,7 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     if (event.button !== 0 || gesture.current) return;
     const target = event.target as Element;
     if (target.closest('[data-text-editor]')) return;
+    if (tool === 'form') { if (!target.closest('[data-form-field]')) onSelect(null); return; }
     const textTarget = tool === 'highlight' && target.closest('[data-text-run]');
     const start = point(event);
     if (textTarget) {
@@ -366,6 +369,19 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
             {object.kind !== 'watermark' && (['nw', 'ne', 'sw', 'se'] as const).map(corner => <rect key={corner} data-object={object.id} data-corner={corner} x={(corner.includes('w') ? object.rect.x : object.rect.x + object.rect.width) - 5 / scale} y={(corner.includes('n') ? object.rect.y : object.rect.y + object.rect.height) - 5 / scale} width={10 / scale} height={10 / scale} tabIndex={0} role="button" aria-label={`Resize ${object.kind} ${corner}`} className="scene-resize-handle" strokeWidth={1 / scale} onKeyDown={e => key(e, object, corner)} />)}
           </g>}
         </g>)}
+        {tool === 'form' && formValue && onFormValue && formFields.flatMap(field => field.widgets.filter(widget => widget.page === page.sourceIndex).map((widget, index) => {
+          const value = formValue(field);
+          const label = field.label || field.name;
+          const fontSize = Math.max(6, Math.min(12, widget.height * 0.6));
+          return <foreignObject key={`${field.name}:${index}`} x={widget.x} y={widget.y} width={widget.width} height={widget.height} className="scene-form-field" data-form-field={field.name}>
+            {field.type === 'checkbox'
+              ? <Checkbox aria-label={label} checked={value === true} disabled={field.readOnly} aria-required={field.required} style={{ width: Math.min(widget.width, widget.height), height: Math.min(widget.width, widget.height) }}
+                onCheckedChange={checked => onFormValue(field, checked === true)} />
+              : field.multiline
+                ? <Textarea aria-label={label} value={String(value)} disabled={field.readOnly} required={field.required} maxLength={field.maxLen ?? undefined} className="h-full w-full min-h-0 resize-none rounded-none px-1 py-0" style={{ fontSize }} onChange={event => onFormValue(field, event.target.value)} />
+                : <Input aria-label={label} value={String(value)} disabled={field.readOnly} required={field.required} maxLength={field.maxLen ?? undefined} className="h-full w-full min-h-0 rounded-none px-1 py-0" style={{ fontSize }} onChange={event => onFormValue(field, event.target.value)} />}
+          </foreignObject>;
+        }))}
         {draft && gesture.current?.mode === 'crop' && draft.crop && <rect {...draft.crop} className="scene-crop-outline" strokeWidth={2 / scale} pointerEvents="none" />}
       </g>
     </svg>

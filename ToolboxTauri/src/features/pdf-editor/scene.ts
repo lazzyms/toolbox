@@ -1,9 +1,9 @@
-import type { PdfDocument, PdfTextRun } from './contracts';
+import type { PdfDocument, PdfFormField, PdfTextRun } from './contracts';
 
 // All geometry is in points, from the top-left of the unrotated visible source page.
 export interface SceneRect { x: number; y: number; width: number; height: number }
 export interface ScenePoint { x: number; y: number }
-export type SceneTool = 'select' | 'text' | 'highlight' | 'shape' | 'signature' | 'watermark' | 'crop';
+export type SceneTool = 'select' | 'text' | 'highlight' | 'shape' | 'signature' | 'form' | 'watermark' | 'crop';
 export type SceneShape = 'square' | 'round' | 'triangle' | 'line' | 'dotted-line' | 'arrow-left' | 'arrow-right' | 'arrow-up' | 'arrow-down';
 export type SignatureMode = 'image' | 'text';
 export type WatermarkPattern = 'across-page' | 'bottom-right-to-top-left' | 'top-right-to-bottom-left' | 'center-horizontal' | 'center-vertical';
@@ -61,6 +61,10 @@ export interface SceneCanvasProps {
   onSelect: (id: string | null) => void;
   onCommit: (page: ScenePage) => void;
   makeObject: (kind: SceneObject['kind'], rect: SceneRect) => SceneObject;
+  // Form fields on this page, in Tab order; shown only while filling the form.
+  formFields?: PdfFormField[];
+  formValue?: (field: PdfFormField) => string | boolean;
+  onFormValue?: (field: PdfFormField, value: string | boolean) => void;
 }
 export const sceneFromDocument = (document: PdfDocument): PdfScene => ({
   pages: document.pages.map((page) => ({ id: `source-${page.index}`, sourceIndex: page.index,
