@@ -19,6 +19,7 @@ test.beforeEach(async ({ page }) => {
         for (const page of args?.request?.scene?.pages ?? []) for (const object of page.objects) {
           if (!/^#[0-9a-fA-F]{6}$/.test(object.color)) throw new Error('Color must be #RRGGBB');
         }
+        if (command === 'check_output_folder') return 'ready';
         if (command === 'plugin:dialog|open') return w.dialogNext ?? '/local/scene-fixture.pdf';
         if (command === 'inspect_pdf_scene') return { path: '/local/scene-fixture.pdf', pages: [0, 1, 2].map(index => ({ index, width: 612, height: 792, preview: null })) };
         if (command === 'inspect_pdf_scene_page') {
@@ -44,7 +45,14 @@ test.beforeEach(async ({ page }) => {
           if (w.previewDelay) await new Promise(resolve => setTimeout(resolve, w.previewDelay));
           return args.request.pageIndices.map((pageIndex: number) => ({ pageIndex, preview: { dataUrl: svg, width: 612, height: 792 } }));
         }
-        if (command === 'export_pdf_scene') return [{ inputPath: '/local/scene-fixture.pdf', outputPaths: [w.exportOutput ?? '/local/scene-fixture-edited-1.pdf'], state: 'succeeded', detail: w.exportDetail ?? 'PDF scene exported', failure: null, reason: null, warnings: [] }];
+        if (command === 'export_pdf_scene') {
+          // Mirror the native naming: Export As numbers a taken chosen name and says so.
+          const chosen: string | undefined = args.request.outputPath;
+          const numbered = chosen?.replace(/\.pdf$/, '-1.pdf');
+          const name = (path: string) => path.split('/').pop();
+          return [{ inputPath: '/local/scene-fixture.pdf', outputPaths: [numbered ?? w.exportOutput ?? '/local/scene-fixture-edited.pdf'], state: 'succeeded', detail: w.exportDetail ?? 'PDF scene exported', failure: null, reason: null,
+            warnings: numbered ? [{ code: 'renamedToAvoidReplacing', message: '', details: { chosenName: name(chosen!), finalName: name(numbered) } }] : [] }];
+        }
         return null;
       },
     };
@@ -865,3 +873,64 @@ test('search skips deleted pages, clears when pages change, and reports failures
   await expect(inspector.getByRole('list', { name: 'Marks' })).toHaveCount(0);
 });
 
+test('Edit PDF shows where the export goes and names it by the contributing tool', async ({ page }) => {
+  await openEditor(page);
+  const destination = page.getByRole('region', { name: 'Destination' });
+  await expect(destination.getByTestId('run-destination-path')).toHaveText('Next to each original');
+  await draw(page, 'Shape', .4);
+  await expect(destination.getByTestId('run-destination-example')).toHaveText('scene-fixture-edited.pdf');
+  await page.getByRole('button', { name: 'Export PDF', exact: true }).click();
+  const results = page.getByRole('list', { name: 'Results' });
+  await expect(results.getByRole('button', { name: 'Open scene-fixture-edited.pdf' })).toBeVisible();
+  await expect(results.getByRole('button', { name: /^Show in / })).toBeVisible();
+});
+
+test('Edit PDF sends a per-run folder in the export request without writing Settings', async ({ page }) => {
+  await openEditor(page);
+  await draw(page, 'Shape', .4);
+  await page.evaluate(() => { (window as any).dialogNext = '/Users/test/Delivery'; });
+  const destination = page.getByRole('region', { name: 'Destination' });
+  await destination.getByRole('button', { name: 'Change for this run' }).click();
+  await expect(destination.getByText('This run only')).toBeVisible();
+  await page.evaluate(() => { (window as any).dialogNext = null; });
+  await page.getByRole('button', { name: 'Export PDF', exact: true }).click();
+  await expect(page.getByRole('list', { name: 'Results' })).toBeVisible();
+  const request = await page.evaluate(() => (window as any).calls.filter((c: any) => c.command === 'export_pdf_scene').at(-1).args.request);
+  expect(request.outputLocation).toEqual({ customFolder: '/Users/test/Delivery' });
+  expect(request.outputPath).toBeUndefined();
+  expect(await page.evaluate(() => (window as any).calls.map((c: any) => c.command))).not.toContain('set_output_settings');
+});
+
+test('Export As saves a chosen copy and reports the numbered name instead of replacing a file', async ({ page }) => {
+  await openEditor(page);
+  await expect(page.getByRole('button', { name: 'Export As…', exact: true })).toBeDisabled();
+  await draw(page, 'Shape', .4);
+  await page.getByRole('button', { name: 'Export As…', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Export a copy' });
+  await expect(dialog.getByLabel('File name')).toHaveValue('scene-fixture-edited.pdf');
+  await expect(dialog.getByTestId('save-folder')).toContainText('/local');
+  await dialog.getByLabel('File name').fill('contract final.pdf');
+  await dialog.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  const request = await page.evaluate(() => (window as any).calls.filter((c: any) => c.command === 'export_pdf_scene').at(-1).args.request);
+  expect(request.outputPath).toBe('/local/contract final.pdf');
+  expect(request.paths).toEqual(['/local/scene-fixture.pdf']);
+  const results = page.getByRole('list', { name: 'Results' });
+  await expect(results).toContainText('Saved as contract final-1.pdf. Renamed to avoid replacing an existing file.');
+  await expect(results.getByRole('button', { name: 'Open contract final-1.pdf' })).toBeVisible();
+});
+
+test('Export stays off with a reason until there is a change and the preview shows it', async ({ page }) => {
+  await openEditor(page);
+  const reason = page.getByRole('status').filter({ hasText: 'Nothing to export yet' });
+  await expect(reason).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toHaveAttribute('aria-describedby', 'scene-export-reason');
+  await page.evaluate(() => { (window as any).previewDelay = 1500; });
+  await draw(page, 'Shape', .4);
+  await expect(page.getByRole('status').filter({ hasText: 'Updating the preview' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Export As…', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeEnabled({ timeout: 5000 });
+  await expect(page.locator('#scene-export-reason')).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).calls.some((c: any) => c.command === 'export_pdf_scene'))).toBe(false);
+});

@@ -38,6 +38,14 @@ test("export request carries the scene unchanged in the native request shape", (
   assert.equal(JSON.stringify(request), JSON.stringify({ paths: ["/local/source.pdf"], scene, outputLocation: "alongsideInput" }));
 });
 
+test("Export As adds the chosen path after the destination and a plain export omits it", () => {
+  const scene = withObjects(baseline, 0, "shape");
+  const { request } = planSceneExport({ paths: ["/local/source.pdf"], scene, baseline, outputLocation: "alongsideInput", outputPath: "/local/contract final.pdf" });
+  assert.deepEqual(Object.keys(request), ["paths", "scene", "outputLocation", "outputPath"]);
+  assert.equal(request.outputPath, "/local/contract final.pdf");
+  assert.equal("outputPath" in plan(scene).request, false);
+});
+
 test("chained export reports contributors in the fixed export order, not scene order", () => {
   const edited = withObjects(baseline, 0, "watermark", "signature", "text");
   const scene: PdfScene = {

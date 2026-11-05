@@ -773,7 +773,7 @@ mod tests {
 
     fn fill(input: &Path, scene: PdfScene, values: serde_json::Value) -> crate::kit::contracts::JobOutcome {
         let sections = serde_json::from_value(serde_json::json!({ "formValues": values })).unwrap();
-        export(&ExportRequest { paths: vec![input.to_path_buf()], scene, output_location: OutputLocation::AlongsideInput, sections }, input.to_path_buf())
+        export(&ExportRequest { paths: vec![input.to_path_buf()], scene, output_location: OutputLocation::AlongsideInput, output_path: None, sections }, input.to_path_buf())
     }
 
     fn values() -> serde_json::Value {
@@ -957,7 +957,7 @@ mod tests {
         scene.pages[0].objects.push(note);
         let outcome = fill(&input, scene, serde_json::json!([{ "name": "agree", "value": false }]));
         assert!(outcome.error().is_none(), "{:?}", outcome.error());
-        assert_eq!(outcome.output_paths(), [temp.0.join("form-edited-1.pdf")]);
+        assert_eq!(outcome.output_paths(), [temp.0.join("form-edited.pdf")]);
         let doc = Document::load(&outcome.output_paths()[0]).unwrap();
         let agree = field(&doc, b"agree");
         assert_eq!((agree.get(b"V").unwrap().as_name().unwrap(), agree.get(b"AS").unwrap().as_name().unwrap()), (&b"Off"[..], &b"Off"[..]));
@@ -1032,7 +1032,7 @@ mod tests {
 
     fn export_sections(input: &Path, sections: serde_json::Value) -> crate::kit::contracts::JobOutcome {
         let sections = serde_json::from_value(sections).unwrap();
-        export(&ExportRequest { paths: vec![input.to_path_buf()], scene: identity_scene(), output_location: OutputLocation::AlongsideInput, sections }, input.to_path_buf())
+        export(&ExportRequest { paths: vec![input.to_path_buf()], scene: identity_scene(), output_location: OutputLocation::AlongsideInput, output_path: None, sections }, input.to_path_buf())
     }
 
     fn subtypes(path: &Path) -> Vec<Vec<u8>> {
@@ -1095,7 +1095,7 @@ mod tests {
         let outcome = export_sections(&input, serde_json::json!({ "formValues": [{ "name": "name", "value": "Ada Lovelace" }, { "name": "agree", "value": true }], "flatten": "forms" }));
         assert!(outcome.error().is_none(), "{:?}", outcome.error());
         let output = &outcome.output_paths()[0];
-        assert_eq!(output, &temp.0.join("form-edited-1.pdf"));
+        assert_eq!(output, &temp.0.join("form-edited.pdf"));
         assert!(subtypes(output).is_empty());
         assert!(!Document::load(output).unwrap().catalog().unwrap().has(b"AcroForm"));
         assert_eq!(fs::read(&input).unwrap(), original);

@@ -11,7 +11,7 @@ export interface SubTool {
   contributes: (scene: PdfScene, baseline: PdfScene, formValues: readonly FormValue[], flatten: PdfFlattenChoice | null) => boolean;
 }
 export interface RedactionMark { pageIndex: number; rect: SceneRect; color: string }
-export interface SceneExportRequest { paths: string[]; scene: PdfScene; outputLocation: OutputLocation; formValues?: FormValue[]; flatten?: PdfFlattenChoice; redactions?: RedactionMark[] }
+export interface SceneExportRequest { paths: string[]; scene: PdfScene; outputLocation: OutputLocation; outputPath?: string; formValues?: FormValue[]; flatten?: PdfFlattenChoice; redactions?: RedactionMark[] }
 export interface SceneExportPlan { request: SceneExportRequest; contributors: SubToolId[]; suffix: string | null }
 
 export const combinedSuffix = '-edited';
@@ -46,8 +46,10 @@ export const sceneContributors = (scene: PdfScene, baseline: PdfScene, formValue
 export const exportSuffix = (contributors: readonly Pick<SubTool, 'suffix'>[]): string | null =>
   contributors.length === 0 ? null : contributors.length === 1 ? contributors[0].suffix : combinedSuffix;
 
-export function planSceneExport({ paths, scene, baseline, outputLocation, formValues = [], flatten = null }: {
-  paths: string[]; scene: PdfScene; baseline: PdfScene; outputLocation: OutputLocation; formValues?: FormValue[]; flatten?: PdfFlattenChoice | null;
+/** Plans one export. `outputPath` is the Export As file chosen in the save step; without it the export takes the
+ * default name (original stem + suffix, then -1, -2) in `outputLocation`. */
+export function planSceneExport({ paths, scene, baseline, outputLocation, outputPath = null, formValues = [], flatten = null }: {
+  paths: string[]; scene: PdfScene; baseline: PdfScene; outputLocation: OutputLocation; outputPath?: string | null; formValues?: FormValue[]; flatten?: PdfFlattenChoice | null;
 }): SceneExportPlan {
   const contributors = sceneContributors(scene, baseline, formValues, flatten);
   const redactions = scene.pages.flatMap((page, pageIndex) => (page.redactions ?? []).map(({ rect, color }) => ({ pageIndex, rect, color })));
@@ -55,6 +57,7 @@ export function planSceneExport({ paths, scene, baseline, outputLocation, formVa
     paths,
     scene: redactions.length ? { pages: scene.pages.map(({ redactions: _marks, ...page }) => page) } : scene,
     outputLocation,
+    ...(outputPath ? { outputPath } : {}),
     ...(formValues.length ? { formValues } : {}),
     ...(flatten ? { flatten } : {}),
     ...(redactions.length ? { redactions } : {}),

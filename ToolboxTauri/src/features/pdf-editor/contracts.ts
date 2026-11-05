@@ -143,6 +143,8 @@ export interface PdfSceneExportRequest {
     paths: string[];
     scene: PdfScene;
     outputLocation: OutputLocation;
+    /** Export As: the chosen file. Never replaced; a taken name is numbered. */
+    outputPath?: string;
     formValues?: PdfFormValue[];
     textEdits?: unknown[];
     flatten?: PdfFlattenChoice;
