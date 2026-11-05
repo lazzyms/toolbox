@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { legacyWatermarkPatterns, objectsOnPage, pagesInRange, sceneFromDocument, watermarkMarks, type PdfScene, type SceneObject } from "../src/features/pdf-editor/scene";
+import { legacyWatermarkPatterns, objectsOnPage, pageNumberRect, pageNumberText, pagesInRange, resolvePageTokens, sceneFromDocument, watermarkMarks, type PageNumberFormat, type PdfScene, type SceneObject } from "../src/features/pdf-editor/scene";
 
 test("scene import carries source rotation and page-box baseline", () => {
   const scene = sceneFromDocument({
@@ -71,4 +71,35 @@ test("watermark marks follow the native placement geometry inside the visible ar
   assert.ok(tiles.length > 4);
   assert.ok(tiles.some(({ x, y }) => x === 300 && y === 400));
   assert.deepEqual(watermarkMarks(area, { watermark: { logoPath: "/local/logo.png", opacity: 50 }, watermarkImageSize: { width: 900, height: 100 } } as SceneObject), { width: 180, height: 20, rotation: 0, centers: [{ x: 300, y: 400 }] });
+});
+
+const pageNumbers = (format: PageNumberFormat, start = 1, pageRange = "all"): SceneObject => ({
+  id: "numbers", kind: "pageNumbers", rect: { x: 0, y: 0, width: 612, height: 792 }, text: "", fontSize: 10, color: "#000000", opacity: 1, strokes: [],
+  pageRange, pageNumbers: { format, start, position: "bottom-center", margin: 36 },
+});
+
+test("page tokens resolve every format against the page position and count", () => {
+  assert.equal(resolvePageTokens("Page {page} of {pages} {pagesx}", { page: 2, pages: 9 }), "Page 2 of 9 {pagesx}");
+  const formats: [PageNumberFormat, string][] = [["number", "3"], ["page", "Page 3"], ["page-of-total", "Page 3 of 5"], ["number-of-total", "3 / 5"], ["dashes", "- 3 -"]];
+  for (const [format, expected] of formats) assert.equal(pageNumberText(pageNumbers(format), 2, 5), expected);
+  assert.equal(pageNumberText(pageNumbers("page-of-total", 10), 0, 5), "Page 10 of 14");
+});
+
+test("page numbers follow the final page order after a reorder", () => {
+  const page = (id: string, objects: SceneObject[] = []) => ({ id, sourceIndex: Number(id), width: 612, height: 792, rotation: 0, crop: null, sourceRotation: 0, sourceBox: null, objects });
+  const style = pageNumbers("page-of-total", 1, "2-");
+  const before: PdfScene = { pages: [page("0", [style]), page("1"), page("2")] };
+  const numbered = (scene: PdfScene) => scene.pages.map((item, index) => [item.id, objectsOnPage(scene, index).map(({ object }) => pageNumberText(object, index, scene.pages.length))]);
+  assert.deepEqual(numbered(before), [["0", []], ["1", ["Page 2 of 3"]], ["2", ["Page 3 of 3"]]]);
+  const reordered: PdfScene = { pages: [before.pages[2], before.pages[0], before.pages[1]] };
+  assert.deepEqual(numbered(reordered), [["2", []], ["0", ["Page 2 of 3"]], ["1", ["Page 3 of 3"]]]);
+});
+
+test("page-number placement mirrors the native corners, centres and margin", () => {
+  const area = { x: 10, y: 20, width: 500, height: 600 };
+  const object = pageNumbers("number");
+  const at = (position: NonNullable<SceneObject["pageNumbers"]>["position"]) => pageNumberRect(area, { ...object, pageNumbers: { ...object.pageNumbers!, position } }, "12");
+  assert.deepEqual(at("top-left"), { x: 46, y: 56, width: 11, height: 12 });
+  assert.deepEqual(at("bottom-right"), { x: 10 + 500 - 36 - 11, y: 20 + 600 - 36 - 12, width: 11, height: 12 });
+  assert.deepEqual(at("middle-center"), { x: 10 + (500 - 11) / 2, y: 20 + (600 - 12) / 2, width: 11, height: 12 });
 });

@@ -29,13 +29,23 @@ pub struct SceneObject {
     #[serde(default)] pub italic: bool,
     #[serde(default)] pub align: TextAlign,
     #[serde(default)] pub page_range: Option<String>,
+    #[serde(default)] pub page_numbers: Option<PageNumberOptions>,
 }
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all="kebab-case")]
+pub enum PageNumberFormat { Number, Page, PageOfTotal, NumberOfTotal, Dashes }
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all="kebab-case")]
+pub enum PageNumberPosition { TopLeft, TopCenter, TopRight, MiddleLeft, MiddleCenter, MiddleRight, BottomLeft, BottomCenter, BottomRight }
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all="camelCase")]
+pub struct PageNumberOptions { pub format: PageNumberFormat, pub start: u32, pub position: PageNumberPosition, pub margin: f32 }
 #[derive(Clone, Copy, Debug, Default, Deserialize)]
 #[serde(rename_all="lowercase")]
 pub enum TextAlign { #[default] Left, Center, Right }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all="camelCase")]
-pub enum Kind { Text, Highlight, Shape, Signature, Watermark }
+pub enum Kind { Text, Highlight, Shape, Signature, Watermark, PageNumbers }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all="kebab-case")]
 pub enum Shape { Square, Round, Triangle, Line, DottedLine, ArrowLeft, ArrowRight, ArrowUp, ArrowDown }
@@ -307,25 +317,80 @@ fn page_range_pages(range: &str, page_count: usize) -> Result<Vec<usize>, ToolEr
     Ok(pages.into_iter().collect())
 }
 
-struct TextPlan { placed: Vec<Vec<(usize, usize)>>, layouts: HashMap<(usize, usize), TextLayout> }
+const PAGE_NUMBER_SIZES: std::ops::RangeInclusive<f32> = 8.0..=72.0;
+const PAGE_NUMBER_MAX_MARGIN: f32 = 144.;
+
+impl PageNumberFormat {
+    fn template(self) -> &'static str {
+        match self { Self::Number => "{page}", Self::Page => "Page {page}", Self::PageOfTotal => "Page {page} of {pages}", Self::NumberOfTotal => "{page} / {pages}", Self::Dashes => "- {page} -" }
+    }
+}
+
+/// Mirrors resolvePageTokens in the editor.
+fn page_tokens(template: &str, page: u64, pages: u64) -> String {
+    template.replace("{pages}", &pages.to_string()).replace("{page}", &page.to_string())
+}
+
+fn page_number_options(o: &SceneObject) -> Result<&PageNumberOptions, ToolError> {
+    let options = o.page_numbers.as_ref().ok_or_else(|| ToolError::invalid_input("Choose a page-number format and position."))?;
+    if !PAGE_NUMBER_SIZES.contains(&o.font_size) { return Err(ToolError::invalid_input("Page numbers must be between 8 and 72 pt.")); }
+    if options.start == 0 { return Err(ToolError::invalid_input("Page numbers must start at 1 or higher.")); }
+    if !options.margin.is_finite() || !(0. ..=PAGE_NUMBER_MAX_MARGIN).contains(&options.margin) {
+        return Err(ToolError::invalid_input("The distance from the edge must be between 0 and 2 inches."));
+    }
+    Ok(options)
+}
+
+/// Places a page number of the given size inside the visible area, `margin` points from the chosen edges.
+fn page_number_rect(area: &Rect, options: &PageNumberOptions, width: f32, height: f32) -> Rect {
+    use PageNumberPosition::*;
+    let (fx, fy) = match options.position {
+        TopLeft => (0., 0.), TopCenter => (0.5, 0.), TopRight => (1., 0.),
+        MiddleLeft => (0., 0.5), MiddleCenter => (0.5, 0.5), MiddleRight => (1., 0.5),
+        BottomLeft => (0., 1.), BottomCenter => (0.5, 1.), BottomRight => (1., 1.),
+    };
+    let m = options.margin;
+    Rect { x: area.x + m + (area.width - 2. * m - width) * fx, y: area.y + m + (area.height - 2. * m - height) * fy, width, height }
+}
+
+/// A text layout per object; page numbers have one per page they are drawn on.
+type LayoutKey = (usize, usize, Option<usize>);
+struct TextPlan { placed: Vec<Vec<(usize, usize)>>, layouts: HashMap<LayoutKey, TextLayout> }
+impl TextPlan {
+    fn layout(&self, (origin, index): (usize, usize), page: usize) -> Option<&TextLayout> {
+        self.layouts.get(&(origin, index, Some(page))).or_else(|| self.layouts.get(&(origin, index, None)))
+    }
+}
 
 fn text_plan(scene: &PdfScene) -> Result<TextPlan, ToolError> {
     let mut placed = vec![Vec::new(); scene.pages.len()];
     let mut layouts = HashMap::new();
+    let page_count = scene.pages.len();
     for (origin, page) in scene.pages.iter().enumerate() {
         for (index, o) in page.objects.iter().enumerate() {
-            match (&o.kind, o.page_range.as_deref()) {
-                (Kind::Text | Kind::Watermark, Some(range)) => for target in page_range_pages(range, scene.pages.len())? { placed[target].push((origin, index)); },
-                (_, Some(_)) => return Err(ToolError::invalid_input("Only text boxes and watermarks can be shown on several pages")),
-                _ => placed[origin].push((origin, index)),
-            }
+            let targets = match (&o.kind, o.page_range.as_deref()) {
+                (Kind::Text | Kind::Watermark | Kind::PageNumbers, Some(range)) => page_range_pages(range, page_count)?,
+                (_, Some(_)) => return Err(ToolError::invalid_input("Only text boxes, watermarks and page numbers can be shown on several pages")),
+                _ => vec![origin],
+            };
+            for &target in &targets { placed[target].push((origin, index)); }
             match o.kind {
-                Kind::Text => { layouts.insert((origin, index), layout_text(o)?); }
+                Kind::Text => { layouts.insert((origin, index, None), layout_text(o)?); }
                 Kind::Watermark => {
                     let options = watermark_options(o)?;
                     if let Some(path) = &options.logo_path { check_watermark_image(path)?; }
                     // Laid out at 1 pt without wrapping; each page scales it to its own size.
-                    if let Some(text) = options.text() { layouts.insert((origin, index), layout_lines(text_font(o)?, text, 1., f32::INFINITY)?); }
+                    if let Some(text) = options.text() { layouts.insert((origin, index, None), layout_lines(text_font(o)?, text, 1., f32::INFINITY)?); }
+                }
+                Kind::PageNumbers => {
+                    let options = page_number_options(o)?;
+                    let font = text_font(o)?;
+                    // Numbers follow the final page order: the page at `target` shows start + target.
+                    let start = u64::from(options.start);
+                    for &target in &targets {
+                        let text = page_tokens(options.format.template(), start + target as u64, start + page_count as u64 - 1);
+                        layouts.insert((origin, index, Some(target)), layout_lines(font, &text, o.font_size, f32::INFINITY)?);
+                    }
                 }
                 _ => {}
             }
@@ -345,7 +410,7 @@ fn subset_tag(gids: &[u16]) -> String {
 }
 
 /// Embeds one subset Type0 font per bundled face and returns the new glyph id of each source glyph.
-fn embed_text_fonts(doc: &mut Document, layouts: &HashMap<(usize, usize), TextLayout>) -> Result<HashMap<&'static str, (ObjectId, subsetter::GlyphRemapper)>, String> {
+fn embed_text_fonts(doc: &mut Document, layouts: &HashMap<LayoutKey, TextLayout>) -> Result<HashMap<&'static str, (ObjectId, subsetter::GlyphRemapper)>, String> {
     let mut used: std::collections::BTreeMap<&'static str, (TextFont, std::collections::BTreeMap<u16, char>)> = Default::default();
     let mut keys: Vec<_> = layouts.keys().copied().collect();
     keys.sort();
@@ -396,14 +461,13 @@ fn embed_text_fonts(doc: &mut Document, layouts: &HashMap<(usize, usize), TextLa
     Ok(fonts)
 }
 
-fn text_content(o: &SceneObject, layout: &TextLayout, resource: &str, remapper: &subsetter::GlyphRemapper) -> String {
-    let r = &o.rect;
+fn text_content(r: &Rect, align: TextAlign, font_size: f32, layout: &TextLayout, resource: &str, remapper: &subsetter::GlyphRemapper) -> String {
     let slant = if layout.font.oblique { SYNTHETIC_OBLIQUE } else { 0. };
-    let mut content = format!("{} {} {} {} re W n\nBT /{resource} {} Tf\n", r.x, r.y, r.width, r.height, o.font_size);
+    let mut content = format!("{} {} {} {} re W n\nBT /{resource} {} Tf\n", r.x, r.y, r.width, r.height, font_size);
     for (index, line) in layout.lines.iter().enumerate() {
         if line.glyphs.is_empty() { continue; }
-        let x = r.x + match o.align { TextAlign::Left => 0., TextAlign::Center => (r.width - line.width) / 2., TextAlign::Right => r.width - line.width };
-        let y = r.y + layout.first_baseline + index as f32 * o.font_size * TEXT_LINE_HEIGHT;
+        let x = r.x + match align { TextAlign::Left => 0., TextAlign::Center => (r.width - line.width) / 2., TextAlign::Right => r.width - line.width };
+        let y = r.y + layout.first_baseline + index as f32 * font_size * TEXT_LINE_HEIGHT;
         let glyphs: String = line.glyphs.iter().map(|(gid, _)| format!("{:04X}", remapper.get(*gid).unwrap_or(0))).collect();
         content.push_str(&format!("1 0 {slant} -1 {x} {y} Tm <{glyphs}> Tj\n"));
     }
@@ -957,7 +1021,7 @@ fn apply_overlays(doc:&mut Document, scene:&PdfScene, OverlayPlan { preflight, i
             font_names.insert(*resource, name);
         }
         let mut text_resources = HashMap::new();
-        for key in placed { if let Some(layout) = text.layouts.get(key) {
+        for key in placed { if let Some(layout) = text.layout(*key, page_index) {
             if text_resources.contains_key(layout.font.name) { continue; }
             let name = next_resource_name(&effective_fonts, "Font", &format!("SceneText{}", layout.font.name.replace('-', "")))?;
             effective_fonts.set(name.as_str(), Object::Null);
@@ -1051,12 +1115,19 @@ fn apply_overlays(doc:&mut Document, scene:&PdfScene, OverlayPlan { preflight, i
                     }
                 },
                 Kind::Text=>{
-                    let layout = &text.layouts[key];
-                    content.push_str(&text_content(o, layout, &text_resources[layout.font.name], &text_fonts[layout.font.name].1));
+                    let layout = text.layout(*key, page_index).ok_or("Text layout disappeared")?;
+                    content.push_str(&text_content(&o.rect, o.align, o.font_size, layout, &text_resources[layout.font.name], &text_fonts[layout.font.name].1));
+                },
+                Kind::PageNumbers=>{
+                    let options = o.page_numbers.as_ref().ok_or("Page-number options disappeared")?;
+                    let layout = text.layout(*key, page_index).ok_or("Page-number layout disappeared")?;
+                    let width = layout.lines.iter().map(|line| line.width).fold(0., f32::max);
+                    let rect = page_number_rect(&area, options, width, o.font_size * TEXT_LINE_HEIGHT);
+                    content.push_str(&text_content(&rect, TextAlign::Left, o.font_size, layout, &text_resources[layout.font.name], &text_fonts[layout.font.name].1));
                 },
                 Kind::Watermark=>{
                     let options = watermark.ok_or("Watermark options disappeared")?;
-                    let layout = text.layouts.get(key);
+                    let layout = text.layout(*key, page_index);
                     let picture = pictures.get(key).copied();
                     let size = watermark_size(options, &area, layout, picture.map(|(_, size)| size));
                     let mark = match (layout, picture) {
@@ -1435,7 +1506,7 @@ mod tests {
             strokes:vec![vec![Point{x:0.,y:0.5},Point{x:0.5,y:0.},Point{x:1.,y:1.}]], shape:None, highlight_mode:None,
             signature_mode:None, signature_path:None, font_family:None,
             watermark: matches!(kind, Kind::Watermark).then(|| text_watermark("LOCAL")), layer: Layer::Front,
-            bold:false, italic:false, align:TextAlign::Left, page_range:None, kind }
+            bold:false, italic:false, align:TextAlign::Left, page_range:None, page_numbers:None, kind }
     }
     fn text_watermark(text: &str) -> WatermarkOptions {
         WatermarkOptions { text: Some(text.into()), logo_path: None, size: None, opacity: 30, color: Some("#0000FF".into()), position: None, rotation: 0. }
@@ -2226,7 +2297,7 @@ mod tests {
         for page in &pages[1..] { assert!(String::from_utf8_lossy(&doc.get_page_content(*page)).contains("/SceneTextNotoSansRegular 20 Tf")); }
 
         let mut highlight = object(Kind::Highlight); highlight.page_range = Some("1".into());
-        assert_eq!(compose(&input, &text_scene(vec![highlight])).unwrap_err(), "Only text boxes and watermarks can be shown on several pages");
+        assert_eq!(compose(&input, &text_scene(vec![highlight])).unwrap_err(), "Only text boxes, watermarks and page numbers can be shown on several pages");
     }
 
     #[test]
@@ -2243,7 +2314,7 @@ mod tests {
         let remapper = subsetter::GlyphRemapper::new();
         for (align, offset) in [(TextAlign::Left, 0.), (TextAlign::Center, (o.rect.width - width("gamma")) / 2.), (TextAlign::Right, o.rect.width - width("gamma"))] {
             o.align = align;
-            let content = text_content(&o, &layout, "F", &remapper);
+            let content = text_content(&o.rect, o.align, o.font_size, &layout, "F", &remapper);
             let y = o.rect.y + layout.first_baseline + 20. * TEXT_LINE_HEIGHT;
             assert!(content.contains(&format!("1 0 0 -1 {} {y} Tm", o.rect.x + offset)), "{content}");
         }
@@ -2429,5 +2500,84 @@ mod tests {
         assert_ne!(first.output_paths()[0], second.output_paths()[0]);
         assert_eq!(fs::read(&first.output_paths()[0]).unwrap(), fs::read(&second.output_paths()[0]).unwrap());
         assert_eq!(fs::read(&input).unwrap(), { let mut fresh = temp.0.join("fresh.pdf"); page_text_fixture(&fresh); let bytes = fs::read(&fresh).unwrap(); fresh.pop(); bytes }, "the original is not modified");
+    }
+
+    fn page_number_object(format: PageNumberFormat, position: PageNumberPosition, start: u32, range: &str) -> SceneObject {
+        SceneObject { font_size: 12., color: "#202020".into(), opacity: 1., strokes: vec![], page_range: Some(range.into()),
+            page_numbers: Some(PageNumberOptions { format, start, position, margin: 36. }), ..object(Kind::PageNumbers) }
+    }
+    fn page_words(extractor: &Path, path: &Path, page: usize) -> String {
+        let output = Command::new(extractor).args(["-enc", "UTF-8", "-f"]).arg(page.to_string()).arg("-l").arg(page.to_string()).arg(path).arg("-").output().unwrap();
+        String::from_utf8(output.stdout).unwrap().split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    #[test]
+    fn page_numbers_follow_the_final_page_order_and_clamp_ranges() {
+        let Some(extractor) = text_extractor() else { return };
+        let temp = TempDir::new().unwrap(); let input = temp.0.join("source.pdf"); page_text_fixture(&input);
+        // Organize moved the first source page to the end; the number object stays on its origin page.
+        let mut scene = text_scene(vec![page_number_object(PageNumberFormat::PageOfTotal, PageNumberPosition::BottomCenter, 1, "2-99")]);
+        scene.pages.rotate_left(1);
+        let outcome = export_text(&input, scene);
+        assert!(outcome.error().is_none(), "{:?}", outcome.error());
+        let output = &outcome.output_paths()[0];
+        let pages: Vec<_> = (1..=3).map(|page| page_words(&extractor, output, page)).collect();
+        assert_eq!(pages[0], "Second page text", "page 1 is outside 2-99");
+        assert_eq!(pages[1], "Page 2 of 3");
+        assert_eq!(pages[2], "First page text Page 3 of 3");
+    }
+
+    #[test]
+    fn page_number_formats_positions_and_start_numbers_render_as_configured() {
+        if text_extractor().is_none() { return; }
+        use PageNumberFormat::*; use PageNumberPosition::*;
+        let temp = TempDir::new().unwrap(); let input = temp.0.join("source.pdf"); page_text_fixture(&input);
+        let cases = [
+            (Number, TopLeft, 1, "3"), (Page, TopCenter, 5, "Page 7"), (PageOfTotal, TopRight, 1, "Page 3 of 3"),
+            (NumberOfTotal, MiddleLeft, 10, "12 / 12"), (Dashes, MiddleCenter, 1, "- 3 -"), (Number, MiddleRight, 1, "3"),
+            (Page, BottomLeft, 1, "Page 3"), (PageOfTotal, BottomCenter, 3, "Page 5 of 5"), (Number, BottomRight, 99, "101"),
+        ];
+        for (format, position, start, expected) in cases {
+            let outcome = export_text(&input, text_scene(vec![page_number_object(format, position, start, "3")]));
+            assert!(outcome.error().is_none(), "{:?}", outcome.error());
+            // The blank third page carries only the number.
+            let runs = extract_text_runs(&outcome.output_paths()[0], 3, 612., 792., Instant::now() + super::super::PDF_TEXT_TIMEOUT).unwrap();
+            assert_eq!(runs.iter().map(|run| run.text.as_str()).collect::<Vec<_>>().join(" "), expected, "{position:?}");
+            let left = runs.iter().map(|run| run.x).fold(f32::MAX, f32::min);
+            let right = runs.iter().map(|run| run.x + run.width).fold(0., f32::max);
+            let top = runs.iter().map(|run| run.y).fold(f32::MAX, f32::min);
+            let bottom = runs.iter().map(|run| run.y + run.height).fold(0., f32::max);
+            let (fx, fy) = match position { TopLeft => (0, 0), TopCenter => (1, 0), TopRight => (2, 0), MiddleLeft => (0, 1), MiddleCenter => (1, 1), MiddleRight => (2, 1), BottomLeft => (0, 2), BottomCenter => (1, 2), BottomRight => (2, 2) };
+            let near = |a: f32, b: f32| (a - b).abs() < 4.;
+            match fx { 0 => assert!(near(left, 36.), "{position:?} left {left}"), 1 => assert!(near((left + right) / 2., 306.), "{position:?} centre"), _ => assert!(near(right, 576.), "{position:?} right {right}") }
+            match fy { 0 => assert!(near(top, 36.), "{position:?} top {top}"), 1 => assert!(near((top + bottom) / 2., 396.), "{position:?} middle"), _ => assert!(near(bottom, 756.), "{position:?} bottom {bottom}") }
+        }
+    }
+
+    #[test]
+    fn page_numbers_refuse_out_of_range_settings_in_plain_language() {
+        let temp = TempDir::new().unwrap(); let input = temp.0.join("source.pdf"); page_text_fixture(&input);
+        let base = || page_number_object(PageNumberFormat::Number, PageNumberPosition::BottomRight, 1, "all");
+        let refusal = |o: SceneObject| export_text(&input, text_scene(vec![o])).error().map(|e| e.to_string()).unwrap_or_default();
+        assert!(refusal(SceneObject { font_size: 7., ..base() }).contains("between 8 and 72 pt"));
+        assert!(refusal(SceneObject { font_size: 73., ..base() }).contains("between 8 and 72 pt"));
+        let mut zero = base(); zero.page_numbers.as_mut().unwrap().start = 0;
+        assert!(refusal(zero).contains("start at 1 or higher"));
+        let mut far = base(); far.page_numbers.as_mut().unwrap().margin = 145.;
+        assert!(refusal(far).contains("between 0 and 2 inches"));
+        assert!(refusal(SceneObject { page_numbers: None, ..base() }).contains("Choose a page-number format"));
+        assert!(refusal(SceneObject { page_range: Some("9-".into()), ..base() }).contains("not in this document"));
+        assert_eq!(fs::read_dir(&temp.0).unwrap().count(), 1, "refusals write nothing");
+    }
+
+    #[test]
+    fn page_number_exports_are_byte_identical_across_runs() {
+        let temp = TempDir::new().unwrap(); let input = temp.0.join("source.pdf"); page_text_fixture(&input);
+        let scene = || { let mut s = text_scene(vec![page_number_object(PageNumberFormat::PageOfTotal, PageNumberPosition::BottomRight, 4, "all")]); s.pages.swap(0, 1); s };
+        let first = export_text(&input, scene());
+        let second = export_text(&input, scene());
+        assert!(first.error().is_none() && second.error().is_none(), "{:?} {:?}", first.error(), second.error());
+        assert_ne!(first.output_paths()[0], second.output_paths()[0]);
+        assert_eq!(fs::read(&first.output_paths()[0]).unwrap(), fs::read(&second.output_paths()[0]).unwrap());
     }
 }

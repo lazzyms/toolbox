@@ -17,7 +17,7 @@ import { SceneCanvas } from '../features/pdf-editor/SceneCanvas';
 import { subToolInspectors } from '../features/pdf-editor/SubToolInspectors';
 import type { SubToolInspectorProps } from '../features/pdf-editor/SubToolInspectors';
 import { planSceneExport, sceneContributors } from '../features/pdf-editor/subtools';
-import { objectsOnPage, pagesInRange, sceneFromDocument, visibleBounds } from '../features/pdf-editor/scene';
+import { objectsOnPage, pageNumberRect, pageNumberText, pagesInRange, sceneFromDocument, visibleBounds } from '../features/pdf-editor/scene';
 import type { PdfScene, SceneObject, ScenePage, ScenePreview, SceneRect, SceneShape, SceneTool, SignatureMode, TextStyle } from '../features/pdf-editor/scene';
 import { PREVIEW_CACHE_MAX_ENTRIES, PREVIEW_RENDER_SETTINGS, createPreviewCache, pdfEditorErrorMessage, previewCacheKey, requestWithGeneration } from './pdfPreviewHelpers';
 import type { GenerationState } from './pdfPreviewHelpers';
@@ -32,20 +32,22 @@ const tools: { id: SceneTool; label: string; glyph: string }[] = [
   { id: 'select', label: 'Select', glyph: '↖' }, { id: 'text', label: 'Text', glyph: 'T' },
   { id: 'highlight', label: 'Highlight', glyph: '▰' }, { id: 'shape', label: 'Shape', glyph: '□' },
   { id: 'signature', label: 'Signature', glyph: '〰' }, { id: 'watermark', label: 'Watermark', glyph: 'W' },
+  { id: 'pageNumbers', label: 'Page numbers', glyph: '#' },
   { id: 'crop', label: 'Crop', glyph: '⌗' },
 ];
 const toolFlagBySceneTool: Record<SceneTool, AtomicToolId> = {
   select: 'pdf-edit', text: 'pdf-edit', highlight: 'pdf-edit', shape: 'pdf-edit',
-  signature: 'pdf-sign', watermark: 'pdf-watermark', crop: 'pdf-crop',
+  signature: 'pdf-sign', watermark: 'pdf-watermark', pageNumbers: 'pdf-page-numbers', crop: 'pdf-crop',
 };
 const toolFlagByObjectKind: Record<SceneObject['kind'], AtomicToolId> = {
   text: 'pdf-edit', highlight: 'pdf-edit', shape: 'pdf-edit',
-  signature: 'pdf-sign', watermark: 'pdf-watermark',
+  signature: 'pdf-sign', watermark: 'pdf-watermark', pageNumbers: 'pdf-page-numbers',
 };
 const toolGuidance: Record<SceneTool, string> = {
   select: 'Select, move, or resize an object.', text: 'Drag to add text. Double-click text to edit it.',
   highlight: 'Drag across text or draw a highlight area.', shape: 'Drag to draw a shape.',
   signature: 'Choose a signature, then drag its box onto the page.', watermark: 'Add one watermark to every page you choose.',
+  pageNumbers: 'Number every page you choose.',
   crop: 'Drag a rectangle on the page to crop it.',
 };
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
@@ -102,7 +104,7 @@ export const PDFEditorWorkspaceView = ({
 }) => {
   const availability = useToolAvailability();
   const session = useRef<{ path: string; scene: PdfScene; baseline: PdfScene } | null>(null);
-  const requestedTool: SceneTool = utility.id === 'pdf-crop' ? 'crop' : utility.id === 'pdf-watermark' ? 'watermark' : utility.id === 'pdf-sign' ? 'signature' : 'select';
+  const requestedTool: SceneTool = utility.id === 'pdf-crop' ? 'crop' : utility.id === 'pdf-watermark' ? 'watermark' : utility.id === 'pdf-sign' ? 'signature' : utility.id === 'pdf-page-numbers' ? 'pageNumbers' : 'select';
   const initialTool = availability.allows(toolFlagBySceneTool[requestedTool])
     ? requestedTool
     : tools.find((item) => availability.allows(toolFlagBySceneTool[item.id]))?.id ?? null;
@@ -176,8 +178,15 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
   const scene = history.present;
   const page = scene.pages.find((item) => item.id === currentId) ?? scene.pages[0];
   const currentIndex = scene.pages.findIndex((item) => item.id === page?.id);
-  const watermarks = page ? objectsOnPage(scene, currentIndex).filter(({ object }) => object.kind === 'watermark').map(({ object }) => object) : [];
-  const selected = page?.objects.find((object) => object.id === selectedId) ?? watermarks.find((object) => object.id === selectedId);
+  // Page numbers are resolved against the current page order, so a reorder renumbers them.
+  const rangedObjects = page ? objectsOnPage(scene, currentIndex).flatMap(({ object }) => {
+    if (object.kind === 'watermark') return [object];
+    if (object.kind !== 'pageNumbers') return [];
+    const text = pageNumberText(object, currentIndex, scene.pages.length);
+    return [{ ...object, text, rect: pageNumberRect(visibleBounds(page), object, text) }];
+  }) : [];
+  // Prefer the copy drawn on this page, which carries its resolved page number.
+  const selected = rangedObjects.find((object) => object.id === selectedId) ?? page?.objects.find((object) => object.id === selectedId);
   const serializedScene = JSON.stringify(scene);
   const previewKey = path ? previewCacheKey(path, currentIndex, serializedScene, PREVIEW_RENDER_SETTINGS) : null;
   const exactPreview = preview?.key === previewKey ? preview.value : null;
@@ -355,6 +364,13 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
     commitPage({ ...page, objects: [...page.objects, object] });
     setSelectedId(object.id); setWatermarkPictureError(null);
   };
+  const addPageNumbers = () => {
+    if (!page || !availability.allows('pdf-page-numbers')) return;
+    const object: SceneObject = { ...makeObject('pageNumbers', visibleBounds(page)), text: '', fontSize: 9, color: readColorToken(colorTokens.documentText), opacity: 1,
+      fontFamily: 'Noto Sans', pageNumbers: { format: 'page-of-total', start: 1, position: 'bottom-center', margin: 36 }, layer: 'front', pageRange: 'all' };
+    commitPage({ ...page, objects: [...page.objects, object] });
+    setSelectedId(object.id);
+  };
   const chooseWatermarkPicture = async () => {
     if (selected?.kind !== 'watermark' || !selected.watermark || !availability.allows('pdf-watermark')) return;
     setWatermarkPictureError(null);
@@ -385,8 +401,8 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
   };
   const deletePages = () => {
     if (!availability.allows('pdf-remove-pages') || targets.length >= scene.pages.length) return;
-    // A range-applied watermark outlives the page that stores it.
-    const kept = scene.pages.filter((item) => targets.includes(item.id)).flatMap((item) => item.objects.filter((object) => object.kind === 'watermark' && object.pageRange != null));
+    // A range-applied watermark or page-number style outlives the page that stores it.
+    const kept = scene.pages.filter((item) => targets.includes(item.id)).flatMap((item) => item.objects.filter((object) => (object.kind === 'watermark' || object.kind === 'pageNumbers') && object.pageRange != null));
     const next = scene.pages.filter((item) => !targets.includes(item.id)).map((item, index) => index === 0 && kept.length ? { ...item, objects: [...item.objects, ...kept] } : item);
     commit({ pages: next }); setCurrentId(next[Math.min(currentIndex, next.length - 1)].id); setSelectedPages([]); setSelectedId(null);
   };
@@ -406,13 +422,6 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
     if (to < 0 || to >= scene.pages.length) return;
     const next = [...scene.pages]; [next[currentIndex], next[to]] = [next[to], next[currentIndex]]; commit({ pages: next });
   };
-  const pageNumbers = () => {
-    if (!availability.allows('pdf-page-numbers')) return;
-    commit({ pages: scene.pages.map((item, index) => {
-    const b = visibleBounds(item);
-    return { ...item, objects: [...item.objects, { ...makeObject('text', { x: b.x + b.width / 2 - 20, y: b.y + Math.max(0, b.height - 30), width: Math.min(40, b.width), height: Math.min(20, b.height) }), text: String(index + 1), fontSize: 12 }] };
-    }) });
-  };
   const dirty = document && sceneContributors(scene, sceneFromDocument(document)).length > 0;
   const endGroup = () => { group.current = null; };
   const selectedKind = selected?.kind ?? tool;
@@ -427,14 +436,15 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
     fontSize, setFontSize, textStyle, setTextStyle, shape, setShape,
     signatureMode, setSignatureMode, signaturePath, signaturePreview, signatureText, setSignatureText,
     signatureTextDraft, setSignatureTextDraft, signatureFont, setSignatureFont, chooseSignatureImage,
-    pageCount: scene.pages.length, addWatermark, chooseWatermarkPicture, watermarkPictureError,
+    pageCount: scene.pages.length, addWatermark, chooseWatermarkPicture, watermarkPictureError, addPageNumbers,
   } : null;
-  const watermarkCounts = new Array<number>(scene.pages.length).fill(0);
+  const ranged = (object: SceneObject) => object.kind === 'watermark' || object.kind === 'pageNumbers';
+  const rangedCounts = new Array<number>(scene.pages.length).fill(0);
   scene.pages.forEach((item, origin) => item.objects.forEach((object) => {
-    if (object.kind !== 'watermark') return;
-    try { for (const index of object.pageRange == null ? [origin] : pagesInRange(object.pageRange, scene.pages.length)) watermarkCounts[index] += 1; } catch { /* The inspector reports the range. */ }
+    if (!ranged(object)) return;
+    try { for (const index of object.pageRange == null ? [origin] : pagesInRange(object.pageRange, scene.pages.length)) rangedCounts[index] += 1; } catch { /* The inspector reports the range. */ }
   }));
-  const marks = (index: number) => scene.pages[index].objects.filter((object) => object.kind !== 'watermark').length + watermarkCounts[index];
+  const marks = (index: number) => scene.pages[index].objects.filter((object) => !ranged(object)).length + rangedCounts[index];
   const Fields = selectedKind ? subToolInspectors[selectedKind]?.Fields : undefined;
   const Guide = tool ? subToolInspectors[tool]?.Guide : undefined;
 
@@ -486,17 +496,17 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
             textRuns={page.sourceIndex === null ? [] : document?.pages[page.sourceIndex]?.textRuns ?? []}
             renderedPreview={exactPreview} tool={tool ?? 'select'} selectedId={selectedId} zoom={zoom} onSelect={(id) => { endGroup(); setSelectedId(id); }}
             onCommit={(next) => { if (canEditCanvas) commitPage(next); }} makeObject={makeObject}
-            watermarks={watermarks} onWatermarkChange={(id, patch) => { if (canEditCanvas) changeObject(id, patch, 'watermark-position'); }} />
+            rangedObjects={rangedObjects} onRangedChange={(id, patch) => { if (canEditCanvas) changeObject(id, patch, 'ranged-position'); }} />
         </div>
         <aside className="scene-inspector" aria-label="PDF editor inspector">
           <Card role="region" aria-label="Properties" className="scene-inspector-panel gap-4 overflow-y-auto py-4">
             <CardHeader className="gap-1 px-4 py-0">
-              <CardTitle>{selected ? `${selected.kind[0].toUpperCase()}${selected.kind.slice(1)} properties` : 'Properties'}</CardTitle>
-              <CardDescription>{selected ? 'Adjust the selected item.' : tool === 'select' ? 'Select a mark to edit its properties.' : tool ? `New ${tool} settings` : 'No page markup tools are enabled.'}</CardDescription>
+              <CardTitle>{selected ? selected.kind === 'pageNumbers' ? 'Page numbers' : `${selected.kind[0].toUpperCase()}${selected.kind.slice(1)} properties` : 'Properties'}</CardTitle>
+              <CardDescription>{selected?.kind === 'pageNumbers' ? 'Numbers each page you choose.' : selected ? 'Adjust the selected item.' : tool === 'select' ? 'Select a mark to edit its properties.' : tool === 'pageNumbers' ? 'Numbers each page you choose.' : tool ? `New ${tool} settings` : 'No page markup tools are enabled.'}</CardDescription>
             </CardHeader>
             <CardContent className="scene-inspector-content flex flex-col gap-3 px-4">
               {Fields && inspector && <Fields {...inspector} />}
-              {selectedKind !== 'watermark' && (selected || (tool !== null && !['select', 'crop'].includes(tool))) && <>
+              {selectedKind !== 'watermark' && (selected || (tool !== null && !['select', 'crop', 'pageNumbers'].includes(tool))) && <>
                 <div className="scene-inspector-field"><Label htmlFor="scene-object-color">Object color</Label>
                   <input id="scene-object-color" type="color" aria-label="Object color" value={activeColor} onChange={(event) => {
                     if (selected) updateObject({ color: event.target.value }, 'color'); else if (tool === 'highlight') setHighlightColor(event.target.value); else setColor(event.target.value);
@@ -509,8 +519,8 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
                 </div>
               </>}
               {selectedEnabled && selected && <div className="scene-inspector-actions">
-                <Button variant="destructive" size="sm" onClick={() => changeObject(selected.id, null, 'remove')}>{selected.kind === 'watermark' ? 'Remove watermark' : 'Delete object'}</Button>
-                {selected.kind !== 'watermark' && <Button variant="outline" size="sm" onClick={() => { if (availability.allows(toolFlagByObjectKind[selected.kind])) commitPage({ ...page, objects: [...page.objects.filter((item) => item.id !== selected.id), selected] }); }}>Bring to front</Button>}
+                <Button variant="destructive" size="sm" onClick={() => changeObject(selected.id, null, 'remove')}>{selected.kind === 'watermark' ? 'Remove watermark' : selected.kind === 'pageNumbers' ? 'Remove page numbers' : 'Delete object'}</Button>
+                {!ranged(selected) && <Button variant="outline" size="sm" onClick={() => { if (availability.allows(toolFlagByObjectKind[selected.kind])) commitPage({ ...page, objects: [...page.objects.filter((item) => item.id !== selected.id), selected] }); }}>Bring to front</Button>}
               </div>}
               {Guide && inspector && <Guide {...inspector} />}
               {tool === 'select' && !selected && <p className="scene-property-note">Select an object on the page to move it or adjust its properties.</p>}
@@ -530,7 +540,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
         {availability.allows('pdf-organize') && <><Button variant="ghost" size="sm" aria-label="Rotate selected pages" onClick={() => { if (availability.allows('pdf-organize')) commit({ pages: scene.pages.map((item) => targets.includes(item.id) ? { ...item, rotation: (item.rotation + 90) % 360 } : item) }); }}>Rotate ↻</Button>
         <Button variant="ghost" size="sm" aria-label="Move page earlier" disabled={currentIndex <= 0} onClick={() => shiftPage(-1)}>Move ←</Button>
         <Button variant="ghost" size="sm" aria-label="Move page later" disabled={currentIndex >= scene.pages.length - 1} onClick={() => shiftPage(1)}>Move →</Button></>}
-        {availability.allows('pdf-page-numbers') && <Button variant="ghost" size="sm" onClick={pageNumbers}>Page numbers</Button>}<span className="scene-original-note">Original unchanged</span>
+        <span className="scene-original-note">Original unchanged</span>
       </div>
     </>}
   </section>;

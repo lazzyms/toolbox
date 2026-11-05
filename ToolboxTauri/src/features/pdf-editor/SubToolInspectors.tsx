@@ -10,7 +10,7 @@ import { ToggleGroup, ToggleGroupItem } from '../../components/ui/toggle-group';
 import { useToolAvailability } from '../../ToolAvailabilityContext';
 import type { WatermarkOptions, WatermarkPlacement } from '../../contracts';
 import { pagesInRange, WATERMARK_DEFAULT_SIZE } from './scene';
-import type { SceneObject, ScenePage, SceneShape, SceneTool, SignatureMode, TextAlign, TextFontFamily, TextStyle } from './scene';
+import type { PageNumberFormat, PageNumberOptions, PageNumberPosition, SceneObject, ScenePage, SceneShape, SceneTool, SignatureMode, TextAlign, TextFontFamily, TextStyle } from './scene';
 import type { SubToolId } from './subtools';
 
 export interface SubToolInspectorProps {
@@ -34,6 +34,7 @@ export interface SubToolInspectorProps {
   addWatermark: () => void;
   chooseWatermarkPicture: () => Promise<void>;
   watermarkPictureError: string | null;
+  addPageNumbers: () => void;
 }
 type Panel = ComponentType<SubToolInspectorProps>;
 
@@ -152,16 +153,9 @@ const SignatureFields: Panel = (props) => {
   </>;
 };
 
-const WatermarkFields: Panel = ({ selected, updateObject, endGroup, pageNumber, pageCount, chooseWatermarkPicture, watermarkPictureError }) => {
+// The pages a watermark or page-number style is drawn on, and how many that is.
+function PageRangeFields({ selected, updateObject, pageNumber, pageCount, noun }: Pick<SubToolInspectorProps, 'updateObject' | 'pageNumber' | 'pageCount'> & { selected: SceneObject; noun: string }) {
   const [rangeError, setRangeError] = useState<string | null>(null);
-  const [customAngle, setCustomAngle] = useState(false);
-  if (selected?.kind !== 'watermark' || !selected.watermark) return null;
-  const options = selected.watermark;
-  const picture = options.logoPath !== undefined;
-  const update = (patch: Partial<WatermarkOptions>, field: string) => updateObject({ watermark: { ...options, ...patch } }, field);
-  const rotation = options.rotation ?? 0;
-  const angle = customAngle ? 'custom' : Object.keys(watermarkAngles).find((key) => watermarkAngles[key] === rotation) ?? 'custom';
-  const position = typeof options.position === 'object' ? 'moved' : options.position ?? 'center';
   const range = selected.pageRange ?? 'all';
   const rangeChoice = range === 'all' ? 'all' : range === '2-' ? 'skip-first' : 'pages';
   let shownOn: number | null = null;
@@ -172,6 +166,33 @@ const WatermarkFields: Panel = ({ selected, updateObject, endGroup, pageNumber, 
     setRangeError(null);
     if (next !== range) updateObject({ pageRange: next }, 'page-range');
   };
+  return <>
+    <fieldset className="scene-inspector-field">
+      <legend className="mb-1.5 text-sm font-medium">Pages</legend>
+      <RadioGroup className="gap-1.5" value={rangeChoice}
+        onValueChange={(value) => { setRangeError(null); updateObject({ pageRange: value === 'all' ? 'all' : value === 'skip-first' ? '2-' : String(pageNumber) }, 'page-range'); }}>
+        <span className="settings-radio"><RadioGroupItem id="scene-range-all" value="all" /><Label htmlFor="scene-range-all">All {pageCount} page{pageCount === 1 ? '' : 's'}</Label></span>
+        <span className="settings-radio"><RadioGroupItem id="scene-range-skip-first" value="skip-first" disabled={pageCount < 2} /><Label htmlFor="scene-range-skip-first">Skip the first page</Label></span>
+        <span className="settings-radio"><RadioGroupItem id="scene-range-pages" value="pages" /><Label htmlFor="scene-range-pages">These pages</Label></span>
+      </RadioGroup>
+      <Input key={`${selected.id}:${range}`} aria-label="Pages to include" placeholder="For example 2-10, 12" aria-invalid={Boolean(rangeError)}
+        defaultValue={rangeChoice === 'pages' ? range : ''} disabled={rangeChoice !== 'pages'}
+        onBlur={(event) => commitRange(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') commitRange(event.currentTarget.value); }} />
+      {rangeError && <p role="alert" className="scene-error">{rangeError}</p>}
+    </fieldset>
+    {shownOn !== null && <p className="scene-property-note">{shownOn === pageCount ? `${noun} added to all ${pageCount} page${pageCount === 1 ? '' : 's'}.` : `${noun} added to ${shownOn} of ${pageCount} pages.`}</p>}
+  </>;
+}
+
+const WatermarkFields: Panel = ({ selected, updateObject, endGroup, pageNumber, pageCount, chooseWatermarkPicture, watermarkPictureError }) => {
+  const [customAngle, setCustomAngle] = useState(false);
+  if (selected?.kind !== 'watermark' || !selected.watermark) return null;
+  const options = selected.watermark;
+  const picture = options.logoPath !== undefined;
+  const update = (patch: Partial<WatermarkOptions>, field: string) => updateObject({ watermark: { ...options, ...patch } }, field);
+  const rotation = options.rotation ?? 0;
+  const angle = customAngle ? 'custom' : Object.keys(watermarkAngles).find((key) => watermarkAngles[key] === rotation) ?? 'custom';
+  const position = typeof options.position === 'object' ? 'moved' : options.position ?? 'center';
   return <>
     <ToggleGroup type="single" variant="outline" size="sm" className="w-full" aria-label="Watermark type" value={picture ? 'picture' : 'text'}
       onValueChange={(value) => {
@@ -243,21 +264,66 @@ const WatermarkFields: Panel = ({ selected, updateObject, endGroup, pageNumber, 
         <ToggleGroupItem value="behind" className="flex-1">Behind content</ToggleGroupItem>
       </ToggleGroup>
     </div>
-    <fieldset className="scene-inspector-field">
-      <legend className="mb-1.5 text-sm font-medium">Pages</legend>
-      <RadioGroup className="gap-1.5" value={rangeChoice}
-        onValueChange={(value) => { setRangeError(null); updateObject({ pageRange: value === 'all' ? 'all' : value === 'skip-first' ? '2-' : String(pageNumber) }, 'page-range'); }}>
-        <span className="settings-radio"><RadioGroupItem id="scene-watermark-all" value="all" /><Label htmlFor="scene-watermark-all">All {pageCount} page{pageCount === 1 ? '' : 's'}</Label></span>
-        <span className="settings-radio"><RadioGroupItem id="scene-watermark-skip-first" value="skip-first" disabled={pageCount < 2} /><Label htmlFor="scene-watermark-skip-first">Skip the first page</Label></span>
-        <span className="settings-radio"><RadioGroupItem id="scene-watermark-pages" value="pages" /><Label htmlFor="scene-watermark-pages">These pages</Label></span>
-      </RadioGroup>
-      <Input key={`${selected.id}:${range}`} aria-label="Pages to include" placeholder="For example 2-10, 12" aria-invalid={Boolean(rangeError)}
-        defaultValue={rangeChoice === 'pages' ? range : ''} disabled={rangeChoice !== 'pages'}
-        onBlur={(event) => commitRange(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') commitRange(event.currentTarget.value); }} />
-      {rangeError && <p role="alert" className="scene-error">{rangeError}</p>}
-    </fieldset>
-    {shownOn !== null && <p className="scene-property-note">{shownOn === pageCount ? `Watermark added to all ${pageCount} page${pageCount === 1 ? '' : 's'}.` : `Watermark added to ${shownOn} of ${pageCount} pages.`}</p>}
+    <PageRangeFields selected={selected} updateObject={updateObject} pageNumber={pageNumber} pageCount={pageCount} noun="Watermark" />
     <p className="scene-property-note">The preview updates as you type. A watermark behind content may be hidden by full-page images.</p>
+  </>;
+};
+
+const pageNumberFormats: { value: PageNumberFormat; label: (pages: number) => string }[] = [
+  { value: 'page-of-total', label: (pages) => `Page 1 of ${pages}` }, { value: 'page', label: () => 'Page 1' },
+  { value: 'number', label: () => '1' }, { value: 'number-of-total', label: (pages) => `1 / ${pages}` }, { value: 'dashes', label: () => '- 1 -' },
+];
+const pageNumberPositions: { value: PageNumberPosition; label: string }[] = [
+  { value: 'top-left', label: 'Top left' }, { value: 'top-center', label: 'Top centre' }, { value: 'top-right', label: 'Top right' },
+  { value: 'middle-left', label: 'Middle left' }, { value: 'middle-center', label: 'Centre' }, { value: 'middle-right', label: 'Middle right' },
+  { value: 'bottom-left', label: 'Bottom left' }, { value: 'bottom-center', label: 'Bottom centre' }, { value: 'bottom-right', label: 'Bottom right' },
+];
+// The exporter accepts 8 to 72 pt, the limit of the earlier page-number tool.
+const pageNumberSizes = [8, 9, 10, 11, 12, 14, 16, 18, 24, 36, 48, 72];
+const pageNumberMargins = [{ value: 36, label: 'Small, 0.5 in' }, { value: 54, label: 'Medium, 0.75 in' }];
+
+const PageNumberFields: Panel = ({ selected, updateObject, endGroup, pageNumber, pageCount }) => {
+  if (selected?.kind !== 'pageNumbers' || !selected.pageNumbers) return null;
+  const options = selected.pageNumbers;
+  const update = (patch: Partial<PageNumberOptions>, field: string) => updateObject({ pageNumbers: { ...options, ...patch } }, field);
+  return <>
+    <div className="scene-inspector-field"><Label htmlFor="scene-page-number-format">Format</Label>
+      <NativeSelect id="scene-page-number-format" size="sm" value={options.format}
+        onChange={(event) => update({ format: event.target.value as PageNumberFormat }, 'page-number-format')}>
+        {pageNumberFormats.map(({ value, label }) => <option key={value} value={value}>{label(pageCount)}</option>)}
+      </NativeSelect>
+    </div>
+    <div className="scene-inspector-field"><span className="text-sm font-medium" id="scene-page-number-position">Position</span>
+      <ToggleGroup type="single" variant="outline" size="sm" role="radiogroup" className="grid w-fit grid-cols-3 gap-1" aria-labelledby="scene-page-number-position" value={options.position}
+        onValueChange={(value) => { if (value) update({ position: value as PageNumberPosition }, 'page-number-position'); }}>
+        {pageNumberPositions.map(({ value, label }) => <ToggleGroupItem key={value} value={value} aria-label={label}><span aria-hidden="true">•</span></ToggleGroupItem>)}
+      </ToggleGroup>
+    </div>
+    <div className="scene-inspector-row">
+      <div className="scene-inspector-field"><Label htmlFor="scene-page-number-start">Start at</Label>
+        <Input id="scene-page-number-start" type="number" min="1" max="9999" value={options.start}
+          onChange={(event) => update({ start: Math.max(1, Math.min(9999, Math.round(Number(event.target.value)) || 1)) }, 'page-number-start')} onBlur={endGroup} />
+      </div>
+      <div className="scene-inspector-field"><Label htmlFor="scene-page-number-size">Size</Label>
+        <NativeSelect id="scene-page-number-size" size="sm" value={String(selected.fontSize)} onChange={(event) => updateObject({ fontSize: Number(event.target.value) }, 'page-number-size')}>
+          {pageNumberSizes.map((value) => <option key={value} value={String(value)}>{value} pt</option>)}
+        </NativeSelect>
+      </div>
+    </div>
+    <div className="scene-inspector-row">
+      <div className="scene-inspector-field"><Label htmlFor="scene-page-number-margin">Distance from edge</Label>
+        <NativeSelect id="scene-page-number-margin" size="sm" value={String(options.margin)} onChange={(event) => update({ margin: Number(event.target.value) }, 'page-number-margin')}>
+          {pageNumberMargins.map(({ value, label }) => <option key={value} value={String(value)}>{label}</option>)}
+        </NativeSelect>
+      </div>
+      <div className="scene-inspector-field"><Label htmlFor="scene-page-number-font">Font</Label>
+        <NativeSelect id="scene-page-number-font" size="sm" value={selected.fontFamily ?? 'Noto Sans'} onChange={(event) => updateObject({ fontFamily: event.target.value }, 'page-number-font')}>
+          {textFonts.map((family) => <option key={family} value={family}>{family}</option>)}
+        </NativeSelect>
+      </div>
+    </div>
+    <PageRangeFields selected={selected} updateObject={updateObject} pageNumber={pageNumber} pageCount={pageCount} noun="Page numbers" />
+    <p className="scene-property-note">Existing page numbers in the PDF stay. Check the preview for overlaps.</p>
   </>;
 };
 
@@ -278,6 +344,14 @@ const WatermarkGuide: Panel = ({ selected, addWatermark }) => {
   </> : null;
 };
 
+const PageNumberGuide: Panel = ({ selected, addPageNumbers }) => {
+  const availability = useToolAvailability();
+  return availability.allows('pdf-page-numbers') && !selected ? <>
+    <p className="scene-property-note">One page-number style, applied to every page in the range. Edit it once, on any page.</p>
+    <Button size="sm" onClick={addPageNumbers}>Add page numbers</Button>
+  </> : null;
+};
+
 const CropGuide: Panel = ({ page, commitPage }) => {
   const availability = useToolAvailability();
   return availability.allows('pdf-crop') ? <>
@@ -293,5 +367,6 @@ export const subToolInspectors: Partial<Record<SubToolId | SceneTool, { Fields?:
   shape: { Fields: ShapeFields },
   signature: { Fields: SignatureFields, Guide: SignatureGuide },
   watermark: { Fields: WatermarkFields, Guide: WatermarkGuide },
+  pageNumbers: { Fields: PageNumberFields, Guide: PageNumberGuide },
   crop: { Guide: CropGuide },
 };

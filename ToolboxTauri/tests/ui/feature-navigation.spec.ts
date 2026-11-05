@@ -2083,7 +2083,7 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
         await fillPasswords(page, "test-password");
     }
     if (isPdfSceneTool(utility.id)) {
-        if (utility.id === "pdf-page-numbers") await page.getByRole("button", { name: "Page numbers", exact: true }).click();
+        if (utility.id === "pdf-page-numbers") await page.getByRole("button", { name: "Add page numbers", exact: true }).click();
         else if (utility.id === "pdf-organize") await page.getByRole("button", { name: "Add blank page", exact: true }).click();
         else if (utility.id === "pdf-remove-pages") {
             await page.getByRole("button", { name: "Add blank page", exact: true }).click();

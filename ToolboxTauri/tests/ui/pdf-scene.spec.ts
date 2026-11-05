@@ -292,12 +292,82 @@ test('inspector property edits stay in scene history and undo and redo exactly',
   expect(result.pages[0].objects[0].shape).toBe('triangle');
 });
 
-test('page numbering adds editable number objects to every page', async ({ page }) => {
+const pageNumberHit = (page: Page) => page.getByRole('button', { name: /^Page number / });
+async function addPageNumbers(page: Page) {
+  await page.getByRole('toolbar', { name: 'PDF editor tools' }).getByRole('button', { name: 'Page numbers', exact: true }).click();
+  await page.getByRole('button', { name: 'Add page numbers', exact: true }).click();
+  await expect(page.getByText('Page numbers added to all 3 pages.')).toBeVisible();
+}
+
+test('page numbers are one range-applied object, and every option is sent exactly to preview and export', async ({ page }) => {
   await openEditor(page);
-  await page.getByRole('button', { name: 'Page numbers', exact: true }).click();
-  const result = await exported(page);
-  expect(result.pages.map((item: any) => item.objects.map((object: any) => object.text))).toEqual([['1'], ['2'], ['3']]);
-  expect(result.pages.every((item: any) => item.objects[0].kind === 'text')).toBe(true);
+  await addPageNumbers(page);
+  const sent = async () => (await previewScene(page)).pages[0].objects[0];
+  const base = {
+    kind: 'pageNumbers', text: '', fontSize: 9, opacity: 1, fontFamily: 'Noto Sans', layer: 'front', pageRange: 'all',
+    pageNumbers: { format: 'page-of-total', start: 1, position: 'bottom-center', margin: 36 },
+  };
+  await expect.poll(sent).toMatchObject(base);
+  await expect(pageNumberHit(page)).toHaveAccessibleName('Page number Page 1 of 3');
+  const option = async (patch: object, act: () => Promise<void>) => {
+    await act();
+    Object.assign(base, patch);
+    await expect.poll(sent).toMatchObject(base);
+  };
+  for (const [format, label, text] of [['page', 'Page 1', 'Page 1'], ['number', '1', '1'], ['number-of-total', '1 / 3', '1 / 3'], ['dashes', '- 1 -', '- 1 -'], ['page-of-total', 'Page 1 of 3', 'Page 1 of 3']]) {
+    await option({ pageNumbers: { ...base.pageNumbers, format } }, () => page.getByRole('combobox', { name: 'Format' }).selectOption({ label }));
+    await expect(pageNumberHit(page)).toHaveAccessibleName(`Page number ${text}`);
+  }
+  for (const [position, label] of [['top-left', 'Top left'], ['top-center', 'Top centre'], ['top-right', 'Top right'], ['middle-left', 'Middle left'], ['middle-center', 'Centre'], ['middle-right', 'Middle right'], ['bottom-left', 'Bottom left'], ['bottom-right', 'Bottom right'], ['bottom-center', 'Bottom centre']]) {
+    await option({ pageNumbers: { ...base.pageNumbers, position } }, () => page.getByRole('radio', { name: label, exact: true }).click());
+    await expect(page.getByRole('radio', { name: label, exact: true })).toHaveAttribute('aria-checked', 'true');
+  }
+  await option({ pageNumbers: { ...base.pageNumbers, start: 7 } }, () => page.getByRole('spinbutton', { name: 'Start at' }).fill('7'));
+  await expect(pageNumberHit(page)).toHaveAccessibleName('Page number Page 7 of 9');
+  await option({ pageNumbers: { ...base.pageNumbers, margin: 54 } }, () => page.getByRole('combobox', { name: 'Distance from edge' }).selectOption('54'));
+  await option({ fontSize: 72 }, () => page.getByRole('combobox', { name: 'Size' }).selectOption('72'));
+  await option({ fontSize: 8 }, () => page.getByRole('combobox', { name: 'Size' }).selectOption('8'));
+  await option({ fontFamily: 'Noto Serif' }, () => page.getByRole('combobox', { name: 'Font' }).selectOption('Noto Serif'));
+  await option({ pageRange: '2-' }, () => page.getByRole('radio', { name: 'Skip the first page' }).click());
+  await expect(page.getByText('Page numbers added to 2 of 3 pages.')).toBeVisible();
+  await expect(pageNumberHit(page)).toHaveCount(0);
+  await page.getByRole('radio', { name: 'These pages' }).click();
+  const range = page.getByRole('textbox', { name: 'Pages to include' });
+  await range.fill('3-9');
+  await range.press('Enter');
+  await expect.poll(sent).toMatchObject({ ...base, pageRange: '3-9' });
+  await expect(page.getByText('Page numbers added to 1 of 3 pages.')).toBeVisible();
+  const scene = await exported(page);
+  expect(scene.pages[0].objects).toHaveLength(1);
+  expect(scene.pages[0].objects[0]).toMatchObject({ ...base, pageRange: '3-9' });
+  expect(scene.pages[0].objects[0].pageNumbers).toEqual({ format: 'page-of-total', start: 7, position: 'bottom-center', margin: 54 });
+  expect(scene.pages.slice(1).map((item: any) => item.objects)).toEqual([[], []]);
+  await page.getByRole('button', { name: 'Page 3', exact: true }).click();
+  await expect(pageNumberHit(page)).toHaveAccessibleName('Page number Page 9 of 9');
+});
+
+test('page numbers follow the page order after a reorder, in the preview and the export', async ({ page }) => {
+  await openEditor(page);
+  await addPageNumbers(page);
+  await page.getByRole('radio', { name: 'Skip the first page' }).click();
+  await expect(pageNumberHit(page)).toHaveCount(0);
+  await page.evaluate(() => { (window as any).previewDelay = 60_000; });
+  await page.getByRole('button', { name: 'Move page later' }).click();
+  await expect(page.getByRole('button', { name: 'Page 2', exact: true })).toHaveAttribute('aria-current', 'page');
+  // The draft shows the resolved number before the rendered preview arrives.
+  await expect(pageNumberHit(page)).toHaveAccessibleName('Page number Page 2 of 3');
+  await expect(page.locator('.scene-canvas text', { hasText: 'Page 2 of 3' })).toHaveCount(1);
+  await page.getByRole('button', { name: 'Page 1', exact: true }).click();
+  await expect(pageNumberHit(page)).toHaveCount(0);
+  await page.getByRole('button', { name: 'Page 3', exact: true }).click();
+  await expect(pageNumberHit(page)).toHaveAccessibleName('Page number Page 3 of 3');
+  await expect(page.getByRole('button', { name: 'Page 1', exact: true })).not.toContainText('marks');
+  await expect(page.getByRole('button', { name: 'Page 2', exact: true })).toContainText('1 marks');
+  await page.evaluate(() => { (window as any).previewDelay = 0; });
+  const scene = await exported(page);
+  expect(scene.pages.map((item: any) => item.sourceIndex)).toEqual([1, 0, 2]);
+  expect(scene.pages.map((item: any) => item.objects.map((object: any) => object.kind))).toEqual([[], ['pageNumbers'], []]);
+  expect(scene.pages[1].objects[0]).toMatchObject({ pageRange: '2-', pageNumbers: { format: 'page-of-total', start: 1 } });
 });
 
 test('PDF scene history retains exactly the latest 100 edits', async ({ page }) => {

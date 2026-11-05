@@ -102,11 +102,13 @@ function Artwork({ page, object }: { page: ScenePage; object: SceneObject }) {
       fontWeight: object.bold ? 700 : 400, fontStyle: object.italic ? 'italic' : 'normal', textAlign: object.align ?? 'left' }}>{object.text}</div>
   </foreignObject>;
   if (object.kind === 'watermark') return <WatermarkArtwork page={page} object={object} />;
+  if (object.kind === 'pageNumbers') return <text x={r.x} y={r.y} fill={object.color} opacity={object.opacity} fontSize={object.fontSize}
+    fontFamily={cssFont(object.fontFamily ?? 'Noto Sans')} dominantBaseline="hanging" xmlSpace="preserve">{object.text}</text>;
   if (object.kind === 'highlight') return <rect {...r} fill={object.color} stroke="none" opacity={object.opacity} />;
   return shapeArtwork(object.shape, r, object.color, object.opacity);
 }
 
-export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPreview, tool, selectedId, zoom, onSelect, onCommit, makeObject, watermarks = [], onWatermarkChange }: SceneCanvasProps) {
+export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPreview, tool, selectedId, zoom, onSelect, onCommit, makeObject, rangedObjects = [], onRangedChange }: SceneCanvasProps) {
   const host = useRef<HTMLDivElement>(null);
   const surface = useRef<SVGSVGElement>(null);
   const coordinates = useRef<SVGGElement>(null);
@@ -187,9 +189,10 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     return { x: Math.max(b.x, Math.min(b.x + b.width, p.x)), y: Math.max(b.y, Math.min(b.y + b.height, p.y)) };
   };
   const point = (event: PointerEvent): ScenePoint => pointFromClient(event.clientX, event.clientY);
-  // Watermarks are stored once and drawn on every page in their range, so the page's own copy is not drawn here.
-  const drawn = [...watermarks.filter(object => object.layer === 'behind'), ...shown.objects.filter(object => object.kind !== 'watermark'),
-    ...watermarks.filter(object => object.layer !== 'behind')];
+  // Ranged objects are stored once and drawn on every page in their range, so the page's own copy is not drawn here.
+  const ranged = (object: SceneObject) => object.kind === 'watermark' || object.kind === 'pageNumbers';
+  const drawn = [...rangedObjects.filter(object => object.layer === 'behind'), ...shown.objects.filter(object => !ranged(object)),
+    ...rangedObjects.filter(object => object.layer !== 'behind')];
   const hitRect = (object: SceneObject) => object.kind === 'watermark' ? watermarkBounds(b, object) : object.rect;
 
   function finishTextEdit(save: boolean) {
@@ -246,7 +249,7 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     let mode: Gesture['mode'];
     let objectId = id;
     const hitObject = id ? drawn.find(object => object.id === id) : undefined;
-    if (hitObject?.kind === 'watermark' && tool !== 'crop') {
+    if (hitObject && ranged(hitObject) && tool !== 'crop') {
       lastObjectId.current = id ?? null;
       onSelect(id ?? null);
       return;
@@ -254,7 +257,7 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     if (id && tool !== 'crop' && (tool === 'select' || selectedId === id || corner)) { mode = corner ? 'resize' : 'move'; lastObjectId.current = id; onSelect(id); }
     else if (tool === 'select') { lastObjectId.current = null; onSelect(null); return; }
     else if (tool === 'crop') { mode = 'crop'; onSelect(null); }
-    else if (tool === 'watermark') { lastObjectId.current = null; onSelect(null); return; }
+    else if (tool === 'watermark' || tool === 'pageNumbers') { lastObjectId.current = null; onSelect(null); return; }
     else {
       mode = 'create';
       const object = makeObject(tool, { x: start.x, y: start.y, width: 1, height: 1 });
@@ -334,12 +337,13 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     const angle = page.rotation * Math.PI / 180, amount = event.shiftKey ? 10 : 1;
     const dx = step ? Math.round((step.x * Math.cos(angle) + step.y * Math.sin(angle)) * amount) : 0;
     const dy = step ? Math.round((-step.x * Math.sin(angle) + step.y * Math.cos(angle)) * amount) : 0;
+    if (!step && ranged(object)) { onSelect(null); onRangedChange?.(object.id, null); return; }
+    if (object.kind === 'pageNumbers') return;
     if (object.kind === 'watermark') {
-      if (!step) { onSelect(null); onWatermarkChange?.(object.id, null); return; }
       if (!object.watermark) return;
       const r = watermarkBounds(b, object);
       const position = { x: Math.round(Math.max(0, Math.min(b.width - r.width, r.x - b.x + dx))), y: Math.round(Math.max(0, Math.min(b.height - r.height, r.y - b.y + dy))) };
-      onWatermarkChange?.(object.id, { watermark: { ...object.watermark, position } });
+      onRangedChange?.(object.id, { watermark: { ...object.watermark, position } });
       return;
     }
     if (!step) { onSelect(null); onCommit({ ...page, objects: page.objects.filter(o => o.id !== object.id) }); return; }
@@ -363,13 +367,13 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
           {textRuns.map((run, index) => <text key={`${index}-${run.x}-${run.y}`} className="scene-text-run" data-text-run="true" x={run.x} y={run.y + run.height} fontSize={Math.max(6, run.height)} fontFamily="Helvetica, Arial, sans-serif" fill="currentColor" opacity="0.001">{run.text}</text>)}
         </g>}
         {drawn.map(object => <g key={object.id}>
-          <rect {...hitRect(object)} data-object={object.id} tabIndex={0} role="button" aria-label={object.kind === 'watermark' ? `Watermark ${object.watermark?.logoPath ? 'picture' : object.watermark?.text ?? ''}. Arrow keys move it, Shift+arrow moves it further.` : `${object.kind} object ${shown.objects.indexOf(object) + 1}`} aria-pressed={selectedId === object.id} className={`scene-object-hit scene-object-${object.kind}`} onFocus={() => onSelect(object.id)} onKeyDown={e => key(e, object)} onDoubleClick={e => beginTextEdit(e, object)} />
+          <rect {...hitRect(object)} data-object={object.id} tabIndex={0} role="button" aria-label={object.kind === 'watermark' ? `Watermark ${object.watermark?.logoPath ? 'picture' : object.watermark?.text ?? ''}. Arrow keys move it, Shift+arrow moves it further.` : object.kind === 'pageNumbers' ? `Page number ${object.text}` : `${object.kind} object ${shown.objects.indexOf(object) + 1}`} aria-pressed={selectedId === object.id} className={`scene-object-hit scene-object-${object.kind}`} onFocus={() => onSelect(object.id)} onKeyDown={e => key(e, object)} onDoubleClick={e => beginTextEdit(e, object)} />
           {selectedId === object.id && object.kind === 'text' && editingId === object.id && <foreignObject {...object.rect} data-text-editor="true" className="scene-inline-text-editor">
             <Textarea autoFocus onFocus={event => event.currentTarget.select()} className="h-full w-full min-h-0 resize-none" aria-label="Text box text" style={{ fontFamily: cssFont(object.fontFamily ?? 'Noto Sans'), fontWeight: object.bold ? 700 : 400, fontStyle: object.italic ? 'italic' : 'normal', textAlign: object.align ?? 'left' }} value={editingText} onChange={event => setEditingText(event.target.value)} onBlur={() => finishTextEdit(true)} onPointerDown={event => event.stopPropagation()} onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); finishTextEdit(false); } else if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); finishTextEdit(true); } }} />
           </foreignObject>}
           {selectedId === object.id && editingId !== object.id && <g className="scene-selection">
             <rect {...hitRect(object)} fill="none" stroke="var(--pdf-scene-selection)" strokeWidth={1.5 / scale} pointerEvents="none" />
-            {object.kind !== 'watermark' && (['nw', 'ne', 'sw', 'se'] as const).map(corner => <rect key={corner} data-object={object.id} data-corner={corner} x={(corner.includes('w') ? object.rect.x : object.rect.x + object.rect.width) - 5 / scale} y={(corner.includes('n') ? object.rect.y : object.rect.y + object.rect.height) - 5 / scale} width={10 / scale} height={10 / scale} tabIndex={0} role="button" aria-label={`Resize ${object.kind} ${corner}`} className="scene-resize-handle" strokeWidth={1 / scale} onKeyDown={e => key(e, object, corner)} />)}
+            {!ranged(object) && (['nw', 'ne', 'sw', 'se'] as const).map(corner => <rect key={corner} data-object={object.id} data-corner={corner} x={(corner.includes('w') ? object.rect.x : object.rect.x + object.rect.width) - 5 / scale} y={(corner.includes('n') ? object.rect.y : object.rect.y + object.rect.height) - 5 / scale} width={10 / scale} height={10 / scale} tabIndex={0} role="button" aria-label={`Resize ${object.kind} ${corner}`} className="scene-resize-handle" strokeWidth={1 / scale} onKeyDown={e => key(e, object, corner)} />)}
           </g>}
         </g>)}
         {draft && gesture.current?.mode === 'crop' && draft.crop && <rect {...draft.crop} className="scene-crop-outline" strokeWidth={2 / scale} pointerEvents="none" />}
