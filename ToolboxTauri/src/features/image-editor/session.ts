@@ -1,4 +1,4 @@
-import type { ConvertImagesRequest, OutputLocation } from "../../contracts";
+import type { ConvertImagesRequest, OutputLocation, WatermarkOptions } from "../../contracts";
 
 export type ImageEditOperation =
   | { kind: "convert"; format: ConvertImagesRequest["format"] }
@@ -26,7 +26,7 @@ export type ImageEditOperation =
       anchor: string;
     }
   | { kind: "tone"; brightness: number; contrast: number; saturation: number; exposure: number }
-  | { kind: "watermark"; text: string; opacity: number; x: number; y: number };
+  | ({ kind: "watermark" } & WatermarkOptions);
 
 export interface ImageEditPlan {
   edits: ImageEditOperation[];
@@ -34,11 +34,40 @@ export interface ImageEditPlan {
 
 export const imageEditRequestPlan = (plan: ImageEditPlan, outputLocation: OutputLocation) => ({ ...plan, outputLocation });
 
-export interface ImageEditHistory {
-  past: ImageEditPlan[];
-  present: ImageEditPlan;
-  future: ImageEditPlan[];
+export interface EditHistory<T> {
+  past: T[];
+  present: T;
+  future: T[];
 }
+
+export type ImageEditHistory = EditHistory<ImageEditPlan>;
+
+export type ImageCropStep = Omit<Extract<ImageEditOperation, { kind: "crop" }>, "kind">;
+
+/** The shared edit stack holds at most one of each step. Native runs them in a fixed order, so the stack has no order of its own. */
+export interface ImageEditStack {
+  crop?: ImageCropStep;
+}
+
+export const imageEditStackSteps = ["crop"] as const;
+export type ImageEditStackStep = (typeof imageEditStackSteps)[number];
+
+export const presentImageEditSteps = (stack: ImageEditStack) => imageEditStackSteps.filter((step) => stack[step] !== undefined);
+
+export const defaultImageCropStep = (): ImageCropStep => ({
+  mode: "aspectRatio", aspectWidth: 4, aspectHeight: 5, anchor: "center", x: 0, y: 0, width: 0, height: 0,
+});
+
+// A single step names its own output; #513 adds "-edited" for more than one.
+export const imageEditStackSuffix = (stack: ImageEditStack) => (stack.crop ? "-cropped" : "-edited");
+
+export const createEditHistory = <T>(present: T): EditHistory<T> => ({ past: [], present, future: [] });
+
+export const pushEdit = <T>(history: EditHistory<T>, next: T): EditHistory<T> => ({
+  past: [...history.past, history.present],
+  present: next,
+  future: [],
+});
 
 export type ImageCropRect = { x: number; y: number; width: number; height: number };
 
@@ -58,14 +87,14 @@ export const commitImageEdit = (history: ImageEditHistory, edit: ImageEditOperat
   future: [],
 });
 
-export const undoImageEdit = (history: ImageEditHistory): ImageEditHistory => {
+export const undoImageEdit = <T>(history: EditHistory<T>): EditHistory<T> => {
   const previous = history.past[history.past.length - 1];
   return previous
     ? { past: history.past.slice(0, -1), present: previous, future: [history.present, ...history.future] }
     : history;
 };
 
-export const redoImageEdit = (history: ImageEditHistory): ImageEditHistory => {
+export const redoImageEdit = <T>(history: EditHistory<T>): EditHistory<T> => {
   const next = history.future[0];
   return next
     ? { past: [...history.past, history.present], present: next, future: history.future.slice(1) }
@@ -77,7 +106,7 @@ export const resetImageEdits = (): ImageEditHistory => createImageEditHistory();
 export const resolveImageCropRect = (
   sourceWidth: number,
   sourceHeight: number,
-  crop: Extract<ImageEditOperation, { kind: "crop" }>,
+  crop: ImageCropStep,
 ): ImageCropRect => {
   if (crop.mode !== "aspectRatio") return { x: crop.x, y: crop.y, width: crop.width, height: crop.height };
   const ratio = crop.aspectWidth / crop.aspectHeight;
@@ -87,8 +116,8 @@ export const resolveImageCropRect = (
   const maxX = sourceWidth - width;
   const maxY = sourceHeight - height;
   return {
-    x: crop.anchor === "custom" ? Math.min(crop.x, maxX) : crop.anchor === "left" ? 0 : crop.anchor === "right" ? maxX : Math.floor(maxX / 2),
-    y: crop.anchor === "custom" ? Math.min(crop.y, maxY) : crop.anchor === "top" ? 0 : crop.anchor === "bottom" ? maxY : Math.floor(maxY / 2),
+    x: crop.anchor === "custom" ? Math.min(crop.x, maxX) : crop.anchor === "left" || crop.anchor === "start" ? 0 : crop.anchor === "right" || crop.anchor === "end" ? maxX : Math.floor(maxX / 2),
+    y: crop.anchor === "custom" ? Math.min(crop.y, maxY) : crop.anchor === "top" || crop.anchor === "start" ? 0 : crop.anchor === "bottom" || crop.anchor === "end" ? maxY : Math.floor(maxY / 2),
     width,
     height,
   };
