@@ -7,6 +7,7 @@ pub mod font_resolver;
 pub mod layout;
 pub mod markdown;
 pub mod rtf;
+pub mod docx;
 pub mod delimited;
 pub mod convert;
 

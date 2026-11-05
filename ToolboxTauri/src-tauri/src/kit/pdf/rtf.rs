@@ -3,14 +3,11 @@ use std::collections::BTreeMap;
 use encoding_rs::{Encoding, BIG5, EUC_KR, GBK, MACINTOSH, SHIFT_JIS, UTF_8, WINDOWS_1250, WINDOWS_1251, WINDOWS_1252, WINDOWS_1253, WINDOWS_1254, WINDOWS_1255, WINDOWS_1256, WINDOWS_1257, WINDOWS_1258, WINDOWS_874};
 
 use crate::kit::contracts::ToolError;
-use crate::kit::pdf::layout::{Align, Block, Paragraph, Picture, Span, Style};
+use crate::kit::pdf::layout::{Align, Block, PageSetup, Paragraph, Picture, Span, Style};
 
 const DAMAGED: &str = "This RTF file is damaged or incomplete, so no PDF was made.";
 const MAX_DEPTH: usize = 1024;
 const DEFAULT_HALF_POINTS: u16 = 24;
-
-#[derive(Debug, Default, Clone, Copy, PartialEq)]
-pub struct PageSetup { pub width: Option<f32>, pub height: Option<f32>, pub left: Option<f32>, pub right: Option<f32>, pub top: Option<f32>, pub bottom: Option<f32> }
 
 pub struct Parsed {
     pub blocks: Vec<Block>,
