@@ -8,7 +8,7 @@ use quick_xml::name::ResolveResult;
 use quick_xml::{NsReader, Writer};
 use serde::Deserialize;
 
-use super::document_info::{self, DocumentProperty, PdfProperties, DC, RDF, XMP_MAX_BYTES};
+use super::document_info::{self, DocumentProperty, PdfDate, PdfProperties, DC, RDF, XMP, XMP_MAX_BYTES};
 use crate::kit::common::OutputNaming;
 use crate::kit::contracts::{ErrorKind, OutputLocation, JobOutcome, SkipCode, SkipReason, ToolError};
 
@@ -33,19 +33,56 @@ pub struct PropertiesPatch {
     pub author: FieldEdit,
     #[serde(default)]
     pub subject: FieldEdit,
+    #[serde(default)]
+    pub creation_date: FieldEdit,
+    #[serde(default)]
+    pub modification_date: FieldEdit,
 }
 
 impl PropertiesPatch {
-    fn edits(&self) -> Vec<(DocumentProperty, FieldEdit)> {
-        [(DocumentProperty::Title, &self.title), (DocumentProperty::Author, &self.author), (DocumentProperty::Subject, &self.subject)]
-            .into_iter()
-            .filter_map(|(property, edit)| match edit {
-                FieldEdit::Keep => None,
-                FieldEdit::Set(value) => Some((property, FieldEdit::Set(value.trim().to_string()))),
-                FieldEdit::Clear => Some((property, FieldEdit::Clear)),
-            })
-            .collect()
+    /// The fields to change, with each set value trimmed and each date in one canonical form.
+    fn edits(&self) -> Result<Vec<(DocumentProperty, FieldEdit)>, String> {
+        let fields = [
+            (DocumentProperty::Title, &self.title),
+            (DocumentProperty::Author, &self.author),
+            (DocumentProperty::Subject, &self.subject),
+            (DocumentProperty::CreationDate, &self.creation_date),
+            (DocumentProperty::ModificationDate, &self.modification_date),
+        ];
+        let mut edits = Vec::new();
+        for (property, edit) in fields {
+            match edit {
+                FieldEdit::Keep => {}
+                FieldEdit::Clear => edits.push((property, FieldEdit::Clear)),
+                FieldEdit::Set(value) => {
+                    let value = value.trim();
+                    if value.is_empty() {
+                        return Err(format!("Enter {} {}, or choose Keep or Clear.", if property == DocumentProperty::Author { "an" } else { "a" }, label(property)));
+                    }
+                    let value = if property.is_date() { zoned_date(value).ok_or_else(|| format!("The {} isn't a real date. Use YYYY-MM-DD HH:MM, like 2026-02-28 09:00.", label(property)))?.to_string() } else { value.to_string() };
+                    edits.push((property, FieldEdit::Set(value)));
+                }
+            }
+        }
+        if edits.is_empty() {
+            return Err(NO_CHANGE_ASKED.to_string());
+        }
+        Ok(edits)
     }
+}
+
+/// A date with a time and a time zone, as `2026-02-28T09:00:00+05:30`.
+fn zoned_date(value: &str) -> Option<PdfDate> {
+    document_info::parse_xmp_date(value).filter(|date| date.offset_minutes.is_some())
+}
+
+fn pdf_date(date: &PdfDate) -> String {
+    let zone = match date.offset_minutes {
+        None => String::new(),
+        Some(0) => "Z".to_string(),
+        Some(offset) => format!("{}{:02}'{:02}'", if offset < 0 { '-' } else { '+' }, offset.unsigned_abs() / 60, offset.unsigned_abs() % 60),
+    };
+    format!("D:{:04}{:02}{:02}{:02}{:02}{:02}{zone}", date.year, date.month, date.day, date.hour, date.minute, date.second)
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -66,30 +103,29 @@ fn label(property: DocumentProperty) -> &'static str {
     match property {
         DocumentProperty::Title => "title",
         DocumentProperty::Author => "author",
-        _ => "subject",
+        DocumentProperty::Subject => "subject",
+        DocumentProperty::CreationDate => "creation date",
+        DocumentProperty::ModificationDate => "modification date",
+        _ => "property",
     }
 }
 
-fn text(properties: &PdfProperties, property: DocumentProperty) -> Option<&str> {
+fn text(properties: &PdfProperties, property: DocumentProperty) -> Option<String> {
     match property {
-        DocumentProperty::Title => properties.title.as_deref(),
-        DocumentProperty::Author => properties.author.as_deref(),
-        DocumentProperty::Subject => properties.subject.as_deref(),
+        DocumentProperty::Title => properties.title.clone(),
+        DocumentProperty::Author => properties.author.clone(),
+        DocumentProperty::Subject => properties.subject.clone(),
+        DocumentProperty::CreationDate => properties.creation_date.map(|date| date.to_string()),
+        DocumentProperty::ModificationDate => properties.modification_date.map(|date| date.to_string()),
         _ => None,
     }
 }
 
-/// Rejects a patch that could change nothing before any file is opened.
+/// Rejects a patch that could change nothing, or holds an empty value or an invalid date, before any file is opened.
 pub fn validate(request: &EditPropertiesRequest) -> Result<(), Vec<JobOutcome>> {
-    let edits = request.patch.edits();
-    let message = if edits.is_empty() {
-        Some(NO_CHANGE_ASKED.to_string())
-    } else {
-        edits.iter().find(|(_, edit)| matches!(edit, FieldEdit::Set(value) if value.is_empty())).map(|(property, _)| format!("Enter {} {}, or choose Keep or Clear.", if *property == DocumentProperty::Author { "an" } else { "a" }, label(*property)))
-    };
-    match message {
-        None => Ok(()),
-        Some(message) => Err(request.paths.iter().cloned().map(|path| JobOutcome::failure(path, ToolError::invalid_input(message.clone()))).collect()),
+    match request.patch.edits() {
+        Ok(_) => Ok(()),
+        Err(message) => Err(request.paths.iter().cloned().map(|path| JobOutcome::failure(path, ToolError::invalid_input(message.clone()))).collect()),
     }
 }
 
@@ -141,10 +177,7 @@ enum Edited {
 }
 
 fn edit(request: &EditPropertiesRequest, input: &Path) -> Result<Edited, ToolError> {
-    let edits = request.patch.edits();
-    if edits.is_empty() {
-        return Err(ToolError::invalid_input(NO_CHANGE_ASKED));
-    }
+    let edits = request.patch.edits().map_err(ToolError::invalid_input)?;
     let mut document = open(input)?;
     let page_count = document.get_pages().len();
     let current = document_info::from_document(&document);
@@ -163,7 +196,7 @@ fn edit(request: &EditPropertiesRequest, input: &Path) -> Result<Edited, ToolErr
     let mut unchanged = Vec::new();
     for (property, edit) in edits {
         let changes = match &edit {
-            FieldEdit::Set(value) => text(&current.info, property) != Some(value.as_str()) || xmp_values.is_some_and(|xmp| text(xmp, property) != Some(value.as_str())),
+            FieldEdit::Set(value) => text(&current.info, property).as_deref() != Some(value.as_str()) || xmp_values.is_some_and(|xmp| text(xmp, property).as_deref() != Some(value.as_str())),
             _ => info_keys.contains(&property) || present_in_xmp.contains(&property),
         };
         if changes {
@@ -226,6 +259,13 @@ fn xmp_packet(document: &Document) -> Result<Option<(ObjectId, Vec<u8>)>, ToolEr
     }
 }
 
+fn info_value(property: DocumentProperty, value: &str) -> Object {
+    match document_info::parse_xmp_date(value) {
+        Some(date) if property.is_date() => Object::String(pdf_date(&date).into_bytes(), StringFormat::Literal),
+        _ => info_string(value),
+    }
+}
+
 fn info_string(value: &str) -> Object {
     if value.bytes().all(|byte| (0x20..=0x7E).contains(&byte)) {
         return Object::String(value.as_bytes().to_vec(), StringFormat::Literal);
@@ -260,7 +300,7 @@ fn apply_info(document: &mut Document, edits: &[(DocumentProperty, FieldEdit)]) 
             replaced.push(id);
         }
         if let FieldEdit::Set(value) = edit {
-            info.set(key, info_string(value));
+            info.set(key, info_value(*property, value));
         }
     }
     for id in replaced {
@@ -283,6 +323,10 @@ fn refers_to(object: &Object, id: ObjectId) -> bool {
 }
 
 fn xmp_property(property: DocumentProperty, value: &str) -> String {
+    if property.is_date() {
+        let local = String::from_utf8_lossy(property.xmp_name().1);
+        return format!("<xmp:{local} xmlns:xmp=\"{}\">{}</xmp:{local}>", String::from_utf8_lossy(XMP), escape(value));
+    }
     let (local, container, language) = match property {
         DocumentProperty::Author => ("creator", "Seq", ""),
         DocumentProperty::Subject => ("description", "Alt", " xml:lang=\"x-default\""),
@@ -413,9 +457,9 @@ fn rewrite_xmp(packet: &[u8], edits: &[(DocumentProperty, FieldEdit)]) -> Result
 
 fn create_xmp(document: &mut Document) -> Result<(), String> {
     let info = document_info::from_document(document).info;
-    let edits = [DocumentProperty::Title, DocumentProperty::Author, DocumentProperty::Subject]
+    let edits = [DocumentProperty::Title, DocumentProperty::Author, DocumentProperty::Subject, DocumentProperty::CreationDate, DocumentProperty::ModificationDate]
         .into_iter()
-        .filter_map(|property| text(&info, property).map(|value| (property, FieldEdit::Set(value.to_string()))))
+        .filter_map(|property| text(&info, property).map(|value| (property, FieldEdit::Set(value))))
         .collect::<Vec<_>>();
     let empty = format!(
         "<?xpacket begin=\"\u{FEFF}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"{}\"><rdf:Description rdf:about=\"\"></rdf:Description></rdf:RDF></x:xmpmeta>\n<?xpacket end=\"w\"?>",
@@ -460,9 +504,9 @@ fn check_output(bytes: &[u8], page_count: usize, edits: &[(DocumentProperty, Fie
         let xmp_matches = match (expected, xmp) {
             (Some(_), None) => false,
             (_, None) => true,
-            (expected, Some(found)) => found == expected,
+            (expected, Some(found)) => found.as_deref() == expected,
         };
-        if text(&saved.info, *property) != expected || !xmp_matches {
+        if text(&saved.info, *property).as_deref() != expected || !xmp_matches {
             return Err(invalid(&format!("its {} did not change", label(*property))));
         }
     }
@@ -557,7 +601,11 @@ mod tests {
     }
 
     fn patch(title: FieldEdit, author: FieldEdit, subject: FieldEdit) -> PropertiesPatch {
-        PropertiesPatch { title, author, subject }
+        PropertiesPatch { title, author, subject, ..Default::default() }
+    }
+
+    fn dates(creation_date: FieldEdit, modification_date: FieldEdit) -> PropertiesPatch {
+        PropertiesPatch { creation_date, modification_date, ..Default::default() }
     }
 
     fn set(value: &str) -> FieldEdit {
@@ -695,6 +743,111 @@ mod tests {
         assert!(outcomes[2].error().is_some());
         assert_eq!(outcomes[3].detail, "Subject set.");
         assert_eq!(sandbox.names(), vec!["broken.pdf", "locked.pdf", "plain-edited.pdf", "plain.pdf", "restricted.pdf"]);
+    }
+
+    fn info_entry(document: &Document, key: &[u8]) -> Option<Vec<u8>> {
+        info_dictionary(document).and_then(|info| info.get(key).ok()).map(|value| super::super::resolve(document, value).unwrap().as_str().unwrap().to_vec())
+    }
+
+    #[test]
+    fn deserializes_date_edits_from_the_wire() {
+        let request: EditPropertiesRequest = serde_json::from_str(r#"{"paths":["a.pdf"],"patch":{"creationDate":{"action":"set","value":"2026-02-28T09:00:00+05:30"},"modificationDate":{"action":"clear"}},"outputLocation":"alongsideInput"}"#).unwrap();
+        assert_eq!(request.patch, dates(set("2026-02-28T09:00:00+05:30"), FieldEdit::Clear));
+    }
+
+    #[test]
+    fn rejects_invalid_dates_as_invalid_input_before_opening_files() {
+        let sandbox = Sandbox::new("invalid-dates");
+        let input = sandbox.file("report.pdf", &pdf(None, None, None));
+        for (patch, message) in [
+            (dates(set("2026-02-30T09:00:00+00:00"), FieldEdit::Keep), "The creation date isn't a real date. Use YYYY-MM-DD HH:MM, like 2026-02-28 09:00."),
+            (dates(set("2026-02-28 09:00"), FieldEdit::Keep), "The creation date isn't a real date. Use YYYY-MM-DD HH:MM, like 2026-02-28 09:00."),
+            (dates(FieldEdit::Keep, set("2026-02-28T09:00:00")), "The modification date isn't a real date. Use YYYY-MM-DD HH:MM, like 2026-02-28 09:00."),
+            (dates(FieldEdit::Keep, set("2026-02-28")), "The modification date isn't a real date. Use YYYY-MM-DD HH:MM, like 2026-02-28 09:00."),
+            (dates(FieldEdit::Keep, set("2026-02-28T24:00:00Z")), "The modification date isn't a real date. Use YYYY-MM-DD HH:MM, like 2026-02-28 09:00."),
+            (dates(FieldEdit::Keep, set("yesterday")), "The modification date isn't a real date. Use YYYY-MM-DD HH:MM, like 2026-02-28 09:00."),
+            (dates(set("  "), FieldEdit::Keep), "Enter a creation date, or choose Keep or Clear."),
+        ] {
+            let outcomes = run(&[input.clone()], patch.clone());
+            let error = outcomes[0].error().unwrap_or_else(|| panic!("{patch:?}"));
+            assert_eq!(error.kind, ErrorKind::InvalidInput);
+            assert_eq!(error.message, message);
+            let direct = edit_job(&EditPropertiesRequest { paths: vec![input.clone()], patch, output_location: OutputLocation::AlongsideInput }, input.clone());
+            assert_eq!(direct.error().unwrap().kind, ErrorKind::InvalidInput);
+        }
+        assert_eq!(sandbox.names(), vec!["report.pdf"]);
+    }
+
+    #[test]
+    fn sets_dates_in_the_information_dictionary_and_xmp_with_their_time_zone() {
+        let sandbox = Sandbox::new("set-dates");
+        let description = r#"<rdf:Description rdf:about="" xmlns:xap="http://ns.adobe.com/xap/1.0/" xmlns:dc="http://purl.org/dc/elements/1.1/" xap:ModifyDate="2020-01-01T00:00:00Z"><xap:CreateDate>2019-05-02T10:00:00Z</xap:CreateDate><dc:title><rdf:Alt><rdf:li xml:lang="x-default">Deck</rdf:li></rdf:Alt></dc:title></rdf:Description>"#;
+        let with_xmp = sandbox.file("with-xmp.pdf", &pdf(Some(dictionary! { "Title" => literal("Deck"), "CreationDate" => literal("D:20190502100000Z"), "ModDate" => literal("D:20200101000000Z") }), Some(&xmp(description)), None));
+        let plain = sandbox.file("plain.pdf", &pdf(Some(dictionary! { "Title" => literal("Plain") }), None, None));
+        let originals = [std::fs::read(&with_xmp).unwrap(), std::fs::read(&plain).unwrap()];
+
+        let outcomes = run(&[with_xmp.clone(), plain.clone()], dates(set(" 2026-02-28T09:00+05:30 "), set("2026-03-01T17:45:00-08:00")));
+
+        assert_eq!(std::fs::read(&with_xmp).unwrap(), originals[0]);
+        assert_eq!(std::fs::read(&plain).unwrap(), originals[1]);
+        for outcome in &outcomes {
+            assert_eq!(outcome.detail, "Creation date set, modification date set.");
+            let (document, info) = saved(outcome);
+            assert_eq!(info_entry(&document, b"CreationDate").unwrap(), b"D:20260228090000+05'30'");
+            assert_eq!(info_entry(&document, b"ModDate").unwrap(), b"D:20260301174500-08'00'");
+            let xmp = info.xmp.unwrap();
+            assert_eq!(xmp.values.creation_date.unwrap().to_string(), "2026-02-28T09:00:00+05:30");
+            assert_eq!(xmp.values.modification_date.unwrap().to_string(), "2026-03-01T17:45:00-08:00");
+            assert!(info.conflicts.is_empty(), "{:?}", info.conflicts);
+        }
+        let (_, first) = saved(&outcomes[0]);
+        assert_eq!(first.xmp.unwrap().values.title.as_deref(), Some("Deck"));
+        let (_, second) = saved(&outcomes[1]);
+        assert_eq!(second.xmp.unwrap().values.title.as_deref(), Some("Plain"), "a new XMP packet copies the kept values");
+
+        let utc = run(&[plain], dates(set("2026-02-28T09:00:00+00:00"), FieldEdit::Keep));
+        let (document, info) = saved(&utc[0]);
+        assert_eq!(info_entry(&document, b"CreationDate").unwrap(), b"D:20260228090000Z");
+        assert_eq!(info.xmp.unwrap().values.creation_date.unwrap().to_string(), "2026-02-28T09:00:00Z");
+    }
+
+    #[test]
+    fn clears_dates_from_both_places_and_keep_leaves_them_untouched() {
+        let sandbox = Sandbox::new("clear-dates");
+        let description = r#"<rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreateDate="2019-05-02T10:00:00Z"><xmp:ModifyDate>2020-01-01T00:00:00Z</xmp:ModifyDate><xmp:CreatorTool>Writer</xmp:CreatorTool></rdf:Description>"#;
+        let input = sandbox.file("dated.pdf", &pdf(Some(dictionary! { "Title" => literal("Old"), "CreationDate" => literal("D:20190502100000Z"), "ModDate" => literal("D:20200101000000Z") }), Some(&xmp(description)), None));
+
+        let cleared = run(&[input.clone()], dates(FieldEdit::Clear, FieldEdit::Clear));
+        assert_eq!(cleared[0].detail, "Creation date cleared, modification date cleared.");
+        let (document, info) = saved(&cleared[0]);
+        assert_eq!(info_entry(&document, b"CreationDate"), None);
+        assert_eq!(info_entry(&document, b"ModDate"), None);
+        let xmp = info.xmp.unwrap();
+        assert_eq!((xmp.values.creation_date, xmp.values.modification_date), (None, None));
+        assert_eq!(xmp.values.creator.as_deref(), Some("Writer"));
+
+        let retitled = run(&[input], patch(set("New"), FieldEdit::Keep, FieldEdit::Keep));
+        let (document, info) = saved(&retitled[0]);
+        assert_eq!(info_entry(&document, b"CreationDate").unwrap(), b"D:20190502100000Z");
+        assert_eq!(info_entry(&document, b"ModDate").unwrap(), b"D:20200101000000Z", "the modification date changes only when it is set");
+        let xmp = info.xmp.unwrap();
+        assert_eq!(xmp.values.creation_date.unwrap().to_string(), "2019-05-02T10:00:00Z");
+        assert_eq!(xmp.values.modification_date.unwrap().to_string(), "2020-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn matching_dates_are_skipped_and_repeated_date_edits_write_identical_bytes() {
+        let sandbox = Sandbox::new("repeat-dates");
+        let input = sandbox.file("memo.pdf", &pdf(Some(dictionary! { "CreationDate" => literal("D:20260228090000+05'30'") }), None, None));
+        let same = run(&[input.clone()], dates(set("2026-02-28T09:00:00+05:30"), FieldEdit::Clear));
+        let OutcomeState::Skipped { reason } = &same[0].state else { panic!("{:?}", same[0]) };
+        assert_eq!(reason.message, "No effective change: the creation date is already \"2026-02-28T09:00:00+05:30\" and there's no modification date. No copy was made.");
+
+        let edit = || run(&[input.clone()], dates(set("2026-02-28T03:30:00Z"), set("2026-03-01T12:00:00+01:00")));
+        let first = edit();
+        let second = edit();
+        assert_eq!(second[0].output_paths()[0], sandbox.0.join("memo-edited-1.pdf"));
+        assert_eq!(std::fs::read(&first[0].output_paths()[0]).unwrap(), std::fs::read(&second[0].output_paths()[0]).unwrap());
     }
 
     #[test]
