@@ -350,31 +350,6 @@ async fn remove_image_background(events: RunEvents, request: vision::VisionReque
     BatchRunner::run(&events, "remove_image_background", request.paths.clone(), &request.output_location, &request, vision::remove_background)
 }
 #[tauri::command]
-async fn resize_images(events: RunEvents, request: tools::ResizeRequest) -> Vec<JobOutcome> {
-    let request = Arc::new(request);
-    BatchRunner::run(&events, "resize_images", request.paths.clone(), &request.output_location, &request, tools::resize)
-}
-#[tauri::command]
-async fn rotate_images(events: RunEvents, request: tools::RotateRequest) -> Vec<JobOutcome> {
-    let request = Arc::new(request);
-    BatchRunner::run(&events, "rotate_images", request.paths.clone(), &request.output_location, &request, tools::rotate)
-}
-#[tauri::command]
-async fn crop_images(events: RunEvents, request: tools::CropRequest) -> Vec<JobOutcome> {
-    let request = Arc::new(request);
-    BatchRunner::run(&events, "crop_images", request.paths.clone(), &request.output_location, &request, tools::crop)
-}
-#[tauri::command]
-async fn adjust_image_tone(events: RunEvents, request: tools::ToneRequest) -> Vec<JobOutcome> {
-    let request = Arc::new(request);
-    BatchRunner::run(&events, "adjust_image_tone", request.paths.clone(), &request.output_location, &request, tools::tone)
-}
-#[tauri::command]
-async fn watermark_images(events: RunEvents, request: tools::WatermarkRequest) -> Vec<JobOutcome> {
-    let request = Arc::new(request);
-    BatchRunner::run(&events, "watermark_images", request.paths.clone(), &request.output_location, &request, tools::watermark)
-}
-#[tauri::command]
 async fn generate_icon_set(events: RunEvents, request: tools::IconSetRequest) -> Vec<JobOutcome> {
     let request = Arc::new(request);
     BatchRunner::run(&events, "generate_icon_set", request.paths.clone(), &request.output_location, &request, tools::icon_set)
@@ -405,11 +380,6 @@ async fn run_process_tiff_pages(request: &tools::TiffRequest) -> Vec<JobOutcome>
     if let Err(outcomes) = validate_command_inputs("process_tiff_pages", &request.paths) { return outcomes; }
     let request = request.clone();
     aggregate_outcomes("process_tiff_pages", &request.paths.clone(), move || note_renamed(tools::tiff(&request), request.output_path.as_deref()))
-}
-#[tauri::command]
-async fn image_metadata(events: RunEvents, request: tools::MetadataRequest) -> Vec<JobOutcome> {
-    let request = Arc::new(request);
-    BatchRunner::run(&events, "image_metadata", request.paths.clone(), &request.output_location, &request, tools::strip_metadata)
 }
 #[tauri::command]
 fn inspect_image_metadata(request: tools::MetadataRequest) -> Vec<crate::kit::images::metadata::MetadataInspection> { request.paths.into_iter().map(crate::kit::images::metadata::inspect).collect() }
@@ -563,17 +533,11 @@ fn main() {
             ocr_pdf,
             blur_faces,
             remove_image_background,
-            resize_images,
-            rotate_images,
-            crop_images
-            ,adjust_image_tone,
-            watermark_images
-            ,generate_icon_set,
+            generate_icon_set,
             create_gif,
             extract_gif_frames,
-            process_tiff_pages
-            ,image_metadata
-            ,inspect_image_metadata,
+            process_tiff_pages,
+            inspect_image_metadata,
             inspect_image_preview,
             inspect_tiff_pages,
             inspect_image_edit_preview,
@@ -631,7 +595,7 @@ mod command_tests {
     use crate::kit::common::OutputLocation;
     use crate::kit::common::watermark::{WatermarkOptions, WatermarkPlacement, WatermarkPosition};
     use crate::kit::contracts::{ErrorKind, LimitKind, OutcomePointer};
-    use crate::kit::images::tools::{CropRequest, CropStep, ImageEditStackRequest, ImageEditSteps, GifCreateRequest, GifExtractRequest, ImageEdit, ImageEditExportRequest, ImageEditPlan, ImageEditPreviewRequest, IconSetRequest, MetadataRequest, ResizeRequest, ResizeStep, RotateRequest, RotateStep, TiffRequest, ToneRequest, ToneStep, WatermarkRequest};
+    use crate::kit::images::tools::{CropStep, ImageEditStackRequest, ImageEditSteps, GifCreateRequest, GifExtractRequest, ImageEdit, ImageEditExportRequest, ImageEditPlan, ImageEditPreviewRequest, IconSetRequest, MetadataRequest, RemoveMetadataStep, ResizeStep, RotateStep, TiffRequest, ToneStep};
     use crate::kit::office::{test_minimal_ooxml_package, OfficeProcessor};
     use crate::kit::pdf::editor::{AddPdfPagesRequest, CropPdfRequest, EditPdfRequest, OrganizePdfRequest, PageScope, PdfEditMode, PdfEditOperation, PdfEditSessionPlan, PdfEditSessionRequest, PdfOverlay, PdfOverlayPosition, PdfRect, RedactPdfRequest, RotatePage, SignPdfRequest};
     use crate::kit::pdf::remaining::{CompressPdfRequest, ImagesToPdfRequest, MergePdfRequest, PageOverlayRequest, PageSelectionRequest, PdfToImagesRequest, PdfWatermarkRequest, PdfToTextRequest, RotatePdfRequest, ComparePdfsRequest};
@@ -1040,9 +1004,7 @@ mod command_tests {
         let good = root.join("good.png");
         write_png(&good, 32, 9);
         let originals = [std::fs::read(&offender).unwrap(), std::fs::read(&good).unwrap()];
-        let outcomes = tauri::async_runtime::block_on(image_metadata(RunEvents::silent(), MetadataRequest {
-            paths: vec![offender.clone(), good.clone()], output_location: location(&root, "out"),
-        }));
+        let outcomes = rotate_stack(vec![offender.clone(), good.clone()], location(&root, "out"));
         assert_eq!([std::fs::read(&offender).unwrap(), std::fs::read(&good).unwrap()], originals);
         assert_only_offender_limited(&outcomes, &offender, LimitKind::Decompression, "500 MB");
         let _ = std::fs::remove_dir_all(root);
@@ -1290,14 +1252,10 @@ mod command_tests {
         outputs.extend(named(&mut naming, "compare_pdfs", pdf.clone(), assert_aggregate_success("compare pdfs", &[pdf.clone(), pdf_two.clone()], run_compare_pdfs(&ComparePdfsRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: location(&root, "compare pdfs"), output_path: None }))));
         outputs.extend(named(&mut naming, "convert_images", image.clone(), assert_success("convert", convert_images(RunEvents::silent(), ConvertImagesRequest { paths: vec![image.clone()], format: "jpg".into(), output_location: location(&root, "convert") }))));
         outputs.extend(named(&mut naming, "compress_images", image.clone(), assert_success("compress images", compress_images(RunEvents::silent(), serde_json::from_value::<CompressImagesRequest>(serde_json::json!({ "paths": [image.clone()], "quality": 80, "lossless": false, "outputLocation": location(&root, "compress images") })).expect("Compress Files view payload for compress_images")))));
-        outputs.extend(named(&mut naming, "resize_images", image.clone(), assert_success("resize", resize_images(RunEvents::silent(), ResizeRequest { paths: vec![image.clone()], resize: ResizeStep { width: 128, height: 128, mode: "exact".into(), resampling: "lanczos".into(), keep_aspect_ratio: true, percentage: 100, longest_side: 128 }, output_location: location(&root, "resize") }))));
-        outputs.extend(named(&mut naming, "rotate_images", image.clone(), assert_success("rotate", rotate_images(RunEvents::silent(), RotateRequest { paths: vec![image.clone()], rotate: RotateStep { degrees: 90, flip: "none".into() }, output_location: location(&root, "rotate") }))));
-        outputs.extend(named(&mut naming, "crop_images", image.clone(), assert_success("crop image", crop_images(RunEvents::silent(), CropRequest { paths: vec![image.clone()], crop: CropStep { x: 0, y: 0, width: 128, height: 128, mode: "rectangle".into(), aspect_width: 128, aspect_height: 128, anchor: "center".into() }, output_location: location(&root, "crop image") }))));
-        outputs.extend(named(&mut naming, "export_image_edit_stack", image.clone(), assert_success("edit stack", export_image_edit_stack(RunEvents::silent(), ImageEditStackRequest { paths: vec![image.clone()], steps: ImageEditSteps { crop: Some(CropStep { x: 0, y: 0, width: 0, height: 0, mode: "aspectRatio".into(), aspect_width: 4, aspect_height: 5, anchor: "center".into() }), resize: Some(ResizeStep { width: 0, height: 0, mode: "longestSide".into(), resampling: "lanczos".into(), keep_aspect_ratio: true, percentage: 100, longest_side: 64 }), rotate: Some(RotateStep { degrees: 90, flip: "horizontal".into() }), tone: Some(ToneStep { brightness: 10, contrast: 0.0, saturation: -20.0, exposure: 0.0 }), watermark: Some(WatermarkOptions { text: Some("TEST".into()), logo_path: None, size: Some(0.3), opacity: 70, color: Some("#FFFFFF".into()), position: Some(WatermarkPosition::Anchor { anchor_x: 1.0, anchor_y: 1.0 }), rotation: -8.0 }), metadata: None }, format: None, output_location: location(&root, "edit stack") }))));
+        outputs.extend(named(&mut naming, "export_image_edit_stack", image.clone(), assert_success("edit stack", export_image_edit_stack(RunEvents::silent(), ImageEditStackRequest { paths: vec![image.clone()], steps: ImageEditSteps { crop: Some(CropStep { x: 0, y: 0, width: 0, height: 0, mode: "aspectRatio".into(), aspect_width: 4, aspect_height: 5, anchor: "center".into() }), resize: Some(ResizeStep { width: 0, height: 0, mode: "longestSide".into(), resampling: "lanczos".into(), keep_aspect_ratio: true, percentage: 100, longest_side: 64 }), rotate: Some(RotateStep { degrees: 90, flip: "horizontal".into() }), tone: Some(ToneStep { brightness: 10, contrast: 0.0, saturation: -20.0, exposure: 0.0 }), watermark: Some(WatermarkOptions { text: Some("TEST".into()), logo_path: None, size: Some(0.3), opacity: 70, color: Some("#FFFFFF".into()), position: Some(WatermarkPosition::Anchor { anchor_x: 1.0, anchor_y: 1.0 }), rotation: -8.0 }), metadata: Some(RemoveMetadataStep {}) }, format: None, output_location: location(&root, "edit stack") }))));
         outputs.extend(named(&mut naming, "generate_icon_set", image.clone(), assert_success("icons", generate_icon_set(RunEvents::silent(), IconSetRequest { paths: vec![image.clone()], preset: "favicon".into(), sizes: vec![], output_location: location(&root, "icons") }))));
         outputs.extend(named(&mut naming, "create_gif", image.clone(), assert_aggregate_success("create gif", &[image.clone(), image_two.clone()], run_create_gif(&GifCreateRequest { paths: vec![image.clone(), image_two.clone()], frame_delay_ms: 100, loop_forever: true, output_location: location(&root, "create gif"), output_path: None }))));
         outputs.extend(named(&mut naming, "extract_gif_frames", animated.clone(), assert_success("extract gif", extract_gif_frames(RunEvents::silent(), GifExtractRequest { paths: vec![animated.clone()], output_location: location(&root, "extract gif") }))));
-        outputs.extend(named(&mut naming, "watermark_images", image.clone(), assert_success("watermark image", watermark_images(RunEvents::silent(), WatermarkRequest { paths: vec![image.clone()], options: WatermarkOptions { text: Some("TEST".into()), logo_path: None, size: None, opacity: 70, color: None, position: Some(WatermarkPosition::Offset { x: 16, y: 16 }), rotation: 0.0 }, output_location: location(&root, "watermark image") }))));
         let image_plan = ImageEditPlan {
             edits: vec![
                 ImageEdit::Resize { width: 128, height: 128, mode: "exact".into(), percentage: 100, longest_side: 128, resampling: "lanczos".into(), keep_aspect_ratio: false },
@@ -1336,8 +1294,6 @@ mod command_tests {
             .collect::<Vec<_>>();
         assert!(lossy_differing_pixels.is_empty(), "lossy image export pixels must match the verified edit preview; first differences: {lossy_differing_pixels:?}");
         outputs.extend(named(&mut naming, "export_image_edit_plan", lossy_image.clone(), lossy_image_outputs));
-        outputs.extend(named(&mut naming, "image_metadata", image.clone(), assert_success("metadata", image_metadata(RunEvents::silent(), MetadataRequest { paths: vec![image.clone()], output_location: location(&root, "metadata") }))));
-        outputs.extend(named(&mut naming, "adjust_image_tone", image.clone(), assert_success("tone", adjust_image_tone(RunEvents::silent(), ToneRequest { paths: vec![image.clone()], tone: ToneStep { brightness: 20, contrast: 0.0, saturation: 0.0, exposure: 0.0 }, output_location: location(&root, "tone") }))));
         outputs.extend(named(&mut naming, "process_tiff_pages", tiff.clone(), assert_aggregate_success("tiff", &[tiff.clone()], run_process_tiff_pages(&TiffRequest { paths: vec![tiff.clone()], pages: None, output_location: location(&root, "tiff"), output_path: None }))));
         outputs.extend(named(&mut naming, "blur_faces", image.clone(), assert_vision_adapter("face blur", blur_faces(RunEvents::silent(), VisionRequest { paths: vec![image.clone()], pages: None, output_location: location(&root, "face blur") }))));
         outputs.extend(named(&mut naming, "remove_image_background", image.clone(), assert_vision_adapter("background removal", remove_image_background(RunEvents::silent(), VisionRequest { paths: vec![image.clone()], pages: None, output_location: location(&root, "background removal") }))));
@@ -3363,15 +3319,12 @@ mod command_tests {
     }
 
     #[test]
-    fn metadata_command_keeps_batch_failures_isolated() {
+    fn edit_stack_command_keeps_batch_failures_isolated() {
         let valid = temp_path("cmd_mixed_valid.png");
         let missing = temp_path("cmd_mixed_missing.png");
         write_png(&valid, 64, 9);
 
-        let out = tauri::async_runtime::block_on(image_metadata(RunEvents::silent(), MetadataRequest {
-            paths: vec![valid.clone(), missing.clone()],
-            output_location: OutputLocation::AlongsideInput,
-        }));
+        let out = rotate_stack(vec![valid.clone(), missing.clone()], OutputLocation::AlongsideInput);
         assert_eq!(out.len(), 2);
         assert_eq!(out.iter().map(|job| job.input_path.clone()).collect::<Vec<_>>(), vec![valid.clone(), missing.clone()]);
         assert!(out.iter().any(|job| job.error().is_none()));
@@ -3503,18 +3456,16 @@ mod command_tests {
         write_png(&second, 32, 2);
         let output_location = location(&root, "results");
 
-        let outcomes = tauri::async_runtime::block_on(image_metadata(RunEvents::silent(), MetadataRequest {
-            paths: vec![first.clone(), second.clone()], output_location,
-        }));
+        let outcomes = rotate_stack(vec![first.clone(), second.clone()], output_location);
 
         let mut outputs = outcomes.iter().flat_map(|outcome| {
             assert!(outcome.error().is_none(), "{}", outcome.error().cloned().unwrap_or_default());
             outcome.output_paths().to_vec()
         }).collect::<Vec<_>>();
         outputs.sort();
-        assert_eq!(outputs, vec![root.join("results/photo-stripped-1.png"), root.join("results/photo-stripped.png")]);
+        assert_eq!(outputs, vec![root.join("results/photo-rotated-1.png"), root.join("results/photo-rotated.png")]);
         assert!(outputs.iter().all(|output| output.is_file()));
-        assert!(!root.join("a/photo-stripped.png").exists() && !root.join("b/photo-stripped.png").exists());
+        assert!(!root.join("a/photo-rotated.png").exists() && !root.join("b/photo-rotated.png").exists());
     }
 
     #[cfg(unix)]
@@ -3538,9 +3489,7 @@ mod command_tests {
         let original = std::fs::read(&blocked).unwrap();
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
 
-        let outcomes = tauri::async_runtime::block_on(image_metadata(RunEvents::silent(), MetadataRequest {
-            paths: vec![blocked.clone(), writable.clone()], output_location: OutputLocation::AlongsideInput,
-        }));
+        let outcomes = rotate_stack(vec![blocked.clone(), writable.clone()], OutputLocation::AlongsideInput);
         let listing = std::fs::read_dir(&locked).unwrap().map(|entry| entry.unwrap().file_name()).collect::<Vec<_>>();
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
 
@@ -3550,7 +3499,7 @@ mod command_tests {
         assert_eq!(error.pointer, Some(OutcomePointer::OutputFolder));
         assert!(outcomes[0].output_paths().is_empty());
         assert!(outcomes[1].error().is_none(), "{}", outcomes[1].error().cloned().unwrap_or_default());
-        assert_eq!(outcomes[1].output_paths(), [open.join("scan-stripped.png")]);
+        assert_eq!(outcomes[1].output_paths(), [open.join("scan-rotated.png")]);
         assert_eq!(std::fs::read(&blocked).unwrap(), original, "originals stay untouched");
         assert_eq!(listing, vec![std::ffi::OsString::from("scan.png")], "nothing is left in the read-only folder");
     }
@@ -3591,7 +3540,7 @@ mod command_tests {
 
         fn inspect_files(root: &PathBuf, files: Vec<(String, Vec<u8>)>) -> Vec<MetadataInspection> {
             let paths = files.iter().map(|(name, bytes)| { let path = root.join(name); std::fs::write(&path, bytes).unwrap(); path }).collect::<Vec<_>>();
-            let reports = inspect_image_metadata(MetadataRequest { paths: paths.clone(), output_location: OutputLocation::AlongsideInput });
+            let reports = inspect_image_metadata(MetadataRequest { paths: paths.clone() });
             for (path, (_, bytes)) in paths.iter().zip(&files) { assert_eq!(&std::fs::read(path).unwrap(), bytes, "inspection must not modify {}", path.display()); }
             assert_eq!(reports.len(), paths.len());
             for (report, path) in reports.iter().zip(&paths) {
@@ -3633,7 +3582,7 @@ mod command_tests {
                     assert_eq!(report(inspection), &expected(format, wanted), "{format:?} {name}");
                 }
             }
-            let wire = serde_json::to_value(&inspect_image_metadata(MetadataRequest { paths: vec![root.join("all.jpg")], output_location: OutputLocation::AlongsideInput })[0]).unwrap();
+            let wire = serde_json::to_value(&inspect_image_metadata(MetadataRequest { paths: vec![root.join("all.jpg")] })[0]).unwrap();
             assert_eq!(wire, serde_json::json!({
                 "status": "report", "path": root.join("all.jpg"), "format": "jpeg",
                 "exif": true, "gps": true, "xmp": true, "iptc": true, "comments": true, "icc": true, "orientation": 6,
@@ -3652,7 +3601,7 @@ mod command_tests {
                     assert_eq!(report(inspection).orientation, value.filter(|value| *value <= 8).map(|value| value as u8), "{format:?} {value:?}");
                 }
             }
-            let absent = serde_json::to_value(&inspect_image_metadata(MetadataRequest { paths: vec![root.join("absent.png")], output_location: OutputLocation::AlongsideInput })[0]).unwrap();
+            let absent = serde_json::to_value(&inspect_image_metadata(MetadataRequest { paths: vec![root.join("absent.png")] })[0]).unwrap();
             assert_eq!(absent["orientation"], serde_json::Value::Null);
             let _ = std::fs::remove_dir_all(root);
         }
@@ -3687,7 +3636,7 @@ mod command_tests {
             for (index, (inspection, code)) in reports.iter().zip(&codes).enumerate() {
                 if index < 10 && index % 2 == 1 { report(inspection); } else { assert_eq!(error_code(inspection), *code, "{inspection:?}"); }
             }
-            let missing = inspect_image_metadata(MetadataRequest { paths: vec![root.join("missing.png")], output_location: OutputLocation::AlongsideInput });
+            let missing = inspect_image_metadata(MetadataRequest { paths: vec![root.join("missing.png")] });
             assert_eq!(error_code(&missing[0]), MetadataErrorCode::Unreadable);
             let wire = serde_json::to_value(&missing[0]).unwrap();
             assert_eq!((wire["status"].as_str(), wire["code"].as_str(), wire["message"].is_string()), (Some("error"), Some("unreadable"), true));

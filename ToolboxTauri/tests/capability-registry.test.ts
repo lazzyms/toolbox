@@ -45,7 +45,12 @@ test("UI capabilities are the shared native contract facts", () => {
   assert.equal(UtilityRegistry.find(({ id }) => id === "lock-unlock")?.command, "remove_password");
   assert.equal(capabilitiesByCommand.get("export_image_edit_stack")?.inputCardinality, "multiple");
   assert.equal(capabilitiesByCommand.get("export_image_edit_stack")?.outputSuffix, "-edited");
-  assert.equal(capabilitiesByCommand.get("crop_images")?.inputCardinality, "single");
+  for (const retired of ["crop_images", "resize_images", "rotate_images", "adjust_image_tone", "watermark_images", "image_metadata"]) {
+    assert.equal(capabilitiesByCommand.get(retired), undefined, `${retired} is retired: Edit Image exports through the stack`);
+  }
+  for (const id of ["crop", "resize", "rotate", "image-tone", "image-watermark", "image-metadata"]) {
+    assert.equal(UtilityRegistry.find((tool) => tool.id === id)?.command, "export_image_edit_stack", `${id} opens its step in the shared edit stack`);
+  }
   const crop = UtilityRegistry.find(({ id }) => id === "crop");
   assert.equal(crop?.command, "export_image_edit_stack");
   assert.equal(crop?.capability.inputCardinality, "multiple", "Crop accepts a batch because it runs through the shared edit stack");

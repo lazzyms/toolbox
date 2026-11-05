@@ -60,7 +60,7 @@ impl WatermarkOptions {
 
 #[cfg(test)]
 mod tests {
-    use crate::kit::images::tools::{ImageEditPlan, WatermarkRequest};
+    use crate::kit::images::tools::{ImageEditPlan, ImageEditStackRequest};
     use crate::kit::pdf::remaining::PdfWatermarkRequest;
     use serde_json::{json, Value};
 
@@ -70,9 +70,9 @@ mod tests {
         value
     }
 
-    fn image_request(options: &Value) -> Result<(), String> {
-        let request: WatermarkRequest = serde_json::from_value(with(json!({ "paths": [], "outputLocation": "alongsideInput" }), options)).map_err(|error| error.to_string())?;
-        request.options.validate()
+    fn image_stack(options: &Value) -> Result<(), String> {
+        let request: ImageEditStackRequest = serde_json::from_value(json!({ "paths": [], "steps": { "watermark": options }, "outputLocation": "alongsideInput" })).map_err(|error| error.to_string())?;
+        request.steps.watermark.expect("the stack keeps its watermark step").validate()
     }
 
     fn image_plan(options: &Value) -> Result<(), String> {
@@ -131,17 +131,18 @@ mod tests {
         ];
 
         for options in &valid {
-            for (target, result) in [("image request", image_request(options)), ("image edit plan", image_plan(options)), ("pdf request", pdf_request(options))] {
+            for (target, result) in [("image edit stack", image_stack(options)), ("image edit plan", image_plan(options)), ("pdf request", pdf_request(options))] {
                 assert_eq!(result, Ok(()), "{target} rejected {options}");
             }
         }
         for (options, message) in &invalid {
             let pdf = pdf_request(options).expect_err(&format!("pdf request accepted {options}"));
-            assert_eq!(image_request(options).expect_err(&format!("image request accepted {options}")), pdf, "{options}");
             if !message.is_empty() {
                 assert_eq!(pdf, *message, "{options}");
+                assert_eq!(image_stack(options), Err(pdf.clone()), "{options}");
                 assert_eq!(image_plan(options), Err(pdf), "{options}");
             } else {
+                assert!(image_stack(options).is_err(), "image edit stack accepted {options}");
                 assert!(image_plan(options).is_err(), "image edit plan accepted {options}");
             }
         }
