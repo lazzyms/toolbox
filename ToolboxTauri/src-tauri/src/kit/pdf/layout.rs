@@ -14,6 +14,7 @@ const QUOTE_INK: [f32; 3] = [0.3, 0.3, 0.3];
 const LINK_INK: [f32; 3] = [0.05, 0.33, 0.75];
 const SHADE: [f32; 3] = [0.94, 0.94, 0.94];
 const RULE: [f32; 3] = [0.7, 0.7, 0.7];
+const TABLE_PAD: f32 = 4.;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Face { index: usize, oblique: bool, heavy: bool }
@@ -542,11 +543,7 @@ impl<'b, 'r, S: SystemFontLookup> Flow<'b, 'r, S> {
         Ok(())
     }
 
-    fn table(&mut self, aligns: &[Align], head: &[Vec<Span>], rows: &[Vec<Vec<Span>>], x: f32, width: f32) -> Result<(), ToolError> {
-        let size = self.theme.body_size * 0.95;
-        let pad = 4.;
-        let columns = rows.iter().map(Vec::len).chain([head.len(), aligns.len()]).max().unwrap_or(0);
-        if columns == 0 { return Ok(()); }
+    fn column_widths(&mut self, head: &[Vec<Span>], rows: &[Vec<Vec<Span>>], columns: usize, size: f32) -> Result<(Vec<f32>, Vec<f32>), ToolError> {
         let mut natural = vec![0f32; columns];
         let mut minimum = vec![0f32; columns];
         for (row, bold) in std::iter::once((head, true)).chain(rows.iter().map(|row| (row.as_slice(), false))) {
@@ -557,6 +554,23 @@ impl<'b, 'r, S: SystemFontLookup> Flow<'b, 'r, S> {
                 }
             }
         }
+        Ok((natural, minimum))
+    }
+
+    pub fn table_scale(&mut self, head: &[Vec<Span>], rows: &[Vec<Vec<Span>>]) -> Result<f32, ToolError> {
+        let columns = rows.iter().map(Vec::len).chain([head.len()]).max().unwrap_or(0);
+        let (natural, _) = self.column_widths(head, rows, columns, self.theme.body_size * 0.95)?;
+        let text = natural.iter().sum::<f32>();
+        let room = self.text_width() - 2. * TABLE_PAD * columns as f32;
+        Ok(if text <= 0. { 1. } else { (room / text).clamp(0., 1.) })
+    }
+
+    fn table(&mut self, aligns: &[Align], head: &[Vec<Span>], rows: &[Vec<Vec<Span>>], x: f32, width: f32) -> Result<(), ToolError> {
+        let size = self.theme.body_size * 0.95;
+        let pad = TABLE_PAD;
+        let columns = rows.iter().map(Vec::len).chain([head.len(), aligns.len()]).max().unwrap_or(0);
+        if columns == 0 { return Ok(()); }
+        let (natural, minimum) = self.column_widths(head, rows, columns, size)?;
         let wanted = natural.iter().map(|value| value + 2. * pad).collect::<Vec<_>>();
         let total = wanted.iter().sum::<f32>();
         let mut widths = if total <= width { wanted } else {

@@ -35,7 +35,7 @@
     {"id": "presentations", "extensions": [".pptx", ".odp"], "nativeAvailability": "unavailable"},
     {"id": "markdown", "extensions": [".md", ".markdown"], "nativeAvailability": "available"},
     {"id": "web-pages", "extensions": [".html", ".htm"], "nativeAvailability": "unavailable"},
-    {"id": "tables", "extensions": [".csv", ".tsv"], "nativeAvailability": "unavailable"},
+    {"id": "tables", "extensions": [".csv", ".tsv"], "nativeAvailability": "available"},
     {"id": "ebooks", "extensions": [".epub"], "nativeAvailability": "unavailable"},
     {"id": "legacy-office", "extensions": [".doc", ".xls", ".ppt"], "nativeAvailability": "unavailable", "basicFidelity": true},
     {"id": "mobi", "extensions": [".mobi"], "nativeAvailability": "unavailable"}

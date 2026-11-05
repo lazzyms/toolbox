@@ -26,19 +26,32 @@ export type MarkdownOptions = {
 
 export const defaultMarkdownOptions: MarkdownOptions = { pageSize: "a4", margins: "normal", bodyFont: "sans", codeStyle: "shaded", tableOfContents: false };
 
+export type TableOptions = {
+  delimiter: "auto" | "comma" | "semicolon" | "tab" | "pipe";
+  headerRow: boolean;
+  encoding: PlainTextOptions["encoding"];
+  orientation: "landscape" | "portrait";
+  fit: "width" | "none";
+};
+
+export const defaultTableOptions: TableOptions = { delimiter: "auto", headerRow: true, encoding: "detect", orientation: "landscape", fit: "width" };
+
 export const isPlainText = (path: string) => extensionOf(path) === ".txt";
 
 export const isMarkdown = (path: string) => [".md", ".markdown"].includes(extensionOf(path));
 
-export type ConvertToPdfOptions = { plainText: PlainTextOptions; markdown: MarkdownOptions };
+export const isTable = (path: string) => [".csv", ".tsv"].includes(extensionOf(path));
 
-export const defaultConvertToPdfOptions: ConvertToPdfOptions = { plainText: defaultPlainTextOptions, markdown: defaultMarkdownOptions };
+export type ConvertToPdfOptions = { plainText: PlainTextOptions; markdown: MarkdownOptions; tables: TableOptions };
+
+export const defaultConvertToPdfOptions: ConvertToPdfOptions = { plainText: defaultPlainTextOptions, markdown: defaultMarkdownOptions, tables: defaultTableOptions };
 
 export const convertToPdfRequest = (paths: string[], outputLocation: unknown, options: ConvertToPdfOptions) => ({
   paths,
   outputLocation,
   ...(paths.some(isPlainText) ? { plainText: options.plainText } : {}),
   ...(paths.some(isMarkdown) ? { markdown: options.markdown } : {}),
+  ...(paths.some(isTable) ? { tables: options.tables } : {}),
 });
 
 const unavailableFamily = (tool: ToolDefinition, path: string) =>
@@ -66,13 +79,14 @@ const appliesTo = (files: string[], plural: string) => `Applies to ${files.lengt
 type PanelProps<T> = { files: string[]; options: T; onChange: (options: T) => void; disabled: boolean };
 
 export const ConvertToPdfOptionsPanel = ({ files, options, onChange, disabled }: PanelProps<ConvertToPdfOptions>) => {
-  if (!files.some(isPlainText) && !files.some(isMarkdown)) {
+  if (![isPlainText, isMarkdown, isTable].some((matches) => files.some(matches))) {
     return <p className="workspace-note">Options for each format appear here when a file of that format is in the list.</p>;
   }
   return (
     <>
       <MarkdownOptionsPanel files={files} options={options.markdown} onChange={(markdown) => onChange({ ...options, markdown })} disabled={disabled} />
       <PlainTextOptionsPanel files={files} options={options.plainText} onChange={(plainText) => onChange({ ...options, plainText })} disabled={disabled} />
+      <TablesOptionsPanel files={files} options={options.tables} onChange={(tables) => onChange({ ...options, tables })} disabled={disabled} />
     </>
   );
 };
@@ -191,6 +205,63 @@ const PlainTextOptionsPanel = ({ files, options, onChange, disabled }: PanelProp
         <Checkbox id="plain-text-wrap" checked={options.wrapLines} onCheckedChange={(checked) => set("wrapLines", checked === true)} />
         Wrap long lines
       </Label>
+    </fieldset>
+  );
+};
+
+const TablesOptionsPanel = ({ files, options, onChange, disabled }: PanelProps<TableOptions>) => {
+  const tableFiles = files.filter(isTable);
+  if (tableFiles.length === 0) return null;
+  const set = <K extends keyof TableOptions>(key: K, value: TableOptions[K]) => onChange({ ...options, [key]: value });
+  return (
+    <fieldset role="region" aria-label="Tables options" className="grid gap-3" disabled={disabled}>
+      <div className="workspace-panel-intro">
+        <p className="workspace-panel-label">Tables</p>
+        <p className="workspace-panel-copy">{appliesTo(tableFiles, "table files")}</p>
+      </div>
+      <div className="workspace-field-grid">
+        <div className="workspace-field">
+          <Label htmlFor="tables-delimiter">Delimiter</Label>
+          <NativeSelect id="tables-delimiter" aria-describedby="tables-delimiter-hint" value={options.delimiter} onChange={(event) => set("delimiter", event.target.value as TableOptions["delimiter"])}>
+            <option value="auto">By file type</option>
+            <option value="comma">Comma</option>
+            <option value="semicolon">Semicolon</option>
+            <option value="tab">Tab</option>
+            <option value="pipe">Pipe</option>
+          </NativeSelect>
+          <p id="tables-delimiter-hint" className="workspace-note">Comma for CSV and tab for TSV, unless you pick one.</p>
+        </div>
+        <div className="workspace-field">
+          <Label htmlFor="tables-encoding">Encoding</Label>
+          <NativeSelect id="tables-encoding" value={options.encoding} onChange={(event) => set("encoding", event.target.value as TableOptions["encoding"])}>
+            <option value="detect">Detect</option>
+            <option value="utf8">UTF-8</option>
+            <option value="utf16le">UTF-16 LE</option>
+            <option value="utf16be">UTF-16 BE</option>
+            <option value="windows1252">Windows-1252</option>
+          </NativeSelect>
+        </div>
+      </div>
+      <Label htmlFor="tables-header-row" className="cursor-pointer">
+        <Checkbox id="tables-header-row" checked={options.headerRow} onCheckedChange={(checked) => set("headerRow", checked === true)} />
+        First row is a header, repeated on each page
+      </Label>
+      <div className="workspace-field-grid">
+        <div className="workspace-field">
+          <Label htmlFor="tables-orientation">Orientation</Label>
+          <NativeSelect id="tables-orientation" value={options.orientation} onChange={(event) => set("orientation", event.target.value as TableOptions["orientation"])}>
+            <option value="landscape">Landscape</option>
+            <option value="portrait">Portrait</option>
+          </NativeSelect>
+        </div>
+        <div className="workspace-field">
+          <Label htmlFor="tables-fit">Fit</Label>
+          <NativeSelect id="tables-fit" value={options.fit} onChange={(event) => set("fit", event.target.value as TableOptions["fit"])}>
+            <option value="width">Fit to width</option>
+            <option value="none">Keep text size</option>
+          </NativeSelect>
+        </div>
+      </div>
     </fieldset>
   );
 };

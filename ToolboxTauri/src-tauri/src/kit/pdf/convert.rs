@@ -11,8 +11,8 @@ use crate::kit::common::batch_runner::{BatchRunner, RunEvents};
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::{native_capabilities, SkipCode, SkipReason, ToolError};
 use crate::kit::pdf::font_resolver::{FontResolver, FontStyle, SystemFontLookup};
-use crate::kit::pdf::layout::{assemble, expand_tabs, Assembly, Face, FontBook, Flow, Geometry, PageOut, Theme};
-use crate::kit::pdf::{markdown, rtf};
+use crate::kit::pdf::layout::{assemble, expand_tabs, Assembly, Block, Face, FontBook, Flow, Geometry, PageOut, Theme};
+use crate::kit::pdf::{delimited, markdown, rtf};
 
 pub const COMMAND: &str = "convert_to_pdf";
 const ALREADY_PDF: &str = "Already a PDF. Nothing was made.";
@@ -24,6 +24,9 @@ const RTF_FAMILY: &str = "Times New Roman";
 const RTF_SIZE: f32 = 12.;
 const MIN_PAGE_SIDE: f32 = 72.;
 const MAX_PAGE_SIDE: f32 = 14_400.;
+const TABLE_FAMILY: &str = "Arial";
+const TABLE_SIZE: f32 = 10.;
+const MIN_TABLE_SIZE: f32 = 4.;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -110,6 +113,44 @@ impl Default for MarkdownOptions {
     fn default() -> Self { Self { page_size: None, margins: None, body_font: TextFont::Sans, code_style: CodeStyle::default(), table_of_contents: false } }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum Delimiter { #[default] Auto, Comma, Semicolon, Tab, Pipe }
+
+impl Delimiter {
+    fn resolve(self, extension: &str) -> (u8, &'static str) {
+        match self {
+            Self::Auto if extension == "tsv" => (b'\t', "tab"),
+            Self::Auto | Self::Comma => (b',', "comma"),
+            Self::Semicolon => (b';', "semicolon"),
+            Self::Tab => (b'\t', "tab"),
+            Self::Pipe => (b'|', "pipe"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum Orientation { Portrait, #[default] Landscape }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum TableFit { #[default] Width, None }
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TableOptions {
+    pub delimiter: Delimiter,
+    pub header_row: bool,
+    pub encoding: TextEncoding,
+    pub orientation: Orientation,
+    pub fit: TableFit,
+}
+
+impl Default for TableOptions {
+    fn default() -> Self { Self { delimiter: Delimiter::default(), header_row: true, encoding: TextEncoding::default(), orientation: Orientation::default(), fit: TableFit::default() } }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConvertToPdfRequest {
@@ -118,6 +159,7 @@ pub struct ConvertToPdfRequest {
     #[serde(default)] pub page_defaults: PageDefaults,
     #[serde(default)] pub plain_text: Option<PlainTextOptions>,
     #[serde(default)] pub markdown: Option<MarkdownOptions>,
+    #[serde(default)] pub tables: Option<TableOptions>,
 }
 
 pub struct ConvertJob<S: SystemFontLookup> {
@@ -178,6 +220,7 @@ fn convert<S: SystemFontLookup>(job: &ConvertJob<S>, input: PathBuf) -> JobOutco
         "pdf" => return JobOutcome::skipped(input, SkipReason::new(SkipCode::AlreadyInTargetFormat, ALREADY_PDF)),
         "md" | "markdown" => markdown_file(job, &job.request.markdown.unwrap_or_default(), &input),
         "rtf" => rich_text(job, &input),
+        "csv" | "tsv" => table_file(job, &job.request.tables.unwrap_or_default(), &input, &extension),
         _ => plain_text(job, &job.request.plain_text.unwrap_or_default(), &input),
     };
     result.unwrap_or_else(|error| JobOutcome::failure(input, error))
@@ -320,6 +363,44 @@ fn rich_text<S: SystemFontLookup>(job: &ConvertJob<S>, input: &Path) -> Result<J
         1 => detail.push_str(" Omitted content: 1 picture couldn't be shown and was left out."),
         count => detail.push_str(&format!(" Omitted content: {count} pictures couldn't be shown and were left out.")),
     }
+    Ok(JobOutcome::succeeded(input.to_path_buf(), vec![path], detail).with_fonts(book.reports()))
+}
+
+fn grouped(count: usize) -> String {
+    let digits = count.to_string();
+    let mut out = String::new();
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index) % 3 == 0 { out.push(','); }
+        out.push(digit);
+    }
+    out
+}
+
+fn table_file<S: SystemFontLookup>(job: &ConvertJob<S>, options: &TableOptions, input: &Path, extension: &str) -> Result<JobOutcome, ToolError> {
+    let bytes = fs::read(input).map_err(|error| ToolError::processing(format!("Could not read the file: {error}")))?;
+    let (text, encoding) = decode(&bytes, options.encoding)?;
+    let (delimiter, delimiter_name) = options.delimiter.resolve(extension);
+    let delimited::Table { block, rows } = delimited::parse(&text, delimiter, options.header_row)?;
+    let (short, long) = job.request.page_defaults.page_size.points();
+    let (width, height) = if options.orientation == Orientation::Landscape { (long, short) } else { (short, long) };
+    let geometry = Geometry::uniform(width, height, job.request.page_defaults.margins.points());
+
+    let mut book = FontBook::new(&job.fonts);
+    let mut size = TABLE_SIZE;
+    if options.fit == TableFit::Width {
+        if let Block::Table { head, rows, .. } = &block {
+            let mut measure = Flow::new(&mut book, Theme::new(TABLE_FAMILY, CODE_FAMILY, TABLE_SIZE, false), &[], geometry);
+            size = (TABLE_SIZE * measure.table_scale(head, rows)? * 0.995).clamp(MIN_TABLE_SIZE, TABLE_SIZE);
+        }
+    }
+    let mut flow = Flow::new(&mut book, Theme::new(TABLE_FAMILY, CODE_FAMILY, size, false), &[], geometry);
+    flow.blocks(std::slice::from_ref(&block))?;
+    let laid = flow.finish();
+    let count = laid.pages.len();
+    let document = assemble(&book, Assembly { size: (width, height), pages: laid.pages, pictures: &[], bookmarks: &[], anchors: &BTreeMap::new(), title: None, author: None })?;
+    let path = save(&job.request.output_location, input, document)?;
+    let rows = if rows == 1 { "1 row".to_string() } else { format!("{} rows", grouped(rows)) };
+    let detail = format!("{}. {rows}, {delimiter_name}. Read as {encoding}.", page_count(count));
     Ok(JobOutcome::succeeded(input.to_path_buf(), vec![path], detail).with_fonts(book.reports()))
 }
 
@@ -567,9 +648,9 @@ mod tests {
         }
         let outcomes = convert_paths(&[&input], json!({ "markdown": { "bodyFont": "sans", "codeStyle": "shaded", "tableOfContents": false, "toc": true } }));
         assert_eq!(outcomes[0].error().unwrap().kind, ErrorKind::InvalidInput);
-        let outcomes = convert_paths(&[&input], json!({ "tables": {} }));
+        let outcomes = convert_paths(&[&input], json!({ "ebooks": {} }));
         assert_eq!(outcomes[0].error().unwrap().kind, ErrorKind::Unavailable);
-        assert_eq!(outcomes[0].error().unwrap().message, "Tables options come in a later update.");
+        assert_eq!(outcomes[0].error().unwrap().message, "Ebooks options come in a later update.");
         let outcomes = convert_paths(&[&input], json!({ "webPages": {} }));
         assert_eq!(outcomes[0].error().unwrap().message, "Web pages options come in a later update.");
         let mobi = root.join("book.mobi");
@@ -826,5 +907,125 @@ mod tests {
 
         let outcomes = convert_paths(&[&good], json!({ "richText": {} }));
         assert_eq!(outcomes[0].error().unwrap().kind, ErrorKind::InvalidInput);
+    }
+
+    fn media_box(document: &Document, page: u32) -> Vec<f32> {
+        document.get_dictionary(document.get_pages()[&page]).unwrap().get(b"MediaBox").unwrap().as_array().unwrap().iter().map(|value| value.as_float().unwrap()).collect()
+    }
+
+    fn font_sizes(document: &Document, page: u32) -> Vec<f32> {
+        let content = String::from_utf8_lossy(&document.get_page_content(document.get_pages()[&page])).into_owned();
+        let tokens = content.split_whitespace().collect::<Vec<_>>();
+        tokens.windows(2).filter(|pair| pair[1] == "Tf").filter_map(|pair| pair[0].parse().ok()).collect()
+    }
+
+    fn in_order(text: &str, needles: &[&str]) -> bool {
+        let mut rest = text;
+        needles.iter().all(|needle| match rest.find(needle) { Some(at) => { rest = &rest[at + needle.len()..]; true } None => false })
+    }
+
+    #[test]
+    fn quoted_csv_with_a_custom_delimiter_and_default_tsv_keep_cells_in_order() {
+        let root = sandbox("tables");
+        let csv = root.join("ledger.csv");
+        let tsv = root.join("people.tsv");
+        let csv_bytes = b"Name;Note;Amount\n\"Smith; Jo\";\"said \"\"hi\"\"\";1200\nLee;plain;-3\n".to_vec();
+        let tsv_bytes = b"City\tCountry\nOslo\tNorway\nLima, Centro\tPeru\n".to_vec();
+        fs::write(&csv, &csv_bytes).unwrap();
+        fs::write(&tsv, &tsv_bytes).unwrap();
+
+        let outcomes = convert_paths(&[&csv], json!({ "tables": { "delimiter": "semicolon", "headerRow": true, "encoding": "detect", "orientation": "portrait", "fit": "width" } }));
+        assert!(succeeded(&outcomes[0]), "{:?}", outcomes[0]);
+        assert_eq!(outcomes[0].detail, "1 page. 2 rows, semicolon. Read as UTF-8.");
+        assert_eq!(outcomes[0].fonts[0].requested_family, "Arial");
+        let text = Document::load(root.join("ledger.pdf")).unwrap().extract_text(&[1]).unwrap();
+        assert!(in_order(&text, &["Name", "Note", "Amount", "Smith; Jo", "said \"hi\"", "1200", "Lee", "plain", "-3"]), "{text}");
+
+        let outcomes = convert_paths(&[&tsv], json!({}));
+        assert!(succeeded(&outcomes[0]), "{:?}", outcomes[0]);
+        assert_eq!(outcomes[0].detail, "1 page. 2 rows, tab. Read as UTF-8.");
+        let document = Document::load(root.join("people.pdf")).unwrap();
+        assert_eq!(media_box(&document, 1), [0., 0., 841.89, 595.28]);
+        let text = document.extract_text(&[1]).unwrap();
+        assert!(in_order(&text, &["City", "Country", "Oslo", "Norway", "Lima, Centro", "Peru"]), "{text}");
+
+        let comma = convert_paths(&[&tsv], json!({ "tables": { "delimiter": "comma", "headerRow": true, "encoding": "detect", "orientation": "landscape", "fit": "width" } }));
+        assert_eq!(comma[0].detail, "1 page. 2 rows, comma. Read as UTF-8.");
+        assert_eq!(fs::read(&csv).unwrap(), csv_bytes);
+        assert_eq!(fs::read(&tsv).unwrap(), tsv_bytes);
+        assert_eq!(names(&root), ["ledger.csv", "ledger.pdf", "people-1.pdf", "people.pdf", "people.tsv"]);
+    }
+
+    #[test]
+    fn long_tables_repeat_the_header_on_every_page() {
+        let root = sandbox("table_pages");
+        let input = root.join("orders.tsv");
+        let mut text = String::from("Order\tClient\tTotal\n");
+        for index in 0..300 { text.push_str(&format!("{index}\tCustomer {index}\t{}.50\n", index * 3)); }
+        fs::write(&input, &text).unwrap();
+        let outcomes = convert_paths(&[&input], json!({}));
+        assert!(succeeded(&outcomes[0]), "{:?}", outcomes[0]);
+        let document = Document::load(root.join("orders.pdf")).unwrap();
+        let pages = document.get_pages().len() as u32;
+        assert!(pages > 3, "{pages}");
+        assert_eq!(outcomes[0].detail, format!("{pages} pages. 300 rows, tab. Read as UTF-8."));
+        let mut seen = 0;
+        for page in 1..=pages {
+            let text = document.extract_text(&[page]).unwrap();
+            assert!(in_order(&text, &["Order", "Client", "Total"]), "page {page}: {text}");
+            assert_eq!(text.matches("Total").count(), 1, "page {page}");
+            assert!(text.contains(&format!("Customer {seen}")), "page {page} continues at row {seen}");
+            seen += text.matches("Customer ").count();
+        }
+        assert_eq!(seen, 300);
+        assert_eq!([grouped(1), grouped(999), grouped(1240), grouped(1_234_567)], ["1", "999", "1,240", "1,234,567"]);
+
+        let headless = convert_paths(&[&input], json!({ "tables": { "delimiter": "auto", "headerRow": false, "encoding": "detect", "orientation": "landscape", "fit": "width" } }));
+        assert!(headless[0].detail.ends_with(" pages. 301 rows, tab. Read as UTF-8."), "{}", headless[0].detail);
+        let document = Document::load(root.join("orders-1.pdf")).unwrap();
+        assert!(!document.extract_text(&[2]).unwrap().contains("Total"));
+    }
+
+    #[test]
+    fn orientation_and_fit_change_page_geometry_and_text_size() {
+        let root = sandbox("table_fit");
+        let input = root.join("wide.csv");
+        let header = (0..10).map(|index| format!("Column heading {index}")).collect::<Vec<_>>().join(",");
+        let row = (0..10).map(|index| format!("value number {index}")).collect::<Vec<_>>().join(",");
+        fs::write(&input, format!("{header}\n{row}\n")).unwrap();
+        let options = |orientation: &str, fit: &str| json!({ "pageDefaults": { "pageSize": "letter", "margins": "narrow" }, "tables": { "delimiter": "auto", "headerRow": true, "encoding": "detect", "orientation": orientation, "fit": fit } });
+
+        for (orientation, fit) in [("landscape", "width"), ("portrait", "width"), ("portrait", "none")] {
+            assert!(succeeded(&convert_paths(&[&input], options(orientation, fit))[0]));
+        }
+        let landscape = Document::load(root.join("wide.pdf")).unwrap();
+        let portrait = Document::load(root.join("wide-1.pdf")).unwrap();
+        let unfitted = Document::load(root.join("wide-2.pdf")).unwrap();
+        assert_eq!(media_box(&landscape, 1), [0., 0., 792., 612.]);
+        assert_eq!(media_box(&portrait, 1), [0., 0., 612., 792.]);
+        let largest = |document: &Document| font_sizes(document, 1).into_iter().fold(0f32, f32::max);
+        assert!(largest(&portrait) < largest(&landscape), "{} vs {}", largest(&portrait), largest(&landscape));
+        assert!(largest(&landscape) < largest(&unfitted));
+        assert_eq!(largest(&unfitted), 9.5);
+        let text = portrait.extract_text(&[1]).unwrap();
+        assert!(in_order(&text, &["Column heading 0", "Column heading 9", "value number 0", "value number 9"]), "{text}");
+    }
+
+    #[test]
+    fn invalid_delimiters_and_empty_tables_fail_without_output() {
+        let root = sandbox("table_invalid");
+        let input = root.join("data.csv");
+        let empty = root.join("empty.tsv");
+        fs::write(&input, "a,b\n1,2\n").unwrap();
+        fs::write(&empty, "\n\n").unwrap();
+        for delimiter in [json!("colon"), json!(";;"), json!(9)] {
+            let outcomes = convert_paths(&[&input], json!({ "tables": { "delimiter": delimiter, "headerRow": true, "encoding": "detect", "orientation": "landscape", "fit": "width" } }));
+            assert_eq!(outcomes[0].error().unwrap().kind, ErrorKind::InvalidInput, "{delimiter}");
+        }
+        let outcomes = convert_paths(&[&empty, &input], json!({}));
+        assert_eq!(outcomes[0].error().unwrap().kind, ErrorKind::InvalidInput);
+        assert_eq!(outcomes[0].error().unwrap().message, "This table has no rows, so no PDF was made.");
+        assert!(succeeded(&outcomes[1]));
+        assert_eq!(names(&root), ["data.csv", "data.pdf", "empty.tsv"]);
     }
 }
