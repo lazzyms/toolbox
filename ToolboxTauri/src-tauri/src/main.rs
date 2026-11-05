@@ -11,7 +11,7 @@ use crate::file_actions::{open_output_path, open_sponsor_page, open_third_party_
 use crate::kit::common::{note_renamed, JobOutcome};
 use crate::kit::images::{ImageProcessor, Options as ImageOptions};
 use crate::kit::images::tools;
-use crate::kit::pdf::{editor, metadata, remaining, scene, PDFProcessor};
+use crate::kit::pdf::{bates, editor, metadata, remaining, scene, PDFProcessor};
 use crate::kit::vision;
 use crate::kit::contracts::{command_supports_preview, validate_command_inputs, validate_page_selection, CompressImagesRequest, ConvertImagesRequest, OutcomeState, PasswordRequest, ToolError};
 use crate::kit::common::batch_runner::{BatchRunner, FileEvent, FolderCheck, RunEvents};
@@ -212,6 +212,15 @@ async fn organize_pdf(events: RunEvents, request: editor::OrganizePdfRequest) ->
 async fn add_pdf_pages(events: RunEvents, request: editor::AddPdfPagesRequest) -> Vec<JobOutcome> {
     let request = Arc::new(request);
     BatchRunner::run(&events, "add_pdf_pages", request.paths.clone(), &request.output_location, &request, editor::add_pages)
+}
+
+#[tauri::command]
+async fn bates_number_pdfs(events: RunEvents, request: bates::BatesRequest) -> Vec<JobOutcome> {
+    if let Err(outcomes) = validate_command_inputs("bates_number_pdfs", &request.paths) { return outcomes; }
+    let (plan, run) = match bates::plan(&request) { Ok(planned) => planned, Err(outcomes) => return outcomes };
+    let plan = Arc::new(plan);
+    let outcomes = BatchRunner::run(&events, "bates_number_pdfs", run, &request.output_location, &plan, bates::number);
+    bates::report(&plan, outcomes)
 }
 
 #[tauri::command]
@@ -546,6 +555,7 @@ fn main() {
             organize_pdf,
             add_pdf_pages
             ,add_page_numbers,
+            bates_number_pdfs,
             watermark_pdf,
             compress_pdf,
             rotate_pdf,
@@ -1141,6 +1151,7 @@ mod command_tests {
         outputs.extend(named(&mut naming, "export_pdf_scene", pdf.clone(), assert_success("PDF scene", run_export_pdf_scene(RunEvents::silent(), scene::ExportRequest { paths: vec![pdf.clone()], scene: visual_scene, output_location: OutputLocation::AlongsideInput, output_path: None, sections: Default::default() }))));
         outputs.extend(named(&mut naming, "remove_password", protected.clone(), assert_success("unlock", remove_password(RunEvents::silent(), PasswordRequest { paths: vec![protected], password: crate::kit::TEST_PASSWORD.into(), password_overrides: Default::default(), output_location: location(&root, "unlock") }))));
         outputs.extend(named(&mut naming, "add_page_numbers", pdf.clone(), assert_success("page numbers", add_page_numbers(RunEvents::silent(), PageOverlayRequest { paths: vec![pdf.clone()], text: "1".into(), opacity: 100, position: Some("bottom-right".into()), logo_path: None, pages: None, start_number: Some(1), font_size: Some(12), output_location: location(&root, "page numbers") }))));
+        outputs.extend(named(&mut naming, "bates_number_pdfs", pdf.clone(), assert_success("bates", bates_number_pdfs(RunEvents::silent(), bates::BatesRequest { paths: vec![pdf.clone()], run: None, format: bates::BatesFormat { prefix: "HL".into(), suffix: String::new(), start: 1, digits: 6, position: bates::BatesPosition::BottomRight, font_family: None, font_size: 10. }, output_location: location(&root, "bates") }))));
         outputs.extend(named(&mut naming, "merge_pdfs", pdf.clone(), assert_aggregate_success("merge", &[pdf.clone(), pdf_two.clone()], run_merge_pdfs(&MergePdfRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: location(&root, "merge"), output_path: None }))));
         outputs.extend(named(&mut naming, "watermark_pdf", pdf.clone(), assert_success("watermark pdf", watermark_pdf(RunEvents::silent(), PageOverlayRequest { paths: vec![pdf.clone()], text: "TEST".into(), opacity: 70, position: Some("center".into()), logo_path: None, pages: None, start_number: None, font_size: None, output_location: location(&root, "watermark pdf") }))));
         outputs.extend(named(&mut naming, "crop_pdf", pdf.clone(), assert_success("crop pdf", crop_pdf(RunEvents::silent(), CropPdfRequest { paths: vec![pdf.clone()], rectangle: PdfRect { x: 0.5, y: 0.5, width: 500.0, height: 700.0 }, scope: PageScope::All, output_location: location(&root, "crop pdf") }))));

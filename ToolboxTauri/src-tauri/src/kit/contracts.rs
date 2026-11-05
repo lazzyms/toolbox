@@ -817,10 +817,9 @@ mod tests {
             assert_eq!(capability.native_available, row["nativeAvailability"] == "available");
             assert_eq!(capability.output_suffix, row["outputSuffix"].as_str().unwrap());
             assert_eq!(capability.many_to_one, row["manyToOne"].as_bool().unwrap());
-            assert_eq!(
-                capability.many_to_one,
-                capability.input_cardinality == InputCardinality::Ordered,
-                "{command} many-to-one must match its ordered inputs"
+            assert!(
+                !capability.many_to_one || capability.input_cardinality == InputCardinality::Ordered,
+                "{command} many-to-one must take ordered inputs"
             );
         }
         let mut many_to_one = native_capabilities()

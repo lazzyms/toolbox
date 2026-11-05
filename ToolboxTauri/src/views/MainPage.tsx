@@ -33,6 +33,7 @@ import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import type { PdfEditorNavigation } from "./PDFEditorWorkspaceView";
 import { SecurityWorkspaceView } from "./SecurityWorkspaceView";
+import { BatesView } from "./BatesView";
 import { PDFEditorWorkspaceView } from "./PDFEditorWorkspaceView";
 import { PDFConversionWorkspaceView } from "./PDFConversionWorkspaceView";
 import { ImageEditorWorkspaceView } from "./ImageEditorWorkspaceView";
@@ -717,6 +718,7 @@ const ViewFor = ({ utility, initialPaths, fileActivation, onActivationAccepted, 
   if (!workspace) return <PlannedToolView utility={utility} />;
   // Views are chosen by tool: the PDF Editor holds both the scene editor and batch PDF tools.
   if (isPdfSceneTool(utility.id)) return <PDFEditorWorkspaceView utility={utility} initialPaths={initialPaths} onNavigate={onNavigate} onWorkspaceSourceAction={onWorkspaceSourceAction} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange} />;
+  if (utility.id === "pdf-bates") return <BatesView utility={utility} initialPaths={initialPaths} onFilesChange={onFilesChange} />;
   if (workspace.id === "pdf-editor" || workspace.id === "pdf-convert") return <PDFConversionWorkspaceView utility={utility} initialPaths={initialPaths} onFilesChange={onFilesChange} />;
   if (workspace.id === "image-editor" && utility.id !== "image-metadata") return <ImageEditorWorkspaceView utility={utility} initialPaths={initialPaths} onSelectTool={onSelectTool} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange} onWorkspaceSourceAction={onWorkspaceSourceAction} />;
   if (utility.id === "image-metadata") return <MediaWorkspaceView utility={utility} initialPaths={initialPaths} onFilesChange={onFilesChange} />;
