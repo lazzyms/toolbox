@@ -9,7 +9,7 @@ import { RadioGroup, RadioGroupItem } from '../../components/ui/radio-group';
 import { ToggleGroup, ToggleGroupItem } from '../../components/ui/toggle-group';
 import { useToolAvailability } from '../../ToolAvailabilityContext';
 import type { PdfEditRun, PdfTextEdit } from './contracts';
-import { notEditableReasons, textOverflowWords } from './scene';
+import { notEditableReasons, substituteFamily, textOverflowWords } from './scene';
 import type { SceneObject, ScenePage, SceneShape, SceneTool, SignatureMode, TextAlign, TextFontFamily, TextStyle, WatermarkPattern } from './scene';
 import type { SubToolId } from './subtools';
 
@@ -205,6 +205,7 @@ const EditTextGuide: Panel = ({ page, selectedRun, textEdits, pageNumberOf, show
   const availability = useToolAvailability();
   const selectedEdit = selectedRun && textEdits.find((edit) => edit.pageIndex === page.sourceIndex && edit.run === selectedRun.index);
   const overflow = selectedEdit ? textOverflowWords(selectedEdit.original, selectedEdit.replacement) : 0;
+  const substitute = selectedRun && selectedEdit ? substituteFamily(selectedRun, selectedEdit.replacement) : null;
   return <>
     {selectedRun?.reason && <Card role="alert" className="gap-2 py-3">
       <CardHeader className="gap-1 px-3"><CardTitle className="text-sm">This text can't be edited.</CardTitle>
@@ -216,7 +217,9 @@ const EditTextGuide: Panel = ({ page, selectedRun, textEdits, pageNumberOf, show
     {selectedRun && !selectedRun.reason && <div className="scene-inspector-field" role="group" aria-label="Selected text">
       <Label>Selected text</Label>
       <p className="scene-property-note">{selectedRun.fontName} · {Math.round(selectedRun.fontSize * 10) / 10} pt</p>
-      <p className="scene-property-note">Edited text keeps this font, size and colour.</p>
+      {substitute
+        ? <p className="scene-property-note" role="note"><strong>{selectedRun.fontName} isn't embedded in this PDF.</strong> Edited lines use {substitute}, which looks close. Untouched text keeps its original font.</p>
+        : <p className="scene-property-note">Edited text keeps this font, size and colour.</p>}
     </div>}
     {overflow > 0 && <Card role="alert" className="gap-2 py-3">
       <CardHeader className="gap-1 px-3"><CardTitle className="text-sm">This text is too long for its space.</CardTitle>

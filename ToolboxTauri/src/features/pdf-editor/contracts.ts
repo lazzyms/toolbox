@@ -36,6 +36,7 @@ export interface PdfEditRun extends PdfTextRun {
     fontName: string;
     fontSize: number;
     reason: PdfEditRunReason | null;
+    substitute?: { family: string; characters: string } | null;
 }
 
 export interface PdfTextEdit {
