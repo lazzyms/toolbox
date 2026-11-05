@@ -1,5 +1,6 @@
 use crate::kit::common::batch_runner::{BatchRunner, RunEvents};
 use crate::kit::common::JobOutcome;
+use crate::kit::compress::{compress_file, CompressFilesRequest, CompressLevel};
 use crate::kit::contracts::OutputLocation;
 use crate::kit::images::{ImageProcessor, Options as ImageOptions, OutputFormat};
 use crate::kit::pdf::remaining;
@@ -65,7 +66,7 @@ impl QuickAction {
 
     pub fn tool(self) -> &'static str {
         match self {
-            QuickAction::CompressPdf => "compress_pdf",
+            QuickAction::CompressPdf => "compress_files",
             QuickAction::PdfToImages => "pdf_to_images",
             QuickAction::CompressImage => "compress_images",
             QuickAction::ConvertToPng | QuickAction::ConvertToJpg => "convert_images",
@@ -94,8 +95,8 @@ impl QuickAction {
         let output_location = OutputLocation::AlongsideInput;
         match self {
             QuickAction::CompressPdf => {
-                let request = Arc::new(remaining::CompressPdfRequest { paths: paths.clone(), quality: 80, output_location: output_location.clone() });
-                BatchRunner::run(&events, self.tool(), paths, &output_location, &request, remaining::compress)
+                let request = Arc::new(CompressFilesRequest { paths: paths.clone(), level: CompressLevel::Medium, strip_exif: false, output_location: output_location.clone() });
+                BatchRunner::run(&events, self.tool(), paths, &output_location, &request, compress_file)
             }
             QuickAction::PdfToImages => {
                 let request = Arc::new(remaining::PdfToImagesRequest { paths: paths.clone(), pages: None, dpi: 150, format: "png".to_string(), page_range: None, output_location: output_location.clone() });
