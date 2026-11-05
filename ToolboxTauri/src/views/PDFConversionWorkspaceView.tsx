@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
+import { CircleAlert } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { ToolScaffold } from "../components/ToolScaffold";
 import { exampleOutputName } from "../components/RunDestination";
-import { parsePageRange, selectedPageLabel } from "../shared/workspaceValidation";
+import { parsePageRange, selectedPageLabel, splitRangesIssue } from "../shared/workspaceValidation";
 import { displayedBoxToPdfRect, type DisplayedBox, type PdfDocument } from "../features/pdf-editor";
 import type { AtomicToolId, ToolDefinition, ToolResult } from "../contracts";
 import { failedOutcome } from "../jobOutcome";
@@ -13,6 +14,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ShortcutHint } from "../components/ShortcutHint";
 import { shortcutTarget } from "../shortcuts";
 
@@ -20,7 +22,7 @@ const nonInspectingConversionIds = new Set(["images-to-pdf", "pdf-merge", "pdf-s
 const outputPreviewLimitations: Partial<Record<AtomicToolId, string>> = {
   "images-to-pdf": "Output preview unavailable. Export combines the selected images into one PDF in file order.",
   "pdf-merge": "Output preview unavailable. Export merges the selected PDFs in file order.",
-  "pdf-split": "Output preview unavailable. Export creates separate PDF files using the selected split mode.",
+  "pdf-split": "Output preview unavailable. Export creates one PDF for each range, or for every N pages. Ranges are clamped to each PDF's page count.",
   "pdf-to-text": "Output preview unavailable. Export creates a text file from the selected pages.",
   "pdf-image-extract": "Output preview unavailable. Export extracts embedded JPEG images from the selected pages.",
   "pdf-extract-pages": "Output preview unavailable. Export creates a PDF containing the selected pages.",
@@ -65,8 +67,9 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
   const [dpi, setDpi] = useState("150");
   const [format, setFormat] = useState("jpg");
   const [pageRange, setPageRange] = useState("");
-  const [splitMode, setSplitMode] = useState<"pages" | "ranges" | "chunks">("pages");
-  const [chunkSize, setChunkSize] = useState(2);
+  const [splitMode, setSplitMode] = useState<SplitModeKind>("ranges");
+  const [splitRanges, setSplitRanges] = useState("");
+  const [pagesPerFile, setPagesPerFile] = useState("1");
   const [degrees, setDegrees] = useState(90);
   const [redactBox, setRedactBox] = useState<DisplayedBox | null>(null);
   const [document, setDocument] = useState<PdfDocument | null>(null);
@@ -81,7 +84,11 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
       utility={activeUtility}
       initialPaths={initialPaths}
       onFilesChange={onFilesChange}
-      exampleName={activeUtility.id === "pdf-to-images" ? (path) => exampleOutputName(path, "pdf_to_images", activeUtility.capability.outputSuffix, format) : undefined}
+      exampleName={activeUtility.id === "pdf-to-images"
+        ? (path) => exampleOutputName(path, "pdf_to_images", activeUtility.capability.outputSuffix, format)
+        : activeUtility.id === "pdf-split"
+          ? (path) => splitExampleNames(stemOf(path), splitMode, pagesPerFile)[0] ?? splitPartName(stemOf(path), 1, 1)
+          : undefined}
       onRun={(paths, outputLocation, { outputPath, runId }) => {
         const pages = document ? selectedPages : undefined;
         const selectedPageRange = pages?.length ? formatPageRange(pages) : pageRange || null;
@@ -99,10 +106,7 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
           return invoke<ToolResult>("split_pdf", { runId,
             request: {
               paths,
-              pages: [],
-              pageRanges: splitMode === "ranges" ? pageRange || null : null,
-              splitMode,
-              chunkSize: splitMode === "chunks" ? chunkSize : null,
+              mode: splitMode === "ranges" ? { kind: "ranges", ranges: splitRanges } : { kind: "everyN", pages: Number(pagesPerFile) },
               outputLocation,
             },
           });
@@ -191,8 +195,10 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
           setPageRange={setPageRange}
           splitMode={splitMode}
           setSplitMode={setSplitMode}
-          chunkSize={chunkSize}
-          setChunkSize={setChunkSize}
+          splitRanges={splitRanges}
+          setSplitRanges={setSplitRanges}
+          pagesPerFile={pagesPerFile}
+          setPagesPerFile={setPagesPerFile}
           degrees={degrees}
           setDegrees={setDegrees}
           redactBox={redactBox}
@@ -209,6 +215,21 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
   );
 };
 
+type SplitModeKind = "ranges" | "everyN";
+
+const pagesPerFileIssue = (value: string) => /^\d+$/.test(value.trim()) && Number(value) >= 1 ? null : "Enter 1 or more pages per file.";
+
+/** Split parts are named by the one-based pages they hold, the same way in both modes. */
+const splitPartName = (stem: string, first: number, last: number) => `${stem}-${first === last ? `page-${first}` : `pages-${first}-${last}`}.pdf`;
+
+/** Example part names for the File names note: two ranges, or the first two every-N parts. */
+const splitExampleNames = (stem: string, mode: SplitModeKind, pagesPerFile: string): string[] => {
+  if (mode === "ranges") return [splitPartName(stem, 1, 3), splitPartName(stem, 5, 5)];
+  if (pagesPerFileIssue(pagesPerFile)) return [];
+  const size = Number(pagesPerFile);
+  return [splitPartName(stem, 1, size), splitPartName(stem, size + 1, size * 2)];
+};
+
 type ConversionControlsProps = {
   destination: React.ReactNode;
   runLabel: string | null;
@@ -222,10 +243,12 @@ type ConversionControlsProps = {
   setFormat: (value: string) => void;
   pageRange: string;
   setPageRange: (value: string) => void;
-  splitMode: "pages" | "ranges" | "chunks";
-  setSplitMode: (value: "pages" | "ranges" | "chunks") => void;
-  chunkSize: number;
-  setChunkSize: (value: number) => void;
+  splitMode: SplitModeKind;
+  setSplitMode: (value: SplitModeKind) => void;
+  splitRanges: string;
+  setSplitRanges: (value: string) => void;
+  pagesPerFile: string;
+  setPagesPerFile: (value: string) => void;
   degrees: number;
   setDegrees: (value: number) => void;
   redactBox: DisplayedBox | null;
@@ -253,8 +276,10 @@ const ConversionControls = ({
   setPageRange,
   splitMode,
   setSplitMode,
-  chunkSize,
-  setChunkSize,
+  splitRanges,
+  setSplitRanges,
+  pagesPerFile,
+  setPagesPerFile,
   degrees,
   setDegrees,
   redactBox,
@@ -336,10 +361,10 @@ const ConversionControls = ({
   const needsMultipleInputs = activeUtility.id === "pdf-merge";
   const compareIssue = activeUtility.id === "pdf-compare" && files.length !== 2;
   const redactPage = activeUtility.id === "pdf-redact" ? inspectedDocument?.pages[selectedPages[0] ?? -1] : undefined;
-  const rangeSelectionIssue = activeUtility.id === "pdf-split" && splitMode === "ranges" && !pageRange.trim()
-    ? "Enter at least one page range to split by ranges."
-    : null;
-  const canExport = files.length > 0 && activeUtility.capability.nativeAvailability === "available" && (!needsMultipleInputs || files.length > 1) && rangeSelectionIssue === null && !compareIssue
+  const splitIssue = activeUtility.id !== "pdf-split" ? null : splitMode === "ranges" ? splitRangesIssue(splitRanges) : pagesPerFileIssue(pagesPerFile);
+  const splitStem = files[0] ? stemOf(files[0]) : "document";
+  const splitNames = splitExampleNames(splitStem, splitMode, pagesPerFile);
+  const canExport = files.length > 0 && activeUtility.capability.nativeAvailability === "available" && (!needsMultipleInputs || files.length > 1) && splitIssue === null && !compareIssue
     && (nonInspectingConversionIds.has(activeUtility.id) || inspectionReady);
   const outputPreviewLimitation = activeUtility.id === "pdf-to-images"
     ? pdfToImagesOutputSummary(selectedPages, dpi, format)
@@ -449,30 +474,76 @@ const ConversionControls = ({
         <p className="workspace-note">Add at least two PDFs. The order in the source list becomes the page order in the merged copy.</p>
       )}
       {activeUtility.id === "pdf-split" && (
-        <div className="workspace-field-grid">
+        <div className="grid gap-4">
           <div className="workspace-field">
-            <Label htmlFor="split-mode">Split mode</Label>
-            <NativeSelect id="split-mode" aria-label="Split mode" value={splitMode} onChange={(event) => setSplitMode(event.target.value as typeof splitMode)}>
-              <option value="pages">Every page</option>
-              <option value="ranges">Ranges</option>
-              <option value="chunks">Fixed-size chunks</option>
-            </NativeSelect>
+            <span id="split-by-label" className="text-sm leading-none font-medium">Split by</span>
+            <ToggleGroup
+              type="single"
+              variant="outline"
+              size="sm"
+              aria-labelledby="split-by-label"
+              className="self-start"
+              value={splitMode}
+              onValueChange={(value) => {
+                if (value) setSplitMode(value as SplitModeKind);
+              }}
+            >
+              <ToggleGroupItem value="ranges">Page ranges</ToggleGroupItem>
+              <ToggleGroupItem value="everyN">Every N pages</ToggleGroupItem>
+            </ToggleGroup>
           </div>
-          {splitMode === "ranges" && (
+          {splitMode === "ranges" ? (
             <div className="workspace-field">
-              <Label htmlFor="split-ranges">Ranges</Label>
-              <Input id="split-ranges" aria-label="Page ranges" value={pageRange} onChange={(event) => setPageRange(event.target.value)} placeholder="1-3, 4-8, 9-" />
+              <Label htmlFor="split-ranges">Page ranges</Label>
+              <Input
+                id="split-ranges"
+                value={splitRanges}
+                onChange={(event) => setSplitRanges(event.target.value)}
+                placeholder="1-3, 5, 8-"
+                spellCheck={false}
+                aria-invalid={splitIssue !== null || undefined}
+                aria-describedby={splitIssue ? "split-ranges-help split-options-error" : "split-ranges-help"}
+              />
+              <p id="split-ranges-help" className="workspace-note">Each range becomes one file. 8- runs to the last page.</p>
+            </div>
+          ) : (
+            <div className="workspace-field">
+              <Label htmlFor="split-pages-per-file">Pages per file</Label>
+              <div className="flex items-center gap-2">
+                <Input
+                  id="split-pages-per-file"
+                  className="w-24"
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={pagesPerFile}
+                  onChange={(event) => setPagesPerFile(event.target.value)}
+                  aria-invalid={splitIssue !== null || undefined}
+                  aria-describedby={splitIssue ? "split-pages-help split-options-error" : "split-pages-help"}
+                />
+                <span className="workspace-note">pages</span>
+              </div>
+              <p id="split-pages-help" className="workspace-note">1 makes one file per page. The last file can be shorter.</p>
             </div>
           )}
-          {splitMode === "chunks" && (
-            <div className="workspace-field">
-              <Label htmlFor="split-chunk-size">Pages per file</Label>
-              <Input id="split-chunk-size" aria-label="Pages per file" type="number" min="1" value={chunkSize} onChange={(event) => setChunkSize(Number(event.target.value))} />
+          {splitIssue && (
+            <p id="split-options-error" role="alert" className="flex items-start gap-1.5 text-sm text-destructive">
+              <CircleAlert aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
+              <span>{splitIssue}</span>
+            </p>
+          )}
+          <div className="workspace-field" role="group" aria-labelledby="split-fitting-label">
+            <span id="split-fitting-label" className="text-sm leading-none font-medium">Fitting each PDF</span>
+            <p className="workspace-note">A range past the last page is shortened or dropped. A PDF is skipped when nothing is left or the result is the whole file.</p>
+          </div>
+          {splitNames.length > 0 && (
+            <div className="workspace-field" role="group" aria-labelledby="split-names-label">
+              <span id="split-names-label" className="text-sm leading-none font-medium">File names</span>
+              {splitNames.map((name) => <p key={name} className="workspace-note">{name}</p>)}
             </div>
           )}
         </div>
       )}
-      {rangeSelectionIssue && <p className="workspace-note" role="alert">{rangeSelectionIssue}</p>}
       {activeUtility.id === "pdf-extract-pages" && (
         <div className="workspace-field">
           <Label htmlFor="extract-pages-range">Pages or ranges</Label>
@@ -524,6 +595,7 @@ const ConversionControls = ({
 };
 
 const fileName = (path: string) => path.split(/[\\/]/).pop() ?? path;
+const stemOf = (path: string) => fileName(path).replace(/\.[^.]+$/, "");
 
 const clampFraction = (value: number) => Math.min(Math.max(value, 0), 1);
 

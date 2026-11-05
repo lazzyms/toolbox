@@ -1352,14 +1352,172 @@ test("PDF range splitting rejects a blank range and accepts a range", async ({ p
     await page.goto("/");
     await openFromHome(page, "Split PDF");
     await chooseFixture(page, pdfFixturePath);
-    await page.getByLabel("Split mode").selectOption("ranges");
 
-    await expect(page.getByRole("alert")).toHaveText("Enter at least one page range to split by ranges.");
-    await expect(page.getByRole("button", { name: "Export Split PDF" })).toBeDisabled();
+    const splitBy = page.getByRole("radiogroup", { name: "Split by" });
+    await expect(splitBy.getByRole("radio", { name: "Page ranges" })).toBeChecked();
+    const ranges = page.getByRole("textbox", { name: "Page ranges" });
+    const exportSplit = page.getByRole("button", { name: "Export Split PDF" });
+    await expect(page.getByRole("spinbutton", { name: "Pages per file" })).toHaveCount(0);
+    await expect(page.getByText("Each range becomes one file. 8- runs to the last page.", { exact: true })).toBeVisible();
 
-    await page.getByRole("textbox", { name: "Page ranges" }).fill("1");
+    await expect(page.getByRole("alert")).toHaveText("Enter at least one page range to split.");
+    await expect(exportSplit).toBeDisabled();
+
+    for (const [typed, message] of [
+        ["3-1", "3-1 runs backwards (write 1-3)."],
+        ["1,,3", "Entry 2 is empty."],
+        ["1-3,", "Entry 2 is empty."],
+        ["x", "x isn't a page."],
+        ["0", "0 isn't a page. Pages start at 1."],
+        ["0-2", "0-2 isn't a range. Pages start at 1."],
+        ["1-2-3", "1-2-3 isn't a range."],
+        ["-5", "-5 isn't a range."],
+        ["3-1, 5, , x", "3-1 runs backwards (write 1-3). Entry 3 is empty. x isn't a page."],
+        ["   ", "Enter at least one page range to split."],
+    ] as const) {
+        await ranges.fill(typed);
+        await expect(page.getByRole("alert"), typed).toHaveText(message);
+        await expect(ranges, typed).toHaveAttribute("aria-invalid", "true");
+        await expect(exportSplit, typed).toBeDisabled();
+    }
+
+    const names = page.getByRole("group", { name: "File names" });
+    await expect(names.getByText("document-pages-1-3.pdf", { exact: true })).toBeVisible();
+    await expect(names.getByText("document-page-5.pdf", { exact: true })).toBeVisible();
+    await expect(page.getByTestId("run-destination-example")).toHaveText("document-pages-1-3.pdf");
+
+    await ranges.fill("1-3, 5, 8-");
     await expect(page.getByRole("alert")).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Export Split PDF" })).toBeEnabled();
+    await expect(ranges).not.toHaveAttribute("aria-invalid", "true");
+    await expect(exportSplit).toBeEnabled();
+    await exportSplit.click();
+    await expect.poll(async () => ((await lastInvocation(page, "split_pdf"))?.args as { request?: unknown } | undefined)?.request).toEqual({
+        paths: [pdfFixturePath],
+        mode: { kind: "ranges", ranges: "1-3, 5, 8-" },
+        outputLocation: "alongsideInput",
+    });
+});
+
+for (const theme of ["light", "dark"] as const) {
+    test(`PDF splitting every N pages shows only its field, names parts by pages, and sends only the page count in the ${theme} theme`, async ({ page }) => {
+        await page.addInitScript((theme) => { localStorage.setItem("toolbox-theme", theme); }, theme);
+        await page.goto("/");
+        await openFromHome(page, "Split PDF");
+        await chooseFixture(page, pdfFixturePath);
+        await expect(page.locator("body")).toHaveAttribute("data-theme", theme);
+
+        await page.getByRole("radiogroup", { name: "Split by" }).getByRole("radio", { name: "Every N pages" }).click();
+        await expect(page.getByRole("radiogroup", { name: "Split by" }).getByRole("radio", { name: "Every N pages" })).toBeChecked();
+        const pagesPerFile = page.getByRole("spinbutton", { name: "Pages per file" });
+        const exportSplit = page.getByRole("button", { name: "Export Split PDF" });
+        const names = page.getByRole("group", { name: "File names" });
+        const example = page.getByTestId("run-destination-example");
+        await expect(page.getByRole("textbox", { name: "Page ranges" })).toHaveCount(0);
+        await expect(page.getByText("Each range becomes one file. 8- runs to the last page.", { exact: true })).toHaveCount(0);
+        await expect(pagesPerFile).toHaveValue("1");
+        await expect(page.getByText("1 makes one file per page. The last file can be shorter.", { exact: true })).toBeVisible();
+        await expect(page.getByRole("alert")).toHaveCount(0);
+        await expect(names.locator("p")).toHaveText(["document-page-1.pdf", "document-page-2.pdf"]);
+        await expect(example).toHaveText("document-page-1.pdf");
+        await expect(exportSplit).toBeEnabled();
+
+        for (const typed of ["0", "", "-2"]) {
+            await pagesPerFile.fill(typed);
+            await expect(page.getByRole("alert"), typed).toHaveText("Enter 1 or more pages per file.");
+            await expect(pagesPerFile, typed).toHaveAttribute("aria-invalid", "true");
+            await expect(exportSplit, typed).toBeDisabled();
+            await expect(names, typed).toHaveCount(0);
+        }
+        await exportSplit.click({ force: true });
+        expect(await lastInvocation(page, "split_pdf")).toBeUndefined();
+
+        await pagesPerFile.fill("4");
+        await expect(page.getByRole("alert")).toHaveCount(0);
+        await expect(pagesPerFile).not.toHaveAttribute("aria-invalid", "true");
+        await expect(names.locator("p")).toHaveText(["document-pages-1-4.pdf", "document-pages-5-8.pdf"]);
+        await expect(example).toHaveText("document-pages-1-4.pdf");
+        const screenshotDir = process.env.SPLIT_SCREENSHOT_DIR;
+        if (screenshotDir) await page.screenshot({ path: path.join(screenshotDir, `split-every-n-${theme}.png`), animations: "disabled" });
+        await exportSplit.click();
+        await expect.poll(async () => ((await lastInvocation(page, "split_pdf"))?.args as { request?: unknown } | undefined)?.request).toEqual({
+            paths: [pdfFixturePath],
+            mode: { kind: "everyN", pages: 4 },
+            outputLocation: "alongsideInput",
+        });
+    });
+}
+
+test("PDF splitting every 1 page sends one page per file", async ({ page }) => {
+    await page.goto("/");
+    await openFromHome(page, "Split PDF");
+    await chooseFixture(page, pdfFixturePath);
+    await page.getByRole("radiogroup", { name: "Split by" }).getByRole("radio", { name: "Every N pages" }).click();
+    await expect(page.getByRole("spinbutton", { name: "Pages per file" })).toHaveValue("1");
+    await page.getByRole("button", { name: "Export Split PDF" }).click();
+    await expect.poll(async () => ((await lastInvocation(page, "split_pdf"))?.args as { request?: unknown } | undefined)?.request).toEqual({
+        paths: [pdfFixturePath],
+        mode: { kind: "everyN", pages: 1 },
+        outputLocation: "alongsideInput",
+    });
+});
+
+test("PDF splitting runs a batch of PDFs and shows each file's clamped, skipped and failed result on its own row", async ({ page }) => {
+    const inputs = ["/local/lease-agreement.pdf", "/local/vendor-nda.pdf", "/local/appendix-a.pdf", "/local/late-pages.pdf", "/local/site-survey-scan.pdf"];
+    const leaseParts = ["lease-agreement-pages-1-3.pdf", "lease-agreement-page-5.pdf", "lease-agreement-pages-8-14.pdf"].map((name) => `/local/${name}`);
+    const vendorParts = ["vendor-nda-pages-1-3.pdf", "vendor-nda-page-5.pdf"].map((name) => `/local/${name}`);
+    const skipped = (inputPath: string, code: "noEffectiveChange" | "rangeEmptyAfterClamping", message: string): MockOutcome => ({
+        inputPath, outputPaths: [], detail: "", state: "skipped", failure: null, reason: { code, message, pointer: null }, warnings: [],
+    });
+    await page.goto("/");
+    await page.evaluate(({ inputs, outcomes }) => {
+        (window as TestWindow).__toolboxDialogResults = [inputs];
+        (window as TestWindow).__toolboxProcessingResults = outcomes;
+    }, { inputs, outcomes: [
+        succeeded(inputs[0], leaseParts, { detail: "14 pages into 3 files." }),
+        succeeded(inputs[1], vendorParts, { detail: "6 pages into 2 files. 8- was past page 6 and was dropped." }),
+        skipped(inputs[2], "noEffectiveChange", "1-3 was past page 2 and was shortened to 1\u20132. 5 was past page 2 and was dropped. 8- was past page 2 and was dropped. Only 1\u20132 fits, which is the whole file. Nothing was saved."),
+        skipped(inputs[3], "rangeEmptyAfterClamping", "8- was past page 4 and was dropped. Nothing was saved."),
+        failed(inputs[4], "invalidInput", "Not a readable PDF. The file may be damaged or incomplete."),
+    ] });
+    await openFromHome(page, "Split PDF");
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await expect(page.locator(".file-selection-count")).toHaveText("5 files");
+    await expect(page.getByText(/This action accepts one input file/)).toHaveCount(0);
+    const fitting = page.getByRole("group", { name: "Fitting each PDF" });
+    await expect(fitting).toContainText("A range past the last page is shortened or dropped. A PDF is skipped when nothing is left or the result is the whole file.");
+    await expect(page.getByText("Output preview unavailable. Export creates one PDF for each range, or for every N pages. Ranges are clamped to each PDF's page count.", { exact: true })).toBeVisible();
+
+    await page.getByRole("textbox", { name: "Page ranges" }).fill("1-3, 5, 8-");
+    await page.getByRole("button", { name: "Export Split PDF", exact: true }).click();
+    await expect.poll(() => invocationCount(page, "split_pdf")).toBe(1);
+    expect(((await lastInvocation(page, "split_pdf"))?.args as { request?: unknown } | undefined)?.request).toEqual({
+        paths: inputs,
+        mode: { kind: "ranges", ranges: "1-3, 5, 8-" },
+        outputLocation: "alongsideInput",
+    });
+
+    const rows = page.getByRole("list", { name: "Results" }).getByRole("listitem");
+    await expect(rows).toHaveCount(5);
+    for (const [index, name] of ["lease-agreement.pdf", "vendor-nda.pdf", "appendix-a.pdf", "late-pages.pdf", "site-survey-scan.pdf"].entries()) {
+        await expect(rows.nth(index)).toContainText(name);
+    }
+    await expect(rows.nth(0)).toHaveAttribute("data-tone", "ok");
+    await expect(rows.nth(0)).toContainText("3 files");
+    await expect(rows.nth(0)).toContainText("14 pages into 3 files.");
+    await expect(rows.nth(0)).not.toContainText("dropped");
+    await expect(rows.nth(1)).toHaveAttribute("data-tone", "ok");
+    await expect(rows.nth(1)).toContainText("2 files");
+    await expect(rows.nth(1)).toContainText("8- was past page 6 and was dropped.");
+    await expect(rows.nth(2)).toHaveAttribute("data-tone", "skip");
+    await expect(rows.nth(2)).toContainText("Skipped");
+    await expect(rows.nth(2)).toContainText("1-3 was past page 2 and was shortened to 1\u20132.");
+    await expect(rows.nth(2)).toContainText("Only 1\u20132 fits, which is the whole file. Nothing was saved.");
+    await expect(rows.nth(3)).toHaveAttribute("data-tone", "skip");
+    await expect(rows.nth(3)).toContainText("8- was past page 4 and was dropped. Nothing was saved.");
+    for (const index of [2, 3]) await expect(rows.nth(index).getByRole("button", { name: /^Open/ })).toHaveCount(0);
+    await expect(rows.nth(4)).toHaveAttribute("data-tone", "fail");
+    await expect(rows.nth(4)).toContainText("Not a readable PDF.");
+    await expect(resultSummaryStatus(page)).toContainText("Done. 2 split, 2 skipped, 1 failed");
 });
 
 test("media and security workspaces expose ordered inputs and format boundaries", async ({ page }) => {
@@ -1433,7 +1591,7 @@ test("non-previewable PDF conversions identify source selection and show determi
     for (const [action, summary] of [
         ["Merge PDF", "Output preview unavailable. Export merges the selected PDFs in file order."],
         ["Extract PDF Pages", "Output preview unavailable. Export creates a PDF containing the selected pages."],
-        ["Split PDF", "Output preview unavailable. Export creates separate PDF files using the selected split mode."],
+        ["Split PDF", "Output preview unavailable. Export creates one PDF for each range, or for every N pages. Ranges are clamped to each PDF's page count."],
     ] as const) {
         await rail.getByRole("button", { name: action, exact: true }).click();
         await expect(page.getByText(summary, { exact: true })).toBeVisible();
@@ -1939,18 +2097,18 @@ test("single-input actions report every selected file instead of truncating the 
     await chooseFixture(page, pdfFixturePath);
     await page.evaluate(() => { (window as TestWindow).__toolboxSecondPick = true; });
     await page.getByRole("button", { name: "Choose files to process" }).click();
+    await page.getByRole("toolbar", { name: "PDF Editor tools" }).getByRole("button", { name: "Extract PDF Pages", exact: true }).click();
+
+    const exportButton = page.getByRole("button", { name: "Export Extract PDF Pages", exact: true });
+    await expect(exportButton).toBeDisabled();
+    await exportButton.click({ force: true });
+    expect(await invocationCount(page, "extract_pdf_pages")).toBe(0);
+
     await page.getByRole("toolbar", { name: "PDF Editor tools" }).getByRole("button", { name: "Split PDF", exact: true }).click();
-
-    const exportButton = page.getByRole("button", { name: "Export Split PDF", exact: true });
-    await expect(exportButton).toBeEnabled();
-    await exportButton.click();
-
-    await expect(page.getByRole("status").filter({ hasText: "Done." })).toHaveText("Done. 0 split, 2 failed");
-    const processingInvocations = await page.evaluate(() =>
-        ((window as TestWindow).__toolboxInvocations ?? []).filter(({ command }) => command === "split_pdf"),
-    );
-    expect(processingInvocations).toHaveLength(0);
-    await expect(page.getByText("This action accepts one input file, but 2 were selected.", { exact: true })).toHaveCount(2);
+    await page.getByRole("textbox", { name: "Page ranges" }).fill("1");
+    await page.getByRole("button", { name: "Export Split PDF", exact: true }).click();
+    await expect.poll(async () => ((await lastInvocation(page, "split_pdf"))?.args as { request?: { paths: string[] } } | undefined)?.request?.paths).toEqual([pdfFixturePath, `${pdfFixturePath}.second.pdf`]);
+    await expect(page.getByText(/This action accepts one input file/)).toHaveCount(0);
 });
 
 for (const batch of [
@@ -2105,6 +2263,7 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
     }
     if (utility.id === "compress") await page.getByRole("switch", { name: "Preserve original pixels" }).click();
     if (utility.id === "pdf-redact") await drawRedactionBox(page);
+    if (utility.id === "pdf-split") await page.getByRole("textbox", { name: "Page ranges" }).fill("1-");
     if (utility.id === "pdf-merge" || utility.id === "pdf-compare") {
         await page.evaluate(() => { (window as TestWindow).__toolboxSecondPick = true; });
         await page.getByRole("button", { name: "Choose files to process" }).click();

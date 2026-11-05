@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::kit::common::limits::StoppableHelper;
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming, OutputReservation};
-use crate::kit::contracts::ToolError;
+use crate::kit::contracts::{SkipCode, SkipReason, ToolError};
 use super::metadata::{page_bounds, page_rotation};
 use super::{mutation_preflight, PdfMutationIntent};
 
@@ -41,9 +41,43 @@ pub struct PageSelectionRequest {
     pub paths: Vec<PathBuf>,
     pub pages: Vec<usize>,
     #[serde(default)] pub page_ranges: Option<String>,
-    #[serde(default)] pub split_mode: Option<String>,
-    #[serde(default)] pub chunk_size: Option<usize>,
     pub output_location: OutputLocation,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SplitPdfRequest {
+    pub paths: Vec<PathBuf>,
+    #[serde(default)] pub mode: RequestedSplitMode,
+    pub output_location: OutputLocation,
+}
+
+/// How a split divides the document. Each kind carries only its own fields.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum SplitMode {
+    Ranges { ranges: String },
+    EveryN { pages: usize },
+}
+
+/// The mode as the caller sent it. A missing or malformed mode stays a per-file
+/// InvalidInput outcome instead of failing the whole command before any file runs.
+#[derive(Debug, Clone)]
+pub struct RequestedSplitMode(Result<SplitMode, String>);
+
+impl Default for RequestedSplitMode {
+    fn default() -> Self { Self(Err("Choose how to split: by page ranges or every N pages.".to_string())) }
+}
+
+impl From<SplitMode> for RequestedSplitMode {
+    fn from(mode: SplitMode) -> Self { Self(Ok(mode)) }
+}
+
+impl<'de> serde::Deserialize<'de> for RequestedSplitMode {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = <serde_json::Value as serde::Deserialize>::deserialize(deserializer)?;
+        Ok(Self(serde_json::from_value(value).map_err(|error| format!("The split mode is malformed: {error}."))))
+    }
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -133,31 +167,45 @@ pub fn merge(request: &MergePdfRequest) -> JobOutcome {
     }
 }
 
-pub fn split(request: &PageSelectionRequest, input: PathBuf) -> JobOutcome {
-    if let Err(error) = validate_split_request(request) {
-        return JobOutcome::failure(input, ToolError::invalid_input(error));
-    }
-    if let Err(error) = load_existing_document_for_mutation(&input) {
-        return failure(input, error);
-    }
+pub fn split(request: &SplitPdfRequest, input: PathBuf) -> JobOutcome {
+    let plan = match request.mode.0.as_ref().map_err(String::clone).and_then(SplitPlan::new) {
+        Ok(plan) => plan,
+        Err(error) => return JobOutcome::failure(input, ToolError::invalid_input(error)),
+    };
+    let page_count = match load_existing_document_for_mutation(&input) {
+        Ok(document) => document.get_pages().len(),
+        Err(error) => return failure(input, error),
+    };
     let location = &request.output_location;
+    if page_count == 0 { return failure(input, "The PDF has no pages to split.".to_string()); }
+    let FittedSplit { spans, notes } = plan.fit(page_count);
+    if spans.is_empty() {
+        let reason = format!("{} Nothing was saved.", notes.join(" "));
+        return JobOutcome::skipped(input, SkipReason::new(SkipCode::RangeEmptyAfterClamping, reason));
+    }
+    if spans.len() == 1 && spans[0].first == 1 && spans[0].last == page_count {
+        let whole = match &plan {
+            SplitPlan::Ranges(_) if notes.is_empty() => format!("{} is the whole file.", page_span(1, page_count)),
+            SplitPlan::Ranges(_) => format!("Only {} fits, which is the whole file.", page_span(1, page_count)),
+            SplitPlan::EveryN(size) if page_count < *size => format!("{} is fewer than {size}, so it would be the whole file.", pages_phrase(page_count)),
+            SplitPlan::EveryN(size) => format!("{} is exactly one part of {size}, so it would be the whole file.", pages_phrase(page_count)),
+        };
+        let reason = notes.into_iter().chain([whole, "Nothing was saved.".to_string()]).collect::<Vec<_>>().join(" ");
+        return JobOutcome::skipped(input, SkipReason::new(SkipCode::NoEffectiveChange, reason));
+    }
+    let part_count = spans.len();
     let qpdf = match qpdf() { Ok(qpdf) => qpdf, Err(error) => return JobOutcome::failure(input, ToolError::unavailable(error)) };
     let workspace = match SplitWorkspace::new() {
         Ok(workspace) => workspace,
         Err(error) => return failure(input, format!("Could not create a private split workspace: {error}")),
     };
-    let generated = match generate_split_outputs(request, &input, &qpdf, &workspace) {
+    let generated = match write_split_spans(&input, &qpdf, workspace.path(), spans) {
         Ok(generated) => generated,
         Err(error) => return failure(input, error),
     };
     match materialize_split_outputs(&input, location, &generated) {
         Ok(outputs) => {
-            let detail = if request.page_ranges.as_deref().is_some_and(|value| !value.trim().is_empty()) {
-                let stem = input.file_stem().and_then(|value| value.to_str()).unwrap_or("split");
-                format!("PDF split into selected ranges from {stem}")
-            } else {
-                "PDF split".to_string()
-            };
+            let detail = [format!("{} into {}.", pages_phrase(page_count), if part_count == 1 { "1 file".to_string() } else { format!("{part_count} files") })].into_iter().chain(notes).collect::<Vec<_>>().join(" ");
             JobOutcome::succeeded(input, outputs, detail)
         }
         Err(outcome) => outcome,
@@ -188,48 +236,114 @@ impl Drop for SplitWorkspace {
     fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); }
 }
 
-fn generate_split_outputs(request: &PageSelectionRequest, input: &Path, qpdf: &Path, workspace: &SplitWorkspace) -> Result<Vec<PathBuf>, String> {
-    let stem = input.file_stem().and_then(|value| value.to_str()).unwrap_or("output");
-    if request.split_mode.as_deref() == Some("chunks") {
-        let Some(size) = request.chunk_size.filter(|size| *size > 0) else { return Err("Chunk size must be greater than zero.".to_string()); };
-        let output = workspace.path().join(format!("{stem}-split.pdf"));
-        let result = Command::new(qpdf).arg(input).arg(format!("--split-pages={size}")).arg(&output).output_until_stopped().map_err(|error| format!("Could not run qpdf: {error}"))?;
-        if !result.status.success() { return Err(stderr(result, "qpdf failed to split PDF chunks.")); }
-        return collect_split_outputs(workspace.path(), "qpdf reported success but produced no chunk files.");
-    }
-    if let Some(raw) = request.page_ranges.as_deref().filter(|value| !value.trim().is_empty()) {
-        let page_count = Document::load(input).map_err(|error| error.to_string())?.get_pages().len();
-        let ranges = parse_split_ranges(raw, page_count)?;
-        let mut outputs = Vec::with_capacity(ranges.len());
-        for (number, (start, end)) in ranges.into_iter().enumerate() {
-            let output = workspace.path().join(format!("{stem}-split-{number}.pdf"));
-            let result = Command::new(qpdf).arg(input).arg("--pages").arg(input).arg(format!("{start}-{end}")).arg("--").arg(&output).output_until_stopped().map_err(|error| format!("Could not run qpdf: {error}"))?;
-            if !result.status.success() { return Err(stderr(result, "qpdf failed to split the selected ranges.")); }
-            if !output.is_file() { return Err("qpdf reported success but produced no range file.".to_string()); }
-            outputs.push(output);
+struct SplitSpan { suffix: String, first: usize, last: usize }
+
+/// One entry of a range string: a single page, a closed range, or an open-ended `N-`.
+#[derive(Debug, Clone, Copy)]
+struct SplitRange { start: usize, end: Option<usize> }
+
+/// A split mode checked without the document, so malformed requests fail before any file is read.
+enum SplitPlan { Ranges(Vec<(String, SplitRange)>), EveryN(usize) }
+
+impl SplitPlan {
+    fn new(mode: &SplitMode) -> Result<Self, String> {
+        match mode {
+            SplitMode::Ranges { ranges } => parse_split_ranges(ranges).map(Self::Ranges),
+            SplitMode::EveryN { pages: 0 } => Err("Pages per file must be at least 1.".to_string()),
+            SplitMode::EveryN { pages } => Ok(Self::EveryN(*pages)),
         }
-        return Ok(outputs);
     }
-    let pattern = workspace.path().join(format!("{stem}-split-page-%d.pdf"));
-    let result = Command::new(qpdf).arg(input).arg("--split-pages").arg(&pattern).output_until_stopped().map_err(|error| format!("Could not run qpdf: {error}"))?;
-    if !result.status.success() { return Err(stderr(result, "qpdf failed to split the PDF.")); }
-    collect_split_outputs(workspace.path(), "qpdf reported success but produced no split files.")
+
+    /// Fits the plan to one document. A range that starts past the last page is
+    /// dropped and one that ends past it is shortened; each change is noted.
+    fn fit(&self, page_count: usize) -> FittedSplit {
+        match self {
+            Self::Ranges(ranges) => {
+                let mut fitted = FittedSplit { spans: Vec::new(), notes: Vec::new() };
+                for (token, range) in ranges {
+                    if range.start > page_count {
+                        fitted.notes.push(format!("{token} was past page {page_count} and was dropped."));
+                        continue;
+                    }
+                    let last = range.end.map_or(page_count, |end| end.min(page_count));
+                    if range.end.is_some_and(|end| end > page_count) {
+                        fitted.notes.push(format!("{token} was past page {page_count} and was shortened to {}.", page_span(range.start, last)));
+                    }
+                    fitted.spans.push(SplitSpan::pages(range.start, last));
+                }
+                fitted
+            }
+            // Consecutive parts of `size` pages; the last part keeps whatever is left.
+            Self::EveryN(size) => FittedSplit {
+                spans: (1..=page_count).step_by(*size).map(|first| SplitSpan::pages(first, (first + size - 1).min(page_count))).collect(),
+                notes: Vec::new(),
+            },
+        }
+    }
 }
 
-fn collect_split_outputs(workspace: &Path, empty_message: &str) -> Result<Vec<PathBuf>, String> {
-    let mut outputs = fs::read_dir(workspace).map_err(|error| format!("Could not inspect qpdf split outputs: {error}"))?.filter_map(Result::ok).map(|entry| entry.path()).filter(|path| path.is_file() && path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))).collect::<Vec<_>>();
-    outputs.sort();
-    if outputs.is_empty() { Err(empty_message.to_string()) } else { Ok(outputs) }
+/// The parts one document is split into, and what fitting the ranges to it changed.
+struct FittedSplit { spans: Vec<SplitSpan>, notes: Vec<String> }
+
+fn page_span(first: usize, last: usize) -> String {
+    if first == last { first.to_string() } else { format!("{first}\u{2013}{last}") }
 }
 
-fn materialize_split_outputs(input: &Path, location: &OutputLocation, generated: &[PathBuf]) -> Result<Vec<PathBuf>, JobOutcome> {
-    let mut outputs = Vec::with_capacity(generated.len());
-    for source in generated {
-        let suffix = match split_output_suffix(input, source) {
-            Ok(suffix) => suffix,
-            Err(error) => return Err(JobOutcome::failure_with_outputs(input.to_path_buf(), outputs, ToolError::processing(error))),
+fn pages_phrase(count: usize) -> String {
+    if count == 1 { "1 page".to_string() } else { format!("{count} pages") }
+}
+
+impl SplitSpan {
+    /// Names a part by the one-based pages it holds: `-page-5` or `-pages-1-3`.
+    fn pages(first: usize, last: usize) -> Self {
+        let suffix = if first == last { format!("-page-{first}") } else { format!("-pages-{first}-{last}") };
+        Self { suffix, first, last }
+    }
+}
+
+/// Parses a comma-separated list of one-based pages and ranges. Every problem is
+/// reported at once, and any problem rejects the whole string.
+fn parse_split_ranges(raw: &str) -> Result<Vec<(String, SplitRange)>, String> {
+    if raw.trim().is_empty() { return Err("Enter at least one page range to split.".to_string()); }
+    let digits = |value: &str| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit());
+    let mut ranges = Vec::new();
+    let mut problems = Vec::new();
+    for (index, token) in raw.split(',').map(str::trim).enumerate() {
+        if token.is_empty() { problems.push(format!("Entry {} is empty.", index + 1)); continue; }
+        let Some((start, end)) = token.split_once('-').map(|(start, end)| (start.trim(), end.trim())) else {
+            match token.parse::<usize>() {
+                Ok(0) if digits(token) => problems.push(format!("{token} isn't a page. Pages start at 1.")),
+                Ok(page) if digits(token) => ranges.push((token.to_string(), SplitRange { start: page, end: Some(page) })),
+                _ => problems.push(format!("{token} isn't a page.")),
+            }
+            continue;
         };
-        let reservation = match OutputNaming::reserve_destination(input, location, &suffix, "pdf") {
+        let start = if digits(start) { start.parse::<usize>().ok() } else { None };
+        let end = if end.is_empty() { Some(None) } else if digits(end) { end.parse::<usize>().ok().map(Some) } else { None };
+        match (start, end) {
+            (Some(start), Some(end)) if start == 0 || end == Some(0) => problems.push(format!("{token} isn't a range. Pages start at 1.")),
+            (Some(start), Some(Some(end))) if start > end => problems.push(format!("{token} runs backwards (write {end}-{start}).")),
+            (Some(start), Some(end)) => ranges.push((token.to_string(), SplitRange { start, end })),
+            _ => problems.push(format!("{token} isn't a range.")),
+        }
+    }
+    if problems.is_empty() { Ok(ranges) } else { Err(problems.join(" ")) }
+}
+
+fn write_split_spans(input: &Path, qpdf: &Path, workspace: &Path, spans: Vec<SplitSpan>) -> Result<Vec<(String, PathBuf)>, String> {
+    spans.into_iter().enumerate().map(|(index, span)| {
+        let part = workspace.join(format!("part-{index}.pdf"));
+        let result = Command::new(qpdf).arg(input).arg("--pages").arg(input).arg(format!("{}-{}", span.first, span.last)).arg("--").arg(&part).output_until_stopped().map_err(|error| format!("Could not run qpdf: {error}"))?;
+        if !result.status.success() { return Err(stderr(result, "qpdf failed to split the PDF.")); }
+        if !part.is_file() { return Err("qpdf reported success but produced no split file.".to_string()); }
+        Ok((span.suffix, part))
+    }).collect()
+}
+
+fn materialize_split_outputs(input: &Path, location: &OutputLocation, generated: &[(String, PathBuf)]) -> Result<Vec<PathBuf>, JobOutcome> {
+    let mut outputs = Vec::with_capacity(generated.len());
+    for (suffix, source) in generated {
+        let reservation = match OutputNaming::reserve_destination(input, location, suffix, "pdf") {
             Ok(reservation) => reservation,
             Err(error) => return Err(JobOutcome::failure_with_outputs(input.to_path_buf(), outputs, ToolError::processing(format!("Could not reserve split output: {error}")))),
         };
@@ -245,34 +359,9 @@ fn materialize_split_outputs(input: &Path, location: &OutputLocation, generated:
     Ok(outputs)
 }
 
-fn split_output_suffix(input: &Path, generated: &Path) -> Result<String, String> {
-    let input_stem = input.file_stem().and_then(|value| value.to_str()).unwrap_or("output");
-    let generated_stem = generated.file_stem().and_then(|value| value.to_str()).ok_or_else(|| "qpdf produced an unnamed split file.".to_string())?;
-    let suffix = generated_stem.strip_prefix(input_stem).ok_or_else(|| "qpdf produced an unexpected split file name.".to_string())?;
-    if !suffix.starts_with("-split") { return Err("qpdf produced an unexpected split file name.".to_string()); }
-    Ok(suffix.to_string())
-}
-
 fn copy_into_reservation(source: &Path, destination: &Path) -> io::Result<()> {
     fs::copy(source, destination)?;
     fs::remove_file(source)
-}
-
-fn validate_split_request(request: &PageSelectionRequest) -> Result<(), String> {
-    if request.split_mode.as_deref() == Some("ranges") && request.page_ranges.as_deref().is_none_or(|value| value.trim().is_empty()) {
-        return Err("Enter at least one page range when split mode is Ranges.".to_string());
-    }
-    Ok(())
-}
-
-fn parse_split_ranges(raw: &str, page_count: usize) -> Result<Vec<(usize, usize)>, String> {
-    raw.split(',').map(str::trim).map(|token| {
-        let (start, end) = token.split_once('-').unwrap_or((token, token));
-        let start = parse_page_number(start)?;
-        let end = if end.trim().is_empty() { page_count } else { parse_page_number(end)? };
-        if start > end || end > page_count { return Err(format!("Invalid page range: {token}.")); }
-        Ok((start, end))
-    }).collect()
 }
 
 pub fn to_images(request: &PdfToImagesRequest, input: PathBuf) -> JobOutcome {
@@ -777,7 +866,7 @@ fn save(mut document: Document, input: PathBuf, output: OutputReservation, detai
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 struct OverlayPageGeometry {
     left: f32,
     bottom: f32,
@@ -936,22 +1025,15 @@ mod tests {
             paths: vec![],
             pages,
             page_ranges: page_ranges.map(str::to_string),
-            split_mode: None,
-            chunk_size: None,
             output_location: OutputLocation::AlongsideInput,
         }
     }
 
-    fn split_request(output_location: OutputLocation, split_mode: &str, page_ranges: Option<&str>, chunk_size: Option<usize>) -> PageSelectionRequest {
-        PageSelectionRequest {
-            paths: vec![],
-            pages: vec![],
-            page_ranges: page_ranges.map(str::to_string),
-            split_mode: Some(split_mode.to_string()),
-            chunk_size,
-            output_location,
-        }
+    fn split_request(output_location: OutputLocation, mode: SplitMode) -> SplitPdfRequest {
+        SplitPdfRequest { paths: vec![], mode: mode.into(), output_location }
     }
+
+    fn ranges(ranges: &str) -> SplitMode { SplitMode::Ranges { ranges: ranges.to_string() } }
 
     fn split_fixture_root(name: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!(
@@ -1404,12 +1486,11 @@ mod tests {
         fs::create_dir_all(&generated).unwrap();
         fs::create_dir_all(&output_folder).unwrap();
         fs::write(&input, b"source").unwrap();
-        let first = generated.join("source-split-0.pdf");
-        let invalid = generated.join("unexpected.pdf");
+        let first = generated.join("part-0.pdf");
+        let missing = generated.join("part-1.pdf");
         fs::write(&first, b"first split").unwrap();
-        fs::write(&invalid, b"unexpected split").unwrap();
 
-        let outcome = materialize_split_outputs(&input, &OutputLocation::CustomFolder(output_folder.clone()), &[first, invalid]).unwrap_err();
+        let outcome = materialize_split_outputs(&input, &OutputLocation::CustomFolder(output_folder.clone()), &[("-split-0".to_string(), first), ("-split-1".to_string(), missing)]).unwrap_err();
 
         assert!(outcome.error().is_some());
         assert_eq!(outcome.output_paths().len(), 1);
@@ -1417,6 +1498,84 @@ mod tests {
         assert_eq!(fs::read(&outcome.output_paths()[0]).unwrap(), b"first split");
         assert_eq!(fs::read_dir(&output_folder).unwrap().count(), 1);
         fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn split_spans_name_parts_by_mode() {
+        let suffixes = |mode: SplitMode, pages: usize| SplitPlan::new(&mode).unwrap().fit(pages).spans.into_iter().map(|span| (span.suffix, span.first, span.last)).collect::<Vec<_>>();
+        let span = |suffix: &str, first: usize, last: usize| (suffix.to_string(), first, last);
+
+        assert_eq!(suffixes(SplitMode::EveryN { pages: 1 }, 3), vec![span("-page-1", 1, 1), span("-page-2", 2, 2), span("-page-3", 3, 3)]);
+        assert_eq!(suffixes(SplitMode::EveryN { pages: 1 }, 12)[9..], [span("-page-10", 10, 10), span("-page-11", 11, 11), span("-page-12", 12, 12)]);
+        assert_eq!(suffixes(SplitMode::EveryN { pages: 2 }, 3), vec![span("-pages-1-2", 1, 2), span("-page-3", 3, 3)]);
+        assert_eq!(suffixes(SplitMode::EveryN { pages: 5 }, 12), vec![span("-pages-1-5", 1, 5), span("-pages-6-10", 6, 10), span("-pages-11-12", 11, 12)]);
+        assert_eq!(suffixes(SplitMode::EveryN { pages: 4 }, 14), vec![span("-pages-1-4", 1, 4), span("-pages-5-8", 5, 8), span("-pages-9-12", 9, 12), span("-pages-13-14", 13, 14)]);
+        assert_eq!(suffixes(SplitMode::EveryN { pages: 3 }, 9), vec![span("-pages-1-3", 1, 3), span("-pages-4-6", 4, 6), span("-pages-7-9", 7, 9)]);
+        assert_eq!(suffixes(ranges("3, 1-2, 2-"), 3), vec![span("-page-3", 3, 3), span("-pages-1-2", 1, 2), span("-pages-2-3", 2, 3)]);
+        assert_eq!(suffixes(ranges("1-3, 5, 8-"), 10), vec![span("-pages-1-3", 1, 3), span("-page-5", 5, 5), span("-pages-8-10", 8, 10)]);
+        assert_eq!(suffixes(ranges("4-4,10-"), 10), vec![span("-page-4", 4, 4), span("-page-10", 10, 10)]);
+    }
+
+    #[test]
+    fn ranges_are_fitted_to_each_document_and_every_change_is_noted() {
+        let fit = |raw: &str, pages: usize| {
+            let fitted = SplitPlan::new(&ranges(raw)).unwrap().fit(pages);
+            (fitted.spans.into_iter().map(|span| (span.first, span.last)).collect::<Vec<_>>(), fitted.notes)
+        };
+
+        assert_eq!(fit("1-2, 4-9, 12-", 14), (vec![(1, 2), (4, 9), (12, 14)], vec![]));
+        assert_eq!(fit("1-2, 4-9, 12-", 6), (vec![(1, 2), (4, 6)], vec!["4-9 was past page 6 and was shortened to 4\u{2013}6.".to_string(), "12- was past page 6 and was dropped.".to_string()]));
+        assert_eq!(fit("1-2, 4-9, 12-", 1), (vec![(1, 1)], vec!["1-2 was past page 1 and was shortened to 1.".to_string(), "4-9 was past page 1 and was dropped.".to_string(), "12- was past page 1 and was dropped.".to_string()]));
+        assert_eq!(fit("6-", 6), (vec![(6, 6)], vec![]), "an open range that starts on the last page is kept as is");
+        assert_eq!(fit("7, 9-", 6), (vec![], vec!["7 was past page 6 and was dropped.".to_string(), "9- was past page 6 and was dropped.".to_string()]));
+    }
+
+    #[test]
+    fn range_strings_follow_the_grammar_and_report_every_problem() {
+        let parsed = |raw: &str| parse_split_ranges(raw).map(|ranges| ranges.into_iter().map(|(_, range)| (range.start, range.end)).collect::<Vec<_>>());
+        assert_eq!(parsed("1-3, 5, 8-"), Ok(vec![(1, Some(3)), (5, Some(5)), (8, None)]));
+        assert_eq!(parsed(" 2 - 4 ,7"), Ok(vec![(2, Some(4)), (7, Some(7))]));
+        assert_eq!(parsed("1-3,2-5"), Ok(vec![(1, Some(3)), (2, Some(5))]));
+
+        let rejected = |raw: &str| parse_split_ranges(raw).unwrap_err();
+        assert_eq!(rejected(""), "Enter at least one page range to split.");
+        assert_eq!(rejected("  "), "Enter at least one page range to split.");
+        assert_eq!(rejected("3-1"), "3-1 runs backwards (write 1-3).");
+        assert_eq!(rejected("1,,3"), "Entry 2 is empty.");
+        assert_eq!(rejected("1-3,"), "Entry 2 is empty.");
+        assert_eq!(rejected("x"), "x isn't a page.");
+        assert_eq!(rejected("0"), "0 isn't a page. Pages start at 1.");
+        assert_eq!(rejected("0-2"), "0-2 isn't a range. Pages start at 1.");
+        for raw in ["-5", "1-2-3", "a-3", "1-b", "+1-3", "1--3", "-"] {
+            assert_eq!(rejected(raw), format!("{raw} isn't a range."), "{raw}");
+        }
+        for raw in ["+3", "1.5", "two"] {
+            assert_eq!(rejected(raw), format!("{raw} isn't a page."), "{raw}");
+        }
+        assert_eq!(rejected("3-1, , x"), "3-1 runs backwards (write 1-3). Entry 2 is empty. x isn't a page.");
+    }
+
+    #[test]
+    fn split_request_keeps_only_the_selected_mode_fields() {
+        let mode = |json: &str| serde_json::from_str::<SplitPdfRequest>(json).unwrap().mode.0;
+        assert_eq!(mode(r#"{"paths":[],"mode":{"kind":"ranges","ranges":"1-3"},"outputLocation":"alongsideInput"}"#), Ok(ranges("1-3")));
+        assert_eq!(mode(r#"{"paths":[],"mode":{"kind":"everyN","pages":4},"outputLocation":"alongsideInput"}"#), Ok(SplitMode::EveryN { pages: 4 }));
+        for malformed in [
+            r#"{"kind":"ranges"}"#,
+            r#"{"kind":"ranges","ranges":3}"#,
+            r#"{"kind":"ranges","ranges":"1","pages":2}"#,
+            r#"{"kind":"everyN"}"#,
+            r#"{"kind":"everyN","pages":-1}"#,
+            r#"{"kind":"everyN","pages":2,"ranges":"1"}"#,
+            r#"{"kind":"chunks","chunkSize":2}"#,
+            r#"{"ranges":"1-3"}"#,
+            r#""ranges""#,
+            "null",
+        ] {
+            let json = format!(r#"{{"paths":[],"mode":{malformed},"outputLocation":"alongsideInput"}}"#);
+            assert!(mode(&json).unwrap_err().starts_with("The split mode is malformed"), "{malformed}");
+        }
+        assert_eq!(mode(r#"{"paths":[],"outputLocation":"alongsideInput"}"#).unwrap_err(), "Choose how to split: by page ranges or every N pages.");
     }
 
     fn split_temp_entries() -> std::collections::HashSet<PathBuf> {
@@ -1433,7 +1592,7 @@ mod tests {
         }
     }
 
-    fn run_split_with_sentinel(name: &str, split_mode: &str, page_ranges: Option<&str>, chunk_size: Option<usize>, sentinel_name: &str, expected_count: usize) {
+    fn run_split_with_sentinel(name: &str, mode: SplitMode, sentinel_name: &str, expected_count: usize) {
         let _lock = SPLIT_TEST_LOCK.lock().unwrap();
         if qpdf().is_err() {
             eprintln!("skipping: qpdf not available");
@@ -1449,7 +1608,7 @@ mod tests {
         let sentinel_bytes = fs::read(&sentinel).unwrap();
         let temp_before = split_temp_entries();
 
-        let outcome = split(&split_request(OutputLocation::CustomFolder(output_folder.clone()), split_mode, page_ranges, chunk_size), input.clone());
+        let outcome = split(&split_request(OutputLocation::CustomFolder(output_folder.clone()), mode), input.clone());
 
         assert!(outcome.error().is_none(), "split failed: {:?}", outcome.error());
         assert_eq!(outcome.input_path, input);
@@ -1464,27 +1623,268 @@ mod tests {
 
     #[test]
     fn page_split_does_not_overwrite_existing_outputs() {
-        run_split_with_sentinel("pages", "pages", None, None, "document-split-page-1.pdf", 3);
+        run_split_with_sentinel("pages", SplitMode::EveryN { pages: 1 }, "document-page-1.pdf", 3);
     }
 
     #[test]
     fn chunk_split_does_not_overwrite_existing_outputs() {
-        run_split_with_sentinel("chunks", "chunks", None, Some(2), "document-split-1-2.pdf", 2);
+        run_split_with_sentinel("chunks", SplitMode::EveryN { pages: 2 }, "document-pages-1-2.pdf", 2);
     }
 
     #[test]
     fn range_split_does_not_overwrite_existing_outputs() {
-        run_split_with_sentinel("ranges", "pages", Some("1,3"), None, "document-split-0.pdf", 2);
+        run_split_with_sentinel("ranges", ranges("1,3"), "document-page-1.pdf", 2);
     }
 
     #[test]
     fn range_split_rejects_blank_ranges_without_outputs() {
         let input = PathBuf::from("blank-ranges.pdf");
-        let outcome = split(&split_request(OutputLocation::AlongsideInput, "ranges", Some("  "), None), input.clone());
+        let outcome = split(&split_request(OutputLocation::AlongsideInput, ranges("  ")), input.clone());
 
         assert_eq!(outcome.input_path, input);
         assert!(matches!(outcome.error().map(|error| &error.kind), Some(crate::kit::contracts::ErrorKind::InvalidInput)));
         assert!(outcome.output_paths().is_empty());
+    }
+
+    fn split_page_labels(path: &Path) -> Vec<String> {
+        let document = Document::load(path).unwrap();
+        document.get_pages().values().map(|page| {
+            let content = String::from_utf8_lossy(&document.get_page_content(*page)).into_owned();
+            let start = content.find("(Split page ").unwrap_or_else(|| panic!("{} has a page without a label", path.display())) + 1;
+            let end = start + content[start..].find(')').unwrap();
+            content[start..end].to_string()
+        }).collect()
+    }
+
+    fn split_output_names(outcome: &JobOutcome) -> Vec<String> {
+        outcome.output_paths().iter().map(|path| path.file_name().unwrap().to_string_lossy().into_owned()).collect()
+    }
+
+    fn labels(pages: &[usize]) -> Vec<String> { pages.iter().map(|page| format!("Split page {page}")).collect() }
+
+    struct RangeSplitFixture { root: PathBuf, input: PathBuf, original: Vec<u8>, output_folder: PathBuf }
+
+    impl RangeSplitFixture {
+        fn new(name: &str, page_count: usize) -> Self {
+            let root = split_fixture_root(name);
+            let input = root.join("document.pdf");
+            let output_folder = root.join("outputs");
+            fs::create_dir_all(&output_folder).unwrap();
+            split_fixture_pdf(&input, page_count);
+            let original = fs::read(&input).unwrap();
+            Self { root, input, original, output_folder }
+        }
+
+        fn split(&self, mode: impl Into<RequestedSplitMode>) -> JobOutcome {
+            let request = SplitPdfRequest { paths: vec![self.input.clone()], mode: mode.into(), output_location: OutputLocation::CustomFolder(self.output_folder.clone()) };
+            let outcome = split(&request, self.input.clone());
+            assert_eq!(fs::read(&self.input).unwrap(), self.original, "split modified the original PDF");
+            outcome
+        }
+
+        fn output_count(&self) -> usize { fs::read_dir(&self.output_folder).unwrap().count() }
+    }
+
+    impl Drop for RangeSplitFixture {
+        fn drop(&mut self) { let _ = fs::remove_dir_all(&self.root); }
+    }
+
+    #[test]
+    fn mixed_range_split_writes_page_named_files_and_numbers_a_second_run() {
+        let _lock = SPLIT_TEST_LOCK.lock().unwrap();
+        if qpdf().is_err() { eprintln!("skipping: qpdf not available"); return; }
+        let fixture = RangeSplitFixture::new("mixed-ranges", 10);
+
+        let first = fixture.split(ranges("1-3, 5, 8-"));
+        assert!(first.error().is_none(), "split failed: {:?}", first.error());
+        assert_eq!(split_output_names(&first), ["document-pages-1-3.pdf", "document-page-5.pdf", "document-pages-8-10.pdf"]);
+        let contents = first.output_paths().iter().map(|path| split_page_labels(path)).collect::<Vec<_>>();
+        assert_eq!(contents, [labels(&[1, 2, 3]), labels(&[5]), labels(&[8, 9, 10])]);
+        let first_bytes = first.output_paths().iter().map(|path| fs::read(path).unwrap()).collect::<Vec<_>>();
+
+        let second = fixture.split(ranges("1-3, 5, 8-"));
+        assert!(second.error().is_none(), "second split failed: {:?}", second.error());
+        assert_eq!(split_output_names(&second), ["document-pages-1-3-1.pdf", "document-page-5-1.pdf", "document-pages-8-10-1.pdf"]);
+        assert_eq!(second.output_paths().iter().map(|path| split_page_labels(path)).collect::<Vec<_>>(), contents);
+        assert_eq!(first.output_paths().iter().map(|path| fs::read(path).unwrap()).collect::<Vec<_>>(), first_bytes, "a second split replaced an earlier output");
+        assert_eq!(fixture.output_count(), 6);
+    }
+
+    #[test]
+    fn every_n_split_writes_page_named_parts_with_a_short_last_part_and_numbers_a_second_run() {
+        let _lock = SPLIT_TEST_LOCK.lock().unwrap();
+        if qpdf().is_err() { eprintln!("skipping: qpdf not available"); return; }
+        let fixture = RangeSplitFixture::new("every-n", 10);
+        let temp_before = split_temp_entries();
+
+        let first = fixture.split(SplitMode::EveryN { pages: 4 });
+        assert!(first.error().is_none(), "split failed: {:?}", first.error());
+        assert_eq!(split_output_names(&first), ["document-pages-1-4.pdf", "document-pages-5-8.pdf", "document-pages-9-10.pdf"]);
+        let contents = first.output_paths().iter().map(|path| split_page_labels(path)).collect::<Vec<_>>();
+        assert_eq!(contents, [labels(&[1, 2, 3, 4]), labels(&[5, 6, 7, 8]), labels(&[9, 10])]);
+        let first_bytes = first.output_paths().iter().map(|path| fs::read(path).unwrap()).collect::<Vec<_>>();
+
+        let second = fixture.split(SplitMode::EveryN { pages: 4 });
+        assert!(second.error().is_none(), "second split failed: {:?}", second.error());
+        assert_eq!(split_output_names(&second), ["document-pages-1-4-1.pdf", "document-pages-5-8-1.pdf", "document-pages-9-10-1.pdf"]);
+        assert_eq!(second.output_paths().iter().map(|path| split_page_labels(path)).collect::<Vec<_>>(), contents);
+        assert_eq!(first.output_paths().iter().map(|path| fs::read(path).unwrap()).collect::<Vec<_>>(), first_bytes, "a second split replaced an earlier output");
+        assert_eq!(fixture.output_count(), 6);
+        assert_eq!(split_temp_entries(), temp_before, "split temporary directories were not cleaned");
+    }
+
+    #[test]
+    fn every_one_page_split_writes_one_page_named_file_per_page_and_numbers_a_second_run() {
+        let _lock = SPLIT_TEST_LOCK.lock().unwrap();
+        if qpdf().is_err() { eprintln!("skipping: qpdf not available"); return; }
+        let fixture = RangeSplitFixture::new("every-one", 3);
+
+        let first = fixture.split(SplitMode::EveryN { pages: 1 });
+        assert!(first.error().is_none(), "split failed: {:?}", first.error());
+        assert_eq!(split_output_names(&first), ["document-page-1.pdf", "document-page-2.pdf", "document-page-3.pdf"]);
+        assert_eq!(first.output_paths().iter().map(|path| split_page_labels(path)).collect::<Vec<_>>(), [labels(&[1]), labels(&[2]), labels(&[3])]);
+
+        let second = fixture.split(SplitMode::EveryN { pages: 1 });
+        assert!(second.error().is_none(), "second split failed: {:?}", second.error());
+        assert_eq!(split_output_names(&second), ["document-page-1-1.pdf", "document-page-2-1.pdf", "document-page-3-1.pdf"]);
+        assert_eq!(second.output_paths().iter().map(|path| split_page_labels(path)).collect::<Vec<_>>(), [labels(&[1]), labels(&[2]), labels(&[3])]);
+        assert_eq!(fixture.output_count(), 6);
+    }
+
+    #[test]
+    fn every_n_below_one_or_missing_is_invalid_input_without_output() {
+        let _lock = SPLIT_TEST_LOCK.lock().unwrap();
+        let fixture = RangeSplitFixture::new("every-n-invalid", 4);
+        let temp_before = split_temp_entries();
+        let mode = |json: &str| serde_json::from_str::<RequestedSplitMode>(json).unwrap();
+        for requested in [
+            SplitMode::EveryN { pages: 0 }.into(),
+            mode(r#"{"kind":"everyN","pages":0}"#),
+            mode(r#"{"kind":"everyN","pages":-2}"#),
+            mode(r#"{"kind":"everyN","pages":null}"#),
+            mode(r#"{"kind":"everyN","pages":"4"}"#),
+            mode(r#"{"kind":"everyN"}"#),
+        ] {
+            let described = format!("{requested:?}");
+            let outcome = fixture.split(requested);
+            assert!(matches!(outcome.error().map(|error| &error.kind), Some(crate::kit::contracts::ErrorKind::InvalidInput)), "{described}: {:?}", outcome.error());
+            assert!(outcome.output_paths().is_empty(), "{described}");
+            assert_eq!(fixture.output_count(), 0, "{described} wrote an output");
+        }
+        assert_eq!(fixture.split(SplitMode::EveryN { pages: 0 }).error().unwrap().message, "Pages per file must be at least 1.");
+        assert_eq!(split_temp_entries(), temp_before, "a rejected split left a temporary directory");
+    }
+
+    #[test]
+    fn overlapping_ranges_each_get_their_own_pages() {
+        let _lock = SPLIT_TEST_LOCK.lock().unwrap();
+        if qpdf().is_err() { eprintln!("skipping: qpdf not available"); return; }
+        let fixture = RangeSplitFixture::new("overlapping-ranges", 6);
+
+        let outcome = fixture.split(ranges("1-4, 3-6, 4"));
+
+        assert!(outcome.error().is_none(), "split failed: {:?}", outcome.error());
+        assert_eq!(split_output_names(&outcome), ["document-pages-1-4.pdf", "document-pages-3-6.pdf", "document-page-4.pdf"]);
+        assert_eq!(outcome.output_paths().iter().map(|path| split_page_labels(path)).collect::<Vec<_>>(), [labels(&[1, 2, 3, 4]), labels(&[3, 4, 5, 6]), labels(&[4])]);
+    }
+
+    #[test]
+    fn malformed_split_requests_are_rejected_before_any_output() {
+        let _lock = SPLIT_TEST_LOCK.lock().unwrap();
+        let fixture = RangeSplitFixture::new("malformed-ranges", 10);
+        let temp_before = split_temp_entries();
+        let malformed: Vec<RequestedSplitMode> = vec![
+            ranges("3-1").into(),
+            ranges("1,,3").into(),
+            ranges("1-3,").into(),
+            ranges("x").into(),
+            ranges("0").into(),
+            ranges("1-2-3").into(),
+            ranges("-5").into(),
+            ranges("  ").into(),
+            SplitMode::EveryN { pages: 0 }.into(),
+            RequestedSplitMode::default(),
+            serde_json::from_str::<RequestedSplitMode>(r#"{"kind":"ranges","ranges":"1-3","pages":2}"#).unwrap(),
+            serde_json::from_str::<RequestedSplitMode>(r#"{"kind":"ranges"}"#).unwrap(),
+        ];
+
+        for mode in malformed {
+            let described = format!("{mode:?}");
+            let outcome = fixture.split(mode);
+            assert_eq!(outcome.input_path, fixture.input);
+            assert!(matches!(outcome.error().map(|error| &error.kind), Some(crate::kit::contracts::ErrorKind::InvalidInput)), "{described}: {:?}", outcome.error());
+            assert!(outcome.output_paths().is_empty(), "{described}");
+            assert_eq!(fixture.output_count(), 0, "{described} wrote an output");
+        }
+        assert_eq!(split_temp_entries(), temp_before, "a rejected split left a temporary directory");
+    }
+
+    fn split_batch(paths: &[PathBuf], output_folder: &Path, mode: SplitMode) -> Vec<JobOutcome> {
+        let request = std::sync::Arc::new(SplitPdfRequest { paths: paths.to_vec(), mode: mode.into(), output_location: OutputLocation::CustomFolder(output_folder.to_path_buf()) });
+        crate::kit::common::batch_runner::BatchRunner::run(&crate::kit::common::batch_runner::RunEvents::silent(), "split_pdf", paths.to_vec(), &request.output_location.clone(), &request, split)
+    }
+
+    fn skip_reason(outcome: &JobOutcome) -> (SkipCode, String) {
+        match &outcome.state {
+            crate::kit::contracts::OutcomeState::Skipped { reason } => (reason.code.clone(), reason.message.clone()),
+            other => panic!("{} was not skipped: {other:?}", outcome.input_path.display()),
+        }
+    }
+
+    #[test]
+    fn a_batch_split_fits_one_range_string_to_each_pdf_and_isolates_skips_and_failures() {
+        let _lock = SPLIT_TEST_LOCK.lock().unwrap();
+        if qpdf().is_err() { eprintln!("skipping: qpdf not available"); return; }
+        let root = split_fixture_root("batch");
+        let output_folder = root.join("outputs");
+        fs::create_dir_all(&output_folder).unwrap();
+        let pdf = |name: &str, pages: usize| { let path = root.join(name); split_fixture_pdf(&path, pages); path };
+        let long = pdf("long.pdf", 14);
+        let short = pdf("short.pdf", 6);
+        let single = pdf("single.pdf", 1);
+        let damaged = root.join("damaged.pdf");
+        fs::write(&damaged, b"%PDF-1.7 damaged").unwrap();
+        let five = pdf("five.pdf", 5);
+        let three = pdf("three.pdf", 3);
+        let originals = [&long, &short, &single, &damaged, &five, &three].map(|path| (path.clone(), fs::read(path).unwrap()));
+        let temp_before = split_temp_entries();
+        let names = |outcome: &JobOutcome| split_output_names(outcome);
+        let contents = |outcome: &JobOutcome| outcome.output_paths().iter().map(|path| split_page_labels(path)).collect::<Vec<_>>();
+
+        let batch = vec![long.clone(), short.clone(), single.clone(), damaged.clone()];
+        let outcomes = split_batch(&batch, &output_folder, ranges("1-2, 4-9, 12-"));
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), batch);
+        assert!(outcomes[0].error().is_none(), "{:?}", outcomes[0].error());
+        assert_eq!(names(&outcomes[0]), ["long-pages-1-2.pdf", "long-pages-4-9.pdf", "long-pages-12-14.pdf"]);
+        assert_eq!(contents(&outcomes[0]), [labels(&[1, 2]), labels(&[4, 5, 6, 7, 8, 9]), labels(&[12, 13, 14])]);
+        assert_eq!(outcomes[0].detail, "14 pages into 3 files.");
+        assert!(outcomes[1].error().is_none(), "{:?}", outcomes[1].error());
+        assert_eq!(names(&outcomes[1]), ["short-pages-1-2.pdf", "short-pages-4-6.pdf"]);
+        assert_eq!(contents(&outcomes[1]), [labels(&[1, 2]), labels(&[4, 5, 6])]);
+        assert_eq!(outcomes[1].detail, "6 pages into 2 files. 4-9 was past page 6 and was shortened to 4\u{2013}6. 12- was past page 6 and was dropped.");
+        assert_eq!(skip_reason(&outcomes[2]), (SkipCode::NoEffectiveChange, "1-2 was past page 1 and was shortened to 1. 4-9 was past page 1 and was dropped. 12- was past page 1 and was dropped. Only 1 fits, which is the whole file. Nothing was saved.".to_string()));
+        assert!(outcomes[3].error().is_some(), "the damaged PDF should fail on its own");
+        assert!(outcomes[3].output_paths().is_empty());
+        assert_eq!(fs::read_dir(&output_folder).unwrap().count(), 5, "only the two split PDFs wrote parts");
+
+        let beyond = split_batch(&[short.clone(), five.clone()], &output_folder, ranges("7, 9-12"));
+        assert_eq!(skip_reason(&beyond[0]), (SkipCode::RangeEmptyAfterClamping, "7 was past page 6 and was dropped. 9-12 was past page 6 and was dropped. Nothing was saved.".to_string()));
+        assert_eq!(skip_reason(&beyond[1]).0, SkipCode::RangeEmptyAfterClamping);
+
+        let open = split_batch(&[five.clone(), three.clone()], &output_folder, ranges("1-"));
+        assert_eq!(skip_reason(&open[0]), (SkipCode::NoEffectiveChange, "1\u{2013}5 is the whole file. Nothing was saved.".to_string()));
+        assert_eq!(skip_reason(&open[1]), (SkipCode::NoEffectiveChange, "1\u{2013}3 is the whole file. Nothing was saved.".to_string()));
+
+        let every = split_batch(&[long.clone(), five.clone(), three.clone()], &output_folder, SplitMode::EveryN { pages: 5 });
+        assert_eq!(names(&every[0]), ["long-pages-1-5.pdf", "long-pages-6-10.pdf", "long-pages-11-14.pdf"]);
+        assert_eq!(every[0].detail, "14 pages into 3 files.");
+        assert_eq!(skip_reason(&every[1]), (SkipCode::NoEffectiveChange, "5 pages is exactly one part of 5, so it would be the whole file. Nothing was saved.".to_string()));
+        assert_eq!(skip_reason(&every[2]), (SkipCode::NoEffectiveChange, "3 pages is fewer than 5, so it would be the whole file. Nothing was saved.".to_string()));
+
+        assert_eq!(fs::read_dir(&output_folder).unwrap().count(), 8, "skipped PDFs wrote no output");
+        for (path, bytes) in &originals { assert_eq!(&fs::read(path).unwrap(), bytes, "{} was modified", path.display()); }
+        assert_eq!(split_temp_entries(), temp_before, "a batch split left a temporary workspace");
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1499,11 +1899,11 @@ mod tests {
         let output_folder = root.join("outputs");
         fs::create_dir_all(&output_folder).unwrap();
         fs::write(&input, b"not a PDF").unwrap();
-        let sentinel = output_folder.join("document-split-page-1.pdf");
+        let sentinel = output_folder.join("document-page-1.pdf");
         fs::write(&sentinel, b"sentinel").unwrap();
         let temp_before = split_temp_entries();
 
-        let outcome = split(&split_request(OutputLocation::CustomFolder(output_folder.clone()), "pages", None, None), input.clone());
+        let outcome = split(&split_request(OutputLocation::CustomFolder(output_folder.clone()), SplitMode::EveryN { pages: 1 }), input.clone());
 
         assert_eq!(outcome.input_path, input);
         assert!(outcome.error().is_some());
