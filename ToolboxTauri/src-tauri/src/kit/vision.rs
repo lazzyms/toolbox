@@ -27,7 +27,7 @@ const OCR_MAX_TOTAL_PIXELS: u64 = 120_000_000;
 const OCR_MAX_RENDERED_BYTES: u64 = 50 * 1024 * 1024;
 const OCR_TIMEOUT: Duration = Duration::from_secs(120);
 /// The language OCR reads with the data bundled in the app. Every other language needs a pack.
-const ENGLISH: &str = "eng";
+const ENGLISH: &str = crate::packs::BUILT_IN_OCR_LANGUAGE.0;
 /// Development builds read `<code>.traineddata` from this folder when the language's pack is not installed.
 const OCR_LANGUAGE_DIR_ENV: &str = "TOOLBOX_OCR_LANGUAGE_DIR";
 

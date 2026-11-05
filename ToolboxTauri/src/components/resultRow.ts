@@ -61,7 +61,7 @@ export const warningText = (warning: OutcomeWarning): string => {
     }
 };
 
-const packVerbs: Record<PackNeed, string> = { notInstalled: "Install", damaged: "Repair", incompatible: "Update" };
+export const packVerbs: Record<PackNeed, string> = { notInstalled: "Install", damaged: "Repair", incompatible: "Update" };
 
 const pointerView = (pointer: OutcomePointer | null): RowPointer | null => {
     if (!pointer) return null;
