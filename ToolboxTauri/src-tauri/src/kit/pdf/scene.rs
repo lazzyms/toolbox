@@ -1,12 +1,13 @@
 use std::{collections::{HashMap, HashSet}, fs::{self, OpenOptions}, io::Write, path::{Path, PathBuf}, process::Command, sync::atomic::{AtomicU64, Ordering}, time::{Instant}};
 use base64::Engine;
+use rustybuzz::ttf_parser;
 use flate2::{write::ZlibEncoder, Compression};
 use lopdf::{dictionary, Document, Object, ObjectId, Stream};
 use quick_xml::{events::Event, escape::unescape, Reader as XmlReader, XmlVersion};
 use serde::{Deserialize, Serialize};
-use crate::kit::{common::{JobOutcome, OutputLocation, OutputNaming}, contracts::ToolError};
+use crate::kit::{common::{JobOutcome, OutputLocation, OutputNaming}, contracts::{OutcomeWarning, ToolError}};
 use super::metadata::{PdfDocumentMetadata, PdfPageMetadata, PdfTextRun};
-use super::{inherited, resolve, PdfMutationIntent};
+use super::{inherited, resolve, text_edit, PdfMutationIntent};
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Rect { pub x: f32, pub y: f32, pub width: f32, pub height: f32 }
@@ -23,7 +24,14 @@ pub struct SceneObject {
     #[serde(default)] pub signature_path: Option<PathBuf>,
     #[serde(default)] pub font_family: Option<String>,
     #[serde(default)] pub watermark_pattern: Option<WatermarkPattern>,
+    #[serde(default)] pub bold: bool,
+    #[serde(default)] pub italic: bool,
+    #[serde(default)] pub align: TextAlign,
+    #[serde(default)] pub page_range: Option<String>,
 }
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(rename_all="lowercase")]
+pub enum TextAlign { #[default] Left, Center, Right }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all="camelCase")]
 pub enum Kind { Text, Highlight, Shape, Signature, Watermark }
@@ -52,13 +60,21 @@ pub struct ScenePage {
 pub struct PdfScene { pub pages: Vec<ScenePage> }
 #[derive(Deserialize)]
 #[serde(rename_all="camelCase")]
-pub struct PreviewRequest { pub path: PathBuf, pub scene: PdfScene, pub page_index: usize }
+pub struct PreviewRequest { pub path: PathBuf, pub scene: PdfScene, pub page_index: usize, #[serde(flatten)] pub sections: StageSections }
 #[derive(Deserialize)]
 #[serde(rename_all="camelCase")]
-pub struct PreviewPagesRequest { pub path: PathBuf, pub scene: PdfScene, pub page_indices: Vec<usize> }
+pub struct PreviewPagesRequest { pub path: PathBuf, pub scene: PdfScene, pub page_indices: Vec<usize>, #[serde(flatten)] pub sections: StageSections }
 #[derive(Deserialize)]
 #[serde(rename_all="camelCase")]
-pub struct ExportRequest { pub paths: Vec<PathBuf>, pub scene: PdfScene, pub output_location: OutputLocation }
+pub struct ExportRequest { pub paths: Vec<PathBuf>, pub scene: PdfScene, pub output_location: OutputLocation, #[serde(flatten)] pub sections: StageSections }
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, rename_all="camelCase")]
+pub struct StageSections {
+    pub form_values: Option<Vec<serde_json::Value>>,
+    pub text_edits: Option<Vec<text_edit::TextEdit>>,
+    pub flatten: Option<bool>,
+    pub redactions: Option<Vec<serde_json::Value>>,
+}
 #[derive(Serialize)]
 #[serde(rename_all="camelCase")]
 pub struct ScenePreview { pub data_url: String, pub width: u32, pub height: u32 }
@@ -157,6 +173,230 @@ fn encode_text(text: &str) -> Result<String, String> {
         encoded.push_str(&format!("{:02X}", c as u32));
     }
     Ok(encoded)
+}
+
+const TEXT_MAX_CHARACTERS: usize = 100_000;
+const TEXT_LINE_HEIGHT: f32 = 1.2;
+const SYNTHETIC_OBLIQUE: f32 = 0.2;
+const NOTO_SANS_REGULAR: &[u8] = include_bytes!("../../../resources/fonts/NotoSans-Regular.ttf");
+const NOTO_SANS_BOLD: &[u8] = include_bytes!("../../../resources/fonts/NotoSans-Bold.ttf");
+const NOTO_SANS_ITALIC: &[u8] = include_bytes!("../../../resources/fonts/NotoSans-Italic.ttf");
+const NOTO_SANS_BOLD_ITALIC: &[u8] = include_bytes!("../../../resources/fonts/NotoSans-BoldItalic.ttf");
+const NOTO_SERIF_REGULAR: &[u8] = include_bytes!("../../../resources/fonts/NotoSerif-Regular.ttf");
+const NOTO_SERIF_BOLD: &[u8] = include_bytes!("../../../resources/fonts/NotoSerif-Bold.ttf");
+const NOTO_SERIF_ITALIC: &[u8] = include_bytes!("../../../resources/fonts/NotoSerif-Italic.ttf");
+const NOTO_SERIF_BOLD_ITALIC: &[u8] = include_bytes!("../../../resources/fonts/NotoSerif-BoldItalic.ttf");
+const NOTO_SANS_MONO_REGULAR: &[u8] = include_bytes!("../../../resources/fonts/NotoSansMono-Regular.ttf");
+const NOTO_SANS_MONO_BOLD: &[u8] = include_bytes!("../../../resources/fonts/NotoSansMono-Bold.ttf");
+
+#[derive(Clone, Copy)]
+pub(super) struct TextFont { pub(super) family: &'static str, pub(super) name: &'static str, pub(super) bytes: &'static [u8], oblique: bool }
+
+pub(super) fn bundled_font(family: &str, bold: bool, italic: bool) -> Option<TextFont> {
+    let (family, name, bytes) = match (family, bold, italic) {
+        ("Noto Sans", false, false) => ("Noto Sans", "NotoSans-Regular", NOTO_SANS_REGULAR),
+        ("Noto Sans", true, false) => ("Noto Sans", "NotoSans-Bold", NOTO_SANS_BOLD),
+        ("Noto Sans", false, true) => ("Noto Sans", "NotoSans-Italic", NOTO_SANS_ITALIC),
+        ("Noto Sans", true, true) => ("Noto Sans", "NotoSans-BoldItalic", NOTO_SANS_BOLD_ITALIC),
+        ("Noto Serif", false, false) => ("Noto Serif", "NotoSerif-Regular", NOTO_SERIF_REGULAR),
+        ("Noto Serif", true, false) => ("Noto Serif", "NotoSerif-Bold", NOTO_SERIF_BOLD),
+        ("Noto Serif", false, true) => ("Noto Serif", "NotoSerif-Italic", NOTO_SERIF_ITALIC),
+        ("Noto Serif", true, true) => ("Noto Serif", "NotoSerif-BoldItalic", NOTO_SERIF_BOLD_ITALIC),
+        // Noto Sans Mono has no italic; italic is drawn with a slanted text matrix.
+        ("Noto Sans Mono", false, _) => ("Noto Sans Mono", "NotoSansMono-Regular", NOTO_SANS_MONO_REGULAR),
+        ("Noto Sans Mono", true, _) => ("Noto Sans Mono", "NotoSansMono-Bold", NOTO_SANS_MONO_BOLD),
+        _ => return None,
+    };
+    Some(TextFont { family, name, bytes, oblique: italic && family == "Noto Sans Mono" })
+}
+
+fn text_font(o: &SceneObject) -> Result<TextFont, ToolError> {
+    let family = o.font_family.as_deref().unwrap_or("Noto Sans");
+    bundled_font(family, o.bold, o.italic).ok_or_else(|| ToolError::invalid_input(format!("{family} is not a bundled text font. Choose Noto Sans, Noto Serif or Noto Sans Mono.")))
+}
+
+pub(super) fn parse_face(bytes: &[u8]) -> Result<ttf_parser::Face<'_>, ToolError> {
+    ttf_parser::Face::parse(bytes, 0).map_err(|error| ToolError::processing(format!("Could not read a bundled text font: {error}")))
+}
+
+fn glyph_width(face: &ttf_parser::Face<'_>, gid: u16) -> i64 {
+    let advance = face.glyph_hor_advance(ttf_parser::GlyphId(gid)).unwrap_or(0) as f32;
+    (advance * 1000. / face.units_per_em() as f32).round() as i64
+}
+
+struct TextLine { glyphs: Vec<(u16, char)>, width: f32 }
+struct TextLayout { font: TextFont, lines: Vec<TextLine>, first_baseline: f32 }
+
+pub(super) fn unrenderable_message(family: &str, missing: &[char]) -> String {
+    let named = missing.iter().take(10).map(|c| format!("“{c}” (U+{:04X})", *c as u32)).collect::<Vec<_>>().join(", ");
+    let more = if missing.len() > 10 { format!(" and {} more", missing.len() - 10) } else { String::new() };
+    let noun = if missing.len() == 1 { "this character" } else { "these characters" };
+    format!("{family} can't show {noun}: {named}{more}. Remove {} to export this text box.", if missing.len() == 1 { "it" } else { "them" })
+}
+
+fn layout_text(o: &SceneObject) -> Result<TextLayout, ToolError> {
+    if o.text.chars().count() > TEXT_MAX_CHARACTERS {
+        return Err(ToolError::limit_exceeded(crate::kit::contracts::LimitKind::TextLength,
+            "Text box text is longer than the 100,000-character limit. Shorten it and try again."));
+    }
+    let font = text_font(o)?;
+    let face = parse_face(font.bytes)?;
+    let mut missing = Vec::new();
+    let mut glyph = |c: char| match face.glyph_index(c) {
+        Some(id) if id.0 != 0 => Some(id.0),
+        _ => { if !missing.contains(&c) { missing.push(c); } None }
+    };
+    let scale = o.font_size / 1000.;
+    let max_width = o.rect.width + 0.01;
+    let mut lines = Vec::new();
+    for paragraph in o.text.split('\n') {
+        let paragraph = paragraph.strip_suffix('\r').unwrap_or(paragraph);
+        let mut line: Vec<(u16, char, f32)> = Vec::new();
+        let mut break_after = None;
+        let finish = |line: Vec<(u16, char, f32)>, lines: &mut Vec<TextLine>| {
+            let end = line.iter().rposition(|(_, c, _)| *c != ' ').map_or(0, |index| index + 1);
+            let glyphs: Vec<_> = line[..end].iter().map(|(gid, c, _)| (*gid, *c)).collect();
+            let width = line[..end].iter().map(|(_, _, width)| width).sum();
+            lines.push(TextLine { glyphs, width });
+        };
+        for c in paragraph.chars() {
+            let Some(gid) = glyph(c) else { continue };
+            let width = glyph_width(&face, gid) as f32 * scale;
+            let used: f32 = line.iter().map(|(_, _, width)| width).sum();
+            if c != ' ' && used + width > max_width && line.iter().any(|(_, c, _)| *c != ' ') {
+                let carry = match break_after.take() { Some(index) => line.split_off(index), None => Vec::new() };
+                finish(std::mem::replace(&mut line, carry), &mut lines);
+                let used: f32 = line.iter().map(|(_, _, width)| width).sum();
+                if used + width > max_width && !line.is_empty() { finish(std::mem::take(&mut line), &mut lines); }
+            }
+            line.push((gid, c, width));
+            if c == ' ' { break_after = Some(line.len()); }
+        }
+        finish(line, &mut lines);
+    }
+    if !missing.is_empty() { return Err(ToolError::invalid_input(unrenderable_message(font.family, &missing))); }
+    let em = face.units_per_em() as f32;
+    let (ascent, descent) = (face.ascender() as f32 / em, face.descender() as f32 / em);
+    // Matches CSS line-height: half-leading above the ascender.
+    let first_baseline = o.font_size * ((TEXT_LINE_HEIGHT - (ascent - descent)) / 2. + ascent);
+    Ok(TextLayout { font, lines, first_baseline })
+}
+
+fn page_range_pages(range: &str, page_count: usize) -> Result<Vec<usize>, ToolError> {
+    let invalid = || ToolError::invalid_input(format!("“{range}” is not a page list. Use page numbers and ranges like 1-3, 7, 10-."));
+    let number = |value: &str| value.trim().parse::<usize>().ok().filter(|value| *value > 0).ok_or_else(invalid);
+    let mut pages = std::collections::BTreeSet::new();
+    for item in range.split(',') {
+        let item = item.trim();
+        if item.is_empty() { return Err(invalid()); }
+        let (first, last) = match item.split_once('-') {
+            Some((first, "")) => (number(first)?, usize::MAX),
+            Some((first, last)) => (number(first)?, number(last)?),
+            None => { let page = number(item)?; (page, page) }
+        };
+        if first > last { return Err(invalid()); }
+        pages.extend((first..=last.min(page_count)).map(|page| page - 1));
+    }
+    if pages.is_empty() {
+        return Err(ToolError::invalid_input(format!("Pages {range} are not in this document. It has {page_count} page{}.", if page_count == 1 { "" } else { "s" })));
+    }
+    Ok(pages.into_iter().collect())
+}
+
+struct TextPlan { placed: Vec<Vec<(usize, usize)>>, layouts: HashMap<(usize, usize), TextLayout> }
+
+fn text_plan(scene: &PdfScene) -> Result<TextPlan, ToolError> {
+    let mut placed = vec![Vec::new(); scene.pages.len()];
+    let mut layouts = HashMap::new();
+    for (origin, page) in scene.pages.iter().enumerate() {
+        for (index, o) in page.objects.iter().enumerate() {
+            match (&o.kind, o.page_range.as_deref()) {
+                (Kind::Text, Some(range)) => for target in page_range_pages(range, scene.pages.len())? { placed[target].push((origin, index)); },
+                (_, Some(_)) => return Err(ToolError::invalid_input("Only text boxes can be shown on several pages")),
+                _ => placed[origin].push((origin, index)),
+            }
+            if matches!(o.kind, Kind::Text) { layouts.insert((origin, index), layout_text(o)?); }
+        }
+    }
+    Ok(TextPlan { placed, layouts })
+}
+
+fn hex_utf16(c: char) -> String {
+    c.encode_utf16(&mut [0; 2]).iter().map(|unit| format!("{unit:04X}")).collect()
+}
+
+fn subset_tag(gids: &[u16]) -> String {
+    let mut hash: u32 = 0x811c9dc5;
+    for byte in gids.iter().flat_map(|gid| gid.to_be_bytes()) { hash = (hash ^ byte as u32).wrapping_mul(0x01000193); }
+    (0..6).map(|index| (b'A' + ((hash >> (index * 5)) % 26) as u8) as char).collect()
+}
+
+fn embed_text_fonts(doc: &mut Document, layouts: &HashMap<(usize, usize), TextLayout>) -> Result<HashMap<&'static str, (ObjectId, subsetter::GlyphRemapper)>, String> {
+    let mut used: std::collections::BTreeMap<&'static str, (TextFont, std::collections::BTreeMap<u16, char>)> = Default::default();
+    let mut keys: Vec<_> = layouts.keys().copied().collect();
+    keys.sort();
+    for key in keys {
+        let layout = &layouts[&key];
+        let entry = used.entry(layout.font.name).or_insert_with(|| (layout.font, Default::default()));
+        for (gid, c) in layout.lines.iter().flat_map(|line| &line.glyphs) { entry.1.entry(*gid).or_insert(*c); }
+    }
+    used.into_iter().map(|(name, (font, glyphs))| Ok((name, embed_font(doc, font, &glyphs)?))).collect()
+}
+
+/// Embeds a subset Type0 font of one bundled face and returns the new glyph id of each source glyph.
+pub(super) fn embed_font(doc: &mut Document, font: TextFont, glyphs: &std::collections::BTreeMap<u16, char>) -> Result<(ObjectId, subsetter::GlyphRemapper), String> {
+    let name = font.name;
+    let face = parse_face(font.bytes).map_err(|error| error.message)?;
+    let gids: Vec<u16> = glyphs.keys().copied().collect();
+    let remapper = subsetter::GlyphRemapper::new_from_glyphs_sorted(&gids);
+    let subset = subsetter::subset(font.bytes, 0, &remapper).map_err(|error| format!("Could not subset {name}: {error}"))?;
+    let base_font = format!("{}+{name}", subset_tag(&gids));
+    let em = face.units_per_em() as f32;
+    let units = |value: i16| (value as f32 * 1000. / em).round() as i64;
+    let bbox = face.global_bounding_box();
+    let length = subset.len() as i64;
+    let file = doc.add_object(Stream::new(dictionary! { "Length1" => length, "Filter" => "FlateDecode" }, compress_bytes(&subset)?));
+    let italic = name.contains("Italic");
+    let flags = 32 | if face.is_monospaced() { 1 } else { 0 } | if italic { 64 } else { 0 };
+    let descriptor = doc.add_object(dictionary! {
+        "Type" => "FontDescriptor", "FontName" => base_font.as_str(), "Flags" => flags,
+        "FontBBox" => vec![units(bbox.x_min).into(), units(bbox.y_min).into(), units(bbox.x_max).into(), units(bbox.y_max).into()],
+        "ItalicAngle" => face.italic_angle(), "Ascent" => units(face.ascender()), "Descent" => units(face.descender()),
+        "CapHeight" => units(face.capital_height().unwrap_or(face.ascender())), "StemV" => if name.contains("Bold") { 120 } else { 80 },
+        "FontFile2" => file,
+    });
+    let widths: Vec<Object> = gids.iter().map(|gid| Object::Integer(glyph_width(&face, *gid))).collect();
+    let cid_font = doc.add_object(dictionary! {
+        "Type" => "Font", "Subtype" => "CIDFontType2", "BaseFont" => base_font.as_str(),
+        "CIDSystemInfo" => dictionary! { "Registry" => Object::string_literal("Adobe"), "Ordering" => Object::string_literal("Identity"), "Supplement" => 0 },
+        "FontDescriptor" => descriptor, "CIDToGIDMap" => "Identity",
+        "W" => vec![Object::Integer(1), Object::Array(widths)],
+    });
+    let mut cmap = String::from("/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n/CMapName /Adobe-Identity-UCS def\n/CMapType 2 def\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n");
+    let entries: Vec<_> = glyphs.iter().map(|(gid, c)| format!("<{:04X}> <{}>\n", remapper.get(*gid).unwrap_or(0), hex_utf16(*c))).collect();
+    for chunk in entries.chunks(100) { cmap.push_str(&format!("{} beginbfchar\n{}endbfchar\n", chunk.len(), chunk.concat())); }
+    cmap.push_str("endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
+    let to_unicode = doc.add_object(Stream::new(dictionary! {}, cmap.into_bytes()));
+    let font_id = doc.add_object(dictionary! {
+        "Type" => "Font", "Subtype" => "Type0", "BaseFont" => base_font.as_str(), "Encoding" => "Identity-H",
+        "DescendantFonts" => vec![Object::Reference(cid_font)], "ToUnicode" => to_unicode,
+    });
+    Ok((font_id, remapper))
+}
+
+fn text_content(o: &SceneObject, layout: &TextLayout, resource: &str, remapper: &subsetter::GlyphRemapper) -> String {
+    let r = &o.rect;
+    let slant = if layout.font.oblique { SYNTHETIC_OBLIQUE } else { 0. };
+    let mut content = format!("{} {} {} {} re W n\nBT /{resource} {} Tf\n", r.x, r.y, r.width, r.height, o.font_size);
+    for (index, line) in layout.lines.iter().enumerate() {
+        if line.glyphs.is_empty() { continue; }
+        let x = r.x + match o.align { TextAlign::Left => 0., TextAlign::Center => (r.width - line.width) / 2., TextAlign::Right => r.width - line.width };
+        let y = r.y + layout.first_baseline + index as f32 * o.font_size * TEXT_LINE_HEIGHT;
+        let glyphs: String = line.glyphs.iter().map(|(gid, _)| format!("{:04X}", remapper.get(*gid).unwrap_or(0))).collect();
+        content.push_str(&format!("1 0 {slant} -1 {x} {y} Tm <{glyphs}> Tj\n"));
+    }
+    content.push_str("ET\n");
+    content
 }
 
 fn shape_content(shape: Option<&Shape>, r: &Rect) -> String {
@@ -484,14 +724,14 @@ fn is_pure_page_reorder(document: &Document, scene: &PdfScene, source_pages: &[O
     Ok(true)
 }
 
-fn effective_resource_entries(document: &Document, page_id: ObjectId, category: &[u8]) -> Result<lopdf::Dictionary, String> {
+pub(super) fn effective_resource_entries(document: &Document, page_id: ObjectId, category: &[u8]) -> Result<lopdf::Dictionary, String> {
     let Some(value) = inherited(document, page_id, b"Resources")? else { return Ok(lopdf::Dictionary::new()); };
     let resources = value.as_dict().map_err(err)?;
     let Some(entries) = resources.get(category).ok() else { return Ok(lopdf::Dictionary::new()); };
     Ok(resolve(document, entries)?.as_dict().map_err(err)?.clone())
 }
 
-fn next_resource_name(entries: &lopdf::Dictionary, category: &str, base: &str) -> Result<String, String> {
+pub(super) fn next_resource_name(entries: &lopdf::Dictionary, category: &str, base: &str) -> Result<String, String> {
     if !entries.has(base.as_bytes()) { return Ok(base.to_string()); }
     for suffix in 1..=10000 {
         let candidate = format!("{base}{suffix}");
@@ -500,7 +740,7 @@ fn next_resource_name(entries: &lopdf::Dictionary, category: &str, base: &str) -
     Err(format!("Could not allocate a unique {category} resource name"))
 }
 
-fn scene_resources(document: &Document, page_id: ObjectId, xobjects: lopdf::Dictionary, fonts: lopdf::Dictionary, states: lopdf::Dictionary) -> Result<lopdf::Dictionary, String> {
+pub(super) fn scene_resources(document: &Document, page_id: ObjectId, xobjects: lopdf::Dictionary, fonts: lopdf::Dictionary, states: lopdf::Dictionary) -> Result<lopdf::Dictionary, String> {
     let mut resources = match inherited(document, page_id, b"Resources")? {
         Some(value) => value.as_dict().map_err(err)?.clone(),
         None => lopdf::Dictionary::new(),
@@ -517,14 +757,64 @@ fn scene_resources(document: &Document, page_id: ObjectId, xobjects: lopdf::Dict
     Ok(resources)
 }
 
-pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stage { FillForms, EditText, Overlays, Flatten, Redact }
+pub const STAGES: [Stage; 5] = [Stage::FillForms, Stage::EditText, Stage::Overlays, Stage::Flatten, Stage::Redact];
+
+struct OverlayPlan { preflight: ScenePreflight, identity: bool, pure_reorder: bool }
+enum StagePlan { Skip, EditText(text_edit::TextEditPlan), Overlays(OverlayPlan) }
+
+fn unsupported_section(present: bool, name: &str) -> Result<StagePlan, ToolError> {
+    if present { return Err(ToolError::processing(format!("{name} is not supported yet; scene export was rejected before output"))); }
+    Ok(StagePlan::Skip)
+}
+
+fn edit_text_preflight(doc: &Document, edits: Option<&[text_edit::TextEdit]>) -> Result<StagePlan, ToolError> {
+    let Some(edits) = edits else { return Ok(StagePlan::Skip) };
+    text_edit::preflight(doc, edits, |page| geometry(doc, page).map(|geometry| geometry.matrix)).map(StagePlan::EditText)
+}
+
+fn overlay_preflight(doc: &Document, scene: &PdfScene) -> Result<StagePlan, String> {
     if scene.pages.is_empty() || scene.pages.len()>2000 { return Err("Scene must contain 1–2000 pages".into()); }
-    let mut doc=load(path)?;
     let sources:Vec<_>=doc.get_pages().values().copied().collect();
-    let identity = is_identity_scene(&doc, scene, &sources)?;
-    let pure_reorder = is_pure_page_reorder(&doc, scene, &sources)?;
-    let preflight = scene_preflight(&doc, scene, &sources, identity, pure_reorder)?;
-    if identity { return Ok(doc); }
+    let identity = is_identity_scene(doc, scene, &sources)?;
+    let pure_reorder = is_pure_page_reorder(doc, scene, &sources)?;
+    let preflight = scene_preflight(doc, scene, &sources, identity, pure_reorder)?;
+    Ok(StagePlan::Overlays(OverlayPlan { preflight, identity, pure_reorder }))
+}
+
+fn stage_preflight(stage: Stage, doc: &Document, scene: &PdfScene, sections: &StageSections) -> Result<StagePlan, ToolError> {
+    match stage {
+        Stage::FillForms => unsupported_section(sections.form_values.is_some(), "Filling form fields"),
+        Stage::EditText => edit_text_preflight(doc, sections.text_edits.as_deref()),
+        Stage::Overlays => overlay_preflight(doc, scene).map_err(ToolError::processing),
+        Stage::Flatten => unsupported_section(sections.flatten.is_some(), "Flattening"),
+        Stage::Redact => unsupported_section(sections.redactions.is_some(), "Redaction"),
+    }
+}
+
+fn stage_apply(plan: StagePlan, doc: &mut Document, scene: &PdfScene) -> Result<(), String> {
+    match plan {
+        StagePlan::Skip => Ok(()),
+        StagePlan::EditText(plan) => text_edit::apply(doc, plan),
+        StagePlan::Overlays(plan) => apply_overlays(doc, scene, plan),
+    }
+}
+
+fn run_stages(path:&Path, scene:&PdfScene, sections:&StageSections)->Result<(Document,Vec<OutcomeWarning>),ToolError> {
+    let mut doc=load(path).map_err(ToolError::processing)?;
+    let plans=STAGES.iter().map(|&stage| stage_preflight(stage, &doc, scene, sections)).collect::<Result<Vec<_>,_>>()?;
+    let warnings=plans.iter().flat_map(|plan| match plan { StagePlan::EditText(plan) => plan.warnings().to_vec(), _ => Vec::new() }).collect();
+    for plan in plans { stage_apply(plan, &mut doc, scene).map_err(ToolError::processing)?; }
+    Ok((doc,warnings))
+}
+fn compose_with(path:&Path, scene:&PdfScene, sections:&StageSections)->Result<Document,String> { run_stages(path, scene, sections).map(|(doc,_)| doc).map_err(|error| error.message) }
+
+pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> { compose_with(path, scene, &StageSections::default()) }
+
+fn apply_overlays(doc:&mut Document, scene:&PdfScene, OverlayPlan { preflight, identity, pure_reorder }: OverlayPlan)->Result<(),String> {
+    let sources=&preflight.source_pages;
+    if identity { return Ok(()); }
     if pure_reorder {
         let order = scene.pages.iter().map(|page| {
             let index = page.source_index.ok_or_else(|| "Pure page reorder is missing a source page".to_string())?;
@@ -533,7 +823,7 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
         let root = doc.get_dictionary_mut(preflight.pages_root).map_err(err)?;
         root.set("Kids", order.iter().map(|page| Object::Reference(*page)).collect::<Vec<_>>());
         root.set("Count", order.len() as i64);
-        return Ok(doc);
+        return Ok(());
     }
     let font_specs: [(&str, &str); 9] = [
         ("Helvetica", "SceneFont"), ("Helvetica-Bold", "SceneFontHelveticaBold"),
@@ -545,8 +835,11 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
     let fonts: HashMap<&'static str, ObjectId> = font_specs.iter().map(|(base, resource)| (*resource, doc.add_object(dictionary! {
         "Type" => "Font", "Subtype" => "Type1", "BaseFont" => *base, "Encoding" => "WinAnsiEncoding"
     }))).collect();
+    let text = text_plan(scene).map_err(|error| error.message)?;
+    let text_fonts = embed_text_fonts(doc, &text.layouts)?;
     let mut kids=Vec::new();
-    for page in &scene.pages {
+    for (page_index, page) in scene.pages.iter().enumerate() {
+        let placed = &text.placed[page_index];
         dimensions(page.width,page.height)?;
         if page.rotation%90!=0 { return Err("Rotation must be a multiple of 90".into()); }
         let crop=page.crop.clone().unwrap_or(Rect{x:0.,y:0.,width:page.width,height:page.height});
@@ -558,7 +851,7 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
             geometry(&doc, id)
         }).transpose()?;
         let preserve_source_page = source_geometry.as_ref().is_some_and(|geometry| !page_geometry_changed(page, geometry));
-        if preserve_source_page && page.objects.is_empty() {
+        if preserve_source_page && placed.is_empty() {
             kids.push(Object::Reference(sources[page.source_index.unwrap()]));
             continue;
         }
@@ -572,6 +865,14 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
             font_resources.set(name.as_str(), Object::Reference(id));
             font_names.insert(*resource, name);
         }
+        let mut text_resources = HashMap::new();
+        for key in placed { if let Some(layout) = text.layouts.get(key) {
+            if text_resources.contains_key(layout.font.name) { continue; }
+            let name = next_resource_name(&effective_fonts, "Font", &format!("SceneText{}", layout.font.name.replace('-', "")))?;
+            effective_fonts.set(name.as_str(), Object::Null);
+            font_resources.set(name.as_str(), Object::Reference(text_fonts[layout.font.name].0));
+            text_resources.insert(layout.font.name, name);
+        } }
         let mut effective_xobjects = source_index.map(|index| effective_resource_entries(&doc, sources[index], b"XObject")).transpose()?.unwrap_or_default();
         let mut effective_states = source_index.map(|index| effective_resource_entries(&doc, sources[index], b"ExtGState")).transpose()?.unwrap_or_default();
         let mut xobjects=lopdf::Dictionary::new();
@@ -597,9 +898,10 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
                 content.push_str(&format!("q\n{}\n/{original_name} Do\nQ\n", cm(g.matrix)));
             }
         }
-        if page.objects.len()>10000 { return Err("Too many scene objects".into()); }
+        if placed.len()>10000 { return Err("Too many scene objects".into()); }
         let mut states=lopdf::Dictionary::new();
-        for (i,o) in page.objects.iter().enumerate() {
+        for (i,key) in placed.iter().enumerate() {
+            let o=&scene.pages[key.0].objects[key.1];
             valid_rect(&o.rect)?;
             if !o.opacity.is_finite() || !(0. ..=1.).contains(&o.opacity) { return Err("Opacity must be between 0 and 1".into()); }
             if !o.font_size.is_finite() || o.font_size<=0. || o.font_size>1000. { return Err("Invalid font size".into()); }
@@ -621,7 +923,7 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
                             let name_base = format!("Sig{i}");
                             let name = next_resource_name(&effective_xobjects, "XObject", &name_base)?;
                             effective_xobjects.set(name.as_str(), Object::Null);
-                            add_signature_image(&mut doc, &mut xobjects, &name, signature_image(path)?);
+                            add_signature_image(doc, &mut xobjects, &name, signature_image(path)?);
                             content.push_str(&format!("q {} 0 0 {} {} {} /{name} Do Q\n",r.width,r.height,r.x,r.y));
                         }
                         Some(SignatureMode::Text) => {
@@ -629,7 +931,7 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
                                 let name_base = format!("Sig{i}");
                                 let name = next_resource_name(&effective_xobjects, "XObject", &name_base)?;
                                 effective_xobjects.set(name.as_str(), Object::Null);
-                                add_signature_image(&mut doc, &mut xobjects, &name, signature_text_image(&o.text, font_family, o.font_size, rgb)?);
+                                add_signature_image(doc, &mut xobjects, &name, signature_text_image(&o.text, font_family, o.font_size, rgb)?);
                                 content.push_str(&format!("q {} 0 0 {} {} {} /{name} Do Q\n",r.width,r.height,r.x,r.y));
                             } else {
                                 let (_, resource)=font_spec(o.font_family.as_deref())?;
@@ -652,13 +954,8 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
                     }
                 },
                 Kind::Text=>{
-                    let (_, resource)=font_spec(o.font_family.as_deref())?;
-                    let resource = font_names.get(resource).ok_or("Scene font resource disappeared")?;
-                    let encoded_lines=o.text.lines().map(encode_text).collect::<Result<Vec<_>,_>>()?;
-                    content.push_str(&format!("{} {} {} {} re W n\n",r.x,r.y,r.width,r.height));
-                    for (line,encoded) in encoded_lines.iter().enumerate() {
-                        content.push_str(&format!("BT /{resource} {} Tf 1 0 0 -1 {} {} Tm <{}> Tj ET\n",o.font_size,r.x,r.y+o.font_size*(1.+line as f32*1.2),encoded));
-                    }
+                    let layout = &text.layouts[key];
+                    content.push_str(&text_content(o, layout, &text_resources[layout.font.name], &text_fonts[layout.font.name].1));
                 },
                 Kind::Watermark=>{
                     let (_, resource)=font_spec(o.font_family.as_deref())?;
@@ -684,7 +981,7 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
                 page_dict.set("Resources",resources);
                 page_dict.set("Contents",append_contents(original_contents,Object::Reference(stream)));
             } else {
-                super::set_page_box_family(&mut doc, id, [0., 0., crop.width, crop.height], false)?;
+                super::set_page_box_family(doc, id, [0., 0., crop.width, crop.height], false)?;
                 let page_dict = doc.get_dictionary_mut(id).map_err(err)?;
                 page_dict.set("Rotate",page.rotation.rem_euclid(360));
                 page_dict.set("Resources",resources);
@@ -698,7 +995,7 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
     }
     doc.objects.get_mut(&preflight.pages_root).ok_or("PDF page-tree root disappeared during scene export")?.as_dict_mut().map_err(err)?.set("Kids",kids);
     doc.objects.get_mut(&preflight.pages_root).ok_or("PDF page-tree root disappeared during scene export")?.as_dict_mut().map_err(err)?.set("Count",scene.pages.len() as i64);
-    Ok(doc)
+    Ok(())
 }
 
 static NONCE:AtomicU64=AtomicU64::new(0);
@@ -799,7 +1096,7 @@ pub fn preview(request:&PreviewRequest)->Result<ScenePreview,String> {
     let renderer=renderer()?;
     let temp=TempDir::new()?;
     let path=temp.0.join("scene.pdf");
-    compose(&request.path,&request.scene)?.save(&path).map_err(err)?;
+    compose_with(&request.path,&request.scene,&request.sections)?.save(&path).map_err(err)?;
     render(&path,request.page_index,&renderer,&temp)
 }
 fn validate_preview_page_indices(page_indices:&[usize], page_count:usize)->Result<(),String> {
@@ -816,7 +1113,7 @@ pub fn preview_pages(request:&PreviewPagesRequest)->Result<Vec<IndexedScenePrevi
     let renderer=renderer()?;
     let temp=TempDir::new()?;
     let path=temp.0.join("scene.pdf");
-    compose(&request.path,&request.scene)?.save(&path).map_err(err)?;
+    compose_with(&request.path,&request.scene,&request.sections)?.save(&path).map_err(err)?;
     request.page_indices.iter().copied().map(|page_index| {
         render(&path,page_index,&renderer,&temp).map(|preview| IndexedScenePreview{page_index,preview})
     }).collect()
@@ -827,7 +1124,7 @@ pub fn inspect(path:&Path)->Result<PdfDocumentMetadata,String> {
     for (index,id) in doc.get_pages().values().enumerate() {
         let g=geometry(&doc,*id)?;
         let source_rotation = inherited(&doc, *id, b"Rotate")?.map(|value| value.as_i64().map_err(err)).transpose()?.unwrap_or(0).rem_euclid(360) as i32;
-        pages.push(PdfPageMetadata{index,x:g.bbox[0],y:g.bbox[1],width:g.width,height:g.height,rotation:source_rotation,page_box:g.bbox,preview:None,text_runs:None});
+        pages.push(PdfPageMetadata{index,x:g.bbox[0],y:g.bbox[1],width:g.width,height:g.height,rotation:source_rotation,page_box:g.bbox,preview:None,text_runs:None,edit_runs:None});
     }
     if pages.is_empty() { return Err("PDF contains no pages".into()); }
     Ok(PdfDocumentMetadata{path:path.to_path_buf(),pages})
@@ -840,27 +1137,34 @@ pub fn inspect_page(path:&Path,page_index:usize)->Result<PdfPageMetadata,String>
     let source_rotation = inherited(&doc, id, b"Rotate")?.map(|value| value.as_i64().map_err(err)).transpose()?.unwrap_or(0).rem_euclid(360) as i32;
     let text_runs=extract_text_runs(path,page_index + 1,g.width,g.height,Instant::now() + super::PDF_TEXT_TIMEOUT).unwrap_or_default();
     let preview = super::metadata::render_preview(path, page_index + 1, g.width, g.height);
-    Ok(PdfPageMetadata{index:page_index,x:g.bbox[0],y:g.bbox[1],width:g.width,height:g.height,rotation:source_rotation,page_box:g.bbox,preview,text_runs:Some(text_runs)})
+    let edit_runs=text_edit::page_text(&doc,id,g.matrix).map(|text| text.runs()).unwrap_or_default();
+    Ok(PdfPageMetadata{index:page_index,x:g.bbox[0],y:g.bbox[1],width:g.width,height:g.height,rotation:source_rotation,page_box:g.bbox,preview,text_runs:Some(text_runs),edit_runs:Some(edit_runs)})
 }
 pub fn export(request:&ExportRequest,input:PathBuf)->JobOutcome {
-    let result=(|| {
-        if !matches!(request.output_location,OutputLocation::AlongsideInput) { return Err("Scene exports must be alongside the input".into()); }
+    let result=(|| -> Result<(PathBuf,Vec<OutcomeWarning>),ToolError> {
+        let processing=|error: String| ToolError::processing(error);
+        if !matches!(request.output_location,OutputLocation::AlongsideInput) { return Err(processing("Scene exports must be alongside the input".into())); }
+        text_plan(&request.scene)?;
         let mut bytes=Vec::new();
-        compose(&input,&request.scene)?.save_to(&mut bytes).map_err(err)?;
-        let parent=input.parent().ok_or("Input has no parent directory")?;
-        let stem=input.file_stem().ok_or("Input has no filename")?.to_string_lossy();
+        let (mut doc,warnings)=run_stages(&input,&request.scene,&request.sections)?;
+        doc.save_to(&mut bytes).map_err(|error| processing(err(error)))?;
+        let parent=input.parent().ok_or_else(|| processing("Input has no parent directory".into()))?;
+        let stem=input.file_stem().ok_or_else(|| processing("Input has no filename".into()))?.to_string_lossy();
         for n in 1..=10000 {
             let candidate=parent.join(format!("{stem}-edited-{n}.pdf"));
-            let reservation=match OutputNaming::reserve_named_candidate(&candidate).map_err(err)? {
+            let reservation=match OutputNaming::reserve_named_candidate(&candidate).map_err(|error| processing(err(error)))? {
                 Some(reservation)=>reservation,
                 None=>continue,
             };
-            let mut file=OpenOptions::new().write(true).open(reservation.path()).map_err(err)?;
-            file.write_all(&bytes).and_then(|_|file.sync_all()).map_err(err)?;
-            return reservation.publish().map_err(err);
-        } Err("Could not reserve a unique export filename".into())
+            let mut file=OpenOptions::new().write(true).open(reservation.path()).map_err(|error| processing(err(error)))?;
+            file.write_all(&bytes).and_then(|_|file.sync_all()).map_err(|error| processing(err(error)))?;
+            return reservation.publish().map(|path| (path,warnings)).map_err(|error| processing(err(error)));
+        } Err(processing("Could not reserve a unique export filename".into()))
     })();
-    match result { Ok(path)=>JobOutcome::succeeded(input, vec![path], "PDF scene exported"),Err(e)=>JobOutcome::failure(input,ToolError::processing(e)) }
+    match result {
+        Ok((path,warnings))=>warnings.into_iter().fold(JobOutcome::succeeded(input, vec![path], "PDF scene exported"), JobOutcome::with_warning),
+        Err(e)=>JobOutcome::failure(input,e),
+    }
 }
 
 #[cfg(test)]
@@ -1022,7 +1326,8 @@ mod tests {
     fn object(kind: Kind) -> SceneObject {
         SceneObject { kind, rect: Rect{x:30.,y:40.,width:120.,height:40.}, text:"LOCAL".into(),font_size:18.,color:"#0066CC".into(),opacity:0.5,
             strokes:vec![vec![Point{x:0.,y:0.5},Point{x:0.5,y:0.},Point{x:1.,y:1.}]], shape:None, highlight_mode:None,
-            signature_mode:None, signature_path:None, font_family:None, watermark_pattern:None }
+            signature_mode:None, signature_path:None, font_family:None, watermark_pattern:None,
+            bold:false, italic:false, align:TextAlign::Left, page_range:None }
     }
     fn scene() -> PdfScene {
         PdfScene { pages:vec![
@@ -1086,7 +1391,7 @@ mod tests {
         let bytes=composed.get_page_content(pages[0]); let content=String::from_utf8_lossy(&bytes);
         assert!(content.contains("/S4 gs")); assert!(content.contains("re W n")); assert!(content.contains("<4C4F43414C>"));
         let blank=composed.get_page_content(pages[1]); assert!(!String::from_utf8_lossy(&blank).contains("/Original Do"));
-        assert!(String::from_utf8_lossy(&blank).contains("<4C4F43414C>"));
+        assert!(String::from_utf8_lossy(&blank).contains("/SceneTextNotoSansRegular 18 Tf"));
     }
 
     #[test]
@@ -1161,7 +1466,7 @@ mod tests {
             source_box: Some(Rect { x: page.page_box[0], y: page.page_box[1], width: page.page_box[2] - page.page_box[0], height: page.page_box[3] - page.page_box[1] }),
             objects: vec![],
         }).collect() };
-        let outcome = export(&ExportRequest { paths: vec![input.clone()], scene, output_location: OutputLocation::AlongsideInput }, input.clone());
+        let outcome = export(&ExportRequest { paths: vec![input.clone()], scene, output_location: OutputLocation::AlongsideInput, sections: Default::default() }, input.clone());
         assert!(outcome.error().is_none(), "no-op export failed: {:?}", outcome.error());
         let output = outcome.output_paths().first().unwrap();
         let output_document = Document::load(output).unwrap();
@@ -1191,7 +1496,7 @@ mod tests {
             source_rotation: Some(90), source_box: Some(Rect { x: 20., y: 30., width: 200., height: 300. }),
             objects: vec![object(Kind::Text)],
         }] };
-        let outcome = export(&ExportRequest { paths: vec![input.clone()], scene, output_location: OutputLocation::AlongsideInput }, input.clone());
+        let outcome = export(&ExportRequest { paths: vec![input.clone()], scene, output_location: OutputLocation::AlongsideInput, sections: Default::default() }, input.clone());
         assert!(outcome.error().is_none(), "overlay export failed: {:?}", outcome.error());
         let output = outcome.output_paths().first().unwrap();
         let output_document = Document::load(output).unwrap();
@@ -1213,7 +1518,7 @@ mod tests {
         let content_bytes = output_document.get_page_content(page_id);
         let content = String::from_utf8_lossy(&content_bytes);
         assert!(content.contains("Annotated source"));
-        assert!(content.contains("<4C4F43414C>"));
+        assert!(content.contains("/SceneTextNotoSansRegular 18 Tf"));
         assert!(content.contains("0 1 1 0 20 30 cm"));
         assert_eq!(fs::read(&input).unwrap(), original);
     }
@@ -1222,7 +1527,7 @@ mod tests {
         let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); fixture(&input);
         let original=fs::read(&input).unwrap();
         let occupied=temp.0.join("source-edited-1.pdf"); fs::write(&occupied,b"existing output").unwrap();
-        let request=ExportRequest {paths:vec![input.clone()],scene:scene(),output_location:OutputLocation::AlongsideInput};
+        let request=ExportRequest {paths:vec![input.clone()],scene:scene(),output_location:OutputLocation::AlongsideInput, sections: Default::default()};
         let a=export(&request,input.clone()); let b=export(&request,input.clone());
         assert!(a.error().is_none(),"{:?}",a.error()); assert!(b.error().is_none());
         assert_ne!(a.output_paths(),b.output_paths()); assert_ne!(a.output_paths()[0],input);
@@ -1247,7 +1552,7 @@ mod tests {
         let mut s=scene(); s.pages[0].objects[0].opacity=f32::NAN; assert!(compose(&input,&s).is_err());
         let mut s=scene(); s.pages[0].source_index=Some(90); assert!(compose(&input,&s).is_err());
         let mut s=scene(); s.pages[1].objects[0].text="unsupported \u{1f600}".into();
-        let result=export(&ExportRequest {paths:vec![],scene:s,output_location:OutputLocation::AlongsideInput},input.clone());
+        let result=export(&ExportRequest {paths:vec![],scene:s,output_location:OutputLocation::AlongsideInput, sections: Default::default()},input.clone());
         assert!(result.error().is_some()); assert!(result.output_paths().is_empty());
         assert_eq!(fs::read_dir(&temp.0).unwrap().count(),1);
         assert!(compose(&input,&PdfScene{pages:vec![]}).is_err());
@@ -1261,7 +1566,7 @@ mod tests {
             (vec![0, 1, 2, 0], "Preview requests must include 1–3 page indices"),
         ];
         for (page_indices,message) in cases {
-            let result=preview_pages(&PreviewPagesRequest { path: PathBuf::from("missing.pdf"), scene: scene(), page_indices });
+            let result=preview_pages(&PreviewPagesRequest { path: PathBuf::from("missing.pdf"), scene: scene(), page_indices, sections: Default::default() });
             assert_eq!(result.err().as_deref(),Some(message));
         }
     }
@@ -1272,7 +1577,7 @@ mod tests {
         let renderer=match renderer() { Ok(r)=>r,Err(e)=>{if std::env::var_os("TOOLBOX_REQUIRE_PDF_RENDERER").is_some(){panic!("{e}")}; eprintln!("Renderer unavailable: {e}");return;} };
         let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); fixture(&input);
         let before=fs::read(&input).unwrap();
-        let request=PreviewPagesRequest { path:input.clone(), scene:scene(), page_indices:vec![2,0,1] };
+        let request=PreviewPagesRequest { path:input.clone(), scene:scene(), page_indices:vec![2,0,1], sections: Default::default() };
         let previews=preview_pages(&request).unwrap();
         assert_eq!(previews.iter().map(|preview| preview.page_index).collect::<Vec<_>>(),vec![2,0,1]);
         assert!(previews.iter().all(|preview| preview.preview.data_url.starts_with("data:image/png;base64,")));
@@ -1292,10 +1597,10 @@ mod tests {
         let renderer=match renderer() { Ok(r)=>r,Err(e)=>{if std::env::var_os("TOOLBOX_REQUIRE_PDF_RENDERER").is_some(){panic!("{e}")}; eprintln!("Renderer unavailable: {e}");return;} };
         let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); fixture(&input);
         let before=fs::read(&input).unwrap();
-        let request=ExportRequest{paths:vec![input.clone()],scene:scene(),output_location:OutputLocation::AlongsideInput};
+        let request=ExportRequest{paths:vec![input.clone()],scene:scene(),output_location:OutputLocation::AlongsideInput, sections: Default::default()};
         let exported=export(&request,input.clone()); assert!(exported.error().is_none());
         for index in 0..3 {
-            let preview=preview(&PreviewRequest{path:input.clone(),scene:scene(),page_index:index}).unwrap();
+            let preview=preview(&PreviewRequest{path:input.clone(),scene:scene(),page_index:index,sections:Default::default()}).unwrap();
             let actual=render(&exported.output_paths()[0],index,&renderer,&temp).unwrap();
             assert_eq!(preview.data_url,actual.data_url,"page {index} differs between preview and export");
         }
@@ -1304,8 +1609,8 @@ mod tests {
         assert!(!directory.exists());
         // Removing all source marks must visibly differ: negative control for the pixel oracle.
         let mut bare=scene();bare.pages[0].objects.clear();
-        assert_ne!(preview(&PreviewRequest{path:input.clone(),scene:bare,page_index:0}).unwrap().data_url,
-            preview(&PreviewRequest{path:input,scene:scene(),page_index:0}).unwrap().data_url);
+        assert_ne!(preview(&PreviewRequest{path:input.clone(),scene:bare,page_index:0,sections:Default::default()}).unwrap().data_url,
+            preview(&PreviewRequest{path:input,scene:scene(),page_index:0,sections:Default::default()}).unwrap().data_url);
     }
 
     #[test]
@@ -1400,7 +1705,7 @@ mod tests {
             source_index: Some(0), width: 612., height: 792., rotation: 0,
             crop: Some(Rect { x: 0., y: 0., width: 500., height: 700. }),
             source_rotation: None, source_box: None,
-            objects: vec![object(Kind::Text), signature_object],
+            objects: vec![object(Kind::Watermark), signature_object],
         }] };
 
         let composed = compose(&input, &model).unwrap();
@@ -1490,7 +1795,7 @@ mod tests {
     fn scene_rejects_nested_page_tree_before_output() {
         let temp=TempDir::new().unwrap(); let input=temp.0.join("nested.pdf"); nested_fixture(&input);
         let scene=PdfScene { pages:vec![ScenePage { source_index:Some(0), width:300., height:200., rotation:0, crop:None, source_rotation:None, source_box:None, objects:vec![] }, ScenePage { source_index:Some(1), width:612., height:792., rotation:0, crop:None, source_rotation:None, source_box:None, objects:vec![] }] };
-        let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
+        let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput, sections: Default::default()},input.clone());
         assert!(result.error().is_some_and(|error| error.message.contains("nested")));
         assert!(result.output_paths().is_empty());
         assert!(!input.with_file_name("nested-edited-1.pdf").exists());
@@ -1502,7 +1807,7 @@ mod tests {
         let annotation=source.add_object(dictionary! {"Type"=>"Annot", "Subtype"=>"Text", "Rect"=>array(&[20.,20.,80.,50.])});
         source.get_dictionary_mut(page).unwrap().set("Annots",vec![Object::Reference(annotation)]); source.save(&input).unwrap();
         let scene=PdfScene { pages:vec![ScenePage { source_index:Some(0), width:300., height:200., rotation:0, crop:Some(Rect{x:0.,y:0.,width:100.,height:100.}), source_rotation:None, source_box:None, objects:vec![] }] };
-        let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
+        let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput, sections: Default::default()},input.clone());
         assert!(result.error().is_some_and(|error| error.message.contains("annotation")));
         assert!(result.output_paths().is_empty());
         assert!(!input.with_file_name("annotated-edited-1.pdf").exists());
@@ -1520,7 +1825,7 @@ mod tests {
             ScenePage {source_index:Some(0),width:300.,height:200.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]},
             ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]},
         ] };
-        let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
+        let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput, sections: Default::default()},input.clone());
         assert!(result.error().is_some_and(|error| error.message.contains("Digitally signed")));
         assert!(result.output_paths().is_empty());
         assert!(!input.with_file_name("signed-edited-1.pdf").exists());
@@ -1545,7 +1850,7 @@ mod tests {
                 ScenePage {source_index:Some(0),width:300.,height:200.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]},
                 ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]},
             ] };
-            let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
+            let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput, sections: Default::default()},input.clone());
             assert!(result.error().is_some_and(|error| error.message.contains("Digitally signed")), "{name}: {:?}", result.error());
             assert!(result.output_paths().is_empty());
             assert!(!input.with_file_name(format!("{name}-edited-1.pdf")).exists());
@@ -1563,7 +1868,7 @@ mod tests {
             ScenePage {source_index:Some(0),width:300.,height:200.,rotation:0,crop:Some(Rect{x:0.,y:0.,width:100.,height:100.}),source_rotation:None,source_box:None,objects:vec![]},
             ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]},
         ] };
-        let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
+        let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput, sections: Default::default()},input.clone());
         assert!(result.error().is_some_and(|error| error.message.contains("destinations")), "{:?}", result.error());
         assert!(result.output_paths().is_empty());
         assert!(!input.with_file_name("navigation-edited-1.pdf").exists());
@@ -1583,7 +1888,7 @@ mod tests {
             ScenePage {source_index:Some(0),width:200.,height:300.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]},
             ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]},
         ] };
-        let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
+        let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput, sections: Default::default()},input.clone());
         assert!(result.error().is_none(), "{result:?}");
         assert_eq!(result.output_paths().len(), 1);
         assert!(input.with_file_name("box-origin-navigation-edited-1.pdf").exists());
@@ -1599,7 +1904,7 @@ mod tests {
         source.get_dictionary_mut(catalog_id).unwrap().set("StructTreeRoot",structure);
         source.save(&input).unwrap();
         let scene=PdfScene { pages:vec![ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]}] };
-        let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
+        let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput, sections: Default::default()},input.clone());
         assert!(result.error().is_some_and(|error| error.message.contains("tagged PDF")), "{:?}", result.error());
         assert!(result.output_paths().is_empty());
         assert!(!input.with_file_name("tagged-edited-1.pdf").exists());
@@ -1627,9 +1932,422 @@ mod tests {
         assert!(compose(&input, &identity).is_ok());
         let mut overlay = identity;
         overlay.pages[0].objects.push(object(Kind::Text));
-        let result = export(&ExportRequest { paths: vec![input.clone()], scene: overlay, output_location: OutputLocation::AlongsideInput }, input.clone());
+        let result = export(&ExportRequest { paths: vec![input.clone()], scene: overlay, output_location: OutputLocation::AlongsideInput, sections: Default::default() }, input.clone());
         assert!(result.error().is_some_and(|error| error.message.contains("tagged PDF")), "{result:?}");
         assert!(result.output_paths().is_empty());
         assert!(!input.with_file_name("tagged-overlay-edited-1.pdf").exists());
+    }
+
+    fn wire_request(input: &Path, sections: serde_json::Value) -> ExportRequest {
+        let mut request = serde_json::json!({
+            "paths": [input],
+            "outputLocation": "alongsideInput",
+            "scene": { "pages": [
+                { "sourceIndex": 1, "width": 612, "height": 792, "rotation": 0, "crop": null, "objects": [
+                    { "kind": "text", "rect": { "x": 72, "y": 150, "width": 360, "height": 40 }, "text": "Staged", "fontSize": 18, "color": "#1455AA", "opacity": 1, "strokes": [] }
+                ] },
+                { "sourceIndex": null, "width": 300, "height": 200, "rotation": 90, "crop": null, "objects": [] },
+                { "sourceIndex": 0, "width": 300, "height": 200, "rotation": 0, "crop": null, "objects": [] }
+            ] }
+        });
+        request.as_object_mut().unwrap().extend(sections.as_object().unwrap().clone());
+        serde_json::from_value(request).unwrap()
+    }
+
+    #[test]
+    fn export_without_stage_sections_matches_the_overlay_only_composition() {
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); fixture(&input);
+        let original=fs::read(&input).unwrap();
+        let mut overlay_only=load(&input).unwrap();
+        let request=wire_request(&input, serde_json::json!({}));
+        let plan=overlay_preflight(&overlay_only,&request.scene).unwrap();
+        stage_apply(plan,&mut overlay_only,&request.scene).unwrap();
+        let mut expected=Vec::new(); overlay_only.save_to(&mut expected).unwrap();
+
+        for sections in [serde_json::json!({}), serde_json::json!({ "formValues": null, "textEdits": null, "flatten": null, "redactions": null })] {
+            let request=wire_request(&input, sections);
+            assert!(request.sections.form_values.is_none() && request.sections.text_edits.is_none() && request.sections.flatten.is_none() && request.sections.redactions.is_none());
+            let outcome=export(&request,input.clone());
+            assert!(outcome.error().is_none(),"{:?}",outcome.error());
+            assert_eq!(fs::read(&outcome.output_paths()[0]).unwrap(),expected);
+            fs::remove_file(&outcome.output_paths()[0]).unwrap();
+        }
+        assert_eq!(fs::read(&input).unwrap(),original);
+    }
+
+    #[test]
+    fn present_but_unimplemented_sections_are_rejected_before_output() {
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); fixture(&input);
+        let original=fs::read(&input).unwrap();
+        let cases=[
+            (serde_json::json!({ "formValues": [] }), "Filling form fields is not supported yet"),
+            (serde_json::json!({ "flatten": false }), "Flattening is not supported yet"),
+            (serde_json::json!({ "redactions": [] }), "Redaction is not supported yet"),
+        ];
+        for (sections,message) in cases {
+            let outcome=export(&wire_request(&input, sections),input.clone());
+            assert!(outcome.error().is_some_and(|error| error.message.starts_with(message)),"{outcome:?}");
+            assert!(outcome.output_paths().is_empty());
+            assert_eq!(fs::read_dir(&temp.0).unwrap().count(),1);
+            assert_eq!(fs::read(&input).unwrap(),original);
+        }
+    }
+
+    #[test]
+    fn stages_run_in_a_fixed_order_with_every_preflight_before_any_apply() {
+        assert_eq!(STAGES,[Stage::FillForms,Stage::EditText,Stage::Overlays,Stage::Flatten,Stage::Redact]);
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); fixture(&input);
+        let first_failure=|sections: serde_json::Value, scene: Option<PdfScene>| {
+            let mut request=wire_request(&input, sections);
+            if let Some(scene)=scene { request.scene=scene; }
+            run_stages(&input,&request.scene,&request.sections).err().unwrap().message
+        };
+        let all=serde_json::json!({ "formValues": [], "textEdits": [], "flatten": true, "redactions": [] });
+        assert!(first_failure(all, None).starts_with("Filling form fields"));
+        assert!(first_failure(serde_json::json!({ "textEdits": [], "flatten": true, "redactions": [] }), None).starts_with("No text was changed"));
+        assert!(first_failure(serde_json::json!({ "flatten": true, "redactions": [] }), Some(PdfScene{pages:vec![]})).starts_with("Scene must contain"));
+        assert!(first_failure(serde_json::json!({ "flatten": true, "redactions": [] }), None).starts_with("Flattening"));
+        assert!(first_failure(serde_json::json!({ "redactions": [] }), None).starts_with("Redaction"));
+    }
+
+    fn text_object(text: &str, y: f32) -> SceneObject {
+        SceneObject { rect: Rect{x:40.,y,width:400.,height:60.}, text: text.into(), font_size: 20., color: "#202020".into(), opacity: 1., strokes: vec![], ..object(Kind::Text) }
+    }
+    fn text_scene(objects: Vec<SceneObject>) -> PdfScene {
+        PdfScene { pages: vec![
+            ScenePage { source_index:Some(0), width:612., height:792., rotation:0, crop:None, source_rotation:None, source_box:None, objects },
+            ScenePage { source_index:Some(1), width:612., height:792., rotation:0, crop:None, source_rotation:None, source_box:None, objects:vec![] },
+            ScenePage { source_index:None, width:612., height:792., rotation:0, crop:None, source_rotation:None, source_box:None, objects:vec![] },
+        ] }
+    }
+    const SCRIPTS: [&str; 3] = ["Hello, world", "Привет, мир", "Καλημέρα κόσμε"];
+    fn script_objects() -> Vec<SceneObject> {
+        let mut serif = text_object(SCRIPTS[1], 220.); serif.font_family = Some("Noto Serif".into()); serif.bold = true;
+        let mut mono = text_object(SCRIPTS[2], 340.); mono.font_family = Some("Noto Sans Mono".into()); mono.italic = true;
+        vec![text_object(SCRIPTS[0], 100.), serif, mono]
+    }
+    fn export_text(input: &Path, scene: PdfScene) -> JobOutcome {
+        export(&ExportRequest { paths: vec![input.to_path_buf()], scene, output_location: OutputLocation::AlongsideInput, sections: Default::default() }, input.to_path_buf())
+    }
+
+    #[test]
+    fn text_overlays_embed_subset_bundled_fonts_and_export_byte_identically() {
+        let temp = TempDir::new().unwrap(); let input = temp.0.join("source.pdf"); page_text_fixture(&input);
+        let first = export_text(&input, text_scene(script_objects()));
+        let second = export_text(&input, text_scene(script_objects()));
+        assert!(first.error().is_none() && second.error().is_none(), "{:?} {:?}", first.error(), second.error());
+        assert_ne!(first.output_paths()[0], second.output_paths()[0]);
+        assert_eq!(fs::read(&first.output_paths()[0]).unwrap(), fs::read(&second.output_paths()[0]).unwrap());
+
+        let doc = Document::load(&first.output_paths()[0]).unwrap();
+        let mut embedded = Vec::new();
+        for object in doc.objects.values() {
+            let Ok(font) = object.as_dict() else { continue };
+            if font.get(b"Subtype").and_then(Object::as_name).ok() != Some(b"Type0".as_slice()) { continue; }
+            assert_eq!(font.get(b"Encoding").unwrap().as_name().unwrap(), b"Identity-H");
+            assert!(font.has(b"ToUnicode"));
+            let base = String::from_utf8(font.get(b"BaseFont").unwrap().as_name().unwrap().to_vec()).unwrap();
+            let (tag, name) = base.split_once('+').unwrap();
+            assert!(tag.len() == 6 && tag.chars().all(|c| c.is_ascii_uppercase()), "{base}");
+            let descendant = doc.get_dictionary(font.get(b"DescendantFonts").unwrap().as_array().unwrap()[0].as_reference().unwrap()).unwrap();
+            assert_eq!(descendant.get(b"Subtype").unwrap().as_name().unwrap(), b"CIDFontType2");
+            let descriptor = doc.get_dictionary(descendant.get(b"FontDescriptor").unwrap().as_reference().unwrap()).unwrap();
+            let file = doc.get_object(descriptor.get(b"FontFile2").unwrap().as_reference().unwrap()).unwrap().as_stream().unwrap();
+            let subset = file.decompressed_content().unwrap();
+            let full = match name { "NotoSans-Regular" => NOTO_SANS_REGULAR, "NotoSerif-Bold" => NOTO_SERIF_BOLD, "NotoSansMono-Regular" => NOTO_SANS_MONO_REGULAR, other => panic!("unexpected font {other}") };
+            assert!(subset.len() * 10 < full.len(), "{name} was not subset: {} of {} bytes", subset.len(), full.len());
+            embedded.push(name.to_string());
+        }
+        embedded.sort();
+        assert_eq!(embedded, ["NotoSans-Regular", "NotoSansMono-Regular", "NotoSerif-Bold"]);
+        let page = doc.get_pages()[&1];
+        let content = String::from_utf8_lossy(&doc.get_page_content(page)).into_owned();
+        assert!(content.contains("1 0 0.2 -1 "), "mono italic must be slanted: {content}");
+    }
+
+    #[test]
+    fn latin_cyrillic_and_greek_overlay_text_extracts_exactly() {
+        let Some(extractor) = text_extractor() else {
+            if std::env::var_os("TOOLBOX_REQUIRE_PDF_RENDERER").is_some() { panic!("pdftotext is unavailable") }
+            eprintln!("pdftotext unavailable"); return;
+        };
+        let temp = TempDir::new().unwrap(); let input = temp.0.join("source.pdf"); page_text_fixture(&input);
+        let outcome = export_text(&input, text_scene(script_objects()));
+        assert!(outcome.error().is_none(), "{:?}", outcome.error());
+        let output = Command::new(extractor).args(["-enc", "UTF-8", "-f", "1", "-l", "1"]).arg(&outcome.output_paths()[0]).arg("-").output().unwrap();
+        let text = String::from_utf8(output.stdout).unwrap();
+        let lines: Vec<&str> = text.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
+        for script in SCRIPTS { assert!(lines.contains(&script), "{script:?} not extracted from {lines:?}"); }
+    }
+
+    #[test]
+    fn text_overlay_preview_and_export_are_pixel_identical() {
+        let _guard = crate::kit::lock_process_env();
+        let renderer=match renderer() { Ok(r)=>r,Err(e)=>{if std::env::var_os("TOOLBOX_REQUIRE_PDF_RENDERER").is_some(){panic!("{e}")}; eprintln!("Renderer unavailable: {e}");return;} };
+        let temp = TempDir::new().unwrap(); let input = temp.0.join("source.pdf"); page_text_fixture(&input);
+        let mut objects = script_objects();
+        let mut wrapped = text_object("Centred text that wraps inside its box\nand a second paragraph", 450.);
+        wrapped.rect.width = 160.; wrapped.rect.height = 140.; wrapped.align = TextAlign::Center; wrapped.page_range = Some("2-".into());
+        objects.push(wrapped);
+        let outcome = export_text(&input, text_scene(objects.clone()));
+        assert!(outcome.error().is_none(), "{:?}", outcome.error());
+        for index in 0..3 {
+            let preview = preview(&PreviewRequest { path: input.clone(), scene: text_scene(objects.clone()), page_index: index, sections: Default::default() }).unwrap();
+            let actual = render(&outcome.output_paths()[0], index, &renderer, &temp).unwrap();
+            assert_eq!(preview.data_url, actual.data_url, "page {index} differs between preview and export");
+        }
+        let blank = preview(&PreviewRequest { path: input.clone(), scene: text_scene(vec![]), page_index: 2, sections: Default::default() }).unwrap();
+        let ranged = preview(&PreviewRequest { path: input.clone(), scene: text_scene(objects), page_index: 2, sections: Default::default() }).unwrap();
+        assert_ne!(blank.data_url, ranged.data_url, "ranged text must draw on page 3");
+    }
+
+    #[test]
+    fn over_limit_text_returns_limit_exceeded_without_output() {
+        let temp = TempDir::new().unwrap(); let input = temp.0.join("source.pdf"); page_text_fixture(&input);
+        assert!(layout_text(&text_object(&"a".repeat(100_000), 100.)).is_ok());
+        let outcome = export_text(&input, text_scene(vec![text_object(&"a".repeat(100_001), 100.)]));
+        let error = outcome.error().unwrap();
+        assert_eq!(error.kind, crate::kit::contracts::ErrorKind::LimitExceeded { limit: crate::kit::contracts::LimitKind::TextLength });
+        assert!(error.message.contains("100,000"), "{}", error.message);
+        assert_eq!(fs::read_dir(&temp.0).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn unrenderable_characters_are_named_and_nothing_is_written() {
+        let temp = TempDir::new().unwrap(); let input = temp.0.join("source.pdf"); page_text_fixture(&input);
+        let scene = || text_scene(vec![text_object("Hi \u{1f600} आशा \u{1f600}", 100.)]);
+        let outcome = export_text(&input, scene());
+        let error = outcome.error().unwrap();
+        assert_eq!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput);
+        assert_eq!(error.message, "Noto Sans can't show these characters: “\u{1f600}” (U+1F600), “आ” (U+0906), “श” (U+0936), “ा” (U+093E). Remove them to export this text box.");
+        assert_eq!(compose(&input, &scene()).err().unwrap(), error.message);
+        assert_eq!(fs::read_dir(&temp.0).unwrap().count(), 1);
+        let many: String = ('Ա'..='Ք').collect();
+        let message = layout_text(&text_object(&many, 100.)).err().unwrap().message;
+        assert!(message.contains("(U+0531)") && message.ends_with("“Ժ” (U+053A) and 26 more. Remove them to export this text box."), "{message}");
+    }
+
+    #[test]
+    fn page_ranges_expand_and_clamp_to_the_document() {
+        assert_eq!(page_range_pages("2-", 3).unwrap(), vec![1, 2]);
+        assert_eq!(page_range_pages("1-99", 3).unwrap(), vec![0, 1, 2]);
+        assert_eq!(page_range_pages(" 3, 1 ,1", 3).unwrap(), vec![0, 2]);
+        for range in ["", "0", "3-1", "a", "1,,2", "-2", "1-2-3"] {
+            assert_eq!(page_range_pages(range, 3).unwrap_err().kind, crate::kit::contracts::ErrorKind::InvalidInput, "{range:?}");
+        }
+        assert_eq!(page_range_pages("5-", 3).unwrap_err().message, "Pages 5- are not in this document. It has 3 pages.");
+
+        let temp = TempDir::new().unwrap(); let input = temp.0.join("source.pdf"); page_text_fixture(&input);
+        let mut ranged = text_object("Draft", 100.); ranged.page_range = Some("2-".into());
+        let doc = compose(&input, &text_scene(vec![ranged])).unwrap();
+        let pages: Vec<_> = doc.get_pages().values().copied().collect();
+        let source = Document::load(&input).unwrap();
+        assert_eq!(doc.get_page_content(pages[0]), source.get_page_content(source.get_pages()[&1]), "page 1 must stay untouched");
+        for page in &pages[1..] { assert!(String::from_utf8_lossy(&doc.get_page_content(*page)).contains("/SceneTextNotoSansRegular 20 Tf")); }
+
+        let mut highlight = object(Kind::Highlight); highlight.page_range = Some("1".into());
+        assert_eq!(compose(&input, &text_scene(vec![highlight])).unwrap_err(), "Only text boxes can be shown on several pages");
+    }
+
+    #[test]
+    fn text_wraps_inside_the_box_and_aligns_each_line() {
+        let face = parse_face(NOTO_SANS_REGULAR).unwrap();
+        let width = |text: &str| text.chars().map(|c| glyph_width(&face, face.glyph_index(c).unwrap().0) as f32 * 0.02).sum::<f32>();
+        let mut o = text_object("alpha beta gamma\n\nlongwordlongword", 100.);
+        o.rect.width = width("alpha beta") + 1.;
+        let layout = layout_text(&o).unwrap();
+        let lines: Vec<String> = layout.lines.iter().map(|line| line.glyphs.iter().map(|(_, c)| *c).collect()).collect();
+        assert_eq!(lines[..3], ["alpha beta", "gamma", ""]);
+        assert!(lines[3..].iter().all(|line| width(line) <= o.rect.width), "{lines:?}");
+        assert_eq!(lines[3..].concat(), "longwordlongword");
+        let remapper = subsetter::GlyphRemapper::new();
+        for (align, offset) in [(TextAlign::Left, 0.), (TextAlign::Center, (o.rect.width - width("gamma")) / 2.), (TextAlign::Right, o.rect.width - width("gamma"))] {
+            o.align = align;
+            let content = text_content(&o, &layout, "F", &remapper);
+            let y = o.rect.y + layout.first_baseline + 20. * TEXT_LINE_HEIGHT;
+            assert!(content.contains(&format!("1 0 0 -1 {} {y} Tm", o.rect.x + offset)), "{content}");
+        }
+    }
+
+    fn text_edit_fixture(path: &Path, embedded: bool) {
+        let mut d = Document::with_version("1.7");
+        let root = d.new_object_id();
+        let mut helvetica = dictionary! {"Type"=>"Font", "Subtype"=>"Type1", "BaseFont"=>"Helvetica", "Encoding"=>"WinAnsiEncoding"};
+        if embedded {
+            let file = d.add_object(Stream::new(dictionary!{}, b"glyphs".to_vec()));
+            let descriptor = d.add_object(dictionary! {"Type"=>"FontDescriptor", "FontName"=>"ABCDEF+Helvetica", "Flags"=>32, "FontFile2"=>file});
+            helvetica = dictionary! {"Type"=>"Font", "Subtype"=>"TrueType", "BaseFont"=>"ABCDEF+Helvetica", "Encoding"=>"WinAnsiEncoding", "FontDescriptor"=>descriptor};
+        }
+        let font = d.add_object(helvetica);
+        let cid_font = d.add_object(dictionary! {"Type"=>"Font", "Subtype"=>"Type0", "BaseFont"=>"Identity", "Encoding"=>"Identity-H"});
+        let image = d.add_object(Stream::new(dictionary! {"Type"=>"XObject", "Subtype"=>"Image", "Width"=>1, "Height"=>1, "ColorSpace"=>"DeviceGray", "BitsPerComponent"=>8}, vec![0]));
+        let resources = d.add_object(dictionary! {"Font"=>dictionary! {"OriginalFont"=>font, "CidFont"=>cid_font}, "XObject"=>dictionary! {"Scan"=>image}});
+        let content = d.add_object(Stream::new(dictionary!{}, b"BT /OriginalFont 18 Tf 1 0 0 rg 40 700 Td (Original content) Tj ET \
+            q 100 0 0 50 40 600 cm /Scan Do Q BT /CidFont 12 Tf 40 500 Td <0001> Tj ET \
+            /Span <</MCID 0>> BDC BT /OriginalFont 12 Tf 40 400 Td (Tagged words) Tj ET EMC".to_vec()));
+        let kids: Vec<Object> = (0..2).map(|_| Object::Reference(d.add_object(dictionary! {"Type"=>"Page", "Parent"=>root, "MediaBox"=>array(&[0.,0.,612.,792.]), "Resources"=>resources, "Contents"=>content}))).collect();
+        d.objects.insert(root, Object::Dictionary(dictionary! {"Type"=>"Pages", "Kids"=>kids, "Count"=>2}));
+        let catalog = d.add_object(dictionary! {"Type"=>"Catalog","Pages"=>root});
+        d.trailer.set("Root",catalog);
+        d.save(path).unwrap();
+    }
+
+    fn edit_request(input: &Path, edits: serde_json::Value) -> ExportRequest {
+        let page = serde_json::json!({ "width": 612, "height": 792, "rotation": 0, "crop": null, "objects": [] });
+        let pages: Vec<_> = (0..2).map(|index| { let mut page = page.clone(); page["sourceIndex"] = index.into(); page }).collect();
+        serde_json::from_value(serde_json::json!({ "paths": [input], "outputLocation": "alongsideInput", "scene": { "pages": pages }, "textEdits": edits })).unwrap()
+    }
+
+    fn page_runs(path: &Path, page_index: usize) -> Vec<text_edit::TextEditRun> {
+        let doc = load(path).unwrap();
+        let id = doc.get_pages().values().copied().nth(page_index).unwrap();
+        let matrix = geometry(&doc, id).unwrap().matrix;
+        text_edit::page_text(&doc, id, matrix).unwrap().runs()
+    }
+
+    #[test]
+    fn page_runs_mark_editable_text_and_explain_the_rest() {
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); text_edit_fixture(&input, false);
+        let runs=page_runs(&input,1);
+        let summary: Vec<_>=runs.iter().map(|run| (run.text.as_str(), run.reason)).collect();
+        assert_eq!(summary,[("Original content",None),("",Some(text_edit::NotEditable::Picture)),("",Some(text_edit::NotEditable::Encoding)),("Tagged words",Some(text_edit::NotEditable::Tagged))]);
+        let first=&runs[0];
+        assert_eq!((first.font_name.as_str(),first.font_size),("Helvetica",18.));
+        assert!((first.x-40.).abs()<0.01 && (first.y-(792.-700.-18.*0.8)).abs()<0.01 && first.width>100. && first.width<160.,"{first:?}");
+        let picture=&runs[1];
+        assert_eq!((picture.x,picture.y,picture.width,picture.height),(40.,142.,100.,50.));
+    }
+
+    #[test]
+    fn edited_text_keeps_its_font_extracts_and_leaves_the_original_and_shared_stream_alone() {
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); text_edit_fixture(&input, false);
+        let original=fs::read(&input).unwrap();
+        let edits=serde_json::json!([{ "pageIndex": 1, "run": 0, "original": "Original content", "replacement": "Revised (content) é" }]);
+        let request=edit_request(&input, edits);
+        let preview=compose_with(&input,&request.scene,&request.sections).unwrap();
+        let preview_id=preview.get_pages().values().copied().nth(1).unwrap();
+        assert_eq!(text_edit::page_text(&preview,preview_id,[1.,0.,0.,1.,0.,0.]).unwrap().runs()[0].text,"Revised (content) é");
+
+        let outcome=export(&request,input.clone());
+        assert!(outcome.error().is_none(),"{:?}",outcome.error());
+        assert_eq!(outcome.output_paths(),[temp.0.join("source-edited-1.pdf")]);
+        assert_eq!(fs::read(&input).unwrap(),original);
+        let output=&outcome.output_paths()[0];
+        let edited=page_runs(output,1);
+        assert_eq!((edited[0].text.as_str(),edited[0].font_name.as_str(),edited[0].font_size,edited[0].reason),("Revised (content) é","Helvetica",18.,None));
+        assert_eq!(page_runs(output,0)[0].text,"Original content");
+        let doc=load(output).unwrap();
+        let id=doc.get_pages().values().copied().nth(1).unwrap();
+        let content=String::from_utf8_lossy(&doc.get_page_content(id)).to_string();
+        assert!(content.contains("/OriginalFont 18 Tf") && content.contains("1 0 0 rg"),"{content}");
+        if text_extractor().is_some() {
+            let runs=extract_text_runs(output,2,612.,792.,Instant::now() + super::super::PDF_TEXT_TIMEOUT).unwrap();
+            let text=runs.iter().map(|run| run.text.as_str()).collect::<Vec<_>>().join(" ");
+            assert!(text.contains("Revised (content) é") && !text.contains("Original content"),"{text}");
+        }
+    }
+
+    #[test]
+    fn text_fonts_follow_family_bold_and_italic() {
+        let font = |family: Option<&str>, bold, italic| text_font(&SceneObject { font_family: family.map(Into::into), bold, italic, ..object(Kind::Text) });
+        assert_eq!(font(None, false, false).unwrap().name, "NotoSans-Regular");
+        assert_eq!(font(Some("Noto Sans"), true, true).unwrap().name, "NotoSans-BoldItalic");
+        assert_eq!(font(Some("Noto Serif"), false, true).unwrap().name, "NotoSerif-Italic");
+        let mono = font(Some("Noto Sans Mono"), true, true).unwrap();
+        assert_eq!((mono.name, mono.oblique), ("NotoSansMono-Bold", true));
+        assert!(!font(Some("Noto Sans"), false, true).unwrap().oblique);
+        assert_eq!(font(Some("Helvetica"), false, false).err().unwrap().kind, crate::kit::contracts::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn text_edits_that_cannot_be_kept_faithful_are_refused_without_output() {
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); text_edit_fixture(&input, false);
+        let embedded=temp.0.join("embedded.pdf"); text_edit_fixture(&embedded, true);
+        let cases=[
+            (&input, serde_json::json!([]), "No text was changed"),
+            (&input, serde_json::json!([{ "pageIndex": 1, "run": 1, "original": "", "replacement": "x" }]), "This text is part of a picture"),
+            (&input, serde_json::json!([{ "pageIndex": 1, "run": 2, "original": "", "replacement": "x" }]), "This text uses a font with no character map"),
+            (&input, serde_json::json!([{ "pageIndex": 1, "run": 3, "original": "Tagged words", "replacement": "Other words" }]), "This text is linked to the PDF's accessibility tags"),
+            (&input, serde_json::json!([{ "pageIndex": 1, "run": 0, "original": "Stale", "replacement": "x" }]), "The text you edited on page 2 no longer matches"),
+            (&input, serde_json::json!([{ "pageIndex": 1, "run": 0, "original": "Original content", "replacement": "Arrow →" }]), "“→” isn't in the character set"),
+            (&input, serde_json::json!([{ "pageIndex": 1, "run": 0, "original": "Original content", "replacement": "Two\nlines" }]), "Line breaks"),
+            (&input, serde_json::json!([{ "pageIndex": 1, "run": 0, "original": "Original content", "replacement": "Original content" }]), "A text edit on page 2 doesn't change"),
+            (&input, serde_json::json!([{ "pageIndex": 9, "run": 0, "original": "Original content", "replacement": "x" }]), "A text edit points to a page"),
+            (&embedded, serde_json::json!([{ "pageIndex": 0, "run": 0, "original": "Original content", "replacement": "Original 😀" }]), "Neither Helvetica nor Noto Sans can show “😀” on page 1"),
+        ];
+        for (path,edits,message) in cases {
+            let original=fs::read(path).unwrap();
+            let outcome=export(&edit_request(path, edits),path.clone());
+            let error=outcome.error().expect("edit should be refused");
+            assert!(error.kind==crate::kit::contracts::ErrorKind::InvalidInput && error.message.starts_with(message),"{message}: {error:?}");
+            assert!(outcome.output_paths().is_empty());
+            assert_eq!(fs::read_dir(&temp.0).unwrap().count(),2);
+            assert_eq!(fs::read(path).unwrap(),original);
+        }
+        let outcome=export(&edit_request(&embedded, serde_json::json!([{ "pageIndex": 0, "run": 0, "original": "Original content", "replacement": "content origin" }])),embedded.clone());
+        assert!(outcome.error().is_none(),"{:?}",outcome.error());
+        assert!(outcome.warnings.is_empty(),"{:?}",outcome.warnings);
+        assert_eq!(page_runs(&outcome.output_paths()[0],0)[0].text,"content origin");
+        let doc=load(&outcome.output_paths()[0]).unwrap();
+        let id=doc.get_pages().values().copied().next().unwrap();
+        assert!(!String::from_utf8_lossy(&doc.get_page_content(id)).contains("EditText"));
+    }
+
+    fn subset_font_fixture(path: &Path) {
+        text_edit_fixture(path, true);
+        let mut doc = load(path).unwrap();
+        let used: std::collections::BTreeSet<u16> = "Original content Tagged words".chars().filter_map(|c| parse_face(NOTO_SERIF_BOLD).unwrap().glyph_index(c)).map(|id| id.0).collect();
+        let subset = subsetter::subset(NOTO_SERIF_BOLD, 0, &subsetter::GlyphRemapper::new_from_glyphs_sorted(&used.into_iter().collect::<Vec<_>>())).unwrap();
+        let ids: Vec<ObjectId> = doc.objects.keys().copied().collect();
+        for id in ids {
+            let Ok(dict) = doc.get_dictionary_mut(id) else { continue };
+            if dict.get(b"BaseFont").ok() == Some(&Object::Name(b"ABCDEF+Helvetica".to_vec())) { dict.set("BaseFont", "ABCDEF+TimesNewRomanPS-BoldMT"); }
+            if dict.has(b"FontFile2") { dict.set("FontName", "ABCDEF+TimesNewRomanPS-BoldMT"); dict.set("Flags", 34); dict.set("FontWeight", 700); }
+            if let Ok(stream) = doc.get_object_mut(id).and_then(Object::as_stream_mut) { if stream.content == b"glyphs" { stream.set_content(subset.clone()); } }
+        }
+        doc.save(path).unwrap();
+    }
+
+    #[test]
+    fn edits_missing_from_an_embedded_subset_use_the_closest_bundled_font_and_warn() {
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("subset.pdf"); subset_font_fixture(&input);
+        let original=fs::read(&input).unwrap();
+        let run=&page_runs(&input,0)[0];
+        assert_eq!(run.font_name,"TimesNewRomanPS-BoldMT");
+        let substitute=run.substitute.as_ref().unwrap();
+        assert_eq!((substitute.family.as_str(),substitute.characters.as_str()),("Noto Serif"," OTacdegilnorstw"));
+        assert!(page_runs(&input,0)[3].substitute.is_none());
+
+        let request=edit_request(&input, serde_json::json!([{ "pageIndex": 0, "run": 0, "original": "Original content", "replacement": "Rent £1,475!" }]));
+        let outcome=export(&request,input.clone());
+        assert!(outcome.error().is_none(),"{:?}",outcome.error());
+        assert_eq!(fs::read(&input).unwrap(),original);
+        assert_eq!(outcome.warnings.len(),1);
+        let warning=&outcome.warnings[0];
+        assert_eq!(warning.kind,crate::kit::contracts::WarningKind::FontSubstituted { requested_family: "TimesNewRomanPS-BoldMT".into(), actual_family: "Noto Serif".into() });
+        assert!(warning.message.contains("page 1") && warning.message.contains("“Rent £1,475!”"),"{}",warning.message);
+        assert_eq!(serde_json::to_value(warning).unwrap()["code"],"fontSubstituted");
+
+        let output=&outcome.output_paths()[0];
+        let doc=load(output).unwrap();
+        let pages: Vec<ObjectId>=doc.get_pages().values().copied().collect();
+        let content=String::from_utf8_lossy(&doc.get_page_content(pages[0])).to_string();
+        assert!(content.contains("/EditTextNotoSerifBold 18 Tf") && content.contains("Tj\n/OriginalFont 18 Tf"),"{content}");
+        let fonts=effective_resource_entries(&doc,pages[0],b"Font").unwrap();
+        let font=doc.get_dictionary(fonts.get(b"EditTextNotoSerifBold").unwrap().as_reference().unwrap()).unwrap();
+        assert_eq!(font.get(b"Subtype").unwrap().as_name().unwrap(),b"Type0");
+        assert!(String::from_utf8_lossy(font.get(b"BaseFont").unwrap().as_name().unwrap()).ends_with("+NotoSerif-Bold"));
+        assert!(fonts.has(b"OriginalFont"));
+        assert!(!effective_resource_entries(&doc,pages[1],b"Font").unwrap().has(b"EditTextNotoSerifBold"));
+        assert_eq!(page_runs(output,1)[0].text,"Original content");
+
+        let again=export(&request,input.clone());
+        assert_eq!(fs::read(&again.output_paths()[0]).unwrap(),fs::read(output).unwrap());
+        if text_extractor().is_some() {
+            let text=|page| extract_text_runs(output,page,612.,792.,Instant::now() + super::super::PDF_TEXT_TIMEOUT).unwrap().iter().map(|run| run.text.clone()).collect::<Vec<_>>().join(" ");
+            let first=text(1);
+            assert!(first.contains("Rent £1,475!") && !first.contains("Original content") && first.contains("Tagged words"),"{first}");
+            assert!(text(2).contains("Original content"));
+        }
     }
 }

@@ -28,14 +28,18 @@ test.beforeEach(async ({ page }) => {
           const key = `${args.request.path}:${pageIndex}`;
           const response = (w.sceneTextResponses[key] ?? 0) + 1;
           w.sceneTextResponses[key] = response;
-          return { index: pageIndex, width: 612, height: 792, preview: svg, textRuns: [{ text: `${args.request.path} page ${pageIndex} response ${response}`, x: 60, y: 55, width: 250, height: 25 }] };
+          return { index: pageIndex, width: 612, height: 792, preview: svg, textRuns: [{ text: `${args.request.path} page ${pageIndex} response ${response}`, x: 60, y: 55, width: 250, height: 25 }],
+            editRuns: [
+              { index: 0, text: 'Rent £1,450', x: 60, y: 120, width: 120, height: 14, fontName: 'Helvetica', fontSize: 12, reason: null, substitute: { family: 'Noto Serif', characters: ' ,01457Rent£' } },
+              { index: 1, text: 'Stamped by the Landlord', x: 60, y: 400, width: 200, height: 14, fontName: 'Helvetica', fontSize: 12, reason: 'picture' },
+            ] };
         }
         if (command === 'preview_pdf_scene_pages') {
           if (w.previewFailure) throw new Error(w.previewFailureMessage ?? 'Renderer unavailable');
           if (w.previewDelay) await new Promise(resolve => setTimeout(resolve, w.previewDelay));
           return args.request.pageIndices.map((pageIndex: number) => ({ pageIndex, preview: { dataUrl: svg, width: 612, height: 792 } }));
         }
-        if (command === 'export_pdf_scene') return [{ inputPath: '/local/scene-fixture.pdf', outputPaths: ['/local/scene-fixture-edited-1.pdf'], state: 'succeeded', detail: 'PDF scene exported', failure: null, reason: null, warnings: [] }];
+        if (command === 'export_pdf_scene') return w.exportOutcomes ?? [{ inputPath: '/local/scene-fixture.pdf', outputPaths: ['/local/scene-fixture-edited-1.pdf'], state: 'succeeded', detail: 'PDF scene exported', failure: null, reason: null, warnings: [] }];
         return null;
       },
     };
@@ -73,6 +77,8 @@ test('PDF editor toolbars use roving keyboard focus and render the workspace', a
   const selectTool = tools.getByRole('button', { name: 'Select', exact: true });
   const textTool = tools.getByRole('button', { name: 'Text', exact: true });
   await selectTool.focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(tools.getByRole('button', { name: 'Edit text', exact: true })).toBeFocused();
   await page.keyboard.press('ArrowRight');
   await expect(textTool).toBeFocused();
   await page.keyboard.press('Enter');
@@ -119,6 +125,8 @@ test('PDF editor toolbar uses roving keyboard focus and the inspector follows th
   const toolbar = page.getByRole('toolbar', { name: 'PDF editor tools' });
   const select = toolbar.getByRole('button', { name: 'Select', exact: true });
   await select.focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(toolbar.getByRole('button', { name: 'Edit text', exact: true })).toBeFocused();
   await page.keyboard.press('ArrowRight');
   await expect(toolbar.getByRole('button', { name: 'Text', exact: true })).toBeFocused();
   await page.keyboard.press('Home');
@@ -366,7 +374,7 @@ test('scene composes every mark kind, moves and resizes, then exports once', asy
   await page.getByRole('button', { name: 'Select', exact: true }).click();
   const text = page.getByRole('button', { name: 'text object 1', exact: true });
   await text.focus();
-  await page.keyboard.press('Enter');
+  await page.keyboard.press('Space');
   await page.keyboard.press('Shift+ArrowRight');
   await page.getByRole('button', { name: 'Resize text se', exact: true }).focus();
   await page.keyboard.press('Shift+ArrowRight');
@@ -547,7 +555,7 @@ test('Escape discards inline text edits without changing the committed scene', a
   await page.getByRole('button', { name: 'Select', exact: true }).click();
   await page.getByRole('button', { name: 'text object 1', exact: true }).dblclick();
 
-  const editor = page.getByRole('textbox', { name: 'Edit text object' });
+  const editor = page.getByRole('textbox', { name: 'Text box text' });
   const originalText = await editor.inputValue();
   await editor.fill('Discard this draft');
   await editor.press('Escape');
@@ -564,4 +572,203 @@ test('one signature drag stays in one undo step', async ({ page }) => {
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await expect(page.locator('.scene-object-hit')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Redo', exact: true })).toBeEnabled();
+});
+
+test('scene export sends only the scene sections and the invoke boundary accepts the staged request shape', async ({ page }) => {
+  await openEditor(page);
+  await draw(page, 'Text', .2);
+  await exported(page);
+  const request = await page.evaluate(() => (window as any).calls.filter((c: any) => c.command === 'export_pdf_scene').at(-1).args.request);
+  expect(Object.keys(request).sort()).toEqual(['outputLocation', 'paths', 'scene']);
+
+  const staged = { ...request, formValues: [], textEdits: [], flatten: false, redactions: [] };
+  const results = await page.evaluate((staged) => (window as any).__TAURI_INTERNALS__.invoke('export_pdf_scene', { request: staged }), staged);
+  expect(results[0].state).toBe('succeeded');
+  const accepted = await page.evaluate(() => (window as any).calls.filter((c: any) => c.command === 'export_pdf_scene').at(-1).args.request);
+  expect(accepted).toEqual(staged);
+});
+
+const textFields = (object: any) => ({ fontFamily: object.fontFamily, fontSize: object.fontSize, bold: object.bold, italic: object.italic, align: object.align,
+  color: object.color, opacity: object.opacity, pageRange: object.pageRange ?? null });
+
+test('text controls set the next box and the selected box exactly', async ({ page }) => {
+  await openEditor(page);
+  await page.getByRole('toolbar', { name: 'PDF editor tools' }).getByRole('button', { name: 'Text', exact: true }).click();
+  const inspector = page.getByRole('complementary', { name: 'PDF editor inspector' });
+  await expect(inspector.getByText('Click the page to add a text box. Double-click a box or press Enter to edit it.')).toBeVisible();
+  await inspector.getByRole('combobox', { name: 'Font' }).selectOption('Noto Sans Mono');
+  await inspector.getByRole('button', { name: 'Bold', exact: true }).click();
+  await inspector.getByRole('radio', { name: 'Align right' }).click();
+  await draw(page, 'Text', .3);
+  let result = await exported(page);
+  expect(textFields(result.pages[0].objects[0])).toEqual({ fontFamily: 'Noto Sans Mono', fontSize: 18, bold: true, italic: false, align: 'right', color: '#1b1b1b', opacity: 1, pageRange: null });
+
+  await page.getByRole('button', { name: 'Select', exact: true }).click();
+  await page.getByRole('button', { name: 'text object 1', exact: true }).click();
+  await inspector.getByRole('combobox', { name: 'Font' }).selectOption('Noto Serif');
+  await inspector.getByRole('spinbutton', { name: 'Size' }).fill('24');
+  await inspector.getByRole('button', { name: 'Bold', exact: true }).click();
+  await inspector.getByRole('button', { name: 'Italic', exact: true }).click();
+  await inspector.getByRole('radio', { name: 'Align centre' }).click();
+  await expect(inspector.getByRole('radio', { name: 'Align centre' })).toHaveAttribute('aria-checked', 'true');
+  await page.locator('input[type="color"][aria-label="Object color"]').fill('#aa3300');
+  await page.getByRole('slider', { name: 'Object opacity' }).press('Home');
+  result = await exported(page);
+  expect(textFields(result.pages[0].objects[0])).toEqual({ fontFamily: 'Noto Serif', fontSize: 24, bold: false, italic: true, align: 'center', color: '#aa3300', opacity: .05, pageRange: null });
+});
+
+test('a text box can be shown on a page range', async ({ page }) => {
+  await openEditor(page);
+  await draw(page, 'Text', .3);
+  await page.getByRole('button', { name: 'Select', exact: true }).click();
+  await page.getByRole('button', { name: 'text object 1', exact: true }).click();
+  const pages = page.getByRole('textbox', { name: 'Pages for this text box' });
+  await expect(page.getByRole('radio', { name: 'This page only' })).toBeChecked();
+  await expect(pages).toBeDisabled();
+  await page.getByRole('radio', { name: 'These pages' }).click();
+  await expect(pages).toHaveValue('1');
+  await pages.fill('1-2, 3-');
+  await pages.press('Enter');
+  let result = await exported(page);
+  expect(result.pages[0].objects[0].pageRange).toBe('1-2, 3-');
+  expect(result.pages.slice(1).map((item: any) => item.objects.length)).toEqual([0, 0]);
+  await page.getByRole('radio', { name: 'This page only' }).click();
+  result = await exported(page);
+  expect(result.pages[0].objects[0].pageRange).toBeNull();
+});
+
+test('double-click and Enter open the text box editor in place', async ({ page }) => {
+  await openEditor(page);
+  await draw(page, 'Text', .3);
+  await page.getByRole('button', { name: 'Select', exact: true }).click();
+  const box = page.getByRole('button', { name: 'text object 1', exact: true });
+  await box.dblclick();
+  const editor = page.getByRole('textbox', { name: 'Text box text' });
+  await expect(editor).toBeFocused();
+  await editor.fill('Привет\nΚαλημέρα');
+  await editor.press('Control+Enter');
+  await expect(editor).toHaveCount(0);
+  await box.focus();
+  await box.press('Enter');
+  await expect(editor).toBeFocused();
+  await expect(editor).toHaveValue('Привет\nΚαλημέρα');
+  await editor.fill('Hello, world');
+  await editor.press('Control+Enter');
+  const result = await exported(page);
+  expect(result.pages[0].objects[0].text).toBe('Hello, world');
+});
+
+test('unrenderable text names the characters and keeps Export disabled', async ({ page }) => {
+  await openEditor(page);
+  await draw(page, 'Text', .3);
+  await page.evaluate(() => {
+    (window as any).previewFailure = true;
+    (window as any).previewFailureMessage = 'Noto Sans can’t show these characters: “😀” (U+1F600), “आ” (U+0906). Remove them to export this text box.';
+  });
+  await page.getByRole('button', { name: 'Select', exact: true }).click();
+  await page.getByRole('button', { name: 'text object 1', exact: true }).dblclick();
+  await page.getByRole('textbox', { name: 'Text box text' }).fill('Hi 😀 आ');
+  await page.getByRole('textbox', { name: 'Text box text' }).press('Control+Enter');
+  await expect(page.getByRole('alert')).toHaveText('Preview could not be verified. Noto Sans can’t show these characters: “😀” (U+1F600), “आ” (U+0906). Remove them to export this text box. Export is disabled until the preview can be verified.');
+  await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeDisabled();
+});
+
+async function openEditText(page: Page) {
+  await openEditor(page);
+  await page.getByRole('toolbar', { name: 'PDF editor tools' }).getByRole('button', { name: 'Edit text', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Properties' })).toContainText('Click text with a dashed outline to change it.');
+}
+async function replaceRun(page: Page, replacement: string) {
+  await page.getByRole('button', { name: 'Edit text: Rent £1,450' }).click();
+  const input = page.getByRole('textbox', { name: 'Replacement text' });
+  await expect(input).toHaveValue('Rent £1,450');
+  await input.fill(replacement);
+  await input.press('Enter');
+  await expect(input).toHaveCount(0);
+}
+
+test('Edit text outlines editable runs and marks picture text as not editable', async ({ page }) => {
+  await openEditText(page);
+  const editable = page.locator('[data-edit-run="0"]');
+  const blocked = page.locator('[data-edit-run="1"]');
+  await expect(editable).toHaveClass('scene-edit-run');
+  await expect(editable).toHaveAttribute('aria-label', 'Edit text: Rent £1,450');
+  await expect(blocked).toHaveClass('scene-edit-run-blocked');
+  await expect(blocked.locator('title')).toHaveText("This text is part of a picture, so it can't be edited.");
+
+  await page.getByRole('toolbar', { name: 'PDF editor tools' }).getByRole('button', { name: 'Select', exact: true }).click();
+  await expect(page.locator('[data-edit-run]')).toHaveCount(0);
+});
+
+test('not-editable text explains why and offers Add text instead', async ({ page }) => {
+  await openEditText(page);
+  await page.locator('[data-edit-run="1"]').click();
+  await expect(page.getByRole('textbox', { name: 'Replacement text' })).toHaveCount(0);
+  const alert = page.getByRole('region', { name: 'Properties' }).getByRole('alert');
+  await expect(alert).toContainText("This text can't be edited.");
+  await expect(alert).toContainText('It is part of a scanned picture, not real text.');
+  await alert.getByRole('button', { name: 'Cover it with Add text instead' }).click();
+  await expect(page.getByRole('toolbar', { name: 'PDF editor tools' }).getByRole('button', { name: 'Text', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeDisabled();
+});
+
+test('a text edit is sent as textEdits to the preview and the export, and can be reverted', async ({ page }) => {
+  await openEditText(page);
+  await replaceRun(page, 'Rent £1,475');
+  await expect(page.locator('[data-edit-run="0"]')).toHaveAttribute('aria-label', 'Edit text: Rent £1,475');
+  const inspector = page.getByRole('region', { name: 'Properties' });
+  await expect(inspector.getByRole('group', { name: 'Selected text' })).toContainText('Helvetica · 12 pt');
+  await expect(inspector.getByRole('group', { name: 'Edits on this document' })).toContainText('Page 1: “Rent £1,450” to “Rent £1,475”');
+  await expect(page.locator('.scene-edit-overflow')).toHaveCount(0);
+
+  const edit = { pageIndex: 0, run: 0, original: 'Rent £1,450', replacement: 'Rent £1,475' };
+  await expect.poll(() => page.evaluate(() => (window as any).calls.filter((c: any) => c.command === 'preview_pdf_scene_pages').at(-1).args.request.textEdits)).toEqual([edit]);
+  await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: 'Export PDF', exact: true }).click();
+  const request = await page.evaluate(() => (window as any).calls.filter((c: any) => c.command === 'export_pdf_scene').at(-1).args.request);
+  expect(Object.keys(request).sort()).toEqual(['outputLocation', 'paths', 'scene', 'textEdits']);
+  expect(request.textEdits).toEqual([edit]);
+  expect(request.scene).toEqual({ pages: expect.any(Array) });
+
+  await inspector.getByRole('button', { name: 'Revert this text' }).click();
+  await expect(inspector.getByRole('group', { name: 'Edits on this document' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await expect(inspector.getByRole('group', { name: 'Edits on this document' })).toBeVisible();
+});
+
+test('a replacement the embedded font cannot draw notes the substitute font and the export row shows font substituted', async ({ page }) => {
+  await openEditText(page);
+  await replaceRun(page, 'Rent £1,475');
+  const selected = page.getByRole('region', { name: 'Properties' }).getByRole('group', { name: 'Selected text' });
+  await expect(selected).toContainText('Edited text keeps this font, size and colour.');
+  await expect(selected.getByRole('note')).toHaveCount(0);
+
+  await page.locator('[data-edit-run="0"]').click();
+  await page.getByRole('textbox', { name: 'Replacement text' }).fill('Rent €1,475');
+  await page.getByRole('textbox', { name: 'Replacement text' }).press('Enter');
+  await expect(selected.getByRole('note')).toHaveText("Helvetica isn't embedded in this PDF. Edited lines use Noto Serif, which looks close. Untouched text keeps its original font.");
+  await expect(selected).not.toContainText('Edited text keeps this font');
+
+  await page.evaluate(() => {
+    (window as any).exportOutcomes = [{ inputPath: '/local/scene-fixture.pdf', outputPaths: ['/local/scene-fixture-edited-1.pdf'], state: 'succeeded', detail: 'PDF scene exported', failure: null, reason: null,
+      warnings: [{ code: 'fontSubstituted', message: 'Font substituted on page 1.', details: { requestedFamily: 'Helvetica', actualFamily: 'Noto Serif' } }] }];
+  });
+  await page.getByRole('button', { name: 'Export PDF', exact: true }).click();
+  const row = page.locator('[data-tone]').filter({ hasText: 'scene-fixture.pdf' });
+  await expect(row).toHaveAttribute('data-tone', 'warn');
+  await expect(row).toContainText('The font Helvetica wasn’t available, so Noto Serif was used.');
+  await expect(row).not.toContainText('Font substituted on page 1.');
+});
+
+test('a replacement longer than the original line warns that it will be cut off', async ({ page }) => {
+  await openEditText(page);
+  await replaceRun(page, 'Rent £1,475 per calendar month');
+  await expect(page.locator('.scene-edit-overflow')).toHaveText('Text runs past the original line by 3 words. It will be cut off unless you make it shorter or smaller.');
+  await expect(page.getByRole('region', { name: 'Properties' }).getByRole('alert')).toContainText('This text is too long for its space.');
+  await page.locator('[data-edit-run="0"]').click();
+  await page.getByRole('textbox', { name: 'Replacement text' }).fill('Rent £1,475');
+  await page.getByRole('textbox', { name: 'Replacement text' }).press('Enter');
+  await expect(page.locator('.scene-edit-overflow')).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Properties' }).getByRole('alert')).toHaveCount(0);
 });
