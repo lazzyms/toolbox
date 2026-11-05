@@ -1119,9 +1119,9 @@ mod command_tests {
                 { "kind": "text", "rect": { "x": 72, "y": 100, "width": 350, "height": 40 }, "text": "New page in the same session", "fontSize": 18, "color": "#202020", "opacity": 1, "strokes": [] }
             ] }
         ] })).unwrap();
-        let rendered_scene = tauri::async_runtime::block_on(preview_pdf_scene(scene::PreviewRequest { path: pdf.clone(), scene: visual_scene.clone(), page_index: 0 })).unwrap();
+        let rendered_scene = tauri::async_runtime::block_on(preview_pdf_scene(scene::PreviewRequest { path: pdf.clone(), scene: visual_scene.clone(), page_index: 0, sections: Default::default() })).unwrap();
         assert!(rendered_scene.data_url.starts_with("data:image/png;base64,"));
-        let rendered_scene_pages = tauri::async_runtime::block_on(preview_pdf_scene_pages(scene::PreviewPagesRequest { path: pdf.clone(), scene: visual_scene.clone(), page_indices: vec![1, 0] })).unwrap();
+        let rendered_scene_pages = tauri::async_runtime::block_on(preview_pdf_scene_pages(scene::PreviewPagesRequest { path: pdf.clone(), scene: visual_scene.clone(), page_indices: vec![1, 0], sections: Default::default() })).unwrap();
         assert_eq!(rendered_scene_pages.iter().map(|preview| preview.page_index).collect::<Vec<_>>(), vec![1, 0]);
         assert!(rendered_scene_pages.iter().all(|preview| preview.preview.data_url.starts_with("data:image/png;base64,")));
         let wire = serde_json::to_value(&rendered_scene_pages).unwrap();
@@ -1132,7 +1132,7 @@ mod command_tests {
         assert!(preview_width > 0 && preview_height > 0, "preview dimensions must be positive");
         assert!(preview_width > preview_height, "a 90-degree page should preview in landscape orientation");
         assert!(preview["dataUrl"].as_str().is_some_and(|value| value.starts_with("data:image/png;base64,")));
-        outputs.extend(named(&mut naming, "export_pdf_scene", pdf.clone(), assert_success("PDF scene", export_pdf_scene(RunEvents::silent(), scene::ExportRequest { paths: vec![pdf.clone()], scene: visual_scene, output_location: OutputLocation::AlongsideInput }))));
+        outputs.extend(named(&mut naming, "export_pdf_scene", pdf.clone(), assert_success("PDF scene", export_pdf_scene(RunEvents::silent(), scene::ExportRequest { paths: vec![pdf.clone()], scene: visual_scene, output_location: OutputLocation::AlongsideInput, sections: Default::default() }))));
         outputs.extend(named(&mut naming, "remove_password", protected.clone(), assert_success("unlock", remove_password(RunEvents::silent(), PasswordRequest { paths: vec![protected], password: crate::kit::TEST_PASSWORD.into(), password_overrides: Default::default(), output_location: location(&root, "unlock") }))));
         outputs.extend(named(&mut naming, "add_page_numbers", pdf.clone(), assert_success("page numbers", add_page_numbers(RunEvents::silent(), PageOverlayRequest { paths: vec![pdf.clone()], text: "1".into(), opacity: 100, position: Some("bottom-right".into()), logo_path: None, pages: None, start_number: Some(1), font_size: Some(12), output_location: location(&root, "page numbers") }))));
         outputs.extend(named(&mut naming, "merge_pdfs", pdf.clone(), assert_aggregate_success("merge", &[pdf.clone(), pdf_two.clone()], run_merge_pdfs(&MergePdfRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: location(&root, "merge"), output_path: None }))));
