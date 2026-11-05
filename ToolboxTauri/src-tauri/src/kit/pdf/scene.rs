@@ -5,7 +5,7 @@ use flate2::{write::ZlibEncoder, Compression};
 use lopdf::{dictionary, Document, Object, ObjectId, Stream};
 use quick_xml::{events::Event, escape::unescape, Reader as XmlReader, XmlVersion};
 use serde::{Deserialize, Serialize};
-use crate::kit::{common::{JobOutcome, OutputLocation, OutputNaming}, contracts::ToolError};
+use crate::kit::{common::{watermark::{WatermarkOptions, WatermarkPlacement, WatermarkPosition}, JobOutcome, OutputLocation, OutputNaming}, contracts::{LimitKind, ToolError}};
 use super::metadata::{PdfDocumentMetadata, PdfPageMetadata, PdfTextRun};
 use super::{inherited, resolve, PdfMutationIntent};
 
@@ -23,7 +23,8 @@ pub struct SceneObject {
     #[serde(default)] pub signature_mode: Option<SignatureMode>,
     #[serde(default)] pub signature_path: Option<PathBuf>,
     #[serde(default)] pub font_family: Option<String>,
-    #[serde(default)] pub watermark_pattern: Option<WatermarkPattern>,
+    #[serde(default)] pub watermark: Option<WatermarkOptions>,
+    #[serde(default)] pub layer: Layer,
     #[serde(default)] pub bold: bool,
     #[serde(default)] pub italic: bool,
     #[serde(default)] pub align: TextAlign,
@@ -44,9 +45,9 @@ pub enum HighlightMode { Area, TextSelection }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all="kebab-case")]
 pub enum SignatureMode { Image, Text }
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all="kebab-case")]
-pub enum WatermarkPattern { AcrossPage, BottomRightToTopLeft, TopRightToBottomLeft, CenterHorizontal, CenterVertical }
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all="lowercase")]
+pub enum Layer { #[default] Front, Behind }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all="camelCase")]
 pub struct ScenePage {
@@ -232,21 +233,23 @@ fn unrenderable_message(family: &str, missing: &[char]) -> String {
 }
 
 fn layout_text(o: &SceneObject) -> Result<TextLayout, ToolError> {
-    if o.text.chars().count() > TEXT_MAX_CHARACTERS {
-        return Err(ToolError::limit_exceeded(crate::kit::contracts::LimitKind::TextLength,
+    layout_lines(text_font(o)?, &o.text, o.font_size, o.rect.width + 0.01)
+}
+
+fn layout_lines(font: TextFont, text: &str, font_size: f32, max_width: f32) -> Result<TextLayout, ToolError> {
+    if text.chars().count() > TEXT_MAX_CHARACTERS {
+        return Err(ToolError::limit_exceeded(LimitKind::TextLength,
             "Text box text is longer than the 100,000-character limit. Shorten it and try again."));
     }
-    let font = text_font(o)?;
     let face = parse_face(font.bytes)?;
     let mut missing = Vec::new();
     let mut glyph = |c: char| match face.glyph_index(c) {
         Some(id) if id.0 != 0 => Some(id.0),
         _ => { if !missing.contains(&c) { missing.push(c); } None }
     };
-    let scale = o.font_size / 1000.;
-    let max_width = o.rect.width + 0.01;
+    let scale = font_size / 1000.;
     let mut lines = Vec::new();
-    for paragraph in o.text.split('\n') {
+    for paragraph in text.split('\n') {
         let paragraph = paragraph.strip_suffix('\r').unwrap_or(paragraph);
         let mut line: Vec<(u16, char, f32)> = Vec::new();
         let mut break_after = None;
@@ -275,17 +278,21 @@ fn layout_text(o: &SceneObject) -> Result<TextLayout, ToolError> {
     let em = face.units_per_em() as f32;
     let (ascent, descent) = (face.ascender() as f32 / em, face.descender() as f32 / em);
     // Matches CSS line-height: half-leading above the ascender.
-    let first_baseline = o.font_size * ((TEXT_LINE_HEIGHT - (ascent - descent)) / 2. + ascent);
+    let first_baseline = font_size * ((TEXT_LINE_HEIGHT - (ascent - descent)) / 2. + ascent);
     Ok(TextLayout { font, lines, first_baseline })
 }
 
 fn page_range_pages(range: &str, page_count: usize) -> Result<Vec<usize>, ToolError> {
-    let invalid = || ToolError::invalid_input(format!("“{range}” is not a page list. Use page numbers and ranges like 1-3, 7, 10-."));
+    let invalid = || ToolError::invalid_input(format!("“{range}” is not a page list. Use page numbers and ranges like 1-3, 7, 10-, or all, odd or even."));
     let number = |value: &str| value.trim().parse::<usize>().ok().filter(|value| *value > 0).ok_or_else(invalid);
     let mut pages = std::collections::BTreeSet::new();
     for item in range.split(',') {
         let item = item.trim();
         if item.is_empty() { return Err(invalid()); }
+        if let Some((first, step)) = match item.to_ascii_lowercase().as_str() { "all" => Some((1, 1)), "odd" => Some((1, 2)), "even" => Some((2, 2)), _ => None } {
+            pages.extend((first..=page_count).step_by(step).map(|page| page - 1));
+            continue;
+        }
         let (first, last) = match item.split_once('-') {
             Some((first, "")) => (number(first)?, usize::MAX),
             Some((first, last)) => (number(first)?, number(last)?),
@@ -308,11 +315,20 @@ fn text_plan(scene: &PdfScene) -> Result<TextPlan, ToolError> {
     for (origin, page) in scene.pages.iter().enumerate() {
         for (index, o) in page.objects.iter().enumerate() {
             match (&o.kind, o.page_range.as_deref()) {
-                (Kind::Text, Some(range)) => for target in page_range_pages(range, scene.pages.len())? { placed[target].push((origin, index)); },
-                (_, Some(_)) => return Err(ToolError::invalid_input("Only text boxes can be shown on several pages")),
+                (Kind::Text | Kind::Watermark, Some(range)) => for target in page_range_pages(range, scene.pages.len())? { placed[target].push((origin, index)); },
+                (_, Some(_)) => return Err(ToolError::invalid_input("Only text boxes and watermarks can be shown on several pages")),
                 _ => placed[origin].push((origin, index)),
             }
-            if matches!(o.kind, Kind::Text) { layouts.insert((origin, index), layout_text(o)?); }
+            match o.kind {
+                Kind::Text => { layouts.insert((origin, index), layout_text(o)?); }
+                Kind::Watermark => {
+                    let options = watermark_options(o)?;
+                    if let Some(path) = &options.logo_path { check_watermark_image(path)?; }
+                    // Laid out at 1 pt without wrapping; each page scales it to its own size.
+                    if let Some(text) = options.text() { layouts.insert((origin, index), layout_lines(text_font(o)?, text, 1., f32::INFINITY)?); }
+                }
+                _ => {}
+            }
         }
     }
     Ok(TextPlan { placed, layouts })
@@ -428,41 +444,111 @@ fn shape_content(shape: Option<&Shape>, r: &Rect) -> String {
     }
 }
 
-fn watermark_placements(area: &Rect, anchor: &Rect, font_size: f32, text: &str, pattern: Option<&WatermarkPattern>) -> Vec<(f32, f32, f32)> {
-    let pattern = pattern.unwrap_or(&WatermarkPattern::AcrossPage);
-    let text_width = text.chars().count().max(1) as f32 * font_size * 0.6;
-    let center_x = anchor.x + anchor.width / 2.;
-    let center_y = anchor.y + anchor.height / 2.;
-    match pattern {
-        WatermarkPattern::AcrossPage => {
-            let step_x = (text_width + font_size * 2.).max(100.);
-            let step_y = (font_size * 4.).max(80.);
-            let offset_x = anchor.x - (area.x + area.width * 0.14);
-            let offset_y = anchor.y - (area.y + area.height * 0.33);
-            let mut placements = Vec::new();
-            let mut y = area.y - area.height + offset_y;
-            while y <= area.y + area.height * 2. + offset_y {
-                let offset = ((y - (area.y + offset_y)) / step_y).round() * step_x * 0.45;
-                let mut x = area.x - area.width + offset_x + offset;
-                while x <= area.x + area.width * 2. + offset_x {
-                    placements.push((x, y, -35.));
-                    x += step_x;
-                }
-                y += step_y;
-            }
-            placements
+const WATERMARK_DEFAULT_SIZE: f32 = 0.1;
+const WATERMARK_MAX_TILES: usize = 2000;
+const WATERMARK_MAX_PIXELS: u64 = 20_000_000;
+
+fn watermark_options(o: &SceneObject) -> Result<&WatermarkOptions, ToolError> {
+    let options = o.watermark.as_ref().ok_or_else(|| ToolError::invalid_input("Add watermark text or choose a picture."))?;
+    options.validate().map_err(ToolError::invalid_input)?;
+    if options.text().is_some() && options.logo_path.is_some() { return Err(ToolError::invalid_input("Choose text or a picture for the watermark, not both.")); }
+    Ok(options)
+}
+
+#[derive(Debug, Serialize)]
+pub struct WatermarkImageInfo { pub width: u32, pub height: u32 }
+
+/// Refuses a watermark picture before anything is placed: PNG or JPG within the image tools' recorded limits.
+pub fn check_watermark_image(path: &Path) -> Result<WatermarkImageInfo, ToolError> {
+    crate::kit::common::limits::recorded("watermark_images").ok_or_else(|| ToolError::processing("Image limits are missing."))?.check(path)?;
+    let unreadable = |error: std::io::Error| ToolError::invalid_input(format!("Could not read the watermark picture: {error}"));
+    let reader = image::ImageReader::open(path).map_err(unreadable)?.with_guessed_format().map_err(unreadable)?;
+    if !matches!(reader.format(), Some(image::ImageFormat::Png | image::ImageFormat::Jpeg)) {
+        return Err(ToolError::invalid_input("Choose a PNG or JPG picture for the watermark."));
+    }
+    let (width, height) = reader.into_dimensions().map_err(|error| ToolError::invalid_input(format!("Could not read the watermark picture: {error}")))?;
+    if width == 0 || height == 0 || u64::from(width) * u64::from(height) > WATERMARK_MAX_PIXELS {
+        return Err(ToolError::limit_exceeded(LimitKind::Decompression, "This picture is larger than 20 megapixels, the limit for a watermark. Use a smaller picture."));
+    }
+    Ok(WatermarkImageInfo { width, height })
+}
+
+pub fn inspect_watermark_image(path: &Path) -> Result<WatermarkImageInfo, String> { check_watermark_image(path).map_err(|error| error.message) }
+
+fn watermark_image(path: &Path) -> Result<SignatureImage, String> {
+    check_watermark_image(path).map_err(|error| error.message)?;
+    rgba_image(image::open(path).map_err(|error| format!("Could not read the watermark picture: {error}"))?.to_rgba8())
+}
+
+/// The unrotated size of one mark in points: a text layout laid out at 1 pt, or a picture's pixel size.
+fn watermark_size(options: &WatermarkOptions, area: &Rect, layout: Option<&TextLayout>, picture: Option<(u32, u32)>) -> (f32, f32) {
+    let shorter = area.width.min(area.height);
+    match (layout, picture) {
+        (Some(layout), _) => {
+            let font_size = options.size.unwrap_or(WATERMARK_DEFAULT_SIZE) * shorter;
+            let widest = layout.lines.iter().map(|line| line.width).fold(0., f32::max);
+            (widest * font_size, layout.lines.len() as f32 * TEXT_LINE_HEIGHT * font_size)
         }
-        WatermarkPattern::BottomRightToTopLeft => vec![(center_x - text_width / 2., center_y + font_size / 2., -45.)],
-        WatermarkPattern::TopRightToBottomLeft => vec![(center_x - text_width / 2., center_y + font_size / 2., 45.)],
-        WatermarkPattern::CenterHorizontal => vec![(center_x - text_width / 2., center_y + font_size / 2., 0.)],
-        WatermarkPattern::CenterVertical => vec![(center_x - text_width / 2., center_y + font_size / 2., 90.)],
+        (None, Some((width, height))) => {
+            let (width, height) = (width as f32, height as f32);
+            // Without a size, a picture keeps the legacy watermark's 180 × 100 pt box, never enlarged.
+            let scale = match options.size { Some(size) => size * shorter / height, None => (180. / width).min(100. / height).min(1.) };
+            (width * scale, height * scale)
+        }
+        (None, None) => (0., 0.),
     }
 }
 
-fn scene_angle_to_pdf_text_matrix(angle: f32) -> [f32; 4] {
-    let radians = angle.to_radians();
-    let (c, s) = (radians.cos(), radians.sin());
-    [c, -s, -s, -c]
+/// Centres of each mark on a page's visible area. Rotation is in degrees, clockwise on screen.
+fn watermark_centers(area: &Rect, (width, height): (f32, f32), position: Option<WatermarkPosition>, rotation: f32) -> Result<Vec<(f32, f32)>, ToolError> {
+    let (sin, cos) = rotation.to_radians().sin_cos();
+    let (box_w, box_h) = (width * cos.abs() + height * sin.abs(), width * sin.abs() + height * cos.abs());
+    let margin = 0.04 * area.width.min(area.height);
+    let (left, top) = (area.x + margin + box_w / 2., area.y + margin + box_h / 2.);
+    let (right, bottom) = (area.x + area.width - margin - box_w / 2., area.y + area.height - margin - box_h / 2.);
+    let (cx, cy) = (area.x + area.width / 2., area.y + area.height / 2.);
+    Ok(match position.unwrap_or(WatermarkPosition::Placement(WatermarkPlacement::Center)) {
+        WatermarkPosition::Placement(WatermarkPlacement::Center) => vec![(cx, cy)],
+        WatermarkPosition::Placement(WatermarkPlacement::TopLeft) => vec![(left, top)],
+        WatermarkPosition::Placement(WatermarkPlacement::TopRight) => vec![(right, top)],
+        WatermarkPosition::Placement(WatermarkPlacement::BottomLeft) => vec![(left, bottom)],
+        WatermarkPosition::Placement(WatermarkPlacement::BottomRight) => vec![(right, bottom)],
+        WatermarkPosition::Offset { x, y } => vec![(area.x + x as f32 + box_w / 2., area.y + y as f32 + box_h / 2.)],
+        WatermarkPosition::Placement(WatermarkPlacement::Tile) => {
+            let gap = height.max(1.);
+            let (step_x, step_y) = (box_w + gap, box_h + gap);
+            let (columns, rows) = ((area.width / 2. / step_x).ceil() as i64 + 1, (area.height / 2. / step_y).ceil() as i64 + 1);
+            if ((2 * columns + 1) * (2 * rows + 1)) as usize > WATERMARK_MAX_TILES {
+                return Err(ToolError::invalid_input("The watermark is too small to tile across this page. Make it larger."));
+            }
+            // A grid centred on the page; alternate rows shift by half a step.
+            (-rows..=rows).flat_map(|row| (-columns..=columns).map(move |column| (
+                cx + column as f32 * step_x + if row.rem_euclid(2) == 1 { step_x / 2. } else { 0. },
+                cy + row as f32 * step_y,
+            ))).collect()
+        }
+    })
+}
+
+fn watermark_rotation(rotation: f32, (cx, cy): (f32, f32)) -> String {
+    let (sin, cos) = rotation.to_radians().sin_cos();
+    let clean = |value: f32| if value.abs() < 1e-6 { 0. } else { value };
+    format!("{} {} {} {} {cx} {cy} cm\n", clean(cos), clean(sin), clean(-sin), clean(cos))
+}
+
+fn watermark_text_content(options: &WatermarkOptions, size: (f32, f32), area: &Rect, layout: &TextLayout, resource: &str, remapper: &subsetter::GlyphRemapper) -> String {
+    let font_size = options.size.unwrap_or(WATERMARK_DEFAULT_SIZE) * area.width.min(area.height);
+    let slant = if layout.font.oblique { SYNTHETIC_OBLIQUE } else { 0. };
+    let mut content = format!("BT /{resource} {font_size} Tf\n");
+    for (index, line) in layout.lines.iter().enumerate() {
+        if line.glyphs.is_empty() { continue; }
+        let x = -line.width * font_size / 2.;
+        let y = -size.1 / 2. + (layout.first_baseline + index as f32 * TEXT_LINE_HEIGHT) * font_size;
+        let glyphs: String = line.glyphs.iter().map(|(gid, _)| format!("{:04X}", remapper.get(*gid).unwrap_or(0))).collect();
+        content.push_str(&format!("1 0 {slant} -1 {x} {y} Tm <{glyphs}> Tj\n"));
+    }
+    content.push_str("ET\n");
+    content
 }
 
 struct SignatureImage { rgb: Vec<u8>, alpha: Option<Vec<u8>>, width: u32, height: u32 }
@@ -478,6 +564,10 @@ fn signature_image(path: &Path) -> Result<SignatureImage, String> {
     if image.width() == 0 || image.height() == 0 || (image.width() as u64) * (image.height() as u64) > 20_000_000 {
         return Err("Signature image dimensions are not supported".into());
     }
+    rgba_image(image)
+}
+
+fn rgba_image(image: image::RgbaImage) -> Result<SignatureImage, String> {
     let mut rgb = Vec::with_capacity((image.width() * image.height() * 3) as usize);
     let mut alpha = Vec::with_capacity((image.width() * image.height()) as usize);
     for pixel in image.pixels() {
@@ -541,6 +631,11 @@ fn signature_text_image(text: &str, font_family: &str, font_size: f32, color: [f
 }
 
 fn add_signature_image(document: &mut Document, xobjects: &mut lopdf::Dictionary, name: &str, image: SignatureImage) {
+    let id = add_image_xobject(document, image);
+    xobjects.set(name, id);
+}
+
+fn add_image_xobject(document: &mut Document, image: SignatureImage) -> ObjectId {
     let mask = image.alpha.map(|alpha| document.add_object(Object::Stream(Stream::new(dictionary! {
         "Type" => "XObject", "Subtype" => "Image", "Width" => image.width as i64,
         "Height" => image.height as i64, "ColorSpace" => "DeviceGray", "BitsPerComponent" => 8,
@@ -552,8 +647,7 @@ fn add_signature_image(document: &mut Document, xobjects: &mut lopdf::Dictionary
         "Filter" => "FlateDecode",
     };
     if let Some(mask) = mask { properties.set("SMask", mask); }
-    let id = document.add_object(Object::Stream(Stream::new(properties, image.rgb)));
-    xobjects.set(name, id);
+    document.add_object(Object::Stream(Stream::new(properties, image.rgb)))
 }
 
 struct ScenePreflight {
@@ -645,12 +739,10 @@ fn inverse_matrix([a, b, c, d, e, f]: [f32; 6]) -> [f32; 6] {
         (c * f - d * e) / determinant, (b * e - a * f) / determinant]
         .map(|value| if value == 0. { 0. } else { value })
 }
-fn append_contents(original: Option<Object>, overlay: Object) -> Object {
-    match original {
-        Some(Object::Array(mut contents)) => { contents.push(overlay); Object::Array(contents) }
-        Some(contents) => Object::Array(vec![contents, overlay]),
-        None => overlay,
-    }
+fn layer_contents(behind: Option<Object>, original: Option<Object>, front: Option<Object>) -> Object {
+    let original = match original { Some(Object::Array(contents)) => contents, Some(contents) => vec![contents], None => Vec::new() };
+    let contents: Vec<Object> = behind.into_iter().chain(original).chain(front).collect();
+    if contents.len() == 1 { contents.into_iter().next().unwrap() } else { Object::Array(contents) }
 }
 
 fn value_has_tagged_marker(value: &Object) -> bool {
@@ -825,6 +917,17 @@ fn apply_overlays(doc:&mut Document, scene:&PdfScene, OverlayPlan { preflight, i
     }))).collect();
     let text = text_plan(scene).map_err(|error| error.message)?;
     let text_fonts = embed_text_fonts(doc, &text.layouts)?;
+    // Each watermark picture is embedded once and shared by every page in its range.
+    let mut pictures = HashMap::new();
+    for (origin, page) in scene.pages.iter().enumerate() {
+        for (index, o) in page.objects.iter().enumerate() {
+            if let Some(path) = o.watermark.as_ref().and_then(|options| options.logo_path.as_ref()) {
+                let image = watermark_image(path)?;
+                let size = (image.width, image.height);
+                pictures.insert((origin, index), (add_image_xobject(doc, image), size));
+            }
+        }
+    }
     let mut kids=Vec::new();
     for (page_index, page) in scene.pages.iter().enumerate() {
         let placed = &text.placed[page_index];
@@ -864,12 +967,13 @@ fn apply_overlays(doc:&mut Document, scene:&PdfScene, OverlayPlan { preflight, i
         let mut effective_xobjects = source_index.map(|index| effective_resource_entries(&doc, sources[index], b"XObject")).transpose()?.unwrap_or_default();
         let mut effective_states = source_index.map(|index| effective_resource_entries(&doc, sources[index], b"ExtGState")).transpose()?.unwrap_or_default();
         let mut xobjects=lopdf::Dictionary::new();
-        let mut content=if preserve_source_page {
+        let header=if preserve_source_page {
             let g = source_geometry.as_ref().unwrap();
             format!("q\n{}0 0 {} {} re W n\n", cm(inverse_matrix(g.matrix)), page.width, page.height)
         } else {
             format!("q\n1 0 0 -1 {} {} cm\n0 0 {} {} re W n\n",-crop.x,crop.y+crop.height,page.width,page.height)
         };
+        let mut original=String::new();
         if let (Some(index), Some(g)) = (source_index, source_geometry.as_ref()) {
             let id=sources[index];
             if (page.width-g.width).abs()>0.1 || (page.height-g.height).abs()>0.1 { return Err("Scene dimensions do not match source page".into()); }
@@ -883,22 +987,27 @@ fn apply_overlays(doc:&mut Document, scene:&PdfScene, OverlayPlan { preflight, i
                 let bytes=doc.get_page_content(id);
                 let form_id=doc.add_object(Stream::new(form,bytes));
                 xobjects.set(original_name.as_str(),form_id);
-                content.push_str(&format!("q\n{}\n/{original_name} Do\nQ\n", cm(g.matrix)));
+                original.push_str(&format!("q\n{}\n/{original_name} Do\nQ\n", cm(g.matrix)));
             }
         }
         if placed.len()>10000 { return Err("Too many scene objects".into()); }
         let mut states=lopdf::Dictionary::new();
+        let (mut behind, mut front)=(String::new(), String::new());
+        let area=crop.clone();
         for (i,key) in placed.iter().enumerate() {
             let o=&scene.pages[key.0].objects[key.1];
+            let content = if o.layer == Layer::Behind { &mut behind } else { &mut front };
             valid_rect(&o.rect)?;
             if !o.opacity.is_finite() || !(0. ..=1.).contains(&o.opacity) { return Err("Opacity must be between 0 and 1".into()); }
             if !o.font_size.is_finite() || o.font_size<=0. || o.font_size>1000. { return Err("Invalid font size".into()); }
             if o.highlight_mode.is_some() && !matches!(&o.kind, Kind::Highlight) { return Err("Highlight mode is only valid for highlight objects".into()); }
-            let rgb=rgb(&o.color)?;
+            let watermark = match o.kind { Kind::Watermark => Some(watermark_options(o).map_err(|error| error.message)?), _ => None };
+            let rgb=rgb(watermark.map_or(&o.color, |options| options.color.as_deref().unwrap_or("#000000")))?;
+            let opacity = watermark.map_or(o.opacity, |options| options.opacity as f32 / 100.);
             let state_base = format!("S{i}");
             let state_name = next_resource_name(&effective_states, "ExtGState", &state_base)?;
             effective_states.set(state_name.as_str(), Object::Null);
-            states.set(state_name.as_str(),dictionary!{"Type"=>"ExtGState","ca"=>o.opacity,"CA"=>o.opacity});
+            states.set(state_name.as_str(),dictionary!{"Type"=>"ExtGState","ca"=>opacity,"CA"=>opacity});
             let r=&o.rect;
             content.push_str(&format!("q /{state_name} gs {} {} {} rg {} {} {} RG 2 w 1 J 1 j\n",rgb[0],rgb[1],rgb[2],rgb[0],rgb[1],rgb[2]));
             match o.kind {
@@ -946,29 +1055,42 @@ fn apply_overlays(doc:&mut Document, scene:&PdfScene, OverlayPlan { preflight, i
                     content.push_str(&text_content(o, layout, &text_resources[layout.font.name], &text_fonts[layout.font.name].1));
                 },
                 Kind::Watermark=>{
-                    let (_, resource)=font_spec(o.font_family.as_deref())?;
-                    let resource = font_names.get(resource).ok_or("Scene font resource disappeared")?;
-                    let encoded=encode_text(&o.text)?;
-                    let area=page.crop.as_ref().cloned().unwrap_or(Rect{x:0.,y:0.,width:page.width,height:page.height});
-                    for (x,y,angle) in watermark_placements(&area,&o.rect,o.font_size,&o.text,o.watermark_pattern.as_ref()) {
-                        let [a, b, c, d] = scene_angle_to_pdf_text_matrix(angle);
-                        content.push_str(&format!("BT /{resource} {} Tf {} {} {} {} {} {} Tm <{encoded}> Tj ET\n",o.font_size,a,b,c,d,x,y));
+                    let options = watermark.ok_or("Watermark options disappeared")?;
+                    let layout = text.layouts.get(key);
+                    let picture = pictures.get(key).copied();
+                    let size = watermark_size(options, &area, layout, picture.map(|(_, size)| size));
+                    let mark = match (layout, picture) {
+                        (Some(layout), _) => watermark_text_content(options, size, &area, layout, &text_resources[layout.font.name], &text_fonts[layout.font.name].1),
+                        (None, Some((id, _))) => {
+                            let name = next_resource_name(&effective_xobjects, "XObject", &format!("Wm{i}"))?;
+                            effective_xobjects.set(name.as_str(), Object::Null);
+                            xobjects.set(name.as_str(), id);
+                            format!("{} 0 0 {} {} {} cm /{name} Do\n", size.0, -size.1, -size.0 / 2., size.1 / 2.)
+                        }
+                        (None, None) => return Err("Add watermark text or choose a picture.".into()),
+                    };
+                    for center in watermark_centers(&area, size, options.position, options.rotation).map_err(|error| error.message)? {
+                        content.push_str(&format!("q {}{mark}Q\n", watermark_rotation(options.rotation, center)));
                     }
                 },
             }
             content.push_str("Q\n");
         }
-        content.push_str("Q\n");
-        let stream=doc.add_object(Stream::new(dictionary!{},content.into_bytes()));
+        let resources_set = (xobjects, font_resources, states);
         if let Some(index) = source_index {
             let id = preflight.source_pages[index];
+            let (xobjects, font_resources, states) = resources_set;
             let resources = scene_resources(&doc, id, xobjects, font_resources, states)?;
             if preserve_source_page {
+                // The untouched source content stays in place, between the behind and front layers.
+                let behind = (!behind.is_empty()).then(|| Object::Reference(doc.add_object(Stream::new(dictionary!{},format!("{header}{behind}Q\n").into_bytes()))));
+                let front = (!front.is_empty()).then(|| Object::Reference(doc.add_object(Stream::new(dictionary!{},format!("{header}{front}Q\n").into_bytes()))));
                 let page_dict = doc.get_dictionary_mut(id).map_err(err)?;
                 let original_contents = page_dict.get(b"Contents").ok().cloned();
                 page_dict.set("Resources",resources);
-                page_dict.set("Contents",append_contents(original_contents,Object::Reference(stream)));
+                page_dict.set("Contents",layer_contents(behind,original_contents,front));
             } else {
+                let stream=doc.add_object(Stream::new(dictionary!{},format!("{header}{behind}{original}{front}Q\n").into_bytes()));
                 super::set_page_box_family(doc, id, [0., 0., crop.width, crop.height], false)?;
                 let page_dict = doc.get_dictionary_mut(id).map_err(err)?;
                 page_dict.set("Rotate",page.rotation.rem_euclid(360));
@@ -977,6 +1099,8 @@ fn apply_overlays(doc:&mut Document, scene:&PdfScene, OverlayPlan { preflight, i
             }
             kids.push(Object::Reference(id));
         } else {
+            let (xobjects, font_resources, states) = resources_set;
+            let stream=doc.add_object(Stream::new(dictionary!{},format!("{header}{behind}{original}{front}Q\n").into_bytes()));
             let id=doc.add_object(dictionary!{"Type"=>"Page","Parent"=>preflight.pages_root,"MediaBox"=>array(&[0.,0.,crop.width,crop.height]),"Rotate"=>page.rotation.rem_euclid(360),"Resources"=>dictionary!{"XObject"=>xobjects,"Font"=>font_resources,"ExtGState"=>states},"Contents"=>stream});
             kids.push(Object::Reference(id));
         }
@@ -1307,10 +1431,17 @@ mod tests {
         d.save(path).unwrap();
     }
     fn object(kind: Kind) -> SceneObject {
-        SceneObject { kind, rect: Rect{x:30.,y:40.,width:120.,height:40.}, text:"LOCAL".into(),font_size:18.,color:"#0066CC".into(),opacity:0.5,
+        SceneObject { rect: Rect{x:30.,y:40.,width:120.,height:40.}, text:"LOCAL".into(),font_size:18.,color:"#0066CC".into(),opacity:0.5,
             strokes:vec![vec![Point{x:0.,y:0.5},Point{x:0.5,y:0.},Point{x:1.,y:1.}]], shape:None, highlight_mode:None,
-            signature_mode:None, signature_path:None, font_family:None, watermark_pattern:None,
-            bold:false, italic:false, align:TextAlign::Left, page_range:None }
+            signature_mode:None, signature_path:None, font_family:None,
+            watermark: matches!(kind, Kind::Watermark).then(|| text_watermark("LOCAL")), layer: Layer::Front,
+            bold:false, italic:false, align:TextAlign::Left, page_range:None, kind }
+    }
+    fn text_watermark(text: &str) -> WatermarkOptions {
+        WatermarkOptions { text: Some(text.into()), logo_path: None, size: None, opacity: 30, color: Some("#0000FF".into()), position: None, rotation: 0. }
+    }
+    fn watermark_object(options: WatermarkOptions, range: Option<&str>) -> SceneObject {
+        SceneObject { rect: Rect{x:0.,y:0.,width:612.,height:792.}, watermark: Some(options), page_range: range.map(Into::into), ..object(Kind::Watermark) }
     }
     fn scene() -> PdfScene {
         PdfScene { pages:vec![
@@ -1372,7 +1503,7 @@ mod tests {
         assert_eq!(bounds(&composed,composed.get_dictionary(pages[0]).unwrap().get(b"MediaBox").unwrap()).unwrap(),[0.,0.,500.,600.]);
         assert_eq!(composed.get_dictionary(pages[1]).unwrap().get(b"Rotate").unwrap().as_i64().unwrap(),90);
         let bytes=composed.get_page_content(pages[0]); let content=String::from_utf8_lossy(&bytes);
-        assert!(content.contains("/S4 gs")); assert!(content.contains("re W n")); assert!(content.contains("<4C4F43414C>"));
+        assert!(content.contains("/S4 gs")); assert!(content.contains("re W n")); assert!(content.contains("/SceneTextNotoSansRegular 50 Tf"), "a tenth of the cropped shorter side: {content}");
         let blank=composed.get_page_content(pages[1]); assert!(!String::from_utf8_lossy(&blank).contains("/Original Do"));
         assert!(String::from_utf8_lossy(&blank).contains("/SceneTextNotoSansRegular 18 Tf"));
     }
@@ -1414,25 +1545,6 @@ mod tests {
         assert!(runs.iter().any(|run| run.text.contains("Second")), "runs: {runs:?}");
         assert!(runs.iter().all(|run| run.width.is_finite() && run.height.is_finite() && run.width > 0. && run.height > 0.));
         assert!(inspect_page(&input, 2).is_err_and(|error| error == "PDF page outside document"));
-    }
-
-    #[test]
-    fn diagonal_watermark_matrices_match_react_y_down_angles() {
-        let area = Rect { x: 0., y: 0., width: 612., height: 792. };
-        let anchor = Rect { x: 100., y: 200., width: 300., height: 80. };
-        for (pattern, expected_angle) in [
-            (WatermarkPattern::BottomRightToTopLeft, -45_f32),
-            (WatermarkPattern::TopRightToBottomLeft, 45_f32),
-        ] {
-            let placement = watermark_placements(&area, &anchor, 18., "LOCAL", Some(&pattern))[0];
-            assert_eq!(placement.2, expected_angle);
-            let [a, b, c, d] = scene_angle_to_pdf_text_matrix(placement.2);
-            let radians = expected_angle.to_radians();
-            assert!((a - radians.cos()).abs() < 0.0001);
-            assert!((-b - radians.sin()).abs() < 0.0001);
-            assert!((-c - radians.sin()).abs() < 0.0001);
-            assert!((-d - radians.cos()).abs() < 0.0001);
-        }
     }
 
     #[test]
@@ -1597,39 +1709,17 @@ mod tests {
     }
 
     #[test]
-    fn renders_shape_variants_and_fixed_watermark_patterns() {
+    fn renders_shape_variants_and_rotated_watermarks() {
         let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); fixture(&input);
         let variants=[Shape::Square,Shape::Round,Shape::Triangle,Shape::Line,Shape::DottedLine,Shape::ArrowLeft,Shape::ArrowRight,Shape::ArrowUp,Shape::ArrowDown];
         let mut objects=variants.into_iter().map(|shape| { let mut value=object(Kind::Shape); value.shape=Some(shape); value }).collect::<Vec<_>>();
-        let mut watermark=object(Kind::Watermark); watermark.watermark_pattern=Some(WatermarkPattern::CenterVertical); objects.push(watermark);
+        let mut watermark=object(Kind::Watermark); watermark.watermark.as_mut().unwrap().rotation=90.; objects.push(watermark);
         let mut model=scene(); model.pages[0].objects=objects;
         let composed=compose(&input,&model).unwrap(); let page_id=composed.get_pages().values().next().copied().unwrap();
         let content_bytes=composed.get_page_content(page_id); let content=String::from_utf8_lossy(&content_bytes);
         assert!(content.contains("[3 4] 0 d"));
-        assert!(content.contains("BT /SceneFont 18 Tf"));
+        assert!(content.contains("0 1 -1 0 "), "{content}");
         assert!(content.contains("m ")); assert!(content.contains(" h f"));
-    }
-
-    #[test]
-    fn watermark_placements_follow_moved_and_resized_rectangles() {
-        let area = Rect { x: 10., y: 20., width: 500., height: 600. };
-        let original = Rect { x: 30., y: 40., width: 120., height: 40. };
-        let moved = Rect { x: 180., y: 220., width: 120., height: 40. };
-        let resized = Rect { x: 30., y: 40., width: 240., height: 80. };
-        let patterns = [
-            WatermarkPattern::AcrossPage,
-            WatermarkPattern::BottomRightToTopLeft,
-            WatermarkPattern::TopRightToBottomLeft,
-            WatermarkPattern::CenterHorizontal,
-            WatermarkPattern::CenterVertical,
-        ];
-        for pattern in patterns {
-            let initial = watermark_placements(&area, &original, 18., "LOCAL", Some(&pattern));
-            let moved_placements = watermark_placements(&area, &moved, 18., "LOCAL", Some(&pattern));
-            let resized_placements = watermark_placements(&area, &resized, 36., "LOCAL", Some(&pattern));
-            assert_ne!(initial, moved_placements, "moving {pattern:?} did not change native placements");
-            assert_ne!(initial, resized_placements, "resizing {pattern:?} did not change native placements");
-        }
     }
 
     #[test]
@@ -1688,7 +1778,7 @@ mod tests {
             source_index: Some(0), width: 612., height: 792., rotation: 0,
             crop: Some(Rect { x: 0., y: 0., width: 500., height: 700. }),
             source_rotation: None, source_box: None,
-            objects: vec![object(Kind::Watermark), signature_object],
+            objects: vec![object(Kind::Watermark), signature_object, SceneObject { signature_mode: Some(SignatureMode::Text), ..object(Kind::Signature) }],
         }] };
 
         let composed = compose(&input, &model).unwrap();
@@ -2116,7 +2206,13 @@ mod tests {
         assert_eq!(page_range_pages("2-", 3).unwrap(), vec![1, 2]);
         assert_eq!(page_range_pages("1-99", 3).unwrap(), vec![0, 1, 2]);
         assert_eq!(page_range_pages(" 3, 1 ,1", 3).unwrap(), vec![0, 2]);
-        for range in ["", "0", "3-1", "a", "1,,2", "-2", "1-2-3"] {
+        assert_eq!(page_range_pages("all", 4).unwrap(), vec![0, 1, 2, 3]);
+        assert_eq!(page_range_pages("Odd", 5).unwrap(), vec![0, 2, 4]);
+        assert_eq!(page_range_pages("even", 5).unwrap(), vec![1, 3]);
+        assert_eq!(page_range_pages("even, 1", 4).unwrap(), vec![0, 1, 3]);
+        assert_eq!(page_range_pages("5-", 7).unwrap(), vec![4, 5, 6]);
+        assert_eq!(page_range_pages("even", 1).unwrap_err().message, "Pages even are not in this document. It has 1 page.");
+        for range in ["", "0", "3-1", "a", "1,,2", "-2", "1-2-3", "odd-2", "evens"] {
             assert_eq!(page_range_pages(range, 3).unwrap_err().kind, crate::kit::contracts::ErrorKind::InvalidInput, "{range:?}");
         }
         assert_eq!(page_range_pages("5-", 3).unwrap_err().message, "Pages 5- are not in this document. It has 3 pages.");
@@ -2130,7 +2226,7 @@ mod tests {
         for page in &pages[1..] { assert!(String::from_utf8_lossy(&doc.get_page_content(*page)).contains("/SceneTextNotoSansRegular 20 Tf")); }
 
         let mut highlight = object(Kind::Highlight); highlight.page_range = Some("1".into());
-        assert_eq!(compose(&input, &text_scene(vec![highlight])).unwrap_err(), "Only text boxes can be shown on several pages");
+        assert_eq!(compose(&input, &text_scene(vec![highlight])).unwrap_err(), "Only text boxes and watermarks can be shown on several pages");
     }
 
     #[test]
@@ -2163,5 +2259,175 @@ mod tests {
         assert_eq!((mono.name, mono.oblique), ("NotoSansMono-Bold", true));
         assert!(!font(Some("Noto Sans"), false, true).unwrap().oblique);
         assert_eq!(font(Some("Helvetica"), false, false).err().unwrap().kind, crate::kit::contracts::ErrorKind::InvalidInput);
+    }
+
+    fn page_contents(doc: &Document) -> Vec<String> {
+        doc.get_pages().values().map(|page| String::from_utf8_lossy(&doc.get_page_content(*page)).into_owned()).collect()
+    }
+    fn compose_watermark(input: &Path, object: SceneObject) -> Result<Document, String> { compose(input, &text_scene(vec![object])) }
+    fn picture(path: &Path, width: u32, height: u32) {
+        let mut image = image::RgbaImage::from_pixel(width, height, image::Rgba([200, 0, 0, 255]));
+        image.put_pixel(0, 0, image::Rgba([0, 0, 0, 0]));
+        image.save(path).unwrap();
+    }
+
+    #[test]
+    fn watermark_positions_keep_each_mark_inside_the_visible_area() {
+        let area = Rect { x: 10., y: 20., width: 600., height: 800. };
+        let at = |placement, rotation| watermark_centers(&area, (100., 20.), Some(WatermarkPosition::Placement(placement)), rotation).unwrap();
+        assert_eq!(at(WatermarkPlacement::Center, 0.), vec![(310., 420.)]);
+        assert_eq!(at(WatermarkPlacement::TopLeft, 0.), vec![(84., 54.)]);
+        assert_eq!(at(WatermarkPlacement::TopRight, 0.), vec![(536., 54.)]);
+        assert_eq!(at(WatermarkPlacement::BottomLeft, 0.), vec![(84., 786.)]);
+        assert_eq!(at(WatermarkPlacement::BottomRight, 0.), vec![(536., 786.)]);
+        let [(x, y)] = at(WatermarkPlacement::TopLeft, 90.)[..] else { panic!() };
+        assert!((x - 44.).abs() < 0.001 && (y - 94.).abs() < 0.001, "a quarter turn swaps the corner box: {x} {y}");
+        assert_eq!(watermark_centers(&area, (100., 20.), Some(WatermarkPosition::Offset { x: 5, y: 7 }), 0.).unwrap(), vec![(65., 37.)]);
+        assert_eq!(watermark_centers(&area, (100., 20.), None, 0.).unwrap(), vec![(310., 420.)]);
+
+        let tiles = at(WatermarkPlacement::Tile, -35.);
+        assert!(tiles.contains(&(310., 420.)));
+        for corner in [(10., 20.), (610., 20.), (10., 820.), (610., 820.)] {
+            assert!(tiles.iter().any(|(x, y)| (x - corner.0).abs() < 140. && (y - corner.1).abs() < 140.), "tiles must cover {corner:?}");
+        }
+        let error = watermark_centers(&area, (0.5, 0.5), Some(WatermarkPosition::Placement(WatermarkPlacement::Tile)), 0.).unwrap_err();
+        assert_eq!(error.message, "The watermark is too small to tile across this page. Make it larger.");
+    }
+
+    #[test]
+    fn legacy_patterns_map_to_clockwise_rotation_matrices() {
+        let matrix = |rotation| watermark_rotation(rotation, (1., 2.));
+        assert_eq!(matrix(0.), "1 0 0 1 1 2 cm\n");
+        assert_eq!(matrix(90.), "0 1 -1 0 1 2 cm\n");
+        // Scene space points down, so −45° rises from bottom left to top right.
+        let rising: Vec<f32> = matrix(-45.).split(' ').take(4).map(|value| value.parse().unwrap()).collect();
+        assert!(rising[0] > 0.7 && rising[1] < -0.7 && rising[2] > 0.7 && rising[3] > 0.7, "{rising:?}");
+        let falling: Vec<f32> = matrix(45.).split(' ').take(4).map(|value| value.parse().unwrap()).collect();
+        assert!(falling[1] > 0.7, "{falling:?}");
+    }
+
+    #[test]
+    fn text_watermarks_use_every_shared_option() {
+        let temp = TempDir::new().unwrap(); let input = temp.0.join("source.pdf"); page_text_fixture(&input);
+        let options = WatermarkOptions { size: Some(0.2), rotation: -35., position: Some(WatermarkPosition::Placement(WatermarkPlacement::Tile)), ..text_watermark("DRAFT") };
+        let mut object = watermark_object(options, None); object.font_family = Some("Noto Serif".into()); object.bold = true;
+        let doc = compose_watermark(&input, object).unwrap();
+        let content = &page_contents(&doc)[0];
+        assert!(content.contains("0 0 1 rg"), "colour: {content}");
+        assert!(content.contains(&format!("/SceneTextNotoSerifBold {} Tf", 0.2 * 612.)), "size is a fraction of the shorter side: {content}");
+        assert!(content.matches(" Tj").count() > 4, "tile repeats the mark: {content}");
+        let resources = doc.get_dictionary(doc.get_pages()[&1]).unwrap().get(b"Resources").unwrap().as_dict().unwrap();
+        let states = resources.get(b"ExtGState").unwrap().as_dict().unwrap();
+        assert!(states.iter().any(|(_, state)| state.as_dict().is_ok_and(|state| state.get(b"ca").and_then(Object::as_float).ok() == Some(0.3))), "opacity: {states:?}");
+        assert!(content.contains("1 0 0 -1 "), "text must stay upright in the flipped page space: {content}");
+    }
+
+    #[test]
+    fn watermarks_apply_to_all_odd_even_and_clamped_ranges_once() {
+        let temp = TempDir::new().unwrap(); let input = temp.0.join("source.pdf"); page_text_fixture(&input);
+        let source = Document::load(&input).unwrap();
+        let source_second = source.get_page_content(source.get_pages()[&2]);
+        for (range, expected) in [(None, [true, false, false]), (Some("all"), [true, true, true]), (Some("odd"), [true, false, true]),
+            (Some("even"), [false, true, false]), (Some("2-9"), [false, true, true]), (Some("3-"), [false, false, true])] {
+            let doc = compose_watermark(&input, watermark_object(text_watermark("DRAFT"), range)).unwrap();
+            let contents = page_contents(&doc);
+            for (index, marked) in expected.into_iter().enumerate() {
+                assert_eq!(contents[index].contains("/SceneTextNotoSansRegular"), marked, "{range:?} page {}", index + 1);
+            }
+            if !expected[1] { assert_eq!(doc.get_page_content(doc.get_pages()[&2]), source_second, "{range:?} must leave page 2 untouched"); }
+        }
+        assert_eq!(compose_watermark(&input, watermark_object(text_watermark("DRAFT"), Some("5-"))).unwrap_err(), "Pages 5- are not in this document. It has 3 pages.");
+    }
+
+    #[test]
+    fn watermark_layers_draw_behind_or_in_front_of_page_content() {
+        let temp = TempDir::new().unwrap(); let input = temp.0.join("source.pdf"); page_text_fixture(&input);
+        for (layer, behind) in [(Layer::Behind, true), (Layer::Front, false)] {
+            let doc = compose_watermark(&input, SceneObject { layer, ..watermark_object(text_watermark("DRAFT"), Some("all")) }).unwrap();
+            let content = &page_contents(&doc)[0];
+            let (mark, original) = (content.find(" Tj").unwrap(), content.find("(First page text)").unwrap());
+            assert_eq!(mark < original, behind, "{layer:?}: {content}");
+        }
+        let temp = TempDir::new().unwrap(); let cropped = temp.0.join("cropped.pdf"); fixture(&cropped);
+        let mut model = scene();
+        model.pages[0].objects = vec![SceneObject { layer: Layer::Behind, ..watermark_object(text_watermark("DRAFT"), None) }];
+        let content = page_contents(&compose(&cropped, &model).unwrap())[0].clone();
+        assert!(content.find(" Tj").unwrap() < content.find("/Original Do").unwrap(), "{content}");
+    }
+
+    #[test]
+    fn picture_watermarks_embed_once_and_keep_transparency() {
+        let temp = TempDir::new().unwrap(); let input = temp.0.join("source.pdf"); page_text_fixture(&input);
+        let png = temp.0.join("logo.png"); picture(&png, 40, 20);
+        let options = WatermarkOptions { text: None, logo_path: Some(png), color: None, size: Some(0.25), position: Some(WatermarkPosition::Placement(WatermarkPlacement::BottomRight)), ..text_watermark("") };
+        let doc = compose_watermark(&input, watermark_object(options.clone(), Some("all"))).unwrap();
+        let images: Vec<_> = doc.objects.iter().filter(|(_, value)| value.as_stream().is_ok_and(|stream| stream.dict.get(b"Subtype").ok().and_then(|v| v.as_name().ok()) == Some(b"Image") && stream.dict.has(b"SMask"))).map(|(id, _)| *id).collect();
+        assert_eq!(images.len(), 1, "the picture is embedded once");
+        let height = 0.25 * 612.;
+        for (index, page) in doc.get_pages().values().enumerate() {
+            let content = String::from_utf8_lossy(&doc.get_page_content(*page)).into_owned();
+            assert!(content.contains(&format!("{} 0 0 {} {} {} cm /Wm0 Do", height * 2., -height, -height, height / 2.)), "page {index}: {content}");
+            let resources = doc.get_dictionary(*page).unwrap().get(b"Resources").unwrap().as_dict().unwrap();
+            assert_eq!(resources.get(b"XObject").unwrap().as_dict().unwrap().get(b"Wm0").unwrap().as_reference().unwrap(), images[0]);
+        }
+
+        let jpg = temp.0.join("logo.jpg");
+        image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(30, 30, image::Rgba([0, 0, 200, 255]))).to_rgb8().save(&jpg).unwrap();
+        let options = WatermarkOptions { text: None, logo_path: Some(jpg), color: None, ..text_watermark("") };
+        let content = page_contents(&compose_watermark(&input, watermark_object(options, None)).unwrap())[0].clone();
+        assert!(content.contains("30 0 0 -30 -15 15 cm /Wm0 Do"), "without a size a picture keeps its legacy size: {content}");
+
+        let both = WatermarkOptions { text: Some("DRAFT".into()), color: None, ..options_with_logo(&temp) };
+        assert_eq!(compose_watermark(&input, watermark_object(both, None)).unwrap_err(), "Choose text or a picture for the watermark, not both.");
+        let none = SceneObject { watermark: None, ..object(Kind::Watermark) };
+        assert_eq!(compose_watermark(&input, none).unwrap_err(), "Add watermark text or choose a picture.");
+    }
+    fn options_with_logo(temp: &TempDir) -> WatermarkOptions {
+        let png = temp.0.join("small.png"); picture(&png, 4, 4);
+        WatermarkOptions { text: None, logo_path: Some(png), color: None, ..text_watermark("") }
+    }
+
+    #[test]
+    fn oversized_or_unsupported_watermark_pictures_are_refused_before_output() {
+        let temp = TempDir::new().unwrap(); let input = temp.0.join("source.pdf"); page_text_fixture(&input);
+        let huge = temp.0.join("huge.png"); fs::write(&huge, crate::kit::common::limits::fixtures::png_header(5000, 5000)).unwrap();
+        let error = check_watermark_image(&huge).unwrap_err();
+        assert_eq!(error.kind, crate::kit::contracts::ErrorKind::LimitExceeded { limit: LimitKind::Decompression });
+        assert_eq!(error.message, "This picture is larger than 20 megapixels, the limit for a watermark. Use a smaller picture.");
+        assert!(check_watermark_image(&{ let path = temp.0.join("edge.png"); fs::write(&path, crate::kit::common::limits::fixtures::png_header(5000, 4000)).unwrap(); path }).is_ok());
+
+        let heavy = temp.0.join("heavy.png");
+        fs::File::create(&heavy).unwrap().set_len(250 * 1024 * 1024 + 1).unwrap();
+        let error = check_watermark_image(&heavy).unwrap_err();
+        assert_eq!(error.kind, crate::kit::contracts::ErrorKind::LimitExceeded { limit: LimitKind::FileSize });
+        assert_eq!(inspect_watermark_image(&heavy).unwrap_err(), error.message);
+        fs::remove_file(&heavy).unwrap();
+
+        let webp = temp.0.join("logo.webp");
+        image::RgbaImage::from_pixel(4, 4, image::Rgba([0, 0, 0, 255])).save(&webp).unwrap();
+        assert_eq!(check_watermark_image(&webp).unwrap_err().message, "Choose a PNG or JPG picture for the watermark.");
+
+        let options = WatermarkOptions { text: None, logo_path: Some(huge), color: None, ..text_watermark("") };
+        let before = fs::read_dir(&temp.0).unwrap().count();
+        let outcome = export_text(&input, text_scene(vec![watermark_object(options, Some("all"))]));
+        assert_eq!(outcome.error().unwrap().kind, crate::kit::contracts::ErrorKind::LimitExceeded { limit: LimitKind::Decompression });
+        assert_eq!(fs::read_dir(&temp.0).unwrap().count(), before, "nothing is written");
+        let small = check_watermark_image(&options_with_logo(&temp).logo_path.unwrap()).unwrap();
+        assert_eq!((small.width, small.height), (4, 4));
+    }
+
+    #[test]
+    fn watermark_exports_are_byte_identical_across_runs() {
+        let temp = TempDir::new().unwrap(); let input = temp.0.join("source.pdf"); page_text_fixture(&input);
+        let objects = || vec![
+            watermark_object(WatermarkOptions { rotation: -35., position: Some(WatermarkPosition::Placement(WatermarkPlacement::Tile)), ..text_watermark("CONFIDENTIAL") }, Some("odd")),
+            SceneObject { layer: Layer::Behind, ..watermark_object(options_with_logo(&temp), Some("all")) },
+        ];
+        let first = export_text(&input, text_scene(objects()));
+        let second = export_text(&input, text_scene(objects()));
+        assert!(first.error().is_none() && second.error().is_none(), "{:?} {:?}", first.error(), second.error());
+        assert_ne!(first.output_paths()[0], second.output_paths()[0]);
+        assert_eq!(fs::read(&first.output_paths()[0]).unwrap(), fs::read(&second.output_paths()[0]).unwrap());
+        assert_eq!(fs::read(&input).unwrap(), { let mut fresh = temp.0.join("fresh.pdf"); page_text_fixture(&fresh); let bytes = fs::read(&fresh).unwrap(); fresh.pop(); bytes }, "the original is not modified");
     }
 }

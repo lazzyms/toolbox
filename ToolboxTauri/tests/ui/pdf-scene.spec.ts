@@ -35,6 +35,10 @@ test.beforeEach(async ({ page }) => {
           if (w.previewDelay) await new Promise(resolve => setTimeout(resolve, w.previewDelay));
           return args.request.pageIndices.map((pageIndex: number) => ({ pageIndex, preview: { dataUrl: svg, width: 612, height: 792 } }));
         }
+        if (command === 'inspect_pdf_watermark_image') {
+          if (args.request.path.includes('huge')) throw 'This picture is larger than 20 megapixels, the limit for a watermark. Use a smaller picture.';
+          return { width: 400, height: 200 };
+        }
         if (command === 'export_pdf_scene') return [{ inputPath: '/local/scene-fixture.pdf', outputPaths: ['/local/scene-fixture-edited-1.pdf'], state: 'succeeded', detail: 'PDF scene exported', failure: null, reason: null, warnings: [] }];
         return null;
       },
@@ -349,19 +353,19 @@ test('new text and watermark markup use native colors so Export PDF enables', as
   await openEditor(page);
   await draw(page, 'Text', .3);
   await page.getByRole('button', { name: 'Watermark', exact: true }).click();
-  await page.getByRole('button', { name: 'Add fixed watermark', exact: true }).click();
+  await page.getByRole('button', { name: 'Add watermark', exact: true }).click();
   await expect(page.locator('.scene-object-hit')).toHaveCount(2);
   await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeEnabled();
   await expect(page.getByText(/Preview could not be verified/)).toHaveCount(0);
   const result = await exported(page);
-  expect(result.pages[0].objects.map((o: any) => [o.kind, o.color])).toEqual([['text', '#1b1b1b'], ['watermark', '#1b1b1b']]);
+  expect(result.pages[0].objects.map((o: any) => [o.kind, o.color, o.watermark?.color])).toEqual([['text', '#1b1b1b', undefined], ['watermark', '#c62828', '#c62828']]);
 });
 
 test('scene composes every mark kind, moves and resizes, then exports once', async ({ page }) => {
   await openEditor(page);
   for (const [i, name] of ['Text', 'Highlight', 'Shape', 'Signature'].entries()) await draw(page, name, .15 + i * .14);
   await page.getByRole('button', { name: 'Watermark', exact: true }).click();
-  await page.getByRole('button', { name: 'Add fixed watermark', exact: true }).click();
+  await page.getByRole('button', { name: 'Add watermark', exact: true }).click();
   await expect(page.locator('.scene-object-hit')).toHaveCount(5);
   await page.getByRole('button', { name: 'Select', exact: true }).click();
   const text = page.getByRole('button', { name: 'text object 1', exact: true });
@@ -663,4 +667,111 @@ test('unrenderable text names the characters and keeps Export disabled', async (
   await page.getByRole('textbox', { name: 'Text box text' }).press('Control+Enter');
   await expect(page.getByRole('alert')).toHaveText('Preview could not be verified. Noto Sans can’t show these characters: “😀” (U+1F600), “आ” (U+0906). Remove them to export this text box. Export is disabled until the preview can be verified.');
   await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeDisabled();
+});
+
+// Mirrors WatermarkOptions in src/contracts.ts, shared with Edit Image.
+const sharedWatermarkOptions = ['text', 'logoPath', 'size', 'opacity', 'color', 'position', 'rotation'];
+const watermarkHit = (page: Page) => page.getByRole('button', { name: /^Watermark / });
+async function previewScene(page: Page) {
+  return page.evaluate(() => (window as any).calls.filter((c: any) => c.command === 'preview_pdf_scene_pages').at(-1).args.request.scene);
+}
+
+test('a watermark is stored once with its range and every shared option, and sent unchanged to preview and export', async ({ page }) => {
+  await openEditor(page);
+  await page.getByRole('button', { name: 'Watermark', exact: true }).click();
+  await expect(page.getByRole('slider', { name: 'Object opacity' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Add watermark', exact: true }).click();
+  await expect(page.getByText('Watermark added to all 3 pages.')).toBeVisible();
+  await page.getByRole('textbox', { name: 'Text', exact: true }).fill('PRIVATE');
+  await page.getByRole('combobox', { name: 'Font' }).selectOption('Noto Serif|bold');
+  await page.locator('#scene-watermark-color').fill('#0000ff');
+  await page.getByRole('slider', { name: 'Opacity' }).focus();
+  await page.keyboard.press('End');
+  await page.getByRole('combobox', { name: 'Angle' }).selectOption('custom');
+  await page.getByRole('spinbutton', { name: 'Degrees' }).fill('30');
+  await page.getByRole('combobox', { name: 'Position' }).selectOption('tile');
+  await page.getByRole('combobox', { name: 'Size' }).selectOption('0.2');
+  await page.getByRole('radio', { name: 'Above content' }).click();
+  await page.getByRole('radio', { name: 'Skip the first page' }).click();
+  await expect(page.getByText('Watermark added to 2 of 3 pages.')).toBeVisible();
+  await expect(watermarkHit(page)).toHaveCount(0);
+  await expect.poll(async () => (await previewScene(page)).pages[0].objects[0]?.pageRange).toBe('2-');
+  await page.getByRole('radio', { name: 'These pages' }).click();
+  const pages = page.getByRole('textbox', { name: 'Pages to include' });
+  await pages.fill('2-9');
+  await pages.press('Enter');
+  await expect(page.getByText('Watermark added to 2 of 3 pages.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeEnabled();
+  const expected = {
+    kind: 'watermark', fontFamily: 'Noto Serif', bold: true, layer: 'front', pageRange: '2-9',
+    watermark: { text: 'PRIVATE', opacity: 100, color: '#0000ff', position: 'tile', rotation: 30, size: 0.2 },
+  };
+  for (const scene of [await previewScene(page), await exported(page)]) {
+    expect(scene.pages[0].objects).toHaveLength(1);
+    expect(scene.pages[0].objects[0]).toMatchObject(expected);
+    expect(scene.pages[0].objects[0].rect).toEqual({ x: 0, y: 0, width: 612, height: 792 });
+    expect(scene.pages.slice(1).map((item: any) => item.objects)).toEqual([[], []]);
+    expect(Object.keys(scene.pages[0].objects[0].watermark).every((key) => sharedWatermarkOptions.includes(key))).toBe(true);
+  }
+});
+
+test('a range-applied watermark shows and edits on every affected page only', async ({ page }) => {
+  await openEditor(page);
+  await page.getByRole('button', { name: 'Watermark', exact: true }).click();
+  await page.getByRole('button', { name: 'Add watermark', exact: true }).click();
+  await page.getByRole('radio', { name: 'These pages' }).click();
+  const pages = page.getByRole('textbox', { name: 'Pages to include' });
+  await pages.fill('odd-2');
+  await pages.press('Enter');
+  await expect(page.getByRole('alert')).toHaveText('“odd-2” is not a page list. Use page numbers and ranges like 1-3, 7, 10-, or all, odd or even.');
+  await pages.fill('odd');
+  await pages.press('Enter');
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Page 1', exact: true })).toContainText('1 marks');
+  await expect(page.getByRole('button', { name: 'Page 2', exact: true })).not.toContainText('marks');
+  await expect(page.getByRole('button', { name: 'Page 3', exact: true })).toContainText('1 marks');
+  await page.getByRole('button', { name: 'Page 2', exact: true }).click();
+  await expect(watermarkHit(page)).toHaveCount(0);
+  await page.evaluate(() => { (window as any).previewDelay = 60_000; });
+  await page.getByRole('button', { name: 'Page 3', exact: true }).click();
+  await expect(watermarkHit(page)).toHaveCount(1);
+  await watermarkHit(page).focus();
+  await page.getByRole('textbox', { name: 'Text', exact: true }).fill('COPY');
+  // The draft follows the shared placement geometry until the rendered preview is ready.
+  await expect(page.locator('.scene-canvas text', { hasText: 'COPY' })).toHaveCount(1);
+  await page.evaluate(() => { (window as any).previewDelay = 0; });
+  await page.getByRole('button', { name: 'Page 2', exact: true }).click();
+  const scene = await exported(page);
+  expect(scene.pages[0].objects).toHaveLength(1);
+  expect(scene.pages[0].objects[0]).toMatchObject({ pageRange: 'odd', watermark: { text: 'COPY' } });
+  expect(scene.pages[2].objects).toEqual([]);
+  await page.getByRole('button', { name: 'Page 3', exact: true }).click();
+  await watermarkHit(page).focus();
+  await page.keyboard.press('Shift+ArrowRight');
+  const moved = (await exported(page)).pages[0].objects[0].watermark.position;
+  expect(moved).toEqual({ x: expect.any(Number), y: expect.any(Number) });
+  await watermarkHit(page).focus();
+  await page.keyboard.press('Delete');
+  await expect(watermarkHit(page)).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Page 1', exact: true })).not.toContainText('marks');
+});
+
+test('a picture watermark replaces the text options and an oversized picture is refused before placement', async ({ page }) => {
+  await openEditor(page);
+  await page.getByRole('button', { name: 'Watermark', exact: true }).click();
+  await page.getByRole('button', { name: 'Add watermark', exact: true }).click();
+  await page.evaluate(() => { (window as any).dialogNext = '/local/huge.png'; });
+  await page.getByRole('radio', { name: 'Picture' }).click();
+  await expect(page.getByRole('alert')).toHaveText('This picture is larger than 20 megapixels, the limit for a watermark. Use a smaller picture.');
+  await expect(page.getByRole('radio', { name: 'Text' })).toHaveAttribute('aria-checked', 'true');
+  await expect.poll(async () => { const options = (await previewScene(page)).pages[0].objects[0]?.watermark; return [options?.text, options?.logoPath]; }).toEqual(['DRAFT', undefined]);
+  await page.evaluate(() => { (window as any).dialogNext = '/local/logo.png'; });
+  await page.getByRole('radio', { name: 'Picture' }).click();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await expect(page.getByRole('combobox', { name: 'Size' })).toHaveValue('original');
+  await expect(page.getByRole('textbox', { name: 'Text', exact: true })).toHaveCount(0);
+  const watermark = (await exported(page)).pages[0].objects[0];
+  expect(watermark.watermark).toEqual({ logoPath: '/local/logo.png', opacity: 18, position: 'center', rotation: -45 });
+  expect(watermark.watermarkImageSize).toEqual({ width: 400, height: 200 });
+  expect(await page.evaluate(() => (window as any).calls.filter((c: any) => c.command === 'inspect_pdf_watermark_image').map((c: any) => c.args.request.path))).toEqual(['/local/huge.png', '/local/logo.png']);
 });

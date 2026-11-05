@@ -197,24 +197,25 @@ test('typed signature property keeps focus for every character', async ({ page }
   await expect(input).toHaveValue('A. Local');
 });
 
-test('watermarks stay fixed and expose font size as a dropdown', async ({ page }) => {
+test('watermarks keep their own colour and opacity, ignore drags and map legacy patterns to angles', async ({ page }) => {
   await openEditor(page);
   await page.getByRole('button', { name: 'Watermark', exact: true }).click();
-  await expect(page.locator('input[type="color"][aria-label="Object color"]')).toBeVisible();
-  await expect(page.getByRole('slider', { name: 'Object opacity' })).toBeVisible();
-  await page.getByRole('textbox', { name: 'Watermark text' }).fill('PRIVATE');
-  await page.getByRole('combobox', { name: 'Watermark pattern' }).selectOption('bottom-right-to-top-left');
-  await page.getByRole('button', { name: 'Add fixed watermark', exact: true }).click();
-  const watermark = page.getByRole('button', { name: 'watermark object 1', exact: true });
+  await expect(page.locator('input[type="color"][aria-label="Object color"]')).toHaveCount(0);
+  await expect(page.getByRole('slider', { name: 'Object opacity' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Add watermark', exact: true }).click();
+  await expect(page.getByRole('combobox', { name: 'Angle' })).toHaveValue('rising');
+  await expect(page.getByRole('combobox', { name: 'Position' })).toHaveValue('center');
+  await expect(page.getByRole('radio', { name: 'Behind content' })).toHaveAttribute('aria-checked', 'true');
+  await expect(page.getByRole('radio', { name: 'All 1 page', exact: true })).toBeChecked();
+  const watermark = page.getByRole('button', { name: /^Watermark DRAFT/ });
   await watermark.focus();
-  await expect(page.getByRole('button', { name: 'Resize watermark se', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /^Resize watermark/ })).toHaveCount(0);
   const before = await sceneFromExport(page);
   const box = (await watermark.boundingBox())!;
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await page.mouse.down(); await page.mouse.move(box.x + 100, box.y + 50, { steps: 5 }); await page.mouse.up();
-  const afterDrag = await sceneFromExport(page);
-  expect(afterDrag.pages[0].objects[0].rect).toEqual(before.pages[0].objects[0].rect);
-  await page.getByRole('combobox', { name: 'Watermark font size' }).selectOption('72');
+  expect((await sceneFromExport(page)).pages[0].objects[0]).toEqual(before.pages[0].objects[0]);
+  await page.getByRole('combobox', { name: 'Angle' }).selectOption('falling');
   const scene = await sceneFromExport(page);
-  expect(scene.pages[0].objects[0]).toMatchObject({ kind: 'watermark', text: 'PRIVATE', watermarkPattern: 'bottom-right-to-top-left', fontSize: 72 });
-  expect(scene.pages[0].objects[0].rect).toEqual(before.pages[0].objects[0].rect);
+  expect(scene.pages[0].objects[0]).toMatchObject({ kind: 'watermark', layer: 'behind', pageRange: 'all', watermark: { text: 'DRAFT', opacity: 18, position: 'center', rotation: 45 } });
+  await expect(page.getByRole('radio', { name: 'Skip the first page' })).toBeDisabled();
 });
