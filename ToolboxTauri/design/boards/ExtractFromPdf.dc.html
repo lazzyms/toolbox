@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Extract from PDF</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+.tb{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;font-size:13px;line-height:1.45;color:var(--fg);background:var(--bg);-webkit-font-smoothing:antialiased;position:relative}
+.tb.dark{--bg:#0a0a0a;--side:#111111;--panel:#0f0f0f;--raise:#1c1c1c;--fg:#fafafa;--mut:#a3a3a3;--faint:#8a8a8a;--line:rgba(255,255,255,.08);--line2:rgba(255,255,255,.16);--sel:#262626;--pri:#ebebeb;--prifg:#171717;--bad:#ff6b6b;--warn:#f2b552;--ring:#a3a3a3;--scrim:rgba(0,0,0,.6);--seg-ok:#d4d4d4;--seg-wait:#2a2a2a}
+.tb.light{--bg:#ffffff;--side:#f7f7f7;--panel:#fcfcfc;--raise:#f2f2f2;--fg:#0a0a0a;--mut:#525252;--faint:#666666;--line:#e8e8e8;--line2:#d4d4d4;--sel:#ebebeb;--pri:#171717;--prifg:#fafafa;--bad:#c10007;--warn:#9a5800;--ring:#525252;--scrim:rgba(0,0,0,.28);--seg-ok:#262626;--seg-wait:#e5e5e5}
+.tb button,.tb input,.tb select{font:inherit;color:inherit}
+.btn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:7px;border:1px solid var(--line2);background:var(--raise);color:var(--fg);font-weight:500;cursor:pointer;white-space:nowrap;box-sizing:border-box;text-decoration:none}
+.btn.pri{background:var(--pri);color:var(--prifg);border-color:transparent}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--mut)}
+.btn.sm{height:26px;padding:0 9px;font-size:12px}
+.btn[disabled]{opacity:.45;cursor:default}
+.btn.ghost.link{color:var(--fg)}
+.kbd{font-size:11px;line-height:16px;padding:0 5px;border-radius:4px;border:1px solid var(--line2);color:var(--mut);font-weight:500}
+.btn.pri .kbd{border-color:currentColor;color:inherit;opacity:.6}
+.nav{display:flex;align-items:center;gap:9px;min-height:30px;padding:0 10px;border-radius:7px;color:var(--mut);text-decoration:none;border:0;background:none;width:100%;text-align:left;cursor:pointer;box-sizing:border-box}
+.nav.on{background:var(--sel);color:var(--fg);font-weight:500}
+.rh{padding:12px 10px 4px;font-size:11px;font-weight:600;color:var(--faint)}
+.field{height:30px;border-radius:7px;border:1px solid var(--line2);background:var(--bg);padding:0 10px;width:100%;box-sizing:border-box;min-width:0}
+.field[aria-invalid=true]{border-color:var(--bad)}
+.lbl{font-size:12px;font-weight:600}
+.hint{font-size:12px;color:var(--mut)}
+.row{display:grid;grid-template-columns:20px minmax(0,1fr) 72px 170px;gap:12px;align-items:center;padding:7px 20px;border-bottom:1px solid var(--line)}
+.rrow{display:grid;grid-template-columns:20px minmax(0,1fr) 120px;gap:12px;align-items:center;padding:7px 20px;border-bottom:1px solid var(--line);min-height:34px}
+.badge{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:999px;border:1px solid var(--line2);font-size:12px;color:var(--fg);white-space:nowrap}
+svg.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.tb :focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+a{color:inherit}a:hover{color:var(--mut)}
+.seg{display:inline-flex;padding:2px;border-radius:8px;background:var(--raise);border:1px solid var(--line)}
+.seg button{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border:0;border-radius:6px;background:none;cursor:pointer;color:var(--mut);font-weight:500}
+.seg button[aria-checked=true]{background:var(--bg);color:var(--fg);box-shadow:0 1px 2px rgba(0,0,0,.25)}
+.seg.wide{display:flex}.seg.wide button{flex:1;justify-content:center}
+.note{display:flex;gap:8px;align-items:flex-start;padding:10px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--raise)}
+.opt{display:flex;flex-direction:column;gap:6px}
+fieldset.opt{border:0;margin:0;padding:0}fieldset.opt legend{padding:0;margin-bottom:6px}
+.chk{display:flex;gap:8px;align-items:flex-start}
+.chk input{margin:2px 0 0}
+.flag{display:flex;gap:10px;align-items:center;margin:0 20px 10px;padding:8px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--raise)}
+.drop{flex:1;margin:20px;border:1.5px dashed var(--line2);border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;text-align:center;padding:32px}
+.bar{height:6px;border-radius:3px;background:var(--seg-wait);overflow:hidden;display:flex}.bar span{background:var(--seg-ok)}
+.minibar{height:4px;border-radius:2px;background:var(--seg-wait);overflow:hidden;display:flex;margin-top:4px}.minibar span{background:var(--seg-ok)}
+.dest{border-top:1px solid var(--line);padding-top:16px;display:flex;flex-direction:column;gap:8px}
+.ex{display:flex;flex-direction:column;gap:3px;padding:10px 12px;border-radius:8px;background:var(--raise)}
+.ex .ln{display:flex;align-items:center;gap:6px;min-width:0}
+.ex .ln span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.link{align-self:flex-start;padding:0;height:24px;color:var(--fg);text-decoration:underline;text-underline-offset:3px}
+.est{display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;margin:0}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.err{font-size:12px;color:var(--bad);display:flex;gap:6px;align-items:center}
+.modeopts{display:flex;flex-direction:column;gap:8px}
+.num{display:flex;align-items:center;gap:8px;padding-left:24px}
+.tag{display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:999px;border:1px solid var(--line2);font-size:11px;color:var(--mut);white-space:nowrap}
+footer .btn{flex:none}
+</style>
+</helmet>
+<div class="{{themeClass}}" style="min-height: 800px; height: 800px; overflow: hidden; display: flex">
+<aside aria-label="PDF Conversion" style="flex: 1 1 220px; max-width: 232px; background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; padding: 14px 10px; box-sizing: border-box">
+<a class="nav" href="Main.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M5 12l6 6M5 12l6-6"></path></svg>All tools</a>
+<div style="padding: 16px 10px 2px; font-size: 12px; font-weight: 600; color: var(--faint)">PDF Conversion</div>
+<nav aria-label="PDF Conversion tools" style="display: flex; flex-direction: column; gap: 2px"><sc-for list="{{railGroups}}" as="g" hint-placeholder-count="3"><div role="group" aria-labelledby="{{g.id}}" style="display: flex; flex-direction: column; gap: 2px"><div id="{{g.id}}" class="rh">{{g.title}}</div><sc-for list="{{g.items}}" as="it" hint-placeholder-count="3"><button class="{{it.cls}}" aria-pressed="{{it.pressed}}" tabindex="{{it.tab}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="{{it.d}}"></path></svg>{{it.name}}</button></sc-for></div></sc-for></nav>
+<div style="flex: 1"></div>
+<a class="nav" href="Settings.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"></path></svg>Settings<span class="kbd" style="margin-left: auto">{{settingsKey}}</span></a>
+<p class="hint" style="margin: 0; padding: 10px 10px 0">Files stay on this device.</p>
+</aside>
+<div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+<header style="min-height: 52px; display: flex; align-items: center; gap: 14px; padding: 0 20px; border-bottom: 1px solid var(--line); flex-wrap: wrap">
+<h1 style="margin: 0; font-size: 15px; font-weight: 600">Extract from PDF</h1>
+<span class="hint">Save the text, the images, or both from each PDF.</span>
+<div style="flex: 1"></div>
+<button class="btn ghost"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"></circle><path d="M21 21l-6-6"></path></svg>Find a tool<span class="kbd">{{findKey}}</span></button>
+</header>
+<div style="flex: 1; display: flex; min-height: 0">
+
+<sc-if value="{{isEmpty}}" hint-placeholder-val="{{ false }}"><section aria-label="PDFs" style="flex: 999 1 480px; min-width: 0; display: flex; flex-direction: column">
+<div class="drop"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 28px; height: 28px; color: var(--mut)"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"></path></svg>
+<strong style="font-size: 15px">Drop PDFs here</strong>
+<span class="hint">Drag them from {{finder}}, or open several at once.</span>
+<button class="btn pri"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14"></path></svg>Open PDFs<span class="kbd">{{openKey}}</span></button>
+<span class="hint">Accepts PDF. Saves a text file, a folder of images, or both, for each PDF.</span>
+</div>
+</section></sc-if>
+
+<sc-if value="{{isList}}" hint-placeholder-val="{{ true }}"><section aria-label="PDFs" style="flex: 999 1 480px; min-width: 0; display: flex; flex-direction: column">
+<div style="display: flex; align-items: center; gap: 8px; padding: 12px 20px; flex-wrap: wrap"><strong style="font-size: 13px">7 PDFs, 118 pages, 1 locked</strong><div style="flex: 1"></div><button class="btn sm"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14"></path></svg>Add PDFs<span class="kbd">{{openKey}}</span></button><button class="btn sm ghost">Clear list</button></div>
+<sc-if value="{{showDocx}}" hint-placeholder-val="{{ true }}"><div class="flag" role="note"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><circle cx="12" cy="12" r="9"></circle><path d="M8.5 12h7"></path></svg><span style="flex: 1"><strong style="font-weight: 500">quarterly-report.docx wasn't added.</strong> <span class="hint">Extract from PDF takes PDFs. Convert to PDF makes one first.</span></span><button class="btn sm ghost" aria-label="Dismiss note about quarterly-report.docx">Dismiss</button></div></sc-if>
+<p role="status" aria-live="polite" class="hint" style="margin: 0; padding: 0 20px 10px">{{listStatus}}</p>
+<div class="row hint" aria-hidden="true" style="padding-top: 6px; padding-bottom: 6px; border-top: 1px solid var(--line)"><span></span><span>Name</span><span style="text-align: right">{{pagesHead}}</span><span>Status</span></div>
+<ul aria-label="PDFs to extract from" style="list-style: none; margin: 0; padding: 0; overflow: auto"><sc-for list="{{rows}}" as="r" hint-placeholder-count="7"><li class="row" aria-label="{{r.label}}">
+<span style="color: {{r.color}}; display: flex"><sc-if value="{{r.isFile}}" hint-placeholder-val="{{ true }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><path d="M14 3v5h5M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"></path></svg></sc-if><sc-if value="{{r.isWarn}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9.5 17h-19z"></path><path d="M12 10v4M12 17.5v.01"></path></svg></sc-if><sc-if value="{{r.isLock}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg></sc-if></span>
+<span style="min-width: 0; display: flex; flex-direction: column"><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{r.name}}</span><span class="hint" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{r.dir}}</span></span>
+<span class="hint" style="text-align: right; font-variant-numeric: tabular-nums">{{r.pages}}</span>
+<span style="min-width: 0; display: flex; flex-direction: column"><span style="color: {{r.color}}">{{r.state}}</span><sc-if value="{{r.hasDetail}}" hint-placeholder-val="{{ false }}"><span class="hint">{{r.detail}}</span></sc-if></span></li></sc-for></ul>
+</section></sc-if>
+
+<sc-if value="{{isRun}}" hint-placeholder-val="{{ false }}"><section aria-label="Extracting" style="flex: 999 1 480px; min-width: 0; display: flex; flex-direction: column">
+<div style="padding: 14px 20px 12px; display: flex; flex-direction: column; gap: 10px; border-bottom: 1px solid var(--line)">
+<div role="status" aria-live="polite" style="display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap"><strong style="font-size: 15px">Extracting PDF 3 of 7</strong><span class="hint">site-survey-scan.pdf, page 12 of 31</span></div>
+<div aria-hidden="true" style="display: flex; gap: 2px; height: 6px"><sc-for list="{{segments}}" as="s" hint-placeholder-count="7"><span style="flex: 1; border-radius: 2px; background: {{s.bg}}"></span></sc-for></div>
+<p class="hint" style="margin: 0">Each PDF is extracted on its own, so one that fails doesn't stop the others. Finished outputs can be opened now.</p>
+</div>
+<ul aria-label="PDFs" style="list-style: none; margin: 0; padding: 0; overflow: auto"><sc-for list="{{rows}}" as="r" hint-placeholder-count="7"><li class="rrow" style="opacity: {{r.op}}">
+<span style="color: {{r.color}}; display: flex"><sc-if value="{{r.isOk}}" hint-placeholder-val="{{ true }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l5 5L20 7"></path></svg></sc-if><sc-if value="{{r.isRunning}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9"></path></svg></sc-if><sc-if value="{{r.isWait}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg></sc-if></span>
+<span style="min-width: 0; display: flex; flex-direction: column"><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{r.name}}</span><span class="hint">{{r.detail}}</span><sc-if value="{{r.isRunning}}" hint-placeholder-val="{{ false }}"><span class="minibar" role="progressbar" aria-label="{{r.name}}" aria-valuemin="0" aria-valuemax="31" aria-valuenow="12" aria-valuetext="Page 12 of 31"><span style="width: 39%"></span></span></sc-if></span>
+<span style="color: {{r.color}}">{{r.state}}</span></li></sc-for></ul>
+</section></sc-if>
+
+<section aria-label="{{optsLabel}}" style="flex: 1 1 300px; max-width: 360px; border-left: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column">
+<sc-if value="{{isRun}}" hint-placeholder-val="{{ false }}"><div style="margin: 14px 20px 0; padding: 8px 10px; border-radius: 8px; background: var(--raise); display: flex; gap: 8px; align-items: center"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg><span class="hint" style="color: var(--fg)">Options are locked until the batch finishes.</span></div></sc-if>
+<fieldset aria-disabled="{{optsDisabled}}" style="border: 0; margin: 0; padding: 16px 20px; display: flex; flex-direction: column; gap: 16px; flex: 1; min-height: 0; overflow: auto; opacity: {{optsOp}}">
+<fieldset class="opt"><legend class="lbl">Extract</legend><div role="radiogroup" aria-label="Extract" aria-describedby="modehint" class="seg wide"><sc-for list="{{modes}}" as="m" hint-placeholder-count="3"><button role="radio" aria-checked="{{m.on}}" tabindex="{{m.tab}}">{{m.name}}</button></sc-for></div><span id="modehint" class="hint">{{modeHint}}</span></fieldset>
+
+<fieldset class="opt"><legend class="lbl">Pages</legend><div role="radiogroup" aria-label="Pages" class="seg"><button role="radio" aria-checked="{{pgAll}}" tabindex="{{pgAllTab}}">All pages</button><button role="radio" aria-checked="{{pgRange}}" tabindex="{{pgRangeTab}}">Range</button></div>
+<sc-if value="{{showRange}}" hint-placeholder-val="{{ false }}"><label class="sr-only" for="rng">Page range for every PDF</label><sc-if value="{{rangeOk}}" hint-placeholder-val="{{ true }}"><input id="rng" class="field" value="1-3, 5, 8-" aria-describedby="rnghint clamp"></sc-if><sc-if value="{{rangeBad}}" hint-placeholder-val="{{ false }}"><input id="rng" class="field" value="1-3, 5, 9-8" aria-invalid="true" aria-describedby="rngerr rnghint"><span id="rngerr" class="err" role="alert"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v5M12 16.5v.01"></path></svg>9-8 runs backwards. Write it as 8-9.</span></sc-if><span id="rnghint" class="hint">Commas and dashes, like 1-3, 5, 8-. 8- means page 8 to the end.</span></sc-if>
+<span id="clamp" class="hint">{{clampHint}}</span></fieldset>
+
+<sc-if value="{{showText}}" hint-placeholder-val="{{ true }}"><fieldset class="opt"><legend class="lbl">Text</legend><div class="modeopts">
+<label class="chk"><input type="checkbox" aria-describedby="layouthint"><span style="display: flex; flex-direction: column; gap: 2px"><span>Preserve layout</span><span id="layouthint" class="hint">{{layoutHint}}</span></span></label>
+</div></fieldset></sc-if>
+
+<sc-if value="{{showImages}}" hint-placeholder-val="{{ true }}"><fieldset class="opt"><legend class="lbl">Images</legend><div class="modeopts">
+<label class="chk"><sc-if value="{{minOn}}" hint-placeholder-val="{{ false }}"><input type="checkbox" aria-describedby="minhint" checked></sc-if><sc-if value="{{minOff}}" hint-placeholder-val="{{ true }}"><input type="checkbox" aria-describedby="minhint"></sc-if><span style="display: flex; flex-direction: column; gap: 2px"><span>Skip small images</span><span id="minhint" class="hint">{{minHint}}</span></span></label>
+<sc-if value="{{minOn}}" hint-placeholder-val="{{ false }}"><div class="num"><label for="minpx" class="hint" style="color: var(--fg); white-space: nowrap">Smaller than</label><input id="minpx" class="field" type="number" min="1" max="2000" value="64" style="width: 80px" aria-describedby="minhint"><span class="hint">px wide or tall</span></div></sc-if>
+</div></fieldset></sc-if>
+
+<div class="dest"><sc-if value="{{perRun}}" hint-placeholder-val="{{ false }}"><div style="display: flex; align-items: center; gap: 8px"><span class="lbl">Save to</span><span class="badge">This run only</span></div>
+<div style="display: flex; align-items: flex-start; gap: 8px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut); margin-top: 2px"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2"></path></svg><span style="word-break: break-all">{{runDir}}</span></div>
+<div style="display: flex; gap: 14px"><button class="btn ghost link">Change</button><button class="btn ghost link">Reset to default</button></div>
+<p class="hint" style="margin: 0">Your default is next to each original. This change ends when you leave Extract from PDF, and your setting stays as it is.</p></sc-if>
+<sc-if value="{{notPerRun}}" hint-placeholder-val="{{ true }}"><span class="lbl">Save to</span><div style="display: flex; align-items: center; gap: 8px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2"></path></svg><span>Next to each original</span></div><button class="btn ghost link">Change for this run</button></sc-if>
+<div class="ex" aria-label="Example output names"><span class="hint">Example for report.pdf</span>
+<sc-if value="{{showText}}" hint-placeholder-val="{{ true }}"><span class="ln"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut); width: 14px; height: 14px"><path d="M14 3v5h5M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2zM9 13h6M9 17h4"></path></svg><span>report-text.txt</span></span></sc-if>
+<sc-if value="{{showImages}}" hint-placeholder-val="{{ true }}"><span class="ln"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut); width: 14px; height: 14px"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2"></path></svg><span>report-images</span></span><span class="ln" style="padding-left: 20px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut); width: 14px; height: 14px"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 16l5-5 4 4 3-3 6 6"></path></svg><span>page-3-image-2.png</span></span></sc-if>
+<span class="hint">{{exHint}}</span></div></div>
+</fieldset>
+<footer style="padding: 12px 20px 14px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px">
+<sc-if value="{{showEst}}" hint-placeholder-val="{{ true }}"><p id="est" class="est" role="status" aria-live="polite"><strong style="color: {{estColor}}">{{estMain}}</strong><span class="hint">{{estSub}}</span></p></sc-if>
+<div style="display: flex; align-items: center; gap: 10px">
+<sc-if value="{{isRun}}" hint-placeholder-val="{{ false }}"><span class="hint">2 of 7 PDFs done</span><div style="flex: 1"></div><button class="btn">Cancel batch<span class="kbd">Esc</span></button></sc-if>
+<sc-if value="{{notRun}}" hint-placeholder-val="{{ true }}"><span id="runwhy" class="hint" style="white-space: nowrap">{{footHint}}</span><div style="flex: 1"></div><sc-if value="{{runOff}}" hint-placeholder-val="{{ false }}"><button class="btn pri" aria-describedby="runwhy est" disabled>{{runLabel}}<span class="kbd">{{runKey}}</span></button></sc-if><sc-if value="{{runOn}}" hint-placeholder-val="{{ true }}"><button class="btn pri" aria-describedby="est">{{runLabel}}<span class="kbd">{{runKey}}</span></button></sc-if></sc-if>
+</div>
+</footer></section>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "state": {"editor": "enum", "options": ["Files added", "Empty", "Text options", "Images options", "Small images skipped", "Page range", "Range error", "Changed save location", "Extracting"], "default": "Files added"}, "$preview": {"width": 1280, "height": 800}}'>
+class Component extends DCLogic {
+renderVals() {
+const win = (this.props.platform ?? 'macOS') === 'Windows';
+const light = (this.props.theme ?? 'dark') === 'light';
+const base = { themeClass: light ? 'tb light' : 'tb dark', findKey: win ? 'Ctrl+K' : '⌘K', settingsKey: win ? 'Ctrl+,' : '⌘,', openKey: win ? 'Ctrl+O' : '⌘O', runKey: win ? 'Ctrl+Enter' : '⌘↵', finder: win ? 'File Explorer' : 'Finder' };
+const railFor = (active) => [['Combine and split', [['Merge PDFs', 'M7 3v5l5 4 5-4V3M12 12v9'], ['Split PDF', 'M12 3v7M12 10l-6 5v6M12 10l6 5v6'], ['Images to PDF', 'M4 4h16v16H4zM4 15l5-5 4 4 3-3 4 4']]], ['From PDF', [['PDF to Images', 'M4 4h16v16H4zM4 15l5-5 4 4 3-3 4 4'], ['Extract from PDF', 'M12 3l9 5-9 5-9-5zM3 13l9 5 9-5'], ['PDF to EPUB', 'M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3zM9 8h6']]], ['Make PDFs', [['OCR', 'M4 20h4L19 9l-4-4L4 16zM13 7l4 4'], ['Formatted PDF', 'M5 6V4h14v2M12 4v16M9 20h6'], ['Convert to PDF', 'M14 3v5h5M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z']]]].map((g, gi) => ({ id: 'rg' + gi, title: g[0], items: g[1].map((it) => ({ name: it[0], d: it[1], cls: it[0] === active ? 'nav on' : 'nav', pressed: it[0] === active ? 'true' : 'false', tab: it[0] === active ? '0' : '-1' })) }));
+const S = this.props.state ?? 'Files added';
+const x = { railGroups: railFor('Extract from PDF') };
+const mode = S === 'Text options' ? 'Text' : (S === 'Images options' || S === 'Small images skipped') ? 'Images' : 'Both';
+x.modes = ['Text', 'Images', 'Both'].map((n) => ({ name: n, on: n === mode ? 'true' : 'false', tab: n === mode ? '0' : '-1' }));
+x.modeHint = { Text: 'One text file for each PDF, in reading order.', Images: 'One folder of images for each PDF.', Both: 'A text file and a folder of images for each PDF.' }[mode];
+x.showText = mode !== 'Images';
+x.showImages = mode !== 'Text';
+x.isEmpty = S === 'Empty';
+x.isRun = S === 'Extracting';
+x.notRun = !x.isRun;
+x.isList = !x.isEmpty && !x.isRun;
+x.showDocx = S === 'Files added';
+const ranged = S === 'Page range' || S === 'Range error' || S === 'Extracting';
+const bad = S === 'Range error';
+x.pgAll = ranged ? 'false' : 'true'; x.pgAllTab = ranged ? '-1' : '0'; x.pgRange = ranged ? 'true' : 'false'; x.pgRangeTab = ranged ? '0' : '-1';
+x.showRange = ranged; x.rangeOk = !bad; x.rangeBad = bad;
+x.clampHint = ranged ? 'One range applies to every PDF. Pages past a PDF\'s last page are left out, and a PDF with no pages left is skipped.' : 'Every page of every PDF.';
+x.layoutHint = 'Keeps columns and tables lined up. Off follows reading order.';
+x.minOn = S === 'Small images skipped';
+x.minOff = !x.minOn;
+x.minHint = x.minOn ? 'Leaves out bullets, lines and spacers. The result counts what was left out.' : 'Off saves every image at its original size.';
+x.perRun = S === 'Changed save location'; x.notPerRun = !x.perRun;
+x.runDir = win ? 'C:\\Users\\Asha\\Desktop\\Extracted' : '~/Desktop/Extracted';
+x.exHint = mode === 'Text' ? 'UTF-8 text, a page break between pages. An existing name gets -1, -2 and so on.' : mode === 'Images' ? 'JPEG and JPEG 2000 are copied as they are; others become lossless PNG. An existing folder is never reused: the new one gets -1, -2 and so on.' : 'An existing file or folder is never replaced: the new one gets -1, -2 and so on.';
+x.optsOp = x.isRun ? '0.5' : '1'; x.optsDisabled = x.isRun ? 'true' : 'false'; x.optsLabel = x.isRun ? 'Options, locked' : 'Options';
+const d = (sub) => win ? 'C:\\Users\\Asha\\Documents\\' + sub : '~/Documents/' + sub;
+const F = [
+ { name: 'report.pdf', dir: d('Reports'), pages: 12, sel: 9 },
+ { name: 'board-minutes-q3.pdf', dir: d('Board'), pages: 9, sel: 6 },
+ { name: 'site-survey-scan.pdf', dir: d('Projects'), pages: 31, sel: 28 },
+ { name: 'brochure-spring.pdf', dir: d('Marketing'), pages: 16, sel: 13 },
+ { name: 'memo-oct.pdf', dir: d('Board'), pages: 2, sel: 2, short: true },
+ { name: 'payslip-sept.pdf', dir: d('Finance'), pages: null, locked: true },
+ { name: 'scan-archive-2019.pdf', dir: d('Archive'), pages: 48, sel: 45 }
+];
+const col = (k) => k === 'warn' || k === 'lock' ? 'var(--warn)' : k === 'wait' ? 'var(--mut)' : 'var(--fg)';
+const mk = (o, k) => Object.assign({ isFile: k === 'file', isWarn: k === 'warn', isLock: k === 'lock', isOk: k === 'ok', isRunning: k === 'run', isWait: k === 'wait', color: col(k), hasDetail: false, detail: '', op: k === 'wait' ? '0.6' : '1' }, o);
+x.pagesHead = ranged && !bad ? 'Pages used' : 'Pages';
+if (x.isList) {
+ x.rows = F.map((f) => {
+  if (f.locked) return mk({ name: f.name, dir: f.dir, pages: '–', state: 'Locked', hasDetail: true, detail: 'Remove Password first', label: f.name + ', password-protected, page count unknown. It will fail until its password is removed.' }, 'lock');
+  if (ranged && !bad && f.short) return mk({ name: f.name, dir: f.dir, pages: '2 of 2', state: 'Range shortened', hasDetail: true, detail: 'Only pages 1 and 2 exist', label: f.name + ', 2 pages. Range shortened to pages 1 and 2.' }, 'warn');
+  const p = ranged && !bad ? f.sel + ' of ' + f.pages : String(f.pages);
+  return mk({ name: f.name, dir: f.dir, pages: p, state: 'Ready', label: f.name + ', ' + p + ' pages, ready' }, 'file');
+ });
+ x.listStatus = bad ? 'Fix the page range to see which pages each PDF uses.' : ranged ? 'Range 1-3, 5, 8- applied to each PDF. 1 shortened.' : (x.showDocx ? 'Added 7 PDFs. 1 file not added.' : 'Added 7 PDFs.');
+}
+if (x.isRun) {
+ x.rows = F.map((f, i) => i === 0 ? mk({ name: f.name, detail: 'report-text.txt and 23 images in report-images', state: 'Extracted' }, 'ok') : i === 1 ? mk({ name: f.name, detail: 'board-minutes-q3-text.txt. No images in pages 1-3, 5 and 8-9.', state: 'Extracted' }, 'ok') : i === 2 ? mk({ name: f.name, detail: 'Page 12 of 31, 41 images so far', state: 'Extracting' }, 'run') : mk({ name: f.name, detail: f.locked ? 'Page count unknown' : f.short ? '2 pages, range shortened' : f.sel + ' pages', state: 'Waiting' }, 'wait'));
+ x.segments = F.map((f, i) => ({ bg: i < 2 ? 'var(--seg-ok)' : 'var(--seg-wait)' }));
+}
+x.footHint = x.isEmpty ? 'Add PDFs to start' : '';
+x.runOff = x.isEmpty || bad; x.runOn = !x.runOff;
+x.showEst = !x.isRun;
+x.estColor = 'var(--fg)';
+const what = mode === 'Text' ? '6 text files' : mode === 'Images' ? 'up to 6 image folders' : '6 text files and up to 6 image folders';
+if (x.isEmpty) { x.estMain = 'Nothing to extract yet'; x.estSub = 'Originals are only read, never changed'; x.runLabel = 'Extract'; }
+else if (bad) { x.estMain = 'Can\'t extract yet'; x.estSub = 'Fix the page range first'; x.estColor = 'var(--bad)'; x.runLabel = 'Extract from 7 PDFs'; }
+else { x.estMain = 'This will make ' + what; x.estSub = mode === 'Text' ? 'from 7 PDFs, 1 locked' : 'from 7 PDFs, 1 locked. A PDF with nothing to extract is skipped.'; x.runLabel = 'Extract from 7 PDFs'; }
+return Object.assign(base, x);
+}
+}
+</script>
+</body>
+</html>
