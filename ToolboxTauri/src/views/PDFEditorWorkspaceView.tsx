@@ -14,8 +14,8 @@ import { Slider } from '../components/ui/slider';
 import type { PdfDocument, PdfPage, PdfTextRun } from '../features/pdf-editor/contracts';
 import { colorTokens, readColorToken } from '../features/pdf-editor/colorTokens';
 import { SceneCanvas } from '../features/pdf-editor/SceneCanvas';
-import { RedactDisclosure, RedactInspector, listMarks, redactionFills } from '../features/pdf-editor/RedactInspector';
-import type { ListedMark } from '../features/pdf-editor/RedactInspector';
+import { RedactDisclosure, RedactInspector, listMarks, redactionFills, searchStatus } from '../features/pdf-editor/RedactInspector';
+import type { ListedMark, TextMatch, TextSearch } from '../features/pdf-editor/RedactInspector';
 import { subToolInspectors } from '../features/pdf-editor/SubToolInspectors';
 import type { SubToolInspectorProps } from '../features/pdf-editor/SubToolInspectors';
 import { planSceneExport, sceneContributors } from '../features/pdf-editor/subtools';
@@ -29,6 +29,13 @@ import { shortcutTarget } from '../shortcuts';
 export { createPreviewCache, previewCacheKey, requestWithGeneration } from './pdfPreviewHelpers';
 
 type IndexedScenePreview = { pageIndex: number; preview: ScenePreview };
+type NativeTextMatch = { pageIndex: number; rects: SceneRect[]; before: string; text: string; after: string };
+
+const clipped = (rect: SceneRect, bounds: SceneRect): SceneRect | null => {
+  const x = Math.max(rect.x, bounds.x), y = Math.max(rect.y, bounds.y);
+  const width = Math.min(rect.x + rect.width, bounds.x + bounds.width) - x, height = Math.min(rect.y + rect.height, bounds.y + bounds.height) - y;
+  return width > 0 && height > 0 ? { x, y, width, height } : null;
+};
 
 const tools: { id: SceneTool; label: string; glyph: string }[] = [
   { id: 'select', label: 'Select', glyph: '↖' }, { id: 'text', label: 'Text', glyph: 'T' },
@@ -163,6 +170,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
   const [reviewing, setReviewing] = useState(false);
   const [previewRedactions, setPreviewRedactions] = useState(true);
   const [disclosure, setDisclosure] = useState(false);
+  const [search, setSearch] = useState<TextSearch | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(Boolean(path));
   const [rendering, setRendering] = useState(false);
@@ -333,6 +341,27 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
     if (marks.some((mark) => mark.color !== color)) commit({ pages: scene.pages.map((item) => item.redactions?.length
       ? { ...item, redactions: item.redactions.map((mark) => ({ ...mark, color })) } : item) });
   };
+  // Matches belong to the page layout they were found in, so reordering, removing or cropping pages clears them.
+  const searchLayout = JSON.stringify(scene.pages.map((item) => [item.id, item.sourceIndex, item.crop]));
+  useEffect(() => setSearch(null), [searchLayout]);
+  const findText = async (query: string, matchCase: boolean) => {
+    if (!path) return;
+    const found = await invoke<NativeTextMatch[]>('find_pdf_scene_text', { request: { path, query, matchCase } });
+    const matches: TextMatch[] = scene.pages.flatMap((item, index) => found.filter((match) => match.pageIndex === item.sourceIndex).flatMap((match) => {
+      const rects = match.rects.map((rect) => clipped(rect, visibleBounds(item))).filter((rect): rect is SceneRect => rect !== null);
+      return rects.length ? [{ pageId: item.id, page: index + 1, rects, before: match.before, text: match.text, after: match.after }] : [];
+    }));
+    setSearch({ query, matchCase, matches, selected: matches.map(() => true), marked: null, lastMarked: 0 });
+  };
+  const markMatches = (matches: TextMatch[]) => {
+    if (!availability.allows('pdf-redact') || !matches.length) return [];
+    const added = matches.map((match) => ({ match, marks: match.rects.map((rect) => ({ id: crypto.randomUUID(), rect, color: redactionFill, label: `“${match.text}”` })) }));
+    commit({ pages: scene.pages.map((item) => {
+      const marks = added.filter(({ match }) => match.pageId === item.id).flatMap(({ marks }) => marks);
+      return marks.length ? { ...item, redactions: [...(item.redactions ?? []), ...marks] } : item;
+    }) });
+    return added.map(({ marks }) => marks.map((mark) => mark.id));
+  };
   const review = (on: boolean) => {
     setReviewing(on);
     if (on && marks.length && !marks.some((mark) => mark.id === selectedId)) selectMark(marks[0]);
@@ -496,7 +525,8 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
             textRuns={page.sourceIndex === null ? [] : document?.pages[page.sourceIndex]?.textRuns ?? []}
             renderedPreview={exactPreview} tool={tool ?? 'select'} selectedId={selectedId} zoom={zoom} onSelect={(id) => { endGroup(); setSelectedId(id); }}
             onCommit={(next) => { if (canEditCanvas) commitPage(next); }} makeObject={makeObject}
-            redactionFill={redactionFill} redactionPreview={tool === 'redact' && reviewing && previewRedactions} />
+            redactionFill={redactionFill} redactionPreview={tool === 'redact' && reviewing && previewRedactions}
+            searchMatches={search && !search.marked && !reviewing ? search.matches.filter((match, index) => match.pageId === page.id && search.selected[index]).flatMap((match) => match.rects) : []} />
         </div>
         <aside className="scene-inspector" aria-label="PDF editor inspector">
           <Card role="region" aria-label="Properties" className="scene-inspector-panel gap-4 overflow-y-auto py-4">
@@ -505,8 +535,9 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
               <CardDescription>{selected ? 'Adjust the selected item.' : tool === 'redact' ? 'Drag over anything you want removed. Marks are only previews until you export.' : tool === 'select' ? 'Select a mark to edit its properties.' : tool ? `New ${tool} settings` : 'No page markup tools are enabled.'}</CardDescription>
             </CardHeader>
             <CardContent className="scene-inspector-content flex flex-col gap-3 px-4">
-              {tool === 'redact' && !selected && <RedactInspector marks={marks} selectedId={selectedId} reviewing={reviewing} preview={previewRedactions} fill={redactionFill}
-                onSelect={selectMark} onRemove={removeMarks} onReview={review} onPreview={setPreviewRedactions} onFill={recolorMarks} />}
+              {tool === 'redact' && !selected && <RedactInspector marks={marks} selectedId={selectedId} reviewing={reviewing} preview={previewRedactions} fill={redactionFill} search={search}
+                onSelect={selectMark} onRemove={removeMarks} onReview={review} onPreview={setPreviewRedactions} onFill={recolorMarks}
+                onFind={findText} onSearch={setSearch} onMark={markMatches} />}
               {Fields && inspector && <Fields {...inspector} />}
               {(selected || (tool !== null && !['select', 'crop', 'redact'].includes(tool))) && <>
                 <div className="scene-inspector-field"><Label htmlFor="scene-object-color">Object color</Label>
@@ -526,7 +557,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
               </div>}
               {Guide && inspector && <Guide {...inspector} />}
               {tool === 'select' && !selected && <p className="scene-property-note">Select an object on the page to move it or adjust its properties.</p>}
-              <p className="scene-render-status" role="status">{rendering ? 'Rendering on device…' : exactPreview ? 'Export preview · on device' : 'Local document'}</p>
+              <p className="scene-render-status" role="status">{rendering ? 'Rendering on device…' : tool === 'redact' && !reviewing && searchStatus(search) ? searchStatus(search) : exactPreview ? 'Export preview · on device' : 'Local document'}</p>
             </CardContent>
           </Card>
         </aside>

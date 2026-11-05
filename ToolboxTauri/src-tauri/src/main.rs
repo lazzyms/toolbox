@@ -138,6 +138,19 @@ async fn inspect_pdf_scene_page(request: InspectPdfScenePageRequest) -> Result<m
     tauri::async_runtime::spawn_blocking(move || scene::inspect_page(&request.path, request.page_index)).await.map_err(|error| error.to_string())?
 }
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FindPdfSceneTextRequest {
+    path: std::path::PathBuf,
+    query: String,
+    match_case: bool,
+}
+
+#[tauri::command]
+async fn find_pdf_scene_text(request: FindPdfSceneTextRequest) -> Result<Vec<scene::PdfTextMatch>, String> {
+    tauri::async_runtime::spawn_blocking(move || scene::find_text(&request.path, &request.query, request.match_case)).await.map_err(|error| error.to_string())?
+}
+
 #[tauri::command]
 async fn preview_pdf_scene(request: scene::PreviewRequest) -> Result<scene::ScenePreview, String> {
     if !command_supports_preview("export_pdf_scene") { return Err("PDF scene preview is unavailable in this build.".to_string()); }
@@ -530,6 +543,7 @@ fn main() {
             inspect_pdf,
             inspect_pdf_scene,
             inspect_pdf_scene_page,
+            find_pdf_scene_text,
             preview_pdf_scene,
             preview_pdf_scene_pages,
             export_pdf_scene,
@@ -1107,6 +1121,9 @@ mod command_tests {
         let mut naming = Vec::new();
         let inspected_scene = tauri::async_runtime::block_on(inspect_pdf_scene(InspectPdfRequest { path: pdf.clone() })).unwrap();
         assert_eq!(inspected_scene.pages.len(), 2);
+        let found = tauri::async_runtime::block_on(find_pdf_scene_text(FindPdfSceneTextRequest { path: pdf.clone(), query: "toolbox PAGE".into(), match_case: false })).unwrap();
+        assert_eq!(found.iter().map(|found| (found.page_index, found.text.as_str())).collect::<Vec<_>>(), vec![(0, "Toolbox page"), (1, "Toolbox page")]);
+        assert!(tauri::async_runtime::block_on(find_pdf_scene_text(FindPdfSceneTextRequest { path: pdf.clone(), query: "toolbox PAGE".into(), match_case: true })).unwrap().is_empty());
         let visual_scene: scene::PdfScene = serde_json::from_value(serde_json::json!({ "pages": [
             { "sourceIndex": 0, "width": 612, "height": 792, "rotation": 0, "crop": null, "objects": [
                 { "kind": "highlight", "rect": { "x": 65, "y": 62, "width": 200, "height": 30 }, "text": "", "fontSize": 18, "color": "#FFD700", "opacity": 0.35, "strokes": [] },

@@ -8,7 +8,7 @@ use crate::kit::{common::{JobOutcome, OutputLocation, OutputNaming}, contracts::
 use super::metadata::{PdfDocumentMetadata, PdfPageMetadata, PdfTextRun};
 use super::{inherited, resolve, PdfMutationIntent};
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Rect { pub x: f32, pub y: f32, pub width: f32, pub height: f32 }
 #[derive(Clone, Debug, Deserialize)]
 pub struct Point { pub x: f32, pub y: f32 }
@@ -1069,6 +1069,78 @@ pub fn inspect_page(path:&Path,page_index:usize)->Result<PdfPageMetadata,String>
     let text_runs=extract_text_runs(path,page_index + 1,g.width,g.height,Instant::now() + super::PDF_TEXT_TIMEOUT).unwrap_or_default();
     let preview = super::metadata::render_preview(path, page_index + 1, g.width, g.height);
     Ok(PdfPageMetadata{index:page_index,x:g.bbox[0],y:g.bbox[1],width:g.width,height:g.height,rotation:source_rotation,page_box:g.bbox,preview,text_runs:Some(text_runs)})
+}
+/// One occurrence of a searched phrase. `rects` cover every word the match touches, one per line,
+/// in the same page coordinates as the text runs shown on the canvas.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PdfTextMatch { pub page_index: usize, pub rects: Vec<Rect>, pub before: String, pub text: String, pub after: String }
+
+const TEXT_MATCH_CONTEXT: usize = 40;
+
+fn fold(c: char, match_case: bool) -> char {
+    if match_case { return c; }
+    let mut lower = c.to_lowercase();
+    match (lower.next(), lower.next()) { (Some(single), None) => single, _ => c }
+}
+
+/// Finds every occurrence of `query` in the page's words. Words are joined by single spaces, so a
+/// phrase matches across line breaks. Matches never overlap.
+fn find_in_runs(runs: &[PdfTextRun], query: &str, match_case: bool) -> Vec<(Vec<Rect>, String, String, String)> {
+    let needle: Vec<char> = query.split_whitespace().collect::<Vec<_>>().join(" ").chars().map(|c| fold(c, match_case)).collect();
+    if needle.is_empty() { return Vec::new(); }
+    let mut text: Vec<char> = Vec::new();
+    let mut owner: Vec<Option<usize>> = Vec::new();
+    for (index, run) in runs.iter().enumerate() {
+        if index > 0 { text.push(' '); owner.push(None); }
+        for c in run.text.chars() { text.push(c); owner.push(Some(index)); }
+    }
+    let folded: Vec<char> = text.iter().map(|&c| fold(c, match_case)).collect();
+    let mut matches = Vec::new();
+    let mut start = 0;
+    while start + needle.len() <= folded.len() {
+        if folded[start..start + needle.len()] != needle[..] { start += 1; continue; }
+        let end = start + needle.len();
+        let mut words: Vec<usize> = owner[start..end].iter().flatten().copied().collect();
+        words.dedup();
+        let mut rects: Vec<Rect> = Vec::new();
+        for word in words {
+            let run = &runs[word];
+            match rects.last_mut() {
+                Some(last) if (last.y - run.y).abs() < run.height.min(last.height) / 2. && run.x >= last.x => {
+                    let (top, bottom) = (last.y.min(run.y), (last.y + last.height).max(run.y + run.height));
+                    last.width = (run.x + run.width).max(last.x + last.width) - last.x;
+                    last.y = top; last.height = bottom - top;
+                }
+                _ => rects.push(Rect { x: run.x, y: run.y, width: run.width, height: run.height }),
+            }
+        }
+        let before: String = text[start.saturating_sub(TEXT_MATCH_CONTEXT)..start].iter().collect();
+        let after: String = text[end..(end + TEXT_MATCH_CONTEXT).min(text.len())].iter().collect();
+        matches.push((rects, before, text[start..end].iter().collect(), after));
+        start = end;
+    }
+    matches
+}
+
+/// Searches every page's words with the same extraction the canvas uses. A page whose text cannot
+/// be read fails the whole search, so a missing match is never silently reported as absent.
+pub fn find_text(path: &Path, query: &str, match_case: bool) -> Result<Vec<PdfTextMatch>, String> {
+    if query.trim().is_empty() { return Err("Enter text to find".into()); }
+    if query.chars().count() > 1_000 { return Err("Search text must be 1,000 characters or fewer".into()); }
+    let doc = load(path)?;
+    if text_extractor().is_none() { return Err("Text search needs pdftotext, which is unavailable in this build.".into()); }
+    let mut found = Vec::new();
+    for (page_index, id) in doc.get_pages().values().enumerate() {
+        let g = geometry(&doc, *id)?;
+        let runs = extract_text_runs(path, page_index + 1, g.width, g.height, Instant::now() + super::PDF_TEXT_TIMEOUT)
+            .ok_or_else(|| format!("Could not read the text on page {}", page_index + 1))?;
+        for (rects, before, text, after) in find_in_runs(&runs, query, match_case) {
+            if found.len() == REDACTION_MAX_MARKS { return Err(format!("More than {REDACTION_MAX_MARKS} matches. Search for something more specific.")); }
+            found.push(PdfTextMatch { page_index, rects, before, text, after });
+        }
+    }
+    Ok(found)
 }
 pub fn export(request:&ExportRequest,input:PathBuf)->JobOutcome {
     let result=(|| {
@@ -2165,6 +2237,82 @@ mod tests {
             assert!(outcome.error().is_some_and(|error| error.message.starts_with(message)),"{outcome:?}");
             assert_eq!(fs::read_dir(&temp.0).unwrap().count(),1);
             assert_eq!(fs::read(&input).unwrap(),original);
+        }
+    }
+
+    /// Page 1 names the tenant twice (once in lower case), page 2 never does, and page 3 splits the
+    /// name across two lines.
+    fn search_fixture(path: &Path) {
+        let mut d = Document::with_version("1.7");
+        let root = d.new_object_id();
+        let font = d.add_object(dictionary! {"Type"=>"Font", "Subtype"=>"Type1", "BaseFont"=>"Helvetica"});
+        let resources = d.add_object(dictionary! {"Font"=>dictionary!{"F1"=>font}});
+        let contents: [&[u8]; 3] = [
+            b"BT /F1 18 Tf 40 700 Td (Tenant Asha Patel signs here) Tj ET BT /F1 18 Tf 40 500 Td (Witnessed by asha patel today) Tj ET",
+            b"BT /F1 18 Tf 40 700 Td (Nothing private on this page) Tj ET",
+            b"BT /F1 18 Tf 40 700 Td (Agreed with Asha) Tj ET BT /F1 18 Tf 40 676 Td (Patel and the landlord) Tj ET",
+        ];
+        let kids: Vec<Object> = contents.iter().map(|content| {
+            let content = d.add_object(Stream::new(dictionary!{}, content.to_vec()));
+            Object::Reference(d.add_object(dictionary! {"Type"=>"Page","Parent"=>root,"MediaBox"=>array(&[0.,0.,612.,792.]),"Resources"=>resources,"Contents"=>content}))
+        }).collect();
+        d.objects.insert(root, Object::Dictionary(dictionary! {"Type"=>"Pages","Kids"=>kids,"Count"=>3}));
+        let catalog = d.add_object(dictionary! {"Type"=>"Catalog","Pages"=>root});
+        d.trailer.set("Root", catalog);
+        d.save(path).unwrap();
+    }
+
+    #[test]
+    fn text_search_matches_whole_phrases_across_lines_without_overlap() {
+        let run = |text: &str, x: f32, y: f32| PdfTextRun { text: text.into(), x, y, width: 10. * text.len() as f32, height: 20. };
+        let runs = [run("aaa", 0., 0.), run("Asha", 40., 0.), run("Patel,", 90., 2.), run("ASHA", 0., 40.), run("patel", 0., 70.)];
+        let found = find_in_runs(&runs, "  asha\tpatel ", false);
+        assert_eq!(found.len(), 2);
+        assert_eq!((found[0].2.as_str(), found[1].2.as_str()), ("Asha Patel", "ASHA patel"));
+        let rect = |r: &Rect| (r.x, r.y, r.width, r.height);
+        assert_eq!(found[0].0.iter().map(rect).collect::<Vec<_>>(), vec![(40., 0., 110., 22.)], "words on one line share a rect that covers the punctuation too");
+        assert_eq!(found[1].0.iter().map(rect).collect::<Vec<_>>(), vec![(0., 40., 40., 20.), (0., 70., 50., 20.)], "a phrase across lines gets one rect per line");
+        assert_eq!((found[0].1.as_str(), found[0].3.as_str()), ("aaa ", ", ASHA patel"));
+        assert!(find_in_runs(&runs, "asha patel", true).is_empty());
+        assert_eq!(find_in_runs(&[run("aaaa", 0., 0.)], "aa", false).len(), 2, "matches never overlap");
+        assert!(find_in_runs(&runs, "   ", false).is_empty());
+    }
+
+    #[test]
+    fn every_searched_occurrence_is_gone_from_the_redacted_pages() {
+        let _guard = crate::kit::lock_process_env();
+        if !require_renderer() { return; }
+        let Some(extractor) = text_extractor() else {
+            if std::env::var_os("TOOLBOX_REQUIRE_PDF_RENDERER").is_some() { panic!("pdftotext is unavailable") }
+            return;
+        };
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("lease.pdf"); search_fixture(&input);
+        let original=fs::read(&input).unwrap();
+        let found=find_text(&input,"asha PATEL",false).unwrap();
+        assert_eq!(found.iter().map(|found| (found.page_index, found.text.as_str(), found.rects.len())).collect::<Vec<_>>(),
+            vec![(0,"Asha Patel",1),(0,"asha patel",1),(2,"Asha Patel",2)]);
+        assert_eq!((found[0].before.as_str(),found[0].after.as_str()),("Tenant "," signs here Witnessed by asha patel toda"), "context stops at 40 characters");
+        assert!(find_text(&input,"asha PATEL",true).unwrap().is_empty());
+
+        let marks:Vec<_>=found.iter().flat_map(|found| found.rects.iter().map(move |rect| serde_json::json!({ "pageIndex": found.page_index, "rect": rect, "color": "#000000" }))).collect();
+        let outcome=export(&identity_request(&input,3,serde_json::Value::Array(marks)),input.clone());
+        assert!(outcome.error().is_none(),"{:?}",outcome.error());
+        assert_eq!(fs::read(&input).unwrap(),original);
+        let output=outcome.output_paths()[0].clone();
+        assert_eq!(outcome.detail,"Pages 1 and 3 were redacted as 300 dpi images. Document metadata, XMP data and attachments were removed.");
+
+        let bytes=fs::read(&output).unwrap().to_ascii_lowercase();
+        for secret in ["asha","patel"] { assert!(!bytes.windows(secret.len()).any(|window|window==secret.as_bytes()),"{secret} survived in the file bytes"); }
+        let text=|page:usize| String::from_utf8(Command::new(&extractor).args(["-f",&page.to_string(),"-l",&page.to_string()]).arg(&output).arg("-").output().unwrap().stdout).unwrap();
+        for page in [1,3] { assert!(!text(page).to_lowercase().contains("asha"),"page {page} still has the name"); }
+        assert!(text(2).contains("Nothing private on this page"),"unmarked pages keep their text");
+        assert!(find_text(&output,"asha patel",false).unwrap().is_empty());
+
+        let document=load(&output).unwrap();
+        let pages:Vec<ObjectId>=document.get_pages().values().copied().collect();
+        for found in &found {
+            let image=redacted_image(&document,pages[found.page_index]);
+            for rect in &found.rects { assert_eq!(pixel(&image,rect.x+rect.width/2.,rect.y+rect.height/2.,(612.,792.)),[0,0,0],"each match is filled"); }
         }
     }
 }
