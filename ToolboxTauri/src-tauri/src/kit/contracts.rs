@@ -388,6 +388,7 @@ pub enum WarningKind {
     FontSubstituted { requested_family: String, actual_family: String },
     RenamedToAvoidReplacing { chosen_name: String, final_name: String },
     PrecisionReduced,
+    TransparencyFlattened,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -632,9 +633,10 @@ mod tests {
             WarningKind::FontSubstituted { requested_family: "A".into(), actual_family: "B".into() },
             WarningKind::RenamedToAvoidReplacing { chosen_name: "a".into(), final_name: "b".into() },
             WarningKind::PrecisionReduced,
+            WarningKind::TransparencyFlattened,
         ];
         let codes = warnings.into_iter().map(|kind| serde_json::to_value(kind).unwrap()["code"].clone()).collect::<Vec<_>>();
-        assert_eq!(codes, ["signatureRemoved", "fontSubstituted", "renamedToAvoidReplacing", "precisionReduced"]);
+        assert_eq!(codes, ["signatureRemoved", "fontSubstituted", "renamedToAvoidReplacing", "precisionReduced", "transparencyFlattened"]);
     }
 
     #[test]
@@ -667,6 +669,8 @@ mod tests {
                 vec![PathBuf::from("drawings-page-1.png")],
                 ToolError::limit_exceeded(LimitKind::Time, "Took longer than 5 minutes and was stopped. 1 part was saved before it stopped."),
             ),
+            JobOutcome::succeeded(PathBuf::from("badge.png"), vec![PathBuf::from("badge-edited.jpg")], "Image saved")
+                .with_warning(OutcomeWarning { kind: WarningKind::TransparencyFlattened, message: "Transparent areas were flattened onto white, because JPEG has none.".into() }),
         ];
 
         assert_eq!(serde_json::to_value(&samples).unwrap(), shared);

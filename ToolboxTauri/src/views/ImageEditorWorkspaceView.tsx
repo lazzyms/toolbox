@@ -21,8 +21,8 @@ import {
   defaultImageRotateStep,
   defaultImageToneStep,
   editedImageExtension,
-  emptyImageEditPlan,
   imageEditRequestPlan,
+  imageEditStackExtension,
   imageEditStackRequestSteps,
   imageEditStackSuffix,
   imageEditStepLabels,
@@ -38,6 +38,7 @@ import {
   type ImageEditPlan,
   type ImageEditHistory,
   type ImageEditStack,
+  type ImageEditStackFormat,
   type ImageEditStackStep,
   type ImageResizeStep,
   type ImageRotateStep,
@@ -146,6 +147,7 @@ export const ImageEditorWorkspaceView = ({
   onWorkspaceSourceAction?: (action: WorkspaceSourceAction | null) => void;
 }) => {
   const [format, setFormat] = useState<ConvertImagesRequest["format"]>("png");
+  const [stackFormat, setStackFormat] = useState<ImageEditStackFormat>("original");
   const [watermarkText, setWatermarkText] = useState("Toolbox");
   const [watermarkOpacity, setWatermarkOpacity] = useState(20);
   const [watermarkX, setWatermarkX] = useState(0);
@@ -223,7 +225,7 @@ export const ImageEditorWorkspaceView = ({
       onFilesChange={onFilesChange}
       onWorkspaceSourceAction={onWorkspaceSourceAction}
       exampleName={(path) => stackStep
-        ? exampleOutputName(path, activeUtility.command, imageEditStackSuffix(stack.present), editedImageExtension(emptyImageEditPlan(), path))
+        ? exampleOutputName(path, activeUtility.command, imageEditStackSuffix(stack.present), imageEditStackExtension(stackFormat, path))
         : exampleOutputName(path, activeUtility.command, "-edited", editedImageExtension(editPlan, path))}
       onRun={(paths, outputLocation, { runId }) => {
         if (activeUtility.id === "heic-convert") {
@@ -232,7 +234,12 @@ export const ImageEditorWorkspaceView = ({
           });
         }
         if (stackStep) {
-          return invoke<ToolResult>("export_image_edit_stack", { runId, request: { paths, steps: imageEditStackRequestSteps(stack.present), outputLocation } });
+          return invoke<ToolResult>("export_image_edit_stack", { runId, request: {
+            paths,
+            steps: imageEditStackRequestSteps(stack.present),
+            format: stackFormat === "original" ? null : stackFormat,
+            outputLocation,
+          } });
         }
         return invoke<ToolResult>("watermark_images", { runId,
           request: { paths, opacity: watermarkOpacity, text: watermarkText, x: watermarkX, y: watermarkY, outputLocation },
@@ -248,6 +255,8 @@ export const ImageEditorWorkspaceView = ({
           tabs={onSelectTool && <EditImageTabs activeId={activeUtility.id} onSelect={onSelectTool} />}
           history={stack}
           message={stackMessage}
+          format={stackFormat}
+          onFormatChange={setStackFormat}
           focus={stackStep}
           onFocus={(step) => { if (step !== stackStep) onSelectTool?.(toolForStackStep[step]); }}
           onAdd={(step) => {

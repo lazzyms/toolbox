@@ -148,7 +148,8 @@ export type OutcomeWarning =
   | { code: "signatureRemoved"; message: string }
   | { code: "fontSubstituted"; message: string; details: { requestedFamily: string; actualFamily: string } }
   | { code: "renamedToAvoidReplacing"; message: string; details: { chosenName: string; finalName: string } }
-  | { code: "precisionReduced"; message: string };
+  | { code: "precisionReduced"; message: string }
+  | { code: "transparencyFlattened"; message: string };
 
 export type WarningCode = OutcomeWarning["code"];
 

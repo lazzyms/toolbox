@@ -8,7 +8,8 @@ use std::io::{BufReader, Seek};
 use std::path::{Path, PathBuf};
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
-use crate::kit::contracts::ToolError;
+use crate::kit::contracts::{OutcomeWarning, ToolError, WarningKind};
+use crate::kit::images::OutputFormat;
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -176,6 +177,9 @@ pub fn export_edit_plan(plan: &ImageEditPlan, input: PathBuf) -> JobOutcome {
 pub struct ImageEditStackRequest {
     pub paths: Vec<PathBuf>,
     pub steps: ImageEditSteps,
+    /// The format of the final encode: jpg, png, webp or heic. None keeps each input's format.
+    #[serde(default)]
+    pub format: Option<String>,
     pub output_location: OutputLocation,
 }
 
@@ -238,23 +242,36 @@ impl ImageEditSteps {
     }
 }
 
-/// Decodes the input once, runs the stack and encodes once in the input's format.
+pub const TRANSPARENCY_FLATTENED: &str = "Transparent areas were flattened onto white, because JPEG has none.";
+pub const REDUCED_TO_8_BIT: &str = "Saved as 8-bit sRGB. The original had more colour depth.";
+
+/// Decodes the input once, runs the stack and encodes once, in the chosen format or the input's.
 pub fn export_edit_stack(request: &ImageEditStackRequest, input: PathBuf) -> JobOutcome {
     let suffix = match request.steps.suffix() {
         Ok(suffix) => suffix,
         Err(error) => return JobOutcome::failure(input, ToolError::invalid_input(error)),
     };
-    let format = crate::kit::images::detect_format(&input);
+    let format = match request.format.as_deref() {
+        Some(requested) => match parse_output_format(requested) {
+            Ok(format) => format,
+            Err(error) => return JobOutcome::failure(input, ToolError::invalid_input(error)),
+        },
+        None => crate::kit::images::detect_format(&input),
+    };
     let (source, oriented) = match crate::kit::images::load_upright_image(&input) {
         Ok(decoded) => decoded,
         Err(error) => return failure(input, error),
     };
+    let high_bit_source = crate::kit::images::has_high_bit_depth(source.color());
     // A step that cannot apply to this image (a crop outside it, a size past the limits) is a
     // problem with the request, not with the file.
     let edited = match request.steps.apply(source) {
         Ok(image) => image,
         Err(error) => return JobOutcome::failure(input, ToolError::invalid_input(error)),
     };
+    // JPEG has no alpha, and only PNG stores more than 8 bits per channel.
+    let flattened = format == OutputFormat::Jpeg && crate::kit::images::has_transparency(&edited);
+    let reduced = high_bit_source && (format != OutputFormat::Png || !crate::kit::images::has_high_bit_depth(edited.color()));
     let bytes = match crate::kit::images::encode(&edited, format, STACK_QUALITY) {
         Ok(bytes) => bytes,
         Err(error) => return failure(input, error),
@@ -267,7 +284,16 @@ pub fn export_edit_stack(request: &ImageEditStackRequest, input: PathBuf) -> Job
         return failure(input, format!("Could not save image: {error}"));
     }
     match output.publish() {
-        Ok(path) => JobOutcome::succeeded(input, vec![path], request.steps.detail(oriented)),
+        Ok(path) => {
+            let mut outcome = JobOutcome::succeeded(input, vec![path], request.steps.detail(oriented));
+            if flattened {
+                outcome = outcome.with_warning(OutcomeWarning { kind: WarningKind::TransparencyFlattened, message: TRANSPARENCY_FLATTENED.to_string() });
+            }
+            if reduced {
+                outcome = outcome.with_warning(OutcomeWarning { kind: WarningKind::PrecisionReduced, message: REDUCED_TO_8_BIT.to_string() });
+            }
+            outcome
+        }
         Err(error) => failure(input, format!("Could not publish image: {error}")),
     }
 }
