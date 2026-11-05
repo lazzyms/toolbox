@@ -1,3 +1,5 @@
+import { pageRangesWithin, parsePageRanges } from "./pageRanges";
+
 export type ValidationIssue = {
   field: string;
   message: string;
@@ -21,19 +23,14 @@ export const boundedNumber = (
 export const parsePageRange = (value: string, pageCount: number): number[] | ValidationIssue => {
   if (!value.trim()) return Array.from({ length: pageCount }, (_, index) => index);
 
+  const parsed = parsePageRanges(value);
+  const resolved = parsed.ok ? pageRangesWithin(parsed.value, pageCount) : parsed;
+  if (!resolved.ok) return { field: "pageRange", message: resolved.message };
+
   const pages = new Set<number>();
-  for (const token of value.split(",").map((part) => part.trim()).filter(Boolean)) {
-    const match = /^(\d+)(?:\s*-\s*(\d+))?$/.exec(token);
-    if (!match) return { field: "pageRange", message: `Invalid page selection: ${token}.` };
-
-    const start = Number(match[1]);
-    const end = Number(match[2] ?? match[1]);
-    if (start < 1 || end < start || end > pageCount) {
-      return { field: "pageRange", message: `Pages must be between 1 and ${pageCount}.` };
-    }
-    for (let page = start; page <= end; page += 1) pages.add(page - 1);
+  for (const [first, last] of resolved.value) {
+    for (let page = first; page <= last; page += 1) pages.add(page - 1);
   }
-
   return [...pages].sort((left, right) => left - right);
 };
 
