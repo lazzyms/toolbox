@@ -1197,7 +1197,7 @@ mod command_tests {
         outputs.extend(named(&mut naming, "resize_images", image.clone(), assert_success("resize", resize_images(RunEvents::silent(), ResizeRequest { paths: vec![image.clone()], resize: ResizeStep { width: 128, height: 128, mode: "exact".into(), resampling: "lanczos".into(), keep_aspect_ratio: true, percentage: 100, longest_side: 128 }, output_location: location(&root, "resize") }))));
         outputs.extend(named(&mut naming, "rotate_images", image.clone(), assert_success("rotate", rotate_images(RunEvents::silent(), RotateRequest { paths: vec![image.clone()], rotate: RotateStep { degrees: 90, flip: "none".into() }, output_location: location(&root, "rotate") }))));
         outputs.extend(named(&mut naming, "crop_images", image.clone(), assert_success("crop image", crop_images(RunEvents::silent(), CropRequest { paths: vec![image.clone()], crop: CropStep { x: 0, y: 0, width: 128, height: 128, mode: "rectangle".into(), aspect_width: 128, aspect_height: 128, anchor: "center".into() }, output_location: location(&root, "crop image") }))));
-        outputs.extend(named(&mut naming, "export_image_edit_stack", image.clone(), assert_success("edit stack", export_image_edit_stack(RunEvents::silent(), ImageEditStackRequest { paths: vec![image.clone()], steps: ImageEditSteps { crop: Some(CropStep { x: 0, y: 0, width: 0, height: 0, mode: "aspectRatio".into(), aspect_width: 4, aspect_height: 5, anchor: "center".into() }), resize: Some(ResizeStep { width: 0, height: 0, mode: "longestSide".into(), resampling: "lanczos".into(), keep_aspect_ratio: true, percentage: 100, longest_side: 64 }), rotate: Some(RotateStep { degrees: 90, flip: "horizontal".into() }), tone: Some(ToneStep { brightness: 10, contrast: 0.0, saturation: -20.0, exposure: 0.0 }), watermark: Some(WatermarkOptions { text: Some("TEST".into()), logo_path: None, size: Some(0.3), opacity: 70, color: Some("#FFFFFF".into()), position: Some(WatermarkPosition::Anchor { anchor_x: 1.0, anchor_y: 1.0 }), rotation: -8.0 }) }, format: None, output_location: location(&root, "edit stack") }))));
+        outputs.extend(named(&mut naming, "export_image_edit_stack", image.clone(), assert_success("edit stack", export_image_edit_stack(RunEvents::silent(), ImageEditStackRequest { paths: vec![image.clone()], steps: ImageEditSteps { crop: Some(CropStep { x: 0, y: 0, width: 0, height: 0, mode: "aspectRatio".into(), aspect_width: 4, aspect_height: 5, anchor: "center".into() }), resize: Some(ResizeStep { width: 0, height: 0, mode: "longestSide".into(), resampling: "lanczos".into(), keep_aspect_ratio: true, percentage: 100, longest_side: 64 }), rotate: Some(RotateStep { degrees: 90, flip: "horizontal".into() }), tone: Some(ToneStep { brightness: 10, contrast: 0.0, saturation: -20.0, exposure: 0.0 }), watermark: Some(WatermarkOptions { text: Some("TEST".into()), logo_path: None, size: Some(0.3), opacity: 70, color: Some("#FFFFFF".into()), position: Some(WatermarkPosition::Anchor { anchor_x: 1.0, anchor_y: 1.0 }), rotation: -8.0 }), metadata: None }, format: None, output_location: location(&root, "edit stack") }))));
         outputs.extend(named(&mut naming, "generate_icon_set", image.clone(), assert_success("icons", generate_icon_set(RunEvents::silent(), IconSetRequest { paths: vec![image.clone()], preset: "favicon".into(), sizes: vec![], output_location: location(&root, "icons") }))));
         outputs.extend(named(&mut naming, "create_gif", image.clone(), assert_aggregate_success("create gif", &[image.clone(), image_two.clone()], run_create_gif(&GifCreateRequest { paths: vec![image.clone(), image_two.clone()], frame_delay_ms: 100, loop_forever: true, output_location: location(&root, "create gif"), output_path: None }))));
         outputs.extend(named(&mut naming, "extract_gif_frames", animated.clone(), assert_success("extract gif", extract_gif_frames(RunEvents::silent(), GifExtractRequest { paths: vec![animated.clone()], output_location: location(&root, "extract gif") }))));
@@ -1314,7 +1314,7 @@ mod command_tests {
         let originals = inputs.iter().map(|path| (Original::of(path), std::fs::read(path).unwrap())).collect::<Vec<_>>();
         let rectangle = CropStep { x: 10, y: 20, width: 64, height: 48, mode: "rectangle".into(), aspect_width: 0, aspect_height: 0, anchor: "custom".into() };
         let run = |folder: &str| tauri::async_runtime::block_on(export_image_edit_stack(RunEvents::silent(), ImageEditStackRequest {
-            paths: inputs.clone(), steps: ImageEditSteps { crop: Some(rectangle.clone()), resize: None, rotate: None, tone: None, watermark: None }, format: None, output_location: OutputLocation::CustomFolder(root.join(folder)),
+            paths: inputs.clone(), steps: ImageEditSteps { crop: Some(rectangle.clone()), resize: None, rotate: None, tone: None, watermark: None, metadata: None }, format: None, output_location: OutputLocation::CustomFolder(root.join(folder)),
         }));
         std::fs::create_dir_all(root.join("out")).unwrap();
         std::fs::create_dir_all(root.join("again")).unwrap();
@@ -2073,6 +2073,96 @@ mod command_tests {
             original.assert_untouched();
             assert_eq!(&std::fs::read(&original.path).unwrap(), bytes);
         }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn edit_stack_removes_metadata_keeping_orientation_and_colour_profile() {
+        use crate::kit::contracts::{OutcomeState, SkipCode};
+        use crate::kit::images::metadata::{self, fixtures::{self, Wanted}};
+        use crate::kit::images::strip::{self, CLEANED_LOSSLESSLY, NO_METADATA, REENCODED_TO_CLEAN};
+        let root = sandbox("edit_stack_metadata");
+        let everything = Wanted { exif: true, gps: true, orientation: Some(6), xmp: true, iptc: true, comments: true, icc: true };
+        let files = [
+            ("tagged.jpg", fixtures::jpeg(everything)),
+            ("tagged.png", fixtures::png(everything)),
+            ("tagged.webp", fixtures::webp(Wanted { exif: true, gps: true, xmp: true, icc: true, ..Wanted::default() })),
+            ("tagged.heic", fixtures::heic(Wanted { exif: true, gps: true, xmp: true, ..Wanted::default() })),
+            ("profile-only.png", fixtures::png(Wanted { icc: true, ..Wanted::default() })),
+            ("upright.jpg", strip::clean_jpeg(&fixtures::jpeg(Wanted::default()), Some(3)).unwrap()),
+        ];
+        let paths = files.iter().map(|(name, bytes)| { let path = root.join(name); std::fs::write(&path, bytes).unwrap(); path }).collect::<Vec<_>>();
+        let originals = paths.iter().map(Original::of).collect::<Vec<_>>();
+        let run = |paths: &[PathBuf], steps: &str, format: Option<&str>, folder: &str| {
+            let folder = root.join(folder);
+            std::fs::create_dir_all(&folder).unwrap();
+            tauri::async_runtime::block_on(export_image_edit_stack(RunEvents::silent(), ImageEditStackRequest {
+                paths: paths.to_vec(), steps: serde_json::from_str::<ImageEditSteps>(steps).unwrap(), format: format.map(str::to_string), output_location: OutputLocation::CustomFolder(folder),
+            }))
+        };
+        let clean = |path: &PathBuf| {
+            let found = metadata::read_file(path).unwrap();
+            assert!(strip::removable(&found).is_empty() && !found.gps, "{} still holds {found:?}", path.display());
+            found
+        };
+
+        let outcomes = run(&paths, r#"{"metadata":{}}"#, None, "strip");
+        assert_eq!(outcomes.iter().map(|outcome| &outcome.input_path).collect::<Vec<_>>(), paths.iter().collect::<Vec<_>>(), "in input order");
+        // JPEG and PNG lose their metadata without a new encode, and keep orientation and profile.
+        for (outcome, name) in [(&outcomes[0], "tagged-stripped.jpg"), (&outcomes[1], "tagged-stripped.png")] {
+            assert_eq!(outcome.output_paths(), [root.join("strip").join(name)], "{:?}", outcome.state);
+            assert_eq!(outcome.detail, format!("{CLEANED_LOSSLESSLY} Removed: Camera details, GPS location, XMP, IPTC, comments. Kept: Orientation, colour profile."));
+            let saved = clean(&outcome.output_paths()[0]);
+            assert_eq!((saved.orientation, saved.icc), (Some(6), true), "{name}");
+            let source = image::open(&outcome.input_path).unwrap().to_rgb8();
+            assert_eq!(image::open(&outcome.output_paths()[0]).unwrap().to_rgb8(), source, "{name}: the pixels are copied, not re-encoded");
+        }
+        // WebP and HEIC are re-encoded at quality 90. WebP keeps its profile; HEIC can't hold one here.
+        assert_eq!(outcomes[2].output_paths(), [root.join("strip").join("tagged-stripped.webp")]);
+        assert_eq!(outcomes[2].detail, format!("{REENCODED_TO_CLEAN} Removed: Camera details, GPS location, XMP. Kept: Colour profile."));
+        assert!(clean(&outcomes[2].output_paths()[0]).icc);
+        assert_eq!(outcomes[3].output_paths(), [root.join("strip").join("tagged-stripped.heic")]);
+        assert_eq!(outcomes[3].detail, format!("{REENCODED_TO_CLEAN} Removed: Camera details, GPS location, XMP."));
+        clean(&outcomes[3].output_paths()[0]);
+        heif::decode(&std::fs::read(&outcomes[3].output_paths()[0]).unwrap()).expect("the cleaned HEIC decodes");
+        // A profile or an orientation alone is nothing to remove, so no copy is made.
+        for outcome in &outcomes[4..] {
+            let OutcomeState::Skipped { reason } = &outcome.state else { panic!("{} should be Skipped, got {:?}", outcome.input_path.display(), outcome.state) };
+            assert_eq!((reason.code, reason.message.as_str()), (SkipCode::NoEffectiveChange, NO_METADATA));
+        }
+        let mut written = std::fs::read_dir(root.join("strip")).unwrap().map(|entry| entry.unwrap().file_name().into_string().unwrap()).collect::<Vec<_>>();
+        written.sort();
+        assert_eq!(written, ["tagged-stripped.heic", "tagged-stripped.jpg", "tagged-stripped.png", "tagged-stripped.webp"]);
+
+        // Beside a pixel step, the one encode drops the metadata, bakes the orientation and keeps the profile.
+        let resize = r#""resize":{"width":0,"height":0,"mode":"longestSide","percentage":100,"longestSide":8,"resampling":"lanczos","keepAspectRatio":true}"#;
+        let combined = run(&paths[..1], &format!(r#"{{{resize},"metadata":{{}}}}"#), None, "combined").remove(0);
+        assert_eq!(combined.output_paths(), [root.join("combined").join("tagged-edited.jpg")], "{:?}", combined.state);
+        assert!(combined.detail.ends_with("Removed: Camera details, GPS location, XMP, IPTC, comments. Kept: Orientation, colour profile."), "{}", combined.detail);
+        let saved = clean(&combined.output_paths()[0]);
+        assert_eq!((saved.orientation, saved.icc), (None, true));
+        // Choosing another format re-encodes into it, still with the profile.
+        let converted = run(&paths[1..2], r#"{"metadata":{}}"#, Some("jpg"), "converted").remove(0);
+        assert_eq!(converted.output_paths(), [root.join("converted").join("tagged-stripped.jpg")], "{:?}", converted.state);
+        assert!(clean(&converted.output_paths()[0]).icc);
+        // Even a file with nothing to remove is saved when the format changes.
+        let profile_only = run(&paths[4..5], r#"{"metadata":{}}"#, Some("webp"), "profile-only").remove(0);
+        assert_eq!(profile_only.output_paths(), [root.join("profile-only").join("profile-only-stripped.webp")], "{:?}", profile_only.state);
+
+        // A file whose metadata can't be read fails with no copy, rather than being saved unchecked.
+        let broken = root.join("broken.png");
+        let mut bytes = files[1].1.clone();
+        // The XMP text chunk no longer matches its checksum, though the pixels still decode.
+        let xmp = bytes.windows(17).position(|window| window == b"XML:com.adobe.xmp").unwrap();
+        bytes[xmp + 25] ^= 0xFF;
+        std::fs::write(&broken, &bytes).unwrap();
+        image::open(&broken).expect("the pixels still decode");
+        let failed = run(std::slice::from_ref(&broken), r#"{"metadata":{}}"#, None, "broken").remove(0);
+        assert!(failed.error().is_some_and(|error| error.message.starts_with("Could not read this image's metadata")), "{:?}", failed.state);
+        assert_eq!(std::fs::read_dir(root.join("broken")).unwrap().count(), 0);
+
+        for original in &originals { original.assert_untouched(); }
+        for ((_, bytes), path) in files.iter().zip(&paths) { assert_eq!(&std::fs::read(path).unwrap(), bytes); }
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -3344,6 +3434,7 @@ mod command_tests {
             ImageMetadata {
                 format, exif, gps: wanted.gps, xmp: wanted.xmp, iptc: wanted.iptc && textual, comments: wanted.comments && textual, icc: wanted.icc,
                 orientation: wanted.orientation.filter(|value| (1..=8).contains(value)).map(|value| value as u8),
+                camera_details: exif,
             }
         }
 

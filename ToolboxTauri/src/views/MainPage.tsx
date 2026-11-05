@@ -718,8 +718,7 @@ const ViewFor = ({ utility, initialPaths, fileActivation, onActivationAccepted, 
   // Views are chosen by tool: the PDF Editor holds both the scene editor and batch PDF tools.
   if (isPdfSceneTool(utility.id)) return <PDFEditorWorkspaceView utility={utility} initialPaths={initialPaths} onNavigate={onNavigate} onWorkspaceSourceAction={onWorkspaceSourceAction} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange} />;
   if (workspace.id === "pdf-editor" || workspace.id === "pdf-convert") return <PDFConversionWorkspaceView utility={utility} initialPaths={initialPaths} onFilesChange={onFilesChange} />;
-  if (workspace.id === "image-editor" && utility.id !== "image-metadata") return <ImageEditorWorkspaceView utility={utility} initialPaths={initialPaths} onSelectTool={onSelectTool} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange} onWorkspaceSourceAction={onWorkspaceSourceAction} />;
-  if (utility.id === "image-metadata") return <MediaWorkspaceView utility={utility} initialPaths={initialPaths} onFilesChange={onFilesChange} />;
+  if (workspace.id === "image-editor") return <ImageEditorWorkspaceView utility={utility} initialPaths={initialPaths} onSelectTool={onSelectTool} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange} onWorkspaceSourceAction={onWorkspaceSourceAction} />;
   const View = workspaceViews[workspace.id];
   return <View utility={utility} />;
 };

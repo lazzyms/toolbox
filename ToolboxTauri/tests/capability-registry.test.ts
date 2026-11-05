@@ -150,8 +150,8 @@ test("workspace entries group editor tools into one entry and list More tools la
     "pdf-organize", "pdf-merge", "pdf-split", "pdf-crop", "pdf-page-numbers", "pdf-redact",
     "more:pdf-rotate", "more:pdf-repair", "more:pdf-compare", "more:pdf-extract-pages",
   ]);
-  assert.deepEqual(entryIds("image-editor"), ["resize+crop+rotate+image-tone+image-watermark", "heic-convert", "image-metadata"]);
-  assert.deepEqual(entryIds("image-editor", { groupEditor: false }), ["resize", "crop", "rotate", "image-tone", "image-watermark", "heic-convert", "image-metadata"]);
+  assert.deepEqual(entryIds("image-editor"), ["resize+crop+rotate+image-tone+image-watermark+image-metadata", "heic-convert"]);
+  assert.deepEqual(entryIds("image-editor", { groupEditor: false }), ["resize", "crop", "rotate", "image-tone", "image-watermark", "image-metadata", "heic-convert"]);
 
   const pdfEditor = ToolWorkspaceRegistry.find(({ id }) => id === "pdf-editor")!;
   const [editEntry] = workspaceEntries(pdfEditor, toolsForWorkspace(pdfEditor).filter(({ id }) => id !== "pdf-edit"));

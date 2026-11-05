@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::common::watermark::{WatermarkOptions, WatermarkPlacement, WatermarkPosition};
 use crate::kit::contracts::{OutcomeWarning, SkipCode, SkipReason, ToolError, WarningKind};
-use crate::kit::images::OutputFormat;
+use crate::kit::images::{metadata, strip, OutputFormat};
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -186,7 +186,13 @@ pub struct ImageEditSteps {
     #[serde(default)] pub rotate: Option<RotateStep>,
     #[serde(default)] pub tone: Option<ToneStep>,
     #[serde(default)] pub watermark: Option<WatermarkOptions>,
+    #[serde(default)] pub metadata: Option<RemoveMetadataStep>,
 }
+
+/// Removing metadata has no options: it always keeps the orientation and colour profile.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemoveMetadataStep {}
 
 const STACK_QUALITY: u8 = 90;
 
@@ -197,7 +203,7 @@ pub const ORIENTATION_APPLIED_FIRST: &str = "Camera orientation was applied firs
 impl ImageEditSteps {
     /// One step keeps its tool's suffix; any combination is named -edited.
     fn suffix(&self) -> Result<&'static str, String> {
-        let present = [self.crop.as_ref().map(|_| "-cropped"), self.resize.as_ref().map(|_| "-resized"), self.rotate.as_ref().map(|_| "-rotated"), self.tone.as_ref().map(|_| "-tone"), self.watermark.as_ref().map(|_| "-watermarked")];
+        let present = [self.crop.as_ref().map(|_| "-cropped"), self.resize.as_ref().map(|_| "-resized"), self.rotate.as_ref().map(|_| "-rotated"), self.tone.as_ref().map(|_| "-tone"), self.watermark.as_ref().map(|_| "-watermarked"), self.metadata.as_ref().map(|_| "-stripped")];
         let mut suffixes = present.into_iter().flatten();
         match (suffixes.next(), suffixes.next()) {
             (None, _) => Err("Add a step to the stack before running.".to_string()),
@@ -209,7 +215,8 @@ impl ImageEditSteps {
     // The order is fixed here, never by the order the steps were added: crop runs first, so its
     // rectangle is always measured in source pixels, then resize scales what is left, then rotate and
     // flip turn the result, tone adjusts the colour of the pixels that are left, and the watermark
-    // goes on last so it is never cropped, scaled, turned or tinted with the photo.
+    // goes on last so it is never cropped, scaled, turned or tinted with the photo. Removing
+    // metadata changes no pixels, so it has nothing to do here: it decides how the copy is saved.
     fn apply(&self, mut image: DynamicImage) -> Result<DynamicImage, String> {
         if let Some(crop) = &self.crop {
             let (x, y, width, height) = crop_rect(image.width(), image.height(), crop)?;
@@ -235,9 +242,11 @@ impl ImageEditSteps {
     /// neither turns nor mirrors, and tone when all four values are 0. A step that cannot apply to
     /// the image is never neutral, so it still fails as it would otherwise. A watermark with text or
     /// a logo always marks the image, and one with neither fails, so a watermark is never neutral.
+    /// Removing metadata leaves the pixels as they are, so it is neutral here, and whether the file
+    /// has any metadata to remove is read from the file itself.
     /// Every step is named here, so a new step must say whether it can be.
     fn is_neutral_for(&self, width: u32, height: u32) -> bool {
-        let Self { crop, resize, rotate, tone, watermark } = self;
+        let Self { crop, resize, rotate, tone, watermark, metadata: _ } = self;
         crop.as_ref().is_none_or(|crop| crop_rect(width, height, crop).is_ok_and(|rect| rect == (0, 0, width, height)))
             && resize.as_ref().is_none_or(|resize| resize_dimensions(width, height, resize).is_ok_and(|size| size == (width, height)))
             && rotate.as_ref().is_none_or(RotateStep::is_neutral)
@@ -290,24 +299,62 @@ pub fn export_edit_stack(request: &ImageEditStackRequest, input: PathBuf) -> Job
         Ok(decoded) => decoded,
         Err(error) => return failure(input, error),
     };
-    // A stack that leaves this image as it is, saved in the format it already has, would only
-    // make a copy, so the file is Skipped before anything is encoded or reserved.
-    if input_format(&input) == Some(format) && request.steps.is_neutral_for(source.width(), source.height()) {
-        return JobOutcome::skipped(input, SkipReason::new(SkipCode::NoEffectiveChange, NO_CHANGES));
-    }
-    let high_bit_source = crate::kit::images::has_high_bit_depth(source.color());
-    // A step that cannot apply to this image (a crop outside it, a size past the limits) is a
-    // problem with the request, not with the file.
-    let edited = match request.steps.apply(source) {
-        Ok(image) => image,
-        Err(error) => return JobOutcome::failure(input, ToolError::invalid_input(error)),
+    // Removing metadata starts from what the original holds, so a file whose metadata can't be
+    // read fails rather than being saved with something left in it.
+    let found = match request.steps.metadata {
+        Some(_) => match metadata::read_file(&input) {
+            Ok(found) => Some(found),
+            Err(error) => return failure(input, format!("Could not read this image's metadata: {error}")),
+        },
+        None => None,
     };
-    // JPEG has no alpha, and only PNG stores more than 8 bits per channel.
-    let flattened = format == OutputFormat::Jpeg && crate::kit::images::has_transparency(&edited);
-    let reduced = high_bit_source && (format != OutputFormat::Png || !crate::kit::images::has_high_bit_depth(edited.color()));
-    let bytes = match crate::kit::images::encode(&edited, format, STACK_QUALITY) {
-        Ok(bytes) => bytes,
-        Err(error) => return failure(input, error),
+    // A stack that leaves this image as it is, saved in the format it already has, would only
+    // make a copy, so the file is Skipped before anything is encoded or reserved. When the stack
+    // removes metadata, that copy is only worth making if there is metadata to remove.
+    let unchanged = input_format(&input) == Some(format) && request.steps.is_neutral_for(source.width(), source.height());
+    if unchanged {
+        match &found {
+            None => return JobOutcome::skipped(input, SkipReason::new(SkipCode::NoEffectiveChange, NO_CHANGES)),
+            Some(found) if strip::removable(found).is_empty() => return JobOutcome::skipped(input, SkipReason::new(SkipCode::NoEffectiveChange, strip::NO_METADATA)),
+            Some(_) => {}
+        }
+    }
+    let mut warnings = Vec::new();
+    let (bytes, detail) = match (&found, unchanged, format) {
+        // Only metadata is removed, and JPEG and PNG can lose it without touching the pixels.
+        (Some(found), true, OutputFormat::Jpeg | OutputFormat::Png) => {
+            let cleaned = std::fs::read(&input).map_err(|error| format!("Could not read image: {error}")).and_then(|original| match format {
+                OutputFormat::Jpeg => strip::clean_jpeg(&original, found.orientation),
+                _ => strip::clean_png(&original, found.orientation),
+            });
+            match cleaned {
+                Ok(bytes) => (bytes, strip::CLEANED_LOSSLESSLY.to_string()),
+                Err(error) => return failure(input, error),
+            }
+        }
+        _ => {
+            let high_bit_source = crate::kit::images::has_high_bit_depth(source.color());
+            // A step that cannot apply to this image (a crop outside it, a size past the limits) is a
+            // problem with the request, not with the file.
+            let edited = match request.steps.apply(source) {
+                Ok(image) => image,
+                Err(error) => return JobOutcome::failure(input, ToolError::invalid_input(error)),
+            };
+            // JPEG has no alpha, and only PNG stores more than 8 bits per channel.
+            if format == OutputFormat::Jpeg && crate::kit::images::has_transparency(&edited) {
+                warnings.push(OutcomeWarning { kind: WarningKind::TransparencyFlattened, message: TRANSPARENCY_FLATTENED.to_string() });
+            }
+            if high_bit_source && (format != OutputFormat::Png || !crate::kit::images::has_high_bit_depth(edited.color())) {
+                warnings.push(OutcomeWarning { kind: WarningKind::PrecisionReduced, message: REDUCED_TO_8_BIT.to_string() });
+            }
+            // A new encode writes no metadata at all, and the orientation is already in the pixels.
+            // When metadata is removed, the colour profile is carried over so colours look the same.
+            let profile = found.as_ref().filter(|found| found.icc).and_then(|_| crate::kit::images::icc_profile(&input));
+            match crate::kit::images::encode_with_profile(&edited, format, STACK_QUALITY, profile.as_deref()) {
+                Ok(bytes) => (bytes, if unchanged { strip::REENCODED_TO_CLEAN.to_string() } else { request.steps.detail(oriented) }),
+                Err(error) => return failure(input, error),
+            }
+        }
     };
     let output = match OutputNaming::reserve_destination(&input, &request.output_location, suffix, format.extension()) {
         Ok(output) => output,
@@ -316,17 +363,20 @@ pub fn export_edit_stack(request: &ImageEditStackRequest, input: PathBuf) -> Job
     if let Err(error) = std::fs::write(output.path(), bytes) {
         return failure(input, format!("Could not save image: {error}"));
     }
+    // Each cleaned copy is read back once saved. If anything removed is still there, the file
+    // fails and the reservation is dropped, so no copy is kept.
+    let detail = match &found {
+        Some(found) => match metadata::read_file(output.path()) {
+            Ok(saved) => match strip::verify(&saved) {
+                Ok(()) => [detail, strip::summary(found, &saved)].join(" ").trim().to_string(),
+                Err(reason) => return failure(input, reason.to_string()),
+            },
+            Err(error) => return failure(input, format!("Could not check the cleaned copy: {error}")),
+        },
+        None => detail,
+    };
     match output.publish() {
-        Ok(path) => {
-            let mut outcome = JobOutcome::succeeded(input, vec![path], request.steps.detail(oriented));
-            if flattened {
-                outcome = outcome.with_warning(OutcomeWarning { kind: WarningKind::TransparencyFlattened, message: TRANSPARENCY_FLATTENED.to_string() });
-            }
-            if reduced {
-                outcome = outcome.with_warning(OutcomeWarning { kind: WarningKind::PrecisionReduced, message: REDUCED_TO_8_BIT.to_string() });
-            }
-            outcome
-        }
+        Ok(path) => warnings.into_iter().fold(JobOutcome::succeeded(input, vec![path], detail), JobOutcome::with_warning),
         Err(error) => failure(input, format!("Could not publish image: {error}")),
     }
 }
