@@ -6,7 +6,7 @@ use quick_xml::{events::Event, escape::unescape, Reader as XmlReader, XmlVersion
 use serde::{Deserialize, Serialize};
 use crate::kit::{common::{JobOutcome, OutputLocation, OutputNaming}, contracts::ToolError};
 use super::metadata::{PdfDocumentMetadata, PdfPageMetadata, PdfTextRun};
-use super::{inherited, resolve, PdfMutationIntent};
+use super::{inherited, resolve, text_edit, PdfMutationIntent};
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Rect { pub x: f32, pub y: f32, pub width: f32, pub height: f32 }
@@ -52,10 +52,10 @@ pub struct ScenePage {
 pub struct PdfScene { pub pages: Vec<ScenePage> }
 #[derive(Deserialize)]
 #[serde(rename_all="camelCase")]
-pub struct PreviewRequest { pub path: PathBuf, pub scene: PdfScene, pub page_index: usize }
+pub struct PreviewRequest { pub path: PathBuf, pub scene: PdfScene, pub page_index: usize, #[serde(flatten)] pub sections: StageSections }
 #[derive(Deserialize)]
 #[serde(rename_all="camelCase")]
-pub struct PreviewPagesRequest { pub path: PathBuf, pub scene: PdfScene, pub page_indices: Vec<usize> }
+pub struct PreviewPagesRequest { pub path: PathBuf, pub scene: PdfScene, pub page_indices: Vec<usize>, #[serde(flatten)] pub sections: StageSections }
 #[derive(Deserialize)]
 #[serde(rename_all="camelCase")]
 pub struct ExportRequest { pub paths: Vec<PathBuf>, pub scene: PdfScene, pub output_location: OutputLocation, #[serde(flatten)] pub sections: StageSections }
@@ -63,7 +63,7 @@ pub struct ExportRequest { pub paths: Vec<PathBuf>, pub scene: PdfScene, pub out
 #[serde(default, rename_all="camelCase")]
 pub struct StageSections {
     pub form_values: Option<Vec<serde_json::Value>>,
-    pub text_edits: Option<Vec<serde_json::Value>>,
+    pub text_edits: Option<Vec<text_edit::TextEdit>>,
     pub flatten: Option<bool>,
     pub redactions: Option<Vec<serde_json::Value>>,
 }
@@ -530,11 +530,16 @@ pub enum Stage { FillForms, EditText, Overlays, Flatten, Redact }
 pub const STAGES: [Stage; 5] = [Stage::FillForms, Stage::EditText, Stage::Overlays, Stage::Flatten, Stage::Redact];
 
 struct OverlayPlan { preflight: ScenePreflight, identity: bool, pure_reorder: bool }
-enum StagePlan { Skip, Overlays(OverlayPlan) }
+enum StagePlan { Skip, EditText(text_edit::TextEditPlan), Overlays(OverlayPlan) }
 
-fn unsupported_section(present: bool, name: &str) -> Result<StagePlan, String> {
-    if present { return Err(format!("{name} is not supported yet; scene export was rejected before output")); }
+fn unsupported_section(present: bool, name: &str) -> Result<StagePlan, ToolError> {
+    if present { return Err(ToolError::processing(format!("{name} is not supported yet; scene export was rejected before output"))); }
     Ok(StagePlan::Skip)
+}
+
+fn edit_text_preflight(doc: &Document, edits: Option<&[text_edit::TextEdit]>) -> Result<StagePlan, ToolError> {
+    let Some(edits) = edits else { return Ok(StagePlan::Skip) };
+    text_edit::preflight(doc, edits, |page| geometry(doc, page).map(|geometry| geometry.matrix)).map(StagePlan::EditText)
 }
 
 fn overlay_preflight(doc: &Document, scene: &PdfScene) -> Result<StagePlan, String> {
@@ -546,11 +551,11 @@ fn overlay_preflight(doc: &Document, scene: &PdfScene) -> Result<StagePlan, Stri
     Ok(StagePlan::Overlays(OverlayPlan { preflight, identity, pure_reorder }))
 }
 
-fn stage_preflight(stage: Stage, doc: &Document, scene: &PdfScene, sections: &StageSections) -> Result<StagePlan, String> {
+fn stage_preflight(stage: Stage, doc: &Document, scene: &PdfScene, sections: &StageSections) -> Result<StagePlan, ToolError> {
     match stage {
         Stage::FillForms => unsupported_section(sections.form_values.is_some(), "Filling form fields"),
-        Stage::EditText => unsupported_section(sections.text_edits.is_some(), "Editing existing text"),
-        Stage::Overlays => overlay_preflight(doc, scene),
+        Stage::EditText => edit_text_preflight(doc, sections.text_edits.as_deref()),
+        Stage::Overlays => overlay_preflight(doc, scene).map_err(ToolError::processing),
         Stage::Flatten => unsupported_section(sections.flatten.is_some(), "Flattening"),
         Stage::Redact => unsupported_section(sections.redactions.is_some(), "Redaction"),
     }
@@ -559,18 +564,20 @@ fn stage_preflight(stage: Stage, doc: &Document, scene: &PdfScene, sections: &St
 fn stage_apply(plan: StagePlan, doc: &mut Document, scene: &PdfScene) -> Result<(), String> {
     match plan {
         StagePlan::Skip => Ok(()),
+        StagePlan::EditText(plan) => text_edit::apply(doc, plan),
         StagePlan::Overlays(plan) => apply_overlays(doc, scene, plan),
     }
 }
 
-fn run_stages(path:&Path, scene:&PdfScene, sections:&StageSections)->Result<Document,String> {
-    let mut doc=load(path)?;
-    let plans=STAGES.iter().map(|&stage| stage_preflight(stage, &doc, scene, sections)).collect::<Result<Vec<_>,String>>()?;
-    for plan in plans { stage_apply(plan, &mut doc, scene)?; }
+fn run_stages(path:&Path, scene:&PdfScene, sections:&StageSections)->Result<Document,ToolError> {
+    let mut doc=load(path).map_err(ToolError::processing)?;
+    let plans=STAGES.iter().map(|&stage| stage_preflight(stage, &doc, scene, sections)).collect::<Result<Vec<_>,_>>()?;
+    for plan in plans { stage_apply(plan, &mut doc, scene).map_err(ToolError::processing)?; }
     Ok(doc)
 }
+fn compose_with(path:&Path, scene:&PdfScene, sections:&StageSections)->Result<Document,String> { run_stages(path, scene, sections).map_err(|error| error.message) }
 
-pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> { run_stages(path, scene, &StageSections::default()) }
+pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> { compose_with(path, scene, &StageSections::default()) }
 
 fn apply_overlays(doc:&mut Document, scene:&PdfScene, OverlayPlan { preflight, identity, pure_reorder }: OverlayPlan)->Result<(),String> {
     let sources=&preflight.source_pages;
@@ -849,7 +856,7 @@ pub fn preview(request:&PreviewRequest)->Result<ScenePreview,String> {
     let renderer=renderer()?;
     let temp=TempDir::new()?;
     let path=temp.0.join("scene.pdf");
-    compose(&request.path,&request.scene)?.save(&path).map_err(err)?;
+    compose_with(&request.path,&request.scene,&request.sections)?.save(&path).map_err(err)?;
     render(&path,request.page_index,&renderer,&temp)
 }
 fn validate_preview_page_indices(page_indices:&[usize], page_count:usize)->Result<(),String> {
@@ -866,7 +873,7 @@ pub fn preview_pages(request:&PreviewPagesRequest)->Result<Vec<IndexedScenePrevi
     let renderer=renderer()?;
     let temp=TempDir::new()?;
     let path=temp.0.join("scene.pdf");
-    compose(&request.path,&request.scene)?.save(&path).map_err(err)?;
+    compose_with(&request.path,&request.scene,&request.sections)?.save(&path).map_err(err)?;
     request.page_indices.iter().copied().map(|page_index| {
         render(&path,page_index,&renderer,&temp).map(|preview| IndexedScenePreview{page_index,preview})
     }).collect()
@@ -877,7 +884,7 @@ pub fn inspect(path:&Path)->Result<PdfDocumentMetadata,String> {
     for (index,id) in doc.get_pages().values().enumerate() {
         let g=geometry(&doc,*id)?;
         let source_rotation = inherited(&doc, *id, b"Rotate")?.map(|value| value.as_i64().map_err(err)).transpose()?.unwrap_or(0).rem_euclid(360) as i32;
-        pages.push(PdfPageMetadata{index,x:g.bbox[0],y:g.bbox[1],width:g.width,height:g.height,rotation:source_rotation,page_box:g.bbox,preview:None,text_runs:None});
+        pages.push(PdfPageMetadata{index,x:g.bbox[0],y:g.bbox[1],width:g.width,height:g.height,rotation:source_rotation,page_box:g.bbox,preview:None,text_runs:None,edit_runs:None});
     }
     if pages.is_empty() { return Err("PDF contains no pages".into()); }
     Ok(PdfDocumentMetadata{path:path.to_path_buf(),pages})
@@ -890,27 +897,29 @@ pub fn inspect_page(path:&Path,page_index:usize)->Result<PdfPageMetadata,String>
     let source_rotation = inherited(&doc, id, b"Rotate")?.map(|value| value.as_i64().map_err(err)).transpose()?.unwrap_or(0).rem_euclid(360) as i32;
     let text_runs=extract_text_runs(path,page_index + 1,g.width,g.height,Instant::now() + super::PDF_TEXT_TIMEOUT).unwrap_or_default();
     let preview = super::metadata::render_preview(path, page_index + 1, g.width, g.height);
-    Ok(PdfPageMetadata{index:page_index,x:g.bbox[0],y:g.bbox[1],width:g.width,height:g.height,rotation:source_rotation,page_box:g.bbox,preview,text_runs:Some(text_runs)})
+    let edit_runs=text_edit::page_text(&doc,id,g.matrix).map(|text| text.runs()).unwrap_or_default();
+    Ok(PdfPageMetadata{index:page_index,x:g.bbox[0],y:g.bbox[1],width:g.width,height:g.height,rotation:source_rotation,page_box:g.bbox,preview,text_runs:Some(text_runs),edit_runs:Some(edit_runs)})
 }
 pub fn export(request:&ExportRequest,input:PathBuf)->JobOutcome {
-    let result=(|| {
-        if !matches!(request.output_location,OutputLocation::AlongsideInput) { return Err("Scene exports must be alongside the input".into()); }
+    let result=(|| -> Result<PathBuf,ToolError> {
+        let processing=|error: String| ToolError::processing(error);
+        if !matches!(request.output_location,OutputLocation::AlongsideInput) { return Err(processing("Scene exports must be alongside the input".into())); }
         let mut bytes=Vec::new();
-        run_stages(&input,&request.scene,&request.sections)?.save_to(&mut bytes).map_err(err)?;
-        let parent=input.parent().ok_or("Input has no parent directory")?;
-        let stem=input.file_stem().ok_or("Input has no filename")?.to_string_lossy();
+        run_stages(&input,&request.scene,&request.sections)?.save_to(&mut bytes).map_err(|error| processing(err(error)))?;
+        let parent=input.parent().ok_or_else(|| processing("Input has no parent directory".into()))?;
+        let stem=input.file_stem().ok_or_else(|| processing("Input has no filename".into()))?.to_string_lossy();
         for n in 1..=10000 {
             let candidate=parent.join(format!("{stem}-edited-{n}.pdf"));
-            let reservation=match OutputNaming::reserve_named_candidate(&candidate).map_err(err)? {
+            let reservation=match OutputNaming::reserve_named_candidate(&candidate).map_err(|error| processing(err(error)))? {
                 Some(reservation)=>reservation,
                 None=>continue,
             };
-            let mut file=OpenOptions::new().write(true).open(reservation.path()).map_err(err)?;
-            file.write_all(&bytes).and_then(|_|file.sync_all()).map_err(err)?;
-            return reservation.publish().map_err(err);
-        } Err("Could not reserve a unique export filename".into())
+            let mut file=OpenOptions::new().write(true).open(reservation.path()).map_err(|error| processing(err(error)))?;
+            file.write_all(&bytes).and_then(|_|file.sync_all()).map_err(|error| processing(err(error)))?;
+            return reservation.publish().map_err(|error| processing(err(error)));
+        } Err(processing("Could not reserve a unique export filename".into()))
     })();
-    match result { Ok(path)=>JobOutcome::succeeded(input, vec![path], "PDF scene exported"),Err(e)=>JobOutcome::failure(input,ToolError::processing(e)) }
+    match result { Ok(path)=>JobOutcome::succeeded(input, vec![path], "PDF scene exported"),Err(e)=>JobOutcome::failure(input,e) }
 }
 
 #[cfg(test)]
@@ -1311,7 +1320,7 @@ mod tests {
             (vec![0, 1, 2, 0], "Preview requests must include 1–3 page indices"),
         ];
         for (page_indices,message) in cases {
-            let result=preview_pages(&PreviewPagesRequest { path: PathBuf::from("missing.pdf"), scene: scene(), page_indices });
+            let result=preview_pages(&PreviewPagesRequest { path: PathBuf::from("missing.pdf"), scene: scene(), page_indices, sections: Default::default() });
             assert_eq!(result.err().as_deref(),Some(message));
         }
     }
@@ -1322,7 +1331,7 @@ mod tests {
         let renderer=match renderer() { Ok(r)=>r,Err(e)=>{if std::env::var_os("TOOLBOX_REQUIRE_PDF_RENDERER").is_some(){panic!("{e}")}; eprintln!("Renderer unavailable: {e}");return;} };
         let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); fixture(&input);
         let before=fs::read(&input).unwrap();
-        let request=PreviewPagesRequest { path:input.clone(), scene:scene(), page_indices:vec![2,0,1] };
+        let request=PreviewPagesRequest { path:input.clone(), scene:scene(), page_indices:vec![2,0,1], sections: Default::default() };
         let previews=preview_pages(&request).unwrap();
         assert_eq!(previews.iter().map(|preview| preview.page_index).collect::<Vec<_>>(),vec![2,0,1]);
         assert!(previews.iter().all(|preview| preview.preview.data_url.starts_with("data:image/png;base64,")));
@@ -1345,7 +1354,7 @@ mod tests {
         let request=ExportRequest{paths:vec![input.clone()],scene:scene(),output_location:OutputLocation::AlongsideInput, sections: Default::default()};
         let exported=export(&request,input.clone()); assert!(exported.error().is_none());
         for index in 0..3 {
-            let preview=preview(&PreviewRequest{path:input.clone(),scene:scene(),page_index:index}).unwrap();
+            let preview=preview(&PreviewRequest{path:input.clone(),scene:scene(),page_index:index,sections:Default::default()}).unwrap();
             let actual=render(&exported.output_paths()[0],index,&renderer,&temp).unwrap();
             assert_eq!(preview.data_url,actual.data_url,"page {index} differs between preview and export");
         }
@@ -1354,8 +1363,8 @@ mod tests {
         assert!(!directory.exists());
         // Removing all source marks must visibly differ: negative control for the pixel oracle.
         let mut bare=scene();bare.pages[0].objects.clear();
-        assert_ne!(preview(&PreviewRequest{path:input.clone(),scene:bare,page_index:0}).unwrap().data_url,
-            preview(&PreviewRequest{path:input,scene:scene(),page_index:0}).unwrap().data_url);
+        assert_ne!(preview(&PreviewRequest{path:input.clone(),scene:bare,page_index:0,sections:Default::default()}).unwrap().data_url,
+            preview(&PreviewRequest{path:input,scene:scene(),page_index:0,sections:Default::default()}).unwrap().data_url);
     }
 
     #[test]
@@ -1726,7 +1735,6 @@ mod tests {
         let original=fs::read(&input).unwrap();
         let cases=[
             (serde_json::json!({ "formValues": [] }), "Filling form fields is not supported yet"),
-            (serde_json::json!({ "textEdits": [{ "run": 0 }] }), "Editing existing text is not supported yet"),
             (serde_json::json!({ "flatten": false }), "Flattening is not supported yet"),
             (serde_json::json!({ "redactions": [] }), "Redaction is not supported yet"),
         ];
@@ -1746,13 +1754,121 @@ mod tests {
         let first_failure=|sections: serde_json::Value, scene: Option<PdfScene>| {
             let mut request=wire_request(&input, sections);
             if let Some(scene)=scene { request.scene=scene; }
-            run_stages(&input,&request.scene,&request.sections).err().unwrap()
+            run_stages(&input,&request.scene,&request.sections).err().unwrap().message
         };
         let all=serde_json::json!({ "formValues": [], "textEdits": [], "flatten": true, "redactions": [] });
         assert!(first_failure(all, None).starts_with("Filling form fields"));
-        assert!(first_failure(serde_json::json!({ "textEdits": [], "flatten": true, "redactions": [] }), None).starts_with("Editing existing text"));
+        assert!(first_failure(serde_json::json!({ "textEdits": [], "flatten": true, "redactions": [] }), None).starts_with("No text was changed"));
         assert!(first_failure(serde_json::json!({ "flatten": true, "redactions": [] }), Some(PdfScene{pages:vec![]})).starts_with("Scene must contain"));
         assert!(first_failure(serde_json::json!({ "flatten": true, "redactions": [] }), None).starts_with("Flattening"));
         assert!(first_failure(serde_json::json!({ "redactions": [] }), None).starts_with("Redaction"));
+    }
+
+    fn text_edit_fixture(path: &Path, embedded: bool) {
+        let mut d = Document::with_version("1.7");
+        let root = d.new_object_id();
+        let mut helvetica = dictionary! {"Type"=>"Font", "Subtype"=>"Type1", "BaseFont"=>"Helvetica", "Encoding"=>"WinAnsiEncoding"};
+        if embedded {
+            let file = d.add_object(Stream::new(dictionary!{}, b"glyphs".to_vec()));
+            let descriptor = d.add_object(dictionary! {"Type"=>"FontDescriptor", "FontName"=>"ABCDEF+Helvetica", "Flags"=>32, "FontFile2"=>file});
+            helvetica = dictionary! {"Type"=>"Font", "Subtype"=>"TrueType", "BaseFont"=>"ABCDEF+Helvetica", "Encoding"=>"WinAnsiEncoding", "FontDescriptor"=>descriptor};
+        }
+        let font = d.add_object(helvetica);
+        let cid_font = d.add_object(dictionary! {"Type"=>"Font", "Subtype"=>"Type0", "BaseFont"=>"Identity", "Encoding"=>"Identity-H"});
+        let image = d.add_object(Stream::new(dictionary! {"Type"=>"XObject", "Subtype"=>"Image", "Width"=>1, "Height"=>1, "ColorSpace"=>"DeviceGray", "BitsPerComponent"=>8}, vec![0]));
+        let resources = d.add_object(dictionary! {"Font"=>dictionary! {"OriginalFont"=>font, "CidFont"=>cid_font}, "XObject"=>dictionary! {"Scan"=>image}});
+        let content = d.add_object(Stream::new(dictionary!{}, b"BT /OriginalFont 18 Tf 1 0 0 rg 40 700 Td (Original content) Tj ET \
+            q 100 0 0 50 40 600 cm /Scan Do Q BT /CidFont 12 Tf 40 500 Td <0001> Tj ET \
+            /Span <</MCID 0>> BDC BT /OriginalFont 12 Tf 40 400 Td (Tagged words) Tj ET EMC".to_vec()));
+        let kids: Vec<Object> = (0..2).map(|_| Object::Reference(d.add_object(dictionary! {"Type"=>"Page", "Parent"=>root, "MediaBox"=>array(&[0.,0.,612.,792.]), "Resources"=>resources, "Contents"=>content}))).collect();
+        d.objects.insert(root, Object::Dictionary(dictionary! {"Type"=>"Pages", "Kids"=>kids, "Count"=>2}));
+        let catalog = d.add_object(dictionary! {"Type"=>"Catalog","Pages"=>root});
+        d.trailer.set("Root",catalog);
+        d.save(path).unwrap();
+    }
+
+    fn edit_request(input: &Path, edits: serde_json::Value) -> ExportRequest {
+        let page = serde_json::json!({ "width": 612, "height": 792, "rotation": 0, "crop": null, "objects": [] });
+        let pages: Vec<_> = (0..2).map(|index| { let mut page = page.clone(); page["sourceIndex"] = index.into(); page }).collect();
+        serde_json::from_value(serde_json::json!({ "paths": [input], "outputLocation": "alongsideInput", "scene": { "pages": pages }, "textEdits": edits })).unwrap()
+    }
+
+    fn page_runs(path: &Path, page_index: usize) -> Vec<text_edit::TextEditRun> {
+        let doc = load(path).unwrap();
+        let id = doc.get_pages().values().copied().nth(page_index).unwrap();
+        let matrix = geometry(&doc, id).unwrap().matrix;
+        text_edit::page_text(&doc, id, matrix).unwrap().runs()
+    }
+
+    #[test]
+    fn page_runs_mark_editable_text_and_explain_the_rest() {
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); text_edit_fixture(&input, false);
+        let runs=page_runs(&input,1);
+        let summary: Vec<_>=runs.iter().map(|run| (run.text.as_str(), run.reason)).collect();
+        assert_eq!(summary,[("Original content",None),("",Some(text_edit::NotEditable::Picture)),("",Some(text_edit::NotEditable::Encoding)),("Tagged words",Some(text_edit::NotEditable::Tagged))]);
+        let first=&runs[0];
+        assert_eq!((first.font_name.as_str(),first.font_size),("Helvetica",18.));
+        assert!((first.x-40.).abs()<0.01 && (first.y-(792.-700.-18.*0.8)).abs()<0.01 && first.width>100. && first.width<160.,"{first:?}");
+        let picture=&runs[1];
+        assert_eq!((picture.x,picture.y,picture.width,picture.height),(40.,142.,100.,50.));
+    }
+
+    #[test]
+    fn edited_text_keeps_its_font_extracts_and_leaves_the_original_and_shared_stream_alone() {
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); text_edit_fixture(&input, false);
+        let original=fs::read(&input).unwrap();
+        let edits=serde_json::json!([{ "pageIndex": 1, "run": 0, "original": "Original content", "replacement": "Revised (content) é" }]);
+        let request=edit_request(&input, edits);
+        let preview=compose_with(&input,&request.scene,&request.sections).unwrap();
+        let preview_id=preview.get_pages().values().copied().nth(1).unwrap();
+        assert_eq!(text_edit::page_text(&preview,preview_id,[1.,0.,0.,1.,0.,0.]).unwrap().runs()[0].text,"Revised (content) é");
+
+        let outcome=export(&request,input.clone());
+        assert!(outcome.error().is_none(),"{:?}",outcome.error());
+        assert_eq!(outcome.output_paths(),[temp.0.join("source-edited-1.pdf")]);
+        assert_eq!(fs::read(&input).unwrap(),original);
+        let output=&outcome.output_paths()[0];
+        let edited=page_runs(output,1);
+        assert_eq!((edited[0].text.as_str(),edited[0].font_name.as_str(),edited[0].font_size,edited[0].reason),("Revised (content) é","Helvetica",18.,None));
+        assert_eq!(page_runs(output,0)[0].text,"Original content");
+        let doc=load(output).unwrap();
+        let id=doc.get_pages().values().copied().nth(1).unwrap();
+        let content=String::from_utf8_lossy(&doc.get_page_content(id)).to_string();
+        assert!(content.contains("/OriginalFont 18 Tf") && content.contains("1 0 0 rg"),"{content}");
+        if text_extractor().is_some() {
+            let runs=extract_text_runs(output,2,612.,792.,Instant::now() + super::super::PDF_TEXT_TIMEOUT).unwrap();
+            let text=runs.iter().map(|run| run.text.as_str()).collect::<Vec<_>>().join(" ");
+            assert!(text.contains("Revised (content) é") && !text.contains("Original content"),"{text}");
+        }
+    }
+
+    #[test]
+    fn text_edits_that_cannot_be_kept_faithful_are_refused_without_output() {
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); text_edit_fixture(&input, false);
+        let embedded=temp.0.join("embedded.pdf"); text_edit_fixture(&embedded, true);
+        let cases=[
+            (&input, serde_json::json!([]), "No text was changed"),
+            (&input, serde_json::json!([{ "pageIndex": 1, "run": 1, "original": "", "replacement": "x" }]), "This text is part of a picture"),
+            (&input, serde_json::json!([{ "pageIndex": 1, "run": 2, "original": "", "replacement": "x" }]), "This text uses a font with no character map"),
+            (&input, serde_json::json!([{ "pageIndex": 1, "run": 3, "original": "Tagged words", "replacement": "Other words" }]), "This text is linked to the PDF's accessibility tags"),
+            (&input, serde_json::json!([{ "pageIndex": 1, "run": 0, "original": "Stale", "replacement": "x" }]), "The text you edited on page 2 no longer matches"),
+            (&input, serde_json::json!([{ "pageIndex": 1, "run": 0, "original": "Original content", "replacement": "Arrow →" }]), "“→” isn't in the character set"),
+            (&input, serde_json::json!([{ "pageIndex": 1, "run": 0, "original": "Original content", "replacement": "Two\nlines" }]), "Line breaks"),
+            (&input, serde_json::json!([{ "pageIndex": 1, "run": 0, "original": "Original content", "replacement": "Original content" }]), "A text edit on page 2 doesn't change"),
+            (&input, serde_json::json!([{ "pageIndex": 9, "run": 0, "original": "Original content", "replacement": "x" }]), "A text edit points to a page"),
+            (&embedded, serde_json::json!([{ "pageIndex": 0, "run": 0, "original": "Original content", "replacement": "Original contents!" }]), "This text's font only includes the characters already used on page 1, so “!”"),
+        ];
+        for (path,edits,message) in cases {
+            let original=fs::read(path).unwrap();
+            let outcome=export(&edit_request(path, edits),path.clone());
+            let error=outcome.error().expect("edit should be refused");
+            assert!(error.kind==crate::kit::contracts::ErrorKind::InvalidInput && error.message.starts_with(message),"{message}: {error:?}");
+            assert!(outcome.output_paths().is_empty());
+            assert_eq!(fs::read_dir(&temp.0).unwrap().count(),2);
+            assert_eq!(fs::read(path).unwrap(),original);
+        }
+        let outcome=export(&edit_request(&embedded, serde_json::json!([{ "pageIndex": 0, "run": 0, "original": "Original content", "replacement": "content origin" }])),embedded.clone());
+        assert!(outcome.error().is_none(),"{:?}",outcome.error());
+        assert_eq!(page_runs(&outcome.output_paths()[0],0)[0].text,"content origin");
     }
 }

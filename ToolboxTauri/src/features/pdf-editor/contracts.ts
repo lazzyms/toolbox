@@ -18,6 +18,7 @@ export interface PdfPage {
     pageBox?: [number, number, number, number];
     preview?: string | null;
     textRuns?: PdfTextRun[] | null;
+    editRuns?: PdfEditRun[] | null;
 }
 
 export interface PdfTextRun {
@@ -26,6 +27,22 @@ export interface PdfTextRun {
     y: number;
     width: number;
     height: number;
+}
+
+export type PdfEditRunReason = "picture" | "encoding" | "tagged" | "unsupported";
+
+export interface PdfEditRun extends PdfTextRun {
+    index: number;
+    fontName: string;
+    fontSize: number;
+    reason: PdfEditRunReason | null;
+}
+
+export interface PdfTextEdit {
+    pageIndex: number;
+    run: number;
+    original: string;
+    replacement: string;
 }
 
 export interface PdfDocument {
@@ -110,7 +127,7 @@ export interface PdfSceneExportRequest {
     scene: PdfScene;
     outputLocation: OutputLocation;
     formValues?: unknown[];
-    textEdits?: unknown[];
+    textEdits?: PdfTextEdit[];
     flatten?: boolean;
     redactions?: unknown[];
 }
