@@ -1037,6 +1037,41 @@ test('a mirrored page flips its thumbnail and focus view in CSS, names the flip 
   expect((await thumbnailRequests(page)).flat().filter((index) => index === 1)).toHaveLength(1);
 });
 
+test('mirroring pages of a PDF with links, form fields, bookmarks and named destinations exports without a rejection', async ({ page }) => {
+  await setPlatform(page, 'MacIntel');
+  await page.addInitScript(() => {
+    const w = window as any;
+    w.dialogNext = '/local/annotated.pdf';
+    // Like the native preflight: this document's annotations and destinations follow a mirror, but a crop
+    // or resize is still refused before any output is written.
+    const rejection = 'This PDF page has annotations or form widgets and the requested crop would change their coordinates; scene export was rejected before output';
+    const invoke = w.__TAURI_INTERNALS__.invoke;
+    w.__TAURI_INTERNALS__.invoke = (command: string, args: any) => {
+      if (command !== 'export_pdf_scene' || !args.request.paths[0].endsWith('annotated.pdf')) return invoke(command, args);
+      w.calls.push({ command, args });
+      const cropped = args.request.scene.pages.some((item: any) => item.crop);
+      return Promise.resolve([cropped
+        ? { inputPath: args.request.paths[0], outputPaths: [], state: 'failed', detail: rejection, failure: { kind: 'invalidInput', message: rejection }, reason: null, warnings: [] }
+        : { inputPath: args.request.paths[0], outputPaths: ['/local/annotated-organized.pdf'], state: 'succeeded', detail: 'PDF scene exported', failure: null, reason: null, warnings: [] }]);
+    };
+  });
+  await openOrganize(page);
+  await page.getByRole('button', { name: 'Open PDF', exact: true }).click();
+  const pages = grid(page, 'annotated.pdf').getByRole('option');
+  await expect(pages).toHaveCount(5);
+  await pages.nth(0).click();
+  await page.keyboard.press('h');
+  await pages.nth(2).click();
+  await page.keyboard.press('v');
+  await page.keyboard.press('Meta+R');
+  expect(await exportedOrientations(page)).toEqual([[1, 0, true], [2, 0, false], [3, 270, true], [4, 0, false], [5, 0, false]]);
+  const row = page.getByRole('list', { name: 'Results' }).getByRole('listitem');
+  await expect(row).toHaveCount(1);
+  await expect(row).toHaveAttribute('data-state', 'succeeded');
+  await expect(page.getByText(/cannot be preserved|rejected before output/)).toHaveCount(0);
+  await expect(page.getByRole('alert')).toHaveCount(0);
+});
+
 test('the reversed-text notice counts mirrored pages before export and goes once none are mirrored', async ({ page }) => {
   await setPlatform(page, 'MacIntel');
   await openReport(page);

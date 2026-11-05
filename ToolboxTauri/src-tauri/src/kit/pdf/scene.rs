@@ -352,6 +352,7 @@ fn scene_preflight(document: &Document, scene: &PdfScene, source_pages: &[Object
     let mut seen = HashSet::new();
     let mut retained = HashSet::new();
     let mut navigation_geometry_edit = false;
+    let annotation_owners = if scene.pages.iter().any(|page| page.mirrored) { annotation_owner_counts(document, source_pages)? } else { HashMap::new() };
     for page in &scene.pages {
         if let Some(index) = page.source_index {
             let source = *source_pages.get(index).ok_or("Scene source page is outside the document")?;
@@ -387,18 +388,23 @@ fn scene_preflight(document: &Document, scene: &PdfScene, source_pages: &[Object
                 let baseline = [baseline_box.x, baseline_box.y, baseline_box.x + baseline_box.width, baseline_box.y + baseline_box.height];
                 if !same_box(geometry.bbox, baseline) { return Err("Scene source page-box baseline does not match the source PDF".into()); }
             }
-            let changes_page_coordinates = page_geometry_changed(page, &geometry);
-            navigation_geometry_edit |= changes_page_coordinates;
-            if has_annotations && changes_page_coordinates {
-                return Err("This PDF page has annotations or form widgets and the requested crop or mirror would change their coordinates; scene export was rejected before output".into());
+            // A mirror alone is remapped: annotations, widgets and destinations follow the flip. A crop or
+            // resize still cannot move them safely, so it is refused as before.
+            let crops_page = page_box_changed(page, &geometry);
+            navigation_geometry_edit |= crops_page;
+            if has_annotations && crops_page {
+                return Err("This PDF page has annotations or form widgets and the requested crop would change their coordinates; scene export was rejected before output".into());
             }
-            if (page.crop.is_some() || changes_page_coordinates) && has_widget {
+            if (page.crop.is_some() || crops_page) && has_widget {
                 return Err("Cropping a PDF with form widgets is unsupported; remove the crop or edit the source PDF first".into());
+            }
+            if page.mirrored && has_annotations && page_annotation_ids(document, page_id)?.iter().any(|id| annotation_owners.get(id).copied().unwrap_or(0) > 1) {
+                return Err("This PDF page shares annotations or form widgets with another page, so mirroring it would move them on both; scene export was rejected before output".into());
             }
         }
     }
     if has_navigation && navigation_geometry_edit {
-        return Err("This PDF contains bookmarks or destinations whose coordinates cannot be transformed safely after a crop or mirror; scene export was rejected before output".into());
+        return Err("This PDF contains bookmarks or destinations whose coordinates cannot be transformed safely after a crop; scene export was rejected before output".into());
     }
     Ok(ScenePreflight { pages_root, source_pages: source_pages.to_vec() })
 }
@@ -410,11 +416,224 @@ fn same_rect(left: &Rect, right: &Rect) -> bool { same_box([left.x, left.y, left
 /// Rotation is not a geometry change: it is added to the page's own /Rotate entry, which turns
 /// annotations, form widgets and destinations with the page and leaves their coordinates alone.
 fn page_geometry_changed(page: &ScenePage, geometry: &Geometry) -> bool {
+    page.mirrored || page_box_changed(page, geometry)
+}
+/// Whether the scene crops or resizes the page. Unlike a mirror, this has no transform that keeps
+/// annotations, widgets and destinations on the content they point at.
+fn page_box_changed(page: &ScenePage, geometry: &Geometry) -> bool {
     let full_page = Rect { x: 0., y: 0., width: page.width, height: page.height };
-    page.mirrored
-        || page.crop.as_ref().is_some_and(|crop| !same_rect(crop, &full_page))
+    page.crop.as_ref().is_some_and(|crop| !same_rect(crop, &full_page))
         || (page.width - geometry.width).abs() > 0.1
         || (page.height - geometry.height).abs() > 0.1
+}
+
+/// The annotation references a page lists, plus its /Annots array when that array is its own object.
+fn page_annotation_ids(document: &Document, page: ObjectId) -> Result<Vec<ObjectId>, String> {
+    let Some(value) = document.get_dictionary(page).map_err(err)?.get(b"Annots").ok() else { return Ok(vec![]); };
+    let mut ids = value.as_reference().ok().into_iter().collect::<Vec<_>>();
+    ids.extend(resolve(document, value)?.as_array().map_err(err)?.iter().filter_map(|annotation| annotation.as_reference().ok()));
+    Ok(ids)
+}
+/// How many times each annotation (or /Annots array) is listed across the source pages.
+fn annotation_owner_counts(document: &Document, pages: &[ObjectId]) -> Result<HashMap<ObjectId, usize>, String> {
+    let mut counts = HashMap::new();
+    for page in pages { for id in page_annotation_ids(document, *page)? { *counts.entry(id).or_insert(0) += 1; } }
+    Ok(counts)
+}
+
+/// Matrix `outer · inner`: maps a point through `inner`, then through `outer`.
+fn concat(outer: [f32; 6], inner: [f32; 6]) -> [f32; 6] {
+    let [a, b, c, d, e, f] = outer;
+    let [ia, ib, ic, id, ie, iff] = inner;
+    [a * ia + c * ib, b * ia + d * ib, a * ic + c * id, b * ic + d * id, a * ie + c * iff + e, b * ie + d * iff + f]
+}
+fn apply(m: [f32; 6], (x, y): (f32, f32)) -> (f32, f32) { (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]) }
+/// The matrix from a mirrored source page's user space to the user space of the page it is redrawn on.
+/// It is the same chain the redrawn content takes in `compose`: the source turn and box offset undone,
+/// the flip around the visible area, then back to PDF's bottom-up axis.
+fn mirrored_page_matrix(geometry: &Geometry, page: &ScenePage) -> [f32; 6] {
+    let crop = page.crop.clone().unwrap_or(Rect { x: 0., y: 0., width: page.width, height: page.height });
+    let flip = [-1., 0., 0., 1., 2. * crop.x + crop.width, 0.];
+    let outer = [1., 0., 0., -1., -crop.x, crop.y + crop.height];
+    concat(outer, concat(flip, geometry.matrix))
+}
+/// The matrix only ever swaps or negates axes, so a coordinate maps from exactly one source axis.
+fn swaps_axes(m: [f32; 6]) -> bool { m[0].abs() < 0.5 }
+fn mapped_x(m: [f32; 6], x: Option<f32>, y: Option<f32>) -> Option<f32> { if swaps_axes(m) { y.map(|y| m[2] * y + m[4]) } else { x.map(|x| m[0] * x + m[4]) } }
+fn mapped_y(m: [f32; 6], x: Option<f32>, y: Option<f32>) -> Option<f32> { if swaps_axes(m) { x.map(|x| m[1] * x + m[5]) } else { y.map(|y| m[3] * y + m[5]) } }
+
+fn coordinate(document: &Document, value: &Object) -> Result<Option<f32>, String> {
+    match resolve(document, value)? {
+        Object::Null => Ok(None),
+        value => super::metadata::number(value).map(Some).map_err(|_| "A destination or annotation coordinate is not a number; scene export was rejected before output".to_string()),
+    }
+}
+fn numbers(document: &Document, value: &Object) -> Result<Vec<f32>, String> {
+    resolve(document, value)?.as_array().map_err(err)?.iter()
+        .map(|value| coordinate(document, value)?.filter(|value| value.is_finite()).ok_or_else(|| "An annotation coordinate is missing; scene export was rejected before output".to_string()))
+        .collect()
+}
+fn optional(value: Option<f32>) -> Object { value.map_or(Object::Null, Object::Real) }
+fn mapped_rect(m: [f32; 6], rect: &[f32]) -> [f32; 4] {
+    let (x1, y1) = apply(m, (rect[0], rect[1]));
+    let (x2, y2) = apply(m, (rect[2], rect[3]));
+    [x1.min(x2), y1.min(y2), x1.max(x2), y1.max(y2)]
+}
+fn mapped_points(document: &Document, value: &Object, m: [f32; 6]) -> Result<Object, String> {
+    let values = numbers(document, value)?;
+    if values.len() % 2 != 0 { return Err("An annotation point list has an odd number of coordinates; scene export was rejected before output".into()); }
+    Ok(array(&values.chunks(2).flat_map(|point| { let (x, y) = apply(m, (point[0], point[1])); [x, y] }).collect::<Vec<_>>()))
+}
+/// A copy of an appearance stream whose /Matrix also applies the page's flip and turn. A viewer fits
+/// the transformed /BBox to the annotation's /Rect, so only the linear part is needed.
+fn mapped_appearance(document: &mut Document, value: &Object, linear: [f32; 6]) -> Result<Object, String> {
+    match resolve(document, value)?.clone() {
+        Object::Stream(mut stream) => {
+            let matrix = match stream.dict.get(b"Matrix").ok() {
+                Some(matrix) => numbers(document, matrix)?.try_into().map_err(|_| "An appearance stream has an invalid /Matrix; scene export was rejected before output".to_string())?,
+                None => [1., 0., 0., 1., 0., 0.],
+            };
+            stream.dict.set("Matrix", array(&concat(linear, matrix)));
+            Ok(Object::Reference(document.add_object(stream)))
+        }
+        Object::Dictionary(states) => {
+            let mut mapped = lopdf::Dictionary::new();
+            for (state, appearance) in states.iter() { mapped.set(state.clone(), mapped_appearance(document, appearance, linear)?); }
+            Ok(Object::Dictionary(mapped))
+        }
+        _ => Err("An annotation appearance is not a stream; scene export was rejected before output".into()),
+    }
+}
+/// Moves one annotation of a mirrored page onto the redrawn page: its rectangle, points, insets and
+/// appearance follow the content it covers. Appearance streams are copied, so a shared one is untouched.
+fn mirror_annotation(document: &mut Document, annotation: &mut lopdf::Dictionary, m: [f32; 6], source_rotation: i64) -> Result<(), String> {
+    let linear = [m[0], m[1], m[2], m[3], 0., 0.];
+    if let Ok(value) = annotation.get(b"Rect") {
+        let rect = numbers(document, value)?;
+        if rect.len() != 4 { return Err("An annotation rectangle is invalid; scene export was rejected before output".into()); }
+        let mapped = mapped_rect(m, &rect);
+        if let Ok(value) = annotation.get(b"RD") {
+            let insets = numbers(document, value)?;
+            if insets.len() != 4 { return Err("An annotation inset is invalid; scene export was rejected before output".into()); }
+            let (left, top, right, bottom) = (rect[0].min(rect[2]), rect[1].max(rect[3]), rect[0].max(rect[2]), rect[1].min(rect[3]));
+            let inner = mapped_rect(m, &[left + insets[0], bottom + insets[3], right - insets[2], top - insets[1]]);
+            annotation.set("RD", array(&[inner[0] - mapped[0], mapped[3] - inner[3], mapped[2] - inner[2], inner[1] - mapped[1]]));
+        }
+        annotation.set("Rect", array(&mapped));
+    }
+    for key in [b"QuadPoints".as_slice(), b"Vertices", b"L", b"CL"] {
+        if let Ok(value) = annotation.get(key) { let mapped = mapped_points(document, &value.clone(), m)?; annotation.set(key.to_vec(), mapped); }
+    }
+    if let Ok(value) = annotation.get(b"InkList") {
+        let strokes = resolve(document, value)?.as_array().map_err(err)?.clone();
+        let mapped = strokes.iter().map(|stroke| mapped_points(document, stroke, m)).collect::<Result<Vec<_>, _>>()?;
+        annotation.set("InkList", mapped);
+    }
+    if let Ok(value) = annotation.get(b"AP") {
+        let appearances = resolve(document, value)?.as_dict().map_err(err)?.clone();
+        let mut mapped = lopdf::Dictionary::new();
+        for (kind, appearance) in appearances.iter() { mapped.set(kind.clone(), mapped_appearance(document, appearance, linear)?); }
+        annotation.set("AP", mapped);
+    }
+    // The source turn is drawn into the redrawn page, so a widget's own turn no longer needs to undo it.
+    let is_widget = annotation.get(b"Subtype").ok().and_then(|value| value.as_name().ok()) == Some(b"Widget");
+    if is_widget && source_rotation != 0 {
+        let mut characteristics = match annotation.get(b"MK").ok() { Some(value) => resolve(document, value)?.as_dict().map_err(err)?.clone(), None => lopdf::Dictionary::new() };
+        let turn = match characteristics.get(b"R").ok() { Some(value) => resolve(document, value)?.as_i64().map_err(err)?, None => 0 };
+        characteristics.set("R", (turn - source_rotation).rem_euclid(360));
+        annotation.set("MK", characteristics);
+    }
+    Ok(())
+}
+fn mirror_page_annotations(document: &mut Document, page: ObjectId, m: [f32; 6], source_rotation: i64) -> Result<(), String> {
+    let Some(value) = document.get_dictionary(page).map_err(err)?.get(b"Annots").ok().cloned() else { return Ok(()); };
+    let mut annotations = resolve(document, &value)?.as_array().map_err(err)?.clone();
+    for entry in annotations.iter_mut() {
+        match entry {
+            Object::Reference(id) => {
+                let id = *id;
+                let mut annotation = document.get_dictionary(id).map_err(err)?.clone();
+                mirror_annotation(document, &mut annotation, m, source_rotation)?;
+                document.objects.insert(id, Object::Dictionary(annotation));
+            }
+            Object::Dictionary(annotation) => mirror_annotation(document, annotation, m, source_rotation)?,
+            _ => return Err("A page annotation is not a dictionary; scene export was rejected before output".into()),
+        }
+    }
+    match value {
+        Object::Reference(id) => { document.objects.insert(id, Object::Array(annotations)); }
+        _ => { document.get_dictionary_mut(page).map_err(err)?.set("Annots", annotations); }
+    }
+    Ok(())
+}
+/// An explicit destination to a mirrored page, mapped so it lands on the same content. A fit to one
+/// edge keeps pointing at that edge, so on a page whose source turn swaps axes a /FitH becomes a /FitV.
+fn mirror_destination(document: &Document, destination: &mut [Object], m: [f32; 6]) -> Result<(), String> {
+    let kind = destination[1].as_name().map_err(err)?.to_vec();
+    let at = |index: usize| destination.get(index).map(|value| coordinate(document, value)).transpose().map(Option::flatten);
+    let swapped = swaps_axes(m);
+    let edge = |name: &[u8], value: Option<f32>, horizontal: bool| -> (Vec<u8>, Object) {
+        // `horizontal` fits pin a top (y); the others pin a left (x).
+        let (x, y) = if horizontal { (None, value) } else { (value, None) };
+        let horizontal_after = horizontal != swapped;
+        let mapped = if horizontal_after { mapped_y(m, x, y) } else { mapped_x(m, x, y) };
+        let bounded = name.starts_with(b"FitB");
+        let name = match (bounded, horizontal_after) { (false, true) => b"FitH".to_vec(), (false, false) => b"FitV".to_vec(), (true, true) => b"FitBH".to_vec(), (true, false) => b"FitBV".to_vec() };
+        (name, optional(mapped))
+    };
+    match kind.as_slice() {
+        b"XYZ" => {
+            let (left, top) = (at(2)?, at(3)?);
+            if destination.len() > 2 { destination[2] = optional(mapped_x(m, left, top)); }
+            if destination.len() > 3 { destination[3] = optional(mapped_y(m, left, top)); }
+        }
+        b"FitH" | b"FitBH" | b"FitV" | b"FitBV" => {
+            let horizontal = kind.ends_with(b"H");
+            let (name, value) = edge(&kind, at(2)?, horizontal);
+            destination[1] = Object::Name(name);
+            if destination.len() > 2 { destination[2] = value; }
+        }
+        b"FitR" => {
+            let values = (2..6).map(at).collect::<Result<Option<Vec<_>>, _>>()?.ok_or("A /FitR destination is missing a coordinate; scene export was rejected before output")?;
+            let mapped = mapped_rect(m, &values);
+            for (index, value) in mapped.into_iter().enumerate() { destination[2 + index] = Object::Real(value); }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+fn is_destination_to(value: &[Object], pages: &HashMap<ObjectId, [f32; 6]>) -> Option<[f32; 6]> {
+    let page = value.first()?.as_reference().ok()?;
+    let kind = value.get(1)?.as_name().ok()?;
+    let known = matches!(kind, b"XYZ" | b"Fit" | b"FitH" | b"FitV" | b"FitR" | b"FitB" | b"FitBH" | b"FitBV");
+    if known { pages.get(&page).copied() } else { None }
+}
+fn mirror_destinations_in(document: &Document, value: &mut Object, pages: &HashMap<ObjectId, [f32; 6]>) -> Result<(), String> {
+    match value {
+        Object::Array(items) => {
+            if let Some(m) = is_destination_to(items, pages) { return mirror_destination(document, items, m); }
+            for item in items.iter_mut() { mirror_destinations_in(document, item, pages)?; }
+        }
+        Object::Dictionary(dictionary) => for (_, item) in dictionary.iter_mut() { mirror_destinations_in(document, item, pages)?; },
+        _ => {}
+    }
+    Ok(())
+}
+/// Maps every explicit destination that targets a mirrored page, wherever it is stored: bookmarks,
+/// named destinations, link and widget actions, the open action. Each object is visited once.
+fn mirror_destinations(document: &mut Document, pages: &HashMap<ObjectId, [f32; 6]>) -> Result<(), String> {
+    let ids = document.objects.keys().copied().collect::<Vec<_>>();
+    for id in ids {
+        let object = document.objects.get(&id).ok_or("A PDF object disappeared during scene export")?;
+        // Only a stream's dictionary can hold a destination, so its content is never copied.
+        let mut value = match object { Object::Stream(stream) => Object::Dictionary(stream.dict.clone()), object => object.clone() };
+        mirror_destinations_in(document, &mut value, pages)?;
+        match (document.objects.get_mut(&id), value) {
+            (Some(Object::Stream(stream)), Object::Dictionary(dict)) => stream.dict = dict,
+            (_, value) => { document.objects.insert(id, value); }
+        }
+    }
+    Ok(())
 }
 /// The /Rotate a kept source page gets: its source rotation plus the scene's quarter turns.
 fn effective_rotation(document: &Document, page_id: ObjectId, page: &ScenePage) -> Result<i64, String> {
@@ -561,6 +780,18 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
         root.set("Count", order.len() as i64);
         return Ok(doc);
     }
+    // Mirrored pages keep their object ids, so their annotations and every destination that targets
+    // them are moved to the mirrored position once, from the source geometry, before any page is redrawn.
+    let mut mirrored_pages = HashMap::new();
+    for page in scene.pages.iter().filter(|page| page.mirrored) {
+        let Some(index) = page.source_index else { continue; };
+        let id = *sources.get(index).ok_or("Source page index outside document")?;
+        let matrix = mirrored_page_matrix(&geometry(&doc, id)?, page);
+        let source_rotation = super::metadata::page_rotation(&doc, id);
+        mirror_page_annotations(&mut doc, id, matrix, source_rotation)?;
+        mirrored_pages.insert(id, matrix);
+    }
+    if !mirrored_pages.is_empty() { mirror_destinations(&mut doc, &mirrored_pages)?; }
     let font_specs: [(&str, &str); 9] = [
         ("Helvetica", "SceneFont"), ("Helvetica-Bold", "SceneFontHelveticaBold"),
         ("Helvetica-Oblique", "SceneFontHelveticaOblique"), ("Times-Roman", "SceneFontTimesRoman"),
@@ -1863,29 +2094,218 @@ mod tests {
         }
     }
 
-    #[test]
-    fn scene_rejects_mirroring_pages_with_annotations_or_destinations_before_output() {
-        let temp = TempDir::new().unwrap();
-        let annotated = temp.0.join("annotated.pdf");
-        annotated_rotated_offset_fixture(&annotated);
-        let scene = PdfScene { pages: vec![oriented_page(0, (300., 200.), 0, true)] };
-        let result = export(&ExportRequest { paths: vec![annotated.clone()], scene, output_location: OutputLocation::AlongsideInput }, annotated.clone());
-        assert!(result.error().is_some_and(|error| error.message.contains("annotations or form widgets") && error.message.contains("mirror")), "{:?}", result.error());
-        assert!(result.output_paths().is_empty());
-        assert!(!annotated.with_file_name("annotated-edited-1.pdf").exists());
+    /// Page 1 carries a link with quad points and an /XYZ destination, a text field with an appearance
+    /// stream, and is the target of a bookmark, a named destination tree, a catalog /Dests entry, the
+    /// open action and a GoTo link on page 2. `rotated` gives page 1 an offset /Rotate 90 box.
+    fn mirror_navigation_fixture(path: &Path, rotated: bool) -> (ObjectId, ObjectId, ObjectId) {
+        let mut d = Document::with_version("1.7");
+        let root = d.new_object_id();
+        let first = d.new_object_id();
+        let content = d.add_object(Stream::new(dictionary!{}, b"q 1 0 0 rg 30 40 60 40 re f Q".to_vec()));
+        let link = d.add_object(dictionary! {"Type"=>"Annot", "Subtype"=>"Link", "Rect"=>array(&[30., 40., 90., 80.]),
+            "QuadPoints"=>array(&[30., 80., 90., 80., 30., 40., 90., 40.]),
+            "Dest"=>vec![Object::Reference(first), Object::Name(b"XYZ".to_vec()), 50.into(), 250.into(), 0.into()]});
+        let appearance = d.add_object(Stream::new(dictionary! {"Type"=>"XObject", "Subtype"=>"Form", "BBox"=>array(&[0., 0., 60., 40.])}, b"0 0 1 rg 0 0 60 40 re f".to_vec()));
+        let widget = d.add_object(dictionary! {"Type"=>"Annot", "Subtype"=>"Widget", "FT"=>"Tx", "T"=>Object::string_literal("name"),
+            "Rect"=>array(&[100., 40., 160., 80.]), "P"=>Object::Reference(first), "AP"=>dictionary! {"N"=>Object::Reference(appearance)}, "MK"=>dictionary! {"R"=>90}});
+        let mut page = dictionary! {"Type"=>"Page", "Parent"=>root, "Contents"=>content, "Annots"=>vec![Object::Reference(link), Object::Reference(widget)]};
+        if rotated {
+            page.set("MediaBox", array(&[10., 20., 250., 360.])); page.set("CropBox", array(&[20., 30., 220., 330.])); page.set("Rotate", 90);
+        } else {
+            page.set("MediaBox", array(&[0., 0., 200., 300.]));
+        }
+        d.objects.insert(first, Object::Dictionary(page));
+        let goto = d.add_object(dictionary! {"Type"=>"Annot", "Subtype"=>"Link", "Rect"=>array(&[10., 10., 60., 30.]),
+            "A"=>dictionary! {"S"=>"GoTo", "D"=>vec![Object::Reference(first), Object::Name(b"FitR".to_vec()), 30.into(), 40.into(), 90.into(), 80.into()]}});
+        let second = d.add_object(dictionary! {"Type"=>"Page", "Parent"=>root, "MediaBox"=>array(&[0., 0., 200., 300.]), "Annots"=>vec![Object::Reference(goto)]});
+        d.objects.insert(root, Object::Dictionary(dictionary! {"Type"=>"Pages", "Kids"=>vec![Object::Reference(first), Object::Reference(second)], "Count"=>2}));
+        let outlines = d.new_object_id();
+        let bookmark = d.add_object(dictionary! {"Title"=>Object::string_literal("Section"), "Parent"=>outlines,
+            "Dest"=>vec![Object::Reference(first), Object::Name(b"XYZ".to_vec()), 40.into(), 200.into(), Object::Null]});
+        d.objects.insert(outlines, Object::Dictionary(dictionary! {"Type"=>"Outlines", "First"=>bookmark, "Last"=>bookmark, "Count"=>1}));
+        let names = d.add_object(dictionary! {"Dests"=>dictionary! {"Names"=>vec![Object::string_literal("top"),
+            Object::Array(vec![Object::Reference(first), Object::Name(b"FitH".to_vec()), 250.into()])]}});
+        let dests = d.add_object(dictionary! {"side"=>vec![Object::Reference(first), Object::Name(b"FitV".to_vec()), 60.into()]});
+        let acro_form = d.add_object(dictionary! {"Fields"=>vec![Object::Reference(widget)]});
+        let catalog = d.add_object(dictionary! {"Type"=>"Catalog", "Pages"=>root, "Outlines"=>outlines, "Names"=>names, "Dests"=>dests,
+            "OpenAction"=>vec![Object::Reference(first), Object::Name(b"FitBH".to_vec()), 250.into()], "AcroForm"=>acro_form});
+        d.trailer.set("Root", catalog);
+        d.save(path).unwrap();
+        (first, widget, appearance)
+    }
+    fn numbers_of(document: &Document, value: &Object) -> Vec<Option<f32>> {
+        resolve(document, value).unwrap().as_array().unwrap().iter().map(|value| match value { Object::Null => None, value => Some(super::super::metadata::number(value).unwrap()) }).collect()
+    }
+    fn assert_close(actual: &[Option<f32>], expected: &[Option<f32>], what: &str) {
+        assert_eq!(actual.len(), expected.len(), "{what}: {actual:?} vs {expected:?}");
+        for (a, e) in actual.iter().zip(expected) {
+            match (a, e) { (Some(a), Some(e)) => assert!((a - e).abs() < 0.01, "{what}: {actual:?} vs {expected:?}"), (a, e) => assert_eq!(a, e, "{what}") }
+        }
+    }
+    /// A destination array's view name and its coordinates.
+    fn destination_of(document: &Document, value: &Object) -> (Vec<u8>, Vec<Option<f32>>) {
+        let items = resolve(document, value).unwrap().as_array().unwrap();
+        let coordinates = Object::Array(items[2..].to_vec());
+        (items[1].as_name().unwrap().to_vec(), numbers_of(document, &coordinates))
+    }
 
-        let navigation = temp.0.join("navigation.pdf");
-        fixture(&navigation);
-        let mut source = Document::load(&navigation).unwrap();
-        let outlines = source.add_object(dictionary! {"Type"=>"Outlines", "Count"=>0});
-        let catalog = source.trailer.get(b"Root").unwrap().as_reference().unwrap();
-        source.get_dictionary_mut(catalog).unwrap().set("Outlines", outlines);
-        source.save(&navigation).unwrap();
-        let scene = PdfScene { pages: vec![oriented_page(0, (300., 200.), 0, false), oriented_page(1, (612., 792.), 90, true)] };
-        let result = export(&ExportRequest { paths: vec![navigation.clone()], scene, output_location: OutputLocation::AlongsideInput }, navigation.clone());
-        assert!(result.error().is_some_and(|error| error.message.contains("bookmarks or destinations")), "{:?}", result.error());
+    #[test]
+    fn mirroring_moves_annotations_widgets_and_destinations_with_the_content() {
+        let _guard = crate::kit::lock_process_env();
+        let renderer = match renderer() { Ok(r) => Some(r), Err(e) => { if std::env::var_os("TOOLBOX_REQUIRE_PDF_RENDERER").is_some() { panic!("{e}") }; eprintln!("Renderer unavailable: {e}"); None } };
+        // Where a source point lands on the mirrored page, worked out by hand from the page boxes. The
+        // upright page flips across its 200-wide box. The /Rotate 90 page's visible area is its CropBox
+        // 20–220 × 30–330 turned clockwise (300 × 200), so x reads down from its top and y reads across;
+        // the mirror then flips that across the 300-wide visible area.
+        let upright = |(x, y): (f32, f32)| (200. - x, y);
+        let turned = |(x, y): (f32, f32)| (300. - (y - 30.), 200. - (x - 20.));
+        for rotated in [false, true] {
+            let place: &dyn Fn((f32, f32)) -> (f32, f32) = if rotated { &turned } else { &upright };
+            let rect = |[x1, y1, x2, y2]: [f32; 4]| {
+                let ((ax, ay), (bx, by)) = (place((x1, y1)), place((x2, y2)));
+                [Some(ax.min(bx)), Some(ay.min(by)), Some(ax.max(bx)), Some(ay.max(by))]
+            };
+            let size = if rotated { (300., 200.) } else { (200., 300.) };
+            // Left to right, top to bottom (stored as left to right turned 180°), and both with a quarter turn.
+            for rotation in [0, 180, 90, 270] {
+                let what = format!("rotated source {rotated}, turn {rotation}");
+                let temp = TempDir::new().unwrap();
+                let input = temp.0.join("annotated.pdf");
+                let (page, widget, appearance) = mirror_navigation_fixture(&input, rotated);
+                let original = fs::read(&input).unwrap();
+                let scene = PdfScene { pages: vec![oriented_page(0, size, rotation, true), oriented_page(1, (200., 300.), 0, false)] };
+                let result = export(&ExportRequest { paths: vec![input.clone()], scene, output_location: OutputLocation::AlongsideInput }, input.clone());
+                assert!(result.error().is_none(), "{what}: {:?}", result.error());
+                assert_eq!(fs::read(&input).unwrap(), original, "{what}: mirroring changed the original");
+                let output = Document::load(&result.output_paths()[0]).unwrap();
+                let pages: Vec<_> = output.get_pages().values().copied().collect();
+                assert_eq!(pages[0], page, "{what}: the mirrored page lost its object id, so destinations would dangle");
+                let page_dict = output.get_dictionary(page).unwrap();
+                assert_eq!(page_dict.get(b"Rotate").unwrap().as_i64().unwrap(), rotation as i64, "{what}");
+                assert_close(&numbers_of(&output, page_dict.get(b"MediaBox").unwrap()), &[Some(0.), Some(0.), Some(size.0), Some(size.1)], &what);
+
+                // Annotations sit over the mirrored content, and the field stays a live form field.
+                let annots = page_dict.get(b"Annots").unwrap().as_array().unwrap();
+                assert_eq!(annots.len(), 2, "{what}");
+                let link = output.get_dictionary(annots[0].as_reference().unwrap()).unwrap();
+                let link_rect = numbers_of(&output, link.get(b"Rect").unwrap());
+                assert_close(&link_rect, &rect([30., 40., 90., 80.]), &what);
+                // The fixture's red mark fills the link's source rectangle, so on the rendered page the
+                // mirrored link must still cover it.
+                if let Some(renderer) = &renderer {
+                    let mark = red_mark_centre(&render(&result.output_paths()[0], 0, renderer, &temp).unwrap());
+                    let centre = (link_rect[0].unwrap() + link_rect[2].unwrap()) / 2. / size.0;
+                    let middle = 1. - (link_rect[1].unwrap() + link_rect[3].unwrap()) / 2. / size.1;
+                    let expected = displayed_point((centre, middle), rotation, false);
+                    assert!((mark.0 - expected.0).abs() < 0.03 && (mark.1 - expected.1).abs() < 0.03, "{what}: mark at {mark:?}, link at {expected:?}");
+                }
+                let quads = [(30., 80.), (90., 80.), (30., 40.), (90., 40.)].into_iter().flat_map(|point| { let (x, y) = place(point); [Some(x), Some(y)] }).collect::<Vec<_>>();
+                assert_close(&numbers_of(&output, link.get(b"QuadPoints").unwrap()), &quads, &what);
+                assert_eq!(annots[1].as_reference().unwrap(), widget, "{what}: the field is no longer the AcroForm's widget");
+                let fields = output.get_dictionary(output.get_dictionary(output.trailer.get(b"Root").unwrap().as_reference().unwrap()).unwrap().get(b"AcroForm").unwrap().as_reference().unwrap()).unwrap();
+                assert_eq!(fields.get(b"Fields").unwrap().as_array().unwrap(), &vec![Object::Reference(widget)], "{what}");
+                let field = output.get_dictionary(widget).unwrap();
+                assert_eq!(field.get(b"Subtype").unwrap().as_name().unwrap(), b"Widget");
+                assert_eq!(field.get(b"FT").unwrap().as_name().unwrap(), b"Tx");
+                assert_close(&numbers_of(&output, field.get(b"Rect").unwrap()), &rect([100., 40., 160., 80.]), &what);
+                // The appearance is drawn through the same flip, from a copy of the original stream.
+                let normal = field.get(b"AP").unwrap().as_dict().unwrap().get(b"N").unwrap().as_reference().unwrap();
+                assert_ne!(normal, appearance, "{what}: the shared appearance stream was edited in place");
+                let matrix = output.get_object(normal).unwrap().as_stream().unwrap().dict.get(b"Matrix").unwrap().clone();
+                let (o, ex, ey) = (place((0., 0.)), place((1., 0.)), place((0., 1.)));
+                assert_close(&numbers_of(&output, &matrix), &[Some(ex.0 - o.0), Some(ex.1 - o.1), Some(ey.0 - o.0), Some(ey.1 - o.1), Some(0.), Some(0.)], &what);
+                // The page's own turn is now drawn into its content, so the field no longer undoes it.
+                let turn = field.get(b"MK").unwrap().as_dict().unwrap().get(b"R").unwrap().as_i64().unwrap();
+                assert_eq!(turn, if rotated { 0 } else { 90 }, "{what}");
+
+                // Every destination to the page lands on the mirrored position of what it pointed at. A fit
+                // to one edge keeps that edge, so on the turned source a /FitH becomes a /FitV.
+                let (x, y) = place((50., 250.));
+                assert_eq!(destination_of(&output, link.get(b"Dest").unwrap()), (b"XYZ".to_vec(), vec![Some(x), Some(y), Some(0.)]), "{what}: link");
+                let catalog = output.get_dictionary(output.trailer.get(b"Root").unwrap().as_reference().unwrap()).unwrap();
+                let bookmark = output.get_dictionary(output.get_dictionary(catalog.get(b"Outlines").unwrap().as_reference().unwrap()).unwrap().get(b"First").unwrap().as_reference().unwrap()).unwrap();
+                let (name, coordinates) = destination_of(&output, bookmark.get(b"Dest").unwrap());
+                let (x, y) = place((40., 200.));
+                assert_eq!(name, b"XYZ"); assert_close(&coordinates, &[Some(x), Some(y), None], &format!("{what}: bookmark"));
+                let tree = output.get_dictionary(catalog.get(b"Names").unwrap().as_reference().unwrap()).unwrap().get(b"Dests").unwrap().as_dict().unwrap();
+                let (name, coordinates) = destination_of(&output, &tree.get(b"Names").unwrap().as_array().unwrap()[1]);
+                if rotated { assert_eq!(name, b"FitV"); assert_close(&coordinates, &[Some(place((0., 250.)).0)], &what); }
+                else { assert_eq!(name, b"FitH"); assert_close(&coordinates, &[Some(250.)], &what); }
+                let side = output.get_dictionary(catalog.get(b"Dests").unwrap().as_reference().unwrap()).unwrap().get(b"side").unwrap().clone();
+                let (name, coordinates) = destination_of(&output, &side);
+                if rotated { assert_eq!(name, b"FitH"); assert_close(&coordinates, &[Some(place((60., 0.)).1)], &what); }
+                else { assert_eq!(name, b"FitV"); assert_close(&coordinates, &[Some(140.)], &what); }
+                let (name, coordinates) = destination_of(&output, catalog.get(b"OpenAction").unwrap());
+                assert_eq!(name, if rotated { b"FitBV".to_vec() } else { b"FitBH".to_vec() }, "{what}");
+                assert_close(&coordinates, &[Some(if rotated { place((0., 250.)).0 } else { 250. })], &what);
+                let goto = output.get_dictionary(output.get_dictionary(pages[1]).unwrap().get(b"Annots").unwrap().as_array().unwrap()[0].as_reference().unwrap()).unwrap();
+                let (name, coordinates) = destination_of(&output, goto.get(b"A").unwrap().as_dict().unwrap().get(b"D").unwrap());
+                assert_eq!(name, b"FitR"); assert_close(&coordinates, &rect([30., 40., 90., 80.]), &format!("{what}: GoTo"));
+                // The unmirrored page and its own annotation are untouched.
+                assert_close(&numbers_of(&output, goto.get(b"Rect").unwrap()), &[Some(10.), Some(10.), Some(60.), Some(30.)], &what);
+            }
+        }
+    }
+
+    #[test]
+    fn mirroring_keeps_destinations_that_target_other_pages_and_scene_structures() {
+        let temp = TempDir::new().unwrap();
+        let input = temp.0.join("linked.pdf");
+        six_page_linked_form_fixture(&input);
+        let original = fs::read(&input).unwrap();
+        let source = Document::load(&input).unwrap();
+        let pages: Vec<_> = source.get_pages().values().copied().collect();
+        let scene = PdfScene { pages: (0..6).map(|index| oriented_page(index, (612., 792.), if index == 2 { 90 } else { 0 }, index == 1 || index == 2)).collect() };
+        let result = export(&ExportRequest { paths: vec![input.clone()], scene, output_location: OutputLocation::AlongsideInput }, input.clone());
+        assert!(result.error().is_none(), "{:?}", result.error());
+        assert_eq!(fs::read(&input).unwrap(), original);
+        let output = Document::load(&result.output_paths()[0]).unwrap();
+        assert_eq!(output.get_pages().values().copied().collect::<Vec<_>>(), pages);
+        for (index, page) in pages.iter().enumerate() {
+            let annots = output.get_dictionary(*page).unwrap().get(b"Annots").unwrap().as_array().unwrap();
+            assert_eq!(annots.len(), 3, "page {index}");
+            let link = output.get_dictionary(annots[1].as_reference().unwrap()).unwrap();
+            // /Fit has no coordinates, so it is the same whichever page it targets.
+            assert_eq!(link.get(b"Dest").unwrap().as_array().unwrap(), &vec![Object::Reference(pages[(index + 1) % 6]), Object::Name(b"Fit".to_vec())]);
+            let expected = if index == 1 || index == 2 { [352., 40., 442., 80.] } else { [170., 40., 260., 80.] };
+            let widget = output.get_dictionary(annots[2].as_reference().unwrap()).unwrap();
+            assert_close(&numbers_of(&output, widget.get(b"Rect").unwrap()), &expected.map(Some), &format!("page {index}"));
+        }
+        let catalog = output.get_dictionary(output.trailer.get(b"Root").unwrap().as_reference().unwrap()).unwrap();
+        assert_eq!(output.get_dictionary(catalog.get(b"AcroForm").unwrap().as_reference().unwrap()).unwrap().get(b"Fields").unwrap().as_array().unwrap().len(), 6);
+    }
+
+    #[test]
+    fn scene_rejects_mirroring_a_page_whose_annotations_another_page_shares_before_output() {
+        let temp = TempDir::new().unwrap();
+        let input = temp.0.join("shared.pdf");
+        fixture(&input);
+        let mut source = Document::load(&input).unwrap();
+        let pages: Vec<_> = source.get_pages().values().copied().collect();
+        let note = source.add_object(dictionary! {"Type"=>"Annot", "Subtype"=>"Text", "Rect"=>array(&[30., 40., 90., 80.])});
+        for page in &pages { source.get_dictionary_mut(*page).unwrap().set("Annots", vec![Object::Reference(note)]); }
+        source.save(&input).unwrap();
+        let original = fs::read(&input).unwrap();
+        let scene = PdfScene { pages: vec![oriented_page(0, (300., 200.), 0, false), oriented_page(1, (612., 792.), 0, true)] };
+        let result = export(&ExportRequest { paths: vec![input.clone()], scene, output_location: OutputLocation::AlongsideInput }, input.clone());
+        assert!(result.error().is_some_and(|error| error.message.contains("shares annotations")), "{:?}", result.error());
         assert!(result.output_paths().is_empty());
-        assert!(!navigation.with_file_name("navigation-edited-1.pdf").exists());
+        assert!(!input.with_file_name("shared-edited-1.pdf").exists());
+        assert_eq!(fs::read(&input).unwrap(), original);
+    }
+
+    #[test]
+    fn scene_still_rejects_cropping_a_mirrored_page_with_annotations_or_destinations_before_output() {
+        let temp = TempDir::new().unwrap();
+        let input = temp.0.join("annotated.pdf");
+        mirror_navigation_fixture(&input, false);
+        let mut page = oriented_page(0, (200., 300.), 0, true);
+        page.crop = Some(Rect { x: 0., y: 0., width: 100., height: 100. });
+        let scene = PdfScene { pages: vec![page, oriented_page(1, (200., 300.), 0, false)] };
+        let result = export(&ExportRequest { paths: vec![input.clone()], scene, output_location: OutputLocation::AlongsideInput }, input.clone());
+        assert!(result.error().is_some_and(|error| error.message.contains("annotations or form widgets") && error.message.contains("crop")), "{:?}", result.error());
+        assert!(result.output_paths().is_empty());
+        assert!(!input.with_file_name("annotated-edited-1.pdf").exists());
     }
 
     #[test]
