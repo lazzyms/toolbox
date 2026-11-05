@@ -11,74 +11,86 @@
 <style>
 body{margin:0}
 .tb{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;font-size:13px;line-height:1.45;color:var(--fg);background:var(--bg);-webkit-font-smoothing:antialiased}
-.tb.dark{--bg:#0a0a0a;--side:#111111;--panel:#0f0f0f;--raise:#1c1c1c;--fg:#fafafa;--mut:#a3a3a3;--faint:#8a8a8a;--line:rgba(255,255,255,.08);--line2:rgba(255,255,255,.16);--sel:#262626;--pri:#ebebeb;--prifg:#171717;--bad:#ff6b6b;--warn:#f2b552;--ring:#a3a3a3;--scrim:rgba(0,0,0,.6);--well:#1b1b1b}
-.tb.light{--bg:#ffffff;--side:#f7f7f7;--panel:#fcfcfc;--raise:#f2f2f2;--fg:#0a0a0a;--mut:#525252;--faint:#666666;--line:#e8e8e8;--line2:#d4d4d4;--sel:#ebebeb;--pri:#171717;--prifg:#fafafa;--bad:#c10007;--warn:#9a5800;--ring:#525252;--scrim:rgba(0,0,0,.28);--well:#e6e6e6}
+.tb.dark{--bg:#0a0a0a;--side:#111111;--panel:#0f0f0f;--raise:#1c1c1c;--fg:#fafafa;--mut:#a3a3a3;--faint:#8a8a8a;--line:rgba(255,255,255,.08);--line2:rgba(255,255,255,.16);--sel:#262626;--pri:#ebebeb;--prifg:#171717;--bad:#ff6b6b;--warn:#f2b552;--ok:#5fd08a;--ring:#a3a3a3;--scrim:rgba(0,0,0,.6);--well:#1b1b1b;--acc:#4d8dff}
+.tb.light{--bg:#ffffff;--side:#f7f7f7;--panel:#fcfcfc;--raise:#f2f2f2;--fg:#0a0a0a;--mut:#525252;--faint:#666666;--line:#e8e8e8;--line2:#d4d4d4;--sel:#ebebeb;--pri:#171717;--prifg:#fafafa;--bad:#c10007;--warn:#9a5800;--ok:#1a7f3c;--ring:#525252;--scrim:rgba(0,0,0,.28);--well:#e6e6e6;--acc:#1d5fd1}
 .tb button,.tb input,.tb select,.tb textarea{font:inherit;color:inherit}
 .btn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:7px;border:1px solid var(--line2);background:var(--raise);color:var(--fg);font-weight:500;cursor:pointer;white-space:nowrap;box-sizing:border-box;text-decoration:none}
 .btn.pri{background:var(--pri);color:var(--prifg);border-color:transparent}
 .btn.ghost{background:transparent;border-color:transparent;color:var(--mut)}
 .btn.sm{height:26px;padding:0 9px;font-size:12px}
 .btn.icon{width:30px;padding:0;justify-content:center}
-.btn[disabled]{opacity:.45;cursor:default}
-.kbd{font-size:11px;line-height:16px;padding:0 5px;border-radius:4px;border:1px solid var(--line2);color:var(--mut);font-weight:500}
+.btn.sm.icon{width:28px}
+.btn.off{opacity:.45;cursor:default}
+.btn.danger{color:var(--bad)}
+.kbd{font-size:11px;line-height:16px;padding:0 5px;border-radius:4px;border:1px solid var(--line2);color:var(--mut);font-weight:500;white-space:nowrap}
 .btn.pri .kbd{border-color:currentColor;color:inherit;opacity:.6}
-.tbtn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 9px;border-radius:7px;border:0;background:none;color:var(--mut);cursor:pointer;white-space:nowrap}
+.tbtn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 9px;border-radius:7px;border:0;background:none;color:var(--mut);cursor:pointer;white-space:nowrap;text-decoration:none}
 .tbtn[aria-pressed="true"]{background:var(--sel);color:var(--fg);font-weight:500}
 .sep{width:1px;height:20px;background:var(--line2);flex:none}
 .field{height:30px;border-radius:7px;border:1px solid var(--line2);background:var(--bg);padding:0 10px;width:100%;box-sizing:border-box;min-width:0}
-.lbl{font-size:12px;font-weight:600}
+.field.err{border-color:var(--bad)}
 .hint{font-size:12px;color:var(--mut)}
-.seg{display:inline-flex;border:1px solid var(--line2);border-radius:7px;padding:2px;gap:2px}
-.seg button{height:24px;min-width:30px;padding:0 8px;border:0;border-radius:5px;background:none;color:var(--mut);cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
-.seg button[aria-checked="true"],.seg button[aria-pressed="true"]{background:var(--sel);color:var(--fg);font-weight:500}
-.thumb{display:flex;flex-direction:column;align-items:center;gap:4px;width:100%;padding:6px 0;border:0;background:none;border-radius:8px;cursor:pointer;color:var(--mut);font-size:12px}
-.thumb .mini{width:96px;height:124px;background:#ffffff;border:1px solid var(--line2);border-radius:2px;box-sizing:border-box;padding:10px 9px;display:flex;flex-direction:column;gap:4px}
-.thumb .mini i{display:block;height:3px;background:#d6d6d6;border-radius:1px}
-.thumb[aria-current="page"]{background:var(--sel);color:var(--fg);font-weight:500}
-.thumb[aria-current="page"] .mini{outline:2px solid #1d5fd1;outline-offset:1px}
-.paper{background:#ffffff;color:#1f1f1f;box-shadow:0 1px 3px rgba(0,0,0,.25);position:relative;box-sizing:border-box;font-family:"Iowan Old Style","Palatino Linotype",Georgia,serif}
-.paper h3{margin:0 0 6px;font-size:12.5px}
-.paper p{margin:0 0 7px;font-size:10px;line-height:1.5}
-.obj{position:absolute;border:1.5px solid #1d5fd1;background:rgba(29,95,209,.06);padding:4px 6px;box-sizing:border-box;cursor:move;text-align:left;color:#1f1f1f}
-.obj.idle{border:1px dashed rgba(29,95,209,.6);background:none}
-.h{position:absolute;width:7px;height:7px;background:#ffffff;border:1.5px solid #1d5fd1;box-sizing:border-box}
-.olist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
-.olist button{width:100%;text-align:left;border:0;background:none;border-radius:6px;padding:6px 8px;cursor:pointer;display:flex;gap:8px;align-items:baseline}
-.olist button[aria-current="true"]{background:var(--sel)}
-.note{display:flex;gap:10px;padding:10px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--raise)}
+.seg{display:inline-flex;border:1px solid var(--line2);border-radius:7px;padding:2px;gap:2px;align-items:center}
+.seg button{height:24px;min-width:28px;padding:0 7px;border:0;border-radius:5px;background:none;color:var(--mut);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:12px}
+.seg button[aria-checked="true"],.seg button[aria-expanded="true"]{background:var(--sel);color:var(--fg);font-weight:500}
+.seg.off{opacity:.45}
+.note{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--raise)}
+.chip{display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:9px;background:var(--sel);color:var(--fg);font-size:11px;font-weight:600}
 svg.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
 .tb :focus-visible{outline:2px solid var(--ring);outline-offset:2px}
-a{color:inherit}a:hover{color:var(--mut)}
-.mi{display:flex;gap:10px;align-items:flex-start;width:100%;text-align:left;padding:7px 10px;border:0;background:none;border-radius:6px;cursor:pointer;color:var(--fg);text-decoration:none;box-sizing:border-box}.mi:hover{background:var(--sel)}.mi svg{margin-top:2px}
-.pbadge{position:absolute;right:-6px;top:-6px;width:16px;height:16px;border-radius:50%;background:#1d5fd1;color:#fff;display:grid;place-items:center}
+a{color:inherit}
+.grid{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(6,128px);gap:10px 18px}
+.pg{position:relative;display:flex;flex-direction:column;align-items:center;gap:6px;padding:8px 0 6px;border-radius:8px;cursor:pointer}
+.slot{position:relative;width:128px;height:128px;display:flex;align-items:center;justify-content:center}
+.mini{width:96px;height:124px;background:#ffffff;border:1px solid var(--line2);border-radius:2px;box-sizing:border-box;padding:11px 10px;display:flex;flex-direction:column;gap:5px}
+.mini i{display:block;height:3px;background:#d6d6d6;border-radius:1px}
+.mini i.t{width:60%;height:5px;background:#9a9a9a}
+.ph{width:96px;height:124px;border:1px dashed var(--line2);border-radius:2px;box-sizing:border-box;display:grid;place-items:center;color:var(--faint);font-size:12px;background:var(--raise)}
+.obadge{position:absolute;left:8px;bottom:0;display:inline-flex;align-items:center;gap:3px;height:18px;padding:0 6px;border-radius:9px;background:var(--panel);border:1px solid var(--line2);color:var(--fg);font-size:10.5px;font-weight:600;white-space:nowrap}
+.chk{position:absolute;right:10px;top:-2px;width:18px;height:18px;border-radius:50%;background:var(--acc);color:#fff;display:grid;place-items:center}
+.chk svg{width:12px;height:12px;stroke-width:3}
+.plabel{font-size:12px;color:var(--mut);white-space:nowrap}
+.plabel b{color:var(--fg);font-weight:600}
+.ins{position:absolute;left:-11px;top:8px;height:128px;width:3px;border-radius:2px;background:var(--acc)}
+.ins:before,.ins:after{content:"";position:absolute;left:-3px;width:9px;height:3px;border-radius:2px;background:var(--acc)}
+.ins:before{top:0}.ins:after{bottom:0}
+.menu{position:absolute;z-index:5;background:var(--panel);border:1px solid var(--line2);border-radius:10px;padding:5px;box-shadow:0 14px 32px rgba(0,0,0,.28);display:flex;flex-direction:column;gap:1px}
+.mi{display:flex;gap:10px;align-items:center;width:100%;text-align:left;padding:6px 9px;border:0;background:none;border-radius:6px;cursor:pointer;color:var(--fg);box-sizing:border-box;white-space:nowrap}
+.mi.on{background:var(--sel)}
+.mi .kbd{margin-left:auto}
+.mhr{height:1px;background:var(--line);margin:4px 2px}
+.scrim{position:absolute;inset:0;background:var(--scrim);display:flex;align-items:center;justify-content:center;padding:20px;z-index:8}
+.dlg{width:100%;max-width:460px;background:var(--panel);border:1px solid var(--line2);border-radius:12px;padding:22px;display:flex;flex-direction:column;gap:12px;box-shadow:0 24px 48px rgba(0,0,0,.28);box-sizing:border-box}
+.dlg h2{margin:0;font-size:15px;font-weight:600;display:flex;gap:8px;align-items:center}
+.dlg p{margin:0;color:var(--mut)}
+.acts{display:flex;gap:8px;justify-content:flex-end;margin-top:6px}
+.paper{background:#ffffff;color:#1f1f1f;box-shadow:0 1px 3px rgba(0,0,0,.25);box-sizing:border-box;font-family:"Iowan Old Style","Palatino Linotype",Georgia,serif}
+.zone{position:absolute;left:0;right:300px;height:44px;display:flex;align-items:center;justify-content:center;gap:6px;font-size:12px;color:var(--fg);pointer-events:none}
 </style>
 </helmet>
 <div class="{{themeClass}}" style="height: 800px; display: flex; flex-direction: column; position: relative; overflow: hidden">
 <header style="height: 48px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 12px; border-bottom: 1px solid var(--line)">
 <a class="btn sm ghost" href="Main.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M5 12l6 6M5 12l6-6"></path></svg>All tools</a>
 <span class="sep" aria-hidden="true"></span>
-
 <div style="display: flex; flex-direction: column; min-width: 0; line-height: 1.25">
-<h1 style="margin: 0; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">lease-agreement.pdf</h1>
-<span class="hint" style="white-space: nowrap">14 pages. 3 changes not exported</span>
+<h1 style="margin: 0; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{docTitle}}</h1>
+<sc-if value="{{docSub}}" hint-placeholder-val="{{ true }}"><span class="hint" style="white-space: nowrap">{{docSub}}</span></sc-if>
 </div>
 <div style="flex: 1"></div>
-
-<button class="btn sm ghost icon" aria-label="Undo rotate page 5 ({{undoKey}})"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14L4 9l5-5"></path><path d="M4 9h11a5 5 0 0 1 0 10h-3"></path></svg></button>
-<button class="btn sm ghost icon" aria-label="Redo ({{redoKey}})" disabled><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 14l5-5-5-5"></path><path d="M20 9H9a5 5 0 0 0 0 10h3"></path></svg></button>
+<sc-if value="{{hasDoc}}" hint-placeholder-val="{{ true }}">
+<button class="btn sm ghost icon {{undoOff}}" aria-disabled="{{undoDis}}" aria-label="{{undoLabel}} ({{undoKey}})"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14L4 9l5-5"></path><path d="M4 9h11a5 5 0 0 1 0 10h-3"></path></svg></button>
+<button class="btn sm ghost icon off" aria-disabled="true" aria-label="Redo ({{redoKey}})"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 14l5-5-5-5"></path><path d="M20 9H9a5 5 0 0 0 0 10h3"></path></svg></button>
+<button class="btn sm ghost {{resetOff}}" aria-disabled="{{resetDis}}" aria-haspopup="dialog">Reset…</button>
 <span class="sep" aria-hidden="true"></span>
-<div role="group" aria-label="Zoom" style="display: flex; align-items: center; gap: 2px">
-<button class="btn sm ghost icon" aria-label="Zoom out"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"></path></svg></button>
-<label for="zoom" style="position: absolute; width: 1px; height: 1px; overflow: hidden">Zoom</label>
-<select id="zoom" class="field" style="width: 92px; height: 26px; padding: 0 6px"><option>Fit page</option><option>Fit width</option><option selected>100%</option><option>150%</option><option>200%</option></select>
-<button class="btn sm ghost icon" aria-label="Zoom in"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14"></path></svg></button>
-</div>
-<span class="sep" aria-hidden="true"></span>
+</sc-if>
 <button class="btn sm ghost" aria-label="Find a tool"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"></circle><path d="M21 21l-6-6"></path></svg><span class="kbd">{{findKey}}</span></button>
 <button class="btn sm ghost icon" aria-label="Settings ({{settingsKey}})"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"></path></svg></button>
-<a class="btn pri" href="PdfExport.dc.html">Export<span class="kbd">{{runKey}}</span></a>
+<sc-if value="{{hasDoc}}" hint-placeholder-val="{{ true }}"><span class="sep" aria-hidden="true"></span>
+<button class="btn sm ghost {{actOffRun}}" aria-disabled="{{isRun}}" aria-haspopup="dialog" aria-expanded="{{isDest}}" aria-label="Save to {{destFull}}{{destOnceSr}}. Change for this export" style="color: var(--fg); {{destPress}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>{{destShort}}<sc-if value="{{destOnce}}" hint-placeholder-val="{{ false }}"><span class="chip">This export only</span></sc-if></button></sc-if>
+<sc-if value="{{showExport}}" hint-placeholder-val="{{ true }}"><button class="btn pri {{exportOff}}" aria-disabled="{{exportDis}}" aria-describedby="exp-why">Export<span class="kbd">{{runKey}}</span></button></sc-if>
+<sc-if value="{{isRun}}" hint-placeholder-val="{{ false }}"><span style="display: flex; align-items: center; gap: 8px"><span role="progressbar" aria-label="Exporting {{docTitle}}" aria-valuenow="58" aria-valuemin="0" aria-valuemax="100" style="width: 120px; height: 6px; border-radius: 3px; background: var(--line2); overflow: hidden"><span style="display: block; width: 58%; height: 100%; background: var(--pri)"></span></span><span class="hint" style="white-space: nowrap">Page 137 of 236</span><button class="btn sm">Cancel</button></span></sc-if>
 </header>
-<div role="toolbar" aria-label="Edit tools" aria-orientation="horizontal" style="height: 44px; flex: none; display: flex; align-items: center; gap: 2px; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--side); position: relative">
+<div role="toolbar" aria-label="Edit tools" aria-orientation="horizontal" style="height: 44px; flex: none; display: flex; align-items: center; gap: 2px; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--side)">
 <a class="tbtn" href="PdfOrganize.dc.html" aria-pressed="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1"></rect><rect x="14" y="3" width="7" height="9" rx="1"></rect><rect x="3" y="15" width="7" height="6" rx="1"></rect><rect x="14" y="15" width="7" height="6" rx="1"></rect></svg>Organize</a>
 <a class="tbtn" href="PdfCrop.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2v14a2 2 0 0 0 2 2h14"></path><path d="M18 22V8a2 2 0 0 0-2-2H2"></path></svg>Crop</a>
 <span class="sep" aria-hidden="true"></span>
@@ -92,74 +104,204 @@ a{color:inherit}a:hover{color:var(--mut)}
 <a class="tbtn" href="PdfMarks.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2"></rect><path d="M4 7h16M4 17h16"></path></svg>Header and footer</a>
 <span class="sep" aria-hidden="true"></span>
 <a class="tbtn" href="PdfRedact.dc.html" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="4" rx="1" fill="currentColor"></rect><path d="M3 15h10M3 19h14"></path></svg>Redact</a>
-<button class="tbtn" aria-haspopup="menu" aria-expanded="false" aria-pressed="false" tabindex="-1">More<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></button>
 </div>
-<div role="toolbar" aria-label="Page actions, 2 pages selected" style="height: 44px; flex: none; display: flex; align-items: center; gap: 4px; padding: 0 16px; border-bottom: 1px solid var(--line); background: var(--panel)">
-<span style="font-size: 13px; font-weight: 600; margin-right: 8px">2 pages selected</span>
-<button class="btn sm ghost" aria-label="Rotate left"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4v6h6"></path><path d="M3.5 10A9 9 0 1 1 6 16.5"></path></svg></button><button class="btn sm ghost" aria-label="Rotate right"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 4v6h-6"></path><path d="M20.5 10A9 9 0 1 0 18 16.5"></path></svg></button>
-<button class="btn sm ghost" aria-label="Mirror left to right"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18"></path><path d="M9 7L4 12l5 5z"></path><path d="M15 7l5 5-5 5z"></path></svg></button><button class="btn sm ghost" aria-label="Mirror top to bottom"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h18"></path><path d="M7 9l5-5 5 5z"></path><path d="M7 15l5 5 5-5z"></path></svg></button>
+<sc-if value="{{showGrid}}" hint-placeholder-val="{{ true }}">
+<div role="toolbar" aria-label="Page actions, {{selCount}}" style="height: 44px; flex: none; display: flex; align-items: center; gap: 6px; padding: 0 16px; border-bottom: 1px solid var(--line); background: var(--panel)">
+<span role="status" style="font-size: 13px; font-weight: 600; min-width: 128px">{{selCount}}</span>
+<div role="group" aria-label="Orientation" class="seg {{actOff}}">
+<button aria-label="Rotate left ({{rotLKey}})"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4v6h6"></path><path d="M3.5 10A9 9 0 1 1 6 16.5"></path></svg></button>
+<button aria-label="Rotate right ({{rotRKey}})"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 4v6h-6"></path><path d="M20.5 10A9 9 0 1 0 18 16.5"></path></svg></button>
+<button aria-label="Mirror left to right (H)"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18"></path><path d="M9 7L4 12l5 5z"></path><path d="M15 7l5 5-5 5z"></path></svg></button>
+<button aria-label="Mirror top to bottom (V)"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h18"></path><path d="M7 9l5-5 5 5z"></path><path d="M7 15l5 5 5-5z"></path></svg></button>
+<button aria-label="More orientation options" aria-haspopup="menu" aria-expanded="{{isOrient}}" style="min-width: 20px; padding: 0 3px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px"><path d="M6 9l6 6 6-6"></path></svg></button>
+</div>
 <span class="sep" aria-hidden="true"></span>
-<button class="btn sm ghost" aria-label="Move earlier"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"></path></svg></button><button class="btn sm ghost" aria-label="Move later"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"></path></svg></button>
-<label class="hint" style="display: flex; gap: 6px; align-items: center">Move to before page<input class="field" style="width: 44px; height: 26px" inputmode="numeric" value="10"></label><button class="btn sm">Move</button>
-<span class="sep" aria-hidden="true"></span>
-<button class="btn sm ghost"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"></rect><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"></path></svg>Duplicate</button><button class="btn sm ghost"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14"></path></svg>Insert blank page</button><button class="btn sm ghost"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4"></path><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"></path></svg>Insert from PDF</button>
-<button class="btn sm ghost"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6v16H4zM14 4h6v16h-6z"></path></svg>Extract to new PDF</button>
+<button class="btn sm ghost icon {{actOff}}" aria-disabled="{{actDis}}" aria-label="Move earlier ({{mod}}+←)"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5M11 6l-6 6 6 6"></path></svg></button>
+<button class="btn sm ghost icon {{actOff}}" aria-disabled="{{actDis}}" aria-label="Move later ({{mod}}+→)"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg></button>
+<button class="btn sm ghost {{actOff}}" aria-disabled="{{actDis}}" aria-haspopup="dialog" aria-expanded="{{isMoveTo}}" style="{{moveToPress}}">Move to…</button>
+<button class="btn sm ghost {{actOffRun}}" aria-disabled="{{isRun}}" aria-haspopup="menu" aria-expanded="{{isOrder}}" style="{{orderPress}}">Page order<svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px"><path d="M6 9l6 6 6-6"></path></svg></button>
 <div style="flex: 1"></div>
-<button class="btn sm" style="color: var(--bad)"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"></path></svg>Delete 2 pages</button>
+<button class="btn sm danger {{delOff}}" aria-disabled="{{delDis}}" aria-describedby="del-why"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"></path></svg>{{delLabel}}</button>
 </div>
-<div style="height: 40px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 16px; border-bottom: 1px solid var(--line)">
+<div style="height: 40px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 16px; border-bottom: 1px solid var(--line); position: relative">
 <span class="hint" id="selby">Select</span>
-<div role="group" aria-labelledby="selby" style="display: flex; gap: 4px"><button class="btn sm ghost">All<span class="kbd">{{selAllKey}}</span></button><button class="btn sm ghost">Odd</button><button class="btn sm ghost">Even</button><button class="btn sm ghost">Blank pages, 1</button><button class="btn sm ghost">None</button></div>
-<label class="hint" style="display: flex; gap: 6px; align-items: center; margin-left: 8px">Pages<input class="field" style="width: 120px; height: 26px" placeholder="For example 2-5, 9"></label>
-<div style="flex: 1"></div>
-<label class="hint" style="display: flex; gap: 6px; align-items: center">Thumbnail size<input type="range" min="1" max="3" value="2" aria-valuetext="Medium"></label>
+<div role="group" aria-labelledby="selby" style="display: flex; gap: 2px; align-items: center">
+<button class="btn sm ghost {{actOffRun}}" aria-disabled="{{isRun}}">All<span class="kbd">{{selAllKey}}</span></button>
+<button class="btn sm ghost {{actOffRun}}" aria-disabled="{{isRun}}">Odd</button>
+<button class="btn sm ghost {{actOffRun}}" aria-disabled="{{isRun}}">Even</button>
+<button class="btn sm ghost {{actOffRun}}" aria-disabled="{{isRun}}" style="{{blankPress}}">Blank pages<sc-if value="{{blankFound}}" hint-placeholder-val="{{ false }}"><span class="chip">{{blankFound}}</span></sc-if></button>
+<button class="btn sm ghost {{actOffRun}}" aria-disabled="{{isRun}}">None<span class="kbd">Esc</span></button>
 </div>
-<main aria-label="Pages" style="flex: 1; min-height: 0; overflow: auto; background: var(--well); padding: 18px 24px">
-<p class="hint" style="margin: 0 0 12px">Drag pages to reorder them, or use the arrow keys to move focus and {{mod}}+Arrow to move the selected pages. Shift or {{mod}}-click to select several.</p>
-<ul role="listbox" aria-multiselectable="true" aria-label="Pages, in order" aria-orientation="horizontal" style="list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(7, 128px); gap: 14px 18px"><li role="option" aria-selected="false" aria-label="Page 1" tabindex="-1" style="position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px; border-radius: 8px; ">
-<span class="mini" aria-hidden="true" style="width: 96px; height: 124px; transform: rotate(0deg); padding: 10px; gap: 5px"><i style="width: 60%; height: 5px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i><i style="width: 70%"></i><i></i><i style="width: 50%"></i></span>
-<span class="hint" aria-hidden="true">1</span></li><li role="option" aria-selected="false" aria-label="Page 2" tabindex="-1" style="position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px; border-radius: 8px; ">
-<span class="mini" aria-hidden="true" style="width: 96px; height: 124px; transform: rotate(0deg); padding: 10px; gap: 5px"><i style="width: 60%; height: 5px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i><i style="width: 70%"></i><i></i><i style="width: 50%"></i></span>
-<span class="hint" aria-hidden="true">2</span></li><li role="option" aria-selected="false" aria-label="Page 3" tabindex="-1" style="position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px; border-radius: 8px; ">
-<span class="mini" aria-hidden="true" style="width: 96px; height: 124px; transform: rotate(0deg); padding: 10px; gap: 5px"><i style="width: 60%; height: 5px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i><i style="width: 70%"></i><i></i><i style="width: 50%"></i></span>
-<span class="hint" aria-hidden="true">3</span></li><li role="option" aria-selected="true" aria-label="Page 4, selected" tabindex="0" style="position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px; border-radius: 8px; background: var(--sel); outline: 2px solid var(--ring);">
-<span class="mini" aria-hidden="true" style="width: 96px; height: 124px; transform: rotate(0deg); padding: 10px; gap: 5px"><i style="width: 60%; height: 5px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i><i style="width: 70%"></i><i></i><i style="width: 50%"></i></span>
-<span class="hint" aria-hidden="true">4</span></li><li role="option" aria-selected="true" aria-label="Page 5, rotated 90 degrees, selected" tabindex="-1" style="position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px; border-radius: 8px; background: var(--sel); outline: 2px solid var(--ring);">
-<span class="mini" aria-hidden="true" style="width: 96px; height: 124px; transform: rotate(90deg); padding: 10px; gap: 5px"><i style="width: 60%; height: 5px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i><i style="width: 70%"></i><i></i><i style="width: 50%"></i></span>
-<span class="hint" aria-hidden="true">5</span></li><li role="option" aria-selected="false" aria-label="Page 6" tabindex="-1" style="position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px; border-radius: 8px; ">
-<span class="mini" aria-hidden="true" style="width: 96px; height: 124px; transform: rotate(0deg); padding: 10px; gap: 5px"><i style="width: 60%; height: 5px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i><i style="width: 70%"></i><i></i><i style="width: 50%"></i></span>
-<span class="hint" aria-hidden="true">6</span></li><li role="option" aria-selected="false" aria-label="Page 7, blank" tabindex="-1" style="position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px; border-radius: 8px; ">
-<span class="mini" aria-hidden="true" style="width: 96px; height: 124px; transform: rotate(0deg); padding: 10px; gap: 5px"></span>
-<span class="hint" aria-hidden="true">7  ·  blank</span></li><li role="option" aria-selected="false" aria-label="Page 8" tabindex="-1" style="position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px; border-radius: 8px; ">
-<span class="mini" aria-hidden="true" style="width: 96px; height: 124px; transform: rotate(0deg); padding: 10px; gap: 5px"><i style="width: 60%; height: 5px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i><i style="width: 70%"></i><i></i><i style="width: 50%"></i></span>
-<span class="hint" aria-hidden="true">8</span></li><li role="option" aria-selected="false" aria-label="Page 9" tabindex="-1" style="position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px; border-radius: 8px; ">
-<span class="mini" aria-hidden="true" style="width: 96px; height: 124px; transform: rotate(0deg); padding: 10px; gap: 5px"><i style="width: 60%; height: 5px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i><i style="width: 70%"></i><i></i><i style="width: 50%"></i></span>
-<span class="hint" aria-hidden="true">9</span></li><li role="option" aria-selected="false" aria-label="Page 10" tabindex="-1" style="position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px; border-radius: 8px; "><span aria-hidden="true" style="position: absolute; left: -9px; top: 6px; bottom: 26px; width: 3px; border-radius: 2px; background: #1d5fd1"></span>
-<span class="mini" aria-hidden="true" style="width: 96px; height: 124px; transform: rotate(0deg); padding: 10px; gap: 5px"><i style="width: 60%; height: 5px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i><i style="width: 70%"></i><i></i><i style="width: 50%"></i></span>
-<span class="hint" aria-hidden="true">10</span></li><li role="option" aria-selected="false" aria-label="Page 11" tabindex="-1" style="position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px; border-radius: 8px; ">
-<span class="mini" aria-hidden="true" style="width: 96px; height: 124px; transform: rotate(0deg); padding: 10px; gap: 5px"><i style="width: 60%; height: 5px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i><i style="width: 70%"></i><i></i><i style="width: 50%"></i></span>
-<span class="hint" aria-hidden="true">11</span></li><li role="option" aria-selected="false" aria-label="Page 12" tabindex="-1" style="position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px; border-radius: 8px; ">
-<span class="mini" aria-hidden="true" style="width: 96px; height: 124px; transform: rotate(0deg); padding: 10px; gap: 5px"><i style="width: 60%; height: 5px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i><i style="width: 70%"></i><i></i><i style="width: 50%"></i></span>
-<span class="hint" aria-hidden="true">12</span></li><li role="option" aria-selected="false" aria-label="Page 13" tabindex="-1" style="position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px; border-radius: 8px; ">
-<span class="mini" aria-hidden="true" style="width: 96px; height: 124px; transform: rotate(0deg); padding: 10px; gap: 5px"><i style="width: 60%; height: 5px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i><i style="width: 70%"></i><i></i><i style="width: 50%"></i></span>
-<span class="hint" aria-hidden="true">13</span></li><li role="option" aria-selected="false" aria-label="Page 14" tabindex="-1" style="position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px; border-radius: 8px; ">
-<span class="mini" aria-hidden="true" style="width: 96px; height: 124px; transform: rotate(0deg); padding: 10px; gap: 5px"><i style="width: 60%; height: 5px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i><i style="width: 70%"></i><i></i><i style="width: 50%"></i></span>
-<span class="hint" aria-hidden="true">14</span></li></ul>
-</main>
-<footer style="height: 30px; flex: none; display: flex; align-items: center; gap: 12px; padding: 0 12px; border-top: 1px solid var(--line); background: var(--side)">
-<label class="hint" for="pg" style="display: flex; align-items: center; gap: 6px">Page<input id="pg" class="field" value="4" inputmode="numeric" style="width: 44px; height: 22px; padding: 0 6px; text-align: center"></label><span class="hint">of 14</span>
-<div style="flex: 1"></div>
-<span class="hint" role="status">Page 5 rotated right. Pages 4 and 5 selected.</span>
 <span class="sep" aria-hidden="true"></span>
-<span class="hint">Pages are rearranged in the copy only</span>
+<label class="hint" for="range" style="display: flex; gap: 6px; align-items: center">Pages</label>
+<input id="range" class="field {{rangeErr}}" style="width: 150px; height: 26px" placeholder="For example 1-3, 7" value="{{rangeVal}}" aria-invalid="{{rangeInvalid}}" aria-describedby="range-err">
+<sc-if value="{{isRangeErr}}" hint-placeholder-val="{{ false }}"><div id="range-err" role="alert" class="menu" style="left: 380px; top: 36px; flex-direction: row; gap: 8px; padding: 9px 12px; max-width: 360px; white-space: normal"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--bad); margin-top: 1px"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v5M12 16v.5"></path></svg><span>Page 250 isn't in this PDF. It has 236 pages, so use numbers from 1 to 236.</span></div></sc-if>
+<div style="flex: 1"></div>
+<span class="hint" id="tsize">Thumbnails</span>
+<div role="radiogroup" aria-labelledby="tsize" class="seg"><button role="radio" aria-checked="false">Small</button><button role="radio" aria-checked="true">Medium</button><button role="radio" aria-checked="false">Large</button></div>
+<button class="btn sm ghost" aria-haspopup="dialog" aria-label="Keyboard shortcuts (?)"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="6" width="20" height="12" rx="2"></rect><path d="M6 10h.5M10 10h.5M14 10h.5M18 10h.5M7 14h10"></path></svg><span class="kbd">?</span></button>
+</div>
+<div style="flex: 1; min-height: 0; display: flex; position: relative">
+<main aria-label="Pages" aria-busy="{{isRun}}" style="flex: 1; min-width: 0; overflow: hidden; background: var(--well); padding: 16px 24px; display: flex; flex-direction: column; gap: 12px; {{gridDim}}">
+<sc-if value="{{isSigned}}" hint-placeholder-val="{{ false }}"><div class="note" role="status"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--warn); margin-top: 1px"><path d="M12 3l10 18H2z"></path><path d="M12 10v5M12 18v.5"></path></svg><span class="hint" style="flex: 1"><strong style="font-weight: 600; color: var(--fg)">This PDF is digitally signed.</strong> Any copy you export won't be signed any more. The original keeps its signature.</span><button class="btn sm ghost" aria-label="Dismiss signature notice">Got it</button></div></sc-if>
+<sc-if value="{{isMirrored}}" hint-placeholder-val="{{ false }}"><div class="note" role="status"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--warn); margin-top: 1px"><path d="M12 3v18"></path><path d="M9 7L4 12l5 5z"></path><path d="M15 7l5 5-5 5z"></path></svg><span class="hint" style="flex: 1"><strong style="font-weight: 600; color: var(--fg)">2 mirrored pages will show their text reversed.</strong> That's expected: mirroring flips how the page looks. The text still copies and searches normally.</span></div></sc-if>
+<sc-if value="{{isRun}}" hint-placeholder-val="{{ false }}"><div class="note" role="status"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="margin-top: 1px"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg><span class="hint" style="flex: 1"><strong style="font-weight: 600; color: var(--fg)">Exporting a copy.</strong> Pages can't be changed until it finishes. You can cancel at any time and nothing is saved.</span></div></sc-if>
+<ul role="listbox" aria-multiselectable="true" aria-label="Pages of {{docTitle}}, in order" aria-describedby="grid-help" aria-activedescendant="pg-{{focusPos}}" tabindex="0" class="grid">
+<sc-for list="{{pages}}" as="p" hint-placeholder-count="18">
+<li id="pg-{{p.pos}}" role="option" aria-selected="{{p.sel}}" aria-label="{{p.aria}}" class="pg" style="{{p.liStyle}}">
+<sc-if value="{{p.ins}}" hint-placeholder-val="{{ false }}"><span class="ins" aria-hidden="true"></span></sc-if>
+<span class="slot" aria-hidden="true">
+<sc-if value="{{p.ph}}" hint-placeholder-val="{{ false }}"><span class="ph">{{p.pos}}</span></sc-if>
+<sc-if value="{{p.real}}" hint-placeholder-val="{{ true }}"><span class="mini" style="transform: {{p.tf}}; {{p.miniSel}}"><sc-if value="{{p.lines}}" hint-placeholder-val="{{ true }}"><i class="t"></i><i></i><i></i><i style="width: 80%"></i><i></i><i style="width: 70%"></i><i></i><i style="width: 50%"></i></sc-if></span></sc-if>
+<sc-if value="{{p.badge}}" hint-placeholder-val="{{ false }}"><span class="obadge">{{p.badge}}</span></sc-if>
+<sc-if value="{{p.sel}}" hint-placeholder-val="{{ false }}"><span class="chk"><svg class="ic" viewBox="0 0 24 24"><path d="M5 12l5 5 9-10"></path></svg></span></sc-if>
+</span>
+<span class="plabel" aria-hidden="true"><b>{{p.pos}}</b><sc-if value="{{p.moved}}" hint-placeholder-val="{{ false }}"> · was page {{p.orig}}</sc-if><sc-if value="{{p.blankTag}}" hint-placeholder-val="{{ false }}"> · blank</sc-if></span>
+</li>
+</sc-for>
+</ul>
+<p id="grid-help" class="hint" style="position: absolute; width: 1px; height: 1px; overflow: hidden; margin: 0">Arrow keys move focus. Space selects. Shift with an arrow key extends the selection. {{mod}} with an arrow key moves the selected pages. Press question mark for all shortcuts.</p>
+</main>
+<sc-if value="{{isDrag}}" hint-placeholder-val="{{ false }}">
+<div class="zone" aria-hidden="true" style="top: 0; background: linear-gradient(var(--sel), transparent); color: var(--mut)"><svg class="ic" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"></path></svg>Drag here to scroll up</div>
+<div class="zone" aria-hidden="true" style="bottom: 0; background: linear-gradient(transparent, color-mix(in srgb, var(--acc) 35%, transparent)); font-weight: 600"><svg class="ic" viewBox="0 0 24 24"><path d="M12 5v14M6 13l6 6 6-6"></path></svg>Scrolling down. Pages 19 to 24 are coming into view</div>
+<div aria-hidden="true" style="position: absolute; left: 176px; top: 386px; width: 110px; height: 130px; pointer-events: none">
+<span class="mini" style="position: absolute; left: 12px; top: 0; width: 84px; height: 108px; transform: rotate(6deg); padding: 9px"></span>
+<span class="mini" style="position: absolute; left: 6px; top: 4px; width: 84px; height: 108px; transform: rotate(-4deg); padding: 9px"></span>
+<span class="mini" style="position: absolute; left: 0; top: 8px; width: 84px; height: 108px; padding: 9px; box-shadow: 0 10px 24px rgba(0,0,0,.35); outline: 2px solid var(--acc)"><i class="t"></i><i></i><i></i><i style="width: 80%"></i><i></i></span>
+<span style="position: absolute; left: 70px; top: 0; min-width: 24px; height: 24px; padding: 0 6px; box-sizing: border-box; border-radius: 12px; background: var(--acc); color: #fff; font-weight: 700; display: grid; place-items: center">3</span>
+</div>
+</sc-if>
+<aside aria-label="Preview of the focused page" style="width: 300px; flex: none; border-left: 1px solid var(--line); background: var(--panel); padding: 16px; box-sizing: border-box; display: flex; flex-direction: column; gap: 14px">
+<div style="display: flex; align-items: baseline; justify-content: space-between"><h2 style="margin: 0; font-size: 13px; font-weight: 600">Page {{fPos}}</h2><span class="hint">of 236</span></div>
+<div style="height: 300px; display: flex; align-items: center; justify-content: center; background: var(--well); border-radius: 8px">
+<sc-if value="{{fReady}}" hint-placeholder-val="{{ true }}"><div class="paper" style="width: 200px; height: 258px; padding: 18px 16px; transform: {{fTf}}"><sc-if value="{{fLines}}" hint-placeholder-val="{{ true }}"><div style="font-size: 9.5px; font-weight: 700; margin-bottom: 6px">{{fHeading}}</div><div style="font-size: 6.5px; line-height: 1.55; color: #3a3a3a">The Tenant will pay the rent monthly in advance on the first day of each month. Payment is made by standing order to the account named in Schedule 2. The Landlord will confirm each payment in writing on request, and will keep a record of all payments received during the term.</div></sc-if></div></sc-if>
+<sc-if value="{{fWait}}" hint-placeholder-val="{{ false }}"><span class="hint">Loading preview…</span></sc-if>
+</div>
+<dl style="margin: 0; display: grid; grid-template-columns: 96px minmax(0,1fr); gap: 6px 10px">
+<dt class="hint">Position</dt><dd style="margin: 0">{{fPos}} of 236</dd>
+<dt class="hint">Original page</dt><dd style="margin: 0">{{fOrig}}</dd>
+<dt class="hint">Orientation</dt><dd style="margin: 0">{{fOrient}}</dd>
+</dl>
+<button class="btn sm" style="align-self: flex-start">Open in page view<span class="kbd">↵</span></button>
+</aside>
+</div>
+</sc-if>
+<sc-if value="{{showCenter}}" hint-placeholder-val="{{ false }}">
+<main aria-label="Organize PDF" style="flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 24px; {{centerDim}}">
+<div style="max-width: 460px; display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center">
+<span style="width: 48px; height: 48px; border-radius: 12px; display: grid; place-items: center; background: var(--raise); color: {{cIconColor}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 22px; height: 22px"><sc-if value="{{isEmpty}}" hint-placeholder-val="{{ true }}"><rect x="3" y="3" width="7" height="9" rx="1"></rect><rect x="14" y="3" width="7" height="9" rx="1"></rect><rect x="3" y="15" width="7" height="6" rx="1"></rect><rect x="14" y="15" width="7" height="6" rx="1"></rect></sc-if><sc-if value="{{isLocked}}" hint-placeholder-val="{{ false }}"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></sc-if><sc-if value="{{isWarnIcon}}" hint-placeholder-val="{{ false }}"><path d="M12 3l10 18H2z"></path><path d="M12 10v5M12 18v.5"></path></sc-if></svg></span>
+<h2 role="{{cRole}}" style="margin: 0; font-size: 17px; font-weight: 600">{{cTitle}}</h2>
+<p style="margin: 0; color: var(--mut)">{{cText}}</p>
+<div style="display: flex; gap: 8px; margin-top: 6px">
+<sc-if value="{{isEmpty}}" hint-placeholder-val="{{ true }}"><button class="btn pri"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>Open PDF<span class="kbd">{{openKey}}</span></button></sc-if>
+<sc-if value="{{isLocked}}" hint-placeholder-val="{{ false }}"><a class="btn pri" href="SecEmpty.dc.html">Open File Security</a></sc-if>
+<sc-if value="{{isTooBig}}" hint-placeholder-val="{{ false }}"><a class="btn pri" href="Split.dc.html">Open Split</a></sc-if>
+<sc-if value="{{isPreflight}}" hint-placeholder-val="{{ false }}"><button class="btn">Open another PDF<span class="kbd">{{openKey}}</span></button></sc-if>
+</div>
+<sc-if value="{{isEmpty}}" hint-placeholder-val="{{ true }}">
+<p class="hint" style="margin: 0">Or drop one PDF anywhere in this window.</p>
+<div style="margin-top: 14px; display: flex; flex-direction: column; gap: 8px; width: 100%">
+<div class="note" style="text-align: left"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="margin-top: 1px"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg><span class="hint">Copies are saved next to the original, named with “-edited”. You can pick another folder for each export.</span></div>
+<div class="note" style="text-align: left"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="margin-top: 1px"><path d="M8 6h10M8 12h10M8 18h10M4 6h.5M4 12h.5M4 18h.5"></path></svg><span class="hint" style="flex: 1">Organize works on one PDF at a time. To combine several PDFs, use Merge first, then organize the result here.</span><a class="btn sm" href="Merge.dc.html">Open Merge</a></div>
+</div>
+</sc-if>
+</div>
+</main>
+</sc-if>
+<footer style="height: 30px; flex: none; display: flex; align-items: center; gap: 12px; padding: 0 12px; border-top: 1px solid var(--line); background: var(--side)">
+<span class="hint" role="status" aria-live="polite" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{statusMsg}}</span>
+<div style="flex: 1"></div>
+<span class="hint" style="white-space: nowrap">Your original is never changed</span>
 </footer>
+
+<sc-if value="{{isOrient}}" hint-placeholder-val="{{ false }}"><div class="menu" role="menu" aria-label="Orientation" style="left: 268px; top: 130px; width: 270px">
+<button class="mi" role="menuitem"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 4v6h-6"></path><path d="M20.5 10A9 9 0 1 0 18 16.5"></path></svg>Rotate right 90°<span class="kbd">{{rotRKey}}</span></button>
+<button class="mi" role="menuitem"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4v6h6"></path><path d="M3.5 10A9 9 0 1 1 6 16.5"></path></svg>Rotate left 90°<span class="kbd">{{rotLKey}}</span></button>
+<button class="mi" role="menuitem"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 0 1 15-4M20 12a8 8 0 0 1-15 4"></path><path d="M19 3v5h-5M5 21v-5h5"></path></svg>Rotate 180°</button>
+<div class="mhr" role="separator"></div>
+<button class="mi" role="menuitem"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18"></path><path d="M9 7L4 12l5 5z"></path><path d="M15 7l5 5-5 5z"></path></svg>Mirror left to right<span class="kbd">H</span></button>
+<button class="mi" role="menuitem"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h18"></path><path d="M7 9l5-5 5 5z"></path><path d="M7 15l5 5 5-5z"></path></svg>Mirror top to bottom<span class="kbd">V</span></button>
+<div class="mhr" role="separator"></div>
+<button class="mi on" role="menuitem"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14L4 9l5-5"></path><path d="M4 9h11a5 5 0 0 1 0 10h-3"></path></svg>Reset orientation of 3 pages</button>
+<p class="hint" style="margin: 4px 9px 4px; white-space: normal">Turns the selected pages back to how they were in the original. Other changes stay.</p>
+</div></sc-if>
+
+<sc-if value="{{isMoveTo}}" hint-placeholder-val="{{ false }}"><div class="menu" role="dialog" aria-label="Move 3 pages to a position" style="left: 360px; top: 130px; width: 300px; padding: 14px; gap: 10px">
+<label for="mvpos" style="font-weight: 600">Move pages 4 to 6 to position</label>
+<div style="display: flex; gap: 8px; align-items: center"><input id="mvpos" class="field" value="1" inputmode="numeric" style="width: 80px"><span class="hint">of 236</span></div>
+<div style="display: flex; gap: 6px"><button class="btn sm">Start<span class="kbd">{{startKey}}</span></button><button class="btn sm">End<span class="kbd">{{endKey}}</span></button></div>
+<p class="hint" style="margin: 0">The pages stay together in the same order. Position 1 puts them first.</p>
+<div style="display: flex; gap: 8px; justify-content: flex-end"><button class="btn sm">Cancel</button><button class="btn sm pri">Move</button></div>
+</div></sc-if>
+
+<sc-if value="{{isOrder}}" hint-placeholder-val="{{ false }}"><div class="menu" role="menu" aria-label="Page order" style="left: 446px; top: 130px; width: 330px">
+<button class="mi" role="menuitem">Reverse the 3 selected pages</button>
+<button class="mi on" role="menuitem">Reverse the whole document</button>
+<div class="mhr" role="separator"></div>
+<button class="mi" role="menuitem" style="flex-direction: column; align-items: flex-start; gap: 2px; white-space: normal"><span>Interleave a two-sided scan</span><span class="hint">For fronts scanned first, then backs scanned in reverse. Puts the pages in reading order: 1, 236, 2, 235…</span></button>
+</div></sc-if>
+
+<sc-if value="{{isLast}}" hint-placeholder-val="{{ false }}"><div id="del-why" class="menu" role="alert" style="right: 16px; top: 130px; width: 330px; flex-direction: row; gap: 8px; padding: 10px 12px; white-space: normal"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--warn); margin-top: 1px"><path d="M12 3l10 18H2z"></path><path d="M12 10v5M12 18v.5"></path></svg><span>A PDF needs at least one page. Deselect the pages you want to keep, then delete the rest.</span></div></sc-if>
+
+<sc-if value="{{isNoChange}}" hint-placeholder-val="{{ false }}"><div id="exp-why" class="menu" role="status" style="right: 12px; top: 44px; width: 300px; padding: 10px 12px; white-space: normal"><span><strong style="font-weight: 600">Nothing to export yet.</strong> <span class="hint">Every page is back the way it was opened, so a copy would match the original. Make a change to export.</span></span></div></sc-if>
+
+<sc-if value="{{isDest}}" hint-placeholder-val="{{ false }}"><div class="menu" role="dialog" aria-label="Where this export goes" style="right: 104px; top: 44px; width: 340px; padding: 14px; gap: 10px">
+<span style="font-weight: 600">Save this export to</span>
+<div style="display: flex; gap: 8px; align-items: center; padding: 8px 10px; border-radius: 8px; background: var(--raise)"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg><span style="overflow-wrap: anywhere">{{destFull}}</span></div>
+<p class="hint" style="margin: 0">For this export only. Your default in Settings stays “Next to the original”.</p>
+<div style="display: flex; gap: 8px; justify-content: flex-end"><button class="btn sm">Use default</button><button class="btn sm">Choose folder…</button></div>
+</div></sc-if>
+
+<sc-if value="{{dialog}}" hint-placeholder-val="{{ false }}"><div class="scrim">
+<div class="dlg" role="{{dRole}}" aria-modal="true" aria-labelledby="dt" aria-describedby="dd" style="max-width: {{dWidth}}">
+<h2 id="dt"><sc-if value="{{dOk}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--ok)"><path d="M5 12l5 5 9-10"></path></svg></sc-if><sc-if value="{{dBad}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--bad)"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v5M12 16v.5"></path></svg></sc-if>{{dTitle}}</h2>
+<p id="dd">{{dText}}</p>
+<sc-if value="{{isChoose}}" hint-placeholder-val="{{ false }}">
+<div role="radiogroup" aria-label="PDF to open" style="display: flex; flex-direction: column; border: 1px solid var(--line2); border-radius: 8px; overflow: hidden">
+<sc-for list="{{chooseRows}}" as="r" hint-placeholder-count="3"><label style="display: flex; gap: 10px; align-items: center; padding: 9px 12px; border-bottom: 1px solid var(--line); {{r.bg}}"><sc-if value="{{r.on}}" hint-placeholder-val="{{ false }}"><input type="radio" name="pick" checked></sc-if><sc-if value="{{r.off}}" hint-placeholder-val="{{ true }}"><input type="radio" name="pick"></sc-if><span style="flex: 1">{{r.name}}</span><span class="hint">{{r.size}}</span></label></sc-for>
+</div>
+<div class="note"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="margin-top: 1px"><path d="M8 6h10M8 12h10M8 18h10M4 6h.5M4 12h.5M4 18h.5"></path></svg><span class="hint" style="flex: 1">Want all three as one PDF? Merge combines whole files in order. Then open the merged copy here to rearrange its pages.</span><a class="btn sm" href="Merge.dc.html">Open Merge</a></div>
+</sc-if>
+<sc-if value="{{isDone}}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-radius: 8px; background: var(--raise)">
+<div style="display: flex; gap: 10px; align-items: center"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4"></path><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"></path></svg><span style="font-weight: 600; flex: 1">contracts-scan-edited.pdf</span><span class="hint">{{doneSize}}</span></div>
+<span class="hint">233 pages kept, 3 removed, 12 rotated, 2 mirrored. Saved to {{destFull}}.</span>
+<span style="display: flex; gap: 6px; align-items: flex-start; color: var(--warn); font-size: 12px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px; margin-top: 2px"><path d="M12 3l10 18H2z"></path><path d="M12 10v5M12 18v.5"></path></svg><span><strong style="font-weight: 600">Signature removed.</strong> This copy isn't signed. The original still is.</span></span>
+</div>
+<p class="hint" style="margin: 0">Your changes stay here, so you can keep editing and export again. The next copy gets a new name, like contracts-scan-edited-1.pdf.</p>
+</sc-if>
+<sc-if value="{{isFail}}" hint-placeholder-val="{{ false }}">
+<dl style="margin: 0; display: grid; grid-template-columns: 96px minmax(0,1fr); gap: 4px 12px; padding: 10px 12px; border-radius: 8px; background: var(--raise)">
+<dt class="hint">Problem</dt><dd style="margin: 0">{{failKind}}</dd>
+<dt class="hint">Folder</dt><dd style="margin: 0; overflow-wrap: anywhere">{{destFull}}</dd>
+<dt class="hint">Saved</dt><dd style="margin: 0">Nothing. No partial file was left behind.</dd>
+</dl>
+</sc-if>
+<sc-if value="{{isBlocked}}" hint-placeholder-val="{{ false }}">
+<ul style="margin: 0; padding: 10px 12px 10px 30px; border-radius: 8px; background: var(--raise); display: flex; flex-direction: column; gap: 4px">
+<li>Bookmarks “Schedule 2” and “Signatures” point to pages 41 and 42.</li>
+<li>Page 42 holds fillable form fields.</li>
+<li>This PDF has accessibility tags that page 41 is part of.</li>
+</ul>
+<p class="hint" style="margin: 0">Keep pages 41 and 42 and export again. Your other changes are still here.</p>
+</sc-if>
+<sc-if value="{{isShortcuts}}" hint-placeholder-val="{{ false }}">
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px">
+<sc-for list="{{keys}}" as="k" hint-placeholder-count="12"><div style="display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--line)"><span>{{k.what}}</span><span class="kbd" style="align-self: center">{{k.key}}</span></div></sc-for>
+</div>
+</sc-if>
+<div class="acts"><sc-for list="{{dButtons}}" as="b" hint-placeholder-count="2"><button class="btn {{b.cls}}" style="{{b.style}}">{{b.label}}</button></sc-for></div>
+</div>
+</div></sc-if>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "$preview": {"width": 1280, "height": 800}}'>
+<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "state": {"editor": "enum", "options": ["Pages selected", "No document", "Several dropped", "Loading pages", "Signed file", "Locked file", "Damaged file", "Too many pages", "Page range error", "Blank pages found", "Orientation menu", "Mirrored pages", "Dragging", "Move to position", "Page order menu", "Every page selected", "Shortcuts", "Reset", "Unexported changes", "No changes", "Other folder", "Exporting", "Exported", "Export failed", "Removal blocked"], "default": "Pages selected"}, "$preview": {"width": 1280, "height": 800}}'>
 class Component extends DCLogic {
 renderVals() {
 const win = (this.props.platform ?? 'macOS') === 'Windows';
 const light = (this.props.theme ?? 'dark') === 'light';
+const s = this.props.state ?? 'Pages selected';
 const base = {
 themeClass: light ? 'tb light' : 'tb dark',
 findKey: win ? 'Ctrl+K' : '⌘K',
@@ -168,14 +310,199 @@ runKey: win ? 'Ctrl+Enter' : '⌘↵',
 openKey: win ? 'Ctrl+O' : '⌘O',
 undoKey: win ? 'Ctrl+Z' : '⌘Z',
 redoKey: win ? 'Ctrl+Y' : '⇧⌘Z',
-dupKey: win ? 'Ctrl+D' : '⌘D',
 selAllKey: win ? 'Ctrl+A' : '⌘A',
-mod: win ? 'Ctrl' : '⌘',
-reveal: win ? 'Show in File Explorer' : 'Show in Finder',
-docsDir: win ? 'C:\\Users\\Asha\\Documents' : '~/Documents'
+rotRKey: win ? 'Ctrl+R' : '⌘R',
+rotLKey: win ? 'Ctrl+Shift+R' : '⇧⌘R',
+startKey: win ? 'Ctrl+Home' : '⌘↑',
+endKey: win ? 'Ctrl+End' : '⌘↓',
+mod: win ? 'Ctrl' : '⌘'
 };
-const extra = {};
-return Object.assign(base, typeof extra === 'undefined' ? {} : extra);
+const reveal = win ? 'Show in File Explorer' : 'Show in Finder';
+const docsDir = win ? 'C:\\Users\\Asha\\Documents\\Leases' : '~/Documents/Leases';
+const otherDir = win ? 'C:\\Users\\Asha\\Desktop\\For client' : '~/Desktop/For client';
+
+const empty = s === 'No document' || s === 'Several dropped';
+const preflight = s === 'Locked file' || s === 'Damaged file' || s === 'Too many pages';
+const run = s === 'Exporting';
+const loading = s === 'Loading pages';
+const fresh = loading || s === 'Signed file';
+const noChange = s === 'No changes';
+const other = s === 'Other folder' || s === 'Exported' || s === 'Export failed';
+
+let sel = [4, 5, 6];
+if (fresh || noChange) sel = [];
+if (s === 'Blank pages found') sel = [7, 11, 16];
+if (s === 'Every page selected') sel = Array.from({ length: 18 }, (_, i) => i + 1);
+const focus = fresh || noChange ? 1 : s === 'Blank pages found' ? 7 : 5;
+const rot = fresh || noChange ? {} : { 5: 90, 10: 270, 12: 180 };
+const mir = fresh || noChange ? {} : s === 'Mirrored pages' ? { 8: 'h', 9: 'h' } : { 8: 'h' };
+const swapped = !(fresh || noChange);
+const blanks = [7, 11, 16];
+const selSet = new Set(sel);
+const orientWords = (r, m) => {
+  const parts = [];
+  if (r === 90) parts.push('Rotated 90° right');
+  if (r === 180) parts.push('Rotated 180°');
+  if (r === 270) parts.push('Rotated 90° left');
+  if (m === 'h') parts.push('mirrored left to right');
+  if (m === 'v') parts.push('mirrored top to bottom');
+  const t = parts.join(', ');
+  return t ? t.charAt(0).toUpperCase() + t.slice(1) : 'As in the original';
+};
+const pages = [];
+for (let pos = 1; pos <= 18; pos++) {
+  const orig = swapped && pos === 12 ? 13 : swapped && pos === 13 ? 12 : pos;
+  const r = rot[orig] || 0, m = mir[orig] || '';
+  const on = selSet.has(pos);
+  const ph = loading && pos > 8;
+  const dragged = s === 'Dragging' && on;
+  const badgeParts = [];
+  if (r) badgeParts.push(r === 270 ? '↺ 90°' : r === 90 ? '↻ 90°' : '↻ 180°');
+  if (m) badgeParts.push(m === 'h' ? '⇋ Mirrored' : '⇵ Mirrored');
+  const tf = `rotate(${r}deg)` + (m === 'h' ? ' scaleX(-1)' : m === 'v' ? ' scaleY(-1)' : '');
+  const words = orientWords(r, m).toLowerCase();
+  let aria = `Position ${pos}, original page ${orig}`;
+  if (r || m) aria += `, ${words}`;
+  if (blanks.includes(orig) && s === 'Blank pages found') aria += ', blank';
+  if (ph) aria += ', preview loading';
+  aria += on ? ', selected' : '';
+  let li = '';
+  if (on) li += 'background: var(--sel);';
+  if (pos === focus && !run) li += ' outline: 2px solid var(--ring); outline-offset: -2px;';
+  if (dragged) li += ' opacity: .35;';
+  pages.push({
+    pos, orig, sel: on, aria, liStyle: li, ph, real: !ph,
+    lines: !blanks.includes(orig), tf,
+    miniSel: on ? 'outline: 2px solid var(--acc); outline-offset: 2px;' : '',
+    badge: badgeParts.join(' · '), moved: orig !== pos,
+    blankTag: blanks.includes(orig) && s === 'Blank pages found',
+    ins: s === 'Dragging' && pos === 14
+  });
+}
+const fOrig = focus === 12 && swapped ? 13 : focus;
+const fr = rot[fOrig] || 0, fm = mir[fOrig] || '';
+
+const status = {
+  'Pages selected': 'Page 5 rotated 90° right. Pages 4 to 6 selected.',
+  'No document': 'No PDF open.',
+  'Several dropped': '3 PDFs dropped. Choose one to open.',
+  'Loading pages': 'Showing 236 pages. Previews load as you scroll.',
+  'Signed file': 'Opened contracts-scan.pdf, 236 pages. It is digitally signed.',
+  'Locked file': 'Couldn\u2019t open tax-return-2025.pdf. It\u2019s password-protected.',
+  'Damaged file': 'Couldn\u2019t open scan-0412.pdf. It may be damaged.',
+  'Too many pages': 'Couldn\u2019t open archive-2019-2025.pdf. It has too many pages.',
+  'Page range error': 'Page 250 isn\u2019t in this PDF.',
+  'Blank pages found': '3 blank pages found and selected: 7, 11 and 16. Nothing was removed.',
+  'Orientation menu': 'Pages 4 to 6 selected.',
+  'Mirrored pages': 'Pages 8 and 9 mirrored left to right.',
+  'Dragging': 'Moving 3 pages. Drop to place them before position 14. Press Esc to cancel.',
+  'Move to position': 'Pages 4 to 6 selected.',
+  'Page order menu': 'Pages 4 to 6 selected.',
+  'Every page selected': 'All 236 pages selected.',
+  'Shortcuts': 'Pages 4 to 6 selected.',
+  'Reset': 'Pages 4 to 6 selected.',
+  'Unexported changes': '7 changes not exported.',
+  'No changes': 'Page 5 rotated 90° left. It\u2019s back to how it was opened.',
+  'Other folder': 'This export goes to For client. Your default didn\u2019t change.',
+  'Exporting': 'Exporting a copy, page 137 of 236.',
+  'Exported': 'Exported contracts-scan-edited.pdf. Signature removed.',
+  'Export failed': 'Export failed. Nothing was saved.',
+  'Removal blocked': 'Export stopped. Pages 41 and 42 can\u2019t be removed.'
+}[s];
+
+const center = {
+  'No document': ['Open a PDF to organize its pages', 'Reorder, rotate, mirror and remove pages. When you export, Toolbox saves a new copy and never changes your original.', 'heading', 'var(--fg)'],
+  'Several dropped': ['Open a PDF to organize its pages', 'Reorder, rotate, mirror and remove pages. When you export, Toolbox saves a new copy and never changes your original.', 'heading', 'var(--fg)'],
+  'Locked file': ['tax-return-2025.pdf is password-protected', 'Remove its password with File Security first, then open the unlocked copy here.', 'alert', 'var(--fg)'],
+  'Damaged file': ['Toolbox can\u2019t read scan-0412.pdf', 'The file may be damaged, or it isn\u2019t a PDF that Toolbox supports. Nothing was changed. If another app can open it, save a new copy from there and try that.', 'alert', 'var(--bad)'],
+  'Too many pages': ['archive-2019-2025.pdf has too many pages', 'It has 3,120 pages. Organize works with up to 2,000 pages at a time. Use Split to make smaller parts, then organize each one.', 'alert', 'var(--warn)']
+}[s] || ['', '', 'heading', 'var(--fg)'];
+
+const D = { dialog: false, dRole: 'dialog', dWidth: '460px', dOk: false, dBad: false, dTitle: '', dText: '', dButtons: [] };
+if (s === 'Several dropped') Object.assign(D, { dialog: true, dTitle: 'Organize works on one PDF at a time', dText: 'You dropped 3 PDFs. Choose the one to open. The others aren\u2019t opened or changed.', dButtons: [{ label: 'Cancel' }, { label: 'Open', cls: 'pri' }] });
+if (s === 'Shortcuts') Object.assign(D, { dialog: true, dWidth: '640px', dTitle: 'Organize shortcuts', dText: 'These work while the page grid has focus.', dButtons: [{ label: 'Close', cls: 'pri' }] });
+if (s === 'Reset') Object.assign(D, { dialog: true, dRole: 'alertdialog', dTitle: 'Reset all page changes?', dText: 'All 236 pages go back to how contracts-scan.pdf was opened: original order and orientation, with removed pages restored. This also clears changes from other PDF Editor tools. Your original file isn\u2019t affected.', dButtons: [{ label: 'Cancel' }, { label: 'Reset', cls: 'pri' }] });
+if (s === 'Unexported changes') Object.assign(D, { dialog: true, dRole: 'alertdialog', dTitle: 'Export your changes first?', dText: 'contracts-scan.pdf has 7 changes that aren\u2019t exported. If you open another PDF now, they\u2019re lost. Your original isn\u2019t affected either way.', dButtons: [{ label: 'Don\u2019t export', style: 'margin-right: auto' }, { label: 'Cancel' }, { label: 'Export', cls: 'pri' }] });
+if (s === 'Exported') Object.assign(D, { dialog: true, dOk: true, dTitle: 'Exported a copy', dText: 'The original contracts-scan.pdf wasn\u2019t changed.', dButtons: [{ label: 'Keep editing', cls: 'ghost', style: 'margin-right: auto' }, { label: reveal }, { label: 'Open', cls: 'pri' }] });
+if (s === 'Export failed') Object.assign(D, { dialog: true, dRole: 'alertdialog', dBad: true, dTitle: 'Couldn\u2019t export the copy', dText: 'There isn\u2019t enough free space in the folder. The copy needs about 48 MB and the disk has 12 MB free. Your changes are still here.', dButtons: [{ label: 'Keep editing', cls: 'ghost', style: 'margin-right: auto' }, { label: 'Choose another folder…' }, { label: 'Try again', cls: 'pri' }] });
+if (s === 'Removal blocked') Object.assign(D, { dialog: true, dRole: 'alertdialog', dBad: true, dTitle: 'Pages 41 and 42 can\u2019t be removed', dText: 'Other parts of this PDF depend on them, so removing them would break it. Nothing was saved.', dButtons: [{ label: 'Keep editing', cls: 'ghost', style: 'margin-right: auto' }, { label: 'Restore pages 41 and 42', cls: 'pri' }] });
+
+const keys = [
+  { what: 'Select all', key: base.selAllKey },
+  { what: 'Clear selection', key: 'Esc' },
+  { what: 'Add or remove a page', key: win ? 'Ctrl+click' : '⌘-click' },
+  { what: 'Select a run of pages', key: win ? 'Shift+click' : '⇧-click' },
+  { what: 'Move focus', key: '← → ↑ ↓' },
+  { what: 'Select the focused page', key: 'Space' },
+  { what: 'Extend the selection', key: win ? 'Shift+Arrow' : '⇧+Arrow' },
+  { what: 'Move pages earlier or later', key: win ? 'Ctrl+← →' : '⌘← →' },
+  { what: 'Move pages to the start', key: base.startKey },
+  { what: 'Move pages to the end', key: base.endKey },
+  { what: 'Move pages to a position', key: 'M' },
+  { what: 'Rotate right', key: base.rotRKey },
+  { what: 'Rotate left', key: base.rotLKey },
+  { what: 'Mirror left to right', key: 'H' },
+  { what: 'Mirror top to bottom', key: 'V' },
+  { what: 'Delete the selected pages', key: win ? 'Delete' : '⌫' },
+  { what: 'Undo', key: base.undoKey },
+  { what: 'Redo', key: win ? 'Ctrl+Y' : '⇧⌘Z' },
+  { what: 'Open in page view', key: win ? 'Enter' : '↵' },
+  { what: 'Export', key: base.runKey }
+];
+
+const nSel = s === 'Every page selected' ? 236 : sel.length;
+const selCount = nSel === 0 ? 'No pages selected' : nSel === 1 ? '1 page selected' : `${nSel} pages selected`;
+const actOff = run || nSel === 0;
+const changes = noChange ? 'No changes' : run ? '7 changes, exporting' : s === 'Exported' ? 'All changes exported' : '7 changes not exported';
+const extra = {
+  docTitle: empty ? 'Organize PDF' : preflight ? 'Organize PDF' : 'contracts-scan.pdf',
+  docSub: empty || preflight ? '' : fresh ? '236 pages' : `236 pages. ${changes}`,
+  hasDoc: !(empty || preflight),
+  undoOff: fresh ? 'off' : '', undoDis: fresh, undoLabel: noChange ? 'Undo rotate page 5' : 'Undo move pages 4 to 6',
+  resetOff: run || fresh || noChange ? 'off' : '', resetDis: run || fresh || noChange,
+  isRun: run, actOffRun: run ? 'off' : '',
+  showGrid: !(empty || preflight), showCenter: empty || preflight,
+  gridDim: run ? 'opacity: .55;' : '', centerDim: '',
+  showExport: !run,
+  exportOff: empty || preflight || noChange || fresh ? 'off' : '',
+  exportDis: empty || preflight || noChange || fresh,
+  destShort: other ? 'For client' : 'Leases',
+  destFull: other ? otherDir : docsDir,
+  destOnce: other, destOnceSr: other ? ', this export only' : '',
+  isDest: s === 'Other folder', destPress: s === 'Other folder' ? 'background: var(--sel);' : '',
+  selCount, actOff: actOff ? 'off' : '', actDis: actOff,
+  delOff: actOff || s === 'Every page selected' ? 'off' : '',
+  delDis: actOff || s === 'Every page selected',
+  delLabel: nSel === 0 ? 'Delete' : nSel === 1 ? 'Delete 1 page' : `Delete ${nSel} pages`,
+  isOrient: s === 'Orientation menu', isMoveTo: s === 'Move to position', isOrder: s === 'Page order menu',
+  moveToPress: s === 'Move to position' ? 'background: var(--sel); color: var(--fg);' : '',
+  orderPress: s === 'Page order menu' ? 'background: var(--sel); color: var(--fg);' : '',
+  blankFound: s === 'Blank pages found' ? '3 found' : '',
+  blankPress: s === 'Blank pages found' ? 'background: var(--sel); color: var(--fg);' : '',
+  isRangeErr: s === 'Page range error', rangeErr: s === 'Page range error' ? 'err' : '',
+  rangeInvalid: s === 'Page range error', rangeVal: s === 'Page range error' ? '1-3, 250' : '',
+  isSigned: s === 'Signed file', isMirrored: s === 'Mirrored pages', isDrag: s === 'Dragging',
+  isLast: s === 'Every page selected', isNoChange: noChange,
+  focusPos: focus, pages,
+  fPos: focus, fOrig: fOrig, fOrient: orientWords(fr, fm),
+  fTf: `rotate(${fr}deg)` + (fm === 'h' ? ' scaleX(-1)' : ''),
+  fReady: true, fWait: false, fLines: !blanks.includes(fOrig),
+  fHeading: focus === 1 ? 'Tenancy agreement' : '4. Rent and payment',
+  statusMsg: status,
+  isEmpty: empty, isLocked: s === 'Locked file', isTooBig: s === 'Too many pages', isPreflight: preflight,
+  isWarnIcon: s === 'Damaged file' || s === 'Too many pages',
+  cTitle: center[0], cText: center[1], cRole: center[2], cIconColor: center[3],
+  isChoose: s === 'Several dropped', isDone: s === 'Exported', isFail: s === 'Export failed',
+  isBlocked: s === 'Removal blocked', isShortcuts: s === 'Shortcuts',
+  chooseRows: [
+    { name: 'lease-part-1.pdf', size: '2.1 MB', on: true, off: false, bg: 'background: var(--sel);' },
+    { name: 'lease-part-2.pdf', size: '1.8 MB', on: false, off: true, bg: '' },
+    { name: 'lease-schedules.pdf', size: '640 KB', on: false, off: true, bg: '' }
+  ],
+  doneSize: '41.6 MB', failKind: 'Not enough disk space',
+  keys
+};
+return Object.assign(base, D, extra);
 }
 }
 </script>
