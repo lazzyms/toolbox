@@ -63,7 +63,7 @@ export const shortcutTarget = (id: ShortcutId) => ({ "data-shortcut": id, "aria-
 export const pressShortcutTarget = (root: ParentNode | null | undefined, id: ShortcutId) =>
   root?.querySelector<HTMLButtonElement>(`[data-shortcut="${id}"]:not(:disabled)`)?.click();
 
-const isTextField = (target: EventTarget | null) =>
+export const isTextField = (target: EventTarget | null) =>
   target instanceof HTMLElement &&
   (target.isContentEditable || target.matches('input:not([type="checkbox"], [type="radio"], [type="range"]), textarea, select'));
 

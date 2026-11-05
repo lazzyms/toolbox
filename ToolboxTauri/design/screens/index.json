@@ -512,49 +512,154 @@
   },
   {
     "board": "ImageEdit.dc.html",
-    "title": "Image Editor: resize, crop, rotate",
+    "title": "Edit Image: six tools, one edit stack",
     "state": "default",
     "query": "",
     "screen": "ImageEdit--default.jpg"
   },
   {
     "board": "ImageEdit.dc.html",
-    "title": "Image Editor: resize, crop, rotate",
-    "state": "edit-resize",
-    "query": "edit=Resize",
-    "screen": "ImageEdit--edit-resize.jpg"
+    "title": "Edit Image: six tools, one edit stack",
+    "state": "state-empty",
+    "query": "state=Empty",
+    "screen": "ImageEdit--state-empty.jpg"
   },
   {
     "board": "ImageEdit.dc.html",
-    "title": "Image Editor: resize, crop, rotate",
-    "state": "edit-rotate",
-    "query": "edit=Rotate",
-    "screen": "ImageEdit--edit-rotate.jpg"
+    "title": "Edit Image: six tools, one edit stack",
+    "state": "state-files-added",
+    "query": "state=Files%20added",
+    "screen": "ImageEdit--state-files-added.jpg"
   },
   {
     "board": "ImageEdit.dc.html",
-    "title": "Image Editor: resize, crop, rotate",
-    "state": "edit-adjust",
-    "query": "edit=Adjust",
-    "screen": "ImageEdit--edit-adjust.jpg"
+    "title": "Edit Image: six tools, one edit stack",
+    "state": "state-focused-file-changed",
+    "query": "state=Focused%20file%20changed",
+    "screen": "ImageEdit--state-focused-file-changed.jpg"
   },
   {
     "board": "ImageEdit.dc.html",
-    "title": "Image Editor: resize, crop, rotate",
-    "state": "edit-watermark",
-    "query": "edit=Watermark",
-    "screen": "ImageEdit--edit-watermark.jpg"
+    "title": "Edit Image: six tools, one edit stack",
+    "state": "state-crop-pixel-rectangle",
+    "query": "state=Crop%2C%20pixel%20rectangle",
+    "screen": "ImageEdit--state-crop-pixel-rectangle.jpg"
   },
   {
     "board": "ImageEdit.dc.html",
-    "title": "Image Editor: resize, crop, rotate",
+    "title": "Edit Image: six tools, one edit stack",
+    "state": "state-step-added",
+    "query": "state=Step%20added",
+    "screen": "ImageEdit--state-step-added.jpg"
+  },
+  {
+    "board": "ImageEdit.dc.html",
+    "title": "Edit Image: six tools, one edit stack",
+    "state": "state-step-removed",
+    "query": "state=Step%20removed",
+    "screen": "ImageEdit--state-step-removed.jpg"
+  },
+  {
+    "board": "ImageEdit.dc.html",
+    "title": "Edit Image: six tools, one edit stack",
+    "state": "state-stack-reset",
+    "query": "state=Stack%20reset",
+    "screen": "ImageEdit--state-stack-reset.jpg"
+  },
+  {
+    "board": "ImageEdit.dc.html",
+    "title": "Edit Image: six tools, one edit stack",
+    "state": "state-resize-longest-side",
+    "query": "state=Resize%2C%20longest%20side",
+    "screen": "ImageEdit--state-resize-longest-side.jpg"
+  },
+  {
+    "board": "ImageEdit.dc.html",
+    "title": "Edit Image: six tools, one edit stack",
+    "state": "state-resize-exact-size",
+    "query": "state=Resize%2C%20exact%20size",
+    "screen": "ImageEdit--state-resize-exact-size.jpg"
+  },
+  {
+    "board": "ImageEdit.dc.html",
+    "title": "Edit Image: six tools, one edit stack",
+    "state": "state-resize-out-of-range",
+    "query": "state=Resize%2C%20out%20of%20range",
+    "screen": "ImageEdit--state-resize-out-of-range.jpg"
+  },
+  {
+    "board": "ImageEdit.dc.html",
+    "title": "Edit Image: six tools, one edit stack",
+    "state": "state-rotate-and-flip",
+    "query": "state=Rotate%20and%20Flip",
+    "screen": "ImageEdit--state-rotate-and-flip.jpg"
+  },
+  {
+    "board": "ImageEdit.dc.html",
+    "title": "Edit Image: six tools, one edit stack",
+    "state": "state-colour-and-tone",
+    "query": "state=Colour%20and%20Tone",
+    "screen": "ImageEdit--state-colour-and-tone.jpg"
+  },
+  {
+    "board": "ImageEdit.dc.html",
+    "title": "Edit Image: six tools, one edit stack",
+    "state": "state-colour-and-tone-neutral",
+    "query": "state=Colour%20and%20Tone%2C%20neutral",
+    "screen": "ImageEdit--state-colour-and-tone-neutral.jpg"
+  },
+  {
+    "board": "ImageEdit.dc.html",
+    "title": "Edit Image: six tools, one edit stack",
+    "state": "state-watermark-text",
+    "query": "state=Watermark%2C%20text",
+    "screen": "ImageEdit--state-watermark-text.jpg"
+  },
+  {
+    "board": "ImageEdit.dc.html",
+    "title": "Edit Image: six tools, one edit stack",
+    "state": "state-watermark-logo-tiled",
+    "query": "state=Watermark%2C%20logo%20tiled",
+    "screen": "ImageEdit--state-watermark-logo-tiled.jpg"
+  },
+  {
+    "board": "ImageEdit.dc.html",
+    "title": "Edit Image: six tools, one edit stack",
+    "state": "state-watermark-unsupported-character",
+    "query": "state=Watermark%2C%20unsupported%20character",
+    "screen": "ImageEdit--state-watermark-unsupported-character.jpg"
+  },
+  {
+    "board": "ImageEdit.dc.html",
+    "title": "Edit Image: six tools, one edit stack",
+    "state": "state-remove-image-metadata",
+    "query": "state=Remove%20Image%20Metadata",
+    "screen": "ImageEdit--state-remove-image-metadata.jpg"
+  },
+  {
+    "board": "ImageEdit.dc.html",
+    "title": "Edit Image: six tools, one edit stack",
+    "state": "state-output-format-jpeg",
+    "query": "state=Output%20format%20JPEG",
+    "screen": "ImageEdit--state-output-format-jpeg.jpg"
+  },
+  {
+    "board": "ImageEdit.dc.html",
+    "title": "Edit Image: six tools, one edit stack",
+    "state": "state-destination-this-run",
+    "query": "state=Destination%20this%20run",
+    "screen": "ImageEdit--state-destination-this-run.jpg"
+  },
+  {
+    "board": "ImageEdit.dc.html",
+    "title": "Edit Image: six tools, one edit stack",
     "state": "drag-moving",
     "query": "drag=Moving",
     "screen": "ImageEdit--drag-moving.jpg"
   },
   {
     "board": "ImageEdit.dc.html",
-    "title": "Image Editor: resize, crop, rotate",
+    "title": "Edit Image: six tools, one edit stack",
     "state": "drag-resizing",
     "query": "drag=Resizing",
     "screen": "ImageEdit--drag-resizing.jpg"
@@ -586,6 +691,55 @@
     "state": "default",
     "query": "",
     "screen": "CompressResults--default.jpg"
+  },
+  {
+    "board": "ImageEditResults.dc.html",
+    "title": "Edit Image results: progress, Skipped, failures",
+    "state": "default",
+    "query": "",
+    "screen": "ImageEditResults--default.jpg"
+  },
+  {
+    "board": "ImageEditResults.dc.html",
+    "title": "Edit Image results: progress, Skipped, failures",
+    "state": "state-running",
+    "query": "state=Running",
+    "screen": "ImageEditResults--state-running.jpg"
+  },
+  {
+    "board": "ImageEditResults.dc.html",
+    "title": "Edit Image results: progress, Skipped, failures",
+    "state": "state-resize-to-jpeg",
+    "query": "state=Resize%20to%20JPEG",
+    "screen": "ImageEditResults--state-resize-to-jpeg.jpg"
+  },
+  {
+    "board": "ImageEditResults.dc.html",
+    "title": "Edit Image results: progress, Skipped, failures",
+    "state": "state-metadata-removed",
+    "query": "state=Metadata%20removed",
+    "screen": "ImageEditResults--state-metadata-removed.jpg"
+  },
+  {
+    "board": "ImageEditResults.dc.html",
+    "title": "Edit Image results: progress, Skipped, failures",
+    "state": "state-watermark-failed",
+    "query": "state=Watermark%20failed",
+    "screen": "ImageEditResults--state-watermark-failed.jpg"
+  },
+  {
+    "board": "ImageEditNarrow.dc.html",
+    "title": "Edit Image below 1000 px: tools strip and More",
+    "state": "default",
+    "query": "",
+    "screen": "ImageEditNarrow--default.jpg"
+  },
+  {
+    "board": "ImageEditNarrow.dc.html",
+    "title": "Edit Image below 1000 px: tools strip and More",
+    "state": "state-more-open",
+    "query": "state=More%20open",
+    "screen": "ImageEditNarrow--state-more-open.jpg"
   },
   {
     "board": "AppIcons.dc.html",

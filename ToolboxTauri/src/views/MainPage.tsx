@@ -25,7 +25,7 @@ import { TablerIcon } from "../components/TablerIcon";
 import { RunStateContext, type WorkspaceSourceAction } from "../components/ToolScaffold";
 import { ShortcutHint } from "../components/ShortcutHint";
 import { WorkspaceCommandRail } from "../components/WorkspaceCommandRail";
-import { matchShortcut, pressShortcutTarget, shortcutAria, shortcutLabel, shortcutTarget } from "../shortcuts";
+import { isTextField, matchShortcut, pressShortcutTarget, shortcutAria, shortcutLabel, shortcutTarget } from "../shortcuts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
@@ -208,6 +208,11 @@ export const MainPage = () => {
     if (paths.length) await invoke("open_paths", { paths });
   }, []);
   const dispatchEditorCommand = useCallback((command: Exclude<ShellCommand, "search" | "open" | "zoom-in" | "zoom-out" | "zoom-reset" | "toggle-theme" | "shortcuts">) => {
+    // Undo and redo while typing belong to the text field, not to the editor's history.
+    if ((command === "undo" || command === "redo") && isTextField(document.activeElement)) {
+      document.execCommand(command);
+      return;
+    }
     window.dispatchEvent(new CustomEvent("toolbox:editor-command", { detail: command }));
   }, []);
   const activateFile = useCallback((event: Extract<ShellEvent, { kind: "files" }>) => {
@@ -718,8 +723,7 @@ const ViewFor = ({ utility, initialPaths, fileActivation, onActivationAccepted, 
   // Views are chosen by tool: the PDF Editor holds both the scene editor and batch PDF tools.
   if (isPdfSceneTool(utility.id)) return <PDFEditorWorkspaceView utility={utility} initialPaths={initialPaths} onNavigate={onNavigate} onWorkspaceSourceAction={onWorkspaceSourceAction} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange} />;
   if (workspace.id === "pdf-editor" || workspace.id === "pdf-convert") return <PDFConversionWorkspaceView utility={utility} initialPaths={initialPaths} onFilesChange={onFilesChange} />;
-  if (workspace.id === "image-editor" && utility.id !== "image-metadata") return <ImageEditorWorkspaceView utility={utility} initialPaths={initialPaths} onSelectTool={onSelectTool} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange} onWorkspaceSourceAction={onWorkspaceSourceAction} />;
-  if (utility.id === "image-metadata") return <MediaWorkspaceView utility={utility} initialPaths={initialPaths} onFilesChange={onFilesChange} />;
+  if (workspace.id === "image-editor") return <ImageEditorWorkspaceView utility={utility} initialPaths={initialPaths} onSelectTool={onSelectTool} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange} onWorkspaceSourceAction={onWorkspaceSourceAction} />;
   const View = workspaceViews[workspace.id];
   return <View utility={utility} />;
 };

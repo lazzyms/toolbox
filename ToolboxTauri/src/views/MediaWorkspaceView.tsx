@@ -9,7 +9,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Switch } from "@/components/ui/switch";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ShortcutHint } from "../components/ShortcutHint";
 import { shortcutTarget } from "../shortcuts";
 
@@ -37,14 +36,8 @@ export const MediaWorkspaceView = ({ utility: activeUtility, initialPaths, onFil
   const [loop, setLoop] = useState(true);
   const [iconPreset, setIconPreset] = useState("macos");
   const [iconSizes, setIconSizes] = useState(iconSizesByPreset.macos);
-  const [metadataMode, setMetadataMode] = useState<"inspect" | "strip">("strip");
-  const [report, setReport] = useState<unknown[]>([]);
   const [selectedTiffFrameIndex, setSelectedTiffFrameIndex] = useState(0);
   const [tiffInspection, setTiffInspection] = useState<TiffInspection>({ kind: "idle" });
-
-  useEffect(() => {
-    setReport([]);
-  }, [activeUtility.id]);
 
   const selectPreset = (preset: string) => {
     setIconPreset(preset);
@@ -75,30 +68,25 @@ export const MediaWorkspaceView = ({ utility: activeUtility, initialPaths, onFil
             request: { paths, outputLocation },
           });
         }
-        if (activeUtility.id === "tiff-pages") {
-          return invoke<ToolResult>("process_tiff_pages", { runId,
-            request: {
-              paths,
-              pages: isCurrentTiffInspection(tiffInspection, paths)
-                ? tiffInspection.frames.map(({ path, page }) => ({ path, page }))
-                : [],
-              outputLocation,
-              outputPath,
-            },
-          });
-        }
-        return invoke<ToolResult>("image_metadata", { runId,
-          request: { paths, outputLocation },
+        return invoke<ToolResult>("process_tiff_pages", { runId,
+          request: {
+            paths,
+            pages: isCurrentTiffInspection(tiffInspection, paths)
+              ? tiffInspection.frames.map(({ path, page }) => ({ path, page }))
+              : [],
+            outputLocation,
+            outputPath,
+          },
         });
       }}
     >
-      {({ files, outputLocation, run, loading, selectedFileIndex, selectFile, destination, runLabel }) => (
+      {({ files, run, loading, selectedFileIndex, selectFile, destination, runLabel }) => (
         <Card className="workspace-control-panel py-0">
           <CardContent className="workspace-control-panel-content grid gap-4 p-4">
           <div>
             <h2 className="workspace-active-command">{activeUtility.title}</h2>
             <p className="workspace-panel-label">Specialized media outcome</p>
-            <p className="workspace-panel-copy">Keep the same selected files while choosing a sequence, icon, or explicit metadata result.</p>
+            <p className="workspace-panel-copy">Keep the same selected files while choosing a sequence, icon or page order.</p>
           </div>
 
           {(activeUtility.id === "gif-create" || activeUtility.id === "tiff-pages") && (
@@ -167,36 +155,9 @@ export const MediaWorkspaceView = ({ utility: activeUtility, initialPaths, onFil
             </div>
           )}
 
-          {activeUtility.id === "image-metadata" && (
-            <>
-              <ToggleGroup
-                type="single"
-                variant="outline"
-                size="sm"
-                aria-label="Metadata mode"
-                value={metadataMode}
-                onValueChange={(value) => {
-                  if (value) setMetadataMode(value as typeof metadataMode);
-                }}
-              >
-                <ToggleGroupItem value="inspect">Inspect metadata</ToggleGroupItem>
-                <ToggleGroupItem value="strip">Remove metadata in a new copy</ToggleGroupItem>
-              </ToggleGroup>
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={loading || files.length === 0}
-                onClick={async () => setReport(await invoke<unknown[]>("inspect_image_metadata", { request: { paths: files, outputLocation } }))}
-              >
-                Inspect metadata
-              </Button>
-              {report.length > 0 && <pre className="workspace-report">{JSON.stringify(report, null, 2)}</pre>}
-            </>
-          )}
-
           {destination}
-          <Button variant="default" disabled={loading || files.length === 0 || (activeUtility.id === "tiff-pages" && !isCurrentTiffInspection(tiffInspection, files)) || (activeUtility.id === "image-metadata" && metadataMode === "inspect")} onClick={run} className="workspace-primary-action" {...shortcutTarget("run")}>
-            {runLabel ?? (activeUtility.id === "image-metadata" ? "Remove metadata" : activeUtility.shortTitle)}
+          <Button variant="default" disabled={loading || files.length === 0 || (activeUtility.id === "tiff-pages" && !isCurrentTiffInspection(tiffInspection, files))} onClick={run} className="workspace-primary-action" {...shortcutTarget("run")}>
+            {runLabel ?? activeUtility.shortTitle}
             <ShortcutHint id="run" />
           </Button>
           </CardContent>
