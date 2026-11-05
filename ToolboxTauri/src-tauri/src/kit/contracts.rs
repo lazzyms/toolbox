@@ -680,7 +680,7 @@ mod tests {
                 vec![PathBuf::from("drawings-page-1.png")],
                 ToolError::limit_exceeded(LimitKind::Time, "Took longer than 5 minutes and was stopped. 1 part was saved before it stopped."),
             ),
-            JobOutcome::succeeded(PathBuf::from("atlas.pdf"), vec![PathBuf::from("atlas-images")], "Saved 9 images. 3 images weren't saved.")
+            JobOutcome::succeeded(PathBuf::from("atlas.pdf"), vec![PathBuf::from("atlas-images")], "Saved 9 images · 3 couldn't be saved.")
                 .with_warning(OutcomeWarning {
                     kind: WarningKind::ImageUnsupported { page: 7, image: 2, feature: "JBIG2".into() },
                     message: "Page 7, image 2 — JBIG2 isn't supported in this version. Not saved.".into(),

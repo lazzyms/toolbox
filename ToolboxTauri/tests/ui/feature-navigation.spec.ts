@@ -1510,14 +1510,15 @@ test.describe("Extract from PDF", () => {
         await expect(page.getByRole("textbox", { name: "Page range for every PDF" })).toHaveCount(0);
         await page.getByRole("button", { name: "Extract from 2 PDFs", exact: true }).click();
 
-        expect(await extractRequest(page)).toEqual({
+        const request = await extractRequest(page);
+        expect(request).toEqual({
             paths: pdfs,
             mode: "both",
             pageRange: null,
             outputLocation: "alongsideInput",
             preserveLayout: false,
-            minImageSize: null,
         });
+        expect(request).not.toHaveProperty("minImageSize");
     });
 
     test("Text shows only the text options and sends the layout choice and page range", async ({ page }) => {
@@ -1539,14 +1540,15 @@ test.describe("Extract from PDF", () => {
         await expect(page.getByRole("alert")).toHaveCount(0);
         await run.click();
 
-        expect(await extractRequest(page)).toEqual({
+        const request = await extractRequest(page);
+        expect(request).toEqual({
             paths: pdfs,
             mode: "text",
             pageRange: "1-3, 5, 8-",
             outputLocation: "alongsideInput",
             preserveLayout: true,
-            minImageSize: null,
         });
+        expect(request).not.toHaveProperty("minImageSize");
     });
 
     test("Images shows only the image options and sends the minimum image size", async ({ page }) => {
@@ -1557,7 +1559,9 @@ test.describe("Extract from PDF", () => {
         await expect(textOptions(page)).toHaveCount(0);
         await expect(imageOptions(page)).toBeVisible();
         await expect(page.getByRole("spinbutton", { name: "Smaller than" })).toHaveCount(0);
+        await expect(page.getByText("Off saves every image at its original size.", { exact: true })).toBeVisible();
         await imageOptions(page).click();
+        await expect(page.getByText("Leaves out bullets, lines and spacers. The result counts what was left out.", { exact: true })).toBeVisible();
         const minSize = page.getByRole("spinbutton", { name: "Smaller than" });
         await expect(minSize).toHaveValue("64");
         await minSize.fill("120");
@@ -1618,7 +1622,48 @@ test.describe("Extract from PDF", () => {
         await textOptions(page).click();
         await page.getByRole("button", { name: "Extract from 2 PDFs", exact: true }).click();
 
-        expect(await extractRequest(page)).toMatchObject({ mode: "both", preserveLayout: true, minImageSize: null });
+        const request = await extractRequest(page);
+        expect(request).toMatchObject({ mode: "both", preserveLayout: true });
+        expect(request).not.toHaveProperty("minImageSize");
+    });
+
+    test("Both sends the minimum image size only while Skip small images is on", async ({ page }) => {
+        await openWithPdfs(page);
+        await imageOptions(page).click();
+        await page.getByRole("button", { name: "Extract from 2 PDFs", exact: true }).click();
+        expect(await extractRequest(page)).toMatchObject({ mode: "both", minImageSize: 64 });
+    });
+
+    test("turning Skip small images off again leaves the minimum image size out of the request", async ({ page }) => {
+        await openWithPdfs(page);
+        await imageOptions(page).click();
+        await page.getByRole("spinbutton", { name: "Smaller than" }).fill("200");
+        await imageOptions(page).click();
+        await expect(page.getByRole("spinbutton", { name: "Smaller than" })).toHaveCount(0);
+        await page.getByRole("button", { name: "Extract from 2 PDFs", exact: true }).click();
+        expect(await extractRequest(page)).not.toHaveProperty("minImageSize");
+    });
+
+    test("the images folder row shows the extracted, duplicate, small and undecodable counts", async ({ page }) => {
+        const damaged = "Page 7, image 2 — The image data is damaged. Not saved.";
+        await openWithPdfs(page, ["/local/report.pdf", "/local/scan-archive-2019.pdf"]);
+        await extractModes(page).getByRole("radio", { name: "Images", exact: true }).click();
+        await page.evaluate((outcomes) => { (window as TestWindow).__toolboxProcessingResults = outcomes; }, [
+            succeeded("/local/report.pdf", ["/local/report-images"], { detail: "Saved 17 images · 4 duplicates · 6 small left out." }),
+            succeeded("/local/scan-archive-2019.pdf", ["/local/scan-archive-2019-images"], {
+                detail: "Saved 45 images · 2 duplicates · 3 small left out · 1 couldn't be saved.",
+                warnings: [{ code: "imageDamaged", message: damaged, details: { page: 7, image: 2 } }],
+            }),
+        ]);
+        await page.getByRole("button", { name: "Extract from 2 PDFs", exact: true }).click();
+
+        const rows = page.locator(".result-row");
+        const details = (row: number) => rows.nth(row).locator(".result-row-detail");
+        await expect(rows).toHaveCount(2);
+        await expect(details(0)).toHaveText(["report-images", "Saved 17 images · 4 duplicates · 6 small left out."]);
+        await expect(rows.nth(0).getByRole("button", { name: "Show in Finder: report-images", exact: true })).toBeVisible();
+        await expect(rows.nth(1)).toHaveAttribute("data-tone", "warn");
+        await expect(details(1)).toHaveText([damaged, "Saved 45 images · 2 duplicates · 3 small left out · 1 couldn't be saved."]);
     });
 
     test("a locked PDF and a missing text helper fail only their own rows, and the lock row points to Lock & Unlock", async ({ page }) => {
@@ -1662,7 +1707,7 @@ test.describe("Extract from PDF", () => {
         await extractModes(page).getByRole("radio", { name: "Images", exact: true }).click();
         await page.evaluate((outcomes) => { (window as TestWindow).__toolboxProcessingResults = outcomes; }, [
             succeeded("/local/scan-archive-2019.pdf", ["/local/scan-archive-2019-images"], {
-                detail: "Saved 44 images. 3 images weren't saved.",
+                detail: "Saved 44 images · 3 couldn't be saved.",
                 warnings: [
                     { code: "imageUnsupported", message: unsupported, details: { page: 7, image: 2, feature: "JBIG2" } },
                     { code: "imageDamaged", message: damaged, details: { page: 19, image: 1 } },
@@ -1685,7 +1730,7 @@ test.describe("Extract from PDF", () => {
         const details = (row: number) => rows.nth(row).locator(".result-row-detail");
         await expect(rows.nth(0)).toHaveAttribute("data-state", "succeeded");
         await expect(rows.nth(0)).toHaveAttribute("data-tone", "warn");
-        await expect(details(0)).toHaveText([unsupported, damaged, tooLarge, inverted, "Saved 44 images. 3 images weren't saved."]);
+        await expect(details(0)).toHaveText([unsupported, damaged, tooLarge, inverted, "Saved 44 images · 3 couldn't be saved."]);
         await expect(rows.nth(0).getByRole("button", { name: "Show in Finder: scan-archive-2019-images", exact: true })).toBeVisible();
         await expect(rows.nth(1)).toHaveAttribute("data-state", "succeeded");
         await expect(rows.nth(1)).toHaveAttribute("data-tone", "warn");
