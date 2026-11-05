@@ -73,6 +73,7 @@ a{color:inherit}a:hover{color:var(--mut)}
 <p class="hint" style="margin: 0; max-width: 420px; font-size: 13px">Add text, sign, fill forms, redact, and rearrange pages. When you export, Toolbox saves a copy. Your original is never changed.</p>
 <div style="display: flex; gap: 8px"><button class="btn pri"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2"></path></svg>Open PDF<span class="kbd">{{openKey}}</span></button></div>
 <p class="hint" style="margin: 0">Or drop a PDF anywhere in this window.</p>
+<p class="hint" style="margin: 0; display: flex; gap: 6px; align-items: center"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2"></path></svg>Copies save next to the original. You can pick another folder when you export.</p>
 </div></sc-if>
 <sc-if value="{{isChoose}}" hint-placeholder-val="{{ false }}"><div aria-hidden="true" style="position: absolute; inset: 0; background: var(--scrim)"></div><div style="position: relative"><div role="dialog" aria-modal="true" aria-labelledby="chT" aria-describedby="chD" style="width: 460px; background: var(--panel); border: 1px solid var(--line2); border-radius: 12px; box-shadow: 0 24px 60px rgba(0,0,0,.35); padding: 20px; display: flex; flex-direction: column; gap: 14px">
 <h2 id="chT" style="margin: 0; font-size: 15px; font-weight: 600">Which PDF do you want to edit?</h2>
@@ -86,8 +87,13 @@ a{color:inherit}a:hover{color:var(--mut)}
 </div></div></sc-if>
 <sc-if value="{{isEnc}}" hint-placeholder-val="{{ false }}"><div role="alert" style="width: 480px; background: var(--panel); border: 1px solid var(--line2); border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 12px">
 <div style="display: flex; gap: 10px; align-items: center"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--warn); width: 20px; height: 20px"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg><h2 style="margin: 0; font-size: 15px; font-weight: 600">payslip-sept.pdf needs a password to open</h2></div>
-<p class="hint" style="margin: 0; font-size: 13px">The PDF Editor can't open locked files. Unlock a copy first with Unprotect PDF, then open that copy here.</p>
-<div style="display: flex; gap: 8px"><a class="btn pri" href="Files.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="15" r="4"></circle><path d="M10.8 12.2L19 4M16 7l2 2"></path></svg>Unprotect a copy</a><button class="btn">Open a different PDF</button></div>
+<p class="hint" style="margin: 0; font-size: 13px">The PDF Editor can't open password-protected files. Unlock a copy in File Security, then open that copy here. The original stays locked.</p>
+<div style="display: flex; gap: 8px"><a class="btn pri" href="SecEmpty.dc.html?mode=Unlock"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="15" r="4"></circle><path d="M10.8 12.2L19 4M16 7l2 2"></path></svg>Unlock in File Security</a><button class="btn">Open a different PDF</button></div>
+</div></sc-if>
+<sc-if value="{{isBig}}" hint-placeholder-val="{{ false }}"><div role="alert" style="width: 480px; background: var(--panel); border: 1px solid var(--line2); border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 12px">
+<div style="display: flex; gap: 10px; align-items: center"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--warn); width: 20px; height: 20px"><path d="M12 3l10 18H2z"></path><path d="M12 10v5M12 18v.5"></path></svg><h2 style="margin: 0; font-size: 15px; font-weight: 600">court-bundle.pdf is too large to edit</h2></div>
+<p class="hint" style="margin: 0; font-size: 13px">It has 3,412 pages. The PDF Editor opens up to 2,000 pages so the page view stays responsive. Split it into parts, then open the part you need.</p>
+<div style="display: flex; gap: 8px"><a class="btn pri" href="Split.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3v6a3 3 0 0 0 3 3h6a3 3 0 0 1 3 3v6"></path><path d="M18 3v6a3 3 0 0 1-3 3"></path></svg>Split into parts</a><button class="btn">Open a different PDF<span class="kbd">{{openKey}}</span></button></div>
 </div></sc-if>
 <sc-if value="{{isSigned}}" hint-placeholder-val="{{ false }}"><div aria-hidden="true" style="position: absolute; inset: 0; background: var(--scrim)"></div><div style="position: relative"><div style="display: flex; flex-direction: column; gap: 12px; width: 560px">
 <div role="alertdialog" aria-modal="true" aria-labelledby="sgT" aria-describedby="sgD" style="background: var(--panel); border: 1px solid var(--line2); border-radius: 12px; box-shadow: 0 24px 60px rgba(0,0,0,.35); padding: 20px; display: flex; flex-direction: column; gap: 12px">
@@ -101,7 +107,7 @@ a{color:inherit}a:hover{color:var(--mut)}
 <footer style="height: 30px; flex: none; display: flex; align-items: center; padding: 0 12px; border-top: 1px solid var(--line); background: var(--side)"><span class="hint" role="status">{{statusMsg}}</span><div style="flex: 1"></div><span class="hint">Files stay on this computer</span></footer>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "state": {"editor": "enum", "options": ["No document", "Several dropped", "Locked file", "Signed file"], "default": "No document"}, "$preview": {"width": 1280, "height": 800}}'>
+<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "state": {"editor": "enum", "options": ["No document", "Several dropped", "Locked file", "Too many pages", "Signed file"], "default": "No document"}, "$preview": {"width": 1280, "height": 800}}'>
 class Component extends DCLogic {
 renderVals() {
 const win = (this.props.platform ?? 'macOS') === 'Windows';
@@ -121,8 +127,8 @@ reveal: win ? 'Show in File Explorer' : 'Show in Finder',
 docsDir: win ? 'C:\\Users\\Asha\\Documents' : '~/Documents'
 };
 const s = this.props.state ?? 'No document';
-const msgs = { 'No document': 'No PDF open.', 'Several dropped': '3 PDFs dropped. Choose one.', 'Locked file': "payslip-sept.pdf wasn't opened.", 'Signed file': 'contract-signed.pdf has a digital signature.' };
-const extra = { isEmpty: s === 'No document', isChoose: s === 'Several dropped', isEnc: s === 'Locked file', isSigned: s === 'Signed file', statusMsg: msgs[s] };
+const msgs = { 'No document': 'No PDF open.', 'Several dropped': '3 PDFs dropped. Choose one.', 'Locked file': "payslip-sept.pdf wasn't opened.", 'Signed file': 'contract-signed.pdf has a digital signature.', 'Too many pages': "court-bundle.pdf wasn't opened." };
+const extra = { isEmpty: s === 'No document', isChoose: s === 'Several dropped', isEnc: s === 'Locked file', isSigned: s === 'Signed file', isBig: s === 'Too many pages', statusMsg: msgs[s] };
 return Object.assign(base, typeof extra === 'undefined' ? {} : extra);
 }
 }
