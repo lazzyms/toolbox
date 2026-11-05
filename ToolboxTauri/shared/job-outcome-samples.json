@@ -73,6 +73,28 @@
     "warnings": []
   },
   {
+    "inputPath": "report.pdf",
+    "state": "succeeded",
+    "outputPaths": ["report-compressed.pdf"],
+    "detail": "PDF compressed",
+    "failure": null,
+    "reason": null,
+    "warnings": [],
+    "originalBytes": 2500000,
+    "outputBytes": 1000000
+  },
+  {
+    "inputPath": "logo.png",
+    "state": "skipped",
+    "outputPaths": [],
+    "detail": "",
+    "failure": null,
+    "reason": { "code": "noSavings", "message": "No savings: already well compressed", "pointer": null },
+    "warnings": [],
+    "originalBytes": 4096,
+    "outputBytes": 4200
+  },
+  {
     "inputPath": "minutes.pdf",
     "state": "succeeded",
     "outputPaths": ["board-merged.pdf"],
