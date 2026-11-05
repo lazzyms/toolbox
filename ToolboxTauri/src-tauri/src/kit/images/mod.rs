@@ -5,7 +5,7 @@ use image::codecs::png::PngEncoder;
 use image::{DynamicImage, ImageEncoder};
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
-use crate::kit::contracts::{OutcomeWarning, SkipCode, SkipReason, ToolError, WarningKind};
+use crate::kit::contracts::{OutcomeWarning, SkipCode, SkipReason, TiffCompression, ToolError, WarningKind};
 
 pub(crate) mod source;
 pub(crate) use source::decode;
@@ -19,6 +19,7 @@ pub enum OutputFormat {
     Png,
     WebP,
     Heic,
+    Tiff(TiffCompression),
 }
 
 impl OutputFormat {
@@ -28,6 +29,7 @@ impl OutputFormat {
             OutputFormat::Png => "png",
             OutputFormat::WebP => "webp",
             OutputFormat::Heic => "heic",
+            OutputFormat::Tiff(_) => "tiff",
         }
     }
 
@@ -37,16 +39,18 @@ impl OutputFormat {
             OutputFormat::Png => "PNG",
             OutputFormat::WebP => "WebP",
             OutputFormat::Heic => "HEIC",
+            OutputFormat::Tiff(_) => "TIFF",
         }
     }
 }
 
-// HEIC/HEIF and JPG/JPEG each name one format, so a file already in the
+// HEIC/HEIF, JPG/JPEG and TIF/TIFF each name one format, so a file already in the
 // target family makes no output.
 fn already_in_format(path: &std::path::Path, format: OutputFormat) -> Option<String> {
     let aliases = match (ImageFamily::of(path), format) {
         (ImageFamily::Jpeg, OutputFormat::Jpeg) => "JPG and JPEG",
         (ImageFamily::Heif, OutputFormat::Heic) => "HEIC and HEIF",
+        (ImageFamily::Tiff, OutputFormat::Tiff(_)) => "TIF and TIFF",
         (ImageFamily::Png, OutputFormat::Png) | (ImageFamily::WebP, OutputFormat::WebP) => "",
         _ => return None,
     };
@@ -122,7 +126,43 @@ pub(crate) fn encode(img: &image::DynamicImage, format: OutputFormat, quality: u
                 .map_err(|e| format!("HEIC encode failed: {}", e))?;
             Ok(buf)
         }
+        OutputFormat::Tiff(compression) => encode_tiff(img, compression),
     }
+}
+
+// TIFF keeps 8 or 16 bits per channel and alpha as unassociated extra
+// samples; grey with alpha is written as RGBA, which every reader accepts.
+fn encode_tiff(img: &DynamicImage, compression: TiffCompression) -> Result<Vec<u8>, String> {
+    use tiff::encoder::{colortype, Compression, DeflateLevel, TiffEncoder};
+    use tiff::tags::{ExtraSamples, Tag};
+
+    fn write<C: colortype::ColorType>(encoder: &mut TiffEncoder<&mut std::io::Cursor<Vec<u8>>>, width: u32, height: u32, data: &[C::Inner], alpha: bool) -> tiff::TiffResult<()>
+    where [C::Inner]: tiff::encoder::TiffValue {
+        let mut image = encoder.new_image::<C>(width, height)?;
+        if alpha { image.encoder().write_tag(Tag::ExtraSamples, ExtraSamples::UnassociatedAlpha.to_u16())?; }
+        image.write_data(data)
+    }
+
+    let compression = match compression {
+        TiffCompression::Lzw => Compression::Lzw,
+        TiffCompression::None => Compression::Uncompressed,
+        TiffCompression::Deflate => Compression::Deflate(DeflateLevel::Balanced),
+    };
+    let mut buf = std::io::Cursor::new(Vec::new());
+    let mut encoder = TiffEncoder::new(&mut buf).map_err(|e| e.to_string())?.with_compression(compression);
+    let (width, height) = (img.width(), img.height());
+    match img {
+        DynamicImage::ImageLuma8(gray) => write::<colortype::Gray8>(&mut encoder, width, height, gray.as_raw(), false),
+        DynamicImage::ImageLuma16(gray) => write::<colortype::Gray16>(&mut encoder, width, height, gray.as_raw(), false),
+        DynamicImage::ImageRgb8(rgb) => write::<colortype::RGB8>(&mut encoder, width, height, rgb.as_raw(), false),
+        DynamicImage::ImageRgb16(rgb) => write::<colortype::RGB16>(&mut encoder, width, height, rgb.as_raw(), false),
+        DynamicImage::ImageLumaA16(_) | DynamicImage::ImageRgba16(_) => write::<colortype::RGBA16>(&mut encoder, width, height, img.to_rgba16().as_raw(), true),
+        other if other.color().has_alpha() => write::<colortype::RGBA8>(&mut encoder, width, height, other.to_rgba8().as_raw(), true),
+        other => write::<colortype::RGB8>(&mut encoder, width, height, other.to_rgb8().as_raw(), false),
+    }
+    .map_err(|e| format!("TIFF encode failed: {e}"))?;
+    drop(encoder);
+    Ok(buf.into_inner())
 }
 
 pub(crate) const TRANSPARENCY_FLATTENED_MESSAGE: &str = "Transparent areas were flattened onto white, because JPEG has none.";
@@ -147,8 +187,9 @@ pub(crate) fn flatten_onto_white(img: &DynamicImage) -> image::RgbImage {
     })
 }
 
-// Every Convert target is written at 8 bits per channel; alpha survives the
-// reduction so the per-target alpha rule still applies afterwards.
+// Convert targets are written at 8 bits per channel, except TIFF from a
+// 16-bit source; alpha survives the reduction so the per-target alpha rule
+// still applies afterwards.
 fn reduce_to_8_bit(img: DynamicImage) -> DynamicImage {
     match img {
         DynamicImage::ImageLuma16(_) => DynamicImage::ImageLuma8(img.to_luma8()),
@@ -189,7 +230,8 @@ impl ConvertPage {
         if let Some(orientation) = self.orientation {
             img.apply_orientation(orientation);
         }
-        if self.bits > 8 {
+        let keeps_depth = matches!(format, OutputFormat::Tiff(_)) && self.bits == 16;
+        if self.bits > 8 && !keeps_depth {
             img = reduce_to_8_bit(img);
             warn(WarningKind::PrecisionReduced, format!("Reduced from {}-bit to 8-bit sRGB.", self.bits));
         }
@@ -200,7 +242,7 @@ impl ConvertPage {
             .map_err(|error| format!("Could not reserve output: {error}"))?;
         let bytes = if format == OutputFormat::WebP && self.lossless_source { encode_lossless_webp(&img) } else { encode(&img, format, DEFAULT_QUALITY) }?;
         std::fs::write(output_path.path(), bytes).map_err(|error| format!("Write failed: {error}"))?;
-        validate_encoded_output(output_path.path(), img.width(), img.height())?;
+        validate_encoded_output(output_path.path(), format, img.width(), img.height())?;
         output_path.publish().map_err(|error| format!("Could not publish output: {error}"))
     }
 }
@@ -220,7 +262,8 @@ impl ImageProcessor {
     }
 
     /// Convert fidelity rules: orientation is baked into the pixels once, deep
-    /// sources are reduced to 8 bits with a warning, JPEG flattens alpha onto
+    /// sources are reduced to 8 bits with a warning (a 16-bit source keeps 16
+    /// bits in TIFF), JPEG flattens alpha onto
     /// white with a warning, and WebP follows the source (lossless from PNG,
     /// TIFF and other lossless families, quality 90 from JPEG and HEIC).
     pub(crate) fn convert_decoded(input_path: PathBuf, decoded: DecodedImage, format: OutputFormat, output_location: &OutputLocation) -> JobOutcome {
@@ -318,7 +361,7 @@ impl ImageProcessor {
             return JobOutcome::failure(input_path, ToolError::processing(format!("Write failed: {}", e)));
         }
 
-        if let Err(error) = validate_encoded_output(output_path.path(), img.width(), img.height()) {
+        if let Err(error) = validate_encoded_output(output_path.path(), format, img.width(), img.height()) {
             return JobOutcome::failure(input_path, ToolError::processing(error));
         }
 
@@ -351,9 +394,15 @@ impl ImageProcessor {
     }
 }
 
-fn validate_encoded_output(path: &std::path::Path, width: u32, height: u32) -> Result<(), String> {
+// A TIFF output is read back through the image crate, which also reads the
+// 16-bit pages the TIFF page tools turn away.
+fn validate_encoded_output(path: &std::path::Path, format: OutputFormat, width: u32, height: u32) -> Result<(), String> {
     if !path.is_file() { return Err("Encoder did not produce an output container.".to_string()); }
-    let output = decode(path).map_err(|error| format!("Encoded output could not be decoded: {error}"))?.into_first_page();
+    let output = match format {
+        OutputFormat::Tiff(_) => image::open(path).map_err(|error| error.to_string()),
+        _ => decode(path).map(|decoded| decoded.into_first_page()),
+    }
+    .map_err(|error| format!("Encoded output could not be decoded: {error}"))?;
     if output.width() != width || output.height() != height { return Err("Encoded output dimensions do not match the source.".to_string()); }
     Ok(())
 }
@@ -468,7 +517,8 @@ mod tests {
             orientation: None,
             baseline_jpeg: None,
         };
-        for format in [OutputFormat::Png, OutputFormat::Jpeg] {
+        // TIFF keeps only 16-bit sources at 16 bits, so a 10-bit HEIC is reduced too.
+        for format in [OutputFormat::Png, OutputFormat::Jpeg, OutputFormat::Tiff(TiffCompression::Lzw)] {
             let out = ImageProcessor::convert_decoded(src.clone(), ten_bit_heic(), format, &OutputLocation::AlongsideInput);
             assert!(out.error().is_none(), "{}", out.error().cloned().unwrap_or_default());
             assert_eq!(out.warnings.len(), 1);
@@ -476,7 +526,7 @@ mod tests {
             assert_eq!(out.warnings[0].message, "Reduced from 10-bit to 8-bit sRGB.");
             let written = image::open(&out.output_paths()[0]).unwrap();
             assert_eq!(written.color(), image::ColorType::Rgb8, "{format:?} must be written at 8 bits per channel");
-            if format == OutputFormat::Png {
+            if format != OutputFormat::Jpeg {
                 assert_eq!(written.to_rgb8(), DynamicImage::ImageRgb16(deep.clone()).to_rgb8());
             }
             cleanup(&out.output_paths());

@@ -6,6 +6,7 @@ import {
   parseCapabilityRegistry,
   SharedCapabilityRegistry,
 } from "../src/registry/capabilities.ts";
+import { convertImagesRequest, convertTargets, defaultTiffCompression, tiffCompressions } from "../src/registry/convertTargets.ts";
 import {
   ToolWorkspaceRegistry,
   UtilityRegistry,
@@ -66,6 +67,18 @@ test("UI capabilities are the shared native contract facts", () => {
   assert.equal(capabilitiesByCommand.get("ocr_pdf")?.nativeAvailability, "unavailable");
   assert.equal(capabilitiesByCommand.get("blur_faces")?.nativeAvailability, "unavailable");
   assert.equal(capabilitiesByCommand.get("remove_image_background")?.nativeAvailability, "unavailable");
+});
+
+test("Convert Image Format writes TIFF, and only a TIFF target carries a compression", () => {
+  assert.deepEqual(convertTargets.map(({ format }) => format), ["jpg", "png", "webp", "heic", "tiff"]);
+  assert.equal(convertTargets.find(({ format }) => format === "tiff")?.hint, "Lossless. Transparency is kept.");
+  assert.deepEqual(tiffCompressions.map(({ value }) => value), ["lzw", "none", "deflate"]);
+  assert.equal(defaultTiffCompression, "lzw");
+  const location = "alongsideInput" as const;
+  assert.deepEqual(convertImagesRequest(["/a.png"], "tiff", "deflate", location), { paths: ["/a.png"], format: "tiff", tiffCompression: "deflate", outputLocation: location });
+  for (const { format } of convertTargets.filter(({ format }) => format !== "tiff")) {
+    assert.equal("tiffCompression" in convertImagesRequest(["/a.png"], format, "lzw", location), false, `${format} sends no compression`);
+  }
 });
 
 test("every tool declares one output suffix and many-to-one tools take ordered inputs", () => {

@@ -287,6 +287,10 @@ export interface CompressImagesRequest extends ToolRequest {
   lossless?: boolean;
 }
 
+export type TiffCompression = "lzw" | "none" | "deflate";
+
 export interface ConvertImagesRequest extends ToolRequest {
-  format: "jpg" | "png" | "webp" | "heic";
+  format: "jpg" | "png" | "webp" | "heic" | "tiff";
+  /** Sent only with a TIFF target. */
+  tiffCompression?: TiffCompression;
 }

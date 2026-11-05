@@ -82,7 +82,20 @@ pub struct CompressImagesRequest {
 pub struct ConvertImagesRequest {
     pub paths: Vec<PathBuf>,
     pub format: String,
+    /// Sent only with a TIFF target; a TIFF target without it uses LZW.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tiff_compression: Option<TiffCompression>,
     pub output_location: OutputLocation,
+}
+
+/// The three lossless TIFF compressions Convert offers.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TiffCompression {
+    #[default]
+    Lzw,
+    None,
+    Deflate,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -884,6 +897,10 @@ mod tests {
         let convert = native_capability("convert_images").unwrap();
         assert_eq!(convert.input_cardinality, InputCardinality::Multiple);
         assert_eq!(convert.accepted_extensions, [".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif", ".tif", ".tiff"]);
+        use crate::kit::images::{tools::parse_convert_target, OutputFormat};
+        assert_eq!(parse_convert_target("tiff", None), Ok(OutputFormat::Tiff(TiffCompression::Lzw)), "TIFF is a Convert target and defaults to LZW");
+        assert_eq!(parse_convert_target("tiff", Some(TiffCompression::Deflate)), Ok(OutputFormat::Tiff(TiffCompression::Deflate)));
+        assert!(parse_convert_target("png", Some(TiffCompression::None)).is_err(), "only a TIFF target takes a compression");
         let pdf = native_capability("pdf_to_text").unwrap();
         assert!(pdf.supports_page_selection && !pdf.supports_preview);
         assert!(!native_capability("ocr_pdf").unwrap().native_available);

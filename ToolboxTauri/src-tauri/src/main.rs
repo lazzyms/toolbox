@@ -87,7 +87,7 @@ async fn compress_images(events: RunEvents, request: CompressImagesRequest) -> V
 
 #[tauri::command]
 async fn convert_images(events: RunEvents, request: ConvertImagesRequest) -> Vec<JobOutcome> {
-    let img_format = match tools::parse_output_format(&request.format) {
+    let img_format = match tools::parse_convert_target(&request.format, request.tiff_compression) {
         Ok(format) => format,
         Err(error) => {
             if request.paths.is_empty() {
@@ -1606,7 +1606,7 @@ mod command_tests {
         outputs.extend(named(&mut naming, "repair_pdf", pdf.clone(), assert_success("repair pdf", repair_pdf(RunEvents::silent(), PdfToTextRequest { pages: None, paths: vec![pdf.clone()], output_location: location(&root, "repair pdf") }))));
         outputs.extend(named(&mut naming, "redact_pdf", pdf.clone(), assert_success("redact pdf", redact_pdf(RunEvents::silent(), RedactPdfRequest { paths: vec![pdf.clone()], rectangle: PdfRect { x: 40.0, y: 650.0, width: 220.0, height: 60.0 }, scope: PageScope::All, output_location: location(&root, "redact pdf") }))));
         outputs.extend(named(&mut naming, "compare_pdfs", pdf.clone(), assert_aggregate_success("compare pdfs", &[pdf.clone(), pdf_two.clone()], run_compare_pdfs(&ComparePdfsRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: location(&root, "compare pdfs"), output_path: None }))));
-        outputs.extend(named(&mut naming, "convert_images", image.clone(), assert_success("convert", convert_images(RunEvents::silent(), ConvertImagesRequest { paths: vec![image.clone()], format: "jpg".into(), output_location: location(&root, "convert") }))));
+        outputs.extend(named(&mut naming, "convert_images", image.clone(), assert_success("convert", convert_images(RunEvents::silent(), ConvertImagesRequest { paths: vec![image.clone()], format: "jpg".into(), tiff_compression: None, output_location: location(&root, "convert") }))));
         outputs.extend(named(&mut naming, "compress_images", image.clone(), assert_success("compress images", compress_images(RunEvents::silent(), serde_json::from_value::<CompressImagesRequest>(serde_json::json!({ "paths": [image.clone()], "quality": 80, "lossless": false, "outputLocation": location(&root, "compress images") })).expect("Compress Files view payload for compress_images")))));
         outputs.extend(named(&mut naming, "resize_images", image.clone(), assert_success("resize", resize_images(RunEvents::silent(), ResizeRequest { paths: vec![image.clone()], width: 128, height: 128, mode: "exact".into(), resampling: "lanczos".into(), keep_aspect_ratio: true, percentage: 100, longest_side: 128, output_location: location(&root, "resize") }))));
         outputs.extend(named(&mut naming, "rotate_images", image.clone(), assert_success("rotate", rotate_images(RunEvents::silent(), RotateRequest { paths: vec![image.clone()], degrees: 90, flip: "none".into(), output_location: location(&root, "rotate") }))));
@@ -1685,7 +1685,7 @@ mod command_tests {
         write_png(&src, 256, 44);
 
         let heic = tauri::async_runtime::block_on(convert_images(RunEvents::silent(), ConvertImagesRequest {
-            paths: vec![src.clone()], format: "heic".to_string(), output_location: OutputLocation::AlongsideInput,
+            paths: vec![src.clone()], format: "heic".to_string(), tiff_compression: None, output_location: OutputLocation::AlongsideInput,
         }));
         assert!(heic[0].error().is_none(), "{}", heic[0].error().cloned().unwrap_or_default());
         assert_eq!(
@@ -1696,7 +1696,7 @@ mod command_tests {
         assert!(heif::decode(&bytes).is_ok(), "command output must be real HEIC");
 
         let webp = tauri::async_runtime::block_on(convert_images(RunEvents::silent(), ConvertImagesRequest {
-            paths: vec![src.clone()], format: "webp".to_string(), output_location: OutputLocation::AlongsideInput,
+            paths: vec![src.clone()], format: "webp".to_string(), tiff_compression: None, output_location: OutputLocation::AlongsideInput,
         }));
         assert!(webp[0].error().is_none(), "{}", webp[0].error().cloned().unwrap_or_default());
         let bytes = std::fs::read(&webp[0].output_paths()[0]).unwrap();
@@ -1709,7 +1709,7 @@ mod command_tests {
 
     fn convert_batch(paths: &[PathBuf], format: &str, output_location: OutputLocation) -> Vec<JobOutcome> {
         tauri::async_runtime::block_on(convert_images(RunEvents::silent(), ConvertImagesRequest {
-            paths: paths.to_vec(), format: format.to_string(), output_location,
+            paths: paths.to_vec(), format: format.to_string(), tiff_compression: None, output_location,
         }))
     }
 
@@ -1725,7 +1725,7 @@ mod command_tests {
             let image = heif::decode(bytes).expect("output decodes as HEIC");
             return (image.width(), image.height());
         }
-        let expected = match format { "jpg" => image::ImageFormat::Jpeg, "png" => image::ImageFormat::Png, _ => image::ImageFormat::WebP };
+        let expected = match format { "jpg" => image::ImageFormat::Jpeg, "png" => image::ImageFormat::Png, "tiff" => image::ImageFormat::Tiff, _ => image::ImageFormat::WebP };
         assert_eq!(image::guess_format(bytes).unwrap(), expected, "output is real {format}");
         let image = image::load_from_memory_with_format(bytes, expected).unwrap();
         (image.width(), image.height())
@@ -1754,7 +1754,7 @@ mod command_tests {
         sources.push(tiff);
         let originals: Vec<Vec<u8>> = sources.iter().map(|path| std::fs::read(path).unwrap()).collect();
         let mut converted = 0;
-        for format in ["jpg", "png", "webp", "heic"] {
+        for format in ["jpg", "png", "webp", "heic", "tiff"] {
             let folder = root.join(format!("out-{format}"));
             let outcomes = convert_batch(&sources, format, location(&root, &format!("out-{format}")));
             assert_eq!(outcomes.len(), sources.len());
@@ -1774,7 +1774,7 @@ mod command_tests {
             }
             assert_eq!(std::fs::read_dir(&folder).unwrap().count(), sources.len() - 1, "only converted files land in {format}");
         }
-        assert_eq!(converted, 16, "every cross-format pair among HEIC, JPEG, PNG and WebP converts, and TIFF converts to each of them");
+        assert_eq!(converted, 20, "every cross-format pair among HEIC, JPEG, PNG, WebP and TIFF converts");
         for (source, original) in sources.iter().zip(&originals) {
             assert_eq!(&std::fs::read(source).unwrap(), original, "{} stays untouched", source.display());
         }
@@ -1790,6 +1790,10 @@ mod command_tests {
         let heif = root.join("f.heif");
         std::fs::copy(&sources[1], &jpeg).unwrap();
         std::fs::copy(&sources[3], &heif).unwrap();
+        let tiff = root.join("g.tiff");
+        let tif = root.join("h.tif");
+        image::open(&sources[0]).unwrap().save(&tiff).unwrap();
+        std::fs::copy(&tiff, &tif).unwrap();
         let cases = [
             (&sources[0], "png", "Already PNG, so no file was made."),
             (&sources[1], "jpg", "Already JPEG, so no file was made."),
@@ -1798,6 +1802,9 @@ mod command_tests {
             (&sources[2], "webp", "Already WebP, so no file was made."),
             (&sources[3], "heic", "Already HEIC, so no file was made."),
             (&heif, "heic", "Already HEIC. HEIC and HEIF count as one format."),
+            (&tiff, "tiff", "Already TIFF, so no file was made."),
+            (&tif, "tiff", "Already TIFF. TIF and TIFF count as one format."),
+            (&tif, "tif", "Already TIFF. TIF and TIFF count as one format."),
         ];
         for (index, (source, format, message)) in cases.into_iter().enumerate() {
             let original = std::fs::read(source).unwrap();
@@ -3027,7 +3034,7 @@ mod command_tests {
             write_png(&src, 32, 4);
             let original = std::fs::read(&src).unwrap();
             let outcomes = tauri::async_runtime::block_on(convert_images(RunEvents::silent(), ConvertImagesRequest {
-                paths: vec![src.clone()], format: format.to_string(), output_location: location(&root, "output"),
+                paths: vec![src.clone()], format: format.to_string(), tiff_compression: None, output_location: location(&root, "output"),
             }));
             assert_eq!(outcomes.len(), 1);
             assert!(outcomes[0].error().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput)));
@@ -3419,6 +3426,93 @@ mod command_tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    fn convert_to_tiff(paths: &[PathBuf], compression: Option<crate::kit::contracts::TiffCompression>, output_location: OutputLocation) -> Vec<JobOutcome> {
+        tauri::async_runtime::block_on(convert_images(RunEvents::silent(), ConvertImagesRequest {
+            paths: paths.to_vec(), format: "tiff".into(), tiff_compression: compression, output_location,
+        }))
+    }
+
+    fn tiff_tag(path: &PathBuf, tag: tiff::tags::Tag) -> Option<u32> {
+        let mut decoder = tiff::decoder::Decoder::new(std::fs::File::open(path).unwrap()).unwrap();
+        decoder.find_tag(tag).unwrap().map(|value| value.into_u32().unwrap())
+    }
+
+    fn tiff_color(path: &PathBuf) -> tiff::ColorType {
+        tiff::decoder::Decoder::new(std::fs::File::open(path).unwrap()).unwrap().colortype().unwrap()
+    }
+
+    #[test]
+    fn convert_to_tiff_writes_the_requested_lossless_compression() {
+        use crate::kit::contracts::TiffCompression;
+        let root = sandbox("convert-tiff-compression");
+        let source = convert_sources(&root).remove(0);
+        let original = std::fs::read(&source).unwrap();
+        // TIFF Compression tag values: 1 none, 5 LZW, 8 Deflate.
+        for (name, compression, tag) in [("default", None, 5), ("lzw", Some(TiffCompression::Lzw), 5), ("none", Some(TiffCompression::None), 1), ("deflate", Some(TiffCompression::Deflate), 8)] {
+            let outcomes = convert_to_tiff(&[source.clone()], compression, location(&root, name));
+            assert!(outcomes[0].error().is_none(), "{name}: {}", outcomes[0].error().cloned().unwrap_or_default());
+            assert!(outcomes[0].warnings.is_empty(), "{name} loses nothing");
+            let output = &outcomes[0].output_paths()[0];
+            assert_eq!(*output, root.join(name).join("a-converted.tiff"));
+            assert_eq!(tiff_tag(output, tiff::tags::Tag::Compression), Some(tag), "{name} uses compression {tag}");
+            assert_eq!(tiff_color(output), tiff::ColorType::RGB(8), "an 8-bit source gives 8-bit TIFF");
+            assert_eq!(decoded_as(&std::fs::read(output).unwrap(), "tiff"), (64, 48));
+            assert_eq!(image::open(output).unwrap(), image::open(&source).unwrap(), "{name} keeps every pixel");
+        }
+        let again = convert_to_tiff(&[source.clone()], None, location(&root, "lzw"));
+        assert_eq!(again[0].output_paths(), [root.join("lzw").join("a-converted-1.tiff")], "an existing output is never overwritten");
+        assert_eq!(std::fs::read(&source).unwrap(), original, "the original stays untouched");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn convert_to_tiff_keeps_16_bit_sources_at_16_bits_and_keeps_alpha() {
+        let root = sandbox("convert-tiff-depth");
+        let rgb16 = image::DynamicImage::ImageRgb16(image::ImageBuffer::from_fn(24, 16, |x, y| image::Rgb([(x * 2731) as u16, (y * 4093) as u16, 1001u16])));
+        let rgba16 = image::DynamicImage::ImageRgba16(image::ImageBuffer::from_fn(24, 16, |x, y| image::Rgba([(x * 2731) as u16, 513u16, (y * 4093) as u16, (x * 2849) as u16])));
+        let badge = image::DynamicImage::ImageRgba8(translucent_badge());
+        let gray = image::DynamicImage::ImageLuma8(image::GrayImage::from_fn(20, 10, |x, y| image::Luma([(x * 12 + y) as u8])));
+        let cases = [
+            ("scan.png", &rgb16, tiff::ColorType::RGB(16), false),
+            ("matte.png", &rgba16, tiff::ColorType::RGBA(16), true),
+            ("logo.png", &badge, tiff::ColorType::RGBA(8), true),
+            ("sketch.png", &gray, tiff::ColorType::Gray(8), false),
+        ];
+        let paths: Vec<PathBuf> = cases.iter().map(|(name, picture, _, _)| { let path = root.join(name); picture.save(&path).unwrap(); path }).collect();
+        let originals: Vec<Vec<u8>> = paths.iter().map(|path| std::fs::read(path).unwrap()).collect();
+        let outcomes = convert_to_tiff(&paths, Some(crate::kit::contracts::TiffCompression::Deflate), location(&root, "out"));
+        for ((name, picture, color, alpha), outcome) in cases.iter().zip(&outcomes) {
+            assert!(outcome.error().is_none(), "{name}: {}", outcome.error().cloned().unwrap_or_default());
+            assert!(outcome.warnings.is_empty(), "{name} keeps its depth and alpha, so nothing is reported");
+            let output = &outcome.output_paths()[0];
+            assert_eq!(tiff_color(output), *color, "{name} is written as {color:?}");
+            assert_eq!(tiff_tag(output, tiff::tags::Tag::ExtraSamples), alpha.then_some(2), "{name} marks alpha as unassociated only when it has alpha");
+            assert_eq!(image::open(output).unwrap(), **picture, "{name} decodes to the exact source pixels");
+        }
+        let rgba = image::open(&outcomes[2].output_paths()[0]).unwrap().to_rgba8();
+        assert_eq!((rgba.get_pixel(2, 15).0[3], rgba.get_pixel(15, 15).0[3], rgba.get_pixel(35, 15).0[3]), (0, 128, 255), "transparent, translucent and opaque areas are kept");
+        for (path, original) in paths.iter().zip(&originals) {
+            assert_eq!(&std::fs::read(path).unwrap(), original, "{} stays untouched", path.display());
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn convert_rejects_tiff_compression_for_a_non_tiff_target() {
+        let root = sandbox("convert-tiff-compression-misuse");
+        let source = convert_sources(&root).remove(0);
+        let outcomes = tauri::async_runtime::block_on(convert_images(RunEvents::silent(), ConvertImagesRequest {
+            paths: vec![source.clone()], format: "png".into(), tiff_compression: Some(crate::kit::contracts::TiffCompression::Lzw), output_location: location(&root, "out"),
+        }));
+        let error = outcomes[0].error().expect("compression with a PNG target is refused");
+        assert!(matches!(error.kind, ErrorKind::InvalidInput));
+        assert_eq!(error.message, "TIFF compression applies only to a TIFF target.");
+        assert!(!root.join("out").exists() || std::fs::read_dir(root.join("out")).unwrap().count() == 0, "nothing is written");
+        let request: ConvertImagesRequest = serde_json::from_value(serde_json::json!({ "paths": [], "format": "tiff", "tiffCompression": "deflate", "outputLocation": "alongsideInput" })).unwrap();
+        assert_eq!(request.tiff_compression, Some(crate::kit::contracts::TiffCompression::Deflate), "the UI sends lowercase compression names");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn convert_fails_an_animated_gif_alone_with_a_pointer_to_extract_gif_frames() {
         let root = sandbox("convert-gif");
@@ -3450,7 +3544,7 @@ mod command_tests {
         let badge = root.join("badge.png");
         translucent_badge().save(&badge).unwrap();
         sources.push(badge);
-        for format in ["jpg", "png", "webp", "heic"] {
+        for format in ["jpg", "png", "webp", "heic", "tiff"] {
             let first = convert_batch(&sources, format, location(&root, &format!("{format}-first")));
             let second = convert_batch(&sources, format, location(&root, &format!("{format}-second")));
             for (one, two) in first.iter().zip(&second) {
@@ -3490,7 +3584,7 @@ mod command_tests {
             let family = match source.extension().unwrap().to_str().unwrap() { "jpeg" => "jpg", "heif" => "heic", other => other };
             if family != "png" {
                 let png = assert_success(&name, convert_images(RunEvents::silent(), ConvertImagesRequest {
-                    paths: vec![source.clone()], format: "png".into(), output_location: location(&root, &format!("png-{index}")),
+                    paths: vec![source.clone()], format: "png".into(), tiff_compression: None, output_location: location(&root, &format!("png-{index}")),
                 }));
                 let converted = image::open(&png[0]).unwrap();
                 assert_eq!(converted.color(), expected.color(), "{name} keeps its color type in PNG");
@@ -3498,7 +3592,7 @@ mod command_tests {
             }
             for format in ["jpg", "webp", "heic"].into_iter().filter(|format| *format != family) {
                 let output = assert_success(&name, convert_images(RunEvents::silent(), ConvertImagesRequest {
-                    paths: vec![source.clone()], format: format.into(), output_location: location(&root, &format!("{format}-{index}")),
+                    paths: vec![source.clone()], format: format.into(), tiff_compression: None, output_location: location(&root, &format!("{format}-{index}")),
                 }));
                 let bytes = std::fs::read(&output[0]).unwrap();
                 let decoded = if format == "heic" { heif::decode(&bytes).unwrap() } else { image::load_from_memory(&bytes).unwrap() };
