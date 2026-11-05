@@ -5,19 +5,17 @@ use flate2::{write::ZlibEncoder, Compression};
 use lopdf::{dictionary, Document, Object, ObjectId, Stream};
 use quick_xml::{events::Event, escape::unescape, Reader as XmlReader, XmlVersion};
 use serde::{Deserialize, Serialize};
-use crate::kit::{common::{JobOutcome, OutputLocation, OutputNaming}, contracts::ToolError};
+use crate::kit::{common::{limits, JobOutcome, OutputLocation, OutputNaming}, contracts::ToolError};
 use super::metadata::{PdfDocumentMetadata, PdfPageMetadata, PdfTextRun};
 use super::{inherited, resolve, PdfMutationIntent};
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Rect { pub x: f32, pub y: f32, pub width: f32, pub height: f32 }
 #[derive(Clone, Debug, Deserialize)]
-pub struct Point { pub x: f32, pub y: f32 }
-#[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all="camelCase")]
 pub struct SceneObject {
     pub kind: Kind, pub rect: Rect, pub text: String, pub font_size: f32,
-    pub color: String, pub opacity: f32, pub strokes: Vec<Vec<Point>>,
+    pub color: String, pub opacity: f32,
     #[serde(default)] pub shape: Option<Shape>,
     #[serde(default)] pub highlight_mode: Option<HighlightMode>,
     #[serde(default)] pub signature_mode: Option<SignatureMode>,
@@ -151,17 +149,7 @@ fn font_spec(value: Option<&str>) -> Result<(&'static str, &'static str), String
     }
 }
 
-const INCLUDED_SIGNATURE_SATISFY_FONT: &[u8] = include_bytes!("../../../resources/fonts/Satisfy-Regular.ttf");
-const INCLUDED_SIGNATURE_PACIFICO_FONT: &[u8] = include_bytes!("../../../resources/fonts/Pacifico-Regular.ttf");
-const SIGNATURE_RASTER_SCALE: f32 = 4.0;
-
-fn signature_font_bytes(font_family: &str) -> Result<&'static [u8], String> {
-    match font_family {
-        "Satisfy" => Ok(INCLUDED_SIGNATURE_SATISFY_FONT),
-        "Pacifico" => Ok(INCLUDED_SIGNATURE_PACIFICO_FONT),
-        _ => Err("Unsupported cursive signature font".into()),
-    }
-}
+const SIGNATURE_FONT: &[u8] = include_bytes!("../../../resources/fonts/Pacifico-Regular.ttf");
 
 fn encode_text(text: &str) -> Result<String, String> {
     if text.len() > 100_000 { return Err("Text is too long".into()); }
@@ -224,11 +212,11 @@ fn glyph_width(face: &ttf_parser::Face<'_>, gid: u16) -> i64 {
 struct TextLine { glyphs: Vec<(u16, char)>, width: f32 }
 struct TextLayout { font: TextFont, lines: Vec<TextLine>, first_baseline: f32 }
 
-fn unrenderable_message(family: &str, missing: &[char]) -> String {
+fn unrenderable_message(family: &str, missing: &[char], target: &str) -> String {
     let named = missing.iter().take(10).map(|c| format!("“{c}” (U+{:04X})", *c as u32)).collect::<Vec<_>>().join(", ");
     let more = if missing.len() > 10 { format!(" and {} more", missing.len() - 10) } else { String::new() };
     let noun = if missing.len() == 1 { "this character" } else { "these characters" };
-    format!("{family} can't show {noun}: {named}{more}. Remove {} to export this text box.", if missing.len() == 1 { "it" } else { "them" })
+    format!("{family} can't show {noun}: {named}{more}. Remove {} to export {target}.", if missing.len() == 1 { "it" } else { "them" })
 }
 
 fn layout_text(o: &SceneObject) -> Result<TextLayout, ToolError> {
@@ -271,7 +259,7 @@ fn layout_text(o: &SceneObject) -> Result<TextLayout, ToolError> {
         }
         finish(line, &mut lines);
     }
-    if !missing.is_empty() { return Err(ToolError::invalid_input(unrenderable_message(font.family, &missing))); }
+    if !missing.is_empty() { return Err(ToolError::invalid_input(unrenderable_message(font.family, &missing, "this text box"))); }
     let em = face.units_per_em() as f32;
     let (ascent, descent) = (face.ascender() as f32 / em, face.descender() as f32 / em);
     // Matches CSS line-height: half-leading above the ascender.
@@ -300,22 +288,27 @@ fn page_range_pages(range: &str, page_count: usize) -> Result<Vec<usize>, ToolEr
     Ok(pages.into_iter().collect())
 }
 
-struct TextPlan { placed: Vec<Vec<(usize, usize)>>, layouts: HashMap<(usize, usize), TextLayout> }
+struct TextPlan { placed: Vec<Vec<(usize, usize)>>, layouts: HashMap<(usize, usize), TextLayout>, signatures: HashMap<(usize, usize), SignatureImage> }
 
 fn text_plan(scene: &PdfScene) -> Result<TextPlan, ToolError> {
     let mut placed = vec![Vec::new(); scene.pages.len()];
     let mut layouts = HashMap::new();
+    let mut signatures = HashMap::new();
     for (origin, page) in scene.pages.iter().enumerate() {
         for (index, o) in page.objects.iter().enumerate() {
             match (&o.kind, o.page_range.as_deref()) {
-                (Kind::Text, Some(range)) => for target in page_range_pages(range, scene.pages.len())? { placed[target].push((origin, index)); },
-                (_, Some(_)) => return Err(ToolError::invalid_input("Only text boxes can be shown on several pages")),
+                (Kind::Text | Kind::Signature, Some(range)) => for target in page_range_pages(range, scene.pages.len())? { placed[target].push((origin, index)); },
+                (_, Some(_)) => return Err(ToolError::invalid_input("Only text boxes and signatures can be shown on several pages")),
                 _ => placed[origin].push((origin, index)),
             }
-            if matches!(o.kind, Kind::Text) { layouts.insert((origin, index), layout_text(o)?); }
+            match o.kind {
+                Kind::Text => { layouts.insert((origin, index), layout_text(o)?); }
+                Kind::Signature => { signatures.insert((origin, index), signature(o)?); }
+                _ => {}
+            }
         }
     }
-    Ok(TextPlan { placed, layouts })
+    Ok(TextPlan { placed, layouts, signatures })
 }
 
 fn hex_utf16(c: char) -> String {
@@ -473,11 +466,29 @@ fn compress_bytes(bytes: &[u8]) -> Result<Vec<u8>, String> {
     encoder.finish().map_err(err)
 }
 
-fn signature_image(path: &Path) -> Result<SignatureImage, String> {
-    let image = image::open(path).map_err(|error| format!("Could not read signature image: {error}"))?.to_rgba8();
-    if image.width() == 0 || image.height() == 0 || (image.width() as u64) * (image.height() as u64) > 20_000_000 {
-        return Err("Signature image dimensions are not supported".into());
+fn signature(o: &SceneObject) -> Result<SignatureImage, ToolError> {
+    match o.signature_mode {
+        Some(SignatureMode::Image) => signature_image(o.signature_path.as_deref().ok_or_else(|| ToolError::invalid_input("Choose a signature picture before placing it."))?),
+        Some(SignatureMode::Text) => signature_text_image(&o.text, rgb(&o.color).map_err(ToolError::invalid_input)?),
+        None => Err(ToolError::invalid_input("Type a name or choose a signature picture before placing it.")),
     }
+}
+
+#[derive(Debug, Serialize)]
+pub struct SignatureSize { pub width: u32, pub height: u32 }
+
+/// Applies the export-time signature checks when a picture is chosen, so refusals happen before placement.
+pub fn inspect_signature_image(path: &Path) -> Result<SignatureSize, String> {
+    signature_image(path).map(|image| SignatureSize { width: image.width, height: image.height }).map_err(|error| error.message)
+}
+
+fn signature_image(path: &Path) -> Result<SignatureImage, ToolError> {
+    limits::SIGNATURE_IMAGE.check(path)?;
+    let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_else(|| "This file".into());
+    let refused = || ToolError::invalid_input(format!("{name} can't be used. Choose a PNG or JPG. A transparent PNG looks best."));
+    let bytes = fs::read(path).map_err(|_| ToolError::invalid_input(format!("{name} couldn't be opened. Check that it still exists and try again.")))?;
+    let format = image::guess_format(&bytes).ok().filter(|format| matches!(format, image::ImageFormat::Png | image::ImageFormat::Jpeg)).ok_or_else(refused)?;
+    let image = image::load_from_memory_with_format(&bytes, format).map_err(|_| ToolError::invalid_input(format!("{name} couldn't be read. It may be damaged. Choose another PNG or JPG.")))?.to_rgba8();
     let mut rgb = Vec::with_capacity((image.width() * image.height() * 3) as usize);
     let mut alpha = Vec::with_capacity((image.width() * image.height()) as usize);
     for pixel in image.pixels() {
@@ -485,41 +496,39 @@ fn signature_image(path: &Path) -> Result<SignatureImage, String> {
         alpha.push(pixel.0[3]);
     }
     let alpha = alpha.iter().any(|value| *value < 255).then_some(alpha);
-    Ok(SignatureImage { rgb: compress_bytes(&rgb)?, alpha: alpha.map(|values| compress_bytes(&values)).transpose()?, width: image.width(), height: image.height() })
+    let compress = |bytes: &[u8]| compress_bytes(bytes).map_err(ToolError::processing);
+    Ok(SignatureImage { rgb: compress(&rgb)?, alpha: alpha.map(|values| compress(&values)).transpose()?, width: image.width(), height: image.height() })
 }
 
-fn signature_text_image(text: &str, font_family: &str, font_size: f32, color: [f32; 3]) -> Result<SignatureImage, String> {
-    if text.trim().is_empty() { return Err("Signature text is required when using a typed signature".into()); }
-    if text.len() > 100_000 { return Err("Text is too long".into()); }
-    let bytes = signature_font_bytes(font_family)?;
-    let font = fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default()).map_err(|error| format!("Could not parse signature font: {error}"))?;
-    let raster_size = (font_size * SIGNATURE_RASTER_SCALE).clamp(24.0, 512.0);
-    let line_metrics = font.horizontal_line_metrics(raster_size).ok_or("Could not measure signature font")?;
+/// Rasterizes typed signatures in the bundled script font, falling back to Noto Sans per glyph.
+fn signature_text_image(text: &str, color: [f32; 3]) -> Result<SignatureImage, ToolError> {
+    if text.trim().is_empty() { return Err(ToolError::invalid_input("Type a name for the signature before placing it.")); }
+    if text.chars().count() > 200 { return Err(ToolError::invalid_input("Signatures can be up to 200 characters long. Shorten the name and try again.")); }
+    let parse = |bytes: &'static [u8]| fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default()).map_err(|error| ToolError::processing(format!("Could not load the signature font: {error}")));
+    let fonts = [parse(SIGNATURE_FONT)?, parse(NOTO_SANS_REGULAR)?];
+    let mut missing = Vec::new();
+    for c in text.chars().filter(|c| *c != '\n') {
+        if !fonts.iter().any(|font| font.has_glyph(c)) && !missing.contains(&c) { missing.push(c); }
+    }
+    if !missing.is_empty() { return Err(ToolError::invalid_input(unrenderable_message("The signature font", &missing, "this signature"))); }
+    let font_for = |c: char| fonts.iter().find(|font| font.has_glyph(c)).unwrap_or(&fonts[0]);
+    let raster_size = 96.0;
+    let line_metrics = fonts[0].horizontal_line_metrics(raster_size).ok_or_else(|| ToolError::processing("Could not measure the signature font"))?;
     let line_height = (line_metrics.ascent - line_metrics.descent).max(raster_size * 1.1);
     let lines = text.split('\n').collect::<Vec<_>>();
-    let mut line_widths = Vec::with_capacity(lines.len());
-    for line in &lines {
-        let mut width = 0.0;
-        for character in line.chars() {
-            if !font.has_glyph(character) { return Err(format!("Signature font does not support character {character:?}")); }
-            width += font.metrics(character, raster_size).advance_width;
-        }
-        line_widths.push(width);
-    }
+    let line_widths = lines.iter().map(|line| line.chars().map(|c| font_for(c).metrics(c, raster_size).advance_width).sum::<f32>()).collect::<Vec<_>>();
     let width = (line_widths.iter().copied().fold(0.0, f32::max) + 16.0).ceil() as usize;
     let height = (line_height * lines.len() as f32 + 16.0).ceil() as usize;
-    let pixels = width.checked_mul(height).ok_or("Signature image dimensions overflowed")?;
-    if width == 0 || height == 0 || pixels > 20_000_000 { return Err("Signature text dimensions are not supported".into()); }
+    let pixels = width * height;
     let color = color.map(|channel| (channel.clamp(0.0, 1.0) * 255.0).round() as u8);
     let mut alpha = vec![0_u8; pixels];
     for (line_index, line) in lines.iter().enumerate() {
         let baseline = 8.0 + line_index as f32 * line_height + line_metrics.ascent;
         let mut pen_x = 8.0;
         for character in line.chars() {
-            let metrics = font.metrics(character, raster_size);
-            let (_, bitmap) = font.rasterize(character, raster_size);
-            let glyph_x = (pen_x + metrics.bounds.xmin).floor() as i64;
-            let glyph_y = (baseline - metrics.bounds.height - metrics.bounds.ymin).floor() as i64;
+            let (metrics, bitmap) = font_for(character).rasterize(character, raster_size);
+            let glyph_x = (pen_x + metrics.xmin as f32).floor() as i64;
+            let glyph_y = (baseline - metrics.height as f32 - metrics.ymin as f32).floor() as i64;
             for row in 0..metrics.height {
                 for column in 0..metrics.width {
                     let value = bitmap[row * metrics.width + column];
@@ -536,12 +545,12 @@ fn signature_text_image(text: &str, font_family: &str, font_size: f32, color: [f
     }
     let mut rgb = Vec::with_capacity(pixels * 3);
     for _ in 0..pixels { rgb.extend_from_slice(&color); }
-    let alpha = alpha.iter().any(|value| *value < 255).then_some(alpha);
-    Ok(SignatureImage { rgb: compress_bytes(&rgb)?, alpha: alpha.map(|values| compress_bytes(&values)).transpose()?, width: width as u32, height: height as u32 })
+    let compress = |bytes: &[u8]| compress_bytes(bytes).map_err(ToolError::processing);
+    Ok(SignatureImage { rgb: compress(&rgb)?, alpha: Some(compress(&alpha)?), width: width as u32, height: height as u32 })
 }
 
-fn add_signature_image(document: &mut Document, xobjects: &mut lopdf::Dictionary, name: &str, image: SignatureImage) {
-    let mask = image.alpha.map(|alpha| document.add_object(Object::Stream(Stream::new(dictionary! {
+fn add_signature_image(document: &mut Document, image: &SignatureImage) -> ObjectId {
+    let mask = image.alpha.clone().map(|alpha| document.add_object(Object::Stream(Stream::new(dictionary! {
         "Type" => "XObject", "Subtype" => "Image", "Width" => image.width as i64,
         "Height" => image.height as i64, "ColorSpace" => "DeviceGray", "BitsPerComponent" => 8,
         "Filter" => "FlateDecode",
@@ -552,8 +561,7 @@ fn add_signature_image(document: &mut Document, xobjects: &mut lopdf::Dictionary
         "Filter" => "FlateDecode",
     };
     if let Some(mask) = mask { properties.set("SMask", mask); }
-    let id = document.add_object(Object::Stream(Stream::new(properties, image.rgb)));
-    xobjects.set(name, id);
+    document.add_object(Object::Stream(Stream::new(properties, image.rgb.clone())))
 }
 
 struct ScenePreflight {
@@ -825,6 +833,7 @@ fn apply_overlays(doc:&mut Document, scene:&PdfScene, OverlayPlan { preflight, i
     }))).collect();
     let text = text_plan(scene).map_err(|error| error.message)?;
     let text_fonts = embed_text_fonts(doc, &text.layouts)?;
+    let mut signature_ids = HashMap::new();
     let mut kids=Vec::new();
     for (page_index, page) in scene.pages.iter().enumerate() {
         let placed = &text.placed[page_index];
@@ -905,41 +914,15 @@ fn apply_overlays(doc:&mut Document, scene:&PdfScene, OverlayPlan { preflight, i
                 Kind::Highlight=>content.push_str(&format!("{} {} {} {} re f\n",r.x,r.y,r.width,r.height)),
                 Kind::Shape=>content.push_str(&shape_content(o.shape.as_ref(), r)),
                 Kind::Signature=>{
-                    match o.signature_mode {
-                        Some(SignatureMode::Image) => {
-                            let path=o.signature_path.as_ref().ok_or("Choose a signature image before placing it")?;
-                            let name_base = format!("Sig{i}");
-                            let name = next_resource_name(&effective_xobjects, "XObject", &name_base)?;
-                            effective_xobjects.set(name.as_str(), Object::Null);
-                            add_signature_image(doc, &mut xobjects, &name, signature_image(path)?);
-                            content.push_str(&format!("q {} 0 0 {} {} {} /{name} Do Q\n",r.width,r.height,r.x,r.y));
-                        }
-                        Some(SignatureMode::Text) => {
-                            if let Some(font_family) = o.font_family.as_deref().filter(|font| matches!(*font, "Satisfy" | "Pacifico")) {
-                                let name_base = format!("Sig{i}");
-                                let name = next_resource_name(&effective_xobjects, "XObject", &name_base)?;
-                                effective_xobjects.set(name.as_str(), Object::Null);
-                                add_signature_image(doc, &mut xobjects, &name, signature_text_image(&o.text, font_family, o.font_size, rgb)?);
-                                content.push_str(&format!("q {} 0 0 {} {} {} /{name} Do Q\n",r.width,r.height,r.x,r.y));
-                            } else {
-                                let (_, resource)=font_spec(o.font_family.as_deref())?;
-                                let resource = font_names.get(resource).ok_or("Scene font resource disappeared")?;
-                                let encoded=encode_text(&o.text)?;
-                                content.push_str(&format!("BT /{resource} {} Tf 1 0 0 -1 {} {} Tm <{encoded}> Tj ET\n",o.font_size,r.x,r.y+o.font_size));
-                            }
-                        }
-                        None => {
-                            if o.strokes.iter().map(Vec::len).sum::<usize>()>100000 { return Err("Signature is too large".into()); }
-                            for stroke in &o.strokes {
-                                for (j,p) in stroke.iter().enumerate() {
-                                    if !p.x.is_finite() || !p.y.is_finite() || !(0. ..=1.).contains(&p.x) || !(0. ..=1.).contains(&p.y) { return Err("Invalid signature point".into()); }
-                                    content.push_str(&format!("{} {} {}\n",r.x+p.x*r.width,r.y+p.y*r.height,if j==0 {"m"} else {"l"}));
-                                }
-                                if stroke.len()==1 { let p=&stroke[0]; content.push_str(&format!("{} {} l\n",r.x+p.x*r.width,r.y+p.y*r.height)); }
-                                content.push_str("S\n");
-                            }
-                        }
-                    }
+                    let image = &text.signatures[key];
+                    let id = *signature_ids.entry(*key).or_insert_with(|| add_signature_image(doc, image));
+                    let name = next_resource_name(&effective_xobjects, "XObject", &format!("Sig{i}"))?;
+                    effective_xobjects.set(name.as_str(), Object::Null);
+                    xobjects.set(name.as_str(), id);
+                    let scale = (r.width / image.width as f32).min(r.height / image.height as f32);
+                    let (w, h) = (image.width as f32 * scale, image.height as f32 * scale);
+                    let (x, y) = (r.x + (r.width - w) / 2., r.y + (r.height - h) / 2.);
+                    content.push_str(&format!("q {w} 0 0 {} {x} {} cm /{name} Do Q\n", -h, y + h));
                 },
                 Kind::Text=>{
                     let layout = &text.layouts[key];
@@ -1307,9 +1290,10 @@ mod tests {
         d.save(path).unwrap();
     }
     fn object(kind: Kind) -> SceneObject {
-        SceneObject { kind, rect: Rect{x:30.,y:40.,width:120.,height:40.}, text:"LOCAL".into(),font_size:18.,color:"#0066CC".into(),opacity:0.5,
-            strokes:vec![vec![Point{x:0.,y:0.5},Point{x:0.5,y:0.},Point{x:1.,y:1.}]], shape:None, highlight_mode:None,
-            signature_mode:None, signature_path:None, font_family:None, watermark_pattern:None,
+        let signature_mode = matches!(kind, Kind::Signature).then_some(SignatureMode::Text);
+        SceneObject { signature_mode, kind, rect: Rect{x:30.,y:40.,width:120.,height:40.}, text:"LOCAL".into(),font_size:18.,color:"#0066CC".into(),opacity:0.5,
+            shape:None, highlight_mode:None,
+            signature_path:None, font_family:None, watermark_pattern:None,
             bold:false, italic:false, align:TextAlign::Left, page_range:None }
     }
     fn scene() -> PdfScene {
@@ -1647,29 +1631,102 @@ mod tests {
         assert!(has_mask);
     }
 
+    fn signature_object(mode: SignatureMode, path: Option<PathBuf>, text: &str) -> SceneObject {
+        SceneObject { rect: Rect{x:100.,y:200.,width:200.,height:200.}, text: text.into(), color: "#1A3A8F".into(), opacity: 1.,
+            signature_mode: Some(mode), signature_path: path, ..object(Kind::Signature) }
+    }
+
     #[test]
-    fn cursive_typed_signatures_use_bundled_raster_fonts() {
-        let temp = TempDir::new().unwrap();
-        let input = temp.0.join("source.pdf");
-        fixture(&input);
-        for font_family in ["Satisfy", "Pacifico"] {
-            let mut value = object(Kind::Signature);
-            value.signature_mode = Some(SignatureMode::Text);
-            value.text = "A. Local".into();
-            value.font_family = Some(font_family.into());
-            let mut model = scene();
-            model.pages[0].objects = vec![value];
-            let composed = compose(&input, &model).unwrap();
-            let page_id = composed.get_pages().values().next().copied().unwrap();
-            let content = String::from_utf8_lossy(&composed.get_page_content(page_id)).into_owned();
-            assert!(content.contains("/Sig0 Do"), "{font_family} signature was not rasterized: {content}");
-            let resources = composed.get_dictionary(page_id).unwrap().get(b"Resources").unwrap().as_dict().unwrap();
-            let xobjects = resources.get(b"XObject").unwrap().as_dict().unwrap();
-            let signature = xobjects.get(b"Sig0").unwrap().as_reference().unwrap();
-            let signature = composed.get_object(signature).unwrap().as_stream().unwrap();
-            assert_eq!(signature.dict.get(b"Subtype").unwrap().as_name().unwrap(), b"Image");
-            assert!(signature.dict.has(b"SMask"), "{font_family} signature lost transparency");
+    fn typed_signatures_use_the_one_bundled_script_font_with_noto_sans_fallback() {
+        let pacifico = fontdue::Font::from_bytes(SIGNATURE_FONT, fontdue::FontSettings::default()).unwrap();
+        let noto = fontdue::Font::from_bytes(NOTO_SANS_REGULAR, fontdue::FontSettings::default()).unwrap();
+        assert!(!pacifico.has_glyph('α') && noto.has_glyph('α'), "fallback probe must be missing from the script font only");
+        let ink = [0.1, 0.23, 0.56];
+        let latin = signature_text_image("A. Local", ink).unwrap();
+        assert_eq!(latin.rgb, signature_text_image("A. Local", ink).unwrap().rgb, "typed signatures must rasterize deterministically");
+        assert_eq!(latin.alpha, signature_text_image("A. Local", ink).unwrap().alpha);
+        let fallback = signature_text_image("A. Localα", ink).unwrap();
+        assert!(fallback.width > latin.width, "the Noto Sans fallback glyph must be drawn");
+        let missing = signature_text_image("A. Ա", ink).err().unwrap();
+        assert_eq!(missing.kind, crate::kit::contracts::ErrorKind::InvalidInput);
+        assert_eq!(missing.message, "The signature font can't show this character: “Ա” (U+0531). Remove it to export this signature.");
+        assert_eq!(signature_text_image("  ", ink).err().unwrap().message, "Type a name for the signature before placing it.");
+
+        let temp = TempDir::new().unwrap(); let input = temp.0.join("source.pdf"); fixture(&input);
+        let mut model = scene(); model.pages[0].objects = vec![signature_object(SignatureMode::Text, None, "A. Local")];
+        let composed = compose(&input, &model).unwrap();
+        let page_id = composed.get_pages().values().next().copied().unwrap();
+        let content = String::from_utf8_lossy(&composed.get_page_content(page_id)).into_owned();
+        assert!(content.contains("/Sig0 Do") && !content.contains(" Tj"), "typed signature must be an image, not text: {content}");
+        let xobjects = composed.get_dictionary(page_id).unwrap().get(b"Resources").unwrap().as_dict().unwrap().get(b"XObject").unwrap().as_dict().unwrap();
+        let signature = composed.get_object(xobjects.get(b"Sig0").unwrap().as_reference().unwrap()).unwrap().as_stream().unwrap();
+        assert_eq!(signature.dict.get(b"Subtype").unwrap().as_name().unwrap(), b"Image");
+        assert!(signature.dict.has(b"SMask"), "typed signature lost transparency");
+    }
+
+    #[test]
+    fn signature_pictures_accept_png_and_jpg_by_content_and_refuse_everything_else_before_output() {
+        let temp = TempDir::new().unwrap(); let input = temp.0.join("source.pdf"); fixture(&input);
+        let png = temp.0.join("ink.png");
+        image::RgbaImage::from_fn(8, 4, |x, _| image::Rgba([0, 0, 0, if x < 4 { 255 } else { 0 }])).save(&png).unwrap();
+        let jpg = temp.0.join("scan.jpg");
+        image::RgbImage::from_pixel(8, 4, image::Rgb([20, 20, 20])).save(&jpg).unwrap();
+        let png_signature = signature_image(&png).unwrap();
+        assert_eq!((png_signature.width, png_signature.height), (8, 4));
+        assert!(png_signature.alpha.is_some(), "PNG transparency must be kept");
+        assert!(signature_image(&jpg).unwrap().alpha.is_none());
+        let renamed = temp.0.join("scan.png"); fs::copy(&jpg, &renamed).unwrap();
+        assert!(signature_image(&renamed).is_ok(), "formats are sniffed from content, not the name");
+
+        let webp = temp.0.join("ink.webp"); image::RgbaImage::from_pixel(4, 4, image::Rgba([0, 0, 0, 255])).save(&webp).unwrap();
+        let tiff = temp.0.join("ink.tiff"); image::RgbaImage::from_pixel(4, 4, image::Rgba([0, 0, 0, 255])).save(&tiff).unwrap();
+        let disguised = temp.0.join("disguised.png"); fs::copy(&tiff, &disguised).unwrap();
+        let not_image = temp.0.join("notes.jpg"); fs::write(&not_image, b"not a picture").unwrap();
+        let huge = temp.0.join("huge.png"); fs::write(&huge, crate::kit::common::limits::fixtures::png_header(5000, 5000)).unwrap();
+        let before: Vec<_> = fs::read_dir(&temp.0).unwrap().map(|entry| entry.unwrap().path()).collect();
+        for (path, kind, message) in [
+            (&webp, crate::kit::contracts::ErrorKind::InvalidInput, "ink.webp can't be used. Choose a PNG or JPG. A transparent PNG looks best."),
+            (&tiff, crate::kit::contracts::ErrorKind::InvalidInput, "ink.tiff can't be used. Choose a PNG or JPG. A transparent PNG looks best."),
+            (&disguised, crate::kit::contracts::ErrorKind::InvalidInput, "disguised.png can't be used. Choose a PNG or JPG. A transparent PNG looks best."),
+            (&not_image, crate::kit::contracts::ErrorKind::InvalidInput, "notes.jpg can't be used. Choose a PNG or JPG. A transparent PNG looks best."),
+            (&huge, crate::kit::contracts::ErrorKind::LimitExceeded { limit: crate::kit::contracts::LimitKind::Decompression }, "This image expands to more than 80 MB when opened, which is over the limit. It may be damaged or unsafe to open."),
+        ] {
+            assert_eq!(inspect_signature_image(path).unwrap_err(), message);
+            let outcome = export_text(&input, text_scene(vec![signature_object(SignatureMode::Image, Some(path.clone()), "")]));
+            let error = outcome.error().expect("refused signatures must fail the export");
+            assert_eq!((&error.kind, error.message.as_str()), (&kind, message));
         }
+        let after: Vec<_> = fs::read_dir(&temp.0).unwrap().map(|entry| entry.unwrap().path()).collect();
+        assert_eq!(before, after, "refused signatures must not write output");
+    }
+
+    #[test]
+    fn signatures_keep_their_proportions_and_can_repeat_across_a_page_range() {
+        let temp = TempDir::new().unwrap(); let input = temp.0.join("source.pdf"); page_text_fixture(&input);
+        let png = temp.0.join("wide.png");
+        image::RgbaImage::from_pixel(40, 20, image::Rgba([255, 0, 0, 255])).save(&png).unwrap();
+        let mut initials = signature_object(SignatureMode::Image, Some(png), "");
+        initials.page_range = Some("1-2".into());
+        let mut doc = compose(&input, &text_scene(vec![initials])).unwrap();
+        let pages: Vec<_> = doc.get_pages().values().copied().collect();
+        let image_of = |page: ObjectId| {
+            let content = String::from_utf8_lossy(&doc.get_page_content(page)).into_owned();
+            assert!(content.contains("q 200 0 0 -100 100 350 cm /Sig0 Do Q"), "the 2:1 picture must fit the square box without stretching: {content}");
+            doc.get_dictionary(page).unwrap().get(b"Resources").unwrap().as_dict().unwrap().get(b"XObject").unwrap().as_dict().unwrap().get(b"Sig0").unwrap().as_reference().unwrap()
+        };
+        assert_eq!(image_of(pages[0]), image_of(pages[1]), "repeated signatures share one image");
+        assert!(!String::from_utf8_lossy(&doc.get_page_content(pages[2])).contains("Do"), "pages outside the range stay clear");
+
+        let Ok(renderer) = renderer() else { return };
+        let path = temp.0.join("scene.pdf"); doc.save(&path).unwrap();
+        let preview = render(&path, 1, &renderer, &temp).unwrap();
+        let png = base64::engine::general_purpose::STANDARD.decode(preview.data_url.trim_start_matches("data:image/png;base64,")).unwrap();
+        let pixels = image::load_from_memory(&png).unwrap().to_rgb8();
+        let scale = pixels.width() as f32 / 612.;
+        let at = |x: f32, y: f32| pixels.get_pixel((x * scale) as u32, (y * scale) as u32).0;
+        assert_eq!(at(200., 300.), [255, 0, 0], "signature ink must render inside the fitted area");
+        assert_eq!(at(200., 220.), [255, 255, 255], "the fitted picture must not stretch into the empty band");
+        assert_eq!(at(200., 380.), [255, 255, 255]);
     }
 
     #[test]
@@ -1927,7 +1984,7 @@ mod tests {
             "outputLocation": "alongsideInput",
             "scene": { "pages": [
                 { "sourceIndex": 1, "width": 612, "height": 792, "rotation": 0, "crop": null, "objects": [
-                    { "kind": "text", "rect": { "x": 72, "y": 150, "width": 360, "height": 40 }, "text": "Staged", "fontSize": 18, "color": "#1455AA", "opacity": 1, "strokes": [] }
+                    { "kind": "text", "rect": { "x": 72, "y": 150, "width": 360, "height": 40 }, "text": "Staged", "fontSize": 18, "color": "#1455AA", "opacity": 1 }
                 ] },
                 { "sourceIndex": null, "width": 300, "height": 200, "rotation": 90, "crop": null, "objects": [] },
                 { "sourceIndex": 0, "width": 300, "height": 200, "rotation": 0, "crop": null, "objects": [] }
@@ -1995,7 +2052,7 @@ mod tests {
     }
 
     fn text_object(text: &str, y: f32) -> SceneObject {
-        SceneObject { rect: Rect{x:40.,y,width:400.,height:60.}, text: text.into(), font_size: 20., color: "#202020".into(), opacity: 1., strokes: vec![], ..object(Kind::Text) }
+        SceneObject { rect: Rect{x:40.,y,width:400.,height:60.}, text: text.into(), font_size: 20., color: "#202020".into(), opacity: 1., ..object(Kind::Text) }
     }
     fn text_scene(objects: Vec<SceneObject>) -> PdfScene {
         PdfScene { pages: vec![
@@ -2130,7 +2187,7 @@ mod tests {
         for page in &pages[1..] { assert!(String::from_utf8_lossy(&doc.get_page_content(*page)).contains("/SceneTextNotoSansRegular 20 Tf")); }
 
         let mut highlight = object(Kind::Highlight); highlight.page_range = Some("1".into());
-        assert_eq!(compose(&input, &text_scene(vec![highlight])).unwrap_err(), "Only text boxes can be shown on several pages");
+        assert_eq!(compose(&input, &text_scene(vec![highlight])).unwrap_err(), "Only text boxes and signatures can be shown on several pages");
     }
 
     #[test]

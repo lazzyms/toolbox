@@ -10,14 +10,6 @@
       "sourceUrl": "https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_2_37/dejavu-fonts-ttf-2.37.zip",
       "maxBytes": 1000000
     },
-    "signatureSatisfyFont": {
-      "path": "Satisfy-Regular.ttf",
-      "version": "1.001",
-      "sha256": "55bb141a0a23a32278d5fa7fd2e853824faa173b94774660ebeddb106be07c80",
-      "license": "Apache License 2.0; see Satisfy-LICENSE.txt",
-      "sourceUrl": "https://github.com/google/fonts/tree/main/apache/satisfy",
-      "maxBytes": 1000000
-    },
     "signaturePacificoFont": {
       "path": "Pacifico-Regular.ttf",
       "version": "3.001",
