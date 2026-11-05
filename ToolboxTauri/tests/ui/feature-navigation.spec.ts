@@ -1702,7 +1702,7 @@ test.describe("Extract from PDF", () => {
         const inverted = "Page 22 — 1 inverted JPEG, copied as it is. Some viewers show it in negative.";
         const cmyk = "Pages 2, 5, 9 — 6 JPEGs use CMYK colour and were copied as they are. Some viewers show them with the wrong colours.";
         const noneDecoded = "None of the 12 images could be decoded, so nothing was saved.";
-        const faxImage = "Page 3, image 1 — CCITT fax isn't supported in this version. Not saved.";
+        const faxImage = "Page 3, image 1 — JBIG2 isn't supported in this version. Not saved.";
         await openWithPdfs(page, ["/local/scan-archive-2019.pdf", "/local/brochure-spring.pdf", "/local/fax-bundle.pdf"]);
         await extractModes(page).getByRole("radio", { name: "Images", exact: true }).click();
         await page.evaluate((outcomes) => { (window as TestWindow).__toolboxProcessingResults = outcomes; }, [
@@ -1720,7 +1720,7 @@ test.describe("Extract from PDF", () => {
                 warnings: [{ code: "jpegColourKept", message: cmyk, details: { colour: "cmyk", pages: [2, 5, 9], images: 6 } }],
             }),
             failed("/local/fax-bundle.pdf", "processing", noneDecoded, {
-                warnings: [{ code: "imageUnsupported", message: faxImage, details: { page: 3, image: 1, feature: "CCITT fax" } }],
+                warnings: [{ code: "imageUnsupported", message: faxImage, details: { page: 3, image: 1, feature: "JBIG2" } }],
             }),
         ]);
         await page.getByRole("button", { name: "Extract from 3 PDFs", exact: true }).click();
