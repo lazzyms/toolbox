@@ -10,7 +10,7 @@
       "version": "1.0",
       "minPackFormat": 1,
       "appVersions": { "from": "0.1.0" },
-      "payloads": [{ "target": "all", "downloadBytes": 52428800, "installedBytes": 115343360 }]
+      "payloads": [{ "target": "all", "downloadBytes": 52428800, "installedBytes": 115343360, "sha256": "0000000000000000000000000000000000000000000000000000000000000000" }]
     },
     {
       "id": "ocr-german",
@@ -21,7 +21,7 @@
       "version": "4.1",
       "minPackFormat": 1,
       "appVersions": { "from": "0.1.0" },
-      "payloads": [{ "target": "all", "downloadBytes": 15728640, "installedBytes": 15728640 }]
+      "payloads": [{ "target": "all", "downloadBytes": 15728640, "installedBytes": 15728640, "sha256": "0000000000000000000000000000000000000000000000000000000000000000" }]
     },
     {
       "id": "ocr-french",
@@ -32,7 +32,7 @@
       "version": "4.1",
       "minPackFormat": 1,
       "appVersions": { "from": "0.1.0" },
-      "payloads": [{ "target": "all", "downloadBytes": 14680064, "installedBytes": 14680064 }]
+      "payloads": [{ "target": "all", "downloadBytes": 14680064, "installedBytes": 14680064, "sha256": "0000000000000000000000000000000000000000000000000000000000000000" }]
     },
     {
       "id": "ocr-japanese",
@@ -44,9 +44,9 @@
       "minPackFormat": 1,
       "appVersions": { "from": "0.1.0" },
       "payloads": [
-        { "target": "macos-aarch64", "downloadBytes": 20971520, "installedBytes": 31457280 },
-        { "target": "windows-aarch64", "downloadBytes": 20971520, "installedBytes": 31457280 },
-        { "target": "windows-x86_64", "downloadBytes": 20971520, "installedBytes": 31457280 }
+        { "target": "macos-aarch64", "downloadBytes": 20971520, "installedBytes": 31457280, "sha256": "0000000000000000000000000000000000000000000000000000000000000000" },
+        { "target": "windows-aarch64", "downloadBytes": 20971520, "installedBytes": 31457280, "sha256": "0000000000000000000000000000000000000000000000000000000000000000" },
+        { "target": "windows-x86_64", "downloadBytes": 20971520, "installedBytes": 31457280, "sha256": "0000000000000000000000000000000000000000000000000000000000000000" }
       ]
     },
     {
@@ -58,7 +58,7 @@
       "version": "1.0",
       "minPackFormat": 1,
       "appVersions": { "from": "0.1.0" },
-      "payloads": [{ "target": "windows-aarch64", "downloadBytes": 1048576, "installedBytes": 1048576 }]
+      "payloads": [{ "target": "windows-aarch64", "downloadBytes": 1048576, "installedBytes": 1048576, "sha256": "0000000000000000000000000000000000000000000000000000000000000000" }]
     }
   ]
 }
