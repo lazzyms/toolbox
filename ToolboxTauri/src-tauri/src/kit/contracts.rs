@@ -113,6 +113,7 @@ pub enum LimitKind {
     PageCount,
     Time,
     Decompression,
+    TextLength,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
