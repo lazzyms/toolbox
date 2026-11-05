@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { CircleAlert } from "lucide-react";
 import { ToolScaffold, type RunHandler } from "../components/ToolScaffold";
@@ -9,13 +9,15 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ShortcutHint } from "../components/ShortcutHint";
 import { parsePageRanges } from "../shared/pageRanges";
 import { shortcutTarget } from "../shortcuts";
+import { capabilityFor } from "../registry/capabilities";
 import { CropPreview, usePageSizes, type CropTarget } from "../features/pdf-crop/CropPreview";
 import {
-  DEFAULT_RECT, fieldLength, pointsPerUnit, rectIssues, sameRect, type Margins, type PageSize, type Rect, type RectField, type Unit,
+  DEFAULT_RECT, describePage, fieldLength, papers, pointsPerUnit, rectIssues, sameRect, type Margins, type PageSize, type Rect, type RectField, type Unit,
 } from "../features/pdf-crop/geometry";
 
 type Mode = "crop" | "resize";
@@ -33,7 +35,8 @@ const ERROR_ID = "mar-err";
 const RECT_ERROR_ID = "rect-err";
 const PAGES_ERROR_ID = "crop-pages-err";
 const PAGES_HELP_ID = "crop-pages-help";
-const PAGES_FIX_REASON = "Fix the pages to crop.";
+const PAGES_FIX_REASON: Record<Mode, string> = { crop: "Fix the pages to crop.", resize: "Fix the pages to resize." };
+const DEFAULT_PAPER = "a4";
 
 const rectFields: ReadonlyArray<{ key: RectField; label: string; axis: "width" | "height" }> = [
   { key: "left", label: "Left", axis: "width" },
@@ -102,6 +105,16 @@ const cropWith = (spec: CropSpec, scope: CropScope): RunHandler => (paths, outpu
     request: { paths, spec, scope, outputLocation },
   });
 
+/**
+ * Resize sets every page in scope to a preset paper, turned to match each page as displayed, with the page
+ * scaled to fit and centred. Only what Resize mode shows is sent; Crop's values never are.
+ */
+const resizeWith = (preset: string, scope: CropScope): RunHandler => (paths, outputLocation, { runId }) =>
+  invoke<ToolResult>("resize_pdf", {
+    runId,
+    request: { paths, size: { preset }, orientation: "match", placement: "fit", scope, outputLocation },
+  });
+
 const pdfCount = (count: number) => `${count} ${count === 1 ? "PDF" : "PDFs"}`;
 
 const UnitInput = ({ id, label, unit, value, invalid, errorId = ERROR_ID, disabled, onChange, onFocus, onBlur }: {
@@ -156,6 +169,11 @@ export const CropResizeView = ({ utility, initialPaths, onFilesChange, onSelectT
   const [fields, setFields] = useState<Record<Side, string>>({ top: "15", right: "30", bottom: "15", left: "30" });
   const [rectState, setRectState] = useState<RectState>({ rect: DEFAULT_RECT, drafts: {}, past: [] });
   const [pagesText, setPagesText] = useState("");
+  const [paper, setPaper] = useState(DEFAULT_PAPER);
+  // Resize runs its own command, so its rows, running label and output names come from resize_pdf.
+  const resizeUtility = useMemo<ToolDefinition>(() => ({
+    ...utility, command: "resize_pdf", capability: capabilityFor("resize_pdf"), resultVerb: "Resized", runningVerb: "Resizing",
+  }), [utility]);
   const pages = readScope(pagesText);
   const check = checkMargins(same, all, fields, unit);
   const invalidSides = new Set(check.errors.map((error) => error.side));
@@ -187,10 +205,12 @@ export const CropResizeView = ({ utility, initialPaths, onFilesChange, onSelectT
     <ToolScaffold
       variant="workspace"
       sessionKey="pdf-crop"
-      utility={utility}
+      utility={mode === "resize" ? resizeUtility : utility}
       initialPaths={initialPaths}
       onFilesChange={onFilesChange}
-      onRun={spec && "scope" in pages ? cropWith(spec, pages.scope) : async () => { throw new Error(spec ? PAGES_FIX_REASON : fixReason); }}
+      onRun={mode === "resize"
+        ? "scope" in pages ? resizeWith(paper, pages.scope) : async () => { throw new Error(PAGES_FIX_REASON.resize); }
+        : spec && "scope" in pages ? cropWith(spec, pages.scope) : async () => { throw new Error(spec ? PAGES_FIX_REASON.crop : fixReason); }}
     >
       {(props) => (
         <CropWorkspace
@@ -204,6 +224,8 @@ export const CropResizeView = ({ utility, initialPaths, onFilesChange, onSelectT
           onUnitChange={setUnit}
           spec={spec}
           fixReason={fixReason}
+          paper={paper}
+          onPaperChange={setPaper}
           pages={{ text: pagesText, error: "error" in pages ? pages.error : null, onChange: setPagesText }}
           onSelectTool={onSelectTool}
           rectangle={{
@@ -301,7 +323,7 @@ type RectangleControls = {
 /** The preview and options for the files in the scaffold; owns what depends on the loaded PDFs. */
 const CropWorkspace = ({
   files, run, loading, destination, selectedFileIndex, selectFile, utility, mode, onModeChange, cropBy, onCropByChange, unit, spec, fixReason,
-  pages: pageScope, onSelectTool, rectangle, margins, marginsTarget,
+  paper, onPaperChange, pages: pageScope, onSelectTool, rectangle, margins, marginsTarget,
 }: ScaffoldProps & {
   utility: ToolDefinition;
   mode: Mode;
@@ -312,6 +334,8 @@ const CropWorkspace = ({
   onUnitChange: (unit: Unit) => void;
   spec: CropSpec | null;
   fixReason: string;
+  paper: string;
+  onPaperChange: (paper: string) => void;
   pages: { text: string; error: string | null; onChange: (text: string) => void };
   onSelectTool?: (id: AtomicToolId) => void;
   rectangle: RectangleControls;
@@ -332,12 +356,11 @@ const CropWorkspace = ({
   const runLabel = mode === "crop"
     ? files.length === 0 ? "Crop PDFs" : `Crop ${pdfCount(files.length)}`
     : files.length === 0 ? "Resize PDFs" : `Resize ${pdfCount(files.length)}`;
-  const reason = mode === "resize"
-    ? "Resize isn't available yet."
-    : files.length === 0
-      ? "Add PDFs to crop."
-      : !spec ? fixReason
-        : pageScope.error ? PAGES_FIX_REASON : null;
+  const pagesFixReason = PAGES_FIX_REASON[mode];
+  const reason = files.length === 0
+    ? mode === "crop" ? "Add PDFs to crop." : "Add PDFs to resize."
+    : mode === "crop" && !spec ? fixReason
+      : pageScope.error ? pagesFixReason : null;
   const target: CropTarget | null = byRectangle ? (rectangle.errors.length ? null : { rect }) : marginsTarget;
 
   const onKeyDown = (event: React.KeyboardEvent) => {
@@ -451,6 +474,32 @@ const CropWorkspace = ({
               </div>
             </>
           )}
+          {mode === "resize" && (
+            <>
+              <div className="workspace-field">
+                <Label htmlFor="psize">Page size</Label>
+                <NativeSelect id="psize" value={paper} onChange={(event) => onPaperChange(event.target.value)}>
+                  {papers.map(({ id, width, height }) => <option key={id} value={id}>{describePage({ width, height }, "mm")}</option>)}
+                </NativeSelect>
+              </div>
+              <div className="grid gap-2">
+                <Label id="resize-orientation-label">Orientation</Label>
+                <ToggleGroup type="single" variant="outline" size="sm" aria-labelledby="resize-orientation-label" value="match">
+                  <ToggleGroupItem value="match">Match page</ToggleGroupItem>
+                </ToggleGroup>
+              </div>
+              <div className="grid gap-2">
+                <Label id="resize-placement-label">Placement</Label>
+                <RadioGroup value="fit" aria-labelledby="resize-placement-label">
+                  <Label className="workspace-check" htmlFor="resize-placement-fit">
+                    <RadioGroupItem id="resize-placement-fit" value="fit" />
+                    <span>Scale to fit, centered <span className="workspace-note">Nothing is cut off</span></span>
+                  </Label>
+                </RadioGroup>
+              </div>
+              <p className="workspace-note">Links, comments and form fields move with the content. Text stays sharp.</p>
+            </>
+          )}
           <div className="workspace-field">
             <Label htmlFor="crop-pages">Pages</Label>
             <Input
@@ -470,8 +519,8 @@ const CropWorkspace = ({
             <p id={PAGES_HELP_ID} className="workspace-note">Empty means all pages. Pages past the end are ignored. A PDF with none left is skipped.</p>
           </div>
           {destination}
-          {mode === "crop" && <p className="workspace-note">Names end in -cropped. A taken name gets -1, -2.</p>}
-          {reason && <p className={`workspace-note ${reason === fixReason || reason === PAGES_FIX_REASON ? "workspace-note-error" : ""}`} data-testid="crop-run-reason">{reason}</p>}
+          <p className="workspace-note">Names end in {mode === "crop" ? "-cropped" : "-resized"}. A taken name gets -1, -2.</p>
+          {reason && <p className={`workspace-note ${reason === fixReason || reason === pagesFixReason ? "workspace-note-error" : ""}`} data-testid="crop-run-reason">{reason}</p>}
           <Button
             variant="default"
             aria-label={runLabel}

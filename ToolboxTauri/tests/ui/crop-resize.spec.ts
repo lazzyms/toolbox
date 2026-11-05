@@ -100,6 +100,10 @@ const addPdfs = async (page: Page, paths: string[]) => {
     await expect(page.getByRole("listbox").getByRole("option")).toHaveCount(paths.length);
 };
 
+const resizeRequests = (page: Page) => page.evaluate(() =>
+    (window as unknown as CropWindow).__invocations.filter((call) => call.command === "resize_pdf").map((call) => call.args as CropArgs));
+const useResize = (page: Page) => page.getByRole("radiogroup", { name: "Mode" }).getByRole("radio", { name: "Resize pages" }).click();
+
 const margin = (page: Page, side: string) => panel(page).getByRole("textbox", { name: side, exact: true });
 const useMargins = (page: Page) => panel(page).getByRole("radiogroup", { name: "Crop by" }).getByRole("radio", { name: "Margins" }).click();
 
@@ -201,9 +205,12 @@ test("invalid margins are named, linked to their fields, and keep Run disabled u
     await expect(page.getByTestId("crop-run-reason")).toHaveCount(0);
     await expect(run).toBeEnabled();
 
-    await page.getByRole("radiogroup", { name: "Mode" }).getByRole("radio", { name: "Resize pages" }).click();
+    // Margins belong to Crop: Resize runs without them, even when they are invalid.
+    await margin(page, "Top").fill("-5");
+    await useResize(page);
     await expect(panel(page)).toContainText("Change the paper size of every page.");
-    await expect(page.getByRole("button", { name: "Resize 2 PDFs", exact: true })).toBeDisabled();
+    await expect(page.getByTestId("crop-run-reason")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Resize 2 PDFs", exact: true })).toBeEnabled();
     expect(await cropRequests(page)).toHaveLength(0);
 });
 
@@ -545,6 +552,119 @@ test("a ranged crop reports a cropped PDF, a Skipped PDF with its reason, a remo
     await expect(results.nth(2)).toHaveAttribute("data-tone", "warn");
     await expect(results.nth(2)).toContainText("The digital signature was removed, because changing the file breaks it.");
     await expect(results.nth(2)).not.toContainText("native wording");
+    await expect(results.nth(3)).toHaveAttribute("data-tone", "fail");
+    await expect(results.nth(3)).toContainText("Unlock the PDF before editing");
+});
+
+const presets = [
+    { preset: "a3", label: "A3, 297 × 420 mm" },
+    { preset: "a4", label: "A4, 210 × 297 mm" },
+    { preset: "a5", label: "A5, 148 × 210 mm" },
+    { preset: "letter", label: "Letter, 216 × 279 mm" },
+    { preset: "legal", label: "Legal, 216 × 356 mm" },
+    { preset: "tabloid", label: "Tabloid, 279 × 432 mm" },
+];
+
+test("Resize shows only its own options and sends the exact request for each preset, never Crop's values", async ({ page }) => {
+    await openCrop(page);
+    const paths = ["/local/lease.pdf", "/local/scan.pdf"];
+    await addPdfs(page, paths);
+    await useMargins(page);
+    await margin(page, "Top").fill("40");
+    await useResize(page);
+
+    await expect(panel(page).getByRole("radiogroup", { name: "Crop by" })).toHaveCount(0);
+    await expect(margin(page, "Top")).toHaveCount(0);
+    await expect(page.getByTestId("crop-hidden-note")).toHaveCount(0);
+    await expect(panel(page)).toContainText("Names end in -resized. A taken name gets -1, -2.");
+    await expect(panel(page)).toContainText("Links, comments and form fields move with the content. Text stays sharp.");
+    const size = panel(page).getByLabel("Page size");
+    await expect(size.locator("option")).toHaveText(presets.map(({ label }) => label));
+    await expect(size).toHaveValue("a4");
+    await expect(panel(page).getByRole("radiogroup", { name: "Orientation" }).getByRole("radio", { name: "Match page" })).toBeChecked();
+    await expect(panel(page).getByRole("radiogroup", { name: "Placement" }).getByRole("radio", { name: /^Scale to fit, centered/ })).toBeChecked();
+    await expect(panel(page).getByRole("radiogroup", { name: "Placement" })).toContainText("Nothing is cut off");
+
+    const run = page.getByRole("button", { name: "Resize 2 PDFs", exact: true });
+    for (const [index, { preset, label }] of presets.entries()) {
+        await size.selectOption({ label });
+        await run.click();
+        await expect.poll(async () => (await resizeRequests(page)).length).toBe(index + 1);
+        const { runId, request } = (await resizeRequests(page))[index];
+        expect(runId).toMatch(/\S+/);
+        expect(request).toEqual({
+            paths,
+            size: { preset },
+            orientation: "match",
+            placement: "fit",
+            scope: "all",
+            outputLocation: "alongsideInput",
+        });
+        await finish(page, paths.map((path) => outcome(path, { outputPaths: [path.replace(".pdf", "-resized.pdf")] })));
+        await expect(run).toBeEnabled();
+    }
+    expect(await cropRequests(page)).toHaveLength(0);
+
+    // Back in Crop, the margins are still there and Crop sends only its own values.
+    await page.getByRole("radiogroup", { name: "Mode" }).getByRole("radio", { name: "Crop pages" }).click();
+    await expect(margin(page, "Top")).toHaveValue("40");
+    await page.getByRole("button", { name: "Crop 2 PDFs", exact: true }).click();
+    await expect.poll(async () => (await cropRequests(page)).length).toBe(1);
+    const [{ request }] = await cropRequests(page) as Array<{ request: Record<string, unknown> }>;
+    expect(Object.keys(request).sort()).toEqual(["outputLocation", "paths", "scope", "spec"]);
+    expect(await resizeRequests(page)).toHaveLength(presets.length);
+});
+
+test("Resize sends the typed range exactly as entered and names a bad range before running", async ({ page }) => {
+    await openCrop(page);
+    await useResize(page);
+    await expect(page.getByTestId("crop-run-reason")).toHaveText("Add PDFs to resize.");
+    await expect(page.getByRole("button", { name: "Resize PDFs", exact: true })).toBeDisabled();
+    await addPdfs(page, ["/local/lease.pdf"]);
+    const run = page.getByRole("button", { name: "Resize 1 PDF", exact: true });
+
+    await pagesField(page).fill("1-3,,2");
+    await expect(panel(page).locator("#crop-pages-err")).toHaveText("Entry 2 of the page range is empty. Remove the extra comma.");
+    await expect(page.getByTestId("crop-run-reason")).toHaveText("Fix the pages to resize.");
+    await expect(run).toBeDisabled();
+
+    await pagesField(page).fill(" 3-14, 20- ");
+    await panel(page).getByLabel("Page size").selectOption("letter");
+    await run.click();
+    await expect.poll(async () => (await resizeRequests(page)).length).toBe(1);
+    const [{ request }] = await resizeRequests(page) as Array<{ request: { scope: unknown; size: unknown } }>;
+    expect(request.scope).toEqual({ range: { ranges: " 3-14, 20- " } });
+    expect(request.size).toEqual({ preset: "letter" });
+});
+
+test("a ranged resize reports a resized PDF, a Skipped PDF already at the size, a removed signature and a failure", async ({ page }) => {
+    await openCrop(page);
+    const paths = ["/local/lease.pdf", "/local/handbook.pdf", "/local/vendor-nda.pdf", "/local/payroll.pdf"];
+    await addPdfs(page, paths);
+    await useResize(page);
+    await pagesField(page).fill("3-");
+    await page.getByRole("button", { name: "Resize 4 PDFs", exact: true }).click();
+    await expect.poll(async () => (await resizeRequests(page)).length).toBe(1);
+    await expect(page.getByText("Resizing 0 of 4")).toBeVisible();
+
+    await finish(page, [
+        outcome(paths[0], { outputPaths: ["/local/lease-resized.pdf"], detail: "Pages 3–22 changed to A4." }),
+        outcome(paths[1], { state: "skipped", reason: { code: "noEffectiveChange", message: "Pages 3–14 are already A4. Nothing was saved.", pointer: null } }),
+        outcome(paths[2], { outputPaths: ["/local/vendor-nda-resized.pdf"], detail: "Pages 3–4 changed to A4.", warnings: [{ code: "signatureRemoved", message: "native wording" }] }),
+        outcome(paths[3], { state: "failed", failure: { kind: "invalidInput", message: "Unlock the PDF before editing", pointer: { kind: "tool", toolId: "lock-unlock" } } }),
+    ]);
+
+    const results = page.getByRole("list", { name: "Results" }).getByRole("listitem");
+    await expect(results).toHaveCount(4);
+    await expect(results.nth(0)).toHaveAttribute("data-tone", "ok");
+    await expect(results.nth(0)).toContainText("Resized");
+    await expect(results.nth(0)).toContainText("lease-resized.pdf");
+    await expect(results.nth(1)).toHaveAttribute("data-tone", "skip");
+    await expect(results.nth(1)).toContainText("Skipped");
+    await expect(results.nth(1)).toContainText("Pages 3–14 are already A4. Nothing was saved.");
+    await expect(results.nth(1).getByRole("button", { name: /^(Open|Show in)/ })).toHaveCount(0);
+    await expect(results.nth(2)).toHaveAttribute("data-tone", "warn");
+    await expect(results.nth(2)).toContainText("The digital signature was removed, because changing the file breaks it.");
     await expect(results.nth(3)).toHaveAttribute("data-tone", "fail");
     await expect(results.nth(3)).toContainText("Unlock the PDF before editing");
 });

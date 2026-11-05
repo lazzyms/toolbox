@@ -87,6 +87,7 @@ export type ToolCommand =
   | "convert_images"
   | "inspect_pdf"
   | "crop_pdf"
+  | "resize_pdf"
   | "edit_pdf"
   | "export_pdf_scene"
   | "sign_pdf"
