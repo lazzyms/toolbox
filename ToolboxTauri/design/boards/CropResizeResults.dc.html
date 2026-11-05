@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Crop and Resize PDF results</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+.tb{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;font-size:13px;line-height:1.45;color:var(--fg);background:var(--bg);-webkit-font-smoothing:antialiased}
+.tb.dark{--bg:#0a0a0a;--side:#111111;--panel:#0f0f0f;--raise:#1c1c1c;--fg:#fafafa;--mut:#a3a3a3;--faint:#8a8a8a;--line:rgba(255,255,255,.08);--line2:rgba(255,255,255,.16);--sel:#262626;--pri:#ebebeb;--prifg:#171717;--bad:#ff6b6b;--warn:#f2b552;--ring:#a3a3a3;--scrim:rgba(0,0,0,.6);--seg-ok:#d4d4d4;--seg-wait:#2a2a2a}
+.tb.light{--bg:#ffffff;--side:#f7f7f7;--panel:#fcfcfc;--raise:#f2f2f2;--fg:#0a0a0a;--mut:#525252;--faint:#666666;--line:#e8e8e8;--line2:#d4d4d4;--sel:#ebebeb;--pri:#171717;--prifg:#fafafa;--bad:#c10007;--warn:#9a5800;--ring:#525252;--scrim:rgba(0,0,0,.28);--seg-ok:#262626;--seg-wait:#e5e5e5}
+.tb button,.tb input,.tb select{font:inherit;color:inherit}
+.btn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:7px;border:1px solid var(--line2);background:var(--raise);color:var(--fg);font-weight:500;cursor:pointer;white-space:nowrap;box-sizing:border-box;text-decoration:none}
+.btn.pri{background:var(--pri);color:var(--prifg);border-color:transparent}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--mut)}
+.btn.sm{height:26px;padding:0 9px;font-size:12px}
+.btn[aria-disabled=true]{opacity:.4;cursor:default}
+.kbd{font-size:11px;line-height:16px;padding:0 5px;border-radius:4px;border:1px solid var(--line2);color:var(--mut);font-weight:500}
+.btn.pri .kbd{border-color:currentColor;color:inherit;opacity:.6}
+.nav{display:flex;align-items:center;gap:9px;min-height:30px;padding:0 10px;border-radius:7px;color:var(--mut);text-decoration:none;border:0;background:none;width:100%;text-align:left;cursor:pointer;box-sizing:border-box}
+.nav.on{background:var(--sel);color:var(--fg);font-weight:500}
+.lbl{font-size:12px;font-weight:600}
+.hint{font-size:12px;color:var(--mut)}
+.num{font-variant-numeric:tabular-nums}
+svg.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.tb :focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+a{color:inherit}
+.seg{display:inline-flex;padding:2px;border-radius:8px;background:var(--raise);border:1px solid var(--line)}
+.seg button{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 11px;border:0;border-radius:6px;background:none;cursor:pointer;color:var(--mut);font-weight:500}
+.seg button[aria-checked=true]{background:var(--bg);color:var(--fg);box-shadow:0 1px 2px rgba(0,0,0,.25)}
+.seg[aria-disabled=true]{opacity:.5}
+.sect{border-top:1px solid var(--line);padding-top:12px;display:flex;flex-direction:column;gap:6px}
+.kv{display:grid;grid-template-columns:84px minmax(0,1fr);gap:4px 10px;font-size:12px}
+.kv dt{color:var(--mut)}.kv dd{margin:0}
+.rrow{display:grid;grid-template-columns:20px minmax(0,1fr) 84px 200px;gap:12px;align-items:center;padding:8px 20px;border-bottom:1px solid var(--line);min-height:36px}
+.chip{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;border-radius:999px;border:1px solid var(--line2);background:transparent;font-size:12px;cursor:pointer;color:var(--mut)}
+.chip[aria-pressed="true"]{background:var(--sel);color:var(--fg);font-weight:500}
+.lock{opacity:.5}
+</style>
+</helmet>
+<div class="{{themeClass}}" style="min-height: 800px; display: flex; flex-wrap: wrap">
+<aside aria-label="PDF Editor" style="flex: 1 1 220px; max-width: 232px; background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; padding: 14px 10px; box-sizing: border-box">
+<a class="nav" href="Main.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M5 12l6 6M5 12l6-6"></path></svg>All tools</a>
+<div style="padding: 16px 10px 6px; font-size: 12px; font-weight: 600; color: var(--faint)">PDF Editor</div>
+<nav aria-label="PDF Editor tools" style="display: flex; flex-direction: column; gap: 2px"><button class="nav" aria-pressed="false"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"></path></svg>Edit PDF</button><button class="nav" aria-pressed="false"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="7" height="7" rx="1"></rect><rect x="14" y="4" width="7" height="7" rx="1"></rect><rect x="3" y="14" width="7" height="7" rx="1"></rect><rect x="14" y="14" width="7" height="7" rx="1"></rect></svg>Organize Pages</button><button class="nav" aria-pressed="false"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4v5a5 5 0 0 0 5 5h7M18 4v5"></path><path d="M15 11l3 3-3 3"></path></svg>Merge PDF</button><button class="nav" aria-pressed="false"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18"></path><path d="M8 8L4 12l4 4M16 8l4 4-4 4"></path></svg>Split PDF</button><button class="nav on" aria-pressed="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2v14a2 2 0 0 0 2 2h14M2 6h14a2 2 0 0 1 2 2v14"></path></svg>Crop and Resize</button><button class="nav" aria-pressed="false"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4L7 20M17 4l-2 16M4 9h16M3 15h16"></path></svg>Page Numbers and Bates</button></nav>
+<div style="flex: 1"></div>
+<a class="nav" href="Settings.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"></path></svg>Settings<span class="kbd" style="margin-left: auto">{{settingsKey}}</span></a>
+<p class="hint" style="margin: 0; padding: 10px 10px 0">Files stay on this device.</p>
+</aside>
+<div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; position: relative">
+<header style="min-height: 52px; display: flex; align-items: center; gap: 14px; padding: 0 20px; border-bottom: 1px solid var(--line); flex-wrap: wrap">
+<h1 style="margin: 0; font-size: 15px; font-weight: 600">Crop and Resize PDF</h1>
+<div role="radiogroup" aria-label="Mode" class="seg" aria-disabled="{{locked}}"><button role="radio" aria-checked="{{cropOn}}" tabindex="{{cropTab}}">Crop pages</button><button role="radio" aria-checked="{{resizeOn}}" tabindex="{{resizeTab}}">Resize pages</button></div>
+<span class="hint">{{subtitle}}</span>
+<div style="flex: 1"></div>
+<button class="btn ghost"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"></circle><path d="M21 21l-6-6"></path></svg>Find a tool<span class="kbd">{{findKey}}</span></button>
+</header>
+<div style="flex: 1; display: flex; flex-wrap: wrap; min-height: 0">
+<section aria-label="{{listLabel}}" style="flex: 999 1 480px; min-width: 0; display: flex; flex-direction: column">
+<div style="padding: 14px 20px 12px; display: flex; flex-direction: column; gap: 10px; border-bottom: 1px solid var(--line)">
+<div role="status" aria-live="polite" style="display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap"><strong style="font-size: 15px">{{summary}}</strong><span class="hint">{{summaryHint}}</span></div>
+<div aria-hidden="true" style="display: flex; gap: 2px; height: 6px"><sc-for list="{{segments}}" as="s" hint-placeholder-count="8"><span style="flex: 1; border-radius: 2px; background: {{s.bg}}"></span></sc-for></div>
+<sc-if value="{{isDone}}" hint-placeholder-val="{{ true }}"><div role="group" aria-label="Show" style="display: flex; gap: 6px; flex-wrap: wrap; align-items: center"><sc-for list="{{chips}}" as="c" hint-placeholder-count="3"><button class="chip" aria-pressed="{{c.on}}">{{c.label}}<span style="color: var(--mut)">{{c.n}}</span></button></sc-for><div style="flex: 1"></div><button class="btn sm"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2"></path></svg>{{revealAll}}</button></div></sc-if>
+</div>
+<ul aria-label="Results by PDF" style="list-style: none; margin: 0; padding: 0; overflow: auto"><sc-for list="{{results}}" as="r" hint-placeholder-count="8"><li class="rrow">
+<span style="color: {{r.color}}; display: flex"><sc-if value="{{r.isOk}}" hint-placeholder-val="{{ true }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l5 5 9-10"></path></svg></sc-if><sc-if value="{{r.isWarn}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l10 18H2z"></path><path d="M12 10v5M12 18v.5"></path></svg></sc-if><sc-if value="{{r.isSkip}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"></path></svg></sc-if><sc-if value="{{r.isFail}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M9 9l6 6M15 9l-6 6"></path></svg></sc-if><sc-if value="{{r.isBusy}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9"></path></svg></sc-if><sc-if value="{{r.isWait}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke-dasharray="2 3"></circle></svg></sc-if></span>
+<span style="min-width: 0; display: flex; flex-direction: column"><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{r.name}}</span><sc-if value="{{r.detail}}" hint-placeholder-val="{{ true }}"><span class="hint">{{r.detail}}</span></sc-if></span>
+<span style="color: {{r.color}}">{{r.state}}</span>
+<span style="display: flex; gap: 4px; justify-content: flex-end; flex-wrap: wrap"><sc-if value="{{r.hasOut}}" hint-placeholder-val="{{ false }}"><button class="btn sm ghost" style="color: var(--fg)" aria-label="Open {{r.out}}">Open</button><button class="btn sm ghost" style="color: var(--fg)" aria-label="{{reveal}}: {{r.out}}">{{reveal}}</button></sc-if><sc-if value="{{r.hasPointer}}" hint-placeholder-val="{{ false }}"><button class="btn sm">{{r.pointer}}</button></sc-if></span>
+</li></sc-for></ul>
+</section><section aria-label="Options" style="flex: 1 1 300px; max-width: 360px; border-left: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column">
+<div style="padding: 16px 20px; display: flex; flex-direction: column; gap: 14px; flex: 1; overflow: auto">
+<div class="{{optsCls}}" style="display: flex; flex-direction: column; gap: 8px"><span class="lbl">{{settingsHead}}</span><dl class="kv" style="margin: 0"><sc-for list="{{settings}}" as="k" hint-placeholder-count="4"><dt>{{k.k}}</dt><dd>{{k.v}}</dd></sc-for></dl></div>
+<sc-if value="{{isRunning}}" hint-placeholder-val="{{ false }}"><p class="hint" style="margin: 0">Options are locked while the batch runs.</p></sc-if>
+<div class="sect"><span class="lbl">{{savedHead}}</span><span>{{outDir}}</span><span class="hint">Names end in {{suffix}}. A taken name gets -1, -2. Nothing was replaced.</span></div>
+<sc-if value="{{isDone}}" hint-placeholder-val="{{ true }}"><div class="sect"><span class="lbl">Not carried over</span><p class="hint" style="margin: 0">Digital signatures are removed, because changing a file breaks them. The row with a warning had one.</p></div></sc-if>
+</div>
+<footer style="padding: 14px 20px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 10px; flex-wrap: wrap">
+<span class="hint" style="flex: 1 1 100%">{{reason}}</span>
+<sc-if value="{{isRunning}}" hint-placeholder-val="{{ false }}"><button class="btn">Cancel batch<span class="kbd">Esc</span></button></sc-if>
+<sc-if value="{{isDone}}" hint-placeholder-val="{{ true }}"><button class="btn">Clear list</button><div style="flex: 1"></div><button class="btn pri">{{againLabel}}<span class="kbd">{{runKey}}</span></button></sc-if>
+</footer></section>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "state": {"editor": "enum", "options": ["Crop results", "Resize results", "Running"], "default": "Crop results"}, "$preview": {"width": 1280, "height": 800}}'>
+class Component extends DCLogic {
+renderVals() {
+const win = (this.props.platform ?? 'macOS') === 'Windows';
+const light = (this.props.theme ?? 'dark') === 'light';
+const state = this.props.state ?? 'Crop results';
+const running = state === 'Running', resize = state === 'Resize results', crop = !resize;
+const sep = win ? '\\' : '/';
+const dir = (...p) => [win ? 'C:\\Users\\Asha' : '~'].concat(p).join(sep);
+const v = { themeClass: light ? 'tb light' : 'tb dark', findKey: win ? 'Ctrl+K' : '⌘K', settingsKey: win ? 'Ctrl+,' : '⌘,', runKey: win ? 'Ctrl+Enter' : '⌘↵', reveal: win ? 'Show in File Explorer' : 'Show in Finder', revealAll: win ? 'Show all in File Explorer' : 'Show all in Finder' };
+Object.assign(v, { isRunning: running, isDone: !running, locked: String(running), optsCls: running ? 'lock' : '',
+cropOn: String(crop), resizeOn: String(resize), cropTab: crop ? '0' : '-1', resizeTab: resize ? '0' : '-1',
+subtitle: crop ? 'Trim the edges of every page.' : 'Change the paper size of every page.', listLabel: crop ? 'Cropped PDFs' : 'Resized PDFs',
+suffix: crop ? '-cropped' : '-resized', savedHead: running ? 'Saving to' : 'Saved to', againLabel: crop ? 'Crop again' : 'Resize again' });
+v.outDir = resize ? dir('Documents', 'Print shop') : 'Next to each original';
+v.settingsHead = crop ? 'Cropped with' : 'Resized with';
+v.settings = (crop
+? [['Crop by', 'Margins'], ['Margins', 'Top 15, right 30, bottom 15, left 30 mm'], ['Pages', running ? 'All pages' : '3-']]
+: [['Page size', 'A4, 210 × 297 mm'], ['Orientation', 'Match page'], ['Placement', 'Scale to fit, centered'], ['Pages', '3-']]).map((x) => ({ k: x[0], v: x[1] }));
+if (running) v.settingsHead = 'Cropping with';
+const R = [];
+const add = (name, k, state, detail, extra) => R.push(Object.assign({ name, state, detail, isOk: k === 'ok', isWarn: k === 'warn', isSkip: k === 'skip', isFail: k === 'fail', isBusy: k === 'busy', isWait: k === 'wait',
+color: k === 'warn' ? 'var(--warn)' : k === 'skip' || k === 'wait' ? 'var(--mut)' : k === 'fail' ? 'var(--bad)' : 'var(--fg)', hasOut: k === 'ok' || k === 'warn', out: '', hasPointer: false, pointer: '' }, extra || {}));
+const locked = () => add('payroll-2026.pdf', 'fail', 'Failed', 'Unlock the PDF before editing. It is password-protected. Nothing was saved.', { hasPointer: true, pointer: 'Open Remove Password' });
+const big = () => add('archive-2019-scans.pdf', 'fail', 'Failed', 'Its 1,240 pages are over the 1,000-page limit. Split it into smaller PDFs first. Nothing was saved.', { hasPointer: true, pointer: 'Open Split PDF' });
+const sig = 'The digital signature was removed, because changing the file breaks it.';
+if (running) {
+const names = ['lease-agreement.pdf', 'us-office-handbook.pdf', 'site-survey.pdf', 'vendor-nda-acme.pdf', 'board-pack-2026-q3.pdf', 'scan-batch-0412.pdf', 'scan-batch-0413.pdf', 'scan-batch-0414.pdf', 'scan-batch-0415.pdf', 'scan-batch-0416.pdf', 'scan-batch-0417.pdf', 'scan-batch-0418.pdf'];
+names.forEach((n, i) => {
+if (i < 3) add(n, 'ok', 'Cropped', `Saved as ${n.replace('.pdf', '-cropped.pdf')}.`, { out: n.replace('.pdf', '-cropped.pdf') });
+else if (i === 3) add(n, 'warn', 'Cropped', sig, { out: 'vendor-nda-acme-cropped.pdf' });
+else if (i === 4) add(n, 'busy', 'Cropping', 'Page 212 of 412.', { hasOut: false });
+else add(n, 'wait', 'Waiting', '', { hasOut: false });
+});
+v.summary = 'Cropping 48 PDFs';
+v.summaryHint = 'board-pack-2026-q3.pdf, PDF 5 of 48. 4 saved so far.';
+v.segments = Array.from({ length: 48 }, (_, i) => ({ bg: i === 3 ? 'var(--warn)' : i < 4 ? 'var(--seg-ok)' : i === 4 ? 'var(--line2)' : 'var(--seg-wait)' }));
+v.reason = 'Cancel stops after the current PDF. Files already saved are kept.';
+} else if (crop) {
+add('lease-agreement.pdf', 'ok', 'Cropped', 'Pages 3–14 cropped. Saved as lease-agreement-cropped.pdf.', { out: 'lease-agreement-cropped.pdf' });
+add('us-office-handbook.pdf', 'ok', 'Cropped', 'Pages 3–22 cropped. Saved as us-office-handbook-cropped-1.pdf, because the name was taken.', { out: 'us-office-handbook-cropped-1.pdf' });
+add('site-survey.pdf', 'ok', 'Cropped', 'Pages 3–9 cropped, including landscape page 4.', { out: 'site-survey-cropped.pdf' });
+add('vendor-nda-acme.pdf', 'warn', 'Cropped', `Pages 3–6 cropped. ${sig}`, { out: 'vendor-nda-acme-cropped.pdf' });
+add('receipts-q3.pdf', 'fail', 'Failed', 'The margins leave no area on page 3 (58 × 120 mm). Use smaller margins or a rectangle. Nothing was saved.');
+add('cover-letter.pdf', 'skip', 'Skipped', 'No pages in 3-. The PDF has 2 pages. Nothing was saved.');
+locked(); big();
+v.summary = 'Done. 4 cropped, 1 skipped, 3 failed';
+v.summaryHint = '4 files saved. 1 has a warning.';
+v.chips = [['All', 8], ['Needs attention', 4], ['Warnings', 1]];
+v.segments = ['ok', 'ok', 'ok', 'warn', 'fail', 'skip', 'fail', 'fail'];
+v.reason = 'Crop again uses the same settings on the PDFs that failed or were skipped.';
+} else {
+add('lease-agreement.pdf', 'skip', 'Skipped', 'Pages 3–14 are already A4. Nothing was saved.');
+add('us-office-handbook.pdf', 'ok', 'Resized', 'Pages 3–22 changed from Letter to A4, scaled to 97%.', { out: 'us-office-handbook-resized.pdf' });
+add('site-survey.pdf', 'ok', 'Resized', 'Pages 3–9 changed to A4, scaled to 97%. Page 4 stayed landscape.', { out: 'site-survey-resized.pdf' });
+add('vendor-nda-acme.pdf', 'warn', 'Resized', `Pages 3–6 changed to A4. ${sig}`, { out: 'vendor-nda-acme-resized.pdf' });
+add('receipts-q3.pdf', 'ok', 'Resized', 'Page 3 changed from 58 × 120 mm to A4, scaled up to 248%.', { out: 'receipts-q3-resized.pdf' });
+add('cover-letter.pdf', 'skip', 'Skipped', 'No pages in 3-. The PDF has 2 pages. Nothing was saved.');
+locked(); big();
+v.summary = 'Done. 4 resized, 2 skipped, 2 failed';
+v.summaryHint = '4 files saved. 1 has a warning.';
+v.chips = [['All', 8], ['Needs attention', 4], ['Warnings', 1]];
+v.segments = ['skip', 'ok', 'ok', 'warn', 'ok', 'skip', 'fail', 'fail'];
+v.reason = 'Resize again uses the same settings on the PDFs that failed or were skipped.';
+}
+if (!running) {
+v.chips = v.chips.map((c, i) => ({ label: c[0], n: String(c[1]), on: i === 0 ? 'true' : 'false' }));
+v.segments = v.segments.map((k) => ({ bg: k === 'warn' ? 'var(--warn)' : k === 'skip' ? 'var(--mut)' : k === 'fail' ? 'var(--bad)' : 'var(--seg-ok)' }));
+} else v.chips = [];
+v.results = R;
+return v;
+}
+}
+</script>
+</body>
+</html>

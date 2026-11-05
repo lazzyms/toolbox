@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ToolScaffold } from "../components/ToolScaffold";
-import type { ImagePreview, ToolDefinition, ToolResult } from "../contracts";
+import type { ImageMetadataInspection, ImagePreview, ToolDefinition, ToolResult } from "../contracts";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -38,7 +38,7 @@ export const MediaWorkspaceView = ({ utility: activeUtility, initialPaths, onFil
   const [iconPreset, setIconPreset] = useState("macos");
   const [iconSizes, setIconSizes] = useState(iconSizesByPreset.macos);
   const [metadataMode, setMetadataMode] = useState<"inspect" | "strip">("strip");
-  const [report, setReport] = useState<unknown[]>([]);
+  const [report, setReport] = useState<ImageMetadataInspection[]>([]);
   const [selectedTiffFrameIndex, setSelectedTiffFrameIndex] = useState(0);
   const [tiffInspection, setTiffInspection] = useState<TiffInspection>({ kind: "idle" });
 
@@ -186,7 +186,7 @@ export const MediaWorkspaceView = ({ utility: activeUtility, initialPaths, onFil
                 variant="ghost"
                 size="sm"
                 disabled={loading || files.length === 0}
-                onClick={async () => setReport(await invoke<unknown[]>("inspect_image_metadata", { request: { paths: files, outputLocation } }))}
+                onClick={async () => setReport(await invoke<ImageMetadataInspection[]>("inspect_image_metadata", { request: { paths: files, outputLocation } }))}
               >
                 Inspect metadata
               </Button>
