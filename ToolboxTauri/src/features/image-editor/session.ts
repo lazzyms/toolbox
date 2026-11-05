@@ -1,4 +1,4 @@
-import type { ConvertImagesRequest, OutputLocation } from "../../contracts";
+import type { ConvertImagesRequest, OutputLocation, WatermarkOptions } from "../../contracts";
 
 export type ImageEditOperation =
   | { kind: "convert"; format: ConvertImagesRequest["format"] }
@@ -26,7 +26,7 @@ export type ImageEditOperation =
       anchor: string;
     }
   | { kind: "tone"; brightness: number; contrast: number; saturation: number; exposure: number }
-  | { kind: "watermark"; text: string; opacity: number; x: number; y: number };
+  | ({ kind: "watermark" } & WatermarkOptions);
 
 export interface ImageEditPlan {
   edits: ImageEditOperation[];
