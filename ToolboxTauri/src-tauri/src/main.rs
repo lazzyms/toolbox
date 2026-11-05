@@ -412,7 +412,7 @@ async fn image_metadata(events: RunEvents, request: tools::MetadataRequest) -> V
     BatchRunner::run(&events, "image_metadata", request.paths.clone(), &request.output_location, &request, tools::strip_metadata)
 }
 #[tauri::command]
-fn inspect_image_metadata(request: tools::MetadataRequest) -> Vec<Result<tools::MetadataReport, String>> { request.paths.into_iter().map(tools::inspect_metadata).collect() }
+fn inspect_image_metadata(request: tools::MetadataRequest) -> Vec<crate::kit::images::metadata::MetadataInspection> { request.paths.into_iter().map(crate::kit::images::metadata::inspect).collect() }
 
 #[tauri::command]
 fn inspect_image_preview(request: tools::ImagePreviewRequest) -> Result<tools::ImagePreview, String> { tools::inspect_preview(&request) }
@@ -2805,5 +2805,157 @@ mod command_tests {
         assert_eq!(outcomes[1].output_paths(), [open.join("scan-stripped.png")]);
         assert_eq!(std::fs::read(&blocked).unwrap(), original, "originals stay untouched");
         assert_eq!(listing, vec![std::ffi::OsString::from("scan.png")], "nothing is left in the read-only folder");
+    }
+
+    mod image_metadata_inspection {
+        use super::*;
+        use crate::kit::images::metadata::fixtures::{self, Wanted};
+        use crate::kit::images::metadata::{ImageMetadata, MetadataErrorCode, MetadataFormat, MetadataInspection};
+
+        const FORMATS: [(MetadataFormat, &str); 5] = [(MetadataFormat::Jpeg, "jpg"), (MetadataFormat::Png, "png"), (MetadataFormat::Webp, "webp"), (MetadataFormat::Tiff, "tiff"), (MetadataFormat::Heic, "heic")];
+
+        fn fixture(format: MetadataFormat, wanted: Wanted) -> Vec<u8> {
+            match format {
+                MetadataFormat::Jpeg => fixtures::jpeg(wanted),
+                MetadataFormat::Png => fixtures::png(wanted),
+                MetadataFormat::Webp => fixtures::webp(wanted),
+                MetadataFormat::Tiff => fixtures::tiff(wanted),
+                MetadataFormat::Heic => fixtures::heic(wanted),
+            }
+        }
+
+        fn expected(format: MetadataFormat, wanted: Wanted) -> ImageMetadata {
+            let textual = matches!(format, MetadataFormat::Jpeg | MetadataFormat::Png | MetadataFormat::Tiff);
+            let exif = wanted.exif || wanted.gps || (wanted.orientation.is_some() && format != MetadataFormat::Tiff);
+            ImageMetadata {
+                format, exif, gps: wanted.gps, xmp: wanted.xmp, iptc: wanted.iptc && textual, comments: wanted.comments && textual, icc: wanted.icc,
+                orientation: wanted.orientation.filter(|value| (1..=8).contains(value)).map(|value| value as u8),
+            }
+        }
+
+        fn assert_decodes(format: MetadataFormat, bytes: &[u8]) {
+            match format {
+                MetadataFormat::Heic => { heif::decode(bytes).expect("HEIC fixture must decode"); }
+                _ => { image::load_from_memory(bytes).expect("fixture must decode"); }
+            }
+        }
+
+        fn inspect_files(root: &PathBuf, files: Vec<(String, Vec<u8>)>) -> Vec<MetadataInspection> {
+            let paths = files.iter().map(|(name, bytes)| { let path = root.join(name); std::fs::write(&path, bytes).unwrap(); path }).collect::<Vec<_>>();
+            let reports = inspect_image_metadata(MetadataRequest { paths: paths.clone(), output_location: OutputLocation::AlongsideInput });
+            for (path, (_, bytes)) in paths.iter().zip(&files) { assert_eq!(&std::fs::read(path).unwrap(), bytes, "inspection must not modify {}", path.display()); }
+            assert_eq!(reports.len(), paths.len());
+            for (report, path) in reports.iter().zip(&paths) {
+                let reported = match report { MetadataInspection::Report(report) => &report.path, MetadataInspection::Error(error) => &error.path };
+                assert_eq!(reported, path, "one result per file, in request order");
+            }
+            reports
+        }
+
+        fn report(inspection: &MetadataInspection) -> &ImageMetadata {
+            match inspection { MetadataInspection::Report(report) => &report.metadata, MetadataInspection::Error(error) => panic!("{}: {}", error.path.display(), error.error.message) }
+        }
+
+        fn error_code(inspection: &MetadataInspection) -> MetadataErrorCode {
+            match inspection { MetadataInspection::Error(error) => error.error.code, MetadataInspection::Report(report) => panic!("{} unexpectedly read as {:?}", report.path.display(), report.metadata) }
+        }
+
+        #[test]
+        fn inspect_reports_each_category_for_every_format() {
+            let root = sandbox("metadata-categories");
+            let cases = [
+                ("none", Wanted::default()),
+                ("exif", Wanted { exif: true, ..Wanted::default() }),
+                ("gps", Wanted { gps: true, ..Wanted::default() }),
+                ("xmp", Wanted { xmp: true, ..Wanted::default() }),
+                ("iptc", Wanted { iptc: true, ..Wanted::default() }),
+                ("comments", Wanted { comments: true, ..Wanted::default() }),
+                ("icc", Wanted { icc: true, ..Wanted::default() }),
+                ("all", Wanted { exif: true, gps: true, orientation: Some(6), xmp: true, iptc: true, comments: true, icc: true }),
+            ];
+            for (format, extension) in FORMATS {
+                let files = cases.iter().map(|(name, wanted)| {
+                    let bytes = fixture(format, *wanted);
+                    assert_decodes(format, &bytes);
+                    (format!("{name}.{extension}"), bytes)
+                }).collect::<Vec<_>>();
+                let reports = inspect_files(&root, files);
+                for (inspection, (name, wanted)) in reports.iter().zip(cases) {
+                    assert_eq!(report(inspection), &expected(format, wanted), "{format:?} {name}");
+                }
+            }
+            let wire = serde_json::to_value(&inspect_image_metadata(MetadataRequest { paths: vec![root.join("all.jpg")], output_location: OutputLocation::AlongsideInput })[0]).unwrap();
+            assert_eq!(wire, serde_json::json!({
+                "status": "report", "path": root.join("all.jpg"), "format": "jpeg",
+                "exif": true, "gps": true, "xmp": true, "iptc": true, "comments": true, "icc": true, "orientation": 6,
+            }));
+            let _ = std::fs::remove_dir_all(root);
+        }
+
+        #[test]
+        fn inspect_reports_orientation_values_or_absent() {
+            let root = sandbox("metadata-orientation");
+            for (format, extension) in FORMATS {
+                let values = [None, Some(1), Some(2), Some(3), Some(4), Some(5), Some(6), Some(7), Some(8), Some(9)];
+                let files = values.iter().map(|value| (format!("{}.{extension}", value.map_or("absent".to_string(), |value: u16| value.to_string())), fixture(format, Wanted { orientation: *value, ..Wanted::default() }))).collect();
+                let reports = inspect_files(&root, files);
+                for (inspection, value) in reports.iter().zip(values) {
+                    assert_eq!(report(inspection).orientation, value.filter(|value| *value <= 8).map(|value| value as u8), "{format:?} {value:?}");
+                }
+            }
+            let absent = serde_json::to_value(&inspect_image_metadata(MetadataRequest { paths: vec![root.join("absent.png")], output_location: OutputLocation::AlongsideInput })[0]).unwrap();
+            assert_eq!(absent["orientation"], serde_json::Value::Null);
+            let _ = std::fs::remove_dir_all(root);
+        }
+
+        #[test]
+        fn inspect_returns_typed_errors_per_file_for_damaged_input() {
+            let root = sandbox("metadata-damaged");
+            let all = Wanted { exif: true, gps: true, orientation: Some(3), xmp: true, iptc: true, comments: true, icc: true };
+            let mut files = Vec::new();
+            let mut codes = Vec::new();
+            for (format, extension) in FORMATS {
+                let bytes = fixture(format, all);
+                files.push((format!("truncated.{extension}"), bytes[..bytes.len() * 2 / 3].to_vec()));
+                codes.push(MetadataErrorCode::Truncated);
+                files.push((format!("valid.{extension}"), bytes));
+                codes.push(MetadataErrorCode::Truncated);
+            }
+            let mut bad_crc = fixtures::png(all);
+            bad_crc[40] ^= 0xFF;
+            files.push(("bad-crc.png".into(), bad_crc));
+            codes.push(MetadataErrorCode::Corrupt);
+            let mut bad_exif = fixtures::jpeg(Wanted { exif: true, ..Wanted::default() });
+            bad_exif[12] = b'X';
+            files.push(("bad-exif.jpg".into(), bad_exif));
+            codes.push(MetadataErrorCode::Corrupt);
+            let mut gif = std::io::Cursor::new(Vec::new());
+            image::RgbImage::new(4, 4).write_to(&mut gif, image::ImageFormat::Gif).unwrap();
+            files.push(("animation.gif".into(), gif.into_inner()));
+            codes.push(MetadataErrorCode::UnsupportedFormat);
+
+            let reports = inspect_files(&root, files);
+            for (index, (inspection, code)) in reports.iter().zip(&codes).enumerate() {
+                if index < 10 && index % 2 == 1 { report(inspection); } else { assert_eq!(error_code(inspection), *code, "{inspection:?}"); }
+            }
+            let missing = inspect_image_metadata(MetadataRequest { paths: vec![root.join("missing.png")], output_location: OutputLocation::AlongsideInput });
+            assert_eq!(error_code(&missing[0]), MetadataErrorCode::Unreadable);
+            let wire = serde_json::to_value(&missing[0]).unwrap();
+            assert_eq!((wire["status"].as_str(), wire["code"].as_str(), wire["message"].is_string()), (Some("error"), Some("unreadable"), true));
+            let _ = std::fs::remove_dir_all(root);
+        }
+
+        #[test]
+        fn every_truncation_of_every_format_is_an_error_and_never_panics() {
+            let all = Wanted { exif: true, gps: true, orientation: Some(8), xmp: true, iptc: true, comments: true, icc: true };
+            for (format, _) in FORMATS {
+                for wanted in [Wanted::default(), all] {
+                    let bytes = fixture(format, wanted);
+                    for length in 0..bytes.len() {
+                        assert!(crate::kit::images::metadata::read(&bytes[..length]).is_err(), "{format:?} cut at {length} of {} read as valid", bytes.len());
+                    }
+                }
+            }
+        }
     }
 }
