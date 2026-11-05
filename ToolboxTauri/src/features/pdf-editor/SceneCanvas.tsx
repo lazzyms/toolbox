@@ -1,8 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { KeyboardEvent, MouseEvent as ReactMouseEvent, PointerEvent } from 'react';
 import { Textarea } from '../../components/ui/textarea';
-import { visibleBounds } from './scene';
-import type { SceneCanvasProps, SceneObject, ScenePage, ScenePoint, SceneRect, SceneShape, WatermarkPattern } from './scene';
+import { textLines, visibleBounds } from './scene';
+import type { SceneCanvasProps, SceneObject, ScenePage, ScenePoint, SceneRect, SceneRedaction, SceneShape, WatermarkPattern } from './scene';
 import './scene-canvas.css';
 
 export function sceneTransform(page: ScenePage) {
@@ -19,7 +19,7 @@ export function sceneTransform(page: ScenePage) {
 }
 
 type Gesture = { pointerId: number; start: ScenePoint; base: ScenePage; next: ScenePage;
-  mode: 'create' | 'move' | 'resize' | 'crop' | 'text-selection' | 'pan'; id?: string; corner?: string; points: ScenePoint[]; changed: boolean;
+  mode: 'create' | 'move' | 'resize' | 'crop' | 'text-selection' | 'pan' | 'redact'; id?: string; corner?: string; points: ScenePoint[]; changed: boolean;
   clientStart?: ScenePoint; scrollStart?: ScenePoint };
 const rectangle = (a: ScenePoint, b: ScenePoint): SceneRect => ({ x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), width: Math.max(1, Math.abs(a.x - b.x)), height: Math.max(1, Math.abs(a.y - b.y)) });
 
@@ -110,7 +110,7 @@ function Artwork({ page, object }: { page: ScenePage; object: SceneObject }) {
   return shapeArtwork(object.shape, r, object.color, object.opacity);
 }
 
-export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPreview, tool, selectedId, zoom, onSelect, onCommit, makeObject }: SceneCanvasProps) {
+export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPreview, tool, selectedId, zoom, onSelect, onCommit, makeObject, redactionFill = '#000000', redactionPreview = false, searchMatches = [] }: SceneCanvasProps) {
   const host = useRef<HTMLDivElement>(null);
   const surface = useRef<SVGSVGElement>(null);
   const coordinates = useRef<SVGGElement>(null);
@@ -223,6 +223,14 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     if (!selection || selection.isCollapsed || !selection.toString().trim() || !selection.rangeCount) return [];
     return Array.from(selection.getRangeAt(0).getClientRects()).map(rect => rectangle(pointFromClient(rect.left, rect.top), pointFromClient(rect.right, rect.bottom))).filter(rect => rect.width > 2 && rect.height > 2);
   }
+  /** Whole words under the selection, one mark per line, so a redaction never leaves part of a word behind. */
+  function selectedRunMarks(): SceneRedaction[] {
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || !selection.toString().trim()) return [];
+    const runs = Array.from(coordinates.current?.querySelectorAll<SVGTextElement>('[data-text-run]') ?? [])
+      .filter((element) => selection.containsNode(element, true)).map((element) => textRuns[Number(element.dataset.textRun)]).filter(Boolean);
+    return textLines(runs).map(({ rect, text }) => ({ id: crypto.randomUUID(), rect, color: redactionFill, label: `“${text}”` }));
+  }
   function down(event: PointerEvent<SVGSVGElement>) {
     if (event.button === 1 || (event.button === 0 && spacePressed.current)) {
       event.preventDefault();
@@ -236,13 +244,25 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     if (event.button !== 0 || gesture.current) return;
     const target = event.target as Element;
     if (target.closest('[data-text-editor]')) return;
-    const textTarget = tool === 'highlight' && target.closest('[data-text-run]');
+    const textTarget = (tool === 'highlight' || tool === 'redact') && target.closest('[data-text-run]');
     const start = point(event);
     if (textTarget) {
       // Leave the browser's selection gesture intact. The selection is turned
-      // into one or more scene highlights when the pointer is released.
+      // into scene highlights or redaction marks when the pointer is released.
       gesture.current = { pointerId: event.pointerId, start, base: page, next: page, mode: 'text-selection', points: [start], changed: false };
       surface.current?.setPointerCapture(event.pointerId);
+      return;
+    }
+    if (tool === 'redact') {
+      const markId = target.closest('[data-redaction]')?.getAttribute('data-redaction');
+      if (markId) { onSelect(markId); return; }
+      const mark = { id: crypto.randomUUID(), rect: { x: start.x, y: start.y, width: 1, height: 1 }, color: redactionFill };
+      const next = { ...page, redactions: [...(page.redactions ?? []), mark] };
+      event.preventDefault();
+      surface.current?.setPointerCapture(event.pointerId);
+      onSelect(mark.id);
+      gesture.current = { pointerId: event.pointerId, start, base: page, next, mode: 'redact', id: mark.id, points: [start], changed: false };
+      setDraft(next);
       return;
     }
     const id = target.closest('[data-object]')?.getAttribute('data-object') ?? undefined;
@@ -288,6 +308,7 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     const dx = p.x - g.start.x, dy = p.y - g.start.y;
     g.changed ||= Math.abs(dx) + Math.abs(dy) > 0.5;
     if (g.mode === 'crop') g.next = { ...g.base, crop: rectangle(g.start, p) };
+    else if (g.mode === 'redact') g.next = { ...g.next, redactions: g.next.redactions?.map(mark => mark.id === g.id ? { ...mark, rect: rectangle(g.start, p) } : mark) };
     else g.next = { ...g.next, objects: g.next.objects.map(object => {
       if (object.id !== g.id) return object;
       const original = g.base.objects.find(o => o.id === g.id) ?? object;
@@ -318,7 +339,9 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     if (g.mode === 'pan') return;
     if (g.mode === 'text-selection') {
       if (!cancel) {
-        const rects = selectedTextRects();
+        const marks = tool === 'redact' ? selectedRunMarks() : [];
+        if (marks.length) { onCommit({ ...g.base, redactions: [...(g.base.redactions ?? []), ...marks] }); onSelect(null); }
+        const rects = tool === 'redact' ? [] : selectedTextRects();
         if (rects.length) onCommit({ ...g.base, objects: [...g.base.objects, ...rects.map(rect => ({ ...makeObject('highlight', rect), rect, highlightMode: 'text-selection' as const }))] });
       }
       window.getSelection()?.removeAllRanges();
@@ -326,7 +349,12 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     }
     setDraft(null);
     if (!cancel && g.changed) onCommit(g.next);
-    else if (g.mode === 'create') onSelect(null);
+    else if (g.mode === 'create' || g.mode === 'redact') onSelect(null);
+  }
+  function markKey(event: KeyboardEvent<SVGElement>, id: string) {
+    if (event.key !== 'Delete' && event.key !== 'Backspace') return;
+    event.preventDefault(); event.stopPropagation(); onSelect(null);
+    onCommit({ ...page, redactions: page.redactions?.filter(mark => mark.id !== id) });
   }
   function key(event: KeyboardEvent<SVGElement>, object: SceneObject, corner?: string) {
     if (event.key === 'Escape') { cancelGesture(); onSelect(null); return; }
@@ -356,8 +384,8 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
           {sourcePreview && <image href={sourcePreview} x={0} y={0} width={page.width} height={page.height} preserveAspectRatio="none" />}
           {shown.objects.map(object => <Artwork key={object.id} page={page} object={object} />)}
         </g>}
-        {tool === 'highlight' && textRuns.length > 0 && <g className="scene-text-layer" aria-label="Selectable PDF text">
-          {textRuns.map((run, index) => <text key={`${index}-${run.x}-${run.y}`} className="scene-text-run" data-text-run="true" x={run.x} y={run.y + run.height} fontSize={Math.max(6, run.height)} fontFamily="Helvetica, Arial, sans-serif" fill="currentColor" opacity="0.001">{run.text}</text>)}
+        {(tool === 'highlight' || tool === 'redact') && textRuns.length > 0 && <g className="scene-text-layer" aria-label="Selectable PDF text">
+          {textRuns.map((run, index) => <text key={`${index}-${run.x}-${run.y}`} className="scene-text-run" data-text-run={index} x={run.x} y={run.y + run.height} fontSize={Math.max(6, run.height)} fontFamily="Helvetica, Arial, sans-serif" fill="currentColor" opacity="0.001">{run.text}</text>)}
         </g>}
         {shown.objects.map((object, index) => <g key={object.id}>
           <rect {...object.rect} data-object={object.id} tabIndex={0} role="button" aria-label={`${object.kind} object ${index + 1}`} aria-pressed={selectedId === object.id} className={`scene-object-hit scene-object-${object.kind}`} onFocus={() => onSelect(object.id)} onKeyDown={e => key(e, object)} onDoubleClick={e => beginTextEdit(e, object)} />
@@ -369,6 +397,11 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
             {object.kind !== 'watermark' && (['nw', 'ne', 'sw', 'se'] as const).map(corner => <rect key={corner} data-object={object.id} data-corner={corner} x={(corner.includes('w') ? object.rect.x : object.rect.x + object.rect.width) - 5 / scale} y={(corner.includes('n') ? object.rect.y : object.rect.y + object.rect.height) - 5 / scale} width={10 / scale} height={10 / scale} tabIndex={0} role="button" aria-label={`Resize ${object.kind} ${corner}`} className="scene-resize-handle" strokeWidth={1 / scale} onKeyDown={e => key(e, object, corner)} />)}
           </g>}
         </g>)}
+        {tool === 'redact' && searchMatches.map((rect, index) => <rect key={`match-${index}`} {...rect} className="scene-search-match" aria-hidden="true" />)}
+        {shown.redactions?.map((mark, index) => <rect key={mark.id} {...mark.rect} data-redaction={mark.id} data-preview={redactionPreview}
+          className="scene-redaction" style={redactionPreview ? { fill: mark.color } : undefined}
+          tabIndex={tool === 'redact' ? 0 : -1} role="button" aria-label={`Redaction mark ${index + 1}${mark.label ? `, ${mark.label}` : ''}`} aria-pressed={selectedId === mark.id}
+          onFocus={() => { if (tool === 'redact') onSelect(mark.id); }} onKeyDown={e => markKey(e, mark.id)} />)}
         {draft && gesture.current?.mode === 'crop' && draft.crop && <rect {...draft.crop} className="scene-crop-outline" strokeWidth={2 / scale} pointerEvents="none" />}
       </g>
     </svg>
