@@ -1,4 +1,4 @@
-import type { ErrorKind, JobOutcome, OutcomePointer, OutcomeWarning, ToolError } from "../contracts";
+import type { ErrorKind, JobOutcome, OutcomePointer, OutcomeWarning, ToolError, WarningCode } from "../contracts";
 import { UtilityRegistry } from "../registry";
 
 export type RowTone = "ok" | "warn" | "skip" | "fail";
@@ -53,9 +53,15 @@ export const warningText = (warning: OutcomeWarning): string => {
         case "renamedToAvoidReplacing":
             return `Saved as ${warning.details.finalName}. Renamed to avoid replacing an existing file.`;
         case "precisionReduced":
-            return "Some values were rounded to the precision this format can store.";
+            return "Saved as 8-bit sRGB. The original had more colour depth.";
+        case "transparencyFlattened":
+            return "Transparent areas were flattened onto white, because JPEG has none.";
     }
 };
+
+// Notes say how a finished file was saved. They show on its row but leave it done, not warned.
+const noteCodes: ReadonlySet<WarningCode> = new Set(["precisionReduced", "transparencyFlattened"]);
+const isNote = (warning: OutcomeWarning) => noteCodes.has(warning.code);
 
 const pointerView = (pointer: OutcomePointer | null): RowPointer | null => {
     if (!pointer) return null;
@@ -78,14 +84,16 @@ export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput =
     switch (outcome.state) {
         case "succeeded": {
             const first = outcome.outputPaths[0] ?? null;
-            const warned = warnings.length > 0;
+            const notes = outcome.warnings.filter(isNote).map(warningText);
+            const cautions = outcome.warnings.filter((warning) => !isNote(warning)).map(warningText);
+            const warned = cautions.length > 0;
             const byOutput = namedByOutput && first !== null;
             return {
                 ...(byOutput ? { name: fileName(first), fullPath: first } : input),
                 tone: warned ? "warn" : "ok",
                 stateLabel: resultVerb,
-                spokenState: warned ? `${resultVerb} with ${warnings.length === 1 ? "a warning" : "warnings"}` : resultVerb,
-                detailLines: nonEmpty(warned ? [...warnings, outcome.detail] : [first && !byOutput ? outputSummary(outcome.outputPaths) : "", outcome.detail]),
+                spokenState: warned ? `${resultVerb} with ${cautions.length === 1 ? "a warning" : "warnings"}` : resultVerb,
+                detailLines: nonEmpty(warned ? [...cautions, outcome.detail, ...notes] : [first && !byOutput ? outputSummary(outcome.outputPaths) : "", outcome.detail, ...notes]),
                 openOutput: first ? { path: first, label: outcome.outputPaths.length > 1 ? "Open first" : "Open" } : null,
                 revealOutput: first,
                 pointer: null,
@@ -149,7 +157,7 @@ export const resultTally = (results: JobOutcome[], resultVerb: string): string =
 
 export const resultSummary = (results: JobOutcome[], resultVerb: string): ResultSummary => {
     const verb = resultVerb.toLowerCase();
-    const warned = results.filter((result) => result.state === "succeeded" && result.warnings.length > 0).length;
+    const warned = results.filter((result) => result.state === "succeeded" && result.warnings.some((warning) => !isNote(warning))).length;
     const cancelled = results.some(isCancelled);
     const hints = [
         cancelled ? "Finished files were kept. Nothing was half-written." : null,
