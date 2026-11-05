@@ -8,7 +8,8 @@ import { NativeSelect } from '../../components/ui/native-select';
 import { RadioGroup, RadioGroupItem } from '../../components/ui/radio-group';
 import { ToggleGroup, ToggleGroupItem } from '../../components/ui/toggle-group';
 import { useToolAvailability } from '../../ToolAvailabilityContext';
-import type { PdfFormField, PdfFormInspection } from './contracts';
+import type { PdfFormEntry, PdfFormField, PdfFormInspection } from './contracts';
+import { formChoiceText, isFormEntryEmpty } from './form-checks';
 import type { SceneObject, ScenePage, SceneShape, SceneTool, SignatureMode, TextAlign, TextFontFamily, TextStyle, WatermarkPattern } from './scene';
 import type { SubToolId } from './subtools';
 
@@ -34,8 +35,10 @@ export interface SubToolInspectorProps {
   watermarkPattern: WatermarkPattern; setWatermarkPattern: (value: WatermarkPattern) => void;
   addFixedWatermark: () => void;
   form: PdfFormInspection | null;
-  formValue: (field: PdfFormField) => string | boolean;
+  formValue: (field: PdfFormField) => PdfFormEntry;
+  formFlag: (field: PdfFormField) => string | null;
   goToField: (field: PdfFormField) => void;
+  goToNextRequired: () => void;
   switchToAddText: () => void;
 }
 type Panel = ComponentType<SubToolInspectorProps>;
@@ -202,7 +205,7 @@ const pageList = (pages: number[]) => pages.length === 1 ? `page ${pages[0]}`
   : `pages ${pages.slice(0, -1).join(', ')} and ${pages[pages.length - 1]}`;
 const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
 
-const FormGuide: Panel = ({ page, form, formValue, goToField, switchToAddText }) => {
+const FormGuide: Panel = ({ page, form, formValue, formFlag, goToField, goToNextRequired, switchToAddText }) => {
   if (!form) return <p className="scene-property-note" role="status">Reading the form fields…</p>;
   if (form.unsupported || !form.fields.length) {
     const [headline, ...rest] = (form.unsupported ?? 'This PDF has no form fields to fill.').split(/(?<=\.) /);
@@ -215,21 +218,29 @@ const FormGuide: Panel = ({ page, form, formValue, goToField, switchToAddText })
       <Button variant="outline" size="sm" className="self-start" onClick={switchToAddText}>Use Add text instead</Button>
     </>;
   }
-  const empty = (field: PdfFormField) => formValue(field) === '' || formValue(field) === false;
   const pages = [...new Set(form.fields.map((field) => field.widgets[0].page + 1))].sort((a, b) => a - b);
-  const missing = form.fields.filter((field) => field.required && empty(field)).length;
+  const missing = form.fields.filter((field) => field.required && isFormEntryEmpty(formValue(field))).length;
+  const invalid = form.fields.filter((field) => (formFlag(field) ?? 'Required') !== 'Required').length;
   const status = (field: PdfFormField) => {
     const value = formValue(field);
-    if (field.type === 'checkbox') return value ? 'Checked' : field.required ? 'Required, not checked' : null;
-    if (value !== '') return <Check aria-label="Filled" />;
+    const flag = formFlag(field);
+    const flagged = (text: string) => flag ? <span className="text-destructive">{text}</span> : text;
+    if (flag && flag !== 'Required') return flagged(flag);
+    if (field.type === 'checkbox') return value ? 'Checked' : field.required ? flagged('Required, not checked') : null;
+    if (!isFormEntryEmpty(value)) return field.type === 'text' ? <Check aria-label="Filled" /> : formChoiceText(field, value);
     if (field.widgets[0].page !== page.sourceIndex) return `Page ${field.widgets[0].page + 1}${field.required ? ', required' : ''}`;
-    return field.required ? 'Required, empty' : field.readOnly ? 'Read-only' : null;
+    return field.required ? flagged('Required, empty') : field.readOnly ? 'Read-only' : null;
   };
+  const problems = [
+    invalid ? `${plural(invalid, "field has an entry that isn't valid", "fields have entries that aren't valid")}` : '',
+    missing ? `${plural(missing, 'required field is', 'required fields are')} still empty` : '',
+  ].filter(Boolean).join(', and ');
   return <>
     <p className="scene-property-note">Type into the fields on the page. Tab moves to the next field in the order below.</p>
     <Card className="scene-form-note py-0" role="note"><CardContent className="scene-form-note-content">
-      <Info aria-hidden="true" /><p>{`${plural(form.fields.length, 'field', 'fields')} on ${pageList(pages)}.`}{missing ? ` ${plural(missing, 'required field is', 'required fields are')} still empty.` : ''}</p>
+      <Info aria-hidden="true" /><p>{`${plural(form.fields.length, 'field', 'fields')} on ${pageList(pages)}.`}{problems ? ` ${problems}.` : ''}</p>
     </CardContent></Card>
+    <Button variant="outline" size="sm" className="self-start" disabled={!missing} onClick={goToNextRequired}>Go to next empty required field</Button>
     <div className="scene-inspector-field"><span className="text-sm font-medium" id="scene-form-fields">Fields</span>
       <ol className="scene-form-fields" aria-labelledby="scene-form-fields">
         {form.fields.map((field) => <li key={field.name}>

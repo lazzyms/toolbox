@@ -1,4 +1,4 @@
-import type { PdfDocument, PdfFormField, PdfTextRun } from './contracts';
+import type { PdfDocument, PdfFormEntry, PdfFormField, PdfTextRun } from './contracts';
 
 // All geometry is in points, from the top-left of the unrotated visible source page.
 export interface SceneRect { x: number; y: number; width: number; height: number }
@@ -63,8 +63,12 @@ export interface SceneCanvasProps {
   makeObject: (kind: SceneObject['kind'], rect: SceneRect) => SceneObject;
   // Form fields on this page, in Tab order; shown only while filling the form.
   formFields?: PdfFormField[];
-  formValue?: (field: PdfFormField) => string | boolean;
-  onFormValue?: (field: PdfFormField, value: string | boolean) => void;
+  formValue?: (field: PdfFormField) => PdfFormEntry;
+  onFormValue?: (field: PdfFormField, value: PdfFormEntry) => void;
+  // The flag shown under a field the user left empty or invalid, such as "Required".
+  formFlag?: (field: PdfFormField) => string | null;
+  onFormFocus?: (field: PdfFormField) => void;
+  onFormLeave?: (field: PdfFormField) => void;
 }
 export const sceneFromDocument = (document: PdfDocument): PdfScene => ({
   pages: document.pages.map((page) => ({ id: `source-${page.index}`, sourceIndex: page.index,
