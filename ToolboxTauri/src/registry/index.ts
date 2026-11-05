@@ -28,6 +28,7 @@ const UtilityMetadata: Array<Omit<ToolDefinition, "capability" | "status">> = [
     { id: "pdf-repair", title: "Repair PDF", shortTitle: "Repair", resultVerb: "Repaired", runningVerb: "Repairing", blurb: "Fix a damaged PDF that won't open properly.", symbol: "tool", category: "PDF", command: "repair_pdf", verification: "pdf-repair", view: "pdf-repair" },
     { id: "pdf-redact", title: "Redact PDF", shortTitle: "Redact", resultVerb: "Redacted", runningVerb: "Redacting", blurb: "Black out private details so they can't be recovered.", symbol: "eye-off", category: "PDF", command: "redact_pdf", verification: "pdf-redact", view: "pdf-redact" },
     { id: "pdf-compare", title: "Compare PDFs", shortTitle: "Compare", resultVerb: "Compared", runningVerb: "Comparing", blurb: "See what text changed between two versions of a PDF.", symbol: "git-compare", category: "PDF", command: "compare_pdfs", verification: "pdf-compare", view: "pdf-compare" },
+    { id: "pdf-privacy", title: "Privacy Check", shortTitle: "Privacy Check", resultVerb: "Checked", runningVerb: "Checking", blurb: "See what each PDF reveals besides its pages. Changes nothing.", keywords: ["privacy", "metadata", "xmp", "properties", "encryption", "permissions", "document id", "inspect"], symbol: "privacy-check", category: "PDF", command: "inspect_pdf_privacy", verification: "pdf-privacy", view: "pdf-privacy" },
     { id: "heic-convert", title: "Convert Image Format", shortTitle: "Convert", resultVerb: "Converted", runningVerb: "Converting", blurb: "Convert HEIC to PNG, JPEG, WebP, and back.", symbol: "arrows-exchange", category: "Images", command: "convert_images", verification: "convert-image-format", view: "image-convert" },
     { id: "compress", title: "Compress Images", shortTitle: "Compress", resultVerb: "Compressed", runningVerb: "Compressing", blurb: "Shrink image files losslessly or trade quality for size.", symbol: "file-download", category: "Images", command: "compress_images", verification: "compress-images", view: "image-compress" },
     { id: "resize", title: "Resize Images", shortTitle: "Resize", resultVerb: "Resized", runningVerb: "Resizing", blurb: "Scale images to exact dimensions.", symbol: "resize", category: "Images", command: "resize_images", verification: "resize-images", view: "image-resize" },
@@ -89,6 +90,7 @@ export const ToolWorkspaceRegistry: ToolWorkspaceDefinition[] = [
             "pdf-crop",
             "pdf-page-numbers",
             "pdf-redact",
+            "pdf-privacy",
             "pdf-rotate",
             "pdf-repair",
             "pdf-compare",
@@ -100,7 +102,10 @@ export const ToolWorkspaceRegistry: ToolWorkspaceDefinition[] = [
             symbol: "edit-pdf",
             toolIds: ["pdf-edit", "pdf-watermark", "pdf-sign", "pdf-remove-pages"],
         },
-        moreToolIds: ["pdf-rotate", "pdf-repair", "pdf-compare", "pdf-extract-pages"],
+        groups: [
+            { label: "Details", toolIds: ["pdf-privacy"] },
+            { label: "More", toolIds: ["pdf-rotate", "pdf-repair", "pdf-compare", "pdf-extract-pages"] },
+        ],
     },
     {
         id: "pdf-convert",
@@ -177,11 +182,12 @@ export interface WorkspaceEntry {
     symbol: string;
     /** The tools this entry stands for. Opening the entry opens the first one. */
     tools: ToolDefinition[];
-    more: boolean;
+    /** The label of the group the entry is listed under, or undefined for the main tools. */
+    group?: string;
 }
 
 /**
- * List entries for a view, built from the tools the caller can open, in list order with More last.
+ * List entries for a view, built from the tools the caller can open: main tools in list order, then each group in order.
  * `groupEditor: false` lists editor tools by their own names, for search results and favorites.
  */
 export const workspaceEntries = (
@@ -191,15 +197,16 @@ export const workspaceEntries = (
 ): WorkspaceEntry[] => {
     const editorTools = tools.filter((tool) => workspace.editor?.toolIds.includes(tool.id));
     const entries = tools.flatMap((tool): WorkspaceEntry[] => {
-        const more = workspace.moreToolIds?.includes(tool.id) ?? false;
+        const group = workspace.groups?.find(({ toolIds }) => toolIds.includes(tool.id))?.label;
         if (!groupEditor || !workspace.editor?.toolIds.includes(tool.id)) {
-            return [{ key: tool.id, title: tool.title, blurb: tool.blurb, symbol: tool.symbol, tools: [tool], more }];
+            return [{ key: tool.id, title: tool.title, blurb: tool.blurb, symbol: tool.symbol, tools: [tool], group }];
         }
         if (tool !== editorTools[0]) return [];
         const { title, blurb, symbol } = workspace.editor;
-        return [{ key: `${workspace.id}-editor`, title, blurb, symbol, tools: editorTools, more }];
+        return [{ key: `${workspace.id}-editor`, title, blurb, symbol, tools: editorTools, group }];
     });
-    return [...entries.filter((entry) => !entry.more), ...entries.filter((entry) => entry.more)];
+    const groupOrder = [undefined, ...(workspace.groups ?? []).map(({ label }) => label)];
+    return groupOrder.flatMap((label) => entries.filter((entry) => entry.group === label));
 };
 
 /** PDF Editor tools that open the full-window page editor rather than a batch screen. */

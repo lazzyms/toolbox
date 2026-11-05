@@ -1,4 +1,7 @@
 pub mod metadata;
+pub mod document_info;
+pub mod privacy;
+pub mod hidden_content;
 pub mod scene;
 pub mod editor;
 pub mod remaining;
@@ -666,6 +669,20 @@ pub(crate) fn mutation_preflight(document: &Document, intent: PdfMutationIntent)
     Ok(preflight)
 }
 
+pub(crate) fn pdf_load_error(error: lopdf::Error) -> ToolError {
+    match error {
+        lopdf::Error::InvalidPassword | lopdf::Error::Decryption(lopdf::encryption::DecryptionError::IncorrectPassword) => ToolError::wrong_password(WRONG_PASSWORD),
+        lopdf::Error::UnsupportedSecurityHandler(_)
+        | lopdf::Error::Unimplemented(_)
+        | lopdf::Error::Decryption(
+            lopdf::encryption::DecryptionError::UnsupportedEncryption
+            | lopdf::encryption::DecryptionError::UnsupportedVersion
+            | lopdf::encryption::DecryptionError::UnsupportedRevision,
+        ) => ToolError::unavailable(UNSUPPORTED_ENCRYPTION),
+        _ => unreadable(ProtectedFormat::Pdf),
+    }
+}
+
 fn unlocked_pdf_is_verified(path: &Path, page_count: usize) -> bool {
     let Ok(bytes) = std::fs::read(path) else { return false };
     matches!(probe(&bytes, ProtectedFormat::Pdf), Ok(ProtectionState::NotProtected))
@@ -744,19 +761,7 @@ impl PDFProcessor {
                     Err(e) => JobOutcome::failure(input_path, ToolError::processing(format!("Save failed: {}", e))),
                 }
             }
-            Err(lopdf::Error::InvalidPassword | lopdf::Error::Decryption(lopdf::encryption::DecryptionError::IncorrectPassword)) => {
-                JobOutcome::failure(input_path, ToolError::wrong_password(WRONG_PASSWORD))
-            }
-            Err(
-                lopdf::Error::UnsupportedSecurityHandler(_)
-                | lopdf::Error::Unimplemented(_)
-                | lopdf::Error::Decryption(
-                    lopdf::encryption::DecryptionError::UnsupportedEncryption
-                    | lopdf::encryption::DecryptionError::UnsupportedVersion
-                    | lopdf::encryption::DecryptionError::UnsupportedRevision,
-                ),
-            ) => JobOutcome::failure(input_path, ToolError::unavailable(UNSUPPORTED_ENCRYPTION)),
-            Err(_) => JobOutcome::failure(input_path, unreadable(ProtectedFormat::Pdf)),
+            Err(error) => JobOutcome::failure(input_path, pdf_load_error(error)),
         }
     }
 

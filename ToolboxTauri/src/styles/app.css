@@ -843,6 +843,95 @@ body {
 .result-row:last-child {
   border-bottom: 0;
 }
+.privacy-reports {
+  display: grid;
+  gap: 12px;
+}
+.privacy-report-content,
+.privacy-category-content {
+  display: grid;
+  gap: 10px;
+}
+.privacy-category-content {
+  gap: 6px;
+}
+.privacy-report-heading {
+  display: grid;
+  min-width: 0;
+}
+.privacy-report-heading h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.privacy-report-heading span,
+.privacy-report-tally span,
+.privacy-category-heading span,
+.privacy-category-why {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.privacy-report-error {
+  margin: 0;
+  color: var(--destructive);
+  font-size: 13px;
+}
+.privacy-report-tally,
+.privacy-category-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+.privacy-report-categories {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.privacy-category-heading h4 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+.privacy-category-pointer {
+  margin-left: auto;
+}
+.privacy-category-none {
+  padding: 3px 16px;
+}
+.privacy-category-none h4 {
+  color: var(--muted-foreground);
+  font-weight: 500;
+}
+.privacy-category-why {
+  margin: 0;
+}
+.privacy-category-why strong {
+  color: var(--foreground);
+  font-weight: 500;
+}
+.privacy-category-items {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  font-size: 12px;
+}
+.privacy-category-items div {
+  display: grid;
+  grid-template-columns: minmax(0, 170px) minmax(0, 1fr);
+  gap: 12px;
+}
+.privacy-category-items dt {
+  color: var(--muted-foreground);
+}
+.privacy-category-items dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
 .file-selection-badge[data-tone="warning"] { color: var(--warning); }
 .result-row[data-tone="ok"] { --result-tone: var(--foreground); }
 .result-row[data-tone="warn"] { --result-tone: var(--warning); }
