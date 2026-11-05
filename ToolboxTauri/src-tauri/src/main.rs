@@ -3,6 +3,7 @@
 mod file_actions;
 mod intake;
 mod kit;
+mod packs;
 mod quick_action;
 mod settings;
 mod shell;
@@ -333,11 +334,16 @@ async fn run_images_to_pdf(request: &remaining::ImagesToPdfRequest) -> Vec<JobOu
 }
 
 #[tauri::command]
-async fn ocr_pdf(events: RunEvents, request: vision::VisionRequest) -> Vec<JobOutcome> {
+async fn ocr_pdf(app: tauri::AppHandle, events: RunEvents, request: vision::OcrRequest) -> Vec<JobOutcome> {
+    let packs = vision::OcrPacks::new(packs::app_data(&app), app.package_info().version.to_string(), packs::load_catalog());
+    run_ocr_pdf(events, request, packs).await
+}
+
+async fn run_ocr_pdf(events: RunEvents, request: vision::OcrRequest, packs: vision::OcrPacks) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_command_inputs("ocr_pdf", &request.paths) { return outcomes; }
     if let Err(outcomes) = validate_page_selection("ocr_pdf", &request.paths, request.pages.as_deref()) { return outcomes; }
-    let request = Arc::new(request);
-    BatchRunner::run(&events, "ocr_pdf", request.paths.clone(), &request.output_location, &request, vision::ocr_pdf)
+    let run = Arc::new(vision::OcrRun { request, packs });
+    BatchRunner::run(&events, "ocr_pdf", run.request.paths.clone(), &run.request.output_location, &run, vision::ocr_pdf)
 }
 #[tauri::command]
 async fn blur_faces(events: RunEvents, request: vision::VisionRequest) -> Vec<JobOutcome> {
@@ -573,7 +579,12 @@ fn main() {
             inspect_image_edit_preview,
             export_image_edit_plan,
             get_quick_actions,
-            set_quick_actions
+            set_quick_actions,
+            packs::list_packs,
+            packs::install::inspect_pack_file,
+            packs::install::install_pack_file,
+            packs::download::install_pack,
+            packs::uninstall::uninstall_pack
         ])
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             shell::focus(app);
@@ -627,7 +638,7 @@ mod command_tests {
     use crate::kit::office::{test_minimal_ooxml_package, OfficeProcessor};
     use crate::kit::pdf::editor::{AddPdfPagesRequest, CropPdfRequest, EditPdfRequest, OrganizePdfRequest, PageScope, PdfEditMode, PdfEditOperation, PdfEditSessionPlan, PdfEditSessionRequest, PdfOverlay, PdfOverlayPosition, PdfRect, RedactPdfRequest, RotatePage, SignPdfRequest};
     use crate::kit::pdf::remaining::{CompressPdfRequest, ImagesToPdfRequest, MergePdfRequest, PageOverlayRequest, PageSelectionRequest, PdfToImagesRequest, PdfToTextRequest, RotatePdfRequest, ComparePdfsRequest};
-    use crate::kit::vision::VisionRequest;
+    use crate::kit::vision::{OcrPacks, OcrRequest, VisionRequest};
     use base64::{engine::general_purpose::STANDARD, Engine};
     use image::Rgba;
     use std::path::PathBuf;
@@ -1162,7 +1173,7 @@ mod command_tests {
         outputs.extend(named(&mut naming, "split_pdf", pdf.clone(), assert_success("split", split_pdf(RunEvents::silent(), PageSelectionRequest { paths: vec![pdf.clone()], pages: vec![], page_ranges: None, split_mode: Some("pages".into()), chunk_size: None, output_location: location(&root, "split") }))));
         outputs.extend(named(&mut naming, "extract_pdf_images", image_pdf.clone(), assert_success("extract pdf images", extract_pdf_images(RunEvents::silent(), PdfToTextRequest { paths: vec![image_pdf.clone()], pages: None, output_location: location(&root, "extract pdf images") }))));
         outputs.extend(named(&mut naming, "sign_pdf", pdf.clone(), assert_success("sign", sign_pdf(RunEvents::silent(), SignPdfRequest { paths: vec![pdf.clone()], page: 0, text: "Signed".into(), signature_path: None, rectangle: PdfRect { x: 40.0, y: 40.0, width: 180.0, height: 60.0 }, scope: PageScope::All, output_location: location(&root, "sign") }))));
-        outputs.extend(named(&mut naming, "ocr_pdf", pdf.clone(), assert_ocr_adapter("ocr", ocr_pdf(RunEvents::silent(), VisionRequest { paths: vec![pdf.clone()], pages: None, output_location: location(&root, "ocr") }))));
+        outputs.extend(named(&mut naming, "ocr_pdf", pdf.clone(), assert_ocr_adapter("ocr", run_ocr_pdf(RunEvents::silent(), OcrRequest { paths: vec![pdf.clone()], pages: None, output_location: location(&root, "ocr"), language: "eng".into(), language_overrides: Default::default() }, OcrPacks::new(Err("No packs in this test.".into()), "0.0.0", Err("No catalog in this test.".into()))))));
         outputs.extend(named(&mut naming, "remove_pdf_pages", pdf.clone(), assert_success("remove pages", remove_pdf_pages(RunEvents::silent(), PageSelectionRequest { paths: vec![pdf.clone()], pages: vec![0], page_ranges: None, split_mode: None, chunk_size: None, output_location: location(&root, "remove pages") }))));
         outputs.extend(named(&mut naming, "extract_pdf_pages", pdf.clone(), assert_success("extract pages", extract_pdf_pages(RunEvents::silent(), PageSelectionRequest { paths: vec![pdf.clone()], pages: vec![], page_ranges: Some("1".into()), split_mode: None, chunk_size: None, output_location: location(&root, "extract pages") }))));
         outputs.extend(named(&mut naming, "organize_pdf", pdf.clone(), assert_success("organize", organize_pdf(RunEvents::silent(), OrganizePdfRequest { paths: vec![pdf.clone()], page_order: vec![1, 0], delete_pages: vec![], rotate_pages: vec![RotatePage { page: 0, degrees: 90 }], scope: PageScope::All, output_location: location(&root, "organize") }))));
@@ -1234,8 +1245,8 @@ mod command_tests {
         outputs.extend(named(&mut naming, "image_metadata", image.clone(), assert_success("metadata", image_metadata(RunEvents::silent(), MetadataRequest { paths: vec![image.clone()], output_location: location(&root, "metadata") }))));
         outputs.extend(named(&mut naming, "adjust_image_tone", image.clone(), assert_success("tone", adjust_image_tone(RunEvents::silent(), ToneRequest { paths: vec![image.clone()], brightness: 20, contrast: 0.0, saturation: 0.0, exposure: 0.0, output_location: location(&root, "tone") }))));
         outputs.extend(named(&mut naming, "process_tiff_pages", tiff.clone(), assert_aggregate_success("tiff", &[tiff.clone()], run_process_tiff_pages(&TiffRequest { paths: vec![tiff.clone()], pages: None, output_location: location(&root, "tiff"), output_path: None }))));
-        outputs.extend(named(&mut naming, "blur_faces", image.clone(), assert_vision_adapter("face blur", blur_faces(RunEvents::silent(), VisionRequest { paths: vec![image.clone()], pages: None, output_location: location(&root, "face blur") }))));
-        outputs.extend(named(&mut naming, "remove_image_background", image.clone(), assert_vision_adapter("background removal", remove_image_background(RunEvents::silent(), VisionRequest { paths: vec![image.clone()], pages: None, output_location: location(&root, "background removal") }))));
+        outputs.extend(named(&mut naming, "blur_faces", image.clone(), assert_vision_adapter("face blur", blur_faces(RunEvents::silent(), VisionRequest { paths: vec![image.clone()], output_location: location(&root, "face blur") }))));
+        outputs.extend(named(&mut naming, "remove_image_background", image.clone(), assert_vision_adapter("background removal", remove_image_background(RunEvents::silent(), VisionRequest { paths: vec![image.clone()], output_location: location(&root, "background removal") }))));
         let docx = root.join("document.docx");
         std::fs::write(&docx, test_minimal_ooxml_package("docx")).unwrap();
         let docx_bytes = std::fs::read(&docx).unwrap();
