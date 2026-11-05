@@ -85,11 +85,13 @@ test("every tool declares one output suffix and many-to-one tools take ordered i
 });
 
 test("every many-to-one tool opens the save step and sends the chosen path", () => {
-  const viewSources = readdirSync(new URL("../src/views/", import.meta.url))
-    .filter((name) => name.endsWith(".tsx"))
-    .map((name) => readFileSync(new URL(`../src/views/${name}`, import.meta.url), "utf8"));
+  const requestSources = ["views", "features"].flatMap((folder) =>
+    readdirSync(new URL(`../src/${folder}/`, import.meta.url), { recursive: true, encoding: "utf8" })
+      .filter((name) => /\.tsx?$/.test(name))
+      .map((name) => readFileSync(new URL(`../src/${folder}/${name}`, import.meta.url), "utf8")),
+  );
   const requestFor = (command: string) => {
-    for (const source of viewSources) {
+    for (const source of requestSources) {
       const start = source.indexOf(`invoke<ToolResult>("${command}"`);
       if (start === -1) continue;
       const open = source.indexOf("request: {", start) + "request: ".length;
@@ -213,4 +215,28 @@ test("shared capability samples parse the same as the native contract parser", (
     () => parseCapabilityRegistry([{ ...creation, inputCardinality: "zero" }]),
     /invalid input cardinality/,
   );
+});
+
+const familySamples = JSON.parse(
+  readFileSync(new URL("../shared/capability-family-samples.json", import.meta.url), "utf8"),
+);
+
+test("format families derive accepted extensions and per-family flags like the native parser", () => {
+  const { row, acceptedExtensions, families } = familySamples.valid;
+  const [capability] = parseCapabilityRegistry([row]);
+
+  assert.deepEqual(capability.acceptedExtensions, acceptedExtensions);
+  assert.deepEqual(
+    capability.formatFamilies?.map(({ id, nativeAvailability, basicFidelity }) => ({ id, nativeAvailability, basicFidelity })),
+    families,
+  );
+  assert.ok(SharedCapabilityRegistry.every((shared) => !("formatFamilies" in shared)));
+});
+
+test("format families reject shared extensions, empty families and mixed extension shapes", () => {
+  const { formatFamilies: _families, ...base } = familySamples.valid.row;
+  for (const [name, shape] of Object.entries(familySamples.invalid)) {
+    assert.throws(() => parseCapabilityRegistry([{ ...base, ...(shape as object) }]), Error, `${name} must be rejected`);
+  }
+  assert.throws(() => parseCapabilityRegistry([base]), /either accepted extensions or format families/);
 });
