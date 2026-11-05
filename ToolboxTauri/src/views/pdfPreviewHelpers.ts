@@ -24,10 +24,10 @@ const errorText = (reason: unknown) => {
 export const pdfEditorErrorMessage = (reason: unknown, phase: PdfEditorErrorPhase) => {
   const text = errorText(reason);
   if (/bookmarks? or destinations?/i.test(text)) {
-    return 'This PDF contains bookmarks or destinations that cannot be preserved after this page edit. Undo the crop or rotation, or use a copy without them.';
+    return 'This PDF contains bookmarks or destinations that cannot be preserved after this page edit. Undo the crop, rotation or mirror, or use a copy without them.';
   }
   if (/annotations?|form widgets?/i.test(text)) {
-    return 'This PDF has annotations or form fields that cannot be preserved after this page edit. Undo the crop or rotation, or use a copy without them.';
+    return 'This PDF has annotations or form fields that cannot be preserved after this page edit. Undo the crop, rotation or mirror, or use a copy without them.';
   }
   if (/navigation or form structures?/i.test(text)) {
     return 'This page edit could break bookmarks or form fields. Undo it, or use a copy without those structures.';

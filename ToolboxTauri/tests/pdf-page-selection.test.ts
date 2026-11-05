@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  clearPageSelection, clickPage, extendPageSelection, orientationBadge, orientationLabel, pageOptionName, rotationAnnouncement, selectAllPages, selectPagesByParity,
+  clearPageSelection, clickPage, extendPageSelection, mirrorAnnouncement, mirroredTextNotice, orientationBadge, orientationLabel, pageOptionName, rotationAnnouncement, selectAllPages, selectPagesByParity,
   pagePositionsLabel, selectPagesByRange, selectionCountLabel, togglePage,
 } from "../src/features/pdf-editor/pageSelection";
 import type { PageSelection } from "../src/features/pdf-editor/pageSelection";
@@ -95,12 +95,32 @@ test("each page is named by position, original page, orientation and selected st
 });
 
 test("orientation reads the same in the details, on the thumbnail and in announcements", () => {
-  assert.deepEqual([0, 90, 180, 270, -90, 450].map(orientationLabel),
+  assert.deepEqual([0, 90, 180, 270, -90, 450].map((rotation) => orientationLabel({ rotation })),
     ["As in the original", "Rotated 90° right", "Rotated 180°", "Rotated 90° left", "Rotated 90° left", "Rotated 90° right"]);
-  assert.deepEqual([0, 90, 180, 270].map(orientationBadge), [null, "↻ 90°", "↻ 180°", "↺ 90°"]);
+  assert.deepEqual([0, 90, 180, 270].map((rotation) => orientationBadge({ rotation, mirrored: false })), [null, "↻ 90°", "↻ 180°", "↺ 90°"]);
   assert.equal(rotationAnnouncement([5], 90), "Page 5 rotated 90° right");
   assert.equal(rotationAnnouncement([4, 5, 6], -90), "Pages 4 to 6 rotated 90° left");
   assert.equal(rotationAnnouncement([2, 7], 180), "Pages 2 and 7 rotated 180°");
+});
+
+test("a mirrored page names its flip in the details, on the thumbnail and in announcements", () => {
+  assert.deepEqual([0, 90, 180, 270].map((rotation) => orientationLabel({ rotation, mirrored: true })), [
+    "Mirrored left to right", "Rotated 90° right, mirrored left to right", "Mirrored top to bottom", "Rotated 90° left, mirrored left to right",
+  ]);
+  assert.deepEqual([0, 90, 180, 270].map((rotation) => orientationBadge({ rotation, mirrored: true })), [
+    "⇋ Mirrored", "↻ 90° · ⇋ Mirrored", "⇵ Mirrored", "↺ 90° · ⇋ Mirrored",
+  ]);
+  assert.equal(pageOptionName(3, { sourceIndex: 2, rotation: 0, mirrored: true }, true), "Position 3, original page 3, mirrored left to right, selected");
+  assert.equal(pageOptionName(4, { sourceIndex: 3, rotation: 180, mirrored: true }, false), "Position 4, original page 4, mirrored top to bottom");
+  assert.equal(pageOptionName(5, { sourceIndex: 4, rotation: 90, mirrored: true }, false), "Position 5, original page 5, rotated 90° right, mirrored left to right");
+  assert.equal(mirrorAnnouncement([8, 9], "horizontal"), "Pages 8 and 9 mirrored left to right");
+  assert.equal(mirrorAnnouncement([2], "vertical"), "Page 2 mirrored top to bottom");
+});
+
+test("the mirrored-text notice counts mirrored pages and is absent without any", () => {
+  assert.equal(mirroredTextNotice(0), null);
+  assert.equal(mirroredTextNotice(1), "1 mirrored page will show its text reversed.");
+  assert.equal(mirroredTextNotice(3), "3 mirrored pages will show their text reversed.");
 });
 
 test("page positions read as a short phrase for announcements", () => {

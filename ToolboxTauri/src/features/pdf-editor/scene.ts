@@ -34,6 +34,9 @@ export interface ScenePage {
   width: number;
   height: number;
   rotation: number;
+  // Mirrored left to right before the turn: the page shows rotate(rotation) after a horizontal flip.
+  // Top to bottom is the same flip turned 180°, so the pair covers all 8 orientations.
+  mirrored?: boolean;
   crop: SceneRect | null;
   sourceRotation: number | null;
   sourceBox: SceneRect | null;
@@ -55,7 +58,7 @@ export interface SceneCanvasProps {
 }
 export const sceneFromDocument = (document: PdfDocument): PdfScene => ({
   pages: document.pages.map((page) => ({ id: `source-${page.index}`, sourceIndex: page.index,
-    width: page.width, height: page.height, rotation: 0, crop: null,
+    width: page.width, height: page.height, rotation: 0, mirrored: false, crop: null,
     sourceRotation: page.rotation ?? 0,
     sourceBox: page.pageBox ? { x: page.pageBox[0], y: page.pageBox[1], width: page.pageBox[2] - page.pageBox[0], height: page.pageBox[3] - page.pageBox[1] } : null,
     objects: [] })),
@@ -124,15 +127,39 @@ export const swapPage = (scene: PdfScene, index: number, delta: number): PdfScen
   return { pages };
 };
 
+export type MirrorAxis = 'horizontal' | 'vertical';
+export interface PageOrientation { rotation: number; mirrored?: boolean }
+export type OrientationEdit = { rotate: number } | { mirror: MirrorAxis };
+
+const quarterTurn = (degrees: number) => ((degrees % 360) + 360) % 360;
+
 /**
- * Turns the pages by `degrees` (a multiple of 90, negative is left), on top of any earlier turn.
- * `rotation` is the scene's turn only; export adds it to the page's own source rotation.
+ * Applies an edit to the orientation as the page is displayed. Turning keeps the flip; a mirror
+ * reverses the current turn, because flipping a turned page equals turning it the other way after
+ * the flip. Top to bottom is left to right turned 180°, and mirroring twice is the identity.
  */
-export const rotatePages = (scene: PdfScene, ids: string[], degrees = 90): PdfScene => {
-  if (!ids.length || ((degrees % 360) + 360) % 360 === 0) return scene;
-  return { pages: scene.pages.map((page) => ids.includes(page.id) ? { ...page, rotation: (((page.rotation + degrees) % 360) + 360) % 360 } : page) };
+export const composeOrientation = (orientation: PageOrientation, edit: OrientationEdit): Required<PageOrientation> => {
+  const mirrored = !!orientation.mirrored;
+  if ('rotate' in edit) return { rotation: quarterTurn(orientation.rotation + edit.rotate), mirrored };
+  return { rotation: quarterTurn((edit.mirror === 'vertical' ? 180 : 0) - orientation.rotation), mirrored: !mirrored };
 };
 
-/** Turns the pages back to their source orientation. Other pages and every other edit stay. Returns the same scene if nothing was turned. */
+const reoriented = (scene: PdfScene, ids: string[], edit: OrientationEdit) =>
+  reordered(scene, scene.pages.map((page) => {
+    if (!ids.includes(page.id)) return page;
+    const next = composeOrientation(page, edit);
+    return next.rotation === page.rotation && next.mirrored === !!page.mirrored ? page : { ...page, ...next };
+  }));
+
+/**
+ * Turns the pages by `degrees` (a multiple of 90, negative is left), on top of any earlier turn, keeping any mirror.
+ * `rotation` is the scene's turn only; export adds it to the page's own source rotation. Returns the same scene if nothing turned.
+ */
+export const rotatePages = (scene: PdfScene, ids: string[], degrees = 90): PdfScene => reoriented(scene, ids, { rotate: degrees });
+
+/** Mirrors the pages left to right (horizontal) or top to bottom (vertical) as they are displayed. */
+export const mirrorPages = (scene: PdfScene, ids: string[], axis: MirrorAxis): PdfScene => reoriented(scene, ids, { mirror: axis });
+
+/** Turns and unflips the pages back to their source orientation. Other pages and every other edit stay. Returns the same scene if nothing changed. */
 export const resetPageRotation = (scene: PdfScene, ids: string[]): PdfScene =>
-  reordered(scene, scene.pages.map((page) => ids.includes(page.id) && page.rotation ? { ...page, rotation: 0 } : page));
+  reordered(scene, scene.pages.map((page) => ids.includes(page.id) && (page.rotation || page.mirrored) ? { ...page, rotation: 0, mirrored: false } : page));
