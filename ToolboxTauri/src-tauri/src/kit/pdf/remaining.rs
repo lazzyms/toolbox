@@ -1,6 +1,6 @@
 use image::codecs::jpeg::JpegEncoder;
 use image::DynamicImage;
-use lopdf::{dictionary, Document, Object, Stream};
+use lopdf::{dictionary, Document, Object, ObjectId, Stream};
 use std::fs;
 use std::io::{self, Cursor};
 use std::path::{Path, PathBuf};
@@ -492,7 +492,9 @@ fn extract_with(request: &ExtractFromPdfRequest, input: PathBuf, helper: &TextHe
         }
     } else { None };
     let images = if request.mode.wants_images() {
-        match write_images(&input, &document, &pages, &request.output_location, request.min_image_size) {
+        let written = discover_images(&document, &pages).map_err(|error| (Vec::new(), error))
+            .and_then(|candidates| write_images(&input, &request.output_location, &candidates, request.min_image_size));
+        match written {
             Ok(images) => images,
             Err((published, error)) => {
                 let outputs = text.into_iter().chain(published).collect();
@@ -589,27 +591,68 @@ fn normalize_pdf_text(text: &str) -> String {
     text.lines().map(str::trim_end).collect::<Vec<_>>().join("\n").trim().to_string()
 }
 
-/// Copies the selected pages' embedded JPEG images as they are. An empty list means there were none to save.
-/// On failure nothing new is published, except images already published when publishing itself fails.
-fn write_images(input: &Path, document: &Document, pages: &[u32], location: &OutputLocation, min_size: Option<u32>) -> Result<Vec<PathBuf>, (Vec<PathBuf>, String)> {
-    let page_ids = document.get_pages();
-    let mut reservations = Vec::new();
-    for page_number in pages {
-        let Some(page_id) = page_ids.get(page_number) else { continue };
-        let images = document.get_page_images(*page_id).map_err(|error| (Vec::new(), error.to_string()))?;
-        for (index, image) in images.iter().enumerate() {
-            if min_size.is_some_and(|min| image.width < i64::from(min) || image.height < i64::from(min)) { continue; }
-            let Some(filters) = &image.filters else {
-                return Err((Vec::new(), "PDF contains an embedded image with no supported filter; extraction stopped without a complete result.".to_string()));
-            };
-            if filters.iter().any(|filter| filter != "DCTDecode") {
-                return Err((Vec::new(), format!("PDF image on page {page_number} uses an unsupported filter; only original JPEG images can be extracted without recompression.")));
-            }
-            let reservation = OutputNaming::reserve_destination(input, location, &format!("-image-{page_number}-{index}"), "jpg")
-                .map_err(|error| (Vec::new(), format!("Could not reserve extracted image output: {error}")))?;
-            fs::write(reservation.path(), image.content).map_err(|error| (Vec::new(), format!("Could not write extracted image: {error}")))?;
-            reservations.push(reservation);
+/// One embedded image found in the selected pages, in discovery order.
+/// The JPEG-only writer reads only page, index, filters, size and data; the rest is for the
+/// decoding and deduplication work in #426.
+#[derive(Debug)]
+#[allow(dead_code)]
+struct ImageCandidate<'a> {
+    /// One-based page number.
+    page: u32,
+    /// Position among the page's images.
+    index: usize,
+    object_id: ObjectId,
+    filters: Option<Vec<String>>,
+    width: i64,
+    height: i64,
+    color_space: Option<String>,
+    soft_mask: Option<ObjectId>,
+    mask: Option<ObjectId>,
+    data: &'a [u8],
+}
+
+/// Lists the embedded images of the selected one-based pages, in page order and then
+/// in each page's resource order.
+fn discover_images<'a>(document: &'a Document, pages: &[u32]) -> Result<Vec<ImageCandidate<'a>>, String> {
+    let mut candidates = Vec::new();
+    for (page_number, page_id) in document.get_pages() {
+        if !pages.contains(&page_number) { continue; }
+        let images = document.get_page_images(page_id).map_err(|error| error.to_string())?;
+        for (index, image) in images.into_iter().enumerate() {
+            let reference = |key: &[u8]| image.origin_dict.get(key).and_then(Object::as_reference).ok();
+            candidates.push(ImageCandidate {
+                page: page_number,
+                index,
+                object_id: image.id,
+                soft_mask: reference(b"SMask"),
+                mask: reference(b"Mask"),
+                filters: image.filters,
+                width: image.width,
+                height: image.height,
+                color_space: image.color_space,
+                data: image.content,
+            });
         }
+    }
+    Ok(candidates)
+}
+
+/// Copies the candidates' JPEG data as it is, skipping those under `min_size`. An empty list means there were none to save.
+/// On failure nothing new is published, except images already published when publishing itself fails.
+fn write_images(input: &Path, location: &OutputLocation, candidates: &[ImageCandidate], min_size: Option<u32>) -> Result<Vec<PathBuf>, (Vec<PathBuf>, String)> {
+    let mut reservations = Vec::new();
+    for candidate in candidates {
+        if min_size.is_some_and(|min| candidate.width < i64::from(min) || candidate.height < i64::from(min)) { continue; }
+        let Some(filters) = &candidate.filters else {
+            return Err((Vec::new(), "PDF contains an embedded image with no supported filter; extraction stopped without a complete result.".to_string()));
+        };
+        if filters.iter().any(|filter| filter != "DCTDecode") {
+            return Err((Vec::new(), format!("PDF image on page {} uses an unsupported filter; only original JPEG images can be extracted without recompression.", candidate.page)));
+        }
+        let reservation = OutputNaming::reserve_destination(input, location, &format!("-image-{}-{}", candidate.page, candidate.index), "jpg")
+            .map_err(|error| (Vec::new(), format!("Could not reserve extracted image output: {error}")))?;
+        fs::write(reservation.path(), candidate.data).map_err(|error| (Vec::new(), format!("Could not write extracted image: {error}")))?;
+        reservations.push(reservation);
     }
     publish_extracted_images(reservations)
 }
@@ -1412,6 +1455,99 @@ mod tests {
             assert_eq!(fs::read_to_string(output).unwrap(), format!("page-{}", index + 1));
         }
         fs::remove_dir_all(root).unwrap();
+    }
+
+    struct DiscoveryFixture { document: Document, photo: ObjectId, scan: ObjectId, soft_mask: ObjectId, stencil: ObjectId, logo: ObjectId }
+
+    fn image_discovery_fixture() -> DiscoveryFixture {
+        let mut document=Document::with_version("1.7");
+        let pages_id=document.new_object_id();
+        let soft_mask=document.add_object(Stream::new(dictionary! {
+            "Type"=>"XObject", "Subtype"=>"Image", "Width"=>4, "Height"=>3, "ColorSpace"=>"DeviceGray", "BitsPerComponent"=>8
+        },vec![0;12]));
+        let stencil=document.add_object(Stream::new(dictionary! {
+            "Type"=>"XObject", "Subtype"=>"Image", "Width"=>2, "Height"=>2, "ImageMask"=>true, "BitsPerComponent"=>1
+        },vec![0;2]));
+        let photo=document.add_object(Stream::new(dictionary! {
+            "Type"=>"XObject", "Subtype"=>"Image", "Width"=>4, "Height"=>3,
+            "ColorSpace"=>"DeviceCMYK", "BitsPerComponent"=>8, "Filter"=>"DCTDecode", "SMask"=>soft_mask
+        },b"photo".to_vec()));
+        let scan=document.add_object(Stream::new(dictionary! {
+            "Type"=>"XObject", "Subtype"=>"Image", "Width"=>2, "Height"=>2,
+            "ColorSpace"=>vec![Object::Name(b"ICCBased".to_vec()), Object::Integer(0)], "BitsPerComponent"=>8,
+            "Filter"=>vec![Object::Name(b"FlateDecode".to_vec()), Object::Name(b"DCTDecode".to_vec())], "Mask"=>stencil
+        },b"scan".to_vec()));
+        let logo=document.add_object(Stream::new(dictionary! {
+            "Type"=>"XObject", "Subtype"=>"Image", "Width"=>7, "Height"=>5, "ColorSpace"=>"DeviceRGB", "BitsPerComponent"=>8,
+            "Mask"=>vec![Object::Integer(0), Object::Integer(0)]
+        },b"logo".to_vec()));
+        let form=document.add_object(Stream::new(dictionary! { "Type"=>"XObject", "Subtype"=>"Form", "BBox"=>vec![0.into(),0.into(),1.into(),1.into()] },Vec::new()));
+        let mut kids=Vec::new();
+        for xobjects in [
+            dictionary! { "Im1"=>photo, "Fm1"=>form, "Im2"=>scan },
+            dictionary! {},
+            dictionary! { "Logo"=>logo },
+        ] {
+            let page_id=document.add_object(dictionary! {
+                "Type"=>"Page", "Parent"=>pages_id, "MediaBox"=>vec![0.into(),0.into(),1.into(),1.into()],
+                "Resources"=>dictionary! { "XObject"=>xobjects }
+            });
+            kids.push(Object::Reference(page_id));
+        }
+        document.objects.insert(pages_id,dictionary! { "Type"=>"Pages", "Kids"=>kids, "Count"=>3 }.into());
+        let catalog_id=document.add_object(dictionary! { "Type"=>"Catalog", "Pages"=>pages_id });
+        document.trailer.set("Root",catalog_id);
+        DiscoveryFixture { document, photo, scan, soft_mask, stencil, logo }
+    }
+
+    #[test]
+    fn image_discovery_lists_candidates_in_page_then_resource_order_with_their_properties() {
+        let fixture=image_discovery_fixture();
+
+        let candidates=discover_images(&fixture.document,&[1,2,3]).unwrap();
+
+        let order=candidates.iter().map(|candidate| (candidate.page,candidate.index,candidate.object_id)).collect::<Vec<_>>();
+        assert_eq!(order,vec![(1,0,fixture.photo),(1,1,fixture.scan),(3,0,fixture.logo)]);
+
+        let photo=&candidates[0];
+        assert_eq!(photo.filters,Some(vec!["DCTDecode".to_string()]));
+        assert_eq!((photo.width,photo.height),(4,3));
+        assert_eq!(photo.color_space.as_deref(),Some("DeviceCMYK"));
+        assert_eq!((photo.soft_mask,photo.mask),(Some(fixture.soft_mask),None));
+        assert_eq!(photo.data,b"photo");
+
+        let scan=&candidates[1];
+        assert_eq!(scan.filters,Some(vec!["FlateDecode".to_string(),"DCTDecode".to_string()]));
+        assert_eq!((scan.width,scan.height),(2,2));
+        assert_eq!(scan.color_space.as_deref(),Some("ICCBased"));
+        assert_eq!((scan.soft_mask,scan.mask),(None,Some(fixture.stencil)));
+
+        let logo=&candidates[2];
+        assert_eq!(logo.filters,Some(Vec::new()));
+        assert_eq!((logo.width,logo.height),(7,5));
+        assert_eq!(logo.color_space.as_deref(),Some("DeviceRGB"));
+        assert_eq!((logo.soft_mask,logo.mask),(None,None),"a colour-key mask array is not a mask reference");
+    }
+
+    #[test]
+    fn image_discovery_only_lists_the_selected_pages() {
+        let fixture=image_discovery_fixture();
+
+        let third=discover_images(&fixture.document,&[3]).unwrap();
+        assert_eq!(third.iter().map(|candidate| (candidate.page,candidate.index,candidate.object_id)).collect::<Vec<_>>(),vec![(3,0,fixture.logo)]);
+        assert!(discover_images(&fixture.document,&[2]).unwrap().is_empty());
+        assert!(discover_images(&fixture.document,&[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn image_discovery_uses_one_based_pages_from_zero_based_requests() {
+        let fixture=image_discovery_fixture();
+
+        let pages=selected_pdf_pages(&fixture.document,Some(&vec![2])).unwrap();
+        let candidates=discover_images(&fixture.document,&pages).unwrap();
+
+        assert_eq!(pages,vec![3]);
+        assert_eq!(candidates.iter().map(|candidate| candidate.page).collect::<Vec<_>>(),vec![3]);
     }
 
     fn image_extraction_fixture(path: &Path) {
