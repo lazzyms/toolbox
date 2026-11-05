@@ -24,6 +24,16 @@ pub struct ToolLimits {
     pub max_duration: Duration,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct HelperDeadline { pub per_file: Duration, pub per_page: Duration }
+
+impl HelperDeadline {
+    pub(crate) fn limit(self, files: usize, pages: usize) -> Duration {
+        let count = |value: usize| u32::try_from(value).unwrap_or(u32::MAX);
+        self.per_file * count(files) + self.per_page * count(pages)
+    }
+}
+
 // Expansion stays under the image crate's 512 MiB allocation default so this check, not a decoder error, reports it.
 const PDF: ToolLimits = ToolLimits { max_bytes: GB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES };
 const IMAGE: ToolLimits = ToolLimits { max_bytes: 250 * MB, max_pages: None, max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES };
@@ -32,7 +42,7 @@ const PAGED_IMAGE: ToolLimits = ToolLimits { max_pages: Some(1_000), ..IMAGE };
 pub fn recorded(command: &str) -> Option<ToolLimits> {
     Some(match command {
         "remove_password" | "protect_files" | "export_pdf_scene" | "crop_pdf" | "sign_pdf" | "edit_pdf" | "edit_pdf_session"
-        | "organize_pdf" | "add_pdf_pages" | "add_page_numbers" | "watermark_pdf" | "compress_pdf" | "remove_pdf_pages"
+        | "add_page_numbers" | "watermark_pdf" | "compress_pdf"
         | "extract_pdf_pages" | "merge_pdfs" | "split_pdf" | "pdf_to_images" | "pdf_to_text" | "extract_pdf_images"
         | "ocr_pdf" | "rotate_pdf" | "repair_pdf" | "redact_pdf" | "compare_pdfs" => PDF,
         "compress_images" | "convert_images" | "export_image_edit_plan" | "images_to_pdf" | "blur_faces"
