@@ -71,15 +71,6 @@ export interface SignPdfRequest extends CropPdfRequest {
     signaturePath: string | null;
 }
 
-export interface OrganizePdfRequest {
-    paths: string[];
-    pageOrder: number[];
-    deletePages: number[];
-    rotatePages: { page: number; degrees: number }[];
-    scope: PdfPageScope;
-    outputLocation: OutputLocation;
-}
-
 export type PdfOverlay =
     | { kind: "edit"; mode: "text" | "note" | "highlight" | "shape"; text: string; pages: number[] | null; rectangle: PdfRect }
     | { kind: "watermark"; text: string; opacity: number; position: string | null; logoPath: string | null; pages: number[] | null }
