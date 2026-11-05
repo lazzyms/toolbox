@@ -1323,7 +1323,8 @@ mod command_tests {
                 assert!(error.message.contains(message), "{} should contain {message}", error.message);
             } else {
                 assert_eq!(error.kind, ErrorKind::Processing);
-                assert!(error.message.contains(&format!("stopped because {} failed", offender.display())), "{}", error.message);
+                let name = offender.file_name().unwrap().to_string_lossy();
+                assert!(error.message.contains(&format!("Stopped because {name} failed")), "{}", error.message);
             }
         }
         assert_eq!(std::fs::read_dir(output).unwrap().count(), 0, "no merged output is published");

@@ -98,14 +98,15 @@ type PDFEditorWorkspaceProps = {
   fileActivation?: Extract<ShellEvent, { kind: 'files' }>;
   onActivationAccepted?: (activationId: string) => void;
   onFilesChange?: (paths: readonly string[]) => void;
+  onSelectTool?: (id: AtomicToolId) => void;
 };
 
 export const PDFEditorWorkspaceView = ({ batchTools = pdfEditorBatchTools, ...props }: PDFEditorWorkspaceProps & { batchTools?: PdfEditorBatchTools }) => {
-  const { utility, initialPaths, onFilesChange } = props;
+  const { utility, initialPaths, onFilesChange, onSelectTool } = props;
   if (isPdfSceneTool(utility.id)) return <PDFSceneEditor {...props} />;
   const batchTool = batchTools[utility.id];
   if (batchTool) return <PdfEditorBatchSurface utility={utility} tool={batchTool} initialPaths={initialPaths} onFilesChange={onFilesChange} />;
-  return <PDFConversionWorkspaceView utility={utility} initialPaths={initialPaths} onFilesChange={onFilesChange} />;
+  return <PDFConversionWorkspaceView utility={utility} initialPaths={initialPaths} onFilesChange={onFilesChange} onSelectTool={onSelectTool} />;
 };
 
 const PDFSceneEditor = ({
