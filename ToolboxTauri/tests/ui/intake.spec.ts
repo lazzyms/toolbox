@@ -653,7 +653,7 @@ test("a saved Remove Password favorite and recent open File Security once migrat
 
 test("a saved Protect PDF favorite and recent open File Security after the earlier migration already ran", async ({ page }) => {
     await page.addInitScript(() => {
-        if (localStorage.getItem("toolbox-tool-id-migration") === "3") return;
+        if (localStorage.getItem("toolbox-tool-id-migration") === "4") return;
         localStorage.setItem("toolbox-tool-id-migration", "1");
         localStorage.setItem("toolbox-favorites", JSON.stringify(["pdf-protect", "pdf-merge"]));
         localStorage.setItem("toolbox-recent", JSON.stringify(["pdf-protect"]));
@@ -671,12 +671,12 @@ test("a saved Protect PDF favorite and recent open File Security after the earli
         recent: JSON.parse(localStorage.getItem("toolbox-recent") ?? "null"),
         marker: localStorage.getItem("toolbox-tool-id-migration"),
     }));
-    expect(saved).toEqual({ favorites: ["lock-unlock", "pdf-merge"], recent: ["lock-unlock"], marker: "3" });
+    expect(saved).toEqual({ favorites: ["lock-unlock", "pdf-merge"], recent: ["lock-unlock"], marker: "4" });
 });
 
 test("a saved Protect Office Files favorite and recent open File Security after migration", async ({ page }) => {
     await page.addInitScript(() => {
-        if (localStorage.getItem("toolbox-tool-id-migration") === "3") return;
+        if (localStorage.getItem("toolbox-tool-id-migration") === "4") return;
         localStorage.setItem("toolbox-tool-id-migration", "2");
         localStorage.setItem("toolbox-favorites", JSON.stringify(["pdf-merge", "office-protect"]));
         localStorage.setItem("toolbox-recent", JSON.stringify(["office-protect", "pdf-merge"]));
@@ -696,7 +696,31 @@ test("a saved Protect Office Files favorite and recent open File Security after 
         recent: JSON.parse(localStorage.getItem("toolbox-recent") ?? "null"),
         marker: localStorage.getItem("toolbox-tool-id-migration"),
     }));
-    expect(saved).toEqual({ favorites: ["pdf-merge", "lock-unlock"], recent: ["lock-unlock", "pdf-merge"], marker: "3" });
+    expect(saved).toEqual({ favorites: ["pdf-merge", "lock-unlock"], recent: ["lock-unlock", "pdf-merge"], marker: "4" });
+});
+
+test("a saved Compress PDF favorite and recent open Compress Files after the earlier migrations already ran", async ({ page }) => {
+    await page.addInitScript(() => {
+        if (localStorage.getItem("toolbox-tool-id-migration") === "4") return;
+        localStorage.setItem("toolbox-tool-id-migration", "3");
+        localStorage.setItem("toolbox-favorites", JSON.stringify(["pdf-compress", "pdf-merge"]));
+        localStorage.setItem("toolbox-recent", JSON.stringify(["pdf-merge", "pdf-compress"]));
+    });
+    await page.goto("/");
+    const chips = page.getByRole("group", { name: "Favorite tools" });
+    await expect(chips.getByRole("button")).toHaveText(["Compress", "Merge PDF"]);
+    await chips.getByRole("button", { name: "Compress", exact: true }).click();
+    await expect(page.locator(".workspace-title")).toHaveText("Compress Files");
+    await expect(page.getByRole("heading", { name: "Compress", exact: true })).toBeVisible();
+    await expect(page.getByRole("radiogroup", { name: "Strength" })).toBeVisible();
+
+    await page.reload();
+    const saved = await page.evaluate(() => ({
+        favorites: JSON.parse(localStorage.getItem("toolbox-favorites") ?? "null"),
+        recent: JSON.parse(localStorage.getItem("toolbox-recent") ?? "null"),
+        marker: localStorage.getItem("toolbox-tool-id-migration"),
+    }));
+    expect(saved).toEqual({ favorites: ["compress-files", "pdf-merge"], recent: ["compress-files", "pdf-merge"], marker: "4" });
 });
 
 test("Lock sends a mixed PDF, Word, Excel and PowerPoint batch in one protect_files request and shows one locked row per file", async ({ page }) => {

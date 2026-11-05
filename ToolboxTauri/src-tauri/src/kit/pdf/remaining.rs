@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::kit::common::limits::StoppableHelper;
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming, OutputReservation};
-use crate::kit::contracts::ToolError;
+use crate::kit::contracts::{OutcomePointer, SkipCode, SkipReason, ToolError};
 use super::metadata::{page_bounds, page_rotation};
 use super::{mutation_preflight, PdfMutationIntent};
 
@@ -24,14 +24,6 @@ pub struct PageOverlayRequest {
     #[serde(default)] pub pages: Option<Vec<usize>>,
     #[serde(default)] pub start_number: Option<u32>,
     #[serde(default)] pub font_size: Option<u16>,
-    pub output_location: OutputLocation,
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CompressPdfRequest {
-    pub paths: Vec<PathBuf>,
-    pub quality: u8,
     pub output_location: OutputLocation,
 }
 
@@ -113,11 +105,11 @@ pub fn merge(request: &MergePdfRequest) -> JobOutcome {
         };
         expected_pages += document.get_pages().len();
     }
+    let qpdf = match qpdf() { Ok(qpdf) => qpdf, Err(error) => return JobOutcome::failure(first, ToolError::unavailable(error)) };
     let output = match OutputNaming::reserve_single_output(request.output_path.as_deref(), &first, &request.output_location, "-merged", "pdf") {
         Ok(output) => output,
         Err(error) => return failure(first, format!("Could not reserve merged PDF output: {error}")),
     };
-    let qpdf = match qpdf() { Ok(qpdf) => qpdf, Err(error) => return JobOutcome::failure(first, ToolError::unavailable(error)) };
     let result = Command::new(qpdf).arg("--empty").arg("--pages").args(&request.paths).arg("--").arg(output.path()).output_until_stopped();
     match result {
         Ok(result) if result.status.success() => match Document::load(output.path()) {
@@ -574,29 +566,100 @@ pub fn watermark(request: &PageOverlayRequest, input: PathBuf) -> JobOutcome {
     }, request.opacity.clamp(1, 100))
 }
 
-pub fn compress(request: &CompressPdfRequest, input: PathBuf) -> JobOutcome {
-    let source = match load_existing_document_for_mutation(&input) { Ok(document) => document, Err(error) => return failure(input, error) };
-    let page_count = source.get_pages().len();
+pub const PDF_PASSWORD_PROTECTED: &str = "This PDF is password-protected. Unlock it first, then compress the unlocked copy.";
+pub const NO_SAVINGS: &str = "No savings: already well compressed";
+const PAGE_BOXES: [&[u8]; 5] = [b"MediaBox", b"CropBox", b"BleedBox", b"TrimBox", b"ArtBox"];
+
+/// Compresses one PDF for Compress Files. With `images`, eligible photographs are first recompressed
+/// in-process; the lossless qpdf repack (object streams, flate streams at level 9, deterministic ID)
+/// always runs afterwards. The copy is published only when it opens with the same pages, page boxes
+/// and rotation and is smaller.
+pub fn compress_pdf(input: PathBuf, location: &OutputLocation, images: Option<super::recompress::ImageSettings>) -> JobOutcome {
+    let mut source = match Document::load(&input) {
+        Ok(document) => document,
+        Err(_) => return JobOutcome::failure(input, crate::kit::password::unreadable(crate::kit::password::ProtectedFormat::Pdf)),
+    };
+    if source.is_encrypted() || source.was_encrypted() {
+        return JobOutcome::failure(input, ToolError::invalid_input(PDF_PASSWORD_PROTECTED)
+            .with_pointer(OutcomePointer::Tool { tool_id: "lock-unlock".into() }));
+    }
+    // Any rewrite breaks a digital signature, so a signed PDF is still compressed but its copy is flagged.
+    let signed = super::has_signed_signature_field(&source);
+    let geometry = match page_geometry(&source) { Ok(geometry) => geometry, Err(error) => return failure(input, error) };
     let qpdf = match qpdf() { Ok(qpdf) => qpdf, Err(error) => return JobOutcome::failure(input, ToolError::unavailable(error)) };
-    let output = match OutputNaming::reserve_destination(&input, &request.output_location, "-compressed", "pdf") {
+    let output = match OutputNaming::reserve_destination(&input, location, "-compressed", "pdf") {
         Ok(output) => output,
         Err(error) => return failure(input, format!("Could not reserve compressed PDF output: {error}")),
     };
-    let quality = request.quality.clamp(1, 100);
-    let level = ((100_u16.saturating_sub(quality as u16) * 8) / 99 + 1).to_string();
-    let result = Command::new(qpdf).arg("--object-streams=generate").arg("--stream-data=compress").arg("--recompress-flate").arg(format!("--compression-level={level}")).arg(&input).arg(output.path()).output_until_stopped();
-    match result {
-        Ok(result) if result.status.success() => match Document::load(output.path()) {
-            Ok(verified) if verified.get_pages().len() == page_count => match output.publish() {
-                Ok(path) => JobOutcome::succeeded(input, vec![path], format!("PDF compressed at quality {quality}")),
-                Err(error) => failure(input, format!("Could not publish compressed PDF: {error}")),
-            },
-            Ok(_) => failure(input, "Compressed PDF changed its page count.".to_string()),
-            Err(error) => failure(input, format!("Compressed PDF could not be verified: {error}")),
+    let recompressed = images.map_or(0, |settings| super::recompress::recompress_images(&mut source, settings));
+    // Recompressed images go through a staged copy beside the reservation; it is removed on every path.
+    let staged = (recompressed > 0).then(|| StagedFile({
+        let mut path = output.path().as_os_str().to_owned();
+        path.push(".images");
+        PathBuf::from(path)
+    }));
+    let repack_from = match &staged {
+        Some(staged) => match source.save(&staged.0) {
+            Ok(_) => staged.0.clone(),
+            Err(error) => return failure(input, format!("Could not write the recompressed PDF: {error}")),
         },
-        Ok(result) => failure(input, stderr(result, "qpdf failed to compress the PDF.")),
-        Err(error) => failure(input, format!("Could not run qpdf: {error}")),
+        None => input.clone(),
+    };
+    let result = Command::new(qpdf).arg("--object-streams=generate").arg("--recompress-flate").arg("--compression-level=9")
+        .arg("--deterministic-id").arg(&repack_from).arg(output.path()).output_until_stopped();
+    drop(staged);
+    match result {
+        // qpdf exits 3 when it succeeded with warnings; verification below decides whether the copy is sound.
+        Ok(result) if result.status.success() || result.status.code() == Some(3) => {}
+        Ok(result) => return failure(input, stderr(result, "qpdf failed to compress the PDF.")),
+        Err(error) => return failure(input, format!("Could not run qpdf: {error}")),
     }
+    match Document::load(output.path()).map_err(|error| error.to_string()).and_then(|copy| page_geometry(&copy)) {
+        Ok(copy) if copy == geometry => {}
+        Ok(_) => return failure(input, "The compressed copy changed its pages, page boxes or rotation, so nothing was saved.".to_string()),
+        Err(error) => return failure(input, format!("Compressed PDF could not be verified: {error}")),
+    }
+    let sizes = fs::metadata(&input).and_then(|original| fs::metadata(output.path()).map(|copy| (original.len(), copy.len())));
+    let (original_bytes, output_bytes) = match sizes { Ok(sizes) => sizes, Err(error) => return failure(input, format!("Could not measure the compressed PDF: {error}")) };
+    if output_bytes >= original_bytes {
+        drop(output);
+        return JobOutcome::skipped(input, SkipReason::new(SkipCode::NoSavings, NO_SAVINGS)).with_sizes(original_bytes, output_bytes);
+    }
+    match output.publish() {
+        Ok(path) => super::note_signature_removed(JobOutcome::succeeded(input, vec![path], compressed_detail(recompressed)).with_sizes(original_bytes, output_bytes), signed),
+        Err(error) => failure(input, format!("Could not publish compressed PDF: {error}")),
+    }
+}
+
+fn compressed_detail(recompressed: usize) -> String {
+    match recompressed {
+        0 => "PDF repacked without loss".to_string(),
+        1 => "1 image recompressed and PDF repacked".to_string(),
+        count => format!("{count} images recompressed and PDF repacked"),
+    }
+}
+
+/// A scratch file removed when it goes out of scope.
+struct StagedFile(PathBuf);
+
+impl Drop for StagedFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
+#[derive(Debug, PartialEq)]
+struct PageGeometry { boxes: Vec<Option<Vec<f32>>>, rotation: i64 }
+
+fn page_geometry(document: &Document) -> Result<Vec<PageGeometry>, String> {
+    document.get_pages().into_values().map(|page| {
+        let boxes = PAGE_BOXES.iter().map(|key| super::inherited(document, page, key)?.map(|value| {
+            value.as_array().map_err(|error| error.to_string())?.iter()
+                .map(|number| super::resolve(document, number).and_then(super::metadata::number))
+                .collect::<Result<Vec<_>, _>>()
+        }).transpose()).collect::<Result<Vec<_>, String>>()?;
+        Ok(PageGeometry { boxes, rotation: page_rotation(document, page) })
+    }).collect()
 }
 
 pub fn rotate(request: &RotatePdfRequest, input: PathBuf) -> JobOutcome {
@@ -1198,7 +1261,7 @@ mod tests {
     #[test]
     fn remaining_mutators_reject_unsafe_documents_before_reserving_output() {
         for kind in ["signed", "outline", "tagged"] {
-            for operation in ["numbers", "watermark", "image-watermark", "compress", "remove", "extract"] {
+            for operation in ["numbers", "watermark", "image-watermark", "remove", "extract"] {
                 let root = split_fixture_root(&format!("unsafe-{kind}-{operation}"));
                 let input = root.join("document.pdf");
                 let output = root.join("outputs");
@@ -1226,9 +1289,6 @@ mod tests {
                         paths: vec![input.clone()], text: String::new(), opacity: 70,
                         position: None, logo_path: Some(logo), pages: None, start_number: None,
                         font_size: None, output_location: output_location.clone(),
-                    }, input.clone()),
-                    "compress" => compress(&CompressPdfRequest {
-                        paths: vec![input.clone()], quality: 80, output_location: output_location.clone(),
                     }, input.clone()),
                     "remove" => {
                         let mut request = request(None, vec![0]);
@@ -1725,5 +1785,35 @@ mod tests {
         assert!(!fs::read(&input).unwrap().windows(16).any(|window| window == b"ToolboxSignature"), "original must be unchanged");
         let _ = fs::remove_file(output);
         let _ = fs::remove_file(input);
+    }
+
+    const BUNDLED_QPDF_CHILD: &str = "TOOLBOX_TEST_BUNDLED_QPDF_CHILD";
+
+    // Other tests resolve qpdf without the env lock, so the lookup environment is changed only in a child test process.
+    #[cfg(unix)]
+    #[test]
+    fn pdf_commands_find_qpdf_in_the_bundled_resources_location() {
+        if std::env::var_os(BUNDLED_QPDF_CHILD).is_none() {
+            use std::os::unix::fs::PermissionsExt;
+            let _guard = crate::kit::lock_process_env();
+            let root = split_fixture_root("bundled-qpdf");
+            let bundled = root.join("qpdf-bin/qpdf");
+            fs::create_dir_all(bundled.parent().unwrap()).unwrap();
+            fs::write(&bundled, b"#!/bin/sh\nexit 0\n").unwrap();
+            fs::set_permissions(&bundled, fs::Permissions::from_mode(0o755)).unwrap();
+            let child = Command::new(std::env::current_exe().unwrap())
+                .args(["kit::pdf::remaining::tests::pdf_commands_find_qpdf_in_the_bundled_resources_location", "--exact", "--nocapture", "--test-threads=1"])
+                .env(BUNDLED_QPDF_CHILD, &bundled)
+                .env("TOOLBOX_RESOURCE_ROOT", &root)
+                .env_remove("TOOLBOX_QPDF_PATH")
+                .env("PATH", root.join("missing-path"))
+                .output()
+                .unwrap();
+            let report = format!("{}{}", String::from_utf8_lossy(&child.stdout), String::from_utf8_lossy(&child.stderr));
+            let _ = fs::remove_dir_all(root);
+            assert!(child.status.success() && report.contains("1 passed"), "{report}");
+            return;
+        }
+        assert_eq!(qpdf(), Ok(PathBuf::from(std::env::var_os(BUNDLED_QPDF_CHILD).unwrap())));
     }
 }
