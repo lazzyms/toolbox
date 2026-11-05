@@ -50,7 +50,7 @@ impl WatermarkOptions {
 #[cfg(test)]
 mod tests {
     use crate::kit::images::tools::{ImageEditPlan, WatermarkRequest};
-    use crate::kit::pdf::remaining::PdfWatermarkRequest;
+    use super::WatermarkOptions;
     use serde_json::{json, Value};
 
     fn with(base: Value, options: &Value) -> Value {
@@ -69,9 +69,10 @@ mod tests {
         plan.validate()
     }
 
+    // Edit PDF scene objects carry the options as their `watermark` field.
     fn pdf_request(options: &Value) -> Result<(), String> {
-        let request: PdfWatermarkRequest = serde_json::from_value(with(json!({ "paths": [], "outputLocation": "alongsideInput" }), options)).map_err(|error| error.to_string())?;
-        request.options.validate()
+        let options: WatermarkOptions = serde_json::from_value(options.clone()).map_err(|error| error.to_string())?;
+        options.validate()
     }
 
     #[test]

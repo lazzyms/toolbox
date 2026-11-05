@@ -135,6 +135,32 @@ test('PDF editor toolbar uses roving keyboard focus and the inspector follows th
   await expect(inspector.getByRole('combobox', { name: 'Shape type' })).toBeVisible();
 });
 
+test('saved Sign, Watermark, Page Numbers and Edit favorites and recents open the matching Edit PDF sub-tool after migration', async ({ page }) => {
+  const saved = ['pdf-sign', 'pdf-watermark', 'pdf-page-numbers', 'pdf-edit'];
+  await page.addInitScript((saved) => {
+    if (localStorage.getItem('toolbox-tool-id-migration')) return;
+    localStorage.setItem('toolbox-favorites', JSON.stringify(saved));
+    localStorage.setItem('toolbox-recent', JSON.stringify(saved));
+  }, saved);
+  for (const [title, tool] of [['Sign PDF', 'Signature'], ['Watermark PDF', 'Watermark'], ['Add PDF Page Numbers', 'Page numbers'], ['Edit PDF', 'Select']]) {
+    await page.goto('/');
+    const chips = page.getByRole('group', { name: 'Favorite tools' });
+    await expect(chips.getByRole('button')).toHaveText(['Sign PDF', 'Watermark PDF', 'Add PDF Page Numbers', 'Edit PDF']);
+    await chips.getByRole('button', { name: title, exact: true }).click();
+    await page.getByRole('button', { name: 'Choose files to process' }).click();
+    const toolbar = page.getByRole('toolbar', { name: 'PDF editor tools' });
+    await expect(toolbar.getByRole('button', { name: tool, exact: true }), title).toHaveAttribute('aria-pressed', 'true');
+    await expect(toolbar.getByRole('button', { pressed: true }), title).toHaveCount(1);
+  }
+  const stored = await page.evaluate(() => ({
+    favorites: JSON.parse(localStorage.getItem('toolbox-favorites') ?? 'null'),
+    recent: JSON.parse(localStorage.getItem('toolbox-recent') ?? 'null'),
+  }));
+  expect(stored.favorites).toEqual(saved);
+  expect([...stored.recent].sort()).toEqual([...saved].sort());
+  expect(await page.evaluate(() => (window as any).calls.map((call: any) => call.command).filter((command: string) => /sign_pdf|watermark_pdf|add_page_numbers|edit_pdf/.test(command)))).toEqual([]);
+});
+
 test('page actions menu supports keyboard navigation, Escape focus return, and outside dismissal', async ({ page }) => {
   await openEditor(page);
   const trigger = page.getByRole('button', { name: 'Page actions' });

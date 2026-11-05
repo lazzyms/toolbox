@@ -32,8 +32,8 @@ pub const SIGNATURE_IMAGE: ToolLimits = ToolLimits { max_bytes: 20 * MB, max_exp
 
 pub fn recorded(command: &str) -> Option<ToolLimits> {
     Some(match command {
-        "remove_password" | "protect_files" | "export_pdf_scene" | "crop_pdf" | "sign_pdf" | "edit_pdf" | "edit_pdf_session"
-        | "organize_pdf" | "add_pdf_pages" | "add_page_numbers" | "watermark_pdf" | "compress_pdf" | "remove_pdf_pages"
+        "remove_password" | "protect_files" | "export_pdf_scene" | "crop_pdf"
+        | "organize_pdf" | "add_pdf_pages" | "compress_pdf" | "remove_pdf_pages"
         | "extract_pdf_pages" | "merge_pdfs" | "split_pdf" | "pdf_to_images" | "pdf_to_text" | "extract_pdf_images"
         | "ocr_pdf" | "rotate_pdf" | "repair_pdf" | "redact_pdf" | "compare_pdfs" => PDF,
         "compress_images" | "convert_images" | "export_image_edit_plan" | "images_to_pdf" | "blur_faces"
