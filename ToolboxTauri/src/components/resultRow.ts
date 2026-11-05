@@ -1,9 +1,11 @@
-import type { ErrorKind, JobOutcome, OutcomePointer, OutcomeWarning, ToolError } from "../contracts";
+import type { ErrorKind, JobOutcome, OutcomePointer, OutcomeWarning, PackNeed, ToolError } from "../contracts";
 import { UtilityRegistry } from "../registry";
 
 export type RowTone = "ok" | "warn" | "skip" | "fail";
 
 export type RowPointer = { label: string; pointer: OutcomePointer };
+
+type PackPointer = Extract<OutcomePointer, { kind: "pack" }>;
 
 export interface RowView {
     name: string;
@@ -17,6 +19,8 @@ export interface RowView {
     pointer: RowPointer | null;
     canRetry: boolean;
     canRetryWithPassword: boolean;
+    /** Set when the file failed only for want of a pack that has since been installed. */
+    packInstalled: boolean;
 }
 
 export const fileName = (path: string) => path.split(/[\\/]/).pop() || path;
@@ -57,9 +61,11 @@ export const warningText = (warning: OutcomeWarning): string => {
     }
 };
 
+export const packVerbs: Record<PackNeed, string> = { notInstalled: "Install", damaged: "Repair", incompatible: "Update" };
+
 const pointerView = (pointer: OutcomePointer | null): RowPointer | null => {
     if (!pointer) return null;
-    if (pointer.kind === "pack") return { label: `Install ${pointer.packId.replace(/-/g, " ")}`, pointer };
+    if (pointer.kind === "pack") return { label: `${packVerbs[pointer.reason]} ${pointer.name} pack`, pointer };
     if (pointer.kind === "outputFolder") return { label: "Choose output folder", pointer };
     const tool = UtilityRegistry.find((item) => item.id === pointer.toolId);
     return tool ? { label: `Open ${tool.title}`, pointer } : null;
@@ -72,7 +78,16 @@ const outputSummary = (paths: string[]) =>
 
 const nonEmpty = (lines: string[]) => lines.filter((line) => line.trim().length > 0);
 
-export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput = false): RowView => {
+/** The pack a failed file needs before it can run, if that is why it failed. */
+export const neededPack = (outcome: JobOutcome): PackPointer | null =>
+    outcome.state === "failed" && outcome.failure.pointer?.kind === "pack" ? outcome.failure.pointer : null;
+
+/**
+ * A file that failed for want of a pack stays in the list without Retry, since running it again
+ * without the pack fails the same way. Once that pack is installed, the row says the file is ready
+ * to run again. `installedPacks` holds the packs installed, repaired or updated since the run.
+ */
+export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput = false, installedPacks: ReadonlySet<string> = new Set()): RowView => {
     const warnings = outcome.warnings.map(warningText);
     const input = { name: fileName(outcome.inputPath), fullPath: outcome.inputPath };
     switch (outcome.state) {
@@ -91,6 +106,7 @@ export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput =
                 pointer: null,
                 canRetry: false,
                 canRetryWithPassword: false,
+                packInstalled: false,
             };
         }
         case "skipped":
@@ -105,8 +121,26 @@ export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput =
                 pointer: pointerView(outcome.reason.pointer),
                 canRetry: false,
                 canRetryWithPassword: false,
+                packInstalled: false,
             };
         case "failed": {
+            const pack = neededPack(outcome);
+            if (pack) {
+                const installed = installedPacks.has(pack.packId);
+                return {
+                    ...input,
+                    tone: installed ? "ok" : "fail",
+                    stateLabel: installed ? "Ready to run" : "Needs a pack",
+                    spokenState: installed ? `Ready to run, the ${pack.name} pack is installed` : `Needs the ${pack.name} pack`,
+                    detailLines: installed ? [`The ${pack.name} pack is installed now. Run again to read this file.`] : nonEmpty([outcome.failure.message, ...warnings]),
+                    openOutput: null,
+                    revealOutput: null,
+                    pointer: installed ? null : pointerView(pack),
+                    canRetry: false,
+                    canRetryWithPassword: false,
+                    packInstalled: installed,
+                };
+            }
             const unavailable = outcome.failure.kind === "unavailable";
             const wrongPassword = outcome.failure.kind === "wrongPassword";
             return {
@@ -121,6 +155,7 @@ export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput =
                 // A retry reuses the run's output location, so it cannot fix a failure that points at that location.
                 canRetry: isRetryable(outcome.failure) && outcome.failure.pointer?.kind !== "outputFolder",
                 canRetryWithPassword: wrongPassword,
+                packInstalled: false,
             };
         }
     }
@@ -139,11 +174,13 @@ export const resultTally = (results: JobOutcome[], resultVerb: string): string =
     const count = (state: JobOutcome["state"]) => results.filter((result) => result.state === state).length;
     const cancelled = results.filter(skippedAsCancelled).length;
     const skipped = count("skipped") - cancelled;
-    const failed = count("failed");
+    const needPack = results.filter((result) => neededPack(result) !== null).length;
+    const failed = count("failed") - needPack;
     const parts = [`${count("succeeded")} ${resultVerb.toLowerCase()}`];
     if (skipped > 0) parts.push(`${skipped} skipped`);
     if (cancelled > 0) parts.push(`${cancelled} skipped as cancelled`);
     if (failed > 0) parts.push(`${failed} failed`);
+    if (needPack > 0) parts.push(`${needPack} ${needPack === 1 ? "needs" : "need"} a pack`);
     return parts.join(", ");
 };
 

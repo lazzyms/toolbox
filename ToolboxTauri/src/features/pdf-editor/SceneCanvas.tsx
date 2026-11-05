@@ -110,7 +110,7 @@ function Artwork({ page, object }: { page: ScenePage; object: SceneObject }) {
   return shapeArtwork(object.shape, r, object.color, object.opacity);
 }
 
-export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPreview, tool, selectedId, zoom, onSelect, onCommit, makeObject }: SceneCanvasProps) {
+export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPreview, tool, selectedId, zoom, onSelect, onCommit, makeObject, onEditText }: SceneCanvasProps) {
   const host = useRef<HTMLDivElement>(null);
   const surface = useRef<SVGSVGElement>(null);
   const coordinates = useRef<SVGGElement>(null);
@@ -181,6 +181,7 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
       window.getSelection()?.removeAllRanges();
     };
   }, []);
+  useEffect(() => { onEditText?.(editingId ? { id: editingId, text: editingText } : null); }, [editingId, editingText]);
   useEffect(() => {
     if (!editingId) return;
     requestAnimationFrame(() => { editInput.current?.focus(); editInput.current?.select(); });
