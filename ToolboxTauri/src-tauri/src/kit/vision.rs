@@ -4,7 +4,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::io::Read;
-use std::sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex, PoisonError};
+use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -16,8 +16,7 @@ use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::{OutcomePointer, PackNeed, ToolError};
 use crate::kit::pdf::metadata::page_bounds;
 use crate::kit::resources;
-use crate::packs::uninstall::{resolve_pack_resource, PackHolds, RequiredPack};
-use crate::packs::Catalog;
+use crate::packs::uninstall::{RequiredPack, RunPacks};
 
 const OCR_MAX_INPUT_BYTES: u64 = 100 * 1024 * 1024;
 const OCR_MAX_OUTPUT_BYTES: usize = 10 * 1024 * 1024;
@@ -63,48 +62,25 @@ impl OcrRequest {
     }
 }
 
-/// Where an OCR run finds language packs. The packs a run reads stay held until the run ends, so
-/// they cannot be uninstalled under it.
-pub struct OcrPacks {
-    source: Result<PackSource, String>,
-    holds: Mutex<PackHolds>,
-}
-
-struct PackSource {
-    app_data: PathBuf,
-    app_version: String,
-    catalog: Catalog,
-}
-
-impl OcrPacks {
-    pub fn new(app_data: Result<PathBuf, String>, app_version: impl Into<String>, catalog: Result<Catalog, String>) -> Self {
-        let app_version = app_version.into();
-        let source = app_data.and_then(|app_data| catalog.map(|catalog| PackSource { app_data, app_version, catalog }));
-        Self { source, holds: Mutex::default() }
-    }
-}
-
 pub struct OcrRun {
     pub request: OcrRequest,
-    pub packs: OcrPacks,
+    pub packs: RunPacks,
 }
 
 /// The language data for `code`: English from the app, any other language from its pack. A pack
 /// that is not installed, is damaged or does not fit this app fails with a pointer to it.
-fn ocr_language(packs: &OcrPacks, code: &str) -> Result<PathBuf, ToolError> {
+fn ocr_language(packs: &RunPacks, code: &str) -> Result<PathBuf, ToolError> {
     if code == ENGLISH {
         return find_resource("engTraineddata", "TOOLBOX_TESSDATA_PATH", &ocr_resource_root()).map_err(ToolError::unavailable);
     }
-    let source = packs.source.as_ref().map_err(|error| ToolError::unavailable(error.clone()))?;
-    let (pack, language) = source.catalog.packs.iter()
+    let (pack, language) = packs.catalog()?.packs.iter()
         .find_map(|pack| pack.ocr_language.as_ref().filter(|language| language.code == code).map(|language| (pack, language)))
         .ok_or_else(|| ToolError::invalid_input(format!("Toolbox can't read text in language {code:?}.")))?;
     let file_name = format!("{code}.traineddata");
     let development_override = cfg!(debug_assertions).then(|| std::env::var_os(OCR_LANGUAGE_DIR_ENV)).flatten()
         .map(|folder| PathBuf::from(folder).join(&file_name));
-    let mut holds = packs.holds.lock().unwrap_or_else(PoisonError::into_inner);
     let required = RequiredPack { id: &pack.id, name: &language.name };
-    let resolved = resolve_pack_resource(&format!("tessdata/{file_name}"), &source.app_data, required, &source.app_version, Some(ocr_resource_root()), development_override, &mut holds)
+    let resolved = packs.resolve(&format!("tessdata/{file_name}"), required, Some(ocr_resource_root()), development_override)
         .map_err(|mut error| {
             if matches!(error.pointer, Some(OutcomePointer::Pack { reason: PackNeed::NotInstalled, .. })) {
                 error.message = format!("Needs the {} text recognition pack, which isn't installed. Nothing was saved.", language.name);
@@ -497,7 +473,8 @@ fn stderr(result: std::process::Output, fallback: &str) -> String { String::from
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_ocr_text, ocr_pdf, run_command, validate_cutout, validate_face_blur, OcrPacks, OcrRequest, OcrRun};
+    use super::{normalize_ocr_text, ocr_pdf, run_command, validate_cutout, validate_face_blur, OcrRequest, OcrRun};
+    use crate::packs::uninstall::RunPacks;
     use crate::kit::contracts::{ErrorKind, OutcomePointer, PackNeed};
     use image::{Rgba, RgbaImage};
     use lopdf::{dictionary, Document, Object, Stream};
@@ -516,7 +493,7 @@ mod tests {
     fn english_run(input: &Path, pages: Option<Vec<usize>>, output_root: &Path) -> OcrRun {
         OcrRun {
             request: OcrRequest { paths: vec![input.to_path_buf()], pages, output_location: crate::kit::common::OutputLocation::CustomFolder(output_root.to_path_buf()), language: "eng".into(), language_overrides: Default::default() },
-            packs: OcrPacks::new(Err("No packs in this test.".into()), "1.0.14", Err("No catalog in this test.".into())),
+            packs: RunPacks::new(Err("No packs in this test.".into()), "1.0.14", Err("No catalog in this test.".into())),
         }
     }
 
@@ -596,7 +573,7 @@ mod tests {
                     language: "eng".into(),
                     language_overrides: [(self.hindi.clone(), "hin".to_string())].into_iter().collect(),
                 };
-                let packs = OcrPacks::new(Ok(app_data.to_path_buf()), app_version, Ok(crate::packs::install::tests::Fixture::new().catalog()));
+                let packs = RunPacks::new(Ok(app_data.to_path_buf()), app_version, Ok(crate::packs::install::tests::Fixture::new().catalog()));
                 // One run for the whole batch, each file through the job the batch runner calls. The
                 // runner itself refuses ocr_pdf while the tool is unavailable in this build.
                 let run = OcrRun { request, packs };
@@ -697,7 +674,7 @@ mod tests {
         ];
         for (name, text) in catalogs {
             let catalog = crate::packs::parse_catalog(&text).unwrap();
-            let packs = OcrPacks::new(Ok(root.join(name)), "1.0.14", Ok(catalog.clone()));
+            let packs = RunPacks::new(Ok(root.join(name)), "1.0.14", Ok(catalog.clone()));
             for pack in &catalog.packs {
                 let Some(language) = &pack.ocr_language else { continue };
                 let error = super::ocr_language(&packs, &language.code).unwrap_err();

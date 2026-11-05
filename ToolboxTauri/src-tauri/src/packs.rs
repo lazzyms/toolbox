@@ -63,6 +63,10 @@ pub struct CatalogPack {
     /// The language a text recognition pack adds. OCR finds the pack a language needs by its code.
     #[serde(default)]
     pub ocr_language: Option<OcrLanguage>,
+    /// The fonts a script pack adds: a Unicode script's full name, as in `Devanagari`, and the
+    /// TrueType font file in the pack that writes it. Edit PDF finds the pack a script needs here.
+    #[serde(default)]
+    pub script_fonts: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -79,6 +83,8 @@ pub const OCR_TOOL_ID: &str = "pdf-ocr";
 /// The text recognition language built into the app, as its Tesseract code and name. Every other
 /// language comes from a pack.
 pub const BUILT_IN_OCR_LANGUAGE: (&str, &str) = ("eng", "English");
+/// The tool whose script packs the catalog names with `scriptFonts`.
+pub const PDF_TEXT_TOOL_ID: &str = "pdf-edit";
 
 /// `from` is inclusive and `before` is exclusive. No `before` means every later version.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -217,6 +223,7 @@ pub fn parse_catalog(text: &str) -> Result<Catalog, String> {
     }
     let mut ids = std::collections::BTreeSet::new();
     let mut languages = std::collections::BTreeSet::from([BUILT_IN_OCR_LANGUAGE.0]);
+    let mut scripts = std::collections::BTreeSet::new();
     for pack in &catalog.packs {
         let valid_id = !pack.id.is_empty() && pack.id.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
         if !valid_id || !ids.insert(pack.id.as_str()) {
@@ -248,6 +255,22 @@ pub fn parse_catalog(text: &str) -> Result<Catalog, String> {
             }
             if !languages.insert(language.code.as_str()) {
                 return Err(format!("The pack catalog has more than one pack for language {:?}", language.code));
+            }
+        }
+        if !pack.script_fonts.is_empty() && !pack.tool_ids.iter().any(|tool| tool == PDF_TEXT_TOOL_ID) {
+            return Err(format!("Pack {} adds script fonts but not to {PDF_TEXT_TOOL_ID}", pack.id));
+        }
+        for (script, font) in &pack.script_fonts {
+            // Scripts the app writes with its own font never come from a pack.
+            if crate::kit::pdf::script_text::pack_script(script).is_none() {
+                return Err(format!("Pack {} has a bad script: {script:?}", pack.id));
+            }
+            // The font names a file in the pack, so it must stay inside it.
+            if !font.ends_with(".ttf") || !font.split('/').all(install::is_plain_segment) {
+                return Err(format!("Pack {} has a bad font for {script}: {font:?}", pack.id));
+            }
+            if !scripts.insert(script.as_str()) {
+                return Err(format!("The pack catalog has more than one pack for script {script:?}"));
             }
         }
     }
@@ -761,6 +784,142 @@ mod tests {
         assert!(unpinned.contains("no Model baseline entry"), "{unpinned}");
         let renamed = check_ocr_language_packs(&catalog_of(vec![ocr_pack("ocr-hindi-2", "hin", MIB)]), &launch).unwrap_err();
         assert!(renamed.contains("belongs to pack"), "{renamed}");
+    }
+
+    const SCRIPT_PACKS: &str = include_str!("../../shared/script-packs.json");
+
+    /// The script pack plan: its download budget, the pack's id and name, and the families that
+    /// move into packs of their own if the pack goes over budget.
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ScriptPackPlan {
+        base_scripts: Vec<String>,
+        download_budget_bytes: u64,
+        pack: PlannedPack,
+        families: Vec<ScriptFamily>,
+    }
+
+    #[derive(Deserialize)]
+    struct PlannedPack {
+        id: String,
+        name: String,
+    }
+
+    #[derive(Deserialize)]
+    struct ScriptFamily {
+        id: String,
+        name: String,
+        scripts: Vec<String>,
+    }
+
+    fn script_plan() -> ScriptPackPlan {
+        serde_json::from_str(SCRIPT_PACKS).unwrap()
+    }
+
+    /// The release check on a catalog's script packs: each is the planned pack or one of its
+    /// families under the planned name, holds only scripts that belong to it, and no payload is
+    /// over the budget.
+    fn check_script_packs(catalog: &Catalog, plan: &ScriptPackPlan) -> Result<(), String> {
+        let family_of = |script: &str| plan.families.iter().find(|family| family.scripts.iter().any(|name| name == script));
+        for pack in catalog.packs.iter().filter(|pack| !pack.script_fonts.is_empty()) {
+            let family = plan.families.iter().find(|family| family.id == pack.id);
+            let name = match family {
+                Some(family) => &family.name,
+                None if pack.id == plan.pack.id => &plan.pack.name,
+                None => return Err(format!("{} adds script fonts but isn't a planned script pack", pack.id)),
+            };
+            if &pack.name != name {
+                return Err(format!("{} is named {:?}, not {name:?}", pack.id, pack.name));
+            }
+            for script in pack.script_fonts.keys() {
+                let owner = family_of(script).map_or(plan.pack.id.as_str(), |family| family.id.as_str());
+                // A family's scripts may stay in the main pack until it splits, never the reverse.
+                if owner != pack.id && family.is_some() {
+                    return Err(format!("{} adds {script}, which belongs to {owner}", pack.id));
+                }
+            }
+            if let Some(payload) = pack.payloads.iter().find(|payload| payload.download_bytes > plan.download_budget_bytes) {
+                return Err(format!("{} for {} is {} bytes, over the {} byte script pack budget", pack.id, payload.target, payload.download_bytes, plan.download_budget_bytes));
+            }
+        }
+        Ok(())
+    }
+
+    fn script_pack(id: &str, name: &str, fonts: serde_json::Value, download_bytes: u64) -> serde_json::Value {
+        serde_json::json!({
+            "id": id, "name": name, "description": "d", "toolIds": [PDF_TEXT_TOOL_ID], "license": "OFL-1.1", "version": "1.0",
+            "minPackFormat": 1, "appVersions": { "from": "0.1" }, "scriptFonts": fonts,
+            "payloads": [{ "target": "all", "downloadBytes": download_bytes, "installedBytes": download_bytes, "sha256": "0".repeat(64), "path": format!("{id}.toolboxpack") }]
+        })
+    }
+
+    #[test]
+    fn the_script_pack_plan_has_a_budget_and_families_of_pack_scripts() {
+        let plan = script_plan();
+        assert_eq!(plan.download_budget_bytes, 40 * MIB);
+        assert_eq!((plan.pack.id.as_str(), plan.pack.name.as_str()), ("unicode-scripts", "Unicode scripts"));
+        // The app writes its base scripts itself, so no pack holds them.
+        assert_eq!(plan.base_scripts, ["Latin", "Cyrillic", "Greek"]);
+        let mut scripts = std::collections::BTreeSet::new();
+        for family in &plan.families {
+            assert!(family.id.starts_with("unicode-scripts-") && !family.name.is_empty());
+            for script in &family.scripts {
+                assert!(crate::kit::pdf::script_text::pack_script(script).is_some(), "{script}");
+                assert!(scripts.insert(script.as_str()), "{script} is in two families");
+            }
+        }
+        for script in &plan.base_scripts {
+            assert!(crate::kit::pdf::script_text::pack_script(script).is_none(), "{script}");
+        }
+        check_script_packs(&parse_catalog(BUILT_IN_CATALOG).unwrap(), &plan).unwrap();
+        check_script_packs(&fixture(), &plan).unwrap();
+    }
+
+    #[test]
+    fn the_release_check_refuses_a_script_pack_over_budget_or_outside_the_plan() {
+        let plan = script_plan();
+        let fonts = serde_json::json!({ "Arabic": "fonts/Arabic.ttf", "Devanagari": "fonts/Devanagari.ttf", "Han": "fonts/Han.ttf" });
+        check_script_packs(&catalog_of(vec![script_pack("unicode-scripts", "Unicode scripts", fonts.clone(), 40 * MIB)]), &plan).unwrap();
+        // Split: the CJK family moves into its own pack.
+        check_script_packs(&catalog_of(vec![
+            script_pack("unicode-scripts", "Unicode scripts", serde_json::json!({ "Arabic": "fonts/Arabic.ttf" }), 20 * MIB),
+            script_pack("unicode-scripts-cjk", "Unicode scripts: Chinese, Japanese and Korean", serde_json::json!({ "Han": "fonts/Han.ttf", "Hangul": "fonts/Hangul.ttf" }), 40 * MIB),
+        ]), &plan).unwrap();
+
+        let over = check_script_packs(&catalog_of(vec![script_pack("unicode-scripts", "Unicode scripts", fonts.clone(), 40 * MIB + 1)]), &plan).unwrap_err();
+        assert!(over.contains("over the 41943040 byte script pack budget"), "{over}");
+        let unplanned = check_script_packs(&catalog_of(vec![script_pack("unicode-fonts", "Unicode scripts", fonts.clone(), MIB)]), &plan).unwrap_err();
+        assert!(unplanned.contains("isn't a planned script pack"), "{unplanned}");
+        let renamed = check_script_packs(&catalog_of(vec![script_pack("unicode-scripts", "Fonts", fonts, MIB)]), &plan).unwrap_err();
+        assert!(renamed.contains("not \"Unicode scripts\""), "{renamed}");
+        let misplaced = check_script_packs(&catalog_of(vec![script_pack("unicode-scripts-cjk", "Unicode scripts: Chinese, Japanese and Korean", serde_json::json!({ "Arabic": "fonts/Arabic.ttf" }), MIB)]), &plan).unwrap_err();
+        assert!(misplaced.contains("belongs to unicode-scripts"), "{misplaced}");
+    }
+
+    #[test]
+    fn the_catalog_refuses_bad_script_fonts() {
+        let parse = |pack: serde_json::Value| parse_catalog(&serde_json::json!({ "formatVersion": 1, "packs": [pack] }).to_string());
+        let pack = |fonts: serde_json::Value| script_pack("unicode-scripts", "Unicode scripts", fonts, MIB);
+        let catalog = parse(pack(serde_json::json!({ "Arabic": "fonts/Arabic.ttf" }))).unwrap();
+        assert_eq!(catalog.packs[0].script_fonts["Arabic"], "fonts/Arabic.ttf");
+        for (fonts, error) in [
+            (serde_json::json!({ "Latin": "fonts/Latin.ttf" }), "bad script"),
+            (serde_json::json!({ "Klingon": "fonts/Klingon.ttf" }), "bad script"),
+            (serde_json::json!({ "Arabic": "../Arabic.ttf" }), "bad font"),
+            (serde_json::json!({ "Arabic": "/fonts/Arabic.ttf" }), "bad font"),
+            (serde_json::json!({ "Arabic": "fonts/Arabic.otf" }), "bad font"),
+        ] {
+            let message = parse(pack(fonts.clone())).unwrap_err();
+            assert!(message.contains(error), "{fonts}: {message}");
+        }
+        let mut wrong_tool = pack(serde_json::json!({ "Arabic": "fonts/Arabic.ttf" }));
+        wrong_tool["toolIds"] = serde_json::json!(["pdf-ocr"]);
+        assert!(parse(wrong_tool).unwrap_err().contains("not to pdf-edit"));
+        let twice = parse_catalog(&serde_json::json!({ "formatVersion": 1, "packs": [
+            pack(serde_json::json!({ "Arabic": "fonts/Arabic.ttf" })),
+            script_pack("unicode-scripts-cjk", "CJK", serde_json::json!({ "Arabic": "fonts/Arabic.ttf" }), MIB),
+        ] }).to_string()).unwrap_err();
+        assert!(twice.contains("more than one pack for script \"Arabic\""), "{twice}");
     }
 
     /// Listing must work offline: the module has no network code and reads only the filesystem.

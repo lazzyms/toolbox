@@ -1,10 +1,12 @@
-use std::{collections::{HashMap, HashSet}, fs::{self, OpenOptions}, io::Write, path::{Path, PathBuf}, process::Command, sync::atomic::{AtomicU64, Ordering}, time::{Instant}};
+use std::{collections::{BTreeSet, HashMap, HashSet}, fs::{self, OpenOptions}, io::Write, path::{Path, PathBuf}, process::Command, sync::atomic::{AtomicU64, Ordering}, time::{Instant}};
 use base64::Engine;
 use flate2::{write::ZlibEncoder, Compression};
 use lopdf::{dictionary, Document, Object, ObjectId, Stream};
 use quick_xml::{events::Event, escape::unescape, Reader as XmlReader, XmlVersion};
 use serde::{Deserialize, Serialize};
 use crate::kit::{common::{JobOutcome, OutputLocation, OutputNaming}, contracts::ToolError};
+use crate::packs::uninstall::RunPacks;
+use super::script_text::{self, ScriptFonts, UsedGlyphs};
 use super::metadata::{PdfDocumentMetadata, PdfPageMetadata, PdfTextRun};
 use super::{inherited, resolve, PdfMutationIntent};
 
@@ -56,7 +58,7 @@ pub struct PreviewRequest { pub path: PathBuf, pub scene: PdfScene, pub page_ind
 #[derive(Deserialize)]
 #[serde(rename_all="camelCase")]
 pub struct PreviewPagesRequest { pub path: PathBuf, pub scene: PdfScene, pub page_indices: Vec<usize> }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all="camelCase")]
 pub struct ExportRequest { pub paths: Vec<PathBuf>, pub scene: PdfScene, pub output_location: OutputLocation }
 #[derive(Serialize)]
@@ -145,6 +147,38 @@ fn signature_font_bytes(font_family: &str) -> Result<&'static [u8], String> {
         "Pacifico" => Ok(INCLUDED_SIGNATURE_PACIFICO_FONT),
         _ => Err("Unsupported cursive signature font".into()),
     }
+}
+
+fn is_cursive(font_family: Option<&str>) -> bool {
+    matches!(font_family, Some("Satisfy" | "Pacifico"))
+}
+
+/// The text a scene writes with fonts: text boxes, watermarks, and typed signatures that are not
+/// drawn in a cursive font.
+pub fn written_texts(scene: &PdfScene) -> impl Iterator<Item = &str> {
+    scene.pages.iter().flat_map(|page| page.objects.iter()).filter(|o| match o.kind {
+        Kind::Text | Kind::Watermark => true,
+        Kind::Signature => matches!(o.signature_mode, Some(SignatureMode::Text)) && !is_cursive(o.font_family.as_deref()),
+        Kind::Highlight | Kind::Shape => false,
+    }).map(|o| o.text.as_str())
+}
+
+/// The resource names a page gives the scene's Unicode fonts, and the fonts its text used.
+struct PageUnicodeFonts { names: Vec<String>, used: BTreeSet<usize> }
+
+/// Writes one line of text along the text matrix `m`. Latin-1 text keeps the chosen standard font;
+/// any other text is shaped and written with the scene's embedded Unicode fonts.
+fn write_text(content: &mut String, text: &str, resource: &str, size: f32, m: [f32; 6], fonts: &ScriptFonts, page: &mut PageUnicodeFonts, used: &mut UsedGlyphs) -> Result<(), String> {
+    if text.len() > 100_000 { return Err("Text is too long".into()); }
+    let [a, b, c, d, e, f] = m;
+    if let Ok(encoded) = encode_text(text) {
+        content.push_str(&format!("BT /{resource} {size} Tf {a} {b} {c} {d} {e} {f} Tm <{encoded}> Tj ET\n"));
+        return Ok(());
+    }
+    let (glyphs, _) = fonts.shape_line(text)?;
+    page.used.extend(glyphs.iter().map(|glyph| glyph.font));
+    content.push_str(&script_text::draw_line(&glyphs, text, size, m, &|font| page.names[font].clone(), used));
+    Ok(())
 }
 
 fn encode_text(text: &str) -> Result<String, String> {
@@ -517,7 +551,7 @@ fn scene_resources(document: &Document, page_id: ObjectId, xobjects: lopdf::Dict
     Ok(resources)
 }
 
-pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
+pub fn compose(path:&Path, scene:&PdfScene, script_fonts:&ScriptFonts)->Result<Document,String> {
     if scene.pages.is_empty() || scene.pages.len()>2000 { return Err("Scene must contain 1–2000 pages".into()); }
     let mut doc=load(path)?;
     let sources:Vec<_>=doc.get_pages().values().copied().collect();
@@ -545,6 +579,7 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
     let fonts: HashMap<&'static str, ObjectId> = font_specs.iter().map(|(base, resource)| (*resource, doc.add_object(dictionary! {
         "Type" => "Font", "Subtype" => "Type1", "BaseFont" => *base, "Encoding" => "WinAnsiEncoding"
     }))).collect();
+    let mut used_glyphs=UsedGlyphs::default();
     let mut kids=Vec::new();
     for page in &scene.pages {
         dimensions(page.width,page.height)?;
@@ -571,6 +606,12 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
             let id = *fonts.get(resource).ok_or("Scene font resource disappeared")?;
             font_resources.set(name.as_str(), Object::Reference(id));
             font_names.insert(*resource, name);
+        }
+        let mut unicode_fonts = PageUnicodeFonts { names: Vec::new(), used: BTreeSet::new() };
+        for font in 0..script_fonts.len() {
+            let name = next_resource_name(&effective_fonts, "Font", &format!("SceneUnicode{font}"))?;
+            effective_fonts.set(name.as_str(), Object::Null);
+            unicode_fonts.names.push(name);
         }
         let mut effective_xobjects = source_index.map(|index| effective_resource_entries(&doc, sources[index], b"XObject")).transpose()?.unwrap_or_default();
         let mut effective_states = source_index.map(|index| effective_resource_entries(&doc, sources[index], b"ExtGState")).transpose()?.unwrap_or_default();
@@ -634,8 +675,7 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
                             } else {
                                 let (_, resource)=font_spec(o.font_family.as_deref())?;
                                 let resource = font_names.get(resource).ok_or("Scene font resource disappeared")?;
-                                let encoded=encode_text(&o.text)?;
-                                content.push_str(&format!("BT /{resource} {} Tf 1 0 0 -1 {} {} Tm <{encoded}> Tj ET\n",o.font_size,r.x,r.y+o.font_size));
+                                write_text(&mut content,&o.text,resource,o.font_size,[1.,0.,0.,-1.,r.x,r.y+o.font_size],script_fonts,&mut unicode_fonts,&mut used_glyphs)?;
                             }
                         }
                         None => {
@@ -654,26 +694,29 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
                 Kind::Text=>{
                     let (_, resource)=font_spec(o.font_family.as_deref())?;
                     let resource = font_names.get(resource).ok_or("Scene font resource disappeared")?;
-                    let encoded_lines=o.text.lines().map(encode_text).collect::<Result<Vec<_>,_>>()?;
-                    content.push_str(&format!("{} {} {} {} re W n\n",r.x,r.y,r.width,r.height));
-                    for (line,encoded) in encoded_lines.iter().enumerate() {
-                        content.push_str(&format!("BT /{resource} {} Tf 1 0 0 -1 {} {} Tm <{}> Tj ET\n",o.font_size,r.x,r.y+o.font_size*(1.+line as f32*1.2),encoded));
+                    let mut lines=String::new();
+                    for (line,text) in o.text.lines().enumerate() {
+                        write_text(&mut lines,text,resource,o.font_size,[1.,0.,0.,-1.,r.x,r.y+o.font_size*(1.+line as f32*1.2)],script_fonts,&mut unicode_fonts,&mut used_glyphs)?;
                     }
+                    content.push_str(&format!("{} {} {} {} re W n\n",r.x,r.y,r.width,r.height));
+                    content.push_str(&lines);
                 },
                 Kind::Watermark=>{
                     let (_, resource)=font_spec(o.font_family.as_deref())?;
                     let resource = font_names.get(resource).ok_or("Scene font resource disappeared")?;
-                    let encoded=encode_text(&o.text)?;
                     let area=page.crop.as_ref().cloned().unwrap_or(Rect{x:0.,y:0.,width:page.width,height:page.height});
                     for (x,y,angle) in watermark_placements(&area,&o.rect,o.font_size,&o.text,o.watermark_pattern.as_ref()) {
                         let [a, b, c, d] = scene_angle_to_pdf_text_matrix(angle);
-                        content.push_str(&format!("BT /{resource} {} Tf {} {} {} {} {} {} Tm <{encoded}> Tj ET\n",o.font_size,a,b,c,d,x,y));
+                        write_text(&mut content,&o.text,resource,o.font_size,[a,b,c,d,x,y],script_fonts,&mut unicode_fonts,&mut used_glyphs)?;
                     }
                 },
             }
             content.push_str("Q\n");
         }
         content.push_str("Q\n");
+        for font in &unicode_fonts.used {
+            font_resources.set(unicode_fonts.names[*font].as_str(), Object::Reference(used_glyphs.font_object(&mut doc, *font)));
+        }
         let stream=doc.add_object(Stream::new(dictionary!{},content.into_bytes()));
         if let Some(index) = source_index {
             let id = preflight.source_pages[index];
@@ -698,6 +741,7 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
     }
     doc.objects.get_mut(&preflight.pages_root).ok_or("PDF page-tree root disappeared during scene export")?.as_dict_mut().map_err(err)?.set("Kids",kids);
     doc.objects.get_mut(&preflight.pages_root).ok_or("PDF page-tree root disappeared during scene export")?.as_dict_mut().map_err(err)?.set("Count",scene.pages.len() as i64);
+    script_fonts.write_fonts(&mut doc, used_glyphs)?;
     Ok(doc)
 }
 
@@ -794,12 +838,13 @@ fn render(path:&Path,index:usize,renderer:&Path,temp:&TempDir)->Result<ScenePrev
     let (bytes,width,height)=super::read_preview_png(&prefix.with_extension("png")).map_err(err)?;
     Ok(ScenePreview{data_url:format!("data:image/png;base64,{}",base64::engine::general_purpose::STANDARD.encode(bytes)),width,height})
 }
-pub fn preview(request:&PreviewRequest)->Result<ScenePreview,String> {
+pub fn preview(request:&PreviewRequest, packs:&RunPacks)->Result<ScenePreview,String> {
     if request.page_index>=request.scene.pages.len() { return Err("Preview page outside scene".into()); }
+    let fonts=ScriptFonts::resolve(written_texts(&request.scene),packs).map_err(|error| error.message)?;
     let renderer=renderer()?;
     let temp=TempDir::new()?;
     let path=temp.0.join("scene.pdf");
-    compose(&request.path,&request.scene)?.save(&path).map_err(err)?;
+    compose(&request.path,&request.scene,&fonts)?.save(&path).map_err(err)?;
     render(&path,request.page_index,&renderer,&temp)
 }
 fn validate_preview_page_indices(page_indices:&[usize], page_count:usize)->Result<(),String> {
@@ -811,12 +856,13 @@ fn validate_preview_page_indices(page_indices:&[usize], page_count:usize)->Resul
     }
     Ok(())
 }
-pub fn preview_pages(request:&PreviewPagesRequest)->Result<Vec<IndexedScenePreview>,String> {
+pub fn preview_pages(request:&PreviewPagesRequest, packs:&RunPacks)->Result<Vec<IndexedScenePreview>,String> {
     validate_preview_page_indices(&request.page_indices,request.scene.pages.len())?;
+    let fonts=ScriptFonts::resolve(written_texts(&request.scene),packs).map_err(|error| error.message)?;
     let renderer=renderer()?;
     let temp=TempDir::new()?;
     let path=temp.0.join("scene.pdf");
-    compose(&request.path,&request.scene)?.save(&path).map_err(err)?;
+    compose(&request.path,&request.scene,&fonts)?.save(&path).map_err(err)?;
     request.page_indices.iter().copied().map(|page_index| {
         render(&path,page_index,&renderer,&temp).map(|preview| IndexedScenePreview{page_index,preview})
     }).collect()
@@ -842,11 +888,21 @@ pub fn inspect_page(path:&Path,page_index:usize)->Result<PdfPageMetadata,String>
     let preview = super::metadata::render_preview(path, page_index + 1, g.width, g.height);
     Ok(PdfPageMetadata{index:page_index,x:g.bbox[0],y:g.bbox[1],width:g.width,height:g.height,rotation:source_rotation,page_box:g.bbox,preview,text_runs:Some(text_runs)})
 }
-pub fn export(request:&ExportRequest,input:PathBuf)->JobOutcome {
+/// A scene export: the request and the packs its text may need.
+pub struct SceneRun { pub request: ExportRequest, pub packs: RunPacks }
+
+pub fn export(run:&SceneRun,input:PathBuf)->JobOutcome {
+    let request=&run.request;
+    // Fonts for scripts the app does not write itself come from their pack. Without it nothing is
+    // written, and the outcome points at the pack.
+    let fonts=match ScriptFonts::resolve(written_texts(&request.scene),&run.packs) {
+        Ok(fonts)=>fonts,
+        Err(error)=>return JobOutcome::failure(input,error),
+    };
     let result=(|| {
         if !matches!(request.output_location,OutputLocation::AlongsideInput) { return Err("Scene exports must be alongside the input".into()); }
         let mut bytes=Vec::new();
-        compose(&input,&request.scene)?.save_to(&mut bytes).map_err(err)?;
+        compose(&input,&request.scene,&fonts)?.save_to(&mut bytes).map_err(err)?;
         let parent=input.parent().ok_or("Input has no parent directory")?;
         let stem=input.file_stem().ok_or("Input has no filename")?.to_string_lossy();
         for n in 1..=10000 {
@@ -867,6 +923,12 @@ pub fn export(request:&ExportRequest,input:PathBuf)->JobOutcome {
 mod tests {
     use super::*;
     use crate::kit::common::OutputNaming;
+
+    fn no_packs() -> RunPacks { RunPacks::new(Err("No packs in this test.".into()), "0.0.0", Err("No catalog in this test.".into())) }
+    fn compose(path: &Path, scene: &PdfScene) -> Result<Document, String> { super::compose(path, scene, &ScriptFonts::base()) }
+    fn preview(request: &PreviewRequest) -> Result<ScenePreview, String> { super::preview(request, &no_packs()) }
+    fn preview_pages(request: &PreviewPagesRequest) -> Result<Vec<IndexedScenePreview>, String> { super::preview_pages(request, &no_packs()) }
+    fn export(request: &ExportRequest, input: PathBuf) -> JobOutcome { super::export(&SceneRun { request: request.clone(), packs: no_packs() }, input) }
 
     fn fixture(path: &Path) {
         let mut d = Document::with_version("1.7");
@@ -1246,7 +1308,7 @@ mod tests {
         let mut s=scene(); s.pages[0].crop.as_mut().unwrap().x=-1.; assert!(compose(&input,&s).is_err());
         let mut s=scene(); s.pages[0].objects[0].opacity=f32::NAN; assert!(compose(&input,&s).is_err());
         let mut s=scene(); s.pages[0].source_index=Some(90); assert!(compose(&input,&s).is_err());
-        let mut s=scene(); s.pages[1].objects[0].text="unsupported \u{1f600}".into();
+        let mut s=scene(); s.pages[1].objects[0].text="unsupported \u{E000}".into();
         let result=export(&ExportRequest {paths:vec![],scene:s,output_location:OutputLocation::AlongsideInput},input.clone());
         assert!(result.error().is_some()); assert!(result.output_paths().is_empty());
         assert_eq!(fs::read_dir(&temp.0).unwrap().count(),1);
@@ -1631,5 +1693,234 @@ mod tests {
         assert!(result.error().is_some_and(|error| error.message.contains("tagged PDF")), "{result:?}");
         assert!(result.output_paths().is_empty());
         assert!(!input.with_file_name("tagged-overlay-edited-1.pdf").exists());
+    }
+
+    // Text in scripts the app does not write with its own font comes from the Unicode scripts pack.
+    mod script_packs {
+        use super::*;
+        use crate::kit::contracts::{ErrorKind, OutcomePointer, PackNeed};
+        use crate::packs::install::tests::{sandbox, Fixture, TestKey};
+        use crate::packs::install::{install, InstallContext, PackLimits};
+
+        const PACK_ID: &str = "unicode-scripts";
+        const PACK_NAME: &str = "Unicode scripts";
+        const SCRIPT_FONT_DIR_ENV: &str = "TOOLBOX_SCRIPT_FONT_DIR";
+        const APP: &str = "1.0.14";
+        const ARABIC_LINE: &str = "Paid مرحبا 2026";
+
+        /// A script pack whose Arabic font is the app's own font, which has Arabic.
+        fn script_fixture() -> Fixture {
+            let mut fixture = Fixture::new();
+            fixture.id = PACK_ID.into();
+            fixture.files = vec![("fonts/Arabic.ttf".into(), crate::kit::images::tools::INCLUDED_WATERMARK_FONT.to_vec()), ("LICENSE.txt".into(), b"OFL-1.1".to_vec())];
+            fixture
+        }
+
+        fn script_catalog(fixture: &Fixture) -> crate::packs::Catalog {
+            let mut entry = fixture.catalog_entry();
+            entry.as_object_mut().unwrap().remove("ocrLanguage");
+            entry["name"] = PACK_NAME.into();
+            entry["toolIds"] = serde_json::json!(["pdf-edit"]);
+            entry["scriptFonts"] = serde_json::json!({ "Arabic": "fonts/Arabic.ttf", "Devanagari": "fonts/Devanagari.ttf", "Han": "fonts/Han.ttf" });
+            entry["payloads"][0]["path"] = "packs/unicode-scripts.toolboxpack".into();
+            crate::packs::parse_catalog(&serde_json::json!({ "formatVersion": 1, "packs": [entry] }).to_string()).unwrap()
+        }
+
+        fn packs(app_data: &Path) -> RunPacks {
+            RunPacks::new(Ok(app_data.to_path_buf()), APP, Ok(script_catalog(&script_fixture())))
+        }
+
+        fn text_scene(text: &str) -> PdfScene {
+            let mut text_object = object(Kind::Text);
+            text_object.text = text.into();
+            text_object.rect = Rect { x: 72., y: 100., width: 440., height: 200. };
+            text_object.opacity = 1.;
+            text_object.color = "#000000".into();
+            PdfScene { pages: vec![ScenePage { source_index: Some(1), width: 612., height: 792., rotation: 0, crop: None, source_rotation: None, source_box: None, objects: vec![text_object] }] }
+        }
+
+        fn run(input: &Path, text: &str, packs: RunPacks) -> JobOutcome {
+            let request = ExportRequest { paths: vec![input.to_path_buf()], scene: text_scene(text), output_location: OutputLocation::AlongsideInput };
+            super::super::export(&SceneRun { request, packs }, input.to_path_buf())
+        }
+
+        fn set_font_dir(value: Option<&Path>) {
+            match value { Some(value) => std::env::set_var(SCRIPT_FONT_DIR_ENV, value), None => std::env::remove_var(SCRIPT_FONT_DIR_ENV) }
+        }
+
+        /// The fonts the output's first page writes with, by resource name.
+        fn page_fonts(document: &Document) -> Vec<(String, lopdf::Dictionary)> {
+            let page = document.get_pages().values().next().copied().unwrap();
+            let resources = document.get_dictionary(page).unwrap().get(b"Resources").unwrap().as_dict().unwrap();
+            let fonts = resolve(document, resources.get(b"Font").unwrap()).unwrap().as_dict().unwrap().clone();
+            fonts.iter().filter_map(|(name, value)| {
+                let font = resolve(document, value).ok()?.as_dict().ok()?.clone();
+                Some((String::from_utf8_lossy(name).into_owned(), font))
+            }).collect()
+        }
+
+        /// The embedded font file of a Type 0 font, decompressed.
+        fn embedded_font(document: &Document, font: &lopdf::Dictionary) -> Vec<u8> {
+            let descendant = font.get(b"DescendantFonts").unwrap().as_array().unwrap()[0].as_reference().unwrap();
+            let descriptor = document.get_dictionary(descendant).unwrap().get(b"FontDescriptor").unwrap().as_reference().unwrap();
+            let file = document.get_dictionary(descriptor).unwrap().get(b"FontFile2").unwrap().as_reference().unwrap();
+            document.get_object(file).unwrap().as_stream().unwrap().decompressed_content().unwrap()
+        }
+
+        fn page_content(document: &Document) -> String {
+            let page = document.get_pages().values().next().copied().unwrap();
+            String::from_utf8_lossy(&document.get_page_content(page)).into_owned()
+        }
+
+        fn actual_text(line: &str) -> String {
+            std::iter::once(0xFEFFu16).chain(line.encode_utf16()).map(|unit| format!("{unit:04X}")).collect()
+        }
+
+        /// The output's text as the local Poppler extracts it, when it is installed.
+        fn extracted_text(path: &Path) -> Option<String> {
+            let output = Command::new("pdftotext").args(["-enc", "UTF-8"]).arg(path).arg("-").output().ok()?;
+            output.status.success().then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+        }
+
+        fn saved_files(folder: &Path) -> Vec<String> {
+            let mut names: Vec<_> = fs::read_dir(folder).unwrap().flatten().map(|entry| entry.file_name().to_string_lossy().into_owned()).collect();
+            names.sort();
+            names
+        }
+
+        #[test]
+        fn script_text_without_its_pack_points_at_the_pack_and_saves_nothing() {
+            let _guard = crate::kit::lock_process_env();
+            set_font_dir(None);
+            let root = sandbox("scene-script-missing");
+            let input = root.join("source.pdf");
+            fixture(&input);
+            let original = fs::read(&input).unwrap();
+            for (script, text) in [("Arabic", ARABIC_LINE), ("Devanagari", "Received from आशा"), ("Han", "你好")] {
+                let outcome = run(&input, text, packs(&root.join("app-data")));
+                let error = outcome.error().unwrap_or_else(|| panic!("{script}: {outcome:?}"));
+                assert_eq!(error.kind, ErrorKind::Unavailable, "{script}");
+                assert_eq!(error.pointer, Some(OutcomePointer::Pack { pack_id: PACK_ID.into(), name: PACK_NAME.into(), reason: PackNeed::NotInstalled }), "{script}");
+                assert_eq!(error.message, format!("{script} text needs the {PACK_NAME} pack, which isn't installed. Nothing was saved."));
+                assert!(outcome.output_paths().is_empty());
+                // The preview says the same before it renders anything.
+                let preview = super::super::preview(&PreviewRequest { path: input.clone(), scene: text_scene(text), page_index: 0 }, &packs(&root.join("app-data")));
+                assert_eq!(preview.err(), Some(error.message.clone()));
+            }
+            // A script no pack in the catalog writes has no pointer.
+            let outcome = run(&input, "สวัสดี", packs(&root.join("app-data")));
+            let error = outcome.error().unwrap();
+            assert_eq!((error.kind.clone(), error.pointer.clone(), error.message.as_str()), (ErrorKind::Unavailable, None, "Toolbox can't write Thai text yet. Nothing was saved."));
+            assert_eq!(saved_files(&root), ["source.pdf"], "nothing was saved and no pack folder was created");
+            assert_eq!(fs::read(&input).unwrap(), original);
+            fs::remove_dir_all(root).unwrap();
+        }
+
+        #[test]
+        fn latin_cyrillic_and_greek_need_no_pack() {
+            let _guard = crate::kit::lock_process_env();
+            set_font_dir(None);
+            let root = sandbox("scene-script-base");
+            let input = root.join("source.pdf");
+            fixture(&input);
+            // No catalog and no app data: nothing may be looked up.
+            let outcome = run(&input, "Café au lait", no_packs());
+            assert!(outcome.error().is_none(), "{outcome:?}");
+            let latin = Document::load(&outcome.output_paths()[0]).unwrap();
+            assert!(page_fonts(&latin).iter().all(|(_, font)| font.get(b"Subtype").unwrap().as_name().unwrap() == b"Type1"), "Latin-1 text keeps the standard fonts");
+
+            let line = "Привет, κόσμε – Ωmega № 5";
+            let outcome = run(&input, line, no_packs());
+            assert!(outcome.error().is_none(), "{outcome:?}");
+            let output = &outcome.output_paths()[0];
+            let document = Document::load(output).unwrap();
+            let unicode: Vec<_> = page_fonts(&document).into_iter().filter(|(_, font)| font.get(b"Subtype").unwrap().as_name().unwrap() == b"Type0").collect();
+            assert_eq!(unicode.len(), 1, "one embedded font, the app's own");
+            assert!(page_content(&document).contains(&actual_text(line)));
+            if let Some(text) = extracted_text(output) {
+                assert!(text.contains(line), "{text:?}");
+            }
+            fs::remove_dir_all(root).unwrap();
+        }
+
+        #[test]
+        fn with_the_development_font_script_text_is_shaped_embedded_and_extracts_in_reading_order() {
+            let _guard = crate::kit::lock_process_env();
+            let root = sandbox("scene-script-override");
+            let fonts = root.join("dev-fonts");
+            fs::create_dir_all(fonts.join("fonts")).unwrap();
+            fs::write(fonts.join("fonts/Arabic.ttf"), crate::kit::images::tools::INCLUDED_WATERMARK_FONT).unwrap();
+            set_font_dir(Some(&fonts));
+            let input = root.join("source.pdf");
+            fixture(&input);
+            let original = fs::read(&input).unwrap();
+            let text = format!("{ARABIC_LINE}\nПривет κόσμε");
+            let first = run(&input, &text, packs(&root.join("app-data")));
+            let second = run(&input, &text, packs(&root.join("app-data")));
+            set_font_dir(None);
+            assert!(first.error().is_none(), "{first:?}");
+            assert!(second.error().is_none(), "{second:?}");
+            let output = first.output_paths()[0].clone();
+            assert_eq!(fs::read(&output).unwrap(), fs::read(&second.output_paths()[0]).unwrap(), "the same scene writes the same bytes");
+            assert_eq!(fs::read(&input).unwrap(), original);
+
+            let document = Document::load(&output).unwrap();
+            let unicode: Vec<_> = page_fonts(&document).into_iter().filter(|(_, font)| font.get(b"Subtype").unwrap().as_name().unwrap() == b"Type0").collect();
+            assert_eq!(unicode.len(), 2, "the app's font and the Arabic font");
+            for (_, font) in &unicode {
+                assert_eq!(font.get(b"Encoding").unwrap().as_name().unwrap(), b"Identity-H");
+                let base_font = String::from_utf8_lossy(font.get(b"BaseFont").unwrap().as_name().unwrap()).into_owned();
+                assert!(base_font.len() > 7 && base_font.as_bytes()[6] == b'+', "subset fonts are tagged: {base_font}");
+                let embedded = embedded_font(&document, font);
+                assert!(embedded.len() < crate::kit::images::tools::INCLUDED_WATERMARK_FONT.len() / 4, "only a subset is embedded: {} bytes", embedded.len());
+                assert!(rustybuzz::ttf_parser::Face::parse(&embedded, 0).is_ok());
+                assert!(font.has(b"ToUnicode"));
+            }
+            let content = page_content(&document);
+            assert!(content.contains(&actual_text("Привет κόσμε")), "left-to-right lines are marked with their text");
+            assert!(!content.contains(&actual_text(ARABIC_LINE)), "right-to-left lines extract glyph by glyph");
+            // The Arabic word is written with its joined forms, right to left.
+            let face = rustybuzz::Face::from_slice(crate::kit::images::tools::INCLUDED_WATERMARK_FONT, 0).unwrap();
+            let isolated: Vec<String> = "مرحبا".chars().map(|character| format!("<{:04X}>", face.glyph_index(character).unwrap().0)).collect();
+            assert!(!isolated.iter().all(|glyph| content.contains(glyph.as_str())), "letters are shaped, not written in their isolated forms");
+            if let Some(extracted) = extracted_text(&output) {
+                // Arabic numbers sit left of the Arabic word they follow, and the extractor lists a
+                // left-to-right line's runs in visual order, each in reading order.
+                assert!(extracted.contains("Paid 2026 \u{202B}مرحبا\u{202C}\nПривет κόσμε"), "{extracted:?}");
+            }
+            fs::remove_dir_all(root).unwrap();
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn output_written_with_an_installed_pack_still_renders_after_the_pack_is_uninstalled() {
+            let _guard = crate::kit::lock_process_env();
+            set_font_dir(None);
+            let root = sandbox("scene-script-installed");
+            let (fixture_pack, key) = (script_fixture(), TestKey::new(1));
+            let file = root.join("unicode-scripts.toolboxpack");
+            fs::write(&file, fixture_pack.file(&key)).unwrap();
+            let app_data = root.join("app-data");
+            let target = crate::packs::current_target();
+            install(&file, &InstallContext { catalog: &script_catalog(&fixture_pack), app_data: &app_data, target: &target, app_version: APP, public_key: &key.public_key(), limits: PackLimits::DEFAULT, cancel: None, changed: None }).unwrap();
+            let input = root.join("source.pdf");
+            fixture(&input);
+
+            let outcome = run(&input, ARABIC_LINE, packs(&app_data));
+            assert!(outcome.error().is_none(), "{outcome:?}");
+            let output = outcome.output_paths()[0].clone();
+            let temp = TempDir::new().unwrap();
+            let before = render(&output, 0, &renderer().unwrap(), &temp).unwrap().data_url;
+
+            crate::packs::uninstall::uninstall(&app_data, PACK_ID).unwrap();
+            assert!(crate::packs::installed_pack_root(&app_data, PACK_ID).is_none());
+            let after = render(&output, 0, &renderer().unwrap(), &temp).unwrap().data_url;
+            assert_eq!(before, after, "the output embeds what it needs");
+            let blank = run(&input, "", packs(&app_data));
+            assert_ne!(render(&blank.output_paths()[0], 0, &renderer().unwrap(), &temp).unwrap().data_url, after, "the text is drawn");
+            let again = run(&input, ARABIC_LINE, packs(&app_data));
+            assert_eq!(again.error().unwrap().pointer, Some(OutcomePointer::Pack { pack_id: PACK_ID.into(), name: PACK_NAME.into(), reason: PackNeed::NotInstalled }));
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 }
