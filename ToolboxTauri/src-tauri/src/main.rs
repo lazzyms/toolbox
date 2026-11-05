@@ -192,23 +192,6 @@ async fn edit_pdf_session(events: RunEvents, request: editor::PdfEditSessionRequ
 }
 
 #[tauri::command]
-async fn organize_pdf(events: RunEvents, request: editor::OrganizePdfRequest) -> Vec<JobOutcome> {
-    let explicit_pages = match &request.scope {
-        editor::PageScope::All => None,
-        editor::PageScope::Selected { pages } => Some(pages.as_slice()),
-    };
-    if let Err(outcomes) = validate_page_selection("organize_pdf", &request.paths, explicit_pages) { return outcomes; }
-    let request = Arc::new(request);
-    BatchRunner::run(&events, "organize_pdf", request.paths.clone(), &request.output_location, &request, editor::organize)
-}
-
-#[tauri::command]
-async fn add_pdf_pages(events: RunEvents, request: editor::AddPdfPagesRequest) -> Vec<JobOutcome> {
-    let request = Arc::new(request);
-    BatchRunner::run(&events, "add_pdf_pages", request.paths.clone(), &request.output_location, &request, editor::add_pages)
-}
-
-#[tauri::command]
 async fn add_page_numbers(events: RunEvents, request: remaining::PageOverlayRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_page_selection("add_page_numbers", &request.paths, request.pages.as_deref()) { return outcomes; }
     let request = Arc::new(request);
@@ -258,14 +241,6 @@ async fn compress_pdf(events: RunEvents, request: remaining::CompressPdfRequest)
     if let Err(outcomes) = validate_command_inputs("compress_pdf", &request.paths) { return outcomes; }
     let request = Arc::new(request);
     BatchRunner::run(&events, "compress_pdf", request.paths.clone(), &request.output_location, &request, remaining::compress)
-}
-
-#[tauri::command]
-async fn remove_pdf_pages(events: RunEvents, request: remaining::PageSelectionRequest) -> Vec<JobOutcome> {
-    let explicit_pages = request.page_ranges.as_deref().filter(|range| !range.trim().is_empty()).is_none().then_some(request.pages.as_slice());
-    if let Err(outcomes) = validate_page_selection("remove_pdf_pages", &request.paths, explicit_pages) { return outcomes; }
-    let request = Arc::new(request);
-    BatchRunner::run(&events, "remove_pdf_pages", request.paths.clone(), &request.output_location, &request, remaining::remove_pages)
 }
 
 #[tauri::command]
@@ -537,16 +512,13 @@ fn main() {
             edit_pdf,
             edit_pdf_session,
             sign_pdf,
-            organize_pdf,
-            add_pdf_pages
-            ,add_page_numbers,
+            add_page_numbers,
             watermark_pdf,
             compress_pdf,
             rotate_pdf,
             repair_pdf,
             redact_pdf,
             compare_pdfs,
-            remove_pdf_pages,
             extract_pdf_pages
             ,merge_pdfs,
             split_pdf,
@@ -625,7 +597,7 @@ mod command_tests {
     use crate::kit::contracts::{ErrorKind, LimitKind};
     use crate::kit::images::tools::{CropRequest, GifCreateRequest, GifExtractRequest, ImageEdit, ImageEditExportRequest, ImageEditPlan, ImageEditPreviewRequest, IconSetRequest, MetadataRequest, ResizeRequest, RotateRequest, TiffRequest, ToneRequest, WatermarkRequest};
     use crate::kit::office::{test_minimal_ooxml_package, OfficeProcessor};
-    use crate::kit::pdf::editor::{AddPdfPagesRequest, CropPdfRequest, EditPdfRequest, OrganizePdfRequest, PageScope, PdfEditMode, PdfEditOperation, PdfEditSessionPlan, PdfEditSessionRequest, PdfOverlay, PdfOverlayPosition, PdfRect, RedactPdfRequest, RotatePage, SignPdfRequest};
+    use crate::kit::pdf::editor::{CropPdfRequest, EditPdfRequest, PageScope, PdfEditMode, PdfEditOperation, PdfEditSessionPlan, PdfEditSessionRequest, PdfOverlay, PdfOverlayPosition, PdfRect, RedactPdfRequest, RotatePage, SignPdfRequest};
     use crate::kit::pdf::remaining::{CompressPdfRequest, ImagesToPdfRequest, MergePdfRequest, PageOverlayRequest, PageSelectionRequest, PdfToImagesRequest, PdfToTextRequest, RotatePdfRequest, ComparePdfsRequest};
     use crate::kit::vision::VisionRequest;
     use base64::{engine::general_purpose::STANDARD, Engine};
@@ -871,25 +843,6 @@ mod command_tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    #[test]
-    fn organize_command_rejects_empty_selected_scope_before_processing() {
-        let root = sandbox("organize-empty-selection");
-        let input = root.join("source.pdf"); make_pdf(&input, 1);
-        let outcomes = tauri::async_runtime::block_on(organize_pdf(RunEvents::silent(), OrganizePdfRequest {
-            paths: vec![input.clone()], page_order: vec![], delete_pages: vec![], rotate_pages: vec![],
-            scope: PageScope::Selected { pages: vec![] }, output_location: location(&root, "organize-empty"),
-        }));
-
-        assert_eq!(outcomes.len(), 1);
-        assert_eq!(outcomes[0].input_path, input);
-        assert!(outcomes[0].output_paths().is_empty());
-        assert!(outcomes[0].error().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput)));
-        assert!(outcomes[0].error().is_some_and(|error| error.message.contains("at least one page")));
-        assert_eq!(std::fs::read_dir(root.join("organize-empty")).unwrap().count(), 0);
-
-        let _ = std::fs::remove_dir_all(root);
-    }
-
     fn assert_vision_adapter<F>(name: &str, future: F) -> Vec<PathBuf>
     where F: Future<Output = Vec<JobOutcome>> {
         let outcomes = tauri::async_runtime::block_on(future);
@@ -1132,7 +1085,7 @@ mod command_tests {
         assert!(preview_width > 0 && preview_height > 0, "preview dimensions must be positive");
         assert!(preview_width > preview_height, "a 90-degree page should preview in landscape orientation");
         assert!(preview["dataUrl"].as_str().is_some_and(|value| value.starts_with("data:image/png;base64,")));
-        outputs.extend(named(&mut naming, "export_pdf_scene", pdf.clone(), assert_success("PDF scene", export_pdf_scene(RunEvents::silent(), scene::ExportRequest { paths: vec![pdf.clone()], scene: visual_scene, output_location: OutputLocation::AlongsideInput }))));
+        outputs.extend(named(&mut naming, "export_pdf_scene", pdf.clone(), assert_success("PDF scene", export_pdf_scene(RunEvents::silent(), scene::ExportRequest { paths: vec![pdf.clone()], scene: visual_scene, output_location: OutputLocation::AlongsideInput, sections: Default::default() }))));
         outputs.extend(named(&mut naming, "remove_password", protected.clone(), assert_success("unlock", remove_password(RunEvents::silent(), PasswordRequest { paths: vec![protected], password: crate::kit::TEST_PASSWORD.into(), password_overrides: Default::default(), output_location: location(&root, "unlock") }))));
         outputs.extend(named(&mut naming, "add_page_numbers", pdf.clone(), assert_success("page numbers", add_page_numbers(RunEvents::silent(), PageOverlayRequest { paths: vec![pdf.clone()], text: "1".into(), opacity: 100, position: Some("bottom-right".into()), logo_path: None, pages: None, start_number: Some(1), font_size: Some(12), output_location: location(&root, "page numbers") }))));
         outputs.extend(named(&mut naming, "merge_pdfs", pdf.clone(), assert_aggregate_success("merge", &[pdf.clone(), pdf_two.clone()], run_merge_pdfs(&MergePdfRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: location(&root, "merge"), output_path: None }))));
@@ -1163,22 +1116,7 @@ mod command_tests {
         outputs.extend(named(&mut naming, "extract_pdf_images", image_pdf.clone(), assert_success("extract pdf images", extract_pdf_images(RunEvents::silent(), PdfToTextRequest { paths: vec![image_pdf.clone()], pages: None, output_location: location(&root, "extract pdf images") }))));
         outputs.extend(named(&mut naming, "sign_pdf", pdf.clone(), assert_success("sign", sign_pdf(RunEvents::silent(), SignPdfRequest { paths: vec![pdf.clone()], page: 0, text: "Signed".into(), signature_path: None, rectangle: PdfRect { x: 40.0, y: 40.0, width: 180.0, height: 60.0 }, scope: PageScope::All, output_location: location(&root, "sign") }))));
         outputs.extend(named(&mut naming, "ocr_pdf", pdf.clone(), assert_ocr_adapter("ocr", ocr_pdf(RunEvents::silent(), VisionRequest { paths: vec![pdf.clone()], pages: None, output_location: location(&root, "ocr") }))));
-        outputs.extend(named(&mut naming, "remove_pdf_pages", pdf.clone(), assert_success("remove pages", remove_pdf_pages(RunEvents::silent(), PageSelectionRequest { paths: vec![pdf.clone()], pages: vec![0], page_ranges: None, split_mode: None, chunk_size: None, output_location: location(&root, "remove pages") }))));
         outputs.extend(named(&mut naming, "extract_pdf_pages", pdf.clone(), assert_success("extract pages", extract_pdf_pages(RunEvents::silent(), PageSelectionRequest { paths: vec![pdf.clone()], pages: vec![], page_ranges: Some("1".into()), split_mode: None, chunk_size: None, output_location: location(&root, "extract pages") }))));
-        outputs.extend(named(&mut naming, "organize_pdf", pdf.clone(), assert_success("organize", organize_pdf(RunEvents::silent(), OrganizePdfRequest { paths: vec![pdf.clone()], page_order: vec![1, 0], delete_pages: vec![], rotate_pages: vec![RotatePage { page: 0, degrees: 90 }], scope: PageScope::All, output_location: location(&root, "organize") }))));
-        let added = assert_success(
-            "add pages",
-            add_pdf_pages(RunEvents::silent(), AddPdfPagesRequest {
-                paths: vec![pdf.clone()],
-                position: "after".into(),
-                page: 0,
-                count: 2,
-                output_location: location(&root, "add pages"),
-            }),
-        );
-        let added_document = lopdf::Document::load(&added[0]).unwrap();
-        assert_eq!(added_document.get_pages().len(), 4, "add pages must insert the requested number of pages");
-        outputs.extend(named(&mut naming, "add_pdf_pages", pdf.clone(), added));
         outputs.extend(named(&mut naming, "compress_pdf", pdf.clone(), assert_success("compress pdf", compress_pdf(RunEvents::silent(), serde_json::from_value::<CompressPdfRequest>(serde_json::json!({ "paths": [pdf.clone()], "quality": 80, "outputLocation": location(&root, "compress pdf") })).expect("Compress Files view payload for compress_pdf")))));
         outputs.extend(named(&mut naming, "rotate_pdf", pdf.clone(), assert_success("rotate pdf", rotate_pdf(RunEvents::silent(), RotatePdfRequest { paths: vec![pdf.clone()], degrees: 90, pages: Some(vec![1]), output_location: location(&root, "rotate pdf") }))));
         outputs.extend(named(&mut naming, "repair_pdf", pdf.clone(), assert_success("repair pdf", repair_pdf(RunEvents::silent(), PdfToTextRequest { pages: None, paths: vec![pdf.clone()], output_location: location(&root, "repair pdf") }))));
@@ -2436,27 +2374,24 @@ mod command_tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    // Regression test: organize_pdf with AlongsideInput must save the output
-    // next to the input and report it (guards against false-success).
     #[test]
-    fn organize_alongside_input_writes_output() {
-        let root = sandbox("organize-repro");
+    fn scene_export_alongside_input_writes_reordered_output_and_keeps_the_original() {
+        let root = sandbox("scene-alongside");
         let input = root.join("sample.pdf");
         make_pdf(&input, 3);
-        let outputs = assert_success(
-            "organize alongside",
-            organize_pdf(RunEvents::silent(), OrganizePdfRequest {
-                paths: vec![input.clone()],
-                page_order: vec![2, 0, 1],
-                delete_pages: vec![],
-                rotate_pages: vec![],
-                scope: PageScope::All,
-                output_location: OutputLocation::AlongsideInput,
-            }),
-        );
+        let original = std::fs::read(&input).unwrap();
+        let pages = [2, 0, 1].map(|index| serde_json::json!({ "sourceIndex": index, "width": 612, "height": 792, "rotation": 0, "crop": null, "objects": [] }));
+        let scene = serde_json::from_value::<scene::PdfScene>(serde_json::json!({ "pages": pages })).unwrap();
+        let outputs = assert_success("scene alongside", export_pdf_scene(RunEvents::silent(), scene::ExportRequest { paths: vec![input.clone()], scene, output_location: OutputLocation::AlongsideInput, sections: Default::default() }));
         assert_eq!(outputs.len(), 1);
         assert_eq!(outputs[0].parent(), Some(root.as_path()));
-        assert!(outputs[0].exists(), "organize output must exist on disk");
+        assert!(outputs[0].exists(), "scene output must exist on disk");
+        let document = lopdf::Document::load(&outputs[0]).unwrap();
+        let labels = document.get_pages().values().map(|page| String::from_utf8_lossy(&document.get_page_content(*page)).into_owned()).collect::<Vec<_>>();
+        for (content, number) in labels.iter().zip([3, 1, 2]) { assert!(content.contains(&format!("(Toolbox page {number})")), "{content}"); }
+        assert_eq!(labels.len(), 3);
+        assert_eq!(std::fs::read(&input).unwrap(), original);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
