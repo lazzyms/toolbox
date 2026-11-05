@@ -1364,6 +1364,54 @@ mod command_tests {
     }
 
     #[test]
+    fn edit_stack_writes_into_the_per_run_custom_folder_and_streams_each_file() {
+        let root = sandbox("edit_stack_per_run_folder");
+        let holiday = root.join("holiday");
+        let work = root.join("work");
+        std::fs::create_dir_all(&holiday).unwrap();
+        std::fs::create_dir_all(&work).unwrap();
+        let inputs = vec![holiday.join("IMG_4012.png"), work.join("scan.jpg"), holiday.join("IMG_4013.png")];
+        for (index, path) in inputs.iter().enumerate() {
+            image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(120, 80, |x, y| Rgba([index as u8, x as u8, y as u8, 255]))).to_rgb8().save(path).unwrap();
+        }
+        let originals = inputs.iter().map(Original::of).collect::<Vec<_>>();
+        let before = |folder: &PathBuf| std::fs::read_dir(folder).unwrap().count();
+        let (holiday_files, work_files) = (before(&holiday), before(&work));
+        let chosen = root.join("chosen for this run");
+        std::fs::create_dir_all(&chosen).unwrap();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = seen.clone();
+        let outcomes = tauri::async_runtime::block_on(export_image_edit_stack(
+            RunEvents::new(move |event| sink.lock().unwrap().push(event)),
+            ImageEditStackRequest {
+                paths: inputs.clone(),
+                steps: ImageEditSteps { resize: Some(ResizeStep { width: 60, height: 40, mode: "exact".into(), resampling: "lanczos".into(), keep_aspect_ratio: true, percentage: 100, longest_side: 0 }), ..ImageEditSteps::default() },
+                format: None,
+                output_location: OutputLocation::CustomFolder(chosen.clone()),
+            },
+        ));
+
+        assert_eq!(outcomes.len(), inputs.len());
+        for outcome in &outcomes {
+            assert!(outcome.error().is_none(), "{}", outcome.error().cloned().unwrap_or_default());
+            for output in outcome.output_paths() {
+                assert_eq!(output.parent(), Some(chosen.as_path()), "{} is written into the folder chosen for this run", output.display());
+                assert!(output.is_file());
+            }
+        }
+        assert_eq!(std::fs::read_dir(&chosen).unwrap().count(), inputs.len(), "one output per input lands in the chosen folder");
+        assert_eq!((before(&holiday), before(&work)), (holiday_files, work_files), "nothing is written next to the originals");
+        for original in &originals { original.assert_untouched(); }
+        let events = seen.lock().unwrap();
+        for index in 0..inputs.len() {
+            assert!(events.iter().any(|event| matches!(event, FileEvent::Started { index: started } if *started == index)), "file {index} reports that it started");
+            assert!(events.iter().any(|event| matches!(event, FileEvent::Finished { index: finished, .. } if *finished == index)), "file {index} streams its row when it finishes");
+        }
+        drop(events);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn edit_stack_runs_crop_then_resize_in_one_encode_whatever_order_they_arrive_in() {
         let root = sandbox("edit_stack_resize");
         let jpeg = root.join("tall.jpg");

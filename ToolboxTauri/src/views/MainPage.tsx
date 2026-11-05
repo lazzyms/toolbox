@@ -25,7 +25,7 @@ import { TablerIcon } from "../components/TablerIcon";
 import { RunStateContext, type WorkspaceSourceAction } from "../components/ToolScaffold";
 import { ShortcutHint } from "../components/ShortcutHint";
 import { WorkspaceCommandRail } from "../components/WorkspaceCommandRail";
-import { matchShortcut, pressShortcutTarget, shortcutAria, shortcutLabel, shortcutTarget } from "../shortcuts";
+import { isTextField, matchShortcut, pressShortcutTarget, shortcutAria, shortcutLabel, shortcutTarget } from "../shortcuts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
@@ -208,6 +208,11 @@ export const MainPage = () => {
     if (paths.length) await invoke("open_paths", { paths });
   }, []);
   const dispatchEditorCommand = useCallback((command: Exclude<ShellCommand, "search" | "open" | "zoom-in" | "zoom-out" | "zoom-reset" | "toggle-theme" | "shortcuts">) => {
+    // Undo and redo while typing belong to the text field, not to the editor's history.
+    if ((command === "undo" || command === "redo") && isTextField(document.activeElement)) {
+      document.execCommand(command);
+      return;
+    }
     window.dispatchEvent(new CustomEvent("toolbox:editor-command", { detail: command }));
   }, []);
   const activateFile = useCallback((event: Extract<ShellEvent, { kind: "files" }>) => {
