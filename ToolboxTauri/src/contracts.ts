@@ -25,7 +25,6 @@ export type AtomicToolId =
   | "pdf-redact"
   | "pdf-compare"
   | "heic-convert"
-  | "compress"
   | "resize"
   | "rotate"
   | "crop"
@@ -77,7 +76,6 @@ export type JobState = "running" | "success" | "mixed" | "failure";
 export type ToolCommand =
   | "remove_password"
   | "protect_files"
-  | "compress_images"
   | "convert_images"
   | "inspect_pdf"
   | "crop_pdf"
@@ -240,7 +238,6 @@ export interface ToolDefinition {
     | "image-resize"
     | "image-rotate"
     | "image-crop"
-    | "image-compress"
     | "image-convert"
     | "image-watermark"
     | "image-tone"
@@ -291,11 +288,6 @@ export type CompressLevel = "low" | "medium" | "high";
 export interface CompressFilesRequest extends ToolRequest {
   level: CompressLevel;
   stripExif: boolean;
-}
-
-export interface CompressImagesRequest extends ToolRequest {
-  quality: number;
-  lossless?: boolean;
 }
 
 export interface ConvertImagesRequest extends ToolRequest {

@@ -28,7 +28,6 @@ pub struct ImagePreview {
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ImageEdit {
     Convert { format: String },
-    Compress { quality: u8, #[serde(default)] lossless: bool },
     Resize {
         width: u32,
         height: u32,
@@ -102,7 +101,6 @@ impl ImageEditPlan {
         for edit in &self.edits {
             match edit {
                 ImageEdit::Convert { format } if !matches!(format.as_str(), "jpg" | "jpeg" | "png" | "webp" | "heic") => return Err(format!("Unsupported image format: {format}.")),
-                ImageEdit::Compress { quality, .. } if *quality == 0 || *quality > 100 => return Err("Compression quality must be between 1 and 100.".to_string()),
                 ImageEdit::Resize { width, height, mode, percentage, longest_side, .. } => {
                     match mode.as_str() {
                         "exact" if *width == 0 || *height == 0 => return Err("Resize dimensions must be positive.".to_string()),
@@ -189,14 +187,13 @@ fn encode_preview(image: DynamicImage) -> Result<ImagePreview, String> {
 }
 
 fn apply_edit_plan(plan: &ImageEditPlan, mut image: DynamicImage, mut format: crate::kit::images::OutputFormat) -> Result<(DynamicImage, crate::kit::images::OutputFormat, u8), String> {
-    let mut quality = 90;
+    let quality = 90;
     let source_width = image.width();
     let source_height = image.height();
     let mut geometry = Vec::new();
     for edit in &plan.edits {
         match edit {
             ImageEdit::Convert { format: requested } => format = parse_output_format(requested)?,
-            ImageEdit::Compress { quality: requested, lossless } => { quality = if *lossless { 100 } else { *requested }; },
             ImageEdit::Resize { width, height, mode, percentage, longest_side, resampling, keep_aspect_ratio } => {
                 let request = ResizeRequest { paths: vec![], width: *width, height: *height, mode: mode.clone(), resampling: resampling.clone(), keep_aspect_ratio: *keep_aspect_ratio, percentage: *percentage, longest_side: *longest_side, output_location: OutputLocation::AlongsideInput };
                 let old_width = image.width();

@@ -68,7 +68,7 @@ impl QuickAction {
         match self {
             QuickAction::CompressPdf => "compress_files",
             QuickAction::PdfToImages => "pdf_to_images",
-            QuickAction::CompressImage => "compress_images",
+            QuickAction::CompressImage => "compress_files",
             QuickAction::ConvertToPng | QuickAction::ConvertToJpg => "convert_images",
             QuickAction::RemoveBackground => "remove_image_background",
         }
@@ -94,7 +94,7 @@ impl QuickAction {
         let events = RunEvents::silent();
         let output_location = OutputLocation::AlongsideInput;
         match self {
-            QuickAction::CompressPdf => {
+            QuickAction::CompressPdf | QuickAction::CompressImage => {
                 let request = Arc::new(CompressFilesRequest { paths: paths.clone(), level: CompressLevel::Medium, strip_exif: false, output_location: output_location.clone() });
                 BatchRunner::run(&events, self.tool(), paths, &output_location, &request, compress_file)
             }
@@ -102,12 +102,9 @@ impl QuickAction {
                 let request = Arc::new(remaining::PdfToImagesRequest { paths: paths.clone(), pages: None, dpi: 150, format: "png".to_string(), page_range: None, output_location: output_location.clone() });
                 BatchRunner::run(&events, self.tool(), paths, &output_location, &request, remaining::to_images)
             }
-            QuickAction::CompressImage | QuickAction::ConvertToPng | QuickAction::ConvertToJpg => {
-                let options = Arc::new(match self {
-                    QuickAction::ConvertToPng => image_conversion(OutputFormat::Png, &output_location),
-                    QuickAction::ConvertToJpg => image_conversion(OutputFormat::Jpeg, &output_location),
-                    _ => ImageOptions { target_format: None, quality: 80, keep_smaller_original: true, suffix: "-compressed".to_string(), output_location: output_location.clone() },
-                });
+            QuickAction::ConvertToPng | QuickAction::ConvertToJpg => {
+                let format = if self == QuickAction::ConvertToPng { OutputFormat::Png } else { OutputFormat::Jpeg };
+                let options = Arc::new(image_conversion(format, &output_location));
                 BatchRunner::run(&events, self.tool(), paths, &output_location, &options, |options: &ImageOptions, path| ImageProcessor::run(path, ImageOptions { suffix: options.suffix.clone(), output_location: options.output_location.clone(), ..*options }))
             }
             QuickAction::RemoveBackground => {
@@ -119,7 +116,7 @@ impl QuickAction {
 }
 
 fn image_conversion(format: OutputFormat, output_location: &OutputLocation) -> ImageOptions {
-    ImageOptions { target_format: Some(format), quality: 80, keep_smaller_original: false, suffix: "-converted".to_string(), output_location: output_location.clone() }
+    ImageOptions { target_format: format, quality: 80, suffix: "-converted".to_string(), output_location: output_location.clone() }
 }
 
 pub struct Invocation { pub action: QuickAction, pub paths: Vec<PathBuf> }
@@ -546,6 +543,7 @@ mod tests {
         let outcomes = QuickAction::CompressImage.run(vec![dir.join("missing.png"), good]);
         assert_eq!(outcomes.iter().filter(|o| o.error().is_none()).count(), 1);
         assert!(summary(QuickAction::CompressImage, &outcomes).contains("1 done, 1 failed"));
+        assert_eq!(QuickAction::CompressImage.tool(), "compress_files", "Compress Image runs the Compress Files pipeline");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

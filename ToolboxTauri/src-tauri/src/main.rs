@@ -8,13 +8,13 @@ mod settings;
 mod shell;
 
 use crate::file_actions::{open_output_path, open_sponsor_page, open_third_party_notices, reveal_output_path};
-use crate::kit::common::{note_renamed, with_measured_sizes, JobOutcome};
+use crate::kit::common::{note_renamed, JobOutcome};
 use crate::kit::images::{ImageProcessor, Options as ImageOptions};
 use crate::kit::images::tools;
 use crate::kit::compress::{compress_file, CompressFilesRequest};
 use crate::kit::pdf::{editor, metadata, remaining, scene, PDFProcessor};
 use crate::kit::vision;
-use crate::kit::contracts::{command_supports_preview, validate_command_inputs, validate_page_selection, CompressImagesRequest, ConvertImagesRequest, OutcomeState, PasswordRequest, ToolError};
+use crate::kit::contracts::{command_supports_preview, validate_command_inputs, validate_page_selection, ConvertImagesRequest, OutcomeState, PasswordRequest, ToolError};
 use crate::kit::common::batch_runner::{BatchRunner, FileEvent, FolderCheck, RunEvents};
 use crate::kit::password::PasswordProcessor;
 use std::sync::Arc;
@@ -74,20 +74,6 @@ async fn protect_files(events: RunEvents, request: PasswordRequest) -> Vec<JobOu
 }
 
 #[tauri::command]
-async fn compress_images(events: RunEvents, request: CompressImagesRequest) -> Vec<JobOutcome> {
-    let request = Arc::new(request);
-    BatchRunner::run(&events, "compress_images", request.paths.clone(), &request.output_location, &request, |request, path| {
-        with_measured_sizes(ImageProcessor::run(path, ImageOptions {
-            target_format: None,
-            quality: if request.lossless { 0 } else { request.quality },
-            keep_smaller_original: true,
-            suffix: "-compressed".to_string(),
-            output_location: request.output_location.clone(),
-        }))
-    })
-}
-
-#[tauri::command]
 async fn convert_images(events: RunEvents, request: ConvertImagesRequest) -> Vec<JobOutcome> {
     let img_format = match tools::parse_output_format(&request.format) {
         Ok(format) => format,
@@ -102,9 +88,8 @@ async fn convert_images(events: RunEvents, request: ConvertImagesRequest) -> Vec
     let request = Arc::new(request);
     BatchRunner::run(&events, "convert_images", request.paths.clone(), &request.output_location, &request, move |request, path| {
         ImageProcessor::run(path, ImageOptions {
-            target_format: Some(img_format),
+            target_format: img_format,
             quality: 80,
-            keep_smaller_original: false,
             suffix: "-converted".to_string(),
             output_location: request.output_location.clone(),
         })
@@ -526,7 +511,6 @@ fn main() {
             cancel_run,
             remove_password,
             protect_files,
-            compress_images,
             convert_images,
             inspect_pdf,
             inspect_pdf_scene,
@@ -1182,13 +1166,25 @@ mod command_tests {
         let added_document = lopdf::Document::load(&added[0]).unwrap();
         assert_eq!(added_document.get_pages().len(), 4, "add pages must insert the requested number of pages");
         outputs.extend(named(&mut naming, "add_pdf_pages", pdf.clone(), added));
-        outputs.extend(named(&mut naming, "compress_files", compressible_pdf.clone(), assert_success("compress files", compress_files(RunEvents::silent(), serde_json::from_value::<CompressFilesRequest>(serde_json::json!({ "paths": [compressible_pdf.clone()], "level": "medium", "stripExif": false, "outputLocation": location(&root, "compress files") })).expect("Compress Files view payload for compress_files")))));
+        // One mixed batch, as the Compress Files view sends it: a PDF and each supported image format.
+        let compress_photo_jpeg = root.join("compress-photo.jpg"); write_jpeg(&compress_photo_jpeg, &photo_rgb(320, 240, 21), 100, None, false);
+        let compress_photo_png = root.join("compress-photo.png"); write_compress_png(&compress_photo_png, &photo_rgba(160, 120, 5), false);
+        let compress_photo_webp = root.join("compress-photo.webp"); write_webp(&compress_photo_webp, &photo_rgba(240, 180, 85).to_rgba8(), true, 0, false);
+        let compress_batch = vec![compressible_pdf.clone(), compress_photo_jpeg, compress_photo_png, compress_photo_webp];
+        let compress_payload = serde_json::json!({ "paths": compress_batch.clone(), "level": "medium", "stripExif": false, "outputLocation": location(&root, "compress files") });
+        let compress_outcomes = tauri::async_runtime::block_on(compress_files(RunEvents::silent(), serde_json::from_value::<CompressFilesRequest>(compress_payload).expect("Compress Files view payload for compress_files")));
+        assert_eq!(compress_outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), compress_batch, "compress files returns one outcome per input, in order");
+        for outcome in compress_outcomes {
+            assert!(matches!(outcome.state, OutcomeState::Succeeded { .. }), "compress files {}: {:?}", outcome.input_path.display(), outcome.state);
+            assert_eq!(outcome.output_paths().len(), 1, "compress files {} must report one output", outcome.input_path.display());
+            assert!(outcome.output_paths()[0].is_file(), "compress files reported missing output {}", outcome.output_paths()[0].display());
+            outputs.extend(named(&mut naming, "compress_files", outcome.input_path.clone(), outcome.output_paths().to_vec()));
+        }
         outputs.extend(named(&mut naming, "rotate_pdf", pdf.clone(), assert_success("rotate pdf", rotate_pdf(RunEvents::silent(), RotatePdfRequest { paths: vec![pdf.clone()], degrees: 90, pages: Some(vec![1]), output_location: location(&root, "rotate pdf") }))));
         outputs.extend(named(&mut naming, "repair_pdf", pdf.clone(), assert_success("repair pdf", repair_pdf(RunEvents::silent(), PdfToTextRequest { pages: None, paths: vec![pdf.clone()], output_location: location(&root, "repair pdf") }))));
         outputs.extend(named(&mut naming, "redact_pdf", pdf.clone(), assert_success("redact pdf", redact_pdf(RunEvents::silent(), RedactPdfRequest { paths: vec![pdf.clone()], rectangle: PdfRect { x: 40.0, y: 650.0, width: 220.0, height: 60.0 }, scope: PageScope::All, output_location: location(&root, "redact pdf") }))));
         outputs.extend(named(&mut naming, "compare_pdfs", pdf.clone(), assert_aggregate_success("compare pdfs", &[pdf.clone(), pdf_two.clone()], run_compare_pdfs(&ComparePdfsRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: location(&root, "compare pdfs"), output_path: None }))));
         outputs.extend(named(&mut naming, "convert_images", image.clone(), assert_success("convert", convert_images(RunEvents::silent(), ConvertImagesRequest { paths: vec![image.clone()], format: "jpg".into(), output_location: location(&root, "convert") }))));
-        outputs.extend(named(&mut naming, "compress_images", image.clone(), assert_success("compress images", compress_images(RunEvents::silent(), serde_json::from_value::<CompressImagesRequest>(serde_json::json!({ "paths": [image.clone()], "quality": 80, "lossless": false, "outputLocation": location(&root, "compress images") })).expect("Compress Files view payload for compress_images")))));
         outputs.extend(named(&mut naming, "resize_images", image.clone(), assert_success("resize", resize_images(RunEvents::silent(), ResizeRequest { paths: vec![image.clone()], width: 128, height: 128, mode: "exact".into(), resampling: "lanczos".into(), keep_aspect_ratio: true, percentage: 100, longest_side: 128, output_location: location(&root, "resize") }))));
         outputs.extend(named(&mut naming, "rotate_images", image.clone(), assert_success("rotate", rotate_images(RunEvents::silent(), RotateRequest { paths: vec![image.clone()], degrees: 90, flip: "none".into(), output_location: location(&root, "rotate") }))));
         outputs.extend(named(&mut naming, "crop_images", image.clone(), assert_success("crop image", crop_images(RunEvents::silent(), CropRequest { paths: vec![image.clone()], x: 0, y: 0, width: 128, height: 128, mode: "rectangle".into(), aspect_width: 128, aspect_height: 128, anchor: "center".into(), output_location: location(&root, "crop image") }))));
@@ -1219,7 +1215,7 @@ mod command_tests {
         assert!(differing_pixels.is_empty(), "native image export pixels must match the verified edit preview; first differences: {differing_pixels:?}");
         outputs.extend(named(&mut naming, "export_image_edit_plan", image.clone(), composed_image_outputs));
         let lossy_image_plan = ImageEditPlan {
-            edits: vec![ImageEdit::Compress { quality: 40, lossless: false }],
+            edits: vec![ImageEdit::Tone { brightness: 12, contrast: 6.0, saturation: 8.0, exposure: 4.0 }],
             output_location: location(&root, "lossy image editor"),
         };
         let lossy_image_preview = inspect_image_edit_preview(ImageEditPreviewRequest { path: lossy_image.clone(), plan: lossy_image_plan.clone() }).expect("lossy image preview should be available");
@@ -2356,45 +2352,21 @@ mod command_tests {
     }
 
     #[test]
-    fn compress_command_keeps_original_format() {
-        let src = temp_path("cmd_compress.png");
-        write_png(&src, 128, 7);
-        let before = std::fs::metadata(&src).unwrap().len();
-
-        let out = tauri::async_runtime::block_on(compress_images(RunEvents::silent(), CompressImagesRequest {
-            paths: vec![src.clone()], quality: 50, lossless: false, output_location: OutputLocation::AlongsideInput,
-        }));
-        assert!(out[0].error().is_none(), "{}", out[0].error().cloned().unwrap_or_default());
-        assert_eq!(
-            out[0].output_paths()[0].extension().and_then(|e| e.to_str()),
-            Some("png"),
-            "compress keeps the source format"
-        );
-        assert_eq!(std::fs::metadata(&src).unwrap().len(), before, "originals untouched");
-
-        cleanup(&out[0].output_paths());
-        let _ = std::fs::remove_file(&src);
-    }
-
-    #[test]
     fn compress_commands_report_sizes_matching_the_files_on_disk() {
         let root = sandbox("compress-sizes");
         let pdf = root.join("document.pdf");
-        let image = root.join("image.png");
+        let jpeg = root.join("photo.jpg");
+        let png = root.join("photo.png");
         make_pdf(&pdf, 3);
-        write_png(&image, 128, 7);
+        write_jpeg(&jpeg, &photo_rgb(320, 240, 7), 100, None, false);
+        write_compress_png(&png, &photo_rgba(160, 120, 7), false);
 
-        let pdf_outcomes = tauri::async_runtime::block_on(compress_files(RunEvents::silent(), CompressFilesRequest {
-            paths: vec![pdf.clone()], level: CompressLevel::High, strip_exif: false, output_location: location(&root, "pdf"),
-        }));
-        let lossy = tauri::async_runtime::block_on(compress_images(RunEvents::silent(), CompressImagesRequest {
-            paths: vec![image.clone()], quality: 50, lossless: false, output_location: location(&root, "lossy"),
-        }));
-        let lossless = tauri::async_runtime::block_on(compress_images(RunEvents::silent(), CompressImagesRequest {
-            paths: vec![image.clone()], quality: 80, lossless: true, output_location: location(&root, "lossless"),
+        let outcomes = tauri::async_runtime::block_on(compress_files(RunEvents::silent(), CompressFilesRequest {
+            paths: vec![pdf.clone(), jpeg.clone(), png.clone()], level: CompressLevel::High, strip_exif: false, output_location: location(&root, "out"),
         }));
 
-        for outcome in pdf_outcomes.iter().chain(&lossy).chain(&lossless) {
+        assert_eq!(outcomes.len(), 3);
+        for outcome in &outcomes {
             assert!(outcome.error().is_none(), "{}", outcome.error().cloned().unwrap_or_default());
             let [output] = outcome.output_paths() else { panic!("one output expected") };
             assert_eq!(outcome.original_bytes, Some(std::fs::metadata(&outcome.input_path).unwrap().len()));
@@ -3558,13 +3530,12 @@ mod command_tests {
         let image = root.join("image.png");
         write_png(&image, 32, 12);
         let original = std::fs::read(&image).unwrap();
-        let existing = root.join("image-compressed.png");
+        let existing = root.join("image-converted.jpg");
         std::fs::write(&existing, b"existing output").unwrap();
 
-        let outcomes = tauri::async_runtime::block_on(compress_images(RunEvents::silent(), CompressImagesRequest {
+        let outcomes = tauri::async_runtime::block_on(convert_images(RunEvents::silent(), ConvertImagesRequest {
             paths: vec![image.clone()],
-            quality: 80,
-            lossless: false,
+            format: "jpg".to_string(),
             output_location: OutputLocation::AlongsideInput,
         }));
 

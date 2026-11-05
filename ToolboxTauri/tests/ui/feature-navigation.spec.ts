@@ -413,7 +413,7 @@ test("home marks tools this build cannot run and keeps them out of the search hi
 test(`search finds and opens all ${UtilityRegistry.length} registered tool actions`, async ({ page }) => {
     await page.goto("/");
     const search = page.getByRole("textbox", { name: "Search tools" });
-    expect(UtilityRegistry).toHaveLength(35);
+    expect(UtilityRegistry).toHaveLength(34);
 
     for (const utility of UtilityRegistry) {
         await search.fill(utility.title);
@@ -462,21 +462,15 @@ test("search arrows navigate visible results and Enter opens the focused result"
     await expect(page.getByRole("button", { name: "Open Protect Office Files", exact: true })).toHaveCount(0);
 
     await search.fill("Compress");
-    await expect(page.locator("button[data-command-result]")).toHaveCount(2);
+    await expect(page.locator("button[data-command-result]")).toHaveCount(1);
     const compressFiles = page.getByRole("button", { name: "Open Compress", exact: true });
-    const compressImages = page.getByRole("button", { name: "Open Compress Images", exact: true });
 
     await page.keyboard.press("ArrowDown");
-    await expect(compressFiles).toBeFocused();
-    await page.keyboard.press("ArrowDown");
-    await expect(compressImages).toBeFocused();
-    await page.keyboard.press("ArrowUp");
     await expect(compressFiles).toBeFocused();
     await page.keyboard.press("ArrowUp");
     await expect(search).toBeFocused();
     await page.keyboard.press("ArrowDown");
-    await page.keyboard.press("ArrowDown");
-    await expect(compressImages).toBeFocused();
+    await expect(compressFiles).toBeFocused();
     await page.screenshot({ path: testInfo.outputPath("phase2-command-center-search.png") });
     await page.keyboard.press("Enter");
     await expect(page.locator(".workspace-title")).toHaveText("Compress Files");
@@ -527,7 +521,7 @@ test("Windows labels the reveal action for File Explorer", async ({ page }) => {
         Object.defineProperty(window.navigator, "platform", { configurable: true, value: "Win32" });
     });
     await page.goto("/");
-    await openFromHome(page, "Compress Images");
+    await openFromHome(page, "Compress");
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await page.locator(".workspace-primary-action").click();
     await expect(page.getByRole("button", { name: "Show in File Explorer: icon.png.output-one", exact: true })).toHaveText("Show in File Explorer");
@@ -697,44 +691,89 @@ test("each view rail lists exactly its own tools and compression lives only in C
     }
 
     const compress = ToolWorkspaceRegistry.find(({ id }) => id === "compress-files")!;
-    expect(toolsForWorkspace(compress).map(({ title }) => title)).toEqual(["Compress", "Compress Images"]);
+    expect(toolsForWorkspace(compress).map(({ title }) => title)).toEqual(["Compress"]);
     for (const workspace of ToolWorkspaceRegistry.filter(({ id }) => id !== "compress-files")) {
         expect(toolsForWorkspace(workspace).map(({ id }) => id)).not.toContain("compress-files");
-        expect(toolsForWorkspace(workspace).map(({ id }) => id)).not.toContain("compress");
     }
 });
 
-test("Compress Files keeps the open files across tool switches and runs each native command with its own options", async ({ page }) => {
+for (const theme of ["light", "dark"] as const) {
+    test(`Compress Files is the one compress entry: search terms, a migrated Compress Images favorite and recent, no compress step in either editor, in the ${theme} theme`, async ({ page }) => {
+        await page.emulateMedia({ colorScheme: theme });
+        await page.addInitScript(() => {
+            if (localStorage.getItem("toolbox-tool-id-migration") === "5") return;
+            localStorage.setItem("toolbox-tool-id-migration", "4");
+            localStorage.setItem("toolbox-favorites", JSON.stringify(["compress"]));
+            localStorage.setItem("toolbox-recent", JSON.stringify(["compress"]));
+        });
+
+        const compressTools = UtilityRegistry.filter(({ command }) => command.startsWith("compress"));
+        expect(compressTools.map(({ id, title }) => ({ id, title }))).toEqual([{ id: "compress-files", title: "Compress" }]);
+        expect(RetiredToolIds.replacements.get("compress")).toBe("compress-files");
+        for (const workspace of ToolWorkspaceRegistry) {
+            expect(workspace.editor?.toolIds.filter((id) => id.startsWith("compress")) ?? []).toEqual([]);
+        }
+
+        await page.goto("/");
+        const saved = await page.evaluate(() => ({
+            favorites: JSON.parse(localStorage.getItem("toolbox-favorites") ?? "null"),
+            recent: JSON.parse(localStorage.getItem("toolbox-recent") ?? "null"),
+            marker: localStorage.getItem("toolbox-tool-id-migration"),
+        }));
+        expect(saved).toEqual({ favorites: ["compress-files"], recent: ["compress-files"], marker: String(RetiredToolIds.version) });
+
+        const search = page.getByRole("textbox", { name: "Search tools" });
+        for (const term of ["compress", "shrink", "reduce size", "PDF", "image"]) {
+            await search.fill(term);
+            await expect(page.getByRole("heading", { level: 2, name: "Compress Files", exact: true }), term).toHaveCount(1);
+            await expect(page.getByRole("button", { name: "Open Compress", exact: true }), term).toHaveCount(1);
+            await expect(page.locator('button[data-command-result^="compress"]'), term).toHaveCount(1);
+        }
+        await search.fill("");
+
+        const chips = page.getByRole("group", { name: "Favorite tools" });
+        await expect(chips.getByRole("button")).toHaveText(["Compress"]);
+        await chips.getByRole("button", { name: "Compress", exact: true }).click();
+        await expect(page.locator(".workspace-title")).toHaveText("Compress Files");
+        await expect(page.getByRole("radiogroup", { name: "Strength" })).toBeVisible();
+        await expect(page.getByRole("slider")).toHaveCount(0);
+        await expect(page.getByText("Preserve original pixels")).toHaveCount(0);
+
+        await page.goto("/");
+        await openFromHome(page, "Resize Images");
+        await chooseFixture(page, fixturePath);
+        await expect(page.getByRole("tablist", { name: "Edit Image" })).toBeVisible();
+        await expect(page.getByRole("tab", { name: /compress/i })).toHaveCount(0);
+        await expect(page.getByRole("toolbar", { name: "Image Editor tools" }).getByRole("button", { name: /compress/i })).toHaveCount(0);
+
+        await page.goto("/");
+        await openFromHome(page, "Merge PDF");
+        await chooseFixture(page, pdfFixturePath);
+        await expect(page.getByRole("toolbar", { name: "PDF Editor tools" })).toBeVisible();
+        await expect(page.getByRole("toolbar", { name: "PDF Editor tools" }).getByRole("button", { name: /compress/i })).toHaveCount(0);
+        await expect(page.getByRole("tab", { name: /compress/i })).toHaveCount(0);
+    });
+}
+
+test("Compress Files is one tool that takes PDFs and images in one batch with no quality or pixel options", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("navigation", { name: "Views" }).getByRole("button", { name: "Compress Files", exact: true }).click();
     const rail = page.getByRole("toolbar", { name: "Compress Files tools" });
+    await expect(rail.getByRole("button")).toHaveCount(1);
     await expect(rail.getByRole("button", { name: "Compress", exact: true })).toHaveAttribute("aria-pressed", "true");
-    await expect(page.getByRole("slider", { name: "Compression quality" })).toHaveCount(0);
-    await chooseFixture(page, pdfFixturePath);
+    await page.evaluate((paths) => { (window as TestWindow).__toolboxDialogResults = [paths]; }, [pdfFixturePath, fixturePath]);
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await expect(page.locator(".file-selection-count")).toHaveText("2 files");
+    await expect(page.getByRole("slider")).toHaveCount(0);
+    await expect(page.getByRole("switch", { name: "Preserve original pixels" })).toHaveCount(0);
+    await expect(page.getByText("Preserve original pixels")).toHaveCount(0);
 
-    await rail.getByRole("button", { name: "Compress Images", exact: true }).click();
-    await expect(page.getByRole("heading", { name: "Compress Images", exact: true })).toBeVisible();
-    await expect(page.locator(".file-selection-count")).toHaveText("1 file");
-    await expect(page.getByText(pdfFixtureName, { exact: true })).toBeVisible();
-
-    await rail.getByRole("button", { name: "Compress", exact: true }).click();
-    await expect(page.locator(".file-selection-count")).toHaveText("1 file");
-    await page.getByRole("button", { name: "Compress 1 file", exact: true }).click();
-    await expect(page.getByText("Test output", { exact: true }).last()).toBeVisible();
-
-    await rail.getByRole("button", { name: "Compress Images", exact: true }).click();
-    await chooseFixture(page, fixturePath);
-    await page.getByRole("switch", { name: "Preserve original pixels" }).click();
-    await page.getByRole("button", { name: "Export Compress Images", exact: true }).click();
-    await expect.poll(() => invocationCount(page, "compress_images")).toBe(1);
-
-    const requests = await page.evaluate(() => ((window as TestWindow).__toolboxInvocations ?? [])
-        .filter(({ command }) => command === "compress_files" || command === "compress_images")
-        .map(({ command, args }) => ({ command, request: (args as { request: unknown }).request })));
-    expect(requests).toEqual([
-        { command: "compress_files", request: { paths: [pdfFixturePath], level: "medium", stripExif: false, outputLocation: "alongsideInput" } },
-        { command: "compress_images", request: { paths: [fixturePath], quality: 80, lossless: true, outputLocation: "alongsideInput" } },
-    ]);
+    await page.getByRole("button", { name: "Compress 2 files", exact: true }).click();
+    await expect.poll(() => invocationCount(page, "compress_files")).toBe(1);
+    const commands = await page.evaluate(() => ((window as TestWindow).__toolboxInvocations ?? [])
+        .map(({ command }) => command)
+        .filter((command) => command.startsWith("compress")));
+    expect(commands).toEqual(["compress_files"]);
 });
 
 test("Compress defaults to Medium, describes each strength and sends the paths in order with the chosen strength and Strip EXIF", async ({ page }) => {
@@ -920,7 +959,6 @@ test("window shortcuts reach search and settings from every workspace view", asy
 const runShortcutCases = [
     { tool: "Lock & Unlock", file: pdfFixturePath, command: "remove_password", ready: (page: Page) => fillPasswords(page, "test-password") },
     { tool: "Compress", file: pdfFixturePath, command: "compress_files", ready: async () => undefined },
-    { tool: "Compress Images", file: fixturePath, command: "compress_images", ready: async () => undefined },
     { tool: "Image Metadata", file: fixturePath, command: "image_metadata", ready: async () => undefined },
 ];
 
@@ -1706,11 +1744,11 @@ test("TIFF export waits for inspection of the current file set", async ({ page }
 
 test("shared workspace ignores a stale processing completion after action changes", async ({ page }) => {
     await page.goto("/");
-    await openFromHome(page, "Compress Images");
+    await openFromHome(page, "Image Metadata");
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await page.evaluate(() => { (window as TestWindow).__toolboxProcessingDelayMs = 150; });
-    await page.getByRole("button", { name: "Export Compress Images" }).click();
-    await page.getByRole("toolbar", { name: "Compress Files tools" }).getByRole("button", { name: "Compress", exact: true }).click();
+    await page.locator(".workspace-primary-action").click();
+    await page.getByRole("toolbar", { name: "Image Editor tools" }).getByRole("button", { name: "Convert Image Format", exact: true }).click();
     await page.waitForTimeout(220);
     await expect(page.getByText("Test output", { exact: true })).toHaveCount(0);
 });
@@ -1787,14 +1825,14 @@ const overLimit = (inputPath: string, limit: LimitKind, message: string, extra: 
     ...extra,
 });
 
-const runCompressImagesWith = async (page: Page, outcomes: MockOutcome[]) => {
+const runCompressWith = async (page: Page, outcomes: MockOutcome[]) => {
     await page.goto("/");
     await page.evaluate((outcomes) => {
         (window as TestWindow).__toolboxProcessingResults = outcomes;
     }, outcomes);
-    await openFromHome(page, "Compress Images");
+    await openFromHome(page, "Compress");
     await page.getByRole("button", { name: "Choose files to process" }).click();
-    await page.getByRole("button", { name: "Export Compress Images" }).click();
+    await page.getByRole("button", { name: "Compress 1 file", exact: true }).click();
     return page.getByRole("list", { name: "Results" }).getByRole("listitem");
 };
 
@@ -2068,7 +2106,7 @@ test("every output exposes native file actions and keeps action errors inline", 
     const splitOutputs = ["a-01.pdf", "a-02.pdf", "a-12.pdf"].map((name) => `/local/out/${name}`);
     const folderOutput = "/local/out/brochure-pages";
     const partialOutput = "/local/out/drawings-part-1.pdf";
-    const rows = await runCompressImagesWith(page, [
+    const rows = await runCompressWith(page, [
         succeeded(fixturePath, [mockedOutputPaths[0]], { detail: "Test output" }),
         succeeded("/local/annual-report.pdf", splitOutputs),
         succeeded("/local/brochure.pdf", [folderOutput]),
@@ -2110,7 +2148,7 @@ test("every output exposes native file actions and keeps action errors inline", 
 });
 
 test("result rows show succeeded, skipped and failed states with warnings and pointers in input order", async ({ page }) => {
-    const rows = await runCompressImagesWith(page, [
+    const rows = await runCompressWith(page, [
         succeeded("/local/lease-agreement.pdf", ["/local/lease-agreement-protected.pdf"]),
         succeeded("/local/vendor-nda.pdf", ["/local/vendor-nda-protected.pdf"], {
             warnings: [{ code: "signatureRemoved", message: "native wording" }],
@@ -2179,7 +2217,7 @@ test("result rows show succeeded, skipped and failed states with warnings and po
 });
 
 test("a read-only output folder failure points to the output location setting instead of Retry", async ({ page }) => {
-    const rows = await runCompressImagesWith(page, [
+    const rows = await runCompressWith(page, [
         failed("/locked/scan.png", "processing", "The output folder is read-only. Nothing was saved.", {
             failure: { kind: "processing", message: "The output folder is read-only. Nothing was saved.", pointer: { kind: "outputFolder" } },
         }),
@@ -2204,7 +2242,7 @@ test("a read-only output folder failure points to the output location setting in
 
 test("Retry is offered only after processing failures and time limits and re-runs only that file with the same options", async ({ page }) => {
     const timedOut = "/local/drawings-full-set.pdf";
-    const rows = await runCompressImagesWith(page, [
+    const rows = await runCompressWith(page, [
         succeeded(fixturePath, [mockedOutputPaths[0]]),
         overLimit(timedOut, "time", "Took longer than 5 minutes and was stopped. Nothing was saved."),
         failed("/local/scan.pdf", "invalidInput", "Wrong password or unsupported encryption."),
@@ -2238,7 +2276,7 @@ test("Retry is offered only after processing failures and time limits and re-run
     await expect(resultSummaryStatus(page)).toHaveText("Done. 2 compressed, 3 failed");
 
     const runs = await page.evaluate(() =>
-        ((window as TestWindow).__toolboxInvocations ?? []).filter(({ command }) => command === "compress_images"),
+        ((window as TestWindow).__toolboxInvocations ?? []).filter(({ command }) => command === "compress_files"),
     );
     expect(runs).toHaveLength(2);
     const [first, retry] = runs.map((run) => (run.args as { request: { paths: string[] } }).request);
@@ -2252,7 +2290,7 @@ test("files over a limit fail alone with the limit message while the other rows 
         ["/local/poster.png", "decompression", "This image expands to more than 500 MB when opened, which is over the limit. It may be damaged or unsafe to open."],
         ["/local/animation.gif", "pageCount", "More than 1,000 frames, over the limit for one GIF. Use fewer frames and try again."],
     ];
-    const rows = await runCompressImagesWith(page, [
+    const rows = await runCompressWith(page, [
         succeeded(fixturePath, [mockedOutputPaths[0]], { detail: "Test output" }),
         ...limits.map(([path, limit, message]) => overLimit(path, limit, message)),
         failed("/local/broken.png", "processing", "The image could not be read."),
@@ -2278,9 +2316,9 @@ test("files over a limit fail alone with the limit message while the other rows 
 
 test("output action state resets and ignores stale completions", async ({ page }) => {
     await page.goto("/");
-    await openFromHome(page, "Compress Images");
+    await openFromHome(page, "Compress");
     await page.getByRole("button", { name: "Choose files to process" }).click();
-    const processButton = page.getByRole("button", { name: "Export Compress Images" });
+    const processButton = page.getByRole("button", { name: "Compress 1 file", exact: true });
     await processButton.click();
 
     await page.evaluate(({ path }) => {
@@ -2332,8 +2370,7 @@ test("single-input actions report every selected file instead of truncating the 
 });
 
 for (const batch of [
-    { title: "Compress Images", command: "compress_images", paths: ["/local/beach.png", "/local/forest.jpg"] },
-    { title: "Compress", command: "compress_files", paths: ["/local/lease.pdf", "/local/invoice.pdf"] },
+    { title: "Compress", command: "compress_files", paths: ["/local/lease.pdf", "/local/forest.jpg"] },
     { title: "Extract GIF Frames", command: "extract_gif_frames", paths: ["/local/wave.gif", "/local/spin.gif"] },
 ]) {
     test(`${batch.title} runs every selected file in one native batch`, async ({ page }) => {
@@ -2510,7 +2547,7 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
 };
 
 test.describe("registered feature actions", () => {
-    expect(UtilityRegistry).toHaveLength(35);
+    expect(UtilityRegistry).toHaveLength(34);
 
     for (const utility of UtilityRegistry) {
         test(`${utility.id} accepts the fixture and runs with the Settings default`, async ({ page }) => {
