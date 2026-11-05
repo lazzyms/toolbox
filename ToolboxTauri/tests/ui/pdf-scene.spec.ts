@@ -366,7 +366,7 @@ test('scene composes every mark kind, moves and resizes, then exports once', asy
   await page.getByRole('button', { name: 'Select', exact: true }).click();
   const text = page.getByRole('button', { name: 'text object 1', exact: true });
   await text.focus();
-  await page.keyboard.press('Enter');
+  await page.keyboard.press('Space');
   await page.keyboard.press('Shift+ArrowRight');
   await page.getByRole('button', { name: 'Resize text se', exact: true }).focus();
   await page.keyboard.press('Shift+ArrowRight');
@@ -547,7 +547,7 @@ test('Escape discards inline text edits without changing the committed scene', a
   await page.getByRole('button', { name: 'Select', exact: true }).click();
   await page.getByRole('button', { name: 'text object 1', exact: true }).dblclick();
 
-  const editor = page.getByRole('textbox', { name: 'Edit text object' });
+  const editor = page.getByRole('textbox', { name: 'Text box text' });
   const originalText = await editor.inputValue();
   await editor.fill('Discard this draft');
   await editor.press('Escape');
@@ -578,4 +578,89 @@ test('scene export sends only the scene sections and the invoke boundary accepts
   expect(results[0].state).toBe('succeeded');
   const accepted = await page.evaluate(() => (window as any).calls.filter((c: any) => c.command === 'export_pdf_scene').at(-1).args.request);
   expect(accepted).toEqual(staged);
+});
+
+const textFields = (object: any) => ({ fontFamily: object.fontFamily, fontSize: object.fontSize, bold: object.bold, italic: object.italic, align: object.align,
+  color: object.color, opacity: object.opacity, pageRange: object.pageRange ?? null });
+
+test('text controls set the next box and the selected box exactly', async ({ page }) => {
+  await openEditor(page);
+  await page.getByRole('toolbar', { name: 'PDF editor tools' }).getByRole('button', { name: 'Text', exact: true }).click();
+  const inspector = page.getByRole('complementary', { name: 'PDF editor inspector' });
+  await expect(inspector.getByText('Click the page to add a text box. Double-click a box or press Enter to edit it.')).toBeVisible();
+  await inspector.getByRole('combobox', { name: 'Font' }).selectOption('Noto Sans Mono');
+  await inspector.getByRole('button', { name: 'Bold', exact: true }).click();
+  await inspector.getByRole('radio', { name: 'Align right' }).click();
+  await draw(page, 'Text', .3);
+  let result = await exported(page);
+  expect(textFields(result.pages[0].objects[0])).toEqual({ fontFamily: 'Noto Sans Mono', fontSize: 18, bold: true, italic: false, align: 'right', color: '#1b1b1b', opacity: 1, pageRange: null });
+
+  await page.getByRole('button', { name: 'Select', exact: true }).click();
+  await page.getByRole('button', { name: 'text object 1', exact: true }).click();
+  await inspector.getByRole('combobox', { name: 'Font' }).selectOption('Noto Serif');
+  await inspector.getByRole('spinbutton', { name: 'Size' }).fill('24');
+  await inspector.getByRole('button', { name: 'Bold', exact: true }).click();
+  await inspector.getByRole('button', { name: 'Italic', exact: true }).click();
+  await inspector.getByRole('radio', { name: 'Align centre' }).click();
+  await expect(inspector.getByRole('radio', { name: 'Align centre' })).toHaveAttribute('aria-checked', 'true');
+  await page.locator('input[type="color"][aria-label="Object color"]').fill('#aa3300');
+  await page.getByRole('slider', { name: 'Object opacity' }).press('Home');
+  result = await exported(page);
+  expect(textFields(result.pages[0].objects[0])).toEqual({ fontFamily: 'Noto Serif', fontSize: 24, bold: false, italic: true, align: 'center', color: '#aa3300', opacity: .05, pageRange: null });
+});
+
+test('a text box can be shown on a page range', async ({ page }) => {
+  await openEditor(page);
+  await draw(page, 'Text', .3);
+  await page.getByRole('button', { name: 'Select', exact: true }).click();
+  await page.getByRole('button', { name: 'text object 1', exact: true }).click();
+  const pages = page.getByRole('textbox', { name: 'Pages for this text box' });
+  await expect(page.getByRole('radio', { name: 'This page only' })).toBeChecked();
+  await expect(pages).toBeDisabled();
+  await page.getByRole('radio', { name: 'These pages' }).click();
+  await expect(pages).toHaveValue('1');
+  await pages.fill('1-2, 3-');
+  await pages.press('Enter');
+  let result = await exported(page);
+  expect(result.pages[0].objects[0].pageRange).toBe('1-2, 3-');
+  expect(result.pages.slice(1).map((item: any) => item.objects.length)).toEqual([0, 0]);
+  await page.getByRole('radio', { name: 'This page only' }).click();
+  result = await exported(page);
+  expect(result.pages[0].objects[0].pageRange).toBeNull();
+});
+
+test('double-click and Enter open the text box editor in place', async ({ page }) => {
+  await openEditor(page);
+  await draw(page, 'Text', .3);
+  await page.getByRole('button', { name: 'Select', exact: true }).click();
+  const box = page.getByRole('button', { name: 'text object 1', exact: true });
+  await box.dblclick();
+  const editor = page.getByRole('textbox', { name: 'Text box text' });
+  await expect(editor).toBeFocused();
+  await editor.fill('Привет\nΚαλημέρα');
+  await editor.press('Control+Enter');
+  await expect(editor).toHaveCount(0);
+  await box.focus();
+  await box.press('Enter');
+  await expect(editor).toBeFocused();
+  await expect(editor).toHaveValue('Привет\nΚαλημέρα');
+  await editor.fill('Hello, world');
+  await editor.press('Control+Enter');
+  const result = await exported(page);
+  expect(result.pages[0].objects[0].text).toBe('Hello, world');
+});
+
+test('unrenderable text names the characters and keeps Export disabled', async ({ page }) => {
+  await openEditor(page);
+  await draw(page, 'Text', .3);
+  await page.evaluate(() => {
+    (window as any).previewFailure = true;
+    (window as any).previewFailureMessage = 'Noto Sans can’t show these characters: “😀” (U+1F600), “आ” (U+0906). Remove them to export this text box.';
+  });
+  await page.getByRole('button', { name: 'Select', exact: true }).click();
+  await page.getByRole('button', { name: 'text object 1', exact: true }).dblclick();
+  await page.getByRole('textbox', { name: 'Text box text' }).fill('Hi 😀 आ');
+  await page.getByRole('textbox', { name: 'Text box text' }).press('Control+Enter');
+  await expect(page.getByRole('alert')).toHaveText('Preview could not be verified. Noto Sans can’t show these characters: “😀” (U+1F600), “आ” (U+0906). Remove them to export this text box. Export is disabled until the preview can be verified.');
+  await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeDisabled();
 });

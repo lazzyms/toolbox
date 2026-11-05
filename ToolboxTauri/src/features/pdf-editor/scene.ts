@@ -8,6 +8,8 @@ export type SceneShape = 'square' | 'round' | 'triangle' | 'line' | 'dotted-line
 export type SignatureMode = 'image' | 'text';
 export type WatermarkPattern = 'across-page' | 'bottom-right-to-top-left' | 'top-right-to-bottom-left' | 'center-horizontal' | 'center-vertical';
 export type HighlightMode = 'area' | 'text-selection';
+export type TextFontFamily = 'Noto Sans' | 'Noto Serif' | 'Noto Sans Mono';
+export type TextAlign = 'left' | 'center' | 'right';
 export interface SceneObject {
   id: string;
   kind: 'text' | 'highlight' | 'shape' | 'signature' | 'watermark';
@@ -26,8 +28,15 @@ export interface SceneObject {
   // exporter uses signaturePath, keeping the file processing on-device.
   signaturePreview?: string | null;
   fontFamily?: string;
+  bold?: boolean;
+  italic?: boolean;
+  align?: TextAlign;
+  // Text boxes only: a page list like "1-3, 7, 10-"; null keeps the box on its own page.
+  pageRange?: string | null;
   watermarkPattern?: WatermarkPattern;
 }
+// Defaults for the next text box; each new text box copies them.
+export interface TextStyle { fontFamily: TextFontFamily; bold: boolean; italic: boolean; align: TextAlign }
 export interface ScenePage {
   id: string;
   sourceIndex: number | null;

@@ -18,7 +18,7 @@ import { subToolInspectors } from '../features/pdf-editor/SubToolInspectors';
 import type { SubToolInspectorProps } from '../features/pdf-editor/SubToolInspectors';
 import { planSceneExport, sceneContributors } from '../features/pdf-editor/subtools';
 import { sceneFromDocument, visibleBounds } from '../features/pdf-editor/scene';
-import type { PdfScene, SceneObject, ScenePage, ScenePreview, SceneRect, SceneShape, SceneTool, SignatureMode, WatermarkPattern } from '../features/pdf-editor/scene';
+import type { PdfScene, SceneObject, ScenePage, ScenePreview, SceneRect, SceneShape, SceneTool, SignatureMode, TextStyle, WatermarkPattern } from '../features/pdf-editor/scene';
 import { PREVIEW_CACHE_MAX_ENTRIES, PREVIEW_RENDER_SETTINGS, createPreviewCache, pdfEditorErrorMessage, previewCacheKey, requestWithGeneration } from './pdfPreviewHelpers';
 import type { GenerationState } from './pdfPreviewHelpers';
 import { ShortcutHint } from '../components/ShortcutHint';
@@ -143,6 +143,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
   const [zoom, setZoom] = useState(1);
   const text = 'Text';
   const [fontSize, setFontSize] = useState(18);
+  const [textStyle, setTextStyle] = useState<TextStyle>({ fontFamily: 'Noto Sans', bold: false, italic: false, align: 'left' });
   const [color, setColor] = useState(() => readColorToken(colorTokens.documentText));
   const [opacity, setOpacity] = useState(1);
   const [highlightColor, setHighlightColor] = useState(() => readColorToken(colorTokens.documentHighlight));
@@ -330,6 +331,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
     signaturePath: kind === 'signature' && signatureMode === 'image' ? signaturePath : undefined,
     signaturePreview: kind === 'signature' && signatureMode === 'image' ? signaturePreview : undefined,
     fontFamily: kind === 'signature' ? signatureFont : undefined,
+    ...(kind === 'text' ? textStyle : {}),
     watermarkPattern: kind === 'watermark' ? watermarkPattern : undefined,
   });
   const chooseSignatureImage = async () => {
@@ -404,8 +406,8 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
   const activeOpacity = selected?.opacity ?? (tool === 'highlight' ? highlightOpacity : opacity);
 
   const inspector: SubToolInspectorProps | null = page ? {
-    page, selected, hasTextRuns: Boolean(document?.pages[page.sourceIndex ?? -1]?.textRuns?.length), updateObject, commitPage, endGroup,
-    fontSize, setFontSize, shape, setShape,
+    page, pageNumber: currentIndex + 1, selected, hasTextRuns: Boolean(document?.pages[page.sourceIndex ?? -1]?.textRuns?.length), updateObject, commitPage, endGroup,
+    fontSize, setFontSize, textStyle, setTextStyle, shape, setShape,
     signatureMode, setSignatureMode, signaturePath, signaturePreview, signatureText, setSignatureText,
     signatureTextDraft, setSignatureTextDraft, signatureFont, setSignatureFont, chooseSignatureImage,
     watermarkText, setWatermarkText, watermarkFontSize, setWatermarkFontSize, watermarkPattern, setWatermarkPattern, addFixedWatermark,
