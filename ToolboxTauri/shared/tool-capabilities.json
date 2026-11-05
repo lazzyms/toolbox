@@ -29,7 +29,8 @@
   {"command": "convert_to_pdf", "formatFamilies": [
     {"id": "plain-text", "extensions": [".txt"], "nativeAvailability": "available"},
     {"id": "pdf", "extensions": [".pdf"], "nativeAvailability": "available"},
-    {"id": "documents", "extensions": [".docx", ".odt", ".rtf"], "nativeAvailability": "unavailable"},
+    {"id": "documents", "extensions": [".docx", ".odt"], "nativeAvailability": "unavailable"},
+    {"id": "rich-text", "extensions": [".rtf"], "nativeAvailability": "available"},
     {"id": "spreadsheets", "extensions": [".xlsx", ".ods"], "nativeAvailability": "unavailable"},
     {"id": "presentations", "extensions": [".pptx", ".odp"], "nativeAvailability": "unavailable"},
     {"id": "markdown", "extensions": [".md", ".markdown"], "nativeAvailability": "available"},

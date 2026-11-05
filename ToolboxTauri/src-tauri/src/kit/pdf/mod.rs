@@ -6,6 +6,7 @@ pub mod unicode_font;
 pub mod font_resolver;
 pub mod layout;
 pub mod markdown;
+pub mod rtf;
 pub mod convert;
 
 use std::collections::HashSet;

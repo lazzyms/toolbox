@@ -75,11 +75,20 @@ impl<'r, S: SystemFontLookup> FontBook<'r, S> {
     }
 }
 
-pub struct Picture { rgb: Vec<u8>, alpha: Option<Vec<u8>>, width: u32, height: u32 }
+pub struct Picture { rgb: Vec<u8>, alpha: Option<Vec<u8>>, width: u32, height: u32, size: Option<(f32, f32)> }
 
 impl Picture {
     pub fn load(path: &Path) -> Result<Self, String> {
-        let mut reader = image::ImageReader::open(path).map_err(|error| error.to_string())?.with_guessed_format().map_err(|error| error.to_string())?;
+        let reader = image::ImageReader::open(path).map_err(|error| error.to_string())?;
+        Self::decode(reader, None)
+    }
+
+    pub fn from_bytes(bytes: &[u8], size: Option<(f32, f32)>) -> Result<Self, String> {
+        Self::decode(image::ImageReader::new(std::io::Cursor::new(bytes)), size.filter(|(width, height)| *width > 0. && *height > 0.))
+    }
+
+    fn decode<R: std::io::BufRead + std::io::Seek>(reader: image::ImageReader<R>, size: Option<(f32, f32)>) -> Result<Self, String> {
+        let mut reader = reader.with_guessed_format().map_err(|error| error.to_string())?;
         let mut limits = image::Limits::default();
         limits.max_image_width = Some(MAX_PICTURE_SIDE);
         limits.max_image_height = Some(MAX_PICTURE_SIDE);
@@ -96,12 +105,21 @@ impl Picture {
             alpha.push(pixel.0[3]);
         }
         let alpha = alpha.iter().any(|value| *value < 255).then_some(alpha);
-        Ok(Self { rgb, alpha, width: image.width(), height: image.height() })
+        Ok(Self { rgb, alpha, width: image.width(), height: image.height(), size })
     }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct Style { pub bold: bool, pub italic: bool, pub code: bool, pub strike: bool }
+pub struct Style {
+    pub bold: bool,
+    pub italic: bool,
+    pub code: bool,
+    pub strike: bool,
+    pub underline: bool,
+    pub family: u16,
+    pub half_points: u16,
+    pub color: Option<[u8; 3]>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Span { pub text: String, pub style: Style, pub link: Option<String> }
@@ -119,7 +137,12 @@ pub enum Block {
     Table { aligns: Vec<Align>, head: Vec<Vec<Span>>, rows: Vec<Vec<Vec<Span>>> },
     Image(usize),
     Rule,
+    Formatted(Paragraph),
+    PageBreak,
 }
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Paragraph { pub spans: Vec<Span>, pub align: Align, pub indent: f32, pub right_indent: f32, pub before: f32, pub after: f32, pub size: f32, pub leading: f32 }
 
 pub fn plain_text(spans: &[Span]) -> String {
     spans.iter().map(|span| span.text.as_str()).collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ")
@@ -138,25 +161,36 @@ pub struct PageOut { pub content: String, pub links: Vec<Link> }
 pub struct Bookmark { pub level: u8, pub title: String, pub page: usize, pub y: f32 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct Geometry { pub width: f32, pub height: f32, pub margin: f32 }
+pub struct Geometry { pub width: f32, pub height: f32, pub left: f32, pub right: f32, pub top: f32, pub bottom: f32 }
 
 impl Geometry {
-    fn content_height(&self) -> f32 { self.height - 2. * self.margin }
-    fn top(&self) -> f32 { self.height - self.margin }
+    pub fn uniform(width: f32, height: f32, margin: f32) -> Self { Self { width, height, left: margin, right: margin, top: margin, bottom: margin } }
+    fn content_height(&self) -> f32 { self.height - self.top - self.bottom }
+    fn top(&self) -> f32 { self.height - self.top }
 }
 
 #[derive(Debug, Clone)]
-pub struct Theme { pub body_family: String, pub code_family: String, pub body_size: f32, pub shaded_code: bool }
+pub struct Theme { pub body_family: String, pub code_family: String, pub body_size: f32, pub shaded_code: bool, pub families: Vec<String>, pub leading: f32 }
+
+impl Theme {
+    pub fn new(body_family: &str, code_family: &str, body_size: f32, shaded_code: bool) -> Self {
+        Self { body_family: body_family.to_string(), code_family: code_family.to_string(), body_size, shaded_code, families: Vec::new(), leading: 1.45 }
+    }
+}
 
 #[derive(Clone)]
 struct Piece { text: String, face: Face, size: f32, width: f32, style: Style, link: Option<String>, space: bool }
 
-#[derive(Default)]
-struct Line { pieces: Vec<Piece>, width: f32, size: f32 }
+struct Line { pieces: Vec<Piece>, width: f32, size: f32, leading: f32 }
 
 impl Line {
-    fn new(size: f32) -> Self { Self { pieces: Vec::new(), width: 0., size } }
-    fn height(&self) -> f32 { self.size * 1.45 }
+    fn new(size: f32, leading: f32) -> Self { Self { pieces: Vec::new(), width: 0., size, leading } }
+    fn height(&self) -> f32 { self.size * self.leading }
+    fn push(&mut self, piece: Piece) {
+        self.width += piece.width;
+        if !piece.space { self.size = self.size.max(piece.size); }
+        self.pieces.push(piece);
+    }
     fn trim(&mut self) {
         while self.pieces.last().is_some_and(|piece| piece.space) {
             let piece = self.pieces.pop().expect("checked above");
@@ -176,6 +210,7 @@ pub struct Flow<'b, 'r, S: SystemFontLookup> {
     cursor: f32,
     ink: [f32; 3],
     depth: usize,
+    leading: f32,
     bookmarks: Vec<Bookmark>,
     anchors: BTreeMap<String, (usize, f32)>,
 }
@@ -203,13 +238,14 @@ fn color(ink: [f32; 3]) -> String {
 
 impl<'b, 'r, S: SystemFontLookup> Flow<'b, 'r, S> {
     pub fn new(book: &'b mut FontBook<'r, S>, theme: Theme, pictures: &'b [Picture], geometry: Geometry) -> Self {
-        Self { book, theme, pictures, geometry, pages: vec![PageOut::default()], cursor: 0., ink: BLACK, depth: 0, bookmarks: Vec::new(), anchors: BTreeMap::new() }
+        let leading = theme.leading;
+        Self { book, theme, pictures, geometry, pages: vec![PageOut::default()], cursor: 0., ink: BLACK, depth: 0, leading, bookmarks: Vec::new(), anchors: BTreeMap::new() }
     }
 
     pub fn finish(self) -> Laid { Laid { pages: self.pages, bookmarks: self.bookmarks, anchors: self.anchors } }
 
-    fn left(&self) -> f32 { self.geometry.margin }
-    fn text_width(&self) -> f32 { self.geometry.width - 2. * self.geometry.margin }
+    fn left(&self) -> f32 { self.geometry.left }
+    fn text_width(&self) -> f32 { self.geometry.width - self.geometry.left - self.geometry.right }
     fn y(&self) -> f32 { self.geometry.top() - self.cursor }
     fn page(&mut self) -> &mut PageOut { self.pages.last_mut().expect("a flow always has a page") }
     fn page_index(&self) -> usize { self.pages.len() - 1 }
@@ -240,37 +276,40 @@ impl<'b, 'r, S: SystemFontLookup> Flow<'b, 'r, S> {
             let family = self.theme.code_family.clone();
             return Ok((self.book.face(&family, FontStyle::new(style.bold || bold, false))?, size * 0.9));
         }
-        let family = self.theme.body_family.clone();
+        let family = match style.family {
+            0 => self.theme.body_family.clone(),
+            index => self.theme.families.get(index as usize - 1).cloned().unwrap_or_else(|| self.theme.body_family.clone()),
+        };
+        let size = if style.half_points > 0 { style.half_points as f32 / 2. } else { size };
         Ok((self.book.face(&family, FontStyle::new(style.bold || bold, style.italic))?, size))
     }
 
     fn lines(&mut self, spans: &[Span], width: f32, size: f32, bold: bool) -> Result<Vec<Line>, ToolError> {
+        let leading = self.leading;
         let mut lines = Vec::new();
-        let mut line = Line::new(size);
+        let mut line = Line::new(size, leading);
         for span in spans {
             let (face, piece_size) = self.face_for(span.style, size, bold)?;
             for token in tokens(&span.text) {
                 let piece = |text: &str, width: f32, space: bool| Piece { text: text.to_string(), face, size: piece_size, width, style: span.style, link: span.link.clone(), space };
                 if token == "\n" {
                     line.trim();
-                    lines.push(std::mem::replace(&mut line, Line::new(size)));
+                    lines.push(std::mem::replace(&mut line, Line::new(size, leading)));
                     continue;
                 }
                 if token.chars().all(char::is_whitespace) {
                     if line.pieces.is_empty() { continue; }
                     let width = self.book.width(face, " ", piece_size)?;
-                    line.width += width;
-                    line.pieces.push(piece(" ", width, true));
+                    line.push(piece(" ", width, true));
                     continue;
                 }
                 let word_width = self.book.width(face, token, piece_size)?;
                 if line.width + word_width > width && line.pieces.iter().any(|piece| !piece.space) {
                     line.trim();
-                    lines.push(std::mem::replace(&mut line, Line::new(size)));
+                    lines.push(std::mem::replace(&mut line, Line::new(size, leading)));
                 }
                 if word_width <= width {
-                    line.width += word_width;
-                    line.pieces.push(piece(token, word_width, false));
+                    line.push(piece(token, word_width, false));
                     continue;
                 }
                 let mut chunk = String::new();
@@ -278,20 +317,16 @@ impl<'b, 'r, S: SystemFontLookup> Flow<'b, 'r, S> {
                 for character in token.chars() {
                     let character_width = self.book.char_width(face, character, piece_size)?;
                     if line.width + chunk_width + character_width > width && !(chunk.is_empty() && line.pieces.is_empty()) {
-                        if !chunk.is_empty() { line.pieces.push(piece(&chunk, chunk_width, false)); }
-                        line.width += chunk_width;
+                        if !chunk.is_empty() { line.push(piece(&chunk, chunk_width, false)); }
                         line.trim();
-                        lines.push(std::mem::replace(&mut line, Line::new(size)));
+                        lines.push(std::mem::replace(&mut line, Line::new(size, leading)));
                         chunk.clear();
                         chunk_width = 0.;
                     }
                     chunk.push(character);
                     chunk_width += character_width;
                 }
-                if !chunk.is_empty() {
-                    line.width += chunk_width;
-                    line.pieces.push(piece(&chunk, chunk_width, false));
-                }
+                if !chunk.is_empty() { line.push(piece(&chunk, chunk_width, false)); }
             }
         }
         line.trim();
@@ -300,7 +335,7 @@ impl<'b, 'r, S: SystemFontLookup> Flow<'b, 'r, S> {
     }
 
     fn draw_line(&mut self, line: &Line, x: f32, width: f32, align: Align) -> Result<(), ToolError> {
-        let baseline = self.y() - line.size * 1.1;
+        let baseline = self.y() - line.size * (line.leading - 0.35);
         let mut pen = x + match align { Align::Left => 0., Align::Center => (width - line.width) / 2., Align::Right => width - line.width };
         let mut index = 0;
         while index < line.pieces.len() {
@@ -318,12 +353,17 @@ impl<'b, 'r, S: SystemFontLookup> Flow<'b, 'r, S> {
             if style.code && self.theme.shaded_code {
                 self.rect(SHADE, pen - 1., baseline - size * 0.28, run_width + 2., size * 1.2);
             }
-            let ink = if link.is_some() { LINK_INK } else { self.ink };
+            let ink = match (&link, style.color) {
+                (Some(_), _) => LINK_INK,
+                (None, Some(rgb)) => rgb.map(|channel| channel as f32 / 255.),
+                (None, None) => self.ink,
+            };
             let operators = self.book.text(face, size, pen, baseline, &text)?;
             let page = self.page();
             page.content.push_str(&color(ink));
             page.content.push_str(&operators);
             if style.strike { self.stroke(ink, size * 0.06, (pen, baseline + size * 0.28), (pen + run_width, baseline + size * 0.28)); }
+            if style.underline { self.stroke(ink, size * 0.05, (pen, baseline - size * 0.12), (pen + run_width, baseline - size * 0.12)); }
             if let Some(link) = link {
                 let target = match link.strip_prefix('#') { Some(anchor) => Target::Anchor(anchor.to_string()), None => Target::Uri(link) };
                 self.page().links.push(Link { rect: [pen, baseline - size * 0.25, pen + run_width, baseline + size * 0.9], target });
@@ -418,7 +458,7 @@ impl<'b, 'r, S: SystemFontLookup> Flow<'b, 'r, S> {
             Block::Table { aligns, head, rows } => self.table(aligns, head, rows, x, width)?,
             Block::Image(index) => {
                 let picture = &self.pictures[*index];
-                let natural = (picture.width as f32 * 0.75, picture.height as f32 * 0.75);
+                let natural = picture.size.unwrap_or((picture.width as f32 * 0.75, picture.height as f32 * 0.75));
                 let scale = (width / natural.0).min(self.geometry.content_height() / natural.1).min(1.);
                 let (image_width, image_height) = (natural.0 * scale, natural.1 * scale);
                 self.need(image_height);
@@ -426,6 +466,27 @@ impl<'b, 'r, S: SystemFontLookup> Flow<'b, 'r, S> {
                 self.page().content.push_str(&format!("q {image_width:.2} 0 0 {image_height:.2} {x:.2} {bottom:.2} cm /Im{index} Do Q\n"));
                 self.cursor += image_height;
                 self.gap(size * 0.6);
+            }
+            Block::Formatted(paragraph) => {
+                self.gap(paragraph.before);
+                let leading = std::mem::replace(&mut self.leading, paragraph.leading);
+                let x = x + paragraph.indent;
+                let width = (width - paragraph.indent - paragraph.right_indent).max(width * 0.25);
+                let drawn = if paragraph.spans.iter().all(|span| span.text.trim().is_empty()) {
+                    let height = paragraph.size * paragraph.leading;
+                    self.need(height);
+                    self.cursor += height;
+                    Ok(())
+                } else {
+                    self.paragraph(&paragraph.spans, x, width, paragraph.size, false, paragraph.align)
+                };
+                self.leading = leading;
+                drawn?;
+                self.cursor += paragraph.after;
+            }
+            Block::PageBreak => {
+                self.pages.push(PageOut::default());
+                self.cursor = 0.;
             }
             Block::Rule => {
                 self.need(size);
@@ -518,7 +579,7 @@ impl<'b, 'r, S: SystemFontLookup> Flow<'b, 'r, S> {
     }
 
     fn row_height(&mut self, row: &[Vec<Span>], widths: &[f32], size: f32, pad: f32, bold: bool) -> Result<f32, ToolError> {
-        let mut height = size * 1.45;
+        let mut height = size * self.leading;
         for (column, cell) in row.iter().enumerate() {
             let lines = self.lines(cell, widths[column] - 2. * pad, size, bold)?;
             height = height.max(lines.iter().map(Line::height).sum());
@@ -617,6 +678,7 @@ pub struct Assembly<'a> {
     pub bookmarks: &'a [Bookmark],
     pub anchors: &'a BTreeMap<String, (usize, f32)>,
     pub title: Option<&'a str>,
+    pub author: Option<&'a str>,
 }
 
 pub fn assemble<S: SystemFontLookup>(book: &FontBook<'_, S>, assembly: Assembly<'_>) -> Result<Document, ToolError> {
@@ -680,8 +742,11 @@ pub fn assemble<S: SystemFontLookup>(book: &FontBook<'_, S>, assembly: Assembly<
     }
     let catalog_id = document.add_object(catalog);
     document.trailer.set("Root", catalog_id);
-    if let Some(title) = assembly.title.filter(|title| !title.trim().is_empty()) {
-        let info = document.add_object(dictionary! { "Title" => text_string(title.trim()) });
+    let mut info = Dictionary::new();
+    if let Some(title) = assembly.title.filter(|title| !title.trim().is_empty()) { info.set("Title", text_string(title.trim())); }
+    if let Some(author) = assembly.author.filter(|author| !author.trim().is_empty()) { info.set("Author", text_string(author.trim())); }
+    if !info.is_empty() {
+        let info = document.add_object(info);
         document.trailer.set("Info", info);
     }
     document.compress();
