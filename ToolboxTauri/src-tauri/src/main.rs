@@ -129,8 +129,8 @@ fn inspect_pdf(request: InspectPdfRequest) -> Result<metadata::PdfDocumentMetada
 }
 
 #[tauri::command]
-async fn inspect_pdf_scene(request: InspectPdfRequest) -> Result<metadata::PdfDocumentMetadata, String> {
-    tauri::async_runtime::spawn_blocking(move || scene::inspect(&request.path)).await.map_err(|error| error.to_string())?
+async fn inspect_pdf_scene(request: InspectPdfRequest) -> Result<metadata::PdfDocumentMetadata, ToolError> {
+    tauri::async_runtime::spawn_blocking(move || scene::inspect(&request.path)).await.map_err(|error| ToolError::processing(error.to_string()))?
 }
 
 #[tauri::command]

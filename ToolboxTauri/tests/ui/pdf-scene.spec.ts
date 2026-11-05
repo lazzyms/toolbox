@@ -80,7 +80,7 @@ test('PDF editor toolbars use roving keyboard focus and render the workspace', a
   await page.keyboard.press('End');
   await expect(tools.getByRole('button', { name: 'Export PDF', exact: true })).toBeFocused();
   await page.keyboard.press('Home');
-  await expect(selectTool).toBeFocused();
+  await expect(tools.getByRole('button', { name: 'Organize', exact: true })).toBeFocused();
   await expect(page.getByRole('toolbar', { name: 'PDF page and zoom controls' })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('pdf-editor-workspace.png'), fullPage: true });
 });
@@ -122,7 +122,7 @@ test('PDF editor toolbar uses roving keyboard focus and the inspector follows th
   await page.keyboard.press('ArrowRight');
   await expect(toolbar.getByRole('button', { name: 'Text', exact: true })).toBeFocused();
   await page.keyboard.press('Home');
-  await expect(select).toBeFocused();
+  await expect(toolbar.getByRole('button', { name: 'Organize', exact: true })).toBeFocused();
 
   const inspector = page.getByRole('complementary', { name: 'PDF editor inspector' });
   await expect(inspector).toBeVisible();
@@ -298,13 +298,13 @@ test('page numbering adds editable number objects to every page', async ({ page 
 
 test('PDF scene history retains exactly the latest 100 edits', async ({ page }) => {
   await openEditor(page);
-  const addPage = page.getByRole('button', { name: 'Add blank page' });
-  for (let index = 0; index < 101; index += 1) await addPage.click();
-  await expect(page.getByRole('button', { name: 'Page 102, blank', exact: true })).toBeVisible();
+  const rotate = page.getByRole('button', { name: 'Rotate selected pages' });
+  for (let index = 0; index < 101; index += 1) await rotate.click();
   const undo = page.getByRole('button', { name: 'Undo', exact: true });
   for (let index = 0; index < 100; index += 1) await undo.click();
+  await expect(undo).toBeDisabled();
   const result = await exported(page);
-  expect(result.pages).toHaveLength(4);
+  expect(result.pages.map((item: any) => item.rotation)).toEqual([90, 0, 0]);
 });
 
 test('pointer-down does not request another preview before the scene changes', async ({ page }) => {
@@ -378,25 +378,25 @@ test('scene composes every mark kind, moves and resizes, then exports once', asy
   expect(await page.evaluate(() => (window as any).calls.filter((c: any) => c.command === 'export_pdf_scene').length)).toBe(1);
 });
 
-test('scene crop and thumbnail insert rotate reorder delete share undo redo reset', async ({ page }) => {
+test('scene crop and thumbnail rotate reorder delete share undo redo reset', async ({ page }) => {
   await openEditor(page);
   await draw(page, 'Crop', .1, .1);
-  await page.getByRole('button', { name: 'Add blank page' }).click();
-  await expect(page.getByRole('button', { name: 'Page 2, blank', exact: true })).toHaveAttribute('aria-current', 'page');
+  await page.getByRole('button', { name: 'Page 2', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Page 2', exact: true })).toHaveAttribute('aria-current', 'page');
   await draw(page, 'Shape', .3);
   await page.getByRole('button', { name: 'Rotate selected pages' }).click();
   await page.getByRole('button', { name: 'Move page earlier' }).click();
   let result = await exported(page);
-  expect(result.pages[0]).toMatchObject({ sourceIndex: null, rotation: 90 });
+  expect(result.pages[0]).toMatchObject({ sourceIndex: 1, rotation: 90 });
   expect(result.pages[0].objects).toHaveLength(1);
   expect(result.pages[1].crop).not.toBeNull();
   await page.getByRole('button', { name: 'Delete selected pages' }).click();
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
   result = await exported(page);
-  expect(result.pages).toHaveLength(4);
+  expect(result.pages).toHaveLength(3);
   await page.getByRole('button', { name: 'Redo', exact: true }).click();
   result = await exported(page);
-  expect(result.pages).toHaveLength(3);
+  expect(result.pages).toHaveLength(2);
   await page.getByRole('button', { name: 'Reset edits' }).click();
   await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeDisabled();
   await expect(page.getByRole('button', { name: /^Page \d/ })).toHaveText(['1', '2', '3'].map((n) => new RegExp(n)));
