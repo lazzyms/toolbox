@@ -71,5 +71,23 @@
     },
     "reason": null,
     "warnings": []
+  },
+  {
+    "inputPath": "notes.txt",
+    "state": "succeeded",
+    "outputPaths": ["notes.pdf"],
+    "detail": "1 page. Read as Windows-1252.",
+    "failure": null,
+    "reason": null,
+    "warnings": [],
+    "fonts": [
+      {
+        "requestedFamily": "Courier New",
+        "requestedStyle": "regular",
+        "fontUsed": "Liberation Mono",
+        "styleUsed": "regular",
+        "source": "bundled fallback"
+      }
+    ]
   }
 ]
