@@ -1,5 +1,6 @@
 pub mod metadata;
 pub mod scene;
+pub mod bates;
 pub mod editor;
 pub mod remaining;
 

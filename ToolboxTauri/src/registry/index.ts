@@ -27,6 +27,7 @@ const UtilityMetadata: Array<Omit<ToolDefinition, "capability" | "status">> = [
     { id: "pdf-rotate", title: "Rotate PDFs", shortTitle: "Rotate", resultVerb: "Rotated", runningVerb: "Rotating", blurb: "Turn all pages, or just the ones you pick.", symbol: "rotate", category: "PDF", command: "rotate_pdf", verification: "pdf-rotate", view: "pdf-rotate" },
     { id: "pdf-repair", title: "Repair PDF", shortTitle: "Repair", resultVerb: "Repaired", runningVerb: "Repairing", blurb: "Fix a damaged PDF that won't open properly.", symbol: "tool", category: "PDF", command: "repair_pdf", verification: "pdf-repair", view: "pdf-repair" },
     { id: "pdf-redact", title: "Redact PDF", shortTitle: "Redact", resultVerb: "Redacted", runningVerb: "Redacting", blurb: "Black out private details so they can't be recovered.", symbol: "eye-off", category: "PDF", command: "redact_pdf", verification: "pdf-redact", view: "pdf-redact" },
+    { id: "pdf-bates", title: "Bates Numbering", shortTitle: "Bates", resultVerb: "Numbered", runningVerb: "Numbering", runningDetail: "Stamping each page with its number", lockedNote: "Files, order and numbering are locked until the set finishes.", blurb: "Stamp one running number on every page across a set of PDFs, in the order you set.", keywords: ["bates", "legal", "discovery", "exhibit", "production", "number", "stamp"], symbol: "page-numbers", category: "PDF", command: "bates_number_pdfs", verification: "pdf-bates", view: "pdf-bates" },
     { id: "pdf-compare", title: "Compare PDFs", shortTitle: "Compare", resultVerb: "Compared", runningVerb: "Comparing", blurb: "See what text changed between two versions of a PDF.", symbol: "git-compare", category: "PDF", command: "compare_pdfs", verification: "pdf-compare", view: "pdf-compare" },
     { id: "heic-convert", title: "Convert Image Format", shortTitle: "Convert", resultVerb: "Converted", runningVerb: "Converting", blurb: "Convert HEIC to PNG, JPEG, WebP, and back.", symbol: "arrows-exchange", category: "Images", command: "convert_images", verification: "convert-image-format", view: "image-convert" },
     { id: "compress", title: "Compress Images", shortTitle: "Compress", resultVerb: "Compressed", runningVerb: "Compressing", blurb: "Shrink image files losslessly or trade quality for size.", symbol: "file-download", category: "Images", command: "compress_images", verification: "compress-images", view: "image-compress" },
@@ -93,6 +94,7 @@ export const ToolWorkspaceRegistry: ToolWorkspaceDefinition[] = [
             "pdf-repair",
             "pdf-compare",
             "pdf-extract-pages",
+            "pdf-bates",
         ],
         editor: {
             title: "Edit PDF",
@@ -100,7 +102,7 @@ export const ToolWorkspaceRegistry: ToolWorkspaceDefinition[] = [
             symbol: "edit-pdf",
             toolIds: ["pdf-edit", "pdf-watermark", "pdf-sign", "pdf-remove-pages"],
         },
-        moreToolIds: ["pdf-rotate", "pdf-repair", "pdf-compare", "pdf-extract-pages"],
+        moreToolIds: ["pdf-rotate", "pdf-repair", "pdf-compare", "pdf-extract-pages", "pdf-bates"],
     },
     {
         id: "pdf-convert",

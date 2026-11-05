@@ -113,28 +113,35 @@
   },
   {
     "board": "PdfOpen.dc.html",
-    "title": "Open a PDF: empty, several dropped, locked, signed",
+    "title": "Open a PDF: empty, several dropped, locked, too many pages, signed",
     "state": "default",
     "query": "",
     "screen": "PdfOpen--default.jpg"
   },
   {
     "board": "PdfOpen.dc.html",
-    "title": "Open a PDF: empty, several dropped, locked, signed",
+    "title": "Open a PDF: empty, several dropped, locked, too many pages, signed",
     "state": "state-several-dropped",
     "query": "state=Several%20dropped",
     "screen": "PdfOpen--state-several-dropped.jpg"
   },
   {
     "board": "PdfOpen.dc.html",
-    "title": "Open a PDF: empty, several dropped, locked, signed",
+    "title": "Open a PDF: empty, several dropped, locked, too many pages, signed",
     "state": "state-locked-file",
     "query": "state=Locked%20file",
     "screen": "PdfOpen--state-locked-file.jpg"
   },
   {
     "board": "PdfOpen.dc.html",
-    "title": "Open a PDF: empty, several dropped, locked, signed",
+    "title": "Open a PDF: empty, several dropped, locked, too many pages, signed",
+    "state": "state-too-many-pages",
+    "query": "state=Too%20many%20pages",
+    "screen": "PdfOpen--state-too-many-pages.jpg"
+  },
+  {
+    "board": "PdfOpen.dc.html",
+    "title": "Open a PDF: empty, several dropped, locked, too many pages, signed",
     "state": "state-signed-file",
     "query": "state=Signed%20file",
     "screen": "PdfOpen--state-signed-file.jpg"
@@ -176,136 +183,185 @@
   },
   {
     "board": "PdfSign.dc.html",
-    "title": "Sign: typed or picture signature",
+    "title": "Sign: typed or picture signature, use again",
     "state": "default",
     "query": "",
     "screen": "PdfSign--default.jpg"
   },
   {
     "board": "PdfSign.dc.html",
-    "title": "Sign: typed or picture signature",
+    "title": "Sign: typed or picture signature, use again",
     "state": "source-picture",
     "query": "source=Picture",
     "screen": "PdfSign--source-picture.jpg"
   },
   {
     "board": "PdfSign.dc.html",
-    "title": "Sign: typed or picture signature",
+    "title": "Sign: typed or picture signature, use again",
     "state": "ink-black",
     "query": "ink=Black",
     "screen": "PdfSign--ink-black.jpg"
   },
   {
     "board": "PdfSign.dc.html",
-    "title": "Sign: typed or picture signature",
+    "title": "Sign: typed or picture signature, use again",
     "state": "drag-moving",
     "query": "drag=Moving",
     "screen": "PdfSign--drag-moving.jpg"
   },
   {
     "board": "PdfSign.dc.html",
-    "title": "Sign: typed or picture signature",
+    "title": "Sign: typed or picture signature, use again",
     "state": "drag-resizing",
     "query": "drag=Resizing",
     "screen": "PdfSign--drag-resizing.jpg"
   },
   {
     "board": "PdfSign.dc.html",
-    "title": "Sign: typed or picture signature",
+    "title": "Sign: typed or picture signature, use again",
     "state": "drag-rotating",
     "query": "drag=Rotating",
     "screen": "PdfSign--drag-rotating.jpg"
   },
   {
+    "board": "PdfSign.dc.html",
+    "title": "Sign: typed or picture signature, use again",
+    "state": "panel-use-again",
+    "query": "panel=Use%20again",
+    "screen": "PdfSign--panel-use-again.jpg"
+  },
+  {
     "board": "PdfForms.dc.html",
-    "title": "Fill forms and flatten",
+    "title": "Fill forms: Tab order, invalid entry, unsupported form, flatten",
     "state": "default",
     "query": "",
     "screen": "PdfForms--default.jpg"
   },
   {
     "board": "PdfForms.dc.html",
-    "title": "Fill forms and flatten",
+    "title": "Fill forms: Tab order, invalid entry, unsupported form, flatten",
+    "state": "state-tab-order",
+    "query": "state=Tab%20order",
+    "screen": "PdfForms--state-tab-order.jpg"
+  },
+  {
+    "board": "PdfForms.dc.html",
+    "title": "Fill forms: Tab order, invalid entry, unsupported form, flatten",
+    "state": "state-invalid-entry",
+    "query": "state=Invalid%20entry",
+    "screen": "PdfForms--state-invalid-entry.jpg"
+  },
+  {
+    "board": "PdfForms.dc.html",
+    "title": "Fill forms: Tab order, invalid entry, unsupported form, flatten",
+    "state": "state-unsupported-form",
+    "query": "state=Unsupported%20form",
+    "screen": "PdfForms--state-unsupported-form.jpg"
+  },
+  {
+    "board": "PdfForms.dc.html",
+    "title": "Fill forms: Tab order, invalid entry, unsupported form, flatten",
     "state": "flatten-confirming",
     "query": "flatten=Confirming",
     "screen": "PdfForms--flatten-confirming.jpg"
   },
   {
     "board": "PdfForms.dc.html",
-    "title": "Fill forms and flatten",
+    "title": "Fill forms: Tab order, invalid entry, unsupported form, flatten",
     "state": "flatten-on",
     "query": "flatten=On",
     "screen": "PdfForms--flatten-on.jpg"
   },
   {
     "board": "PdfRedact.dc.html",
-    "title": "Redact: mark, then the export disclosure",
+    "title": "Redact: mark, search, review, export disclosure",
     "state": "default",
     "query": "",
     "screen": "PdfRedact--default.jpg"
   },
   {
     "board": "PdfRedact.dc.html",
-    "title": "Redact: mark, then the export disclosure",
+    "title": "Redact: mark, search, review, export disclosure",
+    "state": "step-search-results",
+    "query": "step=Search%20results",
+    "screen": "PdfRedact--step-search-results.jpg"
+  },
+  {
+    "board": "PdfRedact.dc.html",
+    "title": "Redact: mark, search, review, export disclosure",
+    "state": "step-reviewing",
+    "query": "step=Reviewing",
+    "screen": "PdfRedact--step-reviewing.jpg"
+  },
+  {
+    "board": "PdfRedact.dc.html",
+    "title": "Redact: mark, search, review, export disclosure",
     "state": "step-export-disclosure",
     "query": "step=Export%20disclosure",
     "screen": "PdfRedact--step-export-disclosure.jpg"
   },
   {
     "board": "PdfMarks.dc.html",
-    "title": "Watermark, page numbers, header and footer",
+    "title": "Watermark, page numbers, header and footer: range and tokens",
     "state": "default",
     "query": "",
     "screen": "PdfMarks--default.jpg"
   },
   {
     "board": "PdfMarks.dc.html",
-    "title": "Watermark, page numbers, header and footer",
+    "title": "Watermark, page numbers, header and footer: range and tokens",
     "state": "tool-page-numbers",
     "query": "tool=Page%20numbers",
     "screen": "PdfMarks--tool-page-numbers.jpg"
   },
   {
     "board": "PdfMarks.dc.html",
-    "title": "Watermark, page numbers, header and footer",
+    "title": "Watermark, page numbers, header and footer: range and tokens",
     "state": "tool-header-and-footer",
     "query": "tool=Header%20and%20footer",
     "screen": "PdfMarks--tool-header-and-footer.jpg"
   },
   {
     "board": "PdfMarks.dc.html",
-    "title": "Watermark, page numbers, header and footer",
+    "title": "Watermark, page numbers, header and footer: range and tokens",
     "state": "drag-moving",
     "query": "drag=Moving",
     "screen": "PdfMarks--drag-moving.jpg"
   },
   {
     "board": "PdfMarks.dc.html",
-    "title": "Watermark, page numbers, header and footer",
+    "title": "Watermark, page numbers, header and footer: range and tokens",
     "state": "drag-resizing",
     "query": "drag=Resizing",
     "screen": "PdfMarks--drag-resizing.jpg"
   },
   {
     "board": "PdfMarks.dc.html",
-    "title": "Watermark, page numbers, header and footer",
+    "title": "Watermark, page numbers, header and footer: range and tokens",
     "state": "drag-rotating",
     "query": "drag=Rotating",
     "screen": "PdfMarks--drag-rotating.jpg"
   },
   {
     "board": "PdfEditText.dc.html",
-    "title": "Edit existing text: substituted font, too long",
+    "title": "Edit existing text: substituted font, too long, not editable",
     "state": "default",
     "query": "",
     "screen": "PdfEditText--default.jpg"
   },
   {
     "board": "PdfEditText.dc.html",
-    "title": "Edit existing text: substituted font, too long",
+    "title": "Edit existing text: substituted font, too long, not editable",
     "state": "state-too-long",
     "query": "state=Too%20long",
     "screen": "PdfEditText--state-too-long.jpg"
+  },
+  {
+    "board": "PdfEditText.dc.html",
+    "title": "Edit existing text: substituted font, too long, not editable",
+    "state": "state-not-editable",
+    "query": "state=Not%20editable",
+    "screen": "PdfEditText--state-not-editable.jpg"
   },
   {
     "board": "PdfOrganize.dc.html",
@@ -316,35 +372,63 @@
   },
   {
     "board": "PdfExport.dc.html",
-    "title": "Export a copy: review, progress, done, failed, closing",
+    "title": "Export a copy: review, blocked, progress, done, warnings, failed, closing",
     "state": "default",
     "query": "",
     "screen": "PdfExport--default.jpg"
   },
   {
     "board": "PdfExport.dc.html",
-    "title": "Export a copy: review, progress, done, failed, closing",
+    "title": "Export a copy: review, blocked, progress, done, warnings, failed, closing",
+    "state": "step-nothing-to-export",
+    "query": "step=Nothing%20to%20export",
+    "screen": "PdfExport--step-nothing-to-export.jpg"
+  },
+  {
+    "board": "PdfExport.dc.html",
+    "title": "Export a copy: review, blocked, progress, done, warnings, failed, closing",
+    "state": "step-export-blocked",
+    "query": "step=Export%20blocked",
+    "screen": "PdfExport--step-export-blocked.jpg"
+  },
+  {
+    "board": "PdfExport.dc.html",
+    "title": "Export a copy: review, blocked, progress, done, warnings, failed, closing",
+    "state": "step-other-folder",
+    "query": "step=Other%20folder",
+    "screen": "PdfExport--step-other-folder.jpg"
+  },
+  {
+    "board": "PdfExport.dc.html",
+    "title": "Export a copy: review, blocked, progress, done, warnings, failed, closing",
     "state": "step-exporting",
     "query": "step=Exporting",
     "screen": "PdfExport--step-exporting.jpg"
   },
   {
     "board": "PdfExport.dc.html",
-    "title": "Export a copy: review, progress, done, failed, closing",
+    "title": "Export a copy: review, blocked, progress, done, warnings, failed, closing",
     "state": "step-done",
     "query": "step=Done",
     "screen": "PdfExport--step-done.jpg"
   },
   {
     "board": "PdfExport.dc.html",
-    "title": "Export a copy: review, progress, done, failed, closing",
+    "title": "Export a copy: review, blocked, progress, done, warnings, failed, closing",
+    "state": "step-done-with-warnings",
+    "query": "step=Done%20with%20warnings",
+    "screen": "PdfExport--step-done-with-warnings.jpg"
+  },
+  {
+    "board": "PdfExport.dc.html",
+    "title": "Export a copy: review, blocked, progress, done, warnings, failed, closing",
     "state": "step-failed",
     "query": "step=Failed",
     "screen": "PdfExport--step-failed.jpg"
   },
   {
     "board": "PdfExport.dc.html",
-    "title": "Export a copy: review, progress, done, failed, closing",
+    "title": "Export a copy: review, blocked, progress, done, warnings, failed, closing",
     "state": "step-closing-with-changes",
     "query": "step=Closing%20with%20changes",
     "screen": "PdfExport--step-closing-with-changes.jpg"
@@ -435,17 +519,38 @@
   },
   {
     "board": "Bates.dc.html",
-    "title": "Bates numbering: ready and done",
+    "title": "Bates numbering: empty, ready, running, done, failed file",
     "state": "default",
     "query": "",
     "screen": "Bates--default.jpg"
   },
   {
     "board": "Bates.dc.html",
-    "title": "Bates numbering: ready and done",
+    "title": "Bates numbering: empty, ready, running, done, failed file",
+    "state": "step-no-files",
+    "query": "step=No%20files",
+    "screen": "Bates--step-no-files.jpg"
+  },
+  {
+    "board": "Bates.dc.html",
+    "title": "Bates numbering: empty, ready, running, done, failed file",
+    "state": "step-numbering",
+    "query": "step=Numbering",
+    "screen": "Bates--step-numbering.jpg"
+  },
+  {
+    "board": "Bates.dc.html",
+    "title": "Bates numbering: empty, ready, running, done, failed file",
     "state": "step-done",
     "query": "step=Done",
     "screen": "Bates--step-done.jpg"
+  },
+  {
+    "board": "Bates.dc.html",
+    "title": "Bates numbering: empty, ready, running, done, failed file",
+    "state": "step-done-with-a-failed-file",
+    "query": "step=Done%20with%20a%20failed%20file",
+    "screen": "Bates--step-done-with-a-failed-file.jpg"
   },
   {
     "board": "ConvertBatch.dc.html",

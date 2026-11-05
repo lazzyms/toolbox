@@ -24,6 +24,7 @@ export type AtomicToolId =
   | "pdf-repair"
   | "pdf-redact"
   | "pdf-compare"
+  | "pdf-bates"
   | "heic-convert"
   | "compress"
   | "resize"
@@ -83,6 +84,7 @@ export type ToolCommand =
   | "sign_pdf"
   | "organize_pdf"
   | "add_page_numbers"
+  | "bates_number_pdfs"
   | "watermark_pdf"
   | "compress_pdf"
   | "rotate_pdf"
@@ -117,7 +119,7 @@ export type OutcomePointer =
   | { kind: "pack"; packId: string }
   | { kind: "outputFolder" };
 
-export type LimitKind = "fileSize" | "pageCount" | "time" | "decompression";
+export type LimitKind = "fileSize" | "pageCount" | "time" | "decompression" | "textLength";
 
 export type ToolError = { message: string; pointer: OutcomePointer | null } & (
   | { kind: "invalidInput" | "unavailable" | "processing" | "wrongPassword" | "cancelled" }
@@ -222,6 +224,7 @@ export interface ToolDefinition {
     | "pdf-repair"
     | "pdf-redact"
     | "pdf-compare"
+    | "pdf-bates"
     | "pdf-remove-pages"
     | "pdf-extract-pages"
     | "pdf-merge"

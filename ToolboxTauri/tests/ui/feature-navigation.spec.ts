@@ -408,7 +408,7 @@ test("home marks tools this build cannot run and keeps them out of the search hi
 test(`search finds and opens all ${UtilityRegistry.length} registered tool actions`, async ({ page }) => {
     await page.goto("/");
     const search = page.getByRole("textbox", { name: "Search tools" });
-    expect(UtilityRegistry).toHaveLength(35);
+    expect(UtilityRegistry).toHaveLength(36);
 
     for (const utility of UtilityRegistry) {
         await search.fill(utility.title);
@@ -2132,7 +2132,7 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
 };
 
 test.describe("registered feature actions", () => {
-    expect(UtilityRegistry).toHaveLength(35);
+    expect(UtilityRegistry).toHaveLength(36);
 
     for (const utility of UtilityRegistry) {
         test(`${utility.id} accepts the fixture and runs with the Settings default`, async ({ page }) => {
@@ -2672,7 +2672,7 @@ test("PDF Editor rail lists More tools after a label and keeps files across swit
     await page.goto("/");
     await openFromHome(page, "Rotate PDFs");
     const rail = page.getByRole("toolbar", { name: "PDF Editor tools" });
-    await expect(rail.getByRole("button")).toHaveText(["Edit PDF", "Organize PDF", "Merge PDF", "Split PDF", "Crop PDF", "Add PDF Page Numbers", "Redact PDF", "Rotate PDFs", "Repair PDF", "Compare PDFs", "Extract PDF Pages"].map((title) => new RegExp(`^${title}`)));
+    await expect(rail.getByRole("button")).toHaveText(["Edit PDF", "Organize PDF", "Merge PDF", "Split PDF", "Crop PDF", "Add PDF Page Numbers", "Redact PDF", "Rotate PDFs", "Repair PDF", "Compare PDFs", "Extract PDF Pages", "Bates Numbering"].map((title) => new RegExp(`^${title}`)));
     await expect(rail.locator(".workspace-command-group")).toHaveText("More");
     await expect(rail.locator(".workspace-command-group + button")).toHaveAccessibleName("Rotate PDFs");
     await expect(rail.getByRole("button", { name: "Rotate PDFs" })).toHaveAttribute("aria-pressed", "true");
@@ -2750,4 +2750,100 @@ test("search and favorites list folded tools by their own names and open them", 
     await expect(page.locator("button[data-command-result]")).toHaveText(["Watermark PDF", "Rotate and Flip Images"]);
     await page.getByRole("button", { name: "Open Watermark PDF", exact: true }).click();
     await expect(page.getByRole("button", { name: "Remove Watermark PDF from favorites" })).toBeVisible();
+});
+
+test.describe("Bates numbering", () => {
+    const files = ["/local/set/lease.scoped.pdf", "/local/set/deposit.replacement.pdf", "/local/set/inventory.pdf"];
+    const openBates = async (page: Page, theme: "light" | "dark" = "dark") => {
+        await page.addInitScript((theme) => { localStorage.setItem("toolbox-theme", theme); }, theme);
+        await page.goto("/");
+        await openToolBySearch(page, "Bates Numbering");
+        await page.evaluate((files) => { (window as TestWindow).__toolboxDialogResults = [[...files]]; }, files);
+        await page.getByRole("button", { name: "Choose files to process" }).click();
+        await expect(page.locator(".file-selection-row")).toHaveCount(3);
+    };
+    const batesRequests = (page: Page) => page.evaluate(() =>
+        ((window as TestWindow).__toolboxInvocations ?? []).filter(({ command }) => command === "bates_number_pdfs").map(({ args }) => (args as { request: Record<string, unknown> }).request),
+    );
+    const numbersOf = (page: Page, name: string) => page.locator(".file-selection-row").filter({ hasText: name }).locator(".bates-numbers");
+
+    test("the example and each file's numbers follow the format and the list order", async ({ page }) => {
+        await openBates(page);
+        await page.getByLabel("Prefix").fill("HL");
+        await expect(page.getByTestId("bates-example")).toHaveText("HL000001");
+        await page.getByLabel("Suffix").fill("-C");
+        await page.getByLabel("Start at").fill("42");
+        await page.getByLabel("Digits").fill("4");
+        await expect(page.getByTestId("bates-example")).toHaveText("HL0042-C");
+        // 3, 2 and 1 pages, numbered across files in list order.
+        await expect(numbersOf(page, "lease.scoped.pdf")).toHaveText("HL0042-C to HL0044-C");
+        await expect(numbersOf(page, "deposit.replacement.pdf")).toHaveText("HL0045-C to HL0046-C");
+        await expect(numbersOf(page, "inventory.pdf")).toHaveText("HL0047-C");
+
+        await page.getByLabel("Digits").fill("13");
+        await expect(page.getByRole("alert")).toHaveText("Digits must be from 1 to 12.");
+        await expect(page.locator(".workspace-primary-action")).toBeDisabled();
+    });
+
+    test("the request follows the file list after a reorder and carries the format", async ({ page }) => {
+        await openBates(page);
+        await page.getByLabel("Prefix").fill("HL");
+        await page.getByRole("button", { name: "Move lease.scoped.pdf down" }).click();
+        await page.getByRole("button", { name: "Move lease.scoped.pdf down" }).click();
+        await expect(numbersOf(page, "deposit.replacement.pdf")).toHaveText("HL000001 to HL000002");
+        await expect(numbersOf(page, "inventory.pdf")).toHaveText("HL000003");
+        await expect(numbersOf(page, "lease.scoped.pdf")).toHaveText("HL000004 to HL000006");
+        await page.getByLabel("Position").selectOption("top-right");
+        await page.getByLabel("Font").selectOption("Noto Serif");
+        await page.getByRole("textbox", { name: "Size", exact: true }).fill("12");
+        await expect(page.locator(".workspace-primary-action")).toContainText("Number 3 files");
+        await page.locator(".workspace-primary-action").click();
+        await expect.poll(() => batesRequests(page)).toHaveLength(1);
+        const reordered = [files[1], files[2], files[0]];
+        expect((await batesRequests(page))[0]).toMatchObject({
+            paths: reordered, run: reordered, prefix: "HL", suffix: "", start: 1, digits: 6, position: "top-right", fontFamily: "Noto Serif", fontSize: 12,
+        });
+    });
+
+    for (const theme of ["light", "dark"] as const) {
+        test(`results show each file's range and the gap a failed file leaves in the ${theme} theme`, async ({ page }) => {
+            await page.setViewportSize({ width: 1280, height: 800 });
+            await openBates(page, theme);
+            await page.evaluate((files) => { (window as TestWindow).__toolboxProcessingResults = [
+                { inputPath: files[0], outputPaths: ["/local/set/lease.scoped-bates.pdf"], detail: "HL000001 to HL000003", state: "succeeded", failure: null, reason: null, warnings: [] },
+                { inputPath: files[1], outputPaths: [], detail: "HL000004 to HL000005 unused", state: "failed", failure: { kind: "processing", message: "Page 2 is damaged and could not be read.", pointer: null }, reason: null, warnings: [] },
+                { inputPath: files[2], outputPaths: ["/local/set/inventory-bates.pdf"], detail: "HL000006", state: "succeeded", failure: null, reason: null, warnings: [] },
+            ]; }, files);
+            await page.locator(".workspace-primary-action").click();
+
+            await expect(numbersOf(page, "lease.scoped.pdf")).toHaveText("HL000001 to HL000003");
+            const gap = numbersOf(page, "deposit.replacement.pdf");
+            await expect(gap).toHaveAttribute("data-state", "unused");
+            await expect(gap.locator("s")).toHaveText("HL000004 to HL000005");
+            await expect(gap).toContainText("Unused gap");
+            await expect(numbersOf(page, "inventory.pdf")).toHaveText("HL000006");
+            await expect(page.locator(".bates-summary")).toContainText("2 files numbered, 1 failed. HL000004 to HL000005 are unused.");
+            const rows = page.getByRole("list", { name: "Results" }).getByRole("listitem");
+            await expect(rows).toHaveCount(3);
+            await expect(rows.nth(0)).toContainText("HL000001 to HL000003");
+            await expect(rows.nth(1)).toContainText("Page 2 is damaged");
+            await expect(page.locator("body")).toHaveAttribute("data-theme", theme);
+            const screenshotDir = process.env.BATES_SCREENSHOT_DIR;
+            if (screenshotDir) await page.screenshot({ path: path.join(screenshotDir, `bates-${theme}.png`), fullPage: true, animations: "disabled" });
+        });
+    }
+
+    test("a file whose pages can't be counted gets no numbers and later files continue", async ({ page }) => {
+        await openBates(page);
+        await page.evaluate((files) => { (window as TestWindow).__toolboxProcessingResults = [
+            { inputPath: files[0], outputPaths: ["/local/set/lease.scoped-bates.pdf"], detail: "000001 to 000003", state: "succeeded", failure: null, reason: null, warnings: [] },
+            { inputPath: files[1], outputPaths: [], detail: "", state: "failed", failure: { kind: "invalidInput", message: "Couldn't read how many pages this PDF has, so no numbers were set aside for it. Later files continue from the next number.", pointer: null }, reason: null, warnings: [] },
+            { inputPath: files[2], outputPaths: ["/local/set/inventory-bates.pdf"], detail: "000004", state: "succeeded", failure: null, reason: null, warnings: [] },
+        ]; }, files);
+        await page.locator(".workspace-primary-action").click();
+        await expect(numbersOf(page, "deposit.replacement.pdf")).toHaveText("None");
+        await expect(numbersOf(page, "inventory.pdf")).toHaveText("000004");
+        await expect(page.locator(".bates-summary")).toContainText("No numbers were set aside for deposit.replacement.pdf; later files continued from the next number.");
+        await expect(page.getByRole("list", { name: "Results" }).getByRole("listitem").nth(1)).toContainText("Later files continue from the next number.");
+    });
 });
