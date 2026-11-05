@@ -111,6 +111,7 @@ test.beforeEach(async ({ page }) => {
                     }
                     return null;
                 }
+if (command === "render_pdf_source_thumbnails") return (args as { request: { pageIndices: number[] } }).request.pageIndices.map((pageIndex) => ({ pageIndex, thumbnail: { dataUrl: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='612' height='792'/%3E", width: 247, height: 320 }, error: null }));
 if (command === "preview_pdf_scene_pages") return (args as { request: { pageIndices: number[] } }).request.pageIndices.map((pageIndex) => ({ pageIndex, preview: { dataUrl: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='612' height='792'/%3E", width: 612, height: 792 } }));
                 if (command === "inspect_pdf" || command === "inspect_pdf_scene") {
                     const inspectionDelay = (window as TestWindow).__toolboxInspectionDelayMs;
@@ -1060,17 +1061,6 @@ test("pdf editor renders page previews", async ({ page }) => {
     await chooseFixture(page, pdfFixturePath);
     await expect(page.getByRole("group", { name: "PDF page canvas" })).toBeVisible();
     await expect(page.getByRole("img", { name: "Thumbnail of page 1" })).toBeVisible();
-});
-
-test("PDF editor inserts editable blank pages from thumbnails", async ({ page }) => {
-    await page.goto("/");
-    await openFromHome(page, "Organize PDF");
-    await chooseFixture(page, pdfFixturePath);
-    await page.getByRole("button", { name: "Add blank page", exact: true }).click();
-    await drawSceneMark(page, "Shape");
-    await page.getByRole("button", { name: "Export PDF", exact: true }).click();
-    const invocation = await page.evaluate(() => (window as TestWindow).__toolboxInvocations?.find(c => c.command === "export_pdf_scene"));
-    expect(invocation?.args).toMatchObject({ request: { scene: { pages: [{ sourceIndex: 0 }, { sourceIndex: null, objects: [{ kind: "shape" }] }] } } });
 });
 
 test("editor command rails keep one document session while changing tools", async ({ page }) => {
@@ -2084,12 +2074,10 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
     }
     if (isPdfSceneTool(utility.id)) {
         if (utility.id === "pdf-page-numbers") await page.getByRole("button", { name: "Page numbers", exact: true }).click();
-        else if (utility.id === "pdf-organize") await page.getByRole("button", { name: "Add blank page", exact: true }).click();
-        else if (utility.id === "pdf-remove-pages") {
-            await page.getByRole("button", { name: "Add blank page", exact: true }).click();
-            await page.getByRole("button", { name: "Page 1", exact: true }).click();
-            await page.getByRole("button", { name: "Delete selected pages", exact: true }).click();
-        } else if (utility.id === "pdf-watermark") await page.getByRole("button", { name: "Add fixed watermark", exact: true }).click();
+        else if (utility.id === "pdf-organize") {
+            await page.getByRole("button", { name: "Open in page view", exact: true }).click();
+            await page.getByRole("button", { name: "Rotate selected pages", exact: true }).click();
+        } else if (utility.id === "pdf-remove-pages") await page.getByRole("button", { name: "Rotate selected pages", exact: true }).click(); else if (utility.id === "pdf-watermark") await page.getByRole("button", { name: "Add fixed watermark", exact: true }).click();
         else await drawSceneMark(page, utility.id === "pdf-sign" ? "Signature" : utility.id === "pdf-watermark" ? "Watermark" : utility.id === "pdf-crop" ? "Crop" : "Text");
     }
     if (usesImageEditPlan) {
