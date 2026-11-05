@@ -113,28 +113,35 @@
   },
   {
     "board": "PdfOpen.dc.html",
-    "title": "Open a PDF: empty, several dropped, locked, signed",
+    "title": "Open a PDF: empty, several dropped, locked, too many pages, signed",
     "state": "default",
     "query": "",
     "screen": "PdfOpen--default.jpg"
   },
   {
     "board": "PdfOpen.dc.html",
-    "title": "Open a PDF: empty, several dropped, locked, signed",
+    "title": "Open a PDF: empty, several dropped, locked, too many pages, signed",
     "state": "state-several-dropped",
     "query": "state=Several%20dropped",
     "screen": "PdfOpen--state-several-dropped.jpg"
   },
   {
     "board": "PdfOpen.dc.html",
-    "title": "Open a PDF: empty, several dropped, locked, signed",
+    "title": "Open a PDF: empty, several dropped, locked, too many pages, signed",
     "state": "state-locked-file",
     "query": "state=Locked%20file",
     "screen": "PdfOpen--state-locked-file.jpg"
   },
   {
     "board": "PdfOpen.dc.html",
-    "title": "Open a PDF: empty, several dropped, locked, signed",
+    "title": "Open a PDF: empty, several dropped, locked, too many pages, signed",
+    "state": "state-too-many-pages",
+    "query": "state=Too%20many%20pages",
+    "screen": "PdfOpen--state-too-many-pages.jpg"
+  },
+  {
+    "board": "PdfOpen.dc.html",
+    "title": "Open a PDF: empty, several dropped, locked, too many pages, signed",
     "state": "state-signed-file",
     "query": "state=Signed%20file",
     "screen": "PdfOpen--state-signed-file.jpg"
@@ -176,175 +183,420 @@
   },
   {
     "board": "PdfSign.dc.html",
-    "title": "Sign: typed or picture signature",
+    "title": "Sign: typed or picture signature, use again",
     "state": "default",
     "query": "",
     "screen": "PdfSign--default.jpg"
   },
   {
     "board": "PdfSign.dc.html",
-    "title": "Sign: typed or picture signature",
+    "title": "Sign: typed or picture signature, use again",
     "state": "source-picture",
     "query": "source=Picture",
     "screen": "PdfSign--source-picture.jpg"
   },
   {
     "board": "PdfSign.dc.html",
-    "title": "Sign: typed or picture signature",
+    "title": "Sign: typed or picture signature, use again",
     "state": "ink-black",
     "query": "ink=Black",
     "screen": "PdfSign--ink-black.jpg"
   },
   {
     "board": "PdfSign.dc.html",
-    "title": "Sign: typed or picture signature",
+    "title": "Sign: typed or picture signature, use again",
     "state": "drag-moving",
     "query": "drag=Moving",
     "screen": "PdfSign--drag-moving.jpg"
   },
   {
     "board": "PdfSign.dc.html",
-    "title": "Sign: typed or picture signature",
+    "title": "Sign: typed or picture signature, use again",
     "state": "drag-resizing",
     "query": "drag=Resizing",
     "screen": "PdfSign--drag-resizing.jpg"
   },
   {
     "board": "PdfSign.dc.html",
-    "title": "Sign: typed or picture signature",
+    "title": "Sign: typed or picture signature, use again",
     "state": "drag-rotating",
     "query": "drag=Rotating",
     "screen": "PdfSign--drag-rotating.jpg"
   },
   {
+    "board": "PdfSign.dc.html",
+    "title": "Sign: typed or picture signature, use again",
+    "state": "panel-use-again",
+    "query": "panel=Use%20again",
+    "screen": "PdfSign--panel-use-again.jpg"
+  },
+  {
     "board": "PdfForms.dc.html",
-    "title": "Fill forms and flatten",
+    "title": "Fill forms: Tab order, invalid entry, unsupported form, flatten",
     "state": "default",
     "query": "",
     "screen": "PdfForms--default.jpg"
   },
   {
     "board": "PdfForms.dc.html",
-    "title": "Fill forms and flatten",
+    "title": "Fill forms: Tab order, invalid entry, unsupported form, flatten",
+    "state": "state-tab-order",
+    "query": "state=Tab%20order",
+    "screen": "PdfForms--state-tab-order.jpg"
+  },
+  {
+    "board": "PdfForms.dc.html",
+    "title": "Fill forms: Tab order, invalid entry, unsupported form, flatten",
+    "state": "state-invalid-entry",
+    "query": "state=Invalid%20entry",
+    "screen": "PdfForms--state-invalid-entry.jpg"
+  },
+  {
+    "board": "PdfForms.dc.html",
+    "title": "Fill forms: Tab order, invalid entry, unsupported form, flatten",
+    "state": "state-unsupported-form",
+    "query": "state=Unsupported%20form",
+    "screen": "PdfForms--state-unsupported-form.jpg"
+  },
+  {
+    "board": "PdfForms.dc.html",
+    "title": "Fill forms: Tab order, invalid entry, unsupported form, flatten",
     "state": "flatten-confirming",
     "query": "flatten=Confirming",
     "screen": "PdfForms--flatten-confirming.jpg"
   },
   {
     "board": "PdfForms.dc.html",
-    "title": "Fill forms and flatten",
+    "title": "Fill forms: Tab order, invalid entry, unsupported form, flatten",
     "state": "flatten-on",
     "query": "flatten=On",
     "screen": "PdfForms--flatten-on.jpg"
   },
   {
     "board": "PdfRedact.dc.html",
-    "title": "Redact: mark, then the export disclosure",
+    "title": "Redact: mark, search, review, export disclosure",
     "state": "default",
     "query": "",
     "screen": "PdfRedact--default.jpg"
   },
   {
     "board": "PdfRedact.dc.html",
-    "title": "Redact: mark, then the export disclosure",
+    "title": "Redact: mark, search, review, export disclosure",
+    "state": "step-search-results",
+    "query": "step=Search%20results",
+    "screen": "PdfRedact--step-search-results.jpg"
+  },
+  {
+    "board": "PdfRedact.dc.html",
+    "title": "Redact: mark, search, review, export disclosure",
+    "state": "step-reviewing",
+    "query": "step=Reviewing",
+    "screen": "PdfRedact--step-reviewing.jpg"
+  },
+  {
+    "board": "PdfRedact.dc.html",
+    "title": "Redact: mark, search, review, export disclosure",
     "state": "step-export-disclosure",
     "query": "step=Export%20disclosure",
     "screen": "PdfRedact--step-export-disclosure.jpg"
   },
   {
     "board": "PdfMarks.dc.html",
-    "title": "Watermark, page numbers, header and footer",
+    "title": "Watermark, page numbers, header and footer: range and tokens",
     "state": "default",
     "query": "",
     "screen": "PdfMarks--default.jpg"
   },
   {
     "board": "PdfMarks.dc.html",
-    "title": "Watermark, page numbers, header and footer",
+    "title": "Watermark, page numbers, header and footer: range and tokens",
     "state": "tool-page-numbers",
     "query": "tool=Page%20numbers",
     "screen": "PdfMarks--tool-page-numbers.jpg"
   },
   {
     "board": "PdfMarks.dc.html",
-    "title": "Watermark, page numbers, header and footer",
+    "title": "Watermark, page numbers, header and footer: range and tokens",
     "state": "tool-header-and-footer",
     "query": "tool=Header%20and%20footer",
     "screen": "PdfMarks--tool-header-and-footer.jpg"
   },
   {
     "board": "PdfMarks.dc.html",
-    "title": "Watermark, page numbers, header and footer",
+    "title": "Watermark, page numbers, header and footer: range and tokens",
     "state": "drag-moving",
     "query": "drag=Moving",
     "screen": "PdfMarks--drag-moving.jpg"
   },
   {
     "board": "PdfMarks.dc.html",
-    "title": "Watermark, page numbers, header and footer",
+    "title": "Watermark, page numbers, header and footer: range and tokens",
     "state": "drag-resizing",
     "query": "drag=Resizing",
     "screen": "PdfMarks--drag-resizing.jpg"
   },
   {
     "board": "PdfMarks.dc.html",
-    "title": "Watermark, page numbers, header and footer",
+    "title": "Watermark, page numbers, header and footer: range and tokens",
     "state": "drag-rotating",
     "query": "drag=Rotating",
     "screen": "PdfMarks--drag-rotating.jpg"
   },
   {
     "board": "PdfEditText.dc.html",
-    "title": "Edit existing text: substituted font, too long",
+    "title": "Edit existing text: substituted font, too long, not editable",
     "state": "default",
     "query": "",
     "screen": "PdfEditText--default.jpg"
   },
   {
     "board": "PdfEditText.dc.html",
-    "title": "Edit existing text: substituted font, too long",
+    "title": "Edit existing text: substituted font, too long, not editable",
     "state": "state-too-long",
     "query": "state=Too%20long",
     "screen": "PdfEditText--state-too-long.jpg"
   },
   {
+    "board": "PdfEditText.dc.html",
+    "title": "Edit existing text: substituted font, too long, not editable",
+    "state": "state-not-editable",
+    "query": "state=Not%20editable",
+    "screen": "PdfEditText--state-not-editable.jpg"
+  },
+  {
     "board": "PdfOrganize.dc.html",
-    "title": "Organize pages: grid with page actions",
+    "title": "Organize pages: empty, editing, export and result states",
     "state": "default",
     "query": "",
     "screen": "PdfOrganize--default.jpg"
   },
   {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-no-document",
+    "query": "state=No%20document",
+    "screen": "PdfOrganize--state-no-document.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-several-dropped",
+    "query": "state=Several%20dropped",
+    "screen": "PdfOrganize--state-several-dropped.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-loading-pages",
+    "query": "state=Loading%20pages",
+    "screen": "PdfOrganize--state-loading-pages.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-signed-file",
+    "query": "state=Signed%20file",
+    "screen": "PdfOrganize--state-signed-file.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-locked-file",
+    "query": "state=Locked%20file",
+    "screen": "PdfOrganize--state-locked-file.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-damaged-file",
+    "query": "state=Damaged%20file",
+    "screen": "PdfOrganize--state-damaged-file.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-too-many-pages",
+    "query": "state=Too%20many%20pages",
+    "screen": "PdfOrganize--state-too-many-pages.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-page-range-error",
+    "query": "state=Page%20range%20error",
+    "screen": "PdfOrganize--state-page-range-error.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-blank-pages-found",
+    "query": "state=Blank%20pages%20found",
+    "screen": "PdfOrganize--state-blank-pages-found.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-orientation-menu",
+    "query": "state=Orientation%20menu",
+    "screen": "PdfOrganize--state-orientation-menu.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-mirrored-pages",
+    "query": "state=Mirrored%20pages",
+    "screen": "PdfOrganize--state-mirrored-pages.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-dragging",
+    "query": "state=Dragging",
+    "screen": "PdfOrganize--state-dragging.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-move-to-position",
+    "query": "state=Move%20to%20position",
+    "screen": "PdfOrganize--state-move-to-position.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-page-order-menu",
+    "query": "state=Page%20order%20menu",
+    "screen": "PdfOrganize--state-page-order-menu.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-every-page-selected",
+    "query": "state=Every%20page%20selected",
+    "screen": "PdfOrganize--state-every-page-selected.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-shortcuts",
+    "query": "state=Shortcuts",
+    "screen": "PdfOrganize--state-shortcuts.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-reset",
+    "query": "state=Reset",
+    "screen": "PdfOrganize--state-reset.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-unexported-changes",
+    "query": "state=Unexported%20changes",
+    "screen": "PdfOrganize--state-unexported-changes.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-no-changes",
+    "query": "state=No%20changes",
+    "screen": "PdfOrganize--state-no-changes.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-other-folder",
+    "query": "state=Other%20folder",
+    "screen": "PdfOrganize--state-other-folder.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-exporting",
+    "query": "state=Exporting",
+    "screen": "PdfOrganize--state-exporting.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-exported",
+    "query": "state=Exported",
+    "screen": "PdfOrganize--state-exported.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-export-failed",
+    "query": "state=Export%20failed",
+    "screen": "PdfOrganize--state-export-failed.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-removal-blocked",
+    "query": "state=Removal%20blocked",
+    "screen": "PdfOrganize--state-removal-blocked.jpg"
+  },
+  {
     "board": "PdfExport.dc.html",
-    "title": "Export a copy: review, progress, done, failed, closing",
+    "title": "Export a copy: review, blocked, progress, done, warnings, failed, closing",
     "state": "default",
     "query": "",
     "screen": "PdfExport--default.jpg"
   },
   {
     "board": "PdfExport.dc.html",
-    "title": "Export a copy: review, progress, done, failed, closing",
+    "title": "Export a copy: review, blocked, progress, done, warnings, failed, closing",
+    "state": "step-nothing-to-export",
+    "query": "step=Nothing%20to%20export",
+    "screen": "PdfExport--step-nothing-to-export.jpg"
+  },
+  {
+    "board": "PdfExport.dc.html",
+    "title": "Export a copy: review, blocked, progress, done, warnings, failed, closing",
+    "state": "step-export-blocked",
+    "query": "step=Export%20blocked",
+    "screen": "PdfExport--step-export-blocked.jpg"
+  },
+  {
+    "board": "PdfExport.dc.html",
+    "title": "Export a copy: review, blocked, progress, done, warnings, failed, closing",
+    "state": "step-other-folder",
+    "query": "step=Other%20folder",
+    "screen": "PdfExport--step-other-folder.jpg"
+  },
+  {
+    "board": "PdfExport.dc.html",
+    "title": "Export a copy: review, blocked, progress, done, warnings, failed, closing",
     "state": "step-exporting",
     "query": "step=Exporting",
     "screen": "PdfExport--step-exporting.jpg"
   },
   {
     "board": "PdfExport.dc.html",
-    "title": "Export a copy: review, progress, done, failed, closing",
+    "title": "Export a copy: review, blocked, progress, done, warnings, failed, closing",
     "state": "step-done",
     "query": "step=Done",
     "screen": "PdfExport--step-done.jpg"
   },
   {
     "board": "PdfExport.dc.html",
-    "title": "Export a copy: review, progress, done, failed, closing",
+    "title": "Export a copy: review, blocked, progress, done, warnings, failed, closing",
+    "state": "step-done-with-warnings",
+    "query": "step=Done%20with%20warnings",
+    "screen": "PdfExport--step-done-with-warnings.jpg"
+  },
+  {
+    "board": "PdfExport.dc.html",
+    "title": "Export a copy: review, blocked, progress, done, warnings, failed, closing",
     "state": "step-failed",
     "query": "step=Failed",
     "screen": "PdfExport--step-failed.jpg"
   },
   {
     "board": "PdfExport.dc.html",
-    "title": "Export a copy: review, progress, done, failed, closing",
+    "title": "Export a copy: review, blocked, progress, done, warnings, failed, closing",
     "state": "step-closing-with-changes",
     "query": "step=Closing%20with%20changes",
     "screen": "PdfExport--step-closing-with-changes.jpg"
@@ -407,94 +659,367 @@
   },
   {
     "board": "Split.dc.html",
-    "title": "Split: page ranges or every N pages",
+    "title": "Split: ranges or every N, fit preview, grouped results",
     "state": "default",
     "query": "",
     "screen": "Split--default.jpg"
   },
   {
     "board": "Split.dc.html",
-    "title": "Split: page ranges or every N pages",
-    "state": "mode-every-n-pages",
-    "query": "mode=Every%20N%20pages",
-    "screen": "Split--mode-every-n-pages.jpg"
+    "title": "Split: ranges or every N, fit preview, grouped results",
+    "state": "state-empty",
+    "query": "state=Empty",
+    "screen": "Split--state-empty.jpg"
+  },
+  {
+    "board": "Split.dc.html",
+    "title": "Split: ranges or every N, fit preview, grouped results",
+    "state": "state-every-n-pages",
+    "query": "state=Every%20N%20pages",
+    "screen": "Split--state-every-n-pages.jpg"
+  },
+  {
+    "board": "Split.dc.html",
+    "title": "Split: ranges or every N, fit preview, grouped results",
+    "state": "state-invalid-ranges",
+    "query": "state=Invalid%20ranges",
+    "screen": "Split--state-invalid-ranges.jpg"
+  },
+  {
+    "board": "Split.dc.html",
+    "title": "Split: ranges or every N, fit preview, grouped results",
+    "state": "state-splitting",
+    "query": "state=Splitting",
+    "screen": "Split--state-splitting.jpg"
+  },
+  {
+    "board": "Split.dc.html",
+    "title": "Split: ranges or every N, fit preview, grouped results",
+    "state": "state-results",
+    "query": "state=Results",
+    "screen": "Split--state-results.jpg"
   },
   {
     "board": "Merge.dc.html",
-    "title": "Merge: ordered files and save dialog",
+    "title": "Merge: ordered list, native save dialog, aggregate results",
     "state": "default",
     "query": "",
     "screen": "Merge--default.jpg"
   },
   {
     "board": "Merge.dc.html",
-    "title": "Merge: ordered files and save dialog",
-    "state": "step-save-dialog",
-    "query": "step=Save%20dialog",
-    "screen": "Merge--step-save-dialog.jpg"
+    "title": "Merge: ordered list, native save dialog, aggregate results",
+    "state": "state-empty",
+    "query": "state=Empty",
+    "screen": "Merge--state-empty.jpg"
+  },
+  {
+    "board": "Merge.dc.html",
+    "title": "Merge: ordered list, native save dialog, aggregate results",
+    "state": "state-reordering",
+    "query": "state=Reordering",
+    "screen": "Merge--state-reordering.jpg"
+  },
+  {
+    "board": "Merge.dc.html",
+    "title": "Merge: ordered list, native save dialog, aggregate results",
+    "state": "state-one-file",
+    "query": "state=One%20file",
+    "screen": "Merge--state-one-file.jpg"
+  },
+  {
+    "board": "Merge.dc.html",
+    "title": "Merge: ordered list, native save dialog, aggregate results",
+    "state": "state-save-dialog",
+    "query": "state=Save%20dialog",
+    "screen": "Merge--state-save-dialog.jpg"
+  },
+  {
+    "board": "Merge.dc.html",
+    "title": "Merge: ordered list, native save dialog, aggregate results",
+    "state": "state-merging",
+    "query": "state=Merging",
+    "screen": "Merge--state-merging.jpg"
+  },
+  {
+    "board": "Merge.dc.html",
+    "title": "Merge: ordered list, native save dialog, aggregate results",
+    "state": "state-merged",
+    "query": "state=Merged",
+    "screen": "Merge--state-merged.jpg"
+  },
+  {
+    "board": "Merge.dc.html",
+    "title": "Merge: ordered list, native save dialog, aggregate results",
+    "state": "state-failed",
+    "query": "state=Failed",
+    "screen": "Merge--state-failed.jpg"
   },
   {
     "board": "Bates.dc.html",
-    "title": "Bates numbering: ready and done",
+    "title": "Bates numbering: empty, ready, running, done, failed file",
     "state": "default",
     "query": "",
     "screen": "Bates--default.jpg"
   },
   {
     "board": "Bates.dc.html",
-    "title": "Bates numbering: ready and done",
+    "title": "Bates numbering: empty, ready, running, done, failed file",
+    "state": "step-no-files",
+    "query": "step=No%20files",
+    "screen": "Bates--step-no-files.jpg"
+  },
+  {
+    "board": "Bates.dc.html",
+    "title": "Bates numbering: empty, ready, running, done, failed file",
+    "state": "step-numbering",
+    "query": "step=Numbering",
+    "screen": "Bates--step-numbering.jpg"
+  },
+  {
+    "board": "Bates.dc.html",
+    "title": "Bates numbering: empty, ready, running, done, failed file",
     "state": "step-done",
     "query": "step=Done",
     "screen": "Bates--step-done.jpg"
   },
   {
+    "board": "Bates.dc.html",
+    "title": "Bates numbering: empty, ready, running, done, failed file",
+    "state": "step-done-with-a-failed-file",
+    "query": "step=Done%20with%20a%20failed%20file",
+    "screen": "Bates--step-done-with-a-failed-file.jpg"
+  },
+  {
     "board": "ConvertBatch.dc.html",
-    "title": "Convert: PDF to images, extract, EPUB, to PDF",
+    "title": "PDF to Images: range, picks, estimate, results; extract, EPUB, to PDF",
     "state": "default",
     "query": "",
     "screen": "ConvertBatch--default.jpg"
   },
   {
     "board": "ConvertBatch.dc.html",
-    "title": "Convert: PDF to images, extract, EPUB, to PDF",
+    "title": "PDF to Images: range, picks, estimate, results; extract, EPUB, to PDF",
     "state": "tool-extract-from-pdf",
     "query": "tool=Extract%20from%20PDF",
     "screen": "ConvertBatch--tool-extract-from-pdf.jpg"
   },
   {
     "board": "ConvertBatch.dc.html",
-    "title": "Convert: PDF to images, extract, EPUB, to PDF",
+    "title": "PDF to Images: range, picks, estimate, results; extract, EPUB, to PDF",
     "state": "tool-pdf-to-epub",
     "query": "tool=PDF%20to%20EPUB",
     "screen": "ConvertBatch--tool-pdf-to-epub.jpg"
   },
   {
     "board": "ConvertBatch.dc.html",
-    "title": "Convert: PDF to images, extract, EPUB, to PDF",
+    "title": "PDF to Images: range, picks, estimate, results; extract, EPUB, to PDF",
     "state": "tool-convert-to-pdf",
     "query": "tool=Convert%20to%20PDF",
     "screen": "ConvertBatch--tool-convert-to-pdf.jpg"
   },
   {
+    "board": "ConvertBatch.dc.html",
+    "title": "PDF to Images: range, picks, estimate, results; extract, EPUB, to PDF",
+    "state": "state-empty",
+    "query": "state=Empty",
+    "screen": "ConvertBatch--state-empty.jpg"
+  },
+  {
+    "board": "ConvertBatch.dc.html",
+    "title": "PDF to Images: range, picks, estimate, results; extract, EPUB, to PDF",
+    "state": "state-range-and-resolution",
+    "query": "state=Range%20and%20resolution",
+    "screen": "ConvertBatch--state-range-and-resolution.jpg"
+  },
+  {
+    "board": "ConvertBatch.dc.html",
+    "title": "PDF to Images: range, picks, estimate, results; extract, EPUB, to PDF",
+    "state": "state-range-error",
+    "query": "state=Range%20error",
+    "screen": "ConvertBatch--state-range-error.jpg"
+  },
+  {
+    "board": "ConvertBatch.dc.html",
+    "title": "PDF to Images: range, picks, estimate, results; extract, EPUB, to PDF",
+    "state": "state-pick-pages",
+    "query": "state=Pick%20pages",
+    "screen": "ConvertBatch--state-pick-pages.jpg"
+  },
+  {
+    "board": "ConvertBatch.dc.html",
+    "title": "PDF to Images: range, picks, estimate, results; extract, EPUB, to PDF",
+    "state": "state-converting",
+    "query": "state=Converting",
+    "screen": "ConvertBatch--state-converting.jpg"
+  },
+  {
+    "board": "ConvertBatch.dc.html",
+    "title": "PDF to Images: range, picks, estimate, results; extract, EPUB, to PDF",
+    "state": "state-converted",
+    "query": "state=Converted",
+    "screen": "ConvertBatch--state-converted.jpg"
+  },
+  {
+    "board": "ConvertBatch.dc.html",
+    "title": "PDF to Images: range, picks, estimate, results; extract, EPUB, to PDF",
+    "state": "state-renderer-missing",
+    "query": "state=Renderer%20missing",
+    "screen": "ConvertBatch--state-renderer-missing.jpg"
+  },
+  {
+    "board": "ConvertBatch.dc.html",
+    "title": "PDF to Images: range, picks, estimate, results; extract, EPUB, to PDF",
+    "state": "state-rail",
+    "query": "state=Rail",
+    "screen": "ConvertBatch--state-rail.jpg"
+  },
+  {
     "board": "OCR.dc.html",
-    "title": "OCR: language packs and output",
+    "title": "OCR: modes, languages, pages and results",
     "state": "default",
     "query": "",
     "screen": "OCR--default.jpg"
   },
   {
     "board": "OCR.dc.html",
-    "title": "OCR: language packs and output",
+    "title": "OCR: modes, languages, pages and results",
     "state": "pack-downloading",
     "query": "pack=Downloading",
     "screen": "OCR--pack-downloading.jpg"
   },
   {
+    "board": "OCR.dc.html",
+    "title": "OCR: modes, languages, pages and results",
+    "state": "pack-picker-open",
+    "query": "pack=Picker%20open",
+    "screen": "OCR--pack-picker-open.jpg"
+  },
+  {
+    "board": "OCR.dc.html",
+    "title": "OCR: modes, languages, pages and results",
+    "state": "state-empty",
+    "query": "state=Empty",
+    "screen": "OCR--state-empty.jpg"
+  },
+  {
+    "board": "OCR.dc.html",
+    "title": "OCR: modes, languages, pages and results",
+    "state": "state-text-file-and-force",
+    "query": "state=Text%20file%20and%20Force",
+    "screen": "OCR--state-text-file-and-force.jpg"
+  },
+  {
+    "board": "OCR.dc.html",
+    "title": "OCR: modes, languages, pages and results",
+    "state": "state-pick-pages",
+    "query": "state=Pick%20pages",
+    "screen": "OCR--state-pick-pages.jpg"
+  },
+  {
+    "board": "OCR.dc.html",
+    "title": "OCR: modes, languages, pages and results",
+    "state": "state-recognizing",
+    "query": "state=Recognizing",
+    "screen": "OCR--state-recognizing.jpg"
+  },
+  {
+    "board": "OCR.dc.html",
+    "title": "OCR: modes, languages, pages and results",
+    "state": "state-results",
+    "query": "state=Results",
+    "screen": "OCR--state-results.jpg"
+  },
+  {
+    "board": "OCR.dc.html",
+    "title": "OCR: modes, languages, pages and results",
+    "state": "state-text-results",
+    "query": "state=Text%20results",
+    "screen": "OCR--state-text-results.jpg"
+  },
+  {
+    "board": "OCR.dc.html",
+    "title": "OCR: modes, languages, pages and results",
+    "state": "state-engine-missing",
+    "query": "state=Engine%20missing",
+    "screen": "OCR--state-engine-missing.jpg"
+  },
+  {
+    "board": "OCR.dc.html",
+    "title": "OCR: modes, languages, pages and results",
+    "state": "state-opened-from-extract",
+    "query": "state=Opened%20from%20Extract",
+    "screen": "OCR--state-opened-from-extract.jpg"
+  },
+  {
     "board": "ImagesToPdf.dc.html",
-    "title": "Images to PDF: ordered pages and save dialog",
+    "title": "Images to PDF: order, layout, save dialog, combine",
     "state": "default",
     "query": "",
     "screen": "ImagesToPdf--default.jpg"
+  },
+  {
+    "board": "ImagesToPdf.dc.html",
+    "title": "Images to PDF: order, layout, save dialog, combine",
+    "state": "state-empty",
+    "query": "state=Empty",
+    "screen": "ImagesToPdf--state-empty.jpg"
+  },
+  {
+    "board": "ImagesToPdf.dc.html",
+    "title": "Images to PDF: order, layout, save dialog, combine",
+    "state": "state-dragging",
+    "query": "state=Dragging",
+    "screen": "ImagesToPdf--state-dragging.jpg"
+  },
+  {
+    "board": "ImagesToPdf.dc.html",
+    "title": "Images to PDF: order, layout, save dialog, combine",
+    "state": "state-a4-layout",
+    "query": "state=A4%20layout",
+    "screen": "ImagesToPdf--state-a4-layout.jpg"
+  },
+  {
+    "board": "ImagesToPdf.dc.html",
+    "title": "Images to PDF: order, layout, save dialog, combine",
+    "state": "state-save-dialog",
+    "query": "state=Save%20dialog",
+    "screen": "ImagesToPdf--state-save-dialog.jpg"
+  },
+  {
+    "board": "ImagesToPdf.dc.html",
+    "title": "Images to PDF: order, layout, save dialog, combine",
+    "state": "state-combining",
+    "query": "state=Combining",
+    "screen": "ImagesToPdf--state-combining.jpg"
+  },
+  {
+    "board": "ImagesToPdf.dc.html",
+    "title": "Images to PDF: order, layout, save dialog, combine",
+    "state": "state-combined",
+    "query": "state=Combined",
+    "screen": "ImagesToPdf--state-combined.jpg"
+  },
+  {
+    "board": "ImagesToPdf.dc.html",
+    "title": "Images to PDF: order, layout, save dialog, combine",
+    "state": "state-combined-with-warnings",
+    "query": "state=Combined%20with%20warnings",
+    "screen": "ImagesToPdf--state-combined-with-warnings.jpg"
+  },
+  {
+    "board": "ImagesToPdf.dc.html",
+    "title": "Images to PDF: order, layout, save dialog, combine",
+    "state": "state-combine-failed",
+    "query": "state=Combine%20failed",
+    "screen": "ImagesToPdf--state-combine-failed.jpg"
+  },
+  {
+    "board": "ImagesToPdf.dc.html",
+    "title": "Images to PDF: order, layout, save dialog, combine",
+    "state": "state-rail",
+    "query": "state=Rail",
+    "screen": "ImagesToPdf--state-rail.jpg"
   },
   {
     "board": "FormattedPdf.dc.html",
@@ -589,80 +1114,332 @@
   },
   {
     "board": "ImageEdit.dc.html",
-    "title": "Image Editor: resize, crop, rotate",
+    "title": "Edit Image: six tools, one edit stack",
     "state": "default",
     "query": "",
     "screen": "ImageEdit--default.jpg"
   },
   {
     "board": "ImageEdit.dc.html",
-    "title": "Image Editor: resize, crop, rotate",
-    "state": "edit-resize",
-    "query": "edit=Resize",
-    "screen": "ImageEdit--edit-resize.jpg"
+    "title": "Edit Image: six tools, one edit stack",
+    "state": "state-empty",
+    "query": "state=Empty",
+    "screen": "ImageEdit--state-empty.jpg"
   },
   {
     "board": "ImageEdit.dc.html",
-    "title": "Image Editor: resize, crop, rotate",
-    "state": "edit-rotate",
-    "query": "edit=Rotate",
-    "screen": "ImageEdit--edit-rotate.jpg"
+    "title": "Edit Image: six tools, one edit stack",
+    "state": "state-files-added",
+    "query": "state=Files%20added",
+    "screen": "ImageEdit--state-files-added.jpg"
   },
   {
     "board": "ImageEdit.dc.html",
-    "title": "Image Editor: resize, crop, rotate",
-    "state": "edit-adjust",
-    "query": "edit=Adjust",
-    "screen": "ImageEdit--edit-adjust.jpg"
+    "title": "Edit Image: six tools, one edit stack",
+    "state": "state-focused-file-changed",
+    "query": "state=Focused%20file%20changed",
+    "screen": "ImageEdit--state-focused-file-changed.jpg"
   },
   {
     "board": "ImageEdit.dc.html",
-    "title": "Image Editor: resize, crop, rotate",
-    "state": "edit-watermark",
-    "query": "edit=Watermark",
-    "screen": "ImageEdit--edit-watermark.jpg"
+    "title": "Edit Image: six tools, one edit stack",
+    "state": "state-crop-pixel-rectangle",
+    "query": "state=Crop%2C%20pixel%20rectangle",
+    "screen": "ImageEdit--state-crop-pixel-rectangle.jpg"
   },
   {
     "board": "ImageEdit.dc.html",
-    "title": "Image Editor: resize, crop, rotate",
+    "title": "Edit Image: six tools, one edit stack",
+    "state": "state-step-added",
+    "query": "state=Step%20added",
+    "screen": "ImageEdit--state-step-added.jpg"
+  },
+  {
+    "board": "ImageEdit.dc.html",
+    "title": "Edit Image: six tools, one edit stack",
+    "state": "state-step-removed",
+    "query": "state=Step%20removed",
+    "screen": "ImageEdit--state-step-removed.jpg"
+  },
+  {
+    "board": "ImageEdit.dc.html",
+    "title": "Edit Image: six tools, one edit stack",
+    "state": "state-stack-reset",
+    "query": "state=Stack%20reset",
+    "screen": "ImageEdit--state-stack-reset.jpg"
+  },
+  {
+    "board": "ImageEdit.dc.html",
+    "title": "Edit Image: six tools, one edit stack",
+    "state": "state-resize-longest-side",
+    "query": "state=Resize%2C%20longest%20side",
+    "screen": "ImageEdit--state-resize-longest-side.jpg"
+  },
+  {
+    "board": "ImageEdit.dc.html",
+    "title": "Edit Image: six tools, one edit stack",
+    "state": "state-resize-exact-size",
+    "query": "state=Resize%2C%20exact%20size",
+    "screen": "ImageEdit--state-resize-exact-size.jpg"
+  },
+  {
+    "board": "ImageEdit.dc.html",
+    "title": "Edit Image: six tools, one edit stack",
+    "state": "state-resize-out-of-range",
+    "query": "state=Resize%2C%20out%20of%20range",
+    "screen": "ImageEdit--state-resize-out-of-range.jpg"
+  },
+  {
+    "board": "ImageEdit.dc.html",
+    "title": "Edit Image: six tools, one edit stack",
+    "state": "state-rotate-and-flip",
+    "query": "state=Rotate%20and%20Flip",
+    "screen": "ImageEdit--state-rotate-and-flip.jpg"
+  },
+  {
+    "board": "ImageEdit.dc.html",
+    "title": "Edit Image: six tools, one edit stack",
+    "state": "state-colour-and-tone",
+    "query": "state=Colour%20and%20Tone",
+    "screen": "ImageEdit--state-colour-and-tone.jpg"
+  },
+  {
+    "board": "ImageEdit.dc.html",
+    "title": "Edit Image: six tools, one edit stack",
+    "state": "state-colour-and-tone-neutral",
+    "query": "state=Colour%20and%20Tone%2C%20neutral",
+    "screen": "ImageEdit--state-colour-and-tone-neutral.jpg"
+  },
+  {
+    "board": "ImageEdit.dc.html",
+    "title": "Edit Image: six tools, one edit stack",
+    "state": "state-watermark-text",
+    "query": "state=Watermark%2C%20text",
+    "screen": "ImageEdit--state-watermark-text.jpg"
+  },
+  {
+    "board": "ImageEdit.dc.html",
+    "title": "Edit Image: six tools, one edit stack",
+    "state": "state-watermark-logo-tiled",
+    "query": "state=Watermark%2C%20logo%20tiled",
+    "screen": "ImageEdit--state-watermark-logo-tiled.jpg"
+  },
+  {
+    "board": "ImageEdit.dc.html",
+    "title": "Edit Image: six tools, one edit stack",
+    "state": "state-watermark-unsupported-character",
+    "query": "state=Watermark%2C%20unsupported%20character",
+    "screen": "ImageEdit--state-watermark-unsupported-character.jpg"
+  },
+  {
+    "board": "ImageEdit.dc.html",
+    "title": "Edit Image: six tools, one edit stack",
+    "state": "state-remove-image-metadata",
+    "query": "state=Remove%20Image%20Metadata",
+    "screen": "ImageEdit--state-remove-image-metadata.jpg"
+  },
+  {
+    "board": "ImageEdit.dc.html",
+    "title": "Edit Image: six tools, one edit stack",
+    "state": "state-output-format-jpeg",
+    "query": "state=Output%20format%20JPEG",
+    "screen": "ImageEdit--state-output-format-jpeg.jpg"
+  },
+  {
+    "board": "ImageEdit.dc.html",
+    "title": "Edit Image: six tools, one edit stack",
+    "state": "state-destination-this-run",
+    "query": "state=Destination%20this%20run",
+    "screen": "ImageEdit--state-destination-this-run.jpg"
+  },
+  {
+    "board": "ImageEdit.dc.html",
+    "title": "Edit Image: six tools, one edit stack",
     "state": "drag-moving",
     "query": "drag=Moving",
     "screen": "ImageEdit--drag-moving.jpg"
   },
   {
     "board": "ImageEdit.dc.html",
-    "title": "Image Editor: resize, crop, rotate",
+    "title": "Edit Image: six tools, one edit stack",
     "state": "drag-resizing",
     "query": "drag=Resizing",
     "screen": "ImageEdit--drag-resizing.jpg"
   },
   {
     "board": "ImageConvert.dc.html",
-    "title": "Convert image format",
+    "title": "Convert image format: mixed batch, skipped, TIFF pages",
     "state": "default",
     "query": "",
     "screen": "ImageConvert--default.jpg"
   },
   {
     "board": "ImageConvert.dc.html",
-    "title": "Convert image format",
+    "title": "Convert image format: mixed batch, skipped, TIFF pages",
     "state": "format-png",
     "query": "format=PNG",
     "screen": "ImageConvert--format-png.jpg"
   },
   {
+    "board": "ImageConvert.dc.html",
+    "title": "Convert image format: mixed batch, skipped, TIFF pages",
+    "state": "format-webp",
+    "query": "format=WebP",
+    "screen": "ImageConvert--format-webp.jpg"
+  },
+  {
+    "board": "ImageConvert.dc.html",
+    "title": "Convert image format: mixed batch, skipped, TIFF pages",
+    "state": "format-heic",
+    "query": "format=HEIC",
+    "screen": "ImageConvert--format-heic.jpg"
+  },
+  {
+    "board": "ImageConvert.dc.html",
+    "title": "Convert image format: mixed batch, skipped, TIFF pages",
+    "state": "format-tiff",
+    "query": "format=TIFF",
+    "screen": "ImageConvert--format-tiff.jpg"
+  },
+  {
+    "board": "ImageConvert.dc.html",
+    "title": "Convert image format: mixed batch, skipped, TIFF pages",
+    "state": "state-empty",
+    "query": "state=Empty",
+    "screen": "ImageConvert--state-empty.jpg"
+  },
+  {
+    "board": "ImageConvert.dc.html",
+    "title": "Convert image format: mixed batch, skipped, TIFF pages",
+    "state": "state-converting",
+    "query": "state=Converting",
+    "screen": "ImageConvert--state-converting.jpg"
+  },
+  {
+    "board": "ImageConvert.dc.html",
+    "title": "Convert image format: mixed batch, skipped, TIFF pages",
+    "state": "state-converted",
+    "query": "state=Converted",
+    "screen": "ImageConvert--state-converted.jpg"
+  },
+  {
+    "board": "ImageConvert.dc.html",
+    "title": "Convert image format: mixed batch, skipped, TIFF pages",
+    "state": "state-rail",
+    "query": "state=Rail",
+    "screen": "ImageConvert--state-rail.jpg"
+  },
+  {
     "board": "Compress.dc.html",
-    "title": "Compress PDFs and images",
+    "title": "Compress Files: empty, files, options, running",
     "state": "default",
     "query": "",
     "screen": "Compress--default.jpg"
   },
   {
+    "board": "Compress.dc.html",
+    "title": "Compress Files: empty, files, options, running",
+    "state": "state-empty",
+    "query": "state=empty",
+    "screen": "Compress--state-empty.jpg"
+  },
+  {
+    "board": "Compress.dc.html",
+    "title": "Compress Files: empty, files, options, running",
+    "state": "state-dragging",
+    "query": "state=dragging",
+    "screen": "Compress--state-dragging.jpg"
+  },
+  {
+    "board": "Compress.dc.html",
+    "title": "Compress Files: empty, files, options, running",
+    "state": "state-more-added",
+    "query": "state=more-added",
+    "screen": "Compress--state-more-added.jpg"
+  },
+  {
+    "board": "Compress.dc.html",
+    "title": "Compress Files: empty, files, options, running",
+    "state": "state-one-removed",
+    "query": "state=one-removed",
+    "screen": "Compress--state-one-removed.jpg"
+  },
+  {
+    "board": "Compress.dc.html",
+    "title": "Compress Files: empty, files, options, running",
+    "state": "state-running",
+    "query": "state=running",
+    "screen": "Compress--state-running.jpg"
+  },
+  {
+    "board": "Compress.dc.html",
+    "title": "Compress Files: empty, files, options, running",
+    "state": "preset-low",
+    "query": "preset=Low",
+    "screen": "Compress--preset-low.jpg"
+  },
+  {
+    "board": "Compress.dc.html",
+    "title": "Compress Files: empty, files, options, running",
+    "state": "preset-high",
+    "query": "preset=High",
+    "screen": "Compress--preset-high.jpg"
+  },
+  {
+    "board": "Compress.dc.html",
+    "title": "Compress Files: empty, files, options, running",
+    "state": "stripExif-true",
+    "query": "stripExif=true",
+    "screen": "Compress--stripExif-true.jpg"
+  },
+  {
+    "board": "Compress.dc.html",
+    "title": "Compress Files: empty, files, options, running",
+    "state": "destination-settings-folder",
+    "query": "destination=settings-folder",
+    "screen": "Compress--destination-settings-folder.jpg"
+  },
+  {
+    "board": "Compress.dc.html",
+    "title": "Compress Files: empty, files, options, running",
+    "state": "destination-this-run",
+    "query": "destination=this-run",
+    "screen": "Compress--destination-this-run.jpg"
+  },
+  {
     "board": "CompressResults.dc.html",
-    "title": "Compress results: saved, kept, failed",
+    "title": "Compress Files results: compressed, skipped, failed",
     "state": "default",
     "query": "",
     "screen": "CompressResults--default.jpg"
+  },
+  {
+    "board": "CompressResults.dc.html",
+    "title": "Compress Files results: compressed, skipped, failed",
+    "state": "filter-needs-attention",
+    "query": "filter=Needs%20attention",
+    "screen": "CompressResults--filter-needs-attention.jpg"
+  },
+  {
+    "board": "CompressResults.dc.html",
+    "title": "Compress Files results: compressed, skipped, failed",
+    "state": "filter-warnings",
+    "query": "filter=Warnings",
+    "screen": "CompressResults--filter-warnings.jpg"
+  },
+  {
+    "board": "CompressResults.dc.html",
+    "title": "Compress Files results: compressed, skipped, failed",
+    "state": "state-helper-missing",
+    "query": "state=helper-missing",
+    "screen": "CompressResults--state-helper-missing.jpg"
+  },
+  {
+    "board": "CompressResults.dc.html",
+    "title": "Compress Files results: compressed, skipped, failed",
+    "state": "state-many-results",
+    "query": "state=many-results",
+    "screen": "CompressResults--state-many-results.jpg"
   },
   {
     "board": "AppIcons.dc.html",
@@ -764,24 +1541,94 @@
   },
   {
     "board": "Packs.dc.html",
-    "title": "Packs: downloading, failed, offline, low space",
+    "title": "Packs: every status, errors, Install from file",
     "state": "default",
     "query": "",
     "screen": "Packs--default.jpg"
   },
   {
     "board": "Packs.dc.html",
-    "title": "Packs: downloading, failed, offline, low space",
+    "title": "Packs: every status, errors, Install from file",
+    "state": "state-empty",
+    "query": "state=Empty",
+    "screen": "Packs--state-empty.jpg"
+  },
+  {
+    "board": "Packs.dc.html",
+    "title": "Packs: every status, errors, Install from file",
+    "state": "state-details",
+    "query": "state=Details",
+    "screen": "Packs--state-details.jpg"
+  },
+  {
+    "board": "Packs.dc.html",
+    "title": "Packs: every status, errors, Install from file",
+    "state": "state-working",
+    "query": "state=Working",
+    "screen": "Packs--state-working.jpg"
+  },
+  {
+    "board": "Packs.dc.html",
+    "title": "Packs: every status, errors, Install from file",
+    "state": "state-problems",
+    "query": "state=Problems",
+    "screen": "Packs--state-problems.jpg"
+  },
+  {
+    "board": "Packs.dc.html",
+    "title": "Packs: every status, errors, Install from file",
     "state": "state-offline",
     "query": "state=Offline",
     "screen": "Packs--state-offline.jpg"
   },
   {
     "board": "Packs.dc.html",
-    "title": "Packs: downloading, failed, offline, low space",
+    "title": "Packs: every status, errors, Install from file",
+    "state": "state-server-blocked",
+    "query": "state=Server%20blocked",
+    "screen": "Packs--state-server-blocked.jpg"
+  },
+  {
+    "board": "Packs.dc.html",
+    "title": "Packs: every status, errors, Install from file",
     "state": "state-low-disk-space",
     "query": "state=Low%20disk%20space",
     "screen": "Packs--state-low-disk-space.jpg"
+  },
+  {
+    "board": "Packs.dc.html",
+    "title": "Packs: every status, errors, Install from file",
+    "state": "state-in-use",
+    "query": "state=In%20use",
+    "screen": "Packs--state-in-use.jpg"
+  },
+  {
+    "board": "Packs.dc.html",
+    "title": "Packs: every status, errors, Install from file",
+    "state": "state-install-from-file",
+    "query": "state=Install%20from%20file",
+    "screen": "Packs--state-install-from-file.jpg"
+  },
+  {
+    "board": "Packs.dc.html",
+    "title": "Packs: every status, errors, Install from file",
+    "state": "state-file-for-another-computer",
+    "query": "state=File%20for%20another%20computer",
+    "screen": "Packs--state-file-for-another-computer.jpg"
+  },
+  {
+    "board": "Packs.dc.html",
+    "title": "Packs: every status, errors, Install from file",
+    "state": "state-file-not-signed",
+    "query": "state=File%20not%20signed",
+    "screen": "Packs--state-file-not-signed.jpg"
+  },
+  {
+    "board": "Packs.dc.html",
+    "title": "Packs: every status, errors, Install from file",
+    "state": "state-file-failed-check",
+    "query": "state=File%20failed%20check",
+    "screen": "Packs--state-file-failed-check.jpg"
   },
   {
     "board": "Shortcuts.dc.html",
@@ -1027,5 +1874,789 @@
     "state": "state-single-book",
     "query": "state=Single%20book",
     "screen": "PdfToEpubResults--state-single-book.jpg"
+  },
+  {
+    "board": "MediaEmpty.dc.html",
+    "title": "Media creation: empty drop target, all four tools",
+    "state": "default",
+    "query": "",
+    "screen": "MediaEmpty--default.jpg"
+  },
+  {
+    "board": "MediaEmpty.dc.html",
+    "title": "Media creation: empty drop target, all four tools",
+    "state": "tool-create-gif",
+    "query": "tool=Create%20GIF",
+    "screen": "MediaEmpty--tool-create-gif.jpg"
+  },
+  {
+    "board": "MediaEmpty.dc.html",
+    "title": "Media creation: empty drop target, all four tools",
+    "state": "tool-extract-gif-frames",
+    "query": "tool=Extract%20GIF%20Frames",
+    "screen": "MediaEmpty--tool-extract-gif-frames.jpg"
+  },
+  {
+    "board": "MediaEmpty.dc.html",
+    "title": "Media creation: empty drop target, all four tools",
+    "state": "tool-tiff-pages",
+    "query": "tool=TIFF%20Pages",
+    "screen": "MediaEmpty--tool-tiff-pages.jpg"
+  },
+  {
+    "board": "MediaEmpty.dc.html",
+    "title": "Media creation: empty drop target, all four tools",
+    "state": "dragging-true",
+    "query": "dragging=true",
+    "screen": "MediaEmpty--dragging-true.jpg"
+  },
+  {
+    "board": "MediaIcons.dc.html",
+    "title": "App Icon Set: masters, presets, sizes, pad or crop, contact sheet",
+    "state": "default",
+    "query": "",
+    "screen": "MediaIcons--default.jpg"
+  },
+  {
+    "board": "MediaIcons.dc.html",
+    "title": "App Icon Set: masters, presets, sizes, pad or crop, contact sheet",
+    "state": "preset-iphone-and-ipad",
+    "query": "preset=iPhone%20and%20iPad",
+    "screen": "MediaIcons--preset-iphone-and-ipad.jpg"
+  },
+  {
+    "board": "MediaIcons.dc.html",
+    "title": "App Icon Set: masters, presets, sizes, pad or crop, contact sheet",
+    "state": "preset-android",
+    "query": "preset=Android",
+    "screen": "MediaIcons--preset-android.jpg"
+  },
+  {
+    "board": "MediaIcons.dc.html",
+    "title": "App Icon Set: masters, presets, sizes, pad or crop, contact sheet",
+    "state": "preset-website",
+    "query": "preset=Website",
+    "screen": "MediaIcons--preset-website.jpg"
+  },
+  {
+    "board": "MediaIcons.dc.html",
+    "title": "App Icon Set: masters, presets, sizes, pad or crop, contact sheet",
+    "state": "preset-custom-sizes",
+    "query": "preset=Custom%20sizes",
+    "screen": "MediaIcons--preset-custom-sizes.jpg"
+  },
+  {
+    "board": "MediaIcons.dc.html",
+    "title": "App Icon Set: masters, presets, sizes, pad or crop, contact sheet",
+    "state": "square-crop-to-centre",
+    "query": "square=Crop%20to%20centre",
+    "screen": "MediaIcons--square-crop-to-centre.jpg"
+  },
+  {
+    "board": "MediaIcons.dc.html",
+    "title": "App Icon Set: masters, presets, sizes, pad or crop, contact sheet",
+    "state": "sizeOff-true",
+    "query": "sizeOff=true",
+    "screen": "MediaIcons--sizeOff-true.jpg"
+  },
+  {
+    "board": "MediaGif.dc.html",
+    "title": "Create GIF: frame strip, delays, reorder, preview, save dialog",
+    "state": "default",
+    "query": "",
+    "screen": "MediaGif--default.jpg"
+  },
+  {
+    "board": "MediaGif.dc.html",
+    "title": "Create GIF: frame strip, delays, reorder, preview, save dialog",
+    "state": "step-own-delay",
+    "query": "step=Own%20delay",
+    "screen": "MediaGif--step-own-delay.jpg"
+  },
+  {
+    "board": "MediaGif.dc.html",
+    "title": "Create GIF: frame strip, delays, reorder, preview, save dialog",
+    "state": "step-dragging",
+    "query": "step=Dragging",
+    "screen": "MediaGif--step-dragging.jpg"
+  },
+  {
+    "board": "MediaGif.dc.html",
+    "title": "Create GIF: frame strip, delays, reorder, preview, save dialog",
+    "state": "step-save-dialog",
+    "query": "step=Save%20dialog",
+    "screen": "MediaGif--step-save-dialog.jpg"
+  },
+  {
+    "board": "MediaGif.dc.html",
+    "title": "Create GIF: frame strip, delays, reorder, preview, save dialog",
+    "state": "largeGif-true",
+    "query": "largeGif=true",
+    "screen": "MediaGif--largeGif-true.jpg"
+  },
+  {
+    "board": "MediaExtract.dc.html",
+    "title": "Extract GIF Frames: GIFs added, frames and timings",
+    "state": "default",
+    "query": "",
+    "screen": "MediaExtract--default.jpg"
+  },
+  {
+    "board": "MediaExtract.dc.html",
+    "title": "Extract GIF Frames: GIFs added, frames and timings",
+    "state": "notAdded-true",
+    "query": "notAdded=true",
+    "screen": "MediaExtract--notAdded-true.jpg"
+  },
+  {
+    "board": "MediaTiff.dc.html",
+    "title": "TIFF Pages: Split files, Combine page grid, save dialog",
+    "state": "default",
+    "query": "",
+    "screen": "MediaTiff--default.jpg"
+  },
+  {
+    "board": "MediaTiff.dc.html",
+    "title": "TIFF Pages: Split files, Combine page grid, save dialog",
+    "state": "step-combine",
+    "query": "step=Combine",
+    "screen": "MediaTiff--step-combine.jpg"
+  },
+  {
+    "board": "MediaTiff.dc.html",
+    "title": "TIFF Pages: Split files, Combine page grid, save dialog",
+    "state": "step-combine-save-dialog",
+    "query": "step=Combine%20save%20dialog",
+    "screen": "MediaTiff--step-combine-save-dialog.jpg"
+  },
+  {
+    "board": "MediaRunning.dc.html",
+    "title": "Media creation: running, locked options, Cancel",
+    "state": "default",
+    "query": "",
+    "screen": "MediaRunning--default.jpg"
+  },
+  {
+    "board": "MediaRunning.dc.html",
+    "title": "Media creation: running, locked options, Cancel",
+    "state": "tool-create-gif",
+    "query": "tool=Create%20GIF",
+    "screen": "MediaRunning--tool-create-gif.jpg"
+  },
+  {
+    "board": "MediaRunning.dc.html",
+    "title": "Media creation: running, locked options, Cancel",
+    "state": "tool-extract-gif-frames",
+    "query": "tool=Extract%20GIF%20Frames",
+    "screen": "MediaRunning--tool-extract-gif-frames.jpg"
+  },
+  {
+    "board": "MediaRunning.dc.html",
+    "title": "Media creation: running, locked options, Cancel",
+    "state": "tool-tiff-pages",
+    "query": "tool=TIFF%20Pages",
+    "screen": "MediaRunning--tool-tiff-pages.jpg"
+  },
+  {
+    "board": "MediaResults.dc.html",
+    "title": "Media creation: results, grouped outputs, Skipped and Failed",
+    "state": "default",
+    "query": "",
+    "screen": "MediaResults--default.jpg"
+  },
+  {
+    "board": "MediaResults.dc.html",
+    "title": "Media creation: results, grouped outputs, Skipped and Failed",
+    "state": "tool-create-gif",
+    "query": "tool=Create%20GIF",
+    "screen": "MediaResults--tool-create-gif.jpg"
+  },
+  {
+    "board": "MediaResults.dc.html",
+    "title": "Media creation: results, grouped outputs, Skipped and Failed",
+    "state": "tool-create-gif-failed",
+    "query": "tool=Create%20GIF%20failed",
+    "screen": "MediaResults--tool-create-gif-failed.jpg"
+  },
+  {
+    "board": "MediaResults.dc.html",
+    "title": "Media creation: results, grouped outputs, Skipped and Failed",
+    "state": "tool-extract-gif-frames",
+    "query": "tool=Extract%20GIF%20Frames",
+    "screen": "MediaResults--tool-extract-gif-frames.jpg"
+  },
+  {
+    "board": "MediaResults.dc.html",
+    "title": "Media creation: results, grouped outputs, Skipped and Failed",
+    "state": "tool-tiff-split",
+    "query": "tool=TIFF%20Split",
+    "screen": "MediaResults--tool-tiff-split.jpg"
+  },
+  {
+    "board": "MediaResults.dc.html",
+    "title": "Media creation: results, grouped outputs, Skipped and Failed",
+    "state": "tool-tiff-combine",
+    "query": "tool=TIFF%20Combine",
+    "screen": "MediaResults--tool-tiff-combine.jpg"
+  },
+  {
+    "board": "ExtractFromPdf.dc.html",
+    "title": "Extract from PDF: modes, range, options, running",
+    "state": "default",
+    "query": "",
+    "screen": "ExtractFromPdf--default.jpg"
+  },
+  {
+    "board": "ExtractFromPdf.dc.html",
+    "title": "Extract from PDF: modes, range, options, running",
+    "state": "state-empty",
+    "query": "state=Empty",
+    "screen": "ExtractFromPdf--state-empty.jpg"
+  },
+  {
+    "board": "ExtractFromPdf.dc.html",
+    "title": "Extract from PDF: modes, range, options, running",
+    "state": "state-text-options",
+    "query": "state=Text%20options",
+    "screen": "ExtractFromPdf--state-text-options.jpg"
+  },
+  {
+    "board": "ExtractFromPdf.dc.html",
+    "title": "Extract from PDF: modes, range, options, running",
+    "state": "state-images-options",
+    "query": "state=Images%20options",
+    "screen": "ExtractFromPdf--state-images-options.jpg"
+  },
+  {
+    "board": "ExtractFromPdf.dc.html",
+    "title": "Extract from PDF: modes, range, options, running",
+    "state": "state-small-images-skipped",
+    "query": "state=Small%20images%20skipped",
+    "screen": "ExtractFromPdf--state-small-images-skipped.jpg"
+  },
+  {
+    "board": "ExtractFromPdf.dc.html",
+    "title": "Extract from PDF: modes, range, options, running",
+    "state": "state-page-range",
+    "query": "state=Page%20range",
+    "screen": "ExtractFromPdf--state-page-range.jpg"
+  },
+  {
+    "board": "ExtractFromPdf.dc.html",
+    "title": "Extract from PDF: modes, range, options, running",
+    "state": "state-range-error",
+    "query": "state=Range%20error",
+    "screen": "ExtractFromPdf--state-range-error.jpg"
+  },
+  {
+    "board": "ExtractFromPdf.dc.html",
+    "title": "Extract from PDF: modes, range, options, running",
+    "state": "state-changed-save-location",
+    "query": "state=Changed%20save%20location",
+    "screen": "ExtractFromPdf--state-changed-save-location.jpg"
+  },
+  {
+    "board": "ExtractFromPdf.dc.html",
+    "title": "Extract from PDF: modes, range, options, running",
+    "state": "state-extracting",
+    "query": "state=Extracting",
+    "screen": "ExtractFromPdf--state-extracting.jpg"
+  },
+  {
+    "board": "ExtractFromPdfResults.dc.html",
+    "title": "Extract from PDF results: text, folders, skipped, failed",
+    "state": "default",
+    "query": "",
+    "screen": "ExtractFromPdfResults--default.jpg"
+  },
+  {
+    "board": "ExtractFromPdfResults.dc.html",
+    "title": "Extract from PDF results: text, folders, skipped, failed",
+    "state": "state-text",
+    "query": "state=Text",
+    "screen": "ExtractFromPdfResults--state-text.jpg"
+  },
+  {
+    "board": "ExtractFromPdfResults.dc.html",
+    "title": "Extract from PDF results: text, folders, skipped, failed",
+    "state": "state-images",
+    "query": "state=Images",
+    "screen": "ExtractFromPdfResults--state-images.jpg"
+  },
+  {
+    "board": "ExtractFromPdfResults.dc.html",
+    "title": "Extract from PDF results: text, folders, skipped, failed",
+    "state": "state-needs-attention",
+    "query": "state=Needs%20attention",
+    "screen": "ExtractFromPdfResults--state-needs-attention.jpg"
+  },
+  {
+    "board": "ExtractFromPdfResults.dc.html",
+    "title": "Extract from PDF results: text, folders, skipped, failed",
+    "state": "state-warnings-and-notes",
+    "query": "state=Warnings%20and%20notes",
+    "screen": "ExtractFromPdfResults--state-warnings-and-notes.jpg"
+  },
+  {
+    "board": "ExtractFromPdfResults.dc.html",
+    "title": "Extract from PDF results: text, folders, skipped, failed",
+    "state": "state-helper-unavailable",
+    "query": "state=Helper%20unavailable",
+    "screen": "ExtractFromPdfResults--state-helper-unavailable.jpg"
+  },
+  {
+    "board": "PdfPrivacy.dc.html",
+    "title": "Privacy Check: read-only report, one file or many",
+    "state": "default",
+    "query": "",
+    "screen": "PdfPrivacy--default.jpg"
+  },
+  {
+    "board": "PdfPrivacy.dc.html",
+    "title": "Privacy Check: read-only report, one file or many",
+    "state": "state-empty",
+    "query": "state=Empty",
+    "screen": "PdfPrivacy--state-empty.jpg"
+  },
+  {
+    "board": "PdfPrivacy.dc.html",
+    "title": "Privacy Check: read-only report, one file or many",
+    "state": "state-checking",
+    "query": "state=Checking",
+    "screen": "PdfPrivacy--state-checking.jpg"
+  },
+  {
+    "board": "PdfPrivacy.dc.html",
+    "title": "Privacy Check: read-only report, one file or many",
+    "state": "state-report-one-file",
+    "query": "state=Report%2C%20one%20file",
+    "screen": "PdfPrivacy--state-report-one-file.jpg"
+  },
+  {
+    "board": "PdfPrivacy.dc.html",
+    "title": "Privacy Check: read-only report, one file or many",
+    "state": "state-report-batch",
+    "query": "state=Report%2C%20batch",
+    "screen": "PdfPrivacy--state-report-batch.jpg"
+  },
+  {
+    "board": "PdfPrivacy.dc.html",
+    "title": "Privacy Check: read-only report, one file or many",
+    "state": "state-wrong-password-retry",
+    "query": "state=Wrong%20password%20retry",
+    "screen": "PdfPrivacy--state-wrong-password-retry.jpg"
+  },
+  {
+    "board": "PdfPrivacy.dc.html",
+    "title": "Privacy Check: read-only report, one file or many",
+    "state": "state-reports-saved",
+    "query": "state=Reports%20saved",
+    "screen": "PdfPrivacy--state-reports-saved.jpg"
+  },
+  {
+    "board": "PdfProperties.dc.html",
+    "title": "Edit Properties: keep, set or clear, mixed values",
+    "state": "default",
+    "query": "",
+    "screen": "PdfProperties--default.jpg"
+  },
+  {
+    "board": "PdfProperties.dc.html",
+    "title": "Edit Properties: keep, set or clear, mixed values",
+    "state": "state-empty",
+    "query": "state=Empty",
+    "screen": "PdfProperties--state-empty.jpg"
+  },
+  {
+    "board": "PdfProperties.dc.html",
+    "title": "Edit Properties: keep, set or clear, mixed values",
+    "state": "state-one-file",
+    "query": "state=One%20file",
+    "screen": "PdfProperties--state-one-file.jpg"
+  },
+  {
+    "board": "PdfProperties.dc.html",
+    "title": "Edit Properties: keep, set or clear, mixed values",
+    "state": "state-invalid-date",
+    "query": "state=Invalid%20date",
+    "screen": "PdfProperties--state-invalid-date.jpg"
+  },
+  {
+    "board": "PdfProperties.dc.html",
+    "title": "Edit Properties: keep, set or clear, mixed values",
+    "state": "state-all-keep",
+    "query": "state=All%20keep",
+    "screen": "PdfProperties--state-all-keep.jpg"
+  },
+  {
+    "board": "PdfProperties.dc.html",
+    "title": "Edit Properties: keep, set or clear, mixed values",
+    "state": "state-saving",
+    "query": "state=Saving",
+    "screen": "PdfProperties--state-saving.jpg"
+  },
+  {
+    "board": "PdfProperties.dc.html",
+    "title": "Edit Properties: keep, set or clear, mixed values",
+    "state": "state-results",
+    "query": "state=Results",
+    "screen": "PdfProperties--state-results.jpg"
+  },
+  {
+    "board": "PdfProperties.dc.html",
+    "title": "Edit Properties: keep, set or clear, mixed values",
+    "state": "state-wrong-password-retry",
+    "query": "state=Wrong%20password%20retry",
+    "screen": "PdfProperties--state-wrong-password-retry.jpg"
+  },
+  {
+    "board": "PdfRestrictions.dc.html",
+    "title": "Remove Restrictions: permissions password, per-file override",
+    "state": "default",
+    "query": "",
+    "screen": "PdfRestrictions--default.jpg"
+  },
+  {
+    "board": "PdfRestrictions.dc.html",
+    "title": "Remove Restrictions: permissions password, per-file override",
+    "state": "state-empty",
+    "query": "state=Empty",
+    "screen": "PdfRestrictions--state-empty.jpg"
+  },
+  {
+    "board": "PdfRestrictions.dc.html",
+    "title": "Remove Restrictions: permissions password, per-file override",
+    "state": "state-password-shown",
+    "query": "state=Password%20shown",
+    "screen": "PdfRestrictions--state-password-shown.jpg"
+  },
+  {
+    "board": "PdfRestrictions.dc.html",
+    "title": "Remove Restrictions: permissions password, per-file override",
+    "state": "state-per-file-override",
+    "query": "state=Per-file%20override",
+    "screen": "PdfRestrictions--state-per-file-override.jpg"
+  },
+  {
+    "board": "PdfRestrictions.dc.html",
+    "title": "Remove Restrictions: permissions password, per-file override",
+    "state": "state-removing",
+    "query": "state=Removing",
+    "screen": "PdfRestrictions--state-removing.jpg"
+  },
+  {
+    "board": "PdfRestrictions.dc.html",
+    "title": "Remove Restrictions: permissions password, per-file override",
+    "state": "state-results",
+    "query": "state=Results",
+    "screen": "PdfRestrictions--state-results.jpg"
+  },
+  {
+    "board": "PdfRestrictions.dc.html",
+    "title": "Remove Restrictions: permissions password, per-file override",
+    "state": "state-wrong-password-retry",
+    "query": "state=Wrong%20password%20retry",
+    "screen": "PdfRestrictions--state-wrong-password-retry.jpg"
+  },
+  {
+    "board": "PdfDetailsNarrow.dc.html",
+    "title": "Narrow window: Details tools with options as a drawer",
+    "state": "default",
+    "query": "",
+    "screen": "PdfDetailsNarrow--default.jpg"
+  },
+  {
+    "board": "PdfDetailsNarrow.dc.html",
+    "title": "Narrow window: Details tools with options as a drawer",
+    "state": "tool-edit-properties",
+    "query": "tool=Edit%20Properties",
+    "screen": "PdfDetailsNarrow--tool-edit-properties.jpg"
+  },
+  {
+    "board": "PdfDetailsNarrow.dc.html",
+    "title": "Narrow window: Details tools with options as a drawer",
+    "state": "tool-remove-restrictions",
+    "query": "tool=Remove%20Restrictions",
+    "screen": "PdfDetailsNarrow--tool-remove-restrictions.jpg"
+  },
+  {
+    "board": "PdfDetailsNarrow.dc.html",
+    "title": "Narrow window: Details tools with options as a drawer",
+    "state": "state-options-open",
+    "query": "state=Options%20open",
+    "screen": "PdfDetailsNarrow--state-options-open.jpg"
+  },
+  {
+    "board": "PdfDetailsNarrow.dc.html",
+    "title": "Narrow window: Details tools with options as a drawer",
+    "state": "state-results",
+    "query": "state=Results",
+    "screen": "PdfDetailsNarrow--state-results.jpg"
+  },
+  {
+    "board": "ConvertToPdf.dc.html",
+    "title": "Convert to PDF: mixed list, format options, paste HTML",
+    "state": "default",
+    "query": "",
+    "screen": "ConvertToPdf--default.jpg"
+  },
+  {
+    "board": "ConvertToPdf.dc.html",
+    "title": "Convert to PDF: mixed list, format options, paste HTML",
+    "state": "state-empty",
+    "query": "state=Empty",
+    "screen": "ConvertToPdf--state-empty.jpg"
+  },
+  {
+    "board": "ConvertToPdf.dc.html",
+    "title": "Convert to PDF: mixed list, format options, paste HTML",
+    "state": "state-paste-html",
+    "query": "state=Paste%20HTML",
+    "screen": "ConvertToPdf--state-paste-html.jpg"
+  },
+  {
+    "board": "ConvertToPdf.dc.html",
+    "title": "Convert to PDF: mixed list, format options, paste HTML",
+    "state": "state-markdown-options",
+    "query": "state=Markdown%20options",
+    "screen": "ConvertToPdf--state-markdown-options.jpg"
+  },
+  {
+    "board": "ConvertToPdf.dc.html",
+    "title": "Convert to PDF: mixed list, format options, paste HTML",
+    "state": "state-plain-text-options",
+    "query": "state=Plain%20text%20options",
+    "screen": "ConvertToPdf--state-plain-text-options.jpg"
+  },
+  {
+    "board": "ConvertToPdf.dc.html",
+    "title": "Convert to PDF: mixed list, format options, paste HTML",
+    "state": "state-table-options",
+    "query": "state=Table%20options",
+    "screen": "ConvertToPdf--state-table-options.jpg"
+  },
+  {
+    "board": "ConvertToPdf.dc.html",
+    "title": "Convert to PDF: mixed list, format options, paste HTML",
+    "state": "state-spreadsheet-and-slide-options",
+    "query": "state=Spreadsheet%20and%20slide%20options",
+    "screen": "ConvertToPdf--state-spreadsheet-and-slide-options.jpg"
+  },
+  {
+    "board": "ConvertToPdf.dc.html",
+    "title": "Convert to PDF: mixed list, format options, paste HTML",
+    "state": "state-changed-save-location",
+    "query": "state=Changed%20save%20location",
+    "screen": "ConvertToPdf--state-changed-save-location.jpg"
+  },
+  {
+    "board": "ConvertToPdf.dc.html",
+    "title": "Convert to PDF: mixed list, format options, paste HTML",
+    "state": "state-last-markdown-removed",
+    "query": "state=Last%20Markdown%20removed",
+    "screen": "ConvertToPdf--state-last-markdown-removed.jpg"
+  },
+  {
+    "board": "ConvertToPdf.dc.html",
+    "title": "Convert to PDF: mixed list, format options, paste HTML",
+    "state": "state-save-dialog",
+    "query": "state=Save%20dialog",
+    "screen": "ConvertToPdf--state-save-dialog.jpg"
+  },
+  {
+    "board": "ConvertToPdf.dc.html",
+    "title": "Convert to PDF: mixed list, format options, paste HTML",
+    "state": "state-converting",
+    "query": "state=Converting",
+    "screen": "ConvertToPdf--state-converting.jpg"
+  },
+  {
+    "board": "ConvertToPdfResults.dc.html",
+    "title": "Convert to PDF: results, fonts, script pack",
+    "state": "default",
+    "query": "",
+    "screen": "ConvertToPdfResults--default.jpg"
+  },
+  {
+    "board": "ConvertToPdfResults.dc.html",
+    "title": "Convert to PDF: results, fonts, script pack",
+    "state": "state-needs-attention",
+    "query": "state=Needs%20attention",
+    "screen": "ConvertToPdfResults--state-needs-attention.jpg"
+  },
+  {
+    "board": "ConvertToPdfResults.dc.html",
+    "title": "Convert to PDF: results, fonts, script pack",
+    "state": "state-warnings-and-notes",
+    "query": "state=Warnings%20and%20notes",
+    "screen": "ConvertToPdfResults--state-warnings-and-notes.jpg"
+  },
+  {
+    "board": "ConvertToPdfResults.dc.html",
+    "title": "Convert to PDF: results, fonts, script pack",
+    "state": "state-script-pack-installed",
+    "query": "state=Script%20pack%20installed",
+    "screen": "ConvertToPdfResults--state-script-pack-installed.jpg"
+  },
+  {
+    "board": "CropResize.dc.html",
+    "title": "Crop and Resize PDF: batch tool, ten states",
+    "state": "default",
+    "query": "",
+    "screen": "CropResize--default.jpg"
+  },
+  {
+    "board": "CropResize.dc.html",
+    "title": "Crop and Resize PDF: batch tool, ten states",
+    "state": "state-empty",
+    "query": "state=Empty",
+    "screen": "CropResize--state-empty.jpg"
+  },
+  {
+    "board": "CropResize.dc.html",
+    "title": "Crop and Resize PDF: batch tool, ten states",
+    "state": "state-empty-resize",
+    "query": "state=Empty%2C%20resize",
+    "screen": "CropResize--state-empty-resize.jpg"
+  },
+  {
+    "board": "CropResize.dc.html",
+    "title": "Crop and Resize PDF: batch tool, ten states",
+    "state": "state-crop-adjusting",
+    "query": "state=Crop%2C%20adjusting",
+    "screen": "CropResize--state-crop-adjusting.jpg"
+  },
+  {
+    "board": "CropResize.dc.html",
+    "title": "Crop and Resize PDF: batch tool, ten states",
+    "state": "state-crop-margins",
+    "query": "state=Crop%2C%20margins",
+    "screen": "CropResize--state-crop-margins.jpg"
+  },
+  {
+    "board": "CropResize.dc.html",
+    "title": "Crop and Resize PDF: batch tool, ten states",
+    "state": "state-crop-same-margins",
+    "query": "state=Crop%2C%20same%20margins",
+    "screen": "CropResize--state-crop-same-margins.jpg"
+  },
+  {
+    "board": "CropResize.dc.html",
+    "title": "Crop and Resize PDF: batch tool, ten states",
+    "state": "state-crop-invalid-margins",
+    "query": "state=Crop%2C%20invalid%20margins",
+    "screen": "CropResize--state-crop-invalid-margins.jpg"
+  },
+  {
+    "board": "CropResize.dc.html",
+    "title": "Crop and Resize PDF: batch tool, ten states",
+    "state": "state-resize-preset",
+    "query": "state=Resize%2C%20preset",
+    "screen": "CropResize--state-resize-preset.jpg"
+  },
+  {
+    "board": "CropResize.dc.html",
+    "title": "Crop and Resize PDF: batch tool, ten states",
+    "state": "state-resize-actual-size",
+    "query": "state=Resize%2C%20actual%20size",
+    "screen": "CropResize--state-resize-actual-size.jpg"
+  },
+  {
+    "board": "CropResize.dc.html",
+    "title": "Crop and Resize PDF: batch tool, ten states",
+    "state": "state-resize-invalid-size",
+    "query": "state=Resize%2C%20invalid%20size",
+    "screen": "CropResize--state-resize-invalid-size.jpg"
+  },
+  {
+    "board": "CropResizeResults.dc.html",
+    "title": "Crop and Resize PDF: running and results",
+    "state": "default",
+    "query": "",
+    "screen": "CropResizeResults--default.jpg"
+  },
+  {
+    "board": "CropResizeResults.dc.html",
+    "title": "Crop and Resize PDF: running and results",
+    "state": "state-resize-results",
+    "query": "state=Resize%20results",
+    "screen": "CropResizeResults--state-resize-results.jpg"
+  },
+  {
+    "board": "CropResizeResults.dc.html",
+    "title": "Crop and Resize PDF: running and results",
+    "state": "state-running",
+    "query": "state=Running",
+    "screen": "CropResizeResults--state-running.jpg"
+  },
+  {
+    "board": "ImageEditResults.dc.html",
+    "title": "Edit Image results: progress, Skipped, failures",
+    "state": "default",
+    "query": "",
+    "screen": "ImageEditResults--default.jpg"
+  },
+  {
+    "board": "ImageEditResults.dc.html",
+    "title": "Edit Image results: progress, Skipped, failures",
+    "state": "state-running",
+    "query": "state=Running",
+    "screen": "ImageEditResults--state-running.jpg"
+  },
+  {
+    "board": "ImageEditResults.dc.html",
+    "title": "Edit Image results: progress, Skipped, failures",
+    "state": "state-resize-to-jpeg",
+    "query": "state=Resize%20to%20JPEG",
+    "screen": "ImageEditResults--state-resize-to-jpeg.jpg"
+  },
+  {
+    "board": "ImageEditResults.dc.html",
+    "title": "Edit Image results: progress, Skipped, failures",
+    "state": "state-metadata-removed",
+    "query": "state=Metadata%20removed",
+    "screen": "ImageEditResults--state-metadata-removed.jpg"
+  },
+  {
+    "board": "ImageEditResults.dc.html",
+    "title": "Edit Image results: progress, Skipped, failures",
+    "state": "state-watermark-failed",
+    "query": "state=Watermark%20failed",
+    "screen": "ImageEditResults--state-watermark-failed.jpg"
+  },
+  {
+    "board": "ImageEditNarrow.dc.html",
+    "title": "Edit Image below 1000 px: tools strip and More",
+    "state": "default",
+    "query": "",
+    "screen": "ImageEditNarrow--default.jpg"
+  },
+  {
+    "board": "ImageEditNarrow.dc.html",
+    "title": "Edit Image below 1000 px: tools strip and More",
+    "state": "state-more-open",
+    "query": "state=More%20open",
+    "screen": "ImageEditNarrow--state-more-open.jpg"
+  },
+  {
+    "board": "PackResults.dc.html",
+    "title": "OCR results: files that need a pack, before and after install",
+    "state": "default",
+    "query": "",
+    "screen": "PackResults--default.jpg"
+  },
+  {
+    "board": "PackResults.dc.html",
+    "title": "OCR results: files that need a pack, before and after install",
+    "state": "pack-installing",
+    "query": "pack=Installing",
+    "screen": "PackResults--pack-installing.jpg"
+  },
+  {
+    "board": "PackResults.dc.html",
+    "title": "OCR results: files that need a pack, before and after install",
+    "state": "pack-installed",
+    "query": "pack=Installed",
+    "screen": "PackResults--pack-installed.jpg"
   }
 ]
