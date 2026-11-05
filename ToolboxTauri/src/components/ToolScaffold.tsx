@@ -83,6 +83,10 @@ interface ToolScaffoldProps {
         failedFiles: string[];
         retryFailed: () => Promise<void>;
         retrying: boolean;
+        /** Opens the file dialog, as the workspace's own open button does. */
+        browse: () => Promise<void>;
+        /** Replaces the open files, for views that decide which dropped file to keep. */
+        replaceFiles: (paths: readonly string[]) => void;
     }) => React.ReactNode;
 }
 
@@ -315,16 +319,18 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
     };
 
     const intake = (incoming: InspectedPath[], replaceSingle = false) => {
+        const policy = { ...intakePolicyFor(workspace?.title ?? utility.title, intakeTools, utility), notAcceptedMessage: intakeCopy?.notAccepted };
         if (inputPolicy.inputCardinality === 'single' && replaceSingle) {
-            const next = incoming[0]?.path;
+            // A picked file still goes through intake rules, so a file the tool can't open never replaces the open one.
+            const classified = classifyIntake([], incoming.slice(0, 1), policy);
+            setNotAdded(classified.notAdded);
+            const next = classified.added[0];
             if (!next || (entries.length === 1 && entries[0].path === next)) return;
             const [entry] = newEntries([next]);
-            setNotAdded([]);
             setEntries([entry]);
             selectOnly(entry.key);
             return;
         }
-        const policy = { ...intakePolicyFor(workspace?.title ?? utility.title, intakeTools, utility), notAcceptedMessage: intakeCopy?.notAccepted };
         const classified = classifyIntake(entries.map((entry) => entry.path), incoming, policy);
         setNotAdded(classified.notAdded);
         if (classified.added.length) setEntries((current) => [...current, ...newEntries(classified.added)]);
@@ -394,6 +400,14 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
     };
 
     browseRef.current = browse;
+
+    const replaceFiles = (paths: readonly string[]) => {
+        if (loading) return;
+        const next = newEntries(paths);
+        setEntries(next);
+        setResults([]);
+        selectOnly(next[0]?.key ?? null);
+    };
     const reportRunState = useContext(RunStateContext);
     useEffect(() => {
         if (!reportRunState) return;
@@ -726,6 +740,8 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 failedFiles,
                 retryFailed,
                 retrying,
+                browse,
+                replaceFiles,
             })}
             </fieldset>
 
