@@ -821,15 +821,27 @@ pub fn preview_pages(request:&PreviewPagesRequest)->Result<Vec<IndexedScenePrevi
         render(&path,page_index,&renderer,&temp).map(|preview| IndexedScenePreview{page_index,preview})
     }).collect()
 }
-pub fn inspect(path:&Path)->Result<PdfDocumentMetadata,String> {
-    let doc=load(path)?;
+pub const LOCKED_PDF_MESSAGE:&str="This PDF is password-protected. Remove its password with File Security first, then open the unlocked copy.";
+pub const UNREADABLE_PDF_MESSAGE:&str="Toolbox can't read this file. It may be damaged, or it isn't a PDF that Toolbox supports. Nothing was changed.";
+
+/// Reads page geometry for the scene editors. Password-protected and unreadable files come back as typed
+/// invalid-input errors so the UI can explain them (and point locked files to File Security).
+pub fn inspect(path:&Path)->Result<PdfDocumentMetadata,ToolError> {
+    let locked=|| ToolError::invalid_input(LOCKED_PDF_MESSAGE).with_pointer(crate::kit::contracts::OutcomePointer::Tool{tool_id:"lock-unlock".into()});
+    fn unreadable(_:impl std::fmt::Display)->ToolError { ToolError::invalid_input(UNREADABLE_PDF_MESSAGE) }
+    let doc=match Document::load(path) {
+        Ok(doc)=>doc,
+        Err(lopdf::Error::Decryption(_)|lopdf::Error::InvalidPassword|lopdf::Error::UnsupportedSecurityHandler(_))=>return Err(locked()),
+        Err(error)=>return Err(unreadable(error)),
+    };
+    if doc.is_encrypted() { return Err(locked()); }
     let mut pages=Vec::new();
     for (index,id) in doc.get_pages().values().enumerate() {
-        let g=geometry(&doc,*id)?;
-        let source_rotation = inherited(&doc, *id, b"Rotate")?.map(|value| value.as_i64().map_err(err)).transpose()?.unwrap_or(0).rem_euclid(360) as i32;
+        let g=geometry(&doc,*id).map_err(unreadable)?;
+        let source_rotation = inherited(&doc, *id, b"Rotate").map_err(unreadable)?.map(|value| value.as_i64().map_err(err)).transpose().map_err(unreadable)?.unwrap_or(0).rem_euclid(360) as i32;
         pages.push(PdfPageMetadata{index,x:g.bbox[0],y:g.bbox[1],width:g.width,height:g.height,rotation:source_rotation,page_box:g.bbox,preview:None,text_runs:None});
     }
-    if pages.is_empty() { return Err("PDF contains no pages".into()); }
+    if pages.is_empty() { return Err(ToolError::invalid_input("This PDF has no pages. Nothing was changed.")); }
     Ok(PdfDocumentMetadata{path:path.to_path_buf(),pages})
 }
 pub fn inspect_page(path:&Path,page_index:usize)->Result<PdfPageMetadata,String> {
@@ -1108,6 +1120,51 @@ mod tests {
         assert_eq!(metadata.pages[0].page_box, [20., 30., 220., 330.]);
         assert_eq!(metadata.pages[0].rotation, 90);
         assert!(metadata.pages.iter().all(|page| page.preview.is_none() && page.text_runs.is_none()));
+    }
+
+    fn assert_invalid_input_without_output(dir: &Path, input: &Path, message: &str, pointer: Option<&str>) {
+        let before = fs::read(input).unwrap();
+        let error = inspect(input).expect_err("inspect should reject the fixture");
+        assert!(matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput), "kind: {:?}", error.kind);
+        assert_eq!(error.message, message);
+        assert!(error.message.is_ascii() && !error.message.contains("lopdf") && !error.message.contains("Error"));
+        match (pointer, &error.pointer) {
+            (Some(id), Some(crate::kit::contracts::OutcomePointer::Tool { tool_id })) => assert_eq!(tool_id, id),
+            (None, None) => {}
+            (expected, actual) => panic!("pointer mismatch: expected {expected:?}, got {actual:?}"),
+        }
+        assert_eq!(fs::read(input).unwrap(), before, "the original must not change");
+        assert_eq!(fs::read_dir(dir).unwrap().count(), 1, "inspect must not write any output");
+    }
+
+    #[test]
+    fn inspect_rejects_a_password_protected_pdf_with_a_file_security_pointer() {
+        let temp = TempDir::new().unwrap();
+        let input = temp.0.join("locked.pdf");
+        fixture(&input);
+        let mut document = Document::load(&input).unwrap();
+        document.trailer.set("ID", Object::Array(vec![
+            Object::String(b"toolbox-scene-id-1".to_vec(), lopdf::StringFormat::Literal),
+            Object::String(b"toolbox-scene-id-2".to_vec(), lopdf::StringFormat::Literal),
+        ]));
+        let state = lopdf::EncryptionState::try_from(lopdf::EncryptionVersion::V2 {
+            document: &document, owner_password: "owner", user_password: "user", key_length: 128, permissions: lopdf::Permissions::all(),
+        }).unwrap();
+        document.encrypt(&state).unwrap();
+        document.save(&input).unwrap();
+        assert_invalid_input_without_output(&temp.0, &input, LOCKED_PDF_MESSAGE, Some("lock-unlock"));
+    }
+
+    #[test]
+    fn inspect_rejects_a_damaged_pdf_with_plain_text() {
+        let temp = TempDir::new().unwrap();
+        let input = temp.0.join("damaged.pdf");
+        fixture(&input);
+        let bytes = fs::read(&input).unwrap();
+        fs::write(&input, &bytes[..bytes.len() / 3]).unwrap();
+        assert_invalid_input_without_output(&temp.0, &input, UNREADABLE_PDF_MESSAGE, None);
+        fs::write(&input, b"%PDF-1.7\nthis is not a pdf body").unwrap();
+        assert_invalid_input_without_output(&temp.0, &input, UNREADABLE_PDF_MESSAGE, None);
     }
 
     #[test]
@@ -1456,6 +1513,82 @@ mod tests {
         let annots=composed.get_dictionary(output_pages[1]).unwrap().get(b"Annots").unwrap().as_array().unwrap();
         assert_eq!(annots.len(),2);
         assert_eq!(fs::read(&input).unwrap(),original);
+    }
+
+    /// Six letter-size pages. Each has its own content, a note, a link to the next page and a form field.
+    fn six_page_linked_form_fixture(path: &Path) {
+        let mut d = Document::with_version("1.7");
+        let root = d.new_object_id();
+        let font = d.add_object(dictionary! {"Type"=>"Font", "Subtype"=>"Type1", "BaseFont"=>"Helvetica"});
+        let fonts = d.add_object(dictionary! {"F1"=>font});
+        let resources = d.add_object(dictionary! {"Font"=>fonts});
+        let pages: Vec<ObjectId> = (0..6).map(|_| d.new_object_id()).collect();
+        let mut fields = Vec::new();
+        for (index, page) in pages.iter().enumerate() {
+            let content = d.add_object(Stream::new(dictionary!{}, format!("BT /F1 18 Tf 40 700 Td (Source page {}) Tj ET", index + 1).into_bytes()));
+            let note = d.add_object(dictionary! {"Type"=>"Annot", "Subtype"=>"Text", "Rect"=>array(&[30., 40., 90., 80.]), "Contents"=>Object::string_literal(format!("Note {}", index + 1))});
+            let link = d.add_object(dictionary! {"Type"=>"Annot", "Subtype"=>"Link", "Rect"=>array(&[100., 40., 160., 80.]),
+                "Dest"=>vec![Object::Reference(pages[(index + 1) % 6]), Object::Name(b"Fit".to_vec())]});
+            let widget = d.add_object(dictionary! {"Type"=>"Annot", "Subtype"=>"Widget", "FT"=>"Tx", "T"=>Object::string_literal(format!("field{}", index + 1)),
+                "Rect"=>array(&[170., 40., 260., 80.]), "P"=>Object::Reference(*page)});
+            fields.push(Object::Reference(widget));
+            d.objects.insert(*page, Object::Dictionary(dictionary! {"Type"=>"Page", "Parent"=>root, "MediaBox"=>array(&[0., 0., 612., 792.]), "Resources"=>resources,
+                "Contents"=>content, "Annots"=>vec![Object::Reference(note), Object::Reference(link), Object::Reference(widget)]}));
+        }
+        d.objects.insert(root, Object::Dictionary(dictionary! {"Type"=>"Pages", "Kids"=>pages.iter().map(|page| Object::Reference(*page)).collect::<Vec<_>>(), "Count"=>6}));
+        let acro_form = d.add_object(dictionary! {"Fields"=>fields});
+        let catalog = d.add_object(dictionary! {"Type"=>"Catalog", "Pages"=>root, "AcroForm"=>acro_form});
+        d.trailer.set("Root", catalog);
+        d.save(path).unwrap();
+    }
+
+    #[test]
+    fn block_moved_reversed_and_interleaved_orders_only_reorder_the_page_tree() {
+        let temp = TempDir::new().unwrap();
+        let input = temp.0.join("six.pdf");
+        six_page_linked_form_fixture(&input);
+        let original_bytes = fs::read(&input).unwrap();
+        let original = Document::load(&input).unwrap();
+        let pages: Vec<_> = original.get_pages().values().copied().collect();
+        let catalog = original.trailer.get(b"Root").unwrap().as_reference().unwrap();
+        let pages_root = original.get_dictionary(catalog).unwrap().get(b"Pages").unwrap().as_reference().unwrap();
+        let scene = |order: &[usize]| PdfScene { pages: order.iter().map(|&index| ScenePage {
+            source_index: Some(index), width: 612., height: 792., rotation: 0, crop: None,
+            source_rotation: Some(0), source_box: Some(Rect { x: 0., y: 0., width: 612., height: 792. }), objects: vec![],
+        }).collect() };
+        // Pages 2 and 3 moved as a block to the end; the whole document reversed; a two-sided scan interleaved.
+        for order in [[0, 3, 4, 5, 1, 2], [5, 4, 3, 2, 1, 0], [0, 5, 1, 4, 2, 3]] {
+            let expected: Vec<_> = order.iter().map(|&index| pages[index]).collect();
+            let composed = compose(&input, &scene(&order)).expect("a reorder should compose");
+            let reordered: Vec<_> = composed.get_pages().values().copied().collect();
+            assert_eq!(reordered, expected);
+            // Content, notes, links and form fields are the same objects, byte for byte; only the page tree's order changes.
+            assert_only_page_tree_order_changed(&composed, &original, pages_root, &reordered);
+
+            let request = ExportRequest { paths: vec![input.clone()], scene: scene(&order), output_location: OutputLocation::AlongsideInput };
+            let first = export(&request, input.clone());
+            let second = export(&request, input.clone());
+            assert!(first.error().is_none(), "{:?}", first.error());
+            assert!(second.error().is_none(), "{:?}", second.error());
+            assert_ne!(first.output_paths(), second.output_paths());
+            let bytes = fs::read(&first.output_paths()[0]).unwrap();
+            assert_eq!(bytes, fs::read(&second.output_paths()[0]).unwrap(), "two exports of the same order differ");
+            let output = Document::load(&first.output_paths()[0]).unwrap();
+            let output_pages: Vec<_> = output.get_pages().values().copied().collect();
+            for (position, &source) in order.iter().enumerate() {
+                let content = output.get_page_content(output_pages[position]);
+                assert!(String::from_utf8_lossy(&content).contains(&format!("(Source page {})", source + 1)));
+                let annotations = output.get_dictionary(output_pages[position]).unwrap().get(b"Annots").unwrap().as_array().unwrap();
+                assert_eq!(annotations.len(), 3);
+                let link = output.get_dictionary(annotations[1].as_reference().unwrap()).unwrap();
+                let target = link.get(b"Dest").unwrap().as_array().unwrap()[0].as_reference().unwrap();
+                assert_eq!(target, pages[(source + 1) % 6], "a link lost its target page");
+            }
+            let output_catalog = output.trailer.get(b"Root").unwrap().as_reference().unwrap();
+            let acro_form = output.get_dictionary(output_catalog).unwrap().get(b"AcroForm").unwrap().as_reference().unwrap();
+            assert_eq!(output.get_dictionary(acro_form).unwrap().get(b"Fields").unwrap().as_array().unwrap().len(), 6);
+            assert_eq!(fs::read(&input).unwrap(), original_bytes);
+        }
     }
 
     #[test]
