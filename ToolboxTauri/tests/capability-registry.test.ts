@@ -43,6 +43,17 @@ test("UI capabilities are the shared native contract facts", () => {
   assert.equal(capabilitiesByCommand.get("remove_password")?.outputSuffix, "-unlocked");
   assert.equal(capabilitiesByCommand.get("remove_password")?.inputCardinality, "multiple");
   assert.equal(UtilityRegistry.find(({ id }) => id === "lock-unlock")?.command, "remove_password");
+  assert.equal(capabilitiesByCommand.get("export_image_edit_stack")?.inputCardinality, "multiple");
+  assert.equal(capabilitiesByCommand.get("export_image_edit_stack")?.outputSuffix, "-edited");
+  for (const retired of ["crop_images", "resize_images", "rotate_images", "adjust_image_tone", "watermark_images", "image_metadata"]) {
+    assert.equal(capabilitiesByCommand.get(retired), undefined, `${retired} is retired: Edit Image exports through the stack`);
+  }
+  for (const id of ["crop", "resize", "rotate", "image-tone", "image-watermark", "image-metadata"]) {
+    assert.equal(UtilityRegistry.find((tool) => tool.id === id)?.command, "export_image_edit_stack", `${id} opens its step in the shared edit stack`);
+  }
+  const crop = UtilityRegistry.find(({ id }) => id === "crop");
+  assert.equal(crop?.command, "export_image_edit_stack");
+  assert.equal(crop?.capability.inputCardinality, "multiple", "Crop accepts a batch because it runs through the shared edit stack");
   assert.deepEqual(capabilitiesByCommand.get("protect_files")?.acceptedExtensions, [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"]);
   assert.equal(capabilitiesByCommand.get("protect_files")?.nativeAvailability, "available");
   assert.equal(capabilitiesByCommand.get("protect_office"), undefined);
@@ -144,8 +155,8 @@ test("workspace entries group editor tools into one entry and list More tools la
     "pdf-organize", "pdf-merge", "pdf-split", "pdf-crop", "pdf-page-numbers", "pdf-redact",
     "more:pdf-rotate", "more:pdf-repair", "more:pdf-compare", "more:pdf-extract-pages",
   ]);
-  assert.deepEqual(entryIds("image-editor"), ["resize+crop+rotate+image-tone+image-watermark", "heic-convert", "image-metadata"]);
-  assert.deepEqual(entryIds("image-editor", { groupEditor: false }), ["resize", "crop", "rotate", "image-tone", "image-watermark", "heic-convert", "image-metadata"]);
+  assert.deepEqual(entryIds("image-editor"), ["resize+crop+rotate+image-tone+image-watermark+image-metadata", "heic-convert"]);
+  assert.deepEqual(entryIds("image-editor", { groupEditor: false }), ["resize", "crop", "rotate", "image-tone", "image-watermark", "image-metadata", "heic-convert"]);
 
   const pdfEditor = ToolWorkspaceRegistry.find(({ id }) => id === "pdf-editor")!;
   const [editEntry] = workspaceEntries(pdfEditor, toolsForWorkspace(pdfEditor).filter(({ id }) => id !== "pdf-edit"));

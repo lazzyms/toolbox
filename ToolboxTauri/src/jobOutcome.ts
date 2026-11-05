@@ -15,7 +15,7 @@ import { UtilityRegistry } from "./registry";
 
 const errorKinds: readonly ErrorKind[] = ["invalidInput", "unavailable", "limitExceeded", "processing", "wrongPassword", "cancelled"];
 
-const limitKinds: readonly LimitKind[] = ["fileSize", "pageCount", "time", "decompression"];
+const limitKinds: readonly LimitKind[] = ["fileSize", "pageCount", "time", "decompression", "dimensions"];
 
 const skipCodes: readonly SkipCode[] = [
   "notProtected",
@@ -34,6 +34,7 @@ const warningDetailKeys: Record<WarningCode, readonly string[] | null> = {
   fontSubstituted: ["requestedFamily", "actualFamily"],
   renamedToAvoidReplacing: ["chosenName", "finalName"],
   precisionReduced: null,
+  transparencyFlattened: null,
 };
 
 const toolIds = new Set<string>(UtilityRegistry.map((utility) => utility.id));

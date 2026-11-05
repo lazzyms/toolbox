@@ -100,16 +100,11 @@ export type ToolCommand =
   | "ocr_pdf"
   | "blur_faces"
   | "remove_image_background"
-  | "resize_images"
-  | "rotate_images"
-  | "crop_images"
-  | "adjust_image_tone"
-  | "watermark_images"
+  | "export_image_edit_stack"
   | "generate_icon_set"
   | "create_gif"
   | "extract_gif_frames"
-  | "process_tiff_pages"
-  | "image_metadata";
+  | "process_tiff_pages";
 
 
 export type OutcomePointer =
@@ -117,7 +112,7 @@ export type OutcomePointer =
   | { kind: "pack"; packId: string }
   | { kind: "outputFolder" };
 
-export type LimitKind = "fileSize" | "pageCount" | "time" | "decompression";
+export type LimitKind = "fileSize" | "pageCount" | "time" | "decompression" | "dimensions";
 
 export type ToolError = { message: string; pointer: OutcomePointer | null } & (
   | { kind: "invalidInput" | "unavailable" | "processing" | "wrongPassword" | "cancelled" }
@@ -147,7 +142,8 @@ export type OutcomeWarning =
   | { code: "signatureRemoved"; message: string }
   | { code: "fontSubstituted"; message: string; details: { requestedFamily: string; actualFamily: string } }
   | { code: "renamedToAvoidReplacing"; message: string; details: { chosenName: string; finalName: string } }
-  | { code: "precisionReduced"; message: string };
+  | { code: "precisionReduced"; message: string }
+  | { code: "transparencyFlattened"; message: string };
 
 export type WarningCode = OutcomeWarning["code"];
 
@@ -192,6 +188,25 @@ export interface ImagePreview {
   height: number;
   dataUrl: string;
 }
+
+export type ImageMetadataFormat = "jpeg" | "png" | "webp" | "tiff" | "heic";
+
+export type ImageMetadataErrorCode = "unreadable" | "unsupportedFormat" | "truncated" | "corrupt";
+
+export type ImageMetadataInspection =
+  | {
+      status: "report";
+      path: string;
+      format: ImageMetadataFormat;
+      exif: boolean;
+      gps: boolean;
+      xmp: boolean;
+      iptc: boolean;
+      comments: boolean;
+      icc: boolean;
+      orientation: number | null;
+    }
+  | { status: "error"; path: string; code: ImageMetadataErrorCode; message: string };
 
 export interface ToolDefinition {
   id: AtomicToolId;
@@ -279,6 +294,21 @@ export interface PasswordSet {
 export interface PasswordRequest extends ToolRequest {
   password: string;
   passwordOverrides: Record<string, string>;
+}
+
+export type WatermarkPlacement = "center" | "top-left" | "top-right" | "bottom-left" | "bottom-right" | "tile";
+/** A placement, a legacy pen offset in pixels, or an anchor from 0 to 1 that lands the mark in the same relative place on every size. */
+export type WatermarkPosition = WatermarkPlacement | { x: number; y: number } | { anchorX: number; anchorY: number };
+
+// Mirrors kit::common::watermark::WatermarkOptions.
+export interface WatermarkOptions {
+  text?: string;
+  logoPath?: string;
+  size?: number;
+  opacity: number;
+  color?: string;
+  position?: WatermarkPosition;
+  rotation?: number;
 }
 
 export interface CompressImagesRequest extends ToolRequest {

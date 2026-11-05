@@ -46,7 +46,7 @@ rustybuzz = "0.20.1"
 lopdf = "0.44"
 rayon = "1"
 heif-rs = "26.7"
-webpx = "0.4"
+webpx = { version = "0.4", features = ["icc"] }
 sha2 = "0.11"
 tiff = "0.11"
 tract-onnx = { version = "0.23.7", optional = true }

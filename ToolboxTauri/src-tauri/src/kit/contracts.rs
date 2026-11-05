@@ -113,6 +113,7 @@ pub enum LimitKind {
     PageCount,
     Time,
     Decompression,
+    Dimensions,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -388,6 +389,7 @@ pub enum WarningKind {
     FontSubstituted { requested_family: String, actual_family: String },
     RenamedToAvoidReplacing { chosen_name: String, final_name: String },
     PrecisionReduced,
+    TransparencyFlattened,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -632,9 +634,10 @@ mod tests {
             WarningKind::FontSubstituted { requested_family: "A".into(), actual_family: "B".into() },
             WarningKind::RenamedToAvoidReplacing { chosen_name: "a".into(), final_name: "b".into() },
             WarningKind::PrecisionReduced,
+            WarningKind::TransparencyFlattened,
         ];
         let codes = warnings.into_iter().map(|kind| serde_json::to_value(kind).unwrap()["code"].clone()).collect::<Vec<_>>();
-        assert_eq!(codes, ["signatureRemoved", "fontSubstituted", "renamedToAvoidReplacing", "precisionReduced"]);
+        assert_eq!(codes, ["signatureRemoved", "fontSubstituted", "renamedToAvoidReplacing", "precisionReduced", "transparencyFlattened"]);
     }
 
     #[test]
@@ -667,6 +670,8 @@ mod tests {
                 vec![PathBuf::from("drawings-page-1.png")],
                 ToolError::limit_exceeded(LimitKind::Time, "Took longer than 5 minutes and was stopped. 1 part was saved before it stopped."),
             ),
+            JobOutcome::succeeded(PathBuf::from("badge.png"), vec![PathBuf::from("badge-edited.jpg")], "Image saved")
+                .with_warning(OutcomeWarning { kind: WarningKind::TransparencyFlattened, message: "Transparent areas were flattened onto white, because JPEG has none.".into() }),
         ];
 
         assert_eq!(serde_json::to_value(&samples).unwrap(), shared);
@@ -744,7 +749,7 @@ mod tests {
     #[test]
     fn capability_registry_keeps_valid_inputs_when_one_extension_is_rejected() {
         let paths = vec![PathBuf::from("source.png"), PathBuf::from("source.pdf")];
-        let validation = partition_command_inputs("image_metadata", &paths).unwrap();
+        let validation = partition_command_inputs("export_image_edit_stack", &paths).unwrap();
 
         assert_eq!(validation.accepted, vec![(0, paths[0].clone())]);
         assert_eq!(validation.rejected.len(), 1);
@@ -757,7 +762,7 @@ mod tests {
         std::fs::create_dir_all(&folder).unwrap();
         let paths = vec![PathBuf::from("first.png"), folder.clone(), PathBuf::from("notes.txt"), PathBuf::from("second.png")];
 
-        let validation = partition_command_inputs("image_metadata", &paths).unwrap();
+        let validation = partition_command_inputs("export_image_edit_stack", &paths).unwrap();
 
         assert_eq!(validation.accepted, vec![(0, paths[0].clone()), (3, paths[3].clone())]);
         assert_eq!(validation.rejected.iter().map(|(index, _)| *index).collect::<Vec<_>>(), vec![1, 2]);
@@ -841,6 +846,11 @@ mod tests {
         assert_eq!(images.input_cardinality, InputCardinality::Ordered);
         assert!(!images.accepted_extensions.contains(&".tif".to_string()));
         assert!(!images.accepted_extensions.contains(&".tiff".to_string()));
+        let stack = native_capability("export_image_edit_stack").unwrap();
+        assert_eq!((stack.input_cardinality, stack.output_suffix.as_str(), stack.many_to_one), (InputCardinality::Multiple, "-edited", false), "the edit stack runs every image as its own job and names a combined stack -edited");
+        for retired in ["crop_images", "resize_images", "rotate_images", "adjust_image_tone", "watermark_images", "image_metadata"] {
+            assert!(native_capability(retired).is_none(), "{retired} is retired: Edit Image exports through the stack");
+        }
         assert!(!native_capability("extract_gif_frames").unwrap().supports_preview);
         let pdf = native_capability("pdf_to_text").unwrap();
         assert!(pdf.supports_page_selection && !pdf.supports_preview);
