@@ -1,9 +1,9 @@
-import type { PdfDocument, PdfFormEntry, PdfFormField, PdfTextRun } from './contracts';
+import type { PdfDocument, PdfEditRun, PdfEditRunReason, PdfFormEntry, PdfFormField, PdfTextEdit, PdfTextRun } from './contracts';
 
 // All geometry is in points, from the top-left of the unrotated visible source page.
 export interface SceneRect { x: number; y: number; width: number; height: number }
 export interface ScenePoint { x: number; y: number }
-export type SceneTool = 'select' | 'text' | 'highlight' | 'shape' | 'signature' | 'form' | 'watermark' | 'crop' | 'redact';
+export type SceneTool = 'select' | 'edit-text' | 'text' | 'highlight' | 'shape' | 'signature' | 'form' | 'watermark' | 'crop' | 'redact';
 export type SceneShape = 'square' | 'round' | 'triangle' | 'line' | 'dotted-line' | 'arrow-left' | 'arrow-right' | 'arrow-up' | 'arrow-down';
 export type SignatureMode = 'image' | 'text';
 export type WatermarkPattern = 'across-page' | 'bottom-right-to-top-left' | 'top-right-to-bottom-left' | 'center-horizontal' | 'center-vertical';
@@ -64,7 +64,7 @@ export const textLines = (runs: { text: string; x: number; y: number; width: num
     } else lines.push({ rect: { x: run.x, y: run.y, width: run.width, height: run.height }, text: run.text });
     return lines;
   }, []);
-export interface PdfScene { pages: ScenePage[] }
+export interface PdfScene { pages: ScenePage[]; textEdits?: PdfTextEdit[] }
 export interface ScenePreview { dataUrl: string; width: number; height: number }
 export interface SceneCanvasProps {
   page: ScenePage;
@@ -89,6 +89,11 @@ export interface SceneCanvasProps {
   redactionPreview?: boolean;
   /** Text search matches on this page, drawn while the results are under review. */
   searchMatches?: SceneRect[];
+  editRuns: PdfEditRun[];
+  textEdits: PdfTextEdit[];
+  selectedRun: number | null;
+  onSelectRun: (run: number | null) => void;
+  onEditRun: (run: PdfEditRun, replacement: string) => void;
 }
 export const sceneFromDocument = (document: PdfDocument): PdfScene => ({
   pages: document.pages.map((page) => ({ id: `source-${page.index}`, sourceIndex: page.index,
@@ -98,3 +103,24 @@ export const sceneFromDocument = (document: PdfDocument): PdfScene => ({
     objects: [] })),
 });
 export const visibleBounds = (page: ScenePage): SceneRect => page.crop ?? { x: 0, y: 0, width: page.width, height: page.height };
+// Words of the replacement that end past the original run's width, assuming the
+// original font's average character width.
+export const textOverflowWords = (original: string, replacement: string): number => {
+  let end = 0;
+  return replacement.split(/(\s+)/).filter((part) => {
+    end += part.length;
+    return part.trim() !== '' && end > original.length;
+  }).length;
+};
+export const notEditableReasons: Record<PdfEditRunReason, { short: string; detail: string }> = {
+  picture: { short: 'This text is part of a picture, so it can\'t be edited.',
+    detail: 'It is part of a scanned picture, not real text. Text drawn in a font with no character map is treated the same way.' },
+  encoding: { short: 'This text uses a font with no character map, so it can\'t be edited.',
+    detail: 'Its font has no character map, so its letters can\'t be changed safely. It is treated like text in a picture.' },
+  tagged: { short: 'This text is linked to accessibility tags, so it can\'t be edited.',
+    detail: 'It is linked to the PDF\'s accessibility tags, and changing it would break them.' },
+  unsupported: { short: 'This text can\'t be rewritten safely, so it can\'t be edited.',
+    detail: 'This page\'s content can\'t be rewritten safely.' },
+};
+export const overflowMessage = (words: number) =>
+  `Text runs past the original line by ${words} ${words === 1 ? 'word' : 'words'}. It will be cut off unless you make it shorter or smaller.`;

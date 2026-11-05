@@ -7,7 +7,7 @@ import { RadioGroup, RadioGroupItem } from '../../components/ui/radio-group';
 import { Textarea } from '../../components/ui/textarea';
 import { ToggleGroup, ToggleGroupItem } from '../../components/ui/toggle-group';
 import type { PdfFormField, PdfFormWidget } from './contracts';
-import { textLines, visibleBounds } from './scene';
+import { notEditableReasons, overflowMessage, textLines, textOverflowWords, visibleBounds } from './scene';
 import type { SceneCanvasProps, SceneObject, ScenePage, ScenePoint, SceneRect, SceneRedaction, SceneShape, WatermarkPattern } from './scene';
 import './scene-canvas.css';
 
@@ -117,7 +117,8 @@ function Artwork({ page, object }: { page: ScenePage; object: SceneObject }) {
   return shapeArtwork(object.shape, r, object.color, object.opacity);
 }
 
-export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPreview, tool, selectedId, zoom, onSelect, onCommit, makeObject, formFields = [], formValue, onFormValue, formFlag, onFormFocus, onFormLeave, redactionFill = '#000000', redactionPreview = false, searchMatches = [] }: SceneCanvasProps) {
+export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPreview, tool, selectedId, zoom, onSelect, onCommit, makeObject, formFields = [], formValue, onFormValue, formFlag, onFormFocus, onFormLeave, redactionFill = '#000000', redactionPreview = false, searchMatches = [],
+  editRuns, textEdits, selectedRun, onSelectRun, onEditRun }: SceneCanvasProps) {
   const host = useRef<HTMLDivElement>(null);
   const surface = useRef<SVGSVGElement>(null);
   const coordinates = useRef<SVGGElement>(null);
@@ -132,6 +133,7 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
   const [editingText, setEditingText] = useState('');
   const [spaceHeld, setSpaceHeld] = useState(false);
   const [panning, setPanning] = useState(false);
+  const [editingRun, setEditingRun] = useState<{ index: number; text: string } | null>(null);
   function cancelGesture() {
     const active = gesture.current;
     if (!active) return;
@@ -147,7 +149,7 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     observer.observe(host.current);
     return () => observer.disconnect();
   }, []);
-  useEffect(() => { gesture.current = null; setDraft(null); setEditingId(null); setPanning(false); window.getSelection()?.removeAllRanges(); }, [page]);
+  useEffect(() => { gesture.current = null; setDraft(null); setEditingId(null); setEditingRun(null); setPanning(false); window.getSelection()?.removeAllRanges(); }, [page]);
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key === 'Escape' && gesture.current) {
@@ -268,6 +270,18 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     const object = id ? page.objects.find(item => item.id === id) : undefined;
     if (object) beginTextEdit(event, object);
   }
+  const replacementOf = (index: number) => textEdits.find((edit) => edit.run === index)?.replacement;
+  function openRun(index: number) {
+    const run = editRuns.find((item) => item.index === index);
+    onSelectRun(index);
+    setEditingRun(run && !run.reason ? { index, text: replacementOf(index) ?? run.text } : null);
+  }
+  function finishRunEdit(save: boolean) {
+    const run = editingRun && editRuns.find((item) => item.index === editingRun.index);
+    // Clicking another run blurs this editor after the click already opened the next one.
+    setEditingRun((current) => current?.index === editingRun?.index ? null : current);
+    if (save && run && editingRun && editingRun.text !== (replacementOf(run.index) ?? run.text)) onEditRun(run, editingRun.text);
+  }
   function selectedTextRects(): SceneRect[] {
     const selection = window.getSelection();
     if (!selection || selection.isCollapsed || !selection.toString().trim() || !selection.rangeCount) return [];
@@ -295,6 +309,11 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     const target = event.target as Element;
     if (target.closest('[data-text-editor]')) return;
     if (tool === 'form') { if (!target.closest('[data-form-field]')) onSelect(null); return; }
+    if (tool === 'edit-text') {
+      const index = target.closest('[data-edit-run]')?.getAttribute('data-edit-run');
+      if (index == null) { onSelectRun(null); setEditingRun(null); } else { event.preventDefault(); openRun(Number(index)); }
+      return;
+    }
     const textTarget = (tool === 'highlight' || tool === 'redact') && target.closest('[data-text-run]');
     const start = point(event);
     if (textTarget) {
@@ -426,7 +445,10 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
       : { ...r, x: Math.max(b.x, Math.min(b.x + b.width - r.width, r.x + dx)), y: Math.max(b.y, Math.min(b.y + b.height - r.height, r.y + dy)) };
     onCommit({ ...page, objects: page.objects.map(o => o.id === object.id ? (corner ? resizedObject(o, rect, o) : { ...o, rect }) : o) });
   }
-  const exact = renderedPreview && !draft && !editingId;
+  const exact = renderedPreview && !draft && !editingId && !editingRun;
+  const overflowRun = tool === 'edit-text' && selectedRun !== null ? editRuns.find((run) => run.index === selectedRun) : undefined;
+  const overflowEdit = overflowRun && textEdits.find((edit) => edit.run === overflowRun.index);
+  const overflowWords = overflowEdit ? textOverflowWords(overflowEdit.original, overflowEdit.replacement) : 0;
   return <div className="scene-canvas" ref={host}>
     <svg ref={surface} className={`scene-canvas-page scene-tool-${tool}${panning ? ' scene-pan-active' : spaceHeld ? ' scene-space-pan' : ''}`} aria-label="PDF page canvas" role="group" width={transform.width * scale} height={transform.height * scale} viewBox={`0 0 ${transform.width} ${transform.height}`} onPointerDown={down} onPointerMove={move} onPointerUp={e => finish(e)} onPointerCancel={e => finish(e, true)} onLostPointerCapture={e => finish(e, true)} onDoubleClick={doubleClick}>
       <rect width={transform.width} height={transform.height} fill="var(--pdf-document-page)" />
@@ -460,6 +482,28 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
           className="scene-redaction" style={redactionPreview ? { fill: mark.color } : undefined}
           tabIndex={tool === 'redact' ? 0 : -1} role="button" aria-label={`Redaction mark ${index + 1}${mark.label ? `, ${mark.label}` : ''}`} aria-pressed={selectedId === mark.id}
           onFocus={() => { if (tool === 'redact') onSelect(mark.id); }} onKeyDown={e => markKey(e, mark.id)} />)}
+        {tool === 'edit-text' && <g className="scene-edit-layer" aria-label="PDF text you can edit">
+          {editRuns.map((run) => {
+            const edited = replacementOf(run.index);
+            const label = run.reason ? `${run.text}. ${notEditableReasons[run.reason].short}` : `Edit text: ${edited ?? run.text}`;
+            return <rect key={run.index} data-edit-run={run.index} x={run.x} y={run.y} width={Math.max(1, run.width)} height={Math.max(1, run.height)}
+              className={run.reason ? 'scene-edit-run-blocked' : edited !== undefined ? 'scene-edit-run scene-edit-run-changed' : 'scene-edit-run'}
+              strokeWidth={1.5 / scale} tabIndex={0} role="button" aria-label={label} aria-pressed={selectedRun === run.index}
+              onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openRun(run.index); } }}>
+              {run.reason && <title>{notEditableReasons[run.reason].short}</title>}
+            </rect>;
+          })}
+          {editingRun && (() => {
+            const run = editRuns.find((item) => item.index === editingRun.index);
+            return run && <foreignObject x={run.x} y={run.y - 2} width={Math.max(run.width, 40)} height={run.height + 4} data-text-editor="true" className="scene-inline-text-editor">
+              <Input autoFocus className="h-full w-full min-h-0 rounded-sm px-1 py-0" style={{ fontSize: Math.max(6, run.height * 0.8) }} aria-label="Replacement text"
+                value={editingRun.text} onChange={(event) => setEditingRun({ index: run.index, text: event.target.value })} onBlur={() => finishRunEdit(true)}
+                onPointerDown={(event) => event.stopPropagation()}
+                onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); finishRunEdit(true); } else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); finishRunEdit(false); } }} />
+            </foreignObject>;
+          })()}
+          {overflowRun && overflowWords > 0 && <text className="scene-edit-overflow" x={overflowRun.x} y={overflowRun.y + overflowRun.height + 10} fontSize={8}>{overflowMessage(overflowWords)}</text>}
+        </g>}
         {draft && gesture.current?.mode === 'crop' && draft.crop && <rect {...draft.crop} className="scene-crop-outline" strokeWidth={2 / scale} pointerEvents="none" />}
       </g>
     </svg>

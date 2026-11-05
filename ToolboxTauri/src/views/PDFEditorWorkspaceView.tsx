@@ -11,7 +11,7 @@ import { Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Label } from '../components/ui/label';
 import { Slider } from '../components/ui/slider';
-import type { PdfDocument, PdfFlattenChoice, PdfFormEntry, PdfFormField, PdfFormInspection, PdfFormValue, PdfPage, PdfTextRun } from '../features/pdf-editor/contracts';
+import type { PdfDocument, PdfEditRun, PdfFlattenChoice, PdfFormEntry, PdfFormField, PdfFormInspection, PdfFormValue, PdfPage, PdfTextEdit, PdfTextRun } from '../features/pdf-editor/contracts';
 import { formEntryFlag, isFormEntryEmpty } from '../features/pdf-editor/form-checks';
 import { colorTokens, readColorToken } from '../features/pdf-editor/colorTokens';
 import { SceneCanvas } from '../features/pdf-editor/SceneCanvas';
@@ -19,7 +19,7 @@ import { RedactDisclosure, RedactInspector, listMarks, redactionFills, searchSta
 import type { ListedMark, TextMatch, TextSearch } from '../features/pdf-editor/RedactInspector';
 import { subToolInspectors } from '../features/pdf-editor/SubToolInspectors';
 import type { SubToolInspectorProps } from '../features/pdf-editor/SubToolInspectors';
-import { combinedSuffix, exportSuffix, planSceneExport, sceneContributors } from '../features/pdf-editor/subtools';
+import { combinedSuffix, exportSuffix, planSceneExport, sceneContributors, sceneSections } from '../features/pdf-editor/subtools';
 import { proposedSaveName } from '../components/saveStep';
 import type { SaveDialog } from '../registry/saveSteps';
 import { sceneFromDocument, visibleBounds } from '../features/pdf-editor/scene';
@@ -44,13 +44,13 @@ const exportAsDialog: SaveDialog = { title: 'Export a copy', extension: 'pdf' };
 const exportAsSummary = 'Saves a new copy with your edits. The original isn’t changed, and an existing file is never replaced.';
 
 const tools: { id: SceneTool; label: string; glyph: string }[] = [
-  { id: 'select', label: 'Select', glyph: '↖' }, { id: 'text', label: 'Text', glyph: 'T' },
+  { id: 'select', label: 'Select', glyph: '↖' }, { id: 'edit-text', label: 'Edit text', glyph: '✎' }, { id: 'text', label: 'Text', glyph: 'T' },
   { id: 'highlight', label: 'Highlight', glyph: '▰' }, { id: 'shape', label: 'Shape', glyph: '□' },
   { id: 'signature', label: 'Signature', glyph: '〰' }, { id: 'form', label: 'Fill form', glyph: '☑' }, { id: 'watermark', label: 'Watermark', glyph: 'W' },
   { id: 'crop', label: 'Crop', glyph: '⌗' }, { id: 'redact', label: 'Redact', glyph: '▮' },
 ];
 const toolFlagBySceneTool: Record<SceneTool, AtomicToolId> = {
-  select: 'pdf-edit', text: 'pdf-edit', highlight: 'pdf-edit', shape: 'pdf-edit',
+  select: 'pdf-edit', 'edit-text': 'pdf-edit', text: 'pdf-edit', highlight: 'pdf-edit', shape: 'pdf-edit',
   signature: 'pdf-sign', form: 'pdf-edit', watermark: 'pdf-watermark', crop: 'pdf-crop', redact: 'pdf-redact',
 };
 const toolFlagByObjectKind: Record<SceneObject['kind'], AtomicToolId> = {
@@ -58,7 +58,9 @@ const toolFlagByObjectKind: Record<SceneObject['kind'], AtomicToolId> = {
   signature: 'pdf-sign', watermark: 'pdf-watermark',
 };
 const toolGuidance: Record<SceneTool, string> = {
-  select: 'Select, move, or resize an object.', text: 'Drag to add text. Double-click text to edit it.',
+  select: 'Select, move, or resize an object.',
+  'edit-text': 'Click text with a dashed outline to change it. Text that is part of a picture can\'t be edited. Use OCR first.',
+  text: 'Drag to add text. Double-click text to edit it.',
   highlight: 'Drag across text or draw a highlight area.', shape: 'Drag to draw a shape.',
   signature: 'Choose a signature, then drag its box onto the page.', form: 'Type into the form fields on the page.', watermark: 'Choose a pattern, then add a watermark.',
   crop: 'Drag a rectangle on the page to crop it.', redact: 'Drag over anything you want removed.',
@@ -162,6 +164,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onExportAs, o
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [selectedPages, setSelectedPages] = useState<string[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedRun, setSelectedRun] = useState<number | null>(null);
   const [zoom, setZoom] = useState(1);
   const text = 'Text';
   const [fontSize, setFontSize] = useState(18);
@@ -249,9 +252,10 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onExportAs, o
       (value) => {
         if (value.index !== sourceIndex) return;
         const textRuns: PdfTextRun[] = value.textRuns ?? [];
+        const editRuns: PdfEditRun[] = value.editRuns ?? [];
         setDocument((current) => {
           if (!current || current.path !== path || textGeneration.current.current !== requestGeneration || current.pages[sourceIndex]?.textRuns != null) return current;
-          return { ...current, pages: current.pages.map((item, index) => index === sourceIndex ? { ...item, preview: value.preview ?? item.preview ?? null, textRuns } : item) };
+          return { ...current, pages: current.pages.map((item, index) => index === sourceIndex ? { ...item, preview: value.preview ?? item.preview ?? null, textRuns, editRuns } : item) };
         });
       },
       (reason) => setError(pdfEditorErrorMessage(reason, 'open')),
@@ -333,7 +337,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onExportAs, o
     const timer = missing.length ? window.setTimeout(() => {
       if (previewGeneration.current.current !== requestGeneration) return;
       void requestWithGeneration(previewGeneration.current, requestGeneration,
-        () => invoke<IndexedScenePreview[]>('preview_pdf_scene_pages', { request: { path, scene, pageIndices: missing.map(({ index }) => index) } }),
+        () => invoke<IndexedScenePreview[]>('preview_pdf_scene_pages', { request: { path, ...sceneSections(scene), pageIndices: missing.map(({ index }) => index) } }),
         (values) => {
           const previews = new Map(values.map(({ pageIndex, preview }) => [pageIndex, preview]));
           for (const { index, item, key } of missing) {
@@ -361,7 +365,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onExportAs, o
     }));
     setPreview(null);
   };
-  const commitPage = (next: ScenePage) => commit({ pages: scene.pages.map((item) => item.id === next.id ? next : item) });
+  const commitPage = (next: ScenePage) => commit({ ...scene, pages: scene.pages.map((item) => item.id === next.id ? next : item) });
   const undo = () => { group.current = null; setPreview(null); setHistory((value) => value.past.length ? {
     past: value.past.slice(0, -1), present: value.past[value.past.length - 1], future: [value.present, ...value.future],
   } : value); };
@@ -369,7 +373,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onExportAs, o
     past: [...value.past, value.present], present: value.future[0], future: value.future.slice(1),
   } : value); };
   // An unchanged scene keeps its preview, so Export works again after resetting only form entries or Flatten.
-  const reset = () => { if (document && !same(scene, sceneFromDocument(document))) commit(sceneFromDocument(document)); setFormEntries({}); setFlatten(null); setFormLeft(new Set()); setFormNotice(null); setSelectedId(null); };
+  const reset = () => { if (document && !same(scene, sceneFromDocument(document))) commit(sceneFromDocument(document)); setFormEntries({}); setFlatten(null); setFormLeft(new Set()); setFormNotice(null); setSelectedId(null); setSelectedRun(null); };
   useEffect(() => {
     const onShellCommand = (event: Event) => {
       const command = (event as CustomEvent<string>).detail;
@@ -425,7 +429,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onExportAs, o
   }, [selectedId, currentId]);
   const updateObject = (patch: Partial<SceneObject>, field: string) => {
     if (!selected || !page || !availability.allows(toolFlagByObjectKind[selected.kind])) return;
-    commit({ pages: scene.pages.map((item) => item.id === page.id ? { ...page,
+    commit({ ...scene, pages: scene.pages.map((item) => item.id === page.id ? { ...page,
       objects: page.objects.map((object) => object.id === selected.id ? { ...object, ...patch } : object),
     } : item) }, `${selected.id}:${field}`);
   };
@@ -469,7 +473,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onExportAs, o
       const other = scene.pages.findIndex((item) => item.id === id);
       setSelectedPages(scene.pages.slice(Math.min(currentIndex, other), Math.max(currentIndex, other) + 1).map((item) => item.id));
     } else setSelectedPages((old) => additive ? old.includes(id) ? old.filter((item) => item !== id) : [...old, id] : [id]);
-    setCurrentId(id); setSelectedId(null); group.current = null;
+    setCurrentId(id); setSelectedId(null); setSelectedRun(null); group.current = null;
   };
   const goToField = (field: PdfFormField) => {
     const target = scene.pages.find((item) => item.sourceIndex === field.widgets[0].page);
@@ -492,12 +496,13 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onExportAs, o
     if (!page || !availability.allows('pdf-organize')) return;
     const blank: ScenePage = { id: crypto.randomUUID(), sourceIndex: null, width: page.width, height: page.height, rotation: 0, crop: null, sourceRotation: null, sourceBox: null, objects: [] };
     const next = [...scene.pages]; next.splice(currentIndex + 1, 0, blank);
-    commit({ pages: next }); selectPage(blank.id);
+    commit({ ...scene, pages: next }); selectPage(blank.id);
   };
   const deletePages = () => {
     if (!availability.allows('pdf-remove-pages') || targets.length >= scene.pages.length) return;
     const next = scene.pages.filter((item) => !targets.includes(item.id));
-    commit({ pages: next }); setCurrentId(next[Math.min(currentIndex, next.length - 1)].id); setSelectedPages([]); setSelectedId(null);
+    const kept = scene.textEdits?.filter((edit) => next.some((item) => item.sourceIndex === edit.pageIndex));
+    commit({ pages: next, textEdits: kept?.length ? kept : undefined }); setCurrentId(next[Math.min(currentIndex, next.length - 1)].id); setSelectedPages([]); setSelectedId(null);
   };
   const movePages = (targetId: string) => {
     if (!availability.allows('pdf-organize')) return;
@@ -507,22 +512,39 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onExportAs, o
     if (ids.includes(targetId)) return;
     const moving = scene.pages.filter((item) => ids.includes(item.id));
     const remaining = scene.pages.filter((item) => !ids.includes(item.id));
-    remaining.splice(remaining.findIndex((item) => item.id === targetId), 0, ...moving); commit({ pages: remaining });
+    remaining.splice(remaining.findIndex((item) => item.id === targetId), 0, ...moving); commit({ ...scene, pages: remaining });
   };
   const shiftPage = (delta: number) => {
     if (!availability.allows('pdf-organize')) return;
     const to = currentIndex + delta;
     if (to < 0 || to >= scene.pages.length) return;
-    const next = [...scene.pages]; [next[currentIndex], next[to]] = [next[to], next[currentIndex]]; commit({ pages: next });
+    const next = [...scene.pages]; [next[currentIndex], next[to]] = [next[to], next[currentIndex]]; commit({ ...scene, pages: next });
   };
   const pageNumbers = () => {
     if (!availability.allows('pdf-page-numbers')) return;
-    commit({ pages: scene.pages.map((item, index) => {
+    commit({ ...scene, pages: scene.pages.map((item, index) => {
     const b = visibleBounds(item);
     return { ...item, objects: [...item.objects, { ...makeObject('text', { x: b.x + b.width / 2 - 20, y: b.y + Math.max(0, b.height - 30), width: Math.min(40, b.width), height: Math.min(20, b.height) }), text: String(index + 1), fontSize: 12 }] };
     }) });
   };
   const endGroup = () => { group.current = null; };
+  const editRuns: PdfEditRun[] = page?.sourceIndex == null ? [] : document?.pages[page.sourceIndex]?.editRuns ?? [];
+  const textEdits = scene.textEdits ?? [];
+  const pageEdits = textEdits.filter((edit) => edit.pageIndex === page?.sourceIndex);
+  const commitTextEdits = (next: PdfTextEdit[]) => commit({ pages: scene.pages, ...(next.length ? { textEdits: next } : {}) });
+  const setTextEdit = (run: PdfEditRun, replacement: string) => {
+    if (!availability.allows('pdf-edit') || run.reason || page?.sourceIndex == null) return;
+    const pageIndex = page.sourceIndex;
+    const others = textEdits.filter((edit) => edit.pageIndex !== pageIndex || edit.run !== run.index);
+    commitTextEdits(replacement === run.text ? others : [...others, { pageIndex, run: run.index, original: run.text, replacement }]);
+  };
+  const revertEdit = (edit: PdfTextEdit) => { if (availability.allows('pdf-edit')) commitTextEdits(textEdits.filter((item) => item !== edit)); };
+  const showEdit = (edit: PdfTextEdit) => {
+    const target = scene.pages.find((item) => item.sourceIndex === edit.pageIndex);
+    if (!target) return;
+    selectPage(target.id); setTool('edit-text'); setSelectedRun(edit.run);
+  };
+  const chooseTool = (next: SceneTool) => { if (!availability.allows(toolFlagBySceneTool[next])) return; endGroup(); setTool(next); setSelectedId(null); setSelectedRun(null); };
   const selectedKind = selected?.kind ?? tool;
   const selectedEnabled = Boolean(selected && availability.allows(toolFlagByObjectKind[selected.kind]));
   const canEditCanvas = tool !== null && availability.allows(toolFlagBySceneTool[tool])
@@ -536,7 +558,9 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onExportAs, o
     signatureMode, setSignatureMode, signaturePath, signaturePreview, signatureText, setSignatureText,
     signatureTextDraft, setSignatureTextDraft, signatureFont, setSignatureFont, chooseSignatureImage,
     watermarkText, setWatermarkText, watermarkFontSize, setWatermarkFontSize, watermarkPattern, setWatermarkPattern, addFixedWatermark,
-    form, formValue, formFlag, goToField, goToNextRequired, flatten, setFlatten, switchToAddText: () => { endGroup(); setTool('text'); setSelectedId(null); },
+    form, formValue, formFlag, goToField, goToNextRequired, flatten, setFlatten, switchToAddText: () => chooseTool('text'),
+    selectedRun: editRuns.find((run) => run.index === selectedRun), textEdits,
+    pageNumberOf: (sourceIndex) => scene.pages.findIndex((item) => item.sourceIndex === sourceIndex) + 1, showEdit, revertEdit, chooseTool,
   } : null;
   const Fields = selectedKind ? subToolInspectors[selectedKind]?.Fields : undefined;
   const Guide = tool ? subToolInspectors[tool]?.Guide : undefined;
@@ -555,7 +579,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onExportAs, o
   }}>
     <div ref={toolsToolbar} className="scene-tools" role="toolbar" aria-label="PDF editor tools" aria-orientation="horizontal" onFocusCapture={handleToolbarFocus} onKeyDown={handleToolbarKeyDown}>
       {tools.filter((item) => availability.allows(toolFlagBySceneTool[item.id])).map((item) => <Button key={item.id} variant={tool === item.id ? "secondary" : "ghost"} size="sm" aria-label={item.label} aria-description={toolGuidance[item.id]} title={toolGuidance[item.id]} aria-pressed={tool === item.id}
-        onClick={() => { if (!availability.allows(toolFlagBySceneTool[item.id])) return; endGroup(); setTool(item.id); setSelectedId(null); }} disabled={!page}><span aria-hidden="true">{item.glyph}</span>{item.label}</Button>)}
+        onClick={() => chooseTool(item.id)} disabled={!page}><span aria-hidden="true">{item.glyph}</span>{item.label}</Button>)}
       <span className="scene-toolbar-divider" />
       <Button variant="ghost" size="icon-sm" aria-label="Undo" title="Undo (⌘Z / Ctrl+Z)" disabled={!history.past.length} onClick={undo}>↶</Button>
       <Button variant="ghost" size="icon-sm" aria-label="Redo" title="Redo (⇧⌘Z / Ctrl+Shift+Z)" disabled={!history.future.length} onClick={redo}>↷</Button>
@@ -601,20 +625,21 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onExportAs, o
             onFormValue={(field, value) => { if (availability.allows('pdf-edit') && !field.readOnly) setFormEntries((entries) => ({ ...entries, [field.name]: value })); }}
             formFlag={formFlag} onFormFocus={(field) => setFormFocus(field.name)} onFormLeave={leaveFormField}
             redactionFill={redactionFill} redactionPreview={tool === 'redact' && reviewing && previewRedactions}
-            searchMatches={search && !search.marked && !reviewing ? search.matches.filter((match, index) => match.pageId === page.id && search.selected[index]).flatMap((match) => match.rects) : []} />
+            searchMatches={search && !search.marked && !reviewing ? search.matches.filter((match, index) => match.pageId === page.id && search.selected[index]).flatMap((match) => match.rects) : []}
+            editRuns={editRuns} textEdits={pageEdits} selectedRun={selectedRun} onSelectRun={setSelectedRun} onEditRun={setTextEdit} />
         </div>
         <aside className="scene-inspector" aria-label="PDF editor inspector">
           <Card role="region" aria-label="Properties" className="scene-inspector-panel gap-4 overflow-y-auto py-4">
             <CardHeader className="gap-1 px-4 py-0">
-              <CardTitle>{selected ? `${selected.kind[0].toUpperCase()}${selected.kind.slice(1)} properties` : tool === 'form' ? 'Fill form' : tool === 'redact' ? 'Redact' : 'Properties'}</CardTitle>
-              <CardDescription>{selected ? 'Adjust the selected item.' : tool === 'form' ? 'Fill in the fields this PDF already has.' : tool === 'redact' ? 'Drag over anything you want removed. Marks are only previews until you export.' : tool === 'select' ? 'Select a mark to edit its properties.' : tool ? `New ${tool} settings` : 'No page markup tools are enabled.'}</CardDescription>
+              <CardTitle>{selected ? `${selected.kind[0].toUpperCase()}${selected.kind.slice(1)} properties` : tool === 'form' ? 'Fill form' : tool === 'edit-text' ? 'Edit text' : tool === 'redact' ? 'Redact' : 'Properties'}</CardTitle>
+              <CardDescription>{selected ? 'Adjust the selected item.' : tool === 'form' ? 'Fill in the fields this PDF already has.' : tool === 'redact' ? 'Drag over anything you want removed. Marks are only previews until you export.' : tool === 'select' ? 'Select a mark to edit its properties.' : tool === 'edit-text' ? toolGuidance['edit-text'] : tool ? `New ${tool} settings` : 'No page markup tools are enabled.'}</CardDescription>
             </CardHeader>
             <CardContent className="scene-inspector-content flex flex-col gap-3 px-4">
               {tool === 'redact' && !selected && <RedactInspector marks={marks} selectedId={selectedId} reviewing={reviewing} preview={previewRedactions} fill={redactionFill} search={search}
                 onSelect={selectMark} onRemove={removeMarks} onReview={review} onPreview={setPreviewRedactions} onFill={recolorMarks}
                 onFind={findText} onSearch={setSearch} onMark={markMatches} />}
               {Fields && inspector && <Fields {...inspector} />}
-              {(selected || (tool !== null && !['select', 'crop', 'form', 'redact'].includes(tool))) && <>
+              {(selected || (tool !== null && !['select', 'edit-text', 'crop', 'form', 'redact'].includes(tool))) && <>
                 <div className="scene-inspector-field"><Label htmlFor="scene-object-color">Object color</Label>
                   <input id="scene-object-color" type="color" aria-label="Object color" value={activeColor} onChange={(event) => {
                     if (selected) updateObject({ color: event.target.value }, 'color'); else if (tool === 'highlight') setHighlightColor(event.target.value); else setColor(event.target.value);
@@ -648,7 +673,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onExportAs, o
         <Button variant="ghost" size="icon-sm" aria-label="Zoom out" disabled={zoom <= 0.5} onClick={() => setZoom((value) => Math.max(0.5, value - 0.25))}>−</Button>
         <Button variant="ghost" size="sm" aria-label="Fit page" onClick={() => setZoom(1)}>{Math.round(zoom * 100)}% · Fit</Button>
         <Button variant="ghost" size="icon-sm" aria-label="Zoom in" disabled={zoom >= 3} onClick={() => setZoom((value) => Math.min(3, value + 0.25))}>＋</Button>
-        {availability.allows('pdf-organize') && <><Button variant="ghost" size="sm" aria-label="Rotate selected pages" onClick={() => { if (availability.allows('pdf-organize')) commit({ pages: scene.pages.map((item) => targets.includes(item.id) ? { ...item, rotation: (item.rotation + 90) % 360 } : item) }); }}>Rotate ↻</Button>
+        {availability.allows('pdf-organize') && <><Button variant="ghost" size="sm" aria-label="Rotate selected pages" onClick={() => { if (availability.allows('pdf-organize')) commit({ ...scene, pages: scene.pages.map((item) => targets.includes(item.id) ? { ...item, rotation: (item.rotation + 90) % 360 } : item) }); }}>Rotate ↻</Button>
         <Button variant="ghost" size="sm" aria-label="Move page earlier" disabled={currentIndex <= 0} onClick={() => shiftPage(-1)}>Move ←</Button>
         <Button variant="ghost" size="sm" aria-label="Move page later" disabled={currentIndex >= scene.pages.length - 1} onClick={() => shiftPage(1)}>Move →</Button></>}
         {availability.allows('pdf-page-numbers') && <Button variant="ghost" size="sm" onClick={pageNumbers}>Page numbers</Button>}<span className="scene-original-note">{tool === 'form' && formUnavailable && <><span role="status">Fill form is unavailable for this PDF.</span><span className="scene-toolbar-divider" /></>}{tool === 'form' && formNotice && <><span role="status">{formNotice}</span><span className="scene-toolbar-divider" /></>}{tool === 'form' ? 'Fields are filled in the copy only' : 'Original unchanged'}</span>

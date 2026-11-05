@@ -27,7 +27,7 @@ body[data-theme="light"] {
 .scene-canvas-page { flex: none; overflow: hidden; touch-action: none; user-select: none; filter: drop-shadow(0 1px 4px rgb(0 0 0 / 14%)); }
 .scene-tool-select { cursor: default; }
 .scene-tool-text, .scene-tool-highlight, .scene-tool-shape, .scene-tool-signature, .scene-tool-crop { cursor: crosshair; }
-.scene-tool-watermark { cursor: default; }
+.scene-tool-watermark, .scene-tool-edit-text { cursor: default; }
 .scene-object-hit { fill: transparent; stroke: none; cursor: move; pointer-events: all; }
 .scene-object-watermark { cursor: default; }
 .scene-object-hit:focus-visible { outline: none; stroke: var(--pdf-scene-selection); stroke-width: 2px; vector-effect: non-scaling-stroke; }
@@ -47,3 +47,8 @@ body[data-theme="light"] {
 .scene-search-match { fill: rgb(255 196 0 / 40%); stroke: #c99a00; stroke-width: 1.5px; vector-effect: non-scaling-stroke; pointer-events: none; }
 .scene-tool-redact .scene-redaction { pointer-events: all; cursor: pointer; }
 .scene-redaction[aria-pressed="true"], .scene-redaction:focus-visible { outline: none; stroke: var(--pdf-scene-selection); stroke-width: 2px; stroke-dasharray: none; }
+.scene-edit-run { fill: transparent; stroke: var(--pdf-scene-selection); stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; cursor: text; pointer-events: all; }
+.scene-edit-run-changed { fill: var(--pdf-scene-overlay); }
+.scene-edit-run-blocked { fill: transparent; stroke: #e5484d; vector-effect: non-scaling-stroke; cursor: not-allowed; pointer-events: all; }
+.scene-edit-run:focus-visible, .scene-edit-run-blocked:focus-visible, .scene-edit-run[aria-pressed="true"], .scene-edit-run-blocked[aria-pressed="true"] { outline: none; stroke-dasharray: none; stroke-width: 2px; }
+.scene-edit-overflow { fill: #e5484d; font-family: var(--font-sans, sans-serif); }
