@@ -1,14 +1,16 @@
-import type { ComponentType } from 'react';
+import { useState, type ComponentType } from 'react';
 import { Bold, Check, Info, Italic, TextAlignCenter, TextAlignEnd, TextAlignStart, TriangleAlert } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { Card, CardContent } from '../../components/ui/card';
+import { Checkbox } from '../../components/ui/checkbox';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../../components/ui/dialog';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { NativeSelect } from '../../components/ui/native-select';
 import { RadioGroup, RadioGroupItem } from '../../components/ui/radio-group';
 import { ToggleGroup, ToggleGroupItem } from '../../components/ui/toggle-group';
 import { useToolAvailability } from '../../ToolAvailabilityContext';
-import type { PdfFormEntry, PdfFormField, PdfFormInspection } from './contracts';
+import type { PdfFlattenChoice, PdfFormEntry, PdfFormField, PdfFormInspection } from './contracts';
 import { formChoiceText, isFormEntryEmpty } from './form-checks';
 import type { SceneObject, ScenePage, SceneShape, SceneTool, SignatureMode, TextAlign, TextFontFamily, TextStyle, WatermarkPattern } from './scene';
 import type { SubToolId } from './subtools';
@@ -39,6 +41,7 @@ export interface SubToolInspectorProps {
   formFlag: (field: PdfFormField) => string | null;
   goToField: (field: PdfFormField) => void;
   goToNextRequired: () => void;
+  flatten: PdfFlattenChoice | null; setFlatten: (value: PdfFlattenChoice | null) => void;
   switchToAddText: () => void;
 }
 type Panel = ComponentType<SubToolInspectorProps>;
@@ -205,7 +208,62 @@ const pageList = (pages: number[]) => pages.length === 1 ? `page ${pages[0]}`
   : `pages ${pages.slice(0, -1).join(', ')} and ${pages[pages.length - 1]}`;
 const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
 
-const FormGuide: Panel = ({ page, form, formValue, formFlag, goToField, goToNextRequired, switchToAddText }) => {
+const flattenChoices: { value: PdfFlattenChoice; label: string }[] = [
+  { value: 'both', label: 'Fields and comments' }, { value: 'forms', label: 'Fields only' }, { value: 'annotations', label: 'Comments only' },
+];
+
+// Flattening can't be undone in the copy, so turning it on always asks first; turning it off doesn't.
+const FlattenSection = ({ form, formValue, flatten, setFlatten }: Pick<SubToolInspectorProps, 'formValue' | 'flatten' | 'setFlatten'> & { form: PdfFormInspection }) => {
+  const fields = form.unsupported ? 0 : form.fields.length;
+  const comments = form.comments;
+  const [choice, setChoice] = useState<PdfFlattenChoice>(fields && comments ? 'both' : fields ? 'forms' : 'annotations');
+  const [confirming, setConfirming] = useState(false);
+  const formsOnly = !comments || choice === 'forms';
+  const things = formsOnly ? 'fields' : choice === 'annotations' ? 'comments' : 'fields and comments';
+  const unavailable = !fields && !comments
+    ? form.unsupported ? "Toolbox can't read this form's fields, and the PDF has no comments to flatten." : 'This PDF has no form fields or comments to flatten.'
+    : null;
+  const missing = choice === 'annotations' ? 0 : form.fields.filter((field) => field.required && isFormEntryEmpty(formValue(field))).length;
+  const [fieldCount, commentCount] = [choice === 'annotations' ? 0 : fields, choice === 'forms' ? 0 : comments];
+  const counted = [fieldCount ? plural(fieldCount, 'field', 'fields') : '', commentCount ? plural(commentCount, 'comment', 'comments') : ''].filter(Boolean).join(' and ');
+  const consequences = [
+    `${fieldCount + commentCount === 1 ? 'The' : 'All'} ${counted} ${fieldCount + commentCount === 1 ? 'becomes' : 'become'} part of the page in the exported copy. Nobody will be able to change ${fieldCount + commentCount === 1 ? 'it' : 'them'} there.`,
+    missing ? `${plural(missing, 'required field is', 'required fields are')} still empty.` : '',
+    'You can turn this off before exporting.',
+  ].filter(Boolean).join(' ');
+  const label = !fields && comments ? 'Flatten comments when exporting' : 'Flatten fields when exporting';
+  return <div className="scene-inspector-field border-t pt-3.5">
+    <span className="text-sm font-medium" id="scene-flatten">Flatten</span>
+    <p className="scene-property-note">{unavailable
+      ? <>Flatten is unavailable. {unavailable}</>
+      : `Turns the ${fields ? 'fields' : 'comments'} into plain page content in the exported copy, so they can't be changed later.`}</p>
+    {fields > 0 && comments > 0 && <RadioGroup className="gap-1.5" aria-label="What to flatten" value={choice} disabled={flatten !== null}
+      onValueChange={(value) => setChoice(value as PdfFlattenChoice)}>
+      {flattenChoices.map((item) => <span key={item.value} className="settings-radio">
+        <RadioGroupItem id={`scene-flatten-${item.value}`} value={item.value} /><Label htmlFor={`scene-flatten-${item.value}`}>{item.label}</Label>
+      </span>)}
+    </RadioGroup>}
+    <span className="settings-radio">
+      <Checkbox id="scene-flatten-on" checked={flatten !== null} disabled={Boolean(unavailable)}
+        onCheckedChange={(checked) => checked ? setConfirming(true) : setFlatten(null)} />
+      <Label htmlFor="scene-flatten-on">{label}</Label>
+    </span>
+    <Dialog open={confirming} onOpenChange={setConfirming}>
+      <DialogContent role="alertdialog" showCloseButton={false} className="sm:max-w-[440px]">
+        <DialogHeader>
+          <DialogTitle>{`Flatten ${things} in the copy?`}</DialogTitle>
+          <DialogDescription>{consequences}</DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setConfirming(false)}>{`Keep ${choice === 'annotations' || !fields ? 'comments' : 'fields'} editable`}</Button>
+          <Button onClick={() => { setFlatten(choice); setConfirming(false); }}>Flatten when exporting</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  </div>;
+};
+
+const FormGuide: Panel = ({ page, form, formValue, formFlag, goToField, goToNextRequired, flatten, setFlatten, switchToAddText }) => {
   if (!form) return <p className="scene-property-note" role="status">Reading the form fields…</p>;
   if (form.unsupported || !form.fields.length) {
     const [headline, ...rest] = (form.unsupported ?? 'This PDF has no form fields to fill.').split(/(?<=\.) /);
@@ -216,6 +274,7 @@ const FormGuide: Panel = ({ page, form, formValue, formFlag, goToField, goToNext
       </CardContent></Card>
       <p className="scene-property-note">{form.unsupported ? 'To fill it anyway, open it in Adobe Acrobat or Reader. Or type your answers onto the page with Add text.' : 'Type your answers onto the page with Add text instead.'}</p>
       <Button variant="outline" size="sm" className="self-start" onClick={switchToAddText}>Use Add text instead</Button>
+      <FlattenSection form={form} formValue={formValue} flatten={flatten} setFlatten={setFlatten} />
     </>;
   }
   const pages = [...new Set(form.fields.map((field) => field.widgets[0].page + 1))].sort((a, b) => a - b);
@@ -250,6 +309,7 @@ const FormGuide: Panel = ({ page, form, formValue, formFlag, goToField, goToNext
         </li>)}
       </ol>
     </div>
+    <FlattenSection form={form} formValue={formValue} flatten={flatten} setFlatten={setFlatten} />
   </>;
 };
 

@@ -134,7 +134,8 @@ export interface PdfFormField {
     widgets: PdfFormWidget[];
 }
 // Fields arrive in Tab order. `unsupported` explains why a form can't be filled at all.
-export interface PdfFormInspection { fields: PdfFormField[]; unsupported: string | null }
+export interface PdfFormInspection { fields: PdfFormField[]; unsupported: string | null; comments: number }
+export type PdfFlattenChoice = 'forms' | 'annotations' | 'both';
 export interface PdfFormValue { name: string; value: PdfFormEntry }
 
 export interface PdfSceneExportRequest {
@@ -143,6 +144,6 @@ export interface PdfSceneExportRequest {
     outputLocation: OutputLocation;
     formValues?: PdfFormValue[];
     textEdits?: unknown[];
-    flatten?: boolean;
+    flatten?: PdfFlattenChoice;
     redactions?: unknown[];
 }

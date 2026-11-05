@@ -9,6 +9,7 @@ use crate::kit::{common::{JobOutcome, OutputLocation, OutputNaming}, contracts::
 use super::metadata::{PdfDocumentMetadata, PdfPageMetadata, PdfTextRun};
 use super::{inherited, resolve, PdfMutationIntent};
 
+mod flatten;
 mod forms;
 pub use forms::{inspect_form, FormInspection};
 
@@ -75,7 +76,7 @@ pub struct ExportRequest { pub paths: Vec<PathBuf>, pub scene: PdfScene, pub out
 pub struct StageSections {
     pub form_values: Option<Vec<serde_json::Value>>,
     pub text_edits: Option<Vec<serde_json::Value>>,
-    pub flatten: Option<bool>,
+    pub flatten: Option<flatten::FlattenChoice>,
     pub redactions: Option<Vec<serde_json::Value>>,
 }
 #[derive(Serialize)]
@@ -763,7 +764,7 @@ pub enum Stage { FillForms, EditText, Overlays, Flatten, Redact }
 pub const STAGES: [Stage; 5] = [Stage::FillForms, Stage::EditText, Stage::Overlays, Stage::Flatten, Stage::Redact];
 
 struct OverlayPlan { preflight: ScenePreflight, identity: bool, pure_reorder: bool }
-enum StagePlan { Skip, FillForms(forms::FormPlan), Overlays(OverlayPlan) }
+enum StagePlan { Skip, FillForms(forms::FormPlan), Overlays(OverlayPlan), Flatten(flatten::FlattenPlan) }
 
 fn unsupported_section(present: bool, name: &str) -> Result<StagePlan, ToolError> {
     if present { return Err(ToolError::processing(format!("{name} is not supported yet; scene export was rejected before output"))); }
@@ -787,7 +788,10 @@ fn stage_preflight(stage: Stage, doc: &Document, scene: &PdfScene, sections: &St
         },
         Stage::EditText => unsupported_section(sections.text_edits.is_some(), "Editing existing text"),
         Stage::Overlays => overlay_preflight(doc, scene).map_err(ToolError::processing),
-        Stage::Flatten => unsupported_section(sections.flatten.is_some(), "Flattening"),
+        Stage::Flatten => match sections.flatten {
+            Some(choice) => flatten::preflight(doc, choice).map(StagePlan::Flatten),
+            None => Ok(StagePlan::Skip),
+        },
         Stage::Redact => unsupported_section(sections.redactions.is_some(), "Redaction"),
     }
 }
@@ -797,17 +801,22 @@ fn stage_apply(plan: StagePlan, doc: &mut Document, scene: &PdfScene) -> Result<
         StagePlan::Skip => Ok(()),
         StagePlan::FillForms(plan) => forms::apply(doc, plan),
         StagePlan::Overlays(plan) => apply_overlays(doc, scene, plan),
+        StagePlan::Flatten(plan) => flatten::apply(doc, plan),
     }
 }
 
-/// Returns the composed document and whether filling form fields is its only change.
-fn run_stages(path:&Path, scene:&PdfScene, sections:&StageSections)->Result<(Document, bool),ToolError> {
+/// Returns the composed document and, when filling or flattening is its only change, that stage's output suffix.
+fn run_stages(path:&Path, scene:&PdfScene, sections:&StageSections)->Result<(Document, Option<&'static str>),ToolError> {
     let mut doc=load(path).map_err(ToolError::processing)?;
     let plans=STAGES.iter().map(|&stage| stage_preflight(stage, &doc, scene, sections)).collect::<Result<Vec<_>,ToolError>>()?;
-    let fills=plans.iter().any(|plan| matches!(plan, StagePlan::FillForms(_)));
-    let edits=plans.iter().any(|plan| matches!(plan, StagePlan::Overlays(OverlayPlan { identity: false, .. })));
+    let changes: Vec<_>=plans.iter().filter_map(|plan| match plan {
+        StagePlan::FillForms(_) => Some(Some("-filled")),
+        StagePlan::Flatten(_) => Some(Some("-flattened")),
+        StagePlan::Overlays(OverlayPlan { identity: false, .. }) => Some(None),
+        _ => None,
+    }).collect();
     for plan in plans { stage_apply(plan, &mut doc, scene).map_err(ToolError::processing)?; }
-    Ok((doc, fills && !edits))
+    Ok((doc, if let [suffix] = changes[..] { suffix } else { None }))
 }
 
 pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> { run_stages(path, scene, &StageSections::default()).map(|(doc, _)| doc).map_err(|error| error.message) }
@@ -1145,15 +1154,15 @@ pub fn export(request:&ExportRequest,input:PathBuf)->JobOutcome {
         if !matches!(request.output_location,OutputLocation::AlongsideInput) { return Err(processing("Scene exports must be alongside the input".into())); }
         text_plan(&request.scene)?;
         let mut bytes=Vec::new();
-        let (mut doc, fill_only)=run_stages(&input,&request.scene,&request.sections)?;
+        let (mut doc, suffix)=run_stages(&input,&request.scene,&request.sections)?;
         doc.save_to(&mut bytes).map_err(|error| processing(err(error)))?;
         let write=|reservation:crate::kit::common::OutputReservation| {
             let mut file=OpenOptions::new().write(true).open(reservation.path()).map_err(|error| processing(err(error)))?;
             file.write_all(&bytes).and_then(|_|file.sync_all()).map_err(|error| processing(err(error)))?;
             reservation.publish().map_err(|error| processing(err(error)))
         };
-        if fill_only {
-            return write(OutputNaming::reserve_destination(&input,&request.output_location,"-filled","pdf").map_err(|error| processing(err(error)))?);
+        if let Some(suffix)=suffix {
+            return write(OutputNaming::reserve_destination(&input,&request.output_location,suffix,"pdf").map_err(|error| processing(err(error)))?);
         }
         let parent=input.parent().ok_or_else(|| processing("Input has no parent directory".into()))?;
         let stem=input.file_stem().ok_or_else(|| processing("Input has no filename".into()))?.to_string_lossy();
@@ -1979,7 +1988,6 @@ mod tests {
         let original=fs::read(&input).unwrap();
         let cases=[
             (serde_json::json!({ "textEdits": [{ "run": 0 }] }), "Editing existing text is not supported yet"),
-            (serde_json::json!({ "flatten": false }), "Flattening is not supported yet"),
             (serde_json::json!({ "redactions": [] }), "Redaction is not supported yet"),
         ];
         for (sections,message) in cases {
@@ -2000,11 +2008,11 @@ mod tests {
             if let Some(scene)=scene { request.scene=scene; }
             run_stages(&input,&request.scene,&request.sections).err().unwrap().message
         };
-        let all=serde_json::json!({ "formValues": [], "textEdits": [], "flatten": true, "redactions": [] });
+        let all=serde_json::json!({ "formValues": [], "textEdits": [], "flatten": "forms", "redactions": [] });
         assert!(first_failure(all, None).starts_with("This PDF has no form fields to fill"));
-        assert!(first_failure(serde_json::json!({ "textEdits": [], "flatten": true, "redactions": [] }), None).starts_with("Editing existing text"));
-        assert!(first_failure(serde_json::json!({ "flatten": true, "redactions": [] }), Some(PdfScene{pages:vec![]})).starts_with("Scene must contain"));
-        assert!(first_failure(serde_json::json!({ "flatten": true, "redactions": [] }), None).starts_with("Flattening"));
+        assert!(first_failure(serde_json::json!({ "textEdits": [], "flatten": "forms", "redactions": [] }), None).starts_with("Editing existing text"));
+        assert!(first_failure(serde_json::json!({ "flatten": "forms", "redactions": [] }), Some(PdfScene{pages:vec![]})).starts_with("Scene must contain"));
+        assert!(first_failure(serde_json::json!({ "flatten": "forms", "redactions": [] }), None).starts_with("This PDF has no form fields to flatten"));
         assert!(first_failure(serde_json::json!({ "redactions": [] }), None).starts_with("Redaction"));
     }
 
