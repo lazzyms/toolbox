@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ShortcutHint } from "../components/ShortcutHint";
+import { parsePageRanges } from "../shared/pageRanges";
 import { shortcutTarget } from "../shortcuts";
 import { CropPreview, usePageSizes, type CropTarget } from "../features/pdf-crop/CropPreview";
 import {
@@ -30,6 +31,9 @@ const sides: ReadonlyArray<{ key: Side; label: string }> = [
 
 const ERROR_ID = "mar-err";
 const RECT_ERROR_ID = "rect-err";
+const PAGES_ERROR_ID = "crop-pages-err";
+const PAGES_HELP_ID = "crop-pages-help";
+const PAGES_FIX_REASON = "Fix the pages to crop.";
 
 const rectFields: ReadonlyArray<{ key: RectField; label: string; axis: "width" | "height" }> = [
   { key: "left", label: "Left", axis: "width" },
@@ -82,10 +86,20 @@ const checkMargins = (same: boolean, all: string, fields: Record<Side, string>, 
 
 type CropSpec = ({ kind: "margins" } & Margins) | ({ kind: "rectangle" } & Rect);
 
-const cropWith = (spec: CropSpec): RunHandler => (paths, outputLocation, { runId }) =>
+/** Every page, or the typed ranges exactly as entered; each PDF clamps them to its own length natively. */
+type CropScope = "all" | { range: { ranges: string } };
+
+/** The scope to send for the typed Pages text, or why it can't be read. */
+const readScope = (text: string): { scope: CropScope } | { error: string } => {
+  if (!text.trim()) return { scope: "all" };
+  const parsed = parsePageRanges(text);
+  return parsed.ok ? { scope: { range: { ranges: text } } } : { error: parsed.message };
+};
+
+const cropWith = (spec: CropSpec, scope: CropScope): RunHandler => (paths, outputLocation, { runId }) =>
   invoke<ToolResult>("crop_pdf", {
     runId,
-    request: { paths, spec, scope: "all", outputLocation },
+    request: { paths, spec, scope, outputLocation },
   });
 
 const pdfCount = (count: number) => `${count} ${count === 1 ? "PDF" : "PDFs"}`;
@@ -141,6 +155,8 @@ export const CropResizeView = ({ utility, initialPaths, onFilesChange, onSelectT
   const [all, setAll] = useState("12");
   const [fields, setFields] = useState<Record<Side, string>>({ top: "15", right: "30", bottom: "15", left: "30" });
   const [rectState, setRectState] = useState<RectState>({ rect: DEFAULT_RECT, drafts: {}, past: [] });
+  const [pagesText, setPagesText] = useState("");
+  const pages = readScope(pagesText);
   const check = checkMargins(same, all, fields, unit);
   const invalidSides = new Set(check.errors.map((error) => error.side));
 
@@ -174,7 +190,7 @@ export const CropResizeView = ({ utility, initialPaths, onFilesChange, onSelectT
       utility={utility}
       initialPaths={initialPaths}
       onFilesChange={onFilesChange}
-      onRun={spec ? cropWith(spec) : async () => { throw new Error(fixReason); }}
+      onRun={spec && "scope" in pages ? cropWith(spec, pages.scope) : async () => { throw new Error(spec ? PAGES_FIX_REASON : fixReason); }}
     >
       {(props) => (
         <CropWorkspace
@@ -188,6 +204,7 @@ export const CropResizeView = ({ utility, initialPaths, onFilesChange, onSelectT
           onUnitChange={setUnit}
           spec={spec}
           fixReason={fixReason}
+          pages={{ text: pagesText, error: "error" in pages ? pages.error : null, onChange: setPagesText }}
           onSelectTool={onSelectTool}
           rectangle={{
             state: rectState,
@@ -284,7 +301,7 @@ type RectangleControls = {
 /** The preview and options for the files in the scaffold; owns what depends on the loaded PDFs. */
 const CropWorkspace = ({
   files, run, loading, destination, selectedFileIndex, selectFile, utility, mode, onModeChange, cropBy, onCropByChange, unit, spec, fixReason,
-  onSelectTool, rectangle, margins, marginsTarget,
+  pages: pageScope, onSelectTool, rectangle, margins, marginsTarget,
 }: ScaffoldProps & {
   utility: ToolDefinition;
   mode: Mode;
@@ -295,6 +312,7 @@ const CropWorkspace = ({
   onUnitChange: (unit: Unit) => void;
   spec: CropSpec | null;
   fixReason: string;
+  pages: { text: string; error: string | null; onChange: (text: string) => void };
   onSelectTool?: (id: AtomicToolId) => void;
   rectangle: RectangleControls;
   margins: React.ReactNode;
@@ -318,7 +336,8 @@ const CropWorkspace = ({
     ? "Resize isn't available yet."
     : files.length === 0
       ? "Add PDFs to crop."
-      : !spec ? fixReason : null;
+      : !spec ? fixReason
+        : pageScope.error ? PAGES_FIX_REASON : null;
   const target: CropTarget | null = byRectangle ? (rectangle.errors.length ? null : { rect }) : marginsTarget;
 
   const onKeyDown = (event: React.KeyboardEvent) => {
@@ -432,9 +451,27 @@ const CropWorkspace = ({
               </div>
             </>
           )}
+          <div className="workspace-field">
+            <Label htmlFor="crop-pages">Pages</Label>
+            <Input
+              id="crop-pages"
+              value={pageScope.text}
+              placeholder="All pages"
+              aria-invalid={pageScope.error ? true : undefined}
+              aria-describedby={pageScope.error ? `${PAGES_ERROR_ID} ${PAGES_HELP_ID}` : PAGES_HELP_ID}
+              onChange={(event) => pageScope.onChange(event.target.value)}
+            />
+            {pageScope.error && (
+              <p id={PAGES_ERROR_ID} role="alert" className="workspace-field-error">
+                <CircleAlert aria-hidden="true" />
+                <span>{pageScope.error}</span>
+              </p>
+            )}
+            <p id={PAGES_HELP_ID} className="workspace-note">Empty means all pages. Pages past the end are ignored. A PDF with none left is skipped.</p>
+          </div>
           {destination}
           {mode === "crop" && <p className="workspace-note">Names end in -cropped. A taken name gets -1, -2.</p>}
-          {reason && <p className={`workspace-note ${reason === fixReason ? "workspace-note-error" : ""}`} data-testid="crop-run-reason">{reason}</p>}
+          {reason && <p className={`workspace-note ${reason === fixReason || reason === PAGES_FIX_REASON ? "workspace-note-error" : ""}`} data-testid="crop-run-reason">{reason}</p>}
           <Button
             variant="default"
             aria-label={runLabel}

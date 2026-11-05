@@ -871,6 +871,71 @@ mod command_tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// Each page's CropBox (if any), MediaBox and content bytes, by page number.
+    fn page_boxes_and_contents(path: &std::path::Path) -> Vec<(Option<Vec<f32>>, Vec<f32>, Vec<u8>)> {
+        let document = lopdf::Document::load(path).unwrap();
+        let floats = |value: &lopdf::Object| value.as_array().unwrap().iter().map(|number| number.as_float().unwrap()).collect::<Vec<_>>();
+        document.get_pages().into_values().map(|page_id| {
+            let page = document.get_dictionary(page_id).unwrap();
+            (page.get(b"CropBox").ok().map(floats), floats(page.get(b"MediaBox").unwrap()), document.get_page_content(page_id))
+        }).collect()
+    }
+
+    #[test]
+    fn crop_command_scopes_a_mixed_batch_to_the_typed_range_with_skipped_signed_and_failed_files_isolated() {
+        use crate::kit::contracts::{OutcomeWarning, SkipCode, WarningKind};
+        let root = sandbox("crop-scoped-batch");
+        let (lease, nda, cover, broken) = (root.join("lease.pdf"), root.join("vendor-nda.pdf"), root.join("cover.pdf"), root.join("broken.pdf"));
+        make_pdf(&lease, 5); make_pdf(&nda, 4); make_pdf(&cover, 2);
+        let mut document = lopdf::Document::load(&nda).unwrap();
+        crate::kit::pdf::tests::sign(&mut document);
+        document.save(&nda).unwrap();
+        std::fs::write(&broken, b"%PDF-1.7 not really").unwrap();
+        let inputs = vec![lease.clone(), nda.clone(), cover.clone(), broken.clone()];
+        let originals = inputs.iter().map(|input| std::fs::read(input).unwrap()).collect::<Vec<_>>();
+        let before = [&lease, &nda].map(|path| page_boxes_and_contents(path));
+
+        let outcomes = tauri::async_runtime::block_on(crop_pdf(RunEvents::silent(), crop_request(inputs.clone(), RangedPageScope::Range { ranges: "3-".into() }, location(&root, "out"))));
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), inputs);
+
+        let removed = vec![OutcomeWarning { kind: WarningKind::SignatureRemoved, message: crate::kit::pdf::SIGNATURE_REMOVED.into() }];
+        for ((outcome, before), (pages, warnings)) in outcomes.iter().zip(&before).zip([(5, vec![]), (4, removed)]) {
+            assert!(outcome.error().is_none(), "{}", outcome.error().cloned().unwrap_or_default());
+            assert_eq!(outcome.detail, "PDF saved");
+            assert_eq!(outcome.warnings, warnings);
+            let after = page_boxes_and_contents(&outcome.output_paths()[0]);
+            assert_eq!(after.len(), pages);
+            for (number, (page_after, page_before)) in after.iter().zip(before).enumerate() {
+                if number < 2 {
+                    assert_eq!(page_after, page_before, "page {} is outside 3- and must be unchanged", number + 1);
+                    assert!(page_after.0.is_none());
+                } else {
+                    assert_eq!(page_after.0.as_deref(), Some(&[100.0, 100.0, 300.0, 400.0][..]), "page {}", number + 1);
+                    assert_eq!((&page_after.1, &page_after.2), (&page_before.1, &page_before.2), "page {} keeps its MediaBox and content", number + 1);
+                }
+            }
+        }
+        assert!(!crate::kit::pdf::has_signed_signature_field(&lopdf::Document::load(&outcomes[1].output_paths()[0]).unwrap()));
+
+        match &outcomes[2].state {
+            OutcomeState::Skipped { reason } => {
+                assert_eq!(reason.code, SkipCode::RangeEmptyAfterClamping);
+                assert_eq!(reason.message, "No pages in 3- are in this PDF, which has 2 pages.");
+            }
+            state => panic!("expected cover.pdf to be skipped, got {state:?}"),
+        }
+        assert!(outcomes[2].output_paths().is_empty() && outcomes[2].warnings.is_empty());
+        assert!(outcomes[3].error().is_some() && outcomes[3].output_paths().is_empty());
+
+        let mut written = std::fs::read_dir(root.join("out")).unwrap().map(|entry| entry.unwrap().file_name().into_string().unwrap()).collect::<Vec<_>>();
+        written.sort();
+        assert_eq!(written, vec!["lease-cropped.pdf", "vendor-nda-cropped.pdf"]);
+        for (input, original) in inputs.iter().zip(originals) {
+            assert_eq!(std::fs::read(input).unwrap(), original, "original was modified: {}", input.display());
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn crop_command_rejects_malformed_ranges_for_every_file_before_writing() {
         let root = sandbox("crop-malformed-range");
