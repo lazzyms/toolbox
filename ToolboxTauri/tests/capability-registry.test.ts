@@ -30,6 +30,7 @@ test("UI capabilities are the shared native contract facts", () => {
       nativeAvailability: shared.nativeAvailability,
       outputSuffix: shared.outputSuffix,
       manyToOne: shared.manyToOne,
+      ...(shared.formatFamilies ? { formatFamilies: shared.formatFamilies } : {}),
     });
     assert.equal(
       utility.status,
@@ -63,7 +64,7 @@ test("UI capabilities are the shared native contract facts", () => {
 
 test("every tool declares one output suffix and many-to-one tools take ordered inputs", () => {
   for (const capability of SharedCapabilityRegistry) {
-    assert.match(capability.outputSuffix, /^-[a-z0-9]+(-[a-z0-9]+)*$/, capability.command);
+    assert.match(capability.outputSuffix, capability.formatFamilies ? /^$/ : /^-[a-z0-9]+(-[a-z0-9]+)*$/, capability.command);
     assert.equal(
       capability.manyToOne,
       capability.inputCardinality === "ordered",
@@ -82,6 +83,7 @@ test("every tool declares one output suffix and many-to-one tools take ordered i
   assert.equal(suffixes.get("merge_pdfs"), "-merged");
   assert.equal(suffixes.get("protect_files"), "-protected");
   assert.equal(suffixes.get("pdf_to_images"), "-images");
+  assert.equal(suffixes.get("convert_to_pdf"), "");
 });
 
 test("every many-to-one tool opens the save step and sends the chosen path", () => {
@@ -183,4 +185,34 @@ test("shared capability parsing rejects drift-prone shapes", () => {
     () => parseCapabilityRegistry([{ ...valid, manyToOne: "yes" }]),
     /invalid many-to-one flag/,
   );
+});
+
+const familySamples = JSON.parse(
+  readFileSync(new URL("../shared/capability-family-samples.json", import.meta.url), "utf8"),
+);
+
+test("format families derive accepted extensions and per-family flags like the native parser", () => {
+  const { row, acceptedExtensions, families } = familySamples.valid;
+  const [capability] = parseCapabilityRegistry([row]);
+
+  assert.deepEqual(capability.acceptedExtensions, acceptedExtensions);
+  assert.deepEqual(
+    capability.formatFamilies?.map(({ id, nativeAvailability, basicFidelity }) => ({ id, nativeAvailability, basicFidelity })),
+    families,
+  );
+  assert.deepEqual(SharedCapabilityRegistry.filter((shared) => shared.formatFamilies).map(({ command }) => command), ["convert_to_pdf"]);
+  const convert = SharedCapabilityRegistry.find(({ command }) => command === "convert_to_pdf")!;
+  assert.deepEqual(convert.acceptedExtensions, convert.formatFamilies!.flatMap(({ extensions }) => extensions));
+  assert.deepEqual(
+    convert.formatFamilies!.filter(({ nativeAvailability }) => nativeAvailability === "available").map(({ id }) => id),
+    ["plain-text", "pdf", "word", "rich-text", "markdown", "tables"],
+  );
+});
+
+test("format families reject shared extensions, empty families and mixed extension shapes", () => {
+  const { formatFamilies: _families, ...base } = familySamples.valid.row;
+  for (const [name, shape] of Object.entries(familySamples.invalid)) {
+    assert.throws(() => parseCapabilityRegistry([{ ...base, ...(shape as object) }]), Error, `${name} must be rejected`);
+  }
+  assert.throws(() => parseCapabilityRegistry([base]), /either accepted extensions or format families/);
 });
