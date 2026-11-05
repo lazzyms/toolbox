@@ -866,5 +866,96 @@
     "state": "retryOpen-true",
     "query": "retryOpen=true",
     "screen": "SecResults--retryOpen-true.jpg"
+  },
+  {
+    "board": "CropResize.dc.html",
+    "title": "Crop and Resize PDF: batch tool, ten states",
+    "state": "default",
+    "query": "",
+    "screen": "CropResize--default.jpg"
+  },
+  {
+    "board": "CropResize.dc.html",
+    "title": "Crop and Resize PDF: batch tool, ten states",
+    "state": "state-empty",
+    "query": "state=Empty",
+    "screen": "CropResize--state-empty.jpg"
+  },
+  {
+    "board": "CropResize.dc.html",
+    "title": "Crop and Resize PDF: batch tool, ten states",
+    "state": "state-empty-resize",
+    "query": "state=Empty%2C%20resize",
+    "screen": "CropResize--state-empty-resize.jpg"
+  },
+  {
+    "board": "CropResize.dc.html",
+    "title": "Crop and Resize PDF: batch tool, ten states",
+    "state": "state-crop-adjusting",
+    "query": "state=Crop%2C%20adjusting",
+    "screen": "CropResize--state-crop-adjusting.jpg"
+  },
+  {
+    "board": "CropResize.dc.html",
+    "title": "Crop and Resize PDF: batch tool, ten states",
+    "state": "state-crop-margins",
+    "query": "state=Crop%2C%20margins",
+    "screen": "CropResize--state-crop-margins.jpg"
+  },
+  {
+    "board": "CropResize.dc.html",
+    "title": "Crop and Resize PDF: batch tool, ten states",
+    "state": "state-crop-same-margins",
+    "query": "state=Crop%2C%20same%20margins",
+    "screen": "CropResize--state-crop-same-margins.jpg"
+  },
+  {
+    "board": "CropResize.dc.html",
+    "title": "Crop and Resize PDF: batch tool, ten states",
+    "state": "state-crop-invalid-margins",
+    "query": "state=Crop%2C%20invalid%20margins",
+    "screen": "CropResize--state-crop-invalid-margins.jpg"
+  },
+  {
+    "board": "CropResize.dc.html",
+    "title": "Crop and Resize PDF: batch tool, ten states",
+    "state": "state-resize-preset",
+    "query": "state=Resize%2C%20preset",
+    "screen": "CropResize--state-resize-preset.jpg"
+  },
+  {
+    "board": "CropResize.dc.html",
+    "title": "Crop and Resize PDF: batch tool, ten states",
+    "state": "state-resize-actual-size",
+    "query": "state=Resize%2C%20actual%20size",
+    "screen": "CropResize--state-resize-actual-size.jpg"
+  },
+  {
+    "board": "CropResize.dc.html",
+    "title": "Crop and Resize PDF: batch tool, ten states",
+    "state": "state-resize-invalid-size",
+    "query": "state=Resize%2C%20invalid%20size",
+    "screen": "CropResize--state-resize-invalid-size.jpg"
+  },
+  {
+    "board": "CropResizeResults.dc.html",
+    "title": "Crop and Resize PDF: running and results",
+    "state": "default",
+    "query": "",
+    "screen": "CropResizeResults--default.jpg"
+  },
+  {
+    "board": "CropResizeResults.dc.html",
+    "title": "Crop and Resize PDF: running and results",
+    "state": "state-resize-results",
+    "query": "state=Resize%20results",
+    "screen": "CropResizeResults--state-resize-results.jpg"
+  },
+  {
+    "board": "CropResizeResults.dc.html",
+    "title": "Crop and Resize PDF: running and results",
+    "state": "state-running",
+    "query": "state=Running",
+    "screen": "CropResizeResults--state-running.jpg"
   }
 ]

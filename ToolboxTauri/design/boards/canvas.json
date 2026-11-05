@@ -369,6 +369,22 @@
 "h": 800,
 "title": "Results: every lock and unlock outcome",
 "expand": "fill"
+},
+"CropResize.dc.html": {
+"x": 10440,
+"y": 4960,
+"w": 1280,
+"h": 800,
+"title": "Crop and Resize PDF: batch tool, ten states",
+"expand": "fill"
+},
+"CropResizeResults.dc.html": {
+"x": 11800,
+"y": 4960,
+"w": 1280,
+"h": 800,
+"title": "Crop and Resize PDF: running and results",
+"expand": "fill"
 }
 },
 "order": [
@@ -392,6 +408,8 @@
 "PdfExport.dc.html",
 "PdfNarrow.dc.html",
 "PdfCrop.dc.html",
+"CropResize.dc.html",
+"CropResizeResults.dc.html",
 "PdfDetails.dc.html",
 "Split.dc.html",
 "Merge.dc.html",
@@ -447,7 +465,7 @@
 "y": 3540,
 "text": "PDF Editor: one document, like a viewer",
 "kind": "title1",
-"maxW": 6800
+"maxW": 16400
 },
 "editor": {
 "x": 6800,
@@ -632,6 +650,70 @@
 "maxH": 520,
 "fill": "green",
 "text": "Screen-reader announcements\n\nOne polite live region sits on the batch strip:\n- On start: 'Protecting 24 files.'\n- During the run: progress every 5 files or 10 seconds, whichever is later, such as 'Protecting, 10 of 24 done.'\n- On finish: 'Done. 21 protected, 2 skipped, 1 failed.' Focus stays where it was.\n\nEach row is a list item whose accessible name reads as one sentence: file, state, reason, warnings, then output name. Row actions are real buttons, such as 'Open annual-report-protected.pdf'.\n\nThe cancel dialog traps focus and returns it to Cancel batch."
+},
+"cr1": {
+"x": 13160,
+"y": 4960,
+"w": 360,
+"maxH": 800,
+"fill": "blue",
+"text": "Crop and Resize PDF: one tool, two modes\n\nCrop and Resize PDF is a batch tool in the PDF Editor rail. It works on many PDFs at once and saves new files. The PdfCrop board is different: it crops pages inside the one open document.\n\nThe header has a 'Crop pages / Resize pages' switch. It is a radio group, so the arrow keys move between the modes. Switching keeps the files, the Pages range and the Save to choice. Only the mode's own fields change.\n\nThe options panel shows only the active mode:\n- Crop: Crop by (Rectangle or Margins), then the rectangle or margin fields.\n- Resize: Page size, Orientation, Placement.\n\nPages and Save to come after the mode's fields, in the same place in both modes. The Run button names the mode, such as 'Crop 8 PDFs' or 'Resize 8 PDFs'."
+},
+"cr2": {
+"x": 13560,
+"y": 4960,
+"w": 360,
+"maxH": 800,
+"fill": "blue",
+"text": "Drawing the crop and showing margins\n\nRectangle: drag on the preview page to draw. Eight handles resize it, and dragging inside moves it. During a drag a chip shows the kept size, such as '168 × 241 mm'. The Left, Top, Width and Height fields update live, and typing in them moves the rectangle. Arrow keys move it 1 mm. Shift+Arrow resizes it. Undo and Reset crop sit in the preview header.\n\nThe area that will be hidden is shaded. The kept area has a solid edge.\n\nMargins: four edge handles, one per side. Each margin shows its value in a small label on the page, such as '12 mm'. The fields are Top, Right, Bottom and Left. 'Same on all sides' replaces them with one field. The Unit menu offers mm, in and pt.\n\nA negative or empty margin, or margins that leave no area, mark the field as invalid. Run is turned off with 'Fix the margins to crop.'"
+},
+"cr3": {
+"x": 13960,
+"y": 4960,
+"w": 360,
+"maxH": 800,
+"fill": "blue",
+"text": "One rectangle on mixed page sizes\n\nThe rectangle is stored relative to the page, as fractions of its width and height. So it lands in the same spot on any size or orientation. The preview shows it on the selected page. Under 'On other page sizes', small copies show it on a Letter page, a landscape page and the smallest page in the batch, with the size each one keeps.\n\nMargins are absolute lengths, so a small page loses more of its area. The small copies show that. A page with no area left is marked in red: 'No area left. This PDF will fail.' The file row says so before the run, and the footer counts it: 'receipts-q3.pdf will fail on page 3.'"
+},
+"cr4": {
+"x": 14360,
+"y": 4960,
+"w": 360,
+"maxH": 800,
+"fill": "blue",
+"text": "Resize preview on mixed sizes\n\nThe preview shows the chosen page in its new page size. The old page is drawn inside it, and the new page edge is dashed. The caption names both sizes and the scale, such as 'Letter, 216 × 279 mm on A4, 210 × 297 mm. Scaled to 97%.'\n\nSmall copies show other sizes in the batch: a landscape page that stays landscape with 'Match page', and a small receipt scaled up to 248%. A page that already has the target size says 'Already A4. Unchanged.' A PDF whose pages in range all match is skipped.\n\nScale to fit is the default, and nothing is cut off. With 'Actual size, centered', the parts outside the new page are hatched in amber. A warning gives the count: 'Cuts off content on 43 pages.' The footer repeats it.\n\nCustom size accepts 25.4 to 5,080 mm (72 to 14,400 pt). Outside that, the field is invalid and Run is turned off."
+},
+"cr5": {
+"x": 14760,
+"y": 4960,
+"w": 360,
+"maxH": 800,
+"fill": "purple",
+"text": "Crop hides, it does not remove\n\nA crop only hides the edges. The content stays in the file and any PDF app can show it again. The Crop options say so in a note under the fields: 'Crop hides the rest of the page. It stays in the file and can be shown again.'\n\nThe note ends with a link, 'Remove content with Redact PDF', which opens Redact with the same files. We show the note every time, not as a dialog, so it never blocks a run.\n\nResize changes the page box and scales the page content. Links, comments and form fields move with the content. Text stays sharp, because nothing is rasterized."
+},
+"cr6": {
+"x": 15160,
+"y": 4960,
+"w": 360,
+"maxH": 800,
+"fill": "green",
+"text": "Pages, page sizes and destination\n\nPages: one range for every PDF, such as '3-'. Empty means all pages. Pages past the end are ignored. The 'In range' column shows the count per file, such as '12 of 14'. A PDF with no pages in range is skipped.\n\nPage sizes: the file list has a Page size column. It shows the name, such as A4 or Letter, or '2 sizes' when pages differ. The 'Before you run' column notes the outliers, such as 'Page 4 is landscape' or 'Page 3 is 58 × 120 mm'.\n\nDestination: Save to defaults to 'Next to each original'. Names end in -cropped or -resized. A taken name gets -1, -2, and nothing is replaced. 'Change for this run' picks a folder for this run only, shown with a 'This run only' tag. Your default returns when you leave the tool."
+},
+"cr7": {
+"x": 15560,
+"y": 4960,
+"w": 360,
+"maxH": 800,
+"fill": "green",
+"text": "Skipped, failed and signed files\n\nBefore the run, the 'Before you run' column states the outcome per file:\n- Skipped: no pages in range, or (Resize) already the target size.\n- Won't run: password-protected, or over the 1,000-page limit.\n- Will fail: margins leave no area on a page.\n- Signed, in amber: 'The signature will be removed.'\n\nThe footer counts them, such as 'Crops 44 pages in 5 PDFs. 1 will be skipped and 2 won't run.' Run is still on, because each file is handled on its own.\n\nAfter the run, every row keeps its reason. Failures that another tool fixes end with one button that names it, such as 'Open Remove Password' or 'Open Split PDF'. A signed file is saved, with a warning row and a 'Not carried over' note in the summary panel."
+},
+"cr8": {
+"x": 15960,
+"y": 4960,
+"w": 360,
+"maxH": 800,
+"fill": "blue",
+"text": "Scope and assumptions\n\nTwo boards: CropResize (ten states) and CropResizeResults (Crop results, Resize results, Running). Theme and platform are props on both.\n\nThe tool name is 'Crop and Resize PDF', because Toolbox UI uses 'and', not '&'. The 1,000-page limit and the 25.4 to 5,080 mm size bounds are placeholders. Engineering confirms them.\n\nThe batch rules (per-file errors, no overwrites, originals unchanged, the results list and Cancel batch) follow the Running, Results and Split boards."
 }
 },
 "designSystems": []

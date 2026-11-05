@@ -1046,7 +1046,7 @@ const chooseFixture = async (page: Page, selectedPath: string) => {
 
 test("crop is applied visually and exported as part of the scene", async ({ page }) => {
     await page.goto("/");
-    await openFromHome(page, "Crop PDF");
+    await openFromHome(page, "Edit PDF");
     await chooseFixture(page, pdfFixturePath);
     await drawSceneMark(page, "Crop");
     await page.getByRole("button", { name: "Export PDF", exact: true }).click();
@@ -1976,7 +1976,7 @@ for (const batch of [
 
 test("single-input replacement keeps the source and edit state after cancellation or the same path", async ({ page }) => {
     await page.goto("/");
-    await openFromHome(page, "Crop PDF");
+    await openFromHome(page, "Edit PDF");
     await chooseFixture(page, pdfFixturePath);
     await drawSceneMark(page, "Crop");
     await expect(page.getByRole("button", { name: "Reset edits" })).toBeEnabled();
@@ -2090,7 +2090,7 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
             await page.getByRole("button", { name: "Page 1", exact: true }).click();
             await page.getByRole("button", { name: "Delete selected pages", exact: true }).click();
         } else if (utility.id === "pdf-watermark") await page.getByRole("button", { name: "Add fixed watermark", exact: true }).click();
-        else await drawSceneMark(page, utility.id === "pdf-sign" ? "Signature" : utility.id === "pdf-watermark" ? "Watermark" : utility.id === "pdf-crop" ? "Crop" : "Text");
+        else await drawSceneMark(page, utility.id === "pdf-sign" ? "Signature" : utility.id === "pdf-watermark" ? "Watermark" : "Text");
     }
     if (usesImageEditPlan) {
         if (utility.id === "heic-convert") await page.getByLabel("Target format").selectOption("jpg");
@@ -2672,7 +2672,7 @@ test("PDF Editor rail lists More tools after a label and keeps files across swit
     await page.goto("/");
     await openFromHome(page, "Rotate PDFs");
     const rail = page.getByRole("toolbar", { name: "PDF Editor tools" });
-    await expect(rail.getByRole("button")).toHaveText(["Edit PDF", "Organize PDF", "Merge PDF", "Split PDF", "Crop PDF", "Add PDF Page Numbers", "Redact PDF", "Rotate PDFs", "Repair PDF", "Compare PDFs", "Extract PDF Pages"].map((title) => new RegExp(`^${title}`)));
+    await expect(rail.getByRole("button")).toHaveText(["Edit PDF", "Organize PDF", "Merge PDF", "Split PDF", "Crop and Resize PDF", "Add PDF Page Numbers", "Redact PDF", "Rotate PDFs", "Repair PDF", "Compare PDFs", "Extract PDF Pages"].map((title) => new RegExp(`^${title}`)));
     await expect(rail.locator(".workspace-command-group")).toHaveText("More");
     await expect(rail.locator(".workspace-command-group + button")).toHaveAccessibleName("Rotate PDFs");
     await expect(rail.getByRole("button", { name: "Rotate PDFs" })).toHaveAttribute("aria-pressed", "true");
@@ -2733,7 +2733,7 @@ test("search and favorites list folded tools by their own names and open them", 
     await page.goto("/");
     const search = page.getByRole("textbox", { name: "Search tools" });
     await expect(page.getByRole("button", { name: "Open Watermark PDF", exact: true })).toHaveCount(0);
-    for (const [title, id] of [["Merge PDF", "pdf-merge"], ["Split PDF", "pdf-split"], ["Crop PDF", "pdf-crop"], ["Watermark PDF", "pdf-watermark"], ["Rotate and Flip Images", "rotate"]] as const) {
+    for (const [title, id] of [["Merge PDF", "pdf-merge"], ["Split PDF", "pdf-split"], ["Crop and Resize PDF", "pdf-crop"], ["Watermark PDF", "pdf-watermark"], ["Rotate and Flip Images", "rotate"]] as const) {
         await search.fill(title);
         await expect(page.locator(`[data-command-result="${id}"]`)).toHaveAccessibleName(`Open ${title}`);
     }
