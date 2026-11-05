@@ -2,6 +2,16 @@ pub mod metadata;
 pub mod scene;
 pub mod editor;
 pub mod remaining;
+pub mod unicode_font;
+pub mod font_resolver;
+pub mod layout;
+pub mod markdown;
+pub mod rtf;
+pub mod wordprocessing;
+pub mod docx;
+pub mod odt;
+pub mod delimited;
+pub mod convert;
 
 use std::collections::HashSet;
 use std::fs;

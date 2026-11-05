@@ -125,9 +125,8 @@ pub fn resolve_bundled_or_override(name: &str, bundled_root: &Path, override_var
         let manifest: ResourceManifest = serde_json::from_slice(&fs::read(&manifest_path).map_err(|e| format!("Cannot read resource manifest: {e}"))?)
             .map_err(|e| format!("Invalid resource manifest: {e}"))?;
         let spec = manifest.resources.get(name).ok_or_else(|| format!("Resource {name} is missing from the bundled manifest."))?;
-        if manifest.version != 1 || (manifest.architecture != "all" && manifest.architecture != std::env::consts::ARCH) { return Err("Bundled resource manifest does not match this application.".to_string()); }
-        let path = bundled_root.join(&spec.path);
-        verify(&path, spec)?;
+        ensure_manifest_matches_application(manifest.version, &manifest.architecture)?;
+        let path = verify_bundled(bundled_root, spec)?;
         return Ok(Some(ResolvedResource { path, source: ResourceSource::Bundled }));
     }
     if let Ok(path) = std::env::var(override_var) {
@@ -136,6 +135,18 @@ pub fn resolve_bundled_or_override(name: &str, bundled_root: &Path, override_var
         return Err(format!("Development resource override {override_var} does not point to a file."));
     }
     Ok(None)
+}
+
+pub(crate) fn ensure_manifest_matches_application(version: u32, architecture: &str) -> Result<(), String> {
+    if version != 1 || (architecture != "all" && architecture != std::env::consts::ARCH) { return Err("Bundled resource manifest does not match this application.".to_string()); }
+    Ok(())
+}
+
+/// Checks a bundled file against its manifest entry (version, license, size limit and SHA-256) and returns its path.
+pub(crate) fn verify_bundled(bundled_root: &Path, spec: &ResourceSpec) -> Result<PathBuf, String> {
+    let path = bundled_root.join(&spec.path);
+    verify(&path, spec)?;
+    Ok(path)
 }
 
 fn verify(path: &Path, spec: &ResourceSpec) -> Result<(), String> {
