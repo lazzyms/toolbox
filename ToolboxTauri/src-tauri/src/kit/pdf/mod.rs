@@ -4,6 +4,10 @@ pub mod editor;
 pub mod remaining;
 mod embedded_image;
 mod inline_image;
+#[cfg(test)]
+pub(crate) mod jbig2_fixtures;
+#[cfg(test)]
+mod jbig2_spike;
 
 use std::collections::HashSet;
 use std::fs;
