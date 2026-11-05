@@ -9,8 +9,10 @@ import {
 import {
   ToolWorkspaceRegistry,
   UtilityRegistry,
+  isPdfSceneTool,
   toolsForWorkspace,
   workspaceEntries,
+  workspaceForTool,
 } from "../src/registry/index.ts";
 
 test("UI capabilities are the shared native contract facts", () => {
@@ -85,11 +87,13 @@ test("every tool declares one output suffix and many-to-one tools take ordered i
 });
 
 test("every many-to-one tool opens the save step and sends the chosen path", () => {
-  const viewSources = readdirSync(new URL("../src/views/", import.meta.url))
-    .filter((name) => name.endsWith(".tsx"))
-    .map((name) => readFileSync(new URL(`../src/views/${name}`, import.meta.url), "utf8"));
+  const requestSources = ["views", "features"].flatMap((folder) =>
+    readdirSync(new URL(`../src/${folder}/`, import.meta.url), { recursive: true, encoding: "utf8" })
+      .filter((name) => /\.tsx?$/.test(name))
+      .map((name) => readFileSync(new URL(`../src/${folder}/${name}`, import.meta.url), "utf8")),
+  );
   const requestFor = (command: string) => {
-    for (const source of viewSources) {
+    for (const source of requestSources) {
       const start = source.indexOf(`invoke<ToolResult>("${command}"`);
       if (start === -1) continue;
       const open = source.indexOf("request: {", start) + "request: ".length;
@@ -153,6 +157,16 @@ test("workspace entries group editor tools into one entry and list More tools la
   assert.equal(editEntry.tools[0].id, "pdf-watermark", "a hidden tool leaves the group led by the next one");
 });
 
+test("Crop and Resize PDF is a PDF Editor batch tool that takes many PDFs", () => {
+  const crop = UtilityRegistry.find(({ id }) => id === "pdf-crop")!;
+  assert.equal(crop.title, "Crop and Resize PDF");
+  assert.equal(crop.command, "crop_pdf");
+  assert.equal(workspaceForTool("pdf-crop")?.id, "pdf-editor");
+  assert.equal(isPdfSceneTool("pdf-crop"), false, "the rail entry opens the batch view, not the page editor");
+  assert.equal(crop.capability.inputCardinality, "multiple");
+  assert.deepEqual(crop.capability.acceptedExtensions, [".pdf"]);
+});
+
 test("shared capability parsing rejects drift-prone shapes", () => {
   const valid = SharedCapabilityRegistry[0];
   assert.throws(
@@ -183,4 +197,28 @@ test("shared capability parsing rejects drift-prone shapes", () => {
     () => parseCapabilityRegistry([{ ...valid, manyToOne: "yes" }]),
     /invalid many-to-one flag/,
   );
+});
+
+const familySamples = JSON.parse(
+  readFileSync(new URL("../shared/capability-family-samples.json", import.meta.url), "utf8"),
+);
+
+test("format families derive accepted extensions and per-family flags like the native parser", () => {
+  const { row, acceptedExtensions, families } = familySamples.valid;
+  const [capability] = parseCapabilityRegistry([row]);
+
+  assert.deepEqual(capability.acceptedExtensions, acceptedExtensions);
+  assert.deepEqual(
+    capability.formatFamilies?.map(({ id, nativeAvailability, basicFidelity }) => ({ id, nativeAvailability, basicFidelity })),
+    families,
+  );
+  assert.ok(SharedCapabilityRegistry.every((shared) => !("formatFamilies" in shared)));
+});
+
+test("format families reject shared extensions, empty families and mixed extension shapes", () => {
+  const { formatFamilies: _families, ...base } = familySamples.valid.row;
+  for (const [name, shape] of Object.entries(familySamples.invalid)) {
+    assert.throws(() => parseCapabilityRegistry([{ ...base, ...(shape as object) }]), Error, `${name} must be rejected`);
+  }
+  assert.throws(() => parseCapabilityRegistry([base]), /either accepted extensions or format families/);
 });
