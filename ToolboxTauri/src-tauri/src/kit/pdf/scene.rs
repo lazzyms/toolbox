@@ -65,6 +65,13 @@ pub struct ScenePreview { pub data_url: String, pub width: u32, pub height: u32 
 #[derive(Serialize)]
 #[serde(rename_all="camelCase")]
 pub struct IndexedScenePreview { pub page_index: usize, pub preview: ScenePreview }
+#[derive(Deserialize)]
+#[serde(rename_all="camelCase")]
+pub struct SourceThumbnailsRequest { pub path: PathBuf, pub page_indices: Vec<usize> }
+/// One requested source page: its thumbnail, or why it has none. A failed page never fails the others.
+#[derive(Serialize)]
+#[serde(rename_all="camelCase")]
+pub struct SourceThumbnail { pub page_index: usize, pub thumbnail: Option<ScenePreview>, pub error: Option<String> }
 
 fn err(e: impl std::fmt::Display) -> String { e.to_string() }
 fn bounds(doc: &Document, v: &Object) -> Result<[f32;4], String> {
@@ -784,12 +791,16 @@ fn extract_text_runs(path: &Path, page_number: usize, width: f32, height: f32, d
     Some(runs)
 }
 fn render(path:&Path,index:usize,renderer:&Path,temp:&TempDir)->Result<ScenePreview,String> {
-    let prefix=temp.0.join("render");
+    render_at(path,index,renderer,temp,super::PDF_PREVIEW_MAX_DIMENSION,Instant::now() + super::PDF_PREVIEW_TIMEOUT)
+}
+fn render_at(path:&Path,index:usize,renderer:&Path,temp:&TempDir,max_dimension:u32,deadline:Instant)->Result<ScenePreview,String> {
+    // A per-page name, so a page whose helper writes nothing can never pick up an earlier page's image.
+    let prefix=temp.0.join(format!("render-{index}"));
     let output=super::run_bounded_helper({
         let mut command = Command::new(renderer);
-        command.args(["-png","-singlefile","-scale-to"]).arg(super::PDF_PREVIEW_MAX_DIMENSION.to_string()).arg("-f").arg((index+1).to_string()).arg("-l").arg((index+1).to_string()).arg(path).arg(&prefix);
+        command.args(["-png","-singlefile","-scale-to"]).arg(max_dimension.to_string()).arg("-f").arg((index+1).to_string()).arg("-l").arg((index+1).to_string()).arg(path).arg(&prefix);
         command
-    }, Instant::now() + super::PDF_PREVIEW_TIMEOUT, 64 * 1024, super::PDF_TEXT_MAX_ERROR_BYTES, "PDF preview renderer timed out.").map_err(err)?;
+    }, deadline, 64 * 1024, super::PDF_TEXT_MAX_ERROR_BYTES, "PDF preview renderer timed out.").map_err(err)?;
     if !output.status.success() { return Err("pdftoppm could not render this PDF".into()); }
     let (bytes,width,height)=super::read_preview_png(&prefix.with_extension("png")).map_err(err)?;
     Ok(ScenePreview{data_url:format!("data:image/png;base64,{}",base64::engine::general_purpose::STANDARD.encode(bytes)),width,height})
@@ -821,12 +832,55 @@ pub fn preview_pages(request:&PreviewPagesRequest)->Result<Vec<IndexedScenePrevi
         render(&path,page_index,&renderer,&temp).map(|preview| IndexedScenePreview{page_index,preview})
     }).collect()
 }
+/// The latest a helper run may finish when it renders `pages` pages of one file: the per-file budget plus the per-page budget for each page.
+fn thumbnail_deadline(start:Instant,pages:u32)->Instant {
+    start + super::PDF_THUMBNAIL_FILE_TIMEOUT + super::PDF_THUMBNAIL_PAGE_TIMEOUT * pages
+}
+fn validate_thumbnail_page_indices(page_indices:&[usize], page_count:usize)->Result<(),String> {
+    if !(1..=super::PDF_THUMBNAIL_MAX_BATCH).contains(&page_indices.len()) { return Err(format!("Thumbnail requests must include 1–{} page indices", super::PDF_THUMBNAIL_MAX_BATCH)); }
+    let mut seen=HashSet::with_capacity(page_indices.len());
+    for &index in page_indices {
+        if index>=page_count { return Err("Thumbnail page outside document".into()); }
+        if !seen.insert(index) { return Err("Thumbnail page indices must be unique".into()); }
+    }
+    Ok(())
+}
+/// Low-resolution thumbnails of the original pages, not the edited scene, for the Organize grid.
+/// Each page renders in its own helper run under its own deadline, so one bad page only loses its own thumbnail.
+pub fn source_thumbnails(request:&SourceThumbnailsRequest)->Result<Vec<SourceThumbnail>,ToolError> {
+    let page_count=Document::load_metadata(&request.path).map_err(|_| ToolError::invalid_input(UNREADABLE_PDF_MESSAGE))?.page_count as usize;
+    validate_thumbnail_page_indices(&request.page_indices,page_count).map_err(ToolError::invalid_input)?;
+    let renderer=renderer().map_err(ToolError::unavailable)?;
+    let temp=TempDir::new().map_err(ToolError::processing)?;
+    Ok(request.page_indices.iter().copied().map(|page_index| {
+        match render_at(&request.path,page_index,&renderer,&temp,super::PDF_THUMBNAIL_MAX_DIMENSION,thumbnail_deadline(Instant::now(),1)) {
+            Ok(thumbnail)=>SourceThumbnail{page_index,thumbnail:Some(thumbnail),error:None},
+            Err(error)=>SourceThumbnail{page_index,thumbnail:None,error:Some(error)},
+        }
+    }).collect())
+}
 pub const LOCKED_PDF_MESSAGE:&str="This PDF is password-protected. Remove its password with File Security first, then open the unlocked copy.";
 pub const UNREADABLE_PDF_MESSAGE:&str="Toolbox can't read this file. It may be damaged, or it isn't a PDF that Toolbox supports. Nothing was changed.";
 
+/// Refuses a file over the recorded scene-export limits before any page is read, so the editors never show
+/// a partial grid for a document they could not export. A page-count refusal says how many pages it has and points to Split.
+fn check_scene_limits(path:&Path)->Result<(),ToolError> {
+    let limits=crate::kit::common::limits::recorded("export_pdf_scene").expect("scene export records its limits");
+    let error=match limits.check(path) { Ok(())=>return Ok(()), Err(error)=>error };
+    if !matches!(error.kind,crate::kit::contracts::ErrorKind::LimitExceeded{limit:crate::kit::contracts::LimitKind::PageCount}) { return Err(error); }
+    let Some(max_pages)=limits.max_pages else { return Err(error) };
+    let label=crate::kit::common::limits::count_label;
+    let pages=Document::load_metadata(path).map(|metadata| label(u64::from(metadata.page_count))).unwrap_or_else(|_| format!("more than {}", label(u64::from(max_pages))));
+    Err(ToolError::limit_exceeded(crate::kit::contracts::LimitKind::PageCount,
+        format!("It has {pages} pages. Toolbox works with up to {} pages in one PDF. Use Split to make smaller parts, then open each one.", label(u64::from(max_pages))))
+        .with_pointer(crate::kit::contracts::OutcomePointer::Tool{tool_id:"pdf-split".into()}))
+}
+
 /// Reads page geometry for the scene editors. Password-protected and unreadable files come back as typed
-/// invalid-input errors so the UI can explain them (and point locked files to File Security).
+/// invalid-input errors so the UI can explain them (and point locked files to File Security). Files over the
+/// recorded limits come back as LimitExceeded before the document is loaded.
 pub fn inspect(path:&Path)->Result<PdfDocumentMetadata,ToolError> {
+    check_scene_limits(path)?;
     let locked=|| ToolError::invalid_input(LOCKED_PDF_MESSAGE).with_pointer(crate::kit::contracts::OutcomePointer::Tool{tool_id:"lock-unlock".into()});
     fn unreadable(_:impl std::fmt::Display)->ToolError { ToolError::invalid_input(UNREADABLE_PDF_MESSAGE) }
     let doc=match Document::load(path) {
@@ -1764,5 +1818,130 @@ mod tests {
         assert!(result.error().is_some_and(|error| error.message.contains("tagged PDF")), "{result:?}");
         assert!(result.output_paths().is_empty());
         assert!(!input.with_file_name("tagged-overlay-edited-1.pdf").exists());
+    }
+
+    fn many_page_fixture(path: &Path, pages: usize) {
+        let mut d = Document::with_version("1.7");
+        let root = d.new_object_id();
+        let content = d.add_object(Stream::new(dictionary!{}, b"q 0 0 1 rg 40 60 50 70 re f Q".to_vec()));
+        let kids = (0..pages).map(|_| Object::Reference(d.add_object(dictionary! {"Type"=>"Page", "Parent"=>root, "MediaBox"=>array(&[0.,0.,612.,792.]), "Contents"=>content}))).collect::<Vec<_>>();
+        d.objects.insert(root, Object::Dictionary(dictionary! {"Type"=>"Pages", "Kids"=>kids, "Count"=>pages as i64}));
+        let catalog = d.add_object(dictionary! {"Type"=>"Catalog","Pages"=>root});
+        d.trailer.set("Root",catalog);
+        d.save(path).unwrap();
+    }
+
+    fn with_renderer_override<T>(renderer: &Path, run: impl FnOnce() -> T) -> T {
+        let previous = std::env::var_os("TOOLBOX_PDFTOPPM_PATH");
+        std::env::set_var("TOOLBOX_PDFTOPPM_PATH", renderer);
+        let result = run();
+        match previous {
+            Some(value) => std::env::set_var("TOOLBOX_PDFTOPPM_PATH", value),
+            None => std::env::remove_var("TOOLBOX_PDFTOPPM_PATH"),
+        }
+        result
+    }
+
+    #[test]
+    fn source_thumbnail_deadlines_are_recorded_per_file_plus_per_page() {
+        assert_eq!(super::super::PDF_THUMBNAIL_MAX_DIMENSION, 320);
+        assert_eq!(super::super::PDF_THUMBNAIL_MAX_BATCH, 12);
+        assert_eq!(super::super::PDF_THUMBNAIL_FILE_TIMEOUT, std::time::Duration::from_secs(5));
+        assert_eq!(super::super::PDF_THUMBNAIL_PAGE_TIMEOUT, std::time::Duration::from_secs(3));
+        let start = Instant::now();
+        assert_eq!(thumbnail_deadline(start, 1) - start, std::time::Duration::from_secs(8));
+        assert_eq!(thumbnail_deadline(start, 4) - start, std::time::Duration::from_secs(17));
+    }
+
+    #[test]
+    fn source_thumbnails_reject_empty_duplicate_out_of_range_and_oversized_sets() {
+        let temp = TempDir::new().unwrap();
+        let input = temp.0.join("source.pdf");
+        many_page_fixture(&input, 20);
+        let cases = [
+            (vec![], "Thumbnail requests must include 1–12 page indices"),
+            (vec![3, 3], "Thumbnail page indices must be unique"),
+            (vec![20], "Thumbnail page outside document"),
+            ((0..13).collect(), "Thumbnail requests must include 1–12 page indices"),
+        ];
+        for (page_indices, message) in cases {
+            let error = source_thumbnails(&SourceThumbnailsRequest { path: input.clone(), page_indices }).err().expect("request should be rejected");
+            assert!(matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput), "kind: {:?}", error.kind);
+            assert_eq!(error.message, message);
+        }
+        let missing = source_thumbnails(&SourceThumbnailsRequest { path: temp.0.join("missing.pdf"), page_indices: vec![0] }).err().unwrap();
+        assert_eq!(missing.message, UNREADABLE_PDF_MESSAGE);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn source_thumbnails_isolate_a_failing_page_and_never_reuse_another_pages_image() {
+        use std::os::unix::fs::PermissionsExt;
+        let _guard = crate::kit::lock_process_env();
+        let temp = TempDir::new().unwrap();
+        let input = temp.0.join("source.pdf");
+        many_page_fixture(&input, 5);
+        let png = temp.0.join("page.png");
+        image::RgbImage::from_pixel(232, 300, image::Rgb([200, 200, 255])).save(&png).unwrap();
+        // pdftoppm -png -singlefile -scale-to N -f P -l P input prefix: page 2 fails, page 4 "succeeds" without writing an image.
+        let fake = temp.0.join("pdftoppm");
+        fs::write(&fake, format!("#!/bin/sh\ncase \"$6\" in 2) echo broken >&2; exit 1;; 4) exit 0;; esac\nexec cp '{}' \"${{10}}.png\"\n", png.display())).unwrap();
+        fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+        let before = fs::read(&input).unwrap();
+        let results = with_renderer_override(&fake, || source_thumbnails(&SourceThumbnailsRequest { path: input.clone(), page_indices: vec![0, 1, 2, 3] })).unwrap();
+        assert_eq!(results.iter().map(|result| result.page_index).collect::<Vec<_>>(), vec![0, 1, 2, 3]);
+        for index in [0, 2] {
+            let thumbnail = results[index].thumbnail.as_ref().expect("healthy page should have a thumbnail");
+            assert!(thumbnail.data_url.starts_with("data:image/png;base64,"));
+            assert_eq!((thumbnail.width, thumbnail.height), (232, 300));
+            assert!(results[index].error.is_none());
+        }
+        assert!(results[1].thumbnail.is_none() && results[1].error.is_some(), "page 2 should fail alone");
+        assert!(results[3].thumbnail.is_none() && results[3].error.is_some(), "page 4 wrote nothing, so it must not reuse another page's image");
+        assert_eq!(fs::read(&input).unwrap(), before);
+    }
+
+    #[test]
+    fn source_thumbnails_render_requested_source_pages_with_the_bundled_renderer() {
+        let _guard = crate::kit::lock_process_env();
+        if let Err(e) = renderer() { if std::env::var_os("TOOLBOX_REQUIRE_PDF_RENDERER").is_some() { panic!("{e}") }; eprintln!("Renderer unavailable: {e}"); return; }
+        let temp = TempDir::new().unwrap();
+        let input = temp.0.join("source.pdf");
+        fixture(&input);
+        let results = source_thumbnails(&SourceThumbnailsRequest { path: input.clone(), page_indices: vec![1, 0] }).unwrap();
+        assert_eq!(results.iter().map(|result| result.page_index).collect::<Vec<_>>(), vec![1, 0]);
+        let sizes = results.iter().map(|result| {
+            let thumbnail = result.thumbnail.as_ref().unwrap_or_else(|| panic!("page {} failed: {:?}", result.page_index, result.error));
+            assert!(thumbnail.width.max(thumbnail.height) <= super::super::PDF_THUMBNAIL_MAX_DIMENSION);
+            (thumbnail.width, thumbnail.height)
+        }).collect::<Vec<_>>();
+        assert!(sizes[0].1 > sizes[0].0, "the portrait source page stays portrait");
+        assert!(sizes[1].0 > sizes[1].1, "the source /Rotate 90 page renders landscape");
+    }
+
+    #[test]
+    fn inspect_refuses_documents_over_the_recorded_limits_with_limit_exceeded() {
+        use crate::kit::contracts::{ErrorKind, LimitKind, OutcomePointer};
+        let limits = crate::kit::common::limits::recorded("export_pdf_scene").unwrap();
+        assert_eq!(limits.max_pages, Some(5_000));
+        assert_eq!(limits.max_bytes, 1_000_000_000);
+        let temp = TempDir::new().unwrap();
+
+        let at_limit = temp.0.join("at-limit.pdf");
+        many_page_fixture(&at_limit, 5_000);
+        assert_eq!(inspect(&at_limit).unwrap().pages.len(), 5_000);
+
+        let over = temp.0.join("archive.pdf");
+        many_page_fixture(&over, 5_001);
+        let error = inspect(&over).expect_err("over the page limit");
+        assert_eq!(error.kind, ErrorKind::LimitExceeded { limit: LimitKind::PageCount });
+        assert_eq!(error.message, "It has 5,001 pages. Toolbox works with up to 5,000 pages in one PDF. Use Split to make smaller parts, then open each one.");
+        assert_eq!(error.pointer, Some(OutcomePointer::Tool { tool_id: "pdf-split".into() }));
+
+        let large = temp.0.join("large.pdf");
+        fs::File::create(&large).unwrap().set_len(limits.max_bytes + 1).unwrap();
+        let error = inspect(&large).expect_err("over the size limit");
+        assert_eq!(error.kind, ErrorKind::LimitExceeded { limit: LimitKind::FileSize });
+        assert_eq!(error.message, "Larger than the 1 GB limit for one PDF. Reduce its size and try again.");
     }
 }

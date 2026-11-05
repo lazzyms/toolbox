@@ -30,6 +30,7 @@ test.beforeEach(async ({ page }) => {
           w.sceneTextResponses[key] = response;
           return { index: pageIndex, width: 612, height: 792, preview: svg, textRuns: [{ text: `${args.request.path} page ${pageIndex} response ${response}`, x: 60, y: 55, width: 250, height: 25 }] };
         }
+        if (command === 'render_pdf_source_thumbnails') return args.request.pageIndices.map((pageIndex: number) => ({ pageIndex, thumbnail: { dataUrl: svg, width: 247, height: 320 }, error: null }));
         if (command === 'preview_pdf_scene_pages') {
           if (w.previewFailure) throw new Error(w.previewFailureMessage ?? 'Renderer unavailable');
           if (w.previewDelay) await new Promise(resolve => setTimeout(resolve, w.previewDelay));

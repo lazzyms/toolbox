@@ -7,7 +7,7 @@ import type { WorkspaceSourceAction } from '../components/ToolScaffold';
 import type { ShellEvent } from '../hooks/useShellBridge';
 import type { AtomicToolId, ToolDefinition, ToolError, ToolResult } from '../contracts';
 import { useToolAvailability } from '../ToolAvailabilityContext';
-import { ArrowLeft, ArrowRight, ArrowDown, ArrowUp, ChevronDown } from 'lucide-react';
+import { ArrowLeft, ArrowRight, ArrowDown, ArrowUp, ChevronDown, TriangleAlert } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '../components/ui/dropdown-menu';
@@ -32,6 +32,8 @@ import { ShortcutHint } from '../components/ShortcutHint';
 import { isWindows, primaryModifierPressed, shortcutTarget } from '../shortcuts';
 import { clearPageSelection, clickPage, extendPageSelection, pageOptionName, pagePositionsLabel, selectAllPages, selectPagesByParity, selectPagesByRange, selectionCountLabel, togglePage } from '../features/pdf-editor/pageSelection';
 import type { PageSelection } from '../features/pdf-editor/pageSelection';
+import { createSourceThumbnailQueue } from '../features/pdf-editor/sourceThumbnails';
+import type { SourceThumbnail, SourceThumbnailQueue } from '../features/pdf-editor/sourceThumbnails';
 
 export { createPreviewCache, previewCacheKey, requestWithGeneration } from './pdfPreviewHelpers';
 
@@ -85,14 +87,33 @@ export type PdfEditorNavigation = (navigation: {
   initialPaths: readonly string[];
 }) => void;
 type ThumbnailSize = 'small' | 'medium' | 'large';
-type OpenFailure = { kind: 'locked' | 'unreadable'; name: string };
+type OpenFailure = { kind: 'locked' | 'unreadable'; name: string } | { kind: 'tooManyPages' | 'tooLarge'; name: string; message: string };
 
 /** Reads the typed error `inspect_pdf_scene` returns for a file the editor can't open. */
 const openFailureFor = (reason: unknown, path: string): OpenFailure | null => {
-  if (typeof reason !== 'object' || reason === null || (reason as ToolError).kind !== 'invalidInput') return null;
+  if (typeof reason !== 'object' || reason === null) return null;
   const error = reason as ToolError;
+  const name = fileName(path);
+  if (error.kind === 'limitExceeded') return { kind: error.details.limit === 'pageCount' ? 'tooManyPages' : 'tooLarge', name, message: error.message };
+  if (error.kind !== 'invalidInput') return null;
   const locked = error.pointer?.kind === 'tool' && error.pointer.toolId === 'lock-unlock';
-  return { kind: locked ? 'locked' : 'unreadable', name: fileName(path) };
+  return { kind: locked ? 'locked' : 'unreadable', name };
+};
+const openFailureText = (failure: OpenFailure) => {
+  switch (failure.kind) {
+    case 'locked': return { title: `${failure.name} is password-protected`, description: 'Remove its password with File Security first, then open the unlocked copy here.', status: 'It’s password-protected.' };
+    case 'unreadable': return { title: `Toolbox can’t read ${failure.name}`, description: 'The file may be damaged, or it isn’t a PDF that Toolbox supports. Nothing was changed. If another app can open it, save a new copy from there and try that.', status: 'It may be damaged.' };
+    case 'tooManyPages': return { title: `${failure.name} has too many pages`, description: failure.message, status: 'It has too many pages.' };
+    case 'tooLarge': return { title: `${failure.name} is too large to open`, description: failure.message, status: 'It’s too large.' };
+  }
+};
+/** A grid placeholder keeps the source page's shape from inspection, turned with the page, so the grid doesn't jump when the thumbnail arrives. */
+const thumbnailAspect = ({ width, height, rotation }: ScenePage) => rotation % 180 === 0 ? `${width} / ${height}` : `${height} / ${width}`;
+/** Source thumbnails show the original page, so the scene's rotation is drawn in CSS. A quarter turn swaps the image box to fill the frame. */
+const thumbnailImageStyle = ({ width, height, rotation }: ScenePage): React.CSSProperties | undefined => {
+  if (!rotation) return undefined;
+  if (rotation % 180 === 0) return { transform: `rotate(${rotation}deg)` };
+  return { position: 'absolute', left: '50%', top: '50%', width: `${(100 * width) / height}%`, height: `${(100 * height) / width}%`, maxWidth: 'none', maxHeight: 'none', transform: `translate(-50%, -50%) rotate(${rotation}deg)` };
 };
 
 function keepToolbarTabStop(toolbar: HTMLDivElement | null) {
@@ -224,6 +245,18 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onBrowse, onN
   const [visiblePages, setVisiblePages] = useState<number[]>([]);
   const [openFailure, setOpenFailure] = useState<OpenFailure | null>(null);
   const organizeGrid = useRef<HTMLDivElement>(null);
+  // Organize grid thumbnails are the original pages, loaded as they scroll into view; page edits show as CSS rotation.
+  const [, setSourceThumbnailVersion] = useState(0);
+  const [sourceThumbnails, setSourceThumbnails] = useState<SourceThumbnailQueue | null>(null);
+  useEffect(() => {
+    if (!path) { setSourceThumbnails(null); return; }
+    const queue = createSourceThumbnailQueue({
+      fetch: (pageIndices) => invoke<SourceThumbnail[]>('render_pdf_source_thumbnails', { request: { path, pageIndices } }),
+      onChange: () => setSourceThumbnailVersion((version) => version + 1),
+    });
+    setSourceThumbnails(queue);
+    return () => queue.dispose();
+  }, [path]);
   useEffect(() => setTool(initialTool), [initialTool]);
   const [currentId, setCurrentId] = useState<string | null>(null);
   // Page selection is view state, not an edit, so it never adds an undo step.
@@ -389,48 +422,27 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onBrowse, onN
     return () => { if (timer !== undefined) window.clearTimeout(timer); previewGeneration.current.current += 1; };
   }, [path, currentIndex, serializedScene]);
 
-  // The organize grid asks for previews of the pages on screen, a few at a time, as the person scrolls.
+  // The organize grid asks for thumbnails of the pages on or near the screen as the person scrolls.
+  const pageOrderKey = scene.pages.map((item) => item.id).join(',');
   useEffect(() => {
     const grid = organizeGrid.current;
     if (tool !== 'organize' || !grid || typeof IntersectionObserver === 'undefined') return;
-    const shown = new Set<number>();
+    const shown = new Set<HTMLElement>();
     const observer = new IntersectionObserver((entries) => {
       for (const entry of entries) {
-        const index = Number((entry.target as HTMLElement).dataset.pageIndex);
-        if (entry.isIntersecting) shown.add(index); else shown.delete(index);
+        const cell = entry.target as HTMLElement;
+        if (entry.isIntersecting) shown.add(cell); else shown.delete(cell);
       }
-      setVisiblePages([...shown].sort((a, b) => a - b));
+      setVisiblePages([...shown].map((cell) => Number(cell.dataset.pageIndex)).sort((a, b) => a - b));
     }, { root: grid, rootMargin: '200px' });
     grid.querySelectorAll('[data-page-index]').forEach((cell) => observer.observe(cell));
     return () => observer.disconnect();
-  }, [tool, scene.pages.length, Boolean(page)]);
-  useEffect(() => {
-    if (tool !== 'organize' || !path) return;
-    const missing = visiblePages.filter((index) => {
-      const item = scene.pages[index];
-      if (!item) return false;
-      const key = previewCacheKey(path, index, serializedScene, PREVIEW_RENDER_SETTINGS);
-      if (thumbnails[item.id]?.key === key) return false;
-      const cached = previewCache.current.get(key);
-      if (cached) { updateThumbnail(item, key, cached); return false; }
-      return true;
-    }).slice(0, PREVIEW_CACHE_MAX_ENTRIES);
-    if (!missing.length) return;
-    let active = true;
-    const timer = window.setTimeout(() => {
-      invoke<IndexedScenePreview[]>('preview_pdf_scene_pages', { request: { path, scene, pageIndices: missing } }).then((values) => {
-        if (!active) return;
-        for (const { pageIndex, preview: value } of values) {
-          const item = scene.pages[pageIndex];
-          if (!item) continue;
-          const key = previewCacheKey(path, pageIndex, serializedScene, PREVIEW_RENDER_SETTINGS);
-          previewCache.current.set(key, value);
-          updateThumbnail(item, key, value);
-        }
-      }).catch(() => { /* A grid thumbnail is optional; the focused page reports its own preview errors. */ });
-    }, 200);
-    return () => { active = false; window.clearTimeout(timer); };
-  }, [tool, path, serializedScene, visiblePages.join(',')]);
+  }, [tool, pageOrderKey, Boolean(page)]);
+  const wantedSourcePages = tool === 'organize'
+    ? visiblePages.flatMap((index) => { const sourceIndex = scene.pages[index]?.sourceIndex; return sourceIndex === null || sourceIndex === undefined ? [] : [sourceIndex]; })
+    : [];
+  const wantedSourceKey = wantedSourcePages.join(',');
+  useEffect(() => { sourceThumbnails?.want(wantedSourcePages); }, [sourceThumbnails, wantedSourceKey]);
 
   const commit = (next: PdfScene, mergeGroup: string | null = null) => {
     const merge = Boolean(mergeGroup && group.current === mergeGroup);
@@ -800,15 +812,15 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onBrowse, onN
     {renderError && <p role="alert" className="scene-error">{renderError} Export is disabled until the preview can be verified.</p>}
     {!page ? <Card className="scene-empty"><CardHeader className="my-auto items-center gap-3 text-center">
       {openFailure ? <>
-        <CardTitle role="heading" aria-level={2}>{openFailure.kind === 'locked' ? `${openFailure.name} is password-protected` : `Toolbox can’t read ${openFailure.name}`}</CardTitle>
-        <CardDescription>{openFailure.kind === 'locked'
-          ? 'Remove its password with File Security first, then open the unlocked copy here.'
-          : 'The file may be damaged, or it isn’t a PDF that Toolbox supports. Nothing was changed. If another app can open it, save a new copy from there and try that.'}</CardDescription>
+        {(openFailure.kind === 'tooManyPages' || openFailure.kind === 'tooLarge') && <TriangleAlert className="scene-empty-warning" aria-hidden="true" />}
+        <CardTitle role="heading" aria-level={2}>{openFailureText(openFailure).title}</CardTitle>
+        <CardDescription>{openFailureText(openFailure).description}</CardDescription>
         <div className="flex justify-center gap-2">
           {openFailure.kind === 'locked' && onNavigate && path && availability.allows('lock-unlock') && <Button onClick={() => onNavigate({ utilityId: 'lock-unlock', initialPaths: [path] })}>Open File Security</Button>}
+          {openFailure.kind === 'tooManyPages' && onNavigate && path && availability.allows('pdf-split') && <Button onClick={() => onNavigate({ utilityId: 'pdf-split', initialPaths: [path] })}>Open Split</Button>}
           <Button variant="outline" onClick={() => void onBrowse()}>Open another PDF</Button>
         </div>
-        <p role="status" className="scene-property-note">Couldn’t open {openFailure.name}. {openFailure.kind === 'locked' ? 'It’s password-protected.' : 'It may be damaged.'}</p>
+        <p role="status" className="scene-property-note">Couldn’t open {openFailure.name}. {openFailureText(openFailure).status}</p>
       </> : loading ? <CardTitle role="heading" aria-level={2}>Opening PDF…</CardTitle> : tool === 'organize' ? <>
         <CardTitle role="heading" aria-level={2}>Open a PDF to organize its pages</CardTitle>
         <CardDescription>Reorder, rotate, mirror and remove pages. When you export, Toolbox saves a new copy and never changes your original.</CardDescription>
@@ -913,20 +925,22 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onBrowse, onN
           {scene.pages.map((item, index) => {
             const position = index + 1;
             const original = item.sourceIndex === null ? null : item.sourceIndex + 1;
-            const cached = thumbnails[item.id];
-            const thumbnailKey = path ? previewCacheKey(path, index, serializedScene, PREVIEW_RENDER_SETTINGS) : null;
-            const thumb = cached?.key === thumbnailKey ? cached.value.dataUrl : item.sourceIndex === null ? null : document?.pages[item.sourceIndex]?.preview;
+            const source = item.sourceIndex === null ? null : sourceThumbnails?.get(item.sourceIndex) ?? { status: 'loading' as const };
+            const thumb = source?.status === 'ready' ? source.value.dataUrl : null;
             const focused = item.id === page.id;
             const isSelected = pageTargets.includes(item.id);
             const insertion = dragPreview === index ? 'before' : dragPreview === scene.pages.length && index === scene.pages.length - 1 ? 'after' : undefined;
             return <Button key={item.id} role="option" aria-selected={isSelected} tabIndex={focused ? 0 : -1} data-page-index={index} data-page-id={item.id}
               data-moving={pageDrag?.ids.includes(item.id) || undefined}
               variant={isSelected ? 'secondary' : 'ghost'} className="scene-organize-page relative h-auto flex-col gap-2 p-2"
-              aria-label={pageOptionName(position, item, isSelected)}
+              aria-label={pageOptionName(position, item, isSelected, source && source.status !== 'ready' ? source.status : undefined)}
               onPointerDown={(event) => startPageDrag(event, item)} onDragStart={(event) => event.preventDefault()}
               onClick={(event) => { if (suppressPageClick.current) return; selectPage(item.id, primaryModifierPressed(event), event.shiftKey); }}>
               {insertion && <span className="scene-organize-insertion" data-side={insertion} aria-hidden="true" />}
-              <span className="scene-organize-thumb" data-selected={isSelected || undefined}>{thumb && <img alt="" src={thumb} />}{isSelected && <span className="scene-organize-check" aria-hidden="true">✓</span>}</span>
+              <span className="scene-organize-thumb" data-selected={isSelected || undefined} data-placeholder={source && !thumb ? source.status : undefined} style={{ aspectRatio: thumbnailAspect(item) }}>
+                {thumb ? <img alt="" src={thumb} style={thumbnailImageStyle(item)} /> : source && <span aria-hidden="true">{position}</span>}
+                {isSelected && <span className="scene-organize-check" aria-hidden="true">✓</span>}
+              </span>
               <span className="scene-organize-label"><strong>{position}</strong>{original !== null && original !== position && <span> · was page {original}</span>}</span>
             </Button>;
           })}
@@ -942,7 +956,8 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onBrowse, onN
           {pageDrag.ids.length > 1 && <span className="scene-organize-ghost-sheet" data-layer="middle" />}
           <span className="scene-organize-ghost-sheet" data-layer="front">{(() => {
             const lead = scene.pages.find((item) => pageDrag.ids.includes(item.id));
-            const src = lead && (thumbnails[lead.id]?.value.dataUrl ?? (lead.sourceIndex === null ? null : document?.pages[lead.sourceIndex]?.preview));
+            const leadThumbnail = lead && lead.sourceIndex !== null ? sourceThumbnails?.get(lead.sourceIndex) : undefined;
+            const src = leadThumbnail?.status === 'ready' ? leadThumbnail.value.dataUrl : null;
             return src ? <img alt="" src={src} /> : null;
           })()}</span>
           <Badge className="scene-organize-ghost-count">{pageDrag.ids.length}</Badge>
@@ -950,7 +965,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onBrowse, onN
         <aside className="scene-organize-focus" aria-label="Preview of the focused page">
           <div className="scene-organize-focus-heading"><strong>Page {currentIndex + 1}</strong><span>of {scene.pages.length}</span></div>
           <div className="scene-organize-focus-frame">
-            {exactPreview ? <img alt={`Preview of page ${currentIndex + 1}`} src={exactPreview.dataUrl} /> : <span>{rendering ? 'Rendering on device…' : 'No preview yet'}</span>}
+            {exactPreview ? <img alt={`Preview of page ${currentIndex + 1}`} src={exactPreview.dataUrl} /> : <span>{rendering ? 'Loading preview…' : 'No preview yet'}</span>}
           </div>
           <dl className="scene-organize-facts">
             <dt>Position</dt><dd>{currentIndex + 1} of {scene.pages.length}</dd>

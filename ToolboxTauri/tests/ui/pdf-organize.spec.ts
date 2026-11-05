@@ -6,6 +6,7 @@ import { openToolBySearch } from './open-tool';
 const svg = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="612" height="792"><rect width="612" height="792" fill="white"/><text x="60" y="85" font-size="24">Local page</text></svg>');
 const lockedMessage = 'This PDF is password-protected. Remove its password with File Security first, then open the unlocked copy.';
 const damagedMessage = 'Toolbox can’t read this file. It may be damaged, or it isn’t a PDF that Toolbox supports. Nothing was changed.';
+const tooManyMessage = 'It has 6,200 pages. Toolbox works with up to 5,000 pages in one PDF. Use Split to make smaller parts, then open each one.';
 
 let remote: string[] = [];
 
@@ -14,7 +15,7 @@ test.beforeEach(async ({ page }) => {
   page.on('request', (request) => {
     if (!/^(http:\/\/(127\.0\.0\.1|localhost)|data:|blob:)/.test(request.url())) remote.push(request.url());
   });
-  await page.addInitScript(({ svg, lockedMessage, damagedMessage }) => {
+  await page.addInitScript(({ svg, lockedMessage, damagedMessage, tooManyMessage }) => {
     const w = window as any;
     const callbacks = new Map<number, (event: unknown) => void>();
     const listeners = new Map<number, { event: string; handler: number }>();
@@ -44,7 +45,17 @@ test.beforeEach(async ({ page }) => {
           const path: string = args.request?.path ?? args.path;
           if (path.endsWith('locked.pdf')) throw { kind: 'invalidInput', message: lockedMessage, pointer: { kind: 'tool', toolId: 'lock-unlock' } };
           if (path.endsWith('damaged.pdf')) throw { kind: 'invalidInput', message: damagedMessage, pointer: null };
-          return { path, pages: [0, 1, 2, 3, 4].map((index) => ({ index, width: 612, height: 792, preview: null })) };
+          if (path.endsWith('archive.pdf')) throw { kind: 'limitExceeded', details: { limit: 'pageCount' }, message: tooManyMessage, pointer: { kind: 'tool', toolId: 'pdf-split' } };
+          // large.pdf has 300 pages, and its second page is landscape.
+          const count = path.endsWith('large.pdf') ? 300 : 5;
+          return { path, pages: Array.from({ length: count }, (_, index) => count > 5 && index === 1
+            ? { index, width: 792, height: 612, preview: null } : { index, width: 612, height: 792, preview: null }) };
+        }
+        if (command === 'render_pdf_source_thumbnails') {
+          if (w.holdThumbnails) await new Promise((resolve) => { w.releaseThumbnails = resolve; });
+          return args.request.pageIndices.map((pageIndex: number) => (w.failThumbnails ?? []).includes(pageIndex)
+            ? { pageIndex, thumbnail: null, error: 'pdftoppm failed for this page' }
+            : { pageIndex, thumbnail: { dataUrl: svg, width: 247, height: 320 }, error: null });
         }
         if (command === 'inspect_pdf_scene_page') {
           const pageIndex = args.request.pageIndex;
@@ -56,7 +67,7 @@ test.beforeEach(async ({ page }) => {
       },
     };
     w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
-  }, { svg, lockedMessage, damagedMessage });
+  }, { svg, lockedMessage, damagedMessage, tooManyMessage });
 });
 
 test.afterEach(() => {
@@ -221,6 +232,118 @@ test('a damaged PDF explains the problem and offers another file', async ({ page
   await page.evaluate(() => (window as any).dialogNext = '/local/report.pdf');
   await page.getByRole('button', { name: 'Open another PDF', exact: true }).click();
   await expect(grid(page)).toBeVisible();
+});
+
+test('a PDF over the page limit points to Split, shows no grid and renders nothing', async ({ page }) => {
+  await openOrganize(page);
+  await page.evaluate(() => (window as any).dialogNext = '/local/archive.pdf');
+  await page.getByRole('button', { name: 'Open PDF', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'archive.pdf has too many pages' })).toBeVisible();
+  await expect(page.getByText(tooManyMessage)).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: 'Couldn’t open archive.pdf. It has too many pages.' })).toBeVisible();
+  await expect(page.getByRole('listbox', { name: /^Pages of/ })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Open File Security' })).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).calls.filter((call: any) => /^(render_pdf_source_thumbnails|preview_pdf_scene_pages|export_pdf_scene)$/.test(call.command)).length)).toBe(0);
+  await page.getByRole('button', { name: 'Open Split', exact: true }).click();
+  await expect(page.getByRole('toolbar', { name: 'PDF Editor tools' }).getByRole('button', { name: 'Split PDF', exact: true })).toHaveAttribute('aria-pressed', 'true');
+});
+
+const thumbnailRequests = (page: Page): Promise<number[][]> => page.evaluate(() => (window as any).calls
+  .filter((call: any) => call.command === 'render_pdf_source_thumbnails').map((call: any) => call.args.request.pageIndices));
+const nextFrames = (page: Page) => page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+
+test('loading placeholders keep each page shape and say the preview is loading until its thumbnail arrives', async ({ page }) => {
+  await openOrganize(page);
+  await page.evaluate(() => { const w = window as any; w.holdThumbnails = true; w.dialogNext = '/local/large.pdf'; });
+  await page.getByRole('button', { name: 'Open PDF', exact: true }).click();
+  const first = grid(page, 'large.pdf').getByRole('option').nth(0);
+  const second = grid(page, 'large.pdf').getByRole('option').nth(1);
+  await expect(first).toHaveAccessibleName('Position 1, original page 1, preview loading');
+  const firstThumb = first.locator('.scene-organize-thumb');
+  const secondThumb = second.locator('.scene-organize-thumb');
+  await expect(firstThumb).toHaveAttribute('data-placeholder', 'loading');
+  await expect(firstThumb).toHaveText('1');
+  const portrait = (await firstThumb.boundingBox())!;
+  const landscape = (await secondThumb.boundingBox())!;
+  expect(portrait.height).toBeGreaterThan(portrait.width);
+  expect(landscape.width).toBeGreaterThan(landscape.height);
+  await page.evaluate(() => { const w = window as any; w.holdThumbnails = false; w.releaseThumbnails(); });
+  await expect(first).toHaveAccessibleName('Position 1, original page 1');
+  await expect(firstThumb).not.toHaveAttribute('data-placeholder', /.*/);
+  await expect(firstThumb.locator('img')).toBeVisible();
+  // The thumbnail fills the same box the placeholder held.
+  expect((await firstThumb.boundingBox())!.height).toBeCloseTo(portrait.height, 0);
+  await expect(secondThumb.locator('img')).toBeVisible();
+  expect((await secondThumb.boundingBox())!.height).toBeCloseTo(landscape.height, 0);
+});
+
+test('a large PDF renders thumbnails only near the view, and pages scrolled past are never requested', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 640 });
+  await openOrganize(page);
+  await page.evaluate(() => (window as any).dialogNext = '/local/large.pdf');
+  await page.getByRole('button', { name: 'Open PDF', exact: true }).click();
+  const options = grid(page, 'large.pdf').getByRole('option');
+  await expect(options).toHaveCount(300);
+  await expect(options.first()).toHaveAccessibleName('Position 1, original page 1');
+  await expect(page.getByRole('status').filter({ hasText: 'Showing 300 pages. Previews load as you scroll.' })).toBeVisible();
+  const initial = (await thumbnailRequests(page)).flat();
+  expect(initial).toContain(0);
+  expect(Math.max(...initial)).toBeLessThan(100);
+  expect(new Set(initial).size).toBe(initial.length);
+  expect((await thumbnailRequests(page)).every((batch) => batch.length >= 1 && batch.length <= 12)).toBe(true);
+
+  // Hold the helper while the person scrolls through the middle and on to the end.
+  const before = (await thumbnailRequests(page)).length;
+  await page.evaluate(() => (window as any).holdThumbnails = true);
+  await grid(page, 'large.pdf').evaluate((element) => { element.scrollTop = element.scrollHeight / 2; });
+  await expect.poll(async () => (await thumbnailRequests(page)).length).toBe(before + 1);
+  const held = (await thumbnailRequests(page))[before];
+  expect(Math.min(...held)).toBeGreaterThan(100);
+  await grid(page, 'large.pdf').evaluate((element) => { element.scrollTop = element.scrollHeight; });
+  await expect(options.last()).toBeInViewport();
+  await nextFrames(page);
+  await page.evaluate(() => { const w = window as any; w.holdThumbnails = false; w.releaseThumbnails(); });
+  await expect(options.last()).toHaveAccessibleName('Position 300, original page 300');
+  const later = (await thumbnailRequests(page)).slice(before + 1).flat();
+  expect(later.length).toBeGreaterThan(0);
+  expect(later.every((index) => index >= 250)).toBe(true);
+  const requested = new Set((await thumbnailRequests(page)).flat());
+  expect(requested.size).toBeLessThan(150);
+});
+
+test('a page whose thumbnail fails keeps a numbered placeholder while the other pages load', async ({ page }) => {
+  await openOrganize(page);
+  await page.evaluate(() => (window as any).failThumbnails = [2]);
+  await page.getByRole('button', { name: 'Open PDF', exact: true }).click();
+  const failed = grid(page).getByRole('option').nth(2);
+  await expect(failed).toHaveAccessibleName('Position 3, original page 3, preview unavailable');
+  await expect(failed.locator('.scene-organize-thumb')).toHaveAttribute('data-placeholder', 'failed');
+  await expect(failed.locator('.scene-organize-thumb')).toHaveText('3');
+  for (const index of [0, 1, 3, 4]) await expect(grid(page).getByRole('option').nth(index).locator('img')).toBeVisible();
+  // A failed page isn't asked for again.
+  await grid(page).getByRole('option').nth(3).click();
+  await page.keyboard.press('ArrowRight');
+  expect((await thumbnailRequests(page)).flat().filter((index) => index === 2)).toHaveLength(1);
+});
+
+test('a rotated page shows its source thumbnail turned in a frame of the turned shape', async ({ page }) => {
+  await openOrganize(page);
+  await page.getByRole('button', { name: 'Open PDF', exact: true }).click();
+  const second = grid(page).getByRole('option').nth(1);
+  await expect(second.locator('img')).toBeVisible();
+  await second.click();
+  await page.getByRole('button', { name: 'Open in page view', exact: true }).click();
+  await page.getByRole('button', { name: 'Rotate selected pages', exact: true }).click();
+  await page.getByRole('toolbar', { name: 'PDF Editor tools' }).getByRole('button', { name: 'Organize', exact: true }).click();
+  const thumb = grid(page).getByRole('option').nth(1).locator('.scene-organize-thumb');
+  await expect(thumb.locator('img')).toHaveCSS('transform', /matrix\(/);
+  const frame = (await thumb.boundingBox())!;
+  expect(frame.width).toBeGreaterThan(frame.height);
+  const image = (await thumb.locator('img').boundingBox())!;
+  expect(image.width).toBeCloseTo(frame.width, 0);
+  expect(image.height).toBeCloseTo(frame.height, 0);
+  // Rotating needs no new render: the source thumbnail is reused.
+  expect((await thumbnailRequests(page)).flat().filter((index) => index === 1)).toHaveLength(1);
 });
 
 for (const theme of ['light', 'dark']) test(`the Organize page grid renders in ${theme}`, async ({ page }, testInfo) => {

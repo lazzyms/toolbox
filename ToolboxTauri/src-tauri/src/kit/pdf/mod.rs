@@ -26,6 +26,12 @@ pub(crate) const PDF_PREVIEW_MAX_DIMENSION: u32 = 1_600;
 pub(crate) const PDF_PREVIEW_MAX_PIXELS: u64 = 2_560_000;
 pub(crate) const PDF_PREVIEW_MAX_BYTES: u64 = 20 * 1024 * 1024;
 pub(crate) const PDF_PREVIEW_TIMEOUT: Duration = Duration::from_secs(15);
+// Organize grid thumbnails come straight from the source page, one pdftoppm run per page, so one bad page fails alone.
+// Each run gets the per-file budget (opening and parsing the PDF) plus the per-page budget (rasterising one page).
+pub(crate) const PDF_THUMBNAIL_MAX_DIMENSION: u32 = 320;
+pub(crate) const PDF_THUMBNAIL_MAX_BATCH: usize = 12;
+pub(crate) const PDF_THUMBNAIL_FILE_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const PDF_THUMBNAIL_PAGE_TIMEOUT: Duration = Duration::from_secs(3);
 pub(crate) const PDF_HELPER_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 pub(crate) const PDF_TEXT_MAX_OUTPUT_BYTES: usize = 10 * 1024 * 1024;
 pub(crate) const PDF_TEXT_MAX_ERROR_BYTES: usize = 1024 * 1024;
