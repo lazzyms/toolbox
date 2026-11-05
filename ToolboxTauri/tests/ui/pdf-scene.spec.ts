@@ -740,6 +740,122 @@ test('unrenderable text names the characters and keeps Export disabled', async (
 });
 
 // Mirrors WatermarkOptions in src/contracts.ts, shared with Edit Image.
+const headerFooterPart = (page: Page, part: string) => page.locator(`.scene-canvas [data-header-footer-part="${part}"]`);
+const tokenField = (page: Page, name: string) => page.getByRole('textbox', { name, exact: true });
+async function addHeaderFooter(page: Page) {
+  await page.getByRole('toolbar', { name: 'PDF editor tools' }).getByRole('button', { name: 'Header and footer', exact: true }).click();
+  await page.getByRole('button', { name: 'Add header and footer', exact: true }).click();
+  await expect(page.getByText('Header and footer added to all 3 pages.')).toBeVisible();
+}
+const blankBand = { left: '', center: '', right: '' };
+
+test('header and footer text uses token tags, and every option is sent exactly to preview and export', async ({ page }) => {
+  await openEditor(page);
+  await page.evaluate(() => { (window as any).previewDelay = 60_000; });
+  await addHeaderFooter(page);
+  const sent = async () => (await previewScene(page)).pages[0].objects[0];
+  await expect.poll(sent).toMatchObject({
+    kind: 'headerFooter', text: '', fontSize: 8.5, color: '#555555', opacity: 1, fontFamily: 'Noto Sans', layer: 'front', pageRange: 'all',
+    headerFooter: { header: blankBand, footer: { ...blankBand, center: '{page} of {pages}' }, firstPage: null, even: null, fileName: 'scene-fixture.pdf', margin: 36 },
+  });
+  expect((await sent()).headerFooter.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  await expect(tokenField(page, 'Footer centre').locator('[data-token]')).toHaveText(['Page number', 'Page count']);
+  await expect(headerFooterPart(page, 'footer-center')).toHaveText('1 of 3');
+  await expect(page.getByRole('button', { name: 'Footer', exact: true })).toBeVisible();
+
+  await tokenField(page, 'Header left').click();
+  await page.keyboard.type('Acme ');
+  await page.getByRole('group', { name: 'Insert' }).getByRole('button', { name: 'File name' }).click();
+  await expect(tokenField(page, 'Header left').locator('[data-token]')).toHaveText(['File name']);
+  await expect(headerFooterPart(page, 'header-left')).toHaveText('Acme scene-fixture.pdf');
+  await tokenField(page, 'Header right').click();
+  await page.getByRole('group', { name: 'Insert' }).getByRole('button', { name: 'Date' }).click();
+  await page.locator('#scene-header-footer-date').fill('2026-10-13');
+  await expect(headerFooterPart(page, 'header-right')).toHaveText('13 October 2026');
+  await tokenField(page, 'Header right').click();
+  await page.keyboard.press('End');
+  await page.keyboard.press('Backspace');
+  await expect(tokenField(page, 'Header right').locator('[data-token]')).toHaveCount(0);
+  await expect(headerFooterPart(page, 'header-right')).toHaveCount(0);
+  await page.keyboard.type('Draft ');
+  await page.getByRole('group', { name: 'Insert' }).getByRole('button', { name: 'Page number' }).click();
+  await page.keyboard.press('Enter');
+  await expect(headerFooterPart(page, 'header-right')).toHaveText('Draft 1');
+
+  await page.getByRole('combobox', { name: 'Size' }).selectOption('10');
+  await page.getByRole('combobox', { name: 'Distance from edge' }).selectOption('54');
+  await page.getByRole('combobox', { name: 'Font' }).selectOption('Noto Serif');
+  await page.locator('#scene-header-footer-color').fill('#112233');
+  await page.getByRole('radio', { name: 'Skip the first page' }).click();
+  await expect(page.getByText('Header and footer added to 2 of 3 pages.')).toBeVisible();
+  await expect(headerFooterPart(page, 'footer-center')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Page 2', exact: true }).click();
+  await expect(headerFooterPart(page, 'footer-center')).toHaveText('2 of 3');
+  await expect(headerFooterPart(page, 'header-right')).toHaveText('Draft 2');
+  await page.evaluate(() => { (window as any).previewDelay = 0; });
+
+  const scene = await exported(page);
+  expect(scene.pages[0].objects).toHaveLength(1);
+  expect(scene.pages.slice(1).map((item: any) => item.objects)).toEqual([[], []]);
+  const object = scene.pages[0].objects[0];
+  expect(object).toMatchObject({ kind: 'headerFooter', fontSize: 10, color: '#112233', fontFamily: 'Noto Serif', pageRange: '2-' });
+  expect(object).not.toHaveProperty('headerFooterParts');
+  expect(object.headerFooter).toEqual({
+    header: { left: 'Acme {file}', center: '', right: 'Draft {page}' }, footer: { ...blankBand, center: '{page} of {pages}' },
+    firstPage: null, even: null, date: '2026-10-13', fileName: 'scene-fixture.pdf', margin: 54,
+  });
+});
+
+test('header and footer first-page and even-page text apply by final page, and overlaps with page text are flagged', async ({ page }) => {
+  await openEditor(page);
+  await addHeaderFooter(page);
+  await page.evaluate(() => { (window as any).previewDelay = 60_000; });
+  await page.getByRole('checkbox', { name: 'Different first page' }).click();
+  await expect(page.getByRole('radio', { name: 'First page', exact: true })).toHaveAttribute('aria-checked', 'true');
+  await tokenField(page, 'Footer left').click();
+  await page.keyboard.type('Cover');
+  await expect(headerFooterPart(page, 'footer-left')).toHaveText('Cover');
+  await page.getByRole('checkbox', { name: 'Different odd and even pages' }).click();
+  await expect(page.getByRole('radio', { name: 'Even pages', exact: true })).toHaveAttribute('aria-checked', 'true');
+  await expect(tokenField(page, 'Footer left')).toHaveText('');
+  await tokenField(page, 'Header right').click();
+  await page.keyboard.type('Even');
+  await page.getByRole('radio', { name: 'Odd pages', exact: true }).click();
+  await tokenField(page, 'Header left').click();
+  await page.keyboard.type('Company');
+  await expect(headerFooterPart(page, 'header-left')).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Page 2', exact: true }).click();
+  await expect(headerFooterPart(page, 'header-right')).toHaveText('Even');
+  await expect(headerFooterPart(page, 'header-left')).toHaveCount(0);
+  await expect(headerFooterPart(page, 'footer-left')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Page 3', exact: true }).click();
+  await expect(headerFooterPart(page, 'header-left')).toHaveText('Company');
+  await expect(headerFooterPart(page, 'header-right')).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Header', exact: true }).click();
+  const overlap = page.getByRole('alert').filter({ hasText: 'overlaps existing text' });
+  await expect(overlap).toHaveCount(0);
+  await page.getByRole('combobox', { name: 'Distance from edge' }).selectOption('54');
+  await expect(overlap).toBeVisible();
+  await page.getByRole('combobox', { name: 'Distance from edge' }).selectOption('36');
+  await expect(overlap).toHaveCount(0);
+  await page.evaluate(() => { (window as any).previewDelay = 0; });
+
+  let scene = await exported(page);
+  expect(scene.pages[0].objects[0].headerFooter).toMatchObject({
+    header: { ...blankBand, left: 'Company' }, footer: { ...blankBand, center: '{page} of {pages}' },
+    firstPage: { header: blankBand, footer: { left: 'Cover', center: '{page} of {pages}', right: '' } },
+    even: { header: { ...blankBand, right: 'Even' }, footer: { ...blankBand, center: '{page} of {pages}' } },
+  });
+  await page.getByRole('checkbox', { name: 'Different first page' }).click();
+  await expect(page.getByRole('radio', { name: 'First page', exact: true })).toHaveCount(0);
+  scene = await exported(page);
+  expect(scene.pages[0].objects[0].headerFooter.firstPage).toBeNull();
+  await page.getByRole('button', { name: 'Remove header and footer' }).click();
+  await expect(page.getByRole('button', { name: 'Header', exact: true })).toHaveCount(0);
+});
+
 const sharedWatermarkOptions = ['text', 'logoPath', 'size', 'opacity', 'color', 'position', 'rotation'];
 const watermarkHit = (page: Page) => page.getByRole('button', { name: /^Watermark / });
 async function previewScene(page: Page) {

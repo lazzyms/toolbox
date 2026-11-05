@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { KeyboardEvent, MouseEvent as ReactMouseEvent, PointerEvent } from 'react';
 import { Textarea } from '../../components/ui/textarea';
-import { visibleBounds, watermarkBounds, watermarkMarks } from './scene';
+import { headerFooterBands, isRangedKind, visibleBounds, watermarkBounds, watermarkMarks } from './scene';
 import type { SceneCanvasProps, SceneObject, ScenePage, ScenePoint, SceneRect, SceneShape } from './scene';
 import './scene-canvas.css';
 
@@ -104,6 +104,12 @@ function Artwork({ page, object }: { page: ScenePage; object: SceneObject }) {
   if (object.kind === 'watermark') return <WatermarkArtwork page={page} object={object} />;
   if (object.kind === 'pageNumbers') return <text x={r.x} y={r.y} fill={object.color} opacity={object.opacity} fontSize={object.fontSize}
     fontFamily={cssFont(object.fontFamily ?? 'Noto Sans')} dominantBaseline="hanging" xmlSpace="preserve">{object.text}</text>;
+  if (object.kind === 'headerFooter') return <g fill={object.color} opacity={object.opacity} fontSize={object.fontSize} fontFamily={cssFont(object.fontFamily ?? 'Noto Sans')}>
+    {(object.headerFooterParts ?? []).filter(part => part.text).map(({ band, slot, text, rect }) => <svg key={`${band}-${slot}`} {...rect} overflow="hidden">
+      <text x={slot === 'left' ? 0 : slot === 'right' ? rect.width : rect.width / 2} y={0} textAnchor={slot === 'left' ? 'start' : slot === 'right' ? 'end' : 'middle'}
+        dominantBaseline="hanging" xmlSpace="preserve" data-header-footer-part={`${band}-${slot}`}>{text}</text>
+    </svg>)}
+  </g>;
   if (object.kind === 'highlight') return <rect {...r} fill={object.color} stroke="none" opacity={object.opacity} />;
   return shapeArtwork(object.shape, r, object.color, object.opacity);
 }
@@ -138,7 +144,11 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     observer.observe(host.current);
     return () => observer.disconnect();
   }, []);
-  useEffect(() => { gesture.current = null; setDraft(null); setEditingId(null); setPanning(false); window.getSelection()?.removeAllRanges(); }, [page]);
+  useEffect(() => {
+    gesture.current = null; setDraft(null); setEditingId(null); setPanning(false);
+    const selection = window.getSelection();
+    if (selection?.anchorNode && host.current?.contains(selection.anchorNode)) selection.removeAllRanges();
+  }, [page]);
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key === 'Escape' && gesture.current) {
@@ -190,10 +200,19 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
   };
   const point = (event: PointerEvent): ScenePoint => pointFromClient(event.clientX, event.clientY);
   // Ranged objects are stored once and drawn on every page in their range, so the page's own copy is not drawn here.
-  const ranged = (object: SceneObject) => object.kind === 'watermark' || object.kind === 'pageNumbers';
+  const ranged = (object: SceneObject) => isRangedKind(object.kind);
   const drawn = [...rangedObjects.filter(object => object.layer === 'behind'), ...shown.objects.filter(object => !ranged(object)),
     ...rangedObjects.filter(object => object.layer !== 'behind')];
-  const hitRect = (object: SceneObject) => object.kind === 'watermark' ? watermarkBounds(b, object) : object.rect;
+  const hitRects = (object: SceneObject): { rect: SceneRect; label?: string }[] => {
+    if (object.kind === 'watermark') return [{ rect: watermarkBounds(b, object) }];
+    if (object.kind !== 'headerFooter') return [{ rect: object.rect }];
+    return headerFooterBands.flatMap(band => {
+      const slots = (object.headerFooterParts ?? []).filter(part => part.band === band);
+      if (!slots.length) return [];
+      const left = slots[0].rect, right = slots[slots.length - 1].rect;
+      return [{ rect: { x: left.x, y: left.y, width: right.x + right.width - left.x, height: left.height }, label: band === 'header' ? 'Header' : 'Footer' }];
+    });
+  };
 
   function finishTextEdit(save: boolean) {
     if (!editingId) return;
@@ -257,7 +276,7 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     if (id && tool !== 'crop' && (tool === 'select' || selectedId === id || corner)) { mode = corner ? 'resize' : 'move'; lastObjectId.current = id; onSelect(id); }
     else if (tool === 'select') { lastObjectId.current = null; onSelect(null); return; }
     else if (tool === 'crop') { mode = 'crop'; onSelect(null); }
-    else if (tool === 'watermark' || tool === 'pageNumbers') { lastObjectId.current = null; onSelect(null); return; }
+    else if (tool === 'watermark' || tool === 'pageNumbers' || tool === 'headerFooter') { lastObjectId.current = null; onSelect(null); return; }
     else {
       mode = 'create';
       const object = makeObject(tool, { x: start.x, y: start.y, width: 1, height: 1 });
@@ -338,7 +357,7 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     const dx = step ? Math.round((step.x * Math.cos(angle) + step.y * Math.sin(angle)) * amount) : 0;
     const dy = step ? Math.round((-step.x * Math.sin(angle) + step.y * Math.cos(angle)) * amount) : 0;
     if (!step && ranged(object)) { onSelect(null); onRangedChange?.(object.id, null); return; }
-    if (object.kind === 'pageNumbers') return;
+    if (object.kind === 'pageNumbers' || object.kind === 'headerFooter') return;
     if (object.kind === 'watermark') {
       if (!object.watermark) return;
       const r = watermarkBounds(b, object);
@@ -367,12 +386,12 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
           {textRuns.map((run, index) => <text key={`${index}-${run.x}-${run.y}`} className="scene-text-run" data-text-run="true" x={run.x} y={run.y + run.height} fontSize={Math.max(6, run.height)} fontFamily="Helvetica, Arial, sans-serif" fill="currentColor" opacity="0.001">{run.text}</text>)}
         </g>}
         {drawn.map(object => <g key={object.id}>
-          <rect {...hitRect(object)} data-object={object.id} tabIndex={0} role="button" aria-label={object.kind === 'watermark' ? `Watermark ${object.watermark?.logoPath ? 'picture' : object.watermark?.text ?? ''}. Arrow keys move it, Shift+arrow moves it further.` : object.kind === 'pageNumbers' ? `Page number ${object.text}` : `${object.kind} object ${shown.objects.indexOf(object) + 1}`} aria-pressed={selectedId === object.id} className={`scene-object-hit scene-object-${object.kind}`} onFocus={() => onSelect(object.id)} onKeyDown={e => key(e, object)} onDoubleClick={e => beginTextEdit(e, object)} />
+          {hitRects(object).map(({ rect, label }, index) => <rect key={index} {...rect} data-object={object.id} tabIndex={0} role="button" aria-label={label ?? (object.kind === 'watermark' ? `Watermark ${object.watermark?.logoPath ? 'picture' : object.watermark?.text ?? ''}. Arrow keys move it, Shift+arrow moves it further.` : object.kind === 'pageNumbers' ? `Page number ${object.text}` : `${object.kind} object ${shown.objects.indexOf(object) + 1}`)} aria-pressed={selectedId === object.id} className={`scene-object-hit scene-object-${object.kind}`} onFocus={() => onSelect(object.id)} onKeyDown={e => key(e, object)} onDoubleClick={e => beginTextEdit(e, object)} />)}
           {selectedId === object.id && object.kind === 'text' && editingId === object.id && <foreignObject {...object.rect} data-text-editor="true" className="scene-inline-text-editor">
             <Textarea autoFocus onFocus={event => event.currentTarget.select()} className="h-full w-full min-h-0 resize-none" aria-label="Text box text" style={{ fontFamily: cssFont(object.fontFamily ?? 'Noto Sans'), fontWeight: object.bold ? 700 : 400, fontStyle: object.italic ? 'italic' : 'normal', textAlign: object.align ?? 'left' }} value={editingText} onChange={event => setEditingText(event.target.value)} onBlur={() => finishTextEdit(true)} onPointerDown={event => event.stopPropagation()} onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); finishTextEdit(false); } else if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); finishTextEdit(true); } }} />
           </foreignObject>}
           {selectedId === object.id && editingId !== object.id && <g className="scene-selection">
-            <rect {...hitRect(object)} fill="none" stroke="var(--pdf-scene-selection)" strokeWidth={1.5 / scale} pointerEvents="none" />
+            {hitRects(object).map(({ rect }, index) => <rect key={index} {...rect} fill="none" stroke="var(--pdf-scene-selection)" strokeWidth={1.5 / scale} pointerEvents="none" />)}
             {!ranged(object) && (['nw', 'ne', 'sw', 'se'] as const).map(corner => <rect key={corner} data-object={object.id} data-corner={corner} x={(corner.includes('w') ? object.rect.x : object.rect.x + object.rect.width) - 5 / scale} y={(corner.includes('n') ? object.rect.y : object.rect.y + object.rect.height) - 5 / scale} width={10 / scale} height={10 / scale} tabIndex={0} role="button" aria-label={`Resize ${object.kind} ${corner}`} className="scene-resize-handle" strokeWidth={1 / scale} onKeyDown={e => key(e, object, corner)} />)}
           </g>}
         </g>)}

@@ -1,6 +1,7 @@
-import { useState, type ComponentType } from 'react';
+import { useRef, useState, type ComponentType } from 'react';
 import { Bold, Italic, TextAlignCenter, TextAlignEnd, TextAlignStart } from 'lucide-react';
 import { Button } from '../../components/ui/button';
+import { Checkbox } from '../../components/ui/checkbox';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { NativeSelect } from '../../components/ui/native-select';
@@ -9,9 +10,10 @@ import { Slider } from '../../components/ui/slider';
 import { ToggleGroup, ToggleGroupItem } from '../../components/ui/toggle-group';
 import { useToolAvailability } from '../../ToolAvailabilityContext';
 import type { WatermarkOptions, WatermarkPlacement } from '../../contracts';
-import { pagesInRange, WATERMARK_DEFAULT_SIZE } from './scene';
-import type { PageNumberFormat, PageNumberOptions, PageNumberPosition, SceneObject, ScenePage, SceneShape, SceneTool, SignatureMode, TextAlign, TextFontFamily, TextStyle } from './scene';
+import { headerFooterBands, headerFooterSlots, pagesInRange, WATERMARK_DEFAULT_SIZE } from './scene';
+import type { HeaderFooterBand, HeaderFooterOptions, HeaderFooterSlot, HeaderFooterText, PageNumberFormat, PageNumberOptions, PageNumberPosition, SceneObject, ScenePage, SceneShape, SceneTool, SignatureMode, TextAlign, TextFontFamily, TextStyle } from './scene';
 import type { SubToolId } from './subtools';
+import { TokenField, tokenLabels, type TokenFieldHandle, type TokenName } from './TokenField';
 
 export interface SubToolInspectorProps {
   page: ScenePage;
@@ -35,6 +37,8 @@ export interface SubToolInspectorProps {
   chooseWatermarkPicture: () => Promise<void>;
   watermarkPictureError: string | null;
   addPageNumbers: () => void;
+  addHeaderFooter: () => void;
+  headerFooterOverlap: boolean;
 }
 type Panel = ComponentType<SubToolInspectorProps>;
 
@@ -327,6 +331,93 @@ const PageNumberFields: Panel = ({ selected, updateObject, endGroup, pageNumber,
   </>;
 };
 
+type HeaderFooterVariant = 'main' | 'firstPage' | 'even';
+const headerFooterSizes = [7, 8, 8.5, 9, 10, 11, 12, 14];
+const slotLabels: Record<HeaderFooterSlot, string> = { left: 'Left', center: 'Centre', right: 'Right' };
+const bandLabels: Record<HeaderFooterBand, string> = { header: 'Header', footer: 'Footer' };
+
+const HeaderFooterFields: Panel = ({ selected, updateObject, endGroup, pageNumber, pageCount, headerFooterOverlap }) => {
+  const [variant, setVariant] = useState<HeaderFooterVariant>('main');
+  const fields = useRef(new Map<string, TokenFieldHandle>());
+  const lastField = useRef('footer-center');
+  if (selected?.kind !== 'headerFooter' || !selected.headerFooter) return null;
+  const options = selected.headerFooter;
+  const editing = variant !== 'main' && options[variant] ? variant : 'main';
+  const text: HeaderFooterText = editing === 'main' ? options : options[editing]!;
+  const update = (patch: Partial<HeaderFooterOptions>, field: string) => updateObject({ headerFooter: { ...options, ...patch } }, field);
+  const setSlot = (band: HeaderFooterBand, slot: HeaderFooterSlot, value: string) => {
+    const next = { header: { ...text.header }, footer: { ...text.footer } };
+    next[band][slot] = value;
+    update(editing === 'main' ? next : { [editing]: next }, `header-footer-${editing}-${band}-${slot}`);
+  };
+  const toggleVariant = (key: 'firstPage' | 'even', on: boolean, field: string) => {
+    update({ [key]: on ? { header: { ...options.header }, footer: { ...options.footer } } : null }, field);
+    setVariant(on ? key : 'main');
+  };
+  const mainLabel = options.even ? 'Odd pages' : 'Other pages';
+  return <>
+    <div className="scene-inspector-field gap-2">
+      <span className="settings-radio"><Checkbox id="scene-header-footer-first" checked={Boolean(options.firstPage)}
+        onCheckedChange={(checked) => toggleVariant('firstPage', checked === true, 'header-footer-first')} /><Label htmlFor="scene-header-footer-first">Different first page</Label></span>
+      <span className="settings-radio"><Checkbox id="scene-header-footer-even" checked={Boolean(options.even)}
+        onCheckedChange={(checked) => toggleVariant('even', checked === true, 'header-footer-even')} /><Label htmlFor="scene-header-footer-even">Different odd and even pages</Label></span>
+    </div>
+    {(options.firstPage || options.even) && <ToggleGroup type="single" variant="outline" size="sm" className="w-full" aria-label="Text for" value={editing}
+      onValueChange={(value) => { if (value) setVariant(value as HeaderFooterVariant); }}>
+      {options.firstPage && <ToggleGroupItem value="firstPage" className="flex-1">First page</ToggleGroupItem>}
+      {options.even && <ToggleGroupItem value="even" className="flex-1">Even pages</ToggleGroupItem>}
+      <ToggleGroupItem value="main" className="flex-1">{mainLabel}</ToggleGroupItem>
+    </ToggleGroup>}
+    {headerFooterBands.map((band) => <fieldset key={band} className="scene-inspector-field">
+      <legend className="mb-1.5 text-sm font-medium">{bandLabels[band]}</legend>
+      {headerFooterSlots.map((slot) => {
+        const key = `${band}-${slot}`;
+        return <div key={slot} className="grid grid-cols-[46px_1fr] items-center gap-2">
+          <span className="text-xs text-muted-foreground" aria-hidden="true">{slotLabels[slot]}</span>
+          <TokenField key={`${editing}-${key}`} label={`${bandLabels[band]} ${slotLabels[slot].toLowerCase()}`} value={text[band][slot]}
+            ref={(handle) => { if (handle) fields.current.set(key, handle); else fields.current.delete(key); }}
+            onChange={(value) => setSlot(band, slot, value)} onFocus={() => { lastField.current = key; }} onBlur={endGroup} />
+        </div>;
+      })}
+    </fieldset>)}
+    <div className="scene-inspector-field"><span className="text-sm font-medium" id="scene-header-footer-insert">Insert</span>
+      <div role="group" aria-labelledby="scene-header-footer-insert" className="flex flex-wrap gap-1.5">
+        {(Object.keys(tokenLabels) as TokenName[]).map((token) => <Button key={token} variant="outline" size="sm"
+          onMouseDown={(event) => event.preventDefault()} onClick={() => { fields.current.get(lastField.current)?.insert(token); endGroup(); }}>{tokenLabels[token]}</Button>)}
+      </div>
+      <p className="scene-property-note">Inserts into the box you last selected. Inserted items show as tags and fill in per page; Backspace removes a whole tag.</p>
+    </div>
+    <div className="scene-inspector-row">
+      <div className="scene-inspector-field"><Label htmlFor="scene-header-footer-size">Size</Label>
+        <NativeSelect id="scene-header-footer-size" size="sm" value={String(selected.fontSize)} onChange={(event) => updateObject({ fontSize: Number(event.target.value) }, 'header-footer-size')}>
+          {headerFooterSizes.map((value) => <option key={value} value={String(value)}>{value} pt</option>)}
+        </NativeSelect>
+      </div>
+      <div className="scene-inspector-field"><Label htmlFor="scene-header-footer-color">Colour</Label>
+        <input id="scene-header-footer-color" type="color" value={selected.color} onChange={(event) => updateObject({ color: event.target.value }, 'header-footer-color')} onBlur={endGroup} />
+      </div>
+    </div>
+    <div className="scene-inspector-row">
+      <div className="scene-inspector-field"><Label htmlFor="scene-header-footer-margin">Distance from edge</Label>
+        <NativeSelect id="scene-header-footer-margin" size="sm" value={String(options.margin)} onChange={(event) => update({ margin: Number(event.target.value) }, 'header-footer-margin')}>
+          {pageNumberMargins.map(({ value, label }) => <option key={value} value={String(value)}>{label}</option>)}
+        </NativeSelect>
+      </div>
+      <div className="scene-inspector-field"><Label htmlFor="scene-header-footer-font">Font</Label>
+        <NativeSelect id="scene-header-footer-font" size="sm" value={selected.fontFamily ?? 'Noto Sans'} onChange={(event) => updateObject({ fontFamily: event.target.value }, 'header-footer-font')}>
+          {textFonts.map((family) => <option key={family} value={family}>{family}</option>)}
+        </NativeSelect>
+      </div>
+    </div>
+    <div className="scene-inspector-field"><Label htmlFor="scene-header-footer-date">Date</Label>
+      <Input id="scene-header-footer-date" type="date" value={options.date} onChange={(event) => { if (event.target.value) update({ date: event.target.value }, 'header-footer-date'); }} onBlur={endGroup} />
+    </div>
+    <PageRangeFields selected={selected} updateObject={updateObject} pageNumber={pageNumber} pageCount={pageCount} noun="Header and footer" />
+    {headerFooterOverlap && <p role="alert" className="scene-error">Header or footer text overlaps existing text on this page. Increase the distance from the edge or move the text to another box.</p>}
+    <p className="scene-property-note">Text that is too long for its box is cut off. The preview shows exactly what will be exported.</p>
+  </>;
+};
+
 const TextGuide: Panel = () =>
   <p className="scene-property-note">Click the page to add a text box. Double-click a box or press Enter to edit it.</p>;
 
@@ -352,6 +443,14 @@ const PageNumberGuide: Panel = ({ selected, addPageNumbers }) => {
   </> : null;
 };
 
+const HeaderFooterGuide: Panel = ({ selected, addHeaderFooter }) => {
+  const availability = useToolAvailability();
+  return availability.allows('pdf-edit') && !selected ? <>
+    <p className="scene-property-note">One header and footer, applied to every page in the range. Edit it once, on any page.</p>
+    <Button size="sm" onClick={addHeaderFooter}>Add header and footer</Button>
+  </> : null;
+};
+
 const CropGuide: Panel = ({ page, commitPage }) => {
   const availability = useToolAvailability();
   return availability.allows('pdf-crop') ? <>
@@ -368,5 +467,6 @@ export const subToolInspectors: Partial<Record<SubToolId | SceneTool, { Fields?:
   signature: { Fields: SignatureFields, Guide: SignatureGuide },
   watermark: { Fields: WatermarkFields, Guide: WatermarkGuide },
   pageNumbers: { Fields: PageNumberFields, Guide: PageNumberGuide },
+  headerFooter: { Fields: HeaderFooterFields, Guide: HeaderFooterGuide },
   crop: { Guide: CropGuide },
 };

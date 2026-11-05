@@ -4,7 +4,7 @@ import type { PdfDocument, PdfTextRun } from './contracts';
 // All geometry is in points, from the top-left of the unrotated visible source page.
 export interface SceneRect { x: number; y: number; width: number; height: number }
 export interface ScenePoint { x: number; y: number }
-export type SceneTool = 'select' | 'text' | 'highlight' | 'shape' | 'signature' | 'watermark' | 'pageNumbers' | 'crop';
+export type SceneTool = 'select' | 'text' | 'highlight' | 'shape' | 'signature' | 'watermark' | 'pageNumbers' | 'headerFooter' | 'crop';
 export type SceneShape = 'square' | 'round' | 'triangle' | 'line' | 'dotted-line' | 'arrow-left' | 'arrow-right' | 'arrow-up' | 'arrow-down';
 export type SignatureMode = 'image' | 'text';
 export type WatermarkLayer = 'front' | 'behind';
@@ -14,9 +14,22 @@ export type TextAlign = 'left' | 'center' | 'right';
 export type PageNumberFormat = 'number' | 'page' | 'page-of-total' | 'number-of-total' | 'dashes';
 export type PageNumberPosition = `${'top' | 'middle' | 'bottom'}-${'left' | 'center' | 'right'}`;
 export interface PageNumberOptions { format: PageNumberFormat; start: number; position: PageNumberPosition; margin: number }
+export type HeaderFooterBand = 'header' | 'footer';
+export type HeaderFooterSlot = 'left' | 'center' | 'right';
+export type HeaderFooterText = Record<HeaderFooterBand, Record<HeaderFooterSlot, string>>;
+// Slot text is a template with {page}, {pages}, {date} and {file} tags. The date is a fixed yyyy-mm-dd,
+// and the file name is captured when the header and footer are added, so exports are reproducible.
+export interface HeaderFooterOptions extends HeaderFooterText {
+  firstPage: HeaderFooterText | null;
+  even: HeaderFooterText | null;
+  date: string;
+  fileName: string;
+  margin: number;
+}
+export interface HeaderFooterPart { band: HeaderFooterBand; slot: HeaderFooterSlot; text: string; rect: SceneRect }
 export interface SceneObject {
   id: string;
-  kind: 'text' | 'highlight' | 'shape' | 'signature' | 'watermark' | 'pageNumbers';
+  kind: 'text' | 'highlight' | 'shape' | 'signature' | 'watermark' | 'pageNumbers' | 'headerFooter';
   rect: SceneRect;
   text: string;
   fontSize: number;
@@ -35,7 +48,7 @@ export interface SceneObject {
   bold?: boolean;
   italic?: boolean;
   align?: TextAlign;
-  // Text boxes, watermarks and page numbers: a page list like "1-3, 7, 10-" or "all", "odd", "even".
+  // Text boxes, watermarks, page numbers and headers and footers: a page list like "1-3, 7, 10-" or "all", "odd", "even".
   // The object is stored once on its page and drawn on every page in the list.
   pageRange?: string | null;
   watermark?: WatermarkOptions;
@@ -44,6 +57,9 @@ export interface SceneObject {
   watermarkPreview?: string | null;
   watermarkImageSize?: { width: number; height: number } | null;
   pageNumbers?: PageNumberOptions;
+  headerFooter?: HeaderFooterOptions;
+  // The resolved header and footer text drawn on one page, for the page preview only.
+  headerFooterParts?: HeaderFooterPart[];
 }
 // Defaults for the next text box; each new text box copies them.
 export interface TextStyle { fontFamily: TextFontFamily; bold: boolean; italic: boolean; align: TextAlign }
@@ -122,6 +138,9 @@ export function objectsOnPage(scene: PdfScene, pageIndex: number): { object: Sce
   }));
 }
 
+// Range-applied kinds are stored once and drawn on every page in their range, and outlive the page that stores them.
+export const isRangedKind = (kind: SceneObject['kind']) => kind === 'watermark' || kind === 'pageNumbers' || kind === 'headerFooter';
+
 // The five fixed patterns of the earlier watermark tool, as shared options.
 export const legacyWatermarkPatterns = {
   'across-page': { position: 'tile', rotation: -35 },
@@ -191,10 +210,24 @@ export const pageNumberTemplates: Record<PageNumberFormat, string> = {
   'number-of-total': '{page} / {pages}', dashes: '- {page} -',
 };
 
-export interface PageTokens { page: number; pages: number }
-// Mirrors page_tokens in the native exporter.
+export interface PageTokens { page: number; pages: number; date?: string; file?: string }
+const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+// Mirrors token_date in the native exporter: 2026-10-13 shows as 13 October 2026.
+export function tokenDate(iso: string): string | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!match) return null;
+  const [year, month, day] = match.slice(1).map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null;
+  return `${day} ${months[month - 1]} ${year}`;
+}
+// Mirrors page_tokens in the native exporter. Each tag is replaced once, so tag-like text in a file name stays as it is.
 export const resolvePageTokens = (template: string, tokens: PageTokens) =>
-  template.replace(/\{(page|pages)\}/g, (_, name: keyof PageTokens) => String(tokens[name]));
+  template.replace(/\{(page|pages|date|file)\}/g, (tag, name: keyof PageTokens) => {
+    if (name === 'date') return tokens.date === undefined ? tag : tokenDate(tokens.date) ?? '';
+    const value = tokens[name];
+    return value === undefined ? tag : String(value);
+  });
 
 // Numbers follow the final page order: the page at pageIndex shows start + pageIndex.
 export function pageNumberText(object: SceneObject, pageIndex: number, pageCount: number): string {
@@ -211,4 +244,44 @@ export function pageNumberRect(area: SceneRect, object: SceneObject, text: strin
   const place = (start: number, size: number, length: number, side: string) =>
     side === 'left' || side === 'top' ? start + margin : side === 'right' || side === 'bottom' ? start + size - margin - length : start + (size - length) / 2;
   return { x: place(area.x, area.width, width, horizontal), y: place(area.y, area.height, height, vertical), width, height };
+}
+
+export const headerFooterBands: HeaderFooterBand[] = ['header', 'footer'];
+export const headerFooterSlots: HeaderFooterSlot[] = ['left', 'center', 'right'];
+export const emptyHeaderFooterText = (): HeaderFooterText => ({ header: { left: '', center: '', right: '' }, footer: { left: '', center: '', right: '' } });
+
+// Mirrors header_footer_variant in the native exporter. The first page of the range uses the first-page text,
+// even page numbers use the even-page text, and every other page uses the main text.
+export function headerFooterVariant(options: HeaderFooterOptions, pageIndex: number, firstIndex: number): HeaderFooterText {
+  if (options.firstPage && pageIndex === firstIndex) return options.firstPage;
+  if (options.even && (pageIndex + 1) % 2 === 0) return options.even;
+  return { header: options.header, footer: options.footer };
+}
+
+// The six slots split each band into thirds between the margins; mirrors header_footer_rect in the native exporter.
+export function headerFooterRect(area: SceneRect, margin: number, fontSize: number, band: HeaderFooterBand, slot: HeaderFooterSlot): SceneRect {
+  const width = Math.max(0, area.width - 2 * margin) / 3, height = fontSize * 1.2;
+  return { x: area.x + margin + width * headerFooterSlots.indexOf(slot), y: band === 'header' ? area.y + margin : area.y + area.height - margin - height, width, height };
+}
+
+// Header and footer text resolved for the page at pageIndex in the final page order.
+export function headerFooterParts(area: SceneRect, object: SceneObject, pageIndex: number, pageCount: number): HeaderFooterPart[] {
+  const options = object.headerFooter;
+  if (!options) return [];
+  let firstIndex = pageIndex;
+  try { firstIndex = pagesInRange(object.pageRange ?? 'all', pageCount)[0]; } catch { /* The inspector reports the range. */ }
+  const text = headerFooterVariant(options, pageIndex, firstIndex);
+  const tokens = { page: pageIndex + 1, pages: pageCount, date: options.date, file: options.fileName };
+  return headerFooterBands.flatMap((band) => headerFooterSlots.map((slot) => ({
+    band, slot, text: resolvePageTokens(text[band][slot], tokens), rect: headerFooterRect(area, options.margin, object.fontSize, band, slot) })));
+}
+
+// Whether any non-empty slot's estimated text box overlaps a text run on the page. Draft text width is estimated.
+export function headerFooterOverlaps(parts: HeaderFooterPart[], fontSize: number, runs: Pick<PdfTextRun, 'x' | 'y' | 'width' | 'height'>[]): boolean {
+  return parts.some(({ slot, text, rect }) => {
+    if (!text.trim()) return false;
+    const width = Math.min(rect.width, text.length * fontSize * 0.55);
+    const x = slot === 'left' ? rect.x : slot === 'right' ? rect.x + rect.width - width : rect.x + (rect.width - width) / 2;
+    return runs.some((run) => run.x < x + width && x < run.x + run.width && run.y < rect.y + rect.height && rect.y < run.y + run.height);
+  });
 }

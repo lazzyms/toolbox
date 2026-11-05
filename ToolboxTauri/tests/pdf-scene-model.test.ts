@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { legacyWatermarkPatterns, objectsOnPage, pageNumberRect, pageNumberText, pagesInRange, resolvePageTokens, sceneFromDocument, watermarkMarks, type PageNumberFormat, type PdfScene, type SceneObject } from "../src/features/pdf-editor/scene";
+import { headerFooterOverlaps, headerFooterParts, headerFooterVariant, isRangedKind, legacyWatermarkPatterns, objectsOnPage, pageNumberRect, pageNumberText, pagesInRange, resolvePageTokens, sceneFromDocument, tokenDate, watermarkMarks, type HeaderFooterOptions, type HeaderFooterText, type PageNumberFormat, type PdfScene, type SceneObject } from "../src/features/pdf-editor/scene";
 
 test("scene import carries source rotation and page-box baseline", () => {
   const scene = sceneFromDocument({
@@ -102,4 +102,65 @@ test("page-number placement mirrors the native corners, centres and margin", () 
   assert.deepEqual(at("top-left"), { x: 46, y: 56, width: 11, height: 12 });
   assert.deepEqual(at("bottom-right"), { x: 10 + 500 - 36 - 11, y: 20 + 600 - 36 - 12, width: 11, height: 12 });
   assert.deepEqual(at("middle-center"), { x: 10 + (500 - 11) / 2, y: 20 + (600 - 12) / 2, width: 11, height: 12 });
+});
+
+const slots = (left = "", center = "", right = "") => ({ left, center, right });
+const texts = (header: ReturnType<typeof slots>, footer: ReturnType<typeof slots>): HeaderFooterText => ({ header, footer });
+const headerFooter = (options: Partial<HeaderFooterOptions> = {}, pageRange = "all"): SceneObject => ({
+  id: "hf", kind: "headerFooter", rect: { x: 0, y: 0, width: 612, height: 792 }, text: "", fontSize: 9, color: "#555555", opacity: 1, strokes: [], pageRange,
+  headerFooter: { ...texts(slots("{file}", "", "{date}"), slots("", "{page} of {pages}", "")), firstPage: null, even: null, date: "2026-10-13", fileName: "report.pdf", margin: 36, ...options },
+});
+const area = { x: 0, y: 0, width: 612, height: 792 };
+const resolved = (object: SceneObject, pageIndex: number, pageCount: number) =>
+  Object.fromEntries(headerFooterParts(area, object, pageIndex, pageCount).filter(({ text }) => text).map(({ band, slot, text }) => [`${band} ${slot}`, text]));
+
+test("every page token resolves once, including the fixed date and file name", () => {
+  const tokens = { page: 4, pages: 12, date: "2026-10-13", file: "{page} notes.pdf" };
+  assert.equal(resolvePageTokens("{page}", tokens), "4");
+  assert.equal(resolvePageTokens("{pages}", tokens), "12");
+  assert.equal(resolvePageTokens("{date}", tokens), "13 October 2026");
+  assert.equal(resolvePageTokens("{file}", tokens), "{page} notes.pdf");
+  assert.equal(resolvePageTokens("{date} {file} {x}", { page: 1, pages: 1 }), "{date} {file} {x}");
+  assert.equal(tokenDate("2024-02-29"), "29 February 2024");
+  for (const bad of ["2023-02-29", "2026-13-01", "2026-04-31", "2026-1-01", ""]) assert.equal(tokenDate(bad), null, bad);
+  assert.equal(resolvePageTokens("{date}", { page: 1, pages: 1, date: "not a date" }), "");
+});
+
+test("header and footer variants pick the first page of the range, then even pages, then the main text", () => {
+  const first = texts(slots("Cover"), slots("", "First"));
+  const even = texts(slots("", "", "Even {page}"), slots("{file}"));
+  const options = headerFooter({ firstPage: first, even }).headerFooter!;
+  assert.equal(headerFooterVariant(options, 0, 0), first);
+  assert.equal(headerFooterVariant(options, 1, 0), even);
+  assert.deepEqual(headerFooterVariant(options, 2, 0), texts(options.header, options.footer));
+  assert.equal(headerFooterVariant({ ...options, firstPage: null }, 0, 0).header.left, "{file}");
+  assert.equal(headerFooterVariant({ ...options, even: null }, 1, 0).header.left, "{file}");
+  assert.equal(headerFooterVariant(options, 3, 3), first, "an odd-numbered first page of the range still uses the first-page text");
+});
+
+test("header and footer text follows the final page order, first-page and even variants", () => {
+  const object = headerFooter({ firstPage: texts(slots("Cover"), slots("", "First")), even: texts(slots("", "", "Even {page}"), slots("{file}")) });
+  assert.deepEqual(resolved(object, 0, 3), { "header left": "Cover", "footer center": "First" });
+  assert.deepEqual(resolved(object, 1, 3), { "header right": "Even 2", "footer left": "report.pdf" });
+  assert.deepEqual(resolved(object, 2, 3), { "header left": "report.pdf", "header right": "13 October 2026", "footer center": "3 of 3" });
+  const skipFirst = headerFooter({ firstPage: texts(slots("Start"), slots()) }, "2-");
+  assert.deepEqual(resolved(skipFirst, 1, 3), { "header left": "Start" });
+  const page = (id: string, objects: SceneObject[] = []) => ({ id, sourceIndex: Number(id), width: 612, height: 792, rotation: 0, crop: null, sourceRotation: 0, sourceBox: null, objects });
+  const before: PdfScene = { pages: [page("0", [object]), page("1"), page("2")] };
+  const reordered: PdfScene = { pages: [before.pages[1], before.pages[2], before.pages[0]] };
+  assert.deepEqual(objectsOnPage(reordered, 2).map(({ object: item }) => resolved(item, 2, 3)["footer center"]), ["3 of 3"]);
+  assert.ok(isRangedKind("headerFooter") && isRangedKind("pageNumbers") && !isRangedKind("text"));
+});
+
+test("header and footer slots split each band into thirds and report overlap with page text", () => {
+  const parts = headerFooterParts(area, headerFooter(), 0, 1);
+  assert.deepEqual(parts.map(({ band, slot, rect }) => [band, slot, rect]), [
+    ["header", "left", { x: 36, y: 36, width: 180, height: 9 * 1.2 }], ["header", "center", { x: 216, y: 36, width: 180, height: 9 * 1.2 }],
+    ["header", "right", { x: 396, y: 36, width: 180, height: 9 * 1.2 }], ["footer", "left", { x: 36, y: 792 - 36 - 9 * 1.2, width: 180, height: 9 * 1.2 }],
+    ["footer", "center", { x: 216, y: 792 - 36 - 9 * 1.2, width: 180, height: 9 * 1.2 }], ["footer", "right", { x: 396, y: 792 - 36 - 9 * 1.2, width: 180, height: 9 * 1.2 }],
+  ]);
+  assert.equal(headerFooterOverlaps(parts, 9, [{ x: 40, y: 38, width: 50, height: 10 }]), true);
+  assert.equal(headerFooterOverlaps(parts, 9, [{ x: 40, y: 100, width: 300, height: 10 }]), false);
+  assert.equal(headerFooterOverlaps(parts, 9, [{ x: 220, y: 38, width: 20, height: 10 }]), false, "the empty header centre does not collide");
+  assert.equal(headerFooterOverlaps(parts, 9, [{ x: 290, y: 740, width: 20, height: 10 }]), true, "the centred footer text collides");
 });
