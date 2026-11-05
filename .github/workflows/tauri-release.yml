@@ -115,7 +115,10 @@ jobs:
         working-directory: ToolboxTauri
       - name: Install qpdf (macOS)
         if: runner.os == 'macOS'
-        run: brew install qpdf poppler tesseract
+        run: |
+          brew install qpdf poppler tesseract
+          # pdftotext is never found on PATH; native tests use the Development override.
+          echo "TOOLBOX_PDFTOTEXT_PATH=$(command -v pdftotext)" >> "$GITHUB_ENV"
       - name: Install qpdf and stage Windows resources
         if: runner.os == 'Windows'
         shell: pwsh
@@ -177,6 +180,7 @@ jobs:
         run: |
           npm run tauri build -- --target ${{ matrix.target }} --config release-config.json
           ./scripts/bundle-qpdf.sh "$(pwd)/src-tauri/target/${{ matrix.target }}/release/bundle/macos/Toolbox.app"
+          node scripts/check-release-readiness.mjs --fonts "$(pwd)/src-tauri/target/${{ matrix.target }}/release/bundle/macos/Toolbox.app/Contents/Resources/resources/fonts"
           mkdir -p release-assets
           archive="$(find src-tauri/target/${{ matrix.target }}/release/bundle/macos -name '*.app.tar.gz' -print -quit)"
           cp "$archive" "release-assets/Toolbox-${{ matrix.artifact }}.app.tar.gz"

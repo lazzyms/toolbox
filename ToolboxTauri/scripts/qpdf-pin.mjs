@@ -69,7 +69,8 @@ export function runVersion(path) {
   return match ? match[1] : null;
 }
 
-function inspectNativeBinary({ name, path, target }) {
+// A release helper must exist and be a native binary for the target, so it never runs emulated.
+function inspectNative(name, path, target) {
   const expected = TARGETS[target];
   if (!expected) throw new Error(`Unsupported release target ${target}; expected one of ${Object.keys(TARGETS).join(", ")}`);
   if (!path || !existsSync(path) || !statSync(path).isFile()) {
@@ -83,17 +84,34 @@ function inspectNativeBinary({ name, path, target }) {
       message: `${name} at ${path} is ${described}; ${target} needs a native ${expected.format} ${expected.architecture} binary and would otherwise run emulated or not at all`,
     };
   }
-  return { cause: null, message: `${name} is native ${expected.architecture} for ${target}` };
+  return null;
 }
 
 // The bundled page renderer (pdftoppm) has no pinned version; it only has to be native to the target.
 export function inspectRenderer({ path, target }) {
-  return inspectNativeBinary({ name: "page renderer", path, target });
+  const failure = inspectNative("page renderer", path, target);
+  if (failure) return failure;
+  return { cause: null, message: `page renderer is native ${TARGETS[target].architecture} for ${target}` };
+}
+
+export function runPdftotextVersion(path) {
+  const result = spawnSync(path, ["-v"], { encoding: "utf8", timeout: 30_000 });
+  if (result.error || result.status !== 0) return null;
+  const match = /^pdftotext version (\d+\.\d+\.\d+)/m.exec(`${result.stdout}\n${result.stderr}`);
+  return match ? match[1] : null;
+}
+
+export function inspectPdftotext({ path, target, readVersion = runPdftotextVersion }) {
+  const failure = inspectNative("pdftotext", path, target);
+  if (failure) return failure;
+  const version = readVersion(path);
+  if (!parseVersion(version)) return { cause: "unrunnable", message: `pdftotext at ${path} did not report a version` };
+  return { cause: null, version, message: `pdftotext ${version} is native ${TARGETS[target].architecture} for ${target}` };
 }
 
 export function inspectQpdf({ path, target, pin = readPin(), readVersion = runVersion }) {
-  const native = inspectNativeBinary({ name: "qpdf", path, target });
-  if (native.cause) return native;
+  const failure = inspectNative("qpdf", path, target);
+  if (failure) return failure;
   const expected = TARGETS[target];
   const version = readVersion(path);
   const parsed = parseVersion(version);

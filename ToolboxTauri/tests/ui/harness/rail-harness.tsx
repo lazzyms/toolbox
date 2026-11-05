@@ -7,7 +7,8 @@ import type { ToolAvailabilitySnapshot } from "../../../src/toolFlags";
 import "../../../src/styles/app.css";
 
 // No real view holds ten or more tools yet, so the rail is exercised with twelve registered ones.
-const tools = UtilityRegistry.slice(0, 12);
+// Unavailable tools render disabled and take no focus, so they are left out.
+const tools = UtilityRegistry.filter((tool) => tool.status !== "unavailable").slice(0, 12);
 
 const everyToolEnabled = {
   platform: "macos",

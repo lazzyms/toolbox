@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { inspectQpdf, inspectRenderer, readPin } from "../scripts/qpdf-pin.mjs";
+import { inspectPdftotext, inspectQpdf, inspectRenderer, readPin } from "../scripts/qpdf-pin.mjs";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const fixtures = mkdtempSync(join(tmpdir(), "toolbox-qpdf-release-"));
@@ -173,14 +173,14 @@ test("release readiness passes a native release qpdf at the pinned minimum", { s
   assert.match(result.stdout, /qpdf release check passed/);
 });
 
-function bundleMacOS(qpdf) {
+function bundleMacOS(qpdf, pdftotext) {
   const app = join(fixtures, `app-${Math.random().toString(36).slice(2)}`, "Toolbox.app");
   mkdirSync(join(app, "Contents", "Resources"), { recursive: true });
   const helper = fixture("helper", Buffer.from("#!/bin/sh\nexit 0\n"));
   const result = spawnSync("bash", ["scripts/bundle-qpdf.sh", app], {
     cwd: projectRoot,
     encoding: "utf8",
-    env: { ...process.env, QPDF: qpdf, PDFTOPPM: helper, PDFTOTEXT: helper, TESSERACT: helper, TAURI_SIGNING_PRIVATE_KEY: "" },
+    env: { ...process.env, QPDF: qpdf, PDFTOPPM: helper, PDFTOTEXT: pdftotext ?? helper, TESSERACT: helper, TAURI_SIGNING_PRIVATE_KEY: "" },
   });
   return { result, resources: readdirSync(join(app, "Contents", "Resources")) };
 }
@@ -204,5 +204,92 @@ test("the macOS bundling script refuses a qpdf path that does not exist", { skip
   const { result, resources } = bundleMacOS(join(fixtures, "absent", "qpdf"));
   assert.equal(result.status, 1);
   assert.match(result.stderr, /\(missing\)/);
+  assert.deepEqual(resources, []);
+});
+
+const pdftotextCases = [
+  { name: "passes a native arm64 pdftotext for macOS", target: "aarch64-apple-darwin", bytes: machO(ARM64_MACH_O), cause: null },
+  { name: "passes a native x64 pdftotext for Windows x86_64", target: "x86_64-pc-windows-msvc", bytes: pe(X86_64_PE), cause: null },
+  { name: "passes a native arm64 pdftotext for Windows arm64", target: "aarch64-pc-windows-msvc", bytes: pe(ARM64_PE), cause: null },
+  { name: "fails an emulated x64 pdftotext on Windows arm64", target: "aarch64-pc-windows-msvc", bytes: pe(X86_64_PE), cause: "wrong-architecture" },
+  { name: "fails an arm64 pdftotext on Windows x86_64", target: "x86_64-pc-windows-msvc", bytes: pe(ARM64_PE), cause: "wrong-architecture" },
+  { name: "fails an x86_64-only pdftotext on macOS arm64", target: "aarch64-apple-darwin", bytes: machO(X86_64_MACH_O), cause: "wrong-architecture" },
+  { name: "fails a pdftotext script that is not a native executable", target: "aarch64-apple-darwin", bytes: Buffer.from("#!/bin/sh\necho 'pdftotext version 26.02.0'\n"), cause: "wrong-architecture" },
+];
+
+for (const [index, entry] of pdftotextCases.entries()) {
+  test(entry.name, () => {
+    const path = fixture(`pdftotext-case-${index}`, entry.bytes);
+    const result = inspectPdftotext({ path, target: entry.target, readVersion: () => "26.02.0" });
+    assert.equal(result.cause, entry.cause, result.message);
+  });
+}
+
+test("fails a missing pdftotext on every supported target without running anything", () => {
+  for (const target of ["aarch64-apple-darwin", "x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]) {
+    const result = inspectPdftotext({ path: join(fixtures, "absent", "pdftotext.exe"), target, readVersion: () => assert.fail("a missing pdftotext must not run") });
+    assert.equal(result.cause, "missing", target);
+  }
+});
+
+test("does not run a pdftotext built for another architecture", () => {
+  const path = fixture("emulated-pdftotext.exe", pe(X86_64_PE));
+  const result = inspectPdftotext({ path, target: "aarch64-pc-windows-msvc", readVersion: () => assert.fail("a foreign pdftotext must not run") });
+  assert.equal(result.cause, "wrong-architecture");
+  assert.match(result.message, /emulated/);
+});
+
+test("fails a native pdftotext that reports no version", () => {
+  const path = fixture("silent-pdftotext.exe", pe(X86_64_PE));
+  const result = inspectPdftotext({ path, target: "x86_64-pc-windows-msvc", readVersion: () => null });
+  assert.equal(result.cause, "unrunnable");
+});
+
+test("release readiness names the cause when a release pdftotext is missing", () => {
+  const result = readiness(["--pdftotext", join(fixtures, "absent", "pdftotext"), "--target", "aarch64-apple-darwin"]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /pdftotext release check failed \(missing\)/);
+  assert.doesNotMatch(result.stderr, /qpdf release check/);
+});
+
+test("release readiness names the cause when a release pdftotext is emulated on Windows arm64", () => {
+  const result = readiness(["--pdftotext", fixture("readiness-emulated-pdftotext.exe", pe(X86_64_PE)), "--target", "aarch64-pc-windows-msvc"]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /pdftotext release check failed \(wrong-architecture\)/);
+});
+
+test("release readiness checks both helpers when both are given", () => {
+  const result = readiness([
+    "--qpdf", join(fixtures, "absent", "qpdf.exe"),
+    "--pdftotext", join(fixtures, "absent", "pdftotext.exe"),
+    "--target", "x86_64-pc-windows-msvc",
+  ]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /qpdf release check failed \(missing\)/);
+  assert.match(result.stderr, /pdftotext release check failed \(missing\)/);
+});
+
+function nativeFakePdftotext(name, version) {
+  const directory = join(fixtures, name);
+  mkdirSync(directory, { recursive: true });
+  const source = join(directory, "pdftotext.c");
+  writeFileSync(source, `#include <stdio.h>\nint main(void) { fputs("pdftotext version ${version}\\n", stderr); return 0; }\n`);
+  const path = join(directory, "pdftotext");
+  const build = spawnSync("cc", ["-arch", "arm64", source, "-o", path], { encoding: "utf8" });
+  assert.equal(build.status, 0, build.stderr);
+  return path;
+}
+
+test("release readiness passes a native release pdftotext", { skip: !compiler }, () => {
+  const result = readiness(["--pdftotext", nativeFakePdftotext("readiness-pdftotext", "26.02.0"), "--target", "aarch64-apple-darwin"]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /pdftotext release check passed: pdftotext 26\.02\.0 is native aarch64/);
+});
+
+test("the macOS bundling script refuses a pdftotext that is not a native arm64 binary", { skip: !compiler }, () => {
+  const { result, resources } = bundleMacOS(nativeFakeQpdf("bundle-qpdf-for-pdftotext", pin.minimumVersion), fixture("bundle-intel-pdftotext", machO(X86_64_MACH_O)));
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /pdftotext release check failed \(wrong-architecture\)/);
+  assert.match(result.stderr, /bundle-qpdf: refusing pdftotext/);
   assert.deepEqual(resources, []);
 });

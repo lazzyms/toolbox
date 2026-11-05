@@ -16,11 +16,26 @@ pub struct BatchRunner;
 pub enum FileEvent {
     Started { index: usize },
     Finished { index: usize, outcome: JobOutcome },
+    /// How far a long single-file job has got, such as the page a PDF export is on.
+    Progress { index: usize, completed: usize, total: usize },
+}
+
+type Sink = Arc<dyn Fn(FileEvent) + Send + Sync>;
+
+thread_local! {
+    static PROGRESS: std::cell::RefCell<Option<(usize, Sink)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Reports progress for the file the current job is processing. Outside a batch run, such as a preview, it does nothing.
+pub fn report_progress(completed: usize, total: usize) {
+    PROGRESS.with(|progress| {
+        if let Some((index, sink)) = &*progress.borrow() { sink(FileEvent::Progress { index: *index, completed, total }) }
+    });
 }
 
 /// A run's link to the view that started it. Progress goes out through the sink and a cancel comes back in by run id.
 pub struct RunEvents {
-    sink: Option<Box<dyn Fn(FileEvent) + Send + Sync>>,
+    sink: Option<Sink>,
     cancel: CancelFlag,
     run_id: Option<String>,
 }
@@ -41,12 +56,12 @@ pub const CANCELLED_BEFORE_START: &str = "Cancelled before it started";
 impl RunEvents {
     pub fn silent() -> Self { Self { sink: None, cancel: CancelFlag::default(), run_id: None } }
     pub fn new(sink: impl Fn(FileEvent) + Send + Sync + 'static) -> Self {
-        Self { sink: Some(Box::new(sink)), cancel: CancelFlag::default(), run_id: None }
+        Self { sink: Some(Arc::new(sink)), cancel: CancelFlag::default(), run_id: None }
     }
     pub fn for_run(run_id: String, sink: impl Fn(FileEvent) + Send + Sync + 'static) -> Self {
         let cancel = CancelFlag::default();
         running().insert(run_id.clone(), cancel.clone());
-        Self { sink: Some(Box::new(sink)), cancel, run_id: Some(run_id) }
+        Self { sink: Some(Arc::new(sink)), cancel, run_id: Some(run_id) }
     }
     fn emit(&self, event: FileEvent) { if let Some(sink) = &self.sink { sink(event) } }
     fn settled(&self, index: usize, outcome: &JobOutcome) {
@@ -127,8 +142,12 @@ impl BatchRunner {
                     events.emit(FileEvent::Started { index });
                     let outcome = match limits {
                         Some(limits) => {
-                            let (job, request) = (Arc::clone(&job), Arc::clone(request));
-                            limits.run_each(path, &events.cancel, move |path| job(&request, path))
+                            let (job, request, sink) = (Arc::clone(&job), Arc::clone(request), events.sink.clone());
+                            limits.run_each(path, &events.cancel, move |path| {
+                                // Each job runs on its own thread, so the reporter belongs to this file alone.
+                                PROGRESS.with(|progress| *progress.borrow_mut() = sink.map(|sink| (index, sink)));
+                                job(&request, path)
+                            })
                         }
                         None => JobOutcome::failure(path, ToolError::processing(format!("No processing limits are recorded for {command}."))),
                     };
@@ -190,6 +209,10 @@ mod tests {
         assert_eq!(finished["phase"], "finished");
         assert_eq!(finished["index"], 0);
         assert_eq!(finished["outcome"], serde_json::to_value(&outcome).unwrap());
+        assert_eq!(
+            serde_json::to_value(FileEvent::Progress { index: 0, completed: 4, total: 9 }).unwrap(),
+            serde_json::json!({ "phase": "progress", "index": 0, "completed": 4, "total": 9 })
+        );
     }
 
     #[test]

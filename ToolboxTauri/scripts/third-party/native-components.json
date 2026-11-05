@@ -497,6 +497,33 @@
       "source": "https://github.com/google/fonts/tree/main/ofl/pacifico"
     },
     {
+      "name": "Liberation fonts (Sans, Serif, Mono)",
+      "version": "2.1.5",
+      "licenseFile": "src-tauri/resources/fonts/Liberation-LICENSE.txt",
+      "license": "OFL-1.1",
+      "copyright": "Digitized data copyright (c) 2010 Google Corporation with Reserved Font Arimo, Tinos and Cousine; Copyright (c) 2012 Red Hat, Inc. with Reserved Font Name Liberation",
+      "source": "https://github.com/liberationfonts/liberation-fonts/releases/tag/2.1.5",
+      "note": "Metric-compatible fallbacks for Arial, Helvetica, Times New Roman, Times, Courier New and Courier."
+    },
+    {
+      "name": "Carlito font",
+      "version": "1.104",
+      "licenseFile": "src-tauri/resources/fonts/Carlito-LICENSE.txt",
+      "license": "OFL-1.1",
+      "copyright": "Copyright 2013 The Carlito Project Authors (https://github.com/googlefonts/carlito), with Reserved Font Name Carlito",
+      "source": "https://github.com/google/fonts/tree/main/ofl/carlito",
+      "note": "Metric-compatible fallback for Calibri."
+    },
+    {
+      "name": "Caladea font",
+      "version": "1.001",
+      "licenseFile": "src-tauri/resources/fonts/Caladea-LICENSE.txt",
+      "license": "OFL-1.1",
+      "copyright": "Copyright 2012 The Caladea Project Authors (https://github.com/huertatipografica/Caladea)",
+      "source": "https://github.com/google/fonts/tree/main/ofl/caladea",
+      "note": "Metric-compatible fallback for Cambria."
+    },
+    {
       "name": "YuNet face detection model",
       "licenseFile": "src-tauri/resources/vision/licenses/yunet-MIT.txt",
       "license": "MIT",
