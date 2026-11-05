@@ -11,8 +11,18 @@
 body[data-theme="light"] {
   --pdf-scene-canvas: oklch(0.94 0 0);
 }
-@font-face { font-family: "Toolbox Satisfy"; src: url("/fonts/Satisfy-Regular.ttf") format("truetype"); font-display: swap; }
 @font-face { font-family: "Toolbox Pacifico"; src: url("/fonts/Pacifico-Regular.ttf") format("truetype"); font-display: swap; }
+@font-face { font-family: "Toolbox Noto Sans"; src: url("/fonts/NotoSans-Regular.ttf") format("truetype"); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: "Toolbox Noto Sans"; src: url("/fonts/NotoSans-Bold.ttf") format("truetype"); font-weight: 700; font-style: normal; font-display: swap; }
+@font-face { font-family: "Toolbox Noto Sans"; src: url("/fonts/NotoSans-Italic.ttf") format("truetype"); font-weight: 400; font-style: italic; font-display: swap; }
+@font-face { font-family: "Toolbox Noto Sans"; src: url("/fonts/NotoSans-BoldItalic.ttf") format("truetype"); font-weight: 700; font-style: italic; font-display: swap; }
+@font-face { font-family: "Toolbox Noto Serif"; src: url("/fonts/NotoSerif-Regular.ttf") format("truetype"); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: "Toolbox Noto Serif"; src: url("/fonts/NotoSerif-Bold.ttf") format("truetype"); font-weight: 700; font-style: normal; font-display: swap; }
+@font-face { font-family: "Toolbox Noto Serif"; src: url("/fonts/NotoSerif-Italic.ttf") format("truetype"); font-weight: 400; font-style: italic; font-display: swap; }
+@font-face { font-family: "Toolbox Noto Serif"; src: url("/fonts/NotoSerif-BoldItalic.ttf") format("truetype"); font-weight: 700; font-style: italic; font-display: swap; }
+@font-face { font-family: "Toolbox Noto Sans Mono"; src: url("/fonts/NotoSansMono-Regular.ttf") format("truetype"); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: "Toolbox Noto Sans Mono"; src: url("/fonts/NotoSansMono-Bold.ttf") format("truetype"); font-weight: 700; font-style: normal; font-display: swap; }
+.scene-text-draft { width: 100%; height: 100%; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.2; }
 .scene-canvas-page { flex: none; overflow: hidden; touch-action: none; user-select: none; filter: drop-shadow(0 1px 4px rgb(0 0 0 / 14%)); }
 .scene-tool-select { cursor: default; }
 .scene-tool-text, .scene-tool-highlight, .scene-tool-shape, .scene-tool-signature, .scene-tool-crop { cursor: crosshair; }

@@ -1,4 +1,5 @@
 import type { OutputLocation } from "../../contracts";
+import type { PdfScene } from "./scene";
 
 export type EditorLayout = "vertical" | "horizontal";
 export type EditorDensity = "compact" | "comfortable";
@@ -102,4 +103,14 @@ export interface PdfEditSessionRequest {
     paths: string[];
     plan: PdfEditSessionPlan;
     outputLocation: OutputLocation;
+}
+
+export interface PdfSceneExportRequest {
+    paths: string[];
+    scene: PdfScene;
+    outputLocation: OutputLocation;
+    formValues?: unknown[];
+    textEdits?: unknown[];
+    flatten?: boolean;
+    redactions?: unknown[];
 }

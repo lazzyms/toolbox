@@ -20,6 +20,10 @@ test.beforeEach(async ({ page }) => {
           w.dialogNext = null;
           return next ?? '/local/scene-fixture.pdf';
         }
+        if (command === 'inspect_signature_image') {
+          if (!/\.(png|jpe?g)$/i.test(args.request.path)) throw `${args.request.path.split('/').pop()} can't be used. Choose a PNG or JPG. A transparent PNG looks best.`;
+          return { width: 400, height: 100 };
+        }
         if (command === 'inspect_pdf_scene') return { path: '/local/scene-fixture.pdf', pages: [{ index: 0, width: 612, height: 792, preview: svg, textRuns: [{ text: 'Selectable local PDF text', x: 60, y: 55, width: 250, height: 25 }] }] };
         if (command === 'preview_pdf_scene_pages') return args.request.pageIndices.map((pageIndex: number) => ({ pageIndex, preview: { dataUrl: svg, width: 612, height: 792 } }));
         if (command === 'export_pdf_scene') return [{ inputPath: '/local/scene-fixture.pdf', outputPaths: ['/local/scene-fixture-edited-1.pdf'], state: 'succeeded', detail: 'PDF scene exported', failure: null, reason: null, warnings: [] }];
@@ -59,10 +63,10 @@ test('text edits happen in the page box and do not expose a duplicate property i
   await dragOnCanvas(page, .18, .18);
   await page.getByRole('button', { name: 'Select', exact: true }).click();
   await page.getByRole('button', { name: 'text object 1', exact: true }).dblclick();
-  await expect(page.getByRole('textbox', { name: 'Edit text object' })).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Text box text' })).toBeVisible();
   expect(await page.locator('input[aria-label="Object text"]').count()).toBe(0);
-  await page.getByRole('textbox', { name: 'Edit text object' }).fill('Edited directly on page');
-  await page.getByRole('textbox', { name: 'Edit text object' }).press('Control+Enter');
+  await page.getByRole('textbox', { name: 'Text box text' }).fill('Edited directly on page');
+  await page.getByRole('textbox', { name: 'Text box text' }).press('Control+Enter');
   const scene = await sceneFromExport(page);
   expect(scene.pages[0].objects[0].text).toBe('Edited directly on page');
 });
@@ -162,33 +166,117 @@ test('shape tool exposes every requested shape and arrow direction', async ({ pa
   expect(scene.pages[0].objects.map((object: any) => object.shape)).toEqual(variants);
 });
 
-test('signature supports a draggable local image and a typed font-backed box', async ({ page }) => {
+async function clickCanvas(page: Page, x: number, y: number) {
+  const box = (await page.getByRole('group', { name: 'PDF page canvas' }).boundingBox())!;
+  await page.mouse.click(box.x + box.width * x, box.y + box.height * y);
+}
+
+test('signature panel offers a typed name or a picture, with plain wording and no font or drawing controls', async ({ page }) => {
   await openEditor(page);
   await page.getByRole('button', { name: 'Signature', exact: true }).click();
-  await page.getByRole('combobox', { name: 'Signature mode' }).selectOption('image');
-  await page.evaluate(() => { (window as any).dialogNext = '/local/signature.png'; });
-  await page.getByRole('button', { name: 'Choose signature image', exact: true }).click();
-  await expect(page.getByText('signature.png', { exact: true })).toBeVisible();
-  await expect(page.locator('.scene-signature-mini-preview')).toHaveAttribute('src', signatureAssetUrl);
-  await dragOnCanvas(page, .18, .22, .25, .12);
-  await expect.poll(() => page.locator('.scene-canvas image').evaluateAll((images) => images.map((image) => image.getAttribute('href'))))
-    .toContain(signatureAssetUrl);
-  await page.getByRole('button', { name: 'Signature', exact: true }).click();
-  await page.getByRole('combobox', { name: 'Signature mode' }).selectOption('text');
-  await page.getByRole('textbox', { name: 'Signature text' }).fill('A. Local');
-  await page.getByRole('combobox', { name: 'Signature font' }).selectOption('Pacifico');
-  await dragOnCanvas(page, .52, .48, .24, .12);
-  const scene = await sceneFromExport(page);
-  expect(scene.pages[0].objects).toHaveLength(2);
-  expect(scene.pages[0].objects[0]).toMatchObject({ signatureMode: 'image', signaturePath: '/local/signature.png', signaturePreview: signatureAssetUrl });
-  expect(scene.pages[0].objects[1]).toMatchObject({ signatureMode: 'text', text: 'A. Local', fontFamily: 'Pacifico' });
+  await expect(page.getByText("This adds a picture of a signature. It isn't a certified digital signature.")).toBeVisible();
+  await expect(page.getByRole('radiogroup', { name: 'Signature source' })).toBeVisible();
+  await expect(page.getByRole('combobox')).toHaveCount(0);
+  await expect(page.getByText(/font/i)).toHaveCount(0);
+  await expect(page.getByRole('slider', { name: 'Object opacity' })).toHaveCount(0);
+  await expect(page.locator('input[aria-label="Object color"]')).toHaveCount(0);
+  await expect(page.getByText(/certified signature|digitally signed|legally binding/i)).toHaveCount(0);
 });
 
-test('typed signature property keeps focus for every character', async ({ page }) => {
+test('a signature picture is checked before it can be placed and only PNG or JPG are offered', async ({ page }) => {
+  await openEditor(page);
+  await page.getByRole('button', { name: 'Signature', exact: true }).click();
+  await page.getByRole('radio', { name: 'Picture', exact: true }).click();
+  await page.evaluate(() => { (window as any).dialogNext = '/local/signature.webp'; });
+  await page.getByRole('button', { name: 'Choose a PNG or JPG', exact: true }).click();
+  const dialog = await page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'plugin:dialog|open').at(-1).args.options);
+  expect(dialog.filters).toEqual([{ name: 'Signature picture', extensions: ['png', 'jpg', 'jpeg'] }]);
+  await expect(page.getByRole('alert')).toHaveText("signature.webp can't be used. Choose a PNG or JPG. A transparent PNG looks best.");
+  await expect(page.getByText('Choose a PNG or JPG before placing it.')).toBeVisible();
+  await dragOnCanvas(page, .18, .22, .25, .12);
+  await clickCanvas(page, .5, .5);
+  await expect(page.locator('.scene-object-hit')).toHaveCount(0);
+
+  await page.evaluate(() => { (window as any).dialogNext = '/local/signature.png'; });
+  await page.getByRole('button', { name: 'Choose a PNG or JPG', exact: true }).click();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await expect(page.getByText('signature.png', { exact: true })).toBeVisible();
+  await expect(page.locator('.scene-signature-mini-preview')).toHaveAttribute('src', signatureAssetUrl);
+  await clickCanvas(page, .4, .4);
+  await expect.poll(() => page.locator('.scene-canvas image').evaluateAll((images) => images.map((image) => image.getAttribute('href'))))
+    .toContain(signatureAssetUrl);
+  const scene = await sceneFromExport(page);
+  expect(scene.pages[0].objects).toHaveLength(1);
+  expect(scene.pages[0].objects[0]).toMatchObject({ kind: 'signature', signatureMode: 'image', signaturePath: '/local/signature.png', opacity: 1 });
+  expect(scene.pages[0].objects[0].pageRange).toBeUndefined();
+  expect(scene.pages[0].objects[0].rect).toMatchObject({ width: 160, height: 56 });
+});
+
+test('a typed signature previews in the chosen ink, is placed with a click and can be used again', async ({ page }) => {
+  await openEditor(page);
+  await page.getByRole('button', { name: 'Signature', exact: true }).click();
+  const name = page.getByRole('textbox', { name: 'Name', exact: true });
+  await name.fill('');
+  await expect(page.getByText('Type a name before placing it.')).toBeVisible();
+  await clickCanvas(page, .3, .3);
+  await expect(page.locator('.scene-object-hit')).toHaveCount(0);
+  await name.fill('A. Local');
+  await page.getByRole('radio', { name: 'Dark blue', exact: true }).click();
+  const preview = page.getByRole('img', { name: 'Preview', exact: true });
+  await expect(preview).toContainText('A. Local');
+  await expect(preview.locator('text')).toHaveAttribute('fill', '#1a3a8f');
+  await clickCanvas(page, .5, .5);
+  await expect(page.locator('.scene-object-hit')).toHaveCount(1);
+  const reuse = page.getByRole('list', { name: 'Use again' });
+  await expect(reuse.getByRole('button')).toHaveText(['A. LocalTyped']);
+  await page.getByRole('button', { name: 'Signature', exact: true }).click();
+  await name.fill('Someone else');
+  await page.getByRole('radio', { name: 'Black', exact: true }).click();
+  await reuse.getByRole('button', { name: /A\. Local/ }).click();
+  await expect(name).toHaveValue('A. Local');
+  await expect(page.getByRole('radio', { name: 'Dark blue', exact: true })).toBeChecked();
+  await clickCanvas(page, .5, .8);
+  const scene = await sceneFromExport(page);
+  expect(scene.pages[0].objects).toHaveLength(2);
+  for (const object of scene.pages[0].objects) expect(object).toMatchObject({ kind: 'signature', signatureMode: 'text', text: 'A. Local', color: '#1a3a8f' });
+  expect(scene.pages[0].objects[0].fontFamily).toBeUndefined();
+  await expect(reuse.getByRole('button')).toHaveCount(1);
+  await page.getByRole('region', { name: 'Properties' }).getByRole('button', { name: 'Clear list', exact: true }).click();
+  await expect(page.getByRole('list', { name: 'Use again' })).toHaveCount(0);
+});
+
+test('a signature can be placed on several pages and keeps its proportions when resized', async ({ page }) => {
+  await openEditor(page);
+  await page.getByRole('button', { name: 'Signature', exact: true }).click();
+  await dragOnCanvas(page, .3, .3, .3, .1);
+  await page.getByRole('radio', { name: 'These pages, for initials', exact: true }).click();
+  const pages = page.getByRole('textbox', { name: 'Pages for this signature', exact: true });
+  await expect(pages).toHaveAttribute('placeholder', 'For example 1-13');
+  await pages.fill('1-');
+  await pages.press('Enter');
+  const before = (await sceneFromExport(page)).pages[0].objects[0];
+  expect(before.pageRange).toBe('1-');
+  await page.getByRole('button', { name: 'Select', exact: true }).click();
+  await page.getByRole('button', { name: 'signature object 1', exact: true }).focus();
+  await page.keyboard.press('Space');
+  await page.getByRole('button', { name: 'Resize signature se', exact: true }).focus();
+  await page.keyboard.press('Shift+ArrowRight');
+  const handle = (await page.getByRole('button', { name: 'Resize signature se', exact: true }).boundingBox())!;
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(handle.x + 80, handle.y + handle.height / 2, { steps: 5 });
+  await page.mouse.up();
+  const after = (await sceneFromExport(page)).pages[0].objects[0];
+  expect(after.rect.width).toBeGreaterThan(before.rect.width + 20);
+  expect(after.rect.width / after.rect.height).toBeCloseTo(before.rect.width / before.rect.height, 2);
+  expect([after.rect.x, after.rect.y]).toEqual([before.rect.x, before.rect.y]);
+});
+
+test('typed signature name keeps focus for every character', async ({ page }) => {
   await openEditor(page);
   await page.getByRole('button', { name: 'Signature', exact: true }).click();
   await dragOnCanvas(page, .3, .3, .22, .1);
-  const input = page.getByRole('textbox', { name: 'Signature text' });
+  const input = page.getByRole('textbox', { name: 'Name', exact: true });
   await input.fill('');
   for (const character of 'A. Local') {
     await input.press(character === ' ' ? 'Space' : character);

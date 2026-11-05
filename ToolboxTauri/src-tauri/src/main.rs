@@ -139,6 +139,11 @@ async fn inspect_pdf_scene_page(request: InspectPdfScenePageRequest) -> Result<m
 }
 
 #[tauri::command]
+async fn inspect_signature_image(request: InspectPdfRequest) -> Result<scene::SignatureSize, String> {
+    tauri::async_runtime::spawn_blocking(move || scene::inspect_signature_image(&request.path)).await.map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 async fn preview_pdf_scene(request: scene::PreviewRequest) -> Result<scene::ScenePreview, String> {
     if !command_supports_preview("export_pdf_scene") { return Err("PDF scene preview is unavailable in this build.".to_string()); }
     tauri::async_runtime::spawn_blocking(move || scene::preview(&request)).await.map_err(|error| error.to_string())?
@@ -530,6 +535,7 @@ fn main() {
             inspect_pdf,
             inspect_pdf_scene,
             inspect_pdf_scene_page,
+            inspect_signature_image,
             preview_pdf_scene,
             preview_pdf_scene_pages,
             export_pdf_scene,
@@ -1103,20 +1109,26 @@ mod command_tests {
         let image_pdf_output = assert_success("images-to-pdf fixture", image_pdf_result)[0].clone();
         std::fs::rename(image_pdf_output, &image_pdf).unwrap();
 
+        let signature_size = tauri::async_runtime::block_on(inspect_signature_image(InspectPdfRequest { path: image.clone() })).unwrap();
+        assert_eq!((signature_size.width, signature_size.height), (256, 256));
+        assert!(tauri::async_runtime::block_on(inspect_signature_image(InspectPdfRequest { path: lossy_image.clone() })).is_ok());
+        let refused = tauri::async_runtime::block_on(inspect_signature_image(InspectPdfRequest { path: tiff.clone() })).unwrap_err();
+        assert!(refused.contains("Choose a PNG or JPG"), "{refused}");
         let mut outputs = Vec::new();
         let mut naming = Vec::new();
         let inspected_scene = tauri::async_runtime::block_on(inspect_pdf_scene(InspectPdfRequest { path: pdf.clone() })).unwrap();
         assert_eq!(inspected_scene.pages.len(), 2);
         let visual_scene: scene::PdfScene = serde_json::from_value(serde_json::json!({ "pages": [
             { "sourceIndex": 0, "width": 612, "height": 792, "rotation": 0, "crop": null, "objects": [
-                { "kind": "highlight", "rect": { "x": 65, "y": 62, "width": 200, "height": 30 }, "text": "", "fontSize": 18, "color": "#FFD700", "opacity": 0.35, "strokes": [] },
-                { "kind": "text", "rect": { "x": 72, "y": 150, "width": 360, "height": 40 }, "text": "Edited entirely on this device", "fontSize": 18, "color": "#1455AA", "opacity": 1, "strokes": [] },
-                { "kind": "shape", "rect": { "x": 65, "y": 145, "width": 380, "height": 50 }, "text": "", "fontSize": 18, "color": "#1455AA", "opacity": 1, "strokes": [] },
-                { "kind": "watermark", "rect": { "x": 120, "y": 340, "width": 370, "height": 80 }, "text": "PRIVATE DRAFT", "fontSize": 40, "color": "#AAAAAA", "opacity": 0.4, "strokes": [] },
-                { "kind": "signature", "rect": { "x": 90, "y": 580, "width": 200, "height": 50 }, "text": "", "fontSize": 18, "color": "#202020", "opacity": 1, "strokes": [[{"x":0,"y":0.8},{"x":0.2,"y":0.1},{"x":0.15,"y":1},{"x":0.6,"y":0.2},{"x":0.4,"y":0.8},{"x":1,"y":0.4}]] }
+                { "kind": "highlight", "rect": { "x": 65, "y": 62, "width": 200, "height": 30 }, "text": "", "fontSize": 18, "color": "#FFD700", "opacity": 0.35 },
+                { "kind": "text", "rect": { "x": 72, "y": 150, "width": 360, "height": 40 }, "text": "Edited entirely on this device", "fontSize": 18, "color": "#1455AA", "opacity": 1 },
+                { "kind": "shape", "rect": { "x": 65, "y": 145, "width": 380, "height": 50 }, "text": "", "fontSize": 18, "color": "#1455AA", "opacity": 1 },
+                { "kind": "watermark", "rect": { "x": 120, "y": 340, "width": 370, "height": 80 }, "text": "PRIVATE DRAFT", "fontSize": 40, "color": "#AAAAAA", "opacity": 0.4 },
+                { "kind": "signature", "rect": { "x": 90, "y": 580, "width": 200, "height": 50 }, "text": "", "fontSize": 18, "color": "#202020", "opacity": 1, "signatureMode": "image", "signaturePath": image, "pageRange": "1-2" },
+                { "kind": "signature", "rect": { "x": 320, "y": 580, "width": 200, "height": 50 }, "text": "A. Signer", "fontSize": 18, "color": "#1A3A8F", "opacity": 1, "signatureMode": "text" }
             ] },
             { "sourceIndex": null, "width": 612, "height": 792, "rotation": 90, "crop": {"x": 20, "y": 20, "width": 550, "height": 700}, "objects": [
-                { "kind": "text", "rect": { "x": 72, "y": 100, "width": 350, "height": 40 }, "text": "New page in the same session", "fontSize": 18, "color": "#202020", "opacity": 1, "strokes": [] }
+                { "kind": "text", "rect": { "x": 72, "y": 100, "width": 350, "height": 40 }, "text": "New page in the same session", "fontSize": 18, "color": "#202020", "opacity": 1 }
             ] }
         ] })).unwrap();
         let rendered_scene = tauri::async_runtime::block_on(preview_pdf_scene(scene::PreviewRequest { path: pdf.clone(), scene: visual_scene.clone(), page_index: 0 })).unwrap();
@@ -1132,7 +1144,7 @@ mod command_tests {
         assert!(preview_width > 0 && preview_height > 0, "preview dimensions must be positive");
         assert!(preview_width > preview_height, "a 90-degree page should preview in landscape orientation");
         assert!(preview["dataUrl"].as_str().is_some_and(|value| value.starts_with("data:image/png;base64,")));
-        outputs.extend(named(&mut naming, "export_pdf_scene", pdf.clone(), assert_success("PDF scene", export_pdf_scene(RunEvents::silent(), scene::ExportRequest { paths: vec![pdf.clone()], scene: visual_scene, output_location: OutputLocation::AlongsideInput }))));
+        outputs.extend(named(&mut naming, "export_pdf_scene", pdf.clone(), assert_success("PDF scene", export_pdf_scene(RunEvents::silent(), scene::ExportRequest { paths: vec![pdf.clone()], scene: visual_scene, output_location: OutputLocation::AlongsideInput, sections: Default::default() }))));
         outputs.extend(named(&mut naming, "remove_password", protected.clone(), assert_success("unlock", remove_password(RunEvents::silent(), PasswordRequest { paths: vec![protected], password: crate::kit::TEST_PASSWORD.into(), password_overrides: Default::default(), output_location: location(&root, "unlock") }))));
         outputs.extend(named(&mut naming, "add_page_numbers", pdf.clone(), assert_success("page numbers", add_page_numbers(RunEvents::silent(), PageOverlayRequest { paths: vec![pdf.clone()], text: "1".into(), opacity: 100, position: Some("bottom-right".into()), logo_path: None, pages: None, start_number: Some(1), font_size: Some(12), output_location: location(&root, "page numbers") }))));
         outputs.extend(named(&mut naming, "merge_pdfs", pdf.clone(), assert_aggregate_success("merge", &[pdf.clone(), pdf_two.clone()], run_merge_pdfs(&MergePdfRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: location(&root, "merge"), output_path: None }))));
