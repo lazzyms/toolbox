@@ -14,7 +14,7 @@ use crate::kit::contracts::{native_capabilities, OutcomePointer, OutcomeWarning,
 use crate::kit::office;
 use crate::kit::pdf::font_resolver::{FontResolver, FontSource, FontStyle, SystemFontLookup};
 use crate::kit::pdf::layout::{assemble, expand_tabs, Assembly, Block, Face, FontBook, Flow, Geometry, Omitted, PageOut, PageSetup, Theme};
-use crate::kit::pdf::{delimited, docx, markdown, rtf};
+use crate::kit::pdf::{delimited, docx, markdown, odt, rtf};
 
 pub const COMMAND: &str = "convert_to_pdf";
 const ALREADY_PDF: &str = "Already a PDF. Nothing was made.";
@@ -224,7 +224,7 @@ fn convert<S: SystemFontLookup>(job: &ConvertJob<S>, input: PathBuf) -> JobOutco
         "pdf" => return JobOutcome::skipped(input, SkipReason::new(SkipCode::AlreadyInTargetFormat, ALREADY_PDF)),
         "md" | "markdown" => markdown_file(job, &job.request.markdown.unwrap_or_default(), &input),
         "rtf" => rich_text(job, &input),
-        "docx" => word_file(job, &input),
+        "docx" | "odt" => word_file(job, &input, &extension),
         "csv" | "tsv" => table_file(job, &job.request.tables.unwrap_or_default(), &input, &extension),
         _ => plain_text(job, &job.request.plain_text.unwrap_or_default(), &input),
     };
@@ -431,15 +431,20 @@ fn approximate_layout(floats: &[usize]) -> Option<OutcomeWarning> {
     Some(OutcomeWarning { kind: WarningKind::ApproximateLayout, message: format!("Approximate layout: {objects} placed as close as possible.") })
 }
 
-fn word_file<S: SystemFontLookup>(job: &ConvertJob<S>, input: &Path) -> Result<JobOutcome, ToolError> {
+fn word_file<S: SystemFontLookup>(job: &ConvertJob<S>, input: &Path, extension: &str) -> Result<JobOutcome, ToolError> {
     let bytes = fs::read(input).map_err(|error| ToolError::processing(format!("Could not read the file: {error}")))?;
-    match office::is_encrypted(&bytes, "docx") {
-        Ok(false) => {}
-        Ok(true) => return Err(ToolError::invalid_input(LOCKED).with_pointer(OutcomePointer::Tool { tool_id: "lock-unlock".into() })),
-        Err(_) => return Err(ToolError::invalid_input(docx::DAMAGED)),
-    }
+    let locked = ToolError::invalid_input(LOCKED).with_pointer(OutcomePointer::Tool { tool_id: "lock-unlock".into() });
     let limits = limits::recorded(COMMAND).ok_or_else(|| ToolError::processing("No size limits are recorded for converting to PDF."))?;
-    let parsed = docx::parse(&bytes, limits.max_expanded_bytes, limits.expansion_error(input))?;
+    let parsed = if extension == "odt" {
+        odt::parse(&bytes, limits.max_expanded_bytes, limits.expansion_error(input), locked)?
+    } else {
+        match office::is_encrypted(&bytes, "docx") {
+            Ok(false) => {}
+            Ok(true) => return Err(locked),
+            Err(_) => return Err(ToolError::invalid_input(docx::DAMAGED)),
+        }
+        docx::parse(&bytes, limits.max_expanded_bytes, limits.expansion_error(input))?
+    };
     let geometry = page_geometry(parsed.page, &job.request.page_defaults);
     let mut theme = Theme::new(parsed.body_family.as_deref().unwrap_or(RTF_FAMILY), CODE_FAMILY, parsed.body_size, false);
     theme.families = parsed.families.clone();
@@ -1330,6 +1335,229 @@ mod tests {
         assert_eq!(media_box(&Document::load(root.join("letter.pdf")).unwrap(), 1), [0., 0., 612., 792.], "without page setup the page defaults apply");
         assert_eq!([&locked, &damaged, &bomb, &good].map(|path| fs::read(path).unwrap()), originals);
         assert!(!root.join("damaged.pdf").exists() && !root.join("bomb.pdf").exists());
+    }
+
+    fn odt_styles(automatic: &str, styles: &str, masters: &str) -> String {
+        format!(r#"<office:document-styles {}><office:font-face-decls><style:font-face style:name="Calibri" svg:font-family="Calibri"/><style:font-face style:name="Cambria" svg:font-family="Cambria"/></office:font-face-decls><office:styles><style:default-style style:family="paragraph"><style:text-properties style:font-name="Calibri" fo:font-size="11pt"/></style:default-style><style:style style:name="Standard" style:family="paragraph"/>{styles}</office:styles><office:automatic-styles>{automatic}</office:automatic-styles><office:master-styles>{masters}</office:master-styles></office:document-styles>"#, odt::fixtures::NS)
+    }
+
+    fn odt_fixture() -> Vec<u8> {
+        let mut png = Vec::new();
+        image::RgbaImage::from_fn(8, 6, |x, _| image::Rgba([30, 90, 200, if x < 4 { 255 } else { 128 }]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let automatic = concat!(
+            r#"<style:style style:name="T1" style:family="text"><style:text-properties fo:font-weight="bold"/></style:style>"#,
+            r##"<style:style style:name="T2" style:family="text"><style:text-properties fo:color="#c80000"/></style:style>"##,
+            r#"<style:style style:name="T3" style:family="text"><style:text-properties text:display="none"/></style:style>"#,
+            r#"<style:style style:name="P1" style:family="paragraph" style:parent-style-name="Heading_20_2"><style:paragraph-properties fo:break-before="page"/></style:style>"#,
+            r#"<text:list-style style:name="L1"><text:list-level-style-bullet text:level="1" text:bullet-char="•"/></text:list-style>"#,
+            r#"<text:list-style style:name="L2"><text:list-level-style-number text:level="1" style:num-format="1" style:num-suffix="."/></text:list-style>"#,
+        );
+        let body = concat!(
+            r#"<text:tracked-changes><text:changed-region text:id="ct1"><text:deletion><office:change-info><dc:creator>A</dc:creator></office:change-info><text:p>removed text</text:p></text:deletion></text:changed-region><text:changed-region text:id="ct2"><text:insertion><office:change-info><dc:creator>A</dc:creator></office:change-info></text:insertion></text:changed-region></text:tracked-changes>"#,
+            r#"<text:h text:style-name="Heading_20_1" text:outline-level="1"><text:bookmark text:name="summary"/>Quarterly summary</text:h>"#,
+            r#"<text:p>Plain text with <text:span text:style-name="T1">bold</text:span> and <text:span text:style-name="T2">red</text:span><text:span text:style-name="T3">hidden words</text:span><text:change text:change-id="ct1"/><text:change-start text:change-id="ct2"/> added text<text:change-end text:change-id="ct2"/></text:p>"#,
+            r##"<text:p><text:a xlink:type="simple" xlink:href="https://example.com/odt">Example link</text:a> and <text:a xlink:type="simple" xlink:href="file:///etc/hosts">local file</text:a> and <text:a xlink:type="simple" xlink:href="#summary">back to top</text:a></text:p>"##,
+            r#"<text:list text:style-name="L1"><text:list-item><text:p>Bullet item</text:p></text:list-item><text:list-item><text:p>Second bullet</text:p></text:list-item></text:list>"#,
+            r#"<text:list text:style-name="L2"><text:list-item><text:p>Step one</text:p></text:list-item><text:list-item><text:p>Step two</text:p></text:list-item></text:list>"#,
+            r#"<table:table table:name="Sales"><table:table-column table:number-columns-repeated="2"/><table:table-header-rows><table:table-row><table:table-cell><text:p>Region</text:p></table:table-cell><table:table-cell><text:p>Revenue</text:p></table:table-cell></table:table-row></table:table-header-rows><table:table-row><table:table-cell><text:p>North</text:p></table:table-cell><table:table-cell><text:p>1,200</text:p></table:table-cell></table:table-row></table:table>"#,
+            r#"<text:p><draw:frame draw:name="Image1" text:anchor-type="as-char" svg:width="60pt" svg:height="45pt"><draw:image xlink:href="Pictures/image1.png" xlink:type="simple"/></draw:frame></text:p>"#,
+            r#"<text:p><draw:frame draw:name="Image2" text:anchor-type="as-char" svg:width="60pt" svg:height="45pt"><draw:image xlink:href="http://127.0.0.1:9/remote.png" xlink:type="simple"/></draw:frame></text:p>"#,
+            r#"<text:p>After the table</text:p>"#,
+            r#"<text:h text:style-name="P1" text:outline-level="2">Second page</text:h>"#,
+            r#"<text:p>Closing words</text:p>"#,
+        );
+        let styles = odt_styles(
+            r#"<style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="8.5in" fo:page-height="11in" fo:margin-top="0.5in" fo:margin-bottom="0.5in" fo:margin-left="1in" fo:margin-right="1in"/><style:header-style><style:header-footer-properties fo:min-height="0.4in" fo:margin-bottom="0.1in"/></style:header-style><style:footer-style><style:header-footer-properties fo:min-height="0.4in" fo:margin-top="0.1in"/></style:footer-style></style:page-layout><style:style style:name="MP1" style:family="paragraph"><style:paragraph-properties fo:text-align="center"/></style:style>"#,
+            r#"<style:style style:name="Heading_20_1" style:display-name="Heading 1" style:family="paragraph" style:parent-style-name="Standard" style:default-outline-level="1"><style:text-properties style:font-name="Cambria" fo:font-size="16pt" fo:font-weight="bold"/></style:style><style:style style:name="Heading_20_2" style:display-name="Heading 2" style:family="paragraph" style:parent-style-name="Standard" style:default-outline-level="2"><style:text-properties fo:font-size="13pt" fo:font-weight="bold"/></style:style>"#,
+            r#"<style:master-page style:name="Standard" style:page-layout-name="pm1"><style:header><text:p>Header text</text:p></style:header><style:footer><text:p text:style-name="MP1">Page <text:page-number text:select-page="current">9</text:page-number> of <text:page-count>9</text:page-count></text:p></style:footer></style:master-page>"#,
+        );
+        let meta = format!(r#"<office:document-meta {}><office:meta><dc:title>Quarterly report</dc:title><meta:initial-creator>Dana Whitfield</meta:initial-creator><dc:creator>Someone Else</dc:creator></office:meta></office:document-meta>"#, odt::fixtures::NS);
+        odt::fixtures::odt(automatic, body, &[("styles.xml", styles.as_bytes()), ("meta.xml", meta.as_bytes()), ("Pictures/image1.png", &png)], &[("Pictures/image1.png", "image/png")])
+    }
+
+    #[test]
+    fn odt_matches_word_for_headings_lists_tables_pictures_bands_links_and_page_setup() {
+        let root = sandbox("odt");
+        let input = root.join("report.odt");
+        let source = odt_fixture();
+        fs::write(&input, &source).unwrap();
+        let word = root.join("word.docx");
+        fs::write(&word, docx_fixture()).unwrap();
+
+        let outcomes = convert_paths(&[&input, &word], json!({ "pageDefaults": { "pageSize": "a4", "margins": "wide" } }));
+        let outcome = &outcomes[0];
+        assert!(succeeded(outcome), "{outcome:?}");
+        assert_eq!(outcome.detail, "2 pages.");
+        assert_eq!(outcome.warnings, outcomes[1].warnings, "the same content gives the Word warnings");
+        assert_eq!(outcome.warnings, [OutcomeWarning { kind: WarningKind::OmittedContent, message: "Omitted content: 1 picture couldn't be shown and was left out.".into() }]);
+        for family in ["Calibri", "Cambria"] {
+            assert!(outcome.fonts.iter().any(|font| font.requested_family == family), "{family} missing from {:?}", outcome.fonts);
+        }
+
+        let document = Document::load(root.join("report.pdf")).unwrap();
+        let docx = Document::load(root.join("word.pdf")).unwrap();
+        assert_eq!(document.get_pages().len(), docx.get_pages().len());
+        assert_eq!(media_box(&document, 1), [0., 0., 612., 792.], "the document's own page setup wins");
+        let first = document.extract_text(&[1]).unwrap();
+        assert!(in_order(&first, &["Quarterly summary", "Plain text with", "bold", "red", "added text", "Example link", "local file", "back to top", "\u{2022}", "Bullet item", "Second bullet", "1.", "Step one", "2.", "Step two", "Region", "Revenue", "North", "1,200", "After the table", "Header text", "Page 1 of 2"]), "{first}");
+        for absent in ["hidden words", "removed text", "Second page", "Closing words"] {
+            assert!(!first.contains(absent), "{absent:?} should not be on page 1: {first}");
+        }
+        let second = document.extract_text(&[2]).unwrap();
+        assert!(in_order(&second, &["Second page", "Closing words", "Header text", "Page 2 of 2"]), "{second}");
+        for page in [1, 2] {
+            assert_eq!(document.extract_text(&[page]).unwrap().split_whitespace().collect::<Vec<_>>(), docx.extract_text(&[page]).unwrap().split_whitespace().collect::<Vec<_>>(), "page {page} recovers the Word text");
+        }
+
+        let content = page_content(&document, 1);
+        assert!(content.contains("60.00 0 0 45.00 72.00"), "the picture keeps its stored size and the document's left margin");
+        assert!(content.contains("0.78431374 0 0 rg"), "the red colour is applied");
+        assert!(font_sizes(&document, 1).contains(&16.), "Heading 1 keeps its 16 pt style size");
+
+        let links = links(&document);
+        let uris = links.iter().filter_map(|link| link.get(b"A").and_then(Object::as_dict).and_then(|action| action.get(b"URI")).and_then(Object::as_str).ok().map(<[u8]>::to_vec)).collect::<Vec<_>>();
+        assert_eq!(uris, [b"https://example.com/odt".to_vec()], "only the web link is linked; file links are left as text");
+        let internal = links.iter().find_map(|link| link.get(b"Dest").ok().cloned()).expect("the bookmark link points inside the document");
+        assert_eq!(page_of(&document, &internal), 1);
+        assert_eq!(outline_titles(&document), outline_titles(&docx));
+        assert_eq!(outline_titles(&document), ["Quarterly summary", "Second page"]);
+        assert_eq!(info(&document, b"Title"), b"Quarterly report");
+        assert_eq!(info(&document, b"Author"), b"Dana Whitfield");
+
+        assert!(succeeded(&convert_paths(&[&input], json!({}))[0]));
+        assert_eq!(fs::read(&input).unwrap(), source);
+        assert_eq!(names(&root), ["report-1.pdf", "report.odt", "report.pdf", "word.docx", "word.pdf"]);
+    }
+
+    #[test]
+    fn odt_draws_charts_from_their_stored_image_and_names_the_ones_left_out() {
+        let root = sandbox("odt_charts");
+        let input = root.join("charts.odt");
+        let body = concat!(
+            r#"<text:p>Revenue by region</text:p><text:p><draw:frame text:anchor-type="as-char" svg:width="200pt" svg:height="100pt"><draw:object xlink:href="./Object 1" xlink:type="simple"/><draw:image xlink:href="./ObjectReplacements/Object 1" xlink:type="simple"/></draw:frame></text:p>"#,
+            r#"<text:p>Costs by region</text:p><text:p><draw:frame text:anchor-type="as-char" svg:width="200pt" svg:height="100pt"><draw:object xlink:href="./Object 2" xlink:type="simple"/></draw:frame></text:p>"#,
+            r#"<text:p><draw:frame text:anchor-type="as-char" svg:width="120pt" svg:height="60pt"><draw:object-ole xlink:href="./Object 3" xlink:type="simple"/></draw:frame></text:p>"#,
+        );
+        let chart = br#"<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"><office:body><office:chart/></office:body></office:document-content>"#;
+        fs::write(&input, odt::fixtures::odt("", body, &[
+            ("Object 1/content.xml", chart), ("ObjectReplacements/Object 1", &png(20, 10, [10, 120, 60])),
+            ("Object 2/content.xml", chart), ("Object 3", b"never opened"),
+        ], &[("Object 1/", "application/vnd.oasis.opendocument.chart"), ("Object 2/", "application/vnd.oasis.opendocument.chart"), ("Object 3", "application/vnd.sun.star.oleobject")])).unwrap();
+
+        let outcome = &convert_paths(&[&input], json!({}))[0];
+        assert!(succeeded(outcome), "{outcome:?}");
+        assert_eq!(outcome.detail, "1 page.");
+        assert_eq!(outcome.warnings, [OutcomeWarning {
+            kind: WarningKind::OmittedContent,
+            message: "Omitted content: 1 chart and 1 embedded object have no stored image, so they were left out.".into(),
+        }]);
+        let document = Document::load(root.join("charts.pdf")).unwrap();
+        assert_eq!(page_images(&document, 1), 1, "only the chart with a stored image is drawn");
+        assert!(page_content(&document, 1).contains("200.00 0 0 100.00"), "the stored image keeps the chart's size");
+        let text = document.extract_text(&[1]).unwrap();
+        assert!(in_order(&text, &["Revenue by region", "Costs by region"]), "{text}");
+    }
+
+    #[test]
+    fn odt_renders_tracked_changes_as_accepted_and_leaves_comments_out() {
+        let root = sandbox("odt_tracked");
+        let input = root.join("review.odt");
+        let body = concat!(
+            r#"<text:tracked-changes><text:changed-region text:id="d1"><text:deletion><office:change-info><dc:creator>A</dc:creator></office:change-info><text:p>deleted words</text:p></text:deletion></text:changed-region><text:changed-region text:id="i1"><text:insertion><office:change-info><dc:creator>A</dc:creator></office:change-info></text:insertion></text:changed-region><text:changed-region text:id="f1"><text:format-change><office:change-info><dc:creator>A</dc:creator></office:change-info></text:format-change></text:changed-region></text:tracked-changes>"#,
+            r#"<text:p>Kept <text:change-start text:change-id="i1"/>inserted words<text:change-end text:change-id="i1"/><text:change text:change-id="d1"/><office:annotation office:name="c7"><dc:creator>Reviewer</dc:creator><dc:date>2026-01-01T00:00:00</dc:date><text:p>Secret reviewer remark</text:p></office:annotation> commented<office:annotation-end office:name="c7"/></text:p>"#,
+            r#"<text:p><text:change-start text:change-id="f1"/>Reformatted<text:change-end text:change-id="f1"/></text:p>"#,
+            r#"<table:table><table:table-row><table:table-cell><text:p>Kept row</text:p></table:table-cell></table:table-row><table:table-row><table:table-cell><text:p><text:change-start text:change-id="i1"/>Inserted row<text:change-end text:change-id="i1"/></text:p></table:table-cell></table:table-row></table:table>"#,
+        );
+        fs::write(&input, odt::fixtures::odt("", body, &[], &[])).unwrap();
+
+        let outcome = &convert_paths(&[&input], json!({}))[0];
+        assert!(succeeded(outcome), "{outcome:?}");
+        assert!(outcome.warnings.is_empty(), "comments are left out without a warning: {:?}", outcome.warnings);
+        let text = Document::load(root.join("review.pdf")).unwrap().extract_text(&[1]).unwrap();
+        assert!(in_order(&text, &["Kept", "inserted words", "commented", "Reformatted", "Kept row", "Inserted row"]), "{text}");
+        for absent in ["deleted words", "Secret reviewer remark", "Reviewer"] {
+            assert!(!text.contains(absent), "{absent:?} should be left out: {text}");
+        }
+    }
+
+    #[test]
+    fn odt_places_anchored_frames_at_their_anchors_with_an_approximate_layout_note() {
+        let root = sandbox("odt_floating");
+        let input = root.join("brochure.odt");
+        let automatic = concat!(
+            r##"<style:style style:name="gr1" style:family="graphic"><style:graphic-properties draw:fill="solid" draw:fill-color="#fff2cc" draw:stroke="solid" svg:stroke-color="#000000" style:wrap="parallel" style:horizontal-pos="from-left" style:horizontal-rel="page" style:vertical-pos="from-top" style:vertical-rel="page"/></style:style>"##,
+            r##"<style:style style:name="gr2" style:family="graphic"><style:graphic-properties draw:fill="solid" draw:fill-color="#2e75b6" draw:stroke="none" style:wrap="run-through" style:horizontal-pos="from-left" style:horizontal-rel="page-content" style:vertical-pos="from-top" style:vertical-rel="paragraph"/></style:style>"##,
+            r#"<style:style style:name="fr1" style:family="graphic"><style:graphic-properties style:wrap="none" style:horizontal-pos="from-left" style:horizontal-rel="paragraph" style:vertical-pos="from-top" style:vertical-rel="paragraph"/></style:style>"#,
+            r#"<style:style style:name="P1" style:family="paragraph"><style:paragraph-properties fo:break-before="page"/></style:style>"#,
+        );
+        let body = concat!(
+            r#"<text:p><draw:frame draw:style-name="gr1" text:anchor-type="paragraph" svg:x="300pt" svg:y="100pt" svg:width="150pt" svg:height="50pt"><draw:text-box><text:p>Boxed callout</text:p></draw:text-box></draw:frame>Front page text</text:p>"#,
+            r#"<text:p><draw:ellipse draw:style-name="gr2" text:anchor-type="paragraph" svg:x="0pt" svg:y="0pt" svg:width="100pt" svg:height="20pt"/>Banner paragraph</text:p>"#,
+            r#"<text:p text:style-name="P1"><draw:frame draw:style-name="fr1" text:anchor-type="paragraph" svg:x="0pt" svg:y="0pt" svg:width="100pt" svg:height="100pt"><draw:image xlink:href="Pictures/photo.png"/></draw:frame>Photo caption</text:p>"#,
+            r#"<text:p>Text after the photo</text:p>"#,
+        );
+        fs::write(&input, odt::fixtures::odt(automatic, body, &[("Pictures/photo.png", &png(10, 10, [200, 40, 40]))], &[])).unwrap();
+
+        let outcome = &convert_paths(&[&input], json!({ "pageDefaults": { "pageSize": "letter", "margins": "normal" } }))[0];
+        assert!(succeeded(outcome), "{outcome:?}");
+        assert_eq!(outcome.detail, "2 pages.");
+        assert_eq!(outcome.warnings, [OutcomeWarning {
+            kind: WarningKind::ApproximateLayout,
+            message: "Approximate layout: 3 floating objects on pages 1 and 2 were placed as close as possible.".into(),
+        }]);
+
+        let document = Document::load(root.join("brochure.pdf")).unwrap();
+        let first = page_content(&document, 1);
+        assert!(first.contains("1 0.9490196 0.8 rg 300.00 642.00 150.00 50.00 re f"), "the text box sits at its page offset: {first}");
+        assert!(first.contains("0 0 0 RG 0.75 w 300.00 642.00 150.00 50.00 re S"), "the text box keeps its outline");
+        assert!(first.contains("0.18039216 0.45882353 0.7137255 rg"), "the anchored shape is filled");
+        let text = document.extract_text(&[1]).unwrap();
+        assert!(in_order(&text, &["Boxed callout", "Front page text", "Banner paragraph"]), "{text}");
+        assert_eq!(page_images(&document, 1), 0);
+        assert_eq!(page_images(&document, 2), 1, "the wrapped picture stays on its anchor's page");
+        let second = page_content(&document, 2);
+        let picture_bottom = second.split("100.00 0 0 100.00 ").nth(1).and_then(|rest| rest.split_whitespace().nth(1)).and_then(|value| value.parse::<f32>().ok()).expect(&second);
+        let second_text = document.extract_text(&[2]).unwrap();
+        assert!(in_order(&second_text, &["Photo caption", "Text after the photo"]), "{second_text}");
+        assert_eq!(picture_bottom, 792. - 72. - 100., "the picture sits at the top of its anchor paragraph on page 2");
+        let first_line = second.split(" Tm ").next().and_then(|head| head.split_whitespace().last()).and_then(|value| value.parse::<f32>().ok()).expect(&second);
+        assert!(first_line < picture_bottom, "wrapped text flows below the picture, not under it: {first_line}");
+    }
+
+    #[test]
+    fn locked_damaged_and_oversized_odt_documents_fail_alone() {
+        let root = sandbox("odt_batch");
+        let manifest = br#"<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"><manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"><manifest:encryption-data manifest:checksum-type="SHA1/1K" manifest:checksum="AA=="><manifest:algorithm manifest:algorithm-name="Blowfish CFB" manifest:initialisation-vector="AA=="/></manifest:encryption-data></manifest:file-entry></manifest:manifest>"#;
+        let locked = root.join("locked.odt");
+        let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, data) in [("mimetype", &b"application/vnd.oasis.opendocument.text"[..]), ("META-INF/manifest.xml", &manifest[..]), ("content.xml", b"\x9c\x01 ciphertext")] {
+            archive.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+            std::io::Write::write_all(&mut archive, data).unwrap();
+        }
+        fs::write(&locked, archive.finish().unwrap().into_inner()).unwrap();
+        let damaged = root.join("damaged.odt");
+        fs::write(&damaged, b"PK\x03\x04 not really a package").unwrap();
+        let bomb = root.join("bomb.odt");
+        fs::write(&bomb, crate::kit::common::limits::fixtures::zip_with_deflated("content.xml", &crate::kit::common::limits::fixtures::zlib_of_zeros(500_000_001), 500_000_001)).unwrap();
+        let good = root.join("letter.odt");
+        fs::write(&good, odt::fixtures::odt("", "<text:p>Dear reader,</text:p>", &[], &[])).unwrap();
+        let originals = [&locked, &damaged, &bomb, &good].map(|path| fs::read(path).unwrap());
+
+        let outcomes = convert_paths(&[&locked, &good, &damaged, &bomb], json!({ "pageDefaults": { "pageSize": "letter", "margins": "narrow" } }));
+        let error = outcomes[0].error().unwrap();
+        assert_eq!(error.kind, ErrorKind::InvalidInput);
+        assert_eq!(error.message, "It's password-protected. Unlock it in Lock & Unlock, then convert the unlocked copy.");
+        assert_eq!(error.pointer, Some(OutcomePointer::Tool { tool_id: "lock-unlock".into() }));
+        assert_eq!(outcomes[2].error().unwrap().message, odt::DAMAGED);
+        let limited = outcomes[3].error().unwrap();
+        assert_eq!(limited.kind, ErrorKind::LimitExceeded { limit: crate::kit::contracts::LimitKind::Decompression }, "{limited:?}");
+        assert!(limited.message.contains("500 MB"), "{}", limited.message);
+        assert!(succeeded(&outcomes[1]), "{outcomes:?}");
+        assert_eq!(outcomes[1].detail, "1 page.");
+        assert_eq!(media_box(&Document::load(root.join("letter.pdf")).unwrap(), 1), [0., 0., 612., 792.], "without page setup the page defaults apply");
+        assert_eq!([&locked, &damaged, &bomb, &good].map(|path| fs::read(path).unwrap()), originals);
+        assert!(!root.join("locked.pdf").exists() && !root.join("damaged.pdf").exists() && !root.join("bomb.pdf").exists());
     }
 
     fn media_box(document: &Document, page: u32) -> Vec<f32> {

@@ -90,14 +90,14 @@ test("Convert to PDF sits in the PDF Conversion rail and shows text options only
 
 test("unsupported drops are refused with a reason, and later formats and PDFs are flagged on their own rows", async ({ page }) => {
     await openConvert(page);
-    await drop(page, ["/local/notes.txt", "/local/archive.zip", "/local/photo.png", "/local/report.odt", "/local/signed.pdf"]);
+    await drop(page, ["/local/notes.txt", "/local/archive.zip", "/local/photo.png", "/local/sheet.xlsx", "/local/signed.pdf"]);
 
     await expect(page.getByText(/archive\.zip/).first()).toBeVisible();
     await expect(fileRow(page, "archive.zip")).toHaveCount(0);
     await expect(fileRow(page, "photo.png")).toContainText("This file type can't become a PDF here.");
     await expect(fileRow(page, "photo.png")).toContainText("Won't run");
-    await expect(fileRow(page, "report.odt")).toContainText("Not available yet");
-    await expect(fileRow(page, "report.odt")).toContainText("ODT comes in a later update");
+    await expect(fileRow(page, "sheet.xlsx")).toContainText("Not available yet");
+    await expect(fileRow(page, "sheet.xlsx")).toContainText("XLSX comes in a later update");
     await expect(fileRow(page, "signed.pdf")).toContainText("Will be skipped");
     await expect(fileRow(page, "signed.pdf")).toContainText("Already a PDF");
     await expect(fileRow(page, "notes.txt")).not.toContainText("Will be skipped");
@@ -324,6 +324,50 @@ test("Word rows show omitted content as a warning and approximate layout as a no
 
     await expect(rows.filter({ hasText: "plain.docx" })).toHaveAttribute("data-tone", "ok");
     await expect(page.locator(".result-summary")).toContainText("3 PDFs have a warning or note.");
+});
+
+test("an OpenDocument text file is taken like a Word document, with no format section and Word-style result rows", async ({ page }) => {
+    await openConvert(page);
+    await drop(page, ["/local/minutes.odt", "/local/budget.ODT", "/local/report.docx"]);
+    for (const name of ["minutes.odt", "budget.ODT"]) {
+        await expect(fileRow(page, name)).not.toContainText("Not available yet");
+        await expect(fileRow(page, name)).not.toContainText("Won't run");
+    }
+    await expect(page.getByText("Options for each format appear here when a file of that format is in the list.", { exact: true })).toBeVisible();
+    await expect(page.getByRole("region", { name: /options/ })).toHaveCount(0);
+    await expect(page.getByText("This will make 3 PDFs", { exact: true })).toBeVisible();
+    await page.locator(".workspace-primary-action").click();
+    await expect.poll(() => convertRequest(page)).toEqual({ paths: ["/local/minutes.odt", "/local/budget.ODT", "/local/report.docx"], outputLocation: "alongsideInput" });
+
+    const omitted = "Omitted content: 1 chart has no stored image, so it was left out.";
+    const layout = "Approximate layout: 1 floating object on page 1 was placed as close as possible.";
+    const saved = (name: string, detail: string, warnings: unknown[]) =>
+        ({ inputPath: `/local/${name}`, outputPaths: [`/local/${name.replace(/\.\w+$/, ".pdf")}`], detail, state: "succeeded", failure: null, reason: null, warnings });
+    await page.evaluate((outcomes) => (window as unknown as ConvertWindow).__finish(outcomes), [
+        saved("minutes.odt", "2 pages.", [{ code: "approximateLayout", message: layout }]),
+        saved("budget.ODT", "3 pages.", [{ code: "omittedContent", message: omitted }]),
+        saved("report.docx", "3 pages.", [{ code: "omittedContent", message: omitted }]),
+    ]);
+
+    const rows = page.getByRole("list", { name: "Results" }).getByRole("listitem").filter({ has: page.locator(".result-row-name") });
+    const minutes = rows.filter({ hasText: "minutes.odt" });
+    await expect(minutes).toHaveAttribute("data-tone", "note");
+    await expect(minutes.locator(".result-row-icon svg")).toHaveClass(/lucide-info/);
+    await expect(minutes.locator(".result-row-detail")).toHaveText([layout, "2 pages."]);
+    await expect(minutes.locator(".result-row-state .sr-only")).toHaveText("Saved with a note");
+    await expect(minutes.getByRole("button", { name: "Open minutes.pdf", exact: true })).toBeVisible();
+
+    const budget = rows.filter({ hasText: "budget.ODT" });
+    const word = rows.filter({ hasText: "report.docx" });
+    for (const row of [budget, word]) {
+        await expect(row).toHaveAttribute("data-tone", "warn");
+        await expect(row.locator(".result-row-icon svg")).toHaveClass(/lucide-triangle-alert/);
+        await expect(row.locator(".result-row-detail")).toHaveText([omitted, "3 pages."]);
+        await expect(row.locator(".result-row-detail").first()).toHaveAttribute("data-tone", "warn");
+        await expect(row.locator(".result-row-state .sr-only")).toHaveText("Saved with a warning");
+    }
+    expect(await budget.locator(".result-row-detail").first().evaluate((line) => getComputedStyle(line).color))
+        .toBe(await word.locator(".result-row-detail").first().evaluate((line) => getComputedStyle(line).color));
 });
 
 test("the Tables section appears only while a CSV or TSV is listed and picks the delimiter by file type", async ({ page }) => {

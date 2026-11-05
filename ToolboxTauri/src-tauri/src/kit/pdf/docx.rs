@@ -1,49 +1,25 @@
 use std::collections::HashMap;
-use std::io::{Cursor, Read};
-
-use quick_xml::escape::resolve_predefined_entity;
-use quick_xml::events::{BytesStart, Event};
-use quick_xml::{Reader, XmlVersion};
-use zip::result::ZipError;
-use zip::ZipArchive;
 
 use crate::kit::contracts::ToolError;
 use crate::kit::pdf::font_resolver::{EmbeddedFont, FontStyle};
 use crate::kit::pdf::layout::{plain_text, Align, Block, Float, Frame, Omitted, PageSetup, Paragraph, Picture, Place, Position, Span, Style, PAGE_COUNT, PAGE_NUMBER};
+pub use crate::kit::pdf::wordprocessing::Parsed;
+use crate::kit::pdf::wordprocessing::{self as shared, css_points, DEFAULT_FLOAT_SIDE, SHAPE_FILL, SHAPE_LINE, hex_color, safe_uri, Collected, Families, Item, Node, Out, Package};
 
 pub const DAMAGED: &str = "This Word document is damaged or incomplete, so no PDF was made.";
 const DOCUMENT: &str = "word/document.xml";
-const MAX_DEPTH: usize = 256;
 const MAX_STYLE_CHAIN: usize = 16;
 const DEFAULT_HALF_POINTS: u16 = 20;
 const EMU_PER_POINT: f32 = 12_700.;
-const SHAPE_FILL: [u8; 3] = [217, 217, 217];
-const SHAPE_LINE: [u8; 3] = [89, 89, 89];
-const DEFAULT_FLOAT_SIDE: f32 = 72.;
-
-pub struct Parsed {
-    pub blocks: Vec<Block>,
-    pub header: Vec<Block>,
-    pub footer: Vec<Block>,
-    pub header_distance: Option<f32>,
-    pub footer_distance: Option<f32>,
-    pub pictures: Vec<Picture>,
-    pub families: Vec<String>,
-    pub body_family: Option<String>,
-    pub body_size: f32,
-    pub embedded: Vec<EmbeddedFont>,
-    pub title: Option<String>,
-    pub author: Option<String>,
-    pub page: PageSetup,
-    pub omitted: Omitted,
-}
 
 fn damaged() -> ToolError { ToolError::invalid_input(DAMAGED) }
 
+fn tree(bytes: &[u8]) -> Result<Node, ToolError> { shared::tree(bytes, DAMAGED) }
+
 /// Reads a DOCX package. `budget` caps the bytes expanded across every part read; going over returns `exceeded`.
 pub fn parse(bytes: &[u8], budget: u64, exceeded: ToolError) -> Result<Parsed, ToolError> {
-    let mut package = Package { archive: ZipArchive::new(Cursor::new(bytes)).map_err(|_| damaged())?, budget, exceeded };
-    let rels = package.rels(DOCUMENT)?;
+    let mut package = Package::open(bytes, budget, exceeded, DAMAGED)?;
+    let rels = rels(&mut package, DOCUMENT)?;
     let related = |kind: &str| rels.values().find(|rel| !rel.external && rel.kind.ends_with(kind)).map(|rel| rel.target.clone());
 
     let theme = match related("/theme") {
@@ -68,14 +44,13 @@ pub fn parse(bytes: &[u8], budget: u64, exceeded: ToolError) -> Result<Parsed, T
 
     let (_, base) = styles.paragraph(None);
     let mut converter = Converter {
-        body_family: base.font.clone(),
+        fonts: Families { body: base.font.clone(), others: Vec::new() },
         body_half_points: base.half_points.unwrap_or(DEFAULT_HALF_POINTS),
         package,
         theme,
         styles,
         numbering,
         counters: HashMap::new(),
-        families: Vec::new(),
         pictures: Vec::new(),
         omitted: Omitted::default(),
         headings: 0,
@@ -87,7 +62,7 @@ pub fn parse(bytes: &[u8], budget: u64, exceeded: ToolError) -> Result<Parsed, T
     let document = converter.package.part(DOCUMENT)?.ok_or_else(damaged)?;
     let body = Part { rels, band: false };
     let mut out = Out::default();
-    let root = walk(&document, 2, |node| converter.block(&node, &body, &mut out))?;
+    let root = shared::walk(&document, |open| open.len() == 2, DAMAGED, |node| converter.block(&node, &body, &mut out))?;
     if root.name != "document" { return Err(damaged()); }
     let blocks = out.finish();
 
@@ -122,8 +97,8 @@ pub fn parse(bytes: &[u8], budget: u64, exceeded: ToolError) -> Result<Parsed, T
         header_distance: twips(margins, "header"),
         footer_distance: twips(margins, "footer"),
         pictures: converter.pictures,
-        families: converter.families,
-        body_family: converter.body_family,
+        families: converter.fonts.others,
+        body_family: converter.fonts.body,
         body_size: converter.body_half_points as f32 / 2.,
         embedded,
         title,
@@ -133,38 +108,21 @@ pub fn parse(bytes: &[u8], budget: u64, exceeded: ToolError) -> Result<Parsed, T
     })
 }
 
-struct Package<'a> { archive: ZipArchive<Cursor<&'a [u8]>>, budget: u64, exceeded: ToolError }
-
 #[derive(Debug, Clone)]
 struct Rel { target: String, kind: String, external: bool }
 
-impl Package<'_> {
-    fn part(&mut self, name: &str) -> Result<Option<Vec<u8>>, ToolError> {
-        let entry = match self.archive.by_name(name) {
-            Ok(entry) => entry,
-            Err(ZipError::FileNotFound) => return Ok(None),
-            Err(_) => return Err(damaged()),
-        };
-        let mut data = Vec::new();
-        entry.take(self.budget.saturating_add(1)).read_to_end(&mut data).map_err(|_| damaged())?;
-        if data.len() as u64 > self.budget { return Err(self.exceeded.clone()); }
-        self.budget -= data.len() as u64;
-        Ok(Some(data))
-    }
-
-    fn rels(&mut self, part: &str) -> Result<HashMap<String, Rel>, ToolError> {
-        let (folder, file) = part.rsplit_once('/').unwrap_or(("", part));
-        let path = if folder.is_empty() { format!("_rels/{file}.rels") } else { format!("{folder}/_rels/{file}.rels") };
-        let Some(bytes) = self.part(&path)? else { return Ok(HashMap::new()) };
-        let root = tree(&bytes)?;
-        Ok(root.nodes().filter(|node| node.name == "Relationship").filter_map(|node| {
-            let id = node.attr("Id")?.to_string();
-            let target = node.attr("Target")?;
-            let external = node.attr("TargetMode").is_some_and(|mode| mode.eq_ignore_ascii_case("External"));
-            let target = if external { target.trim().to_string() } else { resolve(folder, target) };
-            Some((id, Rel { target, kind: node.attr("Type").unwrap_or_default().to_string(), external }))
-        }).collect())
-    }
+fn rels(package: &mut Package, part: &str) -> Result<HashMap<String, Rel>, ToolError> {
+    let (folder, file) = part.rsplit_once('/').unwrap_or(("", part));
+    let path = if folder.is_empty() { format!("_rels/{file}.rels") } else { format!("{folder}/_rels/{file}.rels") };
+    let Some(bytes) = package.part(&path)? else { return Ok(HashMap::new()) };
+    let root = tree(&bytes)?;
+    Ok(root.nodes().filter(|node| node.name == "Relationship").filter_map(|node| {
+        let id = node.attr("Id")?.to_string();
+        let target = node.attr("Target")?;
+        let external = node.attr("TargetMode").is_some_and(|mode| mode.eq_ignore_ascii_case("External"));
+        let target = if external { target.trim().to_string() } else { resolve(folder, target) };
+        Some((id, Rel { target, kind: node.attr("Type").unwrap_or_default().to_string(), external }))
+    }).collect())
 }
 
 fn resolve(folder: &str, target: &str) -> String {
@@ -177,91 +135,6 @@ fn resolve(folder: &str, target: &str) -> String {
         }
     }
     parts.join("/")
-}
-
-#[derive(Debug, Clone, Default)]
-struct Node { name: String, attrs: Vec<(String, String)>, children: Vec<Child> }
-
-#[derive(Debug, Clone)]
-enum Child { Node(Node), Text(String) }
-
-impl Node {
-    fn attr(&self, name: &str) -> Option<&str> { self.attrs.iter().find(|(key, _)| key == name).map(|(_, value)| value.as_str()) }
-    fn nodes(&self) -> impl Iterator<Item = &Node> { self.children.iter().filter_map(|child| match child { Child::Node(node) => Some(node), Child::Text(_) => None }) }
-    fn child(&self, name: &str) -> Option<&Node> { self.nodes().find(|node| node.name == name) }
-    fn val(&self, name: &str) -> Option<&str> { self.child(name)?.attr("val") }
-    fn on(&self, name: &str) -> Option<bool> { self.child(name).map(|node| !matches!(node.attr("val"), Some("0" | "false" | "off" | "none"))) }
-    fn find(&self, name: &str) -> Option<&Node> { self.nodes().find_map(|node| if node.name == name { Some(node) } else { node.find(name) }) }
-    fn text(&self) -> String {
-        self.children.iter().map(|child| match child { Child::Text(text) => text.clone(), Child::Node(node) => node.text() }).collect()
-    }
-}
-
-fn tree(bytes: &[u8]) -> Result<Node, ToolError> { walk(bytes, usize::MAX, |_| Ok(())) }
-
-/// Builds the element tree, handing each element closed at `detach` depth to `each` instead of keeping it.
-fn walk(bytes: &[u8], detach: usize, mut each: impl FnMut(Node) -> Result<(), ToolError>) -> Result<Node, ToolError> {
-    let mut reader = Reader::from_reader(bytes);
-    let mut buffer = Vec::new();
-    let mut stack: Vec<Node> = Vec::new();
-    let mut root = None;
-    let mut close = |node: Node, stack: &mut Vec<Node>| -> Result<(), ToolError> {
-        let depth = stack.len();
-        match stack.last_mut() {
-            None => root = Some(node),
-            Some(_) if depth == detach => each(node)?,
-            Some(parent) => parent.children.push(Child::Node(node)),
-        }
-        Ok(())
-    };
-    loop {
-        match reader.read_event_into(&mut buffer).map_err(|_| damaged())? {
-            Event::Start(start) => {
-                if stack.len() >= MAX_DEPTH { return Err(damaged()); }
-                stack.push(element(&start)?);
-            }
-            Event::Empty(start) => close(element(&start)?, &mut stack)?,
-            Event::End(_) => {
-                let node = stack.pop().ok_or_else(damaged)?;
-                close(node, &mut stack)?;
-            }
-            Event::Text(text) => push_text(&mut stack, &text.decode().map_err(|_| damaged())?),
-            Event::CData(data) => push_text(&mut stack, &data.decode().map_err(|_| damaged())?),
-            Event::GeneralRef(reference) => {
-                let text = match reference.resolve_char_ref().map_err(|_| damaged())? {
-                    Some(character) => character.to_string(),
-                    None => resolve_predefined_entity(&reference.decode().map_err(|_| damaged())?).ok_or_else(damaged)?.to_string(),
-                };
-                push_text(&mut stack, &text);
-            }
-            Event::Eof => break,
-            _ => {}
-        }
-        buffer.clear();
-    }
-    drop(close);
-    if !stack.is_empty() { return Err(damaged()); }
-    root.ok_or_else(damaged)
-}
-
-fn element(start: &BytesStart) -> Result<Node, ToolError> {
-    let name = String::from_utf8_lossy(start.local_name().as_ref()).into_owned();
-    let mut attrs = Vec::new();
-    for attribute in start.attributes() {
-        let attribute = attribute.map_err(|_| damaged())?;
-        let key = String::from_utf8_lossy(attribute.key.local_name().as_ref()).into_owned();
-        let value = attribute.normalized_value(XmlVersion::Implicit1_0).map_err(|_| damaged())?.into_owned();
-        attrs.push((key, value));
-    }
-    Ok(Node { name, attrs, children: Vec::new() })
-}
-
-fn push_text(stack: &mut [Node], text: &str) {
-    let Some(node) = stack.last_mut() else { return };
-    match node.children.last_mut() {
-        Some(Child::Text(existing)) => existing.push_str(text),
-        _ => node.children.push(Child::Text(text.to_string())),
-    }
 }
 
 #[derive(Debug, Default)]
@@ -317,12 +190,6 @@ impl Run {
             font: top.font.clone().or(self.font),
         }
     }
-}
-
-fn hex_color(value: &str) -> Option<[u8; 3]> {
-    if value.len() != 6 { return None; }
-    let channel = |index: usize| u8::from_str_radix(value.get(index..index + 2)?, 16).ok();
-    Some([channel(0)?, channel(2)?, channel(4)?])
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -488,7 +355,7 @@ impl Numbering {
 fn embedded_fonts(package: &mut Package, path: &str) -> Result<Vec<EmbeddedFont>, ToolError> {
     let Some(bytes) = package.part(path)? else { return Ok(Vec::new()) };
     let table = tree(&bytes)?;
-    let rels = package.rels(path)?;
+    let rels = rels(package, path)?;
     let mut fonts = Vec::new();
     for font in table.nodes().filter(|node| node.name == "font") {
         let Some(family) = font.attr("name") else { continue };
@@ -534,96 +401,9 @@ fn field_kind(instruction: &str) -> FieldKind {
     }
 }
 
-fn safe_uri(target: &str) -> Option<String> {
-    let target = target.trim();
-    let lower = target.to_ascii_lowercase();
-    ["http://", "https://", "mailto:"].iter().any(|scheme| lower.starts_with(scheme)).then(|| target.to_string())
-}
-
 struct Field { kind: FieldKind, instruction: String, result: bool, shown: bool }
 
-/// A paragraph's text segments (split at page breaks), the blocks drawn after it and the floating objects anchored to it.
-#[derive(Default, Clone)]
-struct Collected { segments: Vec<Vec<Span>>, after: Vec<Block>, floats: Vec<Block>, bookmark: Option<String> }
-
 struct Graphic { picture: Option<usize>, fill: Option<[u8; 3]>, line: Option<[u8; 3]>, blocks: Vec<Block> }
-
-impl Collected {
-    fn new() -> Self { Self { segments: vec![Vec::new()], ..Self::default() } }
-
-    fn text(&mut self, text: &str, style: Style, link: Option<&str>) {
-        if text.is_empty() { return; }
-        let spans = self.segments.last_mut().expect("a segment always exists");
-        match spans.last_mut() {
-            Some(span) if span.style == style && span.link.as_deref() == link => span.text.push_str(text),
-            _ => spans.push(Span { text: text.to_string(), style, link: link.map(str::to_string) }),
-        }
-    }
-}
-
-#[derive(Clone)]
-struct Item { level: u8, start: Option<u64>, spans: Vec<Span> }
-
-#[derive(Default, Clone)]
-struct Out { blocks: Vec<Block>, list: Vec<Item>, list_id: Option<String>, pending_break: bool }
-
-impl Out {
-    fn push(&mut self, block: Block) {
-        self.flush();
-        self.settle();
-        self.blocks.push(block);
-    }
-
-    fn item(&mut self, id: &str, item: Item) {
-        if self.list_id.as_deref() != Some(id) || self.pending_break { self.flush(); }
-        self.settle();
-        self.list_id = Some(id.to_string());
-        self.list.push(item);
-    }
-
-    fn page_break(&mut self) {
-        self.flush();
-        self.pending_break = true;
-    }
-
-    fn settle(&mut self) {
-        if std::mem::take(&mut self.pending_break) && !self.blocks.is_empty() { self.blocks.push(Block::PageBreak); }
-    }
-
-    fn flush(&mut self) {
-        self.list_id = None;
-        let items = std::mem::take(&mut self.list);
-        if !items.is_empty() { self.blocks.push(nest(&items)); }
-    }
-
-    fn finish(mut self) -> Vec<Block> {
-        self.flush();
-        self.blocks
-    }
-}
-
-fn nest(items: &[Item]) -> Block {
-    let level = items.iter().map(|item| item.level).min().unwrap_or(0);
-    let mut entries: Vec<Vec<Block>> = Vec::new();
-    let mut start = None;
-    let mut index = 0;
-    while index < items.len() {
-        if items[index].level == level {
-            if entries.is_empty() { start = items[index].start; }
-            entries.push(vec![Block::Paragraph(items[index].spans.clone())]);
-            index += 1;
-        } else {
-            let end = index + items[index..].iter().take_while(|item| item.level > level).count();
-            let nested = nest(&items[index..end]);
-            match entries.last_mut() {
-                Some(entry) => entry.push(nested),
-                None => entries.push(vec![nested]),
-            }
-            index = end;
-        }
-    }
-    Block::List { start, items: entries }
-}
 
 struct Converter<'a> {
     package: Package<'a>,
@@ -631,8 +411,7 @@ struct Converter<'a> {
     styles: Styles,
     numbering: Numbering,
     counters: HashMap<(String, u8), u64>,
-    families: Vec<String>,
-    body_family: Option<String>,
+    fonts: Families,
     body_half_points: u16,
     pictures: Vec<Picture>,
     omitted: Omitted,
@@ -649,10 +428,10 @@ impl Converter<'_> {
         let Some(rel) = chosen.and_then(|node| node.attr("id")).and_then(|id| body.rels.get(id)).filter(|rel| !rel.external) else { return Ok(Vec::new()) };
         let path = rel.target.clone();
         let Some(bytes) = self.package.part(&path)? else { return Ok(Vec::new()) };
-        let part = Part { rels: self.package.rels(&path)?, band: true };
+        let part = Part { rels: rels(&mut self.package, &path)?, band: true };
         self.fields.clear();
         let mut out = Out::default();
-        walk(&bytes, 1, |node| self.block(&node, &part, &mut out))?;
+        shared::walk(&bytes, |open| open.len() == 1, DAMAGED, |node| self.block(&node, &part, &mut out))?;
         self.fields.clear();
         Ok(out.finish())
     }
@@ -706,19 +485,6 @@ impl Converter<'_> {
         if self.section.is_none() { self.section = Some(node.clone()); }
     }
 
-    fn family(&mut self, font: Option<&str>) -> u16 {
-        let Some(font) = font else { return 0 };
-        if Some(font) == self.body_family.as_deref() { return 0; }
-        let index = match self.families.iter().position(|family| family == font) {
-            Some(index) => index,
-            None => {
-                self.families.push(font.to_string());
-                self.families.len() - 1
-            }
-        };
-        u16::try_from(index + 1).unwrap_or(0)
-    }
-
     fn style(&mut self, run: &Run) -> Style {
         Style {
             bold: run.bold.unwrap_or(false),
@@ -726,7 +492,7 @@ impl Converter<'_> {
             code: false,
             strike: run.strike.unwrap_or(false),
             underline: run.underline.unwrap_or(false),
-            family: self.family(run.font.as_deref()),
+            family: self.fonts.index(run.font.as_deref()),
             half_points: run.half_points.unwrap_or(DEFAULT_HALF_POINTS),
             color: run.color.flatten(),
         }
@@ -1107,21 +873,6 @@ fn vml_style(style: &str) -> HashMap<String, String> {
         let (key, value) = declaration.split_once(':')?;
         Some((key.trim().to_ascii_lowercase(), value.trim().to_ascii_lowercase()))
     }).collect()
-}
-
-fn css_points(value: &str) -> Option<f32> {
-    let split = value.find(|character: char| character.is_ascii_alphabetic()).unwrap_or(value.len());
-    let number = value[..split].trim().parse::<f32>().ok().filter(|number| number.is_finite())?;
-    let scale = match &value[split..] {
-        "pt" => 1.,
-        "in" => 72.,
-        "cm" => 72. / 2.54,
-        "mm" => 72. / 25.4,
-        "pc" => 12.,
-        "" | "px" => 0.75,
-        _ => return None,
-    };
-    Some(number * scale)
 }
 
 fn sentinel(kind: &FieldKind) -> String {

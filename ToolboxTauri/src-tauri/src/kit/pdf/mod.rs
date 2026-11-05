@@ -7,7 +7,9 @@ pub mod font_resolver;
 pub mod layout;
 pub mod markdown;
 pub mod rtf;
+pub mod wordprocessing;
 pub mod docx;
+pub mod odt;
 pub mod delimited;
 pub mod convert;
 
