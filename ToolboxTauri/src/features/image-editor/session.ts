@@ -45,20 +45,22 @@ export type ImageEditHistory = EditHistory<ImageEditPlan>;
 export type ImageCropStep = Omit<Extract<ImageEditOperation, { kind: "crop" }>, "kind">;
 export type ImageResizeStep = Omit<Extract<ImageEditOperation, { kind: "resize" }>, "kind">;
 export type ImageRotateStep = Omit<Extract<ImageEditOperation, { kind: "rotate" }>, "kind">;
+export type ImageToneStep = Omit<Extract<ImageEditOperation, { kind: "tone" }>, "kind">;
 
 /** The shared edit stack holds at most one of each step. Native runs them in a fixed order, so the stack has no order of its own. */
 export interface ImageEditStack {
   crop?: ImageCropStep;
   resize?: ImageResizeStep;
   rotate?: ImageRotateStep;
+  tone?: ImageToneStep;
 }
 
 /** The fixed run order. */
-export const imageEditStackSteps = ["crop", "resize", "rotate"] as const;
+export const imageEditStackSteps = ["crop", "resize", "rotate", "tone"] as const;
 export type ImageEditStackStep = (typeof imageEditStackSteps)[number];
 
-export const imageEditStepLabels: Record<ImageEditStackStep, string> = { crop: "Crop", resize: "Resize", rotate: "Rotate and Flip" };
-const imageEditStepSuffixes: Record<ImageEditStackStep, string> = { crop: "-cropped", resize: "-resized", rotate: "-rotated" };
+export const imageEditStepLabels: Record<ImageEditStackStep, string> = { crop: "Crop", resize: "Resize", rotate: "Rotate and Flip", tone: "Colour and Tone" };
+const imageEditStepSuffixes: Record<ImageEditStackStep, string> = { crop: "-cropped", resize: "-resized", rotate: "-rotated", tone: "-tone" };
 
 export const presentImageEditSteps = (stack: ImageEditStack) => imageEditStackSteps.filter((step) => stack[step] !== undefined);
 
@@ -74,6 +76,13 @@ export const imageRotateDegrees = [0, 90, 180, 270] as const;
 export const imageFlips = ["none", "horizontal", "vertical"] as const;
 
 export const defaultImageRotateStep = (): ImageRotateStep => ({ degrees: 90, flip: "none" });
+
+/** The four tone values in the order the step shows them. Each runs from -100 to 100, and 0 leaves it as it is. */
+export const imageToneValues = ["brightness", "contrast", "saturation", "exposure"] as const;
+
+export const defaultImageToneStep = (): ImageToneStep => ({ brightness: 0, contrast: 0, saturation: 0, exposure: 0 });
+
+export const isNeutralImageToneStep = (tone: ImageToneStep) => imageToneValues.every((value) => tone[value] === 0);
 
 /** A single step names its own output; more than one is named -edited. */
 export const imageEditStackSuffix = (stack: ImageEditStack) => {
@@ -91,7 +100,9 @@ export const imageEditStackPreviewPlan = (stack: ImageEditStack): ImageEditPlan 
     ? { kind: "crop", ...stack.crop! }
     : step === "resize"
       ? { kind: "resize", ...stack.resize! }
-      : { kind: "rotate", ...stack.rotate! }),
+      : step === "rotate"
+        ? { kind: "rotate", ...stack.rotate! }
+        : { kind: "tone", ...stack.tone! }),
 });
 
 const MAX_DIMENSION = 16384;
@@ -108,6 +119,12 @@ export const imageResizeStepProblem = (resize: ImageResizeStep): { field: string
   return inRange(resize.width, 1, MAX_DIMENSION) && inRange(resize.height, 1, MAX_DIMENSION)
     ? null
     : { field: "size", message: `Enter a width and height from 1 to ${MAX_DIMENSION} pixels.` };
+};
+
+/** What to fix before the tone step can run, or null. Native checks the same range. */
+export const imageToneStepProblem = (tone: ImageToneStep): { field: string; message: string } | null => {
+  const field = imageToneValues.find((value) => !inRange(tone[value], -100, 100));
+  return field ? { field, message: `Enter a ${field} from −100 to 100.` } : null;
 };
 
 export const createEditHistory = <T>(present: T): EditHistory<T> => ({ past: [], present, future: [] });

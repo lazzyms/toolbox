@@ -39,7 +39,7 @@ test.beforeEach(async ({ page }) => {
                 if (command.startsWith("plugin:")) return null;
                 const request = (args as { request?: { paths?: string[]; steps?: Record<string, unknown> } }).request;
                 const stepNames = Object.keys(request?.steps ?? {});
-                const suffix = stepNames.length > 1 ? "-edited" : ({ resize: "-resized", rotate: "-rotated" } as Record<string, string>)[stepNames[0]] ?? "-cropped";
+                const suffix = stepNames.length > 1 ? "-edited" : ({ resize: "-resized", rotate: "-rotated", tone: "-tone" } as Record<string, string>)[stepNames[0]] ?? "-cropped";
                 return win.__processingResults ?? (request?.paths ?? []).map((inputPath) => ({
                     inputPath,
                     outputPaths: [inputPath.replace(/(\.\w+)$/, `${suffix}$1`)],
@@ -71,6 +71,7 @@ const openTool = async (page: Page, tool: string, paths: string[]) => {
 const openCrop = (page: Page, paths: string[]) => openTool(page, "Crop Images", paths);
 const openResize = (page: Page, paths: string[]) => openTool(page, "Resize Images", paths);
 const openRotate = (page: Page, paths: string[]) => openTool(page, "Rotate and Flip Images", paths);
+const openTone = (page: Page, paths: string[]) => openTool(page, "Colour and Tone Adjustments", paths);
 const addedMessage = (label: string, position: number) =>
     `${label} added as step ${position}. Steps always run Crop, Resize, Rotate and Flip, Colour and Tone, Watermark, then Remove Metadata.`;
 
@@ -320,7 +321,7 @@ for (const theme of ["light", "dark"] as const) {
         await page.screenshot({ path: testInfo.outputPath(`resize-step-${theme}.png`), animations: "disabled" });
         await steps(page).getByRole("button", { name: "Add Crop step" }).click();
         const separators = page.locator(".image-edit-stack-separator");
-        await expect(separators).toHaveCount(2);
+        await expect(separators).toHaveCount(3);
         for (const separator of await separators.all()) await expect(separator).toHaveAttribute("aria-hidden", "true");
     });
 }
@@ -406,5 +407,160 @@ for (const theme of ["light", "dark"] as const) {
         expect(colors.note).not.toBe("");
         expect(colors.note).not.toBe(colors.surface);
         await options.screenshot({ path: testInfo.outputPath(`rotate-step-${theme}.png`), animations: "disabled" });
+    });
+}
+
+const toneNames = ["Brightness", "Contrast", "Saturation", "Exposure"] as const;
+const toneField = (page: Page, name: (typeof toneNames)[number]) => page.getByRole("textbox", { name: `${name}, from −100 to 100` });
+const toneSlider = (page: Page, name: (typeof toneNames)[number]) => page.getByRole("slider", { name, exact: true });
+const lastPreviewEdits = async (page: Page) => {
+    const previews = await invocations(page, "inspect_image_edit_preview");
+    return (previews.at(-1)?.args as { request: { plan: { edits: unknown[] } } } | undefined)?.request.plan.edits;
+};
+
+test("choosing Colour and Tone sends all four values, set by slider or typed", async ({ page }) => {
+    await openTone(page, ["/photos/a.png", "/photos/b.jpg"]);
+    await expect(steps(page).getByRole("button", { name: "Step 1 of 1, Colour and Tone, showing its options" })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByRole("heading", { name: "Colour and Tone", exact: true })).toBeVisible();
+    await expect(page.getByRole("status").filter({ hasText: addedMessage("Colour and Tone", 1) })).toBeVisible();
+    for (const name of toneNames) {
+        await expect(toneSlider(page, name)).toHaveAttribute("aria-valuenow", "0");
+        await expect(toneField(page, name)).toHaveValue("0");
+    }
+    await expect(page.getByText("Each runs from −100 to 100. 0 leaves it as it is.", { exact: true })).toBeVisible();
+    await expect(page.getByRole("note").filter({ hasText: "This step changes nothing." })).toBeVisible();
+
+    await toneSlider(page, "Brightness").focus();
+    for (let press = 0; press < 10; press += 1) await page.keyboard.press("ArrowRight");
+    await expect(toneField(page, "Brightness")).toHaveValue("+10");
+    await toneField(page, "Contrast").fill("5");
+    await toneField(page, "Saturation").fill("-20");
+    await toneField(page, "Exposure").fill("−3");
+    await toneField(page, "Exposure").blur();
+    await expect(toneField(page, "Saturation")).toHaveValue("−20");
+    await expect(toneField(page, "Contrast")).toHaveValue("+5");
+    await expect(toneSlider(page, "Saturation")).toHaveAttribute("aria-valuenow", "-20");
+    await expect(toneSlider(page, "Exposure")).toHaveAttribute("aria-valuenow", "-3");
+    await expect(page.getByRole("note").filter({ hasText: "Transparent areas stay transparent." })).toBeVisible();
+    await expect(page.getByTestId("run-destination-example")).toHaveText("a-tone.png");
+
+    await page.getByRole("button", { name: "Run on 2 images" }).click();
+    const request = await runRequest(page);
+    expect(request.steps).toEqual({ tone: { brightness: 10, contrast: 5, saturation: -20, exposure: -3 } });
+    expect(await invocations(page, "adjust_image_tone")).toEqual([]);
+    await expect(page.locator(".result-row")).toHaveCount(2);
+    await expect(page.getByRole("button", { name: "Open a-tone.png" })).toBeVisible();
+});
+
+test("moving a tone slider refreshes the focused file's preview", async ({ page }) => {
+    await openTone(page, ["/photos/a.png", "/photos/b.jpg"]);
+    await expect(page.getByRole("img", { name: "Result preview of a.png" })).toBeVisible();
+    await expect.poll(() => lastPreviewEdits(page)).toEqual([{ kind: "tone", brightness: 0, contrast: 0, saturation: 0, exposure: 0 }]);
+    const before = (await invocations(page, "inspect_image_edit_preview")).length;
+
+    await toneSlider(page, "Contrast").focus();
+    await page.keyboard.press("ArrowRight");
+    await expect.poll(async () => (await invocations(page, "inspect_image_edit_preview")).length).toBeGreaterThan(before);
+    await expect.poll(() => lastPreviewEdits(page)).toEqual([{ kind: "tone", brightness: 0, contrast: 1, saturation: 0, exposure: 0 }]);
+    const previews = await invocations(page, "inspect_image_edit_preview");
+    expect((previews.at(-1)?.args as { request: { path: string } }).request.path).toBe("/photos/a.png");
+    await expect(page.getByRole("img", { name: "Result preview of a.png" })).toBeVisible();
+
+    // The preview follows the focused file.
+    await page.getByRole("button", { name: "Next image" }).click();
+    await toneSlider(page, "Saturation").focus();
+    await page.keyboard.press("ArrowLeft");
+    await expect.poll(async () => {
+        const last = (await invocations(page, "inspect_image_edit_preview")).at(-1)?.args as { request: { path: string; plan: { edits: unknown[] } } };
+        return { path: last.request.path, edits: last.request.plan.edits };
+    }).toEqual({ path: "/photos/b.jpg", edits: [{ kind: "tone", brightness: 0, contrast: 1, saturation: -1, exposure: 0 }] });
+    await expect(page.getByRole("img", { name: "Result preview of b.jpg" })).toBeVisible();
+});
+
+test("Reset tone sets all four values to 0 in one action", async ({ page }) => {
+    await openTone(page, ["/photos/a.png"]);
+    const reset = page.getByRole("button", { name: "Reset tone" });
+    await expect(reset).toBeDisabled();
+    await toneField(page, "Brightness").fill("10");
+    await toneField(page, "Contrast").fill("5");
+    await toneField(page, "Saturation").fill("-20");
+    await toneField(page, "Exposure").fill("40");
+    await toneField(page, "Exposure").blur();
+    await expect(reset).toBeEnabled();
+
+    await reset.click();
+    for (const name of toneNames) {
+        await expect(toneField(page, name)).toHaveValue("0");
+        await expect(toneSlider(page, name)).toHaveAttribute("aria-valuenow", "0");
+    }
+    await expect(reset).toBeDisabled();
+    await expect.poll(() => lastPreviewEdits(page)).toEqual([{ kind: "tone", brightness: 0, contrast: 0, saturation: 0, exposure: 0 }]);
+    await expect(steps(page).getByRole("button", { name: "Step 1 of 1, Colour and Tone, showing its options" })).toBeVisible();
+
+    // The reset is one step in the history, so one undo brings all four values back.
+    await page.getByRole("button", { name: /^Undo,/ }).click();
+    await expect(toneField(page, "Brightness")).toHaveValue("+10");
+    await expect(toneField(page, "Contrast")).toHaveValue("+5");
+    await expect(toneField(page, "Saturation")).toHaveValue("−20");
+    await expect(toneField(page, "Exposure")).toHaveValue("+40");
+
+    await reset.click();
+    await page.getByRole("button", { name: "Run on 1 image" }).click();
+    expect((await runRequest(page)).steps).toEqual({ tone: { brightness: 0, contrast: 0, saturation: 0, exposure: 0 } });
+});
+
+test("a tone value outside -100 to 100 blocks Run and names the value", async ({ page }) => {
+    await openTone(page, ["/photos/a.png"]);
+    const brightness = toneField(page, "Brightness");
+    await brightness.fill("150");
+    await expect(brightness).toHaveAttribute("aria-invalid", "true");
+    await expect(page.getByText("Enter a brightness from −100 to 100.", { exact: true })).toBeVisible();
+    await expect(page.getByText("Fix the brightness to run", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Run on 1 image" })).toBeDisabled();
+    await brightness.fill("100");
+    await expect(page.getByRole("button", { name: "Run on 1 image" })).toBeEnabled();
+});
+
+test("Colour and Tone runs after Rotate and Flip and the run is named -edited", async ({ page }) => {
+    await openTone(page, ["/photos/a.jpg"]);
+    await toneField(page, "Brightness").fill("10");
+    await steps(page).getByRole("button", { name: "Add Rotate and Flip step" }).click();
+    await expect(page.getByRole("status").filter({ hasText: addedMessage("Rotate and Flip", 1) })).toBeVisible();
+    await steps(page).getByRole("button", { name: "Step 2 of 2, Colour and Tone" }).click();
+    await expect(page.getByText("Step 2 of 2. Runs after Rotate and Flip.", { exact: true })).toBeVisible();
+    await expect(toneField(page, "Brightness")).toHaveValue("+10");
+    await expect(page.getByTestId("run-destination-example")).toHaveText("a-edited.jpg");
+    await page.getByRole("button", { name: "Run on 1 image" }).click();
+    const request = await runRequest(page);
+    expect(Object.keys(request.steps)).toEqual(["rotate", "tone"]);
+    expect(request.steps).toMatchObject({ tone: { brightness: 10, contrast: 0, saturation: 0, exposure: 0 } });
+});
+
+for (const theme of ["light", "dark"] as const) {
+    test(`the Colour and Tone step renders readable controls in the ${theme} theme`, async ({ page }, testInfo) => {
+        await page.addInitScript((theme) => { localStorage.setItem("toolbox-theme", theme); }, theme);
+        await openTone(page, ["/photos/a.png"]);
+        await expect(page.locator("body")).toHaveAttribute("data-theme", theme);
+        const options = page.getByRole("region", { name: "Options" });
+        await toneField(page, "Brightness").fill("10");
+        await expect(options.getByRole("slider", { name: "Brightness", exact: true })).toBeVisible();
+        const colors = await options.evaluate((node) => {
+            const label = node.querySelector("#image-tone-brightness-label");
+            const field = node.querySelector<HTMLInputElement>("#image-tone-brightness");
+            const range = node.querySelector('[data-slot="slider-range"]');
+            const note = Array.from(node.querySelectorAll("p")).find((p) => p.textContent?.startsWith("Transparent areas"));
+            return {
+                surface: getComputedStyle(node).backgroundColor,
+                label: label ? getComputedStyle(label).color : "",
+                field: field ? getComputedStyle(field).color : "",
+                range: range ? getComputedStyle(range).backgroundColor : "",
+                note: note ? getComputedStyle(note).color : "",
+            };
+        });
+        for (const color of [colors.label, colors.field, colors.range, colors.note]) {
+            expect(color).not.toBe("");
+            expect(color).not.toBe(colors.surface);
+        }
+        await options.screenshot({ path: testInfo.outputPath(`tone-step-${theme}.png`), animations: "disabled" });
     });
 }

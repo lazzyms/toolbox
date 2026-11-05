@@ -1083,7 +1083,7 @@ test("editor command rails keep one document session while changing tools", asyn
     await expect(page.getByRole("heading", { name: "Rotate and Flip", exact: true })).toBeVisible();
     await expect(page.locator(".file-selection-count")).toHaveText("1 file");
     await page.getByRole("tablist", { name: "Edit Image" }).getByRole("tab", { name: "Adjust", exact: true }).click();
-    await expect(page.getByRole("slider", { name: "Contrast" })).toBeVisible();
+    await expect(page.getByRole("slider", { name: "Contrast", exact: true })).toBeVisible();
 
     await page.getByRole("button", { name: "← All tools" }).click();
     await page.getByRole("button", { name: "Open PDF Editor", exact: true }).click();
@@ -2066,7 +2066,7 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
     await openFromHome(page, utility.title);
     // Image Metadata lives in the Image Editor but runs on its own screen, without an edit plan.
     // Crop runs through the shared edit stack, which Crop fills with its default step.
-    const usesImageEditPlan = workspaceForTool(utility.id)?.id === "image-editor" && !["image-metadata", "crop", "resize", "rotate"].includes(utility.id);
+    const usesImageEditPlan = workspaceForTool(utility.id)?.id === "image-editor" && !["image-metadata", "crop", "resize", "rotate", "image-tone"].includes(utility.id);
 
     const accepts = (extension: string) => utility.capability.acceptedExtensions.some((accepted) => accepted.toLowerCase() === extension);
     const selectedFixturePath = accepts(".pdf")
@@ -2092,7 +2092,6 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
     if (usesImageEditPlan) {
         if (utility.id === "heic-convert") await page.getByLabel("Target format").selectOption("jpg");
         if (utility.id === "image-watermark") await page.getByLabel("Watermark text").fill("Test watermark");
-        if (utility.id === "image-tone") await page.getByRole("slider", { name: "Brightness" }).press("End");
     }
     if (utility.id === "compress") await page.getByRole("switch", { name: "Preserve original pixels" }).click();
     if (utility.id === "pdf-redact") await drawRedactionBox(page);
@@ -2104,6 +2103,7 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
         await page.getByRole("button", { name: "Add edit to plan" }).click();
     }
     if (utility.id === "resize") await page.getByLabel("Longest side, pixels").fill("640");
+    if (utility.id === "image-tone") await page.getByRole("slider", { name: "Brightness" }).press("End");
 
     const action = page.locator(".workspace-primary-action");
     await expect(action).toBeEnabled();

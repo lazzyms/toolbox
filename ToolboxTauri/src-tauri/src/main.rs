@@ -630,7 +630,7 @@ mod command_tests {
     use super::*;
     use crate::kit::common::OutputLocation;
     use crate::kit::contracts::{ErrorKind, LimitKind};
-    use crate::kit::images::tools::{CropRequest, CropStep, ImageEditStackRequest, ImageEditSteps, GifCreateRequest, GifExtractRequest, ImageEdit, ImageEditExportRequest, ImageEditPlan, ImageEditPreviewRequest, IconSetRequest, MetadataRequest, ResizeRequest, ResizeStep, RotateRequest, RotateStep, TiffRequest, ToneRequest, WatermarkRequest};
+    use crate::kit::images::tools::{CropRequest, CropStep, ImageEditStackRequest, ImageEditSteps, GifCreateRequest, GifExtractRequest, ImageEdit, ImageEditExportRequest, ImageEditPlan, ImageEditPreviewRequest, IconSetRequest, MetadataRequest, ResizeRequest, ResizeStep, RotateRequest, RotateStep, TiffRequest, ToneRequest, ToneStep, WatermarkRequest};
     use crate::kit::office::{test_minimal_ooxml_package, OfficeProcessor};
     use crate::kit::pdf::editor::{AddPdfPagesRequest, CropPdfRequest, EditPdfRequest, OrganizePdfRequest, PageScope, PdfEditMode, PdfEditOperation, PdfEditSessionPlan, PdfEditSessionRequest, PdfOverlay, PdfOverlayPosition, PdfRect, RedactPdfRequest, RotatePage, SignPdfRequest};
     use crate::kit::pdf::remaining::{CompressPdfRequest, ImagesToPdfRequest, MergePdfRequest, PageOverlayRequest, PageSelectionRequest, PdfToImagesRequest, PdfToTextRequest, RotatePdfRequest, ComparePdfsRequest};
@@ -1196,7 +1196,7 @@ mod command_tests {
         outputs.extend(named(&mut naming, "resize_images", image.clone(), assert_success("resize", resize_images(RunEvents::silent(), ResizeRequest { paths: vec![image.clone()], resize: ResizeStep { width: 128, height: 128, mode: "exact".into(), resampling: "lanczos".into(), keep_aspect_ratio: true, percentage: 100, longest_side: 128 }, output_location: location(&root, "resize") }))));
         outputs.extend(named(&mut naming, "rotate_images", image.clone(), assert_success("rotate", rotate_images(RunEvents::silent(), RotateRequest { paths: vec![image.clone()], rotate: RotateStep { degrees: 90, flip: "none".into() }, output_location: location(&root, "rotate") }))));
         outputs.extend(named(&mut naming, "crop_images", image.clone(), assert_success("crop image", crop_images(RunEvents::silent(), CropRequest { paths: vec![image.clone()], crop: CropStep { x: 0, y: 0, width: 128, height: 128, mode: "rectangle".into(), aspect_width: 128, aspect_height: 128, anchor: "center".into() }, output_location: location(&root, "crop image") }))));
-        outputs.extend(named(&mut naming, "export_image_edit_stack", image.clone(), assert_success("edit stack", export_image_edit_stack(RunEvents::silent(), ImageEditStackRequest { paths: vec![image.clone()], steps: ImageEditSteps { crop: Some(CropStep { x: 0, y: 0, width: 0, height: 0, mode: "aspectRatio".into(), aspect_width: 4, aspect_height: 5, anchor: "center".into() }), resize: Some(ResizeStep { width: 0, height: 0, mode: "longestSide".into(), resampling: "lanczos".into(), keep_aspect_ratio: true, percentage: 100, longest_side: 64 }), rotate: Some(RotateStep { degrees: 90, flip: "horizontal".into() }) }, output_location: location(&root, "edit stack") }))));
+        outputs.extend(named(&mut naming, "export_image_edit_stack", image.clone(), assert_success("edit stack", export_image_edit_stack(RunEvents::silent(), ImageEditStackRequest { paths: vec![image.clone()], steps: ImageEditSteps { crop: Some(CropStep { x: 0, y: 0, width: 0, height: 0, mode: "aspectRatio".into(), aspect_width: 4, aspect_height: 5, anchor: "center".into() }), resize: Some(ResizeStep { width: 0, height: 0, mode: "longestSide".into(), resampling: "lanczos".into(), keep_aspect_ratio: true, percentage: 100, longest_side: 64 }), rotate: Some(RotateStep { degrees: 90, flip: "horizontal".into() }), tone: Some(ToneStep { brightness: 10, contrast: 0.0, saturation: -20.0, exposure: 0.0 }) }, output_location: location(&root, "edit stack") }))));
         outputs.extend(named(&mut naming, "generate_icon_set", image.clone(), assert_success("icons", generate_icon_set(RunEvents::silent(), IconSetRequest { paths: vec![image.clone()], preset: "favicon".into(), sizes: vec![], output_location: location(&root, "icons") }))));
         outputs.extend(named(&mut naming, "create_gif", image.clone(), assert_aggregate_success("create gif", &[image.clone(), image_two.clone()], run_create_gif(&GifCreateRequest { paths: vec![image.clone(), image_two.clone()], frame_delay_ms: 100, loop_forever: true, output_location: location(&root, "create gif"), output_path: None }))));
         outputs.extend(named(&mut naming, "extract_gif_frames", animated.clone(), assert_success("extract gif", extract_gif_frames(RunEvents::silent(), GifExtractRequest { paths: vec![animated.clone()], output_location: location(&root, "extract gif") }))));
@@ -1240,7 +1240,7 @@ mod command_tests {
         assert!(lossy_differing_pixels.is_empty(), "lossy image export pixels must match the verified edit preview; first differences: {lossy_differing_pixels:?}");
         outputs.extend(named(&mut naming, "export_image_edit_plan", lossy_image.clone(), lossy_image_outputs));
         outputs.extend(named(&mut naming, "image_metadata", image.clone(), assert_success("metadata", image_metadata(RunEvents::silent(), MetadataRequest { paths: vec![image.clone()], output_location: location(&root, "metadata") }))));
-        outputs.extend(named(&mut naming, "adjust_image_tone", image.clone(), assert_success("tone", adjust_image_tone(RunEvents::silent(), ToneRequest { paths: vec![image.clone()], brightness: 20, contrast: 0.0, saturation: 0.0, exposure: 0.0, output_location: location(&root, "tone") }))));
+        outputs.extend(named(&mut naming, "adjust_image_tone", image.clone(), assert_success("tone", adjust_image_tone(RunEvents::silent(), ToneRequest { paths: vec![image.clone()], tone: ToneStep { brightness: 20, contrast: 0.0, saturation: 0.0, exposure: 0.0 }, output_location: location(&root, "tone") }))));
         outputs.extend(named(&mut naming, "process_tiff_pages", tiff.clone(), assert_aggregate_success("tiff", &[tiff.clone()], run_process_tiff_pages(&TiffRequest { paths: vec![tiff.clone()], pages: None, output_location: location(&root, "tiff"), output_path: None }))));
         outputs.extend(named(&mut naming, "blur_faces", image.clone(), assert_vision_adapter("face blur", blur_faces(RunEvents::silent(), VisionRequest { paths: vec![image.clone()], pages: None, output_location: location(&root, "face blur") }))));
         outputs.extend(named(&mut naming, "remove_image_background", image.clone(), assert_vision_adapter("background removal", remove_image_background(RunEvents::silent(), VisionRequest { paths: vec![image.clone()], pages: None, output_location: location(&root, "background removal") }))));
@@ -1313,7 +1313,7 @@ mod command_tests {
         let originals = inputs.iter().map(|path| (Original::of(path), std::fs::read(path).unwrap())).collect::<Vec<_>>();
         let rectangle = CropStep { x: 10, y: 20, width: 64, height: 48, mode: "rectangle".into(), aspect_width: 0, aspect_height: 0, anchor: "custom".into() };
         let run = |folder: &str| tauri::async_runtime::block_on(export_image_edit_stack(RunEvents::silent(), ImageEditStackRequest {
-            paths: inputs.clone(), steps: ImageEditSteps { crop: Some(rectangle.clone()), resize: None, rotate: None }, output_location: OutputLocation::CustomFolder(root.join(folder)),
+            paths: inputs.clone(), steps: ImageEditSteps { crop: Some(rectangle.clone()), resize: None, rotate: None, tone: None }, output_location: OutputLocation::CustomFolder(root.join(folder)),
         }));
         std::fs::create_dir_all(root.join("out")).unwrap();
         std::fs::create_dir_all(root.join("again")).unwrap();
@@ -1509,6 +1509,63 @@ mod command_tests {
             original.assert_untouched();
             assert_eq!(&std::fs::read(&original.path).unwrap(), bytes);
         }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn edit_stack_tone_is_deterministic_keeps_alpha_and_rejects_out_of_range_values() {
+        let root = sandbox("edit_stack_tone");
+        let png = root.join("logo.png");
+        // A gradient with a different alpha in every column, from fully clear to opaque.
+        let source = image::RgbaImage::from_fn(64, 32, |x, y| Rgba([(x * 4) as u8, (y * 8) as u8, 120, (x * 4) as u8]));
+        source.save(&png).unwrap();
+        let original = (Original::of(&png), std::fs::read(&png).unwrap());
+        let run = |steps: &str, folder: &str| {
+            std::fs::create_dir_all(root.join(folder)).unwrap();
+            tauri::async_runtime::block_on(export_image_edit_stack(RunEvents::silent(), ImageEditStackRequest {
+                paths: vec![png.clone()], steps: serde_json::from_str::<ImageEditSteps>(steps).unwrap(), output_location: OutputLocation::CustomFolder(root.join(folder)),
+            }))
+        };
+
+        let tone = r#"{"tone":{"brightness":10,"contrast":15,"saturation":-20,"exposure":25}}"#;
+        let first = run(tone, "first");
+        let second = run(tone, "second");
+        assert!(first[0].error().is_none(), "{:?}", first[0].error());
+        assert_eq!(first[0].output_paths(), [root.join("first").join("logo-tone.png")], "a single Colour and Tone step is named -tone");
+        let bytes = std::fs::read(&first[0].output_paths()[0]).unwrap();
+        assert_eq!(bytes, std::fs::read(&second[0].output_paths()[0]).unwrap(), "two runs give the same bytes");
+        let output = image::load_from_memory(&bytes).unwrap().to_rgba8();
+        assert_eq!(output.dimensions(), source.dimensions());
+        assert!(output.pixels().zip(source.pixels()).all(|(out, src)| out.0[3] == src.0[3]), "tone leaves PNG alpha unchanged");
+        assert!(output.pixels().zip(source.pixels()).any(|(out, src)| out.0[..3] != src.0[..3]), "tone changes the colour");
+
+        // All four at zero leaves the colour as it is.
+        let neutral = run(r#"{"tone":{"brightness":0,"contrast":0,"saturation":0,"exposure":0}}"#, "neutral");
+        assert_eq!(image::open(&neutral[0].output_paths()[0]).unwrap().to_rgba8(), source);
+
+        // Tone runs after rotate, whatever order the steps arrive in.
+        let rotate = r#"{"degrees":90,"flip":"none"}"#;
+        let tone_step = r#"{"brightness":10,"contrast":15,"saturation":-20,"exposure":25}"#;
+        let tone_first = run(&format!(r#"{{"tone":{tone_step},"rotate":{rotate}}}"#), "tone-first");
+        let rotate_first = run(&format!(r#"{{"rotate":{rotate},"tone":{tone_step}}}"#), "rotate-first");
+        assert_eq!(tone_first[0].output_paths(), [root.join("tone-first").join("logo-edited.png")]);
+        assert_eq!(std::fs::read(&tone_first[0].output_paths()[0]).unwrap(), std::fs::read(&rotate_first[0].output_paths()[0]).unwrap());
+
+        for (steps, message) in [
+            (r#"{"tone":{"brightness":101,"contrast":0,"saturation":0,"exposure":0}}"#, "Brightness must be between -100 and 100."),
+            (r#"{"tone":{"brightness":0,"contrast":-100.5,"saturation":0,"exposure":0}}"#, "Contrast must be between -100 and 100."),
+            (r#"{"tone":{"brightness":0,"contrast":0,"saturation":150,"exposure":0}}"#, "Saturation must be between -100 and 100."),
+            (r#"{"tone":{"brightness":0,"contrast":0,"saturation":0,"exposure":-101}}"#, "Exposure must be between -100 and 100."),
+        ] {
+            let outcome = &run(steps, "invalid")[0];
+            let error = outcome.error().unwrap_or_else(|| panic!("{steps} must fail"));
+            assert!(matches!(error.kind, ErrorKind::InvalidInput), "{steps}: {:?}", error.kind);
+            assert_eq!(error.message, message);
+        }
+        assert_eq!(std::fs::read_dir(root.join("invalid")).unwrap().count(), 0, "an out-of-range value never writes");
+
+        original.0.assert_untouched();
+        assert_eq!(std::fs::read(&png).unwrap(), original.1);
         let _ = std::fs::remove_dir_all(&root);
     }
 

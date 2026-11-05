@@ -4,12 +4,16 @@ import { ChevronLeft, ChevronRight, Info, Link2, Redo2, Undo2, X } from "lucide-
 import type { ImagePreview, OutputLocation } from "../contracts";
 import {
   imageEditRequestPlan,
+  defaultImageToneStep,
   imageEditStackPreviewPlan,
   imageEditStackSteps,
   imageEditStepLabels,
   imageFlips,
   imageResizeStepProblem,
   imageRotateDegrees,
+  imageToneStepProblem,
+  imageToneValues,
+  isNeutralImageToneStep,
   presentImageEditSteps,
   resolveImageCropRect,
   type EditHistory,
@@ -18,12 +22,14 @@ import {
   type ImageEditStackStep,
   type ImageResizeStep,
   type ImageRotateStep,
+  type ImageToneStep,
 } from "../features/image-editor/session";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { NativeSelect } from "../components/ui/native-select";
+import { Slider } from "../components/ui/slider";
 import { Toggle } from "../components/ui/toggle";
 import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group";
 import { ShortcutHint } from "../components/ShortcutHint";
@@ -58,6 +64,15 @@ const resamplingOptions = [
 
 const flipLabels: Record<(typeof imageFlips)[number], string> = { none: "None", horizontal: "Horizontal", vertical: "Vertical" };
 
+const toneLabels: Record<(typeof imageToneValues)[number], string> = { brightness: "Brightness", contrast: "Contrast", saturation: "Saturation", exposure: "Exposure" };
+// Shown as the board writes them: +10, −20 and 0.
+const formatToneValue = (value: number) => value > 0 ? `+${value}` : value < 0 ? `−${Math.abs(value)}` : "0";
+const parseToneValue = (text: string) => {
+  const trimmed = text.trim().replace("−", "-");
+  const value = Number(trimmed);
+  return trimmed !== "" && trimmed !== "-" && trimmed !== "+" && Number.isFinite(value) ? value : null;
+};
+
 const fileName = (path: string | undefined) => path?.split(/[\\/]/).pop() ?? "selected image";
 
 // Native rejects a crop whose size or ratio is not positive, so Run waits for a well-formed step.
@@ -69,7 +84,9 @@ const cropStepIsRunnable = (crop: ImageCropStep) => crop.mode === "aspectRatio"
 const stackProblem = (stack: ImageEditStack) => {
   if (stack.crop && !cropStepIsRunnable(stack.crop)) return "Fix the crop to run";
   const resize = stack.resize && imageResizeStepProblem(stack.resize);
-  return resize ? `Fix the ${resize.field} to run` : null;
+  if (resize) return `Fix the ${resize.field} to run`;
+  const tone = stack.tone && imageToneStepProblem(stack.tone);
+  return tone ? `Fix the ${tone.field} to run` : null;
 };
 
 const stepOrder = (steps: ImageEditStackStep[], step: ImageEditStackStep) => {
@@ -100,6 +117,7 @@ export const ImageEditStackPanel = ({
   onEditCrop,
   onEditResize,
   onEditRotate,
+  onEditTone,
   onRemove,
   onUndo,
   onRedo,
@@ -123,6 +141,7 @@ export const ImageEditStackPanel = ({
   onEditCrop: (crop: ImageCropStep, coalesceKey?: string) => void;
   onEditResize: (resize: ImageResizeStep, coalesceKey?: string) => void;
   onEditRotate: (rotate: ImageRotateStep) => void;
+  onEditTone: (tone: ImageToneStep, coalesceKey?: string) => void;
   onRemove: (step: ImageEditStackStep) => void;
   onUndo: () => void;
   onRedo: () => void;
@@ -132,6 +151,7 @@ export const ImageEditStackPanel = ({
   const crop = stack.crop;
   const resize = stack.resize;
   const rotate = stack.rotate;
+  const tone = stack.tone;
   const steps = presentImageEditSteps(stack);
   const problem = stackProblem(stack);
   const canUndo = history.past.length > 0;
@@ -144,6 +164,8 @@ export const ImageEditStackPanel = ({
   const previewStageRef = useRef<HTMLDivElement>(null);
   const drag = useRef<{ pointerId: number; offsetX: number; offsetY: number; key: string } | null>(null);
   const dragCount = useRef(0);
+  // What the user is typing in a tone field, kept until it leaves the field so "-" or "+" can start a value.
+  const [toneText, setToneText] = useState<Partial<Record<(typeof imageToneValues)[number], string>>>({});
   const canRun = files.length > 0 && steps.length > 0 && !problem && !loading;
 
   useEffect(() => {
@@ -256,6 +278,7 @@ export const ImageEditStackPanel = ({
   const redoKey = isWindows() ? "Ctrl+Y" : "⇧⌘Z";
   const footHint = files.length === 0 ? "Add images to run" : steps.length === 0 ? "Add a step to run" : problem ?? "Originals stay as they are";
   const resizeProblem = resize ? imageResizeStepProblem(resize) : null;
+  const toneProblem = tone ? imageToneStepProblem(tone) : null;
   const focused = stack[focus] !== undefined;
   const cropAria = crop?.mode === "rectangle"
     ? `Crop area, ${crop.width} by ${crop.height} pixels, from ${crop.x}, ${crop.y}. Drag to move it.`
@@ -528,6 +551,62 @@ export const ImageEditStackPanel = ({
                   </ToggleGroup>
                 </fieldset>
                 <p className="workspace-panel-copy flex gap-2"><Info aria-hidden="true" className="mt-0.5 size-4 shrink-0" />Rotated images are always re-encoded at quality 90, even with no other changes.</p>
+              </>
+            ) : focus === "tone" && tone ? (
+              <>
+                {imageToneValues.map((key) => (
+                  <div className="workspace-field" key={key}>
+                    <Label id={`image-tone-${key}-label`} htmlFor={`image-tone-${key}`}>{toneLabels[key]}</Label>
+                    <div className="grid grid-cols-[minmax(0,1fr)_4rem] items-center gap-2.5">
+                      <Slider
+                        aria-labelledby={`image-tone-${key}-label`}
+                        min={-100}
+                        max={100}
+                        step={1}
+                        value={[Math.min(Math.max(tone[key], -100), 100)]}
+                        onValueChange={([value]) => { if (value !== undefined && value !== tone[key]) onEditTone({ ...tone, [key]: value }, `tone-${key}`); }}
+                      />
+                      <Input
+                        id={`image-tone-${key}`}
+                        aria-label={`${toneLabels[key]}, from −100 to 100`}
+                        inputMode="numeric"
+                        value={toneText[key] ?? formatToneValue(tone[key])}
+                        aria-invalid={toneProblem?.field === key ? true : undefined}
+                        aria-describedby="image-tone-hint"
+                        onChange={(event) => {
+                          const text = event.target.value;
+                          setToneText((current) => ({ ...current, [key]: text }));
+                          const value = parseToneValue(text);
+                          if (value !== null && value !== tone[key]) onEditTone({ ...tone, [key]: value }, `tone-field-${key}`);
+                        }}
+                        onBlur={() => setToneText((current) => ({ ...current, [key]: undefined }))}
+                      />
+                    </div>
+                  </div>
+                ))}
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={isNeutralImageToneStep(tone)}
+                    onClick={() => {
+                      setToneText({});
+                      onEditTone(defaultImageToneStep());
+                    }}
+                  >
+                    Reset tone
+                  </Button>
+                  {toneProblem
+                    ? <p id="image-tone-hint" className="text-sm text-destructive">{toneProblem.message}</p>
+                    : <p id="image-tone-hint" className="workspace-panel-copy">Each runs from −100 to 100. 0 leaves it as it is.</p>}
+                </div>
+                <p className="workspace-panel-copy flex gap-2" role="note">
+                  <Info aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
+                  {isNeutralImageToneStep(tone)
+                    ? "This step changes nothing. All four values are 0, so the preview matches the original."
+                    : "Transparent areas stay transparent."}
+                </p>
               </>
             ) : (
               <Card className="py-0" role="note">

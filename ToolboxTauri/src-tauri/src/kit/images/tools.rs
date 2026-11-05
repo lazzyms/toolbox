@@ -117,10 +117,7 @@ impl ImageEditPlan {
                 ImageEdit::Crop { width, height, mode, aspect_width, aspect_height, .. } if mode == "rectangle" && (*width == 0 || *height == 0) => return Err("Crop rectangle must have positive dimensions.".to_string()),
                 ImageEdit::Crop { mode, aspect_width, aspect_height, .. } if mode == "aspectRatio" && (*aspect_width == 0 || *aspect_height == 0) => return Err("Aspect ratio dimensions must be positive.".to_string()),
                 ImageEdit::Crop { mode, .. } if !matches!(mode.as_str(), "rectangle" | "aspectRatio") => return Err(format!("Unsupported crop mode: {mode}.")),
-                ImageEdit::Tone { brightness, contrast, saturation, exposure } if !(-100..=100).contains(brightness) => return Err("Brightness must be between -100 and 100.".to_string()),
-                ImageEdit::Tone { contrast, .. } if !(-100.0..=100.0).contains(contrast) => return Err("Contrast must be between -100 and 100.".to_string()),
-                ImageEdit::Tone { saturation, .. } if !(-100.0..=100.0).contains(saturation) => return Err("Saturation must be between -100 and 100.".to_string()),
-                ImageEdit::Tone { exposure, .. } if !(-100.0..=100.0).contains(exposure) => return Err("Exposure must be between -100 and 100.".to_string()),
+                ImageEdit::Tone { brightness, contrast, saturation, exposure } => ToneStep { brightness: *brightness, contrast: *contrast, saturation: *saturation, exposure: *exposure }.validate()?,
                 ImageEdit::Watermark { opacity, text, logo_path, .. } if *opacity > 100 => return Err("Watermark opacity must be between 0 and 100.".to_string()),
                 ImageEdit::Watermark { text, logo_path, .. } if text.as_deref().is_none_or(|value| value.trim().is_empty()) && logo_path.is_none() => return Err("Provide watermark text or a logo image.".to_string()),
                 _ => {}
@@ -189,6 +186,7 @@ pub struct ImageEditSteps {
     #[serde(default)] pub crop: Option<CropStep>,
     #[serde(default)] pub resize: Option<ResizeStep>,
     #[serde(default)] pub rotate: Option<RotateStep>,
+    #[serde(default)] pub tone: Option<ToneStep>,
 }
 
 const STACK_QUALITY: u8 = 90;
@@ -199,7 +197,7 @@ pub const REENCODED_AFTER_ROTATING: &str = "Re-encoded at quality 90 after rotat
 impl ImageEditSteps {
     /// One step keeps its tool's suffix; any combination is named -edited.
     fn suffix(&self) -> Result<&'static str, String> {
-        let present = [self.crop.as_ref().map(|_| "-cropped"), self.resize.as_ref().map(|_| "-resized"), self.rotate.as_ref().map(|_| "-rotated")];
+        let present = [self.crop.as_ref().map(|_| "-cropped"), self.resize.as_ref().map(|_| "-resized"), self.rotate.as_ref().map(|_| "-rotated"), self.tone.as_ref().map(|_| "-tone")];
         let mut suffixes = present.into_iter().flatten();
         match (suffixes.next(), suffixes.next()) {
             (None, _) => Err("Add a step to the stack before running.".to_string()),
@@ -210,7 +208,7 @@ impl ImageEditSteps {
 
     // The order is fixed here, never by the order the steps were added: crop runs first, so its
     // rectangle is always measured in source pixels, then resize scales what is left, then rotate and
-    // flip turn the result.
+    // flip turn the result, and tone adjusts the colour of the pixels that are left.
     fn apply(&self, mut image: DynamicImage) -> Result<DynamicImage, String> {
         if let Some(crop) = &self.crop {
             let (x, y, width, height) = crop_rect(image.width(), image.height(), crop)?;
@@ -221,6 +219,9 @@ impl ImageEditSteps {
         }
         if let Some(rotate) = &self.rotate {
             image = rotate.apply(image)?;
+        }
+        if let Some(tone) = &self.tone {
+            image = tone.apply(image)?;
         }
         Ok(image)
     }
@@ -314,20 +315,7 @@ fn apply_edit_plan(plan: &ImageEditPlan, mut image: DynamicImage, mut format: cr
                 image = image.crop_imm(crop.0, crop.1, crop.2, crop.3);
             }
             ImageEdit::Tone { brightness, contrast, saturation, exposure } => {
-                let mut rgba = image::imageops::brighten(&image, *brightness);
-                let exposure = 2.0_f32.powf(*exposure / 100.0);
-                let saturation = (1.0 + *saturation / 100.0).max(0.0);
-                for pixel in rgba.pixels_mut() {
-                    let [red, green, blue, alpha] = pixel.0;
-                    let average = (red as f32 + green as f32 + blue as f32) / 3.0;
-                    pixel.0 = [
-                        ((average + (red as f32 - average) * saturation) * exposure).clamp(0.0, 255.0) as u8,
-                        ((average + (green as f32 - average) * saturation) * exposure).clamp(0.0, 255.0) as u8,
-                        ((average + (blue as f32 - average) * saturation) * exposure).clamp(0.0, 255.0) as u8,
-                        alpha,
-                    ];
-                }
-                image = DynamicImage::ImageRgba8(rgba).adjust_contrast(*contrast);
+                image = ToneStep { brightness: *brightness, contrast: *contrast, saturation: *saturation, exposure: *exposure }.apply(image)?;
             }
             ImageEdit::Watermark { text, logo_path, opacity, x, y } => {
                 let request = WatermarkRequest { paths: vec![], opacity: *opacity, text: text.clone(), logo_path: logo_path.clone(), x: *x, y: *y, output_location: OutputLocation::AlongsideInput };
@@ -465,11 +453,17 @@ pub struct CropStep {
 #[serde(rename_all = "camelCase")]
 pub struct ToneRequest {
     pub paths: Vec<PathBuf>,
+    #[serde(flatten)] pub tone: ToneStep,
+    pub output_location: OutputLocation,
+}
+/// Brightness, contrast, saturation and exposure, each from -100 to 100, where 0 leaves it as it is.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToneStep {
     pub brightness: i32,
     pub contrast: f32,
     #[serde(default)] pub saturation: f32,
     #[serde(default)] pub exposure: f32,
-    pub output_location: OutputLocation,
 }
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -618,22 +612,44 @@ fn crop_rect(image_width: u32, image_height: u32, request: &CropStep) -> Result<
     } else { Err(format!("Unsupported crop mode: {}.", request.mode)) }
 }
 pub fn tone(request: &ToneRequest, input: PathBuf) -> JobOutcome {
-    transform(&request.paths, input, &request.output_location, "-tone", |image| {
-        let mut image = image::imageops::brighten(&image, request.brightness);
-        let exposure = 2.0_f32.powf(request.exposure.clamp(-100.0, 100.0) / 100.0);
-        let saturation = (1.0 + request.saturation.clamp(-100.0, 100.0) / 100.0).max(0.0);
-        for pixel in image.pixels_mut() {
+    transform(&request.paths, input, &request.output_location, "-tone", |image| request.tone.apply(image))
+}
+
+impl ToneStep {
+    fn validate(&self) -> Result<(), String> {
+        if !(-100..=100).contains(&self.brightness) { return Err("Brightness must be between -100 and 100.".to_string()); }
+        for (name, value) in [("Contrast", self.contrast), ("Saturation", self.saturation), ("Exposure", self.exposure)] {
+            if !(-100.0..=100.0).contains(&value) { return Err(format!("{name} must be between -100 and 100.")); }
+        }
+        Ok(())
+    }
+
+    // A value of 0 leaves the pixels exactly as they were: the colour maths rounds rather than
+    // truncates, and contrast is skipped at 0. Brightness, saturation and exposure leave alpha
+    // alone, but the image crate's contrast also stretches alpha, so each pixel gets its alpha
+    // back afterwards and transparent areas stay transparent.
+    fn apply(&self, image: DynamicImage) -> Result<DynamicImage, String> {
+        self.validate()?;
+        let mut rgba = image::imageops::brighten(&image, self.brightness);
+        let exposure = 2.0_f32.powf(self.exposure / 100.0);
+        let saturation = 1.0 + self.saturation / 100.0;
+        for pixel in rgba.pixels_mut() {
             let [red, green, blue, alpha] = pixel.0;
             let average = (red as f32 + green as f32 + blue as f32) / 3.0;
             pixel.0 = [
-                ((average + (red as f32 - average) * saturation) * exposure).clamp(0.0, 255.0) as u8,
-                ((average + (green as f32 - average) * saturation) * exposure).clamp(0.0, 255.0) as u8,
-                ((average + (blue as f32 - average) * saturation) * exposure).clamp(0.0, 255.0) as u8,
+                ((average + (red as f32 - average) * saturation) * exposure).round().clamp(0.0, 255.0) as u8,
+                ((average + (green as f32 - average) * saturation) * exposure).round().clamp(0.0, 255.0) as u8,
+                ((average + (blue as f32 - average) * saturation) * exposure).round().clamp(0.0, 255.0) as u8,
                 alpha,
             ];
         }
-        Ok(DynamicImage::ImageRgba8(image).adjust_contrast(request.contrast))
-    })
+        if self.contrast == 0.0 { return Ok(DynamicImage::ImageRgba8(rgba)); }
+        let mut contrasted = image::imageops::contrast(&rgba, self.contrast);
+        for (pixel, source) in contrasted.pixels_mut().zip(rgba.pixels()) {
+            pixel.0[3] = source.0[3];
+        }
+        Ok(DynamicImage::ImageRgba8(contrasted))
+    }
 }
 pub fn watermark(request: &WatermarkRequest, input: PathBuf) -> JobOutcome {
     transform(&request.paths, input, &request.output_location, "-watermarked", |image| {
