@@ -14,6 +14,9 @@ pub mod delimited;
 pub mod spreadsheet;
 pub mod xlsx;
 pub mod ods;
+pub mod presentation;
+pub mod pptx;
+pub mod odp;
 pub mod convert;
 
 use std::collections::HashSet;

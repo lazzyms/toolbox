@@ -1,7 +1,7 @@
 //! Reads an OpenDocument spreadsheet (ODS) into the shared sheet model, using the text each cell stores for its value.
 
 use crate::kit::contracts::ToolError;
-use crate::kit::pdf::odt::{link_target, push_collapsed, text_style, Props, Styles};
+use crate::kit::pdf::odt::{link_target, manifest, push_collapsed, text_style, Props, Styles};
 use crate::kit::pdf::spreadsheet::{area, split_quoted, Cell, Sheet, Workbook};
 use crate::kit::pdf::wordprocessing::{self as shared, css_points, Child, Collected, Families, Node, Package};
 
@@ -24,9 +24,7 @@ fn hidden(node: &Node) -> bool { matches!(node.attr("visibility"), Some("collaps
 /// Reads an ODS package. `budget` caps the bytes expanded across every part read; going over returns `exceeded`, and a password-protected package returns `locked`.
 pub fn parse(bytes: &[u8], budget: u64, exceeded: ToolError, locked: ToolError) -> Result<Workbook, ToolError> {
     let mut package = Package::open(bytes, budget, exceeded, DAMAGED)?;
-    if let Some(manifest) = package.part("META-INF/manifest.xml")? {
-        if tree(&manifest)?.find("encryption-data").is_some() { return Err(locked); }
-    }
+    manifest(&mut package, DAMAGED, locked)?;
     let mut styles = Styles::default();
     if let Some(bytes) = package.part("styles.xml")? { styles.read(&tree(&bytes)?); }
     let content = package.part("content.xml")?.ok_or_else(damaged)?;

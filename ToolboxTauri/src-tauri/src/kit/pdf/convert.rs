@@ -13,8 +13,9 @@ use crate::kit::common::limits;
 use crate::kit::contracts::{native_capabilities, OutcomePointer, OutcomeWarning, SkipCode, SkipReason, ToolError, WarningKind};
 use crate::kit::office;
 use crate::kit::pdf::font_resolver::{FontResolver, FontSource, FontStyle, SystemFontLookup};
-use crate::kit::pdf::layout::{assemble, expand_tabs, Assembly, Block, Bookmark, Face, FontBook, Flow, Geometry, Omitted, PageOut, PageSetup, Theme};
-use crate::kit::pdf::{delimited, docx, markdown, ods, odt, rtf, xlsx};
+use crate::kit::pdf::layout::{assemble, expand_tabs, Align, Assembly, Block, Bookmark, Face, FontBook, Flow, Geometry, Omitted, PageOut, PageSetup, Paragraph, Span, Style, Theme};
+use crate::kit::pdf::presentation::Include;
+use crate::kit::pdf::{delimited, docx, markdown, odp, ods, odt, pptx, rtf, xlsx};
 
 pub const COMMAND: &str = "convert_to_pdf";
 const ALREADY_PDF: &str = "Already a PDF. Nothing was made.";
@@ -31,6 +32,10 @@ const MAX_PAGE_SIDE: f32 = 14_400.;
 const TABLE_FAMILY: &str = "Arial";
 const TABLE_SIZE: f32 = 10.;
 const MIN_TABLE_SIZE: f32 = 4.;
+const SLIDE_FAMILY: &str = "Arial";
+const SLIDE_SIZE: f32 = 18.;
+const NOTES_SIZE: f32 = 12.;
+const NOTES_MARGIN: f32 = 36.;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -171,6 +176,13 @@ impl Default for SpreadsheetOptions {
     fn default() -> Self { Self { sheets: SheetChoice::default(), print_areas: true, fit_to_width: true } }
 }
 
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PresentationOptions {
+    pub speaker_notes: bool,
+    pub hidden_slides: bool,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConvertToPdfRequest {
@@ -181,6 +193,7 @@ pub struct ConvertToPdfRequest {
     #[serde(default)] pub markdown: Option<MarkdownOptions>,
     #[serde(default)] pub tables: Option<TableOptions>,
     #[serde(default)] pub spreadsheets: Option<SpreadsheetOptions>,
+    #[serde(default)] pub presentations: Option<PresentationOptions>,
 }
 
 pub struct ConvertJob<S: SystemFontLookup> {
@@ -244,6 +257,7 @@ fn convert<S: SystemFontLookup>(job: &ConvertJob<S>, input: PathBuf) -> JobOutco
         "docx" | "odt" => word_file(job, &input, &extension),
         "csv" | "tsv" => table_file(job, &job.request.tables.unwrap_or_default(), &input, &extension),
         "xlsx" | "ods" => spreadsheet_file(job, &job.request.spreadsheets.unwrap_or_default(), &input, &extension),
+        "pptx" | "odp" => presentation_file(job, &job.request.presentations.unwrap_or_default(), &input, &extension),
         _ => plain_text(job, &job.request.plain_text.unwrap_or_default(), &input),
     };
     result.unwrap_or_else(|error| JobOutcome::failure(input, error))
@@ -425,6 +439,11 @@ fn omitted_content(omitted: Omitted) -> Option<OutcomeWarning> {
 }
 
 fn approximate_layout(floats: &[usize]) -> Option<OutcomeWarning> {
+    approximate_placement(floats, ("floating object", "floating objects"), ("page", "pages"))
+}
+
+/// Notes items in `floats` (one page or slide index each, counted from 0) that were placed approximately, naming the pages or slides they were on.
+fn approximate_placement(floats: &[usize], (one, many): (&str, &str), (unit, units): (&str, &str)) -> Option<OutcomeWarning> {
     let mut pages = floats.iter().map(|page| page + 1).collect::<Vec<_>>();
     pages.sort_unstable();
     pages.dedup();
@@ -442,10 +461,10 @@ fn approximate_layout(floats: &[usize]) -> Option<OutcomeWarning> {
     }).collect::<Vec<_>>();
     let pages = match spans.as_slice() {
         [] => return None,
-        [page] if !page.contains('\u{2013}') => format!("page {page}"),
-        _ => format!("pages {}", listed(&spans)),
+        [page] if !page.contains('\u{2013}') => format!("{unit} {page}"),
+        _ => format!("{units} {}", listed(&spans)),
     };
-    let objects = if floats.len() == 1 { format!("1 floating object on {pages} was") } else { format!("{} floating objects on {pages} were", floats.len()) };
+    let objects = if floats.len() == 1 { format!("1 {one} on {pages} was") } else { format!("{} {many} on {pages} were", floats.len()) };
     Some(OutcomeWarning { kind: WarningKind::ApproximateLayout, message: format!("Approximate layout: {objects} placed as close as possible.") })
 }
 
@@ -594,6 +613,70 @@ fn spreadsheet_file<S: SystemFontLookup>(job: &ConvertJob<S>, options: &Spreadsh
     }
     let outcome = JobOutcome::succeeded(input.to_path_buf(), vec![path], detail).with_fonts(book.reports());
     Ok(with_notes(outcome, [omitted_content(omitted)]))
+}
+
+fn presentation_file<S: SystemFontLookup>(job: &ConvertJob<S>, options: &PresentationOptions, input: &Path, extension: &str) -> Result<JobOutcome, ToolError> {
+    let bytes = fs::read(input).map_err(|error| ToolError::processing(format!("Could not read the file: {error}")))?;
+    let locked = ToolError::invalid_input(LOCKED).with_pointer(OutcomePointer::Tool { tool_id: "lock-unlock".into() });
+    let limits = limits::recorded(COMMAND).ok_or_else(|| ToolError::processing("No size limits are recorded for converting to PDF."))?;
+    let include = Include { hidden: options.hidden_slides, notes: options.speaker_notes };
+    let deck = if extension == "odp" {
+        odp::parse(&bytes, limits.max_expanded_bytes, limits.expansion_error(input), locked, include)?
+    } else {
+        match office::is_encrypted(&bytes, "pptx") {
+            Ok(false) => {}
+            Ok(true) => return Err(locked),
+            Err(_) => return Err(ToolError::invalid_input(pptx::DAMAGED)),
+        }
+        pptx::parse(&bytes, limits.max_expanded_bytes, limits.expansion_error(input), include)?
+    };
+    if deck.slides.is_empty() {
+        let hint = if deck.hidden_left_out > 0 { " Its slides are all hidden; choose Include hidden slides to include them." } else { "" };
+        return Err(ToolError::invalid_input(format!("This presentation has nothing to print, so no PDF was made.{hint}")));
+    }
+    let mut theme = Theme::new(deck.body_family.as_deref().unwrap_or(SLIDE_FAMILY), CODE_FAMILY, SLIDE_SIZE, false);
+    theme.families = deck.families.clone();
+    theme.leading = 1.2;
+
+    let mut book = FontBook::with_embedded(&job.fonts, deck.embedded);
+    let (mut pages, mut bookmarks, mut omitted, mut approximate) = (Vec::new(), Vec::new(), Omitted::default(), Vec::new());
+    let heading = Block::Formatted(Paragraph {
+        spans: vec![Span { text: "Speaker notes".into(), style: Style { bold: true, ..Style::default() }, link: None }],
+        align: Align::Left, indent: 0., right_indent: 0., before: 0., after: 6., size: NOTES_SIZE, leading: 1.2,
+    });
+    for slide in &deck.slides {
+        let (width, height) = slide.size;
+        let mut flow = Flow::new(&mut book, theme.clone(), &deck.pictures, Geometry::uniform(width, height, 0.));
+        flow.blocks(&slide.shapes)?;
+        let laid = flow.finish();
+        bookmarks.push(Bookmark { level: 1, title: slide.title.clone().unwrap_or_else(|| format!("Slide {}", slide.number)), page: pages.len(), y: height });
+        pages.extend(laid.pages.into_iter().take(1).map(|page| PageOut { size: Some((width, height)), ..page }));
+        approximate.extend(std::iter::repeat_n(slide.number - 1, slide.approximate));
+        omitted = Omitted { pictures: omitted.pictures + slide.omitted.pictures, charts: omitted.charts + slide.omitted.charts, diagrams: omitted.diagrams + slide.omitted.diagrams, objects: omitted.objects + slide.omitted.objects };
+        if !slide.notes.is_empty() {
+            let blocks = std::iter::once(heading.clone()).chain(slide.notes.iter().cloned()).collect::<Vec<_>>();
+            let geometry = Geometry::uniform(width, height, NOTES_MARGIN.min(width / 4.).min(height / 4.));
+            let mut flow = Flow::new(&mut book, Theme { body_size: NOTES_SIZE, ..theme.clone() }, &deck.pictures, geometry);
+            flow.blocks(&blocks)?;
+            pages.extend(flow.finish().pages.into_iter().map(|page| PageOut { size: Some((width, height)), ..page }));
+        }
+    }
+    let count = pages.len();
+    let first = pages[0].size.unwrap_or_default();
+    let assembly = Assembly { size: first, pages, pictures: &deck.pictures, bookmarks: &bookmarks, anchors: &BTreeMap::new(), title: deck.title.as_deref(), author: deck.author.as_deref() };
+    let document = assemble(&book, assembly)?;
+    let path = save(&job.request.output_location, input, document)?;
+
+    let printed = deck.slides.len();
+    let mut detail = format!("{}. {}.", page_count(count), if printed == 1 { "1 slide".to_string() } else { format!("{printed} slides") });
+    match deck.hidden_left_out {
+        0 => {}
+        1 => detail.push_str(" 1 hidden slide left out."),
+        count => detail.push_str(&format!(" {count} hidden slides left out.")),
+    }
+    let layout = approximate_placement(&approximate, ("shape", "shapes"), ("slide", "slides"));
+    let outcome = JobOutcome::succeeded(input.to_path_buf(), vec![path], detail).with_fonts(book.reports());
+    Ok(with_notes(outcome, [omitted_content(omitted), layout]))
 }
 
 fn decode(bytes: &[u8], encoding: TextEncoding) -> Result<(String, &'static str), ToolError> {
@@ -1919,5 +2002,172 @@ mod tests {
         assert_eq!((outcomes[5].error().unwrap().message.as_str(), &outcomes[5].error().unwrap().pointer), (LOCKED, &error.pointer));
         assert_eq!(inputs.map(|path| fs::read(path).unwrap()), originals);
         assert!(["locked.pdf", "locked-1.pdf", "damaged.pdf", "bomb.pdf", "hidden.pdf"].iter().all(|name| !root.join(name).exists() && !root.join("locked").join(name).exists()));
+    }
+
+    const PICTURE: &str = r#"<p:pic><p:nvPicPr><p:cNvPr id="3" name="Picture"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rIdImage"/></p:blipFill><p:spPr><a:xfrm><a:off x="6350000" y="2540000"/><a:ext cx="2540000" cy="1270000"/></a:xfrm></p:spPr></p:pic>"#;
+    const CHART_FRAME: &str = r#"<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="5" name="Chart"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="635000" y="3810000"/><a:ext cx="2540000" cy="1270000"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rIdChart"/></a:graphicData></a:graphic></p:graphicFrame>"#;
+
+    fn pptx_deck() -> Vec<u8> {
+        use pptx::fixtures::{text_shape, FixtureSlide};
+        let first = format!("{}{}{PICTURE}", text_shape(Some("title"), (36, 24, 600, 60), "Quarterly review", ""), text_shape(None, (36, 120, 400, 200), "Revenue grew", ""));
+        let hidden = text_shape(Some("title"), (36, 24, 600, 60), "Draft numbers", "");
+        let third = format!(
+            r#"{}{}<mc:AlternateContent><mc:Choice Requires="c14">{CHART_FRAME}</mc:Choice><mc:Fallback>{PICTURE}</mc:Fallback></mc:AlternateContent>{CHART_FRAME}"#,
+            text_shape(Some("title"), (36, 24, 600, 60), "Charts", ""),
+            text_shape(None, (500, 300, 200, 80), "Tilted", r#" rot="1800000""#),
+        );
+        let media: &[(&str, &str, &str)] = &[("rIdImage", "image", "../media/image1.png"), ("rIdChart", "chart", "../charts/chart1.xml")];
+        pptx::fixtures::pptx((960, 540), &[
+            FixtureSlide { shapes: &first, notes: Some("Mention the new region"), rels: media, ..FixtureSlide::default() },
+            FixtureSlide { shapes: &hidden, hidden: true, notes: Some("Hidden notes"), rels: media },
+            FixtureSlide { shapes: &third, rels: media, ..FixtureSlide::default() },
+        ], &[("ppt/media/image1.png", &png(20, 10, [10, 120, 60])), ("ppt/charts/chart1.xml", br#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"/>"#)])
+    }
+
+    fn odp_deck() -> Vec<u8> {
+        let styles = concat!(
+            r#"<office:automatic-styles><style:page-layout style:name="PM1"><style:page-layout-properties fo:page-width="960pt" fo:page-height="540pt"/></style:page-layout></office:automatic-styles>"#,
+            r#"<office:master-styles><style:master-page style:name="Default" style:page-layout-name="PM1"/></office:master-styles>"#,
+        );
+        let automatic = r#"<style:style style:name="dp1" style:family="drawing-page"/><style:style style:name="dp2" style:family="drawing-page"><style:drawing-page-properties presentation:visibility="hidden"/></style:style>"#;
+        let text = |class: &str, (x, y, width, height): (u32, u32, u32, u32), text: &str, extra: &str| {
+            let class = if class.is_empty() { String::new() } else { format!(r#" presentation:class="{class}""#) };
+            format!(r#"<draw:frame{class} svg:x="{x}pt" svg:y="{y}pt" svg:width="{width}pt" svg:height="{height}pt"{extra}><draw:text-box><text:p>{text}</text:p></draw:text-box></draw:frame>"#)
+        };
+        let notes = |words: &str| format!("<presentation:notes>{}</presentation:notes>", text("notes", (36, 400, 600, 100), words, ""));
+        let picture = r#"<draw:frame svg:x="500pt" svg:y="200pt" svg:width="200pt" svg:height="100pt"><draw:image xlink:href="Pictures/image1.png"/></draw:frame>"#;
+        let stored_chart = r#"<draw:frame svg:x="500pt" svg:y="200pt" svg:width="200pt" svg:height="100pt"><draw:object xlink:href="./Object 1"/><draw:image xlink:href="Pictures/image1.png"/></draw:frame>"#;
+        let chart = r#"<draw:frame svg:x="50pt" svg:y="300pt" svg:width="200pt" svg:height="100pt"><draw:object><office:document><office:body><office:chart/></office:body></office:document></draw:object></draw:frame>"#;
+        let body = format!(
+            concat!(
+                r#"<draw:page draw:name="One" draw:style-name="dp1" draw:master-page-name="Default">{}{}{}{}</draw:page>"#,
+                r#"<draw:page draw:name="Two" draw:style-name="dp2" draw:master-page-name="Default">{}{}</draw:page>"#,
+                r#"<draw:page draw:name="Three" draw:style-name="dp1" draw:master-page-name="Default">{}{}{}{}</draw:page>"#,
+            ),
+            text("title", (36, 24, 600, 60), "Quarterly review", ""), text("", (36, 120, 400, 200), "Revenue grew", ""), picture, notes("Mention the new region"),
+            text("title", (36, 24, 600, 60), "Draft numbers", ""), notes("Hidden notes"),
+            text("title", (36, 24, 600, 60), "Charts", ""), text("", (500, 300, 200, 80), "Tilted", r#" draw:transform="rotate (0.5) translate (500pt 300pt)""#).replace(r#" svg:x="500pt" svg:y="300pt""#, ""), stored_chart, chart,
+        );
+        odp::fixtures::odp(styles, automatic, &body, &[("Pictures/image1.png", &png(20, 10, [10, 120, 60]))])
+    }
+
+    fn presentation_options(speaker_notes: bool, hidden_slides: bool) -> serde_json::Value {
+        json!({ "presentations": { "speakerNotes": speaker_notes, "hiddenSlides": hidden_slides } })
+    }
+
+    fn assert_presentation_outcomes(root: &Path, input: &Path) {
+        let original = fs::read(input).unwrap();
+        let outcomes = convert_paths(&[input], json!({}));
+        let outcome = &outcomes[0];
+        assert!(succeeded(outcome), "{outcome:?}");
+        assert_eq!(outcome.detail, "2 pages. 2 slides. 1 hidden slide left out.");
+        assert_eq!(outcome.warnings, [
+            OutcomeWarning { kind: WarningKind::OmittedContent, message: "Omitted content: 1 chart has no stored image, so it was left out.".into() },
+            OutcomeWarning { kind: WarningKind::ApproximateLayout, message: "Approximate layout: 1 shape on slide 3 was placed as close as possible.".into() },
+        ]);
+        let document = Document::load(root.join("deck.pdf")).unwrap();
+        assert_eq!(document.get_pages().len(), 2);
+        for page in [1, 2] { assert_eq!(media_box(&document, page), [0., 0., 960., 540.]); }
+        let first = document.extract_text(&[1]).unwrap();
+        assert!(in_order(&first, &["Quarterly review", "Revenue grew"]), "{first}");
+        for absent in ["Mention the new region", "Draft numbers", "Speaker notes"] {
+            let all = document.extract_text(&[1, 2]).unwrap();
+            assert!(!all.contains(absent), "{absent} in {all}");
+        }
+        assert!(document.extract_text(&[2]).unwrap().contains("Tilted"));
+        assert_eq!((page_images(&document, 1), page_images(&document, 2)), (1, 1), "pictures and the chart's stored image are drawn");
+        assert_eq!(outline_titles(&document), ["Quarterly review", "Charts"]);
+
+        let outcomes = convert_paths(&[input], presentation_options(true, true));
+        assert_eq!(outcomes[0].detail, "5 pages. 3 slides.");
+        let document = Document::load(root.join("deck-1.pdf")).unwrap();
+        assert_eq!(document.get_pages().len(), 5);
+        for page in 1..=5 { assert_eq!(media_box(&document, page), [0., 0., 960., 540.]); }
+        let notes = document.extract_text(&[2]).unwrap();
+        assert!(in_order(&notes, &["Speaker notes", "Mention the new region"]), "{notes}");
+        assert!(document.extract_text(&[3]).unwrap().contains("Draft numbers"));
+        assert!(document.extract_text(&[4]).unwrap().contains("Hidden notes"));
+        assert!(document.extract_text(&[5]).unwrap().contains("Charts"));
+        assert_eq!(outline_titles(&document), ["Quarterly review", "Draft numbers", "Charts"]);
+
+        let outcomes = convert_paths(&[input], presentation_options(true, false));
+        assert_eq!(outcomes[0].detail, "3 pages. 2 slides. 1 hidden slide left out.");
+        let all = Document::load(root.join("deck-2.pdf")).unwrap().extract_text(&[1, 2, 3]).unwrap();
+        assert!(in_order(&all, &["Quarterly review", "Mention the new region", "Charts"]), "{all}");
+        assert!(!all.contains("Hidden notes"), "{all}");
+        assert_eq!(fs::read(input).unwrap(), original);
+    }
+
+    #[test]
+    fn powerpoint_decks_print_one_page_per_visible_slide_with_notes_and_hidden_slides_on_request() {
+        let root = sandbox("pptx");
+        let input = root.join("deck.pptx");
+        fs::write(&input, pptx_deck()).unwrap();
+        assert_presentation_outcomes(&root, &input);
+        assert_eq!(names(&root), ["deck-1.pdf", "deck-2.pdf", "deck.pdf", "deck.pptx"]);
+        let document = Document::load(root.join("deck.pdf")).unwrap();
+        let info = document.trailer.get(b"Info").and_then(Object::as_reference).and_then(|id| document.get_dictionary(id)).unwrap();
+        assert_eq!(info.get(b"Title").unwrap().as_str().unwrap(), b"Quarterly review");
+    }
+
+    #[test]
+    fn opendocument_presentations_match_powerpoint() {
+        let root = sandbox("odp");
+        let input = root.join("deck.odp");
+        fs::write(&input, odp_deck()).unwrap();
+        assert_presentation_outcomes(&root, &input);
+        assert_eq!(names(&root), ["deck-1.pdf", "deck-2.pdf", "deck.odp", "deck.pdf"]);
+    }
+
+    #[test]
+    fn locked_damaged_oversized_and_hidden_only_presentations_fail_alone() {
+        let root = sandbox("pptx_batch");
+        let plain = root.join("plain.pptx");
+        fs::write(&plain, crate::kit::office::test_minimal_ooxml_package("pptx")).unwrap();
+        fs::create_dir_all(root.join("locked")).unwrap();
+        let protected = crate::kit::office::OfficeProcessor::protect(plain.clone(), crate::kit::TEST_PASSWORD, &OutputLocation::CustomFolder(root.join("locked")));
+        let locked = protected.output_paths().first().cloned().unwrap_or_else(|| panic!("{protected:?}"));
+        let damaged = root.join("damaged.pptx");
+        fs::write(&damaged, b"PK\x03\x04 not really a package").unwrap();
+        let bomb = root.join("bomb.pptx");
+        fs::write(&bomb, crate::kit::common::limits::fixtures::zip_with_deflated("ppt/presentation.xml", &crate::kit::common::limits::fixtures::zlib_of_zeros(500_000_001), 500_000_001)).unwrap();
+        let hidden_only = root.join("hidden.pptx");
+        let shape = pptx::fixtures::text_shape(None, (36, 36, 200, 50), "Secret", "");
+        fs::write(&hidden_only, pptx::fixtures::pptx((720, 540), &[pptx::fixtures::FixtureSlide { shapes: &shape, hidden: true, ..Default::default() }], &[])).unwrap();
+        let good = root.join("good.pptx");
+        fs::write(&good, pptx_deck()).unwrap();
+        let locked_odp = root.join("locked.odp");
+        fs::write(&locked_odp, encrypted_open_document("application/vnd.oasis.opendocument.presentation")).unwrap();
+        let damaged_odp = root.join("damaged.odp");
+        fs::write(&damaged_odp, b"PK\x03\x04 not really a package").unwrap();
+        let inputs = [&locked, &damaged, &bomb, &hidden_only, &good, &locked_odp, &damaged_odp];
+        let originals = inputs.map(|path| fs::read(path).unwrap());
+
+        let outcomes = convert_paths(&inputs.map(|path| path.as_path()), json!({}));
+        let error = outcomes[0].error().unwrap();
+        assert_eq!(error.kind, ErrorKind::InvalidInput);
+        assert_eq!(error.message, LOCKED);
+        assert_eq!(error.pointer, Some(OutcomePointer::Tool { tool_id: "lock-unlock".into() }));
+        assert_eq!(outcomes[1].error().unwrap().message, pptx::DAMAGED);
+        assert_eq!(outcomes[2].error().unwrap().kind, ErrorKind::LimitExceeded { limit: crate::kit::contracts::LimitKind::Decompression });
+        assert_eq!(outcomes[3].error().unwrap().message, "This presentation has nothing to print, so no PDF was made. Its slides are all hidden; choose Include hidden slides to include them.");
+        assert!(succeeded(&outcomes[4]), "{:?}", outcomes[4]);
+        assert_eq!((outcomes[5].error().unwrap().message.as_str(), &outcomes[5].error().unwrap().pointer), (LOCKED, &error.pointer));
+        assert_eq!(outcomes[6].error().unwrap().message, odp::DAMAGED);
+        assert_eq!(inputs.map(|path| fs::read(path).unwrap()), originals);
+        assert!(["locked.pdf", "damaged.pdf", "bomb.pdf", "hidden.pdf"].iter().all(|name| !root.join(name).exists() && !root.join("locked").join(name).exists()));
+
+        let outcomes = convert_paths(&[&hidden_only], presentation_options(false, true));
+        assert_eq!(outcomes[0].detail, "1 page. 1 slide.");
+    }
+
+    #[test]
+    fn presentation_options_reject_unknown_fields() {
+        let root = sandbox("pptx_options");
+        let input = root.join("deck.pptx");
+        fs::write(&input, pptx_deck()).unwrap();
+        let outcomes = convert_paths(&[&input], json!({ "presentations": { "speakerNotes": true, "hiddenSlides": false, "handouts": 2 } }));
+        assert_eq!(outcomes[0].error().unwrap().kind, ErrorKind::InvalidInput);
+        assert_eq!(names(&root), ["deck.pptx"]);
     }
 }

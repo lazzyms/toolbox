@@ -40,6 +40,10 @@ export type SpreadsheetOptions = { sheets: "all" | "visible"; printAreas: boolea
 
 export const defaultSpreadsheetOptions: SpreadsheetOptions = { sheets: "all", printAreas: true, fitToWidth: true };
 
+export type PresentationOptions = { speakerNotes: boolean; hiddenSlides: boolean };
+
+export const defaultPresentationOptions: PresentationOptions = { speakerNotes: false, hiddenSlides: false };
+
 export const isPlainText = (path: string) => extensionOf(path) === ".txt";
 
 export const isMarkdown = (path: string) => [".md", ".markdown"].includes(extensionOf(path));
@@ -48,9 +52,11 @@ export const isTable = (path: string) => [".csv", ".tsv"].includes(extensionOf(p
 
 export const isSpreadsheet = (path: string) => [".xlsx", ".ods"].includes(extensionOf(path));
 
-export type ConvertToPdfOptions = { plainText: PlainTextOptions; markdown: MarkdownOptions; tables: TableOptions; spreadsheets: SpreadsheetOptions };
+export const isPresentation = (path: string) => [".pptx", ".odp"].includes(extensionOf(path));
 
-export const defaultConvertToPdfOptions: ConvertToPdfOptions = { plainText: defaultPlainTextOptions, markdown: defaultMarkdownOptions, tables: defaultTableOptions, spreadsheets: defaultSpreadsheetOptions };
+export type ConvertToPdfOptions = { plainText: PlainTextOptions; markdown: MarkdownOptions; tables: TableOptions; spreadsheets: SpreadsheetOptions; presentations: PresentationOptions };
+
+export const defaultConvertToPdfOptions: ConvertToPdfOptions = { plainText: defaultPlainTextOptions, markdown: defaultMarkdownOptions, tables: defaultTableOptions, spreadsheets: defaultSpreadsheetOptions, presentations: defaultPresentationOptions };
 
 export const convertToPdfRequest = (paths: string[], outputLocation: unknown, options: ConvertToPdfOptions) => ({
   paths,
@@ -59,6 +65,7 @@ export const convertToPdfRequest = (paths: string[], outputLocation: unknown, op
   ...(paths.some(isMarkdown) ? { markdown: options.markdown } : {}),
   ...(paths.some(isTable) ? { tables: options.tables } : {}),
   ...(paths.some(isSpreadsheet) ? { spreadsheets: options.spreadsheets } : {}),
+  ...(paths.some(isPresentation) ? { presentations: options.presentations } : {}),
 });
 
 const unavailableFamily = (tool: ToolDefinition, path: string) =>
@@ -86,12 +93,13 @@ const appliesTo = (files: string[], plural: string) => `Applies to ${files.lengt
 type PanelProps<T> = { files: string[]; options: T; onChange: (options: T) => void; disabled: boolean };
 
 export const ConvertToPdfOptionsPanel = ({ files, options, onChange, disabled }: PanelProps<ConvertToPdfOptions>) => {
-  if (![isSpreadsheet, isPlainText, isMarkdown, isTable].some((matches) => files.some(matches))) {
+  if (![isSpreadsheet, isPresentation, isPlainText, isMarkdown, isTable].some((matches) => files.some(matches))) {
     return <p className="workspace-note">Options for each format appear here when a file of that format is in the list.</p>;
   }
   return (
     <>
       <SpreadsheetOptionsPanel files={files} options={options.spreadsheets} onChange={(spreadsheets) => onChange({ ...options, spreadsheets })} disabled={disabled} />
+      <PresentationOptionsPanel files={files} options={options.presentations} onChange={(presentations) => onChange({ ...options, presentations })} disabled={disabled} />
       <MarkdownOptionsPanel files={files} options={options.markdown} onChange={(markdown) => onChange({ ...options, markdown })} disabled={disabled} />
       <PlainTextOptionsPanel files={files} options={options.plainText} onChange={(plainText) => onChange({ ...options, plainText })} disabled={disabled} />
       <TablesOptionsPanel files={files} options={options.tables} onChange={(tables) => onChange({ ...options, tables })} disabled={disabled} />
@@ -132,6 +140,28 @@ const SpreadsheetOptionsPanel = ({ files, options, onChange, disabled }: PanelPr
       <Label htmlFor="spreadsheets-fit-to-width" className="cursor-pointer">
         <Checkbox id="spreadsheets-fit-to-width" checked={options.fitToWidth} onCheckedChange={(checked) => set("fitToWidth", checked === true)} />
         Fit each sheet to the page width
+      </Label>
+    </fieldset>
+  );
+};
+
+const PresentationOptionsPanel = ({ files, options, onChange, disabled }: PanelProps<PresentationOptions>) => {
+  const presentationFiles = files.filter(isPresentation);
+  if (presentationFiles.length === 0) return null;
+  const set = <K extends keyof PresentationOptions>(key: K, value: PresentationOptions[K]) => onChange({ ...options, [key]: value });
+  return (
+    <fieldset role="region" aria-label="Presentations options" className="grid gap-3" disabled={disabled}>
+      <div className="workspace-panel-intro">
+        <p className="workspace-panel-label">Presentations</p>
+        <p className="workspace-panel-copy">{appliesTo(presentationFiles, "presentations")}</p>
+      </div>
+      <Label htmlFor="presentations-speaker-notes" className="cursor-pointer">
+        <Checkbox id="presentations-speaker-notes" checked={options.speakerNotes} onCheckedChange={(checked) => set("speakerNotes", checked === true)} />
+        Include speaker notes
+      </Label>
+      <Label htmlFor="presentations-hidden-slides" className="cursor-pointer">
+        <Checkbox id="presentations-hidden-slides" checked={options.hiddenSlides} onCheckedChange={(checked) => set("hiddenSlides", checked === true)} />
+        Include hidden slides
       </Label>
     </fieldset>
   );
