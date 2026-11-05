@@ -59,7 +59,9 @@ export interface PackProgress {
   totalBytes: number;
 }
 
-const PROGRESS_EVENT = "pack-progress";
+export const PROGRESS_EVENT = "pack-progress";
+/** Sent by `src-tauri/src/packs/install.rs` after a pack is installed, updated or repaired. */
+export const PACK_CHANGED_EVENT = "pack-changed";
 
 /** A download started from this view: in progress, or failed with the error its row shows. */
 type Job =
@@ -324,6 +326,7 @@ export const PacksSection = ({ onCheckForUpdates }: { onCheckForUpdates: () => v
   useEffect(() => {
     let live = true;
     let stop: UnlistenFn | null = null;
+    let stopChanged: UnlistenFn | null = null;
     listen<PackProgress>(PROGRESS_EVENT, ({ payload }) => {
       setJobs((current) => {
         const job = current[payload.packId];
@@ -335,12 +338,19 @@ export const PacksSection = ({ onCheckForUpdates }: { onCheckForUpdates: () => v
       .catch(() => {
         // Without progress events a download still finishes and shows its final state.
       });
+    // A pack installed, updated or repaired elsewhere, such as from a result row, shows here at once.
+    listen(PACK_CHANGED_EVENT, () => {
+      invoke<PackList>("list_packs").then((result) => { if (live) setList(result); }).catch(() => undefined);
+    })
+      .then((unlisten) => { if (live) stopChanged = unlisten; else unlisten(); })
+      .catch(() => undefined);
     // Offline rows wait for the network to come back before offering Install again.
     const online = () => setOffline(false);
     window.addEventListener("online", online);
     return () => {
       live = false;
       stop?.();
+      stopChanged?.();
       window.removeEventListener("online", online);
     };
   }, []);

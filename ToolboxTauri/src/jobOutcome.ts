@@ -5,6 +5,7 @@ import type {
   LimitKind,
   OutcomePointer,
   OutcomeWarning,
+  PackNeed,
   SkipCode,
   SkipReason,
   ToolError,
@@ -14,6 +15,8 @@ import type {
 import { UtilityRegistry } from "./registry";
 
 const errorKinds: readonly ErrorKind[] = ["invalidInput", "unavailable", "limitExceeded", "processing", "wrongPassword", "cancelled"];
+
+const packNeeds: readonly PackNeed[] = ["notInstalled", "damaged", "incompatible"];
 
 const limitKinds: readonly LimitKind[] = ["fileSize", "pageCount", "time", "decompression"];
 
@@ -62,7 +65,14 @@ const parsePointer = (value: unknown, path: string): OutcomePointer | null => {
     const toolId = text(pointer.toolId, `${path}.toolId`);
     return toolIds.has(toolId) ? { kind: "tool", toolId: toolId as AtomicToolId } : fail(`${path}.toolId`, "a registered tool id");
   }
-  if (pointer.kind === "pack") return { kind: "pack", packId: text(pointer.packId, `${path}.packId`) };
+  if (pointer.kind === "pack") {
+    return {
+      kind: "pack",
+      packId: text(pointer.packId, `${path}.packId`),
+      name: text(pointer.name, `${path}.name`),
+      reason: member(pointer.reason, packNeeds, `${path}.reason`),
+    };
+  }
   if (pointer.kind === "outputFolder") return { kind: "outputFolder" };
   return fail(`${path}.kind`, "tool, pack or outputFolder");
 };

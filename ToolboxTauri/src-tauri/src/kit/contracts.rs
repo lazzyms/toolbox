@@ -119,8 +119,18 @@ pub enum LimitKind {
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum OutcomePointer {
     Tool { tool_id: String },
-    Pack { pack_id: String },
+    /// A pack the file needs. `name` is how the row names it, as in "Install Hindi pack".
+    Pack { pack_id: String, name: String, reason: PackNeed },
     OutputFolder,
+}
+
+/// Why a required pack could not be used, which picks the row's action: Install, Repair or Update.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PackNeed {
+    NotInstalled,
+    Damaged,
+    Incompatible,
 }
 
 impl ToolError {
@@ -564,11 +574,11 @@ mod tests {
 
         let pointed = JobOutcome::failure(
             PathBuf::from("arabic.pdf"),
-            ToolError::unavailable("Install the script pack.").with_pointer(OutcomePointer::Pack { pack_id: "script-pack".into() }),
+            ToolError::unavailable("Install the script pack.").with_pointer(OutcomePointer::Pack { pack_id: "script-pack".into(), name: "Indic script".into(), reason: PackNeed::NotInstalled }),
         );
         let value = serde_json::to_value(pointed).unwrap();
         assert_eq!(value["failure"]["kind"], "unavailable");
-        assert_eq!(value["failure"]["pointer"], serde_json::json!({ "kind": "pack", "packId": "script-pack" }));
+        assert_eq!(value["failure"]["pointer"], serde_json::json!({ "kind": "pack", "packId": "script-pack", "name": "Indic script", "reason": "notInstalled" }));
 
         let read_only = ToolError::processing("The output folder is read-only. Nothing was saved.").with_pointer(OutcomePointer::OutputFolder);
         assert_eq!(serde_json::to_value(read_only).unwrap()["pointer"], serde_json::json!({ "kind": "outputFolder" }));
@@ -657,7 +667,7 @@ mod tests {
                 PathBuf::from("scan.pdf"),
                 vec![PathBuf::from("scan-page-1.png")],
                 ToolError::unavailable("Install the script pack to shape this text.")
-                    .with_pointer(OutcomePointer::Pack { pack_id: "script-pack".into() }),
+                    .with_pointer(OutcomePointer::Pack { pack_id: "script-pack".into(), name: "Indic script".into(), reason: PackNeed::Damaged }),
             ).with_warning(OutcomeWarning {
                 kind: WarningKind::RenamedToAvoidReplacing { chosen_name: "scan-page-1.png".into(), final_name: "scan-page-1 2.png".into() },
                 message: "Saved as scan-page-1 2.png so the existing file was not replaced.".into(),

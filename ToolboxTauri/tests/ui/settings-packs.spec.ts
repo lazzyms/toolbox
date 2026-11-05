@@ -13,6 +13,7 @@ type PacksWindow = Window & {
     /** Downloads in the order Install was pressed, held until the test settles them. */
     __downloads: Array<{ packId: string; runId: string; settle: (outcome: Outcome<PackList>) => void }>;
     __progress: (payload: PackProgress) => void;
+    __changed: (packId: string) => void;
     /** Uninstalls in the order Remove was pressed, held until the test settles them. */
     __uninstalls: Array<{ packId: string; settle: (outcome: Outcome<PackList>) => void }>;
 };
@@ -72,6 +73,11 @@ test.beforeEach(async ({ page }) => {
         win.__progress = (payload) => {
             for (const [id, listener] of listeners) {
                 if (listener.event === "pack-progress") callbacks.get(listener.handler)?.({ event: "pack-progress", id, payload });
+            }
+        };
+        win.__changed = (packId) => {
+            for (const [id, listener] of listeners) {
+                if (listener.event === "pack-changed") callbacks.get(listener.handler)?.({ event: "pack-changed", id, payload: { packId } });
             }
         };
         Object.defineProperty(window.navigator, "platform", { configurable: true, value: "MacIntel" });
@@ -770,4 +776,19 @@ test("an incompatible pack explains itself and Check for updates opens Updates w
 
     await expect(page.getByRole("heading", { level: 1, name: "Updates", exact: true })).toBeVisible();
     expect(await calls(page, "install_pack")).toEqual([]);
+});
+
+test("a pack installed elsewhere, such as from a result row, shows as installed without reopening Packs", async ({ page }) => {
+    const region = await openPacks(page, everyStatus);
+    await expect(region.getByRole("listitem", { name: "Text recognition, Hindi, Not installed", exact: true })).toBeVisible();
+
+    const installed = { ...everyStatus, packs: everyStatus.packs.map((entry) => entry.id === "ocr-hindi" ? { ...entry, status: "installed" as const, installedVersion: "2.0", diskBytes: 31 * MB } : entry) };
+    await page.evaluate((installed) => {
+        const win = window as unknown as PacksWindow;
+        win.__packs = installed;
+        win.__changed("ocr-hindi");
+    }, installed);
+
+    await expect(region.getByRole("listitem", { name: /^Text recognition, Hindi, Installed/ })).toBeVisible();
+    expect((await invocations(page)).filter((command) => command === "list_packs")).toHaveLength(2);
 });
