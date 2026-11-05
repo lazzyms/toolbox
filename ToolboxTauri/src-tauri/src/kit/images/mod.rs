@@ -170,10 +170,48 @@ fn encode_lossless_webp(img: &DynamicImage) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("WebP encode failed: {}", e))
 }
 
+/// One image written by Convert, with the source facts its fidelity rules need.
+struct ConvertPage {
+    bits: u8,
+    orientation: Option<image::metadata::Orientation>,
+    lossless_source: bool,
+    suffix: String,
+}
+
+impl ConvertPage {
+    /// Writes and publishes the converted image, adding each warning once
+    /// across the pages of a file.
+    fn write(self, input_path: &std::path::Path, mut img: DynamicImage, format: OutputFormat, output_location: &OutputLocation, warnings: &mut Vec<OutcomeWarning>) -> Result<PathBuf, String> {
+        let mut warn = |kind: WarningKind, message: String| {
+            let warning = OutcomeWarning { kind, message };
+            if !warnings.contains(&warning) { warnings.push(warning); }
+        };
+        if let Some(orientation) = self.orientation {
+            img.apply_orientation(orientation);
+        }
+        if self.bits > 8 {
+            img = reduce_to_8_bit(img);
+            warn(WarningKind::PrecisionReduced, format!("Reduced from {}-bit to 8-bit sRGB.", self.bits));
+        }
+        if format == OutputFormat::Jpeg && has_transparency(&img) {
+            warn(WarningKind::TransparencyFlattened, TRANSPARENCY_FLATTENED_MESSAGE.to_string());
+        }
+        let output_path = OutputNaming::reserve_destination(input_path, output_location, &self.suffix, format.extension())
+            .map_err(|error| format!("Could not reserve output: {error}"))?;
+        let bytes = if format == OutputFormat::WebP && self.lossless_source { encode_lossless_webp(&img) } else { encode(&img, format, DEFAULT_QUALITY) }?;
+        std::fs::write(output_path.path(), bytes).map_err(|error| format!("Write failed: {error}"))?;
+        validate_encoded_output(output_path.path(), img.width(), img.height())?;
+        output_path.publish().map_err(|error| format!("Could not publish output: {error}"))
+    }
+}
+
 impl ImageProcessor {
     pub fn convert(input_path: PathBuf, format: OutputFormat, output_location: OutputLocation) -> JobOutcome {
         if let Some(message) = already_in_format(&input_path, format) {
             return JobOutcome::skipped(input_path, SkipReason::new(SkipCode::AlreadyInTargetFormat, message));
+        }
+        if ImageFamily::of(&input_path) == ImageFamily::Tiff {
+            return Self::convert_tiff(input_path, format, &output_location);
         }
         match decode(&input_path) {
             Ok(decoded) => Self::convert_decoded(input_path, decoded, format, &output_location),
@@ -187,41 +225,46 @@ impl ImageProcessor {
     /// TIFF and other lossless families, quality 90 from JPEG and HEIC).
     pub(crate) fn convert_decoded(input_path: PathBuf, decoded: DecodedImage, format: OutputFormat, output_location: &OutputLocation) -> JobOutcome {
         let lossless_source = !matches!(decoded.family, ImageFamily::Jpeg | ImageFamily::Heif);
-        let bits = decoded.bits_per_channel;
-        let orientation = decoded.orientation;
-        let mut img = decoded.into_first_page();
-        if let Some(orientation) = orientation {
-            img.apply_orientation(orientation);
-        }
+        let page = ConvertPage { bits: decoded.bits_per_channel, orientation: decoded.orientation, lossless_source, suffix: "-converted".to_string() };
         let mut warnings = Vec::new();
-        if bits > 8 {
-            img = reduce_to_8_bit(img);
-            warnings.push(OutcomeWarning { kind: WarningKind::PrecisionReduced, message: format!("Reduced from {bits}-bit to 8-bit sRGB.") });
+        match page.write(&input_path, decoded.into_first_page(), format, output_location, &mut warnings) {
+            Ok(path) => warnings.into_iter().fold(JobOutcome::succeeded(input_path, vec![path], format!("Saved as {}", format.extension())), JobOutcome::with_warning),
+            Err(error) => JobOutcome::failure(input_path, ToolError::processing(error)),
         }
-        if format == OutputFormat::Jpeg && has_transparency(&img) {
-            warnings.push(OutcomeWarning { kind: WarningKind::TransparencyFlattened, message: TRANSPARENCY_FLATTENED_MESSAGE.to_string() });
-        }
+    }
 
-        let extension = format.extension();
-        let output_path = match OutputNaming::reserve_destination(&input_path, output_location, "-converted", extension) {
-            Ok(output) => output,
-            Err(error) => return JobOutcome::failure(input_path, ToolError::processing(format!("Could not reserve output: {error}"))),
-        };
-        let encoded = if format == OutputFormat::WebP && lossless_source { encode_lossless_webp(&img) } else { encode(&img, format, DEFAULT_QUALITY) };
-        let bytes = match encoded {
-            Ok(bytes) => bytes,
+    /// A TIFF is read and saved one page at a time, in page order. A
+    /// multi-page TIFF makes one file per page named "-converted-p1",
+    /// "-converted-p2" and so on; if a page fails, the pages already saved
+    /// stay listed on the failed result.
+    fn convert_tiff(input_path: PathBuf, format: OutputFormat, output_location: &OutputLocation) -> JobOutcome {
+        let mut tiff = match source::TiffPages::open(&input_path) {
+            Ok(tiff) => tiff,
             Err(error) => return JobOutcome::failure(input_path, ToolError::processing(error)),
         };
-        if let Err(error) = std::fs::write(output_path.path(), bytes) {
-            return JobOutcome::failure(input_path, ToolError::processing(format!("Write failed: {error}")));
+        let total = tiff.total();
+        let mut outputs = Vec::with_capacity(total);
+        let mut warnings = Vec::new();
+        for index in 0..total {
+            let saved = tiff.read(index).and_then(|(img, orientation)| {
+                let suffix = if total > 1 { format!("-converted-p{}", index + 1) } else { "-converted".to_string() };
+                let page = ConvertPage { bits: source::channel_bits(img.color()), orientation, lossless_source: true, suffix };
+                page.write(&input_path, img, format, output_location, &mut warnings)
+            });
+            match saved {
+                Ok(path) => outputs.push(path),
+                Err(error) => {
+                    let message = match outputs.as_slice() {
+                        [] => error,
+                        [only] => format!("{error} Page 1 was saved as {}.", only.file_name().unwrap_or_default().to_string_lossy()),
+                        saved => format!("{error} Pages 1 to {} were saved.", saved.len()),
+                    };
+                    return warnings.into_iter().fold(JobOutcome::failure_with_outputs(input_path, outputs, ToolError::processing(message)), JobOutcome::with_warning);
+                }
+            }
         }
-        if let Err(error) = validate_encoded_output(output_path.path(), img.width(), img.height()) {
-            return JobOutcome::failure(input_path, ToolError::processing(error));
-        }
-        match output_path.publish() {
-            Ok(path) => warnings.into_iter().fold(JobOutcome::succeeded(input_path, vec![path], format!("Saved as {extension}")), JobOutcome::with_warning),
-            Err(error) => JobOutcome::failure(input_path, ToolError::processing(format!("Could not publish output: {error}"))),
-        }
+        let detail = if total > 1 { format!("{total} files, one per page.") } else { format!("Saved as {}", format.extension()) };
+        warnings.into_iter().fold(JobOutcome::succeeded(input_path, outputs, detail), JobOutcome::with_warning)
     }
 
     pub fn run(input_path: PathBuf, options: Options) -> JobOutcome {
@@ -422,7 +465,6 @@ mod tests {
             pages: vec![DynamicImage::ImageRgb16(deep.clone())],
             family: ImageFamily::Heif,
             bits_per_channel: 10,
-            has_alpha: false,
             orientation: None,
             baseline_jpeg: None,
         };

@@ -60,13 +60,16 @@ interface ResultListProps {
     runningDetail?: string;
     live: LiveRun | null;
     namedByOutput?: boolean;
+    /** Lists each output of a file that wrote several, with its own Open and Reveal, behind a toggle on the row. */
+    listOutputs?: boolean;
     onRetry?: (inputPath: string) => Promise<void>;
     onRetryWithPassword?: (inputPath: string, password: string) => Promise<void>;
 }
 
-export const ResultList = ({ results, progress, loading, resultVerb, runningVerb, runningDetail, live, namedByOutput = false, onRetry, onRetryWithPassword }: ResultListProps) => {
-    const [actionStates, setActionStates] = useState<Record<number, RowActionState>>({});
+export const ResultList = ({ results, progress, loading, resultVerb, runningVerb, runningDetail, live, namedByOutput = false, listOutputs = false, onRetry, onRetryWithPassword }: ResultListProps) => {
+    const [actionStates, setActionStates] = useState<Record<string, RowActionState>>({});
     const [passwordRow, setPasswordRow] = useState<number | null>(null);
+    const [expandedRows, setExpandedRows] = useState<ReadonlySet<number>>(new Set());
     const resultSetGeneration = useRef(0);
 
     useEffect(() => {
@@ -74,12 +77,13 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
         resultSetGeneration.current = generation;
         setActionStates({});
         setPasswordRow(null);
+        setExpandedRows(new Set());
         return () => {
             if (resultSetGeneration.current === generation) resultSetGeneration.current += 1;
         };
     }, [results]);
 
-    const runAction = async (row: number, action: RowAction, perform: () => Promise<unknown>) => {
+    const runAction = async (row: number | string, action: RowAction, perform: () => Promise<unknown>) => {
         const generation = resultSetGeneration.current;
         setActionStates((states) => ({ ...states, [row]: { pending: action, error: null } }));
 
@@ -97,9 +101,17 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
     const reveal = revealButtonLabel();
 
     const finishedRow = (result: JobOutcome, index: number) => {
-        const view = rowView(result, resultVerb, namedByOutput);
+        const view = rowView(result, resultVerb, namedByOutput, listOutputs);
         const state = actionStates[index] ?? idleActionState;
         const busy = state.pending !== null;
+        const listed = view.listedOutputs;
+        const expanded = expandedRows.has(index);
+        const outputsId = `result-outputs-${index}`;
+        const toggleExpanded = () => setExpandedRows((rows) => {
+            const next = new Set(rows);
+            if (!next.delete(index)) next.add(index);
+            return next;
+        });
         const name = view.name;
         const Icon = toneIcons[view.tone];
         return (
@@ -138,6 +150,11 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
                             {state.pending === "reveal" ? "Showing..." : reveal}
                         </Button>
                     )}
+                    {listed.length > 0 && (
+                        <Button variant="outline" size="xs" aria-expanded={expanded} aria-controls={outputsId} onClick={toggleExpanded}>
+                            {expanded ? "Hide files" : `Show ${listed.length === 1 ? "1 file" : `${listed.length} files`}`}
+                        </Button>
+                    )}
                     {view.pointer && (
                         <Button variant="outline" size="xs" onClick={() => view.pointer && followPointer(view.pointer.pointer)}>
                             {view.pointer.label}
@@ -171,6 +188,40 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
                     />
                 )}
                 {state.error && <p className="result-action-error" role="alert">{state.error}</p>}
+                {listed.length > 0 && expanded && (
+                    <ul id={outputsId} className="result-outputs" aria-label={`Files from ${name}`}>
+                        {listed.map((path, outputIndex) => {
+                            const key = `${index}:${outputIndex}`;
+                            const outputState = actionStates[key] ?? idleActionState;
+                            const outputBusy = outputState.pending !== null;
+                            const outputName = fileName(path);
+                            return (
+                                <li key={path} className="result-output">
+                                    <span className="result-output-name" title={path}>{outputName}</span>
+                                    <Button
+                                        variant="ghost"
+                                        size="xs"
+                                        aria-label={`Open ${outputName}`}
+                                        disabled={outputBusy}
+                                        onClick={() => void runAction(key, "open", () => invoke("open_output_path", { path }))}
+                                    >
+                                        {outputState.pending === "open" ? "Opening..." : "Open"}
+                                    </Button>
+                                    <Button
+                                        variant="ghost"
+                                        size="xs"
+                                        aria-label={`${reveal}: ${outputName}`}
+                                        disabled={outputBusy}
+                                        onClick={() => void runAction(key, "reveal", () => invoke("reveal_output_path", { path }))}
+                                    >
+                                        {outputState.pending === "reveal" ? "Showing..." : reveal}
+                                    </Button>
+                                    {outputState.error && <p className="result-action-error" role="alert">{outputState.error}</p>}
+                                </li>
+                            );
+                        })}
+                    </ul>
+                )}
             </li>
         );
     };

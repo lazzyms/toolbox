@@ -84,6 +84,7 @@ export const MediaWorkspaceView = ({ utility: activeUtility, initialPaths, fileA
       onFilesChange={onFilesChange}
       showFileOrdering={activeUtility.id !== "tiff-pages" && activeUtility.id !== "heic-convert"}
       intakeRedirect={activeUtility.id === "heic-convert" ? convertGifRedirect : undefined}
+      listOutputs={activeUtility.id === "heic-convert"}
       exampleName={activeUtility.id === "heic-convert" ? (path) => exampleOutputName(path, activeUtility.command, activeUtility.capability.outputSuffix, targetFormat) : undefined}
       onRun={(paths, outputLocation, { outputPath, runId }) => {
         if (activeUtility.id === "heic-convert") {

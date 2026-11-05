@@ -14,6 +14,8 @@ export interface RowView {
     detailLines: string[];
     openOutput: { path: string; label: "Open" | "Open first" } | null;
     revealOutput: string | null;
+    /** Every output the file wrote, listed one by one under the row instead of the row-level Open and Reveal. */
+    listedOutputs: string[];
     pointer: RowPointer | null;
     canRetry: boolean;
     canRetryWithPassword: boolean;
@@ -75,7 +77,7 @@ const outputSummary = (paths: string[]) =>
 
 const nonEmpty = (lines: string[]) => lines.filter((line) => line.trim().length > 0);
 
-export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput = false): RowView => {
+export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput = false, listOutputs = false): RowView => {
     const warnings = outcome.warnings.map(warningText);
     const input = { name: fileName(outcome.inputPath), fullPath: outcome.inputPath };
     switch (outcome.state) {
@@ -83,14 +85,16 @@ export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput =
             const first = outcome.outputPaths[0] ?? null;
             const warned = warnings.length > 0;
             const byOutput = namedByOutput && first !== null;
+            const listed = listOutputs && outcome.outputPaths.length > 1 ? outcome.outputPaths : [];
             return {
                 ...(byOutput ? { name: fileName(first), fullPath: first } : input),
                 tone: warned ? "warn" : "ok",
                 stateLabel: resultVerb,
                 spokenState: warned ? `${resultVerb} with ${warnings.length === 1 ? "a warning" : "warnings"}` : resultVerb,
-                detailLines: nonEmpty(warned ? [...warnings, outcome.detail] : [first && !byOutput ? outputSummary(outcome.outputPaths) : "", outcome.detail]),
-                openOutput: first ? { path: first, label: outcome.outputPaths.length > 1 ? "Open first" : "Open" } : null,
-                revealOutput: first,
+                detailLines: nonEmpty(warned ? [...warnings, outcome.detail] : [first && !byOutput && listed.length === 0 ? outputSummary(outcome.outputPaths) : "", outcome.detail]),
+                openOutput: first && listed.length === 0 ? { path: first, label: outcome.outputPaths.length > 1 ? "Open first" : "Open" } : null,
+                revealOutput: listed.length === 0 ? first : null,
+                listedOutputs: listed,
                 pointer: null,
                 canRetry: false,
                 canRetryWithPassword: false,
@@ -105,6 +109,7 @@ export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput =
                 detailLines: nonEmpty([outcome.reason.message, ...warnings]),
                 openOutput: null,
                 revealOutput: null,
+                listedOutputs: [],
                 pointer: pointerView(outcome.reason.pointer),
                 canRetry: false,
                 canRetryWithPassword: false,
@@ -119,7 +124,8 @@ export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput =
                 spokenState: spokenKinds[outcome.failure.kind],
                 detailLines: nonEmpty([wrongPassword ? wrongPasswordDetail : outcome.failure.message, ...warnings]),
                 openOutput: null,
-                revealOutput: outcome.outputPaths[0] ?? null,
+                revealOutput: listOutputs ? null : outcome.outputPaths[0] ?? null,
+                listedOutputs: listOutputs ? outcome.outputPaths : [],
                 pointer: pointerView(outcome.failure.pointer),
                 // A retry reuses the run's output location, so it cannot fix a failure that points at that location.
                 canRetry: isRetryable(outcome.failure) && outcome.failure.pointer?.kind !== "outputFolder",

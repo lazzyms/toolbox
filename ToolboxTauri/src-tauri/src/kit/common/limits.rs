@@ -36,10 +36,10 @@ pub fn recorded(command: &str) -> Option<ToolLimits> {
         | "organize_pdf" | "add_pdf_pages" | "add_page_numbers" | "watermark_pdf" | "compress_pdf" | "remove_pdf_pages"
         | "extract_pdf_pages" | "merge_pdfs" | "split_pdf" | "pdf_to_images" | "pdf_to_text" | "extract_pdf_images"
         | "ocr_pdf" | "rotate_pdf" | "repair_pdf" | "redact_pdf" | "compare_pdfs" => PDF,
-        "compress_images" | "convert_images" | "export_image_edit_plan" | "blur_faces"
+        "compress_images" | "export_image_edit_plan" | "blur_faces"
         | "remove_image_background" | "resize_images" | "rotate_images" | "crop_images" | "adjust_image_tone"
         | "watermark_images" | "generate_icon_set" | "create_gif" => IMAGE,
-        "extract_gif_frames" | "process_tiff_pages" | "image_metadata" | "images_to_pdf" => PAGED_IMAGE,
+        "extract_gif_frames" | "process_tiff_pages" | "image_metadata" | "images_to_pdf" | "convert_images" => PAGED_IMAGE,
         _ => return None,
     })
 }
@@ -541,6 +541,7 @@ mod tests {
         assert_eq!(recorded("resize_images"), Some(ToolLimits { max_bytes: 250 * MB, max_pages: None, max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES }));
         assert_eq!(recorded("extract_gif_frames").and_then(|limits| limits.max_pages), Some(1_000));
         assert_eq!(recorded("images_to_pdf").and_then(|limits| limits.max_pages), Some(MAX_IMAGE_PAGES));
+        assert_eq!(recorded("convert_images").and_then(|limits| limits.max_pages), Some(MAX_IMAGE_PAGES));
         assert_eq!(MAX_IMAGE_PAGES, 1_000);
         assert_eq!(recorded("unknown"), None);
     }

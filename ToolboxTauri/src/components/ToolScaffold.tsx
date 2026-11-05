@@ -70,6 +70,8 @@ interface ToolScaffoldProps {
     onFilesChange?: (paths: readonly string[]) => void;
     /** Overrides the example output name when the view's options decide the output's suffix or type. */
     exampleName?: (inputPath: string) => string;
+    /** Lists every output of a file that wrote several on its result row, each with Open and Reveal. */
+    listOutputs?: boolean;
     children: (props: {
         files: string[];
         failingFiles: string[];
@@ -88,7 +90,7 @@ interface ToolScaffoldProps {
     }) => React.ReactNode;
 }
 
-export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, retryWithPassword, intakeCopy, intakeRedirect, initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, exampleName, children }: ToolScaffoldProps) => {
+export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, retryWithPassword, intakeCopy, intakeRedirect, initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, exampleName, listOutputs = false, children }: ToolScaffoldProps) => {
     const nextEntryKey = useRef(0);
     const newEntries = (paths: readonly string[]) => paths.map((path) => ({ key: `entry-${++nextEntryKey.current}`, path }));
     const [entries, setEntries] = useState<IntakeEntry[]>(() => newEntries(initialPaths));
@@ -747,6 +749,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 runningDetail={utility.runningDetail}
                 live={live}
                 namedByOutput={resultsNamedByOutput}
+                listOutputs={listOutputs}
                 onRetry={perFileRun ? (inputPath) => rerun([inputPath]) : undefined}
                 onRetryWithPassword={perFileRun && retryWithPassword ? (inputPath, password) => rerun([inputPath], retryWithPassword(inputPath, password)) : undefined}
             />
