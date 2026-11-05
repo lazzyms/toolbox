@@ -653,7 +653,7 @@ test("a saved Remove Password favorite and recent open File Security once migrat
 
 test("a saved Protect PDF favorite and recent open File Security after the earlier migration already ran", async ({ page }) => {
     await page.addInitScript(() => {
-        if (localStorage.getItem("toolbox-tool-id-migration") === "3") return;
+        if (localStorage.getItem("toolbox-tool-id-migration") === "4") return;
         localStorage.setItem("toolbox-tool-id-migration", "1");
         localStorage.setItem("toolbox-favorites", JSON.stringify(["pdf-protect", "pdf-merge"]));
         localStorage.setItem("toolbox-recent", JSON.stringify(["pdf-protect"]));
@@ -671,12 +671,12 @@ test("a saved Protect PDF favorite and recent open File Security after the earli
         recent: JSON.parse(localStorage.getItem("toolbox-recent") ?? "null"),
         marker: localStorage.getItem("toolbox-tool-id-migration"),
     }));
-    expect(saved).toEqual({ favorites: ["lock-unlock", "pdf-merge"], recent: ["lock-unlock"], marker: "3" });
+    expect(saved).toEqual({ favorites: ["lock-unlock", "pdf-merge"], recent: ["lock-unlock"], marker: "4" });
 });
 
 test("a saved Protect Office Files favorite and recent open File Security after migration", async ({ page }) => {
     await page.addInitScript(() => {
-        if (localStorage.getItem("toolbox-tool-id-migration") === "3") return;
+        if (localStorage.getItem("toolbox-tool-id-migration") === "4") return;
         localStorage.setItem("toolbox-tool-id-migration", "2");
         localStorage.setItem("toolbox-favorites", JSON.stringify(["pdf-merge", "office-protect"]));
         localStorage.setItem("toolbox-recent", JSON.stringify(["office-protect", "pdf-merge"]));
@@ -696,7 +696,50 @@ test("a saved Protect Office Files favorite and recent open File Security after 
         recent: JSON.parse(localStorage.getItem("toolbox-recent") ?? "null"),
         marker: localStorage.getItem("toolbox-tool-id-migration"),
     }));
-    expect(saved).toEqual({ favorites: ["pdf-merge", "lock-unlock"], recent: ["lock-unlock", "pdf-merge"], marker: "3" });
+    expect(saved).toEqual({ favorites: ["pdf-merge", "lock-unlock"], recent: ["lock-unlock", "pdf-merge"], marker: "4" });
+});
+
+test("saved PDF to Text and Extract Images favorites and recents open Extract from PDF after migration", async ({ page }) => {
+    await page.addInitScript(() => {
+        if (localStorage.getItem("toolbox-tool-id-migration") === "4") return;
+        localStorage.setItem("toolbox-tool-id-migration", "3");
+        localStorage.setItem("toolbox-favorites", JSON.stringify(["pdf-to-text", "pdf-merge", "pdf-image-extract"]));
+        localStorage.setItem("toolbox-recent", JSON.stringify(["pdf-image-extract", "pdf-to-text"]));
+    });
+    await page.goto("/");
+    const chips = page.getByRole("group", { name: "Favorite tools" });
+    await expect(chips.getByRole("button")).toHaveText(["Extract from PDF", "Merge PDF"]);
+    await chips.getByRole("button", { name: "Extract from PDF" }).click();
+    await expect(page.locator(".workspace-title")).toHaveText("PDF Conversion");
+    await expect(page.getByRole("heading", { name: "Extract from PDF", exact: true })).toBeVisible();
+    const rail = page.getByRole("toolbar", { name: "PDF Conversion tools" });
+    await expect(rail.getByRole("button", { name: "Extract from PDF", exact: true })).toHaveCount(1);
+    await expect(rail.getByRole("button", { name: /PDF to Text|Extract Images/ })).toHaveCount(0);
+
+    await page.reload();
+    const saved = await page.evaluate(() => ({
+        favorites: JSON.parse(localStorage.getItem("toolbox-favorites") ?? "null"),
+        recent: JSON.parse(localStorage.getItem("toolbox-recent") ?? "null"),
+        marker: localStorage.getItem("toolbox-tool-id-migration"),
+    }));
+    expect(saved.favorites).toEqual(["pdf-extract", "pdf-merge"]);
+    expect(saved.recent[0]).toBe("pdf-extract");
+    expect(saved.recent.filter((id: string) => id === "pdf-extract")).toHaveLength(1);
+    expect(saved.recent).not.toContain("pdf-to-text");
+    expect(saved.recent).not.toContain("pdf-image-extract");
+    expect(saved.marker).toBe("4");
+});
+
+const extractSearchTerms = ["Extract from PDF", "PDF to Text", "Extract Images", "text", "images"];
+
+test("search shows one PDF extraction tool for old and new names", async ({ page }) => {
+    await page.goto("/");
+    const search = page.getByRole("textbox", { name: "Search tools" });
+    for (const term of extractSearchTerms) {
+        await search.fill(term);
+        await expect(page.locator('button[data-command-result="pdf-extract"]'), term).toHaveCount(1);
+        await expect(page.getByRole("button", { name: /^Open (PDF to Text|Extract Images from PDF)$/ }), term).toHaveCount(0);
+    }
 });
 
 test("Lock sends a mixed PDF, Word, Excel and PowerPoint batch in one protect_files request and shows one locked row per file", async ({ page }) => {

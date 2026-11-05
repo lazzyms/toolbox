@@ -1,4 +1,4 @@
-import type { ErrorKind, JobOutcome, OutcomePointer, OutcomeWarning, ToolError } from "../contracts";
+import type { ErrorKind, JobOutcome, JpegColour, OutcomePointer, OutcomeWarning, ToolError } from "../contracts";
 import { UtilityRegistry } from "../registry";
 
 export type RowTone = "ok" | "warn" | "skip" | "fail";
@@ -54,7 +54,43 @@ export const warningText = (warning: OutcomeWarning): string => {
             return `Saved as ${warning.details.finalName}. Renamed to avoid replacing an existing file.`;
         case "precisionReduced":
             return "Some values were rounded to the precision this format can store.";
+        case "imageUnsupported":
+            return `${imagePlace(warning.details)} — ${warning.details.feature} isn't supported in this version. Not saved.`;
+        case "imageDamaged":
+            return `${imagePlace(warning.details)} — The image data is damaged. Not saved.`;
+        case "imageTooLarge":
+            return `${imagePlace(warning.details)} — Would be ${grouped(warning.details.width)} × ${grouped(warning.details.height)} px when decoded, over the size limit. Not saved.`;
+        case "jpegColourKept":
+            return jpegColourText(warning.details);
     }
+};
+
+const imagePlace = ({ page, image }: { page: number; image: number }) => `Page ${page}, image ${image}`;
+
+const grouped = (value: number) => value.toLocaleString("en-US");
+
+const pageList = (pages: number[]) => {
+    const runs: [number, number][] = [];
+    for (const page of pages) {
+        const last = runs[runs.length - 1];
+        if (last && last[1] + 1 === page) last[1] = page;
+        else runs.push([page, page]);
+    }
+    const label = runs.map(([first, last]) => (first === last ? `${first}` : `${first}-${last}`)).join(", ");
+    return `${pages.length === 1 ? "Page" : "Pages"} ${label}`;
+};
+
+const jpegColourText = ({ colour, pages, images }: { colour: JpegColour; pages: number[]; images: number }) => {
+    const one = images === 1;
+    const place = pageList(pages);
+    if (colour === "cmyk") {
+        return one
+            ? `${place} — 1 JPEG uses CMYK colour and was copied as it is. Some viewers show it with the wrong colours.`
+            : `${place} — ${images} JPEGs use CMYK colour and were copied as they are. Some viewers show them with the wrong colours.`;
+    }
+    return one
+        ? `${place} — 1 inverted JPEG, copied as it is. Some viewers show it in negative.`
+        : `${place} — ${images} inverted JPEGs, copied as they are. Some viewers show them in negative.`;
 };
 
 const pointerView = (pointer: OutcomePointer | null): RowPointer | null => {
