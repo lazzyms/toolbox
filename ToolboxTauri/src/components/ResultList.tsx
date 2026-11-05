@@ -67,6 +67,7 @@ interface ResultListProps {
 export const ResultList = ({ results, progress, loading, resultVerb, runningVerb, runningDetail, live, namedByOutput = false, onRetry, onRetryWithPassword }: ResultListProps) => {
     const [actionStates, setActionStates] = useState<Record<number, RowActionState>>({});
     const [passwordRow, setPasswordRow] = useState<number | null>(null);
+    const [fontRows, setFontRows] = useState<ReadonlySet<number>>(new Set());
     const resultSetGeneration = useRef(0);
 
     useEffect(() => {
@@ -74,6 +75,7 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
         resultSetGeneration.current = generation;
         setActionStates({});
         setPasswordRow(null);
+        setFontRows(new Set());
         return () => {
             if (resultSetGeneration.current === generation) resultSetGeneration.current += 1;
         };
@@ -96,12 +98,21 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
 
     const reveal = revealButtonLabel();
 
+    const toggleFonts = (row: number) =>
+        setFontRows((rows) => {
+            const next = new Set(rows);
+            if (!next.delete(row)) next.add(row);
+            return next;
+        });
+
     const finishedRow = (result: JobOutcome, index: number) => {
         const view = rowView(result, resultVerb, namedByOutput);
         const state = actionStates[index] ?? idleActionState;
         const busy = state.pending !== null;
         const name = view.name;
         const Icon = toneIcons[view.tone];
+        const fontsOpen = fontRows.has(index);
+        const fontListId = `result-fonts-${index}`;
         return (
             <li key={`${index}:${result.inputPath}`} className="result-row" data-tone={view.tone} data-state={result.state}>
                 <span className="result-row-icon" aria-hidden="true"><Icon /></span>
@@ -116,6 +127,11 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
                     <span className="sr-only">{view.spokenState}</span>
                 </span>
                 <span className="result-row-actions">
+                    {view.fonts.length > 0 && (
+                        <Button variant="ghost" size="xs" aria-expanded={fontsOpen} aria-controls={fontListId} onClick={() => toggleFonts(index)}>
+                            {fontsOpen ? "Hide fonts" : "Show fonts"}
+                        </Button>
+                    )}
                     {view.openOutput && (
                         <Button
                             variant="ghost"
@@ -169,6 +185,19 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
                         onRetry={(password) => void runAction(index, "retry", () => onRetryWithPassword(result.inputPath, password))}
                         onCancel={() => setPasswordRow(null)}
                     />
+                )}
+                {fontsOpen && view.fonts.length > 0 && (
+                    <ul id={fontListId} className="result-row-fonts" aria-label={`Fonts used in ${name}`}>
+                        {view.fonts.map((font, fontIndex) => (
+                            <li key={fontIndex}>
+                                <span className="result-row-font-requested">{font.requested}</span>
+                                <span aria-hidden="true">→</span>
+                                <span className="sr-only">used</span>
+                                <span>{font.used}</span>
+                                <span className="result-row-detail">{font.source}</span>
+                            </li>
+                        ))}
+                    </ul>
                 )}
                 {state.error && <p className="result-action-error" role="alert">{state.error}</p>}
             </li>

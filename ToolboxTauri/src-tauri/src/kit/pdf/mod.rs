@@ -4,6 +4,7 @@ pub mod editor;
 pub mod remaining;
 pub mod unicode_font;
 pub mod font_resolver;
+pub mod convert;
 
 use std::collections::HashSet;
 use std::fs;
