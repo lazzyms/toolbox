@@ -22,13 +22,19 @@ type Gesture = { pointerId: number; start: ScenePoint; base: ScenePage; next: Sc
   mode: 'create' | 'move' | 'resize' | 'crop' | 'text-selection' | 'pan'; id?: string; corner?: string; points: ScenePoint[]; changed: boolean;
   clientStart?: ScenePoint; scrollStart?: ScenePoint };
 const rectangle = (a: ScenePoint, b: ScenePoint): SceneRect => ({ x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), width: Math.max(1, Math.abs(a.x - b.x)), height: Math.max(1, Math.abs(a.y - b.y)) });
+// Drags a corner to p while the opposite corner stays put; signatures keep their proportions.
+function cornerRect(r: SceneRect, corner: string, p: ScenePoint, keepRatio: boolean): SceneRect {
+  const anchor = { x: corner.includes('w') ? r.x + r.width : r.x, y: corner.includes('n') ? r.y + r.height : r.y };
+  if (!keepRatio) return rectangle(anchor, p);
+  const sx = Math.abs(p.x - anchor.x) / r.width, sy = Math.abs(p.y - anchor.y) / r.height;
+  const scale = Math.abs(sx - 1) >= Math.abs(sy - 1) ? sx : sy;
+  const width = Math.max(1, r.width * scale), height = Math.max(1, r.height * scale);
+  return { x: p.x < anchor.x ? anchor.x - width : anchor.x, y: p.y < anchor.y ? anchor.y - height : anchor.y, width, height };
+}
 
 const cssFont = (font?: string) => font?.startsWith('Noto') ? `"Toolbox ${font}", ${font.endsWith('Mono') ? 'monospace' : font.endsWith('Serif') ? 'serif' : 'sans-serif'}`
-  : font === 'Satisfy' ? 'Toolbox Satisfy, cursive'
   : font === 'Pacifico' ? 'Toolbox Pacifico, cursive'
     : font?.startsWith('Times') ? 'Times New Roman, serif' : font?.startsWith('Courier') ? 'Courier New, monospace' : 'Helvetica, Arial, sans-serif';
-const fontWeight = (font?: string) => font?.includes('Bold') ? 700 : 400;
-const fontStyle = (font?: string) => font?.includes('Oblique') || font?.includes('Italic') ? 'italic' : 'normal';
 
 function shapeArtwork(shape: SceneShape | undefined, r: SceneRect, color: string, opacity: number) {
   const selected = shape ?? 'square';
@@ -81,20 +87,29 @@ function resizedObject(object: SceneObject, rect: SceneRect, original: SceneObje
   return { ...object, rect };
 }
 
+// Mirrors the exporter: the name is drawn at 96 pt with 8 pt padding and fitted inside the box.
+export function TypedSignature({ text, color, ...box }: { text: string; color: string; x?: number; y?: number; width: number | string; height: number | string; opacity?: number }) {
+  const lines = text.split('\n');
+  const context = typeof document === 'undefined' ? null : document.createElement('canvas').getContext('2d');
+  if (context) context.font = '96px "Toolbox Pacifico", cursive';
+  const measure = (line: string) => context?.measureText(line);
+  const ascent = measure('Ag')?.fontBoundingBoxAscent || 125, descent = measure('Ag')?.fontBoundingBoxDescent || 36;
+  const lineHeight = Math.max(ascent + descent, 105.6);
+  const width = Math.max(...lines.map(line => measure(line)?.width ?? line.length * 48)) + 16;
+  return <svg {...box} viewBox={`0 0 ${Math.max(1, width)} ${lineHeight * lines.length + 16}`} preserveAspectRatio="xMidYMid meet" overflow="hidden">
+    <text fill={color} fontSize={96} fontFamily={cssFont('Pacifico')}>
+      {lines.map((line, i) => <tspan key={i} x={8} y={8 + ascent + i * lineHeight}>{line}</tspan>)}
+    </text>
+  </svg>;
+}
+
 function Artwork({ page, object }: { page: ScenePage; object: SceneObject }) {
   const { rect: r } = object;
   if (object.kind === 'signature') {
     if (object.signatureMode === 'image') return object.signaturePreview
       ? <image href={object.signaturePreview} x={r.x} y={r.y} width={r.width} height={r.height} preserveAspectRatio="xMidYMid meet" opacity={object.opacity} />
       : <rect {...r} fill="var(--pdf-scene-placeholder)" stroke={object.color} strokeDasharray="5 4" opacity={object.opacity} />;
-    if (object.signatureMode === 'text') return <svg x={r.x} y={r.y} width={r.width} height={r.height} overflow="hidden">
-      <text fill={object.color} opacity={object.opacity} fontSize={object.fontSize} fontFamily={cssFont(object.fontFamily)} fontWeight={fontWeight(object.fontFamily)} fontStyle={fontStyle(object.fontFamily)} dominantBaseline="hanging">
-        {object.text.split('\n').map((line, i) => <tspan key={i} x={0} y={i * object.fontSize * 1.2}>{line}</tspan>)}
-      </text>
-    </svg>;
-    return <g fill="none" stroke={object.color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" opacity={object.opacity}>
-      {object.strokes.map((stroke, i) => <polyline key={i} points={stroke.map(p => `${r.x + p.x * r.width},${r.y + p.y * r.height}`).join(' ')} />)}
-    </g>;
+    return <TypedSignature text={object.text} color={object.color} opacity={object.opacity} x={r.x} y={r.y} width={r.width} height={r.height} />;
   }
   // While drafting, wrap like the native exporter; the rendered preview replaces this once it is ready.
   if (object.kind === 'text') return <foreignObject {...r}>
@@ -293,16 +308,7 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
       if (g.mode === 'move') rect = { ...original.rect,
         x: Math.max(b.x, Math.min(b.x + b.width - original.rect.width, original.rect.x + dx)),
         y: Math.max(b.y, Math.min(b.y + b.height - original.rect.height, original.rect.y + dy)) };
-      if (g.mode === 'resize') {
-        const r = original.rect;
-        rect = rectangle({ x: g.corner?.includes('w') ? r.x + r.width : r.x, y: g.corner?.includes('n') ? r.y + r.height : r.y }, p);
-      }
-      if (g.mode === 'create' && object.kind === 'signature' && !object.signatureMode) {
-        g.points.push(p);
-        const xs = g.points.map(v => v.x), ys = g.points.map(v => v.y);
-        rect = rectangle({ x: Math.min(...xs), y: Math.min(...ys) }, { x: Math.max(...xs), y: Math.max(...ys) });
-        return { ...object, rect, strokes: [g.points.map(v => ({ x: (v.x - rect.x) / rect.width, y: (v.y - rect.y) / rect.height }))] };
-      }
+      if (g.mode === 'resize') rect = cornerRect(original.rect, g.corner ?? 'se', p, object.kind === 'signature');
       return g.mode === 'resize' ? resizedObject(object, rect, original) : { ...object, rect };
     }) };
     setDraft(g.next);
@@ -323,7 +329,14 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
       return;
     }
     setDraft(null);
+    const created = g.mode === 'create' ? g.next.objects.find(o => o.id === g.id) : undefined;
     if (!cancel && g.changed) onCommit(g.next);
+    else if (!cancel && created?.kind === 'signature') {
+      // A click places a signature at a default size, centred on the click.
+      const width = Math.min(160, b.width), height = Math.min(56, b.height);
+      const rect = { x: Math.max(b.x, Math.min(b.x + b.width - width, g.start.x - width / 2)), y: Math.max(b.y, Math.min(b.y + b.height - height, g.start.y - height / 2)), width, height };
+      onCommit({ ...g.next, objects: g.next.objects.map(o => o.id === created.id ? { ...o, rect } : o) });
+    }
     else if (g.mode === 'create') onSelect(null);
   }
   function key(event: KeyboardEvent<SVGElement>, object: SceneObject, corner?: string) {
@@ -348,8 +361,8 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     }
     if (!step) { onSelect(null); onCommit({ ...page, objects: page.objects.filter(o => o.id !== object.id) }); return; }
     const r = object.rect;
-    const rect = corner ? rectangle({ x: corner.includes('w') ? r.x + r.width : r.x, y: corner.includes('n') ? r.y + r.height : r.y },
-      { x: Math.max(b.x, Math.min(b.x + b.width, (corner.includes('w') ? r.x : r.x + r.width) + dx)), y: Math.max(b.y, Math.min(b.y + b.height, (corner.includes('n') ? r.y : r.y + r.height) + dy)) })
+    const rect = corner ? cornerRect(r, corner,
+      { x: Math.max(b.x, Math.min(b.x + b.width, (corner.includes('w') ? r.x : r.x + r.width) + dx)), y: Math.max(b.y, Math.min(b.y + b.height, (corner.includes('n') ? r.y : r.y + r.height) + dy)) }, object.kind === 'signature')
       : { ...r, x: Math.max(b.x, Math.min(b.x + b.width - r.width, r.x + dx)), y: Math.max(b.y, Math.min(b.y + b.height - r.height, r.y + dy)) };
     onCommit({ ...page, objects: page.objects.map(o => o.id === object.id ? (corner ? resizedObject(o, rect, o) : { ...o, rect }) : o) });
   }

@@ -12,7 +12,6 @@
 body[data-theme="light"] {
   --pdf-scene-canvas: oklch(0.94 0 0);
 }
-@font-face { font-family: "Toolbox Satisfy"; src: url("/fonts/Satisfy-Regular.ttf") format("truetype"); font-display: swap; }
 @font-face { font-family: "Toolbox Pacifico"; src: url("/fonts/Pacifico-Regular.ttf") format("truetype"); font-display: swap; }
 @font-face { font-family: "Toolbox Noto Sans"; src: url("/fonts/NotoSans-Regular.ttf") format("truetype"); font-weight: 400; font-style: normal; font-display: swap; }
 @font-face { font-family: "Toolbox Noto Sans"; src: url("/fonts/NotoSans-Bold.ttf") format("truetype"); font-weight: 700; font-style: normal; font-display: swap; }

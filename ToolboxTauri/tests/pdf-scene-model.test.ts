@@ -74,7 +74,7 @@ test("watermark marks follow the native placement geometry inside the visible ar
 });
 
 const pageNumbers = (format: PageNumberFormat, start = 1, pageRange = "all"): SceneObject => ({
-  id: "numbers", kind: "pageNumbers", rect: { x: 0, y: 0, width: 612, height: 792 }, text: "", fontSize: 10, color: "#000000", opacity: 1, strokes: [],
+  id: "numbers", kind: "pageNumbers", rect: { x: 0, y: 0, width: 612, height: 792 }, text: "", fontSize: 10, color: "#000000", opacity: 1,
   pageRange, pageNumbers: { format, start, position: "bottom-center", margin: 36 },
 });
 

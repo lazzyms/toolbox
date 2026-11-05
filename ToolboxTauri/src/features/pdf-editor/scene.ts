@@ -22,8 +22,6 @@ export interface SceneObject {
   fontSize: number;
   color: string;
   opacity: number;
-  // Signature points are normalized to the object's rectangle (0..1).
-  strokes: ScenePoint[][];
   shape?: SceneShape;
   highlightMode?: HighlightMode;
   signatureMode?: SignatureMode;
@@ -35,8 +33,8 @@ export interface SceneObject {
   bold?: boolean;
   italic?: boolean;
   align?: TextAlign;
-  // Text boxes, watermarks and page numbers: a page list like "1-3, 7, 10-" or "all", "odd", "even".
-  // The object is stored once on its page and drawn on every page in the list.
+  // Text boxes, signatures, watermarks and page numbers: a page list like "1-3, 7, 10-" or "all", "odd", "even".
+  // The object is stored once on its page and drawn on every page in the list; null keeps it on its own page.
   pageRange?: string | null;
   watermark?: WatermarkOptions;
   layer?: WatermarkLayer;

@@ -15,7 +15,7 @@ import type { PdfDocument, PdfPage, PdfTextRun } from '../features/pdf-editor/co
 import { colorTokens, readColorToken } from '../features/pdf-editor/colorTokens';
 import { SceneCanvas } from '../features/pdf-editor/SceneCanvas';
 import { subToolInspectors } from '../features/pdf-editor/SubToolInspectors';
-import type { SubToolInspectorProps } from '../features/pdf-editor/SubToolInspectors';
+import type { SubToolInspectorProps, UsedSignature } from '../features/pdf-editor/SubToolInspectors';
 import { planSceneExport, sceneContributors } from '../features/pdf-editor/subtools';
 import { objectsOnPage, pageNumberRect, pageNumberText, pagesInRange, sceneFromDocument, visibleBounds } from '../features/pdf-editor/scene';
 import type { PdfScene, SceneObject, ScenePage, ScenePreview, SceneRect, SceneShape, SceneTool, SignatureMode, TextStyle } from '../features/pdf-editor/scene';
@@ -46,10 +46,13 @@ const toolFlagByObjectKind: Record<SceneObject['kind'], AtomicToolId> = {
 const toolGuidance: Record<SceneTool, string> = {
   select: 'Select, move, or resize an object.', text: 'Drag to add text. Double-click text to edit it.',
   highlight: 'Drag across text or draw a highlight area.', shape: 'Drag to draw a shape.',
-  signature: 'Choose a signature, then drag its box onto the page.', watermark: 'Add one watermark to every page you choose.',
+  signature: 'Type your name or choose a picture of your signature, then click where it goes.', watermark: 'Add one watermark to every page you choose.',
   pageNumbers: 'Number every page you choose.',
   crop: 'Drag a rectangle on the page to crop it.',
 };
+// Signatures placed during this app session, offered again under "Use again". Memory only, never saved to disk.
+let usedSignatures: UsedSignature[] = [];
+const usedSignatureKey = (item: UsedSignature) => item.mode === 'image' ? `image:${item.path}` : `text:${item.text}:${item.color.toLowerCase()}`;
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 type History = { past: PdfScene[]; present: PdfScene; future: PdfScene[] };
 export type ExistingPdfUtilityId = 'pdf-merge' | 'pdf-split' | 'pdf-redact';
@@ -156,7 +159,9 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
   const [signaturePreview, setSignaturePreview] = useState<string | null>(null);
   const [signatureText, setSignatureText] = useState('Your signature');
   const [signatureTextDraft, setSignatureTextDraft] = useState('');
-  const [signatureFont, setSignatureFont] = useState('Satisfy');
+  const [signatureColor, setSignatureColor] = useState('#1f1f1f');
+  const [signatureError, setSignatureError] = useState<string | null>(null);
+  const [reusable, setReusable] = useState(usedSignatures);
   const [watermarkPictureError, setWatermarkPictureError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(Boolean(path));
@@ -334,28 +339,43 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
     id: crypto.randomUUID(), kind, rect,
     text: kind === 'signature' ? signatureText : text,
     fontSize: kind === 'signature' ? Math.max(18, fontSize) : fontSize,
-    color: kind === 'highlight' ? highlightColor : color,
-    opacity: kind === 'highlight' ? highlightOpacity : opacity,
-    strokes: [],
+    color: kind === 'highlight' ? highlightColor : kind === 'signature' ? signatureColor : color,
+    opacity: kind === 'highlight' ? highlightOpacity : kind === 'signature' ? 1 : opacity,
     shape: kind === 'shape' ? shape : undefined,
     highlightMode: kind === 'highlight' ? 'area' : undefined,
     signatureMode: kind === 'signature' ? signatureMode : undefined,
     signaturePath: kind === 'signature' && signatureMode === 'image' ? signaturePath : undefined,
     signaturePreview: kind === 'signature' && signatureMode === 'image' ? signaturePreview : undefined,
-    fontFamily: kind === 'signature' ? signatureFont : undefined,
     ...(kind === 'text' ? textStyle : {}),
   });
   const chooseSignatureImage = async () => {
     if (!availability.allows('pdf-sign')) return;
     try {
-      const picked = await open({ multiple: false, filters: [{ name: 'Signature image', extensions: ['png', 'jpg', 'jpeg', 'webp', 'tif', 'tiff'] }] });
+      const picked = await open({ multiple: false, filters: [{ name: 'Signature picture', extensions: ['png', 'jpg', 'jpeg'] }] });
       if (typeof picked !== 'string') return;
+      try { await invoke('inspect_signature_image', { request: { path: picked } }); }
+      catch (reason) { setSignatureError(String(reason)); return; }
+      setSignatureError(null);
       let previewSource: string | null = null;
       try { previewSource = convertFileSrc(picked); } catch { /* Keep the original path for native export, but fail closed for the preview. */ }
       setSignatureMode('image'); setSignaturePath(picked); setSignaturePreview(previewSource);
       if (selected?.kind === 'signature') updateObject({ signatureMode: 'image', signaturePath: picked, signaturePreview: previewSource }, 'signature-image');
     } catch (reason) { setError(String(reason)); }
   };
+  useEffect(() => {
+    const placed = scene.pages.flatMap((item) => item.objects).filter((object) => object.kind === 'signature' && object.signatureMode
+      && (object.signatureMode === 'image' ? object.signaturePath : object.text.trim()))
+      .map((object): UsedSignature => ({ mode: object.signatureMode!, text: object.text, path: object.signaturePath ?? null, preview: object.signaturePreview ?? null, color: object.color }));
+    const fresh = placed.filter((item, index) => !usedSignatures.some((used) => usedSignatureKey(used) === usedSignatureKey(item))
+      && placed.findIndex((other) => usedSignatureKey(other) === usedSignatureKey(item)) === index);
+    if (fresh.length) { usedSignatures = [...fresh, ...usedSignatures]; setReusable(usedSignatures); }
+  }, [scene]);
+  const reuseSignature = (item: UsedSignature) => {
+    setSignatureMode(item.mode); setSignatureColor(item.color); setSignatureError(null);
+    if (item.mode === 'text') setSignatureText(item.text); else { setSignaturePath(item.path); setSignaturePreview(item.preview); }
+    endGroup(); setTool('signature'); setSelectedId(null);
+  };
+  const clearUsedSignatures = () => { usedSignatures = []; setReusable(usedSignatures); };
   const addWatermark = () => {
     if (!page || !availability.allows('pdf-watermark')) return;
     const color = readColorToken(colorTokens.documentWatermark);
@@ -426,8 +446,11 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
   const endGroup = () => { group.current = null; };
   const selectedKind = selected?.kind ?? tool;
   const selectedEnabled = Boolean(selected && availability.allows(toolFlagByObjectKind[selected.kind]));
+  // A new signature needs a name or a checked picture before it can be placed.
+  const signatureReady = signatureMode === 'image' ? Boolean(signaturePath) : Boolean(signatureText.trim());
   const canEditCanvas = tool !== null && availability.allows(toolFlagBySceneTool[tool])
-    && (!selected || availability.allows(toolFlagByObjectKind[selected.kind]));
+    && (!selected || availability.allows(toolFlagByObjectKind[selected.kind]))
+    && (selected || tool !== 'signature' || signatureReady);
   const activeColor = selected?.color ?? (tool === 'highlight' ? highlightColor : color);
   const activeOpacity = selected?.opacity ?? (tool === 'highlight' ? highlightOpacity : opacity);
 
@@ -435,7 +458,8 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
     page, pageNumber: currentIndex + 1, selected, hasTextRuns: Boolean(document?.pages[page.sourceIndex ?? -1]?.textRuns?.length), updateObject, commitPage, endGroup,
     fontSize, setFontSize, textStyle, setTextStyle, shape, setShape,
     signatureMode, setSignatureMode, signaturePath, signaturePreview, signatureText, setSignatureText,
-    signatureTextDraft, setSignatureTextDraft, signatureFont, setSignatureFont, chooseSignatureImage,
+    signatureTextDraft, setSignatureTextDraft, signatureColor, setSignatureColor, signatureError, chooseSignatureImage,
+    usedSignatures: reusable, reuseSignature, clearUsedSignatures,
     pageCount: scene.pages.length, addWatermark, chooseWatermarkPicture, watermarkPictureError, addPageNumbers,
   } : null;
   const ranged = (object: SceneObject) => object.kind === 'watermark' || object.kind === 'pageNumbers';
@@ -506,7 +530,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
             </CardHeader>
             <CardContent className="scene-inspector-content flex flex-col gap-3 px-4">
               {Fields && inspector && <Fields {...inspector} />}
-              {selectedKind !== 'watermark' && (selected || (tool !== null && !['select', 'crop', 'pageNumbers'].includes(tool))) && <>
+              {selectedKind !== 'watermark' && selectedKind !== 'signature' && (selected || (tool !== null && !['select', 'crop', 'pageNumbers'].includes(tool))) && <>
                 <div className="scene-inspector-field"><Label htmlFor="scene-object-color">Object color</Label>
                   <input id="scene-object-color" type="color" aria-label="Object color" value={activeColor} onChange={(event) => {
                     if (selected) updateObject({ color: event.target.value }, 'color'); else if (tool === 'highlight') setHighlightColor(event.target.value); else setColor(event.target.value);
