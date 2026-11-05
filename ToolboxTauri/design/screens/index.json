@@ -309,10 +309,178 @@
   },
   {
     "board": "PdfOrganize.dc.html",
-    "title": "Organize pages: grid with page actions",
+    "title": "Organize pages: empty, editing, export and result states",
     "state": "default",
     "query": "",
     "screen": "PdfOrganize--default.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-no-document",
+    "query": "state=No%20document",
+    "screen": "PdfOrganize--state-no-document.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-several-dropped",
+    "query": "state=Several%20dropped",
+    "screen": "PdfOrganize--state-several-dropped.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-loading-pages",
+    "query": "state=Loading%20pages",
+    "screen": "PdfOrganize--state-loading-pages.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-signed-file",
+    "query": "state=Signed%20file",
+    "screen": "PdfOrganize--state-signed-file.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-locked-file",
+    "query": "state=Locked%20file",
+    "screen": "PdfOrganize--state-locked-file.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-damaged-file",
+    "query": "state=Damaged%20file",
+    "screen": "PdfOrganize--state-damaged-file.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-too-many-pages",
+    "query": "state=Too%20many%20pages",
+    "screen": "PdfOrganize--state-too-many-pages.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-page-range-error",
+    "query": "state=Page%20range%20error",
+    "screen": "PdfOrganize--state-page-range-error.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-blank-pages-found",
+    "query": "state=Blank%20pages%20found",
+    "screen": "PdfOrganize--state-blank-pages-found.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-orientation-menu",
+    "query": "state=Orientation%20menu",
+    "screen": "PdfOrganize--state-orientation-menu.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-mirrored-pages",
+    "query": "state=Mirrored%20pages",
+    "screen": "PdfOrganize--state-mirrored-pages.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-dragging",
+    "query": "state=Dragging",
+    "screen": "PdfOrganize--state-dragging.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-move-to-position",
+    "query": "state=Move%20to%20position",
+    "screen": "PdfOrganize--state-move-to-position.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-page-order-menu",
+    "query": "state=Page%20order%20menu",
+    "screen": "PdfOrganize--state-page-order-menu.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-every-page-selected",
+    "query": "state=Every%20page%20selected",
+    "screen": "PdfOrganize--state-every-page-selected.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-shortcuts",
+    "query": "state=Shortcuts",
+    "screen": "PdfOrganize--state-shortcuts.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-reset",
+    "query": "state=Reset",
+    "screen": "PdfOrganize--state-reset.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-unexported-changes",
+    "query": "state=Unexported%20changes",
+    "screen": "PdfOrganize--state-unexported-changes.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-no-changes",
+    "query": "state=No%20changes",
+    "screen": "PdfOrganize--state-no-changes.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-other-folder",
+    "query": "state=Other%20folder",
+    "screen": "PdfOrganize--state-other-folder.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-exporting",
+    "query": "state=Exporting",
+    "screen": "PdfOrganize--state-exporting.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-exported",
+    "query": "state=Exported",
+    "screen": "PdfOrganize--state-exported.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-export-failed",
+    "query": "state=Export%20failed",
+    "screen": "PdfOrganize--state-export-failed.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-removal-blocked",
+    "query": "state=Removal%20blocked",
+    "screen": "PdfOrganize--state-removal-blocked.jpg"
   },
   {
     "board": "PdfExport.dc.html",

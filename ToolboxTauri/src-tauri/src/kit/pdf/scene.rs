@@ -44,6 +44,8 @@ pub enum WatermarkPattern { AcrossPage, BottomRightToTopLeft, TopRightToBottomLe
 pub struct ScenePage {
     pub source_index: Option<usize>, pub width: f32, pub height: f32,
     pub rotation: i32, pub crop: Option<Rect>,
+    /// Flipped left to right before the turn, so the page displays as rotate(rotation) after the flip.
+    #[serde(default)] pub mirrored: bool,
     #[serde(default)] pub source_rotation: Option<i32>,
     #[serde(default)] pub source_box: Option<Rect>,
     pub objects: Vec<SceneObject>,
@@ -65,6 +67,13 @@ pub struct ScenePreview { pub data_url: String, pub width: u32, pub height: u32 
 #[derive(Serialize)]
 #[serde(rename_all="camelCase")]
 pub struct IndexedScenePreview { pub page_index: usize, pub preview: ScenePreview }
+#[derive(Deserialize)]
+#[serde(rename_all="camelCase")]
+pub struct SourceThumbnailsRequest { pub path: PathBuf, pub page_indices: Vec<usize> }
+/// One requested source page: its thumbnail, or why it has none. A failed page never fails the others.
+#[derive(Serialize)]
+#[serde(rename_all="camelCase")]
+pub struct SourceThumbnail { pub page_index: usize, pub thumbnail: Option<ScenePreview>, pub error: Option<String> }
 
 fn err(e: impl std::fmt::Display) -> String { e.to_string() }
 fn bounds(doc: &Document, v: &Object) -> Result<[f32;4], String> {
@@ -381,27 +390,43 @@ fn scene_preflight(document: &Document, scene: &PdfScene, source_pages: &[Object
             let changes_page_coordinates = page_geometry_changed(page, &geometry);
             navigation_geometry_edit |= changes_page_coordinates;
             if has_annotations && changes_page_coordinates {
-                return Err("This PDF page has annotations or form widgets and the requested crop or rotation would change their coordinates; scene export was rejected before output".into());
+                return Err("This PDF page has annotations or form widgets and the requested crop or mirror would change their coordinates; scene export was rejected before output".into());
             }
             if (page.crop.is_some() || changes_page_coordinates) && has_widget {
-                return Err("Cropping or rotating a PDF with form widgets is unsupported; remove the page operation or edit the source PDF first".into());
+                return Err("Cropping a PDF with form widgets is unsupported; remove the crop or edit the source PDF first".into());
             }
         }
     }
     if has_navigation && navigation_geometry_edit {
-        return Err("This PDF contains bookmarks or destinations whose coordinates cannot be transformed safely after crop or rotation; scene export was rejected before output".into());
+        return Err("This PDF contains bookmarks or destinations whose coordinates cannot be transformed safely after a crop or mirror; scene export was rejected before output".into());
     }
     Ok(ScenePreflight { pages_root, source_pages: source_pages.to_vec() })
 }
 
 fn same_box(left: [f32; 4], right: [f32; 4]) -> bool { left.iter().zip(right).all(|(left, right)| (*left - right).abs() <= 0.1) }
 fn same_rect(left: &Rect, right: &Rect) -> bool { same_box([left.x, left.y, left.x + left.width, left.y + left.height], [right.x, right.y, right.x + right.width, right.y + right.height]) }
+/// Whether the scene crops, resizes or mirrors the page, which moves its content in page space.
+/// A mirror redraws the page through a flipped Form XObject, the same path a crop takes, so it stays vector.
+/// Rotation is not a geometry change: it is added to the page's own /Rotate entry, which turns
+/// annotations, form widgets and destinations with the page and leaves their coordinates alone.
 fn page_geometry_changed(page: &ScenePage, geometry: &Geometry) -> bool {
     let full_page = Rect { x: 0., y: 0., width: page.width, height: page.height };
-    page.crop.as_ref().is_some_and(|crop| !same_rect(crop, &full_page))
+    page.mirrored
+        || page.crop.as_ref().is_some_and(|crop| !same_rect(crop, &full_page))
         || (page.width - geometry.width).abs() > 0.1
         || (page.height - geometry.height).abs() > 0.1
-        || page.rotation.rem_euclid(360) != 0
+}
+/// The /Rotate a kept source page gets: its source rotation plus the scene's quarter turns.
+fn effective_rotation(document: &Document, page_id: ObjectId, page: &ScenePage) -> Result<i64, String> {
+    if page.rotation % 90 != 0 { return Err("Rotation must be a multiple of 90".into()); }
+    let source = inherited(document, page_id, b"Rotate")?.map(|value| value.as_i64().map_err(err)).transpose()?.unwrap_or(0);
+    Ok((source + i64::from(page.rotation)).rem_euclid(360))
+}
+fn rotate_kept_page(document: &mut Document, page_id: ObjectId, page: &ScenePage) -> Result<(), String> {
+    if page.rotation.rem_euclid(360) == 0 { return Ok(()); }
+    let rotation = effective_rotation(document, page_id, page)?;
+    document.get_dictionary_mut(page_id).map_err(err)?.set("Rotate", rotation);
+    Ok(())
 }
 fn inverse_matrix([a, b, c, d, e, f]: [f32; 6]) -> [f32; 6] {
     let determinant = a * d - b * c;
@@ -450,7 +475,7 @@ fn has_tagged_structure(document: &Document, pages: &[ObjectId], common: bool) -
 fn is_identity_scene(document: &Document, scene: &PdfScene, source_pages: &[ObjectId]) -> Result<bool, String> {
     if scene.pages.len() != source_pages.len() { return Ok(false); }
     for (index, page) in scene.pages.iter().enumerate() {
-        if page.source_index != Some(index) || !page.objects.is_empty() || page.rotation.rem_euclid(360) != 0 { return Ok(false); }
+        if page.source_index != Some(index) || !page.objects.is_empty() || page.rotation.rem_euclid(360) != 0 || page.mirrored { return Ok(false); }
         dimensions(page.width, page.height)?;
         let source = source_pages[index];
         let geometry = geometry(document, source)?;
@@ -530,6 +555,7 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
             let index = page.source_index.ok_or_else(|| "Pure page reorder is missing a source page".to_string())?;
             sources.get(index).copied().ok_or_else(|| "Scene source page is outside the document".to_string())
         }).collect::<Result<Vec<_>, String>>()?;
+        for (page, id) in scene.pages.iter().zip(&order) { rotate_kept_page(&mut doc, *id, page)?; }
         let root = doc.get_dictionary_mut(preflight.pages_root).map_err(err)?;
         root.set("Kids", order.iter().map(|page| Object::Reference(*page)).collect::<Vec<_>>());
         root.set("Count", order.len() as i64);
@@ -559,7 +585,9 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
         }).transpose()?;
         let preserve_source_page = source_geometry.as_ref().is_some_and(|geometry| !page_geometry_changed(page, geometry));
         if preserve_source_page && page.objects.is_empty() {
-            kids.push(Object::Reference(sources[page.source_index.unwrap()]));
+            let id = sources[page.source_index.unwrap()];
+            rotate_kept_page(&mut doc, id, page)?;
+            kids.push(Object::Reference(id));
             continue;
         }
         let mut effective_fonts = source_index.map(|index| effective_resource_entries(&doc, sources[index], b"Font")).transpose()?.unwrap_or_default();
@@ -594,7 +622,10 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
                 let bytes=doc.get_page_content(id);
                 let form_id=doc.add_object(Stream::new(form,bytes));
                 xobjects.set(original_name.as_str(),form_id);
-                content.push_str(&format!("q\n{}\n/{original_name} Do\nQ\n", cm(g.matrix)));
+                // A mirror flips the source left to right around the visible area, in scene coordinates,
+                // before the page's turn. Only the original's content flips: scene objects draw as placed.
+                let flip = if page.mirrored { cm([-1., 0., 0., 1., 2. * crop.x + crop.width, 0.]) } else { String::new() };
+                content.push_str(&format!("q\n{flip}{}\n/{original_name} Do\nQ\n", cm(g.matrix)));
             }
         }
         if page.objects.len()>10000 { return Err("Too many scene objects".into()); }
@@ -683,6 +714,7 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
                 let original_contents = page_dict.get(b"Contents").ok().cloned();
                 page_dict.set("Resources",resources);
                 page_dict.set("Contents",append_contents(original_contents,Object::Reference(stream)));
+                rotate_kept_page(&mut doc, id, page)?;
             } else {
                 super::set_page_box_family(&mut doc, id, [0., 0., crop.width, crop.height], false)?;
                 let page_dict = doc.get_dictionary_mut(id).map_err(err)?;
@@ -784,12 +816,16 @@ fn extract_text_runs(path: &Path, page_number: usize, width: f32, height: f32, d
     Some(runs)
 }
 fn render(path:&Path,index:usize,renderer:&Path,temp:&TempDir)->Result<ScenePreview,String> {
-    let prefix=temp.0.join("render");
+    render_at(path,index,renderer,temp,super::PDF_PREVIEW_MAX_DIMENSION,Instant::now() + super::PDF_PREVIEW_TIMEOUT)
+}
+fn render_at(path:&Path,index:usize,renderer:&Path,temp:&TempDir,max_dimension:u32,deadline:Instant)->Result<ScenePreview,String> {
+    // A per-page name, so a page whose helper writes nothing can never pick up an earlier page's image.
+    let prefix=temp.0.join(format!("render-{index}"));
     let output=super::run_bounded_helper({
         let mut command = Command::new(renderer);
-        command.args(["-png","-singlefile","-scale-to"]).arg(super::PDF_PREVIEW_MAX_DIMENSION.to_string()).arg("-f").arg((index+1).to_string()).arg("-l").arg((index+1).to_string()).arg(path).arg(&prefix);
+        command.args(["-png","-singlefile","-scale-to"]).arg(max_dimension.to_string()).arg("-f").arg((index+1).to_string()).arg("-l").arg((index+1).to_string()).arg(path).arg(&prefix);
         command
-    }, Instant::now() + super::PDF_PREVIEW_TIMEOUT, 64 * 1024, super::PDF_TEXT_MAX_ERROR_BYTES, "PDF preview renderer timed out.").map_err(err)?;
+    }, deadline, 64 * 1024, super::PDF_TEXT_MAX_ERROR_BYTES, "PDF preview renderer timed out.").map_err(err)?;
     if !output.status.success() { return Err("pdftoppm could not render this PDF".into()); }
     let (bytes,width,height)=super::read_preview_png(&prefix.with_extension("png")).map_err(err)?;
     Ok(ScenePreview{data_url:format!("data:image/png;base64,{}",base64::engine::general_purpose::STANDARD.encode(bytes)),width,height})
@@ -821,15 +857,70 @@ pub fn preview_pages(request:&PreviewPagesRequest)->Result<Vec<IndexedScenePrevi
         render(&path,page_index,&renderer,&temp).map(|preview| IndexedScenePreview{page_index,preview})
     }).collect()
 }
-pub fn inspect(path:&Path)->Result<PdfDocumentMetadata,String> {
-    let doc=load(path)?;
+/// The latest a helper run may finish when it renders `pages` pages of one file: the per-file budget plus the per-page budget for each page.
+fn thumbnail_deadline(start:Instant,pages:u32)->Instant {
+    start + super::PDF_THUMBNAIL_FILE_TIMEOUT + super::PDF_THUMBNAIL_PAGE_TIMEOUT * pages
+}
+fn validate_thumbnail_page_indices(page_indices:&[usize], page_count:usize)->Result<(),String> {
+    if !(1..=super::PDF_THUMBNAIL_MAX_BATCH).contains(&page_indices.len()) { return Err(format!("Thumbnail requests must include 1–{} page indices", super::PDF_THUMBNAIL_MAX_BATCH)); }
+    let mut seen=HashSet::with_capacity(page_indices.len());
+    for &index in page_indices {
+        if index>=page_count { return Err("Thumbnail page outside document".into()); }
+        if !seen.insert(index) { return Err("Thumbnail page indices must be unique".into()); }
+    }
+    Ok(())
+}
+/// Low-resolution thumbnails of the original pages, not the edited scene, for the Organize grid.
+/// Each page renders in its own helper run under its own deadline, so one bad page only loses its own thumbnail.
+pub fn source_thumbnails(request:&SourceThumbnailsRequest)->Result<Vec<SourceThumbnail>,ToolError> {
+    let page_count=Document::load_metadata(&request.path).map_err(|_| ToolError::invalid_input(UNREADABLE_PDF_MESSAGE))?.page_count as usize;
+    validate_thumbnail_page_indices(&request.page_indices,page_count).map_err(ToolError::invalid_input)?;
+    let renderer=renderer().map_err(ToolError::unavailable)?;
+    let temp=TempDir::new().map_err(ToolError::processing)?;
+    Ok(request.page_indices.iter().copied().map(|page_index| {
+        match render_at(&request.path,page_index,&renderer,&temp,super::PDF_THUMBNAIL_MAX_DIMENSION,thumbnail_deadline(Instant::now(),1)) {
+            Ok(thumbnail)=>SourceThumbnail{page_index,thumbnail:Some(thumbnail),error:None},
+            Err(error)=>SourceThumbnail{page_index,thumbnail:None,error:Some(error)},
+        }
+    }).collect())
+}
+pub const LOCKED_PDF_MESSAGE:&str="This PDF is password-protected. Remove its password with File Security first, then open the unlocked copy.";
+pub const UNREADABLE_PDF_MESSAGE:&str="Toolbox can't read this file. It may be damaged, or it isn't a PDF that Toolbox supports. Nothing was changed.";
+
+/// Refuses a file over the recorded scene-export limits before any page is read, so the editors never show
+/// a partial grid for a document they could not export. A page-count refusal says how many pages it has and points to Split.
+fn check_scene_limits(path:&Path)->Result<(),ToolError> {
+    let limits=crate::kit::common::limits::recorded("export_pdf_scene").expect("scene export records its limits");
+    let error=match limits.check(path) { Ok(())=>return Ok(()), Err(error)=>error };
+    if !matches!(error.kind,crate::kit::contracts::ErrorKind::LimitExceeded{limit:crate::kit::contracts::LimitKind::PageCount}) { return Err(error); }
+    let Some(max_pages)=limits.max_pages else { return Err(error) };
+    let label=crate::kit::common::limits::count_label;
+    let pages=Document::load_metadata(path).map(|metadata| label(u64::from(metadata.page_count))).unwrap_or_else(|_| format!("more than {}", label(u64::from(max_pages))));
+    Err(ToolError::limit_exceeded(crate::kit::contracts::LimitKind::PageCount,
+        format!("It has {pages} pages. Toolbox works with up to {} pages in one PDF. Use Split to make smaller parts, then open each one.", label(u64::from(max_pages))))
+        .with_pointer(crate::kit::contracts::OutcomePointer::Tool{tool_id:"pdf-split".into()}))
+}
+
+/// Reads page geometry for the scene editors. Password-protected and unreadable files come back as typed
+/// invalid-input errors so the UI can explain them (and point locked files to File Security). Files over the
+/// recorded limits come back as LimitExceeded before the document is loaded.
+pub fn inspect(path:&Path)->Result<PdfDocumentMetadata,ToolError> {
+    check_scene_limits(path)?;
+    let locked=|| ToolError::invalid_input(LOCKED_PDF_MESSAGE).with_pointer(crate::kit::contracts::OutcomePointer::Tool{tool_id:"lock-unlock".into()});
+    fn unreadable(_:impl std::fmt::Display)->ToolError { ToolError::invalid_input(UNREADABLE_PDF_MESSAGE) }
+    let doc=match Document::load(path) {
+        Ok(doc)=>doc,
+        Err(lopdf::Error::Decryption(_)|lopdf::Error::InvalidPassword|lopdf::Error::UnsupportedSecurityHandler(_))=>return Err(locked()),
+        Err(error)=>return Err(unreadable(error)),
+    };
+    if doc.is_encrypted() { return Err(locked()); }
     let mut pages=Vec::new();
     for (index,id) in doc.get_pages().values().enumerate() {
-        let g=geometry(&doc,*id)?;
-        let source_rotation = inherited(&doc, *id, b"Rotate")?.map(|value| value.as_i64().map_err(err)).transpose()?.unwrap_or(0).rem_euclid(360) as i32;
+        let g=geometry(&doc,*id).map_err(unreadable)?;
+        let source_rotation = inherited(&doc, *id, b"Rotate").map_err(unreadable)?.map(|value| value.as_i64().map_err(err)).transpose().map_err(unreadable)?.unwrap_or(0).rem_euclid(360) as i32;
         pages.push(PdfPageMetadata{index,x:g.bbox[0],y:g.bbox[1],width:g.width,height:g.height,rotation:source_rotation,page_box:g.bbox,preview:None,text_runs:None});
     }
-    if pages.is_empty() { return Err("PDF contains no pages".into()); }
+    if pages.is_empty() { return Err(ToolError::invalid_input("This PDF has no pages. Nothing was changed.")); }
     Ok(PdfDocumentMetadata{path:path.to_path_buf(),pages})
 }
 pub fn inspect_page(path:&Path,page_index:usize)->Result<PdfPageMetadata,String> {
@@ -1026,9 +1117,9 @@ mod tests {
     }
     fn scene() -> PdfScene {
         PdfScene { pages:vec![
-            ScenePage {source_index:Some(1),width:612.,height:792.,rotation:180,crop:Some(Rect{x:10.,y:20.,width:500.,height:600.}),source_rotation:None,source_box:None,objects:vec![object(Kind::Highlight),object(Kind::Text),object(Kind::Shape),object(Kind::Watermark),object(Kind::Signature)]},
-            ScenePage {source_index:None,width:300.,height:200.,rotation:90,crop:None,source_rotation:None,source_box:None,objects:vec![object(Kind::Text)]},
-            ScenePage {source_index:Some(0),width:300.,height:200.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]},
+            ScenePage {source_index:Some(1),width:612.,height:792.,rotation:180, mirrored: false,crop:Some(Rect{x:10.,y:20.,width:500.,height:600.}),source_rotation:None,source_box:None,objects:vec![object(Kind::Highlight),object(Kind::Text),object(Kind::Shape),object(Kind::Watermark),object(Kind::Signature)]},
+            ScenePage {source_index:None,width:300.,height:200.,rotation:90, mirrored: false,crop:None,source_rotation:None,source_box:None,objects:vec![object(Kind::Text)]},
+            ScenePage {source_index:Some(0),width:300.,height:200.,rotation:0, mirrored: false,crop:None,source_rotation:None,source_box:None,objects:vec![]},
         ] }
     }
 
@@ -1110,6 +1201,51 @@ mod tests {
         assert!(metadata.pages.iter().all(|page| page.preview.is_none() && page.text_runs.is_none()));
     }
 
+    fn assert_invalid_input_without_output(dir: &Path, input: &Path, message: &str, pointer: Option<&str>) {
+        let before = fs::read(input).unwrap();
+        let error = inspect(input).expect_err("inspect should reject the fixture");
+        assert!(matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput), "kind: {:?}", error.kind);
+        assert_eq!(error.message, message);
+        assert!(error.message.is_ascii() && !error.message.contains("lopdf") && !error.message.contains("Error"));
+        match (pointer, &error.pointer) {
+            (Some(id), Some(crate::kit::contracts::OutcomePointer::Tool { tool_id })) => assert_eq!(tool_id, id),
+            (None, None) => {}
+            (expected, actual) => panic!("pointer mismatch: expected {expected:?}, got {actual:?}"),
+        }
+        assert_eq!(fs::read(input).unwrap(), before, "the original must not change");
+        assert_eq!(fs::read_dir(dir).unwrap().count(), 1, "inspect must not write any output");
+    }
+
+    #[test]
+    fn inspect_rejects_a_password_protected_pdf_with_a_file_security_pointer() {
+        let temp = TempDir::new().unwrap();
+        let input = temp.0.join("locked.pdf");
+        fixture(&input);
+        let mut document = Document::load(&input).unwrap();
+        document.trailer.set("ID", Object::Array(vec![
+            Object::String(b"toolbox-scene-id-1".to_vec(), lopdf::StringFormat::Literal),
+            Object::String(b"toolbox-scene-id-2".to_vec(), lopdf::StringFormat::Literal),
+        ]));
+        let state = lopdf::EncryptionState::try_from(lopdf::EncryptionVersion::V2 {
+            document: &document, owner_password: "owner", user_password: "user", key_length: 128, permissions: lopdf::Permissions::all(),
+        }).unwrap();
+        document.encrypt(&state).unwrap();
+        document.save(&input).unwrap();
+        assert_invalid_input_without_output(&temp.0, &input, LOCKED_PDF_MESSAGE, Some("lock-unlock"));
+    }
+
+    #[test]
+    fn inspect_rejects_a_damaged_pdf_with_plain_text() {
+        let temp = TempDir::new().unwrap();
+        let input = temp.0.join("damaged.pdf");
+        fixture(&input);
+        let bytes = fs::read(&input).unwrap();
+        fs::write(&input, &bytes[..bytes.len() / 3]).unwrap();
+        assert_invalid_input_without_output(&temp.0, &input, UNREADABLE_PDF_MESSAGE, None);
+        fs::write(&input, b"%PDF-1.7\nthis is not a pdf body").unwrap();
+        assert_invalid_input_without_output(&temp.0, &input, UNREADABLE_PDF_MESSAGE, None);
+    }
+
     #[test]
     fn inspect_page_validates_bounds_and_returns_only_the_requested_text_runs() {
         let _guard = crate::kit::lock_process_env();
@@ -1156,7 +1292,7 @@ mod tests {
         annotated_rotated_offset_fixture(&input);
         let metadata = inspect(&input).unwrap();
         let scene = PdfScene { pages: metadata.pages.iter().map(|page| ScenePage {
-            source_index: Some(page.index), width: page.width, height: page.height, rotation: 0, crop: None,
+            source_index: Some(page.index), width: page.width, height: page.height, rotation: 0, mirrored: false, crop: None,
             source_rotation: Some(page.rotation),
             source_box: Some(Rect { x: page.page_box[0], y: page.page_box[1], width: page.page_box[2] - page.page_box[0], height: page.page_box[3] - page.page_box[1] }),
             objects: vec![],
@@ -1187,7 +1323,7 @@ mod tests {
         annotated_rotated_offset_fixture(&input);
         let original = fs::read(&input).unwrap();
         let scene = PdfScene { pages: vec![ScenePage {
-            source_index: Some(0), width: 300., height: 200., rotation: 0, crop: None,
+            source_index: Some(0), width: 300., height: 200., rotation: 0, mirrored: false, crop: None,
             source_rotation: Some(90), source_box: Some(Rect { x: 20., y: 30., width: 200., height: 300. }),
             objects: vec![object(Kind::Text)],
         }] };
@@ -1397,7 +1533,7 @@ mod tests {
         signature_object.signature_mode = Some(SignatureMode::Image);
         signature_object.signature_path = Some(signature);
         let model = PdfScene { pages: vec![ScenePage {
-            source_index: Some(0), width: 612., height: 792., rotation: 0,
+            source_index: Some(0), width: 612., height: 792., rotation: 0, mirrored: false,
             crop: Some(Rect { x: 0., y: 0., width: 500., height: 700. }),
             source_rotation: None, source_box: None,
             objects: vec![object(Kind::Text), signature_object],
@@ -1447,7 +1583,7 @@ mod tests {
         catalog.set("Metadata",metadata); catalog.set("Names",names); catalog.set("Outlines",outlines); catalog.set("StructTreeRoot",structure); catalog.set("AcroForm",acro_form);
         source.save(&input).unwrap();
         let original=fs::read(&input).unwrap();
-        let scene=PdfScene { pages: pages.iter().enumerate().map(|(index,_)| ScenePage { source_index:Some(index), width:if index==0 {200.} else {612.}, height:if index==0 {300.} else {792.}, rotation:0, crop:None, source_rotation:None, source_box:None, objects:vec![] }).collect() };
+        let scene=PdfScene { pages: pages.iter().enumerate().map(|(index,_)| ScenePage { source_index:Some(index), width:if index==0 {200.} else {612.}, height:if index==0 {300.} else {792.}, rotation:0, mirrored: false, crop:None, source_rotation:None, source_box:None, objects:vec![] }).collect() };
         let composed=compose(&input,&scene).unwrap();
         let catalog=composed.get_dictionary(catalog_id).unwrap();
         for key in [b"Metadata".as_slice(),b"Names",b"Outlines",b"StructTreeRoot",b"AcroForm"] { assert!(catalog.has(key),"catalog lost {key:?}"); }
@@ -1456,6 +1592,146 @@ mod tests {
         let annots=composed.get_dictionary(output_pages[1]).unwrap().get(b"Annots").unwrap().as_array().unwrap();
         assert_eq!(annots.len(),2);
         assert_eq!(fs::read(&input).unwrap(),original);
+    }
+
+    /// Six letter-size pages. Each has its own content, a note, a link to the next page and a form field.
+    fn six_page_linked_form_fixture(path: &Path) {
+        let mut d = Document::with_version("1.7");
+        let root = d.new_object_id();
+        let font = d.add_object(dictionary! {"Type"=>"Font", "Subtype"=>"Type1", "BaseFont"=>"Helvetica"});
+        let fonts = d.add_object(dictionary! {"F1"=>font});
+        let resources = d.add_object(dictionary! {"Font"=>fonts});
+        let pages: Vec<ObjectId> = (0..6).map(|_| d.new_object_id()).collect();
+        let mut fields = Vec::new();
+        for (index, page) in pages.iter().enumerate() {
+            let content = d.add_object(Stream::new(dictionary!{}, format!("BT /F1 18 Tf 40 700 Td (Source page {}) Tj ET", index + 1).into_bytes()));
+            let note = d.add_object(dictionary! {"Type"=>"Annot", "Subtype"=>"Text", "Rect"=>array(&[30., 40., 90., 80.]), "Contents"=>Object::string_literal(format!("Note {}", index + 1))});
+            let link = d.add_object(dictionary! {"Type"=>"Annot", "Subtype"=>"Link", "Rect"=>array(&[100., 40., 160., 80.]),
+                "Dest"=>vec![Object::Reference(pages[(index + 1) % 6]), Object::Name(b"Fit".to_vec())]});
+            let widget = d.add_object(dictionary! {"Type"=>"Annot", "Subtype"=>"Widget", "FT"=>"Tx", "T"=>Object::string_literal(format!("field{}", index + 1)),
+                "Rect"=>array(&[170., 40., 260., 80.]), "P"=>Object::Reference(*page)});
+            fields.push(Object::Reference(widget));
+            d.objects.insert(*page, Object::Dictionary(dictionary! {"Type"=>"Page", "Parent"=>root, "MediaBox"=>array(&[0., 0., 612., 792.]), "Resources"=>resources,
+                "Contents"=>content, "Annots"=>vec![Object::Reference(note), Object::Reference(link), Object::Reference(widget)]}));
+        }
+        d.objects.insert(root, Object::Dictionary(dictionary! {"Type"=>"Pages", "Kids"=>pages.iter().map(|page| Object::Reference(*page)).collect::<Vec<_>>(), "Count"=>6}));
+        let acro_form = d.add_object(dictionary! {"Fields"=>fields});
+        let catalog = d.add_object(dictionary! {"Type"=>"Catalog", "Pages"=>root, "AcroForm"=>acro_form});
+        d.trailer.set("Root", catalog);
+        d.save(path).unwrap();
+    }
+
+    #[test]
+    fn block_moved_reversed_and_interleaved_orders_only_reorder_the_page_tree() {
+        let temp = TempDir::new().unwrap();
+        let input = temp.0.join("six.pdf");
+        six_page_linked_form_fixture(&input);
+        let original_bytes = fs::read(&input).unwrap();
+        let original = Document::load(&input).unwrap();
+        let pages: Vec<_> = original.get_pages().values().copied().collect();
+        let catalog = original.trailer.get(b"Root").unwrap().as_reference().unwrap();
+        let pages_root = original.get_dictionary(catalog).unwrap().get(b"Pages").unwrap().as_reference().unwrap();
+        let scene = |order: &[usize]| PdfScene { pages: order.iter().map(|&index| ScenePage {
+            source_index: Some(index), width: 612., height: 792., rotation: 0, mirrored: false, crop: None,
+            source_rotation: Some(0), source_box: Some(Rect { x: 0., y: 0., width: 612., height: 792. }), objects: vec![],
+        }).collect() };
+        // Pages 2 and 3 moved as a block to the end; the whole document reversed; a two-sided scan interleaved.
+        for order in [[0, 3, 4, 5, 1, 2], [5, 4, 3, 2, 1, 0], [0, 5, 1, 4, 2, 3]] {
+            let expected: Vec<_> = order.iter().map(|&index| pages[index]).collect();
+            let composed = compose(&input, &scene(&order)).expect("a reorder should compose");
+            let reordered: Vec<_> = composed.get_pages().values().copied().collect();
+            assert_eq!(reordered, expected);
+            // Content, notes, links and form fields are the same objects, byte for byte; only the page tree's order changes.
+            assert_only_page_tree_order_changed(&composed, &original, pages_root, &reordered);
+
+            let request = ExportRequest { paths: vec![input.clone()], scene: scene(&order), output_location: OutputLocation::AlongsideInput };
+            let first = export(&request, input.clone());
+            let second = export(&request, input.clone());
+            assert!(first.error().is_none(), "{:?}", first.error());
+            assert!(second.error().is_none(), "{:?}", second.error());
+            assert_ne!(first.output_paths(), second.output_paths());
+            let bytes = fs::read(&first.output_paths()[0]).unwrap();
+            assert_eq!(bytes, fs::read(&second.output_paths()[0]).unwrap(), "two exports of the same order differ");
+            let output = Document::load(&first.output_paths()[0]).unwrap();
+            let output_pages: Vec<_> = output.get_pages().values().copied().collect();
+            for (position, &source) in order.iter().enumerate() {
+                let content = output.get_page_content(output_pages[position]);
+                assert!(String::from_utf8_lossy(&content).contains(&format!("(Source page {})", source + 1)));
+                let annotations = output.get_dictionary(output_pages[position]).unwrap().get(b"Annots").unwrap().as_array().unwrap();
+                assert_eq!(annotations.len(), 3);
+                let link = output.get_dictionary(annotations[1].as_reference().unwrap()).unwrap();
+                let target = link.get(b"Dest").unwrap().as_array().unwrap()[0].as_reference().unwrap();
+                assert_eq!(target, pages[(source + 1) % 6], "a link lost its target page");
+            }
+            let output_catalog = output.trailer.get(b"Root").unwrap().as_reference().unwrap();
+            let acro_form = output.get_dictionary(output_catalog).unwrap().get(b"AcroForm").unwrap().as_reference().unwrap();
+            assert_eq!(output.get_dictionary(acro_form).unwrap().get(b"Fields").unwrap().as_array().unwrap().len(), 6);
+            assert_eq!(fs::read(&input).unwrap(), original_bytes);
+        }
+    }
+
+    #[test]
+    fn each_quarter_turn_adds_to_the_source_rotation_and_keeps_annotations_fields_and_destinations() {
+        let temp = TempDir::new().unwrap();
+        let input = temp.0.join("annotated-rotated-offset.pdf");
+        annotated_rotated_offset_fixture(&input);
+        let original_bytes = fs::read(&input).unwrap();
+        let original = Document::load(&input).unwrap();
+        let page = original.get_pages().values().next().copied().unwrap();
+        let original_annots = original.get_dictionary(page).unwrap().get(b"Annots").unwrap().clone();
+        // The source page is /Rotate 90, inherited from its page tree. Each scene quarter turn is added to it.
+        for (rotation, expected) in [(90, 180), (180, 270), (270, 0), (-90, 0)] {
+            let scene = PdfScene { pages: vec![ScenePage {
+                source_index: Some(0), width: 300., height: 200., rotation, crop: None,
+                source_rotation: Some(90), mirrored: false, source_box: Some(Rect { x: 20., y: 30., width: 200., height: 300. }), objects: vec![],
+            }] };
+            let outcome = export(&ExportRequest { paths: vec![input.clone()], scene, output_location: OutputLocation::AlongsideInput }, input.clone());
+            assert!(outcome.error().is_none(), "rotation {rotation}: {:?}", outcome.error());
+            let output = Document::load(&outcome.output_paths()[0]).unwrap();
+            let output_page = output.get_pages().values().next().copied().unwrap();
+            assert_eq!(output_page, page, "rotation {rotation} replaced the source page");
+            assert_eq!(inherited(&output, output_page, b"Rotate").unwrap().unwrap().as_i64().unwrap(), expected, "rotation {rotation}");
+            // Lossless: same content, same boxes, and the notes, link and form field stay on the page with their own coordinates.
+            assert_eq!(output.get_page_content(output_page), original.get_page_content(page));
+            assert_eq!(bounds(&output, &inherited(&output, output_page, b"CropBox").unwrap().unwrap()).unwrap(), [20., 30., 220., 330.]);
+            let page_dictionary = output.get_dictionary(output_page).unwrap();
+            assert_eq!(page_dictionary.get(b"Annots").unwrap(), &original_annots);
+            for annotation in original_annots.as_array().unwrap() {
+                let id = annotation.as_reference().unwrap();
+                assert_eq!(output.get_object(id).unwrap(), original.get_object(id).unwrap());
+            }
+            let catalog = output.get_dictionary(output.trailer.get(b"Root").unwrap().as_reference().unwrap()).unwrap();
+            for key in [b"AcroForm".as_slice(), b"Names", b"Outlines"] { assert!(catalog.has(key), "rotation {rotation} lost {key:?}"); }
+            assert_eq!(fs::read(&input).unwrap(), original_bytes, "rotation {rotation} changed the original");
+        }
+    }
+
+    #[test]
+    fn rotating_reordered_pages_only_sets_their_rotate_entry() {
+        let temp = TempDir::new().unwrap();
+        let input = temp.0.join("six.pdf");
+        six_page_linked_form_fixture(&input);
+        let original_bytes = fs::read(&input).unwrap();
+        let original = Document::load(&input).unwrap();
+        let pages: Vec<_> = original.get_pages().values().copied().collect();
+        let order = [5, 4, 3, 2, 1, 0];
+        let rotations = [0, 90, 180, 270, 0, 0];
+        let scene = PdfScene { pages: order.iter().zip(rotations).map(|(&index, rotation)| ScenePage {
+            source_index: Some(index), width: 612., height: 792., rotation, crop: None,
+            source_rotation: Some(0), mirrored: false, source_box: Some(Rect { x: 0., y: 0., width: 612., height: 792. }), objects: vec![],
+        }).collect() };
+        let composed = compose(&input, &scene).expect("a rotated reorder should compose");
+        let output_pages: Vec<_> = composed.get_pages().values().copied().collect();
+        assert_eq!(output_pages, order.iter().map(|&index| pages[index]).collect::<Vec<_>>());
+        assert_eq!(composed.objects.len(), original.objects.len(), "rotation added objects");
+        for (position, &index) in order.iter().enumerate() {
+            let mut expected = original.get_dictionary(pages[index]).unwrap().clone();
+            if rotations[position] != 0 { expected.set("Rotate", rotations[position] as i64); }
+            assert_eq!(composed.get_dictionary(pages[index]).unwrap(), &expected, "page {} changed beyond its rotation", index + 1);
+        }
+        let outcome = export(&ExportRequest { paths: vec![input.clone()], scene, output_location: OutputLocation::AlongsideInput }, input.clone());
+        assert!(outcome.error().is_none(), "{:?}", outcome.error());
+        assert_eq!(fs::read(&input).unwrap(), original_bytes);
     }
 
     #[test]
@@ -1470,11 +1746,11 @@ mod tests {
         let pages_root = original.get_dictionary(catalog).unwrap().get(b"Pages").unwrap().as_reference().unwrap();
         let scene = PdfScene { pages: vec![
             ScenePage {
-                source_index: Some(1), width: 612., height: 792., rotation: 0, crop: None,
+                source_index: Some(1), width: 612., height: 792., rotation: 0, mirrored: false, crop: None,
                 source_rotation: Some(0), source_box: Some(Rect { x: 0., y: 0., width: 612., height: 792. }), objects: vec![],
             },
             ScenePage {
-                source_index: Some(0), width: 300., height: 200., rotation: 0, crop: None,
+                source_index: Some(0), width: 300., height: 200., rotation: 0, mirrored: false, crop: None,
                 source_rotation: Some(90), source_box: Some(Rect { x: 20., y: 30., width: 200., height: 300. }), objects: vec![],
             },
         ] };
@@ -1486,10 +1762,136 @@ mod tests {
         assert_eq!(fs::read(&input).unwrap(), original_bytes);
     }
 
+    /// A portrait page with a red mark near its top-left corner and three words, once upright and
+    /// once as /Rotate 90 with an offset CropBox, so the flip is checked in both page spaces.
+    fn mirror_mark_fixture(path: &Path) {
+        let mut d = Document::with_version("1.7");
+        let root = d.new_object_id();
+        let font = d.add_object(dictionary! {"Type"=>"Font", "Subtype"=>"Type1", "BaseFont"=>"Helvetica"});
+        let resources = d.add_object(dictionary! {"Font"=>dictionary! {"F1"=>font}});
+        let upright = d.add_object(Stream::new(dictionary!{}, b"q 1 0 0 rg 10 240 50 50 re f Q BT /F1 16 Tf 30 140 Td (Alpha Beta Gamma) Tj ET".to_vec()));
+        let turned = d.add_object(Stream::new(dictionary!{}, b"q 1 0 0 rg 30 270 50 50 re f Q BT /F1 16 Tf 50 170 Td (Alpha Beta Gamma) Tj ET".to_vec()));
+        let first = d.add_object(dictionary! {"Type"=>"Page", "Parent"=>root, "MediaBox"=>array(&[0.,0.,200.,300.]), "Resources"=>resources, "Contents"=>upright});
+        let second = d.add_object(dictionary! {"Type"=>"Page", "Parent"=>root, "MediaBox"=>array(&[10.,20.,250.,360.]), "CropBox"=>array(&[20.,30.,220.,330.]), "Rotate"=>90, "Resources"=>resources, "Contents"=>turned});
+        d.objects.insert(root, Object::Dictionary(dictionary! {"Type"=>"Pages", "Kids"=>vec![Object::Reference(first),Object::Reference(second)], "Count"=>2}));
+        let catalog = d.add_object(dictionary! {"Type"=>"Catalog","Pages"=>root});
+        d.trailer.set("Root",catalog);
+        d.save(path).unwrap();
+    }
+    fn oriented_page(source_index: usize, (width, height): (f32, f32), rotation: i32, mirrored: bool) -> ScenePage {
+        ScenePage { source_index: Some(source_index), width, height, rotation, mirrored, crop: None, source_rotation: None, source_box: None, objects: vec![] }
+    }
+    /// The centre of the red mark, as fractions of the rendered page's width and height.
+    fn red_mark_centre(preview: &ScenePreview) -> (f32, f32) {
+        let bytes = base64::engine::general_purpose::STANDARD.decode(preview.data_url.trim_start_matches("data:image/png;base64,")).unwrap();
+        let pixels = image::load_from_memory(&bytes).unwrap().to_rgba8();
+        let (mut sum_x, mut sum_y, mut count) = (0f32, 0f32, 0f32);
+        for (x, y, pixel) in pixels.enumerate_pixels() {
+            if pixel[0] > 200 && pixel[1] < 80 && pixel[2] < 80 { sum_x += x as f32; sum_y += y as f32; count += 1.; }
+        }
+        assert!(count > 0., "the red mark is missing");
+        (sum_x / count / pixels.width() as f32, sum_y / count / pixels.height() as f32)
+    }
+    /// Where a point of the upright page lands once it is flipped left to right (when mirrored) and then turned clockwise.
+    fn displayed_point((mut x, mut y): (f32, f32), rotation: i32, mirrored: bool) -> (f32, f32) {
+        if mirrored { x = 1. - x; }
+        for _ in 0..rotation.rem_euclid(360) / 90 { (x, y) = (1. - y, x); }
+        (x, y)
+    }
+    fn image_xobject_count(document: &Document) -> usize {
+        document.objects.values().filter(|object| matches!(object, Object::Stream(stream) if stream.dict.get(b"Subtype").ok().and_then(|value| value.as_name().ok()) == Some(b"Image"))).count()
+    }
+
+    #[test]
+    fn mirroring_flips_the_page_as_a_vector_in_all_eight_orientations() {
+        let _guard = crate::kit::lock_process_env();
+        let renderer = match renderer() { Ok(r) => r, Err(e) => { if std::env::var_os("TOOLBOX_REQUIRE_PDF_RENDERER").is_some() { panic!("{e}") }; eprintln!("Renderer unavailable: {e}"); return; } };
+        let temp = TempDir::new().unwrap();
+        let input = temp.0.join("mark.pdf");
+        mirror_mark_fixture(&input);
+        let original_bytes = fs::read(&input).unwrap();
+        let original = Document::load(&input).unwrap();
+        // Where the mark shows on the unedited page, from the fixture's geometry: 10–60 × 240–290 on the
+        // upright 200 × 300 page, and 30–80 × 270–320 inside the /Rotate 90 page's CropBox 20–220 × 30–330.
+        // The turned page's unmirrored orientations keep its CropBox, which the test renderer ignores,
+        // so only its mirrored ones (redrawn on a page the size of the visible area) are measured.
+        for (source_index, size, upright, flips) in [(0, (200., 300.), (35. / 200., 35. / 300.), &[false, true][..]), (1, (300., 200.), (265. / 300., 35. / 200.), &[true][..])] {
+            for rotation in [0, 90, 180, 270] {
+                for &mirrored in flips {
+                    let scene = PdfScene { pages: vec![oriented_page(source_index, size, rotation, mirrored)] };
+                    let mut composed = compose(&input, &scene).unwrap();
+                    assert_eq!(image_xobject_count(&composed), image_xobject_count(&original), "page {source_index} {rotation}° mirrored {mirrored}: a raster image was added");
+                    let path = temp.0.join(format!("oriented-{source_index}-{rotation}-{mirrored}.pdf"));
+                    composed.save(&path).unwrap();
+                    let actual = red_mark_centre(&render(&path, 0, &renderer, &temp).unwrap());
+                    let expected = displayed_point(upright, rotation, mirrored);
+                    assert!((actual.0 - expected.0).abs() < 0.03 && (actual.1 - expected.1).abs() < 0.03,
+                        "page {source_index} {rotation}° mirrored {mirrored}: mark at {actual:?}, expected {expected:?}");
+                    // The upright page's mark starts top-left. Left to right moves it top-right; top to bottom
+                    // (stored as left to right turned 180°) moves it bottom-left.
+                    if source_index == 0 && mirrored && rotation == 0 { assert!(actual.0 > 0.5 && actual.1 < 0.5, "left to right: {actual:?}"); }
+                    if source_index == 0 && mirrored && rotation == 180 { assert!(actual.0 < 0.5 && actual.1 > 0.5, "top to bottom: {actual:?}"); }
+                }
+            }
+        }
+        assert_eq!(fs::read(&input).unwrap(), original_bytes, "mirroring changed the original");
+    }
+
+    #[test]
+    fn mirrored_export_keeps_text_extractable_in_reading_order_and_is_deterministic() {
+        let temp = TempDir::new().unwrap();
+        let input = temp.0.join("mark.pdf");
+        mirror_mark_fixture(&input);
+        let original_bytes = fs::read(&input).unwrap();
+        let scene = || PdfScene { pages: vec![oriented_page(0, (200., 300.), 0, true), oriented_page(1, (300., 200.), 180, true)] };
+        let first = export(&ExportRequest { paths: vec![input.clone()], scene: scene(), output_location: OutputLocation::AlongsideInput }, input.clone());
+        let second = export(&ExportRequest { paths: vec![input.clone()], scene: scene(), output_location: OutputLocation::AlongsideInput }, input.clone());
+        assert!(first.error().is_none() && second.error().is_none(), "{:?} {:?}", first.error(), second.error());
+        assert_ne!(first.output_paths()[0], second.output_paths()[0], "a second export must not overwrite the first");
+        assert_eq!(fs::read(&first.output_paths()[0]).unwrap(), fs::read(&second.output_paths()[0]).unwrap(), "mirrored export is not byte-identical across runs");
+        assert_eq!(fs::read(&input).unwrap(), original_bytes, "mirroring changed the original");
+        let output = Document::load(&first.output_paths()[0]).unwrap();
+        assert_eq!(image_xobject_count(&output), 0, "a raster image was added");
+        // The words stay text, in their content order. A position-sorted extraction reads a mirrored line
+        // backwards, as it reads any flipped glyphs, so this reads the content order the way copy and search do.
+        let Some(extractor) = text_extractor() else { return; };
+        for page in ["1", "2"] {
+            let output = Command::new(&extractor).args(["-raw", "-enc", "UTF-8", "-f", page, "-l", page]).arg(&first.output_paths()[0]).arg("-").output().unwrap();
+            assert!(output.status.success());
+            let text: String = String::from_utf8(output.stdout).unwrap().split_whitespace().collect();
+            assert!(text.contains("AlphaBetaGamma"), "page {page} text: {text:?}");
+        }
+    }
+
+    #[test]
+    fn scene_rejects_mirroring_pages_with_annotations_or_destinations_before_output() {
+        let temp = TempDir::new().unwrap();
+        let annotated = temp.0.join("annotated.pdf");
+        annotated_rotated_offset_fixture(&annotated);
+        let scene = PdfScene { pages: vec![oriented_page(0, (300., 200.), 0, true)] };
+        let result = export(&ExportRequest { paths: vec![annotated.clone()], scene, output_location: OutputLocation::AlongsideInput }, annotated.clone());
+        assert!(result.error().is_some_and(|error| error.message.contains("annotations or form widgets") && error.message.contains("mirror")), "{:?}", result.error());
+        assert!(result.output_paths().is_empty());
+        assert!(!annotated.with_file_name("annotated-edited-1.pdf").exists());
+
+        let navigation = temp.0.join("navigation.pdf");
+        fixture(&navigation);
+        let mut source = Document::load(&navigation).unwrap();
+        let outlines = source.add_object(dictionary! {"Type"=>"Outlines", "Count"=>0});
+        let catalog = source.trailer.get(b"Root").unwrap().as_reference().unwrap();
+        source.get_dictionary_mut(catalog).unwrap().set("Outlines", outlines);
+        source.save(&navigation).unwrap();
+        let scene = PdfScene { pages: vec![oriented_page(0, (300., 200.), 0, false), oriented_page(1, (612., 792.), 90, true)] };
+        let result = export(&ExportRequest { paths: vec![navigation.clone()], scene, output_location: OutputLocation::AlongsideInput }, navigation.clone());
+        assert!(result.error().is_some_and(|error| error.message.contains("bookmarks or destinations")), "{:?}", result.error());
+        assert!(result.output_paths().is_empty());
+        assert!(!navigation.with_file_name("navigation-edited-1.pdf").exists());
+    }
+
     #[test]
     fn scene_rejects_nested_page_tree_before_output() {
         let temp=TempDir::new().unwrap(); let input=temp.0.join("nested.pdf"); nested_fixture(&input);
-        let scene=PdfScene { pages:vec![ScenePage { source_index:Some(0), width:300., height:200., rotation:0, crop:None, source_rotation:None, source_box:None, objects:vec![] }, ScenePage { source_index:Some(1), width:612., height:792., rotation:0, crop:None, source_rotation:None, source_box:None, objects:vec![] }] };
+        let scene=PdfScene { pages:vec![ScenePage { source_index:Some(0), width:300., height:200., rotation:0, mirrored: false, crop:None, source_rotation:None, source_box:None, objects:vec![] }, ScenePage { source_index:Some(1), width:612., height:792., rotation:0, mirrored: false, crop:None, source_rotation:None, source_box:None, objects:vec![] }] };
         let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
         assert!(result.error().is_some_and(|error| error.message.contains("nested")));
         assert!(result.output_paths().is_empty());
@@ -1501,7 +1903,7 @@ mod tests {
         let mut source=Document::load(&input).unwrap(); let page=source.get_pages().values().next().copied().unwrap();
         let annotation=source.add_object(dictionary! {"Type"=>"Annot", "Subtype"=>"Text", "Rect"=>array(&[20.,20.,80.,50.])});
         source.get_dictionary_mut(page).unwrap().set("Annots",vec![Object::Reference(annotation)]); source.save(&input).unwrap();
-        let scene=PdfScene { pages:vec![ScenePage { source_index:Some(0), width:300., height:200., rotation:0, crop:Some(Rect{x:0.,y:0.,width:100.,height:100.}), source_rotation:None, source_box:None, objects:vec![] }] };
+        let scene=PdfScene { pages:vec![ScenePage { source_index:Some(0), width:300., height:200., rotation:0, mirrored: false, crop:Some(Rect{x:0.,y:0.,width:100.,height:100.}), source_rotation:None, source_box:None, objects:vec![] }] };
         let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
         assert!(result.error().is_some_and(|error| error.message.contains("annotation")));
         assert!(result.output_paths().is_empty());
@@ -1517,8 +1919,8 @@ mod tests {
         source.get_dictionary_mut(catalog_id).unwrap().set("AcroForm",acro_form);
         source.save(&input).unwrap();
         let scene=PdfScene { pages:vec![
-            ScenePage {source_index:Some(0),width:300.,height:200.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]},
-            ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]},
+            ScenePage {source_index:Some(0),width:300.,height:200.,rotation:0, mirrored: false,crop:None,source_rotation:None,source_box:None,objects:vec![]},
+            ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0, mirrored: false,crop:None,source_rotation:None,source_box:None,objects:vec![]},
         ] };
         let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
         assert!(result.error().is_some_and(|error| error.message.contains("Digitally signed")));
@@ -1542,8 +1944,8 @@ mod tests {
             }
             source.save(&input).unwrap();
             let scene=PdfScene { pages:vec![
-                ScenePage {source_index:Some(0),width:300.,height:200.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]},
-                ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]},
+                ScenePage {source_index:Some(0),width:300.,height:200.,rotation:0, mirrored: false,crop:None,source_rotation:None,source_box:None,objects:vec![]},
+                ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0, mirrored: false,crop:None,source_rotation:None,source_box:None,objects:vec![]},
             ] };
             let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
             assert!(result.error().is_some_and(|error| error.message.contains("Digitally signed")), "{name}: {:?}", result.error());
@@ -1560,8 +1962,8 @@ mod tests {
         source.get_dictionary_mut(catalog_id).unwrap().set("Outlines", outlines);
         source.save(&input).unwrap();
         let scene=PdfScene { pages:vec![
-            ScenePage {source_index:Some(0),width:300.,height:200.,rotation:0,crop:Some(Rect{x:0.,y:0.,width:100.,height:100.}),source_rotation:None,source_box:None,objects:vec![]},
-            ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]},
+            ScenePage {source_index:Some(0),width:300.,height:200.,rotation:0, mirrored: false,crop:Some(Rect{x:0.,y:0.,width:100.,height:100.}),source_rotation:None,source_box:None,objects:vec![]},
+            ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0, mirrored: false,crop:None,source_rotation:None,source_box:None,objects:vec![]},
         ] };
         let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
         assert!(result.error().is_some_and(|error| error.message.contains("destinations")), "{:?}", result.error());
@@ -1580,8 +1982,8 @@ mod tests {
         source.get_dictionary_mut(catalog_id).unwrap().set("Outlines", outlines);
         source.save(&input).unwrap();
         let scene=PdfScene { pages:vec![
-            ScenePage {source_index:Some(0),width:200.,height:300.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]},
-            ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]},
+            ScenePage {source_index:Some(0),width:200.,height:300.,rotation:0, mirrored: false,crop:None,source_rotation:None,source_box:None,objects:vec![]},
+            ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0, mirrored: false,crop:None,source_rotation:None,source_box:None,objects:vec![]},
         ] };
         let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
         assert!(result.error().is_none(), "{result:?}");
@@ -1598,7 +2000,7 @@ mod tests {
         let catalog_id=source.trailer.get(b"Root").unwrap().as_reference().unwrap();
         source.get_dictionary_mut(catalog_id).unwrap().set("StructTreeRoot",structure);
         source.save(&input).unwrap();
-        let scene=PdfScene { pages:vec![ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]}] };
+        let scene=PdfScene { pages:vec![ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0, mirrored: false,crop:None,source_rotation:None,source_box:None,objects:vec![]}] };
         let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
         assert!(result.error().is_some_and(|error| error.message.contains("tagged PDF")), "{:?}", result.error());
         assert!(result.output_paths().is_empty());
@@ -1621,8 +2023,8 @@ mod tests {
         source.get_dictionary_mut(catalog_id).unwrap().set("StructTreeRoot", structure);
         source.save(&input).unwrap();
         let identity = PdfScene { pages: vec![
-            ScenePage { source_index: Some(0), width: 300., height: 200., rotation: 0, crop: None, source_rotation: Some(90), source_box: Some(Rect { x: 20., y: 30., width: 200., height: 300. }), objects: vec![] },
-            ScenePage { source_index: Some(1), width: 612., height: 792., rotation: 0, crop: None, source_rotation: Some(0), source_box: Some(Rect { x: 0., y: 0., width: 612., height: 792. }), objects: vec![] },
+            ScenePage { source_index: Some(0), width: 300., height: 200., rotation: 0, mirrored: false, crop: None, source_rotation: Some(90), source_box: Some(Rect { x: 20., y: 30., width: 200., height: 300. }), objects: vec![] },
+            ScenePage { source_index: Some(1), width: 612., height: 792., rotation: 0, mirrored: false, crop: None, source_rotation: Some(0), source_box: Some(Rect { x: 0., y: 0., width: 612., height: 792. }), objects: vec![] },
         ] };
         assert!(compose(&input, &identity).is_ok());
         let mut overlay = identity;
@@ -1631,5 +2033,130 @@ mod tests {
         assert!(result.error().is_some_and(|error| error.message.contains("tagged PDF")), "{result:?}");
         assert!(result.output_paths().is_empty());
         assert!(!input.with_file_name("tagged-overlay-edited-1.pdf").exists());
+    }
+
+    fn many_page_fixture(path: &Path, pages: usize) {
+        let mut d = Document::with_version("1.7");
+        let root = d.new_object_id();
+        let content = d.add_object(Stream::new(dictionary!{}, b"q 0 0 1 rg 40 60 50 70 re f Q".to_vec()));
+        let kids = (0..pages).map(|_| Object::Reference(d.add_object(dictionary! {"Type"=>"Page", "Parent"=>root, "MediaBox"=>array(&[0.,0.,612.,792.]), "Contents"=>content}))).collect::<Vec<_>>();
+        d.objects.insert(root, Object::Dictionary(dictionary! {"Type"=>"Pages", "Kids"=>kids, "Count"=>pages as i64}));
+        let catalog = d.add_object(dictionary! {"Type"=>"Catalog","Pages"=>root});
+        d.trailer.set("Root",catalog);
+        d.save(path).unwrap();
+    }
+
+    fn with_renderer_override<T>(renderer: &Path, run: impl FnOnce() -> T) -> T {
+        let previous = std::env::var_os("TOOLBOX_PDFTOPPM_PATH");
+        std::env::set_var("TOOLBOX_PDFTOPPM_PATH", renderer);
+        let result = run();
+        match previous {
+            Some(value) => std::env::set_var("TOOLBOX_PDFTOPPM_PATH", value),
+            None => std::env::remove_var("TOOLBOX_PDFTOPPM_PATH"),
+        }
+        result
+    }
+
+    #[test]
+    fn source_thumbnail_deadlines_are_recorded_per_file_plus_per_page() {
+        assert_eq!(super::super::PDF_THUMBNAIL_MAX_DIMENSION, 320);
+        assert_eq!(super::super::PDF_THUMBNAIL_MAX_BATCH, 12);
+        assert_eq!(super::super::PDF_THUMBNAIL_FILE_TIMEOUT, std::time::Duration::from_secs(5));
+        assert_eq!(super::super::PDF_THUMBNAIL_PAGE_TIMEOUT, std::time::Duration::from_secs(3));
+        let start = Instant::now();
+        assert_eq!(thumbnail_deadline(start, 1) - start, std::time::Duration::from_secs(8));
+        assert_eq!(thumbnail_deadline(start, 4) - start, std::time::Duration::from_secs(17));
+    }
+
+    #[test]
+    fn source_thumbnails_reject_empty_duplicate_out_of_range_and_oversized_sets() {
+        let temp = TempDir::new().unwrap();
+        let input = temp.0.join("source.pdf");
+        many_page_fixture(&input, 20);
+        let cases = [
+            (vec![], "Thumbnail requests must include 1–12 page indices"),
+            (vec![3, 3], "Thumbnail page indices must be unique"),
+            (vec![20], "Thumbnail page outside document"),
+            ((0..13).collect(), "Thumbnail requests must include 1–12 page indices"),
+        ];
+        for (page_indices, message) in cases {
+            let error = source_thumbnails(&SourceThumbnailsRequest { path: input.clone(), page_indices }).err().expect("request should be rejected");
+            assert!(matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput), "kind: {:?}", error.kind);
+            assert_eq!(error.message, message);
+        }
+        let missing = source_thumbnails(&SourceThumbnailsRequest { path: temp.0.join("missing.pdf"), page_indices: vec![0] }).err().unwrap();
+        assert_eq!(missing.message, UNREADABLE_PDF_MESSAGE);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn source_thumbnails_isolate_a_failing_page_and_never_reuse_another_pages_image() {
+        use std::os::unix::fs::PermissionsExt;
+        let _guard = crate::kit::lock_process_env();
+        let temp = TempDir::new().unwrap();
+        let input = temp.0.join("source.pdf");
+        many_page_fixture(&input, 5);
+        let png = temp.0.join("page.png");
+        image::RgbImage::from_pixel(232, 300, image::Rgb([200, 200, 255])).save(&png).unwrap();
+        // pdftoppm -png -singlefile -scale-to N -f P -l P input prefix: page 2 fails, page 4 "succeeds" without writing an image.
+        let fake = temp.0.join("pdftoppm");
+        fs::write(&fake, format!("#!/bin/sh\ncase \"$6\" in 2) echo broken >&2; exit 1;; 4) exit 0;; esac\nexec cp '{}' \"${{10}}.png\"\n", png.display())).unwrap();
+        fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+        let before = fs::read(&input).unwrap();
+        let results = with_renderer_override(&fake, || source_thumbnails(&SourceThumbnailsRequest { path: input.clone(), page_indices: vec![0, 1, 2, 3] })).unwrap();
+        assert_eq!(results.iter().map(|result| result.page_index).collect::<Vec<_>>(), vec![0, 1, 2, 3]);
+        for index in [0, 2] {
+            let thumbnail = results[index].thumbnail.as_ref().expect("healthy page should have a thumbnail");
+            assert!(thumbnail.data_url.starts_with("data:image/png;base64,"));
+            assert_eq!((thumbnail.width, thumbnail.height), (232, 300));
+            assert!(results[index].error.is_none());
+        }
+        assert!(results[1].thumbnail.is_none() && results[1].error.is_some(), "page 2 should fail alone");
+        assert!(results[3].thumbnail.is_none() && results[3].error.is_some(), "page 4 wrote nothing, so it must not reuse another page's image");
+        assert_eq!(fs::read(&input).unwrap(), before);
+    }
+
+    #[test]
+    fn source_thumbnails_render_requested_source_pages_with_the_bundled_renderer() {
+        let _guard = crate::kit::lock_process_env();
+        if let Err(e) = renderer() { if std::env::var_os("TOOLBOX_REQUIRE_PDF_RENDERER").is_some() { panic!("{e}") }; eprintln!("Renderer unavailable: {e}"); return; }
+        let temp = TempDir::new().unwrap();
+        let input = temp.0.join("source.pdf");
+        fixture(&input);
+        let results = source_thumbnails(&SourceThumbnailsRequest { path: input.clone(), page_indices: vec![1, 0] }).unwrap();
+        assert_eq!(results.iter().map(|result| result.page_index).collect::<Vec<_>>(), vec![1, 0]);
+        let sizes = results.iter().map(|result| {
+            let thumbnail = result.thumbnail.as_ref().unwrap_or_else(|| panic!("page {} failed: {:?}", result.page_index, result.error));
+            assert!(thumbnail.width.max(thumbnail.height) <= super::super::PDF_THUMBNAIL_MAX_DIMENSION);
+            (thumbnail.width, thumbnail.height)
+        }).collect::<Vec<_>>();
+        assert!(sizes[0].1 > sizes[0].0, "the portrait source page stays portrait");
+        assert!(sizes[1].0 > sizes[1].1, "the source /Rotate 90 page renders landscape");
+    }
+
+    #[test]
+    fn inspect_refuses_documents_over_the_recorded_limits_with_limit_exceeded() {
+        use crate::kit::contracts::{ErrorKind, LimitKind, OutcomePointer};
+        let limits = crate::kit::common::limits::recorded("export_pdf_scene").unwrap();
+        assert_eq!(limits.max_pages, Some(5_000));
+        assert_eq!(limits.max_bytes, 1_000_000_000);
+        let temp = TempDir::new().unwrap();
+
+        let at_limit = temp.0.join("at-limit.pdf");
+        many_page_fixture(&at_limit, 5_000);
+        assert_eq!(inspect(&at_limit).unwrap().pages.len(), 5_000);
+
+        let over = temp.0.join("archive.pdf");
+        many_page_fixture(&over, 5_001);
+        let error = inspect(&over).expect_err("over the page limit");
+        assert_eq!(error.kind, ErrorKind::LimitExceeded { limit: LimitKind::PageCount });
+        assert_eq!(error.message, "It has 5,001 pages. Toolbox works with up to 5,000 pages in one PDF. Use Split to make smaller parts, then open each one.");
+        assert_eq!(error.pointer, Some(OutcomePointer::Tool { tool_id: "pdf-split".into() }));
+
+        let large = temp.0.join("large.pdf");
+        fs::File::create(&large).unwrap().set_len(limits.max_bytes + 1).unwrap();
+        let error = inspect(&large).expect_err("over the size limit");
+        assert_eq!(error.kind, ErrorKind::LimitExceeded { limit: LimitKind::FileSize });
+        assert_eq!(error.message, "Larger than the 1 GB limit for one PDF. Reduce its size and try again.");
     }
 }
