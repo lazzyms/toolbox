@@ -309,10 +309,178 @@
   },
   {
     "board": "PdfOrganize.dc.html",
-    "title": "Organize pages: grid with page actions",
+    "title": "Organize pages: empty, editing, export and result states",
     "state": "default",
     "query": "",
     "screen": "PdfOrganize--default.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-no-document",
+    "query": "state=No%20document",
+    "screen": "PdfOrganize--state-no-document.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-several-dropped",
+    "query": "state=Several%20dropped",
+    "screen": "PdfOrganize--state-several-dropped.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-loading-pages",
+    "query": "state=Loading%20pages",
+    "screen": "PdfOrganize--state-loading-pages.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-signed-file",
+    "query": "state=Signed%20file",
+    "screen": "PdfOrganize--state-signed-file.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-locked-file",
+    "query": "state=Locked%20file",
+    "screen": "PdfOrganize--state-locked-file.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-damaged-file",
+    "query": "state=Damaged%20file",
+    "screen": "PdfOrganize--state-damaged-file.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-too-many-pages",
+    "query": "state=Too%20many%20pages",
+    "screen": "PdfOrganize--state-too-many-pages.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-page-range-error",
+    "query": "state=Page%20range%20error",
+    "screen": "PdfOrganize--state-page-range-error.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-blank-pages-found",
+    "query": "state=Blank%20pages%20found",
+    "screen": "PdfOrganize--state-blank-pages-found.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-orientation-menu",
+    "query": "state=Orientation%20menu",
+    "screen": "PdfOrganize--state-orientation-menu.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-mirrored-pages",
+    "query": "state=Mirrored%20pages",
+    "screen": "PdfOrganize--state-mirrored-pages.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-dragging",
+    "query": "state=Dragging",
+    "screen": "PdfOrganize--state-dragging.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-move-to-position",
+    "query": "state=Move%20to%20position",
+    "screen": "PdfOrganize--state-move-to-position.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-page-order-menu",
+    "query": "state=Page%20order%20menu",
+    "screen": "PdfOrganize--state-page-order-menu.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-every-page-selected",
+    "query": "state=Every%20page%20selected",
+    "screen": "PdfOrganize--state-every-page-selected.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-shortcuts",
+    "query": "state=Shortcuts",
+    "screen": "PdfOrganize--state-shortcuts.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-reset",
+    "query": "state=Reset",
+    "screen": "PdfOrganize--state-reset.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-unexported-changes",
+    "query": "state=Unexported%20changes",
+    "screen": "PdfOrganize--state-unexported-changes.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-no-changes",
+    "query": "state=No%20changes",
+    "screen": "PdfOrganize--state-no-changes.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-other-folder",
+    "query": "state=Other%20folder",
+    "screen": "PdfOrganize--state-other-folder.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-exporting",
+    "query": "state=Exporting",
+    "screen": "PdfOrganize--state-exporting.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-exported",
+    "query": "state=Exported",
+    "screen": "PdfOrganize--state-exported.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-export-failed",
+    "query": "state=Export%20failed",
+    "screen": "PdfOrganize--state-export-failed.jpg"
+  },
+  {
+    "board": "PdfOrganize.dc.html",
+    "title": "Organize pages: empty, editing, export and result states",
+    "state": "state-removal-blocked",
+    "query": "state=Removal%20blocked",
+    "screen": "PdfOrganize--state-removal-blocked.jpg"
   },
   {
     "board": "PdfExport.dc.html",
@@ -488,6 +656,13 @@
     "state": "pack-downloading",
     "query": "pack=Downloading",
     "screen": "OCR--pack-downloading.jpg"
+  },
+  {
+    "board": "OCR.dc.html",
+    "title": "OCR: language packs and output",
+    "state": "pack-picker-open",
+    "query": "pack=Picker%20open",
+    "screen": "OCR--pack-picker-open.jpg"
   },
   {
     "board": "ImagesToPdf.dc.html",
@@ -687,24 +862,94 @@
   },
   {
     "board": "Packs.dc.html",
-    "title": "Packs: downloading, failed, offline, low space",
+    "title": "Packs: every status, errors, Install from file",
     "state": "default",
     "query": "",
     "screen": "Packs--default.jpg"
   },
   {
     "board": "Packs.dc.html",
-    "title": "Packs: downloading, failed, offline, low space",
+    "title": "Packs: every status, errors, Install from file",
+    "state": "state-empty",
+    "query": "state=Empty",
+    "screen": "Packs--state-empty.jpg"
+  },
+  {
+    "board": "Packs.dc.html",
+    "title": "Packs: every status, errors, Install from file",
+    "state": "state-details",
+    "query": "state=Details",
+    "screen": "Packs--state-details.jpg"
+  },
+  {
+    "board": "Packs.dc.html",
+    "title": "Packs: every status, errors, Install from file",
+    "state": "state-working",
+    "query": "state=Working",
+    "screen": "Packs--state-working.jpg"
+  },
+  {
+    "board": "Packs.dc.html",
+    "title": "Packs: every status, errors, Install from file",
+    "state": "state-problems",
+    "query": "state=Problems",
+    "screen": "Packs--state-problems.jpg"
+  },
+  {
+    "board": "Packs.dc.html",
+    "title": "Packs: every status, errors, Install from file",
     "state": "state-offline",
     "query": "state=Offline",
     "screen": "Packs--state-offline.jpg"
   },
   {
     "board": "Packs.dc.html",
-    "title": "Packs: downloading, failed, offline, low space",
+    "title": "Packs: every status, errors, Install from file",
+    "state": "state-server-blocked",
+    "query": "state=Server%20blocked",
+    "screen": "Packs--state-server-blocked.jpg"
+  },
+  {
+    "board": "Packs.dc.html",
+    "title": "Packs: every status, errors, Install from file",
     "state": "state-low-disk-space",
     "query": "state=Low%20disk%20space",
     "screen": "Packs--state-low-disk-space.jpg"
+  },
+  {
+    "board": "Packs.dc.html",
+    "title": "Packs: every status, errors, Install from file",
+    "state": "state-in-use",
+    "query": "state=In%20use",
+    "screen": "Packs--state-in-use.jpg"
+  },
+  {
+    "board": "Packs.dc.html",
+    "title": "Packs: every status, errors, Install from file",
+    "state": "state-install-from-file",
+    "query": "state=Install%20from%20file",
+    "screen": "Packs--state-install-from-file.jpg"
+  },
+  {
+    "board": "Packs.dc.html",
+    "title": "Packs: every status, errors, Install from file",
+    "state": "state-file-for-another-computer",
+    "query": "state=File%20for%20another%20computer",
+    "screen": "Packs--state-file-for-another-computer.jpg"
+  },
+  {
+    "board": "Packs.dc.html",
+    "title": "Packs: every status, errors, Install from file",
+    "state": "state-file-not-signed",
+    "query": "state=File%20not%20signed",
+    "screen": "Packs--state-file-not-signed.jpg"
+  },
+  {
+    "board": "Packs.dc.html",
+    "title": "Packs: every status, errors, Install from file",
+    "state": "state-file-failed-check",
+    "query": "state=File%20failed%20check",
+    "screen": "Packs--state-file-failed-check.jpg"
   },
   {
     "board": "Shortcuts.dc.html",
@@ -866,5 +1111,26 @@
     "state": "retryOpen-true",
     "query": "retryOpen=true",
     "screen": "SecResults--retryOpen-true.jpg"
+  },
+  {
+    "board": "PackResults.dc.html",
+    "title": "OCR results: files that need a pack, before and after install",
+    "state": "default",
+    "query": "",
+    "screen": "PackResults--default.jpg"
+  },
+  {
+    "board": "PackResults.dc.html",
+    "title": "OCR results: files that need a pack, before and after install",
+    "state": "pack-installing",
+    "query": "pack=Installing",
+    "screen": "PackResults--pack-installing.jpg"
+  },
+  {
+    "board": "PackResults.dc.html",
+    "title": "OCR results: files that need a pack, before and after install",
+    "state": "pack-installed",
+    "query": "pack=Installed",
+    "screen": "PackResults--pack-installed.jpg"
   }
 ]
