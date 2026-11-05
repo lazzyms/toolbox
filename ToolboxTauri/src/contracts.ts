@@ -80,8 +80,8 @@ export type ToolCommand =
   | "inspect_pdf"
   | "crop_pdf"
   | "edit_pdf"
+  | "export_pdf_scene"
   | "sign_pdf"
-  | "organize_pdf"
   | "add_page_numbers"
   | "watermark_pdf"
   | "compress_pdf"
@@ -89,7 +89,6 @@ export type ToolCommand =
   | "repair_pdf"
   | "redact_pdf"
   | "compare_pdfs"
-  | "remove_pdf_pages"
   | "extract_pdf_pages"
   | "merge_pdfs"
   | "split_pdf"
@@ -195,6 +194,25 @@ export interface ImagePreview {
   dataUrl: string;
 }
 
+export type ImageMetadataFormat = "jpeg" | "png" | "webp" | "tiff" | "heic";
+
+export type ImageMetadataErrorCode = "unreadable" | "unsupportedFormat" | "truncated" | "corrupt";
+
+export type ImageMetadataInspection =
+  | {
+      status: "report";
+      path: string;
+      format: ImageMetadataFormat;
+      exif: boolean;
+      gps: boolean;
+      xmp: boolean;
+      iptc: boolean;
+      comments: boolean;
+      icc: boolean;
+      orientation: number | null;
+    }
+  | { status: "error"; path: string; code: ImageMetadataErrorCode; message: string };
+
 export interface ToolDefinition {
   id: AtomicToolId;
   title: string;
@@ -282,6 +300,22 @@ export interface PasswordRequest extends ToolRequest {
   password: string;
   passwordOverrides: Record<string, string>;
 }
+
+export type WatermarkPlacement = "center" | "top-left" | "top-right" | "bottom-left" | "bottom-right" | "tile";
+export type WatermarkPosition = WatermarkPlacement | { x: number; y: number };
+
+// Mirrors kit::common::watermark::WatermarkOptions.
+export interface WatermarkOptions {
+  text?: string;
+  logoPath?: string;
+  size?: number;
+  opacity: number;
+  color?: string;
+  position?: WatermarkPosition;
+  rotation?: number;
+}
+
+export interface WatermarkImagesRequest extends ToolRequest, WatermarkOptions {}
 
 export interface CompressImagesRequest extends ToolRequest {
   quality: number;
