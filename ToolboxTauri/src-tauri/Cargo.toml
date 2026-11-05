@@ -43,6 +43,7 @@ zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "tiff"] }
 fontdue = "0.9.4"
 rustybuzz = "0.20.1"
+subsetter = { version = "0.2.6", default-features = false }
 lopdf = "0.44"
 rayon = "1"
 heif-rs = "26.7"

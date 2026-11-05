@@ -2059,7 +2059,7 @@ test("GIF extraction does not request a source preview", async ({ page }) => {
     expect(previewInvocations).toHaveLength(0);
 });
 
-type RunRequest = { outputLocation?: unknown; plan?: { outputLocation?: unknown } };
+type RunRequest = { outputLocation?: unknown; plan?: { outputLocation?: unknown; edits?: unknown[] } };
 
 const storeOutputSettings = async (page: Page, settings: OutputSettings) => {
     await page.addInitScript((settings) => { (window as TestWindow).__toolboxOutputSettings = settings; }, settings);
@@ -2083,13 +2083,13 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
         await fillPasswords(page, "test-password");
     }
     if (isPdfSceneTool(utility.id)) {
-        if (utility.id === "pdf-page-numbers") await page.getByRole("button", { name: "Page numbers", exact: true }).click();
+        if (utility.id === "pdf-page-numbers") await page.getByRole("button", { name: "Add page numbers", exact: true }).click();
         else if (utility.id === "pdf-organize") await page.getByRole("button", { name: "Add blank page", exact: true }).click();
         else if (utility.id === "pdf-remove-pages") {
             await page.getByRole("button", { name: "Add blank page", exact: true }).click();
             await page.getByRole("button", { name: "Page 1", exact: true }).click();
             await page.getByRole("button", { name: "Delete selected pages", exact: true }).click();
-        } else if (utility.id === "pdf-watermark") await page.getByRole("button", { name: "Add fixed watermark", exact: true }).click();
+        } else if (utility.id === "pdf-watermark") await page.getByRole("button", { name: "Add watermark", exact: true }).click();
         else await drawSceneMark(page, utility.id === "pdf-sign" ? "Signature" : utility.id === "pdf-watermark" ? "Watermark" : utility.id === "pdf-crop" ? "Crop" : "Text");
     }
     if (usesImageEditPlan) {
@@ -2129,6 +2129,12 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
     expect(run).toBeDefined();
     const request = (run?.args as { request: RunRequest }).request;
     expect(composedCommand === "export_image_edit_plan" ? request.plan?.outputLocation : request.outputLocation).toEqual(expectedOutputLocation);
+    if (utility.id === "image-watermark") {
+        expect(request.plan?.edits).toContainEqual({ kind: "watermark", text: "Test watermark", opacity: 20, position: { x: 0, y: 0 } });
+        // Edit PDF watermarks send the same shared option set (tests/ui/pdf-scene.spec.ts).
+        const watermarkEdit = request.plan?.edits?.find((edit: { kind: string }) => edit.kind === "watermark");
+        expect(Object.keys(watermarkEdit ?? {}).filter((key) => key !== "kind").every((key) => ["text", "logoPath", "size", "opacity", "color", "position", "rotation"].includes(key))).toBe(true);
+    }
 };
 
 test.describe("registered feature actions", () => {

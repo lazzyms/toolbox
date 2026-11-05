@@ -1,4 +1,5 @@
 import type { OutputLocation } from "../../contracts";
+import type { PdfScene } from "./scene";
 
 export type EditorLayout = "vertical" | "horizontal";
 export type EditorDensity = "compact" | "comfortable";
@@ -65,12 +66,6 @@ export interface CropPdfRequest {
     outputLocation: OutputLocation;
 }
 
-export interface SignPdfRequest extends CropPdfRequest {
-    page: number;
-    text: string;
-    signaturePath: string | null;
-}
-
 export interface OrganizePdfRequest {
     paths: string[];
     pageOrder: number[];
@@ -80,26 +75,12 @@ export interface OrganizePdfRequest {
     outputLocation: OutputLocation;
 }
 
-export type PdfOverlay =
-    | { kind: "edit"; mode: "text" | "note" | "highlight" | "shape"; text: string; pages: number[] | null; rectangle: PdfRect }
-    | { kind: "watermark"; text: string; opacity: number; position: string | null; logoPath: string | null; pages: number[] | null }
-    | { kind: "sign"; page: number; text: string; signaturePath: string | null; rectangle: PdfRect; scope: PdfPageScope }
-    | { kind: "pageNumbers"; startNumber: number | null; fontSize: number | null; position: string | null; pages: number[] | null };
-
-export type PdfEditOperation =
-    | { kind: "crop"; rectangle: PdfRect; scope: PdfPageScope }
-    | { kind: "overlay"; overlay: PdfOverlay }
-    | { kind: "addPages"; page: number; position: "before" | "after" | "end"; count: number };
-
-export interface PdfEditSessionPlan {
-    pageOrder: number[];
-    deletePages: number[];
-    rotatePages: { page: number; degrees: number }[];
-    operations: PdfEditOperation[];
-}
-
-export interface PdfEditSessionRequest {
+export interface PdfSceneExportRequest {
     paths: string[];
-    plan: PdfEditSessionPlan;
+    scene: PdfScene;
     outputLocation: OutputLocation;
+    formValues?: unknown[];
+    textEdits?: unknown[];
+    flatten?: boolean;
+    redactions?: unknown[];
 }
