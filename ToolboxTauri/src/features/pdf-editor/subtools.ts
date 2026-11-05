@@ -1,7 +1,8 @@
 import type { OutputLocation } from '../../contracts';
+import type { PdfTextEdit } from './contracts';
 import type { PdfScene, SceneObject } from './scene';
 
-export type SubToolId = SceneObject['kind'] | 'crop' | 'organize';
+export type SubToolId = SceneObject['kind'] | 'edit-text' | 'crop' | 'organize';
 export interface SubTool {
   id: SubToolId;
   label: string;
@@ -9,7 +10,8 @@ export interface SubTool {
   suffix: string;
   contributes: (scene: PdfScene, baseline: PdfScene) => boolean;
 }
-export interface SceneExportRequest { paths: string[]; scene: PdfScene; outputLocation: OutputLocation }
+export interface SceneSections { scene: Pick<PdfScene, 'pages'>; textEdits?: PdfTextEdit[] }
+export interface SceneExportRequest extends SceneSections { paths: string[]; outputLocation: OutputLocation }
 export interface SceneExportPlan { request: SceneExportRequest; contributors: SubToolId[]; suffix: string | null }
 
 export const combinedSuffix = '-edited';
@@ -21,6 +23,8 @@ const overlay = (id: SceneObject['kind'], label: string): SubTool => ({
 const pageLayout = (scene: PdfScene) => JSON.stringify(scene.pages.map((page) => [page.id, page.rotation]));
 
 export const subTools: readonly SubTool[] = [
+  { id: 'edit-text', label: 'Edit text', group: 'document', suffix: '-edited',
+    contributes: (scene) => Boolean(scene.textEdits?.length) },
   overlay('text', 'Text'),
   overlay('highlight', 'Highlight'),
   overlay('shape', 'Shape'),
@@ -32,6 +36,10 @@ export const subTools: readonly SubTool[] = [
     contributes: (scene, baseline) => pageLayout(scene) !== pageLayout(baseline) },
 ];
 
+// Native requests carry text edits as their own stage section, beside the scene.
+export const sceneSections = ({ pages, textEdits }: PdfScene): SceneSections =>
+  textEdits?.length ? { scene: { pages }, textEdits } : { scene: { pages } };
+
 export const sceneContributors = (scene: PdfScene, baseline: PdfScene): SubTool[] =>
   subTools.filter((tool) => tool.contributes(scene, baseline));
 
@@ -42,5 +50,5 @@ export function planSceneExport({ paths, scene, baseline, outputLocation }: {
   paths: string[]; scene: PdfScene; baseline: PdfScene; outputLocation: OutputLocation;
 }): SceneExportPlan {
   const contributors = sceneContributors(scene, baseline);
-  return { request: { paths, scene, outputLocation }, contributors: contributors.map((tool) => tool.id), suffix: exportSuffix(contributors) };
+  return { request: { paths, ...sceneSections(scene), outputLocation }, contributors: contributors.map((tool) => tool.id), suffix: exportSuffix(contributors) };
 }
