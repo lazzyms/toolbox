@@ -230,7 +230,7 @@ async fn rotate_pdf(events: RunEvents, request: remaining::RotatePdfRequest) -> 
 }
 
 #[tauri::command]
-async fn repair_pdf(events: RunEvents, request: remaining::PdfToTextRequest) -> Vec<JobOutcome> {
+async fn repair_pdf(events: RunEvents, request: remaining::RepairPdfRequest) -> Vec<JobOutcome> {
     let request = Arc::new(request);
     BatchRunner::run(&events, "repair_pdf", request.paths.clone(), &request.output_location, &request, remaining::repair)
 }
@@ -305,19 +305,10 @@ async fn pdf_to_images(events: RunEvents, request: remaining::PdfToImagesRequest
 }
 
 #[tauri::command]
-async fn pdf_to_text(events: RunEvents, request: remaining::PdfToTextRequest) -> Vec<JobOutcome> {
-    if let Err(outcomes) = validate_command_inputs("pdf_to_text", &request.paths) { return outcomes; }
-    if let Err(outcomes) = validate_page_selection("pdf_to_text", &request.paths, request.pages.as_deref()) { return outcomes; }
+async fn extract_from_pdf(events: RunEvents, request: remaining::ExtractFromPdfRequest) -> Vec<JobOutcome> {
+    if let Err(outcomes) = validate_command_inputs("extract_from_pdf", &request.paths) { return outcomes; }
     let request = Arc::new(request);
-    BatchRunner::run(&events, "pdf_to_text", request.paths.clone(), &request.output_location, &request, remaining::to_text)
-}
-
-#[tauri::command]
-async fn extract_pdf_images(events: RunEvents, request: remaining::PdfToTextRequest) -> Vec<JobOutcome> {
-    if let Err(outcomes) = validate_command_inputs("extract_pdf_images", &request.paths) { return outcomes; }
-    if let Err(outcomes) = validate_page_selection("extract_pdf_images", &request.paths, request.pages.as_deref()) { return outcomes; }
-    let request = Arc::new(request);
-    BatchRunner::run(&events, "extract_pdf_images", request.paths.clone(), &request.output_location, &request, remaining::extract_images)
+    BatchRunner::run(&events, "extract_from_pdf", request.paths.clone(), &request.output_location, &request, remaining::extract)
 }
 
 #[tauri::command]
@@ -551,8 +542,7 @@ fn main() {
             ,merge_pdfs,
             split_pdf,
             pdf_to_images,
-            pdf_to_text,
-            extract_pdf_images,
+            extract_from_pdf,
             images_to_pdf,
             ocr_pdf,
             blur_faces,
@@ -626,7 +616,7 @@ mod command_tests {
     use crate::kit::images::tools::{CropRequest, GifCreateRequest, GifExtractRequest, ImageEdit, ImageEditExportRequest, ImageEditPlan, ImageEditPreviewRequest, IconSetRequest, MetadataRequest, ResizeRequest, RotateRequest, TiffRequest, ToneRequest, WatermarkRequest};
     use crate::kit::office::{test_minimal_ooxml_package, OfficeProcessor};
     use crate::kit::pdf::editor::{AddPdfPagesRequest, CropPdfRequest, EditPdfRequest, OrganizePdfRequest, PageScope, PdfEditMode, PdfEditOperation, PdfEditSessionPlan, PdfEditSessionRequest, PdfOverlay, PdfOverlayPosition, PdfRect, RedactPdfRequest, RotatePage, SignPdfRequest};
-    use crate::kit::pdf::remaining::{CompressPdfRequest, ImagesToPdfRequest, MergePdfRequest, PageOverlayRequest, PageSelectionRequest, PdfToImagesRequest, PdfToTextRequest, RotatePdfRequest, ComparePdfsRequest};
+    use crate::kit::pdf::remaining::{CompressPdfRequest, ImagesToPdfRequest, MergePdfRequest, PageOverlayRequest, PageSelectionRequest, PdfToImagesRequest, RepairPdfRequest, RotatePdfRequest, ComparePdfsRequest, ExtractFromPdfRequest, ExtractMode};
     use crate::kit::vision::VisionRequest;
     use base64::{engine::general_purpose::STANDARD, Engine};
     use image::Rgba;
@@ -689,7 +679,7 @@ mod command_tests {
         let outcome = &outcomes[0];
         assert!(outcome.error().is_none(), "{name} failed: {}", outcome.error().cloned().unwrap_or_default());
         assert!(!outcome.output_paths().is_empty(), "{name} must report an output");
-        for output in outcome.output_paths() { assert!(output.is_file(), "{name} reported missing output {}", output.display()); }
+        for output in outcome.output_paths() { assert!(output.is_file() || output.is_dir(), "{name} reported missing output {}", output.display()); }
         outcome.output_paths().to_vec()
     }
 
@@ -933,8 +923,9 @@ mod command_tests {
     }
 
     // Icon presets and single-file TIFF splitting predate declared suffixes and keep their
-    // shipped names, so these are the only outputs allowed a different suffix family.
-    const LEGACY_SUFFIX_FAMILIES: &[(&str, &str)] = &[("generate_icon_set", "-favicon"), ("process_tiff_pages", "-page")];
+    // shipped names. Extract from PDF declares its text suffix and names its images folder -images.
+    // These are the only outputs allowed a different suffix family.
+    const LEGACY_SUFFIX_FAMILIES: &[(&str, &str)] = &[("generate_icon_set", "-favicon"), ("process_tiff_pages", "-page"), ("extract_from_pdf", "-images")];
 
     fn assert_outputs_use_declared_suffixes(naming: &[(&'static str, PathBuf, Vec<PathBuf>)]) {
         let covered = naming.iter().map(|(command, _, _)| *command).collect::<std::collections::BTreeSet<_>>();
@@ -979,16 +970,22 @@ mod command_tests {
         assert!(error.message.contains(recorded_value), "{} should state {recorded_value}", error.message);
         assert!(limited.output_paths().is_empty());
         assert!(other.error().is_none(), "the other file must still succeed: {}", other.error().cloned().unwrap_or_default());
-        assert!(other.output_paths().iter().all(|output| output.is_file()) && !other.output_paths().is_empty());
+        assert!(other.output_paths().iter().all(|output| output.is_file() || output.is_dir()) && !other.output_paths().is_empty());
     }
 
-    fn pdf_to_text_pair(root: &PathBuf, offender: &PathBuf, name: &str) -> (PathBuf, Vec<JobOutcome>) {
+    fn extract_request(paths: Vec<PathBuf>, mode: ExtractMode, page_range: Option<&str>, output_location: OutputLocation) -> ExtractFromPdfRequest {
+        ExtractFromPdfRequest { paths, mode, page_range: page_range.map(str::to_string), output_location, preserve_layout: false, min_image_size: None }
+    }
+
+    fn pdftotext_available() -> bool {
+        crate::kit::resources::resolve_helper(&crate::kit::resources::PDF_TEXT_EXTRACTOR).is_ok()
+    }
+
+    fn extract_pair(root: &PathBuf, offender: &PathBuf, name: &str) -> (PathBuf, Vec<JobOutcome>) {
         let good = root.join("good.pdf");
-        make_pdf(&good, 1);
+        make_extract_pdf(&good, &[(false, true)]);
         let originals = [Original::of(offender), Original::of(&good)];
-        let outcomes = tauri::async_runtime::block_on(pdf_to_text(RunEvents::silent(), PdfToTextRequest {
-            paths: vec![offender.clone(), good.clone()], pages: None, output_location: location(root, name),
-        }));
+        let outcomes = tauri::async_runtime::block_on(extract_from_pdf(RunEvents::silent(), extract_request(vec![offender.clone(), good.clone()], ExtractMode::Images, None, location(root, name))));
         for original in &originals { original.assert_untouched(); }
         (good, outcomes)
     }
@@ -999,7 +996,7 @@ mod command_tests {
         let offender = root.join("oversized.pdf");
         std::fs::write(&offender, b"%PDF-1.7\n").unwrap();
         std::fs::OpenOptions::new().write(true).open(&offender).unwrap().set_len(1_000_000_001).unwrap();
-        let (_, outcomes) = pdf_to_text_pair(&root, &offender, "out");
+        let (_, outcomes) = extract_pair(&root, &offender, "out");
         assert_only_offender_limited(&outcomes, &offender, LimitKind::FileSize, "1 GB");
         let _ = std::fs::remove_dir_all(root);
     }
@@ -1009,7 +1006,7 @@ mod command_tests {
         let root = sandbox("limit-pages");
         let offender = root.join("long.pdf");
         make_pdf(&offender, 5_001);
-        let (_, outcomes) = pdf_to_text_pair(&root, &offender, "out");
+        let (_, outcomes) = extract_pair(&root, &offender, "out");
         assert_only_offender_limited(&outcomes, &offender, LimitKind::PageCount, "5,000");
         let _ = std::fs::remove_dir_all(root);
     }
@@ -1019,7 +1016,7 @@ mod command_tests {
         let root = sandbox("limit-pdf-expansion");
         let offender = root.join("bomb.pdf");
         std::fs::write(&offender, crate::kit::common::limits::fixtures::pdf_with_stream(&crate::kit::common::limits::fixtures::zlib_of_zeros(500_000_001))).unwrap();
-        let (_, outcomes) = pdf_to_text_pair(&root, &offender, "out");
+        let (_, outcomes) = extract_pair(&root, &offender, "out");
         assert_only_offender_limited(&outcomes, &offender, LimitKind::Decompression, "500 MB");
         let _ = std::fs::remove_dir_all(root);
     }
@@ -1046,17 +1043,17 @@ mod command_tests {
         let root = sandbox("limit-time");
         let slow = root.join("slow.pdf");
         let good = root.join("good.pdf");
-        make_pdf(&slow, 1);
-        make_pdf(&good, 1);
+        make_extract_pdf(&slow, &[(false, true)]);
+        make_extract_pdf(&good, &[(false, true)]);
         let originals = [std::fs::read(&slow).unwrap(), std::fs::read(&good).unwrap()];
-        let request = Arc::new(PdfToTextRequest { paths: vec![slow.clone(), good.clone()], pages: None, output_location: location(&root, "out") });
+        let request = Arc::new(extract_request(vec![slow.clone(), good.clone()], ExtractMode::Images, None, location(&root, "out")));
         let released = Arc::new(AtomicBool::new(false));
-        let limits = crate::kit::common::limits::ToolLimits { max_duration: std::time::Duration::from_secs(1), ..crate::kit::common::limits::recorded("pdf_to_text").unwrap() };
+        let limits = crate::kit::common::limits::ToolLimits { max_duration: std::time::Duration::from_secs(1), ..crate::kit::common::limits::recorded("extract_from_pdf").unwrap() };
         let job_released = Arc::clone(&released);
         let job_slow = slow.clone();
-        let outcomes = BatchRunner::run_with_limits(&RunEvents::silent(), "pdf_to_text", request.paths.clone(), &request.output_location, Some(limits), &request, move |request, path| {
+        let outcomes = BatchRunner::run_with_limits(&RunEvents::silent(), "extract_from_pdf", request.paths.clone(), &request.output_location, Some(limits), &request, move |request, path| {
             while path == job_slow && !job_released.load(Ordering::SeqCst) { std::thread::sleep(std::time::Duration::from_millis(10)); }
-            remaining::to_text(request, path)
+            remaining::extract(request, path)
         });
         released.store(true, Ordering::SeqCst);
         assert_eq!([std::fs::read(&slow).unwrap(), std::fs::read(&good).unwrap()], originals);
@@ -1158,9 +1155,11 @@ mod command_tests {
         let selected_image_outputs = assert_success("pdf selected pages to images", pdf_to_images(RunEvents::silent(), PdfToImagesRequest { paths: vec![pdf.clone()], dpi: 72, format: "png".into(), page_range: None, pages: Some(vec![1]), output_location: location(&root, "pdf selected pages to images") }));
         assert_eq!(selected_image_outputs.len(), 1, "selected PDF page rendering must produce only the selected page");
         outputs.extend(named(&mut naming, "pdf_to_images", pdf.clone(), selected_image_outputs));
-        outputs.extend(named(&mut naming, "pdf_to_text", pdf.clone(), assert_success("pdf to text", pdf_to_text(RunEvents::silent(), PdfToTextRequest { paths: vec![pdf.clone()], pages: None, output_location: location(&root, "pdf to text") }))));
+        if pdftotext_available() {
+            outputs.extend(named(&mut naming, "extract_from_pdf", pdf.clone(), assert_success("extract text from pdf", extract_from_pdf(RunEvents::silent(), extract_request(vec![pdf.clone()], ExtractMode::Text, None, location(&root, "extract text"))))));
+        }
         outputs.extend(named(&mut naming, "split_pdf", pdf.clone(), assert_success("split", split_pdf(RunEvents::silent(), PageSelectionRequest { paths: vec![pdf.clone()], pages: vec![], page_ranges: None, split_mode: Some("pages".into()), chunk_size: None, output_location: location(&root, "split") }))));
-        outputs.extend(named(&mut naming, "extract_pdf_images", image_pdf.clone(), assert_success("extract pdf images", extract_pdf_images(RunEvents::silent(), PdfToTextRequest { paths: vec![image_pdf.clone()], pages: None, output_location: location(&root, "extract pdf images") }))));
+        outputs.extend(named(&mut naming, "extract_from_pdf", image_pdf.clone(), assert_success("extract images from pdf", extract_from_pdf(RunEvents::silent(), extract_request(vec![image_pdf.clone()], ExtractMode::Images, None, location(&root, "extract images"))))));
         outputs.extend(named(&mut naming, "sign_pdf", pdf.clone(), assert_success("sign", sign_pdf(RunEvents::silent(), SignPdfRequest { paths: vec![pdf.clone()], page: 0, text: "Signed".into(), signature_path: None, rectangle: PdfRect { x: 40.0, y: 40.0, width: 180.0, height: 60.0 }, scope: PageScope::All, output_location: location(&root, "sign") }))));
         outputs.extend(named(&mut naming, "ocr_pdf", pdf.clone(), assert_ocr_adapter("ocr", ocr_pdf(RunEvents::silent(), VisionRequest { paths: vec![pdf.clone()], pages: None, output_location: location(&root, "ocr") }))));
         outputs.extend(named(&mut naming, "remove_pdf_pages", pdf.clone(), assert_success("remove pages", remove_pdf_pages(RunEvents::silent(), PageSelectionRequest { paths: vec![pdf.clone()], pages: vec![0], page_ranges: None, split_mode: None, chunk_size: None, output_location: location(&root, "remove pages") }))));
@@ -1181,7 +1180,7 @@ mod command_tests {
         outputs.extend(named(&mut naming, "add_pdf_pages", pdf.clone(), added));
         outputs.extend(named(&mut naming, "compress_pdf", pdf.clone(), assert_success("compress pdf", compress_pdf(RunEvents::silent(), serde_json::from_value::<CompressPdfRequest>(serde_json::json!({ "paths": [pdf.clone()], "quality": 80, "outputLocation": location(&root, "compress pdf") })).expect("Compress Files view payload for compress_pdf")))));
         outputs.extend(named(&mut naming, "rotate_pdf", pdf.clone(), assert_success("rotate pdf", rotate_pdf(RunEvents::silent(), RotatePdfRequest { paths: vec![pdf.clone()], degrees: 90, pages: Some(vec![1]), output_location: location(&root, "rotate pdf") }))));
-        outputs.extend(named(&mut naming, "repair_pdf", pdf.clone(), assert_success("repair pdf", repair_pdf(RunEvents::silent(), PdfToTextRequest { pages: None, paths: vec![pdf.clone()], output_location: location(&root, "repair pdf") }))));
+        outputs.extend(named(&mut naming, "repair_pdf", pdf.clone(), assert_success("repair pdf", repair_pdf(RunEvents::silent(), RepairPdfRequest { paths: vec![pdf.clone()], output_location: location(&root, "repair pdf") }))));
         outputs.extend(named(&mut naming, "redact_pdf", pdf.clone(), assert_success("redact pdf", redact_pdf(RunEvents::silent(), RedactPdfRequest { paths: vec![pdf.clone()], rectangle: PdfRect { x: 40.0, y: 650.0, width: 220.0, height: 60.0 }, scope: PageScope::All, output_location: location(&root, "redact pdf") }))));
         outputs.extend(named(&mut naming, "compare_pdfs", pdf.clone(), assert_aggregate_success("compare pdfs", &[pdf.clone(), pdf_two.clone()], run_compare_pdfs(&ComparePdfsRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: location(&root, "compare pdfs"), output_path: None }))));
         outputs.extend(named(&mut naming, "convert_images", image.clone(), assert_success("convert", convert_images(RunEvents::silent(), ConvertImagesRequest { paths: vec![image.clone()], format: "jpg".into(), output_location: location(&root, "convert") }))));
@@ -2355,10 +2354,13 @@ mod command_tests {
         let pdf = root.join("document.pdf");
         make_pdf(&pdf, 2);
 
-        let outcomes = tauri::async_runtime::block_on(pdf_to_text(RunEvents::silent(), PdfToTextRequest {
+        let outcomes = tauri::async_runtime::block_on(pdf_to_images(RunEvents::silent(), PdfToImagesRequest {
             paths: vec![pdf.clone()],
+            dpi: 72,
+            format: "png".into(),
+            page_range: None,
             pages: Some(Vec::new()),
-            output_location: location(&root, "text"),
+            output_location: location(&root, "images"),
         }));
 
         assert_eq!(outcomes.len(), 1);
@@ -2378,11 +2380,7 @@ mod command_tests {
         make_pdf(&second_pdf, 2);
         write_png(&image, 8, 4);
 
-        let wrong_format = tauri::async_runtime::block_on(pdf_to_text(RunEvents::silent(), PdfToTextRequest {
-            paths: vec![image.clone()],
-            pages: Some(vec![0]),
-            output_location: location(&root, "wrong-format"),
-        }));
+        let wrong_format = tauri::async_runtime::block_on(extract_from_pdf(RunEvents::silent(), extract_request(vec![image.clone()], ExtractMode::Text, Some("1"), location(&root, "wrong-format"))));
         assert_eq!(wrong_format.len(), 1);
         assert!(wrong_format[0].output_paths().is_empty());
         assert!(wrong_format[0].error().is_some_and(|error| error.message.contains("Accepted extensions")));
@@ -2398,17 +2396,147 @@ mod command_tests {
         assert_eq!(wrong_cardinality.len(), 2);
         assert!(wrong_cardinality.iter().all(|outcome| outcome.output_paths().is_empty() && outcome.error().is_some()));
 
-        let selected = tauri::async_runtime::block_on(pdf_to_text(RunEvents::silent(), PdfToTextRequest {
-            paths: vec![pdf.clone()],
-            pages: Some(vec![1]),
-            output_location: location(&root, "selected-text"),
-        }));
-        let output = selected[0].output_paths().first().expect("selected text should produce an output");
-        let text = std::fs::read_to_string(output).unwrap();
-        assert!(text.contains("Toolbox page 2"), "selected text: {text}");
-        assert!(!text.contains("Toolbox page 1"), "unselected text: {text}");
+        if pdftotext_available() {
+            let selected = tauri::async_runtime::block_on(extract_from_pdf(RunEvents::silent(), extract_request(vec![pdf.clone()], ExtractMode::Text, Some("2"), location(&root, "selected-text"))));
+            let output = selected[0].output_paths().first().expect("selected text should produce an output");
+            let text = std::fs::read_to_string(output).unwrap();
+            assert!(text.contains("Toolbox page 2"), "selected text: {text}");
+            assert!(!text.contains("Toolbox page 1"), "unselected text: {text}");
+            cleanup(&selected.iter().flat_map(|outcome| outcome.output_paths().to_vec()).collect::<Vec<_>>());
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
 
-        cleanup(&selected.iter().flat_map(|outcome| outcome.output_paths().to_vec()).collect::<Vec<_>>());
+    /// Builds a PDF whose pages each may carry a line of selectable text and a 4x3 embedded JPEG.
+    fn make_extract_pdf(path: &PathBuf, pages: &[(bool, bool)]) {
+        use lopdf::{dictionary, Dictionary, Document, Object, Stream};
+        let mut jpeg = std::io::Cursor::new(Vec::new());
+        image::codecs::jpeg::JpegEncoder::new(&mut jpeg).encode_image(&image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(4, 3, image::Rgb([200, 30, 30])))).unwrap();
+        let jpeg = jpeg.into_inner();
+        let mut document = Document::with_version("1.7");
+        let pages_id = document.new_object_id();
+        let font_id = document.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
+        let mut kids = Vec::new();
+        for (number, (text, picture)) in pages.iter().enumerate() {
+            let mut content = String::new();
+            let mut xobjects = Dictionary::new();
+            if *text { content.push_str(&format!("BT /F1 24 Tf 72 720 Td (Toolbox page {}) Tj ET\n", number + 1)); }
+            if *picture {
+                let image_id = document.add_object(Stream::new(dictionary! { "Type" => "XObject", "Subtype" => "Image", "Width" => 4, "Height" => 3, "ColorSpace" => "DeviceRGB", "BitsPerComponent" => 8, "Filter" => "DCTDecode" }, jpeg.clone()));
+                xobjects.set("Im0", image_id);
+                content.push_str("q 40 0 0 30 72 600 cm /Im0 Do Q\n");
+            }
+            let content_id = document.add_object(Stream::new(dictionary! {}, content.into_bytes()));
+            let page_id = document.add_object(dictionary! {
+                "Type" => "Page", "Parent" => pages_id,
+                "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+                "Resources" => dictionary! { "Font" => dictionary! { "F1" => font_id }, "XObject" => xobjects }, "Contents" => content_id,
+            });
+            kids.push(Object::Reference(page_id));
+        }
+        document.objects.insert(pages_id, dictionary! { "Type" => "Pages", "Kids" => kids, "Count" => pages.len() as i64 }.into());
+        let catalog_id = document.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+        document.trailer.set("Root", catalog_id);
+        document.save(path).unwrap();
+    }
+
+    fn files_in(folder: &std::path::Path) -> Vec<String> {
+        let mut names = std::fs::read_dir(folder).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect::<Vec<_>>();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn extract_from_pdf_runs_each_mode_with_one_outcome_per_pdf() {
+        if !pdftotext_available() { return; }
+        use crate::kit::contracts::{OutcomeState, SkipCode};
+        use crate::kit::pdf::remaining::{BOTH_WITHOUT_IMAGES, BOTH_WITHOUT_TEXT, NOTHING_TO_EXTRACT, NO_EMBEDDED_IMAGES, NO_SELECTABLE_TEXT};
+        let root = sandbox("extract-from-pdf");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let mixed = root.join("mixed.pdf");
+        let scanned = root.join("scanned.pdf");
+        let plain = root.join("plain.pdf");
+        let blank = root.join("blank.pdf");
+        make_extract_pdf(&mixed, &[(true, true), (true, false)]);
+        make_extract_pdf(&scanned, &[(false, true)]);
+        make_extract_pdf(&plain, &[(true, false), (true, false)]);
+        make_extract_pdf(&blank, &[(false, false)]);
+        let originals = [&mixed, &scanned, &plain, &blank].map(Original::of);
+        let run = |paths: Vec<PathBuf>, mode, range: Option<&str>, folder: &str| {
+            let request = extract_request(paths, mode, range, location(&root, folder));
+            tauri::async_runtime::block_on(extract_from_pdf(RunEvents::silent(), request))
+        };
+        let read = |path: &PathBuf| std::fs::read_to_string(path).unwrap();
+
+        // Text: one text file per PDF in reading order; a PDF without a text layer fails alone.
+        let text = run(vec![mixed.clone(), plain.clone(), scanned.clone()], ExtractMode::Text, None, "text");
+        assert_eq!(text.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), vec![mixed.clone(), plain.clone(), scanned.clone()]);
+        for outcome in &text[..2] {
+            assert_eq!(outcome.output_paths().len(), 1, "{outcome:?}");
+            let body = read(&outcome.output_paths()[0]);
+            assert!(body.contains("Toolbox page 1") && body.contains("Toolbox page 2"), "{body}");
+        }
+        assert_eq!(text[2].error().map(|error| error.message.as_str()), Some(NO_SELECTABLE_TEXT));
+        assert!(text[2].output_paths().is_empty());
+        assert_eq!(files_in(&root.join("text")), vec!["mixed-text.txt", "plain-text.txt"]);
+
+        // Images: the embedded JPEGs are copied byte for byte; a PDF without images is skipped alone.
+        let images = run(vec![mixed.clone(), scanned.clone(), plain.clone()], ExtractMode::Images, None, "images");
+        assert_eq!(images.len(), 3);
+        assert_eq!(images[0].output_paths(), [root.join("images").join("mixed-images")]);
+        assert_eq!(images[0].detail, "Saved 1 image.");
+        assert_eq!(images[1].output_paths(), [root.join("images").join("scanned-images")]);
+        assert_eq!(std::fs::read(images[0].output_paths()[0].join("page-1-image-1.jpg")).unwrap()[..2], [0xFF, 0xD8]);
+        assert!(matches!(&images[2].state, OutcomeState::Skipped { reason } if reason.code == SkipCode::NoEffectiveChange && reason.message == NO_EMBEDDED_IMAGES), "{:?}", images[2]);
+        assert_eq!(files_in(&root.join("images")), vec!["mixed-images", "scanned-images"]);
+        assert_eq!(files_in(&root.join("images").join("mixed-images")), vec!["page-1-image-1.jpg"]);
+
+        // Both: one outcome per PDF holds the text file first, then the images, with a note when a part is missing.
+        let both = run(vec![mixed.clone(), scanned.clone(), plain.clone(), blank.clone()], ExtractMode::Both, None, "both");
+        assert_eq!(both.len(), 4);
+        let folder = root.join("both");
+        assert!(matches!(both[0].state, OutcomeState::Succeeded { .. }));
+        assert_eq!(both[0].output_paths(), [folder.join("mixed-text.txt"), folder.join("mixed-images")]);
+        assert_eq!(both[0].detail, "Saved the text and 1 image.");
+        assert!(matches!(both[1].state, OutcomeState::Succeeded { .. }), "an image-only PDF succeeds in Both: {:?}", both[1]);
+        assert_eq!(both[1].output_paths(), [folder.join("scanned-images")]);
+        assert_eq!(both[1].detail, BOTH_WITHOUT_TEXT);
+        assert!(both[1].detail.contains("No selectable text"));
+        assert!(matches!(both[2].state, OutcomeState::Succeeded { .. }));
+        assert_eq!(both[2].output_paths(), [folder.join("plain-text.txt")]);
+        assert_eq!(both[2].detail, BOTH_WITHOUT_IMAGES);
+        match &both[3].state {
+            OutcomeState::Skipped { reason } => assert_eq!((reason.code, reason.message.as_str()), (SkipCode::NoEffectiveChange, NOTHING_TO_EXTRACT)),
+            state => panic!("a PDF with neither part is skipped, got {state:?}"),
+        }
+        assert_eq!(files_in(&folder), vec!["mixed-images", "mixed-text.txt", "plain-text.txt", "scanned-images"]);
+
+        // A second run never replaces the first run's outputs.
+        let again = run(vec![mixed.clone()], ExtractMode::Both, None, "both");
+        assert_eq!(again[0].output_paths(), [folder.join("mixed-text-1.txt"), folder.join("mixed-images-1")]);
+        assert_eq!(files_in(&folder.join("mixed-images")), vec!["page-1-image-1.jpg"]);
+        assert_eq!(files_in(&folder.join("mixed-images-1")), vec!["page-1-image-1.jpg"]);
+        assert_eq!(read(&folder.join("mixed-text.txt")), read(&folder.join("mixed-text-1.txt")));
+
+        // One range applies to every PDF; "2-" runs to the end of the document.
+        let ranged = run(vec![mixed.clone(), plain.clone()], ExtractMode::Both, Some("2-"), "ranged");
+        assert_eq!(ranged[0].output_paths(), [root.join("ranged").join("mixed-text.txt")]);
+        assert_eq!(ranged[0].detail, BOTH_WITHOUT_IMAGES);
+        let body = read(&ranged[0].output_paths()[0]);
+        assert!(body.contains("Toolbox page 2") && !body.contains("Toolbox page 1"), "{body}");
+        assert_eq!(ranged[1].output_paths().len(), 1);
+        let backwards = run(vec![mixed.clone()], ExtractMode::Text, Some("2-1"), "backwards");
+        assert_eq!(backwards[0].error().map(|error| error.message.as_str()), Some("2-1 runs backwards. Write it as 1-2."));
+        assert!(files_in(&root.join("backwards")).is_empty());
+
+        // Skip small images leaves out images under the given size.
+        let mut small = extract_request(vec![mixed.clone()], ExtractMode::Both, None, location(&root, "small"));
+        small.min_image_size = Some(5);
+        let small = tauri::async_runtime::block_on(extract_from_pdf(RunEvents::silent(), small));
+        assert_eq!(small[0].output_paths(), [root.join("small").join("mixed-text.txt")]);
+
+        for original in &originals { original.assert_untouched(); }
         let _ = std::fs::remove_dir_all(root);
     }
 
