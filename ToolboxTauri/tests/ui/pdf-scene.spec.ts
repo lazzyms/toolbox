@@ -35,6 +35,10 @@ test.beforeEach(async ({ page }) => {
           if (w.previewDelay) await new Promise(resolve => setTimeout(resolve, w.previewDelay));
           return args.request.pageIndices.map((pageIndex: number) => ({ pageIndex, preview: { dataUrl: svg, width: 612, height: 792 } }));
         }
+        if (command === 'inspect_pdf_watermark_image') {
+          if (args.request.path.includes('huge')) throw 'This picture is larger than 20 megapixels, the limit for a watermark. Use a smaller picture.';
+          return { width: 400, height: 200 };
+        }
         if (command === 'export_pdf_scene') return [{ inputPath: '/local/scene-fixture.pdf', outputPaths: ['/local/scene-fixture-edited-1.pdf'], state: 'succeeded', detail: 'PDF scene exported', failure: null, reason: null, warnings: [] }];
         return null;
       },
@@ -288,12 +292,82 @@ test('inspector property edits stay in scene history and undo and redo exactly',
   expect(result.pages[0].objects[0].shape).toBe('triangle');
 });
 
-test('page numbering adds editable number objects to every page', async ({ page }) => {
+const pageNumberHit = (page: Page) => page.getByRole('button', { name: /^Page number / });
+async function addPageNumbers(page: Page) {
+  await page.getByRole('toolbar', { name: 'PDF editor tools' }).getByRole('button', { name: 'Page numbers', exact: true }).click();
+  await page.getByRole('button', { name: 'Add page numbers', exact: true }).click();
+  await expect(page.getByText('Page numbers added to all 3 pages.')).toBeVisible();
+}
+
+test('page numbers are one range-applied object, and every option is sent exactly to preview and export', async ({ page }) => {
   await openEditor(page);
-  await page.getByRole('button', { name: 'Page numbers', exact: true }).click();
-  const result = await exported(page);
-  expect(result.pages.map((item: any) => item.objects.map((object: any) => object.text))).toEqual([['1'], ['2'], ['3']]);
-  expect(result.pages.every((item: any) => item.objects[0].kind === 'text')).toBe(true);
+  await addPageNumbers(page);
+  const sent = async () => (await previewScene(page)).pages[0].objects[0];
+  const base = {
+    kind: 'pageNumbers', text: '', fontSize: 9, opacity: 1, fontFamily: 'Noto Sans', layer: 'front', pageRange: 'all',
+    pageNumbers: { format: 'page-of-total', start: 1, position: 'bottom-center', margin: 36 },
+  };
+  await expect.poll(sent).toMatchObject(base);
+  await expect(pageNumberHit(page)).toHaveAccessibleName('Page number Page 1 of 3');
+  const option = async (patch: object, act: () => Promise<void>) => {
+    await act();
+    Object.assign(base, patch);
+    await expect.poll(sent).toMatchObject(base);
+  };
+  for (const [format, label, text] of [['page', 'Page 1', 'Page 1'], ['number', '1', '1'], ['number-of-total', '1 / 3', '1 / 3'], ['dashes', '- 1 -', '- 1 -'], ['page-of-total', 'Page 1 of 3', 'Page 1 of 3']]) {
+    await option({ pageNumbers: { ...base.pageNumbers, format } }, () => page.getByRole('combobox', { name: 'Format' }).selectOption({ label }));
+    await expect(pageNumberHit(page)).toHaveAccessibleName(`Page number ${text}`);
+  }
+  for (const [position, label] of [['top-left', 'Top left'], ['top-center', 'Top centre'], ['top-right', 'Top right'], ['middle-left', 'Middle left'], ['middle-center', 'Centre'], ['middle-right', 'Middle right'], ['bottom-left', 'Bottom left'], ['bottom-right', 'Bottom right'], ['bottom-center', 'Bottom centre']]) {
+    await option({ pageNumbers: { ...base.pageNumbers, position } }, () => page.getByRole('radio', { name: label, exact: true }).click());
+    await expect(page.getByRole('radio', { name: label, exact: true })).toHaveAttribute('aria-checked', 'true');
+  }
+  await option({ pageNumbers: { ...base.pageNumbers, start: 7 } }, () => page.getByRole('spinbutton', { name: 'Start at' }).fill('7'));
+  await expect(pageNumberHit(page)).toHaveAccessibleName('Page number Page 7 of 9');
+  await option({ pageNumbers: { ...base.pageNumbers, margin: 54 } }, () => page.getByRole('combobox', { name: 'Distance from edge' }).selectOption('54'));
+  await option({ fontSize: 72 }, () => page.getByRole('combobox', { name: 'Size' }).selectOption('72'));
+  await option({ fontSize: 8 }, () => page.getByRole('combobox', { name: 'Size' }).selectOption('8'));
+  await option({ fontFamily: 'Noto Serif' }, () => page.getByRole('combobox', { name: 'Font' }).selectOption('Noto Serif'));
+  await option({ pageRange: '2-' }, () => page.getByRole('radio', { name: 'Skip the first page' }).click());
+  await expect(page.getByText('Page numbers added to 2 of 3 pages.')).toBeVisible();
+  await expect(pageNumberHit(page)).toHaveCount(0);
+  await page.getByRole('radio', { name: 'These pages' }).click();
+  const range = page.getByRole('textbox', { name: 'Pages to include' });
+  await range.fill('3-9');
+  await range.press('Enter');
+  await expect.poll(sent).toMatchObject({ ...base, pageRange: '3-9' });
+  await expect(page.getByText('Page numbers added to 1 of 3 pages.')).toBeVisible();
+  const scene = await exported(page);
+  expect(scene.pages[0].objects).toHaveLength(1);
+  expect(scene.pages[0].objects[0]).toMatchObject({ ...base, pageRange: '3-9' });
+  expect(scene.pages[0].objects[0].pageNumbers).toEqual({ format: 'page-of-total', start: 7, position: 'bottom-center', margin: 54 });
+  expect(scene.pages.slice(1).map((item: any) => item.objects)).toEqual([[], []]);
+  await page.getByRole('button', { name: 'Page 3', exact: true }).click();
+  await expect(pageNumberHit(page)).toHaveAccessibleName('Page number Page 9 of 9');
+});
+
+test('page numbers follow the page order after a reorder, in the preview and the export', async ({ page }) => {
+  await openEditor(page);
+  await addPageNumbers(page);
+  await page.getByRole('radio', { name: 'Skip the first page' }).click();
+  await expect(pageNumberHit(page)).toHaveCount(0);
+  await page.evaluate(() => { (window as any).previewDelay = 60_000; });
+  await page.getByRole('button', { name: 'Move page later' }).click();
+  await expect(page.getByRole('button', { name: 'Page 2', exact: true })).toHaveAttribute('aria-current', 'page');
+  // The draft shows the resolved number before the rendered preview arrives.
+  await expect(pageNumberHit(page)).toHaveAccessibleName('Page number Page 2 of 3');
+  await expect(page.locator('.scene-canvas text', { hasText: 'Page 2 of 3' })).toHaveCount(1);
+  await page.getByRole('button', { name: 'Page 1', exact: true }).click();
+  await expect(pageNumberHit(page)).toHaveCount(0);
+  await page.getByRole('button', { name: 'Page 3', exact: true }).click();
+  await expect(pageNumberHit(page)).toHaveAccessibleName('Page number Page 3 of 3');
+  await expect(page.getByRole('button', { name: 'Page 1', exact: true })).not.toContainText('marks');
+  await expect(page.getByRole('button', { name: 'Page 2', exact: true })).toContainText('1 marks');
+  await page.evaluate(() => { (window as any).previewDelay = 0; });
+  const scene = await exported(page);
+  expect(scene.pages.map((item: any) => item.sourceIndex)).toEqual([1, 0, 2]);
+  expect(scene.pages.map((item: any) => item.objects.map((object: any) => object.kind))).toEqual([[], ['pageNumbers'], []]);
+  expect(scene.pages[1].objects[0]).toMatchObject({ pageRange: '2-', pageNumbers: { format: 'page-of-total', start: 1 } });
 });
 
 test('PDF scene history retains exactly the latest 100 edits', async ({ page }) => {
@@ -349,24 +423,24 @@ test('new text and watermark markup use native colors so Export PDF enables', as
   await openEditor(page);
   await draw(page, 'Text', .3);
   await page.getByRole('button', { name: 'Watermark', exact: true }).click();
-  await page.getByRole('button', { name: 'Add fixed watermark', exact: true }).click();
+  await page.getByRole('button', { name: 'Add watermark', exact: true }).click();
   await expect(page.locator('.scene-object-hit')).toHaveCount(2);
   await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeEnabled();
   await expect(page.getByText(/Preview could not be verified/)).toHaveCount(0);
   const result = await exported(page);
-  expect(result.pages[0].objects.map((o: any) => [o.kind, o.color])).toEqual([['text', '#1b1b1b'], ['watermark', '#1b1b1b']]);
+  expect(result.pages[0].objects.map((o: any) => [o.kind, o.color, o.watermark?.color])).toEqual([['text', '#1b1b1b', undefined], ['watermark', '#c62828', '#c62828']]);
 });
 
 test('scene composes every mark kind, moves and resizes, then exports once', async ({ page }) => {
   await openEditor(page);
   for (const [i, name] of ['Text', 'Highlight', 'Shape', 'Signature'].entries()) await draw(page, name, .15 + i * .14);
   await page.getByRole('button', { name: 'Watermark', exact: true }).click();
-  await page.getByRole('button', { name: 'Add fixed watermark', exact: true }).click();
+  await page.getByRole('button', { name: 'Add watermark', exact: true }).click();
   await expect(page.locator('.scene-object-hit')).toHaveCount(5);
   await page.getByRole('button', { name: 'Select', exact: true }).click();
   const text = page.getByRole('button', { name: 'text object 1', exact: true });
   await text.focus();
-  await page.keyboard.press('Enter');
+  await page.keyboard.press('Space');
   await page.keyboard.press('Shift+ArrowRight');
   await page.getByRole('button', { name: 'Resize text se', exact: true }).focus();
   await page.keyboard.press('Shift+ArrowRight');
@@ -547,7 +621,7 @@ test('Escape discards inline text edits without changing the committed scene', a
   await page.getByRole('button', { name: 'Select', exact: true }).click();
   await page.getByRole('button', { name: 'text object 1', exact: true }).dblclick();
 
-  const editor = page.getByRole('textbox', { name: 'Edit text object' });
+  const editor = page.getByRole('textbox', { name: 'Text box text' });
   const originalText = await editor.inputValue();
   await editor.fill('Discard this draft');
   await editor.press('Escape');
@@ -564,4 +638,326 @@ test('one signature drag stays in one undo step', async ({ page }) => {
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await expect(page.locator('.scene-object-hit')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Redo', exact: true })).toBeEnabled();
+});
+
+test('scene export sends only the scene sections and the invoke boundary accepts the staged request shape', async ({ page }) => {
+  await openEditor(page);
+  await draw(page, 'Text', .2);
+  await exported(page);
+  const request = await page.evaluate(() => (window as any).calls.filter((c: any) => c.command === 'export_pdf_scene').at(-1).args.request);
+  expect(Object.keys(request).sort()).toEqual(['outputLocation', 'paths', 'scene']);
+
+  const staged = { ...request, formValues: [], textEdits: [], flatten: false, redactions: [] };
+  const results = await page.evaluate((staged) => (window as any).__TAURI_INTERNALS__.invoke('export_pdf_scene', { request: staged }), staged);
+  expect(results[0].state).toBe('succeeded');
+  const accepted = await page.evaluate(() => (window as any).calls.filter((c: any) => c.command === 'export_pdf_scene').at(-1).args.request);
+  expect(accepted).toEqual(staged);
+});
+
+const textFields = (object: any) => ({ fontFamily: object.fontFamily, fontSize: object.fontSize, bold: object.bold, italic: object.italic, align: object.align,
+  color: object.color, opacity: object.opacity, pageRange: object.pageRange ?? null });
+
+test('text controls set the next box and the selected box exactly', async ({ page }) => {
+  await openEditor(page);
+  await page.getByRole('toolbar', { name: 'PDF editor tools' }).getByRole('button', { name: 'Text', exact: true }).click();
+  const inspector = page.getByRole('complementary', { name: 'PDF editor inspector' });
+  await expect(inspector.getByText('Click the page to add a text box. Double-click a box or press Enter to edit it.')).toBeVisible();
+  await inspector.getByRole('combobox', { name: 'Font' }).selectOption('Noto Sans Mono');
+  await inspector.getByRole('button', { name: 'Bold', exact: true }).click();
+  await inspector.getByRole('radio', { name: 'Align right' }).click();
+  await draw(page, 'Text', .3);
+  let result = await exported(page);
+  expect(textFields(result.pages[0].objects[0])).toEqual({ fontFamily: 'Noto Sans Mono', fontSize: 18, bold: true, italic: false, align: 'right', color: '#1b1b1b', opacity: 1, pageRange: null });
+
+  await page.getByRole('button', { name: 'Select', exact: true }).click();
+  await page.getByRole('button', { name: 'text object 1', exact: true }).click();
+  await inspector.getByRole('combobox', { name: 'Font' }).selectOption('Noto Serif');
+  await inspector.getByRole('spinbutton', { name: 'Size' }).fill('24');
+  await inspector.getByRole('button', { name: 'Bold', exact: true }).click();
+  await inspector.getByRole('button', { name: 'Italic', exact: true }).click();
+  await inspector.getByRole('radio', { name: 'Align centre' }).click();
+  await expect(inspector.getByRole('radio', { name: 'Align centre' })).toHaveAttribute('aria-checked', 'true');
+  await page.locator('input[type="color"][aria-label="Object color"]').fill('#aa3300');
+  await page.getByRole('slider', { name: 'Object opacity' }).press('Home');
+  result = await exported(page);
+  expect(textFields(result.pages[0].objects[0])).toEqual({ fontFamily: 'Noto Serif', fontSize: 24, bold: false, italic: true, align: 'center', color: '#aa3300', opacity: .05, pageRange: null });
+});
+
+test('a text box can be shown on a page range', async ({ page }) => {
+  await openEditor(page);
+  await draw(page, 'Text', .3);
+  await page.getByRole('button', { name: 'Select', exact: true }).click();
+  await page.getByRole('button', { name: 'text object 1', exact: true }).click();
+  const pages = page.getByRole('textbox', { name: 'Pages for this text box' });
+  await expect(page.getByRole('radio', { name: 'This page only' })).toBeChecked();
+  await expect(pages).toBeDisabled();
+  await page.getByRole('radio', { name: 'These pages' }).click();
+  await expect(pages).toHaveValue('1');
+  await pages.fill('1-2, 3-');
+  await pages.press('Enter');
+  let result = await exported(page);
+  expect(result.pages[0].objects[0].pageRange).toBe('1-2, 3-');
+  expect(result.pages.slice(1).map((item: any) => item.objects.length)).toEqual([0, 0]);
+  await page.getByRole('radio', { name: 'This page only' }).click();
+  result = await exported(page);
+  expect(result.pages[0].objects[0].pageRange).toBeNull();
+});
+
+test('double-click and Enter open the text box editor in place', async ({ page }) => {
+  await openEditor(page);
+  await draw(page, 'Text', .3);
+  await page.getByRole('button', { name: 'Select', exact: true }).click();
+  const box = page.getByRole('button', { name: 'text object 1', exact: true });
+  await box.dblclick();
+  const editor = page.getByRole('textbox', { name: 'Text box text' });
+  await expect(editor).toBeFocused();
+  await editor.fill('Привет\nΚαλημέρα');
+  await editor.press('Control+Enter');
+  await expect(editor).toHaveCount(0);
+  await box.focus();
+  await box.press('Enter');
+  await expect(editor).toBeFocused();
+  await expect(editor).toHaveValue('Привет\nΚαλημέρα');
+  await editor.fill('Hello, world');
+  await editor.press('Control+Enter');
+  const result = await exported(page);
+  expect(result.pages[0].objects[0].text).toBe('Hello, world');
+});
+
+test('unrenderable text names the characters and keeps Export disabled', async ({ page }) => {
+  await openEditor(page);
+  await draw(page, 'Text', .3);
+  await page.evaluate(() => {
+    (window as any).previewFailure = true;
+    (window as any).previewFailureMessage = 'Noto Sans can’t show these characters: “😀” (U+1F600), “आ” (U+0906). Remove them to export this text box.';
+  });
+  await page.getByRole('button', { name: 'Select', exact: true }).click();
+  await page.getByRole('button', { name: 'text object 1', exact: true }).dblclick();
+  await page.getByRole('textbox', { name: 'Text box text' }).fill('Hi 😀 आ');
+  await page.getByRole('textbox', { name: 'Text box text' }).press('Control+Enter');
+  await expect(page.getByRole('alert')).toHaveText('Preview could not be verified. Noto Sans can’t show these characters: “😀” (U+1F600), “आ” (U+0906). Remove them to export this text box. Export is disabled until the preview can be verified.');
+  await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeDisabled();
+});
+
+// Mirrors WatermarkOptions in src/contracts.ts, shared with Edit Image.
+const headerFooterPart = (page: Page, part: string) => page.locator(`.scene-canvas [data-header-footer-part="${part}"]`);
+const tokenField = (page: Page, name: string) => page.getByRole('textbox', { name, exact: true });
+async function addHeaderFooter(page: Page) {
+  await page.getByRole('toolbar', { name: 'PDF editor tools' }).getByRole('button', { name: 'Header and footer', exact: true }).click();
+  await page.getByRole('button', { name: 'Add header and footer', exact: true }).click();
+  await expect(page.getByText('Header and footer added to all 3 pages.')).toBeVisible();
+}
+const blankBand = { left: '', center: '', right: '' };
+
+test('header and footer text uses token tags, and every option is sent exactly to preview and export', async ({ page }) => {
+  await openEditor(page);
+  await page.evaluate(() => { (window as any).previewDelay = 60_000; });
+  await addHeaderFooter(page);
+  const sent = async () => (await previewScene(page)).pages[0].objects[0];
+  await expect.poll(sent).toMatchObject({
+    kind: 'headerFooter', text: '', fontSize: 8.5, color: '#555555', opacity: 1, fontFamily: 'Noto Sans', layer: 'front', pageRange: 'all',
+    headerFooter: { header: blankBand, footer: { ...blankBand, center: '{page} of {pages}' }, firstPage: null, even: null, fileName: 'scene-fixture.pdf', margin: 36 },
+  });
+  expect((await sent()).headerFooter.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  await expect(tokenField(page, 'Footer centre').locator('[data-token]')).toHaveText(['Page number', 'Page count']);
+  await expect(headerFooterPart(page, 'footer-center')).toHaveText('1 of 3');
+  await expect(page.getByRole('button', { name: 'Footer', exact: true })).toBeVisible();
+
+  await tokenField(page, 'Header left').click();
+  await page.keyboard.type('Acme ');
+  await page.getByRole('group', { name: 'Insert' }).getByRole('button', { name: 'File name' }).click();
+  await expect(tokenField(page, 'Header left').locator('[data-token]')).toHaveText(['File name']);
+  await expect(headerFooterPart(page, 'header-left')).toHaveText('Acme scene-fixture.pdf');
+  await tokenField(page, 'Header right').click();
+  await page.getByRole('group', { name: 'Insert' }).getByRole('button', { name: 'Date' }).click();
+  await page.locator('#scene-header-footer-date').fill('2026-10-13');
+  await expect(headerFooterPart(page, 'header-right')).toHaveText('13 October 2026');
+  await tokenField(page, 'Header right').click();
+  await page.keyboard.press('End');
+  await page.keyboard.press('Backspace');
+  await expect(tokenField(page, 'Header right').locator('[data-token]')).toHaveCount(0);
+  await expect(headerFooterPart(page, 'header-right')).toHaveCount(0);
+  await page.keyboard.type('Draft ');
+  await page.getByRole('group', { name: 'Insert' }).getByRole('button', { name: 'Page number' }).click();
+  await page.keyboard.press('Enter');
+  await expect(headerFooterPart(page, 'header-right')).toHaveText('Draft 1');
+
+  await page.getByRole('combobox', { name: 'Size' }).selectOption('10');
+  await page.getByRole('combobox', { name: 'Distance from edge' }).selectOption('54');
+  await page.getByRole('combobox', { name: 'Font' }).selectOption('Noto Serif');
+  await page.locator('#scene-header-footer-color').fill('#112233');
+  await page.getByRole('radio', { name: 'Skip the first page' }).click();
+  await expect(page.getByText('Header and footer added to 2 of 3 pages.')).toBeVisible();
+  await expect(headerFooterPart(page, 'footer-center')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Page 2', exact: true }).click();
+  await expect(headerFooterPart(page, 'footer-center')).toHaveText('2 of 3');
+  await expect(headerFooterPart(page, 'header-right')).toHaveText('Draft 2');
+  await page.evaluate(() => { (window as any).previewDelay = 0; });
+
+  const scene = await exported(page);
+  expect(scene.pages[0].objects).toHaveLength(1);
+  expect(scene.pages.slice(1).map((item: any) => item.objects)).toEqual([[], []]);
+  const object = scene.pages[0].objects[0];
+  expect(object).toMatchObject({ kind: 'headerFooter', fontSize: 10, color: '#112233', fontFamily: 'Noto Serif', pageRange: '2-' });
+  expect(object).not.toHaveProperty('headerFooterParts');
+  expect(object.headerFooter).toEqual({
+    header: { left: 'Acme {file}', center: '', right: 'Draft {page}' }, footer: { ...blankBand, center: '{page} of {pages}' },
+    firstPage: null, even: null, date: '2026-10-13', fileName: 'scene-fixture.pdf', margin: 54,
+  });
+});
+
+test('header and footer first-page and even-page text apply by final page, and overlaps with page text are flagged', async ({ page }) => {
+  await openEditor(page);
+  await addHeaderFooter(page);
+  await page.evaluate(() => { (window as any).previewDelay = 60_000; });
+  await page.getByRole('checkbox', { name: 'Different first page' }).click();
+  await expect(page.getByRole('radio', { name: 'First page', exact: true })).toHaveAttribute('aria-checked', 'true');
+  await tokenField(page, 'Footer left').click();
+  await page.keyboard.type('Cover');
+  await expect(headerFooterPart(page, 'footer-left')).toHaveText('Cover');
+  await page.getByRole('checkbox', { name: 'Different odd and even pages' }).click();
+  await expect(page.getByRole('radio', { name: 'Even pages', exact: true })).toHaveAttribute('aria-checked', 'true');
+  await expect(tokenField(page, 'Footer left')).toHaveText('');
+  await tokenField(page, 'Header right').click();
+  await page.keyboard.type('Even');
+  await page.getByRole('radio', { name: 'Odd pages', exact: true }).click();
+  await tokenField(page, 'Header left').click();
+  await page.keyboard.type('Company');
+  await expect(headerFooterPart(page, 'header-left')).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Page 2', exact: true }).click();
+  await expect(headerFooterPart(page, 'header-right')).toHaveText('Even');
+  await expect(headerFooterPart(page, 'header-left')).toHaveCount(0);
+  await expect(headerFooterPart(page, 'footer-left')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Page 3', exact: true }).click();
+  await expect(headerFooterPart(page, 'header-left')).toHaveText('Company');
+  await expect(headerFooterPart(page, 'header-right')).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Header', exact: true }).click();
+  const overlap = page.getByRole('alert').filter({ hasText: 'overlaps existing text' });
+  await expect(overlap).toHaveCount(0);
+  await page.getByRole('combobox', { name: 'Distance from edge' }).selectOption('54');
+  await expect(overlap).toBeVisible();
+  await page.getByRole('combobox', { name: 'Distance from edge' }).selectOption('36');
+  await expect(overlap).toHaveCount(0);
+  await page.evaluate(() => { (window as any).previewDelay = 0; });
+
+  let scene = await exported(page);
+  expect(scene.pages[0].objects[0].headerFooter).toMatchObject({
+    header: { ...blankBand, left: 'Company' }, footer: { ...blankBand, center: '{page} of {pages}' },
+    firstPage: { header: blankBand, footer: { left: 'Cover', center: '{page} of {pages}', right: '' } },
+    even: { header: { ...blankBand, right: 'Even' }, footer: { ...blankBand, center: '{page} of {pages}' } },
+  });
+  await page.getByRole('checkbox', { name: 'Different first page' }).click();
+  await expect(page.getByRole('radio', { name: 'First page', exact: true })).toHaveCount(0);
+  scene = await exported(page);
+  expect(scene.pages[0].objects[0].headerFooter.firstPage).toBeNull();
+  await page.getByRole('button', { name: 'Remove header and footer' }).click();
+  await expect(page.getByRole('button', { name: 'Header', exact: true })).toHaveCount(0);
+});
+
+const sharedWatermarkOptions = ['text', 'logoPath', 'size', 'opacity', 'color', 'position', 'rotation'];
+const watermarkHit = (page: Page) => page.getByRole('button', { name: /^Watermark / });
+async function previewScene(page: Page) {
+  return page.evaluate(() => (window as any).calls.filter((c: any) => c.command === 'preview_pdf_scene_pages').at(-1).args.request.scene);
+}
+
+test('a watermark is stored once with its range and every shared option, and sent unchanged to preview and export', async ({ page }) => {
+  await openEditor(page);
+  await page.getByRole('button', { name: 'Watermark', exact: true }).click();
+  await expect(page.getByRole('slider', { name: 'Object opacity' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Add watermark', exact: true }).click();
+  await expect(page.getByText('Watermark added to all 3 pages.')).toBeVisible();
+  await page.getByRole('textbox', { name: 'Text', exact: true }).fill('PRIVATE');
+  await page.getByRole('combobox', { name: 'Font' }).selectOption('Noto Serif|bold');
+  await page.locator('#scene-watermark-color').fill('#0000ff');
+  await page.getByRole('slider', { name: 'Opacity' }).focus();
+  await page.keyboard.press('End');
+  await page.getByRole('combobox', { name: 'Angle' }).selectOption('custom');
+  await page.getByRole('spinbutton', { name: 'Degrees' }).fill('30');
+  await page.getByRole('combobox', { name: 'Position' }).selectOption('tile');
+  await page.getByRole('combobox', { name: 'Size' }).selectOption('0.2');
+  await page.getByRole('radio', { name: 'Above content' }).click();
+  await page.getByRole('radio', { name: 'Skip the first page' }).click();
+  await expect(page.getByText('Watermark added to 2 of 3 pages.')).toBeVisible();
+  await expect(watermarkHit(page)).toHaveCount(0);
+  await expect.poll(async () => (await previewScene(page)).pages[0].objects[0]?.pageRange).toBe('2-');
+  await page.getByRole('radio', { name: 'These pages' }).click();
+  const pages = page.getByRole('textbox', { name: 'Pages to include' });
+  await pages.fill('2-9');
+  await pages.press('Enter');
+  await expect(page.getByText('Watermark added to 2 of 3 pages.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeEnabled();
+  const expected = {
+    kind: 'watermark', fontFamily: 'Noto Serif', bold: true, layer: 'front', pageRange: '2-9',
+    watermark: { text: 'PRIVATE', opacity: 100, color: '#0000ff', position: 'tile', rotation: 30, size: 0.2 },
+  };
+  for (const scene of [await previewScene(page), await exported(page)]) {
+    expect(scene.pages[0].objects).toHaveLength(1);
+    expect(scene.pages[0].objects[0]).toMatchObject(expected);
+    expect(scene.pages[0].objects[0].rect).toEqual({ x: 0, y: 0, width: 612, height: 792 });
+    expect(scene.pages.slice(1).map((item: any) => item.objects)).toEqual([[], []]);
+    expect(Object.keys(scene.pages[0].objects[0].watermark).every((key) => sharedWatermarkOptions.includes(key))).toBe(true);
+  }
+});
+
+test('a range-applied watermark shows and edits on every affected page only', async ({ page }) => {
+  await openEditor(page);
+  await page.getByRole('button', { name: 'Watermark', exact: true }).click();
+  await page.getByRole('button', { name: 'Add watermark', exact: true }).click();
+  await page.getByRole('radio', { name: 'These pages' }).click();
+  const pages = page.getByRole('textbox', { name: 'Pages to include' });
+  await pages.fill('odd-2');
+  await pages.press('Enter');
+  await expect(page.getByRole('alert')).toHaveText('“odd-2” is not a page list. Use page numbers and ranges like 1-3, 7, 10-, or all, odd or even.');
+  await pages.fill('odd');
+  await pages.press('Enter');
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Page 1', exact: true })).toContainText('1 marks');
+  await expect(page.getByRole('button', { name: 'Page 2', exact: true })).not.toContainText('marks');
+  await expect(page.getByRole('button', { name: 'Page 3', exact: true })).toContainText('1 marks');
+  await page.getByRole('button', { name: 'Page 2', exact: true }).click();
+  await expect(watermarkHit(page)).toHaveCount(0);
+  await page.evaluate(() => { (window as any).previewDelay = 60_000; });
+  await page.getByRole('button', { name: 'Page 3', exact: true }).click();
+  await expect(watermarkHit(page)).toHaveCount(1);
+  await watermarkHit(page).focus();
+  await page.getByRole('textbox', { name: 'Text', exact: true }).fill('COPY');
+  // The draft follows the shared placement geometry until the rendered preview is ready.
+  await expect(page.locator('.scene-canvas text', { hasText: 'COPY' })).toHaveCount(1);
+  await page.evaluate(() => { (window as any).previewDelay = 0; });
+  await page.getByRole('button', { name: 'Page 2', exact: true }).click();
+  const scene = await exported(page);
+  expect(scene.pages[0].objects).toHaveLength(1);
+  expect(scene.pages[0].objects[0]).toMatchObject({ pageRange: 'odd', watermark: { text: 'COPY' } });
+  expect(scene.pages[2].objects).toEqual([]);
+  await page.getByRole('button', { name: 'Page 3', exact: true }).click();
+  await watermarkHit(page).focus();
+  await page.keyboard.press('Shift+ArrowRight');
+  const moved = (await exported(page)).pages[0].objects[0].watermark.position;
+  expect(moved).toEqual({ x: expect.any(Number), y: expect.any(Number) });
+  await watermarkHit(page).focus();
+  await page.keyboard.press('Delete');
+  await expect(watermarkHit(page)).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Page 1', exact: true })).not.toContainText('marks');
+});
+
+test('a picture watermark replaces the text options and an oversized picture is refused before placement', async ({ page }) => {
+  await openEditor(page);
+  await page.getByRole('button', { name: 'Watermark', exact: true }).click();
+  await page.getByRole('button', { name: 'Add watermark', exact: true }).click();
+  await page.evaluate(() => { (window as any).dialogNext = '/local/huge.png'; });
+  await page.getByRole('radio', { name: 'Picture' }).click();
+  await expect(page.getByRole('alert')).toHaveText('This picture is larger than 20 megapixels, the limit for a watermark. Use a smaller picture.');
+  await expect(page.getByRole('radio', { name: 'Text' })).toHaveAttribute('aria-checked', 'true');
+  await expect.poll(async () => { const options = (await previewScene(page)).pages[0].objects[0]?.watermark; return [options?.text, options?.logoPath]; }).toEqual(['DRAFT', undefined]);
+  await page.evaluate(() => { (window as any).dialogNext = '/local/logo.png'; });
+  await page.getByRole('radio', { name: 'Picture' }).click();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await expect(page.getByRole('combobox', { name: 'Size' })).toHaveValue('original');
+  await expect(page.getByRole('textbox', { name: 'Text', exact: true })).toHaveCount(0);
+  const watermark = (await exported(page)).pages[0].objects[0];
+  expect(watermark.watermark).toEqual({ logoPath: '/local/logo.png', opacity: 18, position: 'center', rotation: -45 });
+  expect(watermark.watermarkImageSize).toEqual({ width: 400, height: 200 });
+  expect(await page.evaluate(() => (window as any).calls.filter((c: any) => c.command === 'inspect_pdf_watermark_image').map((c: any) => c.args.request.path))).toEqual(['/local/huge.png', '/local/logo.png']);
 });

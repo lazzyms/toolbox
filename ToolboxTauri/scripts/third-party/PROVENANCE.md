@@ -44,6 +44,7 @@ that CI installs unpinned, so a later build can differ.
 | DejaVu | `LicenseRef-Arev` (Arev is not an SPDX id); public-domain line | font LICENSE.txt |
 | Satisfy | Font Diner, Inc. copyright and trademark | font name table and license |
 | Pacifico | version 3.001 (also in `fonts/manifest.json`) | font name table |
+| Noto Sans, Noto Serif, Noto Sans Mono | unhinted static TTFs pinned to notofonts.github.io commit a5fca98891563057e7f65c1c4bf3f2a58c7704a4 (Sans and Serif 2.015, Sans Mono 2.014); OFL.txt from notofonts/latin-greek-cyrillic commit 0ef94805d19e98ed658543a7c48c0a4f19cc0ac0; sha256 in `fonts/manifest.json` | font name table and license |
 | Per-library Windows versions | added to each `note`; values marked "inferred" have no version string in the binary and come from MSYS2 package history | `agent-tesseract.md`, `agent-poppler.md` |
 
 ## Not proved: missing evidence and next step
