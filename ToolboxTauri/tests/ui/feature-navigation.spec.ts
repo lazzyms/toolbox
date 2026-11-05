@@ -1490,10 +1490,10 @@ test.describe("Extract from PDF", () => {
         expect(runs).toHaveLength(1);
         return (runs[0].args as { request: unknown }).request;
     };
-    const openWithPdfs = async (page: Page) => {
+    const openWithPdfs = async (page: Page, paths = pdfs) => {
         await page.goto("/");
         await openFromHome(page, "Extract from PDF");
-        await page.evaluate((pdfs) => { (window as TestWindow).__toolboxDialogResults = [pdfs]; }, pdfs);
+        await page.evaluate((paths) => { (window as TestWindow).__toolboxDialogResults = [paths]; }, paths);
         await page.getByRole("button", { name: "Choose files to process" }).click();
         await expect(page.getByText("site-survey-scan.pdf", { exact: true }).first()).toBeVisible();
     };
@@ -1609,6 +1609,43 @@ test.describe("Extract from PDF", () => {
         await expect(rows.nth(1)).toContainText("site-survey-scan-image-1-0.jpg");
         await expect(rows.nth(1)).toContainText("No selectable text, so no text file was made. OCR can read scanned pages.");
         expect(((await extractRequest(page)) as { mode: string }).mode).toBe("both");
+    });
+
+    test("Both sends the layout choice with the image options", async ({ page }) => {
+        await openWithPdfs(page);
+        await textOptions(page).click();
+        await page.getByRole("button", { name: "Extract from 2 PDFs", exact: true }).click();
+
+        expect(await extractRequest(page)).toMatchObject({ mode: "both", preserveLayout: true, minImageSize: null });
+    });
+
+    test("a locked PDF and a missing text helper fail only their own rows, and the lock row points to Lock & Unlock", async ({ page }) => {
+        const locked = "This PDF is password-protected. Remove the password, then extract again.";
+        const missing = "Not read: the text helper is missing. Reinstall Toolbox to restore it.";
+        await openWithPdfs(page, ["/local/report.pdf", "/local/payroll-locked.pdf", "/local/site-survey-scan.pdf"]);
+        await extractModes(page).getByRole("radio", { name: "Text", exact: true }).click();
+        await page.evaluate((outcomes) => { (window as TestWindow).__toolboxProcessingResults = outcomes; }, [
+            succeeded("/local/report.pdf", ["/local/report-text.txt"], { detail: "PDF text extracted in reading order" }),
+            failed("/local/payroll-locked.pdf", "invalidInput", locked, {
+                failure: { kind: "invalidInput", message: locked, pointer: { kind: "tool", toolId: "lock-unlock" } },
+            }),
+            failed("/local/site-survey-scan.pdf", "unavailable", missing),
+        ]);
+        await page.getByRole("button", { name: "Extract from 3 PDFs", exact: true }).click();
+
+        const rows = page.locator(".result-row");
+        await expect(rows).toHaveCount(3);
+        await expect(rows.nth(0)).toHaveAttribute("data-state", "succeeded");
+        await expect(rows.nth(0).getByRole("button", { name: "Open report-text.txt", exact: true })).toBeVisible();
+        await expect(rows.nth(1)).toHaveAttribute("data-state", "failed");
+        await expect(rows.nth(1)).toContainText(locked);
+        await expect(rows.nth(2)).toHaveAttribute("data-state", "failed");
+        await expect(rows.nth(2).locator(".result-row-state")).toContainText("Unavailable");
+        await expect(rows.nth(2)).toContainText(missing);
+        await expect(rows.nth(2).getByRole("button", { name: "Open Lock & Unlock", exact: true })).toHaveCount(0);
+
+        await rows.nth(1).getByRole("button", { name: "Open Lock & Unlock", exact: true }).click();
+        await expect(page.getByRole("heading", { name: "Lock & Unlock", exact: true })).toBeVisible();
     });
 });
 

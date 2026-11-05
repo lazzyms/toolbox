@@ -383,7 +383,7 @@ fn saved_label(count: usize) -> String {
     }
 }
 
-fn bytes_label(bytes: u64) -> String {
+pub(crate) fn bytes_label(bytes: u64) -> String {
     match bytes {
         bytes if bytes >= GB && bytes % GB == 0 => format!("{} GB", count_label(bytes / GB)),
         bytes if bytes >= MB && bytes % MB == 0 => format!("{} MB", count_label(bytes / MB)),
@@ -392,7 +392,7 @@ fn bytes_label(bytes: u64) -> String {
     }
 }
 
-fn duration_label(duration: Duration) -> String {
+pub(crate) fn duration_label(duration: Duration) -> String {
     let plural = |count: u128, unit: &str| if count == 1 { format!("1 {unit}") } else { format!("{count} {unit}s") };
     match duration.as_millis() {
         millis if millis >= 60_000 && millis % 60_000 == 0 => plural(millis / 60_000, "minute"),
