@@ -11,14 +11,11 @@ import { Switch } from "@/components/ui/switch";
 import { ShortcutHint } from "../components/ShortcutHint";
 import { shortcutTarget } from "../shortcuts";
 
-// Every PDF is repacked without loss at every strength, so the PDF row says so until image recompression ships.
-const levels: { value: CompressLevel; name: string; summary: string }[] = [
-  { value: "low", name: "Low", summary: "Least saving, detail stays" },
-  { value: "medium", name: "Medium", summary: "Good for sharing and email" },
-  { value: "high", name: "High", summary: "Smallest, photos look softer" },
+const levels: { value: CompressLevel; name: string; summary: string; pdf: string }[] = [
+  { value: "low", name: "Low", summary: "Least saving, detail stays", pdf: "Repacked without loss. Images untouched." },
+  { value: "medium", name: "Medium", summary: "Good for sharing and email", pdf: "Images inside recompressed and scaled down." },
+  { value: "high", name: "High", summary: "Smallest, photos look softer", pdf: "Images at lower quality and resolution." },
 ];
-
-const PDF_EFFECT = "Repacked without loss. Images untouched.";
 
 const exifHint = (on: boolean) => on
   ? "On: removes camera, date and GPS details from JPEG, PNG and WebP. Photos stay upright. PDFs aren't changed."
@@ -32,7 +29,7 @@ export const CompressFilesWorkspaceView = ({ utility }: { utility: ToolDefinitio
   const [imageQuality, setImageQuality] = useState(80);
   const [lossless, setLossless] = useState(false);
   const isCompress = utility.id === "compress-files";
-  const levelName = levels.find(({ value }) => value === level)?.name ?? "Medium";
+  const selected = levels.find(({ value }) => value === level) ?? levels[1];
 
   return (
     <ToolScaffold
@@ -73,10 +70,10 @@ export const CompressFilesWorkspaceView = ({ utility }: { utility: ToolDefinitio
                   </RadioGroup>
                 </div>
                 <div className="workspace-field">
-                  <span className="workspace-panel-label" id="compress-effect-label">What {levelName} does</span>
+                  <span className="workspace-panel-label" id="compress-effect-label">What {selected.name} does</span>
                   <dl className="workspace-field-grid m-0" aria-labelledby="compress-effect-label">
                     <dt>PDF</dt>
-                    <dd className="m-0 text-foreground">{PDF_EFFECT}</dd>
+                    <dd className="m-0 text-foreground">{selected.pdf}</dd>
                   </dl>
                   <p className="workspace-note mt-0">Text, transparency and colour profiles always stay.</p>
                 </div>

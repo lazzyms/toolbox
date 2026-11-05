@@ -283,7 +283,7 @@ export interface PasswordRequest extends ToolRequest {
   passwordOverrides: Record<string, string>;
 }
 
-/** Low keeps the most detail and High saves the most space. Every PDF is repacked without loss at each level. */
+/** Low keeps the most detail and High saves the most space. Every PDF is repacked without loss; Medium and High also recompress and downsample its photographs. */
 export type CompressLevel = "low" | "medium" | "high";
 
 export interface CompressFilesRequest extends ToolRequest {

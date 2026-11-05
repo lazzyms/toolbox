@@ -742,7 +742,7 @@ test("Compress defaults to Medium, describes each strength and sends the paths i
     await expect(strength.getByRole("radio", { name: "Medium Good for sharing and email" })).toBeVisible();
     await expect(strength.getByRole("radio", { name: "High Smallest, photos look softer" })).toBeVisible();
     await expect(page.getByText("What Medium does", { exact: true })).toBeVisible();
-    await expect(page.getByText("Repacked without loss. Images untouched.", { exact: true })).toBeVisible();
+    await expect(page.getByText("Images inside recompressed and scaled down.", { exact: true })).toBeVisible();
     await expect(page.getByText("Text, transparency and colour profiles always stay.", { exact: true })).toBeVisible();
     const exif = page.getByRole("switch", { name: "Strip EXIF" });
     await expect(exif).not.toBeChecked();
@@ -771,6 +771,39 @@ test("Compress defaults to Medium, describes each strength and sends the paths i
         { paths, level: "high", stripExif: true, outputLocation: "alongsideInput" },
     ]);
 });
+
+for (const theme of ["light", "dark"] as const) {
+    test(`Compress explains what each strength does to PDFs and sends that strength in the ${theme} theme`, async ({ page }) => {
+        await page.addInitScript((theme) => { localStorage.setItem("toolbox-theme", theme); }, theme);
+        await page.goto("/");
+        await openFromHome(page, "Compress");
+        await expect(page.locator("body")).toHaveAttribute("data-theme", theme);
+        const strength = page.getByRole("radiogroup", { name: "Strength" });
+        const effect = page.getByRole("definition");
+        await page.evaluate(() => { (window as TestWindow).__toolboxDialogResults = [["/local/scan.pdf"]]; });
+        await page.getByRole("button", { name: "Choose files to process" }).click();
+        await expect(page.locator(".file-selection-count")).toHaveText("1 file");
+
+        const expected = [
+            { level: "low", name: "Low", pdf: "Repacked without loss. Images untouched." },
+            { level: "medium", name: "Medium", pdf: "Images inside recompressed and scaled down." },
+            { level: "high", name: "High", pdf: "Images at lower quality and resolution." },
+        ] as const;
+        for (const [index, { name, pdf }] of expected.entries()) {
+            await strength.getByRole("radio", { name: new RegExp(`^${name}`) }).click();
+            await expect(page.getByText(`What ${name} does`, { exact: true })).toBeVisible();
+            await expect(page.getByRole("term")).toHaveText("PDF");
+            await expect(effect).toHaveText(pdf);
+            await page.getByRole("button", { name: "Compress 1 file", exact: true }).click();
+            await expect.poll(() => invocationCount(page, "compress_files")).toBe(index + 1);
+        }
+
+        const levels = await page.evaluate(() => ((window as TestWindow).__toolboxInvocations ?? [])
+            .filter(({ command }) => command === "compress_files")
+            .map(({ args }) => (args as { request: { level: string; paths: string[] } }).request));
+        expect(levels).toEqual(expected.map(({ level }) => ({ paths: ["/local/scan.pdf"], level, stripExif: false, outputLocation: "alongsideInput" })));
+    });
+}
 
 for (const layout of [
     { name: "vertical", viewport: { width: 1280, height: 360 }, forward: "ArrowDown", backward: "ArrowUp", ignored: "ArrowRight" },
