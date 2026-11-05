@@ -9,13 +9,16 @@ import type { AtomicToolId, ToolDefinition, ToolResult } from '../contracts';
 import { useToolAvailability } from '../ToolAvailabilityContext';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
-import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
-import { NativeSelect } from '../components/ui/native-select';
 import { Slider } from '../components/ui/slider';
 import type { PdfDocument, PdfPage, PdfTextRun } from '../features/pdf-editor/contracts';
 import { colorTokens, readColorToken } from '../features/pdf-editor/colorTokens';
 import { SceneCanvas } from '../features/pdf-editor/SceneCanvas';
+import { RedactDisclosure, RedactInspector, listMarks, redactionFills } from '../features/pdf-editor/RedactInspector';
+import type { ListedMark } from '../features/pdf-editor/RedactInspector';
+import { subToolInspectors } from '../features/pdf-editor/SubToolInspectors';
+import type { SubToolInspectorProps } from '../features/pdf-editor/SubToolInspectors';
+import { planSceneExport, sceneContributors } from '../features/pdf-editor/subtools';
 import { sceneFromDocument, visibleBounds } from '../features/pdf-editor/scene';
 import type { PdfScene, SceneObject, ScenePage, ScenePreview, SceneRect, SceneShape, SceneTool, SignatureMode, WatermarkPattern } from '../features/pdf-editor/scene';
 import { PREVIEW_CACHE_MAX_ENTRIES, PREVIEW_RENDER_SETTINGS, createPreviewCache, pdfEditorErrorMessage, previewCacheKey, requestWithGeneration } from './pdfPreviewHelpers';
@@ -31,11 +34,11 @@ const tools: { id: SceneTool; label: string; glyph: string }[] = [
   { id: 'select', label: 'Select', glyph: '↖' }, { id: 'text', label: 'Text', glyph: 'T' },
   { id: 'highlight', label: 'Highlight', glyph: '▰' }, { id: 'shape', label: 'Shape', glyph: '□' },
   { id: 'signature', label: 'Signature', glyph: '〰' }, { id: 'watermark', label: 'Watermark', glyph: 'W' },
-  { id: 'crop', label: 'Crop', glyph: '⌗' },
+  { id: 'crop', label: 'Crop', glyph: '⌗' }, { id: 'redact', label: 'Redact', glyph: '▮' },
 ];
 const toolFlagBySceneTool: Record<SceneTool, AtomicToolId> = {
   select: 'pdf-edit', text: 'pdf-edit', highlight: 'pdf-edit', shape: 'pdf-edit',
-  signature: 'pdf-sign', watermark: 'pdf-watermark', crop: 'pdf-crop',
+  signature: 'pdf-sign', watermark: 'pdf-watermark', crop: 'pdf-crop', redact: 'pdf-redact',
 };
 const toolFlagByObjectKind: Record<SceneObject['kind'], AtomicToolId> = {
   text: 'pdf-edit', highlight: 'pdf-edit', shape: 'pdf-edit',
@@ -45,22 +48,11 @@ const toolGuidance: Record<SceneTool, string> = {
   select: 'Select, move, or resize an object.', text: 'Drag to add text. Double-click text to edit it.',
   highlight: 'Drag across text or draw a highlight area.', shape: 'Drag to draw a shape.',
   signature: 'Choose a signature, then drag its box onto the page.', watermark: 'Choose a pattern, then add a watermark.',
-  crop: 'Drag a rectangle on the page to crop it.',
+  crop: 'Drag a rectangle on the page to crop it.', redact: 'Drag over anything you want removed.',
 };
-const signatureFontOptions = [
-  { value: 'Satisfy', label: 'Satisfy — cursive' },
-  { value: 'Pacifico', label: 'Pacifico — cursive' },
-  { value: 'Helvetica-Oblique', label: 'Helvetica italic' },
-  { value: 'Times-Italic', label: 'Times italic' },
-  { value: 'Courier-Oblique', label: 'Courier italic' },
-  { value: 'Helvetica', label: 'Helvetica' },
-  { value: 'Times-Roman', label: 'Times' },
-  { value: 'Courier', label: 'Courier' },
-];
-const watermarkFontSizes = [18, 24, 32, 40, 48, 56, 64, 72, 88, 104, 120];
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 type History = { past: PdfScene[]; present: PdfScene; future: PdfScene[] };
-export type ExistingPdfUtilityId = 'pdf-merge' | 'pdf-split' | 'pdf-redact';
+export type ExistingPdfUtilityId = 'pdf-merge' | 'pdf-split';
 export type PdfEditorNavigation = (navigation: {
   utilityId: ExistingPdfUtilityId;
   initialPaths: readonly [string, ...string[]];
@@ -111,7 +103,7 @@ export const PDFEditorWorkspaceView = ({
   onFilesChange?: (paths: readonly string[]) => void;
 }) => {
   const availability = useToolAvailability();
-  const session = useRef<{ path: string; scene: PdfScene } | null>(null);
+  const session = useRef<{ path: string; scene: PdfScene; baseline: PdfScene } | null>(null);
   const requestedTool: SceneTool = utility.id === 'pdf-crop' ? 'crop' : utility.id === 'pdf-watermark' ? 'watermark' : utility.id === 'pdf-sign' ? 'signature' : 'select';
   const initialTool = availability.allows(toolFlagBySceneTool[requestedTool])
     ? requestedTool
@@ -120,7 +112,8 @@ export const PDFEditorWorkspaceView = ({
     onRun={async (paths, outputLocation, { runId }) => {
       const [inputPath] = paths;
       if (!inputPath || !session.current || session.current.path !== inputPath) throw new Error('Select exactly one open PDF before exporting.');
-      const results = await invoke<ToolResult>('export_pdf_scene', { runId, request: { paths, scene: session.current.scene, outputLocation } });
+      const { request } = planSceneExport({ paths, scene: session.current.scene, baseline: session.current.baseline, outputLocation });
+      const results = await invoke<ToolResult>('export_pdf_scene', { runId, request });
       return results.map((result) => result.failure ? { ...result, failure: { ...result.failure, message: pdfEditorErrorMessage(result.failure.message, 'export') } } : result);
     }}>
     {({ files, run, loading, destination }) => {
@@ -129,7 +122,7 @@ export const PDFEditorWorkspaceView = ({
         <PDFSceneSession key={inputPath ?? 'empty'} path={inputPath} initialTool={initialTool}
           exporting={loading} onExport={run}
           onNavigate={onNavigate}
-          onScene={(path, scene) => { session.current = path && scene ? { path, scene } : null; }} />
+          onScene={(path, scene, baseline) => { session.current = path && scene && baseline ? { path, scene, baseline } : null; }} />
         <Card className="pdf-scene-destination py-0"><CardContent className="py-3">{destination}</CardContent></Card>
       </>;
     }}
@@ -139,7 +132,7 @@ export const PDFEditorWorkspaceView = ({
 function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, onScene }: {
   path: string | null; initialTool: SceneTool | null; exporting: boolean; onExport: () => Promise<void>;
   onNavigate?: PdfEditorNavigation;
-  onScene: (path: string | null, scene: PdfScene | null) => void;
+  onScene: (path: string | null, scene: PdfScene | null, baseline: PdfScene | null) => void;
 }) {
   const availability = useToolAvailability();
   const [document, setDocument] = useState<PdfDocument | null>(null);
@@ -166,6 +159,10 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
   const [watermarkText, setWatermarkText] = useState('DRAFT');
   const [watermarkFontSize, setWatermarkFontSize] = useState(40);
   const [watermarkPattern, setWatermarkPattern] = useState<WatermarkPattern>('across-page');
+  const [redactionFill, setRedactionFill] = useState<string>(redactionFills.Black);
+  const [reviewing, setReviewing] = useState(false);
+  const [previewRedactions, setPreviewRedactions] = useState(true);
+  const [disclosure, setDisclosure] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(Boolean(path));
   const [rendering, setRendering] = useState(false);
@@ -173,6 +170,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
   const [thumbnails, setThumbnails] = useState<Record<string, { key: string; value: ScenePreview }>>({});
   const [renderError, setRenderError] = useState<string | null>(null);
   const group = useRef<string | null>(null);
+  const focusMark = useRef(false);
   const draggedPage = useRef<string | null>(null);
   const toolsToolbar = useRef<HTMLDivElement>(null);
   const bottomToolbar = useRef<HTMLDivElement>(null);
@@ -191,10 +189,12 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
   const previewKey = path ? previewCacheKey(path, currentIndex, serializedScene, PREVIEW_RENDER_SETTINGS) : null;
   const exactPreview = preview?.key === previewKey ? preview.value : null;
   const selectedSignature = selected?.kind === 'signature' ? selected : null;
+  const marks = listMarks(scene);
+  const requestExport = () => { if (marks.length) setDisclosure(true); else void onExport(); };
 
   useEffect(() => {
     let active = true;
-    if (!path) { onScene(null, null); return; }
+    if (!path) { onScene(null, null, null); return; }
     invoke<PdfDocument>('inspect_pdf_scene', { request: { path } }).then((value) => {
       if (!active) return;
       if (!value.pages.length) throw new Error('The PDF has no pages.');
@@ -226,7 +226,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
       () => {});
     return () => { textGeneration.current.current += 1; };
   }, [path, document, page?.sourceIndex]);
-  useEffect(() => { onScene(path, document ? scene : null); }, [path, scene, document]);
+  useEffect(() => { onScene(path, document ? scene : null, document ? sceneFromDocument(document) : null); }, [path, scene, document]);
   useLayoutEffect(() => {
     if (selectedSignature) setSignatureTextDraft(selectedSignature.text);
   }, [selectedSignature?.id, selectedSignature?.text]);
@@ -315,11 +315,33 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
       const command = (event as CustomEvent<string>).detail;
       if (command === 'undo') undo();
       else if (command === 'redo') redo();
-      else if (command === 'export' && page && !exporting && !renderError && !rendering && exactPreview) void onExport();
+      else if (command === 'export' && page && !exporting && !renderError && !rendering && exactPreview) requestExport();
     };
     window.addEventListener('toolbox:editor-command', onShellCommand);
     return () => window.removeEventListener('toolbox:editor-command', onShellCommand);
-  }, [exactPreview, exporting, onExport, page, redo, renderError, rendering, undo]);
+  }, [exactPreview, exporting, onExport, page, redo, renderError, rendering, undo, marks.length]);
+  const selectMark = (mark: ListedMark) => { endGroup(); setCurrentId(mark.pageId); setSelectedPages([mark.pageId]); setSelectedId(mark.id); };
+  const removeMarks = (ids: string[]) => {
+    if (!availability.allows('pdf-redact')) return;
+    commit({ pages: scene.pages.map((item) => item.redactions?.some((mark) => ids.includes(mark.id))
+      ? { ...item, redactions: item.redactions.filter((mark) => !ids.includes(mark.id)) } : item) });
+    setSelectedId(null);
+    if (ids.length >= marks.length) setReviewing(false);
+  };
+  const recolorMarks = (color: string) => {
+    setRedactionFill(color);
+    if (marks.some((mark) => mark.color !== color)) commit({ pages: scene.pages.map((item) => item.redactions?.length
+      ? { ...item, redactions: item.redactions.map((mark) => ({ ...mark, color })) } : item) });
+  };
+  const review = (on: boolean) => {
+    setReviewing(on);
+    if (on && marks.length && !marks.some((mark) => mark.id === selectedId)) selectMark(marks[0]);
+  };
+  useEffect(() => {
+    if (!focusMark.current) return;
+    focusMark.current = false;
+    window.document.querySelector<SVGElement>(`[data-redaction="${selectedId}"]`)?.focus();
+  }, [selectedId, currentId]);
   const updateObject = (patch: Partial<SceneObject>, field: string) => {
     if (!selected || !page || !availability.allows(toolFlagByObjectKind[selected.kind])) return;
     commit({ pages: scene.pages.map((item) => item.id === page.id ? { ...page,
@@ -403,7 +425,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
     return { ...item, objects: [...item.objects, { ...makeObject('text', { x: b.x + b.width / 2 - 20, y: b.y + Math.max(0, b.height - 30), width: Math.min(40, b.width), height: Math.min(20, b.height) }), text: String(index + 1), fontSize: 12 }] };
     }) });
   };
-  const dirty = document && !same(scene, sceneFromDocument(document));
+  const dirty = document && sceneContributors(scene, sceneFromDocument(document)).length > 0;
   const endGroup = () => { group.current = null; };
   const selectedKind = selected?.kind ?? tool;
   const selectedEnabled = Boolean(selected && availability.allows(toolFlagByObjectKind[selected.kind]));
@@ -411,33 +433,38 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
     && (!selected || availability.allows(toolFlagByObjectKind[selected.kind]));
   const activeColor = selected?.color ?? (tool === 'highlight' ? highlightColor : color);
   const activeOpacity = selected?.opacity ?? (tool === 'highlight' ? highlightOpacity : opacity);
-  const activeShape = selected?.shape ?? shape;
-  const activeSignatureMode = selected?.signatureMode ?? signatureMode;
-  const activeSignaturePath = selected?.signaturePath ?? signaturePath;
-  const activeSignaturePreview = selected?.signaturePreview ?? signaturePreview;
-  const activeSignatureText = selectedSignature ? signatureTextDraft : signatureText;
-  const activeSignatureFont = selected?.fontFamily ?? signatureFont;
-  const activeWatermarkPattern = selected?.watermarkPattern ?? watermarkPattern;
-  const activeWatermarkText = selected?.text ?? watermarkText;
-  const activeWatermarkFontSize = selected?.kind === 'watermark' ? selected.fontSize : watermarkFontSize;
+
+  const inspector: SubToolInspectorProps | null = page ? {
+    page, selected, hasTextRuns: Boolean(document?.pages[page.sourceIndex ?? -1]?.textRuns?.length), updateObject, commitPage, endGroup,
+    fontSize, setFontSize, shape, setShape,
+    signatureMode, setSignatureMode, signaturePath, signaturePreview, signatureText, setSignatureText,
+    signatureTextDraft, setSignatureTextDraft, signatureFont, setSignatureFont, chooseSignatureImage,
+    watermarkText, setWatermarkText, watermarkFontSize, setWatermarkFontSize, watermarkPattern, setWatermarkPattern, addFixedWatermark,
+  } : null;
+  const Fields = selectedKind ? subToolInspectors[selectedKind]?.Fields : undefined;
+  const Guide = tool ? subToolInspectors[tool]?.Guide : undefined;
 
   return <section className="pdf-scene-workspace" aria-label="PDF editing session" onKeyDown={(event) => {
+    const markId = event.target instanceof SVGElement ? event.target.dataset.redaction : undefined;
+    if (reviewing && event.key === 'Tab' && markId && marks.length) {
+      event.preventDefault();
+      const index = marks.findIndex((mark) => mark.id === markId);
+      focusMark.current = true;
+      selectMark(marks[(index + (event.shiftKey ? -1 : 1) + marks.length) % marks.length]);
+      return;
+    }
     const input = event.target instanceof HTMLElement && (['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target.tagName) || event.target.isContentEditable);
     if (!input && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); event.shiftKey ? redo() : undo(); }
   }}>
     <div ref={toolsToolbar} className="scene-tools" role="toolbar" aria-label="PDF editor tools" aria-orientation="horizontal" onFocusCapture={handleToolbarFocus} onKeyDown={handleToolbarKeyDown}>
       {tools.filter((item) => availability.allows(toolFlagBySceneTool[item.id])).map((item) => <Button key={item.id} variant={tool === item.id ? "secondary" : "ghost"} size="sm" aria-label={item.label} aria-description={toolGuidance[item.id]} title={toolGuidance[item.id]} aria-pressed={tool === item.id}
         onClick={() => { if (!availability.allows(toolFlagBySceneTool[item.id])) return; endGroup(); setTool(item.id); setSelectedId(null); }} disabled={!page}><span aria-hidden="true">{item.glyph}</span>{item.label}</Button>)}
-      {/* Redaction removes content for good, so it runs on a saved copy in its own screen with a confirmation step. */}
-      {availability.allows('pdf-redact') && onNavigate && <Button variant="ghost" size="sm" aria-label="Redact"
-        title={dirty ? 'Export or reset your edits before redacting' : 'Black out private details in a copy of this PDF'}
-        disabled={!page || !path || Boolean(dirty)} onClick={() => { if (path) onNavigate({ utilityId: 'pdf-redact', initialPaths: [path] }); }}><span aria-hidden="true">▮</span>Redact</Button>}
       <span className="scene-toolbar-divider" />
       <Button variant="ghost" size="icon-sm" aria-label="Undo" title="Undo (⌘Z / Ctrl+Z)" disabled={!history.past.length} onClick={undo}>↶</Button>
       <Button variant="ghost" size="icon-sm" aria-label="Redo" title="Redo (⇧⌘Z / Ctrl+Shift+Z)" disabled={!history.future.length} onClick={redo}>↷</Button>
       <Button variant="destructive" size="sm" aria-label="Reset edits" disabled={!dirty} onClick={reset}>Reset</Button>
       <Button variant="default" size="sm" className="workspace-primary-action scene-export" aria-label="Export PDF" disabled={!page || !dirty || exporting || Boolean(renderError) || rendering || !exactPreview}
-        {...shortcutTarget('run')} onClick={() => void onExport()}>{exporting ? 'Exporting…' : 'Export PDF'}<ShortcutHint id="run" /></Button>
+        {...shortcutTarget('run')} onClick={requestExport}>{exporting ? 'Exporting…' : 'Export PDF'}<ShortcutHint id="run" /></Button>
     </div>
     {error && <p role="alert" className="scene-error">{error}</p>}
     {renderError && <p role="alert" className="scene-error">{renderError} Export is disabled until the preview can be verified.</p>}
@@ -468,78 +495,20 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
           <SceneCanvas page={page} sourcePreview={page.sourceIndex === null ? null : document?.pages[page.sourceIndex]?.preview ?? null}
             textRuns={page.sourceIndex === null ? [] : document?.pages[page.sourceIndex]?.textRuns ?? []}
             renderedPreview={exactPreview} tool={tool ?? 'select'} selectedId={selectedId} zoom={zoom} onSelect={(id) => { endGroup(); setSelectedId(id); }}
-            onCommit={(next) => { if (canEditCanvas) commitPage(next); }} makeObject={makeObject} />
+            onCommit={(next) => { if (canEditCanvas) commitPage(next); }} makeObject={makeObject}
+            redactionFill={redactionFill} redactionPreview={tool === 'redact' && reviewing && previewRedactions} />
         </div>
         <aside className="scene-inspector" aria-label="PDF editor inspector">
           <Card role="region" aria-label="Properties" className="scene-inspector-panel gap-4 overflow-y-auto py-4">
             <CardHeader className="gap-1 px-4 py-0">
-              <CardTitle>{selected ? `${selected.kind[0].toUpperCase()}${selected.kind.slice(1)} properties` : 'Properties'}</CardTitle>
-              <CardDescription>{selected ? 'Adjust the selected item.' : tool === 'select' ? 'Select a mark to edit its properties.' : tool ? `New ${tool} settings` : 'No page markup tools are enabled.'}</CardDescription>
+              <CardTitle>{selected ? `${selected.kind[0].toUpperCase()}${selected.kind.slice(1)} properties` : tool === 'redact' ? 'Redact' : 'Properties'}</CardTitle>
+              <CardDescription>{selected ? 'Adjust the selected item.' : tool === 'redact' ? 'Drag over anything you want removed. Marks are only previews until you export.' : tool === 'select' ? 'Select a mark to edit its properties.' : tool ? `New ${tool} settings` : 'No page markup tools are enabled.'}</CardDescription>
             </CardHeader>
             <CardContent className="scene-inspector-content flex flex-col gap-3 px-4">
-              {selectedKind === 'text' && <div className="scene-inspector-field">
-                <Label htmlFor="scene-text-size">Font size</Label>
-                <Input id="scene-text-size" type="number" min="6" max="144" value={selected?.fontSize ?? fontSize}
-                  onChange={(event) => { const value = Math.max(6, Math.min(144, Number(event.target.value) || 6)); selected ? updateObject({ fontSize: value }, 'font') : setFontSize(value); }} onBlur={endGroup} />
-              </div>}
-              {selectedKind === 'shape' && <div className="scene-inspector-field">
-                <Label htmlFor="scene-shape-type">Shape type</Label>
-                <NativeSelect id="scene-shape-type" size="sm" value={activeShape}
-                  onChange={(event) => selected ? updateObject({ shape: event.target.value as SceneShape }, 'shape') : setShape(event.target.value as SceneShape)}>
-                  <option value="square">Square</option><option value="round">Round</option><option value="triangle">Triangle</option>
-                  <option value="line">Line</option><option value="dotted-line">Dotted line</option><option value="arrow-left">Arrow left</option>
-                  <option value="arrow-right">Arrow right</option><option value="arrow-up">Arrow up</option><option value="arrow-down">Arrow down</option>
-                </NativeSelect>
-              </div>}
-              {selectedKind === 'signature' && <>
-                <div className="scene-inspector-field"><Label htmlFor="scene-signature-mode">Signature mode</Label>
-                  <NativeSelect id="scene-signature-mode" size="sm" value={activeSignatureMode}
-                    onChange={(event) => { const value = event.target.value as SignatureMode; selected ? updateObject({ signatureMode: value, strokes: [] }, 'signature-mode') : setSignatureMode(value); }}>
-                    <option value="image">Choose image</option><option value="text">Type signature</option>
-                  </NativeSelect>
-                </div>
-                {activeSignatureMode === 'image' ? <>
-                  <Button variant="outline" size="sm" onClick={() => void chooseSignatureImage()}>Choose signature image</Button>
-                  <p className="scene-property-note">{activeSignaturePath ? activeSignaturePath.split(/[\\/]/).pop() : 'No image chosen'}</p>
-                </> : <>
-                  <div className="scene-inspector-field"><Label htmlFor="scene-signature-text">Signature text</Label>
-                    <Input id="scene-signature-text" value={activeSignatureText}
-                      onChange={(event) => selectedSignature ? setSignatureTextDraft(event.target.value) : setSignatureText(event.target.value)}
-                      onBlur={() => { if (selectedSignature && signatureTextDraft !== selectedSignature.text) updateObject({ text: signatureTextDraft }, 'signature-text'); endGroup(); }} />
-                  </div>
-                  <div className="scene-inspector-field"><Label htmlFor="scene-signature-font">Signature font</Label>
-                    <NativeSelect id="scene-signature-font" size="sm" value={activeSignatureFont}
-                      onChange={(event) => selected ? updateObject({ fontFamily: event.target.value }, 'signature-font') : setSignatureFont(event.target.value)}>
-                      {signatureFontOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                    </NativeSelect>
-                  </div>
-                </>}
-                <div className="scene-inspector-field"><Label htmlFor="scene-signature-size">Font size</Label>
-                  <Input id="scene-signature-size" type="number" min="8" max="144" value={selected?.fontSize ?? Math.max(18, fontSize)}
-                    onChange={(event) => { const value = Math.max(8, Math.min(144, Number(event.target.value) || 8)); selected ? updateObject({ fontSize: value }, 'signature-font-size') : setFontSize(value); }} onBlur={endGroup} />
-                </div>
-                {activeSignatureMode === 'image' && activeSignaturePreview && <img className="scene-signature-mini-preview" alt="Selected signature preview" src={activeSignaturePreview} />}
-              </>}
-              {selectedKind === 'watermark' && <>
-                <div className="scene-inspector-field"><Label htmlFor="scene-watermark-text">Watermark text</Label>
-                  <Input id="scene-watermark-text" value={activeWatermarkText} onChange={(event) => selected ? updateObject({ text: event.target.value }, 'watermark-text') : setWatermarkText(event.target.value)} onBlur={endGroup} />
-                </div>
-                <div className="scene-inspector-field"><Label htmlFor="scene-watermark-size">Watermark font size</Label>
-                  <NativeSelect id="scene-watermark-size" size="sm" value={String(activeWatermarkFontSize)} onChange={(event) => {
-                    const value = Number(event.target.value); selected ? updateObject({ fontSize: value }, 'watermark-font-size') : setWatermarkFontSize(value);
-                  }}>{watermarkFontSizes.map((value) => <option key={value} value={value}>{value} pt</option>)}</NativeSelect>
-                </div>
-                <div className="scene-inspector-field"><Label htmlFor="scene-watermark-pattern">Watermark pattern</Label>
-                  <NativeSelect id="scene-watermark-pattern" size="sm" value={activeWatermarkPattern}
-                    onChange={(event) => selected ? updateObject({ watermarkPattern: event.target.value as WatermarkPattern }, 'watermark-pattern') : setWatermarkPattern(event.target.value as WatermarkPattern)}>
-                    <option value="across-page">Across page</option><option value="bottom-right-to-top-left">Bottom-right to top-left</option>
-                    <option value="top-right-to-bottom-left">Top-right to bottom-left</option><option value="center-horizontal">Centre horizontal</option>
-                    <option value="center-vertical">Centre vertical</option>
-                  </NativeSelect>
-                </div>
-                {selected && <Button variant="outline" size="sm" onClick={addFixedWatermark}>Add fixed watermark</Button>}
-              </>}
-              {(selected || (tool !== null && !['select', 'crop'].includes(tool))) && <>
+              {tool === 'redact' && !selected && <RedactInspector marks={marks} selectedId={selectedId} reviewing={reviewing} preview={previewRedactions} fill={redactionFill}
+                onSelect={selectMark} onRemove={removeMarks} onReview={review} onPreview={setPreviewRedactions} onFill={recolorMarks} />}
+              {Fields && inspector && <Fields {...inspector} />}
+              {(selected || (tool !== null && !['select', 'crop', 'redact'].includes(tool))) && <>
                 <div className="scene-inspector-field"><Label htmlFor="scene-object-color">Object color</Label>
                   <input id="scene-object-color" type="color" aria-label="Object color" value={activeColor} onChange={(event) => {
                     if (selected) updateObject({ color: event.target.value }, 'color'); else if (tool === 'highlight') setHighlightColor(event.target.value); else setColor(event.target.value);
@@ -555,22 +524,16 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
                 <Button variant="destructive" size="sm" onClick={() => { if (!availability.allows(toolFlagByObjectKind[selected.kind])) return; commitPage({ ...page, objects: page.objects.filter((item) => item.id !== selected.id) }); setSelectedId(null); }}>Delete object</Button>
                 <Button variant="outline" size="sm" onClick={() => { if (availability.allows(toolFlagByObjectKind[selected.kind])) commitPage({ ...page, objects: [...page.objects.filter((item) => item.id !== selected.id), selected] }); }}>Bring to front</Button>
               </div>}
-              {tool === 'crop' && availability.allows('pdf-crop') && <>
-                <p className="scene-property-note">Drag a rectangle on the page to crop.</p>
-                <Button variant="outline" size="sm" disabled={!page.crop} onClick={() => { if (availability.allows('pdf-crop')) commitPage({ ...page, crop: null }); }}>Remove crop</Button>
-              </>}
+              {Guide && inspector && <Guide {...inspector} />}
               {tool === 'select' && !selected && <p className="scene-property-note">Select an object on the page to move it or adjust its properties.</p>}
-              {tool === 'highlight' && <p className="scene-property-note">{document?.pages[page.sourceIndex ?? -1]?.textRuns?.length ? 'Drag across selectable PDF text, or draw a highlight area.' : 'Drag across the page to highlight an area.'}</p>}
-              {tool === 'signature' && !selected && <p className="scene-property-note">{signatureMode === 'image' ? 'Choose an image, then drag its box onto the page.' : 'Type a signature, choose its font, then drag a box onto the page.'}</p>}
-              {tool === 'watermark' && availability.allows('pdf-watermark') && !selected && <>
-                <p className="scene-property-note">Fixed placement: choose a pattern and add it to the page.</p>
-                <Button size="sm" onClick={addFixedWatermark}>Add fixed watermark</Button>
-              </>}
               <p className="scene-render-status" role="status">{rendering ? 'Rendering on device…' : exactPreview ? 'Export preview · on device' : 'Local document'}</p>
             </CardContent>
           </Card>
         </aside>
       </div>
+      <RedactDisclosure marks={marks} open={disclosure} onOpenChange={setDisclosure}
+        onReview={() => { setDisclosure(false); setTool('redact'); review(true); }}
+        onContinue={() => { setDisclosure(false); void onExport(); }} />
       <div ref={bottomToolbar} className="scene-bottom-bar" role="toolbar" aria-label="PDF page and zoom controls" aria-orientation="horizontal" onFocusCapture={handleToolbarFocus} onKeyDown={handleToolbarKeyDown}>
         <Button variant="ghost" size="icon-sm" aria-label="Previous page" disabled={currentIndex <= 0} onClick={() => selectPage(scene.pages[currentIndex - 1].id)}>‹</Button>
         <span>Page {currentIndex + 1} of {scene.pages.length}</span>

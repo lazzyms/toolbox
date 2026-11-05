@@ -27,3 +27,8 @@ body[data-theme="light"] {
 .scene-text-layer { user-select: text; pointer-events: all; }
 .scene-text-run { user-select: text; cursor: text; }
 .scene-inline-text-editor { overflow: visible; pointer-events: all; }
+.scene-tool-redact { cursor: crosshair; }
+.scene-redaction { fill: rgb(0 0 0 / 18%); stroke: #111111; stroke-width: 1.5px; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; pointer-events: none; }
+.scene-redaction[data-preview="true"] { stroke: none; }
+.scene-tool-redact .scene-redaction { pointer-events: all; cursor: pointer; }
+.scene-redaction[aria-pressed="true"], .scene-redaction:focus-visible { outline: none; stroke: var(--pdf-scene-selection); stroke-width: 2px; stroke-dasharray: none; }
