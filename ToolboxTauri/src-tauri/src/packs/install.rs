@@ -525,8 +525,6 @@ fn commit(context: &InstallContext, header: &Header, staging: &Path, content: &P
     let pack_folder = context.app_data.join(PACKS_DIR).join(&header.id);
     let created = !pack_folder.exists();
     fs::create_dir_all(&pack_folder).map_err(unavailable)?;
-    let previous: Option<InstalledRecord> = fs::read_to_string(pack_folder.join(INSTALLED_FILE)).ok()
-        .and_then(|text| serde_json::from_str(&text).ok());
     let destination = pack_folder.join(&header.version);
     let displaced = staging.join("displaced");
     let had_folder = fs::symlink_metadata(&destination).is_ok();
@@ -551,10 +549,9 @@ fn commit(context: &InstallContext, header: &Header, staging: &Path, content: &P
             let _ = fs::remove_file(&pending_record);
             undo(error)
         })?;
-    // The older version is no longer recorded; removing it only frees space.
-    if let Some(previous) = previous.filter(|previous| previous.version != header.version && is_plain_segment(&previous.version)) {
-        let _ = remove_tree(&pack_folder.join(previous.version));
-    }
+    // Runs resolve the recorded version from now on. A run still using the older version keeps
+    // it until the run finishes.
+    super::uninstall::retire_old_versions(&pack_folder);
     // A repaired or updated pack is checked again at its next use.
     super::health::forget(&pack_folder);
     Ok(())

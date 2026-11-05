@@ -188,7 +188,7 @@ const failedText = (error: PackInstallError) => {
 /** An uninstall started from this view: waiting for the native side, refused while a run uses the pack, or failed. */
 type Removal = "removing" | "inUse" | "failed";
 
-type RowActions = { install: () => void; cancel: (runId: string) => void; remove: () => void };
+type RowActions = { install: () => void; cancel: (runId: string) => void; remove: () => void; checkForUpdates: () => void };
 
 const PackRow = ({ pack, checking, job, removal, offline, actions }: { pack: PackEntry; checking: boolean; job: Job | undefined; removal: Removal | undefined; offline: boolean; actions: RowActions }) => {
   const [open, setOpen] = useState(false);
@@ -196,6 +196,8 @@ const PackRow = ({ pack, checking, job, removal, offline, actions }: { pack: Pac
   const tools = toolList(pack.toolIds);
   const download = pack.downloadBytes === null ? null : formatBytes(pack.downloadBytes);
   const offlineRow = offline && !installed && job === undefined;
+  // An update downloads beside the installed version, which keeps working until the new one is checked.
+  const updating = job !== undefined && job.phase !== "failed" && pack.status === "updateAvailable";
   let status = statusText(pack);
   let state: string = pack.status;
   let bar: { label: string; percent: number } | null = null;
@@ -210,9 +212,9 @@ const PackRow = ({ pack, checking, job, removal, offline, actions }: { pack: Pac
     status = "Waiting. Starts after the downloads above.";
     state = "queued";
   } else if (job?.phase === "downloading") {
-    status = formatProgress(job.receivedBytes, job.totalBytes);
+    status = updating ? `Updating, ${formatProgress(job.receivedBytes, job.totalBytes)}` : formatProgress(job.receivedBytes, job.totalBytes);
     state = "downloading";
-    bar = { label: `Downloading ${pack.name}`, percent: job.totalBytes > 0 ? Math.floor(Math.min(job.receivedBytes / job.totalBytes, 1) * 100) : 0 };
+    bar = { label: `${updating ? "Updating" : "Downloading"} ${pack.name}`, percent: job.totalBytes > 0 ? Math.floor(Math.min(job.receivedBytes / job.totalBytes, 1) * 100) : 0 };
   } else if (job?.phase === "verifying") {
     status = "Checking the download…";
     state = "verifying";
@@ -227,7 +229,9 @@ const PackRow = ({ pack, checking, job, removal, offline, actions }: { pack: Pac
     status = "No internet connection.";
     state = "offline";
   }
-  const sub = installed
+  const sub = updating
+    ? `Used by ${tools}. Version ${pack.installedVersion} keeps working until ${pack.version} is ready.`
+    : installed
     ? `Used by ${tools}. ${formatBytes(pack.diskBytes)} on this disk.`
     : `Used by ${tools}. ${download} download.`;
   const detailsId = `pack-details-${pack.id}`;
@@ -261,7 +265,9 @@ const PackRow = ({ pack, checking, job, removal, offline, actions }: { pack: Pac
           {job && job.phase !== "failed" && action("Cancel", () => actions.cancel(job.runId))}
           {job?.phase === "failed" && action("Try again", actions.install)}
           {!job && !checking && pack.status === "notInstalled" && action("Install", actions.install, offlineRow)}
+          {!job && !checking && pack.status === "updateAvailable" && action("Update", actions.install, offline)}
           {!job && !checking && pack.status === "damaged" && download !== null && action("Repair", actions.install, offline)}
+          {!job && !checking && pack.status === "incompatible" && action("Check for updates", actions.checkForUpdates)}
           {!job && !checking && installed && action("Remove…", actions.remove, removal === "removing" || removal === "inUse", "ghost")}
         </span>
       </div>
@@ -271,7 +277,7 @@ const PackRow = ({ pack, checking, job, removal, offline, actions }: { pack: Pac
           <dt>Used by</dt><dd>{tools}</dd>
           {download !== null && <><dt>Download</dt><dd>{download}</dd></>}
           <dt>On this disk</dt><dd>{installed ? formatBytes(pack.diskBytes) : "Nothing yet"}</dd>
-          <dt>Version</dt><dd>{versionText(pack)}</dd>
+          <dt>Version</dt><dd>{updating ? `${pack.installedVersion} (in use until ${pack.version} is checked)` : versionText(pack)}</dd>
           <dt>License</dt><dd>{pack.license}</dd>
         </dl>
       )}
@@ -290,8 +296,13 @@ const Banner = ({ role, tone, title, text, action }: { role: "status" | "alert";
   </Card>
 );
 
-/** Lists packs, downloads and installs them one at a time, installs one from a pack file, repairs damaged ones by installing them again, and removes them. Updating arrives later. */
-export const PacksSection = () => {
+/**
+ * Lists packs, downloads and installs them one at a time, installs one from a pack file, updates
+ * them when the built-in catalog offers a newer version, repairs damaged ones by installing them
+ * again, and removes them. Nothing is downloaded until the user asks. An incompatible pack sends the
+ * user to Updates, since only a newer Toolbox can use it.
+ */
+export const PacksSection = ({ onCheckForUpdates }: { onCheckForUpdates: () => void }) => {
   const request = useRef<Promise<PackList> | null>(null);
   const [list, setList] = useState<PackList | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -458,7 +469,7 @@ export const PacksSection = () => {
             job={jobs[pack.id]}
             removal={removals[pack.id]}
             offline={offline}
-            actions={{ install: () => void download(pack), cancel, remove: () => void remove(pack) }}
+            actions={{ install: () => void download(pack), cancel, remove: () => void remove(pack), checkForUpdates: onCheckForUpdates }}
           />
         ))}
       </ul>

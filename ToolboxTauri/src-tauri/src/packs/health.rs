@@ -8,7 +8,7 @@
 //! removing a pack forgets its result, so its next use checks it again.
 
 use super::install::{digest_hex, is_plain_segment, INSTALL_LOCK};
-use super::{files_intact, InstalledRecord, INSTALLED_FILE, MANIFEST_FILE, PACKS_DIR};
+use super::{files_intact, read_record, INSTALLED_FILE, MANIFEST_FILE, PACKS_DIR};
 use crate::kit::resources::verify_manifest_root;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -67,9 +67,7 @@ pub(super) fn forget(folder: &Path) {
 }
 
 fn verify(folder: &Path) -> Result<PathBuf, String> {
-    let record: InstalledRecord = std::fs::read_to_string(folder.join(INSTALLED_FILE)).ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .ok_or("Its installed record cannot be read.")?;
+    let record = read_record(folder).ok_or("Its installed record cannot be read.")?;
     if !is_plain_segment(&record.version) {
         return Err("Its installed record names no version folder.".to_string());
     }

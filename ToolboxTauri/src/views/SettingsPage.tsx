@@ -391,6 +391,9 @@ const KeyboardShortcutsSection = () => {
   );
 };
 
+/** What a section can ask of the page: Packs sends an incompatible pack's user to Updates. */
+type SectionProps = { onCheckForUpdates: () => void };
+
 const sections = [
   { id: "appearance", title: "Appearance", Icon: Eye, Content: AppearanceSection },
   { id: "output-location", title: "Output location", Icon: Folder, Content: OutputLocationSection },
@@ -400,7 +403,7 @@ const sections = [
   { id: "updates", title: "Updates", Icon: LoaderCircle, Content: UpdatesSection },
   { id: "about-and-support", title: "About and support", Icon: Info, Content: AboutSection },
   { id: "keyboard-shortcuts", title: "Keyboard shortcuts", Icon: List, Content: KeyboardShortcutsSection, hint: "Shown for the computer you are on." },
-] as const satisfies ReadonlyArray<{ id: string; title: string; Icon: LucideIcon; Content: ComponentType; hint?: string }>;
+] as const satisfies ReadonlyArray<{ id: string; title: string; Icon: LucideIcon; Content: ComponentType<SectionProps>; hint?: string }>;
 
 export type SettingsSection = (typeof sections)[number]["id"];
 
@@ -471,7 +474,7 @@ export const SettingsPage = ({
         </header>
         <div className="settings-scroll">
           <section className="settings-content" aria-labelledby="settings-section-title">
-            <Content />
+            <Content onCheckForUpdates={() => onSectionChange("updates")} />
           </section>
         </div>
       </main>

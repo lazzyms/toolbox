@@ -171,8 +171,14 @@ test("Packs shows every status with sizes, license, tools, total disk usage and 
 
     await expect(region.getByRole("status").last()).toHaveText("4 installed, 415 MB used.");
 
-    // The pack that isn't installed offers Install, the damaged one Repair, and every installed pack offers Remove: updating arrives later.
-    await expect(list.getByRole("button")).toHaveCount(11);
+    // The pack that isn't installed offers Install, the outdated one Update, the damaged one Repair, the incompatible one
+    // Check for updates, and every installed pack offers Remove.
+    await expect(list.getByRole("button")).toHaveCount(13);
+    await expect(rows.update.getByRole("button", { name: "Update Text recognition, Gujarati" })).toBeEnabled();
+    await expect(list.getByRole("button", { name: /^Update / })).toHaveCount(1);
+    await expect(rows.incompatible.getByRole("button", { name: "Check for updates Text recognition, German" })).toBeEnabled();
+    await expect(list.getByRole("button", { name: /^Check for updates / })).toHaveCount(1);
+    await expect(rows.incompatible.getByRole("button", { name: /^(Install|Update|Repair) / })).toHaveCount(0);
     await expect(rows.damaged.getByRole("button", { name: "Repair Text recognition, French" })).toBeEnabled();
     await expect(list.getByRole("button", { name: /^Repair / })).toHaveCount(1);
     await expect(region.getByRole("alert").first()).toHaveText(`${damagedBanner}Repair`);
@@ -675,4 +681,93 @@ test("a damaged pack the catalog no longer offers is repaired from a pack file",
     await expect(region.getByRole("button", { name: `Remove… ${french}` })).toBeEnabled();
     await banner.getByRole("button", { name: "Install from file…" }).click();
     await expect(page.getByRole("dialog", { name: "Install this pack?" })).toBeVisible();
+});
+
+const gujarati = "Text recognition, Gujarati";
+const german = "Text recognition, German";
+const updateStatus = "Version 3.1. Update to 3.2, 12 MB";
+const afterUpdate: PackList = {
+    ...everyStatus,
+    packs: everyStatus.packs.map((entry) => entry.id === "ocr-gujarati" ? { ...entry, status: "installed", installedVersion: "3.2", diskBytes: 310 * MB } : entry),
+    totalBytes: 425 * MB,
+};
+
+test("Update sends the pack id, shows the old version in use while the new one downloads, and then the new version", async ({ page }) => {
+    const region = await openPacks(page, everyStatus);
+    await region.getByRole("listitem", { name: `${gujarati}, ${updateStatus}` }).getByRole("button", { name: `Update ${gujarati}` }).click();
+
+    const [started] = await downloads(page);
+    expect(await calls(page, "install_pack")).toEqual([{ packId: "ocr-gujarati", runId: started.runId }]);
+    const row = region.getByRole("listitem", { name: new RegExp(`^${gujarati}, `) });
+    await expect(row.getByRole("status")).toHaveText("Updating, 0 of 12 MB");
+    await expect(row.getByRole("button", { name: `Update ${gujarati}` })).toHaveCount(0);
+    await expect(row.getByRole("button", { name: `Cancel ${gujarati}` })).toBeVisible();
+    await expect(row).toContainText("Used by OCR PDF. Version 3.1 keeps working until 3.2 is ready.");
+
+    await progress(page, { runId: started.runId, packId: "ocr-gujarati", phase: "downloading", receivedBytes: 5 * MB, totalBytes: 12 * MB });
+    await expect(row).toHaveAccessibleName(`${gujarati}, Updating, 5 of 12 MB`);
+    await expect(row.getByRole("progressbar", { name: `Updating ${gujarati}` })).toHaveAttribute("aria-valuenow", "41");
+    await row.getByRole("button", { name: `Details for ${gujarati}` }).click();
+    await expect(row.getByRole("definition").nth(4)).toHaveText("3.1 (in use until 3.2 is checked)");
+    await progress(page, { runId: started.runId, packId: "ocr-gujarati", phase: "verifying", receivedBytes: 12 * MB, totalBytes: 12 * MB });
+    await expect(row.getByRole("status")).toHaveText("Checking the download…");
+
+    await settle(page, 0, { ok: afterUpdate });
+    const updated = region.getByRole("listitem", { name: `${gujarati}, Installed, version 3.2` });
+    await expect(updated).toContainText("Used by OCR PDF. 310 MB on this disk.");
+    await expect(updated.getByRole("progressbar")).toHaveCount(0);
+    await expect(updated.getByRole("button", { name: /^(Update|Cancel|Try again) / })).toHaveCount(0);
+    await expect(updated.getByRole("definition").nth(4)).toHaveText("3.2");
+    await expect(region.getByRole("status").last()).toHaveText("4 installed, 425 MB used.");
+});
+
+test("a cancelled update keeps the old version and offers Update again", async ({ page }) => {
+    const region = await openPacks(page, everyStatus);
+    await region.getByRole("button", { name: `Update ${gujarati}` }).click();
+    const [started] = await downloads(page);
+    await region.getByRole("button", { name: `Cancel ${gujarati}` }).click();
+
+    expect(await calls(page, "cancel_run")).toEqual([{ runId: started.runId }]);
+    const row = region.getByRole("listitem", { name: `${gujarati}, ${updateStatus}` });
+    await expect(row).toContainText("Used by OCR PDF. 300 MB on this disk.");
+    await expect(row.getByRole("progressbar")).toHaveCount(0);
+    await expect(row.getByRole("button", { name: `Update ${gujarati}` })).toBeEnabled();
+});
+
+test("a failed update says so on its row, keeps the old version, and Try again starts a new update", async ({ page }) => {
+    const region = await openPacks(page, everyStatus);
+    await region.getByRole("button", { name: `Update ${gujarati}` }).click();
+    await settle(page, 0, { error: { kind: "checksumMismatch", message: "" } });
+
+    const failed = "The download didn't pass its safety check, so it was deleted. Nothing was installed.";
+    const row = region.getByRole("listitem", { name: `${gujarati}, ${failed}` });
+    await expect(row).toContainText("Used by OCR PDF. 300 MB on this disk.");
+    await row.getByRole("button", { name: `Details for ${gujarati}` }).click();
+    await expect(row.getByRole("definition").nth(4)).toHaveText("3.1, 3.2 is ready");
+    await row.getByRole("button", { name: `Try again ${gujarati}` }).click();
+    const [first, second] = await downloads(page);
+    expect(second.packId).toBe("ocr-gujarati");
+    expect(second.runId).not.toBe(first.runId);
+    await expect(region.getByRole("listitem", { name: `${gujarati}, Updating, 0 of 12 MB` })).toBeVisible();
+});
+
+test("offline, an outdated pack keeps working and Update waits for the network", async ({ page }) => {
+    const region = await openPacks(page, everyStatus);
+    await region.getByRole("button", { name: `Install ${hindi}` }).click();
+    await settle(page, 0, { error: { kind: "offline", message: "dns error" } });
+
+    const row = region.getByRole("listitem", { name: `${gujarati}, ${updateStatus}` });
+    await expect(row.getByRole("button", { name: `Update ${gujarati}` })).toBeDisabled();
+    await page.evaluate(() => window.dispatchEvent(new Event("online")));
+    await expect(row.getByRole("button", { name: `Update ${gujarati}` })).toBeEnabled();
+});
+
+test("an incompatible pack explains itself and Check for updates opens Updates without downloading anything", async ({ page }) => {
+    const region = await openPacks(page, everyStatus);
+    const row = region.getByRole("listitem", { name: `${german}, Doesn't work with this version of Toolbox. Update Toolbox to use it.` });
+    await expect(row.getByRole("button", { name: `Remove… ${german}` })).toBeEnabled();
+    await row.getByRole("button", { name: `Check for updates ${german}` }).click();
+
+    await expect(page.getByRole("heading", { level: 1, name: "Updates", exact: true })).toBeVisible();
+    expect(await calls(page, "install_pack")).toEqual([]);
 });

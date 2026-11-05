@@ -138,6 +138,19 @@ struct InstalledRecord {
     pub(crate) manifest_sha256: Option<String>,
 }
 
+impl InstalledRecord {
+    /// Whether this build can use the installed pack: its format and app range fit. Tools never
+    /// load a pack that does not fit, and listing marks it incompatible.
+    fn fits(&self, app_version: &str) -> bool {
+        self.pack_format <= PACK_FORMAT && in_range(app_version, &self.app_versions)
+    }
+}
+
+/// The installed record in the pack folder `folder`, when it can be read.
+fn read_record(folder: &Path) -> Option<InstalledRecord> {
+    serde_json::from_str(&std::fs::read_to_string(folder.join(INSTALLED_FILE)).ok()?).ok()
+}
+
 #[tauri::command]
 pub async fn list_packs(app: tauri::AppHandle) -> Result<PackList, String> {
     let catalog = load_catalog()?;
@@ -238,9 +251,7 @@ fn installed_state(pack: &CatalogPack, folder: &Path, app_version: &str, offered
     if !record_path.exists() {
         return (PackStatus::NotInstalled, None);
     }
-    let Some(record) = std::fs::read_to_string(&record_path).ok()
-        .and_then(|text| serde_json::from_str::<InstalledRecord>(&text).ok())
-        .filter(|record| parse_version(&record.version).is_some()) else {
+    let Some(record) = read_record(folder).filter(|record| parse_version(&record.version).is_some()) else {
         return (PackStatus::Damaged, None);
     };
     let version = Some(record.version.clone());
@@ -251,7 +262,7 @@ fn installed_state(pack: &CatalogPack, folder: &Path, app_version: &str, offered
     if newer_offered {
         return (PackStatus::UpdateAvailable, version);
     }
-    if record.pack_format > PACK_FORMAT || !in_range(app_version, &record.app_versions) {
+    if !record.fits(app_version) {
         return (PackStatus::Incompatible, version);
     }
     (PackStatus::Installed, version)
@@ -291,7 +302,7 @@ fn disk_usage(path: &Path) -> u64 {
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn installed_pack_root(app_data: &Path, id: &str) -> Option<PathBuf> {
     let folder = app_data.join(PACKS_DIR).join(id);
-    let record: InstalledRecord = serde_json::from_str(&std::fs::read_to_string(folder.join(INSTALLED_FILE)).ok()?).ok()?;
+    let record = read_record(&folder)?;
     install::is_plain_segment(&record.version).then(|| folder.join(record.version))
 }
 
