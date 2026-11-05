@@ -490,6 +490,13 @@
     "screen": "OCR--pack-downloading.jpg"
   },
   {
+    "board": "OCR.dc.html",
+    "title": "OCR: language packs and output",
+    "state": "pack-picker-open",
+    "query": "pack=Picker%20open",
+    "screen": "OCR--pack-picker-open.jpg"
+  },
+  {
     "board": "ImagesToPdf.dc.html",
     "title": "Images to PDF: ordered pages and save dialog",
     "state": "default",
@@ -687,24 +694,94 @@
   },
   {
     "board": "Packs.dc.html",
-    "title": "Packs: downloading, failed, offline, low space",
+    "title": "Packs: every status, errors, Install from file",
     "state": "default",
     "query": "",
     "screen": "Packs--default.jpg"
   },
   {
     "board": "Packs.dc.html",
-    "title": "Packs: downloading, failed, offline, low space",
+    "title": "Packs: every status, errors, Install from file",
+    "state": "state-empty",
+    "query": "state=Empty",
+    "screen": "Packs--state-empty.jpg"
+  },
+  {
+    "board": "Packs.dc.html",
+    "title": "Packs: every status, errors, Install from file",
+    "state": "state-details",
+    "query": "state=Details",
+    "screen": "Packs--state-details.jpg"
+  },
+  {
+    "board": "Packs.dc.html",
+    "title": "Packs: every status, errors, Install from file",
+    "state": "state-working",
+    "query": "state=Working",
+    "screen": "Packs--state-working.jpg"
+  },
+  {
+    "board": "Packs.dc.html",
+    "title": "Packs: every status, errors, Install from file",
+    "state": "state-problems",
+    "query": "state=Problems",
+    "screen": "Packs--state-problems.jpg"
+  },
+  {
+    "board": "Packs.dc.html",
+    "title": "Packs: every status, errors, Install from file",
     "state": "state-offline",
     "query": "state=Offline",
     "screen": "Packs--state-offline.jpg"
   },
   {
     "board": "Packs.dc.html",
-    "title": "Packs: downloading, failed, offline, low space",
+    "title": "Packs: every status, errors, Install from file",
+    "state": "state-server-blocked",
+    "query": "state=Server%20blocked",
+    "screen": "Packs--state-server-blocked.jpg"
+  },
+  {
+    "board": "Packs.dc.html",
+    "title": "Packs: every status, errors, Install from file",
     "state": "state-low-disk-space",
     "query": "state=Low%20disk%20space",
     "screen": "Packs--state-low-disk-space.jpg"
+  },
+  {
+    "board": "Packs.dc.html",
+    "title": "Packs: every status, errors, Install from file",
+    "state": "state-in-use",
+    "query": "state=In%20use",
+    "screen": "Packs--state-in-use.jpg"
+  },
+  {
+    "board": "Packs.dc.html",
+    "title": "Packs: every status, errors, Install from file",
+    "state": "state-install-from-file",
+    "query": "state=Install%20from%20file",
+    "screen": "Packs--state-install-from-file.jpg"
+  },
+  {
+    "board": "Packs.dc.html",
+    "title": "Packs: every status, errors, Install from file",
+    "state": "state-file-for-another-computer",
+    "query": "state=File%20for%20another%20computer",
+    "screen": "Packs--state-file-for-another-computer.jpg"
+  },
+  {
+    "board": "Packs.dc.html",
+    "title": "Packs: every status, errors, Install from file",
+    "state": "state-file-not-signed",
+    "query": "state=File%20not%20signed",
+    "screen": "Packs--state-file-not-signed.jpg"
+  },
+  {
+    "board": "Packs.dc.html",
+    "title": "Packs: every status, errors, Install from file",
+    "state": "state-file-failed-check",
+    "query": "state=File%20failed%20check",
+    "screen": "Packs--state-file-failed-check.jpg"
   },
   {
     "board": "Shortcuts.dc.html",
@@ -866,5 +943,26 @@
     "state": "retryOpen-true",
     "query": "retryOpen=true",
     "screen": "SecResults--retryOpen-true.jpg"
+  },
+  {
+    "board": "PackResults.dc.html",
+    "title": "OCR results: files that need a pack, before and after install",
+    "state": "default",
+    "query": "",
+    "screen": "PackResults--default.jpg"
+  },
+  {
+    "board": "PackResults.dc.html",
+    "title": "OCR results: files that need a pack, before and after install",
+    "state": "pack-installing",
+    "query": "pack=Installing",
+    "screen": "PackResults--pack-installing.jpg"
+  },
+  {
+    "board": "PackResults.dc.html",
+    "title": "OCR results: files that need a pack, before and after install",
+    "state": "pack-installed",
+    "query": "pack=Installed",
+    "screen": "PackResults--pack-installed.jpg"
   }
 ]

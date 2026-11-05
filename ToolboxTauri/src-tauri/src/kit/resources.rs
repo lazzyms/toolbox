@@ -26,7 +26,7 @@ pub struct ResourceSpec {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ResourceSource { Bundled, DevelopmentOverride, Path }
+pub enum ResourceSource { Bundled, InstalledPack, DevelopmentOverride, Path }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedResource { pub path: PathBuf, pub source: ResourceSource }
@@ -122,12 +122,11 @@ pub fn resolve(name: &str, bundled_root: &Path, override_var: &str, path_name: &
 pub fn resolve_bundled_or_override(name: &str, bundled_root: &Path, override_var: &str) -> Result<Option<ResolvedResource>, String> {
     let manifest_path = bundled_root.join("manifest.json");
     if manifest_path.is_file() {
-        let manifest: ResourceManifest = serde_json::from_slice(&fs::read(&manifest_path).map_err(|e| format!("Cannot read resource manifest: {e}"))?)
-            .map_err(|e| format!("Invalid resource manifest: {e}"))?;
+        let manifest = read_manifest(&manifest_path)?;
         let spec = manifest.resources.get(name).ok_or_else(|| format!("Resource {name} is missing from the bundled manifest."))?;
-        if manifest.version != 1 || (manifest.architecture != "all" && manifest.architecture != std::env::consts::ARCH) { return Err("Bundled resource manifest does not match this application.".to_string()); }
+        if !manifest.matches_this_application() { return Err("Bundled resource manifest does not match this application.".to_string()); }
         let path = bundled_root.join(&spec.path);
-        verify(&path, spec)?;
+        verify_resource(&path, spec).map_err(|failure| failure.bundled_message())?;
         return Ok(Some(ResolvedResource { path, source: ResourceSource::Bundled }));
     }
     if let Ok(path) = std::env::var(override_var) {
@@ -138,13 +137,91 @@ pub fn resolve_bundled_or_override(name: &str, bundled_root: &Path, override_var
     Ok(None)
 }
 
-fn verify(path: &Path, spec: &ResourceSpec) -> Result<(), String> {
-    let bytes = fs::read(path).map_err(|e| format!("Bundled resource is unavailable: {e}"))?;
-    if spec.version.trim().is_empty() { return Err("Bundled resource has no version metadata.".to_string()); }
-    if spec.license.trim().is_empty() { return Err("Bundled resource has no license metadata.".to_string()); }
-    if bytes.len() as u64 > spec.max_bytes { return Err("Bundled resource exceeds its declared size limit.".to_string()); }
-    let digest = digest_hex(&bytes);
-    if digest != spec.sha256 { return Err("Bundled resource checksum does not match its manifest.".to_string()); }
+#[cfg_attr(not(test), allow(dead_code))]
+pub struct PackBackedLocations {
+    pub bundled_root: Option<PathBuf>,
+    pub installed_pack_root: Option<PathBuf>,
+    pub development_override: Option<PathBuf>,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn resolve_pack_backed(name: &str, locations: &PackBackedLocations) -> Result<ResolvedResource, String> {
+    let manifest_roots = [(&locations.bundled_root, ResourceSource::Bundled), (&locations.installed_pack_root, ResourceSource::InstalledPack)];
+    for (root, source) in manifest_roots {
+        let Some(root) = root else { continue };
+        let manifest_path = root.join("manifest.json");
+        if !manifest_path.is_file() {
+            // An installed pack always has a manifest. Without it the pack is damaged, and nothing
+            // past it may stand in for its files.
+            if source == ResourceSource::InstalledPack { return Err(format!("The installed pack for {name} has no manifest.")); }
+            continue;
+        }
+        let manifest = read_manifest(&manifest_path)?;
+        let Some(spec) = manifest.resources.get(name) else { continue };
+        if !manifest.matches_this_application() { return Err(format!("The manifest for {name} does not match this application.")); }
+        let path = root.join(&spec.path);
+        verify_resource(&path, spec).map_err(|failure| format!("Resource {name} failed verification: {failure:?}."))?;
+        return Ok(ResolvedResource { path, source });
+    }
+    match &locations.development_override {
+        Some(path) if path.is_file() => Ok(ResolvedResource { path: path.clone(), source: ResourceSource::DevelopmentOverride }),
+        Some(_) => Err(format!("Development override for {name} does not point to a file.")),
+        None => Err(format!("Resource {name} is unavailable.")),
+    }
+}
+
+/// Verifies every resource the manifest under `root` lists, as discovery would before using it.
+/// Returns why the first one that fails does.
+pub fn verify_manifest_root(root: &Path) -> Result<(), String> {
+    let manifest = read_manifest(&root.join("manifest.json"))?;
+    if !manifest.matches_this_application() { return Err("The manifest does not match this application.".to_string()); }
+    for (name, spec) in &manifest.resources {
+        if !spec.path.components().all(|component| matches!(component, std::path::Component::Normal(_))) {
+            return Err(format!("The manifest lists {name} outside its folder."));
+        }
+        verify_resource(&root.join(&spec.path), spec).map_err(|failure| format!("Resource {name} failed verification: {failure:?}."))?;
+    }
+    Ok(())
+}
+
+fn read_manifest(manifest_path: &Path) -> Result<ResourceManifest, String> {
+    serde_json::from_slice(&fs::read(manifest_path).map_err(|e| format!("Cannot read resource manifest: {e}"))?)
+        .map_err(|e| format!("Invalid resource manifest: {e}"))
+}
+
+impl ResourceManifest {
+    fn matches_this_application(&self) -> bool {
+        self.version == 1 && (self.architecture == "all" || self.architecture == std::env::consts::ARCH)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VerificationFailure {
+    Missing(String),
+    MissingVersion,
+    MissingLicense,
+    OverSizeLimit,
+    ChecksumMismatch,
+}
+
+impl VerificationFailure {
+    fn bundled_message(&self) -> String {
+        match self {
+            Self::Missing(error) => format!("Bundled resource is unavailable: {error}"),
+            Self::MissingVersion => "Bundled resource has no version metadata.".to_string(),
+            Self::MissingLicense => "Bundled resource has no license metadata.".to_string(),
+            Self::OverSizeLimit => "Bundled resource exceeds its declared size limit.".to_string(),
+            Self::ChecksumMismatch => "Bundled resource checksum does not match its manifest.".to_string(),
+        }
+    }
+}
+
+pub fn verify_resource(path: &Path, spec: &ResourceSpec) -> Result<(), VerificationFailure> {
+    let bytes = fs::read(path).map_err(|e| VerificationFailure::Missing(e.to_string()))?;
+    if spec.version.trim().is_empty() { return Err(VerificationFailure::MissingVersion); }
+    if spec.license.trim().is_empty() { return Err(VerificationFailure::MissingLicense); }
+    if bytes.len() as u64 > spec.max_bytes { return Err(VerificationFailure::OverSizeLimit); }
+    if digest_hex(&bytes) != spec.sha256 { return Err(VerificationFailure::ChecksumMismatch); }
     Ok(())
 }
 
@@ -188,6 +265,86 @@ mod tests {
         resources.insert("adapter".to_string(), ResourceSpec { path: PathBuf::from("bin"), version: "test".to_string(), sha256: "bad".to_string(), license: "MIT".to_string(), source_url: "https://example.test/adapter".to_string(), max_bytes: 100 });
         fs::write(root.join("manifest.json"), serde_json::to_vec(&ResourceManifest { version: 1, architecture: std::env::consts::ARCH.to_string(), resources }).unwrap()).unwrap();
         assert!(resolve("adapter", &root, "TOOLBOX_TEST_OVERRIDE", "adapter").is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn spec_for(path: &str, bytes: &[u8]) -> ResourceSpec {
+        ResourceSpec { path: PathBuf::from(path), version: "1.0".to_string(), sha256: digest_hex(bytes), license: "MIT".to_string(), source_url: String::new(), max_bytes: 100 }
+    }
+
+    fn write_manifest_root(root: &Path, name: &str, file: &str, bytes: &[u8]) {
+        fs::create_dir_all(root).unwrap();
+        fs::write(root.join(file), bytes).unwrap();
+        let resources = BTreeMap::from([(name.to_string(), spec_for(file, bytes))]);
+        fs::write(root.join("manifest.json"), serde_json::to_vec(&ResourceManifest { version: 1, architecture: "all".to_string(), resources }).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn verifier_reports_a_distinct_reason_for_each_failure() {
+        let root = root();
+        fs::create_dir_all(&root).unwrap();
+        let file = root.join("pack.bin");
+        fs::write(&file, b"pack bytes").unwrap();
+        let good = spec_for("pack.bin", b"pack bytes");
+        assert_eq!(verify_resource(&file, &good), Ok(()));
+        assert!(matches!(verify_resource(&root.join("absent.bin"), &good), Err(VerificationFailure::Missing(_))));
+        assert_eq!(verify_resource(&file, &ResourceSpec { sha256: digest_hex(b"other"), ..good.clone() }), Err(VerificationFailure::ChecksumMismatch));
+        assert_eq!(verify_resource(&file, &ResourceSpec { max_bytes: 3, ..good.clone() }), Err(VerificationFailure::OverSizeLimit));
+        assert_eq!(verify_resource(&file, &ResourceSpec { version: " ".to_string(), ..good.clone() }), Err(VerificationFailure::MissingVersion));
+        assert_eq!(verify_resource(&file, &ResourceSpec { license: String::new(), ..good.clone() }), Err(VerificationFailure::MissingLicense));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn pack_backed_lookup_prefers_bundled_then_installed_pack_then_override_and_never_path() {
+        let root = root();
+        let name = "toolbox-pack-backed-test-resource";
+        write_manifest_root(&root.join("bundled"), name, "bundled.bin", b"bundled");
+        write_manifest_root(&root.join("pack"), name, "pack.bin", b"pack");
+        let development_override = root.join("override.bin");
+        fs::write(&development_override, b"override").unwrap();
+        let on_path = root.join("system");
+        fs::create_dir_all(&on_path).unwrap();
+        fs::write(on_path.join(name), b"system").unwrap();
+        struct RestorePath(Option<std::ffi::OsString>);
+        impl Drop for RestorePath {
+            fn drop(&mut self) { match self.0.take() { Some(value) => std::env::set_var("PATH", value), None => std::env::remove_var("PATH") } }
+        }
+        let original_path = RestorePath(std::env::var_os("PATH"));
+        let mut search = vec![on_path.clone()];
+        search.extend(original_path.0.iter().flat_map(std::env::split_paths));
+        std::env::set_var("PATH", std::env::join_paths(search).unwrap());
+        assert_eq!(find_on_path(name), Some(on_path.join(name)));
+
+        let mut locations = PackBackedLocations { bundled_root: Some(root.join("bundled")), installed_pack_root: Some(root.join("pack")), development_override: Some(development_override.clone()) };
+        assert_eq!(resolve_pack_backed(name, &locations), Ok(ResolvedResource { path: root.join("bundled/bundled.bin"), source: ResourceSource::Bundled }));
+        fs::remove_file(root.join("bundled/manifest.json")).unwrap();
+        assert_eq!(resolve_pack_backed(name, &locations), Ok(ResolvedResource { path: root.join("pack/pack.bin"), source: ResourceSource::InstalledPack }));
+        locations.installed_pack_root = None;
+        assert_eq!(resolve_pack_backed(name, &locations), Ok(ResolvedResource { path: development_override, source: ResourceSource::DevelopmentOverride }));
+        locations.development_override = None;
+        assert_eq!(resolve_pack_backed(name, &locations), Err(format!("Resource {name} is unavailable.")));
+        drop(original_path);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn pack_backed_lookup_does_not_fall_back_past_a_pack_that_fails_verification() {
+        let root = root();
+        let name = "ocrLanguage";
+        write_manifest_root(&root.join("pack"), name, "pack.bin", b"pack");
+        fs::write(root.join("pack/pack.bin"), b"changed").unwrap();
+        let development_override = root.join("override.bin");
+        fs::write(&development_override, b"override").unwrap();
+        let locations = PackBackedLocations { bundled_root: Some(root.join("bundled")), installed_pack_root: Some(root.join("pack")), development_override: Some(development_override) };
+        assert_eq!(resolve_pack_backed(name, &locations), Err("Resource ocrLanguage failed verification: ChecksumMismatch.".to_string()));
+        assert_eq!(verify_manifest_root(&root.join("pack")), Err("Resource ocrLanguage failed verification: ChecksumMismatch.".to_string()));
+        // An installed pack that lost its manifest is not skipped either.
+        fs::remove_file(root.join("pack/manifest.json")).unwrap();
+        assert_eq!(resolve_pack_backed(name, &locations), Err("The installed pack for ocrLanguage has no manifest.".to_string()));
+        fs::write(root.join("pack/pack.bin"), b"pack").unwrap();
+        write_manifest_root(&root.join("pack"), name, "pack.bin", b"pack");
+        assert_eq!(verify_manifest_root(&root.join("pack")), Ok(()));
         let _ = fs::remove_dir_all(root);
     }
 
