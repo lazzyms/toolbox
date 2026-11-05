@@ -23,7 +23,7 @@ const SKIPPED: &[&str] = &[
     "soft-page-break", "hidden-paragraph",
 ];
 
-type Props = HashMap<String, String>;
+pub(super) type Props = HashMap<String, String>;
 
 fn damaged() -> ToolError { ToolError::invalid_input(DAMAGED) }
 
@@ -133,13 +133,13 @@ pub fn parse(bytes: &[u8], budget: u64, exceeded: ToolError, locked: ToolError) 
 }
 
 #[derive(Debug, Default)]
-struct StyleDef { parent: Option<String>, text: Props, paragraph: Props, graphic: Props, master: Option<String>, outline: Option<u8> }
+struct StyleDef { parent: Option<String>, text: Props, paragraph: Props, graphic: Props, table: Props, master: Option<String>, outline: Option<u8> }
 
 #[derive(Debug, Clone, Copy)]
 struct Level { bullet: bool, start: u64 }
 
 #[derive(Debug, Default)]
-struct Styles {
+pub(super) struct Styles {
     defs: HashMap<String, StyleDef>,
     defaults: HashMap<String, StyleDef>,
     lists: HashMap<String, HashMap<u8, Level>>,
@@ -150,7 +150,7 @@ struct Styles {
 
 struct ParaStyle { text: Props, para: Props, outline: Option<u8>, master: Option<String> }
 
-fn unquote(value: &str) -> String { value.trim().trim_matches(|character| character == '\'' || character == '"').to_string() }
+pub(super) fn unquote(value: &str) -> String { value.trim().trim_matches(|character| character == '\'' || character == '"').to_string() }
 
 fn properties(node: &Node) -> Props { node.attrs.iter().cloned().collect() }
 
@@ -170,7 +170,7 @@ fn font_size(text: &Props) -> f32 {
 }
 
 impl Styles {
-    fn read(&mut self, root: &Node) {
+    pub(super) fn read(&mut self, root: &Node) {
         for section in root.nodes() {
             match section.name.as_str() {
                 "font-face-decls" => for face in section.nodes().filter(|node| node.name == "font-face") {
@@ -199,6 +199,7 @@ impl Styles {
                     "text-properties" => definition.text = properties(child),
                     "paragraph-properties" => definition.paragraph = properties(child),
                     "graphic-properties" => definition.graphic = properties(child),
+                    "table-properties" => definition.table = properties(child),
                     _ => {}
                 }
             }
@@ -244,7 +245,7 @@ impl Styles {
         ParaStyle { text, para, outline: chain.iter().rev().find_map(|def| def.outline), master: chain.last().and_then(|def| def.master.clone()) }
     }
 
-    fn text(&self, base: &Props, name: Option<&str>) -> Props {
+    pub(super) fn text(&self, base: &Props, name: Option<&str>) -> Props {
         let mut text = base.clone();
         for def in self.chain("text", name) { merge_text(&mut text, &def.text); }
         text
@@ -256,11 +257,32 @@ impl Styles {
         graphic
     }
 
+    /// The text properties of a spreadsheet cell style, starting from the default cell style.
+    pub(super) fn cell_text(&self, name: Option<&str>) -> Props {
+        let mut text = Props::new();
+        for def in self.defaults.get("table-cell").into_iter().chain(self.chain("table-cell", Some("Default"))).chain(self.chain("table-cell", name)) { merge_text(&mut text, &def.text); }
+        text
+    }
+
+    /// A spreadsheet table style's properties and the master page it prints on.
+    pub(super) fn table(&self, name: Option<&str>) -> (Props, Option<String>) {
+        let chain = self.chain("table", name);
+        let props = chain.iter().fold(Props::new(), |mut props, def| { props.extend(def.table.clone()); props });
+        (props, chain.iter().rev().find_map(|def| def.master.clone()))
+    }
+
+    /// The page layout properties of a master page, falling back to the default master.
+    pub(super) fn page_layout(&self, master: Option<&str>) -> Option<&Node> {
+        let named = |name: &str| self.masters.iter().find(|page| page.attr("name") == Some(name));
+        let page = master.and_then(named).or_else(|| named("Default")).or_else(|| named("Standard")).or(self.masters.first())?;
+        self.layouts.get(page.attr("page-layout-name")?)?.child("page-layout-properties")
+    }
+
     fn level(&self, list: Option<&str>, level: u8) -> Level {
         list.and_then(|name| self.lists.get(name)).and_then(|levels| levels.get(&(level + 1))).copied().unwrap_or(Level { bullet: true, start: 1 })
     }
 
-    fn font(&self, text: &Props) -> Option<String> {
+    pub(super) fn font(&self, text: &Props) -> Option<String> {
         text.get("font-name").map(|name| self.faces.get(name).map(|(family, _)| family.clone()).unwrap_or_else(|| name.clone()))
             .or_else(|| text.get("font-family").map(|family| unquote(family)))
             .filter(|family| !family.is_empty())
@@ -290,7 +312,7 @@ fn internal(href: &str) -> Option<String> {
     (!outside).then(|| path.to_string())
 }
 
-fn link_target(href: &str) -> Option<String> {
+pub(super) fn link_target(href: &str) -> Option<String> {
     match href.trim().strip_prefix('#') {
         Some(anchor) => (!anchor.is_empty()).then(|| format!("#{anchor}")),
         None => safe_uri(href),
@@ -465,21 +487,7 @@ impl Converter<'_> {
         Ok(())
     }
 
-    fn style(&mut self, text: &Props) -> (Style, bool) {
-        let font = self.styles.font(text);
-        let flag = |name: &str| text.get(name).is_some_and(|value| value != "none");
-        let style = Style {
-            bold: text.get("font-weight").is_some_and(|weight| weight == "bold" || weight.parse::<u16>().is_ok_and(|weight| weight >= 600)),
-            italic: matches!(text.get("font-style").map(String::as_str), Some("italic" | "oblique")),
-            code: false,
-            strike: flag("text-line-through-style"),
-            underline: flag("text-underline-style"),
-            family: self.fonts.index(font.as_deref()),
-            half_points: (font_size(text) * 2.).round() as u16,
-            color: text.get("color").and_then(|value| hex_color(value.trim_start_matches('#'))),
-        };
-        (style, text.get("display").map(String::as_str) == Some("none"))
-    }
+    fn style(&mut self, text: &Props) -> (Style, bool) { text_style(&self.styles, &mut self.fonts, text) }
 
     fn inline(&mut self, node: &Node, text: &Props, link: Option<&str>, out: &mut Collected) -> Result<(), ToolError> {
         let (style, hidden) = self.style(text);
@@ -649,8 +657,25 @@ fn paint(graphic: &Props, shape: bool) -> (Option<[u8; 3]>, Option<[u8; 3]>) {
     (fill, line)
 }
 
+/// The run style for text properties, and whether the text is hidden.
+pub(super) fn text_style(styles: &Styles, fonts: &mut Families, text: &Props) -> (Style, bool) {
+    let font = styles.font(text);
+    let flag = |name: &str| text.get(name).is_some_and(|value| value != "none");
+    let style = Style {
+        bold: text.get("font-weight").is_some_and(|weight| weight == "bold" || weight.parse::<u16>().is_ok_and(|weight| weight >= 600)),
+        italic: matches!(text.get("font-style").map(String::as_str), Some("italic" | "oblique")),
+        code: false,
+        strike: flag("text-line-through-style"),
+        underline: flag("text-underline-style"),
+        family: fonts.index(font.as_deref()),
+        half_points: (font_size(text) * 2.).round() as u16,
+        color: text.get("color").and_then(|value| hex_color(value.trim_start_matches('#'))),
+    };
+    (style, text.get("display").map(String::as_str) == Some("none"))
+}
+
 /// Runs of white space in document text show as one space, and none at the start of a paragraph.
-fn push_collapsed(out: &mut Collected, value: &str, style: Style, link: Option<&str>) {
+pub(super) fn push_collapsed(out: &mut Collected, value: &str, style: Style, link: Option<&str>) {
     let mut space = out.segments.last().and_then(|spans| spans.last()).is_none_or(|span| span.text.ends_with([' ', '\n']));
     let mut text = String::with_capacity(value.len());
     for character in value.chars() {

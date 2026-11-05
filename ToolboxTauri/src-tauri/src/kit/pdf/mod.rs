@@ -11,6 +11,9 @@ pub mod wordprocessing;
 pub mod docx;
 pub mod odt;
 pub mod delimited;
+pub mod spreadsheet;
+pub mod xlsx;
+pub mod ods;
 pub mod convert;
 
 use std::collections::HashSet;

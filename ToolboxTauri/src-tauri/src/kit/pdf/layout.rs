@@ -189,8 +189,9 @@ pub enum Target { Uri(String), Anchor(String), Page { page: usize, y: f32 } }
 #[derive(Debug, Clone, PartialEq)]
 pub struct Link { pub rect: [f32; 4], pub target: Target }
 
+/// A laid-out page; `size` overrides the document's page size for this page.
 #[derive(Debug, Default)]
-pub struct PageOut { pub content: String, pub links: Vec<Link> }
+pub struct PageOut { pub content: String, pub links: Vec<Link>, pub size: Option<(f32, f32)> }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Bookmark { pub level: u8, pub title: String, pub page: usize, pub y: f32 }
@@ -874,7 +875,6 @@ pub struct Assembly<'a> {
 }
 
 pub fn assemble<S: SystemFontLookup>(book: &FontBook<'_, S>, assembly: Assembly<'_>) -> Result<Document, ToolError> {
-    let (width, height) = assembly.size;
     let mut document = Document::with_version("1.7");
     let pages_id = document.new_object_id();
     let page_ids = (0..assembly.pages.len()).map(|_| document.new_object_id()).collect::<Vec<_>>();
@@ -899,6 +899,7 @@ pub fn assemble<S: SystemFontLookup>(book: &FontBook<'_, S>, assembly: Assembly<
     let resources_id = document.add_object(resources);
 
     for (index, page) in assembly.pages.into_iter().enumerate() {
+        let (width, height) = page.size.unwrap_or(assembly.size);
         let content_id = document.add_object(Stream::new(dictionary! {}, page.content.into_bytes()));
         let mut annotations = Vec::new();
         for link in page.links {

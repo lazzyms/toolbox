@@ -13,8 +13,8 @@ use crate::kit::common::limits;
 use crate::kit::contracts::{native_capabilities, OutcomePointer, OutcomeWarning, SkipCode, SkipReason, ToolError, WarningKind};
 use crate::kit::office;
 use crate::kit::pdf::font_resolver::{FontResolver, FontSource, FontStyle, SystemFontLookup};
-use crate::kit::pdf::layout::{assemble, expand_tabs, Assembly, Block, Face, FontBook, Flow, Geometry, Omitted, PageOut, PageSetup, Theme};
-use crate::kit::pdf::{delimited, docx, markdown, odt, rtf};
+use crate::kit::pdf::layout::{assemble, expand_tabs, Assembly, Block, Bookmark, Face, FontBook, Flow, Geometry, Omitted, PageOut, PageSetup, Theme};
+use crate::kit::pdf::{delimited, docx, markdown, ods, odt, rtf, xlsx};
 
 pub const COMMAND: &str = "convert_to_pdf";
 const ALREADY_PDF: &str = "Already a PDF. Nothing was made.";
@@ -155,6 +155,22 @@ impl Default for TableOptions {
     fn default() -> Self { Self { delimiter: Delimiter::default(), header_row: true, encoding: TextEncoding::default(), orientation: Orientation::default(), fit: TableFit::default() } }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum SheetChoice { All, #[default] Visible }
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SpreadsheetOptions {
+    pub sheets: SheetChoice,
+    pub print_areas: bool,
+    pub fit_to_width: bool,
+}
+
+impl Default for SpreadsheetOptions {
+    fn default() -> Self { Self { sheets: SheetChoice::default(), print_areas: true, fit_to_width: true } }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConvertToPdfRequest {
@@ -164,6 +180,7 @@ pub struct ConvertToPdfRequest {
     #[serde(default)] pub plain_text: Option<PlainTextOptions>,
     #[serde(default)] pub markdown: Option<MarkdownOptions>,
     #[serde(default)] pub tables: Option<TableOptions>,
+    #[serde(default)] pub spreadsheets: Option<SpreadsheetOptions>,
 }
 
 pub struct ConvertJob<S: SystemFontLookup> {
@@ -226,6 +243,7 @@ fn convert<S: SystemFontLookup>(job: &ConvertJob<S>, input: PathBuf) -> JobOutco
         "rtf" => rich_text(job, &input),
         "docx" | "odt" => word_file(job, &input, &extension),
         "csv" | "tsv" => table_file(job, &job.request.tables.unwrap_or_default(), &input, &extension),
+        "xlsx" | "ods" => spreadsheet_file(job, &job.request.spreadsheets.unwrap_or_default(), &input, &extension),
         _ => plain_text(job, &job.request.plain_text.unwrap_or_default(), &input),
     };
     result.unwrap_or_else(|error| JobOutcome::failure(input, error))
@@ -507,6 +525,75 @@ fn table_file<S: SystemFontLookup>(job: &ConvertJob<S>, options: &TableOptions, 
     let rows = if rows == 1 { "1 row".to_string() } else { format!("{} rows", grouped(rows)) };
     let detail = format!("{}. {rows}, {delimiter_name}. Read as {encoding}.", page_count(count));
     Ok(JobOutcome::succeeded(input.to_path_buf(), vec![path], detail).with_fonts(book.reports()))
+}
+
+fn spreadsheet_file<S: SystemFontLookup>(job: &ConvertJob<S>, options: &SpreadsheetOptions, input: &Path, extension: &str) -> Result<JobOutcome, ToolError> {
+    let bytes = fs::read(input).map_err(|error| ToolError::processing(format!("Could not read the file: {error}")))?;
+    let locked = ToolError::invalid_input(LOCKED).with_pointer(OutcomePointer::Tool { tool_id: "lock-unlock".into() });
+    let limits = limits::recorded(COMMAND).ok_or_else(|| ToolError::processing("No size limits are recorded for converting to PDF."))?;
+    let workbook = if extension == "ods" {
+        ods::parse(&bytes, limits.max_expanded_bytes, limits.expansion_error(input), locked)?
+    } else {
+        match office::is_encrypted(&bytes, "xlsx") {
+            Ok(false) => {}
+            Ok(true) => return Err(locked),
+            Err(_) => return Err(ToolError::invalid_input(xlsx::DAMAGED)),
+        }
+        xlsx::parse(&bytes, limits.max_expanded_bytes, limits.expansion_error(input))?
+    };
+    let mut theme = Theme::new(workbook.body_family.as_deref().unwrap_or(TABLE_FAMILY), CODE_FAMILY, TABLE_SIZE, false);
+    theme.families = workbook.families.clone();
+
+    let mut book = FontBook::new(&job.fonts);
+    let (mut pages, mut bookmarks, mut omitted) = (Vec::new(), Vec::new(), Omitted::default());
+    let (mut printed, mut left_out) = (0, 0);
+    for sheet in &workbook.sheets {
+        if sheet.hidden && options.sheets == SheetChoice::Visible {
+            if !sheet.is_empty() { left_out += 1; }
+            continue;
+        }
+        let tables = sheet.tables(options.print_areas)?;
+        if tables.is_empty() { continue; }
+        omitted = Omitted { pictures: omitted.pictures + sheet.omitted.pictures, charts: omitted.charts + sheet.omitted.charts, diagrams: omitted.diagrams + sheet.omitted.diagrams, objects: omitted.objects + sheet.omitted.objects };
+        let paper = sheet.paper.map(|(width, height)| PageSetup { width: Some(width), height: Some(height), ..PageSetup::default() }).unwrap_or_default();
+        let portrait = page_geometry(paper, &job.request.page_defaults);
+        let (width, height) = if sheet.landscape { (portrait.width.max(portrait.height), portrait.width.min(portrait.height)) } else { (portrait.width, portrait.height) };
+        let geometry = Geometry::uniform(width, height, job.request.page_defaults.margins.points().min(width / 4.).min(height / 4.));
+
+        let mut size = TABLE_SIZE;
+        if options.fit_to_width || sheet.fit {
+            let mut measure = Flow::new(&mut book, Theme { body_size: TABLE_SIZE, ..theme.clone() }, &[], geometry);
+            for table in &tables {
+                if let Block::Table { head, rows, .. } = table { size = size.min(TABLE_SIZE * measure.table_scale(head, rows)? * 0.995); }
+            }
+            size = size.clamp(MIN_TABLE_SIZE, TABLE_SIZE);
+        }
+        let blocks = tables.into_iter().enumerate().flat_map(|(index, table)| (index > 0).then_some(Block::PageBreak).into_iter().chain([table])).collect::<Vec<_>>();
+        let mut flow = Flow::new(&mut book, Theme { body_size: size, ..theme.clone() }, &[], geometry);
+        flow.blocks(&blocks)?;
+        let laid = flow.finish();
+        bookmarks.push(Bookmark { level: 1, title: sheet.name.clone(), page: pages.len(), y: height });
+        pages.extend(laid.pages.into_iter().map(|page| PageOut { size: Some((width, height)), ..page }));
+        printed += 1;
+    }
+    if pages.is_empty() {
+        let hint = if left_out > 0 { " Its hidden sheets have content; choose All sheets to include them." } else { "" };
+        return Err(ToolError::invalid_input(format!("This spreadsheet has nothing to print, so no PDF was made.{hint}")));
+    }
+    let count = pages.len();
+    let first = pages[0].size.unwrap_or_default();
+    let assembly = Assembly { size: first, pages, pictures: &[], bookmarks: &bookmarks, anchors: &BTreeMap::new(), title: workbook.title.as_deref(), author: workbook.author.as_deref() };
+    let document = assemble(&book, assembly)?;
+    let path = save(&job.request.output_location, input, document)?;
+
+    let mut detail = format!("{}. {}.", page_count(count), if printed == 1 { "1 sheet".to_string() } else { format!("{printed} sheets") });
+    match left_out {
+        0 => {}
+        1 => detail.push_str(" 1 hidden sheet left out."),
+        count => detail.push_str(&format!(" {count} hidden sheets left out.")),
+    }
+    let outcome = JobOutcome::succeeded(input.to_path_buf(), vec![path], detail).with_fonts(book.reports());
+    Ok(with_notes(outcome, [omitted_content(omitted)]))
 }
 
 fn decode(bytes: &[u8], encoding: TextEncoding) -> Result<(String, &'static str), ToolError> {
@@ -1525,17 +1612,21 @@ mod tests {
         assert!(first_line < picture_bottom, "wrapped text flows below the picture, not under it: {first_line}");
     }
 
-    #[test]
-    fn locked_damaged_and_oversized_odt_documents_fail_alone() {
-        let root = sandbox("odt_batch");
+    fn encrypted_open_document(mimetype: &str) -> Vec<u8> {
         let manifest = br#"<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"><manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"><manifest:encryption-data manifest:checksum-type="SHA1/1K" manifest:checksum="AA=="><manifest:algorithm manifest:algorithm-name="Blowfish CFB" manifest:initialisation-vector="AA=="/></manifest:encryption-data></manifest:file-entry></manifest:manifest>"#;
-        let locked = root.join("locked.odt");
         let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-        for (name, data) in [("mimetype", &b"application/vnd.oasis.opendocument.text"[..]), ("META-INF/manifest.xml", &manifest[..]), ("content.xml", b"\x9c\x01 ciphertext")] {
+        for (name, data) in [("mimetype", mimetype.as_bytes()), ("META-INF/manifest.xml", &manifest[..]), ("content.xml", b"\x9c\x01 ciphertext")] {
             archive.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
             std::io::Write::write_all(&mut archive, data).unwrap();
         }
-        fs::write(&locked, archive.finish().unwrap().into_inner()).unwrap();
+        archive.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn locked_damaged_and_oversized_odt_documents_fail_alone() {
+        let root = sandbox("odt_batch");
+        let locked = root.join("locked.odt");
+        fs::write(&locked, encrypted_open_document("application/vnd.oasis.opendocument.text")).unwrap();
         let damaged = root.join("damaged.odt");
         fs::write(&damaged, b"PK\x03\x04 not really a package").unwrap();
         let bomb = root.join("bomb.odt");
@@ -1678,5 +1769,155 @@ mod tests {
         assert_eq!(outcomes[0].error().unwrap().message, "This table has no rows, so no PDF was made.");
         assert!(succeeded(&outcomes[1]));
         assert_eq!(names(&root), ["data.csv", "data.pdf", "empty.tsv"]);
+    }
+
+    fn xlsx_workbook() -> Vec<u8> {
+        let styles = r#"<fonts count="1"><font><sz val="11"/><name val="Arial"/></font></fonts><cellXfs count="2"><xf numFmtId="0" fontId="0"/><xf numFmtId="4" fontId="0"/></cellXfs>"#;
+        let summary = xlsx::fixtures::sheet("", concat!(
+            r#"<row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c><c r="C1" t="s"><v>2</v></c></row>"#,
+            r#"<row r="2"><c r="A2" t="s"><v>3</v></c><c r="B2" s="1"><f>SUM(40,2)</f><v>42</v></c></row>"#,
+            r#"<row r="3"><c r="A3" t="s"><v>4</v></c><c r="B3" s="1"><v>7</v></c></row>"#,
+            r#"<row r="10"><c r="A10" t="s"><v>5</v></c></row>"#,
+        ), r#"<pageSetup orientation="portrait"/>"#);
+        let secret = xlsx::fixtures::sheet("", r#"<row r="1"><c r="A1" t="s"><v>6</v></c></row>"#, "");
+        let wide = xlsx::fixtures::sheet("", r#"<row r="1"><c r="A1" t="s"><v>7</v></c></row>"#, r#"<pageSetup orientation="landscape"/>"#);
+        xlsx::fixtures::xlsx(
+            &[("Summary", "visible", &summary), ("Secret", "hidden", &secret), ("Wide", "visible", &wide)],
+            r#"<definedName name="_xlnm.Print_Area" localSheetId="0">Summary!$A$1:$B$3</definedName><definedName name="_xlnm.Print_Titles" localSheetId="0">Summary!$1:$1</definedName>"#,
+            styles,
+            &["Item", "Total", "Beyond", "Pens", "Ink", "Outside", "Hidden note", "Wide data"],
+        )
+    }
+
+    fn ods_workbook() -> Vec<u8> {
+        let styles = concat!(
+            r#"<office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm" style:print-orientation="portrait"/></style:page-layout>"#,
+            r#"<style:page-layout style:name="pm2"><style:page-layout-properties fo:page-width="29.7cm" fo:page-height="21cm" style:print-orientation="landscape"/></style:page-layout></office:automatic-styles>"#,
+            r#"<office:master-styles><style:master-page style:name="Default" style:page-layout-name="pm1"/><style:master-page style:name="Landscape" style:page-layout-name="pm2"/></office:master-styles>"#,
+        );
+        let automatic = concat!(
+            r#"<style:style style:name="ta1" style:family="table" style:master-page-name="Default"><style:table-properties table:display="true"/></style:style>"#,
+            r#"<style:style style:name="ta2" style:family="table" style:master-page-name="Default"><style:table-properties table:display="false"/></style:style>"#,
+            r#"<style:style style:name="ta3" style:family="table" style:master-page-name="Landscape"><style:table-properties table:display="true"/></style:style>"#,
+        );
+        let cell = |text: &str| format!("<table:table-cell><text:p>{text}</text:p></table:table-cell>");
+        let number = |value: &str, text: &str, formula: &str| format!(r#"<table:table-cell {formula} office:value-type="float" office:value="{value}"><text:p>{text}</text:p></table:table-cell>"#);
+        let body = format!(
+            concat!(
+                r#"<table:table table:name="Summary" table:style-name="ta1" table:print-ranges="Summary.A1:Summary.B3"><table:table-column table:number-columns-repeated="3"/>"#,
+                "<table:table-header-rows><table:table-row>{}{}{}</table:table-row></table:table-header-rows>",
+                "<table:table-row>{}{}</table:table-row><table:table-row>{}{}</table:table-row>",
+                r#"<table:table-row table:number-rows-repeated="6"><table:table-cell table:number-columns-repeated="3"/></table:table-row><table:table-row>{}</table:table-row></table:table>"#,
+                r#"<table:table table:name="Secret" table:style-name="ta2"><table:table-row>{}</table:table-row></table:table>"#,
+                r#"<table:table table:name="Wide" table:style-name="ta3"><table:table-row>{}</table:table-row></table:table>"#,
+            ),
+            cell("Item"), cell("Total"), cell("Beyond"),
+            cell("Pens"), number("42", "42.00", r#"table:formula="of:=SUM(40;2)""#), cell("Ink"), number("7", "7.00", ""),
+            cell("Outside"), cell("Hidden note"), cell("Wide data"),
+        );
+        ods::fixtures::ods(&styles, automatic, &body)
+    }
+
+    fn sheets_option(sheets: &str, print_areas: bool) -> serde_json::Value {
+        json!({ "spreadsheets": { "sheets": sheets, "printAreas": print_areas, "fitToWidth": true } })
+    }
+
+    fn assert_spreadsheet_outcomes(root: &Path, input: &Path) {
+        let original = fs::read(input).unwrap();
+        let outcomes = convert_paths(&[input], json!({}));
+        assert!(succeeded(&outcomes[0]), "{:?}", outcomes[0]);
+        assert_eq!(outcomes[0].detail, "2 pages. 2 sheets. 1 hidden sheet left out.");
+        let document = Document::load(root.join("book.pdf")).unwrap();
+        assert_eq!(document.get_pages().len(), 2);
+        let summary = document.extract_text(&[1]).unwrap();
+        assert!(in_order(&summary, &["Item", "Total", "Pens", "42.00", "Ink", "7.00"]), "{summary}");
+        for absent in ["Beyond", "Outside", "SUM", "Hidden note"] { assert!(!summary.contains(absent), "{absent} in {summary}"); }
+        let (portrait, landscape) = (media_box(&document, 1), media_box(&document, 2));
+        assert!(portrait[2] < portrait[3], "{portrait:?}");
+        assert!(landscape[2] > landscape[3], "{landscape:?}");
+        assert!(document.extract_text(&[2]).unwrap().contains("Wide data"));
+        assert_eq!(outline_titles(&document), ["Summary", "Wide"]);
+
+        let outcomes = convert_paths(&[input], sheets_option("all", true));
+        assert_eq!(outcomes[0].detail, "3 pages. 3 sheets.");
+        let document = Document::load(root.join("book-1.pdf")).unwrap();
+        assert!(document.extract_text(&[2]).unwrap().contains("Hidden note"));
+        assert_eq!(outline_titles(&document), ["Summary", "Secret", "Wide"]);
+
+        let outcomes = convert_paths(&[input], sheets_option("visible", false));
+        assert_eq!(outcomes[0].detail, "2 pages. 2 sheets. 1 hidden sheet left out.");
+        let whole = Document::load(root.join("book-2.pdf")).unwrap().extract_text(&[1]).unwrap();
+        assert!(in_order(&whole, &["Item", "Total", "Beyond", "Pens", "42.00", "Outside"]), "{whole}");
+        assert_eq!(fs::read(input).unwrap(), original);
+    }
+
+    #[test]
+    fn excel_workbooks_respect_hidden_sheets_print_areas_orientation_and_stored_results() {
+        let root = sandbox("xlsx");
+        let input = root.join("book.xlsx");
+        fs::write(&input, xlsx_workbook()).unwrap();
+        assert_spreadsheet_outcomes(&root, &input);
+        assert_eq!(names(&root), ["book-1.pdf", "book-2.pdf", "book.pdf", "book.xlsx"]);
+    }
+
+    #[test]
+    fn opendocument_spreadsheets_match_excel() {
+        let root = sandbox("ods");
+        let input = root.join("book.ods");
+        fs::write(&input, ods_workbook()).unwrap();
+        assert_spreadsheet_outcomes(&root, &input);
+        assert_eq!(names(&root), ["book-1.pdf", "book-2.pdf", "book.ods", "book.pdf"]);
+    }
+
+    #[test]
+    fn wide_sheets_fit_the_page_width_unless_turned_off() {
+        let root = sandbox("xlsx_fit");
+        let cells = (0..26u8).map(|column| format!(r#"<c r="{}1" t="inlineStr"><is><t>Column heading {column}</t></is></c>"#, (b'A' + column) as char)).collect::<String>();
+        let wide = xlsx::fixtures::sheet("", &format!(r#"<row r="1">{cells}</row>"#), "");
+        let input = root.join("wide.xlsx");
+        fs::write(&input, xlsx::fixtures::xlsx(&[("Wide", "visible", &wide)], "", "", &[])).unwrap();
+        let fit = convert_paths(&[&input], json!({}));
+        assert!(succeeded(&fit[0]), "{:?}", fit[0]);
+        let fitted = font_sizes(&Document::load(root.join("wide.pdf")).unwrap(), 1);
+        assert!(fitted.iter().all(|size| *size < TABLE_SIZE * 0.95 * 0.6), "{fitted:?}");
+        convert_paths(&[&input], json!({ "spreadsheets": { "sheets": "visible", "printAreas": true, "fitToWidth": false } }));
+        let natural = font_sizes(&Document::load(root.join("wide-1.pdf")).unwrap(), 1);
+        assert!(natural.iter().all(|size| *size == TABLE_SIZE * 0.95), "{natural:?}");
+    }
+
+    #[test]
+    fn locked_damaged_oversized_and_blank_spreadsheets_fail_alone() {
+        let root = sandbox("xlsx_batch");
+        let plain = root.join("plain.xlsx");
+        fs::write(&plain, crate::kit::office::test_minimal_ooxml_package("xlsx")).unwrap();
+        fs::create_dir_all(root.join("locked")).unwrap();
+        let protected = crate::kit::office::OfficeProcessor::protect(plain.clone(), crate::kit::TEST_PASSWORD, &OutputLocation::CustomFolder(root.join("locked")));
+        let locked = protected.output_paths().first().cloned().unwrap_or_else(|| panic!("{protected:?}"));
+        let damaged = root.join("damaged.xlsx");
+        fs::write(&damaged, b"PK\x03\x04 not really a package").unwrap();
+        let bomb = root.join("bomb.xlsx");
+        fs::write(&bomb, crate::kit::common::limits::fixtures::zip_with_deflated("xl/workbook.xml", &crate::kit::common::limits::fixtures::zlib_of_zeros(500_000_001), 500_000_001)).unwrap();
+        let hidden_only = root.join("hidden.xlsx");
+        let note = xlsx::fixtures::sheet("", r#"<row r="1"><c r="A1" t="inlineStr"><is><t>Only here</t></is></c></row>"#, "");
+        fs::write(&hidden_only, xlsx::fixtures::xlsx(&[("Blank", "visible", &xlsx::fixtures::sheet("", "", "")), ("Notes", "hidden", &note)], "", "", &[])).unwrap();
+        let good = root.join("good.xlsx");
+        fs::write(&good, xlsx_workbook()).unwrap();
+        let locked_ods = root.join("locked.ods");
+        fs::write(&locked_ods, encrypted_open_document("application/vnd.oasis.opendocument.spreadsheet")).unwrap();
+        let inputs = [&locked, &damaged, &bomb, &hidden_only, &good, &locked_ods];
+        let originals = inputs.map(|path| fs::read(path).unwrap());
+
+        let outcomes = convert_paths(&inputs.map(|path| path.as_path()), json!({}));
+        let error = outcomes[0].error().unwrap();
+        assert_eq!(error.kind, ErrorKind::InvalidInput);
+        assert_eq!(error.message, LOCKED);
+        assert_eq!(error.pointer, Some(OutcomePointer::Tool { tool_id: "lock-unlock".into() }));
+        assert_eq!(outcomes[1].error().unwrap().message, xlsx::DAMAGED);
+        assert_eq!(outcomes[2].error().unwrap().kind, ErrorKind::LimitExceeded { limit: crate::kit::contracts::LimitKind::Decompression });
+        assert_eq!(outcomes[3].error().unwrap().message, "This spreadsheet has nothing to print, so no PDF was made. Its hidden sheets have content; choose All sheets to include them.");
+        assert!(succeeded(&outcomes[4]), "{:?}", outcomes[4]);
+        assert_eq!((outcomes[5].error().unwrap().message.as_str(), &outcomes[5].error().unwrap().pointer), (LOCKED, &error.pointer));
+        assert_eq!(inputs.map(|path| fs::read(path).unwrap()), originals);
+        assert!(["locked.pdf", "locked-1.pdf", "damaged.pdf", "bomb.pdf", "hidden.pdf"].iter().all(|name| !root.join(name).exists() && !root.join("locked").join(name).exists()));
     }
 }
