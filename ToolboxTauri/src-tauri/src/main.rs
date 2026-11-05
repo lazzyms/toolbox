@@ -236,6 +236,12 @@ async fn inspect_pdf_privacy(events: RunEvents, request: privacy::PrivacyRequest
     BatchRunner::inspect(&events, "inspect_pdf_privacy", request.paths.clone(), &request, privacy::inspect_job)
 }
 
+/// Saves the reports the view already holds, one "-details" file per PDF. It never opens a PDF.
+#[tauri::command]
+async fn save_privacy_reports(request: privacy::SaveReportsRequest) -> Vec<JobOutcome> {
+    privacy::save_reports(&request)
+}
+
 #[tauri::command]
 async fn repair_pdf(events: RunEvents, request: remaining::PdfToTextRequest) -> Vec<JobOutcome> {
     let request = Arc::new(request);
@@ -552,6 +558,7 @@ fn main() {
             rotate_pdf,
             repair_pdf,
             inspect_pdf_privacy,
+            save_privacy_reports,
             redact_pdf,
             compare_pdfs,
             remove_pdf_pages,
@@ -1203,6 +1210,14 @@ mod command_tests {
         }
         assert_eq!(std::fs::read_dir(&root).unwrap().count(), entries_before_inspection, "privacy check must create nothing");
         named(&mut naming, "inspect_pdf_privacy", pdf.clone(), Vec::new());
+        let pdf_bytes = std::fs::read(&pdf).unwrap();
+        let reports = privacy_reports.iter().map(|outcome| serde_json::json!({ "inputPath": outcome.input_path, "report": serde_json::from_str::<serde_json::Value>(&outcome.detail).unwrap() })).collect::<Vec<_>>();
+        let save_request = serde_json::from_value::<privacy::SaveReportsRequest>(serde_json::json!({ "reports": reports, "format": "json", "outputLocation": location(&root, "privacy reports") })).expect("Privacy Check save payload");
+        let saved_reports = tauri::async_runtime::block_on(save_privacy_reports(save_request));
+        let saved_names = saved_reports.iter().map(|outcome| outcome.output_paths().first().and_then(|path| path.file_name()).map(|name| name.to_string_lossy().into_owned())).collect::<Vec<_>>();
+        let stems = [&pdf, &pdf_two].map(|path| Some(format!("{}-details.json", path.file_stem().unwrap().to_string_lossy())));
+        assert_eq!(saved_names, stems, "privacy reports save as one -details file per PDF");
+        assert_eq!(std::fs::read(&pdf).unwrap(), pdf_bytes, "saving a report must not touch its PDF");
         outputs.extend(named(&mut naming, "convert_images", image.clone(), assert_success("convert", convert_images(RunEvents::silent(), ConvertImagesRequest { paths: vec![image.clone()], format: "jpg".into(), output_location: location(&root, "convert") }))));
         outputs.extend(named(&mut naming, "compress_images", image.clone(), assert_success("compress images", compress_images(RunEvents::silent(), serde_json::from_value::<CompressImagesRequest>(serde_json::json!({ "paths": [image.clone()], "quality": 80, "lossless": false, "outputLocation": location(&root, "compress images") })).expect("Compress Files view payload for compress_images")))));
         outputs.extend(named(&mut naming, "resize_images", image.clone(), assert_success("resize", resize_images(RunEvents::silent(), ResizeRequest { paths: vec![image.clone()], width: 128, height: 128, mode: "exact".into(), resampling: "lanczos".into(), keep_aspect_ratio: true, percentage: 100, longest_side: 128, output_location: location(&root, "resize") }))));
