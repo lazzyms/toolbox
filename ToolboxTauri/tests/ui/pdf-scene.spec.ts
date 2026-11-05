@@ -35,7 +35,7 @@ test.beforeEach(async ({ page }) => {
           if (w.previewDelay) await new Promise(resolve => setTimeout(resolve, w.previewDelay));
           return args.request.pageIndices.map((pageIndex: number) => ({ pageIndex, preview: { dataUrl: svg, width: 612, height: 792 } }));
         }
-        if (command === 'export_pdf_scene') return [{ inputPath: '/local/scene-fixture.pdf', outputPaths: ['/local/scene-fixture-edited-1.pdf'], state: 'succeeded', detail: 'PDF scene exported', failure: null, reason: null, warnings: [] }];
+        if (command === 'export_pdf_scene') return [{ inputPath: '/local/scene-fixture.pdf', outputPaths: [w.exportOutput ?? '/local/scene-fixture-edited-1.pdf'], state: 'succeeded', detail: w.exportDetail ?? 'PDF scene exported', failure: null, reason: null, warnings: [] }];
         return null;
       },
     };
@@ -578,4 +578,90 @@ test('scene export sends only the scene sections and the invoke boundary accepts
   expect(results[0].state).toBe('succeeded');
   const accepted = await page.evaluate(() => (window as any).calls.filter((c: any) => c.command === 'export_pdf_scene').at(-1).args.request);
   expect(accepted).toEqual(staged);
+});
+
+test('redaction marks are added, reviewed, recoloured and removed, and export waits for the disclosure', async ({ page }, testInfo) => {
+  await openEditor(page);
+  await page.evaluate(() => {
+    const w = window as any;
+    w.exportOutput = '/local/scene-fixture-redacted.pdf';
+    w.exportDetail = 'Pages 1 and 3 were redacted as 300 dpi images. Document metadata, XMP data and attachments were removed.';
+  });
+  const inspector = page.getByRole('complementary', { name: 'PDF editor inspector' });
+  const marks = inspector.getByRole('list', { name: 'Marks' });
+  await draw(page, 'Redact', .2);
+  await draw(page, 'Redact', .5);
+  await page.getByRole('button', { name: 'Page 3' }).click();
+  await draw(page, 'Redact', .3);
+  await expect(inspector.getByText('Redact', { exact: true })).toBeVisible();
+  await expect(marks.getByRole('button')).toHaveText(['Page 1, area 1', 'Page 1, area 2', 'Page 3, area 1']);
+  await expect(page.locator('.scene-redaction')).toHaveCount(1);
+  await expect(page.locator('.scene-redaction')).not.toHaveAttribute('data-preview', 'true');
+
+  await marks.getByRole('button', { name: 'Page 1, area 2' }).click();
+  await expect(page.getByRole('button', { name: 'Page 1', exact: true })).toHaveAttribute('aria-current', 'page');
+  await inspector.getByRole('button', { name: 'Remove mark' }).click();
+  await expect(marks.getByRole('button')).toHaveText(['Page 1, area 1', 'Page 3, area 1']);
+  await inspector.getByRole('radio', { name: 'White' }).click();
+  await expect(inspector.getByRole('radio', { name: 'White' })).toHaveAttribute('aria-checked', 'true');
+
+  await inspector.getByRole('button', { name: 'Review marks' }).click();
+  await expect(inspector.getByRole('status').filter({ hasText: 'Mark 1 of 2' })).toHaveText('Mark 1 of 2: page 1, area 1');
+  await expect(page.locator('.scene-redaction')).toHaveAttribute('data-preview', 'true');
+  await expect(page.locator('.scene-redaction')).toHaveCSS('fill', 'rgb(255, 255, 255)');
+  await inspector.getByRole('button', { name: 'Next' }).click();
+  await expect(inspector.getByText('Mark 2 of 2: page 3, area 1')).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('pdf-redact-reviewing.png') });
+  await expect(page.getByRole('button', { name: 'Page 3', exact: true })).toHaveAttribute('aria-current', 'page');
+  await page.getByRole('button', { name: 'Redaction mark 1' }).focus();
+  await page.keyboard.press('Tab');
+  await expect(inspector.getByText('Mark 1 of 2: page 1, area 1')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Redaction mark 1' })).toBeFocused();
+  await expect(page.getByRole('button', { name: 'Page 1', exact: true })).toHaveAttribute('aria-current', 'page');
+  await inspector.getByRole('checkbox', { name: 'Preview as exported' }).click();
+  await expect(page.locator('.scene-redaction')).not.toHaveAttribute('data-preview', 'true');
+  await inspector.getByRole('button', { name: 'Done reviewing' }).click();
+  await expect(inspector.getByRole('button', { name: 'Review marks' })).toBeVisible();
+
+  const exportButton = page.getByRole('button', { name: 'Export PDF', exact: true });
+  await expect(exportButton).toBeEnabled();
+  await exportButton.click();
+  const dialog = page.getByRole('dialog', { name: 'Before you export with redactions' });
+  await expect(dialog).toContainText('2 marks on pages 1 and 3 will be removed for good in the copy. To make sure nothing can be recovered:');
+  await expect(dialog.getByRole('listitem')).toHaveText([
+    "Pages 1 and 3 become 300 dpi images. Their text can't be selected or searched.",
+    'Comments, form fields and hidden layers on those pages are removed.',
+    'Document metadata, XMP data and attachments are removed from the whole copy.',
+  ]);
+  const continueExport = dialog.getByRole('button', { name: 'Continue to export' });
+  await expect(continueExport).toBeDisabled();
+  await page.screenshot({ path: testInfo.outputPath('pdf-redact-disclosure.png') });
+  await dialog.getByRole('button', { name: 'Review marks' }).click();
+  await expect(dialog).toBeHidden();
+  await expect(inspector.getByText('Mark 1 of 2: page 1, area 1')).toBeVisible();
+  expect(await page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'export_pdf_scene').length)).toBe(0);
+
+  await exportButton.click();
+  await dialog.getByRole('checkbox', { name: "I've checked the marks on every page" }).click();
+  await continueExport.click();
+  await expect.poll(() => page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'export_pdf_scene').length)).toBe(1);
+  const request = await page.evaluate(() => (window as any).calls.find((call: any) => call.command === 'export_pdf_scene').args.request);
+  expect(request.scene.pages.every((item: any) => !('redactions' in item))).toBe(true);
+  expect(request.redactions.map(({ pageIndex, color }: any) => [pageIndex, color])).toEqual([[0, '#ffffff'], [2, '#ffffff']]);
+  for (const [mark, y] of [[request.redactions[0], .2], [request.redactions[1], .3]] as const) {
+    expect(mark.rect.x).toBeCloseTo(612 * .2, 0);
+    expect(mark.rect.width).toBeCloseTo(612 * .35, 0);
+    expect(mark.rect.y).toBeCloseTo(792 * y, 0);
+    expect(mark.rect.height).toBeCloseTo(792 * .07, 0);
+  }
+  await expect(page.getByText('Pages 1 and 3 were redacted as 300 dpi images. Document metadata, XMP data and attachments were removed.')).toBeVisible();
+});
+
+test('exporting without redaction marks skips the disclosure', async ({ page }) => {
+  await openEditor(page);
+  await draw(page, 'Shape', .4);
+  await page.getByRole('button', { name: 'Export PDF', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'export_pdf_scene').length)).toBe(1);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  expect(await page.evaluate(() => 'redactions' in (window as any).calls.find((call: any) => call.command === 'export_pdf_scene').args.request)).toBe(false);
 });

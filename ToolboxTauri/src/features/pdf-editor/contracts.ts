@@ -1,5 +1,6 @@
 import type { OutputLocation } from "../../contracts";
 import type { PdfScene } from "./scene";
+import type { RedactionMark } from "./subtools";
 
 export type EditorLayout = "vertical" | "horizontal";
 export type EditorDensity = "compact" | "comfortable";
@@ -112,5 +113,5 @@ export interface PdfSceneExportRequest {
     formValues?: unknown[];
     textEdits?: unknown[];
     flatten?: boolean;
-    redactions?: unknown[];
+    redactions?: RedactionMark[];
 }

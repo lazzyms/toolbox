@@ -24,6 +24,7 @@ test("every Edit PDF sub-tool is declared once with a group and a suffix", () =>
     ["watermark", "overlay", "-edited"],
     ["crop", "document", "-edited"],
     ["organize", "document", "-edited"],
+    ["redact", "document", "-redacted"],
   ]);
 });
 
@@ -66,4 +67,25 @@ test("an unchanged scene has no contributors and no suffix", () => {
     suffix: null,
   });
   assert.deepEqual(plan(sceneFromDocument({ path: "/local/source.pdf", pages: [0, 1].map((index) => ({ index, width: 612, height: 792 })) })).contributors, []);
+});
+
+test("redaction marks leave the scene and travel as the request's redactions section in output page order", () => {
+  const mark = (id: string, x: number, color = "#000000") => ({ id, rect: { x, y: 20, width: 50, height: 10 }, color });
+  const scene: PdfScene = { pages: [{ ...baseline.pages[1], redactions: [mark("b", 5, "#ffffff")] }, { ...baseline.pages[0], redactions: [mark("a", 1), mark("c", 9)] }] };
+  const result = plan(scene);
+  assert.deepEqual(result.contributors, ["organize", "redact"]);
+  assert.equal(result.suffix, "-edited");
+  assert.deepEqual(Object.keys(result.request), ["paths", "scene", "outputLocation", "redactions"]);
+  assert.deepEqual(result.request.redactions, [
+    { pageIndex: 0, rect: { x: 5, y: 20, width: 50, height: 10 }, color: "#ffffff" },
+    { pageIndex: 1, rect: { x: 1, y: 20, width: 50, height: 10 }, color: "#000000" },
+    { pageIndex: 1, rect: { x: 9, y: 20, width: 50, height: 10 }, color: "#000000" },
+  ]);
+  assert.ok(result.request.scene.pages.every((page) => !("redactions" in page)));
+  assert.deepEqual(result.request.scene.pages.map((page) => page.id), ["source-1", "source-0"]);
+
+  const only = plan({ pages: [{ ...baseline.pages[0], redactions: [mark("a", 1)] }, baseline.pages[1]] });
+  assert.deepEqual(only.contributors, ["redact"]);
+  assert.equal(only.suffix, "-redacted");
+  assert.deepEqual(plan({ pages: [{ ...baseline.pages[0], redactions: [] }, baseline.pages[1]] }).contributors, []);
 });
