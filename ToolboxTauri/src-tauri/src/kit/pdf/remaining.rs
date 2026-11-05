@@ -1280,6 +1280,7 @@ fn failure(input_path: PathBuf, error: String) -> JobOutcome { JobOutcome::failu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kit::pdf::jbig2_fixtures::{self, Jbig2Fixture};
 
     static SPLIT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -1973,7 +1974,7 @@ mod tests {
             vec![
                 vec![rgb(dictionary! { "Width"=>2, "Height"=>2, "Filter"=>"DCTDecode" },jpeg.clone()),rgb(dictionary! { "Filter"=>"FlateDecode" },b"broken".to_vec())],
                 vec![
-                    rgb(dictionary! { "ColorSpace"=>"DeviceGray", "BitsPerComponent"=>1, "Filter"=>"JBIG2Decode" },vec![0;8]),
+                    rgb(dictionary! { "ColorSpace"=>"DeviceGray", "BitsPerComponent"=>1, "Filter"=>"JBIG2Decode" },jbig2_colour_extension()),
                     rgb(dictionary! { "ColorSpace"=>"DeviceGray", "BitsPerComponent"=>1, "Filter"=>"CCITTFaxDecode" },vec![0;8]),
                     rgb(dictionary! { "ColorSpace"=>vec![Object::Name(b"Lab".to_vec()),dictionary! {}.into()] },vec![0;3]),
                     rgb(dictionary! { "Width"=>61000, "Height"=>48000 },vec![0;3]),
@@ -2014,9 +2015,9 @@ mod tests {
     #[test]
     fn a_pdf_fails_only_when_none_of_its_images_could_be_saved() {
         let temp=split_fixture_root("images-none-decoded");
-        let jbig2=|| image_stream(dictionary! { "Width"=>1, "Height"=>1, "ColorSpace"=>"DeviceGray", "BitsPerComponent"=>1, "Filter"=>"JBIG2Decode" },vec![0;8]);
+        let jbig2=|data: Vec<u8>| image_stream(dictionary! { "Width"=>1, "Height"=>1, "ColorSpace"=>"DeviceGray", "BitsPerComponent"=>1, "Filter"=>"JBIG2Decode" },data);
         let fax=temp.join("fax.pdf");
-        image_pdf(&fax,|_| vec![vec![jbig2(),jbig2()],vec![jbig2()]]);
+        image_pdf(&fax,|_| vec![vec![jbig2(jbig2_colour_extension()),jbig2(vec![0;8])],vec![jbig2(jbig2_colour_extension())]]);
         let single=temp.join("single.pdf");
         image_pdf(&single,|_| vec![vec![image_stream(dictionary! { "Width"=>1, "Height"=>1, "ColorSpace"=>"DeviceRGB", "BitsPerComponent"=>8, "Filter"=>"FlateDecode" },b"broken".to_vec())]]);
 
@@ -2024,7 +2025,11 @@ mod tests {
         let error=outcome.error().unwrap();
         assert_eq!((&error.kind,error.message.as_str()),(&crate::kit::contracts::ErrorKind::Processing,"None of the 3 images could be decoded, so nothing was saved."));
         assert!(outcome.output_paths().is_empty());
-        assert_eq!(warning_kinds(&outcome),[(1,1),(1,2),(2,1)].map(|(page,image)| WarningKind::ImageUnsupported { page, image, feature:"JBIG2".into() }).to_vec());
+        assert_eq!(warning_kinds(&outcome),vec![
+            WarningKind::ImageUnsupported { page:1, image:1, feature:"JBIG2".into() },
+            WarningKind::ImageDamaged { page:1, image:2 },
+            WarningKind::ImageUnsupported { page:2, image:1, feature:"JBIG2".into() },
+        ]);
 
         let outcome=extract_images(&single);
         assert_eq!(outcome.error().map(|error| error.message.as_str()),Some("The image couldn't be decoded, so nothing was saved."));
@@ -2192,6 +2197,115 @@ mod tests {
             "Page 1, image 1 — The image data is damaged. Not saved.",
             "Page 2, image 1 — The image data is damaged. Not saved.",
         ]);
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    fn jbig2_luma(fixture: &Jbig2Fixture) -> Vec<u8> {
+        fixture.black.iter().map(|black| if *black { 0 } else { 255 }).collect()
+    }
+
+    fn jbig2_image(fixture: &Jbig2Fixture, globals: Option<lopdf::ObjectId>, extra: lopdf::Dictionary) -> Stream {
+        let mut entries=dictionary! { "Width"=>fixture.width as i64, "Height"=>fixture.height as i64, "ColorSpace"=>"DeviceGray", "BitsPerComponent"=>1, "Filter"=>"JBIG2Decode" };
+        if let Some(globals)=globals { entries.set("DecodeParms",dictionary! { "JBIG2Globals"=>globals }); }
+        for (key,value) in extra { entries.set(key,value); }
+        image_stream(entries,fixture.stream.clone())
+    }
+
+    /// The generic region fixture with its region's colour extension flag set, a JBIG2 feature the decoder does not handle.
+    fn jbig2_colour_extension() -> Vec<u8> {
+        let mut stream=jbig2_fixtures::generic_region().stream;
+        // A page information segment (11-byte header, 19 bytes of data), then the region's 11-byte header and 17-byte region info.
+        assert_eq!(stream[30+4],38,"the second segment is the immediate generic region");
+        stream[30+11+16]|=0x08;
+        stream
+    }
+
+    #[test]
+    fn jbig2_images_become_png_with_their_exact_pixels_including_ones_that_use_global_segments() {
+        let temp=split_fixture_root("images-jbig2");
+        let fixtures=jbig2_fixtures::all();
+
+        // Identical pixels would be merged as duplicates, so each fixture gets its own PDF, written as the spike wrote it.
+        for (index,fixture) in fixtures.iter().enumerate() {
+            let input=temp.join(format!("jbig2-{index}.pdf"));
+            jbig2_fixtures::pdf_with_images(std::slice::from_ref(fixture)).save(&input).unwrap();
+            let original=fs::read(&input).unwrap();
+
+            let outcome=extract_images(&input);
+
+            let folder=temp.join(format!("jbig2-{index}-images"));
+            assert!(outcome.warnings.is_empty(),"{}: {:?}",fixture.name,outcome.warnings);
+            assert_eq!(outcome.detail,"Saved 1 image.","{}",fixture.name);
+            assert_eq!(sorted_names(&folder),vec!["page-1-image-1.png"],"{}",fixture.name);
+            let image=decoded(folder.join("page-1-image-1.png"));
+            assert_eq!((image.width(),image.height()),(fixture.width,fixture.height),"{} keeps its native size",fixture.name);
+            assert_eq!(image.as_luma8().unwrap().as_raw(),&jbig2_luma(fixture),"{}",fixture.name);
+            assert_eq!(fs::read(&input).unwrap(),original,"{} is left as it was",fixture.name);
+        }
+
+        // A compressed globals stream, a Decode array, a stencil mask and a page wider than the image.
+        let input=temp.join("variants.pdf");
+        let [generic,_,global]=&fixtures[..] else { unreachable!() };
+        image_pdf(&input,|document| {
+            let globals=document.add_object(Stream::new(dictionary! { "Filter"=>"FlateDecode" },flate(global.globals.as_ref().unwrap())));
+            vec![
+                vec![jbig2_image(global,Some(globals),dictionary! {})],
+                vec![jbig2_image(generic,None,dictionary! { "Decode"=>vec![Object::from(1),Object::from(0)] })],
+                vec![jbig2_image(generic,None,dictionary! { "ImageMask"=>true })],
+                vec![jbig2_image(generic,None,dictionary! { "Width"=>20 })],
+            ]
+        });
+
+        let outcome=extract_images(&input);
+
+        let folder=temp.join("variants-images");
+        assert!(outcome.warnings.is_empty(),"{:?}",outcome.warnings);
+        assert_eq!(outcome.detail,"Saved 4 images.");
+        assert_eq!(decoded(folder.join("page-1-image-1.png")).as_luma8().unwrap().as_raw(),&jbig2_luma(global),"globals behind a filter are decoded");
+        assert_eq!(decoded(folder.join("page-2-image-1.png")).as_luma8().unwrap().as_raw(),&jbig2_luma(generic).iter().map(|luma| 255-luma).collect::<Vec<_>>(),"Decode [1 0] inverts");
+        assert_eq!(decoded(folder.join("page-3-image-1.png")).as_luma_alpha8().unwrap().as_raw(),&jbig2_luma(generic).iter().flat_map(|luma| [0,255-luma]).collect::<Vec<_>>(),"a JBIG2 stencil mask paints its black pixels");
+        let narrow=decoded(folder.join("page-4-image-1.png"));
+        assert_eq!((narrow.width(),narrow.height()),(20,generic.height));
+        assert_eq!(narrow.as_luma8().unwrap().as_raw(),&jbig2_luma(generic).chunks(generic.width as usize).flat_map(|row| row[..20].to_vec()).collect::<Vec<_>>(),"rows wider than the image are cut to its width");
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn a_jbig2_image_that_cannot_be_decoded_is_reported_on_its_own_while_the_other_images_are_saved() {
+        let temp=split_fixture_root("images-jbig2-malformed");
+        let input=temp.join("jbig2-bundle.pdf");
+        let generic=jbig2_fixtures::generic_region();
+        let global=jbig2_fixtures::text_region_with_embedded_globals();
+        image_pdf(&input,|document| {
+            let not_globals=document.add_object(Stream::new(dictionary! { "Filter"=>"JBIG2Decode", "DecodeParms"=>dictionary! {} },global.globals.clone().unwrap()));
+            let mut truncated=jbig2_image(&generic,None,dictionary! {});
+            truncated.set_content(generic.stream[..40].to_vec());
+            let mut colour=jbig2_image(&generic,None,dictionary! {});
+            colour.set_content(jbig2_colour_extension());
+            vec![
+                vec![jbig2_image(&global,None,dictionary! {}),jbig2_image(&generic,None,dictionary! {})],
+                vec![truncated,colour],
+                vec![jbig2_image(&generic,None,dictionary! { "Height"=>10 }),jbig2_image(&global,Some(not_globals),dictionary! {})],
+            ]
+        });
+        let original=fs::read(&input).unwrap();
+
+        let outcome=extract_images(&input);
+
+        let folder=temp.join("jbig2-bundle-images");
+        assert!(matches!(outcome.state,crate::kit::contracts::OutcomeState::Succeeded { .. }));
+        assert_eq!(sorted_names(&folder),vec!["page-1-image-2.png"]);
+        assert_eq!(decoded(folder.join("page-1-image-2.png")).as_luma8().unwrap().as_raw(),&jbig2_luma(&generic));
+        assert_eq!(outcome.detail,"Saved 1 image · 5 couldn't be saved.");
+        assert_eq!(warning_kinds(&outcome),vec![
+            WarningKind::ImageDamaged { page:1, image:1 },
+            WarningKind::ImageDamaged { page:2, image:1 },
+            WarningKind::ImageUnsupported { page:2, image:2, feature:"JBIG2".into() },
+            WarningKind::ImageDamaged { page:3, image:1 },
+            WarningKind::ImageDamaged { page:3, image:2 },
+        ]);
+        assert_eq!(outcome.warnings[2].message,"Page 2, image 2 — JBIG2 isn't supported in this version. Not saved.");
+        assert_eq!(fs::read(&input).unwrap(),original);
         fs::remove_dir_all(temp).unwrap();
     }
 
