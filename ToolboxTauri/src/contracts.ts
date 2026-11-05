@@ -80,8 +80,8 @@ export type ToolCommand =
   | "inspect_pdf"
   | "crop_pdf"
   | "edit_pdf"
+  | "export_pdf_scene"
   | "sign_pdf"
-  | "organize_pdf"
   | "add_page_numbers"
   | "watermark_pdf"
   | "compress_pdf"
@@ -89,7 +89,6 @@ export type ToolCommand =
   | "repair_pdf"
   | "redact_pdf"
   | "compare_pdfs"
-  | "remove_pdf_pages"
   | "extract_pdf_pages"
   | "merge_pdfs"
   | "split_pdf"
@@ -192,6 +191,25 @@ export interface ImagePreview {
   height: number;
   dataUrl: string;
 }
+
+export type ImageMetadataFormat = "jpeg" | "png" | "webp" | "tiff" | "heic";
+
+export type ImageMetadataErrorCode = "unreadable" | "unsupportedFormat" | "truncated" | "corrupt";
+
+export type ImageMetadataInspection =
+  | {
+      status: "report";
+      path: string;
+      format: ImageMetadataFormat;
+      exif: boolean;
+      gps: boolean;
+      xmp: boolean;
+      iptc: boolean;
+      comments: boolean;
+      icc: boolean;
+      orientation: number | null;
+    }
+  | { status: "error"; path: string; code: ImageMetadataErrorCode; message: string };
 
 export interface ToolDefinition {
   id: AtomicToolId;
