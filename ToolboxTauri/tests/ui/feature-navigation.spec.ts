@@ -773,30 +773,31 @@ test("Compress defaults to Medium, describes each strength and sends the paths i
 });
 
 for (const theme of ["light", "dark"] as const) {
-    test(`Compress explains what each strength does to PDFs and JPEGs and sends that strength in the ${theme} theme`, async ({ page }) => {
+    test(`Compress explains what each strength does to PDFs, JPEGs and PNGs and sends that strength in the ${theme} theme`, async ({ page }) => {
         await page.addInitScript((theme) => { localStorage.setItem("toolbox-theme", theme); }, theme);
         await page.goto("/");
         await openFromHome(page, "Compress");
         await expect(page.locator("body")).toHaveAttribute("data-theme", theme);
         const strength = page.getByRole("radiogroup", { name: "Strength" });
-        const paths = ["/local/scan.pdf", "/local/IMG_4012.jpg", "/local/IMG_4031.jpeg"];
+        const paths = ["/local/scan.pdf", "/local/IMG_4012.jpg", "/local/IMG_4031.jpeg", "/local/floor-plan.png"];
         await page.evaluate((paths) => { (window as TestWindow).__toolboxDialogResults = [paths]; }, paths);
         await page.getByRole("button", { name: "Choose files to process" }).click();
-        await expect(page.locator(".file-selection-count")).toHaveText("3 files");
+        await expect(page.locator(".file-selection-count")).toHaveText("4 files");
 
         const expected = [
-            { level: "low", name: "Low", pdf: "Repacked without loss. Images untouched.", jpeg: "Re-saved at high quality." },
-            { level: "medium", name: "Medium", pdf: "Images inside recompressed and scaled down.", jpeg: "Re-saved at medium quality." },
-            { level: "high", name: "High", pdf: "Images at lower quality and resolution.", jpeg: "Re-saved at low quality." },
+            { level: "low", name: "Low", pdf: "Repacked without loss. Images untouched.", jpeg: "Re-saved at high quality.", png: "Lossless. Pixels unchanged." },
+            { level: "medium", name: "Medium", pdf: "Images inside recompressed and scaled down.", jpeg: "Re-saved at medium quality.", png: "Lossless. Pixels unchanged." },
+            { level: "high", name: "High", pdf: "Images at lower quality and resolution.", jpeg: "Re-saved at low quality.", png: "Cut to 256 colours, dithered." },
         ] as const;
-        for (const [index, { name, pdf, jpeg }] of expected.entries()) {
+        for (const [index, { name, pdf, jpeg, png }] of expected.entries()) {
             await strength.getByRole("radio", { name: new RegExp(`^${name}`) }).click();
             await expect(page.getByText(`What ${name} does`, { exact: true })).toBeVisible();
-            await expect(page.getByRole("term")).toHaveText(["PDF", "JPEG"]);
-            await expect(page.getByRole("definition")).toHaveText([pdf, jpeg]);
-            await page.getByRole("button", { name: "Compress 3 files", exact: true }).click();
+            await expect(page.getByRole("term")).toHaveText(["PDF", "JPEG", "PNG"]);
+            await expect(page.getByRole("definition")).toHaveText([pdf, jpeg, png]);
+            await page.getByRole("button", { name: "Compress 4 files", exact: true }).click();
             await expect.poll(() => invocationCount(page, "compress_files")).toBe(index + 1);
         }
+        await expect(page.getByRole("definition").last()).toContainText("256 colours");
 
         const levels = await page.evaluate(() => ((window as TestWindow).__toolboxInvocations ?? [])
             .filter(({ command }) => command === "compress_files")
@@ -1846,6 +1847,40 @@ test("Compress rows show sizes and the saving, skips keep both sizes without fil
     await expect(summary).toContainText("25.4 MB → 8.3 MB across 2 compressed files");
     await expect(summary).toContainText("Counts only compressed files. Skipped and failed files kept their size and got no copy.");
 });
+
+for (const theme of ["light", "dark"] as const) {
+    test(`Compress shows an animated PNG failure on its own row beside compressed PNGs in the ${theme} theme`, async ({ page }) => {
+        await page.addInitScript((theme) => { localStorage.setItem("toolbox-theme", theme); }, theme);
+        await page.goto("/");
+        const paths = ["/local/floor-plan.png", "/local/loading-spinner.png", "/local/logo-mark.png"];
+        const animated = "Animated PNG isn't supported. Only still images can be compressed.";
+        await page.evaluate((outcomes) => { (window as TestWindow).__toolboxProcessingResults = outcomes; }, [
+            succeeded(paths[0], ["/local/floor-plan-compressed.png"], { detail: "Cut to 256 colours, dithered. EXIF and colour profile kept.", originalBytes: 1_800_000, outputBytes: 600_000 }),
+            failed(paths[1], "invalidInput", animated),
+            succeeded(paths[2], ["/local/logo-mark-compressed.png"], { detail: "Cut to 256 colours, dithered. EXIF and colour profile kept.", originalBytes: 84_000, outputBytes: 42_000 }),
+        ] satisfies MockOutcome[]);
+        await openFromHome(page, "Compress");
+        await expect(page.locator("body")).toHaveAttribute("data-theme", theme);
+        await page.evaluate((paths) => { (window as TestWindow).__toolboxDialogResults = [paths]; }, paths);
+        await page.getByRole("button", { name: "Choose files to process" }).click();
+        await page.getByRole("radiogroup", { name: "Strength" }).getByRole("radio", { name: /^High/ }).click();
+        await page.getByRole("button", { name: "Compress 3 files", exact: true }).click();
+
+        const rows = page.getByRole("list", { name: "Results" }).getByRole("listitem");
+        await expect(rows).toHaveText([/^floor-plan\.png/, /^loading-spinner\.png/, /^logo-mark\.png/]);
+        await expect(rows.nth(1)).toContainText("Failed");
+        await expect(rows.nth(1)).toContainText(animated);
+        await expect(rows.nth(1)).not.toContainText("→");
+        await expect(rows.nth(1).getByRole("button")).toHaveCount(0);
+        for (const index of [0, 2]) {
+            await expect(rows.nth(index)).not.toContainText("Failed");
+            await expect(rows.nth(index)).not.toContainText(animated);
+        }
+        await expect(rows.nth(0)).toContainText("1.8 MB → 600 KB, 67% smaller");
+        await expect(rows.nth(0).getByRole("button", { name: "Open floor-plan-compressed.png" })).toBeVisible();
+        await expect(resultSummaryStatus(page).locator("strong")).toHaveText("Done. 2 compressed, 1 failed");
+    });
+}
 
 for (const theme of ["light", "dark"] as const) {
     test(`Compress shows and announces the signature removed warning only on the signed PDF row in the ${theme} theme`, async ({ page }) => {

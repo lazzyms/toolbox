@@ -13,9 +13,9 @@ import { shortcutTarget } from "../shortcuts";
 
 // What each strength does to each supported format, in the board's order.
 const levels: { value: CompressLevel; name: string; summary: string; does: [format: string, effect: string][] }[] = [
-  { value: "low", name: "Low", summary: "Least saving, detail stays", does: [["PDF", "Repacked without loss. Images untouched."], ["JPEG", "Re-saved at high quality."]] },
-  { value: "medium", name: "Medium", summary: "Good for sharing and email", does: [["PDF", "Images inside recompressed and scaled down."], ["JPEG", "Re-saved at medium quality."]] },
-  { value: "high", name: "High", summary: "Smallest, photos look softer", does: [["PDF", "Images at lower quality and resolution."], ["JPEG", "Re-saved at low quality."]] },
+  { value: "low", name: "Low", summary: "Least saving, detail stays", does: [["PDF", "Repacked without loss. Images untouched."], ["JPEG", "Re-saved at high quality."], ["PNG", "Lossless. Pixels unchanged."]] },
+  { value: "medium", name: "Medium", summary: "Good for sharing and email", does: [["PDF", "Images inside recompressed and scaled down."], ["JPEG", "Re-saved at medium quality."], ["PNG", "Lossless. Pixels unchanged."]] },
+  { value: "high", name: "High", summary: "Smallest, photos look softer", does: [["PDF", "Images at lower quality and resolution."], ["JPEG", "Re-saved at low quality."], ["PNG", "Cut to 256 colours, dithered."]] },
 ];
 
 const exifHint = (on: boolean) => on

@@ -1,10 +1,14 @@
-//! Compress Files for JPEG: re-encode at the strength's quality, keep the JPEG format, and carry
+//! Compress Files for images. Every image keeps its format and is saved through
+//! `save_smaller_copy`, which Skips a copy that would not be smaller and verifies the written copy
+//! before publishing it. PNG lives in `png`.
+//!
+//! JPEG: re-encode at the strength's quality, keep the JPEG format, and carry
 //! the source's metadata segments over byte for byte. The ICC colour profile always stays; EXIF,
 //! XMP, IPTC and comments stay unless Strip EXIF is on. Orientation stays as the EXIF tag when
 //! EXIF is kept and is baked into the pixels when it is stripped, so photos display upright.
 
 use std::io::Cursor;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use image::codecs::jpeg::JpegDecoder;
 use image::metadata::Orientation;
@@ -13,6 +17,8 @@ use image::{DynamicImage, ImageDecoder};
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::compress::NO_SAVINGS;
 use crate::kit::contracts::{SkipCode, SkipReason, ToolError};
+
+pub mod png;
 
 const SOI: [u8; 2] = [0xFF, 0xD8];
 const APP0: u8 = 0xE0;
@@ -156,33 +162,45 @@ pub fn compress_jpeg(input: PathBuf, location: &OutputLocation, quality: u8, str
         Ok(bytes) => bytes,
         Err(error) => return JobOutcome::failure(input, error),
     };
+    save_smaller_copy(input, location, "JPEG", &source, compressed, |written| verify(written, &source, strip_exif), detail(quality, strip_exif))
+}
+
+/// Saves `compressed` as a new "-compressed" copy with the input's extension, beside the input or
+/// in the chosen folder, when it is smaller than `source`. Otherwise the file is Skipped as no
+/// savings with both sizes and nothing is reserved or written. The written copy is read back and
+/// checked by `verify` before it is published, so a copy that fails the check is never saved.
+pub(crate) fn save_smaller_copy(
+    input: PathBuf,
+    location: &OutputLocation,
+    kind: &str,
+    source: &[u8],
+    compressed: Vec<u8>,
+    verify: impl FnOnce(&[u8]) -> Result<(), String>,
+    detail: String,
+) -> JobOutcome {
     let (original_bytes, output_bytes) = (source.len() as u64, compressed.len() as u64);
     if output_bytes >= original_bytes {
         return JobOutcome::skipped(input, SkipReason::new(SkipCode::NoSavings, NO_SAVINGS)).with_sizes(original_bytes, output_bytes);
     }
-    let extension = extension_of(&input);
+    let extension = input.extension().and_then(|extension| extension.to_str()).map(str::to_string).unwrap_or_else(|| kind.to_ascii_lowercase());
     let output = match OutputNaming::reserve_destination(&input, location, "-compressed", &extension) {
         Ok(output) => output,
-        Err(error) => return failure(input, format!("Could not reserve compressed JPEG output: {error}")),
+        Err(error) => return failure(input, format!("Could not reserve compressed {kind} output: {error}")),
     };
     if let Err(error) = std::fs::write(output.path(), &compressed) {
-        return failure(input, format!("Could not write the compressed JPEG: {error}"));
+        return failure(input, format!("Could not write the compressed {kind}: {error}"));
     }
     let written = match std::fs::read(output.path()) {
         Ok(bytes) => bytes,
-        Err(error) => return failure(input, format!("Compressed JPEG could not be verified: {error}")),
+        Err(error) => return failure(input, format!("Compressed {kind} could not be verified: {error}")),
     };
-    if let Err(error) = verify(&written, &source, strip_exif) {
+    if let Err(error) = verify(&written) {
         return failure(input, format!("{error} Nothing was saved."));
     }
     match output.publish() {
-        Ok(path) => JobOutcome::succeeded(input, vec![path], detail(quality, strip_exif)).with_sizes(original_bytes, output_bytes),
-        Err(error) => failure(input, format!("Could not publish compressed JPEG: {error}")),
+        Ok(path) => JobOutcome::succeeded(input, vec![path], detail).with_sizes(original_bytes, output_bytes),
+        Err(error) => failure(input, format!("Could not publish compressed {kind}: {error}")),
     }
-}
-
-fn extension_of(input: &Path) -> String {
-    input.extension().and_then(|extension| extension.to_str()).unwrap_or("jpg").to_string()
 }
 
 fn detail(quality: u8, strip_exif: bool) -> String {

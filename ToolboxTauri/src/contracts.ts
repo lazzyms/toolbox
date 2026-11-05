@@ -283,7 +283,7 @@ export interface PasswordRequest extends ToolRequest {
   passwordOverrides: Record<string, string>;
 }
 
-/** Low keeps the most detail and High saves the most space. Every PDF is repacked without loss; Medium and High also recompress and downsample its photographs. JPEGs are re-saved at quality 85, 75 or 50. */
+/** Low keeps the most detail and High saves the most space. Every PDF is repacked without loss; Medium and High also recompress and downsample its photographs. JPEGs are re-saved at quality 85, 75 or 50. PNGs are repacked without loss at Low and Medium and cut to a dithered 256-colour palette at High. */
 export type CompressLevel = "low" | "medium" | "high";
 
 export interface CompressFilesRequest extends ToolRequest {

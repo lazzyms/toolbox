@@ -3012,6 +3012,191 @@ mod command_tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    fn png_crc(bytes: &[u8]) -> u32 {
+        let mut crc = !0u32;
+        for byte in bytes {
+            crc ^= u32::from(*byte);
+            for _ in 0..8 { crc = if crc & 1 == 1 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 }; }
+        }
+        !crc
+    }
+
+    fn png_chunk(name: &[u8; 4], data: &[u8]) -> Vec<u8> {
+        let crc = png_crc(&[name.as_slice(), data].concat());
+        [(data.len() as u32).to_be_bytes().as_slice(), name, data, &crc.to_be_bytes()].concat()
+    }
+
+    /// Inserts chunks right after the header chunk, which is always the first 33 bytes.
+    fn with_chunks(png: &[u8], chunks: &[Vec<u8>]) -> Vec<u8> {
+        [&png[..33], &chunks.concat(), &png[33..]].concat()
+    }
+
+    /// Writes `image` as a quickly deflated PNG, with the ICC profile, an EXIF chunk and a text
+    /// comment when `metadata` is on.
+    fn write_compress_png(path: &PathBuf, image: &image::DynamicImage, metadata: bool) -> Vec<u8> {
+        use image::ImageEncoder;
+        let mut bytes = Vec::new();
+        let mut encoder = image::codecs::png::PngEncoder::new_with_quality(&mut bytes, image::codecs::png::CompressionType::Fast, image::codecs::png::FilterType::NoFilter);
+        if metadata { encoder.set_icc_profile(icc_profile()).unwrap(); }
+        encoder.write_image(image.as_bytes(), image.width(), image.height(), image.color().into()).unwrap();
+        if metadata { bytes = with_chunks(&bytes, &[png_chunk(b"eXIf", &exif_block(1)), png_chunk(b"tEXt", b"Comment\0Holiday at the lake")]); }
+        std::fs::write(path, &bytes).unwrap();
+        bytes
+    }
+
+    /// A noisy photo with a soft alpha ramp on the right and a fully transparent block top-left.
+    fn photo_rgba(width: u32, height: u32, seed: u32) -> image::DynamicImage {
+        let photo = photo_rgb(width, height, seed);
+        image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(width, height, |x, y| {
+            let [r, g, b] = photo.get_pixel(x, y).0;
+            let alpha = if x < width / 4 && y < height / 4 { 0 } else if x > width * 3 / 4 { (255 - (x - width * 3 / 4) * 255 / width * 2).max(64) as u8 } else { 255 };
+            image::Rgba([r, g, b, alpha])
+        }))
+    }
+
+    struct PngFacts { icc: Option<Vec<u8>>, exif: Option<Vec<u8>>, text: bool, pixels: image::ImageBuffer<image::Rgba<u16>, Vec<u16>>, colours: usize }
+
+    fn png_facts(path: &PathBuf) -> PngFacts {
+        use image::ImageDecoder;
+        let bytes = std::fs::read(path).unwrap();
+        assert_eq!(image::guess_format(&bytes).unwrap(), image::ImageFormat::Png, "{} is not a PNG", path.display());
+        let mut decoder = image::codecs::png::PngDecoder::new(std::io::Cursor::new(&bytes)).unwrap();
+        let (icc, exif) = (decoder.icc_profile().unwrap(), decoder.exif_metadata().unwrap());
+        let pixels = image::DynamicImage::from_decoder(decoder).unwrap().to_rgba16();
+        let colours = pixels.pixels().map(|pixel| pixel.0).collect::<std::collections::HashSet<_>>().len();
+        let text = bytes.windows(4).any(|window| window == b"tEXt" || window == b"iTXt" || window == b"zTXt");
+        PngFacts { icc, exif, text, pixels, colours }
+    }
+
+    #[test]
+    fn compress_files_keeps_png_pixels_at_low_and_medium_and_cuts_to_256_colours_with_alpha_at_high() {
+        use crate::kit::images::compress::png::PngMethod;
+        assert_eq!([CompressLevel::Low, CompressLevel::Medium, CompressLevel::High].map(CompressLevel::png_method),
+            [PngMethod::Lossless { effort: 2 }, PngMethod::Lossless { effort: 4 }, PngMethod::Palette { effort: 4 }]);
+        let root = sandbox("compress-files-png-levels");
+        let picture = root.join("Screenshot.png");
+        let image = photo_rgba(256, 192, 13);
+        let source = write_compress_png(&picture, &image, false);
+        let original = png_facts(&picture);
+        assert!(original.colours > 256, "the fixture needs a palette cut, it has {} colours", original.colours);
+
+        let mut sizes = Vec::new();
+        for level in [CompressLevel::Low, CompressLevel::Medium, CompressLevel::High] {
+            let name = format!("{level:?}");
+            let outcomes = compress_jpegs(&[picture.clone()], level, false, location(&root, &name));
+            let [outcome] = outcomes.as_slice() else { panic!("one outcome per input") };
+            assert!(outcome.error().is_none(), "{name}: {:?}", outcome.error());
+            let output = &outcome.output_paths()[0];
+            assert_eq!(output, &root.join(&name).join("Screenshot-compressed.png"), "{name} keeps the PNG extension");
+            let written = std::fs::metadata(output).unwrap().len();
+            assert_eq!((outcome.original_bytes, outcome.output_bytes), (Some(source.len() as u64), Some(written)));
+            assert!(written < source.len() as u64, "{name} is smaller");
+            let facts = png_facts(output);
+            if level == CompressLevel::High {
+                assert!(facts.colours <= 256, "High keeps at most 256 colours, got {}", facts.colours);
+                assert!(outcome.detail.starts_with("Cut to 256 colours, dithered."), "{}", outcome.detail);
+                for (source, copy) in original.pixels.pixels().zip(facts.pixels.pixels()) {
+                    assert_eq!(source[3] == 0, copy[3] == 0, "invisible pixels stay invisible and visible ones stay visible");
+                }
+                let translucent = facts.pixels.pixels().filter(|pixel| pixel[3] > 0 && pixel[3] < u16::MAX).count();
+                assert!(translucent > 1_000, "the soft alpha ramp stays translucent, {translucent} pixels");
+                let difference = original.pixels.as_raw().iter().zip(facts.pixels.as_raw()).map(|(a, b)| u64::from(a.abs_diff(*b) >> 8)).sum::<u64>() as f64 / original.pixels.as_raw().len() as f64;
+                assert!(difference < 12.0, "the dithered copy stays close to the source, mean difference {difference}");
+            } else {
+                assert!(facts.pixels == original.pixels, "{name} keeps every pixel");
+                assert!(outcome.detail.starts_with("Lossless, pixels unchanged."), "{}", outcome.detail);
+            }
+            sizes.push(written);
+        }
+        assert!(sizes[2] < sizes[0], "High saves more than Low, got {sizes:?}");
+        assert_eq!(std::fs::read(&picture).unwrap(), source, "the original is untouched");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn compress_files_keeps_png_icc_and_strip_exif_removes_exif_and_text_at_every_level() {
+        let root = sandbox("compress-files-png-metadata");
+        let picture = root.join("scan.png");
+        let source = write_compress_png(&picture, &photo_rgba(200, 150, 17), true);
+        let original = png_facts(&picture);
+        assert_eq!((original.icc.clone(), original.exif.clone(), original.text), (Some(icc_profile()), Some(exif_block(1)), true));
+
+        for level in [CompressLevel::Low, CompressLevel::Medium, CompressLevel::High] {
+            for strip_exif in [false, true] {
+                let name = format!("{level:?}-strip-{strip_exif}");
+                let outcomes = compress_jpegs(&[picture.clone()], level, strip_exif, location(&root, &name));
+                assert!(outcomes[0].error().is_none(), "{name}: {:?}", outcomes[0].error());
+                let facts = png_facts(&outcomes[0].output_paths()[0]);
+                assert_eq!(facts.icc, Some(icc_profile()), "{name} keeps the colour profile");
+                if strip_exif {
+                    assert_eq!((facts.exif, facts.text), (None, false), "{name} removes EXIF and text");
+                    assert!(outcomes[0].detail.ends_with("EXIF removed, colour profile kept."), "{}", outcomes[0].detail);
+                } else {
+                    assert_eq!((facts.exif, facts.text), (Some(exif_block(1)), true), "{name} keeps EXIF and text");
+                    assert!(outcomes[0].detail.ends_with("EXIF and colour profile kept."), "{}", outcomes[0].detail);
+                }
+            }
+        }
+        assert_eq!(std::fs::read(&picture).unwrap(), source);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn compress_files_fails_an_animated_or_damaged_png_alone_and_skips_one_that_would_not_shrink() {
+        use crate::kit::images::compress::png::{ANIMATED, DAMAGED};
+        let root = sandbox("compress-files-png-refused");
+        let good = root.join("good.png");
+        let whole = write_compress_png(&good, &photo_rgba(160, 120, 5), false);
+        let animated = root.join("animated.png");
+        std::fs::write(&animated, with_chunks(&whole, &[png_chunk(b"acTL", &[0, 0, 0, 1, 0, 0, 0, 0])])).unwrap();
+        let truncated = root.join("truncated.png");
+        std::fs::write(&truncated, &whole[..whole.len() / 2]).unwrap();
+        let tight = root.join("tight.png");
+        let first = compress_jpegs(&[good.clone()], CompressLevel::Medium, false, location(&root, "tight"));
+        std::fs::copy(&first[0].output_paths()[0], &tight).unwrap();
+        let inputs = vec![good.clone(), animated.clone(), truncated.clone(), tight.clone()];
+        let before = inputs.iter().map(|input| std::fs::read(input).unwrap()).collect::<Vec<_>>();
+
+        let outcomes = compress_jpegs(&inputs, CompressLevel::Low, false, location(&root, "out"));
+
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), inputs, "one outcome per file, in input order");
+        assert!(outcomes[0].error().is_none(), "{:?}", outcomes[0].error());
+        let refused = outcomes[1].error().expect("the animated PNG fails");
+        assert_eq!((refused.kind.clone(), refused.message.as_str()), (ErrorKind::InvalidInput, ANIMATED));
+        let damaged = outcomes[2].error().expect("the truncated PNG fails");
+        assert_eq!((damaged.kind.clone(), damaged.message.as_str()), (ErrorKind::Processing, DAMAGED));
+        let OutcomeState::Skipped { reason } = &outcomes[3].state else { panic!("expected a skip, got {:?}", outcomes[3].state) };
+        assert_eq!(reason.code, crate::kit::contracts::SkipCode::NoSavings);
+        assert_eq!(outcomes[3].original_bytes, Some(before[3].len() as u64));
+        let written = std::fs::read_dir(root.join("out")).unwrap().map(|entry| entry.unwrap().file_name().into_string().unwrap()).collect::<Vec<_>>();
+        assert_eq!(written, ["good-compressed.png"], "no output for the refused, damaged or skipped files");
+        assert_eq!(inputs.iter().map(|input| std::fs::read(input).unwrap()).collect::<Vec<_>>(), before);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn compress_files_writes_byte_identical_pngs_on_a_repeat_run_and_keeps_a_few_colour_png_lossless_at_high() {
+        let root = sandbox("compress-files-png-repeat");
+        let photo = root.join("photo.png");
+        write_compress_png(&photo, &photo_rgba(240, 180, 29), true);
+        let diagram = root.join("diagram.png");
+        let flat = image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(240, 180, |x, y| image::Rgba([(x / 30 * 30) as u8, (y / 30 * 40) as u8, 90, if x < 20 { 0 } else { 255 }])));
+        write_compress_png(&diagram, &flat, false);
+        let inputs = vec![photo.clone(), diagram.clone()];
+
+        for level in [CompressLevel::Low, CompressLevel::Medium, CompressLevel::High] {
+            let runs = ["first", "second"].map(|run| compress_jpegs(&inputs, level, true, location(&root, &format!("{level:?}-{run}"))));
+            for (first, second) in runs[0].iter().zip(&runs[1]) {
+                assert!(first.error().is_none(), "{level:?} {}: {:?}", first.input_path.display(), first.error());
+                assert!(std::fs::read(&first.output_paths()[0]).unwrap() == std::fs::read(&second.output_paths()[0]).unwrap(), "{level:?} {} differs between runs", first.input_path.display());
+            }
+            let diagram_copy = &runs[0][1];
+            assert!(diagram_copy.detail.starts_with("Lossless, pixels unchanged."), "{level:?}: {}", diagram_copy.detail);
+            assert!(png_facts(&diagram_copy.output_paths()[0]).pixels == png_facts(&diagram).pixels, "{level:?} keeps a few-colour PNG exact");
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn metadata_command_keeps_batch_failures_isolated() {
         let valid = temp_path("cmd_mixed_valid.png");
