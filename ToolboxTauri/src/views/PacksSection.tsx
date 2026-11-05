@@ -47,7 +47,7 @@ export type PackInstallError = { message: string } & (
   | { kind: "wrongTarget"; details: { target: string } }
   | { kind: "overLimit"; details: { limit: "archiveSize" | "unpackedSize" | "entryCount" | "compressionRatio" } }
   | { kind: "unsafeEntry" | "fileMissing" | "fileChecksumMismatch" | "fileSizeMismatch" | "unlistedFile"; details: { path: string } }
-  | { kind: "notAPack" | "notInCatalog" | "badSignature" | "wrongKey" | "checksumMismatch" | "malformed" | "incompatibleFormat" | "incompatibleApp" | "unavailable" | "cancelled" | "offline" | "serverBlocked" | "interrupted" }
+  | { kind: "notAPack" | "notInCatalog" | "badSignature" | "wrongKey" | "checksumMismatch" | "malformed" | "incompatibleFormat" | "incompatibleApp" | "unavailable" | "cancelled" | "offline" | "serverBlocked" | "interrupted" | "inUse" }
 );
 
 /** A `pack-progress` event from `src-tauri/src/packs/download.rs`. */
@@ -185,9 +185,12 @@ const failedText = (error: PackInstallError) => {
   }
 };
 
-type RowActions = { install: () => void; cancel: (runId: string) => void };
+/** An uninstall started from this view: waiting for the native side, refused while a run uses the pack, or failed. */
+type Removal = "removing" | "inUse" | "failed";
 
-const PackRow = ({ pack, checking, job, offline, actions }: { pack: PackEntry; checking: boolean; job: Job | undefined; offline: boolean; actions: RowActions }) => {
+type RowActions = { install: () => void; cancel: (runId: string) => void; remove: () => void };
+
+const PackRow = ({ pack, checking, job, removal, offline, actions }: { pack: PackEntry; checking: boolean; job: Job | undefined; removal: Removal | undefined; offline: boolean; actions: RowActions }) => {
   const [open, setOpen] = useState(false);
   const installed = pack.status !== "notInstalled";
   const tools = toolList(pack.toolIds);
@@ -214,6 +217,12 @@ const PackRow = ({ pack, checking, job, offline, actions }: { pack: PackEntry; c
     status = "Checking the download…";
     state = "verifying";
     bar = { label: `Checking ${pack.name}`, percent: 100 };
+  } else if (removal === "inUse") {
+    status = `Can't remove it while ${tools} is running. Remove it when the run finishes.`;
+    state = "inUse";
+  } else if (removal === "failed") {
+    status = "Couldn't remove this pack. Try again.";
+    state = "failed";
   } else if (offlineRow) {
     status = "No internet connection.";
     state = "offline";
@@ -222,8 +231,8 @@ const PackRow = ({ pack, checking, job, offline, actions }: { pack: PackEntry; c
     ? `Used by ${tools}. ${formatBytes(pack.diskBytes)} on this disk.`
     : `Used by ${tools}. ${download} download.`;
   const detailsId = `pack-details-${pack.id}`;
-  const action = (label: string, onClick: () => void, disabled = false) => (
-    <Button variant="outline" size="xs" aria-label={`${label} ${pack.name}`} disabled={disabled} onClick={onClick}>{label}</Button>
+  const action = (label: string, onClick: () => void, disabled = false, variant: "outline" | "ghost" = "outline") => (
+    <Button variant={variant} size="xs" aria-label={`${label} ${pack.name}`} disabled={disabled} onClick={onClick}>{label}</Button>
   );
   return (
     <li className="pack-row" aria-label={`${pack.name}, ${status}`}>
@@ -248,10 +257,11 @@ const PackRow = ({ pack, checking, job, offline, actions }: { pack: PackEntry; c
               <span style={{ width: `${bar.percent}%` }} />
             </span>
           )}
-          <span className="pack-row-status settings-row-hint" role="status" data-status={state}>{status}</span>
+          <span className="pack-row-status settings-row-hint" role={state === "inUse" ? "alert" : "status"} data-status={state}>{status}</span>
           {job && job.phase !== "failed" && action("Cancel", () => actions.cancel(job.runId))}
           {job?.phase === "failed" && action("Try again", actions.install)}
           {!job && !checking && pack.status === "notInstalled" && action("Install", actions.install, offlineRow)}
+          {!job && !checking && installed && action("Remove…", actions.remove, removal === "removing" || removal === "inUse", "ghost")}
         </span>
       </div>
       {open && (
@@ -279,7 +289,7 @@ const Banner = ({ role, tone, title, text, action }: { role: "status" | "alert";
   </Card>
 );
 
-/** Lists packs, downloads and installs them one at a time, and installs one from a pack file. Updating and removing arrive later. */
+/** Lists packs, downloads and installs them one at a time, installs one from a pack file, and removes them. Updating arrives later. */
 export const PacksSection = () => {
   const request = useRef<Promise<PackList> | null>(null);
   const [list, setList] = useState<PackList | null>(null);
@@ -287,6 +297,7 @@ export const PacksSection = () => {
   const [fileStep, setFileStep] = useState<FileStep | null>(null);
   const [checking, setChecking] = useState<string | null>(null);
   const [jobs, setJobs] = useState<Record<string, Job>>({});
+  const [removals, setRemovals] = useState<Record<string, Removal>>({});
   const [offline, setOffline] = useState(false);
   useEffect(() => {
     // One request per visit, even when StrictMode runs this effect twice.
@@ -341,6 +352,21 @@ export const PacksSection = () => {
     });
   };
 
+  const remove = async (pack: PackEntry) => {
+    setRemovals((current) => ({ ...current, [pack.id]: "removing" }));
+    let outcome: Removal | null = null;
+    try {
+      setList(await invoke<PackList>("uninstall_pack", { packId: pack.id }));
+    } catch (reason) {
+      // A refusal changes nothing on disk, so the row keeps its state and says why.
+      outcome = asInstallError(reason).kind === "inUse" ? "inUse" : "failed";
+    }
+    setRemovals((current) => {
+      const { [pack.id]: _finished, ...rest } = current;
+      return outcome ? { ...rest, [pack.id]: outcome } : rest;
+    });
+  };
+
   const cancel = (runId: string) => {
     void invoke<boolean>("cancel_run", { runId });
   };
@@ -375,6 +401,7 @@ export const PacksSection = () => {
     return job?.phase === "failed" ? [{ pack, error: job.error }] : [];
   });
   const blocked = failures.some(({ error }) => error.kind === "serverBlocked");
+  const inUse = (list?.packs ?? []).find((pack) => removals[pack.id] === "inUse");
   const lowSpace = failures.flatMap(({ pack, error }) => error.kind === "notEnoughSpace" ? [{ pack, ...error.details }] : [])[0];
   return (
     <div className="packs">
@@ -387,7 +414,9 @@ export const PacksSection = () => {
         </div>
         <Button variant="outline" size="xs" disabled={checking !== null} onClick={() => void chooseFile()}>Install from file…</Button>
       </div>
-      {offline ? (
+      {inUse ? (
+        <Banner role="alert" tone="warning" title={`${inUse.name} wasn't removed.`} text={`${toolList(inUse.toolIds)} is using it right now. Remove it after the run finishes.`} />
+      ) : offline ? (
         <Banner role="status" tone="warning" title="You're offline." text="Installed packs keep working. Connect to the internet to install or update packs, or use Install from file." />
       ) : blocked ? (
         <Banner
@@ -412,8 +441,9 @@ export const PacksSection = () => {
             pack={pack}
             checking={checking === pack.id}
             job={jobs[pack.id]}
+            removal={removals[pack.id]}
             offline={offline}
-            actions={{ install: () => void download(pack), cancel }}
+            actions={{ install: () => void download(pack), cancel, remove: () => void remove(pack) }}
           />
         ))}
       </ul>

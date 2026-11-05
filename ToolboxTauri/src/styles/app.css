@@ -1421,7 +1421,7 @@ body {
 .pack-row-end { display:flex; flex-wrap:wrap; align-items:center; justify-content:flex-end; gap:8px; max-width:360px; }
 .pack-row-status { text-align:right; }
 .pack-row-status[data-status="damaged"], .pack-row-status[data-status="failed"] { color:var(--destructive); }
-.pack-row-status[data-status="incompatible"] { color:var(--warning); }
+.pack-row-status[data-status="incompatible"], .pack-row-status[data-status="inUse"] { color:var(--warning); }
 .pack-progress { display:block; width:110px; height:6px; border-radius:3px; background:var(--border); overflow:hidden; }
 .pack-progress > span { display:block; height:100%; background:var(--primary); }
 .packs-banner[data-tone="warning"] .settings-note-content > svg { color:var(--warning); }
