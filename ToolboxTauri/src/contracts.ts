@@ -117,7 +117,7 @@ export type OutcomePointer =
   | { kind: "pack"; packId: string }
   | { kind: "outputFolder" };
 
-export type LimitKind = "fileSize" | "pageCount" | "time" | "decompression";
+export type LimitKind = "fileSize" | "pageCount" | "time" | "decompression" | "textLength";
 
 export type ToolError = { message: string; pointer: OutcomePointer | null } & (
   | { kind: "invalidInput" | "unavailable" | "processing" | "wrongPassword" | "cancelled" }
@@ -280,6 +280,22 @@ export interface PasswordRequest extends ToolRequest {
   password: string;
   passwordOverrides: Record<string, string>;
 }
+
+export type WatermarkPlacement = "center" | "top-left" | "top-right" | "bottom-left" | "bottom-right" | "tile";
+export type WatermarkPosition = WatermarkPlacement | { x: number; y: number };
+
+// Mirrors kit::common::watermark::WatermarkOptions.
+export interface WatermarkOptions {
+  text?: string;
+  logoPath?: string;
+  size?: number;
+  opacity: number;
+  color?: string;
+  position?: WatermarkPosition;
+  rotation?: number;
+}
+
+export interface WatermarkImagesRequest extends ToolRequest, WatermarkOptions {}
 
 export interface CompressImagesRequest extends ToolRequest {
   quality: number;
