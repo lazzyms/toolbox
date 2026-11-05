@@ -369,6 +369,22 @@
 "h": 800,
 "title": "Results: every lock and unlock outcome",
 "expand": "fill"
+},
+"ConvertToPdf.dc.html": {
+"x": 14000,
+"y": 7280,
+"w": 1280,
+"h": 800,
+"title": "Convert to PDF: mixed list, format options, paste HTML",
+"expand": "fill"
+},
+"ConvertToPdfResults.dc.html": {
+"x": 15360,
+"y": 7280,
+"w": 1280,
+"h": 800,
+"title": "Convert to PDF: results, fonts, script pack",
+"expand": "fill"
 }
 },
 "order": [
@@ -400,6 +416,8 @@
 "OCR.dc.html",
 "ImagesToPdf.dc.html",
 "FormattedPdf.dc.html",
+"ConvertToPdf.dc.html",
+"ConvertToPdfResults.dc.html",
 "ImageEdit.dc.html",
 "ImageConvert.dc.html",
 "Compress.dc.html",
@@ -632,6 +650,78 @@
 "maxH": 520,
 "fill": "green",
 "text": "Screen-reader announcements\n\nOne polite live region sits on the batch strip:\n- On start: 'Protecting 24 files.'\n- During the run: progress every 5 files or 10 seconds, whichever is later, such as 'Protecting, 10 of 24 done.'\n- On finish: 'Done. 21 protected, 2 skipped, 1 failed.' Focus stays where it was.\n\nEach row is a list item whose accessible name reads as one sentence: file, state, reason, warnings, then output name. Row actions are real buttons, such as 'Open annual-report-protected.pdf'.\n\nThe cancel dialog traps focus and returns it to Cancel batch."
+},
+"c2pMix": {
+"x": 16720,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Convert to PDF: one mixed batch\n\nEvery added item sits in one list in the order it was added, with a Format column. There are no tabs per format. Word, Excel, PowerPoint, OpenDocument, RTF, older Office (with a Basic fidelity tag), Markdown, pasted HTML, plain text, CSV/TSV and EPUB can share a run.\n\nOptions has Page defaults first, then one collapsible section per family that is in the list, in a fixed order. A section disappears when its last file leaves the list, and its choices are kept. Each closed section shows a one-line summary.\n\nItems that can't be added (video, folders) are named in a 'not added' card. Formats that aren't shipped yet (MOBI here) and PDFs stay in the list as 'Not available yet' and 'Will be skipped'."
+},
+"c2pPaste": {
+"x": 17120,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Convert to PDF: pasted HTML\n\nPaste HTML… (⌘⇧V, Ctrl+Shift+V on Windows) opens a dialog with a name field and the pasted markup in a monospace box. It shows the size and how many remote images will be left out. Add to list makes a list item with a clipboard icon.\n\nPasted HTML has no original folder, so when the run starts a native save dialog asks for its name and folder. It opens in the folder last used for pasted HTML, or Documents. That is why the run button ends in an ellipsis while a pasted item is in the list. Cancel returns to the list without converting.\n\nThe other files keep saving next to their originals."
+},
+"c2pRows": {
+"x": 17520,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "Convert to PDF: result rows\n\nResults reuse the shared results header: status title, segment bar, All / Needs attention / Warnings and notes chips, Show all in Finder.\n\n- Fonts: 'Show fonts' expands a list of each font used: embedded, bundled fallback (Calibri to Carlito) or system font.\n- Approximate layout and remote content left out use the note icon and say what changed.\n- Omitted content (a chart with no stored image) uses the warning icon and amber detail.\n- Older Office files carry a Basic fidelity tag.\n- Skipped (already a PDF), Failed (password, DRM), Unavailable (MOBI) and Over limit give the reason in the detail line. Password-protected rows point to Open Lock & Unlock."
+},
+"c2pDest": {
+"x": 17920,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Convert to PDF: destination\n\nUses the shared Save to block: next to each original by default, with an example name and -1, -2 for clashes. Change for this run sets a folder for this run only and shows the 'This run only' badge and Reset to default (state: Changed save location).\n\nPasted HTML is the exception: it asks where to save when the run starts. No original is ever replaced."
+},
+"c2pCtl": {
+"x": 18320,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Convert to PDF: Markdown, text and table controls\n\n- Markdown: page size, margins, body font, code blocks (shaded or plain), add a table of contents.\n- Plain text: page size, margins, font (monospace default), encoding (Detect, with the detected value named), wrap long lines.\n- Tables (CSV/TSV): delimiter (by file type), encoding, first row is a header and repeats on each page, orientation, fit to width.\n- Spreadsheets: all sheets or visible only, respect print areas, fit sheet to page width. Presentations: speaker notes, hidden slides (the count is named).\n\nControls are paired selects and checkboxes inside each section. There is no live preview: the result row's Open shows the real PDF, so there is one render path."
+},
+"c2pPack": {
+"x": 18720,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "Convert to PDF: script pack\n\nA document whose text needs a script that isn't installed (Devanagari here) gets the shared pack row: package icon, 'Needs a pack', a reason and one 'Install script pack' button with its download size. There is no Retry.\n\nAfter install the row reads 'Ready to run' with a 'Pack installed' tag. The status line says '1 file is ready to run again' and the run button becomes 'Convert 1 file again'. Only that file runs; PDFs already made are kept."
+},
+"c2pKeys": {
+"x": 19120,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "Convert to PDF: keyboard and multi-select\n\nThe list is a multi-select listbox. Click selects one, Shift-click a range, ⌘-click (Ctrl-click) toggles, ⌘A selects all. Delete or Remove from list removes items from the list, never from disk.\n\nShortcuts: ⌘O add files, ⌘⇧V paste HTML (new), ⌘↵ convert, Esc cancels a run or closes a dialog. Option sections are buttons with aria-expanded; Enter or Space opens one.\n\nOne polite status line announces adds, removals, progress and the final result. Each converts on its own, so one failure doesn't stop the batch."
+},
+"c2pStates": {
+"x": 19520,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "purple",
+"text": "Convert to PDF: states\n\nConvertToPdf: Files added (default), Empty, Paste HTML, Markdown options, Plain text options, Table options, Spreadsheet and slide options, Changed save location, Last Markdown removed, Save dialog, Converting.\n\nConvertToPdfResults: Results (default), Needs attention, Warnings and notes, Script pack installed.\n\nBoth boards take theme (dark, light) and platform (macOS, Windows) props."
+},
+"c2pNew": {
+"x": 19920,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "orange",
+"text": "Convert to PDF: new patterns and open points\n\n- Collapsible option sections are new. There is no shadcn Accordion in the kit, so each header is a Button with aria-expanded and a chevron.\n- ⌘⇧V for Paste HTML is a new shortcut. Check it against the global shortcut map.\n- The save dialog is drawn as a placeholder. The app uses the native dialog.\n- Two states (Table options, Changed save location) show the options panel scrolled.\n- The pack size (38 MB) and the unshipped format (MOBI) are illustrative.\n- ConvertBatch keeps its older Convert to PDF view until these boards are approved; then remove it."
 }
 },
 "designSystems": []

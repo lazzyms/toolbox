@@ -34,7 +34,7 @@ pub fn recorded(command: &str) -> Option<ToolLimits> {
         "remove_password" | "protect_files" | "export_pdf_scene" | "crop_pdf" | "sign_pdf" | "edit_pdf" | "edit_pdf_session"
         | "organize_pdf" | "add_pdf_pages" | "add_page_numbers" | "watermark_pdf" | "compress_pdf" | "remove_pdf_pages"
         | "extract_pdf_pages" | "merge_pdfs" | "split_pdf" | "pdf_to_images" | "pdf_to_text" | "extract_pdf_images"
-        | "ocr_pdf" | "rotate_pdf" | "repair_pdf" | "redact_pdf" | "compare_pdfs" => PDF,
+        | "ocr_pdf" | "rotate_pdf" | "repair_pdf" | "redact_pdf" | "compare_pdfs" | "convert_to_pdf" => PDF,
         "compress_images" | "convert_images" | "export_image_edit_plan" | "images_to_pdf" | "blur_faces"
         | "remove_image_background" | "resize_images" | "rotate_images" | "crop_images" | "adjust_image_tone"
         | "watermark_images" | "generate_icon_set" | "create_gif" => IMAGE,
@@ -68,6 +68,16 @@ impl ToolLimits {
         })
     }
 
+    pub fn expansion_error(&self, path: &Path) -> ToolError {
+        ToolError::limit_exceeded(
+            LimitKind::Decompression,
+            format!(
+                "{} expands to more than {} when opened, which is over the limit. It may be damaged or unsafe to open.",
+                Format::for_path(path).part(), bytes_label(self.max_expanded_bytes),
+            ),
+        )
+    }
+
     pub fn check(&self, path: &Path) -> Result<(), ToolError> {
         let Ok(metadata) = std::fs::metadata(path) else { return Ok(()) };
         let format = Format::for_path(path);
@@ -80,13 +90,7 @@ impl ToolLimits {
         let Ok(bytes) = std::fs::read(path) else { return Ok(()) };
         let shape = Shape::read(&bytes, self.max_pages.unwrap_or(u32::MAX), self.max_expanded_bytes);
         if shape.largest_part > self.max_expanded_bytes {
-            return Err(ToolError::limit_exceeded(
-                LimitKind::Decompression,
-                format!(
-                    "{} expands to more than {} when opened, which is over the limit. It may be damaged or unsafe to open.",
-                    format.part(), bytes_label(self.max_expanded_bytes),
-                ),
-            ));
+            return Err(self.expansion_error(path));
         }
         match self.max_pages {
             Some(max_pages) if shape.pages > u64::from(max_pages) => Err(ToolError::limit_exceeded(
@@ -109,7 +113,8 @@ impl Format {
         let extension = path.extension().and_then(|extension| extension.to_str()).unwrap_or_default().to_ascii_lowercase();
         match extension.as_str() {
             "pdf" => Self::Pdf,
-            "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" => Self::Document,
+            "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "odt" | "ods" | "odp" | "rtf" | "txt" | "md" | "markdown" | "html" | "htm"
+            | "csv" | "tsv" | "epub" | "mobi" => Self::Document,
             "gif" => Self::Gif,
             "tif" | "tiff" => Self::Tiff,
             _ => Self::Image,
@@ -454,6 +459,32 @@ pub mod fixtures {
             if self.filled > 0 { self.bytes.push(self.current); }
             self.bytes
         }
+    }
+
+    pub fn zip_with_deflated(name: &str, zlib: &[u8], expanded: u32) -> Vec<u8> {
+        let deflated = &zlib[2..zlib.len() - 4];
+        let header = |signature: u32, central: bool| {
+            let mut bytes = signature.to_le_bytes().to_vec();
+            if central { bytes.extend_from_slice(&20u16.to_le_bytes()); }
+            for value in [20u16, 0, 8, 0, 0] { bytes.extend_from_slice(&value.to_le_bytes()); }
+            for value in [0u32, deflated.len() as u32, expanded] { bytes.extend_from_slice(&value.to_le_bytes()); }
+            bytes.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            bytes.extend_from_slice(&0u16.to_le_bytes());
+            if central { bytes.extend_from_slice(&[0; 14]); }
+            bytes.extend_from_slice(name.as_bytes());
+            bytes
+        };
+        let mut zip = header(0x0403_4b50, false);
+        zip.extend_from_slice(deflated);
+        let central_at = zip.len() as u32;
+        let central = header(0x0201_4b50, true);
+        let central_len = central.len() as u32;
+        zip.extend(central);
+        zip.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
+        for value in [0u16, 0, 1, 1] { zip.extend_from_slice(&value.to_le_bytes()); }
+        for value in [central_len, central_at] { zip.extend_from_slice(&value.to_le_bytes()); }
+        zip.extend_from_slice(&0u16.to_le_bytes());
+        zip
     }
 
     pub fn pdf_with_stream(stream: &[u8]) -> Vec<u8> {

@@ -603,7 +603,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                                         <span className="file-selection-name">{name}</span>
                                         <span className="file-selection-detail">{flag?.message ?? shortenHomePath(parentFolder(entry.path), home)}</span>
                                     </Button>
-                                    {flag && <Badge variant="outline" className="file-selection-badge">Won't run</Badge>}
+                                    {flag && <Badge variant="outline" className="file-selection-badge">{flag.label ?? "Won't run"}</Badge>}
                                     {!flag && renderFileExtra?.(entry.path, isSelected, loading)}
                                     {ordered && occurrence > 1 && <Badge variant="outline" className="file-selection-badge" data-tone="warning">{repeatLabel(occurrence)}</Badge>}
                                     {ordered && (
@@ -736,6 +736,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 progress={progress}
                 loading={loading}
                 resultVerb={utility.resultVerb}
+                resultNoun={utility.resultNoun}
                 runningVerb={utility.runningVerb}
                 runningDetail={utility.runningDetail}
                 live={live}

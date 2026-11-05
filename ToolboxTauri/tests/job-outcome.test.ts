@@ -13,9 +13,13 @@ test("native-shaped outcomes parse into the TypeScript contract for all three st
   const outcomes = parseToolResult(nativeSamples);
 
   assert.deepEqual(outcomes, nativeSamples);
-  assert.deepEqual(outcomes.map((outcome) => outcome.state), ["succeeded", "skipped", "skipped", "failed", "failed"]);
+  assert.deepEqual(outcomes.map((outcome) => outcome.state), ["succeeded", "skipped", "skipped", "failed", "failed", "succeeded"]);
 
-  const [succeeded, pointedSkip, plainSkip, failed, limited] = outcomes;
+  const [succeeded, pointedSkip, plainSkip, failed, limited, converted] = outcomes;
+  assert.equal(succeeded.fonts, undefined, "outcomes without fonts carry no font list");
+  assert.deepEqual(converted.fonts, [
+    { requestedFamily: "Courier New", requestedStyle: "regular", fontUsed: "Liberation Mono", styleUsed: "regular", source: "bundled fallback" },
+  ]);
   assert.equal(succeeded.state === "succeeded" && succeeded.outputPaths[0], "signed-edited.pdf");
   assert.deepEqual(succeeded.warnings.map((warning) => warning.code), ["signatureRemoved", "fontSubstituted"]);
   assert.deepEqual(
@@ -53,6 +57,8 @@ test("inconsistent native outcomes are rejected", () => {
   const fontWarningWithoutDetails = { ...sample(0), warnings: [{ code: "fontSubstituted", message: "Changed." }] };
   const limitWithoutDetails = { ...sample(4), failure: { kind: "limitExceeded", message: "Too big.", pointer: null } };
   const unknownLimit = { ...sample(4), failure: { kind: "limitExceeded", details: { limit: "patience" }, message: "Too big.", pointer: null } };
+  const unknownFontSource = { ...sample(5), fonts: [{ ...(sample(5).fonts as object[])[0], source: "borrowed" }] };
+  const fontsNotAList = { ...sample(5), fonts: { fontUsed: "Liberation Mono" } };
 
   for (const [name, value] of Object.entries({
     skippedWithOutputs,
@@ -63,6 +69,8 @@ test("inconsistent native outcomes are rejected", () => {
     fontWarningWithoutDetails,
     limitWithoutDetails,
     unknownLimit,
+    unknownFontSource,
+    fontsNotAList,
   })) {
     assert.throws(() => parseJobOutcome(value), /Invalid job outcome/, name);
   }
