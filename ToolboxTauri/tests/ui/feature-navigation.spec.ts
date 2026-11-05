@@ -111,6 +111,7 @@ test.beforeEach(async ({ page }) => {
                     }
                     return null;
                 }
+if (command === "render_pdf_source_thumbnails") return (args as { request: { pageIndices: number[] } }).request.pageIndices.map((pageIndex) => ({ pageIndex, thumbnail: { dataUrl: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='612' height='792'/%3E", width: 247, height: 320 }, error: null }));
 if (command === "preview_pdf_scene_pages") return (args as { request: { pageIndices: number[] } }).request.pageIndices.map((pageIndex) => ({ pageIndex, preview: { dataUrl: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='612' height='792'/%3E", width: 612, height: 792 } }));
                 if (command === "inspect_pdf" || command === "inspect_pdf_scene") {
                     const inspectionDelay = (window as TestWindow).__toolboxInspectionDelayMs;
@@ -1062,17 +1063,6 @@ test("pdf editor renders page previews", async ({ page }) => {
     await expect(page.getByRole("img", { name: "Thumbnail of page 1" })).toBeVisible();
 });
 
-test("PDF editor inserts editable blank pages from thumbnails", async ({ page }) => {
-    await page.goto("/");
-    await openFromHome(page, "Organize PDF");
-    await chooseFixture(page, pdfFixturePath);
-    await page.getByRole("button", { name: "Add blank page", exact: true }).click();
-    await drawSceneMark(page, "Shape");
-    await page.getByRole("button", { name: "Export PDF", exact: true }).click();
-    const invocation = await page.evaluate(() => (window as TestWindow).__toolboxInvocations?.find(c => c.command === "export_pdf_scene"));
-    expect(invocation?.args).toMatchObject({ request: { scene: { pages: [{ sourceIndex: 0 }, { sourceIndex: null, objects: [{ kind: "shape" }] }] } } });
-});
-
 test("editor command rails keep one document session while changing tools", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Open Image Editor", exact: true }).click();
@@ -1114,11 +1104,12 @@ test("PDF editor protects the last page and supports unified history", async ({ 
     await expect(page.getByRole("button", { name: "Delete selected pages" })).toBeDisabled();
     await drawSceneMark(page, "Text");
     await expect(page.locator(".scene-object-hit")).toHaveCount(1);
-    await page.getByRole("button", { name: "Undo", exact: true }).click();
+    await page.getByRole("button", { name: /^Undo \(/ }).click();
     await expect(page.locator(".scene-object-hit")).toHaveCount(0);
-    await page.getByRole("button", { name: "Redo", exact: true }).click();
+    await page.getByRole("button", { name: /^Redo \(/ }).click();
     await expect(page.locator(".scene-object-hit")).toHaveCount(1);
-    await page.getByRole("button", { name: "Reset edits" }).click();
+    await page.getByRole("button", { name: "Reset…" }).click();
+    await page.getByRole("alertdialog", { name: "Reset all page changes?" }).getByRole("button", { name: "Reset", exact: true }).click();
     await expect(page.locator(".scene-object-hit")).toHaveCount(0);
 });
 
@@ -1979,18 +1970,18 @@ test("single-input replacement keeps the source and edit state after cancellatio
     await openFromHome(page, "Crop PDF");
     await chooseFixture(page, pdfFixturePath);
     await drawSceneMark(page, "Crop");
-    await expect(page.getByRole("button", { name: "Reset edits" })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "Reset…" })).toBeEnabled();
 
     await page.evaluate((path) => { (window as TestWindow).__toolboxDialogResults = [null, path]; }, pdfFixturePath);
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await expect(page.locator(".file-selection-count")).toHaveText("1 file");
     await expect(page.getByText(pdfFixtureName, { exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Reset edits" })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "Reset…" })).toBeEnabled();
 
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await expect(page.locator(".file-selection-count")).toHaveText("1 file");
     await expect(page.getByText(pdfFixtureName, { exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Reset edits" })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "Reset…" })).toBeEnabled();
 });
 
 test("page-scoped actions disable export when the explicit selection is empty", async ({ page }) => {
@@ -2084,12 +2075,10 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
     }
     if (isPdfSceneTool(utility.id)) {
         if (utility.id === "pdf-page-numbers") await page.getByRole("button", { name: "Page numbers", exact: true }).click();
-        else if (utility.id === "pdf-organize") await page.getByRole("button", { name: "Add blank page", exact: true }).click();
-        else if (utility.id === "pdf-remove-pages") {
-            await page.getByRole("button", { name: "Add blank page", exact: true }).click();
-            await page.getByRole("button", { name: "Page 1", exact: true }).click();
-            await page.getByRole("button", { name: "Delete selected pages", exact: true }).click();
-        } else if (utility.id === "pdf-watermark") await page.getByRole("button", { name: "Add fixed watermark", exact: true }).click();
+        else if (utility.id === "pdf-organize") {
+            await page.getByRole("button", { name: "Open in page view", exact: true }).click();
+            await page.getByRole("button", { name: "Rotate selected pages", exact: true }).click();
+        } else if (utility.id === "pdf-remove-pages") await page.getByRole("button", { name: "Rotate selected pages", exact: true }).click(); else if (utility.id === "pdf-watermark") await page.getByRole("button", { name: "Add fixed watermark", exact: true }).click();
         else await drawSceneMark(page, utility.id === "pdf-sign" ? "Signature" : utility.id === "pdf-watermark" ? "Watermark" : utility.id === "pdf-crop" ? "Crop" : "Text");
     }
     if (usesImageEditPlan) {
@@ -2720,7 +2709,8 @@ test("Redact opens from the Edit PDF toolbar with the open file unless edits are
     await drawSceneMark(page, "Text");
     await expect(redact).toBeDisabled();
     await expect(redact).toHaveAttribute("title", "Export or reset your edits before redacting");
-    await page.getByRole("button", { name: "Reset edits" }).click();
+    await page.getByRole("button", { name: "Reset…" }).click();
+    await page.getByRole("alertdialog", { name: "Reset all page changes?" }).getByRole("button", { name: "Reset", exact: true }).click();
     await expect(redact).toBeEnabled();
 
     await redact.click();

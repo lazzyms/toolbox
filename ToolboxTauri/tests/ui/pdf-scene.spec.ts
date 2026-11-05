@@ -30,6 +30,7 @@ test.beforeEach(async ({ page }) => {
           w.sceneTextResponses[key] = response;
           return { index: pageIndex, width: 612, height: 792, preview: svg, textRuns: [{ text: `${args.request.path} page ${pageIndex} response ${response}`, x: 60, y: 55, width: 250, height: 25 }] };
         }
+        if (command === 'render_pdf_source_thumbnails') return args.request.pageIndices.map((pageIndex: number) => ({ pageIndex, thumbnail: { dataUrl: svg, width: 247, height: 320 }, error: null }));
         if (command === 'preview_pdf_scene_pages') {
           if (w.previewFailure) throw new Error(w.previewFailureMessage ?? 'Renderer unavailable');
           if (w.previewDelay) await new Promise(resolve => setTimeout(resolve, w.previewDelay));
@@ -80,7 +81,7 @@ test('PDF editor toolbars use roving keyboard focus and render the workspace', a
   await page.keyboard.press('End');
   await expect(tools.getByRole('button', { name: 'Export PDF', exact: true })).toBeFocused();
   await page.keyboard.press('Home');
-  await expect(selectTool).toBeFocused();
+  await expect(tools.getByRole('button', { name: 'Organize', exact: true })).toBeFocused();
   await expect(page.getByRole('toolbar', { name: 'PDF page and zoom controls' })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('pdf-editor-workspace.png'), fullPage: true });
 });
@@ -122,7 +123,7 @@ test('PDF editor toolbar uses roving keyboard focus and the inspector follows th
   await page.keyboard.press('ArrowRight');
   await expect(toolbar.getByRole('button', { name: 'Text', exact: true })).toBeFocused();
   await page.keyboard.press('Home');
-  await expect(select).toBeFocused();
+  await expect(toolbar.getByRole('button', { name: 'Organize', exact: true })).toBeFocused();
 
   const inspector = page.getByRole('complementary', { name: 'PDF editor inspector' });
   await expect(inspector).toBeVisible();
@@ -280,10 +281,10 @@ test('inspector property edits stay in scene history and undo and redo exactly',
   await shape.selectOption('triangle');
   let result = await exported(page);
   expect(result.pages[0].objects[0].shape).toBe('triangle');
-  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await page.getByRole('button', { name: /^Undo \(/ }).click();
   result = await exported(page);
   expect(result.pages[0].objects[0].shape).toBe('square');
-  await page.getByRole('button', { name: 'Redo', exact: true }).click();
+  await page.getByRole('button', { name: /^Redo \(/ }).click();
   result = await exported(page);
   expect(result.pages[0].objects[0].shape).toBe('triangle');
 });
@@ -298,13 +299,13 @@ test('page numbering adds editable number objects to every page', async ({ page 
 
 test('PDF scene history retains exactly the latest 100 edits', async ({ page }) => {
   await openEditor(page);
-  const addPage = page.getByRole('button', { name: 'Add blank page' });
-  for (let index = 0; index < 101; index += 1) await addPage.click();
-  await expect(page.getByRole('button', { name: 'Page 102, blank', exact: true })).toBeVisible();
-  const undo = page.getByRole('button', { name: 'Undo', exact: true });
+  const rotate = page.getByRole('button', { name: 'Rotate selected pages' });
+  for (let index = 0; index < 101; index += 1) await rotate.click();
+  const undo = page.getByRole('button', { name: /^Undo \(/ });
   for (let index = 0; index < 100; index += 1) await undo.click();
+  await expect(undo).toBeDisabled();
   const result = await exported(page);
-  expect(result.pages).toHaveLength(4);
+  expect(result.pages.map((item: any) => item.rotation)).toEqual([90, 0, 0]);
 });
 
 test('pointer-down does not request another preview before the scene changes', async ({ page }) => {
@@ -378,30 +379,31 @@ test('scene composes every mark kind, moves and resizes, then exports once', asy
   expect(await page.evaluate(() => (window as any).calls.filter((c: any) => c.command === 'export_pdf_scene').length)).toBe(1);
 });
 
-test('scene crop and thumbnail insert rotate reorder delete share undo redo reset', async ({ page }) => {
+test('scene crop and thumbnail rotate reorder delete share undo redo reset', async ({ page }) => {
   await openEditor(page);
   await draw(page, 'Crop', .1, .1);
-  await page.getByRole('button', { name: 'Add blank page' }).click();
-  await expect(page.getByRole('button', { name: 'Page 2, blank', exact: true })).toHaveAttribute('aria-current', 'page');
+  await page.getByRole('button', { name: 'Page 2', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Page 2', exact: true })).toHaveAttribute('aria-current', 'page');
   await draw(page, 'Shape', .3);
   await page.getByRole('button', { name: 'Rotate selected pages' }).click();
   await page.getByRole('button', { name: 'Move page earlier' }).click();
   let result = await exported(page);
-  expect(result.pages[0]).toMatchObject({ sourceIndex: null, rotation: 90 });
+  expect(result.pages[0]).toMatchObject({ sourceIndex: 1, rotation: 90 });
   expect(result.pages[0].objects).toHaveLength(1);
   expect(result.pages[1].crop).not.toBeNull();
   await page.getByRole('button', { name: 'Delete selected pages' }).click();
-  await page.getByRole('button', { name: 'Undo', exact: true }).click();
-  result = await exported(page);
-  expect(result.pages).toHaveLength(4);
-  await page.getByRole('button', { name: 'Redo', exact: true }).click();
+  await page.getByRole('button', { name: /^Undo \(/ }).click();
   result = await exported(page);
   expect(result.pages).toHaveLength(3);
-  await page.getByRole('button', { name: 'Reset edits' }).click();
+  await page.getByRole('button', { name: /^Redo \(/ }).click();
+  result = await exported(page);
+  expect(result.pages).toHaveLength(2);
+  await page.getByRole('button', { name: 'Reset…' }).click();
+  await page.getByRole('alertdialog', { name: 'Reset all page changes?' }).getByRole('button', { name: 'Reset', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeDisabled();
   await expect(page.getByRole('button', { name: /^Page \d/ })).toHaveText(['1', '2', '3'].map((n) => new RegExp(n)));
-  await page.getByRole('button', { name: 'Undo', exact: true }).click();
-  expect(await page.getByRole('button', { name: 'Reset edits' }).isEnabled()).toBe(true);
+  await page.getByRole('button', { name: /^Undo \(/ }).click();
+  expect(await page.getByRole('button', { name: 'Reset…' }).isEnabled()).toBe(true);
 });
 
 test('scene drag reorders selected thumbnails together and protects the last page', async ({ page }) => {
@@ -421,9 +423,9 @@ test('Export stays disabled until the document has an effective change', async (
   await expect(exportButton).toBeDisabled();
   await draw(page, 'Shape', .4);
   await expect(exportButton).toBeEnabled();
-  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await page.getByRole('button', { name: /^Undo \(/ }).click();
   await expect(exportButton).toBeDisabled();
-  await page.getByRole('button', { name: 'Redo', exact: true }).click();
+  await page.getByRole('button', { name: /^Redo \(/ }).click();
   await expect(exportButton).toBeEnabled();
   await exportButton.click();
   expect(await page.evaluate(() => (window as any).calls.filter((c: any) => c.command === 'export_pdf_scene'))).toHaveLength(1);
@@ -458,7 +460,7 @@ test('scene rejects stale and failed previews without exposing an unverified exp
   await draw(page, 'Text', .2);
   await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeDisabled();
   await expect.poll(() => page.locator('.scene-canvas image').evaluateAll((images) => images.map((image) => image.getAttribute('href')))).toContain(svg);
-  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await page.getByRole('button', { name: /^Undo \(/ }).click();
   await expect(page.locator('.scene-object-hit')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeDisabled();
   await page.evaluate(() => { (window as any).previewFailure = true; });
@@ -507,7 +509,7 @@ test('Escape cancels a canvas gesture before pointer release', async ({ page }) 
 
   await expect(page.getByRole('group', { name: 'PDF page canvas' })).toBeVisible();
   await expect(page.locator('.scene-object-hit')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: /^Undo \(/ })).toBeDisabled();
 });
 
 test('Escape releases pointer capture while cancelling object movement', async ({ page }, testInfo) => {
@@ -536,7 +538,7 @@ test('Escape releases pointer capture while cancelling object movement', async (
   await page.mouse.up();
   await expect(object).toHaveAttribute('x', originalX!);
   await expect(object).toHaveAttribute('y', originalY!);
-  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await page.getByRole('button', { name: /^Undo \(/ }).click();
   await expect(page.locator('.scene-object-hit')).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath('escape-releases-pointer-capture.png') });
 });
@@ -561,7 +563,7 @@ test('one signature drag stays in one undo step', async ({ page }) => {
   await openEditor(page);
   await draw(page, 'Signature', .2);
   await expect(page.locator('.scene-object-hit')).toHaveCount(1);
-  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await page.getByRole('button', { name: /^Undo \(/ }).click();
   await expect(page.locator('.scene-object-hit')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Redo', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: /^Redo \(/ })).toBeEnabled();
 });
