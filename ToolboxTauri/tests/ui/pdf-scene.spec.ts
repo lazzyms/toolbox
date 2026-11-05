@@ -565,3 +565,17 @@ test('one signature drag stays in one undo step', async ({ page }) => {
   await expect(page.locator('.scene-object-hit')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Redo', exact: true })).toBeEnabled();
 });
+
+test('scene export sends only the scene sections and the invoke boundary accepts the staged request shape', async ({ page }) => {
+  await openEditor(page);
+  await draw(page, 'Text', .2);
+  await exported(page);
+  const request = await page.evaluate(() => (window as any).calls.filter((c: any) => c.command === 'export_pdf_scene').at(-1).args.request);
+  expect(Object.keys(request).sort()).toEqual(['outputLocation', 'paths', 'scene']);
+
+  const staged = { ...request, formValues: [], textEdits: [], flatten: false, redactions: [] };
+  const results = await page.evaluate((staged) => (window as any).__TAURI_INTERNALS__.invoke('export_pdf_scene', { request: staged }), staged);
+  expect(results[0].state).toBe('succeeded');
+  const accepted = await page.evaluate(() => (window as any).calls.filter((c: any) => c.command === 'export_pdf_scene').at(-1).args.request);
+  expect(accepted).toEqual(staged);
+});
