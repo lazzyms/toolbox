@@ -62,6 +62,8 @@ interface ToolScaffoldProps {
     renderFileExtra?: (path: string, selected: boolean, locked: boolean) => React.ReactNode;
     retryWithPassword?: (inputPath: string, password: string) => RunHandler;
     intakeCopy?: IntakeCopy;
+    /** What the workspace source bar says before any file is open, such as the formats it takes. */
+    emptyHint?: string;
     initialPaths?: readonly string[];
     fileActivation?: Extract<ShellEvent, { kind: 'files' }>;
     onActivationAccepted?: (activationId: string) => void;
@@ -86,9 +88,11 @@ interface ToolScaffoldProps {
     }) => React.ReactNode;
 }
 
-export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, retryWithPassword, intakeCopy, initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, exampleName, children }: ToolScaffoldProps) => {
+export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, retryWithPassword, intakeCopy, emptyHint = 'Drop files here or browse from this device.', initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, exampleName, children }: ToolScaffoldProps) => {
     const nextEntryKey = useRef(0);
-    const newEntries = (paths: readonly string[]) => paths.map((path) => ({ key: `entry-${++nextEntryKey.current}`, path }));
+    const newEntries = (items: readonly (string | InspectedPath)[]): IntakeEntry[] => items.map((item) => typeof item === 'string'
+        ? { key: `entry-${++nextEntryKey.current}`, path: item }
+        : { key: `entry-${++nextEntryKey.current}`, path: item.path, animated: item.animated });
     const [entries, setEntries] = useState<IntakeEntry[]>(() => newEntries(initialPaths));
     const [selection, setSelection] = useState<ReadonlySet<string>>(() => new Set());
     const [anchor, setAnchor] = useState<string | null>(null);
@@ -117,7 +121,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
     const statuses = useMemo(() => entryStatuses(entries, utility, intakeCopy), [entries, utility, intakeCopy]);
     const runnable = useMemo(() => statuses.filter((status) => status.flag?.kind !== 'wontRun'), [statuses]);
     const files = useMemo(() => runnable.map((status) => status.entry.path), [runnable]);
-    const failingFiles = useMemo(() => runnable.filter((status) => status.flag !== null).map((status) => status.entry.path), [runnable]);
+    const failingFiles = useMemo(() => runnable.filter((status) => status.flag?.kind === 'willFail').map((status) => status.entry.path), [runnable]);
     const flagged = statuses.filter((status) => status.flag !== null);
     const selectedFileIndex = Math.max(runnable.findIndex((status) => status.entry.key === anchor), 0);
     const saveStep = saveStepFor(utility);
@@ -316,29 +320,29 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
 
     const intake = (incoming: InspectedPath[], replaceSingle = false) => {
         if (inputPolicy.inputCardinality === 'single' && replaceSingle) {
-            const next = incoming[0]?.path;
-            if (!next || (entries.length === 1 && entries[0].path === next)) return;
+            const next = incoming[0];
+            if (!next || (entries.length === 1 && entries[0].path === next.path)) return;
             const [entry] = newEntries([next]);
             setNotAdded([]);
             setEntries([entry]);
             selectOnly(entry.key);
             return;
         }
-        const policy = { ...intakePolicyFor(workspace?.title ?? utility.title, intakeTools, utility), notAcceptedMessage: intakeCopy?.notAccepted };
+        const policy = { ...intakePolicyFor(workspace?.title ?? utility.title, intakeTools, utility), notAcceptedMessage: intakeCopy?.notAccepted, keepsUnsupported: intakeCopy?.keepsUnsupported };
         const classified = classifyIntake(entries.map((entry) => entry.path), incoming, policy);
         setNotAdded(classified.notAdded);
         if (classified.added.length) setEntries((current) => [...current, ...newEntries(classified.added)]);
     };
 
-    const dropPaths = async (paths: string[]) => {
-        let inspected: InspectedPath[];
+    const inspect = async (paths: string[]) => {
         try {
-            inspected = parseInspection(await invoke('inspect_intake_paths', { paths }), paths);
+            return parseInspection(await invoke('inspect_intake_paths', { paths }), paths);
         } catch {
-            inspected = parseInspection(null, paths);
+            return parseInspection(null, paths);
         }
-        intake(inspected);
     };
+
+    const dropPaths = async (paths: string[]) => intake(await inspect(paths));
 
     const dropRef = useRef<(paths: string[]) => void>(() => undefined);
     dropRef.current = (paths) => {
@@ -387,7 +391,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 filters: [{ name: 'Supported files', extensions: inputPolicy.acceptedExtensions.map((extension) => extension.replace(/^\./, '')) }],
             });
             const paths = Array.isArray(picked) ? picked : picked ? [picked] : [];
-            if (paths.length) intake(parseInspection(null, paths), true);
+            if (paths.length) intake(await inspect(paths), true);
         } catch (e) {
             setResults([failedOutcome('Dialog error', 'processing', String(e))]);
         }
@@ -527,7 +531,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 <div className="file-selection-flagged">
                     <p className="workspace-note">
                         {intakeCopy
-                            ? intakeCopy.flaggedNotice(flagged.length)
+                            ? intakeCopy.flaggedNotice(flagged.length, flagged.filter((status) => status.flag?.kind === 'willSkip').length)
                             : `${flagged.length} ${flagged.length === 1 ? "file won't" : "files won't"} run with ${utility.title}. ${flagged.length === 1 ? 'It stays' : 'They stay'} in the list for other actions.`}
                     </p>
                     <Button variant="outline" size="sm" disabled={loading} onClick={() => removeEntries(new Set(flagged.map((status) => status.entry.key)))}>
@@ -603,7 +607,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                                         <span className="file-selection-name">{name}</span>
                                         <span className="file-selection-detail">{flag?.message ?? shortenHomePath(parentFolder(entry.path), home)}</span>
                                     </Button>
-                                    {flag && <Badge variant="outline" className="file-selection-badge">Won't run</Badge>}
+                                    {flag && <Badge variant="outline" className="file-selection-badge">{flag.kind === 'willSkip' ? 'Will skip' : "Won't run"}</Badge>}
                                     {!flag && renderFileExtra?.(entry.path, isSelected, loading)}
                                     {ordered && occurrence > 1 && <Badge variant="outline" className="file-selection-badge" data-tone="warning">{repeatLabel(occurrence)}</Badge>}
                                     {ordered && (
@@ -655,7 +659,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
             <div className="workspace-source-copy">
                 <span className="workspace-source-kicker">Source</span>
                 <strong>{entries.length ? `${entries.length} ${entries.length === 1 ? 'file' : 'files'} open` : 'Open a file to begin'}</strong>
-                <span>{entries.length ? 'Export saves a new copy. Your original stays unchanged.' : 'Drop files here or browse from this device.'}</span>
+                <span>{entries.length ? 'Export saves a new copy. Your original stays unchanged.' : emptyHint}</span>
             </div>
             <div className="workspace-source-actions">
                 <Button variant="default" size="sm" className="workspace-source-open" aria-label="Choose files to process" disabled={loading} {...shortcutTarget('open')} onClick={() => void browse()}>
