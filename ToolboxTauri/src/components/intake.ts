@@ -1,4 +1,4 @@
-import type { ToolDefinition } from '../contracts';
+import type { AtomicToolId, ToolDefinition } from '../contracts';
 
 export type PathKind = 'file' | 'folder' | 'unreadable';
 
@@ -8,13 +8,17 @@ export type IntakeEntry = { key: string; path: string };
 
 export type NotAddedReason = 'notAccepted' | 'folder' | 'duplicate' | 'unreadable';
 
-export type NotAdded = { path: string; reason: NotAddedReason; message: string };
+// A redirect names the tool that handles a refused file, so the notice can offer to open it.
+export type IntakeRedirect = { message: string; toolId: AtomicToolId };
+
+export type NotAdded = { path: string; reason: NotAddedReason; message: string; redirectTo?: AtomicToolId };
 
 export type IntakePolicy = {
     label: string;
     acceptedExtensions: string[];
     allowsRepeats: boolean;
     notAcceptedMessage?: string;
+    redirect?: (path: string) => IntakeRedirect | null;
 };
 
 export type IntakeCopy = {
@@ -90,7 +94,11 @@ export const classifyIntake = (existing: string[], incoming: InspectedPath[], po
     for (const { path, kind } of incoming) {
         if (kind === 'folder') refuse(path, 'folder');
         else if (kind === 'unreadable') refuse(path, 'unreadable');
-        else if (!accepts(policy.acceptedExtensions, path)) refuse(path, 'notAccepted');
+        else if (!accepts(policy.acceptedExtensions, path)) {
+            const redirect = policy.redirect?.(path);
+            if (redirect) notAdded.push({ path, reason: 'notAccepted', message: redirect.message, redirectTo: redirect.toolId });
+            else refuse(path, 'notAccepted');
+        }
         else if (present.has(path) && !policy.allowsRepeats) refuse(path, 'duplicate');
         else {
             present.add(path);

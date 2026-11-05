@@ -1,6 +1,6 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
 use image::codecs::png::PngEncoder;
-use image::{DynamicImage, ImageBuffer, ImageFormat, ImageEncoder, Luma, Rgb, Rgba};
+use image::{DynamicImage, ImageFormat, ImageEncoder, Rgba};
 use image::AnimationDecoder;
 use std::collections::BTreeSet;
 use std::fs::File;
@@ -133,8 +133,9 @@ impl ImageEditPlan {
 pub fn inspect_edit_preview(request: &ImageEditPreviewRequest) -> Result<ImagePreview, String> {
     let plan = request.plan.canonicalized();
     plan.validate()?;
-    let source = crate::kit::images::load_image(&request.path)?;
-    let (edited, format, quality) = apply_edit_plan(&plan, source, crate::kit::images::detect_format(&request.path))?;
+    let source = crate::kit::images::decode(&request.path)?;
+    let format = source.family.output_format();
+    let (edited, format, quality) = apply_edit_plan(&plan, source.into_first_page(), format)?;
     let encoded = crate::kit::images::encode(&edited, format, quality)?;
     let preview_source = match format {
         crate::kit::images::OutputFormat::Heic => heif::decode(&encoded)
@@ -148,11 +149,12 @@ pub fn inspect_edit_preview(request: &ImageEditPreviewRequest) -> Result<ImagePr
 pub fn export_edit_plan(plan: &ImageEditPlan, input: PathBuf) -> JobOutcome {
     let plan = plan.canonicalized();
     if let Err(error) = plan.validate() { return failure(input, error); }
-    let source = match crate::kit::images::load_image(&input) {
-        Ok(image) => image,
+    let source = match crate::kit::images::decode(&input) {
+        Ok(source) => source,
         Err(error) => return failure(input, error),
     };
-    let (edited, format, quality) = match apply_edit_plan(&plan, source, crate::kit::images::detect_format(&input)) {
+    let format = source.family.output_format();
+    let (edited, format, quality) = match apply_edit_plan(&plan, source.into_first_page(), format) {
         Ok(value) => value,
         Err(error) => return failure(input, error),
     };
@@ -189,7 +191,7 @@ fn encode_preview(image: DynamicImage) -> Result<ImagePreview, String> {
 }
 
 fn apply_edit_plan(plan: &ImageEditPlan, mut image: DynamicImage, mut format: crate::kit::images::OutputFormat) -> Result<(DynamicImage, crate::kit::images::OutputFormat, u8), String> {
-    let mut quality = 90;
+    let mut quality = crate::kit::images::DEFAULT_QUALITY;
     let source_width = image.width();
     let source_height = image.height();
     let mut geometry = Vec::new();
@@ -284,6 +286,16 @@ fn map_source_rect(mut rect: (u32, u32, u32, u32), geometry: &[ImageGeometryStep
 fn scale_floor(value: u32, from: u32, to: u32) -> u32 { ((value as u64 * to as u64) / from as u64) as u32 }
 fn scale_ceil(value: u32, from: u32, to: u32) -> u32 { ((value as u64 * to as u64 + from as u64 - 1) / from as u64) as u32 }
 
+/// Convert Image Format's target: the editor's formats plus TIFF, whose
+/// compression is accepted only with a TIFF target and defaults to LZW.
+pub(crate) fn parse_convert_target(format: &str, tiff_compression: Option<crate::kit::contracts::TiffCompression>) -> Result<crate::kit::images::OutputFormat, String> {
+    match (format.to_ascii_lowercase().as_str(), tiff_compression) {
+        ("tif" | "tiff", compression) => Ok(crate::kit::images::OutputFormat::Tiff(compression.unwrap_or_default())),
+        (_, Some(_)) => Err("TIFF compression applies only to a TIFF target.".to_string()),
+        (_, None) => parse_output_format(format),
+    }
+}
+
 pub(crate) fn parse_output_format(format: &str) -> Result<crate::kit::images::OutputFormat, String> {
     match format.to_ascii_lowercase().as_str() {
         "jpg" | "jpeg" => Ok(crate::kit::images::OutputFormat::Jpeg),
@@ -295,7 +307,7 @@ pub(crate) fn parse_output_format(format: &str) -> Result<crate::kit::images::Ou
 }
 
 pub fn inspect_preview(request: &ImagePreviewRequest) -> Result<ImagePreview, String> {
-    let image = crate::kit::images::load_image(&request.path).map_err(|error| format!("Could not preview image: {error}"))?;
+    let image = crate::kit::images::decode(&request.path).map_err(|error| format!("Could not preview image: {error}"))?.into_first_page();
     let width = image.width();
     let height = image.height();
     let preview = image.thumbnail(1200, 900).to_rgba8();
@@ -316,10 +328,15 @@ pub fn inspect_preview(request: &ImagePreviewRequest) -> Result<ImagePreview, St
 }
 
 pub fn inspect_tiff_pages(request: &TiffPreviewRequest) -> Result<Vec<ImagePreview>, String> {
-    read_tiff_pages(&request.path)?
-        .iter()
-        .map(|page| tiff_page_to_dynamic(page).and_then(encode_preview))
+    crate::kit::images::decode(&request.path)?
+        .pages
+        .into_iter()
+        .map(encode_preview)
         .collect()
+}
+
+pub fn inspect_image_pages(request: &ImagePagesRequest) -> Vec<Option<usize>> {
+    request.paths.iter().map(|path| crate::kit::images::source::page_count(path).ok()).collect()
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -402,6 +419,9 @@ pub struct TiffRequest {
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TiffPreviewRequest { pub path: PathBuf }
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImagePagesRequest { pub paths: Vec<PathBuf> }
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MetadataRequest { pub paths: Vec<PathBuf>, pub output_location: OutputLocation }
@@ -518,7 +538,7 @@ fn apply_watermark(image: DynamicImage, request: &WatermarkRequest) -> Result<Dy
         draw_text(&mut watermark, text, request.x, request.y, alpha as u8)?;
     }
     if let Some(path) = request.logo_path.as_ref() {
-        let logo = crate::kit::images::load_image(path)?.to_rgba8();
+        let logo = crate::kit::images::decode(path)?.into_first_page().to_rgba8();
         image::imageops::overlay(&mut watermark, &logo, request.x as i64, request.y as i64);
     }
     if watermark.pixels().all(|pixel| pixel.0[3] == 0) {
@@ -821,8 +841,8 @@ pub fn tiff(request: &TiffRequest) -> JobOutcome {
             if !request.paths.iter().any(|path| path == &page_ref.path) {
                 return failure(page_ref.path.clone(), "The TIFF page selection contains an unselected file.".to_string());
             }
-            let decoded = match read_tiff_pages(&page_ref.path) {
-                Ok(decoded) => decoded,
+            let decoded = match crate::kit::images::decode(&page_ref.path) {
+                Ok(decoded) => decoded.pages,
                 Err(error) => return failure(page_ref.path.clone(), format!("Could not process {}: {error}", page_ref.path.display())),
             };
             let Some(page) = decoded.get(page_ref.page) else {
@@ -834,8 +854,8 @@ pub fn tiff(request: &TiffRequest) -> JobOutcome {
     } else {
         let mut pages = Vec::new();
         for path in &request.paths {
-            match read_tiff_pages(path) {
-                Ok(mut decoded) => pages.append(&mut decoded),
+            match crate::kit::images::decode(path) {
+                Ok(mut decoded) => pages.append(&mut decoded.pages),
                 Err(error) => return failure(path.clone(), format!("Could not process {}: {error}", path.display())),
             }
         }
@@ -870,58 +890,27 @@ pub fn tiff(request: &TiffRequest) -> JobOutcome {
     }
 }
 
-#[derive(Clone)]
-enum TiffPage { Gray { width: u32, height: u32, data: Vec<u8> }, Rgb { width: u32, height: u32, data: Vec<u8> }, Rgba { width: u32, height: u32, data: Vec<u8> } }
-
-fn tiff_page_to_dynamic(page: &TiffPage) -> Result<DynamicImage, String> {
-    match page {
-        TiffPage::Gray { width, height, data } => ImageBuffer::<Luma<u8>, _>::from_raw(*width, *height, data.clone()).map(DynamicImage::ImageLuma8),
-        TiffPage::Rgb { width, height, data } => ImageBuffer::<Rgb<u8>, _>::from_raw(*width, *height, data.clone()).map(DynamicImage::ImageRgb8),
-        TiffPage::Rgba { width, height, data } => ImageBuffer::<Rgba<u8>, _>::from_raw(*width, *height, data.clone()).map(DynamicImage::ImageRgba8),
-    }
-    .ok_or_else(|| "TIFF page pixel data has an invalid length.".to_string())
-}
-
-fn read_tiff_pages(path: &std::path::Path) -> Result<Vec<TiffPage>, String> {
-    let file = File::open(path).map_err(|error| format!("Could not open TIFF: {error}"))?;
-    let mut decoder = tiff::decoder::Decoder::new(file).map_err(|error| format!("Could not read TIFF: {error}"))?;
-    let mut pages = Vec::new();
-    loop {
-        let (width, height) = decoder.dimensions().map_err(|error| format!("Could not read TIFF dimensions: {error}"))?;
-        let color = decoder.colortype().map_err(|error| format!("Could not read TIFF color type: {error}"))?;
-        let data = decoder.read_image().map_err(|error| format!("Unsupported TIFF page: {error}"))?;
-        let page = match (color, data) {
-            (tiff::ColorType::Gray(8), tiff::decoder::DecodingResult::U8(data)) => TiffPage::Gray { width, height, data },
-            (tiff::ColorType::RGB(8), tiff::decoder::DecodingResult::U8(data)) => TiffPage::Rgb { width, height, data },
-            (tiff::ColorType::RGBA(8), tiff::decoder::DecodingResult::U8(data)) => TiffPage::Rgba { width, height, data },
-            (color, _) => return Err(format!("Unsupported TIFF color type or bit depth: {color:?}")),
-        };
-        pages.push(page);
-        if !decoder.more_images() { break; }
-        decoder.next_image().map_err(|error| format!("Could not advance to TIFF page: {error}"))?;
-    }
-    Ok(pages)
-}
-
-fn write_tiff_pages(path: &std::path::Path, pages: &[TiffPage]) -> Result<(), String> {
+fn write_tiff_pages(path: &std::path::Path, pages: &[DynamicImage]) -> Result<(), String> {
     let file = File::create(path).map_err(|error| error.to_string())?;
     let mut encoder = tiff::encoder::TiffEncoder::new(file).map_err(|error| error.to_string())?;
     for page in pages { write_encoded_page(&mut encoder, page)?; }
     Ok(())
 }
 
-fn write_tiff_page(path: &std::path::Path, page: &TiffPage) -> Result<(), String> {
+fn write_tiff_page(path: &std::path::Path, page: &DynamicImage) -> Result<(), String> {
     let file = File::create(path).map_err(|error| error.to_string())?;
     let mut encoder = tiff::encoder::TiffEncoder::new(file).map_err(|error| error.to_string())?;
     write_encoded_page(&mut encoder, page)
 }
 
-fn write_encoded_page<W: std::io::Write + Seek>(encoder: &mut tiff::encoder::TiffEncoder<W>, page: &TiffPage) -> Result<(), String> {
+fn write_encoded_page<W: std::io::Write + Seek>(encoder: &mut tiff::encoder::TiffEncoder<W>, page: &DynamicImage) -> Result<(), String> {
     match page {
-        TiffPage::Gray { width, height, data } => encoder.write_image::<tiff::encoder::colortype::Gray8>(*width, *height, data).map_err(|error| error.to_string()),
-        TiffPage::Rgb { width, height, data } => encoder.write_image::<tiff::encoder::colortype::RGB8>(*width, *height, data).map_err(|error| error.to_string()),
-        TiffPage::Rgba { width, height, data } => encoder.write_image::<tiff::encoder::colortype::RGBA8>(*width, *height, data).map_err(|error| error.to_string()),
+        DynamicImage::ImageLuma8(page) => encoder.write_image::<tiff::encoder::colortype::Gray8>(page.width(), page.height(), page.as_raw()),
+        DynamicImage::ImageRgb8(page) => encoder.write_image::<tiff::encoder::colortype::RGB8>(page.width(), page.height(), page.as_raw()),
+        DynamicImage::ImageRgba8(page) => encoder.write_image::<tiff::encoder::colortype::RGBA8>(page.width(), page.height(), page.as_raw()),
+        page => return Err(format!("Unsupported TIFF page color type: {:?}", page.color())),
     }
+    .map_err(|error| error.to_string())
 }
 pub fn inspect_metadata(input: PathBuf) -> Result<MetadataReport, String> {
     let bytes = std::fs::read(&input).map_err(|error| format!("Could not read image metadata: {error}"))?;
@@ -955,7 +944,7 @@ pub fn strip_metadata(request: &MetadataRequest, input: PathBuf) -> JobOutcome {
 fn contains(bytes: &[u8], needle: &[u8]) -> bool { bytes.windows(needle.len()).any(|window| window == needle) }
 
 fn transform<F>(_: &[PathBuf], input: PathBuf, location: &OutputLocation, suffix: &str, edit: F) -> JobOutcome where F: FnOnce(DynamicImage) -> Result<DynamicImage, String> {
-    let image = match crate::kit::images::load_image(&input) { Ok(image) => image, Err(error) => return failure(input, format!("Could not read image: {error}")) };
+    let image = match crate::kit::images::decode(&input) { Ok(decoded) => decoded.into_first_page(), Err(error) => return failure(input, format!("Could not read image: {error}")) };
     let image = match edit(image) { Ok(image) => image, Err(error) => return failure(input, error) };
     let extension = input.extension().and_then(|extension| extension.to_str()).unwrap_or("png");
     let output = match OutputNaming::reserve_destination(&input, location, suffix, extension) {
@@ -979,6 +968,8 @@ mod tests {
     use super::*;
     use sha2::{Digest, Sha256};
     fn path(name: &str) -> PathBuf { std::env::temp_dir().join(format!("toolbox_tiff_{}_{}", std::process::id(), name)) }
+    fn gray(width: u32, height: u32, data: Vec<u8>) -> DynamicImage { DynamicImage::ImageLuma8(image::ImageBuffer::from_raw(width, height, data).unwrap()) }
+    fn read_pages(path: &Path) -> Result<Vec<DynamicImage>, String> { crate::kit::images::decode(path).map(|decoded| decoded.pages) }
 
     #[test]
     fn splits_and_combines_pages_in_order() {
@@ -990,18 +981,18 @@ mod tests {
 
         let split = tiff(&TiffRequest { paths: vec![input.clone()], pages: None, output_location: OutputLocation::AlongsideInput, output_path: None });
         assert_eq!(split.output_paths().len(), 2);
-        assert_eq!(read_tiff_pages(&split.output_paths()[0]).unwrap().len(), 1);
-        assert_eq!(read_tiff_pages(&split.output_paths()[1]).unwrap().len(), 1);
+        assert_eq!(read_pages(&split.output_paths()[0]).unwrap().len(), 1);
+        assert_eq!(read_pages(&split.output_paths()[1]).unwrap().len(), 1);
 
         let first = path("first.tiff");
         let second = path("second.tiff");
-        write_tiff_page(&first, &TiffPage::Gray { width: 1, height: 1, data: vec![1] }).unwrap();
-        write_tiff_page(&second, &TiffPage::Gray { width: 1, height: 1, data: vec![2] }).unwrap();
+        write_tiff_page(&first, &gray(1, 1, vec![1])).unwrap();
+        write_tiff_page(&second, &gray(1, 1, vec![2])).unwrap();
         let combined = tiff(&TiffRequest { paths: vec![first.clone(), second.clone()], pages: None, output_location: OutputLocation::AlongsideInput, output_path: None });
-        let pages = read_tiff_pages(&combined.output_paths()[0]).unwrap();
+        let pages = read_pages(&combined.output_paths()[0]).unwrap();
         assert_eq!(pages.len(), 2);
-        assert!(matches!(&pages[0], TiffPage::Gray { data, .. } if data == &vec![1]));
-        assert!(matches!(&pages[1], TiffPage::Gray { data, .. } if data == &vec![2]));
+        assert_eq!(pages[0].as_bytes(), &[1]);
+        assert_eq!(pages[1].as_bytes(), &[2]);
 
         for output in split.output_paths() { let _ = std::fs::remove_file(output); }
         let _ = std::fs::remove_file(input);
@@ -1029,7 +1020,7 @@ mod tests {
         let mut encoder = tiff::encoder::TiffEncoder::new(file).unwrap();
         encoder.write_image::<tiff::encoder::colortype::Gray8>(2, 1, &[10, 20]).unwrap();
         encoder.write_image::<tiff::encoder::colortype::Gray8>(2, 1, &[30, 40]).unwrap();
-        write_tiff_page(&one_page, &TiffPage::Gray { width: 1, height: 1, data: vec![2] }).unwrap();
+        write_tiff_page(&one_page, &gray(1, 1, vec![2])).unwrap();
 
         let outcome = tiff(&TiffRequest {
             paths: vec![two_page.clone(), one_page.clone()],
@@ -1043,11 +1034,11 @@ mod tests {
 
         assert!(outcome.error().is_none(), "selected TIFF pages failed: {:?}", outcome.error());
         let output = outcome.output_paths().first().unwrap().clone();
-        let pages = read_tiff_pages(&output).unwrap();
+        let pages = read_pages(&output).unwrap();
         assert_eq!(pages.len(), 3);
-        assert!(matches!(&pages[0], TiffPage::Gray { data, .. } if data == &vec![30, 40]));
-        assert!(matches!(&pages[1], TiffPage::Gray { data, .. } if data == &vec![2]));
-        assert!(matches!(&pages[2], TiffPage::Gray { data, .. } if data == &vec![10, 20]));
+        assert_eq!(pages[0].as_bytes(), &[30, 40]);
+        assert_eq!(pages[1].as_bytes(), &[2]);
+        assert_eq!(pages[2].as_bytes(), &[10, 20]);
 
         let _ = std::fs::remove_file(two_page);
         let _ = std::fs::remove_file(one_page);

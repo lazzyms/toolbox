@@ -6,7 +6,6 @@ import type { WorkspaceSourceAction } from "../components/ToolScaffold";
 import type { ShellEvent } from "../hooks/useShellBridge";
 import type {
   AtomicToolId,
-  ConvertImagesRequest,
   ImagePreview,
   OutputLocation,
   ToolDefinition,
@@ -49,7 +48,6 @@ const aspectRatioMatches = (firstWidth: number, firstHeight: number, secondWidth
   firstWidth > 0 && firstHeight > 0 && Math.abs(firstWidth / firstHeight - secondWidth / secondHeight) < 0.001;
 
 type ImageEditorDraftValues = {
-  format: ConvertImagesRequest["format"];
   width: number;
   height: number;
   resizeMode: string;
@@ -75,7 +73,6 @@ type ImageEditorDraftValues = {
 };
 
 const buildImageEditDraft = (id: string, values: ImageEditorDraftValues): ImageEditOperation => {
-  if (id === "heic-convert") return { kind: "convert", format: values.format };
   if (id === "resize") return {
     kind: "resize",
     width: values.width,
@@ -178,7 +175,6 @@ export const ImageEditorWorkspaceView = ({
   onFilesChange?: (paths: readonly string[]) => void;
   onWorkspaceSourceAction?: (action: WorkspaceSourceAction | null) => void;
 }) => {
-  const [format, setFormat] = useState<ConvertImagesRequest["format"]>("png");
   const [width, setWidth] = useState(1024);
   const [height, setHeight] = useState(768);
   const [resizeMode, setResizeMode] = useState("exact");
@@ -204,7 +200,7 @@ export const ImageEditorWorkspaceView = ({
   const [history, setHistory] = useState<ImageEditHistory>(() => createImageEditHistory());
   const [committedDraftKey, setCommittedDraftKey] = useState<string | null>(null);
   const draft = buildImageEditDraft(activeUtility.id, {
-    format, width, height, resizeMode, percentage, resampling, keepRatio,
+    width, height, resizeMode, percentage, resampling, keepRatio,
     degrees, flip, cropMode, cropWidth, cropHeight, cropX, cropY, anchor, brightness, contrast, saturation, exposure,
     watermarkText, watermarkOpacity, watermarkX, watermarkY,
   });
@@ -241,11 +237,6 @@ export const ImageEditorWorkspaceView = ({
       onWorkspaceSourceAction={onWorkspaceSourceAction}
       exampleName={(path) => exampleOutputName(path, activeUtility.command, "-edited", editedImageExtension(editPlan, path))}
       onRun={(paths, outputLocation, { runId }) => {
-        if (activeUtility.id === "heic-convert") {
-          return invoke<ToolResult>("convert_images", { runId,
-            request: { paths, format, outputLocation } satisfies ConvertImagesRequest,
-          });
-        }
         if (activeUtility.id === "resize") {
           return invoke<ToolResult>("resize_images", { runId,
             request: { paths, width, height, mode: resizeMode, percentage, longestSide: width, resampling, keepAspectRatio: keepRatio, outputLocation },
@@ -273,8 +264,6 @@ export const ImageEditorWorkspaceView = ({
       })}
     >
       {(props) => <ImageEditorControls {...props} utility={activeUtility} onSelectTool={onSelectTool} {...{
-        format,
-        setFormat,
         width,
         setWidth,
         height,
@@ -353,8 +342,6 @@ type ImageEditorControlsProps = {
   loading: boolean;
   utility: ToolDefinition;
   onSelectTool?: (id: AtomicToolId) => void;
-  format: ConvertImagesRequest["format"];
-  setFormat: (value: ConvertImagesRequest["format"]) => void;
   width: number;
   setWidth: (value: number) => void;
   height: number;
@@ -422,8 +409,6 @@ const ImageEditorControls = ({
   loading,
   utility,
   onSelectTool,
-  format,
-  setFormat,
   width,
   setWidth,
   height,
@@ -715,14 +700,6 @@ const ImageEditorControls = ({
           <h2 className="workspace-active-command">{utility.title}</h2>
           <p className="workspace-panel-copy">Change the outcome without leaving the image editor.</p>
         </div>
-        {utility.id === "heic-convert" && (
-          <div className="workspace-field">
-            <Label htmlFor="image-target-format">Target format</Label>
-            <NativeSelect id="image-target-format" aria-label="Target format" value={format} onChange={(event) => setFormat(event.target.value as ConvertImagesRequest["format"])}>
-              <option value="png">PNG</option><option value="jpg">JPEG</option><option value="webp">WebP</option><option value="heic">HEIC</option>
-            </NativeSelect>
-          </div>
-        )}
         {utility.id === "resize" && (
           <>
             <div className="workspace-field"><Label htmlFor="image-resize-mode">Resize mode</Label><NativeSelect id="image-resize-mode" aria-label="Resize mode" value={resizeMode} onChange={(event) => setResizeMode(event.target.value)}>

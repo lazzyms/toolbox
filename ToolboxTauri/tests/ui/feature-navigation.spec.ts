@@ -2068,8 +2068,8 @@ const storeOutputSettings = async (page: Page, settings: OutputSettings) => {
 const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[number], expectedOutputLocation: unknown = "alongsideInput") => {
     await page.goto("/");
     await openFromHome(page, utility.title);
-    // Image Metadata lives in the Image Editor but runs on its own screen, without an edit plan.
-    const usesImageEditPlan = workspaceForTool(utility.id)?.id === "image-editor" && utility.id !== "image-metadata";
+    // Image Metadata and Convert Image Format live in the Image Editor but run on their own screen, without an edit plan.
+    const usesImageEditPlan = workspaceForTool(utility.id)?.id === "image-editor" && utility.id !== "image-metadata" && utility.id !== "heic-convert";
 
     const accepts = (extension: string) => utility.capability.acceptedExtensions.some((accepted) => accepted.toLowerCase() === extension);
     const selectedFixturePath = accepts(".pdf")
@@ -2093,7 +2093,6 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
         else await drawSceneMark(page, utility.id === "pdf-sign" ? "Signature" : utility.id === "pdf-watermark" ? "Watermark" : utility.id === "pdf-crop" ? "Crop" : "Text");
     }
     if (usesImageEditPlan) {
-        if (utility.id === "heic-convert") await page.getByLabel("Target format").selectOption("jpg");
         if (utility.id === "resize") await page.getByLabel("Width").fill("640");
         if (utility.id === "rotate") await page.getByLabel("Rotation").selectOption("90");
         if (utility.id === "crop") {
@@ -2297,8 +2296,11 @@ test.describe("per-run destination", () => {
 
         await openFromHome(page, "Convert Image Format");
         await chooseFixture(page, fixturePath);
-        await page.getByLabel("Target format").selectOption("webp");
-        await expect(example).toHaveText("icon-edited.webp");
+        await expect(example).toHaveText("icon-converted.jpg");
+        await page.getByRole("radiogroup", { name: "Convert to" }).getByRole("radio", { name: "WebP", exact: true }).click();
+        await expect(example).toHaveText("icon-converted.webp");
+        await page.getByRole("radiogroup", { name: "Convert to" }).getByRole("radio", { name: "TIFF", exact: true }).click();
+        await expect(example).toHaveText("icon-converted.tiff");
 
         await page.goto("/");
         await openFromHome(page, "PDF to Text");

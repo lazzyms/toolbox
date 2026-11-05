@@ -82,7 +82,20 @@ pub struct CompressImagesRequest {
 pub struct ConvertImagesRequest {
     pub paths: Vec<PathBuf>,
     pub format: String,
+    /// Sent only with a TIFF target; a TIFF target without it uses LZW.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tiff_compression: Option<TiffCompression>,
     pub output_location: OutputLocation,
+}
+
+/// The three lossless TIFF compressions Convert offers.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TiffCompression {
+    #[default]
+    Lzw,
+    None,
+    Deflate,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -336,7 +349,7 @@ pub fn partition_command_inputs(command: &str, paths: &[PathBuf]) -> Result<Vali
         let error = if path.is_dir() {
             Some(ToolError::invalid_input("Folders aren't processed. Add the files inside the folder instead."))
         } else if !extension_accepted {
-            Some(ToolError::invalid_input(format!("Unsupported input format. Accepted extensions: {accepted_extensions}.")))
+            Some(unsupported_input(command, &path, &accepted_extensions))
         } else {
             None
         };
@@ -346,6 +359,18 @@ pub fn partition_command_inputs(command: &str, paths: &[PathBuf]) -> Result<Vali
         }
     }
     Ok(validation)
+}
+
+pub const CONVERT_GIF_MESSAGE: &str = "Converting a GIF would drop its animation. Extract GIF Frames saves every frame.";
+
+/// A GIF sent to Convert Image Format is refused with a pointer to Extract GIF Frames, because
+/// converting it would keep one frame and drop the animation.
+fn unsupported_input(command: &str, path: &Path, accepted_extensions: &str) -> ToolError {
+    let gif = path.extension().and_then(|extension| extension.to_str()).is_some_and(|extension| extension.eq_ignore_ascii_case("gif"));
+    if command == "convert_images" && gif {
+        return ToolError::invalid_input(CONVERT_GIF_MESSAGE).with_pointer(OutcomePointer::Tool { tool_id: "gif-extract".into() });
+    }
+    ToolError::invalid_input(format!("Unsupported input format. Accepted extensions: {accepted_extensions}."))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -388,6 +413,7 @@ pub enum WarningKind {
     FontSubstituted { requested_family: String, actual_family: String },
     RenamedToAvoidReplacing { chosen_name: String, final_name: String },
     PrecisionReduced,
+    TransparencyFlattened,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -632,9 +658,10 @@ mod tests {
             WarningKind::FontSubstituted { requested_family: "A".into(), actual_family: "B".into() },
             WarningKind::RenamedToAvoidReplacing { chosen_name: "a".into(), final_name: "b".into() },
             WarningKind::PrecisionReduced,
+            WarningKind::TransparencyFlattened,
         ];
         let codes = warnings.into_iter().map(|kind| serde_json::to_value(kind).unwrap()["code"].clone()).collect::<Vec<_>>();
-        assert_eq!(codes, ["signatureRemoved", "fontSubstituted", "renamedToAvoidReplacing", "precisionReduced"]);
+        assert_eq!(codes, ["signatureRemoved", "fontSubstituted", "renamedToAvoidReplacing", "precisionReduced", "transparencyFlattened"]);
     }
 
     #[test]
@@ -667,6 +694,8 @@ mod tests {
                 vec![PathBuf::from("drawings-page-1.png")],
                 ToolError::limit_exceeded(LimitKind::Time, "Took longer than 5 minutes and was stopped. 1 part was saved before it stopped."),
             ),
+            JobOutcome::succeeded(PathBuf::from("badge.png"), vec![PathBuf::from("badge-edited.jpg")], "Image saved")
+                .with_warning(OutcomeWarning { kind: WarningKind::TransparencyFlattened, message: "Transparent areas were flattened onto white, because JPEG has none.".into() }),
         ];
 
         assert_eq!(serde_json::to_value(&samples).unwrap(), shared);
@@ -723,6 +752,17 @@ mod tests {
     }
 
     #[test]
+    fn convert_images_accepts_a_batch() {
+        let paths = vec![PathBuf::from("one.png"), PathBuf::from("two.heic"), PathBuf::from("three.jpeg")];
+        assert!(validate_command_inputs("convert_images", &paths).is_ok());
+    }
+
+    #[test]
+    fn convert_images_accepts_tiff_at_the_native_boundary() {
+        assert!(validate_command_inputs("convert_images", &[PathBuf::from("scan.tif"), PathBuf::from("scan.TIFF"), PathBuf::from("photo.png")]).is_ok());
+    }
+
+    #[test]
     fn capability_registry_rejects_unsupported_extensions_at_the_boundary() {
         let outcomes = validate_command_inputs("convert_images", &[PathBuf::from("source.pdf")]).unwrap_err();
 
@@ -731,14 +771,24 @@ mod tests {
     }
 
     #[test]
-    fn images_to_pdf_rejects_tiff_at_the_native_boundary() {
-        for extension in ["tif", "tiff"] {
+    fn images_to_pdf_rejects_gif_at_the_native_boundary() {
+        for extension in ["gif", "bmp"] {
             let outcomes = validate_command_inputs("images_to_pdf", &[PathBuf::from(format!("source.{extension}"))]).unwrap_err();
 
             assert_eq!(outcomes.len(), 1);
             assert!(outcomes[0].error().is_some_and(|error| matches!(error.kind, ErrorKind::InvalidInput)));
             assert!(outcomes[0].error().is_some_and(|error| error.message.contains("Accepted extensions")));
         }
+    }
+
+    #[test]
+    fn images_to_pdf_accepts_heic_and_heif_at_the_native_boundary() {
+        assert!(validate_command_inputs("images_to_pdf", &[PathBuf::from("photo.heic"), PathBuf::from("photo.HEIF")]).is_ok());
+    }
+
+    #[test]
+    fn images_to_pdf_accepts_tiff_at_the_native_boundary() {
+        assert!(validate_command_inputs("images_to_pdf", &[PathBuf::from("scan.tif"), PathBuf::from("scan.TIFF"), PathBuf::from("photo.png")]).is_ok());
     }
 
     #[test]
@@ -839,9 +889,18 @@ mod tests {
         assert!(native_capability("protect_office").is_none(), "the Office protect command is retired");
         let images = native_capability("images_to_pdf").unwrap();
         assert_eq!(images.input_cardinality, InputCardinality::Ordered);
-        assert!(!images.accepted_extensions.contains(&".tif".to_string()));
-        assert!(!images.accepted_extensions.contains(&".tiff".to_string()));
+        assert!(images.accepted_extensions.contains(&".tif".to_string()));
+        assert!(images.accepted_extensions.contains(&".tiff".to_string()));
+        assert!(!images.accepted_extensions.contains(&".gif".to_string()));
+        assert_eq!(images.accepted_extensions, [".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif", ".tif", ".tiff"]);
         assert!(!native_capability("extract_gif_frames").unwrap().supports_preview);
+        let convert = native_capability("convert_images").unwrap();
+        assert_eq!(convert.input_cardinality, InputCardinality::Multiple);
+        assert_eq!(convert.accepted_extensions, [".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif", ".tif", ".tiff"]);
+        use crate::kit::images::{tools::parse_convert_target, OutputFormat};
+        assert_eq!(parse_convert_target("tiff", None), Ok(OutputFormat::Tiff(TiffCompression::Lzw)), "TIFF is a Convert target and defaults to LZW");
+        assert_eq!(parse_convert_target("tiff", Some(TiffCompression::Deflate)), Ok(OutputFormat::Tiff(TiffCompression::Deflate)));
+        assert!(parse_convert_target("png", Some(TiffCompression::None)).is_err(), "only a TIFF target takes a compression");
         let pdf = native_capability("pdf_to_text").unwrap();
         assert!(pdf.supports_page_selection && !pdf.supports_preview);
         assert!(!native_capability("ocr_pdf").unwrap().native_available);
