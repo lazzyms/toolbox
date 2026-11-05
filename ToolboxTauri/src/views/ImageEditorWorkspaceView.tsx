@@ -11,6 +11,7 @@ import type {
   OutputLocation,
   ToolDefinition,
   ToolResult,
+  WatermarkImagesRequest,
 } from "../contracts";
 import {
   commitImageEdit,
@@ -86,8 +87,7 @@ const buildImageEditDraft = (id: string, values: ImageEditorDraftValues): ImageE
     kind: "watermark",
     text: values.watermarkText,
     opacity: values.watermarkOpacity,
-    x: values.watermarkX,
-    y: values.watermarkY,
+    position: { x: values.watermarkX, y: values.watermarkY },
   };
   return {
     kind: "tone",
@@ -269,7 +269,7 @@ export const ImageEditorWorkspaceView = ({
         }
         if (activeUtility.id === "image-watermark") {
           return invoke<ToolResult>("watermark_images", { runId,
-            request: { paths, opacity: watermarkOpacity, text: watermarkText, x: watermarkX, y: watermarkY, outputLocation },
+            request: { paths, opacity: watermarkOpacity, text: watermarkText, position: { x: watermarkX, y: watermarkY }, outputLocation } satisfies WatermarkImagesRequest,
           });
         }
         return invoke<ToolResult>("adjust_image_tone", { runId,
