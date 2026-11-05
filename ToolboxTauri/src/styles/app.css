@@ -1390,6 +1390,10 @@ fieldset.scene-inspector-field { min-inline-size: 0; margin: 0; padding: 0; bord
 .scene-original-note { margin-left: auto; color: var(--muted-foreground); white-space: nowrap; }
 .scene-empty { min-height: calc(100dvh - 275px); }
 .scene-error { padding: 8px 12px; margin: 0; font-size: 12px; color: var(--destructive); }
+.scene-tools { position: relative; }
+/* Board PdfExport "Nothing to export": a callout under Export that overlays the page instead of pushing it down. */
+.scene-export-reason { position: absolute; z-index: 5; right: 12px; top: calc(100% + 6px); width: min(300px, calc(100% - 24px)); display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 10px 12px; font-size: 12px; color: var(--muted-foreground); background: var(--popover); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 12px 30px rgb(0 0 0 / .3); pointer-events: none; }
+.scene-export-reason strong { font-size: 13px; font-weight: 600; color: var(--popover-foreground); }
 @media (max-width: 900px) {
   .command-center:has(.pdf-scene-workspace) { padding: 8px; }
   .scene-tools { gap: 2px; }
