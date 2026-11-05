@@ -1193,7 +1193,7 @@ mod command_tests {
         outputs.extend(named(&mut naming, "redact_pdf", pdf.clone(), assert_success("redact pdf", redact_pdf(RunEvents::silent(), RedactPdfRequest { paths: vec![pdf.clone()], rectangle: PdfRect { x: 40.0, y: 650.0, width: 220.0, height: 60.0 }, scope: PageScope::All, output_location: location(&root, "redact pdf") }))));
         outputs.extend(named(&mut naming, "compare_pdfs", pdf.clone(), assert_aggregate_success("compare pdfs", &[pdf.clone(), pdf_two.clone()], run_compare_pdfs(&ComparePdfsRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: location(&root, "compare pdfs"), output_path: None }))));
         let entries_before_inspection = std::fs::read_dir(&root).unwrap().count();
-        let privacy_reports = tauri::async_runtime::block_on(inspect_pdf_privacy(RunEvents::silent(), privacy::PrivacyRequest { paths: vec![pdf.clone(), pdf_two.clone()], password: None }));
+        let privacy_reports = tauri::async_runtime::block_on(inspect_pdf_privacy(RunEvents::silent(), privacy::PrivacyRequest { paths: vec![pdf.clone(), pdf_two.clone()], password: None, password_overrides: Default::default() }));
         assert_eq!(privacy_reports.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), [pdf.clone(), pdf_two.clone()]);
         for (outcome, pages) in privacy_reports.iter().zip([2, 1]) {
             assert!(outcome.error().is_none(), "privacy check failed: {:?}", outcome.error());

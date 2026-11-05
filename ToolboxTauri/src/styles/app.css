@@ -877,6 +877,17 @@ body {
   color: var(--destructive);
   font-size: 13px;
 }
+.privacy-report-retry {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+}
+.privacy-report-retry .password-inline {
+  justify-self: stretch;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
 .privacy-report-tally,
 .privacy-category-heading {
   display: flex;

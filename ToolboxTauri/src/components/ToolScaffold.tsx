@@ -72,7 +72,7 @@ interface ToolScaffoldProps {
      * Marks a read-only tool that saves nothing: the run skips the output-folder check
      * and the finished results show through this instead of the result list.
      */
-    renderReport?: (results: JobOutcome[]) => React.ReactNode;
+    renderReport?: (results: JobOutcome[], retry: { withPassword?: (inputPath: string, password: string) => Promise<void> }) => React.ReactNode;
     children: (props: {
         files: string[];
         failingFiles: string[];
@@ -736,7 +736,9 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
 
             {loading && live && !inputPolicy.manyToOne && <CancelRun key={live.runId} run={live} lockedNote={utility.lockedNote} />}
 
-            {renderReport && !loading && results.length > 0 ? renderReport(results) : <ResultList
+            {renderReport && !loading && results.length > 0 ? renderReport(results, {
+                withPassword: perFileRun && retryWithPassword ? (inputPath, password) => rerun([inputPath], retryWithPassword(inputPath, password)) : undefined,
+            }) : <ResultList
                 results={results}
                 progress={progress}
                 loading={loading}
