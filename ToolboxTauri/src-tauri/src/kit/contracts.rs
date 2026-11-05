@@ -336,7 +336,7 @@ pub fn partition_command_inputs(command: &str, paths: &[PathBuf]) -> Result<Vali
         let error = if path.is_dir() {
             Some(ToolError::invalid_input("Folders aren't processed. Add the files inside the folder instead."))
         } else if !extension_accepted {
-            Some(ToolError::invalid_input(format!("Unsupported input format. Accepted extensions: {accepted_extensions}.")))
+            Some(unsupported_input(command, &path, &accepted_extensions))
         } else {
             None
         };
@@ -346,6 +346,18 @@ pub fn partition_command_inputs(command: &str, paths: &[PathBuf]) -> Result<Vali
         }
     }
     Ok(validation)
+}
+
+pub const CONVERT_GIF_MESSAGE: &str = "Converting a GIF would drop its animation. Extract GIF Frames saves every frame.";
+
+/// A GIF sent to Convert Image Format is refused with a pointer to Extract GIF Frames, because
+/// converting it would keep one frame and drop the animation.
+fn unsupported_input(command: &str, path: &Path, accepted_extensions: &str) -> ToolError {
+    let gif = path.extension().and_then(|extension| extension.to_str()).is_some_and(|extension| extension.eq_ignore_ascii_case("gif"));
+    if command == "convert_images" && gif {
+        return ToolError::invalid_input(CONVERT_GIF_MESSAGE).with_pointer(OutcomePointer::Tool { tool_id: "gif-extract".into() });
+    }
+    ToolError::invalid_input(format!("Unsupported input format. Accepted extensions: {accepted_extensions}."))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -388,6 +400,7 @@ pub enum WarningKind {
     FontSubstituted { requested_family: String, actual_family: String },
     RenamedToAvoidReplacing { chosen_name: String, final_name: String },
     PrecisionReduced,
+    TransparencyFlattened,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -632,9 +645,10 @@ mod tests {
             WarningKind::FontSubstituted { requested_family: "A".into(), actual_family: "B".into() },
             WarningKind::RenamedToAvoidReplacing { chosen_name: "a".into(), final_name: "b".into() },
             WarningKind::PrecisionReduced,
+            WarningKind::TransparencyFlattened,
         ];
         let codes = warnings.into_iter().map(|kind| serde_json::to_value(kind).unwrap()["code"].clone()).collect::<Vec<_>>();
-        assert_eq!(codes, ["signatureRemoved", "fontSubstituted", "renamedToAvoidReplacing", "precisionReduced"]);
+        assert_eq!(codes, ["signatureRemoved", "fontSubstituted", "renamedToAvoidReplacing", "precisionReduced", "transparencyFlattened"]);
     }
 
     #[test]
@@ -667,6 +681,8 @@ mod tests {
                 vec![PathBuf::from("drawings-page-1.png")],
                 ToolError::limit_exceeded(LimitKind::Time, "Took longer than 5 minutes and was stopped. 1 part was saved before it stopped."),
             ),
+            JobOutcome::succeeded(PathBuf::from("badge.png"), vec![PathBuf::from("badge-edited.jpg")], "Image saved")
+                .with_warning(OutcomeWarning { kind: WarningKind::TransparencyFlattened, message: "Transparent areas were flattened onto white, because JPEG has none.".into() }),
         ];
 
         assert_eq!(serde_json::to_value(&samples).unwrap(), shared);

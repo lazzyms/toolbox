@@ -1,18 +1,15 @@
 use std::path::PathBuf;
-use std::fs::File;
-use std::io::BufReader;
 
 use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::PngEncoder;
-use image::ImageEncoder;
-use image::AnimationDecoder;
+use image::{DynamicImage, ImageEncoder};
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
-use crate::kit::contracts::{SkipCode, SkipReason, ToolError};
+use crate::kit::contracts::{OutcomeWarning, SkipCode, SkipReason, ToolError, WarningKind};
 
 mod source;
 pub(crate) use source::decode;
-use source::ImageFamily;
+pub(crate) use source::{DecodedImage, ImageFamily};
 
 pub(crate) const DEFAULT_QUALITY: u8 = 90;
 
@@ -64,7 +61,6 @@ fn already_in_format(path: &std::path::Path, format: OutputFormat) -> Option<Str
 pub struct ImageProcessor;
 
 pub struct Options {
-    pub target_format: Option<OutputFormat>,
     pub quality: u8, // 1-100
     pub keep_smaller_original: bool,
     pub suffix: String,
@@ -83,7 +79,7 @@ fn lower_ext(path: &std::path::Path) -> Option<String> {
 pub(crate) fn encode(img: &image::DynamicImage, format: OutputFormat, quality: u8) -> Result<Vec<u8>, String> {
     match format {
         OutputFormat::Jpeg => {
-            let rgb = img.to_rgb8();
+            let rgb = if img.color().has_alpha() { flatten_onto_white(img) } else { img.to_rgb8() };
             let mut buf = Vec::new();
             JpegEncoder::new_with_quality(&mut buf, quality)
                 .write_image(
@@ -129,24 +125,109 @@ pub(crate) fn encode(img: &image::DynamicImage, format: OutputFormat, quality: u
     }
 }
 
+pub(crate) const TRANSPARENCY_FLATTENED_MESSAGE: &str = "Transparent areas were flattened onto white, because JPEG has none.";
+
+pub(crate) fn has_transparency(img: &DynamicImage) -> bool {
+    match img {
+        DynamicImage::ImageRgba8(rgba) => rgba.pixels().any(|pixel| pixel.0[3] < u8::MAX),
+        DynamicImage::ImageLumaA8(luma) => luma.pixels().any(|pixel| pixel.0[1] < u8::MAX),
+        other if other.color().has_alpha() => other.to_rgba16().pixels().any(|pixel| pixel.0[3] < u16::MAX),
+        _ => false,
+    }
+}
+
+// JPEG has no alpha channel, so transparent pixels are composited over white
+// instead of keeping whatever colour sat under them.
+pub(crate) fn flatten_onto_white(img: &DynamicImage) -> image::RgbImage {
+    let rgba = img.to_rgba8();
+    image::RgbImage::from_fn(rgba.width(), rgba.height(), |x, y| {
+        let [red, green, blue, alpha] = rgba.get_pixel(x, y).0;
+        let over_white = |channel: u8| ((u32::from(channel) * u32::from(alpha) + 255 * u32::from(u8::MAX - alpha) + 127) / 255) as u8;
+        image::Rgb([over_white(red), over_white(green), over_white(blue)])
+    })
+}
+
+// Every Convert target is written at 8 bits per channel; alpha survives the
+// reduction so the per-target alpha rule still applies afterwards.
+fn reduce_to_8_bit(img: DynamicImage) -> DynamicImage {
+    match img {
+        DynamicImage::ImageLuma16(_) => DynamicImage::ImageLuma8(img.to_luma8()),
+        DynamicImage::ImageLumaA16(_) => DynamicImage::ImageLumaA8(img.to_luma_alpha8()),
+        DynamicImage::ImageRgb16(_) | DynamicImage::ImageRgb32F(_) => DynamicImage::ImageRgb8(img.to_rgb8()),
+        DynamicImage::ImageRgba16(_) | DynamicImage::ImageRgba32F(_) => DynamicImage::ImageRgba8(img.to_rgba8()),
+        other => other,
+    }
+}
+
+// Lossless WebP keeps every pixel, including the colour under fully
+// transparent areas, so a PNG or TIFF source decodes back unchanged.
+fn encode_lossless_webp(img: &DynamicImage) -> Result<Vec<u8>, String> {
+    let rgba = img.to_rgba8();
+    webpx::Encoder::new_rgba(rgba.as_raw(), rgba.width(), rgba.height())
+        .lossless(true)
+        .exact(true)
+        .encode(webpx::Unstoppable)
+        .map_err(|e| format!("WebP encode failed: {}", e))
+}
+
 impl ImageProcessor {
     pub fn convert(input_path: PathBuf, format: OutputFormat, output_location: OutputLocation) -> JobOutcome {
         if let Some(message) = already_in_format(&input_path, format) {
             return JobOutcome::skipped(input_path, SkipReason::new(SkipCode::AlreadyInTargetFormat, message));
         }
-        Self::run(input_path, Options {
-            target_format: Some(format),
-            quality: DEFAULT_QUALITY,
-            keep_smaller_original: false,
-            suffix: "-converted".to_string(),
-            output_location,
-        })
+        match decode(&input_path) {
+            Ok(decoded) => Self::convert_decoded(input_path, decoded, format, &output_location),
+            Err(error) => JobOutcome::failure(input_path, ToolError::processing(error)),
+        }
+    }
+
+    /// Convert fidelity rules: orientation is baked into the pixels once, deep
+    /// sources are reduced to 8 bits with a warning, JPEG flattens alpha onto
+    /// white with a warning, and WebP follows the source (lossless from PNG,
+    /// TIFF and other lossless families, quality 90 from JPEG and HEIC).
+    pub(crate) fn convert_decoded(input_path: PathBuf, decoded: DecodedImage, format: OutputFormat, output_location: &OutputLocation) -> JobOutcome {
+        let lossless_source = !matches!(decoded.family, ImageFamily::Jpeg | ImageFamily::Heif);
+        let bits = decoded.bits_per_channel;
+        let orientation = decoded.orientation;
+        let mut img = decoded.into_first_page();
+        if let Some(orientation) = orientation {
+            img.apply_orientation(orientation);
+        }
+        let mut warnings = Vec::new();
+        if bits > 8 {
+            img = reduce_to_8_bit(img);
+            warnings.push(OutcomeWarning { kind: WarningKind::PrecisionReduced, message: format!("Reduced from {bits}-bit to 8-bit sRGB.") });
+        }
+        if format == OutputFormat::Jpeg && has_transparency(&img) {
+            warnings.push(OutcomeWarning { kind: WarningKind::TransparencyFlattened, message: TRANSPARENCY_FLATTENED_MESSAGE.to_string() });
+        }
+
+        let extension = format.extension();
+        let output_path = match OutputNaming::reserve_destination(&input_path, output_location, "-converted", extension) {
+            Ok(output) => output,
+            Err(error) => return JobOutcome::failure(input_path, ToolError::processing(format!("Could not reserve output: {error}"))),
+        };
+        let encoded = if format == OutputFormat::WebP && lossless_source { encode_lossless_webp(&img) } else { encode(&img, format, DEFAULT_QUALITY) };
+        let bytes = match encoded {
+            Ok(bytes) => bytes,
+            Err(error) => return JobOutcome::failure(input_path, ToolError::processing(error)),
+        };
+        if let Err(error) = std::fs::write(output_path.path(), bytes) {
+            return JobOutcome::failure(input_path, ToolError::processing(format!("Write failed: {error}")));
+        }
+        if let Err(error) = validate_encoded_output(output_path.path(), img.width(), img.height()) {
+            return JobOutcome::failure(input_path, ToolError::processing(error));
+        }
+        match output_path.publish() {
+            Ok(path) => warnings.into_iter().fold(JobOutcome::succeeded(input_path, vec![path], format!("Saved as {extension}")), JobOutcome::with_warning),
+            Err(error) => JobOutcome::failure(input_path, ToolError::processing(format!("Could not publish output: {error}"))),
+        }
     }
 
     pub fn run(input_path: PathBuf, options: Options) -> JobOutcome {
         let original_bytes = std::fs::metadata(&input_path).map(|m| m.len()).unwrap_or(0);
 
-        if options.quality == 0 && options.target_format.is_none() {
+        if options.quality == 0 {
             let extension = input_path.extension().and_then(|e| e.to_str()).unwrap_or("bin");
             let output_path = match OutputNaming::reserve_destination(&input_path, &options.output_location, &options.suffix, extension) {
                 Ok(output) => output,
@@ -161,12 +242,6 @@ impl ImageProcessor {
             };
         }
 
-        if options.target_format.is_some() {
-            if let Err(error) = reject_animated_input(&input_path) {
-                return JobOutcome::failure(input_path, ToolError::processing(error));
-            }
-        }
-
         let decoded = match decode(&input_path) {
             Ok(decoded) => decoded,
             Err(e) => {
@@ -174,9 +249,7 @@ impl ImageProcessor {
             }
         };
 
-        let format = options
-            .target_format
-            .unwrap_or_else(|| decoded.family.output_format());
+        let format = decoded.family.output_format();
         let img = decoded.into_first_page();
         let extension = format.extension();
 
@@ -235,15 +308,6 @@ impl ImageProcessor {
     }
 }
 
-fn reject_animated_input(path: &std::path::Path) -> Result<(), String> {
-    if lower_ext(path).as_deref() != Some("gif") { return Ok(()); }
-    let file = File::open(path).map_err(|error| format!("Could not inspect GIF sequence: {error}"))?;
-    let decoder = image::codecs::gif::GifDecoder::new(BufReader::new(file)).map_err(|error| format!("Could not inspect GIF sequence: {error}"))?;
-    let frames = decoder.into_frames().collect_frames().map_err(|error| format!("Could not inspect GIF frames: {error}"))?;
-    if frames.len() > 1 { return Err("Animated GIF conversion is unsupported because it would discard frames; extract frames first.".to_string()); }
-    Ok(())
-}
-
 fn validate_encoded_output(path: &std::path::Path, width: u32, height: u32) -> Result<(), String> {
     if !path.is_file() { return Err("Encoder did not produce an output container.".to_string()); }
     let output = decode(path).map_err(|error| format!("Encoded output could not be decoded: {error}"))?.into_first_page();
@@ -273,20 +337,12 @@ mod tests {
             .save(&src)
             .unwrap();
 
-        let out = ImageProcessor::run(
-            src.clone(),
-            Options {
-                target_format: Some(OutputFormat::Jpeg),
-                quality: 80,
-                keep_smaller_original: false,
-                suffix: "-converted".to_string(),
-                output_location: OutputLocation::AlongsideInput,
-            },
-        );
+        let out = ImageProcessor::convert(src.clone(), OutputFormat::Jpeg, OutputLocation::AlongsideInput);
 
         assert!(out.error().is_none(), "{}", out.error().cloned().unwrap_or_default());
         assert_eq!(out.output_paths().len(), 1);
         assert_eq!(out.output_paths()[0].extension().and_then(|e| e.to_str()), Some("jpg"));
+        assert!(out.warnings.is_empty(), "an opaque source has nothing to flatten");
 
         cleanup(&out.output_paths());
         let _ = std::fs::remove_file(&src);
@@ -303,7 +359,6 @@ mod tests {
         let out = ImageProcessor::run(
             src.clone(),
             Options {
-                target_format: None,
                 quality: 50,
                 keep_smaller_original: true,
                 suffix: "-compressed".to_string(),
@@ -327,15 +382,14 @@ mod tests {
         let src = temp_path("lossless_src.png");
         let original = b"deliberate source bytes";
         std::fs::write(&src, original).unwrap();
-        let out = ImageProcessor::run(src.clone(), Options { target_format: None, quality: 0, keep_smaller_original: true, suffix: "-compressed".to_string(), output_location: OutputLocation::AlongsideInput });
+        let out = ImageProcessor::run(src.clone(), Options { quality: 0, keep_smaller_original: true, suffix: "-compressed".to_string(), output_location: OutputLocation::AlongsideInput });
         assert!(out.error().is_none(), "{}", out.error().cloned().unwrap_or_default());
         assert_eq!(std::fs::read(&out.output_paths()[0]).unwrap(), original);
         cleanup(&out.output_paths());
         let _ = std::fs::remove_file(src);
     }
 
-    // Photo-size image: x265 rejects tiny frames on some builds, and the
-    // no-inflation guard would quietly keep the original and skip the assert.
+    // Photo-size image: x265 rejects tiny frames on some builds.
     #[test]
     fn heic_roundtrip_png_to_heic_to_png() {
         let src = temp_path("heic_src.png");
@@ -343,32 +397,11 @@ mod tests {
             .save(&src)
             .unwrap();
 
-        let heic = ImageProcessor::run(
-            src.clone(),
-            Options {
-                target_format: Some(OutputFormat::Heic),
-                quality: 80,
-                keep_smaller_original: false,
-                suffix: "-heic".to_string(),
-                output_location: OutputLocation::AlongsideInput,
-            },
-        );
+        let heic = ImageProcessor::convert(src.clone(), OutputFormat::Heic, OutputLocation::AlongsideInput);
         assert!(heic.error().is_none(), "{}", heic.error().cloned().unwrap_or_default());
-        assert_eq!(
-            heic.output_paths()[0].extension().and_then(|e| e.to_str()),
-            Some("heic")
-        );
+        assert_eq!(heic.output_paths()[0].extension().and_then(|e| e.to_str()), Some("heic"));
 
-        let back = ImageProcessor::run(
-            heic.output_paths()[0].clone(),
-            Options {
-                target_format: Some(OutputFormat::Png),
-                quality: 80,
-                keep_smaller_original: false,
-                suffix: "-back".to_string(),
-                output_location: OutputLocation::AlongsideInput,
-            },
-        );
+        let back = ImageProcessor::convert(heic.output_paths()[0].clone(), OutputFormat::Png, OutputLocation::AlongsideInput);
         assert!(back.error().is_none(), "{}", back.error().cloned().unwrap_or_default());
         let back_img = image::open(&back.output_paths()[0]).unwrap();
         assert_eq!((back_img.width(), back_img.height()), (256, 256));
@@ -378,36 +411,35 @@ mod tests {
         let _ = std::fs::remove_file(&src);
     }
 
+    // libheif's bundled x265 only writes 8-bit HEIC, so a 10-bit HEIC decode
+    // is described directly to exercise the precision rule.
     #[test]
-    fn converts_png_to_lossy_webp() {
-        let src = temp_path("webp_src.png");
-        image::RgbaImage::from_fn(256, 256, |x, y| Rgba([x as u8, y as u8, (x & y) as u8, 255]))
-            .save(&src)
-            .unwrap();
-
-        let out = ImageProcessor::run(
-            src.clone(),
-            Options {
-                target_format: Some(OutputFormat::WebP),
-                quality: 60,
-                keep_smaller_original: false,
-                suffix: "-webp".to_string(),
-                output_location: OutputLocation::AlongsideInput,
-            },
-        );
-
-        assert!(out.error().is_none(), "{}", out.error().cloned().unwrap_or_default());
-        assert_eq!(
-            out.output_paths()[0].extension().and_then(|e| e.to_str()),
-            Some("webp")
-        );
-        let data = std::fs::read(&out.output_paths()[0]).unwrap();
-        assert_eq!(&data[..4], b"RIFF", "webpx must produce a real lossy webp container");
-        assert_eq!(&data[8..12], b"WEBP");
-        let dec = image::load_from_memory(&data).unwrap();
-        assert_eq!(dec.width(), 256);
-
-        cleanup(&out.output_paths());
+    fn a_ten_bit_heic_is_reduced_to_eight_bits_with_a_precision_warning() {
+        let src = temp_path("deep_floorplan.heic");
+        std::fs::write(&src, b"stand-in for a 10-bit HEIC").unwrap();
+        let deep = image::ImageBuffer::from_fn(32, 24, |x, y| image::Rgb([(x * 2000) as u16, (y * 2700) as u16, 40_000u16]));
+        let ten_bit_heic = || DecodedImage {
+            pages: vec![DynamicImage::ImageRgb16(deep.clone())],
+            family: ImageFamily::Heif,
+            bits_per_channel: 10,
+            has_alpha: false,
+            orientation: None,
+            baseline_jpeg: None,
+        };
+        for format in [OutputFormat::Png, OutputFormat::Jpeg] {
+            let out = ImageProcessor::convert_decoded(src.clone(), ten_bit_heic(), format, &OutputLocation::AlongsideInput);
+            assert!(out.error().is_none(), "{}", out.error().cloned().unwrap_or_default());
+            assert_eq!(out.warnings.len(), 1);
+            assert_eq!(out.warnings[0].kind, WarningKind::PrecisionReduced);
+            assert_eq!(out.warnings[0].message, "Reduced from 10-bit to 8-bit sRGB.");
+            let written = image::open(&out.output_paths()[0]).unwrap();
+            assert_eq!(written.color(), image::ColorType::Rgb8, "{format:?} must be written at 8 bits per channel");
+            if format == OutputFormat::Png {
+                assert_eq!(written.to_rgb8(), DynamicImage::ImageRgb16(deep.clone()).to_rgb8());
+            }
+            cleanup(&out.output_paths());
+        }
+        assert_eq!(std::fs::read(&src).unwrap(), b"stand-in for a 10-bit HEIC");
         let _ = std::fs::remove_file(&src);
     }
 
@@ -416,21 +448,6 @@ mod tests {
         assert_eq!(source::ImageFamily::of(std::path::Path::new("x.heic")).output_format(), OutputFormat::Heic);
         assert_eq!(source::ImageFamily::of(std::path::Path::new("x.HEIC")).output_format(), OutputFormat::Heic);
         assert_eq!(source::ImageFamily::of(std::path::Path::new("x.jpeg")).output_format(), OutputFormat::Jpeg);
-    }
-
-    #[test]
-    fn conversion_rejects_animated_gifs_without_mutating_source() {
-        let src = temp_path("animated_conversion.gif");
-        let file = std::fs::File::create(&src).unwrap();
-        let mut encoder = image::codecs::gif::GifEncoder::new(file);
-        let frames = (0..2).map(|value| image::Frame::from_parts(image::RgbaImage::from_pixel(2, 2, Rgba([value * 100, 0, 0, 255])), 0, 0, image::Delay::from_numer_denom_ms(100, 1))).collect::<Vec<_>>();
-        encoder.encode_frames(frames).unwrap();
-        let before = std::fs::read(&src).unwrap();
-        let result = ImageProcessor::run(src.clone(), Options { target_format: Some(OutputFormat::Png), quality: 80, keep_smaller_original: false, suffix: "-converted".to_string(), output_location: OutputLocation::AlongsideInput });
-        assert!(result.error().is_some());
-        assert_eq!(std::fs::read(&src).unwrap(), before);
-        cleanup(&result.output_paths());
-        let _ = std::fs::remove_file(src);
     }
 }
 pub mod tools;

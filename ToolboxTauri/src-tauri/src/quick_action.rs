@@ -102,7 +102,7 @@ impl QuickAction {
                 BatchRunner::run(&events, self.tool(), paths, &output_location, &request, remaining::to_images)
             }
             QuickAction::CompressImage => {
-                let options = Arc::new(ImageOptions { target_format: None, quality: 80, keep_smaller_original: true, suffix: "-compressed".to_string(), output_location: output_location.clone() });
+                let options = Arc::new(ImageOptions { quality: 80, keep_smaller_original: true, suffix: "-compressed".to_string(), output_location: output_location.clone() });
                 BatchRunner::run(&events, self.tool(), paths, &output_location, &options, |options: &ImageOptions, path| ImageProcessor::run(path, ImageOptions { suffix: options.suffix.clone(), output_location: options.output_location.clone(), ..*options }))
             }
             QuickAction::ConvertToPng | QuickAction::ConvertToJpg => {

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ToolScaffold } from "../components/ToolScaffold";
 import { exampleOutputName } from "../components/RunDestination";
+import { extensionOf, type IntakeRedirect } from "../components/intake";
 import type { ConvertImagesRequest, ImagePreview, ToolDefinition, ToolResult } from "../contracts";
 import type { ShellEvent } from "../hooks/useShellBridge";
 import { Button } from "@/components/ui/button";
@@ -37,9 +38,14 @@ const iconSizesByPreset: Record<string, number[]> = {
 const convertTargets: { format: ConvertImagesRequest["format"]; name: string; hint: string }[] = [
   { format: "jpg", name: "JPEG", hint: "Transparent areas become white, because JPEG has no transparency." },
   { format: "png", name: "PNG", hint: "Lossless. Transparency is kept." },
-  { format: "webp", name: "WebP", hint: "Lossy. Transparency is kept." },
+  { format: "webp", name: "WebP", hint: "Follows each source. PNG and TIFF stay lossless. JPEG and HEIC are lossy." },
   { format: "heic", name: "HEIC", hint: "Saved as 8-bit. Transparency is kept." },
 ];
+
+// Converting keeps one frame of a GIF, so Convert points GIFs at Extract GIF Frames instead.
+const convertGifRedirect = (path: string): IntakeRedirect | null => extensionOf(path) === ".gif"
+  ? { message: "Converting a GIF would drop its animation. Extract GIF Frames saves every frame.", toolId: "gif-extract" }
+  : null;
 
 export const MediaWorkspaceView = ({ utility: activeUtility, initialPaths, fileActivation, onActivationAccepted, onFilesChange }: {
   utility: ToolDefinition;
@@ -77,6 +83,7 @@ export const MediaWorkspaceView = ({ utility: activeUtility, initialPaths, fileA
       onActivationAccepted={onActivationAccepted}
       onFilesChange={onFilesChange}
       showFileOrdering={activeUtility.id !== "tiff-pages" && activeUtility.id !== "heic-convert"}
+      intakeRedirect={activeUtility.id === "heic-convert" ? convertGifRedirect : undefined}
       exampleName={activeUtility.id === "heic-convert" ? (path) => exampleOutputName(path, activeUtility.command, activeUtility.capability.outputSuffix, targetFormat) : undefined}
       onRun={(paths, outputLocation, { outputPath, runId }) => {
         if (activeUtility.id === "heic-convert") {

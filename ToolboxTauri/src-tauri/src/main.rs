@@ -77,7 +77,6 @@ async fn compress_images(events: RunEvents, request: CompressImagesRequest) -> V
     let request = Arc::new(request);
     BatchRunner::run(&events, "compress_images", request.paths.clone(), &request.output_location, &request, |request, path| {
         ImageProcessor::run(path, ImageOptions {
-            target_format: None,
             quality: if request.lossless { 0 } else { request.quality },
             keep_smaller_original: true,
             suffix: "-compressed".to_string(),
@@ -616,7 +615,7 @@ mod command_tests {
 
     use super::*;
     use crate::kit::common::OutputLocation;
-    use crate::kit::contracts::{ErrorKind, LimitKind};
+    use crate::kit::contracts::{ErrorKind, LimitKind, WarningKind};
     use crate::kit::images::tools::{CropRequest, GifCreateRequest, GifExtractRequest, ImageEdit, ImageEditExportRequest, ImageEditPlan, ImageEditPreviewRequest, IconSetRequest, MetadataRequest, ResizeRequest, RotateRequest, TiffRequest, ToneRequest, WatermarkRequest};
     use crate::kit::office::{test_minimal_ooxml_package, OfficeProcessor};
     use crate::kit::pdf::editor::{AddPdfPagesRequest, CropPdfRequest, EditPdfRequest, OrganizePdfRequest, PageScope, PdfEditMode, PdfEditOperation, PdfEditSessionPlan, PdfEditSessionRequest, PdfOverlay, PdfOverlayPosition, PdfRect, RedactPdfRequest, RotatePage, SignPdfRequest};
@@ -1383,9 +1382,10 @@ mod command_tests {
     #[test]
     fn convert_encodes_lossy_targets_at_the_shared_quality_of_90() {
         let root = sandbox("convert-quality");
-        let source = convert_sources(&root).remove(0);
-        let picture = image::open(&source).unwrap();
-        for (format, target) in [("jpg", crate::kit::images::OutputFormat::Jpeg), ("webp", crate::kit::images::OutputFormat::WebP)] {
+        let sources = convert_sources(&root);
+        // WebP from a PNG is lossless, so the lossy WebP rule is read from the JPEG source.
+        for (source, format, target) in [(&sources[0], "jpg", crate::kit::images::OutputFormat::Jpeg), (&sources[1], "webp", crate::kit::images::OutputFormat::WebP)] {
+            let picture = image::open(source).unwrap();
             let outcomes = convert_batch(&[source.clone()], format, location(&root, format));
             let bytes = std::fs::read(&outcomes[0].output_paths()[0]).unwrap();
             assert_eq!(bytes, crate::kit::images::encode(&picture, target, crate::kit::images::DEFAULT_QUALITY).unwrap(), "{format} uses quality 90");
@@ -2674,6 +2674,190 @@ mod command_tests {
             if !decoder.more_images() { return pages; }
             decoder.next_image().unwrap();
         }
+    }
+
+    fn warning_codes(outcome: &JobOutcome) -> Vec<WarningKind> {
+        outcome.warnings.iter().map(|warning| warning.kind.clone()).collect()
+    }
+
+    fn webp_is_lossless(bytes: &[u8]) -> bool {
+        assert_eq!((&bytes[..4], &bytes[8..12]), (&b"RIFF"[..], &b"WEBP"[..]), "output is a WebP container");
+        let lossless = bytes.windows(4).any(|chunk| chunk == b"VP8L");
+        let lossy = bytes.windows(4).any(|chunk| chunk == b"VP8 ");
+        assert_ne!(lossless, lossy, "a WebP holds exactly one kind of bitstream");
+        lossless
+    }
+
+    fn translucent_badge() -> image::RgbaImage {
+        image::RgbaImage::from_fn(40, 30, |x, y| {
+            let alpha = if x < 10 { 0 } else if x < 20 { 128 } else { 255 };
+            Rgba([x as u8 * 6, y as u8 * 8, 200, alpha])
+        })
+    }
+
+    #[test]
+    fn convert_keeps_alpha_for_png_webp_and_heic_and_flattens_it_onto_white_for_jpeg() {
+        let root = sandbox("convert-alpha");
+        let badge = translucent_badge();
+        let png = root.join("logo.png");
+        badge.save(&png).unwrap();
+        let webp = root.join("sticker.webp");
+        std::fs::write(&webp, webpx::Encoder::new_rgba(badge.as_raw(), 40, 30).lossless(true).exact(true).encode(webpx::Unstoppable).unwrap()).unwrap();
+        let originals = [std::fs::read(&png).unwrap(), std::fs::read(&webp).unwrap()];
+
+        let to_png = convert_batch(&[webp.clone()], "png", location(&root, "png"));
+        assert!(warning_codes(&to_png[0]).is_empty());
+        assert_eq!(image::open(&to_png[0].output_paths()[0]).unwrap().to_rgba8(), badge, "PNG keeps every alpha value");
+
+        let to_webp = convert_batch(&[png.clone()], "webp", location(&root, "webp"));
+        assert!(warning_codes(&to_webp[0]).is_empty());
+        let webp_bytes = std::fs::read(&to_webp[0].output_paths()[0]).unwrap();
+        assert_eq!(image::load_from_memory(&webp_bytes).unwrap().to_rgba8(), badge, "WebP keeps every alpha value");
+
+        let to_heic = convert_batch(&[png.clone()], "heic", location(&root, "heic"));
+        assert!(to_heic[0].error().is_none(), "{}", to_heic[0].error().cloned().unwrap_or_default());
+        assert!(warning_codes(&to_heic[0]).is_empty());
+        let heic = heif::decode(&std::fs::read(&to_heic[0].output_paths()[0]).unwrap()).unwrap();
+        assert!(heic.color().has_alpha(), "HEIC keeps an alpha plane");
+        let heic = heic.to_rgba8();
+        assert!(heic.get_pixel(2, 15).0[3] < 16 && heic.get_pixel(35, 15).0[3] > 240, "HEIC keeps transparent and opaque areas apart");
+
+        for source in [&png, &webp] {
+            let to_jpeg = convert_batch(&[source.clone()], "jpg", location(&root, &format!("jpg-{}", source.extension().unwrap().to_string_lossy())));
+            assert!(to_jpeg[0].error().is_none(), "{}", to_jpeg[0].error().cloned().unwrap_or_default());
+            assert_eq!(to_jpeg[0].warnings, [crate::kit::contracts::OutcomeWarning { kind: WarningKind::TransparencyFlattened, message: "Transparent areas were flattened onto white, because JPEG has none.".into() }]);
+            let flattened = image::DynamicImage::ImageRgb8(crate::kit::images::flatten_onto_white(&image::DynamicImage::ImageRgba8(badge.clone())));
+            assert_eq!(std::fs::read(&to_jpeg[0].output_paths()[0]).unwrap(), crate::kit::images::encode(&flattened, crate::kit::images::OutputFormat::Jpeg, 90).unwrap(), "JPEG is the source over white at quality 90");
+            let jpeg = image::open(&to_jpeg[0].output_paths()[0]).unwrap().to_rgb8();
+            assert!(jpeg.get_pixel(2, 15).0.iter().all(|channel| *channel > 240), "fully transparent pixels become white");
+        }
+
+        let opaque = root.join("opaque.png");
+        write_png(&opaque, 32, 9);
+        let plain = convert_batch(&[opaque], "jpg", location(&root, "opaque"));
+        assert!(plain[0].error().is_none() && plain[0].warnings.is_empty(), "an opaque source has nothing to flatten");
+        assert_eq!([std::fs::read(&png).unwrap(), std::fs::read(&webp).unwrap()], originals, "originals stay untouched");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn convert_writes_lossless_webp_from_png_and_quality_90_webp_from_jpeg_and_heic() {
+        let root = sandbox("convert-webp-rules");
+        let sources = convert_sources(&root);
+        let from_png = convert_batch(&[sources[0].clone()], "webp", location(&root, "png"));
+        let bytes = std::fs::read(&from_png[0].output_paths()[0]).unwrap();
+        assert!(webp_is_lossless(&bytes), "PNG becomes lossless WebP");
+        assert_eq!(image::load_from_memory(&bytes).unwrap().to_rgba8(), image::open(&sources[0]).unwrap().to_rgba8(), "lossless WebP has identical pixels");
+
+        for (source, picture) in [(&sources[1], image::open(&sources[1]).unwrap()), (&sources[3], heif::decode(&std::fs::read(&sources[3]).unwrap()).unwrap())] {
+            let outcome = convert_batch(&[source.clone()], "webp", location(&root, &source.extension().unwrap().to_string_lossy()));
+            let bytes = std::fs::read(&outcome[0].output_paths()[0]).unwrap();
+            assert!(!webp_is_lossless(&bytes), "{} becomes lossy WebP", source.display());
+            assert_eq!(bytes, crate::kit::images::encode(&picture, crate::kit::images::OutputFormat::WebP, 90).unwrap(), "{} is encoded at quality 90", source.display());
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    // EXIF orientation 6 (rotate 90 degrees clockwise), as a little-endian TIFF block.
+    fn exif_rotated_90() -> Vec<u8> {
+        let mut exif = b"II*\0".to_vec();
+        exif.extend_from_slice(&8u32.to_le_bytes());
+        exif.extend_from_slice(&1u16.to_le_bytes());
+        exif.extend_from_slice(&[0x12, 0x01, 3, 0, 1, 0, 0, 0, 6, 0, 0, 0]);
+        exif.extend_from_slice(&0u32.to_le_bytes());
+        exif
+    }
+
+    #[test]
+    fn convert_bakes_orientation_into_the_pixels_once() {
+        use image::ImageDecoder;
+        let root = sandbox("convert-orientation");
+        let sideways = image::RgbImage::from_fn(48, 24, |x, y| if x < 24 { image::Rgb([220, 30, 30]) } else if y < 12 { image::Rgb([30, 200, 30]) } else { image::Rgb([30, 30, 220]) });
+        let source = root.join("portrait.jpg");
+        let mut bytes = Vec::new();
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 95);
+        image::ImageEncoder::set_exif_metadata(&mut encoder, exif_rotated_90()).unwrap();
+        image::ImageEncoder::write_image(encoder, sideways.as_raw(), 48, 24, image::ExtendedColorType::Rgb8).unwrap();
+        std::fs::write(&source, &bytes).unwrap();
+        let mut upright = image::open(&source).unwrap();
+        assert_eq!((upright.width(), upright.height()), (48, 24), "the fixture stores its pixels sideways");
+        upright.apply_orientation(image::metadata::Orientation::Rotate90);
+
+        let png = convert_batch(&[source.clone()], "png", location(&root, "png"));
+        let converted = image::open(&png[0].output_paths()[0]).unwrap();
+        assert_eq!((converted.width(), converted.height()), (24, 48), "the output is upright");
+        assert_eq!(converted.to_rgb8(), upright.to_rgb8(), "the pixels are rotated exactly once");
+
+        for format in ["webp", "heic"] {
+            let outcome = convert_batch(&[source.clone()], format, location(&root, format));
+            let bytes = std::fs::read(&outcome[0].output_paths()[0]).unwrap();
+            assert_eq!(decoded_as(&bytes, format), (24, 48), "{format} is upright");
+        }
+        let again = convert_batch(&[png[0].output_paths()[0].clone()], "jpg", location(&root, "jpg"));
+        let reader = image::ImageReader::open(&again[0].output_paths()[0]).unwrap().with_guessed_format().unwrap();
+        let mut decoder = reader.into_decoder().unwrap();
+        assert_eq!(decoder.orientation().unwrap(), image::metadata::Orientation::NoTransforms, "no orientation tag is left to rotate it again");
+        assert_eq!(decoder.dimensions(), (24, 48));
+        assert_eq!(std::fs::read(&source).unwrap(), bytes, "the original keeps its tag and pixels");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn convert_warns_when_a_deep_source_is_reduced_to_8_bits() {
+        let root = sandbox("convert-deep");
+        let deep = root.join("scan.png");
+        image::DynamicImage::ImageRgb16(image::ImageBuffer::from_fn(24, 16, |x, y| image::Rgb([(x * 2731) as u16, (y * 4093) as u16, 1000u16]))).save(&deep).unwrap();
+        let shallow = root.join("shot.png");
+        write_png(&shallow, 24, 3);
+        let outcomes = convert_batch(&[deep.clone(), shallow], "jpg", location(&root, "out"));
+        assert_eq!(outcomes[0].warnings, [crate::kit::contracts::OutcomeWarning { kind: WarningKind::PrecisionReduced, message: "Reduced from 16-bit to 8-bit sRGB.".into() }]);
+        assert!(outcomes[1].error().is_none() && outcomes[1].warnings.is_empty(), "an 8-bit source has no precision to lose");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn convert_fails_an_animated_gif_alone_with_a_pointer_to_extract_gif_frames() {
+        let root = sandbox("convert-gif");
+        let gif = root.join("party-invite.gif");
+        let frames = (0..2).map(|value| image::Frame::from_parts(image::RgbaImage::from_pixel(8, 8, Rgba([value * 100, 0, 0, 255])), 0, 0, image::Delay::from_numer_denom_ms(100, 1))).collect::<Vec<_>>();
+        image::codecs::gif::GifEncoder::new(std::fs::File::create(&gif).unwrap()).encode_frames(frames).unwrap();
+        let original = std::fs::read(&gif).unwrap();
+        let png = root.join("logo.png");
+        write_png(&png, 16, 5);
+        let outcomes = convert_batch(&[png.clone(), gif.clone()], "jpg", location(&root, "out"));
+        assert_eq!(outcomes.len(), 2);
+        assert!(outcomes[0].error().is_none(), "the PNG still converts");
+        let error = outcomes[1].error().expect("the GIF fails");
+        assert_eq!(outcomes[1].input_path, gif);
+        assert!(matches!(error.kind, ErrorKind::InvalidInput));
+        assert_eq!(error.message, "Converting a GIF would drop its animation. Extract GIF Frames saves every frame.");
+        assert_eq!(error.pointer, Some(crate::kit::contracts::OutcomePointer::Tool { tool_id: "gif-extract".into() }));
+        assert!(outcomes[1].output_paths().is_empty());
+        let written: Vec<_> = std::fs::read_dir(root.join("out")).unwrap().map(|entry| entry.unwrap().file_name()).collect();
+        assert_eq!(written, ["logo-converted.jpg"]);
+        assert_eq!(std::fs::read(&gif).unwrap(), original, "the GIF stays untouched");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn convert_writes_byte_identical_output_across_two_runs() {
+        let root = sandbox("convert-deterministic");
+        let mut sources = convert_sources(&root);
+        let badge = root.join("badge.png");
+        translucent_badge().save(&badge).unwrap();
+        sources.push(badge);
+        for format in ["jpg", "png", "webp", "heic"] {
+            let first = convert_batch(&sources, format, location(&root, &format!("{format}-first")));
+            let second = convert_batch(&sources, format, location(&root, &format!("{format}-second")));
+            for (one, two) in first.iter().zip(&second) {
+                assert_eq!(one.output_paths().len(), two.output_paths().len());
+                for (left, right) in one.output_paths().iter().zip(two.output_paths()) {
+                    assert_eq!(left.file_name(), right.file_name());
+                    assert_eq!(std::fs::read(left).unwrap(), std::fs::read(right).unwrap(), "{} is identical across runs", left.display());
+                }
+            }
+        }
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
