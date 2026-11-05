@@ -157,7 +157,9 @@ export type OutcomeWarning =
   | { code: "signatureRemoved"; message: string }
   | { code: "fontSubstituted"; message: string; details: { requestedFamily: string; actualFamily: string } }
   | { code: "renamedToAvoidReplacing"; message: string; details: { chosenName: string; finalName: string } }
-  | { code: "precisionReduced"; message: string };
+  | { code: "precisionReduced"; message: string }
+  | { code: "omittedContent"; message: string }
+  | { code: "approximateLayout"; message: string };
 
 export type WarningCode = OutcomeWarning["code"];
 
@@ -221,6 +223,7 @@ export interface ToolDefinition {
   title: string;
   shortTitle: string;
   resultVerb: string;
+  resultNoun?: string;
   runningVerb: string;
   runningDetail?: string;
   lockedNote?: string;

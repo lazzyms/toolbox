@@ -9,7 +9,7 @@ use zip::ZipArchive;
 
 use crate::kit::contracts::ToolError;
 use crate::kit::pdf::font_resolver::{EmbeddedFont, FontStyle};
-use crate::kit::pdf::layout::{plain_text, Align, Block, PageSetup, Paragraph, Picture, Span, Style, PAGE_COUNT, PAGE_NUMBER};
+use crate::kit::pdf::layout::{plain_text, Align, Block, Float, Frame, Omitted, PageSetup, Paragraph, Picture, Place, Position, Span, Style, PAGE_COUNT, PAGE_NUMBER};
 
 pub const DAMAGED: &str = "This Word document is damaged or incomplete, so no PDF was made.";
 const DOCUMENT: &str = "word/document.xml";
@@ -17,6 +17,9 @@ const MAX_DEPTH: usize = 256;
 const MAX_STYLE_CHAIN: usize = 16;
 const DEFAULT_HALF_POINTS: u16 = 20;
 const EMU_PER_POINT: f32 = 12_700.;
+const SHAPE_FILL: [u8; 3] = [217, 217, 217];
+const SHAPE_LINE: [u8; 3] = [89, 89, 89];
+const DEFAULT_FLOAT_SIDE: f32 = 72.;
 
 pub struct Parsed {
     pub blocks: Vec<Block>,
@@ -32,7 +35,7 @@ pub struct Parsed {
     pub title: Option<String>,
     pub author: Option<String>,
     pub page: PageSetup,
-    pub omitted_pictures: usize,
+    pub omitted: Omitted,
 }
 
 fn damaged() -> ToolError { ToolError::invalid_input(DAMAGED) }
@@ -74,10 +77,11 @@ pub fn parse(bytes: &[u8], budget: u64, exceeded: ToolError) -> Result<Parsed, T
         counters: HashMap::new(),
         families: Vec::new(),
         pictures: Vec::new(),
-        omitted_pictures: 0,
+        omitted: Omitted::default(),
         headings: 0,
         fields: Vec::new(),
         section: None,
+        carry: Vec::new(),
     };
 
     let document = converter.package.part(DOCUMENT)?.ok_or_else(damaged)?;
@@ -125,7 +129,7 @@ pub fn parse(bytes: &[u8], budget: u64, exceeded: ToolError) -> Result<Parsed, T
         title,
         author,
         page,
-        omitted_pictures: converter.omitted_pictures,
+        omitted: converter.omitted,
     })
 }
 
@@ -538,8 +542,11 @@ fn safe_uri(target: &str) -> Option<String> {
 
 struct Field { kind: FieldKind, instruction: String, result: bool, shown: bool }
 
-#[derive(Default)]
-struct Collected { segments: Vec<Vec<Span>>, images: Vec<usize>, bookmark: Option<String> }
+/// A paragraph's text segments (split at page breaks), the blocks drawn after it and the floating objects anchored to it.
+#[derive(Default, Clone)]
+struct Collected { segments: Vec<Vec<Span>>, after: Vec<Block>, floats: Vec<Block>, bookmark: Option<String> }
+
+struct Graphic { picture: Option<usize>, fill: Option<[u8; 3]>, line: Option<[u8; 3]>, blocks: Vec<Block> }
 
 impl Collected {
     fn new() -> Self { Self { segments: vec![Vec::new()], ..Self::default() } }
@@ -554,9 +561,10 @@ impl Collected {
     }
 }
 
+#[derive(Clone)]
 struct Item { level: u8, start: Option<u64>, spans: Vec<Span> }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct Out { blocks: Vec<Block>, list: Vec<Item>, list_id: Option<String>, pending_break: bool }
 
 impl Out {
@@ -627,10 +635,11 @@ struct Converter<'a> {
     body_family: Option<String>,
     body_half_points: u16,
     pictures: Vec<Picture>,
-    omitted_pictures: usize,
+    omitted: Omitted,
     headings: usize,
     fields: Vec<Field>,
     section: Option<Node>,
+    carry: Vec<Span>,
 }
 
 impl Converter<'_> {
@@ -654,11 +663,43 @@ impl Converter<'_> {
             "tbl" => self.table(node, part, out)?,
             "sdt" => if let Some(content) = node.child("sdtContent") { for child in content.nodes() { self.block(child, part, out)?; } },
             "customXml" | "sdtContent" => for child in node.nodes() { self.block(child, part, out)?; },
-            "AlternateContent" => if let Some(choice) = node.child("Choice") { for child in choice.nodes() { self.block(child, part, out)?; } },
+            "AlternateContent" => self.alternate(node, out, |converter, branch, out| {
+                for child in branch.nodes() { converter.block(child, part, out)?; }
+                Ok(())
+            })?,
             "sectPr" => self.section(node),
             _ => {}
         }
         Ok(())
+    }
+
+    /// Reads the preferred branch of a compatibility block, falling back to the stored alternative when the preferred one leaves content out.
+    fn alternate<O: Clone>(&mut self, node: &Node, out: &mut O, mut each: impl FnMut(&mut Self, &Node, &mut O) -> Result<(), ToolError>) -> Result<(), ToolError> {
+        let (choice, fallback) = (node.child("Choice"), node.child("Fallback"));
+        let (Some(choice), Some(fallback)) = (choice, fallback) else {
+            return match choice.or(fallback) { Some(branch) => each(self, branch, out), None => Ok(()) };
+        };
+        let (omitted, pictures) = (self.omitted, self.pictures.len());
+        let mut tried = out.clone();
+        each(self, choice, &mut tried)?;
+        if self.omitted == omitted {
+            *out = tried;
+            return Ok(());
+        }
+        self.omitted = omitted;
+        self.pictures.truncate(pictures);
+        each(self, fallback, out)
+    }
+
+    fn text_box(&mut self, content: &Node, part: &Part) -> Result<Vec<Block>, ToolError> {
+        let fields = std::mem::take(&mut self.fields);
+        let carry = std::mem::take(&mut self.carry);
+        let mut out = Out::default();
+        let read = content.nodes().try_for_each(|child| self.block(child, part, &mut out));
+        self.fields = fields;
+        self.carry = carry;
+        read?;
+        Ok(out.finish())
     }
 
     fn section(&mut self, node: &Node) {
@@ -697,6 +738,10 @@ impl Converter<'_> {
         if let Some(properties) = properties { para = para.over(&Para::read(properties)); }
         let mut collected = Collected::new();
         self.inline(paragraph, part, &run, None, &mut collected)?;
+        if !self.carry.is_empty() {
+            let carried = std::mem::take(&mut self.carry);
+            collected.segments[0].splice(0..0, carried);
+        }
         Ok((collected, para, heading, run))
     }
 
@@ -706,7 +751,15 @@ impl Converter<'_> {
         let size = run.half_points.unwrap_or(DEFAULT_HALF_POINTS) as f32 / 2.;
         let heading = para.outline.filter(|level| *level < 6).map(|level| level + 1).or(style_heading);
         let list = para.num_id.clone().filter(|id| id != "0" && heading.is_none()).map(|id| (id, para.level.unwrap_or(0).min(8)));
-        let Collected { segments, images, bookmark } = collected;
+        let Collected { segments, after, floats, bookmark } = collected;
+        for float in floats { out.push(float); }
+        let mark = node.child("pPr").and_then(|properties| properties.child("rPr"));
+        let segments = if mark.is_some_and(|mark| mark.child("del").is_some() || mark.child("moveFrom").is_some()) {
+            self.carry.extend(segments.into_iter().flatten());
+            Vec::new()
+        } else {
+            segments
+        };
         for (index, spans) in segments.into_iter().enumerate() {
             if index > 0 {
                 out.page_break();
@@ -726,7 +779,7 @@ impl Converter<'_> {
                 });
                 out.item(id, Item { level: *level, start, spans });
             } else {
-                if index == 0 && images.len() > 0 && spans.iter().all(|span| span.text.trim().is_empty()) { continue; }
+                if index == 0 && !after.is_empty() && spans.iter().all(|span| span.text.trim().is_empty()) { continue; }
                 out.push(Block::Formatted(Paragraph {
                     spans,
                     align: para.align.unwrap_or(Align::Left),
@@ -739,7 +792,7 @@ impl Converter<'_> {
                 }));
             }
         }
-        for image in images { out.push(Block::Image(image)); }
+        for block in after { out.push(block); }
         if let Some(section) = node.child("pPr").and_then(|properties| properties.child("sectPr")) {
             self.section(section);
             if section.val("type") != Some("continuous") { out.page_break(); }
@@ -750,27 +803,30 @@ impl Converter<'_> {
     fn table(&mut self, node: &Node, part: &Part, out: &mut Out) -> Result<(), ToolError> {
         let mut head = Vec::new();
         let mut rows = Vec::new();
-        let mut images = Vec::new();
-        for (index, row) in node.nodes().filter(|node| node.name == "tr").enumerate() {
+        let mut extra = Collected::default();
+        let kept = node.nodes().filter(|node| node.name == "tr").filter(|row| !row.child("trPr").is_some_and(|properties| properties.child("del").is_some()));
+        for (index, row) in kept.enumerate() {
             let header = index == 0 && row.child("trPr").and_then(|properties| properties.on("tblHeader")).unwrap_or(false);
             let mut cells = Vec::new();
             for cell in row.nodes().filter(|node| node.name == "tc") {
                 let properties = cell.child("tcPr");
+                if properties.is_some_and(|properties| properties.child("cellDel").is_some()) { continue; }
                 let span = properties.and_then(|properties| properties.val("gridSpan")).and_then(|value| value.parse::<usize>().ok()).unwrap_or(1).clamp(1, 64);
                 let merged = properties.and_then(|properties| properties.child("vMerge")).is_some_and(|merge| merge.attr("val") != Some("restart"));
                 let mut spans = Vec::new();
-                if !merged { self.cell(cell, part, &mut spans, &mut images)?; }
+                if !merged { self.cell(cell, part, &mut spans, &mut extra)?; }
                 cells.push(spans);
                 cells.extend(std::iter::repeat_with(Vec::new).take(span - 1));
             }
             if header { head = cells; } else { rows.push(cells); }
         }
+        for float in extra.floats { out.push(float); }
         out.push(Block::Table { aligns: Vec::new(), head, rows });
-        for image in images { out.push(Block::Image(image)); }
+        for block in extra.after { out.push(block); }
         Ok(())
     }
 
-    fn cell(&mut self, node: &Node, part: &Part, spans: &mut Vec<Span>, images: &mut Vec<usize>) -> Result<(), ToolError> {
+    fn cell(&mut self, node: &Node, part: &Part, spans: &mut Vec<Span>, extra: &mut Collected) -> Result<(), ToolError> {
         for child in node.nodes() {
             match child.name.as_str() {
                 "p" => {
@@ -778,9 +834,10 @@ impl Converter<'_> {
                     let text = collected.segments.into_iter().flatten().collect::<Vec<_>>();
                     if !spans.is_empty() { spans.push(Span { text: "\n".into(), style: Style::default(), link: None }); }
                     spans.extend(text);
-                    images.extend(collected.images);
+                    extra.after.extend(collected.after);
+                    extra.floats.extend(collected.floats);
                 }
-                "tbl" | "tr" | "tc" | "sdt" | "sdtContent" | "customXml" => self.cell(child, part, spans, images)?,
+                "tbl" | "tr" | "tc" | "sdt" | "sdtContent" | "customXml" => self.cell(child, part, spans, extra)?,
                 _ => {}
             }
         }
@@ -815,7 +872,7 @@ impl Converter<'_> {
                 }
                 "ins" | "moveTo" | "smartTag" | "customXml" | "sdtContent" | "dir" | "bdo" => self.inline(child, part, run, link, out)?,
                 "sdt" => if let Some(content) = child.child("sdtContent") { self.inline(content, part, run, link, out)?; },
-                "AlternateContent" => if let Some(choice) = child.child("Choice") { self.inline(choice, part, run, link, out)?; },
+                "AlternateContent" => self.alternate(child, out, |converter, branch, out| converter.inline(branch, part, run, link, out))?,
                 _ => {}
             }
         }
@@ -850,8 +907,8 @@ impl Converter<'_> {
                     if child.attr("type") == Some("page") { out.segments.push(Vec::new()); } else { out.text("\n", style, link); }
                 }
                 "drawing" if visible => self.drawing(child, part, out)?,
-                "pict" | "object" if visible => self.omitted_pictures += 1,
-                "AlternateContent" => if let Some(choice) = child.child("Choice") { self.run_content(choice, part, style, hidden, link, out)?; },
+                "pict" | "object" if visible => self.vml(child, part, out)?,
+                "AlternateContent" => self.alternate(child, out, |converter, branch, out| converter.run_content(branch, part, style, hidden, link, out))?,
                 "instrText" => if let Some(field) = self.fields.last_mut().filter(|field| !field.result) { field.instruction.push_str(&child.text()); },
                 "fldChar" => match child.attr("fldCharType") {
                     Some("begin") => self.fields.push(Field { kind: FieldKind::Other, instruction: String::new(), result: false, shown: false }),
@@ -887,21 +944,184 @@ impl Converter<'_> {
                 let read = |name: &str| extent.attr(name)?.parse::<f32>().ok().map(|value| value / EMU_PER_POINT);
                 Some((read("cx")?, read("cy")?))
             });
-            let rel = frame.find("blip").and_then(|blip| blip.attr("embed")).and_then(|id| part.rels.get(id)).filter(|rel| !rel.external).cloned();
-            let picture = match rel {
-                Some(rel) => self.package.part(&rel.target)?.and_then(|bytes| Picture::from_bytes(&bytes, size).ok()),
-                None => None,
-            };
-            match picture {
-                Some(picture) => {
-                    out.images.push(self.pictures.len());
-                    self.pictures.push(picture);
-                }
-                None => self.omitted_pictures += 1,
+            let Some(graphic) = self.graphic(frame, part, size)? else { continue };
+            if frame.name == "inline" {
+                out.after.extend(graphic.picture.map(Block::Image));
+                out.after.extend(graphic.blocks);
+                continue;
             }
+            let (width, height) = size.filter(|(width, height)| *width > 0. && *height > 0.).unwrap_or((DEFAULT_FLOAT_SIDE, DEFAULT_FLOAT_SIDE));
+            let simple = frame.attr("simplePos").is_some_and(|value| matches!(value, "1" | "true" | "on"));
+            let (x, y) = match frame.child("simplePos").filter(|_| simple) {
+                Some(point) => {
+                    let read = |name: &str| point.attr(name).and_then(|value| value.parse::<f32>().ok()).unwrap_or(0.) / EMU_PER_POINT;
+                    (Position { frame: Frame::Page, place: Place::Offset(read("x")) }, Position { frame: Frame::Page, place: Place::Offset(read("y")) })
+                }
+                None => (anchor_position(frame.child("positionH")), anchor_position(frame.child("positionV"))),
+            };
+            let wrap = !frame.nodes().any(|node| node.name == "wrapNone");
+            out.floats.push(Block::Float(Float { x, y, width, height, fill: graphic.fill, line: graphic.line, picture: graphic.picture, blocks: graphic.blocks, wrap }));
         }
         Ok(())
     }
+
+    fn graphic(&mut self, frame: &Node, part: &Part, size: Option<(f32, f32)>) -> Result<Option<Graphic>, ToolError> {
+        let Some(data) = frame.find("graphicData") else {
+            self.omitted.objects += 1;
+            return Ok(None);
+        };
+        let kind = data.attr("uri").and_then(|uri| uri.rsplit('/').next()).unwrap_or_default();
+        match kind {
+            "chart" | "chartex" => self.omitted.charts += 1,
+            "diagram" => self.omitted.diagrams += 1,
+            "wordprocessingShape" => {
+                let Some(shape) = data.child("wsp") else { return Ok(None) };
+                let (fill, line) = shape_paint(shape);
+                let blocks = match shape.find("txbxContent") { Some(content) => self.text_box(content, part)?, None => Vec::new() };
+                return Ok(Some(Graphic { picture: None, fill, line, blocks }));
+            }
+            "wordprocessingGroup" | "wordprocessingCanvas" => {
+                let mut blocks = Vec::new();
+                for content in descendants(data, "txbxContent") { blocks.extend(self.text_box(content, part)?); }
+                let picture = match data.find("blip") { Some(blip) => self.picture(blip.attr("embed"), part, None)?, None => None };
+                return Ok(Some(Graphic { picture, fill: None, line: None, blocks }));
+            }
+            _ => match data.find("blip") {
+                Some(blip) => match self.picture(blip.attr("embed"), part, size)? {
+                    Some(index) => return Ok(Some(Graphic { picture: Some(index), fill: None, line: None, blocks: Vec::new() })),
+                    None => self.omitted.pictures += 1,
+                },
+                None => self.omitted.objects += 1,
+            },
+        }
+        Ok(None)
+    }
+
+    fn picture(&mut self, id: Option<&str>, part: &Part, size: Option<(f32, f32)>) -> Result<Option<usize>, ToolError> {
+        let Some(rel) = id.and_then(|id| part.rels.get(id)).filter(|rel| !rel.external).cloned() else { return Ok(None) };
+        let Some(picture) = self.package.part(&rel.target)?.and_then(|bytes| Picture::from_bytes(&bytes, size).ok()) else { return Ok(None) };
+        self.pictures.push(picture);
+        Ok(Some(self.pictures.len() - 1))
+    }
+
+    /// Legacy VML drawings and OLE objects: only the preview image and text box text they store are used.
+    fn vml(&mut self, node: &Node, part: &Part, out: &mut Collected) -> Result<(), ToolError> {
+        let shape = node.nodes().find(|child| child.attr("style").is_some());
+        let style = shape.and_then(|shape| shape.attr("style")).map(vml_style).unwrap_or_default();
+        let length = |name: &str| style.get(name).and_then(|value| css_points(value));
+        let size = length("width").zip(length("height"));
+        let picture = match node.find("imagedata") {
+            Some(image) => match self.picture(image.attr("id").or(image.attr("relid")), part, size)? {
+                Some(index) => Some(index),
+                None => {
+                    self.omitted.pictures += 1;
+                    return Ok(());
+                }
+            },
+            None => None,
+        };
+        let blocks = match node.find("txbxContent") { Some(content) => self.text_box(content, part)?, None => Vec::new() };
+        if picture.is_none() && blocks.is_empty() {
+            self.omitted.objects += 1;
+            return Ok(());
+        }
+        if style.get("position").map(String::as_str) != Some("absolute") {
+            out.after.extend(picture.map(Block::Image));
+            out.after.extend(blocks);
+            return Ok(());
+        }
+        let frame = |name: &str| match style.get(name).map(String::as_str) {
+            Some("page") => Frame::Page,
+            Some("margin") => Frame::Margin,
+            _ => Frame::Text,
+        };
+        let offset = |name: &str| Place::Offset(length(name).unwrap_or(0.));
+        let shape = shape.expect("an absolute position comes from a styled shape");
+        let colour = |name: &str, switch: &str| (!matches!(shape.attr(switch), Some("f" | "false"))).then(|| shape.attr(name).and_then(|value| hex_color(value.trim_start_matches('#')))).flatten();
+        let fill = if picture.is_some() { None } else { colour("fillcolor", "filled").or_else(|| (!matches!(shape.attr("filled"), Some("f" | "false"))).then_some([255, 255, 255])) };
+        let line = if picture.is_some() { None } else { colour("strokecolor", "stroked").or_else(|| (!matches!(shape.attr("stroked"), Some("f" | "false"))).then_some([0, 0, 0])) };
+        let (width, height) = size.unwrap_or((DEFAULT_FLOAT_SIDE, DEFAULT_FLOAT_SIDE));
+        let wrap = node.find("wrap").and_then(|wrap| wrap.attr("type")) != Some("none");
+        out.floats.push(Block::Float(Float {
+            x: Position { frame: frame("mso-position-horizontal-relative"), place: offset("margin-left") },
+            y: Position { frame: frame("mso-position-vertical-relative"), place: offset("margin-top") },
+            width,
+            height,
+            fill,
+            line,
+            picture,
+            blocks,
+            wrap,
+        }));
+        Ok(())
+    }
+}
+
+fn descendants<'n>(node: &'n Node, name: &str) -> Vec<&'n Node> {
+    let mut found = Vec::new();
+    for child in node.nodes() {
+        if child.name == name { found.push(child); } else { found.extend(descendants(child, name)); }
+    }
+    found
+}
+
+fn anchor_position(node: Option<&Node>) -> Position {
+    let frame = match node.and_then(|node| node.attr("relativeFrom")) {
+        Some("page") => Frame::Page,
+        Some("margin" | "leftMargin" | "rightMargin" | "topMargin" | "bottomMargin" | "insideMargin" | "outsideMargin") => Frame::Margin,
+        _ => Frame::Text,
+    };
+    let place = node.and_then(|node| match node.child("posOffset") {
+        Some(offset) => offset.text().trim().parse::<f32>().ok().map(|value| Place::Offset(value / EMU_PER_POINT)),
+        None => node.child("align").map(|align| match align.text().trim() {
+            "center" => Place::Center,
+            "right" | "bottom" | "outside" => Place::End,
+            _ => Place::Start,
+        }),
+    });
+    Position { frame, place: place.unwrap_or(Place::Offset(0.)) }
+}
+
+/// Explicit colours from the shape properties, else a neutral stand-in when the shape style asks for a fill or outline.
+fn shape_paint(shape: &Node) -> (Option<[u8; 3]>, Option<[u8; 3]>) {
+    let properties = shape.child("spPr");
+    let style = shape.child("style");
+    let paint = |explicit: Option<&Node>, reference: Option<&Node>, stand_in: [u8; 3]| -> Option<[u8; 3]> {
+        if let Some(explicit) = explicit {
+            if explicit.child("noFill").is_some() { return None; }
+            if let Some(fill) = explicit.child("solidFill") {
+                return Some(fill.child("srgbClr").and_then(|colour| colour.attr("val")).and_then(hex_color).unwrap_or(stand_in));
+            }
+        }
+        reference.filter(|reference| reference.attr("idx").is_some_and(|index| index != "0")).map(|reference| {
+            reference.child("srgbClr").and_then(|colour| colour.attr("val")).and_then(hex_color).unwrap_or(stand_in)
+        })
+    };
+    let fill = paint(properties, style.and_then(|style| style.child("fillRef")), SHAPE_FILL);
+    let line = paint(properties.and_then(|properties| properties.child("ln")), style.and_then(|style| style.child("lnRef")), SHAPE_LINE);
+    (fill, line)
+}
+
+fn vml_style(style: &str) -> HashMap<String, String> {
+    style.split(';').filter_map(|declaration| {
+        let (key, value) = declaration.split_once(':')?;
+        Some((key.trim().to_ascii_lowercase(), value.trim().to_ascii_lowercase()))
+    }).collect()
+}
+
+fn css_points(value: &str) -> Option<f32> {
+    let split = value.find(|character: char| character.is_ascii_alphabetic()).unwrap_or(value.len());
+    let number = value[..split].trim().parse::<f32>().ok().filter(|number| number.is_finite())?;
+    let scale = match &value[split..] {
+        "pt" => 1.,
+        "in" => 72.,
+        "cm" => 72. / 2.54,
+        "mm" => 72. / 25.4,
+        "pc" => 12.,
+        "" | "px" => 0.75,
+        _ => return None,
+    };
+    Some(number * scale)
 }
 
 fn sentinel(kind: &FieldKind) -> String {
@@ -915,7 +1135,7 @@ pub mod fixtures {
     use zip::write::SimpleFileOptions;
     use zip::ZipWriter;
 
-    pub const W: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture""#;
+    pub const W: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w10="urn:schemas-microsoft-com:office:word""#;
     const REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 
     /// Builds a DOCX package from a body, document relationships `(id, type suffix, target, external)` and extra parts.

@@ -736,6 +736,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 progress={progress}
                 loading={loading}
                 resultVerb={utility.resultVerb}
+                resultNoun={utility.resultNoun}
                 runningVerb={utility.runningVerb}
                 runningDetail={utility.runningDetail}
                 live={live}

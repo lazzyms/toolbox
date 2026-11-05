@@ -145,7 +145,36 @@ pub enum Block {
     Rule,
     Formatted(Paragraph),
     PageBreak,
+    Float(Float),
 }
+
+/// What a floating object is placed against: the page edge, the page margins, or the surrounding text (column and paragraph).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Frame { Page, Margin, Text }
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Place { Offset(f32), Start, Center, End }
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Position { pub frame: Frame, pub place: Place }
+
+/// An object anchored at a position instead of flowing with the text. Text that follows is pushed below it when `wrap` is set.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Float {
+    pub x: Position,
+    pub y: Position,
+    pub width: f32,
+    pub height: f32,
+    pub fill: Option<[u8; 3]>,
+    pub line: Option<[u8; 3]>,
+    pub picture: Option<usize>,
+    pub blocks: Vec<Block>,
+    pub wrap: bool,
+}
+
+/// Content left out because nothing renderable is stored for it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Omitted { pub pictures: usize, pub charts: usize, pub diagrams: usize, pub objects: usize }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Paragraph { pub spans: Vec<Span>, pub align: Align, pub indent: f32, pub right_indent: f32, pub before: f32, pub after: f32, pub size: f32, pub leading: f32 }
@@ -208,7 +237,8 @@ impl Line {
     }
 }
 
-pub struct Laid { pub pages: Vec<PageOut>, pub bookmarks: Vec<Bookmark>, pub anchors: BTreeMap<String, (usize, f32)> }
+/// `floats` lists the page index of every floating object placed, in placement order.
+pub struct Laid { pub pages: Vec<PageOut>, pub bookmarks: Vec<Bookmark>, pub anchors: BTreeMap<String, (usize, f32)>, pub floats: Vec<usize> }
 
 pub struct Flow<'b, 'r, S: SystemFontLookup> {
     book: &'b mut FontBook<'r, S>,
@@ -222,6 +252,8 @@ pub struct Flow<'b, 'r, S: SystemFontLookup> {
     leading: f32,
     bookmarks: Vec<Bookmark>,
     anchors: BTreeMap<String, (usize, f32)>,
+    floats: Vec<usize>,
+    keep_out: Vec<(usize, f32, f32)>,
 }
 
 fn tokens(text: &str) -> Vec<&str> {
@@ -248,50 +280,61 @@ fn color(ink: [f32; 3]) -> String {
 impl<'b, 'r, S: SystemFontLookup> Flow<'b, 'r, S> {
     pub fn new(book: &'b mut FontBook<'r, S>, theme: Theme, pictures: &'b [Picture], geometry: Geometry) -> Self {
         let leading = theme.leading;
-        Self { book, theme, pictures, geometry, pages: vec![PageOut::default()], cursor: 0., ink: BLACK, depth: 0, leading, bookmarks: Vec::new(), anchors: BTreeMap::new() }
+        Self { book, theme, pictures, geometry, pages: vec![PageOut::default()], cursor: 0., ink: BLACK, depth: 0, leading, bookmarks: Vec::new(), anchors: BTreeMap::new(), floats: Vec::new(), keep_out: Vec::new() }
     }
 
-    pub fn finish(self) -> Laid { Laid { pages: self.pages, bookmarks: self.bookmarks, anchors: self.anchors } }
+    pub fn finish(self) -> Laid { Laid { pages: self.pages, bookmarks: self.bookmarks, anchors: self.anchors, floats: self.floats } }
 
     pub fn bands(&mut self, header: &[Block], footer: &[Block], header_top: f32, footer_bottom: f32) -> Result<(), ToolError> {
         let total = self.pages.len();
         for index in 0..total {
             let numbers = [(PAGE_NUMBER, (index + 1).to_string()), (PAGE_COUNT, total.to_string())];
             if !header.is_empty() {
-                let (band, _) = self.band(&numbered(header, &numbers), header_top)?;
-                self.overlay(index, band);
+                let (band, _, floats) = self.band(&numbered(header, &numbers), header_top)?;
+                self.overlay(index, band, floats);
             }
             if !footer.is_empty() {
                 let footer = numbered(footer, &numbers);
-                let (_, height) = self.band(&footer, 0.)?;
-                let (band, _) = self.band(&footer, (self.geometry.height - footer_bottom - height).max(0.))?;
-                self.overlay(index, band);
+                let (_, height, _) = self.band(&footer, 0.)?;
+                let (band, _, floats) = self.band(&footer, (self.geometry.height - footer_bottom - height).max(0.))?;
+                self.overlay(index, band, floats);
             }
         }
         Ok(())
     }
 
-    fn band(&mut self, blocks: &[Block], top: f32) -> Result<(PageOut, f32), ToolError> {
+    fn band(&mut self, blocks: &[Block], top: f32) -> Result<(PageOut, f32, usize), ToolError> {
+        let geometry = Geometry { top, bottom: 0., ..self.geometry };
+        let (x, width) = (geometry.left, geometry.width - geometry.left - geometry.right);
+        self.apart(geometry, |flow| flow.block_list(blocks, x, width))
+    }
+
+    /// Lays `blocks` out on a scratch page with `geometry`, returning that page, the height used and how many floats it placed.
+    fn apart(&mut self, geometry: Geometry, draw: impl FnOnce(&mut Self) -> Result<(), ToolError>) -> Result<(PageOut, f32, usize), ToolError> {
         let pages = std::mem::replace(&mut self.pages, vec![PageOut::default()]);
-        let geometry = self.geometry;
+        let geometry = std::mem::replace(&mut self.geometry, geometry);
         let cursor = std::mem::replace(&mut self.cursor, 0.);
+        let floats = std::mem::take(&mut self.floats);
+        let keep_out = std::mem::take(&mut self.keep_out);
         let (bookmarks, anchors) = (self.bookmarks.len(), self.anchors.clone());
-        self.geometry = Geometry { top, bottom: 0., ..geometry };
-        let drawn = self.blocks(blocks);
+        let drawn = draw(self);
         let height = self.cursor;
-        let band = std::mem::replace(&mut self.pages, pages).into_iter().next().unwrap_or_default();
+        let page = std::mem::replace(&mut self.pages, pages).into_iter().next().unwrap_or_default();
+        let placed = std::mem::replace(&mut self.floats, floats).len();
         self.geometry = geometry;
         self.cursor = cursor;
+        self.keep_out = keep_out;
         self.bookmarks.truncate(bookmarks);
         self.anchors = anchors;
         drawn?;
-        Ok((band, height))
+        Ok((page, height, placed))
     }
 
-    fn overlay(&mut self, index: usize, band: PageOut) {
+    fn overlay(&mut self, index: usize, band: PageOut, floats: usize) {
         let page = &mut self.pages[index];
         page.content.push_str(&band.content);
         page.links.extend(band.links);
+        self.floats.extend(std::iter::repeat_n(index, floats));
     }
 
     fn left(&self) -> f32 { self.geometry.left }
@@ -301,12 +344,23 @@ impl<'b, 'r, S: SystemFontLookup> Flow<'b, 'r, S> {
     fn page_index(&self) -> usize { self.pages.len() - 1 }
 
     fn need(&mut self, height: f32) -> bool {
-        if self.cursor > 0. && self.cursor + height > self.geometry.content_height() {
+        let broke = self.cursor > 0. && self.cursor + height > self.geometry.content_height();
+        if broke {
             self.pages.push(PageOut::default());
             self.cursor = 0.;
-            return true;
         }
-        false
+        let page = self.page_index();
+        let below = self.keep_out.iter()
+            .filter(|(on, top, bottom)| *on == page && *top < self.cursor + height && *bottom > self.cursor)
+            .map(|(_, _, bottom)| *bottom)
+            .fold(None, |lowest: Option<f32>, bottom| Some(lowest.map_or(bottom, |lowest| lowest.max(bottom))));
+        match below {
+            Some(bottom) => {
+                self.cursor = bottom;
+                self.need(height) || broke
+            }
+            None => broke,
+        }
     }
 
     fn gap(&mut self, height: f32) { if self.cursor > 0. { self.cursor += height; } }
@@ -538,6 +592,7 @@ impl<'b, 'r, S: SystemFontLookup> Flow<'b, 'r, S> {
                 self.pages.push(PageOut::default());
                 self.cursor = 0.;
             }
+            Block::Float(float) => self.float(float, x, width)?,
             Block::Rule => {
                 self.need(size);
                 let y = self.y() - size * 0.5;
@@ -545,6 +600,62 @@ impl<'b, 'r, S: SystemFontLookup> Flow<'b, 'r, S> {
                 self.cursor += size;
             }
         }
+        Ok(())
+    }
+
+    fn float(&mut self, float: &Float, x: f32, width: f32) -> Result<(), ToolError> {
+        const INSET: f32 = 5.;
+        const GAP: f32 = 4.;
+        let geometry = self.geometry;
+        let (box_width, box_height) = (float.width.clamp(1., geometry.width), float.height.clamp(1., geometry.height));
+        let place = |position: Position, start: f32, span: f32, size: f32, limit: f32| {
+            let at = match position.place {
+                Place::Offset(offset) => start + offset,
+                Place::Start => start,
+                Place::Center => start + (span - size) / 2.,
+                Place::End => start + span - size,
+            };
+            at.clamp(0., (limit - size).max(0.))
+        };
+        let (start, span) = match float.x.frame {
+            Frame::Page => (0., geometry.width),
+            Frame::Margin => (geometry.left, self.text_width()),
+            Frame::Text => (x, width),
+        };
+        let left = place(float.x, start, span, box_width, geometry.width);
+        let (start, span) = match float.y.frame {
+            Frame::Page => (0., geometry.height),
+            Frame::Margin => (geometry.top, geometry.content_height()),
+            Frame::Text => (geometry.top + self.cursor, geometry.content_height() - self.cursor),
+        };
+        let top = place(float.y, start, span, box_height, geometry.height);
+        let bottom = geometry.height - top - box_height;
+        let page = self.page_index();
+
+        let mut content = String::new();
+        if let Some(fill) = float.fill {
+            let [r, g, b] = fill.map(|channel| channel as f32 / 255.);
+            content.push_str(&format!("q {r} {g} {b} rg {left:.2} {bottom:.2} {box_width:.2} {box_height:.2} re f Q\n"));
+        }
+        if let Some(index) = float.picture {
+            content.push_str(&format!("q {box_width:.2} 0 0 {box_height:.2} {left:.2} {bottom:.2} cm /Im{index} Do Q\n"));
+        }
+        if let Some(line) = float.line {
+            let [r, g, b] = line.map(|channel| channel as f32 / 255.);
+            content.push_str(&format!("q {r} {g} {b} RG 0.75 w {left:.2} {bottom:.2} {box_width:.2} {box_height:.2} re S Q\n"));
+        }
+        self.page().content.push_str(&content);
+        if !float.blocks.is_empty() {
+            let inset = INSET.min(box_width / 4.);
+            let inner = Geometry { left: left + inset, right: (geometry.width - left - box_width + inset).max(0.), top: top + inset, bottom: 0., ..geometry };
+            let (inner_x, inner_width) = (inner.left, (box_width - 2. * inset).max(1.));
+            let (text, _, _) = self.apart(inner, |flow| flow.block_list(&float.blocks, inner_x, inner_width))?;
+            let page = self.page();
+            page.content.push_str(&text.content);
+            page.links.extend(text.links);
+        }
+        if float.wrap { self.keep_out.push((page, top - geometry.top - GAP, top + box_height - geometry.top + GAP)); }
+        self.floats.push(page);
         Ok(())
     }
 
@@ -723,6 +834,7 @@ fn numbered(blocks: &[Block], numbers: &[(char, String)]) -> Vec<Block> {
         Block::Quote(inner) => Block::Quote(numbered(inner, numbers)),
         Block::List { start, items } => Block::List { start: *start, items: items.iter().map(|item| numbered(item, numbers)).collect() },
         Block::Table { aligns, head, rows: body } => Block::Table { aligns: aligns.clone(), head: head.iter().map(|cell| spans(cell)).collect(), rows: rows(body) },
+        Block::Float(float) => Block::Float(Float { blocks: numbered(&float.blocks, numbers), ..float.clone() }),
         other => other.clone(),
     }).collect()
 }

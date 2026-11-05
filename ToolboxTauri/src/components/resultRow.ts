@@ -1,7 +1,7 @@
 import type { ErrorKind, FontSource, JobOutcome, OutcomePointer, OutcomeWarning, ToolError } from "../contracts";
 import { UtilityRegistry } from "../registry";
 
-export type RowTone = "ok" | "warn" | "skip" | "fail";
+export type RowTone = "ok" | "warn" | "note" | "skip" | "fail";
 
 export type RowPointer = { label: string; pointer: OutcomePointer };
 
@@ -11,7 +11,7 @@ export interface RowView {
     tone: RowTone;
     stateLabel: string;
     spokenState: string;
-    detailLines: string[];
+    detailLines: RowDetail[];
     openOutput: { path: string; label: "Open" | "Open first" } | null;
     revealOutput: string | null;
     pointer: RowPointer | null;
@@ -21,6 +21,8 @@ export interface RowView {
 }
 
 export type RowFont = { requested: string; used: string; source: string };
+
+export type RowDetail = { text: string; tone: "warn" | null };
 
 const fontSources: Record<FontSource, string> = {
     embedded: "Embedded in the file",
@@ -64,8 +66,15 @@ export const warningText = (warning: OutcomeWarning): string => {
             return `Saved as ${warning.details.finalName}. Renamed to avoid replacing an existing file.`;
         case "precisionReduced":
             return "Some values were rounded to the precision this format can store.";
+        case "omittedContent":
+        case "approximateLayout":
+            return warning.message;
     }
 };
+
+const isNote = (warning: OutcomeWarning) => warning.code === "approximateLayout";
+
+const warningDetail = (warning: OutcomeWarning): RowDetail => ({ text: warningText(warning), tone: warning.code === "omittedContent" ? "warn" : null });
 
 const pointerView = (pointer: OutcomePointer | null): RowPointer | null => {
     if (!pointer) return null;
@@ -80,21 +89,24 @@ const outputSummary = (paths: string[]) =>
         ? fileName(paths[0])
         : `${paths.length} files, ${fileName(paths[0])} to ${fileName(paths[paths.length - 1])}`;
 
-const nonEmpty = (lines: string[]) => lines.filter((line) => line.trim().length > 0);
+const nonEmpty = (lines: (string | RowDetail)[]): RowDetail[] =>
+    lines.map((line) => (typeof line === "string" ? { text: line, tone: null } : line)).filter((line) => line.text.trim().length > 0);
 
 export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput = false): RowView => {
-    const warnings = outcome.warnings.map(warningText);
+    const warnings = outcome.warnings.map(warningDetail);
     const input = { name: fileName(outcome.inputPath), fullPath: outcome.inputPath };
     switch (outcome.state) {
         case "succeeded": {
             const first = outcome.outputPaths[0] ?? null;
             const warned = warnings.length > 0;
+            const noted = warned && outcome.warnings.every(isNote);
+            const flagged = noted ? (warnings.length === 1 ? "a note" : "notes") : warnings.length === 1 ? "a warning" : "warnings";
             const byOutput = namedByOutput && first !== null;
             return {
                 ...(byOutput ? { name: fileName(first), fullPath: first } : input),
-                tone: warned ? "warn" : "ok",
+                tone: noted ? "note" : warned ? "warn" : "ok",
                 stateLabel: resultVerb,
-                spokenState: warned ? `${resultVerb} with ${warnings.length === 1 ? "a warning" : "warnings"}` : resultVerb,
+                spokenState: warned ? `${resultVerb} with ${flagged}` : resultVerb,
                 detailLines: nonEmpty(warned ? [...warnings, outcome.detail] : [first && !byOutput ? outputSummary(outcome.outputPaths) : "", outcome.detail]),
                 openOutput: first ? { path: first, label: outcome.outputPaths.length > 1 ? "Open first" : "Open" } : null,
                 revealOutput: first,
@@ -160,13 +172,17 @@ export const resultTally = (results: JobOutcome[], resultVerb: string): string =
     return parts.join(", ");
 };
 
-export const resultSummary = (results: JobOutcome[], resultVerb: string): ResultSummary => {
+export const resultSummary = (results: JobOutcome[], resultVerb: string, resultNoun?: string): ResultSummary => {
     const verb = resultVerb.toLowerCase();
-    const warned = results.filter((result) => result.state === "succeeded" && result.warnings.length > 0).length;
+    const flagged = results.filter((result) => result.state === "succeeded" && result.warnings.length > 0);
+    const warned = flagged.length;
+    const noted = flagged.some((result) => result.warnings.some(isNote));
+    const files = resultNoun ? (warned === 1 ? resultNoun : `${resultNoun}s`) : `${verb} ${warned === 1 ? "file" : "files"}`;
+    const flag = noted ? `${warned === 1 ? "has" : "have"} a warning or note` : warned === 1 ? "has a warning" : "have warnings";
     const cancelled = results.some(isCancelled);
     const hints = [
         cancelled ? "Finished files were kept. Nothing was half-written." : null,
-        warned === 0 ? null : `${warned} ${verb} ${warned === 1 ? "file has a warning" : "files have warnings"}.`,
+        warned === 0 ? null : `${warned} ${files} ${flag}.`,
     ];
     return {
         headline: `${cancelled ? "Cancelled" : "Done"}. ${resultTally(results, resultVerb)}`,

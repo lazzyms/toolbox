@@ -463,6 +463,8 @@ pub enum WarningKind {
     FontSubstituted { requested_family: String, actual_family: String },
     RenamedToAvoidReplacing { chosen_name: String, final_name: String },
     PrecisionReduced,
+    OmittedContent,
+    ApproximateLayout,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -716,9 +718,11 @@ mod tests {
             WarningKind::FontSubstituted { requested_family: "A".into(), actual_family: "B".into() },
             WarningKind::RenamedToAvoidReplacing { chosen_name: "a".into(), final_name: "b".into() },
             WarningKind::PrecisionReduced,
+            WarningKind::OmittedContent,
+            WarningKind::ApproximateLayout,
         ];
         let codes = warnings.into_iter().map(|kind| serde_json::to_value(kind).unwrap()["code"].clone()).collect::<Vec<_>>();
-        assert_eq!(codes, ["signatureRemoved", "fontSubstituted", "renamedToAvoidReplacing", "precisionReduced"]);
+        assert_eq!(codes, ["signatureRemoved", "fontSubstituted", "renamedToAvoidReplacing", "precisionReduced", "omittedContent", "approximateLayout"]);
     }
 
     #[test]
@@ -735,7 +739,9 @@ mod tests {
                 PathBuf::from("photo.heic"),
                 SkipReason::new(SkipCode::UnsupportedFormat, "Convert HEIC images before compressing them.")
                     .with_pointer(OutcomePointer::Tool { tool_id: "heic-convert".into() }),
-            ).with_warning(OutcomeWarning { kind: WarningKind::PrecisionReduced, message: "The 16-bit source would be reduced to 8-bit.".into() }),
+            ).with_warning(OutcomeWarning { kind: WarningKind::PrecisionReduced, message: "The 16-bit source would be reduced to 8-bit.".into() })
+            .with_warning(OutcomeWarning { kind: WarningKind::OmittedContent, message: "Omitted content: 1 chart has no stored image, so it was left out.".into() })
+            .with_warning(OutcomeWarning { kind: WarningKind::ApproximateLayout, message: "Approximate layout: 1 floating object on page 2 was placed as close as possible.".into() }),
             JobOutcome::skipped(PathBuf::from("plain.pdf"), SkipReason::new(SkipCode::NotProtected, "This PDF is not password protected.")),
             JobOutcome::failure_with_outputs(
                 PathBuf::from("scan.pdf"),

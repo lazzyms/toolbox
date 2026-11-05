@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { Check, CircleMinus, CircleX, Clock, KeyRound, LoaderCircle, RotateCcw, TriangleAlert } from "lucide-react";
+import { Check, CircleMinus, CircleX, Clock, Info, KeyRound, LoaderCircle, RotateCcw, TriangleAlert } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -20,6 +20,7 @@ const idleActionState: RowActionState = { pending: null, error: null };
 const toneIcons: Record<RowTone, typeof Check> = {
     ok: Check,
     warn: TriangleAlert,
+    note: Info,
     skip: CircleMinus,
     fail: CircleX,
 };
@@ -56,6 +57,7 @@ interface ResultListProps {
     progress: Progress;
     loading: boolean;
     resultVerb: string;
+    resultNoun?: string;
     runningVerb: string;
     runningDetail?: string;
     live: LiveRun | null;
@@ -64,7 +66,7 @@ interface ResultListProps {
     onRetryWithPassword?: (inputPath: string, password: string) => Promise<void>;
 }
 
-export const ResultList = ({ results, progress, loading, resultVerb, runningVerb, runningDetail, live, namedByOutput = false, onRetry, onRetryWithPassword }: ResultListProps) => {
+export const ResultList = ({ results, progress, loading, resultVerb, resultNoun, runningVerb, runningDetail, live, namedByOutput = false, onRetry, onRetryWithPassword }: ResultListProps) => {
     const [actionStates, setActionStates] = useState<Record<number, RowActionState>>({});
     const [passwordRow, setPasswordRow] = useState<number | null>(null);
     const [fontRows, setFontRows] = useState<ReadonlySet<number>>(new Set());
@@ -119,7 +121,7 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
                 <span className="result-row-text">
                     <span className="result-row-name" title={view.fullPath}>{name}</span>
                     {view.detailLines.map((line, lineIndex) => (
-                        <span key={lineIndex} className="result-row-detail">{line}</span>
+                        <span key={lineIndex} className="result-row-detail" data-tone={line.tone ?? undefined}>{line.text}</span>
                     ))}
                 </span>
                 <span className="result-row-state">
@@ -262,7 +264,7 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
     }
     if (results.length === 0) return null;
 
-    const summary = resultSummary(results, resultVerb);
+    const summary = resultSummary(results, resultVerb, resultNoun);
     return (
         <div className="result-list">
             <div className="result-summary" role="status" aria-live="polite">

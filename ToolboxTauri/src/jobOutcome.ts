@@ -41,6 +41,8 @@ const warningDetailKeys: Record<WarningCode, readonly string[] | null> = {
   fontSubstituted: ["requestedFamily", "actualFamily"],
   renamedToAvoidReplacing: ["chosenName", "finalName"],
   precisionReduced: null,
+  omittedContent: null,
+  approximateLayout: null,
 };
 
 const toolIds = new Set<string>(UtilityRegistry.map((utility) => utility.id));
