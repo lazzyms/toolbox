@@ -2,6 +2,7 @@ pub mod metadata;
 pub mod scene;
 pub mod editor;
 pub mod remaining;
+pub mod recompress;
 
 use std::collections::HashSet;
 use std::fs;
@@ -514,6 +515,13 @@ fn is_signature_dictionary(value: &Object) -> bool {
         _ => return false,
     };
     dictionary.get(b"Type").ok().and_then(|value| value.as_name().ok()) == Some(b"Sig") || dictionary.has(b"ByteRange")
+}
+
+/// Whether the document carries a digital signature that rewriting its bytes would invalidate.
+pub(crate) fn is_signed(document: &Document) -> Result<bool, String> {
+    let catalog = document.trailer.get(b"Root").and_then(Object::as_reference).map_err(|error| error.to_string())?;
+    let pages = document.get_pages().values().copied().collect::<Vec<_>>();
+    document_has_signature(document, catalog, &pages)
 }
 
 fn document_has_signature(document: &Document, catalog: ObjectId, pages: &[ObjectId]) -> Result<bool, String> {
