@@ -1504,7 +1504,7 @@ test.describe("Extract from PDF", () => {
     test("Both is the default and sends one request for every PDF with both option groups", async ({ page }) => {
         await openWithPdfs(page);
         await expect(extractModes(page).getByRole("radio", { name: "Both", exact: true })).toHaveAttribute("aria-checked", "true");
-        await expect(page.getByText("A text file and the embedded images of each PDF.", { exact: true })).toBeVisible();
+        await expect(page.getByText("A text file and a folder of images for each PDF.", { exact: true })).toBeVisible();
         await expect(textOptions(page)).toBeVisible();
         await expect(imageOptions(page)).toBeVisible();
         await expect(page.getByRole("textbox", { name: "Page range for every PDF" })).toHaveCount(0);
@@ -1553,7 +1553,7 @@ test.describe("Extract from PDF", () => {
         await openWithPdfs(page);
         await textOptions(page).click();
         await extractModes(page).getByRole("radio", { name: "Images", exact: true }).click();
-        await expect(page.getByText("The embedded images of each PDF, saved next to it.", { exact: true })).toBeVisible();
+        await expect(page.getByText("One folder of images for each PDF.", { exact: true })).toBeVisible();
         await expect(textOptions(page)).toHaveCount(0);
         await expect(imageOptions(page)).toBeVisible();
         await expect(page.getByRole("spinbutton", { name: "Smaller than" })).toHaveCount(0);
@@ -1573,13 +1573,13 @@ test.describe("Extract from PDF", () => {
         });
     });
 
-    test("a Both run shows one row per PDF with the text and images together and the missing part named", async ({ page }) => {
+    test("a Both run shows one row per PDF with the text file and images folder together and the missing part named", async ({ page }) => {
         await openWithPdfs(page);
         await page.evaluate(() => {
             (window as TestWindow).__toolboxProcessingResults = [
                 {
                     inputPath: "/local/report.pdf",
-                    outputPaths: ["/local/report-text.txt", "/local/report-image-1-0.jpg", "/local/report-image-3-0.jpg"],
+                    outputPaths: ["/local/report-text.txt", "/local/report-images"],
                     detail: "Saved the text and 2 images.",
                     state: "succeeded",
                     failure: null,
@@ -1588,7 +1588,7 @@ test.describe("Extract from PDF", () => {
                 },
                 {
                     inputPath: "/local/site-survey-scan.pdf",
-                    outputPaths: ["/local/site-survey-scan-image-1-0.jpg"],
+                    outputPaths: ["/local/site-survey-scan-images"],
                     detail: "No selectable text, so no text file was made. OCR can read scanned pages.",
                     state: "succeeded",
                     failure: null,
@@ -1602,12 +1602,14 @@ test.describe("Extract from PDF", () => {
         const rows = page.locator(".result-row");
         await expect(rows).toHaveCount(2);
         await expect(rows.nth(0)).toHaveAttribute("data-state", "succeeded");
-        await expect(rows.nth(0)).toContainText("3 files, report-text.txt to report-image-3-0.jpg");
+        await expect(rows.nth(0)).toContainText("2 files, report-text.txt to report-images");
         await expect(rows.nth(0)).toContainText("Saved the text and 2 images.");
         await expect(rows.nth(0).getByRole("button", { name: "Open report-text.txt", exact: true })).toBeVisible();
         await expect(rows.nth(1)).toHaveAttribute("data-state", "succeeded");
-        await expect(rows.nth(1)).toContainText("site-survey-scan-image-1-0.jpg");
+        await expect(rows.nth(1)).toContainText("site-survey-scan-images");
         await expect(rows.nth(1)).toContainText("No selectable text, so no text file was made. OCR can read scanned pages.");
+        await rows.nth(1).getByRole("button", { name: "Show in Finder: site-survey-scan-images", exact: true }).click();
+        expect(await fileActionInvocations(page)).toEqual([{ command: "reveal_output_path", args: { path: "/local/site-survey-scan-images" } }]);
         expect(((await extractRequest(page)) as { mode: string }).mode).toBe("both");
     });
 
@@ -2473,7 +2475,10 @@ test.describe("per-run destination", () => {
         await chooseFixture(page, pdfFixturePath);
         await expect(example).toHaveText("document-text.txt");
         await page.getByRole("radio", { name: "Images", exact: true }).click();
-        await expect(example).toHaveText("document-image-1-0.jpg");
+        await expect(example).toHaveText("document-images");
+        await expect(page.getByText("JPEG images are copied as they are. An existing folder is never reused: the new one gets -1, -2 and so on.", { exact: true })).toBeVisible();
+        await page.getByRole("radio", { name: "Both", exact: true }).click();
+        await expect(page.getByText("An existing file or folder is never replaced: the new one gets -1, -2 and so on.", { exact: true })).toBeVisible();
 
         await page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "PDF to Images", exact: true }).click();
         await expect(example).toHaveText("document-images.jpg");

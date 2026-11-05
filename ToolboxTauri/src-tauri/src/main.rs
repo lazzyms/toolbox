@@ -679,7 +679,7 @@ mod command_tests {
         let outcome = &outcomes[0];
         assert!(outcome.error().is_none(), "{name} failed: {}", outcome.error().cloned().unwrap_or_default());
         assert!(!outcome.output_paths().is_empty(), "{name} must report an output");
-        for output in outcome.output_paths() { assert!(output.is_file(), "{name} reported missing output {}", output.display()); }
+        for output in outcome.output_paths() { assert!(output.is_file() || output.is_dir(), "{name} reported missing output {}", output.display()); }
         outcome.output_paths().to_vec()
     }
 
@@ -923,9 +923,9 @@ mod command_tests {
     }
 
     // Icon presets and single-file TIFF splitting predate declared suffixes and keep their
-    // shipped names. Extract from PDF declares its text suffix and names its images -image.
+    // shipped names. Extract from PDF declares its text suffix and names its images folder -images.
     // These are the only outputs allowed a different suffix family.
-    const LEGACY_SUFFIX_FAMILIES: &[(&str, &str)] = &[("generate_icon_set", "-favicon"), ("process_tiff_pages", "-page"), ("extract_from_pdf", "-image")];
+    const LEGACY_SUFFIX_FAMILIES: &[(&str, &str)] = &[("generate_icon_set", "-favicon"), ("process_tiff_pages", "-page"), ("extract_from_pdf", "-images")];
 
     fn assert_outputs_use_declared_suffixes(naming: &[(&'static str, PathBuf, Vec<PathBuf>)]) {
         let covered = naming.iter().map(|(command, _, _)| *command).collect::<std::collections::BTreeSet<_>>();
@@ -970,7 +970,7 @@ mod command_tests {
         assert!(error.message.contains(recorded_value), "{} should state {recorded_value}", error.message);
         assert!(limited.output_paths().is_empty());
         assert!(other.error().is_none(), "the other file must still succeed: {}", other.error().cloned().unwrap_or_default());
-        assert!(other.output_paths().iter().all(|output| output.is_file()) && !other.output_paths().is_empty());
+        assert!(other.output_paths().iter().all(|output| output.is_file() || output.is_dir()) && !other.output_paths().is_empty());
     }
 
     fn extract_request(paths: Vec<PathBuf>, mode: ExtractMode, page_range: Option<&str>, output_location: OutputLocation) -> ExtractFromPdfRequest {
@@ -2484,21 +2484,23 @@ mod command_tests {
         // Images: the embedded JPEGs are copied byte for byte; a PDF without images fails alone.
         let images = run(vec![mixed.clone(), scanned.clone(), plain.clone()], ExtractMode::Images, None, "images");
         assert_eq!(images.len(), 3);
-        assert_eq!(images[0].output_paths(), [root.join("images").join("mixed-image-1-0.jpg")]);
-        assert_eq!(images[1].output_paths(), [root.join("images").join("scanned-image-1-0.jpg")]);
-        assert_eq!(std::fs::read(&images[0].output_paths()[0]).unwrap()[..2], [0xFF, 0xD8]);
+        assert_eq!(images[0].output_paths(), [root.join("images").join("mixed-images")]);
+        assert_eq!(images[0].detail, "Saved 1 image.");
+        assert_eq!(images[1].output_paths(), [root.join("images").join("scanned-images")]);
+        assert_eq!(std::fs::read(images[0].output_paths()[0].join("page-1-image-1.jpg")).unwrap()[..2], [0xFF, 0xD8]);
         assert_eq!(images[2].error().map(|error| error.message.as_str()), Some(NO_EMBEDDED_IMAGES));
-        assert_eq!(files_in(&root.join("images")), vec!["mixed-image-1-0.jpg", "scanned-image-1-0.jpg"]);
+        assert_eq!(files_in(&root.join("images")), vec!["mixed-images", "scanned-images"]);
+        assert_eq!(files_in(&root.join("images").join("mixed-images")), vec!["page-1-image-1.jpg"]);
 
         // Both: one outcome per PDF holds the text file first, then the images, with a note when a part is missing.
         let both = run(vec![mixed.clone(), scanned.clone(), plain.clone(), blank.clone()], ExtractMode::Both, None, "both");
         assert_eq!(both.len(), 4);
         let folder = root.join("both");
         assert!(matches!(both[0].state, OutcomeState::Succeeded { .. }));
-        assert_eq!(both[0].output_paths(), [folder.join("mixed-text.txt"), folder.join("mixed-image-1-0.jpg")]);
+        assert_eq!(both[0].output_paths(), [folder.join("mixed-text.txt"), folder.join("mixed-images")]);
         assert_eq!(both[0].detail, "Saved the text and 1 image.");
         assert!(matches!(both[1].state, OutcomeState::Succeeded { .. }), "an image-only PDF succeeds in Both: {:?}", both[1]);
-        assert_eq!(both[1].output_paths(), [folder.join("scanned-image-1-0.jpg")]);
+        assert_eq!(both[1].output_paths(), [folder.join("scanned-images")]);
         assert_eq!(both[1].detail, BOTH_WITHOUT_TEXT);
         assert!(both[1].detail.contains("No selectable text"));
         assert!(matches!(both[2].state, OutcomeState::Succeeded { .. }));
@@ -2508,11 +2510,13 @@ mod command_tests {
             OutcomeState::Skipped { reason } => assert_eq!((reason.code, reason.message.as_str()), (SkipCode::NoEffectiveChange, NOTHING_TO_EXTRACT)),
             state => panic!("a PDF with neither part is skipped, got {state:?}"),
         }
-        assert_eq!(files_in(&folder), vec!["mixed-image-1-0.jpg", "mixed-text.txt", "plain-text.txt", "scanned-image-1-0.jpg"]);
+        assert_eq!(files_in(&folder), vec!["mixed-images", "mixed-text.txt", "plain-text.txt", "scanned-images"]);
 
         // A second run never replaces the first run's outputs.
         let again = run(vec![mixed.clone()], ExtractMode::Both, None, "both");
-        assert_eq!(again[0].output_paths(), [folder.join("mixed-text-1.txt"), folder.join("mixed-image-1-0-1.jpg")]);
+        assert_eq!(again[0].output_paths(), [folder.join("mixed-text-1.txt"), folder.join("mixed-images-1")]);
+        assert_eq!(files_in(&folder.join("mixed-images")), vec!["page-1-image-1.jpg"]);
+        assert_eq!(files_in(&folder.join("mixed-images-1")), vec!["page-1-image-1.jpg"]);
         assert_eq!(read(&folder.join("mixed-text.txt")), read(&folder.join("mixed-text-1.txt")));
 
         // One range applies to every PDF; "2-" runs to the end of the document.
