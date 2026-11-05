@@ -32,7 +32,7 @@ const PAGED_IMAGE: ToolLimits = ToolLimits { max_pages: Some(1_000), ..IMAGE };
 pub fn recorded(command: &str) -> Option<ToolLimits> {
     Some(match command {
         "remove_password" | "protect_files" | "export_pdf_scene" | "crop_pdf" | "sign_pdf" | "edit_pdf" | "edit_pdf_session"
-        | "organize_pdf" | "add_pdf_pages" | "add_page_numbers" | "watermark_pdf" | "compress_pdf" | "remove_pdf_pages"
+        | "add_page_numbers" | "watermark_pdf" | "compress_pdf"
         | "extract_pdf_pages" | "merge_pdfs" | "split_pdf" | "pdf_to_images" | "pdf_to_text" | "extract_pdf_images"
         | "ocr_pdf" | "rotate_pdf" | "repair_pdf" | "redact_pdf" | "compare_pdfs" => PDF,
         "compress_images" | "convert_images" | "export_image_edit_plan" | "images_to_pdf" | "blur_faces"
@@ -392,7 +392,7 @@ fn bytes_label(bytes: u64) -> String {
     }
 }
 
-fn duration_label(duration: Duration) -> String {
+pub(crate) fn duration_label(duration: Duration) -> String {
     let plural = |count: u128, unit: &str| if count == 1 { format!("1 {unit}") } else { format!("{count} {unit}s") };
     match duration.as_millis() {
         millis if millis >= 60_000 && millis % 60_000 == 0 => plural(millis / 60_000, "minute"),
@@ -401,7 +401,7 @@ fn duration_label(duration: Duration) -> String {
     }
 }
 
-fn count_label(count: u64) -> String {
+pub(crate) fn count_label(count: u64) -> String {
     let digits = count.to_string();
     let mut label = String::with_capacity(digits.len() + digits.len() / 3);
     for (index, digit) in digits.chars().enumerate() {
