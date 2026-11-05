@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Compress</title>
+<title>Compress Files: empty, files, options, running</title>
 <script src="./support.js"></script>
 </head>
 <body>
@@ -37,10 +37,39 @@ a{color:inherit}a:hover{color:var(--mut)}
 .opt{display:flex;flex-direction:column;gap:6px}
 fieldset.opt{border:0;margin:0;padding:0}fieldset.opt legend{padding:0;margin-bottom:6px}
 .chk{display:flex;gap:8px;align-items:center}
-
+.tb.dark{--seg-ok:#d4d4d4;--seg-wait:#2a2a2a}.tb.light{--seg-ok:#262626;--seg-wait:#e5e5e5}
+.seg{display:inline-flex;padding:2px;border-radius:8px;background:var(--raise);border:1px solid var(--line)}
+.seg button{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border:0;border-radius:6px;background:none;cursor:pointer;color:var(--mut);font-weight:500}
+.seg button[aria-checked=true]{background:var(--bg);color:var(--fg);box-shadow:0 1px 2px rgba(0,0,0,.25)}
+.seg[aria-disabled=true]{opacity:.5}
+.row{grid-template-columns:20px minmax(0,1fr) 84px 64px 170px}
+.rrow{display:grid;grid-template-columns:20px minmax(0,1fr) 110px 250px;gap:12px;align-items:center;padding:8px 20px;border-bottom:1px solid var(--line);min-height:36px}
+.chip{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;border-radius:999px;border:1px solid var(--line2);background:transparent;font-size:12px;cursor:pointer;color:var(--mut)}
+.chip[aria-pressed="true"]{background:var(--sel);color:var(--fg);font-weight:500}
+.inl{grid-column:2 / -1;display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;padding:10px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--panel)}
+.inl .opt{flex:1 1 160px}
+.err{font-size:12px;color:var(--bad);display:flex;gap:6px;align-items:center}
+.field[aria-invalid=true]{border-color:var(--bad)}
+.flag{display:flex;gap:10px;align-items:center;margin:0 20px 10px;padding:8px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--raise)}
+.tag{display:inline-flex;align-items:center;height:20px;padding:0 7px;border-radius:999px;border:1px solid var(--line2);font-size:11px;color:var(--mut);white-space:nowrap}
+.row{grid-template-columns:20px minmax(0,1fr) 52px 64px 96px;padding:5px 20px}
+.row .sub{font-size:12px;line-height:16px}
+.rrow{grid-template-columns:20px minmax(0,1fr) 150px 96px;padding:6px 20px}
+.pcard{display:grid;grid-template-columns:16px 56px minmax(0,1fr);gap:8px;align-items:center;padding:6px 10px;border-radius:8px;border:1px solid var(--line);background:transparent;text-align:left;cursor:pointer;width:100%;box-sizing:border-box}
+.pcard[aria-checked=true]{border-color:var(--ring);background:var(--sel)}
+.dot{width:14px;height:14px;border-radius:50%;border:1.5px solid var(--line2);box-sizing:border-box;margin-top:0}
+.pcard[aria-checked=true] .dot{border:4px solid var(--fg)}
+.sw{width:32px;height:18px;border-radius:999px;background:var(--line2);position:relative;border:0;flex:none;padding:0;cursor:pointer}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--bg)}
+.sw[aria-checked=true]{background:var(--pri)}.sw[aria-checked=true]::after{left:16px;background:var(--prifg)}
+.does{display:grid;grid-template-columns:40px minmax(0,1fr);gap:4px 10px;margin:0;padding:10px 12px;border-radius:8px;background:var(--raise);font-size:12px}
+.does dt{color:var(--mut)}.does dd{margin:0}
+.drop{flex:1;margin:20px;border:1.5px dashed var(--line2);border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;text-align:center;padding:24px}
+.btn.off{opacity:.45;cursor:default}
+.status{display:flex;gap:8px;align-items:center;margin:0 20px 10px;padding:6px 12px;border-radius:8px;background:var(--raise)}
 </style>
 </helmet>
-<div class="{{themeClass}}" style="min-height: 800px; display: flex; flex-wrap: wrap">
+<div class="{{themeClass}}" style="height: 800px; overflow: hidden; display: flex; flex-wrap: wrap">
 <aside aria-label="Compress Files" style="flex: 1 1 220px; max-width: 232px; background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; padding: 14px 10px; box-sizing: border-box">
 <a class="nav" href="Main.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M5 12l6 6M5 12l6-6"></path></svg>All tools</a>
 <div style="padding: 16px 10px 6px; font-size: 12px; font-weight: 600; color: var(--faint)">Compress Files</div>
@@ -49,39 +78,154 @@ fieldset.opt{border:0;margin:0;padding:0}fieldset.opt legend{padding:0;margin-bo
 <a class="nav" href="Settings.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"></path></svg>Settings<span class="kbd" style="margin-left: auto">{{settingsKey}}</span></a>
 <p class="hint" style="margin: 0; padding: 10px 10px 0">Files stay on this device.</p>
 </aside>
-<div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+<div style="flex: 999 1 560px; min-width: 0; height: 800px; display: flex; flex-direction: column">
 <header style="min-height: 52px; display: flex; align-items: center; gap: 14px; padding: 0 20px; border-bottom: 1px solid var(--line); flex-wrap: wrap">
-<h1 style="margin: 0; font-size: 15px; font-weight: 600">Compress</h1>
-<span class="hint">Make PDFs and images smaller.</span>
+<h1 style="margin: 0; font-size: 15px; font-weight: 600">Compress Files</h1>
+<span class="hint">Make PDFs and images smaller. Originals are never changed.</span>
 <div style="flex: 1"></div>
 <button class="btn ghost"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"></circle><path d="M21 21l-6-6"></path></svg>Find a tool<span class="kbd">{{findKey}}</span></button>
 </header>
-<div style="flex: 1; display: flex; flex-wrap: wrap; min-height: 0">
-<section aria-label="Files" style="flex: 999 1 480px; min-width: 0; display: flex; flex-direction: column">
-<div style="display: flex; align-items: center; gap: 8px; padding: 12px 20px; flex-wrap: wrap"><strong style="font-size: 13px">5 files, 21.3 MB</strong><span class="hint">PDFs and images can be mixed</span><div style="flex: 1"></div><button class="btn sm"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14"></path></svg>Add files<span class="kbd">{{openKey}}</span></button><button class="btn sm">Remove from list</button><button class="btn sm ghost">Clear list</button></div>
-<div class="row hint" style="grid-template-columns: 20px minmax(0,1fr) 72px 110px; padding-top: 6px; padding-bottom: 6px; border-top: 1px solid var(--line)"><span></span><span>Name</span><span style="text-align: right">Now</span><span style="text-align: right">Estimate</span></div>
-<ul aria-label="Files to compress" style="list-style: none; margin: 0; padding: 0; overflow: auto"><li class="row sel" style="grid-template-columns: 20px minmax(0,1fr) 72px 110px" aria-selected="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><path d="M14 3v4a1 1 0 0 0 1 1h4"></path><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"></path></svg><span style="min-width: 0; display: flex; flex-direction: column"><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">site-survey-scan.pdf</span><span class="hint" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">~/Documents/Projects</span></span><span class="hint" style="text-align: right">14.6 MB</span><span class="" style="text-align: right">About 4 MB</span></li><li class="row" style="grid-template-columns: 20px minmax(0,1fr) 72px 110px" aria-selected="false"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 16l5-5 4 4 3-3 6 6"></path><circle cx="15.5" cy="8.5" r="1.5"></circle></svg><span style="min-width: 0; display: flex; flex-direction: column"><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">IMG_4012.jpg</span><span class="hint" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">~/Pictures/Move-out</span></span><span class="hint" style="text-align: right">3.1 MB</span><span class="" style="text-align: right">About 900 KB</span></li><li class="row" style="grid-template-columns: 20px minmax(0,1fr) 72px 110px" aria-selected="false"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 16l5-5 4 4 3-3 6 6"></path><circle cx="15.5" cy="8.5" r="1.5"></circle></svg><span style="min-width: 0; display: flex; flex-direction: column"><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">IMG_4013.jpg</span><span class="hint" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">~/Pictures/Move-out</span></span><span class="hint" style="text-align: right">2.9 MB</span><span class="" style="text-align: right">About 850 KB</span></li><li class="row" style="grid-template-columns: 20px minmax(0,1fr) 72px 110px" aria-selected="false"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><path d="M14 3v4a1 1 0 0 0 1 1h4"></path><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"></path></svg><span style="min-width: 0; display: flex; flex-direction: column"><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">board-minutes-q3.pdf</span><span class="hint" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">~/Documents/Board</span></span><span class="hint" style="text-align: right">640 KB</span><span class="" style="text-align: right">About 600 KB</span></li><li class="row" style="grid-template-columns: 20px minmax(0,1fr) 72px 110px" aria-selected="false"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 16l5-5 4 4 3-3 6 6"></path><circle cx="15.5" cy="8.5" r="1.5"></circle></svg><span style="min-width: 0; display: flex; flex-direction: column"><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">logo.png</span><span class="hint" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">~/Documents/Brand</span></span><span class="hint" style="text-align: right">84 KB</span><span class="" style="text-align: right">About 60 KB</span></li></ul>
-
-</section><section aria-label="Options" style="flex: 1 1 300px; max-width: 360px; border-left: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column">
-<div style="padding: 18px 20px; display: flex; flex-direction: column; gap: 20px; flex: 1; overflow: auto"><fieldset class="opt"><legend class="lbl">Level</legend><div role="radiogroup" aria-label="Compression level" class="seg"><button role="radio" aria-checked="false" tabindex="-1">Smallest</button><button role="radio" aria-checked="true">Balanced</button><button role="radio" aria-checked="false" tabindex="-1">Best quality</button></div><span class="hint">Balanced keeps text sharp and lowers photo detail to screen resolution, 150 dpi.</span></fieldset>
-<div class="opt"><label class="chk"><input type="checkbox" checked>Remove metadata</label><span class="hint">Author, location and editing history.</span></div>
-<div class="note"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut); margin-top: 1px"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v6M12 7.5v.5"></path></svg><span class="hint">Estimates are rough. You see real sizes when it finishes. A file that wouldn't get smaller is skipped.</span></div><div style="border-top: 1px solid var(--line); padding-top: 18px; display: flex; flex-direction: column; gap: 8px"><span class="lbl">Save to</span>
-<div style="display: flex; align-items: center; gap: 8px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2"></path></svg><span>Next to each original</span></div>
-<button class="btn ghost" style="align-self: flex-start; padding: 0; height: 24px; color: var(--fg); text-decoration: underline; text-underline-offset: 3px">Change for this run</button><div style="display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 8px; background: var(--raise)"><span class="hint">Example</span><span>site-survey-scan-compressed.pdf</span><span class="hint">An existing name gets -1, -2 and so on. Nothing is replaced.</span></div></div></div>
-<footer style="padding: 14px 20px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 10px"><span class="hint">Originals stay as they are</span><div style="flex: 1"></div><button class="btn pri">Compress 5 files<span class="kbd">{{runKey}}</span></button></footer>
-</section>
+<div style="flex: 1; display: flex; flex-wrap: wrap; min-height: 0; overflow: hidden">
+<section aria-label="{{sectionLabel}}" style="flex: 999 1 480px; min-width: 0; min-height: 0; max-height: 100%; display: flex; flex-direction: column">
+<sc-if value="{{isEmpty}}" hint-placeholder-val="{{ false }}"><div class="drop" role="region" aria-label="Add files" style="border-style: {{dropBorder}}; background: {{dropBg}}">
+<svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 28px; height: 28px; color: var(--mut)"><path d="M12 3v7M9 7l3 3 3-3M12 21v-7M9 17l3-3 3 3M4 12h16"></path></svg>
+<strong style="font-size: 15px">{{dropTitle}}</strong>
+<span class="hint">PDF, JPEG, PNG and WebP. Mix them in one batch.</span>
+<button class="btn pri"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14"></path></svg>Open files<span class="kbd">{{openKey}}</span></button>
+<span class="hint">Each file gets a smaller copy. Originals stay as they are.</span>
+</div></sc-if>
+<sc-if value="{{isList}}" hint-placeholder-val="{{ true }}">
+<div style="display: flex; align-items: center; gap: 8px; padding: 12px 20px; flex-wrap: wrap"><strong style="font-size: 13px">{{countLabel}}</strong><span class="hint">{{countHint}}</span><div style="flex: 1"></div><button class="btn sm"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14"></path></svg>Add files<span class="kbd">{{openKey}}</span></button><button class="btn sm">Remove from list<span class="kbd">{{delKey}}</span></button><button class="btn sm ghost">Clear list</button></div>
+<sc-if value="{{hasStatus}}" hint-placeholder-val="{{ false }}"><div class="status" role="status" aria-live="polite"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v6M12 7.5v.5"></path></svg><span style="flex: 1">{{statusText}}</span><sc-if value="{{canUndo}}" hint-placeholder-val="{{ false }}"><button class="btn sm">Undo<span class="kbd">{{undoKey}}</span></button></sc-if></div></sc-if>
+<div class="flag" role="region" aria-label="Files that won't be compressed"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--warn)"><path d="M12 3l10 18H2z"></path><path d="M12 10v5M12 18v.5"></path></svg><span style="flex: 1">3 files won&#39;t be compressed: 1 will be skipped, 2 would fail.</span><button class="btn sm">Remove 3 flagged files</button></div>
+<div class="row hint" style="padding-top: 6px; padding-bottom: 6px; border-top: 1px solid var(--line)"><span></span><span>Name</span><span>Type</span><span style="text-align: right">Size</span><span></span></div>
+<ul aria-label="Files to compress" style="list-style: none; margin: 0; padding: 0; overflow: auto; min-height: 0; flex: 0 1 auto"><sc-if value="{{hasAbove}}" hint-placeholder-val="{{ false }}"><li class="hint" style="padding: 6px 20px; border-bottom: 1px solid var(--line)">{{aboveText}}</li></sc-if><sc-for list="{{files}}" as="f" hint-placeholder-count="13">
+<li class="{{f.rowClass}}" aria-selected="{{f.selected}}">
+<span style="color: {{f.icColor}}; display: flex"><sc-if value="{{f.flagged}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l10 18H2z"></path><path d="M12 10v5M12 18v.5"></path></svg></sc-if><sc-if value="{{f.isDoc}}" hint-placeholder-val="{{ true }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4"></path><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"></path></svg></sc-if><sc-if value="{{f.isImg}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 16l5-5 4 4 3-3 6 6"></path><circle cx="15.5" cy="8.5" r="1.5"></circle></svg></sc-if></span>
+<span style="min-width: 0; display: flex; flex-direction: column"><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{f.name}}</span><span class="hint sub" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: {{f.subColor}}">{{f.sub}}</span></span>
+<span class="hint">{{f.type}}</span>
+<span class="hint" style="text-align: right">{{f.size}}</span>
+<span style="display: flex; justify-content: flex-end"><sc-if value="{{f.flagged}}" hint-placeholder-val="{{ false }}"><span class="tag">{{f.tag}}</span></sc-if></span>
+</li></sc-for></ul>
+<sc-if value="{{showNotAdded}}" hint-placeholder-val="{{ false }}"><div role="region" aria-label="Not added" style="margin: 12px 20px 16px; border: 1px solid var(--line); border-radius: 10px"><div style="display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--line)"><strong style="font-size: 13px">1 item not added</strong><div style="flex: 1"></div><button class="btn sm ghost">Dismiss</button></div><div style="display: grid; grid-template-columns: minmax(0, 200px) minmax(0, 1fr); column-gap: 16px; padding: 8px 14px"><span>IMG_4012.jpg</span><span class="hint">Already in the list. The same file isn&#39;t added twice.</span></div></div></sc-if>
+</sc-if>
+<sc-if value="{{isRunning}}" hint-placeholder-val="{{ false }}">
+<div style="padding: 14px 20px 12px; display: flex; flex-direction: column; gap: 10px; border-bottom: 1px solid var(--line)">
+<div role="status" aria-live="polite" style="display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap"><strong style="font-size: 15px">Compressing 6 of 13</strong><span class="hint">14.3 MB saved so far</span></div>
+<div aria-hidden="true" style="display: flex; gap: 2px; height: 6px"><sc-for list="{{segments}}" as="s" hint-placeholder-count="13"><span style="flex: 1; border-radius: 2px; background: {{s.bg}}"></span></sc-for></div>
+<p class="hint" style="margin: 0">Finished copies can be opened now. The batch total appears when every file is done.</p>
+</div>
+<ul aria-label="Files and results" style="list-style: none; margin: 0; padding: 0; overflow: auto; min-height: 0; flex: 0 1 auto"><sc-for list="{{runRows}}" as="r" hint-placeholder-count="13"><li class="rrow" style="opacity: {{r.opacity}}">
+<span style="color: {{r.color}}; display: flex"><sc-if value="{{r.isOk}}" hint-placeholder-val="{{ true }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l5 5 9-10"></path></svg></sc-if><sc-if value="{{r.isWarn}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l10 18H2z"></path><path d="M12 10v5M12 18v.5"></path></svg></sc-if><sc-if value="{{r.isSkip}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"></path></svg></sc-if><sc-if value="{{r.isFail}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M9 9l6 6M15 9l-6 6"></path></svg></sc-if><sc-if value="{{r.isRun}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9"></path></svg></sc-if><sc-if value="{{r.isWait}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M8 12h8"></path></svg></sc-if></span>
+<span style="min-width: 0; display: flex; flex-direction: column"><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{r.name}}</span><span class="hint" style="font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{r.detail}}</span></span>
+<span style="color: {{r.color}}">{{r.state}}</span>
+<span style="display: flex; gap: 4px; justify-content: flex-end"><sc-if value="{{r.hasOut}}" hint-placeholder-val="{{ false }}"><button class="btn sm ghost" style="color: var(--fg)" aria-label="Open {{r.out}}">Open</button></sc-if></span>
+</li></sc-for></ul>
+</sc-if>
+</section><section aria-label="Options" style="flex: 1 1 340px; max-width: 360px; min-height: 0; height: 100%; border-left: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column">
+<sc-if value="{{isRunning}}" hint-placeholder-val="{{ false }}"><div style="margin: 14px 20px 0; padding: 8px 10px; border-radius: 8px; background: var(--raise); display: flex; gap: 8px; align-items: center"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg><span class="hint" style="color: var(--fg)">Strength, Strip EXIF, Save to and the file list are locked until the batch finishes.</span></div></sc-if>
+<div aria-disabled="{{lockedStr}}" style="padding: 14px 20px; display: flex; flex-direction: column; gap: 12px; flex: 1; min-height: 0; overflow: auto; opacity: {{optOpacity}}">
+<fieldset class="opt"><legend class="lbl">Strength</legend><div role="radiogroup" aria-label="Strength" style="display: flex; flex-direction: column; gap: 6px"><sc-for list="{{presets}}" as="p" hint-placeholder-count="3"><button class="pcard" role="radio" aria-checked="{{p.on}}" tabindex="{{p.tab}}"><span class="dot" aria-hidden="true"></span><span style="font-weight: 500">{{p.name}}</span><span class="hint">{{p.sum}}</span></button></sc-for></div></fieldset>
+<div style="display: flex; flex-direction: column; gap: 6px"><span class="lbl" id="does">What {{preset}} does</span><dl class="does" aria-labelledby="does"><sc-for list="{{does}}" as="d" hint-placeholder-count="3"><dt>{{d.k}}</dt><dd>{{d.v}}</dd></sc-for></dl><span class="hint">Text, transparency and colour profiles always stay.</span></div>
+<div style="border-top: 1px solid var(--line); padding-top: 14px; display: flex; flex-direction: column; gap: 6px"><div style="display: flex; align-items: center; gap: 10px"><label class="lbl" for="exif" style="flex: 1">Strip EXIF</label><button id="exif" class="sw" role="switch" aria-checked="{{exifOn}}" aria-describedby="exifwhy"></button></div><span id="exifwhy" class="hint">{{exifHint}}</span></div>
+<div style="border-top: 1px solid var(--line); padding-top: 14px; display: flex; flex-direction: column; gap: 8px"><div style="display: flex; align-items: center; gap: 8px"><span class="lbl">Save to</span><sc-if value="{{isThisRun}}" hint-placeholder-val="{{ false }}"><span class="badge">This run only</span></sc-if></div>
+<div style="display: flex; align-items: center; gap: 8px; min-width: 0"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2"></path></svg><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{destName}}</span></div>
+<span class="hint">{{destHint}}</span>
+<div style="display: flex; gap: 6px; flex-wrap: wrap"><sc-if value="{{isThisRun}}" hint-placeholder-val="{{ false }}"><button class="btn sm">Change</button><button class="btn sm">Reset to default</button></sc-if><sc-if value="{{notThisRun}}" hint-placeholder-val="{{ true }}"><button class="btn ghost" style="padding: 0; height: 24px; color: var(--fg); text-decoration: underline; text-underline-offset: 3px">Change for this run</button></sc-if></div>
+<p class="hint" style="margin: 0; padding: 8px 12px; border-radius: 8px; background: var(--raise)">Example: <span style="color: var(--fg)">site-survey-scan-compressed.pdf</span>. An existing name gets -1, -2 and so on. Nothing is replaced.</p></div>
+</div>
+<footer style="padding: 14px 20px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 10px"><span id="runwhy" class="hint">{{footHint}}</span><div style="flex: 1"></div><sc-if value="{{isRunning}}" hint-placeholder-val="{{ false }}"><button class="btn">Cancel batch<span class="kbd">Esc</span></button></sc-if><sc-if value="{{notRunning}}" hint-placeholder-val="{{ true }}"><button class="{{runClass}}" aria-disabled="{{runDisabled}}" aria-describedby="runwhy">{{runLabel}}<span class="kbd">{{runKey}}</span></button></sc-if></footer></section>
 </div>
 </div>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "$preview": {"width": 1280, "height": 800}}'>
+<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "state": {"editor": "enum", "options": ["files-added", "empty", "dragging", "more-added", "one-removed", "running"], "default": "files-added"}, "preset": {"editor": "enum", "options": ["Low", "Medium", "High"], "default": "Medium"}, "stripExif": {"editor": "boolean", "default": false}, "destination": {"editor": "enum", "options": ["next-to-originals", "settings-folder", "this-run"], "default": "next-to-originals"}, "$preview": {"width": 1280, "height": 800}}'>
 class Component extends DCLogic {
 renderVals() {
 const win = (this.props.platform ?? 'macOS') === 'Windows';
 const light = (this.props.theme ?? 'dark') === 'light';
 const base = { themeClass: light ? 'tb light' : 'tb dark', findKey: win ? 'Ctrl+K' : '⌘K', settingsKey: win ? 'Ctrl+,' : '⌘,', openKey: win ? 'Ctrl+O' : '⌘O', runKey: win ? 'Ctrl+Enter' : '⌘↵', mod: win ? 'Ctrl' : '⌘', reveal: win ? 'Show in File Explorer' : 'Show in Finder', docsDir: win ? 'C:\\Users\\Asha\\Documents' : '~/Documents' };
-const extra = {};
-return Object.assign(base, extra);
+const st = this.props.state ?? 'files-added';
+const preset = this.props.preset ?? 'Medium';
+const exif = this.props.stripExif ?? false;
+const dest = this.props.destination ?? 'next-to-originals';
+const x = {};
+const p = (sub) => win ? 'C:\\Users\\Asha\\' + sub.replace(/\//g, '\\') : '~/' + sub;
+x.delKey = win ? 'Delete' : '⌫'; x.undoKey = win ? 'Ctrl+Z' : '⌘Z';
+x.isEmpty = st === 'empty' || st === 'dragging';
+x.isRunning = st === 'running'; x.notRunning = !x.isRunning;
+x.isList = !x.isEmpty && !x.isRunning;
+x.sectionLabel = x.isRunning ? 'Batch' : 'Files';
+x.dropTitle = st === 'dragging' ? 'Drop to add' : 'Drop PDFs and images here';
+x.dropBorder = st === 'dragging' ? 'solid' : 'dashed';
+x.dropBg = st === 'dragging' ? 'var(--sel)' : 'transparent';
+const HEIC = 'HEIC isn\'t compressed, so it will be skipped. Convert it to JPEG first.';
+const DOCX = 'Not a PDF or image. Compress takes PDF, JPEG, PNG and WebP.';
+const ANIM = 'Animated WebP. Only still images can be compressed.';
+const F = [
+['site-survey-scan.pdf', 'Documents/Site survey', 'PDF', '14.6 MB'],
+['permit-signed.pdf', 'Documents/Permits', 'PDF', '2.4 MB'],
+['IMG_4012.jpg', 'Pictures/Move-out', 'JPEG', '3.1 MB'],
+['IMG_4020.heic', 'Pictures/Move-out', 'HEIC', '2.2 MB', HEIC, 'Will skip'],
+['site-notes.docx', 'Documents/Site survey', 'Word', '96 KB', DOCX, 'Won\'t run'],
+['floor-plan.png', 'Documents/Site survey', 'PNG', '1.8 MB'],
+['loading-spinner.webp', 'Documents/Brand', 'WebP', '410 KB', ANIM, 'Won\'t run'],
+['hero-banner.webp', 'Documents/Brand', 'WebP', '640 KB'],
+['board-minutes-q3.pdf', 'Documents/Board', 'PDF', '640 KB'],
+['tax-return-2025.pdf', 'Documents/Taxes', 'PDF', '310 KB'],
+['IMG_4013.jpg', 'Pictures/Move-out', 'JPEG', '2.9 MB'],
+['drone-survey-full.pdf', 'Documents/Site survey', 'PDF', '86 MB'],
+['IMG_3999.png', 'Pictures/Move-out', 'PNG', '1.2 MB']
+];
+const ADDED = [['receipt-scan.pdf', 'Documents/Receipts', 'PDF', '1.1 MB'], ['IMG_4031.jpg', 'Pictures/Move-out', 'JPEG', '2.7 MB'], ['logo-mark.png', 'Documents/Brand', 'PNG', '84 KB']];
+let list = F, count = '13 files, 116.3 MB', n = 13;
+x.hasStatus = false; x.canUndo = false; x.statusText = ''; x.hasAbove = false; x.aboveText = ''; x.showNotAdded = false;
+if (st === 'one-removed') { list = F.filter((r) => r[0] !== 'floor-plan.png'); count = '12 files, 114.5 MB'; n = 12; x.hasStatus = true; x.canUndo = true; x.statusText = 'Removed floor-plan.png from the list. The file itself isn\'t touched.'; }
+if (st === 'more-added') { list = F.concat(ADDED).slice(7); count = '16 files, 120.2 MB'; n = 16; x.hasStatus = true; x.statusText = 'Added 3 files to the end of the list. 1 wasn\'t added.'; x.hasAbove = true; x.aboveText = '7 more files above'; x.showNotAdded = true; }
+x.countLabel = count;
+x.countHint = 'PDFs and images can be mixed';
+const isNew = (name) => st === 'more-added' && ADDED.some((a) => a[0] === name);
+x.files = list.map((r) => {
+const flagged = !!r[4];
+const img = ['JPEG', 'PNG', 'WebP', 'HEIC'].includes(r[2]);
+return { name: r[0], type: r[2], size: r[3], flagged: flagged, tag: r[5] || '', isDoc: !flagged && !img, isImg: !flagged && img,
+sub: flagged ? r[4] : p(r[1]), subColor: flagged ? 'var(--fg)' : 'var(--mut)', icColor: flagged ? 'var(--warn)' : 'var(--mut)',
+selected: isNew(r[0]) ? 'true' : 'false', rowClass: isNew(r[0]) ? 'row sel' : 'row' };
+});
+const R = [
+{ k: 'ok', name: 'site-survey-scan.pdf', detail: '14.6 MB → 3.8 MB, 74% smaller' },
+{ k: 'warn', name: 'permit-signed.pdf', detail: '2.4 MB → 1.1 MB. Digital signature removed' },
+{ k: 'ok', name: 'IMG_4012.jpg', detail: '3.1 MB → 0.9 MB, 71% smaller' },
+{ k: 'skip', name: 'IMG_4020.heic', detail: 'HEIC isn\'t compressed. Convert it first' },
+{ k: 'fail', name: 'site-notes.docx', detail: 'Not a PDF or image' },
+{ k: 'run', name: 'floor-plan.png', detail: '1.8 MB. Lossless at ' + preset }
+].concat(F.slice(6).map((r) => ({ k: 'wait', name: r[0], detail: r[3] })));
+const col = { ok: 'var(--fg)', warn: 'var(--warn)', skip: 'var(--mut)', fail: 'var(--bad)', run: 'var(--fg)', wait: 'var(--mut)' };
+const word = { ok: 'Compressed', warn: 'Compressed', skip: 'Skipped', fail: 'Failed', run: 'Compressing', wait: 'Waiting' };
+x.runRows = R.map((r) => ({ name: r.name, detail: r.detail, state: word[r.k], color: col[r.k], opacity: r.k === 'wait' ? '.6' : '1',
+isOk: r.k === 'ok', isWarn: r.k === 'warn', isSkip: r.k === 'skip', isFail: r.k === 'fail', isRun: r.k === 'run', isWait: r.k === 'wait',
+hasOut: r.k === 'ok' || r.k === 'warn', out: r.name.replace(/(\.[a-z]+)$/, '-compressed$1') }));
+x.segments = R.map((r) => ({ bg: r.k === 'ok' ? 'var(--seg-ok)' : r.k === 'warn' ? 'var(--warn)' : r.k === 'skip' ? 'var(--mut)' : r.k === 'fail' ? 'var(--bad)' : 'var(--seg-wait)' }));
+const P = {
+Low: { sum: 'Least saving, detail stays', does: [['PDF', 'Repacked without loss. Images untouched.'], ['JPEG', 'Re-saved at high quality.'], ['PNG', 'Lossless. Pixels unchanged.'], ['WebP', 'Lossless stays lossless. Lossy at high quality.']] },
+Medium: { sum: 'Good for sharing and email', does: [['PDF', 'Images inside recompressed and scaled down.'], ['JPEG', 'Re-saved at medium quality.'], ['PNG', 'Lossless. Pixels unchanged.'], ['WebP', 'Lossless stays lossless. Lossy at medium quality.']] },
+High: { sum: 'Smallest, photos look softer', does: [['PDF', 'Images at lower quality and resolution.'], ['JPEG', 'Re-saved at low quality.'], ['PNG', 'Cut to 256 colours, dithered.'], ['WebP', 'All become lossy, at low quality.']] }
+};
+x.preset = preset;
+x.presets = ['Low', 'Medium', 'High'].map((k) => ({ name: k, sum: P[k].sum, on: k === preset ? 'true' : 'false', tab: k === preset ? '0' : '-1' }));
+x.does = P[preset].does.map((d) => ({ k: d[0], v: d[1] }));
+x.exifOn = exif ? 'true' : 'false';
+x.exifHint = exif ? 'On: removes camera, date and GPS details from JPEG, PNG and WebP. Photos stay upright. PDFs aren\'t changed.' : 'Off: camera, date and GPS details stay in the copies.';
+x.isThisRun = dest === 'this-run'; x.notThisRun = !x.isThisRun;
+x.destName = dest === 'this-run' ? p('Desktop/For email') : dest === 'settings-folder' ? p('Documents/Compressed') : 'Next to each original';
+x.destHint = dest === 'this-run' ? 'After this run, Save to goes back to Next to each original.' : dest === 'settings-folder' ? 'Your default, from Settings.' : 'Your default, from Settings.';
+x.lockedStr = x.isRunning ? 'true' : 'false';
+x.optOpacity = x.isRunning ? '.5' : '1';
+x.runLabel = x.isEmpty ? 'Compress' : `Compress ${n} files`;
+x.runClass = x.isEmpty ? 'btn pri off' : 'btn pri';
+x.runDisabled = x.isEmpty ? 'true' : 'false';
+x.footHint = x.isEmpty ? 'Add files to run' : x.isRunning ? '5 of 13 done' : '3 won\'t be compressed';
+return Object.assign(base, x);
 }
 }
 </script>
