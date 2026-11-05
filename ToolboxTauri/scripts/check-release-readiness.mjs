@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
+import { inspectPackRelease, inspectUninstallers, tauriNsisTemplate } from "./pack-release.mjs";
 import { inspectQpdf, readPin } from "./qpdf-pin.mjs";
 
 const projectFile = (path) => new URL(`../${path}`, import.meta.url);
@@ -25,10 +26,23 @@ const workflow = readFileSync(projectFile("../.github/workflows/tauri-release.ym
 const notesHeader = readFileSync(projectFile("../.github/release-notes-header.md"), "utf8");
 if (!workflow.includes("node ToolboxTauri/scripts/release-notes.mjs") || !workflow.includes("--notes-file release-notes.md")) throw new Error("Releases must use the first-launch header and the PR release-notes changelog");
 if (!/Privacy & Security[\s\S]*Open Anyway/.test(notesHeader)) throw new Error("Release notes header must explain the macOS Open Anyway step");
+if (!/check-release-readiness\.mjs --packs pack-release/.test(workflow) || !/check-tool-matrix\.mjs --catalog pack-release\/pack-catalog\.json/.test(workflow)) {
+  throw new Error("Releases must build their packs, gate them with --packs and check the catalog against the tool matrix");
+}
+if (!/gh release create[^\n]*pack-release\/\*\.toolboxpack/.test(workflow)) throw new Error("Releases must publish the pack files they build");
+const uninstallers = inspectUninstallers({
+  config,
+  packsSource: readFileSync(projectFile("src-tauri/src/packs.rs"), "utf8"),
+  nsisTemplate: tauriNsisTemplate(),
+});
+const keepsAppData = uninstallers.filter(({ cause }) => cause);
+if (keepsAppData.length) throw new Error(`Uninstaller check failed: ${keepsAppData.map(({ cause, message }) => `${cause}: ${message}`).join("; ")}`);
 const pin = readPin();
 console.log(`Release configuration passed: ${requiredIcons.length} icons, all Tauri targets, updater and ${canonicalExtensions.length} file associations configured, qpdf minimum ${pin.minimumVersion}`);
 
-const { values } = parseArgs({ options: { qpdf: { type: "string" }, target: { type: "string" } } });
+for (const { message } of uninstallers) console.log(`Uninstall: ${message}`);
+
+const { values } = parseArgs({ options: { qpdf: { type: "string" }, target: { type: "string" }, packs: { type: "string" }, "public-key": { type: "string" } } });
 if (values.qpdf !== undefined || values.target !== undefined) {
   const result = inspectQpdf({ path: values.qpdf, target: values.target, pin });
   if (result.cause) {
@@ -38,3 +52,17 @@ if (values.qpdf !== undefined || values.target !== undefined) {
   console.log(`qpdf release check passed: ${result.message}`);
 }
 
+
+// `--packs <dir>`: the release's pack files and catalog, as scripts/pack-release.mjs builds them.
+// They must verify against the updater key the app trusts; `--public-key <file>` substitutes
+// another key in the updater configuration's format, for checking a locally signed build.
+if (values.packs !== undefined) {
+  const publicKey = values["public-key"] ? readFileSync(values["public-key"], "utf8").trim() : config.plugins.updater.pubkey;
+  const failures = inspectPackRelease({ dir: values.packs, publicKey });
+  if (failures.length) {
+    for (const { cause, message } of failures) console.error(`Pack release check failed (${cause}): ${message}`);
+    process.exit(1);
+  }
+  const catalog = JSON.parse(readFileSync(`${values.packs}/pack-catalog.json`, "utf8"));
+  console.log(`Pack release check passed: ${catalog.packs.length} packs, ${catalog.packs.reduce((total, { payloads }) => total + payloads.length, 0)} payloads signed with the updater key`);
+}

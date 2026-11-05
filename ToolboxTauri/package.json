@@ -29,7 +29,8 @@
     "design:screens": "node scripts/render-design-screens.mjs",
     "check:matrix": "npm run test:capabilities && npm run test:outcomes && npm run test:retired-ids && npm run test:pack-catalog && node scripts/check-tool-matrix.mjs && node scripts/check-workspace-consolidation.mjs",
     "test:qpdf-release": "node --test tests/qpdf-release-readiness.test.mjs",
-    "check:release": "npm run check:shadcn-components && npm run check:notices && npm run check:matrix && npm run test:qpdf-release && node scripts/check-release-readiness.mjs",
+    "test:pack-release": "node --test tests/pack-release.test.mjs",
+    "check:release": "npm run check:shadcn-components && npm run check:notices && npm run check:matrix && npm run test:qpdf-release && npm run test:pack-release && node scripts/check-release-readiness.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
   },

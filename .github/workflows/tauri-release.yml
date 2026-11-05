@@ -53,8 +53,46 @@ jobs:
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
           echo "value=$version" >> "$GITHUB_OUTPUT"
 
-  build:
+  packs:
+    # Builds every pack the release publishes, signs each payload archive with the updater key and
+    # gates the release on them: readiness (payloads, signatures, licenses, budgets, native
+    # architectures and code signing) and the tool matrix (every pack a tool uses, for every
+    # Supported target). The catalog it writes is compiled into each build below.
     needs: version
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.version.outputs.value }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.version.outputs.source_sha }}
+      - name: Require updater key
+        run: test -n "$TAURI_SIGNING_PRIVATE_KEY"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ToolboxTauri/package-lock.json
+      - run: npm ci
+        working-directory: ToolboxTauri
+      - name: Build and sign packs
+        run: node scripts/pack-release.mjs --out pack-release --version "$VERSION"
+        working-directory: ToolboxTauri
+      - name: Gate the release on its packs
+        working-directory: ToolboxTauri
+        run: |
+          node scripts/check-release-readiness.mjs --packs pack-release
+          node scripts/check-tool-matrix.mjs --catalog pack-release/pack-catalog.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: toolbox-packs
+          path: ToolboxTauri/pack-release/*
+          if-no-files-found: error
+
+  build:
+    needs: [version, packs]
     strategy:
       fail-fast: false
       matrix:
@@ -91,6 +129,11 @@ jobs:
       - name: Require updater key
         shell: bash
         run: test -n "$TAURI_SIGNING_PRIVATE_KEY"
+      - uses: actions/download-artifact@v7
+        with: {name: toolbox-packs, path: ToolboxTauri/pack-release}
+      - name: Compile in the release pack catalog
+        shell: bash
+        run: cp ToolboxTauri/pack-release/pack-catalog.json ToolboxTauri/shared/pack-catalog.json
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -199,7 +242,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: [version, build]
+    needs: [version, packs, build]
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.version.outputs.value }}
@@ -214,6 +257,8 @@ jobs:
         with: {name: toolbox-windows-x86_64, path: release-assets}
       - uses: actions/download-artifact@v7
         with: {name: toolbox-windows-arm64, path: release-assets}
+      - uses: actions/download-artifact@v7
+        with: {name: toolbox-packs, path: pack-release}
       - name: Create signed update manifest
         run: |
           set -euo pipefail
@@ -225,7 +270,7 @@ jobs:
             > tauri-latest.json
           previous="$(git tag --list 'tauri-v[0-9]*' --sort=-v:refname | grep -vx "tauri-v$VERSION" | sed -n '1p')"
           node ToolboxTauri/scripts/release-notes.mjs "$VERSION" "$previous" "$SOURCE_SHA" > release-notes.md
-          gh release create "tauri-v$VERSION" release-assets/* tauri-latest.json \
+          gh release create "tauri-v$VERSION" release-assets/* tauri-latest.json pack-release/*.toolboxpack \
             --target "$SOURCE_SHA" \
             --title "Toolbox Tauri $VERSION" \
             --notes-file release-notes.md
