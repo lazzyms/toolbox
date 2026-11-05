@@ -25,7 +25,7 @@ const modeHints: Record<ExtractMode, string> = {
 
 const exampleHints: Record<ExtractMode, string> = {
   text: "UTF-8 text, a page break between pages. An existing name gets -1, -2 and so on.",
-  images: "JPEG images are copied as they are. An existing folder is never reused: the new one gets -1, -2 and so on.",
+  images: "JPEG and JPEG 2000 are copied as they are; others become lossless PNG. An existing folder is never reused: the new one gets -1, -2 and so on.",
   both: "An existing file or folder is never replaced: the new one gets -1, -2 and so on.",
 };
 

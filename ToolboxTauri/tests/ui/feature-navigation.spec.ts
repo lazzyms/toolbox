@@ -1495,7 +1495,7 @@ test.describe("Extract from PDF", () => {
         await openFromHome(page, "Extract from PDF");
         await page.evaluate((paths) => { (window as TestWindow).__toolboxDialogResults = [paths]; }, paths);
         await page.getByRole("button", { name: "Choose files to process" }).click();
-        await expect(page.getByText("site-survey-scan.pdf", { exact: true }).first()).toBeVisible();
+        await expect(page.getByText(paths[paths.length - 1].split("/").pop()!, { exact: true }).first()).toBeVisible();
     };
     const extractModes = (page: Page) => page.getByRole("radiogroup", { name: "Extract", exact: true });
     const textOptions = (page: Page) => page.getByRole("checkbox", { name: "Preserve layout" });
@@ -1648,6 +1648,52 @@ test.describe("Extract from PDF", () => {
 
         await rows.nth(1).getByRole("button", { name: "Open Lock & Unlock", exact: true }).click();
         await expect(page.getByRole("heading", { name: "Lock & Unlock", exact: true })).toBeVisible();
+    });
+
+    test("images that weren't saved are listed with their page, colour warnings stay on saved rows, and a PDF with no decodable image fails", async ({ page }) => {
+        const unsupported = "Page 7, image 2 — JBIG2 isn't supported in this version. Not saved.";
+        const damaged = "Page 19, image 1 — The image data is damaged. Not saved.";
+        const tooLarge = "Page 41, image 1 — Would be 61,000 × 48,000 px when decoded, over the size limit. Not saved.";
+        const inverted = "Page 22 — 1 inverted JPEG, copied as it is. Some viewers show it in negative.";
+        const cmyk = "Pages 2, 5, 9 — 6 JPEGs use CMYK colour and were copied as they are. Some viewers show them with the wrong colours.";
+        const noneDecoded = "None of the 12 images could be decoded, so nothing was saved.";
+        const faxImage = "Page 3, image 1 — CCITT fax isn't supported in this version. Not saved.";
+        await openWithPdfs(page, ["/local/scan-archive-2019.pdf", "/local/brochure-spring.pdf", "/local/fax-bundle.pdf"]);
+        await extractModes(page).getByRole("radio", { name: "Images", exact: true }).click();
+        await page.evaluate((outcomes) => { (window as TestWindow).__toolboxProcessingResults = outcomes; }, [
+            succeeded("/local/scan-archive-2019.pdf", ["/local/scan-archive-2019-images"], {
+                detail: "Saved 44 images. 3 images weren't saved.",
+                warnings: [
+                    { code: "imageUnsupported", message: unsupported, details: { page: 7, image: 2, feature: "JBIG2" } },
+                    { code: "imageDamaged", message: damaged, details: { page: 19, image: 1 } },
+                    { code: "imageTooLarge", message: tooLarge, details: { page: 41, image: 1, width: 61000, height: 48000 } },
+                    { code: "jpegColourKept", message: inverted, details: { colour: "inverted", pages: [22], images: 1 } },
+                ],
+            }),
+            succeeded("/local/brochure-spring.pdf", ["/local/brochure-spring-images"], {
+                detail: "Saved 38 images.",
+                warnings: [{ code: "jpegColourKept", message: cmyk, details: { colour: "cmyk", pages: [2, 5, 9], images: 6 } }],
+            }),
+            failed("/local/fax-bundle.pdf", "processing", noneDecoded, {
+                warnings: [{ code: "imageUnsupported", message: faxImage, details: { page: 3, image: 1, feature: "CCITT fax" } }],
+            }),
+        ]);
+        await page.getByRole("button", { name: "Extract from 3 PDFs", exact: true }).click();
+
+        const rows = page.locator(".result-row");
+        await expect(rows).toHaveCount(3);
+        const details = (row: number) => rows.nth(row).locator(".result-row-detail");
+        await expect(rows.nth(0)).toHaveAttribute("data-state", "succeeded");
+        await expect(rows.nth(0)).toHaveAttribute("data-tone", "warn");
+        await expect(details(0)).toHaveText([unsupported, damaged, tooLarge, inverted, "Saved 44 images. 3 images weren't saved."]);
+        await expect(rows.nth(0).getByRole("button", { name: "Show in Finder: scan-archive-2019-images", exact: true })).toBeVisible();
+        await expect(rows.nth(1)).toHaveAttribute("data-state", "succeeded");
+        await expect(rows.nth(1)).toHaveAttribute("data-tone", "warn");
+        await expect(details(1)).toHaveText([cmyk, "Saved 38 images."]);
+        await expect(rows.nth(2)).toHaveAttribute("data-state", "failed");
+        await expect(rows.nth(2)).toHaveAttribute("data-tone", "fail");
+        await expect(details(2)).toHaveText([noneDecoded, faxImage]);
+        await expect(rows.nth(2).getByRole("button", { name: "Open Lock & Unlock", exact: true })).toHaveCount(0);
     });
 });
 
@@ -2476,7 +2522,7 @@ test.describe("per-run destination", () => {
         await expect(example).toHaveText("document-text.txt");
         await page.getByRole("radio", { name: "Images", exact: true }).click();
         await expect(example).toHaveText("document-images");
-        await expect(page.getByText("JPEG images are copied as they are. An existing folder is never reused: the new one gets -1, -2 and so on.", { exact: true })).toBeVisible();
+        await expect(page.getByText("JPEG and JPEG 2000 are copied as they are; others become lossless PNG. An existing folder is never reused: the new one gets -1, -2 and so on.", { exact: true })).toBeVisible();
         await page.getByRole("radio", { name: "Both", exact: true }).click();
         await expect(page.getByText("An existing file or folder is never replaced: the new one gets -1, -2 and so on.", { exact: true })).toBeVisible();
 

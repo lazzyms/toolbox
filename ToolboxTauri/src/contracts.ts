@@ -145,7 +145,14 @@ export type OutcomeWarning =
   | { code: "signatureRemoved"; message: string }
   | { code: "fontSubstituted"; message: string; details: { requestedFamily: string; actualFamily: string } }
   | { code: "renamedToAvoidReplacing"; message: string; details: { chosenName: string; finalName: string } }
-  | { code: "precisionReduced"; message: string };
+  | { code: "precisionReduced"; message: string }
+  | { code: "imageUnsupported"; message: string; details: { page: number; image: number; feature: string } }
+  | { code: "imageDamaged"; message: string; details: { page: number; image: number } }
+  | { code: "imageTooLarge"; message: string; details: { page: number; image: number; width: number; height: number } }
+  | { code: "jpegColourKept"; message: string; details: { colour: JpegColour; pages: number[]; images: number } };
+
+export const jpegColours = ["cmyk", "inverted"] as const;
+export type JpegColour = (typeof jpegColours)[number];
 
 export type WarningCode = OutcomeWarning["code"];
 
