@@ -1,0 +1,33 @@
+{
+  "accepted": [
+    { "input": " 1-3, 5,8 - ,10 - 12 ", "spans": [[1, 3], [5, 5], [8, null], [10, 12]] },
+    { "input": "7", "spans": [[7, 7]] },
+    { "input": "2-4, 9-", "spans": [[2, 4], [9, null]] },
+    { "input": "3-3", "spans": [[3, 3]] },
+    { "input": "1-3, 2", "spans": [[1, 3], [2, 2]] },
+    { "input": "007", "spans": [[7, 7]] }
+  ],
+  "rejected": [
+    { "input": "", "message": "Enter at least one page or range, for example 1-3, 5, 8-." },
+    { "input": " , ", "message": "Enter at least one page or range, for example 1-3, 5, 8-." },
+    { "input": "1-3,,5", "message": "Entry 2 of the page range is empty. Remove the extra comma." },
+    { "input": "1-3,", "message": "Entry 2 of the page range is empty. Remove the extra comma." },
+    { "input": "5-3", "message": "\"5-3\" runs backwards. Put the lower page first, for example 3-5." },
+    { "input": "0", "message": "\"0\" uses page 0. Page numbers start at 1." },
+    { "input": "2, 0-4", "message": "\"0-4\" uses page 0. Page numbers start at 1." },
+    { "input": "1-0", "message": "\"1-0\" uses page 0. Page numbers start at 1." },
+    { "input": "1, two", "message": "\"two\" isn't a page or range. Use pages and ranges like 1-3, 5, 8-." },
+    { "input": "-4", "message": "\"-4\" isn't a page or range. Use pages and ranges like 1-3, 5, 8-." },
+    { "input": "1-2-3", "message": "\"1-2-3\" isn't a page or range. Use pages and ranges like 1-3, 5, 8-." },
+    { "input": "+2", "message": "\"+2\" isn't a page or range. Use pages and ranges like 1-3, 5, 8-." },
+    { "input": "1.5", "message": "\"1.5\" isn't a page or range. Use pages and ranges like 1-3, 5, 8-." },
+    { "input": "1 2", "message": "\"1 2\" isn't a page or range. Use pages and ranges like 1-3, 5, 8-." },
+    { "input": "99999999999999999999999", "message": "\"99999999999999999999999\" isn't a page or range. Use pages and ranges like 1-3, 5, 8-." }
+  ],
+  "within": [
+    { "input": "1-3, 5, 8-", "pageCount": 10, "pages": [[1, 3], [5, 5], [8, 10]] },
+    { "input": "1-3, 5, 8-", "pageCount": 7, "message": "The PDF has 7 pages, so pages 8- can't be used." },
+    { "input": "2-4", "pageCount": 3, "message": "The PDF has 3 pages, so pages 2-4 can't be used." },
+    { "input": "2", "pageCount": 1, "message": "The PDF has 1 page, so page 2 can't be used." }
+  ]
+}
