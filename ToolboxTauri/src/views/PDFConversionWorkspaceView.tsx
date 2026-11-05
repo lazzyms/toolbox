@@ -15,6 +15,7 @@ import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { ShortcutHint } from "../components/ShortcutHint";
 import { shortcutTarget } from "../shortcuts";
+import { BUILT_IN_OCR_LANGUAGE, OcrLanguagePicker } from "./OcrLanguagePicker";
 
 const nonInspectingConversionIds = new Set(["images-to-pdf", "pdf-merge", "pdf-split", "pdf-repair", "pdf-compare"]);
 const outputPreviewLimitations: Partial<Record<AtomicToolId, string>> = {
@@ -72,6 +73,7 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
   const [document, setDocument] = useState<PdfDocument | null>(null);
   const [selectedPages, setSelectedPages] = useState<number[]>([]);
   const [inspectError, setInspectError] = useState("");
+  const [ocrLanguage, setOcrLanguage] = useState(BUILT_IN_OCR_LANGUAGE.code);
 
   return (
     <ToolScaffold
@@ -167,7 +169,7 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
         }
         if (activeUtility.id === "pdf-ocr") {
           return invoke<ToolResult>("ocr_pdf", { runId,
-            request: { paths, pages: pages ?? null, outputLocation },
+            request: { paths, pages: pages ?? null, outputLocation, language: ocrLanguage },
           });
         }
         return invoke<ToolResult>("extract_pdf_images", { runId,
@@ -203,6 +205,8 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
           setSelectedPages={setSelectedPages}
           inspectError={inspectError}
           setInspectError={setInspectError}
+          ocrLanguage={ocrLanguage}
+          setOcrLanguage={setOcrLanguage}
         />
       )}
     </ToolScaffold>
@@ -236,6 +240,8 @@ type ConversionControlsProps = {
   setSelectedPages: (value: number[]) => void;
   inspectError: string;
   setInspectError: (value: string) => void;
+  ocrLanguage: string;
+  setOcrLanguage: (value: string) => void;
 };
 
 const ConversionControls = ({
@@ -265,6 +271,8 @@ const ConversionControls = ({
   setSelectedPages,
   inspectError,
   setInspectError,
+  ocrLanguage,
+  setOcrLanguage,
 }: ConversionControlsProps) => {
   const inputPath = files[0];
   const [inspection, setInspection] = useState<PdfInspectionState>({ kind: "idle" });
@@ -437,6 +445,7 @@ const ConversionControls = ({
           Selectable text is extracted in page order. Scanned PDFs are reported as needing OCR.
         </p>
       )}
+      {activeUtility.id === "pdf-ocr" && <OcrLanguagePicker value={ocrLanguage} onChange={setOcrLanguage} />}
       {activeUtility.id === "pdf-image-extract" && (
         <p className="workspace-note">
           Embedded JPEG images are saved at their original resolution when the PDF contains them.

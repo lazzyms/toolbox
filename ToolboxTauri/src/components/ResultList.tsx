@@ -1,14 +1,50 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Check, CircleMinus, CircleX, Clock, KeyRound, LoaderCircle, RotateCcw, TriangleAlert } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import type { JobOutcome, OutcomePointer, Progress } from "../contracts";
+import type { JobOutcome, OutcomePointer, PackNeed, Progress } from "../contracts";
+import { formatBytes, PACK_CHANGED_EVENT, PROGRESS_EVENT, type PackProgress } from "../views/PacksSection";
 import { liveFiles, type LiveFile, type LiveRun } from "./liveRun";
-import { fileName, resultSummary, resultTally, rowView, type RowTone } from "./resultRow";
+import { fileName, neededPack, resultSummary, resultTally, rowView, type RowTone } from "./resultRow";
 import { PasswordRetryForm } from "./PasswordFields";
 
-type RowAction = "open" | "reveal" | "retry";
+type RowAction = "open" | "reveal" | "retry" | "install";
+
+type PackPointer = Extract<OutcomePointer, { kind: "pack" }>;
+
+/** A pack install started from a result row, keyed by pack id. */
+type PackJob = { runId: string; reason: PackNeed; name: string; receivedBytes: number; totalBytes: number };
+
+const packJobVerbs: Record<PackNeed, string> = { notInstalled: "Installing", damaged: "Repairing", incompatible: "Updating" };
+
+/** "7 of 12 MB", or "900 KB of 12 MB" when the units differ. */
+const bytesOf = (received: number, total: number) => {
+    const [done, all] = [formatBytes(received), formatBytes(total)];
+    const unit = all.split(" ")[1];
+    return `${done.endsWith(` ${unit}`) ? done.slice(0, -unit.length - 1) : done} of ${all}`;
+};
+
+const filesCount = (count: number) => `${count} ${count === 1 ? "file" : "files"}`;
+
+/** The summary lines for packs being installed from the rows, or installed since the run. */
+const packHints = (results: JobOutcome[], jobs: Record<string, PackJob>, installed: ReadonlySet<string>) => {
+    const needs = new Map<string, { name: string; count: number }>();
+    for (const result of results) {
+        const pack = neededPack(result);
+        if (!pack) continue;
+        const entry = needs.get(pack.packId) ?? { name: pack.name, count: 0 };
+        needs.set(pack.packId, { ...entry, count: entry.count + 1 });
+    }
+    return [...needs].flatMap(([packId, { name, count }]) => {
+        if (installed.has(packId)) return [`${name} pack installed. ${filesCount(count)} ${count === 1 ? "is" : "are"} ready to run again.`];
+        const job = jobs[packId];
+        if (job) return [`${packJobVerbs[job.reason]} the ${name} pack. The ${count === 1 ? `${name} file stays` : `${count} ${name} files stay`} in the list.`];
+        return [];
+    });
+};
 
 type RowActionState = {
     pending: RowAction | null;
@@ -41,13 +77,11 @@ const revealButtonLabel = () => {
     return "Show in file manager";
 };
 
-const followPointer = (pointer: OutcomePointer) => {
+const followPointer = (pointer: Exclude<OutcomePointer, PackPointer>) => {
     if (pointer.kind === "tool") {
         window.dispatchEvent(new CustomEvent("toolbox:open", { detail: pointer.toolId }));
-    } else if (pointer.kind === "outputFolder") {
-        window.dispatchEvent(new CustomEvent("toolbox:open-settings", { detail: "output-location" }));
     } else {
-        window.dispatchEvent(new CustomEvent("toolbox:install-pack", { detail: pointer.packId }));
+        window.dispatchEvent(new CustomEvent("toolbox:open-settings", { detail: "output-location" }));
     }
 };
 
@@ -67,13 +101,37 @@ interface ResultListProps {
 export const ResultList = ({ results, progress, loading, resultVerb, runningVerb, runningDetail, live, namedByOutput = false, onRetry, onRetryWithPassword }: ResultListProps) => {
     const [actionStates, setActionStates] = useState<Record<number, RowActionState>>({});
     const [passwordRow, setPasswordRow] = useState<number | null>(null);
+    const [packJobs, setPackJobs] = useState<Record<string, PackJob>>({});
+    const [installedPacks, setInstalledPacks] = useState<ReadonlySet<string>>(new Set());
     const resultSetGeneration = useRef(0);
+
+    useEffect(() => {
+        let live = true;
+        const stops: UnlistenFn[] = [];
+        const keep = (unlisten: UnlistenFn) => { if (live) stops.push(unlisten); else unlisten(); };
+        // Rows keep their files; a pack installed anywhere marks its rows ready to run again.
+        listen<{ packId: string }>(PACK_CHANGED_EVENT, ({ payload }) => {
+            setInstalledPacks((current) => new Set(current).add(payload.packId));
+        }).then(keep).catch(() => undefined);
+        listen<PackProgress>(PROGRESS_EVENT, ({ payload }) => {
+            setPackJobs((current) => {
+                const job = current[payload.packId];
+                if (job?.runId !== payload.runId) return current;
+                return { ...current, [payload.packId]: { ...job, receivedBytes: payload.receivedBytes, totalBytes: payload.totalBytes } };
+            });
+        }).then(keep).catch(() => undefined);
+        return () => {
+            live = false;
+            stops.forEach((stop) => stop());
+        };
+    }, []);
 
     useEffect(() => {
         const generation = resultSetGeneration.current + 1;
         resultSetGeneration.current = generation;
         setActionStates({});
         setPasswordRow(null);
+        setInstalledPacks(new Set());
         return () => {
             if (resultSetGeneration.current === generation) resultSetGeneration.current += 1;
         };
@@ -94,10 +152,30 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
         setActionStates((states) => ({ ...states, [row]: { pending: null, error } }));
     };
 
+    const installPack = (row: number, pack: PackPointer) => runAction(row, "install", async () => {
+        const runId = crypto.randomUUID();
+        setPackJobs((current) => ({ ...current, [pack.packId]: { runId, reason: pack.reason, name: pack.name, receivedBytes: 0, totalBytes: 0 } }));
+        try {
+            await invoke("install_pack", { packId: pack.packId, runId });
+        } catch (reason) {
+            // A pack error carries its wording; a cancelled install leaves the row as it was.
+            const failure = reason as { kind?: string; message?: string } | null;
+            if (failure?.kind === "cancelled") return;
+            throw new Error(failure?.message || String(reason));
+        } finally {
+            setPackJobs((current) => {
+                const { [pack.packId]: finished, ...rest } = current;
+                return finished?.runId === runId ? rest : current;
+            });
+        }
+    });
+
     const reveal = revealButtonLabel();
 
     const finishedRow = (result: JobOutcome, index: number) => {
-        const view = rowView(result, resultVerb, namedByOutput);
+        const view = rowView(result, resultVerb, namedByOutput, installedPacks);
+        const pack = view.pointer?.pointer.kind === "pack" ? view.pointer.pointer : null;
+        const packJob = pack ? packJobs[pack.packId] : undefined;
         const state = actionStates[index] ?? idleActionState;
         const busy = state.pending !== null;
         const name = view.name;
@@ -138,10 +216,32 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
                             {state.pending === "reveal" ? "Showing..." : reveal}
                         </Button>
                     )}
-                    {view.pointer && (
-                        <Button variant="outline" size="xs" onClick={() => view.pointer && followPointer(view.pointer.pointer)}>
-                            {view.pointer.label}
-                        </Button>
+                    {packJob && (
+                        <>
+                            <span
+                                role="progressbar"
+                                aria-label={`${packJobVerbs[packJob.reason]} ${packJob.name} pack`}
+                                aria-valuenow={packJob.totalBytes > 0 ? Math.floor(Math.min(packJob.receivedBytes / packJob.totalBytes, 1) * 100) : 0}
+                                aria-valuemin={0}
+                                aria-valuemax={100}
+                                className="pack-progress"
+                            >
+                                <span style={{ width: `${packJob.totalBytes > 0 ? Math.min(packJob.receivedBytes / packJob.totalBytes, 1) * 100 : 0}%` }} />
+                            </span>
+                            {packJob.totalBytes > 0 && <span className="result-row-detail">{bytesOf(packJob.receivedBytes, packJob.totalBytes)}</span>}
+                        </>
+                    )}
+                    {view.packInstalled && <Badge variant="outline">Pack installed</Badge>}
+                    {view.pointer && !packJob && (
+                        pack ? (
+                            <Button variant="outline" size="xs" aria-label={`${view.pointer.label} for ${name}`} disabled={busy} onClick={() => void installPack(index, pack)}>
+                                {view.pointer.label}
+                            </Button>
+                        ) : (
+                            <Button variant="outline" size="xs" onClick={() => view.pointer && view.pointer.pointer.kind !== "pack" && followPointer(view.pointer.pointer)}>
+                                {view.pointer.label}
+                            </Button>
+                        )
                     )}
                     {view.canRetry && onRetry && !live && (
                         <Button
@@ -234,11 +334,12 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
     if (results.length === 0) return null;
 
     const summary = resultSummary(results, resultVerb);
+    const hints = [...packHints(results, packJobs, installedPacks), ...summary.hints];
     return (
         <div className="result-list">
             <div className="result-summary" role="status" aria-live="polite">
                 <strong>{summary.headline}</strong>
-                {summary.hints.map((hint) => <span key={hint} className="result-summary-hint">{hint}</span>)}
+                {hints.map((hint) => <span key={hint} className="result-summary-hint">{hint}</span>)}
             </div>
             <Card className="result-card gap-0 py-0">
                 <CardContent className="p-0">
