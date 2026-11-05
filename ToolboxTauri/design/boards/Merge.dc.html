@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Merge PDFs</title>
+<title>Merge PDF</title>
 <script src="./support.js"></script>
 </head>
 <body>
@@ -11,130 +11,284 @@
 <style>
 body{margin:0}
 .tb{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;font-size:13px;line-height:1.45;color:var(--fg);background:var(--bg);-webkit-font-smoothing:antialiased}
-.tb.dark{--bg:#0a0a0a;--side:#111111;--panel:#0f0f0f;--raise:#1c1c1c;--fg:#fafafa;--mut:#a3a3a3;--faint:#8a8a8a;--line:rgba(255,255,255,.08);--line2:rgba(255,255,255,.16);--sel:#262626;--pri:#ebebeb;--prifg:#171717;--bad:#ff6b6b;--warn:#f2b552;--ring:#a3a3a3;--scrim:rgba(0,0,0,.6);--well:#1b1b1b}
-.tb.light{--bg:#ffffff;--side:#f7f7f7;--panel:#fcfcfc;--raise:#f2f2f2;--fg:#0a0a0a;--mut:#525252;--faint:#666666;--line:#e8e8e8;--line2:#d4d4d4;--sel:#ebebeb;--pri:#171717;--prifg:#fafafa;--bad:#c10007;--warn:#9a5800;--ring:#525252;--scrim:rgba(0,0,0,.28);--well:#e6e6e6}
-.tb button,.tb input,.tb select,.tb textarea{font:inherit;color:inherit}
+.tb.dark{--bg:#0a0a0a;--side:#111111;--panel:#0f0f0f;--raise:#1c1c1c;--fg:#fafafa;--mut:#a3a3a3;--faint:#8a8a8a;--line:rgba(255,255,255,.08);--line2:rgba(255,255,255,.16);--sel:#262626;--pri:#ebebeb;--prifg:#171717;--bad:#ff6b6b;--warn:#f2b552;--ring:#a3a3a3;--scrim:rgba(0,0,0,.6)}
+.tb.light{--bg:#ffffff;--side:#f7f7f7;--panel:#fcfcfc;--raise:#f2f2f2;--fg:#0a0a0a;--mut:#525252;--faint:#666666;--line:#e8e8e8;--line2:#d4d4d4;--sel:#ebebeb;--pri:#171717;--prifg:#fafafa;--bad:#c10007;--warn:#9a5800;--ring:#525252;--scrim:rgba(0,0,0,.28)}
+.tb button,.tb input,.tb select{font:inherit;color:inherit}
 .btn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:7px;border:1px solid var(--line2);background:var(--raise);color:var(--fg);font-weight:500;cursor:pointer;white-space:nowrap;box-sizing:border-box;text-decoration:none}
 .btn.pri{background:var(--pri);color:var(--prifg);border-color:transparent}
 .btn.ghost{background:transparent;border-color:transparent;color:var(--mut)}
 .btn.sm{height:26px;padding:0 9px;font-size:12px}
-.btn.icon{width:30px;padding:0;justify-content:center}
 .btn[disabled]{opacity:.45;cursor:default}
 .kbd{font-size:11px;line-height:16px;padding:0 5px;border-radius:4px;border:1px solid var(--line2);color:var(--mut);font-weight:500}
 .btn.pri .kbd{border-color:currentColor;color:inherit;opacity:.6}
-.tbtn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 9px;border-radius:7px;border:0;background:none;color:var(--mut);cursor:pointer;white-space:nowrap}
-.tbtn[aria-pressed="true"]{background:var(--sel);color:var(--fg);font-weight:500}
-.sep{width:1px;height:20px;background:var(--line2);flex:none}
+.nav{display:flex;align-items:center;gap:9px;min-height:30px;padding:0 10px;border-radius:7px;color:var(--mut);text-decoration:none;border:0;background:none;width:100%;text-align:left;cursor:pointer;box-sizing:border-box}
+.nav.on{background:var(--sel);color:var(--fg);font-weight:500}
 .field{height:30px;border-radius:7px;border:1px solid var(--line2);background:var(--bg);padding:0 10px;width:100%;box-sizing:border-box;min-width:0}
 .lbl{font-size:12px;font-weight:600}
 .hint{font-size:12px;color:var(--mut)}
-.seg{display:inline-flex;border:1px solid var(--line2);border-radius:7px;padding:2px;gap:2px}
-.seg button{height:24px;min-width:30px;padding:0 8px;border:0;border-radius:5px;background:none;color:var(--mut);cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
-.seg button[aria-checked="true"],.seg button[aria-pressed="true"]{background:var(--sel);color:var(--fg);font-weight:500}
-.thumb{display:flex;flex-direction:column;align-items:center;gap:4px;width:100%;padding:6px 0;border:0;background:none;border-radius:8px;cursor:pointer;color:var(--mut);font-size:12px}
-.thumb .mini{width:96px;height:124px;background:#ffffff;border:1px solid var(--line2);border-radius:2px;box-sizing:border-box;padding:10px 9px;display:flex;flex-direction:column;gap:4px}
-.thumb .mini i{display:block;height:3px;background:#d6d6d6;border-radius:1px}
-.thumb[aria-current="page"]{background:var(--sel);color:var(--fg);font-weight:500}
-.thumb[aria-current="page"] .mini{outline:2px solid #1d5fd1;outline-offset:1px}
-.paper{background:#ffffff;color:#1f1f1f;box-shadow:0 1px 3px rgba(0,0,0,.25);position:relative;box-sizing:border-box;font-family:"Iowan Old Style","Palatino Linotype",Georgia,serif}
-.paper h3{margin:0 0 6px;font-size:12.5px}
-.paper p{margin:0 0 7px;font-size:10px;line-height:1.5}
-.obj{position:absolute;border:1.5px solid #1d5fd1;background:rgba(29,95,209,.06);padding:4px 6px;box-sizing:border-box;cursor:move;text-align:left;color:#1f1f1f}
-.obj.idle{border:1px dashed rgba(29,95,209,.6);background:none}
-.h{position:absolute;width:7px;height:7px;background:#ffffff;border:1.5px solid #1d5fd1;box-sizing:border-box}
-.olist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
-.olist button{width:100%;text-align:left;border:0;background:none;border-radius:6px;padding:6px 8px;cursor:pointer;display:flex;gap:8px;align-items:baseline}
-.olist button[aria-current="true"]{background:var(--sel)}
-.note{display:flex;gap:10px;padding:10px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--raise)}
+.row{display:grid;grid-template-columns:20px minmax(0,1fr) 72px 60px 150px;gap:12px;align-items:center;padding:8px 20px;border-bottom:1px solid var(--line)}
+.row.sel{background:var(--sel)}
+.badge{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:999px;border:1px solid var(--line2);font-size:12px;color:var(--fg);white-space:nowrap}
 svg.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
 .tb :focus-visible{outline:2px solid var(--ring);outline-offset:2px}
 a{color:inherit}a:hover{color:var(--mut)}
-.mi{display:flex;gap:10px;align-items:flex-start;width:100%;text-align:left;padding:7px 10px;border:0;background:none;border-radius:6px;cursor:pointer;color:var(--fg);text-decoration:none;box-sizing:border-box}.mi:hover{background:var(--sel)}.mi svg{margin-top:2px}
-.pbadge{position:absolute;right:-6px;top:-6px;width:16px;height:16px;border-radius:50%;background:#1d5fd1;color:#fff;display:grid;place-items:center}
+.seg{display:inline-flex;padding:2px;border-radius:8px;background:var(--raise);border:1px solid var(--line)}.seg button{height:26px;padding:0 10px;border:0;border-radius:6px;background:none;cursor:pointer;color:var(--mut)}.seg button[aria-checked=true]{background:var(--bg);color:var(--fg);font-weight:500;box-shadow:0 1px 2px rgba(0,0,0,.2)}
+.note{display:flex;gap:8px;align-items:flex-start;padding:10px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--raise)}
+.opt{display:flex;flex-direction:column;gap:6px}
+fieldset.opt{border:0;margin:0;padding:0}fieldset.opt legend{padding:0;margin-bottom:6px}
+.chk{display:flex;gap:8px;align-items:center}
+.tb.dark{--seg-ok:#d4d4d4;--seg-wait:#2a2a2a}.tb.light{--seg-ok:#262626;--seg-wait:#e5e5e5}
+.seg{display:inline-flex;padding:2px;border-radius:8px;background:var(--raise);border:1px solid var(--line)}
+.seg button{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border:0;border-radius:6px;background:none;cursor:pointer;color:var(--mut);font-weight:500}
+.seg button[aria-checked=true]{background:var(--bg);color:var(--fg);box-shadow:0 1px 2px rgba(0,0,0,.25)}
+.seg[aria-disabled=true]{opacity:.5}
+.row{grid-template-columns:20px minmax(0,1fr) 84px 64px 170px}
+.rrow{display:grid;grid-template-columns:20px minmax(0,1fr) 110px 250px;gap:12px;align-items:center;padding:8px 20px;border-bottom:1px solid var(--line);min-height:36px}
+.chip{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;border-radius:999px;border:1px solid var(--line2);background:transparent;font-size:12px;cursor:pointer;color:var(--mut)}
+.chip[aria-pressed="true"]{background:var(--sel);color:var(--fg);font-weight:500}
+.inl{grid-column:2 / -1;display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;padding:10px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--panel)}
+.inl .opt{flex:1 1 160px}
+.err{font-size:12px;color:var(--bad);display:flex;gap:6px;align-items:center}
+.field[aria-invalid=true]{border-color:var(--bad)}
+.flag{display:flex;gap:10px;align-items:center;margin:0 20px 10px;padding:8px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--raise)}
+.tag{display:inline-flex;align-items:center;height:20px;padding:0 7px;border-radius:999px;border:1px solid var(--line2);font-size:11px;color:var(--mut);white-space:nowrap}
+
+.btn[aria-disabled=true]{opacity:.35;cursor:default}
+.btn.ib{width:26px;padding:0;justify-content:center}
+.tbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:12px 20px;border-bottom:1px solid var(--line)}
+.field.sel{width:auto;padding-right:28px}
+.lrow{display:grid;grid-template-columns:16px 22px 30px minmax(0,1fr) 64px 72px 92px;gap:12px;align-items:center;padding:8px 20px;border-bottom:1px solid var(--line);min-height:44px}
+.lrow.sel{background:var(--sel)}
+.lrow.ghost{opacity:.4;border:1px dashed var(--line2);border-radius:8px;margin:0 12px;padding:8px}
+.lrow.lift{background:var(--raise);border-radius:8px;margin:0 12px;padding:8px;box-shadow:0 8px 24px rgba(0,0,0,.35);border:1px solid var(--line2)}
+.grip{color:var(--faint);display:flex;cursor:grab}
+.pos{color:var(--mut);font-variant-numeric:tabular-nums;text-align:right}
+.thumb{width:26px;height:34px;border-radius:3px;border:1px solid var(--line2);background:var(--bg);display:flex;flex-direction:column;gap:3px;padding:5px 4px;box-sizing:border-box}
+.thumb i{display:block;height:2px;border-radius:1px;background:var(--line2)}
+.thumb i:first-child{width:60%;background:var(--mut)}
+.dropline{position:relative;height:2px;margin:-1px 20px;background:var(--fg);border-radius:2px}
+.dropline::before{content:"";position:absolute;left:-4px;top:-3px;width:8px;height:8px;border-radius:50%;background:var(--fg)}
+.num{font-variant-numeric:tabular-nums}
+.drop{flex:1;border:1.5px dashed var(--line2);border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:40px;text-align:center;min-height:420px}
+.sect{border-top:1px solid var(--line);padding-top:14px;display:flex;flex-direction:column;gap:8px}
+.ex{display:flex;flex-direction:column;gap:2px;padding:10px 12px;border-radius:8px;background:var(--raise);border:1px solid var(--line)}
+.lock{opacity:.5}
+.alert{display:flex;gap:8px;align-items:flex-start;padding:10px 12px;border-radius:8px;border:1px solid var(--bad);color:var(--bad);font-size:12px}
+.spans{display:flex;gap:4px;flex-wrap:wrap}
+.span{display:inline-flex;align-items:center;height:20px;padding:0 7px;border-radius:5px;background:var(--raise);border:1px solid var(--line2);font-size:11px;font-variant-numeric:tabular-nums}
+.span.cut{border-style:dashed;color:var(--mut)}
+.grow{background:var(--panel)}
+.grow strong{font-weight:600}
+.rrow.child{padding-left:52px}
+.rrow.child .ic{width:14px;height:14px}
+.scrim{position:absolute;inset:0;background:var(--scrim);display:flex;align-items:flex-start;justify-content:center;padding-top:52px;z-index:2}
+.osdlg{width:520px;max-width:calc(100% - 32px);background:var(--raise);border:1px solid var(--line2);border-radius:12px;box-shadow:0 24px 60px rgba(0,0,0,.45);padding:18px 20px;display:flex;flex-direction:column;gap:12px;box-sizing:border-box}
+.osdlg.win{border-radius:8px;padding:0;gap:0}
+.osrow{display:grid;grid-template-columns:110px minmax(0,1fr);gap:10px;align-items:center}
+.caption{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.06em}
+.field[aria-disabled=true]{opacity:.45}
+.lrow.busy .grip{visibility:hidden}
+.srow{display:grid;grid-template-columns:18px minmax(0,1fr) 60px 64px 240px 26px;gap:12px;align-items:center;padding:8px 20px;border-bottom:1px solid var(--line);min-height:44px}
+.span.gone{border-style:dashed;color:var(--mut);text-decoration:line-through}
+.rrow.child{min-height:28px;padding-top:2px;padding-bottom:2px}
+.rlist .rrow{grid-template-columns:20px minmax(0,1fr) 84px 190px}
+.rrow.grp{background:var(--panel)}
 </style>
 </helmet>
-<div class="{{themeClass}}" style="height: 800px; display: flex; flex-direction: column; position: relative; overflow: hidden">
-<header style="height: 48px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 12px; border-bottom: 1px solid var(--line)">
-<a class="btn sm ghost" href="Main.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M5 12l6 6M5 12l6-6"></path></svg>All tools</a>
-<span class="sep" aria-hidden="true"></span>
-<div style="display: flex; flex-direction: column; min-width: 0; line-height: 1.25"><h1 style="margin: 0; font-size: 13px; font-weight: 600">Merge PDFs</h1><span class="hint" style="white-space: nowrap">4 files, 22 pages</span></div>
+<div class="{{themeClass}}" style="min-height: 800px; display: flex; flex-wrap: wrap">
+<aside aria-label="PDF Editor" style="flex: 1 1 220px; max-width: 232px; background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; padding: 14px 10px; box-sizing: border-box">
+<a class="nav" href="Main.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M5 12l6 6M5 12l6-6"></path></svg>All tools</a>
+<div style="padding: 16px 10px 6px; font-size: 12px; font-weight: 600; color: var(--faint)">PDF Editor</div>
+<nav aria-label="PDF Editor tools" style="display: flex; flex-direction: column; gap: 2px"><button class="nav" aria-pressed="false"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"></path></svg>Edit PDF</button><button class="nav" aria-pressed="false"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="7" height="7" rx="1"></rect><rect x="14" y="4" width="7" height="7" rx="1"></rect><rect x="3" y="14" width="7" height="7" rx="1"></rect><rect x="14" y="14" width="7" height="7" rx="1"></rect></svg>Organize Pages</button><button class="nav on" aria-pressed="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4v5a5 5 0 0 0 5 5h7M18 4v5"></path><path d="M15 11l3 3-3 3"></path></svg>Merge PDF</button><button class="nav" aria-pressed="false"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18"></path><path d="M8 8L4 12l4 4M16 8l4 4-4 4"></path></svg>Split PDF</button><button class="nav" aria-pressed="false"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2v14a2 2 0 0 0 2 2h14M2 6h14a2 2 0 0 1 2 2v14"></path></svg>Crop and Resize</button><button class="nav" aria-pressed="false"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4L7 20M17 4l-2 16M4 9h16M3 15h16"></path></svg>Page Numbers and Bates</button></nav>
 <div style="flex: 1"></div>
-
-<button class="btn sm ghost" aria-label="Find a tool"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"></circle><path d="M21 21l-6-6"></path></svg><span class="kbd">{{findKey}}</span></button>
-<button class="btn sm ghost icon" aria-label="Settings ({{settingsKey}})"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"></path></svg></button>
-<button class="btn pri">Merge…<span class="kbd">{{runKey}}</span></button>
+<a class="nav" href="Settings.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"></path></svg>Settings<span class="kbd" style="margin-left: auto">{{settingsKey}}</span></a>
+<p class="hint" style="margin: 0; padding: 10px 10px 0">Files stay on this device.</p>
+</aside>
+<div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; position: relative">
+<header style="min-height: 52px; display: flex; align-items: center; gap: 14px; padding: 0 20px; border-bottom: 1px solid var(--line); flex-wrap: wrap">
+<h1 style="margin: 0; font-size: 15px; font-weight: 600">Merge PDF</h1>
+<span class="hint">Join PDFs into one file, in the order you set.</span>
+<div style="flex: 1"></div>
+<button class="btn ghost"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"></circle><path d="M21 21l-6-6"></path></svg>Find a tool<span class="kbd">{{findKey}}</span></button>
 </header>
-<div style="height: 44px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 16px; border-bottom: 1px solid var(--line); background: var(--side)">
-<button class="btn sm"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14"></path></svg>Add PDFs<span class="kbd">{{openKey}}</span></button>
-<label class="hint" style="display: flex; gap: 6px; align-items: center">Sort<select class="field" style="height: 28px"><option>As added</option><option>Name, A to Z</option><option>Name, Z to A</option><option>Date modified</option></select></label>
-<div style="flex: 1"></div>
-<label class="hint" style="display: flex; gap: 6px; align-items: center"><input type="checkbox" checked>Keep bookmarks</label>
-<button class="btn sm ghost">Clear all</button>
+<div style="flex: 1; display: flex; flex-wrap: wrap; min-height: 0">
+<section aria-label="Files" style="flex: 999 1 480px; min-width: 0; display: flex; flex-direction: column">
+<sc-if value="{{isEmpty}}" hint-placeholder-val="{{ false }}"><div style="flex: 1; display: flex; padding: 20px; box-sizing: border-box"><div role="region" aria-label="Drop PDFs to add them" class="drop">
+<svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 28px; height: 28px; color: var(--mut); stroke-width: 1.5"><path d="M12 5v14M6 13l6 6 6-6"></path></svg>
+<p style="margin: 0; font-size: 17px; font-weight: 600">Drop PDFs to merge</p>
+<p class="hint" style="margin: 0; max-width: 380px">Add two or more PDFs. They join top to bottom in the order you set, and you name the merged file when you save it. Your originals stay as they are.</p>
+<button class="btn pri" style="margin-top: 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2"></path></svg>Open files<span class="kbd">{{openKey}}</span></button>
+<p class="hint" style="margin: 0">Accepts .pdf. Add the same file twice to repeat it.</p>
+</div></div></sc-if>
+<sc-if value="{{isList}}" hint-placeholder-val="{{ true }}">
+<div class="tbar"><strong>{{countLabel}}</strong><span class="hint">{{pagesLabel}}</span><div style="flex: 1"></div>
+<label class="hint" for="sort">Sort</label><select id="sort" class="field sel" style="width: 190px" aria-disabled="{{listLocked}}"><option>Order added</option><option>Name, A to Z</option><option>Name, Z to A</option><option>Date modified, oldest first</option><option>Date modified, newest first</option></select>
+<button class="btn sm" aria-disabled="{{listLocked}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>Add files<span class="kbd">{{openKey}}</span></button><button class="btn sm ghost" aria-disabled="{{listLocked}}">Clear list</button></div>
+<sc-if value="{{isRunning}}" hint-placeholder-val="{{ false }}"><div style="padding: 14px 20px 12px; display: flex; flex-direction: column; gap: 10px; border-bottom: 1px solid var(--line)">
+<div role="status" aria-live="polite" style="display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap"><strong style="font-size: 15px">Merging 5 PDFs</strong><span class="hint">Adding appendix-a.pdf, file 3 of 5. Page 19 of 31.</span></div>
+<div aria-hidden="true" style="display: flex; gap: 2px; height: 6px"><sc-for list="{{segments}}" as="s" hint-placeholder-count="5"><span style="flex: {{s.w}}; border-radius: 2px; background: {{s.bg}}"></span></sc-for></div></div></sc-if>
+<p id="order-hint" class="hint" aria-live="polite" style="margin: 0; padding: 8px 20px; border-bottom: 1px solid var(--line); color: {{hintColor}}">{{listHint}}</p>
+<ul role="listbox" aria-label="Merge order, top joins first" aria-describedby="order-hint" style="list-style: none; margin: 0; padding: 4px 0; overflow: auto"><sc-for list="{{rows}}" as="r" hint-placeholder-count="5">
+<sc-if value="{{r.isLine}}" hint-placeholder-val="{{ false }}"><li role="presentation" aria-hidden="true" class="dropline"></li></sc-if>
+<sc-if value="{{r.isRow}}" hint-placeholder-val="{{ true }}"><li role="option" aria-selected="{{r.selected}}" aria-label="{{r.pos}}. {{r.name}}, {{r.pages}}" tabindex="{{r.tab}}" class="lrow {{r.cls}}">
+<span class="grip" aria-hidden="true" title="Drag to reorder"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="6" r="1"></circle><circle cx="15" cy="6" r="1"></circle><circle cx="9" cy="12" r="1"></circle><circle cx="15" cy="12" r="1"></circle><circle cx="9" cy="18" r="1"></circle><circle cx="15" cy="18" r="1"></circle></svg></span>
+<span class="pos">{{r.pos}}</span>
+<span class="thumb" aria-hidden="true" title="First page"><i></i><i></i><i></i><i></i><i></i></span>
+<span style="min-width: 0; display: flex; flex-direction: column"><span style="display: flex; gap: 8px; align-items: center; min-width: 0"><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{r.name}}</span><sc-if value="{{r.dup}}" hint-placeholder-val="{{ false }}"><span class="tag">{{r.dup}}</span></sc-if></span><span class="hint" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{r.dir}} · Modified {{r.date}}</span></span>
+<span class="hint num">{{r.pages}}</span>
+<span class="hint num">{{r.size}}</span>
+<span style="display: flex; gap: 2px; justify-content: flex-end">
+<sc-if value="{{r.showMove}}" hint-placeholder-val="{{ true }}"><button class="btn sm ghost ib" aria-label="Move {{r.name}} up" title="Move up ({{mod}}+↑)" aria-disabled="{{r.upOff}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"></path></svg></button><button class="btn sm ghost ib" aria-label="Move {{r.name}} down" title="Move down ({{mod}}+↓)" aria-disabled="{{r.downOff}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"></path></svg></button><button class="btn sm ghost ib" aria-label="Remove {{r.name}} from the list" title="Remove (Delete)"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button></sc-if>
+<sc-if value="{{r.showStatus}}" hint-placeholder-val="{{ false }}"><span class="hint" style="color: {{r.stColor}}">{{r.status}}</span></sc-if>
+</span></li></sc-if></sc-for></ul>
+</sc-if>
+<sc-if value="{{isResult}}" hint-placeholder-val="{{ false }}">
+<div style="padding: 14px 20px 12px; display: flex; flex-direction: column; gap: 10px; border-bottom: 1px solid var(--line)">
+<div role="status" aria-live="polite" style="display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap"><strong style="font-size: 15px">{{summary}}</strong><span class="hint">{{warnHint}}</span></div>
+<div aria-hidden="true" style="display: flex; gap: 2px; height: 6px"><sc-for list="{{segments}}" as="s" hint-placeholder-count="5"><span style="flex: {{s.w}}; border-radius: 2px; background: {{s.bg}}"></span></sc-for></div>
+<div role="group" aria-label="Show" style="display: flex; gap: 6px; flex-wrap: wrap; align-items: center"><sc-for list="{{chips}}" as="c" hint-placeholder-count="3"><button class="chip" aria-pressed="{{c.on}}">{{c.label}}<span style="color: var(--mut)">{{c.n}}</span></button></sc-for><div style="flex: 1"></div><sc-if value="{{isMerged}}" hint-placeholder-val="{{ true }}"><button class="btn sm"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2"></path></svg>{{reveal}}</button></sc-if></div>
 </div>
-<div style="flex: 1; min-height: 0; position: relative; display: flex">
-<main aria-labelledby="ml" style="flex: 1; overflow: auto; background: var(--well); padding: 16px 20px; display: flex; flex-direction: column; gap: 10px">
-<p id="ml" class="hint" style="margin: 0">Files are joined top to bottom. Drag a row, or select it and press {{mod}}+Up or {{mod}}+Down. Open a file in the PDF Editor to rearrange its pages first.</p>
-<ul role="listbox" aria-label="Files to merge, in order" style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px"><li role="option" aria-selected="false" tabindex="-1" aria-label="1 of 4, lease-agreement.pdf, 14 pages" style="display: flex; gap: 14px; align-items: center; padding: 10px 12px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line)">
-<span aria-hidden="true" style="color: var(--faint); cursor: grab"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="6" r="1"></circle><circle cx="15" cy="6" r="1"></circle><circle cx="9" cy="12" r="1"></circle><circle cx="15" cy="12" r="1"></circle><circle cx="9" cy="18" r="1"></circle><circle cx="15" cy="18" r="1"></circle></svg></span>
-<span class="hint" style="width: 14px; text-align: right">1</span>
-<div style="width: 210px; flex: none; display: flex; flex-direction: column; gap: 3px; min-width: 0"><span style="font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">lease-agreement.pdf</span><span class="hint">14 pages, 2.1 MB</span>
-<label class="hint" style="display: flex; gap: 6px; align-items: center">Pages<input class="field" style="width: 80px; height: 24px" value="" placeholder="All"></label></div>
-<div aria-hidden="true" style="flex: 1; min-width: 0; display: flex; gap: 6px; overflow: hidden"><span class="mini" aria-hidden="true" style="width: 60px; height: 78px; padding: 7px; gap: 4px; flex: none"><i style="width: 60%; height: 4px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i></span><span class="mini" aria-hidden="true" style="width: 60px; height: 78px; padding: 7px; gap: 4px; flex: none"><i style="width: 60%; height: 4px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i></span><span class="mini" aria-hidden="true" style="width: 60px; height: 78px; padding: 7px; gap: 4px; flex: none"><i style="width: 60%; height: 4px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i></span><span class="mini" aria-hidden="true" style="width: 60px; height: 78px; padding: 7px; gap: 4px; flex: none"><i style="width: 60%; height: 4px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i></span><span class="mini" aria-hidden="true" style="width: 60px; height: 78px; padding: 7px; gap: 4px; flex: none"><i style="width: 60%; height: 4px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i></span><span class="mini" aria-hidden="true" style="width: 60px; height: 78px; padding: 7px; gap: 4px; flex: none"><i style="width: 60%; height: 4px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i></span><span class="mini" aria-hidden="true" style="width: 60px; height: 78px; padding: 7px; gap: 4px; flex: none"><i style="width: 60%; height: 4px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i></span><span class="hint" style="align-self: center">+7 more</span></div>
-<div role="group" aria-label="Arrange lease-agreement.pdf" style="display: flex; gap: 2px"><button class="btn sm ghost icon" aria-label="Move up" disabled><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"></path></svg></button><button class="btn sm ghost icon" aria-label="Move down" ><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"></path></svg></button><button class="btn sm ghost icon" aria-label="Remove lease-agreement.pdf"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button></div>
-</li><li role="option" aria-selected="false" tabindex="-1" aria-label="2 of 4, deposit-certificate.pdf, 2 pages" style="display: flex; gap: 14px; align-items: center; padding: 10px 12px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line)">
-<span aria-hidden="true" style="color: var(--faint); cursor: grab"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="6" r="1"></circle><circle cx="15" cy="6" r="1"></circle><circle cx="9" cy="12" r="1"></circle><circle cx="15" cy="12" r="1"></circle><circle cx="9" cy="18" r="1"></circle><circle cx="15" cy="18" r="1"></circle></svg></span>
-<span class="hint" style="width: 14px; text-align: right">2</span>
-<div style="width: 210px; flex: none; display: flex; flex-direction: column; gap: 3px; min-width: 0"><span style="font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">deposit-certificate.pdf</span><span class="hint">2 pages, 340 KB</span>
-<label class="hint" style="display: flex; gap: 6px; align-items: center">Pages<input class="field" style="width: 80px; height: 24px" value="" placeholder="All"></label></div>
-<div aria-hidden="true" style="flex: 1; min-width: 0; display: flex; gap: 6px; overflow: hidden"><span class="mini" aria-hidden="true" style="width: 60px; height: 78px; padding: 7px; gap: 4px; flex: none"><i style="width: 60%; height: 4px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i></span><span class="mini" aria-hidden="true" style="width: 60px; height: 78px; padding: 7px; gap: 4px; flex: none"><i style="width: 60%; height: 4px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i></span></div>
-<div role="group" aria-label="Arrange deposit-certificate.pdf" style="display: flex; gap: 2px"><button class="btn sm ghost icon" aria-label="Move up" ><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"></path></svg></button><button class="btn sm ghost icon" aria-label="Move down" ><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"></path></svg></button><button class="btn sm ghost icon" aria-label="Remove deposit-certificate.pdf"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button></div>
-</li><li role="option" aria-selected="true" tabindex="0" aria-label="3 of 4, inventory-2026.pdf, 9 pages, pages 1-4 only" style="display: flex; gap: 14px; align-items: center; padding: 10px 12px; border-radius: 10px; background: var(--panel); border: 1px solid var(--ring)">
-<span aria-hidden="true" style="color: var(--faint); cursor: grab"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="6" r="1"></circle><circle cx="15" cy="6" r="1"></circle><circle cx="9" cy="12" r="1"></circle><circle cx="15" cy="12" r="1"></circle><circle cx="9" cy="18" r="1"></circle><circle cx="15" cy="18" r="1"></circle></svg></span>
-<span class="hint" style="width: 14px; text-align: right">3</span>
-<div style="width: 210px; flex: none; display: flex; flex-direction: column; gap: 3px; min-width: 0"><span style="font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">inventory-2026.pdf</span><span class="hint">9 pages, 6.4 MB</span>
-<label class="hint" style="display: flex; gap: 6px; align-items: center">Pages<input class="field" style="width: 80px; height: 24px" value="1-4" placeholder="All"></label></div>
-<div aria-hidden="true" style="flex: 1; min-width: 0; display: flex; gap: 6px; overflow: hidden"><span class="mini" aria-hidden="true" style="width: 60px; height: 78px; padding: 7px; gap: 4px; flex: none"><i style="width: 60%; height: 4px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i></span><span class="mini" aria-hidden="true" style="width: 60px; height: 78px; padding: 7px; gap: 4px; flex: none"><i style="width: 60%; height: 4px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i></span><span class="mini" aria-hidden="true" style="width: 60px; height: 78px; padding: 7px; gap: 4px; flex: none"><i style="width: 60%; height: 4px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i></span><span class="mini" aria-hidden="true" style="width: 60px; height: 78px; padding: 7px; gap: 4px; flex: none"><i style="width: 60%; height: 4px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i></span><span class="mini" aria-hidden="true" style="width: 60px; height: 78px; padding: 7px; gap: 4px; flex: none"><i style="width: 60%; height: 4px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i></span><span class="mini" aria-hidden="true" style="width: 60px; height: 78px; padding: 7px; gap: 4px; flex: none"><i style="width: 60%; height: 4px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i></span><span class="mini" aria-hidden="true" style="width: 60px; height: 78px; padding: 7px; gap: 4px; flex: none"><i style="width: 60%; height: 4px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i></span><span class="hint" style="align-self: center">+2 more</span></div>
-<div role="group" aria-label="Arrange inventory-2026.pdf" style="display: flex; gap: 2px"><button class="btn sm ghost icon" aria-label="Move up" ><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"></path></svg></button><button class="btn sm ghost icon" aria-label="Move down" ><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"></path></svg></button><button class="btn sm ghost icon" aria-label="Remove inventory-2026.pdf"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button></div>
-</li><li role="option" aria-selected="false" tabindex="-1" aria-label="4 of 4, deposit-certificate.pdf, 2 pages" style="display: flex; gap: 14px; align-items: center; padding: 10px 12px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line)">
-<span aria-hidden="true" style="color: var(--faint); cursor: grab"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="6" r="1"></circle><circle cx="15" cy="6" r="1"></circle><circle cx="9" cy="12" r="1"></circle><circle cx="15" cy="12" r="1"></circle><circle cx="9" cy="18" r="1"></circle><circle cx="15" cy="18" r="1"></circle></svg></span>
-<span class="hint" style="width: 14px; text-align: right">4</span>
-<div style="width: 210px; flex: none; display: flex; flex-direction: column; gap: 3px; min-width: 0"><span style="font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">deposit-certificate.pdf</span><span class="hint">2 pages, 340 KB</span><span class="hint" style="color: var(--warn)">Added twice</span>
-<label class="hint" style="display: flex; gap: 6px; align-items: center">Pages<input class="field" style="width: 80px; height: 24px" value="" placeholder="All"></label></div>
-<div aria-hidden="true" style="flex: 1; min-width: 0; display: flex; gap: 6px; overflow: hidden"><span class="mini" aria-hidden="true" style="width: 60px; height: 78px; padding: 7px; gap: 4px; flex: none"><i style="width: 60%; height: 4px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i></span><span class="mini" aria-hidden="true" style="width: 60px; height: 78px; padding: 7px; gap: 4px; flex: none"><i style="width: 60%; height: 4px; background: #9a9a9a"></i><i></i><i></i><i style="width: 80%"></i><i></i></span></div>
-<div role="group" aria-label="Arrange deposit-certificate.pdf" style="display: flex; gap: 2px"><button class="btn sm ghost icon" aria-label="Move up" ><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"></path></svg></button><button class="btn sm ghost icon" aria-label="Move down" disabled><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"></path></svg></button><button class="btn sm ghost icon" aria-label="Remove deposit-certificate.pdf"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button></div>
-</li></ul>
-<p class="hint" role="status" style="margin: 0">Moved inventory-2026.pdf to position 3.</p>
-</main><sc-if value="{{saving}}" hint-placeholder-val="{{ false }}"><div aria-hidden="true" style="position: absolute; inset: 0; background: var(--scrim)"></div>
-<div role="dialog" aria-modal="true" aria-labelledby="st" style="position: absolute; left: 50%; top: 42%; transform: translate(-50%,-50%); width: 500px; background: var(--panel); border: 1px solid var(--line2); border-radius: 12px; box-shadow: 0 24px 60px rgba(0,0,0,.35); padding: 22px; display: flex; flex-direction: column; gap: 12px">
-<h2 id="st" style="margin: 0; font-size: 15px; font-weight: 600">Save the merged PDF</h2>
-<div style="display: flex; flex-direction: column; gap: 6px"><label class="lbl" for="fn">File name</label><input id="fn" class="field" value="lease-agreement-merged.pdf"></div>
-<div style="display: flex; flex-direction: column; gap: 6px"><span class="lbl" id="dl">Save to</span><div style="display: flex; gap: 8px; align-items: center"><span aria-labelledby="dl" style="flex: 1; display: flex; gap: 8px; align-items: center"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2"></path></svg>{{docsDir}}/Leases</span><button class="btn sm">Change…</button></div></div>
-<p class="hint" style="margin: 0">22 pages from 4 files. Bookmarks from each file are kept under its name.</p>
-<div style="display: flex; gap: 8px; justify-content: flex-end"><button class="btn">Cancel</button><button class="btn pri">Save</button></div></div></sc-if></div>
-<footer style="height: 30px; flex: none; display: flex; align-items: center; padding: 0 12px; border-top: 1px solid var(--line); background: var(--side)"><span class="hint">Needs at least 2 files</span><div style="flex: 1"></div><span class="hint">Originals are never changed</span></footer>
+<div class="flag" style="margin: 12px 20px 2px; align-items: flex-start"><span style="color: {{flagColor}}; display: flex; margin-top: 1px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v5M12 8v.5"></path></svg></span><span>{{flag}}</span></div>
+<ul aria-label="Results" style="list-style: none; margin: 0; padding: 0; overflow: auto"><sc-for list="{{rows}}" as="r" hint-placeholder-count="5"><li class="rrow">
+<span style="color: {{r.color}}; display: flex"><sc-if value="{{r.isOk}}" hint-placeholder-val="{{ true }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l5 5 9-10"></path></svg></sc-if><sc-if value="{{r.isWarn}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l10 18H2z"></path><path d="M12 10v5M12 18v.5"></path></svg></sc-if><sc-if value="{{r.isSkip}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"></path></svg></sc-if><sc-if value="{{r.isFail}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M9 9l6 6M15 9l-6 6"></path></svg></sc-if></span>
+<span style="min-width: 0; display: flex; flex-direction: column"><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{r.pos}}. {{r.name}}</span><span class="hint">{{r.detail}}</span></span>
+<span style="color: {{r.color}}">{{r.state}}</span>
+<span style="display: flex; gap: 4px; justify-content: flex-end; flex-wrap: wrap"><sc-if value="{{r.hasOut}}" hint-placeholder-val="{{ true }}"><button class="btn sm ghost" style="color: var(--fg)" aria-label="Open {{out}}">Open</button><button class="btn sm ghost" style="color: var(--fg)" aria-label="{{reveal}}: {{out}}">{{reveal}}</button></sc-if><sc-if value="{{r.hasPointer}}" hint-placeholder-val="{{ false }}"><button class="btn sm">{{r.pointer}}</button></sc-if></span>
+</li></sc-for></ul>
+</sc-if>
+</section><section aria-label="Options" style="flex: 1 1 300px; max-width: 360px; border-left: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column">
+<div style="padding: 18px 20px; display: flex; flex-direction: column; gap: 20px; flex: 1; overflow: auto">
+<sc-if value="{{showOpts}}" hint-placeholder-val="{{ true }}"><div class="{{optsCls}}" aria-disabled="{{listLocked}}" style="display: flex; flex-direction: column; gap: 20px">
+<div style="display: flex; flex-direction: column; gap: 6px"><span class="lbl">Order</span><p class="hint" style="margin: 0">Files join top to bottom, every page of each. A file can be listed twice.</p></div>
+<div class="sect"><span class="lbl">Save to</span><span>{{outDir}}</span><div style="display: flex; gap: 12px"><button class="btn sm ghost" style="padding: 0; text-decoration: underline">Change for this run</button><button class="btn sm ghost" style="padding: 0; text-decoration: underline" aria-disabled="true">Reset to default</button></div><div class="ex"><span class="hint">Suggested name</span><span>{{suggested}}</span></div><p class="hint" style="margin: 0">A save dialog opens in this folder when you merge, so you can rename the file. Cancel saves nothing. An existing name gets -1, -2 and so on. Nothing is replaced.</p></div>
+<div class="sect"><span class="lbl">Not carried over</span><p class="hint" style="margin: 0">Bookmarks and tags aren't kept, and signatures are removed. Results name the files that had them.</p></div>
+<div class="note"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="7" height="7" rx="1"></rect><rect x="14" y="4" width="7" height="7" rx="1"></rect><rect x="3" y="14" width="7" height="7" rx="1"></rect><rect x="14" y="14" width="7" height="7" rx="1"></rect></svg><span style="display: flex; flex-direction: column; gap: 8px; align-items: flex-start"><span class="hint" style="color: var(--fg)">Need only some pages, or a page order? Use Organize Pages.</span><button class="btn sm">Open Organize Pages</button></span></div>
+</div></sc-if>
+<sc-if value="{{isRunning}}" hint-placeholder-val="{{ false }}"><p class="hint" style="margin: 0">Options and order are locked while merging. Cancel stops the merge and saves nothing.</p></sc-if>
+<sc-if value="{{isResult}}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; flex-direction: column; gap: 8px"><span class="lbl">Merged file</span><sc-if value="{{isMerged}}" hint-placeholder-val="{{ true }}"><div class="ex"><span>{{out}}</span><span class="hint">31 pages from 5 files</span></div><div style="display: flex; align-items: center; gap: 8px"><span class="lbl">Saved to</span></div><span>{{outDir}}</span></sc-if><sc-if value="{{isFailed}}" hint-placeholder-val="{{ false }}"><p class="hint" style="margin: 0">Nothing was saved. The list is kept as it was, so you can fix or remove site-photos.pdf and merge again.</p></sc-if></div>
+<sc-if value="{{isMerged}}" hint-placeholder-val="{{ true }}"><div class="sect"><span class="lbl">Not carried over</span><p class="hint" style="margin: 0">Bookmarks and tags aren't kept, and signatures are removed. The rows with notes had them.</p></div></sc-if>
+</sc-if>
+</div>
+<footer style="padding: 14px 20px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 10px; flex-wrap: wrap">
+<sc-if value="{{isRunning}}" hint-placeholder-val="{{ false }}"><button class="btn">Cancel merge<span class="kbd">Esc</span></button></sc-if>
+<sc-if value="{{hasSecondary}}" hint-placeholder-val="{{ false }}"><button class="btn">{{secondary}}</button></sc-if>
+<sc-if value="{{hasReason}}" hint-placeholder-val="{{ false }}"><span class="hint" style="flex: 1 1 140px">{{reason}}</span></sc-if>
+<div style="flex: 1"></div>
+<sc-if value="{{hasRun}}" hint-placeholder-val="{{ true }}"><button class="btn pri" aria-disabled="{{runOff}}">{{runLabel}}<sc-if value="{{hasRunKey}}" hint-placeholder-val="{{ true }}"><span class="kbd">{{runKey}}</span></sc-if></button></sc-if>
+</footer></section>
+</div>
+<sc-if value="{{isDialog}}" hint-placeholder-val="{{ false }}"><div class="scrim"><div style="display: flex; flex-direction: column; gap: 10px; align-items: center; width: 100%">
+<sc-if value="{{isMac}}" hint-placeholder-val="{{ true }}"><div role="dialog" aria-modal="true" aria-label="Save merged PDF" class="osdlg">
+<div class="osrow"><label class="hint" for="sa" style="text-align: right">Save As:</label><input id="sa" class="field" value="{{suggested}}"></div>
+<div class="osrow"><span class="hint" style="text-align: right">Tags:</span><input class="field" aria-label="Tags"></div>
+<div class="osrow"><label class="hint" for="wh" style="text-align: right">Where:</label><select id="wh" class="field"><option>{{whereName}}</option></select></div>
+<div style="display: flex; justify-content: flex-end; gap: 8px; padding-top: 4px"><button class="btn">Cancel</button><button class="btn pri">Save</button></div>
+</div></sc-if>
+<sc-if value="{{isWin}}" hint-placeholder-val="{{ false }}"><div role="dialog" aria-modal="true" aria-label="Save As" class="osdlg win">
+<div style="padding: 10px 14px; border-bottom: 1px solid var(--line); font-weight: 600">Save As</div>
+<div style="padding: 10px 14px; border-bottom: 1px solid var(--line)" class="hint">{{outDir}}</div>
+<div style="padding: 14px; display: flex; flex-direction: column; gap: 10px">
+<div class="osrow"><label class="hint" for="fn">File name:</label><input id="fn" class="field" value="{{suggested}}"></div>
+<div class="osrow"><label class="hint" for="ft">Save as type:</label><select id="ft" class="field"><option>PDF file (*.pdf)</option></select></div>
+<div style="display: flex; justify-content: flex-end; gap: 8px; padding-top: 4px"><button class="btn pri">Save</button><button class="btn">Cancel</button></div></div>
+</div></sc-if>
+<p class="hint" style="margin: 0; padding: 6px 10px; border-radius: 6px; background: var(--bg); border: 1px solid var(--line)">System save dialog, drawn by the OS. It opens in your Save to folder. Cancel returns to the list and nothing is written.</p>
+</div></div></sc-if>
+
+</div>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "step": {"editor": "enum", "options": ["Arrange", "Save dialog"], "default": "Arrange"}, "$preview": {"width": 1280, "height": 800}}'>
+<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "state": {"editor": "enum", "options": ["Files added", "Empty", "Reordering", "One file", "Save dialog", "Merging", "Merged", "Failed"], "default": "Files added"}, "$preview": {"width": 1280, "height": 800}}'>
 class Component extends DCLogic {
 renderVals() {
 const win = (this.props.platform ?? 'macOS') === 'Windows';
 const light = (this.props.theme ?? 'dark') === 'light';
-const base = {
-themeClass: light ? 'tb light' : 'tb dark',
-findKey: win ? 'Ctrl+K' : '⌘K',
-settingsKey: win ? 'Ctrl+,' : '⌘,',
-runKey: win ? 'Ctrl+Enter' : '⌘↵',
-openKey: win ? 'Ctrl+O' : '⌘O',
-undoKey: win ? 'Ctrl+Z' : '⌘Z',
-redoKey: win ? 'Ctrl+Y' : '⇧⌘Z',
-dupKey: win ? 'Ctrl+D' : '⌘D',
-selAllKey: win ? 'Ctrl+A' : '⌘A',
-mod: win ? 'Ctrl' : '⌘',
-reveal: win ? 'Show in File Explorer' : 'Show in Finder',
-docsDir: win ? 'C:\\Users\\Asha\\Documents' : '~/Documents'
-};
-const extra = { saving: (this.props.step ?? 'Arrange') === 'Save dialog' };
-return Object.assign(base, typeof extra === 'undefined' ? {} : extra);
+const base = { themeClass: light ? 'tb light' : 'tb dark', findKey: win ? 'Ctrl+K' : '⌘K', settingsKey: win ? 'Ctrl+,' : '⌘,', openKey: win ? 'Ctrl+O' : '⌘O', runKey: win ? 'Ctrl+Enter' : '⌘↵', mod: win ? 'Ctrl' : '⌘', reveal: win ? 'Show in File Explorer' : 'Show in Finder', docsDir: win ? 'C:\\Users\\Asha\\Documents' : '~/Documents' };
+const state = this.props.state ?? 'Files added';
+const sep = win ? '\\' : '/';
+const dir = (...p) => [win ? 'C:\\Users\\Asha' : '~'].concat(p).join(sep);
+base.isMac = !win; base.isWin = win;
+base.outDir = dir('Documents', 'Merged');
+base.whereName = 'Merged';
+base.suggested = 'lease-agreement-merged.pdf';
+base.out = 'lease-agreement-merged-1.pdf';
+const F = [
+{ name: 'lease-agreement.pdf', d: ['Documents', 'Contracts'], pages: 12, size: '1.4 MB', date: 'Oct 2, 2026' },
+{ name: 'vendor-nda-acme.pdf', d: ['Documents', 'Contracts'], pages: 6, size: '380 KB', date: 'Sep 18, 2026', signed: true },
+{ name: 'appendix-a.pdf', d: ['Documents', 'Contracts', 'Appendices'], pages: 4, size: '210 KB', date: 'Oct 1, 2026', dup: 'Copy 1 of 2', marks: true },
+{ name: 'site-photos.pdf', d: ['Downloads'], pages: 5, size: '8.2 MB', date: 'Oct 3, 2026', tags: true },
+{ name: 'appendix-a.pdf', d: ['Documents', 'Contracts', 'Appendices'], pages: 4, size: '210 KB', date: 'Oct 1, 2026', dup: 'Copy 2 of 2', marks: true }
+];
+const isEmpty = state === 'Empty';
+const isRunning = state === 'Merging';
+const isResult = state === 'Merged' || state === 'Failed';
+const one = state === 'One file';
+const files = one ? F.slice(0, 1) : F;
+base.isEmpty = isEmpty; base.isRunning = isRunning; base.isResult = isResult;
+base.isList = !isEmpty && !isResult; base.isDialog = state === 'Save dialog';
+base.isMerged = state === 'Merged'; base.isFailed = state === 'Failed';
+base.showOpts = !isResult;
+base.optsCls = isRunning ? 'lock' : '';
+base.listLocked = isRunning ? 'true' : 'false';
+const pagesTotal = files.reduce((n, f) => n + f.pages, 0);
+base.countLabel = files.length === 1 ? '1 PDF' : `${files.length} PDFs`;
+base.pagesLabel = `${pagesTotal} pages in all`;
+base.hintColor = 'var(--mut)';
+base.listHint = `Drag a row by its handle, or select it and press ${base.mod}+↑ or ${base.mod}+↓. The top file comes first.`;
+if (state === 'Reordering') { base.listHint = 'Moving site-photos.pdf to position 2. Release to drop it there, or press Esc to cancel.'; base.hintColor = 'var(--fg)'; }
+if (isRunning) { base.listHint = 'The order is locked while merging.'; }
+if (one) { base.listHint = 'Add at least one more PDF. You can add the same file again to repeat it.'; }
+const rows = [];
+const prog = ['Added', 'Added', 'Adding…', 'Waiting', 'Waiting'];
+files.forEach((f, i) => {
+const r = { isRow: true, isLine: false, pos: String(i + 1), name: f.name, dir: dir(...f.d), date: f.date, pages: f.pages === 1 ? '1 page' : `${f.pages} pages`, size: f.size, dup: one ? '' : (f.dup || ''),
+upOff: i === 0 ? 'true' : 'false', downOff: i === files.length - 1 ? 'true' : 'false',
+selected: 'false', tab: '-1', cls: isRunning ? 'busy' : '', showMove: !isRunning, showStatus: isRunning, status: prog[i], stColor: i < 3 ? 'var(--fg)' : 'var(--mut)' };
+if (state === 'Files added' && i === 1) { r.selected = 'true'; r.tab = '0'; r.cls = 'sel'; }
+if (state !== 'Files added' && i === 0) r.tab = '0';
+if (state === 'Reordering' && i === 3) r.cls = 'ghost';
+rows.push(r);
+if (state === 'Reordering' && i === 0) rows.push({ isLine: true, isRow: false });
+});
+base.segments = F.map((f, i) => ({ w: String(f.pages), bg: isRunning ? (i < 2 ? 'var(--seg-ok)' : i === 2 ? 'var(--mut)' : 'var(--seg-wait)') : 'var(--seg-ok)' }));
+if (isResult) {
+const ok = state === 'Merged';
+let at = 1;
+base.rows = F.map((f, i) => {
+const span = `${at}–${at + f.pages - 1}`; at += f.pages;
+const r = { pos: String(i + 1), name: f.name, hasOut: ok, hasPointer: false, pointer: '', isOk: false, isWarn: false, isSkip: false, isFail: false };
+if (ok) {
+const w = f.signed ? 'Saved. The digital signature was removed, because changing the file breaks it.' : f.marks ? 'Bookmarks weren\'t carried into the merged file.' : f.tags ? 'Accessibility tags weren\'t carried into the merged file.' : '';
+r.detail = `Pages ${span} of ${base.out}.` + (w ? ' ' + w : '');
+r.isWarn = !!w; r.isOk = !w; r.state = 'Merged'; r.color = w ? 'var(--warn)' : 'var(--fg)';
+} else if (i === 3) {
+r.isFail = true; r.state = 'Failed'; r.color = 'var(--bad)'; r.hasPointer = true; r.pointer = 'Open Remove Password';
+r.detail = 'Password-protected, so it can\'t be read. Remove the password, then add it again.';
+} else {
+r.isSkip = true; r.state = 'Not merged'; r.color = 'var(--mut)';
+r.detail = 'Stopped because site-photos.pdf failed. Nothing was saved.';
+}
+return r;
+});
+const warnN = base.rows.filter((r) => r.isWarn).length;
+base.summary = ok ? `Done. 5 PDFs merged into ${base.out}` : 'Merge stopped. Nothing was saved';
+base.warnHint = ok ? `${warnN} files have notes.` : '1 file failed.';
+base.chips = [['All', 5], ['Needs attention', ok ? 0 : 5], ['Warnings', warnN]].map((c, i) => ({ label: c[0], n: String(c[1]), on: i === 0 ? 'true' : 'false' }));
+base.segments = F.map((f, i) => ({ w: String(f.pages), bg: ok ? (base.rows[i].isWarn ? 'var(--warn)' : 'var(--seg-ok)') : (i === 3 ? 'var(--bad)' : 'var(--mut)') }));
+base.flag = ok ? `Saved as ${base.out}. A file named ${base.suggested} was already there, so a number was added. Nothing was replaced.` : 'site-photos.pdf couldn\'t be read, so the merge stopped before writing anything. Every row points to the same cause.';
+base.flagColor = ok ? 'var(--mut)' : 'var(--bad)';
+} else {
+base.rows = rows;
+}
+base.hasSecondary = isResult; base.secondary = state === 'Merged' ? 'Clear list' : 'Back to list';
+base.hasReason = one || isEmpty;
+base.reason = isEmpty ? 'Add at least 2 PDFs.' : 'Merge needs at least 2 PDFs.';
+base.hasRunKey = state !== 'Merged';
+base.hasRun = !isRunning && !(state === 'Failed');
+base.runOff = (one || isEmpty) ? 'true' : 'false';
+base.runLabel = state === 'Merged' ? 'Open merged PDF' : (one || isEmpty) ? 'Merge PDFs' : `Merge ${files.length} PDFs`;
+return base;
 }
 }
 </script>
