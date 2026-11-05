@@ -1,0 +1,11 @@
+{
+  "tolerancePoints": 1.5,
+  "sizes": [
+    { "id": "a3", "name": "A3", "width": 841.8898, "height": 1190.5512 },
+    { "id": "a4", "name": "A4", "width": 595.2756, "height": 841.8898 },
+    { "id": "a5", "name": "A5", "width": 419.5276, "height": 595.2756 },
+    { "id": "letter", "name": "Letter", "width": 612, "height": 792 },
+    { "id": "legal", "name": "Legal", "width": 612, "height": 1008 },
+    { "id": "tabloid", "name": "Tabloid", "width": 792, "height": 1224 }
+  ]
+}
