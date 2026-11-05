@@ -24,6 +24,16 @@ pub struct ToolLimits {
     pub max_duration: Duration,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct HelperDeadline { pub per_file: Duration, pub per_page: Duration }
+
+impl HelperDeadline {
+    pub(crate) fn limit(self, files: usize, pages: usize) -> Duration {
+        let count = |value: usize| u32::try_from(value).unwrap_or(u32::MAX);
+        self.per_file * count(files) + self.per_page * count(pages)
+    }
+}
+
 // Expansion stays under the image crate's 512 MiB allocation default so this check, not a decoder error, reports it.
 const PDF: ToolLimits = ToolLimits { max_bytes: GB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES };
 const IMAGE: ToolLimits = ToolLimits { max_bytes: 250 * MB, max_pages: None, max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES };
@@ -392,7 +402,7 @@ fn bytes_label(bytes: u64) -> String {
     }
 }
 
-fn duration_label(duration: Duration) -> String {
+pub(crate) fn duration_label(duration: Duration) -> String {
     let plural = |count: u128, unit: &str| if count == 1 { format!("1 {unit}") } else { format!("{count} {unit}s") };
     match duration.as_millis() {
         millis if millis >= 60_000 && millis % 60_000 == 0 => plural(millis / 60_000, "minute"),
@@ -401,7 +411,7 @@ fn duration_label(duration: Duration) -> String {
     }
 }
 
-fn count_label(count: u64) -> String {
+pub(crate) fn count_label(count: u64) -> String {
     let digits = count.to_string();
     let mut label = String::with_capacity(digits.len() + digits.len() / 3);
     for (index, digit) in digits.chars().enumerate() {

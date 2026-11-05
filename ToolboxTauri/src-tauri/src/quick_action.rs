@@ -110,7 +110,7 @@ impl QuickAction {
                 BatchRunner::run(&events, self.tool(), paths, &output_location, &options, |options: &ImageOptions, path| ImageProcessor::run(path, ImageOptions { suffix: options.suffix.clone(), output_location: options.output_location.clone(), ..*options }))
             }
             QuickAction::RemoveBackground => {
-                let request = Arc::new(vision::VisionRequest { paths: paths.clone(), pages: None, output_location: output_location.clone() });
+                let request = Arc::new(vision::VisionRequest { paths: paths.clone(), output_location: output_location.clone() });
                 BatchRunner::run(&events, self.tool(), paths, &output_location, &request, vision::remove_background)
             }
         }

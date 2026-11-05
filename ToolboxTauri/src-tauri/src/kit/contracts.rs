@@ -359,6 +359,7 @@ pub enum SkipCode {
     TextAlreadyPresent,
     NoEffectiveChange,
     UnsupportedFormat,
+    NeedsOcr,
     Cancelled,
 }
 
@@ -621,11 +622,11 @@ mod tests {
         let skips = [
             SkipCode::NotProtected, SkipCode::AlreadyProtected, SkipCode::NoSavings,
             SkipCode::AlreadyInTargetFormat, SkipCode::RangeEmptyAfterClamping, SkipCode::TextAlreadyPresent,
-            SkipCode::NoEffectiveChange, SkipCode::UnsupportedFormat, SkipCode::Cancelled,
+            SkipCode::NoEffectiveChange, SkipCode::UnsupportedFormat, SkipCode::NeedsOcr, SkipCode::Cancelled,
         ];
         assert_eq!(serde_json::to_value(skips).unwrap(), serde_json::json!([
             "notProtected", "alreadyProtected", "noSavings", "alreadyInTargetFormat",
-            "rangeEmptyAfterClamping", "textAlreadyPresent", "noEffectiveChange", "unsupportedFormat", "cancelled",
+            "rangeEmptyAfterClamping", "textAlreadyPresent", "noEffectiveChange", "unsupportedFormat", "needsOcr", "cancelled",
         ]));
         let warnings = [
             WarningKind::SignatureRemoved,
@@ -844,7 +845,9 @@ mod tests {
         assert!(!native_capability("extract_gif_frames").unwrap().supports_preview);
         let pdf = native_capability("pdf_to_text").unwrap();
         assert!(pdf.supports_page_selection && !pdf.supports_preview);
-        assert!(!native_capability("ocr_pdf").unwrap().native_available);
+        let ocr = native_capability("ocr_pdf").unwrap();
+        assert!(ocr.native_available);
+        assert_eq!((ocr.input_cardinality, ocr.output_suffix.as_str()), (InputCardinality::Multiple, "-ocr"));
         assert!(!native_capability("blur_faces").unwrap().native_available);
         assert!(!native_capability("remove_image_background").unwrap().native_available);
     }

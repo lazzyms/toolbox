@@ -135,6 +135,7 @@ export type SkipCode =
   | "textAlreadyPresent"
   | "noEffectiveChange"
   | "unsupportedFormat"
+  | "needsOcr"
   | "cancelled";
 
 export interface SkipReason {
@@ -284,6 +285,15 @@ export interface PasswordRequest extends ToolRequest {
 export interface CompressImagesRequest extends ToolRequest {
   quality: number;
   lossless?: boolean;
+}
+
+export type OcrMode = "searchablePdf" | "text";
+
+export interface OcrRequest extends ToolRequest {
+  pageRange: string | null;
+  mode: OcrMode;
+  force: boolean;
+  languages: string[];
 }
 
 export interface ConvertImagesRequest extends ToolRequest {
