@@ -57,6 +57,14 @@ test.beforeEach(async ({ page }) => {
             ? { pageIndex, thumbnail: null, error: 'pdftoppm failed for this page' }
             : { pageIndex, thumbnail: { dataUrl: svg, width: 247, height: 320 }, error: null });
         }
+        // A faked classification: window.blankPages are blank, window.uncheckedPages come back with a note.
+        if (command === 'classify_pdf_blank_pages') {
+          if (w.holdBlankPages) await new Promise((resolve) => { w.releaseBlankPages = resolve; });
+          if (w.failBlankPages) throw { kind: 'unavailable', message: 'pdftotext is required to find blank pages.', pointer: null };
+          return args.request.pageIndices.map((pageIndex: number) => (w.uncheckedPages ?? []).includes(pageIndex)
+            ? { pageIndex, blank: false, note: "Couldn't check this page, so it isn't counted as blank. pdftoppm could not render this PDF" }
+            : { pageIndex, blank: (w.blankPages ?? []).includes(pageIndex), note: null });
+        }
         if (command === 'inspect_pdf_scene_page') {
           const pageIndex = args.request.pageIndex;
           return { index: pageIndex, width: 612, height: 792, preview: svg, textRuns: [] };
@@ -1246,4 +1254,100 @@ test('export explains each refused removal, writes nothing, and can restore the 
   await expect(exportButton(page)).toBeDisabled();
   await undoButton(page).click();
   expect(await order(page)).toEqual([1, 2, 3]);
+});
+
+// Blank pages. A faked native classification picks the pages; the action only selects them, so nothing is removed and
+// there is no undo step until Delete removes them as one.
+const blankButton = (page: Page) => selectGroup(page).getByRole('button', { name: /^Blank pages/ });
+const setBlankPages = (page: Page, blank: number[], unchecked: number[] = []) =>
+  page.evaluate(({ blank, unchecked }) => { (window as any).blankPages = blank; (window as any).uncheckedPages = unchecked; }, { blank, unchecked });
+const blankRequests = (page: Page) => page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'classify_pdf_blank_pages').map((call: any) => call.args.request));
+
+test('Blank pages selects the pages the native check reports, says so, and removes nothing', async ({ page }) => {
+  await setPlatform(page, 'MacIntel');
+  await countRemovals(page);
+  await openReport(page);
+  const buttons = await selectGroup(page).getByRole('button').allTextContents();
+  expect(buttons.map((text) => text.replace(/⌘A|Esc/, ''))).toEqual(['All', 'Odd', 'Even', 'Blank pages', 'None']);
+  await option(page, 1).click();
+  await setBlankPages(page, [1, 3]);
+  await blankButton(page).click();
+
+  expect(await selectedPositions(page)).toEqual([2, 4]);
+  await expect(liveStatus(page)).toHaveText('2 blank pages found and selected: 2 and 4. Nothing was removed.');
+  await expect(blankButton(page)).toHaveText('Blank pages2 found');
+  await expect(option(page, 2)).toBeFocused();
+  await expect(option(page, 2)).toHaveAccessibleName('Position 2, original page 2, blank, selected');
+  await expect(option(page, 2)).toContainText('2 · blank');
+  await expect(option(page, 1)).toHaveAccessibleName('Position 1, original page 1');
+  await expect(count(page)).toHaveText('2 pages selected');
+  expect(await order(page)).toEqual([1, 2, 3, 4, 5]);
+  await expect(undoButton(page)).toBeDisabled();
+  expect(await blankRequests(page)).toEqual([{ path: '/local/report.pdf', pageIndices: [0, 1, 2, 3, 4] }]);
+
+  // Delete then removes exactly those pages as one undo step.
+  await expect(deleteButton(page)).toHaveText('Delete 2 pages');
+  await deleteButton(page).click();
+  expect(await order(page)).toEqual([1, 3, 5]);
+  await expect(liveStatus(page)).toHaveText('Pages 2 and 4 removed');
+  await expect(blankButton(page)).toHaveText('Blank pages');
+  await undoButton(page).click();
+  expect(await order(page)).toEqual([1, 2, 3, 4, 5]);
+  await expect(undoButton(page)).toBeDisabled();
+  await page.keyboard.press('Meta+Shift+z');
+  expect(await exportedOrder(page)).toEqual([1, 3, 5]);
+  const row = page.getByRole('list', { name: 'Results' }).getByRole('listitem');
+  await expect(row).toContainText('PDF scene exported. 3 pages kept, 2 removed.');
+});
+
+test('Blank pages says when none were found, clears the selection, and reuses earlier answers', async ({ page }) => {
+  await openReport(page);
+  await setBlankPages(page, []);
+  await selectGroup(page).getByRole('button', { name: 'Odd', exact: true }).click();
+  await blankButton(page).click();
+  await expect(liveStatus(page)).toHaveText('No blank pages found. Nothing was removed.');
+  expect(await selectedPositions(page)).toEqual([]);
+  await expect(blankButton(page)).toHaveText('Blank pages');
+  await expect(undoButton(page)).toBeDisabled();
+  expect(await order(page)).toEqual([1, 2, 3, 4, 5]);
+  await blankButton(page).click();
+  await expect(liveStatus(page)).toHaveText('No blank pages found. Nothing was removed.');
+  expect(await blankRequests(page)).toHaveLength(1);
+});
+
+test('Blank pages follows the current order, names pages it could not check, and leaves them unselected', async ({ page }) => {
+  await openReport(page);
+  await option(page, 1).click();
+  await page.getByRole('button', { name: 'Open in page view', exact: true }).click();
+  await page.getByRole('button', { name: 'Move page later', exact: true }).click();
+  await page.getByRole('toolbar', { name: 'PDF editor tools' }).getByRole('button', { name: 'Organize', exact: true }).click();
+  expect(await order(page)).toEqual([2, 1, 3, 4, 5]);
+  await setBlankPages(page, [0, 4], [2]);
+  await blankButton(page).click();
+  expect(await selectedPositions(page)).toEqual([2, 5]);
+  await expect(liveStatus(page)).toHaveText("2 blank pages found and selected: 2 and 5. Page 3 couldn't be checked, so it wasn't selected. Nothing was removed.");
+  await expect(option(page, 3)).toHaveAccessibleName('Position 3, original page 3');
+});
+
+test('Blank pages is off while it runs or exports, and a failed check changes nothing', async ({ page }) => {
+  await openReport(page);
+  await page.evaluate(() => { (window as any).holdBlankPages = true; });
+  await selectGroup(page).getByRole('button', { name: 'Even', exact: true }).click();
+  await blankButton(page).click();
+  await expect(liveStatus(page)).toHaveText('Looking for blank pages…');
+  await expect(blankButton(page)).toBeDisabled();
+  await page.evaluate(() => { const w = window as any; w.holdBlankPages = false; w.failBlankPages = true; w.releaseBlankPages(); });
+  await expect(liveStatus(page)).toHaveText("Couldn't look for blank pages. The selection didn't change, and nothing was removed.");
+  expect(await selectedPositions(page)).toEqual([2, 4]);
+  await expect(blankButton(page)).toBeEnabled();
+  await expect(undoButton(page)).toBeDisabled();
+
+  await deleteButton(page).click();
+  await page.evaluate(() => {
+    const w = window as any;
+    const invoke = w.__TAURI_INTERNALS__.invoke;
+    w.__TAURI_INTERNALS__.invoke = (command: string, args: any) => command === 'export_pdf_scene' ? new Promise(() => {}) : invoke(command, args);
+  });
+  await page.getByRole('button', { name: 'Export PDF' }).click();
+  await expect(blankButton(page)).toBeDisabled();
 });

@@ -106,11 +106,12 @@ export const mirroredTextNotice = (count: number) => count === 0 ? null
 
 const previewWords = { loading: "preview loading", failed: "preview unavailable" } as const;
 
-export const pageOptionName = (position: number, page: Pick<ScenePage, "sourceIndex" | "rotation" | "mirrored">, selected: boolean, preview?: keyof typeof previewWords) => {
+export const pageOptionName = (position: number, page: Pick<ScenePage, "sourceIndex" | "rotation" | "mirrored">, selected: boolean, preview?: keyof typeof previewWords, blank = false) => {
   const parts = [`Position ${position}`];
   if (page.sourceIndex !== null) parts.push(`original page ${page.sourceIndex + 1}`);
   const orientation = orientationWords(page);
   if (orientation) parts.push(orientation);
+  if (blank) parts.push("blank");
   if (preview) parts.push(previewWords[preview]);
   if (selected) parts.push("selected");
   return parts.join(", ");
@@ -119,9 +120,14 @@ export const pageOptionName = (position: number, page: Pick<ScenePage, "sourceIn
 const listWords = (parts: string[]) => parts.length < 2 ? parts.join("") : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
 
 /** Names 1-based positions for an announcement: "Page 5", "Pages 8 and 9", "Pages 4 to 6", "Pages 1 to 3, 7 and 9". */
-export const pagePositionsLabel = (positions: number[]) => {
+export const pagePositionsLabel = (positions: readonly number[]) => {
+  const sorted = [...new Set(positions)];
+  return sorted.length === 1 ? `Page ${sorted[0]}` : `Pages ${positionsList(sorted)}`;
+};
+
+/** Lists 1-based positions in order, runs of three or more compressed: "5", "8 and 9", "1 to 3, 7 and 9". */
+export const positionsList = (positions: readonly number[]) => {
   const sorted = [...new Set(positions)].sort((a, b) => a - b);
-  if (sorted.length === 1) return `Page ${sorted[0]}`;
   const parts: string[] = [];
   for (let start = 0; start < sorted.length;) {
     let end = start;
@@ -130,7 +136,7 @@ export const pagePositionsLabel = (positions: number[]) => {
     else for (let index = start; index <= end; index += 1) parts.push(String(sorted[index]));
     start = end + 1;
   }
-  return `Pages ${listWords(parts)}`;
+  return listWords(parts);
 };
 
 /** The toolbar's delete button names how many pages it removes. */

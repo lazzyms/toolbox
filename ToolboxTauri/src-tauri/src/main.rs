@@ -156,6 +156,11 @@ async fn render_pdf_source_thumbnails(request: scene::SourceThumbnailsRequest) -
 }
 
 #[tauri::command]
+async fn classify_pdf_blank_pages(request: scene::BlankPagesRequest) -> Result<Vec<scene::BlankPageClassification>, ToolError> {
+    tauri::async_runtime::spawn_blocking(move || scene::blank_pages(&request)).await.map_err(|error| ToolError::processing(error.to_string()))?
+}
+
+#[tauri::command]
 async fn export_pdf_scene(events: RunEvents, request: scene::ExportRequest) -> Vec<JobOutcome> {
     let request = Arc::new(request);
     BatchRunner::run(&events, "export_pdf_scene", request.paths.clone(), &request.output_location, &request, scene::export)
@@ -538,6 +543,7 @@ fn main() {
             preview_pdf_scene,
             preview_pdf_scene_pages,
             render_pdf_source_thumbnails,
+            classify_pdf_blank_pages,
             export_pdf_scene,
             crop_pdf,
             edit_pdf,
@@ -1149,6 +1155,14 @@ mod command_tests {
         let out_of_range = tauri::async_runtime::block_on(render_pdf_source_thumbnails(scene::SourceThumbnailsRequest { path: pdf.clone(), page_indices: vec![2] })).err().expect("an out-of-range page must be rejected");
         assert!(matches!(out_of_range.kind, ErrorKind::InvalidInput), "kind: {:?}", out_of_range.kind);
         assert_eq!(std::fs::read(&pdf).unwrap(), plain_pdf_bytes, "thumbnails must not change the source PDF");
+        // Both fixture pages carry text, so neither is blank. Two runs agree, and the source is never written.
+        let classify = || tauri::async_runtime::block_on(classify_pdf_blank_pages(scene::BlankPagesRequest { path: pdf.clone(), page_indices: vec![1, 0] })).unwrap();
+        let blank_wire = serde_json::to_value(classify()).unwrap();
+        assert_eq!(blank_wire, serde_json::json!([{ "pageIndex": 1, "blank": false, "note": null }, { "pageIndex": 0, "blank": false, "note": null }]));
+        assert_eq!(serde_json::to_value(classify()).unwrap(), blank_wire, "blank-page classification must be deterministic");
+        let blank_out_of_range = tauri::async_runtime::block_on(classify_pdf_blank_pages(scene::BlankPagesRequest { path: pdf.clone(), page_indices: vec![2] })).err().expect("an out-of-range page must be rejected");
+        assert!(matches!(blank_out_of_range.kind, ErrorKind::InvalidInput), "kind: {:?}", blank_out_of_range.kind);
+        assert_eq!(std::fs::read(&pdf).unwrap(), plain_pdf_bytes, "blank-page classification must not change the source PDF");
         outputs.extend(named(&mut naming, "export_pdf_scene", pdf.clone(), assert_success("PDF scene", export_pdf_scene(RunEvents::silent(), scene::ExportRequest { paths: vec![pdf.clone()], scene: visual_scene, output_location: OutputLocation::AlongsideInput }))));
         outputs.extend(named(&mut naming, "remove_password", protected.clone(), assert_success("unlock", remove_password(RunEvents::silent(), PasswordRequest { paths: vec![protected], password: crate::kit::TEST_PASSWORD.into(), password_overrides: Default::default(), output_location: location(&root, "unlock") }))));
         outputs.extend(named(&mut naming, "add_page_numbers", pdf.clone(), assert_success("page numbers", add_page_numbers(RunEvents::silent(), PageOverlayRequest { paths: vec![pdf.clone()], text: "1".into(), opacity: 100, position: Some("bottom-right".into()), logo_path: None, pages: None, start_number: Some(1), font_size: Some(12), output_location: location(&root, "page numbers") }))));
