@@ -2387,9 +2387,10 @@ mod command_tests {
         assert!(wrong_format[0].output_paths().is_empty());
         assert!(wrong_format[0].error().is_some_and(|error| error.message.contains("Accepted extensions")));
 
-        let wrong_cardinality = tauri::async_runtime::block_on(split_pdf(RunEvents::silent(), SplitPdfRequest {
+        let wrong_cardinality = tauri::async_runtime::block_on(extract_pdf_pages(RunEvents::silent(), PageSelectionRequest {
             paths: vec![pdf.clone(), second_pdf.clone()],
-            mode: SplitMode::EveryN { pages: 1 }.into(),
+            pages: vec![],
+            page_ranges: Some("1".into()),
             output_location: location(&root, "wrong-cardinality"),
         }));
         assert_eq!(wrong_cardinality.len(), 2);

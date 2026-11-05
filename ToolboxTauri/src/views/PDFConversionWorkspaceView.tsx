@@ -22,7 +22,7 @@ const nonInspectingConversionIds = new Set(["images-to-pdf", "pdf-merge", "pdf-s
 const outputPreviewLimitations: Partial<Record<AtomicToolId, string>> = {
   "images-to-pdf": "Output preview unavailable. Export combines the selected images into one PDF in file order.",
   "pdf-merge": "Output preview unavailable. Export merges the selected PDFs in file order.",
-  "pdf-split": "Output preview unavailable. Export creates one PDF for each range, or for every N pages.",
+  "pdf-split": "Output preview unavailable. Export creates one PDF for each range, or for every N pages. Ranges are clamped to each PDF's page count.",
   "pdf-to-text": "Output preview unavailable. Export creates a text file from the selected pages.",
   "pdf-image-extract": "Output preview unavailable. Export extracts embedded JPEG images from the selected pages.",
   "pdf-extract-pages": "Output preview unavailable. Export creates a PDF containing the selected pages.",
@@ -532,6 +532,10 @@ const ConversionControls = ({
               <span>{splitIssue}</span>
             </p>
           )}
+          <div className="workspace-field" role="group" aria-labelledby="split-fitting-label">
+            <span id="split-fitting-label" className="text-sm leading-none font-medium">Fitting each PDF</span>
+            <p className="workspace-note">A range past the last page is shortened or dropped. A PDF is skipped when nothing is left or the result is the whole file.</p>
+          </div>
           {splitNames.length > 0 && (
             <div className="workspace-field" role="group" aria-labelledby="split-names-label">
               <span id="split-names-label" className="text-sm leading-none font-medium">File names</span>
