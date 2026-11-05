@@ -130,7 +130,7 @@ impl ImageEditPlan {
 pub fn inspect_edit_preview(request: &ImageEditPreviewRequest) -> Result<ImagePreview, String> {
     let plan = request.plan.canonicalized();
     plan.validate()?;
-    let source = crate::kit::images::load_image(&request.path)?;
+    let (source, _) = crate::kit::images::load_upright_image(&request.path)?;
     let (edited, format, quality) = apply_edit_plan(&plan, source, crate::kit::images::detect_format(&request.path))?;
     let encoded = crate::kit::images::encode(&edited, format, quality)?;
     let preview_source = match format {
@@ -145,8 +145,8 @@ pub fn inspect_edit_preview(request: &ImageEditPreviewRequest) -> Result<ImagePr
 pub fn export_edit_plan(plan: &ImageEditPlan, input: PathBuf) -> JobOutcome {
     let plan = plan.canonicalized();
     if let Err(error) = plan.validate() { return failure(input, error); }
-    let source = match crate::kit::images::load_image(&input) {
-        Ok(image) => image,
+    let source = match crate::kit::images::load_upright_image(&input) {
+        Ok((image, _)) => image,
         Err(error) => return failure(input, error),
     };
     let (edited, format, quality) = match apply_edit_plan(&plan, source, crate::kit::images::detect_format(&input)) {
@@ -193,6 +193,7 @@ const STACK_QUALITY: u8 = 90;
 
 /// The per-file note for a run that turned or mirrored the pixels, which always means a new encode.
 pub const REENCODED_AFTER_ROTATING: &str = "Re-encoded at quality 90 after rotating.";
+pub const ORIENTATION_APPLIED_FIRST: &str = "Camera orientation was applied first.";
 
 impl ImageEditSteps {
     /// One step keeps its tool's suffix; any combination is named -edited.
@@ -226,8 +227,14 @@ impl ImageEditSteps {
         Ok(image)
     }
 
-    fn detail(&self) -> &'static str {
-        if self.rotate.as_ref().is_some_and(|rotate| !rotate.is_neutral()) { REENCODED_AFTER_ROTATING } else { "Image saved" }
+    fn detail(&self, oriented: bool) -> String {
+        let rotated = self.rotate.as_ref().is_some_and(|rotate| !rotate.is_neutral());
+        match (oriented, rotated) {
+            (true, true) => format!("{ORIENTATION_APPLIED_FIRST} {REENCODED_AFTER_ROTATING}"),
+            (true, false) => ORIENTATION_APPLIED_FIRST.to_string(),
+            (false, true) => REENCODED_AFTER_ROTATING.to_string(),
+            (false, false) => "Image saved".to_string(),
+        }
     }
 }
 
@@ -238,8 +245,8 @@ pub fn export_edit_stack(request: &ImageEditStackRequest, input: PathBuf) -> Job
         Err(error) => return JobOutcome::failure(input, ToolError::invalid_input(error)),
     };
     let format = crate::kit::images::detect_format(&input);
-    let source = match crate::kit::images::load_image(&input) {
-        Ok(image) => image,
+    let (source, oriented) = match crate::kit::images::load_upright_image(&input) {
+        Ok(decoded) => decoded,
         Err(error) => return failure(input, error),
     };
     // A step that cannot apply to this image (a crop outside it, a size past the limits) is a
@@ -260,7 +267,7 @@ pub fn export_edit_stack(request: &ImageEditStackRequest, input: PathBuf) -> Job
         return failure(input, format!("Could not save image: {error}"));
     }
     match output.publish() {
-        Ok(path) => JobOutcome::succeeded(input, vec![path], request.steps.detail()),
+        Ok(path) => JobOutcome::succeeded(input, vec![path], request.steps.detail(oriented)),
         Err(error) => failure(input, format!("Could not publish image: {error}")),
     }
 }
@@ -373,7 +380,7 @@ pub(crate) fn parse_output_format(format: &str) -> Result<crate::kit::images::Ou
 }
 
 pub fn inspect_preview(request: &ImagePreviewRequest) -> Result<ImagePreview, String> {
-    let image = crate::kit::images::load_image(&request.path).map_err(|error| format!("Could not preview image: {error}"))?;
+    let (image, _) = crate::kit::images::load_upright_image(&request.path).map_err(|error| format!("Could not preview image: {error}"))?;
     let width = image.width();
     let height = image.height();
     let preview = image.thumbnail(1200, 900).to_rgba8();
@@ -1087,7 +1094,7 @@ pub fn strip_metadata(request: &MetadataRequest, input: PathBuf) -> JobOutcome {
 }
 
 fn transform<F>(_: &[PathBuf], input: PathBuf, location: &OutputLocation, suffix: &str, edit: F) -> JobOutcome where F: FnOnce(DynamicImage) -> Result<DynamicImage, String> {
-    let image = match crate::kit::images::load_image(&input) { Ok(image) => image, Err(error) => return failure(input, format!("Could not read image: {error}")) };
+    let image = match crate::kit::images::load_upright_image(&input) { Ok((image, _)) => image, Err(error) => return failure(input, format!("Could not read image: {error}")) };
     let image = match edit(image) { Ok(image) => image, Err(error) => return failure(input, error) };
     let extension = input.extension().and_then(|extension| extension.to_str()).unwrap_or("png");
     let output = match OutputNaming::reserve_destination(&input, location, suffix, extension) {
