@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
 import { openToolBySearch } from "./open-tool";
 
 type PathKind = "file" | "folder" | "unreadable";
@@ -653,7 +654,7 @@ test("a saved Remove Password favorite and recent open File Security once migrat
 
 test("a saved Protect PDF favorite and recent open File Security after the earlier migration already ran", async ({ page }) => {
     await page.addInitScript(() => {
-        if (localStorage.getItem("toolbox-tool-id-migration") === "3") return;
+        if (localStorage.getItem("toolbox-tool-id-migration") === "4") return;
         localStorage.setItem("toolbox-tool-id-migration", "1");
         localStorage.setItem("toolbox-favorites", JSON.stringify(["pdf-protect", "pdf-merge"]));
         localStorage.setItem("toolbox-recent", JSON.stringify(["pdf-protect"]));
@@ -671,12 +672,12 @@ test("a saved Protect PDF favorite and recent open File Security after the earli
         recent: JSON.parse(localStorage.getItem("toolbox-recent") ?? "null"),
         marker: localStorage.getItem("toolbox-tool-id-migration"),
     }));
-    expect(saved).toEqual({ favorites: ["lock-unlock", "pdf-merge"], recent: ["lock-unlock"], marker: "3" });
+    expect(saved).toEqual({ favorites: ["lock-unlock", "pdf-merge"], recent: ["lock-unlock"], marker: "4" });
 });
 
 test("a saved Protect Office Files favorite and recent open File Security after migration", async ({ page }) => {
     await page.addInitScript(() => {
-        if (localStorage.getItem("toolbox-tool-id-migration") === "3") return;
+        if (localStorage.getItem("toolbox-tool-id-migration") === "4") return;
         localStorage.setItem("toolbox-tool-id-migration", "2");
         localStorage.setItem("toolbox-favorites", JSON.stringify(["pdf-merge", "office-protect"]));
         localStorage.setItem("toolbox-recent", JSON.stringify(["office-protect", "pdf-merge"]));
@@ -696,7 +697,50 @@ test("a saved Protect Office Files favorite and recent open File Security after 
         recent: JSON.parse(localStorage.getItem("toolbox-recent") ?? "null"),
         marker: localStorage.getItem("toolbox-tool-id-migration"),
     }));
-    expect(saved).toEqual({ favorites: ["pdf-merge", "lock-unlock"], recent: ["lock-unlock", "pdf-merge"], marker: "3" });
+    expect(saved).toEqual({ favorites: ["pdf-merge", "lock-unlock"], recent: ["lock-unlock", "pdf-merge"], marker: "4" });
+});
+
+test("saved PDF to Text and Extract Images favorites and recents open Extract from PDF after migration", async ({ page }) => {
+    await page.addInitScript(() => {
+        if (localStorage.getItem("toolbox-tool-id-migration") === "4") return;
+        localStorage.setItem("toolbox-tool-id-migration", "3");
+        localStorage.setItem("toolbox-favorites", JSON.stringify(["pdf-to-text", "pdf-merge", "pdf-image-extract"]));
+        localStorage.setItem("toolbox-recent", JSON.stringify(["pdf-image-extract", "pdf-to-text"]));
+    });
+    await page.goto("/");
+    const chips = page.getByRole("group", { name: "Favorite tools" });
+    await expect(chips.getByRole("button")).toHaveText(["Extract from PDF", "Merge PDF"]);
+    await chips.getByRole("button", { name: "Extract from PDF" }).click();
+    await expect(page.locator(".workspace-title")).toHaveText("PDF Conversion");
+    await expect(page.getByRole("heading", { name: "Extract from PDF", exact: true })).toBeVisible();
+    const rail = page.getByRole("toolbar", { name: "PDF Conversion tools" });
+    await expect(rail.getByRole("button", { name: "Extract from PDF", exact: true })).toHaveCount(1);
+    await expect(rail.getByRole("button", { name: /PDF to Text|Extract Images/ })).toHaveCount(0);
+
+    await page.reload();
+    const saved = await page.evaluate(() => ({
+        favorites: JSON.parse(localStorage.getItem("toolbox-favorites") ?? "null"),
+        recent: JSON.parse(localStorage.getItem("toolbox-recent") ?? "null"),
+        marker: localStorage.getItem("toolbox-tool-id-migration"),
+    }));
+    expect(saved.favorites).toEqual(["pdf-extract", "pdf-merge"]);
+    expect(saved.recent[0]).toBe("pdf-extract");
+    expect(saved.recent.filter((id: string) => id === "pdf-extract")).toHaveLength(1);
+    expect(saved.recent).not.toContain("pdf-to-text");
+    expect(saved.recent).not.toContain("pdf-image-extract");
+    expect(saved.marker).toBe("4");
+});
+
+const extractSearchTerms = ["Extract from PDF", "PDF to Text", "Extract Images", "text", "images"];
+
+test("search shows one PDF extraction tool for old and new names", async ({ page }) => {
+    await page.goto("/");
+    const search = page.getByRole("textbox", { name: "Search tools" });
+    for (const term of extractSearchTerms) {
+        await search.fill(term);
+        await expect(page.locator('button[data-command-result="pdf-extract"]'), term).toHaveCount(1);
+        await expect(page.getByRole("button", { name: /^Open (PDF to Text|Extract Images from PDF)$/ }), term).toHaveCount(0);
+    }
 });
 
 test("Lock sends a mixed PDF, Word, Excel and PowerPoint batch in one protect_files request and shows one locked row per file", async ({ page }) => {
@@ -889,6 +933,39 @@ test("Lock without its PDF helper shows the PDFs as Unavailable and the Word and
         await expect(failed).toContainText(missing.message);
     }
 });
+
+const qpdfUnavailableMessage = (() => {
+    const resources = readFileSync(new URL("../../src-tauri/src/kit/resources.rs", import.meta.url), "utf8");
+    const message = /const QPDF: Helper = Helper \{[^}]*unavailable: "([^"]+)"/.exec(resources)?.[1];
+    if (!message) throw new Error("Could not read the native qpdf Unavailable message");
+    return message;
+})();
+
+for (const tool of [
+    { title: "Merge PDF", command: "merge_pdfs", paths: ["/local/a.pdf", "/local/b.pdf"] },
+    { title: "Split PDF", command: "split_pdf", paths: ["/local/a.pdf"] },
+]) {
+    test(`${tool.title} without qpdf shows the native Unavailable message in plain language`, async ({ page }) => {
+        await open(page, "Merge PDF");
+        await drop(page, tool.paths);
+        if (tool.title === "Split PDF") await page.getByRole("toolbar", { name: "PDF Editor tools" }).getByRole("button", { name: "Split PDF", exact: true }).click();
+        await page.evaluate(({ paths, message }) => {
+            (window as unknown as IntakeWindow).__failures = Object.fromEntries(paths.map((path) => [path, { kind: "unavailable", message }]));
+        }, { paths: tool.paths, message: qpdfUnavailableMessage });
+        await run(page).click();
+        if (tool.title === "Merge PDF") await page.getByRole("dialog").getByRole("button", { name: "Save" }).click();
+
+        await expect(results(page)).toHaveCount(tool.paths.length);
+        expect((await requestFor(page, tool.command)).map((request) => request.paths)).toEqual([tool.paths]);
+        for (const row of await results(page).all()) {
+            await expect(row).toHaveAttribute("data-state", "failed");
+            await expect(row.locator(".result-row-state")).toContainText("Unavailable");
+            await expect(row).toContainText(qpdfUnavailableMessage);
+            await expect(row).not.toContainText(/environment variable/i);
+            await expect(row).not.toContainText(/TOOLBOX_|\bPATH\b/);
+        }
+    });
+}
 
 test("Lock shows already-protected files as Skipped rows with their reason, apart from Unavailable failures in the summary", async ({ page }) => {
     const already = { code: "alreadyProtected", message: "Already password-protected. Unlock it first, then lock it again." };

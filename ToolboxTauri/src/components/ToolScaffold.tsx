@@ -59,6 +59,15 @@ export type RunHandler = (files: string[], outputLocation: OutputLocation, run: 
 
 type PerFileRun = { handler: RunHandler; outputLocation: OutputLocation };
 
+export type RunDestinationControl = {
+    location: OutputLocation;
+    defaultLocation: OutputLocation;
+    overridden: boolean;
+    /** Opens the folder dialog and uses the chosen folder for this run only. Settings stay unchanged. */
+    change: () => void;
+    reset: () => void;
+};
+
 interface ToolScaffoldProps {
     utility: ToolDefinition;
     onRun: RunHandler;
@@ -91,6 +100,9 @@ interface ToolScaffoldProps {
         selectedFileIndex: number;
         selectFile: (index: number) => void;
         destination: React.ReactNode;
+        /** The pieces of `destination`, for a view that places its own destination control, such as next to Export. */
+        runDestination: RunDestinationControl;
+        live: LiveRun | null;
         runLabel: string | null;
         failedFiles: string[];
         retryFailed: () => Promise<void>;
@@ -777,6 +789,14 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                         onReset={() => setRunOverride(null)}
                     />
                 ),
+                runDestination: {
+                    location: outputLocation,
+                    defaultLocation,
+                    overridden: runOverride !== null,
+                    change: () => void changeForRun(),
+                    reset: () => setRunOverride(null),
+                },
+                live,
                 runLabel: savesOneFile ? saveStep.runLabel : null,
                 failedFiles,
                 retryFailed,
