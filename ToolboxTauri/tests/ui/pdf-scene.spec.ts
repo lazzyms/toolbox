@@ -174,6 +174,8 @@ for (const [utility, command] of [['Merge PDF', 'merge_pdfs'], ['Split PDF', 'sp
       await page.evaluate(() => { (window as any).dialogNext = '/local/second-scene-fixture.pdf'; });
       await page.getByRole('button', { name: 'Choose files to process' }).click();
       await expect(page.getByRole('button', { name: 'second-scene-fixture.pdf /local', exact: true })).toBeVisible();
+    } else {
+      await page.getByRole('textbox', { name: 'Page ranges' }).fill('1');
     }
     await page.locator('.workspace-primary-action').click();
     if (utility === 'Merge PDF') await page.getByRole('dialog').getByRole('button', { name: 'Save' }).click();
