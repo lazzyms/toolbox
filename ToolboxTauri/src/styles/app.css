@@ -820,6 +820,16 @@ body {
   font-size: 15px;
   font-weight: 600;
 }
+.result-summary-total {
+  display: flex;
+  flex-basis: 100%;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+}
+.result-summary-saved {
+  font-weight: 600;
+}
 .result-summary-hint,
 .result-row-detail {
   color: var(--muted-foreground);

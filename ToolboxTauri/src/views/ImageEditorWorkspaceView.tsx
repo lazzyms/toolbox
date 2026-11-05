@@ -119,7 +119,6 @@ const imageEditLabel = (edit: ImageEditOperation) => {
   if (edit.kind === "rotate") return `Rotate ${edit.degrees}°${edit.flip !== "none" ? ` · ${edit.flip}` : ""}`;
   if (edit.kind === "tone") return `Tone · ${edit.brightness}/${edit.contrast}/${edit.saturation}/${edit.exposure}`;
   if (edit.kind === "watermark") return `Watermark · ${edit.text || "Text"}`;
-  if (edit.kind === "compress") return `Compress · ${edit.lossless ? "lossless" : `${edit.quality}%`}`;
   if (edit.kind === "convert") return `Convert · ${edit.format.toUpperCase()}`;
   return `Crop ${edit.width} × ${edit.height}`;
 };
