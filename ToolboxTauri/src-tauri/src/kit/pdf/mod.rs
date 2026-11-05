@@ -1,8 +1,16 @@
 pub mod metadata;
+pub mod document_info;
+pub mod page_ranges;
 pub mod scene;
 pub mod editor;
 pub mod remaining;
 pub mod page_text;
+#[cfg(test)]
+pub(crate) mod jbig2_fixtures;
+#[cfg(test)]
+mod jbig2_spike;
+pub(crate) mod qpdf;
+pub mod unicode_font;
 
 use std::collections::HashSet;
 use std::fs;
@@ -554,7 +562,115 @@ fn document_has_signature(document: &Document, catalog: ObjectId, pages: &[Objec
     }).collect::<Result<Vec<_>, String>>().map(|values| values.into_iter().any(|value| value))
 }
 
-pub const SIGNATURE_REMOVED: &str = "Saved. The digital signature was removed, because changing the file breaks it.";
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum SignedPdf {
+    Reject,
+    RemoveSignature,
+}
+
+fn effective_field_type(document: &Document, id: ObjectId) -> Option<Vec<u8>> {
+    let mut seen = HashSet::new();
+    let mut current = id;
+    while seen.insert(current) {
+        let field = document.get_dictionary(current).ok()?;
+        if let Some(field_type) = field.get(b"FT").ok().and_then(|value| value.as_name().ok()) {
+            return Some(field_type.to_vec());
+        }
+        current = field.get(b"Parent").ok()?.as_reference().ok()?;
+    }
+    None
+}
+
+fn collect_signature_fields(document: &Document, id: ObjectId, signature: bool, seen: &mut HashSet<ObjectId>, found: &mut HashSet<ObjectId>, parents: &mut Vec<ObjectId>) {
+    if !seen.insert(id) {
+        return;
+    }
+    let Ok(field) = document.get_dictionary(id) else { return };
+    let signature = signature || field.get(b"FT").ok().and_then(|value| value.as_name().ok()) == Some(b"Sig");
+    if signature {
+        found.insert(id);
+    }
+    let kids = field.get(b"Kids").ok().and_then(|kids| resolve(document, kids).ok()?.as_array().ok());
+    if let Some(kids) = kids {
+        if !signature {
+            parents.push(id);
+        }
+        for kid in kids.iter().filter_map(|kid| kid.as_reference().ok()) {
+            collect_signature_fields(document, kid, signature, seen, found, parents);
+        }
+    }
+}
+
+fn retain_references(document: &mut Document, owner: ObjectId, key: &[u8], removed: &HashSet<ObjectId>) -> Result<bool, String> {
+    let target = match document.get_dictionary(owner).map_err(|error| error.to_string())?.get(key) {
+        Ok(Object::Reference(id)) => *id,
+        Ok(_) => owner,
+        Err(_) => return Ok(false),
+    };
+    let array = if target == owner {
+        document.get_dictionary_mut(owner).map_err(|error| error.to_string())?.get_mut(key).map_err(|error| error.to_string())?
+    } else {
+        document.get_object_mut(target).map_err(|error| error.to_string())?
+    };
+    let array = array.as_array_mut().map_err(|error| error.to_string())?;
+    array.retain(|item| item.as_reference().map_or(true, |id| !removed.contains(&id)));
+    Ok(array.is_empty())
+}
+
+pub(crate) fn remove_signatures(document: &mut Document) -> Result<bool, String> {
+    let catalog = document.trailer.get(b"Root").map_err(|error| error.to_string())?.as_reference().map_err(|error| error.to_string())?;
+    let pages = document.get_pages().values().copied().collect::<Vec<_>>();
+    if !document_has_signature(document, catalog, &pages)? {
+        return Ok(false);
+    }
+    let acro_form = match document.get_dictionary(catalog).map_err(|error| error.to_string())?.get(b"AcroForm").cloned() {
+        Ok(Object::Reference(id)) => Some(id),
+        Ok(inline) => {
+            let id = document.add_object(inline);
+            document.get_dictionary_mut(catalog).map_err(|error| error.to_string())?.set("AcroForm", id);
+            Some(id)
+        }
+        Err(_) => None,
+    };
+    let mut found = HashSet::new();
+    let mut parents = Vec::new();
+    let mut seen = HashSet::new();
+    let form_fields = acro_form
+        .and_then(|id| Some(resolve(document, document.get_dictionary(id).ok()?.get(b"Fields").ok()?).ok()?.as_array().ok()?.iter().filter_map(|field| field.as_reference().ok()).collect::<Vec<_>>()))
+        .unwrap_or_default();
+    for field in form_fields {
+        collect_signature_fields(document, field, false, &mut seen, &mut found, &mut parents);
+    }
+    for page in &pages {
+        let annotations = document.get_dictionary(*page).ok()
+            .and_then(|page| resolve(document, page.get(b"Annots").ok()?).ok()?.as_array().ok())
+            .map(|annotations| annotations.iter().filter_map(|annotation| annotation.as_reference().ok()).collect::<Vec<_>>())
+            .unwrap_or_default();
+        found.extend(annotations.into_iter().filter(|id| effective_field_type(document, *id).as_deref() == Some(b"Sig")));
+    }
+    for page in &pages {
+        if retain_references(document, *page, b"Annots", &found)? {
+            document.get_dictionary_mut(*page).map_err(|error| error.to_string())?.remove(b"Annots");
+        }
+    }
+    for parent in parents {
+        retain_references(document, parent, b"Kids", &found)?;
+    }
+    if let Some(form) = acro_form {
+        let has_fields = document.get_dictionary(form).map_err(|error| error.to_string())?.has(b"Fields");
+        if !has_fields || retain_references(document, form, b"Fields", &found)? {
+            document.get_dictionary_mut(catalog).map_err(|error| error.to_string())?.remove(b"AcroForm");
+            document.objects.remove(&form);
+        } else {
+            document.get_dictionary_mut(form).map_err(|error| error.to_string())?.remove(b"SigFlags");
+        }
+    }
+    document.get_dictionary_mut(catalog).map_err(|error| error.to_string())?.remove(b"Perms");
+    document.objects.retain(|id, value| !found.contains(id) && !is_signature_dictionary(value));
+    Ok(true)
+}
+
+pub const SIGNATURE_REMOVED: &str ="Saved. The digital signature was removed, because changing the file breaks it.";
 
 pub fn has_signed_signature_field(document: &Document) -> bool {
     let mut seen = HashSet::new();
@@ -667,6 +783,20 @@ pub(crate) fn mutation_preflight(document: &Document, intent: PdfMutationIntent)
     Ok(preflight)
 }
 
+pub(crate) fn pdf_load_error(error: lopdf::Error) -> ToolError {
+    match error {
+        lopdf::Error::InvalidPassword | lopdf::Error::Decryption(lopdf::encryption::DecryptionError::IncorrectPassword) => ToolError::wrong_password(WRONG_PASSWORD),
+        lopdf::Error::UnsupportedSecurityHandler(_)
+        | lopdf::Error::Unimplemented(_)
+        | lopdf::Error::Decryption(
+            lopdf::encryption::DecryptionError::UnsupportedEncryption
+            | lopdf::encryption::DecryptionError::UnsupportedVersion
+            | lopdf::encryption::DecryptionError::UnsupportedRevision,
+        ) => ToolError::unavailable(UNSUPPORTED_ENCRYPTION),
+        _ => unreadable(ProtectedFormat::Pdf),
+    }
+}
+
 fn unlocked_pdf_is_verified(path: &Path, page_count: usize) -> bool {
     let Ok(bytes) = std::fs::read(path) else { return false };
     matches!(probe(&bytes, ProtectedFormat::Pdf), Ok(ProtectionState::NotProtected))
@@ -745,19 +875,7 @@ impl PDFProcessor {
                     Err(e) => JobOutcome::failure(input_path, ToolError::processing(format!("Save failed: {}", e))),
                 }
             }
-            Err(lopdf::Error::InvalidPassword | lopdf::Error::Decryption(lopdf::encryption::DecryptionError::IncorrectPassword)) => {
-                JobOutcome::failure(input_path, ToolError::wrong_password(WRONG_PASSWORD))
-            }
-            Err(
-                lopdf::Error::UnsupportedSecurityHandler(_)
-                | lopdf::Error::Unimplemented(_)
-                | lopdf::Error::Decryption(
-                    lopdf::encryption::DecryptionError::UnsupportedEncryption
-                    | lopdf::encryption::DecryptionError::UnsupportedVersion
-                    | lopdf::encryption::DecryptionError::UnsupportedRevision,
-                ),
-            ) => JobOutcome::failure(input_path, ToolError::unavailable(UNSUPPORTED_ENCRYPTION)),
-            Err(_) => JobOutcome::failure(input_path, unreadable(ProtectedFormat::Pdf)),
+            Err(error) => JobOutcome::failure(input_path, pdf_load_error(error)),
         }
     }
 
@@ -809,7 +927,7 @@ impl PDFProcessor {
             return JobOutcome::failure(input_path, ToolError::invalid_input("A non-empty password is required."));
         }
         if password.contains(['\n', '\r']) {
-            return JobOutcome::failure(input_path, ToolError::invalid_input("Passwords can't contain line breaks."));
+            return JobOutcome::failure(input_path, ToolError::invalid_input(qpdf::PASSWORD_LINE_BREAK));
         }
         let raw = match read_and_probe(&input_path) {
             Ok((raw, state)) => match lock_skip_reason(state) {
@@ -832,11 +950,10 @@ impl PDFProcessor {
         };
 
         let mut command = Command::new(&qpdf);
-        command.arg(&input_path).arg(output_path.path()).args(["--encrypt", "@-", "--bits=256", "--"]);
-        let options = format!("--user-password={password}\n--owner-password={password}\n").into_bytes();
+        command.arg(&input_path).arg(output_path.path()).args(["--encrypt", qpdf::PASSWORDS_FROM_STDIN, "--bits=256", "--"]);
         let limit = pdf_lock_time_limit(page_count);
         let timed_out = format!("Locking took longer than {} seconds and was stopped. Nothing was saved.", limit.as_secs());
-        let output = match run_bounded_helper_with_input(command, Some(options), Instant::now() + limit, PDF_TEXT_MAX_ERROR_BYTES, PDF_TEXT_MAX_ERROR_BYTES, &timed_out) {
+        let output = match qpdf::run_with_passwords(command, &[("--user-password", password), ("--owner-password", password)], Instant::now() + limit, &timed_out) {
             Ok(output) => output,
             Err(message) if message == timed_out => return JobOutcome::failure(input_path, ToolError::limit_exceeded(crate::kit::contracts::LimitKind::Time, message)),
             Err(message) => return JobOutcome::failure(input_path, ToolError::unavailable(message)),
@@ -899,7 +1016,7 @@ pub(crate) mod tests {
         false
     }
 
-    fn make_pdf(path: &PathBuf) {
+    pub(crate) fn make_pdf(path: &PathBuf) {
         let mut doc = Document::with_version("1.7");
         let pages_id = doc.new_object_id();
         let font_id = doc.add_object(dictionary! {
@@ -1113,6 +1230,49 @@ pub(crate) mod tests {
         ];
         for ((name, document), expected) in cases {
             assert_eq!(has_signed_signature_field(&document), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn removing_signatures_leaves_no_signature_and_keeps_other_form_fields() {
+        let text_field = |document: &mut Document| document.add_object(dictionary! { "FT" => "Tx", "T" => "Name", "V" => Object::string_literal("Asha") });
+        let cases = [
+            fixture("plain", |_| {}),
+            fixture("signed field", sign),
+            fixture("kid inherits the signature type", |document| {
+                let value = document.add_object(signature_value());
+                let parent = document.new_object_id();
+                let kid = document.add_object(dictionary! { "Parent" => parent, "Subtype" => "Widget", "V" => value });
+                document.objects.insert(parent, dictionary! { "FT" => "Sig", "T" => "Approval", "Kids" => vec![Object::Reference(kid)] }.into());
+                attach_widget(document, kid);
+                set_form_fields(document, vec![Object::Reference(parent)]);
+            }),
+            fixture("signed widget outside the field tree", |document| {
+                let value = document.add_object(signature_value());
+                let widget = document.add_object(dictionary! { "Subtype" => "Widget", "FT" => "Sig", "V" => value });
+                attach_widget(document, widget);
+            }),
+            fixture("signed field beside a text field", |document| {
+                sign(document);
+                let text = text_field(document);
+                let form = document.catalog().unwrap().get(b"AcroForm").unwrap().as_reference().unwrap();
+                document.get_dictionary_mut(form).unwrap().get_mut(b"Fields").unwrap().as_array_mut().unwrap().push(Object::Reference(text));
+            }),
+        ];
+        for (name, mut document) in cases {
+            let removed = remove_signatures(&mut document).unwrap();
+            assert_eq!(removed, name != "plain", "{name}");
+            let catalog = document.trailer.get(b"Root").unwrap().as_reference().unwrap();
+            let pages = document.get_pages().values().copied().collect::<Vec<_>>();
+            assert!(!document_has_signature(&document, catalog, &pages).unwrap(), "{name}");
+            let form = document.catalog().unwrap().get(b"AcroForm").ok().and_then(|form| form.as_reference().ok());
+            if name == "signed field beside a text field" {
+                let form = document.get_dictionary(form.unwrap()).unwrap();
+                assert_eq!(form.get(b"Fields").unwrap().as_array().unwrap().len(), 1);
+                assert!(form.get(b"SigFlags").is_err());
+            } else {
+                assert!(form.is_none(), "{name}");
+            }
         }
     }
 
