@@ -3,12 +3,13 @@ import type { KeyboardEvent } from "react";
 import { Button } from "@/components/ui/button";
 import type { AtomicToolId, ToolDefinition, ToolWorkspaceDefinition } from "../contracts";
 import { workspaceEntries } from "../registry";
+import type { WorkspaceEntry } from "../registry";
 import { TablerIcon } from "./TablerIcon";
 import { useToolAvailability } from "../ToolAvailabilityContext";
 
 interface WorkspaceCommandRailProps {
   actions: readonly ToolDefinition[];
-  /** Groups the view's editor tools into one entry and lists More tools last. */
+  /** Groups the view's editor tools into one entry and lists labelled groups, such as Details and More, after the main tools. */
   workspace?: ToolWorkspaceDefinition;
   activeId: AtomicToolId;
   onSelect: (id: AtomicToolId) => void;
@@ -38,6 +39,7 @@ const designIconByToolId: Record<AtomicToolId, string> = {
   "pdf-repair": "repair-pdf",
   "pdf-redact": "redact-pdf",
   "pdf-compare": "compare-pdf",
+  "pdf-privacy": "privacy-check",
   "heic-convert": "convert-format",
   compress: "compress-images",
   resize: "resize-images",
@@ -104,9 +106,9 @@ export const WorkspaceCommandRail = ({
   const [orientation, setOrientation] = useState<ToolbarOrientation>(getToolbarOrientation);
   const listRef = useRef<HTMLDivElement>(null);
   const tools = availability.filter(actions);
-  const entries = workspace
+  const entries: WorkspaceEntry[] = workspace
     ? workspaceEntries(workspace, tools)
-    : tools.map((tool) => ({ key: tool.id, title: tool.title, blurb: tool.blurb, symbol: tool.symbol, tools: [tool], more: false }));
+    : tools.map((tool) => ({ key: tool.id, title: tool.title, blurb: tool.blurb, symbol: tool.symbol, tools: [tool] }));
 
   useEffect(() => {
     const updateOrientation = () => setOrientation(getToolbarOrientation());
@@ -134,7 +136,7 @@ export const WorkspaceCommandRail = ({
           const unavailable = tool.capability.nativeAvailability === "unavailable";
           return (
             <Fragment key={entry.key}>
-              {entry.more && !entries[index - 1]?.more && <p className="workspace-command-group">More</p>}
+              {entry.group && entry.group !== entries[index - 1]?.group && <p className="workspace-command-group">{entry.group}</p>}
               <Button
                 variant={active ? "secondary" : "ghost"}
                 size="sm"

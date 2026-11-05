@@ -178,6 +178,38 @@
 "title": "Details: privacy report and properties",
 "expand": "fill"
 },
+"PdfPrivacy.dc.html": {
+"x": 10040,
+"y": 6120,
+"w": 1280,
+"h": 800,
+"title": "Privacy Check: read-only report, one file or many",
+"expand": "fill"
+},
+"PdfProperties.dc.html": {
+"x": 11400,
+"y": 6120,
+"w": 1280,
+"h": 800,
+"title": "Edit Properties: keep, set or clear, mixed values",
+"expand": "fill"
+},
+"PdfRestrictions.dc.html": {
+"x": 12760,
+"y": 6120,
+"w": 1280,
+"h": 800,
+"title": "Remove Restrictions: permissions password, per-file override",
+"expand": "fill"
+},
+"PdfDetailsNarrow.dc.html": {
+"x": 14120,
+"y": 6120,
+"w": 900,
+"h": 800,
+"title": "Narrow window: Details tools with options as a drawer",
+"expand": "fill"
+},
 "Split.dc.html": {
 "x": 2720,
 "y": 6120,
@@ -393,6 +425,10 @@
 "PdfNarrow.dc.html",
 "PdfCrop.dc.html",
 "PdfDetails.dc.html",
+"PdfPrivacy.dc.html",
+"PdfProperties.dc.html",
+"PdfRestrictions.dc.html",
+"PdfDetailsNarrow.dc.html",
 "Split.dc.html",
 "Merge.dc.html",
 "Bates.dc.html",
@@ -478,7 +514,7 @@
 "y": 5860,
 "text": "Other PDF tools",
 "kind": "title1",
-"maxW": 6800
+"maxW": 18620
 },
 "row7": {
 "x": 0,
@@ -537,7 +573,7 @@
 "w": 360,
 "maxH": 560,
 "fill": "blue",
-"text": "Lock & Unlock: mode and passwords\n\nThe view is File Security and its one tool is Lock & Unlock, so the rail never reads File Security twice. Unlock also removes restrictions from PDFs that open without a password, with no password needed, and saves an unlocked copy.\n\nLock and Unlock is a segmented control in the header. Switching keeps the file list, clears both password fields and re-checks every row for the new mode. It is disabled while a batch runs.\n\nThe batch password sits at the top of the options with show/hide. Lock adds Confirm under it. A mismatch marks Confirm as invalid with 'Passwords don't match. Type the new password again.' and Run names the reason.\n\nA row's own password opens an inline editor in that row, with Confirm in Lock. Saved rows show 'Own password' with Change and Use batch password. Clearing it shows a status line with Undo."
+"text": "Lock & Unlock: mode and passwords\n\nThe view is File Security and its one tool is Lock & Unlock, so the rail never reads File Security twice. Unlock removes open passwords. A PDF that opens without a password but limits printing, copying or editing is Skipped, with a pointer to Remove Restrictions in the PDF Editor.\n\nLock and Unlock is a segmented control in the header. Switching keeps the file list, clears both password fields and re-checks every row for the new mode. It is disabled while a batch runs.\n\nThe batch password sits at the top of the options with show/hide. Lock adds Confirm under it. A mismatch marks Confirm as invalid with 'Passwords don't match. Type the new password again.' and Run names the reason.\n\nA row's own password opens an inline editor in that row, with Confirm in Lock. Saved rows show 'Own password' with Change and Use batch password. Clearing it shows a status line with Undo."
 },
 "sec2": {
 "x": 7200,
@@ -632,6 +668,78 @@
 "maxH": 520,
 "fill": "green",
 "text": "Screen-reader announcements\n\nOne polite live region sits on the batch strip:\n- On start: 'Protecting 24 files.'\n- During the run: progress every 5 files or 10 seconds, whichever is later, such as 'Protecting, 10 of 24 done.'\n- On finish: 'Done. 21 protected, 2 skipped, 1 failed.' Focus stays where it was.\n\nEach row is a list item whose accessible name reads as one sentence: file, state, reason, warnings, then output name. Row actions are real buttons, such as 'Open annual-report-protected.pdf'.\n\nThe cancel dialog traps focus and returns it to Cancel batch."
+},
+"pdrail": {
+"x": 15060,
+"y": 6120,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Details: rail and names\n\nThe PDF Editor rail gets a Details group under its six tools: Privacy Check, Edit Properties and Remove Restrictions. Each name is a verb and what it acts on. The one-line description under the view title is also the rail tooltip.\n\nRemove Restrictions reads 'Lift print, copy and edit limits with the permissions password. Open passwords are removed in File Security.' Unlock in File Security removes open passwords only.\n\nEach tool points at the other instead of doing its job. A permissions-only PDF in Unlock is Skipped with 'Open Remove Restrictions'. A PDF with an open password in Remove Restrictions fails with 'Open Unlock'.\n\nThe narrow window shows the three tools as toolbar tabs after an 'Edit PDF and 5 more' menu."
+},
+"pdq1": {
+"x": 15460,
+"y": 6120,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Q1. Privacy report: one file and many\n\nPrivacy Check is read-only. It never changes or saves a PDF, and results say 'Nothing was changed in any PDF.'\n\nOne file: the report replaces the list. A summary counts High, Medium and Low findings and the categories with none found. All 14 categories follow in a fixed order. A category with findings is a card with a severity badge, a count, 'Why it matters', the items, and a pointer when a tool fixes it, such as Open Edit Properties. Empty categories collapse to one line, 'None found'. Unsupported items are always listed, so a report never claims more than was read.\n\nMany files: a report list on the left shows each file with its counts or its failure. The chosen file's report fills the right. A failed file shows its reason and a retry in place of a report."
+},
+"pdq2": {
+"x": 15860,
+"y": 6120,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Q2. Copy and save\n\nCopy, Save as JSON and Save as Markdown sit at the top of the report, above the categories, and act on the report on screen. Copy uses Shift+Cmd+C (Ctrl+Shift+C) and copies Markdown.\n\nWith many files, an 'All 4 reports' group above the report list has Copy all, Save all as JSON and Save all as Markdown. Failed files have no report and are left out.\n\nSaving writes name-details.json or .md to 'Save reports to'. A taken name gets -1, -2, and the saved banner names the renamed file with Show in Finder (Show in File Explorer). Nothing is written until you choose Save."
+},
+"pdq3": {
+"x": 16260,
+"y": 6120,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "Q3. Mixed values in a batch\n\nEach field (title, author, subject, created, modified) has Keep, Set and Clear. Under it, 'Now:' summarises the batch, such as '7 different titles, 2 files have none'. Keep leaves each file's own value, even where files differ. Set shows the new value and 'Replaces the title in all 9 files'. Clear says it also removes the XMP copy.\n\nThe list shows each file's current title, author and modified date, so differences are visible before the run.\n\nDates use YYYY-MM-DD HH:MM in local time. An impossible date marks the field invalid, says why with an example, and Run names the reason. While every field is Keep, Run is disabled and says nothing would change.\n\nA file that already matches is Skipped with 'No effective change', and no copy is made."
+},
+"pdq4": {
+"x": 16660,
+"y": 6120,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "Q4. Batch password, overrides, retries and Skipped\n\nOne masked field with show/hide holds the password for all files: the open password in Privacy Check and Edit Properties, the permissions password in Remove Restrictions. It is never saved.\n\nA row's own password opens inline under that row, with 'Use for this file' (Enter) and Cancel (Esc). The row then shows an 'Own password' badge. It is used instead of the batch password for this run only.\n\nAfter a wrong password, 'Try another password' opens a field in the failed row with 'Retry this file'. Only that file runs again, and its new password isn't saved. A damaged file gets Retry and 'Open Repair PDF'.\n\nSkipped is grey and means nothing needed doing, such as no restrictions or no effective change. It never counts as a failure."
+},
+"pdq5": {
+"x": 17060,
+"y": 6120,
+"w": 360,
+"maxH": 640,
+"fill": "purple",
+"text": "Q5. Signature removed\n\nAny save of a signed PDF removes the signature, so Edit Properties and Remove Restrictions warn twice.\n\nBefore the run, the row note reads 'Signed. Saving removes the signature.' in amber.\n\nAfter the run, the row is amber and Saved, not Failed: 'Saved. The digital signature was removed, because changing the file breaks it.' The summary adds '1 saved file has a warning', and the Warnings filter shows it. This is the same sentence File Security uses. Privacy Check only reports the signature and changes nothing."
+},
+"pdq6": {
+"x": 17460,
+"y": 6120,
+"w": 360,
+"maxH": 640,
+"fill": "purple",
+"text": "Q6. Destination\n\nEdit Properties and Remove Restrictions show 'Save to' in the options, above Run. Defaults are a folder per tool, such as ~/Documents/Edited and ~/Documents/Unrestricted (C:\\Users\\Asha\\... on Windows). Names add -edited or -unrestricted. A taken name gets -1, -2 and the result row says it was renamed. Originals are never replaced.\n\n'Change for this run' opens the native folder dialog. The new folder applies to this run only and 'Reset to default' turns on so it can be undone. The default changes only in Settings.\n\nPrivacy Check shows 'Save reports to', used only when you save reports. The narrow window shows the destination in the list footer, with the same link."
+},
+"pdq7": {
+"x": 17860,
+"y": 6120,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "Q7. Keyboard and multi-select\n\nThe list is a multi-select listbox. Click selects, Shift-click extends, Cmd-click (Ctrl-click) toggles, and arrows move. Delete removes from the list, never from disk. A selection offers 'Set password for 2...' and Remove from list.\n\nShortcut hints sit on their buttons: Open Cmd/Ctrl+O, Run Cmd+Return (Ctrl+Enter), Cancel Esc, Find a tool Cmd/Ctrl+K, Copy report Shift+Cmd+C (Ctrl+Shift+C).\n\nIn reports, arrows move in the report list. From inside a report, Option+Up and Option+Down (Alt+Up, Alt+Down) open the previous or next report.\n\nKeep, Set and Clear are a radio group: one Tab stop, arrows to choose. While a run is going, the list and options are locked and Esc cancels after the current file. The narrow drawer closes with Esc or Done and returns focus to Options."
+},
+"pdstates": {
+"x": 18260,
+"y": 6120,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Details boards: states\n\nPdfPrivacy: Files added, Empty, Checking, Report one file, Report batch, Wrong password retry, Reports saved.\n\nPdfProperties: Files added, Empty, One file, Invalid date, All keep, Saving, Results, Wrong password retry.\n\nPdfRestrictions: Files added, Empty, Password shown, Per-file override, Removing, Results, Wrong password retry.\n\nPdfDetailsNarrow: each tool with Files added, Options open and Results, at 900 px.\n\nEvery board has dark and light themes and macOS and Windows key labels. SecResults in unlock mode shows the permissions-only PDF that points to Remove Restrictions."
 }
 },
 "designSystems": []
