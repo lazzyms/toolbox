@@ -87,7 +87,7 @@
 "y": 3800,
 "w": 1280,
 "h": 800,
-"title": "Open a PDF: empty, several dropped, locked, signed",
+"title": "Open a PDF: empty, several dropped, locked, too many pages, signed",
 "expand": "fill"
 },
 "PdfText.dc.html": {
@@ -103,7 +103,7 @@
 "y": 3800,
 "w": 1280,
 "h": 800,
-"title": "Sign: typed or picture signature",
+"title": "Sign: typed or picture signature, use again",
 "expand": "fill"
 },
 "PdfForms.dc.html": {
@@ -111,7 +111,7 @@
 "y": 3800,
 "w": 1280,
 "h": 800,
-"title": "Fill forms and flatten",
+"title": "Fill forms: Tab order, invalid entry, unsupported form, flatten",
 "expand": "fill"
 },
 "PdfRedact.dc.html": {
@@ -119,7 +119,7 @@
 "y": 3800,
 "w": 1280,
 "h": 800,
-"title": "Redact: mark, then the export disclosure",
+"title": "Redact: mark, search, review, export disclosure",
 "expand": "fill"
 },
 "PdfMarks.dc.html": {
@@ -127,7 +127,7 @@
 "y": 4960,
 "w": 1280,
 "h": 800,
-"title": "Watermark, page numbers, header and footer",
+"title": "Watermark, page numbers, header and footer: range and tokens",
 "expand": "fill"
 },
 "PdfEditText.dc.html": {
@@ -135,7 +135,7 @@
 "y": 4960,
 "w": 1280,
 "h": 800,
-"title": "Edit existing text: substituted font, too long",
+"title": "Edit existing text: substituted font, too long, not editable",
 "expand": "fill"
 },
 "PdfOrganize.dc.html": {
@@ -143,7 +143,7 @@
 "y": 4960,
 "w": 1280,
 "h": 800,
-"title": "Organize pages: grid with page actions",
+"title": "Organize pages: empty, editing, export and result states",
 "expand": "fill"
 },
 "PdfExport.dc.html": {
@@ -151,7 +151,7 @@
 "y": 4960,
 "w": 1280,
 "h": 800,
-"title": "Export a copy: review, progress, done, failed, closing",
+"title": "Export a copy: review, blocked, progress, done, warnings, failed, closing",
 "expand": "fill"
 },
 "PdfNarrow.dc.html": {
@@ -215,7 +215,7 @@
 "y": 6120,
 "w": 1280,
 "h": 800,
-"title": "Split: page ranges or every N pages",
+"title": "Split: ranges or every N, fit preview, grouped results",
 "expand": "fill"
 },
 "Merge.dc.html": {
@@ -223,7 +223,7 @@
 "y": 6120,
 "w": 1280,
 "h": 800,
-"title": "Merge: ordered files and save dialog",
+"title": "Merge: ordered list, native save dialog, aggregate results",
 "expand": "fill"
 },
 "Bates.dc.html": {
@@ -231,7 +231,7 @@
 "y": 6120,
 "w": 1280,
 "h": 800,
-"title": "Bates numbering: ready and done",
+"title": "Bates numbering: empty, ready, running, done, failed file",
 "expand": "fill"
 },
 "ConvertBatch.dc.html": {
@@ -239,7 +239,7 @@
 "y": 7280,
 "w": 1280,
 "h": 800,
-"title": "Convert: PDF to images, extract, EPUB, to PDF",
+"title": "PDF to Images: range, picks, estimate, results; extract, EPUB, to PDF",
 "expand": "fill"
 },
 "OCR.dc.html": {
@@ -247,7 +247,7 @@
 "y": 7280,
 "w": 1280,
 "h": 800,
-"title": "OCR: language packs and output",
+"title": "OCR: modes, languages, pages and results",
 "expand": "fill"
 },
 "ImagesToPdf.dc.html": {
@@ -255,7 +255,7 @@
 "y": 7280,
 "w": 1280,
 "h": 800,
-"title": "Images to PDF: ordered pages and save dialog",
+"title": "Images to PDF: order, layout, save dialog, combine",
 "expand": "fill"
 },
 "FormattedPdf.dc.html": {
@@ -271,7 +271,7 @@
 "y": 8440,
 "w": 1280,
 "h": 800,
-"title": "Image Editor: resize, crop, rotate",
+"title": "Edit Image: six tools, one edit stack",
 "expand": "fill"
 },
 "ImageConvert.dc.html": {
@@ -279,7 +279,7 @@
 "y": 8440,
 "w": 1280,
 "h": 800,
-"title": "Convert image format",
+"title": "Convert image format: mixed batch, skipped, TIFF pages",
 "expand": "fill"
 },
 "Compress.dc.html": {
@@ -287,7 +287,7 @@
 "y": 8440,
 "w": 1280,
 "h": 800,
-"title": "Compress PDFs and images",
+"title": "Compress Files: empty, files, options, running",
 "expand": "fill"
 },
 "CompressResults.dc.html": {
@@ -295,7 +295,7 @@
 "y": 8440,
 "w": 1280,
 "h": 800,
-"title": "Compress results: saved, kept, failed",
+"title": "Compress Files results: compressed, skipped, failed",
 "expand": "fill"
 },
 "AppIcons.dc.html": {
@@ -343,7 +343,7 @@
 "y": 10760,
 "w": 1280,
 "h": 800,
-"title": "Packs: downloading, failed, offline, low space",
+"title": "Packs: every status, errors, Install from file",
 "expand": "fill"
 },
 "Shortcuts.dc.html": {
@@ -401,6 +401,62 @@
 "h": 800,
 "title": "Results: every lock and unlock outcome",
 "expand": "fill"
+},
+"ConvertToPdf.dc.html": {
+"x": 14000,
+"y": 7280,
+"w": 1280,
+"h": 800,
+"title": "Convert to PDF: mixed list, format options, paste HTML",
+"expand": "fill"
+},
+"ConvertToPdfResults.dc.html": {
+"x": 15360,
+"y": 7280,
+"w": 1280,
+"h": 800,
+"title": "Convert to PDF: results, fonts, script pack",
+"expand": "fill"
+},
+"CropResize.dc.html": {
+"x": 10440,
+"y": 4960,
+"w": 1280,
+"h": 800,
+"title": "Crop and Resize PDF: batch tool, ten states",
+"expand": "fill"
+},
+"CropResizeResults.dc.html": {
+"x": 11800,
+"y": 4960,
+"w": 1280,
+"h": 800,
+"title": "Crop and Resize PDF: running and results",
+"expand": "fill"
+},
+"ImageEditResults.dc.html": {
+"x": 5440,
+"y": 8440,
+"w": 1280,
+"h": 800,
+"title": "Edit Image results: progress, Skipped, failures",
+"expand": "fill"
+},
+"ImageEditNarrow.dc.html": {
+"x": 6800,
+"y": 8440,
+"w": 900,
+"h": 800,
+"title": "Edit Image below 1000 px: tools strip and More",
+"expand": "fill"
+},
+"PackResults.dc.html": {
+"x": 0,
+"y": 13080,
+"w": 1280,
+"h": 800,
+"title": "OCR results: files that need a pack, before and after install",
+"expand": "fill"
 }
 },
 "order": [
@@ -452,7 +508,14 @@
 "SecFiles.dc.html",
 "SecOptions.dc.html",
 "SecRunning.dc.html",
-"SecResults.dc.html"
+"SecResults.dc.html",
+"ConvertToPdf.dc.html",
+"ConvertToPdfResults.dc.html",
+"CropResize.dc.html",
+"CropResizeResults.dc.html",
+"ImageEditResults.dc.html",
+"ImageEditNarrow.dc.html",
+"PackResults.dc.html"
 ],
 "notes": {
 "row3": {
@@ -483,7 +546,7 @@
 "y": 3540,
 "text": "PDF Editor: one document, like a viewer",
 "kind": "title1",
-"maxW": 6800
+"maxW": 16400
 },
 "editor": {
 "x": 6800,
@@ -521,7 +584,7 @@
 "y": 7020,
 "text": "PDF Conversion",
 "kind": "title1",
-"maxW": 6800
+"maxW": "20400"
 },
 "conv": {
 "x": 5440,
@@ -536,7 +599,7 @@
 "y": 8180,
 "text": "Images",
 "kind": "title1",
-"maxW": 6800
+"maxW": "17400"
 },
 "row9": {
 "x": 0,
@@ -740,6 +803,773 @@
 "maxH": 640,
 "fill": "blue",
 "text": "Details boards: states\n\nPdfPrivacy: Files added, Empty, Checking, Report one file, Report batch, Wrong password retry, Reports saved.\n\nPdfProperties: Files added, Empty, One file, Invalid date, All keep, Saving, Results, Wrong password retry.\n\nPdfRestrictions: Files added, Empty, Password shown, Per-file override, Removing, Results, Wrong password retry.\n\nPdfDetailsNarrow: each tool with Files added, Options open and Results, at 900 px.\n\nEvery board has dark and light themes and macOS and Windows key labels. SecResults in unlock mode shows the permissions-only PDF that points to Remove Restrictions."
+},
+"c2pMix": {
+"x": 16720,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Convert to PDF: one mixed batch\n\nEvery added item sits in one list in the order it was added, with a Format column. There are no tabs per format. Word, Excel, PowerPoint, OpenDocument, RTF, older Office (with a Basic fidelity tag), Markdown, pasted HTML, plain text, CSV/TSV and EPUB can share a run.\n\nOptions has Page defaults first, then one collapsible section per family that is in the list, in a fixed order. A section disappears when its last file leaves the list, and its choices are kept. Each closed section shows a one-line summary.\n\nItems that can't be added (video, folders) are named in a 'not added' card. Formats that aren't shipped yet (MOBI here) and PDFs stay in the list as 'Not available yet' and 'Will be skipped'."
+},
+"c2pPaste": {
+"x": 17120,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Convert to PDF: pasted HTML\n\nPaste HTML… (⌘⇧V, Ctrl+Shift+V on Windows) opens a dialog with a name field and the pasted markup in a monospace box. It shows the size and how many remote images will be left out. Add to list makes a list item with a clipboard icon.\n\nPasted HTML has no original folder, so when the run starts a native save dialog asks for its name and folder. It opens in the folder last used for pasted HTML, or Documents. That is why the run button ends in an ellipsis while a pasted item is in the list. Cancel returns to the list without converting.\n\nThe other files keep saving next to their originals."
+},
+"c2pRows": {
+"x": 17520,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "Convert to PDF: result rows\n\nResults reuse the shared results header: status title, segment bar, All / Needs attention / Warnings and notes chips, Show all in Finder.\n\n- Fonts: 'Show fonts' expands a list of each font used: embedded, bundled fallback (Calibri to Carlito) or system font.\n- Approximate layout and remote content left out use the note icon and say what changed.\n- Omitted content (a chart with no stored image) uses the warning icon and amber detail.\n- Older Office files carry a Basic fidelity tag.\n- Skipped (already a PDF), Failed (password, DRM), Unavailable (MOBI) and Over limit give the reason in the detail line. Password-protected rows point to Open Lock & Unlock."
+},
+"c2pDest": {
+"x": 17920,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Convert to PDF: destination\n\nUses the shared Save to block: next to each original by default, with an example name and -1, -2 for clashes. Change for this run sets a folder for this run only and shows the 'This run only' badge and Reset to default (state: Changed save location).\n\nPasted HTML is the exception: it asks where to save when the run starts. No original is ever replaced."
+},
+"c2pCtl": {
+"x": 18320,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Convert to PDF: Markdown, text and table controls\n\n- Markdown: page size, margins, body font, code blocks (shaded or plain), add a table of contents.\n- Plain text: page size, margins, font (monospace default), encoding (Detect, with the detected value named), wrap long lines.\n- Tables (CSV/TSV): delimiter (by file type), encoding, first row is a header and repeats on each page, orientation, fit to width.\n- Spreadsheets: all sheets or visible only, respect print areas, fit sheet to page width. Presentations: speaker notes, hidden slides (the count is named).\n\nControls are paired selects and checkboxes inside each section. There is no live preview: the result row's Open shows the real PDF, so there is one render path."
+},
+"c2pPack": {
+"x": 18720,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "Convert to PDF: script pack\n\nA document whose text needs a script that isn't installed (Devanagari here) gets the shared pack row: package icon, 'Needs a pack', a reason and one 'Install script pack' button with its download size. There is no Retry.\n\nAfter install the row reads 'Ready to run' with a 'Pack installed' tag. The status line says '1 file is ready to run again' and the run button becomes 'Convert 1 file again'. Only that file runs; PDFs already made are kept."
+},
+"c2pKeys": {
+"x": 19120,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "Convert to PDF: keyboard and multi-select\n\nThe list is a multi-select listbox. Click selects one, Shift-click a range, ⌘-click (Ctrl-click) toggles, ⌘A selects all. Delete or Remove from list removes items from the list, never from disk.\n\nShortcuts: ⌘O add files, ⌘⇧V paste HTML (new), ⌘↵ convert, Esc cancels a run or closes a dialog. Option sections are buttons with aria-expanded; Enter or Space opens one.\n\nOne polite status line announces adds, removals, progress and the final result. Each converts on its own, so one failure doesn't stop the batch."
+},
+"c2pStates": {
+"x": 19520,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "purple",
+"text": "Convert to PDF: states\n\nConvertToPdf: Files added (default), Empty, Paste HTML, Markdown options, Plain text options, Table options, Spreadsheet and slide options, Changed save location, Last Markdown removed, Save dialog, Converting.\n\nConvertToPdfResults: Results (default), Needs attention, Warnings and notes, Script pack installed.\n\nBoth boards take theme (dark, light) and platform (macOS, Windows) props."
+},
+"c2pNew": {
+"x": 19920,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "orange",
+"text": "Convert to PDF: new patterns and open points\n\n- Collapsible option sections are new. There is no shadcn Accordion in the kit, so each header is a Button with aria-expanded and a chevron.\n- ⌘⇧V for Paste HTML is a new shortcut. Check it against the global shortcut map.\n- The save dialog is drawn as a placeholder. The app uses the native dialog.\n- Two states (Table options, Changed save location) show the options panel scrolled.\n- The pack size (38 MB) and the unshipped format (MOBI) are illustrative.\n- ConvertBatch keeps its older Convert to PDF view until these boards are approved; then remove it."
+},
+"oc1": {
+"x": 10000,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "OCR 1. Mode, Force and languages\n\nOptions run top to bottom: Save as, Languages, Pages, Force, Save to.\n\nSave as is a two-option segmented radiogroup: Searchable PDF (default) or Text file, with a one-line hint under it.\n\nLanguages is an ordered list, numbered by priority, with move and remove buttons. English is the default; the last choice is remembered. 'Add a language' is the #445 combobox.\n\nForce is a checkbox, off by default: 'Force: redo earlier OCR text'. Its hint says visible text is always skipped."
+},
+"oc2": {
+"x": 10400,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "purple",
+"text": "OCR 2. Packs in the picker\n\nSame as #445 (pack=Picker open): one listbox in two groups, 'Installed' and 'Download to use', each pack with its size. English is 'Added' and disabled.\n\nChoosing a pack adds it to the list as 'Not installed' and shows the note 'Hindi needs a 12 MB download.' with Install Hindi. Downloading shows 'Downloading 62%' in the list row (role=status).\n\nA remembered language that is no longer installed is dropped with a notice (state=Pick pages): 'Tamil was removed from your languages.'"
+},
+"oc3": {
+"x": 10800,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "OCR 3. Pages, thumbnails, mixed lists\n\nPages is a segmented control: All pages (default) or Range, with the shared syntax '1-3, 5, 8-'. One range applies to every PDF and multi-page TIFF and is clamped to each file.\n\nWith exactly one PDF, the list becomes a thumbnail listbox (state=Pick pages). Each page carries a class tag: Scan, Text or Earlier OCR. Picks write the range ('1-4, 9', badge 'Set by the page picks'); typing a range updates the picks.\n\nMixed lists show a Type column (PDF, HEIC photo, TIFF) and a Pages column, and say what each file will do."
+},
+"oc4": {
+"x": 11200,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "OCR 4. Save to\n\nThe shared shell block: 'Save to: Next to each original' with 'Change for this run'. After a change (state=Text file and Force) it shows the folder, the 'This run only' badge, Change and 'Reset to default'.\n\nThe Example box follows the mode: site-survey-scan-ocr.pdf or -ocr.txt. Clashes get -1, -2; nothing is replaced."
+},
+"oc5": {
+"x": 11600,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "orange",
+"text": "OCR 5. Progress\n\nThe header counts files and the current page: 'Recognizing file 2 of 9' / 'board-minutes-q3.pdf, page 4 of 9'.\n\nThe overall bar counts pages, not files ('35 of 541 pages done'), so a 480-page scan doesn't look stuck.\n\nThe active row has its own minibar ('Page 4 of 9'). Waiting rows show their page count. Options lock; Cancel (Esc) keeps finished files."
+},
+"oc6": {
+"x": 12000,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "purple",
+"text": "OCR 6. Result wording\n\nSearchable / Saved as text: '31 pages recognized. English and Hindi.'\nPage detail (toggle, aria-expanded): Recognized: Pages 1-4 and 9 / Skipped, visible text: Pages 5-7 / Skipped, earlier OCR text: Page 8. Turn on Force to replace it.\nWarning: 'Signature removed. Adding text removes the digital signature, so the copy isn't signed. The original still is.' (PDF mode only)\nNote: 'Saved as 8-bit colour, because the photo is 10-bit.'\nSkipped: 'Every page already has text: pages 1-3 visible, page 4 from an earlier OCR run. Nothing was made. Turn on Force…' / 'No pages left in 2-. It has 1 page, so nothing was made.'\nNo text found: 'OCR completed but found no readable text.' (existing message, kept)"
+},
+"oc7": {
+"x": 12400,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "orange",
+"text": "OCR 7. Errors\n\nInvalidInput (locked): 'It's password-protected. Remove its password in File Security, then run OCR again.' + Remove Password button.\nLimitExceeded, state 'Over limit': 'Stopped at page 212 of 480: it reached the time limit for one file. Nothing was saved. Split it into smaller PDFs, then try again.' Limit values are set at implementation.\nUnavailable (state=Engine missing): every row 'Unavailable' with 'The text recognition engine is missing. Reinstall Toolbox.' plus one role=alert card. A missing pack is 'Needs a pack' in #445's PackResults.\nEach failure stays on its own row."
+},
+"oc8": {
+"x": 12800,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "OCR 8. Hand-off and shortcuts\n\nExtract from PDF marks a scan 'Needs OCR' with an 'Open in OCR' button. OCR opens with that file queued, a note 'Opened from Extract from PDF' with 'Back to Extract from PDF', and Save as preset to Text file (state=Opened from Extract).\n\nShortcuts are the shell's: ⌘O / Ctrl+O add files, ⌘↵ / Ctrl+Enter runs, Esc cancels, ⌘K / Ctrl+K, ⌘, / Ctrl+,. No mode shortcut: Tab to Save as, then arrow keys. ⌘A / Ctrl+A picks all thumbnails."
+},
+"oc9": {
+"x": 13200,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "OCR 9. Playwright states\n\nEmpty: run disabled, 'Add files to start'.\nFiles added: 9 rows, 'loading-spinner.gif wasn't added.', estimate 'This will make up to 7 searchable PDFs'.\nText file and Force: example -ocr.txt, 'Will be skipped' rows, This run only.\nPick pages: listbox aria-multiselectable, range '1-4, 9'.\nOpened from Extract, Recognizing (progressbar values, locked fieldset), Results, Text results, Engine missing (role=alert).\nPacks: Not installed, Downloading, Picker open (aria-expanded)."
+},
+"oc10": {
+"x": 13600,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "OCR 10. New patterns\n\nNamed new patterns: page class tags on thumbnails (Scan / Text / Earlier OCR), the per-row page minibar during a run, the hand-off note from another tool, and the removed-language notice.\n\nAll else is the shared shell: grouped rail, Save to, Example, estimate (role=status), ResultList with Skipped and an .outs page-detail sublist.\n\nmacOS and Windows differ only in key caps, paths and 'Show in Finder' / 'Show in Explorer'."
+},
+"cr1": {
+"x": 13160,
+"y": 4960,
+"w": 360,
+"maxH": 800,
+"fill": "blue",
+"text": "Crop and Resize PDF: one tool, two modes\n\nCrop and Resize PDF is a batch tool in the PDF Editor rail. It works on many PDFs at once and saves new files. The PdfCrop board is different: it crops pages inside the one open document.\n\nThe header has a 'Crop pages / Resize pages' switch. It is a radio group, so the arrow keys move between the modes. Switching keeps the files, the Pages range and the Save to choice. Only the mode's own fields change.\n\nThe options panel shows only the active mode:\n- Crop: Crop by (Rectangle or Margins), then the rectangle or margin fields.\n- Resize: Page size, Orientation, Placement.\n\nPages and Save to come after the mode's fields, in the same place in both modes. The Run button names the mode, such as 'Crop 8 PDFs' or 'Resize 8 PDFs'."
+},
+"cr2": {
+"x": 13560,
+"y": 4960,
+"w": 360,
+"maxH": 800,
+"fill": "blue",
+"text": "Drawing the crop and showing margins\n\nRectangle: drag on the preview page to draw. Eight handles resize it, and dragging inside moves it. During a drag a chip shows the kept size, such as '168 × 241 mm'. The Left, Top, Width and Height fields update live, and typing in them moves the rectangle. Arrow keys move it 1 mm. Shift+Arrow resizes it. Undo and Reset crop sit in the preview header.\n\nThe area that will be hidden is shaded. The kept area has a solid edge.\n\nMargins: four edge handles, one per side. Each margin shows its value in a small label on the page, such as '12 mm'. The fields are Top, Right, Bottom and Left. 'Same on all sides' replaces them with one field. The Unit menu offers mm, in and pt.\n\nA negative or empty margin, or margins that leave no area, mark the field as invalid. Run is turned off with 'Fix the margins to crop.'"
+},
+"cr3": {
+"x": 13960,
+"y": 4960,
+"w": 360,
+"maxH": 800,
+"fill": "blue",
+"text": "One rectangle on mixed page sizes\n\nThe rectangle is stored relative to the page, as fractions of its width and height. So it lands in the same spot on any size or orientation. The preview shows it on the selected page. Under 'On other page sizes', small copies show it on a Letter page, a landscape page and the smallest page in the batch, with the size each one keeps.\n\nMargins are absolute lengths, so a small page loses more of its area. The small copies show that. A page with no area left is marked in red: 'No area left. This PDF will fail.' The file row says so before the run, and the footer counts it: 'receipts-q3.pdf will fail on page 3.'"
+},
+"cr4": {
+"x": 14360,
+"y": 4960,
+"w": 360,
+"maxH": 800,
+"fill": "blue",
+"text": "Resize preview on mixed sizes\n\nThe preview shows the chosen page in its new page size. The old page is drawn inside it, and the new page edge is dashed. The caption names both sizes and the scale, such as 'Letter, 216 × 279 mm on A4, 210 × 297 mm. Scaled to 97%.'\n\nSmall copies show other sizes in the batch: a landscape page that stays landscape with 'Match page', and a small receipt scaled up to 248%. A page that already has the target size says 'Already A4. Unchanged.' A PDF whose pages in range all match is skipped.\n\nScale to fit is the default, and nothing is cut off. With 'Actual size, centered', the parts outside the new page are hatched in amber. A warning gives the count: 'Cuts off content on 43 pages.' The footer repeats it.\n\nCustom size accepts 25.4 to 5,080 mm (72 to 14,400 pt). Outside that, the field is invalid and Run is turned off."
+},
+"cr5": {
+"x": 14760,
+"y": 4960,
+"w": 360,
+"maxH": 800,
+"fill": "purple",
+"text": "Crop hides, it does not remove\n\nA crop only hides the edges. The content stays in the file and any PDF app can show it again. The Crop options say so in a note under the fields: 'Crop hides the rest of the page. It stays in the file and can be shown again.'\n\nThe note ends with a link, 'Remove content with Redact PDF', which opens Redact with the same files. We show the note every time, not as a dialog, so it never blocks a run.\n\nResize changes the page box and scales the page content. Links, comments and form fields move with the content. Text stays sharp, because nothing is rasterized."
+},
+"cr6": {
+"x": 15160,
+"y": 4960,
+"w": 360,
+"maxH": 800,
+"fill": "green",
+"text": "Pages, page sizes and destination\n\nPages: one range for every PDF, such as '3-'. Empty means all pages. Pages past the end are ignored. The 'In range' column shows the count per file, such as '12 of 14'. A PDF with no pages in range is skipped.\n\nPage sizes: the file list has a Page size column. It shows the name, such as A4 or Letter, or '2 sizes' when pages differ. The 'Before you run' column notes the outliers, such as 'Page 4 is landscape' or 'Page 3 is 58 × 120 mm'.\n\nDestination: Save to defaults to 'Next to each original'. Names end in -cropped or -resized. A taken name gets -1, -2, and nothing is replaced. 'Change for this run' picks a folder for this run only, shown with a 'This run only' tag. Your default returns when you leave the tool."
+},
+"cr7": {
+"x": 15560,
+"y": 4960,
+"w": 360,
+"maxH": 800,
+"fill": "green",
+"text": "Skipped, failed and signed files\n\nBefore the run, the 'Before you run' column states the outcome per file:\n- Skipped: no pages in range, or (Resize) already the target size.\n- Won't run: password-protected, or over the 1,000-page limit.\n- Will fail: margins leave no area on a page.\n- Signed, in amber: 'The signature will be removed.'\n\nThe footer counts them, such as 'Crops 44 pages in 5 PDFs. 1 will be skipped and 2 won't run.' Run is still on, because each file is handled on its own.\n\nAfter the run, every row keeps its reason. Failures that another tool fixes end with one button that names it, such as 'Open Remove Password' or 'Open Split PDF'. A signed file is saved, with a warning row and a 'Not carried over' note in the summary panel."
+},
+"cr8": {
+"x": 15960,
+"y": 4960,
+"w": 360,
+"maxH": 800,
+"fill": "blue",
+"text": "Scope and assumptions\n\nTwo boards: CropResize (ten states) and CropResizeResults (Crop results, Resize results, Running). Theme and platform are props on both.\n\nThe tool name is 'Crop and Resize PDF', because Toolbox UI uses 'and', not '&'. The 1,000-page limit and the 25.4 to 5,080 mm size bounds are placeholders. Engineering confirms them.\n\nThe batch rules (per-file errors, no overwrites, originals unchanged, the results list and Cancel batch) follow the Running, Results and Split boards."
+},
+"ic1": {
+"x": 5840,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Conversion Q1. Ordered list for Images to PDF\n\nImagesToPdf Files added: a grid of page cards, each with a thumbnail, its page number, name, format and size. The grid reads as the page order.\n\nReorder by dragging (ImagesToPdf Dragging shows the drop slot and 'Drop here to make floorplan.heic page 2'), by the Move earlier and Move later buttons on each card, or with ⌘/Ctrl+Left and ⌘/Ctrl+Right on the selected card. Sort by: Order added (default), Name or Modified date.\n\nA multi-page TIFF is one wide card numbered 'Pages 5–7' with a thumbnail per TIFF page. Its pages stay together and move as one."
+},
+"ic2": {
+"x": 6240,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "purple",
+"text": "Conversion Q2. Layout options and the page preview\n\nImagesToPdf Files added: Page size defaults to Match image, and the only hint is 'Each page is the size of its image. Margin, fit and orientation appear for A4 and Letter.' Margin, fit and orientation are hidden, not disabled, because they do nothing for Match image.\n\nImagesToPdf A4 layout: choosing A4 or Letter shows Margin (None, Small, Large), Fit (Fit within, Fill the page, trimming edges) and Orientation (Automatic). They are grouped under the page size they depend on.\n\nThe page preview appears only for A4 and Letter. It shows the selected page on the paper with its margin, and selecting another card changes it."
+},
+"ic3": {
+"x": 6640,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "Conversion Q3. Resolution control\n\nConvertBatch Files added: Resolution, dpi is a segmented control with 72, 150 (default) and 300, plus Custom. Custom (ConvertBatch Range and resolution) shows a number field limited to 72–300.\n\nThe hint under it turns the dpi into pixels for a Letter page, such as '1275 × 1650 px' at 150, and says to use 300 for print. Each button has an accessible name such as '150 dpi', so a screen reader does not read a bare number."
+},
+"ic4": {
+"x": 7040,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "orange",
+"text": "Conversion Q4. Where the image-count estimate goes\n\nConvertBatch: the estimate sits in the footer, directly above the run button, so it is read last before running: 'This will make 108 images, from 6 PDFs, 1 locked.' The run button points at it with aria-describedby, and it is a polite status region, so changing the range or picks announces the new count.\n\nThe list also has an Images column per PDF, so a surprising total can be traced to one file. ConvertBatch Range error replaces the count with 'No image count yet' and disables Convert PDFs."
+},
+"ic5": {
+"x": 7440,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Conversion Q5. Page selection across a batch, and clamping\n\nConvertBatch Range and resolution: one typed range ('3-5, 8-') applies to every PDF. The hint says so: pages past a PDF's last page are left out, and a PDF with no pages left is skipped. Rows show it before running: memo-oct.pdf 'Range shortened, only pages 3 and 4 exist', and cover-letter.pdf 'Will be skipped, no pages in 3-5, 8-'.\n\nConvertBatch Pick pages: selecting a PDF and pressing Return opens its thumbnails. Picks replace the range for that PDF only, and a badge in the options says so.\n\nConvertBatch Range error: '5-3 runs backwards. Write it as 3-5.' The error is inline, uses role=alert and is tied to the field with aria-describedby."
+},
+"ic7": {
+"x": 7840,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "purple",
+"text": "Conversion Q7. Aggregate versus per-file results\n\nImages to PDF makes one file, so ImagesToPdf Combined shows one output card (name, page count, size, Open and Show in Finder) above the list of input images and their pages. In ImagesToPdf Combine failed, nothing is saved. The card names the input and page that stopped it (scan-0042.tiff, TIFF page 2), and every other input says the combine stopped.\n\nPDF to Images and Convert Image Format make files per input, so ConvertBatch Converted and ImageConvert Converted use one result row per input with its own state. A row with several outputs has a Show N images button (aria-expanded) that lists each file with Open and Show in Finder."
+},
+"ic8": {
+"x": 8240,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "Conversion Q8. The PDF Conversion rail\n\nConvertBatch Rail and ImagesToPdf Rail: the rail has three labelled groups. Combine and split has Merge PDFs, Split PDF and Images to PDF. From PDF has PDF to Images, Extract from PDF and PDF to EPUB. Make PDFs has OCR, Formatted PDF and Convert to PDF.\n\nEach group is role=group named by its heading. The current tool is aria-pressed. Up and Down move between tools, and Enter opens one, as the Rail state's help line says. Convert Image Format stays in the Images rail (ImageConvert Rail)."
+},
+"ic9": {
+"x": 8640,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "orange",
+"text": "Conversion Q9. Shortcuts and destination\n\nOpen files is ⌘/Ctrl+O, run is ⌘/Ctrl+Return (⌘↵ on macOS, Ctrl+Enter on Windows), Find a tool is ⌘/Ctrl+K, and Esc cancels a run. Images to PDF also uses ⌘/Ctrl+Left and ⌘/Ctrl+Right to reorder pages. Every shortcut is shown on its button.\n\nPDF to Images and Convert Image Format show Save to from the app-wide setting ('Next to each original') with 'Change for this run'. After a change, ConvertBatch Range and resolution and ImageConvert Converted show the folder with a 'This run only' badge, Change and Reset to default. The example name shows the suffix: -page-03, or -converted with -p1, -p2 for TIFF pages.\n\nImages to PDF has no Save to. Make PDF… always opens the native save dialog (ImagesToPdf Save dialog), which suggests IMG_4012-combined.pdf next to the first image."
+},
+"ic6": {
+"x": 9040,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Conversion Q6. Mixed batch, target, TIFF compression and Skipped\n\nImageConvert Files added: one list for any mix of HEIC, JPEG, PNG, WebP and TIFF. Each row shows From (format, transparency, bit depth, TIFF page count) and a To column for the chosen target. Files already in the target format say 'Will be skipped, already JPEG' before running. JPG and JPEG count as one format, and so do HEIC and HEIF, and TIF and TIFF.\n\nPer-file notes are predicted before running: 'Transparent areas become white', 'Saved as 8-bit', '3 files, -p1 to -p3'. In ImageConvert format-webp, each row says Lossless or Lossy, quality 90.\n\nConvert to is a segmented control. TIFF compression (LZW default, None, Deflate) appears only when TIFF is the target (ImageConvert format-tiff). There is no quality control. A note says quality is the shared 90 and points to Compress.\n\nA GIF isn't added. A note gives the reason and a button to Extract GIF Frames."
+},
+"ic10": {
+"x": 9440,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "purple",
+"text": "Conversion: screen reader and platform labels\n\nAll three boards follow the same pattern:\n- One polite status line under the list header announces changes: 'Added 7 PDFs. 1 file not added.', the new range result, or the drag target.\n- Each row's accessible name is one sentence: name, details, state, then the reason, such as 'cover-letter.pdf, 2 pages. No pages in the range, so it will be skipped.'\n- The run header is a status region ('Converting PDF 2 of 7'). Progress bars have aria-valuetext ('13 of 88 images saved').\n- Errors in fields use role=alert and aria-invalid. A missing renderer is a role=alert card.\n- Seg controls are radiogroups with roving tabindex. Locked options use aria-disabled.\n- Row actions name their file, such as 'Open logo-converted.jpg'.\n\nOn Windows, every board shows Ctrl in place of ⌘, File Explorer in place of Finder ('Show in Explorer' on small buttons), and C:\\Users paths. Use the platform prop to see both."
+},
+"ms1": {
+"x": 7600,
+"y": 6120,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Merge and Split Q1. Reordering the Merge list\n\nEach row has a grip, its position, a first-page thumbnail, the page count and the size, so files with the same name can be told apart. A repeated file gets a 'Copy 1 of 2' tag (Merge, Files added).\n\nDrag a row by its grip. A 2px insertion line shows where it lands, and a live hint says 'Moving site-photos.pdf to position 2' (Merge, Reordering).\n\nMove up and Move down buttons sit on every row; they are disabled on the first and last row. The keyboard path is Cmd+Up or Down (Ctrl on Windows) on the focused row, shown in the hint and the tooltips. A Sort menu sets name or date order in one step.\n\nWith one file, Merge is disabled and says it needs at least 2 PDFs (Merge, One file)."
+},
+"ms2": {
+"x": 8000,
+"y": 6120,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Merge and Split Q2. Where the output goes\n\nBoth boards share one Save to block: the default folder, 'Change for this run' and 'Reset to default' (Merge, Files added; Split, Files added).\n\nMerge makes one file, so Merge opens the native save dialog in that folder with a suggested name, lease-agreement-merged.pdf. Cancel writes nothing (Merge, Save dialog).\n\nSplit makes many files, so it saves straight to the folder with no dialog.\n\nNothing is ever replaced. An existing name gets -1, -2 and so on, and the result says so (Merge, Merged; Split, Results)."
+},
+"ms3": {
+"x": 8400,
+"y": 6120,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "Merge and Split Q3. Split options\n\nSplit has two modes in a segmented 'Split by' control: Page ranges and Every N pages. Only the field for the selected mode shows (Split, Files added; Split, Every N pages).\n\nRanges are typed as 1-3, 5, 8-. Each range becomes one file, and 8- runs to the last page.\n\nBad input gets one inline alert that names every problem and how to fix it, such as '3-1 runs backwards (write 1-3)'. Split stays disabled with the reason in the footer (Split, Invalid ranges).\n\nThe File names section shows example names, such as -pages-1-3 and -page-5."
+},
+"ms4": {
+"x": 8800,
+"y": 6120,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "Merge and Split Q4. Preview of the page spans\n\nYes. Each row shows the files it will make as chips before anything runs (Split, Files added; Split, Every N pages).\n\nA range past the last page is shortened (dashed chip) or dropped (struck chip). A PDF is skipped when nothing is left or the result would be the whole file, and the row says why.\n\nA password-protected PDF shows its page count as a dash and says the password must be removed first.\n\nThe toolbar and footer total the files to make and the PDFs that will be skipped."
+},
+"ms5": {
+"x": 9200,
+"y": 6120,
+"w": 360,
+"maxH": 640,
+"fill": "purple",
+"text": "Merge and Split Q5. Split results\n\nResults are grouped by input PDF, with the output files indented under each group (Split, Results).\n\nClean groups are folded with 'Show 3 files'. The group row carries the state and the reason: Split, Split with warnings (range dropped, signature removed, bookmarks not kept), Skipped, or Failed.\n\nA PDF that failed part-way lists the parts it saved and offers Retry. A password failure points to Remove Password.\n\nThe summary counts double as filter chips, and 'Show all in Finder' opens the folder.\n\nMerge has one output, so its result maps each input to its page range in the merged file (Merge, Merged). If one input fails, nothing is saved (Merge, Failed)."
+},
+"ms6": {
+"x": 9600,
+"y": 6120,
+"w": 360,
+"maxH": 640,
+"fill": "purple",
+"text": "Merge and Split Q6. Pointer to Organize Pages\n\nMerge joins whole files in order. Removing, rotating or reordering single pages belongs to Organize Pages.\n\nThe Merge options panel ends with a short note and an 'Open Organize Pages' button (Merge, Files added). After a merge, open the merged file there to adjust pages.\n\nThe pointer stays out of the file list so it does not compete with the main action."
+},
+"ie1": {
+"x": 7780,
+"y": 8440,
+"w": 360,
+"maxH": 900,
+"fill": "green",
+"text": "IE1. Batch vs. preview\n\nThe stack always applies to every image in the list. The preview shows one image at a time: the selected row, marked with an eye, is the one previewed, and ↑ ↓ or the arrows above the preview change it (Focused file changed).\n\nThe list shows each image's own result size, in → out, so mixed sizes are checked without previewing each one. Without a geometry step the row shows the size and file size instead.\n\nThe preview is scaled to fit and is never the saved file. Show original compares against the untouched image."
+},
+"ie2": {
+"x": 8180,
+"y": 8440,
+"w": 360,
+"maxH": 900,
+"fill": "green",
+"text": "IE2. Crop in mixed sizes, and the default\n\nThe default is Aspect ratio 4:5, keep Centre. Each image keeps the largest 4:5 area it has, so every size in the batch works and nothing can fail on size. Swap for portrait images flips the ratio for tall photos.\n\nPixel rectangle (Crop, pixel rectangle) uses one fixed rectangle in source pixels. Images too small for it are marked in the list before running, 'Smaller than the rectangle. Will fail.', and fail on their own in results with 'The crop falls outside this 1200 × 900 image. No copy was made.'\n\nDragging the area (drag Moving / Resizing) shows the size and position chip and snaps to the centre guides. Arrow keys move it 1 px, Shift+arrow 10 px."
+},
+"ie3": {
+"x": 8580,
+"y": 8440,
+"w": 360,
+"maxH": 900,
+"fill": "green",
+"text": "IE3. How the stack is shown\n\nThe six image tools in the rail are the stack. A tool in the stack shows its step number in the rail. The toolbar above the work area shows all six in their fixed run order: Crop, Resize, Rotate and Flip, Colour and Tone, Watermark, Remove Metadata. Steps in the stack are solid chips with a number and ×; the rest are dashed '+ Name' chips that add the step.\n\nThe order is fixed, so there is no drag to reorder. Selecting a rail tool or a chip opens its options on the right, headed 'Step N of M' and what it runs after (Step added).\n\nOne step is a single-tool edit with that tool's suffix (-cropped, -resized). Two or more save with -edited."
+},
+"ie4": {
+"x": 8980,
+"y": 8440,
+"w": 360,
+"maxH": 900,
+"fill": "green",
+"text": "IE4. Undo, redo and reset vs. Run\n\nUndo and Redo change the stack and step options only, never files. Removing a step or Reset stack shows a status line with Undo (Step removed, Stack reset). Reset stack keeps the image list.\n\nRun is never undone: it writes new files next to the originals and never changes them. After a run the list and the stack stay, so the user can change one step and run again (results, Edit the stack / Run again).\n\nRun is disabled with a reason in the footer when the stack is empty, there are no images, or a value is invalid (Empty, Stack reset, Resize out of range, Watermark unsupported character)."
+},
+"ie5": {
+"x": 9380,
+"y": 8440,
+"w": 360,
+"maxH": 900,
+"fill": "green",
+"text": "IE5. Destination\n\nSave to uses the Settings default, 'Next to each original'. 'Change for this run' picks a folder for this run only (Destination this run): the folder is shown with a This run only tag, Reset to default, and a line saying the Settings default stays as it is.\n\nNames are the original name plus the suffix. If the name is taken, -1, -2 and so on is added and the row warns about it in results. Files are never overwritten."
+},
+"ie6": {
+"x": 9780,
+"y": 8440,
+"w": 360,
+"maxH": 900,
+"fill": "green",
+"text": "IE6. Metadata report\n\nBefore running: the Metadata tab beside Preview shows what the previewed image contains and what will happen to each kind: Removed, Kept or None found. Orientation and colour profile are always kept.\n\nAfter running: each cleaned row has 'What was removed', which expands to Removed / Kept / Not found for that file (Metadata removed). A note at the top says profiles and orientation were kept in every copy.\n\nJPEG and PNG are cleaned without re-encoding. HEIC, WebP and TIFF are re-encoded at quality 90, and the row says so. Each copy is re-read after saving; if anything removed is still there, the file fails and no copy is kept."
+},
+"ie7": {
+"x": 10180,
+"y": 8440,
+"w": 360,
+"maxH": 900,
+"fill": "green",
+"text": "IE7. Watermark and PDF parity\n\nThe Watermark step uses the same options and words as the PDF watermark: Text or Picture, size as % of width, opacity, colour, angle, and Position (3 × 3 grid) or Tile. The PDF board stays the reference; only the preview differs.\n\nOn images the text can be dragged, resized from a corner and turned with the top handle, and it lands in the same relative place on every size (Watermark text, logo tiled).\n\nA character the watermark font can't draw is an error on the field before running (Watermark unsupported character). If it gets through, every file fails in one group in results (Watermark failed)."
+},
+"ie8": {
+"x": 10580,
+"y": 8440,
+"w": 360,
+"maxH": 900,
+"fill": "green",
+"text": "IE8. Where notices appear\n\nOne rule: a notice sits next to what it is about.\n\nField errors sit under the field and the Run footer names the fix. Step-level notes (neutral tone, re-encoding) sit at the bottom of that step's options. Format notes (quality 90, transparency flattened) sit under Format (Output format JPEG). Per-file predictions (will fail, will be skipped) sit in that file's row. Files not added sit in a dismissible 'Not added' region above the list (Files added). Stack changes use one status line under the stack.\n\nNo toasts. After a run, everything is in the results list, filterable by Needs attention, Warnings and Notes."
+},
+"ie9": {
+"x": 10980,
+"y": 8440,
+"w": 360,
+"maxH": 900,
+"fill": "green",
+"text": "IE9. Skipped vs. success and error\n\nDone: a new file was saved. Done with a warning: saved, but something the user should know (renamed -1, 8-bit, flattened). Skipped: nothing to do, so no copy was made; this is not an error. Failed: the file could not be edited and no copy was made; other files are unaffected.\n\nThe two Skipped wordings:\n• 'No changes. Already 2048 px on its longest side and already JPEG, so no copy was made.' when the stack would not change the file (also 'No changes. Will be skipped.' before running, Colour and Tone neutral).\n• 'No metadata to remove. No copy was made.' when Remove Metadata finds nothing.\n\nSkipped is grey, counts in Needs attention, and never turns the run red."
+},
+"ie10": {
+"x": 11380,
+"y": 8440,
+"w": 360,
+"maxH": 900,
+"fill": "blue",
+"text": "IE10. Shortcuts, clashes, macOS and Windows\n\n⌘O / Ctrl+O add files. ⌘↵ / Ctrl+Enter run. ⌘Z / Ctrl+Z undo a stack change; ⇧⌘Z / Ctrl+Y redo (Ctrl+Shift+Z also works on Windows). Inside a text field these keys keep the field's own undo. Delete on a focused chip removes that step; Delete in the list removes that file. ↑ ↓ in the list change the previewed image. Esc cancels a running batch.\n\nNo new global keys, so nothing clashes with ⌘K, ⌘, (Settings) or the other views' ⌘E, ⌘D, ⌘/ and F6.\n\nLabels: Show in Finder / Show in File Explorer, Show all in Finder / File Explorer, key hints as above (platform=Windows on every board). Paths use / on macOS and \\ on Windows."
+},
+"ie11": {
+"x": 11780,
+"y": 8440,
+"w": 360,
+"maxH": 900,
+"fill": "green",
+"text": "IE11. Progress in large batches\n\n'Editing 9 of 24' with time left, and one segment per file coloured by outcome (Running). Over 60 files the segments become one bar with the same colours in proportion.\n\nThe running row says which step it is on ('Step 2 of 3, Resize'). The list shows the latest rows and finished rows stay put, so the list doesn't jump. Each finished file is saved as soon as it is done.\n\nThe stack and options are locked during a run with a reason; Cancel batch (Esc) stops after the current file and keeps what is saved."
+},
+"ie12": {
+"x": 12180,
+"y": 8440,
+"w": 360,
+"maxH": 900,
+"fill": "blue",
+"text": "IE12. Focus order\n\nEditor: rail → stack toolbar (one tab stop; ← → move between chips, Delete removes, Enter selects) → Undo, Redo, Reset stack → status Undo when shown → Add files, Clear list → Not added region → file list (one tab stop, ↑ ↓) → Preview / Metadata tabs → Show original → preview crop or watermark handle (arrow keys) → step options → Format → Save to → Run.\n\nAfter removing a step, focus goes to the next chip, or the add chip in its place. After Reset stack, focus goes to the status Undo.\n\nResults: Ran strip → filter chips → Show all → rows (one tab stop, ↑ ↓; Tab reaches Open, Show in Finder and What was removed) → right panel. On finish, focus moves to the headline."
+},
+"ie13": {
+"x": 12580,
+"y": 8440,
+"w": 360,
+"maxH": 900,
+"fill": "blue",
+"text": "IE13. Screen reader\n\nThe stack is a toolbar with a list 'Steps, in the order they run'. Each chip reads 'Step 1 of 3, Crop' and its × reads 'Remove Crop step'. Rail tools read 'Crop, step 1 of 3' or 'not in the stack'.\n\nEach list row reads name, size in → out, and any warning. The preview has a text alternative describing the crop. Undo and Redo labels include the key.\n\nStack changes, the run headline and progress are polite live regions; progress announces every 10% and the finish, not every file. Errors are linked to their fields. The Metadata report is a description list."
+},
+"ie14": {
+"x": 12980,
+"y": 8440,
+"w": 360,
+"maxH": 900,
+"fill": "purple",
+"text": "IE14. Intake, GIFs and output format\n\nDrop or Open files accepts JPEG, PNG, WebP, HEIC, TIFF and BMP. Others are listed under 'Not added' with a reason: not an image, already in the list, or an animated GIF, which points to Extract GIF Frames.\n\nFormat defaults to Keep original format. Choosing JPEG says which images lose transparency and that it saves at quality 90. HEIC and over-8-bit images save as 8-bit sRGB, noted per file.\n\nImages over 16384 px on a side fail on their own with the limit named (Crop and rotate)."
+},
+"ie15": {
+"x": 13380,
+"y": 8440,
+"w": 360,
+"maxH": 900,
+"fill": "purple",
+"text": "IE15. Narrow window and themes\n\nBelow 1000 px the rail becomes a tools strip: the first four tools, then More with Watermark, Remove Image Metadata and the other Images tools (ImageEditNarrow). Step numbers stay on every tool. The stack shows only the steps in it plus '+ Add step'. The file list becomes a Previewing menu.\n\nEvery board renders in dark and light (theme=light) and macOS and Windows (platform=Windows) from the same tokens."
+},
+"cf6": {
+"x": 13780,
+"y": 8440,
+"w": 360,
+"maxH": 760,
+"fill": "blue",
+"text": "Compress Files: intake, flags, adding and removing\n\nOne view takes PDF, JPEG, PNG and WebP in the same batch. With no files the center is the drop zone, Open files (Cmd/Ctrl+O) is the main button, and Medium is already selected. Compress stays disabled with 'Add files to run'.\n\nEach row shows name, folder, type and size. Files known before the run are flagged in place: HEIC gets Will skip and the Convert it to JPEG first reason; a .docx and an animated WebP get Won't run. A banner counts them and offers one action to remove them all.\n\nAdding more appends to the end, scrolls to them and selects them. Duplicates go under Not added. Remove from list (Delete/Backspace) never touches the file; the status line says so and offers Undo."
+},
+"cf1": {
+"x": 14180,
+"y": 8440,
+"w": 360,
+"maxH": 760,
+"fill": "blue",
+"text": "Compress Files: Low, Medium, High\n\nStrength is a three-card radio group, Medium by default. Each card has one line on the trade-off, and 'What Medium does' lists what happens per type, so a mixed batch is clear before running.\n\nLow: PDFs are repacked without loss and images inside stay; JPEG is re-saved at high quality; PNG and lossless WebP stay lossless.\nMedium: images inside PDFs are recompressed and scaled down; JPEG and lossy WebP at medium quality.\nHigh: lower quality and resolution; PNG cut to 256 colours with dithering; WebP becomes lossy.\n\nText, transparency and colour profiles always stay. No dpi or quality numbers are shown."
+},
+"cf2": {
+"x": 14580,
+"y": 8440,
+"w": 360,
+"maxH": 760,
+"fill": "blue",
+"text": "Compress Files: Strip EXIF\n\nA switch under Strength, off by default. The line under it changes with the state, so the choice is explained where it is made.\n\nOff: camera, date and GPS details stay in the copies.\nOn: removes them from JPEG, PNG and WebP. Photos stay upright because orientation is applied first. PDFs aren't changed.\n\nThe results panel repeats the setting used for the batch."
+},
+"cf3": {
+"x": 14980,
+"y": 8440,
+"w": 360,
+"maxH": 760,
+"fill": "blue",
+"text": "Compress Files: Save to\n\nSave to shows the default from Settings: Next to each original, or a folder. 'Change for this run' picks a folder for this batch only; the row then shows This run only, Change and Reset to default, and says Save to goes back afterwards.\n\nCopies end in -compressed. An existing name gets -1, -2 and so on. Originals and existing files are never replaced.\n\nWhile running, Strength, Strip EXIF, Save to and the list are locked and dimmed, with one line saying why. Progress is per file, finished copies can be opened at once, and Esc cancels the batch."
+},
+"cf4": {
+"x": 15380,
+"y": 8440,
+"w": 360,
+"maxH": 760,
+"fill": "green",
+"text": "Compress Files results: sizes and savings\n\nThe summary leads with counts (compressed, skipped, failed), then Saved X, N% smaller, with before and after for the compressed files only. The side panel repeats the batch total and says skipped and failed files aren't counted.\n\nEach compressed row shows before -> after, a small bar of the new size against the old, and the percent saved. Sizes use the platform's units.\n\nThe segment bar has one segment per file; for large batches it becomes proportional by outcome."
+},
+"cf5": {
+"x": 15780,
+"y": 8440,
+"w": 360,
+"maxH": 760,
+"fill": "green",
+"text": "Compress Files results: skipped, warned, failed\n\nCompressed: check icon, Open and Show in Finder or File Explorer.\nWarning: compressed, with an amber icon and one line on what changed, such as a removed digital signature. It counts as compressed.\nSkipped: not an error. The file was fine but no copy was written: no savings (the copy would be larger) or HEIC, with Convert Image Format.\nFailed: red, with the reason and the fix. Unsupported type; animated WebP; password-protected (Unlock it first, Open Lock & Unlock); over the page or size limit (Open Split PDF); damaged file; PDF helper missing (a banner, PDFs only, images still run).\n\nThere is no Retry: the same file gives the same result. Fix it, then add it again."
+},
+"cf7": {
+"x": 16180,
+"y": 8440,
+"w": 360,
+"maxH": 760,
+"fill": "green",
+"text": "Compress Files results: open, compare, many files\n\nEvery compressed row has Open and Show in Finder or File Explorer, labelled with the output file name for screen readers. There is no side-by-side preview; Show in Finder selects the copy so Quick Look or the system viewer compares it with the original.\n\nShow all opens each destination folder once with the copies selected. With This run only, it opens that one folder.\n\nFilters (All, Needs attention, Warnings) show counts, so a 186-file batch can be cut to the 15 that need attention. The list scrolls and rows keep their actions. New batch clears the results."
+},
+"cf8": {
+"x": 16580,
+"y": 8440,
+"w": 360,
+"maxH": 760,
+"fill": "purple",
+"text": "Compress Files: command center\n\nOne tile, Compress Files, replaces Compress PDF and Compress Images, with the hint 'PDFs, JPEG, PNG and WebP in one batch'. It keeps the compress icon.\n\nFind a tool matches compress, compression, shrink, reduce size, smaller, optimize, PDF, image, photo, JPEG, PNG and WebP.\n\nA favorite on either old tool becomes a favorite on Compress Files, kept in the same place. Recent and pinned entries move the same way."
+},
+"cf9": {
+"x": 16980,
+"y": 8440,
+"w": 360,
+"maxH": 760,
+"fill": "purple",
+"text": "Compress Files: keyboard, screen readers, platforms\n\nTab order: Open or Add files, the list, Remove, Clear list, then Strength (arrow keys move between cards), Strip EXIF (Space), Save to, Change for this run, and the run button. Cmd/Ctrl+Enter runs; Esc cancels a run.\n\nResults: the summary is a polite live region read once when the batch ends. Filters, then rows, each row's Open, Show in and fix button, then New batch.\n\nWhile running, one polite region reads 'Compressing 6 of 13' at most every few seconds; failures are not read one by one.\n\nmacOS shows Cmd shortcuts and Show in Finder; Windows shows Ctrl and Show in File Explorer, and Delete instead of Backspace. Dark and light use the same tokens as the other boards."
+},
+"ep1": {
+"x": 7600,
+"y": 3800,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Edit PDF Q1. Grouping: overlays vs document operations\n\nThe toolbar groups tools by what they do, split by separators: page operations (Organize, Crop), content edits (Edit text, Add text, Sign, Fill form), range overlays (Watermark, Page numbers, Header and footer), then Redact. More holds Flatten, Split, Merge, Bates and Details.\n\nOverlays put a selectable object on the page. It has a blue outline and the inspector edits it, ending with a Remove action such as 'Remove watermark'. Document operations change pages, so they open their own view (Organize) or act on the whole file. They show no object on the page.\n\nThe inspector title always names the active tool."
+},
+"ep2": {
+"x": 8000,
+"y": 3800,
+"w": 360,
+"maxH": 640,
+"fill": "purple",
+"text": "Edit PDF Q2. Export summary, fixed order, disabled Export\n\nPdfExport Review lists every contributing change under 'Changes, applied in this fixed order': forms, edit text, overlays, flatten, then redact. Each row names the tool and its pages.\n\nNothing to export: Export in the header is disabled, and a tooltip explains why: nothing has changed yet, and the run shortcut does nothing.\n\nExport blocked: the Export button is disabled with aria-describedby pointing at the reason, a missing Devanagari script pack. The reason sits directly above the button, with the fix (Install script pack, 38 MB) inside it.\n\nWhile exporting, the document is locked and the background is aria-hidden. Cancel export (Esc) is the only action."
+},
+"ep3": {
+"x": 8400,
+"y": 3800,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Edit PDF Q3. Destination and per-run change\n\nThe empty PdfOpen view says copies save next to the original and that another folder can be picked at export.\n\nIn the Export dialog, Save to shows the folder. The default is 'Same folder as the original.' PdfExport Other folder shows a changed folder with a 'This export only' badge, a 'Reset to default' button and the hint 'Next export goes back to the original's folder.'\n\nBates shows the same pattern in its destination bar: 'This run only' and Reset to default. Its empty state shows the default, the same folder as each original. It follows the shared Q1 rule on the Destination board."
+},
+"ep4": {
+"x": 8800,
+"y": 3800,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "Edit PDF Q4. Form fields, Tab order, required and invalid\n\nFields show as tinted boxes on the page. The focused field has a blue ring. Required fields have a red asterisk in the label, and the inspector's Fields list shows 'Required, empty'. 'Go to next empty required field' jumps to the next one.\n\nPdfForms Tab order: numbered blue badges 1 to 8 sit beside each field, in the order Tab follows. The checkbox 'Show Tab order on the page' turns them on. Tab order comes from the PDF and is shown, not edited.\n\nPdfForms Invalid entry: the field gets a red border, aria-invalid, and an inline reason ('Not a real date') tied by aria-describedby. The Fields list, the summary and the status line name it too."
+},
+"ep5": {
+"x": 9200,
+"y": 3800,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "Edit PDF Q5. Typed signature, reuse, reminder\n\nPdfSign Placing: in the typed mode, the name shows in the chosen signature style before you place it. The picture mode uses an image file instead. Either way, you click the page to place it.\n\nPdfSign Use again: signatures already used are listed with a preview. Picking one and clicking the page places it again. 'Placed so far' lists each copy, and each copy can be moved, resized or deleted on its own. New signature and Clear list are below.\n\nThe reminder stays visible under the intro in both panels: this is a picture of a signature, not a digital signature. The reuse list points to it with aria-describedby."
+},
+"ep6": {
+"x": 9600,
+"y": 3800,
+"w": 360,
+"maxH": 640,
+"fill": "orange",
+"text": "Edit PDF Q6. Range-applied objects\n\nWatermark, page numbers and header and footer are each one object that applies to a page range.\n\nA chip above the page (for example 'Pages 1–14') says which range it covers, with the line 'One watermark, applied to every page in the range. Edit it once, on any page.' Selecting it on any page selects the same object, and every change shows on all pages in the range.\n\nThe Pages section in the inspector sets the range: All, Skip the first page, or These pages. The status line confirms how many pages it covers."
+},
+"ep7": {
+"x": 10000,
+"y": 3800,
+"w": 360,
+"maxH": 640,
+"fill": "orange",
+"text": "Edit PDF Q7. Token insertion\n\nHeader and footer has six labelled boxes: Left, Centre and Right for the header and for the footer. Insert buttons (Page number, Page count, Date, File name) add a token into the box last selected.\n\nTokens show as blue tags inside the box. They are not typed codes such as {date}, so nobody has to learn a syntax. Backspace removes a whole tag. The page preview shows the filled-in values, such as '3 of 14'.\n\nBates Stamp text uses the same tag box and Insert buttons: Bates number, File name, Page in file, Date. Stamp text must contain the Bates number."
+},
+"ep8": {
+"x": 10400,
+"y": 3800,
+"w": 360,
+"maxH": 640,
+"fill": "purple",
+"text": "Edit PDF Q8. Redaction: mark, search, review, disclosure\n\nMarking: drag over anything to remove. Marks are previews until export, are listed in the inspector, and can be resized or removed.\n\nSearch results: 'Find text to redact' lists each match with its page and context. Check the matches to mark, then use Mark selected.\n\nReviewing: 'Preview as exported' shows marks as solid black. Previous and Next step through every mark, with 'Mark 2 of 5' announced, and Remove drops one.\n\nExport disclosure: a dialog shown before a redacted export. It says which pages become 300 dpi images and that their comments, form fields and hidden layers are removed. Metadata, XMP and attachments go too. Export needs 'I've checked the marks on every page' ticked."
+},
+"ep9": {
+"x": 10800,
+"y": 3800,
+"w": 360,
+"maxH": 640,
+"fill": "orange",
+"text": "Edit PDF Q9. Flatten, result warnings, unavailable sub-tool\n\nFlatten confirmation (PdfForms flatten Confirming): a dialog titled 'Flatten fields in the copy?' says what becomes permanent and names the required fields still empty. Its buttons are Keep fields editable and Flatten when exporting.\n\nResult warnings (PdfExport Done with warnings): the copy is saved, and '2 things to check' lists 'Digital signature removed' and 'Font substituted on pages 1 and 3', each with what changed.\n\nUnavailable sub-tool (PdfForms Unsupported form): an XFA form shows a warning in the inspector, explains why, and offers 'Use Add text instead'. Non-editable text (PdfEditText Not editable) offers OCR or Add text."
+},
+"ep10": {
+"x": 11200,
+"y": 3800,
+"w": 360,
+"maxH": 640,
+"fill": "orange",
+"text": "Edit PDF Q10. Errors at open\n\nEncrypted PDF (PdfOpen Locked file): the file isn't opened. Unlock in File Security makes an unlocked copy, and the original stays locked.\n\nLimit exceeded (PdfOpen Too many pages): 'court-bundle.pdf is too large to edit' gives the page count and the limit. It offers Split into parts or another PDF. The 2,000-page limit is a placeholder until engineering measures the real ceiling.\n\nSigned file: opens with a warning that exporting removes the digital signature, which the Done-with-warnings result repeats.\n\nSkipped never happens in Edit PDF. It edits one document, so a no-op export is prevented by disabling Export (Nothing to export)."
+},
+"ep11": {
+"x": 11600,
+"y": 3800,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "Edit PDF Q11. Script-pack prompt\n\nTyping text the bundled fonts can't draw (PdfText scriptPackPrompt) shows the text box with a warning in the inspector. The warning names the script and says the box can't be exported until the pack is installed. 'Install script pack' gives the download size and is installed once for all tools.\n\nIf you export anyway, PdfExport Export blocked repeats the same message and button above the disabled Export. The wording and the Install action match the optional-pack rows in #445 (Packs, PackResults), so the pack is named the same everywhere."
+},
+"ep12": {
+"x": 12000,
+"y": 3800,
+"w": 360,
+"maxH": 640,
+"fill": "purple",
+"text": "Edit PDF Q12. Unexported-changes warning\n\nClosing the window, opening another PDF or going back to All tools with changes that haven't been exported opens 'Export your changes before closing?' (PdfExport Closing with changes). It gives the number of changes and says they're lost on close.\n\nThe buttons are Discard changes, Cancel and Export….\n\nThe header subtitle keeps a running count, such as '1 change not exported', so the warning is never a surprise."
+},
+"ep13": {
+"x": 12400,
+"y": 3800,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "Edit PDF Q13. Focus, screen reader, macOS and Windows\n\nDialogs trap focus and return it to the control that opened them. While a dialog is open, the background is aria-hidden.\n\nDisabled actions point to their reason with aria-describedby: Export, Number files and Export blocked. Status lines are role=status and announce results, such as 'Mark 2 of 5', '3 numbered, 1 failed'.\n\nPlatform labels change with the platform property. ⌘ becomes Ctrl, ⌘↵ becomes Ctrl+Enter, ⇧⌘Z becomes Ctrl+Y, Show in Finder becomes Show in File Explorer, and paths use C:\\Users\\Asha\\… with backslashes. Every board renders in both themes."
+},
+"epb1": {
+"x": 6800,
+"y": 6120,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Bates Q. File order, preview, ranges, unused gap\n\nFiles are listed in numbering order. Each row has a drag grip and Move up, Move down and Remove buttons, so it can be reordered by mouse or keyboard. The Numbers column previews each file's range before anything runs, and the inspector shows an example stamp on a page.\n\nA locked file is flagged before the run. It is skipped and given no numbers, so the set has no gap (Done).\n\nA file that fails during the run keeps the numbers set aside for it, because later files are already stamped. The row shows that range struck through with 'Unused gap', and the banner names it: 'HL000017 to HL000019 are unused.' Copy number list includes the gap."
+},
+"epb2": {
+"x": 7200,
+"y": 6120,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "Bates Q. Empty, running, results\n\nNo files: a drop target with Add PDFs and its shortcut. Number files is disabled with the reason 'Add PDFs first', and the destination reads the same folder as each original.\n\nNumbering: an overall progress bar and per-file progress ('Page 4 of 9'). Add PDFs, Change… and the options are locked. Cancel (Esc) replaces the Run button, and Skip stops just the current file.\n\nResults: saved rows have Open and Show in Finder (Show in File Explorer on Windows), and the banner has Copy number list. This is the only multi-file sub-tool, so it uses a file list instead of the page canvas."
+},
+"og1": {
+"x": 7200,
+"y": 4960,
+"w": 360,
+"maxH": 860,
+"fill": "blue",
+"text": "Organize: rail and page view\n\nOrganize is the first item in the PDF Editor rail and the place a PDF opens. It's a full-width page grid, not a strip beside the page. Every other rail item (Crop, Edit text, Sign…) shows one page at a time.\n\nTo switch: press Enter or double-click a thumbnail, or use \"Open in page view\" under the preview. That opens the focused page in the last page tool you used, Edit text by default. Choosing Organize in the rail comes back to the grid with the same focus and selection.\n\nThe right panel previews the focused page large, with its position, original page and orientation, so users can check a page without leaving the grid."
+},
+"og2": {
+"x": 7600,
+"y": 4960,
+"w": 360,
+"maxH": 860,
+"fill": "blue",
+"text": "Thumbnails, drag and scrolling\n\nSize: Small, Medium (default) or Large, a segmented control at the right of the Select bar. The choice is remembered for the app, not per file.\n\nEach thumbnail shows its position in bold. A page that moved adds \"· was page 13\". The screen reader always hears both: \"Position 12, original page 13\".\n\nDrag: dragging any selected page carries the whole selection. The pointer shows a small stack with a count badge (3). The pages being moved are dimmed in place. A blue bar with end caps shows where they'll land, always between two pages.\n\nAuto-scroll: 44-pixel bands at the top and bottom of the grid. They appear only during a drag. Hovering a band scrolls that way, faster nearer the edge, and the band says what is coming into view. Esc cancels the drag and nothing moves."
+},
+"og3": {
+"x": 8000,
+"y": 4960,
+"w": 360,
+"maxH": 860,
+"fill": "green",
+"text": "Orientation\n\nOne segmented group in the page actions bar: rotate left, rotate right, mirror left to right, mirror top to bottom, plus a ▾ menu. The menu repeats those four with their shortcuts and adds Rotate 180° and \"Reset orientation of N pages\", which only undoes orientation.\n\nThe thumbnail itself turns and flips, so users see the result. A small badge in the bottom-left corner states it in words and symbols: \"↻ 90°\", \"↺ 90°\", \"↻ 180°\", \"⇋ Mirrored\", \"⇵ Mirrored\", joined with \"·\" when both apply. A page with no change has no badge.\n\nThe preview panel's Orientation line spells it out: \"Rotated 90° right, mirrored left to right\" or \"As in the original\"."
+},
+"og4": {
+"x": 8400,
+"y": 4960,
+"w": 360,
+"maxH": 860,
+"fill": "green",
+"text": "Notices and preflight\n\nNotices sit at the top of the grid, above the pages, as quiet rows with an icon and plain words. They never block the grid.\n\n- Signed PDF: on open. \"This PDF is digitally signed. Any copy you export won't be signed any more. The original keeps its signature.\" Dismissable with Got it. It returns as \"Signature removed\" in the export result.\n- Mirrored pages: whenever any page is mirrored. \"2 mirrored pages will show their text reversed. That's expected…\"\n\nPreflight rejections replace the grid with a centered message, an icon and the next step. No pages are shown and nothing is changed:\n- Password-protected: Open File Security.\n- Damaged or unsupported: Open another PDF.\n- Over the page limit (2,000 is a placeholder until the spec fixes it): Open Split."
+},
+"og5": {
+"x": 8800,
+"y": 4960,
+"w": 360,
+"maxH": 860,
+"fill": "purple",
+"text": "Selecting pages\n\nThe Select bar sits under the page actions: All, Odd, Even, Blank pages, None. \"Blank pages\" sits right after Odd and Even because it's the same kind of action: it only selects.\n\nAfter it runs, the button keeps a \"3 found\" chip. The pages are selected and labelled \"· blank\" in the grid. Focus moves to the first one, and the status line says \"3 blank pages found and selected: 7, 11 and 16. Nothing was removed.\" Users review them, deselect any they want to keep, then press Delete. Finding zero says \"No blank pages found\" and changes nothing. Selecting never adds an undo step.\n\nThe Pages field takes ranges like \"1-3, 7\" and selects them on Enter. It uses the same rules as Split. A page past the end is an error: red border and the message \"Page 250 isn't in this PDF. It has 236 pages…\".\n\nThe count is always visible at the left of the actions bar: \"3 pages selected\", or \"No pages selected\" with the actions disabled."
+},
+"og6": {
+"x": 9200,
+"y": 4960,
+"w": 360,
+"maxH": 860,
+"fill": "purple",
+"text": "Moving, deleting and shortcuts\n\nMove earlier and later go one step. \"Move to…\" opens a small popover with a position field and Start and End buttons. \"Page order\" holds Reverse the selected pages, Reverse the whole document and Interleave a two-sided scan, with a line explaining when to use it.\n\nDelete names the count: \"Delete 3 pages\". With every page selected it's disabled, and an alert explains: \"A PDF needs at least one page…\".\n\nShortcuts: the keyboard button (or ?) opens the full list. The grid is one tab stop. Arrow keys, Home and End move focus. Space selects. Shift plus an arrow extends. ⌘/Ctrl plus an arrow moves the selection. ⌘↑/⌘↓ on Mac and Ctrl+Home/End on Windows move it to the start or end. M opens Move to. Rotate is ⌘R/Ctrl+R, and with Shift it rotates left. H and V mirror. Delete or ⌫ removes. Every Mac label has a Windows label."
+},
+"og7": {
+"x": 9600,
+"y": 4960,
+"w": 360,
+"maxH": 860,
+"fill": "orange",
+"text": "Export, destination and results\n\nNext to Export is a folder button with the destination's short name, by default the original's folder. Clicking it opens a popover with the full path, Choose folder… and Use default. A per-run change shows a \"This export only\" chip and says the Settings default didn't change.\n\nExport is disabled until the previews are ready and while nothing has changed. Undoing back to the original disables it again, with \"Nothing to export yet\". This view never shows Skipped.\n\nRunning: Export becomes a progress bar with \"Page 137 of 236\" and Cancel. Page edits are locked, with a notice saying so.\n\nExported: a dialog with the file (contracts-scan-edited.pdf, then -edited-1), \"233 pages kept, 3 removed, 12 rotated, 2 mirrored\", the folder, and \"Signature removed\" when relevant. Buttons: Open, Show in Finder / Show in File Explorer, and Keep editing.\n\nFailed: names the problem, the folder, and \"Nothing. No partial file was left behind.\"\n\nRemoval blocked: lists what depends on the pages (bookmarks, form fields, tags), says nothing was saved, and offers to restore those pages."
+},
+"og8": {
+"x": 10000,
+"y": 4960,
+"w": 360,
+"maxH": 860,
+"fill": "orange",
+"text": "Reset, unsaved changes, motion and screen readers\n\nReset… (header) asks first. It's an alert dialog that returns every page to how the PDF was opened, and says it also clears other PDF Editor changes. Opening another PDF with changes asks \"Export your changes first?\" with Export, Cancel and Don't export.\n\nReduced motion: reordering normally slides pages into place over 150 ms, and drops settle the same way. With reduced motion on, pages jump straight to their new place, the drag ghost has no tilt, and rotation applies without turning. Auto-scroll still works but moves in steps.\n\nScreen readers: the grid is a multi-select listbox. Each option is \"Position 12, original page 13, rotated 90° right, mirrored left to right, selected\". The footer status is a polite live region. It says things like \"Pages 4 to 6 moved to position 1\", \"Page 5 rotated 90° right\", \"Pages 8 and 9 mirrored left to right\", \"3 blank pages found and selected: 7, 11 and 16\", \"No blank pages found\" and \"3 pages deleted. 233 left.\" Errors, the last-page message and failed exports are alerts."
+},
+"row12": {
+"x": 0,
+"y": 12820,
+"text": "Optional packs: Settings, tool prompts and results",
+"kind": "title1",
+"maxW": 6800
+},
+"pk1": {
+"x": 1360,
+"y": 13080,
+"w": 360,
+"maxH": 720,
+"fill": "blue",
+"text": "Packs: layout and disk use\n\nPacks is a plain list in Settings, not cards, with one row per pack. The row shows the name, what uses it and its size. Status and actions sit on the right. Status is always words, with an icon or bar where it helps, never colour alone.\n\nA chevron opens a row's details: what it does, which tools use it, download size, size on this disk, version and license. License text sits only in details, with View license.\n\nThe privacy statement is the first paragraph: one download from the Toolbox release server, checked before use, works offline, and your files never leave this device.\n\nInstall from file… sits beside the heading in every state. On a computer without internet it's the main way in.\n\nInstalled rows show their own size on this disk. The line under the list gives the total: \"3 installed, 415 MB used. 48 GB free on this disk.\""
+},
+"pk2": {
+"x": 1760,
+"y": 13080,
+"w": 360,
+"maxH": 720,
+"fill": "blue",
+"text": "Pack statuses and actions\n\n- Not installed: \"Not installed\", with Install.\n- Downloading: bar plus \"7 of 12 MB\", with Cancel.\n- Checking: full bar plus \"Checking the download…\", with Cancel.\n- Waiting: \"Waiting. Starts after the downloads above.\", with Cancel. Packs install one at a time.\n- Installed: \"Installed, version 2.0\", with Remove…\n- Update available: \"Version 3.1. Update to 3.2, 12 MB\", with Update and Remove…\n- Updating: bar plus \"Updating, 5 of 12 MB\", with Cancel. The row says version 3.1 keeps working until 3.2 is ready. A cancelled or failed update keeps 3.1.\n- Damaged: red text, with Repair and Remove…, plus a banner at the top.\n- Doesn't work with this version: amber text, with Check for updates (opens Settings, Updates) and Remove…\n\nRemove… asks first: \"Remove Text recognition, Hindi? OCR can't read Hindi until you install it again. Frees 31 MB.\""
+},
+"pk3": {
+"x": 2160,
+"y": 13080,
+"w": 360,
+"maxH": 720,
+"fill": "green",
+"text": "Prompts inside tools\n\nIn a tool, the prompt is a note in the options panel, next to the setting that needs the pack. It names the pack and its download size and has one Install button. Examples: \"Hindi needs a 12 MB download.\" in OCR, and the script note in the Edit PDF text inspector. The tool stays usable while it downloads.\n\nOn a result row, the prompt is one secondary button that names the action: Install Hindi pack, Update Gujarati pack or Repair Tamil pack. The row says \"Needs a pack\". It never offers Retry.\n\nWhen the pack finishes installing, the row changes to \"Ready to run\" with a \"Pack installed\" badge. The status line says \"Hindi pack installed. 2 files are ready to run again.\" The files stay in the list until the user runs again.\n\nOCR language picker: two groups. \"Installed\" lists languages that are ready; ones already added are dimmed with \"Added\". \"Download to use\" lists the rest with a download icon and size. Choosing one adds it to the list as \"Not installed\" with the Install note."
+},
+"pk4": {
+"x": 2560,
+"y": 13080,
+"w": 360,
+"maxH": 720,
+"fill": "purple",
+"text": "Final error copy\n\nOffline: \"You're offline. Installed packs keep working. Connect to the internet to install or update packs, or use Install from file.\" Row: \"No internet connection.\" Install is disabled.\n\nBlocked server: \"Couldn't reach the Toolbox release server. Your internet works, but something on this network is blocking downloads from Toolbox. Try again later or on another network, or install from a pack file.\"\n\nInterrupted: \"Download stopped before it finished. Nothing was installed.\" with Try again, which starts over.\n\nNot enough space: \"Not enough space for Office documents. It needs 310 MB free and this disk has 120 MB. Free up at least 190 MB, then try again.\"\n\nCheck failed (download): \"The download didn't pass its safety check, so it was deleted. Nothing was installed.\"\n\nWrong computer (file): \"This pack file is for another kind of computer. It was made for a Mac, so it can't be installed here. Nothing was installed. Get the pack file for Windows on this processor from the Toolbox releases page.\"\n\nNot signed (file): \"This file isn't a Toolbox pack. It isn't signed by Toolbox, so it can't be installed. Nothing was installed.\"\n\nCheck failed (file): \"This pack file didn't pass its safety check. It may be damaged or changed since it was made, so it was not installed.\"\n\nIn use: \"Text recognition, English wasn't removed. OCR is using it right now. Remove it after the run finishes.\""
+},
+"pk5": {
+"x": 2960,
+"y": 13080,
+"w": 360,
+"maxH": 720,
+"fill": "green",
+"text": "Packs keyboard and screen reader\n\nSettings, Packs: Tab goes to Install from file…, then each row in order. Within a row, Tab goes to the details chevron, then the row's actions from left to right. Enter or Space opens and closes details. Details content is read in order and isn't a stop.\n\nNames for tests:\n- The list is \"Packs\". Each row is \"<pack name>, <status>\".\n- The chevron is \"Details for <pack name>\" with aria-expanded.\n- Buttons are \"<action> <pack name>\", such as \"Install Text recognition, Hindi\" and \"Cancel Text recognition, Hindi\".\n- Progress bars are \"Downloading <pack name>\", \"Checking <pack name>\" or \"Updating <pack name>\".\n- Status text is a polite live region. Damaged, in use and server errors are alerts.\n\nInstall from file: the native open dialog, then a dialog called \"Install this pack?\" with Cancel first and Install as the default. Rejection dialogs are alert dialogs with \"Choose another file…\" and OK.\n\nOCR picker: a combobox \"Add a language\" that opens a listbox with the groups \"Installed\" and \"Download to use\". Options are named \"<language>, installed\" or \"<language>, not installed, <size> download\". Arrow keys move, Enter chooses and Escape closes.\n\nResult rows: the action is \"<action> for <file name>\", such as \"Install Hindi pack for ration-card-hindi.pdf\"."
 }
 },
 "designSystems": []
