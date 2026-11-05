@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  interleaveDuplexScan, movePagesBefore, movePagesBy, movePagesTo, movePagesToGap, removePages, reversePages, rotatePages, sceneFromDocument, swapPage,
+  interleaveDuplexScan, movePagesBefore, movePagesBy, movePagesTo, movePagesToGap, removePages, resetPageRotation, reversePages, rotatePages, sceneFromDocument, swapPage,
 } from "../src/features/pdf-editor/scene";
 import { parsePageRange } from "../src/shared/workspaceValidation";
 
@@ -50,6 +50,25 @@ test("rotation turns only the selected pages and wraps at 360", () => {
   scene = rotatePages(scene, ["source-0", "source-2"]);
   assert.deepEqual(scene.pages.map((page) => page.rotation), [90, 0, 90, 0, 0, 0]);
   assert.equal(rotatePages(scene, ["source-0"], -90).pages[0].rotation, 0);
+});
+
+test("rotation by a full turn or of no pages returns the same scene", () => {
+  const scene = sixPages();
+  assert.equal(rotatePages(scene, []), scene);
+  assert.equal(rotatePages(scene, ["source-1"], 360), scene);
+  assert.equal(rotatePages(rotatePages(scene, ["source-1"], 180), ["source-1"], 180).pages[1].rotation, 0);
+});
+
+test("resetting orientation turns only the chosen pages back and keeps every other edit", () => {
+  let scene = rotatePages(sixPages(), ["source-1", "source-2", "source-4"], 90);
+  scene = rotatePages(scene, ["source-2"], 90);
+  scene = movePagesTo(scene, ["source-4"], 1);
+  const reset = resetPageRotation(scene, ["source-2", "source-4", "source-5"]);
+  assert.deepEqual(reset.pages.map((page) => [page.id, page.rotation]), [
+    ["source-4", 0], ["source-0", 0], ["source-1", 90], ["source-2", 0], ["source-3", 0], ["source-5", 0],
+  ]);
+  assert.equal(reset.pages[1], scene.pages[1], "an untouched page keeps its identity");
+  assert.equal(resetPageRotation(reset, ["source-2", "source-0"]), reset, "nothing to reset returns the same scene");
 });
 
 test("swapping pages changes only the page order", () => {

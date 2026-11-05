@@ -124,6 +124,15 @@ export const swapPage = (scene: PdfScene, index: number, delta: number): PdfScen
   return { pages };
 };
 
-export const rotatePages = (scene: PdfScene, ids: string[], degrees = 90): PdfScene => ({
-  pages: scene.pages.map((page) => ids.includes(page.id) ? { ...page, rotation: (((page.rotation + degrees) % 360) + 360) % 360 } : page),
-});
+/**
+ * Turns the pages by `degrees` (a multiple of 90, negative is left), on top of any earlier turn.
+ * `rotation` is the scene's turn only; export adds it to the page's own source rotation.
+ */
+export const rotatePages = (scene: PdfScene, ids: string[], degrees = 90): PdfScene => {
+  if (!ids.length || ((degrees % 360) + 360) % 360 === 0) return scene;
+  return { pages: scene.pages.map((page) => ids.includes(page.id) ? { ...page, rotation: (((page.rotation + degrees) % 360) + 360) % 360 } : page) };
+};
+
+/** Turns the pages back to their source orientation. Other pages and every other edit stay. Returns the same scene if nothing was turned. */
+export const resetPageRotation = (scene: PdfScene, ids: string[]): PdfScene =>
+  reordered(scene, scene.pages.map((page) => ids.includes(page.id) && page.rotation ? { ...page, rotation: 0 } : page));

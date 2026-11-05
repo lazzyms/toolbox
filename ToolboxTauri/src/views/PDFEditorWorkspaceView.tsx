@@ -7,10 +7,10 @@ import type { WorkspaceSourceAction } from '../components/ToolScaffold';
 import type { ShellEvent } from '../hooks/useShellBridge';
 import type { AtomicToolId, ToolDefinition, ToolError, ToolResult } from '../contracts';
 import { useToolAvailability } from '../ToolAvailabilityContext';
-import { ArrowLeft, ArrowRight, ArrowDown, ArrowUp, ChevronDown, TriangleAlert } from 'lucide-react';
+import { ArrowLeft, ArrowRight, ArrowDown, ArrowUp, ChevronDown, RefreshCw, RotateCcw, RotateCw, TriangleAlert, Undo2 } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '../components/ui/dropdown-menu';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuTrigger } from '../components/ui/dropdown-menu';
 import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/dialog';
@@ -24,13 +24,13 @@ import { Slider } from '../components/ui/slider';
 import type { PdfDocument, PdfPage, PdfTextRun } from '../features/pdf-editor/contracts';
 import { colorTokens, readColorToken } from '../features/pdf-editor/colorTokens';
 import { SceneCanvas } from '../features/pdf-editor/SceneCanvas';
-import { interleaveDuplexScan, movePagesBefore, movePagesBy, movePagesTo, movePagesToGap, removePages, reversePages, rotatePages, sceneFromDocument, visibleBounds } from '../features/pdf-editor/scene';
+import { interleaveDuplexScan, movePagesBefore, movePagesBy, movePagesTo, movePagesToGap, removePages, resetPageRotation, reversePages, rotatePages, sceneFromDocument, visibleBounds } from '../features/pdf-editor/scene';
 import type { PdfScene, SceneObject, ScenePage, ScenePreview, SceneRect, SceneShape, SceneTool, SignatureMode, WatermarkPattern } from '../features/pdf-editor/scene';
 import { PREVIEW_CACHE_MAX_ENTRIES, PREVIEW_RENDER_SETTINGS, createPreviewCache, pdfEditorErrorMessage, previewCacheKey, requestWithGeneration } from './pdfPreviewHelpers';
 import type { GenerationState } from './pdfPreviewHelpers';
 import { ShortcutHint } from '../components/ShortcutHint';
 import { isWindows, primaryModifierPressed, shortcutTarget } from '../shortcuts';
-import { clearPageSelection, clickPage, extendPageSelection, pageOptionName, pagePositionsLabel, selectAllPages, selectPagesByParity, selectPagesByRange, selectionCountLabel, togglePage } from '../features/pdf-editor/pageSelection';
+import { clearPageSelection, clickPage, extendPageSelection, orientationBadge, orientationLabel, pageOptionName, pagePositionsLabel, rotationAnnouncement, selectAllPages, selectPagesByParity, selectPagesByRange, selectionCountLabel, togglePage } from '../features/pdf-editor/pageSelection';
 import type { PageSelection } from '../features/pdf-editor/pageSelection';
 import { createSourceThumbnailQueue } from '../features/pdf-editor/sourceThumbnails';
 import type { SourceThumbnail, SourceThumbnailQueue } from '../features/pdf-editor/sourceThumbnails';
@@ -577,6 +577,8 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onBrowse, onN
       ? (event.key === 'Home' ? 'start' : event.key === 'End' ? 'end' : null)
       : (event.key === 'ArrowUp' ? 'start' : event.key === 'ArrowDown' ? 'end' : null);
     if (edge) { event.preventDefault(); if (pageTargets.length) movePagesToEdge(edge); return; }
+    // {mod}+R turns the selected pages right, Shift+{mod}+R turns them left. It never reloads the window.
+    if (primary && event.key.toLowerCase() === 'r') { event.preventDefault(); rotateSelection(event.shiftKey ? -90 : 90); return; }
     if (event.metaKey || event.ctrlKey) return;
     if (event.key.toLowerCase() === 'm' && !event.shiftKey) {
       if (pageTargets.length && canReorder) { event.preventDefault(); openMoveTo(true); }
@@ -599,7 +601,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onBrowse, onN
   };
   // A focused button activates on Space key-up in some engines; the grid already handled Space on key-down.
   const gridKeyUp = (event: ReactKeyboardEvent<HTMLDivElement>) => { if (event.key === ' ') event.preventDefault(); };
-  // Reordering in Organize. Each change is one undo step. Pages keep their ids, so the selection and focus follow them.
+  // Page edits in Organize: order and orientation. Each change is one undo step. Pages keep their ids, so the selection and focus follow them.
   const canReorder = Boolean(page) && !exporting && availability.allows('pdf-organize');
   const positionsOf = (ids: string[]) => scene.pages.flatMap((item, index) => ids.includes(item.id) ? [index + 1] : []);
   const gridCells = () => Array.from(organizeGrid.current?.querySelectorAll<HTMLElement>('[data-page-id]') ?? []);
@@ -620,6 +622,20 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onBrowse, onN
   const stepPages = (delta: -1 | 1) => moveSelection(movePagesBy(scene, pageTargets, delta), delta < 0 ? 'first' : 'last');
   const movePagesToEdge = (edge: 'start' | 'end') =>
     moveSelection(movePagesTo(scene, pageTargets, edge === 'start' ? 1 : scene.pages.length), edge === 'start' ? 'first' : 'last');
+  // A turn adds to each selected page's rotation; export adds that to the page's own rotation. Thumbnails turn in CSS, with no new render.
+  const backToOpened = (next: PdfScene) => document && same(next, sceneFromDocument(document)) ? '. It’s back to how it was opened.' : '';
+  const rotateSelection = (degrees: 90 | 180 | -90) => {
+    if (!pageTargets.length) return;
+    const next = rotatePages(scene, pageTargets, degrees);
+    reorder(next, rotationAnnouncement(positionsOf(pageTargets), degrees) + backToOpened(next), null);
+  };
+  const resetOrientation = () => {
+    if (!pageTargets.length) return;
+    const label = pagePositionsLabel(positionsOf(pageTargets));
+    const next = resetPageRotation(scene, pageTargets);
+    reorder(next, `${label} turned back to how ${pageTargets.length === 1 ? 'it was' : 'they were'} in the original${backToOpened(next)}`,
+      `${label} ${pageTargets.length === 1 ? 'is' : 'are'} already as in the original`);
+  };
   const reverseSelection = () => reorder(reversePages(scene, pageTargets), `${pagePositionsLabel(positionsOf(pageTargets))} reversed`, null);
   const reverseDocument = () => reorder(reversePages(scene, pageOrder), `All ${pageCount} reversed`, null);
   const interleaveScan = () => reorder(interleaveDuplexScan(scene), `Pages put in reading order: ${duplexExample(scene.pages.length)}`, null);
@@ -769,7 +785,12 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onBrowse, onN
   const moveModifier = isWindows() ? 'Ctrl' : '⌘';
   const startKey = isWindows() ? 'Ctrl+Home' : '⌘↑';
   const endKey = isWindows() ? 'Ctrl+End' : '⌘↓';
+  const rotateRightKey = isWindows() ? 'Ctrl+R' : '⌘R';
+  const rotateLeftKey = isWindows() ? 'Ctrl+Shift+R' : '⇧⌘R';
   const selectionCount = selectionCountLabel(pageTargets.length);
+  // The focused page shows its source thumbnail turned in CSS, so a rotation shows at once without waiting for a render.
+  const focusSource = tool === 'organize' && page?.sourceIndex !== null && page?.sourceIndex !== undefined ? sourceThumbnails?.get(page.sourceIndex) : undefined;
+  const focusThumbnail = focusSource?.status === 'ready' ? focusSource.value.dataUrl : null;
   const selectionLocked = exporting || !page;
   const documentName = path ? fileName(path) : '';
   const pageCount = `${scene.pages.length} ${scene.pages.length === 1 ? 'page' : 'pages'}`;
@@ -842,6 +863,27 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onBrowse, onN
         </div>
         <div className="scene-organize-actions" role="toolbar" aria-label={`Page actions, ${selectionCount}`} aria-orientation="horizontal">
           <span role="status" className="scene-organize-count">{selectionCount}</span>
+          <div className="scene-organize-orientation" role="group" aria-label="Orientation">
+            <Button variant="ghost" size="icon-sm" aria-label={`Rotate left (${rotateLeftKey})`} title={`Rotate left (${rotateLeftKey})`}
+              aria-keyshortcuts={isWindows() ? 'Control+Shift+R' : 'Shift+Meta+R'} disabled={!canReorder || !pageTargets.length} onClick={() => rotateSelection(-90)}><RotateCcw aria-hidden="true" /></Button>
+            <Button variant="ghost" size="icon-sm" aria-label={`Rotate right (${rotateRightKey})`} title={`Rotate right (${rotateRightKey})`}
+              aria-keyshortcuts={isWindows() ? 'Control+R' : 'Meta+R'} disabled={!canReorder || !pageTargets.length} onClick={() => rotateSelection(90)}><RotateCw aria-hidden="true" /></Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon-xs" aria-label="More orientation options" disabled={!canReorder || !pageTargets.length}><ChevronDown aria-hidden="true" /></Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-72" aria-label="Orientation">
+                <DropdownMenuItem onSelect={() => rotateSelection(90)}><RotateCw aria-hidden="true" />Rotate right 90°<DropdownMenuShortcut>{rotateRightKey}</DropdownMenuShortcut></DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => rotateSelection(-90)}><RotateCcw aria-hidden="true" />Rotate left 90°<DropdownMenuShortcut>{rotateLeftKey}</DropdownMenuShortcut></DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => rotateSelection(180)}><RefreshCw aria-hidden="true" />Rotate 180°</DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem className="flex-col items-start gap-0.5" onSelect={resetOrientation}>
+                  <span className="flex items-center gap-2"><Undo2 aria-hidden="true" />Reset orientation of {pageTargets.length} {pageTargets.length === 1 ? 'page' : 'pages'}</span>
+                  <span className="text-xs text-muted-foreground">Turns the selected pages back to how they were in the original. Other changes stay.</span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
           <span className="scene-toolbar-divider" aria-hidden="true" />
           <Button variant="ghost" size="icon-sm" aria-label={`Move earlier (${moveModifier}+←)`} title={`Move earlier (${moveModifier}+←)`}
             aria-keyshortcuts={isWindows() ? 'Control+ArrowLeft' : 'Meta+ArrowLeft'} disabled={!canReorder || !pageTargets.length} onClick={() => stepPages(-1)}><ArrowLeft aria-hidden="true" /></Button>
@@ -940,6 +982,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onBrowse, onN
               <span className="scene-organize-thumb" data-selected={isSelected || undefined} data-placeholder={source && !thumb ? source.status : undefined} style={{ aspectRatio: thumbnailAspect(item) }}>
                 {thumb ? <img alt="" src={thumb} style={thumbnailImageStyle(item)} /> : source && <span aria-hidden="true">{position}</span>}
                 {isSelected && <span className="scene-organize-check" aria-hidden="true">✓</span>}
+                {orientationBadge(item.rotation) && <Badge variant="outline" className="scene-organize-orientation-badge" aria-hidden="true">{orientationBadge(item.rotation)}</Badge>}
               </span>
               <span className="scene-organize-label"><strong>{position}</strong>{original !== null && original !== position && <span> · was page {original}</span>}</span>
             </Button>;
@@ -965,12 +1008,16 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onBrowse, onN
         <aside className="scene-organize-focus" aria-label="Preview of the focused page">
           <div className="scene-organize-focus-heading"><strong>Page {currentIndex + 1}</strong><span>of {scene.pages.length}</span></div>
           <div className="scene-organize-focus-frame">
-            {exactPreview ? <img alt={`Preview of page ${currentIndex + 1}`} src={exactPreview.dataUrl} /> : <span>{rendering ? 'Loading preview…' : 'No preview yet'}</span>}
+            {focusThumbnail
+              ? <span className="scene-organize-focus-page" data-shape={(page.rotation % 180 ? page.height >= page.width : page.width >= page.height) ? 'wide' : 'tall'} style={{ aspectRatio: thumbnailAspect(page) }}>
+                <img alt={`Preview of page ${currentIndex + 1}`} src={focusThumbnail} style={thumbnailImageStyle(page)} />
+              </span>
+              : exactPreview ? <img alt={`Preview of page ${currentIndex + 1}`} src={exactPreview.dataUrl} /> : <span>{rendering ? 'Loading preview…' : 'No preview yet'}</span>}
           </div>
           <dl className="scene-organize-facts">
             <dt>Position</dt><dd>{currentIndex + 1} of {scene.pages.length}</dd>
             <dt>Original page</dt><dd>{page.sourceIndex === null ? 'None' : page.sourceIndex + 1}</dd>
-            <dt>Orientation</dt><dd>{page.rotation ? `Rotated ${page.rotation}° right` : 'As in the original'}</dd>
+            <dt>Orientation</dt><dd>{orientationLabel(page.rotation)}</dd>
           </dl>
           <Button variant="outline" size="sm" disabled={!pageViewTool} onClick={() => { if (pageViewTool) { endGroup(); setTool(pageViewTool); } }}>Open in page view</Button>
         </aside>

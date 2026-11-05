@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  clearPageSelection, clickPage, extendPageSelection, pageOptionName, selectAllPages, selectPagesByParity,
+  clearPageSelection, clickPage, extendPageSelection, orientationBadge, orientationLabel, pageOptionName, rotationAnnouncement, selectAllPages, selectPagesByParity,
   pagePositionsLabel, selectPagesByRange, selectionCountLabel, togglePage,
 } from "../src/features/pdf-editor/pageSelection";
 import type { PageSelection } from "../src/features/pdf-editor/pageSelection";
@@ -92,6 +92,15 @@ test("each page is named by position, original page, orientation and selected st
   assert.equal(pageOptionName(5, { sourceIndex: null, rotation: 0 }, false), "Position 5");
   assert.equal(pageOptionName(9, { sourceIndex: 8, rotation: 0 }, true, "loading"), "Position 9, original page 9, preview loading, selected");
   assert.equal(pageOptionName(10, { sourceIndex: 9, rotation: 90 }, false, "failed"), "Position 10, original page 10, rotated 90° right, preview unavailable");
+});
+
+test("orientation reads the same in the details, on the thumbnail and in announcements", () => {
+  assert.deepEqual([0, 90, 180, 270, -90, 450].map(orientationLabel),
+    ["As in the original", "Rotated 90° right", "Rotated 180°", "Rotated 90° left", "Rotated 90° left", "Rotated 90° right"]);
+  assert.deepEqual([0, 90, 180, 270].map(orientationBadge), [null, "↻ 90°", "↻ 180°", "↺ 90°"]);
+  assert.equal(rotationAnnouncement([5], 90), "Page 5 rotated 90° right");
+  assert.equal(rotationAnnouncement([4, 5, 6], -90), "Pages 4 to 6 rotated 90° left");
+  assert.equal(rotationAnnouncement([2, 7], 180), "Pages 2 and 7 rotated 180°");
 });
 
 test("page positions read as a short phrase for announcements", () => {
