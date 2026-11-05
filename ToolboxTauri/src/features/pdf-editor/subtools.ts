@@ -14,7 +14,10 @@ export interface RedactionMark { pageIndex: number; rect: SceneRect; color: stri
 // Native requests carry text edits as their own stage section, beside the scene.
 export interface SceneSections { scene: Pick<PdfScene, 'pages'>; textEdits?: PdfTextEdit[] }
 export interface SceneExportRequest extends SceneSections { paths: string[]; outputLocation: OutputLocation; outputPath?: string; formValues?: FormValue[]; flatten?: PdfFlattenChoice; redactions?: RedactionMark[] }
-export interface SceneExportPlan { request: SceneExportRequest; contributors: SubToolId[]; suffix: string | null }
+export interface SceneExportPlan { request: SceneExportRequest; contributors: SubToolId[]; summary: ExportStep[]; suffix: string | null }
+/** One row of the export summary: a stage of the native export and the sub-tools that feed it. */
+export interface ExportStep { stage: ExportStageId; label: string; tools: string[] }
+export type ExportStageId = 'fill-forms' | 'edit-text' | 'overlays' | 'flatten' | 'redact';
 
 export const combinedSuffix = '-edited';
 
@@ -44,6 +47,22 @@ export const subTools: readonly SubTool[] = [
     contributes: (scene) => scene.pages.some((page) => page.redactions?.length) },
 ];
 
+/** The native export's stages, in the fixed order it applies them. Each sub-tool feeds exactly one stage. */
+export const exportStages: readonly { id: ExportStageId; label: string; tools: readonly SubToolId[] }[] = [
+  { id: 'fill-forms', label: 'Fill form', tools: ['form'] },
+  { id: 'edit-text', label: 'Edit text', tools: ['edit-text'] },
+  { id: 'overlays', label: 'Add text, signatures and page marks', tools: ['text', 'highlight', 'shape', 'signature', 'watermark', 'crop', 'organize'] },
+  { id: 'flatten', label: 'Flatten', tools: ['flatten'] },
+  { id: 'redact', label: 'Redact', tools: ['redact'] },
+];
+
+/** Lists the stages the contributors feed, in the fixed export order, each with its contributing sub-tools. */
+export const exportSummary = (contributors: readonly Pick<SubTool, 'id' | 'label'>[]): ExportStep[] =>
+  exportStages.flatMap(({ id, label, tools }) => {
+    const feeding = contributors.filter((tool) => tools.includes(tool.id)).map((tool) => tool.label);
+    return feeding.length ? [{ stage: id, label, tools: feeding }] : [];
+  });
+
 export const sceneSections = ({ pages, textEdits }: PdfScene): SceneSections =>
   textEdits?.length ? { scene: { pages }, textEdits } : { scene: { pages } };
 
@@ -69,5 +88,5 @@ export function planSceneExport({ paths, scene, baseline, outputLocation, output
     ...(flatten ? { flatten } : {}),
     ...(redactions.length ? { redactions } : {}),
   };
-  return { request, contributors: contributors.map((tool) => tool.id), suffix: exportSuffix(contributors) };
+  return { request, contributors: contributors.map((tool) => tool.id), summary: exportSummary(contributors), suffix: exportSuffix(contributors) };
 }

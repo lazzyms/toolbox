@@ -1138,4 +1138,66 @@ mod tests {
         }
         assert_eq!(fs::read_dir(&temp.0).unwrap().count(), 3);
     }
+
+    /// A second page with a plain line the Edit text stage can change.
+    fn with_rent_page(d: &mut Document, _: ObjectId, city: ObjectId) {
+        let first = d.get_dictionary(city).unwrap().get(b"P").unwrap().as_reference().unwrap();
+        let pages = d.get_dictionary(first).unwrap().get(b"Parent").unwrap().as_reference().unwrap();
+        let font = d.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica", "Encoding" => "WinAnsiEncoding" });
+        let content = d.add_object(Stream::new(dictionary! {}, b"BT /Body 14 Tf 72 700 Td (Rent 1450 per month) Tj ET".to_vec()));
+        let second = d.add_object(dictionary! { "Type" => "Page", "Parent" => pages, "MediaBox" => rect([0., 0., 612., 792.]),
+            "Resources" => dictionary! { "Font" => dictionary! { "Body" => font } }, "Contents" => content });
+        let kids = d.get_dictionary_mut(pages).unwrap();
+        kids.get_mut(b"Kids").unwrap().as_array_mut().unwrap().push(Object::Reference(second));
+        kids.set("Count", 2);
+    }
+
+    #[test]
+    fn one_export_chains_every_stage_in_the_fixed_order_and_redaction_removes_what_came_before() {
+        let _guard = crate::kit::lock_process_env();
+        let (Some(extractor), Ok(_)) = (text_extractor(), super::super::renderer()) else {
+            if std::env::var_os("TOOLBOX_REQUIRE_PDF_RENDERER").is_some() { panic!("pdftotext or pdftoppm is unavailable") }
+            return eprintln!("pdftotext or pdftoppm unavailable");
+        };
+        let temp = TempDir::new().unwrap(); let input = temp.0.join("lease.pdf"); form_fixture(&input, with_rent_page);
+        let original = fs::read(&input).unwrap();
+        let overlay = |text: &str| serde_json::json!({ "kind": "text", "rect": { "x": 72, "y": 200, "width": 360, "height": 40 }, "text": text, "fontSize": 18, "color": "#202020", "opacity": 1, "strokes": [] });
+        let request: ExportRequest = serde_json::from_value(serde_json::json!({
+            "paths": [input], "outputLocation": "alongsideInput",
+            "scene": { "pages": [
+                { "sourceIndex": 0, "width": 612, "height": 792, "rotation": 0, "crop": null, "objects": [overlay("Overlaysecret")] },
+                { "sourceIndex": 1, "width": 612, "height": 792, "rotation": 0, "crop": null, "objects": [overlay("Visible note")] }
+            ] },
+            "formValues": [{ "name": "name", "value": "Zebulon Quill" }, { "name": "agree", "value": true }],
+            "textEdits": [{ "pageIndex": 1, "run": 0, "original": "Rent 1450 per month", "replacement": "Rent 1475 per month" }],
+            "flatten": "forms",
+            "redactions": [{ "pageIndex": 0, "rect": { "x": 0, "y": 0, "width": 612, "height": 300 }, "color": "#000000" }],
+        })).unwrap();
+
+        let outcome = export(&request, input.clone());
+        assert!(outcome.error().is_none(), "{:?}", outcome.error());
+        let output = outcome.output_paths()[0].clone();
+        assert_eq!(output, temp.0.join("lease-edited.pdf"), "several stages share the combined name");
+        assert_eq!(outcome.detail, "Changes applied in this fixed order: Fill form; Edit text; Add text, signatures and page marks; Flatten; Redact. \
+Page 1 was redacted as a 300 dpi image. Document metadata, XMP data and attachments were removed.");
+        assert_eq!(fs::read(&input).unwrap(), original, "the original is unchanged");
+
+        let text = |page: usize| String::from_utf8(Command::new(&extractor).args(["-enc", "UTF-8", "-f", &page.to_string(), "-l", &page.to_string()]).arg(&output).arg("-").output().unwrap().stdout).unwrap();
+        assert!(text(1).trim().is_empty(), "the redacted page keeps no text: {}", text(1));
+        let kept = text(2);
+        assert!(kept.contains("Rent 1475 per month") && !kept.contains("1450"), "the text edit reaches the unredacted page: {kept}");
+        assert!(kept.contains("Visible note"), "overlays on unredacted pages stay: {kept}");
+        let bytes = fs::read(&output).unwrap().to_ascii_lowercase();
+        for secret in ["zebulon", "quill", "overlaysecret", "application"] {
+            assert!(!bytes.windows(secret.len()).any(|window| window == secret.as_bytes()), "{secret} survived in the file bytes");
+        }
+        let document = Document::load(&output).unwrap();
+        assert!(!document.catalog().unwrap().has(b"AcroForm"), "flattened fields leave no form behind");
+        assert!(subtypes(&output).is_empty());
+
+        let again = export(&request, input.clone());
+        assert_eq!(again.output_paths(), [temp.0.join("lease-edited-1.pdf")], "never overwrites an earlier output");
+        assert_eq!(fs::read(&again.output_paths()[0]).unwrap(), fs::read(&output).unwrap(), "repeated runs are byte-identical");
+        assert_eq!(fs::read(&input).unwrap(), original);
+    }
 }

@@ -1018,3 +1018,48 @@ test('a replacement longer than the original line warns that it will be cut off'
   await expect(page.locator('.scene-edit-overflow')).toHaveCount(0);
   await expect(page.getByRole('region', { name: 'Properties' }).getByRole('alert')).toHaveCount(0);
 });
+
+test('one export chains every sub-tool in the fixed order and the summary lists them in that order', async ({ page }, testInfo) => {
+  // Wrap the shared mock so this PDF also has a form field, below the editable text run.
+  await page.addInitScript(() => {
+    const w = window as any;
+    const invoke = w.__TAURI_INTERNALS__.invoke;
+    w.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => command === 'inspect_pdf_form'
+      ? (w.calls.push({ command, args }), { unsupported: null, comments: 0, fields: [{ name: 'tenant', label: 'Tenant name', type: 'text', value: '', options: [], optionLabels: [], flags: 0,
+          required: false, readOnly: false, multiline: false, multiSelect: false, editable: false, maxLen: null, format: null, widgets: [{ page: 0, x: 72, y: 600, width: 220, height: 22 }] }] })
+      : invoke(command, args);
+  });
+  await openEditText(page);
+  await page.evaluate(() => { (window as any).exportDetail = 'Changes applied in this fixed order: Fill form; Edit text; Add text, signatures and page marks; Flatten; Redact. Page 1 was redacted as a 300 dpi image.'; });
+  const tools = page.getByRole('toolbar', { name: 'PDF editor tools' });
+  const summary = page.getByRole('region', { name: 'Changes, applied in this fixed order' });
+  await expect(summary).toHaveCount(0);
+
+  // Added out of the fixed order on purpose: redact, overlay, text edit, flatten, then form value.
+  await draw(page, 'Redact', .3);
+  await draw(page, 'Shape', .5);
+  await tools.getByRole('button', { name: 'Edit text', exact: true }).click();
+  await replaceRun(page, 'Rent £1,475');
+  await tools.getByRole('button', { name: 'Fill form', exact: true }).click();
+  const panel = page.getByRole('complementary', { name: 'PDF editor inspector' });
+  await panel.getByRole('checkbox', { name: 'Flatten fields when exporting' }).click();
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Flatten when exporting' }).click();
+  await page.getByRole('group', { name: 'PDF page canvas' }).getByRole('textbox', { name: 'Tenant name' }).fill('Ada Lovelace');
+
+  await expect(summary.getByRole('listitem')).toHaveText(['Fill form', 'Edit text', 'Add text, signatures and page marksShape', 'Flatten', 'Redact']);
+  await page.screenshot({ path: testInfo.outputPath('pdf-chained-export-summary.png') });
+
+  await page.getByRole('button', { name: 'Export PDF', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Before you export with redactions' });
+  await dialog.getByRole('checkbox', { name: "I've checked the marks on every page" }).click();
+  await dialog.getByRole('button', { name: 'Continue to export' }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).calls.filter((c: any) => c.command === 'export_pdf_scene').length)).toBe(1);
+  const request = await page.evaluate(() => (window as any).calls.find((c: any) => c.command === 'export_pdf_scene').args.request);
+  expect(Object.keys(request).sort()).toEqual(['flatten', 'formValues', 'outputLocation', 'paths', 'redactions', 'scene', 'textEdits']);
+  expect(request.formValues).toEqual([{ name: 'tenant', value: 'Ada Lovelace' }]);
+  expect(request.textEdits).toEqual([{ pageIndex: 0, run: 0, original: 'Rent £1,450', replacement: 'Rent £1,475' }]);
+  expect(request.scene.pages[0].objects.map((object: any) => object.kind)).toEqual(['shape']);
+  expect(request.flatten).toBe('forms');
+  expect(request.redactions.map(({ pageIndex }: any) => pageIndex)).toEqual([0]);
+  await expect(page.getByText('Changes applied in this fixed order: Fill form; Edit text; Add text, signatures and page marks; Flatten; Redact.', { exact: false })).toBeVisible();
+});

@@ -19,7 +19,8 @@ import { RedactDisclosure, RedactInspector, listMarks, redactionFills, searchSta
 import type { ListedMark, TextMatch, TextSearch } from '../features/pdf-editor/RedactInspector';
 import { subToolInspectors } from '../features/pdf-editor/SubToolInspectors';
 import type { SubToolInspectorProps } from '../features/pdf-editor/SubToolInspectors';
-import { combinedSuffix, exportSuffix, planSceneExport, sceneContributors, sceneSections } from '../features/pdf-editor/subtools';
+import { combinedSuffix, exportSuffix, exportSummary, planSceneExport, sceneContributors, sceneSections } from '../features/pdf-editor/subtools';
+import type { SubTool } from '../features/pdf-editor/subtools';
 import { proposedSaveName } from '../components/saveStep';
 import type { SaveDialog } from '../registry/saveSteps';
 import { sceneFromDocument, visibleBounds } from '../features/pdf-editor/scene';
@@ -123,8 +124,10 @@ export const PDFEditorWorkspaceView = ({
   const initialTool = availability.allows(toolFlagBySceneTool[requestedTool])
     ? requestedTool
     : tools.find((item) => availability.allows(toolFlagBySceneTool[item.id]))?.id ?? null;
-  // The export name follows the sub-tools that change the document, so the destination's example tracks the edits.
-  const [suffix, setSuffix] = useState<string | null>(null);
+  // The sub-tools that change the document name the export and fill the summary of its fixed-order stages.
+  const [contributors, setContributors] = useState<SubTool[]>([]);
+  const suffix = exportSuffix(contributors);
+  const summary = exportSummary(contributors);
   return <ToolScaffold utility={utility} variant="workspace" sessionKey="pdf-editor-scene" initialPaths={initialPaths} onWorkspaceSourceAction={onWorkspaceSourceAction} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange}
     exampleName={(inputPath) => proposedSaveName(inputPath, suffix ?? combinedSuffix, 'pdf')}
     onRun={async (paths, outputLocation, { runId, outputPath }) => {
@@ -143,9 +146,18 @@ export const PDFEditorWorkspaceView = ({
           onNavigate={onNavigate}
           onScene={(path, scene, baseline, formValues, flatten) => {
             session.current = path && scene && baseline ? { path, scene, baseline, formValues, flatten } : null;
-            setSuffix(scene && baseline ? exportSuffix(sceneContributors(scene, baseline, formValues, flatten)) : null);
+            setContributors(scene && baseline ? sceneContributors(scene, baseline, formValues, flatten) : []);
           }} />
-        <Card className="pdf-scene-destination py-0"><CardContent className="py-3">{destination}</CardContent></Card>
+        <Card className="pdf-scene-destination py-0"><CardContent className="py-3">
+          {summary.length > 0 && <section className="scene-export-summary" aria-labelledby="scene-export-summary-title">
+            <h3 id="scene-export-summary-title">Changes, applied in this fixed order</h3>
+            <ol>{summary.map((step) => <li key={step.stage} data-export-stage={step.stage}>
+              <span className="scene-export-summary-label">{step.label}</span>
+              {step.tools.length > 1 || step.tools[0] !== step.label ? <span className="scene-export-summary-detail">{step.tools.join(', ')}</span> : null}
+            </li>)}</ol>
+          </section>}
+          {destination}
+        </CardContent></Card>
       </>;
     }}
   </ToolScaffold>;
