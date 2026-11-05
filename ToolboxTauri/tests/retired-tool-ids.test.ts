@@ -133,11 +133,10 @@ test("the shipped table sends the retired Protect PDF id to Lock & Unlock, also 
   migrateSavedToolIds(storage);
   assert.deepEqual(storage.list(favoritesStorageKey), ["lock-unlock", "pdf-merge"]);
   assert.deepEqual(storage.list(recentStorageKey), ["pdf-merge", "lock-unlock"]);
-  assert.equal(storage.getItem(toolIdMigrationStorageKey), "3");
+  assert.equal(storage.getItem(toolIdMigrationStorageKey), String(RetiredToolIds.version));
 });
 
 test("the shipped table sends the retired Protect Office Files id to Lock & Unlock, also after the second migration ran", () => {
-  assert.equal(RetiredToolIds.version, 3);
   assert.equal(RetiredToolIds.replacements.get("office-protect"), "lock-unlock");
   assert.ok(!registeredToolIds.has("office-protect"));
   const storage = new MemoryStorage({ [favoritesStorageKey]: ["office-protect", "pdf-merge"], [recentStorageKey]: ["lock-unlock", "pdf-merge", "office-protect"] });
@@ -145,7 +144,25 @@ test("the shipped table sends the retired Protect Office Files id to Lock & Unlo
   migrateSavedToolIds(storage);
   assert.deepEqual(storage.list(favoritesStorageKey), ["lock-unlock", "pdf-merge"]);
   assert.deepEqual(storage.list(recentStorageKey), ["lock-unlock", "pdf-merge"]);
-  assert.equal(storage.getItem(toolIdMigrationStorageKey), "3");
+  assert.equal(storage.getItem(toolIdMigrationStorageKey), "4");
+});
+
+test("the shipped table sends both retired PDF extraction ids to Extract from PDF, also after the third migration ran", () => {
+  assert.equal(RetiredToolIds.version, 4);
+  for (const retired of ["pdf-to-text", "pdf-image-extract"]) {
+    assert.equal(RetiredToolIds.replacements.get(retired), "pdf-extract");
+    assert.ok(!registeredToolIds.has(retired));
+  }
+  assert.ok(registeredToolIds.has("pdf-extract"));
+  const storage = new MemoryStorage({
+    [favoritesStorageKey]: ["pdf-to-text", "pdf-merge", "pdf-image-extract"],
+    [recentStorageKey]: ["pdf-image-extract", "pdf-merge", "pdf-to-text"],
+  });
+  storage.setItem(toolIdMigrationStorageKey, "3");
+  migrateSavedToolIds(storage);
+  assert.deepEqual(storage.list(favoritesStorageKey), ["pdf-extract", "pdf-merge"]);
+  assert.deepEqual(storage.list(recentStorageKey), ["pdf-extract", "pdf-merge"]);
+  assert.equal(storage.getItem(toolIdMigrationStorageKey), "4");
 });
 
 test("the retired tool id table rejects ids that are still registered or map nowhere", () => {

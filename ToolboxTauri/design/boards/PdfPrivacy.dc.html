@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Privacy Check</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+.tb{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;font-size:13px;line-height:1.45;color:var(--fg);background:var(--bg);-webkit-font-smoothing:antialiased;position:relative}
+.tb.dark{--bg:#0a0a0a;--side:#111111;--panel:#0f0f0f;--raise:#1c1c1c;--fg:#fafafa;--mut:#a3a3a3;--faint:#8a8a8a;--line:rgba(255,255,255,.08);--line2:rgba(255,255,255,.16);--sel:#262626;--pri:#ebebeb;--prifg:#171717;--bad:#ff6b6b;--warn:#f2b552;--ring:#a3a3a3;--scrim:rgba(0,0,0,.6);--seg-ok:#d4d4d4;--seg-wait:#2a2a2a}
+.tb.light{--bg:#ffffff;--side:#f7f7f7;--panel:#fcfcfc;--raise:#f2f2f2;--fg:#0a0a0a;--mut:#525252;--faint:#666666;--line:#e8e8e8;--line2:#d4d4d4;--sel:#ebebeb;--pri:#171717;--prifg:#fafafa;--bad:#c10007;--warn:#9a5800;--ring:#525252;--scrim:rgba(0,0,0,.28);--seg-ok:#262626;--seg-wait:#e5e5e5}
+.tb button,.tb input,.tb select{font:inherit;color:inherit}
+.btn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:7px;border:1px solid var(--line2);background:var(--raise);color:var(--fg);font-weight:500;cursor:pointer;white-space:nowrap;box-sizing:border-box;text-decoration:none}
+.btn.pri{background:var(--pri);color:var(--prifg);border-color:transparent}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--mut)}
+.btn.ghost.link{color:var(--fg);padding:0;text-decoration:underline}
+.btn.sm{height:26px;padding:0 9px;font-size:12px}
+.btn.ib{width:26px;padding:0;justify-content:center}
+.btn[aria-disabled=true]{opacity:.4;cursor:default}
+.kbd{font-size:11px;line-height:16px;padding:0 5px;border-radius:4px;border:1px solid var(--line2);color:var(--mut);font-weight:500;white-space:nowrap}
+.btn.pri .kbd{border-color:currentColor;color:inherit;opacity:.6}
+.nav{display:flex;align-items:center;gap:9px;min-height:30px;padding:0 10px;border-radius:7px;color:var(--mut);text-decoration:none;border:0;background:none;width:100%;text-align:left;cursor:pointer;box-sizing:border-box}
+.nav.on{background:var(--sel);color:var(--fg);font-weight:500}
+.rgrp{padding:12px 10px 4px;font-size:11px;font-weight:600;color:var(--faint);text-transform:uppercase;letter-spacing:.05em}
+.field{height:30px;border-radius:7px;border:1px solid var(--line2);background:var(--bg);padding:0 10px;width:100%;box-sizing:border-box;min-width:0}
+.field[aria-invalid=true]{border-color:var(--bad)}
+.field[readonly]{color:var(--mut)}
+.lbl{font-size:12px;font-weight:600}
+.hint{font-size:12px;color:var(--mut)}
+.badge{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:999px;border:1px solid var(--line2);font-size:12px;color:var(--fg);white-space:nowrap}
+svg.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.tb :focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+a{color:inherit}a:hover{color:var(--mut)}
+.seg{display:inline-flex;padding:2px;border-radius:8px;background:var(--raise);border:1px solid var(--line)}
+.seg button{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 10px;border:0;border-radius:6px;background:none;cursor:pointer;color:var(--mut);font-weight:500;font-size:12px}
+.seg button[aria-checked=true]{background:var(--bg);color:var(--fg);box-shadow:0 1px 2px rgba(0,0,0,.25)}
+.opt{display:flex;flex-direction:column;gap:6px}
+.sect{border-top:1px solid var(--line);padding-top:14px;display:flex;flex-direction:column;gap:8px}
+.lock{opacity:.5}
+.alert{display:flex;gap:8px;align-items:flex-start;padding:8px 10px;border-radius:8px;border:1px solid var(--bad);color:var(--bad);font-size:12px}
+.flag{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:8px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--raise)}
+.tbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:12px 20px 8px}
+.drop{flex:1;border:1.5px dashed var(--line2);border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:40px;text-align:center;min-height:420px}
+.frow{display:grid;grid-template-columns:18px minmax(0,1fr) 56px 64px 200px 26px;gap:12px;align-items:center;padding:7px 20px;border-bottom:1px solid var(--line);min-height:40px}
+.frow.sel{background:var(--sel)}
+.ell{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.num{font-variant-numeric:tabular-nums}
+.rrow{display:grid;grid-template-columns:20px minmax(0,1fr) 92px 230px;gap:12px;align-items:center;padding:8px 20px;border-bottom:1px solid var(--line);min-height:36px}
+.chip{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;border-radius:999px;border:1px solid var(--line2);background:transparent;font-size:12px;cursor:pointer;color:var(--mut)}
+.chip[aria-pressed="true"]{background:var(--sel);color:var(--fg);font-weight:500}
+.inl{grid-column:2 / -1;display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;padding:10px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--panel)}
+.inl .opt{flex:1 1 180px}
+.fit{height:100vh;overflow:clip}.fit>div{height:100%}.fit>div,.fit>div>div,.fit section,.fit section>div{min-height:0}.fit section{overflow:hidden;max-height:100%}.fit section>ul{flex:1 1 auto;min-height:0}
+.notadd{margin:14px 20px 20px;border:1px solid var(--line);border-radius:10px}
+.notadd .g{display:grid;grid-template-columns:minmax(0,200px) minmax(0,1fr) auto;column-gap:16px;row-gap:8px;padding:10px 14px;align-items:center}
+.rep{display:grid;grid-template-columns:18px minmax(0,1fr);gap:10px;padding:7px 10px;border-radius:7px}
+.rep.sel{background:var(--sel)}
+.sev{display:inline-flex;align-items:center;height:20px;padding:0 8px;border-radius:999px;font-size:11px;font-weight:600;border:1px solid currentColor;white-space:nowrap}
+.sev.hi{color:var(--bad)}.sev.md{color:var(--warn)}.sev.lo{color:var(--mut)}
+.cat{border:1px solid var(--line2);border-radius:10px;padding:10px 14px;display:flex;flex-direction:column;gap:6px;background:var(--panel)}
+.cat.none{border-color:var(--line);background:transparent;padding:3px 14px}
+.cat.none h3{font-weight:500 !important;color:var(--mut)}
+.kv{display:grid;grid-template-columns:170px minmax(0,1fr);gap:3px 12px;margin:0;font-size:12px}
+.kv dt{color:var(--mut)}.kv dd{margin:0;min-width:0;overflow-wrap:anywhere}
+</style>
+</helmet>
+<div class="{{themeClass}} fit" style="min-height: 640px; display: flex; flex-wrap: wrap">
+<aside aria-label="PDF Editor" style="flex: 1 1 220px; max-width: 232px; background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; padding: 14px 10px; box-sizing: border-box">
+<a class="nav" href="Main.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M5 12l6 6M5 12l6-6"></path></svg>All tools</a>
+<div style="padding: 16px 10px 6px; font-size: 12px; font-weight: 600; color: var(--faint)">PDF Editor</div>
+<nav aria-label="PDF Editor tools" style="display: flex; flex-direction: column; gap: 2px"><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"></path></svg>Edit PDF</button><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="7" height="7" rx="1"></rect><rect x="14" y="4" width="7" height="7" rx="1"></rect><rect x="3" y="14" width="7" height="7" rx="1"></rect><rect x="14" y="14" width="7" height="7" rx="1"></rect></svg>Organize Pages</button><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4v5a5 5 0 0 0 5 5h7M18 4v5"></path><path d="M15 11l3 3-3 3"></path></svg>Merge PDF</button><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18"></path><path d="M8 8L4 12l4 4M16 8l4 4-4 4"></path></svg>Split PDF</button><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2v14a2 2 0 0 0 2 2h14M2 6h14a2 2 0 0 1 2 2v14"></path></svg>Crop and Resize</button><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4L7 20M17 4l-2 16M4 9h16M3 15h16"></path></svg>Page Numbers and Bates</button>
+<div class="rgrp" id="rail-details">Details</div>
+<button class="nav on" aria-pressed="true" aria-describedby="rail-details" title="See what each PDF reveals besides its pages. Changes nothing."><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6v18h5"></path><path d="M14 3v4h4v3"></path><circle cx="16" cy="16" r="3.5"></circle><path d="M18.5 18.5L21 21"></path></svg>Privacy Check</button><button class="nav" aria-pressed="false" tabindex="-1" aria-describedby="rail-details" title="Set, keep or clear title, author, subject and dates."><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6v18h12V7z"></path><path d="M14 3v4h4"></path><path d="M9 12h6M9 16h4"></path></svg>Edit Properties</button><button class="nav" aria-pressed="false" tabindex="-1" aria-describedby="rail-details" title="Lift print, copy and edit limits with the permissions password. Open passwords are removed in File Security."><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"></path><path d="M9 9l6 6M15 9l-6 6"></path></svg>Remove Restrictions</button></nav>
+<div style="flex: 1"></div>
+<a class="nav" href="Settings.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"></path></svg>Settings<span class="kbd" style="margin-left: auto">{{settingsKey}}</span></a>
+<p class="hint" style="margin: 0; padding: 10px 10px 0">Files stay on this device.</p>
+</aside>
+<div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+<header style="min-height: 52px; display: flex; align-items: center; gap: 14px; padding: 0 20px; border-bottom: 1px solid var(--line); flex-wrap: wrap">
+<h1 style="margin: 0; font-size: 15px; font-weight: 600">Privacy Check</h1>
+<span class="hint">See what each PDF reveals besides its pages. Changes nothing.</span>
+<div style="flex: 1"></div>
+<button class="btn ghost"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"></circle><path d="M21 21l-6-6"></path></svg>Find a tool<span class="kbd">{{findKey}}</span></button>
+</header>
+<div style="flex: 1; display: flex; flex-wrap: wrap; min-height: 0">
+<sc-if value="{{isPrep}}" hint-placeholder-val="{{ true }}">
+<section aria-label="Files" style="flex: 999 1 480px; min-width: 0; display: flex; flex-direction: column">
+<sc-if value="{{isEmpty}}" hint-placeholder-val="{{ false }}"><div style="flex: 1; display: flex; padding: 20px; box-sizing: border-box"><div role="region" aria-label="Drop PDFs to add them" class="drop">
+<svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 28px; height: 28px; color: var(--mut); stroke-width: 1.5"><path d="M12 5v14M6 13l6 6 6-6"></path></svg>
+<p style="margin: 0; font-size: 17px; font-weight: 600">Drop PDFs to check</p>
+<p class="hint" style="margin: 0; max-width: 400px">Toolbox lists what each PDF carries besides its pages: properties, earlier versions, attachments, scripts, comments, links and more. Nothing is changed.</p>
+<button class="btn pri" style="margin-top: 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2"></path></svg>Open files<span class="kbd">{{openKey}}</span></button>
+<p class="hint" style="margin: 0">Accepts .pdf</p>
+</div></div></sc-if>
+<sc-if value="{{isList}}" hint-placeholder-val="{{ true }}">
+<div class="tbar"><strong>{{countLabel}}</strong><span class="hint">{{selLabel}}</span><div style="flex: 1"></div>
+<sc-if value="{{hasSel}}" hint-placeholder-val="{{ true }}"><button class="btn sm" aria-disabled="{{locked}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="15" r="4"></circle><path d="M10.8 12.2L19 4M16 7l2 2"></path></svg>Set password for 2…</button><button class="btn sm" aria-disabled="{{locked}}">Remove from list</button></sc-if>
+<button class="btn sm" aria-disabled="{{locked}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>Add files<span class="kbd">{{openKey}}</span></button><button class="btn sm ghost" aria-disabled="{{locked}}">Clear list</button></div>
+<sc-if value="{{isRunning}}" hint-placeholder-val="{{ false }}"><div style="padding: 6px 20px 12px; display: flex; flex-direction: column; gap: 10px">
+<div role="status" aria-live="polite" style="display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap"><strong style="font-size: 15px">Checking 7 PDFs</strong><span class="hint">board-minutes.pdf, 3 of 7.</span></div>
+<div aria-hidden="true" style="display: flex; gap: 2px; height: 6px"><sc-for list="{{segments}}" as="s" hint-placeholder-count="7"><span style="flex: 1; border-radius: 2px; background: {{s.bg}}"></span></sc-for></div></div></sc-if>
+<sc-if value="{{showSelHint}}" hint-placeholder-val="{{ true }}"><p class="hint" style="margin: 0; padding: 0 20px 10px">Shift-click or {{modClick}} to select. {{mod}}A selects all. Delete removes files from the list, not from disk.</p></sc-if>
+<div class="frow hint" aria-hidden="true" style="min-height: 0; padding-top: 6px; padding-bottom: 6px; border-top: 1px solid var(--line)"><span></span><span>Name</span><span style="text-align: right">Pages</span><span style="text-align: right">Size</span><span>{{statusHead}}</span><span></span></div>
+<ul role="listbox" aria-multiselectable="true" aria-label="PDFs to check" style="list-style: none; margin: 0; padding: 0; overflow: auto"><sc-for list="{{rows}}" as="r" hint-placeholder-count="7"><li role="option" class="frow {{r.cls}}" aria-selected="{{r.sel}}">
+<span style="color: var(--mut); display: flex"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6v18h12V7z"></path><path d="M14 3v4h4"></path></svg></span>
+<span style="min-width: 0; display: flex; flex-direction: column"><span class="ell">{{r.name}}</span><span class="hint ell">{{r.dir}}</span></span>
+<span class="hint num" style="text-align: right">{{r.pages}}</span>
+<span class="hint num" style="text-align: right">{{r.size}}</span>
+<span style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><sc-if value="{{r.own}}" hint-placeholder-val="{{ false }}"><span class="badge" style="align-self: flex-start"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 13px; height: 13px"><circle cx="8" cy="15" r="4"></circle><path d="M10.8 12.2L19 4M16 7l2 2"></path></svg>Own password</span></sc-if><span class="hint" style="color: {{r.noteColor}}">{{r.note}}</span></span>
+<span style="display: flex; justify-content: flex-end"><sc-if value="{{r.canRemove}}" hint-placeholder-val="{{ true }}"><button class="btn sm ghost ib" aria-label="Remove {{r.name}} from the list" title="Remove (Delete)"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button></sc-if></span>
+</li></sc-for></ul>
+<sc-if value="{{hasNotAdded}}" hint-placeholder-val="{{ true }}"><div role="region" aria-label="Not added" class="notadd">
+<div style="display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--line)"><strong>1 item not added</strong><div style="flex: 1"></div><button class="btn sm ghost">Dismiss</button></div>
+<div class="g"><span class="ell">budget-2027.xlsx</span><span class="hint">Privacy Check only reads PDFs.</span><span></span></div>
+</div></sc-if>
+</sc-if>
+</section>
+<section aria-label="Options" style="flex: 1 1 300px; max-width: 360px; border-left: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column">
+<div class="{{optsCls}}" aria-disabled="{{locked}}" style="padding: 18px 20px; display: flex; flex-direction: column; gap: 18px; flex: 1; overflow: auto">
+<div class="opt"><label class="lbl" for="pw">Open password for all files</label>
+<div style="display: flex; gap: 6px"><input id="pw" class="field" type="password" value="{{pwValue}}" placeholder="Only for PDFs that need one" aria-describedby="pw-help"><button class="btn" aria-label="Show password" aria-pressed="false" style="padding: 0 8px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"></path><circle cx="12" cy="12" r="3"></circle></svg></button></div>
+<span id="pw-help" class="hint">{{pwHelp}}</span><span class="hint">Never saved. Cleared when you clear the list.</span></div>
+<div class="sect" style="gap: 6px"><span class="lbl">The report</span><p class="hint" style="margin: 0">One report per PDF in 14 categories, from document information to unsupported items. Each category shows what was found and why it matters, or says None found.</p></div>
+<div class="sect" style="gap: 6px"><span class="lbl">Save reports to</span><span>{{outDir}}</span><div style="display: flex; gap: 12px"><button class="btn sm ghost link">Change for this run</button><button class="btn sm ghost link" aria-disabled="true">Reset to default</button></div><p class="hint" style="margin: 0">Reports are only saved when you choose Save. Names: {{exName}}. An existing name gets -1, -2 and so on.</p></div>
+</div>
+<footer style="padding: 14px 20px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 10px; flex-wrap: wrap">
+<sc-if value="{{isRunning}}" hint-placeholder-val="{{ false }}"><button class="btn">Cancel batch<span class="kbd">Esc</span></button></sc-if>
+<span class="hint" style="flex: 1 1 100%; color: {{reasonColor}}">{{reason}}</span>
+<div style="flex: 1"></div>
+<sc-if value="{{hasRun}}" hint-placeholder-val="{{ true }}"><button class="btn pri" aria-disabled="{{runOff}}">{{runLabel}}<span class="kbd">{{runKey}}</span></button></sc-if>
+</footer></section>
+</sc-if>
+<sc-if value="{{isReport}}" hint-placeholder-val="{{ false }}">
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column">
+<sc-if value="{{isBatch}}" hint-placeholder-val="{{ false }}"><div style="padding: 12px 20px; display: flex; flex-direction: column; gap: 10px; border-bottom: 1px solid var(--line)">
+<div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap"><div role="status" aria-live="polite" style="display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap"><strong style="font-size: 15px">Done. 4 reports, 3 failed</strong><span class="hint">Nothing was changed in any PDF.</span></div><div style="flex: 1"></div>
+<div role="group" aria-label="All 4 reports" style="display: flex; gap: 6px; align-items: center"><span class="hint">All 4 reports:</span><button class="btn sm"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"></rect><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"></path></svg>Copy all</button><button class="btn sm">Save all as JSON</button><button class="btn sm">Save all as Markdown</button></div></div>
+<div aria-hidden="true" style="display: flex; gap: 2px; height: 6px"><sc-for list="{{segments}}" as="s" hint-placeholder-count="7"><span style="flex: 1; border-radius: 2px; background: {{s.bg}}"></span></sc-for></div>
+<sc-if value="{{hasSaved}}" hint-placeholder-val="{{ false }}"><div role="status" class="flag"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l5 5 9-10"></path></svg><span style="flex: 1 1 300px">Saved 4 Markdown reports to {{outDir}}. One name was taken, so it was saved as board-minutes-details-1.md.</span><button class="btn sm">{{revealAll}}</button></div></sc-if>
+</div></sc-if>
+<div style="flex: 1; display: flex; min-height: 0">
+<sc-if value="{{isBatch}}" hint-placeholder-val="{{ false }}"><div style="width: 270px; flex: none; border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0">
+<ul role="listbox" aria-label="Reports by PDF" style="list-style: none; margin: 0; padding: 6px; overflow: auto; flex: 1"><sc-for list="{{reports}}" as="f" hint-placeholder-count="7"><li role="option" aria-selected="{{f.sel}}" class="rep {{f.cls}}">
+<span style="color: {{f.color}}; display: flex; padding-top: 1px"><sc-if value="{{f.isOk}}" hint-placeholder-val="{{ true }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6v18h12V7z"></path><path d="M14 3v4h4"></path></svg></sc-if><sc-if value="{{f.isFail}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M9 9l6 6M15 9l-6 6"></path></svg></sc-if></span>
+<span style="min-width: 0; display: flex; flex-direction: column"><span class="ell">{{f.name}}</span><span class="hint" style="color: {{f.subColor}}">{{f.sub}}</span></span>
+</li></sc-for></ul>
+<p class="hint" style="margin: 0; padding: 8px 14px; border-top: 1px solid var(--line); display: flex; gap: 6px; align-items: center; flex-wrap: wrap"><span class="kbd">↑</span><span class="kbd">↓</span>in the list, or <span class="kbd">{{prevKey}}</span><span class="kbd">{{nextKey}}</span>from the report</p>
+</div></sc-if>
+<section aria-labelledby="rep-h" style="flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0">
+<div style="padding: 12px 20px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 10px; flex-wrap: wrap">
+<div style="display: flex; flex-direction: column; min-width: 0; flex: 1 1 220px"><h2 id="rep-h" style="margin: 0; font-size: 14px; font-weight: 600" class="ell">{{cur.name}}</h2><span class="hint ell">{{cur.sub}}</span></div>
+<sc-if value="{{cur.ok}}" hint-placeholder-val="{{ true }}"><div role="group" aria-label="This report" style="display: flex; gap: 6px; flex-wrap: wrap"><button class="btn sm"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"></rect><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"></path></svg>Copy<span class="kbd">{{copyKey}}</span></button><button class="btn sm">Save as JSON</button><button class="btn sm">Save as Markdown</button></div></sc-if>
+</div>
+<div style="flex: 1; overflow: auto; padding: 14px 20px 20px; display: flex; flex-direction: column; gap: 12px">
+<sc-if value="{{cur.ok}}" hint-placeholder-val="{{ true }}">
+<div role="status" style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap"><span class="sev hi">{{cur.hi}} high</span><span class="sev md">{{cur.md}} medium</span><span class="sev lo">{{cur.lo}} low</span><span class="hint">{{cur.none}} categories with none found. {{cur.unsup}}</span></div>
+<ul aria-label="Report categories" style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px"><sc-for list="{{cats}}" as="c" hint-placeholder-count="14"><li class="cat {{c.cls}}">
+<div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-height: 26px">
+<h3 style="margin: 0; font-size: 13px; font-weight: 600">{{c.name}}</h3>
+<sc-if value="{{c.has}}" hint-placeholder-val="{{ true }}"><span class="sev {{c.sevCls}}">{{c.sev}}</span><span class="hint">{{c.count}}</span></sc-if>
+<sc-if value="{{c.none}}" hint-placeholder-val="{{ false }}"><span class="hint">None found</span></sc-if>
+<div style="flex: 1"></div>
+<sc-if value="{{c.hasPointer}}" hint-placeholder-val="{{ false }}"><button class="btn sm">{{c.pointer}}</button></sc-if>
+</div>
+<sc-if value="{{c.has}}" hint-placeholder-val="{{ true }}"><p class="hint" style="margin: 0"><strong style="color: var(--fg); font-weight: 500">Why it matters: </strong>{{c.why}}</p>
+<dl class="kv"><sc-for list="{{c.items}}" as="i" hint-placeholder-count="3"><dt>{{i.k}}</dt><dd>{{i.v}}</dd></sc-for></dl></sc-if>
+</li></sc-for></ul>
+</sc-if>
+<sc-if value="{{cur.failed}}" hint-placeholder-val="{{ false }}">
+<div role="alert" class="alert" style="font-size: 13px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M9 9l6 6M15 9l-6 6"></path></svg><span>{{cur.error}}</span></div>
+<div style="display: flex; gap: 6px; flex-wrap: wrap"><sc-if value="{{cur.canRetryPw}}" hint-placeholder-val="{{ false }}"><button class="btn sm" aria-expanded="{{cur.retryOpen}}" aria-controls="retry">Try another password</button></sc-if><sc-if value="{{cur.hasPointer}}" hint-placeholder-val="{{ false }}"><button class="btn sm">{{cur.pointer}}</button></sc-if></div>
+<sc-if value="{{cur.showRetry}}" hint-placeholder-val="{{ false }}"><div id="retry" class="inl" style="grid-column: auto"><div class="opt"><label class="lbl" for="rpw">Password for {{cur.name}}</label><input id="rpw" class="field" type="password" value="••••••••••" autofocus></div><button class="btn pri sm">Retry this file<span class="kbd">{{runKey}}</span></button><button class="btn sm ghost">Cancel<span class="kbd">Esc</span></button><span class="hint" style="flex: 1 1 100%">Only this file is checked again. Its new password isn't saved.</span></div></sc-if>
+</sc-if>
+</div>
+</section>
+</div>
+<footer style="padding: 10px 20px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 12px; flex-wrap: wrap">
+<button class="btn">Clear list</button><button class="btn">Add files<span class="kbd">{{openKey}}</span></button>
+<div style="flex: 1"></div>
+<span class="hint">Reports save to</span><span>{{outDir}}</span><button class="btn sm ghost link">Change for this run</button>
+</footer>
+</div>
+</sc-if>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "state": {"editor": "enum", "options": ["Files added", "Empty", "Checking", "Report, one file", "Report, batch", "Wrong password retry", "Reports saved"], "default": "Files added"}, "$preview": {"width": 1280, "height": 800}}'>
+class Component extends DCLogic {
+renderVals() {
+const win = (this.props.platform ?? 'macOS') === 'Windows';
+const light = (this.props.theme ?? 'dark') === 'light';
+const base = { themeClass: light ? 'tb light' : 'tb dark', findKey: win ? 'Ctrl+K' : '⌘K', settingsKey: win ? 'Ctrl+,' : '⌘,', openKey: win ? 'Ctrl+O' : '⌘O', runKey: win ? 'Ctrl+Enter' : '⌘↵', mod: win ? 'Ctrl+' : '⌘', modClick: win ? 'Ctrl-click' : '⌘-click', reveal: win ? 'Show in File Explorer' : 'Show in Finder', revealAll: win ? 'Show in File Explorer' : 'Show in Finder', copyKey: win ? 'Ctrl+Shift+C' : '⇧⌘C', prevKey: win ? 'Alt+↑' : '⌥↑', nextKey: win ? 'Alt+↓' : '⌥↓' };
+const state = this.props.state ?? 'Files added';
+const sep = win ? '\\' : '/';
+const dir = (...p) => [win ? 'C:\\Users\\Asha' : '~'].concat(p).join(sep);
+const isEmpty = state === 'Empty', isRunning = state === 'Checking';
+const isReport = state.startsWith('Report') || state === 'Wrong password retry' || state === 'Reports saved';
+const isBatch = isReport && state !== 'Report, one file';
+Object.assign(base, { isEmpty, isRunning, isReport, isBatch, isPrep: !isReport, isList: !isEmpty && !isReport, hasSaved: state === 'Reports saved',
+optsCls: isRunning ? 'lock' : '', locked: isRunning ? 'true' : 'false', outDir: dir('Documents', 'Reports'), exName: 'lease-agreement-details.json or .md',
+hasSel: state === 'Files added', showSelHint: state === 'Files added', hasNotAdded: state === 'Files added', statusHead: isRunning ? 'Status' : 'Password' });
+const F = [
+{ name: 'lease-agreement.pdf', d: ['Documents', 'Contracts'], pages: '14', size: '1.6 MB' },
+{ name: 'vendor-nda-acme.pdf', d: ['Documents', 'Contracts'], pages: '6', size: '380 KB' },
+{ name: 'board-minutes.pdf', d: ['Documents', 'Board'], pages: '9', size: '640 KB', sel: true },
+{ name: 'offer-letter-chen.pdf', d: ['Documents', 'HR'], pages: '—', size: '210 KB', own: true },
+{ name: 'payroll-2026.pdf', d: ['Documents', 'Finance'], pages: '—', size: '300 KB', needsPw: true, sel: true },
+{ name: 'scan-archive.pdf', d: ['Scans'], pages: '2,400', size: '480 MB' },
+{ name: 'site-survey-scan.pdf', d: ['Documents', 'Projects'], pages: '31', size: '14.6 MB' }
+];
+const run = ['Checked', 'Checked', 'Checking…', 'Waiting', 'Waiting', 'Waiting', 'Waiting'];
+base.rows = F.map((f, i) => {
+let note = 'Doesn\'t need a password', color = 'var(--mut)';
+if (f.own) note = 'Needs an open password. Uses its own.';
+if (f.needsPw) { note = 'Needs an open password. The one for all files is tried.'; color = 'var(--warn)'; }
+if (isRunning) { note = run[i]; color = i < 3 ? 'var(--fg)' : 'var(--mut)'; }
+return { name: f.name, dir: dir(...f.d), pages: f.pages, size: f.size, own: !!f.own && !isRunning, note, noteColor: color, sel: f.sel && !isRunning ? 'true' : 'false', cls: f.sel && !isRunning ? 'sel' : '', canRemove: !isRunning };
+});
+base.countLabel = '7 PDFs';
+base.selLabel = isRunning ? 'The list is locked while checking.' : '2 selected';
+base.pwValue = isEmpty ? '' : 'harbour-lantern-42';
+base.pwHelp = isEmpty ? 'Only used for PDFs that need a password to open.' : 'Tried on 1 PDF that needs a password to open. 1 PDF uses its own password.';
+base.segments = F.map((f, i) => ({ bg: i < 2 ? 'var(--seg-ok)' : i === 2 ? 'var(--line2)' : 'var(--seg-wait)' }));
+base.hasRun = !isRunning;
+base.runOff = isEmpty ? 'true' : 'false';
+base.runLabel = isEmpty ? 'Check PDFs' : 'Check 7 PDFs';
+base.reasonColor = 'var(--mut)';
+base.reason = isEmpty ? 'Add PDFs to check.' : isRunning ? 'Cancel stops after the current PDF. Finished reports are kept.' : 'Reads each PDF and makes a report. No file is changed or saved.';
+// Report data
+const it = (k, v) => ({ k, v });
+const CAT = ['Document information', 'XMP metadata', 'Earlier versions (incremental updates)', 'Embedded files', 'JavaScript and automatic actions', 'Comments and their authors', 'Filled form fields', 'Hidden layers (optional content)', 'Links and the hosts they reach', 'Digital signatures', 'Encryption and permissions', 'Document IDs', 'Thumbnails and page piece data', 'Unsupported items'];
+const WHY = {
+0: 'Anyone you send the file to can see who made it, with which apps, and when.',
+1: 'A second copy of the properties. It can keep old names after the visible ones change.',
+2: 'Earlier saves are still inside the file. Text you deleted may be recoverable.',
+3: 'Attached files travel with the PDF, even though they aren\'t on any page.',
+4: 'Scripts and actions can run when the PDF opens, or contact other sites.',
+5: 'Comments show reviewers\' names and can hold notes nobody sees on the page.',
+6: 'Typed answers stay in the file, including fields that are hidden or empty-looking.',
+7: 'Hidden layers can hold content that doesn\'t show until someone turns them on.',
+8: 'Opening a link tells that site the file was opened, and from where.',
+9: 'A signature names who signed and when. Changing the file removes it.',
+10: 'Shows who can open the file and what readers are allowed to do with it.',
+11: 'A fixed ID can link this file to other copies or earlier versions of it.',
+12: 'Stored thumbnails and page pieces can show content that was later removed.',
+13: 'These parts weren\'t checked, so the report can\'t say what they hold.'
+};
+const R = {
+lease: { name: 'lease-agreement.pdf', sub: dir('Documents', 'Contracts') + ' · 14 pages', c: {
+0: ['md', '6 fields', [it('Author', 'Asha Patel'), it('Created with', 'Microsoft Word for Microsoft 365'), it('Created, modified', '2026-03-02 09:14, 2026-03-04 17:40')], 'Open Edit Properties'],
+1: ['md', '2 items', [it('Author differs', 'XMP says "A. Patel (draft)"'), it('Edit history', '3 entries, last by Word')], 'Open Edit Properties'],
+2: ['hi', '2 earlier saves', [it('Earlier saves kept', '2, from 2026-03-02 and 2026-03-03')], ''],
+3: ['hi', '1 file', [it('rent-schedule.xlsx', '48 KB, attached to page 1')], ''],
+4: null,
+5: ['md', '5 comments, 2 authors', [it('Authors', 'Asha Patel, J. Morgan')], ''],
+6: ['lo', '3 fields', [it('Filled', 'Tenant name, Start date, Deposit')], 'Open Edit PDF'],
+7: null,
+8: ['lo', '4 links, 2 hosts', [it('Hosts', 'elmrow-lettings.example, gov.uk')], ''],
+9: null, 10: null,
+11: ['lo', '1 ID', [it('Document ID', '9f3c…a71e, unchanged since the first save')], ''],
+12: null,
+13: ['md', '2 items', [it('Page 9', 'RichMedia (video) annotation'), it('Whole file', 'XFA form data')], ''] } },
+nda: { name: 'vendor-nda-acme.pdf', sub: dir('Documents', 'Contracts') + ' · 6 pages', c: {
+0: ['md', '5 fields', [it('Author', 'Legal Ops, Acme Ltd'), it('Title', 'NDA draft v7 – do not send')], 'Open Edit Properties'],
+1: null,
+2: ['hi', '1 earlier save', [it('Earlier saves kept', '1, from before the signature was added')], ''],
+3: null, 4: null,
+5: ['md', '2 comments', [it('Authors', 'R. Okafor (Acme Legal)')], ''],
+6: null, 7: null, 8: null,
+9: ['lo', '1 signature', [it('Signed by', 'Acme Ltd, 2026-02-11. Any change to the file removes it.')], ''],
+10: ['lo', 'Restricted', [it('No open password', 'Anyone can open it'), it('Not allowed', 'Printing, copying text, editing')], 'Open Remove Restrictions'],
+11: ['lo', '1 ID', [it('Document ID', '2b77…0c19')], ''],
+12: null, 13: null } }
+};
+const cats = (rep) => CAT.map((name, i) => {
+const v = rep.c[i];
+if (!v) return { name, has: false, none: true, cls: 'none', sev: '', sevCls: '', count: '', why: '', items: [], hasPointer: false, pointer: '' };
+return { name, has: true, none: false, cls: '', sev: v[0] === 'hi' ? 'High' : v[0] === 'md' ? 'Medium' : 'Low', sevCls: v[0], count: v[1], why: WHY[i], items: v[2], hasPointer: !!v[3], pointer: v[3] };
+});
+const sum = (rep) => { const vs = Object.values(rep.c).filter(Boolean); return { hi: vs.filter((v) => v[0] === 'hi').length, md: vs.filter((v) => v[0] === 'md').length, lo: vs.filter((v) => v[0] === 'lo').length, none: 14 - vs.length }; };
+const okCur = (rep) => Object.assign({ name: rep.name, sub: rep.sub, ok: true, failed: false, unsup: rep.c[13] ? '2 items weren\'t checked.' : 'Everything was checked.' }, sum(rep));
+const one = state === 'Report, one file';
+const retry = state === 'Wrong password retry';
+if (isReport) {
+const pick = one ? R.lease : R.nda;
+base.cur = okCur(pick);
+base.cats = cats(pick);
+if (retry) base.cur = { name: 'payroll-2026.pdf', sub: dir('Documents', 'Finance') + ' · Not read', ok: false, failed: true, error: 'The password didn\'t open this file. Check it, or try the password this file was sent with.', canRetryPw: true, retryOpen: 'true', showRetry: true, hasPointer: false, pointer: '' };
+const L = [
+['lease-agreement.pdf', 'ok', '2 high, 4 medium, 3 low'],
+['vendor-nda-acme.pdf', 'ok', '1 high, 2 medium, 3 low'],
+['board-minutes.pdf', 'ok', '1 medium, 2 low'],
+['offer-letter-chen.pdf', 'ok', '2 low'],
+['payroll-2026.pdf', 'fail', 'Failed: wrong password'],
+['scan-archive.pdf', 'fail', 'Failed: over the size limit'],
+['site-survey-scan.pdf', 'fail', 'Failed: damaged file']
+];
+const selName = retry ? 'payroll-2026.pdf' : 'vendor-nda-acme.pdf';
+base.reports = L.map((r) => ({ name: r[0], sub: r[2], isOk: r[1] === 'ok', isFail: r[1] === 'fail', color: r[1] === 'fail' ? 'var(--bad)' : 'var(--mut)', subColor: r[1] === 'fail' ? 'var(--bad)' : 'var(--mut)', sel: r[0] === selName ? 'true' : 'false', cls: r[0] === selName ? 'sel' : '' }));
+base.segments = L.map((r) => ({ bg: r[1] === 'fail' ? 'var(--bad)' : 'var(--seg-ok)' }));
+}
+return base;
+}
+}
+</script>
+</body>
+</html>
