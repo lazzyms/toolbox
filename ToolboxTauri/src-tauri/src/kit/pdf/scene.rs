@@ -1,4 +1,4 @@
-use std::{collections::{HashMap, HashSet}, fs::{self, OpenOptions}, io::Write, path::{Path, PathBuf}, process::Command, sync::atomic::{AtomicU64, Ordering}, time::{Instant}};
+use std::{collections::{BTreeMap, HashMap, HashSet}, fs::{self, OpenOptions}, io::Write, path::{Path, PathBuf}, process::Command, sync::atomic::{AtomicU64, Ordering}, time::{Instant}};
 use base64::Engine;
 use rustybuzz::ttf_parser;
 use flate2::{write::ZlibEncoder, Compression};
@@ -13,7 +13,7 @@ mod flatten;
 mod forms;
 pub use forms::{inspect_form, FormInspection};
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Rect { pub x: f32, pub y: f32, pub width: f32, pub height: f32 }
 #[derive(Clone, Debug, Deserialize)]
 pub struct Point { pub x: f32, pub y: f32 }
@@ -77,8 +77,11 @@ pub struct StageSections {
     pub form_values: Option<Vec<serde_json::Value>>,
     pub text_edits: Option<Vec<serde_json::Value>>,
     pub flatten: Option<flatten::FlattenChoice>,
-    pub redactions: Option<Vec<serde_json::Value>>,
+    pub redactions: Option<Vec<RedactionMark>>,
 }
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all="camelCase")]
+pub struct RedactionMark { pub page_index: usize, pub rect: Rect, pub color: String }
 #[derive(Serialize)]
 #[serde(rename_all="camelCase")]
 pub struct ScenePreview { pub data_url: String, pub width: u32, pub height: u32 }
@@ -764,7 +767,8 @@ pub enum Stage { FillForms, EditText, Overlays, Flatten, Redact }
 pub const STAGES: [Stage; 5] = [Stage::FillForms, Stage::EditText, Stage::Overlays, Stage::Flatten, Stage::Redact];
 
 struct OverlayPlan { preflight: ScenePreflight, identity: bool, pure_reorder: bool }
-enum StagePlan { Skip, FillForms(forms::FormPlan), Overlays(OverlayPlan), Flatten(flatten::FlattenPlan) }
+struct RedactPlan { renderer: PathBuf, pages: BTreeMap<usize, Vec<(Rect, [u8; 3])>> }
+enum StagePlan { Skip, FillForms(forms::FormPlan), Overlays(OverlayPlan), Flatten(flatten::FlattenPlan), Redact(RedactPlan) }
 
 fn unsupported_section(present: bool, name: &str) -> Result<StagePlan, ToolError> {
     if present { return Err(ToolError::processing(format!("{name} is not supported yet; scene export was rejected before output"))); }
@@ -792,7 +796,7 @@ fn stage_preflight(stage: Stage, doc: &Document, scene: &PdfScene, sections: &St
             Some(choice) => flatten::preflight(doc, choice).map(StagePlan::Flatten),
             None => Ok(StagePlan::Skip),
         },
-        Stage::Redact => unsupported_section(sections.redactions.is_some(), "Redaction"),
+        Stage::Redact => sections.redactions.as_deref().map_or(Ok(StagePlan::Skip), |marks| redact_preflight(scene, marks).map_err(ToolError::processing)),
     }
 }
 
@@ -802,16 +806,19 @@ fn stage_apply(plan: StagePlan, doc: &mut Document, scene: &PdfScene) -> Result<
         StagePlan::FillForms(plan) => forms::apply(doc, plan),
         StagePlan::Overlays(plan) => apply_overlays(doc, scene, plan),
         StagePlan::Flatten(plan) => flatten::apply(doc, plan),
+        StagePlan::Redact(plan) => apply_redactions(doc, scene, plan),
     }
 }
 
-/// Returns the composed document and, when filling or flattening is its only change, that stage's output suffix.
+/// Runs every preflight before any apply. Returns the composed document and, when filling,
+/// flattening or redacting is its only change, that stage's output suffix.
 fn run_stages(path:&Path, scene:&PdfScene, sections:&StageSections)->Result<(Document, Option<&'static str>),ToolError> {
     let mut doc=load(path).map_err(ToolError::processing)?;
     let plans=STAGES.iter().map(|&stage| stage_preflight(stage, &doc, scene, sections)).collect::<Result<Vec<_>,ToolError>>()?;
     let changes: Vec<_>=plans.iter().filter_map(|plan| match plan {
         StagePlan::FillForms(_) => Some(Some("-filled")),
         StagePlan::Flatten(_) => Some(Some("-flattened")),
+        StagePlan::Redact(_) => Some(Some("-redacted")),
         StagePlan::Overlays(OverlayPlan { identity: false, .. }) => Some(None),
         _ => None,
     }).collect();
@@ -1007,6 +1014,171 @@ fn apply_overlays(doc:&mut Document, scene:&PdfScene, OverlayPlan { preflight, i
     Ok(())
 }
 
+const REDACTION_DPI: f32 = 300.;
+const REDACTION_MAX_PIXELS: f32 = 150_000_000.;
+const REDACTION_MAX_MARKS: usize = 10_000;
+const REDACTION_RENDER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+fn visible(page:&ScenePage)->Rect { page.crop.clone().unwrap_or(Rect{x:0.,y:0.,width:page.width,height:page.height}) }
+
+/// Maps a scene rectangle onto the page as displayed, mirroring the canvas's `sceneTransform`.
+/// Returns the mapped rectangle and the displayed page size in points.
+fn displayed(page:&ScenePage, r:&Rect)->(Rect,f32,f32) {
+    let b=visible(page);
+    let (c,s)=match page.rotation.rem_euclid(360) { 90=>(0.,1.), 180=>(-1.,0.), 270=>(0.,-1.), _=>(1.,0.) };
+    let map=|x:f32,y:f32| (c*(x-b.x)-s*(y-b.y), s*(x-b.x)+c*(y-b.y));
+    let frame=[map(b.x,b.y),map(b.x+b.width,b.y),map(b.x,b.y+b.height),map(b.x+b.width,b.y+b.height)];
+    let (min_x,min_y)=frame.iter().fold((f32::MAX,f32::MAX),|(x,y),p|(x.min(p.0),y.min(p.1)));
+    let (max_x,max_y)=frame.iter().fold((f32::MIN,f32::MIN),|(x,y),p|(x.max(p.0),y.max(p.1)));
+    let corners=[map(r.x,r.y),map(r.x+r.width,r.y+r.height)];
+    let (x0,x1)=(corners[0].0.min(corners[1].0)-min_x, corners[0].0.max(corners[1].0)-min_x);
+    let (y0,y1)=(corners[0].1.min(corners[1].1)-min_y, corners[0].1.max(corners[1].1)-min_y);
+    (Rect{x:x0,y:y0,width:x1-x0,height:y1-y0}, max_x-min_x, max_y-min_y)
+}
+
+fn page_list(pages:&[usize])->String {
+    let names:Vec<String>=pages.iter().map(|page|(page+1).to_string()).collect();
+    match names.as_slice() {
+        [one]=>format!("page {one}"),
+        [rest@..,last]=>format!("pages {} and {last}",rest.join(", ")),
+        []=>String::new(),
+    }
+}
+
+fn redact_preflight(scene:&PdfScene, marks:&[RedactionMark])->Result<StagePlan,String> {
+    if marks.is_empty() || marks.len()>REDACTION_MAX_MARKS { return Err(format!("Redaction needs between 1 and {REDACTION_MAX_MARKS} marks; scene export was rejected before output")); }
+    let mut pages:BTreeMap<usize,Vec<(Rect,[u8;3])>>=BTreeMap::new();
+    for mark in marks {
+        let page=scene.pages.get(mark.page_index).ok_or("A redaction mark is on a page that is not in the document")?;
+        valid_rect(&mark.rect)?;
+        let b=visible(page);
+        let (x0,y0)=(mark.rect.x.max(b.x),mark.rect.y.max(b.y));
+        let (x1,y1)=((mark.rect.x+mark.rect.width).min(b.x+b.width),(mark.rect.y+mark.rect.height).min(b.y+b.height));
+        if x1<=x0 || y1<=y0 { return Err(format!("A redaction mark is outside page {}; scene export was rejected before output",mark.page_index+1)); }
+        let color=rgb(&mark.color)?.map(|value|(value*255.).round() as u8);
+        pages.entry(mark.page_index).or_default().push((Rect{x:x0,y:y0,width:x1-x0,height:y1-y0},color));
+    }
+    let scale=REDACTION_DPI/72.;
+    for &index in pages.keys() {
+        let b=visible(&scene.pages[index]);
+        if b.width*scale*b.height*scale>REDACTION_MAX_PIXELS { return Err(format!("Page {} is too large to redact at 300 dpi; scene export was rejected before output",index+1)); }
+    }
+    let renderer=renderer().map_err(|_|"Redaction needs the PDF renderer (pdftoppm), which was not found; scene export was rejected before output".to_string())?;
+    Ok(StagePlan::Redact(RedactPlan{renderer,pages}))
+}
+
+/// Replaces each marked page with a 300 dpi image of itself with the marks painted in, so nothing
+/// under a mark survives, then removes hidden data from the whole document.
+fn apply_redactions(doc:&mut Document, scene:&PdfScene, RedactPlan{renderer,pages:marked}:RedactPlan)->Result<(),String> {
+    let temp=TempDir::new()?;
+    let source=temp.0.join("redact.pdf");
+    doc.save(&source).map_err(err)?;
+    let page_ids:Vec<ObjectId>=doc.get_pages().values().copied().collect();
+    if page_ids.len()!=scene.pages.len() { return Err("The composed PDF does not match the scene; redaction stopped before output".into()); }
+    let mut removed_annotations=HashSet::new();
+    for (&index,marks) in &marked {
+        let page=&scene.pages[index];
+        let (_,width,height)=displayed(page,&visible(page));
+        let prefix=temp.0.join(format!("page-{}",index+1));
+        let output=super::run_bounded_helper({
+            let mut command=Command::new(&renderer);
+            command.args(["-r","300","-cropbox","-png","-singlefile","-f"]).arg((index+1).to_string()).arg("-l").arg((index+1).to_string()).arg(&source).arg(&prefix);
+            command
+        }, Instant::now()+REDACTION_RENDER_TIMEOUT, 64*1024, super::PDF_TEXT_MAX_ERROR_BYTES, "Rendering a page for redaction timed out.").map_err(err)?;
+        if !output.status.success() { return Err(format!("Page {} could not be rendered for redaction",index+1)); }
+        let mut image=image::open(prefix.with_extension("png")).map_err(|e|format!("Could not read the rendered page {}: {e}",index+1))?.into_rgb8();
+        let (pixel_width,pixel_height)=image.dimensions();
+        let (sx,sy)=(pixel_width as f32/width,pixel_height as f32/height);
+        for (rect,color) in marks {
+            let (r,_,_)=displayed(page,rect);
+            let span=|start:f32,end:f32,scale:f32,limit:u32|(((start*scale).floor().max(0.) as u32).min(limit),((end*scale).ceil().max(0.) as u32).min(limit));
+            let (x0,x1)=span(r.x,r.x+r.width,sx,pixel_width);
+            let (y0,y1)=span(r.y,r.y+r.height,sy,pixel_height);
+            for y in y0..y1 { for x in x0..x1 { image.put_pixel(x,y,image::Rgb(*color)); } }
+        }
+        let image_id=doc.add_object(Stream::new(dictionary!{
+            "Type"=>"XObject","Subtype"=>"Image","Width"=>pixel_width as i64,"Height"=>pixel_height as i64,
+            "ColorSpace"=>"DeviceRGB","BitsPerComponent"=>8,"Filter"=>"FlateDecode",
+        },compress_bytes(image.as_raw())?));
+        let content_id=doc.add_object(Stream::new(dictionary!{},format!("q {width} 0 0 {height} 0 0 cm /Redacted Do Q").into_bytes()));
+        let original=doc.get_dictionary(page_ids[index]).map_err(err)?;
+        let parent=original.get(b"Parent").map_err(err)?.clone();
+        if let Ok(annotations)=original.get(b"Annots") {
+            removed_annotations.extend(resolve(doc,annotations)?.as_array().map_err(err)?.iter().filter_map(|annotation|annotation.as_reference().ok()));
+        }
+        let page_box=array(&[0.,0.,width,height]);
+        *doc.get_dictionary_mut(page_ids[index]).map_err(err)?=dictionary!{
+            "Type"=>"Page","Parent"=>parent,"MediaBox"=>page_box.clone(),"CropBox"=>page_box,"Rotate"=>0,
+            "Resources"=>dictionary!{"XObject"=>dictionary!{"Redacted"=>image_id}},"Contents"=>content_id,
+        };
+    }
+    remove_hidden_data(doc,&page_ids,&marked,&removed_annotations)?;
+    doc.prune_objects();
+    Ok(())
+}
+
+fn is_file_attachment(doc:&Document, annotation:&Object)->bool {
+    resolve(doc,annotation).ok().and_then(|value|value.as_dict().ok()).and_then(|dict|dict.get(b"Subtype").ok()).and_then(|value|value.as_name().ok())==Some(b"FileAttachment")
+}
+
+fn edit_catalog_entry(doc:&mut Document, catalog:ObjectId, key:&[u8], edit:impl FnOnce(&Document,&mut lopdf::Dictionary)->Result<(),String>)->Result<(),String> {
+    let Ok(value)=doc.get_dictionary(catalog).map_err(err)?.get(key).cloned() else { return Ok(()); };
+    let mut dict=resolve(doc,&value)?.as_dict().map_err(err)?.clone();
+    edit(doc,&mut dict)?;
+    let catalog=doc.get_dictionary_mut(catalog).map_err(err)?;
+    if dict.is_empty() { catalog.remove(key); } else { catalog.set(key.to_vec(),Object::Dictionary(dict)); }
+    Ok(())
+}
+
+/// Drops form fields whose widgets were removed, returning the retained list and kid-list rewrites.
+fn retained_fields(doc:&Document, fields:&[Object], removed:&HashSet<ObjectId>, depth:usize, rewrites:&mut Vec<(ObjectId,Vec<Object>)>)->Result<Vec<Object>,String> {
+    if depth>64 { return Err("PDF form fields are nested too deeply to redact safely".into()); }
+    let mut kept=Vec::new();
+    for field in fields {
+        let Ok(id)=field.as_reference() else { kept.push(field.clone()); continue; };
+        if removed.contains(&id) { continue; }
+        if let Ok(kids)=doc.get_dictionary(id).map_err(err)?.get(b"Kids") {
+            let kids=resolve(doc,kids)?.as_array().map_err(err)?.clone();
+            let retained=retained_fields(doc,&kids,removed,depth+1,rewrites)?;
+            if retained.is_empty() && !kids.is_empty() { continue; }
+            if retained.len()!=kids.len() { rewrites.push((id,retained)); }
+        }
+        kept.push(field.clone());
+    }
+    Ok(kept)
+}
+
+/// Metadata, XMP, attachments, structure text and orphaned form fields could still reveal what was
+/// redacted, so they are removed from the whole copy.
+fn remove_hidden_data(doc:&mut Document, page_ids:&[ObjectId], redacted:&BTreeMap<usize,Vec<(Rect,[u8;3])>>, removed:&HashSet<ObjectId>)->Result<(),String> {
+    doc.trailer.remove(b"Info");
+    for (index,&id) in page_ids.iter().enumerate() {
+        if redacted.contains_key(&index) { continue; }
+        let page=doc.get_dictionary(id).map_err(err)?;
+        let annotations=match page.get(b"Annots") { Ok(value)=>resolve(doc,value)?.as_array().map_err(err)?.clone(), Err(_)=>Vec::new() };
+        let kept:Vec<Object>=annotations.iter().filter(|annotation|!is_file_attachment(doc,annotation)).cloned().collect();
+        let has_files=page.has(b"AF");
+        if kept.len()==annotations.len() && !has_files { continue; }
+        let page=doc.get_dictionary_mut(id).map_err(err)?;
+        page.remove(b"AF");
+        if kept.is_empty() { page.remove(b"Annots"); } else if kept.len()!=annotations.len() { page.set("Annots",kept); }
+    }
+    let catalog=doc.trailer.get(b"Root").and_then(Object::as_reference).map_err(err)?;
+    let entry=doc.get_dictionary_mut(catalog).map_err(err)?;
+    for key in [&b"Metadata"[..],b"AF",b"StructTreeRoot",b"MarkInfo",b"PieceInfo"] { entry.remove(key); }
+    edit_catalog_entry(doc,catalog,b"Names",|_,names|{ names.remove(b"EmbeddedFiles"); Ok(()) })?;
+    let mut rewrites=Vec::new();
+    edit_catalog_entry(doc,catalog,b"AcroForm",|doc,form|{
+        form.remove(b"XFA");
+        let fields=match form.get(b"Fields") { Ok(value)=>resolve(doc,value)?.as_array().map_err(err)?.clone(), Err(_)=>Vec::new() };
+        let kept=retained_fields(doc,&fields,removed,0,&mut rewrites)?;
+        if kept.is_empty() { *form=lopdf::Dictionary::new(); } else { form.set("Fields",kept); }
+        Ok(())
+    })?;
+    for (id,kids) in rewrites { doc.get_dictionary_mut(id).map_err(err)?.set("Kids",kids); }
+    Ok(())
+}
+
 static NONCE:AtomicU64=AtomicU64::new(0);
 struct TempDir(PathBuf);
 impl TempDir {
@@ -1148,6 +1320,78 @@ pub fn inspect_page(path:&Path,page_index:usize)->Result<PdfPageMetadata,String>
     let preview = super::metadata::render_preview(path, page_index + 1, g.width, g.height);
     Ok(PdfPageMetadata{index:page_index,x:g.bbox[0],y:g.bbox[1],width:g.width,height:g.height,rotation:source_rotation,page_box:g.bbox,preview,text_runs:Some(text_runs)})
 }
+/// One occurrence of a searched phrase. `rects` cover every word the match touches, one per line,
+/// in the same page coordinates as the text runs shown on the canvas.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PdfTextMatch { pub page_index: usize, pub rects: Vec<Rect>, pub before: String, pub text: String, pub after: String }
+
+const TEXT_MATCH_CONTEXT: usize = 40;
+
+fn fold(c: char, match_case: bool) -> char {
+    if match_case { return c; }
+    let mut lower = c.to_lowercase();
+    match (lower.next(), lower.next()) { (Some(single), None) => single, _ => c }
+}
+
+/// Finds every occurrence of `query` in the page's words. Words are joined by single spaces, so a
+/// phrase matches across line breaks. Matches never overlap.
+fn find_in_runs(runs: &[PdfTextRun], query: &str, match_case: bool) -> Vec<(Vec<Rect>, String, String, String)> {
+    let needle: Vec<char> = query.split_whitespace().collect::<Vec<_>>().join(" ").chars().map(|c| fold(c, match_case)).collect();
+    if needle.is_empty() { return Vec::new(); }
+    let mut text: Vec<char> = Vec::new();
+    let mut owner: Vec<Option<usize>> = Vec::new();
+    for (index, run) in runs.iter().enumerate() {
+        if index > 0 { text.push(' '); owner.push(None); }
+        for c in run.text.chars() { text.push(c); owner.push(Some(index)); }
+    }
+    let folded: Vec<char> = text.iter().map(|&c| fold(c, match_case)).collect();
+    let mut matches = Vec::new();
+    let mut start = 0;
+    while start + needle.len() <= folded.len() {
+        if folded[start..start + needle.len()] != needle[..] { start += 1; continue; }
+        let end = start + needle.len();
+        let mut words: Vec<usize> = owner[start..end].iter().flatten().copied().collect();
+        words.dedup();
+        let mut rects: Vec<Rect> = Vec::new();
+        for word in words {
+            let run = &runs[word];
+            match rects.last_mut() {
+                Some(last) if (last.y - run.y).abs() < run.height.min(last.height) / 2. && run.x >= last.x => {
+                    let (top, bottom) = (last.y.min(run.y), (last.y + last.height).max(run.y + run.height));
+                    last.width = (run.x + run.width).max(last.x + last.width) - last.x;
+                    last.y = top; last.height = bottom - top;
+                }
+                _ => rects.push(Rect { x: run.x, y: run.y, width: run.width, height: run.height }),
+            }
+        }
+        let before: String = text[start.saturating_sub(TEXT_MATCH_CONTEXT)..start].iter().collect();
+        let after: String = text[end..(end + TEXT_MATCH_CONTEXT).min(text.len())].iter().collect();
+        matches.push((rects, before, text[start..end].iter().collect(), after));
+        start = end;
+    }
+    matches
+}
+
+/// Searches every page's words with the same extraction the canvas uses. A page whose text cannot
+/// be read fails the whole search, so a missing match is never silently reported as absent.
+pub fn find_text(path: &Path, query: &str, match_case: bool) -> Result<Vec<PdfTextMatch>, String> {
+    if query.trim().is_empty() { return Err("Enter text to find".into()); }
+    if query.chars().count() > 1_000 { return Err("Search text must be 1,000 characters or fewer".into()); }
+    let doc = load(path)?;
+    if text_extractor().is_none() { return Err("Text search needs pdftotext, which is unavailable in this build.".into()); }
+    let mut found = Vec::new();
+    for (page_index, id) in doc.get_pages().values().enumerate() {
+        let g = geometry(&doc, *id)?;
+        let runs = extract_text_runs(path, page_index + 1, g.width, g.height, Instant::now() + super::PDF_TEXT_TIMEOUT)
+            .ok_or_else(|| format!("Could not read the text on page {}", page_index + 1))?;
+        for (rects, before, text, after) in find_in_runs(&runs, query, match_case) {
+            if found.len() == REDACTION_MAX_MARKS { return Err(format!("More than {REDACTION_MAX_MARKS} matches. Search for something more specific.")); }
+            found.push(PdfTextMatch { page_index, rects, before, text, after });
+        }
+    }
+    Ok(found)
+}
 pub fn export(request:&ExportRequest,input:PathBuf)->JobOutcome {
     let result=(|| {
         let processing=|error:String| ToolError::processing(error);
@@ -1171,7 +1415,15 @@ pub fn export(request:&ExportRequest,input:PathBuf)->JobOutcome {
             if let Some(reservation)=OutputNaming::reserve_named_candidate(&candidate).map_err(|error| processing(err(error)))? { return write(reservation); }
         } Err(processing("Could not reserve a unique export filename".into()))
     })();
-    match result { Ok(path)=>JobOutcome::succeeded(input, vec![path], "PDF scene exported"),Err(e)=>JobOutcome::failure(input,e) }
+    let detail=match &request.sections.redactions {
+        Some(marks)=>{
+            let pages:Vec<usize>=marks.iter().map(|mark|mark.page_index).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+            let image=if pages.len()==1 {"was redacted as a 300 dpi image"} else {"were redacted as 300 dpi images"};
+            format!("{} {image}. Document metadata, XMP data and attachments were removed.",page_list(&pages).replacen('p',"P",1))
+        }
+        None=>"PDF scene exported".to_string(),
+    };
+    match result { Ok(path)=>JobOutcome::succeeded(input, vec![path], detail),Err(e)=>JobOutcome::failure(input,e) }
 }
 
 #[cfg(test)]
@@ -1988,7 +2240,6 @@ mod tests {
         let original=fs::read(&input).unwrap();
         let cases=[
             (serde_json::json!({ "textEdits": [{ "run": 0 }] }), "Editing existing text is not supported yet"),
-            (serde_json::json!({ "redactions": [] }), "Redaction is not supported yet"),
         ];
         for (sections,message) in cases {
             let outcome=export(&wire_request(&input, sections),input.clone());
@@ -2185,5 +2436,302 @@ mod tests {
         assert_eq!((mono.name, mono.oblique), ("NotoSansMono-Bold", true));
         assert!(!font(Some("Noto Sans"), false, true).unwrap().oblique);
         assert_eq!(font(Some("Helvetica"), false, false).err().unwrap().kind, crate::kit::contracts::ErrorKind::InvalidInput);
+    }
+
+    /// Three pages: page 1 holds text, a vector, an image, a hidden layer, a comment and a filled
+    /// form field; page 3 holds a file attachment and a link. The catalog carries metadata, XMP,
+    /// an embedded file and structure text.
+    fn redaction_fixture(path: &Path) {
+        let mut d = Document::with_version("1.7");
+        let root = d.new_object_id();
+        let font = d.add_object(dictionary! {"Type"=>"Font", "Subtype"=>"Type1", "BaseFont"=>"Helvetica"});
+        let hidden = d.add_object(dictionary! {"Type"=>"OCG", "Name"=>Object::string_literal("Hidden layer")});
+        let photo = d.add_object(Stream::new(dictionary! {"Type"=>"XObject","Subtype"=>"Image","Width"=>2,"Height"=>1,"ColorSpace"=>"DeviceGray","BitsPerComponent"=>8,"Name"=>"PhotoSecret"}, vec![0, 255]));
+        let first_resources = d.add_object(dictionary! {"Font"=>dictionary!{"F1"=>font}, "XObject"=>dictionary!{"Photo"=>photo}, "Properties"=>dictionary!{"Hidden"=>hidden}});
+        let resources = d.add_object(dictionary! {"Font"=>dictionary!{"F1"=>font}});
+        let first_content = d.add_object(Stream::new(dictionary!{}, b"q 0.5 0.5 0.5 rg 20 600 380 180 re f Q BT /F1 18 Tf 40 700 Td (First page text) Tj ET q 50 0 0 50 400 400 cm /Photo Do Q /OC /Hidden BDC BT /F1 18 Tf 40 300 Td (Hidden layer text) Tj ET EMC".to_vec()));
+        let second_content = d.add_object(Stream::new(dictionary!{}, b"BT /F1 18 Tf 40 700 Td (Second page text) Tj ET".to_vec()));
+        let third_content = d.add_object(Stream::new(dictionary!{}, b"BT /F1 18 Tf 40 700 Td (Third page text) Tj ET".to_vec()));
+        let first = d.new_object_id();
+        let third = d.new_object_id();
+        let comment = d.add_object(dictionary! {"Type"=>"Annot","Subtype"=>"Text","Rect"=>array(&[300.,300.,320.,320.]),"Contents"=>Object::string_literal("Secret note"),"P"=>first});
+        let appearance = d.add_object(Stream::new(dictionary!{"Type"=>"XObject","Subtype"=>"Form","BBox"=>array(&[0.,0.,100.,20.]),"Resources"=>dictionary!{"Font"=>dictionary!{"F1"=>font}}}, b"BT /F1 12 Tf 2 5 Td (Secret value) Tj ET".to_vec()));
+        let widget = d.add_object(dictionary! {"Type"=>"Annot","Subtype"=>"Widget","FT"=>"Tx","T"=>Object::string_literal("account"),"V"=>Object::string_literal("Secret value"),"Rect"=>array(&[40.,100.,140.,120.]),"AP"=>dictionary!{"N"=>appearance},"P"=>first});
+        let attached = d.add_object(Stream::new(dictionary!{"Type"=>"EmbeddedFile"}, b"Attached secret".to_vec()));
+        let file_spec = d.add_object(dictionary! {"Type"=>"Filespec","F"=>Object::string_literal("secret.txt"),"EF"=>dictionary!{"F"=>attached}});
+        let attachment = d.add_object(dictionary! {"Type"=>"Annot","Subtype"=>"FileAttachment","Rect"=>array(&[10.,10.,30.,30.]),"FS"=>file_spec,"P"=>third});
+        let link = d.add_object(dictionary! {"Type"=>"Annot","Subtype"=>"Link","Rect"=>array(&[100.,40.,160.,80.]),"A"=>dictionary!{"S"=>"URI","URI"=>"https://example.invalid"}});
+        d.objects.insert(first, Object::Dictionary(dictionary! {"Type"=>"Page","Parent"=>root,"MediaBox"=>array(&[0.,0.,612.,792.]),"Resources"=>first_resources,"Contents"=>first_content,"Annots"=>vec![Object::Reference(comment),Object::Reference(widget)],"StructParents"=>0}));
+        let second = d.add_object(dictionary! {"Type"=>"Page","Parent"=>root,"MediaBox"=>array(&[0.,0.,612.,792.]),"Resources"=>resources,"Contents"=>second_content});
+        d.objects.insert(third, Object::Dictionary(dictionary! {"Type"=>"Page","Parent"=>root,"MediaBox"=>array(&[0.,0.,612.,792.]),"Resources"=>resources,"Contents"=>third_content,"Annots"=>vec![Object::Reference(attachment),Object::Reference(link)]}));
+        d.objects.insert(root, Object::Dictionary(dictionary! {"Type"=>"Pages","Kids"=>vec![Object::Reference(first),Object::Reference(second),Object::Reference(third)],"Count"=>3}));
+        let xmp = d.add_object(Stream::new(dictionary!{"Type"=>"Metadata","Subtype"=>"XML"}, b"<x:xmpmeta>XMP secret</x:xmpmeta>".to_vec()));
+        let structure = d.add_object(dictionary! {"Type"=>"StructTreeRoot","K"=>dictionary!{"S"=>"P","ActualText"=>Object::string_literal("Structure secret"),"Pg"=>first}});
+        let form = d.add_object(dictionary! {"Fields"=>vec![Object::Reference(widget)]});
+        let catalog = d.add_object(dictionary! {"Type"=>"Catalog","Pages"=>root,"Metadata"=>xmp,"StructTreeRoot"=>structure,"MarkInfo"=>dictionary!{"Marked"=>true},"AcroForm"=>form,
+            "Names"=>dictionary!{"EmbeddedFiles"=>dictionary!{"Names"=>vec![Object::string_literal("secret.txt"),Object::Reference(file_spec)]}},
+            "OCProperties"=>dictionary!{"OCGs"=>vec![Object::Reference(hidden)],"D"=>dictionary!{"OFF"=>vec![Object::Reference(hidden)]}}});
+        let info = d.add_object(dictionary! {"Author"=>Object::string_literal("Author secret")});
+        d.trailer.set("Root", catalog);
+        d.trailer.set("Info", info);
+        d.save(path).unwrap();
+    }
+
+    fn identity_request(input: &Path, pages: usize, redactions: serde_json::Value) -> ExportRequest {
+        serde_json::from_value(serde_json::json!({
+            "paths": [input], "outputLocation": "alongsideInput",
+            "scene": { "pages": (0..pages).map(|index| serde_json::json!({ "sourceIndex": index, "width": 612, "height": 792, "rotation": 0, "crop": null, "objects": [] })).collect::<Vec<_>>() },
+            "redactions": redactions,
+        })).unwrap()
+    }
+
+    fn redacted_image(document: &Document, page: ObjectId) -> (u32, u32, Vec<u8>) {
+        let dict = document.get_dictionary(page).unwrap();
+        let resources = dict.get(b"Resources").unwrap().as_dict().unwrap();
+        assert_eq!(resources.len(), 1, "a redacted page keeps only its image resource");
+        let xobjects = resources.get(b"XObject").unwrap().as_dict().unwrap();
+        assert_eq!(xobjects.len(), 1);
+        let image = document.get_object(xobjects.get(b"Redacted").unwrap().as_reference().unwrap()).unwrap().as_stream().unwrap();
+        assert_eq!(image.dict.get(b"Subtype").unwrap().as_name().unwrap(), b"Image");
+        assert_eq!(image.dict.get(b"Filter").unwrap().as_name().unwrap(), b"FlateDecode");
+        let width = image.dict.get(b"Width").unwrap().as_i64().unwrap() as u32;
+        let height = image.dict.get(b"Height").unwrap().as_i64().unwrap() as u32;
+        (width, height, image.decompressed_content().unwrap())
+    }
+
+    fn pixel(image: &(u32, u32, Vec<u8>), x: f32, y: f32, page: (f32, f32)) -> [u8; 3] {
+        let (px, py) = ((x * image.0 as f32 / page.0) as usize, (y * image.1 as f32 / page.1) as usize);
+        let offset = (py * image.0 as usize + px) * 3;
+        [image.2[offset], image.2[offset + 1], image.2[offset + 2]]
+    }
+
+    fn require_renderer() -> bool {
+        match renderer() { Ok(_) => true, Err(e) => { if std::env::var_os("TOOLBOX_REQUIRE_PDF_RENDERER").is_some() { panic!("{e}") }; eprintln!("Renderer unavailable: {e}"); false } }
+    }
+
+    #[test]
+    fn redaction_rasterises_only_marked_pages_and_removes_everything_under_them() {
+        let _guard = crate::kit::lock_process_env();
+        if !require_renderer() { return; }
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); redaction_fixture(&input);
+        let original=fs::read(&input).unwrap();
+        let source=load(&input).unwrap();
+        let source_pages:Vec<ObjectId>=source.get_pages().values().copied().collect();
+        let request=identity_request(&input,3,serde_json::json!([
+            { "pageIndex": 0, "rect": { "x": 30, "y": 60, "width": 300, "height": 50 }, "color": "#000000" },
+            { "pageIndex": 0, "rect": { "x": 380, "y": 330, "width": 100, "height": 100 }, "color": "#000000" },
+        ]));
+        let outcome=export(&request,input.clone());
+        assert!(outcome.error().is_none(),"{:?}",outcome.error());
+        let output=outcome.output_paths()[0].clone();
+        assert_eq!(output.file_name().unwrap(),"source-redacted.pdf");
+        assert_eq!(outcome.detail,"Page 1 was redacted as a 300 dpi image. Document metadata, XMP data and attachments were removed.");
+        assert_eq!(fs::read(&input).unwrap(),original);
+
+        let bytes=fs::read(&output).unwrap();
+        for secret in ["First page text","Hidden layer text","Secret note","Secret value","XMP secret","Attached secret","Author secret","Structure secret","PhotoSecret"] {
+            assert!(!bytes.windows(secret.len()).any(|window|window==secret.as_bytes()),"{secret} survived redaction");
+        }
+        let document=load(&output).unwrap();
+        let pages:Vec<ObjectId>=document.get_pages().values().copied().collect();
+        assert_eq!(pages,source_pages);
+
+        let first=document.get_dictionary(pages[0]).unwrap();
+        let mut keys:Vec<_>=first.iter().map(|(key,_)|String::from_utf8_lossy(key).into_owned()).collect(); keys.sort();
+        assert_eq!(keys,["Contents","CropBox","MediaBox","Parent","Resources","Rotate","Type"],"annotations, widgets and structure keys are gone");
+        let image=redacted_image(&document,pages[0]);
+        assert_eq!((image.0,image.1),(2550,3300),"612×792 pt at 300 dpi");
+        assert_eq!(pixel(&image,40.,80.,(612.,792.)),[0,0,0],"marked text area is filled");
+        assert_eq!(pixel(&image,420.,370.,(612.,792.)),[0,0,0],"marked image area is filled");
+        assert!(pixel(&image,360.,30.,(612.,792.)).iter().all(|value|(120..=135).contains(value)),"unmarked vector content stays as pixels");
+        assert_eq!(pixel(&image,500.,700.,(612.,792.)),[255,255,255]);
+
+        for index in [1,2] {
+            let expected=source.get_object(source_pages[index]).unwrap();
+            let actual=document.get_object(pages[index]).unwrap();
+            if index==1 { assert_eq!(format!("{actual:?}"),format!("{expected:?}"),"untouched page is unchanged"); }
+            let content=|doc:&Document,page:ObjectId| doc.get_object(doc.get_dictionary(page).unwrap().get(b"Contents").unwrap().as_reference().unwrap()).unwrap().as_stream().unwrap().content.clone();
+            assert_eq!(content(&document,pages[index]),content(&source,source_pages[index]));
+        }
+        let third=document.get_dictionary(pages[2]).unwrap().get(b"Annots").unwrap().as_array().unwrap();
+        assert_eq!(third.len(),1,"file attachments are removed from untouched pages");
+        assert_eq!(document.get_dictionary(third[0].as_reference().unwrap()).unwrap().get(b"Subtype").unwrap().as_name().unwrap(),b"Link");
+
+        let catalog=document.catalog().unwrap();
+        for key in [&b"Metadata"[..],b"StructTreeRoot",b"MarkInfo",b"AcroForm",b"Names"] { assert!(!catalog.has(key),"{} survived",String::from_utf8_lossy(key)); }
+        assert!(!document.trailer.has(b"Info"));
+        assert!(document.objects.values().all(|object| object.as_stream().map_or(true,|stream| stream.dict.get(b"Type").ok().and_then(|t|t.as_name().ok())!=Some(b"EmbeddedFile"))));
+
+        if let Some(extractor)=text_extractor() {
+            let text=|page:usize| String::from_utf8(Command::new(&extractor).args(["-f",&page.to_string(),"-l",&page.to_string()]).arg(&output).arg("-").output().unwrap().stdout).unwrap();
+            assert!(text(1).trim().is_empty(),"redacted page has no extractable text");
+            assert!(text(2).contains("Second page text"));
+        }
+
+        let again=export(&request,input.clone());
+        assert_eq!(again.output_paths()[0].file_name().unwrap(),"source-redacted-1.pdf","never overwrites an earlier output");
+        assert_eq!(fs::read(&again.output_paths()[0]).unwrap(),bytes,"repeated runs are byte-identical");
+    }
+
+    #[test]
+    fn redaction_fill_colour_renders() {
+        let _guard = crate::kit::lock_process_env();
+        if !require_renderer() { return; }
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); redaction_fixture(&input);
+        let request=identity_request(&input,3,serde_json::json!([{ "pageIndex": 0, "rect": { "x": 30, "y": 60, "width": 300, "height": 50 }, "color": "#FFFFFF" }]));
+        let outcome=export(&request,input.clone());
+        assert!(outcome.error().is_none(),"{:?}",outcome.error());
+        let document=load(&outcome.output_paths()[0]).unwrap();
+        let image=redacted_image(&document,document.get_pages()[&1]);
+        assert_eq!(pixel(&image,40.,80.,(612.,792.)),[255,255,255],"white fill replaces the grey vector under the mark");
+        assert!(pixel(&image,360.,30.,(612.,792.)).iter().all(|value|(120..=135).contains(value)));
+    }
+
+    #[test]
+    fn redaction_follows_the_visible_page_of_rotated_and_cropped_sources() {
+        let _guard = crate::kit::lock_process_env();
+        if !require_renderer() { return; }
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); fixture(&input);
+        let request:ExportRequest=serde_json::from_value(serde_json::json!({
+            "paths": [input], "outputLocation": "alongsideInput",
+            "scene": { "pages": [
+                { "sourceIndex": 0, "width": 300, "height": 200, "rotation": 0, "crop": null, "objects": [] },
+                { "sourceIndex": 1, "width": 612, "height": 792, "rotation": 0, "crop": null, "objects": [] }
+            ] },
+            "redactions": [{ "pageIndex": 0, "rect": { "x": 0, "y": 0, "width": 150, "height": 100 }, "color": "#000000" }],
+        })).unwrap();
+        let outcome=export(&request,input.clone());
+        assert!(outcome.error().is_none(),"{:?}",outcome.error());
+        let document=load(&outcome.output_paths()[0]).unwrap();
+        let page=document.get_pages()[&1];
+        let dict=document.get_dictionary(page).unwrap();
+        assert_eq!(bounds(&document,dict.get(b"MediaBox").unwrap()).unwrap(),[0.,0.,300.,200.]);
+        assert_eq!(dict.get(b"Rotate").unwrap().as_i64().unwrap(),0);
+        let image=redacted_image(&document,page);
+        assert_eq!((image.0,image.1),(1250,834));
+        assert_eq!(pixel(&image,10.,10.,(300.,200.)),[0,0,0]);
+        assert_eq!(pixel(&image,140.,90.,(300.,200.)),[0,0,0]);
+        assert_ne!(pixel(&image,160.,110.,(300.,200.)),[0,0,0]);
+    }
+
+    #[test]
+    fn redaction_marks_follow_the_canvas_rotation() {
+        let page:ScenePage=serde_json::from_value(serde_json::json!({ "sourceIndex": 0, "width": 300, "height": 200, "rotation": 90, "crop": null, "objects": [] })).unwrap();
+        let (rect,width,height)=displayed(&page,&Rect{x:0.,y:0.,width:150.,height:100.});
+        assert_eq!((width,height),(200.,300.));
+        assert_eq!((rect.x,rect.y,rect.width,rect.height),(100.,0.,100.,150.));
+        let cropped:ScenePage=serde_json::from_value(serde_json::json!({ "sourceIndex": 0, "width": 300, "height": 200, "rotation": 0, "crop": { "x": 50, "y": 40, "width": 100, "height": 100 }, "objects": [] })).unwrap();
+        let (rect,width,height)=displayed(&cropped,&Rect{x:60.,y:50.,width:10.,height:10.});
+        assert_eq!((width,height,rect.x,rect.y),(100.,100.,10.,10.));
+    }
+
+    #[test]
+    fn redaction_with_other_edits_uses_the_combined_suffix() {
+        let _guard = crate::kit::lock_process_env();
+        if !require_renderer() { return; }
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); fixture(&input);
+        let outcome=export(&wire_request(&input, serde_json::json!({ "redactions": [
+            { "pageIndex": 0, "rect": { "x": 60, "y": 140, "width": 400, "height": 60 }, "color": "#000000" },
+            { "pageIndex": 2, "rect": { "x": 0, "y": 0, "width": 10, "height": 10 }, "color": "#000000" },
+        ] })),input.clone());
+        assert!(outcome.error().is_none(),"{:?}",outcome.error());
+        assert_eq!(outcome.output_paths()[0].file_name().unwrap(),"source-edited-1.pdf");
+        assert_eq!(outcome.detail,"Pages 1 and 3 were redacted as 300 dpi images. Document metadata, XMP data and attachments were removed.");
+        let bytes=fs::read(&outcome.output_paths()[0]).unwrap();
+        assert!(!bytes.windows(6).any(|window|window==b"Staged"),"overlays are redacted too because redaction runs last");
+    }
+
+    #[test]
+    fn invalid_redactions_are_rejected_before_output() {
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); page_text_fixture(&input);
+        let original=fs::read(&input).unwrap();
+        let mark=|page:usize,x:f32,color:&str| serde_json::json!({ "pageIndex": page, "rect": { "x": x, "y": 10, "width": 20, "height": 20 }, "color": color });
+        for (marks,message) in [
+            (serde_json::json!([]),"Redaction needs between 1 and"),
+            (serde_json::json!([mark(2,10.,"#000000")]),"A redaction mark is on a page that is not in the document"),
+            (serde_json::json!([mark(0,700.,"#000000")]),"A redaction mark is outside page 1"),
+            (serde_json::json!([mark(0,10.,"black")]),"Color must be #RRGGBB"),
+        ] {
+            let outcome=export(&identity_request(&input,2,marks),input.clone());
+            assert!(outcome.error().is_some_and(|error| error.message.starts_with(message)),"{outcome:?}");
+            assert_eq!(fs::read_dir(&temp.0).unwrap().count(),1);
+            assert_eq!(fs::read(&input).unwrap(),original);
+        }
+    }
+
+    /// Page 1 names the tenant twice (once in lower case), page 2 never does, and page 3 splits the
+    /// name across two lines.
+    fn search_fixture(path: &Path) {
+        let mut d = Document::with_version("1.7");
+        let root = d.new_object_id();
+        let font = d.add_object(dictionary! {"Type"=>"Font", "Subtype"=>"Type1", "BaseFont"=>"Helvetica"});
+        let resources = d.add_object(dictionary! {"Font"=>dictionary!{"F1"=>font}});
+        let contents: [&[u8]; 3] = [
+            b"BT /F1 18 Tf 40 700 Td (Tenant Asha Patel signs here) Tj ET BT /F1 18 Tf 40 500 Td (Witnessed by asha patel today) Tj ET",
+            b"BT /F1 18 Tf 40 700 Td (Nothing private on this page) Tj ET",
+            b"BT /F1 18 Tf 40 700 Td (Agreed with Asha) Tj ET BT /F1 18 Tf 40 676 Td (Patel and the landlord) Tj ET",
+        ];
+        let kids: Vec<Object> = contents.iter().map(|content| {
+            let content = d.add_object(Stream::new(dictionary!{}, content.to_vec()));
+            Object::Reference(d.add_object(dictionary! {"Type"=>"Page","Parent"=>root,"MediaBox"=>array(&[0.,0.,612.,792.]),"Resources"=>resources,"Contents"=>content}))
+        }).collect();
+        d.objects.insert(root, Object::Dictionary(dictionary! {"Type"=>"Pages","Kids"=>kids,"Count"=>3}));
+        let catalog = d.add_object(dictionary! {"Type"=>"Catalog","Pages"=>root});
+        d.trailer.set("Root", catalog);
+        d.save(path).unwrap();
+    }
+
+    #[test]
+    fn text_search_matches_whole_phrases_across_lines_without_overlap() {
+        let run = |text: &str, x: f32, y: f32| PdfTextRun { text: text.into(), x, y, width: 10. * text.len() as f32, height: 20. };
+        let runs = [run("aaa", 0., 0.), run("Asha", 40., 0.), run("Patel,", 90., 2.), run("ASHA", 0., 40.), run("patel", 0., 70.)];
+        let found = find_in_runs(&runs, "  asha\tpatel ", false);
+        assert_eq!(found.len(), 2);
+        assert_eq!((found[0].2.as_str(), found[1].2.as_str()), ("Asha Patel", "ASHA patel"));
+        let rect = |r: &Rect| (r.x, r.y, r.width, r.height);
+        assert_eq!(found[0].0.iter().map(rect).collect::<Vec<_>>(), vec![(40., 0., 110., 22.)], "words on one line share a rect that covers the punctuation too");
+        assert_eq!(found[1].0.iter().map(rect).collect::<Vec<_>>(), vec![(0., 40., 40., 20.), (0., 70., 50., 20.)], "a phrase across lines gets one rect per line");
+        assert_eq!((found[0].1.as_str(), found[0].3.as_str()), ("aaa ", ", ASHA patel"));
+        assert!(find_in_runs(&runs, "asha patel", true).is_empty());
+        assert_eq!(find_in_runs(&[run("aaaa", 0., 0.)], "aa", false).len(), 2, "matches never overlap");
+        assert!(find_in_runs(&runs, "   ", false).is_empty());
+    }
+
+    #[test]
+    fn every_searched_occurrence_is_gone_from_the_redacted_pages() {
+        let _guard = crate::kit::lock_process_env();
+        if !require_renderer() { return; }
+        let Some(extractor) = text_extractor() else {
+            if std::env::var_os("TOOLBOX_REQUIRE_PDF_RENDERER").is_some() { panic!("pdftotext is unavailable") }
+            return;
+        };
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("lease.pdf"); search_fixture(&input);
+        let original=fs::read(&input).unwrap();
+        let found=find_text(&input,"asha PATEL",false).unwrap();
+        assert_eq!(found.iter().map(|found| (found.page_index, found.text.as_str(), found.rects.len())).collect::<Vec<_>>(),
+            vec![(0,"Asha Patel",1),(0,"asha patel",1),(2,"Asha Patel",2)]);
+        assert_eq!((found[0].before.as_str(),found[0].after.as_str()),("Tenant "," signs here Witnessed by asha patel toda"), "context stops at 40 characters");
+        assert!(find_text(&input,"asha PATEL",true).unwrap().is_empty());
+
+        let marks:Vec<_>=found.iter().flat_map(|found| found.rects.iter().map(move |rect| serde_json::json!({ "pageIndex": found.page_index, "rect": rect, "color": "#000000" }))).collect();
+        let outcome=export(&identity_request(&input,3,serde_json::Value::Array(marks)),input.clone());
+        assert!(outcome.error().is_none(),"{:?}",outcome.error());
+        assert_eq!(fs::read(&input).unwrap(),original);
+        let output=outcome.output_paths()[0].clone();
+        assert_eq!(outcome.detail,"Pages 1 and 3 were redacted as 300 dpi images. Document metadata, XMP data and attachments were removed.");
+
+        let bytes=fs::read(&output).unwrap().to_ascii_lowercase();
+        for secret in ["asha","patel"] { assert!(!bytes.windows(secret.len()).any(|window|window==secret.as_bytes()),"{secret} survived in the file bytes"); }
+        let text=|page:usize| String::from_utf8(Command::new(&extractor).args(["-f",&page.to_string(),"-l",&page.to_string()]).arg(&output).arg("-").output().unwrap().stdout).unwrap();
+        for page in [1,3] { assert!(!text(page).to_lowercase().contains("asha"),"page {page} still has the name"); }
+        assert!(text(2).contains("Nothing private on this page"),"unmarked pages keep their text");
+        assert!(find_text(&output,"asha patel",false).unwrap().is_empty());
+
+        let document=load(&output).unwrap();
+        let pages:Vec<ObjectId>=document.get_pages().values().copied().collect();
+        for found in &found {
+            let image=redacted_image(&document,pages[found.page_index]);
+            for rect in &found.rects { assert_eq!(pixel(&image,rect.x+rect.width/2.,rect.y+rect.height/2.,(612.,792.)),[0,0,0],"each match is filled"); }
+        }
     }
 }

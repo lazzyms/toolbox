@@ -30,12 +30,21 @@ test.beforeEach(async ({ page }) => {
           w.sceneTextResponses[key] = response;
           return { index: pageIndex, width: 612, height: 792, preview: svg, textRuns: [{ text: `${args.request.path} page ${pageIndex} response ${response}`, x: 60, y: 55, width: 250, height: 25 }] };
         }
+        if (command === 'find_pdf_scene_text') {
+          if (w.findFailure) throw new Error(w.findFailure);
+          const text = args.request.query;
+          return [
+            { pageIndex: 0, rects: [{ x: 60, y: 55, width: 120, height: 25 }], before: 'between Harbour Properties Ltd and ', text, after: ' (the Tenant), who agrees to pay the rent on time' },
+            { pageIndex: 2, rects: [{ x: 500, y: 300, width: 90, height: 20 }, { x: 40, y: 322, width: 50, height: 20 }], before: 'The Tenant, ', text, after: ', of 22 Wren Street' },
+            { pageIndex: 2, rects: [{ x: 200, y: 500, width: 90, height: 20 }], before: 'Witness: ', text, after: '' },
+          ];
+        }
         if (command === 'preview_pdf_scene_pages') {
           if (w.previewFailure) throw new Error(w.previewFailureMessage ?? 'Renderer unavailable');
           if (w.previewDelay) await new Promise(resolve => setTimeout(resolve, w.previewDelay));
           return args.request.pageIndices.map((pageIndex: number) => ({ pageIndex, preview: { dataUrl: svg, width: 612, height: 792 } }));
         }
-        if (command === 'export_pdf_scene') return [{ inputPath: '/local/scene-fixture.pdf', outputPaths: ['/local/scene-fixture-edited-1.pdf'], state: 'succeeded', detail: 'PDF scene exported', failure: null, reason: null, warnings: [] }];
+        if (command === 'export_pdf_scene') return [{ inputPath: '/local/scene-fixture.pdf', outputPaths: [w.exportOutput ?? '/local/scene-fixture-edited-1.pdf'], state: 'succeeded', detail: w.exportDetail ?? 'PDF scene exported', failure: null, reason: null, warnings: [] }];
         return null;
       },
     };
@@ -664,3 +673,195 @@ test('unrenderable text names the characters and keeps Export disabled', async (
   await expect(page.getByRole('alert')).toHaveText('Preview could not be verified. Noto Sans can’t show these characters: “😀” (U+1F600), “आ” (U+0906). Remove them to export this text box. Export is disabled until the preview can be verified.');
   await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeDisabled();
 });
+
+test('redaction marks are added, reviewed, recoloured and removed, and export waits for the disclosure', async ({ page }, testInfo) => {
+  await openEditor(page);
+  await page.evaluate(() => {
+    const w = window as any;
+    w.exportOutput = '/local/scene-fixture-redacted.pdf';
+    w.exportDetail = 'Pages 1 and 3 were redacted as 300 dpi images. Document metadata, XMP data and attachments were removed.';
+  });
+  const inspector = page.getByRole('complementary', { name: 'PDF editor inspector' });
+  const marks = inspector.getByRole('list', { name: 'Marks' });
+  await draw(page, 'Redact', .2);
+  await draw(page, 'Redact', .5);
+  await page.getByRole('button', { name: 'Page 3' }).click();
+  await draw(page, 'Redact', .3);
+  await expect(inspector.getByText('Redact', { exact: true })).toBeVisible();
+  await expect(marks.getByRole('button')).toHaveText(['Page 1, area 1', 'Page 1, area 2', 'Page 3, area 1']);
+  await expect(page.locator('.scene-redaction')).toHaveCount(1);
+  await expect(page.locator('.scene-redaction')).not.toHaveAttribute('data-preview', 'true');
+
+  await marks.getByRole('button', { name: 'Page 1, area 2' }).click();
+  await expect(page.getByRole('button', { name: 'Page 1', exact: true })).toHaveAttribute('aria-current', 'page');
+  await inspector.getByRole('button', { name: 'Remove mark' }).click();
+  await expect(marks.getByRole('button')).toHaveText(['Page 1, area 1', 'Page 3, area 1']);
+  await inspector.getByRole('radio', { name: 'White' }).click();
+  await expect(inspector.getByRole('radio', { name: 'White' })).toHaveAttribute('aria-checked', 'true');
+
+  await inspector.getByRole('button', { name: 'Review marks' }).click();
+  await expect(inspector.getByRole('status').filter({ hasText: 'Mark 1 of 2' })).toHaveText('Mark 1 of 2: page 1, area 1');
+  await expect(page.locator('.scene-redaction')).toHaveAttribute('data-preview', 'true');
+  await expect(page.locator('.scene-redaction')).toHaveCSS('fill', 'rgb(255, 255, 255)');
+  await inspector.getByRole('button', { name: 'Next' }).click();
+  await expect(inspector.getByText('Mark 2 of 2: page 3, area 1')).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('pdf-redact-reviewing.png') });
+  await expect(page.getByRole('button', { name: 'Page 3', exact: true })).toHaveAttribute('aria-current', 'page');
+  await page.getByRole('button', { name: 'Redaction mark 1' }).focus();
+  await page.keyboard.press('Tab');
+  await expect(inspector.getByText('Mark 1 of 2: page 1, area 1')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Redaction mark 1' })).toBeFocused();
+  await expect(page.getByRole('button', { name: 'Page 1', exact: true })).toHaveAttribute('aria-current', 'page');
+  await inspector.getByRole('checkbox', { name: 'Preview as exported' }).click();
+  await expect(page.locator('.scene-redaction')).not.toHaveAttribute('data-preview', 'true');
+  await inspector.getByRole('button', { name: 'Done reviewing' }).click();
+  await expect(inspector.getByRole('button', { name: 'Review marks' })).toBeVisible();
+
+  const exportButton = page.getByRole('button', { name: 'Export PDF', exact: true });
+  await expect(exportButton).toBeEnabled();
+  await exportButton.click();
+  const dialog = page.getByRole('dialog', { name: 'Before you export with redactions' });
+  await expect(dialog).toContainText('2 marks on pages 1 and 3 will be removed for good in the copy. To make sure nothing can be recovered:');
+  await expect(dialog.getByRole('listitem')).toHaveText([
+    "Pages 1 and 3 become 300 dpi images. Their text can't be selected or searched.",
+    'Comments, form fields and hidden layers on those pages are removed.',
+    'Document metadata, XMP data and attachments are removed from the whole copy.',
+  ]);
+  const continueExport = dialog.getByRole('button', { name: 'Continue to export' });
+  await expect(continueExport).toBeDisabled();
+  await page.screenshot({ path: testInfo.outputPath('pdf-redact-disclosure.png') });
+  await dialog.getByRole('button', { name: 'Review marks' }).click();
+  await expect(dialog).toBeHidden();
+  await expect(inspector.getByText('Mark 1 of 2: page 1, area 1')).toBeVisible();
+  expect(await page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'export_pdf_scene').length)).toBe(0);
+
+  await exportButton.click();
+  await dialog.getByRole('checkbox', { name: "I've checked the marks on every page" }).click();
+  await continueExport.click();
+  await expect.poll(() => page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'export_pdf_scene').length)).toBe(1);
+  const request = await page.evaluate(() => (window as any).calls.find((call: any) => call.command === 'export_pdf_scene').args.request);
+  expect(request.scene.pages.every((item: any) => !('redactions' in item))).toBe(true);
+  expect(request.redactions.map(({ pageIndex, color }: any) => [pageIndex, color])).toEqual([[0, '#ffffff'], [2, '#ffffff']]);
+  for (const [mark, y] of [[request.redactions[0], .2], [request.redactions[1], .3]] as const) {
+    expect(mark.rect.x).toBeCloseTo(612 * .2, 0);
+    expect(mark.rect.width).toBeCloseTo(612 * .35, 0);
+    expect(mark.rect.y).toBeCloseTo(792 * y, 0);
+    expect(mark.rect.height).toBeCloseTo(792 * .07, 0);
+  }
+  await expect(page.getByText('Pages 1 and 3 were redacted as 300 dpi images. Document metadata, XMP data and attachments were removed.')).toBeVisible();
+});
+
+test('exporting without redaction marks skips the disclosure', async ({ page }) => {
+  await openEditor(page);
+  await draw(page, 'Shape', .4);
+  await page.getByRole('button', { name: 'Export PDF', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'export_pdf_scene').length)).toBe(1);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  expect(await page.evaluate(() => 'redactions' in (window as any).calls.find((call: any) => call.command === 'export_pdf_scene').args.request)).toBe(false);
+});
+
+async function exportWithDisclosure(page: Page) {
+  await page.getByRole('button', { name: 'Export PDF', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Before you export with redactions' });
+  await dialog.getByRole('checkbox', { name: "I've checked the marks on every page" }).click();
+  await dialog.getByRole('button', { name: 'Continue to export' }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'export_pdf_scene').length)).toBe(1);
+  return page.evaluate(() => (window as any).calls.find((call: any) => call.command === 'export_pdf_scene').args.request);
+}
+
+test('selecting text with the redact tool marks the whole words it covers', async ({ page }) => {
+  await openEditor(page);
+  await page.getByRole('toolbar', { name: 'PDF editor tools' }).getByRole('button', { name: 'Redact', exact: true }).click();
+  const text = page.locator('[data-text-run]').first();
+  await expect(text).toHaveText('/local/scene-fixture.pdf page 0 response 1');
+  const box = (await text.boundingBox())!;
+  await page.mouse.move(box.x + box.width * .3, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * .6, box.y + box.height / 2, { steps: 8 });
+  await page.mouse.up();
+  const inspector = page.getByRole('complementary', { name: 'PDF editor inspector' });
+  await expect(inspector.getByRole('list', { name: 'Marks' }).getByRole('button')).toHaveText(['Page 1, “/local/scene-fixture.pdf page 0 response 1”']);
+  await expect(page.getByRole('button', { name: 'Redaction mark 1, “/local/scene-fixture.pdf page 0 response 1”' })).toBeVisible();
+  expect(await page.evaluate(() => window.getSelection()?.isCollapsed ?? true)).toBe(true);
+
+  const request = await exportWithDisclosure(page);
+  expect(request.redactions).toEqual([{ pageIndex: 0, rect: { x: 60, y: 55, width: 250, height: 25 }, color: '#000000' }]);
+  expect(request.scene.pages[0].objects).toEqual([]);
+});
+
+for (const theme of ['light', 'dark']) test(`search marks every match across pages after review in ${theme}`, async ({ page }, testInfo) => {
+  await page.addInitScript(theme => localStorage.setItem('toolbox-theme', theme), theme);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await openEditor(page);
+  await page.getByRole('toolbar', { name: 'PDF editor tools' }).getByRole('button', { name: 'Redact', exact: true }).click();
+  const inspector = page.getByRole('complementary', { name: 'PDF editor inspector' });
+  const footer = page.locator('.scene-render-status');
+  await expect(inspector.getByRole('button', { name: 'Find', exact: true })).toBeDisabled();
+  await inspector.getByLabel('Find text to redact').fill('Asha Patel');
+  await inspector.getByRole('checkbox', { name: 'Match case' }).click();
+  await inspector.getByRole('button', { name: 'Find', exact: true }).click();
+  expect(await page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'find_pdf_scene_text').map((call: any) => call.args.request)))
+    .toEqual([{ path: '/local/scene-fixture.pdf', query: 'Asha Patel', matchCase: true }]);
+
+  const results = inspector.getByRole('list', { name: '3 matches for “Asha Patel”' });
+  await expect(results.getByRole('listitem')).toHaveText([
+    'Page 1between Harbour Properties Ltd and Asha Patel (the Tenant), who agrees to pay the rent on time…',
+    'Page 3The Tenant, Asha Patel, of 22 Wren Street',
+    'Page 3Witness: Asha Patel',
+  ]);
+  await expect(results.getByRole('checkbox')).toHaveCount(3);
+  for (const box of await results.getByRole('checkbox').all()) await expect(box).toBeChecked();
+  await expect(footer).toHaveText('3 matches for “Asha Patel” on pages 1 and 3.');
+  await expect(page.locator('.scene-search-match')).toHaveCount(1);
+  await expect(page.locator('.scene-search-match')).toHaveCSS('fill', 'rgba(255, 196, 0, 0.4)');
+  await results.getByRole('checkbox').nth(2).click();
+  await expect(inspector.getByRole('button', { name: 'Mark 2 selected' })).toBeEnabled();
+  await page.screenshot({ path: testInfo.outputPath(`pdf-redact-search-results-${theme}.png`) });
+
+  await inspector.getByRole('button', { name: 'Mark 2 selected' }).click();
+  const marks = inspector.getByRole('list', { name: 'Marks' });
+  await expect(marks.getByRole('button')).toHaveText(['Page 1, “Asha Patel”', 'Page 3, “Asha Patel”', 'Page 3, “Asha Patel”']);
+  await expect(results).toHaveCount(0);
+  await expect(page.locator('.scene-search-match')).toHaveCount(0);
+  await expect(inspector.getByRole('status').filter({ hasText: 'on pages 1 and 3' })).toHaveText('3 matches, on pages 1 and 3');
+  await expect(footer).toHaveText('Marked 2 matches for “Asha Patel”.');
+  await page.screenshot({ path: testInfo.outputPath(`pdf-redact-search-marked-${theme}.png`) });
+
+  await inspector.getByRole('button', { name: 'Mark all matches' }).click();
+  await expect(marks.getByRole('button')).toHaveCount(4);
+  await expect(footer).toHaveText('Marked 1 match for “Asha Patel”.');
+  await expect(inspector.getByRole('button', { name: 'Mark all matches' })).toBeDisabled();
+
+  await inspector.getByRole('button', { name: 'Review marks' }).click();
+  await expect(inspector.getByRole('status').filter({ hasText: 'Mark 1 of 4' })).toHaveText('Mark 1 of 4: page 1, “Asha Patel”');
+  await inspector.getByRole('button', { name: 'Done reviewing' }).click();
+
+  const request = await exportWithDisclosure(page);
+  expect(request.redactions).toEqual([
+    { pageIndex: 0, rect: { x: 60, y: 55, width: 120, height: 25 }, color: '#000000' },
+    { pageIndex: 2, rect: { x: 500, y: 300, width: 90, height: 20 }, color: '#000000' },
+    { pageIndex: 2, rect: { x: 40, y: 322, width: 50, height: 20 }, color: '#000000' },
+    { pageIndex: 2, rect: { x: 200, y: 500, width: 90, height: 20 }, color: '#000000' },
+  ]);
+});
+
+test('search skips deleted pages, clears when pages change, and reports failures in place', async ({ page }) => {
+  await openEditor(page);
+  await page.getByRole('button', { name: 'Page 1', exact: true }).click();
+  await page.getByRole('button', { name: 'Delete selected pages' }).click();
+  await page.getByRole('toolbar', { name: 'PDF editor tools' }).getByRole('button', { name: 'Redact', exact: true }).click();
+  const inspector = page.getByRole('complementary', { name: 'PDF editor inspector' });
+  await inspector.getByLabel('Find text to redact').fill('Asha Patel');
+  await inspector.getByLabel('Find text to redact').press('Enter');
+  const results = inspector.getByRole('list', { name: '2 matches for “Asha Patel”' });
+  await expect(results.getByRole('listitem')).toHaveText(['Page 2The Tenant, Asha Patel, of 22 Wren Street', 'Page 2Witness: Asha Patel']);
+  await page.getByRole('button', { name: 'Page 1', exact: true }).click();
+  await page.getByRole('button', { name: 'Delete selected pages' }).click();
+  await expect(results).toHaveCount(0);
+
+  await page.evaluate(() => { (window as any).findFailure = 'Could not read the text on page 2'; });
+  await inspector.getByRole('button', { name: 'Find', exact: true }).click();
+  await expect(inspector.getByRole('alert')).toHaveText("Search didn't finish. Could not read the text on page 2");
+  await expect(inspector.getByRole('list', { name: 'Marks' })).toHaveCount(0);
+});
+
