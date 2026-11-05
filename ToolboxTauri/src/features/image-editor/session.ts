@@ -1,4 +1,4 @@
-import type { ConvertImagesRequest, OutputLocation } from "../../contracts";
+import type { ConvertImagesRequest, OutputLocation, WatermarkOptions } from "../../contracts";
 
 export type ImageEditOperation =
   | { kind: "convert"; format: ConvertImagesRequest["format"] }
@@ -26,7 +26,7 @@ export type ImageEditOperation =
       anchor: string;
     }
   | { kind: "tone"; brightness: number; contrast: number; saturation: number; exposure: number }
-  | { kind: "watermark"; text: string; opacity: number; x: number; y: number };
+  | ({ kind: "watermark" } & WatermarkOptions);
 
 export interface ImageEditPlan {
   edits: ImageEditOperation[];
@@ -47,20 +47,41 @@ export type ImageResizeStep = Omit<Extract<ImageEditOperation, { kind: "resize" 
 export type ImageRotateStep = Omit<Extract<ImageEditOperation, { kind: "rotate" }>, "kind">;
 export type ImageToneStep = Omit<Extract<ImageEditOperation, { kind: "tone" }>, "kind">;
 
+/**
+ * The watermark step as the panel edits it. It keeps both the text and the picture so switching between them loses neither,
+ * and sends only the one in use. Size and opacity are whole percents; the anchor runs from 0 to 1 across the free space.
+ */
+export interface ImageWatermarkStep {
+  mark: "text" | "picture";
+  text: string;
+  logoPath: string;
+  size: number;
+  opacity: number;
+  color: string;
+  rotation: number;
+  placement: "position" | "tile";
+  anchorX: number;
+  anchorY: number;
+}
+
 /** The shared edit stack holds at most one of each step. Native runs them in a fixed order, so the stack has no order of its own. */
 export interface ImageEditStack {
   crop?: ImageCropStep;
   resize?: ImageResizeStep;
   rotate?: ImageRotateStep;
   tone?: ImageToneStep;
+  watermark?: ImageWatermarkStep;
 }
 
+/** The stack as native reads it: the watermark goes as the shared watermark options. */
+export type ImageEditStackRequest = Omit<ImageEditStack, "watermark"> & { watermark?: WatermarkOptions };
+
 /** The fixed run order. */
-export const imageEditStackSteps = ["crop", "resize", "rotate", "tone"] as const;
+export const imageEditStackSteps = ["crop", "resize", "rotate", "tone", "watermark"] as const;
 export type ImageEditStackStep = (typeof imageEditStackSteps)[number];
 
-export const imageEditStepLabels: Record<ImageEditStackStep, string> = { crop: "Crop", resize: "Resize", rotate: "Rotate and Flip", tone: "Colour and Tone" };
-const imageEditStepSuffixes: Record<ImageEditStackStep, string> = { crop: "-cropped", resize: "-resized", rotate: "-rotated", tone: "-tone" };
+export const imageEditStepLabels: Record<ImageEditStackStep, string> = { crop: "Crop", resize: "Resize", rotate: "Rotate and Flip", tone: "Colour and Tone", watermark: "Watermark" };
+const imageEditStepSuffixes: Record<ImageEditStackStep, string> = { crop: "-cropped", resize: "-resized", rotate: "-rotated", tone: "-tone", watermark: "-watermarked" };
 
 export const presentImageEditSteps = (stack: ImageEditStack) => imageEditStackSteps.filter((step) => stack[step] !== undefined);
 
@@ -84,6 +105,19 @@ export const defaultImageToneStep = (): ImageToneStep => ({ brightness: 0, contr
 
 export const isNeutralImageToneStep = (tone: ImageToneStep) => imageToneValues.every((value) => tone[value] === 0);
 
+export const defaultImageWatermarkStep = (): ImageWatermarkStep => ({
+  mark: "text", text: "", logoPath: "", size: 30, opacity: 70, color: "#FFFFFF", rotation: 0, placement: "position", anchorX: 1, anchorY: 1,
+});
+
+/** The step as the shared watermark options. Colour is sent for text only, since native rejects it for a picture. */
+export const imageWatermarkOptions = (watermark: ImageWatermarkStep): WatermarkOptions => ({
+  ...(watermark.mark === "text" ? { text: watermark.text, color: watermark.color.toUpperCase() } : { logoPath: watermark.logoPath }),
+  size: watermark.size / 100,
+  opacity: watermark.opacity,
+  rotation: watermark.rotation,
+  position: watermark.placement === "tile" ? "tile" : { anchorX: watermark.anchorX, anchorY: watermark.anchorY },
+});
+
 /** A single step names its own output; more than one is named -edited. */
 export const imageEditStackSuffix = (stack: ImageEditStack) => {
   const steps = presentImageEditSteps(stack);
@@ -91,8 +125,8 @@ export const imageEditStackSuffix = (stack: ImageEditStack) => {
 };
 
 /** The request's steps, keyed in run order whatever order they were added in. */
-export const imageEditStackRequestSteps = (stack: ImageEditStack): ImageEditStack =>
-  Object.fromEntries(presentImageEditSteps(stack).map((step) => [step, stack[step]]));
+export const imageEditStackRequestSteps = (stack: ImageEditStack): ImageEditStackRequest =>
+  Object.fromEntries(presentImageEditSteps(stack).map((step) => [step, step === "watermark" ? imageWatermarkOptions(stack.watermark!) : stack[step]]));
 
 /** The same steps as a preview plan, in run order. */
 export const imageEditStackPreviewPlan = (stack: ImageEditStack): ImageEditPlan => ({
@@ -102,7 +136,9 @@ export const imageEditStackPreviewPlan = (stack: ImageEditStack): ImageEditPlan 
       ? { kind: "resize", ...stack.resize! }
       : step === "rotate"
         ? { kind: "rotate", ...stack.rotate! }
-        : { kind: "tone", ...stack.tone! }),
+        : step === "tone"
+          ? { kind: "tone", ...stack.tone! }
+          : { kind: "watermark", ...imageWatermarkOptions(stack.watermark!) }),
 });
 
 const MAX_DIMENSION = 16384;
@@ -125,6 +161,17 @@ export const imageResizeStepProblem = (resize: ImageResizeStep): { field: string
 export const imageToneStepProblem = (tone: ImageToneStep): { field: string; message: string } | null => {
   const field = imageToneValues.find((value) => !inRange(tone[value], -100, 100));
   return field ? { field, message: `Enter a ${field} from −100 to 100.` } : null;
+};
+
+/** What to fix before the watermark step can run, or null. Native checks the same limits, and whether the font can draw the text. */
+export const imageWatermarkStepProblem = (watermark: ImageWatermarkStep): { field: string; message: string } | null => {
+  if (watermark.mark === "text" && watermark.text.trim() === "") return { field: "text", message: "Enter the watermark text." };
+  if (watermark.mark === "picture" && watermark.logoPath === "") return { field: "picture", message: "Choose a picture for the watermark." };
+  if (!inRange(watermark.size, 1, 100)) return { field: "size", message: "Enter a size from 1 to 100% of the width." };
+  if (!inRange(watermark.opacity, 1, 100)) return { field: "opacity", message: "Enter an opacity from 1 to 100%." };
+  if (watermark.mark === "text" && !/^#[0-9a-f]{6}$/i.test(watermark.color)) return { field: "colour", message: "Enter a colour such as #FFFFFF." };
+  if (!inRange(watermark.rotation, -180, 180)) return { field: "angle", message: "Enter an angle from −180 to 180 degrees." };
+  return null;
 };
 
 export const createEditHistory = <T>(present: T): EditHistory<T> => ({ past: [], present, future: [] });

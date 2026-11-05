@@ -535,27 +535,87 @@ body {
   cursor: crosshair;
   touch-action: none;
 }
-.image-editor-crop-overlay,
-.image-editor-watermark-overlay {
+.image-editor-crop-overlay {
   position: absolute;
   pointer-events: none;
-}
-.image-editor-crop-overlay {
   border: 2px solid var(--primary);
   background: color-mix(in srgb, var(--primary) 18%, transparent);
   box-shadow: 0 0 0 9999px color-mix(in srgb, black 35%, transparent);
 }
-.image-editor-watermark-overlay {
-  padding: 5px 8px;
-  border: 1px dashed var(--primary);
-  border-radius: 5px;
-  background: color-mix(in srgb, var(--card) 55%, transparent);
-  color: var(--foreground);
-  font-size: 12px;
-  font-weight: 600;
-  opacity: .9;
-  transform: translate(-4px, -4px);
-  white-space: nowrap;
+.image-editor-watermark-mark {
+  position: absolute;
+  /* Above the After card, so a mark in a lower corner can still be grabbed. */
+  z-index: 1;
+  pointer-events: none;
+  transform-origin: center;
+}
+.image-editor-watermark-mark[data-selected="true"] {
+  pointer-events: auto;
+  cursor: move;
+  outline: 1px dashed var(--primary);
+  outline-offset: 2px;
+}
+.image-editor-watermark-mark:focus-visible {
+  outline: 2px solid var(--ring);
+}
+.image-editor-watermark-mark svg,
+.image-editor-watermark-mark img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.image-editor-watermark-handle {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid var(--primary);
+  border-radius: 2px;
+  background: var(--background);
+  cursor: nwse-resize;
+  transform: translate(-50%, -50%);
+}
+.image-editor-watermark-rotate {
+  left: 50%;
+  top: -22px;
+  border-radius: 999px;
+  cursor: grab;
+}
+.image-editor-watermark-stem {
+  position: absolute;
+  left: 50%;
+  top: -17px;
+  width: 1.5px;
+  height: 15px;
+  background: var(--primary);
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+.image-watermark-picture-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--muted);
+  color: var(--muted-foreground);
+}
+.image-watermark-swatch {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  padding: 2px;
+  border: 1px solid var(--input);
+  border-radius: 6px;
+  background: var(--background);
+  cursor: pointer;
+}
+.image-watermark-anchors {
+  display: grid;
+  grid-template-columns: repeat(3, auto);
+  gap: 6px;
 }
 .image-editor-empty {
   display: grid;

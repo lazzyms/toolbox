@@ -302,6 +302,23 @@ export interface PasswordRequest extends ToolRequest {
   passwordOverrides: Record<string, string>;
 }
 
+export type WatermarkPlacement = "center" | "top-left" | "top-right" | "bottom-left" | "bottom-right" | "tile";
+/** A placement, a legacy pen offset in pixels, or an anchor from 0 to 1 that lands the mark in the same relative place on every size. */
+export type WatermarkPosition = WatermarkPlacement | { x: number; y: number } | { anchorX: number; anchorY: number };
+
+// Mirrors kit::common::watermark::WatermarkOptions.
+export interface WatermarkOptions {
+  text?: string;
+  logoPath?: string;
+  size?: number;
+  opacity: number;
+  color?: string;
+  position?: WatermarkPosition;
+  rotation?: number;
+}
+
+export interface WatermarkImagesRequest extends ToolRequest, WatermarkOptions {}
+
 export interface CompressImagesRequest extends ToolRequest {
   quality: number;
   lossless?: boolean;

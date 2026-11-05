@@ -1142,28 +1142,25 @@ test("PDF editor protects the last page and supports unified history", async ({ 
 
 test("Image editor previews a reversible edit stack and exports one combined plan", async ({ page }) => {
     await page.goto("/");
-    await page.getByRole("button", { name: "Open Image Editor", exact: true }).click();
+    await openFromHome(page, "Convert Image Format");
     await page.getByRole("button", { name: "Choose files to process" }).click();
-    await page.getByRole("tablist", { name: "Edit Image" }).getByRole("tab", { name: "Watermark", exact: true }).click();
     await expect(page.getByRole("img", { name: `Preview of ${fixtureName}` })).toBeVisible();
     await expect(page.getByRole("button", { name: "Undo" })).toBeDisabled();
     await expect(page.getByRole("button", { name: "Redo" })).toBeDisabled();
     await expect(page.getByRole("button", { name: "Reset edits" })).toBeDisabled();
     await expect(page.getByText("Edits are applied in order. Undo removes one edit at a time.", { exact: true })).toBeVisible();
-    await expect(page.getByRole("tablist", { name: "Edit Image" })).toBeVisible();
-    await expect(page.getByRole("toolbar", { name: "Image Editor tools" })).toBeVisible();
     await expect(page.locator(".workspace-primary-action")).toHaveCount(1);
 
-    await page.getByLabel("Watermark text").fill("First");
+    await page.getByLabel("Target format").selectOption("jpg");
     await expect.poll(async () =>
         (await page.evaluate(() => (window as TestWindow).__toolboxInvocations ?? []))
             .some(({ command }) => command === "inspect_image_edit_preview"),
     ).toBe(true);
     await page.getByRole("button", { name: "Add edit to plan" }).click();
-    await page.getByLabel("Watermark text").fill("Second");
+    await page.getByLabel("Target format").selectOption("webp");
     await page.getByRole("button", { name: "Add edit to plan" }).click();
     await expect(page.getByText("2 committed edits", { exact: true })).toBeVisible();
-    await expect(page.locator(".image-edit-timeline li")).toContainText(["Watermark · First", "Watermark · Second"]);
+    await expect(page.locator(".image-edit-timeline li")).toContainText(["Convert · JPG", "Convert · WEBP"]);
     await page.getByRole("button", { name: "Export edited images" }).click();
 
     const invocation = await page.evaluate(() =>
@@ -1315,12 +1312,11 @@ test("Image crop clears an old result and disables Run for an empty rectangle", 
 
 test("Image editor history can undo, redo, and reset the composed plan", async ({ page }) => {
     await page.goto("/");
-    await page.getByRole("button", { name: "Open Image Editor", exact: true }).click();
+    await openFromHome(page, "Convert Image Format");
     await page.getByRole("button", { name: "Choose files to process" }).click();
-    await page.getByRole("tablist", { name: "Edit Image" }).getByRole("tab", { name: "Watermark", exact: true }).click();
-    await page.getByLabel("Watermark text").fill("First");
+    await page.getByLabel("Target format").selectOption("jpg");
     await page.getByRole("button", { name: "Add edit to plan" }).click();
-    await page.getByLabel("Watermark text").fill("Second");
+    await page.getByLabel("Target format").selectOption("webp");
     await page.getByRole("button", { name: "Add edit to plan" }).click();
 
     await expect(page.getByRole("button", { name: "Undo" })).toBeEnabled();
@@ -2073,7 +2069,7 @@ test("GIF extraction does not request a source preview", async ({ page }) => {
     expect(previewInvocations).toHaveLength(0);
 });
 
-type RunRequest = { outputLocation?: unknown; plan?: { outputLocation?: unknown } };
+type RunRequest = { outputLocation?: unknown; plan?: { outputLocation?: unknown; edits?: unknown[] } };
 
 const storeOutputSettings = async (page: Page, settings: OutputSettings) => {
     await page.addInitScript((settings) => { (window as TestWindow).__toolboxOutputSettings = settings; }, settings);
@@ -2084,7 +2080,7 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
     await openFromHome(page, utility.title);
     // Image Metadata lives in the Image Editor but runs on its own screen, without an edit plan.
     // Crop runs through the shared edit stack, which Crop fills with its default step.
-    const usesImageEditPlan = workspaceForTool(utility.id)?.id === "image-editor" && !["image-metadata", "crop", "resize", "rotate", "image-tone"].includes(utility.id);
+    const usesImageEditPlan = workspaceForTool(utility.id)?.id === "image-editor" && !["image-metadata", "crop", "resize", "rotate", "image-tone", "image-watermark"].includes(utility.id);
 
     const accepts = (extension: string) => utility.capability.acceptedExtensions.some((accepted) => accepted.toLowerCase() === extension);
     const selectedFixturePath = accepts(".pdf")
@@ -2109,7 +2105,6 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
     }
     if (usesImageEditPlan) {
         if (utility.id === "heic-convert") await page.getByLabel("Target format").selectOption("jpg");
-        if (utility.id === "image-watermark") await page.getByLabel("Watermark text").fill("Test watermark");
     }
     if (utility.id === "compress") await page.getByRole("switch", { name: "Preserve original pixels" }).click();
     if (utility.id === "pdf-redact") await drawRedactionBox(page);
@@ -2122,6 +2117,7 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
     }
     if (utility.id === "resize") await page.getByLabel("Longest side, pixels").fill("640");
     if (utility.id === "image-tone") await page.getByRole("slider", { name: "Brightness" }).press("End");
+    if (utility.id === "image-watermark") await page.getByLabel("Text", { exact: true }).fill("Test watermark");
 
     const action = page.locator(".workspace-primary-action");
     await expect(action).toBeEnabled();
@@ -2139,6 +2135,9 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
     expect(run).toBeDefined();
     const request = (run?.args as { request: RunRequest }).request;
     expect(composedCommand === "export_image_edit_plan" ? request.plan?.outputLocation : request.outputLocation).toEqual(expectedOutputLocation);
+    if (utility.id === "image-watermark") {
+        expect((request as RunRequest & { steps?: { watermark?: unknown } }).steps?.watermark).toEqual({ text: "Test watermark", color: "#FFFFFF", size: 0.3, opacity: 70, rotation: 0, position: { anchorX: 1, anchorY: 1 } });
+    }
 };
 
 test.describe("registered feature actions", () => {

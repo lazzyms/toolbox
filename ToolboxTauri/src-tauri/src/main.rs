@@ -216,7 +216,7 @@ async fn add_page_numbers(events: RunEvents, request: remaining::PageOverlayRequ
 }
 
 #[tauri::command]
-async fn watermark_pdf(events: RunEvents, request: remaining::PageOverlayRequest) -> Vec<JobOutcome> {
+async fn watermark_pdf(events: RunEvents, request: remaining::PdfWatermarkRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_page_selection("watermark_pdf", &request.paths, request.pages.as_deref()) { return outcomes; }
     let request = Arc::new(request);
     BatchRunner::run(&events, "watermark_pdf", request.paths.clone(), &request.output_location, &request, remaining::watermark)
@@ -629,11 +629,12 @@ mod command_tests {
 
     use super::*;
     use crate::kit::common::OutputLocation;
+    use crate::kit::common::watermark::{WatermarkOptions, WatermarkPlacement, WatermarkPosition};
     use crate::kit::contracts::{ErrorKind, LimitKind};
     use crate::kit::images::tools::{CropRequest, CropStep, ImageEditStackRequest, ImageEditSteps, GifCreateRequest, GifExtractRequest, ImageEdit, ImageEditExportRequest, ImageEditPlan, ImageEditPreviewRequest, IconSetRequest, MetadataRequest, ResizeRequest, ResizeStep, RotateRequest, RotateStep, TiffRequest, ToneRequest, ToneStep, WatermarkRequest};
     use crate::kit::office::{test_minimal_ooxml_package, OfficeProcessor};
     use crate::kit::pdf::editor::{AddPdfPagesRequest, CropPdfRequest, EditPdfRequest, OrganizePdfRequest, PageScope, PdfEditMode, PdfEditOperation, PdfEditSessionPlan, PdfEditSessionRequest, PdfOverlay, PdfOverlayPosition, PdfRect, RedactPdfRequest, RotatePage, SignPdfRequest};
-    use crate::kit::pdf::remaining::{CompressPdfRequest, ImagesToPdfRequest, MergePdfRequest, PageOverlayRequest, PageSelectionRequest, PdfToImagesRequest, PdfToTextRequest, RotatePdfRequest, ComparePdfsRequest};
+    use crate::kit::pdf::remaining::{CompressPdfRequest, ImagesToPdfRequest, MergePdfRequest, PageOverlayRequest, PageSelectionRequest, PdfToImagesRequest, PdfWatermarkRequest, PdfToTextRequest, RotatePdfRequest, ComparePdfsRequest};
     use crate::kit::vision::VisionRequest;
     use base64::{engine::general_purpose::STANDARD, Engine};
     use image::Rgba;
@@ -1141,9 +1142,9 @@ mod command_tests {
         assert!(preview["dataUrl"].as_str().is_some_and(|value| value.starts_with("data:image/png;base64,")));
         outputs.extend(named(&mut naming, "export_pdf_scene", pdf.clone(), assert_success("PDF scene", export_pdf_scene(RunEvents::silent(), scene::ExportRequest { paths: vec![pdf.clone()], scene: visual_scene, output_location: OutputLocation::AlongsideInput }))));
         outputs.extend(named(&mut naming, "remove_password", protected.clone(), assert_success("unlock", remove_password(RunEvents::silent(), PasswordRequest { paths: vec![protected], password: crate::kit::TEST_PASSWORD.into(), password_overrides: Default::default(), output_location: location(&root, "unlock") }))));
-        outputs.extend(named(&mut naming, "add_page_numbers", pdf.clone(), assert_success("page numbers", add_page_numbers(RunEvents::silent(), PageOverlayRequest { paths: vec![pdf.clone()], text: "1".into(), opacity: 100, position: Some("bottom-right".into()), logo_path: None, pages: None, start_number: Some(1), font_size: Some(12), output_location: location(&root, "page numbers") }))));
+        outputs.extend(named(&mut naming, "add_page_numbers", pdf.clone(), assert_success("page numbers", add_page_numbers(RunEvents::silent(), PageOverlayRequest { paths: vec![pdf.clone()], position: Some("bottom-right".into()), pages: None, start_number: Some(1), font_size: Some(12), output_location: location(&root, "page numbers") }))));
         outputs.extend(named(&mut naming, "merge_pdfs", pdf.clone(), assert_aggregate_success("merge", &[pdf.clone(), pdf_two.clone()], run_merge_pdfs(&MergePdfRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: location(&root, "merge"), output_path: None }))));
-        outputs.extend(named(&mut naming, "watermark_pdf", pdf.clone(), assert_success("watermark pdf", watermark_pdf(RunEvents::silent(), PageOverlayRequest { paths: vec![pdf.clone()], text: "TEST".into(), opacity: 70, position: Some("center".into()), logo_path: None, pages: None, start_number: None, font_size: None, output_location: location(&root, "watermark pdf") }))));
+        outputs.extend(named(&mut naming, "watermark_pdf", pdf.clone(), assert_success("watermark pdf", watermark_pdf(RunEvents::silent(), PdfWatermarkRequest { paths: vec![pdf.clone()], options: WatermarkOptions { text: Some("TEST".into()), logo_path: None, size: None, opacity: 70, color: None, position: Some(WatermarkPosition::Placement(WatermarkPlacement::Center)), rotation: 0.0 }, pages: None, output_location: location(&root, "watermark pdf") }))));
         outputs.extend(named(&mut naming, "crop_pdf", pdf.clone(), assert_success("crop pdf", crop_pdf(RunEvents::silent(), CropPdfRequest { paths: vec![pdf.clone()], rectangle: PdfRect { x: 0.5, y: 0.5, width: 500.0, height: 700.0 }, scope: PageScope::All, output_location: location(&root, "crop pdf") }))));
         outputs.extend(named(&mut naming, "edit_pdf", pdf.clone(), assert_success("edit pdf", edit_pdf(RunEvents::silent(), EditPdfRequest { paths: vec![pdf.clone()], mode: "highlight".into(), text: "TEST NOTE".into(), pages: None, rectangle: PdfRect { x: 40.0, y: 650.0, width: 220.0, height: 60.0 }, output_location: location(&root, "edit pdf") }))));
         outputs.extend(named(&mut naming, "edit_pdf_session", pdf.clone(), assert_success("composed pdf editor", edit_pdf_session(RunEvents::silent(), PdfEditSessionRequest {
@@ -1196,11 +1197,11 @@ mod command_tests {
         outputs.extend(named(&mut naming, "resize_images", image.clone(), assert_success("resize", resize_images(RunEvents::silent(), ResizeRequest { paths: vec![image.clone()], resize: ResizeStep { width: 128, height: 128, mode: "exact".into(), resampling: "lanczos".into(), keep_aspect_ratio: true, percentage: 100, longest_side: 128 }, output_location: location(&root, "resize") }))));
         outputs.extend(named(&mut naming, "rotate_images", image.clone(), assert_success("rotate", rotate_images(RunEvents::silent(), RotateRequest { paths: vec![image.clone()], rotate: RotateStep { degrees: 90, flip: "none".into() }, output_location: location(&root, "rotate") }))));
         outputs.extend(named(&mut naming, "crop_images", image.clone(), assert_success("crop image", crop_images(RunEvents::silent(), CropRequest { paths: vec![image.clone()], crop: CropStep { x: 0, y: 0, width: 128, height: 128, mode: "rectangle".into(), aspect_width: 128, aspect_height: 128, anchor: "center".into() }, output_location: location(&root, "crop image") }))));
-        outputs.extend(named(&mut naming, "export_image_edit_stack", image.clone(), assert_success("edit stack", export_image_edit_stack(RunEvents::silent(), ImageEditStackRequest { paths: vec![image.clone()], steps: ImageEditSteps { crop: Some(CropStep { x: 0, y: 0, width: 0, height: 0, mode: "aspectRatio".into(), aspect_width: 4, aspect_height: 5, anchor: "center".into() }), resize: Some(ResizeStep { width: 0, height: 0, mode: "longestSide".into(), resampling: "lanczos".into(), keep_aspect_ratio: true, percentage: 100, longest_side: 64 }), rotate: Some(RotateStep { degrees: 90, flip: "horizontal".into() }), tone: Some(ToneStep { brightness: 10, contrast: 0.0, saturation: -20.0, exposure: 0.0 }) }, format: None, output_location: location(&root, "edit stack") }))));
+        outputs.extend(named(&mut naming, "export_image_edit_stack", image.clone(), assert_success("edit stack", export_image_edit_stack(RunEvents::silent(), ImageEditStackRequest { paths: vec![image.clone()], steps: ImageEditSteps { crop: Some(CropStep { x: 0, y: 0, width: 0, height: 0, mode: "aspectRatio".into(), aspect_width: 4, aspect_height: 5, anchor: "center".into() }), resize: Some(ResizeStep { width: 0, height: 0, mode: "longestSide".into(), resampling: "lanczos".into(), keep_aspect_ratio: true, percentage: 100, longest_side: 64 }), rotate: Some(RotateStep { degrees: 90, flip: "horizontal".into() }), tone: Some(ToneStep { brightness: 10, contrast: 0.0, saturation: -20.0, exposure: 0.0 }), watermark: Some(WatermarkOptions { text: Some("TEST".into()), logo_path: None, size: Some(0.3), opacity: 70, color: Some("#FFFFFF".into()), position: Some(WatermarkPosition::Anchor { anchor_x: 1.0, anchor_y: 1.0 }), rotation: -8.0 }) }, format: None, output_location: location(&root, "edit stack") }))));
         outputs.extend(named(&mut naming, "generate_icon_set", image.clone(), assert_success("icons", generate_icon_set(RunEvents::silent(), IconSetRequest { paths: vec![image.clone()], preset: "favicon".into(), sizes: vec![], output_location: location(&root, "icons") }))));
         outputs.extend(named(&mut naming, "create_gif", image.clone(), assert_aggregate_success("create gif", &[image.clone(), image_two.clone()], run_create_gif(&GifCreateRequest { paths: vec![image.clone(), image_two.clone()], frame_delay_ms: 100, loop_forever: true, output_location: location(&root, "create gif"), output_path: None }))));
         outputs.extend(named(&mut naming, "extract_gif_frames", animated.clone(), assert_success("extract gif", extract_gif_frames(RunEvents::silent(), GifExtractRequest { paths: vec![animated.clone()], output_location: location(&root, "extract gif") }))));
-        outputs.extend(named(&mut naming, "watermark_images", image.clone(), assert_success("watermark image", watermark_images(RunEvents::silent(), WatermarkRequest { paths: vec![image.clone()], opacity: 70, text: Some("TEST".into()), logo_path: None, x: 16, y: 16, output_location: location(&root, "watermark image") }))));
+        outputs.extend(named(&mut naming, "watermark_images", image.clone(), assert_success("watermark image", watermark_images(RunEvents::silent(), WatermarkRequest { paths: vec![image.clone()], options: WatermarkOptions { text: Some("TEST".into()), logo_path: None, size: None, opacity: 70, color: None, position: Some(WatermarkPosition::Offset { x: 16, y: 16 }), rotation: 0.0 }, output_location: location(&root, "watermark image") }))));
         let image_plan = ImageEditPlan {
             edits: vec![
                 ImageEdit::Resize { width: 128, height: 128, mode: "exact".into(), percentage: 100, longest_side: 128, resampling: "lanczos".into(), keep_aspect_ratio: false },
@@ -1313,7 +1314,7 @@ mod command_tests {
         let originals = inputs.iter().map(|path| (Original::of(path), std::fs::read(path).unwrap())).collect::<Vec<_>>();
         let rectangle = CropStep { x: 10, y: 20, width: 64, height: 48, mode: "rectangle".into(), aspect_width: 0, aspect_height: 0, anchor: "custom".into() };
         let run = |folder: &str| tauri::async_runtime::block_on(export_image_edit_stack(RunEvents::silent(), ImageEditStackRequest {
-            paths: inputs.clone(), steps: ImageEditSteps { crop: Some(rectangle.clone()), resize: None, rotate: None, tone: None }, format: None, output_location: OutputLocation::CustomFolder(root.join(folder)),
+            paths: inputs.clone(), steps: ImageEditSteps { crop: Some(rectangle.clone()), resize: None, rotate: None, tone: None, watermark: None }, format: None, output_location: OutputLocation::CustomFolder(root.join(folder)),
         }));
         std::fs::create_dir_all(root.join("out")).unwrap();
         std::fs::create_dir_all(root.join("again")).unwrap();
@@ -1577,6 +1578,120 @@ mod command_tests {
 
         original.0.assert_untouched();
         assert_eq!(std::fs::read(&png).unwrap(), original.1);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The box around every pixel the watermark changed, as (left, top, right, bottom), exclusive.
+    fn changed_box(output: &image::RgbaImage, source: &image::RgbaImage) -> Option<(u32, u32, u32, u32)> {
+        let mut found: Option<(u32, u32, u32, u32)> = None;
+        for (x, y, pixel) in output.enumerate_pixels() {
+            let before = source.get_pixel(x, y);
+            if pixel.0[..3].iter().zip(&before.0[..3]).all(|(a, b)| (*a as i32 - *b as i32).abs() <= 2) { continue; }
+            found = Some(match found {
+                None => (x, y, x + 1, y + 1),
+                Some((left, top, right, bottom)) => (left.min(x), top.min(y), right.max(x + 1), bottom.max(y + 1)),
+            });
+        }
+        found
+    }
+
+    #[test]
+    fn edit_stack_watermark_renders_every_option_deterministically_and_fails_before_reserving() {
+        let root = sandbox("edit_stack_watermark");
+        let small = root.join("photo.png");
+        let large = root.join("wide.png");
+        let logo = root.join("logo-mark.png");
+        // Mid grey with a partly clear alpha, so the mark shows and the alpha must survive.
+        let grey = |width: u32, height: u32| image::RgbaImage::from_pixel(width, height, Rgba([128, 128, 128, 200]));
+        grey(240, 120).save(&small).unwrap();
+        grey(480, 240).save(&large).unwrap();
+        image::RgbaImage::from_pixel(20, 10, Rgba([0, 0, 255, 255])).save(&logo).unwrap();
+        let originals = [&small, &large, &logo].map(|path| (Original::of(path), std::fs::read(path).unwrap()));
+        let run = |paths: &[&PathBuf], steps: &str, folder: &str| {
+            std::fs::create_dir_all(root.join(folder)).unwrap();
+            tauri::async_runtime::block_on(export_image_edit_stack(RunEvents::silent(), ImageEditStackRequest {
+                paths: paths.iter().map(|path| (*path).clone()).collect(), steps: serde_json::from_str::<ImageEditSteps>(steps).unwrap(), format: None, output_location: OutputLocation::CustomFolder(root.join(folder)),
+            }))
+        };
+        let step = |overrides: &str| {
+            let mut step = serde_json::json!({ "text": "Toolbox", "size": 0.3, "opacity": 70, "color": "#FF0000", "rotation": 0, "position": { "anchorX": 1, "anchorY": 1 } });
+            step.as_object_mut().unwrap().extend(serde_json::from_str::<serde_json::Value>(overrides).unwrap().as_object().unwrap().clone());
+            step
+        };
+        let mark = |overrides: &str| format!(r#"{{"watermark":{}}}"#, step(overrides));
+        let output = |outcome: &JobOutcome| image::open(&outcome.output_paths()[0]).unwrap().to_rgba8();
+
+        let first = run(&[&small, &large], &mark("{}"), "first");
+        let second = run(&[&small, &large], &mark("{}"), "second");
+        assert!(first.iter().all(|outcome| outcome.error().is_none()), "{:?}", first.iter().map(JobOutcome::error).collect::<Vec<_>>());
+        assert_eq!(first[0].output_paths(), [root.join("first").join("photo-watermarked.png")], "a single Watermark step is named -watermarked");
+        for index in 0..2 {
+            assert_eq!(std::fs::read(&first[index].output_paths()[0]).unwrap(), std::fs::read(&second[index].output_paths()[0]).unwrap(), "two runs give the same bytes");
+        }
+        let base = output(&first[0]);
+        assert!(base.pixels().all(|pixel| pixel.0[3] == 200), "the watermark keeps the source alpha");
+        assert!(base.pixels().any(|pixel| pixel.0[0] > pixel.0[1] + 40), "the colour is applied to the text");
+        let (left, top, right, bottom) = changed_box(&base, &grey(240, 120)).expect("a watermark is never neutral");
+        assert!(left >= 120 && top >= 60, "bottom-right anchor keeps the mark in the bottom-right quarter: {left},{top}");
+        // The margin is 3% of the shorter side, 4 pixels here.
+        assert!((230..=236).contains(&right) && (108..=116).contains(&bottom), "the anchor keeps a margin from the edge: {right},{bottom}");
+        let width = right - left;
+        assert!((60..=80).contains(&width), "size 0.3 makes the text about 30% of the width, got {width}");
+        let (wide_left, _, wide_right, _) = changed_box(&output(&first[1]), &grey(480, 240)).unwrap();
+        assert!(((wide_right - wide_left) as i32 - 2 * width as i32).abs() <= 4, "the size is relative, so it lands the same on every size");
+
+        // Each option changes the result, and no two give the same pixels.
+        let variants = [
+            ("{}", "base"),
+            (r#"{"size":0.5}"#, "size"),
+            (r#"{"opacity":30}"#, "opacity"),
+            (r##"{"color":"#0000FF"}"##, "colour"),
+            (r#"{"rotation":-30}"#, "angle"),
+            (r#"{"position":{"anchorX":0,"anchorY":0}}"#, "position"),
+            (r#"{"position":"tile"}"#, "tile"),
+            (&format!(r#"{{"text":null,"color":null,"logoPath":{}}}"#, serde_json::to_string(&logo).unwrap()), "picture"),
+        ];
+        let mut rendered = Vec::new();
+        for (overrides, folder) in variants {
+            let outcome = &run(&[&small], &mark(overrides), folder)[0];
+            assert!(outcome.error().is_none(), "{folder}: {:?}", outcome.error());
+            let image = output(outcome);
+            assert!(rendered.iter().all(|(_, other)| other != &image), "{folder} matches another option's result");
+            rendered.push((folder, image));
+        }
+        let find = |name: &str| &rendered.iter().find(|(folder, _)| *folder == name).unwrap().1;
+        let (_, _, _, top_bottom) = changed_box(find("position"), &grey(240, 120)).unwrap();
+        assert!(top_bottom <= 60, "top-left anchor keeps the mark in the top half");
+        let (angle_left, angle_top, angle_right, angle_bottom) = changed_box(find("angle"), &grey(240, 120)).unwrap();
+        assert!(angle_bottom - angle_top > bottom - top + 10 && angle_right - angle_left < width + 10, "an angle turns the mark");
+        let tiled = find("tile");
+        for (x0, y0) in [(0, 0), (120, 0), (0, 60), (120, 60)] {
+            let quarter = |image: &image::RgbaImage| image::imageops::crop_imm(image, x0, y0, 120, 60).to_image();
+            assert!(changed_box(&quarter(tiled), &quarter(&grey(240, 120))).is_some(), "tiles cover the quarter at {x0},{y0}");
+        }
+        let picture = find("picture");
+        let (picture_left, _, picture_right, _) = changed_box(picture, &grey(240, 120)).unwrap();
+        assert_eq!(picture_right - picture_left, 72, "a picture is scaled to 30% of the width");
+        assert!(picture.pixels().any(|pixel| pixel.0[2] > pixel.0[0] + 40), "a picture keeps its own colours");
+
+        // The watermark runs after resize, so it is sized against the resized image.
+        let resized = run(&[&small], &format!(r#"{{"resize":{{"width":0,"height":0,"mode":"percentage","resampling":"lanczos","keepAspectRatio":true,"percentage":200,"longestSide":0}},"watermark":{}}}"#, step("{}")), "resized");
+        assert_eq!(resized[0].output_paths(), [root.join("resized").join("photo-edited.png")]);
+        let (resized_left, _, resized_right, _) = changed_box(&output(&resized[0]), &grey(480, 240)).unwrap();
+        assert!(((resized_right - resized_left) as i32 - 2 * width as i32).abs() <= 4, "the mark is not scaled with the photo");
+
+        // Characters the font cannot draw fail as a request problem before anything is written.
+        std::fs::create_dir_all(root.join("unsupported")).unwrap();
+        std::fs::write(root.join("unsupported").join("photo-watermarked.png"), b"existing").unwrap();
+        let outcome = &run(&[&small], &mark(r#"{"text":"Home 🏡"}"#), "unsupported")[0];
+        let error = outcome.error().expect("an emoji must fail");
+        assert!(matches!(error.kind, ErrorKind::InvalidInput), "{:?}", error.kind);
+        assert_eq!(error.message, "The watermark font can't draw \u{201c}🏡\u{201d}.");
+        assert_eq!(std::fs::read_dir(root.join("unsupported")).unwrap().count(), 1, "nothing is reserved or written");
+        assert_eq!(std::fs::read(root.join("unsupported").join("photo-watermarked.png")).unwrap(), b"existing");
+
+        for (original, bytes) in &originals { original.assert_untouched(); assert!(!bytes.is_empty()); }
+        assert_eq!(std::fs::read(&small).unwrap(), originals[0].1);
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1904,6 +2019,8 @@ mod command_tests {
             ("rotate-turn", r#""rotate":{"degrees":180,"flip":"none"}"#.to_string()),
             ("rotate-mirror", r#""rotate":{"degrees":0,"flip":"horizontal"}"#.to_string()),
             ("tone-exposure", format!(r#"{crop_all},"tone":{{"brightness":0,"contrast":0,"saturation":0,"exposure":1}}"#)),
+            // A watermark always marks the image, even beside neutral steps.
+            ("watermark-text", format!(r#"{every},"watermark":{{"text":"T","size":0.3,"opacity":70,"rotation":0,"position":{{"anchorX":1,"anchorY":1}}}}"#)),
         ] {
             let outcome = run(&[&wide], &format!("{{{steps}}}"), None, label).remove(0);
             assert!(matches!(outcome.state, OutcomeState::Succeeded { .. }), "{label}: {:?}", outcome.state);
