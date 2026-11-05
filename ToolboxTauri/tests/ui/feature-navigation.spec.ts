@@ -923,7 +923,7 @@ test("the settings sidebar switches sections and lists only the built ones", asy
     await page.goto("/");
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     const sections = page.getByRole("navigation", { name: "Settings sections" });
-    await expect(sections.getByRole("button")).toHaveText(["Appearance", "Output location", "Quick actions", "Privacy", "Updates", "About and support", "Keyboard shortcuts"]);
+    await expect(sections.getByRole("button")).toHaveText(["Appearance", "Output location", "Quick actions", "Packs", "Privacy", "Updates", "About and support", "Keyboard shortcuts"]);
     await expect(page.getByText("Changes save as you make them.")).toBeVisible();
 
     const about = await openSettingsSection(page, "About and support", false);
@@ -1754,7 +1754,7 @@ test("result rows show succeeded, skipped and failed states with warnings and po
         }),
         failed("/local/site-survey-scan.pdf", "invalidInput", "Not a readable PDF. The file may be damaged or incomplete."),
         failed("/local/temple-scan.png", "unavailable", "Recognising Gujarati text needs the Indic script pack.", {
-            failure: { kind: "unavailable", message: "Recognising Gujarati text needs the Indic script pack.", pointer: { kind: "pack", packId: "script-pack" } },
+            failure: { kind: "unavailable", message: "Recognising Gujarati text needs the Indic script pack.", pointer: { kind: "pack", packId: "script-pack", name: "Indic script", reason: "notInstalled" } },
         }),
     ]);
 
@@ -1765,7 +1765,7 @@ test("result rows show succeeded, skipped and failed states with warnings and po
     await expect(rows.nth(1)).toHaveAttribute("data-tone", "warn");
     await expect(rows.nth(2)).toHaveAttribute("data-tone", "skip");
     await expect(rows.nth(4)).toHaveAttribute("data-tone", "fail");
-    await expect(rows.nth(5)).toHaveAttribute("data-tone", "skip");
+    await expect(rows.nth(5)).toHaveAttribute("data-tone", "fail");
 
     await expect(rows.nth(0)).toContainText("lease-agreement-protected.pdf");
     await expect(rows.nth(0)).toContainText("Compressed");
@@ -1780,21 +1780,17 @@ test("result rows show succeeded, skipped and failed states with warnings and po
     await expect(rows.nth(2).getByRole("button", { name: /^(Open|Show in)/ })).toHaveCount(1);
     await expect(rows.nth(4)).toContainText("Not a readable PDF.");
     await expect(rows.nth(4)).toContainText("Failed, the input can't be used");
-    await expect(rows.nth(5)).toContainText("Unavailable");
+    await expect(rows.nth(5)).toContainText("Needs a pack");
 
     await expect(resultSummaryStatus(page)).toHaveAttribute("aria-live", "polite");
-    await expect(resultSummaryStatus(page)).toContainText("Done. 3 compressed, 1 skipped, 2 failed");
+    await expect(resultSummaryStatus(page)).toContainText("Done. 3 compressed, 1 skipped, 1 failed, 1 needs a pack");
     await expect(resultSummaryStatus(page)).toContainText("2 compressed files have warnings.");
     await expect(page.getByRole("button", { name: /^Retry/ })).toHaveCount(0);
 
-    await page.evaluate(() => {
-        window.addEventListener("toolbox:install-pack", (event) => {
-            (window as unknown as { __installPackRequests: string[] }).__installPackRequests.push((event as CustomEvent<string>).detail);
-        });
-        (window as unknown as { __installPackRequests: string[] }).__installPackRequests = [];
-    });
-    await rows.nth(5).getByRole("button", { name: "Install script pack", exact: true }).click();
-    expect(await page.evaluate(() => (window as unknown as { __installPackRequests: string[] }).__installPackRequests)).toEqual(["script-pack"]);
+    await rows.nth(5).getByRole("button", { name: "Install Indic script pack for temple-scan.png", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => ((window as TestWindow).__toolboxInvocations ?? [])
+        .filter(({ command }) => command === "install_pack")
+        .map(({ args }) => (args as { packId: string }).packId))).toEqual(["script-pack"]);
 
     await rows.nth(2).getByRole("button", { name: "Open Lock & Unlock", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Lock & Unlock", exact: true })).toBeVisible();
