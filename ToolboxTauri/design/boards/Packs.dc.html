@@ -18,7 +18,7 @@ body{margin:0}
 .btn.pri{background:var(--pri);color:var(--prifg);border-color:transparent}
 .btn.ghost{background:transparent;border-color:transparent;color:var(--mut)}
 .btn.sm{height:26px;padding:0 9px;font-size:12px}
-.btn[disabled]{opacity:.45;cursor:default}
+.btn[disabled],.btn.off{opacity:.45;cursor:default}
 .kbd{font-size:11px;line-height:16px;padding:0 5px;border-radius:4px;border:1px solid var(--line2);color:var(--mut);font-weight:500}
 .btn.pri .kbd{border-color:currentColor;color:inherit;opacity:.6}
 .nav{display:flex;align-items:center;gap:9px;min-height:30px;padding:0 10px;border-radius:7px;color:var(--mut);text-decoration:none;border:0;background:none;width:100%;text-align:left;cursor:pointer;box-sizing:border-box}
@@ -40,7 +40,7 @@ fieldset.opt{border:0;margin:0;padding:0}fieldset.opt legend{padding:0;margin-bo
 
 </style>
 </helmet>
-<div class="{{themeClass}}" style="min-height: 800px; display: flex; flex-wrap: wrap">
+<div class="{{themeClass}}" style="min-height: 800px; display: flex; flex-wrap: wrap; position: relative">
 <aside aria-label="Settings" style="flex: 1 1 220px; max-width: 232px; background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; padding: 14px 10px; box-sizing: border-box">
 <a class="nav" href="Main.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M5 12l6 6M5 12l6-6"></path></svg>All tools</a>
 <div style="padding: 16px 10px 6px; font-size: 12px; font-weight: 600; color: var(--faint)">Settings</div>
@@ -57,12 +57,59 @@ fieldset.opt{border:0;margin:0;padding:0}fieldset.opt legend{padding:0;margin-bo
 <button class="btn ghost"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"></circle><path d="M21 21l-6-6"></path></svg>Find a tool<span class="kbd">{{findKey}}</span></button>
 </header>
 <div style="flex: 1; display: flex; flex-wrap: wrap; min-height: 0">
-<section style="flex: 1; min-width: 0; padding: 24px 28px; display: flex; flex-direction: column; gap: 22px; max-width: 640px"><p class="hint" style="margin: 0">Packs download once from the Toolbox release server and then work offline. Tools that need a missing pack ask before downloading. Removing a pack frees the space; you can install it again at any time.</p><sc-if value="{{offline}}" hint-placeholder-val="{{ false }}"><div class="note" role="status"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--warn); margin-top: 1px"><path d="M12 3l10 18H2z"></path><path d="M12 10v5M12 18v.5"></path></svg><span class="hint"><strong style="font-weight: 600; color: var(--fg)">You are offline.</strong> Installed packs keep working. Downloads start again when you reconnect.</span></div></sc-if><ul aria-label="Packs" style="list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line)"><li style="display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 14px; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--line)"><span style="display: flex; flex-direction: column; gap: 3px"><span style="font-weight: 500">Office documents</span><span class="hint">Word, Excel and PowerPoint to PDF. 310 MB.</span></span><span style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end"><sc-if value="{{normal}}" hint-placeholder-val="{{ true }}"><span class="hint">Update available, 12 MB</span><button class="btn sm">Update</button><button class="btn sm ghost">Remove…</button></sc-if><sc-if value="{{space}}" hint-placeholder-val="{{ false }}"><span class="hint" style="color: var(--bad); max-width: 260px; text-align: right">Needs 310 MB free. 120 MB is free on this disk.</span><button class="btn sm">Try again</button></sc-if><sc-if value="{{offline}}" hint-placeholder-val="{{ false }}"><span class="hint">Update available, 12 MB</span><button class="btn sm" disabled>Update</button></sc-if></span></li><li style="display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 14px; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--line)"><span style="display: flex; flex-direction: column; gap: 3px"><span style="font-weight: 500">Text recognition, English</span><span class="hint">Used by OCR. 9 MB.</span></span><span style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end"><span class="hint">Installed</span><button class="btn sm ghost">Remove…</button></span></li><li style="display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 14px; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--line)"><span style="display: flex; flex-direction: column; gap: 3px"><span style="font-weight: 500">Text recognition, Hindi</span><span class="hint">Used by OCR. 12 MB.</span></span><span style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end"><sc-if value="{{normal}}" hint-placeholder-val="{{ true }}"><span role="progressbar" aria-label="Downloading Hindi" aria-valuenow="62" aria-valuemin="0" aria-valuemax="100" style="width: 120px; height: 6px; border-radius: 3px; background: var(--line2); overflow: hidden"><span style="display: block; width: 62%; height: 100%; background: var(--pri)"></span></span><span class="hint">7 of 12 MB</span><button class="btn sm">Cancel</button></sc-if><sc-if value="{{space}}" hint-placeholder-val="{{ false }}"><span role="progressbar" aria-label="Downloading Hindi" aria-valuenow="62" aria-valuemin="0" aria-valuemax="100" style="width: 120px; height: 6px; border-radius: 3px; background: var(--line2); overflow: hidden"><span style="display: block; width: 62%; height: 100%; background: var(--pri)"></span></span><span class="hint">7 of 12 MB</span><button class="btn sm">Cancel</button></sc-if><sc-if value="{{offline}}" hint-placeholder-val="{{ false }}"><span class="hint" style="color: var(--bad); max-width: 260px; text-align: right">Download stopped. Check your internet connection, then try again.</span><button class="btn sm">Try again</button></sc-if></span></li><li style="display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 14px; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--line)"><span style="display: flex; flex-direction: column; gap: 3px"><span style="font-weight: 500">Text recognition, Gujarati</span><span class="hint">Used by OCR. 14 MB.</span></span><span style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end"><button class="btn sm">Install</button></span></li><li style="display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 14px; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--line)"><span style="display: flex; flex-direction: column; gap: 3px"><span style="font-weight: 500">Text recognition, French</span><span class="hint">Used by OCR. 6 MB.</span></span><span style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end"><button class="btn sm">Install</button></span></li></ul><span class="hint">2 installed, 319 MB used. 48 GB free on this disk.</span></section>
+<section aria-labelledby="packs-h" style="flex: 1; min-width: 0; padding: 24px 28px; display: flex; flex-direction: column; gap: 18px; max-width: 680px">
+<div style="display: flex; align-items: flex-start; gap: 16px">
+<div style="flex: 1; display: flex; flex-direction: column; gap: 6px">
+<h2 id="packs-h" style="margin: 0; font-size: 13px; font-weight: 600">Optional packs</h2>
+<p class="hint" style="margin: 0">Packs add file types and languages. Each one downloads once from the Toolbox release server, is checked before it's used, and then works offline. Your files never leave this device.</p>
+</div>
+<button class="btn">Install from file…</button>
+</div>
+<sc-if value="{{banner}}" hint-placeholder-val="{{ false }}"><div class="note" role="{{bannerRole}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: {{bannerColor}}; margin-top: 1px"><path d="M12 3l10 18H2z"></path><path d="M12 10v5M12 18v.5"></path></svg><span class="hint" style="flex: 1"><strong style="font-weight: 600; color: var(--fg)">{{bannerTitle}}</strong> {{bannerText}}</span><sc-if value="{{bannerAction}}" hint-placeholder-val="{{ false }}"><button class="btn sm">{{bannerAction}}</button></sc-if></div></sc-if>
+<ul aria-label="Packs" style="list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line)">
+<sc-for list="{{rows}}" as="p" hint-placeholder-count="6">
+<li aria-label="{{p.name}}, {{p.status}}" style="padding: 12px 0; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 10px">
+<div style="display: grid; grid-template-columns: 22px minmax(0,1fr) auto; gap: 10px; align-items: center">
+<button class="btn sm ghost" aria-expanded="{{p.open}}" aria-label="Details for {{p.name}}" style="padding: 0 3px; height: 22px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="transform: rotate({{p.rot}}deg)"><path d="M9 6l6 6-6 6"></path></svg></button>
+<span style="display: flex; flex-direction: column; gap: 3px; min-width: 0"><span style="font-weight: 500">{{p.name}}</span><span class="hint">{{p.sub}}</span></span>
+<span style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; max-width: 360px">
+<sc-if value="{{p.bar}}" hint-placeholder-val="{{ false }}"><span role="progressbar" aria-label="{{p.barLabel}}" aria-valuenow="{{p.pct}}" aria-valuemin="0" aria-valuemax="100" style="width: 110px; height: 6px; border-radius: 3px; background: var(--line2); overflow: hidden"><span style="display: block; width: {{p.pct}}%; height: 100%; background: var(--pri)"></span></span></sc-if>
+<span class="hint" role="{{p.statusRole}}" style="color: {{p.statusColor}}; text-align: right">{{p.status}}</span>
+<sc-for list="{{p.actions}}" as="a" hint-placeholder-count="1"><button class="btn sm {{a.cls}}" aria-label="{{a.aria}}" aria-disabled="{{a.dis}}">{{a.label}}</button></sc-for>
+</span>
+</div>
+<sc-if value="{{p.isOpen}}" hint-placeholder-val="{{ false }}"><dl style="margin: 0 0 0 32px; display: grid; grid-template-columns: 130px minmax(0,1fr); gap: 6px 12px; padding: 12px 14px; border-radius: 8px; background: var(--raise)">
+<dt class="hint">What it does</dt><dd style="margin: 0">{{p.desc}}</dd>
+<dt class="hint">Used by</dt><dd style="margin: 0">{{p.tools}}</dd>
+<dt class="hint">Download</dt><dd style="margin: 0">{{p.dl}}</dd>
+<dt class="hint">On this disk</dt><dd style="margin: 0">{{p.disk}}</dd>
+<dt class="hint">Version</dt><dd style="margin: 0">{{p.ver}}</dd>
+<dt class="hint">License</dt><dd style="margin: 0">{{p.lic}} <button class="btn sm ghost" style="padding: 0 4px; height: 22px; color: var(--fg); text-decoration: underline; text-underline-offset: 3px">View license</button></dd>
+</dl></sc-if>
+</li>
+</sc-for>
+</ul>
+<p class="hint" style="margin: 0" role="status">{{total}}</p>
+</section>
 </div>
 </div>
+<sc-if value="{{dialog}}" hint-placeholder-val="{{ false }}">
+<div style="position: absolute; inset: 0; background: var(--scrim); display: flex; align-items: center; justify-content: center; padding: 20px">
+<div role="{{dRole}}" aria-modal="true" aria-labelledby="dt" aria-describedby="dd" style="width: 100%; max-width: 440px; background: var(--panel); border: 1px solid var(--line2); border-radius: 12px; padding: 22px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 24px 48px rgba(0,0,0,.28)">
+<h2 id="dt" style="margin: 0; font-size: 15px; font-weight: 600">{{dTitle}}</h2>
+<p id="dd" style="margin: 0; color: var(--mut)">{{dText}}</p>
+<dl style="margin: 0; display: grid; grid-template-columns: 90px minmax(0,1fr); gap: 4px 12px; padding: 10px 12px; border-radius: 8px; background: var(--raise)">
+<sc-for list="{{dFacts}}" as="f" hint-placeholder-count="3"><dt class="hint">{{f.k}}</dt><dd style="margin: 0; overflow-wrap: anywhere">{{f.v}}</dd></sc-for>
+</dl>
+<div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 6px">
+<sc-for list="{{dButtons}}" as="b" hint-placeholder-count="2"><button class="btn {{b.cls}}">{{b.label}}</button></sc-for>
+</div>
+</div>
+</div>
+</sc-if>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "state": {"editor": "enum", "options": ["Normal", "Offline", "Low disk space"], "default": "Normal"}, "$preview": {"width": 1280, "height": 800}}'>
+<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "state": {"editor": "enum", "options": ["Normal", "Empty", "Details", "Working", "Problems", "Offline", "Server blocked", "Low disk space", "In use", "Install from file", "File for another computer", "File not signed", "File failed check"], "default": "Normal"}, "$preview": {"width": 1280, "height": 800}}'>
 class Component extends DCLogic {
 renderVals() {
 const win = (this.props.platform ?? 'macOS') === 'Windows';
@@ -71,8 +118,75 @@ const base = { themeClass: light ? 'tb light' : 'tb dark', findKey: win ? 'Ctrl+
 const st = this.props.state ?? 'Normal';
 const s = 'Packs';
 const _names = ["Appearance", "Output location", "Packs", "Privacy", "Updates", "About and support", "Keyboard shortcuts"]; _names.forEach((n, i) => { base['nav' + i] = n === s ? 'nav on' : 'nav'; base['press' + i] = n === s ? 'true' : 'false'; }); base.toolName = s;
-const extra = { normal: st === 'Normal', offline: st === 'Offline', space: st === 'Low disk space' };
-return Object.assign(base, extra);
+const lic = 'Open-source license. Free to use, including for work.';
+const P = {
+office: { name: 'Office documents', desc: 'Turns Word, Excel and PowerPoint files into PDFs.', tools: 'Office to PDF', dl: '118 MB', size: 310, ver: '3.2' },
+script: { name: 'More writing systems', desc: 'Shows and exports text in scripts such as Devanagari, Gujarati, Arabic and Thai.', tools: 'Edit PDF: Add text and Edit text', dl: '38 MB', size: 96, ver: '1.4' },
+en: { name: 'Text recognition, English', desc: 'Reads English text in scanned pages.', tools: 'OCR', dl: '4 MB', size: 9, ver: '2.0' },
+hi: { name: 'Text recognition, Hindi', desc: 'Reads Hindi text in scanned pages.', tools: 'OCR', dl: '12 MB', size: 31, ver: '2.0' },
+gu: { name: 'Text recognition, Gujarati', desc: 'Reads Gujarati text in scanned pages.', tools: 'OCR', dl: '14 MB', size: 34, ver: '2.0' },
+fr: { name: 'Text recognition, French', desc: 'Reads French text in scanned pages.', tools: 'OCR', dl: '6 MB', size: 14, ver: '2.0' }
+};
+const A = (label, name, cls) => ({ label: label, aria: label.replace('…', '') + ' ' + name, cls: cls || '', dis: 'false' });
+const off = (label, name) => ({ label: label, aria: label + ' ' + name, cls: 'off', dis: 'true' });
+const row = (id, kind, extra) => {
+const p = P[id]; const e = extra || {};
+const r = { name: p.name, desc: p.desc, tools: p.tools, dl: p.dl, ver: p.ver, lic: lic, open: 'false', rot: 0, isOpen: false, bar: false, pct: 0, barLabel: '', statusRole: 'status', statusColor: 'var(--mut)', actions: [], disk: 'Nothing yet' };
+const inst = (v) => { r.disk = p.size + ' MB'; r.sub = 'Used by ' + p.tools + '. ' + p.size + ' MB on this disk.'; r.ver = v || p.ver; };
+r.sub = 'Used by ' + p.tools + '. ' + p.dl + ' download.';
+if (kind === 'none') { r.status = 'Not installed'; r.actions = [A('Install', p.name)]; }
+if (kind === 'installed') { inst(); r.status = 'Installed, version ' + p.ver; r.actions = [A('Remove…', p.name, 'ghost')]; }
+if (kind === 'update') { inst('3.1, 3.2 is ready'); r.status = 'Version 3.1. Update to 3.2, 12 MB'; r.actions = [A('Update', p.name), A('Remove…', p.name, 'ghost')]; }
+if (kind === 'downloading') { r.bar = true; r.pct = 58; r.barLabel = 'Downloading ' + p.name; r.status = Math.round(parseInt(p.dl) * 0.58) + ' of ' + p.dl; r.actions = [A('Cancel', p.name)]; }
+if (kind === 'verifying') { r.bar = true; r.pct = 100; r.barLabel = 'Checking ' + p.name; r.status = 'Checking the download…'; r.actions = [A('Cancel', p.name)]; }
+if (kind === 'queued') { r.status = 'Waiting. Starts after the downloads above.'; r.actions = [A('Cancel', p.name)]; }
+if (kind === 'updating') { inst('3.1 (in use until 3.2 is checked)'); r.bar = true; r.pct = 40; r.barLabel = 'Updating ' + p.name; r.sub = 'Used by ' + p.tools + '. Version 3.1 keeps working until 3.2 is ready.'; r.status = 'Updating, 5 of 12 MB'; r.actions = [A('Cancel', p.name)]; }
+if (kind === 'damaged') { inst(); r.status = 'Damaged. A file in this pack was changed or is missing.'; r.statusColor = 'var(--bad)'; r.actions = [A('Repair', p.name), A('Remove…', p.name, 'ghost')]; }
+if (kind === 'incompatible') { inst('2.6'); r.status = "Doesn't work with this version of Toolbox. Update Toolbox to use it."; r.statusColor = 'var(--warn)'; r.actions = [A('Check for updates', p.name), A('Remove…', p.name, 'ghost')]; }
+if (kind === 'interrupted') { r.status = 'Download stopped before it finished. Nothing was installed.'; r.statusColor = 'var(--bad)'; r.actions = [A('Try again', p.name)]; }
+if (kind === 'checkfailed') { r.status = "The download didn't pass its safety check, so it was deleted. Nothing was installed."; r.statusColor = 'var(--bad)'; r.actions = [A('Try again', p.name)]; }
+if (kind === 'offline') { r.status = 'No internet connection.'; r.actions = [off('Install', p.name)]; }
+if (kind === 'offupdate') { inst(); r.status = 'Version 3.1. Update to 3.2, 12 MB'; r.actions = [off('Update', p.name), A('Remove…', p.name, 'ghost')]; }
+if (kind === 'blocked') { r.status = "Couldn't reach the Toolbox release server."; r.statusColor = 'var(--bad)'; r.actions = [A('Try again', p.name)]; }
+if (kind === 'space') { r.status = 'Needs 310 MB free. 120 MB is free on this disk.'; r.statusColor = 'var(--bad)'; r.actions = [A('Try again', p.name)]; }
+if (kind === 'inuse') { inst(); r.status = "Can't remove it while OCR is running. Remove it when the run finishes."; r.statusColor = 'var(--warn)'; r.statusRole = 'alert'; r.actions = [off('Remove…', p.name)]; }
+if (e.open) { r.open = 'true'; r.rot = 90; r.isOpen = true; }
+return r;
+};
+const sets = {
+'Normal': [row('office', 'update'), row('script', 'installed'), row('en', 'installed'), row('hi', 'downloading'), row('gu', 'none'), row('fr', 'none')],
+'Empty': [row('office', 'none'), row('script', 'none'), row('en', 'none'), row('hi', 'none'), row('gu', 'none'), row('fr', 'none')],
+'Details': [row('office', 'update'), row('script', 'installed', { open: true }), row('en', 'installed'), row('hi', 'none', { open: true }), row('gu', 'none'), row('fr', 'none')],
+'Working': [row('office', 'updating'), row('script', 'installed'), row('en', 'installed'), row('hi', 'verifying'), row('gu', 'downloading'), row('fr', 'queued')],
+'Problems': [row('office', 'incompatible'), row('script', 'installed'), row('en', 'damaged'), row('hi', 'interrupted'), row('gu', 'checkfailed'), row('fr', 'none')],
+'Offline': [row('office', 'offupdate'), row('script', 'installed'), row('en', 'installed'), row('hi', 'interrupted'), row('gu', 'offline'), row('fr', 'offline')],
+'Server blocked': [row('office', 'installed'), row('script', 'installed'), row('en', 'installed'), row('hi', 'blocked'), row('gu', 'none'), row('fr', 'none')],
+'Low disk space': [row('office', 'space'), row('script', 'installed'), row('en', 'installed'), row('hi', 'none'), row('gu', 'none'), row('fr', 'none')],
+'In use': [row('office', 'installed'), row('script', 'installed'), row('en', 'inuse'), row('hi', 'none'), row('gu', 'none'), row('fr', 'none')]
+};
+const rows = sets[st] || sets['Empty'];
+const banners = {
+'Empty': ['status', 'var(--mut)', 'No packs installed yet.', 'Tools that need one ask before downloading. On a computer without internet, use Install from file with a pack file copied from the Toolbox releases page.', ''],
+'Offline': ['status', 'var(--warn)', "You're offline.", 'Installed packs keep working. Connect to the internet to install or update packs, or use Install from file.', ''],
+'Server blocked': ['alert', 'var(--bad)', "Couldn't reach the Toolbox release server.", 'Your internet works, but something on this network is blocking downloads from Toolbox. Try again later or on another network, or install from a pack file.', 'Install from file…'],
+'Low disk space': ['alert', 'var(--bad)', 'Not enough space for Office documents.', 'It needs 310 MB free and this disk has 120 MB. Free up at least 190 MB, then try again.', ''],
+'In use': ['alert', 'var(--warn)', "Text recognition, English wasn't removed.", 'OCR is using it right now. Remove it after the run finishes.', ''],
+'Problems': ['alert', 'var(--bad)', 'Text recognition, English is damaged.', "OCR won't use it until it's repaired. Repair downloads a fresh copy, 4 MB.", 'Repair']
+};
+const b = banners[st];
+const dialogs = {
+'Install from file': ['dialog', 'Install this pack?', "Toolbox checks the file's signature and contents before installing it. Nothing is downloaded, and your files never leave this device.", [['File', 'text-recognition-hindi-2.0.toolboxpack'], ['Pack', 'Text recognition, Hindi'], ['Version', '2.0'], ['Size', '31 MB on this disk'], ['License', lic]], [['Cancel', ''], ['Install', 'pri']]],
+'File for another computer': ['alertdialog', "This pack file is for another kind of computer", 'It was made for ' + (win ? 'a Mac' : 'Windows on a different processor') + ', so it can\u2019t be installed here. Nothing was installed. Get the pack file for ' + (win ? 'Windows on this processor' : 'Mac') + ' from the Toolbox releases page.', [['File', 'office-documents-3.2-' + (win ? 'mac' : 'windows-arm') + '.toolboxpack']], [['Choose another file…', ''], ['OK', 'pri']]],
+'File not signed': ['alertdialog', "This file isn't a Toolbox pack", "It isn't signed by Toolbox, so it can't be installed. Nothing was installed. Only use pack files from the Toolbox releases page.", [['File', 'text-recognition-hindi.toolboxpack']], [['Choose another file…', ''], ['OK', 'pri']]],
+'File failed check': ['alertdialog', "This pack file didn't pass its safety check", 'It may be damaged or changed since it was made, so it was not installed. Copy the file again from the Toolbox releases page, then try again.', [['File', 'text-recognition-hindi-2.0.toolboxpack']], [['Choose another file…', ''], ['OK', 'pri']]]
+};
+const d = dialogs[st];
+const used = { 'Empty': 'No packs installed. 48 GB free on this disk.', 'Low disk space': '2 installed, 105 MB used. 120 MB free on this disk.' }[st] || '3 installed, 415 MB used. 48 GB free on this disk.';
+return Object.assign(base, {
+rows: rows, total: used,
+banner: !!b, bannerRole: b ? b[0] : 'status', bannerColor: b ? b[1] : '', bannerTitle: b ? b[2] : '', bannerText: b ? b[3] : '', bannerAction: b ? b[4] : '',
+dialog: !!d, dRole: d ? d[0] : 'dialog', dTitle: d ? d[1] : '', dText: d ? d[2] : '', dFacts: d ? d[3].map((f) => ({ k: f[0], v: f[1] })) : [], dButtons: d ? d[4].map((x) => ({ label: x[0], cls: x[1] })) : []
+});
 }
 }
 </script>

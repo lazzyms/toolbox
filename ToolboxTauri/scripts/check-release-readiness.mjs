@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { inspectQpdf, readPin } from "./qpdf-pin.mjs";
+import { inspectPdftotext, inspectQpdf, readPin } from "./qpdf-pin.mjs";
 
 const projectFile = (path) => new URL(`../${path}`, import.meta.url);
 const config = JSON.parse(readFileSync(projectFile("src-tauri/tauri.conf.json"), "utf8"));
@@ -28,13 +28,22 @@ if (!/Privacy & Security[\s\S]*Open Anyway/.test(notesHeader)) throw new Error("
 const pin = readPin();
 console.log(`Release configuration passed: ${requiredIcons.length} icons, all Tauri targets, updater and ${canonicalExtensions.length} file associations configured, qpdf minimum ${pin.minimumVersion}`);
 
-const { values } = parseArgs({ options: { qpdf: { type: "string" }, target: { type: "string" } } });
-if (values.qpdf !== undefined || values.target !== undefined) {
-  const result = inspectQpdf({ path: values.qpdf, target: values.target, pin });
-  if (result.cause) {
-    console.error(`qpdf release check failed (${result.cause}): ${result.message}`);
-    process.exit(1);
-  }
-  console.log(`qpdf release check passed: ${result.message}`);
+const { values } = parseArgs({ options: { qpdf: { type: "string" }, pdftotext: { type: "string" }, target: { type: "string" } } });
+const helperChecks = [];
+if (values.qpdf !== undefined || (values.target !== undefined && values.pdftotext === undefined)) {
+  helperChecks.push(["qpdf", () => inspectQpdf({ path: values.qpdf, target: values.target, pin })]);
 }
-
+if (values.pdftotext !== undefined) {
+  helperChecks.push(["pdftotext", () => inspectPdftotext({ path: values.pdftotext, target: values.target })]);
+}
+let helperFailed = false;
+for (const [name, inspect] of helperChecks) {
+  const result = inspect();
+  if (result.cause) {
+    console.error(`${name} release check failed (${result.cause}): ${result.message}`);
+    helperFailed = true;
+  } else {
+    console.log(`${name} release check passed: ${result.message}`);
+  }
+}
+if (helperFailed) process.exit(1);
