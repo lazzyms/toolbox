@@ -8,6 +8,7 @@ use std::io::{BufReader, Seek};
 use std::path::{Path, PathBuf};
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
+use crate::kit::common::watermark::{WatermarkOptions, WatermarkPosition};
 use crate::kit::contracts::ToolError;
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -50,13 +51,7 @@ pub enum ImageEdit {
         #[serde(default = "default_crop_anchor")] anchor: String,
     },
     Tone { brightness: i32, contrast: f32, #[serde(default)] saturation: f32, #[serde(default)] exposure: f32 },
-    Watermark {
-        #[serde(default)] text: Option<String>,
-        #[serde(default)] logo_path: Option<PathBuf>,
-        opacity: u8,
-        #[serde(default = "default_watermark_position")] x: u32,
-        #[serde(default = "default_watermark_position")] y: u32,
-    },
+    Watermark(WatermarkOptions),
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -118,8 +113,7 @@ impl ImageEditPlan {
                 ImageEdit::Crop { mode, aspect_width, aspect_height, .. } if mode == "aspectRatio" && (*aspect_width == 0 || *aspect_height == 0) => return Err("Aspect ratio dimensions must be positive.".to_string()),
                 ImageEdit::Crop { mode, .. } if !matches!(mode.as_str(), "rectangle" | "aspectRatio") => return Err(format!("Unsupported crop mode: {mode}.")),
                 ImageEdit::Tone { brightness, contrast, saturation, exposure } => ToneStep { brightness: *brightness, contrast: *contrast, saturation: *saturation, exposure: *exposure }.validate()?,
-                ImageEdit::Watermark { opacity, text, logo_path, .. } if *opacity > 100 => return Err("Watermark opacity must be between 0 and 100.".to_string()),
-                ImageEdit::Watermark { text, logo_path, .. } if text.as_deref().is_none_or(|value| value.trim().is_empty()) && logo_path.is_none() => return Err("Provide watermark text or a logo image.".to_string()),
+                ImageEdit::Watermark(options) => options.validate()?,
                 _ => {}
             }
         }
@@ -324,10 +318,7 @@ fn apply_edit_plan(plan: &ImageEditPlan, mut image: DynamicImage, mut format: cr
             ImageEdit::Tone { brightness, contrast, saturation, exposure } => {
                 image = ToneStep { brightness: *brightness, contrast: *contrast, saturation: *saturation, exposure: *exposure }.apply(image)?;
             }
-            ImageEdit::Watermark { text, logo_path, opacity, x, y } => {
-                let request = WatermarkRequest { paths: vec![], opacity: *opacity, text: text.clone(), logo_path: logo_path.clone(), x: *x, y: *y, output_location: OutputLocation::AlongsideInput };
-                image = apply_watermark(image, &request)?;
-            }
+            ImageEdit::Watermark(options) => image = apply_watermark(image, options)?,
         }
     }
     Ok((image, format, quality.clamp(1, 100)))
@@ -476,11 +467,7 @@ pub struct ToneStep {
 #[serde(rename_all = "camelCase")]
 pub struct WatermarkRequest {
     pub paths: Vec<PathBuf>,
-    pub opacity: u8,
-    #[serde(default)] pub text: Option<String>,
-    #[serde(default)] pub logo_path: Option<PathBuf>,
-    #[serde(default = "default_watermark_position")] pub x: u32,
-    #[serde(default = "default_watermark_position")] pub y: u32,
+    #[serde(flatten)] pub options: WatermarkOptions,
     pub output_location: OutputLocation,
 }
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -657,21 +644,26 @@ impl ToneStep {
 }
 pub fn watermark(request: &WatermarkRequest, input: PathBuf) -> JobOutcome {
     transform(&request.paths, input, &request.output_location, "-watermarked", |image| {
-        apply_watermark(image, request)
+        apply_watermark(image, &request.options)
     })
 }
 
-fn apply_watermark(image: DynamicImage, request: &WatermarkRequest) -> Result<DynamicImage, String> {
+fn apply_watermark(image: DynamicImage, options: &WatermarkOptions) -> Result<DynamicImage, String> {
+    options.validate()?;
+    let (x, y) = match options.position {
+        Some(WatermarkPosition::Offset { x, y }) => (x, y),
+        _ => (16, 16),
+    };
     let mut image = image.to_rgba8();
     let original_alpha = image.pixels().map(|pixel| pixel.0[3]).collect::<Vec<_>>();
-    let alpha = request.opacity.min(100) as u16 * 255 / 100;
+    let alpha = options.opacity as u16 * 255 / 100;
     let mut watermark = image::RgbaImage::new(image.width(), image.height());
-    if let Some(text) = request.text.as_deref().filter(|text| !text.trim().is_empty()) {
-        draw_text(&mut watermark, text, request.x, request.y, alpha as u8)?;
+    if let Some(text) = options.text() {
+        draw_text(&mut watermark, text, x, y, alpha as u8)?;
     }
-    if let Some(path) = request.logo_path.as_ref() {
+    if let Some(path) = options.logo_path.as_ref() {
         let logo = crate::kit::images::load_image(path)?.to_rgba8();
-        image::imageops::overlay(&mut watermark, &logo, request.x as i64, request.y as i64);
+        image::imageops::overlay(&mut watermark, &logo, x as i64, y as i64);
     }
     if watermark.pixels().all(|pixel| pixel.0[3] == 0) {
         return Err("Provide watermark text or a logo image.".to_string());
@@ -680,8 +672,6 @@ fn apply_watermark(image: DynamicImage, request: &WatermarkRequest) -> Result<Dy
     for (pixel, alpha) in image.pixels_mut().zip(original_alpha) { pixel.0[3] = alpha; }
     Ok(DynamicImage::ImageRgba8(image))
 }
-
-fn default_watermark_position() -> u32 { 16 }
 
 const WATERMARK_FONT_RESOURCE: &str = "watermarkFont";
 const WATERMARK_FONT_FILE: &str = "DejaVuSans.ttf";
@@ -1119,6 +1109,14 @@ mod tests {
     use sha2::{Digest, Sha256};
     fn path(name: &str) -> PathBuf { std::env::temp_dir().join(format!("toolbox_tiff_{}_{}", std::process::id(), name)) }
 
+    fn text_watermark(input: &Path, text: &str, opacity: u8, offset: u32) -> WatermarkRequest {
+        WatermarkRequest {
+            paths: vec![input.to_path_buf()],
+            options: WatermarkOptions { text: Some(text.to_string()), logo_path: None, size: None, opacity, color: None, position: Some(WatermarkPosition::Offset { x: offset, y: offset }), rotation: 0.0 },
+            output_location: OutputLocation::AlongsideInput,
+        }
+    }
+
     #[test]
     fn splits_and_combines_pages_in_order() {
         let input = path("source.tiff");
@@ -1198,7 +1196,7 @@ mod tests {
         let input = path("watermark-input.png");
         let image = image::RgbaImage::from_pixel(64, 32, image::Rgba([10, 20, 30, 77]));
         image.save(&input).unwrap();
-        let result = watermark(&WatermarkRequest { paths: vec![input.clone()], opacity: 50, text: Some("TOOL".to_string()), logo_path: None, x: 2, y: 2, output_location: OutputLocation::AlongsideInput }, input.clone());
+        let result = watermark(&text_watermark(&input, "TOOL", 50, 2), input.clone());
         let output = result.output_paths().first().unwrap();
         let output_image = image::open(output).unwrap().to_rgba8();
         assert!(output_image.pixels().any(|pixel| pixel.0[0..3] != [10, 20, 30]));
@@ -1234,15 +1232,7 @@ mod tests {
         let existing_bytes = b"existing output must remain intact";
         std::fs::write(&output, existing_bytes).unwrap();
 
-        let result = watermark(&WatermarkRequest {
-            paths: vec![input.clone()],
-            opacity: 80,
-            text: Some("Café Ж \u{10FFFF}".to_string()),
-            logo_path: None,
-            x: 4,
-            y: 4,
-            output_location: OutputLocation::AlongsideInput,
-        }, input.clone());
+        let result = watermark(&text_watermark(&input, "Café Ж \u{10FFFF}", 80, 4), input.clone());
 
         let error = result.error().expect("unsupported text must fail");
         assert!(error.message.contains("Unsupported watermark characters"));
@@ -1281,15 +1271,7 @@ mod tests {
         let existing_bytes = b"do not overwrite this output";
         std::fs::write(&existing_output, existing_bytes).unwrap();
 
-        let result = watermark(&WatermarkRequest {
-            paths: vec![input.clone()],
-            opacity: 50,
-            text: Some("Safe".to_string()),
-            logo_path: None,
-            x: 4,
-            y: 4,
-            output_location: OutputLocation::AlongsideInput,
-        }, input.clone());
+        let result = watermark(&text_watermark(&input, "Safe", 50, 4), input.clone());
 
         assert!(result.error().is_none(), "watermark failed: {:?}", result.error());
         let output = result.output_paths().first().expect("watermark output");

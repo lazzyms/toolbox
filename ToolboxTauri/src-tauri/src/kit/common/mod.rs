@@ -1,5 +1,6 @@
 pub mod batch_runner;
 pub mod limits;
+pub mod watermark;
 #[cfg(all(test, unix))]
 pub mod fake_helper;
 

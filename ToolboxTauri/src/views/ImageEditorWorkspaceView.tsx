@@ -11,6 +11,7 @@ import type {
   OutputLocation,
   ToolDefinition,
   ToolResult,
+  WatermarkImagesRequest,
 } from "../contracts";
 import {
   commitImageEdit,
@@ -75,8 +76,7 @@ const buildImageEditDraft = (id: string, values: ImageEditorDraftValues): ImageE
     kind: "watermark",
     text: values.watermarkText,
     opacity: values.watermarkOpacity,
-    x: values.watermarkX,
-    y: values.watermarkY,
+    position: { x: values.watermarkX, y: values.watermarkY },
   };
   return null;
 };
@@ -235,7 +235,7 @@ export const ImageEditorWorkspaceView = ({
           return invoke<ToolResult>("export_image_edit_stack", { runId, request: { paths, steps: imageEditStackRequestSteps(stack.present), outputLocation } });
         }
         return invoke<ToolResult>("watermark_images", { runId,
-          request: { paths, opacity: watermarkOpacity, text: watermarkText, x: watermarkX, y: watermarkY, outputLocation },
+          request: { paths, opacity: watermarkOpacity, text: watermarkText, position: { x: watermarkX, y: watermarkY }, outputLocation } satisfies WatermarkImagesRequest,
         });
       }}
       onRunCombined={(paths, outputLocation, { runId }) => invoke<ToolResult>("export_image_edit_plan", { runId,
