@@ -1529,3 +1529,10 @@ kbd.shortcut-hint {
   gap: 2px 8px;
 }
 .image-edit-stack-focus > p { grid-column: 1 / -1; margin: 0; }
+.image-edit-stack-separator { color: var(--muted-foreground); margin-right: 6px; }
+.image-resize-size {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: end;
+  gap: 8px;
+}

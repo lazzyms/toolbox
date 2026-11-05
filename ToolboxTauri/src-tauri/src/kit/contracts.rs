@@ -842,7 +842,7 @@ mod tests {
         assert!(!images.accepted_extensions.contains(&".tif".to_string()));
         assert!(!images.accepted_extensions.contains(&".tiff".to_string()));
         let stack = native_capability("export_image_edit_stack").unwrap();
-        assert_eq!((stack.input_cardinality, stack.output_suffix.as_str(), stack.many_to_one), (InputCardinality::Multiple, "-cropped", false), "the edit stack runs every image as its own job");
+        assert_eq!((stack.input_cardinality, stack.output_suffix.as_str(), stack.many_to_one), (InputCardinality::Multiple, "-edited", false), "the edit stack runs every image as its own job and names a combined stack -edited");
         assert_eq!(native_capability("crop_images").unwrap().input_cardinality, InputCardinality::Single);
         assert!(!native_capability("extract_gif_frames").unwrap().supports_preview);
         let pdf = native_capability("pdf_to_text").unwrap();

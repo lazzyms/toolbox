@@ -43,14 +43,20 @@ export interface EditHistory<T> {
 export type ImageEditHistory = EditHistory<ImageEditPlan>;
 
 export type ImageCropStep = Omit<Extract<ImageEditOperation, { kind: "crop" }>, "kind">;
+export type ImageResizeStep = Omit<Extract<ImageEditOperation, { kind: "resize" }>, "kind">;
 
 /** The shared edit stack holds at most one of each step. Native runs them in a fixed order, so the stack has no order of its own. */
 export interface ImageEditStack {
   crop?: ImageCropStep;
+  resize?: ImageResizeStep;
 }
 
-export const imageEditStackSteps = ["crop"] as const;
+/** The fixed run order. */
+export const imageEditStackSteps = ["crop", "resize"] as const;
 export type ImageEditStackStep = (typeof imageEditStackSteps)[number];
+
+export const imageEditStepLabels: Record<ImageEditStackStep, string> = { crop: "Crop", resize: "Resize" };
+const imageEditStepSuffixes: Record<ImageEditStackStep, string> = { crop: "-cropped", resize: "-resized" };
 
 export const presentImageEditSteps = (stack: ImageEditStack) => imageEditStackSteps.filter((step) => stack[step] !== undefined);
 
@@ -58,8 +64,42 @@ export const defaultImageCropStep = (): ImageCropStep => ({
   mode: "aspectRatio", aspectWidth: 4, aspectHeight: 5, anchor: "center", x: 0, y: 0, width: 0, height: 0,
 });
 
-// A single step names its own output; #513 adds "-edited" for more than one.
-export const imageEditStackSuffix = (stack: ImageEditStack) => (stack.crop ? "-cropped" : "-edited");
+export const defaultImageResizeStep = (): ImageResizeStep => ({
+  mode: "longestSide", longestSide: 2048, width: 1600, height: 1200, percentage: 50, resampling: "lanczos", keepAspectRatio: true,
+});
+
+/** A single step names its own output; more than one is named -edited. */
+export const imageEditStackSuffix = (stack: ImageEditStack) => {
+  const steps = presentImageEditSteps(stack);
+  return steps.length === 1 ? imageEditStepSuffixes[steps[0]] : "-edited";
+};
+
+/** The request's steps, keyed in run order whatever order they were added in. */
+export const imageEditStackRequestSteps = (stack: ImageEditStack): ImageEditStack =>
+  Object.fromEntries(presentImageEditSteps(stack).map((step) => [step, stack[step]]));
+
+/** The same steps as a preview plan, in run order. */
+export const imageEditStackPreviewPlan = (stack: ImageEditStack): ImageEditPlan => ({
+  edits: presentImageEditSteps(stack).map((step): ImageEditOperation => step === "crop"
+    ? { kind: "crop", ...stack.crop! }
+    : { kind: "resize", ...stack.resize! }),
+});
+
+const MAX_DIMENSION = 16384;
+const inRange = (value: number, min: number, max: number) => Number.isInteger(value) && value >= min && value <= max;
+
+/** What to fix before the resize step can run, or null. Native checks the same limits. */
+export const imageResizeStepProblem = (resize: ImageResizeStep): { field: string; message: string } | null => {
+  if (resize.mode === "percentage") {
+    return inRange(resize.percentage, 1, 1000) ? null : { field: "percentage", message: "Enter a percentage from 1 to 1000." };
+  }
+  if (resize.mode === "longestSide") {
+    return inRange(resize.longestSide, 1, MAX_DIMENSION) ? null : { field: "longest side", message: `Enter a longest side from 1 to ${MAX_DIMENSION} pixels.` };
+  }
+  return inRange(resize.width, 1, MAX_DIMENSION) && inRange(resize.height, 1, MAX_DIMENSION)
+    ? null
+    : { field: "size", message: `Enter a width and height from 1 to ${MAX_DIMENSION} pixels.` };
+};
 
 export const createEditHistory = <T>(present: T): EditHistory<T> => ({ past: [], present, future: [] });
 

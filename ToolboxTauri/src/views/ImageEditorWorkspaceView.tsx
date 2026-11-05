@@ -17,10 +17,13 @@ import {
   createEditHistory,
   createImageEditHistory,
   defaultImageCropStep,
+  defaultImageResizeStep,
   editedImageExtension,
   emptyImageEditPlan,
   imageEditRequestPlan,
+  imageEditStackRequestSteps,
   imageEditStackSuffix,
+  imageEditStepLabels,
   planWithDraft,
   presentImageEditSteps,
   pushEdit,
@@ -33,6 +36,8 @@ import {
   type ImageEditPlan,
   type ImageEditHistory,
   type ImageEditStack,
+  type ImageEditStackStep,
+  type ImageResizeStep,
 } from "../features/image-editor/session";
 import { ImageEditStackPanel, type StackMessage } from "./ImageEditStackPanel";
 import { Button } from "../components/ui/button";
@@ -41,7 +46,6 @@ import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { NativeSelect } from "../components/ui/native-select";
 import { Slider } from "../components/ui/slider";
-import { Switch } from "../components/ui/switch";
 import { ShortcutHint } from "../components/ShortcutHint";
 import { shortcutTarget } from "../shortcuts";
 import { UtilityRegistry, workspaceById } from "../registry";
@@ -49,12 +53,6 @@ import { useToolAvailability } from "../ToolAvailabilityContext";
 
 type ImageEditorDraftValues = {
   format: ConvertImagesRequest["format"];
-  width: number;
-  height: number;
-  resizeMode: string;
-  percentage: number;
-  resampling: string;
-  keepRatio: boolean;
   degrees: number;
   flip: string;
   brightness: number;
@@ -67,20 +65,14 @@ type ImageEditorDraftValues = {
   watermarkY: number;
 };
 
-// Crop is a step in the shared edit stack, not a draft of the edit plan.
+// Tools that are steps in the shared edit stack, not drafts of the edit plan.
+const stackStepForTool: Partial<Record<string, ImageEditStackStep>> = { crop: "crop", resize: "resize" };
+const toolForStackStep: Record<ImageEditStackStep, AtomicToolId> = { crop: "crop", resize: "resize" };
+const stackStepDefaults: { [Step in ImageEditStackStep]: () => NonNullable<ImageEditStack[Step]> } = { crop: defaultImageCropStep, resize: defaultImageResizeStep };
+
 const buildImageEditDraft = (id: string, values: ImageEditorDraftValues): ImageEditOperation | null => {
-  if (id === "crop") return null;
+  if (stackStepForTool[id]) return null;
   if (id === "heic-convert") return { kind: "convert", format: values.format };
-  if (id === "resize") return {
-    kind: "resize",
-    width: values.width,
-    height: values.height,
-    mode: values.resizeMode,
-    percentage: values.percentage,
-    longestSide: values.width,
-    resampling: values.resampling,
-    keepAspectRatio: values.keepRatio,
-  };
   if (id === "rotate") return { kind: "rotate", degrees: values.degrees, flip: values.flip };
   if (id === "image-watermark") return {
     kind: "watermark",
@@ -119,10 +111,10 @@ const EditImageTabs = ({ activeId, onSelect }: { activeId: AtomicToolId; onSelec
     const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
     if (!step) return;
     event.preventDefault();
-    const list = event.currentTarget;
     const index = tools.findIndex((tool) => tool.id === activeId);
     onSelect(tools[(index + step + tools.length) % tools.length].id);
-    requestAnimationFrame(() => list.querySelector<HTMLButtonElement>('[aria-selected="true"]')?.focus());
+    // Stack steps and plan edits render the tabs in different panels, so find the list again after the switch.
+    requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('[role="tablist"][aria-label="Edit Image"] [aria-selected="true"]')?.focus());
   };
   return (
     <div className="edit-image-tabs" role="tablist" aria-label="Edit Image" onKeyDown={onKeyDown}>
@@ -163,12 +155,6 @@ export const ImageEditorWorkspaceView = ({
   onWorkspaceSourceAction?: (action: WorkspaceSourceAction | null) => void;
 }) => {
   const [format, setFormat] = useState<ConvertImagesRequest["format"]>("png");
-  const [width, setWidth] = useState(1024);
-  const [height, setHeight] = useState(768);
-  const [resizeMode, setResizeMode] = useState("exact");
-  const [percentage, setPercentage] = useState(100);
-  const [resampling, setResampling] = useState("lanczos");
-  const [keepRatio, setKeepRatio] = useState(true);
   const [degrees, setDegrees] = useState(0);
   const [flip, setFlip] = useState("none");
   const [brightness, setBrightness] = useState(0);
@@ -182,8 +168,7 @@ export const ImageEditorWorkspaceView = ({
   const [history, setHistory] = useState<ImageEditHistory>(() => createImageEditHistory());
   const [committedDraftKey, setCommittedDraftKey] = useState<string | null>(null);
   const draft = buildImageEditDraft(activeUtility.id, {
-    format, width, height, resizeMode, percentage, resampling, keepRatio,
-    degrees, flip, brightness, contrast, saturation, exposure,
+    format, degrees, flip, brightness, contrast, saturation, exposure,
     watermarkText, watermarkOpacity, watermarkX, watermarkY,
   });
   const draftKey = JSON.stringify(draft);
@@ -220,10 +205,15 @@ export const ImageEditorWorkspaceView = ({
     });
     setStackMessage(message);
   }, []);
-  const addCrop = useCallback(() => changeStack(
-    (current) => current.crop ? null : { ...current, crop: defaultImageCropStep() },
-    { text: "Crop added as step 1. Steps always run in the same order.", undo: false },
-  ), [changeStack]);
+  const stackStep = stackStepForTool[activeUtility.id];
+  const addStep = useCallback((step: ImageEditStackStep) => {
+    if (stack.present[step]) return;
+    const position = presentImageEditSteps({ ...stack.present, [step]: stackStepDefaults[step]() }).indexOf(step) + 1;
+    changeStack(
+      (current) => current[step] ? null : { ...current, [step]: stackStepDefaults[step]() },
+      { text: `${imageEditStepLabels[step]} added as step ${position}. Steps always run Crop, Resize, Rotate and Flip, Colour and Tone, Watermark, then Remove Metadata.`, undo: false },
+    );
+  }, [changeStack, stack.present]);
   const moveStackHistory = useCallback((move: (current: EditHistory<ImageEditStack>) => EditHistory<ImageEditStack>) => {
     lastCoalesceKey.current = null;
     setStack(move);
@@ -232,9 +222,9 @@ export const ImageEditorWorkspaceView = ({
   const onStackUndo = useCallback(() => moveStackHistory(undoImageEdit), [moveStackHistory]);
   const onStackRedo = useCallback(() => moveStackHistory(redoImageEdit), [moveStackHistory]);
 
-  // Choosing Crop adds its step, or shows it when the stack already has one.
+  // Choosing a stack tool adds its step, or shows it when the stack already has one.
   useEffect(() => {
-    if (activeUtility.id === "crop" && !stack.present.crop) addCrop();
+    if (stackStep) addStep(stackStep);
   }, [activeUtility.id]);
 
   return (
@@ -247,7 +237,7 @@ export const ImageEditorWorkspaceView = ({
       onActivationAccepted={onActivationAccepted}
       onFilesChange={onFilesChange}
       onWorkspaceSourceAction={onWorkspaceSourceAction}
-      exampleName={(path) => activeUtility.id === "crop"
+      exampleName={(path) => stackStep
         ? exampleOutputName(path, activeUtility.command, imageEditStackSuffix(stack.present), editedImageExtension(emptyImageEditPlan(), path))
         : exampleOutputName(path, activeUtility.command, "-edited", editedImageExtension(editPlan, path))}
       onRun={(paths, outputLocation, { runId }) => {
@@ -256,16 +246,11 @@ export const ImageEditorWorkspaceView = ({
             request: { paths, format, outputLocation } satisfies ConvertImagesRequest,
           });
         }
-        if (activeUtility.id === "resize") {
-          return invoke<ToolResult>("resize_images", { runId,
-            request: { paths, width, height, mode: resizeMode, percentage, longestSide: width, resampling, keepAspectRatio: keepRatio, outputLocation },
-          });
-        }
         if (activeUtility.id === "rotate") {
           return invoke<ToolResult>("rotate_images", { runId, request: { paths, degrees, flip, outputLocation } });
         }
-        if (activeUtility.id === "crop") {
-          return invoke<ToolResult>("export_image_edit_stack", { runId, request: { paths, steps: stack.present, outputLocation } });
+        if (stackStep) {
+          return invoke<ToolResult>("export_image_edit_stack", { runId, request: { paths, steps: imageEditStackRequestSteps(stack.present), outputLocation } });
         }
         if (activeUtility.id === "image-watermark") {
           return invoke<ToolResult>("watermark_images", { runId,
@@ -280,17 +265,23 @@ export const ImageEditorWorkspaceView = ({
         request: { paths, plan: imageEditRequestPlan(editPlan, outputLocation) },
       })}
     >
-      {(props) => activeUtility.id === "crop" ? (
+      {(props) => stackStep ? (
         <ImageEditStackPanel
           {...props}
           tabs={onSelectTool && <EditImageTabs activeId={activeUtility.id} onSelect={onSelectTool} />}
           history={stack}
           message={stackMessage}
-          onAddCrop={addCrop}
+          focus={stackStep}
+          onFocus={(step) => { if (step !== stackStep) onSelectTool?.(toolForStackStep[step]); }}
+          onAdd={(step) => {
+            addStep(step);
+            if (step !== stackStep) onSelectTool?.(toolForStackStep[step]);
+          }}
           onEditCrop={(crop: ImageCropStep, coalesceKey?: string) => changeStack((current) => ({ ...current, crop }), null, coalesceKey)}
-          onRemoveCrop={() => changeStack(
-            (current) => current.crop ? { ...current, crop: undefined } : null,
-            { text: "Crop removed. The other steps keep their settings.", undo: true },
+          onEditResize={(resize: ImageResizeStep, coalesceKey?: string) => changeStack((current) => ({ ...current, resize }), null, coalesceKey)}
+          onRemove={(step) => changeStack(
+            (current) => current[step] ? { ...current, [step]: undefined } : null,
+            { text: `${imageEditStepLabels[step]} removed. The other steps keep their settings.`, undo: true },
           )}
           onUndo={onStackUndo}
           onRedo={onStackRedo}
@@ -305,18 +296,6 @@ export const ImageEditorWorkspaceView = ({
       ) : <ImageEditorControls {...props} utility={activeUtility} onSelectTool={onSelectTool} {...{
         format,
         setFormat,
-        width,
-        setWidth,
-        height,
-        setHeight,
-        resizeMode,
-        setResizeMode,
-        percentage,
-        setPercentage,
-        resampling,
-        setResampling,
-        keepRatio,
-        setKeepRatio,
         degrees,
         setDegrees,
         flip,
@@ -373,18 +352,6 @@ type ImageEditorControlsProps = {
   onSelectTool?: (id: AtomicToolId) => void;
   format: ConvertImagesRequest["format"];
   setFormat: (value: ConvertImagesRequest["format"]) => void;
-  width: number;
-  setWidth: (value: number) => void;
-  height: number;
-  setHeight: (value: number) => void;
-  resizeMode: string;
-  setResizeMode: (value: string) => void;
-  percentage: number;
-  setPercentage: (value: number) => void;
-  resampling: string;
-  setResampling: (value: string) => void;
-  keepRatio: boolean;
-  setKeepRatio: (value: boolean) => void;
   degrees: number;
   setDegrees: (value: number) => void;
   flip: string;
@@ -430,18 +397,6 @@ const ImageEditorControls = ({
   onSelectTool,
   format,
   setFormat,
-  width,
-  setWidth,
-  height,
-  setHeight,
-  resizeMode,
-  setResizeMode,
-  percentage,
-  setPercentage,
-  resampling,
-  setResampling,
-  keepRatio,
-  setKeepRatio,
   degrees,
   setDegrees,
   flip,
@@ -651,25 +606,6 @@ const ImageEditorControls = ({
               <option value="png">PNG</option><option value="jpg">JPEG</option><option value="webp">WebP</option><option value="heic">HEIC</option>
             </NativeSelect>
           </div>
-        )}
-        {utility.id === "resize" && (
-          <>
-            <div className="workspace-field"><Label htmlFor="image-resize-mode">Resize mode</Label><NativeSelect id="image-resize-mode" aria-label="Resize mode" value={resizeMode} onChange={(event) => setResizeMode(event.target.value)}>
-              <option value="exact">Exact size</option><option value="percentage">Percentage</option><option value="longestSide">Longest side</option>
-            </NativeSelect></div>
-            {resizeMode === "percentage" ? (
-              <div className="workspace-field"><Label htmlFor="image-resize-percentage">Scale</Label><Input id="image-resize-percentage" aria-label="Resize percentage" type="number" min="1" max="1000" value={percentage} onChange={(event) => setPercentage(Number(event.target.value))} /></div>
-            ) : (
-              <div className="workspace-field-grid">
-                <div className="workspace-field"><Label htmlFor="image-resize-width">Width</Label><Input id="image-resize-width" aria-label="Width" type="number" min="1" value={width} onChange={(event) => setWidth(Number(event.target.value))} /></div>
-                <div className="workspace-field"><Label htmlFor="image-resize-height">{resizeMode === "longestSide" ? "Longest side" : "Height"}</Label><Input id="image-resize-height" aria-label={resizeMode === "longestSide" ? "Longest side" : "Height"} type="number" min="1" value={resizeMode === "longestSide" ? width : height} onChange={(event) => { if (resizeMode === "longestSide") setWidth(Number(event.target.value)); else setHeight(Number(event.target.value)); }} /></div>
-              </div>
-            )}
-            <div className="workspace-check"><Label htmlFor="image-keep-ratio">Preserve aspect ratio</Label><Switch id="image-keep-ratio" checked={keepRatio} onCheckedChange={setKeepRatio} /></div>
-            <div className="workspace-field"><Label htmlFor="image-resampling">Resampling</Label><NativeSelect id="image-resampling" aria-label="Resampling" value={resampling} onChange={(event) => setResampling(event.target.value)}>
-              <option value="lanczos">Lanczos — best quality</option><option value="bicubic">Bicubic — balanced</option><option value="nearest">Nearest — sharp edges</option>
-            </NativeSelect></div>
-          </>
         )}
         {utility.id === "rotate" && (
           <div className="workspace-field-grid">

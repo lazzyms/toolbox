@@ -187,23 +187,34 @@ pub struct ImageEditStackRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ImageEditSteps {
     #[serde(default)] pub crop: Option<CropStep>,
+    #[serde(default)] pub resize: Option<ResizeStep>,
 }
 
 const STACK_QUALITY: u8 = 90;
 
 impl ImageEditSteps {
+    /// One step keeps its tool's suffix; any combination is named -edited.
     fn suffix(&self) -> Result<&'static str, String> {
-        match self.crop {
-            Some(_) => Ok("-cropped"),
-            None => Err("Add a step to the stack before running.".to_string()),
+        let present = [self.crop.as_ref().map(|_| "-cropped"), self.resize.as_ref().map(|_| "-resized")];
+        let mut suffixes = present.into_iter().flatten();
+        match (suffixes.next(), suffixes.next()) {
+            (None, _) => Err("Add a step to the stack before running.".to_string()),
+            (Some(suffix), None) => Ok(suffix),
+            (Some(_), Some(_)) => Ok("-edited"),
         }
     }
 
-    // Crop runs first, so its rectangle is always measured in source pixels.
-    fn apply(&self, image: DynamicImage) -> Result<DynamicImage, String> {
-        let Some(crop) = &self.crop else { return Ok(image) };
-        let (x, y, width, height) = crop_rect(image.width(), image.height(), crop)?;
-        Ok(image.crop_imm(x, y, width, height))
+    // The order is fixed here, never by the order the steps were added: crop runs first, so its
+    // rectangle is always measured in source pixels, then resize scales what is left.
+    fn apply(&self, mut image: DynamicImage) -> Result<DynamicImage, String> {
+        if let Some(crop) = &self.crop {
+            let (x, y, width, height) = crop_rect(image.width(), image.height(), crop)?;
+            image = image.crop_imm(x, y, width, height);
+        }
+        if let Some(resize) = &self.resize {
+            image = resize.apply(image)?;
+        }
+        Ok(image)
     }
 }
 
@@ -218,9 +229,11 @@ pub fn export_edit_stack(request: &ImageEditStackRequest, input: PathBuf) -> Job
         Ok(image) => image,
         Err(error) => return failure(input, error),
     };
+    // A step that cannot apply to this image (a crop outside it, a size past the limits) is a
+    // problem with the request, not with the file.
     let edited = match request.steps.apply(source) {
         Ok(image) => image,
-        Err(error) => return failure(input, error),
+        Err(error) => return JobOutcome::failure(input, ToolError::invalid_input(error)),
     };
     let bytes = match crate::kit::images::encode(&edited, format, STACK_QUALITY) {
         Ok(bytes) => bytes,
@@ -264,12 +277,11 @@ fn apply_edit_plan(plan: &ImageEditPlan, mut image: DynamicImage, mut format: cr
             ImageEdit::Convert { format: requested } => format = parse_output_format(requested)?,
             ImageEdit::Compress { quality: requested, lossless } => { quality = if *lossless { 100 } else { *requested }; },
             ImageEdit::Resize { width, height, mode, percentage, longest_side, resampling, keep_aspect_ratio } => {
-                let request = ResizeRequest { paths: vec![], width: *width, height: *height, mode: mode.clone(), resampling: resampling.clone(), keep_aspect_ratio: *keep_aspect_ratio, percentage: *percentage, longest_side: *longest_side, output_location: OutputLocation::AlongsideInput };
+                let step = ResizeStep { width: *width, height: *height, mode: mode.clone(), resampling: resampling.clone(), keep_aspect_ratio: *keep_aspect_ratio, percentage: *percentage, longest_side: *longest_side };
                 let old_width = image.width();
                 let old_height = image.height();
-                let (width, height) = resize_dimensions(image.width(), image.height(), &request)?;
-                let filter = match resampling.as_str() { "nearest" => image::imageops::FilterType::Nearest, "bicubic" => image::imageops::FilterType::CatmullRom, _ => image::imageops::FilterType::Lanczos3 };
-                image = image.resize_exact(width, height, filter);
+                image = step.apply(image)?;
+                let (width, height) = (image.width(), image.height());
                 geometry.push(ImageGeometryStep::Resize { from_width: old_width, from_height: old_height, to_width: width, to_height: height });
             }
             ImageEdit::Rotate { degrees, flip } => {
@@ -391,12 +403,20 @@ pub fn inspect_tiff_pages(request: &TiffPreviewRequest) -> Result<Vec<ImagePrevi
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResizeRequest {
-    pub paths: Vec<PathBuf>, pub width: u32, pub height: u32,
+    pub paths: Vec<PathBuf>,
+    #[serde(flatten)] pub resize: ResizeStep,
+    pub output_location: OutputLocation,
+}
+/// How to size each image: a width-and-height box (fitted inside unless the aspect lock is off),
+/// a percentage, or the length of the longer edge.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResizeStep {
+    #[serde(default)] pub width: u32, #[serde(default)] pub height: u32,
     #[serde(default = "default_resize_mode")] pub mode: String,
     #[serde(default = "default_resampling")] pub resampling: String,
     #[serde(default = "default_keep_aspect_ratio")] pub keep_aspect_ratio: bool,
     #[serde(default)] pub percentage: u32, #[serde(default)] pub longest_side: u32,
-    pub output_location: OutputLocation,
 }
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -484,21 +504,27 @@ pub struct MetadataRequest { pub paths: Vec<PathBuf>, pub output_location: Outpu
 pub struct MetadataReport { pub path: PathBuf, pub exif: bool, pub gps: bool, pub xmp: bool, pub icc: bool, pub orientation: bool, pub unsupported: Vec<String> }
 
 pub fn resize(request: &ResizeRequest, input: PathBuf) -> JobOutcome {
-    transform(request.paths.as_slice(), input, &request.output_location, "-resized", |image| {
-        let (width, height) = resize_dimensions(image.width(), image.height(), request)?;
-        let filter = match request.resampling.as_str() { "nearest" => image::imageops::FilterType::Nearest, "bicubic" => image::imageops::FilterType::CatmullRom, _ => image::imageops::FilterType::Lanczos3 };
+    transform(request.paths.as_slice(), input, &request.output_location, "-resized", |image| request.resize.apply(image))
+}
+
+impl ResizeStep {
+    fn apply(&self, image: DynamicImage) -> Result<DynamicImage, String> {
+        let (width, height) = resize_dimensions(image.width(), image.height(), self)?;
+        let filter = match self.resampling.as_str() { "nearest" => image::imageops::FilterType::Nearest, "bicubic" => image::imageops::FilterType::CatmullRom, _ => image::imageops::FilterType::Lanczos3 };
         Ok(image.resize_exact(width, height, filter))
-    })
+    }
 }
 
 fn default_resize_mode() -> String { "exact".to_string() }
 fn default_resampling() -> String { "lanczos".to_string() }
 fn default_keep_aspect_ratio() -> bool { true }
 
-fn resize_dimensions(source_width: u32, source_height: u32, request: &ResizeRequest) -> Result<(u32, u32), String> {
+fn resize_dimensions(source_width: u32, source_height: u32, request: &ResizeStep) -> Result<(u32, u32), String> {
+    if request.mode == "exact" && (request.width == 0 || request.height == 0 || request.width > 16384 || request.height > 16384) {
+        return Err("Resize dimensions must be between 1 and 16384 pixels.".to_string());
+    }
     let dimensions = match request.mode.as_str() {
         "exact" if request.keep_aspect_ratio => {
-            if request.width == 0 || request.height == 0 { return Err("Resize dimensions must be positive.".to_string()); }
             let scale = (request.width as f64 / source_width as f64).min(request.height as f64 / source_height as f64);
             (((source_width as f64 * scale).round() as u32).max(1), ((source_height as f64 * scale).round() as u32).max(1))
         }
@@ -518,7 +544,8 @@ fn resize_dimensions(source_width: u32, source_height: u32, request: &ResizeRequ
     Ok(dimensions)
 }
 
-fn scale_dimension(value: u32, percentage: u32) -> u32 { ((value as u64 * percentage as u64 + 50) / 100).max(1).min(16384) as u32 }
+// Not clamped: a result past 16384 px is refused by resize_dimensions rather than silently distorted.
+fn scale_dimension(value: u32, percentage: u32) -> u32 { ((value as u64 * percentage as u64 + 50) / 100).clamp(1, u32::MAX as u64) as u32 }
 pub fn rotate(request: &RotateRequest, input: PathBuf) -> JobOutcome {
     transform(request.paths.as_slice(), input, &request.output_location, "-rotated", |image| {
         let image = match request.degrees.rem_euclid(360) { 90 => image.rotate90(), 180 => image.rotate180(), 270 => image.rotate270(), 0 => image, _ => return Err("Rotation must be 0, 90, 180, or 270 degrees.".to_string()) };
@@ -1437,12 +1464,18 @@ mod tests {
 
     #[test]
     fn resize_modes_produce_bounded_dimensions() {
-        let percentage = ResizeRequest { paths: vec![], width: 0, height: 0, mode: "percentage".to_string(), resampling: "lanczos".to_string(), keep_aspect_ratio: true, percentage: 50, longest_side: 0, output_location: OutputLocation::AlongsideInput };
+        let percentage = ResizeStep { width: 0, height: 0, mode: "percentage".to_string(), resampling: "lanczos".to_string(), keep_aspect_ratio: true, percentage: 50, longest_side: 0 };
         assert_eq!(resize_dimensions(400, 200, &percentage).unwrap(), (200, 100));
-        let longest = ResizeRequest { mode: "longestSide".to_string(), longest_side: 100, ..percentage };
+        let longest = ResizeStep { mode: "longestSide".to_string(), longest_side: 100, ..percentage.clone() };
         assert_eq!(resize_dimensions(400, 200, &longest).unwrap(), (100, 50));
-        let invalid = ResizeRequest { mode: "percentage".to_string(), percentage: 0, ..longest };
+        assert_eq!(resize_dimensions(200, 400, &longest).unwrap(), (50, 100));
+        let invalid = ResizeStep { mode: "percentage".to_string(), percentage: 0, ..longest.clone() };
         assert!(resize_dimensions(400, 200, &invalid).is_err());
+        let boxed = ResizeStep { mode: "exact".to_string(), width: 100, height: 100, ..percentage.clone() };
+        assert_eq!(resize_dimensions(400, 200, &boxed).unwrap(), (100, 50));
+        assert_eq!(resize_dimensions(400, 200, &ResizeStep { keep_aspect_ratio: false, ..boxed.clone() }).unwrap(), (100, 100));
+        // A box past the limit is refused even when the lock would fit the image inside it.
+        assert!(resize_dimensions(400, 200, &ResizeStep { width: 16385, ..boxed }).is_err());
     }
 
     #[test]
