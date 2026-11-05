@@ -6,6 +6,7 @@ use lopdf::{Document, Object, Permissions};
 use serde::{Deserialize, Serialize};
 
 use super::document_info::{self, PdfProperties, PropertyConflict, XmpSummary};
+use super::hidden_content::{self, HiddenContent};
 use crate::kit::contracts::{JobOutcome, ToolError};
 
 #[derive(Debug, Clone, Deserialize)]
@@ -25,6 +26,8 @@ pub struct PrivacyReport {
     pub xmp: XmpReport,
     pub encryption: Option<EncryptionReport>,
     pub identifiers: IdentifierReport,
+    #[serde(flatten)]
+    pub hidden: HiddenContent,
     pub unsupported: Vec<String>,
 }
 
@@ -104,6 +107,7 @@ pub fn inspect(path: &Path, password: Option<&str>) -> Result<PrivacyReport, Too
     let document = document_info::load(&bytes, password)?;
     let details = document_info::from_document(&document);
     let mut unsupported = details.unsupported;
+    let hidden = hidden_content::read(&document, &bytes, &mut unsupported);
     let encryption = document.encryption_state.as_ref().map(|state| {
         let permissions = state.permissions();
         let (allowed, denied) = Permission::ALL.into_iter().partition::<Vec<_>, _>(|(_, flag)| permissions.contains(*flag));
@@ -128,6 +132,7 @@ pub fn inspect(path: &Path, password: Option<&str>) -> Result<PrivacyReport, Too
         xmp: XmpReport { summary: details.xmp, conflicts: details.conflicts },
         encryption,
         identifiers,
+        hidden,
         unsupported,
     })
 }
@@ -184,6 +189,7 @@ mod tests {
     use crate::kit::common::batch_runner::{BatchRunner, RunEvents};
     use crate::kit::contracts::{ErrorKind, OutcomeState};
     use document_info::{DocumentProperty, PdfDate};
+    use hidden_content::{ActionTrigger, AnnotationGroup, AutomaticAction, EmbeddedFile, HiddenItem, HiddenReason, Layer, Leftovers, LinkHost, OptionalContent, PagePiece, Signature};
     use lopdf::{dictionary, Dictionary, EncryptionState, EncryptionVersion, Stream, StringFormat};
     use std::sync::Arc;
 
@@ -234,20 +240,25 @@ mod tests {
         xmp: Option<String>,
         id: Option<(&'static [u8], &'static [u8])>,
         encryption: Option<(&'static str, &'static str, Permissions)>,
+        plant: Option<fn(&mut Document, &mut Dictionary, &mut Dictionary)>,
     }
 
-    const CLEAN: Fixture = Fixture { info: None, xmp: None, id: None, encryption: None };
+    const CLEAN: Fixture = Fixture { info: None, xmp: None, id: None, encryption: None, plant: None };
 
     fn pdf(fixture: Fixture) -> Vec<u8> {
         let mut document = Document::with_version("1.7");
         let pages_id = document.new_object_id();
         let content_id = document.add_object(Stream::new(dictionary! {}, b"BT ET".to_vec()));
-        let page_id = document.add_object(dictionary! {
+        let mut page = dictionary! {
             "Type" => "Page", "Parent" => pages_id, "Contents" => content_id,
             "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
-        });
-        document.objects.insert(pages_id, dictionary! { "Type" => "Pages", "Kids" => vec![Object::Reference(page_id)], "Count" => 1 }.into());
+        };
         let mut catalog = dictionary! { "Type" => "Catalog", "Pages" => pages_id };
+        if let Some(plant) = fixture.plant {
+            plant(&mut document, &mut catalog, &mut page);
+        }
+        let page_id = document.add_object(page);
+        document.objects.insert(pages_id, dictionary! { "Type" => "Pages", "Kids" => vec![Object::Reference(page_id)], "Count" => 1 }.into());
         if let Some(xmp) = fixture.xmp {
             let stream = Stream::new(dictionary! { "Type" => "Metadata", "Subtype" => "XML" }, xmp.into_bytes());
             catalog.set("Metadata", document.add_object(stream));
@@ -286,7 +297,7 @@ mod tests {
             }),
             xmp: None,
             id: Some((b"\x9f\x3c\xa7\x1e", b"\x9f\x3c\xa7\x1e")),
-            encryption: None,
+            ..CLEAN
         }
     }
 
@@ -294,13 +305,136 @@ mod tests {
         Fixture {
             info: Some(dictionary! { "Author" => literal(b"A. Patel") }),
             xmp: Some(xmp(r#"<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:creator><rdf:Seq><rdf:li>A. Patel (draft)</rdf:li></rdf:Seq></dc:creator></rdf:Description>"#)),
-            id: None,
-            encryption: None,
+            ..CLEAN
         }
     }
 
     fn restricted() -> Fixture {
-        Fixture { info: None, xmp: None, id: Some((b"first", b"later")), encryption: Some(("owner", "", Permissions::PRINTABLE | Permissions::COPYABLE_FOR_ACCESSIBILITY)) }
+        Fixture { info: None, xmp: None, id: Some((b"first", b"later")), encryption: Some(("owner", "", Permissions::PRINTABLE | Permissions::COPYABLE_FOR_ACCESSIBILITY)), plant: None }
+    }
+
+    fn name(value: &str) -> Object {
+        Object::Name(value.as_bytes().to_vec())
+    }
+
+    fn rect(values: [i64; 4]) -> Object {
+        Object::Array(values.into_iter().map(Object::Integer).collect())
+    }
+
+    /// Plants one or more items in every hidden-content category, plus items each category must leave out.
+    fn plant_hidden_content(document: &mut Document, catalog: &mut Dictionary, page: &mut Dictionary) {
+        let sheet = document.add_object(Stream::new(dictionary! {
+            "Type" => "EmbeddedFile", "Subtype" => name("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"), "Params" => dictionary! { "Size" => 49152 },
+        }, b"PK".to_vec()));
+        let sheet_spec = document.add_object(dictionary! { "Type" => "Filespec", "F" => literal(b"rent.xlsx"), "UF" => literal(b"rent-schedule.xlsx"), "EF" => dictionary! { "F" => sheet } });
+        let script = document.add_object(dictionary! { "S" => "JavaScript", "JS" => literal(b"app.alert('hi')") });
+        catalog.set("Names", dictionary! {
+            "EmbeddedFiles" => dictionary! { "Names" => vec![literal(b"rent-schedule.xlsx"), sheet_spec.into()] },
+            "JavaScript" => dictionary! { "Names" => vec![literal(b"init"), script.into()] },
+        });
+        catalog.set("OpenAction", dictionary! { "S" => "GoTo", "D" => vec![0.into(), name("Fit")] });
+        catalog.set("AA", dictionary! { "WP" => dictionary! { "S" => "JavaScript", "JS" => literal(b"stamp()"), "Next" => dictionary! { "S" => "Launch", "F" => literal(b"cmd.exe") } } });
+
+        let draft = document.add_object(dictionary! { "Type" => "OCG", "Name" => literal(b"Draft notes") });
+        let final_layer = document.add_object(dictionary! { "Type" => "OCG", "Name" => literal(b"Final") });
+        catalog.set("OCProperties", dictionary! { "OCGs" => vec![draft.into(), final_layer.into()], "D" => dictionary! { "OFF" => vec![draft.into()] } });
+
+        let tenant_name = document.add_object(dictionary! { "T" => literal(b"name"), "V" => literal(b"Asha Patel") });
+        let fields = [
+            dictionary! { "FT" => "Tx", "T" => literal(b"tenant"), "Kids" => vec![tenant_name.into()] },
+            dictionary! { "FT" => "Tx", "T" => literal(b"deposit"), "V" => literal(b"") },
+            dictionary! { "FT" => "Btn", "T" => literal(b"agree"), "V" => name("Off") },
+            dictionary! { "FT" => "Btn", "T" => literal(b"pets"), "V" => name("Yes") },
+            dictionary! { "FT" => "Sig", "T" => literal(b"approver"), "V" => dictionary! { "Type" => "Sig", "Name" => literal(b"Acme Ltd"), "M" => literal(b"D:20260211093000+01'00'") } },
+            dictionary! { "FT" => "Sig", "T" => literal(b"witness") },
+        ].into_iter().map(|field| Object::Reference(document.add_object(field))).collect::<Vec<_>>();
+        catalog.set("AcroForm", dictionary! { "Fields" => fields, "XFA" => literal(b"<xdp/>") });
+
+        let photo = document.add_object(Stream::new(dictionary! { "Type" => "EmbeddedFile" }, b"jpegdata".to_vec()));
+        let link = |uri: &[u8]| dictionary! { "Subtype" => "Link", "Rect" => rect([0, 0, 10, 10]), "A" => dictionary! { "S" => "URI", "URI" => literal(uri) } };
+        let annotations = [
+            dictionary! { "Subtype" => "Text", "Rect" => rect([10, 10, 30, 30]), "T" => literal(b"Asha Patel") },
+            dictionary! { "Subtype" => "Text", "Rect" => rect([10, 40, 30, 60]), "T" => literal(b"J. Morgan"), "F" => 2 },
+            dictionary! { "Subtype" => "Highlight", "Rect" => rect([50, 50, 90, 60]), "T" => literal(b"Asha Patel") },
+            dictionary! { "Subtype" => "Square", "Rect" => rect([700, 800, 750, 850]) },
+            dictionary! { "Subtype" => "Popup", "Rect" => rect([0, 0, 1, 1]), "F" => 2 },
+            dictionary! { "Subtype" => "FileAttachment", "Rect" => rect([100, 100, 120, 120]), "T" => literal(b"Asha Patel"), "FS" => dictionary! { "Type" => "Filespec", "UF" => literal(b"photo.jpg"), "EF" => dictionary! { "F" => photo } } },
+            dictionary! { "Subtype" => "FileAttachment", "Rect" => rect([130, 100, 150, 120]), "FS" => sheet_spec },
+            link(b"https://Elmrow-Lettings.example/rent?x=1"),
+            link(b"HTTP://user@GOV.UK:443/path"),
+            link(b"https://gov.uk/other"),
+            dictionary! { "Subtype" => "Link", "Rect" => rect([0, 0, 10, 10]), "A" => dictionary! { "S" => "GoTo", "D" => vec![0.into(), name("Fit")] } },
+            dictionary! { "Subtype" => "Widget", "Rect" => rect([200, 200, 300, 220]), "AA" => dictionary! { "K" => dictionary! { "S" => "JavaScript", "JS" => literal(b"AFNumber_Keystroke()") } } },
+        ].into_iter().map(|annotation| Object::Reference(document.add_object(annotation))).collect::<Vec<_>>();
+        page.set("Annots", annotations);
+        page.set("AA", dictionary! { "O" => dictionary! { "S" => "URI", "URI" => literal(b"https://tracker.example/opened") } });
+        page.set("Thumb", document.add_object(Stream::new(dictionary! { "Width" => 1, "Height" => 1 }, vec![0, 0, 0])));
+        page.set("PieceInfo", dictionary! { "Illustrator" => dictionary! { "LastModified" => literal(b"D:20260101000000Z"), "Private" => dictionary! {} } });
+    }
+
+    fn hidden_content() -> Fixture {
+        Fixture { plant: Some(plant_hidden_content), ..CLEAN }
+    }
+
+    fn last_startxref(bytes: &[u8]) -> usize {
+        let start = bytes.windows(9).rposition(|window| window == b"startxref").unwrap();
+        String::from_utf8_lossy(&bytes[start + 9..]).split_whitespace().next().unwrap().parse().unwrap()
+    }
+
+    /// Appends a save the way an editor does: a new object, a cross-reference section and a trailer pointing back to the last one.
+    fn append_save(bytes: &mut Vec<u8>, object: &str) {
+        let document = Document::load_mem(bytes).unwrap();
+        let root = document.trailer.get(b"Root").unwrap().as_reference().unwrap();
+        let id = document.max_id + 1;
+        let start = bytes.len() + 1;
+        bytes.extend(format!("\n{id} 0 obj\n{object}\nendobj\n").as_bytes());
+        let xref = bytes.len();
+        let previous = last_startxref(bytes);
+        bytes.extend(format!("xref\n0 1\n0000000000 65535 f \n{id} 1\n{start:010} 00000 n \ntrailer\n<< /Size {} /Root {} {} R /Prev {previous} >>\nstartxref\n{xref}\n%%EOF\n", id + 1, root.0, root.1).as_bytes());
+    }
+
+    fn with_incremental_updates(mut bytes: Vec<u8>, count: usize) -> Vec<u8> {
+        for revision in 0..count {
+            append_save(&mut bytes, &format!("(revision {revision})"));
+        }
+        bytes
+    }
+
+    fn expected_hidden_content(incremental_updates: usize) -> HiddenContent {
+        HiddenContent {
+            incremental_updates: Some(incremental_updates),
+            embedded_files: vec![
+                EmbeddedFile { name: "rent-schedule.xlsx".into(), size: Some(49152), mime_type: Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".into()), page: None },
+                EmbeddedFile { name: "photo.jpg".into(), size: Some(8), mime_type: None, page: Some(1) },
+            ],
+            actions: vec![
+                AutomaticAction { trigger: ActionTrigger::DocumentScript, page: None, name: Some("init".into()), kinds: vec!["JavaScript".into()] },
+                AutomaticAction { trigger: ActionTrigger::BeforePrint, page: None, name: None, kinds: vec!["JavaScript".into(), "Launch".into()] },
+                AutomaticAction { trigger: ActionTrigger::PageOpen, page: Some(1), name: None, kinds: vec!["URI".into()] },
+                AutomaticAction { trigger: ActionTrigger::Annotation, page: Some(1), name: None, kinds: vec!["JavaScript".into()] },
+            ],
+            annotations: vec![
+                AnnotationGroup { subtype: "FileAttachment".into(), count: 2, authors: vec!["Asha Patel".into()] },
+                AnnotationGroup { subtype: "Highlight".into(), count: 1, authors: vec!["Asha Patel".into()] },
+                AnnotationGroup { subtype: "Square".into(), count: 1, authors: vec![] },
+                AnnotationGroup { subtype: "Text".into(), count: 2, authors: vec!["Asha Patel".into(), "J. Morgan".into()] },
+            ],
+            filled_form_fields: vec!["tenant.name".into(), "pets".into()],
+            optional_content: OptionalContent {
+                layers: vec![Layer { name: "Draft notes".into(), visible: false }, Layer { name: "Final".into(), visible: true }],
+                hidden: vec![
+                    HiddenItem { page: 1, subtype: "Text".into(), reason: HiddenReason::Hidden },
+                    HiddenItem { page: 1, subtype: "Square".into(), reason: HiddenReason::OffPage },
+                ],
+            },
+            links: vec![LinkHost { host: "elmrow-lettings.example".into(), count: 1 }, LinkHost { host: "gov.uk".into(), count: 2 }],
+            signatures: vec![Signature {
+                field: "approver".into(),
+                signer: Some("Acme Ltd".into()),
+                signed_at: Some(PdfDate { year: 2026, month: 2, day: 11, hour: 9, minute: 30, second: 0, offset_minutes: Some(60) }),
+            }],
+            leftovers: Leftovers { thumbnail_pages: vec![1], page_pieces: vec![PagePiece { page: 1, applications: vec!["Illustrator".into()] }] },
+        }
     }
 
     fn assert_none_found(report: &PrivacyReport) {
@@ -308,6 +442,7 @@ mod tests {
         assert_eq!(report.xmp, XmpReport::default(), "XMP: none found");
         assert_eq!(report.encryption, None, "encryption: none found");
         assert_eq!(report.identifiers, IdentifierReport::default(), "identifiers: none found");
+        assert_eq!(report.hidden, HiddenContent { incremental_updates: Some(0), ..HiddenContent::default() }, "hidden content: none found");
         assert!(report.unsupported.is_empty(), "unsupported: none found");
     }
 
@@ -396,6 +531,79 @@ mod tests {
     }
 
     #[test]
+    fn reports_exactly_the_planted_hidden_content_and_lists_xfa_as_unsupported() {
+        let sandbox = Sandbox::new("hidden");
+        let report = sandbox.inspect(&pdf(hidden_content()), None).unwrap();
+
+        assert_eq!(report.hidden, expected_hidden_content(0));
+        assert_eq!(report.unsupported, ["XFA form data could not be checked."]);
+        assert_eq!(report.document_information, PdfProperties::default());
+        assert_eq!(report.xmp, XmpReport::default());
+        assert_eq!(report.encryption, None);
+    }
+
+    #[test]
+    fn counts_each_incremental_update_and_nothing_else_changes() {
+        let sandbox = Sandbox::new("incremental");
+        for count in [1, 2] {
+            let report = sandbox.inspect(&with_incremental_updates(pdf(CLEAN), count), None).unwrap();
+            assert_eq!(report.hidden, HiddenContent { incremental_updates: Some(count), ..HiddenContent::default() }, "{count} updates");
+            assert!(report.unsupported.is_empty());
+        }
+        let report = sandbox.inspect(&with_incremental_updates(pdf(hidden_content()), 2), None).unwrap();
+        assert_eq!(report.hidden, expected_hidden_content(2));
+    }
+
+    #[test]
+    fn a_linearized_first_save_is_not_an_incremental_update() {
+        let sandbox = Sandbox::new("linearized");
+        let mut bytes = pdf(CLEAN);
+        append_save(&mut bytes, "<< /Linearized 1 >>");
+
+        assert_eq!(sandbox.inspect(&bytes, None).unwrap().hidden.incremental_updates, Some(0));
+        assert_eq!(sandbox.inspect(&with_incremental_updates(bytes, 1), None).unwrap().hidden.incremental_updates, Some(1));
+    }
+
+    #[test]
+    fn an_unreadable_save_history_is_listed_as_unsupported() {
+        let sandbox = Sandbox::new("bad-history");
+        let mut bytes = with_incremental_updates(pdf(CLEAN), 1);
+        let own_section = last_startxref(&bytes);
+        bytes.truncate(bytes.windows(5).rposition(|window| window == b"/Prev").unwrap());
+        bytes.extend(format!("/Prev {own_section} >>\nstartxref\n{own_section}\n%%EOF\n").as_bytes());
+
+        let report = sandbox.inspect(&bytes, None).unwrap();
+        assert_eq!(report.hidden, HiddenContent::default());
+        assert_eq!(report.unsupported, ["The file's save history could not be read."]);
+    }
+
+    #[test]
+    fn hidden_content_of_an_encrypted_pdf_is_read_once_it_opens() {
+        let sandbox = Sandbox::new("encrypted-hidden");
+        let bytes = pdf(Fixture { id: Some((b"first", b"later")), encryption: Some(("owner", crate::kit::TEST_PASSWORD, Permissions::all())), ..hidden_content() });
+
+        let report = sandbox.inspect(&bytes, Some(crate::kit::TEST_PASSWORD)).unwrap();
+        assert_eq!(report.hidden, expected_hidden_content(0));
+    }
+
+    #[test]
+    fn link_hosts_are_the_domain_or_the_scheme() {
+        for (uri, expected) in [
+            ("https://Example.COM/path?q=1", "example.com"),
+            ("http://user:pass@sub.example.org:8080", "sub.example.org"),
+            ("https://[2001:db8::1]:443/x", "2001:db8::1"),
+            ("mailto:Asha@Example.com?subject=hi", "example.com"),
+            ("ftp://files.example.net./", "files.example.net"),
+            ("www.example.com/page", "www.example.com"),
+            ("file:///C:/secret.docx", "file:"),
+            ("tel:+15551234", "tel:"),
+            ("", "No host"),
+        ] {
+            assert_eq!(hidden_content::host(uri), expected, "{uri}");
+        }
+    }
+
+    #[test]
     fn producer_versions_are_the_first_dotted_number() {
         for (producer, version) in [
             ("Acrobat Distiller 9.0.1 (Windows)", Some("9.0.1")),
@@ -419,6 +627,7 @@ mod tests {
             ("xmp.pdf", pdf(conflicting_xmp())),
             ("restricted.pdf", pdf(restricted())),
             ("clean.pdf", pdf(CLEAN)),
+            ("hidden.pdf", with_incremental_updates(pdf(hidden_content()), 1)),
         ];
         let paths = fixtures.iter().map(|(name, bytes)| sandbox.file(name, bytes)).collect::<Vec<_>>();
         let before = sandbox.names();
@@ -433,7 +642,7 @@ mod tests {
         assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), paths);
         assert!(outcomes.iter().all(|outcome| outcome.output_paths().is_empty()), "reports name no output paths");
         assert!(matches!(outcomes[1].error().map(|error| &error.kind), Some(ErrorKind::Processing)), "{:?}", outcomes[1]);
-        for index in [0, 2, 3, 4] {
+        for index in [0, 2, 3, 4, 5] {
             assert!(matches!(outcomes[index].state, OutcomeState::Succeeded { .. }), "{:?}", outcomes[index]);
         }
         let reports = outcomes.iter().map(|outcome| serde_json::from_str::<serde_json::Value>(&outcome.detail).ok()).collect::<Vec<_>>();
@@ -450,7 +659,23 @@ mod tests {
             "xmp": { "summary": null, "conflicts": [] },
             "encryption": null,
             "identifiers": { "documentId": null, "producer": null },
+            "incrementalUpdates": 0,
+            "embeddedFiles": [],
+            "actions": [],
+            "annotations": [],
+            "filledFormFields": [],
+            "optionalContent": { "layers": [], "hidden": [] },
+            "links": [],
+            "signatures": [],
+            "leftovers": { "thumbnailPages": [], "pagePieces": [] },
             "unsupported": [],
         }));
+        let hidden = reports[5].as_ref().unwrap();
+        assert_eq!(hidden["incrementalUpdates"], 1);
+        assert_eq!(hidden["embeddedFiles"][0], serde_json::json!({ "name": "rent-schedule.xlsx", "size": 49152, "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "page": null }));
+        assert_eq!(hidden["actions"][1], serde_json::json!({ "trigger": "beforePrint", "page": null, "name": null, "kinds": ["JavaScript", "Launch"] }));
+        assert_eq!(hidden["optionalContent"]["hidden"][1], serde_json::json!({ "page": 1, "subtype": "Square", "reason": "offPage" }));
+        assert_eq!(hidden["signatures"][0], serde_json::json!({ "field": "approver", "signer": "Acme Ltd", "signedAt": "2026-02-11T09:30:00+01:00" }));
+        assert_eq!(hidden["leftovers"], serde_json::json!({ "thumbnailPages": [1], "pagePieces": [{ "page": 1, "applications": ["Illustrator"] }] }));
     }
 }

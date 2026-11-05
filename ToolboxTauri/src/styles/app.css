@@ -897,6 +897,9 @@ body {
   font-size: 13px;
   font-weight: 600;
 }
+.privacy-category-pointer {
+  margin-left: auto;
+}
 .privacy-category-none {
   padding: 3px 16px;
 }

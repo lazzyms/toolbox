@@ -45,18 +45,21 @@ const pdfEditor = workspaceById("pdf-editor")!;
 const workspace: ToolWorkspaceDefinition = { ...pdfEditor, toolIds: [...pdfEditor.toolIds, testToolId] };
 const tools = [...toolsForWorkspace(pdfEditor), testTool];
 
-const everyToolEnabled = {
+// ?tool= opens another rail tool first, ?folder= saves to a custom folder instead of next to each file,
+// and ?disabled= turns a tool off.
+const query = new URLSearchParams(window.location.search);
+const availability = {
   platform: "macos",
-  enabledByTool: Object.fromEntries([...UtilityRegistry, testTool].map((tool) => [tool.id, true])),
+  enabledByTool: Object.fromEntries([...UtilityRegistry, testTool].map((tool) => [tool.id, !query.getAll("disabled").includes(tool.id)])),
 } as ToolAvailabilitySnapshot;
 
-// ?tool= opens another rail tool first, and ?folder= saves to a custom folder instead of next to each file.
-const query = new URLSearchParams(window.location.search);
 const firstTool = tools.find((tool) => tool.id === query.get("tool")) ?? testTool;
 const folder = query.get("folder");
 const outputLocation: OutputLocation = folder ? { customFolder: folder } : "alongsideInput";
 
-// Like the main page, a rail switch reopens the new tool with the files that were open.
+// Like the main page, a rail switch reopens the new tool with the files that were open, and a
+// report pointer opens its tool with that report's file. Pointer navigations are recorded for tests.
+const navigations: unknown[] = ((window as unknown as { navigations: unknown[] }).navigations = []);
 const Harness = () => {
   const [active, setActive] = useState({ tool: firstTool, paths: [] as readonly string[] });
   const [openPaths, setOpenPaths] = useState<readonly string[]>([]);
@@ -72,14 +75,24 @@ const Harness = () => {
         />
       </aside>
       <main className="command-center" aria-label="Tool detail">
-        <PDFEditorWorkspaceView key={active.tool.id} utility={active.tool} initialPaths={active.paths} onFilesChange={setOpenPaths} batchTools={batchTools} />
+        <PDFEditorWorkspaceView
+          key={active.tool.id}
+          utility={active.tool}
+          initialPaths={active.paths}
+          onFilesChange={setOpenPaths}
+          onNavigate={(navigation) => {
+            navigations.push(navigation);
+            setActive({ tool: tools.find((tool) => tool.id === navigation.utilityId)!, paths: navigation.initialPaths });
+          }}
+          batchTools={batchTools}
+        />
       </main>
     </div>
   );
 };
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  <ToolAvailabilityProvider snapshot={everyToolEnabled}>
+  <ToolAvailabilityProvider snapshot={availability}>
     <OutputLocationContext.Provider value={outputLocation}>
       <Harness />
     </OutputLocationContext.Provider>

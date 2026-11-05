@@ -1,6 +1,13 @@
 import type { ReactNode } from "react";
 import type { AtomicToolId, JobOutcome, OutputLocation } from "../../contracts";
+import type { ExistingPdfUtilityId } from "../../views/PDFEditorWorkspaceView";
 import { privacyCheckTool } from "./PrivacyReport";
+
+/** Opens another tool on the file a report describes, where that tool is available. */
+export interface ReportActions {
+  canOpen: (tool: ExistingPdfUtilityId) => boolean;
+  open: (tool: ExistingPdfUtilityId, path: string) => void;
+}
 
 /** A PDF Editor rail tool that runs on many files through the shared batch shell. */
 export interface PdfEditorBatchTool {
@@ -13,7 +20,7 @@ export interface PdfEditorBatchTool {
   report?: {
     runLabel: (fileCount: number) => string;
     note: string;
-    render: (results: JobOutcome[]) => ReactNode;
+    render: (results: JobOutcome[], actions: ReportActions) => ReactNode;
   };
 }
 

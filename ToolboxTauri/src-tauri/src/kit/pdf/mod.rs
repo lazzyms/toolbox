@@ -1,6 +1,7 @@
 pub mod metadata;
 pub mod document_info;
 pub mod privacy;
+pub mod hidden_content;
 pub mod scene;
 pub mod editor;
 pub mod remaining;
