@@ -11,7 +11,7 @@ use crate::file_actions::{open_output_path, open_sponsor_page, open_third_party_
 use crate::kit::common::{note_renamed, JobOutcome};
 use crate::kit::images::{ImageProcessor, Options as ImageOptions};
 use crate::kit::images::tools;
-use crate::kit::pdf::{editor, metadata, remaining, scene, PDFProcessor};
+use crate::kit::pdf::{editor, metadata, privacy, properties, remaining, scene, PDFProcessor};
 use crate::kit::vision;
 use crate::kit::contracts::{command_supports_preview, validate_command_inputs, validate_page_selection, CompressImagesRequest, ConvertImagesRequest, OutcomeState, PasswordRequest, ToolError};
 use crate::kit::common::batch_runner::{BatchRunner, FileEvent, FolderCheck, RunEvents};
@@ -227,6 +227,32 @@ async fn rotate_pdf(events: RunEvents, request: remaining::RotatePdfRequest) -> 
     if let Err(outcomes) = validate_page_selection("rotate_pdf", &request.paths, request.pages.as_deref()) { return outcomes; }
     let request = Arc::new(request);
     BatchRunner::run(&events, "rotate_pdf", request.paths.clone(), &request.output_location, &request, remaining::rotate)
+}
+
+/// Reads each PDF and returns one report per file. It saves nothing, so it never touches an output folder.
+#[tauri::command]
+async fn inspect_pdf_privacy(events: RunEvents, request: privacy::PrivacyRequest) -> Vec<JobOutcome> {
+    let request = Arc::new(request);
+    BatchRunner::inspect(&events, "inspect_pdf_privacy", request.paths.clone(), &request, privacy::inspect_job)
+}
+
+#[tauri::command]
+async fn read_pdf_properties(events: RunEvents, request: properties::ReadPropertiesRequest) -> Vec<JobOutcome> {
+    let request = Arc::new(request);
+    BatchRunner::inspect(&events, "edit_pdf_properties", request.paths.clone(), &request, properties::read_job)
+}
+
+#[tauri::command]
+async fn edit_pdf_properties(events: RunEvents, request: properties::EditPropertiesRequest) -> Vec<JobOutcome> {
+    if let Err(outcomes) = properties::validate(&request) { return outcomes; }
+    let request = Arc::new(request);
+    BatchRunner::run(&events, "edit_pdf_properties", request.paths.clone(), &request.output_location, &request, properties::edit_job)
+}
+
+/// Saves the reports the view already holds, one "-details" file per PDF. It never opens a PDF.
+#[tauri::command]
+async fn save_privacy_reports(request: privacy::SaveReportsRequest) -> Vec<JobOutcome> {
+    privacy::save_reports(&request)
 }
 
 #[tauri::command]
@@ -544,6 +570,10 @@ fn main() {
             compress_pdf,
             rotate_pdf,
             repair_pdf,
+            inspect_pdf_privacy,
+            read_pdf_properties,
+            edit_pdf_properties,
+            save_privacy_reports,
             redact_pdf,
             compare_pdfs,
             remove_pdf_pages,
@@ -1184,6 +1214,29 @@ mod command_tests {
         outputs.extend(named(&mut naming, "repair_pdf", pdf.clone(), assert_success("repair pdf", repair_pdf(RunEvents::silent(), PdfToTextRequest { pages: None, paths: vec![pdf.clone()], output_location: location(&root, "repair pdf") }))));
         outputs.extend(named(&mut naming, "redact_pdf", pdf.clone(), assert_success("redact pdf", redact_pdf(RunEvents::silent(), RedactPdfRequest { paths: vec![pdf.clone()], rectangle: PdfRect { x: 40.0, y: 650.0, width: 220.0, height: 60.0 }, scope: PageScope::All, output_location: location(&root, "redact pdf") }))));
         outputs.extend(named(&mut naming, "compare_pdfs", pdf.clone(), assert_aggregate_success("compare pdfs", &[pdf.clone(), pdf_two.clone()], run_compare_pdfs(&ComparePdfsRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: location(&root, "compare pdfs"), output_path: None }))));
+        let entries_before_inspection = std::fs::read_dir(&root).unwrap().count();
+        let privacy_reports = tauri::async_runtime::block_on(inspect_pdf_privacy(RunEvents::silent(), privacy::PrivacyRequest { paths: vec![pdf.clone(), pdf_two.clone()], passwords: Default::default() }));
+        assert_eq!(privacy_reports.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), [pdf.clone(), pdf_two.clone()]);
+        for (outcome, pages) in privacy_reports.iter().zip([2, 1]) {
+            assert!(outcome.error().is_none(), "privacy check failed: {:?}", outcome.error());
+            assert!(outcome.output_paths().is_empty(), "privacy check reports name no output");
+            let report: serde_json::Value = serde_json::from_str(&outcome.detail).expect("privacy check detail is its JSON report");
+            assert_eq!(report["pageCount"], pages);
+        }
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), entries_before_inspection, "privacy check must create nothing");
+        named(&mut naming, "inspect_pdf_privacy", pdf.clone(), Vec::new());
+        let current = tauri::async_runtime::block_on(read_pdf_properties(RunEvents::silent(), properties::ReadPropertiesRequest { paths: vec![pdf.clone()], passwords: Default::default() }));
+        assert!(current[0].error().is_none() && current[0].output_paths().is_empty(), "reading properties saves nothing: {:?}", current[0]);
+        let edit_request = serde_json::from_value::<properties::EditPropertiesRequest>(serde_json::json!({ "paths": [pdf.clone()], "patch": { "title": { "action": "set", "value": "Sweep title" }, "author": { "action": "clear" }, "creationDate": { "action": "set", "value": "2026-02-28T09:00:00+05:30" }, "modificationDate": { "action": "clear" } }, "outputLocation": location(&root, "edit pdf properties") })).expect("Edit Properties view payload");
+        outputs.extend(named(&mut naming, "edit_pdf_properties", pdf.clone(), assert_success("edit pdf properties", edit_pdf_properties(RunEvents::silent(), edit_request))));
+        let pdf_bytes = std::fs::read(&pdf).unwrap();
+        let reports = privacy_reports.iter().map(|outcome| serde_json::json!({ "inputPath": outcome.input_path, "report": serde_json::from_str::<serde_json::Value>(&outcome.detail).unwrap() })).collect::<Vec<_>>();
+        let save_request = serde_json::from_value::<privacy::SaveReportsRequest>(serde_json::json!({ "reports": reports, "format": "json", "outputLocation": location(&root, "privacy reports") })).expect("Privacy Check save payload");
+        let saved_reports = tauri::async_runtime::block_on(save_privacy_reports(save_request));
+        let saved_names = saved_reports.iter().map(|outcome| outcome.output_paths().first().and_then(|path| path.file_name()).map(|name| name.to_string_lossy().into_owned())).collect::<Vec<_>>();
+        let stems = [&pdf, &pdf_two].map(|path| Some(format!("{}-details.json", path.file_stem().unwrap().to_string_lossy())));
+        assert_eq!(saved_names, stems, "privacy reports save as one -details file per PDF");
+        assert_eq!(std::fs::read(&pdf).unwrap(), pdf_bytes, "saving a report must not touch its PDF");
         outputs.extend(named(&mut naming, "convert_images", image.clone(), assert_success("convert", convert_images(RunEvents::silent(), ConvertImagesRequest { paths: vec![image.clone()], format: "jpg".into(), output_location: location(&root, "convert") }))));
         outputs.extend(named(&mut naming, "compress_images", image.clone(), assert_success("compress images", compress_images(RunEvents::silent(), serde_json::from_value::<CompressImagesRequest>(serde_json::json!({ "paths": [image.clone()], "quality": 80, "lossless": false, "outputLocation": location(&root, "compress images") })).expect("Compress Files view payload for compress_images")))));
         outputs.extend(named(&mut naming, "resize_images", image.clone(), assert_success("resize", resize_images(RunEvents::silent(), ResizeRequest { paths: vec![image.clone()], width: 128, height: 128, mode: "exact".into(), resampling: "lanczos".into(), keep_aspect_ratio: true, percentage: 100, longest_side: 128, output_location: location(&root, "resize") }))));
@@ -1622,9 +1675,70 @@ mod command_tests {
         }));
         assert_warned_only_on_signed(&unlocked);
         assert!(opens_without_password(&unlocked[0].output_paths()[0]));
+        for outcome in &unlocked[..2] {
+            assert!(!crate::kit::pdf::tests::holds_a_signature(&lopdf::Document::load(&outcome.output_paths()[0]).unwrap()), "{} still holds a signature", outcome.input_path.display());
+        }
         for (input, original) in inputs.iter().zip(originals) {
             assert_eq!(std::fs::read(input).unwrap(), original, "original was modified: {}", input.display());
         }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn removing_restrictions_from_a_signed_pdf_strips_the_signature_and_warns_on_that_file_only() {
+        use crate::kit::contracts::{OutcomeState, OutcomeWarning, WarningKind};
+        let qpdf = crate::kit::resources::resolve_helper(&crate::kit::resources::QPDF).expect("qpdf is required for the native suite");
+        let root = sandbox("unrestrict-signed");
+        let inputs_dir = root.join("inputs");
+        std::fs::create_dir_all(&inputs_dir).unwrap();
+        let restrict = |source: &std::path::Path, name: &str| {
+            let restricted = inputs_dir.join(name);
+            let status = std::process::Command::new(&qpdf)
+                .arg(source).arg(&restricted)
+                .args(["--encrypt", "--user-password=", "--owner-password=owner-secret", "--bits=256", "--print=none", "--extract=n", "--"])
+                .status().unwrap();
+            assert!(status.success(), "qpdf made the owner-only fixture {name}");
+            restricted
+        };
+        let signed_plain = root.join("vendor-nda-plain.pdf");
+        make_pdf(&signed_plain, 2);
+        let mut document = lopdf::Document::load(&signed_plain).unwrap();
+        crate::kit::pdf::tests::sign(&mut document);
+        document.save(&signed_plain).unwrap();
+        let unsigned_plain = root.join("lease-plain.pdf");
+        make_pdf(&unsigned_plain, 1);
+        let signed = restrict(&signed_plain, "vendor-nda.pdf");
+        let unsigned = restrict(&unsigned_plain, "lease.pdf");
+        assert!(crate::kit::pdf::tests::holds_a_signature(&lopdf::Document::load(&signed).unwrap()), "the fixture is signed");
+        let inputs = vec![signed.clone(), unsigned.clone()];
+        let originals = inputs.iter().map(|input| std::fs::read(input).unwrap()).collect::<Vec<_>>();
+
+        let output = location(&root, "unlocked");
+        let OutputLocation::CustomFolder(output_dir) = &output else { unreachable!() };
+        let outcomes = tauri::async_runtime::block_on(remove_password(RunEvents::silent(), PasswordRequest {
+            paths: inputs.clone(),
+            password: String::new(),
+            password_overrides: Default::default(),
+            output_location: output.clone(),
+        }));
+
+        let removed = vec![OutcomeWarning { kind: WarningKind::SignatureRemoved, message: crate::kit::pdf::SIGNATURE_REMOVED.into() }];
+        assert_eq!(outcomes.iter().map(|outcome| outcome.warnings.clone()).collect::<Vec<_>>(), [removed, vec![]]);
+        for (outcome, name, pages) in [(&outcomes[0], "vendor-nda-unlocked.pdf", 2), (&outcomes[1], "lease-unlocked.pdf", 1)] {
+            assert!(matches!(outcome.state, OutcomeState::Succeeded { .. }), "{}: {:?}", outcome.input_path.display(), outcome.state);
+            assert_eq!(outcome.detail, "Unlocked. Restrictions removed.");
+            let path = &outcome.output_paths()[0];
+            assert_eq!(path, &output_dir.join(name));
+            assert!(opens_without_password(path), "{} still has encryption", path.display());
+            let unlocked = lopdf::Document::load(path).unwrap();
+            assert!(unlocked.trailer.get(b"Encrypt").is_err(), "{} keeps an /Encrypt dictionary", path.display());
+            assert!(!crate::kit::pdf::tests::holds_a_signature(&unlocked), "{} still holds a signature", path.display());
+            assert_eq!(unlocked.get_pages().len(), pages);
+        }
+        for (input, original) in inputs.iter().zip(originals) {
+            assert_eq!(std::fs::read(input).unwrap(), original, "original was modified: {}", input.display());
+        }
+        assert!(crate::kit::pdf::tests::holds_a_signature(&lopdf::Document::load(&signed).unwrap()), "the original keeps its signature");
         let _ = std::fs::remove_dir_all(root);
     }
 

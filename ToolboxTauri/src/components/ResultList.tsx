@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { Check, CircleMinus, CircleX, Clock, KeyRound, LoaderCircle, RotateCcw, TriangleAlert } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import type { JobOutcome, OutcomePointer, Progress } from "../contracts";
@@ -34,7 +34,7 @@ const segmentTone = (file: LiveFile): SegmentTone => {
     return file.outcome.state === "skipped" ? "skip" : "fail";
 };
 
-const revealButtonLabel = () => {
+export const revealButtonLabel = () => {
     const platform = navigator.platform.toLowerCase();
     if (platform.includes("mac")) return "Show in Finder";
     if (platform.includes("win")) return "Show in File Explorer";
@@ -62,9 +62,11 @@ interface ResultListProps {
     namedByOutput?: boolean;
     onRetry?: (inputPath: string) => Promise<void>;
     onRetryWithPassword?: (inputPath: string, password: string) => Promise<void>;
+    /** Replaces the finished summary line. */
+    summary?: ReactNode;
 }
 
-export const ResultList = ({ results, progress, loading, resultVerb, runningVerb, runningDetail, live, namedByOutput = false, onRetry, onRetryWithPassword }: ResultListProps) => {
+export const ResultList = ({ results, progress, loading, resultVerb, runningVerb, runningDetail, live, namedByOutput = false, onRetry, onRetryWithPassword, summary: customSummary }: ResultListProps) => {
     const [actionStates, setActionStates] = useState<Record<number, RowActionState>>({});
     const [passwordRow, setPasswordRow] = useState<number | null>(null);
     const resultSetGeneration = useRef(0);
@@ -236,10 +238,12 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
     const summary = resultSummary(results, resultVerb);
     return (
         <div className="result-list">
-            <div className="result-summary" role="status" aria-live="polite">
-                <strong>{summary.headline}</strong>
-                {summary.hints.map((hint) => <span key={hint} className="result-summary-hint">{hint}</span>)}
-            </div>
+            {customSummary ?? (
+                <div className="result-summary" role="status" aria-live="polite">
+                    <strong>{summary.headline}</strong>
+                    {summary.hints.map((hint) => <span key={hint} className="result-summary-hint">{hint}</span>)}
+                </div>
+            )}
             <Card className="result-card gap-0 py-0">
                 <CardContent className="p-0">
                     <ul className="result-rows" aria-label="Results">
