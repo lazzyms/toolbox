@@ -311,7 +311,7 @@
 "y": 10760,
 "w": 1280,
 "h": 800,
-"title": "Packs: downloading, failed, offline, low space",
+"title": "Packs: every status, errors, Install from file",
 "expand": "fill"
 },
 "Shortcuts.dc.html": {
@@ -369,6 +369,14 @@
 "h": 800,
 "title": "Results: every lock and unlock outcome",
 "expand": "fill"
+},
+"PackResults.dc.html": {
+"x": 0,
+"y": 13080,
+"w": 1280,
+"h": 800,
+"title": "OCR results: files that need a pack, before and after install",
+"expand": "fill"
 }
 },
 "order": [
@@ -410,6 +418,7 @@
 "TiffPages.dc.html",
 "Settings.dc.html",
 "Packs.dc.html",
+"PackResults.dc.html",
 "Shortcuts.dc.html",
 "Logo.dc.html",
 "SecEmpty.dc.html",
@@ -696,6 +705,53 @@
 "maxH": 860,
 "fill": "orange",
 "text": "Reset, unsaved changes, motion and screen readers\n\nReset… (header) asks first. It's an alert dialog that returns every page to how the PDF was opened, and says it also clears other PDF Editor changes. Opening another PDF with changes asks \"Export your changes first?\" with Export, Cancel and Don't export.\n\nReduced motion: reordering normally slides pages into place over 150 ms, and drops settle the same way. With reduced motion on, pages jump straight to their new place, the drag ghost has no tilt, and rotation applies without turning. Auto-scroll still works but moves in steps.\n\nScreen readers: the grid is a multi-select listbox. Each option is \"Position 12, original page 13, rotated 90° right, mirrored left to right, selected\". The footer status is a polite live region. It says things like \"Pages 4 to 6 moved to position 1\", \"Page 5 rotated 90° right\", \"Pages 8 and 9 mirrored left to right\", \"3 blank pages found and selected: 7, 11 and 16\", \"No blank pages found\" and \"3 pages deleted. 233 left.\" Errors, the last-page message and failed exports are alerts."
+},
+"row12": {
+"x": 0,
+"y": 12820,
+"text": "Optional packs: Settings, tool prompts and results",
+"kind": "title1",
+"maxW": 6800
+},
+"pk1": {
+"x": 1360,
+"y": 13080,
+"w": 360,
+"maxH": 720,
+"fill": "blue",
+"text": "Packs: layout and disk use\n\nPacks is a plain list in Settings, not cards, with one row per pack. The row shows the name, what uses it and its size. Status and actions sit on the right. Status is always words, with an icon or bar where it helps, never colour alone.\n\nA chevron opens a row's details: what it does, which tools use it, download size, size on this disk, version and license. License text sits only in details, with View license.\n\nThe privacy statement is the first paragraph: one download from the Toolbox release server, checked before use, works offline, and your files never leave this device.\n\nInstall from file… sits beside the heading in every state. On a computer without internet it's the main way in.\n\nInstalled rows show their own size on this disk. The line under the list gives the total: \"3 installed, 415 MB used. 48 GB free on this disk.\""
+},
+"pk2": {
+"x": 1760,
+"y": 13080,
+"w": 360,
+"maxH": 720,
+"fill": "blue",
+"text": "Pack statuses and actions\n\n- Not installed: \"Not installed\", with Install.\n- Downloading: bar plus \"7 of 12 MB\", with Cancel.\n- Checking: full bar plus \"Checking the download…\", with Cancel.\n- Waiting: \"Waiting. Starts after the downloads above.\", with Cancel. Packs install one at a time.\n- Installed: \"Installed, version 2.0\", with Remove…\n- Update available: \"Version 3.1. Update to 3.2, 12 MB\", with Update and Remove…\n- Updating: bar plus \"Updating, 5 of 12 MB\", with Cancel. The row says version 3.1 keeps working until 3.2 is ready. A cancelled or failed update keeps 3.1.\n- Damaged: red text, with Repair and Remove…, plus a banner at the top.\n- Doesn't work with this version: amber text, with Check for updates (opens Settings, Updates) and Remove…\n\nRemove… asks first: \"Remove Text recognition, Hindi? OCR can't read Hindi until you install it again. Frees 31 MB.\""
+},
+"pk3": {
+"x": 2160,
+"y": 13080,
+"w": 360,
+"maxH": 720,
+"fill": "green",
+"text": "Prompts inside tools\n\nIn a tool, the prompt is a note in the options panel, next to the setting that needs the pack. It names the pack and its download size and has one Install button. Examples: \"Hindi needs a 12 MB download.\" in OCR, and the script note in the Edit PDF text inspector. The tool stays usable while it downloads.\n\nOn a result row, the prompt is one secondary button that names the action: Install Hindi pack, Update Gujarati pack or Repair Tamil pack. The row says \"Needs a pack\". It never offers Retry.\n\nWhen the pack finishes installing, the row changes to \"Ready to run\" with a \"Pack installed\" badge. The status line says \"Hindi pack installed. 2 files are ready to run again.\" The files stay in the list until the user runs again.\n\nOCR language picker: two groups. \"Installed\" lists languages that are ready; ones already added are dimmed with \"Added\". \"Download to use\" lists the rest with a download icon and size. Choosing one adds it to the list as \"Not installed\" with the Install note."
+},
+"pk4": {
+"x": 2560,
+"y": 13080,
+"w": 360,
+"maxH": 720,
+"fill": "purple",
+"text": "Final error copy\n\nOffline: \"You're offline. Installed packs keep working. Connect to the internet to install or update packs, or use Install from file.\" Row: \"No internet connection.\" Install is disabled.\n\nBlocked server: \"Couldn't reach the Toolbox release server. Your internet works, but something on this network is blocking downloads from Toolbox. Try again later or on another network, or install from a pack file.\"\n\nInterrupted: \"Download stopped before it finished. Nothing was installed.\" with Try again, which starts over.\n\nNot enough space: \"Not enough space for Office documents. It needs 310 MB free and this disk has 120 MB. Free up at least 190 MB, then try again.\"\n\nCheck failed (download): \"The download didn't pass its safety check, so it was deleted. Nothing was installed.\"\n\nWrong computer (file): \"This pack file is for another kind of computer. It was made for a Mac, so it can't be installed here. Nothing was installed. Get the pack file for Windows on this processor from the Toolbox releases page.\"\n\nNot signed (file): \"This file isn't a Toolbox pack. It isn't signed by Toolbox, so it can't be installed. Nothing was installed.\"\n\nCheck failed (file): \"This pack file didn't pass its safety check. It may be damaged or changed since it was made, so it was not installed.\"\n\nIn use: \"Text recognition, English wasn't removed. OCR is using it right now. Remove it after the run finishes.\""
+},
+"pk5": {
+"x": 2960,
+"y": 13080,
+"w": 360,
+"maxH": 720,
+"fill": "green",
+"text": "Packs keyboard and screen reader\n\nSettings, Packs: Tab goes to Install from file…, then each row in order. Within a row, Tab goes to the details chevron, then the row's actions from left to right. Enter or Space opens and closes details. Details content is read in order and isn't a stop.\n\nNames for tests:\n- The list is \"Packs\". Each row is \"<pack name>, <status>\".\n- The chevron is \"Details for <pack name>\" with aria-expanded.\n- Buttons are \"<action> <pack name>\", such as \"Install Text recognition, Hindi\" and \"Cancel Text recognition, Hindi\".\n- Progress bars are \"Downloading <pack name>\", \"Checking <pack name>\" or \"Updating <pack name>\".\n- Status text is a polite live region. Damaged, in use and server errors are alerts.\n\nInstall from file: the native open dialog, then a dialog called \"Install this pack?\" with Cancel first and Install as the default. Rejection dialogs are alert dialogs with \"Choose another file…\" and OK.\n\nOCR picker: a combobox \"Add a language\" that opens a listbox with the groups \"Installed\" and \"Download to use\". Options are named \"<language>, installed\" or \"<language>, not installed, <size> download\". Arrow keys move, Enter chooses and Escape closes.\n\nResult rows: the action is \"<action> for <file name>\", such as \"Install Hindi pack for ration-card-hindi.pdf\"."
 }
 },
 "designSystems": []
