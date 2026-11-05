@@ -61,3 +61,37 @@ export const sceneFromDocument = (document: PdfDocument): PdfScene => ({
     objects: [] })),
 });
 export const visibleBounds = (page: ScenePage): SceneRect => page.crop ?? { x: 0, y: 0, width: page.width, height: page.height };
+
+// Page-sequence edits. Each takes a scene and page ids and returns the next scene.
+export const insertPageAfter = (scene: PdfScene, index: number, page: ScenePage): PdfScene => {
+  const pages = [...scene.pages];
+  pages.splice(index + 1, 0, page);
+  return { pages };
+};
+
+// Returns null when the selection covers every page, because a PDF keeps at least one.
+export const removePages = (scene: PdfScene, ids: string[]): PdfScene | null => {
+  const pages = scene.pages.filter((page) => !ids.includes(page.id));
+  return pages.length ? { pages } : null;
+};
+
+// Moves the pages to the target's position, keeping their relative order.
+export const movePagesBefore = (scene: PdfScene, ids: string[], targetId: string): PdfScene => {
+  if (ids.includes(targetId) || !scene.pages.some((page) => page.id === targetId)) return scene;
+  const moving = scene.pages.filter((page) => ids.includes(page.id));
+  const pages = scene.pages.filter((page) => !ids.includes(page.id));
+  pages.splice(pages.findIndex((page) => page.id === targetId), 0, ...moving);
+  return { pages };
+};
+
+export const swapPage = (scene: PdfScene, index: number, delta: number): PdfScene => {
+  const to = index + delta;
+  if (index < 0 || index >= scene.pages.length || to < 0 || to >= scene.pages.length) return scene;
+  const pages = [...scene.pages];
+  [pages[index], pages[to]] = [pages[to], pages[index]];
+  return { pages };
+};
+
+export const rotatePages = (scene: PdfScene, ids: string[], degrees = 90): PdfScene => ({
+  pages: scene.pages.map((page) => ids.includes(page.id) ? { ...page, rotation: (((page.rotation + degrees) % 360) + 360) % 360 } : page),
+});
