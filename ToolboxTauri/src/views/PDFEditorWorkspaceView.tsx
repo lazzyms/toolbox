@@ -16,7 +16,7 @@ import { Slider } from '../components/ui/slider';
 import type { PdfDocument, PdfPage, PdfTextRun } from '../features/pdf-editor/contracts';
 import { colorTokens, readColorToken } from '../features/pdf-editor/colorTokens';
 import { SceneCanvas } from '../features/pdf-editor/SceneCanvas';
-import { sceneFromDocument, visibleBounds } from '../features/pdf-editor/scene';
+import { insertPageAfter, movePagesBefore, removePages, rotatePages, sceneFromDocument, swapPage, visibleBounds } from '../features/pdf-editor/scene';
 import type { PdfScene, SceneObject, ScenePage, ScenePreview, SceneRect, SceneShape, SceneTool, SignatureMode, WatermarkPattern } from '../features/pdf-editor/scene';
 import { PREVIEW_CACHE_MAX_ENTRIES, PREVIEW_RENDER_SETTINGS, createPreviewCache, pdfEditorErrorMessage, previewCacheKey, requestWithGeneration } from './pdfPreviewHelpers';
 import type { GenerationState } from './pdfPreviewHelpers';
@@ -372,29 +372,23 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
   const insertPage = () => {
     if (!page || !availability.allows('pdf-organize')) return;
     const blank: ScenePage = { id: crypto.randomUUID(), sourceIndex: null, width: page.width, height: page.height, rotation: 0, crop: null, sourceRotation: null, sourceBox: null, objects: [] };
-    const next = [...scene.pages]; next.splice(currentIndex + 1, 0, blank);
-    commit({ pages: next }); selectPage(blank.id);
+    commit(insertPageAfter(scene, currentIndex, blank)); selectPage(blank.id);
   };
   const deletePages = () => {
-    if (!availability.allows('pdf-remove-pages') || targets.length >= scene.pages.length) return;
-    const next = scene.pages.filter((item) => !targets.includes(item.id));
-    commit({ pages: next }); setCurrentId(next[Math.min(currentIndex, next.length - 1)].id); setSelectedPages([]); setSelectedId(null);
+    if (!availability.allows('pdf-remove-pages')) return;
+    const next = removePages(scene, targets);
+    if (!next) return;
+    commit(next); setCurrentId(next.pages[Math.min(currentIndex, next.pages.length - 1)].id); setSelectedPages([]); setSelectedId(null);
   };
   const movePages = (targetId: string) => {
     if (!availability.allows('pdf-organize')) return;
     const dragged = draggedPage.current; draggedPage.current = null;
     if (!dragged || dragged === targetId) return;
-    const ids = targets.includes(dragged) ? targets : [dragged];
-    if (ids.includes(targetId)) return;
-    const moving = scene.pages.filter((item) => ids.includes(item.id));
-    const remaining = scene.pages.filter((item) => !ids.includes(item.id));
-    remaining.splice(remaining.findIndex((item) => item.id === targetId), 0, ...moving); commit({ pages: remaining });
+    commit(movePagesBefore(scene, targets.includes(dragged) ? targets : [dragged], targetId));
   };
   const shiftPage = (delta: number) => {
     if (!availability.allows('pdf-organize')) return;
-    const to = currentIndex + delta;
-    if (to < 0 || to >= scene.pages.length) return;
-    const next = [...scene.pages]; [next[currentIndex], next[to]] = [next[to], next[currentIndex]]; commit({ pages: next });
+    commit(swapPage(scene, currentIndex, delta));
   };
   const pageNumbers = () => {
     if (!availability.allows('pdf-page-numbers')) return;
@@ -579,7 +573,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
         <Button variant="ghost" size="icon-sm" aria-label="Zoom out" disabled={zoom <= 0.5} onClick={() => setZoom((value) => Math.max(0.5, value - 0.25))}>−</Button>
         <Button variant="ghost" size="sm" aria-label="Fit page" onClick={() => setZoom(1)}>{Math.round(zoom * 100)}% · Fit</Button>
         <Button variant="ghost" size="icon-sm" aria-label="Zoom in" disabled={zoom >= 3} onClick={() => setZoom((value) => Math.min(3, value + 0.25))}>＋</Button>
-        {availability.allows('pdf-organize') && <><Button variant="ghost" size="sm" aria-label="Rotate selected pages" onClick={() => { if (availability.allows('pdf-organize')) commit({ pages: scene.pages.map((item) => targets.includes(item.id) ? { ...item, rotation: (item.rotation + 90) % 360 } : item) }); }}>Rotate ↻</Button>
+        {availability.allows('pdf-organize') && <><Button variant="ghost" size="sm" aria-label="Rotate selected pages" onClick={() => { if (availability.allows('pdf-organize')) commit(rotatePages(scene, targets)); }}>Rotate ↻</Button>
         <Button variant="ghost" size="sm" aria-label="Move page earlier" disabled={currentIndex <= 0} onClick={() => shiftPage(-1)}>Move ←</Button>
         <Button variant="ghost" size="sm" aria-label="Move page later" disabled={currentIndex >= scene.pages.length - 1} onClick={() => shiftPage(1)}>Move →</Button></>}
         {availability.allows('pdf-page-numbers') && <Button variant="ghost" size="sm" onClick={pageNumbers}>Page numbers</Button>}<span className="scene-original-note">Original unchanged</span>
