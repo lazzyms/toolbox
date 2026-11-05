@@ -2,6 +2,7 @@ import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Button } from "@/components/ui/button";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import type { ImageMetadataInspection } from "../../contracts";
 import type { MediaPanelProps, MediaTool } from "./types";
 
 export interface ImageMetadataOptions {
@@ -10,7 +11,7 @@ export interface ImageMetadataOptions {
 
 const ImageMetadataPanel = ({ options, setOptions, files, outputLocation, loading }: MediaPanelProps<ImageMetadataOptions>) => {
   // The report belongs to this panel, so it clears when another tool is chosen.
-  const [report, setReport] = useState<unknown[]>([]);
+  const [report, setReport] = useState<ImageMetadataInspection[]>([]);
   return (
     <>
       <ToggleGroup
@@ -30,7 +31,7 @@ const ImageMetadataPanel = ({ options, setOptions, files, outputLocation, loadin
         variant="ghost"
         size="sm"
         disabled={loading || files.length === 0}
-        onClick={async () => setReport(await invoke<unknown[]>("inspect_image_metadata", { request: { paths: files, outputLocation } }))}
+        onClick={async () => setReport(await invoke<ImageMetadataInspection[]>("inspect_image_metadata", { request: { paths: files, outputLocation } }))}
       >
         Inspect metadata
       </Button>
