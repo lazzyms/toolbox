@@ -156,7 +156,11 @@ if (command === "preview_pdf_scene_pages") return (args as { request: { pageIndi
                     }
                     return { width, height, dataUrl: `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='${width}' height='${height}'%3E%3Crect width='100%25' height='100%25' fill='white'/%3E%3C/svg%3E` };
                 }
-                if (command === "inspect_image_metadata") return ["fixture image"];
+                if (command === "inspect_image_metadata") {
+                    return (args as { request: { paths: string[] } }).request.paths.map((path) => ({
+                        status: "report", path, format: "png", exif: true, gps: false, xmp: false, iptc: false, comments: false, icc: true, orientation: 6,
+                    }));
+                }
                 if (command === "plugin:path|resolve_directory") return "/Users/test";
                 if (command.startsWith("plugin:")) return null;
 
@@ -1043,6 +1047,20 @@ const chooseFixture = async (page: Page, selectedPath: string) => {
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await expect(page.getByText(path.basename(selectedPath), { exact: true }).first()).toBeVisible();
 };
+
+test("image metadata inspection shows the structured report for each file", async ({ page }) => {
+    await page.goto("/");
+    await openFromHome(page, "Image Metadata");
+    await chooseFixture(page, fixturePath);
+    await page.getByRole("radio", { name: "Inspect metadata" }).click();
+    await page.getByRole("button", { name: "Inspect metadata", exact: true }).click();
+
+    expect((await lastInvocation(page, "inspect_image_metadata"))?.args).toMatchObject({ request: { paths: [fixturePath] } });
+    const report = page.locator(".workspace-report");
+    await expect(report).toContainText('"status": "report"');
+    await expect(report).toContainText('"orientation": 6');
+    expect(await invocationCount(page, "image_metadata")).toBe(0);
+});
 
 test("crop is applied visually and exported as part of the scene", async ({ page }) => {
     await page.goto("/");
@@ -2059,7 +2077,7 @@ test("GIF extraction does not request a source preview", async ({ page }) => {
     expect(previewInvocations).toHaveLength(0);
 });
 
-type RunRequest = { outputLocation?: unknown; plan?: { outputLocation?: unknown } };
+type RunRequest = { outputLocation?: unknown; plan?: { outputLocation?: unknown; edits?: unknown[] } };
 
 const storeOutputSettings = async (page: Page, settings: OutputSettings) => {
     await page.addInitScript((settings) => { (window as TestWindow).__toolboxOutputSettings = settings; }, settings);
@@ -2129,6 +2147,9 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
     expect(run).toBeDefined();
     const request = (run?.args as { request: RunRequest }).request;
     expect(composedCommand === "export_image_edit_plan" ? request.plan?.outputLocation : request.outputLocation).toEqual(expectedOutputLocation);
+    if (utility.id === "image-watermark") {
+        expect(request.plan?.edits).toContainEqual({ kind: "watermark", text: "Test watermark", opacity: 20, position: { x: 0, y: 0 } });
+    }
 };
 
 test.describe("registered feature actions", () => {
