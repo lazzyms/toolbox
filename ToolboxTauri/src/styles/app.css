@@ -1420,6 +1420,28 @@ body {
 .settings-folder > svg { width:16px; height:16px; flex:none; color:var(--muted-foreground); }
 .settings-folder-path { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:240px; }
 .settings-update-status { min-height: 24px; border: 0; padding: 0; background: transparent; color: var(--muted-foreground); font-size: 12px; }
+.packs { display:flex; flex-direction:column; gap:18px; max-width:680px; }
+.packs-intro { display:flex; flex-direction:column; gap:6px; }
+.packs-intro h2, .packs-intro p { margin:0; }
+.packs > p { margin:0; }
+.pack-list { list-style:none; margin:0; padding:0; border-top:1px solid var(--border); }
+.pack-row { display:flex; flex-direction:column; gap:10px; padding:12px 0; border-bottom:1px solid var(--border); }
+.pack-row-main { display:grid; grid-template-columns:22px minmax(0,1fr) auto; gap:10px; align-items:center; }
+.pack-row-text { display:flex; flex-direction:column; gap:3px; min-width:0; }
+.pack-row-name { font-size:13px; font-weight:500; }
+.pack-row-status { max-width:360px; text-align:right; }
+.pack-row-status[data-status="damaged"] { color:var(--destructive); }
+.pack-row-status[data-status="incompatible"] { color:var(--warning); }
+.pack-chevron { transition:transform .15s; }
+.pack-chevron[data-open="true"] { transform:rotate(90deg); }
+.pack-details { display:grid; grid-template-columns:130px minmax(0,1fr); gap:6px 12px; margin:0 0 0 32px; padding:12px 14px; border-radius:8px; background:var(--muted); font-size:12px; }
+.pack-details dt { color:var(--muted-foreground); }
+.pack-details dd { margin:0; }
+@media (max-width: 560px) {
+  .pack-row-main { grid-template-columns:22px minmax(0,1fr); }
+  .pack-row-status { grid-column:2; text-align:left; }
+  .pack-details { grid-template-columns:1fr; margin-left:0; }
+}
 
 /* Batch password with per-file overrides */
 .password-options { display: grid; gap: 10px; }
