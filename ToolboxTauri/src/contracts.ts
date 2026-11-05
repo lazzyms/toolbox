@@ -51,8 +51,16 @@ export type ToolInputCardinality = "single" | "multiple" | "ordered";
 
 export type NativeAvailability = "available" | "unavailable";
 
+export interface FormatFamily {
+  id: string;
+  extensions: readonly string[];
+  nativeAvailability: NativeAvailability;
+  basicFidelity: boolean;
+}
+
 export interface ToolCapability {
   acceptedExtensions: readonly string[];
+  formatFamilies?: readonly FormatFamily[];
   inputCardinality: ToolInputCardinality;
   supportsPageSelection: boolean;
   supportsPreview: boolean;
@@ -80,8 +88,8 @@ export type ToolCommand =
   | "inspect_pdf"
   | "crop_pdf"
   | "edit_pdf"
+  | "export_pdf_scene"
   | "sign_pdf"
-  | "organize_pdf"
   | "add_page_numbers"
   | "watermark_pdf"
   | "compress_pdf"
@@ -89,7 +97,6 @@ export type ToolCommand =
   | "repair_pdf"
   | "redact_pdf"
   | "compare_pdfs"
-  | "remove_pdf_pages"
   | "extract_pdf_pages"
   | "merge_pdfs"
   | "split_pdf"
@@ -155,6 +162,8 @@ interface JobOutcomeBase {
   inputPath: string;
   detail: string;
   warnings: OutcomeWarning[];
+  originalBytes?: number;
+  outputBytes?: number;
 }
 
 export interface SucceededJobOutcome extends JobOutcomeBase {
@@ -192,6 +201,25 @@ export interface ImagePreview {
   height: number;
   dataUrl: string;
 }
+
+export type ImageMetadataFormat = "jpeg" | "png" | "webp" | "tiff" | "heic";
+
+export type ImageMetadataErrorCode = "unreadable" | "unsupportedFormat" | "truncated" | "corrupt";
+
+export type ImageMetadataInspection =
+  | {
+      status: "report";
+      path: string;
+      format: ImageMetadataFormat;
+      exif: boolean;
+      gps: boolean;
+      xmp: boolean;
+      iptc: boolean;
+      comments: boolean;
+      icc: boolean;
+      orientation: number | null;
+    }
+  | { status: "error"; path: string; code: ImageMetadataErrorCode; message: string };
 
 export interface ToolDefinition {
   id: AtomicToolId;
@@ -281,9 +309,34 @@ export interface PasswordRequest extends ToolRequest {
   passwordOverrides: Record<string, string>;
 }
 
+export type WatermarkPlacement = "center" | "top-left" | "top-right" | "bottom-left" | "bottom-right" | "tile";
+export type WatermarkPosition = WatermarkPlacement | { x: number; y: number };
+
+// Mirrors kit::common::watermark::WatermarkOptions.
+export interface WatermarkOptions {
+  text?: string;
+  logoPath?: string;
+  size?: number;
+  opacity: number;
+  color?: string;
+  position?: WatermarkPosition;
+  rotation?: number;
+}
+
+export interface WatermarkImagesRequest extends ToolRequest, WatermarkOptions {}
+
 export interface CompressImagesRequest extends ToolRequest {
   quality: number;
   lossless?: boolean;
+}
+
+export type OcrMode = "searchablePdf" | "text";
+
+export interface OcrRequest extends ToolRequest {
+  pageRange: string | null;
+  mode: OcrMode;
+  force: boolean;
+  languages: string[];
 }
 
 export interface ConvertImagesRequest extends ToolRequest {
