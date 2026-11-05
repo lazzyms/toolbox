@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { warningText } from "../src/components/resultRow.ts";
+import { resultSummary, rowView, warningText } from "../src/components/resultRow.ts";
 import { parseJobOutcome, parseToolResult } from "../src/jobOutcome.ts";
 
 const nativeSamples: unknown[] = JSON.parse(
@@ -14,9 +14,9 @@ test("native-shaped outcomes parse into the TypeScript contract for all three st
   const outcomes = parseToolResult(nativeSamples);
 
   assert.deepEqual(outcomes, nativeSamples);
-  assert.deepEqual(outcomes.map((outcome) => outcome.state), ["succeeded", "skipped", "skipped", "failed", "failed", "succeeded"]);
+  assert.deepEqual(outcomes.map((outcome) => outcome.state), ["succeeded", "skipped", "skipped", "failed", "failed", "succeeded", "succeeded"]);
 
-  const [succeeded, pointedSkip, plainSkip, failed, limited, images] = outcomes;
+  const [succeeded, pointedSkip, plainSkip, failed, limited, images, blankPages] = outcomes;
   assert.equal(succeeded.state === "succeeded" && succeeded.outputPaths[0], "signed-edited.pdf");
   assert.deepEqual(succeeded.warnings.map((warning) => warning.code), ["signatureRemoved", "fontSubstituted"]);
   assert.deepEqual(
@@ -41,6 +41,43 @@ test("native-shaped outcomes parse into the TypeScript contract for all three st
 
   assert.deepEqual(images.warnings.map((warning) => warning.code), ["imageUnsupported", "imageDamaged", "imageTooLarge", "jpegColourKept"]);
   assert.deepEqual(images.warnings.map(warningText), images.warnings.map((warning) => warning.message), "rows say what the native side says");
+  assert.deepEqual(blankPages.warnings.map(warningText), blankPages.warnings.map((warning) => warning.message));
+});
+
+test("pages without text are a note that points at OCR, not a warning", () => {
+  const withPages = (pages: number[], extra: unknown[] = []) =>
+    parseJobOutcome({ ...sample(6), warnings: [{ code: "pagesWithoutText", message: "", details: { pages } }, ...extra] });
+  assert.equal(warningText(withPages([3]).warnings[0]), "Page 3 has no selectable text. OCR can read it.");
+  assert.equal(warningText(withPages([2, 3, 6]).warnings[0]), "Pages 2-3, 6 have no selectable text. OCR can read them.");
+
+  const note = rowView(withPages([30, 31, 32, 33]), "Extracted");
+  assert.equal(note.tone, "note");
+  assert.equal(note.spokenState, "Extracted with a note");
+  assert.deepEqual(note.detailLines, ["Pages 30-33 have no selectable text. OCR can read them.", "PDF text extracted in reading order"]);
+  assert.deepEqual(note.pointer?.pointer, { kind: "tool", toolId: "pdf-ocr" });
+  assert.equal(note.openOutput?.path, "scan-archive-text.txt", "the text file was still written");
+  assert.deepEqual(resultSummary([withPages([2])], "Extracted").hints, [], "a note is not counted as a warning");
+
+  const kept = sample(5).warnings as unknown[];
+  const warned = rowView(withPages([2], kept.slice(-1)), "Extracted");
+  assert.equal(warned.tone, "warn", "a real warning still wins the row's tone");
+  assert.deepEqual(warned.pointer?.pointer, { kind: "tool", toolId: "pdf-ocr" });
+  assert.equal(rowView(sample(5) as never, "Extracted").pointer, null, "rows without blank pages keep no pointer");
+});
+
+test("skipped PDFs keep their reason and OCR pointer apart from failures", () => {
+  const scanned = parseJobOutcome({
+    ...sample(2),
+    inputPath: "scan.pdf",
+    reason: { code: "noEffectiveChange", message: "PDF contains no selectable text; scanned PDFs require OCR. No file was made.", pointer: { kind: "tool", toolId: "pdf-ocr" } },
+  });
+  const range = parseJobOutcome({ ...sample(2), inputPath: "memo.pdf", reason: { code: "rangeEmptyAfterClamping", message: "No pages in range 3-5, 8-. This PDF has 2 pages.", pointer: null } });
+  const scannedRow = rowView(scanned, "Extracted");
+  assert.deepEqual([scannedRow.tone, scannedRow.stateLabel, scannedRow.detailLines[0]], ["skip", "Skipped", "PDF contains no selectable text; scanned PDFs require OCR. No file was made."]);
+  assert.deepEqual(scannedRow.pointer?.pointer, { kind: "tool", toolId: "pdf-ocr" });
+  assert.equal(scannedRow.canRetry, false);
+  const rangeRow = rowView(range, "Extracted");
+  assert.deepEqual([rangeRow.tone, rangeRow.detailLines, rangeRow.pointer], ["skip", ["No pages in range 3-5, 8-. This PDF has 2 pages."], null]);
 });
 
 test("image warnings name the pages as runs and keep singular wording for one image", () => {

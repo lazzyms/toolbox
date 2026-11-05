@@ -418,7 +418,7 @@ fn materialize_rendered_images(input: &Path, location: &OutputLocation, generate
     JobOutcome::succeeded(input.to_path_buf(), outputs, "PDF rendered to images")
 }
 
-pub const NO_SELECTABLE_TEXT: &str = "PDF contains no selectable text; scanned PDFs require OCR.";
+pub const NO_SELECTABLE_TEXT: &str = "PDF contains no selectable text; scanned PDFs require OCR. No file was made.";
 pub const NO_EMBEDDED_IMAGES: &str = "No images in the selected pages. No folder was made.";
 pub const BOTH_WITHOUT_TEXT: &str = "No selectable text, so no text file was made. OCR can read scanned pages.";
 pub const BOTH_WITHOUT_IMAGES: &str = "No images in this PDF, so only the text file was saved.";
@@ -484,8 +484,8 @@ fn extract_with(request: &ExtractFromPdfRequest, input: PathBuf, helper: &TextHe
     };
     let pages = match pages_in_range(&document, request.page_range.as_deref()) {
         Ok(pages) if !pages.is_empty() => pages,
-        Ok(_) => return failure(input, "Select at least one PDF page.".to_string()),
-        Err(error) => return failure(input, error),
+        Ok(_) => return range_empty_after_clamping(input, request.page_range.as_deref().unwrap_or_default(), document.get_pages().len()),
+        Err(error) => return JobOutcome::failure(input, ToolError::invalid_input(error)),
     };
     let text = if request.mode.wants_text() {
         match write_text(&input, &pages, helper, request.preserve_layout, &request.output_location) {
@@ -499,7 +499,7 @@ fn extract_with(request: &ExtractFromPdfRequest, input: PathBuf, helper: &TextHe
         match written {
             Ok(images) => images,
             Err(ImageFailure { folder, message, warnings }) => {
-                let outputs = text.into_iter().chain(folder).collect();
+                let outputs = text.map(|text| text.path).into_iter().chain(folder).collect();
                 return warnings.into_iter().fold(JobOutcome::failure_with_outputs(input, outputs, ToolError::processing(message)), JobOutcome::with_warning);
             }
         }
@@ -507,9 +507,11 @@ fn extract_with(request: &ExtractFromPdfRequest, input: PathBuf, helper: &TextHe
     let tally = images.tally();
     let all_small = images.all_small();
     let skipped = |message: String| JobOutcome::skipped(input.clone(), SkipReason::new(SkipCode::NoEffectiveChange, message));
+    let blank_pages = text.as_ref().map(|text| text.blank_pages.clone()).unwrap_or_default();
+    let text = text.map(|text| text.path);
     let outcome = match (request.mode, text, images.saved) {
         (ExtractMode::Text, Some(text), _) => JobOutcome::succeeded(input, vec![text], if request.preserve_layout { "PDF text extracted with its layout preserved" } else { "PDF text extracted in reading order" }),
-        (ExtractMode::Text, None, _) => failure(input, NO_SELECTABLE_TEXT.to_string()),
+        (ExtractMode::Text, None, _) => JobOutcome::skipped(input, SkipReason::new(SkipCode::NoEffectiveChange, NO_SELECTABLE_TEXT).with_pointer(ocr_pointer())),
         (ExtractMode::Images, _, None) => skipped(all_small.map_or(NO_EMBEDDED_IMAGES.to_string(), |lead| format!("{lead}. No folder was made."))),
         (ExtractMode::Images, _, Some(saved)) => JobOutcome::succeeded(input, vec![saved.folder], format!("Saved {tally}.")),
         (ExtractMode::Both, Some(text), Some(saved)) => JobOutcome::succeeded(input, vec![text, saved.folder], format!("Saved the text and {tally}.")),
@@ -517,10 +519,26 @@ fn extract_with(request: &ExtractFromPdfRequest, input: PathBuf, helper: &TextHe
         (ExtractMode::Both, None, Some(saved)) => JobOutcome::succeeded(input, vec![saved.folder], format!("{BOTH_WITHOUT_TEXT} Saved {tally}.")),
         (ExtractMode::Both, None, None) => skipped(all_small.map_or(NOTHING_TO_EXTRACT.to_string(), |lead| format!("No selectable text, and {}{}. Nothing was saved.", lead[..1].to_lowercase(), &lead[1..]))),
     };
+    let outcome = if blank_pages.is_empty() { outcome } else { outcome.with_warning(pages_without_text(blank_pages)) };
     images.warnings.into_iter().fold(outcome, JobOutcome::with_warning)
 }
 
+fn ocr_pointer() -> OutcomePointer { OutcomePointer::Tool { tool_id: "pdf-ocr".into() } }
+
+/// One range applies to a whole batch, so a PDF too short for every page in it is skipped, not failed.
+fn range_empty_after_clamping(input: PathBuf, range: &str, count: usize) -> JobOutcome {
+    let length = if count == 1 { "1 page".to_string() } else { format!("{count} pages") };
+    JobOutcome::skipped(input, SkipReason::new(SkipCode::RangeEmptyAfterClamping, format!("No pages in range {}. This PDF has {length}.", range.trim())))
+}
+
+/// Pages the text helper read as blank while other pages had text: likely scanned, so OCR can read them.
+fn pages_without_text(pages: Vec<u32>) -> OutcomeWarning {
+    let message = if pages.len() == 1 { format!("{} has no selectable text. OCR can read it.", page_list(&pages)) } else { format!("{} have no selectable text. OCR can read them.", page_list(&pages)) };
+    OutcomeWarning { kind: WarningKind::PagesWithoutText { pages }, message }
+}
+
 /// Resolves the shared range syntax against one PDF into 1-based page numbers in document order.
+/// The range is clamped to this PDF's length: entries past its last page are dropped and open or long runs end there.
 fn pages_in_range(document: &Document, range: Option<&str>) -> Result<Vec<u32>, String> {
     let count = document.get_pages().len();
     let Some(raw) = range.filter(|value| !value.trim().is_empty()) else { return Ok((1..=count as u32).collect()); };
@@ -532,9 +550,9 @@ fn pages_in_range(document: &Document, range: Option<&str>) -> Result<Vec<u32>, 
             Some((start, end)) => (parse_page_number(start)?, parse_page_number(end)?),
             None => { let page = parse_page_number(token)?; (page, page) },
         };
-        if start > count || end > count { return Err(format!("Page range {token} is outside the document.")); }
-        if start > end { return Err(format!("{token} runs backwards. Write it as {end}-{start}.")); }
-        selected.extend((start as u32)..=(end as u32));
+        if start > end && !token.trim_end().ends_with('-') { return Err(format!("{token} runs backwards. Write it as {end}-{start}.")); }
+        if start > count { continue; }
+        selected.extend((start as u32)..=(end.min(count) as u32));
     }
     Ok(selected.into_iter().collect())
 }
@@ -543,8 +561,14 @@ fn password_protected(input: PathBuf) -> JobOutcome {
     JobOutcome::failure(input, ToolError::invalid_input(PDF_PASSWORD_PROTECTED).with_pointer(OutcomePointer::Tool { tool_id: "lock-unlock".into() }))
 }
 
+/// A written text file, and the selected pages that had no selectable text in it.
+struct TextFile {
+    path: PathBuf,
+    blank_pages: Vec<u32>,
+}
+
 /// Writes the selected pages' text with pdftotext. `None` means the pages hold no selectable text, and nothing is written.
-fn write_text(input: &Path, pages: &[u32], helper: &TextHelper, preserve_layout: bool, location: &OutputLocation) -> Result<Option<PathBuf>, ToolError> {
+fn write_text(input: &Path, pages: &[u32], helper: &TextHelper, preserve_layout: bool, location: &OutputLocation) -> Result<Option<TextFile>, ToolError> {
     let Ok(pdftotext) = &helper.path else { return Err(ToolError::unavailable(PDF_TEXT_HELPER_MISSING)) };
     let limit = helper.time_limit(pages.len());
     let deadline = Instant::now() + limit;
@@ -565,10 +589,22 @@ fn write_text(input: &Path, pages: &[u32], helper: &TextHelper, preserve_layout:
         text.extend_from_slice(&output.stdout);
     }
     let text = unix_text(&String::from_utf8_lossy(&text));
-    if text.trim_matches(|character: char| character.is_whitespace() || character == '\u{c}').is_empty() { return Ok(None); }
+    if is_blank(&text) { return Ok(None); }
+    let blank_pages = blank_pages(&text, pages);
     let output = OutputNaming::reserve_destination(input, location, "-text", "txt").map_err(|error| ToolError::processing(format!("Could not reserve PDF text output: {error}")))?;
     fs::write(output.path(), text).map_err(|error| ToolError::processing(format!("Could not write text output: {error}")))?;
-    output.publish().map(Some).map_err(|error| ToolError::processing(format!("Could not publish text output: {error}")))
+    let path = output.publish().map_err(|error| ToolError::processing(format!("Could not publish text output: {error}")))?;
+    Ok(Some(TextFile { path, blank_pages }))
+}
+
+fn is_blank(text: &str) -> bool { text.trim_matches(|character: char| character.is_whitespace() || character == '\u{c}').is_empty() }
+
+/// pdftotext ends every page with a form feed, so the text splits into one part per selected page in order.
+/// When the parts and pages don't line up, no page is named rather than naming the wrong ones.
+fn blank_pages(text: &str, pages: &[u32]) -> Vec<u32> {
+    let parts = text.split('\u{c}').collect::<Vec<_>>();
+    if parts.len() != pages.len() { return Vec::new(); }
+    pages.iter().zip(parts).filter(|(_, part)| is_blank(part)).map(|(page, _)| *page).collect()
 }
 
 /// Groups sorted page numbers into the contiguous runs pdftotext reads with -f and -l.
@@ -2873,7 +2909,7 @@ mod tests {
 #[cfg(test)]
 mod text_extraction_tests {
     use super::*;
-    use crate::kit::contracts::ErrorKind;
+    use crate::kit::contracts::{ErrorKind, OutcomeState};
     use lopdf::StringFormat;
 
     enum Run<'a> { Latin(&'a str), Cid(&'a str) }
@@ -3055,6 +3091,52 @@ mod text_extraction_tests {
         pages_pdf(&input, 5);
         let text = text_of(&extract_with(&request(&input, ExtractMode::Text, Some("4, 1-2"), false), input.clone(), &helper));
         assert_eq!(text, "Toolbox page 1\n\n\u{c}Toolbox page 2\n\n\u{c}Toolbox page 4\n\n");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn one_range_is_clamped_to_each_pdf_and_a_pdf_outside_it_is_skipped() {
+        let root = sandbox("clamped");
+        let helper = TextHelper { path: Ok(root.join("never-run")), per_file: PDF_TEXT_TIME_PER_FILE, per_page: PDF_TEXT_TIME_PER_PAGE };
+        let [two, five] = [2, 5].map(|count| {
+            let path = root.join(format!("pages-{count}.pdf"));
+            pages_pdf(&path, count);
+            (path, Document::load(root.join(format!("pages-{count}.pdf"))).unwrap())
+        });
+        assert_eq!(pages_in_range(&five.1, Some("2-4, 9, 4-")), Ok(vec![2, 3, 4, 5]));
+        assert_eq!(pages_in_range(&two.1, Some("2-4, 9, 4-")), Ok(vec![2]));
+        assert_eq!(pages_in_range(&two.1, Some("3-5, 8-")), Ok(vec![]));
+        assert_eq!(pages_in_range(&two.1, Some("4-3")), Err("4-3 runs backwards. Write it as 3-4.".to_string()));
+        assert_eq!(pages_in_range(&two.1, Some("0")), Err("Page numbers start at 1.".to_string()));
+        for mode in [ExtractMode::Text, ExtractMode::Images, ExtractMode::Both] {
+            let outcome = extract_with(&request(&two.0, mode, Some(" 3-5, 8- "), false), two.0.clone(), &helper);
+            assert_eq!(outcome.state, OutcomeState::Skipped { reason: SkipReason::new(SkipCode::RangeEmptyAfterClamping, "No pages in range 3-5, 8-. This PDF has 2 pages.") });
+        }
+        assert_eq!(files_in(&root), ["pages-2.pdf", "pages-5.pdf"]);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn blank_pages_are_listed_while_the_text_is_saved_and_a_textless_pdf_points_at_ocr() {
+        let root = sandbox("blank_pages");
+        let input = root.join("partial.pdf");
+        pages_pdf(&input, 6);
+        // Prints each page in the -f/-l run, leaving pages 2, 3 and 6 without text, the way pdftotext reads scanned pages.
+        let helper = stand_in(&root, "i=$6\nwhile [ $i -le $8 ]; do case $i in 2|3|6) printf '\\n\\f' ;; *) printf 'Page %s\\n\\f' $i ;; esac; i=$((i+1)); done\n");
+        let outcome = extract_with(&request(&input, ExtractMode::Text, None, false), input.clone(), &helper);
+        assert_eq!(text_of(&outcome), "Page 1\n\u{c}\n\u{c}\n\u{c}Page 4\n\u{c}Page 5\n\u{c}\n");
+        assert_eq!(outcome.warnings, [pages_without_text(vec![2, 3, 6])]);
+        assert_eq!(outcome.warnings[0].message, "Pages 2-3, 6 have no selectable text. OCR can read them.");
+        let selected = extract_with(&request(&input, ExtractMode::Text, Some("1, 3, 5"), false), input.clone(), &helper);
+        assert_eq!(selected.warnings[0].message, "Page 3 has no selectable text. OCR can read it.");
+        let full = extract_with(&request(&input, ExtractMode::Text, Some("4-5"), false), input.clone(), &helper);
+        assert!(full.warnings.is_empty(), "{full:?}");
+        let scanned = extract_with(&request(&input, ExtractMode::Text, Some("2-3, 6"), false), input.clone(), &helper);
+        assert_eq!(scanned.state, OutcomeState::Skipped { reason: SkipReason::new(SkipCode::NoEffectiveChange, NO_SELECTABLE_TEXT).with_pointer(OutcomePointer::Tool { tool_id: "pdf-ocr".into() }) });
+        let mut names = files_in(&root);
+        names.retain(|name| name.ends_with(".txt"));
+        assert_eq!(names, ["partial-text-1.txt", "partial-text-2.txt", "partial-text.txt"], "the textless run writes nothing");
         let _ = fs::remove_dir_all(root);
     }
 

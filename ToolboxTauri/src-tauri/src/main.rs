@@ -2469,7 +2469,7 @@ mod command_tests {
         };
         let read = |path: &PathBuf| std::fs::read_to_string(path).unwrap();
 
-        // Text: one text file per PDF in reading order; a PDF without a text layer fails alone.
+        // Text: one text file per PDF in reading order; a PDF without a text layer is skipped alone and points at OCR.
         let text = run(vec![mixed.clone(), plain.clone(), scanned.clone()], ExtractMode::Text, None, "text");
         assert_eq!(text.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), vec![mixed.clone(), plain.clone(), scanned.clone()]);
         for outcome in &text[..2] {
@@ -2477,7 +2477,14 @@ mod command_tests {
             let body = read(&outcome.output_paths()[0]);
             assert!(body.contains("Toolbox page 1") && body.contains("Toolbox page 2"), "{body}");
         }
-        assert_eq!(text[2].error().map(|error| error.message.as_str()), Some(NO_SELECTABLE_TEXT));
+        match &text[2].state {
+            OutcomeState::Skipped { reason } => {
+                assert_eq!((reason.code, reason.message.as_str()), (SkipCode::NoEffectiveChange, NO_SELECTABLE_TEXT));
+                assert!(reason.message.starts_with("PDF contains no selectable text; scanned PDFs require OCR"));
+                assert_eq!(reason.pointer, Some(crate::kit::contracts::OutcomePointer::Tool { tool_id: "pdf-ocr".into() }));
+            }
+            state => panic!("a fully scanned PDF is skipped in Text mode, got {state:?}"),
+        }
         assert!(text[2].output_paths().is_empty());
         assert_eq!(files_in(&root.join("text")), vec!["mixed-text.txt", "plain-text.txt"]);
 
@@ -2535,6 +2542,80 @@ mod command_tests {
         let small = tauri::async_runtime::block_on(extract_from_pdf(RunEvents::silent(), small));
         assert_eq!(small[0].output_paths(), [root.join("small").join("mixed-text.txt")]);
         assert_eq!(small[0].detail, "The 1 image is smaller than the minimum size, so only the text file was saved.");
+
+        for original in &originals { original.assert_untouched(); }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn extract_from_pdf_clamps_one_range_to_each_pdf_and_skips_what_has_nothing_to_extract() {
+        if !pdftotext_available() { return; }
+        use crate::kit::contracts::{OutcomePointer, OutcomeState, SkipCode, WarningKind};
+        use crate::kit::pdf::remaining::{NOTHING_TO_EXTRACT, NO_EMBEDDED_IMAGES, NO_SELECTABLE_TEXT};
+        let root = sandbox("extract-from-pdf-skips");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let short = root.join("short.pdf");
+        let middle = root.join("middle.pdf");
+        let long = root.join("long.pdf");
+        let partial = root.join("partial.pdf");
+        let scanned = root.join("scanned.pdf");
+        let blank = root.join("blank.pdf");
+        make_extract_pdf(&short, &[(true, false)]);
+        make_extract_pdf(&middle, &[(true, false); 3]);
+        make_extract_pdf(&long, &[(true, false); 6]);
+        make_extract_pdf(&partial, &[(true, false), (false, true), (false, false), (true, false)]);
+        make_extract_pdf(&scanned, &[(false, true), (false, true)]);
+        make_extract_pdf(&blank, &[(false, false)]);
+        let originals = [&short, &middle, &long, &partial, &scanned, &blank].map(Original::of);
+        let run = |paths: Vec<PathBuf>, mode, range: Option<&str>, folder: &str| {
+            let request = extract_request(paths, mode, range, location(&root, folder));
+            tauri::async_runtime::block_on(extract_from_pdf(RunEvents::silent(), request))
+        };
+        let pages_in = |outcome: &JobOutcome| {
+            let body = std::fs::read_to_string(&outcome.output_paths()[0]).unwrap();
+            (1..=6).filter(|page| body.contains(&format!("Toolbox page {page}"))).collect::<Vec<_>>()
+        };
+        let skip_of = |outcome: &JobOutcome| match &outcome.state {
+            OutcomeState::Skipped { reason } => reason.clone(),
+            state => panic!("{} should be skipped, got {state:?}", outcome.input_path.display()),
+        };
+
+        // One range is clamped to each PDF in the batch; a PDF with no page in it is skipped and nothing is written for it.
+        let ranged = run(vec![short.clone(), middle.clone(), long.clone()], ExtractMode::Text, Some("2-4, 6-"), "ranged");
+        let reason = skip_of(&ranged[0]);
+        assert_eq!((reason.code, reason.message.as_str(), &reason.pointer), (SkipCode::RangeEmptyAfterClamping, "No pages in range 2-4, 6-. This PDF has 1 page.", &None));
+        assert!(ranged[0].output_paths().is_empty());
+        assert_eq!(pages_in(&ranged[1]), [2, 3]);
+        assert_eq!(pages_in(&ranged[2]), [2, 3, 4, 6]);
+        assert!(ranged[1].warnings.is_empty() && ranged[2].warnings.is_empty());
+        assert_eq!(files_in(&root.join("ranged")), vec!["long-text.txt", "middle-text.txt"]);
+        let past_the_end = run(vec![middle.clone()], ExtractMode::Both, Some("7-9"), "past-the-end");
+        assert_eq!(skip_of(&past_the_end[0]).message, "No pages in range 7-9. This PDF has 3 pages.");
+        assert!(files_in(&root.join("past-the-end")).is_empty());
+
+        // Each mode skips a PDF that has nothing for it, says why, and leaves no file or folder behind.
+        let images = run(vec![middle.clone()], ExtractMode::Images, None, "no-images");
+        assert_eq!(skip_of(&images[0]).message, NO_EMBEDDED_IMAGES);
+        let text = run(vec![scanned.clone()], ExtractMode::Text, None, "scanned");
+        let reason = skip_of(&text[0]);
+        assert_eq!(reason.message, NO_SELECTABLE_TEXT);
+        assert_eq!(reason.pointer, Some(OutcomePointer::Tool { tool_id: "pdf-ocr".into() }));
+        let neither = run(vec![blank.clone()], ExtractMode::Both, None, "neither");
+        assert_eq!(skip_of(&neither[0]).message, NOTHING_TO_EXTRACT);
+        for folder in ["no-images", "scanned", "neither"] { assert!(files_in(&root.join(folder)).is_empty(), "{folder} should stay empty"); }
+
+        // Pages without text are listed with an OCR suggestion while the text file is still written.
+        for mode in [ExtractMode::Text, ExtractMode::Both] {
+            let folder = if mode == ExtractMode::Text { "partial-text" } else { "partial-both" };
+            let outcome = &run(vec![partial.clone()], mode, None, folder)[0];
+            assert!(matches!(outcome.state, OutcomeState::Succeeded { .. }), "{outcome:?}");
+            assert_eq!(pages_in(outcome), [1, 4]);
+            assert_eq!(outcome.warnings.iter().map(|warning| (&warning.kind, warning.message.as_str())).collect::<Vec<_>>(), [(&WarningKind::PagesWithoutText { pages: vec![2, 3] }, "Pages 2-3 have no selectable text. OCR can read them.")]);
+        }
+        let selected = &run(vec![partial.clone()], ExtractMode::Text, Some("1-2"), "partial-selected")[0];
+        assert_eq!(selected.warnings.iter().map(|warning| warning.message.as_str()).collect::<Vec<_>>(), ["Page 2 has no selectable text. OCR can read it."]);
+        assert_eq!(files_in(&root.join("partial-selected")), vec!["partial-text.txt"]);
 
         for original in &originals { original.assert_untouched(); }
         let _ = std::fs::remove_dir_all(root);

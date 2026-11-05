@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import path from "node:path";
-import type { JobOutcome, LimitKind, OutputSettings } from "../../src/contracts";
+import type { JobOutcome, LimitKind, OutcomePointer, OutputSettings } from "../../src/contracts";
 import { openToolBySearch } from "./open-tool";
 import { ToolWorkspaceRegistry, UtilityRegistry, isPdfSceneTool, toolsForWorkspace, workspaceEntries, workspaceForTool } from "../../src/registry";
 import { RetiredToolIds } from "../../src/registry/retiredToolIds";
@@ -1479,6 +1479,68 @@ test("PDF page-scoped conversions send the selected pages and keep OCR gated", a
     const ocrButton = page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "OCR PDF", exact: true });
     await expect(ocrButton).toBeDisabled();
     await expect(ocrButton).toHaveAttribute("title", "OCR PDF is unavailable in this build");
+
+    // Extract from PDF sends one range for every PDF; the native side clamps it per file and skips what has nothing to extract.
+    const scanned = "PDF contains no selectable text; scanned PDFs require OCR. No file was made.";
+    const outOfRange = "No pages in range 3-5, 8-. This PDF has 2 pages.";
+    const blankPages = "Pages 30-33 have no selectable text. OCR can read them.";
+    const timedOut = "Reading text took longer than 3 minutes, so it was stopped. The other PDFs weren't affected.";
+    const extractPaths = ["/local/scan-archive-2019.pdf", "/local/site-survey-scan.pdf", "/local/memo-oct.pdf", "/local/annual-accounts.pdf"];
+    const skipped = (inputPath: string, code: "noEffectiveChange" | "rangeEmptyAfterClamping", message: string, pointer: OutcomePointer | null): MockOutcome => ({
+        inputPath, outputPaths: [], detail: "", state: "skipped", failure: null, reason: { code, message, pointer }, warnings: [],
+    });
+    await page.goto("/");
+    await openFromHome(page, "Extract from PDF");
+    await page.evaluate((paths) => { (window as TestWindow).__toolboxDialogResults = [paths]; }, extractPaths);
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await page.getByRole("radiogroup", { name: "Extract", exact: true }).getByRole("radio", { name: "Text", exact: true }).click();
+    await page.getByRole("radio", { name: "Range", exact: true }).click();
+    await page.getByRole("textbox", { name: "Page range for every PDF" }).fill("3-5, 8-");
+    await page.evaluate((outcomes) => { (window as TestWindow).__toolboxProcessingResults = outcomes; }, [
+        succeeded("/local/scan-archive-2019.pdf", ["/local/scan-archive-2019-text.txt"], {
+            detail: "PDF text extracted in reading order",
+            warnings: [{ code: "pagesWithoutText", message: blankPages, details: { pages: [30, 31, 32, 33] } }],
+        }),
+        skipped("/local/site-survey-scan.pdf", "noEffectiveChange", scanned, { kind: "tool", toolId: "pdf-ocr" }),
+        skipped("/local/memo-oct.pdf", "rangeEmptyAfterClamping", outOfRange, null),
+        failed("/local/annual-accounts.pdf", "processing", timedOut),
+    ]);
+    await page.getByRole("button", { name: "Extract from 4 PDFs", exact: true }).click();
+
+    const extractInvocation = await page.evaluate(() =>
+        (window as TestWindow).__toolboxInvocations?.find(({ command }) => command === "extract_from_pdf"),
+    );
+    expect(extractInvocation?.args).toMatchObject({ request: { paths: extractPaths, mode: "text", pageRange: "3-5, 8-" } });
+
+    const rows = page.locator(".result-row");
+    const details = (row: number) => rows.nth(row).locator(".result-row-detail");
+    const ocrPointer = (row: number) => rows.nth(row).getByRole("button", { name: "Open OCR PDF", exact: true });
+    await expect(rows).toHaveCount(4);
+    await expect(rows.nth(0)).toHaveAttribute("data-state", "succeeded");
+    await expect(rows.nth(0)).toHaveAttribute("data-tone", "note");
+    await expect(details(0)).toHaveText([blankPages, "PDF text extracted in reading order"]);
+    await expect(rows.nth(0).getByRole("button", { name: "Open scan-archive-2019-text.txt", exact: true })).toBeVisible();
+    await expect(ocrPointer(0)).toBeVisible();
+    for (const [row, reason] of [[1, scanned], [2, outOfRange]] as const) {
+        await expect(rows.nth(row)).toHaveAttribute("data-state", "skipped");
+        await expect(rows.nth(row)).toHaveAttribute("data-tone", "skip");
+        await expect(rows.nth(row).locator(".result-row-state")).toContainText("Skipped");
+        await expect(details(row)).toHaveText([reason]);
+        await expect(rows.nth(row).getByRole("button", { name: /^(Show in|Retry)/ })).toHaveCount(0);
+    }
+    await expect(ocrPointer(1)).toBeVisible();
+    await expect(ocrPointer(2)).toHaveCount(0);
+    await expect(rows.nth(3)).toHaveAttribute("data-state", "failed");
+    await expect(rows.nth(3)).toHaveAttribute("data-tone", "fail");
+    await expect(rows.nth(3).locator(".result-row-state")).toContainText("Failed");
+    await expect(details(3)).toHaveText([timedOut]);
+    await expect(ocrPointer(3)).toHaveCount(0);
+    await expect(page.getByText("1 extracted, 2 skipped, 1 failed", { exact: false }).first()).toBeVisible();
+
+    await ocrPointer(1).click();
+    const gatedOcr = page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "OCR PDF", exact: true });
+    await expect(gatedOcr).toHaveAttribute("aria-pressed", "true");
+    await expect(gatedOcr).toBeDisabled();
 });
 
 test.describe("Extract from PDF", () => {
