@@ -74,15 +74,79 @@ pub(crate) fn load_image(path: &std::path::Path) -> Result<image::DynamicImage, 
     }
 }
 
+/// Decodes an image and bakes its camera orientation into the pixels once
+/// (`OrientationPolicy::BakePixelsOnce`), so every later pixel step sees the upright
+/// image. Returns whether a non-neutral orientation was applied. HEIC is left as
+/// decoded because libheif already applies its rotation and mirror transforms, and
+/// unreadable metadata never fails an otherwise decodable image.
+pub(crate) fn load_upright_image(path: &std::path::Path) -> Result<(image::DynamicImage, bool), String> {
+    let mut image = load_image(path)?;
+    let orientation = match metadata::read_file(path) {
+        Ok(found) if found.format != metadata::MetadataFormat::Heic => found.orientation,
+        _ => None,
+    };
+    match orientation.filter(|value| *value != 1).and_then(image::metadata::Orientation::from_exif) {
+        Some(orientation) => {
+            image.apply_orientation(orientation);
+            Ok((image, true))
+        }
+        None => Ok((image, false)),
+    }
+}
+
+/// Whether any pixel is less than fully opaque. An alpha channel that is opaque
+/// everywhere, as the tone and flip steps add, does not count.
+pub(crate) fn has_transparency(img: &image::DynamicImage) -> bool {
+    match img {
+        image::DynamicImage::ImageRgba8(rgba) => rgba.pixels().any(|pixel| pixel.0[3] < u8::MAX),
+        image::DynamicImage::ImageLumaA8(luma) => luma.pixels().any(|pixel| pixel.0[1] < u8::MAX),
+        other if other.color().has_alpha() => other.to_rgba16().pixels().any(|pixel| pixel.0[3] < u16::MAX),
+        _ => false,
+    }
+}
+
+/// Whether the image stores more than 8 bits per channel.
+pub(crate) fn has_high_bit_depth(color: image::ColorType) -> bool {
+    u16::from(color.bits_per_pixel()) / u16::from(color.channel_count()) > 8
+}
+
+/// Composites the image onto white, the background every image tool uses for a
+/// format without transparency.
+pub(crate) fn flatten_onto_white(img: &image::DynamicImage) -> image::RgbImage {
+    let rgba = img.to_rgba8();
+    image::RgbImage::from_fn(rgba.width(), rgba.height(), |x, y| {
+        let [red, green, blue, alpha] = rgba.get_pixel(x, y).0;
+        let over_white = |channel: u8| ((u32::from(channel) * u32::from(alpha) + 255 * u32::from(u8::MAX - alpha) + 127) / 255) as u8;
+        image::Rgb([over_white(red), over_white(green), over_white(blue)])
+    })
+}
+
 // Encoders write to a buffer first: WebP and HEIC only expose buffer encoders
 // anyway, and buffering lets the no-inflation guard compare sizes before
 // touching the destination (JPEG/PNG write through the same path).
 pub(crate) fn encode(img: &image::DynamicImage, format: OutputFormat, quality: u8) -> Result<Vec<u8>, String> {
+    encode_with_profile(img, format, quality, None)
+}
+
+/// The colour profile embedded in a JPEG, PNG or WebP file, if it has one. HEIC is not read
+/// here, because its encoder cannot write a profile back.
+pub(crate) fn icc_profile(path: &std::path::Path) -> Option<Vec<u8>> {
+    use image::ImageDecoder;
+    let mut decoder = image::ImageReader::open(path).ok()?.with_guessed_format().ok()?.into_decoder().ok()?;
+    decoder.icc_profile().ok().flatten()
+}
+
+/// Encodes like `encode`, embedding the given colour profile in JPEG, PNG and WebP. HEIC is saved
+/// without it, because libheif's encoder here has no way to write one.
+pub(crate) fn encode_with_profile(img: &image::DynamicImage, format: OutputFormat, quality: u8, icc: Option<&[u8]>) -> Result<Vec<u8>, String> {
+    let profile_error = |error: image::error::UnsupportedError| format!("Could not keep the colour profile: {error}");
     match format {
         OutputFormat::Jpeg => {
-            let rgb = img.to_rgb8();
+            let rgb = if img.color().has_alpha() { flatten_onto_white(img) } else { img.to_rgb8() };
             let mut buf = Vec::new();
-            JpegEncoder::new_with_quality(&mut buf, quality)
+            let mut encoder = JpegEncoder::new_with_quality(&mut buf, quality);
+            if let Some(icc) = icc { encoder.set_icc_profile(icc.to_vec()).map_err(profile_error)?; }
+            encoder
                 .write_image(
                     rgb.as_raw(),
                     rgb.width(),
@@ -94,7 +158,9 @@ pub(crate) fn encode(img: &image::DynamicImage, format: OutputFormat, quality: u
         }
         OutputFormat::Png => {
             let mut buf = Vec::new();
-            PngEncoder::new(&mut buf)
+            let mut encoder = PngEncoder::new(&mut buf);
+            if let Some(icc) = icc { encoder.set_icc_profile(icc.to_vec()).map_err(profile_error)?; }
+            encoder
                 .write_image(
                     img.as_bytes(),
                     img.width(),
@@ -108,14 +174,18 @@ pub(crate) fn encode(img: &image::DynamicImage, format: OutputFormat, quality: u
             // image's WebPEncoder is lossless-only; lossy quality needs
             // Google's libwebp through webpx (quality 0-100)
             let rgba = img.to_rgba8();
-            webpx::Encoder::new_rgba(rgba.as_raw(), rgba.width(), rgba.height())
+            let bytes = webpx::Encoder::new_rgba(rgba.as_raw(), rgba.width(), rgba.height())
                 .quality(quality.min(100) as f32)
                 .encode(webpx::Unstoppable)
-                .map_err(|e| format!("WebP encode failed: {}", e))
+                .map_err(|e| format!("WebP encode failed: {}", e))?;
+            match icc {
+                Some(icc) => webpx::embed_icc(&bytes, icc).map_err(|e| format!("Could not keep the colour profile: {}", e)),
+                None => Ok(bytes),
+            }
         }
         OutputFormat::Heic => {
-            // libheif's bundled x265 is 8-bit only, so downconvert first and
-            // let a high-bit-depth source fail at encode time like Swift does
+            // libheif's bundled x265 is 8-bit only, so a high-bit-depth source
+            // is reduced to 8 bits per channel here
             let rgba = img.to_rgba8();
             let mut buf = Vec::new();
             image::DynamicImage::ImageRgba8(rgba)
@@ -417,4 +487,6 @@ mod tests {
         let _ = std::fs::remove_file(src);
     }
 }
+pub mod metadata;
+pub(crate) mod strip;
 pub mod tools;
