@@ -11,7 +11,7 @@ use crate::file_actions::{open_output_path, open_sponsor_page, open_third_party_
 use crate::kit::common::{note_renamed, JobOutcome};
 use crate::kit::images::{ImageProcessor, Options as ImageOptions};
 use crate::kit::images::tools;
-use crate::kit::pdf::{editor, metadata, remaining, scene, PDFProcessor};
+use crate::kit::pdf::{convert, editor, metadata, remaining, scene, PDFProcessor};
 use crate::kit::vision;
 use crate::kit::contracts::{command_supports_preview, validate_command_inputs, validate_page_selection, CompressImagesRequest, ConvertImagesRequest, OutcomeState, PasswordRequest, ToolError};
 use crate::kit::common::batch_runner::{BatchRunner, FileEvent, FolderCheck, RunEvents};
@@ -305,6 +305,11 @@ async fn pdf_to_images(events: RunEvents, request: remaining::PdfToImagesRequest
 }
 
 #[tauri::command]
+async fn convert_to_pdf(events: RunEvents, request: serde_json::Value) -> Vec<JobOutcome> {
+    convert::run(&events, request)
+}
+
+#[tauri::command]
 async fn pdf_to_text(events: RunEvents, request: remaining::PdfToTextRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_command_inputs("pdf_to_text", &request.paths) { return outcomes; }
     if let Err(outcomes) = validate_page_selection("pdf_to_text", &request.paths, request.pages.as_deref()) { return outcomes; }
@@ -552,6 +557,7 @@ fn main() {
             split_pdf,
             pdf_to_images,
             pdf_to_text,
+            convert_to_pdf,
             extract_pdf_images,
             images_to_pdf,
             ocr_pdf,
@@ -1091,6 +1097,10 @@ mod command_tests {
         let plain_lossy_image_bytes = std::fs::read(&lossy_image).unwrap();
         let animated_bytes = std::fs::read(&animated).unwrap();
         let tiff_bytes = std::fs::read(&tiff).unwrap();
+        let text = root.join("notes.txt"); std::fs::write(&text, b"Caf\xe9 notes\n\tindented line\n").unwrap();
+        let text_bytes = std::fs::read(&text).unwrap();
+        let markdown = root.join("release-notes.md"); std::fs::write(&markdown, "# Release notes\n\n| Step | Result |\n|---|---|\n| build | ok |\n\n```\ncargo test\n```\n\n![chart](image.png)\n\n![logo](https://example.com/logo.png)\n\nSee [the site](https://example.com).\n").unwrap();
+        let markdown_bytes = std::fs::read(&markdown).unwrap();
 
         let protected = root.join("protected.pdf");
         let protected_result = protect_files(RunEvents::silent(), PasswordRequest { paths: vec![pdf.clone()], password: crate::kit::TEST_PASSWORD.into(), password_overrides: Default::default(), output_location: OutputLocation::AlongsideInput });
@@ -1159,6 +1169,18 @@ mod command_tests {
         assert_eq!(selected_image_outputs.len(), 1, "selected PDF page rendering must produce only the selected page");
         outputs.extend(named(&mut naming, "pdf_to_images", pdf.clone(), selected_image_outputs));
         outputs.extend(named(&mut naming, "pdf_to_text", pdf.clone(), assert_success("pdf to text", pdf_to_text(RunEvents::silent(), PdfToTextRequest { paths: vec![pdf.clone()], pages: None, output_location: location(&root, "pdf to text") }))));
+        let converted = assert_success("convert to pdf", convert_to_pdf(RunEvents::silent(), serde_json::json!({ "paths": [text.clone()], "outputLocation": location(&root, "convert to pdf"), "plainText": { "font": "monospace", "encoding": "detect", "wrapLines": true } })));
+        assert!(lopdf::Document::load(&converted[0]).unwrap().extract_text(&[1]).unwrap().contains("Caf\u{e9} notes"), "converted text must stay searchable");
+        outputs.extend(named(&mut naming, "convert_to_pdf", text.clone(), converted));
+        let markdown_outcomes = tauri::async_runtime::block_on(convert_to_pdf(RunEvents::silent(), serde_json::json!({ "paths": [markdown.clone()], "outputLocation": location(&root, "convert markdown to pdf"), "markdown": { "bodyFont": "sans", "codeStyle": "shaded", "tableOfContents": true } })));
+        assert_eq!(markdown_outcomes[0].detail, "2 pages. Remote content left out: 1 image from the internet wasn't loaded.", "{markdown_outcomes:?}");
+        let converted_markdown = markdown_outcomes[0].output_paths().to_vec();
+        let markdown_pdf = lopdf::Document::load(&converted_markdown[0]).unwrap();
+        assert!(markdown_pdf.extract_text(&[1]).unwrap().contains("Contents"), "the table of contents comes first");
+        let markdown_text = markdown_pdf.extract_text(&[2]).unwrap();
+        assert!(["Release notes", "build", "cargo test", "the site"].iter().all(|expected| markdown_text.contains(expected)), "converted Markdown must stay searchable: {markdown_text}");
+        assert!(markdown_pdf.catalog().unwrap().has(b"Outlines"), "headings become bookmarks");
+        outputs.extend(named(&mut naming, "convert_to_pdf", markdown.clone(), converted_markdown));
         outputs.extend(named(&mut naming, "split_pdf", pdf.clone(), assert_success("split", split_pdf(RunEvents::silent(), PageSelectionRequest { paths: vec![pdf.clone()], pages: vec![], page_ranges: None, split_mode: Some("pages".into()), chunk_size: None, output_location: location(&root, "split") }))));
         outputs.extend(named(&mut naming, "extract_pdf_images", image_pdf.clone(), assert_success("extract pdf images", extract_pdf_images(RunEvents::silent(), PdfToTextRequest { paths: vec![image_pdf.clone()], pages: None, output_location: location(&root, "extract pdf images") }))));
         outputs.extend(named(&mut naming, "sign_pdf", pdf.clone(), assert_success("sign", sign_pdf(RunEvents::silent(), SignPdfRequest { paths: vec![pdf.clone()], page: 0, text: "Signed".into(), signature_path: None, rectangle: PdfRect { x: 40.0, y: 40.0, width: 180.0, height: 60.0 }, scope: PageScope::All, output_location: location(&root, "sign") }))));
@@ -1249,6 +1271,8 @@ mod command_tests {
         assert_eq!(std::fs::read(&lossy_image).unwrap(), plain_lossy_image_bytes, "native E2E commands must not modify their lossy image input");
         assert_eq!(std::fs::read(&animated).unwrap(), animated_bytes, "native E2E commands must not modify their GIF input");
         assert_eq!(std::fs::read(&tiff).unwrap(), tiff_bytes, "native E2E commands must not modify their TIFF input");
+        assert_eq!(std::fs::read(&text).unwrap(), text_bytes, "native E2E commands must not modify their text input");
+        assert_eq!(std::fs::read(&markdown).unwrap(), markdown_bytes, "native E2E commands must not modify their Markdown input");
         assert!(!outputs.is_empty(), "native E2E matrix must exercise every producing command");
         if std::env::var_os("TOOLBOX_KEEP_NATIVE_E2E").is_none() {
             let _ = std::fs::remove_dir_all(root);
