@@ -359,6 +359,7 @@ pub enum SkipCode {
     TextAlreadyPresent,
     NoEffectiveChange,
     UnsupportedFormat,
+    NeedsOcr,
     Cancelled,
 }
 
@@ -621,11 +622,11 @@ mod tests {
         let skips = [
             SkipCode::NotProtected, SkipCode::AlreadyProtected, SkipCode::NoSavings,
             SkipCode::AlreadyInTargetFormat, SkipCode::RangeEmptyAfterClamping, SkipCode::TextAlreadyPresent,
-            SkipCode::NoEffectiveChange, SkipCode::UnsupportedFormat, SkipCode::Cancelled,
+            SkipCode::NoEffectiveChange, SkipCode::UnsupportedFormat, SkipCode::NeedsOcr, SkipCode::Cancelled,
         ];
         assert_eq!(serde_json::to_value(skips).unwrap(), serde_json::json!([
             "notProtected", "alreadyProtected", "noSavings", "alreadyInTargetFormat",
-            "rangeEmptyAfterClamping", "textAlreadyPresent", "noEffectiveChange", "unsupportedFormat", "cancelled",
+            "rangeEmptyAfterClamping", "textAlreadyPresent", "noEffectiveChange", "unsupportedFormat", "needsOcr", "cancelled",
         ]));
         let warnings = [
             WarningKind::SignatureRemoved,

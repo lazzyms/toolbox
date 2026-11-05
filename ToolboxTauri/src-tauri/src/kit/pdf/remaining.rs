@@ -9,7 +9,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::kit::common::limits::{self, StoppableHelper};
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming, OutputReservation};
-use crate::kit::contracts::{LimitKind, ToolError};
+use crate::kit::contracts::{LimitKind, OutcomePointer, SkipCode, SkipReason, ToolError};
 use super::metadata::{page_bounds, page_rotation};
 use super::page_ranges::PageRanges;
 use super::{mutation_preflight, PdfMutationIntent};
@@ -444,6 +444,8 @@ fn materialize_rendered_images(input: &Path, location: &OutputLocation, generate
     JobOutcome::succeeded(input.to_path_buf(), outputs, "PDF rendered to images")
 }
 
+pub const NEEDS_OCR_MESSAGE: &str = "This PDF has no text layer. Run OCR to read its text.";
+
 pub fn to_text(request: &PdfToTextRequest, input: PathBuf) -> JobOutcome {
     let output = match OutputNaming::reserve_destination(&input, &request.output_location, "-text", "txt") {
         Ok(output) => output,
@@ -459,7 +461,10 @@ pub fn to_text(request: &PdfToTextRequest, input: PathBuf) -> JobOutcome {
     match document.extract_text(&pages) {
         Ok(text) => {
             let text = normalize_pdf_text(&text);
-            if text.is_empty() { return failure(input, "PDF contains no selectable text; scanned PDFs require OCR.".to_string()); }
+            if text.is_empty() {
+                let reason = SkipReason::new(SkipCode::NeedsOcr, NEEDS_OCR_MESSAGE).with_pointer(OutcomePointer::Tool { tool_id: "pdf-ocr".into() });
+                return JobOutcome::skipped(input, reason);
+            }
             match fs::write(output.path(), text) {
                 Ok(_) => match output.publish() {
                     Ok(path) => JobOutcome::succeeded(input, vec![path], "PDF text extracted in page order"),

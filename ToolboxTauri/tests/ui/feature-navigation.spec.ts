@@ -1552,6 +1552,40 @@ test("OCR shows a missing engine, a locked scan and a blank scan beside a saved 
     await expect(page.getByRole("heading", { name: "Lock & Unlock", exact: true })).toBeVisible();
 });
 
+test("PDF to Text hands a scan that needs OCR to OCR with only that file queued", async ({ page }) => {
+    const scan = "/local/scan.pdf";
+    await page.goto("/");
+    await page.evaluate((outcomes) => { (window as TestWindow).__toolboxProcessingResults = outcomes; }, [
+        {
+            inputPath: scan,
+            outputPaths: [],
+            detail: "",
+            state: "skipped",
+            failure: null,
+            reason: { code: "needsOcr", message: "This PDF has no text layer. Run OCR to read its text.", pointer: { kind: "tool", toolId: "pdf-ocr" } },
+            warnings: [],
+        } satisfies MockOutcome,
+        succeeded(pdfFixturePath, ["/fake/shell/output/sample-text.txt"]),
+    ]);
+    await openFromHome(page, "PDF to Text");
+    await page.evaluate((fixtures) => { (window as TestWindow).__toolboxDialogResults = [fixtures]; }, [scan, pdfFixturePath]);
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await expect(page.getByText("scan.pdf", { exact: true }).first()).toBeVisible();
+    await page.getByRole("button", { name: "Export PDF to Text", exact: true }).click();
+
+    const rows = page.getByRole("list", { name: "Results" }).getByRole("listitem");
+    await expect(rows).toHaveCount(2);
+    await expect(rows.nth(0)).toContainText("This PDF has no text layer. Run OCR to read its text.");
+    await expect(rows.nth(1).getByRole("button", { name: "Open OCR PDF", exact: true })).toHaveCount(0);
+    await rows.nth(0).getByRole("button", { name: "Open OCR PDF", exact: true }).click();
+
+    await expect(page.getByRole("button", { name: "Export OCR PDF", exact: true })).toBeVisible();
+    await expect(page.getByText("scan.pdf", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText(path.basename(pdfFixturePath), { exact: true })).toHaveCount(0);
+    await page.getByRole("button", { name: "Export OCR PDF", exact: true }).click();
+    expect((await lastInvocation(page, "ocr_pdf"))?.args).toMatchObject({ request: { paths: [scan], mode: "text" } });
+});
+
 test("rotate PDF sends the chosen direction and zero-based pages", async ({ page }) => {
     await page.goto("/");
     await openFromHome(page, "Rotate PDFs");

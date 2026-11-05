@@ -26,6 +26,7 @@ const skipCodes: readonly SkipCode[] = [
   "textAlreadyPresent",
   "noEffectiveChange",
   "unsupportedFormat",
+  "needsOcr",
   "cancelled",
 ];
 
