@@ -1472,13 +1472,18 @@ mod command_tests {
         ] {
             let folder = format!("{degrees}-{flip}");
             let outcome = &run(&format!(r#"{{"rotate":{{"degrees":{degrees},"flip":"{flip}"}}}}"#), vec![grid.clone()], &folder)[0];
+            if degrees == 0 && flip == "none" {
+                // No turn and no mirror changes nothing, so the file is Skipped and nothing is written.
+                assert!(matches!(outcome.state, crate::kit::contracts::OutcomeState::Skipped { .. }), "{folder}: {:?}", outcome.state);
+                assert_eq!(std::fs::read_dir(root.join(&folder)).unwrap().count(), 0, "{folder}");
+                continue;
+            }
             assert!(outcome.error().is_none(), "{folder}: {:?}", outcome.error());
             assert_eq!(outcome.output_paths(), [root.join(&folder).join("grid-rotated.png")]);
             let output = image::open(&outcome.output_paths()[0]).unwrap().to_rgba8();
             assert_eq!(output.dimensions(), size, "{folder}");
             assert_eq!(*output.get_pixel(0, 0), source(corner.0, corner.1), "{folder}");
-            let expected = if degrees == 0 && flip == "none" { "Image saved" } else { REENCODED_AFTER_ROTATING };
-            assert_eq!(outcome.detail, expected, "{folder}: only a step that changes the pixels reports a re-encode");
+            assert_eq!(outcome.detail, REENCODED_AFTER_ROTATING, "{folder}: a step that changes the pixels reports a re-encode");
         }
 
         // Crop and resize run first whatever order the steps arrive in, and the run is still one encode.
@@ -1539,9 +1544,15 @@ mod command_tests {
         assert!(output.pixels().zip(source.pixels()).all(|(out, src)| out.0[3] == src.0[3]), "tone leaves PNG alpha unchanged");
         assert!(output.pixels().zip(source.pixels()).any(|(out, src)| out.0[..3] != src.0[..3]), "tone changes the colour");
 
-        // All four at zero leaves the colour as it is.
-        let neutral = run(r#"{"tone":{"brightness":0,"contrast":0,"saturation":0,"exposure":0}}"#, "neutral");
-        assert_eq!(image::open(&neutral[0].output_paths()[0]).unwrap().to_rgba8(), source);
+        // All four at zero leaves the colour as it is: next to a step that changes the image, the
+        // result matches that step alone. On its own it changes nothing, so the file is Skipped.
+        let flip = r#""rotate":{"degrees":180,"flip":"vertical"}"#;
+        let zero_tone = r#""tone":{"brightness":0,"contrast":0,"saturation":0,"exposure":0}"#;
+        let with_zero_tone = run(&format!("{{{flip},{zero_tone}}}"), "zero-tone");
+        let without_tone = run(&format!("{{{flip}}}"), "no-tone");
+        assert_eq!(image::open(&with_zero_tone[0].output_paths()[0]).unwrap().to_rgba8(), image::open(&without_tone[0].output_paths()[0]).unwrap().to_rgba8());
+        let neutral = run(&format!("{{{zero_tone}}}"), "neutral");
+        assert!(matches!(neutral[0].state, crate::kit::contracts::OutcomeState::Skipped { .. }), "{:?}", neutral[0].state);
 
         // Tone runs after rotate, whatever order the steps arrive in.
         let rotate = r#"{"degrees":90,"flip":"none"}"#;
@@ -1736,7 +1747,8 @@ mod command_tests {
         image::DynamicImage::ImageRgb16(image::ImageBuffer::from_fn(64, 32, |x, y| image::Rgb([(x * 1000) as u16, (y * 2000) as u16, 40_000]))).save(&deep).unwrap();
         let inputs = [badge.clone(), jpeg.clone(), webp.clone(), heic.clone(), deep.clone()];
         let originals = inputs.iter().map(|path| (Original::of(path), std::fs::read(path).unwrap())).collect::<Vec<_>>();
-        let crop = r#"{"crop":{"x":0,"y":0,"width":64,"height":32,"mode":"rectangle","aspectWidth":0,"aspectHeight":0,"anchor":"custom"}}"#;
+        // A crop that keeps all but the last two columns, so no input is left as it is.
+        let crop = r#"{"crop":{"x":0,"y":0,"width":62,"height":32,"mode":"rectangle","aspectWidth":0,"aspectHeight":0,"anchor":"custom"}}"#;
         let run = |paths: &[PathBuf], steps: &str, format: Option<&str>, folder: &str| {
             std::fs::create_dir_all(root.join(folder)).unwrap();
             tauri::async_runtime::block_on(export_image_edit_stack(RunEvents::silent(), ImageEditStackRequest {
@@ -1814,6 +1826,131 @@ mod command_tests {
         let unknown = run(std::slice::from_ref(&badge), crop, Some("tiff"), "unknown").remove(0);
         assert!(unknown.error().is_some_and(|error| matches!(error.kind, ErrorKind::InvalidInput)));
         assert_eq!(std::fs::read_dir(root.join("unknown")).unwrap().count(), 0);
+
+        for (original, bytes) in &originals {
+            original.assert_untouched();
+            assert_eq!(&std::fs::read(&original.path).unwrap(), bytes);
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn edit_stack_skips_each_file_it_cannot_change_unless_the_format_changes() {
+        use crate::kit::contracts::{OutcomeState, SkipCode};
+        use crate::kit::images::tools::NO_CHANGES;
+        use crate::kit::images::{encode, OutputFormat};
+        let root = sandbox("edit_stack_neutral");
+        let pattern = |width: u32, height: u32| image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(width, height, |x, y| Rgba([(x * 3) as u8, (y * 5) as u8, 90, 255])));
+        let wide = root.join("wide.png");
+        let large = root.join("large.png");
+        let small = root.join("small.png");
+        let photo = root.join("photo.jpeg");
+        let still = root.join("still.webp");
+        let phone = root.join("phone.heic");
+        let sideways = root.join("sideways.jpg");
+        pattern(64, 32).save(&wide).unwrap();
+        pattern(96, 48).save(&large).unwrap();
+        pattern(40, 20).save(&small).unwrap();
+        pattern(64, 32).to_rgb8().save(&photo).unwrap();
+        std::fs::write(&still, encode(&pattern(64, 32), OutputFormat::WebP, 90).unwrap()).unwrap();
+        std::fs::write(&phone, encode(&pattern(64, 32), OutputFormat::Heic, 90).unwrap()).unwrap();
+        // Stored 64 x 96 with orientation 6, so it is 96 x 64 upright.
+        oriented_jpeg(&sideways, 6);
+        let originals = [&wide, &large, &small, &photo, &still, &phone, &sideways].map(|path| (Original::of(path), std::fs::read(path).unwrap()));
+        let run = |paths: &[&PathBuf], steps: &str, format: Option<&str>, folder: &str| {
+            let folder = root.join(folder);
+            std::fs::create_dir_all(&folder).unwrap();
+            tauri::async_runtime::block_on(export_image_edit_stack(RunEvents::silent(), ImageEditStackRequest {
+                paths: paths.iter().map(|path| (*path).clone()).collect(), steps: serde_json::from_str::<ImageEditSteps>(steps).unwrap(), format: format.map(str::to_string), output_location: OutputLocation::CustomFolder(folder),
+            }))
+        };
+        let written = |folder: &str| std::fs::read_dir(root.join(folder)).unwrap().map(|entry| entry.unwrap().file_name().into_string().unwrap()).collect::<Vec<_>>();
+        let assert_skipped = |outcome: &JobOutcome, label: &str| {
+            let OutcomeState::Skipped { reason } = &outcome.state else { panic!("{label}: {} should be Skipped, got {:?}", outcome.input_path.display(), outcome.state) };
+            assert_eq!((reason.code, reason.message.as_str()), (SkipCode::NoEffectiveChange, NO_CHANGES), "{label}");
+            assert!(outcome.output_paths().is_empty(), "{label}");
+        };
+        let crop_all = r#""crop":{"x":0,"y":0,"width":64,"height":32,"mode":"rectangle","aspectWidth":0,"aspectHeight":0,"anchor":"custom"}"#;
+        let crop_ratio = r#""crop":{"x":0,"y":0,"width":0,"height":0,"mode":"aspectRatio","aspectWidth":2,"aspectHeight":1,"anchor":"center"}"#;
+        let resize_exact = r#""resize":{"width":64,"height":32,"mode":"exact","percentage":100,"longestSide":0,"resampling":"lanczos","keepAspectRatio":false}"#;
+        let resize_box = r#""resize":{"width":200,"height":32,"mode":"exact","percentage":100,"longestSide":0,"resampling":"lanczos","keepAspectRatio":true}"#;
+        let resize_percent = r#""resize":{"width":0,"height":0,"mode":"percentage","percentage":100,"longestSide":0,"resampling":"lanczos","keepAspectRatio":true}"#;
+        let resize_longest = r#""resize":{"width":0,"height":0,"mode":"longestSide","percentage":100,"longestSide":64,"resampling":"nearest","keepAspectRatio":true}"#;
+        let rotate_none = r#""rotate":{"degrees":0,"flip":"none"}"#;
+        let rotate_full = r#""rotate":{"degrees":360,"flip":"none"}"#;
+        let tone_zero = r#""tone":{"brightness":0,"contrast":0,"saturation":0,"exposure":0}"#;
+        let every = format!("{crop_ratio},{resize_longest},{rotate_none},{tone_zero}");
+
+        // Each neutral step kind, alone and all together, skips every 64 x 32 input in its own format.
+        let same_size = [&wide, &photo, &still, &phone];
+        for (label, steps) in [("crop-all", crop_all), ("crop-ratio", crop_ratio), ("resize-exact", resize_exact), ("resize-box", resize_box), ("resize-percent", resize_percent), ("resize-longest", resize_longest), ("rotate-none", rotate_none), ("rotate-full", rotate_full), ("tone-zero", tone_zero), ("every", every.as_str())] {
+            for format in [None, Some("same")] {
+                let folder = format!("{label}-{}", format.unwrap_or("original"));
+                let outcomes = match format {
+                    // Choosing the format each input already has is the same as keeping it.
+                    Some(_) => same_size.iter().zip(["png", "jpg", "webp", "heic"]).map(|(path, ext)| run(&[path], &format!("{{{steps}}}"), Some(ext), &folder).remove(0)).collect::<Vec<_>>(),
+                    None => run(&same_size, &format!("{{{steps}}}"), None, &folder),
+                };
+                assert_eq!(outcomes.iter().map(|outcome| &outcome.input_path).collect::<Vec<_>>(), same_size.to_vec(), "{folder}: in input order");
+                for outcome in &outcomes { assert_skipped(outcome, &folder); }
+                assert!(written(&folder).is_empty(), "{folder}: nothing is written or reserved, found {:?}", written(&folder));
+            }
+        }
+
+        // A step that changes the image is never neutral, even next to neutral ones.
+        for (label, steps) in [
+            ("crop-smaller", r#""crop":{"x":0,"y":0,"width":63,"height":32,"mode":"rectangle","aspectWidth":0,"aspectHeight":0,"anchor":"custom"}"#.to_string()),
+            ("resize-up", r#""resize":{"width":0,"height":0,"mode":"percentage","percentage":101,"longestSide":0,"resampling":"lanczos","keepAspectRatio":true}"#.to_string()),
+            ("rotate-turn", r#""rotate":{"degrees":180,"flip":"none"}"#.to_string()),
+            ("rotate-mirror", r#""rotate":{"degrees":0,"flip":"horizontal"}"#.to_string()),
+            ("tone-exposure", format!(r#"{crop_all},"tone":{{"brightness":0,"contrast":0,"saturation":0,"exposure":1}}"#)),
+        ] {
+            let outcome = run(&[&wide], &format!("{{{steps}}}"), None, label).remove(0);
+            assert!(matches!(outcome.state, OutcomeState::Succeeded { .. }), "{label}: {:?}", outcome.state);
+            assert_eq!(written(label).len(), 1, "{label}");
+        }
+        // A step that cannot apply still fails, rather than being Skipped.
+        let outside = run(&[&small], &format!("{{{crop_all}}}"), None, "outside").remove(0);
+        assert!(outside.error().is_some_and(|error| matches!(error.kind, ErrorKind::InvalidInput)), "{:?}", outside.state);
+
+        // One resize target skips the file already that size and resizes the others in the same batch.
+        let mixed = run(&[&large, &wide, &small], &format!("{{{resize_longest}}}"), None, "mixed");
+        assert_eq!(mixed.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), vec![large.clone(), wide.clone(), small.clone()]);
+        assert_skipped(&mixed[1], "mixed");
+        for (outcome, name, size) in [(&mixed[0], "large-resized.png", (64, 32)), (&mixed[2], "small-resized.png", (64, 32))] {
+            assert_eq!(outcome.output_paths(), [root.join("mixed").join(name)]);
+            let resized = image::open(&outcome.output_paths()[0]).unwrap();
+            assert_eq!((resized.width(), resized.height()), size);
+        }
+        let mut names = written("mixed");
+        names.sort();
+        assert_eq!(names, ["large-resized.png", "small-resized.png"], "the skipped file has no output");
+
+        // The same neutral stack with another format is encoded once in that format and succeeds.
+        let decoded_format = |path: &PathBuf| {
+            let bytes = std::fs::read(path).unwrap();
+            match image::guess_format(&bytes) {
+                Ok(format) => format!("{format:?}"),
+                Err(_) => { heif::decode(&bytes).expect("decodes as HEIC"); "Heic".to_string() }
+            }
+        };
+        for (input, format, name, expected) in [(&wide, "jpg", "wide-edited.jpg", "Jpeg"), (&photo, "png", "photo-edited.png", "Png"), (&still, "heic", "still-edited.heic", "Heic"), (&phone, "webp", "phone-edited.webp", "WebP")] {
+            let folder = format!("convert-{format}");
+            let outcome = run(&[input], &format!("{{{every}}}"), Some(format), &folder).remove(0);
+            assert!(matches!(outcome.state, OutcomeState::Succeeded { .. }), "{} as {format}: {:?}", input.display(), outcome.state);
+            assert_eq!(outcome.output_paths(), [root.join(&folder).join(name)]);
+            assert_eq!(written(&folder), [name], "exactly one file is written");
+            assert_eq!(decoded_format(&outcome.output_paths()[0]), expected);
+        }
+
+        // Neutrality is measured on the upright image: the stored 64 x 96 size is a change, the upright 96 x 64 is not.
+        let upright = r#"{"resize":{"width":96,"height":64,"mode":"exact","percentage":100,"longestSide":0,"resampling":"lanczos","keepAspectRatio":false}}"#;
+        let stored = r#"{"resize":{"width":64,"height":96,"mode":"exact","percentage":100,"longestSide":0,"resampling":"lanczos","keepAspectRatio":false}}"#;
+        assert_skipped(&run(&[&sideways], upright, None, "upright").remove(0), "upright size");
+        assert!(written("upright").is_empty());
+        let turned = run(&[&sideways], stored, None, "stored").remove(0);
+        let resized = image::open(&turned.output_paths()[0]).unwrap();
+        assert_eq!((resized.width(), resized.height()), (64, 96), "the stored size is a real resize of the upright photo");
 
         for (original, bytes) in &originals {
             original.assert_untouched();

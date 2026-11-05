@@ -8,7 +8,7 @@ use std::io::{BufReader, Seek};
 use std::path::{Path, PathBuf};
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
-use crate::kit::contracts::{OutcomeWarning, ToolError, WarningKind};
+use crate::kit::contracts::{OutcomeWarning, SkipCode, SkipReason, ToolError, WarningKind};
 use crate::kit::images::OutputFormat;
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -231,6 +231,19 @@ impl ImageEditSteps {
         Ok(image)
     }
 
+    /// Whether no step can change this image, measured at its upright size. A crop is neutral when
+    /// it covers the whole image, a resize when its result is the source size, a rotate when it
+    /// neither turns nor mirrors, and tone when all four values are 0. A step that cannot apply to
+    /// the image is never neutral, so it still fails as it would otherwise. Every step is named
+    /// here, so a new step (such as a watermark, which is never neutral) must say whether it can be.
+    fn is_neutral_for(&self, width: u32, height: u32) -> bool {
+        let Self { crop, resize, rotate, tone } = self;
+        crop.as_ref().is_none_or(|crop| crop_rect(width, height, crop).is_ok_and(|rect| rect == (0, 0, width, height)))
+            && resize.as_ref().is_none_or(|resize| resize_dimensions(width, height, resize).is_ok_and(|size| size == (width, height)))
+            && rotate.as_ref().is_none_or(RotateStep::is_neutral)
+            && tone.as_ref().is_none_or(ToneStep::is_neutral)
+    }
+
     fn detail(&self, oriented: bool) -> String {
         let rotated = self.rotate.as_ref().is_some_and(|rotate| !rotate.is_neutral());
         match (oriented, rotated) {
@@ -239,6 +252,20 @@ impl ImageEditSteps {
             (false, true) => REENCODED_AFTER_ROTATING.to_string(),
             (false, false) => "Image saved".to_string(),
         }
+    }
+}
+
+/// The reason a file is Skipped when the stack cannot change it and the format stays the same.
+pub const NO_CHANGES: &str = "No changes. No copy was made.";
+
+/// The output format an input already is, if it is one the stack can write.
+fn input_format(path: &Path) -> Option<OutputFormat> {
+    match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+        "jpg" | "jpeg" => Some(OutputFormat::Jpeg),
+        "png" => Some(OutputFormat::Png),
+        "webp" => Some(OutputFormat::WebP),
+        "heic" | "heif" => Some(OutputFormat::Heic),
+        _ => None,
     }
 }
 
@@ -262,6 +289,11 @@ pub fn export_edit_stack(request: &ImageEditStackRequest, input: PathBuf) -> Job
         Ok(decoded) => decoded,
         Err(error) => return failure(input, error),
     };
+    // A stack that leaves this image as it is, saved in the format it already has, would only
+    // make a copy, so the file is Skipped before anything is encoded or reserved.
+    if input_format(&input) == Some(format) && request.steps.is_neutral_for(source.width(), source.height()) {
+        return JobOutcome::skipped(input, SkipReason::new(SkipCode::NoEffectiveChange, NO_CHANGES));
+    }
     let high_bit_source = crate::kit::images::has_high_bit_depth(source.color());
     // A step that cannot apply to this image (a crop outside it, a size past the limits) is a
     // problem with the request, not with the file.
@@ -646,6 +678,8 @@ pub fn tone(request: &ToneRequest, input: PathBuf) -> JobOutcome {
 }
 
 impl ToneStep {
+    fn is_neutral(&self) -> bool { self.brightness == 0 && self.contrast == 0.0 && self.saturation == 0.0 && self.exposure == 0.0 }
+
     fn validate(&self) -> Result<(), String> {
         if !(-100..=100).contains(&self.brightness) { return Err("Brightness must be between -100 and 100.".to_string()); }
         for (name, value) in [("Contrast", self.contrast), ("Saturation", self.saturation), ("Exposure", self.exposure)] {
