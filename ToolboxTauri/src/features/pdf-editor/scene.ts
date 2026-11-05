@@ -52,6 +52,8 @@ export interface SceneCanvasProps {
   onSelect: (id: string | null) => void;
   onCommit: (page: ScenePage) => void;
   makeObject: (kind: SceneObject['kind'], rect: SceneRect) => SceneObject;
+  /** The text of the box being edited in place, as it is typed, or `null` when no box is. */
+  onEditText?: (edit: { id: string; text: string } | null) => void;
 }
 export const sceneFromDocument = (document: PdfDocument): PdfScene => ({
   pages: document.pages.map((page) => ({ id: `source-${page.index}`, sourceIndex: page.index,

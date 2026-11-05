@@ -16,6 +16,8 @@ import { Slider } from '../components/ui/slider';
 import type { PdfDocument, PdfPage, PdfTextRun } from '../features/pdf-editor/contracts';
 import { colorTokens, readColorToken } from '../features/pdf-editor/colorTokens';
 import { SceneCanvas } from '../features/pdf-editor/SceneCanvas';
+import { ScriptPackPrompt, useScriptPacks } from '../features/pdf-editor/ScriptPackPrompt';
+import { scriptPackNeed } from '../features/pdf-editor/scriptPacks';
 import { sceneFromDocument, visibleBounds } from '../features/pdf-editor/scene';
 import type { PdfScene, SceneObject, ScenePage, ScenePreview, SceneRect, SceneShape, SceneTool, SignatureMode, WatermarkPattern } from '../features/pdf-editor/scene';
 import { PREVIEW_CACHE_MAX_ENTRIES, PREVIEW_RENDER_SETTINGS, createPreviewCache, pdfEditorErrorMessage, previewCacheKey, requestWithGeneration } from './pdfPreviewHelpers';
@@ -173,6 +175,8 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
   const [preview, setPreview] = useState<{ key: string; value: ScenePreview } | null>(null);
   const [thumbnails, setThumbnails] = useState<Record<string, { key: string; value: ScenePreview }>>({});
   const [renderError, setRenderError] = useState<string | null>(null);
+  const [editedText, setEditedText] = useState<{ id: string; text: string } | null>(null);
+  const scriptPacks = useScriptPacks();
   const group = useRef<string | null>(null);
   const draggedPage = useRef<string | null>(null);
   const toolsToolbar = useRef<HTMLDivElement>(null);
@@ -192,6 +196,9 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
   const previewKey = path ? previewCacheKey(path, currentIndex, serializedScene, PREVIEW_RENDER_SETTINGS) : null;
   const exactPreview = preview?.key === previewKey ? preview.value : null;
   const selectedSignature = selected?.kind === 'signature' ? selected : null;
+  // Text in a script whose pack isn't installed can't be exported, so the inspector says so while it is typed.
+  const selectedText = selected?.kind === 'text' ? (editedText?.id === selected.id ? editedText.text : selected.text) : null;
+  const scriptNeed = selectedText ? scriptPackNeed(selectedText, scriptPacks.states) : null;
 
   useEffect(() => {
     let active = true;
@@ -238,7 +245,8 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
     setThumbnails({});
     setRenderError(null);
     setRendering(false);
-  }, [path, serializedScene]);
+    // A pack installed or removed changes what the preview can draw, so it renders again.
+  }, [path, serializedScene, scriptPacks.changes]);
   useEffect(() => {
     const requestGeneration = ++previewGeneration.current.current;
     const serializedScene = JSON.stringify(scene);
@@ -293,7 +301,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
         () => setRendering(false));
     }, 200) : undefined;
     return () => { if (timer !== undefined) window.clearTimeout(timer); previewGeneration.current.current += 1; };
-  }, [path, currentIndex, serializedScene]);
+  }, [path, currentIndex, serializedScene, scriptPacks.changes]);
 
   const commit = (next: PdfScene, mergeGroup: string | null = null) => {
     const merge = Boolean(mergeGroup && group.current === mergeGroup);
@@ -469,7 +477,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
           <SceneCanvas page={page} sourcePreview={page.sourceIndex === null ? null : document?.pages[page.sourceIndex]?.preview ?? null}
             textRuns={page.sourceIndex === null ? [] : document?.pages[page.sourceIndex]?.textRuns ?? []}
             renderedPreview={exactPreview} tool={tool ?? 'select'} selectedId={selectedId} zoom={zoom} onSelect={(id) => { endGroup(); setSelectedId(id); }}
-            onCommit={(next) => { if (canEditCanvas) commitPage(next); }} makeObject={makeObject} />
+            onCommit={(next) => { if (canEditCanvas) commitPage(next); }} makeObject={makeObject} onEditText={setEditedText} />
         </div>
         <aside className="scene-inspector" aria-label="PDF editor inspector">
           <Card role="region" aria-label="Properties" className="scene-inspector-panel gap-4 overflow-y-auto py-4">
@@ -478,6 +486,7 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
               <CardDescription>{selected ? 'Adjust the selected item.' : tool === 'select' ? 'Select a mark to edit its properties.' : tool ? `New ${tool} settings` : 'No page markup tools are enabled.'}</CardDescription>
             </CardHeader>
             <CardContent className="scene-inspector-content flex flex-col gap-3 px-4">
+              {scriptNeed && <ScriptPackPrompt need={scriptNeed} job={scriptPacks.job} installError={scriptPacks.installError} onInstall={(packId) => void scriptPacks.install(packId)} />}
               {selectedKind === 'text' && <div className="scene-inspector-field">
                 <Label htmlFor="scene-text-size">Font size</Label>
                 <Input id="scene-text-size" type="number" min="6" max="144" value={selected?.fontSize ?? fontSize}

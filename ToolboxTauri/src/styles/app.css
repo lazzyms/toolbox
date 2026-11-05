@@ -1527,3 +1527,11 @@ kbd.shortcut-hint {
   gap: 7px;
   overflow-x: auto;
 }
+
+/* Edit PDF: the text inspector's note for text whose script pack isn't installed. */
+.scene-script-pack-content { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; font-size: 12px; }
+.scene-script-pack-message { display: flex; gap: 8px; margin: 0; }
+.scene-script-pack-message > svg { flex: none; width: 16px; height: 16px; margin-top: 1px; color: var(--warning); }
+.scene-script-pack-message strong { font-weight: 600; }
+.scene-script-pack-action { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.scene-script-pack-action > span { white-space: nowrap; }
