@@ -1080,7 +1080,7 @@ test("editor command rails keep one document session while changing tools", asyn
     await expect(page.getByRole("img", { name: `Original image preview of ${fixtureName}` })).toBeVisible();
 
     await page.getByRole("tablist", { name: "Edit Image" }).getByRole("tab", { name: "Rotate", exact: true }).click();
-    await expect(page.getByRole("heading", { name: "Rotate and Flip Images", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Rotate and Flip", exact: true })).toBeVisible();
     await expect(page.locator(".file-selection-count")).toHaveText("1 file");
     await page.getByRole("tablist", { name: "Edit Image" }).getByRole("tab", { name: "Adjust", exact: true }).click();
     await expect(page.getByRole("slider", { name: "Contrast" })).toBeVisible();
@@ -1126,7 +1126,7 @@ test("Image editor previews a reversible edit stack and exports one combined pla
     await page.goto("/");
     await page.getByRole("button", { name: "Open Image Editor", exact: true }).click();
     await page.getByRole("button", { name: "Choose files to process" }).click();
-    await page.getByRole("tablist", { name: "Edit Image" }).getByRole("tab", { name: "Rotate", exact: true }).click();
+    await page.getByRole("tablist", { name: "Edit Image" }).getByRole("tab", { name: "Watermark", exact: true }).click();
     await expect(page.getByRole("img", { name: `Preview of ${fixtureName}` })).toBeVisible();
     await expect(page.getByRole("button", { name: "Undo" })).toBeDisabled();
     await expect(page.getByRole("button", { name: "Redo" })).toBeDisabled();
@@ -1136,16 +1136,16 @@ test("Image editor previews a reversible edit stack and exports one combined pla
     await expect(page.getByRole("toolbar", { name: "Image Editor tools" })).toBeVisible();
     await expect(page.locator(".workspace-primary-action")).toHaveCount(1);
 
-    await page.getByLabel("Rotation").selectOption("180");
+    await page.getByLabel("Watermark text").fill("First");
     await expect.poll(async () =>
         (await page.evaluate(() => (window as TestWindow).__toolboxInvocations ?? []))
             .some(({ command }) => command === "inspect_image_edit_preview"),
     ).toBe(true);
     await page.getByRole("button", { name: "Add edit to plan" }).click();
-    await page.getByLabel("Rotation").selectOption("90");
+    await page.getByLabel("Watermark text").fill("Second");
     await page.getByRole("button", { name: "Add edit to plan" }).click();
     await expect(page.getByText("2 committed edits", { exact: true })).toBeVisible();
-    await expect(page.locator(".image-edit-timeline li")).toContainText(["Rotate 180°", "Rotate 90°"]);
+    await expect(page.locator(".image-edit-timeline li")).toContainText(["Watermark · First", "Watermark · Second"]);
     await page.getByRole("button", { name: "Export edited images" }).click();
 
     const invocation = await page.evaluate(() =>
@@ -1299,10 +1299,10 @@ test("Image editor history can undo, redo, and reset the composed plan", async (
     await page.goto("/");
     await page.getByRole("button", { name: "Open Image Editor", exact: true }).click();
     await page.getByRole("button", { name: "Choose files to process" }).click();
-    await page.getByRole("tablist", { name: "Edit Image" }).getByRole("tab", { name: "Rotate", exact: true }).click();
-    await page.getByLabel("Rotation").selectOption("180");
+    await page.getByRole("tablist", { name: "Edit Image" }).getByRole("tab", { name: "Watermark", exact: true }).click();
+    await page.getByLabel("Watermark text").fill("First");
     await page.getByRole("button", { name: "Add edit to plan" }).click();
-    await page.getByLabel("Rotation").selectOption("90");
+    await page.getByLabel("Watermark text").fill("Second");
     await page.getByRole("button", { name: "Add edit to plan" }).click();
 
     await expect(page.getByRole("button", { name: "Undo" })).toBeEnabled();
@@ -2066,7 +2066,7 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
     await openFromHome(page, utility.title);
     // Image Metadata lives in the Image Editor but runs on its own screen, without an edit plan.
     // Crop runs through the shared edit stack, which Crop fills with its default step.
-    const usesImageEditPlan = workspaceForTool(utility.id)?.id === "image-editor" && !["image-metadata", "crop", "resize"].includes(utility.id);
+    const usesImageEditPlan = workspaceForTool(utility.id)?.id === "image-editor" && !["image-metadata", "crop", "resize", "rotate"].includes(utility.id);
 
     const accepts = (extension: string) => utility.capability.acceptedExtensions.some((accepted) => accepted.toLowerCase() === extension);
     const selectedFixturePath = accepts(".pdf")
@@ -2091,7 +2091,6 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
     }
     if (usesImageEditPlan) {
         if (utility.id === "heic-convert") await page.getByLabel("Target format").selectOption("jpg");
-        if (utility.id === "rotate") await page.getByLabel("Rotation").selectOption("90");
         if (utility.id === "image-watermark") await page.getByLabel("Watermark text").fill("Test watermark");
         if (utility.id === "image-tone") await page.getByRole("slider", { name: "Brightness" }).press("End");
     }
@@ -2689,15 +2688,16 @@ test("Edit Image tabs switch with arrow keys and keep the files and the edit pla
     const rotate = tabs.getByRole("tab", { name: "Rotate", exact: true });
     await expect(rotate).toHaveAttribute("aria-selected", "true");
     await expect(rotate).toBeFocused();
-    await expect(page.getByLabel("Rotation")).toBeVisible();
-    await expect(page.getByRole("img", { name: `Preview of ${fixtureName}` })).toBeVisible();
-    await page.getByLabel("Rotation").selectOption("90");
-    await page.getByRole("button", { name: "Add edit to plan" }).click();
-    await expect(page.getByText("1 committed edit", { exact: true })).toBeVisible();
+    await expect(page.getByRole("img", { name: `Original image preview of ${fixtureName}` })).toBeVisible();
+    await page.getByRole("radio", { name: "180 degrees" }).click();
+    await expect(page.getByRole("list", { name: "Steps, in the order they run" }).getByRole("button", { name: /^Step \d of 2/ })).toHaveCount(2);
 
     await rotate.press("ArrowLeft");
     await expect(tabs.getByRole("tab", { name: "Resize", exact: true })).toBeFocused();
     await expect(page.getByLabel("Longest side, pixels")).toHaveValue("320");
+    await tabs.getByRole("tab", { name: "Rotate", exact: true }).click();
+    await expect(page.getByRole("radio", { name: "180 degrees" })).toHaveAttribute("aria-checked", "true");
+    await tabs.getByRole("tab", { name: "Rotate", exact: true }).press("ArrowLeft");
     await tabs.getByRole("tab", { name: "Resize", exact: true }).press("ArrowLeft");
     await expect(tabs.getByRole("tab", { name: "Adjust", exact: true })).toHaveAttribute("aria-selected", "true");
     await expect(page.getByRole("toolbar", { name: "Image Editor tools" }).getByRole("button", { name: "Edit Image" })).toHaveAttribute("aria-pressed", "true");

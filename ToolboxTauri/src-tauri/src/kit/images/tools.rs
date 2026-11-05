@@ -188,14 +188,18 @@ pub struct ImageEditStackRequest {
 pub struct ImageEditSteps {
     #[serde(default)] pub crop: Option<CropStep>,
     #[serde(default)] pub resize: Option<ResizeStep>,
+    #[serde(default)] pub rotate: Option<RotateStep>,
 }
 
 const STACK_QUALITY: u8 = 90;
 
+/// The per-file note for a run that turned or mirrored the pixels, which always means a new encode.
+pub const REENCODED_AFTER_ROTATING: &str = "Re-encoded at quality 90 after rotating.";
+
 impl ImageEditSteps {
     /// One step keeps its tool's suffix; any combination is named -edited.
     fn suffix(&self) -> Result<&'static str, String> {
-        let present = [self.crop.as_ref().map(|_| "-cropped"), self.resize.as_ref().map(|_| "-resized")];
+        let present = [self.crop.as_ref().map(|_| "-cropped"), self.resize.as_ref().map(|_| "-resized"), self.rotate.as_ref().map(|_| "-rotated")];
         let mut suffixes = present.into_iter().flatten();
         match (suffixes.next(), suffixes.next()) {
             (None, _) => Err("Add a step to the stack before running.".to_string()),
@@ -205,7 +209,8 @@ impl ImageEditSteps {
     }
 
     // The order is fixed here, never by the order the steps were added: crop runs first, so its
-    // rectangle is always measured in source pixels, then resize scales what is left.
+    // rectangle is always measured in source pixels, then resize scales what is left, then rotate and
+    // flip turn the result.
     fn apply(&self, mut image: DynamicImage) -> Result<DynamicImage, String> {
         if let Some(crop) = &self.crop {
             let (x, y, width, height) = crop_rect(image.width(), image.height(), crop)?;
@@ -214,7 +219,14 @@ impl ImageEditSteps {
         if let Some(resize) = &self.resize {
             image = resize.apply(image)?;
         }
+        if let Some(rotate) = &self.rotate {
+            image = rotate.apply(image)?;
+        }
         Ok(image)
+    }
+
+    fn detail(&self) -> &'static str {
+        if self.rotate.as_ref().is_some_and(|rotate| !rotate.is_neutral()) { REENCODED_AFTER_ROTATING } else { "Image saved" }
     }
 }
 
@@ -247,7 +259,7 @@ pub fn export_edit_stack(request: &ImageEditStackRequest, input: PathBuf) -> Job
         return failure(input, format!("Could not save image: {error}"));
     }
     match output.publish() {
-        Ok(path) => JobOutcome::succeeded(input, vec![path], "Image saved"),
+        Ok(path) => JobOutcome::succeeded(input, vec![path], request.steps.detail()),
         Err(error) => failure(input, format!("Could not publish image: {error}")),
     }
 }
@@ -420,7 +432,18 @@ pub struct ResizeStep {
 }
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RotateRequest { pub paths: Vec<PathBuf>, pub degrees: i32, #[serde(default = "default_flip")] pub flip: String, pub output_location: OutputLocation }
+pub struct RotateRequest {
+    pub paths: Vec<PathBuf>,
+    #[serde(flatten)] pub rotate: RotateStep,
+    pub output_location: OutputLocation,
+}
+/// A clockwise turn of 0, 90, 180 or 270 degrees, then an optional mirror.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RotateStep {
+    pub degrees: i32,
+    #[serde(default = "default_flip")] pub flip: String,
+}
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CropRequest {
@@ -547,10 +570,16 @@ fn resize_dimensions(source_width: u32, source_height: u32, request: &ResizeStep
 // Not clamped: a result past 16384 px is refused by resize_dimensions rather than silently distorted.
 fn scale_dimension(value: u32, percentage: u32) -> u32 { ((value as u64 * percentage as u64 + 50) / 100).clamp(1, u32::MAX as u64) as u32 }
 pub fn rotate(request: &RotateRequest, input: PathBuf) -> JobOutcome {
-    transform(request.paths.as_slice(), input, &request.output_location, "-rotated", |image| {
-        let image = match request.degrees.rem_euclid(360) { 90 => image.rotate90(), 180 => image.rotate180(), 270 => image.rotate270(), 0 => image, _ => return Err("Rotation must be 0, 90, 180, or 270 degrees.".to_string()) };
-        Ok(match request.flip.as_str() { "none" => image, "horizontal" => DynamicImage::ImageRgba8(image::imageops::flip_horizontal(&image.to_rgba8())), "vertical" => DynamicImage::ImageRgba8(image::imageops::flip_vertical(&image.to_rgba8())), _ => return Err("Mirror choice must be none, horizontal, or vertical.".to_string()) })
-    })
+    transform(request.paths.as_slice(), input, &request.output_location, "-rotated", |image| request.rotate.apply(image))
+}
+
+impl RotateStep {
+    fn apply(&self, image: DynamicImage) -> Result<DynamicImage, String> {
+        let image = match self.degrees.rem_euclid(360) { 90 => image.rotate90(), 180 => image.rotate180(), 270 => image.rotate270(), 0 => image, _ => return Err("Rotation must be 0, 90, 180, or 270 degrees.".to_string()) };
+        Ok(match self.flip.as_str() { "none" => image, "horizontal" => DynamicImage::ImageRgba8(image::imageops::flip_horizontal(&image.to_rgba8())), "vertical" => DynamicImage::ImageRgba8(image::imageops::flip_vertical(&image.to_rgba8())), _ => return Err("Mirror choice must be none, horizontal, or vertical.".to_string()) })
+    }
+
+    fn is_neutral(&self) -> bool { self.degrees.rem_euclid(360) == 0 && self.flip == "none" }
 }
 
 fn default_flip() -> String { "none".to_string() }
@@ -1451,12 +1480,12 @@ mod tests {
         image.put_pixel(0, 0, image::Rgba([255, 0, 0, 255]));
         image.put_pixel(1, 0, image::Rgba([0, 255, 0, 255]));
         image.save(&input).unwrap();
-        let result = rotate(&RotateRequest { paths: vec![input.clone()], degrees: 0, flip: "horizontal".to_string(), output_location: OutputLocation::AlongsideInput }, input.clone());
+        let result = rotate(&RotateRequest { paths: vec![input.clone()], rotate: RotateStep { degrees: 0, flip: "horizontal".to_string() }, output_location: OutputLocation::AlongsideInput }, input.clone());
         let output = result.output_paths().first().unwrap();
         let pixels = image::open(output).unwrap().to_rgba8();
         assert_eq!(pixels.dimensions(), (2, 1));
         assert_eq!(pixels.get_pixel(0, 0).0, [0, 255, 0, 255]);
-        let invalid = rotate(&RotateRequest { paths: vec![input.clone()], degrees: 0, flip: "diagonal".to_string(), output_location: OutputLocation::AlongsideInput }, input.clone());
+        let invalid = rotate(&RotateRequest { paths: vec![input.clone()], rotate: RotateStep { degrees: 0, flip: "diagonal".to_string() }, output_location: OutputLocation::AlongsideInput }, input.clone());
         assert!(invalid.error().is_some());
         let _ = std::fs::remove_file(input);
         let _ = std::fs::remove_file(output);

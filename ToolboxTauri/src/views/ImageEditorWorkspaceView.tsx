@@ -18,6 +18,7 @@ import {
   createImageEditHistory,
   defaultImageCropStep,
   defaultImageResizeStep,
+  defaultImageRotateStep,
   editedImageExtension,
   emptyImageEditPlan,
   imageEditRequestPlan,
@@ -38,6 +39,7 @@ import {
   type ImageEditStack,
   type ImageEditStackStep,
   type ImageResizeStep,
+  type ImageRotateStep,
 } from "../features/image-editor/session";
 import { ImageEditStackPanel, type StackMessage } from "./ImageEditStackPanel";
 import { Button } from "../components/ui/button";
@@ -53,8 +55,6 @@ import { useToolAvailability } from "../ToolAvailabilityContext";
 
 type ImageEditorDraftValues = {
   format: ConvertImagesRequest["format"];
-  degrees: number;
-  flip: string;
   brightness: number;
   contrast: number;
   saturation: number;
@@ -66,14 +66,13 @@ type ImageEditorDraftValues = {
 };
 
 // Tools that are steps in the shared edit stack, not drafts of the edit plan.
-const stackStepForTool: Partial<Record<string, ImageEditStackStep>> = { crop: "crop", resize: "resize" };
-const toolForStackStep: Record<ImageEditStackStep, AtomicToolId> = { crop: "crop", resize: "resize" };
-const stackStepDefaults: { [Step in ImageEditStackStep]: () => NonNullable<ImageEditStack[Step]> } = { crop: defaultImageCropStep, resize: defaultImageResizeStep };
+const stackStepForTool: Partial<Record<string, ImageEditStackStep>> = { crop: "crop", resize: "resize", rotate: "rotate" };
+const toolForStackStep: Record<ImageEditStackStep, AtomicToolId> = { crop: "crop", resize: "resize", rotate: "rotate" };
+const stackStepDefaults: { [Step in ImageEditStackStep]: () => NonNullable<ImageEditStack[Step]> } = { crop: defaultImageCropStep, resize: defaultImageResizeStep, rotate: defaultImageRotateStep };
 
 const buildImageEditDraft = (id: string, values: ImageEditorDraftValues): ImageEditOperation | null => {
   if (stackStepForTool[id]) return null;
   if (id === "heic-convert") return { kind: "convert", format: values.format };
-  if (id === "rotate") return { kind: "rotate", degrees: values.degrees, flip: values.flip };
   if (id === "image-watermark") return {
     kind: "watermark",
     text: values.watermarkText,
@@ -155,8 +154,6 @@ export const ImageEditorWorkspaceView = ({
   onWorkspaceSourceAction?: (action: WorkspaceSourceAction | null) => void;
 }) => {
   const [format, setFormat] = useState<ConvertImagesRequest["format"]>("png");
-  const [degrees, setDegrees] = useState(0);
-  const [flip, setFlip] = useState("none");
   const [brightness, setBrightness] = useState(0);
   const [contrast, setContrast] = useState(0);
   const [saturation, setSaturation] = useState(0);
@@ -168,7 +165,7 @@ export const ImageEditorWorkspaceView = ({
   const [history, setHistory] = useState<ImageEditHistory>(() => createImageEditHistory());
   const [committedDraftKey, setCommittedDraftKey] = useState<string | null>(null);
   const draft = buildImageEditDraft(activeUtility.id, {
-    format, degrees, flip, brightness, contrast, saturation, exposure,
+    format, brightness, contrast, saturation, exposure,
     watermarkText, watermarkOpacity, watermarkX, watermarkY,
   });
   const draftKey = JSON.stringify(draft);
@@ -246,9 +243,6 @@ export const ImageEditorWorkspaceView = ({
             request: { paths, format, outputLocation } satisfies ConvertImagesRequest,
           });
         }
-        if (activeUtility.id === "rotate") {
-          return invoke<ToolResult>("rotate_images", { runId, request: { paths, degrees, flip, outputLocation } });
-        }
         if (stackStep) {
           return invoke<ToolResult>("export_image_edit_stack", { runId, request: { paths, steps: imageEditStackRequestSteps(stack.present), outputLocation } });
         }
@@ -279,6 +273,7 @@ export const ImageEditorWorkspaceView = ({
           }}
           onEditCrop={(crop: ImageCropStep, coalesceKey?: string) => changeStack((current) => ({ ...current, crop }), null, coalesceKey)}
           onEditResize={(resize: ImageResizeStep, coalesceKey?: string) => changeStack((current) => ({ ...current, resize }), null, coalesceKey)}
+          onEditRotate={(rotate: ImageRotateStep) => changeStack((current) => ({ ...current, rotate }), null)}
           onRemove={(step) => changeStack(
             (current) => current[step] ? { ...current, [step]: undefined } : null,
             { text: `${imageEditStepLabels[step]} removed. The other steps keep their settings.`, undo: true },
@@ -296,10 +291,6 @@ export const ImageEditorWorkspaceView = ({
       ) : <ImageEditorControls {...props} utility={activeUtility} onSelectTool={onSelectTool} {...{
         format,
         setFormat,
-        degrees,
-        setDegrees,
-        flip,
-        setFlip,
         brightness,
         setBrightness,
         contrast,
@@ -352,10 +343,6 @@ type ImageEditorControlsProps = {
   onSelectTool?: (id: AtomicToolId) => void;
   format: ConvertImagesRequest["format"];
   setFormat: (value: ConvertImagesRequest["format"]) => void;
-  degrees: number;
-  setDegrees: (value: number) => void;
-  flip: string;
-  setFlip: (value: string) => void;
   brightness: number;
   setBrightness: (value: number) => void;
   contrast: number;
@@ -397,10 +384,6 @@ const ImageEditorControls = ({
   onSelectTool,
   format,
   setFormat,
-  degrees,
-  setDegrees,
-  flip,
-  setFlip,
   brightness,
   setBrightness,
   contrast,
@@ -605,12 +588,6 @@ const ImageEditorControls = ({
             <NativeSelect id="image-target-format" aria-label="Target format" value={format} onChange={(event) => setFormat(event.target.value as ConvertImagesRequest["format"])}>
               <option value="png">PNG</option><option value="jpg">JPEG</option><option value="webp">WebP</option><option value="heic">HEIC</option>
             </NativeSelect>
-          </div>
-        )}
-        {utility.id === "rotate" && (
-          <div className="workspace-field-grid">
-            <div className="workspace-field"><Label htmlFor="image-rotation">Rotation</Label><NativeSelect id="image-rotation" aria-label="Rotation" value={degrees} onChange={(event) => setDegrees(Number(event.target.value))}>{[0, 90, 180, 270].map((value) => <option key={value} value={value}>{value}°</option>)}</NativeSelect></div>
-            <div className="workspace-field"><Label htmlFor="image-flip">Flip</Label><NativeSelect id="image-flip" aria-label="Mirror" value={flip} onChange={(event) => setFlip(event.target.value)}><option value="none">None</option><option value="horizontal">Horizontal</option><option value="vertical">Vertical</option></NativeSelect></div>
           </div>
         )}
         {utility.id === "image-watermark" && (
