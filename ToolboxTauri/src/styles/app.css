@@ -1137,6 +1137,13 @@ body {
   padding-top: 0;
   border-top: 0;
 }
+.scene-export-summary { display: grid; gap: 6px; margin-bottom: 12px; }
+.scene-export-summary h3 { margin: 0; font-size: 12px; font-weight: 600; }
+.scene-export-summary ol { display: grid; margin: 0; padding: 0; list-style: none; counter-reset: export-step; }
+.scene-export-summary li { display: grid; grid-template-columns: 16px minmax(0, 1fr); column-gap: 10px; padding: 6px 0; border-top: 1px solid var(--border); counter-increment: export-step; }
+.scene-export-summary li::before { content: counter(export-step); grid-row: span 2; font-size: 12px; color: var(--muted-foreground); text-align: right; }
+.scene-export-summary-label { font-size: 13px; }
+.scene-export-summary-detail { grid-column: 2; font-size: 12px; color: var(--muted-foreground); }
 .run-destination-label {
   font-size: 12px;
   font-weight: 600;
@@ -1366,6 +1373,11 @@ body {
 .pdf-studio .scene-tools .scene-export { width: auto; margin: 0 0 0 auto; }
 .scene-toolbar-divider { align-self: stretch; width: 1px; background: var(--border); margin: 2px 3px; }
 .scene-inline-hint, .scene-property-note { color: var(--muted-foreground); font-size: 10px; }
+.scene-form-note-content { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; font-size: 12px; color: var(--muted-foreground); }
+.scene-form-note-content p { margin: 0; }
+.scene-form-note-content strong { color: var(--foreground); font-weight: 600; }
+.scene-form-note-content > svg { width: 14px; height: 14px; flex: none; margin-top: 2px; }
+.scene-form-fields { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
 .scene-signature-mini-preview { width: 58px; height: 28px; object-fit: contain; border: 1px solid var(--border); border-radius: 4px; background: var(--pdf-document-page); }
 .scene-render-status { margin-left: auto; font-size: 10px; white-space: nowrap; }
 .scene-document { display: grid; grid-template-columns: 96px minmax(0, 1fr) 260px; height: calc(100dvh - 248px); min-height: 240px; }
@@ -1379,6 +1391,8 @@ body {
 .scene-inspector { min-width: 0; min-height: 0; overflow: hidden; }
 .scene-inspector-panel { height: 100%; min-height: 0; }
 .scene-inspector-field { display: grid; min-width: 0; gap: 6px; }
+fieldset.scene-inspector-field { min-inline-size: 0; margin: 0; padding: 0; border: 0; }
+.scene-inspector-row { display: flex; flex-wrap: wrap; gap: 14px; }
 .scene-inspector-field [data-slot="native-select-wrapper"] { width: 100%; }
 .scene-inspector-field input[type="color"] { width: 100%; height: 36px; padding: 3px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--background); }
 .scene-inspector-slider-label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -1388,6 +1402,10 @@ body {
 .scene-original-note { margin-left: auto; color: var(--muted-foreground); white-space: nowrap; }
 .scene-empty { min-height: calc(100dvh - 275px); }
 .scene-error { padding: 8px 12px; margin: 0; font-size: 12px; color: var(--destructive); }
+.scene-tools { position: relative; }
+/* Board PdfExport "Nothing to export": a callout under Export that overlays the page instead of pushing it down. */
+.scene-export-reason { position: absolute; z-index: 5; right: 12px; top: calc(100% + 6px); width: min(300px, calc(100% - 24px)); display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 10px 12px; font-size: 12px; color: var(--muted-foreground); background: var(--popover); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 12px 30px rgb(0 0 0 / .3); pointer-events: none; }
+.scene-export-reason strong { font-size: 13px; font-weight: 600; color: var(--popover-foreground); }
 @media (max-width: 900px) {
   .command-center:has(.pdf-scene-workspace) { padding: 8px; }
   .scene-tools { gap: 2px; }

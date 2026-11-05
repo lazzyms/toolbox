@@ -25,6 +25,86 @@
       "license": "SIL Open Font License 1.1; see Pacifico-LICENSE.txt",
       "sourceUrl": "https://github.com/google/fonts/tree/main/ofl/pacifico",
       "maxBytes": 1000000
+    },
+    "textOverlayNotoSansBoldFont": {
+      "path": "NotoSans-Bold.ttf",
+      "version": "2.015",
+      "sha256": "87cb2d84472a7d66da659ee47b6cdb9552326e8c128245231f191b6ac72529d9",
+      "license": "SIL Open Font License 1.1; see Noto-LICENSE.txt",
+      "sourceUrl": "https://github.com/notofonts/notofonts.github.io/tree/a5fca98891563057e7f65c1c4bf3f2a58c7704a4/fonts/NotoSans/unhinted/ttf",
+      "maxBytes": 1000000
+    },
+    "textOverlayNotoSansBoldItalicFont": {
+      "path": "NotoSans-BoldItalic.ttf",
+      "version": "2.015",
+      "sha256": "3d367743f371f28671d2764e911a53d7c20ec9b6aa8791d059e7090389fc52a5",
+      "license": "SIL Open Font License 1.1; see Noto-LICENSE.txt",
+      "sourceUrl": "https://github.com/notofonts/notofonts.github.io/tree/a5fca98891563057e7f65c1c4bf3f2a58c7704a4/fonts/NotoSans/unhinted/ttf",
+      "maxBytes": 1000000
+    },
+    "textOverlayNotoSansItalicFont": {
+      "path": "NotoSans-Italic.ttf",
+      "version": "2.015",
+      "sha256": "678288f868807d4d64a6f3b51466871d117d915780381ce9d0ed4b3bcbd06d37",
+      "license": "SIL Open Font License 1.1; see Noto-LICENSE.txt",
+      "sourceUrl": "https://github.com/notofonts/notofonts.github.io/tree/a5fca98891563057e7f65c1c4bf3f2a58c7704a4/fonts/NotoSans/unhinted/ttf",
+      "maxBytes": 1000000
+    },
+    "textOverlayNotoSansRegularFont": {
+      "path": "NotoSans-Regular.ttf",
+      "version": "2.015",
+      "sha256": "f3961a9cde016d41a4879aecda1474d3a36d6bf54fa0e4643de029cc2248b0e8",
+      "license": "SIL Open Font License 1.1; see Noto-LICENSE.txt",
+      "sourceUrl": "https://github.com/notofonts/notofonts.github.io/tree/a5fca98891563057e7f65c1c4bf3f2a58c7704a4/fonts/NotoSans/unhinted/ttf",
+      "maxBytes": 1000000
+    },
+    "textOverlayNotoSansMonoBoldFont": {
+      "path": "NotoSansMono-Bold.ttf",
+      "version": "2.014",
+      "sha256": "1100772b2f79c102402a1011df5e2226517d0f40ac553a25fb12fdbad8c11b85",
+      "license": "SIL Open Font License 1.1; see Noto-LICENSE.txt",
+      "sourceUrl": "https://github.com/notofonts/notofonts.github.io/tree/a5fca98891563057e7f65c1c4bf3f2a58c7704a4/fonts/NotoSansMono/unhinted/ttf",
+      "maxBytes": 1000000
+    },
+    "textOverlayNotoSansMonoRegularFont": {
+      "path": "NotoSansMono-Regular.ttf",
+      "version": "2.014",
+      "sha256": "87f8ce0522a6c99b743ee5fc75b4073cfdd575639119672828b7b9944b65b4f4",
+      "license": "SIL Open Font License 1.1; see Noto-LICENSE.txt",
+      "sourceUrl": "https://github.com/notofonts/notofonts.github.io/tree/a5fca98891563057e7f65c1c4bf3f2a58c7704a4/fonts/NotoSansMono/unhinted/ttf",
+      "maxBytes": 1000000
+    },
+    "textOverlayNotoSerifBoldFont": {
+      "path": "NotoSerif-Bold.ttf",
+      "version": "2.015",
+      "sha256": "24ad531e6b05ddad8c3d89572d2c93eb86a6b74e652ce7ee3c3e171de68e84c3",
+      "license": "SIL Open Font License 1.1; see Noto-LICENSE.txt",
+      "sourceUrl": "https://github.com/notofonts/notofonts.github.io/tree/a5fca98891563057e7f65c1c4bf3f2a58c7704a4/fonts/NotoSerif/unhinted/ttf",
+      "maxBytes": 1000000
+    },
+    "textOverlayNotoSerifBoldItalicFont": {
+      "path": "NotoSerif-BoldItalic.ttf",
+      "version": "2.015",
+      "sha256": "1bc4f86502eaa368718f6192bee022ea9a703d5af1c18b7d291212657b63074a",
+      "license": "SIL Open Font License 1.1; see Noto-LICENSE.txt",
+      "sourceUrl": "https://github.com/notofonts/notofonts.github.io/tree/a5fca98891563057e7f65c1c4bf3f2a58c7704a4/fonts/NotoSerif/unhinted/ttf",
+      "maxBytes": 1000000
+    },
+    "textOverlayNotoSerifItalicFont": {
+      "path": "NotoSerif-Italic.ttf",
+      "version": "2.015",
+      "sha256": "c4b3c971741ecdb40f5a443bce754e8fe91efe761b6ea10c92be7c3597cdadc4",
+      "license": "SIL Open Font License 1.1; see Noto-LICENSE.txt",
+      "sourceUrl": "https://github.com/notofonts/notofonts.github.io/tree/a5fca98891563057e7f65c1c4bf3f2a58c7704a4/fonts/NotoSerif/unhinted/ttf",
+      "maxBytes": 1000000
+    },
+    "textOverlayNotoSerifRegularFont": {
+      "path": "NotoSerif-Regular.ttf",
+      "version": "2.015",
+      "sha256": "a15cfbbc1539d707115111d672d590a3d70d4f74b4c0a315956da20ae19a14e1",
+      "license": "SIL Open Font License 1.1; see Noto-LICENSE.txt",
+      "sourceUrl": "https://github.com/notofonts/notofonts.github.io/tree/a5fca98891563057e7f65c1c4bf3f2a58c7704a4/fonts/NotoSerif/unhinted/ttf",
+      "maxBytes": 1000000
     }
   }
 }

@@ -134,8 +134,26 @@ async fn inspect_pdf_scene(request: InspectPdfRequest) -> Result<metadata::PdfDo
 }
 
 #[tauri::command]
+async fn inspect_pdf_form(request: InspectPdfRequest) -> Result<scene::FormInspection, String> {
+    tauri::async_runtime::spawn_blocking(move || scene::inspect_form(&request.path)).await.map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 async fn inspect_pdf_scene_page(request: InspectPdfScenePageRequest) -> Result<metadata::PdfPageMetadata, String> {
     tauri::async_runtime::spawn_blocking(move || scene::inspect_page(&request.path, request.page_index)).await.map_err(|error| error.to_string())?
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FindPdfSceneTextRequest {
+    path: std::path::PathBuf,
+    query: String,
+    match_case: bool,
+}
+
+#[tauri::command]
+async fn find_pdf_scene_text(request: FindPdfSceneTextRequest) -> Result<Vec<scene::PdfTextMatch>, String> {
+    tauri::async_runtime::spawn_blocking(move || scene::find_text(&request.path, &request.query, request.match_case)).await.map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -151,7 +169,13 @@ async fn preview_pdf_scene_pages(request: scene::PreviewPagesRequest) -> Result<
 }
 
 #[tauri::command]
-async fn export_pdf_scene(events: RunEvents, request: scene::ExportRequest) -> Vec<JobOutcome> {
+async fn export_pdf_scene(app: tauri::AppHandle, events: RunEvents, request: scene::ExportRequest) -> Vec<JobOutcome> {
+    let chosen = request.output_path.clone();
+    let outcomes = run_export_pdf_scene(events, request).await;
+    settings::remember_chosen_save(&app, chosen.as_deref(), outcomes)
+}
+
+async fn run_export_pdf_scene(events: RunEvents, request: scene::ExportRequest) -> Vec<JobOutcome> {
     let request = Arc::new(request);
     BatchRunner::run(&events, "export_pdf_scene", request.paths.clone(), &request.output_location, &request, scene::export)
 }
@@ -530,6 +554,8 @@ fn main() {
             inspect_pdf,
             inspect_pdf_scene,
             inspect_pdf_scene_page,
+            inspect_pdf_form,
+            find_pdf_scene_text,
             preview_pdf_scene,
             preview_pdf_scene_pages,
             export_pdf_scene,
@@ -1107,6 +1133,9 @@ mod command_tests {
         let mut naming = Vec::new();
         let inspected_scene = tauri::async_runtime::block_on(inspect_pdf_scene(InspectPdfRequest { path: pdf.clone() })).unwrap();
         assert_eq!(inspected_scene.pages.len(), 2);
+        let found = tauri::async_runtime::block_on(find_pdf_scene_text(FindPdfSceneTextRequest { path: pdf.clone(), query: "toolbox PAGE".into(), match_case: false })).unwrap();
+        assert_eq!(found.iter().map(|found| (found.page_index, found.text.as_str())).collect::<Vec<_>>(), vec![(0, "Toolbox page"), (1, "Toolbox page")]);
+        assert!(tauri::async_runtime::block_on(find_pdf_scene_text(FindPdfSceneTextRequest { path: pdf.clone(), query: "toolbox PAGE".into(), match_case: true })).unwrap().is_empty());
         let visual_scene: scene::PdfScene = serde_json::from_value(serde_json::json!({ "pages": [
             { "sourceIndex": 0, "width": 612, "height": 792, "rotation": 0, "crop": null, "objects": [
                 { "kind": "highlight", "rect": { "x": 65, "y": 62, "width": 200, "height": 30 }, "text": "", "fontSize": 18, "color": "#FFD700", "opacity": 0.35, "strokes": [] },
@@ -1119,9 +1148,9 @@ mod command_tests {
                 { "kind": "text", "rect": { "x": 72, "y": 100, "width": 350, "height": 40 }, "text": "New page in the same session", "fontSize": 18, "color": "#202020", "opacity": 1, "strokes": [] }
             ] }
         ] })).unwrap();
-        let rendered_scene = tauri::async_runtime::block_on(preview_pdf_scene(scene::PreviewRequest { path: pdf.clone(), scene: visual_scene.clone(), page_index: 0 })).unwrap();
+        let rendered_scene = tauri::async_runtime::block_on(preview_pdf_scene(scene::PreviewRequest { path: pdf.clone(), scene: visual_scene.clone(), page_index: 0, sections: Default::default() })).unwrap();
         assert!(rendered_scene.data_url.starts_with("data:image/png;base64,"));
-        let rendered_scene_pages = tauri::async_runtime::block_on(preview_pdf_scene_pages(scene::PreviewPagesRequest { path: pdf.clone(), scene: visual_scene.clone(), page_indices: vec![1, 0] })).unwrap();
+        let rendered_scene_pages = tauri::async_runtime::block_on(preview_pdf_scene_pages(scene::PreviewPagesRequest { path: pdf.clone(), scene: visual_scene.clone(), page_indices: vec![1, 0], sections: Default::default() })).unwrap();
         assert_eq!(rendered_scene_pages.iter().map(|preview| preview.page_index).collect::<Vec<_>>(), vec![1, 0]);
         assert!(rendered_scene_pages.iter().all(|preview| preview.preview.data_url.starts_with("data:image/png;base64,")));
         let wire = serde_json::to_value(&rendered_scene_pages).unwrap();
@@ -1132,7 +1161,7 @@ mod command_tests {
         assert!(preview_width > 0 && preview_height > 0, "preview dimensions must be positive");
         assert!(preview_width > preview_height, "a 90-degree page should preview in landscape orientation");
         assert!(preview["dataUrl"].as_str().is_some_and(|value| value.starts_with("data:image/png;base64,")));
-        outputs.extend(named(&mut naming, "export_pdf_scene", pdf.clone(), assert_success("PDF scene", export_pdf_scene(RunEvents::silent(), scene::ExportRequest { paths: vec![pdf.clone()], scene: visual_scene, output_location: OutputLocation::AlongsideInput }))));
+        outputs.extend(named(&mut naming, "export_pdf_scene", pdf.clone(), assert_success("PDF scene", run_export_pdf_scene(RunEvents::silent(), scene::ExportRequest { paths: vec![pdf.clone()], scene: visual_scene, output_location: OutputLocation::AlongsideInput, output_path: None, sections: Default::default() }))));
         outputs.extend(named(&mut naming, "remove_password", protected.clone(), assert_success("unlock", remove_password(RunEvents::silent(), PasswordRequest { paths: vec![protected], password: crate::kit::TEST_PASSWORD.into(), password_overrides: Default::default(), output_location: location(&root, "unlock") }))));
         outputs.extend(named(&mut naming, "add_page_numbers", pdf.clone(), assert_success("page numbers", add_page_numbers(RunEvents::silent(), PageOverlayRequest { paths: vec![pdf.clone()], text: "1".into(), opacity: 100, position: Some("bottom-right".into()), logo_path: None, pages: None, start_number: Some(1), font_size: Some(12), output_location: location(&root, "page numbers") }))));
         outputs.extend(named(&mut naming, "merge_pdfs", pdf.clone(), assert_aggregate_success("merge", &[pdf.clone(), pdf_two.clone()], run_merge_pdfs(&MergePdfRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: location(&root, "merge"), output_path: None }))));
