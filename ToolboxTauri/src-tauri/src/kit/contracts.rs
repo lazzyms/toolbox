@@ -481,15 +481,17 @@ pub struct JobOutcome {
     pub detail: String,
     pub warnings: Vec<OutcomeWarning>,
     pub state: OutcomeState,
+    pub original_bytes: Option<u64>,
+    pub output_bytes: Option<u64>,
 }
 
 impl JobOutcome {
     pub fn succeeded(input_path: PathBuf, output_paths: Vec<PathBuf>, detail: impl Into<String>) -> Self {
-        Self { input_path, detail: detail.into(), warnings: Vec::new(), state: OutcomeState::Succeeded { output_paths } }
+        Self::new(input_path, detail.into(), OutcomeState::Succeeded { output_paths })
     }
 
     pub fn skipped(input_path: PathBuf, reason: SkipReason) -> Self {
-        Self { input_path, detail: String::new(), warnings: Vec::new(), state: OutcomeState::Skipped { reason } }
+        Self::new(input_path, String::new(), OutcomeState::Skipped { reason })
     }
 
     pub fn failure(input_path: PathBuf, error: ToolError) -> Self {
@@ -497,7 +499,15 @@ impl JobOutcome {
     }
 
     pub fn failure_with_outputs(input_path: PathBuf, output_paths: Vec<PathBuf>, error: ToolError) -> Self {
-        Self { input_path, detail: String::new(), warnings: Vec::new(), state: OutcomeState::Failed { output_paths, error } }
+        Self::new(input_path, String::new(), OutcomeState::Failed { output_paths, error })
+    }
+
+    fn new(input_path: PathBuf, detail: String, state: OutcomeState) -> Self {
+        Self { input_path, detail, warnings: Vec::new(), state, original_bytes: None, output_bytes: None }
+    }
+
+    pub fn with_sizes(self, original_bytes: u64, output_bytes: u64) -> Self {
+        Self { original_bytes: Some(original_bytes), output_bytes: Some(output_bytes), ..self }
     }
 
     pub fn with_warning(mut self, warning: OutcomeWarning) -> Self {
@@ -538,6 +548,10 @@ struct JobOutcomeWire {
     failure: Option<ToolError>,
     reason: Option<SkipReason>,
     warnings: Vec<OutcomeWarning>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    original_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    output_bytes: Option<u64>,
 }
 
 impl From<JobOutcome> for JobOutcomeWire {
@@ -547,7 +561,7 @@ impl From<JobOutcome> for JobOutcomeWire {
             OutcomeState::Skipped { reason } => (OutcomeStateTag::Skipped, Vec::new(), None, Some(reason)),
             OutcomeState::Failed { output_paths, error } => (OutcomeStateTag::Failed, output_paths, Some(error), None),
         };
-        Self { input_path: outcome.input_path, state, output_paths, detail: outcome.detail, failure, reason, warnings: outcome.warnings }
+        Self { input_path: outcome.input_path, state, output_paths, detail: outcome.detail, failure, reason, warnings: outcome.warnings, original_bytes: outcome.original_bytes, output_bytes: outcome.output_bytes }
     }
 }
 
@@ -561,7 +575,7 @@ impl TryFrom<JobOutcomeWire> for JobOutcome {
             (OutcomeStateTag::Failed, Some(error), None) => OutcomeState::Failed { output_paths: wire.output_paths, error },
             (state, _, _) => return Err(format!("Inconsistent {state:?} job outcome for {}.", wire.input_path.display())),
         };
-        Ok(Self { input_path: wire.input_path, detail: wire.detail, warnings: wire.warnings, state })
+        Ok(Self { input_path: wire.input_path, detail: wire.detail, warnings: wire.warnings, state, original_bytes: wire.original_bytes, output_bytes: wire.output_bytes })
     }
 }
 
@@ -618,6 +632,37 @@ mod tests {
         assert_eq!(value["detail"], "PDF Unlocked");
         assert!(value["failure"].is_null() && value["reason"].is_null());
         assert_eq!(value["warnings"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn sizes_serialize_in_camel_case_only_when_reported() {
+        let compressed = JobOutcome::succeeded(PathBuf::from("a.pdf"), vec![PathBuf::from("a-compressed.pdf")], "PDF compressed").with_sizes(2048, 1024);
+        let no_savings = JobOutcome::skipped(PathBuf::from("b.png"), SkipReason::new(SkipCode::NoSavings, "No savings: already well compressed")).with_sizes(512, 600);
+        let plain_success = JobOutcome::succeeded(PathBuf::from("c.pdf"), vec![PathBuf::from("c-1.pdf")], "Saved");
+        let plain_skip = JobOutcome::skipped(PathBuf::from("d.pdf"), SkipReason::new(SkipCode::NotProtected, "Not protected."));
+
+        let value = serde_json::to_value(&compressed).unwrap();
+        assert_eq!((value["state"].as_str(), value["originalBytes"].as_u64(), value["outputBytes"].as_u64()), (Some("succeeded"), Some(2048), Some(1024)));
+        let value = serde_json::to_value(&no_savings).unwrap();
+        assert_eq!((value["state"].as_str(), value["originalBytes"].as_u64(), value["outputBytes"].as_u64()), (Some("skipped"), Some(512), Some(600)));
+        assert_eq!(value["outputPaths"], serde_json::json!([]));
+
+        for (outcome, state) in [(&plain_success, "succeeded"), (&plain_skip, "skipped")] {
+            let value = serde_json::to_value(outcome).unwrap();
+            assert_eq!(value["state"], state);
+            let object = value.as_object().unwrap();
+            assert!(!object.contains_key("originalBytes") && !object.contains_key("outputBytes"), "{value}");
+        }
+
+        for outcome in [compressed, no_savings, plain_success, plain_skip] {
+            assert_eq!(serde_json::from_value::<JobOutcome>(serde_json::to_value(&outcome).unwrap()).unwrap(), outcome);
+        }
+        let explicit_nulls = serde_json::json!({
+            "inputPath": "e.pdf", "state": "succeeded", "outputPaths": [], "detail": "", "failure": null, "reason": null,
+            "warnings": [], "originalBytes": null, "outputBytes": null,
+        });
+        let parsed = serde_json::from_value::<JobOutcome>(explicit_nulls).unwrap();
+        assert_eq!((parsed.original_bytes, parsed.output_bytes), (None, None));
     }
 
     #[test]
@@ -737,6 +782,10 @@ mod tests {
                 vec![PathBuf::from("drawings-page-1.png")],
                 ToolError::limit_exceeded(LimitKind::Time, "Took longer than 5 minutes and was stopped. 1 part was saved before it stopped."),
             ),
+            JobOutcome::succeeded(PathBuf::from("report.pdf"), vec![PathBuf::from("report-compressed.pdf")], "PDF compressed")
+                .with_sizes(2_500_000, 1_000_000),
+            JobOutcome::skipped(PathBuf::from("logo.png"), SkipReason::new(SkipCode::NoSavings, "No savings: already well compressed"))
+                .with_sizes(4096, 4200),
         ];
 
         assert_eq!(serde_json::to_value(&samples).unwrap(), shared);

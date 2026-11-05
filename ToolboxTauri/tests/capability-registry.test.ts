@@ -85,11 +85,13 @@ test("every tool declares one output suffix and many-to-one tools take ordered i
 });
 
 test("every many-to-one tool opens the save step and sends the chosen path", () => {
-  const viewSources = readdirSync(new URL("../src/views/", import.meta.url))
-    .filter((name) => name.endsWith(".tsx"))
-    .map((name) => readFileSync(new URL(`../src/views/${name}`, import.meta.url), "utf8"));
+  const requestSources = ["views", "features"].flatMap((folder) =>
+    readdirSync(new URL(`../src/${folder}/`, import.meta.url), { recursive: true, encoding: "utf8" })
+      .filter((name) => /\.tsx?$/.test(name))
+      .map((name) => readFileSync(new URL(`../src/${folder}/${name}`, import.meta.url), "utf8")),
+  );
   const requestFor = (command: string) => {
-    for (const source of viewSources) {
+    for (const source of requestSources) {
       const start = source.indexOf(`invoke<ToolResult>("${command}"`);
       if (start === -1) continue;
       const open = source.indexOf("request: {", start) + "request: ".length;
