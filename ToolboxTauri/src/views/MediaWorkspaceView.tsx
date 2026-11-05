@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ToolScaffold } from "../components/ToolScaffold";
-import type { ImagePreview, ToolDefinition, ToolResult } from "../contracts";
+import { exampleOutputName } from "../components/RunDestination";
+import { extensionOf, type IntakeRedirect } from "../components/intake";
+import type { ConvertImagesRequest, ImagePreview, ToolDefinition, ToolResult } from "../contracts";
+import type { ShellEvent } from "../hooks/useShellBridge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -32,7 +35,25 @@ const iconSizesByPreset: Record<string, number[]> = {
   custom: [16, 32, 64, 128, 256, 512],
 };
 
-export const MediaWorkspaceView = ({ utility: activeUtility, initialPaths, onFilesChange }: { utility: ToolDefinition; initialPaths?: readonly string[]; onFilesChange?: (paths: readonly string[]) => void }) => {
+const convertTargets: { format: ConvertImagesRequest["format"]; name: string; hint: string }[] = [
+  { format: "jpg", name: "JPEG", hint: "Transparent areas become white, because JPEG has no transparency." },
+  { format: "png", name: "PNG", hint: "Lossless. Transparency is kept." },
+  { format: "webp", name: "WebP", hint: "Follows each source. PNG and TIFF stay lossless. JPEG and HEIC are lossy." },
+  { format: "heic", name: "HEIC", hint: "Saved as 8-bit. Transparency is kept." },
+];
+
+// Converting keeps one frame of a GIF, so Convert points GIFs at Extract GIF Frames instead.
+const convertGifRedirect = (path: string): IntakeRedirect | null => extensionOf(path) === ".gif"
+  ? { message: "Converting a GIF would drop its animation. Extract GIF Frames saves every frame.", toolId: "gif-extract" }
+  : null;
+
+export const MediaWorkspaceView = ({ utility: activeUtility, initialPaths, fileActivation, onActivationAccepted, onFilesChange }: {
+  utility: ToolDefinition;
+  initialPaths?: readonly string[];
+  fileActivation?: Extract<ShellEvent, { kind: "files" }>;
+  onActivationAccepted?: (activationId: string) => void;
+  onFilesChange?: (paths: readonly string[]) => void;
+}) => {
   const [delay, setDelay] = useState(100);
   const [loop, setLoop] = useState(true);
   const [iconPreset, setIconPreset] = useState("macos");
@@ -41,6 +62,7 @@ export const MediaWorkspaceView = ({ utility: activeUtility, initialPaths, onFil
   const [report, setReport] = useState<unknown[]>([]);
   const [selectedTiffFrameIndex, setSelectedTiffFrameIndex] = useState(0);
   const [tiffInspection, setTiffInspection] = useState<TiffInspection>({ kind: "idle" });
+  const [targetFormat, setTargetFormat] = useState<ConvertImagesRequest["format"]>("jpg");
 
   useEffect(() => {
     setReport([]);
@@ -57,9 +79,19 @@ export const MediaWorkspaceView = ({ utility: activeUtility, initialPaths, onFil
       sessionKey="media-tools"
       utility={activeUtility}
       initialPaths={initialPaths}
+      fileActivation={fileActivation}
+      onActivationAccepted={onActivationAccepted}
       onFilesChange={onFilesChange}
-      showFileOrdering={activeUtility.id !== "tiff-pages"}
+      showFileOrdering={activeUtility.id !== "tiff-pages" && activeUtility.id !== "heic-convert"}
+      intakeRedirect={activeUtility.id === "heic-convert" ? convertGifRedirect : undefined}
+      listOutputs={activeUtility.id === "heic-convert"}
+      exampleName={activeUtility.id === "heic-convert" ? (path) => exampleOutputName(path, activeUtility.command, activeUtility.capability.outputSuffix, targetFormat) : undefined}
       onRun={(paths, outputLocation, { outputPath, runId }) => {
+        if (activeUtility.id === "heic-convert") {
+          return invoke<ToolResult>("convert_images", { runId,
+            request: { paths, format: targetFormat, outputLocation } satisfies ConvertImagesRequest,
+          });
+        }
         if (activeUtility.id === "icon-set") {
           return invoke<ToolResult>("generate_icon_set", { runId,
             request: { paths, preset: iconPreset, sizes: iconSizes, outputLocation },
@@ -113,6 +145,29 @@ export const MediaWorkspaceView = ({ utility: activeUtility, initialPaths, onFil
                 return { ...current, frames };
               });
             }} />
+          )}
+
+          {activeUtility.id === "heic-convert" && (
+            <>
+              <div className="workspace-field">
+                <Label id="image-target-format-label">Convert to</Label>
+                <ToggleGroup
+                  type="single"
+                  variant="outline"
+                  size="sm"
+                  aria-labelledby="image-target-format-label"
+                  aria-describedby="image-target-format-hint"
+                  value={targetFormat}
+                  onValueChange={(value) => {
+                    if (value) setTargetFormat(value as ConvertImagesRequest["format"]);
+                  }}
+                >
+                  {convertTargets.map(({ format, name }) => <ToggleGroupItem key={format} value={format}>{name}</ToggleGroupItem>)}
+                </ToggleGroup>
+                <p id="image-target-format-hint" className="workspace-panel-copy">{convertTargets.find(({ format }) => format === targetFormat)?.hint}</p>
+              </div>
+              <p className="workspace-note">Lossy results use the shared quality of 90, so a second run gives the same files. To choose a quality, use Compress.</p>
+            </>
           )}
 
           {activeUtility.id === "icon-set" && (

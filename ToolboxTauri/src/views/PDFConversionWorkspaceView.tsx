@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ToolScaffold } from "../components/ToolScaffold";
 import { exampleOutputName } from "../components/RunDestination";
@@ -61,6 +61,8 @@ const pdfToImagesOutputSummary = (selectedPages: number[], dpi: string, format: 
   return `Output preview unavailable. Export renders ${pageSummary} at ${dpi} DPI as ${formatLabel} image files.`;
 };
 
+const isTiff = (path: string) => /\.tiff?$/i.test(path);
+
 export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPaths = [], onFilesChange }: { utility: ToolDefinition; initialPaths?: readonly string[]; onFilesChange?: (paths: readonly string[]) => void }) => {
   const [dpi, setDpi] = useState("150");
   const [format, setFormat] = useState("jpg");
@@ -72,6 +74,24 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
   const [document, setDocument] = useState<PdfDocument | null>(null);
   const [selectedPages, setSelectedPages] = useState<number[]>([]);
   const [inspectError, setInspectError] = useState("");
+  const [tiffPages, setTiffPages] = useState<ReadonlyMap<string, number>>(() => new Map());
+  const combinesImages = activeUtility.id === "images-to-pdf";
+  const trackFiles = useCallback((paths: readonly string[]) => {
+    onFilesChange?.(paths);
+    const tiffs = [...new Set(paths.filter(isTiff))];
+    if (!combinesImages || tiffs.length === 0) return;
+    invoke<unknown>("inspect_image_pages", { request: { paths: tiffs } }).then((counts) => {
+      if (!Array.isArray(counts) || counts.length !== tiffs.length) return;
+      setTiffPages((known) => {
+        const next = new Map(known);
+        tiffs.forEach((path, index) => {
+          const count: unknown = counts[index];
+          if (typeof count === "number") next.set(path, count);
+        });
+        return next;
+      });
+    }).catch(() => undefined);
+  }, [onFilesChange, combinesImages]);
 
   return (
     <ToolScaffold
@@ -80,7 +100,11 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
       sessionKey="pdf-convert"
       utility={activeUtility}
       initialPaths={initialPaths}
-      onFilesChange={onFilesChange}
+      onFilesChange={trackFiles}
+      renderFileExtra={combinesImages ? (path) => {
+        const count = tiffPages.get(path) ?? 1;
+        return count > 1 && <Badge variant="outline" className="file-selection-badge">TIFF, {count} pages</Badge>;
+      } : undefined}
       exampleName={activeUtility.id === "pdf-to-images" ? (path) => exampleOutputName(path, "pdf_to_images", activeUtility.capability.outputSuffix, format) : undefined}
       onRun={(paths, outputLocation, { outputPath, runId }) => {
         const pages = document ? selectedPages : undefined;
@@ -443,7 +467,7 @@ const ConversionControls = ({
         </p>
       )}
       {activeUtility.id === "images-to-pdf" && (
-        <p className="workspace-note">Images are combined in the order they appear in the selected list.</p>
+        <p className="workspace-note">JPEGs go in as they are. Other images are stored without loss, and transparency is kept. A multi-page TIFF adds one page per TIFF page.</p>
       )}
       {activeUtility.id === "pdf-merge" && (
         <p className="workspace-note">Add at least two PDFs. The order in the source list becomes the page order in the merged copy.</p>
