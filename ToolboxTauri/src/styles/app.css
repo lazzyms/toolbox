@@ -1654,3 +1654,7 @@ kbd.shortcut-hint {
 .pdf-properties-cell[data-empty="true"] {
   color: var(--muted-foreground);
 }
+.pdf-properties-locked {
+  grid-column: span 2;
+  color: var(--warning);
+}

@@ -5,23 +5,30 @@ const minutesPath = "/Users/test/Documents/minutes.pdf";
 const scanPath = "/Users/test/Scans/scan.pdf";
 const lockedPath = "/Users/test/Documents/locked.pdf";
 const brokenPath = "/Users/test/Documents/broken.pdf";
-const protectedMessage = "Edit Properties can't edit a password-protected PDF yet. Nothing was saved.";
+const lockedPassword = "locked-secret-7";
+const wrongMessage = "The password didn't open this file. Check it, or try the password this file was sent with.";
+const lockedNote = "Needs an open password. The one for all files is tried.";
 
 const none = { keywords: null, creator: null, producer: null };
 const current: Record<string, unknown> = {
   [deckPath]: { ...none, title: "Q3 board pack", author: "R. Okafor", subject: "Board", creationDate: "2026-09-30T17:12:00Z", modificationDate: "2026-10-01T09:00:00Z" },
   [minutesPath]: { ...none, title: "Board minutes", author: "R. Okafor", subject: null, creationDate: "2026-09-14T16:02:00+01:00", modificationDate: "2026-09-15T08:40:00+01:00" },
   [scanPath]: { ...none, title: null, author: null, subject: null, creationDate: null, modificationDate: null },
+  [lockedPath]: { ...none, title: "Sealed contract", author: "Legal", subject: null, creationDate: null, modificationDate: null },
 };
 const keptDates = { creationDate: { action: "keep" }, modificationDate: { action: "keep" } };
 
 type HarnessWindow = Window & { calls: Array<{ command: string; args: any }>; picked?: string[] };
 
 test.beforeEach(async ({ page }) => {
-  await page.addInitScript(({ current, lockedPath, protectedMessage }) => {
+  await page.addInitScript(({ current, lockedPath, lockedPassword, wrongMessage }) => {
     const w = window as unknown as HarnessWindow;
     w.calls = [];
     const outcome = (inputPath: string, rest: object) => ({ inputPath, outputPaths: [], detail: "", failure: null, reason: null, warnings: [], ...rest });
+    const opens = (path: string, request: any) => path !== lockedPath || (request.passwordOverrides[path] ?? request.password) === lockedPassword;
+    const failed = (path: string) => outcome(path, { state: "failed", failure: path === lockedPath
+      ? { kind: "wrongPassword", message: wrongMessage, pointer: null }
+      : { kind: "invalidInput", message: "Could not read the PDF: invalid file header", pointer: null } });
     (window as any).__TAURI_INTERNALS__ = {
       metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main", windowLabel: "main" } },
       transformCallback: () => 1, unregisterCallback: () => {},
@@ -31,22 +38,22 @@ test.beforeEach(async ({ page }) => {
         if (command === "plugin:path|resolve_directory") return "/Users/test";
         if (command === "check_output_folder") return "ready";
         if (command === "read_pdf_properties") {
-          return args.request.paths.map((path: string) => current[path]
+          return args.request.paths.map((path: string) => current[path] && opens(path, args.request)
             ? outcome(path, { state: "succeeded", detail: JSON.stringify(current[path]) })
-            : outcome(path, { state: "failed", failure: { kind: "invalidInput", message: path === lockedPath ? protectedMessage : "Could not read the PDF: invalid file header", pointer: null } }));
+            : failed(path));
         }
         if (command === "edit_pdf_properties") {
           return args.request.paths.map((path: string) => path.endsWith("scan.pdf")
             ? outcome(path, { state: "skipped", reason: { code: "noEffectiveChange", message: "No effective change: title and author are already empty. No copy was made.", pointer: null } })
-            : current[path]
-            ? outcome(path, { state: "succeeded", outputPaths: [path.replace(/\.pdf$/, "-edited.pdf")], detail: "Title set, author cleared." })
-            : outcome(path, { state: "failed", failure: { kind: "invalidInput", message: path === lockedPath ? protectedMessage : "Could not read the PDF: invalid file header", pointer: null } }));
+            : current[path] && opens(path, args.request)
+            ? outcome(path, { state: "succeeded", outputPaths: [path.replace(/\.pdf$/, "-edited.pdf")], detail: path === lockedPath ? "Title cleared. It keeps its open password." : "Title set, author cleared." })
+            : failed(path));
         }
         return null;
       },
     };
     (window as any).__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
-  }, { current, lockedPath, protectedMessage });
+  }, { current, lockedPath, lockedPassword, wrongMessage });
   await page.goto("/tests/ui/harness/pdf-editor-batch.html?tool=pdf-properties");
 });
 
@@ -82,7 +89,7 @@ test("with no files every field keeps and Run is off", async ({ page }) => {
 test("a batch shows each file's current values, summarises them per field and sends one patch for all files", async ({ page }) => {
   await addFiles(page, [deckPath, minutesPath, scanPath]);
 
-  expect((await calls(page, "read_pdf_properties")).map(({ args }) => args)).toEqual([{ request: { paths: [deckPath, minutesPath, scanPath] } }]);
+  expect((await calls(page, "read_pdf_properties")).map(({ args }) => args)).toEqual([{ request: { paths: [deckPath, minutesPath, scanPath], password: "", passwordOverrides: {} } }]);
   await expect(row(page, "deck.pdf").getByLabel("Title now: Q3 board pack")).toBeVisible();
   await expect(row(page, "deck.pdf").getByLabel("Author now: R. Okafor")).toBeVisible();
   await expect(row(page, "deck.pdf").getByLabel("Modified now: 2026-10-01")).toBeVisible();
@@ -121,6 +128,8 @@ test("a batch shows each file's current values, summarises them per field and se
     runId: expect.any(String),
     request: {
       paths: [deckPath, minutesPath, scanPath],
+      password: "",
+      passwordOverrides: {},
       patch: { title: { action: "set", value: "Q3 board pack" }, author: { action: "clear" }, subject: { action: "keep" }, ...keptDates },
       outputLocation: "alongsideInput",
     },
@@ -157,18 +166,102 @@ test("one file shows its own values and describes the change", async ({ page }) 
   expect(run.args.request.patch).toEqual({ title: { action: "keep" }, author: { action: "set", value: "Board secretary" }, subject: { action: "clear" }, ...keptDates });
 });
 
-test("a protected or broken file fails on its own row while the others save", async ({ page }) => {
+const fileRow = (page: Page, name: string) => page.locator(".file-selection-item", { hasText: name });
+const setOwnPassword = async (page: Page, name: string, password: string) => {
+  await fileRow(page, name).click();
+  await page.getByRole("button", { name: `Set own password for ${name}`, exact: true }).click();
+  const editor = page.getByRole("group", { name: `Own password for ${name}` });
+  await editor.getByLabel("Own open password", { exact: true }).fill(password);
+  await editor.getByRole("button", { name: "Save password" }).click();
+  await expect(editor).toHaveCount(0);
+};
+const pageSecrets = (page: Page) => page.evaluate(() => {
+  const storage = (store: Storage) => Object.keys(store).map((key) => `${key}=${store.getItem(key)}`);
+  return [document.body.innerText, ...storage(localStorage), ...storage(sessionStorage), document.cookie].join("\n");
+});
+const editRequests = async (page: Page) => (await calls(page, "edit_pdf_properties")).map(({ args }) => {
+  const { patch: _patch, outputLocation: _outputLocation, ...rest } = args.request;
+  return rest;
+});
+
+test("a locked or broken file fails on its own row while the others save", async ({ page }) => {
   await addFiles(page, [lockedPath, deckPath, brokenPath]);
   await expect(row(page, "locked.pdf")).toContainText("Locked");
+  await expect(row(page, "locked.pdf")).toContainText(lockedNote);
   await expect(row(page, "deck.pdf").getByLabel("Title now: Q3 board pack")).toBeVisible();
   await choose(page, "Title", "Clear");
   await page.getByRole("button", { name: /^Save 3 edited copies/ }).click();
 
   await expect(results(page)).toHaveCount(3);
   await expect(results(page).filter({ hasText: "locked.pdf" })).toHaveAttribute("data-state", "failed");
-  await expect(results(page).filter({ hasText: "locked.pdf" })).toContainText(protectedMessage);
+  await expect(results(page).filter({ hasText: "locked.pdf" })).toContainText(wrongMessage);
   await expect(results(page).filter({ hasText: "broken.pdf" })).toHaveAttribute("data-state", "failed");
   await expect(results(page).filter({ hasText: "deck.pdf" })).toHaveAttribute("data-state", "succeeded");
+});
+
+test("the open password for all files reads a locked file's values and travels with each run, and an own password wins", async ({ page }) => {
+  await addFiles(page, [deckPath, lockedPath, minutesPath]);
+  await expect(row(page, "locked.pdf")).toContainText(lockedNote);
+  const batch = page.getByLabel("Open password for all files", { exact: true });
+  await expect(batch).toHaveAttribute("type", "password");
+
+  await batch.fill(lockedPassword);
+  await expect(row(page, "locked.pdf").getByLabel("Title now: Sealed contract")).toBeVisible();
+  await expect(row(page, "locked.pdf")).not.toContainText(lockedNote);
+  const reads = (await calls(page, "read_pdf_properties")).map(({ args }) => args.request);
+  expect(reads[0]).toEqual({ paths: [deckPath, lockedPath, minutesPath], password: "", passwordOverrides: {} });
+  expect(reads.at(-1)).toEqual({ paths: [lockedPath], password: lockedPassword, passwordOverrides: {} });
+
+  await batch.fill("batch-secret");
+  await setOwnPassword(page, "locked.pdf", lockedPassword);
+  await choose(page, "Title", "Clear");
+  await page.getByRole("button", { name: /^Save 3 edited copies/ }).click();
+
+  expect(await editRequests(page)).toEqual([
+    { paths: [deckPath, lockedPath, minutesPath], password: "batch-secret", passwordOverrides: { [lockedPath]: lockedPassword } },
+  ]);
+  const locked = results(page).filter({ hasText: "locked.pdf" });
+  await expect(locked).toHaveAttribute("data-state", "succeeded");
+  await expect(locked).toContainText("It keeps its open password.");
+  expect(await pageSecrets(page)).not.toContain(lockedPassword);
+  expect(await pageSecrets(page)).not.toContain("batch-secret");
+});
+
+test("a wrong password fails only that file, and retrying sends only that file with its new password", async ({ page }) => {
+  await addFiles(page, [deckPath, lockedPath]);
+  await page.getByLabel("Open password for all files", { exact: true }).fill("batch-secret");
+  await choose(page, "Title", "Clear");
+  await page.getByRole("button", { name: /^Save 2 edited copies/ }).click();
+
+  const locked = results(page).filter({ hasText: "locked.pdf" });
+  await expect(locked).toHaveAttribute("data-state", "failed");
+  await expect(locked).toContainText(wrongMessage);
+  await expect(results(page).filter({ hasText: "deck.pdf" })).toHaveAttribute("data-state", "succeeded");
+
+  await locked.getByRole("button", { name: "Try another password" }).click();
+  const retry = page.getByRole("group", { name: "Retry locked.pdf with another password" });
+  await retry.getByLabel("Password for locked.pdf", { exact: true }).fill(lockedPassword);
+  await retry.getByRole("button", { name: "Retry this file" }).click();
+
+  await expect(locked).toHaveAttribute("data-state", "succeeded");
+  await expect(results(page).filter({ hasText: "deck.pdf" })).toHaveAttribute("data-state", "succeeded");
+  expect(await editRequests(page)).toEqual([
+    { paths: [deckPath, lockedPath], password: "batch-secret", passwordOverrides: {} },
+    { paths: [lockedPath], password: "", passwordOverrides: { [lockedPath]: lockedPassword } },
+  ]);
+  const [, rerun] = await calls(page, "edit_pdf_properties");
+  expect(rerun.args.request.patch.title).toEqual({ action: "clear" });
+  expect(await pageSecrets(page)).not.toContain(lockedPassword);
+});
+
+test("one file asks for an open password only when it is locked", async ({ page }) => {
+  await addFiles(page, [deckPath]);
+  await expect(row(page, "deck.pdf").getByLabel("Title now: Q3 board pack")).toBeVisible();
+  await expect(page.getByLabel("Open password for all files", { exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Clear list" }).click();
+  await addFiles(page, [lockedPath]);
+  await expect(row(page, "locked.pdf")).toContainText(lockedNote);
+  await expect(page.getByLabel("Open password for all files", { exact: true })).toBeVisible();
 });
 
 test("files stay when switching to Privacy Check and back", async ({ page }) => {

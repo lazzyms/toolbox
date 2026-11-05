@@ -18,9 +18,9 @@ pub(crate) const MASKED_PASSWORD: &str = "[password hidden]";
 
 pub(crate) const PASSWORD_LINE_BREAK: &str = "Passwords can't contain line breaks.";
 
-/// The qpdf options whose value is a password: the one that opens the input, and the user
-/// and owner passwords of `--encrypt`.
-const PASSWORD_OPTIONS: [&str; 3] = ["--password", "--user-password", "--owner-password"];
+/// The qpdf options whose value is a password: the one that opens the input, the user and
+/// owner passwords of `--encrypt`, and the one that opens the file `--copy-encryption` reads.
+const PASSWORD_OPTIONS: [&str; 4] = ["--password", "--user-password", "--owner-password", "--encryption-file-password"];
 
 /// Runs `command`, which names [`PASSWORDS_FROM_STDIN`] exactly once, with `passwords` as
 /// `(option, password)` pairs. It stops qpdf at `deadline` (or when the job is stopped) and

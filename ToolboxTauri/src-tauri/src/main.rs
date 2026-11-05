@@ -1215,7 +1215,7 @@ mod command_tests {
         outputs.extend(named(&mut naming, "redact_pdf", pdf.clone(), assert_success("redact pdf", redact_pdf(RunEvents::silent(), RedactPdfRequest { paths: vec![pdf.clone()], rectangle: PdfRect { x: 40.0, y: 650.0, width: 220.0, height: 60.0 }, scope: PageScope::All, output_location: location(&root, "redact pdf") }))));
         outputs.extend(named(&mut naming, "compare_pdfs", pdf.clone(), assert_aggregate_success("compare pdfs", &[pdf.clone(), pdf_two.clone()], run_compare_pdfs(&ComparePdfsRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: location(&root, "compare pdfs"), output_path: None }))));
         let entries_before_inspection = std::fs::read_dir(&root).unwrap().count();
-        let privacy_reports = tauri::async_runtime::block_on(inspect_pdf_privacy(RunEvents::silent(), privacy::PrivacyRequest { paths: vec![pdf.clone(), pdf_two.clone()], password: None, password_overrides: Default::default() }));
+        let privacy_reports = tauri::async_runtime::block_on(inspect_pdf_privacy(RunEvents::silent(), privacy::PrivacyRequest { paths: vec![pdf.clone(), pdf_two.clone()], passwords: Default::default() }));
         assert_eq!(privacy_reports.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), [pdf.clone(), pdf_two.clone()]);
         for (outcome, pages) in privacy_reports.iter().zip([2, 1]) {
             assert!(outcome.error().is_none(), "privacy check failed: {:?}", outcome.error());
@@ -1225,7 +1225,7 @@ mod command_tests {
         }
         assert_eq!(std::fs::read_dir(&root).unwrap().count(), entries_before_inspection, "privacy check must create nothing");
         named(&mut naming, "inspect_pdf_privacy", pdf.clone(), Vec::new());
-        let current = tauri::async_runtime::block_on(read_pdf_properties(RunEvents::silent(), properties::ReadPropertiesRequest { paths: vec![pdf.clone()] }));
+        let current = tauri::async_runtime::block_on(read_pdf_properties(RunEvents::silent(), properties::ReadPropertiesRequest { paths: vec![pdf.clone()], passwords: Default::default() }));
         assert!(current[0].error().is_none() && current[0].output_paths().is_empty(), "reading properties saves nothing: {:?}", current[0]);
         let edit_request = serde_json::from_value::<properties::EditPropertiesRequest>(serde_json::json!({ "paths": [pdf.clone()], "patch": { "title": { "action": "set", "value": "Sweep title" }, "author": { "action": "clear" }, "creationDate": { "action": "set", "value": "2026-02-28T09:00:00+05:30" }, "modificationDate": { "action": "clear" } }, "outputLocation": location(&root, "edit pdf properties") })).expect("Edit Properties view payload");
         outputs.extend(named(&mut naming, "edit_pdf_properties", pdf.clone(), assert_success("edit pdf properties", edit_pdf_properties(RunEvents::silent(), edit_request))));
