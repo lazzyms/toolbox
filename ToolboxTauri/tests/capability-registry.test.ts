@@ -92,8 +92,11 @@ test("every many-to-one tool opens the save step and sends the chosen path", () 
   );
   const requestFor = (command: string) => {
     for (const source of requestSources) {
-      const start = source.indexOf(`invoke<ToolResult>("${command}"`);
-      if (start === -1) continue;
+      // A view invokes the command directly; a Media unit returns it next to its request.
+      const start = [`invoke<ToolResult>("${command}"`, `command: "${command}",`]
+        .map((anchor) => source.indexOf(anchor))
+        .find((index) => index !== -1);
+      if (start === undefined) continue;
       const open = source.indexOf("request: {", start) + "request: ".length;
       let depth = 0;
       for (let index = open; index < source.length; index += 1) {
