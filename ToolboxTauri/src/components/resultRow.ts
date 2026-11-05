@@ -53,7 +53,10 @@ export const warningText = (warning: OutcomeWarning): string => {
         case "renamedToAvoidReplacing":
             return `Saved as ${warning.details.finalName}. Renamed to avoid replacing an existing file.`;
         case "precisionReduced":
-            return "Some values were rounded to the precision this format can store.";
+            // Native names the source depth, as in "Reduced from 10-bit to 8-bit sRGB."
+            return warning.message;
+        case "transparencyFlattened":
+            return "Transparent areas were flattened onto white.";
     }
 };
 

@@ -9,12 +9,12 @@ import type { ToolDefinition, JobOutcome, OutputLocation, Progress } from '../co
 import { TOOL_DROP_EVENT, type ShellEvent } from '../hooks/useShellBridge';
 import { useOutputLocation } from '../outputLocation';
 import { failedOutcome, parseToolResult } from '../jobOutcome';
-import { toolsForWorkspace, workspaceForTool } from '../registry';
+import { UtilityRegistry, toolsForWorkspace, workspaceForTool } from '../registry';
 import { shortenHomePath, useHomeDir } from '../homePath';
 import { CancelRun } from './CancelRun';
 import { ShortcutHint } from './ShortcutHint';
 import { isWindows, matchShortcut, shortcutTarget } from '../shortcuts';
-import { ResultList } from './ResultList';
+import { ResultList, followPointer } from './ResultList';
 import { rowView } from './resultRow';
 import { BATCH_PROGRESS_EVENT, foldRunEvent, parseRunEvent, startRun, type LiveRun } from './liveRun';
 import { BlockedDestinationDialog, RunDestination, exampleOutputName, sameLocation, type BlockedDestination, type FolderCheck } from './RunDestination';
@@ -34,6 +34,7 @@ import {
     type InspectedPath,
     type IntakeCopy,
     type IntakeEntry,
+    type IntakeRedirect,
     type NotAdded,
 } from './intake';
 
@@ -62,6 +63,7 @@ interface ToolScaffoldProps {
     renderFileExtra?: (path: string, selected: boolean, locked: boolean) => React.ReactNode;
     retryWithPassword?: (inputPath: string, password: string) => RunHandler;
     intakeCopy?: IntakeCopy;
+    intakeRedirect?: (path: string) => IntakeRedirect | null;
     initialPaths?: readonly string[];
     fileActivation?: Extract<ShellEvent, { kind: 'files' }>;
     onActivationAccepted?: (activationId: string) => void;
@@ -86,7 +88,7 @@ interface ToolScaffoldProps {
     }) => React.ReactNode;
 }
 
-export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, retryWithPassword, intakeCopy, initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, exampleName, children }: ToolScaffoldProps) => {
+export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, retryWithPassword, intakeCopy, intakeRedirect, initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, exampleName, children }: ToolScaffoldProps) => {
     const nextEntryKey = useRef(0);
     const newEntries = (paths: readonly string[]) => paths.map((path) => ({ key: `entry-${++nextEntryKey.current}`, path }));
     const [entries, setEntries] = useState<IntakeEntry[]>(() => newEntries(initialPaths));
@@ -324,7 +326,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
             selectOnly(entry.key);
             return;
         }
-        const policy = { ...intakePolicyFor(workspace?.title ?? utility.title, intakeTools, utility), notAcceptedMessage: intakeCopy?.notAccepted };
+        const policy = { ...intakePolicyFor(workspace?.title ?? utility.title, intakeTools, utility), notAcceptedMessage: intakeCopy?.notAccepted, redirect: intakeRedirect };
         const classified = classifyIntake(entries.map((entry) => entry.path), incoming, policy);
         setNotAdded(classified.notAdded);
         if (classified.added.length) setEntries((current) => [...current, ...newEntries(classified.added)]);
@@ -642,6 +644,11 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                             {item.reason === 'folder' ? <FolderIcon aria-hidden="true" /> : <FileIcon aria-hidden="true" />}
                             <span className="intake-not-added-name">{fileName(item.path)}</span>
                             <span className="intake-not-added-message">{item.message}</span>
+                            {item.redirectTo && (
+                                <Button variant="outline" size="sm" onClick={() => item.redirectTo && followPointer({ kind: 'tool', toolId: item.redirectTo })}>
+                                    {UtilityRegistry.find((tool) => tool.id === item.redirectTo)?.title}
+                                </Button>
+                            )}
                         </li>
                     ))}
                 </ul>
