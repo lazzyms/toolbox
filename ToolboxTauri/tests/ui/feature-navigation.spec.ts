@@ -156,7 +156,11 @@ if (command === "preview_pdf_scene_pages") return (args as { request: { pageIndi
                     }
                     return { width, height, dataUrl: `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='${width}' height='${height}'%3E%3Crect width='100%25' height='100%25' fill='white'/%3E%3C/svg%3E` };
                 }
-                if (command === "inspect_image_metadata") return ["fixture image"];
+                if (command === "inspect_image_metadata") {
+                    return (args as { request: { paths: string[] } }).request.paths.map((path) => ({
+                        status: "report", path, format: "png", exif: true, gps: false, xmp: false, iptc: false, comments: false, icc: true, orientation: 6,
+                    }));
+                }
                 if (command === "plugin:path|resolve_directory") return "/Users/test";
                 if (command.startsWith("plugin:")) return null;
 
@@ -643,8 +647,8 @@ test("settings use shared theme and privacy controls in both palettes", async ({
 
 test("workspace command rails follow the responsive toolbar keyboard contract", async ({ page }, testInfo) => {
     await page.goto("/");
-    await page.getByRole("button", { name: "Open Image Editor", exact: true }).click();
-    const rail = page.getByRole("toolbar", { name: "Image Editor tools" });
+    await page.getByRole("button", { name: "Open PDF Conversion", exact: true }).click();
+    const rail = page.getByRole("toolbar", { name: "PDF Conversion tools" });
     const commands = rail.getByRole("button");
     const commandCount = await commands.count();
     expect(commandCount).toBeGreaterThan(2);
@@ -801,7 +805,6 @@ const runShortcutCases = [
     { tool: "Lock & Unlock", file: pdfFixturePath, command: "remove_password", ready: (page: Page) => fillPasswords(page, "test-password") },
     { tool: "Compress PDF", file: pdfFixturePath, command: "compress_pdf", ready: async () => undefined },
     { tool: "Compress Images", file: fixturePath, command: "compress_images", ready: async () => undefined },
-    { tool: "Image Metadata", file: fixturePath, command: "image_metadata", ready: async () => undefined },
 ];
 
 for (const { tool, file, command, ready } of runShortcutCases) {
@@ -1077,13 +1080,13 @@ test("editor command rails keep one document session while changing tools", asyn
     await page.goto("/");
     await page.getByRole("button", { name: "Open Image Editor", exact: true }).click();
     await page.getByRole("button", { name: "Choose files to process" }).click();
-    await expect(page.getByRole("img", { name: `Preview of ${fixtureName}` })).toBeVisible();
+    await expect(page.getByRole("img", { name: `Original image preview of ${fixtureName}` })).toBeVisible();
 
     await page.getByRole("tablist", { name: "Edit Image" }).getByRole("tab", { name: "Rotate", exact: true }).click();
-    await expect(page.getByRole("heading", { name: "Rotate and Flip Images", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Rotate and Flip", exact: true })).toBeVisible();
     await expect(page.locator(".file-selection-count")).toHaveText("1 file");
     await page.getByRole("tablist", { name: "Edit Image" }).getByRole("tab", { name: "Adjust", exact: true }).click();
-    await expect(page.getByRole("slider", { name: "Contrast" })).toBeVisible();
+    await expect(page.getByRole("slider", { name: "Contrast", exact: true })).toBeVisible();
 
     await page.getByRole("button", { name: "← All tools" }).click();
     await page.getByRole("button", { name: "Open PDF Editor", exact: true }).click();
@@ -1124,29 +1127,25 @@ test("PDF editor protects the last page and supports unified history", async ({ 
 
 test("Image editor previews a reversible edit stack and exports one combined plan", async ({ page }) => {
     await page.goto("/");
-    await page.getByRole("button", { name: "Open Image Editor", exact: true }).click();
+    await openFromHome(page, "Convert Image Format");
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await expect(page.getByRole("img", { name: `Preview of ${fixtureName}` })).toBeVisible();
     await expect(page.getByRole("button", { name: "Undo" })).toBeDisabled();
     await expect(page.getByRole("button", { name: "Redo" })).toBeDisabled();
     await expect(page.getByRole("button", { name: "Reset edits" })).toBeDisabled();
     await expect(page.getByText("Edits are applied in order. Undo removes one edit at a time.", { exact: true })).toBeVisible();
-    await expect(page.getByRole("tablist", { name: "Edit Image" })).toBeVisible();
-    await expect(page.getByRole("toolbar", { name: "Image Editor tools" })).toBeVisible();
     await expect(page.locator(".workspace-primary-action")).toHaveCount(1);
 
-    await page.getByRole("tablist", { name: "Edit Image" }).getByRole("tab", { name: "Resize", exact: true }).click();
-    await page.getByLabel("Width").fill("320");
+    await page.getByLabel("Target format").selectOption("jpg");
     await expect.poll(async () =>
         (await page.evaluate(() => (window as TestWindow).__toolboxInvocations ?? []))
             .some(({ command }) => command === "inspect_image_edit_preview"),
     ).toBe(true);
     await page.getByRole("button", { name: "Add edit to plan" }).click();
-    await page.getByRole("tablist", { name: "Edit Image" }).getByRole("tab", { name: "Rotate", exact: true }).click();
-    await page.getByLabel("Rotation").selectOption("90");
+    await page.getByLabel("Target format").selectOption("webp");
     await page.getByRole("button", { name: "Add edit to plan" }).click();
     await expect(page.getByText("2 committed edits", { exact: true })).toBeVisible();
-    await expect(page.locator(".image-edit-timeline li")).toContainText(["Resize 320 × 768", "Rotate 90°"]);
+    await expect(page.locator(".image-edit-timeline li")).toContainText(["Convert · JPG", "Convert · WEBP"]);
     await page.getByRole("button", { name: "Export edited images" }).click();
 
     const invocation = await page.evaluate(() =>
@@ -1158,17 +1157,17 @@ test("Image editor previews a reversible edit stack and exports one combined pla
 
 test("Image crop keeps the source interaction surface and shows a separate result", async ({ page }) => {
     await page.goto("/");
-    await page.getByRole("button", { name: "Open Image Editor", exact: true }).click();
+    await openFromHome(page, "Crop Images");
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await page.getByRole("tablist", { name: "Edit Image" }).getByRole("tab", { name: "Crop", exact: true }).click();
-    await page.getByLabel("Aspect ratio").selectOption("free");
-    await page.getByLabel("Crop width").fill("160");
-    await page.getByLabel("Crop height").fill("120");
-    await page.getByLabel("Crop left").fill("80");
-    await page.getByLabel("Crop top").fill("60");
+    await page.getByRole("radio", { name: "Pixel rectangle" }).click();
+    await page.getByLabel("Width, pixels").fill("160");
+    await page.getByLabel("Height, pixels").fill("120");
+    await page.getByLabel("Left edge, pixels").fill("80");
+    await page.getByLabel("Top edge, pixels").fill("60");
 
     await expect(page.getByRole("img", { name: `Original image preview of ${fixtureName}` })).toBeVisible();
-    await expect(page.getByRole("region", { name: "Crop result preview" })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Result preview" })).toBeVisible();
     const stage = (await page.locator(".image-editor-preview-stage").boundingBox())!;
     const overlay = page.getByLabel("Crop selection");
     await expect(overlay).toHaveAttribute("style", /left: 12\.5%/);
@@ -1178,28 +1177,27 @@ test("Image crop keeps the source interaction surface and shows a separate resul
     await page.mouse.down();
     await page.mouse.move(stage.x + stage.width * .5, stage.y + stage.height * .5, { steps: 4 });
     await page.mouse.up();
-    await expect(page.getByLabel("Crop left")).toHaveValue("240");
-    await expect(page.getByLabel("Crop top")).toHaveValue("180");
+    await expect(page.getByLabel("Left edge, pixels")).toHaveValue("240");
+    await expect(page.getByLabel("Top edge, pixels")).toHaveValue("180");
     await expect(overlay).toHaveAttribute("style", /left: 37\.5%/);
     await expect(overlay).toHaveAttribute("style", /top: 37\.5%/);
 });
 
 test("Image crop offers aspect presets with a rule-of-thirds grid", async ({ page }, testInfo) => {
     await page.goto("/");
-    await openFromHome(page, "Resize Images");
+    await openFromHome(page, "Crop Images");
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await page.getByRole("tablist", { name: "Edit Image" }).getByRole("tab", { name: "Crop", exact: true }).click();
-    await page.getByLabel("Aspect ratio").selectOption("1:1");
+    await page.getByRole("radio", { name: "1:1" }).click();
 
     const overlay = page.getByLabel("Crop selection");
     await expect(overlay).toHaveAttribute("style", /left: 12\.5%/);
     await expect(overlay).toHaveAttribute("style", /width: 75%/);
     await expect(overlay).toHaveAttribute("style", /height: 100%/);
     await expect(page.locator(".image-editor-crop-grid > span")).toHaveCount(4);
-    await expect(page.getByRole("region", { name: "Crop result preview" })).toContainText("480 × 480px");
+    await expect(page.getByRole("region", { name: "Result preview" })).toContainText("480 × 480px");
     await page.screenshot({ path: testInfo.outputPath("image-crop-presets.png") });
 
-    await page.getByRole("button", { name: "Add edit to plan" }).click();
     const previewInvocation = await page.evaluate(() =>
         [...(window as TestWindow).__toolboxInvocations ?? []]
             .reverse()
@@ -1212,18 +1210,18 @@ test("Image crop offers aspect presets with a rule-of-thirds grid", async ({ pag
 
 test("Image crop cancels a global pointer interruption before a later move", async ({ page }) => {
     await page.goto("/");
-    await page.getByRole("button", { name: "Open Image Editor", exact: true }).click();
+    await openFromHome(page, "Crop Images");
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await page.getByRole("tablist", { name: "Edit Image" }).getByRole("tab", { name: "Crop", exact: true }).click();
-    await page.getByLabel("Aspect ratio").selectOption("free");
-    await page.getByLabel("Crop width").fill("160");
-    await page.getByLabel("Crop height").fill("120");
-    await page.getByLabel("Crop left").fill("80");
-    await page.getByLabel("Crop top").fill("60");
+    await page.getByRole("radio", { name: "Pixel rectangle" }).click();
+    await page.getByLabel("Width, pixels").fill("160");
+    await page.getByLabel("Height, pixels").fill("120");
+    await page.getByLabel("Left edge, pixels").fill("80");
+    await page.getByLabel("Top edge, pixels").fill("60");
     await expect(page.getByLabel("Crop selection")).toBeVisible();
 
     const stage = (await page.locator(".image-editor-preview-stage").boundingBox())!;
-    const before = { left: await page.getByLabel("Crop left").inputValue(), top: await page.getByLabel("Crop top").inputValue() };
+    const before = { left: await page.getByLabel("Left edge, pixels").inputValue(), top: await page.getByLabel("Top edge, pixels").inputValue() };
     await page.locator(".image-editor-preview-stage").dispatchEvent("pointerdown", {
         pointerId: 77, button: 0, clientX: stage.x + stage.width * .25, clientY: stage.y + stage.height * .25,
     });
@@ -1231,32 +1229,32 @@ test("Image crop cancels a global pointer interruption before a later move", asy
     await page.locator(".image-editor-preview-stage").dispatchEvent("pointermove", {
         pointerId: 77, clientX: stage.x + stage.width * .75, clientY: stage.y + stage.height * .75,
     });
-    await expect(page.getByLabel("Crop left")).toHaveValue(before.left);
-    await expect(page.getByLabel("Crop top")).toHaveValue(before.top);
+    await expect(page.getByLabel("Left edge, pixels")).toHaveValue(before.left);
+    await expect(page.getByLabel("Top edge, pixels")).toHaveValue(before.top);
 });
 
 test("Image aspect crop uses the anchored maximum-fit geometry for overlay and result", async ({ page }) => {
     await page.goto("/");
-    await page.getByRole("button", { name: "Open Image Editor", exact: true }).click();
+    await openFromHome(page, "Crop Images");
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await page.getByRole("tablist", { name: "Edit Image" }).getByRole("tab", { name: "Crop", exact: true }).click();
-    await page.getByLabel("Aspect ratio").selectOption("1:1");
-    await page.getByLabel("Crop anchor").selectOption("right");
+    await page.getByRole("radio", { name: "1:1" }).click();
+    await page.getByLabel("Keep", { exact: true }).selectOption("end");
 
     const overlay = page.getByLabel("Crop selection");
     await expect(overlay).toHaveAttribute("style", /left: 25%/);
     await expect(overlay).toHaveAttribute("style", /top: 0%/);
     await expect(overlay).toHaveAttribute("style", /width: 75%/);
     await expect(overlay).toHaveAttribute("style", /height: 100%/);
-    await expect(page.getByRole("region", { name: "Crop result preview" })).toContainText("480 × 480px");
+    await expect(page.getByRole("region", { name: "Result preview" })).toContainText("480 × 480px");
 });
 
 test("Image aspect crop can move while keeping its preset ratio", async ({ page }) => {
     await page.goto("/");
-    await page.getByRole("button", { name: "Open Image Editor", exact: true }).click();
+    await openFromHome(page, "Crop Images");
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await page.getByRole("tablist", { name: "Edit Image" }).getByRole("tab", { name: "Crop", exact: true }).click();
-    await page.getByLabel("Aspect ratio").selectOption("1:1");
+    await page.getByRole("radio", { name: "1:1" }).click();
     await expect(page.getByLabel("Crop selection")).toHaveAttribute("style", /width: 75%/);
 
     await page.locator(".image-editor-preview-stage").scrollIntoViewIfNeeded();
@@ -1267,8 +1265,8 @@ test("Image aspect crop can move while keeping its preset ratio", async ({ page 
     await page.mouse.up();
 
     const overlay = page.getByLabel("Crop selection");
-    await expect(page.getByLabel("Aspect ratio")).toHaveValue("1:1");
-    await expect(page.getByLabel("Crop anchor")).toHaveValue("custom");
+    await expect(page.getByRole("radio", { name: "1:1" })).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByLabel("Keep", { exact: true })).toHaveValue("custom");
     await expect(overlay).toHaveAttribute("style", /left: 22\.5%/);
     await expect(overlay).toHaveAttribute("style", /width: 75%/);
     await expect.poll(async () => page.evaluate(() =>
@@ -1280,33 +1278,30 @@ test("Image aspect crop can move while keeping its preset ratio", async ({ page 
     });
 });
 
-test("Image crop clears an old result and disables export after invalid preview validation", async ({ page }) => {
+test("Image crop clears an old result and disables Run for an empty rectangle", async ({ page }) => {
     await page.goto("/");
-    await page.getByRole("button", { name: "Open Image Editor", exact: true }).click();
+    await openFromHome(page, "Crop Images");
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await page.getByRole("tablist", { name: "Edit Image" }).getByRole("tab", { name: "Crop", exact: true }).click();
-    await page.getByLabel("Aspect ratio").selectOption("free");
-    await page.getByLabel("Crop width").fill("160");
-    await page.getByLabel("Crop height").fill("120");
-    await expect(page.getByRole("region", { name: "Crop result preview" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Export edited images" })).toBeEnabled();
+    await page.getByRole("radio", { name: "Pixel rectangle" }).click();
+    await page.getByLabel("Width, pixels").fill("160");
+    await page.getByLabel("Height, pixels").fill("120");
+    await expect(page.getByRole("region", { name: "Result preview" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Run on 1 image" })).toBeEnabled();
 
-    await page.getByLabel("Aspect ratio").selectOption("1:1");
-    await page.getByLabel("Aspect width").fill("0");
+    await page.getByLabel("Width, pixels").fill("0");
 
-    await expect(page.getByText("Aspect ratio dimensions must be positive.", { exact: true })).toBeVisible();
-    await expect(page.getByRole("region", { name: "Crop result preview" })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Export edited images" })).toBeDisabled();
+    await expect(page.getByRole("region", { name: "Result preview" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Run on 1 image" })).toBeDisabled();
 });
 
 test("Image editor history can undo, redo, and reset the composed plan", async ({ page }) => {
     await page.goto("/");
-    await page.getByRole("button", { name: "Open Image Editor", exact: true }).click();
+    await openFromHome(page, "Convert Image Format");
     await page.getByRole("button", { name: "Choose files to process" }).click();
-    await page.getByRole("tablist", { name: "Edit Image" }).getByRole("tab", { name: "Resize", exact: true }).click();
-    await page.getByLabel("Width").fill("320");
-    await page.getByRole("tablist", { name: "Edit Image" }).getByRole("tab", { name: "Rotate", exact: true }).click();
-    await page.getByLabel("Rotation").selectOption("90");
+    await page.getByLabel("Target format").selectOption("jpg");
+    await page.getByRole("button", { name: "Add edit to plan" }).click();
+    await page.getByLabel("Target format").selectOption("webp");
     await page.getByRole("button", { name: "Add edit to plan" }).click();
 
     await expect(page.getByRole("button", { name: "Undo" })).toBeEnabled();
@@ -2059,7 +2054,7 @@ test("GIF extraction does not request a source preview", async ({ page }) => {
     expect(previewInvocations).toHaveLength(0);
 });
 
-type RunRequest = { outputLocation?: unknown; plan?: { outputLocation?: unknown } };
+type RunRequest = { outputLocation?: unknown; plan?: { outputLocation?: unknown; edits?: unknown[] } };
 
 const storeOutputSettings = async (page: Page, settings: OutputSettings) => {
     await page.addInitScript((settings) => { (window as TestWindow).__toolboxOutputSettings = settings; }, settings);
@@ -2068,8 +2063,8 @@ const storeOutputSettings = async (page: Page, settings: OutputSettings) => {
 const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[number], expectedOutputLocation: unknown = "alongsideInput") => {
     await page.goto("/");
     await openFromHome(page, utility.title);
-    // Image Metadata lives in the Image Editor but runs on its own screen, without an edit plan.
-    const usesImageEditPlan = workspaceForTool(utility.id)?.id === "image-editor" && utility.id !== "image-metadata";
+    // The stack tools run through the shared edit stack, which each fills with its default step.
+    const usesImageEditPlan = workspaceForTool(utility.id)?.id === "image-editor" && !["image-metadata", "crop", "resize", "rotate", "image-tone", "image-watermark"].includes(utility.id);
 
     const accepts = (extension: string) => utility.capability.acceptedExtensions.some((accepted) => accepted.toLowerCase() === extension);
     const selectedFixturePath = accepts(".pdf")
@@ -2094,14 +2089,6 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
     }
     if (usesImageEditPlan) {
         if (utility.id === "heic-convert") await page.getByLabel("Target format").selectOption("jpg");
-        if (utility.id === "resize") await page.getByLabel("Width").fill("640");
-        if (utility.id === "rotate") await page.getByLabel("Rotation").selectOption("90");
-        if (utility.id === "crop") {
-            await page.getByLabel("Aspect ratio").selectOption("free");
-            await page.getByLabel("Crop width").fill("320");
-        }
-        if (utility.id === "image-watermark") await page.getByLabel("Watermark text").fill("Test watermark");
-        if (utility.id === "image-tone") await page.getByRole("slider", { name: "Brightness" }).press("End");
     }
     if (utility.id === "compress") await page.getByRole("switch", { name: "Preserve original pixels" }).click();
     if (utility.id === "pdf-redact") await drawRedactionBox(page);
@@ -2112,6 +2099,9 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
     if (usesImageEditPlan) {
         await page.getByRole("button", { name: "Add edit to plan" }).click();
     }
+    if (utility.id === "resize") await page.getByLabel("Longest side, pixels").fill("640");
+    if (utility.id === "image-tone") await page.getByRole("slider", { name: "Brightness" }).press("End");
+    if (utility.id === "image-watermark") await page.getByLabel("Text", { exact: true }).fill("Test watermark");
 
     const action = page.locator(".workspace-primary-action");
     await expect(action).toBeEnabled();
@@ -2129,6 +2119,9 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
     expect(run).toBeDefined();
     const request = (run?.args as { request: RunRequest }).request;
     expect(composedCommand === "export_image_edit_plan" ? request.plan?.outputLocation : request.outputLocation).toEqual(expectedOutputLocation);
+    if (utility.id === "image-watermark") {
+        expect((request as RunRequest & { steps?: { watermark?: unknown } }).steps?.watermark).toEqual({ text: "Test watermark", color: "#FFFFFF", size: 0.3, opacity: 70, rotation: 0, position: { anchorX: 1, anchorY: 1 } });
+    }
 };
 
 test.describe("registered feature actions", () => {
@@ -2204,14 +2197,13 @@ test.describe("Settings output location", () => {
         await page.keyboard.press("Escape");
         await openFromHome(page, "Resize Images");
         await chooseFixture(page, fixturePath);
-        await page.getByLabel("Width").fill("640");
-        await page.getByRole("button", { name: "Add edit to plan" }).click();
+        await page.getByLabel("Longest side, pixels").fill("640");
         await page.locator(".workspace-primary-action").click();
         await expect(page.getByText("Test output", { exact: true })).toBeVisible();
         const run = await page.evaluate(() =>
-            ((window as TestWindow).__toolboxInvocations ?? []).find(({ command }) => command === "export_image_edit_plan")?.args as { request: RunRequest },
+            ((window as TestWindow).__toolboxInvocations ?? []).find(({ command }) => command === "export_image_edit_stack")?.args as { request: RunRequest },
         );
-        expect(run.request.plan?.outputLocation).toEqual({ customFolder: "/picked/output" });
+        expect(run.request.outputLocation).toEqual({ customFolder: "/picked/output" });
     });
 
     test("a cancelled folder dialog saves nothing", async ({ page }) => {
@@ -2267,7 +2259,7 @@ test.describe("Settings output location", () => {
 
 const runRequests = (page: Page) => page.evaluate(() =>
     ((window as TestWindow).__toolboxInvocations ?? [])
-        .filter(({ command }) => command === "export_image_edit_plan" || command === "protect_files")
+        .filter(({ command }) => ["export_image_edit_plan", "export_image_edit_stack", "protect_files"].includes(command))
         .map(({ command, args }) => {
             const request = (args as { request: RunRequest }).request;
             return command === "export_image_edit_plan" ? request.plan?.outputLocation : request.outputLocation;
@@ -2276,8 +2268,7 @@ const runRequests = (page: Page) => page.evaluate(() =>
 const openResizeWithFixture = async (page: Page) => {
     await openFromHome(page, "Resize Images");
     await chooseFixture(page, fixturePath);
-    await page.getByLabel("Width").fill("640");
-    await page.getByRole("button", { name: "Add edit to plan" }).click();
+    await page.getByLabel("Longest side, pixels").fill("640");
 };
 
 const runAndWait = async (page: Page) => {
@@ -2318,7 +2309,7 @@ test.describe("per-run destination", () => {
         await expect(destination.getByTestId("run-destination-path")).toHaveText("Next to each original");
         await expect(destination.getByTestId("run-destination-example")).toHaveCount(0);
         await chooseFixture(page, fixturePath);
-        await expect(destination.getByTestId("run-destination-example")).toHaveText("icon-edited.png");
+        await expect(destination.getByTestId("run-destination-example")).toHaveText("icon-resized.png");
         await expect(destination.getByText("An existing name gets -1, -2 and so on. Nothing is replaced.")).toBeVisible();
         await expect(destination.getByText("This run only")).toHaveCount(0);
     });
@@ -2690,20 +2681,24 @@ test("Edit Image tabs switch with arrow keys and keep the files and the edit pla
     await page.getByRole("button", { name: "Open Image Editor", exact: true }).click();
     await page.getByRole("button", { name: "Choose files to process" }).click();
     const tabs = page.getByRole("tablist", { name: "Edit Image" });
-    await expect(tabs.getByRole("tab")).toHaveText(["Resize", "Rotate", "Crop", "Watermark", "Adjust"]);
+    await expect(tabs.getByRole("tab")).toHaveText(["Resize", "Rotate", "Crop", "Watermark", "Remove Metadata", "Adjust"]);
     await tabs.getByRole("tab", { name: "Resize", exact: true }).click();
-    await page.getByLabel("Width").fill("320");
+    await page.getByLabel("Longest side, pixels").fill("320");
 
     await tabs.getByRole("tab", { name: "Resize", exact: true }).press("ArrowRight");
     const rotate = tabs.getByRole("tab", { name: "Rotate", exact: true });
     await expect(rotate).toHaveAttribute("aria-selected", "true");
     await expect(rotate).toBeFocused();
-    await expect(page.getByLabel("Rotation")).toBeVisible();
-    await expect(page.getByRole("img", { name: `Preview of ${fixtureName}` })).toBeVisible();
-    await expect(page.getByText("1 committed edit", { exact: true })).toBeVisible();
+    await expect(page.getByRole("img", { name: `Original image preview of ${fixtureName}` })).toBeVisible();
+    await page.getByRole("radio", { name: "180 degrees" }).click();
+    await expect(page.getByRole("list", { name: "Steps, in the order they run" }).getByRole("button", { name: /^Step \d of 2/ })).toHaveCount(2);
 
     await rotate.press("ArrowLeft");
     await expect(tabs.getByRole("tab", { name: "Resize", exact: true })).toBeFocused();
+    await expect(page.getByLabel("Longest side, pixels")).toHaveValue("320");
+    await tabs.getByRole("tab", { name: "Rotate", exact: true }).click();
+    await expect(page.getByRole("radio", { name: "180 degrees" })).toHaveAttribute("aria-checked", "true");
+    await tabs.getByRole("tab", { name: "Rotate", exact: true }).press("ArrowLeft");
     await tabs.getByRole("tab", { name: "Resize", exact: true }).press("ArrowLeft");
     await expect(tabs.getByRole("tab", { name: "Adjust", exact: true })).toHaveAttribute("aria-selected", "true");
     await expect(page.getByRole("toolbar", { name: "Image Editor tools" }).getByRole("button", { name: "Edit Image" })).toHaveAttribute("aria-pressed", "true");
