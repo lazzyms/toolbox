@@ -1,11 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
-import { Check, CircleMinus, CircleX, Clock, KeyRound, LoaderCircle, RotateCcw, TriangleAlert } from "lucide-react";
+import { Check, CircleMinus, CircleX, Clock, FolderOpen, KeyRound, LoaderCircle, RotateCcw, TriangleAlert } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import type { JobOutcome, OutcomePointer, Progress } from "../contracts";
 import { liveFiles, type LiveFile, type LiveRun } from "./liveRun";
-import { fileName, resultSummary, resultTally, rowView, type RowTone } from "./resultRow";
+import { batchTotal, fileName, resultSummary, resultTally, rowView, savedSoFar, type RowTone } from "./resultRow";
 import { PasswordRetryForm } from "./PasswordFields";
 
 type RowAction = "open" | "reveal" | "retry";
@@ -34,11 +34,11 @@ const segmentTone = (file: LiveFile): SegmentTone => {
     return file.outcome.state === "skipped" ? "skip" : "fail";
 };
 
-const revealButtonLabel = () => {
+const fileManager = () => {
     const platform = navigator.platform.toLowerCase();
-    if (platform.includes("mac")) return "Show in Finder";
-    if (platform.includes("win")) return "Show in File Explorer";
-    return "Show in file manager";
+    if (platform.includes("mac")) return "Finder";
+    if (platform.includes("win")) return "File Explorer";
+    return "file manager";
 };
 
 const followPointer = (pointer: OutcomePointer) => {
@@ -67,6 +67,7 @@ interface ResultListProps {
 export const ResultList = ({ results, progress, loading, resultVerb, runningVerb, runningDetail, live, namedByOutput = false, onRetry, onRetryWithPassword }: ResultListProps) => {
     const [actionStates, setActionStates] = useState<Record<number, RowActionState>>({});
     const [passwordRow, setPasswordRow] = useState<number | null>(null);
+    const [revealAll, setRevealAll] = useState<RowActionState>(idleActionState);
     const resultSetGeneration = useRef(0);
 
     useEffect(() => {
@@ -74,6 +75,7 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
         resultSetGeneration.current = generation;
         setActionStates({});
         setPasswordRow(null);
+        setRevealAll(idleActionState);
         return () => {
             if (resultSetGeneration.current === generation) resultSetGeneration.current += 1;
         };
@@ -94,7 +96,19 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
         setActionStates((states) => ({ ...states, [row]: { pending: null, error } }));
     };
 
-    const reveal = revealButtonLabel();
+    const reveal = `Show in ${fileManager()}`;
+
+    const showAll = async (paths: string[]) => {
+        const generation = resultSetGeneration.current;
+        setRevealAll({ pending: "reveal", error: null });
+        let error: string | null = null;
+        try {
+            await invoke("reveal_output_paths", { paths });
+        } catch (reason) {
+            error = reason instanceof Error ? reason.message : String(reason);
+        }
+        if (resultSetGeneration.current === generation) setRevealAll({ pending: null, error });
+    };
 
     const finishedRow = (result: JobOutcome, index: number) => {
         const view = rowView(result, resultVerb, namedByOutput);
@@ -180,14 +194,15 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
         const done = files.flatMap((file) => file.status === "finished" ? [file.outcome] : []);
         const total = files.length;
         const proportional = total > PROPORTIONAL_BAR_ABOVE;
-        const soFar = done.length > 0 ? `${resultTally(done, resultVerb)} so far.` : null;
+        const saved = savedSoFar(done);
+        const soFar = saved ?? (done.length > 0 ? `${resultTally(done, resultVerb)} so far.` : null);
         const segments = files.map(segmentTone);
         return (
             <div className="result-list" data-live="true">
                 <div className="live-run-header">
                     <div className="result-summary" role="status" aria-live="polite">
                         <strong>{runningVerb} {done.length} of {total}</strong>
-                        {soFar && <span className="result-summary-hint">{proportional ? soFar : `${soFar} Finished files can be opened now.`}</span>}
+                        {soFar && <span className="result-summary-hint">{proportional || saved ? soFar : `${soFar} Finished files can be opened now.`}</span>}
                     </div>
                     {proportional ? (
                         <div className="live-run-bar" data-mode="proportional" aria-hidden="true">
@@ -200,6 +215,7 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
                             {segments.map((tone, index) => <span key={index} data-tone={tone} />)}
                         </div>
                     )}
+                    {saved && !proportional && <p className="result-summary-hint live-run-note">Finished copies can be opened now. The batch total appears when every file is done.</p>}
                     {proportional && <p className="result-summary-hint live-run-note">Over {PROPORTIONAL_BAR_ABOVE} files, the bar shows proportions. Rows for finished files can be opened now.</p>}
                 </div>
                 <Card className="result-card gap-0 py-0">
@@ -234,12 +250,30 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
     if (results.length === 0) return null;
 
     const summary = resultSummary(results, resultVerb);
+    const total = batchTotal(results, resultVerb);
+    const outputs = results.flatMap((result) => result.state === "succeeded" ? result.outputPaths : []);
     return (
         <div className="result-list">
             <div className="result-summary" role="status" aria-live="polite">
                 <strong>{summary.headline}</strong>
                 {summary.hints.map((hint) => <span key={hint} className="result-summary-hint">{hint}</span>)}
+                {total && (
+                    <span className="result-summary-total">
+                        <span className="result-summary-saved">{total.savedLine}</span>
+                        <span className="result-summary-hint">{total.totalLine}</span>
+                        <span className="result-summary-hint">{total.note}</span>
+                    </span>
+                )}
             </div>
+            {outputs.length > 0 && (
+                <div className="result-list-actions">
+                    <Button variant="outline" size="sm" disabled={revealAll.pending !== null} onClick={() => void showAll(outputs)}>
+                        <FolderOpen aria-hidden="true" />
+                        {revealAll.pending ? "Showing..." : `Show all in ${fileManager()}`}
+                    </Button>
+                    {revealAll.error && <p className="result-action-error" role="alert">{revealAll.error}</p>}
+                </div>
+            )}
             <Card className="result-card gap-0 py-0">
                 <CardContent className="p-0">
                     <ul className="result-rows" aria-label="Results">

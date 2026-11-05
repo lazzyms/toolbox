@@ -1,4 +1,4 @@
-use crate::kit::contracts::{JobOutcome, LimitKind, ToolError};
+use crate::kit::contracts::{JobOutcome, LimitKind, OutcomePointer, ToolError};
 use flate2::read::ZlibDecoder;
 use std::cell::RefCell;
 use std::io::{self, Cursor, Read};
@@ -22,20 +22,31 @@ pub struct ToolLimits {
     pub max_pages: Option<u32>,
     pub max_expanded_bytes: u64,
     pub max_duration: Duration,
+    pub page_remedy: PageRemedy,
 }
 
+/// What an over-the-page-limit message asks for: fewer pages, or splitting the PDF and running the tool on the parts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageRemedy {
+    UseFewer,
+    SplitThen(&'static str),
+}
+
+const SPLIT_PDF_TOOL_ID: &str = "pdf-split";
+
 // Expansion stays under the image crate's 512 MiB allocation default so this check, not a decoder error, reports it.
-const PDF: ToolLimits = ToolLimits { max_bytes: GB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES };
-const IMAGE: ToolLimits = ToolLimits { max_bytes: 250 * MB, max_pages: None, max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES };
+const PDF: ToolLimits = ToolLimits { max_bytes: GB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, page_remedy: PageRemedy::UseFewer };
+const IMAGE: ToolLimits = ToolLimits { max_bytes: 250 * MB, max_pages: None, max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, page_remedy: PageRemedy::UseFewer };
 const PAGED_IMAGE: ToolLimits = ToolLimits { max_pages: Some(1_000), ..IMAGE };
 
 pub fn recorded(command: &str) -> Option<ToolLimits> {
     Some(match command {
         "remove_password" | "protect_files" | "export_pdf_scene" | "crop_pdf" | "sign_pdf" | "edit_pdf" | "edit_pdf_session"
-        | "organize_pdf" | "add_pdf_pages" | "add_page_numbers" | "watermark_pdf" | "compress_pdf" | "remove_pdf_pages"
+        | "organize_pdf" | "add_pdf_pages" | "add_page_numbers" | "watermark_pdf" | "remove_pdf_pages"
         | "extract_pdf_pages" | "merge_pdfs" | "split_pdf" | "pdf_to_images" | "pdf_to_text" | "extract_pdf_images"
         | "ocr_pdf" | "rotate_pdf" | "repair_pdf" | "redact_pdf" | "compare_pdfs" => PDF,
-        "compress_images" | "convert_images" | "export_image_edit_plan" | "images_to_pdf" | "blur_faces"
+        "compress_files" => ToolLimits { page_remedy: PageRemedy::SplitThen("compress"), ..PDF },
+        "convert_images" | "export_image_edit_plan" | "images_to_pdf" | "blur_faces"
         | "remove_image_background" | "resize_images" | "rotate_images" | "crop_images" | "adjust_image_tone"
         | "watermark_images" | "generate_icon_set" | "create_gif" => IMAGE,
         "extract_gif_frames" | "process_tiff_pages" | "image_metadata" => PAGED_IMAGE,
@@ -89,13 +100,23 @@ impl ToolLimits {
             ));
         }
         match self.max_pages {
-            Some(max_pages) if shape.pages > u64::from(max_pages) => Err(ToolError::limit_exceeded(
-                LimitKind::PageCount,
-                format!(
-                    "More than {} {}, over the limit for one {}. Use fewer {} and try again.",
-                    count_label(u64::from(max_pages)), format.pages(), format.noun(), format.pages(),
+            Some(max_pages) if shape.pages > u64::from(max_pages) => Err(match self.page_remedy {
+                PageRemedy::UseFewer => ToolError::limit_exceeded(
+                    LimitKind::PageCount,
+                    format!(
+                        "More than {} {}, over the limit for one {}. Use fewer {} and try again.",
+                        count_label(u64::from(max_pages)), format.pages(), format.noun(), format.pages(),
+                    ),
                 ),
-            )),
+                PageRemedy::SplitThen(verb) => ToolError::limit_exceeded(
+                    LimitKind::PageCount,
+                    format!(
+                        "Over the size limit: {} {}, and the limit is {}. Split it, then {verb} the parts.",
+                        count_label(shape.pages), format.pages(), count_label(u64::from(max_pages)),
+                    ),
+                )
+                .with_pointer(OutcomePointer::Tool { tool_id: SPLIT_PDF_TOOL_ID.into() }),
+            }),
             _ => Ok(()),
         }
     }
@@ -517,7 +538,7 @@ mod tests {
     }
 
     fn small() -> ToolLimits {
-        ToolLimits { max_bytes: 10 * MB, max_pages: Some(3), max_expanded_bytes: 1_000, max_duration: Duration::from_secs(5) }
+        ToolLimits { max_bytes: 10 * MB, max_pages: Some(3), max_expanded_bytes: 1_000, max_duration: Duration::from_secs(5), page_remedy: PageRemedy::UseFewer }
     }
 
     fn limit_of(result: Result<(), ToolError>) -> Option<LimitKind> {
@@ -536,8 +557,9 @@ mod tests {
             assert_eq!(limits.max_pages.is_some(), paged, "{}", capability.command);
             assert_eq!(limits.max_duration, FIVE_MINUTES, "{}", capability.command);
         }
-        assert_eq!(recorded("compress_pdf"), Some(ToolLimits { max_bytes: GB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES }));
-        assert_eq!(recorded("resize_images"), Some(ToolLimits { max_bytes: 250 * MB, max_pages: None, max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES }));
+        assert_eq!(recorded("compress_files"), Some(ToolLimits { max_bytes: GB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, page_remedy: PageRemedy::SplitThen("compress") }));
+        assert_eq!(recorded("split_pdf").map(|limits| limits.page_remedy), Some(PageRemedy::UseFewer));
+        assert_eq!(recorded("resize_images"), Some(ToolLimits { max_bytes: 250 * MB, max_pages: None, max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, page_remedy: PageRemedy::UseFewer }));
         assert_eq!(recorded("extract_gif_frames").and_then(|limits| limits.max_pages), Some(1_000));
         assert_eq!(recorded("unknown"), None);
     }

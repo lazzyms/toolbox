@@ -575,17 +575,115 @@
   },
   {
     "board": "Compress.dc.html",
-    "title": "Compress PDFs and images",
+    "title": "Compress Files: empty, files, options, running",
     "state": "default",
     "query": "",
     "screen": "Compress--default.jpg"
   },
   {
+    "board": "Compress.dc.html",
+    "title": "Compress Files: empty, files, options, running",
+    "state": "state-empty",
+    "query": "state=empty",
+    "screen": "Compress--state-empty.jpg"
+  },
+  {
+    "board": "Compress.dc.html",
+    "title": "Compress Files: empty, files, options, running",
+    "state": "state-dragging",
+    "query": "state=dragging",
+    "screen": "Compress--state-dragging.jpg"
+  },
+  {
+    "board": "Compress.dc.html",
+    "title": "Compress Files: empty, files, options, running",
+    "state": "state-more-added",
+    "query": "state=more-added",
+    "screen": "Compress--state-more-added.jpg"
+  },
+  {
+    "board": "Compress.dc.html",
+    "title": "Compress Files: empty, files, options, running",
+    "state": "state-one-removed",
+    "query": "state=one-removed",
+    "screen": "Compress--state-one-removed.jpg"
+  },
+  {
+    "board": "Compress.dc.html",
+    "title": "Compress Files: empty, files, options, running",
+    "state": "state-running",
+    "query": "state=running",
+    "screen": "Compress--state-running.jpg"
+  },
+  {
+    "board": "Compress.dc.html",
+    "title": "Compress Files: empty, files, options, running",
+    "state": "preset-low",
+    "query": "preset=Low",
+    "screen": "Compress--preset-low.jpg"
+  },
+  {
+    "board": "Compress.dc.html",
+    "title": "Compress Files: empty, files, options, running",
+    "state": "preset-high",
+    "query": "preset=High",
+    "screen": "Compress--preset-high.jpg"
+  },
+  {
+    "board": "Compress.dc.html",
+    "title": "Compress Files: empty, files, options, running",
+    "state": "stripExif-true",
+    "query": "stripExif=true",
+    "screen": "Compress--stripExif-true.jpg"
+  },
+  {
+    "board": "Compress.dc.html",
+    "title": "Compress Files: empty, files, options, running",
+    "state": "destination-settings-folder",
+    "query": "destination=settings-folder",
+    "screen": "Compress--destination-settings-folder.jpg"
+  },
+  {
+    "board": "Compress.dc.html",
+    "title": "Compress Files: empty, files, options, running",
+    "state": "destination-this-run",
+    "query": "destination=this-run",
+    "screen": "Compress--destination-this-run.jpg"
+  },
+  {
     "board": "CompressResults.dc.html",
-    "title": "Compress results: saved, kept, failed",
+    "title": "Compress Files results: compressed, skipped, failed",
     "state": "default",
     "query": "",
     "screen": "CompressResults--default.jpg"
+  },
+  {
+    "board": "CompressResults.dc.html",
+    "title": "Compress Files results: compressed, skipped, failed",
+    "state": "filter-needs-attention",
+    "query": "filter=Needs%20attention",
+    "screen": "CompressResults--filter-needs-attention.jpg"
+  },
+  {
+    "board": "CompressResults.dc.html",
+    "title": "Compress Files results: compressed, skipped, failed",
+    "state": "filter-warnings",
+    "query": "filter=Warnings",
+    "screen": "CompressResults--filter-warnings.jpg"
+  },
+  {
+    "board": "CompressResults.dc.html",
+    "title": "Compress Files results: compressed, skipped, failed",
+    "state": "state-helper-missing",
+    "query": "state=helper-missing",
+    "screen": "CompressResults--state-helper-missing.jpg"
+  },
+  {
+    "board": "CompressResults.dc.html",
+    "title": "Compress Files results: compressed, skipped, failed",
+    "state": "state-many-results",
+    "query": "state=many-results",
+    "screen": "CompressResults--state-many-results.jpg"
   },
   {
     "board": "AppIcons.dc.html",

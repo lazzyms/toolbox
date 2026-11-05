@@ -19,13 +19,12 @@ export type AtomicToolId =
   | "pdf-remove-pages"
   | "pdf-extract-pages"
   | "pdf-organize"
-  | "pdf-compress"
+  | "compress-files"
   | "pdf-rotate"
   | "pdf-repair"
   | "pdf-redact"
   | "pdf-compare"
   | "heic-convert"
-  | "compress"
   | "resize"
   | "rotate"
   | "crop"
@@ -53,6 +52,8 @@ export type NativeAvailability = "available" | "unavailable";
 
 export interface ToolCapability {
   acceptedExtensions: readonly string[];
+  /** Extensions the command takes only to report each file Skipped. The open dialog never offers them. */
+  skippedExtensions: readonly string[];
   inputCardinality: ToolInputCardinality;
   supportsPageSelection: boolean;
   supportsPreview: boolean;
@@ -75,7 +76,6 @@ export type JobState = "running" | "success" | "mixed" | "failure";
 export type ToolCommand =
   | "remove_password"
   | "protect_files"
-  | "compress_images"
   | "convert_images"
   | "inspect_pdf"
   | "crop_pdf"
@@ -84,7 +84,7 @@ export type ToolCommand =
   | "organize_pdf"
   | "add_page_numbers"
   | "watermark_pdf"
-  | "compress_pdf"
+  | "compress_files"
   | "rotate_pdf"
   | "repair_pdf"
   | "redact_pdf"
@@ -155,6 +155,8 @@ interface JobOutcomeBase {
   inputPath: string;
   detail: string;
   warnings: OutcomeWarning[];
+  originalBytes?: number;
+  outputBytes?: number;
 }
 
 export interface SucceededJobOutcome extends JobOutcomeBase {
@@ -217,7 +219,7 @@ export interface ToolDefinition {
     | "pdf-organize"
     | "pdf-page-numbers"
     | "pdf-watermark"
-    | "pdf-compress"
+    | "compress-files"
     | "pdf-rotate"
     | "pdf-repair"
     | "pdf-redact"
@@ -236,7 +238,6 @@ export interface ToolDefinition {
     | "image-resize"
     | "image-rotate"
     | "image-crop"
-    | "image-compress"
     | "image-convert"
     | "image-watermark"
     | "image-tone"
@@ -281,9 +282,12 @@ export interface PasswordRequest extends ToolRequest {
   passwordOverrides: Record<string, string>;
 }
 
-export interface CompressImagesRequest extends ToolRequest {
-  quality: number;
-  lossless?: boolean;
+/** Low keeps the most detail and High saves the most space. Every PDF is repacked without loss; Medium and High also recompress and downsample its photographs. JPEGs are re-saved at quality 85, 75 or 50. PNGs are repacked without loss at Low and Medium and cut to a dithered 256-colour palette at High. Lossless WebPs stay lossless at Low and Medium and become lossy at High; lossy WebPs are re-saved at the JPEG qualities. */
+export type CompressLevel = "low" | "medium" | "high";
+
+export interface CompressFilesRequest extends ToolRequest {
+  level: CompressLevel;
+  stripExif: boolean;
 }
 
 export interface ConvertImagesRequest extends ToolRequest {

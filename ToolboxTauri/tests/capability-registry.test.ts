@@ -24,6 +24,7 @@ test("UI capabilities are the shared native contract facts", () => {
     assert.ok(shared, `Missing shared capability for ${utility.command}`);
     assert.deepEqual(utility.capability, {
       acceptedExtensions: shared.acceptedExtensions,
+      skippedExtensions: shared.skippedExtensions,
       inputCardinality: shared.inputCardinality,
       supportsPageSelection: shared.supportsPageSelection,
       supportsPreview: shared.supportsPreview,
@@ -49,6 +50,11 @@ test("UI capabilities are the shared native contract facts", () => {
   assert.deepEqual(capabilitiesByCommand.get("images_to_pdf")?.acceptedExtensions, [
     ".png", ".jpg", ".jpeg", ".webp", ".heic",
   ]);
+  assert.deepEqual(capabilitiesByCommand.get("compress_files")?.acceptedExtensions, [".pdf", ".jpg", ".jpeg", ".png", ".webp"]);
+  assert.deepEqual(capabilitiesByCommand.get("compress_files")?.skippedExtensions, [".heic", ".heif"]);
+  assert.ok(SharedCapabilityRegistry.filter(({ command }) => command !== "compress_files").every(({ skippedExtensions }) => skippedExtensions.length === 0));
+  assert.equal(capabilitiesByCommand.get("compress_images"), undefined, "Compress Images is retired into compress_files");
+  assert.deepEqual(UtilityRegistry.filter(({ command }) => command.startsWith("compress")).map(({ id }) => id), ["compress-files"]);
   assert.equal(capabilitiesByCommand.get("pdf_to_text")?.supportsPageSelection, true);
   assert.equal(capabilitiesByCommand.get("pdf_to_text")?.supportsPreview, false);
   assert.equal(capabilitiesByCommand.get("pdf_to_images")?.supportsPreview, false);
@@ -132,6 +138,15 @@ test("workspace membership covers every registered utility exactly once", () => 
   );
 });
 
+test("Compress Files is one tool that both PDFs and images reach", () => {
+  const compress = ToolWorkspaceRegistry.find(({ id }) => id === "compress-files")!;
+  assert.deepEqual(compress.toolIds, ["compress-files"]);
+  assert.deepEqual(workspaceEntries(compress, toolsForWorkspace(compress)).map(({ title }) => title), ["Compress"]);
+  for (const workspace of ToolWorkspaceRegistry) {
+    assert.ok(!workspace.editor?.toolIds.some((id) => id.startsWith("compress")), `${workspace.title} editor must not offer a compress step`);
+  }
+});
+
 test("workspace entries group editor tools into one entry and list More tools last", () => {
   const entryIds = (workspaceId: string, options?: { groupEditor?: boolean }) => {
     const workspace = ToolWorkspaceRegistry.find(({ id }) => id === workspaceId)!;
@@ -183,4 +198,9 @@ test("shared capability parsing rejects drift-prone shapes", () => {
     () => parseCapabilityRegistry([{ ...valid, manyToOne: "yes" }]),
     /invalid many-to-one flag/,
   );
+  const { skippedExtensions: _skipped, ...withoutSkips } = valid;
+  assert.deepEqual(parseCapabilityRegistry([withoutSkips])[0].skippedExtensions, []);
+  for (const skippedExtensions of [[".HEIC"], ["heic"], valid.acceptedExtensions.slice(0, 1), ".heic"]) {
+    assert.throws(() => parseCapabilityRegistry([{ ...valid, skippedExtensions }]), /invalid accepted extensions/);
+  }
 });
