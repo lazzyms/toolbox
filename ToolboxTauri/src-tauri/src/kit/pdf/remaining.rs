@@ -712,20 +712,6 @@ fn diff_lines(old: &[String], new: &[String]) -> Vec<String> {
     lines
 }
 
-pub fn remove_pages(request: &PageSelectionRequest, input: PathBuf) -> JobOutcome {
-    let mut document = match load_existing_document_for_mutation(&input) { Ok(document) => document, Err(error) => return failure(input, error) };
-    let pages = document.get_pages();
-    let selected = match selected_page_indices(request, pages.len()) { Ok(selected) => selected, Err(error) => return failure(input, error) };
-    let delete = selected.into_iter().map(|page| page as u32 + 1).collect::<Vec<_>>();
-    if delete.len() >= pages.len() { return failure(input, "The output must keep at least one page.".to_string()); }
-    let output = match OutputNaming::reserve_destination(&input, &request.output_location, "-pages-removed", "pdf") {
-        Ok(output) => output,
-        Err(error) => return failure(input, format!("Could not reserve page removal output: {error}")),
-    };
-    document.delete_pages(&delete);
-    save(document, input, output, "PDF pages removed")
-}
-
 pub fn extract_pages(request: &PageSelectionRequest, input: PathBuf) -> JobOutcome {
     let mut document = match load_existing_document_for_mutation(&input) { Ok(document) => document, Err(error) => return failure(input, error) };
     let pages = document.get_pages();
@@ -1198,7 +1184,7 @@ mod tests {
     #[test]
     fn remaining_mutators_reject_unsafe_documents_before_reserving_output() {
         for kind in ["signed", "outline", "tagged"] {
-            for operation in ["numbers", "watermark", "image-watermark", "compress", "remove", "extract"] {
+            for operation in ["numbers", "watermark", "image-watermark", "compress", "extract"] {
                 let root = split_fixture_root(&format!("unsafe-{kind}-{operation}"));
                 let input = root.join("document.pdf");
                 let output = root.join("outputs");
@@ -1230,11 +1216,6 @@ mod tests {
                     "compress" => compress(&CompressPdfRequest {
                         paths: vec![input.clone()], quality: 80, output_location: output_location.clone(),
                     }, input.clone()),
-                    "remove" => {
-                        let mut request = request(None, vec![0]);
-                        request.output_location = output_location.clone();
-                        remove_pages(&request, input.clone())
-                    }
                     "extract" => {
                         let mut request = request(None, vec![0]);
                         request.output_location = output_location;
