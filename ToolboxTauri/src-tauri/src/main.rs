@@ -3,6 +3,7 @@
 mod file_actions;
 mod intake;
 mod kit;
+mod packs;
 mod quick_action;
 mod settings;
 mod shell;
@@ -573,7 +574,11 @@ fn main() {
             inspect_image_edit_preview,
             export_image_edit_plan,
             get_quick_actions,
-            set_quick_actions
+            set_quick_actions,
+            packs::list_packs,
+            packs::install::inspect_pack_file,
+            packs::install::install_pack_file,
+            packs::download::install_pack
         ])
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             shell::focus(app);
