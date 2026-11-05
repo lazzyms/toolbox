@@ -105,6 +105,7 @@ test.beforeEach(async ({ page }) => {
         if (command === "plugin:dialog|open") return w.picked ?? [cleanPath, leakyPath, ndaPath, brokenPath];
         if (command === "plugin:path|resolve_directory") return "/Users/test";
         if (command === "check_output_folder") return w.folderCheck ?? "ready";
+        if (command === "read_pdf_properties") return [];
         if (command === "save_privacy_reports") {
           const { reports: saved, format, outputLocation } = args.request;
           return saved.map(({ inputPath }: { inputPath: string }) => {
@@ -258,8 +259,9 @@ test("Privacy Check sends the paths with no password and shows one report or err
     ]],
   ]);
   await expectNoneFound(leaky, ["Digital signatures"]);
-  await expect(leaky.getByRole("button")).toHaveText(["Copy", "Save as JSON", "Save as Markdown", "Open Edit PDF"]);
+  await expect(leaky.getByRole("button")).toHaveText(["Copy", "Save as JSON", "Save as Markdown", "Open Edit Properties", "Open Edit Properties", "Open Edit PDF"]);
   await expect(category(leaky, "Filled form fields").getByRole("button", { name: "Open Edit PDF" })).toBeVisible();
+  for (const name of ["Document information", "XMP metadata"]) await expect(category(leaky, name).getByRole("button", { name: "Open Edit Properties" })).toBeVisible();
 
   const nda = report(page, "nda.pdf");
   await expect(nda.getByText("~/Documents · 6 pages")).toBeVisible();
@@ -298,6 +300,28 @@ test("A filled form field pointer opens Edit PDF with that report's file", async
 
   expect(await page.evaluate(() => (window as unknown as HarnessWindow).navigations)).toEqual([{ utilityId: "pdf-edit", initialPaths: [leakyPath] }]);
   await expect(page.getByRole("toolbar", { name: "PDF Editor tools" }).getByRole("button", { name: "Edit PDF" })).toHaveAttribute("aria-pressed", "true");
+});
+
+for (const name of ["Document information", "XMP metadata"]) {
+  test(`The ${name} pointer opens Edit Properties with that report's file`, async ({ page }) => {
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await page.getByRole("button", { name: /^Check 4 PDFs/ }).click();
+    await category(report(page, "lease.pdf"), name).getByRole("button", { name: "Open Edit Properties" }).click();
+
+    expect(await page.evaluate(() => (window as unknown as HarnessWindow).navigations)).toEqual([{ utilityId: "pdf-properties", initialPaths: [leakyPath] }]);
+    await expect(page.getByRole("toolbar", { name: "PDF Editor tools" }).getByRole("button", { name: "Edit Properties" })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByRole("option", { name: "lease.pdf", exact: true })).toBeVisible();
+  });
+}
+
+test("The properties pointers are hidden when Edit Properties is turned off", async ({ page }) => {
+  await page.goto("/tests/ui/harness/pdf-editor-batch.html?tool=pdf-privacy&disabled=pdf-properties");
+  await page.getByRole("button", { name: "Choose files to process" }).click();
+  await page.getByRole("button", { name: /^Check 4 PDFs/ }).click();
+
+  const leaky = report(page, "lease.pdf");
+  await expect(category(leaky, "Document information").getByRole("heading")).toBeVisible();
+  await expect(leaky.getByRole("button", { name: "Open Edit Properties" })).toHaveCount(0);
 });
 
 test("The form field pointer is hidden when Edit PDF is turned off", async ({ page }) => {

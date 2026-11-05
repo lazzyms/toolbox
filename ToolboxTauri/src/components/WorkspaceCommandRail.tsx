@@ -40,6 +40,7 @@ const designIconByToolId: Record<AtomicToolId, string> = {
   "pdf-redact": "redact-pdf",
   "pdf-compare": "compare-pdf",
   "pdf-privacy": "privacy-check",
+  "pdf-properties": "edit-properties",
   "heic-convert": "convert-format",
   compress: "compress-images",
   resize: "resize-images",

@@ -24,6 +24,7 @@ import { ShortcutHint } from '../components/ShortcutHint';
 import { isPdfSceneTool } from '../registry';
 import { pdfEditorBatchTools, type PdfEditorBatchTools } from '../features/pdf-editor/batchTools';
 import { PdfEditorBatchSurface } from '../features/pdf-editor/BatchSurface';
+import { PdfPropertiesSurface } from '../features/pdf-editor/PropertiesSurface';
 import { PDFConversionWorkspaceView } from './PDFConversionWorkspaceView';
 import { shortcutTarget } from '../shortcuts';
 
@@ -64,7 +65,7 @@ const signatureFontOptions = [
 const watermarkFontSizes = [18, 24, 32, 40, 48, 56, 64, 72, 88, 104, 120];
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 type History = { past: PdfScene[]; present: PdfScene; future: PdfScene[] };
-export type ExistingPdfUtilityId = 'pdf-merge' | 'pdf-split' | 'pdf-redact' | 'pdf-edit';
+export type ExistingPdfUtilityId = 'pdf-merge' | 'pdf-split' | 'pdf-redact' | 'pdf-edit' | 'pdf-properties';
 export type PdfEditorNavigation = (navigation: {
   utilityId: ExistingPdfUtilityId;
   initialPaths: readonly [string, ...string[]];
@@ -110,6 +111,7 @@ type PDFEditorWorkspaceProps = {
 export const PDFEditorWorkspaceView = ({ batchTools = pdfEditorBatchTools, ...props }: PDFEditorWorkspaceProps & { batchTools?: PdfEditorBatchTools }) => {
   const { utility, initialPaths, onFilesChange, onNavigate } = props;
   if (isPdfSceneTool(utility.id)) return <PDFSceneEditor {...props} />;
+  if (utility.id === 'pdf-properties') return <PdfPropertiesSurface utility={utility} initialPaths={initialPaths} onFilesChange={onFilesChange} />;
   const batchTool = batchTools[utility.id];
   if (batchTool) return <PdfEditorBatchSurface utility={utility} tool={batchTool} initialPaths={initialPaths} onFilesChange={onFilesChange} onNavigate={onNavigate} />;
   return <PDFConversionWorkspaceView utility={utility} initialPaths={initialPaths} onFilesChange={onFilesChange} />;

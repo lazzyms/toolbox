@@ -11,9 +11,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::kit::contracts::ToolError;
 use crate::kit::password::WRONG_PASSWORD;
 
-const XMP_MAX_BYTES: usize = 4 * 1024 * 1024;
-const RDF: &[u8] = b"http://www.w3.org/1999/02/22-rdf-syntax-ns#";
-const DC: &[u8] = b"http://purl.org/dc/elements/1.1/";
+pub(crate) const XMP_MAX_BYTES: usize = 4 * 1024 * 1024;
+pub(crate) const RDF: &[u8] = b"http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+pub(crate) const DC: &[u8] = b"http://purl.org/dc/elements/1.1/";
 const XMP: &[u8] = b"http://ns.adobe.com/xap/1.0/";
 const PDF: &[u8] = b"http://ns.adobe.com/pdf/1.3/";
 
@@ -33,7 +33,7 @@ pub enum DocumentProperty {
 impl DocumentProperty {
     const ALL: [Self; 8] = [Self::Title, Self::Author, Self::Subject, Self::Keywords, Self::Creator, Self::Producer, Self::CreationDate, Self::ModificationDate];
 
-    fn info_key(self) -> &'static str {
+    pub(crate) fn info_key(self) -> &'static str {
         match self {
             Self::Title => "Title",
             Self::Author => "Author",
@@ -46,7 +46,7 @@ impl DocumentProperty {
         }
     }
 
-    fn xmp_name(self) -> (&'static [u8], &'static [u8]) {
+    pub(crate) fn xmp_name(self) -> (&'static [u8], &'static [u8]) {
         match self {
             Self::Title => (DC, b"title"),
             Self::Author => (DC, b"creator"),

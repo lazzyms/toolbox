@@ -67,6 +67,17 @@ test("UI capabilities are the shared native contract facts", () => {
     manyToOne: false,
   });
   assert.equal(UtilityRegistry.find(({ id }) => id === "pdf-privacy")?.command, "inspect_pdf_privacy");
+  assert.deepEqual(capabilitiesByCommand.get("edit_pdf_properties"), {
+    command: "edit_pdf_properties",
+    acceptedExtensions: [".pdf"],
+    inputCardinality: "multiple",
+    supportsPageSelection: false,
+    supportsPreview: false,
+    nativeAvailability: "available",
+    outputSuffix: "-edited",
+    manyToOne: false,
+  });
+  assert.equal(UtilityRegistry.find(({ id }) => id === "pdf-properties")?.command, "edit_pdf_properties");
   assert.equal(capabilitiesByCommand.get("ocr_pdf")?.nativeAvailability, "unavailable");
   assert.equal(capabilitiesByCommand.get("blur_faces")?.nativeAvailability, "unavailable");
   assert.equal(capabilitiesByCommand.get("remove_image_background")?.nativeAvailability, "unavailable");
@@ -156,7 +167,7 @@ test("workspace entries group editor tools into one entry and list labelled grou
   assert.deepEqual(entryIds("pdf-editor"), [
     "pdf-edit+pdf-watermark+pdf-sign+pdf-remove-pages",
     "pdf-organize", "pdf-merge", "pdf-split", "pdf-crop", "pdf-page-numbers", "pdf-redact",
-    "details:pdf-privacy",
+    "details:pdf-privacy", "details:pdf-properties",
     "more:pdf-rotate", "more:pdf-repair", "more:pdf-compare", "more:pdf-extract-pages",
   ]);
   assert.deepEqual(entryIds("image-editor"), ["resize+crop+rotate+image-tone+image-watermark", "heic-convert", "image-metadata"]);

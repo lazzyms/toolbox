@@ -5,6 +5,7 @@ pub mod hidden_content;
 pub mod scene;
 pub mod editor;
 pub mod remaining;
+pub mod properties;
 
 use std::collections::HashSet;
 use std::fs;
