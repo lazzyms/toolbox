@@ -438,3 +438,261 @@ test('a later action sends exactly the selected pages to export', async ({ page 
   const scene = await page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'export_pdf_scene').at(-1).args.request.scene);
   expect(scene.pages.map((item: any) => item.rotation)).toEqual([0, 90, 0, 90, 0]);
 });
+
+// Reordering. Selected pages move as one block, in their order, by drag, keys, Move to and the Page order menu.
+const order = (page: Page) => grid(page).getByRole('option').evaluateAll((options) =>
+  options.map((option) => Number(/original page (\d+)/.exec(option.getAttribute('aria-label') ?? '')?.[1])));
+const liveStatus = (page: Page) => page.locator('.scene-organize-status').getByRole('status');
+const pageActions = (page: Page) => page.getByRole('toolbar', { name: /^Page actions, / });
+async function exportedOrder(page: Page) {
+  await page.getByRole('button', { name: 'Export PDF' }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).calls.some((call: any) => call.command === 'export_pdf_scene'))).toBe(true);
+  const scene = await page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'export_pdf_scene').at(-1).args.request.scene);
+  return scene.pages.map((item: any) => item.sourceIndex + 1);
+}
+async function selectRun(page: Page, first: number, last: number) {
+  await option(page, first).click();
+  if (last !== first) await option(page, last).click({ modifiers: ['Shift'] });
+}
+async function center(page: Page, position: number, side: 'left' | 'right' | 'middle' = 'middle') {
+  const box = (await option(page, position).boundingBox())!;
+  return { x: box.x + (side === 'left' ? box.width * 0.2 : side === 'right' ? box.width * 0.8 : box.width / 2), y: box.y + box.height / 2 };
+}
+
+test('dragging selected pages moves them together, shows the count and the drop position, and exports that order', async ({ page }) => {
+  await openReport(page);
+  await option(page, 1).click();
+  await option(page, 3).click({ modifiers: ['Meta'] });
+  const start = await center(page, 1);
+  const end = await center(page, 5, 'right');
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(end.x, end.y, { steps: 8 });
+  await expect(liveStatus(page)).toHaveText('Moving 2 pages. Drop to place them at the end. Press Esc to cancel.');
+  await expect(page.locator('.scene-organize-ghost')).toContainText('2');
+  await expect(page.locator('.scene-organize-insertion')).toHaveAttribute('data-side', 'after');
+  await expect(grid(page).locator('[data-moving]')).toHaveCount(2);
+  await page.mouse.up();
+  expect(await order(page)).toEqual([2, 4, 5, 1, 3]);
+  await expect(liveStatus(page)).toHaveText('Pages 1 and 3 moved to position 4');
+  // The drop does not change the selection, and it is one undo step.
+  expect(await selectedPositions(page)).toEqual([4, 5]);
+  await expect(page.locator('.scene-organize-ghost')).toHaveCount(0);
+  await undoButton(page).click();
+  expect(await order(page)).toEqual([1, 2, 3, 4, 5]);
+  await expect(undoButton(page)).toBeDisabled();
+  await page.getByRole('button', { name: 'Redo', exact: true }).click();
+  expect(await exportedOrder(page)).toEqual([2, 4, 5, 1, 3]);
+});
+
+test('dragging an unselected page moves only that page, and a drop between pages names the position', async ({ page }) => {
+  await openReport(page);
+  await option(page, 1).click();
+  const start = await center(page, 4);
+  const end = await center(page, 2, 'left');
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(end.x, end.y, { steps: 8 });
+  await expect(liveStatus(page)).toHaveText('Moving 1 page. Drop to place it before position 2. Press Esc to cancel.');
+  await page.mouse.up();
+  expect(await order(page)).toEqual([1, 4, 2, 3, 5]);
+  await expect(liveStatus(page)).toHaveText('Page 4 moved to position 2');
+  expect(await selectedPositions(page)).toEqual([2]);
+});
+
+test('Escape cancels a drag before release: nothing moves and there is nothing to undo', async ({ page }) => {
+  await openReport(page);
+  await selectRun(page, 1, 2);
+  const start = await center(page, 2);
+  const end = await center(page, 5, 'right');
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(end.x, end.y, { steps: 8 });
+  await page.keyboard.press('Escape');
+  await expect(liveStatus(page)).toHaveText('Move cancelled. Nothing moved');
+  await page.mouse.up();
+  expect(await order(page)).toEqual([1, 2, 3, 4, 5]);
+  expect(await selectedPositions(page)).toEqual([1, 2]);
+  await expect(undoButton(page)).toBeDisabled();
+  await expect(grid(page)).toBeVisible();
+});
+
+for (const [platform, modifier, startKey, endKey] of [['MacIntel', 'Meta', 'Meta+ArrowUp', 'Meta+ArrowDown'], ['Win32', 'Control', 'Control+Home', 'Control+End']] as const) {
+  test(`keyboard moves on ${platform}: ${modifier} with arrows steps the block, ${startKey} and ${endKey} send it to an end`, async ({ page }) => {
+    await setPlatform(page, platform);
+    await openReport(page);
+    await selectRun(page, 2, 3);
+    await page.keyboard.press(`${modifier}+ArrowRight`);
+    expect(await order(page)).toEqual([1, 4, 2, 3, 5]);
+    await expect(liveStatus(page)).toHaveText('Pages 2 and 3 moved to position 3');
+    // Focus and selection follow the moved pages.
+    await expect(grid(page).getByRole('option', { name: 'Position 4, original page 3, selected' })).toBeFocused();
+    await page.keyboard.press(endKey);
+    expect(await order(page)).toEqual([1, 4, 5, 2, 3]);
+    await page.keyboard.press(`${modifier}+ArrowRight`);
+    await expect(liveStatus(page)).toHaveText('Pages 4 and 5 are already last');
+    await page.keyboard.press(startKey);
+    expect(await order(page)).toEqual([2, 3, 1, 4, 5]);
+    await expect(liveStatus(page)).toHaveText('Pages 4 and 5 moved to position 1');
+    await page.keyboard.press(`${modifier}+ArrowLeft`);
+    await expect(liveStatus(page)).toHaveText('Pages 1 and 2 are already first');
+    await expect(pageActions(page).getByRole('button', { name: `Move earlier (${platform === 'Win32' ? 'Ctrl' : '⌘'}+←)` })).toBeEnabled();
+    // Three moves, three undo steps.
+    for (let step = 0; step < 3; step += 1) await undoButton(page).click();
+    expect(await order(page)).toEqual([1, 2, 3, 4, 5]);
+    await expect(undoButton(page)).toBeDisabled();
+  });
+}
+
+test('scattered pages gather into one block when stepped, and toolbar Move buttons need a selection', async ({ page }) => {
+  await setPlatform(page, 'MacIntel');
+  await openReport(page);
+  await expect(pageActions(page).getByRole('button', { name: 'Move later (⌘+→)' })).toBeDisabled();
+  await expect(pageActions(page).getByRole('button', { name: 'Move to…' })).toBeDisabled();
+  await option(page, 1).click();
+  await option(page, 4).click({ modifiers: ['Meta'] });
+  await pageActions(page).getByRole('button', { name: 'Move later (⌘+→)' }).click();
+  // Later gathers the block after the last selected page; earlier then steps the whole block back one.
+  expect(await order(page)).toEqual([2, 3, 5, 1, 4]);
+  await expect(liveStatus(page)).toHaveText('Pages 1 and 4 moved to position 4');
+  await pageActions(page).getByRole('button', { name: 'Move earlier (⌘+←)' }).click();
+  expect(await order(page)).toEqual([2, 3, 1, 4, 5]);
+  await expect(pageActions(page).getByRole('button', { name: 'Move earlier (⌘+←)' })).toHaveAttribute('aria-keyshortcuts', 'Meta+ArrowLeft');
+});
+
+test('M opens Move to for the selection, a bad position explains itself, and Enter moves the block', async ({ page }) => {
+  await openReport(page);
+  await selectRun(page, 4, 5);
+  await page.keyboard.press('m');
+  const popup = page.getByRole('dialog', { name: 'Move 2 pages to a position' });
+  await expect(popup).toBeVisible();
+  const field = popup.getByRole('textbox', { name: 'Move pages 4 and 5 to position' });
+  await expect(field).toBeFocused();
+  await expect(popup).toContainText('of 5');
+  await expect(popup).toContainText('The pages stay together in the same order. Position 1 puts them first.');
+  await field.fill('9');
+  await field.press('Enter');
+  await expect(popup.getByRole('alert')).toHaveText('Type a position from 1 to 5.');
+  await expect(field).toHaveAttribute('aria-invalid', 'true');
+  expect(await order(page)).toEqual([1, 2, 3, 4, 5]);
+  await field.fill('2');
+  await field.press('Enter');
+  await expect(popup).toHaveCount(0);
+  expect(await order(page)).toEqual([1, 4, 5, 2, 3]);
+  await expect(liveStatus(page)).toHaveText('Pages 4 and 5 moved to position 2');
+  // Focus returns to the grid, on the same page.
+  await expect(grid(page).getByRole('option', { name: 'Position 3, original page 5, selected' })).toBeFocused();
+  // Start and End in the popup send the block to either end.
+  await pageActions(page).getByRole('button', { name: 'Move to…' }).click();
+  await page.getByRole('dialog', { name: 'Move 2 pages to a position' }).getByRole('button', { name: /^End/ }).click();
+  expect(await order(page)).toEqual([1, 2, 3, 4, 5]);
+  await expect(liveStatus(page)).toHaveText('Pages 2 and 3 moved to position 4');
+  // Escape closes the popup without moving anything, and focus goes back to the grid.
+  await grid(page).getByRole('option', { name: 'Position 5, original page 5, selected' }).focus();
+  await page.keyboard.press('m');
+  await expect(page.getByRole('dialog', { name: 'Move 2 pages to a position' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(grid(page).getByRole('option', { name: 'Position 5, original page 5, selected' })).toBeFocused();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  expect(await order(page)).toEqual([1, 2, 3, 4, 5]);
+});
+
+test('Page order reverses the selection or the whole document, each as one undo step', async ({ page }) => {
+  await openReport(page);
+  await option(page, 1).click();
+  await pageActions(page).getByRole('button', { name: 'Page order' }).click();
+  await expect(page.getByRole('menuitem', { name: 'Reverse the selected pages' })).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await selectRun(page, 2, 4);
+  await pageActions(page).getByRole('button', { name: 'Page order' }).click();
+  await page.getByRole('menuitem', { name: 'Reverse the 3 selected pages' }).click();
+  expect(await order(page)).toEqual([1, 4, 3, 2, 5]);
+  await expect(liveStatus(page)).toHaveText('Pages 2 to 4 reversed');
+  await pageActions(page).getByRole('button', { name: 'Page order' }).click();
+  await page.getByRole('menuitem', { name: 'Reverse the whole document' }).click();
+  expect(await order(page)).toEqual([5, 2, 3, 4, 1]);
+  await expect(liveStatus(page)).toHaveText('All 5 pages reversed');
+  await undoButton(page).click();
+  expect(await order(page)).toEqual([1, 4, 3, 2, 5]);
+  await page.getByRole('button', { name: 'Redo', exact: true }).click();
+  expect(await exportedOrder(page)).toEqual([5, 2, 3, 4, 1]);
+});
+
+test('Page order interleaves a two-sided scan into reading order', async ({ page }) => {
+  await openReport(page);
+  await pageActions(page).getByRole('button', { name: 'Page order' }).click();
+  await expect(page.getByRole('menuitem', { name: /Interleave a two-sided scan/ })).toContainText('For fronts scanned first, then backs scanned in reverse. Puts the pages in reading order: 1, 5, 2, 4…');
+  await page.getByRole('menuitem', { name: /Interleave a two-sided scan/ }).click();
+  expect(await order(page)).toEqual([1, 5, 2, 4, 3]);
+  await expect(liveStatus(page)).toHaveText('Pages put in reading order: 1, 5, 2, 4…');
+  expect(await exportedOrder(page)).toEqual([1, 5, 2, 4, 3]);
+});
+
+for (const reducedMotion of ['no-preference', 'reduce'] as const) {
+  test(`a move ${reducedMotion === 'reduce' ? 'jumps without animation under reduced motion' : 'slides pages from where they were'}`, async ({ page }) => {
+    await page.emulateMedia({ reducedMotion });
+    await page.addInitScript(() => {
+      const w = window as any;
+      w.animations = 0;
+      const animate = Element.prototype.animate;
+      Element.prototype.animate = function (...args: Parameters<typeof animate>) { w.animations += 1; return animate.apply(this, args); };
+    });
+    await setPlatform(page, 'MacIntel');
+    await openReport(page);
+    await option(page, 1).click();
+    await page.keyboard.press('Meta+ArrowRight');
+    expect(await order(page)).toEqual([2, 1, 3, 4, 5]);
+    const animations = await page.evaluate(() => (window as any).animations);
+    if (reducedMotion === 'reduce') expect(animations).toBe(0);
+    else expect(animations).toBeGreaterThan(0);
+  });
+}
+
+test('Move buttons and Page order are disabled while exporting', async ({ page }) => {
+  await page.addInitScript(() => {
+    const w = window as any;
+    const wait = setInterval(() => {
+      const internals = w.__TAURI_INTERNALS__;
+      if (!internals) return;
+      clearInterval(wait);
+      const invoke = internals.invoke;
+      internals.invoke = (command: string, args: any) => command === 'export_pdf_scene' ? (w.calls.push({ command, args }), new Promise(() => {})) : invoke(command, args);
+    }, 1);
+  });
+  await setPlatform(page, 'MacIntel');
+  await openReport(page);
+  await option(page, 1).click();
+  await page.keyboard.press('Meta+ArrowRight');
+  await page.getByRole('button', { name: 'Export PDF' }).click();
+  await expect(pageActions(page).getByRole('button', { name: 'Move later (⌘+→)' })).toBeDisabled();
+  await expect(pageActions(page).getByRole('button', { name: 'Move to…' })).toBeDisabled();
+  await expect(pageActions(page).getByRole('button', { name: 'Page order' })).toBeDisabled();
+});
+
+test('dragging into the band at the grid edge scrolls the grid and says which pages are coming into view', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 640 });
+  await openReport(page);
+  await page.getByRole('radiogroup', { name: 'Thumbnails' }).getByRole('radio', { name: 'Large' }).click();
+  await option(page, 1).click();
+  const start = await center(page, 1);
+  const box = (await grid(page).boundingBox())!;
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(start.x, start.y + 20, { steps: 4 });
+  const band = page.locator('.scene-organize-scroll-band[data-edge="bottom"]');
+  await expect(band).toHaveText('Drag here to scroll down');
+  // The grid reaches its end quickly, so record every text the band shows while it scrolls.
+  await band.evaluate((element) => {
+    const w = window as any;
+    w.bandTexts = [];
+    new MutationObserver(() => w.bandTexts.push(`${element.hasAttribute('data-active')}:${element.textContent}`)).observe(element, { attributes: true, childList: true, subtree: true, characterData: true });
+  });
+  await page.mouse.move(start.x, box.y + box.height - 8, { steps: 8 });
+  await expect.poll(() => grid(page).evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  const texts: string[] = await page.evaluate(() => (window as any).bandTexts);
+  expect(texts.some((text) => /^true:Scrolling down\. Pages? .* coming into view$/.test(text))).toBe(true);
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+  await expect(band).toHaveCount(0);
+  expect(await order(page)).toEqual([1, 2, 3, 4, 5]);
+});

@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { movePagesBefore, removePages, rotatePages, sceneFromDocument, swapPage } from "../src/features/pdf-editor/scene";
+import {
+  interleaveDuplexScan, movePagesBefore, movePagesBy, movePagesTo, movePagesToGap, removePages, reversePages, rotatePages, sceneFromDocument, swapPage,
+} from "../src/features/pdf-editor/scene";
 import { parsePageRange } from "../src/shared/workspaceValidation";
 
 test("scene import carries source rotation and page-box baseline", () => {
@@ -54,6 +56,75 @@ test("swapping pages changes only the page order", () => {
   const scene = sixPages();
   assert.deepEqual(pageIds(swapPage(scene, 0, 1)).slice(0, 2), ["source-1", "source-0"]);
   assert.equal(swapPage(scene, 0, -1), scene);
+});
+
+const at = (positions: number[]) => positions.map((position) => `source-${position - 1}`);
+const positionsOf = (scene: { pages: { id: string }[] }) => scene.pages.map((page) => Number(page.id.slice(7)) + 1);
+const pagesOf = (count: number) => sceneFromDocument({
+  path: "/local/many.pdf",
+  pages: Array.from({ length: count }, (_, index) => ({ index, width: 300, height: 400 })),
+});
+
+test("moving to a position puts the block's first page there, keeping the pages together and in order", () => {
+  const scene = sixPages();
+  assert.deepEqual(positionsOf(movePagesTo(scene, at([4, 5, 6]), 1)), [4, 5, 6, 1, 2, 3]);
+  assert.deepEqual(positionsOf(movePagesTo(scene, at([1, 2]), 3)), [3, 4, 1, 2, 5, 6]);
+  // Scattered pages gather into one block in their current order.
+  assert.deepEqual(positionsOf(movePagesTo(scene, at([5, 2]), 2)), [1, 2, 5, 3, 4, 6]);
+  // Positions past the end clamp so the block ends last; below 1 clamps to the start.
+  assert.deepEqual(positionsOf(movePagesTo(scene, at([1, 2]), 99)), [3, 4, 5, 6, 1, 2]);
+  assert.deepEqual(positionsOf(movePagesTo(scene, at([6]), 0)), [6, 1, 2, 3, 4, 5]);
+  // An unchanged order returns the same scene, so no undo step is added.
+  assert.equal(movePagesTo(scene, at([1, 2]), 1), scene);
+  assert.equal(movePagesTo(scene, [], 3), scene);
+  assert.deepEqual(positionsOf(scene), [1, 2, 3, 4, 5, 6]);
+});
+
+test("dropping in a gap places the block before the page after that gap", () => {
+  const scene = sixPages();
+  // Gap 0 is before the first page, gap 6 after the last.
+  assert.deepEqual(positionsOf(movePagesToGap(scene, at([2, 3]), 0)), [2, 3, 1, 4, 5, 6]);
+  assert.deepEqual(positionsOf(movePagesToGap(scene, at([2, 3]), 6)), [1, 4, 5, 6, 2, 3]);
+  assert.deepEqual(positionsOf(movePagesToGap(scene, at([2, 3]), 5)), [1, 4, 5, 2, 3, 6]);
+  assert.deepEqual(positionsOf(movePagesToGap(scene, at([1, 5]), 3)), [2, 3, 1, 5, 4, 6]);
+  // Gaps next to or inside the block leave a contiguous block where it is.
+  for (const gap of [1, 2, 3]) assert.equal(movePagesToGap(scene, at([2, 3]), gap), scene);
+});
+
+test("stepping moves the block's leading edge by one position and stops at either end", () => {
+  const scene = sixPages();
+  assert.deepEqual(positionsOf(movePagesBy(scene, at([3, 4]), -1)), [1, 3, 4, 2, 5, 6]);
+  assert.deepEqual(positionsOf(movePagesBy(scene, at([3, 4]), 1)), [1, 2, 5, 3, 4, 6]);
+  // A scattered selection gathers next to its first page (earlier) or last page (later).
+  assert.deepEqual(positionsOf(movePagesBy(scene, at([2, 5]), -1)), [2, 5, 1, 3, 4, 6]);
+  assert.deepEqual(positionsOf(movePagesBy(scene, at([2, 5]), 1)), [1, 3, 4, 6, 2, 5]);
+  assert.equal(movePagesBy(scene, at([1, 2]), -1), scene);
+  assert.equal(movePagesBy(scene, at([5, 6]), 1), scene);
+  // A scattered selection at the start still gathers.
+  assert.deepEqual(positionsOf(movePagesBy(scene, at([1, 3]), -1)), [1, 3, 2, 4, 5, 6]);
+});
+
+test("reversing flips the selected pages within their own slots", () => {
+  const scene = sixPages();
+  assert.deepEqual(positionsOf(reversePages(scene, at([2, 3, 4]))), [1, 4, 3, 2, 5, 6]);
+  assert.deepEqual(positionsOf(reversePages(scene, at([1, 3, 6]))), [6, 2, 3, 4, 5, 1]);
+  assert.deepEqual(positionsOf(reversePages(scene, at([1, 2, 3, 4, 5, 6]))), [6, 5, 4, 3, 2, 1]);
+  assert.equal(reversePages(scene, at([4])), scene);
+});
+
+test("interleaving a two-sided scan alternates fronts with backs scanned in reverse", () => {
+  assert.deepEqual(positionsOf(interleaveDuplexScan(pagesOf(6))), [1, 6, 2, 5, 3, 4]);
+  assert.deepEqual(positionsOf(interleaveDuplexScan(pagesOf(5))), [1, 5, 2, 4, 3]);
+  const two = pagesOf(2);
+  assert.equal(interleaveDuplexScan(two), two);
+  assert.deepEqual(positionsOf(interleaveDuplexScan(pagesOf(236))).slice(0, 4), [1, 236, 2, 235]);
+});
+
+test("page-order edits keep each page's rotation, crop and objects", () => {
+  const scene = rotatePages(sixPages(), ["source-1"]);
+  const moved = movePagesTo(reversePages(interleaveDuplexScan(scene), at([1, 2])), at([2]), 6);
+  assert.deepEqual(moved.pages.find((page) => page.id === "source-1"), scene.pages[1]);
+  assert.equal(moved.pages.length, 6);
 });
 
 test("page ranges parse to sorted, unique page indices", () => {
