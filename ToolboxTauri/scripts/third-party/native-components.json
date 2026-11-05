@@ -497,6 +497,33 @@
       "source": "https://github.com/google/fonts/tree/main/ofl/pacifico"
     },
     {
+      "name": "Noto Sans font",
+      "version": "2.015",
+      "licenseFile": "src-tauri/resources/fonts/Noto-LICENSE.txt",
+      "license": "OFL-1.1",
+      "copyright": "Copyright 2022 The Noto Project Authors (https://github.com/notofonts/latin-greek-cyrillic)",
+      "source": "https://github.com/notofonts/notofonts.github.io/tree/a5fca98891563057e7f65c1c4bf3f2a58c7704a4/fonts/NotoSans/unhinted/ttf",
+      "note": "Unhinted static Regular, Bold, Italic and Bold Italic styles, used for PDF text overlays."
+    },
+    {
+      "name": "Noto Serif font",
+      "version": "2.015",
+      "licenseFile": "src-tauri/resources/fonts/Noto-LICENSE.txt",
+      "license": "OFL-1.1",
+      "copyright": "Copyright 2022 The Noto Project Authors (https://github.com/notofonts/latin-greek-cyrillic)",
+      "source": "https://github.com/notofonts/notofonts.github.io/tree/a5fca98891563057e7f65c1c4bf3f2a58c7704a4/fonts/NotoSerif/unhinted/ttf",
+      "note": "Unhinted static Regular, Bold, Italic and Bold Italic styles, used for PDF text overlays."
+    },
+    {
+      "name": "Noto Sans Mono font",
+      "version": "2.014",
+      "licenseFile": "src-tauri/resources/fonts/Noto-LICENSE.txt",
+      "license": "OFL-1.1",
+      "copyright": "Copyright 2022 The Noto Project Authors (https://github.com/notofonts/latin-greek-cyrillic)",
+      "source": "https://github.com/notofonts/notofonts.github.io/tree/a5fca98891563057e7f65c1c4bf3f2a58c7704a4/fonts/NotoSansMono/unhinted/ttf",
+      "note": "Unhinted static Regular and Bold styles, used for PDF text overlays."
+    },
+    {
       "name": "YuNet face detection model",
       "licenseFile": "src-tauri/resources/vision/licenses/yunet-MIT.txt",
       "license": "MIT",

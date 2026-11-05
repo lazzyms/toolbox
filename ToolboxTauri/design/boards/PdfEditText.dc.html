@@ -106,28 +106,31 @@ a{color:inherit}a:hover{color:var(--mut)}
 </ol></nav>
 <main aria-label="Page 3 of 14" style="flex: 1; min-width: 0; background: var(--well); overflow: auto; display: flex; justify-content: center; padding: 20px 0; box-sizing: border-box"><div class="paper" style="width: 500px; height: 647px; flex: none; padding: 56px 58px">
 <h3>4. Rent and payment</h3>
-<p style="position: relative"><span style="outline: 1.5px solid #1d5fd1; outline-offset: 2px; background: rgba(29,95,209,.06)" role="textbox" aria-multiline="true" aria-label="Editable text, paragraph 4.1" contenteditable="true">4.1 The Tenant will pay rent of £1,475 per calendar month, in advance, on the first day of each month.</span></p>
+<sc-if value="{{editing}}" hint-placeholder-val="{{ true }}"><p style="position: relative"><span style="outline: 1.5px solid #1d5fd1; outline-offset: 2px; background: rgba(29,95,209,.06)" role="textbox" aria-multiline="true" aria-label="Editable text, paragraph 4.1" contenteditable="true">4.1 The Tenant will pay rent of £1,475 per calendar month, in advance, on the first day of each month.</span></p></sc-if><sc-if value="{{noEdit}}" hint-placeholder-val="{{ false }}"><p style="outline: 1px dashed #9aa6bf; outline-offset: 2px">4.1 The Tenant will pay rent of £1,475 per calendar month, in advance, on the first day of each month.</p></sc-if>
 <sc-if value="{{overflow}}" hint-placeholder-val="{{ false }}"><p role="alert" style="margin: -4px 0 8px; font-size: 9px; color: #c62828; font-family: 'Noto Sans', system-ui, sans-serif">Text runs past the original line by 2 words. It will be cut off unless you make it shorter or smaller.</p></sc-if>
 <p style="outline: 1px dashed #9aa6bf; outline-offset: 2px">4.2 Payment is made by standing order to the account named in Schedule 2. The Landlord will confirm each payment in writing on request.</p>
 <p style="outline: 1px dashed #9aa6bf; outline-offset: 2px">4.3 If rent is more than 14 days late, the Landlord may charge interest at 3% above the Bank of England base rate on the overdue amount.</p>
 <h3 style="margin-top: 14px">5. Deposit</h3>
 <p style="outline: 1px dashed #9aa6bf; outline-offset: 2px">5.1 The Tenant has paid a deposit of £1,673, held in a government-approved tenancy deposit scheme within 30 days of receipt.</p>
 <p style="outline: 1px dashed #9aa6bf; outline-offset: 2px">5.2 The deposit will be returned within 10 days of the end of the tenancy, less any agreed deductions for damage beyond fair wear and tear.</p>
+<sc-if value="{{noEdit}}" hint-placeholder-val="{{ false }}"><div style="position: relative; margin-top: 12px"><button aria-describedby="whyNot" aria-label="Picture of text, page 3: Schedule 2 stamp. Selected. Not editable." style="display: block; width: 100%; text-align: left; border: 0; padding: 8px 10px; background: #efeee9; outline: 1.5px solid #c62828; outline-offset: 2px; font: italic 10px/1.45 Georgia, serif; color: #3a3a3a; filter: blur(.25px); cursor: not-allowed">Schedule 2. Account for rent: Harbour Properties Ltd, client account. Stamped and initialled by the Landlord on 12 October 2026.</button><p id="whyNot" role="status" style="position: absolute; left: 0; top: calc(100% + 8px); margin: 0; background: #1b1f27; color: #fff; font: 500 10.5px/1.3 system-ui, sans-serif; padding: 6px 8px; border-radius: 5px; box-shadow: 0 2px 6px rgba(0,0,0,.3)">This text is part of a picture, so it can't be edited.</p></div></sc-if>
 <p style="position: absolute; left: 0; right: 0; bottom: 26px; text-align: center; font-size: 9px; color: #6b6b6b">Page 3 of 14</p>
 </div></main>
 <aside aria-labelledby="insp" style="width: 300px; flex: none; border-left: 1px solid var(--line); background: var(--panel); overflow: auto">
 <div style="padding: 16px 18px; display: flex; flex-direction: column; gap: 14px">
 <div style="display: flex; flex-direction: column; gap: 4px"><h2 id="insp" style="margin: 0; font-size: 14px; font-weight: 600">Edit text</h2>
 <p class="hint" style="margin: 0">Click text with a dashed outline to change it. Text that is part of a picture can't be edited. Use OCR first.</p></div>
-<div style="display: flex; flex-direction: column; gap: 6px"><span class="lbl">Selected text</span>
+<sc-if value="{{noEdit}}" hint-placeholder-val="{{ false }}"><div class="note" style="border-color: var(--warn, #b7791f)"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--warn, #b7791f); margin-top: 1px"><path d="M12 3l10 18H2z"></path><path d="M12 10v5M12 18v.5"></path></svg><span class="hint"><strong style="font-weight: 600; color: var(--fg)">This text can't be edited.</strong> It is part of a scanned picture, not real text. Text drawn in a font with no character map is treated the same way.</span></div>
+<div style="display: flex; flex-direction: column; gap: 8px"><a class="btn sm" href="OCR.dc.html" style="align-self: flex-start">Make it editable with OCR</a><span class="hint">OCR makes a searchable copy. Open that copy here to edit the text.</span><a class="btn sm ghost" href="PdfText.dc.html" style="align-self: flex-start">Cover it with Add text instead</a></div></sc-if>
+<sc-if value="{{editing}}" hint-placeholder-val="{{ true }}"><div style="display: flex; flex-direction: column; gap: 6px"><span class="lbl">Selected text</span>
 <div style="display: grid; grid-template-columns: 1fr 70px; gap: 8px"><select class="field" aria-label="Font"><option>Times New Roman</option></select><select class="field" aria-label="Size"><option>11 pt</option></select></div>
-<div style="display: flex; gap: 6px"><button class="btn sm icon" aria-label="Bold" aria-pressed="false"><b>B</b></button><button class="btn sm icon" aria-label="Italic" aria-pressed="false"><i>I</i></button><input type="color" class="field" aria-label="Colour" value="#1f1f1f" style="width: 40px; padding: 2px"></div></div>
+<div style="display: flex; gap: 6px"><button class="btn sm icon" aria-label="Bold" aria-pressed="false"><b>B</b></button><button class="btn sm icon" aria-label="Italic" aria-pressed="false"><i>I</i></button><input type="color" class="field" aria-label="Colour" value="#1f1f1f" style="width: 40px; padding: 2px"></div></div></sc-if>
 <sc-if value="{{subst}}" hint-placeholder-val="{{ true }}"><div class="note"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut); margin-top: 1px"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v6M12 7.5v.5"></path></svg><span class="hint"><strong style="font-weight: 600; color: var(--fg)">Times New Roman isn't embedded in this PDF.</strong> Edited lines use Noto Serif, which looks close. Untouched text keeps its original font.</span></div></sc-if>
 <sc-if value="{{overflow}}" hint-placeholder-val="{{ false }}"><div class="note" style="border-color: var(--bad)"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--bad); margin-top: 1px"><path d="M12 3l10 18H2z"></path><path d="M12 10v5M12 18v.5"></path></svg><span class="hint"><strong style="font-weight: 600; color: var(--fg)">This paragraph is too long for its space.</strong> Shorten it, choose a smaller size, or let it reflow over the next line.</span></div>
 <div style="display: flex; gap: 6px"><button class="btn sm">Shrink to fit</button><button class="btn sm ghost">Allow overlap</button></div></sc-if>
 <div style="border-top: 1px solid var(--line); padding-top: 14px; display: flex; flex-direction: column; gap: 6px"><span class="lbl" id="ed">Edits on this document</span>
-<ol class="olist" aria-labelledby="ed"><li><button aria-current="true"><span style="flex: 1">Page 3, 4.1: “£1,450” to “£1,475”</span></button></li><li><button aria-current="false"><span style="flex: 1">Page 1, tenant name</span></button></li></ol>
-<button class="btn sm ghost" style="align-self: flex-start">Revert this paragraph</button></div>
+<ol class="olist" aria-labelledby="ed"><li><button aria-current="{{curEdit}}"><span style="flex: 1">Page 3, 4.1: “£1,450” to “£1,475”</span></button></li><li><button aria-current="false"><span style="flex: 1">Page 1, tenant name</span></button></li></ol>
+<sc-if value="{{editing}}" hint-placeholder-val="{{ true }}"><button class="btn sm ghost" style="align-self: flex-start">Revert this paragraph</button></sc-if></div>
 </div></aside>
 </div>
 <footer style="height: 30px; flex: none; display: flex; align-items: center; gap: 12px; padding: 0 12px; border-top: 1px solid var(--line); background: var(--side)">
@@ -139,7 +142,7 @@ a{color:inherit}a:hover{color:var(--mut)}
 </footer>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "state": {"editor": "enum", "options": ["Font substituted", "Too long"], "default": "Font substituted"}, "$preview": {"width": 1280, "height": 800}}'>
+<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "state": {"editor": "enum", "options": ["Font substituted", "Too long", "Not editable"], "default": "Font substituted"}, "$preview": {"width": 1280, "height": 800}}'>
 class Component extends DCLogic {
 renderVals() {
 const win = (this.props.platform ?? 'macOS') === 'Windows';
@@ -159,7 +162,7 @@ reveal: win ? 'Show in File Explorer' : 'Show in Finder',
 docsDir: win ? 'C:\\Users\\Asha\\Documents' : '~/Documents'
 };
 const s = this.props.state ?? 'Font substituted';
-const extra = { subst: s === 'Font substituted', overflow: s === 'Too long', statusMsg: s === 'Too long' ? 'Paragraph 4.1 is too long for its space.' : 'Editing paragraph 4.1 on page 3.' };
+const extra = { subst: s === 'Font substituted', overflow: s === 'Too long', noEdit: s === 'Not editable', curEdit: String(s !== 'Not editable'), editing: s !== 'Not editable', statusMsg: { 'Too long': 'Paragraph 4.1 is too long for its space.', 'Not editable': 'The selected text is part of a picture and can\'t be edited.' }[s] ?? 'Editing paragraph 4.1 on page 3.' };
 return Object.assign(base, typeof extra === 'undefined' ? {} : extra);
 }
 }
