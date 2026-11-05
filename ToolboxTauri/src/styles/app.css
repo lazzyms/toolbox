@@ -355,6 +355,8 @@ body {
 }
 .workspace-field-error { margin: 0; color: var(--destructive); font-size: 12px; line-height: 1.5; display: flex; gap: 6px; align-items: flex-start; }
 .workspace-field-error svg { flex: none; width: 14px; height: 14px; margin-top: 2px; }
+.workspace-field-warning { margin: 0; color: var(--warning); font-size: 12px; line-height: 1.5; display: flex; gap: 6px; align-items: flex-start; }
+.workspace-field-warning svg { flex: none; width: 14px; height: 14px; margin-top: 2px; }
 .workspace-note.workspace-note-error { color: var(--destructive); }
 .workspace-password-field {
   display: grid;

@@ -579,7 +579,9 @@ test("Resize shows only its own options and sends the exact request for each pre
     await expect(panel(page)).toContainText("Names end in -resized. A taken name gets -1, -2.");
     await expect(panel(page)).toContainText("Links, comments and form fields move with the content. Text stays sharp.");
     const size = panel(page).getByLabel("Page size");
-    await expect(size.locator("option")).toHaveText(presets.map(({ label }) => label));
+    await expect(size.locator("option")).toHaveText([...presets.map(({ label }) => label), "Custom size"]);
+    await expect(panel(page).getByRole("radiogroup", { name: "Orientation" }).getByRole("radio")).toHaveText(["Match page", "Portrait", "Landscape"]);
+    await expect(panel(page).getByRole("textbox", { name: "Width", exact: true })).toHaveCount(0);
     await expect(size).toHaveValue("a4");
     await expect(panel(page).getByRole("radiogroup", { name: "Orientation" }).getByRole("radio", { name: "Match page" })).toBeChecked();
     await expect(panel(page).getByRole("radiogroup", { name: "Placement" }).getByRole("radio", { name: /^Scale to fit, centered/ })).toBeChecked();
@@ -667,4 +669,178 @@ test("a ranged resize reports a resized PDF, a Skipped PDF already at the size, 
     await expect(results.nth(2)).toContainText("The digital signature was removed, because changing the file breaks it.");
     await expect(results.nth(3)).toHaveAttribute("data-tone", "fail");
     await expect(results.nth(3)).toContainText("Unlock the PDF before editing");
+});
+
+const sizeField = (page: Page, name: "Width" | "Height") => panel(page).getByRole("textbox", { name, exact: true });
+const useCustomSize = (page: Page) => panel(page).getByLabel("Page size").selectOption({ label: "Custom size" });
+const orientationRadio = (page: Page, name: string) => panel(page).getByRole("radiogroup", { name: "Orientation" }).getByRole("radio", { name });
+const placementRadio = (page: Page, name: RegExp) => panel(page).getByRole("radiogroup", { name: "Placement" }).getByRole("radio", { name });
+
+test("a custom size is sent in points, converted once from mm, in or pt, with each orientation and placement", async ({ page }) => {
+    await openCrop(page);
+    const paths = ["/local/lease.pdf", "/local/scan.pdf"];
+    await addPdfs(page, paths);
+    await useResize(page);
+    await useCustomSize(page);
+    const customSize = panel(page).getByRole("region", { name: "Custom size" });
+    await expect(sizeField(page, "Width")).toHaveValue("200");
+    await expect(sizeField(page, "Height")).toHaveValue("250");
+    await expect(customSize.locator(".workspace-unit-input span")).toHaveText(["mm", "mm"]);
+    await expect(placementRadio(page, /^Actual size, centered/)).toBeVisible();
+    await expect(panel(page).getByRole("radiogroup", { name: "Placement" })).toContainText("Edges may be cut off");
+
+    const run = page.getByRole("button", { name: "Resize 2 PDFs", exact: true });
+    const sent = async (count: number) => {
+        await expect.poll(async () => (await resizeRequests(page)).length).toBe(count);
+        const { request } = (await resizeRequests(page))[count - 1] as { request: Record<string, unknown> };
+        await finish(page, paths.map((path) => outcome(path, { outputPaths: [path.replace(".pdf", "-resized.pdf")] })));
+        await expect(run).toBeEnabled();
+        return request;
+    };
+    const millimetres = { width: 200 * (72 / 25.4), height: 250 * (72 / 25.4) };
+    let count = 0;
+    for (const [orientationName, orientation] of [["Match page", "match"], ["Portrait", "portrait"], ["Landscape", "landscape"]] as const) {
+        for (const [placementName, placement] of [[/^Scale to fit, centered/, "fit"], [/^Actual size, centered/, "actualSize"]] as const) {
+            await orientationRadio(page, orientationName).click();
+            await placementRadio(page, placementName).click();
+            await expect(orientationRadio(page, orientationName)).toBeChecked();
+            await expect(placementRadio(page, placementName)).toBeChecked();
+            await run.click();
+            expect(await sent(++count)).toEqual({
+                paths,
+                size: { custom: millimetres },
+                orientation,
+                placement,
+                scope: "all",
+                outputLocation: "alongsideInput",
+            });
+        }
+    }
+
+    // Inches and points: the unit changes what the typed numbers mean, and they are converted once.
+    await customSize.getByLabel("Unit").selectOption("in");
+    await expect(customSize.locator(".workspace-unit-input span")).toHaveText(["in", "in"]);
+    await sizeField(page, "Width").fill("8.5");
+    await sizeField(page, "Height").fill("11");
+    await run.click();
+    const inches = await sent(++count);
+    expect(inches.size).toEqual({ custom: { width: 612, height: 792 } });
+    expect(inches).toMatchObject({ orientation: "landscape", placement: "actualSize" });
+
+    await customSize.getByLabel("Unit").selectOption("pt");
+    await sizeField(page, "Width").fill(" 300.5 ");
+    await sizeField(page, "Height").fill("400");
+    await run.click();
+    expect((await sent(++count)).size).toEqual({ custom: { width: 300.5, height: 400 } });
+    expect(await cropRequests(page)).toHaveLength(0);
+});
+
+test("a custom size outside 72 to 14,400 pt is named, linked to its fields, and keeps Run disabled until fixed", async ({ page }) => {
+    await openCrop(page);
+    await addPdfs(page, ["/local/lease.pdf"]);
+    await useResize(page);
+    await useCustomSize(page);
+    const run = page.getByRole("button", { name: "Resize 1 PDF", exact: true });
+    const alert = panel(page).locator("#size-err");
+    const reason = page.getByTestId("crop-run-reason");
+    await expect(alert).toHaveCount(0);
+    await expect(reason).toHaveCount(0);
+    await expect(run).toBeEnabled();
+
+    // The board's invalid state: 2 x 6000 mm.
+    await sizeField(page, "Width").fill("2");
+    await sizeField(page, "Height").fill("6000");
+    await expect(alert).toHaveAttribute("role", "alert");
+    await expect(alert).toHaveText("Width must be at least 25.4 mm (72 pt). Height can be at most 5,080 mm (14,400 pt).");
+    for (const name of ["Width", "Height"] as const) {
+        await expect(sizeField(page, name)).toHaveAttribute("aria-invalid", "true");
+        await expect(sizeField(page, name)).toHaveAttribute("aria-describedby", "size-err");
+    }
+    await expect(reason).toHaveText("Fix the page size to resize.");
+    await expect(reason).toHaveClass(/workspace-note-error/);
+    await expect(run).toBeDisabled();
+
+    // Only the field that is out of bounds is marked.
+    await sizeField(page, "Width").fill("200");
+    await expect(alert).toHaveText("Height can be at most 5,080 mm (14,400 pt).");
+    await expect(sizeField(page, "Width")).not.toHaveAttribute("aria-invalid", "true");
+    await expect(run).toBeDisabled();
+
+    for (const [unit, width, height, message] of [
+        ["mm", "25.39", "250", "Width must be at least 25.4 mm (72 pt)."],
+        ["mm", "", "250", "Width is empty."],
+        ["mm", "abc", "250", "Width must be a number."],
+        ["in", "0.99", "11", "Width must be at least 1 in (72 pt)."],
+        ["in", "8.5", "200.01", "Height can be at most 200 in (14,400 pt)."],
+        ["pt", "71.9", "792", "Width must be at least 72 pt."],
+        ["pt", "612", "14400.1", "Height can be at most 14,400 pt."],
+    ] as const) {
+        await panel(page).getByRole("region", { name: "Custom size" }).getByLabel("Unit").selectOption(unit);
+        await sizeField(page, "Width").fill(width);
+        await sizeField(page, "Height").fill(height);
+        await expect(alert, `${width} x ${height} ${unit}`).toHaveText(message);
+        await expect(run).toBeDisabled();
+    }
+
+    // A preset needs no custom size, so it runs again.
+    await panel(page).getByLabel("Page size").selectOption("letter");
+    await expect(alert).toHaveCount(0);
+    await expect(run).toBeEnabled();
+
+    // The bounds themselves are allowed and sent.
+    await useCustomSize(page);
+    await panel(page).getByRole("region", { name: "Custom size" }).getByLabel("Unit").selectOption("mm");
+    await sizeField(page, "Width").fill("25.4");
+    await sizeField(page, "Height").fill("5080");
+    await expect(alert).toHaveCount(0);
+    await expect(reason).toHaveCount(0);
+    await run.click();
+    await expect.poll(async () => (await resizeRequests(page)).length).toBe(1);
+    const [{ request }] = await resizeRequests(page) as Array<{ request: { size: unknown } }>;
+    expect(request.size).toEqual({ custom: { width: 25.4 * (72 / 25.4), height: 5080 * (72 / 25.4) } });
+});
+
+test("actual size warns how many pages in scope are larger than the new page, and Scale to fit never does", async ({ page }) => {
+    await withScenes(page, { "/local/letter.pdf": [LETTER, LETTER, A4], "/local/receipt.pdf": [SMALL] });
+    await openCrop(page);
+    await addPdfs(page, ["/local/letter.pdf", "/local/receipt.pdf"]);
+    await useResize(page);
+    const warning = page.getByTestId("resize-cut-off");
+    await expect(placementRadio(page, /^Scale to fit, centered/)).toBeChecked();
+    await expect(warning).toHaveCount(0);
+
+    // A4 at actual size cuts off the two Letter pages, which are wider than A4.
+    await placementRadio(page, /^Actual size, centered/).click();
+    await expect(warning).toHaveAttribute("role", "status");
+    await expect(warning).toHaveText("Cuts off content on 2 pages. Choose Scale to fit to keep everything.");
+    await expect(page.getByRole("button", { name: "Resize 2 PDFs", exact: true })).toBeEnabled();
+
+    // Landscape A4 is shorter than Letter and portrait A4 pages, so three pages are cut off.
+    await orientationRadio(page, "Landscape").click();
+    await expect(warning).toHaveText("Cuts off content on 3 pages. Choose Scale to fit to keep everything.");
+    await orientationRadio(page, "Portrait").click();
+    await expect(warning).toHaveText("Cuts off content on 2 pages. Choose Scale to fit to keep everything.");
+
+    // Only pages in the typed range count, clamped to each PDF.
+    await pagesField(page).fill("1");
+    await expect(warning).toHaveText("Cuts off content on 1 page. Choose Scale to fit to keep everything.");
+    await pagesField(page).fill("3-");
+    await expect(warning).toHaveCount(0);
+    await pagesField(page).fill("");
+
+    // A custom size larger than every page cuts nothing off; a smaller one cuts off every page.
+    await useCustomSize(page);
+    await sizeField(page, "Width").fill("300");
+    await sizeField(page, "Height").fill("400");
+    await expect(warning).toHaveCount(0);
+    await sizeField(page, "Height").fill("100");
+    await sizeField(page, "Width").fill("100");
+    await expect(warning).toHaveText("Cuts off content on 4 pages. Choose Scale to fit to keep everything.");
+    // An invalid size names the size, not the cut-off.
+    await sizeField(page, "Width").fill("2");
+    await expect(warning).toHaveCount(0);
+    await sizeField(page, "Width").fill("100");
+
+    await placementRadio(page, /^Scale to fit, centered/).click();
+    await expect(warning).toHaveCount(0);
 });

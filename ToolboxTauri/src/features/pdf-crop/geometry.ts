@@ -139,3 +139,43 @@ export const describePage = (page: PageSize, unit: Unit) => {
 
 /** A key that treats sizes within a point as the same and keeps orientation apart. */
 export const sizeKey = (page: PageSize) => `${Math.round(page.width)}x${Math.round(page.height)}`;
+
+/** The smallest and largest side a custom paper size may have, in points, shared with the native resize. */
+export const CUSTOM_BOUNDS: Readonly<{ min: number; max: number }> = paperSizes.customBoundsPoints;
+
+/** Slack for a typed length that lands a rounding error past a bound, such as 25.4 mm. */
+const BOUND_SLACK = 1e-6;
+
+const grouped = (value: number) => value.toLocaleString("en-US", { maximumFractionDigits: 2 });
+
+/** "25.4 mm (72 pt)", "1 in (72 pt)" or "72 pt": a bound in the unit being typed, and in points. */
+const describeBound = (points: number, unit: Unit) =>
+  unit === "pt" ? `${grouped(points)} pt` : `${grouped(points / pointsPerUnit[unit])} ${unit} (${grouped(points)} pt)`;
+
+/** A typed custom side in points, or why it can't be used. */
+export const readPaperSide = (label: string, text: string, unit: Unit): { points: number } | { error: string } => {
+  const trimmed = text.trim();
+  if (!trimmed) return { error: `${label} is empty.` };
+  const value = Number(trimmed);
+  if (!Number.isFinite(value)) return { error: `${label} must be a number.` };
+  const points = value * pointsPerUnit[unit];
+  if (points < CUSTOM_BOUNDS.min - BOUND_SLACK) return { error: `${label} must be at least ${describeBound(CUSTOM_BOUNDS.min, unit)}.` };
+  if (points > CUSTOM_BOUNDS.max + BOUND_SLACK) return { error: `${label} can be at most ${describeBound(CUSTOM_BOUNDS.max, unit)}.` };
+  return { points };
+};
+
+export type Orientation = "match" | "portrait" | "landscape";
+
+/** The paper as a page gets it: turned to match the page as displayed, or forced portrait or landscape. */
+export const orientedPaper = (paper: PageSize, page: PageSize, orientation: Orientation): PageSize => {
+  const [short, long] = [Math.min(paper.width, paper.height), Math.max(paper.width, paper.height)];
+  if (orientation === "portrait") return { width: short, height: long };
+  if (orientation === "landscape") return { width: long, height: short };
+  return (page.width > page.height) !== (paper.width > paper.height) ? { width: paper.height, height: paper.width } : paper;
+};
+
+/** Whether placing a page at actual size on the paper cuts off some of it: the page is larger on either side. */
+export const cutsOff = (page: PageSize, paper: PageSize, orientation: Orientation) => {
+  const target = orientedPaper(paper, page, orientation);
+  return page.width - target.width > PAPER_TOLERANCE || page.height - target.height > PAPER_TOLERANCE;
+};
