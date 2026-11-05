@@ -388,7 +388,18 @@ pub enum WarningKind {
     FontSubstituted { requested_family: String, actual_family: String },
     RenamedToAvoidReplacing { chosen_name: String, final_name: String },
     PrecisionReduced,
+    ImageUnsupported { page: u32, image: u32, feature: String },
+    ImageDamaged { page: u32, image: u32 },
+    ImageTooLarge { page: u32, image: u32, width: u64, height: u64 },
+    JpegColourKept { colour: JpegColour, pages: Vec<u32>, images: u32 },
+    /// Pages that had no selectable text while the rest of the file did. OCR can read them.
+    PagesWithoutText { pages: Vec<u32> },
 }
+
+/// Why a JPEG copied byte for byte may show the wrong colours in some viewers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum JpegColour { Cmyk, Inverted }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OutcomeWarning {
@@ -632,9 +643,14 @@ mod tests {
             WarningKind::FontSubstituted { requested_family: "A".into(), actual_family: "B".into() },
             WarningKind::RenamedToAvoidReplacing { chosen_name: "a".into(), final_name: "b".into() },
             WarningKind::PrecisionReduced,
+            WarningKind::ImageUnsupported { page: 1, image: 1, feature: "JBIG2".into() },
+            WarningKind::ImageDamaged { page: 1, image: 1 },
+            WarningKind::ImageTooLarge { page: 1, image: 1, width: 2, height: 2 },
+            WarningKind::JpegColourKept { colour: JpegColour::Cmyk, pages: vec![1], images: 1 },
+            WarningKind::PagesWithoutText { pages: vec![1] },
         ];
         let codes = warnings.into_iter().map(|kind| serde_json::to_value(kind).unwrap()["code"].clone()).collect::<Vec<_>>();
-        assert_eq!(codes, ["signatureRemoved", "fontSubstituted", "renamedToAvoidReplacing", "precisionReduced"]);
+        assert_eq!(codes, ["signatureRemoved", "fontSubstituted", "renamedToAvoidReplacing", "precisionReduced", "imageUnsupported", "imageDamaged", "imageTooLarge", "jpegColourKept", "pagesWithoutText"]);
     }
 
     #[test]
@@ -667,6 +683,22 @@ mod tests {
                 vec![PathBuf::from("drawings-page-1.png")],
                 ToolError::limit_exceeded(LimitKind::Time, "Took longer than 5 minutes and was stopped. 1 part was saved before it stopped."),
             ),
+            JobOutcome::succeeded(PathBuf::from("atlas.pdf"), vec![PathBuf::from("atlas-images")], "Saved 9 images · 3 couldn't be saved.")
+                .with_warning(OutcomeWarning {
+                    kind: WarningKind::ImageUnsupported { page: 7, image: 2, feature: "JBIG2".into() },
+                    message: "Page 7, image 2 — JBIG2 isn't supported in this version. Not saved.".into(),
+                })
+                .with_warning(OutcomeWarning { kind: WarningKind::ImageDamaged { page: 19, image: 1 }, message: "Page 19, image 1 — The image data is damaged. Not saved.".into() })
+                .with_warning(OutcomeWarning {
+                    kind: WarningKind::ImageTooLarge { page: 41, image: 1, width: 61000, height: 48000 },
+                    message: "Page 41, image 1 — Would be 61,000 × 48,000 px when decoded, over the size limit. Not saved.".into(),
+                })
+                .with_warning(OutcomeWarning {
+                    kind: WarningKind::JpegColourKept { colour: JpegColour::Cmyk, pages: vec![2, 5, 9], images: 6 },
+                    message: "Pages 2, 5, 9 — 6 JPEGs use CMYK colour and were copied as they are. Some viewers show them with the wrong colours.".into(),
+                }),
+            JobOutcome::succeeded(PathBuf::from("scan-archive.pdf"), vec![PathBuf::from("scan-archive-text.txt")], "PDF text extracted in reading order")
+                .with_warning(OutcomeWarning { kind: WarningKind::PagesWithoutText { pages: vec![30, 31, 32, 33] }, message: "Pages 30-33 have no selectable text. OCR can read them.".into() }),
         ];
 
         assert_eq!(serde_json::to_value(&samples).unwrap(), shared);
@@ -780,7 +812,7 @@ mod tests {
 
     #[test]
     fn page_capability_rejects_an_explicit_empty_selection() {
-        let outcomes = validate_page_selection("pdf_to_text", &[PathBuf::from("source.pdf")], Some(&[])).unwrap_err();
+        let outcomes = validate_page_selection("pdf_to_images", &[PathBuf::from("source.pdf")], Some(&[])).unwrap_err();
 
         assert_eq!(outcomes.len(), 1);
         assert!(outcomes[0].error().is_some_and(|error| error.message.contains("at least one page")));
@@ -842,8 +874,10 @@ mod tests {
         assert!(!images.accepted_extensions.contains(&".tif".to_string()));
         assert!(!images.accepted_extensions.contains(&".tiff".to_string()));
         assert!(!native_capability("extract_gif_frames").unwrap().supports_preview);
-        let pdf = native_capability("pdf_to_text").unwrap();
-        assert!(pdf.supports_page_selection && !pdf.supports_preview);
+        let extract = native_capability("extract_from_pdf").unwrap();
+        assert!(extract.supports_page_selection && !extract.supports_preview);
+        assert_eq!(extract.input_cardinality, InputCardinality::Multiple);
+        assert!(native_capability("pdf_to_text").is_none() && native_capability("extract_pdf_images").is_none());
         assert!(!native_capability("ocr_pdf").unwrap().native_available);
         assert!(!native_capability("blur_faces").unwrap().native_available);
         assert!(!native_capability("remove_image_background").unwrap().native_available);

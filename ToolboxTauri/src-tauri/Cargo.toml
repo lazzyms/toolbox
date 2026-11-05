@@ -44,6 +44,8 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 fontdue = "0.9.4"
 rustybuzz = "0.20.1"
 lopdf = "0.44"
+hayro-ccitt = "0.5"
+hayro-jbig2 = { version = "0.4.0", default-features = false, features = ["std"] }
 rayon = "1"
 heif-rs = "26.7"
 webpx = "0.4"
@@ -51,6 +53,9 @@ sha2 = "0.11"
 tiff = "0.11"
 tract-onnx = { version = "0.23.7", optional = true }
 notify-rust = "4"
+
+[dev-dependencies]
+fax = "0.2.7"
 
 [profile.release]
 codegen-units = 1

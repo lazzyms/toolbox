@@ -71,5 +71,50 @@
     },
     "reason": null,
     "warnings": []
+  },
+  {
+    "inputPath": "atlas.pdf",
+    "state": "succeeded",
+    "outputPaths": ["atlas-images"],
+    "detail": "Saved 9 images · 3 couldn't be saved.",
+    "failure": null,
+    "reason": null,
+    "warnings": [
+      {
+        "code": "imageUnsupported",
+        "details": { "page": 7, "image": 2, "feature": "JBIG2" },
+        "message": "Page 7, image 2 — JBIG2 isn't supported in this version. Not saved."
+      },
+      {
+        "code": "imageDamaged",
+        "details": { "page": 19, "image": 1 },
+        "message": "Page 19, image 1 — The image data is damaged. Not saved."
+      },
+      {
+        "code": "imageTooLarge",
+        "details": { "page": 41, "image": 1, "width": 61000, "height": 48000 },
+        "message": "Page 41, image 1 — Would be 61,000 × 48,000 px when decoded, over the size limit. Not saved."
+      },
+      {
+        "code": "jpegColourKept",
+        "details": { "colour": "cmyk", "pages": [2, 5, 9], "images": 6 },
+        "message": "Pages 2, 5, 9 — 6 JPEGs use CMYK colour and were copied as they are. Some viewers show them with the wrong colours."
+      }
+    ]
+  },
+  {
+    "inputPath": "scan-archive.pdf",
+    "state": "succeeded",
+    "outputPaths": ["scan-archive-text.txt"],
+    "detail": "PDF text extracted in reading order",
+    "failure": null,
+    "reason": null,
+    "warnings": [
+      {
+        "code": "pagesWithoutText",
+        "details": { "pages": [30, 31, 32, 33] },
+        "message": "Pages 30-33 have no selectable text. OCR can read them."
+      }
+    ]
   }
 ]

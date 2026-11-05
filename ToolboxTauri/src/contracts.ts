@@ -11,9 +11,8 @@ export type AtomicToolId =
   | "pdf-edit"
   | "images-to-pdf"
   | "pdf-to-images"
-  | "pdf-to-text"
+  | "pdf-extract"
   | "pdf-split"
-  | "pdf-image-extract"
   | "pdf-sign"
   | "pdf-ocr"
   | "pdf-remove-pages"
@@ -94,8 +93,7 @@ export type ToolCommand =
   | "merge_pdfs"
   | "split_pdf"
   | "pdf_to_images"
-  | "pdf_to_text"
-  | "extract_pdf_images"
+  | "extract_from_pdf"
   | "images_to_pdf"
   | "ocr_pdf"
   | "blur_faces"
@@ -147,7 +145,15 @@ export type OutcomeWarning =
   | { code: "signatureRemoved"; message: string }
   | { code: "fontSubstituted"; message: string; details: { requestedFamily: string; actualFamily: string } }
   | { code: "renamedToAvoidReplacing"; message: string; details: { chosenName: string; finalName: string } }
-  | { code: "precisionReduced"; message: string };
+  | { code: "precisionReduced"; message: string }
+  | { code: "imageUnsupported"; message: string; details: { page: number; image: number; feature: string } }
+  | { code: "imageDamaged"; message: string; details: { page: number; image: number } }
+  | { code: "imageTooLarge"; message: string; details: { page: number; image: number; width: number; height: number } }
+  | { code: "jpegColourKept"; message: string; details: { colour: JpegColour; pages: number[]; images: number } }
+  | { code: "pagesWithoutText"; message: string; details: { pages: number[] } };
+
+export const jpegColours = ["cmyk", "inverted"] as const;
+export type JpegColour = (typeof jpegColours)[number];
 
 export type WarningCode = OutcomeWarning["code"];
 
@@ -227,8 +233,7 @@ export interface ToolDefinition {
     | "pdf-merge"
     | "pdf-split"
     | "pdf-to-images"
-    | "pdf-to-text"
-    | "pdf-image-extract"
+    | "pdf-extract"
     | "images-to-pdf"
     | "pdf-ocr"
     | "image-blur-faces"
