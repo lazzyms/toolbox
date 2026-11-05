@@ -1,6 +1,6 @@
 //! Compress Files for images. Every image keeps its format and is saved through
 //! `save_smaller_copy`, which Skips a copy that would not be smaller and verifies the written copy
-//! before publishing it. PNG lives in `png`.
+//! before publishing it. PNG lives in `png` and WebP in `webp`.
 //!
 //! JPEG: re-encode at the strength's quality, keep the JPEG format, and carry
 //! the source's metadata segments over byte for byte. The ICC colour profile always stays; EXIF,
@@ -19,6 +19,7 @@ use crate::kit::compress::NO_SAVINGS;
 use crate::kit::contracts::{SkipCode, SkipReason, ToolError};
 
 pub mod png;
+pub mod webp;
 
 const SOI: [u8; 2] = [0xFF, 0xD8];
 const APP0: u8 = 0xE0;

@@ -3197,6 +3197,237 @@ mod command_tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    fn webp_chunk(name: &[u8; 4], data: &[u8]) -> Vec<u8> {
+        let padding: &[u8] = if data.len() % 2 == 1 { &[0] } else { &[] };
+        [name.as_slice(), &(data.len() as u32).to_le_bytes(), data, padding].concat()
+    }
+
+    fn riff_webp(chunks: &[Vec<u8>]) -> Vec<u8> {
+        let body = [b"WEBP".to_vec(), chunks.concat()].concat();
+        [b"RIFF".as_slice(), &(body.len() as u32).to_le_bytes(), &body].concat()
+    }
+
+    /// The chunks of a WebP after the RIFF header, as (name, data) pairs.
+    fn webp_chunks(bytes: &[u8]) -> Vec<([u8; 4], Vec<u8>)> {
+        assert_eq!((&bytes[..4], &bytes[8..12]), (b"RIFF".as_slice(), b"WEBP".as_slice()), "not a WebP");
+        let mut chunks = Vec::new();
+        let mut position = 12;
+        while position + 8 <= bytes.len() {
+            let size = u32::from_le_bytes(bytes[position + 4..position + 8].try_into().unwrap()) as usize;
+            chunks.push((bytes[position..position + 4].try_into().unwrap(), bytes[position + 8..position + 8 + size].to_vec()));
+            position += 8 + size + (size & 1);
+        }
+        chunks
+    }
+
+    fn xmp_packet() -> Vec<u8> { b"<x:xmpmeta xmlns:x='adobe:ns:meta/'><rdf:RDF/></x:xmpmeta>".to_vec() }
+
+    /// Writes `image` as a WebP, lossless at libwebp's fastest level or lossy at `quality`, with the
+    /// ICC profile, an EXIF block and an XMP packet when `metadata` is on.
+    fn write_webp(path: &PathBuf, image: &image::RgbaImage, lossless: bool, quality: u8, metadata: bool) -> Vec<u8> {
+        let config = if lossless { webpx::EncoderConfig::new_lossless_level(0).exact(true) } else { webpx::EncoderConfig::new().quality(f32::from(quality)) };
+        let mut bytes = config.encode_rgba(image.as_raw(), image.width(), image.height(), webpx::Unstoppable).unwrap();
+        if metadata {
+            let image_chunks = webp_chunks(&bytes).into_iter().filter(|(name, _)| name != b"VP8X").map(|(name, data)| webp_chunk(&name, &data)).collect::<Vec<_>>();
+            let (width, height) = ((image.width() - 1).to_le_bytes(), (image.height() - 1).to_le_bytes());
+            let header = [0x20 | 0x10 | 0x08 | 0x04, 0, 0, 0, width[0], width[1], width[2], height[0], height[1], height[2]];
+            bytes = riff_webp(&[vec![webp_chunk(b"VP8X", &header), webp_chunk(b"ICCP", &icc_profile())], image_chunks, vec![webp_chunk(b"EXIF", &exif_block(1)), webp_chunk(b"XMP ", &xmp_packet())]].concat());
+        }
+        std::fs::write(path, &bytes).unwrap();
+        bytes
+    }
+
+    struct WebpFacts { lossless: bool, icc: Option<Vec<u8>>, exif: Option<Vec<u8>>, xmp: Option<Vec<u8>>, pixels: Vec<u8> }
+
+    impl WebpFacts {
+        fn alpha(&self) -> Vec<u8> { self.pixels.chunks_exact(4).map(|pixel| pixel[3]).collect() }
+    }
+
+    fn webp_facts(path: &PathBuf) -> WebpFacts {
+        let bytes = std::fs::read(path).unwrap();
+        assert_eq!(image::guess_format(&bytes).unwrap(), image::ImageFormat::WebP, "{} is not a WebP", path.display());
+        let chunks = webp_chunks(&bytes);
+        let find = |wanted: &[u8; 4]| chunks.iter().find(|(name, _)| name == wanted).map(|(_, data)| data.clone());
+        assert!(find(b"ANIM").is_none() && find(b"ANMF").is_none(), "{} is animated", path.display());
+        let lossless = match (find(b"VP8L"), find(b"VP8 ")) {
+            (Some(_), None) => true,
+            (None, Some(_)) => false,
+            other => panic!("{} has no single image chunk: {:?}", path.display(), (other.0.is_some(), other.1.is_some())),
+        };
+        let (pixels, _, _) = webpx::decode_rgba(&bytes).unwrap();
+        WebpFacts { lossless, icc: find(b"ICCP"), exif: find(b"EXIF"), xmp: find(b"XMP "), pixels }
+    }
+
+    #[test]
+    fn compress_files_keeps_a_lossless_webp_lossless_at_low_and_medium_and_makes_it_lossy_with_alpha_at_high() {
+        use crate::kit::images::compress::webp::WebpMethod;
+        assert_eq!([CompressLevel::Low, CompressLevel::Medium, CompressLevel::High].map(CompressLevel::webp_method), [
+            WebpMethod { lossless_levels: &[6], quality: 85 },
+            WebpMethod { lossless_levels: &[6, 9], quality: 75 },
+            WebpMethod { lossless_levels: &[], quality: 50 },
+        ]);
+        let root = sandbox("compress-files-webp-lossless");
+        let picture = root.join("hero-banner.webp");
+        let source = write_webp(&picture, &photo_rgba(256, 192, 41).to_rgba8(), true, 0, false);
+        let original = webp_facts(&picture);
+        assert!(original.lossless && original.alpha().iter().any(|alpha| *alpha == 0) && original.alpha().iter().any(|alpha| *alpha > 0 && *alpha < 255));
+
+        let mut sizes = Vec::new();
+        for level in [CompressLevel::Low, CompressLevel::Medium, CompressLevel::High] {
+            let name = format!("{level:?}");
+            let outcomes = compress_jpegs(&[picture.clone()], level, false, location(&root, &name));
+            let [outcome] = outcomes.as_slice() else { panic!("one outcome per input") };
+            assert!(outcome.error().is_none(), "{name}: {:?}", outcome.error());
+            let output = &outcome.output_paths()[0];
+            assert_eq!(output, &root.join(&name).join("hero-banner-compressed.webp"), "{name} keeps the WebP extension");
+            let written = std::fs::metadata(output).unwrap().len();
+            assert_eq!((outcome.original_bytes, outcome.output_bytes), (Some(source.len() as u64), Some(written)));
+            assert!(written < source.len() as u64, "{name} is smaller");
+            let facts = webp_facts(output);
+            if level == CompressLevel::High {
+                assert!(!facts.lossless, "High makes a lossless WebP lossy");
+                assert_eq!(outcome.detail, "Lossy at quality 50. EXIF and colour profile kept.");
+                assert_eq!(facts.alpha(), original.alpha(), "High keeps the alpha channel");
+                let difference = original.pixels.iter().zip(&facts.pixels).map(|(a, b)| u64::from(a.abs_diff(*b))).sum::<u64>() as f64 / original.pixels.len() as f64;
+                assert!(difference < 20.0, "the lossy copy stays close to the source, mean difference {difference}");
+            } else {
+                assert!(facts.lossless, "{name} stays lossless");
+                assert!(facts.pixels == original.pixels, "{name} keeps every pixel, alpha included");
+                assert_eq!(outcome.detail, "Lossless, pixels unchanged. EXIF and colour profile kept.");
+            }
+            sizes.push(written);
+        }
+        assert!(sizes[1] <= sizes[0] && sizes[2] < sizes[1], "each stronger level is no larger, got {sizes:?}");
+        assert_eq!(std::fs::read(&picture).unwrap(), source, "the original is untouched");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn compress_files_reencodes_a_lossy_webp_at_each_level_quality_keeping_alpha_and_never_growing_with_strength() {
+        let root = sandbox("compress-files-webp-lossy");
+        let photo = root.join("photo.webp");
+        let photo_source = write_webp(&photo, &image::DynamicImage::ImageRgb8(photo_rgb(320, 240, 43)).to_rgba8(), false, 95, false);
+        let sticker = root.join("sticker.webp");
+        let sticker_source = write_webp(&sticker, &photo_rgba(256, 192, 47).to_rgba8(), false, 95, false);
+        let sticker_original = webp_facts(&sticker);
+        assert!(!webp_facts(&photo).lossless && !sticker_original.lossless, "the fixtures are lossy");
+
+        let mut sizes = Vec::new();
+        for (level, quality) in [(CompressLevel::Low, 85), (CompressLevel::Medium, 75), (CompressLevel::High, 50)] {
+            let outcomes = compress_jpegs(&[photo.clone(), sticker.clone()], level, false, location(&root, &format!("{level:?}")));
+            let mut written = Vec::new();
+            for (outcome, source) in outcomes.iter().zip([&photo_source, &sticker_source]) {
+                assert!(outcome.error().is_none(), "{level:?} {}: {:?}", outcome.input_path.display(), outcome.error());
+                assert_eq!(outcome.detail, format!("Lossy at quality {quality}. EXIF and colour profile kept."));
+                let output = &outcome.output_paths()[0];
+                assert!(!webp_facts(output).lossless, "{level:?} keeps a lossy WebP lossy");
+                let size = std::fs::metadata(output).unwrap().len();
+                assert!(size < source.len() as u64, "{level:?} {} is smaller", outcome.input_path.display());
+                written.push(size);
+            }
+            let sticker_copy = webp_facts(&outcomes[1].output_paths()[0]);
+            assert_eq!(sticker_copy.alpha(), sticker_original.alpha(), "{level:?} keeps the alpha channel");
+            sizes.push(written);
+        }
+        for file in 0..2 {
+            assert!(sizes[2][file] <= sizes[1][file] && sizes[1][file] <= sizes[0][file], "High ≤ Medium ≤ Low, got {sizes:?}");
+        }
+        assert_eq!((std::fs::read(&photo).unwrap(), std::fs::read(&sticker).unwrap()), (photo_source, sticker_source), "the originals are untouched");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn compress_files_keeps_webp_icc_and_strip_exif_removes_exif_and_xmp_at_every_level() {
+        let root = sandbox("compress-files-webp-metadata");
+        let lossless = root.join("logo.webp");
+        let lossless_source = write_webp(&lossless, &photo_rgba(200, 150, 53).to_rgba8(), true, 0, true);
+        let lossy = root.join("banner.webp");
+        let lossy_source = write_webp(&lossy, &photo_rgba(200, 150, 59).to_rgba8(), false, 95, true);
+        for path in [&lossless, &lossy] {
+            let original = webp_facts(path);
+            assert_eq!((original.icc, original.exif, original.xmp), (Some(icc_profile()), Some(exif_block(1)), Some(xmp_packet())));
+        }
+
+        for level in [CompressLevel::Low, CompressLevel::Medium, CompressLevel::High] {
+            for strip_exif in [false, true] {
+                let name = format!("{level:?}-strip-{strip_exif}");
+                let outcomes = compress_jpegs(&[lossless.clone(), lossy.clone()], level, strip_exif, location(&root, &name));
+                for outcome in &outcomes {
+                    assert!(outcome.error().is_none(), "{name} {}: {:?}", outcome.input_path.display(), outcome.error());
+                    let facts = webp_facts(&outcome.output_paths()[0]);
+                    assert_eq!(facts.icc, Some(icc_profile()), "{name} keeps the colour profile");
+                    if strip_exif {
+                        assert_eq!((facts.exif, facts.xmp), (None, None), "{name} removes EXIF and XMP");
+                        assert!(outcome.detail.ends_with("EXIF removed, colour profile kept."), "{}", outcome.detail);
+                    } else {
+                        assert_eq!((facts.exif, facts.xmp), (Some(exif_block(1)), Some(xmp_packet())), "{name} keeps EXIF and XMP");
+                        assert!(outcome.detail.ends_with("EXIF and colour profile kept."), "{}", outcome.detail);
+                    }
+                }
+            }
+        }
+        assert_eq!((std::fs::read(&lossless).unwrap(), std::fs::read(&lossy).unwrap()), (lossless_source, lossy_source));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn compress_files_fails_an_animated_or_damaged_webp_alone_and_skips_one_that_would_not_shrink() {
+        use crate::kit::images::compress::webp::{ANIMATED, DAMAGED};
+        let root = sandbox("compress-files-webp-refused");
+        let good = root.join("good.webp");
+        let whole = write_webp(&good, &photo_rgba(160, 120, 61).to_rgba8(), true, 0, false);
+        let frame = webp_chunks(&whole).into_iter().map(|(name, data)| webp_chunk(&name, &data)).collect::<Vec<_>>().concat();
+        let frame_header = [0, 0, 0, 0, 0, 0, 159, 0, 0, 119, 0, 0, 100, 0, 0, 0];
+        let animation_frame = webp_chunk(b"ANMF", &[frame_header.as_slice(), &frame].concat());
+        let animated = root.join("loading-spinner.webp");
+        std::fs::write(&animated, riff_webp(&[webp_chunk(b"VP8X", &[0x02 | 0x10, 0, 0, 0, 159, 0, 0, 119, 0, 0]), webp_chunk(b"ANIM", &[0, 0, 0, 0, 0, 0]), animation_frame.clone(), animation_frame])).unwrap();
+        let truncated = root.join("truncated.webp");
+        std::fs::write(&truncated, &whole[..whole.len() / 2]).unwrap();
+        let tight = root.join("tight.webp");
+        let first = compress_jpegs(&[good.clone()], CompressLevel::Medium, false, location(&root, "tight"));
+        std::fs::copy(&first[0].output_paths()[0], &tight).unwrap();
+        let inputs = vec![good.clone(), animated.clone(), truncated.clone(), tight.clone()];
+        let before = inputs.iter().map(|input| std::fs::read(input).unwrap()).collect::<Vec<_>>();
+
+        let outcomes = compress_jpegs(&inputs, CompressLevel::Low, false, location(&root, "out"));
+
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), inputs, "one outcome per file, in input order");
+        assert!(outcomes[0].error().is_none(), "{:?}", outcomes[0].error());
+        let refused = outcomes[1].error().expect("the animated WebP fails");
+        assert_eq!((refused.kind.clone(), refused.message.as_str()), (ErrorKind::InvalidInput, ANIMATED));
+        let damaged = outcomes[2].error().expect("the truncated WebP fails");
+        assert_eq!((damaged.kind.clone(), damaged.message.as_str()), (ErrorKind::Processing, DAMAGED));
+        let OutcomeState::Skipped { reason } = &outcomes[3].state else { panic!("expected a skip, got {:?}", outcomes[3].state) };
+        assert_eq!(reason.code, crate::kit::contracts::SkipCode::NoSavings);
+        assert_eq!(outcomes[3].original_bytes, Some(before[3].len() as u64));
+        assert!(outcomes[3].output_bytes.is_some_and(|size| size >= before[3].len() as u64), "a skip reports the size the copy would have had");
+        let written = std::fs::read_dir(root.join("out")).unwrap().map(|entry| entry.unwrap().file_name().into_string().unwrap()).collect::<Vec<_>>();
+        assert_eq!(written, ["good-compressed.webp"], "no output for the animated, damaged or skipped files");
+        assert_eq!(inputs.iter().map(|input| std::fs::read(input).unwrap()).collect::<Vec<_>>(), before, "the originals are untouched");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn compress_files_writes_byte_identical_webps_on_a_repeat_run() {
+        let root = sandbox("compress-files-webp-repeat");
+        let lossless = root.join("diagram.webp");
+        write_webp(&lossless, &photo_rgba(240, 180, 67).to_rgba8(), true, 0, true);
+        let lossy = root.join("photo.webp");
+        write_webp(&lossy, &photo_rgba(240, 180, 71).to_rgba8(), false, 95, true);
+        let inputs = vec![lossless, lossy];
+
+        for level in [CompressLevel::Low, CompressLevel::Medium, CompressLevel::High] {
+            for strip_exif in [false, true] {
+                let runs = ["first", "second"].map(|run| compress_jpegs(&inputs, level, strip_exif, location(&root, &format!("{level:?}-{strip_exif}-{run}"))));
+                for (first, second) in runs[0].iter().zip(&runs[1]) {
+                    assert!(first.error().is_none(), "{level:?} {}: {:?}", first.input_path.display(), first.error());
+                    assert!(std::fs::read(&first.output_paths()[0]).unwrap() == std::fs::read(&second.output_paths()[0]).unwrap(), "{level:?} {} differs between runs", first.input_path.display());
+                }
+            }
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn metadata_command_keeps_batch_failures_isolated() {
         let valid = temp_path("cmd_mixed_valid.png");
