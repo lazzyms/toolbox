@@ -987,8 +987,8 @@ mod tests {
         let ocr = native_capability("ocr_pdf").unwrap();
         assert!(ocr.native_available);
         assert_eq!((ocr.input_cardinality, ocr.output_suffix.as_str()), (InputCardinality::Multiple, "-ocr"));
-        assert_eq!(ocr.accepted_extensions, [".pdf", ".png", ".jpg", ".jpeg", ".webp", ".heic"]);
-        assert!(validate_command_inputs("ocr_pdf", &[PathBuf::from("scan.pdf"), PathBuf::from("photo.HEIC"), PathBuf::from("page.webp")]).is_ok());
+        assert_eq!(ocr.accepted_extensions, [".pdf", ".png", ".jpg", ".jpeg", ".webp", ".heic", ".tif", ".tiff"]);
+        assert!(validate_command_inputs("ocr_pdf", &[PathBuf::from("scan.pdf"), PathBuf::from("photo.HEIC"), PathBuf::from("page.webp"), PathBuf::from("fax.TIF"), PathBuf::from("flatbed-scan.tiff")]).is_ok());
         let rejected = validate_command_inputs("ocr_pdf", &[PathBuf::from("scan.pdf"), PathBuf::from("loading-spinner.gif")]).unwrap_err();
         assert!(rejected[1].error().is_some_and(|error| error.message.contains("Accepted extensions")));
         assert!(!native_capability("blur_faces").unwrap().native_available);
