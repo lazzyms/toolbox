@@ -1,0 +1,8 @@
+{
+  "paths": ["/scans/contract.pdf"],
+  "pageRange": "1-3, 5, 8-",
+  "mode": "text",
+  "force": false,
+  "languages": ["eng"],
+  "outputLocation": "alongsideInput"
+}
