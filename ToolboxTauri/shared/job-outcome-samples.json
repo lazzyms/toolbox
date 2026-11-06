@@ -27,7 +27,9 @@
       "pointer": { "kind": "tool", "toolId": "heic-convert" }
     },
     "warnings": [
-      { "code": "precisionReduced", "message": "The 16-bit source would be reduced to 8-bit." }
+      { "code": "precisionReduced", "message": "The 16-bit source would be reduced to 8-bit." },
+      { "code": "omittedContent", "message": "Omitted content: 1 chart has no stored image, so it was left out." },
+      { "code": "approximateLayout", "message": "Approximate layout: 1 floating object on page 2 was placed as close as possible." }
     ]
   },
   {
@@ -106,6 +108,24 @@
       { "label": "Recognized", "value": "Pages 1 and 3" },
       { "label": "Skipped, visible text", "value": "Page 2" },
       { "label": "Languages", "value": "English" }
+    ]
+  },
+  {
+    "inputPath": "notes.txt",
+    "state": "succeeded",
+    "outputPaths": ["notes.pdf"],
+    "detail": "1 page. Read as Windows-1252.",
+    "failure": null,
+    "reason": null,
+    "warnings": [],
+    "fonts": [
+      {
+        "requestedFamily": "Courier New",
+        "requestedStyle": "regular",
+        "fontUsed": "Liberation Mono",
+        "styleUsed": "regular",
+        "source": "bundled fallback"
+      }
     ]
   }
 ]

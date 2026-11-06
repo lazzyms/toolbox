@@ -234,6 +234,7 @@ export const ConversionPanel = ({
           pageRange={pageRange}
           choosePageRange={choosePageRange}
           pageRangeFromPicks={pageRangeFromPicks}
+          loading={loading}
         />
       )}
       {destination}

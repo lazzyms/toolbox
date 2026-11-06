@@ -12,6 +12,7 @@ export type AtomicToolId =
   | "images-to-pdf"
   | "pdf-to-images"
   | "pdf-to-text"
+  | "convert-to-pdf"
   | "pdf-split"
   | "pdf-image-extract"
   | "pdf-sign"
@@ -105,6 +106,7 @@ export type ToolCommand =
   | "pdf_to_text"
   | "extract_pdf_images"
   | "images_to_pdf"
+  | "convert_to_pdf"
   | "ocr_pdf"
   | "blur_faces"
   | "remove_image_background"
@@ -159,7 +161,9 @@ export type OutcomeWarning =
   | { code: "signatureRemoved"; message: string }
   | { code: "fontSubstituted"; message: string; details: { requestedFamily: string; actualFamily: string } }
   | { code: "renamedToAvoidReplacing"; message: string; details: { chosenName: string; finalName: string } }
-  | { code: "precisionReduced"; message: string };
+  | { code: "precisionReduced"; message: string }
+  | { code: "omittedContent"; message: string }
+  | { code: "approximateLayout"; message: string };
 
 export type WarningCode = OutcomeWarning["code"];
 
@@ -169,6 +173,18 @@ export interface OutcomeDetail {
   value: string;
 }
 
+export type FontStyle = "regular" | "bold" | "italic" | "boldItalic";
+
+export type FontSource = "embedded" | "system" | "bundled fallback" | "bundled default";
+
+export interface FontUse {
+  requestedFamily: string;
+  requestedStyle: FontStyle;
+  fontUsed: string;
+  styleUsed: FontStyle;
+  source: FontSource;
+}
+
 interface JobOutcomeBase {
   inputPath: string;
   detail: string;
@@ -176,6 +192,7 @@ interface JobOutcomeBase {
   originalBytes?: number;
   outputBytes?: number;
   pageDetails?: OutcomeDetail[];
+  fonts?: FontUse[];
 }
 
 export interface SucceededJobOutcome extends JobOutcomeBase {
@@ -238,6 +255,7 @@ export interface ToolDefinition {
   title: string;
   shortTitle: string;
   resultVerb: string;
+  resultNoun?: string;
   runningVerb: string;
   runningDetail?: string;
   /** The live run counts pages instead of files, as long scans take a while (OCR board). */
@@ -274,6 +292,7 @@ export interface ToolDefinition {
     | "pdf-to-text"
     | "pdf-image-extract"
     | "images-to-pdf"
+    | "convert-to-pdf"
     | "pdf-ocr"
     | "image-blur-faces"
     | "image-remove-bg"

@@ -1,6 +1,9 @@
 import type {
   AtomicToolId,
   ErrorKind,
+  FontSource,
+  FontStyle,
+  FontUse,
   JobOutcome,
   LimitKind,
   OutcomeDetail,
@@ -18,6 +21,10 @@ import { UtilityRegistry } from "./registry";
 const errorKinds: readonly ErrorKind[] = ["invalidInput", "unavailable", "limitExceeded", "processing", "wrongPassword", "cancelled"];
 
 const packNeeds: readonly PackNeed[] = ["notInstalled", "damaged", "incompatible"];
+
+const fontStyles: readonly FontStyle[] = ["regular", "bold", "italic", "boldItalic"];
+
+const fontSources: readonly FontSource[] = ["embedded", "system", "bundled fallback", "bundled default"];
 
 const limitKinds: readonly LimitKind[] = ["fileSize", "pageCount", "time", "decompression"];
 
@@ -39,6 +46,8 @@ const warningDetailKeys: Record<WarningCode, readonly string[] | null> = {
   fontSubstituted: ["requestedFamily", "actualFamily"],
   renamedToAvoidReplacing: ["chosenName", "finalName"],
   precisionReduced: null,
+  omittedContent: null,
+  approximateLayout: null,
 };
 
 const toolIds = new Set<string>(UtilityRegistry.map((utility) => utility.id));
@@ -134,6 +143,17 @@ const parseWarning = (value: unknown, path: string): OutcomeWarning => {
   } as OutcomeWarning;
 };
 
+const parseFontUse = (value: unknown, path: string): FontUse => {
+  const font = record(value, path);
+  return {
+    requestedFamily: text(font.requestedFamily, `${path}.requestedFamily`),
+    requestedStyle: member(font.requestedStyle, fontStyles, `${path}.requestedStyle`),
+    fontUsed: text(font.fontUsed, `${path}.fontUsed`),
+    styleUsed: member(font.styleUsed, fontStyles, `${path}.styleUsed`),
+    source: member(font.source, fontSources, `${path}.source`),
+  };
+};
+
 export const parseJobOutcome = (value: unknown, path = "outcome"): JobOutcome => {
   const outcome = record(value, path);
   const base = {
@@ -144,6 +164,13 @@ export const parseJobOutcome = (value: unknown, path = "outcome"): JobOutcome =>
       : fail(`${path}.warnings`, "an array"),
     ...byteSizes(outcome, path),
     ...pageDetails(outcome, path),
+    ...(outcome.fonts === undefined
+      ? {}
+      : {
+          fonts: Array.isArray(outcome.fonts)
+            ? outcome.fonts.map((font, index) => parseFontUse(font, `${path}.fonts[${index}]`))
+            : fail(`${path}.fonts`, "an array"),
+        }),
   };
   const outputPaths = texts(outcome.outputPaths, `${path}.outputPaths`);
   const hasFailure = outcome.failure !== null && outcome.failure !== undefined;

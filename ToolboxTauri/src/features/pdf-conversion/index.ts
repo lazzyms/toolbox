@@ -1,6 +1,7 @@
 import type { AtomicToolId } from "../../contracts";
 import type { ConversionTool } from "./tool";
 import { compare } from "./tools/compare";
+import { convertToPdf } from "./tools/convertToPdf";
 import { extractPages } from "./tools/extractPages";
 import { imagesToPdf } from "./tools/imagesToPdf";
 import { merge } from "./tools/merge";
@@ -26,6 +27,7 @@ const conversionTools: Partial<Record<AtomicToolId, ConversionTool>> = {
   "pdf-repair": repair,
   "pdf-compare": compare,
   "pdf-redact": redact,
+  "convert-to-pdf": convertToPdf,
 };
 
 export const conversionToolFor = (id: AtomicToolId) => {

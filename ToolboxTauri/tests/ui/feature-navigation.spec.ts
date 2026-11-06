@@ -417,7 +417,7 @@ test("home marks tools this build cannot run and keeps them out of the search hi
 test(`search finds and opens all ${UtilityRegistry.length} registered tool actions`, async ({ page }) => {
     await page.goto("/");
     const search = page.getByRole("textbox", { name: "Search tools" });
-    expect(UtilityRegistry).toHaveLength(35);
+    expect(UtilityRegistry).toHaveLength(36);
 
     for (const utility of UtilityRegistry) {
         await search.fill(utility.title);
@@ -2541,7 +2541,9 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
     const usesImageEditPlan = workspaceForTool(utility.id)?.id === "image-editor" && utility.id !== "image-metadata";
 
     const accepts = (extension: string) => utility.capability.acceptedExtensions.some((accepted) => accepted.toLowerCase() === extension);
-    const selectedFixturePath = accepts(".pdf")
+    const selectedFixturePath = utility.id === "convert-to-pdf"
+        ? "/local/notes.txt"
+        : accepts(".pdf")
         ? pdfFixturePath
         : accepts(".png")
             ? fixturePath
@@ -2604,7 +2606,7 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
 };
 
 test.describe("registered feature actions", () => {
-    expect(UtilityRegistry).toHaveLength(35);
+    expect(UtilityRegistry).toHaveLength(36);
 
     for (const utility of UtilityRegistry) {
         test(`${utility.id} accepts the fixture and runs with the Settings default`, async ({ page }) => {

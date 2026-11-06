@@ -33,6 +33,7 @@ test("UI capabilities are the shared native contract facts", () => {
       nativeAvailability: shared.nativeAvailability,
       outputSuffix: shared.outputSuffix,
       manyToOne: shared.manyToOne,
+      ...(shared.formatFamilies ? { formatFamilies: shared.formatFamilies } : {}),
     });
     assert.equal(
       utility.status,
@@ -69,7 +70,7 @@ test("UI capabilities are the shared native contract facts", () => {
 
 test("every tool declares one output suffix and many-to-one tools take ordered inputs", () => {
   for (const capability of SharedCapabilityRegistry) {
-    assert.match(capability.outputSuffix, /^-[a-z0-9]+(-[a-z0-9]+)*$/, capability.command);
+    assert.match(capability.outputSuffix, capability.formatFamilies ? /^$/ : /^-[a-z0-9]+(-[a-z0-9]+)*$/, capability.command);
     assert.equal(
       capability.manyToOne,
       capability.inputCardinality === "ordered",
@@ -88,6 +89,7 @@ test("every tool declares one output suffix and many-to-one tools take ordered i
   assert.equal(suffixes.get("merge_pdfs"), "-merged");
   assert.equal(suffixes.get("protect_files"), "-protected");
   assert.equal(suffixes.get("pdf_to_images"), "-images");
+  assert.equal(suffixes.get("convert_to_pdf"), "");
 });
 
 test("every many-to-one tool opens the save step and sends the chosen path", () => {
@@ -219,7 +221,13 @@ test("format families derive accepted extensions and per-family flags like the n
     capability.formatFamilies?.map(({ id, nativeAvailability, basicFidelity }) => ({ id, nativeAvailability, basicFidelity })),
     families,
   );
-  assert.ok(SharedCapabilityRegistry.every((shared) => !("formatFamilies" in shared)));
+  assert.deepEqual(SharedCapabilityRegistry.filter((shared) => shared.formatFamilies).map(({ command }) => command), ["convert_to_pdf"]);
+  const convert = SharedCapabilityRegistry.find(({ command }) => command === "convert_to_pdf")!;
+  assert.deepEqual(convert.acceptedExtensions, convert.formatFamilies!.flatMap(({ extensions }) => extensions));
+  assert.deepEqual(
+    convert.formatFamilies!.filter(({ nativeAvailability }) => nativeAvailability === "available").map(({ id }) => id),
+    ["plain-text", "pdf", "word", "rich-text", "spreadsheets", "presentations", "markdown", "tables"],
+  );
 });
 
 test("format families reject shared extensions, empty families and mixed extension shapes", () => {

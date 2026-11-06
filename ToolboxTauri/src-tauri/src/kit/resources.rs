@@ -149,6 +149,18 @@ pub fn resolve_bundled_or_override(name: &str, bundled_root: &Path, override_var
     Ok(None)
 }
 
+pub(crate) fn ensure_manifest_matches_application(version: u32, architecture: &str) -> Result<(), String> {
+    if version != 1 || (architecture != "all" && architecture != std::env::consts::ARCH) { return Err("Bundled resource manifest does not match this application.".to_string()); }
+    Ok(())
+}
+
+/// Checks a bundled file against its manifest entry (version, license, size limit and SHA-256) and returns its path.
+pub(crate) fn verify_bundled(bundled_root: &Path, spec: &ResourceSpec) -> Result<PathBuf, String> {
+    let path = bundled_root.join(&spec.path);
+    verify_resource(&path, spec).map_err(|failure| failure.bundled_message())?;
+    Ok(path)
+}
+
 pub struct PackBackedLocations {
     pub bundled_root: Option<PathBuf>,
     pub installed_pack_root: Option<PathBuf>,

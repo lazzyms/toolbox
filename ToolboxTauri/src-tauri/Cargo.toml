@@ -44,6 +44,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 fontdue = "0.9.4"
 rustybuzz = "0.20.1"
 lopdf = "0.44"
+encoding_rs = "0.8"
 rayon = "1"
 heif-rs = "26.7"
 webpx = "0.4"
@@ -53,6 +54,8 @@ tiff = "0.11"
 fax = "0.2"
 tract-onnx = { version = "0.23.7", optional = true }
 notify-rust = "4"
+pulldown-cmark = { version = "0.13", default-features = false }
+csv = "1.3"
 # Pack downloads (src/packs/download.rs). The same client, TLS stack and versions the updater uses.
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream", "system-proxy"] }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }

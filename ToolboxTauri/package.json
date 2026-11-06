@@ -34,7 +34,8 @@
     "check:matrix": "npm run test:capabilities && npm run test:outcomes && npm run test:page-ranges && npm run test:resize-placement && npm run test:ocr-request && npm run test:retired-ids && npm run test:pack-catalog && node scripts/check-tool-matrix.mjs && node scripts/check-workspace-consolidation.mjs",
     "test:qpdf-release": "node --test tests/qpdf-release-readiness.test.mjs",
     "test:ocr-release": "node --test tests/ocr-release-readiness.test.mjs",
-    "check:release": "npm run check:shadcn-components && npm run check:notices && npm run check:matrix && npm run test:qpdf-release && npm run test:ocr-release && node scripts/check-release-readiness.mjs",
+    "test:fonts-release": "node --test tests/fallback-fonts-release-readiness.test.mjs",
+    "check:release": "npm run check:shadcn-components && npm run check:notices && npm run check:matrix && npm run test:qpdf-release && npm run test:ocr-release && npm run test:fonts-release && node scripts/check-release-readiness.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
   },

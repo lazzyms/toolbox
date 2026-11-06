@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { ToolScaffold } from "../components/ToolScaffold";
 import { ConversionPanel, conversionToolFor } from "../features/pdf-conversion";
 import type { PdfDocument } from "../features/pdf-editor";
@@ -18,6 +18,7 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
   const [selectedPages, setSelectedPages] = useState<number[]>([]);
   const [inspectError, setInspectError] = useState("");
   const { exampleName } = tool;
+  const intakeCopy = useMemo(() => tool.intakeCopy?.(activeUtility), [tool, activeUtility]);
 
   return (
     <ToolScaffold
@@ -27,6 +28,7 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
       utility={activeUtility}
       initialPaths={initialPaths}
       onFilesChange={onFilesChange}
+      intakeCopy={intakeCopy}
       exampleName={exampleName ? (path) => exampleName(path, activeUtility, options) : undefined}
       onRun={(paths, outputLocation, run) => tool.request(paths, outputLocation, run, options, { document, selectedPages, pageRange })}
     >

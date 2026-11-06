@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
+import { inspectFallbackFonts, sourceFontsDir } from "./fallback-fonts.mjs";
 import { inspectQpdf, readPin } from "./qpdf-pin.mjs";
 import { describe, readOcrPin, verifyCommittedEnglishData, verifyOcrArtifact } from "./ocr-release.mjs";
 
@@ -35,7 +36,14 @@ const englishProblem = verifyCommittedEnglishData(ocrPin);
 if (englishProblem) throw new Error(englishProblem);
 console.log(`Release configuration passed: ${requiredIcons.length} icons, all Tauri targets, updater and ${canonicalExtensions.length} file associations configured, qpdf minimum ${pin.minimumVersion}, English OCR data ${ocrPin.englishData.version}`);
 
-const { values } = parseArgs({ options: { qpdf: { type: "string" }, target: { type: "string" }, "ocr-artifact": { type: "string" } } });
+const { values } = parseArgs({ options: { qpdf: { type: "string" }, target: { type: "string" }, "ocr-artifact": { type: "string" }, fonts: { type: "string" } } });
+const fonts = inspectFallbackFonts({ fontsDir: values.fonts ?? sourceFontsDir });
+if (fonts.cause) {
+  console.error(`Fallback font release check failed (${fonts.cause}): ${fonts.message}`);
+  process.exit(1);
+}
+console.log(`Fallback font release check passed: ${fonts.message}`);
+
 const ocrArtifact = values["ocr-artifact"];
 if (ocrArtifact !== undefined) {
   if (!values.target) {

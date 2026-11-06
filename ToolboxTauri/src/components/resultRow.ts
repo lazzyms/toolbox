@@ -1,4 +1,4 @@
-import type { ErrorKind, JobOutcome, OutcomePointer, OutcomeWarning, PackNeed, ToolError } from "../contracts";
+import type { ErrorKind, FontSource, JobOutcome, OutcomePointer, OutcomeWarning, PackNeed, ToolError } from "../contracts";
 import { UtilityRegistry } from "../registry";
 
 /** A note is a warning that needs nothing from the user, such as a photo saved at a lower bit depth. */
@@ -14,7 +14,7 @@ export interface RowView {
     tone: RowTone;
     stateLabel: string;
     spokenState: string;
-    detailLines: string[];
+    detailLines: RowDetail[];
     openOutput: { path: string; label: "Open" | "Open first" } | null;
     revealOutput: string | null;
     pointer: RowPointer | null;
@@ -22,7 +22,19 @@ export interface RowView {
     canRetryWithPassword: boolean;
     /** Set when the file failed only for want of a pack that has since been installed. */
     packInstalled: boolean;
+    fonts: RowFont[];
 }
+
+export type RowFont = { requested: string; used: string; source: string };
+
+export type RowDetail = { text: string; tone: "warn" | null };
+
+const fontSources: Record<FontSource, string> = {
+    embedded: "Embedded in the file",
+    "bundled fallback": "Bundled fallback, same widths",
+    system: "System font on this device",
+    "bundled default": "Bundled default font",
+};
 
 export const fileName = (path: string) => path.split(/[\\/]/).pop() || path;
 
@@ -59,11 +71,18 @@ export const warningText = (warning: OutcomeWarning, signatureRemovedNote?: stri
         case "renamedToAvoidReplacing":
             return `Saved as ${warning.details.finalName}. Renamed to avoid replacing an existing file.`;
         case "precisionReduced":
+        case "omittedContent":
+        case "approximateLayout":
             return warning.message;
     }
 };
 
 export const packVerbs: Record<PackNeed, string> = { notInstalled: "Install", damaged: "Repair", incompatible: "Update" };
+
+const warningDetail = (warning: OutcomeWarning, signatureRemovedNote?: string): RowDetail => ({
+    text: warningText(warning, signatureRemovedNote),
+    tone: warning.code === "omittedContent" ? "warn" : null,
+});
 
 const pointerView = (pointer: OutcomePointer | null): RowPointer | null => {
     if (!pointer) return null;
@@ -78,9 +97,10 @@ const outputSummary = (paths: string[]) =>
         ? fileName(paths[0])
         : `${paths.length} files, ${fileName(paths[0])} to ${fileName(paths[paths.length - 1])}`;
 
-const nonEmpty = (lines: string[]) => lines.filter((line) => line.trim().length > 0);
+const nonEmpty = (lines: (string | RowDetail)[]): RowDetail[] =>
+    lines.map((line) => (typeof line === "string" ? { text: line, tone: null } : line)).filter((line) => line.text.trim().length > 0);
 
-const isNote = (warning: OutcomeWarning) => warning.code === "precisionReduced";
+const isNote = (warning: OutcomeWarning) => warning.code === "precisionReduced" || warning.code === "approximateLayout";
 
 /** The pack a failed file needs before it can run, if that is why it failed. */
 export const neededPack = (outcome: JobOutcome): PackPointer | null =>
@@ -92,24 +112,24 @@ export const neededPack = (outcome: JobOutcome): PackPointer | null =>
  * to run again. `installedPacks` holds the packs installed, repaired or updated since the run.
  */
 export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput = false, signatureRemovedNote?: string, installedPacks: ReadonlySet<string> = new Set()): RowView => {
-    const warnings = outcome.warnings.map((warning) => warningText(warning, signatureRemovedNote));
+    const warnings = outcome.warnings.map((warning) => warningDetail(warning, signatureRemovedNote));
     const input = { name: fileName(outcome.inputPath), fullPath: outcome.inputPath };
     switch (outcome.state) {
         case "succeeded": {
             const first = outcome.outputPaths[0] ?? null;
             const warned = warnings.length > 0;
-            // Notes read as one sentence ahead of the detail, in the row's usual colour.
             const noted = warned && outcome.warnings.every(isNote);
+            // Precision notes read as one sentence ahead of the detail; layout notes keep their own line.
+            const joined = noted && outcome.warnings.every((warning) => warning.code === "precisionReduced");
+            const flagged = noted ? (warnings.length === 1 ? "a note" : "notes") : warnings.length === 1 ? "a warning" : "warnings";
             const byOutput = namedByOutput && first !== null;
             return {
                 ...(byOutput ? { name: fileName(first), fullPath: first } : input),
                 tone: noted ? "note" : warned ? "warn" : "ok",
                 stateLabel: resultVerb,
-                spokenState: noted
-                    ? `${resultVerb} with ${warnings.length === 1 ? "a note" : "notes"}`
-                    : warned ? `${resultVerb} with ${warnings.length === 1 ? "a warning" : "warnings"}` : resultVerb,
-                detailLines: nonEmpty(noted
-                    ? [[...warnings, outcome.detail].filter((line) => line.trim()).join(" ")]
+                spokenState: warned ? `${resultVerb} with ${flagged}` : resultVerb,
+                detailLines: nonEmpty(joined
+                    ? [[...warnings.map((warning) => warning.text), outcome.detail].filter((line) => line.trim()).join(" ")]
                     : warned ? [...warnings, outcome.detail] : [first && !byOutput ? outputSummary(outcome.outputPaths) : "", outcome.detail]),
                 openOutput: first ? { path: first, label: outcome.outputPaths.length > 1 ? "Open first" : "Open" } : null,
                 revealOutput: first,
@@ -117,6 +137,7 @@ export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput =
                 canRetry: false,
                 canRetryWithPassword: false,
                 packInstalled: false,
+                fonts: (outcome.fonts ?? []).map((font) => ({ requested: font.requestedFamily, used: font.fontUsed, source: fontSources[font.source] })),
             };
         }
         case "skipped":
@@ -132,6 +153,7 @@ export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput =
                 canRetry: false,
                 canRetryWithPassword: false,
                 packInstalled: false,
+                fonts: [],
             };
         case "failed": {
             const pack = neededPack(outcome);
@@ -142,13 +164,14 @@ export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput =
                     tone: installed ? "ok" : "fail",
                     stateLabel: installed ? "Ready to run" : "Needs a pack",
                     spokenState: installed ? `Ready to run, the ${pack.name} pack is installed` : `Needs the ${pack.name} pack`,
-                    detailLines: installed ? [`The ${pack.name} pack is installed now. Run again to read this file.`] : nonEmpty([outcome.failure.message, ...warnings]),
+                    detailLines: installed ? nonEmpty([`The ${pack.name} pack is installed now. Run again to read this file.`]) : nonEmpty([outcome.failure.message, ...warnings]),
                     openOutput: null,
                     revealOutput: null,
                     pointer: installed ? null : pointerView(pack),
                     canRetry: false,
                     canRetryWithPassword: false,
                     packInstalled: installed,
+                    fonts: [],
                 };
             }
             const unavailable = outcome.failure.kind === "unavailable";
@@ -166,6 +189,7 @@ export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput =
                 canRetry: isRetryable(outcome.failure) && outcome.failure.pointer?.kind !== "outputFolder",
                 canRetryWithPassword: wrongPassword,
                 packInstalled: false,
+                fonts: [],
             };
         }
     }
@@ -194,13 +218,17 @@ export const resultTally = (results: JobOutcome[], resultVerb: string): string =
     return parts.join(", ");
 };
 
-export const resultSummary = (results: JobOutcome[], resultVerb: string): ResultSummary => {
+export const resultSummary = (results: JobOutcome[], resultVerb: string, resultNoun?: string): ResultSummary => {
     const verb = resultVerb.toLowerCase();
-    const warned = results.filter((result) => result.state === "succeeded" && result.warnings.length > 0).length;
+    const flagged = results.filter((result) => result.state === "succeeded" && result.warnings.length > 0);
+    const warned = flagged.length;
+    const noted = flagged.some((result) => result.warnings.some(isNote));
+    const files = resultNoun ? (warned === 1 ? resultNoun : `${resultNoun}s`) : `${verb} ${warned === 1 ? "file" : "files"}`;
+    const flag = noted ? `${warned === 1 ? "has" : "have"} a warning or note` : warned === 1 ? "has a warning" : "have warnings";
     const cancelled = results.some(isCancelled);
     const hints = [
         cancelled ? "Finished files were kept. Nothing was half-written." : null,
-        warned === 0 ? null : `${warned} ${verb} ${warned === 1 ? "file has a warning" : "files have warnings"}.`,
+        warned === 0 ? null : `${warned} ${files} ${flag}.`,
     ];
     return {
         headline: `${cancelled ? "Cancelled" : "Done"}. ${resultTally(results, resultVerb)}`,

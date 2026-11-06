@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { RunContext } from "../../components/ToolScaffold";
+import type { IntakeCopy } from "../../components/intake";
 import type { OutputLocation, ToolDefinition, ToolResult } from "../../contracts";
 import type { PdfDocument } from "../pdf-editor";
 import { formatPageSpans, type PageSpan } from "../../shared/pageRanges";
@@ -16,6 +17,8 @@ export type OptionsPanelProps<Options> = {
   choosePageRange: (value: string) => void;
   /** True when the range was written by picking thumbnails rather than typed. */
   pageRangeFromPicks: boolean;
+  /** True while a run is in progress. */
+  loading: boolean;
 };
 
 export interface ConversionTool<Options = unknown> {
@@ -23,6 +26,8 @@ export interface ConversionTool<Options = unknown> {
   /** Options to start from when another tool hands its files over. */
   handoffOptions?: Options;
   inspectsPdf: boolean;
+  /** Wording for files the intake flags, when the tool names formats rather than one extension. */
+  intakeCopy?(utility: ToolDefinition): IntakeCopy;
   /**
    * One typed range applies to every file in the batch and is shortened to each file's
    * length natively. Thumbnails are offered only for a single PDF, picking writes the

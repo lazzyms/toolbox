@@ -840,6 +840,9 @@ body {
   color: var(--muted-foreground);
   font-size: 12px;
 }
+.result-row-detail[data-tone="warn"] {
+  color: var(--warning);
+}
 .result-rows {
   margin: 0;
   padding: 0;
@@ -956,6 +959,24 @@ body {
 .result-page-details-label {
   flex: none;
   width: 170px;
+  color: var(--muted-foreground);
+}
+.result-row-fonts {
+  display: grid;
+  grid-column: 2 / -1;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+.result-row-fonts li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+}
+.result-row-font-requested {
   color: var(--muted-foreground);
 }
 .result-action-error {

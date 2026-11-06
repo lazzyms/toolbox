@@ -92,6 +92,7 @@ interface ResultListProps {
     progress: Progress;
     loading: boolean;
     resultVerb: string;
+    resultNoun?: string;
     runningVerb: string;
     runningDetail?: string;
     /** Count the live run in pages, for tools whose single files can take minutes. */
@@ -103,13 +104,14 @@ interface ResultListProps {
     onRetryWithPassword?: (inputPath: string, password: string) => Promise<void>;
 }
 
-export const ResultList = ({ results, progress, loading, resultVerb, runningVerb, runningDetail, progressByPage = false, signatureRemovedNote, live, namedByOutput = false, onRetry, onRetryWithPassword }: ResultListProps) => {
+export const ResultList = ({ results, progress, loading, resultVerb, resultNoun, runningVerb, runningDetail, progressByPage = false, signatureRemovedNote, live, namedByOutput = false, onRetry, onRetryWithPassword }: ResultListProps) => {
     const [actionStates, setActionStates] = useState<Record<number, RowActionState>>({});
     const [passwordRow, setPasswordRow] = useState<number | null>(null);
     // Page details start open, the way the board shows them; a row can fold its own away.
     const [foldedDetails, setFoldedDetails] = useState<Record<number, boolean>>({});
     const [packJobs, setPackJobs] = useState<Record<string, PackJob>>({});
     const [installedPacks, setInstalledPacks] = useState<ReadonlySet<string>>(new Set());
+    const [fontRows, setFontRows] = useState<ReadonlySet<number>>(new Set());
     const resultSetGeneration = useRef(0);
 
     useEffect(() => {
@@ -140,6 +142,7 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
         setPasswordRow(null);
         setFoldedDetails({});
         setInstalledPacks(new Set());
+        setFontRows(new Set());
         return () => {
             if (resultSetGeneration.current === generation) resultSetGeneration.current += 1;
         };
@@ -180,6 +183,13 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
 
     const reveal = revealButtonLabel();
 
+    const toggleFonts = (row: number) =>
+        setFontRows((rows) => {
+            const next = new Set(rows);
+            if (!next.delete(row)) next.add(row);
+            return next;
+        });
+
     const finishedRow = (result: JobOutcome, index: number) => {
         const view = rowView(result, resultVerb, namedByOutput, signatureRemovedNote, installedPacks);
         const pack = view.pointer?.pointer.kind === "pack" ? view.pointer.pointer : null;
@@ -191,13 +201,15 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
         const pageDetails = result.pageDetails ?? [];
         const detailsOpen = !foldedDetails[index];
         const detailsId = `page-details-${index}`;
+        const fontsOpen = fontRows.has(index);
+        const fontListId = `result-fonts-${index}`;
         return (
             <li key={`${index}:${result.inputPath}`} className="result-row" data-tone={view.tone} data-state={result.state}>
                 <span className="result-row-icon" aria-hidden="true"><Icon /></span>
                 <span className="result-row-text">
                     <span className="result-row-name" title={view.fullPath}>{name}</span>
                     {view.detailLines.map((line, lineIndex) => (
-                        <span key={lineIndex} className="result-row-detail">{line}</span>
+                        <span key={lineIndex} className="result-row-detail" data-tone={line.tone ?? undefined}>{line.text}</span>
                     ))}
                 </span>
                 <span className="result-row-state">
@@ -214,6 +226,11 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
                             onClick={() => setFoldedDetails((folded) => ({ ...folded, [index]: detailsOpen }))}
                         >
                             {detailsOpen ? "Hide page details" : "Show page details"}
+                        </Button>
+                    )}
+                    {view.fonts.length > 0 && (
+                        <Button variant="ghost" size="xs" aria-expanded={fontsOpen} aria-controls={fontListId} onClick={() => toggleFonts(index)}>
+                            {fontsOpen ? "Hide fonts" : "Show fonts"}
                         </Button>
                     )}
                     {view.openOutput && (
@@ -301,6 +318,19 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
                         onRetry={(password) => void runAction(index, "retry", () => onRetryWithPassword(result.inputPath, password))}
                         onCancel={() => setPasswordRow(null)}
                     />
+                )}
+                {fontsOpen && view.fonts.length > 0 && (
+                    <ul id={fontListId} className="result-row-fonts" aria-label={`Fonts used in ${name}`}>
+                        {view.fonts.map((font, fontIndex) => (
+                            <li key={fontIndex}>
+                                <span className="result-row-font-requested">{font.requested}</span>
+                                <span aria-hidden="true">→</span>
+                                <span className="sr-only">used</span>
+                                <span>{font.used}</span>
+                                <span className="result-row-detail">{font.source}</span>
+                            </li>
+                        ))}
+                    </ul>
                 )}
                 {state.error && <p className="result-action-error" role="alert">{state.error}</p>}
             </li>
@@ -413,7 +443,7 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
     }
     if (results.length === 0) return null;
 
-    const summary = resultSummary(results, resultVerb);
+    const summary = resultSummary(results, resultVerb, resultNoun);
     const hints = [...packHints(results, packJobs, installedPacks), ...summary.hints];
     return (
         <div className="result-list">
