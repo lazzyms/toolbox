@@ -1,13 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
-import { Check, CircleMinus, CircleX, Clock, FileText, KeyRound, LoaderCircle, RotateCcw, TriangleAlert } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Check, ChevronDown, ChevronRight, CircleMinus, CircleX, Clock, FileText, KeyRound, Layers, LoaderCircle, RotateCcw, TriangleAlert } from "lucide-react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import type { JobOutcome, OutcomePointer, Progress } from "../contracts";
 import { shortenHomePath, useHomeDir } from "../homePath";
 import type { CombinedResult } from "../registry/saveSteps";
 import { liveFiles, type LiveFile, type LiveRun } from "./liveRun";
-import { fileName, resultSummary, resultTally, rowView, warningText, type RowTone } from "./resultRow";
+import { fileName, resultSummary, resultTally, rowView, warningText, type OutputGroup, type OutputGrouping, type RowTone } from "./resultRow";
 import { PasswordRetryForm } from "./PasswordFields";
 
 type RowAction = "open" | "reveal" | "retry";
@@ -65,12 +65,17 @@ interface ResultListProps {
     combined?: CombinedResult;
     onRetry?: (inputPath: string) => Promise<void>;
     onRetryWithPassword?: (inputPath: string, password: string) => Promise<void>;
+    /** Shows a succeeded file's outputs as one row that expands into its parts. */
+    outputGroup?: OutputGrouping;
+    /** A line after the finished headline, such as a total across files. */
+    resultsHint?: (results: JobOutcome[]) => string | null;
 }
 
-export const ResultList = ({ results, progress, loading, resultVerb, runningVerb, runningDetail, live, combinedInputs = null, combined, onRetry, onRetryWithPassword }: ResultListProps) => {
+export const ResultList = ({ results, progress, loading, resultVerb, runningVerb, runningDetail, live, combinedInputs = null, combined, onRetry, onRetryWithPassword, outputGroup, resultsHint }: ResultListProps) => {
     const namedByOutput = combinedInputs !== null;
     const home = useHomeDir();
-    const [actionStates, setActionStates] = useState<Record<number, RowActionState>>({});
+    const [actionStates, setActionStates] = useState<Record<string, RowActionState>>({});
+    const [expanded, setExpanded] = useState<ReadonlySet<number>>(() => new Set());
     const [passwordRow, setPasswordRow] = useState<number | null>(null);
     const resultSetGeneration = useRef(0);
 
@@ -78,13 +83,14 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
         const generation = resultSetGeneration.current + 1;
         resultSetGeneration.current = generation;
         setActionStates({});
+        setExpanded(new Set());
         setPasswordRow(null);
         return () => {
             if (resultSetGeneration.current === generation) resultSetGeneration.current += 1;
         };
     }, [results]);
 
-    const runAction = async (row: number, action: RowAction, perform: () => Promise<unknown>) => {
+    const runAction = async (row: number | string, action: RowAction, perform: () => Promise<unknown>) => {
         const generation = resultSetGeneration.current;
         setActionStates((states) => ({ ...states, [row]: { pending: action, error: null } }));
 
@@ -101,14 +107,60 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
 
     const reveal = revealButtonLabel();
 
+    const toggleGroup = (index: number) => setExpanded((open) => {
+        const next = new Set(open);
+        if (!next.delete(index)) next.add(index);
+        return next;
+    });
+
+    const partRow = (group: OutputGroup, index: number) => group.parts.map((part, partIndex) => {
+        const key = `${index}:${partIndex}`;
+        const state = actionStates[key] ?? idleActionState;
+        const busy = state.pending !== null;
+        const PartIcon = part.kind === "set" ? Layers : FileText;
+        return (
+            <li key={key} className="result-row result-row-part" data-tone="part">
+                <span aria-hidden="true" />
+                <span className="result-row-icon" aria-hidden="true"><PartIcon /></span>
+                <span className="result-row-text">
+                    <span className="result-row-name">{part.name}</span>
+                    <span className="result-row-detail">{part.hint}</span>
+                </span>
+                <span className="result-row-state" />
+                <span className="result-row-actions">
+                    {part.open && (
+                        <Button variant="ghost" size="xs" aria-label={`Open ${part.name}`} disabled={busy} onClick={() => void runAction(key, "open", () => invoke("open_output_path", { path: part.open }))}>
+                            {state.pending === "open" ? "Opening..." : "Open"}
+                        </Button>
+                    )}
+                    <Button variant="ghost" size="xs" aria-label={`${reveal}: ${part.name}`} disabled={busy} onClick={() => void runAction(key, "reveal", () => invoke("reveal_output_path", { path: part.reveal }))}>
+                        {state.pending === "reveal" ? "Showing..." : reveal}
+                    </Button>
+                </span>
+                {state.error && <p className="result-action-error" role="alert">{state.error}</p>}
+            </li>
+        );
+    });
+
     const finishedRow = (result: JobOutcome, index: number) => {
-        const view = rowView(result, resultVerb, namedByOutput);
+        const group = result.state === "succeeded" ? outputGroup?.(result) ?? null : null;
+        const baseView = rowView(result, resultVerb, namedByOutput);
+        const view = group
+            ? { ...baseView, detailLines: [group.hint, ...result.warnings.map(warningText)], openOutput: { path: group.primary, label: "Open" as const }, revealOutput: group.primary }
+            : baseView;
+        const open = group !== null && expanded.has(index);
         const state = actionStates[index] ?? idleActionState;
         const busy = state.pending !== null;
         const name = view.name;
         const Icon = toneIcons[view.tone];
         return (
-            <li key={`${index}:${result.inputPath}`} className="result-row" data-tone={view.tone} data-state={result.state}>
+            <Fragment key={`${index}:${result.inputPath}`}>
+            <li className="result-row" data-tone={view.tone} data-state={result.state}>
+                {outputGroup && (group ? (
+                    <Button variant="ghost" size="icon-xs" className="result-row-toggle" aria-expanded={open} aria-label={`${open ? "Hide" : "Show"} outputs of ${name}`} onClick={() => toggleGroup(index)}>
+                        {open ? <ChevronDown /> : <ChevronRight />}
+                    </Button>
+                ) : <span aria-hidden="true" />)}
                 <span className="result-row-icon" aria-hidden="true"><Icon /></span>
                 <span className="result-row-text">
                     <span className="result-row-name" title={view.fullPath}>{name}</span>
@@ -177,6 +229,8 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
                 )}
                 {state.error && <p className="result-action-error" role="alert">{state.error}</p>}
             </li>
+            {open && group && partRow(group, index)}
+            </Fragment>
         );
     };
 
@@ -209,7 +263,7 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
                 </div>
                 <Card className="result-card gap-0 py-0">
                     <CardContent className="p-0">
-                        <ul className="result-rows" aria-label="Files and results">
+                        <ul className="result-rows" aria-label="Files and results" data-grouped={outputGroup ? "true" : undefined}>
                             {files.map((file, index) => {
                                 if (file.status === "finished") return finishedRow(file.outcome, index);
                                 const running = file.status === "running";
@@ -217,6 +271,7 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
                                 const label = running ? runningVerb : "Waiting";
                                 return (
                                     <li key={`${index}:${file.inputPath}`} className="result-row" data-tone={file.status} data-state={file.status}>
+                                        {outputGroup && <span aria-hidden="true" />}
                                         <span className="result-row-icon" aria-hidden="true"><Icon /></span>
                                         <span className="result-row-text">
                                             <span className="result-row-name" title={file.inputPath}>{fileName(file.inputPath)}</span>
@@ -305,15 +360,17 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
     }
 
     const summary = resultSummary(results, resultVerb);
+    const extraHint = resultsHint?.(results) ?? null;
     return (
         <div className="result-list">
             <div className="result-summary" role="status" aria-live="polite">
                 <strong>{summary.headline}</strong>
+                {extraHint && <span className="result-summary-hint">{extraHint}</span>}
                 {summary.hints.map((hint) => <span key={hint} className="result-summary-hint">{hint}</span>)}
             </div>
             <Card className="result-card gap-0 py-0">
                 <CardContent className="p-0">
-                    <ul className="result-rows" aria-label="Results">
+                    <ul className="result-rows" aria-label="Results" data-grouped={outputGroup ? "true" : undefined}>
                         {results.map(finishedRow)}
                     </ul>
                 </CardContent>

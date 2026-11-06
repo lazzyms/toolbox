@@ -111,7 +111,7 @@ const ImagesToPdfOptions = ({ options, setOptions, files, selectedFileIndex }: O
           </CardContent>
         </Card>
       )}
-      <p className="workspace-note">JPEGs go in as they are. Other images are stored without loss, and transparency is kept.</p>
+      <p className="workspace-note">JPEGs go in as they are. Other images are stored without loss, and transparency is kept. A multi-page TIFF adds one page per TIFF page.</p>
     </div>
   );
 };
