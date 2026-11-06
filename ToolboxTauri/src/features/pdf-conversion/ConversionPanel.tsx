@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { parsePageRange, selectedPageLabel } from "../../shared/workspaceValidation";
 import type { PdfDocument } from "../pdf-editor";
-import type { ToolDefinition } from "../../contracts";
+import type { AtomicToolId, ToolDefinition } from "../../contracts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -37,6 +37,7 @@ type ConversionPanelProps = {
   setSelectedPages: (value: number[]) => void;
   inspectError: string;
   setInspectError: (value: string) => void;
+  onSelectTool?: (id: AtomicToolId) => void;
 };
 
 export const ConversionPanel = ({
@@ -58,6 +59,7 @@ export const ConversionPanel = ({
   setSelectedPages,
   inspectError,
   setInspectError,
+  onSelectTool,
 }: ConversionPanelProps) => {
   const inputPath = files[0];
   const [inspection, setInspection] = useState<PdfInspectionState>({ kind: "idle" });
@@ -135,6 +137,7 @@ export const ConversionPanel = ({
   const outputPreviewLimitation = activeUtility.capability.supportsPreview ? null : tool.outputPreview(options, selectedPages);
   const previewRegionLabel = outputPreviewLimitation ? "Source page selection" : "Conversion preview";
   const OptionsPanel = tool.OptionsPanel;
+  const exportNote = tool.exportNote?.(files) ?? null;
 
   return (
     <Card className="workspace-control-panel py-0">
@@ -195,9 +198,11 @@ export const ConversionPanel = ({
           selectedPages={selectedPages}
           pageRange={pageRange}
           choosePageRange={choosePageRange}
+          onSelectTool={onSelectTool}
         />
       )}
       {destination}
+      {exportNote && <p className="workspace-note" role="status">{exportNote}</p>}
       <Button
         variant="default"
         disabled={loading || !canExport || (needsPageSelection && (!inspectedDocument || selectionCount === 0 || selectionIssue !== null))}
