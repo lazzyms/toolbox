@@ -5970,6 +5970,8 @@ dependencies = [
  "tiff",
  "tokio",
  "tract-onnx",
+ "unicode-bidi",
+ "unicode-script",
  "url",
  "webpx",
  "windows-sys 0.61.2",

@@ -3,7 +3,6 @@ use std::ffi::OsStr;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use image::metadata::Orientation;
@@ -19,8 +18,7 @@ use crate::kit::pdf::text_layer::{self, PageText};
 use crate::kit::pdf::unicode_font::UnicodeFont;
 use crate::kit::pdf::page_ranges::{validate_page_ranges, PageRanges};
 use crate::kit::resources;
-use crate::packs::uninstall::{resolve_pack_resource, PackHolds, RequiredPack};
-use crate::packs::Catalog;
+use crate::packs::uninstall::{RequiredPack, RunPacks};
 
 const OCR_MAX_INPUT_BYTES: u64 = 100 * 1024 * 1024;
 const OCR_MAX_OUTPUT_BYTES: usize = 10 * 1024 * 1024;
@@ -86,10 +84,10 @@ impl OcrRequest {
 
     /// Every language list must name at least one language, and only English or a language a
     /// catalog pack reads. Whether that pack is installed is checked per file when it runs.
-    fn check_languages(&self, packs: &OcrPacks) -> Result<(), String> {
+    fn check_languages(&self, packs: &RunPacks) -> Result<(), String> {
         for languages in std::iter::once(&self.languages).chain(self.language_overrides.values()) {
             if languages.is_empty() { return Err("Choose at least one recognition language.".to_string()); }
-            if let Some(code) = languages.iter().find(|code| !packs.knows(code)) {
+            if let Some(code) = languages.iter().find(|code| !knows(packs, code)) {
                 return Err(format!("\"{code}\" is not a recognition language Toolbox knows."));
             }
         }
@@ -97,7 +95,7 @@ impl OcrRequest {
     }
 }
 
-pub fn validate_ocr_request(request: &OcrRequest, packs: &OcrPacks) -> Result<(), Vec<JobOutcome>> {
+pub fn validate_ocr_request(request: &OcrRequest, packs: &RunPacks) -> Result<(), Vec<JobOutcome>> {
     validate_page_ranges(&request.paths, request.page_range())?;
     let Err(error) = request.mode().and_then(|_| request.check_languages(packs)) else { return Ok(()) };
     let error = ToolError::invalid_input(error);
@@ -105,55 +103,32 @@ pub fn validate_ocr_request(request: &OcrRequest, packs: &OcrPacks) -> Result<()
     Err(request.paths.iter().cloned().map(|path| JobOutcome::failure(path, error.clone())).collect())
 }
 
-/// Where an OCR run finds language packs. The packs a run reads stay held until the run ends, so
-/// they cannot be uninstalled under it.
-pub struct OcrPacks {
-    source: Result<PackSource, String>,
-    holds: Mutex<PackHolds>,
-}
-
-struct PackSource {
-    app_data: PathBuf,
-    app_version: String,
-    catalog: Catalog,
-}
-
-impl OcrPacks {
-    pub fn new(app_data: Result<PathBuf, String>, app_version: impl Into<String>, catalog: Result<Catalog, String>) -> Self {
-        let app_version = app_version.into();
-        let source = app_data.and_then(|app_data| catalog.map(|catalog| PackSource { app_data, app_version, catalog }));
-        Self { source, holds: Mutex::default() }
-    }
-
-    /// English, or a language a catalog pack reads.
-    fn knows(&self, code: &str) -> bool {
-        code == ENGLISH || self.source.as_ref().is_ok_and(|source| source.catalog.packs.iter().any(|pack| pack.ocr_language.as_ref().is_some_and(|language| language.code == code)))
-    }
+/// English, or a language a catalog pack reads.
+fn knows(packs: &RunPacks, code: &str) -> bool {
+    code == ENGLISH || packs.catalog().is_ok_and(|catalog| catalog.packs.iter().any(|pack| pack.ocr_language.as_ref().is_some_and(|language| language.code == code)))
 }
 
 pub struct OcrRun {
     pub request: OcrRequest,
-    pub packs: OcrPacks,
+    pub packs: RunPacks,
 }
 
 /// The language data for `code` and the language's name: English from the app, any other
 /// language from its pack. A pack that is not installed, is damaged or does not fit this app
 /// fails with a pointer to it.
-fn ocr_language(packs: &OcrPacks, code: &str) -> Result<(PathBuf, String), ToolError> {
+fn ocr_language(packs: &RunPacks, code: &str) -> Result<(PathBuf, String), ToolError> {
     if code == ENGLISH {
         let path = find_resource("engTraineddata", "TOOLBOX_TESSDATA_PATH", &ocr_resource_root()).map_err(|_| ToolError::unavailable(OcrComponent::EnglishData.to_string()))?;
         return Ok((path, crate::packs::BUILT_IN_OCR_LANGUAGE.1.to_string()));
     }
-    let source = packs.source.as_ref().map_err(|error| ToolError::unavailable(error.clone()))?;
-    let (pack, language) = source.catalog.packs.iter()
+    let (pack, language) = packs.catalog()?.packs.iter()
         .find_map(|pack| pack.ocr_language.as_ref().filter(|language| language.code == code).map(|language| (pack, language)))
         .ok_or_else(|| ToolError::invalid_input(format!("Toolbox can't read text in language {code:?}.")))?;
     let file_name = format!("{code}.traineddata");
     let development_override = cfg!(debug_assertions).then(|| std::env::var_os(OCR_LANGUAGE_DIR_ENV)).flatten()
         .map(|folder| PathBuf::from(folder).join(&file_name));
-    let mut holds = packs.holds.lock().unwrap_or_else(PoisonError::into_inner);
     let required = RequiredPack { id: &pack.id, name: &language.name };
-    let resolved = resolve_pack_resource(&format!("tessdata/{file_name}"), &source.app_data, required, &source.app_version, Some(ocr_resource_root()), development_override, &mut holds)
+    let resolved = packs.resolve(&format!("tessdata/{file_name}"), required, Some(ocr_resource_root()), development_override)
         .map_err(|mut error| {
             if matches!(error.pointer, Some(OutcomePointer::Pack { reason: PackNeed::NotInstalled, .. })) {
                 error.message = format!("Needs the {} text recognition pack, which isn't installed. Nothing was saved.", language.name);
@@ -890,7 +865,7 @@ impl OcrEngine {
     /// The engine, then the data for each language: English from the app, the rest from packs.
     /// The engine reads every language from one folder, so data from different folders is
     /// gathered into a private one first.
-    fn resolve(packs: &OcrPacks, languages: &[String]) -> Result<Self, ToolError> {
+    fn resolve(packs: &RunPacks, languages: &[String]) -> Result<Self, ToolError> {
         let engine = resources::resolve("tesseract", &ocr_resource_root(), "TOOLBOX_TESSERACT_PATH", "tesseract")
             .map_err(|_| ToolError::unavailable(OcrComponent::Engine.to_string()))?.path;
         let (data, names): (Vec<_>, Vec<_>) = languages.iter().map(|code| ocr_language(packs, code)).collect::<Result<Vec<_>, _>>()?.into_iter().unzip();
@@ -947,7 +922,7 @@ fn link_language(data: &Path, link: &Path) -> std::io::Result<()> {
 }
 
 impl OcrResources {
-    fn resolve(packs: &OcrPacks, languages: &[String]) -> Result<Self, ToolError> {
+    fn resolve(packs: &RunPacks, languages: &[String]) -> Result<Self, ToolError> {
         let engine = OcrEngine::resolve(packs, languages)?;
         Ok(Self { engine, renderer: find_pdf_renderer().map_err(|_| ToolError::unavailable(OcrComponent::Renderer.to_string()))? })
     }
@@ -1472,7 +1447,7 @@ fn stderr(result: std::process::Output, fallback: &str) -> String { String::from
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_ocr_text, validate_cutout, validate_face_blur, OcrPacks, OcrRequest, OcrRun, OCR_DEADLINE};
+    use super::{normalize_ocr_text, validate_cutout, validate_face_blur, RunPacks, OcrRequest, OcrRun, OCR_DEADLINE};
     use crate::kit::common::limits::HelperDeadline;
     use crate::kit::common::{JobOutcome, OutputLocation};
     use crate::kit::contracts::{ErrorKind, LimitKind, OutcomePointer, PackNeed};
@@ -1500,7 +1475,7 @@ mod tests {
     }
 
     /// No packs installed and no catalog: only English can be read.
-    fn no_packs() -> OcrPacks { OcrPacks::new(Err("No packs in this test.".into()), "1.0.14", Err("No catalog in this test.".into())) }
+    fn no_packs() -> RunPacks { RunPacks::new(Err("No packs in this test.".into()), "1.0.14", Err("No catalog in this test.".into())) }
 
     fn ocr_pdf(request: &OcrRequest, input: PathBuf) -> JobOutcome { super::ocr_pdf(&OcrRun { request: request.clone(), packs: no_packs() }, input) }
 
@@ -2055,7 +2030,7 @@ mod tests {
                     language_overrides: [(self.hindi.clone(), hindi_languages.iter().map(|code| code.to_string()).collect())].into_iter().collect(),
                     output_location: OutputLocation::CustomFolder(self.output.clone()),
                 };
-                let packs = OcrPacks::new(Ok(app_data.to_path_buf()), app_version, Ok(crate::packs::install::tests::Fixture::new().catalog()));
+                let packs = RunPacks::new(Ok(app_data.to_path_buf()), app_version, Ok(crate::packs::install::tests::Fixture::new().catalog()));
                 // One run for the whole batch, each file through the job the batch runner calls. The
                 // runner itself refuses ocr_pdf while the tool is unavailable in this build.
                 let run = OcrRun { request, packs };
@@ -2192,7 +2167,7 @@ mod tests {
         ];
         for (name, text) in catalogs {
             let catalog = crate::packs::parse_catalog(&text).unwrap();
-            let packs = OcrPacks::new(Ok(root.join(name)), "1.0.14", Ok(catalog.clone()));
+            let packs = RunPacks::new(Ok(root.join(name)), "1.0.14", Ok(catalog.clone()));
             for pack in &catalog.packs {
                 let Some(language) = &pack.ocr_language else { continue };
                 let error = super::ocr_language(&packs, &language.code).unwrap_err();

@@ -2,6 +2,7 @@ pub mod metadata;
 pub mod document_info;
 pub mod page_ranges;
 pub mod scene;
+pub mod script_text;
 pub mod editor;
 pub mod remaining;
 pub mod text_layer;

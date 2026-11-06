@@ -524,7 +524,7 @@ fn apply_watermark(image: DynamicImage, options: &WatermarkOptions) -> Result<Dy
 const WATERMARK_FONT_RESOURCE: &str = "watermarkFont";
 const WATERMARK_FONT_FILE: &str = "DejaVuSans.ttf";
 const WATERMARK_FONT_SIZE: f32 = 32.0;
-const INCLUDED_WATERMARK_FONT: &[u8] = include_bytes!("../../../resources/fonts/DejaVuSans.ttf");
+pub(crate) const INCLUDED_WATERMARK_FONT: &[u8] = include_bytes!("../../../resources/fonts/DejaVuSans.ttf");
 
 /// The bundled Unicode font (DejaVu Sans): a development override or the staged
 /// bundle copy when present, otherwise the copy built into the app. Watermarks draw

@@ -2432,7 +2432,10 @@ mod session_tests {
 
     #[test]
     fn editor_scene_crop_sets_the_same_crop_box_as_batch_crop_and_keeps_the_other_boxes() {
-        use super::super::scene::{export, inspect, ExportRequest, PdfScene, Rect, ScenePage};
+        use super::super::scene::{inspect, ExportRequest, PdfScene, Rect, ScenePage, SceneRun};
+        use crate::packs::uninstall::RunPacks;
+        // Crop-only scenes write no text, so no pack is looked up.
+        let export = |request: &ExportRequest, input: std::path::PathBuf| super::super::scene::export(&SceneRun { request: request.clone(), packs: RunPacks::new(Err("No packs in this test.".into()), "0.0.0", Err("No catalog in this test.".into())) }, input);
         let letter = [0.0, 0.0, 612.0, 792.0];
         let (left, top, width, height) = (0.1, 0.2, 0.5, 0.6);
         for (name, media, existing, rotate) in [

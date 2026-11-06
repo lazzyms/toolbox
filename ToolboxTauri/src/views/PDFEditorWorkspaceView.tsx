@@ -126,7 +126,8 @@ const PDFSceneEditor = ({
       if (!inputPath || !session.current || session.current.path !== inputPath) throw new Error('Select exactly one open PDF before exporting.');
       const { request } = planSceneExport({ paths, scene: session.current.scene, baseline: session.current.baseline, outputLocation });
       const results = await invoke<ToolResult>('export_pdf_scene', { runId, request });
-      return results.map((result) => result.failure ? { ...result, failure: { ...result.failure, message: pdfEditorErrorMessage(result.failure.message, 'export') } } : result);
+      // A failure that points at a pack already says what to install; its row offers the install.
+      return results.map((result) => result.failure && result.failure.pointer?.kind !== 'pack' ? { ...result, failure: { ...result.failure, message: pdfEditorErrorMessage(result.failure.message, 'export') } } : result);
     }}>
     {({ files, run, loading, destination }) => {
       const inputPath = files.length === 1 ? files[0] ?? null : null;
