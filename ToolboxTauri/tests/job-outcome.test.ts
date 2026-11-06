@@ -34,7 +34,7 @@ test("native-shaped outcomes parse into the TypeScript contract for all three st
 
   assert.ok(failed.state === "failed");
   assert.equal(failed.failure.kind, "unavailable");
-  assert.deepEqual(failed.failure.pointer, { kind: "pack", packId: "script-pack" });
+  assert.deepEqual(failed.failure.pointer, { kind: "pack", packId: "script-pack", name: "Indic script", reason: "damaged" });
   assert.deepEqual(failed.outputPaths, ["scan-page-1.png"], "failure keeps already published outputs");
 
   assert.ok(limited.state === "failed" && limited.failure.kind === "limitExceeded");
@@ -95,6 +95,9 @@ test("inconsistent native outcomes are rejected", () => {
   const fontWarningWithoutDetails = { ...sample(0), warnings: [{ code: "fontSubstituted", message: "Changed." }] };
   const limitWithoutDetails = { ...sample(4), failure: { kind: "limitExceeded", message: "Too big.", pointer: null } };
   const unknownLimit = { ...sample(4), failure: { kind: "limitExceeded", details: { limit: "patience" }, message: "Too big.", pointer: null } };
+  const packPointer = (pointer: object) => ({ ...sample(3), failure: { kind: "unavailable", message: "Needs a pack.", pointer: { kind: "pack", packId: "ocr-hindi", name: "Hindi", reason: "notInstalled", ...pointer } } });
+  const packWithoutName = packPointer({ name: undefined });
+  const unknownPackNeed = packPointer({ reason: "bored" });
 
   for (const [name, value] of Object.entries({
     skippedWithOutputs,
@@ -105,6 +108,8 @@ test("inconsistent native outcomes are rejected", () => {
     fontWarningWithoutDetails,
     limitWithoutDetails,
     unknownLimit,
+    packWithoutName,
+    unknownPackNeed,
   })) {
     assert.throws(() => parseJobOutcome(value), /Invalid job outcome/, name);
   }

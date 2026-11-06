@@ -47,7 +47,7 @@
     "failure": {
       "kind": "unavailable",
       "message": "Install the script pack to shape this text.",
-      "pointer": { "kind": "pack", "packId": "script-pack" }
+      "pointer": { "kind": "pack", "packId": "script-pack", "name": "Indic script", "reason": "damaged" }
     },
     "reason": null,
     "warnings": [

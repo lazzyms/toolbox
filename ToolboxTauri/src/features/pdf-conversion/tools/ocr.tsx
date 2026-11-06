@@ -9,9 +9,10 @@ import { Label } from "@/components/ui/label";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { parsePageRanges } from "../../../shared/pageRanges";
 import type { ConversionTool } from "../tool";
+import { BUILT_IN_OCR_LANGUAGE, OcrLanguagePicker } from "../../../views/OcrLanguagePicker";
 
 type PagesScope = "all" | "range";
-type Options = { mode: OcrMode; force: boolean; pages: PagesScope };
+type Options = { mode: OcrMode; force: boolean; pages: PagesScope; language: string };
 
 const modeHints: Record<OcrMode, string> = {
   searchablePdf: "Looks exactly like the scan, with text you can select and search.",
@@ -25,9 +26,9 @@ const rangeHints = {
 };
 
 export const ocr: ConversionTool<Options> = {
-  initialOptions: { mode: "searchablePdf", force: false, pages: "all" },
+  initialOptions: { mode: "searchablePdf", force: false, pages: "all", language: BUILT_IN_OCR_LANGUAGE.code },
   // Extract from PDF hands scans over because it couldn't read their text, so OCR keeps that ask.
-  handoffOptions: { mode: "text", force: false, pages: "all" },
+  handoffOptions: { mode: "text", force: false, pages: "all", language: BUILT_IN_OCR_LANGUAGE.code },
   inspectsPdf: true,
   batchPageRange: true,
   outputPreview: ({ mode }) => `Output preview unavailable. Export recognizes the text on each page and saves it as ${mode === "text" ? "a text file" : "a searchable PDF"}.`,
@@ -101,11 +102,12 @@ export const ocr: ConversionTool<Options> = {
         Reads pages again when their only text is an invisible layer from an earlier OCR run, and replaces that layer. Pages with visible text are always skipped.
       </p>
     </div>
+    <OcrLanguagePicker value={options.language} onChange={(language) => setOptions({ ...options, language })} />
     </>
     );
   },
   exampleName: (inputPath, utility, { mode }) => exampleOutputName(inputPath, "ocr_pdf", utility.capability.outputSuffix, mode === "text" ? "txt" : "pdf"),
   // The Pages range, typed or written by thumbnail picks, applies to every file; an empty one means every page.
-  request: (paths, outputLocation, { runId }, { mode, force }, { pageRange }) =>
-    invoke<ToolResult>("ocr_pdf", { runId, request: ocrRequest(paths, outputLocation, pageRange, mode, force) }),
+  request: (paths, outputLocation, { runId }, { mode, force, language }, { pageRange }) =>
+    invoke<ToolResult>("ocr_pdf", { runId, request: ocrRequest(paths, outputLocation, pageRange, mode, force, [language]) }),
 };

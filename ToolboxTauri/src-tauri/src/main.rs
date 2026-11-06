@@ -3,6 +3,7 @@
 mod file_actions;
 mod intake;
 mod kit;
+mod packs;
 mod quick_action;
 mod settings;
 mod shell;
@@ -323,11 +324,16 @@ async fn run_images_to_pdf(request: &remaining::ImagesToPdfRequest) -> Vec<JobOu
 }
 
 #[tauri::command]
-async fn ocr_pdf(events: RunEvents, request: vision::OcrRequest) -> Vec<JobOutcome> {
-    if let Err(outcomes) = vision::validate_ocr_request(&request) { return outcomes; }
+async fn ocr_pdf(app: tauri::AppHandle, events: RunEvents, request: vision::OcrRequest) -> Vec<JobOutcome> {
+    let packs = vision::OcrPacks::new(packs::app_data(&app), app.package_info().version.to_string(), packs::load_catalog());
+    run_ocr_pdf(events, request, packs).await
+}
+
+async fn run_ocr_pdf(events: RunEvents, request: vision::OcrRequest, packs: vision::OcrPacks) -> Vec<JobOutcome> {
+    if let Err(outcomes) = vision::validate_ocr_request(&request, &packs) { return outcomes; }
     if let Err(outcomes) = validate_command_inputs("ocr_pdf", &request.paths) { return outcomes; }
-    let request = Arc::new(request);
-    BatchRunner::run(&events, "ocr_pdf", request.paths.clone(), &request.output_location, &request, vision::ocr_pdf)
+    let run = Arc::new(vision::OcrRun { request, packs });
+    BatchRunner::run(&events, "ocr_pdf", run.request.paths.clone(), &run.request.output_location, &run, vision::ocr_pdf)
 }
 #[tauri::command]
 async fn blur_faces(events: RunEvents, request: vision::VisionRequest) -> Vec<JobOutcome> {
@@ -561,7 +567,13 @@ fn main() {
             inspect_image_edit_preview,
             export_image_edit_plan,
             get_quick_actions,
-            set_quick_actions
+            set_quick_actions,
+            packs::list_packs,
+            packs::ocr_languages,
+            packs::install::inspect_pack_file,
+            packs::install::install_pack_file,
+            packs::download::install_pack,
+            packs::uninstall::uninstall_pack
         ])
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             shell::focus(app);
@@ -621,6 +633,15 @@ mod command_tests {
     use image::Rgba;
     use std::path::PathBuf;
     use std::future::Future;
+
+    /// The OCR command as a fresh install runs it: English only, with no packs or catalog to find.
+    async fn ocr_pdf(events: RunEvents, request: vision::OcrRequest) -> Vec<JobOutcome> {
+        run_ocr_pdf(events, request, no_ocr_packs()).await
+    }
+
+    fn no_ocr_packs() -> vision::OcrPacks {
+        vision::OcrPacks::new(Err("No packs in this test.".into()), "0.0.0", Err("No catalog in this test.".into()))
+    }
 
     fn temp_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("toolbox_cmd_{}_{}", std::process::id(), name))
@@ -1298,7 +1319,7 @@ mod command_tests {
         let input = root.join("scan.pdf");
         make_pdf(&input, 1);
         let request = |change: fn(&mut vision::OcrRequest)| {
-            let mut request = vision::OcrRequest { paths: vec![input.clone()], page_range: Some("1".into()), mode: "text".into(), force: false, languages: vec!["eng".into()], output_location: location(&root, "ocr") };
+            let mut request = vision::OcrRequest { paths: vec![input.clone()], page_range: Some("1".into()), mode: "text".into(), force: false, languages: vec!["eng".into()], language_overrides: Default::default(), output_location: location(&root, "ocr") };
             change(&mut request);
             tauri::async_runtime::block_on(ocr_pdf(RunEvents::silent(), request))
         };
@@ -1440,7 +1461,7 @@ mod command_tests {
     }
 
     fn ocr_text_request(paths: Vec<PathBuf>, output_location: OutputLocation) -> vision::OcrRequest {
-        vision::OcrRequest { paths, page_range: None, mode: "text".into(), force: false, languages: vec!["eng".into()], output_location }
+        vision::OcrRequest { paths, page_range: None, mode: "text".into(), force: false, languages: vec!["eng".into()], language_overrides: Default::default(), output_location }
     }
 
     #[test]
@@ -1738,9 +1759,9 @@ mod command_tests {
         drawn_pdf(&good, 1);
         let originals = [Original::of(&stalled), Original::of(&good)];
         let run = |name: &str, limits: crate::kit::common::limits::ToolLimits, deadline: crate::kit::common::limits::HelperDeadline| {
-            let request = Arc::new(ocr_text_request(vec![stalled.clone(), good.clone()], location(&root, name)));
-            BatchRunner::run_with_limits(&RunEvents::silent(), "ocr_pdf", request.paths.clone(), &request.output_location, Some(limits), &request, move |request, path| {
-                vision::ocr_pdf_within(request, path, deadline)
+            let run = Arc::new(vision::OcrRun { request: ocr_text_request(vec![stalled.clone(), good.clone()], location(&root, name)), packs: no_ocr_packs() });
+            BatchRunner::run_with_limits(&RunEvents::silent(), "ocr_pdf", run.request.paths.clone(), &run.request.output_location, Some(limits), &run, move |run, path| {
+                vision::ocr_pdf_within(run, path, deadline)
             })
         };
         let recorded = crate::kit::common::limits::recorded("ocr_pdf").unwrap();
@@ -3266,7 +3287,7 @@ mod command_tests {
         outputs.extend(named(&mut naming, "split_pdf", pdf.clone(), assert_success("split", split_pdf(RunEvents::silent(), PageSelectionRequest { paths: vec![pdf.clone()], pages: vec![], page_ranges: None, split_mode: Some("pages".into()), chunk_size: None, output_location: location(&root, "split") }))));
         outputs.extend(named(&mut naming, "extract_pdf_images", image_pdf.clone(), assert_success("extract pdf images", extract_pdf_images(RunEvents::silent(), PdfToTextRequest { paths: vec![image_pdf.clone()], pages: None, output_location: location(&root, "extract pdf images") }))));
         outputs.extend(named(&mut naming, "sign_pdf", pdf.clone(), assert_success("sign", sign_pdf(RunEvents::silent(), SignPdfRequest { paths: vec![pdf.clone()], page: 0, text: "Signed".into(), signature_path: None, rectangle: PdfRect { x: 40.0, y: 40.0, width: 180.0, height: 60.0 }, scope: PageScope::All, output_location: location(&root, "sign") }))));
-        outputs.extend(named(&mut naming, "ocr_pdf", scan.clone(), assert_ocr_adapter("ocr", ocr_pdf(RunEvents::silent(), vision::OcrRequest { paths: vec![scan.clone()], page_range: None, mode: "text".into(), force: false, languages: vec!["eng".into()], output_location: location(&root, "ocr") }))));
+        outputs.extend(named(&mut naming, "ocr_pdf", scan.clone(), assert_ocr_adapter("ocr", ocr_pdf(RunEvents::silent(), vision::OcrRequest { paths: vec![scan.clone()], page_range: None, mode: "text".into(), force: false, languages: vec!["eng".into()], language_overrides: Default::default(), output_location: location(&root, "ocr") }))));
         outputs.extend(named(&mut naming, "extract_pdf_pages", pdf.clone(), assert_success("extract pages", extract_pdf_pages(RunEvents::silent(), PageSelectionRequest { paths: vec![pdf.clone()], pages: vec![], page_ranges: Some("1".into()), split_mode: None, chunk_size: None, output_location: location(&root, "extract pages") }))));
         outputs.extend(named(&mut naming, "compress_pdf", pdf.clone(), assert_success("compress pdf", compress_pdf(RunEvents::silent(), serde_json::from_value::<CompressPdfRequest>(serde_json::json!({ "paths": [pdf.clone()], "quality": 80, "outputLocation": location(&root, "compress pdf") })).expect("Compress Files view payload for compress_pdf")))));
         outputs.extend(named(&mut naming, "rotate_pdf", pdf.clone(), assert_success("rotate pdf", rotate_pdf(RunEvents::silent(), RotatePdfRequest { paths: vec![pdf.clone()], degrees: 90, pages: Some(vec![1]), output_location: location(&root, "rotate pdf") }))));

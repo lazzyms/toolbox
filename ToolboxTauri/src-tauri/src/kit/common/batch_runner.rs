@@ -23,8 +23,31 @@ pub enum FileEvent {
 /// A run's link to the view that started it. Progress goes out through the sink and a cancel comes back in by run id.
 pub struct RunEvents {
     sink: Option<Arc<dyn Fn(FileEvent) + Send + Sync>>,
-    cancel: CancelFlag,
+    cancel: RunCancel,
+}
+
+/// A cancel flag that [`cancel_run`] reaches by run id for as long as it lives.
+pub struct RunCancel {
+    flag: CancelFlag,
     run_id: Option<String>,
+}
+
+impl RunCancel {
+    pub fn unregistered() -> Self { Self { flag: CancelFlag::default(), run_id: None } }
+    pub fn register(run_id: String) -> Self {
+        let flag = CancelFlag::default();
+        running().insert(run_id.clone(), flag.clone());
+        Self { flag, run_id: Some(run_id) }
+    }
+    pub fn flag(&self) -> &CancelFlag { &self.flag }
+}
+
+impl Drop for RunCancel {
+    fn drop(&mut self) {
+        let Some(run_id) = &self.run_id else { return };
+        let mut running = running();
+        if running.get(run_id).is_some_and(|flag| flag.same_as(&self.flag)) { running.remove(run_id); }
+    }
 }
 
 static RUNNING: LazyLock<Mutex<HashMap<String, CancelFlag>>> = LazyLock::new(Default::default);
@@ -41,14 +64,12 @@ pub fn cancel_run(run_id: &str) -> bool {
 pub const CANCELLED_BEFORE_START: &str = "Cancelled before it started";
 
 impl RunEvents {
-    pub fn silent() -> Self { Self { sink: None, cancel: CancelFlag::default(), run_id: None } }
+    pub fn silent() -> Self { Self { sink: None, cancel: RunCancel::unregistered() } }
     pub fn new(sink: impl Fn(FileEvent) + Send + Sync + 'static) -> Self {
-        Self { sink: Some(Arc::new(sink)), cancel: CancelFlag::default(), run_id: None }
+        Self { sink: Some(Arc::new(sink)), cancel: RunCancel::unregistered() }
     }
     pub fn for_run(run_id: String, sink: impl Fn(FileEvent) + Send + Sync + 'static) -> Self {
-        let cancel = CancelFlag::default();
-        running().insert(run_id.clone(), cancel.clone());
-        Self { sink: Some(Arc::new(sink)), cancel, run_id: Some(run_id) }
+        Self { sink: Some(Arc::new(sink)), cancel: RunCancel::register(run_id) }
     }
     fn emit(&self, event: FileEvent) { if let Some(sink) = &self.sink { sink(event) } }
     fn page_sink(&self, index: usize) -> Option<limits::PageSink> {
@@ -58,14 +79,6 @@ impl RunEvents {
     fn settled(&self, index: usize, outcome: &JobOutcome) {
         self.emit(FileEvent::Started { index });
         self.emit(FileEvent::Finished { index, outcome: outcome.clone() });
-    }
-}
-
-impl Drop for RunEvents {
-    fn drop(&mut self) {
-        let Some(run_id) = &self.run_id else { return };
-        let mut running = running();
-        if running.get(run_id).is_some_and(|flag| flag.same_as(&self.cancel)) { running.remove(run_id); }
     }
 }
 
@@ -125,7 +138,7 @@ impl BatchRunner {
                 }
                 let job = Arc::new(job);
                 let processed = runnable.into_par_iter().map(|(index, path)| {
-                    if events.cancel.is_cancelled() {
+                    if events.cancel.flag().is_cancelled() {
                         let outcome = JobOutcome::skipped(path, SkipReason::new(SkipCode::Cancelled, CANCELLED_BEFORE_START));
                         events.settled(index, &outcome);
                         return (index, outcome);
@@ -134,7 +147,7 @@ impl BatchRunner {
                     let outcome = match limits {
                         Some(limits) => {
                             let (job, request) = (Arc::clone(&job), Arc::clone(request));
-                            limits.run_each(path, &events.cancel, events.page_sink(index), move |path| job(&request, path))
+                            limits.run_each(path, events.cancel.flag(), events.page_sink(index), move |path| job(&request, path))
                         }
                         None => JobOutcome::failure(path, ToolError::processing(format!("No processing limits are recorded for {command}."))),
                     };
