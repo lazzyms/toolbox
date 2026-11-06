@@ -1,0 +1,33 @@
+{
+  "englishData": {
+    "path": "tessdata/eng.traineddata",
+    "version": "tessdata_fast 4.1.0",
+    "sha256": "7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2",
+    "license": "Apache-2.0",
+    "source": "https://github.com/tesseract-ocr/tessdata_fast/raw/4.1.0/eng.traineddata",
+    "maxBytes": 52428800
+  },
+  "windows": {
+    "aarch64-pc-windows-msvc": {
+      "msystem": "CLANGARM64",
+      "packages": [
+        {
+          "name": "mingw-w64-clang-aarch64-tesseract-ocr",
+          "version": "5.5.4-1",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-tesseract-ocr-5.5.4-1-any.pkg.tar.zst",
+          "sha256": "ef74919f7fe9c4d9d9d251bfec42f14a27f626ebd8d225c61f5b989fd0498408",
+          "executables": ["tesseract.exe"],
+          "destination": "ocr-engine"
+        },
+        {
+          "name": "mingw-w64-clang-aarch64-poppler",
+          "version": "26.10.0-1",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-poppler-26.10.0-1-any.pkg.tar.zst",
+          "sha256": "e3619c8e7b38ac6549edebe05c4d9c9a05bbbc07367cf4d41ac22197956ca879",
+          "executables": ["pdftoppm.exe", "pdftotext.exe"],
+          "destination": "pdf-rasterizer"
+        }
+      ]
+    }
+  }
+}

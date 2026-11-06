@@ -4,6 +4,8 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+pub use crate::kit::pdf::font_resolver::FontReport;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum OutputLocation {
@@ -119,8 +121,18 @@ pub enum LimitKind {
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum OutcomePointer {
     Tool { tool_id: String },
-    Pack { pack_id: String },
+    /// A pack the file needs. `name` is how the row names it, as in "Install Hindi pack".
+    Pack { pack_id: String, name: String, reason: PackNeed },
     OutputFolder,
+}
+
+/// Why a required pack could not be used, which picks the row's action: Install, Repair or Update.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PackNeed {
+    NotInstalled,
+    Damaged,
+    Incompatible,
 }
 
 impl ToolError {
@@ -177,18 +189,43 @@ pub enum InputCardinality {
     Ordered,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FormatFamily {
+    pub id: String,
+    pub extensions: Vec<String>,
+    #[serde(rename = "nativeAvailability", deserialize_with = "deserialize_native_availability")]
+    pub native_available: bool,
+    #[serde(default)]
+    pub basic_fidelity: bool,
+}
+
+#[derive(Debug, Clone)]
 pub struct NativeCapability {
     pub command: String,
     pub accepted_extensions: Vec<String>,
+    pub format_families: Vec<FormatFamily>,
     pub input_cardinality: InputCardinality,
     pub supports_page_selection: bool,
     pub supports_preview: bool,
-    #[serde(rename = "nativeAvailability", deserialize_with = "deserialize_native_availability")]
     pub native_available: bool,
     pub output_suffix: String,
     pub many_to_one: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SharedCapabilityRow {
+    command: String,
+    accepted_extensions: Option<Vec<String>>,
+    format_families: Option<Vec<FormatFamily>>,
+    input_cardinality: InputCardinality,
+    supports_page_selection: bool,
+    supports_preview: bool,
+    #[serde(rename = "nativeAvailability", deserialize_with = "deserialize_native_availability")]
+    native_available: bool,
+    output_suffix: String,
+    many_to_one: bool,
 }
 
 static CAPABILITY_REGISTRY: OnceLock<Vec<NativeCapability>> = OnceLock::new();
@@ -204,10 +241,55 @@ where
     }
 }
 
+fn accepted_extensions_of(row: &mut SharedCapabilityRow) -> Result<Vec<String>, String> {
+    let command = &row.command;
+    match (row.accepted_extensions.take(), &row.format_families) {
+        (Some(extensions), None) => Ok(extensions),
+        (None, Some(families)) => {
+            if families.is_empty() {
+                return Err(format!("{command} has no format families."));
+            }
+            let mut ids = HashSet::new();
+            for family in families {
+                if !is_valid_family_id(&family.id) || !ids.insert(family.id.as_str()) {
+                    return Err(format!("{command} has an invalid or duplicate format family {}.", family.id));
+                }
+                if family.extensions.is_empty() {
+                    return Err(format!("{command} format family {} has no extensions.", family.id));
+                }
+            }
+            Ok(families.iter().flat_map(|family| family.extensions.iter().cloned()).collect())
+        }
+        _ => Err(format!("{command} must declare either accepted extensions or format families.")),
+    }
+}
+
+fn is_valid_family_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.split('-').all(|segment| {
+            !segment.is_empty() && segment.chars().all(|character| character.is_ascii_lowercase() || character.is_ascii_digit())
+        })
+}
+
 fn parse_capability_registry(raw: &str) -> Result<Vec<NativeCapability>, String> {
-    let capabilities: Vec<NativeCapability> = serde_json::from_str(raw).map_err(|error| error.to_string())?;
-    if capabilities.is_empty() {
+    let rows: Vec<SharedCapabilityRow> = serde_json::from_str(raw).map_err(|error| error.to_string())?;
+    if rows.is_empty() {
         return Err("The shared capability registry is empty.".to_string());
+    }
+    let mut capabilities = Vec::with_capacity(rows.len());
+    for mut row in rows {
+        let accepted_extensions = accepted_extensions_of(&mut row)?;
+        capabilities.push(NativeCapability {
+            command: row.command,
+            accepted_extensions,
+            format_families: row.format_families.unwrap_or_default(),
+            input_cardinality: row.input_cardinality,
+            supports_page_selection: row.supports_page_selection,
+            supports_preview: row.supports_preview,
+            native_available: row.native_available,
+            output_suffix: row.output_suffix,
+            many_to_one: row.many_to_one,
+        });
     }
     let mut commands = HashSet::new();
     for capability in &capabilities {
@@ -330,13 +412,16 @@ pub fn partition_command_inputs(command: &str, paths: &[PathBuf]) -> Result<Vali
     let accepted_extensions = capability.accepted_extensions.join(", ");
     let mut validation = ValidatedCommandInputs { accepted: Vec::new(), rejected: Vec::new() };
     for (index, path) in paths.iter().cloned().enumerate() {
-        let extension_accepted = path.extension().and_then(|extension| extension.to_str()).is_some_and(|extension| {
-            capability.accepted_extensions.iter().any(|accepted| accepted.trim_start_matches('.').eq_ignore_ascii_case(extension))
-        });
+        let extension = path.extension().and_then(|extension| extension.to_str()).unwrap_or_default();
+        let matches = |accepted: &String| !extension.is_empty() && accepted.trim_start_matches('.').eq_ignore_ascii_case(extension);
+        let extension_accepted = capability.accepted_extensions.iter().any(matches);
+        let unavailable_family = capability.format_families.iter().any(|family| !family.native_available && family.extensions.iter().any(matches));
         let error = if path.is_dir() {
             Some(ToolError::invalid_input("Folders aren't processed. Add the files inside the folder instead."))
         } else if !extension_accepted {
             Some(ToolError::invalid_input(format!("Unsupported input format. Accepted extensions: {accepted_extensions}.")))
+        } else if unavailable_family {
+            Some(ToolError::unavailable(format!("{} comes in a later update.", extension.to_ascii_uppercase())))
         } else {
             None
         };
@@ -359,6 +444,7 @@ pub enum SkipCode {
     TextAlreadyPresent,
     NoEffectiveChange,
     UnsupportedFormat,
+    NeedsOcr,
     Cancelled,
 }
 
@@ -388,6 +474,8 @@ pub enum WarningKind {
     FontSubstituted { requested_family: String, actual_family: String },
     RenamedToAvoidReplacing { chosen_name: String, final_name: String },
     PrecisionReduced,
+    OmittedContent,
+    ApproximateLayout,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -395,6 +483,13 @@ pub struct OutcomeWarning {
     #[serde(flatten)]
     pub kind: WarningKind,
     pub message: String,
+}
+
+/// One labelled line of a result's breakdown, such as which pages were recognized.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutcomeDetail {
+    pub label: String,
+    pub value: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -410,16 +505,20 @@ pub struct JobOutcome {
     pub input_path: PathBuf,
     pub detail: String,
     pub warnings: Vec<OutcomeWarning>,
+    pub fonts: Vec<FontReport>,
     pub state: OutcomeState,
+    pub original_bytes: Option<u64>,
+    pub output_bytes: Option<u64>,
+    pub page_details: Vec<OutcomeDetail>,
 }
 
 impl JobOutcome {
     pub fn succeeded(input_path: PathBuf, output_paths: Vec<PathBuf>, detail: impl Into<String>) -> Self {
-        Self { input_path, detail: detail.into(), warnings: Vec::new(), state: OutcomeState::Succeeded { output_paths } }
+        Self::new(input_path, detail.into(), OutcomeState::Succeeded { output_paths })
     }
 
     pub fn skipped(input_path: PathBuf, reason: SkipReason) -> Self {
-        Self { input_path, detail: String::new(), warnings: Vec::new(), state: OutcomeState::Skipped { reason } }
+        Self::new(input_path, String::new(), OutcomeState::Skipped { reason })
     }
 
     pub fn failure(input_path: PathBuf, error: ToolError) -> Self {
@@ -427,7 +526,24 @@ impl JobOutcome {
     }
 
     pub fn failure_with_outputs(input_path: PathBuf, output_paths: Vec<PathBuf>, error: ToolError) -> Self {
-        Self { input_path, detail: String::new(), warnings: Vec::new(), state: OutcomeState::Failed { output_paths, error } }
+        Self::new(input_path, String::new(), OutcomeState::Failed { output_paths, error })
+    }
+
+    fn new(input_path: PathBuf, detail: String, state: OutcomeState) -> Self {
+        Self { input_path, detail, warnings: Vec::new(), fonts: Vec::new(), state, original_bytes: None, output_bytes: None, page_details: Vec::new() }
+    }
+
+    pub fn with_sizes(self, original_bytes: u64, output_bytes: u64) -> Self {
+        Self { original_bytes: Some(original_bytes), output_bytes: Some(output_bytes), ..self }
+    }
+
+    pub fn with_page_details(self, page_details: Vec<OutcomeDetail>) -> Self {
+        Self { page_details, ..self }
+    }
+
+    pub fn with_fonts(mut self, fonts: Vec<FontReport>) -> Self {
+        self.fonts = fonts;
+        self
     }
 
     pub fn with_warning(mut self, warning: OutcomeWarning) -> Self {
@@ -468,6 +584,14 @@ struct JobOutcomeWire {
     failure: Option<ToolError>,
     reason: Option<SkipReason>,
     warnings: Vec<OutcomeWarning>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    original_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    output_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    page_details: Vec<OutcomeDetail>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    fonts: Vec<FontReport>,
 }
 
 impl From<JobOutcome> for JobOutcomeWire {
@@ -477,7 +601,7 @@ impl From<JobOutcome> for JobOutcomeWire {
             OutcomeState::Skipped { reason } => (OutcomeStateTag::Skipped, Vec::new(), None, Some(reason)),
             OutcomeState::Failed { output_paths, error } => (OutcomeStateTag::Failed, output_paths, Some(error), None),
         };
-        Self { input_path: outcome.input_path, state, output_paths, detail: outcome.detail, failure, reason, warnings: outcome.warnings }
+        Self { input_path: outcome.input_path, state, output_paths, detail: outcome.detail, failure, reason, warnings: outcome.warnings, fonts: outcome.fonts, original_bytes: outcome.original_bytes, output_bytes: outcome.output_bytes, page_details: outcome.page_details }
     }
 }
 
@@ -491,7 +615,7 @@ impl TryFrom<JobOutcomeWire> for JobOutcome {
             (OutcomeStateTag::Failed, Some(error), None) => OutcomeState::Failed { output_paths: wire.output_paths, error },
             (state, _, _) => return Err(format!("Inconsistent {state:?} job outcome for {}.", wire.input_path.display())),
         };
-        Ok(Self { input_path: wire.input_path, detail: wire.detail, warnings: wire.warnings, state })
+        Ok(Self { input_path: wire.input_path, detail: wire.detail, warnings: wire.warnings, fonts: wire.fonts, state, original_bytes: wire.original_bytes, output_bytes: wire.output_bytes, page_details: wire.page_details })
     }
 }
 
@@ -537,6 +661,7 @@ mod tests {
 
     use super::*;
     use crate::kit::office::OfficeProcessor;
+    use crate::kit::pdf::font_resolver::{FontSource, FontStyle};
 
     #[test]
     fn ipc_result_uses_the_frontend_field_names() {
@@ -548,6 +673,37 @@ mod tests {
         assert_eq!(value["detail"], "PDF Unlocked");
         assert!(value["failure"].is_null() && value["reason"].is_null());
         assert_eq!(value["warnings"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn sizes_serialize_in_camel_case_only_when_reported() {
+        let compressed = JobOutcome::succeeded(PathBuf::from("a.pdf"), vec![PathBuf::from("a-compressed.pdf")], "PDF compressed").with_sizes(2048, 1024);
+        let no_savings = JobOutcome::skipped(PathBuf::from("b.png"), SkipReason::new(SkipCode::NoSavings, "No savings: already well compressed")).with_sizes(512, 600);
+        let plain_success = JobOutcome::succeeded(PathBuf::from("c.pdf"), vec![PathBuf::from("c-1.pdf")], "Saved");
+        let plain_skip = JobOutcome::skipped(PathBuf::from("d.pdf"), SkipReason::new(SkipCode::NotProtected, "Not protected."));
+
+        let value = serde_json::to_value(&compressed).unwrap();
+        assert_eq!((value["state"].as_str(), value["originalBytes"].as_u64(), value["outputBytes"].as_u64()), (Some("succeeded"), Some(2048), Some(1024)));
+        let value = serde_json::to_value(&no_savings).unwrap();
+        assert_eq!((value["state"].as_str(), value["originalBytes"].as_u64(), value["outputBytes"].as_u64()), (Some("skipped"), Some(512), Some(600)));
+        assert_eq!(value["outputPaths"], serde_json::json!([]));
+
+        for (outcome, state) in [(&plain_success, "succeeded"), (&plain_skip, "skipped")] {
+            let value = serde_json::to_value(outcome).unwrap();
+            assert_eq!(value["state"], state);
+            let object = value.as_object().unwrap();
+            assert!(!object.contains_key("originalBytes") && !object.contains_key("outputBytes"), "{value}");
+        }
+
+        for outcome in [compressed, no_savings, plain_success, plain_skip] {
+            assert_eq!(serde_json::from_value::<JobOutcome>(serde_json::to_value(&outcome).unwrap()).unwrap(), outcome);
+        }
+        let explicit_nulls = serde_json::json!({
+            "inputPath": "e.pdf", "state": "succeeded", "outputPaths": [], "detail": "", "failure": null, "reason": null,
+            "warnings": [], "originalBytes": null, "outputBytes": null,
+        });
+        let parsed = serde_json::from_value::<JobOutcome>(explicit_nulls).unwrap();
+        assert_eq!((parsed.original_bytes, parsed.output_bytes), (None, None));
     }
 
     #[test]
@@ -564,11 +720,11 @@ mod tests {
 
         let pointed = JobOutcome::failure(
             PathBuf::from("arabic.pdf"),
-            ToolError::unavailable("Install the script pack.").with_pointer(OutcomePointer::Pack { pack_id: "script-pack".into() }),
+            ToolError::unavailable("Install the script pack.").with_pointer(OutcomePointer::Pack { pack_id: "script-pack".into(), name: "Indic script".into(), reason: PackNeed::NotInstalled }),
         );
         let value = serde_json::to_value(pointed).unwrap();
         assert_eq!(value["failure"]["kind"], "unavailable");
-        assert_eq!(value["failure"]["pointer"], serde_json::json!({ "kind": "pack", "packId": "script-pack" }));
+        assert_eq!(value["failure"]["pointer"], serde_json::json!({ "kind": "pack", "packId": "script-pack", "name": "Indic script", "reason": "notInstalled" }));
 
         let read_only = ToolError::processing("The output folder is read-only. Nothing was saved.").with_pointer(OutcomePointer::OutputFolder);
         assert_eq!(serde_json::to_value(read_only).unwrap()["pointer"], serde_json::json!({ "kind": "outputFolder" }));
@@ -621,20 +777,22 @@ mod tests {
         let skips = [
             SkipCode::NotProtected, SkipCode::AlreadyProtected, SkipCode::NoSavings,
             SkipCode::AlreadyInTargetFormat, SkipCode::RangeEmptyAfterClamping, SkipCode::TextAlreadyPresent,
-            SkipCode::NoEffectiveChange, SkipCode::UnsupportedFormat, SkipCode::Cancelled,
+            SkipCode::NoEffectiveChange, SkipCode::UnsupportedFormat, SkipCode::NeedsOcr, SkipCode::Cancelled,
         ];
         assert_eq!(serde_json::to_value(skips).unwrap(), serde_json::json!([
             "notProtected", "alreadyProtected", "noSavings", "alreadyInTargetFormat",
-            "rangeEmptyAfterClamping", "textAlreadyPresent", "noEffectiveChange", "unsupportedFormat", "cancelled",
+            "rangeEmptyAfterClamping", "textAlreadyPresent", "noEffectiveChange", "unsupportedFormat", "needsOcr", "cancelled",
         ]));
         let warnings = [
             WarningKind::SignatureRemoved,
             WarningKind::FontSubstituted { requested_family: "A".into(), actual_family: "B".into() },
             WarningKind::RenamedToAvoidReplacing { chosen_name: "a".into(), final_name: "b".into() },
             WarningKind::PrecisionReduced,
+            WarningKind::OmittedContent,
+            WarningKind::ApproximateLayout,
         ];
         let codes = warnings.into_iter().map(|kind| serde_json::to_value(kind).unwrap()["code"].clone()).collect::<Vec<_>>();
-        assert_eq!(codes, ["signatureRemoved", "fontSubstituted", "renamedToAvoidReplacing", "precisionReduced"]);
+        assert_eq!(codes, ["signatureRemoved", "fontSubstituted", "renamedToAvoidReplacing", "precisionReduced", "omittedContent", "approximateLayout"]);
     }
 
     #[test]
@@ -651,13 +809,15 @@ mod tests {
                 PathBuf::from("photo.heic"),
                 SkipReason::new(SkipCode::UnsupportedFormat, "Convert HEIC images before compressing them.")
                     .with_pointer(OutcomePointer::Tool { tool_id: "heic-convert".into() }),
-            ).with_warning(OutcomeWarning { kind: WarningKind::PrecisionReduced, message: "The 16-bit source would be reduced to 8-bit.".into() }),
+            ).with_warning(OutcomeWarning { kind: WarningKind::PrecisionReduced, message: "The 16-bit source would be reduced to 8-bit.".into() })
+            .with_warning(OutcomeWarning { kind: WarningKind::OmittedContent, message: "Omitted content: 1 chart has no stored image, so it was left out.".into() })
+            .with_warning(OutcomeWarning { kind: WarningKind::ApproximateLayout, message: "Approximate layout: 1 floating object on page 2 was placed as close as possible.".into() }),
             JobOutcome::skipped(PathBuf::from("plain.pdf"), SkipReason::new(SkipCode::NotProtected, "This PDF is not password protected.")),
             JobOutcome::failure_with_outputs(
                 PathBuf::from("scan.pdf"),
                 vec![PathBuf::from("scan-page-1.png")],
                 ToolError::unavailable("Install the script pack to shape this text.")
-                    .with_pointer(OutcomePointer::Pack { pack_id: "script-pack".into() }),
+                    .with_pointer(OutcomePointer::Pack { pack_id: "script-pack".into(), name: "Indic script".into(), reason: PackNeed::Damaged }),
             ).with_warning(OutcomeWarning {
                 kind: WarningKind::RenamedToAvoidReplacing { chosen_name: "scan-page-1.png".into(), final_name: "scan-page-1 2.png".into() },
                 message: "Saved as scan-page-1 2.png so the existing file was not replaced.".into(),
@@ -667,6 +827,23 @@ mod tests {
                 vec![PathBuf::from("drawings-page-1.png")],
                 ToolError::limit_exceeded(LimitKind::Time, "Took longer than 5 minutes and was stopped. 1 part was saved before it stopped."),
             ),
+            JobOutcome::succeeded(PathBuf::from("report.pdf"), vec![PathBuf::from("report-compressed.pdf")], "PDF compressed")
+                .with_sizes(2_500_000, 1_000_000),
+            JobOutcome::skipped(PathBuf::from("logo.png"), SkipReason::new(SkipCode::NoSavings, "No savings: already well compressed"))
+                .with_sizes(4096, 4200),
+            JobOutcome::succeeded(PathBuf::from("mixed.pdf"), vec![PathBuf::from("mixed-ocr.pdf")], "2 of 3 pages recognized, 1 skipped for its text.")
+                .with_page_details(vec![
+                    OutcomeDetail { label: "Recognized".into(), value: "Pages 1 and 3".into() },
+                    OutcomeDetail { label: "Skipped, visible text".into(), value: "Page 2".into() },
+                    OutcomeDetail { label: "Languages".into(), value: "English".into() },
+                ]),
+            JobOutcome::succeeded(PathBuf::from("notes.txt"), vec![PathBuf::from("notes.pdf")], "1 page. Read as Windows-1252.").with_fonts(vec![FontReport {
+                requested_family: "Courier New".into(),
+                requested_style: FontStyle::Regular,
+                font_used: "Liberation Mono".into(),
+                style_used: FontStyle::Regular,
+                source: FontSource::BundledFallback,
+            }]),
         ];
 
         assert_eq!(serde_json::to_value(&samples).unwrap(), shared);
@@ -795,12 +972,12 @@ mod tests {
         for row in rows {
             let command = row["command"].as_str().unwrap();
             let capability = native_capability(command).unwrap_or_else(|| panic!("Missing native capability for {command}"));
-            let accepted_extensions = row["acceptedExtensions"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|extension| extension.as_str().unwrap())
-                .collect::<Vec<_>>();
+            let accepted_extensions = match row["acceptedExtensions"].as_array() {
+                Some(extensions) => extensions.iter().map(|extension| extension.as_str().unwrap()).collect::<Vec<_>>(),
+                None => row["formatFamilies"].as_array().unwrap().iter()
+                    .flat_map(|family| family["extensions"].as_array().unwrap().iter().map(|extension| extension.as_str().unwrap()))
+                    .collect(),
+            };
             assert_eq!(capability.accepted_extensions, accepted_extensions);
             assert_eq!(
                 capability.input_cardinality,
@@ -844,7 +1021,13 @@ mod tests {
         assert!(!native_capability("extract_gif_frames").unwrap().supports_preview);
         let pdf = native_capability("pdf_to_text").unwrap();
         assert!(pdf.supports_page_selection && !pdf.supports_preview);
-        assert!(!native_capability("ocr_pdf").unwrap().native_available);
+        let ocr = native_capability("ocr_pdf").unwrap();
+        assert!(ocr.native_available);
+        assert_eq!((ocr.input_cardinality, ocr.output_suffix.as_str()), (InputCardinality::Multiple, "-ocr"));
+        assert_eq!(ocr.accepted_extensions, [".pdf", ".png", ".jpg", ".jpeg", ".webp", ".heic", ".tif", ".tiff"]);
+        assert!(validate_command_inputs("ocr_pdf", &[PathBuf::from("scan.pdf"), PathBuf::from("photo.HEIC"), PathBuf::from("page.webp"), PathBuf::from("fax.TIF"), PathBuf::from("flatbed-scan.tiff")]).is_ok());
+        let rejected = validate_command_inputs("ocr_pdf", &[PathBuf::from("scan.pdf"), PathBuf::from("loading-spinner.gif")]).unwrap_err();
+        assert!(rejected[1].error().is_some_and(|error| error.message.contains("Accepted extensions")));
         assert!(!native_capability("blur_faces").unwrap().native_available);
         assert!(!native_capability("remove_image_background").unwrap().native_available);
     }
@@ -858,6 +1041,64 @@ mod tests {
         assert!(parse_capability_registry(&unknown)
             .unwrap_err()
             .contains("unknown field"));
+    }
+
+    #[test]
+    fn format_families_derive_accepted_extensions_and_per_family_flags() {
+        let samples: serde_json::Value = serde_json::from_str(include_str!("../../../shared/capability-family-samples.json")).unwrap();
+        let valid = &samples["valid"];
+        let capability = parse_capability_registry(&format!("[{}]", valid["row"])).unwrap().remove(0);
+
+        assert_eq!(capability.accepted_extensions, serde_json::from_value::<Vec<String>>(valid["acceptedExtensions"].clone()).unwrap());
+        let families = capability
+            .format_families
+            .iter()
+            .map(|family| serde_json::json!({
+                "id": family.id,
+                "nativeAvailability": if family.native_available { "available" } else { "unavailable" },
+                "basicFidelity": family.basic_fidelity,
+            }))
+            .collect::<Vec<_>>();
+        assert_eq!(serde_json::Value::Array(families), valid["families"]);
+        let with_families = native_capabilities().iter().filter(|capability| !capability.format_families.is_empty()).map(|capability| capability.command.as_str()).collect::<Vec<_>>();
+        assert_eq!(with_families, ["convert_to_pdf"]);
+    }
+
+    #[test]
+    fn format_families_reject_shared_extensions_empty_families_and_mixed_shapes() {
+        let samples: serde_json::Value = serde_json::from_str(include_str!("../../../shared/capability-family-samples.json")).unwrap();
+        let mut base = samples["valid"]["row"].clone();
+        base.as_object_mut().unwrap().remove("formatFamilies");
+        for (name, shape) in samples["invalid"].as_object().unwrap() {
+            let mut row = base.clone();
+            row.as_object_mut().unwrap().extend(shape.as_object().unwrap().clone());
+            assert!(parse_capability_registry(&format!("[{row}]")).is_err(), "{name} must be rejected");
+        }
+        assert!(parse_capability_registry(&format!("[{base}]")).unwrap_err().contains("either accepted extensions or format families"));
+    }
+
+    #[test]
+    fn convert_to_pdf_declares_its_format_families_and_turns_away_unshipped_ones() {
+        let convert = native_capability("convert_to_pdf").unwrap();
+        let families = convert.format_families.iter().map(|family| (family.id.as_str(), family.native_available, family.basic_fidelity)).collect::<Vec<_>>();
+        assert_eq!(families, [
+            ("plain-text", true, false), ("pdf", true, false), ("word", true, false), ("rich-text", true, false), ("spreadsheets", true, false),
+            ("presentations", true, false), ("markdown", true, false), ("web-pages", true, false), ("tables", true, false),
+            ("ebooks", true, false), ("legacy-office", false, true), ("mobi", false, false),
+        ]);
+        assert!(convert.native_available && convert.output_suffix.is_empty() && !convert.many_to_one);
+        assert_eq!(convert.input_cardinality, InputCardinality::Multiple);
+
+        let paths = ["/in/notes.txt", "/in/report.PDF", "/in/book.mobi", "/in/book.epub", "/in/photo.png"].map(PathBuf::from);
+        let validation = partition_command_inputs("convert_to_pdf", &paths).unwrap();
+        assert_eq!(validation.accepted.iter().map(|(index, _)| *index).collect::<Vec<_>>(), [0, 1, 3]);
+        let rejected = validation.rejected.iter().map(|(index, outcome)| {
+            let error = outcome.error().unwrap();
+            (*index, error.kind.clone(), error.message.as_str())
+        }).collect::<Vec<_>>();
+        assert_eq!(rejected[0], (2, ErrorKind::Unavailable, "MOBI comes in a later update."));
+        assert_eq!((rejected[1].0, &rejected[1].1), (4, &ErrorKind::InvalidInput));
+        assert_eq!(rejected.len(), 2);
     }
 
     #[test]

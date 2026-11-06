@@ -13,9 +13,17 @@ test("native-shaped outcomes parse into the TypeScript contract for all three st
   const outcomes = parseToolResult(nativeSamples);
 
   assert.deepEqual(outcomes, nativeSamples);
-  assert.deepEqual(outcomes.map((outcome) => outcome.state), ["succeeded", "skipped", "skipped", "failed", "failed"]);
+  assert.deepEqual(outcomes.map((outcome) => outcome.state), ["succeeded", "skipped", "skipped", "failed", "failed", "succeeded", "skipped", "succeeded", "succeeded"]);
 
   const [succeeded, pointedSkip, plainSkip, failed, limited] = outcomes;
+  const converted = outcomes[8];
+  for (const outcome of outcomes.slice(0, 5)) {
+    assert.ok(!("originalBytes" in outcome) && !("outputBytes" in outcome), "outcomes without sizes stay unchanged");
+  }
+  assert.equal(succeeded.fonts, undefined, "outcomes without fonts carry no font list");
+  assert.deepEqual(converted.fonts, [
+    { requestedFamily: "Courier New", requestedStyle: "regular", fontUsed: "Liberation Mono", styleUsed: "regular", source: "bundled fallback" },
+  ]);
   assert.equal(succeeded.state === "succeeded" && succeeded.outputPaths[0], "signed-edited.pdf");
   assert.deepEqual(succeeded.warnings.map((warning) => warning.code), ["signatureRemoved", "fontSubstituted"]);
   assert.deepEqual(
@@ -31,12 +39,51 @@ test("native-shaped outcomes parse into the TypeScript contract for all three st
 
   assert.ok(failed.state === "failed");
   assert.equal(failed.failure.kind, "unavailable");
-  assert.deepEqual(failed.failure.pointer, { kind: "pack", packId: "script-pack" });
+  assert.deepEqual(failed.failure.pointer, { kind: "pack", packId: "script-pack", name: "Indic script", reason: "damaged" });
   assert.deepEqual(failed.outputPaths, ["scan-page-1.png"], "failure keeps already published outputs");
 
   assert.ok(limited.state === "failed" && limited.failure.kind === "limitExceeded");
   assert.equal(limited.failure.details.limit, "time");
   assert.deepEqual(limited.outputPaths, ["drawings-page-1.png"], "a stopped run keeps the parts it saved");
+});
+
+test("native-shaped outcomes carry original and output byte sizes when reported", () => {
+  const [compressed, noSavings] = parseToolResult(nativeSamples).slice(5, 7);
+
+  assert.ok(compressed.state === "succeeded");
+  assert.deepEqual([compressed.originalBytes, compressed.outputBytes], [2_500_000, 1_000_000]);
+  assert.deepEqual(compressed.outputPaths, ["report-compressed.pdf"]);
+
+  assert.ok(noSavings.state === "skipped" && noSavings.reason.code === "noSavings");
+  assert.deepEqual(noSavings.outputPaths, []);
+  assert.deepEqual([noSavings.originalBytes, noSavings.outputBytes], [4096, 4200]);
+
+  const explicitNulls = parseJobOutcome({ ...sample(0), originalBytes: null, outputBytes: null });
+  assert.ok(!("originalBytes" in explicitNulls) && !("outputBytes" in explicitNulls));
+  const onlyOriginal = parseJobOutcome({ ...sample(6), outputBytes: undefined });
+  assert.deepEqual([onlyOriginal.originalBytes, onlyOriginal.outputBytes], [4096, undefined]);
+
+  for (const bad of [-1, 1.5, "4096", Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => parseJobOutcome({ ...sample(5), outputBytes: bad }), /Invalid job outcome: outcome.outputBytes/);
+  }
+});
+
+test("native-shaped outcomes carry a labelled page breakdown when reported", () => {
+  const outcomes = parseToolResult(nativeSamples);
+  const mixed = outcomes[7];
+
+  assert.ok(mixed.state === "succeeded");
+  assert.deepEqual(mixed.pageDetails, [
+    { label: "Recognized", value: "Pages 1 and 3" },
+    { label: "Skipped, visible text", value: "Page 2" },
+    { label: "Languages", value: "English" },
+  ]);
+  for (const outcome of outcomes.slice(0, 7)) assert.ok(!("pageDetails" in outcome), "outcomes without a breakdown stay unchanged");
+  assert.ok(!("pageDetails" in parseJobOutcome({ ...sample(7), pageDetails: [] })), "an empty breakdown is the same as none");
+
+  for (const bad of ["Pages 1-3", [{ label: "Recognized" }], [{ label: 1, value: "Page 1" }]]) {
+    assert.throws(() => parseJobOutcome({ ...sample(7), pageDetails: bad }), /Invalid job outcome: outcome.pageDetails/);
+  }
 });
 
 test("outcomes from before the state field are rejected at the boundary", () => {
@@ -53,6 +100,11 @@ test("inconsistent native outcomes are rejected", () => {
   const fontWarningWithoutDetails = { ...sample(0), warnings: [{ code: "fontSubstituted", message: "Changed." }] };
   const limitWithoutDetails = { ...sample(4), failure: { kind: "limitExceeded", message: "Too big.", pointer: null } };
   const unknownLimit = { ...sample(4), failure: { kind: "limitExceeded", details: { limit: "patience" }, message: "Too big.", pointer: null } };
+  const packPointer = (pointer: object) => ({ ...sample(3), failure: { kind: "unavailable", message: "Needs a pack.", pointer: { kind: "pack", packId: "ocr-hindi", name: "Hindi", reason: "notInstalled", ...pointer } } });
+  const packWithoutName = packPointer({ name: undefined });
+  const unknownPackNeed = packPointer({ reason: "bored" });
+  const unknownFontSource = { ...sample(8), fonts: [{ ...(sample(8).fonts as object[])[0], source: "borrowed" }] };
+  const fontsNotAList = { ...sample(8), fonts: { fontUsed: "Liberation Mono" } };
 
   for (const [name, value] of Object.entries({
     skippedWithOutputs,
@@ -63,6 +115,10 @@ test("inconsistent native outcomes are rejected", () => {
     fontWarningWithoutDetails,
     limitWithoutDetails,
     unknownLimit,
+    packWithoutName,
+    unknownPackNeed,
+    unknownFontSource,
+    fontsNotAList,
   })) {
     assert.throws(() => parseJobOutcome(value), /Invalid job outcome/, name);
   }
