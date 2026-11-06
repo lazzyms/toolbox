@@ -16,6 +16,7 @@ use crate::kit::pdf::font_resolver::{FontReport, FontResolver, FontSource, FontS
 use crate::kit::pdf::layout::{assemble, expand_tabs, Align, Assembly, Block, Bookmark, Face, FontBook, Flow, Geometry, Omitted, PageOut, PageSetup, Paragraph, Span, Style, Theme};
 use crate::kit::pdf::presentation::Include;
 use crate::kit::pdf::{delimited, docx, epub, html, markdown, odp, ods, odt, pptx, rtf, xlsx};
+use crate::packs::uninstall::RunPacks;
 
 pub const COMMAND: &str = "convert_to_pdf";
 /// Pasted markup is held in memory, so it stays well under the file limit.
@@ -239,13 +240,15 @@ pub struct ConvertToPdfRequest {
 pub struct ConvertJob<S: SystemFontLookup> {
     request: ConvertToPdfRequest,
     fonts: FontResolver<S>,
+    /// The script pack, for text in scripts other than Latin, Cyrillic and Greek.
+    packs: RunPacks,
 }
 
-pub fn run(events: &RunEvents, request: serde_json::Value) -> Vec<JobOutcome> {
-    run_with(events, request, FontResolver::installed)
+pub fn run(events: &RunEvents, request: serde_json::Value, packs: RunPacks) -> Vec<JobOutcome> {
+    run_with(events, request, FontResolver::installed, packs)
 }
 
-pub fn run_with<S, F>(events: &RunEvents, request: serde_json::Value, fonts: F) -> Vec<JobOutcome>
+pub fn run_with<S, F>(events: &RunEvents, request: serde_json::Value, fonts: F, packs: RunPacks) -> Vec<JobOutcome>
 where
     S: SystemFontLookup + Send + Sync + 'static,
     F: FnOnce() -> Result<FontResolver<S>, ToolError>,
@@ -254,7 +257,7 @@ where
     let fail_all = |error: ToolError| paths.iter().cloned().map(|path| JobOutcome::failure(path, error.clone())).collect();
     let request = match parse_request(request) { Ok(request) => request, Err(error) => return fail_all(error) };
     let fonts = match fonts() { Ok(fonts) => fonts, Err(error) => return fail_all(error) };
-    let job = Arc::new(ConvertJob { request, fonts });
+    let job = Arc::new(ConvertJob { request, fonts, packs });
     let location = job.request.output_location.clone();
     BatchRunner::run(events, COMMAND, job.request.paths.clone(), &location, &job, convert)
 }
@@ -319,7 +322,7 @@ fn save(job_location: &OutputLocation, input: &Path, mut document: Document) -> 
 fn plain_text<S: SystemFontLookup>(job: &ConvertJob<S>, options: &PlainTextOptions, input: &Path) -> Result<JobOutcome, ToolError> {
     let bytes = fs::read(input).map_err(|error| ToolError::processing(format!("Could not read the file: {error}")))?;
     let (text, encoding) = decode(&bytes, options.encoding)?;
-    let mut book = FontBook::new(&job.fonts);
+    let mut book = FontBook::new(&job.fonts, &job.packs);
     let face = book.face(options.font.family(), FontStyle::Regular)?;
     let size = options.page_size.unwrap_or(job.request.page_defaults.page_size).points();
     let margin = options.margins.unwrap_or(job.request.page_defaults.margins).points();
@@ -365,7 +368,7 @@ fn markdown_file<S: SystemFontLookup>(job: &ConvertJob<S>, options: &MarkdownOpt
     let geometry = Geometry::uniform(size.0, size.1, options.margins.unwrap_or(job.request.page_defaults.margins).points());
     let theme = Theme::new(options.body_font.family(), CODE_FAMILY, MARKDOWN_SIZE, options.code_style == CodeStyle::Shaded);
 
-    let mut book = FontBook::new(&job.fonts);
+    let mut book = FontBook::new(&job.fonts, &job.packs);
     let mut body = Flow::new(&mut book, theme.clone(), &parsed.pictures, geometry);
     body.blocks(&parsed.blocks)?;
     let mut laid = body.finish();
@@ -406,27 +409,27 @@ fn markdown_file<S: SystemFontLookup>(job: &ConvertJob<S>, options: &MarkdownOpt
 fn html_file<S: SystemFontLookup>(job: &ConvertJob<S>, options: &WebPageOptions, input: &Path) -> Result<JobOutcome, ToolError> {
     let bytes = fs::read(input).map_err(|error| ToolError::processing(format!("Could not read the file: {error}")))?;
     let (markup, _) = decode(&bytes, TextEncoding::Detect)?;
-    let page = web_page(&job.fonts, &job.request.page_defaults, options, &markup, Some(input.parent().unwrap_or(Path::new("."))))?;
+    let page = web_page(&job.fonts, &job.packs, &job.request.page_defaults, options, &markup, Some(input.parent().unwrap_or(Path::new("."))))?;
     let path = save(&job.request.output_location, input, page.document)?;
     Ok(JobOutcome::succeeded(input.to_path_buf(), vec![path], page.detail).with_fonts(page.fonts))
 }
 
-pub fn pasted_html(request: PastedHtmlRequest) -> JobOutcome {
+pub fn pasted_html(request: PastedHtmlRequest, packs: &RunPacks) -> JobOutcome {
     let output_path = request.output_path.clone();
     let outcome = match FontResolver::installed() {
-        Ok(fonts) => pasted_html_with(&request, &fonts),
+        Ok(fonts) => pasted_html_with(&request, &fonts, packs),
         Err(error) => JobOutcome::failure(output_path.clone(), error),
     };
     note_renamed(outcome, Some(&output_path))
 }
 
-fn pasted_html_with<S: SystemFontLookup>(request: &PastedHtmlRequest, fonts: &FontResolver<S>) -> JobOutcome {
+fn pasted_html_with<S: SystemFontLookup>(request: &PastedHtmlRequest, fonts: &FontResolver<S>, packs: &RunPacks) -> JobOutcome {
     let result = (|| {
         if request.markup.trim().is_empty() { return Err(ToolError::invalid_input("There's no HTML to convert. Paste some markup and try again.")); }
         if request.markup.len() > MAX_PASTED_HTML_BYTES {
             return Err(ToolError::limit_exceeded(LimitKind::FileSize, "The pasted HTML is larger than the 50 MB limit. Save it as a file and convert that instead."));
         }
-        let page = web_page(fonts, &request.page_defaults, &request.web_pages.unwrap_or_default(), &request.markup, None)?;
+        let page = web_page(fonts, packs, &request.page_defaults, &request.web_pages.unwrap_or_default(), &request.markup, None)?;
         let mut document = page.document;
         let output = OutputNaming::reserve_single_output(Some(&request.output_path), &request.output_path, &OutputLocation::AlongsideInput, "", "pdf")
             .map_err(|error| ToolError::invalid_input(format!("Could not save the PDF there: {error}")))?;
@@ -440,14 +443,14 @@ fn pasted_html_with<S: SystemFontLookup>(request: &PastedHtmlRequest, fonts: &Fo
 struct WebPage { document: Document, detail: String, fonts: Vec<FontReport> }
 
 /// Lays out a page of HTML; `base` is the folder its local stylesheets and images sit in, or `None` for pasted markup.
-fn web_page<S: SystemFontLookup>(fonts: &FontResolver<S>, defaults: &PageDefaults, options: &WebPageOptions, markup: &str, base: Option<&Path>) -> Result<WebPage, ToolError> {
+fn web_page<S: SystemFontLookup>(fonts: &FontResolver<S>, packs: &RunPacks, defaults: &PageDefaults, options: &WebPageOptions, markup: &str, base: Option<&Path>) -> Result<WebPage, ToolError> {
     let parsed = html::parse(markup, base);
     let size = options.page_size.unwrap_or(defaults.page_size).points();
     let geometry = Geometry::uniform(size.0, size.1, options.margins.unwrap_or(defaults.margins).points());
     let mut theme = Theme::new(RTF_FAMILY, CODE_FAMILY, html::BODY_SIZE, false);
     theme.families = parsed.families.clone();
 
-    let mut book = FontBook::new(fonts);
+    let mut book = FontBook::new(fonts, packs);
     let mut flow = Flow::new(&mut book, theme, &parsed.pictures, geometry);
     flow.blocks(&parsed.blocks)?;
     let mut laid = flow.finish();
@@ -505,7 +508,7 @@ fn ebook_file<S: SystemFontLookup>(job: &ConvertJob<S>, options: &EbookOptions, 
     let mut theme = Theme::new(RTF_FAMILY, CODE_FAMILY, html::BODY_SIZE * scale, false);
     theme.families = parsed.families.clone();
 
-    let mut book = FontBook::new(&job.fonts);
+    let mut book = FontBook::new(&job.fonts, &job.packs);
     let mut flow = Flow::new(&mut book, theme, &parsed.pictures, geometry);
     let mut starts = Vec::with_capacity(parsed.chapters.len());
     for (index, chapter) in parsed.chapters.iter().enumerate() {
@@ -554,7 +557,7 @@ fn rich_text<S: SystemFontLookup>(job: &ConvertJob<S>, input: &Path) -> Result<J
     theme.families = parsed.families.clone();
     theme.leading = 1.2;
 
-    let mut book = FontBook::new(&job.fonts);
+    let mut book = FontBook::new(&job.fonts, &job.packs);
     let mut flow = Flow::new(&mut book, theme, &parsed.pictures, geometry);
     flow.blocks(&parsed.blocks)?;
     let laid = flow.finish();
@@ -656,7 +659,7 @@ fn word_file<S: SystemFontLookup>(job: &ConvertJob<S>, input: &Path, extension: 
     theme.families = parsed.families.clone();
     theme.leading = 1.2;
 
-    let mut book = FontBook::with_embedded(&job.fonts, parsed.embedded);
+    let mut book = FontBook::with_embedded(&job.fonts, &job.packs, parsed.embedded);
     let mut flow = Flow::new(&mut book, theme, &parsed.pictures, geometry);
     flow.blocks(&parsed.blocks)?;
     flow.bands(&parsed.header, &parsed.footer, parsed.header_distance.unwrap_or(BAND_DISTANCE), parsed.footer_distance.unwrap_or(BAND_DISTANCE))?;
@@ -696,7 +699,7 @@ fn table_file<S: SystemFontLookup>(job: &ConvertJob<S>, options: &TableOptions, 
     let (width, height) = if options.orientation == Orientation::Landscape { (long, short) } else { (short, long) };
     let geometry = Geometry::uniform(width, height, job.request.page_defaults.margins.points());
 
-    let mut book = FontBook::new(&job.fonts);
+    let mut book = FontBook::new(&job.fonts, &job.packs);
     let mut size = TABLE_SIZE;
     if options.fit == TableFit::Width {
         if let Block::Table { head, rows, .. } = &block {
@@ -732,7 +735,7 @@ fn spreadsheet_file<S: SystemFontLookup>(job: &ConvertJob<S>, options: &Spreadsh
     let mut theme = Theme::new(workbook.body_family.as_deref().unwrap_or(TABLE_FAMILY), CODE_FAMILY, TABLE_SIZE, false);
     theme.families = workbook.families.clone();
 
-    let mut book = FontBook::new(&job.fonts);
+    let mut book = FontBook::new(&job.fonts, &job.packs);
     let (mut pages, mut bookmarks, mut omitted) = (Vec::new(), Vec::new(), Omitted::default());
     let (mut printed, mut left_out) = (0, 0);
     for sheet in &workbook.sheets {
@@ -807,7 +810,7 @@ fn presentation_file<S: SystemFontLookup>(job: &ConvertJob<S>, options: &Present
     theme.families = deck.families.clone();
     theme.leading = 1.2;
 
-    let mut book = FontBook::with_embedded(&job.fonts, deck.embedded);
+    let mut book = FontBook::with_embedded(&job.fonts, &job.packs, deck.embedded);
     let (mut pages, mut bookmarks, mut omitted, mut approximate) = (Vec::new(), Vec::new(), Omitted::default(), Vec::new());
     let heading = Block::Formatted(Paragraph {
         spans: vec![Span { text: "Speaker notes".into(), style: Style { bold: true, ..Style::default() }, link: None }],
@@ -942,6 +945,8 @@ mod tests {
         fn faces(&self, _family: &str) -> Vec<SystemFace> { Vec::new() }
     }
 
+    fn no_packs() -> RunPacks { RunPacks::new(Err("No packs in this test.".into()), "0.0.0", Err("No catalog in this test.".into())) }
+
     fn fonts() -> Result<FontResolver<NoSystemFonts>, ToolError> {
         Ok(FontResolver::new(BundledFonts::discover(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/fonts"))?, NoSystemFonts))
     }
@@ -956,7 +961,7 @@ mod tests {
     fn convert_paths(paths: &[&Path], options: serde_json::Value) -> Vec<JobOutcome> {
         let mut request = json!({ "paths": paths, "outputLocation": "alongsideInput" });
         request.as_object_mut().unwrap().extend(options.as_object().unwrap().clone());
-        run_with(&RunEvents::silent(), request, fonts)
+        run_with(&RunEvents::silent(), request, fonts, no_packs())
     }
 
     fn names(folder: &Path) -> Vec<String> {
@@ -1118,7 +1123,7 @@ mod tests {
         assert_eq!(names(&root), ["emoji.txt"]);
 
         let request = json!({ "paths": [input], "outputLocation": "alongsideInput" });
-        let outcomes = run_with::<NoSystemFonts, _>(&RunEvents::silent(), request, || Err(ToolError::unavailable("fonts missing")));
+        let outcomes = run_with::<NoSystemFonts, _>(&RunEvents::silent(), request, || Err(ToolError::unavailable("fonts missing")), no_packs());
         assert_eq!(outcomes[0].error().unwrap().kind, ErrorKind::Unavailable);
         assert_eq!(names(&root), ["emoji.txt"]);
     }
@@ -1221,7 +1226,7 @@ mod tests {
 
     fn pasted(markup: &str, output_path: &Path) -> JobOutcome {
         let request = PastedHtmlRequest { markup: markup.into(), output_path: output_path.to_path_buf(), page_defaults: PageDefaults::default(), web_pages: None };
-        note_renamed(pasted_html_with(&request, &fonts().unwrap()), Some(output_path))
+        note_renamed(pasted_html_with(&request, &fonts().unwrap(), &no_packs()), Some(output_path))
     }
 
     #[test]
@@ -2646,4 +2651,176 @@ mod tests {
         assert_eq!(outcomes[0].error().unwrap().kind, ErrorKind::InvalidInput);
     }
 
+
+    mod script_packs {
+        use super::*;
+        use crate::kit::contracts::{OutcomePointer, PackNeed};
+        use crate::packs::install::tests::Fixture;
+
+        const PACK_ID: &str = "unicode-scripts";
+        const PACK_NAME: &str = "Unicode scripts";
+        const ARABIC_LINE: &str = "Paid مرحبا 2026";
+        const BASE_LINE: &str = "Café Привет κόσμε № 5 – Ωmega";
+
+        /// The catalog's script pack, which writes Arabic, Devanagari and Han.
+        fn packs(app_data: &Path) -> RunPacks {
+            let mut fixture = Fixture::new();
+            fixture.id = PACK_ID.into();
+            let mut entry = fixture.catalog_entry();
+            entry.as_object_mut().unwrap().remove("ocrLanguage");
+            entry["name"] = PACK_NAME.into();
+            entry["toolIds"] = json!(["convert-to-pdf", "pdf-edit"]);
+            entry["scriptFonts"] = json!({ "Arabic": "fonts/Arabic.ttf", "Devanagari": "fonts/Devanagari.ttf", "Han": "fonts/Han.ttf" });
+            entry["payloads"][0]["path"] = "packs/unicode-scripts.toolboxpack".into();
+            let catalog = crate::packs::parse_catalog(&json!({ "formatVersion": 1, "packs": [entry] }).to_string()).unwrap();
+            RunPacks::new(Ok(app_data.to_path_buf()), "1.0.14", Ok(catalog))
+        }
+
+        fn convert_with(paths: &[&Path], packs: RunPacks) -> Vec<JobOutcome> {
+            run_with(&RunEvents::silent(), json!({ "paths": paths, "outputLocation": "alongsideInput" }), fonts, packs)
+        }
+
+        fn set_font_dir(value: Option<&Path>) {
+            match value { Some(value) => std::env::set_var("TOOLBOX_SCRIPT_FONT_DIR", value), None => std::env::remove_var("TOOLBOX_SCRIPT_FONT_DIR") }
+        }
+
+        /// The output's text as the local Poppler extracts it, when it is installed.
+        fn extracted_text(path: &Path) -> Option<String> {
+            let output = std::process::Command::new("pdftotext").args(["-enc", "UTF-8"]).arg(path).arg("-").output().ok()?;
+            output.status.success().then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+        }
+
+        /// The Type 0 fonts the first page writes with.
+        fn unicode_fonts(document: &Document) -> Vec<lopdf::Dictionary> {
+            let page = document.get_pages().values().next().copied().unwrap();
+            let dictionary = |object: &Object| match object { Object::Reference(id) => document.get_dictionary(*id).unwrap().clone(), object => object.as_dict().unwrap().clone() };
+            let resources = dictionary(document.get_dictionary(page).unwrap().get(b"Resources").unwrap());
+            let fonts = dictionary(resources.get(b"Font").unwrap());
+            fonts.iter().filter_map(|(_, value)| {
+                let font = dictionary(value);
+                (font.get(b"Subtype").ok()?.as_name().ok()? == b"Type0").then(|| font.clone())
+            }).collect()
+        }
+
+        fn embedded_font(document: &Document, font: &lopdf::Dictionary) -> Vec<u8> {
+            let descendant = font.get(b"DescendantFonts").unwrap().as_array().unwrap()[0].as_reference().unwrap();
+            let descriptor = document.get_dictionary(descendant).unwrap().get(b"FontDescriptor").unwrap().as_reference().unwrap();
+            let file = document.get_dictionary(descriptor).unwrap().get(b"FontFile2").unwrap().as_reference().unwrap();
+            document.get_object(file).unwrap().as_stream().unwrap().decompressed_content().unwrap()
+        }
+
+        fn rtf(text: &str) -> String {
+            let escaped: String = text.chars().map(|character| if character.is_ascii() { character.to_string() } else { format!("\\u{}?", character as u32 as i16) }).collect();
+            format!(r"{{\rtf1\ansi\uc1 {{\fonttbl{{\f0 Helvetica;}}}}\f0 {escaped}\par}}")
+        }
+
+        #[test]
+        fn script_text_without_the_pack_fails_alone_with_a_pointer_and_saves_nothing() {
+            let _guard = crate::kit::lock_process_env();
+            set_font_dir(None);
+            let root = sandbox("script_pack_missing");
+            let arabic = root.join("arabic.txt");
+            fs::write(&arabic, ARABIC_LINE).unwrap();
+            let latin = root.join("latin.txt");
+            fs::write(&latin, BASE_LINE).unwrap();
+            let hindi = root.join("circular-hindi.docx");
+            fs::write(&hindi, docx::fixtures::docx("<w:p><w:r><w:t>Received from आशा</w:t></w:r></w:p>", &[], &[])).unwrap();
+            let chinese = root.join("notice.html");
+            fs::write(&chinese, "<p>你好</p>").unwrap();
+            let thai = root.join("thai.md");
+            fs::write(&thai, "# สวัสดี").unwrap();
+
+            let outcomes = convert_with(&[&arabic, &latin, &hindi, &chinese, &thai], packs(&root.join("app-data")));
+            for (outcome, script) in [(&outcomes[0], "Arabic"), (&outcomes[2], "Devanagari"), (&outcomes[3], "Han")] {
+                let error = outcome.error().unwrap_or_else(|| panic!("{script}: {outcome:?}"));
+                assert_eq!(error.kind, ErrorKind::Unavailable, "{script}");
+                assert_eq!(error.pointer, Some(OutcomePointer::Pack { pack_id: PACK_ID.into(), name: PACK_NAME.into(), reason: PackNeed::NotInstalled }), "{script}");
+                assert_eq!(error.message, format!("{script} text needs the {PACK_NAME} pack, which isn't installed. Nothing was saved."));
+                assert!(outcome.output_paths().is_empty());
+            }
+            assert!(succeeded(&outcomes[1]), "the rest of the batch converts: {:?}", outcomes[1]);
+            // A script no pack in the catalog writes fails without a pointer.
+            let error = outcomes[4].error().unwrap();
+            assert_eq!((error.kind.clone(), error.pointer.clone(), error.message.as_str()), (ErrorKind::Unavailable, None, "Toolbox can't write Thai text yet. Nothing was saved."));
+            assert_eq!(names(&root), ["arabic.txt", "circular-hindi.docx", "latin.pdf", "latin.txt", "notice.html", "thai.md"], "nothing else was saved and no pack folder was created");
+            assert_eq!(fs::read_to_string(&arabic).unwrap(), ARABIC_LINE);
+            fs::remove_dir_all(root).unwrap();
+        }
+
+        #[test]
+        fn with_the_development_font_script_text_is_embedded_as_a_subset_and_extracts_in_reading_order() {
+            let _guard = crate::kit::lock_process_env();
+            let root = sandbox("script_pack_override");
+            let font_dir = root.join("dev-fonts");
+            fs::create_dir_all(font_dir.join("fonts")).unwrap();
+            fs::write(font_dir.join("fonts/Arabic.ttf"), crate::kit::images::tools::INCLUDED_WATERMARK_FONT).unwrap();
+            set_font_dir(Some(&font_dir));
+            let input = root.join("receipt.txt");
+            let text = format!("{ARABIC_LINE}\nПривет κόσμε");
+            fs::write(&input, &text).unwrap();
+            let first = convert_with(&[&input], packs(&root.join("app-data")));
+            let second = convert_with(&[&input], packs(&root.join("app-data")));
+            set_font_dir(None);
+            assert!(succeeded(&first[0]), "{:?}", first[0]);
+            assert!(succeeded(&second[0]), "{:?}", second[0]);
+            let output = root.join("receipt.pdf");
+            assert_eq!(second[0].output_paths(), [root.join("receipt-1.pdf")], "the first PDF is never replaced");
+            assert_eq!(fs::read(&output).unwrap(), fs::read(root.join("receipt-1.pdf")).unwrap(), "the same file writes the same bytes");
+            assert_eq!(fs::read_to_string(&input).unwrap(), text);
+
+            let document = Document::load(&output).unwrap();
+            let fonts = unicode_fonts(&document);
+            assert_eq!(fonts.len(), 2, "the body font and the pack's Arabic font");
+            for font in &fonts {
+                let base_font = String::from_utf8_lossy(font.get(b"BaseFont").unwrap().as_name().unwrap()).into_owned();
+                assert!(base_font.len() > 7 && base_font.as_bytes()[6] == b'+', "subset fonts are tagged: {base_font}");
+                assert!(font.has(b"ToUnicode"));
+                let embedded = embedded_font(&document, font);
+                assert!(rustybuzz::ttf_parser::Face::parse(&embedded, 0).is_ok());
+            }
+            let sizes: Vec<usize> = fonts.iter().map(|font| embedded_font(&document, font).len()).collect();
+            assert!(sizes.iter().all(|size| *size < crate::kit::images::tools::INCLUDED_WATERMARK_FONT.len() / 4), "only subsets are embedded: {sizes:?}");
+            if let Some(extracted) = extracted_text(&output) {
+                // Arabic numbers sit left of the Arabic word they follow; each run reads in order.
+                assert!(extracted.contains("Paid 2026 \u{202B}مرحبا\u{202C}\nПривет κόσμε"), "{extracted:?}");
+            }
+            fs::remove_dir_all(root).unwrap();
+        }
+
+        #[test]
+        fn base_script_documents_never_need_a_pack_in_any_family() {
+            let root = sandbox("script_pack_base");
+            let line = BASE_LINE;
+            let odp_styles = concat!(
+                r#"<office:automatic-styles><style:page-layout style:name="PM1"><style:page-layout-properties fo:page-width="960pt" fo:page-height="540pt"/></style:page-layout></office:automatic-styles>"#,
+                r#"<office:master-styles><style:master-page style:name="Default" style:page-layout-name="PM1"/></office:master-styles>"#,
+            );
+            let chapter = format!(r#"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>One</title></head><body><p>{line}</p></body></html>"#);
+            let opf = r#"<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">urn:uuid:2</dc:identifier><dc:title>Base</dc:title><dc:language>ru</dc:language></metadata><manifest><item id="one" href="one.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="one"/></spine></package>"#;
+            let files: Vec<(&str, Vec<u8>)> = vec![
+                ("note.txt", line.into()),
+                ("note.md", format!("# {line}\n\n*{line}* and **{line}**").into()),
+                ("note.rtf", rtf(line).into()),
+                ("note.csv", format!("Name,Note\n{line},Ωmega").into()),
+                ("note.docx", docx::fixtures::docx(&format!("<w:p><w:r><w:t>{line}</w:t></w:r></w:p>"), &[], &[])),
+                ("note.odt", odt::fixtures::odt("", &format!("<text:p>{line}</text:p>"), &[], &[])),
+                ("note.xlsx", xlsx::fixtures::xlsx(&[("Sheet", "visible", &xlsx::fixtures::sheet("", r#"<row r="1"><c r="A1" t="s"><v>0</v></c></row>"#, ""))], "", "", &[line])),
+                ("note.ods", ods::fixtures::ods("", "", &format!(r#"<table:table table:name="Sheet"><table:table-row><table:table-cell office:value-type="string"><text:p>{line}</text:p></table:table-cell></table:table-row></table:table>"#))),
+                ("note.pptx", pptx::fixtures::pptx((960, 540), &[pptx::fixtures::FixtureSlide { shapes: &pptx::fixtures::text_shape(Some("title"), (36, 24, 800, 60), line, ""), ..Default::default() }], &[])),
+                ("note.odp", odp::fixtures::odp(odp_styles, "", &format!(r#"<draw:page draw:name="One" draw:master-page-name="Default"><draw:frame svg:x="36pt" svg:y="24pt" svg:width="800pt" svg:height="60pt"><draw:text-box><text:p>{line}</text:p></draw:text-box></draw:frame></draw:page>"#), &[])),
+                ("note.html", format!("<h1>{line}</h1><p><b>{line}</b> <i>{line}</i></p>").into()),
+                ("note.epub", epub_package(&[("OEBPS/content.opf", opf.as_bytes()), ("OEBPS/one.xhtml", chapter.as_bytes())])),
+            ];
+            let paths: Vec<PathBuf> = files.iter().map(|(name, bytes)| { let path = root.join(name); fs::write(&path, bytes).unwrap(); path }).collect();
+            // No catalog and no app data: nothing may be looked up.
+            let outcomes = convert_with(&paths.iter().map(PathBuf::as_path).collect::<Vec<_>>(), no_packs());
+            for (outcome, (name, _)) in outcomes.iter().zip(&files) {
+                assert!(succeeded(outcome), "{name}: {outcome:?}");
+                if let Some(text) = extracted_text(&outcome.output_paths()[0]) {
+                    assert!(text.contains("Привет") && text.contains("κόσμε"), "{name}: {text:?}");
+                }
+            }
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
 }

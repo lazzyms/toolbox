@@ -45,3 +45,15 @@ test("the fixture catalog has OCR language packs, so the checks above are not va
   const catalog = JSON.parse(readFileSync(new URL(`../${catalogs.fixture}`, import.meta.url), "utf8")) as { packs: OcrLanguagePack[] };
   assert.ok(catalog.packs.filter((pack) => pack.ocrLanguage).length >= 2);
 });
+
+// Edit PDF and Convert to PDF both write text in the scripts a pack's fonts cover, so a script pack
+// names both, and Settings lists both as using it.
+for (const [name, path] of Object.entries(catalogs)) {
+  test(`every ${name} script pack names Edit PDF and Convert to PDF`, () => {
+    const catalog = JSON.parse(readFileSync(new URL(`../${path}`, import.meta.url), "utf8")) as { packs: Array<{ id: string; toolIds: string[]; scriptFonts?: Record<string, string> }> };
+    for (const pack of catalog.packs) {
+      if (!pack.scriptFonts || Object.keys(pack.scriptFonts).length === 0) continue;
+      for (const toolId of ["pdf-edit", "convert-to-pdf"]) assert.ok(pack.toolIds.includes(toolId), `${pack.id} names ${toolId}`);
+    }
+  });
+}

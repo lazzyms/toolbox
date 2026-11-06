@@ -314,21 +314,25 @@ async fn pdf_to_images(events: RunEvents, request: remaining::PdfToImagesRequest
 }
 
 #[tauri::command]
-async fn convert_to_pdf(events: RunEvents, request: serde_json::Value) -> Vec<JobOutcome> {
-    convert::run(&events, request)
+async fn convert_to_pdf(app: tauri::AppHandle, events: RunEvents, request: serde_json::Value) -> Vec<JobOutcome> {
+    run_convert_to_pdf(events, request, run_packs(&app)).await
+}
+
+async fn run_convert_to_pdf(events: RunEvents, request: serde_json::Value, packs: RunPacks) -> Vec<JobOutcome> {
+    convert::run(&events, request, packs)
 }
 
 #[tauri::command]
 async fn convert_pasted_html(app: tauri::AppHandle, request: convert::PastedHtmlRequest) -> Vec<JobOutcome> {
-    let outcomes = run_convert_pasted_html(request.clone()).await;
+    let outcomes = run_convert_pasted_html(request.clone(), run_packs(&app)).await;
     settings::remember_chosen_save(&app, Some(&request.output_path), outcomes)
 }
 
-async fn run_convert_pasted_html(request: convert::PastedHtmlRequest) -> Vec<JobOutcome> {
+async fn run_convert_pasted_html(request: convert::PastedHtmlRequest, packs: RunPacks) -> Vec<JobOutcome> {
     let output_path = request.output_path.clone();
     let limits = crate::kit::common::limits::recorded(convert::COMMAND).expect("convert_to_pdf records its limits");
     // The markup is in memory, so there is no input file to check; the run still gets the time limit.
-    let mut outcome = limits.run_all(&[], move || convert::pasted_html(request));
+    let mut outcome = limits.run_all(&[], move || convert::pasted_html(request, &packs));
     outcome.input_path = output_path;
     vec![outcome]
 }
@@ -680,6 +684,11 @@ mod command_tests {
         run_ocr_pdf(events, request, no_ocr_packs()).await
     }
 
+    /// Convert to PDF as a fresh install runs it, with no script pack or catalog to find.
+    async fn convert_to_pdf(events: RunEvents, request: serde_json::Value) -> Vec<JobOutcome> {
+        run_convert_to_pdf(events, request, no_packs()).await
+    }
+
     fn no_ocr_packs() -> RunPacks {
         RunPacks::new(Err("No packs in this test.".into()), "0.0.0", Err("No catalog in this test.".into()))
     }
@@ -805,7 +814,7 @@ mod command_tests {
         let tiff_out = chosen("pages.tiff");
         let pasted = chosen("receipt.pdf");
         let runs = [
-            (pasted.clone(), "receipt-1.pdf", tauri::async_runtime::block_on(run_convert_pasted_html(convert::PastedHtmlRequest { markup: "<h1>Receipt</h1><p>Paid</p>".into(), output_path: pasted.clone(), page_defaults: Default::default(), web_pages: None }))),
+            (pasted.clone(), "receipt-1.pdf", tauri::async_runtime::block_on(run_convert_pasted_html(convert::PastedHtmlRequest { markup: "<h1>Receipt</h1><p>Paid</p>".into(), output_path: pasted.clone(), page_defaults: Default::default(), web_pages: None }, no_packs()))),
             (merge.clone(), "statement-1.pdf", tauri::async_runtime::block_on(run_merge_pdfs(&MergePdfRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: OutputLocation::AlongsideInput, output_path: Some(merge.clone()) }))),
             (combined.clone(), "scans-1.pdf", tauri::async_runtime::block_on(run_images_to_pdf(&ImagesToPdfRequest { paths: vec![image.clone(), image_two.clone()], output_location: OutputLocation::AlongsideInput, output_path: Some(combined.clone()) }))),
             (gif.clone(), "loop-1.gif", tauri::async_runtime::block_on(run_create_gif(&GifCreateRequest { paths: vec![image.clone(), image_two.clone()], frame_delay_ms: 100, loop_forever: true, output_location: OutputLocation::AlongsideInput, output_path: Some(gif.clone()) }))),

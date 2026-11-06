@@ -52,6 +52,53 @@ fn pack_scripts(text: &str) -> Result<BTreeSet<&'static str>, String> {
     Ok(scripts)
 }
 
+/// The pack script `character` belongs to, by name, or `None` for text the app's own fonts write
+/// and for characters with no script.
+pub fn character_pack_script(character: char) -> Option<&'static str> {
+    match character.script() {
+        Script::Unknown => None,
+        script if is_base_script(script) => None,
+        script => Some(script.full_name()),
+    }
+}
+
+/// A script's font, read whole from the pack the catalog names for it.
+pub struct PackFont {
+    /// The pack and the font's path in it, which tells apart two scripts that share one font.
+    pub file: (String, String),
+    /// A PDF-safe font name.
+    pub name: String,
+    pub bytes: Vec<u8>,
+}
+
+/// The font for `script` from the pack the catalog names for it. A pack that is not installed, is
+/// damaged or does not fit this app fails with a pointer to that pack; a script no pack writes is
+/// unavailable. Development builds read the font from `TOOLBOX_SCRIPT_FONT_DIR` when the pack is
+/// not installed.
+pub fn pack_font(script: &str, packs: &RunPacks) -> Result<PackFont, ToolError> {
+    let catalog = packs.catalog()?;
+    let (pack, font_path) = catalog.packs.iter()
+        .find_map(|pack| pack.script_fonts.get(script).map(|font| (pack, font)))
+        .ok_or_else(|| ToolError::unavailable(format!("Toolbox can't write {script} text yet. Nothing was saved.")))?;
+    let development_override = cfg!(debug_assertions).then(|| std::env::var_os(SCRIPT_FONT_DIR_ENV)).flatten()
+        .map(|folder| PathBuf::from(folder).join(font_path));
+    let resolved = packs.resolve(font_path, RequiredPack { id: &pack.id, name: &pack.name }, None, development_override)
+        .map_err(|mut error| {
+            if matches!(error.pointer, Some(OutcomePointer::Pack { reason: PackNeed::NotInstalled, .. })) {
+                error.message = format!("{script} text needs the {} pack, which isn't installed. Nothing was saved.", pack.name);
+            }
+            error
+        })?;
+    let unreadable = || ToolError::unavailable(format!("The {} pack's font for {script} can't be read. Nothing was saved.", pack.name));
+    let bytes = std::fs::read(&resolved.path).map_err(|_| unreadable())?;
+    if rustybuzz::Face::from_slice(&bytes, 0).is_none() || table_directory(&bytes).is_err() {
+        return Err(unreadable());
+    }
+    let name = font_path.rsplit('/').next().unwrap_or(font_path).trim_end_matches(".ttf")
+        .chars().filter(|character| character.is_ascii_alphanumeric() || *character == '-').collect();
+    Ok(PackFont { file: (pack.id.clone(), font_path.clone()), name, bytes })
+}
+
 /// The fonts a scene's text is written with: the app's own font, then one font per pack font file.
 pub struct ScriptFonts {
     fonts: Vec<FontFile>,
@@ -95,34 +142,15 @@ impl ScriptFonts {
         if scripts.is_empty() {
             return Ok(fonts);
         }
-        let catalog = packs.catalog()?;
-        let mut by_path: BTreeMap<(String, String), usize> = BTreeMap::new();
+        let mut by_file: BTreeMap<(String, String), usize> = BTreeMap::new();
         for script in scripts {
-            let (pack, font_path) = catalog.packs.iter()
-                .find_map(|pack| pack.script_fonts.get(script).map(|font| (pack, font)))
-                .ok_or_else(|| ToolError::unavailable(format!("Toolbox can't write {script} text yet. Nothing was saved.")))?;
-            if let Some(index) = by_path.get(&(pack.id.clone(), font_path.clone())) {
+            let font = pack_font(script, packs)?;
+            if let Some(index) = by_file.get(&font.file) {
                 fonts.by_script.insert(script, *index);
                 continue;
             }
-            let development_override = cfg!(debug_assertions).then(|| std::env::var_os(SCRIPT_FONT_DIR_ENV)).flatten()
-                .map(|folder| PathBuf::from(folder).join(font_path));
-            let resolved = packs.resolve(font_path, RequiredPack { id: &pack.id, name: &pack.name }, None, development_override)
-                .map_err(|mut error| {
-                    if matches!(error.pointer, Some(OutcomePointer::Pack { reason: PackNeed::NotInstalled, .. })) {
-                        error.message = format!("{script} text needs the {} pack, which isn't installed. Nothing was saved.", pack.name);
-                    }
-                    error
-                })?;
-            let unreadable = || ToolError::unavailable(format!("The {} pack's font for {script} can't be read. Nothing was saved.", pack.name));
-            let bytes = std::fs::read(&resolved.path).map_err(|_| unreadable())?;
-            if rustybuzz::Face::from_slice(&bytes, 0).is_none() || table_directory(&bytes).is_err() {
-                return Err(unreadable());
-            }
-            let name = font_path.rsplit('/').next().unwrap_or(font_path).trim_end_matches(".ttf")
-                .chars().filter(|character| character.is_ascii_alphanumeric() || *character == '-').collect();
-            fonts.fonts.push(FontFile { name, bytes });
-            by_path.insert((pack.id.clone(), font_path.clone()), fonts.fonts.len() - 1);
+            fonts.fonts.push(FontFile { name: font.name, bytes: font.bytes });
+            by_file.insert(font.file, fonts.fonts.len() - 1);
             fonts.by_script.insert(script, fonts.fonts.len() - 1);
         }
         Ok(fonts)

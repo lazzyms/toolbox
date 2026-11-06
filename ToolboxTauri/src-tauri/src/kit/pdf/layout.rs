@@ -3,9 +3,16 @@ use std::path::Path;
 
 use lopdf::{dictionary, Dictionary, Document, Object, ObjectId, Stream, StringFormat};
 
+use std::fmt::Write as _;
+
+use unicode_bidi::ParagraphBidiInfo;
+use unicode_script::{Script, UnicodeScript};
+
 use crate::kit::contracts::ToolError;
 use crate::kit::pdf::font_resolver::{EmbeddedFont, FontReport, FontResolver, FontStyle, SystemFontLookup};
+use crate::kit::pdf::script_text::{character_pack_script, pack_font};
 use crate::kit::pdf::unicode_font::UnicodeFont;
+use crate::packs::uninstall::RunPacks;
 
 const MAX_PICTURE_SIDE: u32 = 20_000;
 const MAX_PICTURE_PIXELS: u64 = 40_000_000;
@@ -18,24 +25,38 @@ const TABLE_PAD: f32 = 4.;
 pub const PAGE_NUMBER: char = '\u{E000}';
 pub const PAGE_COUNT: char = '\u{E001}';
 
+/// A font to write with: `oblique` and `heavy` slant and thicken a font that lacks the asked-for
+/// italic or bold, and `italic` and `bold` say what was asked for, for text in a script pack's font.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Face { index: usize, oblique: bool, heavy: bool }
+pub struct Face { index: usize, oblique: bool, heavy: bool, italic: bool, bold: bool }
 
+/// The fonts a document is written with. Latin, Cyrillic and Greek are written with the font each
+/// face resolves to. Text in any other script is written with the font the script pack has for
+/// it, read the first time the script appears; without the pack, laying the text out fails with a
+/// pointer to the pack, before anything is saved.
 pub struct FontBook<'r, S: SystemFontLookup> {
     resolver: &'r FontResolver<S>,
+    packs: &'r RunPacks,
     embedded: Vec<EmbeddedFont>,
     requests: BTreeMap<(String, FontStyle), Face>,
     files: BTreeMap<(String, FontStyle), usize>,
     fonts: Vec<UnicodeFont>,
     reports: Vec<FontReport>,
     char_widths: HashMap<(usize, char), f32>,
+    /// Each pack script's font in `fonts`, by script name.
+    scripts: BTreeMap<&'static str, usize>,
+    /// Each pack font file's index in `fonts`, by pack and path.
+    pack_files: BTreeMap<(String, String), usize>,
 }
 
-impl<'r, S: SystemFontLookup> FontBook<'r, S> {
-    pub fn new(resolver: &'r FontResolver<S>) -> Self { Self::with_embedded(resolver, Vec::new()) }
+/// Whether `text` has a character in a script the app's own fonts don't write.
+fn needs_pack(text: &str) -> bool { text.chars().any(|character| character_pack_script(character).is_some()) }
 
-    pub fn with_embedded(resolver: &'r FontResolver<S>, embedded: Vec<EmbeddedFont>) -> Self {
-        Self { resolver, embedded, requests: BTreeMap::new(), files: BTreeMap::new(), fonts: Vec::new(), reports: Vec::new(), char_widths: HashMap::new() }
+impl<'r, S: SystemFontLookup> FontBook<'r, S> {
+    pub fn new(resolver: &'r FontResolver<S>, packs: &'r RunPacks) -> Self { Self::with_embedded(resolver, packs, Vec::new()) }
+
+    pub fn with_embedded(resolver: &'r FontResolver<S>, packs: &'r RunPacks, embedded: Vec<EmbeddedFont>) -> Self {
+        Self { resolver, packs, embedded, requests: BTreeMap::new(), files: BTreeMap::new(), fonts: Vec::new(), reports: Vec::new(), char_widths: HashMap::new(), scripts: BTreeMap::new(), pack_files: BTreeMap::new() }
     }
 
     pub fn face(&mut self, family: &str, style: FontStyle) -> Result<Face, ToolError> {
@@ -54,7 +75,7 @@ impl<'r, S: SystemFontLookup> FontBook<'r, S> {
         };
         let bold = |style: FontStyle| matches!(style, FontStyle::Bold | FontStyle::BoldItalic);
         let italic = |style: FontStyle| matches!(style, FontStyle::Italic | FontStyle::BoldItalic);
-        let face = Face { index, oblique: italic(style) && !italic(report.style_used), heavy: bold(style) && !bold(report.style_used) };
+        let face = Face { index, oblique: italic(style) && !italic(report.style_used), heavy: bold(style) && !bold(report.style_used), italic: italic(style), bold: bold(style) };
         self.reports.push(report);
         self.requests.insert(key, face);
         Ok(face)
@@ -62,22 +83,109 @@ impl<'r, S: SystemFontLookup> FontBook<'r, S> {
 
     pub fn reports(&self) -> Vec<FontReport> { self.reports.clone() }
 
+    /// The script pack's font for `script`, read from the pack the first time.
+    fn script_font(&mut self, script: &'static str) -> Result<usize, ToolError> {
+        if let Some(index) = self.scripts.get(script) { return Ok(*index); }
+        let font = pack_font(script, self.packs)?;
+        let index = match self.pack_files.get(&font.file) {
+            Some(index) => *index,
+            None => {
+                self.fonts.push(UnicodeFont::parse(font.bytes)?);
+                self.pack_files.insert(font.file, self.fonts.len() - 1);
+                self.fonts.len() - 1
+            }
+        };
+        self.scripts.insert(script, index);
+        Ok(index)
+    }
+
+    /// `text` in runs of one font each, in logical order, with each run's byte range. Characters
+    /// shared between scripts, such as spaces and digits, follow the character before them when
+    /// its font has them.
+    fn runs(&mut self, face: Face, text: &str) -> Result<Vec<(usize, std::ops::Range<usize>)>, ToolError> {
+        if !needs_pack(text) { return Ok(vec![(face.index, 0..text.len())]); }
+        let mut strong = Vec::new();
+        for (offset, character) in text.char_indices() {
+            let font = match (character_pack_script(character), character.script()) {
+                (Some(script), _) => Some(self.script_font(script)?),
+                (None, Script::Common | Script::Inherited) => None,
+                (None, _) => Some(face.index),
+            };
+            strong.push((offset, character, font));
+        }
+        let mut runs: Vec<(usize, std::ops::Range<usize>)> = Vec::new();
+        for (position, (offset, character, font)) in strong.iter().enumerate() {
+            let previous = runs.last().map(|(font, _)| *font);
+            let has = |font: usize| self.fonts[font].has_glyph(*character);
+            let font = font.unwrap_or_else(|| match previous {
+                Some(previous) if character.script() == Script::Inherited || has(previous) => previous,
+                _ if has(face.index) => face.index,
+                _ => strong[position + 1..].iter().find_map(|(_, _, font)| *font).filter(|font| has(*font)).unwrap_or(face.index),
+            });
+            let end = offset + character.len_utf8();
+            match runs.last_mut() {
+                Some((last, range)) if *last == font => range.end = end,
+                _ => runs.push((font, *offset..end)),
+            }
+        }
+        Ok(runs)
+    }
+
     pub fn width(&mut self, face: Face, text: &str, size: f32) -> Result<f32, ToolError> {
-        Ok(self.fonts[face.index].show(text, size)?.width)
+        let mut width = 0.;
+        for (font, range) in self.runs(face, text)? { width += self.fonts[font].show(&text[range], size)?.width; }
+        Ok(width)
     }
 
     pub fn char_width(&mut self, face: Face, character: char, size: f32) -> Result<f32, ToolError> {
-        if let Some(width) = self.char_widths.get(&(face.index, character)) { return Ok(width * size); }
-        let width = self.fonts[face.index].show(character.encode_utf8(&mut [0; 4]), 1.)?.width;
-        self.char_widths.insert((face.index, character), width);
+        let text = character.to_string();
+        let font = self.runs(face, &text)?.first().map_or(face.index, |(font, _)| *font);
+        if let Some(width) = self.char_widths.get(&(font, character)) { return Ok(width * size); }
+        let width = self.fonts[font].show(&text, 1.)?.width;
+        self.char_widths.insert((font, character), width);
         Ok(width * size)
     }
 
     pub fn text(&mut self, face: Face, size: f32, x: f32, y: f32, text: &str) -> Result<String, ToolError> {
-        let run = self.fonts[face.index].show(text, size)?;
-        let skew = if face.oblique { 0.2 } else { 0. };
-        let (heavy, light) = if face.heavy { (format!("2 Tr {:.2} w ", size * 0.03), " 0 Tr") } else { (String::new(), "") };
-        Ok(format!("BT /F{} {size} Tf {heavy}1 0 {skew} 1 {x:.2} {y:.2} Tm {}{light} ET\n", face.index, run.operators))
+        let style = |oblique: bool, heavy: bool| {
+            let skew = if oblique { 0.2 } else { 0. };
+            let (heavy, light) = if heavy { (format!("2 Tr {:.2} w ", size * 0.03), " 0 Tr") } else { (String::new(), "") };
+            (skew, heavy, light)
+        };
+        if !needs_pack(text) {
+            let run = self.fonts[face.index].show(text, size)?;
+            let (skew, heavy, light) = style(face.oblique, face.heavy);
+            return Ok(format!("BT /F{} {size} Tf {heavy}1 0 {skew} 1 {x:.2} {y:.2} Tm {}{light} ET\n", face.index, run.operators));
+        }
+        // Each bidi run in visual order, and the font runs inside it in visual order too.
+        let runs = self.runs(face, text)?;
+        let font_at = |offset: usize| runs.iter().find(|(_, range)| range.contains(&offset)).map_or(face.index, |(font, _)| *font);
+        let bidi = ParagraphBidiInfo::new(text, None);
+        let (levels, visual) = bidi.visual_runs(0..text.len());
+        let mut content = String::from("BT ");
+        let mut pen = x;
+        for line_run in visual {
+            let rtl = levels[line_run.start].is_rtl();
+            let mut pieces: Vec<(usize, std::ops::Range<usize>)> = Vec::new();
+            for (offset, character) in text[line_run.clone()].char_indices() {
+                let (offset, font) = (line_run.start + offset, font_at(line_run.start + offset));
+                let end = offset + character.len_utf8();
+                match pieces.last_mut() {
+                    Some((last, range)) if *last == font => range.end = end,
+                    _ => pieces.push((font, offset..end)),
+                }
+            }
+            if rtl { pieces.reverse(); }
+            for (font, range) in pieces {
+                let run = self.fonts[font].show_directed(&text[range], size, Some(rtl))?;
+                // A pack font has one style, so it is slanted and thickened for italic and bold.
+                let (skew, heavy, light) = if font == face.index { style(face.oblique, face.heavy) } else { style(face.italic, face.bold) };
+                let _ = write!(content, "/F{font} {size} Tf {heavy}1 0 {skew} 1 {pen:.2} {y:.2} Tm {}{light} ", run.operators);
+                pen += run.width;
+            }
+        }
+        content.push_str("ET\n");
+        Ok(content)
     }
 }
 

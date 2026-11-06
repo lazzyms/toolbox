@@ -173,11 +173,25 @@ impl UnicodeFont {
 
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn show(&mut self, text: &str, font_size: f32) -> Result<GlyphRun, ToolError> {
+        self.show_directed(text, font_size, None)
+    }
+
+    /// Whether the font has a glyph for `character`.
+    pub fn has_glyph(&self, character: char) -> bool {
+        ttf_parser::Face::parse(&self.data, 0).is_ok_and(|face| face.glyph_index(character).is_some())
+    }
+
+    /// Shapes `text` right to left when `rtl` is `Some(true)`, left to right when `Some(false)`, or
+    /// in the direction its script reads when `None`. Glyphs come out in visual order either way.
+    pub fn show_directed(&mut self, text: &str, font_size: f32, rtl: Option<bool>) -> Result<GlyphRun, ToolError> {
         let shaped = {
             let face = rustybuzz::Face::from_slice(&self.data, 0).ok_or_else(|| font_error("it cannot be shaped."))?;
             let mut buffer = rustybuzz::UnicodeBuffer::new();
             buffer.push_str(text);
             buffer.guess_segment_properties();
+            if let Some(rtl) = rtl {
+                buffer.set_direction(if rtl { rustybuzz::Direction::RightToLeft } else { rustybuzz::Direction::LeftToRight });
+            }
             let shaped = rustybuzz::shape(&face, &[], buffer);
             let missing = shaped.glyph_infos().iter().filter(|info| info.glyph_id == 0).filter_map(|info| text[info.cluster as usize..].chars().next()).collect::<BTreeSet<_>>();
             if !missing.is_empty() {
