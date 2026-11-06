@@ -159,6 +159,24 @@ test("the shipped table sends the retired Compress PDF id to Compress Files, als
   assert.equal(storage.getItem(toolIdMigrationStorageKey), "4");
 });
 
+test("the shipped table sends both retired PDF extraction ids to Extract from PDF, also after the third migration ran", () => {
+  assert.equal(RetiredToolIds.version, 4);
+  for (const retired of ["pdf-to-text", "pdf-image-extract"]) {
+    assert.equal(RetiredToolIds.replacements.get(retired), "pdf-extract");
+    assert.ok(!registeredToolIds.has(retired));
+  }
+  assert.ok(registeredToolIds.has("pdf-extract"));
+  const storage = new MemoryStorage({
+    [favoritesStorageKey]: ["pdf-to-text", "pdf-merge", "pdf-image-extract"],
+    [recentStorageKey]: ["pdf-image-extract", "pdf-merge", "pdf-to-text"],
+  });
+  storage.setItem(toolIdMigrationStorageKey, "3");
+  migrateSavedToolIds(storage);
+  assert.deepEqual(storage.list(favoritesStorageKey), ["pdf-extract", "pdf-merge"]);
+  assert.deepEqual(storage.list(recentStorageKey), ["pdf-extract", "pdf-merge"]);
+  assert.equal(storage.getItem(toolIdMigrationStorageKey), "4");
+});
+
 test("the retired tool id table rejects ids that are still registered or map nowhere", () => {
   const table = (retired: Record<string, unknown>, version: unknown = 1) => () => parseRetiredToolIds({ version, retired });
   assert.throws(table({ "pdf-merge": "lock-unlock" }), /still a registered tool/);

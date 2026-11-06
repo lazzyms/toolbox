@@ -93,5 +93,25 @@
     "warnings": [],
     "originalBytes": 4096,
     "outputBytes": 4200
+  },
+  {
+    "inputPath": "minutes.pdf",
+    "state": "succeeded",
+    "outputPaths": ["board-merged.pdf"],
+    "detail": "Pages 3–5 of board-merged.pdf.",
+    "failure": null,
+    "reason": null,
+    "warnings": [
+      {
+        "code": "bookmarksNotCarried",
+        "details": { "into": "the merged file" },
+        "message": "Bookmarks weren't carried into the merged file."
+      },
+      {
+        "code": "tagsNotCarried",
+        "details": { "into": "the merged file" },
+        "message": "Accessibility tags weren't carried into the merged file."
+      }
+    ]
   }
 ]
