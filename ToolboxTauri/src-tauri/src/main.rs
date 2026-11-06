@@ -1026,6 +1026,99 @@ mod command_tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// One batch of good, locked, damaged, malformed and over-limit PDFs for Crop and for Resize: each bad file fails
+    /// alone with its reason, the good ones are saved next to their originals or in the chosen folder, a second run
+    /// takes the next free name with the same bytes, and no original changes.
+    #[test]
+    fn crop_and_resize_isolate_locked_damaged_malformed_and_over_limit_pdfs_in_either_output_location() {
+        use crate::kit::contracts::OutcomePointer;
+        let root = sandbox("crop-resize-safety");
+        let folder = root.join("in");
+        std::fs::create_dir_all(&folder).unwrap();
+        let (lease, scan, broken, no_media_box, orphan, archive, huge) = (
+            folder.join("lease.pdf"), folder.join("scan.pdf"), folder.join("broken.pdf"), folder.join("no-media-box.pdf"),
+            folder.join("orphan-page.pdf"), folder.join("archive.pdf"), folder.join("huge.pdf"),
+        );
+        make_pdf(&lease, 3); make_pdf(&scan, 2); make_pdf(&no_media_box, 3); make_pdf(&orphan, 3); make_pdf(&archive, 5_001);
+        let locked = locked_pdf(&root, "payroll", crate::kit::TEST_PASSWORD);
+        std::fs::write(&broken, b"%PDF-1.7 not really").unwrap();
+        std::fs::write(&huge, b"%PDF-1.7\n").unwrap();
+        std::fs::OpenOptions::new().write(true).open(&huge).unwrap().set_len(1_000_000_001).unwrap();
+        let mut document = lopdf::Document::load(&no_media_box).unwrap();
+        let second = document.get_pages()[&2];
+        document.get_dictionary_mut(second).unwrap().remove(b"MediaBox");
+        document.save(&no_media_box).unwrap();
+        let mut document = lopdf::Document::load(&orphan).unwrap();
+        let second = document.get_pages()[&2];
+        document.get_dictionary_mut(second).unwrap().set("Parent", lopdf::Object::Reference(second));
+        document.save(&orphan).unwrap();
+
+        let inputs = vec![lease.clone(), locked.clone(), broken.clone(), no_media_box.clone(), orphan.clone(), archive.clone(), scan.clone(), huge.clone()];
+        let small = inputs.iter().filter(|input| **input != huge).map(|input| (input.clone(), std::fs::read(input).unwrap())).collect::<Vec<_>>();
+        let huge_original = Original::of(&huge);
+        let assert_originals = || {
+            for (input, original) in &small { assert_eq!(&std::fs::read(input).unwrap(), original, "original was modified: {}", input.display()); }
+            huge_original.assert_untouched();
+        };
+
+        let assert_batch = |outcomes: &[JobOutcome], tool: &str| {
+            assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), inputs, "{tool}");
+            for good in [&outcomes[0], &outcomes[6]] {
+                assert!(good.error().is_none(), "{tool}: {}", good.error().cloned().unwrap_or_default());
+                assert!(good.output_paths().len() == 1 && good.output_paths()[0].is_file(), "{tool}");
+            }
+            let error = |index: usize| outcomes[index].error().cloned().unwrap_or_else(|| panic!("{tool}: {} must fail", inputs[index].display()));
+            for index in 1..6 { assert!(outcomes[index].output_paths().is_empty(), "{tool}: {}", inputs[index].display()); }
+            assert!(outcomes[7].output_paths().is_empty(), "{tool}");
+
+            let locked_error = error(1);
+            assert_eq!((locked_error.kind, locked_error.message.as_str()), (ErrorKind::InvalidInput, editor::LOCKED_PDF), "{tool}");
+            assert_eq!(locked_error.pointer, Some(OutcomePointer::Tool { tool_id: "lock-unlock".into() }), "{tool}");
+            assert_eq!(error(2).kind, ErrorKind::Processing, "{tool}");
+            assert_eq!(error(3).message, "Page 2 can't be read: PDF page has no media box.", "{tool}");
+            assert!(error(4).message.starts_with("Page 2 has a missing or wrong /Parent, so the PDF page-tree is malformed"), "{tool}: {}", error(4).message);
+            let pages = error(5);
+            assert_eq!(pages.kind, ErrorKind::LimitExceeded { limit: LimitKind::PageCount }, "{tool}");
+            assert_eq!(pages.message, "More than 5,000 pages, over the limit for one PDF. Use fewer pages and try again.", "{tool}");
+            let size = error(7);
+            assert_eq!(size.kind, ErrorKind::LimitExceeded { limit: LimitKind::FileSize }, "{tool}");
+            assert_eq!(size.message, "Larger than the 1 GB limit for one PDF. Reduce its size and try again.", "{tool}");
+        };
+
+        type Run = Box<dyn Fn(OutputLocation) -> Vec<JobOutcome>>;
+        let crop: Run = Box::new({
+            let inputs = inputs.clone();
+            move |output_location| tauri::async_runtime::block_on(crop_pdf(RunEvents::silent(), crop_request(inputs.clone(), RangedPageScope::All, output_location)))
+        });
+        let resize: Run = Box::new({
+            let inputs = inputs.clone();
+            move |output_location| tauri::async_runtime::block_on(resize_pdf(RunEvents::silent(), ResizePdfRequest {
+                paths: inputs.clone(), size: TargetSize::Preset("a4".into()), orientation: ResizeOrientation::Match,
+                placement: ResizePlacement::Fit, scope: RangedPageScope::All, output_location,
+            }))
+        });
+        for (tool, suffix, run) in [("crop", "-cropped", crop), ("resize", "-resized", resize)] {
+            let chosen = location(&root, &format!("{tool}-out"));
+            for (output_location, destination) in [(chosen.clone(), root.join(format!("{tool}-out"))), (OutputLocation::AlongsideInput, folder.clone())] {
+                let first = run(output_location.clone());
+                assert_batch(&first, tool);
+                assert_originals();
+                let second = run(output_location);
+                assert_batch(&second, tool);
+                assert_originals();
+                for (index, name) in [(0, "lease"), (6, "scan")] {
+                    assert_eq!(first[index].output_paths()[0], destination.join(format!("{name}{suffix}.pdf")), "{tool}");
+                    assert_eq!(second[index].output_paths()[0], destination.join(format!("{name}{suffix}-1.pdf")), "{tool}: a taken name gets -1");
+                    assert_eq!(std::fs::read(&first[index].output_paths()[0]).unwrap(), std::fs::read(&second[index].output_paths()[0]).unwrap(), "{tool}: {name} runs are byte-identical");
+                }
+                let written = file_names(&destination).into_iter().filter(|name| name.contains(suffix)).collect::<Vec<_>>();
+                assert_eq!(written, [format!("lease{suffix}-1.pdf"), format!("lease{suffix}.pdf"), format!("scan{suffix}-1.pdf"), format!("scan{suffix}.pdf")], "{tool}: only the good files are written");
+            }
+        }
+        assert!(file_names(&root.join("locked")).iter().all(|name| !name.contains("-cropped") && !name.contains("-resized")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn resize_command_applies_a_custom_size_payload_and_rejects_one_out_of_bounds_for_every_file() {
         use crate::kit::contracts::ErrorKind;
