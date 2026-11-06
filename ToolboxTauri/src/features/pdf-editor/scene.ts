@@ -87,3 +87,36 @@ export const notEditableReasons: Record<PdfEditRunReason, { short: string; detai
 };
 export const overflowMessage = (words: number) =>
   `Text runs past the original line by ${words} ${words === 1 ? 'word' : 'words'}. It will be cut off unless you make it shorter or smaller.`;
+
+// Page-sequence edits. Each takes a scene and page ids and returns the next scene.
+// Returns null when the selection covers every page, because a PDF keeps at least one.
+// Text edits belong to source pages, so the edits on removed pages go with them.
+export const removePages = (scene: PdfScene, ids: string[]): PdfScene | null => {
+  const { textEdits, ...rest } = scene;
+  const pages = scene.pages.filter((page) => !ids.includes(page.id));
+  if (!pages.length) return null;
+  const kept = textEdits?.filter((edit) => pages.some((page) => page.sourceIndex === edit.pageIndex));
+  return { ...rest, pages, ...(kept?.length ? { textEdits: kept } : {}) };
+};
+
+// Moves the pages to the target's position, keeping their relative order.
+export const movePagesBefore = (scene: PdfScene, ids: string[], targetId: string): PdfScene => {
+  if (ids.includes(targetId) || !scene.pages.some((page) => page.id === targetId)) return scene;
+  const moving = scene.pages.filter((page) => ids.includes(page.id));
+  const pages = scene.pages.filter((page) => !ids.includes(page.id));
+  pages.splice(pages.findIndex((page) => page.id === targetId), 0, ...moving);
+  return { ...scene, pages };
+};
+
+export const swapPage = (scene: PdfScene, index: number, delta: number): PdfScene => {
+  const to = index + delta;
+  if (index < 0 || index >= scene.pages.length || to < 0 || to >= scene.pages.length) return scene;
+  const pages = [...scene.pages];
+  [pages[index], pages[to]] = [pages[to], pages[index]];
+  return { ...scene, pages };
+};
+
+export const rotatePages = (scene: PdfScene, ids: string[], degrees = 90): PdfScene => ({
+  ...scene,
+  pages: scene.pages.map((page) => ids.includes(page.id) ? { ...page, rotation: (((page.rotation + degrees) % 360) + 360) % 360 } : page),
+});

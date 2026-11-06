@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Media, empty</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+.tb{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;font-size:13px;line-height:1.45;color:var(--fg);background:var(--bg);-webkit-font-smoothing:antialiased}
+.tb.dark{--bg:#0a0a0a;--side:#111111;--panel:#0f0f0f;--raise:#1c1c1c;--fg:#fafafa;--mut:#a3a3a3;--faint:#8a8a8a;--line:rgba(255,255,255,.08);--line2:rgba(255,255,255,.16);--sel:#262626;--pri:#ebebeb;--prifg:#171717;--bad:#ff6b6b;--warn:#f2b552;--ring:#a3a3a3;--scrim:rgba(0,0,0,.6)}
+.tb.light{--bg:#ffffff;--side:#f7f7f7;--panel:#fcfcfc;--raise:#f2f2f2;--fg:#0a0a0a;--mut:#525252;--faint:#666666;--line:#e8e8e8;--line2:#d4d4d4;--sel:#ebebeb;--pri:#171717;--prifg:#fafafa;--bad:#c10007;--warn:#9a5800;--ring:#525252;--scrim:rgba(0,0,0,.28)}
+.tb button,.tb input,.tb select{font:inherit;color:inherit}
+.btn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:7px;border:1px solid var(--line2);background:var(--raise);color:var(--fg);font-weight:500;cursor:pointer;white-space:nowrap;box-sizing:border-box;text-decoration:none}
+.btn.pri{background:var(--pri);color:var(--prifg);border-color:transparent}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--mut)}
+.btn.sm{height:26px;padding:0 9px;font-size:12px}
+.btn[disabled]{opacity:.45;cursor:default}
+.kbd{font-size:11px;line-height:16px;padding:0 5px;border-radius:4px;border:1px solid var(--line2);color:var(--mut);font-weight:500}
+.btn.pri .kbd{border-color:currentColor;color:inherit;opacity:.6}
+.nav{display:flex;align-items:center;gap:9px;min-height:30px;padding:0 10px;border-radius:7px;color:var(--mut);text-decoration:none;border:0;background:none;width:100%;text-align:left;cursor:pointer;box-sizing:border-box}
+.nav.on{background:var(--sel);color:var(--fg);font-weight:500}
+.field{height:30px;border-radius:7px;border:1px solid var(--line2);background:var(--bg);padding:0 10px;width:100%;box-sizing:border-box;min-width:0}
+.lbl{font-size:12px;font-weight:600}
+.hint{font-size:12px;color:var(--mut)}
+.row{display:grid;grid-template-columns:20px minmax(0,1fr) 72px 60px 150px;gap:12px;align-items:center;padding:8px 20px;border-bottom:1px solid var(--line)}
+.row.sel{background:var(--sel)}
+.badge{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:999px;border:1px solid var(--line2);font-size:12px;color:var(--fg);white-space:nowrap}
+svg.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.tb :focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+a{color:inherit}a:hover{color:var(--mut)}
+.seg{display:inline-flex;padding:2px;border-radius:8px;background:var(--raise);border:1px solid var(--line)}.seg button{height:26px;padding:0 10px;border:0;border-radius:6px;background:none;cursor:pointer;color:var(--mut)}.seg button[aria-checked=true]{background:var(--bg);color:var(--fg);font-weight:500;box-shadow:0 1px 2px rgba(0,0,0,.2)}
+.note{display:flex;gap:8px;align-items:flex-start;padding:10px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--raise)}
+.opt{display:flex;flex-direction:column;gap:6px}
+fieldset.opt{border:0;margin:0;padding:0}fieldset.opt legend{padding:0;margin-bottom:6px}
+.chk{display:flex;gap:8px;align-items:center}
+.tb.dark{--seg-ok:#d4d4d4;--seg-wait:#2a2a2a}.tb.light{--seg-ok:#262626;--seg-wait:#e5e5e5}
+.seg{display:inline-flex;padding:2px;border-radius:8px;background:var(--raise);border:1px solid var(--line)}
+.seg button{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border:0;border-radius:6px;background:none;cursor:pointer;color:var(--mut);font-weight:500}
+.seg button[aria-checked=true]{background:var(--bg);color:var(--fg);box-shadow:0 1px 2px rgba(0,0,0,.25)}
+.seg[aria-disabled=true]{opacity:.5}
+.row{grid-template-columns:20px minmax(0,1fr) 84px 64px 170px}
+.rrow{display:grid;grid-template-columns:20px minmax(0,1fr) 110px 250px;gap:12px;align-items:center;padding:8px 20px;border-bottom:1px solid var(--line);min-height:36px}
+.chip{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;border-radius:999px;border:1px solid var(--line2);background:transparent;font-size:12px;cursor:pointer;color:var(--mut)}
+.chip[aria-pressed="true"]{background:var(--sel);color:var(--fg);font-weight:500}
+.inl{grid-column:2 / -1;display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;padding:10px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--panel)}
+.inl .opt{flex:1 1 160px}
+.err{font-size:12px;color:var(--bad);display:flex;gap:6px;align-items:center}
+.field[aria-invalid=true]{border-color:var(--bad)}
+.flag{display:flex;gap:10px;align-items:center;margin:0 20px 10px;padding:8px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--raise)}
+.tag{display:inline-flex;align-items:center;height:20px;padding:0 7px;border-radius:999px;border:1px solid var(--line2);font-size:11px;color:var(--mut);white-space:nowrap}
+
+.tb.dark{--chk1:#262626;--chk2:#1b1b1b}.tb.light{--chk1:#e6e6e6;--chk2:#f8f8f8}
+.chk-bg{background:repeating-conic-gradient(var(--chk1) 0 25%,var(--chk2) 0 50%) 0 0/12px 12px}
+.bar{height:6px;border-radius:3px;overflow:hidden;background:var(--seg-wait);display:flex;gap:2px}
+.mini{height:4px;border-radius:2px;overflow:hidden;background:var(--seg-wait);margin-top:5px;max-width:260px}.mini span{display:block;height:100%;background:var(--seg-ok)}
+.grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;list-style:none;margin:0;padding:0}
+.tile{position:relative;display:flex;flex-direction:column;gap:4px;padding:6px;border-radius:8px;border:1px solid var(--line);background:var(--panel);cursor:grab;min-width:0}
+.tile[aria-selected=true]{border-color:var(--fg);box-shadow:inset 0 0 0 1px var(--fg)}
+.tile .pic{box-sizing:border-box;height:62px;border-radius:5px;display:flex;align-items:center;justify-content:center;overflow:hidden}
+.tile .meta{display:flex;justify-content:space-between;gap:4px;font-size:11px;color:var(--mut);white-space:nowrap}
+.tile .meta b{color:var(--fg);font-weight:600}
+.ins{position:absolute;left:-6px;top:2px;bottom:2px;width:3px;border-radius:2px;background:var(--fg)}
+.sz{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px 8px;padding:8px 0 4px 26px}
+.sz label,.cont label{display:flex;gap:6px;align-items:center;font-size:12px}
+.cont{display:flex;flex-direction:column;gap:6px;padding:6px 0 4px 26px}
+.prow{display:grid;grid-template-columns:18px minmax(0,1fr) auto 26px;gap:8px;align-items:center;min-height:30px}
+.tg{display:inline-flex;align-items:center;gap:4px;height:20px;padding:0 7px;border-radius:999px;border:1px solid var(--line2);font-size:11px;color:var(--mut);white-space:nowrap}
+.tg.w{color:var(--warn);border-color:currentColor}
+.frow{display:grid;grid-template-columns:40px minmax(0,1fr) 92px 64px;gap:12px;align-items:center;padding:8px 20px;border-bottom:1px solid var(--line)}
+.frow[aria-selected=true]{background:var(--sel)}
+.fthumb{width:40px;height:40px;border-radius:6px;display:flex;align-items:center;justify-content:center;overflow:hidden}
+.grow{display:grid;grid-template-columns:20px 20px minmax(0,1fr) 110px 250px;gap:10px;align-items:center;padding:8px 20px;border-bottom:1px solid var(--line);min-height:36px}
+.crow{display:grid;grid-template-columns:20px 20px minmax(0,1fr) 250px;gap:10px;align-items:center;padding:6px 20px 6px 50px;border-bottom:1px solid var(--line);background:var(--panel)}
+.ex{display:flex;flex-direction:column;gap:2px;padding:10px 12px;border-radius:8px;background:var(--raise)}
+.legend{display:flex;gap:6px;flex-wrap:wrap;padding:0 20px 10px}
+.src{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:4px;border:1px solid var(--line2);font-size:10px;font-weight:600;color:var(--fg)}
+.dlg{position:absolute;inset:0;background:var(--scrim);display:flex;align-items:center;justify-content:center;z-index:5}
+.dlg>div{width:520px;border-radius:12px;border:1px solid var(--line2);background:var(--bg);padding:20px 22px;display:flex;flex-direction:column;gap:12px;box-shadow:0 20px 50px rgba(0,0,0,.4)}
+.sw{position:relative;display:inline-block;width:32px;height:18px;border-radius:999px;background:var(--pri);flex:none}.sw::after{content:"";position:absolute;top:2px;left:16px;width:14px;height:14px;border-radius:50%;background:var(--prifg)}
+.warnt{color:var(--warn)}
+.tb input[type=checkbox],.tb input[type=range]{accent-color:var(--fg)}
+.sw.off{background:var(--line2)}.sw.off::after{left:2px;background:var(--bg)}
+
+</style>
+</helmet>
+<sc-if value="{{f_tool_0}}" hint-placeholder-val="{{ true }}"><div class="{{themeClass}}" style="min-height: 800px; display: flex; flex-wrap: wrap; position: relative">
+<aside aria-label="Media" style="flex: 1 1 220px; max-width: 232px; background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; padding: 14px 10px; box-sizing: border-box">
+<a class="nav" href="Main.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M5 12l6 6M5 12l6-6"></path></svg>All tools</a>
+<div style="padding: 16px 10px 6px; font-size: 12px; font-weight: 600; color: var(--faint)">Media</div>
+<nav aria-label="Media tools" style="display: flex; flex-direction: column; gap: 2px"><button class="nav on" aria-pressed="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 16l5-5 4 4 3-3 6 6"></path><circle cx="15.5" cy="8.5" r="1.5"></circle></svg>App Icon Set</button><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4l13 8-13 8z"></path></svg>Create GIF</button><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5z"></path><path d="M3 13l9 5 9-5"></path></svg>Extract GIF Frames</button><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6v16H4zM14 4h6v16h-6z"></path></svg>TIFF Pages</button></nav>
+<div style="flex: 1"></div>
+<a class="nav" href="Settings.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"></path></svg>Settings<span class="kbd" style="margin-left: auto">{{settingsKey}}</span></a>
+<p class="hint" style="margin: 0; padding: 10px 10px 0">Files stay on this device.</p>
+</aside>
+<div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+<header style="min-height: 52px; display: flex; align-items: center; gap: 14px; padding: 0 20px; border-bottom: 1px solid var(--line); flex-wrap: wrap">
+<h1 style="margin: 0; font-size: 15px; font-weight: 600">App Icon Set</h1>
+<span class="hint">Make every icon size for macOS, iPhone, Android and websites from one image.</span>
+<div style="flex: 1"></div>
+<button class="btn ghost"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"></circle><path d="M21 21l-6-6"></path></svg>Find a tool<span class="kbd">{{findKey}}</span></button>
+</header>
+<div style="flex: 1; display: flex; flex-wrap: wrap; min-height: 0">
+<section aria-label="Files" style="flex: 999 1 480px; min-width: 0; padding: 20px; display: flex; box-sizing: border-box">
+<div role="region" aria-label="Drop files to add them" style="flex: 1; border: 1.5px {{dropBorder}} var(--line2); border-radius: 12px; background: {{dropBg}}; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 40px; text-align: center; min-height: 420px">
+<svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 28px; height: 28px; color: var(--mut); stroke-width: 1.5"><path d="M12 5v14M6 13l6 6 6-6"></path></svg>
+<sc-if value="{{f_dragging}}" hint-placeholder-val="{{ false }}"><p style="margin: 0; font-size: 17px; font-weight: 600">Drop to add 5 files</p><p class="hint" style="margin: 0; max-width: 380px">Files this tool can&#39;t take are listed under the files as not added, each with its reason.</p></sc-if>
+<sc-if value="{{f_dragging_not}}" hint-placeholder-val="{{ true }}"><p style="margin: 0; font-size: 17px; font-weight: 600">Drop master images</p><p class="hint" style="margin: 0; max-width: 380px">Each image makes its own set of icons in its own folder. Square images of 1024 pixels or more work best.</p><button class="btn pri" style="margin-top: 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2"></path></svg>Open files<span class="kbd">{{openKey}}</span></button><p class="hint" style="margin: 0">Accepts .png, .jpg, .jpeg, .heic, .heif, .webp, .tiff</p></sc-if>
+</div></section><section aria-label="Options" style="flex: 1 1 300px; max-width: 360px; border-left: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column"><div style="padding: 18px 20px; display: flex; flex-direction: column; gap: 20px; flex: 1; overflow: auto"><fieldset class="opt"><legend class="lbl">Make icons for</legend>
+<div class="prow"><input type="checkbox" checked><span>macOS app</span><span class="hint">7 sizes, ICNS, .appiconset</span><span></span></div>
+<div class="prow"><input type="checkbox" checked><span>iPhone and iPad</span><span class="hint">13 sizes, .appiconset</span><span></span></div>
+<div class="prow"><input type="checkbox"><span>Android</span><span class="hint">6 sizes</span><span></span></div>
+<div class="prow"><input type="checkbox" checked><span>Website</span><span class="hint">6 sizes, favicon.ico</span><span></span></div>
+<div class="prow"><input type="checkbox"><span>Custom sizes</span><span class="hint">None yet</span><span></span></div>
+<p class="hint" style="margin: 0">Add an image to choose single sizes and preview them.</p></fieldset>
+<div style="border-top: 1px solid var(--line); padding-top: 18px; display: flex; flex-direction: column; gap: 8px"><span class="lbl">Save to</span>
+<div style="display: flex; align-items: center; gap: 8px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2"></path></svg><span>Next to each original</span></div>
+<button class="btn ghost" style="align-self: flex-start; padding: 0; height: 24px; color: var(--fg); text-decoration: underline; text-underline-offset: 3px">Change for this run</button>
+<div class="ex"><span class="hint">Example</span><span>app-icon-icons</span><span class="hint">A folder for each image</span><span class="hint">An existing folder gets -1, -2 and so on. Nothing is replaced.</span></div></div></div>
+<footer style="padding: 14px 20px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 10px; flex-wrap: wrap"><span class="hint">Add files to run</span><div style="flex: 1"></div><button class="btn pri" disabled>Make icon sets<span class="kbd">{{runKey}}</span></button></footer></section>
+</div>
+</div>
+</div></sc-if>
+<sc-if value="{{f_tool_1}}" hint-placeholder-val="{{ false }}"><div class="{{themeClass}}" style="min-height: 800px; display: flex; flex-wrap: wrap; position: relative">
+<aside aria-label="Media" style="flex: 1 1 220px; max-width: 232px; background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; padding: 14px 10px; box-sizing: border-box">
+<a class="nav" href="Main.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M5 12l6 6M5 12l6-6"></path></svg>All tools</a>
+<div style="padding: 16px 10px 6px; font-size: 12px; font-weight: 600; color: var(--faint)">Media</div>
+<nav aria-label="Media tools" style="display: flex; flex-direction: column; gap: 2px"><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 16l5-5 4 4 3-3 6 6"></path><circle cx="15.5" cy="8.5" r="1.5"></circle></svg>App Icon Set</button><button class="nav on" aria-pressed="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4l13 8-13 8z"></path></svg>Create GIF</button><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5z"></path><path d="M3 13l9 5 9-5"></path></svg>Extract GIF Frames</button><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6v16H4zM14 4h6v16h-6z"></path></svg>TIFF Pages</button></nav>
+<div style="flex: 1"></div>
+<a class="nav" href="Settings.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"></path></svg>Settings<span class="kbd" style="margin-left: auto">{{settingsKey}}</span></a>
+<p class="hint" style="margin: 0; padding: 10px 10px 0">Files stay on this device.</p>
+</aside>
+<div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+<header style="min-height: 52px; display: flex; align-items: center; gap: 14px; padding: 0 20px; border-bottom: 1px solid var(--line); flex-wrap: wrap">
+<h1 style="margin: 0; font-size: 15px; font-weight: 600">Create GIF</h1>
+<span class="hint">Turn images into one animated GIF.</span>
+<div style="flex: 1"></div>
+<button class="btn ghost"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"></circle><path d="M21 21l-6-6"></path></svg>Find a tool<span class="kbd">{{findKey}}</span></button>
+</header>
+<div style="flex: 1; display: flex; flex-wrap: wrap; min-height: 0">
+<section aria-label="Files" style="flex: 999 1 480px; min-width: 0; padding: 20px; display: flex; box-sizing: border-box">
+<div role="region" aria-label="Drop files to add them" style="flex: 1; border: 1.5px {{dropBorder}} var(--line2); border-radius: 12px; background: {{dropBg}}; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 40px; text-align: center; min-height: 420px">
+<svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 28px; height: 28px; color: var(--mut); stroke-width: 1.5"><path d="M12 5v14M6 13l6 6 6-6"></path></svg>
+<sc-if value="{{f_dragging}}" hint-placeholder-val="{{ false }}"><p style="margin: 0; font-size: 17px; font-weight: 600">Drop to add 5 files</p><p class="hint" style="margin: 0; max-width: 380px">Files this tool can&#39;t take are listed under the files as not added, each with its reason.</p></sc-if>
+<sc-if value="{{f_dragging_not}}" hint-placeholder-val="{{ true }}"><p style="margin: 0; font-size: 17px; font-weight: 600">Drop images to animate</p><p class="hint" style="margin: 0; max-width: 380px">Frames play in the order you add them. The first frame sets the size of the GIF.</p><button class="btn pri" style="margin-top: 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2"></path></svg>Open files<span class="kbd">{{openKey}}</span></button><p class="hint" style="margin: 0">Accepts .png, .jpg, .jpeg, .heic, .heif, .webp, .gif, .bmp, .tiff</p></sc-if>
+</div></section><section aria-label="Options" style="flex: 1 1 300px; max-width: 360px; border-left: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column"><div style="padding: 18px 20px; display: flex; flex-direction: column; gap: 20px; flex: 1; overflow: auto"><div class="opt"><label class="lbl" for="dl">Delay for every frame</label><div style="display: flex; gap: 8px; align-items: center"><input id="dl" class="field" value="100" style="width: 110px"><span class="hint">ms, 1 to 60000</span></div></div>
+<div class="opt"><span class="lbl">Loop</span><label class="chk"><span class="sw"></span><span>Loop forever</span></label></div>
+<div style="border-top: 1px solid var(--line); padding-top: 18px; display: flex; flex-direction: column; gap: 8px"><span class="lbl">Save to</span>
+<p class="hint" style="margin: 0">You name the GIF when you start. The save dialog opens next to the first frame:</p>
+<div style="display: flex; align-items: center; gap: 8px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2"></path></svg><span>Next to the first frame</span></div>
+<button class="btn ghost" style="align-self: flex-start; padding: 0; height: 24px; color: var(--fg); text-decoration: underline; text-underline-offset: 3px">Change for this run</button>
+<p class="hint" style="margin: 0">If you pick a name that's taken, Toolbox adds -1 and tells you. Nothing is replaced.</p></div></div>
+<footer style="padding: 14px 20px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 10px; flex-wrap: wrap"><span class="hint">Add files to run</span><div style="flex: 1"></div><button class="btn pri" disabled>Make GIF…<span class="kbd">{{runKey}}</span></button></footer></section>
+</div>
+</div>
+</div></sc-if>
+<sc-if value="{{f_tool_2}}" hint-placeholder-val="{{ false }}"><div class="{{themeClass}}" style="min-height: 800px; display: flex; flex-wrap: wrap; position: relative">
+<aside aria-label="Media" style="flex: 1 1 220px; max-width: 232px; background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; padding: 14px 10px; box-sizing: border-box">
+<a class="nav" href="Main.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M5 12l6 6M5 12l6-6"></path></svg>All tools</a>
+<div style="padding: 16px 10px 6px; font-size: 12px; font-weight: 600; color: var(--faint)">Media</div>
+<nav aria-label="Media tools" style="display: flex; flex-direction: column; gap: 2px"><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 16l5-5 4 4 3-3 6 6"></path><circle cx="15.5" cy="8.5" r="1.5"></circle></svg>App Icon Set</button><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4l13 8-13 8z"></path></svg>Create GIF</button><button class="nav on" aria-pressed="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5z"></path><path d="M3 13l9 5 9-5"></path></svg>Extract GIF Frames</button><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6v16H4zM14 4h6v16h-6z"></path></svg>TIFF Pages</button></nav>
+<div style="flex: 1"></div>
+<a class="nav" href="Settings.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"></path></svg>Settings<span class="kbd" style="margin-left: auto">{{settingsKey}}</span></a>
+<p class="hint" style="margin: 0; padding: 10px 10px 0">Files stay on this device.</p>
+</aside>
+<div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+<header style="min-height: 52px; display: flex; align-items: center; gap: 14px; padding: 0 20px; border-bottom: 1px solid var(--line); flex-wrap: wrap">
+<h1 style="margin: 0; font-size: 15px; font-weight: 600">Extract GIF Frames</h1>
+<span class="hint">Save every frame of a GIF as a PNG, with its timing.</span>
+<div style="flex: 1"></div>
+<button class="btn ghost"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"></circle><path d="M21 21l-6-6"></path></svg>Find a tool<span class="kbd">{{findKey}}</span></button>
+</header>
+<div style="flex: 1; display: flex; flex-wrap: wrap; min-height: 0">
+<section aria-label="Files" style="flex: 999 1 480px; min-width: 0; padding: 20px; display: flex; box-sizing: border-box">
+<div role="region" aria-label="Drop files to add them" style="flex: 1; border: 1.5px {{dropBorder}} var(--line2); border-radius: 12px; background: {{dropBg}}; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 40px; text-align: center; min-height: 420px">
+<svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 28px; height: 28px; color: var(--mut); stroke-width: 1.5"><path d="M12 5v14M6 13l6 6 6-6"></path></svg>
+<sc-if value="{{f_dragging}}" hint-placeholder-val="{{ false }}"><p style="margin: 0; font-size: 17px; font-weight: 600">Drop to add 5 files</p><p class="hint" style="margin: 0; max-width: 380px">Files this tool can&#39;t take are listed under the files as not added, each with its reason.</p></sc-if>
+<sc-if value="{{f_dragging_not}}" hint-placeholder-val="{{ true }}"><p style="margin: 0; font-size: 17px; font-weight: 600">Drop animated GIFs</p><p class="hint" style="margin: 0; max-width: 380px">Each frame is saved as a full PNG, plus a timings file listing every frame's delay.</p><button class="btn pri" style="margin-top: 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2"></path></svg>Open files<span class="kbd">{{openKey}}</span></button><p class="hint" style="margin: 0">Accepts .gif</p></sc-if>
+</div></section><section aria-label="Options" style="flex: 1 1 300px; max-width: 360px; border-left: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column"><div style="padding: 18px 20px; display: flex; flex-direction: column; gap: 20px; flex: 1; overflow: auto"><div class="opt"><span class="lbl">You get, for each GIF</span><p class="hint" style="margin: 0">Every frame as a full PNG, as it looks when played, numbered so it sorts in order. One timings file lists each frame and its delay in milliseconds.</p></div>
+<div style="border-top: 1px solid var(--line); padding-top: 18px; display: flex; flex-direction: column; gap: 8px"><span class="lbl">Save to</span>
+<div style="display: flex; align-items: center; gap: 8px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2"></path></svg><span>Next to each original</span></div>
+<button class="btn ghost" style="align-self: flex-start; padding: 0; height: 24px; color: var(--fg); text-decoration: underline; text-underline-offset: 3px">Change for this run</button>
+<div class="ex"><span class="hint">Example</span><span>loading-spinner-frame-001.png</span><span>loading-spinner-timings.json</span><span class="hint">An existing name gets -1, -2 and so on. Nothing is replaced.</span></div></div></div>
+<footer style="padding: 14px 20px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 10px; flex-wrap: wrap"><span class="hint">Add files to run</span><div style="flex: 1"></div><button class="btn pri" disabled>Extract frames<span class="kbd">{{runKey}}</span></button></footer></section>
+</div>
+</div>
+</div></sc-if>
+<sc-if value="{{f_tool_3}}" hint-placeholder-val="{{ false }}"><div class="{{themeClass}}" style="min-height: 800px; display: flex; flex-wrap: wrap; position: relative">
+<aside aria-label="Media" style="flex: 1 1 220px; max-width: 232px; background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; padding: 14px 10px; box-sizing: border-box">
+<a class="nav" href="Main.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M5 12l6 6M5 12l6-6"></path></svg>All tools</a>
+<div style="padding: 16px 10px 6px; font-size: 12px; font-weight: 600; color: var(--faint)">Media</div>
+<nav aria-label="Media tools" style="display: flex; flex-direction: column; gap: 2px"><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 16l5-5 4 4 3-3 6 6"></path><circle cx="15.5" cy="8.5" r="1.5"></circle></svg>App Icon Set</button><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4l13 8-13 8z"></path></svg>Create GIF</button><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5z"></path><path d="M3 13l9 5 9-5"></path></svg>Extract GIF Frames</button><button class="nav on" aria-pressed="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6v16H4zM14 4h6v16h-6z"></path></svg>TIFF Pages</button></nav>
+<div style="flex: 1"></div>
+<a class="nav" href="Settings.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"></path></svg>Settings<span class="kbd" style="margin-left: auto">{{settingsKey}}</span></a>
+<p class="hint" style="margin: 0; padding: 10px 10px 0">Files stay on this device.</p>
+</aside>
+<div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+<header style="min-height: 52px; display: flex; align-items: center; gap: 14px; padding: 0 20px; border-bottom: 1px solid var(--line); flex-wrap: wrap">
+<h1 style="margin: 0; font-size: 15px; font-weight: 600">TIFF Pages</h1>
+<span class="hint">Split multi-page TIFFs into pages, or combine pages into one TIFF.</span>
+<div style="flex: 1"></div><div role="radiogroup" aria-label="TIFF Pages mode" class="seg"><button role="radio" aria-checked="true" tabindex="0">Split pages</button><button role="radio" aria-checked="false" tabindex="-1">Combine into one TIFF</button></div>
+<button class="btn ghost"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"></circle><path d="M21 21l-6-6"></path></svg>Find a tool<span class="kbd">{{findKey}}</span></button>
+</header>
+<div style="flex: 1; display: flex; flex-wrap: wrap; min-height: 0">
+<section aria-label="Files" style="flex: 999 1 480px; min-width: 0; padding: 20px; display: flex; box-sizing: border-box">
+<div role="region" aria-label="Drop files to add them" style="flex: 1; border: 1.5px {{dropBorder}} var(--line2); border-radius: 12px; background: {{dropBg}}; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 40px; text-align: center; min-height: 420px">
+<svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 28px; height: 28px; color: var(--mut); stroke-width: 1.5"><path d="M12 5v14M6 13l6 6 6-6"></path></svg>
+<sc-if value="{{f_dragging}}" hint-placeholder-val="{{ false }}"><p style="margin: 0; font-size: 17px; font-weight: 600">Drop to add 5 files</p><p class="hint" style="margin: 0; max-width: 380px">Files this tool can&#39;t take are listed under the files as not added, each with its reason.</p></sc-if>
+<sc-if value="{{f_dragging_not}}" hint-placeholder-val="{{ true }}"><p style="margin: 0; font-size: 17px; font-weight: 600">Drop TIFF files</p><p class="hint" style="margin: 0; max-width: 380px">Split saves each page as its own TIFF. Switch to Combine to join pages from several files into one.</p><button class="btn pri" style="margin-top: 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2"></path></svg>Open files<span class="kbd">{{openKey}}</span></button><p class="hint" style="margin: 0">Accepts .tif, .tiff, including fax and JPEG-compressed scans</p></sc-if>
+</div></section><section aria-label="Options" style="flex: 1 1 300px; max-width: 360px; border-left: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column"><div style="padding: 18px 20px; display: flex; flex-direction: column; gap: 20px; flex: 1; overflow: auto"><div class="opt"><label class="lbl" for="cm">Compression</label><select id="cm" class="field"><option>LZW, lossless (default)</option><option>Deflate, lossless</option><option>None, largest files</option></select><span class="hint">Pages are saved at 8 bits per channel. 16-bit pages stay 16-bit.</span></div>
+<div style="border-top: 1px solid var(--line); padding-top: 18px; display: flex; flex-direction: column; gap: 8px"><span class="lbl">Save to</span>
+<div style="display: flex; align-items: center; gap: 8px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2"></path></svg><span>Next to each original</span></div>
+<button class="btn ghost" style="align-self: flex-start; padding: 0; height: 24px; color: var(--fg); text-decoration: underline; text-underline-offset: 3px">Change for this run</button>
+<div class="ex"><span class="hint">Example</span><span>scan-0042-page-01.tif</span><span class="hint">An existing name gets -1, -2 and so on. Nothing is replaced.</span></div></div></div>
+<footer style="padding: 14px 20px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 10px; flex-wrap: wrap"><span class="hint">Add files to run</span><div style="flex: 1"></div><button class="btn pri" disabled>Split TIFFs<span class="kbd">{{runKey}}</span></button></footer></section>
+</div>
+</div>
+</div></sc-if>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "tool": {"editor": "enum", "options": ["App Icon Set", "Create GIF", "Extract GIF Frames", "TIFF Pages"], "default": "App Icon Set"}, "dragging": {"editor": "boolean", "default": false}, "$preview": {"width": 1280, "height": 800}}'>
+class Component extends DCLogic {
+renderVals() {
+const win = (this.props.platform ?? 'macOS') === 'Windows';
+const light = (this.props.theme ?? 'dark') === 'light';
+const base = { themeClass: light ? 'tb light' : 'tb dark', findKey: win ? 'Ctrl+K' : '⌘K', settingsKey: win ? 'Ctrl+,' : '⌘,', openKey: win ? 'Ctrl+O' : '⌘O', runKey: win ? 'Ctrl+Enter' : '⌘↵', mod: win ? 'Ctrl' : '⌘', reveal: win ? 'Show in File Explorer' : 'Show in Finder', revealAll: win ? 'Show all in File Explorer' : 'Show all in Finder', docsDir: win ? 'C:\\Users\\Asha\\Documents' : '~/Documents', picsDir: win ? 'C:\\Users\\Asha\\Pictures' : '~/Pictures', sep: win ? '\\' : '/', dialogName: win ? 'Save As' : 'Save' };
+base.f_tool_0 = (this.props.tool ?? "App Icon Set") === "App Icon Set";
+base.f_tool_1 = (this.props.tool ?? "App Icon Set") === "Create GIF";
+base.f_tool_2 = (this.props.tool ?? "App Icon Set") === "Extract GIF Frames";
+base.f_tool_3 = (this.props.tool ?? "App Icon Set") === "TIFF Pages";
+base.f_dragging = !!(this.props.dragging ?? false); base.f_dragging_not = !base.f_dragging;
+base.dropBorder = base.f_dragging ? 'solid' : 'dashed'; base.dropBg = base.f_dragging ? 'var(--raise)' : 'transparent';
+return base;
+}
+}
+</script>
+</body>
+</html>

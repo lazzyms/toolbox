@@ -1,28 +1,46 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ToolScaffold } from "../components/ToolScaffold";
-import type { CompressImagesRequest, ToolDefinition, ToolResult } from "../contracts";
+import type { CompressFilesRequest, CompressImagesRequest, CompressLevel, ToolDefinition, ToolResult } from "../contracts";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { ShortcutHint } from "../components/ShortcutHint";
 import { shortcutTarget } from "../shortcuts";
 
+// Every PDF is repacked without loss at every strength, so the PDF row says so until image recompression ships.
+const levels: { value: CompressLevel; name: string; summary: string }[] = [
+  { value: "low", name: "Low", summary: "Least saving, detail stays" },
+  { value: "medium", name: "Medium", summary: "Good for sharing and email" },
+  { value: "high", name: "High", summary: "Smallest, photos look softer" },
+];
+
+const PDF_EFFECT = "Repacked without loss. Images untouched.";
+
+const exifHint = (on: boolean) => on
+  ? "On: removes camera, date and GPS details from JPEG, PNG and WebP. Photos stay upright. PDFs aren't changed."
+  : "Off: camera, date and GPS details stay in the copies.";
+
+const runLabelFor = (count: number) => count === 0 ? "Compress" : `Compress ${count} ${count === 1 ? "file" : "files"}`;
+
 export const CompressFilesWorkspaceView = ({ utility }: { utility: ToolDefinition }) => {
-  const [pdfQuality, setPdfQuality] = useState(80);
+  const [level, setLevel] = useState<CompressLevel>("medium");
+  const [stripExif, setStripExif] = useState(false);
   const [imageQuality, setImageQuality] = useState(80);
   const [lossless, setLossless] = useState(false);
-  const isPdf = utility.id === "pdf-compress";
+  const isCompress = utility.id === "compress-files";
+  const levelName = levels.find(({ value }) => value === level)?.name ?? "Medium";
 
   return (
     <ToolScaffold
       variant="workspace"
       sessionKey="compress-files"
       utility={utility}
-      onRun={(paths, outputLocation, { runId }) => isPdf
-        ? invoke<ToolResult>("compress_pdf", { runId, request: { paths, quality: pdfQuality, outputLocation } })
+      onRun={(paths, outputLocation, { runId }) => isCompress
+        ? invoke<ToolResult>("compress_files", { runId, request: { paths, level, stripExif, outputLocation } satisfies CompressFilesRequest })
         : invoke<ToolResult>("compress_images", { runId,
           request: { paths, quality: imageQuality, lossless, outputLocation } satisfies CompressImagesRequest,
         })}
@@ -33,19 +51,43 @@ export const CompressFilesWorkspaceView = ({ utility }: { utility: ToolDefinitio
             <div>
               <h2 className="workspace-active-command">{utility.title}</h2>
               <p className="workspace-panel-copy">
-                {isPdf
-                  ? "Save a smaller copy of each selected PDF while keeping its page geometry."
+                {isCompress
+                  ? "Save a smaller copy of each selected file. The originals stay untouched."
                   : "Save a smaller copy of each selected image. The originals stay untouched."}
               </p>
             </div>
-            {isPdf ? (
-              <div className="workspace-field slider-field">
-                <div className="slider-label-row">
-                  <Label id="compression-quality-label">Compression quality</Label>
-                  <output>{pdfQuality}%</output>
+            {isCompress ? (
+              <>
+                <div className="workspace-field">
+                  <Label id="compress-strength-label">Strength</Label>
+                  <RadioGroup aria-labelledby="compress-strength-label" className="gap-1.5" value={level} onValueChange={(value) => setLevel(value as CompressLevel)}>
+                    {levels.map(({ value, name, summary }) => (
+                      <span key={value} className="workspace-check">
+                        <RadioGroupItem id={`compress-strength-${value}`} value={value} />
+                        <Label htmlFor={`compress-strength-${value}`} className="gap-2">
+                          <span>{name}</span>
+                          <span className="workspace-panel-copy mt-0">{summary}</span>
+                        </Label>
+                      </span>
+                    ))}
+                  </RadioGroup>
                 </div>
-                <Slider aria-label="Compression quality" aria-labelledby="compression-quality-label" min={1} max={100} value={[pdfQuality]} onValueChange={([value]) => value !== undefined && setPdfQuality(value)} />
-              </div>
+                <div className="workspace-field">
+                  <span className="workspace-panel-label" id="compress-effect-label">What {levelName} does</span>
+                  <dl className="workspace-field-grid m-0" aria-labelledby="compress-effect-label">
+                    <dt>PDF</dt>
+                    <dd className="m-0 text-foreground">{PDF_EFFECT}</dd>
+                  </dl>
+                  <p className="workspace-note mt-0">Text, transparency and colour profiles always stay.</p>
+                </div>
+                <div className="workspace-field">
+                  <div className="workspace-field-heading">
+                    <Label htmlFor="compress-strip-exif">Strip EXIF</Label>
+                    <Switch id="compress-strip-exif" aria-describedby="compress-strip-exif-hint" checked={stripExif} onCheckedChange={setStripExif} />
+                  </div>
+                  <p id="compress-strip-exif-hint" className="workspace-note mt-0">{exifHint(stripExif)}</p>
+                </div>
+              </>
             ) : (
               <>
                 <div className="workspace-field">
@@ -61,10 +103,10 @@ export const CompressFilesWorkspaceView = ({ utility }: { utility: ToolDefinitio
               disabled={loading || files.length === 0 || utility.capability.nativeAvailability !== "available"}
               onClick={run}
               className="workspace-primary-action"
-              aria-label={`Export ${utility.title}`}
+              aria-label={isCompress ? undefined : `Export ${utility.title}`}
               {...shortcutTarget("run")}
             >
-              {runLabel ?? utility.shortTitle}
+              {isCompress ? runLabelFor(files.length) : runLabel ?? utility.shortTitle}
               <ShortcutHint id="run" />
             </Button>
           </CardContent>
