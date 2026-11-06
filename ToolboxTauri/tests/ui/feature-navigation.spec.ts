@@ -1507,7 +1507,7 @@ test("non-previewable PDF conversions identify source selection and show determi
     await chooseFixture(page, pdfFixturePath);
     await expect(page.getByRole("region", { name: "Source page selection" })).toBeVisible();
     await expect(page.getByRole("region", { name: "Conversion preview" })).toHaveCount(0);
-    await expect(page.getByText(/^Output preview unavailable\. Export renders pages? [\d,-]+ at 150 dpi as PNG image files\.$/)).toBeVisible();
+    await expect(page.getByText("Output preview unavailable. Export renders each PDF's pages at 150 dpi as PNG image files.", { exact: true })).toBeVisible();
     await expect(page.getByRole("img", { name: "Source page preview 1" })).toBeVisible();
 
     const conversionRail = page.getByRole("toolbar", { name: "PDF Conversion tools" });
@@ -1562,7 +1562,9 @@ test("PDF page-scoped conversions send the selected pages and reach OCR from the
     const imagesInvocation = await page.evaluate(() =>
         (window as TestWindow).__toolboxInvocations?.find(({ command }) => command === "pdf_to_images"),
     );
-    expect(imagesInvocation?.args).toMatchObject({ request: { paths: ["/local/document.scoped.pdf"], pages: [1] } });
+    expect(imagesInvocation?.args).toMatchObject({
+        request: { paths: ["/local/document.scoped.pdf"], pageRange: null, picks: [{ path: "/local/document.scoped.pdf", pages: [1] }] },
+    });
 
     const ocrButton = page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "OCR PDF", exact: true });
     await expect(ocrButton).toBeEnabled();
@@ -2446,23 +2448,24 @@ test("PDF page ranges follow the native grammar and messages", async ({ page }) 
     await page.goto("/");
     await openFromHome(page, "PDF to Images");
     await chooseFixture(page, "/local/document.scoped.pdf");
-    const range = page.getByRole("textbox", { name: "Page range" });
+    await page.getByRole("radiogroup", { name: "Pages" }).getByRole("radio", { name: "Range", exact: true }).click();
+    const range = page.getByRole("textbox", { name: "Page range for every PDF" });
     const exportButton = page.getByRole("button", { name: "Export PDF to Images", exact: true });
 
     await range.fill("1-3,,2");
     await expect(page.getByText("Entry 2 of the page range is empty. Remove the extra comma.", { exact: true })).toBeVisible();
     await expect(exportButton).toBeDisabled();
 
+    // One range applies to every PDF, so pages past a PDF's last page are left out instead of rejected.
     await range.fill("4");
-    await expect(page.getByText("The PDF has 3 pages, so page 4 can't be used.", { exact: true })).toBeVisible();
-    await expect(exportButton).toBeDisabled();
+    await expect(page.getByText("Range 4 applied to each PDF. 1 will be skipped.", { exact: true })).toBeVisible();
 
     await range.fill("2-");
-    await expect(page.getByText("2 pages selected", { exact: true })).toBeVisible();
+    await expect(page.getByText("Range 2- applied to each PDF.", { exact: true })).toBeVisible();
     await expect(page.getByRole("checkbox", { name: "Page 1" })).not.toBeChecked();
     await expect(page.getByRole("checkbox", { name: "Page 3" })).toBeChecked();
     await exportButton.click();
-    expect((await lastInvocation(page, "pdf_to_images"))?.args).toMatchObject({ request: { pages: [1, 2], pageRange: "2-3" } });
+    expect((await lastInvocation(page, "pdf_to_images"))?.args).toMatchObject({ request: { pageRange: "2-", picks: [] } });
 });
 
 test("GIF extraction does not request a source preview", async ({ page }) => {
