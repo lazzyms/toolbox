@@ -8,6 +8,8 @@ type MediaWindow = Window & {
     __invocations: Array<{ command: string; args: unknown }>;
     __dialogResults: Array<string | string[] | null>;
     __outputSettings: OutputSettings;
+    __warnings: Record<string, Array<{ code: string; message: string }>>;
+    __outcomes: Record<string, unknown[]>;
 };
 
 const customFolder: OutputSettings = { mode: "customFolder", folder: "/Users/test/Media out" };
@@ -19,6 +21,8 @@ const start = async (page: Page, settings: OutputSettings = { mode: "alongsideIn
         win.__invocations = [];
         win.__dialogResults = [];
         win.__outputSettings = settings;
+        win.__warnings = {};
+        win.__outcomes = {};
         Object.defineProperty(window.navigator, "platform", { configurable: true, value: "MacIntel" });
         window.__TAURI_INTERNALS__ = {
             metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main", windowLabel: "main" } },
@@ -35,8 +39,14 @@ const start = async (page: Page, settings: OutputSettings = { mode: "alongsideIn
                     const { path } = (args as { request: { path: string } }).request;
                     return Array.from({ length: path.endsWith("two-page.tiff") ? 2 : 1 }, () => ({ width: 640, height: 480, dataUrl: blankImage }));
                 }
-                if (command === "inspect_image_metadata") return [{ path: "fixture", fields: ["Camera"] }];
+                if (command === "inspect_image_metadata") {
+                    // One report per requested path, in the shape ImageMetadataReport renders.
+                    return ((args as { request: { paths: string[] } }).request.paths).map((path) => ({
+                        status: "report", path, format: "jpeg", exif: true, gps: false, xmp: false, iptc: false, comments: false, icc: false, orientation: null,
+                    }));
+                }
                 if (command.startsWith("plugin:")) return null;
+                if (win.__outcomes[command]) return win.__outcomes[command];
                 const { request } = (args ?? {}) as { request?: { paths?: string[] } };
                 return (request?.paths ?? []).map((inputPath) => ({
                     inputPath,
@@ -45,7 +55,7 @@ const start = async (page: Page, settings: OutputSettings = { mode: "alongsideIn
                     state: "succeeded",
                     failure: null,
                     reason: null,
-                    warnings: [],
+                    warnings: win.__warnings[inputPath] ?? [],
                 }));
             },
             transformCallback: () => 1,
@@ -118,6 +128,23 @@ test.describe("Media requests", () => {
         } });
     });
 
+    test("App Icon Set shows the bit-depth reduction warning on the HEIC result row", async ({ page }) => {
+        await start(page);
+        await page.evaluate(() => {
+            (window as unknown as MediaWindow).__warnings = {
+                "/local/art/widget-small.heic": [{ code: "precisionReduced", message: "10-bit HEIC saved as 8-bit sRGB." }],
+            };
+        });
+        await openToolBySearch(page, "Generate App Icons");
+        await choose(page, "/local/art/widget-small.heic");
+        await runOnce(page, "generate_icon_set");
+
+        const row = page.locator(".result-row", { hasText: "widget-small" });
+        await expect(row).toHaveAttribute("data-tone", "warn");
+        await expect(row.locator(".result-row-detail").first()).toHaveText("10-bit HEIC saved as 8-bit sRGB.");
+        await expect(row.locator(".result-row-state .sr-only")).toHaveText("Generated with a warning");
+    });
+
     test("Create GIF sends frame order, delay, loop, and the saved path", async ({ page }) => {
         await start(page);
         await openToolBySearch(page, "Create GIF");
@@ -150,6 +177,76 @@ test.describe("Media requests", () => {
             outputLocation: "alongsideInput",
             outputPath: "/local/frames/frame-2-animated.gif",
         } });
+    });
+
+    test("Create GIF proposes the first frame's name in the resolved folder, and cancelling sends nothing", async ({ page }) => {
+        await start(page, customFolder);
+        await openToolBySearch(page, "Create GIF");
+        await choose(page, ["/local/frames/IMG_2210.heic", "/local/frames/IMG_2211.png"]);
+
+        await page.locator(".workspace-primary-action").click();
+        const dialog = page.getByRole("dialog");
+        await expect(dialog.getByLabel("File name")).toHaveValue("IMG_2210-animated.gif");
+        await expect(dialog.getByTestId("save-folder")).toHaveText("~/Media out");
+        await dialog.getByRole("button", { name: "Cancel" }).click();
+        await expect(dialog).toHaveCount(0);
+        expect(await invocationsOf(page, "create_gif")).toEqual([]);
+
+        expect(await runOnce(page, "create_gif", "IMG_2210-animated.gif")).toEqual({ runId, request: {
+            paths: ["/local/frames/IMG_2210.heic", "/local/frames/IMG_2211.png"],
+            frameDelayMs: 100,
+            loopForever: true,
+            outputLocation: { customFolder: "/Users/test/Media out" },
+            outputPath: "/Users/test/Media out/IMG_2210-animated.gif",
+        } });
+    });
+
+    test("Create GIF shows the renamed GIF with both names", async ({ page }) => {
+        await start(page, customFolder);
+        await page.evaluate(() => {
+            (window as unknown as MediaWindow).__outcomes = { create_gif: [{
+                inputPath: "/local/frames/loop.png",
+                outputPaths: ["/Users/test/Media out/loop-animated-1.gif"],
+                detail: "GIF saved",
+                state: "succeeded",
+                failure: null,
+                reason: null,
+                warnings: [{ code: "renamedToAvoidReplacing", message: "native wording", details: { chosenName: "loop-animated.gif", finalName: "loop-animated-1.gif" } }],
+            }] };
+        });
+        await openToolBySearch(page, "Create GIF");
+        await choose(page, ["/local/frames/loop.png", "/local/frames/loop-2.png"]);
+        await runOnce(page, "create_gif", "loop-animated.gif");
+
+        const rows = page.getByRole("list", { name: "Results" }).getByRole("listitem");
+        await expect(rows).toHaveCount(1);
+        await expect(rows.first()).toHaveAttribute("data-tone", "warn");
+        await expect(rows.first().locator(".result-row-name")).toHaveText("loop-animated-1.gif");
+        await expect(rows.first()).toContainText("Saved as loop-animated-1.gif. Renamed to avoid replacing an existing file.");
+        await expect(rows.first()).not.toContainText("native wording");
+    });
+
+    test("Create GIF names the unreadable frame and says nothing was saved", async ({ page }) => {
+        await start(page);
+        const message = "Frame 2, IMG_2212.heic, isn't a readable HEIC image. Replace or remove frame 2, then make the GIF again. Nothing was saved.";
+        await page.evaluate((message) => {
+            const failed = (inputPath: string, text: string) => ({ inputPath, outputPaths: [], detail: "", state: "failed", failure: { kind: "processing", message: text, pointer: null }, reason: null, warnings: [] });
+            (window as unknown as MediaWindow).__outcomes = { create_gif: [
+                failed("/local/frames/IMG_2211.png", "Aggregate operation stopped because /local/frames/IMG_2212.heic failed: " + message),
+                failed("/local/frames/IMG_2212.heic", message),
+            ] };
+        }, message);
+        await openToolBySearch(page, "Create GIF");
+        await choose(page, ["/local/frames/IMG_2211.png", "/local/frames/IMG_2212.heic"]);
+        await runOnce(page, "create_gif", "IMG_2211-animated.gif");
+
+        const rows = page.getByRole("list", { name: "Results" }).getByRole("listitem");
+        await expect(rows).toHaveCount(2);
+        const failedFrame = rows.filter({ has: page.locator(".result-row-name", { hasText: /^IMG_2212\.heic$/ }) });
+        await expect(failedFrame).toHaveCount(1);
+        await expect(failedFrame).toHaveAttribute("data-tone", "fail");
+        await expect(failedFrame.getByText(message, { exact: true })).toHaveCount(1);
+        await expect(page.getByRole("list", { name: "Results" })).not.toContainText(".gif");
     });
 
     test("Create GIF keeps its options when the rail switches tools and back", async ({ page }) => {
@@ -247,7 +344,9 @@ test.describe("Media requests", () => {
         await page.getByRole("radio", { name: "Inspect metadata" }).click();
         await expect(page.locator(".workspace-primary-action")).toBeDisabled();
         await page.locator(".workspace-control-panel").getByRole("button", { name: "Inspect metadata", exact: true }).click();
-        await expect(page.locator(".workspace-report")).toContainText("\"Camera\"");
+        const report = page.getByRole("region", { name: "Metadata found" });
+        await expect(report.getByRole("region")).toHaveCount(2);
+        await expect(report.getByRole("region", { name: "Metadata in a.jpg" }).locator(".image-metadata-row[data-present=true] dt")).toHaveText(["Camera"]);
         expect(await invocationsOf(page, "inspect_image_metadata")).toEqual([{ request: {
             paths: ["/local/photos/a.jpg", "/local/photos/b.png"],
             outputLocation: { customFolder: "/Users/test/Media out" },

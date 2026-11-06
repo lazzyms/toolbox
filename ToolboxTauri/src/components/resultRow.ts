@@ -73,7 +73,12 @@ export const warningText = (warning: OutcomeWarning): string => {
         case "renamedToAvoidReplacing":
             return `Saved as ${warning.details.finalName}. Renamed to avoid replacing an existing file.`;
         case "precisionReduced":
-            return "Some values were rounded to the precision this format can store.";
+            // The native side names what was reduced, such as "10-bit HEIC saved as 8-bit sRGB."
+            return warning.message.trim() || "Some values were rounded to the precision this format can store.";
+        case "bookmarksNotCarried":
+            return `Bookmarks weren’t carried into ${warning.details.into}.`;
+        case "tagsNotCarried":
+            return `Accessibility tags weren’t carried into ${warning.details.into}.`;
     }
 };
 
