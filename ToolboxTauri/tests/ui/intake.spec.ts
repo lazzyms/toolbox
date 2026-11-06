@@ -1160,7 +1160,7 @@ test("OCR takes a mixed drop of PDFs and images, refuses other files, and notes 
     const heic = results.nth(1);
     await expect(heic).toHaveAttribute("data-tone", "note");
     await expect(heic.locator(".result-row-detail")).toHaveText(`${note} Test output`);
-    await expect(heic.locator(".result-row-state .sr-only")).toHaveText("Recognised with a note");
+    await expect(heic.locator(".result-row-state .sr-only")).toHaveText("Recognized with a note");
     await expect(heic.locator(".result-row-icon svg")).toHaveClass(/lucide-info/);
     for (const index of [0, 2, 3, 4]) await expect(results.nth(index)).toHaveAttribute("data-tone", "ok");
 });

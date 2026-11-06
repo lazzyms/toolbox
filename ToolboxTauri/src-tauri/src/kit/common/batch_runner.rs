@@ -15,12 +15,14 @@ pub struct BatchRunner;
 #[serde(tag = "phase", rename_all = "camelCase")]
 pub enum FileEvent {
     Started { index: usize },
+    /// Pages of a multi-page file finished so far, for tools that report them.
+    Pages { index: usize, done: usize, total: usize },
     Finished { index: usize, outcome: JobOutcome },
 }
 
 /// A run's link to the view that started it. Progress goes out through the sink and a cancel comes back in by run id.
 pub struct RunEvents {
-    sink: Option<Box<dyn Fn(FileEvent) + Send + Sync>>,
+    sink: Option<Arc<dyn Fn(FileEvent) + Send + Sync>>,
     cancel: CancelFlag,
     run_id: Option<String>,
 }
@@ -41,14 +43,18 @@ pub const CANCELLED_BEFORE_START: &str = "Cancelled before it started";
 impl RunEvents {
     pub fn silent() -> Self { Self { sink: None, cancel: CancelFlag::default(), run_id: None } }
     pub fn new(sink: impl Fn(FileEvent) + Send + Sync + 'static) -> Self {
-        Self { sink: Some(Box::new(sink)), cancel: CancelFlag::default(), run_id: None }
+        Self { sink: Some(Arc::new(sink)), cancel: CancelFlag::default(), run_id: None }
     }
     pub fn for_run(run_id: String, sink: impl Fn(FileEvent) + Send + Sync + 'static) -> Self {
         let cancel = CancelFlag::default();
         running().insert(run_id.clone(), cancel.clone());
-        Self { sink: Some(Box::new(sink)), cancel, run_id: Some(run_id) }
+        Self { sink: Some(Arc::new(sink)), cancel, run_id: Some(run_id) }
     }
     fn emit(&self, event: FileEvent) { if let Some(sink) = &self.sink { sink(event) } }
+    fn page_sink(&self, index: usize) -> Option<limits::PageSink> {
+        let sink = Arc::clone(self.sink.as_ref()?);
+        Some(Arc::new(move |done, total| sink(FileEvent::Pages { index, done, total })))
+    }
     fn settled(&self, index: usize, outcome: &JobOutcome) {
         self.emit(FileEvent::Started { index });
         self.emit(FileEvent::Finished { index, outcome: outcome.clone() });
@@ -128,7 +134,7 @@ impl BatchRunner {
                     let outcome = match limits {
                         Some(limits) => {
                             let (job, request) = (Arc::clone(&job), Arc::clone(request));
-                            limits.run_each(path, &events.cancel, move |path| job(&request, path))
+                            limits.run_each(path, &events.cancel, events.page_sink(index), move |path| job(&request, path))
                         }
                         None => JobOutcome::failure(path, ToolError::processing(format!("No processing limits are recorded for {command}."))),
                     };
@@ -190,6 +196,10 @@ mod tests {
         assert_eq!(finished["phase"], "finished");
         assert_eq!(finished["index"], 0);
         assert_eq!(finished["outcome"], serde_json::to_value(&outcome).unwrap());
+        assert_eq!(
+            serde_json::to_value(FileEvent::Pages { index: 1, done: 3, total: 9 }).unwrap(),
+            serde_json::json!({ "phase": "pages", "index": 1, "done": 3, "total": 9 }),
+        );
     }
 
     #[test]

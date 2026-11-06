@@ -91,7 +91,7 @@ pub fn ocr_pdf(request: &OcrRequest, input: PathBuf) -> JobOutcome {
 }
 
 /// Images go to the engine as they are; every other input is a PDF whose pages are rendered first.
-fn ocr_pdf_within(request: &OcrRequest, input: PathBuf, deadline: HelperDeadline) -> JobOutcome {
+pub(crate) fn ocr_pdf_within(request: &OcrRequest, input: PathBuf, deadline: HelperDeadline) -> JobOutcome {
     let mode = match request.mode() {
         Ok(mode) => mode,
         Err(error) => return JobOutcome::failure(input, ToolError::invalid_input(error)),
@@ -126,7 +126,7 @@ fn image_within(request: &OcrRequest, input: PathBuf, mode: OcrMode, deadline: H
         Ok(metadata) => metadata.len(),
         Err(error) => return failure(input, format!("Could not inspect image for OCR: {error}")),
     };
-    if input_size > OCR_MAX_INPUT_BYTES { return failure(input, "Image exceeds the 100 MiB OCR input limit.".to_string()); }
+    if input_size > OCR_MAX_INPUT_BYTES { return JobOutcome::failure(input, too_large("Image")); }
     let mut pages = match ImagePages::open(&input) {
         Ok(pages) => pages,
         Err(error) => return failure(input, format!("Could not read the image for OCR: {error}")),
@@ -144,14 +144,15 @@ fn image_within(request: &OcrRequest, input: PathBuf, mode: OcrMode, deadline: H
     if let Err(error) = pages.check_pixels(&input, &selected) { return JobOutcome::failure(input, error); }
     let detail = image_detail(&pages, &selected, request.page_range().is_some(), mode);
     let settings = match mode { OcrMode::Text => &[][..], OcrMode::SearchablePdf => WORD_BOX_OUTPUT };
-    let (stop_at, timed_out) = ocr_time_limit(deadline, selected.len());
+    let clock = OcrClock::start(&input, deadline, selected.len());
     let mut document = ImagePdf::new();
     let mut texts = Vec::with_capacity(selected.len());
     let mut layers = Vec::with_capacity(selected.len());
     let mut reduced_from = None;
     let mut total_text = 0usize;
     // One page is decoded at a time, so a long TIFF never holds more than one frame's pixels.
-    for &index in &selected {
+    for (done, &index) in selected.iter().enumerate() {
+        let (stop_at, timed_out) = clock.page(done);
         let page = match pages.read(index) {
             Ok(page) => page,
             Err(error) => return failure(input, format!("Could not read the image for OCR: {error}")),
@@ -161,8 +162,9 @@ fn image_within(request: &OcrRequest, input: PathBuf, mode: OcrMode, deadline: H
             Ok(recognized) => recognized,
             Err(error) => return JobOutcome::failure(input, error),
         };
+        clock.finished(done + 1);
         total_text = total_text.saturating_add(recognized.len()).saturating_add(1);
-        if total_text > OCR_MAX_OUTPUT_BYTES { return failure(input, "OCR output exceeds the 10 MiB text limit.".to_string()); }
+        if total_text > OCR_MAX_OUTPUT_BYTES { return JobOutcome::failure(input, text_too_long()); }
         if mode == OcrMode::Text {
             texts.push(recognized);
             continue;
@@ -473,7 +475,7 @@ fn text_file_within(request: &OcrRequest, input: PathBuf, deadline: HelperDeadli
         Ok(metadata) => metadata.len(),
         Err(error) => return failure(input, format!("Could not inspect PDF for OCR: {error}")),
     };
-    if input_size > OCR_MAX_INPUT_BYTES { return failure(input, "PDF exceeds the 100 MiB OCR input limit.".to_string()); }
+    if input_size > OCR_MAX_INPUT_BYTES { return JobOutcome::failure(input, too_large("PDF")); }
     let document = match load_ocr_document(&input) {
         Ok(document) => document,
         Err(error) => return JobOutcome::failure(input, error),
@@ -485,7 +487,7 @@ fn text_file_within(request: &OcrRequest, input: PathBuf, deadline: HelperDeadli
     };
     let recognized = plan.recognized();
     if recognized.is_empty() { return JobOutcome::skipped(input, plan.text_present()); }
-    if let Err(error) = check_render_limits(&document, &recognized) { return failure(input, error); }
+    if let Err(error) = check_render_limits(&document, &recognized) { return JobOutcome::failure(input, error); }
     let mut ocr = match run_ocr(&resources, &input, &recognized, &request.languages, &[], &[], deadline) {
         Ok(pages) => pages.into_iter(),
         Err(error) => return JobOutcome::failure(input, error),
@@ -502,7 +504,7 @@ fn text_file_within(request: &OcrRequest, input: PathBuf, deadline: HelperDeadli
         Ok(text) => text,
         Err(error) => return failure(input, error),
     };
-    if text.len() > OCR_MAX_OUTPUT_BYTES { return failure(input, "OCR output exceeds the 10 MiB text limit.".to_string()); }
+    if text.len() > OCR_MAX_OUTPUT_BYTES { return JobOutcome::failure(input, text_too_long()); }
     if text.is_empty() { return failure(input, OCR_NO_TEXT.to_string()); }
     match std::fs::write(output.path(), text) {
         Ok(_) => match output.publish() {
@@ -702,26 +704,27 @@ fn existing_text(input: &Path, pages: &[OcrPage], deadline: HelperDeadline) -> R
         let result = run_ocr_helper(command, stop_at, &timed_out)?;
         if !result.status.success() { return Err(ToolError::processing(stderr(result, "The PDF text reader could not read the existing text."))); }
         total = total.saturating_add(result.stdout.len()).saturating_add(1);
-        if total > OCR_MAX_OUTPUT_BYTES { return Err(ToolError::processing("OCR output exceeds the 10 MiB text limit.")); }
+        if total > OCR_MAX_OUTPUT_BYTES { return Err(text_too_long()); }
         texts.push(result.stdout);
     }
     Ok(texts)
 }
 
 /// Only the pages that are rendered count toward the render limits.
-fn check_render_limits(document: &Document, pages: &[OcrPage]) -> Result<(), String> {
+fn check_render_limits(document: &Document, pages: &[OcrPage]) -> Result<(), ToolError> {
     let page_ids = document.get_pages();
     let mut total_pixels = 0u64;
+    let over = |message: &str| ToolError::limit_exceeded(LimitKind::Decompression, message);
     for page in pages {
-        let id = *page_ids.get(&page.number).ok_or_else(|| "PDF page is missing.".to_string())?;
-        let (left, bottom, right, top) = page_bounds(document, id)?;
-        let pixels = rendered_pixels(right - left, top - bottom)?;
+        let id = *page_ids.get(&page.number).ok_or_else(|| ToolError::processing("PDF page is missing."))?;
+        let (left, bottom, right, top) = page_bounds(document, id).map_err(ToolError::processing)?;
+        let pixels = rendered_pixels(right - left, top - bottom).map_err(ToolError::processing)?;
         if pixels > OCR_MAX_SINGLE_PIXELS {
-            return Err("Selected PDF page exceeds the 40 million pixel OCR limit.".to_string());
+            return Err(over("Selected PDF page exceeds the 40 million pixel OCR limit."));
         }
-        total_pixels = total_pixels.checked_add(pixels).ok_or_else(|| "Selected PDF pages exceed the OCR pixel limit.".to_string())?;
+        total_pixels = total_pixels.checked_add(pixels).ok_or_else(|| over("Selected PDF pages exceed the OCR pixel limit."))?;
         if total_pixels > OCR_MAX_TOTAL_PIXELS {
-            return Err("Selected PDF pages exceed the 120 million pixel OCR limit.".to_string());
+            return Err(over("Selected PDF pages exceed the 120 million pixel OCR limit."));
         }
     }
     Ok(())
@@ -828,25 +831,48 @@ impl OcrResources {
     }
 }
 
-/// The time limit for recognising `pages` pages of one file, and its message.
-fn ocr_time_limit(deadline: HelperDeadline, pages: usize) -> (Instant, String) {
-    let limit = deadline.limit(1, pages);
-    (Instant::now() + limit, format!("Recognising took longer than {} and was stopped. Nothing was saved.", limits::duration_label(limit)))
+/// One file's time limits while its pages are recognised. The pages share the file's
+/// budget, so a hard page can use time an easy one left, but no page may take longer
+/// than a one-page file is given, so one stuck page can't hold the file to the end of
+/// its budget. Each finished page is reported, so the view shows the page count and a
+/// stop says which page it was on.
+struct OcrClock { input: PathBuf, file_stop: Instant, page_limit: Duration, total: usize }
+
+impl OcrClock {
+    fn start(input: &Path, deadline: HelperDeadline, total: usize) -> Self {
+        limits::report_pages(0, total);
+        Self { input: input.to_path_buf(), file_stop: Instant::now() + deadline.limit(1, total), page_limit: deadline.limit(1, 1), total }
+    }
+
+    /// When the page after `done` finished pages must stop, and what the file says if it does.
+    fn page(&self, done: usize) -> (Instant, String) {
+        let page_stop = Instant::now() + self.page_limit;
+        if page_stop < self.file_stop {
+            let message = format!("{}: that page took longer than {}. Nothing was saved.", limits::stopped_at(done, self.total), limits::duration_label(self.page_limit));
+            (page_stop, message)
+        } else {
+            (self.file_stop, limits::file_time_limit_message(&self.input, done, self.total, 0))
+        }
+    }
+
+    fn finished(&self, done: usize) { limits::report_pages(done, self.total) }
 }
 
 /// Renders and recognises each page on its own, so the text keeps page order and page breaks.
 /// `area` is extra renderer arguments, such as `DISPLAYED_PAGE`; none renders the media box.
 /// `settings` are extra engine arguments, such as `WORD_BOX_OUTPUT`; none gives plain text.
 fn run_ocr(resources: &OcrResources, input: &Path, pages: &[OcrPage], languages: &[String], area: &[&str], settings: &[&str], deadline: HelperDeadline) -> Result<Vec<Vec<u8>>, ToolError> {
-    let (stop_at, timed_out) = ocr_time_limit(deadline, pages.len());
+    let clock = OcrClock::start(input, deadline, pages.len());
     let workspace = OcrWorkspace::new().map_err(ToolError::processing)?;
     let mut recognized = Vec::with_capacity(pages.len());
     let mut total = 0usize;
-    for page in pages {
+    for (done, page) in pages.iter().enumerate() {
+        let (stop_at, timed_out) = clock.page(done);
         let image = render_ocr_page(&resources.renderer, input, &workspace, *page, area, stop_at, &timed_out)?;
         let text = resources.engine.recognize(&image, languages, settings, stop_at, &timed_out)?;
+        clock.finished(done + 1);
         total = total.saturating_add(text.len()).saturating_add(1);
-        if total > OCR_MAX_OUTPUT_BYTES { return Err(ToolError::processing("OCR output exceeds the 10 MiB text limit.")); }
+        if total > OCR_MAX_OUTPUT_BYTES { return Err(text_too_long()); }
         recognized.push(text);
     }
     Ok(recognized)
@@ -878,7 +904,7 @@ fn searchable_pdf_within(request: &OcrRequest, input: PathBuf, deadline: HelperD
         Ok(metadata) => metadata.len(),
         Err(error) => return failure(input, format!("Could not inspect PDF for OCR: {error}")),
     };
-    if input_size > OCR_MAX_INPUT_BYTES { return failure(input, "PDF exceeds the 100 MiB OCR input limit.".to_string()); }
+    if input_size > OCR_MAX_INPUT_BYTES { return JobOutcome::failure(input, too_large("PDF")); }
     let mut document = match load_ocr_document(&input) {
         Ok(document) => document,
         Err(error) => return JobOutcome::failure(input, error),
@@ -891,7 +917,8 @@ fn searchable_pdf_within(request: &OcrRequest, input: PathBuf, deadline: HelperD
     let pages = plan.recognized();
     if pages.is_empty() { return JobOutcome::skipped(input, plan.text_present()); }
     let page_ids = document.get_pages();
-    let frames = match check_render_limits(&document, &pages).and_then(|()| displayed_pages(&document, &page_ids, &pages)) {
+    if let Err(error) = check_render_limits(&document, &pages) { return JobOutcome::failure(input, error); }
+    let frames = match displayed_pages(&document, &page_ids, &pages) {
         Ok(frames) => frames,
         Err(error) => return failure(input, error),
     };
@@ -1159,7 +1186,7 @@ fn render_ocr_page(renderer: &Path, input: &Path, workspace: &OcrWorkspace, page
     if result.status.success() && output.is_file() {
         let size = std::fs::metadata(&output).map_err(|error| ToolError::processing(format!("Could not inspect rendered OCR page: {error}")))?.len();
         if size > OCR_MAX_RENDERED_BYTES {
-            return Err(ToolError::processing("Rendered OCR page exceeds the 50 MiB file-size limit."));
+            return Err(ToolError::limit_exceeded(LimitKind::Decompression, "Rendered OCR page exceeds the 50 MiB file-size limit."));
         }
         Ok(output)
     } else {
@@ -1315,6 +1342,8 @@ fn validate_face_blur(input: &std::path::Path, output: &std::path::Path) -> Resu
 fn success(input_path: PathBuf, output: PathBuf, detail: &str) -> JobOutcome { JobOutcome::succeeded(input_path, vec![output], detail.to_string()) }
 fn failure(input_path: PathBuf, error: String) -> JobOutcome { JobOutcome::failure(input_path, ToolError::processing(error)) }
 fn unavailable(input_path: PathBuf, error: String) -> JobOutcome { JobOutcome::failure(input_path, ToolError::unavailable(error)) }
+fn too_large(noun: &str) -> ToolError { ToolError::limit_exceeded(LimitKind::FileSize, format!("{noun} exceeds the 100 MiB OCR input limit.")) }
+fn text_too_long() -> ToolError { ToolError::limit_exceeded(LimitKind::FileSize, "OCR output exceeds the 10 MiB text limit.") }
 fn stderr(result: std::process::Output, fallback: &str) -> String { String::from_utf8_lossy(&result.stderr).trim().lines().last().filter(|line| !line.is_empty()).unwrap_or(fallback).to_string() }
 
 #[cfg(test)]
@@ -1407,7 +1436,8 @@ mod tests {
 
         let document = Document::load(&input).unwrap();
         let error = super::check_render_limits(&document, &super::PagePlan::of(&document, None, false).unwrap().recognized()).unwrap_err();
-        assert!(error.contains("pixel"), "{error}");
+        assert_eq!(error.kind, ErrorKind::LimitExceeded { limit: LimitKind::Decompression });
+        assert_eq!(error.message, "Selected PDF page exceeds the 40 million pixel OCR limit.");
         let _ = fs::remove_file(input);
     }
 
@@ -1430,7 +1460,8 @@ mod tests {
         let workspace = super::OcrWorkspace::new().unwrap();
         let result = super::render_ocr_page(&renderer, &input, &workspace, super::OcrPage { number: 1 }, &[], Instant::now() + Duration::from_secs(5), "timed out");
         let error = result.unwrap_err();
-        assert!(error.message.contains("file-size limit"), "{error}");
+        assert_eq!(error.kind, ErrorKind::LimitExceeded { limit: LimitKind::Decompression });
+        assert_eq!(error.message, "Rendered OCR page exceeds the 50 MiB file-size limit.");
 
         drop(workspace);
         let _ = fs::remove_file(renderer);
@@ -1621,6 +1652,7 @@ mod tests {
         assert_eq!(OCR_DEADLINE, HelperDeadline { per_file: Duration::from_secs(30), per_page: Duration::from_secs(30) });
         assert_eq!(OCR_DEADLINE.limit(1, 1), Duration::from_secs(60));
         assert_eq!(OCR_DEADLINE.limit(1, 3), Duration::from_secs(120));
+        assert_eq!(super::OcrClock::start(Path::new("scan.pdf"), OCR_DEADLINE, 3).page_limit, Duration::from_secs(60), "no page may take longer than a one-page file");
     }
 
     #[test]
@@ -1757,7 +1789,7 @@ mod tests {
         let helpers = TimedOcrHelpers::install("page-over-budget", ":", "case \"$1\" in *page-2.png) exec sleep 30 ;; esac\nprintf 'page one\\n'");
 
         let started = Instant::now();
-        let outcome = ocr_pdf_within(&ocr_request(&input, None, &output_root), input.clone(), HelperDeadline { per_file: Duration::from_millis(300), per_page: Duration::from_millis(200) });
+        let outcome = ocr_pdf_within(&ocr_request(&input, None, &output_root), input.clone(), HelperDeadline { per_file: Duration::from_secs(1), per_page: Duration::from_secs(3) });
         let elapsed = started.elapsed();
         let after_workspaces = ocr_workspaces();
         let output_entries = fs::read_dir(&output_root).unwrap().count();
@@ -1768,11 +1800,38 @@ mod tests {
 
         let error = outcome.error().expect("the stalled page fails the file");
         assert_eq!(error.kind, ErrorKind::LimitExceeded { limit: LimitKind::Time });
-        assert_eq!(error.message, "Recognising took longer than 700 milliseconds and was stopped. Nothing was saved.");
+        assert_eq!(error.message, "Stopped at page 2 of 2: that page took longer than 4 seconds. Nothing was saved.");
         assert!(elapsed < Duration::from_secs(10), "the engine is stopped at its deadline, not waited out: {elapsed:?}");
         assert!(outcome.output_paths().is_empty());
         assert_eq!(output_entries, 0);
         assert_eq!(before_workspaces, after_workspaces);
+        assert_eq!(input_after, original);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_that_runs_out_of_its_shared_budget_says_which_page_it_reached() {
+        let _guard = crate::kit::lock_process_env();
+        let input = path("file-over-budget.pdf");
+        let output_root = path("file-over-budget-output");
+        make_pdf(&input, 3);
+        let original = fs::read(&input).unwrap();
+        fs::create_dir_all(&output_root).unwrap();
+        // Pages one and two use most of each page's share, so the third has less left of the file's budget than a page may take.
+        let helpers = TimedOcrHelpers::install("file-over-budget", ":", "case \"$1\" in *page-3.png) exec sleep 30 ;; esac\nsleep 1\nprintf 'page\\n'");
+        let deadline = HelperDeadline { per_file: Duration::from_secs(3), per_page: Duration::from_millis(300) };
+
+        let outcome = ocr_pdf_within(&ocr_request(&input, None, &output_root), input.clone(), deadline);
+        let output_entries = fs::read_dir(&output_root).unwrap().count();
+        let input_after = fs::read(&input).unwrap();
+        drop(helpers);
+        let _ = fs::remove_file(&input);
+        let _ = fs::remove_dir_all(&output_root);
+
+        let error = outcome.error().expect("the file runs out of time");
+        assert_eq!(error.kind, ErrorKind::LimitExceeded { limit: LimitKind::Time });
+        assert_eq!(error.message, "Stopped at page 3 of 3: it reached the time limit for one file. Nothing was saved. Split it into smaller PDFs, then try again.");
+        assert_eq!(output_entries, 0);
         assert_eq!(input_after, original);
     }
 }
