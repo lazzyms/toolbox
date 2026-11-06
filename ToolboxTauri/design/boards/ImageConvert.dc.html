@@ -10,6 +10,7 @@
 <helmet>
 <style>
 body{margin:0}
+body{margin:0}
 .tb{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;font-size:13px;line-height:1.45;color:var(--fg);background:var(--bg);-webkit-font-smoothing:antialiased}
 .tb.dark{--bg:#0a0a0a;--side:#111111;--panel:#0f0f0f;--raise:#1c1c1c;--fg:#fafafa;--mut:#a3a3a3;--faint:#8a8a8a;--line:rgba(255,255,255,.08);--line2:rgba(255,255,255,.16);--sel:#262626;--pri:#ebebeb;--prifg:#171717;--bad:#ff6b6b;--warn:#f2b552;--ring:#a3a3a3;--scrim:rgba(0,0,0,.6)}
 .tb.light{--bg:#ffffff;--side:#f7f7f7;--panel:#fcfcfc;--raise:#f2f2f2;--fg:#0a0a0a;--mut:#525252;--faint:#666666;--line:#e8e8e8;--line2:#d4d4d4;--sel:#ebebeb;--pri:#171717;--prifg:#fafafa;--bad:#c10007;--warn:#9a5800;--ring:#525252;--scrim:rgba(0,0,0,.28)}
@@ -37,14 +38,47 @@ a{color:inherit}a:hover{color:var(--mut)}
 .opt{display:flex;flex-direction:column;gap:6px}
 fieldset.opt{border:0;margin:0;padding:0}fieldset.opt legend{padding:0;margin-bottom:6px}
 .chk{display:flex;gap:8px;align-items:center}
+.tb.dark{--seg-ok:#d4d4d4;--seg-wait:#2a2a2a}.tb.light{--seg-ok:#262626;--seg-wait:#e5e5e5}
+.seg{display:inline-flex;padding:2px;border-radius:8px;background:var(--raise);border:1px solid var(--line)}
+.seg button{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border:0;border-radius:6px;background:none;cursor:pointer;color:var(--mut);font-weight:500}
+.seg button[aria-checked=true]{background:var(--bg);color:var(--fg);box-shadow:0 1px 2px rgba(0,0,0,.25)}
+.seg[aria-disabled=true]{opacity:.5}
+.row{grid-template-columns:20px minmax(0,1fr) 84px 64px 170px}
+.rrow{display:grid;grid-template-columns:20px minmax(0,1fr) 110px 250px;gap:12px;align-items:center;padding:8px 20px;border-bottom:1px solid var(--line);min-height:36px}
+.chip{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;border-radius:999px;border:1px solid var(--line2);background:transparent;font-size:12px;cursor:pointer;color:var(--mut)}
+.chip[aria-pressed="true"]{background:var(--sel);color:var(--fg);font-weight:500}
+.inl{grid-column:2 / -1;display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;padding:10px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--panel)}
+.inl .opt{flex:1 1 160px}
+.err{font-size:12px;color:var(--bad);display:flex;gap:6px;align-items:center}
+.field[aria-invalid=true]{border-color:var(--bad)}
+.flag{display:flex;gap:10px;align-items:center;margin:0 20px 10px;padding:8px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--raise)}
+.tag{display:inline-flex;align-items:center;height:20px;padding:0 7px;border-radius:999px;border:1px solid var(--line2);font-size:11px;color:var(--mut);white-space:nowrap}
+.tb{position:relative}
+.rh{padding:12px 10px 4px;font-size:11px;font-weight:600;color:var(--faint)}
+.drop{flex:1;margin:20px;border:1.5px dashed var(--line2);border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;text-align:center;padding:32px}
+.bar{height:6px;border-radius:3px;background:var(--seg-wait);overflow:hidden;display:flex}.bar span{background:var(--seg-ok)}
+.card{display:flex;flex-direction:column;gap:6px;padding:8px;border-radius:10px;background:var(--panel);border:1px solid var(--line)}
+.dest{border-top:1px solid var(--line);padding-top:18px;display:flex;flex-direction:column;gap:8px}
+.ex{display:flex;flex-direction:column;gap:2px;padding:10px 12px;border-radius:8px;background:var(--raise)}
+.link{align-self:flex-start;padding:0;height:24px;color:var(--fg);text-decoration:underline;text-underline-offset:3px}
+.outs{grid-column:2 / -1;list-style:none;margin:0;padding:4px 0 2px 10px;display:flex;flex-direction:column;gap:0;border-left:2px solid var(--line)}
+.outs li{display:flex;align-items:center;gap:8px;min-height:26px}
+.outs li .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.secth{margin:0;padding:14px 20px 6px;font-size:12px;font-weight:600;color:var(--mut)}
+.est{display:flex;align-items:baseline;gap:6px}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 
+.btn.ghost.link{color:var(--fg)}
+.seg.tight button{padding:0 8px}
+.minibar{height:4px;border-radius:2px;background:var(--seg-wait);overflow:hidden;display:flex;margin-top:4px}.minibar span{background:var(--seg-ok)}
 </style>
 </helmet>
-<div class="{{themeClass}}" style="min-height: 800px; display: flex; flex-wrap: wrap">
+<div class="{{themeClass}}" style="min-height: 800px; height: 800px; overflow: hidden; display: flex">
 <aside aria-label="Images" style="flex: 1 1 220px; max-width: 232px; background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; padding: 14px 10px; box-sizing: border-box">
 <a class="nav" href="Main.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M5 12l6 6M5 12l6-6"></path></svg>All tools</a>
 <div style="padding: 16px 10px 6px; font-size: 12px; font-weight: 600; color: var(--faint)">Images</div>
-<nav aria-label="Images tools" style="display: flex; flex-direction: column; gap: 2px"><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2v14a2 2 0 0 0 2 2h14"></path><path d="M18 22V8a2 2 0 0 0-2-2H2"></path></svg>Image Editor</button><button class="nav on" aria-pressed="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 16l5-5 4 4 3-3 6 6"></path><circle cx="15.5" cy="8.5" r="1.5"></circle></svg>Convert Image Format</button><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"></path></svg>Compress</button></nav>
+<nav aria-label="Images tools" style="display: flex; flex-direction: column; gap: 2px"><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2v14a2 2 0 0 0 2 2h14"></path><path d="M18 22V8a2 2 0 0 0-2-2H2"></path></svg>Image Editor</button><button class="nav on" aria-pressed="true" tabindex="{{railOnTab}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 16l5-5 4 4 3-3 6 6"></path><circle cx="15.5" cy="8.5" r="1.5"></circle></svg>Convert Image Format</button><button class="nav" aria-pressed="false" tabindex="{{railFocusTab}}" style="{{railFocusStyle}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"></path></svg>Compress</button></nav>
+<sc-if value="{{railHelp}}" hint-placeholder-val="{{ false }}"><p class="hint" role="note" style="margin: 8px 0 0; padding: 8px 10px; border-radius: 7px; background: var(--raise)">Up and Down move between tools. Enter opens one.</p></sc-if>
 <div style="flex: 1"></div>
 <a class="nav" href="Settings.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"></path></svg>Settings<span class="kbd" style="margin-left: auto">{{settingsKey}}</span></a>
 <p class="hint" style="margin: 0; padding: 10px 10px 0">Files stay on this device.</p>
@@ -52,38 +86,174 @@ fieldset.opt{border:0;margin:0;padding:0}fieldset.opt legend{padding:0;margin-bo
 <div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
 <header style="min-height: 52px; display: flex; align-items: center; gap: 14px; padding: 0 20px; border-bottom: 1px solid var(--line); flex-wrap: wrap">
 <h1 style="margin: 0; font-size: 15px; font-weight: 600">Convert Image Format</h1>
-<span class="hint">Change images to PNG, JPEG, WebP, HEIC, TIFF or BMP.</span>
+<span class="hint">Change images to HEIC, JPEG, PNG, WebP or TIFF.</span>
 <div style="flex: 1"></div>
 <button class="btn ghost"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"></circle><path d="M21 21l-6-6"></path></svg>Find a tool<span class="kbd">{{findKey}}</span></button>
 </header>
-<div style="flex: 1; display: flex; flex-wrap: wrap; min-height: 0">
-<section aria-label="Files" style="flex: 999 1 480px; min-width: 0; display: flex; flex-direction: column">
-<div style="display: flex; align-items: center; gap: 8px; padding: 12px 20px; flex-wrap: wrap"><strong style="font-size: 13px">4 images</strong><span class="hint">1 selected</span><div style="flex: 1"></div><button class="btn sm"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14"></path></svg>Add files<span class="kbd">{{openKey}}</span></button><button class="btn sm">Remove from list</button><button class="btn sm ghost">Clear list</button></div>
-<div class="row hint" style="grid-template-columns: 20px minmax(0,1fr) 130px 72px; padding-top: 6px; padding-bottom: 6px; border-top: 1px solid var(--line)"><span></span><span>Name</span><span style="">Format</span><span style="text-align: right">Size</span></div>
-<ul aria-label="Images to convert" style="list-style: none; margin: 0; padding: 0; overflow: auto"><li class="row sel" style="grid-template-columns: 20px minmax(0,1fr) 130px 72px" aria-selected="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 16l5-5 4 4 3-3 6 6"></path><circle cx="15.5" cy="8.5" r="1.5"></circle></svg><span style="min-width: 0; display: flex; flex-direction: column"><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">logo.png</span><span class="hint" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">~/Documents/Brand</span></span><span class="hint" style="">PNG, transparent</span><span class="" style="text-align: right">84 KB</span></li><li class="row" style="grid-template-columns: 20px minmax(0,1fr) 130px 72px" aria-selected="false"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 16l5-5 4 4 3-3 6 6"></path><circle cx="15.5" cy="8.5" r="1.5"></circle></svg><span style="min-width: 0; display: flex; flex-direction: column"><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">floorplan.heic</span><span class="hint" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">~/Downloads</span></span><span class="hint" style="">HEIC</span><span class="" style="text-align: right">1.8 MB</span></li><li class="row" style="grid-template-columns: 20px minmax(0,1fr) 130px 72px" aria-selected="false"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 16l5-5 4 4 3-3 6 6"></path><circle cx="15.5" cy="8.5" r="1.5"></circle></svg><span style="min-width: 0; display: flex; flex-direction: column"><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">IMG_4012.jpg</span><span class="hint" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">~/Pictures/Move-out</span></span><span class="hint" style="">JPEG</span><span class="" style="text-align: right">3.1 MB</span></li><li class="row" style="grid-template-columns: 20px minmax(0,1fr) 130px 72px" aria-selected="false"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 16l5-5 4 4 3-3 6 6"></path><circle cx="15.5" cy="8.5" r="1.5"></circle></svg><span style="min-width: 0; display: flex; flex-direction: column"><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">scan-0042.tiff</span><span class="hint" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">~/Documents/Scans</span></span><span class="hint" style="">TIFF, 3 pages</span><span class="" style="text-align: right">22 MB</span></li></ul>
+<div style="flex: 1; display: flex; min-height: 0">
 
-</section><section aria-label="Options" style="flex: 1 1 300px; max-width: 360px; border-left: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column">
-<div style="padding: 18px 20px; display: flex; flex-direction: column; gap: 20px; flex: 1; overflow: auto"><div class="opt"><label class="lbl" for="fmt">Convert to</label><select id="fmt" class="field"><option>{{fmt}}</option><option>PNG</option><option>JPEG</option><option>WebP</option><option>HEIC</option><option>TIFF</option><option>BMP</option></select></div>
-<sc-if value="{{lossy}}" hint-placeholder-val="{{ true }}"><div class="opt"><label class="lbl" for="q">Quality <span class="hint">82</span></label><input id="q" type="range" min="40" max="100" value="82" aria-valuetext="82, good balance"><span class="hint">Lower makes smaller files with more visible blur.</span></div></sc-if>
-<sc-if value="{{lossy}}" hint-placeholder-val="{{ true }}"><div class="opt"><label class="lbl" for="bg">Fill transparent areas with</label><select id="bg" class="field"><option>White</option><option>Black</option></select><span class="hint">JPEG has no transparency. logo.png is affected.</span></div></sc-if>
-<div class="note"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut); margin-top: 1px"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v6M12 7.5v.5"></path></svg><span class="hint">scan-0042.tiff has 3 pages. Only the first is converted. Use TIFF Pages to get all of them.</span></div><div style="border-top: 1px solid var(--line); padding-top: 18px; display: flex; flex-direction: column; gap: 8px"><span class="lbl">Save to</span>
-<div style="display: flex; align-items: center; gap: 8px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2"></path></svg><span>Next to each original</span></div>
-<button class="btn ghost" style="align-self: flex-start; padding: 0; height: 24px; color: var(--fg); text-decoration: underline; text-underline-offset: 3px">Change for this run</button><div style="display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 8px; background: var(--raise)"><span class="hint">Example</span><span>logo.jpg</span><span class="hint">An existing name gets -1, -2 and so on. Nothing is replaced.</span></div></div></div>
-<footer style="padding: 14px 20px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 10px"><span class="hint">Originals stay as they are</span><div style="flex: 1"></div><button class="btn pri">Convert 4 images<span class="kbd">{{runKey}}</span></button></footer>
-</section>
+<sc-if value="{{iEmpty}}" hint-placeholder-val="{{ false }}"><section aria-label="Images" style="flex: 999 1 480px; min-width: 0; display: flex; flex-direction: column">
+<div class="drop"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 28px; height: 28px; color: var(--mut)"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"></path></svg>
+<strong style="font-size: 15px">Drop images here</strong>
+<span class="hint">Drag them from {{finder}}, or open several at once. Each image is converted on its own.</span>
+<button class="btn pri"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14"></path></svg>Open images<span class="kbd">{{openKey}}</span></button>
+<span class="hint">Accepts HEIC, HEIF, JPEG, PNG, WebP and TIFF, including multi-page TIFF. GIF isn't accepted.</span>
+</div>
+</section></sc-if>
+
+<sc-if value="{{iList}}" hint-placeholder-val="{{ true }}"><section aria-label="Images" style="flex: 999 1 480px; min-width: 0; display: flex; flex-direction: column">
+<div style="display: flex; align-items: center; gap: 8px; padding: 12px 20px; flex-wrap: wrap"><strong style="font-size: 13px">9 images</strong><div style="flex: 1"></div><button class="btn sm"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14"></path></svg>Add images<span class="kbd">{{openKey}}</span></button><button class="btn sm ghost">Clear list</button></div>
+<sc-if value="{{showGif}}" hint-placeholder-val="{{ true }}"><div class="flag" role="note"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><circle cx="12" cy="12" r="9"></circle><path d="M8.5 12h7"></path></svg><span style="flex: 1"><strong style="font-weight: 500">party-invite.gif wasn't added.</strong> <span class="hint">Converting a GIF would drop its animation. Extract GIF Frames saves every frame.</span></span><button class="btn sm">Extract GIF Frames</button><button class="btn sm ghost" aria-label="Dismiss note about party-invite.gif">Dismiss</button></div></sc-if>
+<p role="status" aria-live="polite" class="hint" style="margin: 0; padding: 0 20px 10px">{{listStatus}}</p>
+<div class="row hint" aria-hidden="true" style="grid-template-columns: 20px minmax(0,1fr) 116px 190px; padding-top: 6px; padding-bottom: 6px; border-top: 1px solid var(--line)"><span></span><span>Name</span><span>From</span><span>{{toCol}}</span></div>
+<ul aria-label="Images to convert" style="list-style: none; margin: 0; padding: 0; overflow: auto"><sc-for list="{{rows}}" as="r" hint-placeholder-count="9"><li class="row" aria-label="{{r.label}}" style="grid-template-columns: 20px minmax(0,1fr) 116px 190px">
+<span style="color: {{r.color}}; display: flex"><sc-if value="{{r.isOk}}" hint-placeholder-val="{{ true }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l5 5L20 7"></path></svg></sc-if><sc-if value="{{r.isWarn}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9.5 17h-19z"></path><path d="M12 10v4M12 17.5v.01"></path></svg></sc-if><sc-if value="{{r.isSkip}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M8.5 12h7"></path></svg></sc-if><sc-if value="{{r.isFail}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M9 9l6 6M15 9l-6 6"></path></svg></sc-if><sc-if value="{{r.isRun}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9"></path></svg></sc-if><sc-if value="{{r.isWait}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg></sc-if><sc-if value="{{r.isFile}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3v5h5M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"></path></svg></sc-if></span>
+<span style="min-width: 0; display: flex; flex-direction: column"><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{r.name}}</span><span class="hint" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{r.dir}}</span></span>
+<span class="hint">{{r.from}}</span>
+<span style="min-width: 0; display: flex; flex-direction: column"><span style="color: {{r.color}}">{{r.state}}</span><sc-if value="{{r.hasDetail}}" hint-placeholder-val="{{ false }}"><span class="hint">{{r.detail}}</span></sc-if></span></li></sc-for></ul>
+</section></sc-if>
+
+<sc-if value="{{iRun}}" hint-placeholder-val="{{ false }}"><section aria-label="Converting" style="flex: 999 1 480px; min-width: 0; display: flex; flex-direction: column">
+<div style="padding: 14px 20px 12px; display: flex; flex-direction: column; gap: 10px; border-bottom: 1px solid var(--line)">
+<div role="status" aria-live="polite" style="display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap"><strong style="font-size: 15px">Converting image 3 of 7</strong><span class="hint">scan-0042.tiff, page 2 of 3</span></div>
+<div class="bar" role="progressbar" aria-label="Images converted" aria-valuemin="0" aria-valuemax="7" aria-valuenow="2" aria-valuetext="2 of 7 images converted, 2 skipped"><span style="width: 29%"></span></div>
+<p class="hint" style="margin: 0">Each image is converted on its own, so one that fails doesn't stop the others.</p>
+</div>
+<ul aria-label="Images" style="list-style: none; margin: 0; padding: 0; overflow: auto"><sc-for list="{{rows}}" as="r" hint-placeholder-count="9"><li class="rrow" style="grid-template-columns: 20px minmax(0,1fr) 150px; opacity: {{r.op}}">
+<span style="color: {{r.color}}; display: flex"><sc-if value="{{r.isOk}}" hint-placeholder-val="{{ true }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l5 5L20 7"></path></svg></sc-if><sc-if value="{{r.isWarn}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9.5 17h-19z"></path><path d="M12 10v4M12 17.5v.01"></path></svg></sc-if><sc-if value="{{r.isSkip}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M8.5 12h7"></path></svg></sc-if><sc-if value="{{r.isFail}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M9 9l6 6M15 9l-6 6"></path></svg></sc-if><sc-if value="{{r.isRun}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9"></path></svg></sc-if><sc-if value="{{r.isWait}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg></sc-if><sc-if value="{{r.isFile}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3v5h5M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"></path></svg></sc-if></span>
+<span style="min-width: 0; display: flex; flex-direction: column"><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{r.name}}</span><span class="hint">{{r.detail}}</span><sc-if value="{{r.isRun}}" hint-placeholder-val="{{ false }}"><span class="minibar" role="progressbar" aria-label="{{r.name}}" aria-valuemin="0" aria-valuemax="3" aria-valuenow="1" aria-valuetext="1 of 3 pages saved"><span style="width: 33%"></span></span></sc-if></span>
+<span style="color: {{r.color}}">{{r.state}}</span></li></sc-for></ul>
+</section></sc-if>
+
+<sc-if value="{{iRes}}" hint-placeholder-val="{{ false }}"><section aria-label="Results" style="flex: 999 1 480px; min-width: 0; display: flex; flex-direction: column">
+<div style="padding: 14px 20px 12px; display: flex; flex-direction: column; gap: 12px; border-bottom: 1px solid var(--line)">
+<div role="status" aria-live="polite" style="display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap"><strong style="font-size: 15px">Done. Converted 4 images</strong><span class="hint">2 skipped, 3 failed. 7 files saved in {{runDir}}. Nothing was replaced.</span></div>
+</div>
+<ul aria-label="Results by image" style="list-style: none; margin: 0; padding: 0; overflow: auto"><sc-for list="{{rows}}" as="r" hint-placeholder-count="9"><li class="rrow" style="grid-template-columns: 20px minmax(0,1fr) 108px 170px; align-items: start">
+<span style="color: {{r.color}}; display: flex"><sc-if value="{{r.isOk}}" hint-placeholder-val="{{ true }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l5 5L20 7"></path></svg></sc-if><sc-if value="{{r.isWarn}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9.5 17h-19z"></path><path d="M12 10v4M12 17.5v.01"></path></svg></sc-if><sc-if value="{{r.isSkip}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M8.5 12h7"></path></svg></sc-if><sc-if value="{{r.isFail}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M9 9l6 6M15 9l-6 6"></path></svg></sc-if><sc-if value="{{r.isRun}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9"></path></svg></sc-if><sc-if value="{{r.isWait}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg></sc-if><sc-if value="{{r.isFile}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3v5h5M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"></path></svg></sc-if></span>
+<span style="min-width: 0; display: flex; flex-direction: column"><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{r.name}}</span><span class="hint" style="color: {{r.detailColor}}">{{r.detail}}</span></span>
+<span style="color: {{r.color}}">{{r.state}}</span>
+<span style="display: flex; gap: 6px; justify-content: flex-end"><sc-if value="{{r.hasOpen}}" hint-placeholder-val="{{ false }}"><button class="btn sm ghost" aria-label="Open {{r.out}}">Open</button><button class="btn sm ghost" aria-label="{{reveal}}: {{r.out}}">{{revealShort}}</button></sc-if><sc-if value="{{r.hasToggle}}" hint-placeholder-val="{{ false }}"><button class="btn sm" aria-expanded="{{r.open}}" aria-controls="outs-{{r.id}}">{{r.toggle}}</button></sc-if><sc-if value="{{r.hasPointer}}" hint-placeholder-val="{{ false }}"><button class="btn sm">{{r.pointer}}</button></sc-if></span>
+<sc-if value="{{r.isOpen}}" hint-placeholder-val="{{ false }}"><ul id="outs-{{r.id}}" class="outs" aria-label="Files from {{r.name}}"><sc-for list="{{r.outs}}" as="o" hint-placeholder-count="3"><li><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut); width: 14px; height: 14px"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 16l5-5 4 4 3-3 6 6"></path></svg><span class="nm">{{o.name}}</span><span class="hint">{{o.size}}</span><button class="btn sm ghost" aria-label="Open {{o.name}}">Open</button><button class="btn sm ghost" aria-label="{{reveal}}: {{o.name}}">{{revealShort}}</button></li></sc-for></ul></sc-if></li></sc-for></ul>
+</section></sc-if>
+
+<section aria-label="{{optsLabel}}" style="flex: 1 1 300px; max-width: 360px; border-left: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column">
+<sc-if value="{{iRun}}" hint-placeholder-val="{{ false }}"><div style="margin: 14px 20px 0; padding: 8px 10px; border-radius: 8px; background: var(--raise); display: flex; gap: 8px; align-items: center"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg><span class="hint" style="color: var(--fg)">Options are locked until the run ends.</span></div></sc-if>
+<fieldset aria-disabled="{{optsDisabled}}" style="border: 0; margin: 0; padding: 18px 20px; display: flex; flex-direction: column; gap: 20px; flex: 1; min-height: 0; overflow: auto; opacity: {{optsOp}}">
+<fieldset class="opt"><legend class="lbl">Convert to</legend><div role="radiogroup" aria-label="Convert to" aria-describedby="fmthint" class="seg tight"><sc-for list="{{fmts}}" as="f" hint-placeholder-count="5"><button role="radio" aria-checked="{{f.on}}" tabindex="{{f.tab}}">{{f.name}}</button></sc-for></div><span id="fmthint" class="hint">{{fmtHint}}</span></fieldset>
+<sc-if value="{{isTiff}}" hint-placeholder-val="{{ false }}"><fieldset class="opt"><legend class="lbl">TIFF compression</legend><div role="radiogroup" aria-label="TIFF compression" aria-describedby="tiffhint" class="seg"><button role="radio" aria-checked="true" tabindex="0">LZW</button><button role="radio" aria-checked="false" tabindex="-1">None</button><button role="radio" aria-checked="false" tabindex="-1">Deflate</button></div><span id="tiffhint" class="hint">All three are lossless. LZW is the default. 16-bit sources stay 16-bit, and 8-bit sources stay 8-bit.</span></fieldset></sc-if>
+<div class="note"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut); margin-top: 1px"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v6M12 7.5v.5"></path></svg><span class="hint">{{qualNote}}</span></div>
+<div class="dest"><sc-if value="{{perRun}}" hint-placeholder-val="{{ false }}"><div style="display: flex; align-items: center; gap: 8px"><span class="lbl">Save to</span><span class="badge">This run only</span></div>
+<div style="display: flex; align-items: flex-start; gap: 8px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut); margin-top: 2px"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2"></path></svg><span style="word-break: break-all">{{runDir}}</span></div>
+<div style="display: flex; gap: 14px"><button class="btn ghost link">Change</button><button class="btn ghost link">Reset to default</button></div>
+<p class="hint" style="margin: 0">Your default is next to each original. This change ends when you leave Convert Image Format.</p></sc-if>
+<sc-if value="{{notPerRun}}" hint-placeholder-val="{{ true }}"><span class="lbl">Save to</span><div style="display: flex; align-items: center; gap: 8px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2"></path></svg><span>Next to each original</span></div><button class="btn ghost link">Change for this run</button></sc-if>
+<div class="ex"><span class="hint">Example</span><span>{{example}}</span><span>{{examplePages}}</span><span class="hint">A multi-page TIFF makes one file per page. An existing name gets -1, -2 and so on. Nothing is replaced.</span></div></div>
+</fieldset>
+<footer style="padding: 12px 20px 14px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px">
+<sc-if value="{{showEst}}" hint-placeholder-val="{{ true }}"><p id="est" class="est" role="status" aria-live="polite" style="margin: 0; flex-wrap: wrap; column-gap: 6px; row-gap: 0"><strong>{{estMain}}</strong><span class="hint">{{estSub}}</span></p></sc-if>
+<div style="display: flex; align-items: center; gap: 10px">
+<sc-if value="{{iRun}}" hint-placeholder-val="{{ false }}"><span class="hint">2 of 7 converted</span><div style="flex: 1"></div><button class="btn">Cancel<span class="kbd">Esc</span></button></sc-if>
+<sc-if value="{{notRun}}" hint-placeholder-val="{{ true }}"><span id="runwhy" class="hint" style="white-space: nowrap">{{footHint}}</span><div style="flex: 1"></div><sc-if value="{{runOff}}" hint-placeholder-val="{{ false }}"><button class="btn pri" aria-describedby="runwhy" disabled>{{runLabel}}<span class="kbd">{{runKey}}</span></button></sc-if><sc-if value="{{runOn}}" hint-placeholder-val="{{ true }}"><button class="btn pri" aria-describedby="est">{{runLabel}}<span class="kbd">{{runKey}}</span></button></sc-if></sc-if>
+</div>
+</footer></section>
 </div>
 </div>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "format": {"editor": "enum", "options": ["JPEG", "PNG"], "default": "JPEG"}, "$preview": {"width": 1280, "height": 800}}'>
+<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "format": {"editor": "enum", "options": ["JPEG", "PNG", "WebP", "HEIC", "TIFF"], "default": "JPEG"}, "state": {"editor": "enum", "options": ["Files added", "Empty", "Converting", "Converted", "Rail"], "default": "Files added"}, "$preview": {"width": 1280, "height": 800}}'>
 class Component extends DCLogic {
 renderVals() {
 const win = (this.props.platform ?? 'macOS') === 'Windows';
 const light = (this.props.theme ?? 'dark') === 'light';
 const base = { themeClass: light ? 'tb light' : 'tb dark', findKey: win ? 'Ctrl+K' : '⌘K', settingsKey: win ? 'Ctrl+,' : '⌘,', openKey: win ? 'Ctrl+O' : '⌘O', runKey: win ? 'Ctrl+Enter' : '⌘↵', mod: win ? 'Ctrl' : '⌘', reveal: win ? 'Show in File Explorer' : 'Show in Finder', docsDir: win ? 'C:\\Users\\Asha\\Documents' : '~/Documents' };
-const f = this.props.format ?? 'JPEG';
-const extra = { fmt: f, lossy: f === 'JPEG' || f === 'WebP' };
-return Object.assign(base, extra);
+const S = this.props.state ?? 'Files added';
+const run = S === 'Converting' || S === 'Converted';
+const T = run ? 'JPEG' : (this.props.format ?? 'JPEG');
+const x = {};
+x.finder = win ? 'File Explorer' : 'Finder';
+x.revealShort = win ? 'Show in Explorer' : 'Show in Finder';
+x.railHelp = S === 'Rail'; x.railOnTab = S === 'Rail' ? '-1' : '0'; x.railFocusTab = S === 'Rail' ? '0' : '-1';
+x.railFocusStyle = S === 'Rail' ? 'outline: 2px solid var(--ring); outline-offset: -2px; color: var(--fg)' : '';
+const iEmpty = S === 'Empty', iRun = S === 'Converting', iRes = S === 'Converted';
+Object.assign(x, { iEmpty: iEmpty, iList: S === 'Files added' || S === 'Rail', iRun: iRun, iRes: iRes, notRun: !iRun, isTiff: T === 'TIFF' });
+x.showGif = x.iList;
+x.fmts = ['JPEG', 'PNG', 'WebP', 'HEIC', 'TIFF'].map((n) => ({ name: n, on: n === T ? 'true' : 'false', tab: n === T ? '0' : '-1' }));
+x.fmtHint = { JPEG: 'Transparent areas become white, because JPEG has no transparency.', PNG: 'Lossless. Transparency is kept.', WebP: 'Follows each source. PNG and TIFF stay lossless. JPEG and HEIC are lossy.', HEIC: 'Saved as 8-bit. Transparency is kept.', TIFF: 'Lossless. Transparency is kept.' }[T];
+x.qualNote = 'Lossy results use the shared quality of 90, so a second run gives the same files. To choose a quality, use Compress.';
+const ext = { JPEG: '.jpg', PNG: '.png', WebP: '.webp', HEIC: '.heic', TIFF: '.tiff' }[T];
+x.example = 'logo-converted' + ext;
+x.examplePages = T === 'TIFF' ? 'receipt-converted.tiff' : 'scan-0042-converted-p1' + ext + ', -p2, -p3';
+x.toCol = 'To ' + T;
+x.optsOp = iRun ? '0.5' : '1'; x.optsDisabled = iRun ? 'true' : 'false'; x.optsLabel = iRun ? 'Options, locked' : 'Options';
+x.perRun = iRes; x.notPerRun = !iRes;
+x.runDir = win ? 'C:\\Users\\Asha\\Desktop\\Converted' : '~/Desktop/Converted';
+const d = (sub) => win ? 'C:\\Users\\Asha\\' + sub.replace(/\//g, '\\') : '~/' + sub;
+const F = [
+ { name: 'logo.png', dir: d('Documents/Brand'), fmt: 'PNG', from: 'PNG, transparent', alpha: true, lossless: true },
+ { name: 'floorplan.heic', dir: d('Downloads'), fmt: 'HEIC', from: 'HEIC, 10-bit', deep: true },
+ { name: 'IMG_4012.jpg', dir: d('Pictures/Move-out'), fmt: 'JPEG', from: 'JPEG' },
+ { name: 'IMG_4013.jpeg', dir: d('Pictures/Move-out'), fmt: 'JPEG', from: 'JPEG' },
+ { name: 'scan-0042.tiff', dir: d('Documents/Scans'), fmt: 'TIFF', from: 'TIFF, 3 pages', pages: 3, lossless: true },
+ { name: 'receipt.webp', dir: d('Downloads'), fmt: 'WebP', from: 'WebP' },
+ { name: 'fax-0007.tif', dir: d('Documents/Scans'), fmt: 'TIFF', from: 'TIFF, 2 pages', pages: 2, lossless: true },
+ { name: 'banner-old.png', dir: d('Documents/Brand'), fmt: 'PNG', from: 'PNG', lossless: true },
+ { name: 'panorama-hall.tiff', dir: d('Pictures'), fmt: 'TIFF', from: 'TIFF', lossless: true }
+];
+const col = (k) => k === 'fail' ? 'var(--bad)' : k === 'warn' ? 'var(--warn)' : k === 'skip' || k === 'wait' ? 'var(--mut)' : 'var(--fg)';
+const mk = (o, k) => Object.assign({ isOk: k === 'ok', isWarn: k === 'warn', isSkip: k === 'skip', isFail: k === 'fail', isRun: k === 'run', isWait: k === 'wait', isFile: k === 'file', color: col(k), detailColor: k === 'fail' ? 'var(--bad)' : k === 'warn' ? 'var(--warn)' : 'var(--mut)', op: k === 'wait' ? '0.6' : '1', hasDetail: false, detail: '' }, o);
+let outs = 0, conv = 0, skip = 0;
+if (x.iList || iEmpty) {
+ x.rows = F.map((f) => {
+  const same = f.fmt === T;
+  if (same) { skip++; return mk({ name: f.name, dir: f.dir, from: f.from, state: 'Will be skipped', hasDetail: true, detail: 'Already ' + T + ', nothing to do', label: f.name + ', ' + f.from + '. Already ' + T + ', so it will be skipped.' }, 'skip'); }
+  conv++;
+  const n = f.pages && T !== 'TIFF' ? f.pages : 1; outs += n;
+  const notes = [];
+  if (f.alpha && T === 'JPEG') notes.push('Transparent areas become white');
+  if (f.deep && T !== 'HEIC') notes.push('Saved as 8-bit');
+  if (f.pages && T !== 'TIFF') notes.push(f.pages + ' files, -p1 to -p' + f.pages);
+  if (f.pages && T === 'TIFF') notes.push('Keeps all ' + f.pages + ' pages');
+  if (T === 'WebP') notes.push(f.lossless ? 'Lossless' : 'Lossy, quality 90');
+  const warn = (f.alpha && T === 'JPEG') || (f.deep && T !== 'HEIC');
+  const det = notes.join('. ');
+  return mk({ name: f.name, dir: f.dir, from: f.from, state: warn ? 'Ready, with a change' : 'Ready', hasDetail: notes.length > 0, detail: det, label: f.name + ', ' + f.from + '. Ready' + (det ? '. ' + det : '') + '.' }, warn ? 'warn' : 'file');
+ });
+ x.listStatus = 'Added 9 images. ' + skip + (skip === 1 ? ' is' : ' are') + ' already ' + T + '. 1 file not added.';
+}
+if (iRun) {
+ x.rows = [
+  mk({ name: F[0].name, detail: 'Saved logo-converted.jpg', state: 'Converted' }, 'ok'),
+  mk({ name: F[1].name, detail: 'Saved floorplan-converted.jpg', state: 'Converted' }, 'ok'),
+  mk({ name: F[2].name, detail: 'Already JPEG', state: 'Skipped' }, 'skip'),
+  mk({ name: F[3].name, detail: 'Already JPEG', state: 'Skipped' }, 'skip'),
+  mk({ name: F[4].name, detail: 'Page 2 of 3', state: 'Converting' }, 'run'),
+  mk({ name: F[5].name, detail: '1 file', state: 'Waiting' }, 'wait'),
+  mk({ name: F[6].name, detail: '2 files', state: 'Waiting' }, 'wait'),
+  mk({ name: F[7].name, detail: '1 file', state: 'Waiting' }, 'wait'),
+  mk({ name: F[8].name, detail: '1 file', state: 'Waiting' }, 'wait')
+ ];
+}
+if (iRes) {
+ x.rows = [
+  mk({ id: 'r0', name: F[0].name, detail: 'logo-converted.jpg. Transparent areas were flattened onto white.', state: 'Flattened', hasOpen: true, out: 'logo-converted.jpg' }, 'warn'),
+  mk({ id: 'r1', name: F[1].name, detail: 'floorplan-converted.jpg. Reduced from 10-bit to 8-bit sRGB.', state: 'Reduced to 8-bit', hasOpen: true, out: 'floorplan-converted.jpg' }, 'warn'),
+  mk({ id: 'r2', name: F[2].name, detail: 'Already JPEG, so no file was made.', state: 'Skipped' }, 'skip'),
+  mk({ id: 'r3', name: F[3].name, detail: 'Already JPEG. JPG and JPEG count as one format.', state: 'Skipped' }, 'skip'),
+  mk({ id: 'r4', name: F[4].name, detail: '3 files, one per page.', state: 'Converted', hasToggle: true, toggle: 'Hide files', open: 'true', isOpen: true, outs: [{ name: 'scan-0042-converted-p1.jpg', size: '1.2 MB' }, { name: 'scan-0042-converted-p2.jpg', size: '1.1 MB' }, { name: 'scan-0042-converted-p3.jpg', size: '0.9 MB' }] }, 'ok'),
+  mk({ id: 'r5', name: F[5].name, detail: 'Saved as receipt-converted-1.jpg, because receipt-converted.jpg already existed.', state: 'Renamed', hasOpen: true, out: 'receipt-converted-1.jpg' }, 'warn'),
+  mk({ id: 'r6', name: F[6].name, detail: 'Page 2 uses a compression that can\'t be read. Page 1 was saved as fax-0007-converted-p1.jpg.', state: 'Failed on page 2', hasToggle: true, toggle: 'Show 1 file', open: 'false' }, 'fail'),
+  mk({ id: 'r7', name: F[7].name, detail: 'banner-old.png can\'t be read. It may be damaged or not really a PNG.', state: 'Unreadable' }, 'fail'),
+  mk({ id: 'r8', name: F[8].name, detail: 'It\'s 31,000 × 9,800 px, over the 100-megapixel limit. Nothing was saved.', state: 'Over limit' }, 'fail')
+ ];
+}
+x.showEst = !iEmpty && !iRun;
+if (iRes) { x.estMain = '7 files made'; x.estSub = 'Run again to make them again'; x.runLabel = 'Convert again'; }
+else { x.estMain = 'This will make ' + outs + ' files'; x.estSub = 'from ' + conv + ' images, ' + skip + ' skipped'; x.runLabel = 'Convert ' + conv + ' images'; }
+x.runOff = iEmpty; x.runOn = !iEmpty;
+if (iEmpty) x.runLabel = 'Convert images';
+x.footHint = iEmpty ? 'Add images to start' : '';
+return Object.assign(base, x);
 }
 }
 </script>

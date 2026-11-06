@@ -10,6 +10,9 @@ use image::AnimationDecoder;
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::ToolError;
 
+mod source;
+pub(crate) use source::decode;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum OutputFormat {
     Jpeg,
@@ -45,35 +48,6 @@ fn lower_ext(path: &std::path::Path) -> Option<String> {
         .map(|s| s.to_ascii_lowercase())
 }
 
-pub(crate) fn detect_format(path: &std::path::Path) -> OutputFormat {
-    match lower_ext(path).as_deref() {
-        Some("jpg" | "jpeg") => OutputFormat::Jpeg,
-        Some("webp") => OutputFormat::WebP,
-        // libheif reads .heif too; the extension tells us HEIC because the
-        // image crate can't (it reports an unsupported format error we
-        // intercept in load_image below)
-        Some("heic" | "heif") => OutputFormat::Heic,
-        _ => OutputFormat::Png,
-    }
-}
-
-// HEIC has no decoder in the image crate, so fall back to heif-rs when the
-// extension says HEIF but image::open refused it. Everything else errors
-// normally so a genuinely corrupt file is surfaced as such.
-pub(crate) fn load_image(path: &std::path::Path) -> Result<image::DynamicImage, String> {
-    match image::open(path) {
-        Ok(img) => Ok(img),
-        Err(first) => {
-            if matches!(lower_ext(path).as_deref(), Some("heic" | "heif")) {
-                let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-                heif::decode(&bytes).map_err(|e| format!("HEIC decode failed: {}", e))
-            } else {
-                Err(format!("Decode failed: {}", first))
-            }
-        }
-    }
-}
-
 /// A source decoded the way a viewer shows it, plus the HEIF bit depth when it
 /// is above 8 so callers that write 8-bit output can say so.
 pub(crate) struct UprightImage {
@@ -82,30 +56,20 @@ pub(crate) struct UprightImage {
 }
 
 /// Decodes a source upright, applying its orientation exactly once. libheif
-/// already applies HEIF irot/imir transforms while decoding, so HEIC/HEIF
-/// sources are never rotated again here; every other format applies its EXIF
-/// orientation tag after decoding.
+/// already applies HEIF irot/imir transforms while decoding, so `decode`
+/// reports no orientation for HEIC/HEIF sources and they are never rotated
+/// again here; every other format applies its EXIF orientation tag after
+/// decoding. Only HEIF reports a bit depth above 8: the image crate's
+/// decoders hand back 8-bit samples for the formats the 8-bit tools accept.
 pub(crate) fn load_upright_image(path: &std::path::Path) -> Result<UprightImage, String> {
-    use image::ImageDecoder;
-    if matches!(lower_ext(path).as_deref(), Some("heic" | "heif")) {
-        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-        let bits = match heif::probe(&bytes).map_err(|e| format!("HEIC decode failed: {}", e))?.bit_depth {
-            heif::BitDepth::Eight => None,
-            heif::BitDepth::Ten => Some(10),
-            heif::BitDepth::Twelve => Some(12),
-            _ => Some(16),
-        };
-        let image = heif::decode(&bytes).map_err(|e| format!("HEIC decode failed: {}", e))?;
-        return Ok(UprightImage { image, high_bit_depth: bits });
-    }
-    let decode = || -> image::ImageResult<image::DynamicImage> {
-        let mut decoder = image::ImageReader::open(path)?.with_guessed_format()?.into_decoder()?;
-        let orientation = decoder.orientation()?;
-        let mut image = image::DynamicImage::from_decoder(decoder)?;
+    let decoded = decode(path)?;
+    let high_bit_depth = (decoded.family == source::ImageFamily::Heif && decoded.bits_per_channel > 8).then_some(decoded.bits_per_channel);
+    let orientation = decoded.orientation;
+    let mut image = decoded.into_first_page();
+    if let Some(orientation) = orientation {
         image.apply_orientation(orientation);
-        Ok(image)
-    };
-    decode().map(|image| UprightImage { image, high_bit_depth: None }).map_err(|e| format!("Decode failed: {}", e))
+    }
+    Ok(UprightImage { image, high_bit_depth })
 }
 
 // Encoders write to a buffer first: WebP and HEIC only expose buffer encoders
@@ -185,8 +149,8 @@ impl ImageProcessor {
             }
         }
 
-        let img = match load_image(&input_path) {
-            Ok(i) => i,
+        let decoded = match decode(&input_path) {
+            Ok(decoded) => decoded,
             Err(e) => {
                 return JobOutcome::failure(input_path, ToolError::processing(e));
             }
@@ -194,7 +158,8 @@ impl ImageProcessor {
 
         let format = options
             .target_format
-            .unwrap_or_else(|| detect_format(&input_path));
+            .unwrap_or_else(|| decoded.family.output_format());
+        let img = decoded.into_first_page();
         let extension = format.extension();
 
         let output_path = match OutputNaming::reserve_destination(
@@ -431,9 +396,9 @@ mod tests {
 
     #[test]
     fn detection_maps_heic_extension() {
-        assert_eq!(detect_format(std::path::Path::new("x.heic")), OutputFormat::Heic);
-        assert_eq!(detect_format(std::path::Path::new("x.HEIC")), OutputFormat::Heic);
-        assert_eq!(detect_format(std::path::Path::new("x.jpeg")), OutputFormat::Jpeg);
+        assert_eq!(source::ImageFamily::of(std::path::Path::new("x.heic")).output_format(), OutputFormat::Heic);
+        assert_eq!(source::ImageFamily::of(std::path::Path::new("x.HEIC")).output_format(), OutputFormat::Heic);
+        assert_eq!(source::ImageFamily::of(std::path::Path::new("x.jpeg")).output_format(), OutputFormat::Jpeg);
     }
 
     #[test]
@@ -483,7 +448,7 @@ mod tests {
             assert_eq!(loaded.high_bit_depth, None);
             if name.ends_with(".jpg") {
                 // The tag is real: a decode that ignores it still sees the stored landscape pixels.
-                assert_eq!(fixtures::red_edge(&load_image(&path).unwrap()), "left", "{name}");
+                assert_eq!(fixtures::red_edge(&image::open(&path).unwrap()), "left", "{name}");
             }
             assert_eq!(std::fs::read(&path).unwrap(), bytes, "{name} original must stay byte-identical");
             let _ = std::fs::remove_file(path);
@@ -501,6 +466,7 @@ mod tests {
     }
 }
 pub(crate) mod gif_frames;
+pub mod metadata;
 pub mod tools;
 #[cfg(test)]
 pub(crate) mod fixtures;

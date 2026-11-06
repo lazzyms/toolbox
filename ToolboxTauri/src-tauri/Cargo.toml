@@ -54,6 +54,10 @@ tiff = "0.11"
 tract-onnx = { version = "0.23.7", optional = true }
 notify-rust = "4"
 
+[dev-dependencies]
+# JBIG2 decoder spike (#623); promote to [dependencies] for #630.
+hayro-jbig2 = { version = "0.4.0", default-features = false, features = ["std"] }
+
 [profile.release]
 codegen-units = 1
 lto = true
