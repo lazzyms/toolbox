@@ -4,7 +4,7 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
-import { ArrowLeft, Check, Eye, Folder, Info, List, LoaderCircle, MousePointerClick, Search, Shield, type LucideIcon } from "lucide-react";
+import { ArrowDown, ArrowLeft, Check, Eye, Folder, Info, List, LoaderCircle, MousePointerClick, Search, Shield, type LucideIcon } from "lucide-react";
 import appIcon from "../../src-tauri/icons/128x128.png";
 import {
   isAnalyticsOptedOut,
@@ -14,6 +14,7 @@ import { useOutputSettings } from "../outputLocation";
 import { shortenHomePath, useHomeDir } from "../homePath";
 import type { OutputMode } from "../contracts";
 import { ShortcutHint } from "../components/ShortcutHint";
+import { PacksSection } from "./PacksSection";
 import { isWindows, shortcutAria, shortcutLabel, shortcuts } from "../shortcuts";
 import { inAppUpdatesEnabled, installIfApproved } from "../updates";
 import { Button } from "@/components/ui/button";
@@ -394,6 +395,7 @@ const sections = [
   { id: "appearance", title: "Appearance", Icon: Eye, Content: AppearanceSection },
   { id: "output-location", title: "Output location", Icon: Folder, Content: OutputLocationSection },
   { id: "quick-actions", title: "Quick actions", Icon: MousePointerClick, Content: QuickActionsSection },
+  { id: "packs", title: "Packs", Icon: ArrowDown, Content: PacksSection, hint: "Optional downloads for extra formats and languages." },
   { id: "privacy", title: "Privacy", Icon: Shield, Content: PrivacySection },
   { id: "updates", title: "Updates", Icon: LoaderCircle, Content: UpdatesSection },
   { id: "about-and-support", title: "About and support", Icon: Info, Content: AboutSection },
