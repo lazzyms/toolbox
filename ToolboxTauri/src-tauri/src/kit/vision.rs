@@ -3,12 +3,14 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use image::GenericImageView;
+use image::metadata::Orientation;
+use image::{DynamicImage, GenericImageView};
 use lopdf::{dictionary, Document, Object, ObjectId, Stream};
 
 use crate::kit::common::limits::{self, HelperDeadline, StoppableHelper};
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
-use crate::kit::contracts::{LimitKind, OutcomeDetail, OutcomePointer, SkipCode, SkipReason, ToolError};
+use crate::kit::contracts::{LimitKind, OutcomeDetail, OutcomePointer, OutcomeWarning, SkipCode, SkipReason, ToolError, WarningKind};
+use crate::kit::images::{self, ImageFamily};
 use crate::kit::pdf::metadata::{effective_crop_bounds, page_bounds, page_rotation};
 use crate::kit::pdf::text_layer::{self, PageText};
 use crate::kit::pdf::unicode_font::UnicodeFont;
@@ -88,12 +90,233 @@ pub fn ocr_pdf(request: &OcrRequest, input: PathBuf) -> JobOutcome {
     ocr_pdf_within(request, input, OCR_DEADLINE)
 }
 
+/// Images go to the engine as they are; every other input is a PDF whose pages are rendered first.
 fn ocr_pdf_within(request: &OcrRequest, input: PathBuf, deadline: HelperDeadline) -> JobOutcome {
-    match request.mode() {
-        Ok(OcrMode::SearchablePdf) => searchable_pdf_within(request, input, deadline),
-        Ok(OcrMode::Text) => text_file_within(request, input, deadline),
-        Err(error) => JobOutcome::failure(input, ToolError::invalid_input(error)),
+    let mode = match request.mode() {
+        Ok(mode) => mode,
+        Err(error) => return JobOutcome::failure(input, ToolError::invalid_input(error)),
+    };
+    if matches!(ImageFamily::of(&input), ImageFamily::Jpeg | ImageFamily::Png | ImageFamily::WebP | ImageFamily::Heif) {
+        return image_within(request, input, mode, deadline);
     }
+    match mode {
+        OcrMode::SearchablePdf => searchable_pdf_within(request, input, deadline),
+        OcrMode::Text => text_file_within(request, input, deadline),
+    }
+}
+
+/// Recognises a photo or scan given as an image. It is already a raster, so nothing
+/// is rendered: the engine reads it the way it is shown, with its orientation tag
+/// applied. A text file holds the recognised text. A searchable PDF is a new one-page
+/// PDF holding the image by Images to PDF's rule, with the invisible text layer over it.
+fn image_within(request: &OcrRequest, input: PathBuf, mode: OcrMode, deadline: HelperDeadline) -> JobOutcome {
+    let extension = match mode { OcrMode::Text => "txt", OcrMode::SearchablePdf => "pdf" };
+    let output = match OutputNaming::reserve_destination(&input, &request.output_location, OCR_TEXT_SUFFIX, extension) {
+        Ok(output) => output,
+        Err(error) => return failure(input, format!("Could not reserve OCR output: {error}")),
+    };
+    let engine = match OcrEngine::resolve() {
+        Ok(engine) => engine,
+        Err(error) => return unavailable(input, error.to_string()),
+    };
+    let input_size = match std::fs::metadata(&input) {
+        Ok(metadata) => metadata.len(),
+        Err(error) => return failure(input, format!("Could not inspect image for OCR: {error}")),
+    };
+    if input_size > OCR_MAX_INPUT_BYTES { return failure(input, "Image exceeds the 100 MiB OCR input limit.".to_string()); }
+    // An image is one page, so a range that leaves it no pages skips it as it would a PDF.
+    if let Some(range) = request.page_range() {
+        match pages_in_range(range, 1) {
+            Ok(_) => {}
+            Err(NoPlan::Failed(error)) => return failure(input, error),
+            Err(NoPlan::Skipped(reason)) => return JobOutcome::skipped(input, reason),
+        }
+    }
+    if let Err(error) = check_image_pixels(&input) { return JobOutcome::failure(input, error); }
+    let decoded = match images::decode(&input) {
+        Ok(decoded) => decoded,
+        Err(error) => return failure(input, format!("Could not read the image for OCR: {error}")),
+    };
+    let reduced_from = (decoded.bits_per_channel > 8).then_some((decoded.bits_per_channel, decoded.family));
+    let (orientation, has_alpha, jpeg) = (decoded.orientation, decoded.has_alpha, decoded.baseline_jpeg.clone());
+    let image = decoded.into_first_page();
+    let settings = match mode { OcrMode::Text => &[][..], OcrMode::SearchablePdf => WORD_BOX_OUTPUT };
+    let recognized = match recognize_image(&engine, &image, orientation, has_alpha, &request.languages, settings, deadline) {
+        Ok(recognized) => recognized,
+        Err(error) => return JobOutcome::failure(input, error),
+    };
+    if mode == OcrMode::Text {
+        let text = match ocr_text(&[recognized]) {
+            Ok(text) => text,
+            Err(error) => return failure(input, error),
+        };
+        if text.is_empty() { return failure(input, OCR_NO_TEXT.to_string()); }
+        if let Err(error) = std::fs::write(output.path(), text) { return failure(input, format!("Could not write OCR output: {error}")); }
+        return match output.publish() {
+            Ok(path) => success(input, path, &recognized_detail(1)),
+            Err(error) => failure(input, format!("Could not publish OCR output: {error}")),
+        };
+    }
+    let layout = match word_boxes(&recognized) {
+        Ok(layout) => layout,
+        Err(error) => return failure(input, error),
+    };
+    if layout.lines.is_empty() { return failure(input, OCR_NO_TEXT.to_string()); }
+    let (mut document, page_id, (width, height)) = match image_document(&image, jpeg, orientation, has_alpha) {
+        Ok(page) => page,
+        Err(error) => return failure(input, error),
+    };
+    let original = document.clone();
+    let frame = DisplayedPage { index: 0, bounds: [0., 0., width, height], rotation: 0 };
+    let expected = match crate::kit::images::tools::bundled_text_font_bytes().map_err(ToolError::processing).and_then(|font| add_text_layer(&mut document, &[(1, page_id, frame, layout)], font)) {
+        Ok(expected) => expected,
+        Err(error) => return JobOutcome::failure(input, error),
+    };
+    if let Err(error) = document.save(output.path()) { return failure(input, format!("Could not write OCR output: {error}")); }
+    #[cfg(test)]
+    if BREAK_SEARCHABLE_OUTPUT_FOR.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_deref() == Some(input.as_path()) {
+        let _ = std::fs::write(output.path(), b"%PDF-1.7\nnot a PDF any more\n");
+    }
+    if let Err(error) = validate_searchable_pdf(&original, output.path(), &expected) {
+        return failure(input, format!("The searchable PDF didn't pass its check, so it wasn't saved: {error}"));
+    }
+    let outcome = match output.publish() {
+        Ok(path) => success(input, path, &recognized_detail(1)),
+        Err(error) => return failure(input, format!("Could not publish OCR output: {error}")),
+    };
+    match reduced_from {
+        Some((bits, family)) => outcome.with_warning(OutcomeWarning {
+            kind: WarningKind::PrecisionReduced,
+            message: format!("Saved as 8-bit colour, because the {} is {bits}-bit.", if family == ImageFamily::Heif { "photo" } else { "image" }),
+        }),
+        None => outcome,
+    }
+}
+
+/// An image the engine would read is held to the pixel limit a rendered PDF page is,
+/// read from its header before any pixels are decoded.
+fn check_image_pixels(input: &Path) -> Result<(), ToolError> {
+    let unreadable = |error: String| ToolError::processing(format!("Could not read the image for OCR: {error}"));
+    let (width, height) = if ImageFamily::of(input) == ImageFamily::Heif {
+        let bytes = std::fs::read(input).map_err(|error| unreadable(error.to_string()))?;
+        heif::probe(&bytes).map(|info| (info.width, info.height)).map_err(|error| unreadable(error.to_string()))?
+    } else {
+        image::ImageReader::open(input).and_then(|reader| reader.with_guessed_format()).map_err(|error| unreadable(error.to_string()))?
+            .into_dimensions().map_err(|error| unreadable(error.to_string()))?
+    };
+    if u64::from(width) * u64::from(height) > OCR_MAX_SINGLE_PIXELS {
+        return Err(ToolError::limit_exceeded(
+            LimitKind::Decompression,
+            format!("This image has more than {} million pixels, which is over the OCR limit. Use a smaller image and try again.", OCR_MAX_SINGLE_PIXELS / 1_000_000),
+        ));
+    }
+    Ok(())
+}
+
+/// Gives the engine the image as it is shown: the orientation tag applied, 8 bits
+/// per channel, and any transparency laid over white, as a viewer shows it.
+fn recognize_image(engine: &OcrEngine, image: &DynamicImage, orientation: Option<Orientation>, has_alpha: bool, languages: &[String], settings: &[&str], deadline: HelperDeadline) -> Result<Vec<u8>, ToolError> {
+    let (stop_at, timed_out) = ocr_time_limit(deadline, 1);
+    let workspace = OcrWorkspace::new().map_err(ToolError::processing)?;
+    let mut shown = if has_alpha {
+        let mut flat = image::RgbImage::from_pixel(image.width(), image.height(), image::Rgb([255, 255, 255]));
+        for (x, y, pixel) in image.to_rgba8().enumerate_pixels() {
+            let alpha = u16::from(pixel[3]);
+            let over = |channel: u8| ((u16::from(channel) * alpha + 255 * (255 - alpha) + 127) / 255) as u8;
+            flat.put_pixel(x, y, image::Rgb([over(pixel[0]), over(pixel[1]), over(pixel[2])]));
+        }
+        DynamicImage::ImageRgb8(flat)
+    } else if image.color().has_color() {
+        DynamicImage::ImageRgb8(image.to_rgb8())
+    } else {
+        DynamicImage::ImageLuma8(image.to_luma8())
+    };
+    if let Some(orientation) = orientation { shown.apply_orientation(orientation); }
+    let path = workspace.page_prefix(1).with_extension("png");
+    shown.save_with_format(&path, image::ImageFormat::Png).map_err(|error| ToolError::processing(format!("Could not prepare the image for OCR: {error}")))?;
+    engine.recognize(&path, languages, settings, stop_at, &timed_out)
+}
+
+/// A new one-page PDF holding the image by Images to PDF's rule: a baseline JPEG goes
+/// in as its own bytes, and everything else is stored without loss as 8-bit Flate
+/// samples, with any alpha kept as a soft mask. One pixel is one point. The orientation
+/// tag is applied by how the image is drawn, so its data stays as it was, and the page
+/// is the size the image is shown at. Returns the page and its width and height.
+fn image_document(image: &DynamicImage, jpeg: Option<Vec<u8>>, orientation: Option<Orientation>, has_alpha: bool) -> Result<(Document, ObjectId, (f32, f32)), String> {
+    let (width, height) = (image.width(), image.height());
+    let mut document = Document::with_version("1.5");
+    let sampled = dictionary! { "Type" => "XObject", "Subtype" => "Image", "Width" => width as i64, "Height" => height as i64, "BitsPerComponent" => 8 };
+    let image_id = match jpeg.and_then(|bytes| jpeg_color_space(&bytes).map(|space| (bytes, space))) {
+        Some((bytes, color_space)) => {
+            let mut dict = sampled;
+            dict.set("ColorSpace", color_space);
+            dict.set("Filter", "DCTDecode");
+            document.add_object(Stream::new(dict, bytes).with_compression(false))
+        }
+        None => {
+            let (samples, color_space) = if image.color().has_color() { (image.to_rgb8().into_raw(), "DeviceRGB") } else { (image.to_luma8().into_raw(), "DeviceGray") };
+            let mut dict = sampled.clone();
+            dict.set("ColorSpace", color_space);
+            if has_alpha {
+                let alpha = image.to_rgba8().pixels().map(|pixel| pixel[3]).collect::<Vec<_>>();
+                let mut mask = sampled;
+                mask.set("ColorSpace", "DeviceGray");
+                dict.set("SMask", document.add_object(flate_stream(mask, &alpha)?));
+            }
+            document.add_object(flate_stream(dict, &samples)?)
+        }
+    };
+    // Where the image's top-left-origin unit square lands on the shown page, as
+    // u' = m00 u + m01 v + o0 and v' = m10 u + m11 v + o1, all in fractions of each side.
+    let (m00, m01, m10, m11, o0, o1): (f32, f32, f32, f32, f32, f32) = match orientation.unwrap_or(Orientation::NoTransforms) {
+        Orientation::NoTransforms => (1., 0., 0., 1., 0., 0.),
+        Orientation::Rotate90 => (0., -1., 1., 0., 1., 0.),
+        Orientation::Rotate180 => (-1., 0., 0., -1., 1., 1.),
+        Orientation::Rotate270 => (0., 1., -1., 0., 0., 1.),
+        Orientation::FlipHorizontal => (-1., 0., 0., 1., 1., 0.),
+        Orientation::FlipVertical => (1., 0., 0., -1., 0., 1.),
+        Orientation::Rotate90FlipH => (0., 1., 1., 0., 0., 0.),
+        Orientation::Rotate270FlipH => (0., -1., -1., 0., 1., 1.),
+    };
+    let (shown_width, shown_height) = if m00 == 0. { (height as f32, width as f32) } else { (width as f32, height as f32) };
+    // PDF image space has its origin at the bottom left, so v = 1 - t and the page's y runs up.
+    let (a, b, c, d) = (shown_width * m00, -shown_height * m10, -shown_width * m01, shown_height * m11);
+    let (e, f) = (shown_width * (m01 + o0), shown_height * (1. - m11 - o1));
+    let content = document.add_object(Stream::new(dictionary! {}, format!("q {a} {b} {c} {d} {e} {f} cm /Im0 Do Q").into_bytes()));
+    let pages_id = document.new_object_id();
+    let page_id = document.add_object(dictionary! {
+        "Type" => "Page",
+        "Parent" => pages_id,
+        "MediaBox" => vec![0.into(), 0.into(), shown_width.into(), shown_height.into()],
+        "Resources" => dictionary! { "XObject" => dictionary! { "Im0" => image_id } },
+        "Contents" => content,
+    });
+    document.objects.insert(pages_id, dictionary! { "Type" => "Pages", "Kids" => vec![page_id.into()], "Count" => 1 }.into());
+    let catalog_id = document.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+    document.trailer.set("Root", catalog_id);
+    Ok((document, page_id, (shown_width, shown_height)))
+}
+
+fn flate_stream(mut dict: lopdf::Dictionary, samples: &[u8]) -> Result<Stream, String> {
+    use std::io::Write;
+    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(samples).map_err(|error| format!("Could not compress image: {error}"))?;
+    dict.set("Filter", "FlateDecode");
+    Ok(Stream::new(dict, encoder.finish().map_err(|error| format!("Could not compress image: {error}"))?).with_compression(false))
+}
+
+/// The component count in the JPEG's SOF0 header picks the PDF color space; a
+/// four-component (CMYK) JPEG is stored without loss instead.
+fn jpeg_color_space(bytes: &[u8]) -> Option<&'static str> {
+    let mut at = 2;
+    while let Some(&[0xFF, marker, high, low]) = bytes.get(at..at + 4) {
+        match marker {
+            0xFF => at += 1,
+            0xC0 => return match bytes.get(at + 9)? { 1 => Some("DeviceGray"), 3 => Some("DeviceRGB"), _ => None },
+            _ => at += 2 + usize::from(u16::from_be_bytes([high, low])),
+        }
+    }
+    None
 }
 
 fn text_file_within(request: &OcrRequest, input: PathBuf, deadline: HelperDeadline) -> JobOutcome {
@@ -187,17 +410,7 @@ impl PagePlan {
     fn of(document: &Document, range: Option<&str>, force: bool) -> Result<Self, NoPlan> {
         let pages = document.get_pages();
         if pages.is_empty() { return Err(NoPlan::Failed("PDF has no pages to OCR.".to_string())); }
-        let requested = match range {
-            Some(range) => {
-                let ranges = PageRanges::parse(range).map_err(NoPlan::Failed)?;
-                let clamped = ranges.clamp_or_skip(pages.len()).map_err(|skip| NoPlan::Skipped(SkipReason::new(
-                    skip.code,
-                    format!("No pages left in {ranges}. It has {}, so nothing was made.", count(pages.len(), "page", "pages")),
-                )))?;
-                Some(clamped.page_indices())
-            }
-            None => None,
-        };
+        let requested = range.map(|range| pages_in_range(range, pages.len())).transpose()?;
         let mut scope = Vec::new();
         let mut outside = Vec::new();
         for (number, page_id) in pages {
@@ -293,6 +506,17 @@ impl PagePlan {
         ], outside, languages);
         outcome.with_page_details(details)
     }
+}
+
+/// The zero-based page indices `range` leaves in a file of `page_count` pages. One
+/// range applies to every file in a batch, so a file it leaves no pages in is skipped.
+fn pages_in_range(range: &str, page_count: usize) -> Result<Vec<usize>, NoPlan> {
+    let ranges = PageRanges::parse(range).map_err(NoPlan::Failed)?;
+    let clamped = ranges.clamp_or_skip(page_count).map_err(|skip| NoPlan::Skipped(SkipReason::new(
+        skip.code,
+        format!("No pages left in {ranges}. It has {}, so nothing was made.", count(page_count, "page", "pages")),
+    )))?;
+    Ok(clamped.page_indices())
 }
 
 /// "Page 8", "Pages 1-4 and 9", "Pages 1, 3-5 and 9". Pages are in page order.
@@ -401,9 +625,15 @@ impl Drop for OcrWorkspace {
     fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
 }
 
-struct OcrResources {
+/// The recognition engine and its language data, which every input needs.
+struct OcrEngine {
     engine: PathBuf,
     tessdata: PathBuf,
+}
+
+/// The engine plus the renderer that turns PDF pages into images for it.
+struct OcrResources {
+    engine: OcrEngine,
     renderer: PathBuf,
 }
 
@@ -423,45 +653,61 @@ impl std::fmt::Display for OcrComponent {
     }
 }
 
-impl OcrResources {
+impl OcrEngine {
     fn resolve() -> Result<Self, OcrComponent> {
         let root = ocr_resource_root();
         Ok(Self {
             engine: resources::resolve("tesseract", &root, "TOOLBOX_TESSERACT_PATH", "tesseract").map_err(|_| OcrComponent::Engine)?.path,
             tessdata: find_resource("engTraineddata", "TOOLBOX_TESSDATA_PATH", &root).map_err(|_| OcrComponent::EnglishData)?,
-            renderer: find_pdf_renderer().map_err(|_| OcrComponent::Renderer)?,
         })
     }
-}
 
-/// Recognises each page on its own, so the text keeps page order and page breaks.
-/// The engine runs on one thread with a fixed segmentation mode, resolution and
-/// language data, so the same file gives the same text every time.
-/// `area` is extra renderer arguments, such as `DISPLAYED_PAGE`; none renders the media box.
-/// `settings` are extra engine arguments, such as `WORD_BOX_OUTPUT`; none gives plain text.
-fn run_ocr(resources: &OcrResources, input: &Path, pages: &[OcrPage], languages: &[String], area: &[&str], settings: &[&str], deadline: HelperDeadline) -> Result<Vec<Vec<u8>>, ToolError> {
-    let limit = deadline.limit(1, pages.len());
-    let stop_at = Instant::now() + limit;
-    let timed_out = format!("Recognising took longer than {} and was stopped. Nothing was saved.", limits::duration_label(limit));
-    let workspace = OcrWorkspace::new().map_err(ToolError::processing)?;
-    let tessdata_dir = resources.tessdata.parent().ok_or_else(|| ToolError::processing("OCR language data has no parent directory."))?;
-    let mut recognized = Vec::with_capacity(pages.len());
-    let mut total = 0usize;
-    for page in pages {
-        let image = render_ocr_page(&resources.renderer, input, &workspace, *page, area, stop_at, &timed_out)?;
-        let mut command = Command::new(&resources.engine);
+    /// Recognises one image. The engine runs on one thread with a fixed segmentation
+    /// mode, resolution and language data, so the same image gives the same text every time.
+    /// `settings` are extra engine arguments, such as `WORD_BOX_OUTPUT`; none gives plain text.
+    fn recognize(&self, image: &Path, languages: &[String], settings: &[&str], stop_at: Instant, timed_out: &str) -> Result<Vec<u8>, ToolError> {
+        let tessdata_dir = self.tessdata.parent().ok_or_else(|| ToolError::processing("OCR language data has no parent directory."))?;
+        let mut command = Command::new(&self.engine);
         command.env("OMP_THREAD_LIMIT", "1")
-            .arg(&image).arg("stdout")
+            .arg(image).arg("stdout")
             .arg("--tessdata-dir").arg(tessdata_dir)
             .arg("-l").arg(languages.join("+"))
             .arg("--psm").arg(OCR_PAGE_SEGMENTATION)
             .arg("--dpi").arg(OCR_RENDER_DPI.to_string())
             .args(settings);
-        let result = run_ocr_helper(command, stop_at, &timed_out)?;
+        let result = run_ocr_helper(command, stop_at, timed_out)?;
         if !result.status.success() { return Err(ToolError::processing(stderr(result, "OCR engine failed."))); }
-        total = total.saturating_add(result.stdout.len()).saturating_add(1);
+        Ok(result.stdout)
+    }
+}
+
+impl OcrResources {
+    fn resolve() -> Result<Self, OcrComponent> {
+        let engine = OcrEngine::resolve()?;
+        Ok(Self { engine, renderer: find_pdf_renderer().map_err(|_| OcrComponent::Renderer)? })
+    }
+}
+
+/// The time limit for recognising `pages` pages of one file, and its message.
+fn ocr_time_limit(deadline: HelperDeadline, pages: usize) -> (Instant, String) {
+    let limit = deadline.limit(1, pages);
+    (Instant::now() + limit, format!("Recognising took longer than {} and was stopped. Nothing was saved.", limits::duration_label(limit)))
+}
+
+/// Renders and recognises each page on its own, so the text keeps page order and page breaks.
+/// `area` is extra renderer arguments, such as `DISPLAYED_PAGE`; none renders the media box.
+/// `settings` are extra engine arguments, such as `WORD_BOX_OUTPUT`; none gives plain text.
+fn run_ocr(resources: &OcrResources, input: &Path, pages: &[OcrPage], languages: &[String], area: &[&str], settings: &[&str], deadline: HelperDeadline) -> Result<Vec<Vec<u8>>, ToolError> {
+    let (stop_at, timed_out) = ocr_time_limit(deadline, pages.len());
+    let workspace = OcrWorkspace::new().map_err(ToolError::processing)?;
+    let mut recognized = Vec::with_capacity(pages.len());
+    let mut total = 0usize;
+    for page in pages {
+        let image = render_ocr_page(&resources.renderer, input, &workspace, *page, area, stop_at, &timed_out)?;
+        let text = resources.engine.recognize(&image, languages, settings, stop_at, &timed_out)?;
+        total = total.saturating_add(text.len()).saturating_add(1);
         if total > OCR_MAX_OUTPUT_BYTES { return Err(ToolError::processing("OCR output exceeds the 10 MiB text limit.")); }
-        recognized.push(result.stdout);
+        recognized.push(text);
     }
     Ok(recognized)
 }

@@ -861,6 +861,7 @@ body {
 .file-selection-badge[data-tone="warning"] { color: var(--warning); }
 .result-row[data-tone="ok"] { --result-tone: var(--foreground); }
 .result-row[data-tone="warn"] { --result-tone: var(--warning); }
+.result-row[data-tone="note"] { --result-tone: var(--foreground); }
 .result-row[data-tone="skip"] { --result-tone: var(--muted-foreground); }
 .result-row[data-tone="fail"] { --result-tone: var(--destructive); }
 .result-row-icon {

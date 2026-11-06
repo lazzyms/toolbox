@@ -1,7 +1,8 @@
 import type { ErrorKind, JobOutcome, OutcomePointer, OutcomeWarning, ToolError } from "../contracts";
 import { UtilityRegistry } from "../registry";
 
-export type RowTone = "ok" | "warn" | "skip" | "fail";
+/** A note is a warning that needs nothing from the user, such as a photo saved at a lower bit depth. */
+export type RowTone = "ok" | "warn" | "note" | "skip" | "fail";
 
 export type RowPointer = { label: string; pointer: OutcomePointer };
 
@@ -54,7 +55,7 @@ export const warningText = (warning: OutcomeWarning, signatureRemovedNote?: stri
         case "renamedToAvoidReplacing":
             return `Saved as ${warning.details.finalName}. Renamed to avoid replacing an existing file.`;
         case "precisionReduced":
-            return "Some values were rounded to the precision this format can store.";
+            return warning.message;
     }
 };
 
@@ -73,6 +74,8 @@ const outputSummary = (paths: string[]) =>
 
 const nonEmpty = (lines: string[]) => lines.filter((line) => line.trim().length > 0);
 
+const isNote = (warning: OutcomeWarning) => warning.code === "precisionReduced";
+
 export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput = false, signatureRemovedNote?: string): RowView => {
     const warnings = outcome.warnings.map((warning) => warningText(warning, signatureRemovedNote));
     const input = { name: fileName(outcome.inputPath), fullPath: outcome.inputPath };
@@ -80,13 +83,19 @@ export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput =
         case "succeeded": {
             const first = outcome.outputPaths[0] ?? null;
             const warned = warnings.length > 0;
+            // Notes read as one sentence ahead of the detail, in the row's usual colour.
+            const noted = warned && outcome.warnings.every(isNote);
             const byOutput = namedByOutput && first !== null;
             return {
                 ...(byOutput ? { name: fileName(first), fullPath: first } : input),
-                tone: warned ? "warn" : "ok",
+                tone: noted ? "note" : warned ? "warn" : "ok",
                 stateLabel: resultVerb,
-                spokenState: warned ? `${resultVerb} with ${warnings.length === 1 ? "a warning" : "warnings"}` : resultVerb,
-                detailLines: nonEmpty(warned ? [...warnings, outcome.detail] : [first && !byOutput ? outputSummary(outcome.outputPaths) : "", outcome.detail]),
+                spokenState: noted
+                    ? `${resultVerb} with ${warnings.length === 1 ? "a note" : "notes"}`
+                    : warned ? `${resultVerb} with ${warnings.length === 1 ? "a warning" : "warnings"}` : resultVerb,
+                detailLines: nonEmpty(noted
+                    ? [[...warnings, outcome.detail].filter((line) => line.trim()).join(" ")]
+                    : warned ? [...warnings, outcome.detail] : [first && !byOutput ? outputSummary(outcome.outputPaths) : "", outcome.detail]),
                 openOutput: first ? { path: first, label: outcome.outputPaths.length > 1 ? "Open first" : "Open" } : null,
                 revealOutput: first,
                 pointer: null,

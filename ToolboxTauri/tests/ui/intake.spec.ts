@@ -1132,3 +1132,45 @@ test("Unlock shows each verification and legacy-format failure with its own mess
         }
     }
 });
+
+test("OCR takes a mixed drop of PDFs and images, refuses other files, and notes a photo saved as 8-bit on its row", async ({ page }) => {
+    const files = ["/local/scan.pdf", "/local/IMG_4012.heic", "/local/page.png", "/local/photo.jpg", "/local/screen.webp"];
+    const note = "Saved as 8-bit colour, because the photo is 10-bit.";
+    await open(page, "OCR PDF");
+    await page.evaluate((note) => {
+        (window as unknown as IntakeWindow).__warnings = { "/local/IMG_4012.heic": [{ code: "precisionReduced", message: note }] };
+    }, note);
+
+    await drop(page, [...files, "/local/loading-spinner.gif"]);
+
+    await expect(rows(page)).toHaveText([/^scan\.pdf/, /^IMG_4012\.heic/, /^page\.png/, /^photo\.jpg/, /^screen\.webp/]);
+    for (const row of await rows(page).all()) await expect(row).not.toContainText("Won't run");
+    const notAdded = page.getByRole("region", { name: "Not added" });
+    await expect(notAdded.getByRole("listitem")).toHaveText([/loading-spinner\.gif.*only takes .*files\./]);
+    // Thumbnails are for one PDF, so a mixed list asks for none.
+    await expect(page.getByText("With one PDF in the list, its pages appear here as thumbnails to pick from.", { exact: true })).toBeVisible();
+    expect(await requestFor(page, "inspect_pdf")).toEqual([]);
+
+    await page.locator(".workspace-primary-action").click();
+    await expect(page.getByText(/^Done\./)).toBeVisible();
+    expect((await requestFor(page, "ocr_pdf")).map((request) => request.paths)).toEqual([files]);
+
+    const results = page.getByRole("list", { name: "Results" }).locator(":scope > li");
+    await expect(results).toHaveCount(5);
+    const heic = results.nth(1);
+    await expect(heic).toHaveAttribute("data-tone", "note");
+    await expect(heic.locator(".result-row-detail")).toHaveText(`${note} Test output`);
+    await expect(heic.locator(".result-row-state .sr-only")).toHaveText("Recognised with a note");
+    await expect(heic.locator(".result-row-icon svg")).toHaveClass(/lucide-info/);
+    for (const index of [0, 2, 3, 4]) await expect(results.nth(index)).toHaveAttribute("data-tone", "ok");
+});
+
+test("OCR with one image in the list asks for no thumbnails and can run", async ({ page }) => {
+    await open(page, "OCR PDF");
+    await drop(page, ["/local/receipt.jpg"]);
+
+    await expect(rows(page)).toHaveText([/^receipt\.jpg/]);
+    await expect(page.getByText("With one PDF in the list, its pages appear here as thumbnails to pick from.", { exact: true })).toBeVisible();
+    await expect(page.locator(".workspace-primary-action")).toBeEnabled();
+    expect(await requestFor(page, "inspect_pdf")).toEqual([]);
+});

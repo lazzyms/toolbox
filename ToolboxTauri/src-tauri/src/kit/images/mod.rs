@@ -11,7 +11,7 @@ use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::ToolError;
 
 mod source;
-pub(crate) use source::decode;
+pub(crate) use source::{decode, ImageFamily};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum OutputFormat {

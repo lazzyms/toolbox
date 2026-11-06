@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { Check, CircleMinus, CircleX, Clock, KeyRound, LoaderCircle, RotateCcw, TriangleAlert } from "lucide-react";
+import { Check, CircleMinus, CircleX, Clock, Info, KeyRound, LoaderCircle, RotateCcw, TriangleAlert } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -20,6 +20,7 @@ const idleActionState: RowActionState = { pending: null, error: null };
 const toneIcons: Record<RowTone, typeof Check> = {
     ok: Check,
     warn: TriangleAlert,
+    note: Info,
     skip: CircleMinus,
     fail: CircleX,
 };
