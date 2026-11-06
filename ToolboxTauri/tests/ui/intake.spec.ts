@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
 import { openToolBySearch } from "./open-tool";
 
 type PathKind = "file" | "folder" | "unreadable";
@@ -890,6 +891,39 @@ test("Lock without its PDF helper shows the PDFs as Unavailable and the Word and
     }
 });
 
+const qpdfUnavailableMessage = (() => {
+    const resources = readFileSync(new URL("../../src-tauri/src/kit/resources.rs", import.meta.url), "utf8");
+    const message = /const QPDF: Helper = Helper \{[^}]*unavailable: "([^"]+)"/.exec(resources)?.[1];
+    if (!message) throw new Error("Could not read the native qpdf Unavailable message");
+    return message;
+})();
+
+for (const tool of [
+    { title: "Merge PDF", command: "merge_pdfs", paths: ["/local/a.pdf", "/local/b.pdf"] },
+    { title: "Split PDF", command: "split_pdf", paths: ["/local/a.pdf"] },
+]) {
+    test(`${tool.title} without qpdf shows the native Unavailable message in plain language`, async ({ page }) => {
+        await open(page, "Merge PDF");
+        await drop(page, tool.paths);
+        if (tool.title === "Split PDF") await page.getByRole("toolbar", { name: "PDF Editor tools" }).getByRole("button", { name: "Split PDF", exact: true }).click();
+        await page.evaluate(({ paths, message }) => {
+            (window as unknown as IntakeWindow).__failures = Object.fromEntries(paths.map((path) => [path, { kind: "unavailable", message }]));
+        }, { paths: tool.paths, message: qpdfUnavailableMessage });
+        await run(page).click();
+        if (tool.title === "Merge PDF") await page.getByRole("dialog").getByRole("button", { name: "Save" }).click();
+
+        await expect(results(page)).toHaveCount(tool.paths.length);
+        expect((await requestFor(page, tool.command)).map((request) => request.paths)).toEqual([tool.paths]);
+        for (const row of await results(page).all()) {
+            await expect(row).toHaveAttribute("data-state", "failed");
+            await expect(row.locator(".result-row-state")).toContainText("Unavailable");
+            await expect(row).toContainText(qpdfUnavailableMessage);
+            await expect(row).not.toContainText(/environment variable/i);
+            await expect(row).not.toContainText(/TOOLBOX_|\bPATH\b/);
+        }
+    });
+}
+
 test("Lock shows already-protected files as Skipped rows with their reason, apart from Unavailable failures in the summary", async ({ page }) => {
     const already = { code: "alreadyProtected", message: "Already password-protected. Unlock it first, then lock it again." };
     const missing = { kind: "unavailable", message: "This PDF tool is unavailable because a helper it needs is missing from this copy of Toolbox. Reinstall Toolbox to restore it." };
@@ -1097,4 +1131,64 @@ test("Unlock shows each verification and legacy-format failure with its own mess
             await expect(failed).toContainText("The password didn't open this file. Check it, or try the password this file was sent with.");
         }
     }
+});
+
+test("OCR takes a mixed drop of PDFs and images, refuses other files, and notes a photo saved as 8-bit on its row", async ({ page }) => {
+    const files = ["/local/scan.pdf", "/local/IMG_4012.heic", "/local/page.png", "/local/photo.jpg", "/local/screen.webp"];
+    const note = "Saved as 8-bit colour, because the photo is 10-bit.";
+    await open(page, "OCR PDF");
+    await page.evaluate((note) => {
+        (window as unknown as IntakeWindow).__warnings = { "/local/IMG_4012.heic": [{ code: "precisionReduced", message: note }] };
+    }, note);
+
+    await drop(page, [...files, "/local/loading-spinner.gif"]);
+
+    await expect(rows(page)).toHaveText([/^scan\.pdf/, /^IMG_4012\.heic/, /^page\.png/, /^photo\.jpg/, /^screen\.webp/]);
+    for (const row of await rows(page).all()) await expect(row).not.toContainText("Won't run");
+    const notAdded = page.getByRole("region", { name: "Not added" });
+    await expect(notAdded.getByRole("listitem")).toHaveText([/loading-spinner\.gif.*only takes .*files\./]);
+    // Thumbnails are for one PDF, so a mixed list asks for none.
+    await expect(page.getByText("With one PDF in the list, its pages appear here as thumbnails to pick from.", { exact: true })).toBeVisible();
+    expect(await requestFor(page, "inspect_pdf")).toEqual([]);
+
+    await page.locator(".workspace-primary-action").click();
+    await expect(page.getByText(/^Done\./)).toBeVisible();
+    expect((await requestFor(page, "ocr_pdf")).map((request) => request.paths)).toEqual([files]);
+
+    const results = page.getByRole("list", { name: "Results" }).locator(":scope > li");
+    await expect(results).toHaveCount(5);
+    const heic = results.nth(1);
+    await expect(heic).toHaveAttribute("data-tone", "note");
+    await expect(heic.locator(".result-row-detail")).toHaveText(`${note} Test output`);
+    await expect(heic.locator(".result-row-state .sr-only")).toHaveText("Recognized with a note");
+    await expect(heic.locator(".result-row-icon svg")).toHaveClass(/lucide-info/);
+    for (const index of [0, 2, 3, 4]) await expect(results.nth(index)).toHaveAttribute("data-tone", "ok");
+});
+
+test("OCR takes TIFF scans in a mixed drop and sends their paths unchanged", async ({ page }) => {
+    const files = ["/local/scan.pdf", "/local/flatbed-scan.tiff", "/local/fax.TIF", "/local/page.png"];
+    await open(page, "OCR PDF");
+
+    await drop(page, [...files, "/local/notes.docx"]);
+
+    await expect(rows(page)).toHaveText([/^scan\.pdf/, /^flatbed-scan\.tiff/, /^fax\.TIF/, /^page\.png/]);
+    for (const row of await rows(page).all()) await expect(row).not.toContainText("Won't run");
+    const notAdded = page.getByRole("region", { name: "Not added" });
+    await expect(notAdded.getByRole("listitem")).toHaveText([/notes\.docx.*only takes .*files\./]);
+    // A multi-page TIFF is not a PDF, so the list asks for no thumbnails.
+    expect(await requestFor(page, "inspect_pdf")).toEqual([]);
+
+    await page.locator(".workspace-primary-action").click();
+    await expect(page.getByText(/^Done\./)).toBeVisible();
+    expect((await requestFor(page, "ocr_pdf")).map((request) => request.paths)).toEqual([files]);
+});
+
+test("OCR with one image in the list asks for no thumbnails and can run", async ({ page }) => {
+    await open(page, "OCR PDF");
+    await drop(page, ["/local/receipt.jpg"]);
+
+    await expect(rows(page)).toHaveText([/^receipt\.jpg/]);
+    await expect(page.getByText("With one PDF in the list, its pages appear here as thumbnails to pick from.", { exact: true })).toBeVisible();
+    await expect(page.locator(".workspace-primary-action")).toBeEnabled();
+    expect(await requestFor(page, "inspect_pdf")).toEqual([]);
 });
