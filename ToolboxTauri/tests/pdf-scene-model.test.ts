@@ -42,6 +42,16 @@ test("removing pages keeps the rest in order and refuses to remove every page", 
   assert.equal(removePages(scene, pageIds(scene)), null);
 });
 
+test("page edits keep the text edits of the pages that stay and drop the rest", () => {
+  const edit = (pageIndex: number) => ({ pageIndex, run: 0, original: "Rent £1,450", replacement: "Rent £1,475" });
+  const scene = { ...sixPages(), textEdits: [edit(1), edit(2)] };
+  assert.deepEqual(removePages(scene, ["source-1"])!.textEdits, [edit(2)]);
+  assert.equal("textEdits" in removePages(scene, ["source-1", "source-2"])!, false);
+  assert.deepEqual(rotatePages(scene, ["source-1"]).textEdits, scene.textEdits);
+  assert.deepEqual(swapPage(scene, 0, 1).textEdits, scene.textEdits);
+  assert.deepEqual(movePagesBefore(scene, ["source-2"], "source-0").textEdits, scene.textEdits);
+});
+
 test("rotation turns only the selected pages and wraps at 360", () => {
   let scene = sixPages();
   for (let turn = 0; turn < 4; turn += 1) scene = rotatePages(scene, ["source-2"]);
