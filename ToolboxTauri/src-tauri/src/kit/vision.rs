@@ -8,7 +8,7 @@ use lopdf::Document;
 
 use crate::kit::common::limits::{self, HelperDeadline, StoppableHelper};
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
-use crate::kit::contracts::{LimitKind, ToolError};
+use crate::kit::contracts::{LimitKind, OutcomePointer, ToolError};
 use crate::kit::pdf::metadata::page_bounds;
 use crate::kit::pdf::page_ranges::{validate_page_ranges, PageRanges};
 use crate::kit::resources;
@@ -21,6 +21,10 @@ const OCR_MAX_TOTAL_PIXELS: u64 = 120_000_000;
 const OCR_MAX_RENDERED_BYTES: u64 = 50 * 1024 * 1024;
 const OCR_DEADLINE: HelperDeadline = HelperDeadline { per_file: Duration::from_secs(30), per_page: Duration::from_secs(30) };
 const OCR_LANGUAGES: &[&str] = &["eng"];
+const OCR_TEXT_SUFFIX: &str = "-ocr";
+const OCR_PAGE_SEGMENTATION: &str = "3";
+const OCR_NO_TEXT: &str = "OCR completed but found no readable text.";
+const OCR_PASSWORD_PROTECTED: &str = "It's password-protected. Remove its password in File Security, then run OCR again.";
 
 #[derive(Debug, Clone, Copy)]
 struct OcrPage {
@@ -84,9 +88,14 @@ fn ocr_pdf_within(request: &OcrRequest, input: PathBuf, deadline: HelperDeadline
     if request.mode() != Ok(OcrMode::Text) {
         return unavailable(input, "Searchable PDF output is not available yet. Choose a text file.".to_string());
     }
-    let output = match OutputNaming::reserve_destination(&input, &request.output_location, "-ocr-text", "txt") {
+    let output = match OutputNaming::reserve_destination(&input, &request.output_location, OCR_TEXT_SUFFIX, "txt") {
         Ok(output) => output,
         Err(error) => return failure(input, format!("Could not reserve OCR output: {error}")),
+    };
+    // A missing engine affects every file the same way, so it is reported before anything is read from the file.
+    let resources = match OcrResources::resolve() {
+        Ok(resources) => resources,
+        Err(error) => return unavailable(input, error.to_string()),
     };
     let input_size = match std::fs::metadata(&input) {
         Ok(metadata) => metadata.len(),
@@ -95,35 +104,36 @@ fn ocr_pdf_within(request: &OcrRequest, input: PathBuf, deadline: HelperDeadline
     if input_size > OCR_MAX_INPUT_BYTES { return failure(input, "PDF exceeds the 100 MiB OCR input limit.".to_string()); }
     let pages = match selected_ocr_pages(&input, request.page_range()) {
         Ok(pages) => pages,
-        Err(error) => return failure(input, error),
+        Err(error) => return JobOutcome::failure(input, error),
     };
-    let resources = match OcrResources::resolve() {
-        Ok(resources) => resources,
-        Err(error) => return unavailable(input, error),
+    let text = match run_ocr(&resources, &input, &pages, &request.languages, deadline).and_then(|pages| ocr_text(&pages).map_err(ToolError::processing)) {
+        Ok(text) => text,
+        Err(error) => return JobOutcome::failure(input, error),
     };
-    match run_ocr(&resources, &input, &pages, &request.languages, deadline) {
-        Ok(stdout) => {
-            if stdout.len() > OCR_MAX_OUTPUT_BYTES { return failure(input, "OCR output exceeds the 10 MiB text limit.".to_string()); }
-            let text = match normalize_ocr_text(&stdout) {
-                Ok(text) => text,
-                Err(error) => return failure(input, error),
-            };
-            if text.len() > OCR_MAX_OUTPUT_BYTES { return failure(input, "OCR output exceeds the 10 MiB text limit.".to_string()); }
-            if text.is_empty() { return failure(input, "OCR completed but found no readable text.".to_string()); }
-            match std::fs::write(output.path(), text) {
-                Ok(_) => match output.publish() {
-                    Ok(path) => success(input, path, "OCR text extracted in page order"),
-                    Err(error) => failure(input, format!("Could not publish OCR output: {error}")),
-                },
-                Err(error) => failure(input, format!("Could not write OCR output: {error}")),
-            }
-        }
-        Err(error) => JobOutcome::failure(input, error),
+    if text.len() > OCR_MAX_OUTPUT_BYTES { return failure(input, "OCR output exceeds the 10 MiB text limit.".to_string()); }
+    if text.is_empty() { return failure(input, OCR_NO_TEXT.to_string()); }
+    match std::fs::write(output.path(), text) {
+        Ok(_) => match output.publish() {
+            Ok(path) => success(input, path, &recognized_detail(pages.len())),
+            Err(error) => failure(input, format!("Could not publish OCR output: {error}")),
+        },
+        Err(error) => failure(input, format!("Could not write OCR output: {error}")),
     }
 }
 
-fn selected_ocr_pages(input: &Path, range: Option<&str>) -> Result<Vec<OcrPage>, String> {
-    let document = Document::load(input).map_err(|error| format!("Could not inspect PDF for OCR: {error}"))?;
+fn recognized_detail(pages: usize) -> String {
+    format!("{pages} {} recognized. English.", if pages == 1 { "page" } else { "pages" })
+}
+
+fn selected_ocr_pages(input: &Path, range: Option<&str>) -> Result<Vec<OcrPage>, ToolError> {
+    let document = Document::load(input).map_err(|error| ToolError::processing(format!("Could not inspect PDF for OCR: {error}")))?;
+    if document.is_encrypted() {
+        return Err(ToolError::invalid_input(OCR_PASSWORD_PROTECTED).with_pointer(OutcomePointer::Tool { tool_id: "lock-unlock".into() }));
+    }
+    selected_document_pages(&document, range).map_err(ToolError::processing)
+}
+
+fn selected_document_pages(document: &Document, range: Option<&str>) -> Result<Vec<OcrPage>, String> {
     let pages = document.get_pages();
     if pages.is_empty() { return Err("PDF has no pages to OCR.".to_string()); }
     let requested = range.map(|range| PageRanges::parse(range).and_then(|ranges| ranges.within(pages.len()))).transpose()?;
@@ -131,7 +141,7 @@ fn selected_ocr_pages(input: &Path, range: Option<&str>) -> Result<Vec<OcrPage>,
     let mut selected = Vec::new();
     for (number, page_id) in pages {
         if requested.as_ref().is_some_and(|spans| !spans.iter().any(|&(first, last)| (first..=last).contains(&(number as usize)))) { continue; }
-        let (left, bottom, right, top) = page_bounds(&document, page_id)?;
+        let (left, bottom, right, top) = page_bounds(document, page_id)?;
         let width = right - left;
         let height = top - bottom;
         let pixels = rendered_pixels(width, height)?;
@@ -191,35 +201,68 @@ struct OcrResources {
     renderer: PathBuf,
 }
 
-impl OcrResources {
-    fn resolve() -> Result<Self, String> {
-        let root = ocr_resource_root();
-        Ok(Self {
-            engine: resources::resolve("tesseract", &root, "TOOLBOX_TESSERACT_PATH", "tesseract")?.path,
-            tessdata: find_resource("engTraineddata", "TOOLBOX_TESSDATA_PATH", &root)?,
-            renderer: find_pdf_renderer()?,
+/// The OCR pieces a file needs. Each one names itself when it is missing, so the
+/// person knows reinstalling is the fix rather than trying another file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OcrComponent { Engine, Renderer, EnglishData }
+
+impl std::fmt::Display for OcrComponent {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Engine => "The text recognition engine is missing. Reinstall Toolbox.",
+            Self::Renderer => "The PDF page renderer is missing. Reinstall Toolbox.",
+            Self::EnglishData => "The English recognition data is missing. Reinstall Toolbox.",
         })
     }
 }
 
-fn run_ocr(resources: &OcrResources, input: &Path, pages: &[OcrPage], languages: &[String], deadline: HelperDeadline) -> Result<Vec<u8>, ToolError> {
+impl OcrResources {
+    fn resolve() -> Result<Self, OcrComponent> {
+        let root = ocr_resource_root();
+        Ok(Self {
+            engine: resources::resolve("tesseract", &root, "TOOLBOX_TESSERACT_PATH", "tesseract").map_err(|_| OcrComponent::Engine)?.path,
+            tessdata: find_resource("engTraineddata", "TOOLBOX_TESSDATA_PATH", &root).map_err(|_| OcrComponent::EnglishData)?,
+            renderer: find_pdf_renderer().map_err(|_| OcrComponent::Renderer)?,
+        })
+    }
+}
+
+/// Recognises each page on its own, so the text keeps page order and page breaks.
+/// The engine runs on one thread with a fixed segmentation mode, resolution and
+/// language data, so the same file gives the same text every time.
+fn run_ocr(resources: &OcrResources, input: &Path, pages: &[OcrPage], languages: &[String], deadline: HelperDeadline) -> Result<Vec<Vec<u8>>, ToolError> {
     let limit = deadline.limit(1, pages.len());
     let stop_at = Instant::now() + limit;
     let timed_out = format!("Recognising took longer than {} and was stopped. Nothing was saved.", limits::duration_label(limit));
     let workspace = OcrWorkspace::new().map_err(ToolError::processing)?;
     let tessdata_dir = resources.tessdata.parent().ok_or_else(|| ToolError::processing("OCR language data has no parent directory."))?;
-    let mut text = Vec::new();
+    let mut recognized = Vec::with_capacity(pages.len());
+    let mut total = 0usize;
     for page in pages {
         let image = render_ocr_page(&resources.renderer, input, &workspace, *page, stop_at, &timed_out)?;
         let mut command = Command::new(&resources.engine);
-        command.arg(&image).arg("stdout").arg("--tessdata-dir").arg(tessdata_dir).arg("-l").arg(languages.join("+")).arg("--psm").arg("3");
+        command.env("OMP_THREAD_LIMIT", "1")
+            .arg(&image).arg("stdout")
+            .arg("--tessdata-dir").arg(tessdata_dir)
+            .arg("-l").arg(languages.join("+"))
+            .arg("--psm").arg(OCR_PAGE_SEGMENTATION)
+            .arg("--dpi").arg(OCR_RENDER_DPI.to_string());
         let result = run_ocr_helper(command, stop_at, &timed_out)?;
         if !result.status.success() { return Err(ToolError::processing(stderr(result, "OCR engine failed."))); }
-        if text.len().saturating_add(result.stdout.len()).saturating_add(1) > OCR_MAX_OUTPUT_BYTES { return Err(ToolError::processing("OCR output exceeds the 10 MiB text limit.")); }
-        text.extend_from_slice(&result.stdout);
-        text.push(b'\n');
+        total = total.saturating_add(result.stdout.len()).saturating_add(1);
+        if total > OCR_MAX_OUTPUT_BYTES { return Err(ToolError::processing("OCR output exceeds the 10 MiB text limit.")); }
+        recognized.push(result.stdout);
     }
-    Ok(text)
+    Ok(recognized)
+}
+
+/// Joins recognised pages with a form feed between them. Lines end in LF. A page
+/// with no text stays an empty page, so page numbers still line up. When no page
+/// has text the result is empty.
+fn ocr_text(pages: &[Vec<u8>]) -> Result<String, String> {
+    let pages = pages.iter().map(|page| normalize_ocr_text(page)).collect::<Result<Vec<_>, _>>()?;
+    if pages.iter().all(String::is_empty) { return Ok(String::new()); }
+    Ok(pages.iter().map(|page| if page.is_empty() { String::new() } else { format!("{page}\n") }).collect::<Vec<_>>().join("\u{c}"))
 }
 
 fn render_ocr_page(renderer: &Path, input: &Path, workspace: &OcrWorkspace, page: OcrPage, deadline: Instant, timed_out: &str) -> Result<PathBuf, ToolError> {
@@ -474,13 +517,16 @@ mod tests {
         document.save(&input).unwrap();
 
         let error = super::selected_ocr_pages(&input, None).unwrap_err();
-        assert!(error.contains("pixel"), "{error}");
+        assert_eq!(error.kind, ErrorKind::Processing);
+        assert!(error.message.contains("pixel"), "{error}");
         let _ = fs::remove_file(input);
     }
 
     #[cfg(unix)]
     #[test]
     fn oversized_rendered_page_is_rejected_before_ocr_runs() {
+        // Holds the lock because sibling tests count private OCR workspaces.
+        let _guard = crate::kit::lock_process_env();
         let renderer = path("oversized-renderer.sh");
         let engine = path("oversized-engine.sh");
         let input = path("oversized-render.pdf");
@@ -539,7 +585,7 @@ mod tests {
         let _ = fs::remove_dir_all(&output_root);
 
         assert!(outcome.error().is_none(), "selected OCR failed: {:?}", outcome.error());
-        assert_eq!(text.as_deref(), Some("selected page one"));
+        assert_eq!(text.as_deref(), Some("selected page one\n"));
         assert_eq!(output_path.as_deref().and_then(Path::parent), Some(output_root.as_path()));
         assert_eq!(input_after, original);
     }
@@ -649,6 +695,20 @@ mod tests {
     #[test]
     fn normalizes_ocr_lines_without_reordering_them() {
         assert_eq!(normalize_ocr_text(b"  first   line\r\n\n second line  \n").unwrap(), "first line\nsecond line");
+    }
+
+    #[test]
+    fn ocr_text_ends_lines_in_lf_and_separates_pages_with_a_form_feed() {
+        let pages = [b"first  page\r\nline two\r\n".to_vec(), b" \n\n".to_vec(), b"third\n".to_vec()];
+        assert_eq!(super::ocr_text(&pages).unwrap(), "first page\nline two\n\u{c}\u{c}third\n");
+        assert_eq!(super::ocr_text(&[b"\n".to_vec(), b"  \x0c".to_vec()]).unwrap(), "");
+    }
+
+    #[test]
+    fn missing_ocr_components_name_themselves() {
+        assert_eq!(super::OcrComponent::Engine.to_string(), "The text recognition engine is missing. Reinstall Toolbox.");
+        assert_eq!(super::OcrComponent::Renderer.to_string(), "The PDF page renderer is missing. Reinstall Toolbox.");
+        assert_eq!(super::OcrComponent::EnglishData.to_string(), "The English recognition data is missing. Reinstall Toolbox.");
     }
 
     #[test]
@@ -770,7 +830,7 @@ mod tests {
         let _ = fs::remove_dir_all(&output_root);
 
         assert!(outcome.error().is_none(), "budgeted OCR failed: {:?}", outcome.error());
-        assert_eq!(text.as_deref(), Some("page\npage\npage"));
+        assert_eq!(text.as_deref(), Some("page\n\u{c}page\n\u{c}page\n"));
         assert!(elapsed > deadline.limit(1, 1), "three pages ran longer than one page's budget, so a single shared deadline would have stopped them: {elapsed:?}");
     }
 

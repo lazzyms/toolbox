@@ -5,10 +5,12 @@ import { formatPageRange, inspectedPages, type ConversionTool } from "../tool";
 
 export const ocr: ConversionTool = {
   inspectsPdf: true,
-  outputPreview: () => "Output preview unavailable. OCR is unavailable in this build.",
+  outputPreview: () => "Output preview unavailable. Export recognizes the text on each page and saves it as a text file.",
   request: (paths, outputLocation, { runId }, _options, selection) => {
     const pages = inspectedPages(selection);
-    const pageRange = pages?.length ? formatPageRange(pages) : selection.pageRange || null;
+    // Every page picked means no range, so each file in a batch is read in full.
+    const everyPage = selection.document && pages?.length === selection.document.pages.length;
+    const pageRange = !everyPage && pages?.length ? formatPageRange(pages) : selection.pageRange || null;
     return invoke<ToolResult>("ocr_pdf", { runId, request: ocrRequest(paths, outputLocation, pageRange) });
   },
 };

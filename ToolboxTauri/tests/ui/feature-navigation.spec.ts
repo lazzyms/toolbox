@@ -393,7 +393,8 @@ test("home marks tools this build cannot run and keeps them out of the search hi
     await expandViews(page);
 
     const unavailable = UtilityRegistry.filter((tool) => tool.capability.nativeAvailability === "unavailable");
-    expect(unavailable.map((tool) => tool.title)).toEqual(expect.arrayContaining(["OCR PDF", "Blur Faces", "Remove Background"]));
+    expect(unavailable.map((tool) => tool.title)).toEqual(expect.arrayContaining(["Blur Faces", "Remove Background"]));
+    expect(unavailable.map((tool) => tool.title)).not.toContain("OCR PDF");
     for (const tool of unavailable) {
         const link = page.locator(`.view-tool-link[data-command-result="${tool.id}"]`);
         await expect(link).toContainText("Unavailable");
@@ -405,7 +406,11 @@ test("home marks tools this build cannot run and keeps them out of the search hi
     await expect(available).not.toContainText("Unavailable");
     await expect(available).not.toHaveAttribute("aria-describedby", /.+/);
 
-    await page.locator('.view-tool-link[data-command-result="pdf-ocr"]').click();
+    const ocr = page.locator('.view-tool-link[data-command-result="pdf-ocr"]');
+    await expect(ocr).not.toContainText("Unavailable");
+    await expect(ocr).not.toHaveAttribute("aria-describedby", /.+/);
+
+    await page.locator('.view-tool-link[data-command-result="image-blur-faces"]').click();
     await expect(page.getByText("Unavailable in this build.", { exact: true })).toBeVisible();
 });
 
@@ -1114,7 +1119,7 @@ test("editor command rails keep one document session while changing tools", asyn
 
 test("vision tools explain unavailable resources before file selection", async ({ page }) => {
     await page.goto("/");
-    for (const [index, id] of ["pdf-ocr", "image-blur-faces", "image-remove-bg"].entries()) {
+    for (const [index, id] of ["image-blur-faces", "image-remove-bg"].entries()) {
         const utility = UtilityRegistry.find((item) => item.id === id);
         expect(utility).toBeDefined();
         if (!utility) continue;
@@ -1475,7 +1480,7 @@ test("PDF conversion visibly rejects retained files when an action changes forma
     expect(inspections).toHaveLength(0);
 });
 
-test("PDF page-scoped conversions send the selected pages and keep OCR gated", async ({ page }) => {
+test("PDF page-scoped conversions send the selected pages and reach OCR from the rail", async ({ page }) => {
     await page.goto("/");
     await openFromHome(page, "PDF to Text");
     await chooseFixture(page, "/local/document.scoped.pdf");
@@ -1495,8 +1500,108 @@ test("PDF page-scoped conversions send the selected pages and keep OCR gated", a
     expect(textInvocation?.args).toMatchObject({ request: { paths: ["/local/document.scoped.pdf"], pages: [1] } });
 
     const ocrButton = page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "OCR PDF", exact: true });
-    await expect(ocrButton).toBeDisabled();
-    await expect(ocrButton).toHaveAttribute("title", "OCR PDF is unavailable in this build");
+    await expect(ocrButton).toBeEnabled();
+    await expect(ocrButton).not.toHaveAttribute("title", /unavailable/);
+    await ocrButton.click();
+    await expect(page.getByRole("button", { name: "Export OCR PDF", exact: true })).toBeVisible();
+    await expect(page.getByText("Unavailable in this build.", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Output preview unavailable. Export recognizes the text on each page and saves it as a text file.", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Export OCR PDF", exact: true }).click();
+    expect((await lastInvocation(page, "ocr_pdf"))?.args).toMatchObject({ request: { paths: ["/local/document.scoped.pdf"], pageRange: null, mode: "text" } });
+    await page.getByRole("img", { name: "Source page preview 1" }).click();
+    await expect(pageOne).not.toBeChecked();
+    await page.getByRole("button", { name: "Export OCR PDF", exact: true }).click();
+    expect((await lastInvocation(page, "ocr_pdf"))?.args).toMatchObject({ request: { paths: ["/local/document.scoped.pdf"], pageRange: "2-3", mode: "text" } });
+});
+
+test("OCR sends scans as a text-file request to the folder chosen in Settings", async ({ page }) => {
+    await storeOutputSettings(page, { mode: "customFolder", folder: "/fake/shell/output" });
+    await page.goto("/");
+    await openFromHome(page, "PDF to Text");
+    await page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "OCR PDF", exact: true }).click();
+    await page.evaluate((fixtures) => { (window as TestWindow).__toolboxDialogResults = [fixtures]; }, [pdfFixturePath, "/local/second-scan.pdf"]);
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await expect(page.getByText("second-scan.pdf", { exact: true }).first()).toBeVisible();
+    await page.getByRole("button", { name: "Export OCR PDF", exact: true }).click();
+
+    const invocation = await lastInvocation(page, "ocr_pdf");
+    expect((invocation?.args as { request?: unknown } | undefined)?.request).toEqual({
+        paths: [pdfFixturePath, "/local/second-scan.pdf"],
+        pageRange: null,
+        mode: "text",
+        force: false,
+        languages: ["eng"],
+        outputLocation: { customFolder: "/fake/shell/output" },
+    });
+});
+
+test("OCR shows a missing engine, a locked scan and a blank scan beside a saved text file", async ({ page }) => {
+    const textFile = "/fake/shell/output/document-ocr.txt";
+    const locked = "It's password-protected. Remove its password in File Security, then run OCR again.";
+    await page.goto("/");
+    await page.evaluate((outcomes) => { (window as TestWindow).__toolboxProcessingResults = outcomes; }, [
+        succeeded(pdfFixturePath, [textFile], { detail: "1 page recognized. English." }),
+        failed("/local/no-engine.pdf", "unavailable", "The text recognition engine is missing. Reinstall Toolbox."),
+        failed("/local/locked.pdf", "invalidInput", locked, { failure: { kind: "invalidInput", message: locked, pointer: { kind: "tool", toolId: "lock-unlock" } } }),
+        failed("/local/blank.pdf", "processing", "OCR completed but found no readable text."),
+    ]);
+    await openFromHome(page, "PDF to Text");
+    await page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "OCR PDF", exact: true }).click();
+    await chooseFixture(page, pdfFixturePath);
+    await page.getByRole("button", { name: "Export OCR PDF", exact: true }).click();
+
+    const rows = page.getByRole("list", { name: "Results" }).getByRole("listitem");
+    await expect(rows).toHaveCount(4);
+    await expect(rows.nth(0)).toContainText("document-ocr.txt");
+    await expect(rows.nth(0)).toContainText("1 page recognized. English.");
+    await rows.nth(0).getByRole("button", { name: "Open document-ocr.txt", exact: true }).click();
+    await rows.nth(0).getByRole("button", { name: "Show in Finder: document-ocr.txt", exact: true }).click();
+    expect(await fileActionInvocations(page)).toEqual([
+        { command: "open_output_path", args: { path: textFile } },
+        { command: "reveal_output_path", args: { path: textFile } },
+    ]);
+    await expect(rows.nth(1)).toContainText("Unavailable");
+    await expect(rows.nth(1)).toContainText("The text recognition engine is missing. Reinstall Toolbox.");
+    await expect(rows.nth(2)).toContainText(locked);
+    await expect(rows.nth(3)).toContainText("OCR completed but found no readable text.");
+    for (const index of [1, 2, 3]) await expect(rows.nth(index).getByRole("button", { name: /^Show in Finder|^Open .*\.txt$/ })).toHaveCount(0);
+
+    await rows.nth(2).getByRole("button", { name: "Open Lock & Unlock", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Lock & Unlock", exact: true })).toBeVisible();
+});
+
+test("PDF to Text hands a scan that needs OCR to OCR with only that file queued", async ({ page }) => {
+    const scan = "/local/scan.pdf";
+    await page.goto("/");
+    await page.evaluate((outcomes) => { (window as TestWindow).__toolboxProcessingResults = outcomes; }, [
+        {
+            inputPath: scan,
+            outputPaths: [],
+            detail: "",
+            state: "skipped",
+            failure: null,
+            reason: { code: "needsOcr", message: "This PDF has no text layer. Run OCR to read its text.", pointer: { kind: "tool", toolId: "pdf-ocr" } },
+            warnings: [],
+        } satisfies MockOutcome,
+        succeeded(pdfFixturePath, ["/fake/shell/output/sample-text.txt"]),
+    ]);
+    await openFromHome(page, "PDF to Text");
+    await page.evaluate((fixtures) => { (window as TestWindow).__toolboxDialogResults = [fixtures]; }, [scan, pdfFixturePath]);
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await expect(page.getByText("scan.pdf", { exact: true }).first()).toBeVisible();
+    await page.getByRole("button", { name: "Export PDF to Text", exact: true }).click();
+
+    const rows = page.getByRole("list", { name: "Results" }).getByRole("listitem");
+    await expect(rows).toHaveCount(2);
+    await expect(rows.nth(0)).toContainText("This PDF has no text layer. Run OCR to read its text.");
+    await expect(rows.nth(1).getByRole("button", { name: "Open OCR PDF", exact: true })).toHaveCount(0);
+    await rows.nth(0).getByRole("button", { name: "Open OCR PDF", exact: true }).click();
+
+    await expect(page.getByRole("button", { name: "Export OCR PDF", exact: true })).toBeVisible();
+    await expect(page.getByText("scan.pdf", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText(path.basename(pdfFixturePath), { exact: true })).toHaveCount(0);
+    await page.getByRole("button", { name: "Export OCR PDF", exact: true }).click();
+    expect((await lastInvocation(page, "ocr_pdf"))?.args).toMatchObject({ request: { paths: [scan], mode: "text" } });
 });
 
 test("rotate PDF sends the chosen direction and zero-based pages", async ({ page }) => {

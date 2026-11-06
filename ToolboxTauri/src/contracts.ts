@@ -143,6 +143,7 @@ export type SkipCode =
   | "textAlreadyPresent"
   | "noEffectiveChange"
   | "unsupportedFormat"
+  | "needsOcr"
   | "cancelled";
 
 export interface SkipReason {

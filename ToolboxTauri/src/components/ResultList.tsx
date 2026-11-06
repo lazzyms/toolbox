@@ -41,9 +41,9 @@ const revealButtonLabel = () => {
     return "Show in file manager";
 };
 
-const followPointer = (pointer: OutcomePointer) => {
+const followPointer = (pointer: OutcomePointer, inputPath: string) => {
     if (pointer.kind === "tool") {
-        window.dispatchEvent(new CustomEvent("toolbox:open", { detail: pointer.toolId }));
+        window.dispatchEvent(new CustomEvent("toolbox:open", { detail: { toolId: pointer.toolId, paths: [inputPath] } }));
     } else if (pointer.kind === "outputFolder") {
         window.dispatchEvent(new CustomEvent("toolbox:open-settings", { detail: "output-location" }));
     } else {
@@ -139,7 +139,7 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
                         </Button>
                     )}
                     {view.pointer && (
-                        <Button variant="outline" size="xs" onClick={() => view.pointer && followPointer(view.pointer.pointer)}>
+                        <Button variant="outline" size="xs" onClick={() => view.pointer && followPointer(view.pointer.pointer, result.inputPath)}>
                             {view.pointer.label}
                         </Button>
                     )}
