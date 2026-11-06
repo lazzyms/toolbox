@@ -14,7 +14,7 @@ const workspaceIds = [...workspaceSource.matchAll(/(?<!editor:\s*\{[^}]*)toolIds
 
 const failures = [];
 const unique = (values) => new Set(values).size === values.length;
-const expectedAtomicToolCount = 35;
+const expectedAtomicToolCount = 34;
 if (atomicIds.length !== expectedAtomicToolCount || !unique(atomicIds)) failures.push(`expected ${expectedAtomicToolCount} unique atomic IDs, found ${atomicIds.length}`);
 if (workspaceIds.length !== atomicIds.length || !unique(workspaceIds)) failures.push("workspace membership must contain each atomic ID exactly once");
 if (atomicIds.some((id) => !workspaceIds.includes(id)) || workspaceIds.some((id) => !atomicIds.includes(id))) failures.push("workspace membership and atomic registry differ");
@@ -27,7 +27,7 @@ if (membersOf("file-security").join() !== "lock-unlock") failures.push("file-sec
 for (const retired of ["pdf-unlock", "pdf-protect", "office-protect"]) {
   if (atomicIds.includes(retired) || workspaceIds.includes(retired)) failures.push(`${retired} is retired and must not be registered`);
 }
-if (membersOf("compress-files").join() !== "pdf-compress,compress") failures.push("compress-files must hold exactly pdf-compress and compress");
+if (membersOf("compress-files").join() !== "compress-files,compress") failures.push("compress-files must hold exactly compress-files and compress");
 if (!membersOf("pdf-convert").includes("pdf-ocr")) failures.push("pdf-ocr must belong to the PDF conversion workspace");
 if (membersOf("media-tools").includes("pdf-ocr")) failures.push("pdf-ocr must not belong to the media workspace");
 for (const id of ["pdf-merge", "pdf-split", "pdf-crop", "pdf-page-numbers", "pdf-rotate", "pdf-repair", "pdf-compare", "pdf-redact"]) {
