@@ -28,6 +28,10 @@ test.beforeEach(async ({ page }) => {
                     const pageCount = path.endsWith(".three.pdf") ? 3 : Number(/-(\d+)p\.pdf$/.exec(path)?.[1] ?? 1);
                     return { pages: Array.from({ length: pageCount }, (_, index) => ({ index, x: 0, y: 0, width: 612, height: 792, preview: command === "inspect_pdf" ? preview : null })) };
                 }
+                if (command === "inspect_image_preview") {
+                    const tall = (args as { request: { path: string } }).request.path.includes("tall");
+                    return tall ? { width: 20, height: 30, dataUrl: preview } : { width: 40, height: 20, dataUrl: preview };
+                }
                 if (command.startsWith("plugin:")) return null;
                 const paths = (args as { request?: { paths?: string[] } }).request?.paths ?? [];
                 return paths.map((inputPath) => ({ inputPath, outputPaths: [`${inputPath}.out`], detail: "Test output", state: "succeeded", failure: null, reason: null, warnings: [], ...testWindow.__outcome?.(inputPath) }));
@@ -72,7 +76,7 @@ const sent = (request: Record<string, unknown>) => ({ runId: expect.any(String),
 test.describe("PDF Conversion tools send their exact requests", () => {
     test.beforeEach(async ({ page }) => {
         await page.goto("/");
-        await openToolBySearch(page, "PDF to Text");
+        await openToolBySearch(page, "PDF to Images");
     });
 
     test("Images to PDF from the rail", async ({ page }) => {
@@ -82,7 +86,73 @@ test.describe("PDF Conversion tools send their exact requests", () => {
             paths: ["/local/scan-1.png", "/local/scan-2.jpg"],
             outputLocation,
             outputPath: "/fake/shell/output/scan-1-combined.pdf",
+            pageSize: "matchImage",
         }));
+    });
+
+    test("Images to PDF sends margin, fit and orientation only for A4 and Letter", async ({ page }) => {
+        await selectFromRail(page, "PDF Conversion", "Images to PDF");
+        await chooseFiles(page, "/local/wide.jpg", "/local/tall.png");
+        const pageSize = page.getByRole("radiogroup", { name: "Page size" });
+        const layout = (name: string) => page.getByRole("group", { name: `${name} layout` });
+        const matchHint = page.getByText("Each page is the size of its image. Margin, fit and orientation appear for A4 and Letter.");
+        const layoutControls = [
+            page.getByRole("radiogroup", { name: "Orientation" }),
+            page.getByRole("radiogroup", { name: "Fit" }),
+            page.getByRole("radiogroup", { name: "Margin" }),
+        ];
+        const paths = ["/local/wide.jpg", "/local/tall.png"];
+        const base = { paths, outputLocation, outputPath: "/fake/shell/output/wide-combined.pdf" };
+
+        await expect(pageSize.getByRole("radio", { name: "Match image" })).toBeChecked();
+        await expect(matchHint).toBeVisible();
+        for (const control of layoutControls) await expect(control).toHaveCount(0);
+        await expect(layout("A4")).toHaveCount(0);
+        expect(await exportAndCapture(page, "images_to_pdf", { save: true })).toEqual(sent({ ...base, pageSize: "matchImage" }));
+
+        await pageSize.getByRole("radio", { name: "A4" }).click();
+        await expect(matchHint).toHaveCount(0);
+        const a4 = layout("A4");
+        await expect(a4).toBeVisible();
+        await expect(a4.getByRole("radiogroup", { name: "Orientation" }).getByRole("radio", { name: "Automatic" })).toBeChecked();
+        await expect(a4.getByText("Automatic turns each page to suit its image.")).toBeVisible();
+        await expect(a4.getByRole("radio", { name: "Fit within the page" })).toBeChecked();
+        await expect(a4.getByRole("radio", { name: "Fill the page, trimming edges" })).not.toBeChecked();
+        await expect(a4.getByRole("radiogroup", { name: "Margin" }).getByRole("radio", { name: "Small" })).toBeChecked();
+        await expect(a4.getByText("Page 1, wide.jpg on A4 landscape with a small margin. Select another page to preview it.")).toBeVisible();
+        expect(await exportAndCapture(page, "images_to_pdf", { save: true })).toEqual(sent({
+            ...base, pageSize: "a4", margin: "small", fit: "fit", orientation: "automatic",
+        }));
+
+        await page.getByRole("option", { name: "tall.png" }).click();
+        await expect(a4.getByText("Page 2, tall.png on A4 portrait with a small margin. Select another page to preview it.")).toBeVisible();
+
+        await a4.getByRole("radiogroup", { name: "Orientation" }).getByRole("radio", { name: "Landscape" }).click();
+        await a4.getByRole("radio", { name: "Fill the page, trimming edges" }).click();
+        await a4.getByRole("radiogroup", { name: "Margin" }).getByRole("radio", { name: "Large" }).click();
+        await expect(a4.getByText("Page 2, tall.png on A4 landscape with a large margin. Select another page to preview it.")).toBeVisible();
+        expect(await exportAndCapture(page, "images_to_pdf", { save: true })).toEqual(sent({
+            ...base, pageSize: "a4", margin: "large", fit: "fill", orientation: "landscape",
+        }));
+
+        await pageSize.getByRole("radio", { name: "Letter" }).click();
+        await expect(layout("A4")).toHaveCount(0);
+        const letter = layout("Letter");
+        await expect(letter).toBeVisible();
+        await letter.getByRole("radiogroup", { name: "Orientation" }).getByRole("radio", { name: "Portrait" }).click();
+        await letter.getByRole("radiogroup", { name: "Margin" }).getByRole("radio", { name: "None" }).click();
+        await expect(letter.getByText("Page 2, tall.png on Letter portrait with no margin. Select another page to preview it.")).toBeVisible();
+        expect(await exportAndCapture(page, "images_to_pdf", { save: true })).toEqual(sent({
+            ...base, pageSize: "letter", margin: "none", fit: "fill", orientation: "portrait",
+        }));
+
+        await pageSize.getByRole("radio", { name: "Match image" }).click();
+        await expect(matchHint).toBeVisible();
+        await expect(layout("Letter")).toHaveCount(0);
+        for (const control of layoutControls) await expect(control).toHaveCount(0);
+        const request = await exportAndCapture(page, "images_to_pdf", { save: true });
+        expect(request).toEqual(sent({ ...base, pageSize: "matchImage" }));
+        for (const key of ["margin", "fit", "orientation"]) expect((request as { request: object }).request).not.toHaveProperty(key);
     });
 
     test("PDF to Images from the rail", async ({ page }) => {
@@ -186,7 +256,7 @@ test.describe("PDF Conversion tools send their exact requests", () => {
     test("PDF to Images marks a row Renamed when page images got numbered names", async ({ page }) => {
         await page.addInitScript(() => Object.defineProperty(navigator, "platform", { get: () => "Win32" }));
         await page.goto("/");
-        await openToolBySearch(page, "PDF to Text");
+        await openToolBySearch(page, "PDF to Images");
         await page.evaluate(() => {
             const renamed = (page: string) => ({
                 code: "renamedToAvoidReplacing",
@@ -295,25 +365,12 @@ test.describe("PDF Conversion tools send their exact requests", () => {
         await expect(cover.getByRole("button", { name: /^Open/ })).toHaveCount(0);
     });
 
-    test("PDF to Text", async ({ page }) => {
-        await chooseFiles(page, "/local/report.three.pdf");
-        await page.getByRole("checkbox", { name: "Page 1" }).click();
-        expect(await exportAndCapture(page, "pdf_to_text")).toEqual(sent({ paths: ["/local/report.three.pdf"], pages: [1, 2], outputLocation }));
-    });
-
-    test("Extract Images from PDF", async ({ page }) => {
-        await selectFromRail(page, "PDF Conversion", "Extract Images from PDF");
-        await chooseFiles(page, "/local/report.three.pdf");
-        await expect(page.getByRole("checkbox", { name: "Page 3" })).toBeChecked();
-        expect(await exportAndCapture(page, "extract_pdf_images")).toEqual(sent({ paths: ["/local/report.three.pdf"], pages: [0, 1, 2], outputLocation }));
-    });
-
     test("options survive a switch to another tool and back", async ({ page }) => {
         await selectFromRail(page, "PDF Conversion", "PDF to Images");
         await chooseFiles(page, "/local/report.three.pdf");
         await chooseOption(page, "Resolution", "72 dpi");
         await chooseOption(page, "Format", "WebP");
-        await selectFromRail(page, "PDF Conversion", "PDF to Text");
+        await selectFromRail(page, "PDF Conversion", "Images to PDF");
         await selectFromRail(page, "PDF Conversion", "PDF to Images");
         await expect(page.getByRole("option", { name: "report.three.pdf" })).toBeVisible();
         await expect(page.getByRole("radiogroup", { name: "Resolution" }).getByRole("radio", { name: "72 dpi" })).toBeChecked();
@@ -355,20 +412,15 @@ test.describe("PDF Editor file tools send their exact requests", () => {
     test("Split PDF in every mode", async ({ page }) => {
         await selectFromRail(page, "PDF Editor", "Split PDF");
         await chooseFiles(page, "/local/report.three.pdf");
-        expect(await exportAndCapture(page, "split_pdf")).toEqual(sent({
-            paths: ["/local/report.three.pdf"], pages: [], pageRanges: null, splitMode: "pages", chunkSize: null, outputLocation,
-        }));
-
-        await page.getByLabel("Split mode").selectOption("ranges");
         await page.getByRole("textbox", { name: "Page ranges" }).fill("1-2, 3");
         expect(await exportAndCapture(page, "split_pdf")).toEqual(sent({
-            paths: ["/local/report.three.pdf"], pages: [], pageRanges: "1-2, 3", splitMode: "ranges", chunkSize: null, outputLocation,
+            paths: ["/local/report.three.pdf"], mode: { kind: "ranges", ranges: "1-2, 3" }, outputLocation,
         }));
 
-        await page.getByLabel("Split mode").selectOption("chunks");
+        await page.getByRole("radiogroup", { name: "Split by" }).getByRole("radio", { name: "Every N pages" }).click();
         await page.getByRole("spinbutton", { name: "Pages per file" }).fill("3");
         expect(await exportAndCapture(page, "split_pdf")).toEqual(sent({
-            paths: ["/local/report.three.pdf"], pages: [], pageRanges: null, splitMode: "chunks", chunkSize: 3, outputLocation,
+            paths: ["/local/report.three.pdf"], mode: { kind: "everyN", pages: 3 }, outputLocation,
         }));
     });
 

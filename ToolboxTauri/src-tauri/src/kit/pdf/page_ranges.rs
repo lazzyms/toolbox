@@ -1,8 +1,9 @@
+use std::collections::BTreeSet;
 use std::fmt;
 use std::path::PathBuf;
 
 use crate::kit::common::JobOutcome;
-use crate::kit::contracts::ToolError;
+use crate::kit::contracts::{SkipCode, SkipReason, ToolError};
 
 const EXAMPLE: &str = "1-3, 5, 8-";
 
@@ -31,6 +32,13 @@ impl PageSpan {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PageRanges(Vec<PageSpan>);
 
+impl fmt::Display for PageRanges {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let spans = self.0.iter().map(PageSpan::to_string).collect::<Vec<_>>();
+        formatter.write_str(&spans.join(", "))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClampedRanges {
     pub spans: Vec<(usize, usize)>,
@@ -39,6 +47,10 @@ pub struct ClampedRanges {
 
 impl ClampedRanges {
     pub fn is_empty(&self) -> bool { self.spans.is_empty() }
+
+    pub fn page_indices(&self) -> Vec<usize> {
+        self.spans.iter().flat_map(|&(first, last)| first - 1..last).collect::<BTreeSet<_>>().into_iter().collect()
+    }
 }
 
 impl PageRanges {
@@ -78,14 +90,30 @@ impl PageRanges {
         }
         clamped
     }
+
+    pub fn clamp_or_skip(&self, page_count: usize) -> Result<ClampedRanges, SkipReason> {
+        let clamped = self.clamp(page_count);
+        if clamped.is_empty() {
+            return Err(SkipReason::new(SkipCode::RangeEmptyAfterClamping, format!("No pages in {self} are in this PDF, which has {}.", pages_label(page_count))));
+        }
+        Ok(clamped)
+    }
 }
 
 pub fn validate_page_ranges(paths: &[PathBuf], raw: Option<&str>) -> Result<(), Vec<JobOutcome>> {
-    let Some(Err(error)) = raw.filter(|value| !value.trim().is_empty()).map(PageRanges::parse) else { return Ok(()); };
-    if paths.is_empty() {
-        return Err(vec![JobOutcome::failure(PathBuf::new(), ToolError::invalid_input(error))]);
+    match raw.filter(|value| !value.trim().is_empty()) {
+        Some(raw) => require_page_ranges(paths, raw).map(drop),
+        None => Ok(()),
     }
-    Err(paths.iter().cloned().map(|path| JobOutcome::failure(path, ToolError::invalid_input(error.clone()))).collect())
+}
+
+pub fn require_page_ranges(paths: &[PathBuf], raw: &str) -> Result<PageRanges, Vec<JobOutcome>> {
+    PageRanges::parse(raw).map_err(|error| {
+        if paths.is_empty() {
+            return vec![JobOutcome::failure(PathBuf::new(), ToolError::invalid_input(error))];
+        }
+        paths.iter().cloned().map(|path| JobOutcome::failure(path, ToolError::invalid_input(error.clone()))).collect()
+    })
 }
 
 fn parse_entry(index: usize, entry: &str) -> Result<PageSpan, String> {
@@ -129,39 +157,27 @@ mod tests {
     fn span(first: usize, last: Option<usize>) -> PageSpan { PageSpan { first, last } }
 
     #[test]
-    fn parses_pages_spans_and_open_ends_in_written_order() {
-        let ranges = PageRanges::parse(" 1-3, 5,8 - ,10 - 12 ").unwrap();
-        assert_eq!(ranges.spans(), [span(1, Some(3)), span(5, Some(5)), span(8, None), span(10, Some(12))]);
-    }
-
-    #[test]
-    fn rejects_malformed_entries_naming_the_bad_one() {
-        for (raw, expected) in [
-            ("", "Enter at least one page or range"),
-            (" , ", "Enter at least one page or range"),
-            ("1-3,,5", "Entry 2 of the page range is empty"),
-            ("1-3,", "Entry 2 of the page range is empty"),
-            ("5-3", "\"5-3\" runs backwards"),
-            ("0", "\"0\" uses page 0"),
-            ("2, 0-4", "\"0-4\" uses page 0"),
-            ("1-0", "\"1-0\" uses page 0"),
-            ("1, two", "\"two\" isn't a page or range"),
-            ("-4", "\"-4\" isn't a page or range"),
-            ("1-2-3", "\"1-2-3\" isn't a page or range"),
-            ("+2", "\"+2\" isn't a page or range"),
-            ("99999999999999999999999", "isn't a page or range"),
-        ] {
-            let error = PageRanges::parse(raw).expect_err(raw);
-            assert!(error.contains(expected), "{raw}: {error}");
+    fn parser_accepts_and_rejects_the_shared_cases_with_their_messages() {
+        let cases: serde_json::Value = serde_json::from_str(include_str!("../../../../shared/page-range-cases.json")).unwrap();
+        for case in cases["accepted"].as_array().unwrap() {
+            let input = case["input"].as_str().unwrap();
+            let expected = case["spans"].as_array().unwrap().iter()
+                .map(|pair| span(pair[0].as_u64().unwrap() as usize, pair[1].as_u64().map(|last| last as usize)))
+                .collect::<Vec<_>>();
+            assert_eq!(PageRanges::parse(input).expect(input).spans(), expected, "{input}");
         }
-    }
-
-    #[test]
-    fn within_resolves_open_ends_and_fails_on_pages_past_the_end() {
-        let ranges = PageRanges::parse("1-3, 5, 8-").unwrap();
-        assert_eq!(ranges.within(10).unwrap(), vec![(1, 3), (5, 5), (8, 10)]);
-        assert_eq!(ranges.within(7).unwrap_err(), "The PDF has 7 pages, so pages 8- can't be used.");
-        assert_eq!(PageRanges::parse("2-4").unwrap().within(3).unwrap_err(), "The PDF has 3 pages, so pages 2-4 can't be used.");
+        for case in cases["rejected"].as_array().unwrap() {
+            let input = case["input"].as_str().unwrap();
+            assert_eq!(PageRanges::parse(input).expect_err(input), case["message"].as_str().unwrap(), "{input}");
+        }
+        for case in cases["within"].as_array().unwrap() {
+            let input = case["input"].as_str().unwrap();
+            let within = PageRanges::parse(input).unwrap().within(case["pageCount"].as_u64().unwrap() as usize);
+            match case.get("pages") {
+                Some(pages) => assert_eq!(serde_json::to_value(within.unwrap()).unwrap(), *pages, "{input}"),
+                None => assert_eq!(within.unwrap_err(), case["message"].as_str().unwrap(), "{input}"),
+            }
+        }
     }
 
     #[test]
@@ -194,6 +210,18 @@ mod tests {
     }
 
     #[test]
+    fn page_indices_are_zero_based_sorted_and_unique() {
+        assert_eq!(PageRanges::parse("5-6, 1-3, 2").unwrap().clamp(5).page_indices(), vec![0, 1, 2, 4]);
+    }
+
+    #[test]
+    fn clamp_or_skip_names_the_range_and_length_when_nothing_remains() {
+        let ranges = PageRanges::parse("2-4, 9-").unwrap();
+        assert_eq!(ranges.clamp_or_skip(3).unwrap().spans, vec![(2, 3)]);
+        assert_eq!(ranges.clamp_or_skip(1).unwrap_err(), SkipReason::new(SkipCode::RangeEmptyAfterClamping, "No pages in 2-4, 9- are in this PDF, which has 1 page."));
+    }
+
+    #[test]
     fn boundary_rejects_every_input_as_invalid_input_and_ignores_blank_ranges() {
         let paths = vec![PathBuf::from("a.pdf"), PathBuf::from("b.pdf")];
         assert!(validate_page_ranges(&paths, None).is_ok());
@@ -202,5 +230,7 @@ mod tests {
         let outcomes = validate_page_ranges(&paths, Some("3-1")).unwrap_err();
         assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), paths);
         assert!(outcomes.iter().all(|outcome| outcome.error().is_some_and(|error| error.kind == crate::kit::contracts::ErrorKind::InvalidInput && error.message.contains("\"3-1\""))));
+        assert_eq!(require_page_ranges(&paths, " ").unwrap_err().len(), 2);
+        assert_eq!(require_page_ranges(&paths, "2-4, 9-").unwrap().to_string(), "2-4, 9-");
     }
 }

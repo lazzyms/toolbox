@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import type { RunContext } from "../../components/ToolScaffold";
-import type { OutputLocation, ToolDefinition, ToolResult } from "../../contracts";
+import type { AtomicToolId, OutputLocation, ToolDefinition, ToolResult } from "../../contracts";
+import type { EntrySortOption } from "../../components/intake";
 import type { PdfDocument } from "../pdf-editor";
 
 export type PageSelection = { document: PdfDocument | null; selectedPages: number[]; pageRange: string; picks: PagePicks };
@@ -21,22 +22,28 @@ export type OptionsPanelProps<Options> = {
   options: Options;
   setOptions(options: Options): void;
   files: string[];
+  /** The file list row the user last selected, for previews of one input. */
+  selectedFileIndex: number;
   inspectedDocument: PdfDocument | null;
   selectedPages: number[];
   pageRange: string;
   choosePageRange: (value: string) => void;
   picks: PagePicks;
   pageCounts: Record<string, PageCount>;
+  onSelectTool?: (id: AtomicToolId) => void;
 };
 
 export interface ConversionTool<Options = unknown> {
   initialOptions?: Options;
   inspectsPdf: boolean;
+  sortOptions?: readonly EntrySortOption[];
   initialPages?(document: PdfDocument): number[];
   outputPreview(options: Options, selectedPages: number[]): string;
   exportBlocked?(options: Options, files: string[], pageRange: string): boolean;
   pagesPerPdf?(options: Options, pageRange: string, pageCount: number): number[] | null;
   RunSummary?(props: BatchPagesProps<Options>): ReactNode;
+  /** A status shown above the export action while the list can't be exported yet. */
+  exportNote?(files: string[]): string | null;
   OptionsPanel?(props: OptionsPanelProps<Options>): ReactNode;
   exampleName?(inputPath: string, utility: ToolDefinition, options: Options): string;
   exampleHint?: string;

@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { parsePageRange, selectedPageLabel } from "../../shared/workspaceValidation";
 import type { PdfDocument } from "../pdf-editor";
-import type { ToolDefinition } from "../../contracts";
+import type { AtomicToolId, ToolDefinition } from "../../contracts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -40,6 +40,7 @@ type ConversionPanelProps = {
   setInspectError: (value: string) => void;
   picks: PagePicks;
   setPicks: (value: PagePicks) => void;
+  onSelectTool?: (id: AtomicToolId) => void;
 };
 
 const countFailure = (error: unknown): PageCount => /password|encrypt/i.test(String(error)) ? "locked" : "unreadable";
@@ -65,6 +66,7 @@ export const ConversionPanel = ({
   setInspectError,
   picks,
   setPicks,
+  onSelectTool,
 }: ConversionPanelProps) => {
   const pagesPerPdf = tool.pagesPerPdf;
   const inputPath = pagesPerPdf ? files[selectedFileIndex] ?? files[0] : files[0];
@@ -176,6 +178,7 @@ export const ConversionPanel = ({
   const outputPreviewLimitation = activeUtility.capability.supportsPreview ? null : tool.outputPreview(options, selectedPages);
   const previewRegionLabel = outputPreviewLimitation ? "Source page selection" : "Conversion preview";
   const OptionsPanel = tool.OptionsPanel;
+  const exportNote = tool.exportNote?.(files) ?? null;
 
   return (
     <Card className="workspace-control-panel py-0">
@@ -246,16 +249,19 @@ export const ConversionPanel = ({
           options={options}
           setOptions={setOptions}
           files={files}
+          selectedFileIndex={selectedFileIndex}
           inspectedDocument={inspectedDocument}
           selectedPages={selectedPages}
           pageRange={pageRange}
           choosePageRange={choosePageRange}
           picks={picks}
           pageCounts={pageCounts}
+          onSelectTool={onSelectTool}
         />
       )}
       {destination}
       {tool.RunSummary && <tool.RunSummary options={options} files={files} pageRange={pageRange} picks={picks} pageCounts={pageCounts} />}
+      {exportNote && <p className="workspace-note" role="status">{exportNote}</p>}
       <Button
         variant="default"
         disabled={loading || !canExport || pageSelectionBlocked}
