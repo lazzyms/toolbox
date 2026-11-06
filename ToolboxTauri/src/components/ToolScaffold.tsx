@@ -738,6 +738,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 resultVerb={utility.resultVerb}
                 runningVerb={utility.runningVerb}
                 runningDetail={utility.runningDetail}
+                signatureRemovedNote={utility.signatureRemovedNote}
                 live={live}
                 namedByOutput={resultsNamedByOutput}
                 onRetry={perFileRun ? (inputPath) => rerun([inputPath]) : undefined}
