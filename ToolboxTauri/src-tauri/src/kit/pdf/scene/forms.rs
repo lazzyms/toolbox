@@ -201,6 +201,10 @@ fn read(doc: &Document) -> Result<FormInspection, String> {
 enum Fill { Text(String), Check(bool) }
 
 pub(super) struct FormPlan { fills: Vec<(FormField, Fill)>, objects: HashMap<(usize, usize), SceneObject>, layouts: HashMap<(usize, usize), TextLayout> }
+impl FormPlan {
+    /// A plan without fills leaves the document as it was, so it does not name the export.
+    pub(super) fn changes_document(&self) -> bool { !self.fills.is_empty() }
+}
 
 struct Appearance { size: f32, color: String }
 
@@ -244,7 +248,7 @@ fn text_object(field: &FormField, text: &str, size: (f32, f32)) -> SceneObject {
         Rect { x: PADDING, y: (height - line) / 2., width: (width - 2. * PADDING).max(1.), height: line }
     };
     SceneObject {
-        kind: Kind::Text, rect, text: text.into(), font_size, color: "#000000".into(), opacity: 1., strokes: Vec::new(),
+        kind: Kind::Text, rect, text: text.into(), font_size, color: "#000000".into(), opacity: 1.,
         shape: None, highlight_mode: None, signature_mode: None, signature_path: None, font_family: None, watermark_pattern: None,
         bold: false, italic: false, align: field.align, page_range: None,
     }
@@ -393,7 +397,7 @@ mod tests {
 
     fn fill(input: &Path, scene: PdfScene, values: serde_json::Value) -> crate::kit::contracts::JobOutcome {
         let sections = serde_json::from_value(serde_json::json!({ "formValues": values })).unwrap();
-        export(&ExportRequest { paths: vec![input.to_path_buf()], scene, output_location: OutputLocation::AlongsideInput, sections }, input.to_path_buf())
+        export(&ExportRequest { paths: vec![input.to_path_buf()], scene, output_location: OutputLocation::AlongsideInput, output_path: None, sections }, input.to_path_buf())
     }
 
     fn values() -> serde_json::Value {
@@ -487,7 +491,7 @@ mod tests {
         scene.pages[0].objects.push(note);
         let outcome = fill(&input, scene, serde_json::json!([{ "name": "agree", "value": false }]));
         assert!(outcome.error().is_none(), "{:?}", outcome.error());
-        assert_eq!(outcome.output_paths(), [temp.0.join("form-edited-1.pdf")]);
+        assert_eq!(outcome.output_paths(), [temp.0.join("form-edited.pdf")]);
         let doc = Document::load(&outcome.output_paths()[0]).unwrap();
         let agree = field(&doc, b"agree");
         assert_eq!((agree.get(b"V").unwrap().as_name().unwrap(), agree.get(b"AS").unwrap().as_name().unwrap()), (&b"Off"[..], &b"Off"[..]));
