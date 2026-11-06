@@ -1,6 +1,6 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
 use image::codecs::png::PngEncoder;
-use image::{DynamicImage, ImageBuffer, ImageFormat, ImageEncoder, Luma, Rgb, Rgba};
+use image::{DynamicImage, ImageFormat, ImageEncoder, Rgba};
 use image::AnimationDecoder;
 use std::collections::BTreeSet;
 use std::fs::File;
@@ -8,6 +8,7 @@ use std::io::{BufReader, Seek};
 use std::path::{Path, PathBuf};
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
+use crate::kit::common::watermark::{WatermarkOptions, WatermarkPosition};
 use crate::kit::contracts::ToolError;
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -50,13 +51,7 @@ pub enum ImageEdit {
         #[serde(default = "default_crop_anchor")] anchor: String,
     },
     Tone { brightness: i32, contrast: f32, #[serde(default)] saturation: f32, #[serde(default)] exposure: f32 },
-    Watermark {
-        #[serde(default)] text: Option<String>,
-        #[serde(default)] logo_path: Option<PathBuf>,
-        opacity: u8,
-        #[serde(default = "default_watermark_position")] x: u32,
-        #[serde(default = "default_watermark_position")] y: u32,
-    },
+    Watermark(WatermarkOptions),
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -121,8 +116,7 @@ impl ImageEditPlan {
                 ImageEdit::Tone { contrast, .. } if !(-100.0..=100.0).contains(contrast) => return Err("Contrast must be between -100 and 100.".to_string()),
                 ImageEdit::Tone { saturation, .. } if !(-100.0..=100.0).contains(saturation) => return Err("Saturation must be between -100 and 100.".to_string()),
                 ImageEdit::Tone { exposure, .. } if !(-100.0..=100.0).contains(exposure) => return Err("Exposure must be between -100 and 100.".to_string()),
-                ImageEdit::Watermark { opacity, text, logo_path, .. } if *opacity > 100 => return Err("Watermark opacity must be between 0 and 100.".to_string()),
-                ImageEdit::Watermark { text, logo_path, .. } if text.as_deref().is_none_or(|value| value.trim().is_empty()) && logo_path.is_none() => return Err("Provide watermark text or a logo image.".to_string()),
+                ImageEdit::Watermark(options) => options.validate()?,
                 _ => {}
             }
         }
@@ -133,8 +127,9 @@ impl ImageEditPlan {
 pub fn inspect_edit_preview(request: &ImageEditPreviewRequest) -> Result<ImagePreview, String> {
     let plan = request.plan.canonicalized();
     plan.validate()?;
-    let source = crate::kit::images::load_image(&request.path)?;
-    let (edited, format, quality) = apply_edit_plan(&plan, source, crate::kit::images::detect_format(&request.path))?;
+    let source = crate::kit::images::decode(&request.path)?;
+    let format = source.family.output_format();
+    let (edited, format, quality) = apply_edit_plan(&plan, source.into_first_page(), format)?;
     let encoded = crate::kit::images::encode(&edited, format, quality)?;
     let preview_source = match format {
         crate::kit::images::OutputFormat::Heic => heif::decode(&encoded)
@@ -148,11 +143,12 @@ pub fn inspect_edit_preview(request: &ImageEditPreviewRequest) -> Result<ImagePr
 pub fn export_edit_plan(plan: &ImageEditPlan, input: PathBuf) -> JobOutcome {
     let plan = plan.canonicalized();
     if let Err(error) = plan.validate() { return failure(input, error); }
-    let source = match crate::kit::images::load_image(&input) {
-        Ok(image) => image,
+    let source = match crate::kit::images::decode(&input) {
+        Ok(source) => source,
         Err(error) => return failure(input, error),
     };
-    let (edited, format, quality) = match apply_edit_plan(&plan, source, crate::kit::images::detect_format(&input)) {
+    let format = source.family.output_format();
+    let (edited, format, quality) = match apply_edit_plan(&plan, source.into_first_page(), format) {
         Ok(value) => value,
         Err(error) => return failure(input, error),
     };
@@ -239,10 +235,7 @@ fn apply_edit_plan(plan: &ImageEditPlan, mut image: DynamicImage, mut format: cr
                 }
                 image = DynamicImage::ImageRgba8(rgba).adjust_contrast(*contrast);
             }
-            ImageEdit::Watermark { text, logo_path, opacity, x, y } => {
-                let request = WatermarkRequest { paths: vec![], opacity: *opacity, text: text.clone(), logo_path: logo_path.clone(), x: *x, y: *y, output_location: OutputLocation::AlongsideInput };
-                image = apply_watermark(image, &request)?;
-            }
+            ImageEdit::Watermark(options) => image = apply_watermark(image, options)?,
         }
     }
     Ok((image, format, quality.clamp(1, 100)))
@@ -295,7 +288,7 @@ pub(crate) fn parse_output_format(format: &str) -> Result<crate::kit::images::Ou
 }
 
 pub fn inspect_preview(request: &ImagePreviewRequest) -> Result<ImagePreview, String> {
-    let image = crate::kit::images::load_image(&request.path).map_err(|error| format!("Could not preview image: {error}"))?;
+    let image = crate::kit::images::decode(&request.path).map_err(|error| format!("Could not preview image: {error}"))?.into_first_page();
     let width = image.width();
     let height = image.height();
     let preview = image.thumbnail(1200, 900).to_rgba8();
@@ -316,9 +309,10 @@ pub fn inspect_preview(request: &ImagePreviewRequest) -> Result<ImagePreview, St
 }
 
 pub fn inspect_tiff_pages(request: &TiffPreviewRequest) -> Result<Vec<ImagePreview>, String> {
-    read_tiff_pages(&request.path)?
-        .iter()
-        .map(|page| tiff_page_to_dynamic(page).and_then(encode_preview))
+    crate::kit::images::decode(&request.path)?
+        .pages
+        .into_iter()
+        .map(encode_preview)
         .collect()
 }
 
@@ -358,11 +352,7 @@ pub struct ToneRequest {
 #[serde(rename_all = "camelCase")]
 pub struct WatermarkRequest {
     pub paths: Vec<PathBuf>,
-    pub opacity: u8,
-    #[serde(default)] pub text: Option<String>,
-    #[serde(default)] pub logo_path: Option<PathBuf>,
-    #[serde(default = "default_watermark_position")] pub x: u32,
-    #[serde(default = "default_watermark_position")] pub y: u32,
+    #[serde(flatten)] pub options: WatermarkOptions,
     pub output_location: OutputLocation,
 }
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -405,9 +395,6 @@ pub struct TiffPreviewRequest { pub path: PathBuf }
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MetadataRequest { pub paths: Vec<PathBuf>, pub output_location: OutputLocation }
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MetadataReport { pub path: PathBuf, pub exif: bool, pub gps: bool, pub xmp: bool, pub icc: bool, pub orientation: bool, pub unsupported: Vec<String> }
 
 pub fn resize(request: &ResizeRequest, input: PathBuf) -> JobOutcome {
     transform(request.paths.as_slice(), input, &request.output_location, "-resized", |image| {
@@ -505,21 +492,26 @@ pub fn tone(request: &ToneRequest, input: PathBuf) -> JobOutcome {
 }
 pub fn watermark(request: &WatermarkRequest, input: PathBuf) -> JobOutcome {
     transform(&request.paths, input, &request.output_location, "-watermarked", |image| {
-        apply_watermark(image, request)
+        apply_watermark(image, &request.options)
     })
 }
 
-fn apply_watermark(image: DynamicImage, request: &WatermarkRequest) -> Result<DynamicImage, String> {
+fn apply_watermark(image: DynamicImage, options: &WatermarkOptions) -> Result<DynamicImage, String> {
+    options.validate()?;
+    let (x, y) = match options.position {
+        Some(WatermarkPosition::Offset { x, y }) => (x, y),
+        _ => (16, 16),
+    };
     let mut image = image.to_rgba8();
     let original_alpha = image.pixels().map(|pixel| pixel.0[3]).collect::<Vec<_>>();
-    let alpha = request.opacity.min(100) as u16 * 255 / 100;
+    let alpha = options.opacity as u16 * 255 / 100;
     let mut watermark = image::RgbaImage::new(image.width(), image.height());
-    if let Some(text) = request.text.as_deref().filter(|text| !text.trim().is_empty()) {
-        draw_text(&mut watermark, text, request.x, request.y, alpha as u8)?;
+    if let Some(text) = options.text() {
+        draw_text(&mut watermark, text, x, y, alpha as u8)?;
     }
-    if let Some(path) = request.logo_path.as_ref() {
-        let logo = crate::kit::images::load_image(path)?.to_rgba8();
-        image::imageops::overlay(&mut watermark, &logo, request.x as i64, request.y as i64);
+    if let Some(path) = options.logo_path.as_ref() {
+        let logo = crate::kit::images::decode(path)?.into_first_page().to_rgba8();
+        image::imageops::overlay(&mut watermark, &logo, x as i64, y as i64);
     }
     if watermark.pixels().all(|pixel| pixel.0[3] == 0) {
         return Err("Provide watermark text or a logo image.".to_string());
@@ -529,14 +521,15 @@ fn apply_watermark(image: DynamicImage, request: &WatermarkRequest) -> Result<Dy
     Ok(DynamicImage::ImageRgba8(image))
 }
 
-fn default_watermark_position() -> u32 { 16 }
-
 const WATERMARK_FONT_RESOURCE: &str = "watermarkFont";
 const WATERMARK_FONT_FILE: &str = "DejaVuSans.ttf";
 const WATERMARK_FONT_SIZE: f32 = 32.0;
 const INCLUDED_WATERMARK_FONT: &[u8] = include_bytes!("../../../resources/fonts/DejaVuSans.ttf");
 
-fn watermark_font_bytes() -> Result<Vec<u8>, String> {
+/// The bundled Unicode font (DejaVu Sans): a development override or the staged
+/// bundle copy when present, otherwise the copy built into the app. Watermarks draw
+/// with it and searchable OCR PDFs embed a subset of it.
+pub(crate) fn bundled_text_font_bytes() -> Result<Vec<u8>, String> {
     let bundled_root = crate::kit::resources::application_resource_root()
         .map(|root| root.join("resources").join("fonts"));
     if let Some(root) = bundled_root.filter(|root| root.join("manifest.json").is_file()) {
@@ -547,13 +540,13 @@ fn watermark_font_bytes() -> Result<Vec<u8>, String> {
             WATERMARK_FONT_FILE,
         )?;
         return std::fs::read(&resource.path)
-            .map_err(|error| format!("Could not read bundled watermark font: {error}"));
+            .map_err(|error| format!("Could not read the bundled font: {error}"));
     }
     Ok(INCLUDED_WATERMARK_FONT.to_vec())
 }
 
 fn draw_text(canvas: &mut image::RgbaImage, text: &str, x: u32, y: u32, alpha: u8) -> Result<(), String> {
-    let bytes = watermark_font_bytes()?;
+    let bytes = bundled_text_font_bytes()?;
     let font = fontdue::Font::from_bytes(bytes.clone(), fontdue::FontSettings::default())
         .map_err(|error| format!("Could not parse bundled watermark font: {error}"))?;
     let mut face = rustybuzz::Face::from_slice(&bytes, 0)
@@ -821,8 +814,8 @@ pub fn tiff(request: &TiffRequest) -> JobOutcome {
             if !request.paths.iter().any(|path| path == &page_ref.path) {
                 return failure(page_ref.path.clone(), "The TIFF page selection contains an unselected file.".to_string());
             }
-            let decoded = match read_tiff_pages(&page_ref.path) {
-                Ok(decoded) => decoded,
+            let decoded = match crate::kit::images::decode(&page_ref.path) {
+                Ok(decoded) => decoded.pages,
                 Err(error) => return failure(page_ref.path.clone(), format!("Could not process {}: {error}", page_ref.path.display())),
             };
             let Some(page) = decoded.get(page_ref.page) else {
@@ -834,8 +827,8 @@ pub fn tiff(request: &TiffRequest) -> JobOutcome {
     } else {
         let mut pages = Vec::new();
         for path in &request.paths {
-            match read_tiff_pages(path) {
-                Ok(mut decoded) => pages.append(&mut decoded),
+            match crate::kit::images::decode(path) {
+                Ok(mut decoded) => pages.append(&mut decoded.pages),
                 Err(error) => return failure(path.clone(), format!("Could not process {}: {error}", path.display())),
             }
         }
@@ -870,70 +863,28 @@ pub fn tiff(request: &TiffRequest) -> JobOutcome {
     }
 }
 
-#[derive(Clone)]
-enum TiffPage { Gray { width: u32, height: u32, data: Vec<u8> }, Rgb { width: u32, height: u32, data: Vec<u8> }, Rgba { width: u32, height: u32, data: Vec<u8> } }
-
-fn tiff_page_to_dynamic(page: &TiffPage) -> Result<DynamicImage, String> {
-    match page {
-        TiffPage::Gray { width, height, data } => ImageBuffer::<Luma<u8>, _>::from_raw(*width, *height, data.clone()).map(DynamicImage::ImageLuma8),
-        TiffPage::Rgb { width, height, data } => ImageBuffer::<Rgb<u8>, _>::from_raw(*width, *height, data.clone()).map(DynamicImage::ImageRgb8),
-        TiffPage::Rgba { width, height, data } => ImageBuffer::<Rgba<u8>, _>::from_raw(*width, *height, data.clone()).map(DynamicImage::ImageRgba8),
-    }
-    .ok_or_else(|| "TIFF page pixel data has an invalid length.".to_string())
-}
-
-fn read_tiff_pages(path: &std::path::Path) -> Result<Vec<TiffPage>, String> {
-    let file = File::open(path).map_err(|error| format!("Could not open TIFF: {error}"))?;
-    let mut decoder = tiff::decoder::Decoder::new(file).map_err(|error| format!("Could not read TIFF: {error}"))?;
-    let mut pages = Vec::new();
-    loop {
-        let (width, height) = decoder.dimensions().map_err(|error| format!("Could not read TIFF dimensions: {error}"))?;
-        let color = decoder.colortype().map_err(|error| format!("Could not read TIFF color type: {error}"))?;
-        let data = decoder.read_image().map_err(|error| format!("Unsupported TIFF page: {error}"))?;
-        let page = match (color, data) {
-            (tiff::ColorType::Gray(8), tiff::decoder::DecodingResult::U8(data)) => TiffPage::Gray { width, height, data },
-            (tiff::ColorType::RGB(8), tiff::decoder::DecodingResult::U8(data)) => TiffPage::Rgb { width, height, data },
-            (tiff::ColorType::RGBA(8), tiff::decoder::DecodingResult::U8(data)) => TiffPage::Rgba { width, height, data },
-            (color, _) => return Err(format!("Unsupported TIFF color type or bit depth: {color:?}")),
-        };
-        pages.push(page);
-        if !decoder.more_images() { break; }
-        decoder.next_image().map_err(|error| format!("Could not advance to TIFF page: {error}"))?;
-    }
-    Ok(pages)
-}
-
-fn write_tiff_pages(path: &std::path::Path, pages: &[TiffPage]) -> Result<(), String> {
+fn write_tiff_pages(path: &std::path::Path, pages: &[DynamicImage]) -> Result<(), String> {
     let file = File::create(path).map_err(|error| error.to_string())?;
     let mut encoder = tiff::encoder::TiffEncoder::new(file).map_err(|error| error.to_string())?;
     for page in pages { write_encoded_page(&mut encoder, page)?; }
     Ok(())
 }
 
-fn write_tiff_page(path: &std::path::Path, page: &TiffPage) -> Result<(), String> {
+fn write_tiff_page(path: &std::path::Path, page: &DynamicImage) -> Result<(), String> {
     let file = File::create(path).map_err(|error| error.to_string())?;
     let mut encoder = tiff::encoder::TiffEncoder::new(file).map_err(|error| error.to_string())?;
     write_encoded_page(&mut encoder, page)
 }
 
-fn write_encoded_page<W: std::io::Write + Seek>(encoder: &mut tiff::encoder::TiffEncoder<W>, page: &TiffPage) -> Result<(), String> {
+fn write_encoded_page<W: std::io::Write + Seek>(encoder: &mut tiff::encoder::TiffEncoder<W>, page: &DynamicImage) -> Result<(), String> {
     match page {
-        TiffPage::Gray { width, height, data } => encoder.write_image::<tiff::encoder::colortype::Gray8>(*width, *height, data).map_err(|error| error.to_string()),
-        TiffPage::Rgb { width, height, data } => encoder.write_image::<tiff::encoder::colortype::RGB8>(*width, *height, data).map_err(|error| error.to_string()),
-        TiffPage::Rgba { width, height, data } => encoder.write_image::<tiff::encoder::colortype::RGBA8>(*width, *height, data).map_err(|error| error.to_string()),
+        DynamicImage::ImageLuma8(page) => encoder.write_image::<tiff::encoder::colortype::Gray8>(page.width(), page.height(), page.as_raw()),
+        DynamicImage::ImageRgb8(page) => encoder.write_image::<tiff::encoder::colortype::RGB8>(page.width(), page.height(), page.as_raw()),
+        DynamicImage::ImageRgba8(page) => encoder.write_image::<tiff::encoder::colortype::RGBA8>(page.width(), page.height(), page.as_raw()),
+        page => return Err(format!("Unsupported TIFF page color type: {:?}", page.color())),
     }
+    .map_err(|error| error.to_string())
 }
-pub fn inspect_metadata(input: PathBuf) -> Result<MetadataReport, String> {
-    let bytes = std::fs::read(&input).map_err(|error| format!("Could not read image metadata: {error}"))?;
-    let exif = contains(&bytes, b"Exif\0\0");
-    let xmp = contains(&bytes, b"http://ns.adobe.com/xap/1.0/") || contains(&bytes, b"<x:xmpmeta");
-    let icc = contains(&bytes, b"ICC_PROFILE") || contains(&bytes, b"iCCP");
-    let gps = exif && (contains(&bytes, b"GPS") || contains(&bytes, b"gps"));
-    let orientation = exif && (contains(&bytes, b"Orientation") || contains(&bytes, b"orientation"));
-    let supported = exif || xmp || icc;
-    Ok(MetadataReport { path: input, exif, gps, xmp, icc, orientation, unsupported: if supported { Vec::new() } else { vec!["No supported EXIF, GPS, XMP, or ICC metadata marker was recognized.".to_string()] } })
-}
-
 pub fn strip_metadata(request: &MetadataRequest, input: PathBuf) -> JobOutcome {
     let image = match image::open(&input) { Ok(image) => image, Err(error) => return failure(input, format!("Could not read image: {error}")) };
     let output = match OutputNaming::reserve_destination(&input, &request.output_location, "-stripped", input.extension().and_then(|extension| extension.to_str()).unwrap_or("png")) {
@@ -942,7 +893,7 @@ pub fn strip_metadata(request: &MetadataRequest, input: PathBuf) -> JobOutcome {
     };
     let format = ImageFormat::from_path(output.path()).unwrap_or(ImageFormat::Png);
     if let Err(error) = image.save_with_format(output.path(), format) { return failure(input, format!("Could not save metadata-free image: {error}")); }
-    match inspect_metadata(output.path().to_path_buf()) {
+    match crate::kit::images::metadata::read_file(output.path()) {
         Ok(report) if !report.exif && !report.xmp && !report.icc => match output.publish() {
             Ok(path) => JobOutcome::succeeded(input, vec![path], "Metadata removed and verified"),
             Err(error) => failure(input, format!("Could not publish metadata-free image: {error}")),
@@ -952,10 +903,8 @@ pub fn strip_metadata(request: &MetadataRequest, input: PathBuf) -> JobOutcome {
     }
 }
 
-fn contains(bytes: &[u8], needle: &[u8]) -> bool { bytes.windows(needle.len()).any(|window| window == needle) }
-
 fn transform<F>(_: &[PathBuf], input: PathBuf, location: &OutputLocation, suffix: &str, edit: F) -> JobOutcome where F: FnOnce(DynamicImage) -> Result<DynamicImage, String> {
-    let image = match crate::kit::images::load_image(&input) { Ok(image) => image, Err(error) => return failure(input, format!("Could not read image: {error}")) };
+    let image = match crate::kit::images::decode(&input) { Ok(decoded) => decoded.into_first_page(), Err(error) => return failure(input, format!("Could not read image: {error}")) };
     let image = match edit(image) { Ok(image) => image, Err(error) => return failure(input, error) };
     let extension = input.extension().and_then(|extension| extension.to_str()).unwrap_or("png");
     let output = match OutputNaming::reserve_destination(&input, location, suffix, extension) {
@@ -979,6 +928,16 @@ mod tests {
     use super::*;
     use sha2::{Digest, Sha256};
     fn path(name: &str) -> PathBuf { std::env::temp_dir().join(format!("toolbox_tiff_{}_{}", std::process::id(), name)) }
+    fn gray(width: u32, height: u32, data: Vec<u8>) -> DynamicImage { DynamicImage::ImageLuma8(image::ImageBuffer::from_raw(width, height, data).unwrap()) }
+    fn read_pages(path: &Path) -> Result<Vec<DynamicImage>, String> { crate::kit::images::decode(path).map(|decoded| decoded.pages) }
+
+    fn text_watermark(input: &Path, text: &str, opacity: u8, offset: u32) -> WatermarkRequest {
+        WatermarkRequest {
+            paths: vec![input.to_path_buf()],
+            options: WatermarkOptions { text: Some(text.to_string()), logo_path: None, size: None, opacity, color: None, position: Some(WatermarkPosition::Offset { x: offset, y: offset }), rotation: 0.0 },
+            output_location: OutputLocation::AlongsideInput,
+        }
+    }
 
     #[test]
     fn splits_and_combines_pages_in_order() {
@@ -990,18 +949,18 @@ mod tests {
 
         let split = tiff(&TiffRequest { paths: vec![input.clone()], pages: None, output_location: OutputLocation::AlongsideInput, output_path: None });
         assert_eq!(split.output_paths().len(), 2);
-        assert_eq!(read_tiff_pages(&split.output_paths()[0]).unwrap().len(), 1);
-        assert_eq!(read_tiff_pages(&split.output_paths()[1]).unwrap().len(), 1);
+        assert_eq!(read_pages(&split.output_paths()[0]).unwrap().len(), 1);
+        assert_eq!(read_pages(&split.output_paths()[1]).unwrap().len(), 1);
 
         let first = path("first.tiff");
         let second = path("second.tiff");
-        write_tiff_page(&first, &TiffPage::Gray { width: 1, height: 1, data: vec![1] }).unwrap();
-        write_tiff_page(&second, &TiffPage::Gray { width: 1, height: 1, data: vec![2] }).unwrap();
+        write_tiff_page(&first, &gray(1, 1, vec![1])).unwrap();
+        write_tiff_page(&second, &gray(1, 1, vec![2])).unwrap();
         let combined = tiff(&TiffRequest { paths: vec![first.clone(), second.clone()], pages: None, output_location: OutputLocation::AlongsideInput, output_path: None });
-        let pages = read_tiff_pages(&combined.output_paths()[0]).unwrap();
+        let pages = read_pages(&combined.output_paths()[0]).unwrap();
         assert_eq!(pages.len(), 2);
-        assert!(matches!(&pages[0], TiffPage::Gray { data, .. } if data == &vec![1]));
-        assert!(matches!(&pages[1], TiffPage::Gray { data, .. } if data == &vec![2]));
+        assert_eq!(pages[0].as_bytes(), &[1]);
+        assert_eq!(pages[1].as_bytes(), &[2]);
 
         for output in split.output_paths() { let _ = std::fs::remove_file(output); }
         let _ = std::fs::remove_file(input);
@@ -1029,7 +988,7 @@ mod tests {
         let mut encoder = tiff::encoder::TiffEncoder::new(file).unwrap();
         encoder.write_image::<tiff::encoder::colortype::Gray8>(2, 1, &[10, 20]).unwrap();
         encoder.write_image::<tiff::encoder::colortype::Gray8>(2, 1, &[30, 40]).unwrap();
-        write_tiff_page(&one_page, &TiffPage::Gray { width: 1, height: 1, data: vec![2] }).unwrap();
+        write_tiff_page(&one_page, &gray(1, 1, vec![2])).unwrap();
 
         let outcome = tiff(&TiffRequest {
             paths: vec![two_page.clone(), one_page.clone()],
@@ -1043,11 +1002,11 @@ mod tests {
 
         assert!(outcome.error().is_none(), "selected TIFF pages failed: {:?}", outcome.error());
         let output = outcome.output_paths().first().unwrap().clone();
-        let pages = read_tiff_pages(&output).unwrap();
+        let pages = read_pages(&output).unwrap();
         assert_eq!(pages.len(), 3);
-        assert!(matches!(&pages[0], TiffPage::Gray { data, .. } if data == &vec![30, 40]));
-        assert!(matches!(&pages[1], TiffPage::Gray { data, .. } if data == &vec![2]));
-        assert!(matches!(&pages[2], TiffPage::Gray { data, .. } if data == &vec![10, 20]));
+        assert_eq!(pages[0].as_bytes(), &[30, 40]);
+        assert_eq!(pages[1].as_bytes(), &[2]);
+        assert_eq!(pages[2].as_bytes(), &[10, 20]);
 
         let _ = std::fs::remove_file(two_page);
         let _ = std::fs::remove_file(one_page);
@@ -1055,21 +1014,11 @@ mod tests {
     }
 
     #[test]
-    fn reports_unrecognized_metadata_explicitly() {
-        let input = path("metadata.png");
-        image::RgbaImage::from_pixel(1, 1, image::Rgba([1, 2, 3, 255])).save(&input).unwrap();
-        let report = inspect_metadata(input.clone()).unwrap();
-        assert!(!report.exif && !report.gps && !report.xmp && !report.icc);
-        assert!(!report.unsupported.is_empty());
-        let _ = std::fs::remove_file(input);
-    }
-
-    #[test]
     fn text_watermark_composites_without_changing_alpha() {
         let input = path("watermark-input.png");
         let image = image::RgbaImage::from_pixel(64, 32, image::Rgba([10, 20, 30, 77]));
         image.save(&input).unwrap();
-        let result = watermark(&WatermarkRequest { paths: vec![input.clone()], opacity: 50, text: Some("TOOL".to_string()), logo_path: None, x: 2, y: 2, output_location: OutputLocation::AlongsideInput }, input.clone());
+        let result = watermark(&text_watermark(&input, "TOOL", 50, 2), input.clone());
         let output = result.output_paths().first().unwrap();
         let output_image = image::open(output).unwrap().to_rgba8();
         assert!(output_image.pixels().any(|pixel| pixel.0[0..3] != [10, 20, 30]));
@@ -1105,15 +1054,7 @@ mod tests {
         let existing_bytes = b"existing output must remain intact";
         std::fs::write(&output, existing_bytes).unwrap();
 
-        let result = watermark(&WatermarkRequest {
-            paths: vec![input.clone()],
-            opacity: 80,
-            text: Some("Café Ж \u{10FFFF}".to_string()),
-            logo_path: None,
-            x: 4,
-            y: 4,
-            output_location: OutputLocation::AlongsideInput,
-        }, input.clone());
+        let result = watermark(&text_watermark(&input, "Café Ж \u{10FFFF}", 80, 4), input.clone());
 
         let error = result.error().expect("unsupported text must fail");
         assert!(error.message.contains("Unsupported watermark characters"));
@@ -1152,15 +1093,7 @@ mod tests {
         let existing_bytes = b"do not overwrite this output";
         std::fs::write(&existing_output, existing_bytes).unwrap();
 
-        let result = watermark(&WatermarkRequest {
-            paths: vec![input.clone()],
-            opacity: 50,
-            text: Some("Safe".to_string()),
-            logo_path: None,
-            x: 4,
-            y: 4,
-            output_location: OutputLocation::AlongsideInput,
-        }, input.clone());
+        let result = watermark(&text_watermark(&input, "Safe", 50, 4), input.clone());
 
         assert!(result.error().is_none(), "watermark failed: {:?}", result.error());
         let output = result.output_paths().first().expect("watermark output");
