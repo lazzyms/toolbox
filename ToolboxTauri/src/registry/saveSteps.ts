@@ -17,8 +17,9 @@ const manyToOneSaveSteps: Record<string, ManyToOneSaveStep> = {
   // A comparison reads exactly two PDFs and writes one text report.
   compare_pdfs: { title: "Save the comparison report", extension: "txt", runLabel: "Compare…", minimumInputs: 2, summary: () => "2 PDFs, compared line by line." },
   create_gif: { title: "Save the GIF", extension: "gif", runLabel: "Make GIF…", minimumInputs: 1, summary: (n) => `${count(n, "frame", "frames")}, in the order shown.` },
-  // One TIFF splits into pages, so only a combine of two or more makes one file.
-  process_tiff_pages: { title: "Save the combined TIFF", extension: "tiff", runLabel: "Make TIFF…", minimumInputs: 2, summary: (n) => `${count(n, "TIFF file", "TIFF files")}, combined in the order shown.` },
+  // The registry describes Combine mode, which always makes one file, even from one TIFF. Split mode runs as a
+  // per-file batch without this step.
+  process_tiff_pages: { title: "Save the combined TIFF", extension: "tiff", runLabel: "Make TIFF…", minimumInputs: 1, summary: (n) => `${count(n, "TIFF file", "TIFF files")}, combined in the order shown.` },
 };
 
 export const saveStepFor = (tool: { command: string; capability: { manyToOne: boolean } }): ManyToOneSaveStep | null => {

@@ -24,6 +24,16 @@ pub struct ToolLimits {
     pub max_duration: Duration,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct HelperDeadline { pub per_file: Duration, pub per_page: Duration }
+
+impl HelperDeadline {
+    pub(crate) fn limit(self, files: usize, pages: usize) -> Duration {
+        let count = |value: usize| u32::try_from(value).unwrap_or(u32::MAX);
+        self.per_file * count(files) + self.per_page * count(pages)
+    }
+}
+
 // Expansion stays under the image crate's 512 MiB allocation default so this check, not a decoder error, reports it.
 const PDF: ToolLimits = ToolLimits { max_bytes: GB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES };
 const IMAGE: ToolLimits = ToolLimits { max_bytes: 250 * MB, max_pages: None, max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES };
@@ -32,10 +42,10 @@ const PAGED_IMAGE: ToolLimits = ToolLimits { max_pages: Some(1_000), ..IMAGE };
 pub fn recorded(command: &str) -> Option<ToolLimits> {
     Some(match command {
         "remove_password" | "protect_files" | "export_pdf_scene" | "crop_pdf" | "sign_pdf" | "edit_pdf" | "edit_pdf_session"
-        | "organize_pdf" | "add_pdf_pages" | "add_page_numbers" | "watermark_pdf" | "compress_pdf" | "remove_pdf_pages"
-        | "extract_pdf_pages" | "merge_pdfs" | "split_pdf" | "pdf_to_images" | "pdf_to_text" | "extract_pdf_images"
+        | "add_page_numbers" | "watermark_pdf" | "compress_pdf"
+        | "extract_pdf_pages" | "merge_pdfs" | "split_pdf" | "pdf_to_images" | "extract_from_pdf"
         | "ocr_pdf" | "rotate_pdf" | "repair_pdf" | "redact_pdf" | "compare_pdfs" => PDF,
-        "compress_images" | "convert_images" | "export_image_edit_plan" | "images_to_pdf" | "blur_faces"
+        "compress_images" | "convert_images" | "export_image_edit_plan" | "export_image_edit_stack" | "images_to_pdf" | "blur_faces"
         | "remove_image_background" | "resize_images" | "rotate_images" | "crop_images" | "adjust_image_tone"
         | "watermark_images" | "generate_icon_set" | "create_gif" => IMAGE,
         "extract_gif_frames" | "process_tiff_pages" | "image_metadata" => PAGED_IMAGE,
@@ -392,7 +402,7 @@ fn bytes_label(bytes: u64) -> String {
     }
 }
 
-fn duration_label(duration: Duration) -> String {
+pub(crate) fn duration_label(duration: Duration) -> String {
     let plural = |count: u128, unit: &str| if count == 1 { format!("1 {unit}") } else { format!("{count} {unit}s") };
     match duration.as_millis() {
         millis if millis >= 60_000 && millis % 60_000 == 0 => plural(millis / 60_000, "minute"),
@@ -401,7 +411,7 @@ fn duration_label(duration: Duration) -> String {
     }
 }
 
-fn count_label(count: u64) -> String {
+pub(crate) fn count_label(count: u64) -> String {
     let digits = count.to_string();
     let mut label = String::with_capacity(digits.len() + digits.len() / 3);
     for (index, digit) in digits.chars().enumerate() {
