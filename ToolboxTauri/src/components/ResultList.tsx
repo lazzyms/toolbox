@@ -58,13 +58,14 @@ interface ResultListProps {
     resultVerb: string;
     runningVerb: string;
     runningDetail?: string;
+    signatureRemovedNote?: string;
     live: LiveRun | null;
     namedByOutput?: boolean;
     onRetry?: (inputPath: string) => Promise<void>;
     onRetryWithPassword?: (inputPath: string, password: string) => Promise<void>;
 }
 
-export const ResultList = ({ results, progress, loading, resultVerb, runningVerb, runningDetail, live, namedByOutput = false, onRetry, onRetryWithPassword }: ResultListProps) => {
+export const ResultList = ({ results, progress, loading, resultVerb, runningVerb, runningDetail, signatureRemovedNote, live, namedByOutput = false, onRetry, onRetryWithPassword }: ResultListProps) => {
     const [actionStates, setActionStates] = useState<Record<number, RowActionState>>({});
     const [passwordRow, setPasswordRow] = useState<number | null>(null);
     // Page details start open, the way the board shows them; a row can fold its own away.
@@ -100,7 +101,7 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
     const reveal = revealButtonLabel();
 
     const finishedRow = (result: JobOutcome, index: number) => {
-        const view = rowView(result, resultVerb, namedByOutput);
+        const view = rowView(result, resultVerb, namedByOutput, signatureRemovedNote);
         const state = actionStates[index] ?? idleActionState;
         const busy = state.pending !== null;
         const name = view.name;
