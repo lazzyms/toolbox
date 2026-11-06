@@ -1881,6 +1881,142 @@ mod command_tests {
         assert_eq!(after, originals);
     }
 
+    /// Fake helpers whose engine reads each rendered page back as "page N", so a text
+    /// file shows which pages were recognized and in what order.
+    #[cfg(unix)]
+    fn page_number_ocr_helpers(root: &PathBuf) -> EnvGuard {
+        let [renderer, engine, tessdata] = fake_ocr_helpers(root);
+        std::fs::write(&engine, "#!/bin/sh\nn=${1##*page-}\nprintf 'page %s\\n' \"${n%.png}\"\n").unwrap();
+        EnvGuard::set(&[("TOOLBOX_RESOURCE_ROOT", Some(root.join("no-bundle"))), ("TOOLBOX_PDFTOPPM_PATH", Some(renderer)), ("TOOLBOX_TESSERACT_PATH", Some(engine)), ("TOOLBOX_TESSDATA_PATH", Some(tessdata))])
+    }
+
+    fn ranged_ocr_request(mode: &str, range: &str, paths: Vec<PathBuf>, output_location: OutputLocation) -> vision::OcrRequest {
+        vision::OcrRequest { page_range: Some(range.into()), ..ocr_request_with(mode, false, paths, output_location) }
+    }
+
+    fn written(folder: &PathBuf) -> Vec<String> {
+        let mut names = std::fs::read_dir(folder).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect::<Vec<_>>();
+        names.sort();
+        names
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ocr_range_runs_in_page_order_copies_pages_outside_it_and_leaves_them_out_of_a_text_file() {
+        let _guard = crate::kit::lock_process_env();
+        let root = sandbox("ocr-range-scope");
+        let input = root.join("scan.pdf");
+        drawn_pdf(&input, 4);
+        let original = std::fs::read(&input).unwrap();
+        let before = page_boxes_and_streams(&input);
+
+        let searchable = {
+            let _env = word_box_ocr_helpers(&root, &[("Searchable", 200, 500), ("words", 750, 400)]);
+            tauri::async_runtime::block_on(ocr_pdf(RunEvents::silent(), ranged_ocr_request("searchablePdf", "4, 1-2", vec![input.clone()], location(&root, "pdf")))).remove(0)
+        };
+        let pdf = searchable.output_paths().first().cloned().unwrap_or_else(|| panic!("no searchable PDF: {:?}", searchable.state));
+        let after = page_boxes_and_streams(&pdf);
+        let reopened = lopdf::Document::load(&pdf).unwrap();
+        let layered = (1..=4).map(|page| reopened.extract_text(&[page]).unwrap_or_default().contains("Searchable")).collect::<Vec<_>>();
+        let text = {
+            let _env = page_number_ocr_helpers(&root);
+            tauri::async_runtime::block_on(ocr_pdf(RunEvents::silent(), ranged_ocr_request("text", "4, 1-2", vec![input.clone()], location(&root, "text")))).remove(0)
+        };
+        let text_file = text.output_paths().first().map(|path| std::fs::read_to_string(path).unwrap()).unwrap_or_default();
+        let input_after = std::fs::read(&input).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert!(searchable.error().is_none(), "{:?}", searchable.error());
+        assert_eq!(searchable.detail, "3 pages recognized. English.");
+        assert_eq!(after.len(), 4, "the searchable PDF is still the whole document");
+        assert_eq!(after[2], before[2], "page 3 is outside the range and is copied byte for byte");
+        assert_eq!(layered, [true, true, false, true], "only pages in the range gain a text layer");
+        assert!(text.error().is_none(), "{:?}", text.error());
+        assert_eq!(text.detail, "3 pages recognized. English.");
+        assert_eq!(text_file, "page 1\n\u{c}page 2\n\u{c}page 4\n", "a range typed out of order runs in page order and page 3 is left out");
+        assert_eq!(input_after, original);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ocr_clamps_one_range_to_each_file_and_skips_the_file_with_no_pages_left() {
+        use crate::kit::contracts::SkipCode;
+        let _guard = crate::kit::lock_process_env();
+        let root = sandbox("ocr-range-batch");
+        let (long, medium, short) = (root.join("long.pdf"), root.join("medium.pdf"), root.join("short.pdf"));
+        drawn_pdf(&long, 10); drawn_pdf(&medium, 3); drawn_pdf(&short, 1);
+        let paths = vec![long.clone(), medium.clone(), short.clone()];
+        let originals = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+
+        let texts = {
+            let _env = page_number_ocr_helpers(&root);
+            tauri::async_runtime::block_on(ocr_pdf(RunEvents::silent(), ranged_ocr_request("text", "9-, 2-4", paths.clone(), location(&root, "text"))))
+        };
+        let pdfs = {
+            let _env = word_box_ocr_helpers(&root, &[("Searchable", 200, 500), ("words", 750, 400)]);
+            tauri::async_runtime::block_on(ocr_pdf(RunEvents::silent(), ranged_ocr_request("searchablePdf", "9-, 2-4", paths.clone(), location(&root, "pdf"))))
+        };
+        let text_of = |outcome: &JobOutcome| outcome.output_paths().first().map(|path| std::fs::read_to_string(path).unwrap()).unwrap_or_default();
+        let (long_text, medium_text) = (text_of(&texts[0]), text_of(&texts[1]));
+        let layered = |outcome: &JobOutcome| outcome.output_paths().first().map(|pdf| {
+            let document = lopdf::Document::load(pdf).unwrap();
+            document.get_pages().keys().filter(|page| document.extract_text(&[**page]).unwrap_or_default().contains("Searchable")).copied().collect::<Vec<_>>()
+        }).unwrap_or_default();
+        let (long_layers, medium_layers) = (layered(&pdfs[0]), layered(&pdfs[1]));
+        let written_files = [written(&root.join("text")), written(&root.join("pdf"))];
+        let after = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+        let _ = std::fs::remove_dir_all(&root);
+
+        for outcomes in [&texts, &pdfs] {
+            assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), paths);
+            for outcome in &outcomes[..2] { assert!(outcome.error().is_none(), "{:?}", outcome.error()); }
+            let OutcomeState::Skipped { reason } = &outcomes[2].state else { panic!("expected short.pdf to be skipped: {:?}", outcomes[2]) };
+            assert_eq!(reason.code, SkipCode::RangeEmptyAfterClamping);
+            assert_eq!(reason.message, "No pages left in 9-, 2-4. It has 1 page, so nothing was made.");
+            assert!(outcomes[2].output_paths().is_empty());
+        }
+        assert_eq!(long_text, "page 2\n\u{c}page 3\n\u{c}page 4\n\u{c}page 9\n\u{c}page 10\n");
+        assert_eq!(medium_text, "page 2\n\u{c}page 3\n", "the range is shortened to the pages medium.pdf has");
+        assert_eq!(long_layers, vec![2, 3, 4, 9, 10]);
+        assert_eq!(medium_layers, vec![2, 3]);
+        assert_eq!(written_files, [vec!["long-ocr.txt".to_string(), "medium-ocr.txt".to_string()], vec!["long-ocr.pdf".to_string(), "medium-ocr.pdf".to_string()]], "the skipped file writes nothing");
+        assert_eq!(after, originals);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ocr_range_over_only_text_pages_is_skipped_and_one_with_a_scanned_page_succeeds() {
+        use crate::kit::contracts::SkipCode;
+        let _guard = crate::kit::lock_process_env();
+        let root = sandbox("ocr-range-mixed");
+        let _env = word_box_ocr_helpers(&root, &[("Searchable", 200, 500), ("words", 750, 400)]);
+        let input = root.join("mixed.pdf");
+        mixed_text_pdf(&input);
+        let original = std::fs::read(&input).unwrap();
+
+        let run = |mode: &str, range: &str, folder: &str| tauri::async_runtime::block_on(ocr_pdf(RunEvents::silent(), ranged_ocr_request(mode, range, vec![input.clone()], location(&root, folder)))).remove(0);
+        let text_only = [run("searchablePdf", "3, 2", "text-only-pdf"), run("text", "3, 2", "text-only-file")];
+        let with_scan = run("searchablePdf", "2-4", "with-scan-pdf");
+        let with_scan_text = run("text", "2-4", "with-scan-file");
+        let written_files = ["text-only-pdf", "text-only-file", "with-scan-pdf", "with-scan-file"].map(|folder| written(&root.join(folder)).len());
+        let input_after = std::fs::read(&input).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+
+        for outcome in &text_only {
+            let OutcomeState::Skipped { reason } = &outcome.state else { panic!("expected Skipped: {outcome:?}") };
+            assert_eq!(reason.code, SkipCode::TextAlreadyPresent);
+            assert_eq!(reason.message, "Every page already has text: page 2 visible, page 3 from an earlier OCR run. Nothing was made. Turn on Force to replace the earlier OCR text.");
+            assert!(outcome.output_paths().is_empty());
+        }
+        assert!(with_scan.error().is_none(), "{:?}", with_scan.error());
+        assert_eq!(with_scan.detail, "1 of 3 pages recognized, 2 skipped for their text.");
+        assert_eq!(page_details(&with_scan), rows(&[("Recognized", "Page 4"), ("Skipped, visible text", "Page 2"), ("Skipped, earlier OCR text", "Page 3. Turn on Force to replace it."), ("Languages", "English")]));
+        assert!(with_scan_text.error().is_none(), "{:?}", with_scan_text.error());
+        assert_eq!(page_details(&with_scan_text), rows(&[("Recognized", "Page 4"), ("Visible text, added as it is", "Page 2"), ("Earlier OCR text, added as it is", "Page 3"), ("Outside 2-4, left out", "Page 1"), ("Languages", "English")]));
+        assert_eq!(written_files, [0, 0, 1, 1]);
+        assert_eq!(input_after, original);
+    }
+
     fn split_ranges_request(paths: Vec<PathBuf>, ranges: &str, output_location: OutputLocation) -> PageSelectionRequest {
         PageSelectionRequest { paths, pages: vec![], page_ranges: Some(ranges.into()), split_mode: Some("ranges".into()), chunk_size: None, output_location }
     }

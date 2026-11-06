@@ -87,7 +87,7 @@ test.describe("PDF Conversion tools send their exact requests", () => {
         await page.getByLabel("Output format").selectOption("png");
         await page.getByRole("checkbox", { name: "Page 2" }).click();
         expect(await exportAndCapture(page, "pdf_to_images")).toEqual(sent({
-            paths: ["/local/report.three.pdf"], dpi: 300, format: "png", pageRange: "1,3", pages: [0, 2], outputLocation,
+            paths: ["/local/report.three.pdf"], dpi: 300, format: "png", pageRange: "1, 3", pages: [0, 2], outputLocation,
         }));
 
         await page.getByRole("textbox", { name: "Page range" }).fill("2-3");

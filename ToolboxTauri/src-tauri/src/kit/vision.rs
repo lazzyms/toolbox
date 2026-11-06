@@ -117,7 +117,8 @@ fn text_file_within(request: &OcrRequest, input: PathBuf, deadline: HelperDeadli
     };
     let plan = match PagePlan::of(&document, request.page_range(), request.force) {
         Ok(plan) => plan,
-        Err(error) => return failure(input, error),
+        Err(NoPlan::Failed(error)) => return failure(input, error),
+        Err(NoPlan::Skipped(reason)) => return JobOutcome::skipped(input, reason),
     };
     let recognized = plan.recognized();
     if recognized.is_empty() { return JobOutcome::skipped(input, plan.text_present()); }
@@ -163,6 +164,10 @@ fn recognized_detail(pages: usize) -> String {
 
 fn count(number: usize, one: &str, many: &str) -> String { format!("{number} {}", if number == 1 { one } else { many }) }
 
+/// Why a file has no pages to work on: it can't be read, or the range leaves none of its pages.
+#[derive(Debug)]
+enum NoPlan { Failed(String), Skipped(SkipReason) }
+
 /// The pages in scope, in page order, and the text each one already has.
 struct PagePlan {
     scope: Vec<(OcrPage, PageText)>,
@@ -175,21 +180,35 @@ impl PagePlan {
     /// Checks every page in scope for text before anything is recognized. Without
     /// Force any text keeps a page as it is; with Force a page whose only text is an
     /// invisible layer is read again. Visible text is never read again.
-    fn of(document: &Document, range: Option<&str>, force: bool) -> Result<Self, String> {
+    ///
+    /// One range applies to every file in a batch, so it is clamped to this file's
+    /// length; a file with no pages left is skipped. Pages are always taken in page
+    /// order, whatever order the range was typed in.
+    fn of(document: &Document, range: Option<&str>, force: bool) -> Result<Self, NoPlan> {
         let pages = document.get_pages();
-        if pages.is_empty() { return Err("PDF has no pages to OCR.".to_string()); }
-        let requested = range.map(|range| PageRanges::parse(range).and_then(|ranges| ranges.within(pages.len()))).transpose()?;
+        if pages.is_empty() { return Err(NoPlan::Failed("PDF has no pages to OCR.".to_string())); }
+        let requested = match range {
+            Some(range) => {
+                let ranges = PageRanges::parse(range).map_err(NoPlan::Failed)?;
+                let clamped = ranges.clamp_or_skip(pages.len()).map_err(|skip| NoPlan::Skipped(SkipReason::new(
+                    skip.code,
+                    format!("No pages left in {ranges}. It has {}, so nothing was made.", count(pages.len(), "page", "pages")),
+                )))?;
+                Some(clamped.page_indices())
+            }
+            None => None,
+        };
         let mut scope = Vec::new();
         let mut outside = Vec::new();
         for (number, page_id) in pages {
-            if requested.as_ref().is_some_and(|spans| !spans.iter().any(|&(first, last)| (first..=last).contains(&(number as usize)))) {
+            if requested.as_ref().is_some_and(|indices| indices.binary_search(&(number as usize - 1)).is_err()) {
                 outside.push(number);
                 continue;
             }
-            let text = text_layer::page_text(document, page_id).map_err(|error| format!("Page {number}'s text could not be checked: {error}"))?;
+            let text = text_layer::page_text(document, page_id).map_err(|error| NoPlan::Failed(format!("Page {number}'s text could not be checked: {error}")))?;
             scope.push((OcrPage { number }, text));
         }
-        if scope.is_empty() { return Err("Select at least one PDF page for OCR.".to_string()); }
+        if scope.is_empty() { return Err(NoPlan::Failed("Select at least one PDF page for OCR.".to_string())); }
         Ok(Self { scope, outside, force })
     }
 
@@ -479,7 +498,8 @@ fn searchable_pdf_within(request: &OcrRequest, input: PathBuf, deadline: HelperD
     };
     let plan = match PagePlan::of(&document, request.page_range(), request.force) {
         Ok(plan) => plan,
-        Err(error) => return failure(input, error),
+        Err(NoPlan::Failed(error)) => return failure(input, error),
+        Err(NoPlan::Skipped(reason)) => return JobOutcome::skipped(input, reason),
     };
     let pages = plan.recognized();
     if pages.is_empty() { return JobOutcome::skipped(input, plan.text_present()); }
@@ -935,16 +955,17 @@ mod tests {
     }
 
     #[test]
-    fn selected_ocr_pages_preserve_document_order_and_reject_out_of_range_pages() {
+    fn selected_ocr_pages_preserve_document_order_and_clamp_the_range_to_the_file() {
         let _guard = crate::kit::lock_process_env();
         let input = path("selected-pages-scope.pdf");
         make_pdf(&input, 2);
 
         let document = Document::load(&input).unwrap();
         let selected = |range| super::PagePlan::of(&document, Some(range), false).map(|plan| plan.recognized().iter().map(|page| page.number).collect::<Vec<_>>());
-        assert_eq!(selected("2, 1").unwrap(), vec![1, 2]);
-        assert_eq!(selected("2-").unwrap(), vec![2]);
-        assert!(selected("3").is_err());
+        assert!(matches!(selected("2, 1"), Ok(pages) if pages == vec![1, 2]));
+        assert!(matches!(selected("2-"), Ok(pages) if pages == vec![2]));
+        assert!(matches!(selected("2-9"), Ok(pages) if pages == vec![2]), "a range past the end is shortened");
+        assert!(matches!(selected("3, 5-"), Err(super::NoPlan::Skipped(reason)) if reason.code == crate::kit::contracts::SkipCode::RangeEmptyAfterClamping && reason.message == "No pages left in 3, 5-. It has 2 pages, so nothing was made."));
 
         let _ = fs::remove_file(input);
     }

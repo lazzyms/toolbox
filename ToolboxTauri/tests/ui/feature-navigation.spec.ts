@@ -1506,12 +1506,115 @@ test("PDF page-scoped conversions send the selected pages and reach OCR from the
     await expect(page.getByRole("button", { name: "Export OCR PDF", exact: true })).toBeVisible();
     await expect(page.getByText("Unavailable in this build.", { exact: true })).toHaveCount(0);
     await expect(page.getByText("Output preview unavailable. Export recognizes the text on each page and saves it as a searchable PDF.", { exact: true })).toBeVisible();
+    await expect(pageThree).toBeVisible();
+    await expect(pageOne).not.toBeChecked();
     await page.getByRole("button", { name: "Export OCR PDF", exact: true }).click();
     expect((await lastInvocation(page, "ocr_pdf"))?.args).toMatchObject({ request: { paths: ["/local/document.scoped.pdf"], pageRange: null, mode: "searchablePdf" } });
-    await page.getByRole("img", { name: "Source page preview 1" }).click();
+    await page.getByRole("img", { name: "Source page preview 3" }).click();
+    await page.getByRole("img", { name: "Source page preview 2" }).click();
     await expect(pageOne).not.toBeChecked();
     await page.getByRole("button", { name: "Export OCR PDF", exact: true }).click();
     expect((await lastInvocation(page, "ocr_pdf"))?.args).toMatchObject({ request: { paths: ["/local/document.scoped.pdf"], pageRange: "2-3", mode: "searchablePdf" } });
+});
+
+test("OCR Pages: one range for the batch in page order, thumbnails for a single PDF only, and picks write the range", async ({ page }) => {
+    const second = "/local/second-scan.pdf";
+    await page.goto("/");
+    await openFromHome(page, "PDF to Text");
+    await page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "OCR PDF", exact: true }).click();
+    await chooseFixture(page, "/local/document.scoped.pdf");
+
+    const pages = page.getByRole("radiogroup", { name: "Pages" });
+    const range = page.getByRole("textbox", { name: "Page range" });
+    const exportButton = page.getByRole("button", { name: "Export OCR PDF", exact: true });
+    const status = page.getByRole("status").filter({ hasText: "picked" });
+    await expect(pages.getByRole("radio", { name: "All pages", exact: true })).toBeChecked();
+    await expect(page.getByText("Every page of every file. Choose Range to limit them. With one PDF, pick pages by thumbnail.", { exact: true })).toBeVisible();
+    await expect(range).toHaveCount(0);
+    for (const number of [1, 2, 3]) await expect(page.getByRole("checkbox", { name: `Page ${number}` })).not.toBeChecked();
+    await expect(status).toHaveText("No pages picked, so all 3 pages run. Pick pages to limit them.");
+
+    // Picking a thumbnail writes the range field, and typing a range updates the picks.
+    await page.getByRole("img", { name: "Source page preview 3" }).click();
+    await page.getByRole("img", { name: "Source page preview 1" }).click();
+    await expect(pages.getByRole("radio", { name: "Range", exact: true })).toBeChecked();
+    await expect(range).toHaveValue("1, 3");
+    await expect(range).toHaveAccessibleDescription("Commas and dashes, like 1-3, 5, 8-. 8- means page 8 to the end.");
+    await expect(page.getByText("Set by the page picks", { exact: true })).toBeVisible();
+    await expect(page.getByText("Picking pages writes this range, and typing a range updates the picks.", { exact: true })).toBeVisible();
+    await expect(status).toHaveText("2 of 3 pages picked: 1 and 3. The Pages range now says 1, 3.");
+    await exportButton.click();
+    expect((await lastInvocation(page, "ocr_pdf"))?.args).toMatchObject({ request: { pageRange: "1, 3" } });
+
+    await range.fill("3, 1-2");
+    await expect(page.getByText("Set by the page picks", { exact: true })).toHaveCount(0);
+    for (const number of [1, 2, 3]) await expect(page.getByRole("checkbox", { name: `Page ${number}` })).toBeChecked();
+    await exportButton.click();
+    expect((await lastInvocation(page, "ocr_pdf"))?.args).toMatchObject({ request: { pageRange: "1-2, 3" } });
+
+    // A range past this PDF's end is shortened natively, so only its form is checked here.
+    await range.fill("2-9");
+    await expect(page.getByRole("checkbox", { name: "Page 1" })).not.toBeChecked();
+    await expect(page.getByRole("checkbox", { name: "Page 3" })).toBeChecked();
+    await expect(exportButton).toBeEnabled();
+    await range.fill("3-1");
+    await expect(page.getByRole("alert").filter({ hasText: "runs backwards" })).toHaveText('"3-1" runs backwards. Put the lower page first, for example 1-3.');
+    await expect(exportButton).toBeDisabled();
+
+    // With two files there are no thumbnails, and the one range is sent for both in page order.
+    await range.fill("9-, 2");
+    await page.evaluate((fixtures) => { (window as TestWindow).__toolboxDialogResults = [fixtures]; }, [second]);
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await expect(page.getByText("second-scan.pdf", { exact: true }).first()).toBeVisible();
+    await expect(page.getByRole("checkbox", { name: "Page 1" })).toHaveCount(0);
+    await expect(page.getByText("With one PDF in the list, its pages appear here as thumbnails to pick from.", { exact: true })).toBeVisible();
+    await expect(range).toHaveValue("9-, 2");
+    await expect(page.getByText("One range applies to every PDF and multi-page TIFF. Pages past a file's end are left out, and a file with no pages left is skipped.", { exact: true })).toBeVisible();
+    await exportButton.click();
+    expect((await lastInvocation(page, "ocr_pdf"))?.args).toMatchObject({ request: { paths: ["/local/document.scoped.pdf", second], pageRange: "2, 9-" } });
+
+    // Emptying the field, or choosing All pages, sends no range.
+    await range.fill("");
+    await exportButton.click();
+    expect((await lastInvocation(page, "ocr_pdf"))?.args).toMatchObject({ request: { pageRange: null } });
+    await range.fill("4");
+    await pages.getByRole("radio", { name: "All pages", exact: true }).click();
+    await expect(range).toHaveCount(0);
+    await exportButton.click();
+    expect((await lastInvocation(page, "ocr_pdf"))?.args).toMatchObject({ request: { pageRange: null } });
+});
+
+test("OCR shows why a file whose range leaves no pages was skipped", async ({ page }) => {
+    const reason = "No pages left in 2-. It has 1 page, so nothing was made.";
+    await page.goto("/");
+    await page.evaluate((outcomes) => { (window as TestWindow).__toolboxProcessingResults = outcomes; }, [
+        succeeded(pdfFixturePath, ["/fake/shell/output/document-ocr.pdf"], { detail: "2 pages recognized. English." }),
+        {
+            inputPath: "/local/one-page.pdf",
+            outputPaths: [],
+            detail: "",
+            state: "skipped",
+            failure: null,
+            reason: { code: "rangeEmptyAfterClamping", message: reason, pointer: null },
+            warnings: [],
+        } satisfies MockOutcome,
+    ]);
+    await openFromHome(page, "PDF to Text");
+    await page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "OCR PDF", exact: true }).click();
+    await page.evaluate((fixtures) => { (window as TestWindow).__toolboxDialogResults = [fixtures]; }, [pdfFixturePath, "/local/one-page.pdf"]);
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await expect(page.getByText("one-page.pdf", { exact: true }).first()).toBeVisible();
+    await page.getByRole("radiogroup", { name: "Pages" }).getByRole("radio", { name: "Range", exact: true }).click();
+    await page.getByRole("textbox", { name: "Page range" }).fill("2-");
+    await page.getByRole("button", { name: "Export OCR PDF", exact: true }).click();
+    expect((await lastInvocation(page, "ocr_pdf"))?.args).toMatchObject({ request: { paths: [pdfFixturePath, "/local/one-page.pdf"], pageRange: "2-" } });
+
+    const rows = page.getByRole("list", { name: "Results" }).locator(":scope > li");
+    await expect(rows).toHaveCount(2);
+    await expect(rows.nth(1)).toHaveAttribute("data-state", "skipped");
+    await expect(rows.nth(1)).toContainText("Skipped");
+    await expect(rows.nth(1)).toContainText(reason);
+    await expect(rows.nth(1).getByRole("button", { name: /^Open .*\.pdf$/ })).toHaveCount(0);
 });
 
 test("OCR saves searchable PDFs by default and a text file once Save as is switched, to the folder chosen in Settings", async ({ page }) => {

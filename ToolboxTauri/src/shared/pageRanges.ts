@@ -62,3 +62,20 @@ export const pageRangesWithin = (spans: readonly PageSpan[], pageCount: number):
   }
   return { ok: true, value: resolved };
 };
+
+/** Writes spans the way people type them, like "1-3, 5, 8-". */
+export const formatPageSpans = (spans: readonly PageSpan[]) =>
+  spans.map(({ first, last }) => (last === first ? String(first) : `${first}-${last ?? ""}`)).join(", ");
+
+/** The same spans in page order, which is the order they run in. */
+export const spansInPageOrder = (spans: readonly PageSpan[]) =>
+  [...spans].sort((left, right) => left.first - right.first || (left.last ?? Infinity) - (right.last ?? Infinity));
+
+/** The 0-based pages of a document the spans cover, leaving out pages past its end. */
+export const pagesWithin = (spans: readonly PageSpan[], pageCount: number) => {
+  const pages = new Set<number>();
+  for (const { first, last } of spans) {
+    for (let page = first; page <= Math.min(last ?? pageCount, pageCount); page += 1) pages.add(page - 1);
+  }
+  return [...pages].sort((left, right) => left - right);
+};
