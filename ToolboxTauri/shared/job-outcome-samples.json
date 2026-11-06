@@ -71,5 +71,41 @@
     },
     "reason": null,
     "warnings": []
+  },
+  {
+    "inputPath": "report.pdf",
+    "state": "succeeded",
+    "outputPaths": ["report-compressed.pdf"],
+    "detail": "PDF compressed",
+    "failure": null,
+    "reason": null,
+    "warnings": [],
+    "originalBytes": 2500000,
+    "outputBytes": 1000000
+  },
+  {
+    "inputPath": "logo.png",
+    "state": "skipped",
+    "outputPaths": [],
+    "detail": "",
+    "failure": null,
+    "reason": { "code": "noSavings", "message": "No savings: already well compressed", "pointer": null },
+    "warnings": [],
+    "originalBytes": 4096,
+    "outputBytes": 4200
+  },
+  {
+    "inputPath": "mixed.pdf",
+    "state": "succeeded",
+    "outputPaths": ["mixed-ocr.pdf"],
+    "detail": "2 of 3 pages recognized, 1 skipped for its text.",
+    "failure": null,
+    "reason": null,
+    "warnings": [],
+    "pageDetails": [
+      { "label": "Recognized", "value": "Pages 1 and 3" },
+      { "label": "Skipped, visible text", "value": "Page 2" },
+      { "label": "Languages", "value": "English" }
+    ]
   }
 ]

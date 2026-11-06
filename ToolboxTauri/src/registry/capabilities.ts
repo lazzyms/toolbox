@@ -1,20 +1,21 @@
 import rawCapabilities from "../../shared/tool-capabilities.json" with { type: "json" };
-import type { ToolCapability, ToolCommand } from "../contracts";
+import type { FormatFamily, NativeAvailability, ToolCapability, ToolCommand } from "../contracts";
 
 export interface SharedCapability extends ToolCapability {
   command: string;
 }
 
-const capabilityKeys = new Set([
+const requiredCapabilityKeys = [
   "command",
-  "acceptedExtensions",
   "inputCardinality",
   "supportsPageSelection",
   "supportsPreview",
   "nativeAvailability",
   "outputSuffix",
   "manyToOne",
-]);
+];
+const capabilityKeys = new Set([...requiredCapabilityKeys, "acceptedExtensions", "formatFamilies"]);
+const familyKeys = new Set(["id", "extensions", "nativeAvailability", "basicFidelity"]);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -24,15 +25,43 @@ const isInputCardinality = (
 ): value is ToolCapability["inputCardinality"] =>
   value === "single" || value === "multiple" || value === "ordered";
 
+const isNativeAvailability = (value: unknown): value is NativeAvailability =>
+  value === "available" || value === "unavailable";
+
+const parseFormatFamilies = (command: string, value: unknown): FormatFamily[] => {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`${command} has no format families.`);
+  }
+  const ids = new Set<string>();
+  return value.map((family) => {
+    if (!isRecord(family) || Object.keys(family).some((key) => !familyKeys.has(key))) {
+      throw new Error(`${command} has an invalid format family.`);
+    }
+    const { id, extensions, nativeAvailability, basicFidelity = false } = family;
+    if (typeof id !== "string" || !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(id) || ids.has(id)) {
+      throw new Error(`${command} has an invalid or duplicate format family ${String(id)}.`);
+    }
+    ids.add(id);
+    if (!Array.isArray(extensions) || extensions.length === 0) {
+      throw new Error(`${command} format family ${id} has no extensions.`);
+    }
+    if (!isNativeAvailability(nativeAvailability) || typeof basicFidelity !== "boolean") {
+      throw new Error(`${command} format family ${id} has invalid flags.`);
+    }
+    return { id, extensions, nativeAvailability, basicFidelity };
+  });
+};
+
 const parseCapability = (value: unknown): SharedCapability => {
   if (!isRecord(value)) throw new Error("Each shared capability must be an object.");
-  const keys = Object.keys(value);
-  if (keys.length !== capabilityKeys.size || keys.some((key) => !capabilityKeys.has(key))) {
+  if (
+    requiredCapabilityKeys.some((key) => !(key in value)) ||
+    Object.keys(value).some((key) => !capabilityKeys.has(key))
+  ) {
     throw new Error("Each shared capability must contain only the contract fields.");
   }
   const {
     command,
-    acceptedExtensions,
     inputCardinality,
     supportsPageSelection,
     supportsPreview,
@@ -43,6 +72,13 @@ const parseCapability = (value: unknown): SharedCapability => {
   if (typeof command !== "string" || command.length === 0) {
     throw new Error("Each shared capability needs a command.");
   }
+  if ((value.acceptedExtensions == null) === (value.formatFamilies == null)) {
+    throw new Error(`${command} must declare either accepted extensions or format families.`);
+  }
+  const formatFamilies =
+    value.formatFamilies == null ? undefined : parseFormatFamilies(command, value.formatFamilies);
+  const acceptedExtensions =
+    formatFamilies?.flatMap((family) => family.extensions) ?? value.acceptedExtensions;
   if (
     !Array.isArray(acceptedExtensions) ||
     acceptedExtensions.length === 0 ||
@@ -61,7 +97,7 @@ const parseCapability = (value: unknown): SharedCapability => {
   if (typeof supportsPageSelection !== "boolean" || typeof supportsPreview !== "boolean") {
     throw new Error(`${command} has invalid capability flags.`);
   }
-  if (nativeAvailability !== "available" && nativeAvailability !== "unavailable") {
+  if (!isNativeAvailability(nativeAvailability)) {
     throw new Error(`${command} has invalid native availability.`);
   }
   if (typeof outputSuffix !== "string" || !/^(-[a-z0-9]+)*$/.test(outputSuffix)) {
@@ -73,6 +109,7 @@ const parseCapability = (value: unknown): SharedCapability => {
   return {
     command,
     acceptedExtensions,
+    ...(formatFamilies && { formatFamilies }),
     inputCardinality,
     supportsPageSelection,
     supportsPreview,
@@ -103,6 +140,7 @@ const capabilitiesByCommand = new Map<string, ToolCapability>();
 for (const capability of SharedCapabilityRegistry) {
   capabilitiesByCommand.set(capability.command, {
     acceptedExtensions: capability.acceptedExtensions,
+    ...(capability.formatFamilies && { formatFamilies: capability.formatFamilies }),
     inputCardinality: capability.inputCardinality,
     supportsPageSelection: capability.supportsPageSelection,
     supportsPreview: capability.supportsPreview,
