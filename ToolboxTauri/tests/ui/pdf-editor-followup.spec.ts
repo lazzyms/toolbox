@@ -22,7 +22,7 @@ test.beforeEach(async ({ page }) => {
         }
         if (command === 'inspect_pdf_scene') return { path: '/local/scene-fixture.pdf', pages: [{ index: 0, width: 612, height: 792, preview: svg, textRuns: [{ text: 'Selectable local PDF text', x: 60, y: 55, width: 250, height: 25 }] }] };
         if (command === 'preview_pdf_scene_pages') return args.request.pageIndices.map((pageIndex: number) => ({ pageIndex, preview: { dataUrl: svg, width: 612, height: 792 } }));
-        if (command === 'export_pdf_scene') return [{ inputPath: '/local/scene-fixture.pdf', outputPaths: ['/local/scene-fixture-edited-1.pdf'], state: 'succeeded', detail: 'PDF scene exported', failure: null, reason: null, warnings: [] }];
+        if (command === 'export_pdf_scene') return [{ inputPath: '/local/scene-fixture.pdf', outputPaths: ['/local/scene-fixture-edited.pdf'], state: 'succeeded', detail: 'PDF scene exported', failure: null, reason: null, warnings: [] }];
         return null;
       },
     };
@@ -59,10 +59,10 @@ test('text edits happen in the page box and do not expose a duplicate property i
   await dragOnCanvas(page, .18, .18);
   await page.getByRole('button', { name: 'Select', exact: true }).click();
   await page.getByRole('button', { name: 'text object 1', exact: true }).dblclick();
-  await expect(page.getByRole('textbox', { name: 'Edit text object' })).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Text box text' })).toBeVisible();
   expect(await page.locator('input[aria-label="Object text"]').count()).toBe(0);
-  await page.getByRole('textbox', { name: 'Edit text object' }).fill('Edited directly on page');
-  await page.getByRole('textbox', { name: 'Edit text object' }).press('Control+Enter');
+  await page.getByRole('textbox', { name: 'Text box text' }).fill('Edited directly on page');
+  await page.getByRole('textbox', { name: 'Text box text' }).press('Control+Enter');
   const scene = await sceneFromExport(page);
   expect(scene.pages[0].objects[0].text).toBe('Edited directly on page');
 });

@@ -1,20 +1,28 @@
 import type { ComponentType } from 'react';
+import { Bold, Italic, TextAlignCenter, TextAlignEnd, TextAlignStart } from 'lucide-react';
 import { Button } from '../../components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { NativeSelect } from '../../components/ui/native-select';
+import { RadioGroup, RadioGroupItem } from '../../components/ui/radio-group';
+import { ToggleGroup, ToggleGroupItem } from '../../components/ui/toggle-group';
 import { useToolAvailability } from '../../ToolAvailabilityContext';
-import type { SceneObject, ScenePage, SceneShape, SceneTool, SignatureMode, WatermarkPattern } from './scene';
+import type { PdfEditRun, PdfTextEdit } from './contracts';
+import { notEditableReasons, textOverflowWords } from './scene';
+import type { SceneObject, ScenePage, SceneShape, SceneTool, SignatureMode, TextAlign, TextFontFamily, TextStyle, WatermarkPattern } from './scene';
 import type { SubToolId } from './subtools';
 
 export interface SubToolInspectorProps {
   page: ScenePage;
+  pageNumber: number;
   selected: SceneObject | undefined;
   hasTextRuns: boolean;
   updateObject: (patch: Partial<SceneObject>, field: string) => void;
   commitPage: (page: ScenePage) => void;
   endGroup: () => void;
   fontSize: number; setFontSize: (value: number) => void;
+  textStyle: TextStyle; setTextStyle: (value: TextStyle) => void;
   shape: SceneShape; setShape: (value: SceneShape) => void;
   signatureMode: SignatureMode; setSignatureMode: (value: SignatureMode) => void;
   signaturePath: string | null; signaturePreview: string | null;
@@ -26,6 +34,12 @@ export interface SubToolInspectorProps {
   watermarkFontSize: number; setWatermarkFontSize: (value: number) => void;
   watermarkPattern: WatermarkPattern; setWatermarkPattern: (value: WatermarkPattern) => void;
   addFixedWatermark: () => void;
+  selectedRun: PdfEditRun | undefined;
+  textEdits: PdfTextEdit[];
+  pageNumberOf: (sourceIndex: number) => number;
+  showEdit: (edit: PdfTextEdit) => void;
+  revertEdit: (edit: PdfTextEdit) => void;
+  chooseTool: (tool: SceneTool) => void;
 }
 type Panel = ComponentType<SubToolInspectorProps>;
 
@@ -41,11 +55,55 @@ const signatureFontOptions = [
 ];
 const watermarkFontSizes = [18, 24, 32, 40, 48, 56, 64, 72, 88, 104, 120];
 
-const TextFields: Panel = ({ selected, fontSize, setFontSize, updateObject, endGroup }) => <div className="scene-inspector-field">
-  <Label htmlFor="scene-text-size">Font size</Label>
-  <Input id="scene-text-size" type="number" min="6" max="144" value={selected?.fontSize ?? fontSize}
-    onChange={(event) => { const value = Math.max(6, Math.min(144, Number(event.target.value) || 6)); selected ? updateObject({ fontSize: value }, 'font') : setFontSize(value); }} onBlur={endGroup} />
-</div>;
+const textFonts: TextFontFamily[] = ['Noto Sans', 'Noto Serif', 'Noto Sans Mono'];
+
+const TextFields: Panel = ({ selected, fontSize, setFontSize, textStyle, setTextStyle, updateObject, endGroup, pageNumber }) => {
+  const style: TextStyle = selected ? {
+    fontFamily: (selected.fontFamily as TextFontFamily | undefined) ?? 'Noto Sans', bold: Boolean(selected.bold), italic: Boolean(selected.italic), align: selected.align ?? 'left',
+  } : textStyle;
+  const setStyle = (patch: Partial<TextStyle>, field: string) => selected ? updateObject(patch, field) : setTextStyle({ ...textStyle, ...patch });
+  const commitRange = (value: string) => { if (selected && value.trim() !== (selected.pageRange ?? '')) updateObject({ pageRange: value.trim() }, 'page-range'); };
+  return <>
+    <div className="scene-inspector-field"><Label htmlFor="scene-text-font">Font</Label>
+      <NativeSelect id="scene-text-font" size="sm" value={style.fontFamily} onChange={(event) => setStyle({ fontFamily: event.target.value as TextFontFamily }, 'font-family')}>
+        {textFonts.map((family) => <option key={family} value={family}>{family}</option>)}
+      </NativeSelect>
+    </div>
+    <div className="scene-inspector-field"><Label htmlFor="scene-text-size">Size</Label>
+      <Input id="scene-text-size" type="number" min="6" max="144" value={selected?.fontSize ?? fontSize}
+        onChange={(event) => { const value = Math.max(6, Math.min(144, Number(event.target.value) || 6)); selected ? updateObject({ fontSize: value }, 'font') : setFontSize(value); }} onBlur={endGroup} />
+    </div>
+    <div className="scene-inspector-row">
+      <div className="scene-inspector-field"><span className="text-sm font-medium" id="scene-text-style">Style</span>
+        <ToggleGroup type="multiple" variant="outline" size="sm" aria-labelledby="scene-text-style"
+          value={[style.bold && 'bold', style.italic && 'italic'].filter((value): value is string => Boolean(value))}
+          onValueChange={(value) => setStyle({ bold: value.includes('bold'), italic: value.includes('italic') }, 'font-style')}>
+          <ToggleGroupItem value="bold" aria-label="Bold"><Bold /></ToggleGroupItem>
+          <ToggleGroupItem value="italic" aria-label="Italic"><Italic /></ToggleGroupItem>
+        </ToggleGroup>
+      </div>
+      <div className="scene-inspector-field"><span className="text-sm font-medium" id="scene-text-align">Align</span>
+        <ToggleGroup type="single" variant="outline" size="sm" role="radiogroup" aria-labelledby="scene-text-align" value={style.align}
+          onValueChange={(value) => { if (value) setStyle({ align: value as TextAlign }, 'align'); }}>
+          <ToggleGroupItem value="left" aria-label="Align left"><TextAlignStart /></ToggleGroupItem>
+          <ToggleGroupItem value="center" aria-label="Align centre"><TextAlignCenter /></ToggleGroupItem>
+          <ToggleGroupItem value="right" aria-label="Align right"><TextAlignEnd /></ToggleGroupItem>
+        </ToggleGroup>
+      </div>
+    </div>
+    {selected?.kind === 'text' && <fieldset className="scene-inspector-field">
+      <legend className="mb-1.5 text-sm font-medium">Show this text on</legend>
+      <RadioGroup className="gap-1.5" value={selected.pageRange == null ? 'page' : 'pages'}
+        onValueChange={(value) => updateObject({ pageRange: value === 'page' ? null : String(pageNumber) }, 'page-range')}>
+        <span className="settings-radio"><RadioGroupItem id="scene-text-this-page" value="page" /><Label htmlFor="scene-text-this-page">This page only</Label></span>
+        <span className="settings-radio"><RadioGroupItem id="scene-text-pages" value="pages" /><Label htmlFor="scene-text-pages">These pages</Label></span>
+      </RadioGroup>
+      <Input key={`${selected.id}:${selected.pageRange ?? ''}`} aria-label="Pages for this text box" placeholder="For example 1-3, 7, 10-"
+        defaultValue={selected.pageRange ?? ''} disabled={selected.pageRange == null}
+        onBlur={(event) => commitRange(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') commitRange(event.currentTarget.value); }} />
+    </fieldset>}
+  </>;
+};
 
 const ShapeFields: Panel = ({ selected, shape, setShape, updateObject }) => <div className="scene-inspector-field">
   <Label htmlFor="scene-shape-type">Shape type</Label>
@@ -118,6 +176,9 @@ const WatermarkFields: Panel = (props) => {
   </>;
 };
 
+const TextGuide: Panel = () =>
+  <p className="scene-property-note">Click the page to add a text box. Double-click a box or press Enter to edit it.</p>;
+
 const HighlightGuide: Panel = ({ hasTextRuns }) =>
   <p className="scene-property-note">{hasTextRuns ? 'Drag across selectable PDF text, or draw a highlight area.' : 'Drag across the page to highlight an area.'}</p>;
 
@@ -140,9 +201,40 @@ const CropGuide: Panel = ({ page, commitPage }) => {
   </> : null;
 };
 
+const EditTextGuide: Panel = ({ page, selectedRun, textEdits, pageNumberOf, showEdit, revertEdit, chooseTool }) => {
+  const availability = useToolAvailability();
+  const selectedEdit = selectedRun && textEdits.find((edit) => edit.pageIndex === page.sourceIndex && edit.run === selectedRun.index);
+  const overflow = selectedEdit ? textOverflowWords(selectedEdit.original, selectedEdit.replacement) : 0;
+  return <>
+    {selectedRun?.reason && <Card role="alert" className="gap-2 py-3">
+      <CardHeader className="gap-1 px-3"><CardTitle className="text-sm">This text can't be edited.</CardTitle>
+        <CardDescription>{notEditableReasons[selectedRun.reason].detail}</CardDescription></CardHeader>
+      {availability.allows('pdf-edit') && <CardContent className="px-3">
+        <Button variant="ghost" size="sm" onClick={() => chooseTool('text')}>Cover it with Add text instead</Button>
+      </CardContent>}
+    </Card>}
+    {selectedRun && !selectedRun.reason && <div className="scene-inspector-field" role="group" aria-label="Selected text">
+      <Label>Selected text</Label>
+      <p className="scene-property-note">{selectedRun.fontName} · {Math.round(selectedRun.fontSize * 10) / 10} pt</p>
+      <p className="scene-property-note">Edited text keeps this font, size and colour.</p>
+    </div>}
+    {overflow > 0 && <Card role="alert" className="gap-2 py-3">
+      <CardHeader className="gap-1 px-3"><CardTitle className="text-sm">This text is too long for its space.</CardTitle>
+        <CardDescription>Shorten it so it fits the original line.</CardDescription></CardHeader>
+    </Card>}
+    {textEdits.length > 0 && <div className="scene-inspector-field" role="group" aria-label="Edits on this document">
+      <Label>Edits on this document</Label>
+      {textEdits.map((edit) => <Button key={`${edit.pageIndex}-${edit.run}`} variant="ghost" size="sm" className="h-auto justify-start whitespace-normal text-left"
+        onClick={() => showEdit(edit)}>Page {pageNumberOf(edit.pageIndex)}: “{edit.original}” to “{edit.replacement}”</Button>)}
+    </div>}
+    {selectedEdit && <Button variant="ghost" size="sm" onClick={() => revertEdit(selectedEdit)}>Revert this text</Button>}
+  </>;
+};
+
 // Fields edit the selected object or the next new one; Guide shows while the sub-tool is active.
 export const subToolInspectors: Partial<Record<SubToolId | SceneTool, { Fields?: Panel; Guide?: Panel }>> = {
-  text: { Fields: TextFields },
+  'edit-text': { Guide: EditTextGuide },
+  text: { Fields: TextFields, Guide: TextGuide },
   highlight: { Guide: HighlightGuide },
   shape: { Fields: ShapeFields },
   signature: { Fields: SignatureFields, Guide: SignatureGuide },

@@ -25,6 +25,276 @@
       "license": "SIL Open Font License 1.1; see Pacifico-LICENSE.txt",
       "sourceUrl": "https://github.com/google/fonts/tree/main/ofl/pacifico",
       "maxBytes": 1000000
+    },
+    "textOverlayNotoSansBoldFont": {
+      "path": "NotoSans-Bold.ttf",
+      "version": "2.015",
+      "sha256": "87cb2d84472a7d66da659ee47b6cdb9552326e8c128245231f191b6ac72529d9",
+      "license": "SIL Open Font License 1.1; see Noto-LICENSE.txt",
+      "sourceUrl": "https://github.com/notofonts/notofonts.github.io/tree/a5fca98891563057e7f65c1c4bf3f2a58c7704a4/fonts/NotoSans/unhinted/ttf",
+      "maxBytes": 1000000
+    },
+    "textOverlayNotoSansBoldItalicFont": {
+      "path": "NotoSans-BoldItalic.ttf",
+      "version": "2.015",
+      "sha256": "3d367743f371f28671d2764e911a53d7c20ec9b6aa8791d059e7090389fc52a5",
+      "license": "SIL Open Font License 1.1; see Noto-LICENSE.txt",
+      "sourceUrl": "https://github.com/notofonts/notofonts.github.io/tree/a5fca98891563057e7f65c1c4bf3f2a58c7704a4/fonts/NotoSans/unhinted/ttf",
+      "maxBytes": 1000000
+    },
+    "textOverlayNotoSansItalicFont": {
+      "path": "NotoSans-Italic.ttf",
+      "version": "2.015",
+      "sha256": "678288f868807d4d64a6f3b51466871d117d915780381ce9d0ed4b3bcbd06d37",
+      "license": "SIL Open Font License 1.1; see Noto-LICENSE.txt",
+      "sourceUrl": "https://github.com/notofonts/notofonts.github.io/tree/a5fca98891563057e7f65c1c4bf3f2a58c7704a4/fonts/NotoSans/unhinted/ttf",
+      "maxBytes": 1000000
+    },
+    "textOverlayNotoSansRegularFont": {
+      "path": "NotoSans-Regular.ttf",
+      "version": "2.015",
+      "sha256": "f3961a9cde016d41a4879aecda1474d3a36d6bf54fa0e4643de029cc2248b0e8",
+      "license": "SIL Open Font License 1.1; see Noto-LICENSE.txt",
+      "sourceUrl": "https://github.com/notofonts/notofonts.github.io/tree/a5fca98891563057e7f65c1c4bf3f2a58c7704a4/fonts/NotoSans/unhinted/ttf",
+      "maxBytes": 1000000
+    },
+    "textOverlayNotoSansMonoBoldFont": {
+      "path": "NotoSansMono-Bold.ttf",
+      "version": "2.014",
+      "sha256": "1100772b2f79c102402a1011df5e2226517d0f40ac553a25fb12fdbad8c11b85",
+      "license": "SIL Open Font License 1.1; see Noto-LICENSE.txt",
+      "sourceUrl": "https://github.com/notofonts/notofonts.github.io/tree/a5fca98891563057e7f65c1c4bf3f2a58c7704a4/fonts/NotoSansMono/unhinted/ttf",
+      "maxBytes": 1000000
+    },
+    "textOverlayNotoSansMonoRegularFont": {
+      "path": "NotoSansMono-Regular.ttf",
+      "version": "2.014",
+      "sha256": "87f8ce0522a6c99b743ee5fc75b4073cfdd575639119672828b7b9944b65b4f4",
+      "license": "SIL Open Font License 1.1; see Noto-LICENSE.txt",
+      "sourceUrl": "https://github.com/notofonts/notofonts.github.io/tree/a5fca98891563057e7f65c1c4bf3f2a58c7704a4/fonts/NotoSansMono/unhinted/ttf",
+      "maxBytes": 1000000
+    },
+    "textOverlayNotoSerifBoldFont": {
+      "path": "NotoSerif-Bold.ttf",
+      "version": "2.015",
+      "sha256": "24ad531e6b05ddad8c3d89572d2c93eb86a6b74e652ce7ee3c3e171de68e84c3",
+      "license": "SIL Open Font License 1.1; see Noto-LICENSE.txt",
+      "sourceUrl": "https://github.com/notofonts/notofonts.github.io/tree/a5fca98891563057e7f65c1c4bf3f2a58c7704a4/fonts/NotoSerif/unhinted/ttf",
+      "maxBytes": 1000000
+    },
+    "textOverlayNotoSerifBoldItalicFont": {
+      "path": "NotoSerif-BoldItalic.ttf",
+      "version": "2.015",
+      "sha256": "1bc4f86502eaa368718f6192bee022ea9a703d5af1c18b7d291212657b63074a",
+      "license": "SIL Open Font License 1.1; see Noto-LICENSE.txt",
+      "sourceUrl": "https://github.com/notofonts/notofonts.github.io/tree/a5fca98891563057e7f65c1c4bf3f2a58c7704a4/fonts/NotoSerif/unhinted/ttf",
+      "maxBytes": 1000000
+    },
+    "textOverlayNotoSerifItalicFont": {
+      "path": "NotoSerif-Italic.ttf",
+      "version": "2.015",
+      "sha256": "c4b3c971741ecdb40f5a443bce754e8fe91efe761b6ea10c92be7c3597cdadc4",
+      "license": "SIL Open Font License 1.1; see Noto-LICENSE.txt",
+      "sourceUrl": "https://github.com/notofonts/notofonts.github.io/tree/a5fca98891563057e7f65c1c4bf3f2a58c7704a4/fonts/NotoSerif/unhinted/ttf",
+      "maxBytes": 1000000
+    },
+    "textOverlayNotoSerifRegularFont": {
+      "path": "NotoSerif-Regular.ttf",
+      "version": "2.015",
+      "sha256": "a15cfbbc1539d707115111d672d590a3d70d4f74b4c0a315956da20ae19a14e1",
+      "license": "SIL Open Font License 1.1; see Noto-LICENSE.txt",
+      "sourceUrl": "https://github.com/notofonts/notofonts.github.io/tree/a5fca98891563057e7f65c1c4bf3f2a58c7704a4/fonts/NotoSerif/unhinted/ttf",
+      "maxBytes": 1000000
+    },
+    "fallbackLiberationSansRegular": {
+      "path": "LiberationSans-Regular.ttf",
+      "version": "2.1.5",
+      "sha256": "76d04c18ea243f426b7de1f3ad208e927008f961dc5945e5aad352d0dfde8ee8",
+      "license": "SIL Open Font License 1.1; see Liberation-LICENSE.txt",
+      "sourceUrl": "https://github.com/liberationfonts/liberation-fonts/files/7261482/liberation-fonts-ttf-2.1.5.tar.gz",
+      "maxBytes": 1000000
+    },
+    "fallbackLiberationSansBold": {
+      "path": "LiberationSans-Bold.ttf",
+      "version": "2.1.5",
+      "sha256": "788abee4c806d660e8aee46689dd8540cd4bb98da03dcc9d171ce3efd99a9173",
+      "license": "SIL Open Font License 1.1; see Liberation-LICENSE.txt",
+      "sourceUrl": "https://github.com/liberationfonts/liberation-fonts/files/7261482/liberation-fonts-ttf-2.1.5.tar.gz",
+      "maxBytes": 1000000
+    },
+    "fallbackLiberationSerifRegular": {
+      "path": "LiberationSerif-Regular.ttf",
+      "version": "2.1.5",
+      "sha256": "058ea80864aef09a23f45cbec2bb5400bc3dfbdea01c3f10538a21fcb497fb74",
+      "license": "SIL Open Font License 1.1; see Liberation-LICENSE.txt",
+      "sourceUrl": "https://github.com/liberationfonts/liberation-fonts/files/7261482/liberation-fonts-ttf-2.1.5.tar.gz",
+      "maxBytes": 1000000
+    },
+    "fallbackLiberationSerifBold": {
+      "path": "LiberationSerif-Bold.ttf",
+      "version": "2.1.5",
+      "sha256": "d754ba427cfe0bca54ae052384baa8f842da5bd6550ad4da024ac441e7a7d5ce",
+      "license": "SIL Open Font License 1.1; see Liberation-LICENSE.txt",
+      "sourceUrl": "https://github.com/liberationfonts/liberation-fonts/files/7261482/liberation-fonts-ttf-2.1.5.tar.gz",
+      "maxBytes": 1000000
+    },
+    "fallbackLiberationSerifItalic": {
+      "path": "LiberationSerif-Italic.ttf",
+      "version": "2.1.5",
+      "sha256": "0e3dea9f8d613e006ccfa62201f33e265d19167bd0907725c3e145368b04fc2e",
+      "license": "SIL Open Font License 1.1; see Liberation-LICENSE.txt",
+      "sourceUrl": "https://github.com/liberationfonts/liberation-fonts/files/7261482/liberation-fonts-ttf-2.1.5.tar.gz",
+      "maxBytes": 1000000
+    },
+    "fallbackLiberationSerifBoldItalic": {
+      "path": "LiberationSerif-BoldItalic.ttf",
+      "version": "2.1.5",
+      "sha256": "f17db8af71e24d2066b587546021d4f0b296be389512b658dec3c09affeb11a7",
+      "license": "SIL Open Font License 1.1; see Liberation-LICENSE.txt",
+      "sourceUrl": "https://github.com/liberationfonts/liberation-fonts/files/7261482/liberation-fonts-ttf-2.1.5.tar.gz",
+      "maxBytes": 1000000
+    },
+    "fallbackLiberationMonoRegular": {
+      "path": "LiberationMono-Regular.ttf",
+      "version": "2.1.5",
+      "sha256": "f2b83c763e8afd21709333370bed4774337fae82267937e2b5aea7e2fbd922c1",
+      "license": "SIL Open Font License 1.1; see Liberation-LICENSE.txt",
+      "sourceUrl": "https://github.com/liberationfonts/liberation-fonts/files/7261482/liberation-fonts-ttf-2.1.5.tar.gz",
+      "maxBytes": 1000000
+    },
+    "fallbackCarlitoRegular": {
+      "path": "Carlito-Regular.ttf",
+      "version": "1.104",
+      "sha256": "f6418f708baede9789daef5d458c0f53d2a888af9820e8062934e504fedc6595",
+      "license": "SIL Open Font License 1.1; see Carlito-LICENSE.txt",
+      "sourceUrl": "https://github.com/google/fonts/tree/bbda7253fc363238b05d97515ca71f8ae49c4fa9/ofl/carlito",
+      "maxBytes": 1000000
+    },
+    "fallbackCarlitoBold": {
+      "path": "Carlito-Bold.ttf",
+      "version": "1.104",
+      "sha256": "bb5d20f79b82599ec72983597437373a80f2d2085fa91fc144fd74e876a594db",
+      "license": "SIL Open Font License 1.1; see Carlito-LICENSE.txt",
+      "sourceUrl": "https://github.com/google/fonts/tree/bbda7253fc363238b05d97515ca71f8ae49c4fa9/ofl/carlito",
+      "maxBytes": 1000000
+    },
+    "fallbackCarlitoItalic": {
+      "path": "Carlito-Italic.ttf",
+      "version": "1.104",
+      "sha256": "0b019225e58d702bfedcbd35c21696769f8ee115cb6343f84c2f240312450d1c",
+      "license": "SIL Open Font License 1.1; see Carlito-LICENSE.txt",
+      "sourceUrl": "https://github.com/google/fonts/tree/bbda7253fc363238b05d97515ca71f8ae49c4fa9/ofl/carlito",
+      "maxBytes": 1000000
+    },
+    "fallbackCarlitoBoldItalic": {
+      "path": "Carlito-BoldItalic.ttf",
+      "version": "1.104",
+      "sha256": "b32928186c119599e03ca6a1ffc680fdcb7fac95772f4b95d989cf6cd3861517",
+      "license": "SIL Open Font License 1.1; see Carlito-LICENSE.txt",
+      "sourceUrl": "https://github.com/google/fonts/tree/bbda7253fc363238b05d97515ca71f8ae49c4fa9/ofl/carlito",
+      "maxBytes": 1000000
+    },
+    "fallbackCaladeaRegular": {
+      "path": "Caladea-Regular.ttf",
+      "version": "1.001",
+      "sha256": "f1e899278b7b4491aba5b6a8253c4b04c050cc59b21865be5c37559a775153cd",
+      "license": "SIL Open Font License 1.1; see Caladea-LICENSE.txt",
+      "sourceUrl": "https://github.com/google/fonts/tree/bbda7253fc363238b05d97515ca71f8ae49c4fa9/ofl/caladea",
+      "maxBytes": 1000000
+    },
+    "fallbackCaladeaBold": {
+      "path": "Caladea-Bold.ttf",
+      "version": "1.001",
+      "sha256": "ae3cb2dcbc925809dd29d2a44e9802211cab66be541bacbfc9c08c74b27c3742",
+      "license": "SIL Open Font License 1.1; see Caladea-LICENSE.txt",
+      "sourceUrl": "https://github.com/google/fonts/tree/bbda7253fc363238b05d97515ca71f8ae49c4fa9/ofl/caladea",
+      "maxBytes": 1000000
+    },
+    "fallbackCaladeaItalic": {
+      "path": "Caladea-Italic.ttf",
+      "version": "1.001",
+      "sha256": "4359a8e24f748b6447b1ff6d7a174febe70961d29f8bb8634b56dacd740a3deb",
+      "license": "SIL Open Font License 1.1; see Caladea-LICENSE.txt",
+      "sourceUrl": "https://github.com/google/fonts/tree/bbda7253fc363238b05d97515ca71f8ae49c4fa9/ofl/caladea",
+      "maxBytes": 1000000
+    },
+    "fallbackCaladeaBoldItalic": {
+      "path": "Caladea-BoldItalic.ttf",
+      "version": "1.001",
+      "sha256": "ccabaa7b7e2fdf253d2b1a5fa699dd8a3df8d835a9eb285ad82631a677eb76c0",
+      "license": "SIL Open Font License 1.1; see Caladea-LICENSE.txt",
+      "sourceUrl": "https://github.com/google/fonts/tree/bbda7253fc363238b05d97515ca71f8ae49c4fa9/ofl/caladea",
+      "maxBytes": 1000000
+    }
+  },
+  "fallbackFonts": {
+    "budgetBytes": 6000000,
+    "families": [
+      {
+        "family": "Liberation Sans",
+        "substitutes": [
+          "Arial",
+          "Helvetica"
+        ],
+        "faces": {
+          "regular": "fallbackLiberationSansRegular",
+          "bold": "fallbackLiberationSansBold"
+        }
+      },
+      {
+        "family": "Liberation Serif",
+        "substitutes": [
+          "Times New Roman",
+          "Times"
+        ],
+        "faces": {
+          "regular": "fallbackLiberationSerifRegular",
+          "bold": "fallbackLiberationSerifBold",
+          "italic": "fallbackLiberationSerifItalic",
+          "boldItalic": "fallbackLiberationSerifBoldItalic"
+        }
+      },
+      {
+        "family": "Liberation Mono",
+        "substitutes": [
+          "Courier New",
+          "Courier"
+        ],
+        "faces": {
+          "regular": "fallbackLiberationMonoRegular"
+        }
+      },
+      {
+        "family": "Carlito",
+        "substitutes": [
+          "Calibri"
+        ],
+        "faces": {
+          "regular": "fallbackCarlitoRegular",
+          "bold": "fallbackCarlitoBold",
+          "italic": "fallbackCarlitoItalic",
+          "boldItalic": "fallbackCarlitoBoldItalic"
+        }
+      },
+      {
+        "family": "Caladea",
+        "substitutes": [
+          "Cambria"
+        ],
+        "faces": {
+          "regular": "fallbackCaladeaRegular",
+          "bold": "fallbackCaladeaBold",
+          "italic": "fallbackCaladeaItalic",
+          "boldItalic": "fallbackCaladeaBoldItalic"
+        }
+      }
+    ],
+    "default": {
+      "family": "DejaVu Sans",
+      "substitutes": [],
+      "faces": {
+        "regular": "watermarkFont"
+      }
     }
   }
 }

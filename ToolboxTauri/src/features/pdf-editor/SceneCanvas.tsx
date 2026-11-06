@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { KeyboardEvent, MouseEvent as ReactMouseEvent, PointerEvent } from 'react';
+import { Input } from '../../components/ui/input';
 import { Textarea } from '../../components/ui/textarea';
-import { visibleBounds } from './scene';
+import { notEditableReasons, overflowMessage, textOverflowWords, visibleBounds } from './scene';
 import type { SceneCanvasProps, SceneObject, ScenePage, ScenePoint, SceneRect, SceneShape, WatermarkPattern } from './scene';
 import './scene-canvas.css';
 
@@ -23,7 +24,8 @@ type Gesture = { pointerId: number; start: ScenePoint; base: ScenePage; next: Sc
   clientStart?: ScenePoint; scrollStart?: ScenePoint };
 const rectangle = (a: ScenePoint, b: ScenePoint): SceneRect => ({ x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), width: Math.max(1, Math.abs(a.x - b.x)), height: Math.max(1, Math.abs(a.y - b.y)) });
 
-const cssFont = (font?: string) => font === 'Satisfy' ? 'Toolbox Satisfy, cursive'
+const cssFont = (font?: string) => font?.startsWith('Noto') ? `"Toolbox ${font}", ${font.endsWith('Mono') ? 'monospace' : font.endsWith('Serif') ? 'serif' : 'sans-serif'}`
+  : font === 'Satisfy' ? 'Toolbox Satisfy, cursive'
   : font === 'Pacifico' ? 'Toolbox Pacifico, cursive'
     : font?.startsWith('Times') ? 'Times New Roman, serif' : font?.startsWith('Courier') ? 'Courier New, monospace' : 'Helvetica, Arial, sans-serif';
 const fontWeight = (font?: string) => font?.includes('Bold') ? 700 : 400;
@@ -98,11 +100,11 @@ function Artwork({ page, object }: { page: ScenePage; object: SceneObject }) {
       {object.strokes.map((stroke, i) => <polyline key={i} points={stroke.map(p => `${r.x + p.x * r.width},${r.y + p.y * r.height}`).join(' ')} />)}
     </g>;
   }
-  if (object.kind === 'text') return <svg x={r.x} y={r.y} width={r.width} height={r.height} overflow="hidden">
-    <text fill={object.color} opacity={object.opacity} fontSize={object.fontSize} fontFamily={cssFont(object.fontFamily)} fontWeight={fontWeight(object.fontFamily)} fontStyle={fontStyle(object.fontFamily)} dominantBaseline="hanging">
-      {object.text.split('\n').map((line, i) => <tspan key={i} x={0} y={i * object.fontSize * 1.2}>{line}</tspan>)}
-    </text>
-  </svg>;
+  // While drafting, wrap like the native exporter; the rendered preview replaces this once it is ready.
+  if (object.kind === 'text') return <foreignObject {...r}>
+    <div className="scene-text-draft" style={{ color: object.color, opacity: object.opacity, fontSize: object.fontSize, fontFamily: cssFont(object.fontFamily ?? 'Noto Sans'),
+      fontWeight: object.bold ? 700 : 400, fontStyle: object.italic ? 'italic' : 'normal', textAlign: object.align ?? 'left' }}>{object.text}</div>
+  </foreignObject>;
   if (object.kind === 'watermark') return <g fill={object.color} opacity={object.opacity} fontSize={object.fontSize} fontFamily={cssFont(object.fontFamily)} fontWeight={fontWeight(object.fontFamily)} fontStyle={fontStyle(object.fontFamily)}>
     {watermarkPlacements(page, object).map(({ x, y, angle }, index) => <text key={index} transform={`rotate(${angle} ${x} ${y})`} x={x} y={y} dominantBaseline="alphabetic">{object.text}</text>)}
   </g>;
@@ -110,7 +112,8 @@ function Artwork({ page, object }: { page: ScenePage; object: SceneObject }) {
   return shapeArtwork(object.shape, r, object.color, object.opacity);
 }
 
-export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPreview, tool, selectedId, zoom, onSelect, onCommit, makeObject, redactionFill = '#000000', redactionPreview = false }: SceneCanvasProps) {
+export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPreview, tool, selectedId, zoom, onSelect, onCommit, makeObject,
+  redactionFill = '#000000', redactionPreview = false, editRuns, textEdits, selectedRun, onSelectRun, onEditRun }: SceneCanvasProps) {
   const host = useRef<HTMLDivElement>(null);
   const surface = useRef<SVGSVGElement>(null);
   const coordinates = useRef<SVGGElement>(null);
@@ -119,13 +122,13 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
   onSelectRef.current = onSelect;
   const lastObjectId = useRef<string | null>(null);
   const spacePressed = useRef(false);
-  const editInput = useRef<HTMLTextAreaElement>(null);
   const [draft, setDraft] = useState<ScenePage | null>(null);
   const [size, setSize] = useState({ width: 600, height: 600 });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState('');
   const [spaceHeld, setSpaceHeld] = useState(false);
   const [panning, setPanning] = useState(false);
+  const [editingRun, setEditingRun] = useState<{ index: number; text: string } | null>(null);
   function cancelGesture() {
     const active = gesture.current;
     if (!active) return;
@@ -141,7 +144,7 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     observer.observe(host.current);
     return () => observer.disconnect();
   }, []);
-  useEffect(() => { gesture.current = null; setDraft(null); setEditingId(null); setPanning(false); window.getSelection()?.removeAllRanges(); }, [page]);
+  useEffect(() => { gesture.current = null; setDraft(null); setEditingId(null); setEditingRun(null); setPanning(false); window.getSelection()?.removeAllRanges(); }, [page]);
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key === 'Escape' && gesture.current) {
@@ -181,10 +184,6 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
       window.getSelection()?.removeAllRanges();
     };
   }, []);
-  useEffect(() => {
-    if (!editingId) return;
-    requestAnimationFrame(() => { editInput.current?.focus(); editInput.current?.select(); });
-  }, [editingId]);
   const shown = draft ?? page;
   const transform = sceneTransform(page);
   const scale = Math.max(0.01, Math.min((size.width - 24) / transform.width, (size.height - 24) / transform.height)) * Math.max(0.1, zoom);
@@ -204,7 +203,7 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     setEditingId(null);
     if (save && object && value !== object.text) onCommit({ ...page, objects: page.objects.map(item => item.id === editingId ? { ...item, text: value } : item) });
   }
-  function beginTextEdit(event: Pick<ReactMouseEvent<SVGElement>, 'preventDefault' | 'stopPropagation'>, object: SceneObject) {
+  function beginTextEdit(event: Pick<ReactMouseEvent<SVGElement> | KeyboardEvent<SVGElement>, 'preventDefault' | 'stopPropagation'>, object: SceneObject) {
     if (object.kind !== 'text') return;
     event.preventDefault(); event.stopPropagation();
     onSelect(object.id); setEditingText(object.text); setEditingId(object.id);
@@ -217,6 +216,18 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     const id = (event.target as Element).closest('[data-object]')?.getAttribute('data-object') ?? hit?.getAttribute('data-object') ?? lastObjectId.current ?? selectedId;
     const object = id ? page.objects.find(item => item.id === id) : undefined;
     if (object) beginTextEdit(event, object);
+  }
+  const replacementOf = (index: number) => textEdits.find((edit) => edit.run === index)?.replacement;
+  function openRun(index: number) {
+    const run = editRuns.find((item) => item.index === index);
+    onSelectRun(index);
+    setEditingRun(run && !run.reason ? { index, text: replacementOf(index) ?? run.text } : null);
+  }
+  function finishRunEdit(save: boolean) {
+    const run = editingRun && editRuns.find((item) => item.index === editingRun.index);
+    // Clicking another run blurs this editor after the click already opened the next one.
+    setEditingRun((current) => current?.index === editingRun?.index ? null : current);
+    if (save && run && editingRun && editingRun.text !== (replacementOf(run.index) ?? run.text)) onEditRun(run, editingRun.text);
   }
   function selectedTextRects(): SceneRect[] {
     const selection = window.getSelection();
@@ -236,6 +247,11 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     if (event.button !== 0 || gesture.current) return;
     const target = event.target as Element;
     if (target.closest('[data-text-editor]')) return;
+    if (tool === 'edit-text') {
+      const index = target.closest('[data-edit-run]')?.getAttribute('data-edit-run');
+      if (index == null) { onSelectRun(null); setEditingRun(null); } else { event.preventDefault(); openRun(Number(index)); }
+      return;
+    }
     const textTarget = tool === 'highlight' && target.closest('[data-text-run]');
     const start = point(event);
     if (textTarget) {
@@ -348,6 +364,7 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
   }
   function key(event: KeyboardEvent<SVGElement>, object: SceneObject, corner?: string) {
     if (event.key === 'Escape') { cancelGesture(); onSelect(null); return; }
+    if (event.key === 'Enter' && object.kind === 'text' && !corner) { beginTextEdit(event, object); return; }
     if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(object.id); return; }
     const steps: Record<string, ScenePoint> = { ArrowLeft: { x: -1, y: 0 }, ArrowRight: { x: 1, y: 0 }, ArrowUp: { x: 0, y: -1 }, ArrowDown: { x: 0, y: 1 } };
     const step = steps[event.key];
@@ -364,7 +381,10 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
       : { ...r, x: Math.max(b.x, Math.min(b.x + b.width - r.width, r.x + dx)), y: Math.max(b.y, Math.min(b.y + b.height - r.height, r.y + dy)) };
     onCommit({ ...page, objects: page.objects.map(o => o.id === object.id ? (corner ? resizedObject(o, rect, o) : { ...o, rect }) : o) });
   }
-  const exact = renderedPreview && !draft && !editingId;
+  const exact = renderedPreview && !draft && !editingId && !editingRun;
+  const overflowRun = tool === 'edit-text' && selectedRun !== null ? editRuns.find((run) => run.index === selectedRun) : undefined;
+  const overflowEdit = overflowRun && textEdits.find((edit) => edit.run === overflowRun.index);
+  const overflowWords = overflowEdit ? textOverflowWords(overflowEdit.original, overflowEdit.replacement) : 0;
   return <div className="scene-canvas" ref={host}>
     <svg ref={surface} className={`scene-canvas-page scene-tool-${tool}${panning ? ' scene-pan-active' : spaceHeld ? ' scene-space-pan' : ''}`} aria-label="PDF page canvas" role="group" width={transform.width * scale} height={transform.height * scale} viewBox={`0 0 ${transform.width} ${transform.height}`} onPointerDown={down} onPointerMove={move} onPointerUp={e => finish(e)} onPointerCancel={e => finish(e, true)} onLostPointerCapture={e => finish(e, true)} onDoubleClick={doubleClick}>
       <rect width={transform.width} height={transform.height} fill="var(--pdf-document-page)" />
@@ -380,7 +400,7 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
         {shown.objects.map((object, index) => <g key={object.id}>
           <rect {...object.rect} data-object={object.id} tabIndex={0} role="button" aria-label={`${object.kind} object ${index + 1}`} aria-pressed={selectedId === object.id} className={`scene-object-hit scene-object-${object.kind}`} onFocus={() => onSelect(object.id)} onKeyDown={e => key(e, object)} onDoubleClick={e => beginTextEdit(e, object)} />
           {selectedId === object.id && object.kind === 'text' && editingId === object.id && <foreignObject {...object.rect} data-text-editor="true" className="scene-inline-text-editor">
-            <Textarea ref={editInput} className="h-full w-full min-h-0 resize-none" aria-label="Edit text object" value={editingText} onChange={event => setEditingText(event.target.value)} onBlur={() => finishTextEdit(true)} onPointerDown={event => event.stopPropagation()} onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); finishTextEdit(false); } else if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); finishTextEdit(true); } }} />
+            <Textarea autoFocus onFocus={event => event.currentTarget.select()} className="h-full w-full min-h-0 resize-none" aria-label="Text box text" style={{ fontFamily: cssFont(object.fontFamily ?? 'Noto Sans'), fontWeight: object.bold ? 700 : 400, fontStyle: object.italic ? 'italic' : 'normal', textAlign: object.align ?? 'left' }} value={editingText} onChange={event => setEditingText(event.target.value)} onBlur={() => finishTextEdit(true)} onPointerDown={event => event.stopPropagation()} onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); finishTextEdit(false); } else if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); finishTextEdit(true); } }} />
           </foreignObject>}
           {selectedId === object.id && editingId !== object.id && <g className="scene-selection">
             <rect {...object.rect} fill="none" stroke="var(--pdf-scene-selection)" strokeWidth={1.5 / scale} pointerEvents="none" />
@@ -391,6 +411,28 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
           className="scene-redaction" style={redactionPreview ? { fill: mark.color } : undefined}
           tabIndex={tool === 'redact' ? 0 : -1} role="button" aria-label={`Redaction mark ${index + 1}`} aria-pressed={selectedId === mark.id}
           onFocus={() => { if (tool === 'redact') onSelect(mark.id); }} onKeyDown={e => markKey(e, mark.id)} />)}
+        {tool === 'edit-text' && <g className="scene-edit-layer" aria-label="PDF text you can edit">
+          {editRuns.map((run) => {
+            const edited = replacementOf(run.index);
+            const label = run.reason ? `${run.text}. ${notEditableReasons[run.reason].short}` : `Edit text: ${edited ?? run.text}`;
+            return <rect key={run.index} data-edit-run={run.index} x={run.x} y={run.y} width={Math.max(1, run.width)} height={Math.max(1, run.height)}
+              className={run.reason ? 'scene-edit-run-blocked' : edited !== undefined ? 'scene-edit-run scene-edit-run-changed' : 'scene-edit-run'}
+              strokeWidth={1.5 / scale} tabIndex={0} role="button" aria-label={label} aria-pressed={selectedRun === run.index}
+              onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openRun(run.index); } }}>
+              {run.reason && <title>{notEditableReasons[run.reason].short}</title>}
+            </rect>;
+          })}
+          {editingRun && (() => {
+            const run = editRuns.find((item) => item.index === editingRun.index);
+            return run && <foreignObject x={run.x} y={run.y - 2} width={Math.max(run.width, 40)} height={run.height + 4} data-text-editor="true" className="scene-inline-text-editor">
+              <Input autoFocus className="h-full w-full min-h-0 rounded-sm px-1 py-0" style={{ fontSize: Math.max(6, run.height * 0.8) }} aria-label="Replacement text"
+                value={editingRun.text} onChange={(event) => setEditingRun({ index: run.index, text: event.target.value })} onBlur={() => finishRunEdit(true)}
+                onPointerDown={(event) => event.stopPropagation()}
+                onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); finishRunEdit(true); } else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); finishRunEdit(false); } }} />
+            </foreignObject>;
+          })()}
+          {overflowRun && overflowWords > 0 && <text className="scene-edit-overflow" x={overflowRun.x} y={overflowRun.y + overflowRun.height + 10} fontSize={8}>{overflowMessage(overflowWords)}</text>}
+        </g>}
         {draft && gesture.current?.mode === 'crop' && draft.crop && <rect {...draft.crop} className="scene-crop-outline" strokeWidth={2 / scale} pointerEvents="none" />}
       </g>
     </svg>
