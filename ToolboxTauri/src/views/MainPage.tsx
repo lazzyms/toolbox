@@ -35,9 +35,11 @@ import type { PdfEditorNavigation } from "./PDFEditorWorkspaceView";
 import { SecurityWorkspaceView } from "./SecurityWorkspaceView";
 import { PDFEditorWorkspaceView } from "./PDFEditorWorkspaceView";
 import { PDFConversionWorkspaceView } from "./PDFConversionWorkspaceView";
+import { ExtractFromPdfView } from "./ExtractFromPdfView";
 import { ImageEditorWorkspaceView } from "./ImageEditorWorkspaceView";
 import { CompressFilesWorkspaceView } from "./CompressFilesWorkspaceView";
 import { MediaWorkspaceView } from "./MediaWorkspaceView";
+import { CropResizeView } from "./CropResizeView";
 import { PlannedToolView, UnavailableToolView } from "./PlannedToolView";
 import { SettingsPage, type SettingsSection } from "./SettingsPage";
 import { favoritesStorageKey, recentStorageKey } from "../savedToolIds";
@@ -716,10 +718,14 @@ const ViewFor = ({ utility, initialPaths, fileActivation, onActivationAccepted, 
   const workspace = workspaceForTool(utility.id);
   if (!workspace) return <PlannedToolView utility={utility} />;
   // Views are chosen by tool: the PDF Editor holds both the scene editor and batch PDF tools.
-  if (isPdfSceneTool(utility.id)) return <PDFEditorWorkspaceView utility={utility} initialPaths={initialPaths} onNavigate={onNavigate} onWorkspaceSourceAction={onWorkspaceSourceAction} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange} />;
-  if (workspace.id === "pdf-editor" || workspace.id === "pdf-convert") return <PDFConversionWorkspaceView utility={utility} initialPaths={initialPaths} onFilesChange={onFilesChange} />;
-  if (workspace.id === "image-editor" && utility.id !== "image-metadata") return <ImageEditorWorkspaceView utility={utility} initialPaths={initialPaths} onSelectTool={onSelectTool} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange} onWorkspaceSourceAction={onWorkspaceSourceAction} />;
-  if (utility.id === "image-metadata") return <MediaWorkspaceView utility={utility} initialPaths={initialPaths} onFilesChange={onFilesChange} />;
+  if (utility.id === "pdf-crop") return <CropResizeView utility={utility} initialPaths={initialPaths} onFilesChange={onFilesChange} onSelectTool={onSelectTool} />;
+  if (utility.id === "pdf-extract") return <ExtractFromPdfView utility={utility} initialPaths={initialPaths} onFilesChange={onFilesChange} />;
+  if (workspace.id === "pdf-editor") return <PDFEditorWorkspaceView utility={utility} initialPaths={initialPaths} onNavigate={onNavigate} onSelectTool={onSelectTool} onWorkspaceSourceAction={onWorkspaceSourceAction} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange} />;
+  if (workspace.id === "pdf-convert") return <PDFConversionWorkspaceView utility={utility} initialPaths={initialPaths} onFilesChange={onFilesChange} onSelectTool={onSelectTool} />;
+  // Image Metadata and Convert Image Format run per file on their own screen, without an edit plan.
+  const runsWithoutEditPlan = utility.id === "image-metadata" || utility.id === "heic-convert";
+  if (workspace.id === "image-editor" && !runsWithoutEditPlan) return <ImageEditorWorkspaceView utility={utility} initialPaths={initialPaths} onSelectTool={onSelectTool} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange} onWorkspaceSourceAction={onWorkspaceSourceAction} />;
+  if (runsWithoutEditPlan) return <MediaWorkspaceView utility={utility} initialPaths={initialPaths} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange} />;
   const View = workspaceViews[workspace.id];
   return <View utility={utility} />;
 };

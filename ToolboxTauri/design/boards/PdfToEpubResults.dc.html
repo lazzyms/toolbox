@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PDF to EPUB results</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+.tb{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;font-size:13px;line-height:1.45;color:var(--fg);background:var(--bg);-webkit-font-smoothing:antialiased;position:relative}
+.tb.dark{--bg:#0a0a0a;--side:#111111;--panel:#0f0f0f;--raise:#1c1c1c;--fg:#fafafa;--mut:#a3a3a3;--faint:#8a8a8a;--line:rgba(255,255,255,.08);--line2:rgba(255,255,255,.16);--sel:#262626;--pri:#ebebeb;--prifg:#171717;--bad:#ff6b6b;--warn:#f2b552;--ring:#a3a3a3;--scrim:rgba(0,0,0,.6);--seg-ok:#d4d4d4;--seg-wait:#2a2a2a}
+.tb.light{--bg:#ffffff;--side:#f7f7f7;--panel:#fcfcfc;--raise:#f2f2f2;--fg:#0a0a0a;--mut:#525252;--faint:#666666;--line:#e8e8e8;--line2:#d4d4d4;--sel:#ebebeb;--pri:#171717;--prifg:#fafafa;--bad:#c10007;--warn:#9a5800;--ring:#525252;--scrim:rgba(0,0,0,.28);--seg-ok:#262626;--seg-wait:#e5e5e5}
+.tb button,.tb input,.tb select{font:inherit;color:inherit}
+.btn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:7px;border:1px solid var(--line2);background:var(--raise);color:var(--fg);font-weight:500;cursor:pointer;white-space:nowrap;box-sizing:border-box;text-decoration:none}
+.btn.pri{background:var(--pri);color:var(--prifg);border-color:transparent}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--mut)}
+.btn.sm{height:26px;padding:0 9px;font-size:12px}
+.btn.xs{height:22px;padding:0 7px;font-size:12px}
+.kbd{font-size:11px;line-height:16px;padding:0 5px;border-radius:4px;border:1px solid var(--line2);color:var(--mut);font-weight:500}
+.btn.pri .kbd{border-color:currentColor;color:inherit;opacity:.6}
+.nav{display:flex;align-items:center;gap:9px;min-height:30px;padding:0 10px;border-radius:7px;color:var(--mut);text-decoration:none;border:0;background:none;width:100%;text-align:left;cursor:pointer;box-sizing:border-box}
+.nav.on{background:var(--sel);color:var(--fg);font-weight:500}
+.rh{padding:12px 10px 4px;font-size:11px;font-weight:600;color:var(--faint)}
+.lbl{font-size:12px;font-weight:600}
+.hint{font-size:12px;color:var(--mut)}
+.rrow{display:grid;grid-template-columns:20px minmax(0,1fr) 112px 200px;gap:4px 12px;align-items:start;padding:7px 20px;border-bottom:1px solid var(--line)}
+svg.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.tb :focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+a{color:inherit}
+.chip{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;border-radius:999px;border:1px solid var(--line2);background:transparent;font-size:12px;cursor:pointer;color:var(--mut)}
+.chip[aria-pressed="true"]{background:var(--sel);color:var(--fg);font-weight:500}
+.outs{grid-column:2 / -1;list-style:none;margin:0;padding:2px 0 2px 10px;display:flex;flex-direction:column;gap:2px;border-left:2px solid var(--line)}
+.outs li{display:grid;grid-template-columns:16px minmax(0,210px) minmax(0,1fr) auto;gap:8px;align-items:center;min-height:26px}
+.outs li .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.outs li .meta{font-size:12px;color:var(--mut);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.outs li .acts{display:flex;gap:4px;justify-content:flex-end}
+.dets{grid-column:2 / -1;list-style:none;margin:0;padding:2px 0 2px 10px;display:flex;flex-direction:column;border-left:2px solid var(--line)}
+.dets li{display:grid;grid-template-columns:16px 120px minmax(0,1fr);gap:8px;align-items:baseline;min-height:22px;font-size:12px}
+.dets li .k{color:var(--mut)}
+.used{display:grid;grid-template-columns:110px minmax(0,1fr);gap:6px 10px;margin:0}
+.used dt{color:var(--mut);font-size:12px}.used dd{margin:0}
+.dest{border-top:1px solid var(--line);padding-top:16px;display:flex;flex-direction:column;gap:8px}
+.link{align-self:flex-start;padding:0;height:24px;color:var(--fg);text-decoration:underline;text-underline-offset:3px}
+.est{display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;margin:0}
+</style>
+</helmet>
+<div class="{{themeClass}}" style="min-height: 800px; height: 800px; overflow: hidden; display: flex">
+<aside aria-label="PDF Conversion" style="flex: 1 1 220px; max-width: 232px; background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; padding: 14px 10px; box-sizing: border-box">
+<a class="nav" href="Main.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M5 12l6 6M5 12l6-6"></path></svg>All tools</a>
+<div style="padding: 16px 10px 2px; font-size: 12px; font-weight: 600; color: var(--faint)">PDF Conversion</div>
+<nav aria-label="PDF Conversion tools" style="display: flex; flex-direction: column; gap: 2px"><sc-for list="{{railGroups}}" as="g" hint-placeholder-count="3"><div role="group" aria-labelledby="{{g.id}}" style="display: flex; flex-direction: column; gap: 2px"><div id="{{g.id}}" class="rh">{{g.title}}</div><sc-for list="{{g.items}}" as="it" hint-placeholder-count="3"><button class="{{it.cls}}" aria-pressed="{{it.pressed}}" tabindex="{{it.tab}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="{{it.d}}"></path></svg>{{it.name}}</button></sc-for></div></sc-for></nav>
+<div style="flex: 1"></div>
+<a class="nav" href="Settings.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"></path></svg>Settings<span class="kbd" style="margin-left: auto">{{settingsKey}}</span></a>
+<p class="hint" style="margin: 0; padding: 10px 10px 0">Files stay on this device.</p>
+</aside>
+<div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+<header style="min-height: 52px; display: flex; align-items: center; gap: 14px; padding: 0 20px; border-bottom: 1px solid var(--line); flex-wrap: wrap">
+<h1 style="margin: 0; font-size: 15px; font-weight: 600">PDF to EPUB</h1>
+<span class="hint">Turn each PDF into a reflowable eBook for phones and e-readers.</span>
+<div style="flex: 1"></div>
+<button class="btn ghost"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"></circle><path d="M21 21l-6-6"></path></svg>Find a tool<span class="kbd">{{findKey}}</span></button>
+</header>
+<div style="flex: 1; display: flex; min-height: 0">
+<section aria-label="Results" style="flex: 999 1 480px; min-width: 0; display: flex; flex-direction: column">
+<div style="padding: 14px 20px 12px; display: flex; flex-direction: column; gap: 10px; border-bottom: 1px solid var(--line)">
+<div role="status" aria-live="polite" style="display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap"><strong style="font-size: 15px">{{resTitle}}</strong><span class="hint">{{resSub}}</span></div>
+<div aria-hidden="true" style="display: flex; gap: 2px; height: 6px"><sc-for list="{{segments}}" as="s" hint-placeholder-count="9"><span style="flex: 1; border-radius: 2px; background: {{s.bg}}"></span></sc-for></div>
+<div role="group" aria-label="Show" style="display: flex; gap: 6px; flex-wrap: wrap; align-items: center"><sc-for list="{{chips}}" as="c" hint-placeholder-count="3"><button class="chip" aria-pressed="{{c.on}}">{{c.label}}<span style="color: var(--mut)">{{c.n}}</span></button></sc-for><div style="flex: 1"></div><button class="btn sm"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2"></path></svg>{{revealAll}}</button></div>
+</div>
+<ul aria-label="Results by PDF" style="list-style: none; margin: 0; padding: 0; overflow: auto"><sc-for list="{{rows}}" as="r" hint-placeholder-count="9"><li class="rrow" aria-label="{{r.label}}">
+<span style="color: {{r.color}}; display: flex; padding-top: 1px"><sc-if value="{{r.isOk}}" hint-placeholder-val="{{ true }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l5 5L20 7"></path></svg></sc-if><sc-if value="{{r.isWarn}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9.5 17h-19z"></path><path d="M12 10v4M12 17.5v.01"></path></svg></sc-if><sc-if value="{{r.isNote}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v6M12 7.5v.5"></path></svg></sc-if><sc-if value="{{r.isSkip}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M8.5 12h7"></path></svg></sc-if><sc-if value="{{r.isFail}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M9 9l6 6M15 9l-6 6"></path></svg></sc-if></span>
+<span style="min-width: 0; display: flex; flex-direction: column"><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{r.name}}</span><span class="hint" style="color: {{r.detailColor}}">{{r.detail}}</span></span>
+<span style="color: {{r.color}}; padding-top: 1px">{{r.state}}</span>
+<span style="display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap"><sc-if value="{{r.hasToggle}}" hint-placeholder-val="{{ false }}"><button class="btn sm ghost" aria-expanded="{{r.open}}" aria-controls="dt-{{r.id}}">{{r.toggle}}</button></sc-if><sc-if value="{{r.hasPointer}}" hint-placeholder-val="{{ false }}"><button class="btn sm" aria-label="{{r.pointerLabel}}">{{r.pointer}}</button></sc-if></span>
+<sc-if value="{{r.hasOuts}}" hint-placeholder-val="{{ false }}"><ul class="outs" aria-label="Output from {{r.name}}"><sc-for list="{{r.outs}}" as="o" hint-placeholder-count="1"><li><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><path d="M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3zM9 8h6"></path></svg><span class="nm">{{o.nm}}</span><span class="meta">{{o.meta}}</span><span class="acts"><button class="btn xs" aria-label="Open {{o.nm}}">Open</button><button class="btn xs ghost" aria-label="{{reveal}}: {{o.nm}}">{{revealShort}}</button></span></li></sc-for></ul></sc-if>
+<sc-if value="{{r.isOpen}}" hint-placeholder-val="{{ false }}"><ul id="dt-{{r.id}}" class="dets" aria-label="Details for {{r.name}}"><sc-for list="{{r.items}}" as="p" hint-placeholder-count="4"><li><span style="color: {{p.color}}; display: flex"><sc-if value="{{p.isWarn}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px"><path d="M12 3l9.5 17h-19z"></path><path d="M12 10v4M12 17.5v.01"></path></svg></sc-if><sc-if value="{{p.isNote}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v6M12 7.5v.5"></path></svg></sc-if><sc-if value="{{p.isFact}}" hint-placeholder-val="{{ true }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px"><path d="M5 12l5 5L20 7"></path></svg></sc-if></span><span class="k">{{p.k}}</span><span>{{p.v}}</span></li></sc-for></ul></sc-if></li></sc-for></ul>
+</section>
+
+<section aria-label="Run summary" style="flex: 1 1 300px; max-width: 360px; border-left: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column">
+<div style="padding: 16px 20px; display: flex; flex-direction: column; gap: 14px; flex: 1; min-height: 0; overflow: auto">
+<div style="display: flex; flex-direction: column; gap: 8px"><span class="lbl" id="usedl">This run used</span>
+<dl class="used" aria-labelledby="usedl"><sc-for list="{{used}}" as="u" hint-placeholder-count="4"><dt>{{u.k}}</dt><dd>{{u.v}}</dd></sc-for></dl>
+<button class="btn sm" style="align-self: flex-start">Change options</button>
+<span class="hint">Change an option, then convert again. New EPUBs get -1, -2 and so on, so nothing is replaced.</span></div>
+<div class="dest"><span class="lbl">Saved to</span><div style="display: flex; align-items: center; gap: 8px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2"></path></svg><span>Next to each original</span></div><button class="btn ghost link">Change for this run</button></div>
+<div class="dest"><span class="lbl">Reading the details</span><span class="hint">Contents comes from the PDF's bookmarks when it has them, otherwise from headings found in the text. Pages with no text were scanned or are pictures only; OCR can read them. Not reflowed lists layouts that may read out of order in the EPUB, such as columns, tables and formulas.</span></div>
+</div>
+<footer style="padding: 12px 20px 14px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px">
+<p id="est" class="est" role="status" aria-live="polite"><strong>Originals weren't changed</strong><span class="hint">Convert again writes new EPUBs beside these ones</span></p>
+<div style="display: flex; align-items: center; gap: 10px; min-width: 0"><button class="btn ghost">Clear list</button><div style="flex: 1"></div><button class="btn pri" aria-describedby="est">Convert again<span class="kbd">{{runKey}}</span></button></div>
+</footer></section>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "state": {"editor": "enum", "options": ["All results", "Book details open", "Needs attention", "Warnings and notes", "Single book"], "default": "All results"}, "$preview": {"width": 1280, "height": 800}}'>
+class Component extends DCLogic {
+renderVals() {
+const win = (this.props.platform ?? 'macOS') === 'Windows';
+const light = (this.props.theme ?? 'dark') === 'light';
+const base = { themeClass: light ? 'tb light' : 'tb dark', findKey: win ? 'Ctrl+K' : '⌘K', settingsKey: win ? 'Ctrl+,' : '⌘,', runKey: win ? 'Ctrl+Enter' : '⌘↵', reveal: win ? 'Show in File Explorer' : 'Show in Finder', revealShort: win ? 'Show in Explorer' : 'Show in Finder', revealAll: win ? 'Show all in Explorer' : 'Show all in Finder' };
+const railFor = (active) => [['Combine and split', [['Merge PDFs', 'M7 3v5l5 4 5-4V3M12 12v9'], ['Split PDF', 'M12 3v7M12 10l-6 5v6M12 10l6 5v6'], ['Images to PDF', 'M4 4h16v16H4zM4 15l5-5 4 4 3-3 4 4']]], ['From PDF', [['PDF to Images', 'M4 4h16v16H4zM4 15l5-5 4 4 3-3 4 4'], ['Extract from PDF', 'M12 3l9 5-9 5-9-5zM3 13l9 5 9-5'], ['PDF to EPUB', 'M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3zM9 8h6']]], ['Make PDFs', [['OCR', 'M4 20h4L19 9l-4-4L4 16zM13 7l4 4'], ['Formatted PDF', 'M5 6V4h14v2M12 4v16M9 20h6'], ['Convert to PDF', 'M14 3v5h5M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z']]]].map((g, gi) => ({ id: 'rg' + gi, title: g[0], items: g[1].map((it) => ({ name: it[0], d: it[1], cls: it[0] === active ? 'nav on' : 'nav', pressed: it[0] === active ? 'true' : 'false', tab: it[0] === active ? '0' : '-1' })) }));
+const S = this.props.state ?? 'All results';
+const col = (k) => k === 'fail' ? 'var(--bad)' : k === 'warn' ? 'var(--warn)' : k === 'skip' || k === 'note' ? 'var(--mut)' : 'var(--fg)';
+const stateName = { ok: 'Converted', note: 'Converted', warn: 'Converted', skip: 'Skipped', fail: 'Failed' };
+let n = 0;
+const ep = (nm, meta) => ({ nm, meta });
+const df = (k, v) => ({ k, v, isFact: true, isWarn: false, isNote: false, color: 'var(--mut)' });
+const dw = (k, v) => ({ k, v, isFact: false, isWarn: true, isNote: false, color: 'var(--warn)' });
+const dn = (k, v) => ({ k, v, isFact: false, isWarn: false, isNote: true, color: 'var(--mut)' });
+const mk = (k, o) => { n += 1; const outs = o.outs || []; const items = o.items || []; const open = !!o.open; const r = Object.assign({ id: 'r' + n, isOk: k === 'ok', isWarn: k === 'warn', isNote: k === 'note', isSkip: k === 'skip', isFail: k === 'fail', k, color: col(k), detailColor: k === 'fail' ? 'var(--fg)' : 'var(--mut)', state: stateName[k], outs, hasOuts: outs.length > 0, items, hasToggle: items.length > 0, open: open ? 'true' : 'false', isOpen: open && items.length > 0, toggle: open ? 'Hide details' : 'Show details (' + items.length + ')', hasPointer: !!o.pointer, pointer: o.pointer || '', pointerLabel: o.pointer ? o.pointer + ' for ' + o.name : '', detail: '' }, o); r.label = r.name + ', ' + r.state + '. ' + r.detail; return r; };
+const x = { railGroups: railFor('PDF to EPUB') };
+const ocr = 'Open in OCR';
+const longRoad = (open) => mk('ok', { name: 'the-long-road-home.pdf', detail: '310 pages, 12 images. Contents from the bookmarks, 14 chapters.', outs: [ep('the-long-road-home.epub', '1.9 MB')], open, items: [df('Pages converted', '3-312'), df('Images kept', '12 of 12'), df('Contents', 'From the PDF\'s bookmarks, 14 entries'), df('Headers and footers', 'Removed from 304 pages')] });
+const all = () => [
+ longRoad(S === 'Book details open'),
+ mk('warn', { name: 'field-guide-birds.pdf', detail: '186 pages, 240 of 241 images. 1 image couldn\'t be read; 2 parts may read out of order.', outs: [ep('field-guide-birds.epub', '22.4 MB')], open: S === 'Book details open' || S === 'Warnings and notes', items: [df('Pages converted', '3-188'), df('Contents', 'From headings in the text, 9 entries'), dw('Page 63, image 2', 'JBIG2 isn\'t supported in this version. Left out; the rest of the book converted.'), dw('Pages 40-44', 'Two-column layout. Joined into one column, so captions may sit away from their pictures.'), dw('Page 151', 'A table was flowed as plain paragraphs.')] }),
+ mk('note', { name: 'climate-study-2025.pdf', detail: '14 pages. Pages 7 and 12 have no selectable text, so they aren\'t in the EPUB.', outs: [ep('climate-study-2025.epub', '640 KB')], pointer: ocr, open: S === 'Warnings and notes', items: [df('Pages converted', '3-6, 8-11, 13-18'), dn('Pages 7, 12', 'No selectable text. They may be scanned; OCR can read them.'), dw('Pages 9-10', 'Formulas may read out of order.'), dn('Page 15', 'Some text has no reliable character mapping and may show as boxes.')] }),
+ mk('ok', { name: 'quarterly-report.pdf', detail: '22 pages, 6 images. quarterly-report.epub already existed, so a new name was used.', outs: [ep('quarterly-report-1.epub', '810 KB')], items: [df('Pages converted', '3-24'), df('Contents', 'From headings in the text, 5 entries'), df('Name', 'Renamed to avoid replacing quarterly-report.epub')] }),
+ mk('skip', { name: 'lecture-notes-week3.pdf', detail: 'PDF contains no selectable text; scanned PDFs require OCR. No EPUB was made.', pointer: ocr }),
+ mk('skip', { name: 'memo-oct.pdf', detail: 'No pages in range 3-. This PDF has 2 pages. No EPUB was made.' }),
+ mk('fail', { name: 'payslip-sept.pdf', detail: 'This PDF is password-protected. Remove the password, then convert again.', pointer: 'Remove Password' }),
+ mk('fail', { name: 'old-contract.pdf', detail: 'This file is damaged or isn\'t a PDF, so it couldn\'t be read.' }),
+ mk('fail', { name: 'archive-catalogue.pdf', detail: '6,200 pages is over the limit of 5,000 pages for one PDF. Split it, then convert each part.', pointer: 'Split PDF' })
+];
+let rows = [];
+let used = [['Pages', '3- (page 3 to the end)'], ['Headers and footers', 'Removed'], ['Cover', 'First page'], ['Book details', 'From each PDF']];
+let pool;
+if (S === 'Single book') {
+ rows = [mk('ok', { name: 'the-long-road-home.pdf', detail: '312 pages, 12 images. Contents from the bookmarks, 14 chapters. the-long-road-home.epub already existed, so a new name was used.', outs: [ep('the-long-road-home-1.epub', '1.9 MB')], open: true, items: [df('Pages converted', '1-312'), df('Images kept', '12 of 12'), df('Contents', 'From the PDF\'s bookmarks, 14 entries'), df('Headers and footers', 'Removed from 306 pages'), df('Cover', 'Page 1'), df('Title and author', 'The Long Road Home, Mira Okafor (changed for this book)')] })];
+ pool = rows;
+ used = [['Pages', 'All pages'], ['Headers and footers', 'Removed'], ['Cover', 'First page'], ['Book details', 'The Long Road Home, Mira Okafor']];
+ x.resTitle = 'Converted the-long-road-home.pdf'; x.resSub = 'Renamed to avoid replacing the-long-road-home.epub';
+} else {
+ pool = all();
+ rows = S === 'Needs attention' ? pool.filter((r) => r.k === 'fail' || r.k === 'skip') : S === 'Warnings and notes' ? pool.filter((r) => r.k === 'warn' || r.k === 'note') : pool;
+ x.resTitle = 'Converted 4 of 9 PDFs'; x.resSub = '2 skipped, 3 failed';
+}
+const cnt = (f) => pool.filter(f).length;
+x.chips = [['All', pool.length, S !== 'Needs attention' && S !== 'Warnings and notes'], ['Needs attention', cnt((r) => r.k === 'fail' || r.k === 'skip'), S === 'Needs attention'], ['Warnings and notes', cnt((r) => r.k === 'warn' || r.k === 'note'), S === 'Warnings and notes']].map((c) => ({ label: c[0], n: String(c[1]), on: c[2] ? 'true' : 'false' }));
+x.segments = pool.map((r) => ({ bg: r.k === 'fail' ? 'var(--bad)' : r.k === 'warn' ? 'var(--warn)' : r.k === 'skip' ? 'var(--line2)' : 'var(--seg-ok)' }));
+x.rows = rows;
+x.used = used.map((u) => ({ k: u[0], v: u[1] }));
+return Object.assign(base, x);
+}
+}
+</script>
+</body>
+</html>
