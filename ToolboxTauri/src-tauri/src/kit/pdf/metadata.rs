@@ -35,6 +35,8 @@ pub struct PdfTextRun {
 pub struct PdfDocumentMetadata {
     pub path: PathBuf,
     pub pages: Vec<PdfPageMetadata>,
+    /// True when a signature field holds a signature value, so an exported copy loses it.
+    pub signed: bool,
 }
 
 pub fn inspect(path: &Path) -> Result<PdfDocumentMetadata, String> {
@@ -63,7 +65,7 @@ pub fn inspect(path: &Path) -> Result<PdfDocumentMetadata, String> {
             })
         }))
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(PdfDocumentMetadata { path: path.to_path_buf(), pages })
+    Ok(PdfDocumentMetadata { path: path.to_path_buf(), pages, signed: super::has_signed_signature_field(&document) })
 }
 
 pub(crate) fn render_preview(path: &Path, page: usize, width: f32, height: f32) -> Option<String> {

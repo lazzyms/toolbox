@@ -175,20 +175,50 @@ pub enum InputCardinality {
     Single,
     Multiple,
     Ordered,
+    /// A creation tool: it takes no input files and accepts no extensions.
+    None,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FormatFamily {
+    pub id: String,
+    pub extensions: Vec<String>,
+    #[serde(rename = "nativeAvailability", deserialize_with = "deserialize_native_availability")]
+    pub native_available: bool,
+    #[serde(default)]
+    pub basic_fidelity: bool,
+}
+
+#[derive(Debug, Clone)]
 pub struct NativeCapability {
     pub command: String,
     pub accepted_extensions: Vec<String>,
+    pub format_families: Vec<FormatFamily>,
     pub input_cardinality: InputCardinality,
     pub supports_page_selection: bool,
     pub supports_preview: bool,
-    #[serde(rename = "nativeAvailability", deserialize_with = "deserialize_native_availability")]
     pub native_available: bool,
     pub output_suffix: String,
     pub many_to_one: bool,
+    pub output_formats: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SharedCapabilityRow {
+    command: String,
+    accepted_extensions: Option<Vec<String>>,
+    format_families: Option<Vec<FormatFamily>>,
+    input_cardinality: InputCardinality,
+    supports_page_selection: bool,
+    supports_preview: bool,
+    #[serde(rename = "nativeAvailability", deserialize_with = "deserialize_native_availability")]
+    native_available: bool,
+    output_suffix: String,
+    many_to_one: bool,
+    #[serde(default)]
+    output_formats: Option<Vec<String>>,
 }
 
 static CAPABILITY_REGISTRY: OnceLock<Vec<NativeCapability>> = OnceLock::new();
@@ -204,30 +234,82 @@ where
     }
 }
 
+fn accepted_extensions_of(row: &mut SharedCapabilityRow) -> Result<Vec<String>, String> {
+    let command = &row.command;
+    match (row.accepted_extensions.take(), &row.format_families) {
+        (Some(extensions), None) => Ok(extensions),
+        (None, Some(families)) => {
+            if families.is_empty() {
+                return Err(format!("{command} has no format families."));
+            }
+            let mut ids = HashSet::new();
+            for family in families {
+                if !is_valid_family_id(&family.id) || !ids.insert(family.id.as_str()) {
+                    return Err(format!("{command} has an invalid or duplicate format family {}.", family.id));
+                }
+                if family.extensions.is_empty() {
+                    return Err(format!("{command} format family {} has no extensions.", family.id));
+                }
+            }
+            Ok(families.iter().flat_map(|family| family.extensions.iter().cloned()).collect())
+        }
+        _ => Err(format!("{command} must declare either accepted extensions or format families.")),
+    }
+}
+
+fn is_valid_family_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.split('-').all(|segment| {
+            !segment.is_empty() && segment.chars().all(|character| character.is_ascii_lowercase() || character.is_ascii_digit())
+        })
+}
+
 fn parse_capability_registry(raw: &str) -> Result<Vec<NativeCapability>, String> {
-    let capabilities: Vec<NativeCapability> = serde_json::from_str(raw).map_err(|error| error.to_string())?;
-    if capabilities.is_empty() {
+    let rows: Vec<SharedCapabilityRow> = serde_json::from_str(raw).map_err(|error| error.to_string())?;
+    if rows.is_empty() {
         return Err("The shared capability registry is empty.".to_string());
+    }
+    let mut capabilities = Vec::with_capacity(rows.len());
+    for mut row in rows {
+        let accepted_extensions = accepted_extensions_of(&mut row)?;
+        capabilities.push(NativeCapability {
+            command: row.command,
+            accepted_extensions,
+            format_families: row.format_families.unwrap_or_default(),
+            input_cardinality: row.input_cardinality,
+            supports_page_selection: row.supports_page_selection,
+            supports_preview: row.supports_preview,
+            native_available: row.native_available,
+            output_suffix: row.output_suffix,
+            many_to_one: row.many_to_one,
+            output_formats: row.output_formats,
+        });
     }
     let mut commands = HashSet::new();
     for capability in &capabilities {
         if capability.command.is_empty() || !commands.insert(capability.command.as_str()) {
             return Err(format!("Duplicate or empty shared capability command {}.", capability.command));
         }
-        if capability.accepted_extensions.is_empty() {
+        if capability.input_cardinality == InputCardinality::None {
+            if !capability.accepted_extensions.is_empty() {
+                return Err(format!("{} takes no input files, so it cannot declare accepted extensions.", capability.command));
+            }
+        } else if capability.accepted_extensions.is_empty() {
             return Err(format!("{} has no accepted extensions.", capability.command));
         }
-        let mut extensions = HashSet::new();
-        for extension in &capability.accepted_extensions {
-            let valid = extension.strip_prefix('.').is_some_and(|value| {
-                !value.is_empty()
-                    && value.chars().all(|character| {
-                        character.is_ascii_lowercase() || character.is_ascii_digit()
-                    })
-            });
-            if !valid || !extensions.insert(extension.as_str()) {
+        if let Some(extension) = first_invalid_extension(&capability.accepted_extensions) {
+            return Err(format!(
+                "{} has an invalid accepted extension {extension}.",
+                capability.command
+            ));
+        }
+        if let Some(formats) = &capability.output_formats {
+            if formats.is_empty() {
+                return Err(format!("{} lists no output formats.", capability.command));
+            }
+            if let Some(extension) = first_invalid_extension(formats) {
                 return Err(format!(
-                    "{} has an invalid accepted extension {extension}.",
+                    "{} has an invalid output format {extension}.",
                     capability.command
                 ));
             }
@@ -240,6 +322,19 @@ fn parse_capability_registry(raw: &str) -> Result<Vec<NativeCapability>, String>
         }
     }
     Ok(capabilities)
+}
+
+fn first_invalid_extension(extensions: &[String]) -> Option<&str> {
+    let mut seen = HashSet::new();
+    extensions.iter().map(String::as_str).find(|extension| {
+        let valid = extension.strip_prefix('.').is_some_and(|value| {
+            !value.is_empty()
+                && value.chars().all(|character| {
+                    character.is_ascii_lowercase() || character.is_ascii_digit()
+                })
+        });
+        !valid || !seen.insert(*extension)
+    })
 }
 
 fn is_valid_output_suffix(suffix: &str) -> bool {
@@ -311,6 +406,20 @@ pub fn partition_command_inputs(command: &str, paths: &[PathBuf]) -> Result<Vali
     let Some(capability) = native_capability(command) else {
         return Err(vec![JobOutcome::failure(PathBuf::new(), ToolError::invalid_input(format!("Unknown native command: {command}.")))]);
     };
+    partition_capability_inputs(capability, paths)
+}
+
+fn partition_capability_inputs(capability: &NativeCapability, paths: &[PathBuf]) -> Result<ValidatedCommandInputs, Vec<JobOutcome>> {
+    let command = capability.command.as_str();
+    if capability.input_cardinality == InputCardinality::None {
+        if !capability.native_available {
+            return Err(vec![JobOutcome::failure(PathBuf::new(), ToolError::unavailable(format!("Native command {command} is unavailable in this build.")))]);
+        }
+        return Ok(ValidatedCommandInputs {
+            accepted: Vec::new(),
+            rejected: paths.iter().cloned().enumerate().map(|(index, path)| (index, JobOutcome::failure(path, ToolError::invalid_input("This action creates a new file and takes no input files.")))).collect(),
+        });
+    }
     if paths.is_empty() {
         let error = if capability.native_available { ToolError::invalid_input("Select at least one input file.") } else { ToolError::unavailable(format!("Native command {command} is unavailable in this build.")) };
         return Err(vec![JobOutcome::failure(PathBuf::new(), error)]);
@@ -388,6 +497,9 @@ pub enum WarningKind {
     FontSubstituted { requested_family: String, actual_family: String },
     RenamedToAvoidReplacing { chosen_name: String, final_name: String },
     PrecisionReduced,
+    /// `into` names what was saved, such as "the merged file" or "the parts".
+    BookmarksNotCarried { into: String },
+    TagsNotCarried { into: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -411,15 +523,17 @@ pub struct JobOutcome {
     pub detail: String,
     pub warnings: Vec<OutcomeWarning>,
     pub state: OutcomeState,
+    pub original_bytes: Option<u64>,
+    pub output_bytes: Option<u64>,
 }
 
 impl JobOutcome {
     pub fn succeeded(input_path: PathBuf, output_paths: Vec<PathBuf>, detail: impl Into<String>) -> Self {
-        Self { input_path, detail: detail.into(), warnings: Vec::new(), state: OutcomeState::Succeeded { output_paths } }
+        Self::new(input_path, detail.into(), OutcomeState::Succeeded { output_paths })
     }
 
     pub fn skipped(input_path: PathBuf, reason: SkipReason) -> Self {
-        Self { input_path, detail: String::new(), warnings: Vec::new(), state: OutcomeState::Skipped { reason } }
+        Self::new(input_path, String::new(), OutcomeState::Skipped { reason })
     }
 
     pub fn failure(input_path: PathBuf, error: ToolError) -> Self {
@@ -427,7 +541,15 @@ impl JobOutcome {
     }
 
     pub fn failure_with_outputs(input_path: PathBuf, output_paths: Vec<PathBuf>, error: ToolError) -> Self {
-        Self { input_path, detail: String::new(), warnings: Vec::new(), state: OutcomeState::Failed { output_paths, error } }
+        Self::new(input_path, String::new(), OutcomeState::Failed { output_paths, error })
+    }
+
+    fn new(input_path: PathBuf, detail: String, state: OutcomeState) -> Self {
+        Self { input_path, detail, warnings: Vec::new(), state, original_bytes: None, output_bytes: None }
+    }
+
+    pub fn with_sizes(self, original_bytes: u64, output_bytes: u64) -> Self {
+        Self { original_bytes: Some(original_bytes), output_bytes: Some(output_bytes), ..self }
     }
 
     pub fn with_warning(mut self, warning: OutcomeWarning) -> Self {
@@ -468,6 +590,10 @@ struct JobOutcomeWire {
     failure: Option<ToolError>,
     reason: Option<SkipReason>,
     warnings: Vec<OutcomeWarning>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    original_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    output_bytes: Option<u64>,
 }
 
 impl From<JobOutcome> for JobOutcomeWire {
@@ -477,7 +603,7 @@ impl From<JobOutcome> for JobOutcomeWire {
             OutcomeState::Skipped { reason } => (OutcomeStateTag::Skipped, Vec::new(), None, Some(reason)),
             OutcomeState::Failed { output_paths, error } => (OutcomeStateTag::Failed, output_paths, Some(error), None),
         };
-        Self { input_path: outcome.input_path, state, output_paths, detail: outcome.detail, failure, reason, warnings: outcome.warnings }
+        Self { input_path: outcome.input_path, state, output_paths, detail: outcome.detail, failure, reason, warnings: outcome.warnings, original_bytes: outcome.original_bytes, output_bytes: outcome.output_bytes }
     }
 }
 
@@ -491,7 +617,7 @@ impl TryFrom<JobOutcomeWire> for JobOutcome {
             (OutcomeStateTag::Failed, Some(error), None) => OutcomeState::Failed { output_paths: wire.output_paths, error },
             (state, _, _) => return Err(format!("Inconsistent {state:?} job outcome for {}.", wire.input_path.display())),
         };
-        Ok(Self { input_path: wire.input_path, detail: wire.detail, warnings: wire.warnings, state })
+        Ok(Self { input_path: wire.input_path, detail: wire.detail, warnings: wire.warnings, state, original_bytes: wire.original_bytes, output_bytes: wire.output_bytes })
     }
 }
 
@@ -548,6 +674,37 @@ mod tests {
         assert_eq!(value["detail"], "PDF Unlocked");
         assert!(value["failure"].is_null() && value["reason"].is_null());
         assert_eq!(value["warnings"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn sizes_serialize_in_camel_case_only_when_reported() {
+        let compressed = JobOutcome::succeeded(PathBuf::from("a.pdf"), vec![PathBuf::from("a-compressed.pdf")], "PDF compressed").with_sizes(2048, 1024);
+        let no_savings = JobOutcome::skipped(PathBuf::from("b.png"), SkipReason::new(SkipCode::NoSavings, "No savings: already well compressed")).with_sizes(512, 600);
+        let plain_success = JobOutcome::succeeded(PathBuf::from("c.pdf"), vec![PathBuf::from("c-1.pdf")], "Saved");
+        let plain_skip = JobOutcome::skipped(PathBuf::from("d.pdf"), SkipReason::new(SkipCode::NotProtected, "Not protected."));
+
+        let value = serde_json::to_value(&compressed).unwrap();
+        assert_eq!((value["state"].as_str(), value["originalBytes"].as_u64(), value["outputBytes"].as_u64()), (Some("succeeded"), Some(2048), Some(1024)));
+        let value = serde_json::to_value(&no_savings).unwrap();
+        assert_eq!((value["state"].as_str(), value["originalBytes"].as_u64(), value["outputBytes"].as_u64()), (Some("skipped"), Some(512), Some(600)));
+        assert_eq!(value["outputPaths"], serde_json::json!([]));
+
+        for (outcome, state) in [(&plain_success, "succeeded"), (&plain_skip, "skipped")] {
+            let value = serde_json::to_value(outcome).unwrap();
+            assert_eq!(value["state"], state);
+            let object = value.as_object().unwrap();
+            assert!(!object.contains_key("originalBytes") && !object.contains_key("outputBytes"), "{value}");
+        }
+
+        for outcome in [compressed, no_savings, plain_success, plain_skip] {
+            assert_eq!(serde_json::from_value::<JobOutcome>(serde_json::to_value(&outcome).unwrap()).unwrap(), outcome);
+        }
+        let explicit_nulls = serde_json::json!({
+            "inputPath": "e.pdf", "state": "succeeded", "outputPaths": [], "detail": "", "failure": null, "reason": null,
+            "warnings": [], "originalBytes": null, "outputBytes": null,
+        });
+        let parsed = serde_json::from_value::<JobOutcome>(explicit_nulls).unwrap();
+        assert_eq!((parsed.original_bytes, parsed.output_bytes), (None, None));
     }
 
     #[test]
@@ -632,9 +789,11 @@ mod tests {
             WarningKind::FontSubstituted { requested_family: "A".into(), actual_family: "B".into() },
             WarningKind::RenamedToAvoidReplacing { chosen_name: "a".into(), final_name: "b".into() },
             WarningKind::PrecisionReduced,
+            WarningKind::BookmarksNotCarried { into: "the parts".into() },
+            WarningKind::TagsNotCarried { into: "the parts".into() },
         ];
         let codes = warnings.into_iter().map(|kind| serde_json::to_value(kind).unwrap()["code"].clone()).collect::<Vec<_>>();
-        assert_eq!(codes, ["signatureRemoved", "fontSubstituted", "renamedToAvoidReplacing", "precisionReduced"]);
+        assert_eq!(codes, ["signatureRemoved", "fontSubstituted", "renamedToAvoidReplacing", "precisionReduced", "bookmarksNotCarried", "tagsNotCarried"]);
     }
 
     #[test]
@@ -667,6 +826,13 @@ mod tests {
                 vec![PathBuf::from("drawings-page-1.png")],
                 ToolError::limit_exceeded(LimitKind::Time, "Took longer than 5 minutes and was stopped. 1 part was saved before it stopped."),
             ),
+            JobOutcome::succeeded(PathBuf::from("report.pdf"), vec![PathBuf::from("report-compressed.pdf")], "PDF compressed")
+                .with_sizes(2_500_000, 1_000_000),
+            JobOutcome::skipped(PathBuf::from("logo.png"), SkipReason::new(SkipCode::NoSavings, "No savings: already well compressed"))
+                .with_sizes(4096, 4200),
+            JobOutcome::succeeded(PathBuf::from("minutes.pdf"), vec![PathBuf::from("board-merged.pdf")], "Pages 3–5 of board-merged.pdf.")
+                .with_warning(OutcomeWarning { kind: WarningKind::BookmarksNotCarried { into: "the merged file".into() }, message: "Bookmarks weren't carried into the merged file.".into() })
+                .with_warning(OutcomeWarning { kind: WarningKind::TagsNotCarried { into: "the merged file".into() }, message: "Accessibility tags weren't carried into the merged file.".into() }),
         ];
 
         assert_eq!(serde_json::to_value(&samples).unwrap(), shared);
@@ -723,6 +889,12 @@ mod tests {
     }
 
     #[test]
+    fn convert_images_accepts_a_batch() {
+        let paths = vec![PathBuf::from("one.png"), PathBuf::from("two.heic"), PathBuf::from("three.jpeg")];
+        assert!(validate_command_inputs("convert_images", &paths).is_ok());
+    }
+
+    #[test]
     fn capability_registry_rejects_unsupported_extensions_at_the_boundary() {
         let outcomes = validate_command_inputs("convert_images", &[PathBuf::from("source.pdf")]).unwrap_err();
 
@@ -731,14 +903,24 @@ mod tests {
     }
 
     #[test]
-    fn images_to_pdf_rejects_tiff_at_the_native_boundary() {
-        for extension in ["tif", "tiff"] {
+    fn images_to_pdf_rejects_gif_at_the_native_boundary() {
+        for extension in ["gif", "bmp"] {
             let outcomes = validate_command_inputs("images_to_pdf", &[PathBuf::from(format!("source.{extension}"))]).unwrap_err();
 
             assert_eq!(outcomes.len(), 1);
             assert!(outcomes[0].error().is_some_and(|error| matches!(error.kind, ErrorKind::InvalidInput)));
             assert!(outcomes[0].error().is_some_and(|error| error.message.contains("Accepted extensions")));
         }
+    }
+
+    #[test]
+    fn images_to_pdf_accepts_heic_and_heif_at_the_native_boundary() {
+        assert!(validate_command_inputs("images_to_pdf", &[PathBuf::from("photo.heic"), PathBuf::from("photo.HEIF")]).is_ok());
+    }
+
+    #[test]
+    fn images_to_pdf_accepts_tiff_at_the_native_boundary() {
+        assert!(validate_command_inputs("images_to_pdf", &[PathBuf::from("scan.tif"), PathBuf::from("scan.TIFF"), PathBuf::from("photo.png")]).is_ok());
     }
 
     #[test]
@@ -780,7 +962,7 @@ mod tests {
 
     #[test]
     fn page_capability_rejects_an_explicit_empty_selection() {
-        let outcomes = validate_page_selection("pdf_to_text", &[PathBuf::from("source.pdf")], Some(&[])).unwrap_err();
+        let outcomes = validate_page_selection("pdf_to_images", &[PathBuf::from("source.pdf")], Some(&[])).unwrap_err();
 
         assert_eq!(outcomes.len(), 1);
         assert!(outcomes[0].error().is_some_and(|error| error.message.contains("at least one page")));
@@ -808,6 +990,7 @@ mod tests {
                     "single" => InputCardinality::Single,
                     "multiple" => InputCardinality::Multiple,
                     "ordered" => InputCardinality::Ordered,
+                    "none" => InputCardinality::None,
                     cardinality => panic!("Unknown input cardinality {cardinality}"),
                 }
             );
@@ -816,6 +999,10 @@ mod tests {
             assert_eq!(capability.native_available, row["nativeAvailability"] == "available");
             assert_eq!(capability.output_suffix, row["outputSuffix"].as_str().unwrap());
             assert_eq!(capability.many_to_one, row["manyToOne"].as_bool().unwrap());
+            assert_eq!(
+                capability.output_formats,
+                row.get("outputFormats").map(|formats| formats.as_array().unwrap().iter().map(|format| format.as_str().unwrap().to_string()).collect::<Vec<_>>())
+            );
             assert_eq!(
                 capability.many_to_one,
                 capability.input_cardinality == InputCardinality::Ordered,
@@ -828,6 +1015,7 @@ mod tests {
             .map(|capability| capability.command.as_str())
             .collect::<Vec<_>>();
         many_to_one.sort_unstable();
+        // process_tiff_pages is many-to-one in its explicit Combine mode; its explicit Split mode runs per file.
         assert_eq!(many_to_one, ["compare_pdfs", "create_gif", "images_to_pdf", "merge_pdfs", "process_tiff_pages"]);
 
         let office = native_capability("remove_password").unwrap();
@@ -839,14 +1027,104 @@ mod tests {
         assert!(native_capability("protect_office").is_none(), "the Office protect command is retired");
         let images = native_capability("images_to_pdf").unwrap();
         assert_eq!(images.input_cardinality, InputCardinality::Ordered);
-        assert!(!images.accepted_extensions.contains(&".tif".to_string()));
-        assert!(!images.accepted_extensions.contains(&".tiff".to_string()));
+        assert!(images.accepted_extensions.contains(&".tif".to_string()));
+        assert!(images.accepted_extensions.contains(&".tiff".to_string()));
+        assert!(!images.accepted_extensions.contains(&".gif".to_string()));
+        assert_eq!(images.accepted_extensions, [".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif", ".tif", ".tiff"]);
+        let stack = native_capability("export_image_edit_stack").unwrap();
+        assert_eq!((stack.input_cardinality, stack.output_suffix.as_str(), stack.many_to_one), (InputCardinality::Multiple, "-cropped", false), "the edit stack runs every image as its own job");
+        assert_eq!(native_capability("crop_images").unwrap().input_cardinality, InputCardinality::Single);
         assert!(!native_capability("extract_gif_frames").unwrap().supports_preview);
-        let pdf = native_capability("pdf_to_text").unwrap();
-        assert!(pdf.supports_page_selection && !pdf.supports_preview);
-        assert!(!native_capability("ocr_pdf").unwrap().native_available);
+        assert_eq!(native_capability("convert_images").unwrap().input_cardinality, InputCardinality::Multiple);
+        let rendered = native_capability("pdf_to_images").unwrap();
+        assert_eq!(rendered.output_formats.as_deref(), Some([".jpg", ".png", ".webp"].map(String::from).as_slice()));
+        assert_eq!(rendered.output_suffix, "-page");
+        assert_eq!(native_capability("extract_gif_frames").unwrap().input_cardinality, InputCardinality::Multiple);
+        for command in ["generate_icon_set", "create_gif"] {
+            let accepted = &native_capability(command).unwrap().accepted_extensions;
+            assert!([".heic", ".heif"].iter().all(|extension| accepted.contains(&extension.to_string())), "{command} must accept HEIC and HEIF sources");
+        }
+        let extract = native_capability("extract_from_pdf").unwrap();
+        assert!(extract.supports_page_selection && !extract.supports_preview);
+        assert_eq!(extract.input_cardinality, InputCardinality::Multiple);
+        assert!(native_capability("pdf_to_text").is_none() && native_capability("extract_pdf_images").is_none());
+        let ocr = native_capability("ocr_pdf").unwrap();
+        assert!(ocr.native_available);
+        assert_eq!((ocr.input_cardinality, ocr.output_suffix.as_str()), (InputCardinality::Multiple, "-ocr"));
         assert!(!native_capability("blur_faces").unwrap().native_available);
         assert!(!native_capability("remove_image_background").unwrap().native_available);
+    }
+
+    fn capability_samples() -> serde_json::Value {
+        serde_json::from_str(include_str!("../../../shared/tool-capability-samples.json")).unwrap()
+    }
+
+    fn sample_capability(command: &str) -> NativeCapability {
+        let samples = capability_samples();
+        let row = samples["accepted"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["command"] == command)
+            .unwrap_or_else(|| panic!("Missing capability sample {command}"));
+        parse_capability_registry(&format!("[{row}]")).unwrap().remove(0)
+    }
+
+    // The TS registry test reads the same samples, so both parsers agree on every row.
+    #[test]
+    fn shared_capability_samples_parse_the_same_natively() {
+        let samples = capability_samples();
+        for row in samples["accepted"].as_array().unwrap() {
+            let parsed = parse_capability_registry(&format!("[{row}]"))
+                .unwrap_or_else(|error| panic!("{} should parse: {error}", row["command"]));
+            let cardinality = match row["inputCardinality"].as_str().unwrap() {
+                "single" => InputCardinality::Single,
+                "multiple" => InputCardinality::Multiple,
+                "ordered" => InputCardinality::Ordered,
+                "none" => InputCardinality::None,
+                cardinality => panic!("Unknown input cardinality {cardinality}"),
+            };
+            assert_eq!(parsed[0].input_cardinality, cardinality);
+            assert_eq!(parsed[0].accepted_extensions.len(), row["acceptedExtensions"].as_array().unwrap().len());
+        }
+        for sample in samples["rejected"].as_array().unwrap() {
+            let error = parse_capability_registry(&format!("[{}]", sample["capability"]))
+                .err()
+                .unwrap_or_else(|| panic!("{} should be rejected", sample["name"]));
+            assert!(error.contains("accepted extension"), "{}: {error}", sample["name"]);
+        }
+        assert_eq!(sample_capability("sample_create_document").input_cardinality, InputCardinality::None);
+    }
+
+    #[test]
+    fn creation_tool_accepts_an_empty_path_list_and_refuses_input_files() {
+        let creation = sample_capability("sample_create_document");
+
+        let validation = partition_capability_inputs(&creation, &[]).unwrap();
+        assert!(validation.accepted.is_empty() && validation.rejected.is_empty());
+
+        let paths = vec![PathBuf::from("source.pdf")];
+        let validation = partition_capability_inputs(&creation, &paths).unwrap();
+        assert!(validation.accepted.is_empty());
+        assert_eq!(validation.rejected.len(), 1);
+        assert!(validation.rejected[0].1.error().is_some_and(|error| matches!(error.kind, ErrorKind::InvalidInput) && error.message.contains("no input files")));
+
+        let unavailable = NativeCapability { native_available: false, ..creation };
+        let outcomes = partition_capability_inputs(&unavailable, &[]).err().unwrap();
+        assert!(outcomes[0].error().is_some_and(|error| matches!(error.kind, ErrorKind::Unavailable)));
+    }
+
+    #[test]
+    fn file_tools_still_require_at_least_one_path() {
+        let sample = sample_capability("sample_convert_files");
+        let outcomes = partition_capability_inputs(&sample, &[]).err().unwrap();
+        assert!(outcomes[0].error().is_some_and(|error| matches!(error.kind, ErrorKind::InvalidInput) && error.message.contains("at least one input file")));
+
+        for command in ["split_pdf", "image_metadata", "merge_pdfs"] {
+            let outcomes = validate_command_inputs(command, &[]).unwrap_err();
+            assert_eq!(outcomes.len(), 1, "{command}");
+            assert!(outcomes[0].error().is_some_and(|error| error.message.contains("at least one input file")), "{command}");
+        }
     }
 
     #[test]
@@ -858,6 +1136,39 @@ mod tests {
         assert!(parse_capability_registry(&unknown)
             .unwrap_err()
             .contains("unknown field"));
+    }
+
+    #[test]
+    fn format_families_derive_accepted_extensions_and_per_family_flags() {
+        let samples: serde_json::Value = serde_json::from_str(include_str!("../../../shared/capability-family-samples.json")).unwrap();
+        let valid = &samples["valid"];
+        let capability = parse_capability_registry(&format!("[{}]", valid["row"])).unwrap().remove(0);
+
+        assert_eq!(capability.accepted_extensions, serde_json::from_value::<Vec<String>>(valid["acceptedExtensions"].clone()).unwrap());
+        let families = capability
+            .format_families
+            .iter()
+            .map(|family| serde_json::json!({
+                "id": family.id,
+                "nativeAvailability": if family.native_available { "available" } else { "unavailable" },
+                "basicFidelity": family.basic_fidelity,
+            }))
+            .collect::<Vec<_>>();
+        assert_eq!(serde_json::Value::Array(families), valid["families"]);
+        assert!(native_capabilities().iter().all(|capability| capability.format_families.is_empty()));
+    }
+
+    #[test]
+    fn format_families_reject_shared_extensions_empty_families_and_mixed_shapes() {
+        let samples: serde_json::Value = serde_json::from_str(include_str!("../../../shared/capability-family-samples.json")).unwrap();
+        let mut base = samples["valid"]["row"].clone();
+        base.as_object_mut().unwrap().remove("formatFamilies");
+        for (name, shape) in samples["invalid"].as_object().unwrap() {
+            let mut row = base.clone();
+            row.as_object_mut().unwrap().extend(shape.as_object().unwrap().clone());
+            assert!(parse_capability_registry(&format!("[{row}]")).is_err(), "{name} must be rejected");
+        }
+        assert!(parse_capability_registry(&format!("[{base}]")).unwrap_err().contains("either accepted extensions or format families"));
     }
 
     #[test]
@@ -877,6 +1188,22 @@ mod tests {
         }
         let flag = format!("[{}]", row.replace("\"manyToOne\":false", "\"manyToOne\":\"yes\""));
         assert!(parse_capability_registry(&flag).is_err());
+    }
+
+    #[test]
+    fn shared_capability_parser_reads_optional_output_formats() {
+        let row = r#"{"command":"test","acceptedExtensions":[".pdf"],"inputCardinality":"multiple","supportsPageSelection":true,"supportsPreview":false,"nativeAvailability":"available","outputSuffix":"-page","manyToOne":false}"#;
+        assert_eq!(parse_capability_registry(&format!("[{row}]")).unwrap()[0].output_formats, None);
+        let with_formats = |formats: &str| format!("[{}]", row.replace('}', &format!(",\"outputFormats\":{formats}}}")));
+        assert_eq!(
+            parse_capability_registry(&with_formats(r#"[".jpg",".png",".webp"]"#)).unwrap()[0].output_formats.as_deref(),
+            Some([".jpg", ".png", ".webp"].map(String::from).as_slice())
+        );
+        assert!(parse_capability_registry(&with_formats("[]")).unwrap_err().contains("lists no output formats"));
+        for invalid in [r#"["webp"]"#, r#"[".WebP"]"#, r#"[".webp",".webp"]"#, r#"[".we.bp"]"#] {
+            assert!(parse_capability_registry(&with_formats(invalid)).unwrap_err().contains("invalid output format"), "{invalid}");
+        }
+        assert!(parse_capability_registry(&with_formats(r#"".webp""#)).is_err());
     }
 
     #[test]
