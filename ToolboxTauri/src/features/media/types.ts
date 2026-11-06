@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
-import type { OutputLocation, ToolCapability, ToolCommand, ToolDefinition } from "../../contracts";
+import type { JobOutcome, OutputLocation, ToolCapability, ToolCommand, ToolDefinition } from "../../contracts";
+import type { OutputGrouping } from "../../components/resultRow";
 
 /** What the shared run hands every Media tool when it builds its request. */
 export interface MediaRunInput {
@@ -40,6 +41,10 @@ export interface MediaTool<Options> {
   showFileOrdering?: boolean;
   /** How the shared run treats the inputs under these options; defaults to the registered capability. */
   capability?: (options: Options, registered: ToolCapability) => ToolCapability;
-  /** The example output name the destination shows; defaults to the registered suffix. */
-  exampleName?: (options: Options, path: string) => string;
+  /** The example output names the destination shows for an input; defaults to the registered suffix. */
+  exampleName?: (options: Options, inputPath: string) => string | readonly string[];
+  /** Shows a succeeded file's outputs as one row that expands into its parts. */
+  outputGroup?: OutputGrouping;
+  /** A line after the finished headline, such as a total across files. */
+  resultsHint?: (results: JobOutcome[]) => string | null;
 }
