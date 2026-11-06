@@ -44,10 +44,11 @@ const spokenKinds: Record<ErrorKind, string> = {
 
 export const wrongPasswordDetail = "The password didn't open this file. Check it, or try the password this file was sent with.";
 
-export const warningText = (warning: OutcomeWarning): string => {
+/** A tool's `signatureRemovedNote` replaces the shared signature wording on its rows. */
+export const warningText = (warning: OutcomeWarning, signatureRemovedNote?: string): string => {
     switch (warning.code) {
         case "signatureRemoved":
-            return "Saved. The digital signature was removed, because changing the file breaks it.";
+            return signatureRemovedNote ?? "Saved. The digital signature was removed, because changing the file breaks it.";
         case "fontSubstituted":
             return `The font ${warning.details.requestedFamily} wasn’t available, so ${warning.details.actualFamily} was used.`;
         case "renamedToAvoidReplacing":
@@ -72,8 +73,8 @@ const outputSummary = (paths: string[]) =>
 
 const nonEmpty = (lines: string[]) => lines.filter((line) => line.trim().length > 0);
 
-export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput = false): RowView => {
-    const warnings = outcome.warnings.map(warningText);
+export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput = false, signatureRemovedNote?: string): RowView => {
+    const warnings = outcome.warnings.map((warning) => warningText(warning, signatureRemovedNote));
     const input = { name: fileName(outcome.inputPath), fullPath: outcome.inputPath };
     switch (outcome.state) {
         case "succeeded": {
