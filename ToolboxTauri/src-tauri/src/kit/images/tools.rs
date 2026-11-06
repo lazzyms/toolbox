@@ -526,7 +526,10 @@ const WATERMARK_FONT_FILE: &str = "DejaVuSans.ttf";
 const WATERMARK_FONT_SIZE: f32 = 32.0;
 const INCLUDED_WATERMARK_FONT: &[u8] = include_bytes!("../../../resources/fonts/DejaVuSans.ttf");
 
-fn watermark_font_bytes() -> Result<Vec<u8>, String> {
+/// The bundled Unicode font (DejaVu Sans): a development override or the staged
+/// bundle copy when present, otherwise the copy built into the app. Watermarks draw
+/// with it and searchable OCR PDFs embed a subset of it.
+pub(crate) fn bundled_text_font_bytes() -> Result<Vec<u8>, String> {
     let bundled_root = crate::kit::resources::application_resource_root()
         .map(|root| root.join("resources").join("fonts"));
     if let Some(root) = bundled_root.filter(|root| root.join("manifest.json").is_file()) {
@@ -537,13 +540,13 @@ fn watermark_font_bytes() -> Result<Vec<u8>, String> {
             WATERMARK_FONT_FILE,
         )?;
         return std::fs::read(&resource.path)
-            .map_err(|error| format!("Could not read bundled watermark font: {error}"));
+            .map_err(|error| format!("Could not read the bundled font: {error}"));
     }
     Ok(INCLUDED_WATERMARK_FONT.to_vec())
 }
 
 fn draw_text(canvas: &mut image::RgbaImage, text: &str, x: u32, y: u32, alpha: u8) -> Result<(), String> {
-    let bytes = watermark_font_bytes()?;
+    let bytes = bundled_text_font_bytes()?;
     let font = fontdue::Font::from_bytes(bytes.clone(), fontdue::FontSettings::default())
         .map_err(|error| format!("Could not parse bundled watermark font: {error}"))?;
     let mut face = rustybuzz::Face::from_slice(&bytes, 0)

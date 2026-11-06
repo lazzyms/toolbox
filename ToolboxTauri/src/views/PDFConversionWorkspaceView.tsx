@@ -4,9 +4,10 @@ import { ConversionPanel, conversionToolFor } from "../features/pdf-conversion";
 import type { PdfDocument } from "../features/pdf-editor";
 import type { AtomicToolId, ToolDefinition } from "../contracts";
 
-export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPaths = [], onFilesChange }: { utility: ToolDefinition; initialPaths?: readonly string[]; onFilesChange?: (paths: readonly string[]) => void }) => {
+export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPaths = [], handoff = false, onFilesChange }: { utility: ToolDefinition; initialPaths?: readonly string[]; handoff?: boolean; onFilesChange?: (paths: readonly string[]) => void }) => {
   const tool = conversionToolFor(activeUtility.id);
-  const [optionsByTool, setOptionsByTool] = useState<Partial<Record<AtomicToolId, unknown>>>({});
+  const [optionsByTool, setOptionsByTool] = useState<Partial<Record<AtomicToolId, unknown>>>(() =>
+    handoff && tool.handoffOptions !== undefined ? { [activeUtility.id]: tool.handoffOptions } : {});
   const options = optionsByTool[activeUtility.id] ?? tool.initialOptions;
   const setOptions = useCallback(
     (next: unknown) => setOptionsByTool((current) => ({ ...current, [activeUtility.id]: next })),

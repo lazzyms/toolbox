@@ -17,6 +17,8 @@ export type OptionsPanelProps<Options> = {
 
 export interface ConversionTool<Options = unknown> {
   initialOptions?: Options;
+  /** Options to start from when another tool hands its files over. */
+  handoffOptions?: Options;
   inspectsPdf: boolean;
   initialPages?(document: PdfDocument): number[];
   outputPreview(options: Options, selectedPages: number[]): string;

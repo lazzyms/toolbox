@@ -1585,6 +1585,144 @@ mod command_tests {
         assert_eq!(locked_after, locked_original);
     }
 
+    fn searchable_pdf_request(paths: Vec<PathBuf>, output_location: OutputLocation) -> vision::OcrRequest {
+        vision::OcrRequest { mode: "searchablePdf".into(), ..ocr_text_request(paths, output_location) }
+    }
+
+    /// Gives a PDF the same title in its Info dictionary and in its XMP metadata.
+    fn give_title(path: &PathBuf, title: &str) {
+        use lopdf::{dictionary, Document, Object, Stream};
+        let mut document = Document::load(path).unwrap();
+        let xmp = format!(r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title><rdf:Alt><rdf:li xml:lang="x-default">{title}</rdf:li></rdf:Alt></dc:title></rdf:Description></rdf:RDF></x:xmpmeta>"#);
+        let metadata = document.add_object(Stream::new(dictionary! { "Type" => "Metadata", "Subtype" => "XML" }, xmp.into_bytes()));
+        let info = document.add_object(dictionary! { "Title" => Object::string_literal(title) });
+        document.trailer.set("Info", info);
+        let catalog = document.trailer.get(b"Root").and_then(Object::as_reference).unwrap();
+        document.get_dictionary_mut(catalog).unwrap().set("Metadata", metadata);
+        document.save(path).unwrap();
+    }
+
+    /// Each page's MediaBox and raw content streams, to compare a copy against its original.
+    fn page_boxes_and_streams(path: &PathBuf) -> Vec<(Vec<lopdf::Object>, Vec<Vec<u8>>)> {
+        let document = lopdf::Document::load(path).unwrap();
+        document.get_pages().values().map(|id| {
+            let media_box = document.get_dictionary(*id).unwrap().get(b"MediaBox").unwrap().as_array().unwrap().clone();
+            let streams = document.get_page_contents(*id).into_iter().map(|stream| document.get_object(stream).unwrap().as_stream().unwrap().content.clone()).collect();
+            (media_box, streams)
+        }).collect()
+    }
+
+    fn extracted_text(root: &PathBuf, pdf: &PathBuf, folder: &str) -> String {
+        let text = assert_success("extract text from the searchable PDF", pdf_to_text(RunEvents::silent(), PdfToTextRequest { paths: vec![pdf.clone()], pages: None, output_location: location(root, folder) }));
+        std::fs::read_to_string(&text[0]).unwrap()
+    }
+
+    #[test]
+    fn searchable_pdf_keeps_the_scan_and_title_gives_back_its_words_and_repeats_byte_for_byte() {
+        let _guard = crate::kit::lock_process_env();
+        let Some(_engine) = real_ocr_engine() else { return };
+        let root = sandbox("ocr-searchable");
+        let input = root.join("scan.pdf");
+        scanned_pdf(&input, &[&["Quarterly invoice summary", "Northwind shipping ledger"], &["Second page closing remarks", "Thank you for reading"]]);
+        give_title(&input, "Northwind scans");
+        let original = std::fs::read(&input).unwrap();
+        let folder = location(&root, "ocr");
+
+        let first = assert_success("searchable first run", ocr_pdf(RunEvents::silent(), searchable_pdf_request(vec![input.clone()], folder.clone())));
+        let second = assert_success("searchable second run", ocr_pdf(RunEvents::silent(), searchable_pdf_request(vec![input.clone()], folder)));
+        let names = [&first[0], &second[0]].map(|path| path.file_name().unwrap().to_string_lossy().into_owned());
+        let (bytes, again) = (std::fs::read(&first[0]).unwrap(), std::fs::read(&second[0]).unwrap());
+        let (before, after) = (page_boxes_and_streams(&input), page_boxes_and_streams(&first[0]));
+        let text = extracted_text(&root, &first[0], "text");
+        let info = crate::kit::pdf::document_info::read(&first[0], None).unwrap();
+        let input_after = std::fs::read(&input).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert_eq!(names, ["scan-ocr.pdf".to_string(), "scan-ocr-1.pdf".to_string()], "a second run gets a numbered name instead of overwriting");
+        assert!(bytes == again, "the same scan gives the same PDF bytes");
+        assert_eq!(input_after, original, "the scan is never changed");
+        assert_eq!(after.len(), before.len(), "same page count");
+        for (page, ((old_box, old_streams), (new_box, new_streams))) in before.iter().zip(&after).enumerate() {
+            assert_eq!(new_box, old_box, "page {} keeps its MediaBox", page + 1);
+            assert!(new_streams.windows(old_streams.len()).any(|window| window == old_streams.as_slice()), "page {} keeps its content streams byte for byte", page + 1);
+        }
+        let found = ["Quarterly", "invoice", "Northwind", "ledger", "Second", "closing", "Thank", "reading"].map(|word| text.find(word));
+        assert!(found.iter().all(Option::is_some), "every word comes back: {text:?}");
+        assert!(found.windows(2).all(|pair| pair[0] < pair[1]), "words keep page and reading order: {text:?}");
+        assert_eq!(info.info.title.as_deref(), Some("Northwind scans"));
+        assert_eq!(info.xmp.and_then(|xmp| xmp.values.title).as_deref(), Some("Northwind scans"));
+    }
+
+    /// Fake helpers whose engine prints the same TSV word boxes for every page.
+    #[cfg(unix)]
+    fn word_box_ocr_helpers(root: &PathBuf, words: &[(&str, u32, u32)]) -> EnvGuard {
+        let [renderer, engine, tessdata] = fake_ocr_helpers(root);
+        let mut tsv = "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n1\t1\t0\t0\t0\t0\t0\t0\t1700\t2200\t-1\t\n4\t1\t1\t1\t1\t0\t200\t300\t1200\t80\t-1\t\n".to_string();
+        for (index, (word, left, width)) in words.iter().enumerate() {
+            tsv.push_str(&format!("5\t1\t1\t1\t1\t{}\t{left}\t300\t{width}\t80\t95.0\t{word}\n", index + 1));
+        }
+        std::fs::write(&engine, format!("#!/bin/sh\ncat <<'TSV'\n{tsv}TSV\n")).unwrap();
+        EnvGuard::set(&[("TOOLBOX_RESOURCE_ROOT", Some(root.join("no-bundle"))), ("TOOLBOX_PDFTOPPM_PATH", Some(renderer)), ("TOOLBOX_TESSERACT_PATH", Some(engine)), ("TOOLBOX_TESSDATA_PATH", Some(tessdata))])
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn searchable_pdf_fails_only_the_file_whose_output_fails_its_check_or_whose_page_is_rotated() {
+        let _guard = crate::kit::lock_process_env();
+        let root = sandbox("ocr-searchable-batch");
+        let _env = word_box_ocr_helpers(&root, &[("Searchable", 200, 500), ("words", 750, 400)]);
+        let [first, broken, rotated, last] = ["first", "broken", "rotated", "last"].map(|name| root.join(format!("{name}.pdf")));
+        make_pdf(&first, 1);
+        make_pdf(&broken, 1);
+        make_pdf(&rotated, 1);
+        make_pdf(&last, 2);
+        let mut turned = lopdf::Document::load(&rotated).unwrap();
+        let page = *turned.get_pages().get(&1).unwrap();
+        turned.get_dictionary_mut(page).unwrap().set("Rotate", 90);
+        turned.save(&rotated).unwrap();
+        let paths = vec![first.clone(), broken.clone(), rotated.clone(), last.clone()];
+        let originals = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+
+        *vision::BREAK_SEARCHABLE_OUTPUT_FOR.lock().unwrap() = Some(broken.clone());
+        let outcomes = tauri::async_runtime::block_on(ocr_pdf(RunEvents::silent(), searchable_pdf_request(paths.clone(), location(&root, "ocr"))));
+        *vision::BREAK_SEARCHABLE_OUTPUT_FOR.lock().unwrap() = None;
+        let mut written = std::fs::read_dir(root.join("ocr")).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect::<Vec<_>>();
+        written.sort();
+        let texts = [&outcomes[0], &outcomes[3]].map(|outcome| outcome.output_paths().first().map(|pdf| extracted_text(&root, pdf, "text").split_whitespace().collect::<Vec<_>>().join(" ")).unwrap_or_default());
+        let after = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), paths);
+        for index in [0, 3] { assert!(outcomes[index].error().is_none(), "{} still runs: {:?}", paths[index].display(), outcomes[index].error()); }
+        let broken_error = outcomes[1].error().expect("an output that fails its check fails its row");
+        assert_eq!(broken_error.kind, ErrorKind::Processing);
+        assert!(broken_error.message.starts_with("The searchable PDF didn't pass its check, so it wasn't saved: it could not be reopened"), "{}", broken_error.message);
+        let rotated_error = outcomes[2].error().expect("a rotated page fails its row");
+        assert_eq!(rotated_error.kind, ErrorKind::Processing);
+        assert_eq!(rotated_error.message, "Page 1 is rotated or cropped. Searchable PDFs support upright, uncropped pages for now. Save a text file instead.");
+        assert!(outcomes[1].output_paths().is_empty() && outcomes[2].output_paths().is_empty());
+        assert_eq!(written, vec!["first-ocr.pdf".to_string(), "last-ocr.pdf".to_string()], "nothing is left behind for the failed files");
+        assert!(texts[0].contains("Toolbox page 1") && texts[0].contains("Searchable words"), "{:?}", texts[0]);
+        assert_eq!(texts[1].matches("Searchable words").count(), 2, "both pages get a text layer: {:?}", texts[1]);
+        assert_eq!(after, originals);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn searchable_pdf_round_trips_non_latin_words_through_the_embedded_font() {
+        let _guard = crate::kit::lock_process_env();
+        let root = sandbox("ocr-searchable-unicode");
+        let _env = word_box_ocr_helpers(&root, &[("Привет", 200, 420), ("κόσμε", 700, 380), ("café", 1150, 300)]);
+        let input = root.join("letter.pdf");
+        make_pdf(&input, 1);
+
+        let output = assert_success("searchable non-Latin", ocr_pdf(RunEvents::silent(), searchable_pdf_request(vec![input.clone()], location(&root, "ocr"))));
+        let text = extracted_text(&root, &output[0], "text");
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert!(text.split_whitespace().collect::<Vec<_>>().join(" ").contains("Привет κόσμε café"), "{text:?}");
+    }
+
     fn split_ranges_request(paths: Vec<PathBuf>, ranges: &str, output_location: OutputLocation) -> PageSelectionRequest {
         PageSelectionRequest { paths, pages: vec![], page_ranges: Some(ranges.into()), split_mode: Some("ranges".into()), chunk_size: None, output_location }
     }
