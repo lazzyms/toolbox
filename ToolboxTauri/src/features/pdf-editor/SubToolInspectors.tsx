@@ -1,12 +1,15 @@
 import type { ComponentType } from 'react';
 import { Bold, Italic, TextAlignCenter, TextAlignEnd, TextAlignStart } from 'lucide-react';
 import { Button } from '../../components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { NativeSelect } from '../../components/ui/native-select';
 import { RadioGroup, RadioGroupItem } from '../../components/ui/radio-group';
 import { ToggleGroup, ToggleGroupItem } from '../../components/ui/toggle-group';
 import { useToolAvailability } from '../../ToolAvailabilityContext';
+import type { PdfEditRun, PdfTextEdit } from './contracts';
+import { notEditableReasons, textOverflowWords } from './scene';
 import type { SceneObject, ScenePage, SceneShape, SceneTool, SignatureMode, TextAlign, TextFontFamily, TextStyle, WatermarkPattern } from './scene';
 import type { SubToolId } from './subtools';
 
@@ -31,6 +34,12 @@ export interface SubToolInspectorProps {
   watermarkFontSize: number; setWatermarkFontSize: (value: number) => void;
   watermarkPattern: WatermarkPattern; setWatermarkPattern: (value: WatermarkPattern) => void;
   addFixedWatermark: () => void;
+  selectedRun: PdfEditRun | undefined;
+  textEdits: PdfTextEdit[];
+  pageNumberOf: (sourceIndex: number) => number;
+  showEdit: (edit: PdfTextEdit) => void;
+  revertEdit: (edit: PdfTextEdit) => void;
+  chooseTool: (tool: SceneTool) => void;
 }
 type Panel = ComponentType<SubToolInspectorProps>;
 
@@ -192,8 +201,39 @@ const CropGuide: Panel = ({ page, commitPage }) => {
   </> : null;
 };
 
+const EditTextGuide: Panel = ({ page, selectedRun, textEdits, pageNumberOf, showEdit, revertEdit, chooseTool }) => {
+  const availability = useToolAvailability();
+  const selectedEdit = selectedRun && textEdits.find((edit) => edit.pageIndex === page.sourceIndex && edit.run === selectedRun.index);
+  const overflow = selectedEdit ? textOverflowWords(selectedEdit.original, selectedEdit.replacement) : 0;
+  return <>
+    {selectedRun?.reason && <Card role="alert" className="gap-2 py-3">
+      <CardHeader className="gap-1 px-3"><CardTitle className="text-sm">This text can't be edited.</CardTitle>
+        <CardDescription>{notEditableReasons[selectedRun.reason].detail}</CardDescription></CardHeader>
+      {availability.allows('pdf-edit') && <CardContent className="px-3">
+        <Button variant="ghost" size="sm" onClick={() => chooseTool('text')}>Cover it with Add text instead</Button>
+      </CardContent>}
+    </Card>}
+    {selectedRun && !selectedRun.reason && <div className="scene-inspector-field" role="group" aria-label="Selected text">
+      <Label>Selected text</Label>
+      <p className="scene-property-note">{selectedRun.fontName} · {Math.round(selectedRun.fontSize * 10) / 10} pt</p>
+      <p className="scene-property-note">Edited text keeps this font, size and colour.</p>
+    </div>}
+    {overflow > 0 && <Card role="alert" className="gap-2 py-3">
+      <CardHeader className="gap-1 px-3"><CardTitle className="text-sm">This text is too long for its space.</CardTitle>
+        <CardDescription>Shorten it so it fits the original line.</CardDescription></CardHeader>
+    </Card>}
+    {textEdits.length > 0 && <div className="scene-inspector-field" role="group" aria-label="Edits on this document">
+      <Label>Edits on this document</Label>
+      {textEdits.map((edit) => <Button key={`${edit.pageIndex}-${edit.run}`} variant="ghost" size="sm" className="h-auto justify-start whitespace-normal text-left"
+        onClick={() => showEdit(edit)}>Page {pageNumberOf(edit.pageIndex)}: “{edit.original}” to “{edit.replacement}”</Button>)}
+    </div>}
+    {selectedEdit && <Button variant="ghost" size="sm" onClick={() => revertEdit(selectedEdit)}>Revert this text</Button>}
+  </>;
+};
+
 // Fields edit the selected object or the next new one; Guide shows while the sub-tool is active.
 export const subToolInspectors: Partial<Record<SubToolId | SceneTool, { Fields?: Panel; Guide?: Panel }>> = {
+  'edit-text': { Guide: EditTextGuide },
   text: { Fields: TextFields, Guide: TextGuide },
   highlight: { Guide: HighlightGuide },
   shape: { Fields: ShapeFields },

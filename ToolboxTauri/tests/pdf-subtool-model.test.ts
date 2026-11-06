@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { sceneFromDocument, type PdfScene, type SceneObject } from "../src/features/pdf-editor/scene";
-import { exportSuffix, planSceneExport, subTools } from "../src/features/pdf-editor/subtools";
+import { textOverflowWords } from "../src/features/pdf-editor/scene";
+import { exportSuffix, planSceneExport, sceneSections, subTools } from "../src/features/pdf-editor/subtools";
 
 const baseline = sceneFromDocument({
   path: "/local/source.pdf",
@@ -17,6 +18,7 @@ const plan = (scene: PdfScene) => planSceneExport({ paths: ["/local/source.pdf"]
 
 test("every Edit PDF sub-tool is declared once with a group and a suffix", () => {
   assert.deepEqual(subTools.map(({ id, group, suffix }) => [id, group, suffix]), [
+    ["edit-text", "document", "-edited"],
     ["text", "overlay", "-edited"],
     ["highlight", "overlay", "-edited"],
     ["shape", "overlay", "-edited"],
@@ -31,8 +33,16 @@ test("export request carries the scene unchanged in the native request shape", (
   const scene = withObjects(baseline, 0, "watermark");
   const { request } = plan(scene);
   assert.deepEqual(Object.keys(request), ["paths", "scene", "outputLocation"]);
-  assert.equal(request.scene, scene);
+  assert.deepEqual(request.scene, scene);
   assert.equal(JSON.stringify(request), JSON.stringify({ paths: ["/local/source.pdf"], scene, outputLocation: "alongsideInput" }));
+});
+
+test("Export As adds the chosen path after the destination and a plain export omits it", () => {
+  const scene = withObjects(baseline, 0, "shape");
+  const { request } = planSceneExport({ paths: ["/local/source.pdf"], scene, baseline, outputLocation: "alongsideInput", outputPath: "/local/contract final.pdf" });
+  assert.deepEqual(Object.keys(request), ["paths", "scene", "outputLocation", "outputPath"]);
+  assert.equal(request.outputPath, "/local/contract final.pdf");
+  assert.equal("outputPath" in plan(scene).request, false);
 });
 
 test("chained export reports contributors in the fixed export order, not scene order", () => {
@@ -66,4 +76,22 @@ test("an unchanged scene has no contributors and no suffix", () => {
     suffix: null,
   });
   assert.deepEqual(plan(sceneFromDocument({ path: "/local/source.pdf", pages: [0, 1].map((index) => ({ index, width: 612, height: 792 })) })).contributors, []);
+});
+
+test("text edits travel as their own section beside the scene and contribute -edited", () => {
+  const edit = { pageIndex: 1, run: 0, original: "Rent £1,450", replacement: "Rent £1,475" };
+  const scene: PdfScene = { ...baseline, textEdits: [edit] };
+  const result = plan(scene);
+  assert.deepEqual(result.contributors, ["edit-text"]);
+  assert.equal(result.suffix, "-edited");
+  assert.equal(JSON.stringify(result.request), JSON.stringify({ paths: ["/local/source.pdf"], scene: { pages: baseline.pages }, textEdits: [edit], outputLocation: "alongsideInput" }));
+  assert.deepEqual(sceneSections({ ...baseline, textEdits: [] }), { scene: { pages: baseline.pages } });
+  assert.deepEqual(plan({ ...withObjects(baseline, 0, "text"), textEdits: [edit] }).contributors, ["edit-text", "text"]);
+});
+
+test("overflow counts the words that end past the original text length", () => {
+  assert.equal(textOverflowWords("Rent £1,450", "Rent £1,475"), 0);
+  assert.equal(textOverflowWords("Rent £1,450", "Rent £1,475 per calendar month"), 3);
+  assert.equal(textOverflowWords("Total", "Totals"), 1);
+  assert.equal(textOverflowWords("Long original line", "Short"), 0);
 });
