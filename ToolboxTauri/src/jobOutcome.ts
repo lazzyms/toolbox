@@ -3,8 +3,10 @@ import type {
   ErrorKind,
   JobOutcome,
   LimitKind,
+  OutcomeDetail,
   OutcomePointer,
   OutcomeWarning,
+  PackNeed,
   SkipCode,
   SkipReason,
   ToolError,
@@ -14,6 +16,8 @@ import type {
 import { UtilityRegistry } from "./registry";
 
 const errorKinds: readonly ErrorKind[] = ["invalidInput", "unavailable", "limitExceeded", "processing", "wrongPassword", "cancelled"];
+
+const packNeeds: readonly PackNeed[] = ["notInstalled", "damaged", "incompatible"];
 
 const limitKinds: readonly LimitKind[] = ["fileSize", "pageCount", "time", "decompression"];
 
@@ -26,6 +30,7 @@ const skipCodes: readonly SkipCode[] = [
   "textAlreadyPresent",
   "noEffectiveChange",
   "unsupportedFormat",
+  "needsOcr",
   "cancelled",
 ];
 
@@ -55,6 +60,29 @@ const member = <T extends string>(value: unknown, allowed: readonly T[], path: s
 const texts = (value: unknown, path: string): string[] =>
   Array.isArray(value) ? value.map((item, index) => text(item, `${path}[${index}]`)) : fail(path, "an array");
 
+const byteSizes = (outcome: Json, path: string): { originalBytes?: number; outputBytes?: number } => {
+  const sizes: { originalBytes?: number; outputBytes?: number } = {};
+  for (const key of ["originalBytes", "outputBytes"] as const) {
+    const value = outcome[key];
+    if (value === null || value === undefined) continue;
+    sizes[key] = Number.isSafeInteger(value) && (value as number) >= 0 ? (value as number) : fail(`${path}.${key}`, "a non-negative whole number of bytes");
+  }
+  return sizes;
+};
+
+const pageDetails = (outcome: Json, path: string): { pageDetails?: OutcomeDetail[] } => {
+  const value = outcome.pageDetails;
+  if (value === null || value === undefined) return {};
+  if (!Array.isArray(value)) return fail(`${path}.pageDetails`, "an array");
+  if (value.length === 0) return {};
+  return {
+    pageDetails: value.map((item, index) => {
+      const detail = record(item, `${path}.pageDetails[${index}]`);
+      return { label: text(detail.label, `${path}.pageDetails[${index}].label`), value: text(detail.value, `${path}.pageDetails[${index}].value`) };
+    }),
+  };
+};
+
 const parsePointer = (value: unknown, path: string): OutcomePointer | null => {
   if (value === null || value === undefined) return null;
   const pointer = record(value, path);
@@ -62,7 +90,14 @@ const parsePointer = (value: unknown, path: string): OutcomePointer | null => {
     const toolId = text(pointer.toolId, `${path}.toolId`);
     return toolIds.has(toolId) ? { kind: "tool", toolId: toolId as AtomicToolId } : fail(`${path}.toolId`, "a registered tool id");
   }
-  if (pointer.kind === "pack") return { kind: "pack", packId: text(pointer.packId, `${path}.packId`) };
+  if (pointer.kind === "pack") {
+    return {
+      kind: "pack",
+      packId: text(pointer.packId, `${path}.packId`),
+      name: text(pointer.name, `${path}.name`),
+      reason: member(pointer.reason, packNeeds, `${path}.reason`),
+    };
+  }
   if (pointer.kind === "outputFolder") return { kind: "outputFolder" };
   return fail(`${path}.kind`, "tool, pack or outputFolder");
 };
@@ -107,6 +142,8 @@ export const parseJobOutcome = (value: unknown, path = "outcome"): JobOutcome =>
     warnings: Array.isArray(outcome.warnings)
       ? outcome.warnings.map((warning, index) => parseWarning(warning, `${path}.warnings[${index}]`))
       : fail(`${path}.warnings`, "an array"),
+    ...byteSizes(outcome, path),
+    ...pageDetails(outcome, path),
   };
   const outputPaths = texts(outcome.outputPaths, `${path}.outputPaths`);
   const hasFailure = outcome.failure !== null && outcome.failure !== undefined;

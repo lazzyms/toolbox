@@ -80,6 +80,7 @@ jobs:
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       TOOLBOX_REQUIRE_QPDF: '1'
+      TOOLBOX_REQUIRE_OCR_RESOURCES: '1'
       VITE_ENABLE_UPDATES: 'true'
       VITE_POSTHOG_KEY: ${{ secrets.POSTHOG_PROJECT_KEY }}
       VITE_TOOLBOX_TARGET_PLATFORM: ${{ matrix.platform }}
@@ -116,44 +117,80 @@ jobs:
       - name: Install qpdf (macOS)
         if: runner.os == 'macOS'
         run: brew install qpdf poppler tesseract
+      - name: Set up MSYS2 for the native Windows arm64 OCR helpers
+        id: msys2
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANGARM64
+          update: true
+          install: false
+      - name: Stage native Windows arm64 OCR helpers
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        shell: pwsh
+        working-directory: ToolboxTauri
+        run: |
+          $helpers = Join-Path $env:RUNNER_TEMP 'ocr-helpers'
+          node scripts/stage-windows-ocr-helpers.mjs ${{ matrix.target }} --msys-root "${{ steps.msys2.outputs.msys2-location }}" --out $helpers
+          if ($LASTEXITCODE -ne 0) { throw 'Could not stage the native Windows arm64 OCR helpers' }
+          "TOOLBOX_TESSERACT_PATH=$(Join-Path $helpers 'ocr-engine\tesseract.exe')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          (Join-Path $helpers 'ocr-engine') | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          (Join-Path $helpers 'pdf-rasterizer') | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Install qpdf and stage Windows resources
         if: runner.os == 'Windows'
         shell: pwsh
         working-directory: ToolboxTauri
         run: |
-          choco install tesseract -y
-          $tesseractDirectory = Join-Path $env:ProgramFiles 'Tesseract-OCR'
-          if (-not (Test-Path (Join-Path $tesseractDirectory 'tesseract.exe'))) {
-            throw 'Could not locate the installed Tesseract executable'
-          }
-          $tesseractDirectory | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          $popplerVersion = '26.02.0-0'
-          $popplerSha256 = '993e4a94376ed712fafc7058d724ea0b943d118bbd2305cd9ed55174eb85cda5'
-          $popplerArchive = Join-Path $env:RUNNER_TEMP "poppler-$popplerVersion.zip"
-          Invoke-WebRequest `
-            -Uri "https://github.com/oschwartz10612/poppler-windows/releases/download/v$popplerVersion/Release-$popplerVersion.zip" `
-            -OutFile $popplerArchive
-          if ((Get-FileHash $popplerArchive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $popplerSha256) {
-            throw 'Poppler archive checksum did not match the pinned release'
-          }
-          $popplerExtract = Join-Path $env:RUNNER_TEMP "poppler-$popplerVersion"
-          Expand-Archive -Path $popplerArchive -DestinationPath $popplerExtract -Force
-          $pdftoppm = Get-ChildItem $popplerExtract -Recurse -Filter pdftoppm.exe | Select-Object -First 1
-          if (-not $pdftoppm) { throw 'Could not locate pdftoppm.exe in the Poppler archive' }
-          $pdftotext = Get-ChildItem $popplerExtract -Recurse -Filter pdftotext.exe | Select-Object -First 1
-          if (-not $pdftotext) { throw 'Could not locate pdftotext.exe in the Poppler archive' }
-          $env:PATH = "$($pdftoppm.DirectoryName);$env:PATH"
-          $pdftoppm.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           New-Item -ItemType Directory -Force -Path src-tauri\resources | Out-Null
           ./scripts/bundle-qpdf.ps1 -Target ${{ matrix.target }} -ResourcesDir src-tauri\resources
-          Copy-Item $pdftoppm.FullName src-tauri\resources\pdftoppm.exe -Force
-          Get-ChildItem $pdftoppm.DirectoryName -Filter *.dll | Copy-Item -Destination src-tauri\resources -Force
-          Copy-Item $pdftotext.FullName src-tauri\resources\pdftotext.exe -Force
-          @{version=$env:VERSION; bundle=@{resources=@('resources/*')}} | ConvertTo-Json -Compress | Out-File -Encoding ascii release-config.json
+          if ('${{ matrix.target }}' -eq 'aarch64-pc-windows-msvc') {
+            # Native arm64 Poppler from the pinned MSYS2 CLANGARM64 package, staged above.
+            $rasterizer = Join-Path $env:RUNNER_TEMP 'ocr-helpers\pdf-rasterizer'
+            foreach ($file in Get-ChildItem $rasterizer -File) {
+              $existing = Join-Path 'src-tauri\resources' $file.Name
+              if ((Test-Path $existing) -and (Get-FileHash $existing).Hash -ne (Get-FileHash $file.FullName).Hash) {
+                throw "The PDF rasterizer's $($file.Name) would replace a different file staged for qpdf"
+              }
+              Copy-Item $file.FullName $existing -Force
+            }
+          } else {
+            choco install tesseract -y
+            $tesseractDirectory = Join-Path $env:ProgramFiles 'Tesseract-OCR'
+            if (-not (Test-Path (Join-Path $tesseractDirectory 'tesseract.exe'))) {
+              throw 'Could not locate the installed Tesseract executable'
+            }
+            $tesseractDirectory | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+            $popplerVersion = '26.02.0-0'
+            $popplerSha256 = '993e4a94376ed712fafc7058d724ea0b943d118bbd2305cd9ed55174eb85cda5'
+            $popplerArchive = Join-Path $env:RUNNER_TEMP "poppler-$popplerVersion.zip"
+            Invoke-WebRequest `
+              -Uri "https://github.com/oschwartz10612/poppler-windows/releases/download/v$popplerVersion/Release-$popplerVersion.zip" `
+              -OutFile $popplerArchive
+            if ((Get-FileHash $popplerArchive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $popplerSha256) {
+              throw 'Poppler archive checksum did not match the pinned release'
+            }
+            $popplerExtract = Join-Path $env:RUNNER_TEMP "poppler-$popplerVersion"
+            Expand-Archive -Path $popplerArchive -DestinationPath $popplerExtract -Force
+            $pdftoppm = Get-ChildItem $popplerExtract -Recurse -Filter pdftoppm.exe | Select-Object -First 1
+            if (-not $pdftoppm) { throw 'Could not locate pdftoppm.exe in the Poppler archive' }
+            $pdftotext = Get-ChildItem $popplerExtract -Recurse -Filter pdftotext.exe | Select-Object -First 1
+            if (-not $pdftotext) { throw 'Could not locate pdftotext.exe in the Poppler archive' }
+            $pdftoppm.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+            Copy-Item $pdftoppm.FullName src-tauri\resources\pdftoppm.exe -Force
+            Get-ChildItem $pdftoppm.DirectoryName -Filter *.dll | Copy-Item -Destination src-tauri\resources -Force
+            Copy-Item $pdftotext.FullName src-tauri\resources\pdftotext.exe -Force
+          }
+          # A --config array replaces tauri.conf.json's, and resources/* skips folders, so keep
+          # the configured resource folders (ocr, vision, fonts, licenses) alongside the helpers.
+          $configured = @((Get-Content src-tauri\tauri.conf.json -Raw | ConvertFrom-Json).bundle.resources)
+          @{version=$env:VERSION; bundle=@{resources=@($configured + 'resources/*')}} | ConvertTo-Json -Compress -Depth 5 | Out-File -Encoding ascii release-config.json
       - name: Write macOS version config
         if: runner.os == 'macOS'
         working-directory: ToolboxTauri
         run: printf '{"version":"%s"}\n' "$VERSION" > release-config.json
+      - name: Stage offline OCR resources
+        run: npm run stage:ocr -- ${{ matrix.target }}
+        working-directory: ToolboxTauri
       - run: cargo test -- --test-threads=1
         working-directory: ToolboxTauri/src-tauri
       - name: Run native E2E matrix
@@ -161,9 +198,6 @@ jobs:
         working-directory: ToolboxTauri
       - name: Stage offline vision adapter
         run: npm run stage:vision -- ${{ matrix.target }}
-        working-directory: ToolboxTauri
-      - name: Stage offline OCR resources
-        run: npm run stage:ocr -- ${{ matrix.target }}
         working-directory: ToolboxTauri
       - name: Verify third-party notices cover Windows resources
         if: runner.os == 'Windows'
@@ -182,6 +216,7 @@ jobs:
           dmg="$(pwd)/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/Toolbox_${VERSION}_aarch64.dmg"
           ./scripts/make-dmg.sh "$(pwd)/src-tauri/target/${{ matrix.target }}/release/bundle/macos/Toolbox.app" "$dmg"
           cp "$dmg" "release-assets/Toolbox-$VERSION-macos.dmg"
+          echo "OCR_RELEASE_ROOT=$(pwd)/src-tauri/target/${{ matrix.target }}/release/bundle/macos/Toolbox.app/Contents/Resources" >> "$GITHUB_ENV"
       - name: Build Windows
         if: runner.os == 'Windows'
         shell: pwsh
@@ -192,14 +227,59 @@ jobs:
           $installer = Get-ChildItem "src-tauri\target\${{ matrix.target }}\release\bundle\nsis" -Filter *.exe | Select-Object -First 1
           Copy-Item $installer.FullName "release-assets\Toolbox-${{ matrix.artifact }}-setup.exe"
           Copy-Item "$($installer.FullName).sig" "release-assets\Toolbox-${{ matrix.artifact }}-setup.exe.sig"
+          # Install the artifact users download, so the checks below see what it really carries.
+          $installed = Join-Path $env:RUNNER_TEMP 'toolbox-install'
+          $setup = Start-Process $installer.FullName -ArgumentList '/S', "/D=$installed" -Wait -PassThru
+          if ($setup.ExitCode -ne 0) { throw "The Toolbox installer exited with $($setup.ExitCode)" }
+          "OCR_RELEASE_ROOT=$installed" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Check the artifact carries native OCR helpers and the pinned English data
+        shell: bash
+        working-directory: ToolboxTauri
+        run: node scripts/check-release-readiness.mjs --ocr-artifact "$OCR_RELEASE_ROOT" --target ${{ matrix.target }}
+      - name: Recognize the English fixture with the artifact's own OCR resources
+        shell: bash
+        working-directory: ToolboxTauri/src-tauri
+        env:
+          TOOLBOX_OCR_RELEASE_OUT: ${{ runner.temp }}/ocr-outputs
+        run: |
+          TOOLBOX_OCR_RELEASE_ROOT="$OCR_RELEASE_ROOT" cargo test command_tests::release_artifact_recognizes_the_english_fixture_with_its_own_resources -- --exact --nocapture
+          test -f "$TOOLBOX_OCR_RELEASE_OUT/fingerprints.json"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ocr-outputs-${{ matrix.artifact }}
+          path: ${{ runner.temp }}/ocr-outputs/*
+          if-no-files-found: error
       - uses: actions/upload-artifact@v7
         with:
           name: toolbox-${{ matrix.artifact }}
           path: ToolboxTauri/release-assets/*
           if-no-files-found: error
 
-  publish:
+  compare-ocr:
     needs: [version, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.version.outputs.source_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v7
+        with: {name: ocr-outputs-macos-aarch64, path: ocr-outputs/macos-aarch64}
+      - uses: actions/download-artifact@v7
+        with: {name: ocr-outputs-windows-x86_64, path: ocr-outputs/windows-x86_64}
+      - uses: actions/download-artifact@v7
+        with: {name: ocr-outputs-windows-arm64, path: ocr-outputs/windows-arm64}
+      - name: Compare OCR outputs across targets
+        run: |
+          node ToolboxTauri/scripts/compare-ocr-outputs.mjs \
+            macos-aarch64=ocr-outputs/macos-aarch64 \
+            windows-x86_64=ocr-outputs/windows-x86_64 \
+            windows-arm64=ocr-outputs/windows-arm64
+
+  publish:
+    needs: [version, build, compare-ocr]
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.version.outputs.value }}

@@ -57,8 +57,8 @@
       "license": "GPL-2.0-only OR GPL-3.0-only",
       "copyright": "Copyright (c) 2005-2026 The Poppler Developers; based on Xpdf, Copyright (c) 1996-2011 Glyph & Cog, LLC",
       "source": "https://poppler.freedesktop.org/poppler-26.02.0.tar.xz",
-      "note": "Windows builds use the poppler-windows 26.02.0-0 package (https://github.com/oschwartz10612/poppler-windows/releases/tag/v26.02.0-0), a repackage of the conda-forge poppler 26.02.0 build h4b9d284_3. That build's recipe and Windows patches are at https://github.com/conda-forge/poppler-feedstock/tree/b46a81fb3d74/recipe. macOS builds use Homebrew's poppler.",
-      "files": ["pdftoppm", "pdftoppm.exe", "pdftotext", "pdftotext.exe", "poppler*.dll", "libpoppler*.dylib"]
+      "note": "Windows builds use the poppler-windows 26.02.0-0 package (https://github.com/oschwartz10612/poppler-windows/releases/tag/v26.02.0-0), a repackage of the conda-forge poppler 26.02.0 build h4b9d284_3. That build's recipe and Windows patches are at https://github.com/conda-forge/poppler-feedstock/tree/b46a81fb3d74/recipe. macOS builds use Homebrew's poppler. Windows arm64: from the MSYS2 CLANGARM64 packages (https://repo.msys2.org/mingw/clangarm64/; sources at https://repo.msys2.org/mingw/sources/), poppler 26.10.0-1.",
+      "files": ["pdftoppm", "pdftoppm.exe", "pdftotext", "pdftotext.exe", "poppler*.dll", "libpoppler*.dylib", "libpoppler*.dll"]
     },
     {
       "name": "Tesseract OCR",
@@ -66,7 +66,7 @@
       "license": "Apache-2.0",
       "copyright": "Copyright (c) Google Inc.; (C) Copyright 1992, Hewlett-Packard Ltd.; and the Tesseract contributors",
       "source": "https://github.com/tesseract-ocr/tesseract/archive/refs/tags/5.5.3.tar.gz",
-      "note": "Windows builds use the official tesseract-ocr 5.5.3.20260724 installer (https://github.com/tesseract-ocr/tesseract/releases/tag/5.5.3), which is cross-compiled with the Debian gcc-mingw-w64 toolchain against MSYS2 libraries; sources for those libraries are at https://repo.msys2.org/mingw/sources/. macOS builds use Homebrew's tesseract. The English language data comes from https://github.com/tesseract-ocr/tessdata_fast under Apache-2.0.",
+      "note": "Windows builds use the official tesseract-ocr 5.5.3.20260724 installer (https://github.com/tesseract-ocr/tesseract/releases/tag/5.5.3), which is cross-compiled with the Debian gcc-mingw-w64 toolchain against MSYS2 libraries; sources for those libraries are at https://repo.msys2.org/mingw/sources/. macOS builds use Homebrew's tesseract. The English language data comes from https://github.com/tesseract-ocr/tessdata_fast under Apache-2.0. Windows arm64: from the MSYS2 CLANGARM64 packages (https://repo.msys2.org/mingw/clangarm64/; sources at https://repo.msys2.org/mingw/sources/), tesseract-ocr 5.5.4-1.",
       "files": ["tesseract", "tesseract.exe", "libtesseract*.dll", "libtesseract*.dylib"]
     },
     {
@@ -317,6 +317,30 @@
       "files": ["libcurl*.dll", "libcurl*.dylib"]
     },
     {
+      "name": "nghttp2",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2012, 2014, 2015, 2016 Tatsuhiro Tsujikawa; Copyright (c) 2012, 2014, 2015, 2016 nghttp2 contributors",
+      "source": "https://github.com/nghttp2/nghttp2/releases",
+      "note": "Windows arm64: from the MSYS2 CLANGARM64 packages (https://repo.msys2.org/mingw/clangarm64/; sources at https://repo.msys2.org/mingw/sources/), nghttp2 1.71.0-1, linked by libcurl.",
+      "files": ["libnghttp2*.dll", "libnghttp2*.dylib"]
+    },
+    {
+      "name": "nghttp3",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2019 nghttp3 contributors",
+      "source": "https://github.com/ngtcp2/nghttp3/releases",
+      "note": "Windows arm64: from the MSYS2 CLANGARM64 packages (https://repo.msys2.org/mingw/clangarm64/; sources at https://repo.msys2.org/mingw/sources/), nghttp3 1.19.0-1, linked by libcurl.",
+      "files": ["libnghttp3*.dll", "libnghttp3*.dylib"]
+    },
+    {
+      "name": "ngtcp2",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2016 ngtcp2 contributors",
+      "source": "https://github.com/ngtcp2/ngtcp2/releases",
+      "note": "Windows arm64: from the MSYS2 CLANGARM64 packages (https://repo.msys2.org/mingw/clangarm64/; sources at https://repo.msys2.org/mingw/sources/), ngtcp2 1.26.0-1, linked by libcurl.",
+      "files": ["libngtcp2*.dll", "libngtcp2*.dylib"]
+    },
+    {
       "name": "libssh2",
       "license": "BSD-3-Clause",
       "copyright": "Copyright (C) 2004-2007 Sara Golemon; Copyright (C) 2009-2023 Daniel Stenberg; and others; the full list is in the COPYING file below",
@@ -338,16 +362,16 @@
       "license": "MPL-2.0",
       "copyright": "Copyright (c) the Mozilla Foundation and the NSS contributors",
       "source": "https://ftp.mozilla.org/pub/security/nss/releases/",
-      "note": "macOS only: linked by Homebrew's poppler for signature support.",
-      "files": ["libnss*.dylib", "libsmime3.dylib", "libssl3.dylib", "libsoftokn3.dylib", "libfreebl*.dylib"]
+      "note": "macOS: linked by Homebrew's poppler for signature support. Windows arm64: from the MSYS2 CLANGARM64 packages (https://repo.msys2.org/mingw/clangarm64/; sources at https://repo.msys2.org/mingw/sources/), nss 3.133-1, linked by poppler.",
+      "files": ["libnss*.dylib", "libsmime3.dylib", "libssl3.dylib", "libsoftokn3.dylib", "libfreebl*.dylib", "nss3.dll", "nssutil3.dll", "smime3.dll"]
     },
     {
       "name": "NSPR (Netscape Portable Runtime)",
       "license": "MPL-2.0",
       "copyright": "Copyright (c) the Mozilla Foundation and the NSPR contributors",
       "source": "https://archive.mozilla.org/pub/nspr/releases/",
-      "note": "macOS only: required by NSS.",
-      "files": ["libnspr4.dylib", "libplc4.dylib", "libplds4.dylib"]
+      "note": "Required by NSS. Windows arm64: from the MSYS2 CLANGARM64 packages (https://repo.msys2.org/mingw/clangarm64/; sources at https://repo.msys2.org/mingw/sources/), nspr 4.40-1.",
+      "files": ["libnspr4.dylib", "libplc4.dylib", "libplds4.dylib", "libnspr4.dll", "libplc4.dll", "libplds4.dll"]
     },
     {
       "name": "GPGME",
@@ -445,6 +469,14 @@
       "source": "https://github.com/unicode-org/icu",
       "note": "Windows: 78.3 with the OCR helper.",
       "files": ["libicu*.dll", "libicu*.dylib"]
+    },
+    {
+      "name": "LLVM runtime libraries (libc++, OpenMP)",
+      "license": "Apache-2.0 WITH LLVM-exception",
+      "copyright": "Copyright (c) the LLVM Project contributors",
+      "source": "https://github.com/llvm/llvm-project/releases/tag/llvmorg-23.1.5",
+      "note": "Windows arm64: from the MSYS2 CLANGARM64 packages (https://repo.msys2.org/mingw/clangarm64/; sources at https://repo.msys2.org/mingw/sources/), libc++ and llvm-openmp 23.1.5-1, the C++ and OpenMP runtimes of the Windows arm64 OCR engine and PDF rasterizer.",
+      "files": ["libc++*.dll", "libomp*.dll", "libunwind*.dll"]
     },
     {
       "name": "GCC runtime libraries (libgcc, libstdc++)",
