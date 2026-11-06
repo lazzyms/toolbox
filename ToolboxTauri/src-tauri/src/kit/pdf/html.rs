@@ -75,8 +75,27 @@ impl Out {
     }
 }
 
+/// Where a page's local stylesheets and images are read from.
+pub trait Resources {
+    /// The bytes of the local file `href` names, relative to the folder `base`, with the path that names it; `None` when it can't be read.
+    fn read(&mut self, href: &str, base: Option<&Path>) -> Option<(PathBuf, Vec<u8>)>;
+}
+
+/// Files on disk next to the page; pasted markup (no `base`) reaches only absolute `file:` addresses.
+struct Disk;
+
+impl Resources for Disk {
+    fn read(&mut self, href: &str, base: Option<&Path>) -> Option<(PathBuf, Vec<u8>)> {
+        let local = base.is_some() || href.trim().to_ascii_lowercase().starts_with("file:");
+        local_image(href, base.unwrap_or(Path::new(""))).filter(|_| local)?
+            .iter().find(|path| path.is_file()).and_then(|path| fs_key(path))
+            .and_then(|path| std::fs::read(&path).ok().map(|bytes| (path, bytes)))
+    }
+}
+
 struct Walker<'a> {
     base: Option<&'a Path>,
+    resources: &'a mut dyn Resources,
     rules: Vec<Rule>,
     parsed: Parsed,
     loaded: BTreeMap<String, usize>,
@@ -87,9 +106,12 @@ struct Walker<'a> {
 
 /// Reads `markup`; `base` is the folder relative stylesheets and images resolve against, or `None`
 /// for pasted markup, where only absolute `file:` addresses are local.
-pub fn parse(markup: &str, base: Option<&Path>) -> Parsed {
+pub fn parse(markup: &str, base: Option<&Path>) -> Parsed { parse_with(markup, base, &mut Disk) }
+
+/// Reads `markup` with its local stylesheets and images taken from `resources`.
+pub fn parse_with(markup: &str, base: Option<&Path>, resources: &mut dyn Resources) -> Parsed {
     let document = Document::from(markup);
-    let mut walker = Walker { base, rules: Vec::new(), parsed: Parsed::default(), loaded: BTreeMap::new(), anchors: HashSet::new(), html_background: None, body_background: None };
+    let mut walker = Walker { base, resources, rules: Vec::new(), parsed: Parsed::default(), loaded: BTreeMap::new(), anchors: HashSet::new(), html_background: None, body_background: None };
     walker.stylesheets(&document);
     let mut out = Out::new(Align::Left, false);
     walker.children(&document.root(), &Computed::default(), &mut out);
@@ -349,9 +371,7 @@ impl Walker<'_> {
 
     fn linked(&mut self, href: &str, base: Option<&Path>, depth: usize) {
         if is_remote(href) { self.parsed.remote.stylesheets.insert(href.trim().to_string()); return; }
-        let file = local_image(href, base.unwrap_or(Path::new(""))).filter(|_| base.is_some() || href.trim().to_ascii_lowercase().starts_with("file:"))
-            .and_then(|candidates| candidates.into_iter().find(|path| path.is_file()));
-        match file.and_then(|path| std::fs::read(&path).ok().map(|bytes| (path, bytes))) {
+        match self.resources.read(href, base) {
             Some((path, bytes)) if depth < MAX_IMPORT_DEPTH => self.stylesheet(&String::from_utf8_lossy(&bytes), path.parent(), depth + 1),
             Some(_) => {}
             None => self.parsed.unreadable_stylesheets += 1,
@@ -623,12 +643,7 @@ impl Walker<'_> {
         let size = dimension("width").zip(dimension("height")).map(|(width, height)| (width * 0.75, height * 0.75));
         let loaded = match source.get(..5).is_some_and(|scheme| scheme.eq_ignore_ascii_case("data:")) {
             true => data_image(&source).map(|bytes| (source.clone(), bytes)),
-            false => {
-                let local = self.base.is_some() || source.to_ascii_lowercase().starts_with("file:");
-                local_image(&source, self.base.unwrap_or(Path::new(""))).filter(|_| local)
-                    .and_then(|candidates| candidates.iter().find(|path| path.is_file()).and_then(|path| fs_key(path)))
-                    .and_then(|path: PathBuf| std::fs::read(&path).ok().map(|bytes| (path.display().to_string(), bytes)))
-            }
+            false => self.resources.read(&source, self.base).map(|(path, bytes)| (path.display().to_string(), bytes)),
         };
         let index = loaded.and_then(|(key, bytes)| {
             let key = format!("{key}|{size:?}");

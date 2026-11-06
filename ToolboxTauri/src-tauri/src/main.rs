@@ -3448,6 +3448,27 @@ mod command_tests {
         let web_text = lopdf::Document::load(&converted_web_page[0]).unwrap().extract_text(&[1]).unwrap();
         assert!(["Menu", "Soup", "Photo"].iter().all(|expected| web_text.contains(expected)) && !web_text.contains("SCRIPT RAN"), "converted HTML must stay searchable without running scripts: {web_text}");
         outputs.extend(named(&mut naming, "convert_to_pdf", web_page.clone(), converted_web_page));
+        let ebook = root.join("lighthouse.epub");
+        let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, data) in [
+            ("mimetype", "application/epub+zip"),
+            ("META-INF/container.xml", r#"<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/book.opf"/></rootfiles></container>"#),
+            ("OEBPS/book.opf", r#"<package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Lighthouse</dc:title><dc:creator>Ada</dc:creator></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="one" href="one.xhtml" media-type="application/xhtml+xml"/><item id="two" href="two.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="one"/><itemref idref="two"/></spine></package>"#),
+            ("OEBPS/nav.xhtml", r#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="one.xhtml">Arrival</a></li><li><a href="two.xhtml">Departure</a></li></ol></nav></body></html>"#),
+            ("OEBPS/one.xhtml", "<html xmlns=\"http://www.w3.org/1999/xhtml\"><body><h1>Arrival</h1><p>The keeper lit the lamp.</p></body></html>"),
+            ("OEBPS/two.xhtml", "<html xmlns=\"http://www.w3.org/1999/xhtml\"><body><h1>Departure</h1><p>The ship sailed on.</p></body></html>"),
+        ] {
+            archive.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+            std::io::Write::write_all(&mut archive, data.as_bytes()).unwrap();
+        }
+        std::fs::write(&ebook, archive.finish().unwrap().into_inner()).unwrap();
+        let ebook_outcomes = tauri::async_runtime::block_on(convert_to_pdf(RunEvents::silent(), serde_json::json!({ "paths": [ebook.clone()], "outputLocation": location(&root, "convert epub to pdf"), "ebooks": { "pageSize": "a4", "fontScale": 100 } })));
+        assert_eq!(ebook_outcomes[0].detail, "2 pages.", "{ebook_outcomes:?}");
+        let converted_ebook = ebook_outcomes[0].output_paths().to_vec();
+        let ebook_pdf = lopdf::Document::load(&converted_ebook[0]).unwrap();
+        assert!(ebook_pdf.extract_text(&[1]).unwrap().contains("keeper lit the lamp") && ebook_pdf.extract_text(&[2]).unwrap().contains("ship sailed on"), "each chapter starts its own searchable page");
+        assert!(ebook_pdf.catalog().unwrap().has(b"Outlines"), "the table of contents becomes bookmarks");
+        outputs.extend(named(&mut naming, "convert_to_pdf", ebook.clone(), converted_ebook));
         let rich_text_outcomes = tauri::async_runtime::block_on(convert_to_pdf(RunEvents::silent(), serde_json::json!({ "paths": [rich_text.clone()], "outputLocation": location(&root, "convert rich text to pdf") })));
         assert_eq!(rich_text_outcomes[0].detail, "1 page.", "{rich_text_outcomes:?}");
         assert!(["Times New Roman", "Arial"].iter().all(|family| rich_text_outcomes[0].fonts.iter().any(|font| font.requested_family == *family)), "requested RTF fonts are reported: {rich_text_outcomes:?}");

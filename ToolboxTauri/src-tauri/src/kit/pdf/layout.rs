@@ -344,6 +344,9 @@ impl<'b, 'r, S: SystemFontLookup> Flow<'b, 'r, S> {
     fn page(&mut self) -> &mut PageOut { self.pages.last_mut().expect("a flow always has a page") }
     fn page_index(&self) -> usize { self.pages.len() - 1 }
 
+    /// The page and height the next block starts at, for links that point at a place between blocks.
+    pub fn position(&self) -> (usize, f32) { (self.page_index(), self.y()) }
+
     fn need(&mut self, height: f32) -> bool {
         let broke = self.cursor > 0. && self.cursor + height > self.geometry.content_height();
         if broke {
