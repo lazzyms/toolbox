@@ -130,8 +130,8 @@ pub struct Style {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Span { pub text: String, pub style: Style, pub link: Option<String> }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Align { Left, Center, Right }
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Align { #[default] Left, Center, Right }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Block {

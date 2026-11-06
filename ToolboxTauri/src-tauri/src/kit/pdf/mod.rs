@@ -9,6 +9,7 @@ pub mod unicode_font;
 pub mod font_resolver;
 pub mod layout;
 pub mod markdown;
+pub mod html;
 pub mod rtf;
 pub mod wordprocessing;
 pub mod docx;

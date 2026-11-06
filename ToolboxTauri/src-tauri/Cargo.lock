@@ -5934,6 +5934,7 @@ dependencies = [
  "cbc 0.1.2",
  "cfb",
  "csv",
+ "dom_query",
  "encoding_rs",
  "fax",
  "flate2",

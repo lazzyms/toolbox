@@ -32,7 +32,7 @@
     {"id": "spreadsheets", "extensions": [".xlsx", ".ods"], "nativeAvailability": "available"},
     {"id": "presentations", "extensions": [".pptx", ".odp"], "nativeAvailability": "available"},
     {"id": "markdown", "extensions": [".md", ".markdown"], "nativeAvailability": "available"},
-    {"id": "web-pages", "extensions": [".html", ".htm"], "nativeAvailability": "unavailable"},
+    {"id": "web-pages", "extensions": [".html", ".htm"], "nativeAvailability": "available"},
     {"id": "tables", "extensions": [".csv", ".tsv"], "nativeAvailability": "available"},
     {"id": "ebooks", "extensions": [".epub"], "nativeAvailability": "unavailable"},
     {"id": "legacy-office", "extensions": [".doc", ".xls", ".ppt"], "nativeAvailability": "unavailable", "basicFidelity": true},

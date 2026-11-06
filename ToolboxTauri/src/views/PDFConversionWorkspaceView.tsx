@@ -29,6 +29,7 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
       initialPaths={initialPaths}
       onFilesChange={onFilesChange}
       intakeCopy={intakeCopy}
+      pasteHtml={tool.pastesHtml === true}
       exampleName={exampleName ? (path) => exampleName(path, activeUtility, options) : undefined}
       onRun={(paths, outputLocation, run) => tool.request(paths, outputLocation, run, options, { document, selectedPages, pageRange })}
     >

@@ -19,7 +19,9 @@ import { rowView } from './resultRow';
 import { BATCH_PROGRESS_EVENT, foldRunEvent, parseRunEvent, startRun, type LiveRun } from './liveRun';
 import { BlockedDestinationDialog, RunDestination, exampleOutputName, sameLocation, type BlockedDestination, type FolderCheck } from './RunDestination';
 import { TablerIcon } from './TablerIcon';
-import { chooseManyToOneSavePath } from './saveStep';
+import { chooseCreatedDocumentSavePath, chooseManyToOneSavePath } from './saveStep';
+import { PasteHtmlDialog } from './PasteHtmlDialog';
+import { addPastedHtml, choosePastedOutput, isPastedHtml, pastedHtml, pastedRowDetail } from './pastedHtml';
 import { saveStepAppliesTo, saveStepFor } from '../registry/saveSteps';
 import { ArrowDown, ArrowUp, FileIcon, FolderIcon, GripVertical, XIcon } from 'lucide-react';
 import {
@@ -68,6 +70,8 @@ interface ToolScaffoldProps {
     onFilesChange?: (paths: readonly string[]) => void;
     /** Overrides the example output name when the view's options decide the output's suffix or type. */
     exampleName?: (inputPath: string) => string;
+    /** Offers Paste HTML: pasted markup joins the list and asks where to save when the run starts. */
+    pasteHtml?: boolean;
     children: (props: {
         files: string[];
         failingFiles: string[];
@@ -86,7 +90,7 @@ interface ToolScaffoldProps {
     }) => React.ReactNode;
 }
 
-export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, retryWithPassword, intakeCopy, initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, exampleName, children }: ToolScaffoldProps) => {
+export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, retryWithPassword, intakeCopy, initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, exampleName, pasteHtml = false, children }: ToolScaffoldProps) => {
     const nextEntryKey = useRef(0);
     const newEntries = (paths: readonly string[]) => paths.map((path) => ({ key: `entry-${++nextEntryKey.current}`, path }));
     const [entries, setEntries] = useState<IntakeEntry[]>(() => newEntries(initialPaths));
@@ -104,6 +108,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
     const [live, setLive] = useState<LiveRun | null>(null);
     const [perFileRun, setPerFileRun] = useState<PerFileRun | null>(null);
     const [retrying, setRetrying] = useState(false);
+    const [pasting, setPasting] = useState(false);
     const defaultLocation = useOutputLocation();
     const [runOverride, setRunOverride] = useState<OutputLocation | null>(null);
     const [blocked, setBlocked] = useState<(BlockedDestination & { handler: RunHandler }) | null>(null);
@@ -216,6 +221,23 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 if (!outputPath || generation !== runGeneration.current) return;
                 setLoading(true);
             }
+            const pastedPaths = runs ? validPaths.filter(isPastedHtml) : [];
+            if (pastedPaths.length > 0) {
+                setLoading(false);
+                const others = validPaths.length - pastedPaths.length;
+                const elsewhere = others === 0 ? '' : `The other ${others === 1 ? 'file saves' : `${others} files save`} ${location === 'alongsideInput' ? 'next to each original' : 'in the folder chosen for this run'}. `;
+                for (const path of pastedPaths) {
+                    const item = pastedHtml(path);
+                    const chosen = item && await chooseCreatedDocumentSavePath(
+                        { title: 'Save the pasted HTML as a PDF', extension: 'pdf' },
+                        `${item.name}.pdf`,
+                        `Opens in the folder you last saved to, or Documents. ${elsewhere}Cancel goes back to the list without converting.`,
+                    );
+                    if (!chosen || generation !== runGeneration.current) return;
+                    choosePastedOutput(path, chosen);
+                }
+                setLoading(true);
+            }
             const processed = runs ? await runStreamed(handler, validPaths, location, outputPath, generation) : [];
             const processedByPath = new Map(processed.map((result) => [result.inputPath, result]));
             const nextResults = orderedSelectionRejected
@@ -313,6 +335,21 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         setSelection(new Set(key ? [key] : []));
         setAnchor(key);
     };
+
+    const addPasted = (name: string, markup: string) => {
+        setPasting(false);
+        const [entry] = newEntries([addPastedHtml(name, markup)]);
+        setNotAdded([]);
+        setEntries((current) => [...current, entry]);
+        selectOnly(entry.key);
+    };
+
+    const pasteButton = pasteHtml && (
+        <Button variant="outline" size="sm" disabled={loading} onClick={() => setPasting(true)}>
+            Paste HTML…
+        </Button>
+    );
+    const hasPasted = entries.some((entry) => isPastedHtml(entry.path));
 
     const intake = (incoming: InspectedPath[], replaceSingle = false) => {
         if (inputPolicy.inputCardinality === 'single' && replaceSingle) {
@@ -546,7 +583,8 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                         onKeyDown={listKeyDown}
                     >
                         {statuses.map(({ entry, occurrence, flag }, index) => {
-                            const name = fileName(entry.path);
+                            const pasted = pastedHtml(entry.path);
+                            const name = pasted?.name ?? fileName(entry.path);
                             const isSelected = selection.has(entry.key);
                             return (
                                 <li
@@ -601,7 +639,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                                         }}
                                     >
                                         <span className="file-selection-name">{name}</span>
-                                        <span className="file-selection-detail">{flag?.message ?? shortenHomePath(parentFolder(entry.path), home)}</span>
+                                        <span className="file-selection-detail">{flag?.message ?? (pasted ? pastedRowDetail(pasted) : shortenHomePath(parentFolder(entry.path), home))}</span>
                                     </Button>
                                     {flag && <Badge variant="outline" className="file-selection-badge">{flag.label ?? "Won't run"}</Badge>}
                                     {!flag && renderFileExtra?.(entry.path, isSelected, loading)}
@@ -663,6 +701,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                     {entries.length ? inputPolicy.inputCardinality === 'single' ? 'Replace file' : 'Add files' : 'Open files'}
                     <ShortcutHint id="open" />
                 </Button>
+                {pasteButton}
                 {entries.length > 0 && <Button variant="ghost" size="sm" className="workspace-source-clear" disabled={loading} onClick={clearFiles}>Clear list</Button>}
             </div>
             {entries.length > 0 && fileSelection}
@@ -691,6 +730,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                             <TablerIcon name="folder-open" /> Browse files
                             <ShortcutHint id="open" />
                         </Button>
+                        {pasteButton}
                     </div>
 
                     {entries.length > 0 && fileSelection}
@@ -711,6 +751,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 selectedFileIndex,
                 selectFile,
                 destination: (
+                    <>
                     <RunDestination
                         location={outputLocation}
                         defaultLocation={defaultLocation}
@@ -721,8 +762,10 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                         onChange={() => void changeForRun()}
                         onReset={() => setRunOverride(null)}
                     />
+                    {hasPasted && <p className="workspace-note">Pasted HTML has no original, so it asks where to save when you start.</p>}
+                    </>
                 ),
-                runLabel: savesOneFile ? saveStep.runLabel : null,
+                runLabel: savesOneFile ? saveStep.runLabel : hasPasted ? `Export ${utility.shortTitle}…` : null,
                 failedFiles,
                 retryFailed,
                 retrying,
@@ -746,6 +789,8 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 onRetry={perFileRun ? (inputPath) => rerun([inputPath]) : undefined}
                 onRetryWithPassword={perFileRun && retryWithPassword ? (inputPath, password) => rerun([inputPath], retryWithPassword(inputPath, password)) : undefined}
             />
+
+            {pasteHtml && <PasteHtmlDialog open={pasting} onAdd={addPasted} onClose={() => setPasting(false)} />}
 
             <BlockedDestinationDialog
                 blocked={blocked}

@@ -301,6 +301,21 @@ async fn convert_to_pdf(events: RunEvents, request: serde_json::Value) -> Vec<Jo
 }
 
 #[tauri::command]
+async fn convert_pasted_html(app: tauri::AppHandle, request: convert::PastedHtmlRequest) -> Vec<JobOutcome> {
+    let outcomes = run_convert_pasted_html(request.clone()).await;
+    settings::remember_chosen_save(&app, Some(&request.output_path), outcomes)
+}
+
+async fn run_convert_pasted_html(request: convert::PastedHtmlRequest) -> Vec<JobOutcome> {
+    let output_path = request.output_path.clone();
+    let limits = crate::kit::common::limits::recorded(convert::COMMAND).expect("convert_to_pdf records its limits");
+    // The markup is in memory, so there is no input file to check; the run still gets the time limit.
+    let mut outcome = limits.run_all(&[], move || convert::pasted_html(request));
+    outcome.input_path = output_path;
+    vec![outcome]
+}
+
+#[tauri::command]
 async fn pdf_to_text(events: RunEvents, request: remaining::PdfToTextRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_command_inputs("pdf_to_text", &request.paths) { return outcomes; }
     if let Err(outcomes) = validate_page_selection("pdf_to_text", &request.paths, request.pages.as_deref()) { return outcomes; }
@@ -552,6 +567,7 @@ fn main() {
             pdf_to_images,
             pdf_to_text,
             convert_to_pdf,
+            convert_pasted_html,
             extract_pdf_images,
             images_to_pdf,
             ocr_pdf,
@@ -768,7 +784,9 @@ mod command_tests {
         let combined = chosen("scans.pdf");
         let gif = chosen("loop.gif");
         let tiff_out = chosen("pages.tiff");
+        let pasted = chosen("receipt.pdf");
         let runs = [
+            (pasted.clone(), "receipt-1.pdf", tauri::async_runtime::block_on(run_convert_pasted_html(convert::PastedHtmlRequest { markup: "<h1>Receipt</h1><p>Paid</p>".into(), output_path: pasted.clone(), page_defaults: Default::default(), web_pages: None }))),
             (merge.clone(), "statement-1.pdf", tauri::async_runtime::block_on(run_merge_pdfs(&MergePdfRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: OutputLocation::AlongsideInput, output_path: Some(merge.clone()) }))),
             (combined.clone(), "scans-1.pdf", tauri::async_runtime::block_on(run_images_to_pdf(&ImagesToPdfRequest { paths: vec![image.clone(), image_two.clone()], output_location: OutputLocation::AlongsideInput, output_path: Some(combined.clone()) }))),
             (gif.clone(), "loop-1.gif", tauri::async_runtime::block_on(run_create_gif(&GifCreateRequest { paths: vec![image.clone(), image_two.clone()], frame_delay_ms: 100, loop_forever: true, output_location: OutputLocation::AlongsideInput, output_path: Some(gif.clone()) }))),
@@ -3421,6 +3439,15 @@ mod command_tests {
         assert!(["Release notes", "build", "cargo test", "the site"].iter().all(|expected| markdown_text.contains(expected)), "converted Markdown must stay searchable: {markdown_text}");
         assert!(markdown_pdf.catalog().unwrap().has(b"Outlines"), "headings become bookmarks");
         outputs.extend(named(&mut naming, "convert_to_pdf", markdown.clone(), converted_markdown));
+        let web_page = root.join("menu.html");
+        std::fs::write(root.join("menu.css"), "h1 { color: #ff0000 } body { background-color: #eeeeee }").unwrap();
+        std::fs::write(&web_page, "<html><head><title>Menu</title><link rel=stylesheet href=menu.css><link rel=stylesheet href=https://example.com/site.css><script>document.write('SCRIPT RAN')</script></head><body><h1>Menu</h1><p>Soup <b>4</b></p><img src=https://example.com/photo.png alt=Photo></body></html>").unwrap();
+        let web_outcomes = tauri::async_runtime::block_on(convert_to_pdf(RunEvents::silent(), serde_json::json!({ "paths": [web_page.clone()], "outputLocation": location(&root, "convert html to pdf"), "webPages": { "backgroundGraphics": true } })));
+        assert_eq!(web_outcomes[0].detail, "1 page. Remote content left out: 1 image and 1 stylesheet from the internet weren't loaded.", "{web_outcomes:?}");
+        let converted_web_page = web_outcomes[0].output_paths().to_vec();
+        let web_text = lopdf::Document::load(&converted_web_page[0]).unwrap().extract_text(&[1]).unwrap();
+        assert!(["Menu", "Soup", "Photo"].iter().all(|expected| web_text.contains(expected)) && !web_text.contains("SCRIPT RAN"), "converted HTML must stay searchable without running scripts: {web_text}");
+        outputs.extend(named(&mut naming, "convert_to_pdf", web_page.clone(), converted_web_page));
         let rich_text_outcomes = tauri::async_runtime::block_on(convert_to_pdf(RunEvents::silent(), serde_json::json!({ "paths": [rich_text.clone()], "outputLocation": location(&root, "convert rich text to pdf") })));
         assert_eq!(rich_text_outcomes[0].detail, "1 page.", "{rich_text_outcomes:?}");
         assert!(["Times New Roman", "Arial"].iter().all(|family| rich_text_outcomes[0].fonts.iter().any(|font| font.requested_family == *family)), "requested RTF fonts are reported: {rich_text_outcomes:?}");
