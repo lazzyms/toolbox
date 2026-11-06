@@ -3,6 +3,7 @@ import type {
   ErrorKind,
   JobOutcome,
   LimitKind,
+  OutcomeDetail,
   OutcomePointer,
   OutcomeWarning,
   SkipCode,
@@ -26,6 +27,7 @@ const skipCodes: readonly SkipCode[] = [
   "textAlreadyPresent",
   "noEffectiveChange",
   "unsupportedFormat",
+  "needsOcr",
   "cancelled",
 ];
 
@@ -54,6 +56,29 @@ const member = <T extends string>(value: unknown, allowed: readonly T[], path: s
 
 const texts = (value: unknown, path: string): string[] =>
   Array.isArray(value) ? value.map((item, index) => text(item, `${path}[${index}]`)) : fail(path, "an array");
+
+const byteSizes = (outcome: Json, path: string): { originalBytes?: number; outputBytes?: number } => {
+  const sizes: { originalBytes?: number; outputBytes?: number } = {};
+  for (const key of ["originalBytes", "outputBytes"] as const) {
+    const value = outcome[key];
+    if (value === null || value === undefined) continue;
+    sizes[key] = Number.isSafeInteger(value) && (value as number) >= 0 ? (value as number) : fail(`${path}.${key}`, "a non-negative whole number of bytes");
+  }
+  return sizes;
+};
+
+const pageDetails = (outcome: Json, path: string): { pageDetails?: OutcomeDetail[] } => {
+  const value = outcome.pageDetails;
+  if (value === null || value === undefined) return {};
+  if (!Array.isArray(value)) return fail(`${path}.pageDetails`, "an array");
+  if (value.length === 0) return {};
+  return {
+    pageDetails: value.map((item, index) => {
+      const detail = record(item, `${path}.pageDetails[${index}]`);
+      return { label: text(detail.label, `${path}.pageDetails[${index}].label`), value: text(detail.value, `${path}.pageDetails[${index}].value`) };
+    }),
+  };
+};
 
 const parsePointer = (value: unknown, path: string): OutcomePointer | null => {
   if (value === null || value === undefined) return null;
@@ -107,6 +132,8 @@ export const parseJobOutcome = (value: unknown, path = "outcome"): JobOutcome =>
     warnings: Array.isArray(outcome.warnings)
       ? outcome.warnings.map((warning, index) => parseWarning(warning, `${path}.warnings[${index}]`))
       : fail(`${path}.warnings`, "an array"),
+    ...byteSizes(outcome, path),
+    ...pageDetails(outcome, path),
   };
   const outputPaths = texts(outcome.outputPaths, `${path}.outputPaths`);
   const hasFailure = outcome.failure !== null && outcome.failure !== undefined;
