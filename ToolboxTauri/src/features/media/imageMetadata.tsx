@@ -2,6 +2,8 @@ import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Button } from "@/components/ui/button";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import type { ImageMetadataInspection } from "../../contracts";
+import { ImageMetadataReport } from "../../views/ImageMetadataReport";
 import type { MediaPanelProps, MediaTool } from "./types";
 
 export interface ImageMetadataOptions {
@@ -10,7 +12,25 @@ export interface ImageMetadataOptions {
 
 const ImageMetadataPanel = ({ options, setOptions, files, outputLocation, loading }: MediaPanelProps<ImageMetadataOptions>) => {
   // The report belongs to this panel, so it clears when another tool is chosen.
-  const [report, setReport] = useState<unknown[]>([]);
+  const [report, setReport] = useState<ImageMetadataInspection[]>([]);
+  const [inspectError, setInspectError] = useState<string>();
+  const [inspecting, setInspecting] = useState(false);
+
+  const inspectMetadata = async () => {
+    setInspecting(true);
+    setInspectError(undefined);
+    try {
+      setReport(await invoke<ImageMetadataInspection[]>("inspect_image_metadata", { request: { paths: files, outputLocation } }));
+    } catch (error) {
+      setReport([]);
+      setInspectError(String(error));
+    } finally {
+      setInspecting(false);
+    }
+  };
+
+  // Only files still in the list keep their card, so removing a file also drops its report.
+  const inspections = report.filter((inspection) => files.includes(inspection.path));
   return (
     <>
       <ToggleGroup
@@ -29,12 +49,12 @@ const ImageMetadataPanel = ({ options, setOptions, files, outputLocation, loadin
       <Button
         variant="ghost"
         size="sm"
-        disabled={loading || files.length === 0}
-        onClick={async () => setReport(await invoke<unknown[]>("inspect_image_metadata", { request: { paths: files, outputLocation } }))}
+        disabled={loading || inspecting || files.length === 0}
+        onClick={() => void inspectMetadata()}
       >
         Inspect metadata
       </Button>
-      {report.length > 0 && <pre className="workspace-report">{JSON.stringify(report, null, 2)}</pre>}
+      {(inspections.length > 0 || inspectError) && <ImageMetadataReport inspections={inspections} error={inspectError} />}
     </>
   );
 };

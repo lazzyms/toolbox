@@ -55,6 +55,10 @@ export const warningText = (warning: OutcomeWarning): string => {
         case "precisionReduced":
             // The native side names what was reduced, such as "10-bit HEIC saved as 8-bit sRGB."
             return warning.message.trim() || "Some values were rounded to the precision this format can store.";
+        case "bookmarksNotCarried":
+            return `Bookmarks weren’t carried into ${warning.details.into}.`;
+        case "tagsNotCarried":
+            return `Accessibility tags weren’t carried into ${warning.details.into}.`;
     }
 };
 
