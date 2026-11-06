@@ -16,6 +16,7 @@ const english: OcrLanguage = { code: "eng", name: "English", packId: null, statu
 const french: OcrLanguage = { code: "fra", name: "French", packId: "ocr-french", status: "installed", downloadBytes: 3 * MB };
 const hindi: OcrLanguage = { code: "hin", name: "Hindi", packId: "ocr-hindi", status: "notInstalled", downloadBytes: 3 * MB };
 const tamil: OcrLanguage = { code: "tam", name: "Tamil", packId: "ocr-tamil", status: "damaged", downloadBytes: 5 * MB };
+const gujarati: OcrLanguage = { code: "guj", name: "Gujarati", packId: "ocr-gujarati", status: "notInstalled", downloadBytes: 14 * MB };
 
 const pagePreview = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='612' height='792'/%3E";
 
@@ -101,17 +102,36 @@ const emit = (page: Page, event: string, payload: unknown) =>
 const setLanguages = (page: Page, languages: OcrLanguage[]) =>
     page.evaluate((languages) => { (window as unknown as PickerWindow).__languages = languages; }, languages);
 
+const languageList = (page: Page) => page.getByRole("list", { name: "Languages, in order of priority" });
+
+/** Each row's accessible name, in priority order. */
+const rows = (page: Page) => languageList(page).getByRole("listitem");
+
+const addLanguage = async (page: Page, name: RegExp) => {
+    await page.getByRole("combobox", { name: "Add a language" }).click();
+    await page.getByRole("option", { name }).click();
+};
+
+const removedNotice = (page: Page) => page.getByRole("status").filter({ hasText: "removed from your languages" });
+
+const remember = async (page: Page, codes: string[]) => {
+    await page.goto("/");
+    await page.evaluate((codes) => window.localStorage.setItem("toolbox-ocr-languages", JSON.stringify(codes)), codes);
+};
+
 const lastOcrRequest = (page: Page) => page.evaluate(() =>
     (window as unknown as PickerWindow).__invocations.filter(({ command }) => command === "ocr_pdf").at(-1)?.args);
 
 test("English reads scans with no language packs installed", async ({ page }) => {
     await openOcr(page);
-    const picker = page.getByRole("combobox", { name: "Language" });
-    await expect(picker).toHaveText("English");
-    await expect(page.getByLabel("English status")).toHaveText("Installed");
+    await expect(rows(page)).toHaveCount(1);
+    await expect(languageList(page).getByRole("listitem", { name: "English, installed, priority 1" })).toBeVisible();
+    // One language can't be moved or removed.
+    await expect(languageList(page).getByRole("button")).toHaveCount(0);
+    await expect(page.getByText("Recognition runs on this device. Your last choice is remembered.")).toBeVisible();
 
-    await picker.click();
-    await expect(page.getByRole("option", { name: "English, installed" })).toBeVisible();
+    await page.getByRole("combobox", { name: "Add a language" }).click();
+    await expect(page.getByRole("option", { name: "English, installed, already added" })).toBeDisabled();
     await expect(page.getByRole("listbox").getByRole("group", { name: "Download to use" })).toHaveCount(0);
     await page.keyboard.press("Escape");
 
@@ -119,46 +139,109 @@ test("English reads scans with no language packs installed", async ({ page }) =>
     expect(await lastOcrRequest(page)).toMatchObject({ request: { paths: ["/scans/ration-card.pdf"], languages: ["eng"] } });
 });
 
-test("a language from a pack installs from the picker and then runs in that language", async ({ page }) => {
+test("the add list comes from the installed and installable languages the app reports", async ({ page }) => {
     await openOcr(page, [english, french, hindi, tamil]);
-    const picker = page.getByRole("combobox", { name: "Language" });
-    await picker.click();
+    expect(await page.evaluate(() => (window as unknown as PickerWindow).__invocations.some(({ command }) => command === "ocr_languages"))).toBe(true);
+    await page.getByRole("combobox", { name: "Add a language" }).click();
     const installed = page.getByRole("listbox").getByRole("group", { name: "Installed", exact: true });
     const downloadable = page.getByRole("listbox").getByRole("group", { name: "Download to use" });
-    await expect(installed.getByRole("option")).toHaveText(["English", "French"]);
-    await expect(installed.getByRole("option", { name: "French, installed" })).toBeVisible();
+    await expect(installed.getByRole("option")).toHaveText(["EnglishAdded", "French"]);
+    await expect(installed.getByRole("option", { name: "English, installed, already added" })).toBeDisabled();
+    await expect(installed.getByRole("option", { name: "French, installed" })).toBeEnabled();
     await expect(downloadable.getByRole("option", { name: "Hindi, not installed, 3 MB download" })).toBeVisible();
     await expect(downloadable.getByRole("option", { name: "Tamil, not installed, 5 MB download" })).toBeVisible();
+    await expect(page.getByText("Choosing one adds it to the list. It downloads when you click Install or run.")).toBeVisible();
+});
 
-    await downloadable.getByRole("option", { name: /^Hindi/ }).click();
-    await expect(picker).toHaveText("Hindi");
-    await expect(page.getByLabel("Hindi status")).toHaveText("Not installed");
+test("several languages run in the order chosen, and a pack installs from its note", async ({ page }) => {
+    await openOcr(page, [english, french, hindi, tamil]);
+    await addLanguage(page, /^French/);
+    await addLanguage(page, /^Hindi/);
+    await expect(rows(page)).toHaveCount(3);
+    expect(await rows(page).evaluateAll((items) => items.map((item) => item.getAttribute("aria-label")))).toEqual([
+        "English, installed, priority 1",
+        "French, installed, priority 2",
+        "Hindi, not installed, priority 3",
+    ]);
+
+    // The first language moves down; every other one moves up.
+    await page.getByRole("button", { name: "Move Hindi up" }).click();
+    await page.getByRole("button", { name: "Move English down" }).click();
+    await page.getByRole("button", { name: "Remove French" }).click();
+    expect(await rows(page).evaluateAll((items) => items.map((item) => item.getAttribute("aria-label")))).toEqual([
+        "Hindi, not installed, priority 1",
+        "English, installed, priority 2",
+    ]);
+    await page.getByRole("combobox", { name: "Add a language" }).click();
+    await expect(page.getByRole("option", { name: "Hindi, not installed, 3 MB download, already added" })).toBeDisabled();
+    await expect(page.getByRole("option", { name: "French, installed" })).toBeEnabled();
+    await page.keyboard.press("Escape");
+
     await expect(page.getByText("Hindi needs a 3 MB download.")).toBeVisible();
     await page.getByRole("button", { name: "Install Hindi" }).click();
     expect(await page.evaluate(() => (window as unknown as PickerWindow).__installs.map(({ packId }) => packId))).toEqual(["ocr-hindi"]);
-
     const runId = await page.evaluate(() => (window as unknown as PickerWindow).__installs[0].runId);
     await emit(page, "pack-progress", { runId, packId: "ocr-hindi", phase: "downloading", receivedBytes: 1.86 * MB, totalBytes: 3 * MB });
-    await expect(page.getByRole("status").filter({ hasText: "Downloading 62%" })).toBeVisible();
+    await expect(languageList(page).getByRole("status")).toHaveText("Downloading 62%");
+    await expect(languageList(page).getByRole("listitem", { name: "Hindi, downloading 62%, priority 1" })).toBeVisible();
 
     await setLanguages(page, [english, french, { ...hindi, status: "installed" }, tamil]);
     await emit(page, "pack-changed", { packId: "ocr-hindi" });
     await page.evaluate(() => (window as unknown as PickerWindow).__installs[0].settle());
-    await expect(page.getByLabel("Hindi status")).toHaveText("Installed");
+    await expect(languageList(page).getByRole("listitem", { name: "Hindi, installed, priority 1" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Install Hindi" })).toHaveCount(0);
-    await picker.click();
-    await expect(page.getByRole("option", { name: "Hindi, installed" })).toBeVisible();
-    await page.keyboard.press("Escape");
 
     await page.getByRole("button", { name: "Export OCR PDF" }).click();
-    expect(await lastOcrRequest(page)).toMatchObject({ request: { paths: ["/scans/ration-card.pdf"], languages: ["hin"] } });
+    expect(await lastOcrRequest(page)).toMatchObject({ request: { paths: ["/scans/ration-card.pdf"], languages: ["hin", "eng"] } });
+});
+
+test("the last choice of languages is remembered across reloads", async ({ page }) => {
+    await openOcr(page, [english, french, hindi]);
+    await addLanguage(page, /^French/);
+    await page.getByRole("button", { name: "Move French up" }).click();
+    expect(await page.evaluate(() => window.localStorage.getItem("toolbox-ocr-languages"))).toBe(JSON.stringify(["fra", "eng"]));
+
+    await page.reload();
+    await openOcr(page);
+    expect(await rows(page).evaluateAll((items) => items.map((item) => item.getAttribute("aria-label")))).toEqual([
+        "French, installed, priority 1",
+        "English, installed, priority 2",
+    ]);
+    await expect(removedNotice(page)).toHaveCount(0);
+    await page.getByRole("button", { name: "Export OCR PDF" }).click();
+    expect(await lastOcrRequest(page)).toMatchObject({ request: { languages: ["fra", "eng"] } });
+});
+
+test("a remembered language whose pack is no longer installed is dropped with a notice", async ({ page }) => {
+    await remember(page, ["fra", "hin", "eng"]);
+    await openOcr(page, [english, french, hindi]);
+    expect(await rows(page).evaluateAll((items) => items.map((item) => item.getAttribute("aria-label")))).toEqual([
+        "French, installed, priority 1",
+        "English, installed, priority 2",
+    ]);
+    await expect(removedNotice(page)).toHaveText("Hindi was removed from your languages. Its pack isn't installed any more. Add it again from the list to download it.");
+    expect(await page.evaluate(() => window.localStorage.getItem("toolbox-ocr-languages"))).toBe(JSON.stringify(["fra", "eng"]));
+    await page.getByRole("button", { name: "Export OCR PDF" }).click();
+    expect(await lastOcrRequest(page)).toMatchObject({ request: { languages: ["fra", "eng"] } });
+
+    // Adding a language again clears the notice.
+    await addLanguage(page, /^Hindi/);
+    await expect(removedNotice(page)).toHaveCount(0);
+});
+
+test("when every remembered language is gone, English reads on its own", async ({ page }) => {
+    await remember(page, ["hin", "guj"]);
+    await openOcr(page, [english, hindi, gujarati]);
+    expect(await rows(page).evaluateAll((items) => items.map((item) => item.getAttribute("aria-label")))).toEqual(["English, installed, priority 1"]);
+    await expect(removedNotice(page)).toHaveText("Hindi and Gujarati were removed from your languages. Their packs aren't installed any more. Add them again from the list to download them.");
+    await page.getByRole("button", { name: "Export OCR PDF" }).click();
+    expect(await lastOcrRequest(page)).toMatchObject({ request: { languages: ["eng"] } });
 });
 
 test("a damaged language pack offers Repair", async ({ page }) => {
     await openOcr(page, [english, tamil]);
-    await page.getByRole("combobox", { name: "Language" }).click();
-    await page.getByRole("option", { name: /^Tamil/ }).click();
-    await expect(page.getByLabel("Tamil status")).toHaveText("Damaged");
+    await addLanguage(page, /^Tamil/);
+    await expect(languageList(page).getByRole("listitem", { name: "Tamil, damaged, priority 2" })).toBeVisible();
     await page.getByRole("button", { name: "Repair Tamil" }).click();
     expect(await page.evaluate(() => (window as unknown as PickerWindow).__installs.map(({ packId }) => packId))).toEqual(["ocr-tamil"]);
 });

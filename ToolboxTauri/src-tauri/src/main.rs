@@ -1496,6 +1496,42 @@ mod command_tests {
     }
 
     #[test]
+    fn ocr_reads_english_and_a_development_override_language_together_through_the_real_engine() {
+        let _guard = crate::kit::lock_process_env();
+        let Some(_engine) = real_ocr_engine() else { return };
+        let root = sandbox("ocr-two-languages");
+        let input = root.join("scan.pdf");
+        scanned_pdf(&input, &[&["Quarterly invoice summary", "Northwind shipping ledger"]]);
+        // The fixture Hindi language is English's data under Hindi's code, so the real engine
+        // reads both languages from the folder they are gathered into.
+        let languages = root.join("languages");
+        std::fs::create_dir_all(&languages).unwrap();
+        let english = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/ocr/tessdata/eng.traineddata");
+        std::fs::copy(&english, languages.join("hin.traineddata")).unwrap();
+        let _override = EnvGuard::set(&[("TOOLBOX_OCR_LANGUAGE_DIR", Some(languages))]);
+        let folder = location(&root, "ocr");
+        let run = |folder: OutputLocation| {
+            let mut request = ocr_text_request(vec![input.clone()], folder);
+            request.languages = vec!["eng".into(), "hin".into()];
+            let packs = vision::OcrPacks::new(Ok(root.join("app-data")), "1.0.14", Ok(crate::packs::install::tests::Fixture::new().catalog()));
+            tauri::async_runtime::block_on(run_ocr_pdf(RunEvents::silent(), request, packs))
+        };
+
+        let first = run(folder.clone());
+        let second = run(folder);
+        let texts = [&first, &second].map(|outcomes| {
+            assert!(outcomes[0].error().is_none(), "{:?}", outcomes[0]);
+            assert_eq!(outcomes[0].detail, "1 page recognized. English and Hindi.");
+            std::fs::read(&outcomes[0].output_paths()[0]).unwrap()
+        });
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert_eq!(texts[0], texts[1], "the same languages give the same text");
+        let text = String::from_utf8(texts[0].clone()).unwrap();
+        for word in ["Quarterly", "invoice", "Northwind", "ledger"] { assert!(text.contains(word), "{word} is missing from {text:?}"); }
+    }
+
+    #[test]
     fn ocr_reports_locked_and_blank_scans_beside_a_readable_one() {
         let _guard = crate::kit::lock_process_env();
         let Some(_engine) = real_ocr_engine() else { return };
