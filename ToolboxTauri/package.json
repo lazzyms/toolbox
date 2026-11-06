@@ -35,7 +35,8 @@
     "test:qpdf-release": "node --test tests/qpdf-release-readiness.test.mjs",
     "test:ocr-release": "node --test tests/ocr-release-readiness.test.mjs",
     "test:fonts-release": "node --test tests/fallback-fonts-release-readiness.test.mjs",
-    "check:release": "npm run check:shadcn-components && npm run check:notices && npm run check:matrix && npm run test:qpdf-release && npm run test:ocr-release && npm run test:fonts-release && node scripts/check-release-readiness.mjs",
+    "test:convert-release": "node --test tests/convert-release-readiness.test.mjs",
+    "check:release": "npm run check:shadcn-components && npm run check:notices && npm run check:matrix && npm run test:qpdf-release && npm run test:ocr-release && npm run test:fonts-release && npm run test:convert-release && node scripts/check-release-readiness.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
   },

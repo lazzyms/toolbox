@@ -113,6 +113,24 @@ impl BatchRunner {
         R: Send + Sync + 'static,
         F: Fn(&R, PathBuf) -> JobOutcome + Send + Sync + 'static,
     {
+        Self::run_limited(events, command, inputs, location, move |_| limits, request, job)
+    }
+
+    /// For a command whose limits depend on the input, such as Convert to PDF, which takes many formats.
+    pub fn run_limited<R, L, F>(
+        events: &RunEvents,
+        command: &str,
+        inputs: Vec<PathBuf>,
+        location: &OutputLocation,
+        limits_for: L,
+        request: &Arc<R>,
+        job: F,
+    ) -> Vec<JobOutcome>
+    where
+        R: Send + Sync + 'static,
+        L: Fn(&Path) -> Option<ToolLimits> + Sync,
+        F: Fn(&R, PathBuf) -> JobOutcome + Send + Sync + 'static,
+    {
         // rayon::into_par_iter automatically uses the system core count for the thread pool,
         // matching the original Swift `ProcessInfo.processInfo.activeProcessorCount` behavior.
         match partition_command_inputs(command, &inputs) {
@@ -144,7 +162,7 @@ impl BatchRunner {
                         return (index, outcome);
                     }
                     events.emit(FileEvent::Started { index });
-                    let outcome = match limits {
+                    let outcome = match limits_for(&path) {
                         Some(limits) => {
                             let (job, request) = (Arc::clone(&job), Arc::clone(request));
                             limits.run_each(path, events.cancel.flag(), events.page_sink(index), move |path| job(&request, path))
