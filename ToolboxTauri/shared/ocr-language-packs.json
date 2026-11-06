@@ -1,0 +1,66 @@
+{
+  "engine": "Tesseract 5.5.3",
+  "models": {
+    "source": "https://github.com/tesseract-ocr/tessdata_fast",
+    "commit": "87416418657359cb625c412a48b6e1d6d41c29bd",
+    "license": "Apache-2.0"
+  },
+  "budgetRule": "Each pack's download is at most its model file rounded up to a whole MiB, plus 1 MiB for the pack manifest, signature and archive.",
+  "languages": [
+    {
+      "code": "eng",
+      "name": "English",
+      "bundled": true,
+      "model": { "file": "eng.traineddata", "bytes": 4113088, "gitBlobSha1": "bbef4675053b5b468cdb477053e28b1c698ba08e", "sha256": "7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2" },
+      "fixture": { "text": "Toolbox reads scanned pages", "recognizes": "Toolbox" }
+    },
+    {
+      "code": "deu",
+      "name": "German",
+      "packId": "ocr-german",
+      "downloadBudgetBytes": 3145728,
+      "model": { "file": "deu.traineddata", "bytes": 1525436, "gitBlobSha1": "97ed7b2b60f2771c07040660ef0f6daf596dc7bf" },
+      "fixture": { "text": "Größe und Straße", "recognizes": "ß" }
+    },
+    {
+      "code": "fra",
+      "name": "French",
+      "packId": "ocr-french",
+      "downloadBudgetBytes": 3145728,
+      "model": { "file": "fra.traineddata", "bytes": 1130365, "gitBlobSha1": "d9e2b2160be0d1ca3b8f1bf2730fae476ef3b4a6" },
+      "fixture": { "text": "Façade du garçon", "recognizes": "ç" }
+    },
+    {
+      "code": "spa",
+      "name": "Spanish",
+      "packId": "ocr-spanish",
+      "downloadBudgetBytes": 4194304,
+      "model": { "file": "spa.traineddata", "bytes": 2294433, "gitBlobSha1": "72e901f13ca52cfe34cf239a368b9ed3c0ddaf26" },
+      "fixture": { "text": "Mañana en España", "recognizes": "ñ" }
+    },
+    {
+      "code": "hin",
+      "name": "Hindi",
+      "packId": "ocr-hindi",
+      "downloadBudgetBytes": 3145728,
+      "model": { "file": "hin.traineddata", "bytes": 1122751, "gitBlobSha1": "a8f0aaec09378115b12a2c6287c57695d082aea2" },
+      "fixture": { "text": "हिन्दी भाषा", "recognizes": "भाषा" }
+    },
+    {
+      "code": "guj",
+      "name": "Gujarati",
+      "packId": "ocr-gujarati",
+      "downloadBudgetBytes": 3145728,
+      "model": { "file": "guj.traineddata", "bytes": 1418394, "gitBlobSha1": "151b9aad2945e3103118e5d36eee288f631d985a" },
+      "fixture": { "text": "ગુજરાતી ભાષા", "recognizes": "ભાષા" }
+    },
+    {
+      "code": "tam",
+      "name": "Tamil",
+      "packId": "ocr-tamil",
+      "downloadBudgetBytes": 5242880,
+      "model": { "file": "tam.traineddata", "bytes": 3237963, "gitBlobSha1": "fa1793d68f9aba8bf191e8ff1036e2271d288e44" },
+      "fixture": { "text": "தமிழ் மொழி", "recognizes": "தமிழ்" }
+    }
+  ]
+}
