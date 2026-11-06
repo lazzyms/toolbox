@@ -13,7 +13,7 @@ test("native-shaped outcomes parse into the TypeScript contract for all three st
   const outcomes = parseToolResult(nativeSamples);
 
   assert.deepEqual(outcomes, nativeSamples);
-  assert.deepEqual(outcomes.map((outcome) => outcome.state), ["succeeded", "skipped", "skipped", "failed", "failed", "succeeded", "skipped"]);
+  assert.deepEqual(outcomes.map((outcome) => outcome.state), ["succeeded", "skipped", "skipped", "failed", "failed", "succeeded", "skipped", "succeeded"]);
 
   const [succeeded, pointedSkip, plainSkip, failed, limited] = outcomes;
   for (const outcome of outcomes.slice(0, 5)) {
@@ -43,7 +43,7 @@ test("native-shaped outcomes parse into the TypeScript contract for all three st
 });
 
 test("native-shaped outcomes carry original and output byte sizes when reported", () => {
-  const [compressed, noSavings] = parseToolResult(nativeSamples).slice(5);
+  const [compressed, noSavings] = parseToolResult(nativeSamples).slice(5, 7);
 
   assert.ok(compressed.state === "succeeded");
   assert.deepEqual([compressed.originalBytes, compressed.outputBytes], [2_500_000, 1_000_000]);
@@ -60,6 +60,24 @@ test("native-shaped outcomes carry original and output byte sizes when reported"
 
   for (const bad of [-1, 1.5, "4096", Number.MAX_SAFE_INTEGER + 1]) {
     assert.throws(() => parseJobOutcome({ ...sample(5), outputBytes: bad }), /Invalid job outcome: outcome.outputBytes/);
+  }
+});
+
+test("native-shaped outcomes carry a labelled page breakdown when reported", () => {
+  const outcomes = parseToolResult(nativeSamples);
+  const mixed = outcomes[7];
+
+  assert.ok(mixed.state === "succeeded");
+  assert.deepEqual(mixed.pageDetails, [
+    { label: "Recognized", value: "Pages 1 and 3" },
+    { label: "Skipped, visible text", value: "Page 2" },
+    { label: "Languages", value: "English" },
+  ]);
+  for (const outcome of outcomes.slice(0, 7)) assert.ok(!("pageDetails" in outcome), "outcomes without a breakdown stay unchanged");
+  assert.ok(!("pageDetails" in parseJobOutcome({ ...sample(7), pageDetails: [] })), "an empty breakdown is the same as none");
+
+  for (const bad of ["Pages 1-3", [{ label: "Recognized" }], [{ label: 1, value: "Page 1" }]]) {
+    assert.throws(() => parseJobOutcome({ ...sample(7), pageDetails: bad }), /Invalid job outcome: outcome.pageDetails/);
   }
 });
 

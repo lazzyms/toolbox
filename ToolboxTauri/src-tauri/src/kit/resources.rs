@@ -64,6 +64,14 @@ pub(crate) const PDF_RENDERER: Helper = Helper {
     unavailable: "pdftoppm is required for PDF previews. Set TOOLBOX_PDFTOPPM_PATH or add it to PATH.",
 };
 
+pub(crate) const PDF_TEXT: Helper = Helper {
+    name: "pdftotext",
+    override_var: "TOOLBOX_PDFTOTEXT_PATH",
+    bundled_dir: "pdf-bin",
+    probe: "-v",
+    unavailable: "The PDF text reader is missing. Reinstall Toolbox.",
+};
+
 pub(crate) const QPDF: Helper = Helper {
     name: "qpdf",
     override_var: "TOOLBOX_QPDF_PATH",

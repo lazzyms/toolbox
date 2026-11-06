@@ -160,12 +160,19 @@ export type OutcomeWarning =
 
 export type WarningCode = OutcomeWarning["code"];
 
+/** One labelled line of a result's breakdown, such as which pages were recognized. */
+export interface OutcomeDetail {
+  label: string;
+  value: string;
+}
+
 interface JobOutcomeBase {
   inputPath: string;
   detail: string;
   warnings: OutcomeWarning[];
   originalBytes?: number;
   outputBytes?: number;
+  pageDetails?: OutcomeDetail[];
 }
 
 export interface SucceededJobOutcome extends JobOutcomeBase {

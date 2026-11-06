@@ -4,6 +4,7 @@ pub mod page_ranges;
 pub mod scene;
 pub mod editor;
 pub mod remaining;
+pub mod text_layer;
 pub mod unicode_font;
 
 use std::collections::HashSet;

@@ -468,6 +468,13 @@ pub struct OutcomeWarning {
     pub message: String,
 }
 
+/// One labelled line of a result's breakdown, such as which pages were recognized.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutcomeDetail {
+    pub label: String,
+    pub value: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OutcomeState {
     Succeeded { output_paths: Vec<PathBuf> },
@@ -484,6 +491,7 @@ pub struct JobOutcome {
     pub state: OutcomeState,
     pub original_bytes: Option<u64>,
     pub output_bytes: Option<u64>,
+    pub page_details: Vec<OutcomeDetail>,
 }
 
 impl JobOutcome {
@@ -504,11 +512,15 @@ impl JobOutcome {
     }
 
     fn new(input_path: PathBuf, detail: String, state: OutcomeState) -> Self {
-        Self { input_path, detail, warnings: Vec::new(), state, original_bytes: None, output_bytes: None }
+        Self { input_path, detail, warnings: Vec::new(), state, original_bytes: None, output_bytes: None, page_details: Vec::new() }
     }
 
     pub fn with_sizes(self, original_bytes: u64, output_bytes: u64) -> Self {
         Self { original_bytes: Some(original_bytes), output_bytes: Some(output_bytes), ..self }
+    }
+
+    pub fn with_page_details(self, page_details: Vec<OutcomeDetail>) -> Self {
+        Self { page_details, ..self }
     }
 
     pub fn with_warning(mut self, warning: OutcomeWarning) -> Self {
@@ -553,6 +565,8 @@ struct JobOutcomeWire {
     original_bytes: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     output_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    page_details: Vec<OutcomeDetail>,
 }
 
 impl From<JobOutcome> for JobOutcomeWire {
@@ -562,7 +576,7 @@ impl From<JobOutcome> for JobOutcomeWire {
             OutcomeState::Skipped { reason } => (OutcomeStateTag::Skipped, Vec::new(), None, Some(reason)),
             OutcomeState::Failed { output_paths, error } => (OutcomeStateTag::Failed, output_paths, Some(error), None),
         };
-        Self { input_path: outcome.input_path, state, output_paths, detail: outcome.detail, failure, reason, warnings: outcome.warnings, original_bytes: outcome.original_bytes, output_bytes: outcome.output_bytes }
+        Self { input_path: outcome.input_path, state, output_paths, detail: outcome.detail, failure, reason, warnings: outcome.warnings, original_bytes: outcome.original_bytes, output_bytes: outcome.output_bytes, page_details: outcome.page_details }
     }
 }
 
@@ -576,7 +590,7 @@ impl TryFrom<JobOutcomeWire> for JobOutcome {
             (OutcomeStateTag::Failed, Some(error), None) => OutcomeState::Failed { output_paths: wire.output_paths, error },
             (state, _, _) => return Err(format!("Inconsistent {state:?} job outcome for {}.", wire.input_path.display())),
         };
-        Ok(Self { input_path: wire.input_path, detail: wire.detail, warnings: wire.warnings, state, original_bytes: wire.original_bytes, output_bytes: wire.output_bytes })
+        Ok(Self { input_path: wire.input_path, detail: wire.detail, warnings: wire.warnings, state, original_bytes: wire.original_bytes, output_bytes: wire.output_bytes, page_details: wire.page_details })
     }
 }
 
@@ -787,6 +801,12 @@ mod tests {
                 .with_sizes(2_500_000, 1_000_000),
             JobOutcome::skipped(PathBuf::from("logo.png"), SkipReason::new(SkipCode::NoSavings, "No savings: already well compressed"))
                 .with_sizes(4096, 4200),
+            JobOutcome::succeeded(PathBuf::from("mixed.pdf"), vec![PathBuf::from("mixed-ocr.pdf")], "2 of 3 pages recognized, 1 skipped for its text.")
+                .with_page_details(vec![
+                    OutcomeDetail { label: "Recognized".into(), value: "Pages 1 and 3".into() },
+                    OutcomeDetail { label: "Skipped, visible text".into(), value: "Page 2".into() },
+                    OutcomeDetail { label: "Languages".into(), value: "English".into() },
+                ]),
         ];
 
         assert_eq!(serde_json::to_value(&samples).unwrap(), shared);

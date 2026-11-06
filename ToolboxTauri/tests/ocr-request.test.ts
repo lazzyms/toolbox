@@ -19,3 +19,8 @@ test("OCR sends English recognition in the chosen mode and no range when every p
     outputLocation: { customFolder: "/out" },
   });
 });
+
+test("Force asks OCR to read pages again whose only text is an earlier invisible layer", () => {
+  assert.equal(ocrRequest(["/scans/a.pdf"], "alongsideInput", null, "text").force, false);
+  assert.equal(ocrRequest(["/scans/a.pdf"], "alongsideInput", null, "text", true).force, true);
+});

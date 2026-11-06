@@ -3,6 +3,7 @@ import type {
   ErrorKind,
   JobOutcome,
   LimitKind,
+  OutcomeDetail,
   OutcomePointer,
   OutcomeWarning,
   SkipCode,
@@ -66,6 +67,19 @@ const byteSizes = (outcome: Json, path: string): { originalBytes?: number; outpu
   return sizes;
 };
 
+const pageDetails = (outcome: Json, path: string): { pageDetails?: OutcomeDetail[] } => {
+  const value = outcome.pageDetails;
+  if (value === null || value === undefined) return {};
+  if (!Array.isArray(value)) return fail(`${path}.pageDetails`, "an array");
+  if (value.length === 0) return {};
+  return {
+    pageDetails: value.map((item, index) => {
+      const detail = record(item, `${path}.pageDetails[${index}]`);
+      return { label: text(detail.label, `${path}.pageDetails[${index}].label`), value: text(detail.value, `${path}.pageDetails[${index}].value`) };
+    }),
+  };
+};
+
 const parsePointer = (value: unknown, path: string): OutcomePointer | null => {
   if (value === null || value === undefined) return null;
   const pointer = record(value, path);
@@ -119,6 +133,7 @@ export const parseJobOutcome = (value: unknown, path = "outcome"): JobOutcome =>
       ? outcome.warnings.map((warning, index) => parseWarning(warning, `${path}.warnings[${index}]`))
       : fail(`${path}.warnings`, "an array"),
     ...byteSizes(outcome, path),
+    ...pageDetails(outcome, path),
   };
   const outputPaths = texts(outcome.outputPaths, `${path}.outputPaths`);
   const hasFailure = outcome.failure !== null && outcome.failure !== undefined;

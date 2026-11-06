@@ -67,6 +67,8 @@ interface ResultListProps {
 export const ResultList = ({ results, progress, loading, resultVerb, runningVerb, runningDetail, live, namedByOutput = false, onRetry, onRetryWithPassword }: ResultListProps) => {
     const [actionStates, setActionStates] = useState<Record<number, RowActionState>>({});
     const [passwordRow, setPasswordRow] = useState<number | null>(null);
+    // Page details start open, the way the board shows them; a row can fold its own away.
+    const [foldedDetails, setFoldedDetails] = useState<Record<number, boolean>>({});
     const resultSetGeneration = useRef(0);
 
     useEffect(() => {
@@ -74,6 +76,7 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
         resultSetGeneration.current = generation;
         setActionStates({});
         setPasswordRow(null);
+        setFoldedDetails({});
         return () => {
             if (resultSetGeneration.current === generation) resultSetGeneration.current += 1;
         };
@@ -102,6 +105,9 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
         const busy = state.pending !== null;
         const name = view.name;
         const Icon = toneIcons[view.tone];
+        const pageDetails = result.pageDetails ?? [];
+        const detailsOpen = !foldedDetails[index];
+        const detailsId = `page-details-${index}`;
         return (
             <li key={`${index}:${result.inputPath}`} className="result-row" data-tone={view.tone} data-state={result.state}>
                 <span className="result-row-icon" aria-hidden="true"><Icon /></span>
@@ -116,6 +122,17 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
                     <span className="sr-only">{view.spokenState}</span>
                 </span>
                 <span className="result-row-actions">
+                    {pageDetails.length > 0 && (
+                        <Button
+                            variant="ghost"
+                            size="xs"
+                            aria-expanded={detailsOpen}
+                            aria-controls={detailsId}
+                            onClick={() => setFoldedDetails((folded) => ({ ...folded, [index]: detailsOpen }))}
+                        >
+                            {detailsOpen ? "Hide page details" : "Show page details"}
+                        </Button>
+                    )}
                     {view.openOutput && (
                         <Button
                             variant="ghost"
@@ -162,6 +179,16 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
                         </Button>
                     )}
                 </span>
+                {pageDetails.length > 0 && detailsOpen && (
+                    <ul id={detailsId} className="result-page-details" aria-label={`Page details for ${name}`}>
+                        {pageDetails.map((detail) => (
+                            <li key={detail.label}>
+                                <span className="result-page-details-label">{detail.label}</span>
+                                <span>{detail.value}</span>
+                            </li>
+                        ))}
+                    </ul>
+                )}
                 {view.canRetryWithPassword && onRetryWithPassword && !live && passwordRow === index && (
                     <PasswordRetryForm
                         name={name}
