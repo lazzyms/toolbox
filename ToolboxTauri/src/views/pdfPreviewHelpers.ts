@@ -15,11 +15,13 @@ export const previewCacheKey = (path: string, pageIndex: number, serializedScene
   JSON.stringify([path, pageIndex, serializedScene, renderSettings]);
 
 const errorText = (reason: unknown) => {
-  const text = reason instanceof Error ? reason.message : typeof reason === 'string' ? reason : String(reason);
+  const text = reason instanceof Error ? reason.message : typeof reason === 'string' ? reason
+    : typeof reason === 'object' && reason !== null && typeof (reason as { message?: unknown }).message === 'string' ? (reason as { message: string }).message
+      : String(reason);
   return text.replace(/^(?:Error:\s*)+/i, '').trim();
 };
 
-/** The native refusal for a password-protected PDF (kit/pdf/scene.rs `LOCKED_PDF`). It is already plain, so it is shown as is. */
+/** The native refusal for a password-protected PDF (kit/pdf/scene.rs `LOCKED_PDF_MESSAGE`). It is already plain, so it is shown as is. */
 export const LOCKED_PDF_MESSAGE = 'This PDF is password-protected. Remove its password with File Security first, then open the unlocked copy here.';
 export const isLockedPdfError = (reason: unknown) => /password-protected/i.test(errorText(reason));
 

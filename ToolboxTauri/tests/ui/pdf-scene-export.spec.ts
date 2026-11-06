@@ -58,7 +58,7 @@ test.beforeEach(async ({ page }) => {
           if (args?.options?.directory) return w.dialogNext;
           return w.fileNext;
         }
-        if (command === 'inspect_pdf_scene' && w.inspectFailure) throw new Error(w.inspectFailure);
+        if (command === 'inspect_pdf_scene' && w.inspectFailure) throw { kind: 'invalidInput', message: w.inspectFailure, pointer: { kind: 'tool', toolId: 'lock-unlock' } };
         if (command === 'inspect_pdf_scene') return { path: '/local/docs/scene-fixture.pdf', signed: w.signed, pages: [0, 1, 2].map(index => ({ index, width: 612, height: 792, preview: null })) };
         if (command === 'inspect_pdf_scene_page') return { index: args.request.pageIndex, width: 612, height: 792, preview: svg, textRuns: [] };
         if (command === 'preview_pdf_scene_pages') return args.request.pageIndices.map((pageIndex: number) => ({ pageIndex, preview: { dataUrl: svg, width: 612, height: 792 } }));
@@ -229,7 +229,7 @@ test('an unsigned PDF shows no signature notice and no removed-signature warning
   await expect(row).not.toHaveAttribute('data-tone', 'warn');
 });
 
-// The native refusal for a password-protected source (kit/pdf/scene.rs LOCKED_PDF), as the invoke rejects with it.
+// The native refusal for a password-protected source (kit/pdf/scene.rs LOCKED_PDF_MESSAGE): the typed invalid-input error the invoke rejects with.
 const locked = 'This PDF is password-protected. Remove its password with File Security first, then open the unlocked copy here.';
 
 async function openLockedPdf(page: Page) {
