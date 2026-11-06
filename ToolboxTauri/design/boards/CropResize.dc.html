@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Crop and Resize PDF</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+.tb{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;font-size:13px;line-height:1.45;color:var(--fg);background:var(--bg);-webkit-font-smoothing:antialiased}
+.tb.dark{--bg:#0a0a0a;--side:#111111;--panel:#0f0f0f;--raise:#1c1c1c;--fg:#fafafa;--mut:#a3a3a3;--faint:#8a8a8a;--line:rgba(255,255,255,.08);--line2:rgba(255,255,255,.16);--sel:#262626;--pri:#ebebeb;--prifg:#171717;--bad:#ff6b6b;--warn:#f2b552;--ring:#a3a3a3;--scrim:rgba(0,0,0,.6);--paper:#ececec;--ink:#b9b9b9;--ink2:#7a7a7a;--well:#141414;--shade:rgba(10,10,10,.62)}
+.tb.light{--bg:#ffffff;--side:#f7f7f7;--panel:#fcfcfc;--raise:#f2f2f2;--fg:#0a0a0a;--mut:#525252;--faint:#666666;--line:#e8e8e8;--line2:#d4d4d4;--sel:#ebebeb;--pri:#171717;--prifg:#fafafa;--bad:#c10007;--warn:#9a5800;--ring:#525252;--scrim:rgba(0,0,0,.28);--paper:#ffffff;--ink:#d0d0d0;--ink2:#8f8f8f;--well:#efefef;--shade:rgba(40,40,40,.5)}
+.tb button,.tb input,.tb select{font:inherit;color:inherit}
+.btn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:7px;border:1px solid var(--line2);background:var(--raise);color:var(--fg);font-weight:500;cursor:pointer;white-space:nowrap;box-sizing:border-box;text-decoration:none}
+.btn.pri{background:var(--pri);color:var(--prifg);border-color:transparent}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--mut)}
+.btn.sm{height:26px;padding:0 9px;font-size:12px}
+.btn.ib{width:26px;padding:0;justify-content:center}
+.btn.link{height:auto;padding:0;border:0;background:none;text-decoration:underline;color:var(--fg);font-size:12px}
+.btn[aria-disabled=true]{opacity:.4;cursor:default}
+.kbd{font-size:11px;line-height:16px;padding:0 5px;border-radius:4px;border:1px solid var(--line2);color:var(--mut);font-weight:500}
+.btn.pri .kbd{border-color:currentColor;color:inherit;opacity:.6}
+.nav{display:flex;align-items:center;gap:9px;min-height:30px;padding:0 10px;border-radius:7px;color:var(--mut);text-decoration:none;border:0;background:none;width:100%;text-align:left;cursor:pointer;box-sizing:border-box}
+.nav.on{background:var(--sel);color:var(--fg);font-weight:500}
+.field{height:28px;border-radius:7px;border:1px solid var(--line2);background:var(--bg);padding:0 9px;width:100%;box-sizing:border-box;min-width:0}
+.field[aria-invalid=true]{border-color:var(--bad)}
+.field.sel{width:auto;padding-right:24px}
+.lbl{font-size:12px;font-weight:600}
+.hint{font-size:12px;color:var(--mut)}
+.num{font-variant-numeric:tabular-nums}
+svg.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.tb :focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+a{color:inherit}
+.seg{display:inline-flex;padding:2px;border-radius:8px;background:var(--raise);border:1px solid var(--line)}
+.seg button{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 11px;border:0;border-radius:6px;background:none;cursor:pointer;color:var(--mut);font-weight:500}
+.seg button[aria-checked=true]{background:var(--bg);color:var(--fg);box-shadow:0 1px 2px rgba(0,0,0,.25)}
+.seg.full{display:flex}.seg.full button{flex:1;justify-content:center;padding:0 6px;white-space:nowrap}
+.opt{display:flex;flex-direction:column;gap:5px}
+.sect{border-top:1px solid var(--line);padding-top:12px;display:flex;flex-direction:column;gap:7px}
+.hrow{display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;align-items:center}.hrow .lbl{width:82px}.hrow .unit{min-width:0}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:8px 10px}
+.unit{position:relative}.unit .field{padding-right:30px}.unit span{position:absolute;right:9px;top:5px;font-size:12px;color:var(--mut)}
+.chk{display:flex;gap:8px;align-items:center;font-size:12px}
+.radio{display:grid;grid-template-columns:16px 1fr;gap:2px 8px;align-items:start}
+.radio input{margin:2px 0 0}
+.note{display:flex;gap:8px;align-items:flex-start;padding:9px 11px;border-radius:8px;border:1px solid var(--line2);background:var(--raise);font-size:12px}
+.alert{display:flex;gap:8px;align-items:flex-start;padding:9px 11px;border-radius:8px;border:1px solid var(--bad);color:var(--bad);font-size:12px}
+.alert.warn{border-color:var(--warn);color:var(--warn)}
+.tag{display:inline-flex;align-items:center;height:20px;padding:0 7px;border-radius:999px;border:1px solid var(--line2);font-size:11px;color:var(--mut);white-space:nowrap}
+.tbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 20px;border-bottom:1px solid var(--line)}
+.crow{display:grid;grid-template-columns:16px minmax(0,1fr) 92px 62px 218px 24px;gap:10px;align-items:center;padding:0 20px;border-bottom:1px solid var(--line);min-height:27px}
+.crow.sel{background:var(--sel)}
+.crow > span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.drop{flex:1;border:1.5px dashed var(--line2);border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:40px;text-align:center;min-height:420px}
+.card{margin:12px 20px 0;border:1px solid var(--line);border-radius:10px;background:var(--panel);display:flex;flex-direction:column;min-height:0}
+.card-h{display:flex;align-items:center;gap:8px;padding:7px 10px 7px 14px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.card-b{display:flex;gap:18px;padding:12px 14px;align-items:flex-start}
+.well{background:var(--well);border-radius:8px;padding:10px;display:flex;align-items:center;justify-content:center}
+.stage{position:relative;flex:none}
+.stage > div{position:absolute;box-sizing:border-box}
+.pg{background:var(--paper);box-shadow:0 1px 3px rgba(0,0,0,.35)}
+.pg.bad{outline:1.5px solid var(--bad)}
+.ln{position:absolute;display:block;height:2px;border-radius:1px;background:var(--ink)}
+.ln:first-child{height:4px;background:var(--ink2)}
+.mini .ln{height:1px}.mini .ln:first-child{height:2px}
+.src{outline:1px dashed var(--ink2);outline-offset:-1px}
+.shade{background:var(--shade)}
+.shade.full{background:repeating-linear-gradient(135deg,var(--shade) 0 4px,transparent 4px 8px)}
+.over{background:repeating-linear-gradient(135deg,color-mix(in srgb,var(--warn) 55%,transparent) 0 3px,transparent 3px 7px);outline:1px solid color-mix(in srgb,var(--warn) 70%,transparent)}
+.target{outline:1.5px dashed #1d5fd1;outline-offset:0}
+.edge{outline:1px dashed rgba(29,95,209,.9)}
+.mlab{display:flex;align-items:center;justify-content:center;font:600 10px/1 system-ui,sans-serif;color:#fff;background:#1d5fd1;border-radius:3px;z-index:2}
+.tf{position:absolute;outline:1.5px solid #1d5fd1;box-sizing:border-box}
+.tf .th{position:absolute;width:10px;height:10px;margin:-5px 0 0 -5px;background:#fff;border:1.5px solid #1d5fd1;border-radius:2px;box-sizing:border-box;box-shadow:0 1px 2px rgba(0,0,0,.3)}
+.tf .th.nwse{cursor:nwse-resize}.tf .th.nesw{cursor:nesw-resize}.tf .th.ns{cursor:ns-resize}.tf .th.ew{cursor:ew-resize}
+.tf-chip{position:absolute;transform:translateX(-50%);background:#1b1f27;color:#fff;font:500 10.5px/1 system-ui,sans-serif;padding:5px 8px;border-radius:5px;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,.3);z-index:3}
+.tf-cur{position:absolute;z-index:4;filter:drop-shadow(0 1px 1px rgba(0,0,0,.4))}
+.minis{display:flex;gap:12px;align-items:flex-start}
+.mstage{height:98px;display:flex;align-items:flex-end}
+.mfig{display:flex;flex-direction:column;gap:6px;margin:0;width:112px}
+.mfig figcaption{font-size:11px;color:var(--mut);line-height:1.35}
+.mfig figcaption strong{color:var(--fg);font-weight:500;display:block}
+</style>
+</helmet>
+<div class="{{themeClass}}" style="min-height: 800px; display: flex; flex-wrap: wrap">
+<aside aria-label="PDF Editor" style="flex: 1 1 220px; max-width: 232px; background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; padding: 14px 10px; box-sizing: border-box">
+<a class="nav" href="Main.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M5 12l6 6M5 12l6-6"></path></svg>All tools</a>
+<div style="padding: 16px 10px 6px; font-size: 12px; font-weight: 600; color: var(--faint)">PDF Editor</div>
+<nav aria-label="PDF Editor tools" style="display: flex; flex-direction: column; gap: 2px"><button class="nav" aria-pressed="false"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"></path></svg>Edit PDF</button><button class="nav" aria-pressed="false"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="7" height="7" rx="1"></rect><rect x="14" y="4" width="7" height="7" rx="1"></rect><rect x="3" y="14" width="7" height="7" rx="1"></rect><rect x="14" y="14" width="7" height="7" rx="1"></rect></svg>Organize Pages</button><button class="nav" aria-pressed="false"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4v5a5 5 0 0 0 5 5h7M18 4v5"></path><path d="M15 11l3 3-3 3"></path></svg>Merge PDF</button><button class="nav" aria-pressed="false"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18"></path><path d="M8 8L4 12l4 4M16 8l4 4-4 4"></path></svg>Split PDF</button><button class="nav on" aria-pressed="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2v14a2 2 0 0 0 2 2h14M2 6h14a2 2 0 0 1 2 2v14"></path></svg>Crop and Resize</button><button class="nav" aria-pressed="false"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4L7 20M17 4l-2 16M4 9h16M3 15h16"></path></svg>Page Numbers and Bates</button></nav>
+<div style="flex: 1"></div>
+<a class="nav" href="Settings.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"></path></svg>Settings<span class="kbd" style="margin-left: auto">{{settingsKey}}</span></a>
+<p class="hint" style="margin: 0; padding: 10px 10px 0">Files stay on this device.</p>
+</aside>
+<div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; position: relative">
+<header style="min-height: 52px; display: flex; align-items: center; gap: 14px; padding: 0 20px; border-bottom: 1px solid var(--line); flex-wrap: wrap">
+<h1 style="margin: 0; font-size: 15px; font-weight: 600">Crop and Resize PDF</h1>
+<div role="radiogroup" aria-label="Mode" class="seg"><button role="radio" aria-checked="{{cropOn}}" tabindex="{{cropTab}}">Crop pages</button><button role="radio" aria-checked="{{resizeOn}}" tabindex="{{resizeTab}}">Resize pages</button></div>
+<span class="hint">{{subtitle}}</span>
+<div style="flex: 1"></div>
+<button class="btn ghost"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"></circle><path d="M21 21l-6-6"></path></svg>Find a tool<span class="kbd">{{findKey}}</span></button>
+</header>
+<div style="flex: 1; display: flex; flex-wrap: wrap; min-height: 0">
+<section aria-label="Files" style="flex: 999 1 480px; min-width: 0; display: flex; flex-direction: column">
+<sc-if value="{{isEmpty}}" hint-placeholder-val="{{ false }}"><div style="flex: 1; display: flex; padding: 20px; box-sizing: border-box"><div role="region" aria-label="Drop PDFs to add them" class="drop">
+<svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 28px; height: 28px; color: var(--mut); stroke-width: 1.5"><path d="M12 5v14M6 13l6 6 6-6"></path></svg>
+<p style="margin: 0; font-size: 17px; font-weight: 600">{{dropTitle}}</p>
+<p class="hint" style="margin: 0; max-width: 400px">{{dropText}}</p>
+<button class="btn pri" style="margin-top: 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2"></path></svg>Open files<span class="kbd">{{openKey}}</span></button>
+<p class="hint" style="margin: 0">Accepts .pdf</p>
+</div></div></sc-if>
+<sc-if value="{{isList}}" hint-placeholder-val="{{ true }}">
+<div class="tbar"><strong>8 PDFs</strong><span class="hint">{{scopeLabel}}</span><div style="flex: 1"></div>
+<button class="btn sm"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>Add files<span class="kbd">{{openKey}}</span></button><button class="btn sm ghost">Clear list</button></div>
+<div class="crow hint" aria-hidden="true" style="min-height: 0; padding-top: 5px; padding-bottom: 5px; font-size: 12px"><span></span><span>Name</span><span>In range</span><span>Page size</span><span>{{noteHead}}</span><span></span></div>
+<ul aria-label="{{listLabel}}" style="list-style: none; margin: 0; padding: 0"><sc-for list="{{rows}}" as="r" hint-placeholder-count="8"><li class="crow {{r.cls}}" aria-current="{{r.current}}">
+<span style="color: var(--mut); display: flex"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 15px; height: 15px"><path d="M14 3H6v18h12V7z"></path><path d="M14 3v4h4"></path></svg></span>
+<span title="{{r.name}}">{{r.name}}</span>
+<span class="hint num">{{r.scope}}</span>
+<span class="hint" title="{{r.sizeTitle}}">{{r.size}}</span>
+<span class="hint" style="color: {{r.noteColor}}" title="{{r.note}}">{{r.note}}</span>
+<span style="display: flex; justify-content: flex-end"><button class="btn sm ghost ib" aria-label="Remove {{r.name}} from the list" title="Remove (Delete)" style="height: 24px; width: 24px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px"><path d="M6 6l12 12M18 6L6 18"></path></svg></button></span>
+</li></sc-for></ul>
+<div class="card" role="region" aria-label="Preview">
+<div class="card-h">
+<span class="lbl">Preview</span>
+<select class="field sel" aria-label="PDF to preview" style="height: 26px; font-size: 12px; max-width: 200px"><option>{{pv.file}}</option></select>
+<span style="display: inline-flex; align-items: center; gap: 2px"><button class="btn sm ghost ib" aria-label="Previous page in range"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"></path></svg></button><span class="hint num" aria-live="polite">{{pv.page}}</span><button class="btn sm ghost ib" aria-label="Next page in range"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg></button></span>
+<div style="flex: 1"></div>
+<sc-if value="{{pv.hasUndo}}" hint-placeholder-val="{{ true }}"><button class="btn sm ghost" aria-disabled="{{pv.undoOff}}" style="color: var(--fg)">Undo<span class="kbd">{{undoKey}}</span></button><button class="btn sm ghost" aria-disabled="{{pv.undoOff}}" style="color: var(--fg)">Reset crop</button></sc-if>
+</div>
+<div class="card-b">
+<figure style="margin: 0; display: flex; flex-direction: column; gap: 6px; flex: none">
+<div class="well" style="width: {{pv.wellW}}px; height: 258px; box-sizing: border-box"><div class="stage" role="img" aria-label="{{pv.alt}}" style="width: {{pv.big.w}}px; height: {{pv.big.h}}px"><sc-for list="{{pv.big.layers}}" as="l" hint-placeholder-count="4"><div class="{{l.cls}}" style="{{l.style}}"><sc-for list="{{l.lines}}" as="k" hint-placeholder-count="10"><i class="ln" style="{{k}}"></i></sc-for><sc-for list="{{l.hs}}" as="h" hint-placeholder-count="8"><span class="th {{h.c}}" style="{{h.s}}"></span></sc-for>{{l.text}}</div></sc-for>
+<sc-if value="{{pv.chip}}" hint-placeholder-val="{{ false }}"><span class="tf-chip" style="{{pv.chipStyle}}">{{pv.chip}}</span><svg class="tf-cur" style="{{pv.curStyle}}" width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M2 2l14 14M2 2v6M2 2h6M16 16v-6M16 16h-6" stroke="#fff" stroke-width="3.2" fill="none" stroke-linecap="round"></path><path d="M2 2l14 14M2 2v6M2 2h6M16 16v-6M16 16h-6" stroke="#111" stroke-width="1.4" fill="none" stroke-linecap="round"></path></svg></sc-if>
+</div></div>
+<figcaption class="hint" style="max-width: {{pv.wellW}}px; color: {{pv.capColor}}">{{pv.caption}}</figcaption>
+</figure>
+<div style="display: flex; flex-direction: column; gap: 10px; min-width: 0; flex: 1">
+<span class="lbl">{{pv.minisHead}}</span>
+<div class="minis"><sc-for list="{{pv.minis}}" as="m" hint-placeholder-count="3"><figure class="mfig"><div class="mstage"><div class="stage mini" role="img" aria-label="{{m.alt}}" style="width: {{m.st.w}}px; height: {{m.st.h}}px"><sc-for list="{{m.st.layers}}" as="l" hint-placeholder-count="3"><div class="{{l.cls}}" style="{{l.style}}"><sc-for list="{{l.lines}}" as="k" hint-placeholder-count="10"><i class="ln" style="{{k}}"></i></sc-for>{{l.text}}</div></sc-for></div></div><figcaption><strong>{{m.title}}</strong><span style="color: {{m.color}}">{{m.sub}}</span></figcaption></figure></sc-for></div>
+<p class="hint" style="margin: 0; font-size: 11px">{{pv.minisHint}}</p>
+</div>
+</div>
+</div>
+</sc-if>
+</section><section aria-label="Options" style="flex: 1 1 300px; max-width: 360px; border-left: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column">
+<div style="padding: 14px 20px; display: flex; flex-direction: column; gap: 10px; flex: 1; overflow: auto">
+<sc-if value="{{isCrop}}" hint-placeholder-val="{{ true }}">
+<div class="opt"><span class="lbl" id="by">Crop by</span><div role="radiogroup" aria-labelledby="by" class="seg full"><button role="radio" aria-checked="{{rectOn}}" tabindex="{{rectTab}}">Rectangle</button><button role="radio" aria-checked="{{marOn}}" tabindex="{{marTab}}">Margins</button></div></div>
+<sc-if value="{{isRect}}" hint-placeholder-val="{{ true }}"><div class="opt"><div class="g2"><sc-for list="{{rectFields}}" as="f" hint-placeholder-count="4"><label class="hrow"><span class="hint">{{f.l}}</span><span class="unit"><input class="field num" value="{{f.v}}"><span>mm</span></span></label></sc-for></div>
+<span class="hint">{{rectHint}}</span></div></sc-if>
+<sc-if value="{{isMargins}}" hint-placeholder-val="{{ false }}"><div class="opt">
+<div style="display: flex; align-items: center; gap: 10px"><label class="chk"><sc-if value="{{isSame}}" hint-placeholder-val="{{ false }}"><input type="checkbox" checked></sc-if><sc-if value="{{isFour}}" hint-placeholder-val="{{ true }}"><input type="checkbox"></sc-if>Same on all sides</label><div style="flex: 1"></div><label class="hint" style="display: flex; align-items: center; gap: 6px">Unit<select class="field sel" style="height: 26px; font-size: 12px"><option>mm</option><option>in</option><option>pt</option></select></label></div>
+<sc-if value="{{isSame}}" hint-placeholder-val="{{ false }}"><label class="opt"><span class="hint">All sides</span><span class="unit" style="width: 50%"><input class="field num" value="12"><span>mm</span></span></label></sc-if>
+<sc-if value="{{isFour}}" hint-placeholder-val="{{ true }}"><div class="g2"><sc-for list="{{marFields}}" as="f" hint-placeholder-count="4"><label class="hrow"><span class="hint">{{f.l}}</span><span class="unit"><input class="field num" value="{{f.v}}" aria-invalid="{{f.bad}}" aria-describedby="mar-err"><span>mm</span></span></label></sc-for></div></sc-if>
+<sc-if value="{{isInvalid}}" hint-placeholder-val="{{ false }}"><div id="mar-err" role="alert" class="alert"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v6M12 16v.5"></path></svg><span>Top can't be less than 0. Bottom is empty; enter 0 for no margin.</span></div></sc-if>
+<span class="hint">Every page loses the same lengths. A page left with no area fails its PDF.</span></div></sc-if>
+<div class="note"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v5M12 8v.5"></path></svg><span style="display: flex; flex-direction: column; gap: 4px"><span>Crop hides the rest of the page. It stays in the file and can be shown again.</span><button class="btn link">Remove content with Redact PDF</button></span></div>
+</sc-if>
+<sc-if value="{{isResize}}" hint-placeholder-val="{{ false }}">
+<div class="opt"><div class="hrow"><label class="lbl" for="psize">Page size</label><select id="psize" class="field"><option>{{sizeLabel}}</option></select></div>
+<sc-if value="{{isCustom}}" hint-placeholder-val="{{ false }}"><div class="g2"><sc-for list="{{sizeFields}}" as="f" hint-placeholder-count="2"><label class="hrow"><span class="hint">{{f.l}}</span><span class="unit"><input class="field num" value="{{f.v}}" aria-invalid="{{f.bad}}" aria-describedby="size-err"><span>mm</span></span></label></sc-for></div></sc-if>
+<sc-if value="{{isSizeBad}}" hint-placeholder-val="{{ false }}"><div id="size-err" role="alert" class="alert"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v6M12 16v.5"></path></svg><span>Width must be at least 25.4 mm (72 pt). Height can be at most 5,080 mm (14,400 pt).</span></div></sc-if></div>
+<div class="opt"><span class="lbl" id="ori">Orientation</span><div role="radiogroup" aria-labelledby="ori" class="seg full"><button role="radio" aria-checked="true" tabindex="0">Match page</button><button role="radio" aria-checked="false" tabindex="-1">Portrait</button><button role="radio" aria-checked="false" tabindex="-1">Landscape</button></div></div>
+<fieldset class="opt" style="border: 0; margin: 0; padding: 0"><legend class="lbl" style="padding: 0; margin-bottom: 6px">Placement</legend>
+<label class="radio"><sc-if value="{{isFit}}" hint-placeholder-val="{{ true }}"><input type="radio" checked></sc-if><sc-if value="{{isActual}}" hint-placeholder-val="{{ false }}"><input type="radio"></sc-if><span>Scale to fit, centered <span class="hint">Nothing is cut off</span></span></label>
+<label class="radio" style="margin-top: 4px"><sc-if value="{{isActual}}" hint-placeholder-val="{{ false }}"><input type="radio" checked></sc-if><sc-if value="{{isFit}}" hint-placeholder-val="{{ true }}"><input type="radio"></sc-if><span>Actual size, centered <span class="hint">Edges may be cut off</span></span></label>
+</fieldset>
+<p class="hint" style="margin: 0">Links, comments and form fields move with the content. Text stays sharp.</p>
+<sc-if value="{{isActual}}" hint-placeholder-val="{{ false }}"><div role="status" class="alert warn"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l10 18H2z"></path><path d="M12 10v5M12 18v.5"></path></svg><span>Cuts off content on 43 pages. Choose Scale to fit to keep everything.</span></div></sc-if>
+</sc-if>
+<div class="sect"><label class="lbl" for="rng">Pages</label><input id="rng" class="field" value="{{rangeText}}" placeholder="All pages" aria-describedby="rng-help"><span id="rng-help" class="hint">{{rangeHint}}</span></div>
+<div class="sect" style="gap: 5px"><div style="display: flex; align-items: center; gap: 8px"><span class="lbl">Save to</span><sc-if value="{{runOnly}}" hint-placeholder-val="{{ false }}"><span class="tag">This run only</span></sc-if></div><span>{{outDir}}</span><div style="display: flex; gap: 12px"><button class="btn link">Change for this run</button><button class="btn link" aria-disabled="{{resetOff}}">Reset to default</button></div><p class="hint" style="margin: 0">{{saveHint}}</p></div>
+</div>
+<footer style="padding: 12px 20px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 10px; flex-wrap: wrap">
+<span class="hint" style="flex: 1 1 100%; color: {{reasonColor}}">{{reason}}</span>
+<div style="flex: 1"></div>
+<button class="btn pri" aria-disabled="{{runOff}}">{{runLabel}}<span class="kbd">{{runKey}}</span></button>
+</footer></section>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "state": {"editor": "enum", "options": ["Crop, rectangle", "Empty", "Empty, resize", "Crop, adjusting", "Crop, margins", "Crop, same margins", "Crop, invalid margins", "Resize, preset", "Resize, actual size", "Resize, invalid size"], "default": "Crop, rectangle"}, "$preview": {"width": 1280, "height": 800}}'>
+class Component extends DCLogic {
+renderVals() {
+const win = (this.props.platform ?? 'macOS') === 'Windows';
+const light = (this.props.theme ?? 'dark') === 'light';
+const state = this.props.state ?? 'Crop, rectangle';
+const sep = win ? '\\' : '/';
+const dir = (...p) => [win ? 'C:\\Users\\Asha' : '~'].concat(p).join(sep);
+const isEmpty = state.startsWith('Empty');
+const resize = state.startsWith('Resize') || state === 'Empty, resize';
+const crop = !resize;
+const adjusting = state === 'Crop, adjusting';
+const same = state === 'Crop, same margins', badMar = state === 'Crop, invalid margins';
+const margins = state === 'Crop, margins' || same || badMar;
+const actual = state === 'Resize, actual size', badSize = state === 'Resize, invalid size';
+const custom = actual || badSize;
+const v = { themeClass: light ? 'tb light' : 'tb dark', findKey: win ? 'Ctrl+K' : '⌘K', settingsKey: win ? 'Ctrl+,' : '⌘,', openKey: win ? 'Ctrl+O' : '⌘O', runKey: win ? 'Ctrl+Enter' : '⌘↵', undoKey: win ? 'Ctrl+Z' : '⌘Z' };
+Object.assign(v, { isEmpty, isList: !isEmpty, isCrop: crop, isResize: resize, isRect: crop && !margins, isMargins: margins, isSame: same, isFour: margins && !same, isInvalid: badMar, isCustom: custom, isSizeBad: badSize, isActual: actual,
+cropOn: String(crop), resizeOn: String(resize), cropTab: crop ? '0' : '-1', resizeTab: resize ? '0' : '-1',
+rectOn: String(!margins), marOn: String(margins), rectTab: margins ? '-1' : '0', marTab: margins ? '0' : '-1',
+isFit: !actual });
+v.subtitle = crop ? 'Trim the edges of every page.' : 'Change the paper size of every page.';
+v.dropTitle = crop ? 'Drop PDFs to crop' : 'Drop PDFs to resize';
+v.dropText = crop ? 'Every PDF is cropped the same way, by a rectangle you draw or by margins. The results are saved as new files. Your originals stay as they are.' : 'Every page is set to one paper size, such as A4 or Letter. The results are saved as new files. Your originals stay as they are.';
+v.listLabel = crop ? 'PDFs to crop' : 'PDFs to resize';
+v.rangeText = isEmpty ? '' : '3-';
+v.rangeHint = 'Empty means all pages. Pages past the end are ignored. A PDF with none left is skipped.';
+v.runOnly = resize && !isEmpty;
+v.outDir = v.runOnly ? dir('Documents', 'Print shop') : 'Next to each original';
+v.resetOff = String(!v.runOnly);
+v.saveHint = v.runOnly ? 'Your default, next to each original, is back when you leave this tool.' : `Names end in ${crop ? '-cropped' : '-resized'}. A taken name gets -1, -2.`;
+const r1 = (n) => Math.round(n * 10) / 10;
+const box = (x, y, w, h) => `left:${r1(x)}px;top:${r1(y)}px;width:${r1(w)}px;height:${r1(h)}px`;
+const LINES = ['left:10%;top:7%;width:44%'];
+[13, 17, 21, 25, 29, 36, 40, 44, 48, 55, 59, 63, 67, 71, 78, 82, 86, 90].forEach((t, i) => LINES.push(`left:10%;top:${t}%;width:${[80, 76, 80, 58][i % 4]}%`));
+const LANDLINES = ['left:7%;top:9%;width:40%'];
+[18, 24, 30, 36, 46, 52, 58, 64, 74, 80, 86].forEach((t, i) => LANDLINES.push(`left:7%;top:${t}%;width:${[86, 80, 84, 52][i % 4]}%`));
+const lines = (w, h) => (w > h ? LANDLINES : LINES);
+const sheet = (x, y, w, h, extra) => ({ cls: 'pg' + (extra || ''), style: box(x, y, w, h), lines: lines(w, h) });
+const blank = (x, y, w, h, extra) => ({ cls: 'pg' + (extra || ''), style: box(x, y, w, h) });
+const bands = (cls, ox, oy, ow, oh, ix, iy, iw, ih) => {
+const L = Math.max(ix, ox), T = Math.max(iy, oy), R = Math.min(ix + iw, ox + ow), B = Math.min(iy + ih, oy + oh);
+return [[ox, oy, ow, T - oy], [ox, B, ow, oy + oh - B], [ox, T, L - ox, B - T], [R, T, ox + ow - R, B - T]].filter((b) => b[2] > 0.4 && b[3] > 0.4).map((b) => ({ cls, style: box(...b) }));
+};
+const H8 = [['0', '0', 'nwse'], ['50', '0', 'ns'], ['100', '0', 'nesw'], ['100', '50', 'ew'], ['100', '100', 'nwse'], ['50', '100', 'ns'], ['0', '100', 'nesw'], ['0', '50', 'ew']];
+const handles = (edgesOnly) => H8.filter((h) => !edgesOnly || h[2] === 'ns' || h[2] === 'ew').map((h) => ({ c: h[2], s: `left:${h[0]}%;top:${h[1]}%` }));
+// Crop geometry. Rectangle is stored as fractions of the displayed page; margins are absolute millimetres.
+const RECT = adjusting ? { l: 18, t: 22, w: 168, h: 241 } : { l: 18, t: 22, w: 174, h: 250 };
+const FR = { l: RECT.l / 210, t: RECT.t / 297, w: RECT.w / 210, h: RECT.h / 297 };
+const MAR = same ? { t: 12, r: 12, b: 12, l: 12 } : { t: 15, r: 30, b: 15, l: 30 };
+const cropRect = (pw, ph) => margins ? { l: MAR.l, t: MAR.t, w: pw - MAR.l - MAR.r, h: ph - MAR.t - MAR.b } : { l: FR.l * pw, t: FR.t * ph, w: FR.w * pw, h: FR.h * ph };
+const mm = (n) => String(Math.round(n));
+const cropStage = (pw, ph, k, big) => {
+const c = cropRect(pw, ph);
+const W = pw * k, H = ph * k;
+const L = [sheet(0, 0, W, H)];
+if (c.w <= 0 || c.h <= 0) { L[0].cls = 'pg bad'; L.push({ cls: 'shade full', style: box(0, 0, W, H) }); return { w: W, h: H, layers: L, empty: true, c }; }
+const cx = c.l * k, cy = c.t * k, cw = c.w * k, ch = c.h * k;
+L.push(...bands('shade', 0, 0, W, H, cx, cy, cw, ch));
+if (big && margins && !badMar) {
+L.push({ cls: 'edge', style: box(cx, 0, 0.01, H) }, { cls: 'edge', style: box(cx + cw, 0, 0.01, H) }, { cls: 'edge', style: box(0, cy, W, 0.01) }, { cls: 'edge', style: box(0, cy + ch, W, 0.01) });
+[[cx + cw * 0.28, cy / 2, MAR.t], [cx + cw * 0.28, (cy + ch + H) / 2, MAR.b], [cx / 2, cy + ch * 0.3, MAR.l], [(cx + cw + W) / 2, cy + ch * 0.3, MAR.r]].forEach((m) => L.push({ cls: 'mlab', style: box(m[0] - 18, m[1] - 7, 36, 14), text: `${m[2]} mm` }));
+}
+L.push({ cls: big ? 'tf' : 'tf mini-tf', style: box(cx, cy, cw, ch), hs: big && !badMar ? handles(margins) : [] });
+return { w: W, h: H, layers: L, c };
+};
+// Resize geometry. Target follows each page's orientation ("Match each page").
+const TGT = custom ? { w: 200, h: 250, n: '200 × 250 mm' } : { w: 210, h: 297, n: 'A4' };
+const resizeStage = (pw, ph, k) => {
+let tw = TGT.w, th = TGT.h; if ((pw > ph) !== (tw > th)) { const s = tw; tw = th; th = s; }
+const s = actual ? 1 : Math.min(tw / pw, th / ph);
+const cw = pw * s, ch = ph * s;
+const W = Math.max(tw, cw), H = Math.max(th, ch);
+const tx = (W - tw) / 2, ty = (H - th) / 2, cx = (W - cw) / 2, cy = (H - ch) / 2;
+const L = [blank(tx * k, ty * k, tw * k, th * k), { cls: 'src', style: box(cx * k, cy * k, cw * k, ch * k), lines: lines(pw, ph) }];
+if (actual) L.push(...bands('over', cx * k, cy * k, cw * k, ch * k, tx * k, ty * k, tw * k, th * k));
+L.push({ cls: 'target', style: box(tx * k, ty * k, tw * k, th * k) });
+const cut = actual && (cw > tw + 0.1 || ch > th + 0.1);
+return { w: W * k, h: H * k, layers: L, s, cut, tw, th };
+};
+const plain = (pw, ph, k) => ({ w: pw * k, h: ph * k, layers: [sheet(0, 0, pw * k, ph * k)] });
+// Files
+const F = [
+{ name: 'lease-agreement.pdf', pages: 14, size: 'A4', sizeTitle: 'A4, 210 × 297 mm', inr: 12 },
+{ name: 'us-office-handbook.pdf', pages: 22, size: 'Letter', sizeTitle: 'Letter, 216 × 279 mm', inr: 20 },
+{ name: 'site-survey.pdf', pages: 9, size: 'Letter', sizeTitle: 'Letter. Page 4 is landscape.', inr: 7, note: 'Page 4 is landscape' },
+{ name: 'vendor-nda-acme.pdf', pages: 6, size: 'Letter', sizeTitle: 'Letter, 216 × 279 mm', inr: 4, signed: true },
+{ name: 'receipts-q3.pdf', pages: 3, size: '2 sizes', sizeTitle: 'Pages 1–2 A4. Page 3 is 58 × 120 mm.', inr: 1 },
+{ name: 'cover-letter.pdf', pages: 2, size: 'A4', sizeTitle: 'A4, 210 × 297 mm', inr: 0 },
+{ name: 'payroll-2026.pdf', pages: 0, size: '—', sizeTitle: 'Unknown until the password is removed', locked: true },
+{ name: 'archive-2019-scans.pdf', pages: 1240, size: 'A4', sizeTitle: 'A4, 210 × 297 mm', over: true }
+];
+const sel = resize ? 1 : 0;
+v.noteHead = 'Before you run';
+v.rows = F.map((f, i) => {
+let note = f.note || '', color = 'var(--mut)';
+if (f.signed) { note = 'Signed. The signature will be removed.'; color = 'var(--warn)'; }
+if (f.inr === 0) note = 'No pages in 3-. Will be skipped.';
+if (f.locked) { note = 'Password-protected. Won\'t run.'; color = 'var(--warn)'; }
+if (f.over) { note = 'Over the 1,000-page limit. Won\'t run.'; color = 'var(--warn)'; }
+if (f.name === 'receipts-q3.pdf') {
+if (margins && !same && !badMar) { note = 'Page 3 has no area left. Will fail.'; color = 'var(--bad)'; }
+else if (resize) note = 'Page 3 is 58 × 120 mm';
+}
+if (resize && f.name === 'lease-agreement.pdf' && !custom) note = 'Already A4. Will be skipped.';
+if (badMar && !f.locked && !f.over && !f.signed && f.inr) { note = 'Fix the margins to check.'; color = 'var(--mut)'; }
+if (badSize && !f.locked && !f.over && !f.signed && f.inr) { note = 'Fix the size to check.'; color = 'var(--mut)'; }
+return { name: f.name, cls: i === sel ? 'sel' : '', current: i === sel ? 'true' : 'false', scope: f.locked ? '—' : f.over ? '1,238 of 1,240' : `${f.inr} of ${f.pages}`, size: f.size, sizeTitle: f.sizeTitle, note, noteColor: color };
+});
+v.scopeLabel = 'Pages 3-. The preview shows the highlighted PDF.';
+// Preview
+const pv = { hasUndo: crop, undoOff: 'false', capColor: 'var(--mut)', chip: '', chipStyle: '', curStyle: '', wellW: 250 };
+const K = 0.8, KM = 0.32;
+if (crop) {
+pv.file = 'lease-agreement.pdf'; pv.page = 'Page 3 of 14';
+const st = cropStage(210, 297, K, true); pv.big = st;
+const c = st.c;
+pv.alt = `Page 3, A4. The kept area is ${mm(c.w)} by ${mm(c.h)} mm.`;
+pv.caption = badMar ? 'Fix the margins to see the crop.' : `A4, 210 × 297 mm. Keeps ${mm(c.w)} × ${mm(c.h)} mm.`;
+if (badMar) { pv.big = plain(210, 297, K); pv.capColor = 'var(--bad)'; pv.undoOff = 'false'; }
+if (adjusting) { pv.chip = '168 × 241 mm'; pv.chipStyle = `left:${r1((18 + 168 / 2) * K)}px;top:${r1((22 + 241) * K - 26)}px`; pv.curStyle = `left:${r1((18 + 168) * K - 4)}px;top:${r1((22 + 241) * K - 4)}px`; }
+pv.minisHead = 'On other page sizes';
+const M = [['us-office-handbook.pdf', 'Letter', 215.9, 279.4], ['site-survey.pdf, page 4', 'Letter, landscape', 279.4, 215.9], ['receipts-q3.pdf, page 3', '58 × 120 mm', 58, 120]];
+pv.minis = badMar ? M.map((m) => ({ title: m[0], sub: m[1], color: 'var(--mut)', alt: m[0], st: plain(m[2], m[3], KM) })) : M.map((m) => {
+const s = cropStage(m[2], m[3], KM, false);
+const kept = s.empty ? 'No area left. This PDF will fail.' : `Keeps ${mm(s.c.w)} × ${mm(s.c.h)} mm`;
+return { title: m[0], sub: `${m[1]}. ${kept}`, color: s.empty ? 'var(--bad)' : 'var(--mut)', alt: `${m[0]}: ${kept}`, st: s };
+});
+pv.minisHint = margins ? 'Margins trim the same lengths from every page, so small pages lose more of their area.' : 'The rectangle keeps its place relative to each page, so it lands in the same spot on any size or orientation.';
+} else {
+pv.file = 'us-office-handbook.pdf'; pv.page = 'Page 3 of 22';
+if (badSize) { pv.big = plain(215.9, 279.4, K); pv.caption = 'Fix the page size to see the result.'; pv.capColor = 'var(--bad)'; pv.alt = 'Page 3, Letter, unchanged.'; }
+else {
+const st = resizeStage(215.9, 279.4, K); pv.big = st;
+pv.caption = actual ? `Letter, 216 × 279 mm on ${TGT.n}. 16 mm is cut off the sides and 29 mm off the top and bottom.` : `Letter, 216 × 279 mm on A4, 210 × 297 mm. Scaled to ${Math.round(st.s * 100)}%.`;
+pv.capColor = actual ? 'var(--warn)' : 'var(--mut)';
+pv.alt = actual ? 'Letter page placed at actual size on a smaller page. Hatched areas are cut off.' : 'Letter page scaled to fit an A4 page, centered.';
+}
+pv.minisHead = 'On other page sizes';
+const M = [['lease-agreement.pdf', 'A4', 210, 297], ['site-survey.pdf, page 4', 'Letter, landscape', 279.4, 215.9], ['receipts-q3.pdf, page 3', '58 × 120 mm', 58, 120]];
+pv.minis = M.map((m) => {
+if (badSize) return { title: m[0], sub: m[1], color: 'var(--mut)', alt: m[0], st: plain(m[2], m[3], KM) };
+const s = resizeStage(m[2], m[3], KM);
+let sub;
+if (!actual && m[2] === 210 && m[3] === 297) sub = 'Already A4. Unchanged.';
+else if (actual) sub = s.cut ? 'Content cut off' : 'Fits. Nothing is cut off.';
+else sub = s.s > 1.01 ? `Scaled up to ${Math.round(s.s * 100)}%` : `${s.tw > s.th ? 'Stays landscape. ' : ''}Scaled to ${Math.round(s.s * 100)}%`;
+return { title: m[0], sub: sub.startsWith('Already') ? sub : `${m[1]}. ${sub}`, color: actual && s.cut ? 'var(--warn)' : 'var(--mut)', alt: `${m[0]}: ${sub}`, st: s };
+});
+pv.minisHint = actual ? 'Hatched areas are outside the new page and will be cut off.' : 'Each page keeps its orientation and is scaled to fit, so nothing is cut off.';
+}
+v.pv = pv;
+// Options fields
+v.rectFields = [['Left', RECT.l], ['Top', RECT.t], ['Width', RECT.w], ['Height', RECT.h]].map((f) => ({ l: f[0], v: isEmpty ? '' : String(f[1]) }));
+v.rectHint = isEmpty ? 'Add PDFs, then draw the rectangle on the preview or type it here.' : 'Drag on the preview, or type. Arrow keys move it 1 mm. Shift+Arrow resizes it.';
+v.marFields = badMar ? [['Top', '-5', 'true'], ['Right', '30', 'false'], ['Bottom', '', 'true'], ['Left', '30', 'false']].map((f) => ({ l: f[0], v: f[1], bad: f[2] })) : [['Top', MAR.t], ['Right', MAR.r], ['Bottom', MAR.b], ['Left', MAR.l]].map((f) => ({ l: f[0], v: String(f[1]), bad: 'false' }));
+v.sizeLabel = custom ? 'Custom size' : 'A4, 210 × 297 mm';
+v.sizeFields = badSize ? [{ l: 'Width', v: '2', bad: 'true' }, { l: 'Height', v: '6000', bad: 'true' }] : [{ l: 'Width', v: '200', bad: 'false' }, { l: 'Height', v: '250', bad: 'false' }];
+// Footer
+v.reasonColor = 'var(--mut)'; v.runOff = 'false';
+v.runLabel = isEmpty ? (crop ? 'Crop PDFs' : 'Resize PDFs') : (crop ? 'Crop 8 PDFs' : 'Resize 8 PDFs');
+if (isEmpty) { v.reason = crop ? 'Add PDFs to crop.' : 'Add PDFs to resize.'; v.runOff = 'true'; }
+else if (badMar) { v.reason = 'Fix the margins to crop.'; v.reasonColor = 'var(--bad)'; v.runOff = 'true'; }
+else if (badSize) { v.reason = 'Fix the page size to resize.'; v.reasonColor = 'var(--bad)'; v.runOff = 'true'; }
+else if (margins && !same) v.reason = 'Crops 43 pages in 4 PDFs. receipts-q3.pdf will fail on page 3. 1 will be skipped and 2 won\'t run.';
+else if (crop) v.reason = 'Crops 44 pages in 5 PDFs. 1 will be skipped and 2 won\'t run.';
+else if (actual) v.reason = 'Resizes 44 pages in 5 PDFs, cutting off content on 43. 1 will be skipped and 2 won\'t run.';
+else v.reason = 'Resizes 32 pages in 4 PDFs. 2 will be skipped and 2 won\'t run.';
+return v;
+}
+}
+</script>
+</body>
+</html>

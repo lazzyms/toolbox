@@ -1,6 +1,6 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
 use image::codecs::png::PngEncoder;
-use image::{DynamicImage, ImageBuffer, ImageFormat, ImageEncoder, Luma, Rgb, Rgba};
+use image::{DynamicImage, ImageFormat, ImageEncoder, Rgba};
 use image::AnimationDecoder;
 use std::collections::BTreeSet;
 use std::fs::File;
@@ -8,6 +8,7 @@ use std::io::{BufReader, Seek};
 use std::path::{Path, PathBuf};
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
+use crate::kit::common::watermark::{WatermarkOptions, WatermarkPosition};
 use crate::kit::contracts::ToolError;
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -50,13 +51,7 @@ pub enum ImageEdit {
         #[serde(default = "default_crop_anchor")] anchor: String,
     },
     Tone { brightness: i32, contrast: f32, #[serde(default)] saturation: f32, #[serde(default)] exposure: f32 },
-    Watermark {
-        #[serde(default)] text: Option<String>,
-        #[serde(default)] logo_path: Option<PathBuf>,
-        opacity: u8,
-        #[serde(default = "default_watermark_position")] x: u32,
-        #[serde(default = "default_watermark_position")] y: u32,
-    },
+    Watermark(WatermarkOptions),
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -121,8 +116,7 @@ impl ImageEditPlan {
                 ImageEdit::Tone { contrast, .. } if !(-100.0..=100.0).contains(contrast) => return Err("Contrast must be between -100 and 100.".to_string()),
                 ImageEdit::Tone { saturation, .. } if !(-100.0..=100.0).contains(saturation) => return Err("Saturation must be between -100 and 100.".to_string()),
                 ImageEdit::Tone { exposure, .. } if !(-100.0..=100.0).contains(exposure) => return Err("Exposure must be between -100 and 100.".to_string()),
-                ImageEdit::Watermark { opacity, text, logo_path, .. } if *opacity > 100 => return Err("Watermark opacity must be between 0 and 100.".to_string()),
-                ImageEdit::Watermark { text, logo_path, .. } if text.as_deref().is_none_or(|value| value.trim().is_empty()) && logo_path.is_none() => return Err("Provide watermark text or a logo image.".to_string()),
+                ImageEdit::Watermark(options) => options.validate()?,
                 _ => {}
             }
         }
@@ -133,8 +127,9 @@ impl ImageEditPlan {
 pub fn inspect_edit_preview(request: &ImageEditPreviewRequest) -> Result<ImagePreview, String> {
     let plan = request.plan.canonicalized();
     plan.validate()?;
-    let source = crate::kit::images::load_image(&request.path)?;
-    let (edited, format, quality) = apply_edit_plan(&plan, source, crate::kit::images::detect_format(&request.path))?;
+    let source = crate::kit::images::decode(&request.path)?;
+    let format = source.family.output_format();
+    let (edited, format, quality) = apply_edit_plan(&plan, source.into_first_page(), format)?;
     let encoded = crate::kit::images::encode(&edited, format, quality)?;
     let preview_source = match format {
         crate::kit::images::OutputFormat::Heic => heif::decode(&encoded)
@@ -148,11 +143,12 @@ pub fn inspect_edit_preview(request: &ImageEditPreviewRequest) -> Result<ImagePr
 pub fn export_edit_plan(plan: &ImageEditPlan, input: PathBuf) -> JobOutcome {
     let plan = plan.canonicalized();
     if let Err(error) = plan.validate() { return failure(input, error); }
-    let source = match crate::kit::images::load_image(&input) {
-        Ok(image) => image,
+    let source = match crate::kit::images::decode(&input) {
+        Ok(source) => source,
         Err(error) => return failure(input, error),
     };
-    let (edited, format, quality) = match apply_edit_plan(&plan, source, crate::kit::images::detect_format(&input)) {
+    let format = source.family.output_format();
+    let (edited, format, quality) = match apply_edit_plan(&plan, source.into_first_page(), format) {
         Ok(value) => value,
         Err(error) => return failure(input, error),
     };
@@ -170,6 +166,73 @@ pub fn export_edit_plan(plan: &ImageEditPlan, input: PathBuf) -> JobOutcome {
     match output.publish() {
         Ok(path) => JobOutcome::succeeded(input, vec![path], format!("Applied {} edits in one export.", plan.edits.len())),
         Err(error) => failure(input, format!("Could not publish edited image: {error}")),
+    }
+}
+
+/// One run of the shared edit stack: every path gets the same steps and its own result.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageEditStackRequest {
+    pub paths: Vec<PathBuf>,
+    pub steps: ImageEditSteps,
+    pub output_location: OutputLocation,
+}
+
+/// The stack holds at most one of each step, and they always run in this order.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImageEditSteps {
+    #[serde(default)] pub crop: Option<CropStep>,
+}
+
+const STACK_QUALITY: u8 = 90;
+
+impl ImageEditSteps {
+    fn suffix(&self) -> Result<&'static str, String> {
+        match self.crop {
+            Some(_) => Ok("-cropped"),
+            None => Err("Add a step to the stack before running.".to_string()),
+        }
+    }
+
+    // Crop runs first, so its rectangle is always measured in source pixels.
+    fn apply(&self, image: DynamicImage) -> Result<DynamicImage, String> {
+        let Some(crop) = &self.crop else { return Ok(image) };
+        let (x, y, width, height) = crop_rect(image.width(), image.height(), crop)?;
+        Ok(image.crop_imm(x, y, width, height))
+    }
+}
+
+/// Decodes the input once, runs the stack and encodes once in the input's format.
+pub fn export_edit_stack(request: &ImageEditStackRequest, input: PathBuf) -> JobOutcome {
+    let suffix = match request.steps.suffix() {
+        Ok(suffix) => suffix,
+        Err(error) => return JobOutcome::failure(input, ToolError::invalid_input(error)),
+    };
+    let decoded = match crate::kit::images::decode(&input) {
+        Ok(decoded) => decoded,
+        Err(error) => return failure(input, error),
+    };
+    let format = decoded.family.output_format();
+    let source = decoded.into_first_page();
+    let edited = match request.steps.apply(source) {
+        Ok(image) => image,
+        Err(error) => return failure(input, error),
+    };
+    let bytes = match crate::kit::images::encode(&edited, format, STACK_QUALITY) {
+        Ok(bytes) => bytes,
+        Err(error) => return failure(input, error),
+    };
+    let output = match OutputNaming::reserve_destination(&input, &request.output_location, suffix, format.extension()) {
+        Ok(output) => output,
+        Err(error) => return failure(input, format!("Could not reserve image output: {error}")),
+    };
+    if let Err(error) = std::fs::write(output.path(), bytes) {
+        return failure(input, format!("Could not save image: {error}"));
+    }
+    match output.publish() {
+        Ok(path) => JobOutcome::succeeded(input, vec![path], "Image saved"),
+        Err(error) => failure(input, format!("Could not publish image: {error}")),
     }
 }
 
@@ -218,8 +281,8 @@ fn apply_edit_plan(plan: &ImageEditPlan, mut image: DynamicImage, mut format: cr
                 if flip == "vertical" { geometry.push(ImageGeometryStep::FlipVertical { height: current_height }); }
             }
             ImageEdit::Crop { x, y, width, height, mode, aspect_width, aspect_height, anchor } => {
-                let request = CropRequest { paths: vec![], x: *x, y: *y, width: *width, height: *height, mode: mode.clone(), aspect_width: *aspect_width, aspect_height: *aspect_height, anchor: anchor.clone(), output_location: OutputLocation::AlongsideInput };
-                let (x, y, width, height) = crop_rect(source_width, source_height, &request)?;
+                let step = CropStep { x: *x, y: *y, width: *width, height: *height, mode: mode.clone(), aspect_width: *aspect_width, aspect_height: *aspect_height, anchor: anchor.clone() };
+                let (x, y, width, height) = crop_rect(source_width, source_height, &step)?;
                 let crop = map_source_rect((x, y, width, height), &geometry)?;
                 image = image.crop_imm(crop.0, crop.1, crop.2, crop.3);
             }
@@ -239,10 +302,7 @@ fn apply_edit_plan(plan: &ImageEditPlan, mut image: DynamicImage, mut format: cr
                 }
                 image = DynamicImage::ImageRgba8(rgba).adjust_contrast(*contrast);
             }
-            ImageEdit::Watermark { text, logo_path, opacity, x, y } => {
-                let request = WatermarkRequest { paths: vec![], opacity: *opacity, text: text.clone(), logo_path: logo_path.clone(), x: *x, y: *y, output_location: OutputLocation::AlongsideInput };
-                image = apply_watermark(image, &request)?;
-            }
+            ImageEdit::Watermark(options) => image = apply_watermark(image, options)?,
         }
     }
     Ok((image, format, quality.clamp(1, 100)))
@@ -295,7 +355,7 @@ pub(crate) fn parse_output_format(format: &str) -> Result<crate::kit::images::Ou
 }
 
 pub fn inspect_preview(request: &ImagePreviewRequest) -> Result<ImagePreview, String> {
-    let image = crate::kit::images::load_image(&request.path).map_err(|error| format!("Could not preview image: {error}"))?;
+    let image = crate::kit::images::decode(&request.path).map_err(|error| format!("Could not preview image: {error}"))?.into_first_page();
     let width = image.width();
     let height = image.height();
     let preview = image.thumbnail(1200, 900).to_rgba8();
@@ -316,9 +376,10 @@ pub fn inspect_preview(request: &ImagePreviewRequest) -> Result<ImagePreview, St
 }
 
 pub fn inspect_tiff_pages(request: &TiffPreviewRequest) -> Result<Vec<ImagePreview>, String> {
-    read_tiff_pages(&request.path)?
-        .iter()
-        .map(|page| tiff_page_to_dynamic(page).and_then(encode_preview))
+    crate::kit::images::decode(&request.path)?
+        .pages
+        .into_iter()
+        .map(encode_preview)
         .collect()
 }
 
@@ -338,11 +399,19 @@ pub struct RotateRequest { pub paths: Vec<PathBuf>, pub degrees: i32, #[serde(de
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CropRequest {
-    pub paths: Vec<PathBuf>, pub x: u32, pub y: u32, pub width: u32, pub height: u32,
+    pub paths: Vec<PathBuf>,
+    #[serde(flatten)] pub crop: CropStep,
+    pub output_location: OutputLocation,
+}
+/// The crop geometry, measured in source pixels. Aspect-ratio mode keeps the largest area of that
+/// ratio each image has, so one setting fits every size in a batch.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CropStep {
+    pub x: u32, pub y: u32, pub width: u32, pub height: u32,
     #[serde(default = "default_crop_mode")] pub mode: String,
     #[serde(default)] pub aspect_width: u32, #[serde(default)] pub aspect_height: u32,
     #[serde(default = "default_crop_anchor")] pub anchor: String,
-    pub output_location: OutputLocation,
 }
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -358,11 +427,7 @@ pub struct ToneRequest {
 #[serde(rename_all = "camelCase")]
 pub struct WatermarkRequest {
     pub paths: Vec<PathBuf>,
-    pub opacity: u8,
-    #[serde(default)] pub text: Option<String>,
-    #[serde(default)] pub logo_path: Option<PathBuf>,
-    #[serde(default = "default_watermark_position")] pub x: u32,
-    #[serde(default = "default_watermark_position")] pub y: u32,
+    #[serde(flatten)] pub options: WatermarkOptions,
     pub output_location: OutputLocation,
 }
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -405,9 +470,6 @@ pub struct TiffPreviewRequest { pub path: PathBuf }
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MetadataRequest { pub paths: Vec<PathBuf>, pub output_location: OutputLocation }
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MetadataReport { pub path: PathBuf, pub exif: bool, pub gps: bool, pub xmp: bool, pub icc: bool, pub orientation: bool, pub unsupported: Vec<String> }
 
 pub fn resize(request: &ResizeRequest, input: PathBuf) -> JobOutcome {
     transform(request.paths.as_slice(), input, &request.output_location, "-resized", |image| {
@@ -455,7 +517,7 @@ pub fn rotate(request: &RotateRequest, input: PathBuf) -> JobOutcome {
 fn default_flip() -> String { "none".to_string() }
 pub fn crop(request: &CropRequest, input: PathBuf) -> JobOutcome {
     transform(request.paths.as_slice(), input, &request.output_location, "-cropped", |image| {
-        let (x, y, width, height) = crop_rect(image.width(), image.height(), request)?;
+        let (x, y, width, height) = crop_rect(image.width(), image.height(), &request.crop)?;
         Ok(image.crop_imm(x, y, width, height))
     })
 }
@@ -463,7 +525,7 @@ pub fn crop(request: &CropRequest, input: PathBuf) -> JobOutcome {
 fn default_crop_mode() -> String { "rectangle".to_string() }
 fn default_crop_anchor() -> String { "center".to_string() }
 
-fn crop_rect(image_width: u32, image_height: u32, request: &CropRequest) -> Result<(u32, u32, u32, u32), String> {
+fn crop_rect(image_width: u32, image_height: u32, request: &CropStep) -> Result<(u32, u32, u32, u32), String> {
     if request.mode == "aspectRatio" {
         if request.aspect_width == 0 || request.aspect_height == 0 { return Err("Aspect ratio dimensions must be positive.".to_string()); }
         let ratio = request.aspect_width as f64 / request.aspect_height as f64;
@@ -477,8 +539,10 @@ fn crop_rect(image_width: u32, image_height: u32, request: &CropRequest) -> Resu
         if width == 0 || height == 0 || width > image_width || height > image_height { return Err("Aspect ratio crop does not fit inside the image.".to_string()); }
         let max_x = image_width - width;
         let max_y = image_height - height;
-        let x = match request.anchor.as_str() { "left" => 0, "right" => max_x, "custom" => request.x.min(max_x), _ => max_x / 2 };
-        let y = match request.anchor.as_str() { "top" => 0, "bottom" => max_y, "custom" => request.y.min(max_y), _ => max_y / 2 };
+        // The largest fit leaves room on one axis only, so start and end keep the top or left
+        // part and the bottom or right part of every image, whatever its orientation.
+        let x = match request.anchor.as_str() { "left" | "start" => 0, "right" | "end" => max_x, "custom" => request.x.min(max_x), _ => max_x / 2 };
+        let y = match request.anchor.as_str() { "top" | "start" => 0, "bottom" | "end" => max_y, "custom" => request.y.min(max_y), _ => max_y / 2 };
         Ok((x, y, width, height))
     } else if request.mode == "rectangle" {
         if request.width == 0 || request.height == 0 || request.x.saturating_add(request.width) > image_width || request.y.saturating_add(request.height) > image_height { return Err("Crop rectangle must fit inside the image.".to_string()); }
@@ -505,21 +569,26 @@ pub fn tone(request: &ToneRequest, input: PathBuf) -> JobOutcome {
 }
 pub fn watermark(request: &WatermarkRequest, input: PathBuf) -> JobOutcome {
     transform(&request.paths, input, &request.output_location, "-watermarked", |image| {
-        apply_watermark(image, request)
+        apply_watermark(image, &request.options)
     })
 }
 
-fn apply_watermark(image: DynamicImage, request: &WatermarkRequest) -> Result<DynamicImage, String> {
+fn apply_watermark(image: DynamicImage, options: &WatermarkOptions) -> Result<DynamicImage, String> {
+    options.validate()?;
+    let (x, y) = match options.position {
+        Some(WatermarkPosition::Offset { x, y }) => (x, y),
+        _ => (16, 16),
+    };
     let mut image = image.to_rgba8();
     let original_alpha = image.pixels().map(|pixel| pixel.0[3]).collect::<Vec<_>>();
-    let alpha = request.opacity.min(100) as u16 * 255 / 100;
+    let alpha = options.opacity as u16 * 255 / 100;
     let mut watermark = image::RgbaImage::new(image.width(), image.height());
-    if let Some(text) = request.text.as_deref().filter(|text| !text.trim().is_empty()) {
-        draw_text(&mut watermark, text, request.x, request.y, alpha as u8)?;
+    if let Some(text) = options.text() {
+        draw_text(&mut watermark, text, x, y, alpha as u8)?;
     }
-    if let Some(path) = request.logo_path.as_ref() {
-        let logo = crate::kit::images::load_image(path)?.to_rgba8();
-        image::imageops::overlay(&mut watermark, &logo, request.x as i64, request.y as i64);
+    if let Some(path) = options.logo_path.as_ref() {
+        let logo = crate::kit::images::decode(path)?.into_first_page().to_rgba8();
+        image::imageops::overlay(&mut watermark, &logo, x as i64, y as i64);
     }
     if watermark.pixels().all(|pixel| pixel.0[3] == 0) {
         return Err("Provide watermark text or a logo image.".to_string());
@@ -528,8 +597,6 @@ fn apply_watermark(image: DynamicImage, request: &WatermarkRequest) -> Result<Dy
     for (pixel, alpha) in image.pixels_mut().zip(original_alpha) { pixel.0[3] = alpha; }
     Ok(DynamicImage::ImageRgba8(image))
 }
-
-fn default_watermark_position() -> u32 { 16 }
 
 const WATERMARK_FONT_RESOURCE: &str = "watermarkFont";
 const WATERMARK_FONT_FILE: &str = "DejaVuSans.ttf";
@@ -651,8 +718,9 @@ fn unsupported_watermark_characters(characters: impl IntoIterator<Item = char>) 
     format!("Unsupported watermark characters: {details}.")
 }
 pub fn icon_set(request: &IconSetRequest, input: PathBuf) -> JobOutcome {
-    let image = match image::open(&input) { Ok(image) => image, Err(error) => return failure(input, format!("Could not read image: {error}")) };
+    let source = match crate::kit::images::load_upright_image(&input) { Ok(source) => source, Err(error) => return failure(input, format!("Could not read image: {error}")) };
     let (prefix, sizes) = match icon_plan(&request.preset, &request.sizes) { Ok(plan) => plan, Err(error) => return failure(input, error) };
+    let image = match source.high_bit_depth { Some(_) => to_8bit(&source.image), None => source.image };
     let mut outputs = Vec::new();
     for &size in &sizes {
         let output = match OutputNaming::reserve_destination(&input, &request.output_location, &format!("-{prefix}-{size}"), "png") {
@@ -687,7 +755,21 @@ pub fn icon_set(request: &IconSetRequest, input: PathBuf) -> JobOutcome {
         "android" => "Android PNG icon set saved.",
         _ => "Custom PNG icon set saved.",
     };
-    JobOutcome::succeeded(input, outputs, detail.to_string())
+    let outcome = JobOutcome::succeeded(input, outputs, detail.to_string());
+    match source.high_bit_depth {
+        Some(bits) => outcome.with_warning(precision_reduced(format!("{bits}-bit HEIC saved as 8-bit sRGB."))),
+        None => outcome,
+    }
+}
+
+// Icon and GIF outputs are 8-bit; a high-bit-depth HEIC source is reduced once,
+// keeping its alpha channel when it has one.
+fn to_8bit(image: &image::DynamicImage) -> image::DynamicImage {
+    if image.color().has_alpha() { image::DynamicImage::ImageRgba8(image.to_rgba8()) } else { image::DynamicImage::ImageRgb8(image.to_rgb8()) }
+}
+
+fn precision_reduced(message: String) -> crate::kit::contracts::OutcomeWarning {
+    crate::kit::contracts::OutcomeWarning { kind: crate::kit::contracts::WarningKind::PrecisionReduced, message }
 }
 
 fn write_icns(output: &Path, sizes: &[u32], pngs: &[PathBuf]) -> Result<(), String> {
@@ -741,13 +823,17 @@ pub fn gif_create(request: &GifCreateRequest) -> JobOutcome {
         Ok(destination) => destination,
         Err(error) => return failure(input, error.to_string()),
     };
+    let mut reduced = Vec::new();
     let encode_result = {
         let mut encoder = image::codecs::gif::GifEncoder::new(file);
         if request.loop_forever { if let Err(error) = encoder.set_repeat(image::codecs::gif::Repeat::Infinite) { return failure(input, format!("Could not configure GIF loop: {error}")); } }
         let mut images = Vec::with_capacity(request.paths.len());
-        for path in &request.paths {
-            match image::open(path) {
-                Ok(image) => images.push(image.to_rgba8()),
+        for (index, path) in request.paths.iter().enumerate() {
+            match crate::kit::images::load_upright_image(path) {
+                Ok(source) => {
+                    if let Some(bits) = source.high_bit_depth { reduced.push((index + 1, path, bits)); }
+                    images.push(source.image.to_rgba8());
+                }
                 Err(error) => {
                     return failure(path.clone(), format!("Could not create GIF from {}: {error}", path.display()));
                 }
@@ -761,7 +847,17 @@ pub fn gif_create(request: &GifCreateRequest) -> JobOutcome {
     };
     match encode_result {
         Ok(_) => match output.publish() {
-            Ok(path) => JobOutcome::succeeded(input, vec![path], "GIF saved"),
+            Ok(path) => {
+                let outcome = JobOutcome::succeeded(input, vec![path], "GIF saved");
+                match reduced.as_slice() {
+                    [] => outcome,
+                    [(frame, path, bits)] => {
+                        let name = path.file_name().map(|name| name.to_string_lossy()).unwrap_or_default();
+                        outcome.with_warning(precision_reduced(format!("Frame {frame} ({name}) is {bits}-bit HEIC, saved as 8-bit sRGB.")))
+                    }
+                    frames => outcome.with_warning(precision_reduced(format!("{} frames are high-bit-depth HEIC, saved as 8-bit sRGB.", frames.len()))),
+                }
+            }
             Err(error) => failure(input, format!("Could not publish GIF output: {error}")),
         },
         Err(error) => failure(input, format!("Could not create GIF: {error}")),
@@ -821,8 +917,8 @@ pub fn tiff(request: &TiffRequest) -> JobOutcome {
             if !request.paths.iter().any(|path| path == &page_ref.path) {
                 return failure(page_ref.path.clone(), "The TIFF page selection contains an unselected file.".to_string());
             }
-            let decoded = match read_tiff_pages(&page_ref.path) {
-                Ok(decoded) => decoded,
+            let decoded = match crate::kit::images::decode(&page_ref.path) {
+                Ok(decoded) => decoded.pages,
                 Err(error) => return failure(page_ref.path.clone(), format!("Could not process {}: {error}", page_ref.path.display())),
             };
             let Some(page) = decoded.get(page_ref.page) else {
@@ -834,8 +930,8 @@ pub fn tiff(request: &TiffRequest) -> JobOutcome {
     } else {
         let mut pages = Vec::new();
         for path in &request.paths {
-            match read_tiff_pages(path) {
-                Ok(mut decoded) => pages.append(&mut decoded),
+            match crate::kit::images::decode(path) {
+                Ok(mut decoded) => pages.append(&mut decoded.pages),
                 Err(error) => return failure(path.clone(), format!("Could not process {}: {error}", path.display())),
             }
         }
@@ -870,70 +966,28 @@ pub fn tiff(request: &TiffRequest) -> JobOutcome {
     }
 }
 
-#[derive(Clone)]
-enum TiffPage { Gray { width: u32, height: u32, data: Vec<u8> }, Rgb { width: u32, height: u32, data: Vec<u8> }, Rgba { width: u32, height: u32, data: Vec<u8> } }
-
-fn tiff_page_to_dynamic(page: &TiffPage) -> Result<DynamicImage, String> {
-    match page {
-        TiffPage::Gray { width, height, data } => ImageBuffer::<Luma<u8>, _>::from_raw(*width, *height, data.clone()).map(DynamicImage::ImageLuma8),
-        TiffPage::Rgb { width, height, data } => ImageBuffer::<Rgb<u8>, _>::from_raw(*width, *height, data.clone()).map(DynamicImage::ImageRgb8),
-        TiffPage::Rgba { width, height, data } => ImageBuffer::<Rgba<u8>, _>::from_raw(*width, *height, data.clone()).map(DynamicImage::ImageRgba8),
-    }
-    .ok_or_else(|| "TIFF page pixel data has an invalid length.".to_string())
-}
-
-fn read_tiff_pages(path: &std::path::Path) -> Result<Vec<TiffPage>, String> {
-    let file = File::open(path).map_err(|error| format!("Could not open TIFF: {error}"))?;
-    let mut decoder = tiff::decoder::Decoder::new(file).map_err(|error| format!("Could not read TIFF: {error}"))?;
-    let mut pages = Vec::new();
-    loop {
-        let (width, height) = decoder.dimensions().map_err(|error| format!("Could not read TIFF dimensions: {error}"))?;
-        let color = decoder.colortype().map_err(|error| format!("Could not read TIFF color type: {error}"))?;
-        let data = decoder.read_image().map_err(|error| format!("Unsupported TIFF page: {error}"))?;
-        let page = match (color, data) {
-            (tiff::ColorType::Gray(8), tiff::decoder::DecodingResult::U8(data)) => TiffPage::Gray { width, height, data },
-            (tiff::ColorType::RGB(8), tiff::decoder::DecodingResult::U8(data)) => TiffPage::Rgb { width, height, data },
-            (tiff::ColorType::RGBA(8), tiff::decoder::DecodingResult::U8(data)) => TiffPage::Rgba { width, height, data },
-            (color, _) => return Err(format!("Unsupported TIFF color type or bit depth: {color:?}")),
-        };
-        pages.push(page);
-        if !decoder.more_images() { break; }
-        decoder.next_image().map_err(|error| format!("Could not advance to TIFF page: {error}"))?;
-    }
-    Ok(pages)
-}
-
-fn write_tiff_pages(path: &std::path::Path, pages: &[TiffPage]) -> Result<(), String> {
+fn write_tiff_pages(path: &std::path::Path, pages: &[DynamicImage]) -> Result<(), String> {
     let file = File::create(path).map_err(|error| error.to_string())?;
     let mut encoder = tiff::encoder::TiffEncoder::new(file).map_err(|error| error.to_string())?;
     for page in pages { write_encoded_page(&mut encoder, page)?; }
     Ok(())
 }
 
-fn write_tiff_page(path: &std::path::Path, page: &TiffPage) -> Result<(), String> {
+fn write_tiff_page(path: &std::path::Path, page: &DynamicImage) -> Result<(), String> {
     let file = File::create(path).map_err(|error| error.to_string())?;
     let mut encoder = tiff::encoder::TiffEncoder::new(file).map_err(|error| error.to_string())?;
     write_encoded_page(&mut encoder, page)
 }
 
-fn write_encoded_page<W: std::io::Write + Seek>(encoder: &mut tiff::encoder::TiffEncoder<W>, page: &TiffPage) -> Result<(), String> {
+fn write_encoded_page<W: std::io::Write + Seek>(encoder: &mut tiff::encoder::TiffEncoder<W>, page: &DynamicImage) -> Result<(), String> {
     match page {
-        TiffPage::Gray { width, height, data } => encoder.write_image::<tiff::encoder::colortype::Gray8>(*width, *height, data).map_err(|error| error.to_string()),
-        TiffPage::Rgb { width, height, data } => encoder.write_image::<tiff::encoder::colortype::RGB8>(*width, *height, data).map_err(|error| error.to_string()),
-        TiffPage::Rgba { width, height, data } => encoder.write_image::<tiff::encoder::colortype::RGBA8>(*width, *height, data).map_err(|error| error.to_string()),
+        DynamicImage::ImageLuma8(page) => encoder.write_image::<tiff::encoder::colortype::Gray8>(page.width(), page.height(), page.as_raw()),
+        DynamicImage::ImageRgb8(page) => encoder.write_image::<tiff::encoder::colortype::RGB8>(page.width(), page.height(), page.as_raw()),
+        DynamicImage::ImageRgba8(page) => encoder.write_image::<tiff::encoder::colortype::RGBA8>(page.width(), page.height(), page.as_raw()),
+        page => return Err(format!("Unsupported TIFF page color type: {:?}", page.color())),
     }
+    .map_err(|error| error.to_string())
 }
-pub fn inspect_metadata(input: PathBuf) -> Result<MetadataReport, String> {
-    let bytes = std::fs::read(&input).map_err(|error| format!("Could not read image metadata: {error}"))?;
-    let exif = contains(&bytes, b"Exif\0\0");
-    let xmp = contains(&bytes, b"http://ns.adobe.com/xap/1.0/") || contains(&bytes, b"<x:xmpmeta");
-    let icc = contains(&bytes, b"ICC_PROFILE") || contains(&bytes, b"iCCP");
-    let gps = exif && (contains(&bytes, b"GPS") || contains(&bytes, b"gps"));
-    let orientation = exif && (contains(&bytes, b"Orientation") || contains(&bytes, b"orientation"));
-    let supported = exif || xmp || icc;
-    Ok(MetadataReport { path: input, exif, gps, xmp, icc, orientation, unsupported: if supported { Vec::new() } else { vec!["No supported EXIF, GPS, XMP, or ICC metadata marker was recognized.".to_string()] } })
-}
-
 pub fn strip_metadata(request: &MetadataRequest, input: PathBuf) -> JobOutcome {
     let image = match image::open(&input) { Ok(image) => image, Err(error) => return failure(input, format!("Could not read image: {error}")) };
     let output = match OutputNaming::reserve_destination(&input, &request.output_location, "-stripped", input.extension().and_then(|extension| extension.to_str()).unwrap_or("png")) {
@@ -942,7 +996,7 @@ pub fn strip_metadata(request: &MetadataRequest, input: PathBuf) -> JobOutcome {
     };
     let format = ImageFormat::from_path(output.path()).unwrap_or(ImageFormat::Png);
     if let Err(error) = image.save_with_format(output.path(), format) { return failure(input, format!("Could not save metadata-free image: {error}")); }
-    match inspect_metadata(output.path().to_path_buf()) {
+    match crate::kit::images::metadata::read_file(output.path()) {
         Ok(report) if !report.exif && !report.xmp && !report.icc => match output.publish() {
             Ok(path) => JobOutcome::succeeded(input, vec![path], "Metadata removed and verified"),
             Err(error) => failure(input, format!("Could not publish metadata-free image: {error}")),
@@ -952,10 +1006,8 @@ pub fn strip_metadata(request: &MetadataRequest, input: PathBuf) -> JobOutcome {
     }
 }
 
-fn contains(bytes: &[u8], needle: &[u8]) -> bool { bytes.windows(needle.len()).any(|window| window == needle) }
-
 fn transform<F>(_: &[PathBuf], input: PathBuf, location: &OutputLocation, suffix: &str, edit: F) -> JobOutcome where F: FnOnce(DynamicImage) -> Result<DynamicImage, String> {
-    let image = match crate::kit::images::load_image(&input) { Ok(image) => image, Err(error) => return failure(input, format!("Could not read image: {error}")) };
+    let image = match crate::kit::images::decode(&input) { Ok(decoded) => decoded.into_first_page(), Err(error) => return failure(input, format!("Could not read image: {error}")) };
     let image = match edit(image) { Ok(image) => image, Err(error) => return failure(input, error) };
     let extension = input.extension().and_then(|extension| extension.to_str()).unwrap_or("png");
     let output = match OutputNaming::reserve_destination(&input, location, suffix, extension) {
@@ -979,6 +1031,16 @@ mod tests {
     use super::*;
     use sha2::{Digest, Sha256};
     fn path(name: &str) -> PathBuf { std::env::temp_dir().join(format!("toolbox_tiff_{}_{}", std::process::id(), name)) }
+    fn gray(width: u32, height: u32, data: Vec<u8>) -> DynamicImage { DynamicImage::ImageLuma8(image::ImageBuffer::from_raw(width, height, data).unwrap()) }
+    fn read_pages(path: &Path) -> Result<Vec<DynamicImage>, String> { crate::kit::images::decode(path).map(|decoded| decoded.pages) }
+
+    fn text_watermark(input: &Path, text: &str, opacity: u8, offset: u32) -> WatermarkRequest {
+        WatermarkRequest {
+            paths: vec![input.to_path_buf()],
+            options: WatermarkOptions { text: Some(text.to_string()), logo_path: None, size: None, opacity, color: None, position: Some(WatermarkPosition::Offset { x: offset, y: offset }), rotation: 0.0 },
+            output_location: OutputLocation::AlongsideInput,
+        }
+    }
 
     #[test]
     fn splits_and_combines_pages_in_order() {
@@ -990,18 +1052,18 @@ mod tests {
 
         let split = tiff(&TiffRequest { paths: vec![input.clone()], pages: None, output_location: OutputLocation::AlongsideInput, output_path: None });
         assert_eq!(split.output_paths().len(), 2);
-        assert_eq!(read_tiff_pages(&split.output_paths()[0]).unwrap().len(), 1);
-        assert_eq!(read_tiff_pages(&split.output_paths()[1]).unwrap().len(), 1);
+        assert_eq!(read_pages(&split.output_paths()[0]).unwrap().len(), 1);
+        assert_eq!(read_pages(&split.output_paths()[1]).unwrap().len(), 1);
 
         let first = path("first.tiff");
         let second = path("second.tiff");
-        write_tiff_page(&first, &TiffPage::Gray { width: 1, height: 1, data: vec![1] }).unwrap();
-        write_tiff_page(&second, &TiffPage::Gray { width: 1, height: 1, data: vec![2] }).unwrap();
+        write_tiff_page(&first, &gray(1, 1, vec![1])).unwrap();
+        write_tiff_page(&second, &gray(1, 1, vec![2])).unwrap();
         let combined = tiff(&TiffRequest { paths: vec![first.clone(), second.clone()], pages: None, output_location: OutputLocation::AlongsideInput, output_path: None });
-        let pages = read_tiff_pages(&combined.output_paths()[0]).unwrap();
+        let pages = read_pages(&combined.output_paths()[0]).unwrap();
         assert_eq!(pages.len(), 2);
-        assert!(matches!(&pages[0], TiffPage::Gray { data, .. } if data == &vec![1]));
-        assert!(matches!(&pages[1], TiffPage::Gray { data, .. } if data == &vec![2]));
+        assert_eq!(pages[0].as_bytes(), &[1]);
+        assert_eq!(pages[1].as_bytes(), &[2]);
 
         for output in split.output_paths() { let _ = std::fs::remove_file(output); }
         let _ = std::fs::remove_file(input);
@@ -1029,7 +1091,7 @@ mod tests {
         let mut encoder = tiff::encoder::TiffEncoder::new(file).unwrap();
         encoder.write_image::<tiff::encoder::colortype::Gray8>(2, 1, &[10, 20]).unwrap();
         encoder.write_image::<tiff::encoder::colortype::Gray8>(2, 1, &[30, 40]).unwrap();
-        write_tiff_page(&one_page, &TiffPage::Gray { width: 1, height: 1, data: vec![2] }).unwrap();
+        write_tiff_page(&one_page, &gray(1, 1, vec![2])).unwrap();
 
         let outcome = tiff(&TiffRequest {
             paths: vec![two_page.clone(), one_page.clone()],
@@ -1043,11 +1105,11 @@ mod tests {
 
         assert!(outcome.error().is_none(), "selected TIFF pages failed: {:?}", outcome.error());
         let output = outcome.output_paths().first().unwrap().clone();
-        let pages = read_tiff_pages(&output).unwrap();
+        let pages = read_pages(&output).unwrap();
         assert_eq!(pages.len(), 3);
-        assert!(matches!(&pages[0], TiffPage::Gray { data, .. } if data == &vec![30, 40]));
-        assert!(matches!(&pages[1], TiffPage::Gray { data, .. } if data == &vec![2]));
-        assert!(matches!(&pages[2], TiffPage::Gray { data, .. } if data == &vec![10, 20]));
+        assert_eq!(pages[0].as_bytes(), &[30, 40]);
+        assert_eq!(pages[1].as_bytes(), &[2]);
+        assert_eq!(pages[2].as_bytes(), &[10, 20]);
 
         let _ = std::fs::remove_file(two_page);
         let _ = std::fs::remove_file(one_page);
@@ -1055,21 +1117,11 @@ mod tests {
     }
 
     #[test]
-    fn reports_unrecognized_metadata_explicitly() {
-        let input = path("metadata.png");
-        image::RgbaImage::from_pixel(1, 1, image::Rgba([1, 2, 3, 255])).save(&input).unwrap();
-        let report = inspect_metadata(input.clone()).unwrap();
-        assert!(!report.exif && !report.gps && !report.xmp && !report.icc);
-        assert!(!report.unsupported.is_empty());
-        let _ = std::fs::remove_file(input);
-    }
-
-    #[test]
     fn text_watermark_composites_without_changing_alpha() {
         let input = path("watermark-input.png");
         let image = image::RgbaImage::from_pixel(64, 32, image::Rgba([10, 20, 30, 77]));
         image.save(&input).unwrap();
-        let result = watermark(&WatermarkRequest { paths: vec![input.clone()], opacity: 50, text: Some("TOOL".to_string()), logo_path: None, x: 2, y: 2, output_location: OutputLocation::AlongsideInput }, input.clone());
+        let result = watermark(&text_watermark(&input, "TOOL", 50, 2), input.clone());
         let output = result.output_paths().first().unwrap();
         let output_image = image::open(output).unwrap().to_rgba8();
         assert!(output_image.pixels().any(|pixel| pixel.0[0..3] != [10, 20, 30]));
@@ -1105,15 +1157,7 @@ mod tests {
         let existing_bytes = b"existing output must remain intact";
         std::fs::write(&output, existing_bytes).unwrap();
 
-        let result = watermark(&WatermarkRequest {
-            paths: vec![input.clone()],
-            opacity: 80,
-            text: Some("Café Ж \u{10FFFF}".to_string()),
-            logo_path: None,
-            x: 4,
-            y: 4,
-            output_location: OutputLocation::AlongsideInput,
-        }, input.clone());
+        let result = watermark(&text_watermark(&input, "Café Ж \u{10FFFF}", 80, 4), input.clone());
 
         let error = result.error().expect("unsupported text must fail");
         assert!(error.message.contains("Unsupported watermark characters"));
@@ -1152,15 +1196,7 @@ mod tests {
         let existing_bytes = b"do not overwrite this output";
         std::fs::write(&existing_output, existing_bytes).unwrap();
 
-        let result = watermark(&WatermarkRequest {
-            paths: vec![input.clone()],
-            opacity: 50,
-            text: Some("Safe".to_string()),
-            logo_path: None,
-            x: 4,
-            y: 4,
-            output_location: OutputLocation::AlongsideInput,
-        }, input.clone());
+        let result = watermark(&text_watermark(&input, "Safe", 50, 4), input.clone());
 
         assert!(result.error().is_none(), "watermark failed: {:?}", result.error());
         let output = result.output_paths().first().expect("watermark output");
@@ -1329,11 +1365,105 @@ mod tests {
         let _ = std::fs::remove_file(input);
     }
 
+    fn write_fixture(name: &str, bytes: &[u8]) -> PathBuf {
+        let input = path(name);
+        std::fs::write(&input, bytes).unwrap();
+        input
+    }
+
+    fn icon_request(input: &Path, preset: &str) -> IconSetRequest {
+        IconSetRequest { paths: vec![input.to_path_buf()], preset: preset.to_string(), sizes: vec![32, 64], output_location: OutputLocation::AlongsideInput }
+    }
+
+    fn assert_8bit_png(output: &Path) {
+        let color = image::open(output).unwrap().color();
+        assert!(matches!(color, image::ColorType::Rgb8 | image::ColorType::Rgba8), "{} is {color:?}", output.display());
+    }
+
+    #[test]
+    fn heic_masters_make_icon_sets_and_high_bit_depth_is_reduced_with_a_warning() {
+        use crate::kit::images::fixtures;
+        let source = fixtures::red_left_blue_right(64, 32);
+        for (name, bytes, warning) in [
+            ("icon-master-8bit.heic", fixtures::heic(&source), None),
+            ("icon-master-10bit.heif", fixtures::heic_10bit(&source), Some("10-bit HEIC saved as 8-bit sRGB.")),
+        ] {
+            let input = write_fixture(name, &bytes);
+            for preset in ["custom", "macos"] {
+                let result = icon_set(&icon_request(&input, preset), input.clone());
+                assert!(result.error().is_none(), "{name}: {:?}", result.error());
+                let pngs = result.output_paths().iter().filter(|output| output.extension().is_some_and(|extension| extension == "png")).collect::<Vec<_>>();
+                assert!(!pngs.is_empty());
+                for png in &pngs { assert_8bit_png(png); }
+                assert_eq!(fixtures::red_edge(&image::open(pngs[0]).unwrap()), "left");
+                match warning {
+                    Some(message) => assert_eq!(result.warnings, vec![crate::kit::contracts::OutcomeWarning { kind: crate::kit::contracts::WarningKind::PrecisionReduced, message: message.to_string() }]),
+                    None => assert!(result.warnings.is_empty(), "{name}: {:?}", result.warnings),
+                }
+                for output in result.output_paths() { let _ = std::fs::remove_file(output); }
+            }
+            assert_eq!(std::fs::read(&input).unwrap(), bytes, "{name} must stay byte-identical");
+            let _ = std::fs::remove_file(input);
+        }
+    }
+
+    #[test]
+    fn oriented_icon_masters_are_used_upright() {
+        use crate::kit::images::fixtures;
+        let source = fixtures::red_left_blue_right(64, 32);
+        for (name, bytes) in [("icon-exif-6.jpg", fixtures::jpeg_with_orientation(&source, 6)), ("icon-irot-3.heic", fixtures::heic_rotated(&source, 3))] {
+            let input = write_fixture(name, &bytes);
+            let result = icon_set(&icon_request(&input, "custom"), input.clone());
+            assert!(result.error().is_none(), "{name}: {:?}", result.error());
+            // Both sources display with the red half on top; a second rotation would move it.
+            for output in result.output_paths() {
+                assert_eq!(fixtures::red_edge(&image::open(output).unwrap()), "top", "{name} -> {}", output.display());
+                let _ = std::fs::remove_file(output);
+            }
+            assert_eq!(std::fs::read(&input).unwrap(), bytes, "{name} must stay byte-identical");
+            let _ = std::fs::remove_file(input);
+        }
+    }
+
+    #[test]
+    fn gif_accepts_heic_and_oriented_frames_upright_and_names_the_reduced_frame() {
+        use crate::kit::images::fixtures;
+        let source = fixtures::red_left_blue_right(64, 32);
+        let frames = [
+            write_fixture("gif-frame-exif-6.jpg", &fixtures::jpeg_with_orientation(&source, 6)),
+            write_fixture("gif-frame-10bit.heic", &fixtures::heic_10bit(&fixtures::red_left_blue_right(32, 64))),
+            write_fixture("gif-frame-irot-3.heif", &fixtures::heic_rotated(&source, 3)),
+        ];
+        let originals = frames.iter().map(|frame| std::fs::read(frame).unwrap()).collect::<Vec<_>>();
+        let result = gif_create(&GifCreateRequest { paths: frames.to_vec(), frame_delay_ms: 100, loop_forever: true, output_location: OutputLocation::AlongsideInput, output_path: None });
+        assert!(result.error().is_none(), "{:?}", result.error());
+        assert_eq!(result.warnings, vec![crate::kit::contracts::OutcomeWarning {
+            kind: crate::kit::contracts::WarningKind::PrecisionReduced,
+            message: format!("Frame 2 ({}) is 10-bit HEIC, saved as 8-bit sRGB.", frames[1].file_name().unwrap().to_string_lossy()),
+        }]);
+        let output = result.output_paths()[0].clone();
+        let decoded = image::codecs::gif::GifDecoder::new(BufReader::new(File::open(&output).unwrap())).unwrap().into_frames().collect_frames().unwrap();
+        assert_eq!(decoded.len(), 3);
+        let edges = decoded.into_iter().map(|frame| {
+            assert_eq!(frame.buffer().dimensions(), (32, 64), "every frame is upright portrait, so the canvas is too");
+            fixtures::red_edge(&image::DynamicImage::ImageRgba8(frame.into_buffer()))
+        }).collect::<Vec<_>>();
+        assert_eq!(edges, ["top", "left", "top"]);
+        for (frame, original) in frames.iter().zip(&originals) { assert_eq!(&std::fs::read(frame).unwrap(), original, "{} must stay byte-identical", frame.display()); }
+        let several = gif_create(&GifCreateRequest { paths: vec![frames[1].clone(), frames[1].clone()], frame_delay_ms: 100, loop_forever: true, output_location: OutputLocation::AlongsideInput, output_path: None });
+        assert_eq!(several.warnings[0].message, "2 frames are high-bit-depth HEIC, saved as 8-bit sRGB.");
+        for path in frames.iter().chain(result.output_paths()).chain(several.output_paths()) { let _ = std::fs::remove_file(path); }
+    }
+
     #[test]
     fn crop_aspect_ratio_is_anchored_and_bounds_checked() {
-        let request = CropRequest { paths: vec![], x: 0, y: 0, width: 1, height: 1, mode: "aspectRatio".to_string(), aspect_width: 1, aspect_height: 1, anchor: "top".to_string(), output_location: OutputLocation::AlongsideInput };
+        let request = CropStep { x: 0, y: 0, width: 1, height: 1, mode: "aspectRatio".to_string(), aspect_width: 1, aspect_height: 1, anchor: "top".to_string() };
         assert_eq!(crop_rect(8, 4, &request).unwrap(), (2, 0, 4, 4));
-        let invalid = CropRequest { mode: "rectangle".to_string(), x: 7, y: 0, width: 2, height: 1, ..request };
+        let start = CropStep { anchor: "start".to_string(), ..request.clone() };
+        assert_eq!((crop_rect(8, 4, &start).unwrap(), crop_rect(4, 8, &start).unwrap()), ((0, 0, 4, 4), (0, 0, 4, 4)));
+        let end = CropStep { anchor: "end".to_string(), ..request.clone() };
+        assert_eq!((crop_rect(8, 4, &end).unwrap(), crop_rect(4, 8, &end).unwrap()), ((4, 0, 4, 4), (0, 4, 4, 4)));
+        let invalid = CropStep { mode: "rectangle".to_string(), x: 7, y: 0, width: 2, height: 1, ..request };
         assert!(crop_rect(8, 4, &invalid).is_err());
     }
 
@@ -1524,10 +1654,9 @@ mod tests {
             output_location: OutputLocation::AlongsideInput,
         };
 
-        let request = CropRequest {
-            paths: vec![], x: 0, y: 0, width: 1, height: 1, mode: "aspectRatio".to_string(),
+        let request = CropStep {
+            x: 0, y: 0, width: 1, height: 1, mode: "aspectRatio".to_string(),
             aspect_width: 1, aspect_height: 1, anchor: "right".to_string(),
-            output_location: OutputLocation::AlongsideInput,
         };
         assert_eq!(crop_rect(100, 60, &request).unwrap(), (40, 0, 60, 60));
         let preview = inspect_edit_preview(&ImageEditPreviewRequest { path: input.clone(), plan: plan.clone() }).unwrap();
