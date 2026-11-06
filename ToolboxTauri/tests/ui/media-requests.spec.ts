@@ -37,7 +37,12 @@ const start = async (page: Page, settings: OutputSettings = { mode: "alongsideIn
                     const { path } = (args as { request: { path: string } }).request;
                     return Array.from({ length: path.endsWith("two-page.tiff") ? 2 : 1 }, () => ({ width: 640, height: 480, dataUrl: blankImage }));
                 }
-                if (command === "inspect_image_metadata") return [{ path: "fixture", fields: ["Camera"] }];
+                if (command === "inspect_image_metadata") {
+                    // One report per requested path, in the shape ImageMetadataReport renders.
+                    return ((args as { request: { paths: string[] } }).request.paths).map((path) => ({
+                        status: "report", path, format: "jpeg", exif: true, gps: false, xmp: false, iptc: false, comments: false, icc: false, orientation: null,
+                    }));
+                }
                 if (command.startsWith("plugin:")) return null;
                 const { request } = (args ?? {}) as { request?: { paths?: string[] } };
                 return (request?.paths ?? []).map((inputPath) => ({
@@ -266,7 +271,9 @@ test.describe("Media requests", () => {
         await page.getByRole("radio", { name: "Inspect metadata" }).click();
         await expect(page.locator(".workspace-primary-action")).toBeDisabled();
         await page.locator(".workspace-control-panel").getByRole("button", { name: "Inspect metadata", exact: true }).click();
-        await expect(page.locator(".workspace-report")).toContainText("\"Camera\"");
+        const report = page.getByRole("region", { name: "Metadata found" });
+        await expect(report.getByRole("region")).toHaveCount(2);
+        await expect(report.getByRole("region", { name: "Metadata in a.jpg" }).locator(".image-metadata-row[data-present=true] dt")).toHaveText(["Camera"]);
         expect(await invocationsOf(page, "inspect_image_metadata")).toEqual([{ request: {
             paths: ["/local/photos/a.jpg", "/local/photos/b.png"],
             outputLocation: { customFolder: "/Users/test/Media out" },
