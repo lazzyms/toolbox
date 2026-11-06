@@ -24,17 +24,41 @@ pub struct ToolLimits {
     pub max_duration: Duration,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct HelperDeadline { pub per_file: Duration, pub per_page: Duration }
+
+impl HelperDeadline {
+    pub(crate) fn limit(self, files: usize, pages: usize) -> Duration {
+        let count = |value: usize| u32::try_from(value).unwrap_or(u32::MAX);
+        self.per_file * count(files) + self.per_page * count(pages)
+    }
+}
+
 // Expansion stays under the image crate's 512 MiB allocation default so this check, not a decoder error, reports it.
 const PDF: ToolLimits = ToolLimits { max_bytes: GB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES };
 const IMAGE: ToolLimits = ToolLimits { max_bytes: 250 * MB, max_pages: None, max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES };
 const PAGED_IMAGE: ToolLimits = ToolLimits { max_pages: Some(1_000), ..IMAGE };
+// Converted text is read whole and laid out in memory, so text formats stop well below the PDF size. Packaged formats are
+// compressed archives whose parts are held to the expansion limit instead. For both, max_pages caps the pages a file makes.
+const TEXT_DOCUMENT: ToolLimits = ToolLimits { max_bytes: 50 * MB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES };
+const PACKAGED_DOCUMENT: ToolLimits = ToolLimits { max_bytes: 250 * MB, ..TEXT_DOCUMENT };
+
+/// Convert to PDF takes many formats, so its limits follow the input's family rather than the command.
+pub fn convert_to_pdf(input: &Path) -> ToolLimits {
+    let extension = input.extension().and_then(|extension| extension.to_str()).unwrap_or_default().to_ascii_lowercase();
+    match extension.as_str() {
+        "pdf" => PDF,
+        "docx" | "odt" | "xlsx" | "ods" | "pptx" | "odp" | "epub" => PACKAGED_DOCUMENT,
+        _ => TEXT_DOCUMENT,
+    }
+}
 
 pub fn recorded(command: &str) -> Option<ToolLimits> {
     Some(match command {
-        "remove_password" | "protect_files" | "export_pdf_scene" | "crop_pdf" | "sign_pdf" | "edit_pdf" | "edit_pdf_session"
-        | "organize_pdf" | "add_pdf_pages" | "add_page_numbers" | "watermark_pdf" | "compress_pdf" | "remove_pdf_pages"
+        "remove_password" | "protect_files" | "export_pdf_scene" | "crop_pdf" | "resize_pdf" | "sign_pdf" | "edit_pdf" | "edit_pdf_session"
+        | "add_page_numbers" | "watermark_pdf" | "compress_pdf"
         | "extract_pdf_pages" | "merge_pdfs" | "split_pdf" | "pdf_to_images" | "pdf_to_text" | "extract_pdf_images"
-        | "ocr_pdf" | "rotate_pdf" | "repair_pdf" | "redact_pdf" | "compare_pdfs" => PDF,
+        | "ocr_pdf" | "rotate_pdf" | "repair_pdf" | "redact_pdf" | "compare_pdfs" | "convert_to_pdf" => PDF,
         "compress_images" | "convert_images" | "export_image_edit_plan" | "images_to_pdf" | "blur_faces"
         | "remove_image_background" | "resize_images" | "rotate_images" | "crop_images" | "adjust_image_tone"
         | "watermark_images" | "generate_icon_set" | "create_gif" => IMAGE,
@@ -44,11 +68,11 @@ pub fn recorded(command: &str) -> Option<ToolLimits> {
 }
 
 impl ToolLimits {
-    pub fn run_each<F>(self, input: PathBuf, cancel: &CancelFlag, job: F) -> JobOutcome
+    pub fn run_each<F>(self, input: PathBuf, cancel: &CancelFlag, pages: Option<PageSink>, job: F) -> JobOutcome
     where
         F: FnOnce(PathBuf) -> JobOutcome + Send + 'static,
     {
-        run_timed(input.clone(), self.max_duration, cancel, move || match self.check(&input) {
+        run_timed(input.clone(), self.max_duration, cancel, pages, move || match self.check(&input) {
             Ok(()) => job(input),
             Err(error) => JobOutcome::failure(input, error),
         })
@@ -60,12 +84,33 @@ impl ToolLimits {
     {
         let inputs = inputs.to_vec();
         let first = inputs.first().cloned().unwrap_or_default();
-        run_timed(first, self.max_duration, &CancelFlag::default(), move || {
+        run_timed(first, self.max_duration, &CancelFlag::default(), None, move || {
             match inputs.iter().find_map(|input| self.check(input).err().map(|error| (input, error))) {
                 Some((input, error)) => JobOutcome::failure(input.clone(), error),
                 None => job(),
             }
         })
+    }
+
+    pub fn expansion_error(&self, path: &Path) -> ToolError {
+        ToolError::limit_exceeded(
+            LimitKind::Decompression,
+            format!(
+                "{} expands to more than {} when opened, which is over the limit. It may be damaged or unsafe to open.",
+                Format::for_path(path).part(), bytes_label(self.max_expanded_bytes),
+            ),
+        )
+    }
+
+    /// For a job that makes a PDF, such as a conversion, checked before its pages are written.
+    pub fn check_made_pages(&self, pages: usize) -> Result<(), ToolError> {
+        match self.max_pages {
+            Some(max_pages) if pages as u64 > u64::from(max_pages) => Err(ToolError::limit_exceeded(
+                LimitKind::PageCount,
+                format!("Would make more than {} pages, over the limit for one PDF. Split it into smaller files and try again.", count_label(u64::from(max_pages))),
+            )),
+            _ => Ok(()),
+        }
     }
 
     pub fn check(&self, path: &Path) -> Result<(), ToolError> {
@@ -80,13 +125,7 @@ impl ToolLimits {
         let Ok(bytes) = std::fs::read(path) else { return Ok(()) };
         let shape = Shape::read(&bytes, self.max_pages.unwrap_or(u32::MAX), self.max_expanded_bytes);
         if shape.largest_part > self.max_expanded_bytes {
-            return Err(ToolError::limit_exceeded(
-                LimitKind::Decompression,
-                format!(
-                    "{} expands to more than {} when opened, which is over the limit. It may be damaged or unsafe to open.",
-                    format.part(), bytes_label(self.max_expanded_bytes),
-                ),
-            ));
+            return Err(self.expansion_error(path));
         }
         match self.max_pages {
             Some(max_pages) if shape.pages > u64::from(max_pages) => Err(ToolError::limit_exceeded(
@@ -109,7 +148,8 @@ impl Format {
         let extension = path.extension().and_then(|extension| extension.to_str()).unwrap_or_default().to_ascii_lowercase();
         match extension.as_str() {
             "pdf" => Self::Pdf,
-            "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" => Self::Document,
+            "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "odt" | "ods" | "odp" | "rtf" | "txt" | "md" | "markdown" | "html" | "htm"
+            | "csv" | "tsv" | "epub" | "mobi" => Self::Document,
             "gif" => Self::Gif,
             "tif" | "tiff" => Self::Tiff,
             _ => Self::Image,
@@ -260,8 +300,13 @@ fn raster_bytes(bytes: &[u8]) -> u64 {
     reader.into_decoder().map(|decoder| decoder.total_bytes()).unwrap_or(0)
 }
 
+/// Receives `(done, total)` page counts while one file is processed.
+pub type PageSink = Arc<dyn Fn(usize, usize) + Send + Sync>;
+
 struct Clock {
     published: Mutex<Option<Vec<PathBuf>>>,
+    pages: Mutex<Option<(usize, usize)>>,
+    sink: Option<PageSink>,
 }
 
 thread_local! {
@@ -280,6 +325,29 @@ impl CancelFlag {
 /// True once the job on this thread was cancelled or ran out of time, so helpers it starts should stop.
 pub fn job_stopped() -> bool {
     CLOCK.with(|clock| clock.borrow().as_ref().is_some_and(|clock| clock.published.lock().unwrap_or_else(PoisonError::into_inner).is_none()))
+}
+
+/// Records how many pages of the file on this thread are done, so a stop can say where it stopped and the view can show it.
+pub fn report_pages(done: usize, total: usize) {
+    let Some(clock) = CLOCK.with(|clock| clock.borrow().clone()) else { return };
+    *clock.pages.lock().unwrap_or_else(PoisonError::into_inner) = Some((done, total));
+    if let Some(sink) = &clock.sink {
+        if !job_stopped() { sink(done, total) }
+    }
+}
+
+/// "Stopped at page 3 of 9" once a file has reported its pages.
+pub(crate) fn stopped_at(done: usize, total: usize) -> String {
+    format!("Stopped at page {} of {}", count_label((done + 1).min(total) as u64), count_label(total as u64))
+}
+
+/// What a file stopped at its time limit says once it has reported its pages.
+pub(crate) fn file_time_limit_message(input: &Path, done: usize, total: usize, saved: usize) -> String {
+    let advice = match Format::for_path(input) {
+        Format::Image => String::new(),
+        format => format!(" Split it into smaller {}s, then try again.", format.noun()),
+    };
+    format!("{}: it reached the time limit for one file. {}{advice}", stopped_at(done, total), saved_label(saved))
 }
 
 fn stopped_error() -> io::Error { io::Error::new(io::ErrorKind::Interrupted, "Processing was stopped.") }
@@ -326,11 +394,11 @@ pub fn publish_within_time(publish: impl FnOnce() -> io::Result<PathBuf>) -> io:
 }
 
 // A thread cannot be killed, so a stopped job runs on detached while its helpers are terminated and every later publish is refused.
-fn run_timed<F>(input: PathBuf, max_duration: Duration, cancel: &CancelFlag, job: F) -> JobOutcome
+fn run_timed<F>(input: PathBuf, max_duration: Duration, cancel: &CancelFlag, sink: Option<PageSink>, job: F) -> JobOutcome
 where
     F: FnOnce() -> JobOutcome + Send + 'static,
 {
-    let clock = Arc::new(Clock { published: Mutex::new(Some(Vec::new())) });
+    let clock = Arc::new(Clock { published: Mutex::new(Some(Vec::new())), pages: Mutex::new(None), sink });
     let worker_clock = Arc::clone(&clock);
     let (sender, receiver) = mpsc::channel();
     let spawned = std::thread::Builder::new().name("toolbox-job".into()).spawn(move || {
@@ -364,7 +432,11 @@ where
         }
         Err(Stopped::TimedOut) => {
             let saved = saved();
-            let message = format!("Took longer than {} and was stopped. {}", duration_label(max_duration), saved_label(saved.len()));
+            let pages = *clock.pages.lock().unwrap_or_else(PoisonError::into_inner);
+            let message = match pages {
+                Some((done, total)) if total > 0 => file_time_limit_message(&input, done, total, saved.len()),
+                _ => format!("Took longer than {} and was stopped. {}", duration_label(max_duration), saved_label(saved.len())),
+            };
             JobOutcome::failure_with_outputs(input, saved, ToolError::limit_exceeded(LimitKind::Time, message))
         }
         Err(Stopped::Vanished) => {
@@ -383,7 +455,7 @@ fn saved_label(count: usize) -> String {
     }
 }
 
-fn bytes_label(bytes: u64) -> String {
+pub(crate) fn bytes_label(bytes: u64) -> String {
     match bytes {
         bytes if bytes >= GB && bytes % GB == 0 => format!("{} GB", count_label(bytes / GB)),
         bytes if bytes >= MB && bytes % MB == 0 => format!("{} MB", count_label(bytes / MB)),
@@ -392,7 +464,7 @@ fn bytes_label(bytes: u64) -> String {
     }
 }
 
-fn duration_label(duration: Duration) -> String {
+pub(crate) fn duration_label(duration: Duration) -> String {
     let plural = |count: u128, unit: &str| if count == 1 { format!("1 {unit}") } else { format!("{count} {unit}s") };
     match duration.as_millis() {
         millis if millis >= 60_000 && millis % 60_000 == 0 => plural(millis / 60_000, "minute"),
@@ -401,7 +473,7 @@ fn duration_label(duration: Duration) -> String {
     }
 }
 
-fn count_label(count: u64) -> String {
+pub(crate) fn count_label(count: u64) -> String {
     let digits = count.to_string();
     let mut label = String::with_capacity(digits.len() + digits.len() / 3);
     for (index, digit) in digits.chars().enumerate() {
@@ -454,6 +526,32 @@ pub mod fixtures {
             if self.filled > 0 { self.bytes.push(self.current); }
             self.bytes
         }
+    }
+
+    pub fn zip_with_deflated(name: &str, zlib: &[u8], expanded: u32) -> Vec<u8> {
+        let deflated = &zlib[2..zlib.len() - 4];
+        let header = |signature: u32, central: bool| {
+            let mut bytes = signature.to_le_bytes().to_vec();
+            if central { bytes.extend_from_slice(&20u16.to_le_bytes()); }
+            for value in [20u16, 0, 8, 0, 0] { bytes.extend_from_slice(&value.to_le_bytes()); }
+            for value in [0u32, deflated.len() as u32, expanded] { bytes.extend_from_slice(&value.to_le_bytes()); }
+            bytes.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            bytes.extend_from_slice(&0u16.to_le_bytes());
+            if central { bytes.extend_from_slice(&[0; 14]); }
+            bytes.extend_from_slice(name.as_bytes());
+            bytes
+        };
+        let mut zip = header(0x0403_4b50, false);
+        zip.extend_from_slice(deflated);
+        let central_at = zip.len() as u32;
+        let central = header(0x0201_4b50, true);
+        let central_len = central.len() as u32;
+        zip.extend(central);
+        zip.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
+        for value in [0u16, 0, 1, 1] { zip.extend_from_slice(&value.to_le_bytes()); }
+        for value in [central_len, central_at] { zip.extend_from_slice(&value.to_le_bytes()); }
+        zip.extend_from_slice(&0u16.to_le_bytes());
+        zip
     }
 
     pub fn pdf_with_stream(stream: &[u8]) -> Vec<u8> {
@@ -543,6 +641,29 @@ mod tests {
     }
 
     #[test]
+    fn convert_to_pdf_records_limits_for_each_family() {
+        let text = ToolLimits { max_bytes: 50 * MB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES };
+        let packaged = ToolLimits { max_bytes: 250 * MB, ..text };
+        for name in ["notes.txt", "notes.log", "README.MD", "notes.markdown", "page.html", "page.htm", "letter.rtf", "table.csv", "table.tsv"] {
+            assert_eq!(convert_to_pdf(Path::new(name)), text, "{name}");
+        }
+        for name in ["report.docx", "report.odt", "sheet.xlsx", "sheet.ods", "deck.pptx", "deck.odp", "book.EPUB"] {
+            assert_eq!(convert_to_pdf(Path::new(name)), packaged, "{name}");
+        }
+        assert_eq!(convert_to_pdf(Path::new("already.pdf")), recorded("convert_to_pdf").unwrap());
+    }
+
+    #[test]
+    fn made_pages_are_held_to_the_page_limit() {
+        let limits = convert_to_pdf(Path::new("notes.txt"));
+        assert!(limits.check_made_pages(5_000).is_ok());
+        let error = limits.check_made_pages(5_001);
+        assert_eq!(limit_of(error.clone()), Some(LimitKind::PageCount));
+        assert_eq!(error.unwrap_err().message, "Would make more than 5,000 pages, over the limit for one PDF. Split it into smaller files and try again.");
+        assert!(IMAGE.check_made_pages(1_000_000).is_ok());
+    }
+
+    #[test]
     fn messages_state_the_recorded_values_in_plain_units() {
         assert_eq!(bytes_label(GB), "1 GB");
         assert_eq!(bytes_label(250 * MB), "250 MB");
@@ -604,7 +725,7 @@ mod tests {
         let (late_sender, late_result) = mpsc::channel();
         let limits = ToolLimits { max_duration: Duration::from_millis(100), ..small() };
         let started = Instant::now();
-        let outcome = limits.run_each(input.clone(), &CancelFlag::default(), {
+        let outcome = limits.run_each(input.clone(), &CancelFlag::default(), None, {
             let (first, late) = (first.clone(), late.clone());
             move |input| {
                 publish_within_time(|| std::fs::write(&first, b"1").map(|()| first.clone())).unwrap();
@@ -642,7 +763,7 @@ mod tests {
             let cancel = cancel.clone();
             std::thread::spawn(move || { std::thread::sleep(Duration::from_millis(150)); cancel.cancel(); Instant::now() })
         };
-        let outcome = small().run_each(input.clone(), &cancel, {
+        let outcome = small().run_each(input.clone(), &cancel, None, {
             let (first, late) = (first.clone(), late.clone());
             move |input| {
                 publish_within_time(|| std::fs::write(&first, b"1").map(|()| first.clone())).unwrap();
@@ -669,8 +790,43 @@ mod tests {
     }
 
     #[test]
+    fn a_timed_out_job_says_which_page_it_stopped_at_and_stops_reporting_pages() {
+        let root = sandbox("timed-pages");
+        let input = root.join("long.pdf");
+        std::fs::write(&input, b"%PDF-1.7\n").unwrap();
+        let reported = Arc::new(Mutex::new(Vec::new()));
+        let sink: PageSink = { let reported = Arc::clone(&reported); Arc::new(move |done, total| reported.lock().unwrap().push((done, total))) };
+        let (late_sender, late_done) = mpsc::channel();
+        let limits = ToolLimits { max_duration: Duration::from_millis(150), ..small() };
+        let outcome = limits.run_each(input.clone(), &CancelFlag::default(), Some(sink), move |input| {
+            report_pages(0, 480);
+            report_pages(211, 480);
+            std::thread::sleep(Duration::from_millis(400));
+            report_pages(212, 480);
+            let _ = late_sender.send(());
+            JobOutcome::succeeded(input, Vec::new(), "done")
+        });
+
+        let error = outcome.error().expect("the file is stopped at the limit");
+        assert_eq!(error.kind, ErrorKind::LimitExceeded { limit: LimitKind::Time });
+        assert_eq!(
+            error.message,
+            "Stopped at page 212 of 480: it reached the time limit for one file. Nothing was saved. Split it into smaller PDFs, then try again.",
+        );
+        late_done.recv().unwrap();
+        assert_eq!(*reported.lock().unwrap(), vec![(0, 480), (211, 480)], "pages after the stop are not reported");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn page_reports_outside_a_timed_job_are_ignored() {
+        report_pages(1, 2);
+        assert!(!job_stopped());
+    }
+
+    #[test]
     fn a_panicking_job_fails_only_its_own_file() {
-        let outcome = small().run_each(PathBuf::from("missing.png"), &CancelFlag::default(), |_| panic!("decoder bug"));
+        let outcome = small().run_each(PathBuf::from("missing.png"), &CancelFlag::default(), None, |_| panic!("decoder bug"));
         assert!(matches!(outcome.error(), Some(ToolError { kind: ErrorKind::Processing, .. })));
         assert_eq!(outcome.error().unwrap().message, "Processing stopped unexpectedly. Nothing was saved.");
     }
