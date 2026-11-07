@@ -1,6 +1,7 @@
 export const colorTokens = {
   documentText: "--pdf-document-text",
   documentHighlight: "--pdf-document-highlight",
+  documentWatermark: "--pdf-document-watermark",
 } as const;
 
 export type ColorTokenName = (typeof colorTokens)[keyof typeof colorTokens];
