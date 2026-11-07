@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use lopdf::{dictionary, Dictionary, Document, Object, ObjectId, Stream};
 use serde::Serialize;
 use crate::kit::contracts::ToolError;
-use super::{compress_bytes, embed_text_fonts, err, geometry, layout_text_for, load, resolve, text_content, Kind, Rect, SceneObject, TextAlign, TextLayout, TEXT_LINE_HEIGHT};
+use super::{compress_bytes, embed_text_fonts, err, geometry, layout_text_for, load, resolve, text_content, Kind, Layer, Rect, SceneObject, TextAlign, TextLayout, TEXT_LINE_HEIGHT};
 
 const READ_ONLY: i64 = 1;
 const REQUIRED: i64 = 1 << 1;
@@ -454,6 +454,10 @@ fn read(doc: &Document) -> Result<FormInspection, String> {
 enum Fill { Text { value: Object, red: bool }, Button(Vec<u8>), List(Vec<usize>) }
 
 pub(super) struct FormPlan { fills: Vec<(FormField, Fill)>, objects: HashMap<(usize, usize), SceneObject>, layouts: HashMap<(usize, usize), TextLayout> }
+impl FormPlan {
+    /// A plan without fills leaves the document as it was, so it does not name the export.
+    pub(super) fn changes_document(&self) -> bool { !self.fills.is_empty() }
+}
 
 struct Appearance { size: f32, color: String }
 
@@ -497,9 +501,9 @@ fn text_object(field: &FormField, text: &str, size: (f32, f32), multiline: bool)
         Rect { x: PADDING, y: (height - line) / 2., width: (width - 2. * PADDING).max(1.), height: line }
     };
     SceneObject {
-        kind: Kind::Text, rect, text: text.into(), font_size, color: "#000000".into(), opacity: 1., strokes: Vec::new(),
-        shape: None, highlight_mode: None, signature_mode: None, signature_path: None, font_family: None, watermark_pattern: None,
-        bold: false, italic: false, align: field.align, page_range: None,
+        kind: Kind::Text, rect, text: text.into(), font_size, color: "#000000".into(), opacity: 1.,
+        shape: None, highlight_mode: None, signature_mode: None, signature_path: None, font_family: None, watermark: None, layer: Layer::Front,
+        bold: false, italic: false, align: field.align, page_range: None, page_numbers: None,
     }
 }
 
@@ -603,7 +607,8 @@ fn text_appearance(doc: &mut Document, plan: &FormPlan, fonts: &HashMap<&'static
     let (width, height) = widget_size(doc, id)?;
     let layout = &plan.layouts[&key];
     let (font_id, remapper) = &fonts[layout.font.name];
-    let content = format!("/Tx BMC\nq\n1 0 0 -1 0 {height} cm\n{under}{color}\n{}Q\nEMC\n", text_content(&plan.objects[&key], layout, FONT_RESOURCE, remapper));
+    let o = &plan.objects[&key];
+    let content = format!("/Tx BMC\nq\n1 0 0 -1 0 {height} cm\n{under}{color}\n{}Q\nEMC\n", text_content(&o.rect, o.align, o.font_size, layout, FONT_RESOURCE, remapper));
     let resources = dictionary! { "Font" => dictionary! { FONT_RESOURCE => *font_id } };
     let appearance = form_xobject(doc, width, height, resources, &content)?;
     doc.get_dictionary_mut(id).map_err(err)?.set("AP", dictionary! { "N" => appearance });
@@ -773,7 +778,7 @@ mod tests {
 
     fn fill(input: &Path, scene: PdfScene, values: serde_json::Value) -> crate::kit::contracts::JobOutcome {
         let sections = serde_json::from_value(serde_json::json!({ "formValues": values })).unwrap();
-        export(&ExportRequest { paths: vec![input.to_path_buf()], scene, output_location: OutputLocation::AlongsideInput, sections }, input.to_path_buf())
+        export(&ExportRequest { paths: vec![input.to_path_buf()], scene, output_location: OutputLocation::AlongsideInput, output_path: None, sections }, input.to_path_buf())
     }
 
     fn values() -> serde_json::Value {
@@ -957,7 +962,7 @@ mod tests {
         scene.pages[0].objects.push(note);
         let outcome = fill(&input, scene, serde_json::json!([{ "name": "agree", "value": false }]));
         assert!(outcome.error().is_none(), "{:?}", outcome.error());
-        assert_eq!(outcome.output_paths(), [temp.0.join("form-edited-1.pdf")]);
+        assert_eq!(outcome.output_paths(), [temp.0.join("form-edited.pdf")]);
         let doc = Document::load(&outcome.output_paths()[0]).unwrap();
         let agree = field(&doc, b"agree");
         assert_eq!((agree.get(b"V").unwrap().as_name().unwrap(), agree.get(b"AS").unwrap().as_name().unwrap()), (&b"Off"[..], &b"Off"[..]));
@@ -1032,7 +1037,7 @@ mod tests {
 
     fn export_sections(input: &Path, sections: serde_json::Value) -> crate::kit::contracts::JobOutcome {
         let sections = serde_json::from_value(sections).unwrap();
-        export(&ExportRequest { paths: vec![input.to_path_buf()], scene: identity_scene(), output_location: OutputLocation::AlongsideInput, sections }, input.to_path_buf())
+        export(&ExportRequest { paths: vec![input.to_path_buf()], scene: identity_scene(), output_location: OutputLocation::AlongsideInput, output_path: None, sections }, input.to_path_buf())
     }
 
     fn subtypes(path: &Path) -> Vec<Vec<u8>> {
@@ -1095,7 +1100,7 @@ mod tests {
         let outcome = export_sections(&input, serde_json::json!({ "formValues": [{ "name": "name", "value": "Ada Lovelace" }, { "name": "agree", "value": true }], "flatten": "forms" }));
         assert!(outcome.error().is_none(), "{:?}", outcome.error());
         let output = &outcome.output_paths()[0];
-        assert_eq!(output, &temp.0.join("form-edited-1.pdf"));
+        assert_eq!(output, &temp.0.join("form-edited.pdf"));
         assert!(subtypes(output).is_empty());
         assert!(!Document::load(output).unwrap().catalog().unwrap().has(b"AcroForm"));
         assert_eq!(fs::read(&input).unwrap(), original);
