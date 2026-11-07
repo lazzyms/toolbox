@@ -22,7 +22,7 @@ const fontStyles: readonly FontStyle[] = ["regular", "bold", "italic", "boldItal
 
 const fontSources: readonly FontSource[] = ["embedded", "system", "bundled fallback", "bundled default"];
 
-const limitKinds: readonly LimitKind[] = ["fileSize", "pageCount", "time", "decompression"];
+const limitKinds: readonly LimitKind[] = ["fileSize", "pageCount", "time", "decompression", "textLength"];
 
 const skipCodes: readonly SkipCode[] = [
   "notProtected",
@@ -33,6 +33,7 @@ const skipCodes: readonly SkipCode[] = [
   "textAlreadyPresent",
   "noEffectiveChange",
   "unsupportedFormat",
+  "needsOcr",
   "cancelled",
 ];
 
@@ -41,6 +42,8 @@ const warningDetailKeys: Record<WarningCode, readonly string[] | null> = {
   fontSubstituted: ["requestedFamily", "actualFamily"],
   renamedToAvoidReplacing: ["chosenName", "finalName"],
   precisionReduced: null,
+  bookmarksNotCarried: ["into"],
+  tagsNotCarried: ["into"],
   omittedContent: null,
   approximateLayout: null,
 };
@@ -63,6 +66,16 @@ const member = <T extends string>(value: unknown, allowed: readonly T[], path: s
 
 const texts = (value: unknown, path: string): string[] =>
   Array.isArray(value) ? value.map((item, index) => text(item, `${path}[${index}]`)) : fail(path, "an array");
+
+const byteSizes = (outcome: Json, path: string): { originalBytes?: number; outputBytes?: number } => {
+  const sizes: { originalBytes?: number; outputBytes?: number } = {};
+  for (const key of ["originalBytes", "outputBytes"] as const) {
+    const value = outcome[key];
+    if (value === null || value === undefined) continue;
+    sizes[key] = Number.isSafeInteger(value) && (value as number) >= 0 ? (value as number) : fail(`${path}.${key}`, "a non-negative whole number of bytes");
+  }
+  return sizes;
+};
 
 const parsePointer = (value: unknown, path: string): OutcomePointer | null => {
   if (value === null || value === undefined) return null;
@@ -134,6 +147,7 @@ export const parseJobOutcome = (value: unknown, path = "outcome"): JobOutcome =>
             ? outcome.fonts.map((font, index) => parseFontUse(font, `${path}.fonts[${index}]`))
             : fail(`${path}.fonts`, "an array"),
         }),
+    ...byteSizes(outcome, path),
   };
   const outputPaths = texts(outcome.outputPaths, `${path}.outputPaths`);
   const hasFailure = outcome.failure !== null && outcome.failure !== undefined;
