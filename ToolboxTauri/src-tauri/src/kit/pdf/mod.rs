@@ -12,6 +12,7 @@ pub mod layout;
 pub mod markdown;
 pub mod html;
 pub mod epub;
+pub mod mobi;
 pub mod rtf;
 pub mod wordprocessing;
 pub mod docx;

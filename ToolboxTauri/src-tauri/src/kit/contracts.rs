@@ -401,6 +401,11 @@ pub fn partition_command_inputs(command: &str, paths: &[PathBuf]) -> Result<Vali
     let Some(capability) = native_capability(command) else {
         return Err(vec![JobOutcome::failure(PathBuf::new(), ToolError::invalid_input(format!("Unknown native command: {command}.")))]);
     };
+    partition_inputs(capability, paths)
+}
+
+fn partition_inputs(capability: &NativeCapability, paths: &[PathBuf]) -> Result<ValidatedCommandInputs, Vec<JobOutcome>> {
+    let command = &capability.command;
     if paths.is_empty() {
         let error = if capability.native_available { ToolError::invalid_input("Select at least one input file.") } else { ToolError::unavailable(format!("Native command {command} is unavailable in this build.")) };
         return Err(vec![JobOutcome::failure(PathBuf::new(), error)]);
@@ -1101,24 +1106,26 @@ mod tests {
         assert_eq!(families, [
             ("plain-text", true, false), ("pdf", true, false), ("word", true, false), ("rich-text", true, false), ("spreadsheets", true, false),
             ("presentations", true, false), ("markdown", true, false), ("web-pages", true, false), ("tables", true, false),
-            ("ebooks", true, false), ("legacy-office", true, true), ("mobi", false, false),
+            ("ebooks", true, false), ("legacy-office", true, true), ("mobi", true, true),
         ]);
         assert!(convert.native_available && convert.output_suffix.is_empty() && !convert.many_to_one);
         assert_eq!(convert.input_cardinality, InputCardinality::Multiple);
 
         let paths = ["/in/notes.txt", "/in/report.PDF", "/in/book.mobi", "/in/book.epub", "/in/photo.png"].map(PathBuf::from);
         let validation = partition_command_inputs("convert_to_pdf", &paths).unwrap();
-        assert_eq!(validation.accepted.iter().map(|(index, _)| *index).collect::<Vec<_>>(), [0, 1, 3]);
-        let rejected = validation.rejected.iter().map(|(index, outcome)| {
-            let error = outcome.error().unwrap();
-            (*index, error.kind.clone(), error.message.as_str())
-        }).collect::<Vec<_>>();
-        assert_eq!(rejected[0], (2, ErrorKind::Unavailable, "MOBI comes in a later update."));
-        assert_eq!((rejected[1].0, &rejected[1].1), (4, &ErrorKind::InvalidInput));
-        assert_eq!(rejected.len(), 2);
+        assert_eq!(validation.accepted.iter().map(|(index, _)| *index).collect::<Vec<_>>(), [0, 1, 2, 3]);
+        assert_eq!(validation.rejected.iter().map(|(index, outcome)| (*index, outcome.error().unwrap().kind.clone())).collect::<Vec<_>>(), [(4, ErrorKind::InvalidInput)]);
 
-        assert!(["/in/old.doc", "/in/OLD.XLS", "/in/deck.ppt"].iter().all(|path| is_basic_fidelity("convert_to_pdf", Path::new(path))));
-        assert!(["/in/new.docx", "/in/notes.txt", "/in/none"].iter().all(|path| !is_basic_fidelity("convert_to_pdf", Path::new(path))));
+        // A family that hasn't shipped is turned away by name while the rest of the batch goes ahead.
+        let samples: serde_json::Value = serde_json::from_str(include_str!("../../../shared/capability-family-samples.json")).unwrap();
+        let sample = parse_capability_registry(&format!("[{}]", samples["valid"]["row"])).unwrap().remove(0);
+        let validation = partition_inputs(&sample, &["/in/notes.md", "/in/report.docx"].map(PathBuf::from)).unwrap();
+        assert_eq!(validation.accepted.iter().map(|(index, _)| *index).collect::<Vec<_>>(), [1]);
+        let error = validation.rejected[0].1.error().unwrap();
+        assert_eq!((validation.rejected[0].0, error.kind.clone(), error.message.as_str()), (0, ErrorKind::Unavailable, "MD comes in a later update."));
+
+        assert!(["/in/old.doc", "/in/OLD.XLS", "/in/deck.ppt", "/in/book.MOBI"].iter().all(|path| is_basic_fidelity("convert_to_pdf", Path::new(path))));
+        assert!(["/in/new.docx", "/in/book.epub", "/in/notes.txt", "/in/none"].iter().all(|path| !is_basic_fidelity("convert_to_pdf", Path::new(path))));
         assert!(!is_basic_fidelity("compress_pdf", Path::new("/in/old.doc")));
     }
 
