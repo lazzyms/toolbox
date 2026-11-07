@@ -100,6 +100,16 @@ impl BatchRunner {
         Self::run_with_limits(events, command, inputs, location, limits::recorded(command), request, job)
     }
 
+    /// Runs a job that only reads its inputs. It saves nothing, so no output folder is probed and nothing is created.
+    pub fn inspect<R, F>(events: &RunEvents, command: &str, inputs: Vec<PathBuf>, request: &Arc<R>, job: F) -> Vec<JobOutcome>
+    where
+        R: Send + Sync + 'static,
+        F: Fn(&R, PathBuf) -> JobOutcome + Send + Sync + 'static,
+    {
+        let limits = limits::recorded(command);
+        Self::run_batch(events, command, inputs, None, move |_| limits, request, job)
+    }
+
     pub fn run_with_limits<R, F>(
         events: &RunEvents,
         command: &str,
@@ -131,6 +141,24 @@ impl BatchRunner {
         L: Fn(&Path) -> Option<ToolLimits> + Sync,
         F: Fn(&R, PathBuf) -> JobOutcome + Send + Sync + 'static,
     {
+        Self::run_batch(events, command, inputs, Some(location), limits_for, request, job)
+    }
+
+    /// `location` is where outputs go; `None` means the job writes nothing.
+    fn run_batch<R, L, F>(
+        events: &RunEvents,
+        command: &str,
+        inputs: Vec<PathBuf>,
+        location: Option<&OutputLocation>,
+        limits_for: L,
+        request: &Arc<R>,
+        job: F,
+    ) -> Vec<JobOutcome>
+    where
+        R: Send + Sync + 'static,
+        L: Fn(&Path) -> Option<ToolLimits> + Sync,
+        F: Fn(&R, PathBuf) -> JobOutcome + Send + Sync + 'static,
+    {
         // Every result for a file read in basic fidelity says so, whichever way the file settled.
         let label = |outcome: JobOutcome| {
             if is_basic_fidelity(command, &outcome.input_path) { outcome.with_basic_fidelity() } else { outcome }
@@ -144,8 +172,10 @@ impl BatchRunner {
                 let mut writable = HashMap::new();
                 let mut runnable = Vec::with_capacity(validation.accepted.len());
                 for (index, path) in validation.accepted {
-                    let directory = location.directory_for(&path).to_path_buf();
-                    let is_writable = *writable.entry(directory).or_insert_with_key(|directory| !is_read_only(directory));
+                    let is_writable = location.is_none_or(|location| {
+                        let directory = location.directory_for(&path).to_path_buf();
+                        *writable.entry(directory).or_insert_with_key(|directory| !is_read_only(directory))
+                    });
                     if is_writable {
                         runnable.push((index, path));
                     } else {

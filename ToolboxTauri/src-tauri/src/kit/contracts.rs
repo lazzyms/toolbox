@@ -69,6 +69,36 @@ impl fmt::Debug for PasswordRequest {
     }
 }
 
+/// An optional open password for the batch plus per-file overrides, for tools that open a PDF
+/// with a password only when it needs one. An override wins, and an empty password counts as
+/// none, so files that open without one are read directly.
+#[derive(Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenPasswords {
+    #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default)]
+    pub password_overrides: HashMap<PathBuf, String>,
+}
+
+impl OpenPasswords {
+    pub fn password_for(&self, path: &Path) -> Option<&str> {
+        self.password_overrides.get(path).or(self.password.as_ref()).map(String::as_str).filter(|password| !password.is_empty())
+    }
+}
+
+impl fmt::Debug for OpenPasswords {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut overridden = self.password_overrides.keys().collect::<Vec<_>>();
+        overridden.sort();
+        formatter
+            .debug_struct("OpenPasswords")
+            .field("password", &self.password.as_ref().map(|_| "<redacted>"))
+            .field("password_overrides", &overridden)
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompressImagesRequest {
@@ -1052,6 +1082,16 @@ mod tests {
         assert!(rejected[1].error().is_some_and(|error| error.message.contains("Accepted extensions")));
         assert!(!native_capability("blur_faces").unwrap().native_available);
         assert!(!native_capability("remove_image_background").unwrap().native_available);
+        let privacy = native_capability("inspect_pdf_privacy").unwrap();
+        assert_eq!(privacy.accepted_extensions, [".pdf"]);
+        assert_eq!(privacy.input_cardinality, InputCardinality::Multiple);
+        assert!(privacy.native_available && !privacy.many_to_one && !privacy.supports_page_selection && !privacy.supports_preview);
+        assert_eq!(privacy.output_suffix, "", "privacy inspection only reads, so it names no output");
+        let properties = native_capability("edit_pdf_properties").unwrap();
+        assert_eq!(properties.accepted_extensions, [".pdf"]);
+        assert_eq!(properties.input_cardinality, InputCardinality::Multiple);
+        assert!(properties.native_available && !properties.many_to_one && !properties.supports_page_selection && !properties.supports_preview);
+        assert_eq!(properties.output_suffix, "-edited");
     }
 
     #[test]

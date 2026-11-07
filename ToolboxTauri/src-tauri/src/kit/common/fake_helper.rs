@@ -40,6 +40,15 @@ impl FakeHelper {
         Self::write(directory, name, delegate, &stall)
     }
 
+    /// Like `install`, but a call whose arguments mention `marker` fails after echoing its standard
+    /// input to stdout and stderr, as qpdf does with an argument it does not recognize.
+    pub fn install_echoing_input_on(directory: &Path, name: &str, delegate: Option<&Path>, marker: &str) -> Self {
+        let echo = format!(
+            "case \"$*\" in *'{marker}'*) input=$(cat); printf 'qpdf: unrecognized argument %s\\n' \"$input\"; printf 'qpdf: unrecognized argument %s\\n' \"$input\" >&2; exit 2;; esac\n"
+        );
+        Self::write(directory, name, delegate, &echo)
+    }
+
     fn write(directory: &Path, name: &str, delegate: Option<&Path>, before_hand_off: &str) -> Self {
         let records = directory.join(format!("{name}-calls"));
         std::fs::create_dir_all(&records).unwrap();

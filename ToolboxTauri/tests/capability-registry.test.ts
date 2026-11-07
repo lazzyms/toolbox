@@ -64,13 +64,38 @@ test("UI capabilities are the shared native contract facts", () => {
   assert.equal(capabilitiesByCommand.get("ocr_pdf")?.inputCardinality, "multiple");
   assert.equal(capabilitiesByCommand.get("ocr_pdf")?.outputSuffix, "-ocr");
   assert.deepEqual(capabilitiesByCommand.get("ocr_pdf")?.acceptedExtensions, [".pdf", ".png", ".jpg", ".jpeg", ".webp", ".heic", ".tif", ".tiff"]);
+  assert.deepEqual(capabilitiesByCommand.get("inspect_pdf_privacy"), {
+    command: "inspect_pdf_privacy",
+    acceptedExtensions: [".pdf"],
+    inputCardinality: "multiple",
+    supportsPageSelection: false,
+    supportsPreview: false,
+    nativeAvailability: "available",
+    outputSuffix: "",
+    manyToOne: false,
+  });
+  assert.equal(UtilityRegistry.find(({ id }) => id === "pdf-privacy")?.command, "inspect_pdf_privacy");
+  assert.deepEqual(capabilitiesByCommand.get("edit_pdf_properties"), {
+    command: "edit_pdf_properties",
+    acceptedExtensions: [".pdf"],
+    inputCardinality: "multiple",
+    supportsPageSelection: false,
+    supportsPreview: false,
+    nativeAvailability: "available",
+    outputSuffix: "-edited",
+    manyToOne: false,
+  });
+  assert.equal(UtilityRegistry.find(({ id }) => id === "pdf-properties")?.command, "edit_pdf_properties");
   assert.equal(capabilitiesByCommand.get("blur_faces")?.nativeAvailability, "unavailable");
   assert.equal(capabilitiesByCommand.get("remove_image_background")?.nativeAvailability, "unavailable");
 });
 
 test("every tool declares one output suffix and many-to-one tools take ordered inputs", () => {
+  // Read-only tools write no file, so they declare an empty suffix.
+  const readOnly = new Set(["inspect_pdf_privacy"]);
   for (const capability of SharedCapabilityRegistry) {
-    assert.match(capability.outputSuffix, capability.formatFamilies ? /^$/ : /^-[a-z0-9]+(-[a-z0-9]+)*$/, capability.command);
+    if (readOnly.has(capability.command)) assert.equal(capability.outputSuffix, "", capability.command);
+    else assert.match(capability.outputSuffix, capability.formatFamilies ? /^$/ : /^-[a-z0-9]+(-[a-z0-9]+)*$/, capability.command);
     assert.equal(
       capability.manyToOne,
       capability.inputCardinality === "ordered",
@@ -142,16 +167,17 @@ test("workspace membership covers every registered utility exactly once", () => 
   );
 });
 
-test("workspace entries group editor tools into one entry and list More tools last", () => {
+test("workspace entries group editor tools into one entry and list labelled groups after the main tools", () => {
   const entryIds = (workspaceId: string, options?: { groupEditor?: boolean }) => {
     const workspace = ToolWorkspaceRegistry.find(({ id }) => id === workspaceId)!;
     return workspaceEntries(workspace, toolsForWorkspace(workspace), options)
-      .map((entry) => `${entry.more ? "more:" : ""}${entry.tools.map(({ id }) => id).join("+")}`);
+      .map((entry) => `${entry.group ? `${entry.group.toLowerCase()}:` : ""}${entry.tools.map(({ id }) => id).join("+")}`);
   };
 
   assert.deepEqual(entryIds("pdf-editor"), [
     "pdf-edit+pdf-watermark+pdf-sign+pdf-remove-pages",
     "pdf-organize", "pdf-merge", "pdf-split", "pdf-crop", "pdf-page-numbers", "pdf-redact",
+    "details:pdf-privacy", "details:pdf-properties",
     "more:pdf-rotate", "more:pdf-repair", "more:pdf-compare", "more:pdf-extract-pages",
   ]);
   assert.deepEqual(entryIds("image-editor"), ["resize+crop+rotate+image-tone+image-watermark", "heic-convert", "image-metadata"]);

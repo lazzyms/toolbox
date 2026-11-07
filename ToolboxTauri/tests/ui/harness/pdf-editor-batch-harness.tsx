@@ -5,12 +5,12 @@ import { UtilityRegistry, toolsForWorkspace, workspaceById } from "../../../src/
 import { ToolAvailabilityProvider } from "../../../src/ToolAvailabilityContext";
 import { OutputLocationContext } from "../../../src/outputLocation";
 import { PDFEditorWorkspaceView } from "../../../src/views/PDFEditorWorkspaceView";
-import type { PdfEditorBatchTool, PdfEditorBatchTools } from "../../../src/features/pdf-editor/batchTools";
-import type { AtomicToolId, ToolCommand, ToolDefinition, ToolWorkspaceDefinition } from "../../../src/contracts";
+import { pdfEditorBatchTools, type PdfEditorBatchTool, type PdfEditorBatchTools } from "../../../src/features/pdf-editor/batchTools";
+import type { AtomicToolId, OutputLocation, ToolCommand, ToolDefinition, ToolWorkspaceDefinition } from "../../../src/contracts";
 import type { ToolAvailabilitySnapshot } from "../../../src/toolFlags";
 import "../../../src/styles/app.css";
 
-// No shipped PDF Editor tool uses the batch surface yet, so the harness adds one that exists only in tests.
+// Besides the shipped batch tools, the harness adds an export tool that exists only in tests.
 const testToolId = "pdf-test-batch" as AtomicToolId;
 const testTool: ToolDefinition = {
   id: testToolId,
@@ -39,20 +39,29 @@ const testBatchTool: PdfEditorBatchTool = {
   description: "Runs the test command on every PDF.",
   request: (paths, outputLocation) => ({ paths, outputLocation, mode: "test" }),
 };
-const batchTools: PdfEditorBatchTools = { [testToolId]: testBatchTool };
+const batchTools: PdfEditorBatchTools = { ...pdfEditorBatchTools, [testToolId]: testBatchTool };
 
 const pdfEditor = workspaceById("pdf-editor")!;
 const workspace: ToolWorkspaceDefinition = { ...pdfEditor, toolIds: [...pdfEditor.toolIds, testToolId] };
 const tools = [...toolsForWorkspace(pdfEditor), testTool];
 
-const everyToolEnabled = {
+// ?tool= opens another rail tool first, ?folder= saves to a custom folder instead of next to each file,
+// and ?disabled= turns a tool off.
+const query = new URLSearchParams(window.location.search);
+const availability = {
   platform: "macos",
-  enabledByTool: Object.fromEntries([...UtilityRegistry, testTool].map((tool) => [tool.id, true])),
+  enabledByTool: Object.fromEntries([...UtilityRegistry, testTool].map((tool) => [tool.id, !query.getAll("disabled").includes(tool.id)])),
 } as ToolAvailabilitySnapshot;
 
-// Like the main page, a rail switch reopens the new tool with the files that were open.
+const firstTool = tools.find((tool) => tool.id === query.get("tool")) ?? testTool;
+const folder = query.get("folder");
+const outputLocation: OutputLocation = folder ? { customFolder: folder } : "alongsideInput";
+
+// Like the main page, a rail switch reopens the new tool with the files that were open, and a
+// report pointer opens its tool with that report's file. Pointer navigations are recorded for tests.
+const navigations: unknown[] = ((window as unknown as { navigations: unknown[] }).navigations = []);
 const Harness = () => {
-  const [active, setActive] = useState({ tool: testTool, paths: [] as readonly string[] });
+  const [active, setActive] = useState({ tool: firstTool, paths: [] as readonly string[] });
   const [openPaths, setOpenPaths] = useState<readonly string[]>([]);
   return (
     <div className="app-shell app-shell--view">
@@ -66,15 +75,25 @@ const Harness = () => {
         />
       </aside>
       <main className="command-center" aria-label="Tool detail">
-        <PDFEditorWorkspaceView key={active.tool.id} utility={active.tool} initialPaths={active.paths} onFilesChange={setOpenPaths} batchTools={batchTools} />
+        <PDFEditorWorkspaceView
+          key={active.tool.id}
+          utility={active.tool}
+          initialPaths={active.paths}
+          onFilesChange={setOpenPaths}
+          onNavigate={(navigation) => {
+            navigations.push(navigation);
+            setActive({ tool: tools.find((tool) => tool.id === navigation.utilityId)!, paths: navigation.initialPaths });
+          }}
+          batchTools={batchTools}
+        />
       </main>
     </div>
   );
 };
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  <ToolAvailabilityProvider snapshot={everyToolEnabled}>
-    <OutputLocationContext.Provider value="alongsideInput">
+  <ToolAvailabilityProvider snapshot={availability}>
+    <OutputLocationContext.Provider value={outputLocation}>
       <Harness />
     </OutputLocationContext.Provider>
   </ToolAvailabilityProvider>,

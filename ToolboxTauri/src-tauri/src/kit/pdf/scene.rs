@@ -1,10 +1,10 @@
-use std::{collections::{BTreeSet, HashMap, HashSet}, fs::{self, OpenOptions}, io::Write, path::{Path, PathBuf}, process::Command, sync::atomic::{AtomicU64, Ordering}, time::{Instant}};
+use std::{collections::{BTreeSet, HashMap, HashSet}, fs::OpenOptions, io::Write, path::{Path, PathBuf}, process::Command, time::{Instant}};
 use base64::Engine;
 use flate2::{write::ZlibEncoder, Compression};
 use lopdf::{dictionary, Document, Object, ObjectId, Stream};
 use quick_xml::{events::Event, escape::unescape, Reader as XmlReader, XmlVersion};
 use serde::{Deserialize, Serialize};
-use crate::kit::{common::{JobOutcome, OutputLocation, OutputNaming}, contracts::ToolError};
+use crate::kit::{common::{JobOutcome, OutputLocation, OutputNaming, TempDir}, contracts::ToolError};
 use crate::packs::uninstall::RunPacks;
 use super::script_text::{self, ScriptFonts, UsedGlyphs};
 use super::metadata::{PdfDocumentMetadata, PdfPageMetadata, PdfTextRun};
@@ -831,22 +831,6 @@ fn apply_overlays(doc:&mut Document, scene:&PdfScene, OverlayPlan { preflight, i
     Ok(())
 }
 
-static NONCE:AtomicU64=AtomicU64::new(0);
-struct TempDir(PathBuf);
-impl TempDir {
-    fn new()->Result<Self,String> {
-        for _ in 0..1000 {
-            let path=std::env::temp_dir().join(format!("toolbox-scene-{}-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(err)?.as_nanos(),NONCE.fetch_add(1,Ordering::Relaxed)));
-            let mut builder = fs::DirBuilder::new();
-            #[cfg(unix)] {
-                use std::os::unix::fs::DirBuilderExt;
-                builder.mode(0o700);
-            }
-            match builder.create(&path) { Ok(())=>return Ok(Self(path)),Err(e) if e.kind()==std::io::ErrorKind::AlreadyExists=>continue,Err(e)=>return Err(err(e)) }
-        } Err("Could not reserve preview directory".into())
-    }
-}
-impl Drop for TempDir { fn drop(&mut self) { let _=fs::remove_dir_all(&self.0); } }
 fn renderer()->Result<PathBuf,String> {
     crate::kit::resources::resolve_helper(&crate::kit::resources::PDF_RENDERER)
 }
@@ -1009,6 +993,7 @@ pub fn export(run:&SceneRun,input:PathBuf)->JobOutcome {
 mod tests {
     use super::*;
     use crate::kit::common::OutputNaming;
+    use std::fs;
 
     fn no_packs() -> RunPacks { RunPacks::new(Err("No packs in this test.".into()), "0.0.0", Err("No catalog in this test.".into())) }
     fn compose(path: &Path, scene: &PdfScene) -> Result<Document, String> { super::compose(path, scene, &ScriptFonts::base()) }

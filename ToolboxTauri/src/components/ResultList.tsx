@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Check, CircleMinus, CircleX, Clock, Info, KeyRound, LoaderCircle, RotateCcw, TriangleAlert } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -72,7 +72,7 @@ const segmentTone = (file: LiveFile): SegmentTone => {
     return file.outcome.state === "skipped" ? "skip" : "fail";
 };
 
-const revealButtonLabel = () => {
+export const revealButtonLabel = () => {
     const platform = navigator.platform.toLowerCase();
     if (platform.includes("mac")) return "Show in Finder";
     if (platform.includes("win")) return "Show in File Explorer";
@@ -102,9 +102,11 @@ interface ResultListProps {
     namedByOutput?: boolean;
     onRetry?: (inputPath: string) => Promise<void>;
     onRetryWithPassword?: (inputPath: string, password: string) => Promise<void>;
+    /** Replaces the finished summary line. */
+    summary?: ReactNode;
 }
 
-export const ResultList = ({ results, progress, loading, resultVerb, resultNoun, runningVerb, runningDetail, progressByPage = false, signatureRemovedNote, live, namedByOutput = false, onRetry, onRetryWithPassword }: ResultListProps) => {
+export const ResultList = ({ results, progress, loading, resultVerb, resultNoun, runningVerb, runningDetail, progressByPage = false, signatureRemovedNote, live, namedByOutput = false, onRetry, onRetryWithPassword, summary: customSummary }: ResultListProps) => {
     const [actionStates, setActionStates] = useState<Record<number, RowActionState>>({});
     const [passwordRow, setPasswordRow] = useState<number | null>(null);
     // Page details start open, the way the board shows them; a row can fold its own away.
@@ -450,10 +452,12 @@ export const ResultList = ({ results, progress, loading, resultVerb, resultNoun,
     const hints = [...packHints(results, packJobs, installedPacks), ...summary.hints];
     return (
         <div className="result-list">
-            <div className="result-summary" role="status" aria-live="polite">
-                <strong>{summary.headline}</strong>
-                {hints.map((hint) => <span key={hint} className="result-summary-hint">{hint}</span>)}
-            </div>
+            {customSummary ?? (
+                <div className="result-summary" role="status" aria-live="polite">
+                    <strong>{summary.headline}</strong>
+                    {hints.map((hint) => <span key={hint} className="result-summary-hint">{hint}</span>)}
+                </div>
+            )}
             <Card className="result-card gap-0 py-0">
                 <CardContent className="p-0">
                     <ul className="result-rows" aria-label="Results">
