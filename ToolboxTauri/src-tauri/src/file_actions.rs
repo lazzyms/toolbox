@@ -210,6 +210,8 @@ mod tests {
 
     #[test]
     fn finds_the_bundled_third_party_notices() {
+        // OCR tests point TOOLBOX_RESOURCE_ROOT elsewhere while they hold this lock.
+        let _guard = crate::kit::lock_process_env();
         let root = crate::kit::resources::application_resource_root().unwrap();
         let path = third_party_notices_path(&root).unwrap();
         let notices = std::fs::read_to_string(&path).unwrap();
