@@ -97,17 +97,17 @@ const selectRailTool = (page: Page, title: string) =>
 const runId = expect.any(String);
 
 test.describe("Media requests", () => {
-    test("App Icon Set sends the ticked platforms with only their ticked sizes", async ({ page }) => {
+    test("App Icon Set sends the ticked platforms with only their ticked sizes and containers", async ({ page }) => {
         await start(page);
         await openToolBySearch(page, "Generate App Icons");
         await choose(page, "/local/art/logo.png");
 
         const platforms = page.getByRole("group", { name: "Make icons for" });
         for (const [name, checked, summary] of [
-            ["macOS app", true, "7 sizes, ICNS"],
-            ["iPhone and iPad", true, "13 sizes"],
+            ["macOS app", true, "7 sizes, ICNS, .appiconset"],
+            ["iPhone and iPad", true, "13 sizes, .appiconset"],
             ["Android", false, "6 sizes"],
-            ["Website", true, "6 sizes"],
+            ["Website", true, "6 sizes, favicon.ico"],
             ["Custom sizes", false, "None yet"],
         ] as const) {
             const box = platforms.getByRole("checkbox", { name, exact: true });
@@ -120,22 +120,37 @@ test.describe("Media requests", () => {
         const sizes = platforms.getByRole("group", { name: "Sizes, pixels" });
         await expect(sizes.getByRole("checkbox")).toHaveCount(7);
         for (const size of [16, 32, 64, 128, 256, 512, 1024]) await expect(sizes.getByRole("checkbox", { name: String(size), exact: true })).toBeChecked();
+        // Its containers are ticked, and the ICNS is named after the image.
+        const macosContainers = platforms.getByRole("group", { name: "macOS app containers" });
+        const appiconset = macosContainers.getByRole("checkbox", { name: "AppIcon.appiconset, with Contents.json" });
+        const icns = macosContainers.getByRole("checkbox", { name: "logo.icns" });
+        for (const box of [appiconset, icns]) {
+            await expect(box).toBeChecked();
+            await expect(box).toBeEnabled();
+        }
 
         expect(await runOnce(page, "generate_icon_set")).toEqual({ runId, request: {
             paths: ["/local/art/logo.png"],
             platforms: [
-                { preset: "macos", sizes: [16, 32, 64, 128, 256, 512, 1024] },
-                { preset: "ios", sizes: [20, 29, 40, 58, 60, 76, 80, 87, 120, 152, 167, 180, 1024] },
-                { preset: "favicon", sizes: [16, 32, 48, 64, 128, 256] },
+                { preset: "macos", sizes: [16, 32, 64, 128, 256, 512, 1024], containers: ["appiconset", "icns"] },
+                { preset: "ios", sizes: [20, 29, 40, 58, 60, 76, 80, 87, 120, 152, 167, 180, 1024], containers: ["appiconset"] },
+                { preset: "favicon", sizes: [16, 32, 48, 64, 128, 256], containers: ["ico"] },
             ],
             squareRule: "pad",
             outputLocation: "alongsideInput",
         } });
 
-        // Unticking a size removes exactly that size, and a partial macOS set has no ICNS.
+        // Unticking a size removes exactly that size, and a partial macOS set has no asset catalog or ICNS.
         await sizes.getByRole("checkbox", { name: "64", exact: true }).click();
         await expect(platforms.getByRole("checkbox", { name: "macOS app" }).locator("xpath=..")).toContainText("6 sizes, PNGs only");
-        await expect(platforms).toContainText("The ICNS needs every macOS size, so it's off. Tick 64 to turn it back on.");
+        await expect(platforms).toContainText("AppIcon.appiconset and the ICNS need every macOS size, so they're off. Tick 64 to turn them back on.");
+        for (const box of [appiconset, icns]) {
+            await expect(box).not.toBeChecked();
+            await expect(box).toBeDisabled();
+        }
+        // iPhone and iPad icons are made opaque, and the design says so beside the asset catalog.
+        await platforms.getByRole("button", { name: "Sizes for iPhone and iPad" }).click();
+        await expect(platforms.getByRole("group", { name: "iPhone and iPad containers" })).toContainText("iPhone and iPad icons can't be transparent. Transparent areas are filled with white.");
         await platforms.getByRole("checkbox", { name: "iPhone and iPad" }).click();
         await platforms.getByRole("checkbox", { name: "Android" }).click();
         await platforms.getByRole("button", { name: "Sizes for Android" }).click();
@@ -144,12 +159,17 @@ test.describe("Media requests", () => {
         await sizes.getByRole("checkbox", { name: "512", exact: true }).click();
         await platforms.getByRole("button", { name: "Sizes for Website" }).click();
         await sizes.getByRole("checkbox", { name: "48", exact: true }).click();
+        // The favicon.ico holds whichever sizes are ticked, so it stays on.
+        const ico = platforms.getByRole("group", { name: "Website containers" }).getByRole("checkbox", { name: "favicon.ico, with the ticked sizes up to 256" });
+        await expect(ico).toBeChecked();
+        await expect(ico).toBeEnabled();
+        await expect(platforms.getByRole("checkbox", { name: "Website" }).locator("xpath=..")).toContainText("5 sizes, favicon.ico");
         expect(await runOnce(page, "generate_icon_set")).toEqual({ runId, request: {
             paths: ["/local/art/logo.png"],
             platforms: [
-                { preset: "macos", sizes: [16, 32, 128, 256, 512, 1024] },
-                { preset: "android", sizes: [48, 72, 96, 144, 192] },
-                { preset: "favicon", sizes: [16, 32, 64, 128, 256] },
+                { preset: "macos", sizes: [16, 32, 128, 256, 512, 1024], containers: [] },
+                { preset: "android", sizes: [48, 72, 96, 144, 192], containers: [] },
+                { preset: "favicon", sizes: [16, 32, 64, 128, 256], containers: ["ico"] },
             ],
             squareRule: "pad",
             outputLocation: "alongsideInput",
@@ -157,13 +177,48 @@ test.describe("Media requests", () => {
 
         await platforms.getByRole("button", { name: "Sizes for macOS app" }).click();
         await platforms.getByRole("button", { name: "Tick all macOS sizes" }).click();
-        await expect(platforms.getByRole("checkbox", { name: "macOS app" }).locator("xpath=..")).toContainText("7 sizes, ICNS");
+        await expect(platforms.getByRole("checkbox", { name: "macOS app" }).locator("xpath=..")).toContainText("7 sizes, ICNS, .appiconset");
         await expect(platforms.getByRole("button", { name: "Tick all macOS sizes" })).toHaveCount(0);
         expect(await runOnce(page, "generate_icon_set")).toMatchObject({ request: { platforms: [
-            { preset: "macos", sizes: [16, 32, 64, 128, 256, 512, 1024] },
+            { preset: "macos", sizes: [16, 32, 64, 128, 256, 512, 1024], containers: ["appiconset", "icns"] },
             { preset: "android", sizes: [48, 72, 96, 144, 192] },
             { preset: "favicon", sizes: [16, 32, 64, 128, 256] },
         ] } });
+
+        // Unticking a container leaves its PNGs, and the summary says what is left.
+        await appiconset.click();
+        await expect(platforms.getByRole("checkbox", { name: "macOS app" }).locator("xpath=..")).toContainText("7 sizes, ICNS");
+        await icns.click();
+        await expect(platforms.getByRole("checkbox", { name: "macOS app" }).locator("xpath=..")).toContainText("7 sizes, PNGs only");
+        await platforms.getByRole("button", { name: "Sizes for Website" }).click();
+        await ico.click();
+        await expect(platforms.getByRole("checkbox", { name: "Website" }).locator("xpath=..")).toContainText(/5 sizes$/);
+        await platforms.getByRole("button", { name: "Sizes for macOS app" }).click();
+        await icns.click();
+        expect(await runOnce(page, "generate_icon_set")).toMatchObject({ request: { platforms: [
+            { preset: "macos", containers: ["icns"] },
+            { preset: "android", containers: [] },
+            { preset: "favicon", containers: [] },
+        ] } });
+    });
+
+    test("App Icon Set asks for every iPhone and iPad size before making the asset catalog", async ({ page }) => {
+        await start(page);
+        await openToolBySearch(page, "Generate App Icons");
+        await choose(page, "/local/art/logo.png");
+        const platforms = page.getByRole("group", { name: "Make icons for" });
+        await platforms.getByRole("button", { name: "Sizes for iPhone and iPad" }).click();
+        await platforms.getByRole("group", { name: "Sizes, pixels" }).getByRole("checkbox", { name: "87", exact: true }).click();
+        const appiconset = platforms.getByRole("group", { name: "iPhone and iPad containers" }).getByRole("checkbox", { name: "AppIcon.appiconset, with Contents.json" });
+        await expect(appiconset).toBeDisabled();
+        await expect(platforms.getByRole("checkbox", { name: "iPhone and iPad" }).locator("xpath=..")).toContainText("12 sizes, PNGs only");
+        await expect(platforms).toContainText("AppIcon.appiconset needs every iPhone and iPad size, so it's off. Tick 87 to turn it back on.");
+        expect(await runOnce(page, "generate_icon_set")).toMatchObject({ request: { platforms: [
+            { preset: "macos" }, { preset: "ios", containers: [] }, { preset: "favicon" },
+        ] } });
+        await platforms.getByRole("button", { name: "Tick all iPhone and iPad sizes" }).click();
+        await expect(appiconset).toBeChecked();
+        await expect(platforms.getByRole("checkbox", { name: "iPhone and iPad" }).locator("xpath=..")).toContainText("13 sizes, .appiconset");
     });
 
     test("App Icon Set takes custom sizes from 1 to 4096 and blocks the run until the choice is complete", async ({ page }) => {
@@ -366,6 +421,32 @@ test.describe("Media requests", () => {
         await expect.poll(() => invocationsOf(page, "reveal_output_path")).toEqual([{ path: "/local/art/app-icon-icons" }]);
         await results.nth(3).getByRole("button", { name: "Open badge-icons-1" }).click();
         await expect.poll(() => invocationsOf(page, "open_output_path")).toEqual([{ path: "/local/art/badge-icons-1" }]);
+    });
+
+    test("App Icon Set shows a set with its containers as one icon folder, or the container that failed", async ({ page }) => {
+        await start(page);
+        await page.addInitScript(() => {
+            (window as unknown as MediaWindow).__results = { generate_icon_set: [
+                // 7 macOS sizes, AppIcon.appiconset (10 images and Contents.json) and the ICNS; 13 iOS sizes and their 19-file asset catalog; 6 Website sizes and favicon.ico.
+                { inputPath: "/local/art/app-icon.png", outputPaths: ["/local/art/app-icon-icons"], detail: "58 files", state: "succeeded", failure: null, reason: null, warnings: [] },
+                { inputPath: "/local/art/brand-mark.png", outputPaths: [], detail: "", state: "failed", failure: { kind: "processing", message: "The macOS ICNS failed: the disk is full. Nothing was saved for this image.", pointer: null }, reason: null, warnings: [] },
+            ] };
+        });
+        await page.reload();
+        await openToolBySearch(page, "Generate App Icons");
+        await choose(page, ["/local/art/app-icon.png", "/local/art/brand-mark.png"]);
+        await runOnce(page, "generate_icon_set");
+
+        const results = page.getByRole("list", { name: "Results" }).getByRole("listitem");
+        await expect(results).toHaveCount(2);
+        await expect(results.nth(0)).toContainText("app-icon-icons");
+        await expect(results.nth(0)).toContainText("58 files");
+        await expect(results.nth(0)).not.toContainText("ICO container is unavailable");
+        await expect(results.nth(0)).not.toContainText("Failed");
+        await expect(results.nth(1)).toContainText("The macOS ICNS failed: the disk is full. Nothing was saved for this image.");
+        await expect(results.nth(1).getByRole("button", { name: /^Open|Show in Finder/ })).toHaveCount(0);
+        await results.nth(0).getByRole("button", { name: "Show in Finder: app-icon-icons" }).click();
+        await expect.poll(() => invocationsOf(page, "reveal_output_path")).toEqual([{ path: "/local/art/app-icon-icons" }]);
     });
 
     test("Create GIF sends frame order, delay, loop, and the saved path", async ({ page }) => {

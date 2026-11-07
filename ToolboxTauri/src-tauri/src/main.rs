@@ -3897,14 +3897,14 @@ mod command_tests {
         outputs.extend(named(&mut naming, "resize_images", image.clone(), assert_success("resize", resize_images(RunEvents::silent(), ResizeRequest { paths: vec![image.clone()], width: 128, height: 128, mode: "exact".into(), resampling: "lanczos".into(), keep_aspect_ratio: true, percentage: 100, longest_side: 128, output_location: location(&root, "resize") }))));
         outputs.extend(named(&mut naming, "rotate_images", image.clone(), assert_success("rotate", rotate_images(RunEvents::silent(), RotateRequest { paths: vec![image.clone()], degrees: 90, flip: "none".into(), output_location: location(&root, "rotate") }))));
         outputs.extend(named(&mut naming, "crop_images", image.clone(), assert_success("crop image", crop_images(RunEvents::silent(), CropRequest { paths: vec![image.clone()], x: 0, y: 0, width: 128, height: 128, mode: "rectangle".into(), aspect_width: 128, aspect_height: 128, anchor: "center".into(), output_location: location(&root, "crop image") }))));
-        let icon_outputs = named(&mut naming, "generate_icon_set", image.clone(), assert_success("icons", generate_icon_set(RunEvents::silent(), IconSetRequest { paths: vec![image.clone()], platforms: vec![IconPlatform { preset: "favicon".into(), sizes: vec![16, 32, 48, 64, 128, 256] }], square_rule: SquareRule::Pad, output_location: location(&root, "icons") })));
+        let icon_outputs = named(&mut naming, "generate_icon_set", image.clone(), assert_success("icons", generate_icon_set(RunEvents::silent(), IconSetRequest { paths: vec![image.clone()], platforms: vec![IconPlatform { preset: "favicon".into(), sizes: vec![16, 32, 48, 64, 128, 256], containers: None }], square_rule: SquareRule::Pad, output_location: location(&root, "icons") })));
         assert_eq!(icon_outputs.len(), 1, "an icon set is one folder per master");
         assert_eq!(std::fs::read_dir(&icon_outputs[0]).unwrap().map(|entry| entry.unwrap().file_name().into_string().unwrap()).collect::<Vec<_>>(), ["web"]);
-        assert_eq!(std::fs::read_dir(icon_outputs[0].join("web")).unwrap().count(), 6, "the Website preset saves its six sizes");
+        assert_eq!(std::fs::read_dir(icon_outputs[0].join("web")).unwrap().count(), 7, "the Website preset saves its six sizes and favicon.ico");
         outputs.extend(icon_outputs);
         // Several masters run as one batch: each gets its own folder, and a damaged one fails alone.
         let damaged_master = root.join("damaged-master.png"); std::fs::write(&damaged_master, b"\x89PNG\r\n\x1a\nnot an image").unwrap();
-        let icon_batch = tauri::async_runtime::block_on(generate_icon_set(RunEvents::silent(), IconSetRequest { paths: vec![image.clone(), damaged_master.clone(), image_two.clone()], platforms: vec![IconPlatform { preset: "macos".into(), sizes: vec![16, 32, 64, 128, 256, 512, 1024] }], square_rule: SquareRule::Crop, output_location: location(&root, "icon batch") }));
+        let icon_batch = tauri::async_runtime::block_on(generate_icon_set(RunEvents::silent(), IconSetRequest { paths: vec![image.clone(), damaged_master.clone(), image_two.clone()], platforms: vec![IconPlatform { preset: "macos".into(), sizes: vec![16, 32, 64, 128, 256, 512, 1024], containers: None }], square_rule: SquareRule::Crop, output_location: location(&root, "icon batch") }));
         let icon_batch_folder = root.join("icon batch");
         assert_eq!(icon_batch.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), [image.clone(), damaged_master.clone(), image_two.clone()]);
         assert_eq!(icon_batch[0].output_paths(), [icon_batch_folder.join("image-icons")]);
@@ -3913,7 +3913,7 @@ mod command_tests {
         let mut batch_entries = std::fs::read_dir(&icon_batch_folder).unwrap().map(|entry| entry.unwrap().file_name().into_string().unwrap()).collect::<Vec<_>>();
         batch_entries.sort();
         assert_eq!(batch_entries, ["image-icons", "image-two-icons"], "a failed master leaves nothing behind");
-        for set in ["image-icons", "image-two-icons"] { assert_eq!(std::fs::read_dir(icon_batch_folder.join(set).join("macos")).unwrap().count(), 8, "seven macOS sizes and the ICNS"); }
+        for set in ["image-icons", "image-two-icons"] { assert_eq!(std::fs::read_dir(icon_batch_folder.join(set).join("macos")).unwrap().count(), 9, "seven macOS sizes, AppIcon.appiconset and the ICNS"); }
         // Both masters are 256 pixels, so the 512 and 1024 sizes are upscaled, and each outcome says so.
         let upscaled = [(crate::kit::contracts::WarningKind::Upscaled { from: 256, to: 1024 }, "Upscaled to 1024 from 256 pixels.".to_string())];
         for index in [0, 2] { assert_eq!(icon_batch[index].warnings.iter().map(|warning| (warning.kind.clone(), warning.message.clone())).collect::<Vec<_>>(), upscaled); }
@@ -3923,7 +3923,7 @@ mod command_tests {
         let wide = image::RgbaImage::from_fn(96, 48, |x, y| Rgba([(x * 2) as u8, (y * 4) as u8, 90, 255]));
         wide.save(&wide_master).unwrap();
         let wide_bytes = std::fs::read(&wide_master).unwrap();
-        let cropped = tauri::async_runtime::block_on(generate_icon_set(RunEvents::silent(), IconSetRequest { paths: vec![wide_master.clone()], platforms: vec![IconPlatform { preset: "custom".into(), sizes: vec![48] }], square_rule: SquareRule::Crop, output_location: location(&root, "icon crop") }));
+        let cropped = tauri::async_runtime::block_on(generate_icon_set(RunEvents::silent(), IconSetRequest { paths: vec![wide_master.clone()], platforms: vec![IconPlatform { preset: "custom".into(), sizes: vec![48], containers: None }], square_rule: SquareRule::Crop, output_location: location(&root, "icon crop") }));
         let cropped_icon = image::open(cropped[0].output_paths()[0].join("custom/custom-48.png")).unwrap().to_rgba8();
         assert_eq!(cropped_icon, image::imageops::crop_imm(&wide, 24, 0, 48, 48).to_image(), "centre-crop keeps the centred 48 px square");
         assert_eq!(std::fs::read(&wide_master).unwrap(), wide_bytes);

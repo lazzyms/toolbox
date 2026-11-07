@@ -16,10 +16,17 @@ export type SquareRule = "pad" | "crop";
 
 export type IconPreset = "macos" | "ios" | "android" | "favicon" | "custom";
 
-/** Whether a platform is ticked, and the sizes ticked for it. Its sizes are kept while it is unticked. */
+/** A file that bundles a platform's sizes: an Xcode asset catalog folder, a macOS ICNS or a favicon ICO. */
+export type IconContainer = "appiconset" | "icns" | "ico";
+
+/**
+ * Whether a platform is ticked, the sizes ticked for it and the containers ticked for it.
+ * Its sizes and containers are kept while it is unticked.
+ */
 export interface IconPlatformChoice {
   on: boolean;
   sizes: number[];
+  containers: IconContainer[];
 }
 
 export interface IconSetOptions {
@@ -35,15 +42,27 @@ interface PlatformInfo {
   sheetName: string;
   /** The sizes the platform offers, as the design lists them. Custom sizes are typed in instead. */
   offered: number[];
+  /** The containers the platform offers, in the design's order. */
+  containers: IconContainer[];
+  /** The name the platform's notes use for its sizes. */
+  sizesName: string;
   hint?: string;
 }
 
 const platforms: PlatformInfo[] = [
-  { preset: "macos", label: "macOS app", sheetName: "macOS", offered: [16, 32, 64, 128, 256, 512, 1024] },
-  { preset: "ios", label: "iPhone and iPad", sheetName: "iPhone and iPad", offered: [20, 29, 40, 58, 60, 76, 80, 87, 120, 152, 167, 180, 1024] },
-  { preset: "android", label: "Android", sheetName: "Android", offered: [48, 72, 96, 144, 192, 512], hint: "Launcher sizes from mdpi to xxxhdpi, plus the 512 store icon." },
-  { preset: "favicon", label: "Website", sheetName: "Website", offered: [16, 32, 48, 64, 128, 256] },
-  { preset: "custom", label: "Custom sizes", sheetName: "custom", offered: [] },
+  { preset: "macos", label: "macOS app", sheetName: "macOS", sizesName: "macOS", offered: [16, 32, 64, 128, 256, 512, 1024], containers: ["appiconset", "icns"] },
+  {
+    preset: "ios",
+    label: "iPhone and iPad",
+    sheetName: "iPhone and iPad",
+    sizesName: "iPhone and iPad",
+    offered: [20, 29, 40, 58, 60, 76, 80, 87, 120, 152, 167, 180, 1024],
+    containers: ["appiconset"],
+    hint: "iPhone and iPad icons can't be transparent. Transparent areas are filled with white.",
+  },
+  { preset: "android", label: "Android", sheetName: "Android", sizesName: "Android", offered: [48, 72, 96, 144, 192, 512], containers: [], hint: "Launcher sizes from mdpi to xxxhdpi, plus the 512 store icon." },
+  { preset: "favicon", label: "Website", sheetName: "Website", sizesName: "Website", offered: [16, 32, 48, 64, 128, 256], containers: ["ico"] },
+  { preset: "custom", label: "Custom sizes", sheetName: "custom", sizesName: "custom", offered: [], containers: [] },
 ];
 
 const platformInfo = (preset: IconPreset) => platforms.find((platform) => platform.preset === preset)!;
@@ -54,18 +73,35 @@ const ascending = (sizes: Iterable<number>) => [...new Set(sizes)].sort((left, r
 
 const sizeCount = (count: number) => (count === 1 ? "1 size" : `${count} sizes`);
 
-const macosComplete = (sizes: number[]) => platformInfo("macos").offered.every((size) => sizes.includes(size));
+/** The platform's sizes that aren't ticked. */
+const missingSizes = (platform: PlatformInfo, sizes: number[]) => platform.offered.filter((size) => !sizes.includes(size));
+
+/** The asset catalog and the ICNS need every size of their preset. The favicon.ico holds whichever sizes are ticked. */
+const containerAvailable = (container: IconContainer, platform: PlatformInfo, sizes: number[]) =>
+  container === "ico" || missingSizes(platform, sizes).length === 0;
+
+/** The containers that will be made: the ticked ones whose sizes allow them, in the platform's order. */
+const madeContainers = (platform: PlatformInfo, choice: IconPlatformChoice) =>
+  platform.containers.filter((container) => choice.containers.includes(container) && containerAvailable(container, platform, choice.sizes));
+
+const containerSummary: Record<IconContainer, string> = { icns: "ICNS", appiconset: ".appiconset", ico: "favicon.ico" };
 
 /** The summary beside a platform's name. */
-const platformSummary = (preset: IconPreset, sizes: number[]) => {
-  if (sizes.length === 0) return preset === "custom" ? "None yet" : "No sizes ticked";
-  if (preset === "macos") return `${sizeCount(sizes.length)}, ${macosComplete(sizes) ? "ICNS" : "PNGs only"}`;
-  return sizeCount(sizes.length);
+const platformSummary = (platform: PlatformInfo, choice: IconPlatformChoice) => {
+  if (choice.sizes.length === 0) return platform.preset === "custom" ? "None yet" : "No sizes ticked";
+  const made = madeContainers(platform, choice);
+  // The design lists the ICNS before the asset catalog.
+  const names = (["icns", "appiconset", "ico"] as const).filter((container) => made.includes(container)).map((container) => containerSummary[container]);
+  if (names.length > 0) return `${sizeCount(choice.sizes.length)}, ${names.join(", ")}`;
+  return platform.containers.some((container) => container !== "ico") ? `${sizeCount(choice.sizes.length)}, PNGs only` : sizeCount(choice.sizes.length);
 };
 
-/** The ticked platforms with the sizes ticked for each, in the design's order. */
+/** The ticked platforms with the sizes and containers made for each, in the design's order. */
 const tickedPlatforms = (options: IconSetOptions) =>
-  platforms.filter((platform) => options.platforms[platform.preset].on).map((platform) => ({ ...platform, sizes: options.platforms[platform.preset].sizes }));
+  platforms.filter((platform) => options.platforms[platform.preset].on).map((platform) => {
+    const choice = options.platforms[platform.preset];
+    return { ...platform, sizes: choice.sizes, containers: madeContainers(platform, choice) };
+  });
 
 /** Why the run can't start yet, or null when it can. */
 const blockedReason = (options: IconSetOptions) => {
@@ -86,6 +122,25 @@ export const parseCustomSize = (value: string, current: number[]): { size: numbe
 };
 
 const fileName = (path: string) => path.split(/[\\/]/).pop() ?? path;
+
+/** A file's name without its extension, which names the ICNS. */
+const fileStem = (path: string) => fileName(path).replace(/\.[^.]*$/, "");
+
+/** The container's checkbox label. The ICNS is named after the image, as each image makes its own set. */
+const containerLabel = (container: IconContainer, firstFile: string | null) => {
+  if (container === "appiconset") return "AppIcon.appiconset, with Contents.json";
+  if (container === "ico") return "favicon.ico, with the ticked sizes up to 256";
+  return firstFile ? `${fileStem(firstFile)}.icns` : "ICNS, named after each image";
+};
+
+/** The note under a platform whose asset catalog or ICNS is off because a size is unticked. */
+const containersOffNote = (platform: PlatformInfo, missing: number[]) => {
+  const needy = platform.containers.filter((container) => container !== "ico");
+  const subject = needy.length > 1 ? "AppIcon.appiconset and the ICNS need" : "AppIcon.appiconset needs";
+  const them = needy.length > 1 ? "they're" : "it's";
+  const back = needy.length > 1 ? "them" : "it";
+  return `${subject} every ${platform.sizesName} size, so ${them} off. Tick ${listSizes(missing)} to turn ${back} back on.`;
+};
 
 const appliesToAll = "Applies to every non-square image in this run. Images are never stretched.";
 
@@ -304,8 +359,7 @@ const IconSetPanel = (props: MediaPanelProps<IconSetOptions>) => {
   const ticked = tickedPlatforms(options).filter((platform) => platform.sizes.length > 0);
   const sheetPreset = ticked.find((platform) => platform.preset === expanded)?.preset ?? ticked[0]?.preset ?? null;
   const blocked = blockedReason(options);
-  const macosSizes = options.platforms.macos.sizes;
-  const missingMacos = platformInfo("macos").offered.filter((size) => !macosSizes.includes(size));
+  const firstFile = props.files[0] ?? null;
 
   return (
     <>
@@ -326,7 +380,7 @@ const IconSetPanel = (props: MediaPanelProps<IconSetOptions>) => {
                   onCheckedChange={(checked) => setPlatform(platform.preset, (current) => ({ ...current, on: checked === true }))}
                 />
                 <Label htmlFor={`icon-platform-${platform.preset}`} className="icon-platform-name">{platform.label}</Label>
-                <span className="workspace-panel-copy icon-platform-summary">{platformSummary(platform.preset, choice.sizes)}</span>
+                <span className="workspace-panel-copy icon-platform-summary">{platformSummary(platform, choice)}</span>
                 <Button
                   type="button"
                   variant="ghost"
@@ -361,18 +415,48 @@ const IconSetPanel = (props: MediaPanelProps<IconSetOptions>) => {
                       </Label>
                     ))}
                   </div>
-                  {platform.hint && <p className="workspace-panel-copy">{platform.hint}</p>}
-                  {platform.preset === "macos" && missingMacos.length > 0 && macosSizes.length > 0 && (
-                    <div className="workspace-note icon-platform-note">
-                      <p>The ICNS needs every macOS size, so it's off. Tick {listSizes(missingMacos)} to turn it back on.</p>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setPlatform("macos", (current) => ({ ...current, sizes: [...platformInfo("macos").offered] }))}
-                      >
-                        Tick all macOS sizes
-                      </Button>
+                  {platform.containers.length === 0 && platform.hint && <p className="workspace-panel-copy">{platform.hint}</p>}
+                  {platform.containers.length > 0 && (
+                    <div className="icon-platform-containers" role="group" aria-label={`${platform.label} containers`}>
+                      {platform.containers.map((container) => {
+                        const available = containerAvailable(container, platform, choice.sizes);
+                        const id = `icon-container-${platform.preset}-${container}`;
+                        // The label's own disabled style follows its group, so an unavailable container reads as off.
+                        return (
+                          <div key={container} className="group" data-disabled={!available}>
+                            <Label className="workspace-check" htmlFor={id}>
+                              <Checkbox
+                                id={id}
+                                checked={available && choice.containers.includes(container)}
+                                disabled={!available}
+                                onCheckedChange={(checked) => setPlatform(platform.preset, (current) => ({
+                                  ...current,
+                                  containers: checked === true ? [...new Set([...current.containers, container])] : current.containers.filter((value) => value !== container),
+                                }))}
+                              />
+                              <span>{containerLabel(container, firstFile)}</span>
+                            </Label>
+                          </div>
+                        );
+                      })}
+                      {(() => {
+                        const missing = missingSizes(platform, choice.sizes);
+                        if (missing.length === 0 || choice.sizes.length === 0 || platform.containers.every((container) => container === "ico")) return null;
+                        return (
+                          <div className="workspace-note icon-platform-note">
+                            <p>{containersOffNote(platform, missing)}</p>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setPlatform(platform.preset, (current) => ({ ...current, sizes: [...platform.offered] }))}
+                            >
+                              Tick all {platform.sizesName} sizes
+                            </Button>
+                          </div>
+                        );
+                      })()}
+                      {platform.hint && <p className="workspace-panel-copy">{platform.hint}</p>}
                     </div>
                   )}
                 </div>
@@ -387,7 +471,7 @@ const IconSetPanel = (props: MediaPanelProps<IconSetOptions>) => {
   );
 };
 
-const allSizes = (preset: IconPreset, on: boolean): IconPlatformChoice => ({ on, sizes: [...platformInfo(preset).offered] });
+const allSizes = (preset: IconPreset, on: boolean): IconPlatformChoice => ({ on, sizes: [...platformInfo(preset).offered], containers: [...platformInfo(preset).containers] });
 
 export const iconSetTool: MediaTool<IconSetOptions> = {
   initialOptions: {
@@ -396,7 +480,7 @@ export const iconSetTool: MediaTool<IconSetOptions> = {
       ios: allSizes("ios", true),
       android: allSizes("android", false),
       favicon: allSizes("favicon", true),
-      custom: { on: false, sizes: [] },
+      custom: { on: false, sizes: [], containers: [] },
     },
     squareRule: "pad",
   },
@@ -407,7 +491,7 @@ export const iconSetTool: MediaTool<IconSetOptions> = {
     command: "generate_icon_set",
     request: {
       paths,
-      platforms: tickedPlatforms(options).map(({ preset, sizes }) => ({ preset, sizes })),
+      platforms: tickedPlatforms(options).map(({ preset, sizes, containers }) => ({ preset, sizes, containers })),
       squareRule: options.squareRule,
       outputLocation,
     },

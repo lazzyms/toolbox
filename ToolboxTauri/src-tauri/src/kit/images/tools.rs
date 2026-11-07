@@ -2,7 +2,7 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use image::codecs::png::PngEncoder;
 use image::{DynamicImage, ImageFormat, ImageEncoder, Rgba};
 use image::AnimationDecoder;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{BufReader, Seek};
 use std::path::{Path, PathBuf};
@@ -371,6 +371,34 @@ pub struct IconSetRequest {
 pub struct IconPlatform {
     pub preset: String,
     pub sizes: Vec<u32>,
+    /// The containers ticked for this platform. When it is missing, every container the
+    /// preset offers is made whenever its sizes allow it.
+    #[serde(default)]
+    pub containers: Option<Vec<IconContainer>>,
+}
+/// A file that bundles a platform's sizes: an Xcode asset catalog folder, an ICNS or an ICO.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum IconContainer {
+    /// `AppIcon.appiconset` with its `Contents.json`, for macOS and iOS.
+    Appiconset,
+    /// The macOS `.icns`.
+    Icns,
+    /// The website `favicon.ico`.
+    Ico,
+}
+impl IconContainer {
+    /// The name failures and validation messages use for the container.
+    fn name(self) -> &'static str {
+        match self {
+            IconContainer::Appiconset => "AppIcon.appiconset",
+            IconContainer::Icns => "ICNS",
+            IconContainer::Ico => "favicon.ico",
+        }
+    }
+    /// The asset catalog and the ICNS hold every size of their preset, so they need all of them ticked.
+    /// favicon.ico holds whichever sizes are ticked.
+    fn needs_every_size(self) -> bool { !matches!(self, IconContainer::Ico) }
 }
 /// How a non-square master becomes square before its sizes are made. A master is never stretched.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
@@ -664,12 +692,23 @@ fn unsupported_watermark_characters(characters: impl IntoIterator<Item = char>) 
 }
 /// Makes one master's icon set in its own `{stem}-icons` folder, with a folder for each
 /// ticked platform inside. The folder is built in a hidden staging folder and published in
-/// one rename only when every size worked, so a failed master leaves nothing behind.
+/// one rename only when every size and container worked, so a failed master leaves nothing behind.
 pub fn icon_set(request: &IconSetRequest, input: PathBuf) -> JobOutcome {
-    icon_set_with(request, input, |icon, output| icon.save_with_format(output, ImageFormat::Png).map_err(|error| error.to_string()))
+    icon_set_with(
+        request,
+        input,
+        |icon, output| icon.save_with_format(output, ImageFormat::Png).map_err(|error| error.to_string()),
+        |output, bytes| std::fs::write(output, bytes).map_err(|error| error.to_string()),
+    )
 }
 
-fn icon_set_with(request: &IconSetRequest, input: PathBuf, mut save: impl FnMut(&DynamicImage, &Path) -> Result<(), String>) -> JobOutcome {
+/// `save` writes each size's PNG and `write` writes every container file, so a test can fail either.
+fn icon_set_with(
+    request: &IconSetRequest,
+    input: PathBuf,
+    mut save: impl FnMut(&DynamicImage, &Path) -> Result<(), String>,
+    mut write: impl FnMut(&Path, &[u8]) -> Result<(), String>,
+) -> JobOutcome {
     let plans = match icon_plans(&request.platforms) { Ok(plans) => plans, Err(error) => return failure(input, error) };
     let master = match crate::kit::images::decode(&input) {
         Ok(source) => square_master(source.into_first_page().to_rgba8(), request.square_rule),
@@ -686,21 +725,23 @@ fn icon_set_with(request: &IconSetRequest, input: PathBuf, mut save: impl FnMut(
         if let Err(error) = std::fs::create_dir(&platform) {
             return failure(input, format!("Could not make the {} folder: {error}. Nothing was saved for this image.", plan.folder));
         }
-        let mut pngs = Vec::with_capacity(plan.sizes.len());
+        let mut pngs = BTreeMap::new();
         for &size in &plan.sizes {
             let output = platform.join(format!("{}-{size}.png", plan.file_prefix));
             let icon = master.resize_exact(size, size, image::imageops::FilterType::Lanczos3);
-            if let Err(error) = save(&icon, &output) {
-                return failure(input, format!("The {} {size} size failed: {error}. Nothing was saved for this image.", plan.label));
+            let icon = if plan.opaque { DynamicImage::ImageRgb8(flatten_on_white(&icon.to_rgba8())) } else { icon };
+            let saved = save(&icon, &output).and_then(|()| std::fs::read(&output).map_err(|error| error.to_string()));
+            match saved {
+                Ok(bytes) => { pngs.insert(size, bytes); }
+                Err(error) => return failure(input, format!("The {} {size} size failed: {error}. Nothing was saved for this image.", plan.label)),
             }
-            pngs.push(output);
         }
         files += pngs.len();
-        if plan.writes_icns() {
-            if let Err(error) = write_icns(&platform.join(format!("{stem}.icns")), &plan.sizes, &pngs) {
-                return failure(input, format!("The macOS ICNS file failed: {error}. Nothing was saved for this image."));
+        for &container in &plan.containers {
+            match write_container(container, plan, &platform, &stem, &pngs, &mut write) {
+                Ok(written) => files += written,
+                Err(error) => return failure(input, format!("The {} {} failed: {error}. Nothing was saved for this image.", plan.label, container.name())),
             }
-            files += 1;
         }
     }
     let expected = folder.destination_path().with_file_name(format!("{stem}{ICON_SET_SUFFIX}"));
@@ -717,6 +758,48 @@ fn icon_set_with(request: &IconSetRequest, input: PathBuf, mut save: impl FnMut(
             crate::kit::common::note_renamed(outcome, Some(&expected))
         }
         Err(error) => failure(input, format!("Could not save the icon folder: {error}. Nothing was saved for this image.")),
+    }
+}
+
+/// iPhone and iPad icons can't be transparent, so transparent areas are filled with white and
+/// the PNG has no alpha channel. Integer blending keeps the result the same on every machine.
+fn flatten_on_white(icon: &image::RgbaImage) -> image::RgbImage {
+    image::RgbImage::from_fn(icon.width(), icon.height(), |x, y| {
+        let [red, green, blue, alpha] = icon.get_pixel(x, y).0;
+        let blend = |channel: u8| ((u32::from(channel) * u32::from(alpha) + 255 * (255 - u32::from(alpha)) + 127) / 255) as u8;
+        image::Rgb([blend(red), blend(green), blend(blue)])
+    })
+}
+
+/// Writes one container into the platform folder from the PNGs already made, and returns how many files it wrote.
+fn write_container(
+    container: IconContainer,
+    plan: &IconPlan,
+    platform: &Path,
+    stem: &str,
+    pngs: &BTreeMap<u32, Vec<u8>>,
+    write: &mut impl FnMut(&Path, &[u8]) -> Result<(), String>,
+) -> Result<usize, String> {
+    let png = |size: u32| pngs.get(&size).map(Vec::as_slice).ok_or_else(|| format!("the {size} size is missing"));
+    match container {
+        IconContainer::Appiconset => {
+            let slots = match plan.folder { "macos" => MACOS_APPICONSET, "ios" => IOS_APPICONSET, _ => return Err("this platform has no asset catalog".into()) };
+            let catalog = platform.join("AppIcon.appiconset");
+            std::fs::create_dir(&catalog).map_err(|error| error.to_string())?;
+            for slot in slots { write(&catalog.join(slot.filename()), png(slot.pixels())?)?; }
+            write(&catalog.join("Contents.json"), appiconset_contents(slots).as_bytes())?;
+            Ok(slots.len() + 1)
+        }
+        IconContainer::Icns => {
+            let items = ICNS_TYPES.iter().map(|(code, size)| Ok((*code, png(*size)?))).collect::<Result<Vec<_>, String>>()?;
+            write(&platform.join(format!("{stem}.icns")), &icns_bytes(&items)?)?;
+            Ok(1)
+        }
+        IconContainer::Ico => {
+            let images = plan.sizes.iter().map(|&size| Ok((size, png(size)?))).collect::<Result<Vec<_>, String>>()?;
+            write(&platform.join("favicon.ico"), &ico_bytes(&images)?)?;
+            Ok(1)
+        }
     }
 }
 
@@ -752,35 +835,118 @@ fn image_kind(path: &Path) -> &'static str {
     }
 }
 
-fn write_icns(output: &Path, sizes: &[u32], pngs: &[PathBuf]) -> Result<(), String> {
-    let mut items = Vec::new();
-    for (size, png) in sizes.iter().zip(pngs) {
-        let type_code = match size {
-            16 => *b"icp4",
-            32 => *b"icp5",
-            64 => *b"icp6",
-            128 => *b"ic07",
-            256 => *b"ic08",
-            512 => *b"ic09",
-            1024 => *b"ic10",
-            _ => return Err(format!("Unsupported ICNS image size: {size}")),
-        };
-        let payload = std::fs::read(png).map_err(|error| format!("Could not read generated PNG: {error}"))?;
-        let item_length = payload.len().checked_add(8).ok_or_else(|| "ICNS item is too large.".to_string())?;
-        let item_length = u32::try_from(item_length).map_err(|_| "ICNS item is too large.".to_string())?;
-        items.push((type_code, item_length, payload));
-    }
-    let total_length = 8usize.checked_add(items.iter().map(|(_, length, _)| *length as usize).sum::<usize>()).ok_or_else(|| "ICNS container is too large.".to_string())?;
-    let total_length = u32::try_from(total_length).map_err(|_| "ICNS container is too large.".to_string())?;
-    let mut bytes = Vec::with_capacity(total_length as usize);
+/// The ICNS types written for each macOS size, in the order of the asset catalog's slots:
+/// each point size at 1x, then 2x. The 2x types (`ic11` to `ic14`, and `ic10` for 512@2x) let
+/// Retina displays pick the sharper image.
+const ICNS_TYPES: [([u8; 4], u32); 10] = [
+    (*b"icp4", 16), (*b"ic11", 32),
+    (*b"icp5", 32), (*b"ic12", 64),
+    (*b"ic07", 128), (*b"ic13", 256),
+    (*b"ic08", 256), (*b"ic14", 512),
+    (*b"ic09", 512), (*b"ic10", 1024),
+];
+
+/// An ICNS file: the `icns` header and its total length, then each type with its length and PNG.
+fn icns_bytes(items: &[([u8; 4], &[u8])]) -> Result<Vec<u8>, String> {
+    let total = items.iter().try_fold(8usize, |total, (_, png)| total.checked_add(png.len() + 8)).ok_or("the ICNS is too large")?;
+    let total = u32::try_from(total).map_err(|_| "the ICNS is too large".to_string())?;
+    let mut bytes = Vec::with_capacity(total as usize);
     bytes.extend_from_slice(b"icns");
-    bytes.extend_from_slice(&total_length.to_be_bytes());
-    for (type_code, item_length, payload) in items {
-        bytes.extend_from_slice(&type_code);
-        bytes.extend_from_slice(&item_length.to_be_bytes());
-        bytes.extend_from_slice(&payload);
+    bytes.extend_from_slice(&total.to_be_bytes());
+    for (code, png) in items {
+        bytes.extend_from_slice(code);
+        bytes.extend_from_slice(&u32::try_from(png.len() + 8).map_err(|_| "an ICNS image is too large".to_string())?.to_be_bytes());
+        bytes.extend_from_slice(png);
     }
-    std::fs::write(output, bytes).map_err(|error| error.to_string())
+    Ok(bytes)
+}
+
+/// An ICO file holding each size as a 32-bit PNG image, smallest first. Every current browser
+/// and Windows Vista onwards read PNG images in an ICO. A width or height of 256 is written as 0.
+fn ico_bytes(images: &[(u32, &[u8])]) -> Result<Vec<u8>, String> {
+    if images.is_empty() || images.len() > usize::from(u16::MAX) { return Err("an ICO needs 1 or more sizes".into()); }
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&0u16.to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&(images.len() as u16).to_le_bytes());
+    let mut offset = 6 + 16 * images.len();
+    for (size, png) in images {
+        let side = match size { 1..=255 => *size as u8, 256 => 0, _ => return Err(format!("an ICO can't hold {size} pixels")) };
+        bytes.extend_from_slice(&[side, side, 0, 0]);
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&32u16.to_le_bytes());
+        bytes.extend_from_slice(&u32::try_from(png.len()).map_err(|_| "an ICO image is too large".to_string())?.to_le_bytes());
+        bytes.extend_from_slice(&u32::try_from(offset).map_err(|_| "the ICO is too large".to_string())?.to_le_bytes());
+        offset += png.len();
+    }
+    for (_, png) in images { bytes.extend_from_slice(png); }
+    Ok(bytes)
+}
+
+/// One image slot of an Xcode asset catalog app icon: who it is for, its size in points and its scale.
+struct AppIconSlot {
+    idiom: &'static str,
+    /// The point size as Xcode writes it, which can be fractional (83.5 for iPad Pro).
+    points: &'static str,
+    scale: u32,
+}
+
+impl AppIconSlot {
+    const fn new(idiom: &'static str, points: &'static str, scale: u32) -> Self { Self { idiom, points, scale } }
+
+    /// The image's side in pixels: the point size times the scale.
+    fn pixels(&self) -> u32 {
+        let tenths: u32 = match self.points.split_once('.') {
+            Some((whole, fraction)) => whole.parse::<u32>().unwrap_or(0) * 10 + fraction.parse::<u32>().unwrap_or(0),
+            None => self.points.parse::<u32>().unwrap_or(0) * 10,
+        };
+        tenths * self.scale / 10
+    }
+
+    /// One file per slot, so Xcode never sees a file shared between slots.
+    fn filename(&self) -> String {
+        if self.idiom == "mac" {
+            let suffix = if self.scale == 1 { String::new() } else { format!("@{}x", self.scale) };
+            format!("icon_{0}x{0}{suffix}.png", self.points)
+        } else {
+            format!("{}-{}@{}x.png", self.idiom, self.points, self.scale)
+        }
+    }
+}
+
+/// The macOS app icon: 16, 32, 128, 256 and 512 points at 1x and 2x. Their pixels are exactly
+/// the seven macOS sizes, which is why the asset catalog needs every one ticked.
+const MACOS_APPICONSET: &[AppIconSlot] = &[
+    AppIconSlot::new("mac", "16", 1), AppIconSlot::new("mac", "16", 2),
+    AppIconSlot::new("mac", "32", 1), AppIconSlot::new("mac", "32", 2),
+    AppIconSlot::new("mac", "128", 1), AppIconSlot::new("mac", "128", 2),
+    AppIconSlot::new("mac", "256", 1), AppIconSlot::new("mac", "256", 2),
+    AppIconSlot::new("mac", "512", 1), AppIconSlot::new("mac", "512", 2),
+];
+
+/// Xcode's "All Sizes" iOS app icon: iPhone, iPad and the 1024 App Store icon. Their pixels are
+/// exactly the 13 iPhone and iPad sizes.
+const IOS_APPICONSET: &[AppIconSlot] = &[
+    AppIconSlot::new("iphone", "20", 2), AppIconSlot::new("iphone", "20", 3),
+    AppIconSlot::new("iphone", "29", 2), AppIconSlot::new("iphone", "29", 3),
+    AppIconSlot::new("iphone", "40", 2), AppIconSlot::new("iphone", "40", 3),
+    AppIconSlot::new("iphone", "60", 2), AppIconSlot::new("iphone", "60", 3),
+    AppIconSlot::new("ipad", "20", 1), AppIconSlot::new("ipad", "20", 2),
+    AppIconSlot::new("ipad", "29", 1), AppIconSlot::new("ipad", "29", 2),
+    AppIconSlot::new("ipad", "40", 1), AppIconSlot::new("ipad", "40", 2),
+    AppIconSlot::new("ipad", "76", 1), AppIconSlot::new("ipad", "76", 2),
+    AppIconSlot::new("ipad", "83.5", 2),
+    AppIconSlot::new("ios-marketing", "1024", 1),
+];
+
+/// `Contents.json` as Xcode writes it: keys in alphabetical order, two-space indents and
+/// `" : "` separators, with no dates, so the same slots always give the same bytes.
+fn appiconset_contents(slots: &[AppIconSlot]) -> String {
+    let images = slots.iter().map(|slot| format!(
+        "    {{\n      \"filename\" : \"{filename}\",\n      \"idiom\" : \"{idiom}\",\n      \"scale\" : \"{scale}x\",\n      \"size\" : \"{points}x{points}\"\n    }}",
+        filename = slot.filename(), idiom = slot.idiom, scale = slot.scale, points = slot.points,
+    )).collect::<Vec<_>>();
+    format!("{{\n  \"images\" : [\n{}\n  ],\n  \"info\" : {{\n    \"author\" : \"xcode\",\n    \"version\" : 1\n  }}\n}}\n", images.join(",\n"))
 }
 
 /// The sizes each preset offers, as the design lists them. A request may tick any of them.
@@ -791,18 +957,16 @@ const WEBSITE_ICON_SIZES: [u32; 6] = [16, 32, 48, 64, 128, 256];
 const CUSTOM_ICON_SIZES: std::ops::RangeInclusive<u32> = 1..=4096;
 
 /// Where a platform's icons go inside the set folder, how they are named, the name a
-/// failure uses for the platform, and the sizes ticked for it, smallest first.
+/// failure uses for the platform, the sizes ticked for it, smallest first, and its containers.
 #[derive(Debug, PartialEq, Eq)]
 struct IconPlan {
     folder: &'static str,
     file_prefix: &'static str,
     label: &'static str,
     sizes: Vec<u32>,
-}
-
-impl IconPlan {
-    /// The ICNS holds every macOS size, so it is made only when all of them are ticked.
-    fn writes_icns(&self) -> bool { self.folder == "macos" && self.sizes == MACOS_ICON_SIZES }
+    containers: Vec<IconContainer>,
+    /// iPhone and iPad icons are filled with white, as they can't be transparent.
+    opaque: bool,
 }
 
 /// Checks the ticked platforms and their sizes, and orders them the same way every run.
@@ -815,12 +979,12 @@ fn icon_plans(platforms: &[IconPlatform]) -> Result<Vec<IconPlan>, String> {
 }
 
 fn icon_plan(platform: &IconPlatform) -> Result<IconPlan, String> {
-    let (folder, file_prefix, label, offered): (_, _, _, &[u32]) = match platform.preset.as_str() {
-        "macos" => ("macos", "macos", "macOS", &MACOS_ICON_SIZES),
-        "favicon" => ("web", "favicon", "Website", &WEBSITE_ICON_SIZES),
-        "ios" => ("ios", "ios", "iOS", &IOS_ICON_SIZES),
-        "android" => ("android", "android", "Android", &ANDROID_ICON_SIZES),
-        "custom" => ("custom", "custom", "custom", &[]),
+    let (folder, file_prefix, label, offered, containers): (_, _, _, &[u32], &[IconContainer]) = match platform.preset.as_str() {
+        "macos" => ("macos", "macos", "macOS", &MACOS_ICON_SIZES, &[IconContainer::Appiconset, IconContainer::Icns]),
+        "favicon" => ("web", "favicon", "Website", &WEBSITE_ICON_SIZES, &[IconContainer::Ico]),
+        "ios" => ("ios", "ios", "iOS", &IOS_ICON_SIZES, &[IconContainer::Appiconset]),
+        "android" => ("android", "android", "Android", &ANDROID_ICON_SIZES, &[]),
+        "custom" => ("custom", "custom", "custom", &[], &[]),
         preset => return Err(format!("Unsupported icon preset: {preset}.")),
     };
     let sizes = platform.sizes.iter().copied().collect::<BTreeSet<_>>().into_iter().collect::<Vec<_>>();
@@ -832,7 +996,23 @@ fn icon_plan(platform: &IconPlatform) -> Result<IconPlan, String> {
     } else if let Some(size) = sizes.iter().find(|size| !offered.contains(size)) {
         return Err(format!("{label} icons don't come in {size} pixels."));
     }
-    Ok(IconPlan { folder, file_prefix, label, sizes })
+    let missing = offered.iter().copied().filter(|size| !sizes.contains(size)).collect::<Vec<_>>();
+    let available = |container: &IconContainer| !container.needs_every_size() || missing.is_empty();
+    let containers = match &platform.containers {
+        None => containers.iter().copied().filter(available).collect::<Vec<_>>(),
+        Some(ticked) => {
+            let ticked = ticked.iter().copied().collect::<BTreeSet<_>>();
+            if let Some(container) = ticked.iter().find(|container| !containers.contains(container)) {
+                return Err(format!("{label} icons don't come as {}.", container.name()));
+            }
+            if let Some(container) = ticked.iter().find(|container| !available(container)) {
+                let list = missing.iter().map(u32::to_string).collect::<Vec<_>>().join(", ");
+                return Err(format!("The {} needs every {label} size. Tick {list} too, or untick it.", container.name()));
+            }
+            ticked.into_iter().collect()
+        }
+    };
+    Ok(IconPlan { folder, file_prefix, label, sizes, containers, opaque: folder == "ios" })
 }
 
 pub fn gif_create(request: &GifCreateRequest) -> JobOutcome {
@@ -1347,13 +1527,18 @@ mod tests {
 
     #[test]
     fn icon_presets_are_named_and_reject_sizes_they_do_not_offer() {
-        let platform = |preset: &str, sizes: &[u32]| IconPlatform { preset: preset.to_string(), sizes: sizes.to_vec() };
+        let platform = |preset: &str, sizes: &[u32]| IconPlatform { preset: preset.to_string(), sizes: sizes.to_vec(), containers: None };
         let macos = icon_plan(&platform("macos", &MACOS_ICON_SIZES)).unwrap();
         assert_eq!((macos.folder, macos.file_prefix, macos.label), ("macos", "macos", "macOS"));
         assert_eq!(macos.sizes, vec![16, 32, 64, 128, 256, 512, 1024]);
-        assert!(macos.writes_icns());
-        assert!(!icon_plan(&platform("macos", &[1024, 16])).unwrap().writes_icns(), "a partial macOS set has no ICNS");
-        assert_eq!(icon_plan(&platform("ios", &IOS_ICON_SIZES)).unwrap().sizes.len(), 13);
+        assert_eq!(macos.containers, [IconContainer::Appiconset, IconContainer::Icns]);
+        assert!(icon_plan(&platform("macos", &[1024, 16])).unwrap().containers.is_empty(), "a partial macOS set is PNGs only");
+        let ios = icon_plan(&platform("ios", &IOS_ICON_SIZES)).unwrap();
+        assert_eq!((ios.sizes.len(), ios.containers.as_slice(), ios.opaque), (13, [IconContainer::Appiconset].as_slice(), true));
+        assert!(icon_plan(&platform("ios", &[20])).unwrap().containers.is_empty());
+        assert_eq!(icon_plan(&platform("favicon", &[16])).unwrap().containers, [IconContainer::Ico], "the favicon.ico takes any ticked sizes");
+        assert!(icon_plan(&platform("android", &ANDROID_ICON_SIZES)).unwrap().containers.is_empty());
+        assert!(!icon_plan(&platform("macos", &MACOS_ICON_SIZES)).unwrap().opaque);
         assert_eq!(icon_plan(&platform("custom", &[300, 1, 16, 300, 4096])).unwrap().sizes, vec![1, 16, 300, 4096]);
         assert_eq!(icon_plan(&platform("custom", &[16, 0])).unwrap_err(), "A custom size of 0 pixels is not possible. Use sizes from 1 to 4096 pixels.");
         assert_eq!(icon_plan(&platform("custom", &[5000])).unwrap_err(), "A custom size of 5000 pixels is not possible. Use sizes from 1 to 4096 pixels.");
@@ -1385,7 +1570,7 @@ mod tests {
     }
 
     fn icon_request_for(paths: &[PathBuf], platforms: &[(&str, Vec<u32>)]) -> IconSetRequest {
-        let platforms = platforms.iter().map(|(preset, sizes)| IconPlatform { preset: preset.to_string(), sizes: sizes.clone() }).collect();
+        let platforms = platforms.iter().map(|(preset, sizes)| IconPlatform { preset: preset.to_string(), sizes: sizes.clone(), containers: None }).collect();
         IconSetRequest { paths: paths.to_vec(), platforms, square_rule: SquareRule::Pad, output_location: OutputLocation::AlongsideInput }
     }
 
@@ -1396,7 +1581,7 @@ mod tests {
     }
 
     #[test]
-    fn each_preset_saves_exactly_its_sizes_with_alpha_in_one_icons_folder() {
+    fn each_preset_saves_exactly_its_sizes_and_containers_in_one_icons_folder() {
         let root = icon_root("presets");
         let input = root.join("app-icon.png");
         let original = write_master(&input);
@@ -1419,17 +1604,29 @@ mod tests {
             assert_eq!(entry_names(&set), BTreeSet::from([folder.to_string()]));
             let prefix = if preset == "favicon" { "favicon" } else { folder };
             let mut names: BTreeSet<String> = expected.iter().map(|size| format!("{prefix}-{size}.png")).collect();
-            if preset == "macos" { names.insert("app-icon.icns".to_string()); }
+            let containers: &[&str] = match preset { "macos" => &["AppIcon.appiconset", "app-icon.icns"], "ios" => &["AppIcon.appiconset"], "favicon" => &["favicon.ico"], _ => &[] };
+            names.extend(containers.iter().map(|name| name.to_string()));
             assert_eq!(entry_names(&set.join(folder)), names, "{preset}");
             for size in &expected {
                 let icon = image::open(set.join(folder).join(format!("{prefix}-{size}.png"))).unwrap();
+                if preset == "ios" {
+                    // iPhone and iPad icons can't be transparent, so the transparent side is white.
+                    assert_eq!(icon.color(), image::ColorType::Rgb8, "{preset} {size}");
+                    let icon = icon.to_rgb8();
+                    assert_eq!(icon.dimensions(), (*size, *size), "{preset} {size}");
+                    assert_eq!(icon.get_pixel(0, size / 2).0, [255, 255, 255], "{preset} {size} fills the transparent side with white");
+                    assert_eq!(icon.get_pixel(size - 1, size / 2).0, [200, 40, 90], "{preset} {size} keeps the opaque side");
+                    continue;
+                }
                 assert_eq!(icon.color(), image::ColorType::Rgba8, "{preset} {size}");
                 let icon = icon.to_rgba8();
                 assert_eq!(icon.dimensions(), (*size, *size), "{preset} {size}");
                 assert_eq!(icon.get_pixel(0, size / 2)[3], 0, "{preset} {size} keeps the transparent side");
                 assert_eq!(icon.get_pixel(size - 1, size / 2)[3], 255, "{preset} {size} keeps the opaque side");
             }
-            assert_eq!(outcome.detail, format!("{} files", names.len()));
+            let catalog = match preset { "macos" => MACOS_APPICONSET.len() + 1, "ios" => IOS_APPICONSET.len() + 1, _ => 0 };
+            let files = expected.len() + catalog + containers.iter().filter(|name| !name.ends_with("appiconset")).count();
+            assert_eq!(outcome.detail, format!("{files} files"));
             std::fs::remove_dir_all(&set).unwrap();
         }
         assert_eq!(std::fs::read(&input).unwrap(), original);
@@ -1445,11 +1642,182 @@ mod tests {
         let outcome = icon_set(&icon_request(std::slice::from_ref(&input), "macos", MACOS_ICON_SIZES.to_vec()), input.clone());
         assert!(outcome.error().is_none());
         let bytes = std::fs::read(root.join("logo-icons/macos/logo.icns")).unwrap();
-        assert!(bytes.starts_with(b"icns"));
+        assert_eq!(&bytes[..4], b"icns");
         assert_eq!(u32::from_be_bytes(bytes[4..8].try_into().unwrap()) as usize, bytes.len());
-        for code in [b"icp4", b"icp5", b"icp6", b"ic07", b"ic08", b"ic09", b"ic10"] {
-            assert!(bytes.windows(4).any(|item| item == code));
+        // Walk every entry: each is a type, its length and a PNG of that type's size.
+        let mut entries = Vec::new();
+        let mut at = 8;
+        while at < bytes.len() {
+            let code = String::from_utf8(bytes[at..at + 4].to_vec()).unwrap();
+            let length = u32::from_be_bytes(bytes[at + 4..at + 8].try_into().unwrap()) as usize;
+            let icon = image::load_from_memory_with_format(&bytes[at + 8..at + length], ImageFormat::Png).unwrap();
+            assert_eq!(icon.width(), icon.height(), "{code}");
+            entries.push((code, icon.width()));
+            at += length;
         }
+        assert_eq!(at, bytes.len());
+        let expected = [("icp4", 16), ("ic11", 32), ("icp5", 32), ("ic12", 64), ("ic07", 128), ("ic13", 256), ("ic08", 256), ("ic14", 512), ("ic09", 512), ("ic10", 1024)];
+        assert_eq!(entries, expected.map(|(code, size)| (code.to_string(), size)));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Reads `Contents.json` and checks that every slot names a file in the folder with the
+    /// slot's pixel size, and that the folder holds nothing else. Returns each slot's
+    /// idiom, size and scale.
+    fn read_appiconset(catalog: &Path) -> Vec<(String, String, String)> {
+        let contents: serde_json::Value = serde_json::from_slice(&std::fs::read(catalog.join("Contents.json")).unwrap()).unwrap();
+        assert_eq!(contents["info"], serde_json::json!({ "author": "xcode", "version": 1 }));
+        let mut files = BTreeSet::from(["Contents.json".to_string()]);
+        let slots = contents["images"].as_array().unwrap().iter().map(|slot| {
+            let text = |key: &str| slot[key].as_str().unwrap().to_string();
+            let (size, scale) = (text("size"), text("scale"));
+            let points: f64 = size.split_once('x').unwrap().0.parse().unwrap();
+            let pixels = (points * scale.trim_end_matches('x').parse::<f64>().unwrap()) as u32;
+            let icon = image::open(catalog.join(text("filename"))).unwrap();
+            assert_eq!((icon.width(), icon.height()), (pixels, pixels), "{}", text("filename"));
+            assert!(files.insert(text("filename")), "each slot has its own file");
+            (text("idiom"), size, scale)
+        }).collect();
+        assert_eq!(entry_names(catalog), files, "the folder holds exactly the files Contents.json lists");
+        slots
+    }
+
+    fn slots(list: &[(&str, &str, &str)]) -> Vec<(String, String, String)> {
+        list.iter().map(|(idiom, size, scale)| (idiom.to_string(), size.to_string(), scale.to_string())).collect()
+    }
+
+    #[test]
+    fn macos_and_ios_sets_include_a_complete_asset_catalog() {
+        let root = icon_root("appiconset");
+        let input = root.join("app-icon.png");
+        write_master(&input);
+        let request = icon_request_for(std::slice::from_ref(&input), &[("macos", MACOS_ICON_SIZES.to_vec()), ("ios", IOS_ICON_SIZES.to_vec())]);
+        let outcome = icon_set(&request, input.clone());
+        assert!(outcome.error().is_none(), "{:?}", outcome.error());
+        let set = root.join("app-icon-icons");
+        assert_eq!(read_appiconset(&set.join("macos/AppIcon.appiconset")), slots(&[
+            ("mac", "16x16", "1x"), ("mac", "16x16", "2x"), ("mac", "32x32", "1x"), ("mac", "32x32", "2x"),
+            ("mac", "128x128", "1x"), ("mac", "128x128", "2x"), ("mac", "256x256", "1x"), ("mac", "256x256", "2x"),
+            ("mac", "512x512", "1x"), ("mac", "512x512", "2x"),
+        ]));
+        assert_eq!(read_appiconset(&set.join("ios/AppIcon.appiconset")), slots(&[
+            ("iphone", "20x20", "2x"), ("iphone", "20x20", "3x"), ("iphone", "29x29", "2x"), ("iphone", "29x29", "3x"),
+            ("iphone", "40x40", "2x"), ("iphone", "40x40", "3x"), ("iphone", "60x60", "2x"), ("iphone", "60x60", "3x"),
+            ("ipad", "20x20", "1x"), ("ipad", "20x20", "2x"), ("ipad", "29x29", "1x"), ("ipad", "29x29", "2x"),
+            ("ipad", "40x40", "1x"), ("ipad", "40x40", "2x"), ("ipad", "76x76", "1x"), ("ipad", "76x76", "2x"),
+            ("ipad", "83.5x83.5", "2x"), ("ios-marketing", "1024x1024", "1x"),
+        ]));
+        // The catalog images are the platform's own PNGs, so iOS ones have no alpha either.
+        let marketing = image::open(set.join("ios/AppIcon.appiconset/ios-marketing-1024@1x.png")).unwrap();
+        assert_eq!(marketing.color(), image::ColorType::Rgb8);
+        assert_eq!(std::fs::read(set.join("macos/AppIcon.appiconset/icon_512x512@2x.png")).unwrap(), std::fs::read(set.join("macos/macos-1024.png")).unwrap());
+        assert_eq!(outcome.detail, format!("{} files", 7 + 11 + 1 + 13 + 19));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn the_website_set_includes_a_favicon_ico_with_the_ticked_sizes() {
+        let root = icon_root("ico");
+        let input = root.join("site.png");
+        write_master(&input);
+        for sizes in [WEBSITE_ICON_SIZES.to_vec(), vec![16, 256], vec![48]] {
+            let outcome = icon_set(&icon_request(std::slice::from_ref(&input), "favicon", sizes.clone()), input.clone());
+            assert!(outcome.error().is_none(), "{sizes:?}");
+            let set = outcome.output_paths()[0].clone();
+            let bytes = std::fs::read(set.join("web/favicon.ico")).unwrap();
+            assert_eq!(&bytes[..4], &[0, 0, 1, 0], "an ICO header");
+            let count = u16::from_le_bytes([bytes[4], bytes[5]]) as usize;
+            assert_eq!(count, sizes.len());
+            let mut found = Vec::new();
+            for index in 0..count {
+                let entry = &bytes[6 + 16 * index..6 + 16 * (index + 1)];
+                let side = if entry[0] == 0 { 256 } else { u32::from(entry[0]) };
+                assert_eq!(entry[0], entry[1]);
+                assert_eq!(u16::from_le_bytes([entry[6], entry[7]]), 32, "32 bits per pixel");
+                let length = u32::from_le_bytes(entry[8..12].try_into().unwrap()) as usize;
+                let offset = u32::from_le_bytes(entry[12..16].try_into().unwrap()) as usize;
+                let icon = image::load_from_memory_with_format(&bytes[offset..offset + length], ImageFormat::Png).unwrap();
+                assert_eq!((icon.width(), icon.height()), (side, side));
+                assert_eq!(&bytes[offset..offset + length], std::fs::read(set.join(format!("web/favicon-{side}.png"))).unwrap());
+                found.push(side);
+            }
+            assert_eq!(found, sizes);
+            std::fs::remove_dir_all(set).unwrap();
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn the_same_master_gives_byte_identical_sets_on_every_run() {
+        let root = icon_root("deterministic");
+        let input = root.join("brand.png");
+        write_master(&input);
+        let request = icon_request_for(std::slice::from_ref(&input), &[
+            ("macos", MACOS_ICON_SIZES.to_vec()), ("ios", IOS_ICON_SIZES.to_vec()), ("favicon", WEBSITE_ICON_SIZES.to_vec()), ("android", ANDROID_ICON_SIZES.to_vec()),
+        ]);
+        fn files(folder: &Path, into: &mut BTreeMap<PathBuf, Vec<u8>>, base: &Path) {
+            for entry in std::fs::read_dir(folder).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() { files(&path, into, base) } else { into.insert(path.strip_prefix(base).unwrap().to_path_buf(), std::fs::read(&path).unwrap()); }
+            }
+        }
+        let mut runs = Vec::new();
+        for _ in 0..2 {
+            let outcome = icon_set(&request, input.clone());
+            let set = outcome.output_paths()[0].clone();
+            let mut found = BTreeMap::new();
+            files(&set, &mut found, &set);
+            std::fs::remove_dir_all(set).unwrap();
+            runs.push(found);
+        }
+        assert_eq!(runs[0].len(), 7 + 11 + 1 + 13 + 19 + 6 + 1 + 6);
+        assert!(runs[0] == runs[1], "two runs give the same files and bytes");
+        let contents = String::from_utf8(runs[0][Path::new("macos/AppIcon.appiconset/Contents.json")].clone()).unwrap();
+        assert!(contents.starts_with("{\n  \"images\" : [\n    {\n      \"filename\" : \"icon_16x16.png\",\n      \"idiom\" : \"mac\",\n      \"scale\" : \"1x\",\n      \"size\" : \"16x16\"\n    },"), "{contents}");
+        assert!(contents.ends_with("  \"info\" : {\n    \"author\" : \"xcode\",\n    \"version\" : 1\n  }\n}\n"), "{contents}");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn containers_follow_the_ticks_and_need_every_size_where_the_design_says() {
+        let root = icon_root("container_choice");
+        let input = root.join("logo.png");
+        write_master(&input);
+        let request = |preset: &str, sizes: &[u32], containers: &[IconContainer]| IconSetRequest {
+            platforms: vec![IconPlatform { preset: preset.into(), sizes: sizes.to_vec(), containers: Some(containers.to_vec()) }],
+            ..icon_request(std::slice::from_ref(&input), preset, vec![])
+        };
+        // Unticking a container leaves just the PNGs, or the other container.
+        for (preset, sizes, containers, expected) in [
+            ("macos", MACOS_ICON_SIZES.as_slice(), vec![IconContainer::Icns], vec!["logo.icns"]),
+            ("macos", MACOS_ICON_SIZES.as_slice(), vec![IconContainer::Appiconset], vec!["AppIcon.appiconset"]),
+            ("ios", IOS_ICON_SIZES.as_slice(), vec![], vec![]),
+            ("favicon", [16, 32].as_slice(), vec![], vec![]),
+            ("favicon", [32].as_slice(), vec![IconContainer::Ico], vec!["favicon.ico"]),
+        ] {
+            let outcome = icon_set(&request(preset, sizes, &containers), input.clone());
+            assert!(outcome.error().is_none(), "{preset} {containers:?}: {:?}", outcome.error());
+            let set = outcome.output_paths()[0].clone();
+            let platform = std::fs::read_dir(&set).unwrap().next().unwrap().unwrap().path();
+            let extra = entry_names(&platform).into_iter().filter(|name| !name.ends_with(".png")).collect::<Vec<_>>();
+            assert_eq!(extra, expected, "{preset} {containers:?}");
+            std::fs::remove_dir_all(set).unwrap();
+        }
+        for (preset, sizes, containers, message) in [
+            ("macos", [16, 32, 128, 256, 512, 1024].as_slice(), vec![IconContainer::Icns], "The ICNS needs every macOS size. Tick 64 too, or untick it."),
+            ("ios", [20, 1024].as_slice(), vec![IconContainer::Appiconset], "The AppIcon.appiconset needs every iOS size. Tick 29, 40, 58, 60, 76, 80, 87, 120, 152, 167, 180 too, or untick it."),
+            ("android", ANDROID_ICON_SIZES.as_slice(), vec![IconContainer::Ico], "Android icons don't come as favicon.ico."),
+            ("favicon", WEBSITE_ICON_SIZES.as_slice(), vec![IconContainer::Icns], "Website icons don't come as ICNS."),
+        ] {
+            let outcome = icon_set(&request(preset, sizes, &containers), input.clone());
+            assert_eq!(outcome.error().map(|error| error.message.as_str()), Some(message));
+        }
+        assert_eq!(entry_names(&root), BTreeSet::from(["logo.png".to_string()]));
+        let parsed: IconPlatform = serde_json::from_value(serde_json::json!({ "preset": "macos", "sizes": [16], "containers": ["appiconset", "icns"] })).unwrap();
+        assert_eq!(parsed.containers, Some(vec![IconContainer::Appiconset, IconContainer::Icns]));
+        let parsed: IconPlatform = serde_json::from_value(serde_json::json!({ "preset": "favicon", "sizes": [16], "containers": ["ico"] })).unwrap();
+        assert_eq!(parsed.containers, Some(vec![IconContainer::Ico]));
+        assert!(serde_json::from_value::<IconPlatform>(serde_json::json!({ "preset": "macos", "sizes": [16], "containers": ["zip"] })).is_err());
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -1551,13 +1919,43 @@ mod tests {
             icon_set_with(&request, input.clone(), |icon, output| {
                 if broken && icon.width() == 1024 { return Err("the image data is damaged".into()); }
                 icon.save_with_format(output, ImageFormat::Png).map_err(|error| error.to_string())
-            })
+            }, |output, bytes| std::fs::write(output, bytes).map_err(|error| error.to_string()))
         }).collect::<Vec<_>>();
         assert!(outcomes[0].error().is_none() && outcomes[2].error().is_none());
         assert_eq!(outcomes[1].error().unwrap().message, "The macOS 1024 size failed: the image data is damaged. Nothing was saved for this image.");
         assert!(outcomes[1].output_paths().is_empty());
         assert_eq!(entry_names(&root), BTreeSet::from(["first.png", "broken.png", "last.png", "first-icons", "last-icons"].map(String::from)));
-        assert_eq!(entry_names(&root.join("last-icons/macos")).len(), 8, "seven macOS sizes and the ICNS");
+        assert_eq!(entry_names(&root.join("last-icons/macos")).len(), 9, "seven macOS sizes, the asset catalog and the ICNS");
+        for (input, original) in inputs.iter().zip(originals) { assert_eq!(std::fs::read(input).unwrap(), original); }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_failed_container_saves_nothing_for_that_master_and_names_the_container() {
+        let root = icon_root("container_failure");
+        let inputs = ["first", "broken", "last"].map(|name| root.join(format!("{name}.png")));
+        let originals = inputs.iter().map(|input| write_master(input)).collect::<Vec<_>>();
+        let save = |icon: &DynamicImage, output: &Path| icon.save_with_format(output, ImageFormat::Png).map_err(|error| error.to_string());
+        for (platforms, failing, message) in [
+            (vec![("macos", MACOS_ICON_SIZES.to_vec())], "Contents.json", "The macOS AppIcon.appiconset failed: the disk is full. Nothing was saved for this image."),
+            (vec![("macos", MACOS_ICON_SIZES.to_vec())], "broken.icns", "The macOS ICNS failed: the disk is full. Nothing was saved for this image."),
+            (vec![("android", ANDROID_ICON_SIZES.to_vec()), ("ios", IOS_ICON_SIZES.to_vec())], "ipad-83.5@2x.png", "The iOS AppIcon.appiconset failed: the disk is full. Nothing was saved for this image."),
+            (vec![("favicon", WEBSITE_ICON_SIZES.to_vec())], "favicon.ico", "The Website favicon.ico failed: the disk is full. Nothing was saved for this image."),
+        ] {
+            let request = icon_request_for(&inputs, &platforms);
+            let outcomes = inputs.iter().map(|input| {
+                let broken = input.ends_with("broken.png");
+                icon_set_with(&request, input.clone(), save, |output, bytes| {
+                    if broken && output.ends_with(failing) { return Err("the disk is full".into()); }
+                    std::fs::write(output, bytes).map_err(|error| error.to_string())
+                })
+            }).collect::<Vec<_>>();
+            assert!(outcomes[0].error().is_none() && outcomes[2].error().is_none(), "{failing}");
+            assert_eq!(outcomes[1].error().unwrap().message, message);
+            assert!(outcomes[1].output_paths().is_empty());
+            assert_eq!(entry_names(&root), BTreeSet::from(["first.png", "broken.png", "last.png", "first-icons", "last-icons"].map(String::from)), "{failing}");
+            for name in ["first-icons", "last-icons"] { std::fs::remove_dir_all(root.join(name)).unwrap(); }
+        }
         for (input, original) in inputs.iter().zip(originals) { assert_eq!(std::fs::read(input).unwrap(), original); }
         std::fs::remove_dir_all(root).unwrap();
     }
