@@ -45,7 +45,7 @@ export const imageMetadataTool: MediaTool<ImageMetadataOptions> = {
   Panel: ImageMetadataPanel,
   // Inspecting has its own button; the run only removes metadata.
   canRun: ({ mode }) => mode !== "inspect",
-  runLabel: "Remove metadata",
+  runLabel: () => "Remove metadata",
   buildRequest: (_options, { paths, outputLocation }) => ({
     command: "image_metadata",
     request: { paths, outputLocation },

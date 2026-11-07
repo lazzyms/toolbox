@@ -65,7 +65,7 @@ export const MediaWorkspaceView = ({ utility: activeUtility, initialPaths, onFil
 
           {destination}
           <Button variant="default" disabled={loading || files.length === 0 || !canRun(toolId, files)} onClick={run} className="workspace-primary-action" {...shortcutTarget("run")}>
-            {runLabel ?? tool.runLabel ?? activeUtility.shortTitle}
+            {runLabel ?? tool.runLabel?.(files.length) ?? activeUtility.shortTitle}
             <ShortcutHint id="run" />
           </Button>
           </CardContent>

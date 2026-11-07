@@ -34,8 +34,8 @@ export interface MediaTool<Options> {
   buildRequest: (options: Options, input: MediaRunInput) => MediaRequest;
   /** Whether the options allow a run, beyond having files and not running. */
   canRun?: (options: Options, files: string[]) => boolean;
-  /** The run button's label when the shared run has none; defaults to the tool's short title. */
-  runLabel?: string;
+  /** The run button's label for this many files when the shared run has none; defaults to the tool's short title. */
+  runLabel?: (fileCount: number) => string;
   /** Whether the shared file list offers reordering; defaults to true. */
   showFileOrdering?: boolean;
 }
