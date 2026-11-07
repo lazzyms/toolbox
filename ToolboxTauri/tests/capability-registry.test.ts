@@ -3,14 +3,17 @@ import { readdirSync, readFileSync } from "node:fs";
 import test from "node:test";
 import { saveStepAppliesTo, saveStepCommands, saveStepFor } from "../src/registry/saveSteps.ts";
 import {
+  capabilityFor,
   parseCapabilityRegistry,
   SharedCapabilityRegistry,
 } from "../src/registry/capabilities.ts";
 import {
   ToolWorkspaceRegistry,
   UtilityRegistry,
+  isPdfSceneTool,
   toolsForWorkspace,
   workspaceEntries,
+  workspaceForTool,
 } from "../src/registry/index.ts";
 
 test("UI capabilities are the shared native contract facts", () => {
@@ -30,6 +33,7 @@ test("UI capabilities are the shared native contract facts", () => {
       nativeAvailability: shared.nativeAvailability,
       outputSuffix: shared.outputSuffix,
       manyToOne: shared.manyToOne,
+      ...(shared.formatFamilies ? { formatFamilies: shared.formatFamilies } : {}),
     });
     assert.equal(
       utility.status,
@@ -49,21 +53,53 @@ test("UI capabilities are the shared native contract facts", () => {
   assert.deepEqual(capabilitiesByCommand.get("images_to_pdf")?.acceptedExtensions, [
     ".png", ".jpg", ".jpeg", ".webp", ".heic",
   ]);
-  assert.equal(capabilitiesByCommand.get("pdf_to_text")?.supportsPageSelection, true);
-  assert.equal(capabilitiesByCommand.get("pdf_to_text")?.supportsPreview, false);
+  assert.equal(capabilitiesByCommand.get("extract_from_pdf")?.supportsPageSelection, true);
+  assert.equal(capabilitiesByCommand.get("extract_from_pdf")?.supportsPreview, false);
+  assert.equal(capabilitiesByCommand.get("extract_from_pdf")?.inputCardinality, "multiple");
+  assert.equal(capabilitiesByCommand.get("pdf_to_text"), undefined);
+  assert.equal(capabilitiesByCommand.get("extract_pdf_images"), undefined);
+  assert.equal(UtilityRegistry.find(({ id }) => id === "pdf-extract")?.command, "extract_from_pdf");
   assert.equal(capabilitiesByCommand.get("pdf_to_images")?.supportsPreview, false);
   assert.equal(capabilitiesByCommand.get("extract_pdf_pages")?.supportsPreview, false);
   assert.equal(capabilitiesByCommand.get("create_gif")?.inputCardinality, "ordered");
   assert.equal(capabilitiesByCommand.get("create_gif")?.supportsPreview, true);
   assert.equal(capabilitiesByCommand.get("extract_gif_frames")?.supportsPreview, false);
-  assert.equal(capabilitiesByCommand.get("ocr_pdf")?.nativeAvailability, "unavailable");
+  assert.equal(capabilitiesByCommand.get("ocr_pdf")?.nativeAvailability, "available");
+  assert.equal(capabilitiesByCommand.get("ocr_pdf")?.inputCardinality, "multiple");
+  assert.equal(capabilitiesByCommand.get("ocr_pdf")?.outputSuffix, "-ocr");
+  assert.deepEqual(capabilitiesByCommand.get("ocr_pdf")?.acceptedExtensions, [".pdf", ".png", ".jpg", ".jpeg", ".webp", ".heic", ".tif", ".tiff"]);
+  assert.deepEqual(capabilitiesByCommand.get("inspect_pdf_privacy"), {
+    command: "inspect_pdf_privacy",
+    acceptedExtensions: [".pdf"],
+    inputCardinality: "multiple",
+    supportsPageSelection: false,
+    supportsPreview: false,
+    nativeAvailability: "available",
+    outputSuffix: "",
+    manyToOne: false,
+  });
+  assert.equal(UtilityRegistry.find(({ id }) => id === "pdf-privacy")?.command, "inspect_pdf_privacy");
+  assert.deepEqual(capabilitiesByCommand.get("edit_pdf_properties"), {
+    command: "edit_pdf_properties",
+    acceptedExtensions: [".pdf"],
+    inputCardinality: "multiple",
+    supportsPageSelection: false,
+    supportsPreview: false,
+    nativeAvailability: "available",
+    outputSuffix: "-edited",
+    manyToOne: false,
+  });
+  assert.equal(UtilityRegistry.find(({ id }) => id === "pdf-properties")?.command, "edit_pdf_properties");
   assert.equal(capabilitiesByCommand.get("blur_faces")?.nativeAvailability, "unavailable");
   assert.equal(capabilitiesByCommand.get("remove_image_background")?.nativeAvailability, "unavailable");
 });
 
 test("every tool declares one output suffix and many-to-one tools take ordered inputs", () => {
+  // Read-only tools write no file, so they declare an empty suffix.
+  const readOnly = new Set(["inspect_pdf_privacy"]);
   for (const capability of SharedCapabilityRegistry) {
-    assert.match(capability.outputSuffix, /^-[a-z0-9]+(-[a-z0-9]+)*$/, capability.command);
+    if (readOnly.has(capability.command)) assert.equal(capability.outputSuffix, "", capability.command);
+    else assert.match(capability.outputSuffix, capability.formatFamilies ? /^$/ : /^-[a-z0-9]+(-[a-z0-9]+)*$/, capability.command);
     assert.equal(
       capability.manyToOne,
       capability.inputCardinality === "ordered",
@@ -82,14 +118,17 @@ test("every tool declares one output suffix and many-to-one tools take ordered i
   assert.equal(suffixes.get("merge_pdfs"), "-merged");
   assert.equal(suffixes.get("protect_files"), "-protected");
   assert.equal(suffixes.get("pdf_to_images"), "-images");
+  assert.equal(suffixes.get("convert_to_pdf"), "");
 });
 
 test("every many-to-one tool opens the save step and sends the chosen path", () => {
-  const viewSources = readdirSync(new URL("../src/views/", import.meta.url))
-    .filter((name) => name.endsWith(".tsx"))
-    .map((name) => readFileSync(new URL(`../src/views/${name}`, import.meta.url), "utf8"));
+  const requestSources = ["views", "features"].flatMap((folder) =>
+    readdirSync(new URL(`../src/${folder}/`, import.meta.url), { recursive: true, encoding: "utf8" })
+      .filter((name) => /\.tsx?$/.test(name))
+      .map((name) => readFileSync(new URL(`../src/${folder}/${name}`, import.meta.url), "utf8")),
+  );
   const requestFor = (command: string) => {
-    for (const source of viewSources) {
+    for (const source of requestSources) {
       const start = source.indexOf(`invoke<ToolResult>("${command}"`);
       if (start === -1) continue;
       const open = source.indexOf("request: {", start) + "request: ".length;
@@ -132,16 +171,17 @@ test("workspace membership covers every registered utility exactly once", () => 
   );
 });
 
-test("workspace entries group editor tools into one entry and list More tools last", () => {
+test("workspace entries group editor tools into one entry and list labelled groups after the main tools", () => {
   const entryIds = (workspaceId: string, options?: { groupEditor?: boolean }) => {
     const workspace = ToolWorkspaceRegistry.find(({ id }) => id === workspaceId)!;
     return workspaceEntries(workspace, toolsForWorkspace(workspace), options)
-      .map((entry) => `${entry.more ? "more:" : ""}${entry.tools.map(({ id }) => id).join("+")}`);
+      .map((entry) => `${entry.group ? `${entry.group.toLowerCase()}:` : ""}${entry.tools.map(({ id }) => id).join("+")}`);
   };
 
   assert.deepEqual(entryIds("pdf-editor"), [
     "pdf-edit+pdf-watermark+pdf-sign+pdf-remove-pages",
     "pdf-organize", "pdf-merge", "pdf-split", "pdf-crop", "pdf-page-numbers", "pdf-redact",
+    "details:pdf-privacy", "details:pdf-properties",
     "more:pdf-rotate", "more:pdf-repair", "more:pdf-compare", "more:pdf-extract-pages",
   ]);
   assert.deepEqual(entryIds("image-editor"), ["resize+crop+rotate+image-tone+image-watermark", "heic-convert", "image-metadata"]);
@@ -151,6 +191,19 @@ test("workspace entries group editor tools into one entry and list More tools la
   const [editEntry] = workspaceEntries(pdfEditor, toolsForWorkspace(pdfEditor).filter(({ id }) => id !== "pdf-edit"));
   assert.equal(editEntry.title, "Edit PDF");
   assert.equal(editEntry.tools[0].id, "pdf-watermark", "a hidden tool leaves the group led by the next one");
+});
+
+test("Crop and Resize PDF is a PDF Editor batch tool that takes many PDFs", () => {
+  const crop = UtilityRegistry.find(({ id }) => id === "pdf-crop")!;
+  assert.equal(crop.title, "Crop and Resize PDF");
+  assert.equal(crop.command, "crop_pdf");
+  assert.equal(workspaceForTool("pdf-crop")?.id, "pdf-editor");
+  assert.equal(isPdfSceneTool("pdf-crop"), false, "the rail entry opens the batch view, not the page editor");
+  assert.equal(crop.capability.inputCardinality, "multiple");
+  assert.deepEqual(crop.capability.acceptedExtensions, [".pdf"]);
+  const resize = capabilityFor("resize_pdf");
+  assert.equal(resize.outputSuffix, "-resized");
+  assert.deepEqual({ ...resize, outputSuffix: "-cropped" }, capabilityFor("crop_pdf"), "Resize shares every input rule with Crop");
 });
 
 test("shared capability parsing rejects drift-prone shapes", () => {
@@ -183,4 +236,34 @@ test("shared capability parsing rejects drift-prone shapes", () => {
     () => parseCapabilityRegistry([{ ...valid, manyToOne: "yes" }]),
     /invalid many-to-one flag/,
   );
+});
+
+const familySamples = JSON.parse(
+  readFileSync(new URL("../shared/capability-family-samples.json", import.meta.url), "utf8"),
+);
+
+test("format families derive accepted extensions and per-family flags like the native parser", () => {
+  const { row, acceptedExtensions, families } = familySamples.valid;
+  const [capability] = parseCapabilityRegistry([row]);
+
+  assert.deepEqual(capability.acceptedExtensions, acceptedExtensions);
+  assert.deepEqual(
+    capability.formatFamilies?.map(({ id, nativeAvailability, basicFidelity }) => ({ id, nativeAvailability, basicFidelity })),
+    families,
+  );
+  assert.deepEqual(SharedCapabilityRegistry.filter((shared) => shared.formatFamilies).map(({ command }) => command), ["convert_to_pdf"]);
+  const convert = SharedCapabilityRegistry.find(({ command }) => command === "convert_to_pdf")!;
+  assert.deepEqual(convert.acceptedExtensions, convert.formatFamilies!.flatMap(({ extensions }) => extensions));
+  assert.deepEqual(
+    convert.formatFamilies!.filter(({ nativeAvailability }) => nativeAvailability === "available").map(({ id }) => id),
+    ["plain-text", "pdf", "word", "rich-text", "spreadsheets", "presentations", "markdown", "web-pages", "tables", "ebooks", "legacy-office", "mobi"],
+  );
+});
+
+test("format families reject shared extensions, empty families and mixed extension shapes", () => {
+  const { formatFamilies: _families, ...base } = familySamples.valid.row;
+  for (const [name, shape] of Object.entries(familySamples.invalid)) {
+    assert.throws(() => parseCapabilityRegistry([{ ...base, ...(shape as object) }]), Error, `${name} must be rejected`);
+  }
+  assert.throws(() => parseCapabilityRegistry([base]), /either accepted extensions or format families/);
 });

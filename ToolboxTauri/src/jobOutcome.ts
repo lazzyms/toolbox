@@ -1,19 +1,31 @@
 import type {
   AtomicToolId,
   ErrorKind,
+  FontSource,
+  FontStyle,
+  FontUse,
   JobOutcome,
   LimitKind,
+  OutcomeDetail,
   OutcomePointer,
   OutcomeWarning,
+  PackNeed,
   SkipCode,
   SkipReason,
   ToolError,
   ToolResult,
   WarningCode,
 } from "./contracts";
+import { jpegColours } from "./contracts";
 import { UtilityRegistry } from "./registry";
 
 const errorKinds: readonly ErrorKind[] = ["invalidInput", "unavailable", "limitExceeded", "processing", "wrongPassword", "cancelled"];
+
+const packNeeds: readonly PackNeed[] = ["notInstalled", "damaged", "incompatible"];
+
+const fontStyles: readonly FontStyle[] = ["regular", "bold", "italic", "boldItalic"];
+
+const fontSources: readonly FontSource[] = ["embedded", "system", "bundled fallback", "bundled default"];
 
 const limitKinds: readonly LimitKind[] = ["fileSize", "pageCount", "time", "decompression"];
 
@@ -26,15 +38,9 @@ const skipCodes: readonly SkipCode[] = [
   "textAlreadyPresent",
   "noEffectiveChange",
   "unsupportedFormat",
+  "needsOcr",
   "cancelled",
 ];
-
-const warningDetailKeys: Record<WarningCode, readonly string[] | null> = {
-  signatureRemoved: null,
-  fontSubstituted: ["requestedFamily", "actualFamily"],
-  renamedToAvoidReplacing: ["chosenName", "finalName"],
-  precisionReduced: null,
-};
 
 const toolIds = new Set<string>(UtilityRegistry.map((utility) => utility.id));
 
@@ -55,6 +61,55 @@ const member = <T extends string>(value: unknown, allowed: readonly T[], path: s
 const texts = (value: unknown, path: string): string[] =>
   Array.isArray(value) ? value.map((item, index) => text(item, `${path}[${index}]`)) : fail(path, "an array");
 
+const byteSizes = (outcome: Json, path: string): { originalBytes?: number; outputBytes?: number } => {
+  const sizes: { originalBytes?: number; outputBytes?: number } = {};
+  for (const key of ["originalBytes", "outputBytes"] as const) {
+    const value = outcome[key];
+    if (value === null || value === undefined) continue;
+    sizes[key] = Number.isSafeInteger(value) && (value as number) >= 0 ? (value as number) : fail(`${path}.${key}`, "a non-negative whole number of bytes");
+  }
+  return sizes;
+};
+
+const pageDetails = (outcome: Json, path: string): { pageDetails?: OutcomeDetail[] } => {
+  const value = outcome.pageDetails;
+  if (value === null || value === undefined) return {};
+  if (!Array.isArray(value)) return fail(`${path}.pageDetails`, "an array");
+  if (value.length === 0) return {};
+  return {
+    pageDetails: value.map((item, index) => {
+      const detail = record(item, `${path}.pageDetails[${index}]`);
+      return { label: text(detail.label, `${path}.pageDetails[${index}].label`), value: text(detail.value, `${path}.pageDetails[${index}].value`) };
+    }),
+  };
+};
+
+type DetailParser = (value: unknown, path: string) => unknown;
+
+const count = (value: unknown, path: string): number =>
+  Number.isSafeInteger(value) && (value as number) >= 0 ? (value as number) : fail(path, "a whole number");
+
+const counts = (value: unknown, path: string): number[] =>
+  Array.isArray(value) ? value.map((item, index) => count(item, `${path}[${index}]`)) : fail(path, "an array");
+
+const colour = (value: unknown, path: string) => member(value, jpegColours, path);
+
+const imagePlace = { page: count, image: count };
+
+const warningDetails: Record<WarningCode, Record<string, DetailParser> | null> = {
+  signatureRemoved: null,
+  fontSubstituted: { requestedFamily: text, actualFamily: text },
+  renamedToAvoidReplacing: { chosenName: text, finalName: text },
+  precisionReduced: null,
+  omittedContent: null,
+  approximateLayout: null,
+  imageUnsupported: { ...imagePlace, feature: text },
+  imageDamaged: imagePlace,
+  imageTooLarge: { ...imagePlace, width: count, height: count },
+  jpegColourKept: { colour, pages: counts, images: count },
+  pagesWithoutText: { pages: counts },
+};
+
 const parsePointer = (value: unknown, path: string): OutcomePointer | null => {
   if (value === null || value === undefined) return null;
   const pointer = record(value, path);
@@ -62,7 +117,14 @@ const parsePointer = (value: unknown, path: string): OutcomePointer | null => {
     const toolId = text(pointer.toolId, `${path}.toolId`);
     return toolIds.has(toolId) ? { kind: "tool", toolId: toolId as AtomicToolId } : fail(`${path}.toolId`, "a registered tool id");
   }
-  if (pointer.kind === "pack") return { kind: "pack", packId: text(pointer.packId, `${path}.packId`) };
+  if (pointer.kind === "pack") {
+    return {
+      kind: "pack",
+      packId: text(pointer.packId, `${path}.packId`),
+      name: text(pointer.name, `${path}.name`),
+      reason: member(pointer.reason, packNeeds, `${path}.reason`),
+    };
+  }
   if (pointer.kind === "outputFolder") return { kind: "outputFolder" };
   return fail(`${path}.kind`, "tool, pack or outputFolder");
 };
@@ -87,16 +149,27 @@ const parseSkipReason = (value: unknown, path: string): SkipReason => {
 
 const parseWarning = (value: unknown, path: string): OutcomeWarning => {
   const warning = record(value, path);
-  const code = member(warning.code, Object.keys(warningDetailKeys) as WarningCode[], `${path}.code`);
+  const code = member(warning.code, Object.keys(warningDetails) as WarningCode[], `${path}.code`);
   const message = text(warning.message, `${path}.message`);
-  const detailKeys = warningDetailKeys[code];
-  if (!detailKeys) return { code, message } as OutcomeWarning;
+  const parsers = warningDetails[code];
+  if (!parsers) return { code, message } as OutcomeWarning;
   const details = record(warning.details, `${path}.details`);
   return {
     code,
     message,
-    details: Object.fromEntries(detailKeys.map((key) => [key, text(details[key], `${path}.details.${key}`)])),
+    details: Object.fromEntries(Object.entries(parsers).map(([key, parse]) => [key, parse(details[key], `${path}.details.${key}`)])),
   } as OutcomeWarning;
+};
+
+const parseFontUse = (value: unknown, path: string): FontUse => {
+  const font = record(value, path);
+  return {
+    requestedFamily: text(font.requestedFamily, `${path}.requestedFamily`),
+    requestedStyle: member(font.requestedStyle, fontStyles, `${path}.requestedStyle`),
+    fontUsed: text(font.fontUsed, `${path}.fontUsed`),
+    styleUsed: member(font.styleUsed, fontStyles, `${path}.styleUsed`),
+    source: member(font.source, fontSources, `${path}.source`),
+  };
 };
 
 export const parseJobOutcome = (value: unknown, path = "outcome"): JobOutcome => {
@@ -107,6 +180,18 @@ export const parseJobOutcome = (value: unknown, path = "outcome"): JobOutcome =>
     warnings: Array.isArray(outcome.warnings)
       ? outcome.warnings.map((warning, index) => parseWarning(warning, `${path}.warnings[${index}]`))
       : fail(`${path}.warnings`, "an array"),
+    ...byteSizes(outcome, path),
+    ...pageDetails(outcome, path),
+    ...(outcome.basicFidelity === undefined
+      ? {}
+      : { basicFidelity: typeof outcome.basicFidelity === "boolean" ? outcome.basicFidelity : fail(`${path}.basicFidelity`, "a boolean") }),
+    ...(outcome.fonts === undefined
+      ? {}
+      : {
+          fonts: Array.isArray(outcome.fonts)
+            ? outcome.fonts.map((font, index) => parseFontUse(font, `${path}.fonts[${index}]`))
+            : fail(`${path}.fonts`, "an array"),
+        }),
   };
   const outputPaths = texts(outcome.outputPaths, `${path}.outputPaths`);
   const hasFailure = outcome.failure !== null && outcome.failure !== undefined;
