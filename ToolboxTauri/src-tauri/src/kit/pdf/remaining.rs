@@ -2060,6 +2060,51 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn images_over_the_recorded_decoded_size_are_reported_before_their_data_is_decoded_and_the_rest_are_saved() {
+        // Recorded limit: an image may decode to at most 500,000,000 bytes, checked from its declared
+        // width, height, components, bit depth and mask before any filter runs. The undecodable data
+        // proves the order: an image under the limit reaches the filter and is damaged, one over it never does.
+        assert_eq!(embedded_image::MAX_DECODED_BYTES,500_000_000);
+        let temp=split_fixture_root("images-decoded-limit");
+        let input=temp.join("limit.pdf");
+        let jpeg=jpeg_bytes([0,0,255]);
+        image_pdf(&input,|document| {
+            let mask=document.add_object(image_stream(dictionary! { "Width"=>1, "Height"=>1, "ColorSpace"=>"DeviceGray", "BitsPerComponent"=>8 },vec![255]));
+            let grey=|width: i64,height: i64,extra: lopdf::Dictionary| {
+                let mut entries=dictionary! { "Width"=>width, "Height"=>height, "ColorSpace"=>"DeviceGray", "BitsPerComponent"=>8, "Filter"=>"FlateDecode" };
+                for (key,value) in extra { entries.set(key,value); }
+                image_stream(entries,b"not zlib".to_vec())
+            };
+            vec![
+                vec![image_stream(dictionary! { "Width"=>2, "Height"=>2, "ColorSpace"=>"DeviceRGB", "BitsPerComponent"=>8, "Filter"=>"DCTDecode" },jpeg.clone())],
+                vec![
+                    grey(20_000,25_000,dictionary! {}),
+                    grey(20_000,25_001,dictionary! {}),
+                    grey(20_000,12_501,dictionary! { "SMask"=>mask }),
+                    grey(20_000,12_500,dictionary! { "SMask"=>mask }),
+                ],
+            ]
+        });
+        let original=fs::read(&input).unwrap();
+
+        let outcome=extract_images(&input);
+
+        let folder=temp.join("limit-images");
+        assert!(matches!(outcome.state,crate::kit::contracts::OutcomeState::Succeeded { .. }));
+        assert_eq!(sorted_names(&folder),vec!["page-1-image-1.jpg"]);
+        assert_eq!(fs::read(folder.join("page-1-image-1.jpg")).unwrap(),jpeg);
+        assert_eq!(warning_kinds(&outcome),vec![
+            WarningKind::ImageDamaged { page:2, image:1 },
+            WarningKind::ImageTooLarge { page:2, image:2, width:20_000, height:25_001 },
+            WarningKind::ImageTooLarge { page:2, image:3, width:20_000, height:12_501 },
+            WarningKind::ImageDamaged { page:2, image:4 },
+        ]);
+        assert_eq!(outcome.warnings[1].message,"Page 2, image 2 — Would be 20,000 × 25,001 px when decoded, over the size limit. Not saved.");
+        assert_eq!(fs::read(&input).unwrap(),original);
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
     fn a_pdf_fails_only_when_none_of_its_images_could_be_saved() {
         let temp=split_fixture_root("images-none-decoded");
         let jbig2=|data: Vec<u8>| image_stream(dictionary! { "Width"=>1, "Height"=>1, "ColorSpace"=>"DeviceGray", "BitsPerComponent"=>1, "Filter"=>"JBIG2Decode" },data);
