@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Remove Restrictions</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+.tb{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;font-size:13px;line-height:1.45;color:var(--fg);background:var(--bg);-webkit-font-smoothing:antialiased;position:relative}
+.tb.dark{--bg:#0a0a0a;--side:#111111;--panel:#0f0f0f;--raise:#1c1c1c;--fg:#fafafa;--mut:#a3a3a3;--faint:#8a8a8a;--line:rgba(255,255,255,.08);--line2:rgba(255,255,255,.16);--sel:#262626;--pri:#ebebeb;--prifg:#171717;--bad:#ff6b6b;--warn:#f2b552;--ring:#a3a3a3;--scrim:rgba(0,0,0,.6);--seg-ok:#d4d4d4;--seg-wait:#2a2a2a}
+.tb.light{--bg:#ffffff;--side:#f7f7f7;--panel:#fcfcfc;--raise:#f2f2f2;--fg:#0a0a0a;--mut:#525252;--faint:#666666;--line:#e8e8e8;--line2:#d4d4d4;--sel:#ebebeb;--pri:#171717;--prifg:#fafafa;--bad:#c10007;--warn:#9a5800;--ring:#525252;--scrim:rgba(0,0,0,.28);--seg-ok:#262626;--seg-wait:#e5e5e5}
+.tb button,.tb input,.tb select{font:inherit;color:inherit}
+.btn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:7px;border:1px solid var(--line2);background:var(--raise);color:var(--fg);font-weight:500;cursor:pointer;white-space:nowrap;box-sizing:border-box;text-decoration:none}
+.btn.pri{background:var(--pri);color:var(--prifg);border-color:transparent}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--mut)}
+.btn.ghost.link{color:var(--fg);padding:0;text-decoration:underline}
+.btn.sm{height:26px;padding:0 9px;font-size:12px}
+.btn.ib{width:26px;padding:0;justify-content:center}
+.btn[aria-disabled=true]{opacity:.4;cursor:default}
+.kbd{font-size:11px;line-height:16px;padding:0 5px;border-radius:4px;border:1px solid var(--line2);color:var(--mut);font-weight:500;white-space:nowrap}
+.btn.pri .kbd{border-color:currentColor;color:inherit;opacity:.6}
+.nav{display:flex;align-items:center;gap:9px;min-height:30px;padding:0 10px;border-radius:7px;color:var(--mut);text-decoration:none;border:0;background:none;width:100%;text-align:left;cursor:pointer;box-sizing:border-box}
+.nav.on{background:var(--sel);color:var(--fg);font-weight:500}
+.rgrp{padding:12px 10px 4px;font-size:11px;font-weight:600;color:var(--faint);text-transform:uppercase;letter-spacing:.05em}
+.field{height:30px;border-radius:7px;border:1px solid var(--line2);background:var(--bg);padding:0 10px;width:100%;box-sizing:border-box;min-width:0}
+.field[aria-invalid=true]{border-color:var(--bad)}
+.field[readonly]{color:var(--mut)}
+.lbl{font-size:12px;font-weight:600}
+.hint{font-size:12px;color:var(--mut)}
+.badge{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:999px;border:1px solid var(--line2);font-size:12px;color:var(--fg);white-space:nowrap}
+svg.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.tb :focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+a{color:inherit}a:hover{color:var(--mut)}
+.seg{display:inline-flex;padding:2px;border-radius:8px;background:var(--raise);border:1px solid var(--line)}
+.seg button{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 10px;border:0;border-radius:6px;background:none;cursor:pointer;color:var(--mut);font-weight:500;font-size:12px}
+.seg button[aria-checked=true]{background:var(--bg);color:var(--fg);box-shadow:0 1px 2px rgba(0,0,0,.25)}
+.opt{display:flex;flex-direction:column;gap:6px}
+.sect{border-top:1px solid var(--line);padding-top:14px;display:flex;flex-direction:column;gap:8px}
+.lock{opacity:.5}
+.alert{display:flex;gap:8px;align-items:flex-start;padding:8px 10px;border-radius:8px;border:1px solid var(--bad);color:var(--bad);font-size:12px}
+.flag{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:8px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--raise)}
+.tbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:12px 20px 8px}
+.drop{flex:1;border:1.5px dashed var(--line2);border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:40px;text-align:center;min-height:420px}
+.frow{display:grid;grid-template-columns:18px minmax(0,1fr) 56px 64px 200px 26px;gap:12px;align-items:center;padding:7px 20px;border-bottom:1px solid var(--line);min-height:40px}
+.frow.sel{background:var(--sel)}
+.ell{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.num{font-variant-numeric:tabular-nums}
+.rrow{display:grid;grid-template-columns:20px minmax(0,1fr) 92px 230px;gap:12px;align-items:center;padding:8px 20px;border-bottom:1px solid var(--line);min-height:36px}
+.chip{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;border-radius:999px;border:1px solid var(--line2);background:transparent;font-size:12px;cursor:pointer;color:var(--mut)}
+.chip[aria-pressed="true"]{background:var(--sel);color:var(--fg);font-weight:500}
+.inl{grid-column:2 / -1;display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;padding:10px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--panel)}
+.inl .opt{flex:1 1 180px}
+.fit{height:100vh;overflow:clip}.fit>div{height:100%}.fit>div,.fit>div>div,.fit section,.fit section>div{min-height:0}.fit section{overflow:hidden;max-height:100%}.fit section>ul{flex:1 1 auto;min-height:0}
+.notadd{margin:14px 20px 20px;border:1px solid var(--line);border-radius:10px}
+.notadd .g{display:grid;grid-template-columns:minmax(0,200px) minmax(0,1fr) auto;column-gap:16px;row-gap:8px;padding:10px 14px;align-items:center}
+.xrow{display:grid;grid-template-columns:18px minmax(0,1fr) 220px 170px 26px;gap:12px;align-items:center;padding:7px 20px;border-bottom:1px solid var(--line);min-height:40px}
+.xrow.sel{background:var(--sel)}
+.kv{display:grid;grid-template-columns:110px minmax(0,1fr);gap:3px 12px;margin:0;font-size:12px}
+.kv dt{color:var(--mut)}.kv dd{margin:0;min-width:0;overflow-wrap:anywhere}
+</style>
+</helmet>
+<div class="{{themeClass}} fit" style="min-height: 640px; display: flex; flex-wrap: wrap">
+<aside aria-label="PDF Editor" style="flex: 1 1 220px; max-width: 232px; background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; padding: 14px 10px; box-sizing: border-box">
+<a class="nav" href="Main.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M5 12l6 6M5 12l6-6"></path></svg>All tools</a>
+<div style="padding: 16px 10px 6px; font-size: 12px; font-weight: 600; color: var(--faint)">PDF Editor</div>
+<nav aria-label="PDF Editor tools" style="display: flex; flex-direction: column; gap: 2px"><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"></path></svg>Edit PDF</button><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="7" height="7" rx="1"></rect><rect x="14" y="4" width="7" height="7" rx="1"></rect><rect x="3" y="14" width="7" height="7" rx="1"></rect><rect x="14" y="14" width="7" height="7" rx="1"></rect></svg>Organize Pages</button><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4v5a5 5 0 0 0 5 5h7M18 4v5"></path><path d="M15 11l3 3-3 3"></path></svg>Merge PDF</button><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18"></path><path d="M8 8L4 12l4 4M16 8l4 4-4 4"></path></svg>Split PDF</button><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2v14a2 2 0 0 0 2 2h14M2 6h14a2 2 0 0 1 2 2v14"></path></svg>Crop and Resize</button><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4L7 20M17 4l-2 16M4 9h16M3 15h16"></path></svg>Page Numbers and Bates</button>
+<div class="rgrp" id="rail-details">Details</div>
+<button class="nav" aria-pressed="false" tabindex="-1" aria-describedby="rail-details" title="See what each PDF reveals besides its pages. Changes nothing."><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6v18h5"></path><path d="M14 3v4h4v3"></path><circle cx="16" cy="16" r="3.5"></circle><path d="M18.5 18.5L21 21"></path></svg>Privacy Check</button><button class="nav" aria-pressed="false" tabindex="-1" aria-describedby="rail-details" title="Set, keep or clear title, author, subject and dates."><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6v18h12V7z"></path><path d="M14 3v4h4"></path><path d="M9 12h6M9 16h4"></path></svg>Edit Properties</button><button class="nav on" aria-pressed="true" aria-describedby="rail-details" title="Lift print, copy and edit limits with the permissions password. Open passwords are removed in File Security."><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"></path><path d="M9 9l6 6M15 9l-6 6"></path></svg>Remove Restrictions</button></nav>
+<div style="flex: 1"></div>
+<a class="nav" href="Settings.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"></path></svg>Settings<span class="kbd" style="margin-left: auto">{{settingsKey}}</span></a>
+<p class="hint" style="margin: 0; padding: 10px 10px 0">Files stay on this device.</p>
+</aside>
+<div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+<header style="min-height: 52px; display: flex; align-items: center; gap: 14px; padding: 0 20px; border-bottom: 1px solid var(--line); flex-wrap: wrap">
+<h1 style="margin: 0; font-size: 15px; font-weight: 600">Remove Restrictions</h1>
+<span class="hint">Lift print, copy and edit limits. Saves unrestricted copies. Open passwords stay.</span>
+<div style="flex: 1"></div>
+<button class="btn ghost"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"></circle><path d="M21 21l-6-6"></path></svg>Find a tool<span class="kbd">{{findKey}}</span></button>
+</header>
+<div style="flex: 1; display: flex; flex-wrap: wrap; min-height: 0">
+<section aria-label="Files" style="flex: 999 1 480px; min-width: 0; display: flex; flex-direction: column">
+<sc-if value="{{isEmpty}}" hint-placeholder-val="{{ false }}"><div style="flex: 1; display: flex; padding: 20px; box-sizing: border-box"><div role="region" aria-label="Drop PDFs to add them" class="drop">
+<svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 28px; height: 28px; color: var(--mut); stroke-width: 1.5"><path d="M12 5v14M6 13l6 6 6-6"></path></svg>
+<p style="margin: 0; font-size: 17px; font-weight: 600">Drop PDFs to remove their restrictions</p>
+<p class="hint" style="margin: 0; max-width: 400px">Lifts limits on printing, copying and editing. You need the permissions password the author set. Unrestricted copies are saved. Your originals stay as they are.</p>
+<button class="btn pri" style="margin-top: 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2"></path></svg>Open files<span class="kbd">{{openKey}}</span></button>
+<p class="hint" style="margin: 0">Accepts .pdf</p>
+</div></div></sc-if>
+<sc-if value="{{isList}}" hint-placeholder-val="{{ true }}">
+<div class="tbar"><strong>{{countLabel}}</strong><span class="hint">{{selLabel}}</span><div style="flex: 1"></div>
+<sc-if value="{{hasSel}}" hint-placeholder-val="{{ true }}"><button class="btn sm"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="15" r="4"></circle><path d="M10.8 12.2L19 4M16 7l2 2"></path></svg>{{selPwLabel}}</button><button class="btn sm">Remove from list</button></sc-if>
+<button class="btn sm" aria-disabled="{{locked}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>Add files<span class="kbd">{{openKey}}</span></button><button class="btn sm ghost" aria-disabled="{{locked}}">Clear list</button></div>
+<sc-if value="{{isRunning}}" hint-placeholder-val="{{ false }}"><div style="padding: 6px 20px 12px; display: flex; flex-direction: column; gap: 10px">
+<div role="status" aria-live="polite" style="display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap"><strong style="font-size: 15px">Removing restrictions from 8 PDFs</strong><span class="hint">board-pack-q3.pdf, 3 of 8. 2 saved.</span></div>
+<div aria-hidden="true" style="display: flex; gap: 2px; height: 6px"><sc-for list="{{segments}}" as="s" hint-placeholder-count="8"><span style="flex: 1; border-radius: 2px; background: {{s.bg}}"></span></sc-for></div></div></sc-if>
+<sc-if value="{{hasSel}}" hint-placeholder-val="{{ true }}"><p class="hint" style="margin: 0; padding: 0 20px 10px">Shift-click or {{modClick}} to select. Delete removes files from the list, not from disk.</p></sc-if>
+<div class="xrow hint" aria-hidden="true" style="min-height: 0; padding-top: 6px; padding-bottom: 6px; border-top: 1px solid var(--line)"><span></span><span>Name</span><span>Restrictions</span><span>{{lastHead}}</span><span></span></div>
+<ul role="listbox" aria-multiselectable="true" aria-label="PDFs to unrestrict" style="list-style: none; margin: 0; padding: 0; overflow: auto"><sc-for list="{{rows}}" as="r" hint-placeholder-count="8"><li role="option" class="xrow {{r.cls}}" aria-selected="{{r.sel}}">
+<span style="color: var(--mut); display: flex"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6v18h12V7z"></path><path d="M14 3v4h4"></path></svg></span>
+<span style="min-width: 0; display: flex; flex-direction: column"><span class="ell">{{r.name}}</span><sc-if value="{{r.own}}" hint-placeholder-val="{{ false }}"><span class="badge" style="align-self: flex-start; height: 20px; font-size: 11px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 12px; height: 12px"><circle cx="8" cy="15" r="4"></circle><path d="M10.8 12.2L19 4M16 7l2 2"></path></svg>Own password</span></sc-if><span class="hint ell" style="color: {{r.noteColor}}">{{r.note}}</span></span>
+<span class="hint" style="color: {{r.tColor}}">{{r.title}}</span>
+<span class="hint" style="color: {{r.lColor}}">{{r.last}}</span>
+<span style="display: flex; justify-content: flex-end"><sc-if value="{{r.canRemove}}" hint-placeholder-val="{{ true }}"><button class="btn sm ghost ib" aria-label="Remove {{r.name}} from the list" title="Remove (Delete)"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button></sc-if></span>
+<sc-if value="{{r.ovOpen}}" hint-placeholder-val="{{ false }}"><div id="ov-{{r.id}}" class="inl"><div class="opt"><label class="lbl" for="ovpw-{{r.id}}">Permissions password for {{r.name}}</label><div style="display: flex; gap: 6px"><input id="ovpw-{{r.id}}" class="field" type="password" value="oak-ledger-7" autofocus><button class="btn" aria-label="Show password" aria-pressed="false" style="padding: 0 8px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"></path><circle cx="12" cy="12" r="3"></circle></svg></button></div></div><button class="btn pri sm">Use for this file<span class="kbd">↵</span></button><button class="btn sm ghost">Cancel<span class="kbd">Esc</span></button><span class="hint" style="flex: 1 1 100%">Used instead of the password for all files. Only for this run. Never saved.</span></div></sc-if>
+</li></sc-for></ul>
+<sc-if value="{{hasNotAdded}}" hint-placeholder-val="{{ true }}"><div role="region" aria-label="Not added" class="notadd">
+<div style="display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--line)"><strong>1 item not added</strong><div style="flex: 1"></div><button class="btn sm ghost">Dismiss</button></div>
+<div class="g"><span class="ell">budget-2027.xlsx</span><span class="hint">Remove Restrictions only changes PDFs.</span><span></span></div>
+</div></sc-if>
+</sc-if>
+<sc-if value="{{isResult}}" hint-placeholder-val="{{ false }}">
+<div style="padding: 14px 20px 12px; display: flex; flex-direction: column; gap: 10px; border-bottom: 1px solid var(--line)">
+<div role="status" aria-live="polite" style="display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap"><strong style="font-size: 15px">{{summary}}</strong><span class="hint">{{warnHint}}</span></div>
+<div aria-hidden="true" style="display: flex; gap: 2px; height: 6px"><sc-for list="{{segments}}" as="s" hint-placeholder-count="9"><span style="flex: 1; border-radius: 2px; background: {{s.bg}}"></span></sc-for></div>
+<div role="group" aria-label="Show" style="display: flex; gap: 6px; flex-wrap: wrap; align-items: center"><sc-for list="{{chips}}" as="c" hint-placeholder-count="3"><button class="chip" aria-pressed="{{c.on}}">{{c.label}}<span style="color: var(--mut)">{{c.n}}</span></button></sc-for><div style="flex: 1"></div><button class="btn sm"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2"></path></svg>{{revealAll}}</button></div>
+</div>
+<ul aria-label="Results" style="list-style: none; margin: 0; padding: 0; overflow: auto"><sc-for list="{{results}}" as="r" hint-placeholder-count="9"><li class="rrow">
+<span style="color: {{r.color}}; display: flex"><sc-if value="{{r.isOk}}" hint-placeholder-val="{{ true }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l5 5 9-10"></path></svg></sc-if><sc-if value="{{r.isWarn}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l10 18H2z"></path><path d="M12 10v5M12 18v.5"></path></svg></sc-if><sc-if value="{{r.isSkip}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"></path></svg></sc-if><sc-if value="{{r.isFail}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M9 9l6 6M15 9l-6 6"></path></svg></sc-if></span>
+<span style="min-width: 0; display: flex; flex-direction: column"><span class="ell">{{r.name}}</span><span class="hint">{{r.detail}}</span></span>
+<span style="color: {{r.color}}">{{r.state}}</span>
+<span style="display: flex; gap: 4px; justify-content: flex-end; flex-wrap: wrap"><sc-if value="{{r.hasOut}}" hint-placeholder-val="{{ false }}"><button class="btn sm ghost" style="color: var(--fg)" aria-label="Open {{r.out}}">Open</button><button class="btn sm ghost" style="color: var(--fg)" aria-label="{{reveal}}: {{r.out}}">{{reveal}}</button></sc-if><sc-if value="{{r.hasPointer}}" hint-placeholder-val="{{ false }}"><button class="btn sm">{{r.pointer}}</button></sc-if><sc-if value="{{r.canRetry}}" hint-placeholder-val="{{ false }}"><button class="btn sm">Retry</button></sc-if><sc-if value="{{r.canRetryPw}}" hint-placeholder-val="{{ false }}"><button class="btn sm" aria-expanded="{{r.retryOpenAttr}}" aria-controls="retry-{{r.id}}">Try another password</button></sc-if></span>
+<sc-if value="{{r.retryOpen}}" hint-placeholder-val="{{ false }}"><div id="retry-{{r.id}}" class="inl"><div class="opt"><label class="lbl" for="rpw-{{r.id}}">{{r.pwLabel}}</label><input id="rpw-{{r.id}}" class="field" type="password" value="••••••••••" autofocus></div><button class="btn pri sm">Retry this file<span class="kbd">{{runKey}}</span></button><button class="btn sm ghost">Cancel<span class="kbd">Esc</span></button><span class="hint" style="flex: 1 1 100%">Only this file runs again. Its new password isn't saved.</span></div></sc-if>
+</li></sc-for></ul>
+</sc-if>
+
+</section>
+<section aria-label="Options" style="flex: 1 1 300px; max-width: 360px; border-left: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column">
+<div style="padding: 16px 20px; display: flex; flex-direction: column; gap: 14px; flex: 1; overflow: auto">
+<sc-if value="{{showOpts}}" hint-placeholder-val="{{ true }}"><div class="{{optsCls}}" aria-disabled="{{locked}}" style="display: flex; flex-direction: column; gap: 18px">
+<div class="opt"><label class="lbl" for="pw">Permissions password for all files</label>
+<div style="display: flex; gap: 6px"><input id="pw" class="field" type="{{pwType}}" value="{{pwValue}}" placeholder="The password that sets the limits" aria-describedby="pw-help"><button class="btn" aria-label="{{pwToggle}}" aria-pressed="{{pwShown}}" style="padding: 0 8px"><sc-if value="{{pwHidden}}" hint-placeholder-val="{{ true }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"></path><circle cx="12" cy="12" r="3"></circle></svg></sc-if><sc-if value="{{pwVisible}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"></path><path d="M4 4l16 16"></path></svg></sc-if></button></div>
+<span id="pw-help" class="hint">{{pwHelp}}</span><span class="hint">Never saved. Cleared when you clear the list.</span></div>
+<div class="sect" style="gap: 6px"><span class="lbl">What changes</span><p class="hint" style="margin: 0">Printing, copying text and editing are allowed in the copy. An open password, if the file has one, is kept. To remove it, use Unlock in File Security.</p></div>
+<div class="sect" style="gap: 6px"><span class="lbl">Save to</span><span>{{outDir}}</span><div style="display: flex; gap: 12px"><button class="btn sm ghost link">Change for this run</button><button class="btn sm ghost link" aria-disabled="true">Reset to default</button></div><p class="hint" style="margin: 0">Saved as name-unrestricted.pdf, like vendor-nda-acme-unrestricted.pdf. An existing name gets -1, -2 and so on. Nothing is replaced. Signed PDFs lose their signature.</p></div>
+</div></sc-if>
+<sc-if value="{{isRunning}}" hint-placeholder-val="{{ false }}"><p class="hint" style="margin: 0">Options are locked while removing restrictions.</p></sc-if>
+<sc-if value="{{isResult}}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; flex-direction: column; gap: 8px"><span class="lbl">This run</span><dl class="kv"><dt>Password</dt><dd>1 for all files, 1 file with its own</dd><dt>Allowed now</dt><dd>Printing, copying, editing</dd><dt>Open passwords</dt><dd>Kept</dd></dl></div>
+<div class="sect"><span class="lbl">Saved to</span><span>{{outDir}}</span></div>
+</sc-if>
+</div>
+<footer style="padding: 14px 20px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 10px; flex-wrap: wrap">
+<sc-if value="{{isRunning}}" hint-placeholder-val="{{ false }}"><button class="btn">Cancel batch<span class="kbd">Esc</span></button></sc-if>
+<sc-if value="{{isResult}}" hint-placeholder-val="{{ false }}"><button class="btn">Clear list</button><button class="btn">Run again</button></sc-if>
+<sc-if value="{{hasReason}}" hint-placeholder-val="{{ true }}"><span class="hint" style="flex: 1 1 100%; color: {{reasonColor}}">{{reason}}</span></sc-if>
+<div style="flex: 1"></div>
+<sc-if value="{{hasRun}}" hint-placeholder-val="{{ true }}"><button class="btn pri" aria-disabled="{{runOff}}">{{runLabel}}<span class="kbd">{{runKey}}</span></button></sc-if>
+</footer></section>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "state": {"editor": "enum", "options": ["Files added", "Empty", "Password shown", "Per-file override", "Removing", "Results", "Wrong password retry"], "default": "Files added"}, "$preview": {"width": 1280, "height": 800}}'>
+class Component extends DCLogic {
+renderVals() {
+const win = (this.props.platform ?? 'macOS') === 'Windows';
+const light = (this.props.theme ?? 'dark') === 'light';
+const base = { themeClass: light ? 'tb light' : 'tb dark', findKey: win ? 'Ctrl+K' : '⌘K', settingsKey: win ? 'Ctrl+,' : '⌘,', openKey: win ? 'Ctrl+O' : '⌘O', runKey: win ? 'Ctrl+Enter' : '⌘↵', modClick: win ? 'Ctrl-click' : '⌘-click', reveal: win ? 'Show in File Explorer' : 'Show in Finder', revealAll: win ? 'Show all in File Explorer' : 'Show all in Finder' };
+const state = this.props.state ?? 'Files added';
+const sep = win ? '\\' : '/';
+const dir = (...p) => [win ? 'C:\\Users\\Asha' : '~'].concat(p).join(sep);
+const isEmpty = state === 'Empty', isRunning = state === 'Removing', retry = state === 'Wrong password retry', isResult = state === 'Results' || retry;
+const shown = state === 'Password shown', override = state === 'Per-file override';
+Object.assign(base, { isEmpty, isRunning, isResult, isList: !isEmpty && !isResult, showOpts: !isResult, optsCls: isRunning ? 'lock' : '', locked: isRunning ? 'true' : 'false',
+outDir: dir('Documents', 'Unrestricted'), hasSel: state === 'Files added' || override, hasNotAdded: state === 'Files added', lastHead: isRunning ? 'Status' : 'Password' });
+base.pwValue = isEmpty ? '' : 'river-quill-1987';
+base.pwType = shown ? 'text' : 'password';
+base.pwShown = shown ? 'true' : 'false';
+base.pwToggle = shown ? 'Hide password' : 'Show password';
+base.pwHidden = !shown; base.pwVisible = shown;
+base.pwHelp = isEmpty ? 'The password the author set to limit printing, copying or editing. It isn\'t the password that opens the file.' : 'Used for 5 PDFs with restrictions. 1 PDF uses its own password.';
+// name, folder, restrictions, password column, flags
+const F = [
+{ name: 'vendor-nda-acme.pdf', d: ['Contracts'], r: 'No printing, copying or editing', note: 'Signed. Saving removes the signature.', nc: 'var(--warn)' },
+{ name: 'brochure-2026.pdf', d: ['Marketing'], r: 'No copying text' },
+{ name: 'board-pack-q3.pdf', d: ['Board'], r: 'None found', none: true },
+{ name: 'offer-letter-chen.pdf', d: ['HR'], r: 'No editing', own: true, sel: true },
+{ name: 'payroll-2026.pdf', d: ['Finance'], r: 'Unknown until opened', openPw: true },
+{ name: 'policy-handbook.pdf', d: ['HR'], r: 'No printing', sel: true },
+{ name: 'scan-archive.pdf', d: ['Scans'], r: 'No editing' },
+{ name: 'site-survey-scan.pdf', d: ['Projects'], r: 'No printing, copying or editing' }
+];
+const run = ['Saved', 'Saved', 'Checking…', 'Waiting', 'Waiting', 'Waiting', 'Waiting', 'Waiting'];
+base.rows = F.map((f, i) => {
+const ownNow = f.own;
+const r = { id: String(i), name: f.name, own: !!ownNow && !isRunning, title: f.r, tColor: f.none || f.openPw ? 'var(--mut)' : 'var(--fg)',
+note: f.note || dir('Documents', ...f.d), noteColor: f.nc || 'var(--mut)',
+last: f.none ? 'Not needed' : f.openPw ? 'Has an open password' : ownNow ? 'Its own' : 'The one for all files', lColor: f.openPw ? 'var(--warn)' : 'var(--mut)',
+sel: 'false', cls: '', canRemove: !isRunning, ovOpen: false };
+if (f.openPw) { r.note = 'Remove the open password with Unlock in File Security first.'; r.noteColor = 'var(--warn)'; }
+if (f.none) r.note = 'Nothing to remove. It will be skipped.';
+if (state === 'Files added' && f.sel) { r.sel = 'true'; r.cls = 'sel'; }
+if (override && f.name === 'offer-letter-chen.pdf') { r.sel = 'true'; r.cls = 'sel'; r.ovOpen = true; r.own = false; r.last = 'Setting its own…'; }
+if (isRunning) { r.last = run[i]; r.lColor = i < 3 ? 'var(--fg)' : 'var(--mut)'; }
+return r;
+});
+base.countLabel = '8 PDFs';
+base.selLabel = isRunning ? 'The list is locked while removing restrictions.' : override ? '1 selected' : base.hasSel ? '2 selected' : '';
+base.selPwLabel = override ? 'Set password for 1…' : 'Set password for 2…';
+base.segments = F.map((f, i) => ({ bg: i < 2 ? 'var(--seg-ok)' : i === 2 ? 'var(--line2)' : 'var(--seg-wait)' }));
+base.hasReason = !isResult;
+base.reasonColor = 'var(--mut)';
+base.reason = isEmpty ? 'Add PDFs to remove their restrictions.' : isRunning ? 'Cancel stops after the current PDF. Saved copies are kept.' : 'Saves 6 unrestricted copies. 1 PDF has no restrictions and 1 needs Unlock first.';
+base.hasRun = !isRunning && !isResult;
+base.runOff = isEmpty ? 'true' : 'false';
+base.runLabel = isEmpty ? 'Remove restrictions' : 'Remove from 8 PDFs';
+if (isResult) {
+const SIG = 'Saved. The digital signature was removed, because changing the file breaks it.';
+const out = (n) => n.replace('.pdf', '-unrestricted.pdf');
+const R = [
+{ k: 'warn', name: 'vendor-nda-acme.pdf', detail: SIG },
+{ k: 'ok', name: 'brochure-2026.pdf', detail: 'Saved as brochure-2026-unrestricted.pdf. Copying text is allowed now.' },
+{ k: 'skip', name: 'board-pack-q3.pdf', detail: 'No restrictions: printing, copying and editing were already allowed. No copy was made.' },
+{ k: 'ok', name: 'offer-letter-chen.pdf', detail: 'Saved as offer-letter-chen-unrestricted.pdf, using its own password. Editing is allowed now.' },
+{ k: 'fail', name: 'payroll-2026.pdf', detail: 'This PDF has an open password. Remove Restrictions doesn\'t remove it. Unlock it in File Security, then add the unlocked copy here.', pointer: 'Open Unlock' },
+{ k: 'failPw', name: 'policy-handbook.pdf', detail: 'That isn\'t the permissions password for this file. Nothing was saved.' },
+{ k: 'fail', name: 'scan-archive.pdf', detail: 'Too large: 2,400 pages is over the 2,000-page limit. Nothing was saved.' },
+{ k: 'failRetry', name: 'site-survey-scan.pdf', detail: 'Not a readable PDF. The file may be damaged or incomplete. Nothing was saved.', pointer: 'Open Repair PDF' }
+];
+const isOk = (r) => r.k === 'ok' || r.k === 'warn';
+base.results = R.map((r, i) => ({ id: String(i), name: r.name, out: out(r.name), detail: r.detail, isOk: r.k === 'ok', isWarn: r.k === 'warn', isSkip: r.k === 'skip', isFail: r.k.startsWith('fail'),
+state: isOk(r) ? 'Saved' : r.k === 'skip' ? 'Skipped' : 'Failed', color: r.k === 'warn' ? 'var(--warn)' : r.k === 'skip' ? 'var(--mut)' : isOk(r) ? 'var(--fg)' : 'var(--bad)',
+hasOut: isOk(r), hasPointer: !!r.pointer, pointer: r.pointer || '', canRetry: r.k === 'failRetry', canRetryPw: r.k === 'failPw', retryOpenAttr: r.k === 'failPw' && retry ? 'true' : 'false', retryOpen: r.k === 'failPw' && retry, pwLabel: 'Permissions password for ' + r.name }));
+base.summary = 'Done. 3 saved, 1 skipped, 4 failed';
+base.warnHint = '1 saved file has a warning.';
+base.chips = [['All', 8], ['Needs attention', 5], ['Warnings', 1]].map((c, i) => ({ label: c[0], n: String(c[1]), on: i === 0 ? 'true' : 'false' }));
+base.segments = R.map((r) => ({ bg: r.k === 'warn' ? 'var(--warn)' : r.k === 'skip' ? 'var(--mut)' : isOk(r) ? 'var(--seg-ok)' : 'var(--bad)' }));
+}
+return base;
+}
+}
+</script>
+</body>
+</html>

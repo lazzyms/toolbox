@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import test from "node:test";
+import { UtilityRegistry } from "../src/registry/index.ts";
 import { parseRetiredToolIds, registeredToolIds, RetiredToolIds } from "../src/registry/retiredToolIds.ts";
 import {
   favoritesStorageKey,
@@ -133,11 +134,10 @@ test("the shipped table sends the retired Protect PDF id to Lock & Unlock, also 
   migrateSavedToolIds(storage);
   assert.deepEqual(storage.list(favoritesStorageKey), ["lock-unlock", "pdf-merge"]);
   assert.deepEqual(storage.list(recentStorageKey), ["pdf-merge", "lock-unlock"]);
-  assert.equal(storage.getItem(toolIdMigrationStorageKey), "3");
+  assert.equal(storage.getItem(toolIdMigrationStorageKey), String(RetiredToolIds.version));
 });
 
 test("the shipped table sends the retired Protect Office Files id to Lock & Unlock, also after the second migration ran", () => {
-  assert.equal(RetiredToolIds.version, 3);
   assert.equal(RetiredToolIds.replacements.get("office-protect"), "lock-unlock");
   assert.ok(!registeredToolIds.has("office-protect"));
   const storage = new MemoryStorage({ [favoritesStorageKey]: ["office-protect", "pdf-merge"], [recentStorageKey]: ["lock-unlock", "pdf-merge", "office-protect"] });
@@ -145,7 +145,25 @@ test("the shipped table sends the retired Protect Office Files id to Lock & Unlo
   migrateSavedToolIds(storage);
   assert.deepEqual(storage.list(favoritesStorageKey), ["lock-unlock", "pdf-merge"]);
   assert.deepEqual(storage.list(recentStorageKey), ["lock-unlock", "pdf-merge"]);
-  assert.equal(storage.getItem(toolIdMigrationStorageKey), "3");
+  assert.equal(storage.getItem(toolIdMigrationStorageKey), "4");
+});
+
+test("the shipped table sends both retired PDF extraction ids to Extract from PDF, also after the third migration ran", () => {
+  assert.equal(RetiredToolIds.version, 4);
+  for (const retired of ["pdf-to-text", "pdf-image-extract"]) {
+    assert.equal(RetiredToolIds.replacements.get(retired), "pdf-extract");
+    assert.ok(!registeredToolIds.has(retired));
+  }
+  assert.ok(registeredToolIds.has("pdf-extract"));
+  const storage = new MemoryStorage({
+    [favoritesStorageKey]: ["pdf-to-text", "pdf-merge", "pdf-image-extract"],
+    [recentStorageKey]: ["pdf-image-extract", "pdf-merge", "pdf-to-text"],
+  });
+  storage.setItem(toolIdMigrationStorageKey, "3");
+  migrateSavedToolIds(storage);
+  assert.deepEqual(storage.list(favoritesStorageKey), ["pdf-extract", "pdf-merge"]);
+  assert.deepEqual(storage.list(recentStorageKey), ["pdf-extract", "pdf-merge"]);
+  assert.equal(storage.getItem(toolIdMigrationStorageKey), "4");
 });
 
 test("the retired tool id table rejects ids that are still registered or map nowhere", () => {
@@ -173,11 +191,14 @@ const declaredPointerTargets = () => {
   return sources.flatMap((source) => [...source.matchAll(/(?:tool_id: |"toolId": )"([^"]+)"/g)].map((match) => match[1]));
 };
 
-test("tool pointer targets declared by native tools are registered and never retired", () => {
+test("tool pointer targets declared by native tools are registered, available and never retired", () => {
   const targets = declaredPointerTargets();
   assert.ok(targets.includes("heic-convert"), "the scan finds the declared pointer targets");
+  assert.ok(targets.includes("pdf-ocr"), "Extract from PDF hands scans that need OCR to OCR");
   for (const target of targets) {
     assert.ok(registeredToolIds.has(target), `${target} is a registered tool id`);
     assert.ok(!RetiredToolIds.replacements.has(target), `${target} is not a retired tool id`);
+    const tool = UtilityRegistry.find(({ id }) => id === target);
+    assert.equal(tool?.capability.nativeAvailability, "available", `${target} is available`);
   }
 });

@@ -1,0 +1,4 @@
+{
+  "about": "Convert to PDF snapshot differences that may occur between Release targets. Each target converts one embedded-font fixture per family with its own bundled fonts and no packs, and the release workflow compares every family's extracted text and page geometry with the first target's (macos-aarch64), failing on any difference not listed here. Installed system fonts are the stated platform difference: the fixtures never use them, so they are not compared. Each entry names the family (its extension), the aspect (text or geometry), the target, and why the difference is expected; add an optional reference to limit it to one reference target.",
+  "differences": []
+}
