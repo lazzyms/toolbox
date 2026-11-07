@@ -1,0 +1,4 @@
+{
+  "about": "OCR outputs that may differ between Release targets for the English fixture. The release workflow compares each target's text.txt and searchable.pdf with the first target's (macos-aarch64) and fails on any difference not listed here. Each entry names the output, the target, and why the difference is expected; add an optional reference to limit it to one reference target.",
+  "differences": []
+}
