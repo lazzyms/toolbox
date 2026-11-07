@@ -1,0 +1,58 @@
+{
+  "valid": {
+    "row": {
+      "command": "families_sample",
+      "formatFamilies": [
+        { "id": "office", "extensions": [".docx", ".xlsx", ".pptx"], "nativeAvailability": "available" },
+        { "id": "markdown", "extensions": [".md", ".markdown"], "nativeAvailability": "unavailable", "basicFidelity": false },
+        { "id": "legacy-office", "extensions": [".doc", ".xls", ".ppt"], "nativeAvailability": "unavailable", "basicFidelity": true }
+      ],
+      "inputCardinality": "multiple",
+      "supportsPageSelection": false,
+      "supportsPreview": false,
+      "nativeAvailability": "available",
+      "outputSuffix": "",
+      "manyToOne": false
+    },
+    "acceptedExtensions": [".docx", ".xlsx", ".pptx", ".md", ".markdown", ".doc", ".xls", ".ppt"],
+    "families": [
+      { "id": "office", "nativeAvailability": "available", "basicFidelity": false },
+      { "id": "markdown", "nativeAvailability": "unavailable", "basicFidelity": false },
+      { "id": "legacy-office", "nativeAvailability": "unavailable", "basicFidelity": true }
+    ]
+  },
+  "invalid": {
+    "extensionInTwoFamilies": {
+      "formatFamilies": [
+        { "id": "markdown", "extensions": [".md"], "nativeAvailability": "available" },
+        { "id": "plain-text", "extensions": [".txt", ".md"], "nativeAvailability": "available" }
+      ]
+    },
+    "familyWithoutExtensions": {
+      "formatFamilies": [
+        { "id": "office", "extensions": [".docx"], "nativeAvailability": "available" },
+        { "id": "ebook", "extensions": [], "nativeAvailability": "unavailable" }
+      ]
+    },
+    "noFamilies": { "formatFamilies": [] },
+    "duplicateFamily": {
+      "formatFamilies": [
+        { "id": "office", "extensions": [".docx"], "nativeAvailability": "available" },
+        { "id": "office", "extensions": [".odt"], "nativeAvailability": "available" }
+      ]
+    },
+    "familiesAndExtensions": {
+      "acceptedExtensions": [".docx"],
+      "formatFamilies": [{ "id": "office", "extensions": [".docx"], "nativeAvailability": "available" }]
+    },
+    "invalidFamilyAvailability": {
+      "formatFamilies": [{ "id": "office", "extensions": [".docx"], "nativeAvailability": "soon" }]
+    },
+    "invalidBasicFidelity": {
+      "formatFamilies": [{ "id": "office", "extensions": [".docx"], "nativeAvailability": "available", "basicFidelity": "yes" }]
+    },
+    "unknownFamilyField": {
+      "formatFamilies": [{ "id": "office", "label": "Office", "extensions": [".docx"], "nativeAvailability": "available" }]
+    }
+  }
+}
