@@ -1,6 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { inspectQpdf, readPin } from "./qpdf-pin.mjs";
+import { inspectFallbackFonts, sourceFontsDir } from "./fallback-fonts.mjs";
+import { inspectPdftotext, inspectQpdf, readPin } from "./qpdf-pin.mjs";
+import { describe, readOcrPin, verifyCommittedEnglishData, verifyOcrArtifact } from "./ocr-release.mjs";
+import { verifyConvertArtifact } from "./convert-release.mjs";
 
 const projectFile = (path) => new URL(`../${path}`, import.meta.url);
 const config = JSON.parse(readFileSync(projectFile("src-tauri/tauri.conf.json"), "utf8"));
@@ -25,16 +28,67 @@ const workflow = readFileSync(projectFile("../.github/workflows/tauri-release.ym
 const notesHeader = readFileSync(projectFile("../.github/release-notes-header.md"), "utf8");
 if (!workflow.includes("node ToolboxTauri/scripts/release-notes.mjs") || !workflow.includes("--notes-file release-notes.md")) throw new Error("Releases must use the first-launch header and the PR release-notes changelog");
 if (!/Privacy & Security[\s\S]*Open Anyway/.test(notesHeader)) throw new Error("Release notes header must explain the macOS Open Anyway step");
+if (!/TOOLBOX_REQUIRE_OCR_RESOURCES: '1'/.test(workflow) || !workflow.includes("--ocr-artifact")) {
+  throw new Error("Release builds must require OCR resources and check every artifact with --ocr-artifact");
+}
+if (!workflow.includes("--convert-artifact") || !workflow.includes("compare-convert-outputs.mjs")) {
+  throw new Error("Release builds must check every artifact with --convert-artifact and compare Convert to PDF snapshots across targets");
+}
 const pin = readPin();
-console.log(`Release configuration passed: ${requiredIcons.length} icons, all Tauri targets, updater and ${canonicalExtensions.length} file associations configured, qpdf minimum ${pin.minimumVersion}`);
+const ocrPin = readOcrPin();
+const englishProblem = verifyCommittedEnglishData(ocrPin);
+if (englishProblem) throw new Error(englishProblem);
+console.log(`Release configuration passed: ${requiredIcons.length} icons, all Tauri targets, updater and ${canonicalExtensions.length} file associations configured, qpdf minimum ${pin.minimumVersion}, English OCR data ${ocrPin.englishData.version}`);
 
-const { values } = parseArgs({ options: { qpdf: { type: "string" }, target: { type: "string" } } });
-if (values.qpdf !== undefined || values.target !== undefined) {
-  const result = inspectQpdf({ path: values.qpdf, target: values.target, pin });
-  if (result.cause) {
-    console.error(`qpdf release check failed (${result.cause}): ${result.message}`);
+const { values } = parseArgs({ options: { qpdf: { type: "string" }, pdftotext: { type: "string" }, target: { type: "string" }, "ocr-artifact": { type: "string" }, "convert-artifact": { type: "string" }, fonts: { type: "string" } } });
+const fonts = inspectFallbackFonts({ fontsDir: values.fonts ?? sourceFontsDir });
+if (fonts.cause) {
+  console.error(`Fallback font release check failed (${fonts.cause}): ${fonts.message}`);
+  process.exit(1);
+}
+console.log(`Fallback font release check passed: ${fonts.message}`);
+
+const ocrArtifact = values["ocr-artifact"];
+if (ocrArtifact !== undefined) {
+  if (!values.target) {
+    console.error("OCR release check failed (usage): --ocr-artifact needs --target");
     process.exit(1);
   }
-  console.log(`qpdf release check passed: ${result.message}`);
+  const failures = verifyOcrArtifact({ root: ocrArtifact, target: values.target, pin: ocrPin });
+  if (failures.length) {
+    console.error(`OCR release check failed (${[...new Set(failures.map(({ cause }) => cause))].join(", ")}) for ${values.target} at ${ocrArtifact}:\n${describe(failures)}`);
+    process.exit(1);
+  }
+  console.log(`OCR release check passed: ${ocrArtifact} carries a native ${values.target} OCR engine and PDF rasterizer and the pinned English data`);
 }
-
+const convertArtifact = values["convert-artifact"];
+if (convertArtifact !== undefined) {
+  if (!values.target) {
+    console.error("Convert to PDF release check failed (usage): --convert-artifact needs --target");
+    process.exit(1);
+  }
+  const failures = verifyConvertArtifact({ root: convertArtifact, target: values.target });
+  if (failures.length) {
+    console.error(`Convert to PDF release check failed (${[...new Set(failures.map(({ cause }) => cause))].join(", ")}) for ${values.target} at ${convertArtifact}:\n${describe(failures)}`);
+    process.exit(1);
+  }
+  console.log(`Convert to PDF release check passed: ${convertArtifact} carries the native ${values.target} renderer and the fallback fonts, and conversion uses no Bundled helper`);
+}
+const helperChecks = [];
+if (values.qpdf !== undefined || (values.target !== undefined && ocrArtifact === undefined && convertArtifact === undefined && values.pdftotext === undefined)) {
+  helperChecks.push(["qpdf", () => inspectQpdf({ path: values.qpdf, target: values.target, pin })]);
+}
+if (values.pdftotext !== undefined) {
+  helperChecks.push(["pdftotext", () => inspectPdftotext({ path: values.pdftotext, target: values.target })]);
+}
+let helperFailed = false;
+for (const [name, inspect] of helperChecks) {
+  const result = inspect();
+  if (result.cause) {
+    console.error(`${name} release check failed (${result.cause}): ${result.message}`);
+    helperFailed = true;
+  } else {
+    console.log(`${name} release check passed: ${result.message}`);
+  }
+}
+if (helperFailed) process.exit(1);
