@@ -10,7 +10,7 @@ import { shortenHomePath, useHomeDir } from "../../homePath";
 import { failedOutcome, parseToolResult } from "../../jobOutcome";
 import { parentFolder } from "../../components/intake";
 import { fileName, rowView } from "../../components/resultRow";
-import { ResultList, revealButtonLabel } from "../../components/ResultList";
+import { ResultList, revealButtonLabels } from "../../components/ResultList";
 import { describeLocation } from "../../components/RunDestination";
 import { passwordsFor, PasswordRetryForm } from "../../components/PasswordFields";
 import type { PdfEditorBatchTool, ReportActions } from "./batchTools";
@@ -441,7 +441,7 @@ const SavedReports = ({ saved, home }: { saved: Saved; home: string | null }) =>
         <div role="status" className="privacy-report-saved" data-state={first ? "saved" : "failed"}>
           {first && <Check aria-hidden="true" />}
           <span>{savedMessage(saved, home)}</span>
-          {first && <Button variant="outline" size="sm" onClick={() => void reveal(first)}>{revealButtonLabel()}</Button>}
+          {first && <Button variant="outline" size="sm" onClick={() => void reveal(first)}>{revealButtonLabels().full}</Button>}
           {revealError && <span role="alert" className="privacy-report-error">{revealError}</span>}
         </div>
       }
